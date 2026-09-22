@@ -854,6 +854,8 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
         vals = files.lgsm_get_values(server, user, selfname, ["querymode", "querytype", "queryport", "port"])
     except Exception:
         return None
+    if vals is None:
+        return None      # the config could not be read — unknown, and unknown is not "0 players"
     if (vals.get("querymode") or "").strip() != "2":   # only the gamedig querymode is handled here
         return None
     qtype = re.sub(r"[^A-Za-z0-9_-]", "", (vals.get("querytype") or "").strip())[:40]
@@ -861,11 +863,29 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
              or str(fallback_port or "").strip())
     if not qtype or not qport.isdecimal():
         return None
-    cmd = ("gamedig --type %s %s:%d 2>/dev/null | jq -r '.players|length' 2>/dev/null"
-           % (qtype, _core._gamedig_host(server), int(qport)))
+    # The `ok` key, for the third time in this file. gamedig writes its FAILURE to stdout as a JSON
+    # object -- {"error":"Failed all 1 attempts"} -- so `.players` is null, and jq reports the
+    # length of null as 0. A bare `.players|length` therefore turns every dropped query into a
+    # confident "0 players": measured, `echo '{"error":"..."}' | jq -r '.players|length'` prints 0
+    # with rc 0. That is the one answer this function must never invent, and its own docstring
+    # promises it does not ("or the query fails. None => 'unknown', which the reboot poller treats
+    # as 'don't reboot'"). player_slots has carried this guard from the start and player_count
+    # gained it later; this one never got it.
+    jqf = '{c:(.players|length), ok:(.players|type=="array")}'
+    cmd = ("gamedig --type %s %s:%d 2>/dev/null | jq -c %s 2>/dev/null"
+           % (qtype, _core._gamedig_host(server), int(qport), _core._quote(jqf)))
     try:
         out, _, _ = _core.run_command(server, "sudo -u %s bash -c %s" % (user, _core._quote(cmd)), timeout=25, sudo=False)
     except Exception:
         return None
-    s = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
-    return int(s) if s.isdecimal() else None
+    line = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
+    if not line:
+        return None
+    try:
+        import json as _json
+        d = _json.loads(line)
+    except (ValueError, TypeError):
+        return None
+    if not (isinstance(d, dict) and d.get("ok")):
+        return None      # gamedig could not read the server — unknown, NOT zero
+    return d.get("c") if isinstance(d.get("c"), int) else None

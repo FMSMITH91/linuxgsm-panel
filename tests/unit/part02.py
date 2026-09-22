@@ -808,6 +808,49 @@ try:
 finally:
     _sm_core.run_command = _orig_run8c
 
+# ── player_count_via_lgsm_query: the THIRD reader in this file to need the `ok` guard ──────────
+# It covers games absent from the 26-entry GAMEDIG_TYPE map by using LinuxGSM's own querytype, and
+# it fed the reboot-when-empty poller (monitoring._host_idle_state -> _reboot_when_empty_watch).
+# It asked jq for a bare `.players|length`; gamedig writes its failure to stdout as
+# {"error":"Failed all 1 attempts"}, `.players` is then null, and jq reports the length of null as
+# 0 (measured: `echo '{"error":"x"}' | jq -r '.players|length'` prints 0, rc 0). So a dropped query
+# on a server with ten people on it returned a confident 0 and the host was rebooted under them —
+# while the function's own docstring promised None for "the query fails".
+_orig_lgv_q, _orig_run_q = _sm_files.lgsm_get_values, _sm_core.run_command
+try:
+    _sm_files.lgsm_get_values = lambda *a, **k: {"querymode": "2", "querytype": "protocol-valve",
+                                                 "queryport": "27015", "port": "27015"}
+    _cap_q = {}
+    def _q_run(_s, c, **k):
+        """Model the real pipeline, not one function's output.
+
+        Feeding this check a fixed '{"c":0,"ok":false}' would make it pass on the BROKEN code
+        too — the bare parser sees a non-decimal string and also answers None, for the wrong
+        reason. So answer as jq really would, for the document gamedig really emits when a query
+        fails ({"error":"Failed all 1 attempts"}): the guarded filter yields ok:false, and the
+        bare `.players|length` yields 0, because jq reports the length of null as 0."""
+        _cap_q["cmd"] = c
+        if 'type=="array"' in c:
+            return ('{"c":0,"ok":false}', "", 0)
+        return ("0", "", 0)
+    _sm_core.run_command = _q_run
+    check("player_count_via_lgsm_query: a failed gamedig query is None, NOT 0",
+          _sm_cron.player_count_via_lgsm_query(None, "gm", "gmodserver") is None)
+    check("player_count_via_lgsm_query: asks jq whether .players is really an array",
+          'type=="array"' in _cap_q.get("cmd", ""), _cap_q.get("cmd", "")[:200])
+    _sm_core.run_command = lambda s, c, **k: ('{"c":0,"ok":true}', "", 0)
+    check("player_count_via_lgsm_query: a genuinely empty server is still 0",
+          _sm_cron.player_count_via_lgsm_query(None, "gm", "gmodserver") == 0)
+    _sm_core.run_command = lambda s, c, **k: ('{"c":7,"ok":true}', "", 0)
+    check("player_count_via_lgsm_query: a real count is returned",
+          _sm_cron.player_count_via_lgsm_query(None, "gm", "gmodserver") == 7)
+    # ...and an unreadable CONFIG is unknown too, rather than falling through as "no query".
+    _sm_files.lgsm_get_values = lambda *a, **k: None
+    check("player_count_via_lgsm_query: an unreadable LinuxGSM config is None",
+          _sm_cron.player_count_via_lgsm_query(None, "gm", "gmodserver") is None)
+finally:
+    _sm_files.lgsm_get_values, _sm_core.run_command = _orig_lgv_q, _orig_run_q
+
 # ── 'Lockfile found' (LinuxGSM exits 0 but made no backup) must NOT read as success ──
 _orig_lock = _sm_core.run_command
 try:
@@ -908,15 +951,35 @@ finally:
 # ── alerts: lgsm_get_values reads merged config, instance overrides win ──
 _orig_run9 = _sm_core.run_command
 try:
+    # The trailing sentinel is part of the contract now: the command prints it after the three
+    # cats, so its ABSENCE means the read never finished. See the None checks below.
     _sm_core.run_command = lambda s, c, **k: (
         'discordalert="off"\ndiscordwebhook="default"\nemailalert="on"\n'
-        'discordalert="on"\ndiscordwebhook="https://x/hook"\n', "", 0)
+        'discordalert="on"\ndiscordwebhook="https://x/hook"\n' + _sm_files._READ_END, "", 0)
     _av = _sm_files.lgsm_get_values(None, "gm", "gmodserver",
                              ["discordalert", "discordwebhook", "emailalert", "missingkey"])
     check("lgsm_get_values: later (instance) value wins",
           _av["discordwebhook"] == "https://x/hook" and _av["discordalert"] == "on")
     check("lgsm_get_values: reads other toggles; missing key -> empty",
           _av["emailalert"] == "on" and _av["missingkey"] == "")
+
+    # ── a read that did not happen is None, not a dict of "" ────────────────────────────────
+    # The Alerts card paints these values into inputs and Save posts them all back, so a
+    # confident {"discordtoken": ""} for an unreadable host wiped real credentials on the next
+    # Save. run_command does NOT raise on the tailscale/local transports — it returns
+    # ("", "...timed out", -1) — so this is the shape the common deployment actually produces.
+    _sm_core.run_command = lambda s, c, **k: ("", "SSH command timed out", -1)
+    check("lgsm_get_values: a timed-out read is None, not every-key-empty",
+          _sm_files.lgsm_get_values(None, "gm", "gmodserver", ["discordalert", "discordtoken"]) is None)
+    # ...and a partial read (transport died mid-stream) is equally not a measurement.
+    _sm_core.run_command = lambda s, c, **k: ('discordalert="on"\ndiscordtoken="secr', "", 0)
+    check("lgsm_get_values: an unframed (truncated) read is None",
+          _sm_files.lgsm_get_values(None, "gm", "gmodserver", ["discordalert"]) is None)
+    # ...while three legitimately-absent cfg files ARE a measurement: empty, but read.
+    _sm_core.run_command = lambda s, c, **k: (_sm_files._READ_END, "", 0)
+    _fresh = _sm_files.lgsm_get_values(None, "gm", "gmodserver", ["discordalert"])
+    check("lgsm_get_values: a fresh instance with no cfg yet reads as empty, not unreadable",
+          _fresh == {"discordalert": ""}, repr(_fresh))
 finally:
     _sm_core.run_command = _orig_run9
 

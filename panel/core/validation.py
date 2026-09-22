@@ -38,6 +38,14 @@ HOST_RE = re.compile(r"^[A-Za-z0-9._:\[\]-]{1,255}\Z")
 # in the UI's client-side rendering. Defense-in-depth alongside output encoding.
 SAFE_LABEL_RE = re.compile(r"""^[^<>"'`\r\n\\]{1,120}\Z""")
 
+# The auth methods a REMOTE may be set to from a form. RemoteServer.auth_method also has a fourth
+# value, "local", and that one is deliberately absent: it is not a credential choice but a
+# transport choice — _core.is_local_server() treats `auth_method == "local"` as "this record is
+# this machine" — so accepting it from a form would let a remote's commands be redirected onto the
+# panel host. The panel's own row is created with it by host_local.py and is identified by
+# `is_local`, never by an edit.
+EDITABLE_AUTH_METHODS = ("key", "password", "tailscale")
+
 
 # Filenames reach a Content-Disposition header, whose WSGI value is latin-1 — see
 # _attachment_header. Anything outside this set is replaced rather than quoted, because a name is

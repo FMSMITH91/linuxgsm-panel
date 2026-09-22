@@ -292,15 +292,35 @@ def lgsm_game_config(server, user, selfname):
 
 def lgsm_get_values(server, user, selfname, keys):
     """Return {key: value} for `keys` from the merged LinuxGSM config (_default < common <
-    instance — instance wins). Missing keys come back as "". Used by focused editors (alerts)."""
+    instance — instance wins). Missing keys come back as "". Used by focused editors (alerts).
+
+    Returns **None when the config could not be read at all**, which is a different answer from
+    "every one of these settings is unset" and has to stay tellable apart.
+
+    This was `out, _, _ = run_command(...)` with `2>/dev/null` and the rc discarded. run_command
+    does not raise on the tailscale or local transports — it returns ("", "…timed out", -1) — so a
+    hiccup produced an empty `out`, an empty `merged`, and a confident dict of "" for every key.
+    The Alerts card (panel/routes/server_files.py) renders exactly that as "every provider off, no
+    webhook, no token", and its Save posts the form back, so ONE failed read followed by one Save
+    wrote those blanks over the operator's real Discord/Telegram credentials. The write half of
+    this pair already learned it: lgsm_write_config below FRAMES its read and aborts the write when
+    the frame is missing, with a comment describing the same measured data loss.
+
+    The frame is what makes the two cases distinguishable. `cat … 2>/dev/null` on three files that
+    are all legitimately absent (a fresh instance) and a read that never happened both produce "";
+    the trailing sentinel only appears if the command really ran to the end."""
     if not _idents_ok(user, selfname):
-        return {k: "" for k in (keys or ())}
+        return None
     d = _lgsm_cfg_dir(user, selfname)
     inner = (f"cat {_core._quote(d + '/_default.cfg')} 2>/dev/null; "
              f"cat {_core._quote(d + '/common.cfg')} 2>/dev/null; "
-             f"cat {_core._quote(d + '/' + selfname + '.cfg')} 2>/dev/null")
+             f"cat {_core._quote(d + '/' + selfname + '.cfg')} 2>/dev/null; "
+             f"printf %s {_core._quote(_READ_END)}")
     out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(inner)}", timeout=20, sudo=False)
-    merged = _parse_cfg(out or "")
+    body = out or ""
+    if _READ_END not in body:
+        return None
+    merged = _parse_cfg(body[:body.rfind(_READ_END)])
     return {k: merged.get(k, "") for k in keys}
 
 

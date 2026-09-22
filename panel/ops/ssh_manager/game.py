@@ -451,7 +451,10 @@ def ensure_persistent_bans(server, user, selfname):
     lines to the LinuxGSM servercfg (`${selfname}.cfg` in the game's cfg dir), idempotently. Best-
     effort; returns True when the line is present/added, False on any failure or non-Source layout."""
     try:
-        raw = (files.lgsm_get_values(server, user, selfname, ["servercfg"]).get("servercfg") or "").strip()
+        _vals = files.lgsm_get_values(server, user, selfname, ["servercfg"])
+        if _vals is None:
+            return False     # config unreadable: do not guess a filename and append to it
+        raw = (_vals.get("servercfg") or "").strip()
         fname = (raw.replace("${selfname}", selfname).replace("$selfname", selfname)
                  or "%s.cfg" % selfname)
         if not re.match(r"^[A-Za-z0-9_.-]+\.cfg\Z", fname):     # guard the value going into `find`
