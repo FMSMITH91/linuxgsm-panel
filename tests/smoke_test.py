@@ -1744,6 +1744,43 @@ try:
     check("login: brute-force lockout blocks after %d failures" % LOGIN_MAX_FAILS, _locked)
     _LOGIN_FAILS.clear()   # isolate: don't leave 127.0.0.1 locked for anything else
 
+    # ...and it cannot be stepped around with a per-request X-Real-IP.
+    #
+    # The throttle keys on client_ip() and has no second dimension, so whoever chooses that string
+    # chooses whether the throttle exists. The test client connects from loopback, which is the
+    # Tailscale Serve shape exactly: Serve proxies to 127.0.0.1, so `behind_proxy` is True with no
+    # configuration at all. Serve sets the X-Forwarded-* trio and does NOT set or strip X-Real-IP,
+    # so a client-supplied one arrived verbatim — and client_ip() used to prefer it. Below, the
+    # proxy-set header is constant (one real client) while the client-supplied one rotates: the
+    # lockout has to follow the proxy's value.
+    _LOGIN_FAILS.clear()
+    lc2 = app.test_client()
+    _locked_hdr = False
+    for _i in range(LOGIN_MAX_FAILS + 2):
+        lr = lc2.post("/login", data={"username": "nobody_lockout2", "password": "wrong"},
+                      headers={"X-Forwarded-For": "198.51.100.7",
+                               "X-Real-IP": "203.0.113.%d" % _i})
+        if b"Too many failed attempts" in lr.data:
+            _locked_hdr = True
+            break
+    check("login: a rotating X-Real-IP does not mint a fresh throttle bucket per request",
+          _locked_hdr, "%d attempts, never locked" % (LOGIN_MAX_FAILS + 2))
+    # positive control: the throttle really is keyed on the proxy-set header, so a rotating
+    # X-Forwarded-For (a proxy that appends, with the client's own copy to its LEFT) is still one
+    # bucket per real peer rather than one per forged hop.
+    _LOGIN_FAILS.clear()
+    lc3 = app.test_client()
+    _locked_xff = False
+    for _i in range(LOGIN_MAX_FAILS + 2):
+        lr = lc3.post("/login", data={"username": "nobody_lockout3", "password": "wrong"},
+                      headers={"X-Forwarded-For": "203.0.113.%d, 198.51.100.8" % _i})
+        if b"Too many failed attempts" in lr.data:
+            _locked_xff = True
+            break
+    check("login: only the LAST X-Forwarded-For hop keys the throttle, so forged hops don't help",
+          _locked_xff, "%d attempts, never locked" % (LOGIN_MAX_FAILS + 2))
+    _LOGIN_FAILS.clear()
+
     # ── Database maintenance: stats + VACUUM/ANALYZE optimize ─────
     with app.app_context():
         from panel.db.models import database_stats, optimize_database

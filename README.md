@@ -176,8 +176,9 @@ location / {
     proxy_set_header X-Real-IP $remote_addr;
     # Append the real peer rather than passing the client's own copy through. Without this line
     # nginx forwards whatever X-Forwarded-For the client sent, and anything reading that header
-    # is reading a value the client chose. The panel prefers X-Real-IP above and takes the LAST
-    # X-Forwarded-For hop when it falls back, so either header alone is enough — set both.
+    # is reading a value the client chose. THIS is the line the panel depends on: it reads the
+    # LAST X-Forwarded-For hop, which is the peer nginx appended, and only falls back to
+    # X-Real-IP when the header is absent entirely. Set both.
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_read_timeout 86400;

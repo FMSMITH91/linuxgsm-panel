@@ -779,6 +779,28 @@ def _token_auth_record(ip, ok):
 
 # ─── Audit Logging ─────────────────────────────────────────────
 
+def _ip_or_none(value):
+    """The value as a bare IP address string, or None if it is not one.
+
+    Every consumer of client_ip() uses it as a KEY — the login throttle, the API-token throttle,
+    the 7-day auto-block counts — and a key space is only bounded while the values are addresses.
+    A header carrying anything else is not a client address the panel failed to parse; it is a
+    client choosing its own bucket. Some proxies bracket an IPv6 literal and may append a port,
+    so those are peeled before parsing rather than rejected."""
+    import ipaddress
+    text = (value or "").strip()
+    if not text:
+        return None
+    if text.startswith("["):                       # [2001:db8::1] or [2001:db8::1]:443
+        text = text[1:].split("]", 1)[0]
+    elif text.count(":") == 1:                     # 203.0.113.9:443 — one colon means IPv4:port
+        text = text.split(":", 1)[0]
+    try:
+        return str(ipaddress.ip_address(text))
+    except ValueError:
+        return None
+
+
 def client_ip():
     """Real client IP of the connected user.
 
@@ -797,12 +819,28 @@ def client_ip():
 
     So:
 
-      * X-Real-IP first. `proxy_set_header` REPLACES, so a proxy that sets it has overwritten
-        anything the client sent — it is the one header in the README's nginx block, and the one
-        value in it that the proxy actually chose.
-      * then the LAST X-Forwarded-For hop, not the first. That is what the nearest trusted proxy
-        appended (`$proxy_add_x_forwarded_for`, Tailscale Serve, Caddy); everything to its left
-        came from further out and may be invented.
+      * the LAST X-Forwarded-For hop, not the first. That is what the nearest trusted proxy
+        appended or set (`$proxy_add_x_forwarded_for`, Tailscale Serve, Caddy, cloudflared);
+        everything to its left came from further out and may be invented.
+      * then X-Real-IP, and only when there is no X-Forwarded-For at all.
+
+        This order used to be the other way round, on the premise that `proxy_set_header`
+        REPLACES, so a proxy that sets X-Real-IP has overwritten anything the client sent. That
+        is true of the README's nginx block and of Caddy. It is NOT true of the transport this
+        panel defaults to. Tailscale Serve is enabled automatically (`tailscale_auto_setup` is
+        True in panel/core/config.py) and proxies to loopback, which makes `behind_proxy` True
+        with no configuration at all — and its proxy code (tailscale's ipn/ipnlocal/serve.go,
+        addProxyForwardedHeaders) sets only X-Forwarded-Host, X-Forwarded-Proto and
+        X-Forwarded-For. It never sets or strips X-Real-IP, so a client-supplied one arrived
+        verbatim and won, which is the same unlimited-guessing hole described above wearing a
+        different header. X-Forwarded-For is the one header every proxy in play does set itself,
+        and taking its last hop is unforgeable under all of them: nginx's
+        `$proxy_add_x_forwarded_for` appends the real peer last, and Serve `Set`s the header
+        outright. The README asks for both headers, so nginx is unaffected by the swap.
+
+      * and neither unless the value parses as an IP address. A throttle key is only a throttle
+        while the set of keys is bounded; an unparseable header would otherwise become a bucket
+        of its own.
       * and neither unless the request reached us from a proxy at all — loopback, or trust_proxy
         set, in which case the ORIGINAL socket peer is used to decide, because ProxyFix has by
         then already rewritten request.remote_addr from the header we are trying to judge.
@@ -822,12 +860,14 @@ def client_ip():
         except Exception:
             behind_proxy = False     # outside an app context: trust nothing
     if behind_proxy:
-        xr = (request.headers.get("X-Real-IP") or "").strip()
-        if xr:
-            return xr
         xff = request.headers.get("X-Forwarded-For", "")
         if xff:
-            return xff.split(",")[-1].strip()
+            hop = _ip_or_none(xff.split(",")[-1])
+            if hop:
+                return hop
+        xr = _ip_or_none(request.headers.get("X-Real-IP"))
+        if xr:
+            return xr
     return remote
 
 
