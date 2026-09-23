@@ -5956,6 +5956,22 @@ try:
     finally:
         _so_ab.fail2ban_top_ips = _ab_saved
 
+    # The remote route is the same code with a different reader, and it had the same bug — so it
+    # gets the same check rather than being taken on the strength of the panel-host one passing.
+    import panel.routes.remote_security as _rs_ab
+    _rs_saved = _rs_ab.remote_fail2ban_top_ips
+    try:
+        _rs_ab.remote_fail2ban_top_ips = lambda *a, **k: None
+        _rabj = (c.get("/api/remote/%d/security/top-ips" % remote_id).get_json() or {})
+        check("security card (remote): an unreadable log still reports the auto-block setting",
+              "autoblock" in _rabj and _rabj.get("unreadable") is True, str(_rabj)[:160])
+        _rs_ab.remote_fail2ban_top_ips = lambda *a, **k: [{"ip": "203.0.113.9", "attempts": 1}]
+        _rabj2 = (c.get("/api/remote/%d/security/top-ips" % remote_id).get_json() or {})
+        check("security card (remote): a real read is not flagged unreadable (positive control)",
+              len(_rabj2.get("ips") or []) == 1 and not _rabj2.get("unreadable"), str(_rabj2)[:160])
+    finally:
+        _rs_ab.remote_fail2ban_top_ips = _rs_saved
+
     _typed = [
         ("/api/command/%d" % gs_id, {"command": 5}),
         ("/api/server/%d/action" % gs_id, {"action": 5}),
