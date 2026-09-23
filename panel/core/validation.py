@@ -38,6 +38,56 @@ HOST_RE = re.compile(r"^[A-Za-z0-9._:\[\]-]{1,255}\Z")
 # in the UI's client-side rendering. Defense-in-depth alongside output encoding.
 SAFE_LABEL_RE = re.compile(r"""^[^<>"'`\r\n\\]{1,120}\Z""")
 
+# The auth methods a REMOTE may be set to from a form. RemoteServer.auth_method also has a fourth
+# value, "local", and that one is deliberately absent: it is not a credential choice but a
+# transport choice — _core.is_local_server() treats `auth_method == "local"` as "this record is
+# this machine" — so accepting it from a form would let a remote's commands be redirected onto the
+# panel host. The panel's own row is created with it by host_local.py and is identified by
+# `is_local`, never by an edit.
+EDITABLE_AUTH_METHODS = ("key", "password", "tailscale")
+
+# nosec B104 - the set of wildcard addresses to RECOGNISE, so callers can tell "listening
+# everywhere" from loopback. Naming a value is not binding to it.
+BIND_WILDCARD = frozenset({"0.0.0.0", "::"})  # nosec B104
+BIND_LOOPBACK = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def bind_host_error(value, host_has_ip=None):
+    """None if `value` is an address this panel could actually bind to, else why not.
+
+    `bind_host` is written to config.json and read back by the entry point as the address to
+    listen on, so a value that cannot be bound produces a panel that does not come up on its next
+    boot — recoverable only with linuxgsm-panel-recover or by editing the file by hand. It is the
+    same hazard as `port`, and it is shared by the two places that write the key: the setup wizard
+    and /api/panel/change-port.
+
+    It lives here because the wizard wrote it UNCHECKED under a comment saying
+    "api_panel_change_port validates whatever they choose" — a different route, which the wizard
+    never calls. The port on the line above had already been fixed for exactly that reason, and
+    its comment says so; the bind address two lines below kept the claim. One function both
+    callers use is the version of that fix which cannot come apart again.
+
+    `host_has_ip` is passed in rather than imported: this module is the low-level validation layer
+    and must not depend on panel.ops. When it is None the local-address check is skipped, which is
+    right for the wizard — it runs during first-boot setup, before the panel knows much about the
+    host, and the parse plus the wildcard/loopback rules are what stop the unbootable values."""
+    text = (value or "").strip()
+    if not text:
+        return "Pick a bind address — e.g. 0.0.0.0 (all interfaces) or 127.0.0.1 (localhost)."
+    if text in BIND_WILDCARD:
+        return None
+    if text in BIND_LOOPBACK and text != "localhost":
+        return None
+    import ipaddress
+    try:
+        ipaddress.ip_address(text)
+    except ValueError:
+        return ("Bind address must be an IP — e.g. 0.0.0.0 (all interfaces), 127.0.0.1 "
+                "(localhost), or this host's Tailscale IP.")
+    if host_has_ip is not None and not host_has_ip(text):
+        return "%s isn't an address on this host — the panel couldn't bind to it." % text
+    return None
+
 
 # Filenames reach a Content-Disposition header, whose WSGI value is latin-1 — see
 # _attachment_header. Anything outside this set is replaced rather than quoted, because a name is

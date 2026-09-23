@@ -454,9 +454,25 @@ check("daily_restart(mapped): sets pending flag at 05:00 (recorder-wrapped)",
       and ".status" in _cron["add"][0])
 check("daily_restart(mapped): queries gamedig for player count",
       "gamedig --type garrysmod 127.0.0.1:27015" in _cron["add"][1])
+# The hourly line must restart only on a COUNTED zero. gamedig writes its failure to stdout as
+# {"error":...}, so `.players` is null and jq prints the length of null — 0. The old condition was
+# `[ -z "$P" ] || [ "$P" = 0 ] || [ "$P" = null ]`, which restarted on all three, so every dropped
+# query rebooted a server full of players from an unattended cron. The `else empty end` makes jq
+# print nothing unless it really saw a player array.
+_dr_line = _cron["add"][1]
+check("daily_restart(mapped): jq prints nothing unless gamedig really answered",
+      'if (.players|type=="array") then (.players|length) else empty end' in _dr_line, _dr_line[:200])
+check("daily_restart(mapped): restarts on a counted 0, not on an empty/failed read",
+      '[ "$P" = 0 ]' in _dr_line
+      and '-z "$P"' not in _dr_line and '"$P" = null' not in _dr_line, _dr_line[:200])
 _sm_core.set_daily_restart(None, "noqueryserver", game_type="noquerygame", port=28960, enabled=True)
+# The no-query case stays unconditional, and that is a different thing from a failed read: the
+# panel knows at cron-writing time that this game has no gamedig type, so there is no reading to
+# fail and restarting at the daily time is what the operator asked for.
 check("daily_restart(unmapped game): skips gamedig, no player query",
-      "gamedig" not in _cron["add"][1] and "P=; " in _cron["add"][1])
+      "gamedig" not in _cron["add"][1] and "$P" not in _cron["add"][1])
+check("daily_restart(unmapped game): still restarts unconditionally when the flag is set",
+      "if true; then" in _cron["add"][1], _cron["add"][1][:200])
 _sm_core.set_daily_restart(None, "gmodserver", enabled=False)
 check("daily_restart(disable): adds nothing and clears the flag",
       _cron["add"] == [] and "rm -f" in _cron["pre"])

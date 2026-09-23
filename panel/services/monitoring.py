@@ -774,7 +774,10 @@ def _server_max_config(gs):
         return cached
     mx = None
     try:
-        vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, ["maxplayers", "slots"])
+        # `or {}`: None is "the config could not be read". Both answers leave mx None here, and
+        # the cache below deliberately stores only a real value, so an unreadable read is retried
+        # next time instead of being pinned for the panel's lifetime.
+        vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, ["maxplayers", "slots"]) or {}
         for key in ("maxplayers", "slots"):
             v = (vals.get(key) or "").strip()
             if v.isdecimal():

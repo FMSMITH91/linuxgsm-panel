@@ -10,8 +10,8 @@ from panel.ops import (tailscale_integration as ts)
 from panel.ops.ssh_manager import (ssh_test_connection)
 from panel.security.auth import (hash_password)
 import json
-from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT, _port_or,
-    password_problem)
+from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
+    _port_or, bind_host_error, password_problem)
 from app import (_current_lang, _log, _setup_open, _ts_backend_scheme, is_setup_complete)
 
 
@@ -91,11 +91,23 @@ def register(app):
                 cfg["site_title"] = request.form.get("site_title", "LinuxGSM Panel")
                 cfg["site_domain"] = request.form.get("site_domain", "")
                 cfg["port"] = _wiz_port
-                # nosec B104 - not a hardcoded bind: this is the DEFAULT offered in the setup
-                # wizard when the operator leaves the field blank, and 0.0.0.0 is what a panel
-                # reached over a tailnet or a LAN has to listen on. The value is the operator's
-                # to set, and api_panel_change_port validates whatever they choose.
-                cfg["bind_host"] = request.form.get("bind_host", "0.0.0.0")  # nosec B104
+                # The bind address is VALIDATED here for the same reason the port above it is,
+                # and the comment that used to sit here made the same mistake the port's once
+                # did: it said "api_panel_change_port validates whatever they choose". That is a
+                # different route and the wizard never calls it, so this wrote whatever was
+                # posted — and an address the host cannot bind produces a panel that does not come
+                # back up, recoverable only with linuxgsm-panel-recover or by hand-editing
+                # config.json. bind_host_error is now the single rule both writers use.
+                #
+                # nosec B104 - not a hardcoded bind: 0.0.0.0 is the DEFAULT offered when the
+                # operator leaves the field blank, and it is what a panel reached over a tailnet
+                # or a LAN has to listen on. The value is the operator's to set.
+                _wiz_bind = (request.form.get("bind_host") or "0.0.0.0").strip()  # nosec B104
+                _bind_err = bind_host_error(_wiz_bind)
+                if _bind_err:
+                    flash(_bind_err, "danger")
+                    return redirect("/setup")
+                cfg["bind_host"] = _wiz_bind
                 save_config(cfg)
                 data["site_configured"] = True
                 state.step = "admin_user"

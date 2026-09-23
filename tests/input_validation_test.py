@@ -273,6 +273,83 @@ try:
     check("/remotes/edit accepts a valid ssh_port (positive control)", stored_remote_port() == 2222,
           "stored port is %s" % stored_remote_port())
 
+    # ── /remotes/<id>/edit — auth_method PICKS THE TRANSPORT ─────────────────────────────────
+    # Every other field on this form was validated; this one was stored raw. It is not a label:
+    # _core.is_local_server() answers True for auth_method == "local", so that one value moves
+    # every command the panel runs "on that host" onto the PANEL HOST — the machine holding the
+    # database, the credential key and the panel's own sudoers grant. The form's select offers
+    # exactly key/password/tailscale (templates/manage_remotes.html), so anything else is forged.
+    def stored_remote_auth():
+        with app.app_context():
+            return db.session.get(RemoteServer, remote_id).auth_method
+
+    def stored_remote_fields():
+        with app.app_context():
+            _r = db.session.get(RemoteServer, remote_id)
+            return _r.name, _r.host, _r.username
+
+    for bad in ("local", "LOCAL", "banana", "", "key\nlocal"):
+        r = c.post("/remotes/%d/edit" % remote_id,
+                   data={"name": "iv-host", "host": "192.0.2.10", "ssh_user": "root",
+                         "ssh_port": "2222", "auth_method": bad}, follow_redirects=False)
+        label = repr(bad)[:22]
+        check("/remotes/edit auth_method=%s does not 5xx" % label, r.status_code < 500,
+              "got %d" % r.status_code)
+        check("/remotes/edit auth_method=%s never becomes local execution" % label,
+              stored_remote_auth() == "key", "stored auth_method is now %r" % stored_remote_auth())
+    for good in ("password", "tailscale", "key"):
+        c.post("/remotes/%d/edit" % remote_id,
+               data={"name": "iv-host", "host": "192.0.2.10", "ssh_user": "root",
+                     "ssh_port": "2222", "auth_method": good}, follow_redirects=False)
+        check("/remotes/edit accepts auth_method=%s (positive control)" % good,
+              stored_remote_auth() == good, "stored auth_method is %r" % stored_remote_auth())
+
+    # ...and /remotes/add refuses the same value, so the hole is closed on both sides.
+    #
+    # The connection test has to be stubbed SUCCESSFUL for this to mean anything. Left real, the
+    # unreachable 192.0.2.x host refuses the add by itself and the check passes whether the
+    # allowlist is there or not — a gate that certifies the bug. With the test passing, the only
+    # thing standing between this POST and a stored auth_method="local" is the allowlist, which
+    # runs before it.
+    import panel.routes.remotes as _rr
+    _saved_test = _rr.ssh_test_connection
+    try:
+        _rr.ssh_test_connection = lambda *a, **k: (True, "stubbed OK")
+        before = remotes_count()
+        r = c.post("/remotes/add", data={"name": "iv-local-sneak", "host": "192.0.2.12",
+                                         "ssh_user": "root", "ssh_port": "22",
+                                         "auth_method": "local", "credential": ""},
+                   follow_redirects=False)
+        check("/remotes/add auth_method=local writes no host row",
+              r.status_code < 500 and remotes_count() == before,
+              "status %d, rows %d -> %d" % (r.status_code, before, remotes_count()))
+        # positive control: the same POST with a real method DOES add, so the check above is
+        # measuring the allowlist and not a route that refuses everything.
+        before = remotes_count()
+        c.post("/remotes/add", data={"name": "iv-add-ok", "host": "192.0.2.13",
+                                     "ssh_user": "root", "ssh_port": "22",
+                                     "auth_method": "key", "credential": "",
+                                     "setup_type": "existing"},
+               follow_redirects=False)
+        check("/remotes/add accepts auth_method=key (positive control)",
+              remotes_count() == before + 1, "rows %d -> %d" % (before, remotes_count()))
+    finally:
+        _rr.ssh_test_connection = _saved_test
+
+    # ── /remotes/<id>/edit — a BLANK field is not an edit ────────────────────────────────────
+    # `.get(key, default)` only falls back when the key is ABSENT, and this form posts all three
+    # every time, without `required` (the add form above it has it). So clearing a box and saving
+    # stored "" over the real value — and the guards were all `if new_x and ...`, which an empty
+    # string skips. A remote whose host is "" is unreachable and its game servers unmanageable.
+    _was = stored_remote_fields()
+    r = c.post("/remotes/%d/edit" % remote_id,
+               data={"name": "", "host": "", "ssh_user": "", "ssh_port": "2222",
+                     "auth_method": "key"}, follow_redirects=False)
+    check("/remotes/edit blank fields do not 5xx", r.status_code < 500, "got %d" % r.status_code)
+    check("/remotes/edit blank name/host/ssh_user leave the stored values alone",
+          stored_remote_fields() == _was,
+          "%r -> %r" % (_was, stored_remote_fields()))
+
     # ── /api/panel/change-port — JSON body, and the panel's OWN port ─────────────────────────
     # Side-effect-free for every value below: all are refused before any save or restart. A VALID
     # port is deliberately not exercised — that one restarts the panel.

@@ -386,9 +386,36 @@ try:
 
     # Alerts endpoint: GET returns the provider list; POST filters to known keys and never 500s
     # (the config write to the game host fails on the test box, but returns gracefully).
-    al = c.get("/api/server/%d/alerts" % gs_id)
-    check("alerts: GET returns the provider list",
-          al.status_code == 200 and isinstance((al.get_json() or {}).get("providers"), list))
+    #
+    # The GET needs a config read that SUCCEEDS now, and that is the point of the check below it.
+    # This used to run against the test box's unreachable game host and still assert a rendered
+    # provider list, because the route answered an unreadable config with `values: {}`. The card
+    # paints those values into its inputs and Save posts every input back, so a blank form was one
+    # click away from writing "" over the operator's real Discord/Telegram credentials.
+    _al_saved = _sm_core.run_command
+    try:
+        from panel.ops.ssh_manager import files as _sm_files_al
+        _sm_core.run_command = lambda s, cmd, **k: (
+            'discordalert="on"\ndiscordwebhook="https://real/hook"\n' + _sm_files_al._READ_END, "", 0)
+        al = c.get("/api/server/%d/alerts" % gs_id)
+        check("alerts: GET returns the provider list",
+              al.status_code == 200 and isinstance((al.get_json() or {}).get("providers"), list))
+        check("alerts: GET returns the values it read",
+              ((al.get_json() or {}).get("values") or {}).get("discordwebhook") == "https://real/hook",
+              str(al.get_json())[:160])
+        # ...and a read that did NOT happen is reported, not rendered as "nothing configured".
+        # run_command does not raise on the tailscale/local transports, so this tuple — not an
+        # exception — is what an unreachable host really produces.
+        _sm_core.run_command = lambda s, cmd, **k: ("", "SSH command timed out", -1)
+        alf = c.get("/api/server/%d/alerts" % gs_id)
+        _alfj = alf.get_json() or {}
+        check("alerts: an unreadable config is an error, not a blank form",
+              bool(_alfj.get("error")) and "values" not in _alfj, str(_alfj)[:160])
+    finally:
+        _sm_core.run_command = _al_saved
+    # `al` deliberately stays bound to the SUCCESSFUL read above: the provider cross-checks below
+    # compare the GET's advertised providers against the POST's accepted keys, and they need a
+    # response that actually carries a provider list.
     alp = c.post("/api/server/%d/alerts" % gs_id, json={"values": {"discordalert": "on", "notakey": "x"}})
     check("alerts: POST returns a JSON result (no 500)", "success" in (alp.get_json() or {}))
 
@@ -1716,6 +1743,43 @@ try:
             break
     check("login: brute-force lockout blocks after %d failures" % LOGIN_MAX_FAILS, _locked)
     _LOGIN_FAILS.clear()   # isolate: don't leave 127.0.0.1 locked for anything else
+
+    # ...and it cannot be stepped around with a per-request X-Real-IP.
+    #
+    # The throttle keys on client_ip() and has no second dimension, so whoever chooses that string
+    # chooses whether the throttle exists. The test client connects from loopback, which is the
+    # Tailscale Serve shape exactly: Serve proxies to 127.0.0.1, so `behind_proxy` is True with no
+    # configuration at all. Serve sets the X-Forwarded-* trio and does NOT set or strip X-Real-IP,
+    # so a client-supplied one arrived verbatim — and client_ip() used to prefer it. Below, the
+    # proxy-set header is constant (one real client) while the client-supplied one rotates: the
+    # lockout has to follow the proxy's value.
+    _LOGIN_FAILS.clear()
+    lc2 = app.test_client()
+    _locked_hdr = False
+    for _i in range(LOGIN_MAX_FAILS + 2):
+        lr = lc2.post("/login", data={"username": "nobody_lockout2", "password": "wrong"},
+                      headers={"X-Forwarded-For": "198.51.100.7",
+                               "X-Real-IP": "203.0.113.%d" % _i})
+        if b"Too many failed attempts" in lr.data:
+            _locked_hdr = True
+            break
+    check("login: a rotating X-Real-IP does not mint a fresh throttle bucket per request",
+          _locked_hdr, "%d attempts, never locked" % (LOGIN_MAX_FAILS + 2))
+    # positive control: the throttle really is keyed on the proxy-set header, so a rotating
+    # X-Forwarded-For (a proxy that appends, with the client's own copy to its LEFT) is still one
+    # bucket per real peer rather than one per forged hop.
+    _LOGIN_FAILS.clear()
+    lc3 = app.test_client()
+    _locked_xff = False
+    for _i in range(LOGIN_MAX_FAILS + 2):
+        lr = lc3.post("/login", data={"username": "nobody_lockout3", "password": "wrong"},
+                      headers={"X-Forwarded-For": "203.0.113.%d, 198.51.100.8" % _i})
+        if b"Too many failed attempts" in lr.data:
+            _locked_xff = True
+            break
+    check("login: only the LAST X-Forwarded-For hop keys the throttle, so forged hops don't help",
+          _locked_xff, "%d attempts, never locked" % (LOGIN_MAX_FAILS + 2))
+    _LOGIN_FAILS.clear()
 
     # ── Database maintenance: stats + VACUUM/ANALYZE optimize ─────
     with app.app_context():

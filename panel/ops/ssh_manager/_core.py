@@ -1701,11 +1701,30 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     # pipeline misbehave under eventlet's green subprocess; crontab-only works).
     #   daily <hour>:<minute>: set the "pending" flag
     #   hourly :10           : if flag set and server empty (gamedig), restart + clear flag
-    getp = (f"P=$(gamedig --type {gdtype} {_gamedig_host(server)}:{port} 2>/dev/null | jq -r '.players|length' 2>/dev/null); "
-            if (gdtype and port) else "P=; ")
+    # The player test is "did we COUNT zero", not "did we fail to count". gamedig writes its
+    # failure to stdout as a JSON object ({"error":"Failed all 1 attempts"}), so `.players` is null
+    # and jq reports the length of null as 0 — and the old condition,
+    # `[ -z "$P" ] || [ "$P" = 0 ] || [ "$P" = null ]`, restarted on all three. Every way the query
+    # could fail (packet loss, a world save stalling the query thread, a rate-limited Source server,
+    # a firewalled query port, gamedig or jq not installed) therefore restarted a server full of
+    # players, from an unattended hourly cron, and this is the one decision the feature exists to
+    # avoid. `if … then … else empty end` makes jq print NOTHING unless it really saw a player
+    # array, which is the same `ok:(.players|type=="array")` guard the three python-side readers in
+    # cron.py use; the shell then only acts on an exact 0.
+    #
+    # The no-query case stays unconditional, and that is not the same thing: when the panel knows
+    # at cron-writing time that the game has no gamedig type or no port, there is no reading to
+    # fail, and restarting at the daily time is the behaviour the operator asked for.
+    if gdtype and port:
+        jqf = 'if (.players|type=="array") then (.players|length) else empty end'
+        getp = (f"P=$(gamedig --type {gdtype} {_gamedig_host(server)}:{port} 2>/dev/null "
+                f"| jq -r {_quote(jqf)} 2>/dev/null); ")
+        cond = '[ "$P" = 0 ]'
+    else:
+        getp, cond = "", "true"
     check_cmd = (
         f"[ -f {flag} ] && {{ {getp}"
-        f'if [ -z "$P" ] || [ "$P" = 0 ] || [ "$P" = null ]; then '
+        f"if {cond}; then "
         f"/home/{user}/{selfname} restart >/dev/null 2>&1; rm -f {flag}; fi; }}"
     )
     touch_line = f"{minute} {hour} * * * {cron._record_managed_cmd(user, f'touch {flag}')}"

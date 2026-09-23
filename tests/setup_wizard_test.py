@@ -169,6 +169,40 @@ try:
     check("open: step=welcome still accepts a valid port (positive control)",
           load_config().get("port") == 5052, str(load_config().get("port")))
 
+    # ── ...and the BIND ADDRESS, which sat two lines below the port carrying the same false
+    # claim. app.py reads cfg["bind_host"] and hands it to socketio.run(), so a value the host
+    # cannot bind is a panel that does not come back up — the identical unrecoverable state the
+    # port bound above exists to prevent. Both writers now go through bind_host_error().
+    c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
+                           "port": "5052", "bind_host": "127.0.0.1"})
+    _bind_before = load_config().get("bind_host")
+    for _bad in ("not-an-ip", "0.0.0.0; rm -rf /", "999.1.1.1",
+                 "example.com", "127.0.0.1:5000", "<script>", "localhost"):
+        r = c.post("/setup", data={"step": "welcome", "site_title": "Should Not Save",
+                                   "port": "5052", "bind_host": _bad})
+        check("open: step=welcome refuses bind_host=%r" % _bad,
+              r.status_code < 500 and load_config().get("bind_host") == _bind_before,
+              "status %d, config bind_host is now %r" % (r.status_code, load_config().get("bind_host")))
+    # A BLANK field is not a bad value — it means "use the default", which is what the form offers
+    # when the operator leaves the box alone. Asserted rather than assumed, because the refusals
+    # above would otherwise be free to swallow it.
+    r = c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
+                               "port": "5052", "bind_host": ""})
+    check("open: step=welcome treats a blank bind_host as the 0.0.0.0 default",
+          load_config().get("bind_host") == "0.0.0.0", repr(load_config().get("bind_host")))
+    c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
+                           "port": "5052", "bind_host": "127.0.0.1"})
+    _bind_before = load_config().get("bind_host")
+    check("open: a refused bind address leaves the rest of step 1 unsaved too",
+          load_config().get("site_title") == "Test Panel", load_config().get("site_title"))
+    for _good in ("0.0.0.0", "::", "127.0.0.1", "::1"):
+        r = c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
+                                   "port": "5052", "bind_host": _good})
+        check("open: step=welcome accepts bind_host=%r (positive control)" % _good,
+              load_config().get("bind_host") == _good, repr(load_config().get("bind_host")))
+    c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
+                           "port": "5052", "bind_host": "127.0.0.1"})
+
     # ── Step 2 validation: none of these may create an account ────────────────────────────────
     for _name, _form, _why in (
             ("a short username", {"username": "ab", "password": "Sufficient1!pass",

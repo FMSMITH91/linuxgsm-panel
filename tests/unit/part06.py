@@ -2655,17 +2655,34 @@ def _ip_for(headers, remote="127.0.0.1", trust_proxy=False, proxy_fix_orig=None)
         return _ip_auth.client_ip()
 
 
-eq("client_ip: X-Real-IP wins over a client-supplied X-Forwarded-For",
-   _ip_for({"X-Real-IP": "100.64.0.5", "X-Forwarded-For": "9.9.9.9"}), "100.64.0.5")
-eq("client_ip: falling back to X-Forwarded-For takes the LAST hop, not the first",
+# X-Forwarded-For's LAST hop wins, and X-Real-IP is only the fallback. The order used to be the
+# other way round, on the premise that a proxy setting X-Real-IP has overwritten whatever the
+# client sent. True of nginx and Caddy; NOT true of Tailscale Serve, which this panel enables by
+# itself and which proxies to loopback — so `behind_proxy` is True with no configuration, and
+# Serve's addProxyForwardedHeaders sets only the X-Forwarded-* trio and passes a client-supplied
+# X-Real-IP straight through. That made the login throttle key client-chosen on the DEFAULT
+# deployment: a fresh bucket per request, so LOGIN_MAX_FAILS was never reached.
+eq("client_ip: the LAST X-Forwarded-For hop wins over a client-supplied X-Real-IP",
+   _ip_for({"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "100.64.0.5"}), "100.64.0.5")
+eq("client_ip: X-Forwarded-For takes the LAST hop, not the first",
    _ip_for({"X-Forwarded-For": "9.9.9.9, 198.51.100.4, 100.64.0.5"}), "100.64.0.5")
+eq("client_ip: X-Real-IP is still read when there is no X-Forwarded-For at all",
+   _ip_for({"X-Real-IP": "100.64.0.5"}), "100.64.0.5")
+# A key space is only bounded while the values are addresses — anything else is a client picking
+# its own throttle bucket, so it falls through to the socket peer.
+eq("client_ip: a non-address X-Forwarded-For hop is not a bucket key",
+   _ip_for({"X-Forwarded-For": "not-an-ip"}), "127.0.0.1")
+eq("client_ip: a non-address X-Real-IP is not a bucket key",
+   _ip_for({"X-Real-IP": "../../etc/passwd"}), "127.0.0.1")
+eq("client_ip: a bracketed IPv6 hop with a port is still read",
+   _ip_for({"X-Forwarded-For": "[2001:db8::5]:443"}), "2001:db8::5")
 eq("client_ip: a direct connection ignores both headers",
    _ip_for({"X-Real-IP": "100.64.0.5", "X-Forwarded-For": "9.9.9.9"}, remote="203.0.113.9"),
    "203.0.113.9")
 # With trust_proxy, ProxyFix has already rewritten remote_addr FROM the header being judged — so
-# the original socket peer is what decides, and X-Real-IP is what is read.
+# the original socket peer is what decides, and the last X-Forwarded-For hop is what is read.
 eq("client_ip: behind a declared proxy, the header the proxy sets wins over the rewritten peer",
-   _ip_for({"X-Real-IP": "100.64.0.5", "X-Forwarded-For": "9.9.9.9"},
+   _ip_for({"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "100.64.0.5"},
            remote="9.9.9.9", trust_proxy=True, proxy_fix_orig="127.0.0.1"), "100.64.0.5")
 eq("client_ip: no headers at all -> the socket address",
    _ip_for({}, remote="203.0.113.9"), "203.0.113.9")

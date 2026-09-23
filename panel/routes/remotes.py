@@ -12,8 +12,8 @@ from panel.ops.ssh_manager import (close_connection, ssh_test_connection)
 from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, check_password,
     get_remote, log_action, permission_required)
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
-from panel.core.validation import (HOST_RE, LINUX_USER_RE, MAX_PORT, MIN_PORT, SAFE_LABEL_RE,
-    _port_or)
+from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, LINUX_USER_RE, MAX_PORT,
+    MIN_PORT, SAFE_LABEL_RE, _port_or)
 from panel.core.panel_state import (_install_jobs, _install_lock)
 from panel.routes._shared import (_begin_bootstrap, _bootstrap_jobs, _bootstrap_lock)
 import logging
@@ -145,6 +145,14 @@ def register(app):
             return _form_err("SSH user must be a valid Linux username.", "manage_remotes")
         if not is_local and (not host or not HOST_RE.match(host)):
             return _form_err("Host must be a valid hostname or IP address.", "manage_remotes")
+        # The same allowlist edit_remote uses, and for the same reason: `auth_method` picks the
+        # TRANSPORT, and "local" means "this record is the panel host" to is_local_server(). The
+        # is_local branch below sets that itself, from a deliberate checkbox; reaching it through
+        # the credential dropdown instead would store a host that is remote by every other field
+        # and local by the only one that decides where commands run. Only checked off the
+        # non-local path — the branch below hardcodes auth_method="local" on purpose.
+        if not is_local and auth_method not in EDITABLE_AUTH_METHODS:
+            return _form_err("Unknown authentication method.", "manage_remotes")
 
         if is_local:
             remote = RemoteServer(
@@ -203,16 +211,22 @@ def register(app):
     @permission_required(MANAGE_REMOTES)
     def edit_remote(remote_id):
         remote = get_remote(remote_id)
-        new_user = request.form.get("ssh_user", remote.username)
+        # A BLANK field is not an edit. `.get(key, default)` only falls back when the key is
+        # ABSENT, and the edit form posts all three of these every time — without `required`,
+        # unlike the add form above it (templates/manage_remotes.html:25/29 have it, :193/:197 do
+        # not). So clearing the box and saving used to store "" over the real name, host or SSH
+        # user, and the guards below are all `if new_x and …`, which an empty string skips. A
+        # remote with host "" is unreachable and its game servers unmanageable.
+        new_user = (request.form.get("ssh_user") or "").strip() or remote.username
         # SECURITY: validate the username field (it reaches `sudo -u <user>` / SSH commands).
-        if new_user and not LINUX_USER_RE.match(new_user):
+        if not LINUX_USER_RE.match(new_user):
             return _form_err("SSH user must be a valid Linux username.", "manage_remotes")
-        new_name = request.form.get("name", remote.name)
-        if new_name and not SAFE_LABEL_RE.match(new_name):
+        new_name = (request.form.get("name") or "").strip() or remote.name
+        if not SAFE_LABEL_RE.match(new_name):
             return _form_err("Name cannot contain < > \" ' ` or backslashes.", "manage_remotes")
         remote.name = new_name
-        new_host = request.form.get("host", remote.host)
-        if not remote.is_local and new_host and not HOST_RE.match(new_host):
+        new_host = (request.form.get("host") or "").strip() or remote.host
+        if not remote.is_local and not HOST_RE.match(new_host):
             return _form_err("Host must be a valid hostname or IP address.", "manage_remotes")
         new_port = _port_or(request.form.get("ssh_port"), None)
         if new_port is None:
@@ -225,7 +239,26 @@ def register(app):
         remote.host = new_host
         remote.port = new_port
         remote.username = new_user
-        remote.auth_method = request.form.get("auth_method", remote.auth_method)
+        # SECURITY: the one field on this form that was taken raw, while the four above it were
+        # each validated. `auth_method` is not a label — it SELECTS THE TRANSPORT, and
+        # `_core.is_local_server()` returns True for `auth_method == "local"` (panel/ops/
+        # ssh_manager/_core.py:423-424, `or getattr(server, "auth_method", None) == "local"`).
+        # So posting auth_method=local for an ordinary remote moved every command the panel runs
+        # "on that host" — console input, file writes, privileged verbs, firewall changes — onto
+        # the PANEL HOST instead, the machine holding the database, the credential key and the
+        # panel's own sudoers grant. The form never offers it: the select at
+        # templates/manage_remotes.html:210-212 lists exactly key/password/tailscale, so any other
+        # value arrived from a forged request. An unknown value was no better — it falls through
+        # `enforce_pin = auth_method not in ("tailscale", "local")` (_core.py:569) into the key
+        # path with a method nothing recognises.
+        new_auth = (request.form.get("auth_method") or "").strip() or remote.auth_method
+        if remote.is_local:
+            # The panel's own row is created by host_local.py with auth_method="local" and is not
+            # repointable from this form; keep whatever it has.
+            new_auth = remote.auth_method
+        elif new_auth not in EDITABLE_AUTH_METHODS:
+            return _form_err("Unknown authentication method.", "manage_remotes")
+        remote.auth_method = new_auth
         # Credential: the edit form leaves it blank to keep the current one; a new
         # value is (re)encrypted before storage.
         new_cred = request.form.get("credential", "").strip()

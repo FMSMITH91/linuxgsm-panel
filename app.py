@@ -352,6 +352,8 @@ def _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, main_por
         cur = lgsm_get_values(remote, short_name, lgsm_name, _SOURCE_AUX_PORT_KEYS)
     except Exception:
         return {}
+    if cur is None:
+        return {}                        # config unreadable — same best-effort answer as a raise
     have = {k: int(str(cur.get(k, "")).strip())
             for k in _SOURCE_AUX_PORT_KEYS if str(cur.get(k, "")).strip().isdecimal()}
     if not have:
@@ -367,7 +369,7 @@ def _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, main_por
         if e.short_name == short_name or sm_game_engine(e.game_type) != "valve":
             continue
         try:
-            sib = lgsm_get_values(remote, e.short_name, e.lgsm_name, _SOURCE_AUX_PORT_KEYS)
+            sib = lgsm_get_values(remote, e.short_name, e.lgsm_name, _SOURCE_AUX_PORT_KEYS) or {}
             for v in sib.values():
                 if str(v).strip().isdecimal():
                     occupied.add(int(str(v).strip()))

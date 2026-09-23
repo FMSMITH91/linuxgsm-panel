@@ -191,11 +191,23 @@ def register(app, supervise):
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         if request.method == "GET":
+            # A read that FAILED must not render as a form, and this is not a cosmetic point.
+            # The card paints `vals` straight into the inputs, and Save posts every input back
+            # through lgsm_write_config — so a blank form is not "nothing configured", it is a
+            # loaded gun: one failed read followed by one Save replaced the operator's real
+            # Discord/Telegram webhooks and tokens with empty strings and reported success.
+            # lgsm_get_values now answers None for "could not read"; the front end already has an
+            # error path (server_files.js loadAlerts: `if(d.error)`) that shows the message and
+            # never builds the inputs, so there is nothing to save back.
             try:
                 vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, _ALERT_KEYS)
             except Exception:
-                vals = {}   # host unreachable — still return the static provider list so it renders
+                vals = None
                 app.logger.debug("alerts read failed", exc_info=True)
+            if vals is None:
+                return jsonify({"error": "Could not read this server's LinuxGSM config, so the "
+                                         "current alert settings are unknown. Nothing has been "
+                                         "changed — try again when the host answers."}), 200
             return jsonify({"providers": ALERT_PROVIDERS, "values": vals})
         # POST: only the known alert keys; toggles coerced to on/off.
         # isinstance, not `or {}`: a non-empty non-dict (a number, a list) passes the `or` and
@@ -781,6 +793,10 @@ def register(app, supervise):
                 return jsonify({"success": True, "enabled": want == "on",
                                 "needs_restart": True})
             vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, ["logtimestamp"])
+            if vals is None:
+                # "enabled": False would be a claim about a config we could not read, and the
+                # toggle renders from it — say so instead, like the write path above.
+                return jsonify({"error": "Could not read the LinuxGSM config on this host."}), 502
             return jsonify({"enabled": _json_str(vals, "logtimestamp").strip('"') == "on"})
         except Exception:
             return jsonify({"error": _log_and_generic("request failed")}), 500
