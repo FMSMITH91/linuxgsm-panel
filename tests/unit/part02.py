@@ -1076,8 +1076,67 @@ try:
     _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
     check("ssh mode: a rule that did not take is reported as the failure it is",
           _ok is False and "still reports" in _msg.lower(), str(_msg))
+
+    # ── "could not read the firewall" is a THIRD answer, not "tailnet-only" ───────────────────
+    # remote_public_ssh_status discarded the rc, so an unreadable host produced out="" ->
+    # active=False, mode="off", which the UI states as "public SSH is disabled — tailnet only".
+    # That is the reassurance an operator acts on before closing port 22. The non-raising
+    # transports make it the common failure: run_command returns ("", "...timed out", -1).
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "SSH command timed out", -1)
+    _st = _sm_hosts.remote_public_ssh_status(object())
+    check("public ssh: an unreadable firewall is 'unknown', never 'off'",
+          _st.get("unreachable") is True and _st.get("mode") != "off", str(_st))
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+    check("public ssh: ...and setting it then says the state is unknown, not 'UFW is not active'",
+          _ok is False and "unknown" in _msg.lower(), str(_msg))
+    # ufw ABSENT is a reading, not a failed read — it keeps its own answer, and it is still not
+    # "off", because with no firewall nothing governs port 22 at all.
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "ufw: command not found", 127)
+    _st = _sm_hosts.remote_public_ssh_status(object())
+    check("public ssh: an absent ufw is reported as not-installed, not as unreachable",
+          _st.get("installed") is False and not _st.get("unreachable")
+          and _st.get("mode") != "off", str(_st))
+    # positive control: a real read still answers with a real mode.
+    _ufw_says("limit")
+    _st = _sm_hosts.remote_public_ssh_status(object())
+    check("public ssh: a readable firewall still reports its actual mode (positive control)",
+          _st.get("mode") == "limit" and not _st.get("unreachable"), str(_st))
+
+    # ── the unblock that always said it worked ───────────────────────────────────────────────
+    # remote_ufw_undeny_ip discarded the verb's result and returned True unconditionally, while
+    # remote_ufw_deny_ip six lines above it checks rc. Its LOCAL twin (system_ops.ufw_undeny_ip)
+    # was fixed for exactly this and carries the comment; the remote one was missed. The caller
+    # that matters is monitoring._autoblock_reconcile, which tallies releases from this value.
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "Command timed out", -1)
+    _ok, _msg = _sm_hosts.remote_ufw_undeny_ip(object(), "203.0.113.9")
+    check("ufw unblock: a delete that failed is not reported as 'Unblocked'",
+          _ok is False, str(_msg))
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "", 0)
+    _ok, _msg = _sm_hosts.remote_ufw_undeny_ip(object(), "203.0.113.9")
+    check("ufw unblock: a delete that worked still reports success (positive control)",
+          _ok is True and "203.0.113.9" in _msg, str(_msg))
+    check("ufw unblock: an invalid IP is still refused before any command runs",
+          _sm_hosts.remote_ufw_undeny_ip(object(), "not-an-ip")[0] is False)
+
+    # ── reboot: a refusal is knowable even though success is not ─────────────────────────────
+    # A reboot's success looks like a failure (the host goes down mid-command), so this cannot
+    # simply fail on non-zero. But a REFUSAL answers promptly and positively — sudo declining, an
+    # unknown verb, no helper — while -1 is the transport giving up. Both callers use the boolean,
+    # and monitoring writes it as `success=` on the audit row.
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "sudo: a password is required", 1)
+    _ok, _msg = _sm_hosts.remote_reboot(object())
+    check("reboot: a refused reboot is reported as refused", _ok is False, str(_msg))
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "SSH command timed out", -1)
+    check("reboot: ...but a dropped connection still counts as sent, which is what a reboot IS",
+          _sm_hosts.remote_reboot(object())[0] is True)
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "", 0)
+    check("reboot: ...and a clean send is sent (positive control)",
+          _sm_hosts.remote_reboot(object())[0] is True)
 finally:
-    _sm_core.run_command = _orig_rc
+    # BOTH, not just run_command. This block stubs run_privileged too (saved as _orig_rp above)
+    # and never put it back, so every later check in this flat script ran against the last stub
+    # set here — the leak tests/unit_test.py's own header warns about.
+    _sm_core.run_command, _sm_core.run_privileged = _orig_rc, _orig_rp
     _sm_core.run_privileged = _orig_rp
 
 # ── secret encryption round-trip ──────────────────────────────

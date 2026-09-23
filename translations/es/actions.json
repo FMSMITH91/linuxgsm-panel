@@ -168,5 +168,6 @@
   "Update failed": "La actualización falló",
   "Update the panel": "Actualizar el panel",
   "Upload folders": "Subir carpetas",
-  "You'll be alerted once this server is empty (then it turns itself off)": "Se te avisará cuando este servidor esté vacío (después se desactiva solo)"
+  "You'll be alerted once this server is empty (then it turns itself off)": "Se te avisará cuando este servidor esté vacío (después se desactiva solo)",
+  "The panel could not read this host’s firewall, so the public port state is unknown.": "El panel no pudo leer el cortafuegos de este host, por lo que se desconoce el estado del puerto público."
 }
