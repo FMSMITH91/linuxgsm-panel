@@ -5927,6 +5927,47 @@ try:
     # the panel log", which is the panel accusing itself of a bug the caller caused, and which
     # makes 5xx alerting fire on a malformed request. Driven as a superadmin against every
     # mutating JSON endpoint the review named, with a NUMBER where a string belongs.
+    # ── what the ban-watcher RECORDS, and at what threshold ──────────────────────────────────
+    # The false notifications were half of what the unreadable-jail bug produced: an "IP banned on
+    # the panel login" message per live ban, then a "Login attack in progress" alert once three
+    # arrived together. _f2b_ban_events decides; this is what it emits, driven directly rather
+    # than through the daemon thread.
+    import app as _fre
+    from panel.db.models import AuditLog as _fre_AL
+    _fre_notes = []
+    _fre_saved = _fre.notifications.notify
+    try:
+        _fre.notifications.notify = lambda ev, title, body, **k: _fre_notes.append((ev, title))
+        with app.app_context():
+            _n_before = _fre_AL.query.filter(_fre_AL.action.in_(
+                ("fail2ban_ban", "fail2ban_unban"))).count()
+        _fre._f2b_record_events(app, (), ())
+        with app.app_context():
+            _n_noop = _fre_AL.query.filter(_fre_AL.action.in_(
+                ("fail2ban_ban", "fail2ban_unban"))).count()
+        check("ban watcher: a tick with no events writes nothing and notifies nobody",
+              _n_noop == _n_before and not _fre_notes, "rows %d->%d notes=%r"
+              % (_n_before, _n_noop, _fre_notes))
+        # Two bans is under the spike threshold: audit rows and per-IP notices, no attack alert.
+        _fre._f2b_record_events(app, ("203.0.113.1", "203.0.113.2"), ("203.0.113.9",))
+        with app.app_context():
+            _bans = _fre_AL.query.filter_by(action="fail2ban_ban").count()
+            _unbans = _fre_AL.query.filter_by(action="fail2ban_unban").count()
+        check("ban watcher: real events are audited, bans and unbans alike",
+              _bans >= 2 and _unbans >= 1, "bans=%d unbans=%d" % (_bans, _unbans))
+        check("ban watcher: ...with one notice per banned IP",
+              [e for e, _t in _fre_notes].count("ip_banned") == 2, repr(_fre_notes))
+        check("ban watcher: ...and no attack alert below the spike threshold",
+              "ban_spike" not in [e for e, _t in _fre_notes], repr(_fre_notes))
+        # ...and at the threshold it fires exactly once.
+        _fre_notes.clear()
+        _fre._f2b_record_events(
+            app, tuple("203.0.113.%d" % i for i in range(20, 20 + _fre._BAN_SPIKE_THRESHOLD)), ())
+        check("ban watcher: a burst at the threshold raises one attack alert",
+              [e for e, _t in _fre_notes].count("ban_spike") == 1, repr(_fre_notes))
+    finally:
+        _fre.notifications.notify = _fre_saved
+
     # ── the auto-block SETTINGS survive a host read that failed ───────────────────────────────
     # They come from config.json, not from the host, and they were inside the same try as the IP
     # read — so an exception answered {"ips": [], "error": ...} with no `autoblock` key, the card
