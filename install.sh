@@ -1429,11 +1429,32 @@ if command -v tailscale >/dev/null 2>&1; then
 fi
 
 # Firewall state.
-UFW_ACTIVE=0; TS_UFW=0; PORT_OPEN=0
+#
+# ${SUDO} — computed fifteen lines above and not used here. `ufw status` requires uid 0: as an
+# ordinary user it writes "ERROR: You need to be root to run this script" to stderr, which the
+# 2>/dev/null discarded, and exits non-zero. So on the NON-ROOT install path (the documented
+# systemd --user model) all three probes came back empty and all three flags stayed 0 — an empty
+# answer read as the fact "ufw is not active".
+#
+# Both consequences were silent. The auto-open below is gated on UFW_ACTIVE, so the port was never
+# opened; and the banner's else branch printed the bare public URL under "Open the panel — the
+# first visit runs the setup wizard" with no firewalled caveat. The health check passes either
+# way, because it probes 127.0.0.1, so the install reported green while handing the user an
+# address their firewall was blocking.
+#
+# Read ONCE into a variable, too: three separate invocations of a root-only command could disagree
+# with each other, and only one of them needs to be right to matter.
+UFW_ACTIVE=0; TS_UFW=0; PORT_OPEN=0; UFW_READ=0
 if command -v ufw >/dev/null 2>&1; then
-    ufw status 2>/dev/null | grep -q "Status: active" && UFW_ACTIVE=1
-    ufw status 2>/dev/null | grep -qi "tailscale0"    && TS_UFW=1
-    ufw status 2>/dev/null | grep -qw "${PORT}"        && PORT_OPEN=1
+    UFW_STATUS="$(${SUDO} ufw status 2>/dev/null)" || true
+    # `ufw status` always prints a "Status:" line when it really ran. Its absence means the command
+    # did not answer — which is not the same as "inactive", and must not be reported as one.
+    if printf '%s' "${UFW_STATUS}" | grep -q "Status:"; then
+        UFW_READ=1
+        printf '%s' "${UFW_STATUS}" | grep -q "Status: active" && UFW_ACTIVE=1
+        printf '%s' "${UFW_STATUS}" | grep -qi "tailscale0"    && TS_UFW=1
+        printf '%s' "${UFW_STATUS}" | grep -qw "${PORT}"       && PORT_OPEN=1
+    fi
 fi
 
 # Auto-open the port when Tailscale ISN'T already a way in (not logged in, or UFW
@@ -1452,6 +1473,11 @@ echo -e "${GREEN}Open the panel — the first visit runs the setup wizard:${NC}"
 if [ -n "${PUBLIC_IP}" ]; then
     if [ "${UFW_ACTIVE}" -eq 1 ] && [ "${PORT_OPEN}" -eq 0 ]; then
         echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${NC}  ${YELLOW}(firewalled — run 'ufw allow ${PORT}/tcp' to expose)${NC}"
+    elif [ "${UFW_READ}" -eq 0 ] && command -v ufw >/dev/null 2>&1; then
+        # ufw is installed but would not answer — as an ordinary user it needs root. Say the state
+        # is unknown rather than printing the address as though it were reachable: the health check
+        # above proves only that the panel answers on 127.0.0.1.
+        echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${NC}  ${YELLOW}(firewall state unknown — check 'sudo ufw status' allows ${PORT}/tcp)${NC}"
     else
         echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${NC}"
     fi

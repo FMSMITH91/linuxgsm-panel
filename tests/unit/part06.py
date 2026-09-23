@@ -1277,6 +1277,40 @@ try:
           "can_already_sudo" in _sync_body and "no)" in _sync_body
           and "usermod -aG" in _sync_body, _sync_body[:200])
 
+    # ── the firewall probe has to use the SUDO computed beside it ────────────────────────────
+    # `ufw status` requires uid 0 — as an ordinary user it errors to stderr (discarded) and exits
+    # non-zero. The three probes ran WITHOUT ${SUDO}, which is set fifteen lines above, so on the
+    # documented non-root install every flag stayed 0: the auto-open never fired and the banner
+    # printed the bare public URL with no caveat. The health check passes regardless, because it
+    # probes 127.0.0.1 — so the install reported green while handing the user a blocked address.
+    _ufw_probe = _su_between("# Firewall state.", "\nfi\n")
+    _ufw_run = (_ufw_probe
+                + '\necho "ACTIVE=${UFW_ACTIVE} TS=${TS_UFW} OPEN=${PORT_OPEN} READ=${UFW_READ}"\n')
+    # A non-root run: ufw exists, and answers only when invoked through sudo.
+    _r = _su_run(_ufw_run, 'PORT=5000\nSUDO="sudo"\n',
+                 extra=("command() { [ \"$2\" = ufw ] && return 0; return 1; }\n"
+                        "ufw() { echo 'ERROR: You need to be root to run this script' >&2; return 1; }\n"
+                        "sudo() { [ \"$1\" = ufw ] && { echo 'Status: active'; "
+                        "echo '5000/tcp                   ALLOW       Anywhere'; return 0; }; return 1; }\n"))
+    check("install.sh: the firewall probe reads through sudo, so a non-root install sees the truth",
+          "ACTIVE=1" in _r.stdout and "OPEN=1" in _r.stdout and "READ=1" in _r.stdout,
+          repr(_r.stdout[-120:]))
+    # ...and when ufw will not answer at all, that is UNKNOWN, not "inactive".
+    _r = _su_run(_ufw_run, 'PORT=5000\nSUDO=""\n',
+                 extra=("command() { [ \"$2\" = ufw ] && return 0; return 1; }\n"
+                        "ufw() { echo 'ERROR: You need to be root to run this script' >&2; return 1; }\n"))
+    check("install.sh: ...and a firewall that would not answer is unread, not reported inactive",
+          "READ=0" in _r.stdout and "ACTIVE=0" in _r.stdout, repr(_r.stdout[-120:]))
+    # ...and a real "inactive" answer IS a reading (positive control), so the two are distinct.
+    _r = _su_run(_ufw_run, 'PORT=5000\nSUDO=""\n',
+                 extra=("command() { [ \"$2\" = ufw ] && return 0; return 1; }\n"
+                        "ufw() { echo 'Status: inactive'; }\n"))
+    check("install.sh: ...while a genuine 'Status: inactive' counts as read",
+          "READ=1" in _r.stdout and "ACTIVE=0" in _r.stdout, repr(_r.stdout[-120:]))
+    # The banner must act on that distinction rather than printing a bare URL.
+    check("install.sh: the URL banner says so when the firewall state is unknown",
+          'UFW_READ}" -eq 0' in _su_txt and "firewall state unknown" in _su_txt)
+
     # ...and prove it by RUNNING the function both ways, rather than trusting the source text.
     _su_recov = _su_between("install_recovery_command() {", "\n}\n") + "\ninstall_recovery_command\n"
     _su_rshim = ("id() { echo 0; }\n"
