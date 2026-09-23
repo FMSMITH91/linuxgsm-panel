@@ -538,6 +538,54 @@ try:
     _sm_hosts._pro_cache_invalidate(_psrv)
     _sm_hosts.pro_status(_psrv)
     check("pro_status: invalidate forces a refetch", _pro_n["n"] == 3)
+
+    # ── "could not read" is a third answer, and it must not be cached ────────────────────────
+    # The rc was discarded here under a comment saying anything non-JSON already reads as "not
+    # installed", so a timed-out read — which on the tailscale and local transports returns
+    # ("", "…timed out", -1) rather than raising — said "Ubuntu Pro is not installed" about a host
+    # nobody had asked. _pro_status_cached then PERSISTS that to the database and serves it for a
+    # day, across restarts.
+    _orig_pro_priv = _sm_core.run_privileged
+    try:
+        _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "SSH command timed out", -1)
+        _sm_hosts._pro_status_cache.clear()
+        _pu = _sm_hosts.pro_status(NS(id=43, host="h"))
+        check("pro_status: a timed-out read is flagged unreadable, not 'not installed'",
+              _pu.get("unreadable") is True, repr(_pu))
+        # ...and `pro` genuinely absent is still a READING, which keeps its old answer.
+        _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "pro: command not found", 127)
+        _sm_hosts._pro_status_cache.clear()
+        _pn = _sm_hosts.pro_status(NS(id=44, host="h"))
+        check("pro_status: a host without the pro client is 'not installed', not unreadable",
+              _pn.get("installed") is False and not _pn.get("unreadable"), repr(_pn))
+
+        # ── fail2ban overview: installed-but-unreadable is not "no jails" ────────────────────
+        # rc 127 was handled; every OTHER failure fell through to {"installed": True,
+        # "jails": []}, which the Security card renders as "No fail2ban jails found." — the same
+        # thing a healthy host with nothing configured shows. A host whose read timed out, or
+        # where fail2ban is installed but STOPPED, is exactly the one to tell the operator about.
+        _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "SSH command timed out", -1)
+        _ov = _sm_hosts.remote_fail2ban_overview(NS(id=45, host="h"))
+        check("f2b overview: an unreadable host is flagged, not reported as having no jails",
+              _ov.get("unreadable") is True and not _ov.get("jails"), repr(_ov))
+        _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "fail2ban-client: not found", 127)
+        _ov = _sm_hosts.remote_fail2ban_overview(NS(id=46, host="h"))
+        check("f2b overview: a host without fail2ban is 'not installed', not unreadable",
+              _ov.get("installed") is False and not _ov.get("unreadable"), repr(_ov))
+
+        def _ov_ok(s, v, a=(), **k):
+            if v == "f2b-status":
+                return ("Status\n|- Number of jail:\t1\n`- Jail list:\tsshd\n", "", 0)
+            return ("Status for the jail: sshd\n   |- Currently banned: 2\n"
+                    "   `- Banned IP list:\t203.0.113.1 203.0.113.2\n", "", 0)
+        _sm_core.run_privileged = _ov_ok
+        _ov = _sm_hosts.remote_fail2ban_overview(NS(id=47, host="h"))
+        check("f2b overview: a real read still parses its jails (positive control)",
+              _ov.get("installed") is True and not _ov.get("unreadable")
+              and [d["jail"] for d in _ov.get("jails") or []] == ["sshd"], repr(_ov)[:160])
+    finally:
+        _sm_core.run_privileged = _orig_pro_priv
+        _sm_hosts._pro_status_cache.clear()
 finally:
     _sm_core.run_command = _orig_pro_run
     _sm_hosts._pro_status_cache.clear()

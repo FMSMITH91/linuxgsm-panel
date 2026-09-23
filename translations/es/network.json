@@ -299,5 +299,7 @@
   "tailnet-only": "solo tailnet",
   "· Auth:": "· Autenticación:",
   "🔒 Private tailnet — only your devices can reach it": "🔒 Tailnet privada: solo tus dispositivos pueden acceder",
-  "Could not read this fail2ban log, so recent offenders are unknown.": "No se pudo leer este registro de fail2ban, por lo que se desconocen los infractores recientes."
+  "Could not read this fail2ban log, so recent offenders are unknown.": "No se pudo leer este registro de fail2ban, por lo que se desconocen los infractores recientes.",
+  "Could not read fail2ban on this host, so its jails are unknown.": "No se pudo leer fail2ban en este host, por lo que se desconocen sus jaulas.",
+  "Could not read Ubuntu Pro status on this host, so it is unknown.": "No se pudo leer el estado de Ubuntu Pro en este host, por lo que se desconoce."
 }

@@ -83,11 +83,23 @@ def _compute_pro_status(server):
     """Run `pro status` and shape the result. Returns installed/attached plus the featured
     security services and their enabled/disabled state."""
     import json
-    # `|| true` swallowed a non-zero exit so the caller always got a string; the check below
-    # already treats anything that is not JSON as "not installed", so the rc can just be ignored.
-    out, _, _ = _core.run_privileged(server, "pro-status", [], timeout=25, merge_stderr=False)
-    if not out.strip() or not out.strip().startswith("{"):
+    # Three answers, not two. The comment here used to say "the check below already treats
+    # anything that is not JSON as 'not installed', so the rc can just be ignored" — and that is
+    # the assumption: it makes a read that never happened indistinguishable from a host without
+    # Ubuntu Pro. On the tailscale and local transports a timed-out command does not raise, it
+    # returns ("", "…timed out", -1), so the common failure produced "Ubuntu Pro is not installed"
+    # about a host that was never asked.
+    #
+    # That is not a passing glitch: _pro_status_cached PERSISTS this to the database and serves it
+    # for _PRO_MAX_AGE (a day), across restarts.
+    #
+    # rc 127 / "not found" IS a reading — `pro` is genuinely absent — and keeps the old answer.
+    out, err, rc = _core.run_privileged(server, "pro-status", [], timeout=25, merge_stderr=False)
+    _txt = (out or "") + (err or "")
+    if rc == 127 or "not found" in _txt or "No such file" in _txt:
         return {"installed": False, "attached": False, "services": []}
+    if not out.strip() or not out.strip().startswith("{"):
+        return {"installed": False, "attached": False, "services": [], "unreadable": True}
     try:
         data = json.loads(out)
     except Exception:
@@ -1483,8 +1495,19 @@ def remote_fail2ban_overview(server):
     out, err, rc = _core.run_privileged(server, "f2b-status", [], timeout=15, merge_stderr=False)
     if rc == 127 or "not found" in (out + err).lower():
         return {"installed": False, "jails": []}
+    # rc 127 above is a reading — fail2ban is genuinely absent. ANY other failure was not: with
+    # no "Jail list:" line the regex simply found nothing, jails came out empty, and this returned
+    # {"installed": True, "jails": []} — which the Security card renders as "fail2ban is installed
+    # and running with no jails configured". A host where the read timed out, or where fail2ban is
+    # installed but STOPPED, is exactly the host an operator needs told about, and it got the
+    # reassuring answer instead.
+    #
+    # `fail2ban-client status` always prints "Jail list:" when it really runs, which is the same
+    # positive-token test firewall.remote_ufw_status makes on "Status:".
     m = re.search(r"Jail list:\s*(.*)", out or "")
-    jails = [j.strip() for j in (m.group(1).split(",") if m else []) if _F2B_JAIL_RE.match(j.strip())]
+    if rc != 0 or not m:
+        return {"installed": True, "jails": [], "unreadable": True}
+    jails = [j.strip() for j in m.group(1).split(",") if _F2B_JAIL_RE.match(j.strip())]
     details = []
     for jail in jails:
         jo, _, jrc = _core.run_privileged(server, "f2b-status-jail", [jail], timeout=15,

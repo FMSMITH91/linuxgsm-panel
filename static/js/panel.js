@@ -707,6 +707,17 @@ window.UPro = (function(){
   }
   function render(d){
     if(!EL) return;
+    // "could not read" before "not attached". The route used to answer a failed read as
+    // installed:false, so this branch offered an Attach form and the words "Not attached" about a
+    // host nobody had managed to ask — and that answer was persisted and served for a day.
+    if(d && d.unreadable){
+      EL.innerHTML = '<div class="d-flex align-items-center gap-2 mb-2">'
+        + '<span class="badge bg-warning text-dark">Unknown</span></div>'
+        + '<p class="small text-secondary mb-2">'
+        + 'Could not read Ubuntu Pro status on this host, so it is unknown.'
+        + '</p>';  // nosemgrep - fixed string, no interpolation
+      return;
+    }
     if(!d || d.installed === false){
       // nosemgrep - static literal; attachForm() is fixed markup too.
       EL.innerHTML = '<div class="d-flex align-items-center gap-2 mb-2"><span class="badge bg-secondary">Not attached</span></div>'

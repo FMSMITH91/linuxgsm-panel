@@ -1843,11 +1843,20 @@ def _pro_status_cached(remote, force=False):
     if cached and not force and (time.time() - cached.get("ts", 0)) < _PRO_MAX_AGE:
         return cached["data"]
     data = pro_status(remote, force=force)
-    try:
-        remote.update_pro_cache(data)
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
+    # Never persist a read that did not happen. This cache is served for _PRO_MAX_AGE — a day —
+    # and survives restarts, so storing an unreadable result pins "Ubuntu Pro is not installed"
+    # onto a host nobody managed to ask. The helper's own reader refuses to cache a failed read
+    # for the same reason; this is the database half of it.
+    if not data.get("unreadable"):
+        try:
+            remote.update_pro_cache(data)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+    elif cached:
+        # Something was known before. Hand that back rather than a blank — with the flag, so the
+        # page can say the figure is the last one read rather than the current truth.
+        return dict(cached["data"], unreadable=True, stale=True)
     return data
 
 def _refuse_on_panel_host(remote, what):
