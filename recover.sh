@@ -92,7 +92,20 @@ if [ -z "${PANEL_DIR}" ] || [ ! -f "${PANEL_DIR}/manage.py" ]; then
     self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
     selfdir="$(cd "$(dirname "${self}")" 2>/dev/null && pwd)" || selfdir=""
     for d in "/home/lgsmpanel/linuxgsm-panel" "${HOME}/linuxgsm-panel" "${selfdir}"; do
-        if [ -n "${d}" ] && [ -f "${d}/manage.py" ]; then PANEL_DIR="${d}"; break; fi
+        if [ -n "${d}" ] && [ -f "${d}/manage.py" ]; then
+            # The account came from the install this block is DISCARDING — a unit file's User=,
+            # or the owner of a directory that turned out to have no manage.py. Clearing it lets
+            # the `stat -c '%U' "${PANEL_DIR}"` below derive the account from the directory
+            # actually chosen, which is the line that exists to do exactly that.
+            #
+            # Left set, the two halves came from different installs: the interpreter is
+            # ${PANEL_DIR}/venv/bin/python from the NEW directory, run under `sudo -u` as the OLD
+            # directory's user — and the line that announces the pairing
+            # ("Using <dir> (service user <user>)") printed a combination nothing had established.
+            [ "${d}" != "${PANEL_DIR}" ] && SVC_USER=""
+            PANEL_DIR="${d}"
+            break
+        fi
     done
 fi
 if [ -z "${PANEL_DIR}" ] || [ ! -f "${PANEL_DIR}/manage.py" ]; then

@@ -1343,6 +1343,86 @@ try:
     check("uninstall.sh: ...and says the surviving user may still hold the remote SSH key",
           "SSH key used for remote hosts" in _un_txt)
 
+    # ── what the panel writes OUTSIDE its own directory has to be removed with it ─────────────
+    # privileged.py's WRITE_TARGETS is the authoritative list of root-owned files the panel puts
+    # on the host. uninstall.sh did not mention fail2ban at all, so `rm -rf "${PANEL_DIR}"` took
+    # data/auth.log and left an ENABLED jail whose logpath points at it.
+    _wt_src = open(os.path.join(_root, "panel", "security", "privileged.py"),
+                   encoding="utf-8").read()
+    _f2b_all = sorted(set(re.findall(r'"(/etc/fail2ban/[^"]+)"', _wt_src)))
+    # /etc/fail2ban/jail.local is deliberately NOT in this list, and the first version of this gate
+    # demanded it — which would have had uninstall delete the OPERATOR's own fail2ban config, jails
+    # for services that have nothing to do with the panel included. privileged.py says so on the
+    # line above the constant: "fail2ban's operator-owned jail file". The panel writes INTO it; it
+    # does not own it. Only the panel-NAMED files under jail.d/ and filter.d/ are the panel's to
+    # remove, which is why this filters rather than taking WRITE_TARGETS whole.
+    _f2b_owned = [t for t in _f2b_all
+                  if ("linuxgsm-panel" in t or "zz-panel-whitelist" in t)]
+    check("uninstall.sh: (premise) privileged.py writes panel-named fail2ban files",
+          len(_f2b_owned) >= 3, repr(_f2b_owned))
+    check("uninstall.sh: (premise) ...and jail.local is not one of them — it is the operator's",
+          "/etc/fail2ban/jail.local" in _f2b_all
+          and "/etc/fail2ban/jail.local" not in _f2b_owned, repr(_f2b_all))
+    _f2b_missing = [t for t in _f2b_owned if t not in _un_txt]
+    check("uninstall.sh: removes every fail2ban file the panel OWNS",
+          not _f2b_missing, "not removed: %s" % _f2b_missing)
+    check("uninstall.sh: ...and never deletes the operator's own jail.local",
+          "/etc/fail2ban/jail.local" not in _un_txt)
+    check("uninstall.sh: ...and reloads fail2ban so it stops watching the deleted log",
+          "fail2ban-client reload" in _un_txt)
+
+    # ── the host-SHARED pieces are only taken when they belong to this install ───────────────
+    # /usr/local/lib/linuxgsm-panel, the node-tools cron and the recovery symlink are one set for
+    # the whole host, and this block runs for an unprivileged uninstall too — so on a box with two
+    # panels, removing the second took the first's helper and recovery command. panel.conf, inside
+    # the directory being deleted, records which install owns them.
+    def _su_between2(start, end):
+        """_su_between, but over uninstall.sh — _su_txt is install.sh."""
+        i = _un_txt.index(start)
+        j = _un_txt.index(end, i)
+        return _un_txt[i:j + len(end)]
+
+    # Behavioural, not a presence check. The first version asserted that the code READ panel.conf
+    # and mentioned SHARED_MINE — and a mutation that replaced the comparison with `if false`
+    # passed it, because reading a file and then ignoring it looks identical from the outside.
+    # To the end of the SHARED_MINE decision, not the first `fi` — that one closes the panel.conf
+    # read, and slicing there left SHARED_MINE unset, which `set -u` turns into empty output.
+    _shared_dec = _su_between2('SHARED_CONF="${SHARED_CONF:', "    SHARED_MINE=0\nfi\n")
+    _shared_run = _shared_dec + '\necho "MINE=${SHARED_MINE}"\n'
+    _shared_tmp = _tempfile.mkdtemp(prefix="sharedconf-")
+    try:
+        _sc = os.path.join(_shared_tmp, "panel.conf")
+        with open(_sc, "w", encoding="utf-8") as _fh:
+            _fh.write("panel_dir=/home/other/linuxgsm-panel\n")
+        _r = _su_run(_shared_run, 'PANEL_DIR=/home/me/linuxgsm-panel\nSHARED_CONF=%s\n'
+                     % _su_shlex.quote(_sc))
+        check("uninstall.sh: host-shared pieces are LEFT when panel.conf names another install",
+              "MINE=0" in _r.stdout, repr(_r.stdout[-80:]))
+        with open(_sc, "w", encoding="utf-8") as _fh:
+            _fh.write("panel_dir=/home/me/linuxgsm-panel\n")
+        _r = _su_run(_shared_run, 'PANEL_DIR=/home/me/linuxgsm-panel\nSHARED_CONF=%s\n'
+                     % _su_shlex.quote(_sc))
+        check("uninstall.sh: ...and taken when it names this one (positive control)",
+              "MINE=1" in _r.stdout, repr(_r.stdout[-80:]))
+        # No panel.conf at all — an older install that never wrote one. Taking them is the old
+        # behaviour and the right default; refusing would strand the leftovers this block exists for.
+        _r = _su_run(_shared_run, 'PANEL_DIR=/home/me/linuxgsm-panel\n'
+                     'SHARED_CONF=%s\n' % _su_shlex.quote(os.path.join(_shared_tmp, "absent.conf")))
+        check("uninstall.sh: ...and taken when no panel.conf records an owner",
+              "MINE=1" in _r.stdout, repr(_r.stdout[-80:]))
+    finally:
+        _shutil.rmtree(_shared_tmp, ignore_errors=True)
+    check("uninstall.sh: ...and says so when another install owns them",
+          "belong to another install" in _un_txt)
+
+    # ── recover.sh must not pair a directory with another install's service user ─────────────
+    _rec_txt = open(os.path.join(_root, "recover.sh"), encoding="utf-8").read()
+    _rec_fallback = _rec_txt[_rec_txt.index('for d in "/home/lgsmpanel/linuxgsm-panel"'):]
+    _rec_fallback = _rec_fallback[:_rec_fallback.index("done\n")]
+    check("recover.sh: choosing a different panel dir clears the discarded install's service user",
+          'SVC_USER=""' in _rec_fallback,
+          "the stale user short-circuits the stat that derives it from the chosen directory")
+
     # ...and prove it by RUNNING the function both ways, rather than trusting the source text.
     _su_recov = _su_between("install_recovery_command() {", "\n}\n") + "\ninstall_recovery_command\n"
     _su_rshim = ("id() { echo 0; }\n"
