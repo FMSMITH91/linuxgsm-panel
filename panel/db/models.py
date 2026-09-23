@@ -1287,7 +1287,9 @@ def optimize_database():
     # freeze the whole event loop, and if a greenlet holds a DB lock VACUUM can't get
     # its own. Run the maintenance in a real worker thread via eventlet.tpool so the
     # hub keeps turning and lock holders can release. Direct call under tests.
-    vacuumed, wal_trimmed = False, None
+    # No initialiser here on purpose: all three branches below assign both names, and the
+    # `except` returns rather than falling through, so a default would only be dead code that
+    # reads like a fallback. CodeQL flagged it as redefined-before-use and was right.
     try:
         try:
             import eventlet.patcher

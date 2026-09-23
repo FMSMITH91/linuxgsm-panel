@@ -1531,6 +1531,21 @@ try:
         return ("", "", 0)
 
     try:
+        # Close the SSH seam outright. The stubs below cover every function this job is KNOWN to
+        # call, and CI still reached paramiko — "SSH connection failed: Error reading SSH protocol
+        # banner" / "No such file: /home/runner/.ssh/id_rsa" — on a runner where a real connect
+        # gets further than it does here, which is why it reproduced there and not locally. It only
+        # became visible when the install job's last-resort _fail() gained the app context it needs
+        # to record anything: before that the failure was swallowed and the job kept its earlier
+        # values, so the checks below passed on a job that had crashed.
+        #
+        # get_connection is the one door all three transports go through, so stubbing it makes any
+        # call this block has NOT accounted for fail loudly and locally instead of dialling out.
+        _ij_stub(_sm_core, "get_connection",
+                 lambda *a, **k: (_ for _ in ()).throw(
+                     AssertionError("the install job opened a real SSH connection — a call this "
+                                    "block does not stub reached the transport")))
+        _ij_stub(_sm_core, "read_as_game_user", lambda *a, **k: ("", "", 0))
         _ij_stub(_sm_core, "run_command", lambda *a, **k: ("", "", 0))
         _ij_stub(_sm_core, "create_game_user", lambda *a, **k: None)
         _ij_stub(_sm_core, "run_as_game_user", _ij_run_as)

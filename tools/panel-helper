@@ -1513,7 +1513,12 @@ def _write_sshd_hardening_dropin(key, value):
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".panel-", suffix=".tmp")
     with os.fdopen(fd, "w") as fh:
         fh.write(body)
-    os.chmod(tmp, 0o644)                  # what the distro's own drop-ins use
+    # 0600, not the 0644 the distro's own drop-ins carry. Nothing unprivileged reads this file:
+    # sshd parses it as root, and the panel only ever reaches it back through this helper, which
+    # is root too. There is no secret in it — just directive names and values — so this is not a
+    # disclosure fix; it is that a root-owned file with no non-root reader has no reason to be
+    # world-readable, which is what CodeQL's overly-permissive-mask rule is for.
+    os.chmod(tmp, 0o600)
     os.replace(tmp, SSHD_HARDENING_DROPIN)
 
 
