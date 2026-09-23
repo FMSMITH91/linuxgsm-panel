@@ -1296,34 +1296,84 @@ try:
         # so db.session raised "Working outside of application context" into a debug log), and a
         # worker that reaches the row a few milliseconds after this POST returns would both race
         # this check and overwrite the scenario set up after it.
+        import contextlib as _rt_ctx
         import threading as _rt_thr
         import time as _rt_time
 
-        def _retry_under_gate():
+        def _live_install_workers():
+            """The threads still inside an install job's _run(), identified by their target.
+
+            manage_servers spawns them as bare `threading.Thread(target=_run, daemon=True)` — no
+            name, no handle kept — so the target function is the only thing there is to match on.
+            """
+            _out = []
+            for _t in _rt_thr.enumerate():
+                _tgt = getattr(_t, "_target", None)
+                if (_tgt is not None and _t.is_alive()
+                        and getattr(_tgt, "__module__", "") == "panel.routes.manage_servers"
+                        and getattr(_tgt, "__qualname__", "").endswith("._run")):
+                    _out.append(_t)
+            return _out
+
+        @_rt_ctx.contextmanager
+        def _install_seam_closed(_what):
+            """Hold every install worker at its first SSH call, and keep the transport closed
+            until all of them have finished.
+
+            Two separate things go wrong without this, and only the first is obvious.
+
+            The obvious one: these jobs run in a background thread whose first step is an SSH
+            round trip, and no suite has a host to answer it. Letting that reach the real
+            transport costs a full TCP timeout per call on a CI runner — and with a key
+            configured it does not even get that far ("No such file: /home/runner/.ssh/id_rsa").
+            run_command is not enough on its own; get_connection is the one door all three
+            transports go through, so closing it is what makes an unaccounted call fail here
+            instead of dialling out.
+
+            The one that actually broke CI: a worker that outlives the block that started it.
+            The content-capture POST below starts a job, then deletes its row and pops its job
+            dict — but the THREAD keeps running. SQLite hands the next INSERT the id it just
+            freed, so the install-job block's own row is created with the SAME id, and the
+            abandoned worker's _fail() writes "Install failed unexpectedly: SSH connection
+            failed: ... id_rsa" into that row and that job dict. Four install-job checks then
+            failed on a job that was walking through its steps perfectly well. It passed locally
+            because the worker reached its SSH call before the next block began; on a slower
+            runner it did not. This is the hazard _ij_wait's docstring describes, arriving
+            through the id rather than through the stubs.
+
+            So the seam does not reopen on a timer or on one row's status — it reopens when
+            there is no install worker left alive, and says so loudly if that never happens.
+            """
             _gate = _rt_thr.Event()
-            _saved_rc = _sm_core.run_command
+            _saved_rc, _saved_gc = _sm_core.run_command, _sm_core.get_connection
 
             def _blocked(*a, **k):
                 _gate.wait(30)
                 raise ConnectionError("no SSH host in this suite")
             _sm_core.run_command = _blocked
+            _sm_core.get_connection = _blocked
             try:
+                yield
+            finally:
+                _gate.set()
+                for _ in range(3600):                 # 180s, as _ij_wait allows
+                    if not _live_install_workers():
+                        break
+                    _rt_time.sleep(0.05)
+                _sm_core.run_command = _saved_rc
+                _sm_core.get_connection = _saved_gc
+                _left = len(_live_install_workers())
+                check("install seam: no worker outlives the %s block that started it" % _what,
+                      _left == 0,
+                      "%d still running after 180s — whatever it fails on next lands on the row "
+                      "the NEXT block creates, which may hold this one's recycled id" % _left)
+
+        def _retry_under_gate():
+            with _install_seam_closed("retry"):
                 _resp = c.post("/servers/%d/retry-install" % gs_id)
                 with app.app_context():
                     _row = db.session.get(GameServer, gs_id)
                     return _resp, (_row.status, _row.install_error)
-            finally:
-                _gate.set()
-                for _ in range(600):
-                    with _install_lock_sm:
-                        _j = dict(_install_jobs_sm.get(gs_id) or {})
-                    with app.app_context():
-                        _r2 = db.session.get(GameServer, gs_id)
-                        _rs = _r2.status if _r2 is not None else "gone"
-                    if _j.get("status") not in ("running", None) and _rs != "installing":
-                        break
-                    _rt_time.sleep(0.05)
-                _sm_core.run_command = _saved_rc
 
         _rr, _rr_state = _retry_under_gate()
         check("failed install: retry is accepted for a retryable failure",
@@ -1438,11 +1488,16 @@ try:
         _appmod_cg = sys.modules["app"]
         _cg_rlp = _appmod_cg._remote_listening_ports
         _appmod_cg._remote_listening_ports = lambda r: {22}
-        _add = c.post("/servers/add", data={
-            "remote_id": str(_cg_remote_id), "game_type": "gmod",
-            "server_name": "cgcapture", "port": "28980",
-            "content_games": ["cstrike", "tf"],
-        }, follow_redirects=True)
+        # Under the seam, and drained before the row goes: this POST starts a real install thread,
+        # and the row it belongs to is deleted a few lines down. SQLite then hands that freed id
+        # to the next INSERT — the install-job block's row — and this worker, still running, wrote
+        # its SSH failure onto it. See _install_seam_closed.
+        with _install_seam_closed("content-capture"):
+            _add = c.post("/servers/add", data={
+                "remote_id": str(_cg_remote_id), "game_type": "gmod",
+                "server_name": "cgcapture", "port": "28980",
+                "content_games": ["cstrike", "tf"],
+            }, follow_redirects=True)
         _appmod_cg._remote_listening_ports = _cg_rlp
         with app.app_context():
             _new = GameServer.query.filter_by(short_name="cgcapture").first()
@@ -9101,10 +9156,16 @@ try:
     _os_real_list = _os_mod.load_game_list
 
     def _os_try(name, port, game="btl"):
-        """POST an install and say whether a row was created."""
-        c.post("/servers/add", data={"remote_id": str(_cg_remote_id), "game_type": game,
-                                     "server_name": name, "port": str(port)},
-               follow_redirects=True)
+        """POST an install and say whether a row was created.
+
+        Under the seam for the same reason the content-capture POST is: an accepted install starts
+        a background worker, and the row is deleted below while it runs. Draining it here is what
+        keeps its failure off the next row to be handed that id.
+        """
+        with _install_seam_closed("install-OS"):
+            c.post("/servers/add", data={"remote_id": str(_cg_remote_id), "game_type": game,
+                                         "server_name": name, "port": str(port)},
+                   follow_redirects=True)
         with app.app_context():
             _row = GameServer.query.filter_by(short_name=name).first()
             _made = _row is not None
