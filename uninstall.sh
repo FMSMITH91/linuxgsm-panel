@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+
+# `systemctl --user` needs XDG_RUNTIME_DIR to reach the user bus, and install.sh has defaulted it
+# since it was written — this script never did. Without it, every `svc` call here fails, and each
+# one ends in `|| true`, so the failure is silent: the service is NOT stopped, and the `rm -rf` of
+# the panel directory a few lines later then deletes the files out from under a running process.
+# Same line, same reason, as install.sh.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # LinuxGSM Panel — uninstaller.
 #
 # Removes the panel and everything its installer created: the systemd service and its
@@ -92,6 +99,20 @@ fi
 # ── Stop + remove the service ──
 info "Stopping and removing the service…"
 svc disable --now linuxgsm-panel.service >/dev/null 2>&1 || true
+# Confirm it actually stopped before anything is deleted. Every svc call here ends in `|| true`,
+# which is right — a missing unit must not abort an uninstall — but it also meant a stop that
+# never happened read the same as one that did, and the next step removes the files the running
+# process is using.
+if [ "$(svc is-active linuxgsm-panel.service 2>/dev/null || true)" = "active" ]; then
+    warn "The panel service is STILL RUNNING after the stop request."
+    warn "  Stop it yourself and re-run, or its files will be removed from under it:"
+    if [ "${MODE}" = "system" ]; then
+        warn "    sudo systemctl stop linuxgsm-panel.service"
+    else
+        warn "    systemctl --user stop linuxgsm-panel.service"
+    fi
+    die "Refusing to delete a running panel's files."
+fi
 rm -f "${UNIT_FILE}"
 # ...and the low-priority drop-in ensure_service_tuning() writes beside it. Leaving the .d
 # directory behind means a later reinstall silently inherits the old Nice/CPUWeight.
@@ -104,9 +125,19 @@ ok "Service stopped and removed"
 #    Never a game-server port — those rules are left exactly as they are. ──
 if [ "${MODE}" = "system" ]; then
     if [ -n "${PANEL_PORT}" ] && command -v ufw >/dev/null 2>&1; then
-        ufw delete allow "${PANEL_PORT}/tcp" >/dev/null 2>&1 || true
-        ufw delete allow "${PANEL_PORT}" >/dev/null 2>&1 || true
-        ok "Removed the panel's UFW rule for port ${PANEL_PORT} (game-server ports left intact)"
+        # Report what was actually deleted. Both deletes end in `|| true` — correct, since a
+        # rule that was never added must not abort the uninstall — and the success line was
+        # printed regardless, so "Removed the panel's UFW rule" appeared for a host where no rule
+        # existed, where ufw refused (this needs root), and where the port was still open.
+        _ufw_gone=0
+        ufw delete allow "${PANEL_PORT}/tcp" >/dev/null 2>&1 && _ufw_gone=1
+        ufw delete allow "${PANEL_PORT}" >/dev/null 2>&1 && _ufw_gone=1
+        if [ "${_ufw_gone}" -eq 1 ]; then
+            ok "Removed the panel's UFW rule for port ${PANEL_PORT} (game-server ports left intact)"
+        else
+            warn "No UFW rule for port ${PANEL_PORT} was removed (none present, or ufw declined)."
+            warn "  Check with: sudo ufw status"
+        fi
     fi
     if [ "${TS_DONE}" -eq 1 ] && command -v tailscale >/dev/null 2>&1; then
         tailscale serve reset >/dev/null 2>&1 || true
@@ -185,7 +216,17 @@ if [ "${MODE}" = "system" ]; then
     if [ "${PANEL_USER}" = "${SERVICE_USER}" ] && id "${PANEL_USER}" >/dev/null 2>&1; then
         loginctl disable-linger "${PANEL_USER}" >/dev/null 2>&1 || true
         userdel -r "${PANEL_USER}" >/dev/null 2>&1 || userdel "${PANEL_USER}" >/dev/null 2>&1 || true
-        ok "Removed the dedicated panel user '${PANEL_USER}' (game-server users untouched)"
+        # Ask whether the account is actually gone. Both attempts end in `|| true`, so the success
+        # line was printed even when both failed — and a panel user that survives still owns the
+        # SSH key that reaches every remote host this panel managed, which is exactly the thing an
+        # operator running `uninstall` believes they have just removed.
+        if id "${PANEL_USER}" >/dev/null 2>&1; then
+            warn "Could not remove the panel user '${PANEL_USER}' — it still exists."
+            warn "  It may still own credentials (including the SSH key used for remote hosts)."
+            warn "  Remove it yourself once nothing needs it:  sudo userdel -r ${PANEL_USER}"
+        else
+            ok "Removed the dedicated panel user '${PANEL_USER}' (game-server users untouched)"
+        fi
     fi
 fi
 
