@@ -143,5 +143,8 @@
   "Confirm your password and a current code to turn 2FA off": "Confirma tu contraseña y un código actual para desactivar 2FA",
   "Confirm your password and the code from your app": "Confirma tu contraseña y el código de tu aplicación",
   "Code or backup code": "Código o código de respaldo",
-  "This account doesn't have two-factor authentication enabled, so there's nothing to reset.": "Esta cuenta no tiene la autenticación de dos factores activada, así que no hay nada que restablecer."
+  "This account doesn't have two-factor authentication enabled, so there's nothing to reset.": "Esta cuenta no tiene la autenticación de dos factores activada, así que no hay nada que restablecer.",
+  "Password incorrect — no API token was minted.": "Contraseña incorrecta: no se generó ningún token de API.",
+  "That authenticator code didn't match — no API token was minted.": "Ese código de autenticación no coincide: no se generó ningún token de API.",
+  "That code has already been used — wait for your authenticator to show the next one.": "Ese código ya se ha usado: espera a que tu autenticador muestre el siguiente."
 }

@@ -1474,3 +1474,210 @@ finally:
     _dbm.__file__ = _pc_orig_file
     import shutil as _pc_sh
     _pc_sh.rmtree(_pc_dir, ignore_errors=True)
+
+# ── GMod content probes: "could not read" is not "not installed" ──────────────────────────────
+# content_present used to be `return rc == 0`, so a probe that never ran came back as the positive
+# claim "this game's content is NOT on the host". On the non-raising transports (tailscale, local)
+# that is what every blip looks like — ("", "…timed out", -1), no exception; only paramiko raises —
+# and all three callers acted on it: uninstall credited a removal it had not confirmed (the operator
+# is told gigabytes were freed that are still on disk), ensure_content_update_cron read the empty
+# sweep as an empty host and DELETED the weekly content-update cron, and install re-ran a multi-hour
+# SteamCMD download over content already there. The probe has three answers now.
+_gc_orig_rp, _gc_orig_rc = _sm_core.run_privileged, _sm_core.run_command
+_gc_orig_wcc = _sm_core.write_content_cron
+# A crontab holding an `update` line makes ensure_content_update_cron return early, so the uninstall
+# and install blocks below see only the verbs they are about.
+_GC_OWN_CRON = ("30 2 * * 0 /home/gmodcontent/cssserver update", "", 0)
+_GC_TIMEOUT = ("", "SSH command timed out", -1)
+_gc_state = {"present": ("", "", 1), "script": ("", "", 0), "crontab": _GC_OWN_CRON}
+_gc_calls = []
+
+
+def _gc_priv(server, verb, args=(), **kw):
+    _gc_calls.append((verb, list(args)))
+    if verb == "content-game-present":
+        # A list in "present_seq" answers the probe once per entry, in order — the install path
+        # probes the SAME game twice (before the download and after it) and the two answers are
+        # different facts. A single fixed answer cannot express "absent, then installed".
+        if _gc_state.get("present_seq"):
+            return _gc_state["present_seq"].pop(0)
+        return _gc_state["present"]
+    if verb == "content-script-present":
+        return _gc_state["script"]
+    if verb == "crontab-list":
+        return _gc_state["crontab"]
+    return ("", "", 0)
+
+
+try:
+    _sm_core.run_privileged = _gc_priv
+    _sm_core.run_command = lambda s, c, **k: (_gc_calls.append(("run_command", c)), ("", "", 0))[1]
+    _sm_core.write_content_cron = lambda s, u, b, **k: (_gc_calls.append(("write-cron", [u])),
+                                                        ("", "", 0))[1]
+
+    # ── the probe itself ─────────────────────────────────────────────────────────────────────
+    _gc_state["present"] = _GC_TIMEOUT
+    check("gmod content probe: a probe that could not run is 'unknown', never 'not installed'",
+          _sm_gmod.content_present(object(), "gmodcontent", "cstrike") is None)
+    _gc_state["present"] = ("", "", 1)
+    check("gmod content probe: rc 1 is still a real reading — the content is absent (positive control)",
+          _sm_gmod.content_present(object(), "gmodcontent", "cstrike") is False)
+    _gc_state["present"] = ("", "", 0)
+    check("gmod content probe: rc 0 is still a real reading — the content is there (positive control)",
+          _sm_gmod.content_present(object(), "gmodcontent", "cstrike") is True)
+
+    # ── uninstall: only a CONFIRMED absence is reported as freed disk ─────────────────────────
+    _gc_state["present"], _gc_calls[:] = _GC_TIMEOUT, []
+    _uok, _urem, _umsg = _sm_gmod.uninstall_gmod_content(object(), "gmodcontent", ["cstrike"])
+    check("gmod content uninstall: a removal it could not confirm is not reported as removed",
+          _urem == [] and "unverified" in _umsg, "%r %r" % (_urem, _umsg))
+    check("gmod content uninstall: ...and it still asked the host to remove it",
+          ("content-game-remove", ["gmodcontent", "cstrike", "cssserver"]) in _gc_calls,
+          str(_gc_calls))
+    _gc_state["present"], _gc_calls[:] = ("", "", 1), []
+    _uok, _urem, _umsg = _sm_gmod.uninstall_gmod_content(object(), "gmodcontent", ["cstrike"])
+    check("gmod content uninstall: a confirmed removal is still reported as removed (positive control)",
+          _urem == ["cstrike"] and "unverified" not in _umsg, "%r %r" % (_urem, _umsg))
+
+    # ── the weekly update cron survives a host that stopped answering ─────────────────────────
+    # An all-unreadable sweep used to be [] ("nothing is installed"), and [] removes the cron — so
+    # every content game on that host silently stopped updating, and nothing puts the cron back.
+    _gc_state["crontab"] = ("", "", 0)          # readable crontab, no update job of the user's own
+    _gc_state["present"], _gc_calls[:] = _GC_TIMEOUT, []
+    _cron_ok = _sm_gmod.ensure_content_update_cron(object(), "gmodcontent")
+    check("gmod content cron: an unreadable install sweep does not delete the weekly update cron",
+          _cron_ok is None and not any(v == "content-cron-remove" for v, _a in _gc_calls),
+          str(_gc_calls))
+    _gc_state["present"], _gc_calls[:] = ("", "", 1), []
+    _cron_ok = _sm_gmod.ensure_content_update_cron(object(), "gmodcontent")
+    check("gmod content cron: a host with nothing installed still drops the cron (positive control)",
+          _cron_ok is True and ("content-cron-remove", ["gmodcontent"]) in _gc_calls, str(_gc_calls))
+    # A game whose content is there but whose SCRIPT probe failed is the same unknown.
+    _gc_state["present"], _gc_state["script"], _gc_calls[:] = ("", "", 0), _GC_TIMEOUT, []
+    _cron_ok = _sm_gmod.ensure_content_update_cron(object(), "gmodcontent")
+    check("gmod content cron: an unreadable script probe does not rewrite the cron either",
+          _cron_ok is None and not any(v in ("content-cron-remove", "write-cron")
+                                       for v, _a in _gc_calls), str(_gc_calls))
+    _gc_state["script"], _gc_calls[:] = ("", "", 0), []
+    _cron_ok = _sm_gmod.ensure_content_update_cron(object(), "gmodcontent")
+    check("gmod content cron: an installed host still gets its cron written (positive control)",
+          _cron_ok is True and ("write-cron", ["gmodcontent"]) in _gc_calls, str(_gc_calls))
+    # `crontab -l` fails both for a user with no crontab and for a read that did not happen.
+    _gc_state["crontab"], _gc_calls[:] = _GC_TIMEOUT, []
+    _cron_ok = _sm_gmod.ensure_content_update_cron(object(), "gmodcontent")
+    check("gmod content cron: an unreadable crontab is not read as 'this user automates nothing'",
+          _cron_ok is None and all(v == "crontab-list" for v, _a in _gc_calls), str(_gc_calls))
+    # ...but declining is not free — see the install check below for what it costs — so one blip on
+    # a 10s read is not allowed to decide it. The read is retried before the cron is given up on.
+    check("gmod content cron: an unreadable crontab is read TWICE before the cron is given up on",
+          len(_gc_calls) == 2, str(_gc_calls))
+    _gc_state["crontab"], _gc_calls[:] = ("", "no crontab for gmodcontent", 1), []
+    _cron_ok = _sm_gmod.ensure_content_update_cron(object(), "gmodcontent")
+    check("gmod content cron: a user with no crontab at all is still managed (positive control)",
+          _cron_ok is True and ("write-cron", ["gmodcontent"]) in _gc_calls, str(_gc_calls))
+    check("gmod content cron: ...and a crontab it CAN read is read once (positive control)",
+          len([1 for v, _a in _gc_calls if v == "crontab-list"]) == 1, str(_gc_calls))
+
+    # ── install: an unknown skips, it does not start a multi-hour download ────────────────────
+    _gc_state["crontab"] = _GC_OWN_CRON
+    _gc_state["present"], _gc_calls[:] = _GC_TIMEOUT, []
+    _iok, _inst, _imsg = _sm_gmod.install_gmod_content(object(), "gmodcontent", ["cstrike"])
+    check("gmod content install: an unreadable probe skips rather than re-downloading the content",
+          _inst == [] and not any(v == "run_command" for v, _a in _gc_calls), str(_gc_calls))
+    _gc_state["present"], _gc_calls[:] = ("", "", 1), []
+    _iok, _inst, _imsg = _sm_gmod.install_gmod_content(object(), "gmodcontent", ["cstrike"])
+    check("gmod content install: a confirmed-absent game is still installed (positive control)",
+          any(v == "run_command" and "cssserver auto-install" in a for v, a in _gc_calls),
+          str(_gc_calls))
+
+    # ── what the install SAYS about a host it could not read ──────────────────────────────────
+    # The skip above is right; the sentence it produced was not. `msg` was
+    # `"installed: …" if installed else "already present"`, so a run whose every probe timed out
+    # installed nothing, skipped nothing it had actually seen, and still reported the positive
+    # fact "already present" — the same defect as the probe's old `return rc == 0`, moved into the
+    # return value. Nobody renders this today; it is the contract, and the contract was wrong.
+    _gc_state["present"], _gc_calls[:] = _GC_TIMEOUT, []
+    _iok, _inst, _imsg = _sm_gmod.install_gmod_content(object(), "gmodcontent", ["cstrike"])
+    check("gmod content install: a probe that never answered is not reported as 'already present'",
+          _inst == [] and "already present" not in _imsg and "could not check: cstrike" in _imsg,
+          "%r" % (_imsg,))
+    _gc_state["present"], _gc_calls[:] = ("", "", 0), []
+    _iok, _inst, _imsg = _sm_gmod.install_gmod_content(object(), "gmodcontent", ["cstrike"])
+    check("gmod content install: content the host CONFIRMED is there still says so (positive control)",
+          "already present: cstrike" in _imsg and not any(v == "run_command" for v, _a in _gc_calls),
+          "%r %s" % (_imsg, _gc_calls))
+    # A mount-only game (no LinuxGSM installer) that is absent is not "already present" either.
+    _gc_state["present"], _gc_calls[:] = ("", "", 1), []
+    _iok, _inst, _imsg = _sm_gmod.install_gmod_content(object(), "gmodcontent", ["hl2"])
+    check("gmod content install: a game the panel cannot install is not reported as present",
+          "already present" not in _imsg and "no LinuxGSM installer: hl2" in _imsg, "%r" % (_imsg,))
+
+    # ── a successful install whose update cron could not be written must SAY so ───────────────
+    # The three-state cron read fixed one silent loss and opened another in the mirror image: a
+    # `crontab -l` that blips now leaves the cron alone, and at the end of an install there is no
+    # cron yet to leave alone. So the content lands and NOTHING ever updates it, reported as a log
+    # warning to a caller that discards the return value. The message is the one channel out.
+    _gc_state["crontab"] = _GC_TIMEOUT                       # unreadable, both attempts
+    _gc_state["present_seq"] = [("", "", 1), ("", "", 0)]    # absent -> installed
+    _gc_calls[:] = []
+    _iok, _inst, _imsg = _sm_gmod.install_gmod_content(object(), "gmodcontent", ["cstrike"])
+    check("gmod content install: an install whose weekly update cron was not written says so",
+          _inst == ["cstrike"] and "weekly update cron not written" in _imsg, "%r" % (_imsg,))
+    _gc_state["present_seq"] = []
+    _gc_state["crontab"], _gc_calls[:] = _GC_OWN_CRON, []
+    _gc_state["present_seq"] = [("", "", 1), ("", "", 0)]
+    _iok, _inst, _imsg = _sm_gmod.install_gmod_content(object(), "gmodcontent", ["cstrike"])
+    check("gmod content install: a managed cron is not reported as missing (positive control)",
+          _inst == ["cstrike"] and "update cron" not in _imsg, "%r" % (_imsg,))
+    _gc_state["present_seq"] = []
+    # The uninstall says it too: its cron refresh is what drops the removed games from the cron.
+    _gc_state["crontab"], _gc_state["present"], _gc_calls[:] = _GC_TIMEOUT, ("", "", 1), []
+    _uok, _urem, _umsg = _sm_gmod.uninstall_gmod_content(object(), "gmodcontent", ["cstrike"])
+    check("gmod content uninstall: a cron refresh that could not run is reported, not swallowed",
+          _urem == ["cstrike"] and "update cron not refreshed" in _umsg, "%r" % (_umsg,))
+
+    # ── the helper's own exit 2 is a failed call, not an absence ──────────────────────────────
+    # content_present's docstring used to justify the third state with "`test -d` has no other exit
+    # status to give". True of the REMOTE rendering (a bare `test -d`), false of the local one:
+    # tools/panel-helper exits 2 for a verb it does not know or an argument it refuses, which is
+    # exactly what a host whose panel has outrun its root-owned helper answers with. Classifying on
+    # "anything but 0" would put that host in the "content is not installed" bucket — every game,
+    # every run — so the classification is on the two statuses that ARE answers.
+    _gc_state["crontab"] = _GC_OWN_CRON
+    _gc_state["present"] = ("", "", 2)
+    check("gmod content probe: the helper's exit 2 (unknown verb / bad argument) is 'unknown' too",
+          _sm_gmod.content_present(object(), "gmodcontent", "cstrike") is None)
+    _gc_state["present"], _gc_calls[:] = ("", "", 2), []
+    _uok, _urem, _umsg = _sm_gmod.uninstall_gmod_content(object(), "gmodcontent", ["cstrike"])
+    check("gmod content uninstall: ...so an old helper's rc 2 is not a confirmed removal either",
+          _urem == [] and "unverified: cstrike" in _umsg, "%r %r" % (_urem, _umsg))
+finally:
+    _sm_core.run_privileged, _sm_core.run_command = _gc_orig_rp, _gc_orig_rc
+    _sm_core.write_content_cron = _gc_orig_wcc
+
+# ── ...and the operator hears about it: the removal card's own sentence ───────────────────────
+# The three answers above stop at ssh_manager's boundary unless the route says what came back.
+# uninstall_gmod_content keeps a game it could not re-probe OUT of `removed` on purpose, and the
+# worker rendered `", ".join(removed) or "(none)"` with status "done" — so a host that stopped
+# answering during the 120s removal told the operator "Removed from host: (none)", which reads as
+# "there was nothing to remove". Gigabytes still on disk, a job reporting success, and nothing
+# anywhere suggesting a second attempt.
+from panel.routes.server_files import _gmod_removal_result as _grr   # noqa: E402
+
+_grr_st, _grr_msg = _grr(["cstrike"], [])
+check("gmod content removal: a removal the host would not confirm is not reported as done",
+      _grr_st == "error" and "(none)" not in _grr_msg and "cstrike" in _grr_msg,
+      "%r %r" % (_grr_st, _grr_msg))
+check("gmod content removal: ...and the sentence tells the operator to run it again",
+      "again" in _grr_msg and "still be on disk" in _grr_msg, "%r" % (_grr_msg,))
+_grr_st2, _grr_msg2 = _grr(["cstrike", "tf"], ["cstrike"])
+check("gmod content removal: a partial removal reports the confirmed half AND the rest",
+      _grr_st2 == "error" and "Removed from host: cstrike" in _grr_msg2 and "of tf" in _grr_msg2,
+      "%r %r" % (_grr_st2, _grr_msg2))
+_grr_st3, _grr_msg3 = _grr(["cstrike"], ["cstrike"])
+check("gmod content removal: a confirmed removal still reports done (positive control)",
+      _grr_st3 == "done" and _grr_msg3 == "Removed from host: cstrike",
+      "%r %r" % (_grr_st3, _grr_msg3))
+_grr_st4, _grr_msg4 = _grr([], [])
+check("gmod content removal: a host with no content storage still reports done (positive control)",
+      _grr_st4 == "done" and "(none)" in _grr_msg4, "%r %r" % (_grr_st4, _grr_msg4))

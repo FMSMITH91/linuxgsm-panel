@@ -191,13 +191,33 @@
         {% if current_user.has_api_token %}<span class="badge bg-success">A token is active</span>
         {% else %}<span class="badge bg-secondary">No token</span>{% endif %}
       </p>
-      <form method="POST" action="{{ url_for('account_api_token_generate') }}" style="display:inline;">
-        <button class="btn btn-primary btn-sm" type="submit">
-          <i class="bi bi-key"></i> {{ 'Regenerate token' if current_user.has_api_token else 'Generate token' }}
-        </button>
+      {# The fields are not optional decoration: the route requires them, exactly as the password
+         change and the 2FA switch-off above do. A token is a SECOND credential that outlives the
+         session it was minted from — no auth_epoch, no second factor, no CSRF — so a live session
+         alone must not be enough to leave one behind. A backup code works in the code box. #}
+      {# The label is tied to its field with for/id, like the password-change form at the top of
+         this page and unlike the 2FA row above it — copying that row's markup brought its gap
+         along: a label pointing at nothing, and inputs whose only accessible name was a
+         placeholder, which a screen reader may not announce and which vanishes as soon as you
+         type. Two idioms on one page is how that gets missed; this one follows the page's own. #}
+      <form method="POST" action="{{ url_for('account_api_token_generate') }}" autocomplete="off">
+        {% if current_user.totp_enabled %}
+        <label class="form-label small mb-1" for="account-api_password">Confirm your password and the code from your app</label>
+        {% else %}
+        <label class="form-label small mb-1" for="account-api_password">Your account password</label>
+        {% endif %}
+        <div class="d-flex gap-2 flex-wrap" style="max-width: 560px;">
+          <input id="account-api_password" type="password" name="password" class="form-control form-control-sm" style="min-width:12rem;flex:1 1 12rem;" autocomplete="current-password" placeholder="Password" required>
+          {% if current_user.totp_enabled %}
+          <input id="account-api_totp_code" type="text" name="totp_code" class="form-control form-control-sm" style="min-width:9rem;flex:0 1 9rem;" inputmode="numeric" autocomplete="one-time-code" placeholder="Code or backup code" aria-label="Code or backup code" required>
+          {% endif %}
+          <button class="btn btn-primary btn-sm text-nowrap" type="submit">
+            <i class="bi bi-key"></i> {{ 'Regenerate token' if current_user.has_api_token else 'Generate token' }}
+          </button>
+        </div>
       </form>
       {% if current_user.has_api_token %}
-      <form method="POST" action="{{ url_for('account_api_token_revoke') }}" style="display:inline;">
+      <form method="POST" action="{{ url_for('account_api_token_revoke') }}" class="mt-2">
         <button class="btn btn-outline-danger btn-sm" type="submit"><i class="bi bi-x-circle"></i> Revoke</button>
       </form>
       {% endif %}

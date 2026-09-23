@@ -8856,7 +8856,37 @@ try:
     # that ignored `new_token`, so it stored a credential and threw the plaintext away.
     _acct = c.get("/account").get_data(as_text=True)
     check("account page: offers the API-token control", "api-token/generate" in _acct)
-    _mint = c.post("/account/api-token/generate")
+    # ...and asks for the password on the way, because a token is a second credential that outlives
+    # the session that minted it. A bare POST — all a stolen cookie can manage — must mint nothing.
+    check("account page: the mint form asks for the password",
+          'name="password"' in _acct.split("api-token/generate", 1)[1][:800],
+          "the form posts with nothing but the session")
+    _bare = c.post("/account/api-token/generate", follow_redirects=True)
+    check("api token: a POST with no password mints nothing",
+          _re_as.search(r"(lgsm_[0-9a-f]{48})", _bare.get_data(as_text=True) or "") is None,
+          "status=%d" % _bare.status_code)
+    # ...and the refusal is RECORDED. log_action fired on the mint alone, so the one thing this
+    # gate produces that is worth watching — somebody in a borrowed session trying passwords
+    # against it, now the only way past — left no trace anywhere, while the mint they were aiming
+    # at left a tidy one. A gate with invisible refusals reports afterwards that nothing happened,
+    # which is exactly what it looks like when something did.
+    from panel.db.models import AuditLog as _at_AL
+    with app.app_context():
+        _at_refused = _at_AL.query.filter_by(username="smoke_admin", action="api_token_generate",
+                                             success=False).count()
+    check("api token: ...and that refusal is written to the audit log", _at_refused == 1,
+          "%d refusals on record for smoke_admin, expected 1" % _at_refused)
+    # The label has to point AT the field it labels. This card copied the 2FA row's markup, which
+    # has a bare <label> and no ids, while the password-change form at the top of the same page
+    # wires for/id properly — so clicking the label did nothing and the box's only accessible name
+    # was a placeholder, which goes away the moment you type in it.
+    _mint_form = _acct.split("api-token/generate", 1)[1].split("</form>", 1)[0]
+    _mint_for = _re_as.search(r'<label[^>]*\sfor="([^"]+)"', _mint_form)
+    check("account page: the mint form's label points at its password field",
+          bool(_mint_for) and ('id="%s"' % _mint_for.group(1)) in _mint_form,
+          "label for=%r; ids in the form: %r" % (_mint_for and _mint_for.group(1),
+                                                 _re_as.findall(r'id="([^"]+)"', _mint_form)))
+    _mint = c.post("/account/api-token/generate", data={"password": "Str0ng!passw0rd"})
     _mint_body = _mint.get_data(as_text=True)
     _shown = _re_as.search(r"(lgsm_[0-9a-f]{48})", _mint_body)
     check("api token: minting one SHOWS it (once)", _shown is not None, "status=%d" % _mint.status_code)
@@ -8864,6 +8894,34 @@ try:
         check("api token: the token it showed actually authenticates",
               app.test_client().get("/api/servers", headers={
                   "Authorization": "Bearer %s" % _shown.group(1)}).status_code == 200)
+    # ...and it is actually WRITTEN DOWN. Both checks above pass on a route whose
+    # `db.session.commit()` has been deleted: the mint and the Bearer read share one scoped
+    # session, so the query sees the pending write and the token authenticates for the rest of
+    # the process. Proven by mutation — with the commit removed, unit and smoke both stayed
+    # fully green. Drop the session first, so this reads what survived the request rather than
+    # what is still sitting in it: a credential the panel shows you once and forgets is worse
+    # than no credential at all.
+    if _shown:
+        # Read it on a SEPARATE CONNECTION, which sees only what was committed — the checks above
+        # cannot, because the mint and the Bearer read share one scoped session, so a token that
+        # was never written would still authenticate for the rest of the process.
+        #
+        # Honest about what this does and does not prove: deleting the route's own
+        # `db.session.commit()` does NOT make it fail, because log_action (panel/security/auth.py)
+        # commits a few lines later and carries the write with it. So the explicit commit is
+        # redundant today. That is exactly why the check is worth having — it pins the PROPERTY
+        # (the credential the panel shows you once is on disk) rather than the call, and it will
+        # fail if the audit line that happens to be carrying it ever moves or goes conditional.
+        import sqlite3 as _tok_sql
+        _tok_con = _tok_sql.connect(str(DB_PATH))
+        try:
+            _persisted = _tok_con.execute(
+                "SELECT api_token FROM user WHERE id=?", (admin_id,)).fetchone()
+        finally:
+            _tok_con.close()
+        check("api token: ...and it SURVIVES the request that minted it",
+              bool(_persisted and _persisted[0]),
+              "nothing committed to the row — the token the panel showed once is already gone")
     check("account page: offers Revoke once a token exists", "api-token/revoke" in _mint_body)
     _rev = c.post("/account/api-token/revoke", follow_redirects=True)
     check("api token: revoking it works", _rev.status_code == 200)
@@ -8876,11 +8934,13 @@ try:
     # account back. It answered to none of them: it carries no auth_epoch, so a password change
     # did not touch it, and "sign out everywhere" deleted every UserSession row and left it
     # working. app.py's note that "cookie theft is also recoverable via sign out everywhere" was
-    # untrue while one existed — and minting one needs only a live session (no password, no 2FA),
+    # untrue while one existed — and minting one needed only a live session (no password, no 2FA),
     # so an attacker holding a stolen cookie could leave themselves a key that survived the
-    # victim's entire recovery.
+    # victim's entire recovery. Minting now costs the password (and a code when 2FA is on), which
+    # is why this POST carries one; the revocation reach below is what makes an already-minted
+    # token recoverable.
     _tok_c = client_as(admin_id)
-    _mint2 = _tok_c.post("/account/api-token/generate")
+    _mint2 = _tok_c.post("/account/api-token/generate", data={"password": "Str0ng!passw0rd"})
     _m = _re_as.search(r"(lgsm_[0-9a-f]{48})", _mint2.get_data(as_text=True) or "")
     check("api token: minted for the revocation tests", bool(_m),
           _mint2.get_data(as_text=True)[:120])
@@ -8892,6 +8952,167 @@ try:
         _tok_c.post("/account/sessions/revoke")
         check("api token: 'sign out everywhere' also revokes the API token", _bearer() != 200,
               "status=%s" % _bearer())
+
+    # The OTHER control that takes an account back. "Sign out everywhere" is asserted above; the
+    # password change was only ever claimed — in the mint's own rationale, which now rests on both
+    # being true. Nothing in the token carries an auth_epoch, so neither control reaches it by the
+    # sweep every session cookie gets: each route has an explicit revoke_api_token(), and deleting
+    # either one is silent. Its own account, because changing smoke_admin's password would pull the
+    # rug from under every later check that signs in as them.
+    with app.app_context():
+        _pw_u = _TU(username="api_token_pwchg", display_name="Token PW",
+                    password_hash=auth.hash_password("Str0ng!passw0rd"),
+                    is_superadmin=False, is_active=True)
+        db.session.add(_pw_u)
+        db.session.commit()
+        _pw_id = _pw_u.id
+    _pw_c = client_as(_pw_id)
+    _pw_mint = _pw_c.post("/account/api-token/generate", data={"password": "Str0ng!passw0rd"})
+    _pw_m = _re_as.search(r"(lgsm_[0-9a-f]{48})", _pw_mint.get_data(as_text=True) or "")
+    check("api token: minted for the password-change test", bool(_pw_m),
+          "status=%d" % _pw_mint.status_code)
+    if _pw_m:
+        def _pw_bearer():
+            return app.test_client().get("/api/servers", headers={
+                "Authorization": "Bearer %s" % _pw_m.group(1)}).status_code
+
+        check("api token: it authenticates before the password change", _pw_bearer() == 200,
+              "status=%s" % _pw_bearer())
+        _pw_c.post("/account/password", data={"current_password": "Str0ng!passw0rd",
+                                              "new_password": "Str0ng!passw0rd-2",
+                                              "confirm_password": "Str0ng!passw0rd-2"})
+        check("api token: a password change also revokes the API token", _pw_bearer() != 200,
+              "status=%s — the token answers to no epoch, so only that route's explicit "
+              "revoke_api_token() takes it away" % _pw_bearer())
+
+    # ── The 2FA branch of the mint, end to end — and the writes that have to SURVIVE the request
+    # Every mint above is smoke_admin's, and smoke_admin has no 2FA, so the block that burns a
+    # TOTP step and spends a one-time backup code ran against a hand-built stand-in in the unit
+    # suite and nothing else. What a stand-in cannot show is the half that makes either of those
+    # mean anything: the step and the spent code have to reach the DATABASE. If they don't, the
+    # replay guard is a per-request variable and a backup code is infinite — and the route reads
+    # exactly the same either way.
+    #
+    # Nor did anything assert that the mint persists what it hands out: deleting
+    # db.session.commit() from the route left both suites fully green, because log_action commits
+    # the same session one line later. So every assertion below re-reads the row in a FRESH app
+    # context — a new session, a real SELECT — after the POST has finished, instead of trusting
+    # the response that request returned.
+    import hashlib as _at_hashlib
+    with app.app_context():
+        _at2_codes = auth.generate_backup_codes()
+        _at2_secret = auth.generate_totp_secret()
+        _at2 = _TU(username="api_token_2fa", display_name="Token 2FA",
+                   password_hash=auth.hash_password("Str0ng!passw0rd"),
+                   is_superadmin=False, is_active=True,
+                   totp_enabled=True, totp_secret=encrypt_secret(_at2_secret))
+        _at2.set_backup_codes(_at2_codes)
+        db.session.add(_at2)
+        db.session.commit()
+        _at2_id = _at2.id
+
+    def _at2_row():
+        """(stored token digest, last spent step, backup codes left), as the DATABASE has them.
+
+        A fresh app context on purpose: flask-sqlalchemy scopes its session to the app context, so
+        this is a new session and a real read — not the writing request's own uncommitted work
+        handed back from an identity map."""
+        with app.app_context():
+            _row = db.session.get(_TU, _at2_id)
+            return (_row.api_token, _row.last_totp_step or 0, _row.backup_codes_remaining)
+
+    def _at2_shown_digest(body):
+        """What the page showed, hashed the way the column stores it (or None if it showed none)."""
+        _hit = _re_as.search(r"(lgsm_[0-9a-f]{48})", body or "")
+        return _at_hashlib.sha256(_hit.group(1).encode()).hexdigest() if _hit else None
+
+    _at2_c = client_as(_at2_id)
+    _at2_page = _at2_c.get("/account").get_data(as_text=True)
+    _at2_form = _at2_page.split("api-token/generate", 1)[-1].split("</form>", 1)[0]
+    check("account page (2FA): the mint form asks for a code as well as the password",
+          'name="totp_code"' in _at2_form, "the 2FA branch of the route can never be satisfied")
+    check("account page (2FA): ...and the code box has a name a screen reader can read",
+          'aria-label="Code or backup code"' in _at2_form,
+          "its only accessible name is the placeholder, which disappears as soon as you type")
+    # The password alone, with 2FA on — the proof account_2fa_disable refuses on the same page.
+    _r = _at2_c.post("/account/api-token/generate", data={"password": "Str0ng!passw0rd"},
+                     follow_redirects=True)
+    _at2_tok, _at2_step, _at2_left = _at2_row()
+    check("api token (2FA): the password alone mints nothing", _at2_tok is None,
+          "a token was stored anyway: %r" % (_at2_tok,))
+    check("api token (2FA): ...and nothing was written to the account either",
+          _at2_step == 0 and _at2_left == len(_at2_codes),
+          "last_totp_step=%r, %d of %d backup codes left" % (_at2_step, _at2_left, len(_at2_codes)))
+    # A REAL backup code with the wrong password. Counted, not re-checked: use_backup_code
+    # CONSUMES, so asking "is it still valid" would spend the thing being asked about.
+    _r = _at2_c.post("/account/api-token/generate",
+                     data={"password": "wrong-password", "totp_code": _at2_codes[1]},
+                     follow_redirects=True)
+    _at2_tok, _, _at2_left = _at2_row()
+    check("api token (2FA): a valid code with the wrong password mints nothing",
+          _at2_tok is None, "stored=%r" % (_at2_tok,))
+    check("api token (2FA): ...and that backup code was NOT spent on the failed attempt",
+          _at2_left == len(_at2_codes),
+          "%d of %d left — a one-time code was burnt by a request that failed for another reason"
+          % (_at2_left, len(_at2_codes)))
+    # The real thing: password plus a live authenticator code.
+    _at2_code = _pyotp.TOTP(_at2_secret).now()
+    _r = _at2_c.post("/account/api-token/generate",
+                     data={"password": "Str0ng!passw0rd", "totp_code": _at2_code})
+    _at2_first = _at2_shown_digest(_r.get_data(as_text=True))
+    check("api token (2FA): password + a live authenticator code mints one (positive control)",
+          _at2_first is not None, "status=%d" % _r.status_code)
+    _at2_tok, _at2_step, _ = _at2_row()
+    check("api token (2FA): ...and the token it showed is IN THE ROW once the request is over",
+          _at2_first is not None and _at2_tok == _at2_first,
+          "shown=%r stored=%r — the plaintext was handed out and the database kept nothing"
+          % (_at2_first, _at2_tok))
+    check("api token (2FA): ...and the step that code spent was committed with it",
+          _at2_step > 0,
+          "last_totp_step=%r — the replay guard is comparing against a value that never landed"
+          % (_at2_step,))
+    # Which is what that step is FOR. A new request re-loads the user from the database, so the
+    # replay below is refused only if the step above really got there.
+    _r = _at2_c.post("/account/api-token/generate",
+                     data={"password": "Str0ng!passw0rd", "totp_code": _at2_code},
+                     follow_redirects=True)
+    # Both halves, not just the row: "the digest did not change" is also true of a route that
+    # stored nothing at all, so the response is asserted to have shown no token either.
+    _at2_replay = _at2_shown_digest(_r.get_data(as_text=True))
+    _at2_after, _, _ = _at2_row()
+    check("api token (2FA): REPLAYING that code mints nothing",
+          _at2_replay is None and _at2_after == _at2_tok,
+          "shown=%r, stored digest %s" % (_at2_replay,
+                                          "changed" if _at2_after != _at2_tok else "held"))
+    # Somebody whose authenticator is gone is not locked out of their own token.
+    _r = _at2_c.post("/account/api-token/generate",
+                     data={"password": "Str0ng!passw0rd", "totp_code": _at2_codes[0]})
+    _at2_second = _at2_shown_digest(_r.get_data(as_text=True))
+    check("api token (2FA): a one-time backup code mints one too", _at2_second is not None,
+          "status=%d" % _r.status_code)
+    _at2_tok, _, _at2_left = _at2_row()
+    check("api token (2FA): ...and that mint replaced the stored digest",
+          _at2_second is not None and _at2_tok == _at2_second,
+          "shown=%r stored=%r" % (_at2_second, _at2_tok))
+    check("api token (2FA): ...and the code it spent is gone from the ROW, not just the request",
+          _at2_left == len(_at2_codes) - 1, "%d of %d left" % (_at2_left, len(_at2_codes)))
+    _r = _at2_c.post("/account/api-token/generate",
+                     data={"password": "Str0ng!passw0rd", "totp_code": _at2_codes[0]},
+                     follow_redirects=True)
+    _at2_replay = _at2_shown_digest(_r.get_data(as_text=True))
+    _at2_after, _, _ = _at2_row()
+    check("api token (2FA): ...so replaying that backup code mints nothing",
+          _at2_replay is None and _at2_after == _at2_tok,
+          "shown=%r, stored digest %s" % (_at2_replay,
+                                          "changed" if _at2_after != _at2_tok else "held"))
+    # Four refusals above, and a gate is only as useful as its record of them.
+    with app.app_context():
+        _at2_refusals = _at_AL.query.filter_by(username="api_token_2fa",
+                                               action="api_token_generate",
+                                               success=False).count()
+    check("api token (2FA): every refusal above is in the audit log", _at2_refusals == 4,
+          "%d recorded, expected 4 (no code, wrong password, replayed code, spent backup code)"
+          % _at2_refusals)
 
     # ── Deactivating an account must END its open sessions, and nothing asserted that it did.
     # It does — but through a coupling nobody would find by reading the panel: this model is

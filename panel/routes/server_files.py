@@ -92,6 +92,30 @@ def _gmod_job_state(server_id):
     return st
 
 
+def _gmod_removal_result(asked, removed):
+    """The (status, msg) the uninstall worker stashes: what the host CONFIRMED is gone, and what it
+    would not answer about.
+
+    uninstall_gmod_content re-probes every game after the rm and deliberately keeps out of
+    `removed` any game whose probe did not answer — that list is evidence, and the gap between it
+    and what was asked for is not. This used to be rendered as `", ".join(removed) or "(none)"`
+    with status "done", so a host that stopped answering during the 120s removal told the operator
+    "Removed from host: (none)", which reads as "there was nothing to remove" — the one thing it
+    does not mean. The disk may still be full and the content may or may not still be there. The
+    three-state probe added in ssh_manager/gmod.py stops at that module's boundary unless this says
+    what it found, and a job that could not confirm its own work is not "done"."""
+    _done = [g for g in asked if g in (removed or [])]
+    _unconfirmed = [g for g in asked if g not in _done]
+    if not _unconfirmed:
+        # "(none)" belongs to THIS branch only: nothing was asked of the host, or everything asked
+        # came back confirmed. It is the one case where "nothing was removed" is a reading.
+        return "done", "Removed from host: " + (", ".join(_done) or "(none)")
+    _tail = ("Couldn't confirm the removal of " + ", ".join(_unconfirmed)
+             + " — the host stopped answering, so that content may still be on disk. Check the "
+               "host is reachable, then run the removal again.")
+    return "error", (("Removed from host: " + ", ".join(_done) + ". " + _tail) if _done else _tail)
+
+
 # server_id -> {socket session id: the user id that joined on it}.
 #
 # It was a set of sids. The user id is here because authorization on this stream was a ONE-TIME
@@ -710,8 +734,12 @@ def register(app, supervise):
                     if not remote:
                         return
                     cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
-                    removed = []
+                    # No content user at all: nothing was asked of the host, so there is nothing
+                    # this could have failed to confirm — `asked` stays empty rather than turning
+                    # every game into an unconfirmed removal.
+                    _asked, removed = [], []
                     if cu:
+                        _asked = list(games)
                         _, removed, _m = uninstall_gmod_content(remote, cu["user"], games)
                     # Drop the removed games from THIS server's mount.cfg (other servers just skip the
                     # now-missing mount). Best-effort — but NOT when the current mounts could not be
@@ -724,9 +752,9 @@ def register(app, supervise):
                     else:
                         gmod_mount_setup(remote, gmod_user, (cu or {}).get("user", ""),
                                          [g for g in _cur if g not in games])
+                    _st, _msg = _gmod_removal_result(_asked, removed)
                     _gmod_content_apply_state[server_id] = {
-                        "status": "done", "msg": "Removed from host: " + (", ".join(removed) or "(none)"),
-                        "ts": time.time()}
+                        "status": _st, "msg": _msg, "ts": time.time()}
                 except Exception:
                     _log.warning("gmod content uninstall failed for %s", gmod_user, exc_info=True)
                     _gmod_content_apply_state[server_id] = {

@@ -1551,29 +1551,435 @@ try:
     _shared_run = _shared_dec + '\necho "MINE=${SHARED_MINE}"\n'
     _shared_tmp = _tempfile.mkdtemp(prefix="sharedconf-")
     try:
+        # The home scan below reads ${HOMES}, so every case here points it at a fixture rather than
+        # at this machine's /home: a decision that depends on who happens to live on the box the
+        # suite runs on is not a decision anything can gate.
+        _homes = os.path.join(_shared_tmp, "home")
+
+        def _home_with(*users):
+            """A HOMES fixture where each named user has a per-user panel unit installed."""
+            _shutil.rmtree(_homes, ignore_errors=True)
+            for _u in users:
+                os.makedirs(os.path.join(_homes, _u, ".config", "systemd", "user"))
+                open(os.path.join(_homes, _u, ".config", "systemd", "user",
+                                  "linuxgsm-panel.service"), "w").close()
+            os.makedirs(_homes, exist_ok=True)
+            return "PANEL_UNINSTALL_HOMES=%s\n" % _su_shlex.quote(_homes)
+
+        _mine = os.path.join(_homes, "me", "linuxgsm-panel")
+        _env_me = "PANEL_DIR=%s\n" % _su_shlex.quote(_mine)
         _sc = os.path.join(_shared_tmp, "panel.conf")
         with open(_sc, "w", encoding="utf-8") as _fh:
             _fh.write("panel_dir=/home/other/linuxgsm-panel\n")
-        _r = _su_run(_shared_run, 'PANEL_DIR=/home/me/linuxgsm-panel\nSHARED_CONF=%s\n'
-                     % _su_shlex.quote(_sc))
+        _r = _su_run(_shared_run, _env_me + "SHARED_CONF=%s\n" % _su_shlex.quote(_sc)
+                     + _home_with())
         check("uninstall.sh: host-shared pieces are LEFT when panel.conf names another install",
               "MINE=0" in _r.stdout, repr(_r.stdout[-80:]))
         with open(_sc, "w", encoding="utf-8") as _fh:
-            _fh.write("panel_dir=/home/me/linuxgsm-panel\n")
-        _r = _su_run(_shared_run, 'PANEL_DIR=/home/me/linuxgsm-panel\nSHARED_CONF=%s\n'
-                     % _su_shlex.quote(_sc))
+            _fh.write("panel_dir=%s\n" % _mine)
+        _r = _su_run(_shared_run, _env_me + "SHARED_CONF=%s\n" % _su_shlex.quote(_sc)
+                     + _home_with("me"))
         check("uninstall.sh: ...and taken when it names this one (positive control)",
               "MINE=1" in _r.stdout, repr(_r.stdout[-80:]))
         # No panel.conf at all — an older install that never wrote one. Taking them is the old
         # behaviour and the right default; refusing would strand the leftovers this block exists for.
-        _r = _su_run(_shared_run, 'PANEL_DIR=/home/me/linuxgsm-panel\n'
-                     'SHARED_CONF=%s\n' % _su_shlex.quote(os.path.join(_shared_tmp, "absent.conf")))
+        _r = _su_run(_shared_run, _env_me + "SHARED_CONF=%s\n"
+                     % _su_shlex.quote(os.path.join(_shared_tmp, "absent.conf"))
+                     + _home_with("me"))
         check("uninstall.sh: ...and taken when no panel.conf records an owner",
               "MINE=1" in _r.stdout, repr(_r.stdout[-80:]))
+        # ...and the case panel.conf CANNOT answer. install.sh rewrites it on every install and
+        # every self-update, so it names whoever ran last, not whoever owns the shared tree: in the
+        # ordinary ordering (alice installs, bob installs after her) it names BOB, and bob's
+        # uninstall then read his own panel_dir back and took alice's helper, her recovery command
+        # and the weekly cron while her panel was still running. The question has to be "is another
+        # install still here?", which only a scan of the homes can answer.
+        _r = _su_run(_shared_run, _env_me + "SHARED_CONF=%s\n" % _su_shlex.quote(_sc)
+                     + _home_with("me", "alice"))
+        check("uninstall.sh: host-shared pieces are LEFT while ANOTHER install is still on the host",
+              "MINE=0" in _r.stdout,
+              "panel.conf names this install, but alice's is still installed: %r"
+              % _r.stdout[-120:])
+        # ...and a home that is not an install does not count as one (a bare home, no unit file).
+        _env_alice = _home_with("me")
+        os.makedirs(os.path.join(_homes, "alice"))
+        _r = _su_run(_shared_run, _env_me + "SHARED_CONF=%s\n" % _su_shlex.quote(_sc) + _env_alice)
+        check("uninstall.sh: ...while a home with no panel unit is not another install (control)",
+              "MINE=1" in _r.stdout, repr(_r.stdout[-120:]))
+
+        # ── "is this home MINE?" is a question about identity, not about spelling ────────────
+        # The exclusion compared ${HOMES}/* against ${PANEL_DIR} as TEXT. Those name the same
+        # directory in different words on ordinary hosts — /home a symlink onto another
+        # filesystem, a trailing slash on $HOME — and when they did, the only install on the box
+        # matched ITSELF as OTHER_INSTALL. The decision is an OR, so panel.conf naming this
+        # install could not override it: the root-owned helper tree, the weekly root
+        # `npm install -g` cron and the dangling recovery symlink were all left behind, under a
+        # warning naming an install that does not exist. That is the exact leftover this block
+        # was added to remove.
+        _env_sc_mine = "SHARED_CONF=%s\n" % _su_shlex.quote(_sc)
+        with open(_sc, "w", encoding="utf-8") as _fh:
+            _fh.write("panel_dir=%s\n" % _mine)
+        _env_homes = _home_with("me")
+        _homes_link = os.path.join(_shared_tmp, "homes-link")
+        if os.path.islink(_homes_link):
+            os.unlink(_homes_link)
+        os.symlink(_homes, _homes_link)
+        _r = _su_run(_shared_run,
+                     "PANEL_DIR=%s\n" % _su_shlex.quote(
+                         os.path.join(_homes_link, "me", "linuxgsm-panel"))
+                     + _env_sc_mine + _env_homes)
+        check("uninstall.sh: the only install on the host is not mistaken for another one",
+              "MINE=1" in _r.stdout,
+              "a symlinked home spells this install's own directory differently, and it is then "
+              "read as a co-tenant: %r" % _r.stdout[-200:])
+        _r = _su_run(_shared_run,
+                     "PANEL_DIR=%s\n" % _su_shlex.quote(
+                         os.path.join(_homes, "me") + "//linuxgsm-panel")
+                     + _env_sc_mine + _env_homes)
+        check("uninstall.sh: ...nor is it when $HOME carried a trailing slash",
+              "MINE=1" in _r.stdout, repr(_r.stdout[-200:]))
+        # ...and resolving paths did not turn the co-tenant case into a false negative: alice is
+        # still another install when she is reached through the symlinked spelling too.
+        _r = _su_run(_shared_run,
+                     "PANEL_DIR=%s\n" % _su_shlex.quote(
+                         os.path.join(_homes_link, "me", "linuxgsm-panel"))
+                     + _env_sc_mine + _home_with("me", "alice"))
+        check("uninstall.sh: ...while alice's install is still another install (control)",
+              "MINE=0" in _r.stdout, repr(_r.stdout[-200:]))
+
+        # ── the homes root this scans is a NAMESPACED knob ───────────────────────────────────
+        # It was a bare `HOMES`, a name any shell may already carry for something else, and it
+        # decides both whether the host-wide files are deleted and (through the case guard beside
+        # the userdel) what a root `rm -rf` is allowed to touch. recover.sh namespaces the same
+        # knob as PANEL_RECOVER_HOMES for exactly this reason. Both are exported here: only the
+        # namespaced one may steer the scan.
+        _other_homes = os.path.join(_shared_tmp, "inherited")
+        os.makedirs(os.path.join(_other_homes, "alice", ".config", "systemd", "user"),
+                    exist_ok=True)
+        open(os.path.join(_other_homes, "alice", ".config", "systemd", "user",
+                          "linuxgsm-panel.service"), "w").close()
+        _r = _su_run(_shared_run, _env_me + _env_sc_mine + _home_with("me")
+                     + "HOMES=%s\n" % _su_shlex.quote(_other_homes))
+        check("uninstall.sh: an inherited bare $HOMES does not steer the home scan",
+              "MINE=1" in _r.stdout,
+              "a generic environment variable decided whether host-wide files are removed: %r"
+              % _r.stdout[-200:])
+        _r = _su_run(_shared_run, _env_me + _env_sc_mine
+                     + "PANEL_UNINSTALL_HOMES=%s\n" % _su_shlex.quote(_other_homes))
+        check("uninstall.sh: ...and the namespaced one does (positive control)",
+              "MINE=0" in _r.stdout, repr(_r.stdout[-200:]))
     finally:
         _shutil.rmtree(_shared_tmp, ignore_errors=True)
     check("uninstall.sh: ...and says so when another install owns them",
           "belong to another install" in _un_txt)
+
+    # ── the firewall rule the INSTALLER opened has to come off on the path it opened it ───────
+    # The ufw removal lived inside `if [ "${MODE}" = "system" ]`, so a per-user uninstall never
+    # closed the port — it printed "If you opened a firewall port for the panel…" instead, which
+    # the operator did not: install.sh runs `${SUDO} ufw allow "${PORT}/tcp"` at column 0, after
+    # its root/user split, so the installer opens it on the per-user path too. The port stayed
+    # open on a host with no panel behind it.
+    #
+    # Run the region rather than reading it: "outside the MODE branch" is a property of where the
+    # code sits, and the only honest way to ask is to run it as a per-user uninstall and see
+    # whether ufw is called. The shims trace to a file because every call in here is redirected to
+    # /dev/null — asserting on stdout would assert on nothing.
+    # The slice starts at the U_SUDO computation, NOT at the firewall comment four lines below it.
+    # Starting below it meant the test environment handed in `U_SUDO=sudo`, so nothing here asked
+    # whether the code still computes it above the first command that needs it — and it has to:
+    # move that assignment back down beside the /usr/local removals, as it was, and a per-user
+    # uninstall dies on `set -u` at the ufw line. min() rather than a bare .index() so that a
+    # version which DID move it fails this check by name instead of raising ValueError out of the
+    # extraction and taking the rest of the file's checks with it.
+    _usudo_i = _un_txt.index('U_SUDO=""')
+    _fw_i = _un_txt.index("# ── Undo ONLY the panel's own firewall rule")
+    check("uninstall.sh: ${U_SUDO} is computed above the first root-owned removal, not beside it",
+          _usudo_i < _fw_i,
+          "the ufw delete runs %d bytes BEFORE U_SUDO exists" % (_usudo_i - _fw_i))
+    _fw_region = _un_txt[min(_usudo_i, _fw_i):
+                         _un_txt.index("\n# ── Remove the panel files", _fw_i)]
+    # Two places now have to be able to be the first sudo on the path, so the explanation is a
+    # function with a once-guard rather than a line. Run it twice and count.
+    _note_fn = _su_between2("_SUDO_NOTE_SHOWN=0", "\n}\n")
+    _note_shim = 'info() { echo "INFO $*"; }\n'
+    _r = _su_run(_note_fn + "\nsudo_note\nsudo_note\n", "U_SUDO=sudo\n", extra=_note_shim)
+    check("uninstall.sh: the sudo explanation is printed once, not once per removal",
+          _r.stdout.count("INFO ") == 1, repr(_r.stdout))
+    _r = _su_run(_note_fn + "\nsudo_note\n", "U_SUDO=\n", extra=_note_shim)
+    check("uninstall.sh: ...and not at all when there is no sudo to explain (control)",
+          "INFO" not in _r.stdout, repr(_r.stdout))
+    _fw_tmp = _tempfile.mkdtemp(prefix="uninst-fw-")
+    try:
+        _trace = os.path.join(_fw_tmp, "trace")
+        # `id` is shimmed and U_SUDO is NOT supplied: the region derives it from the uid, which is
+        # the thing under test. info() goes to the trace as well as to stdout because every
+        # privileged call in here is redirected to /dev/null — the trace is the only stream where
+        # the ORDER of "here is why I need sudo" against "sudo …" can be read back.
+        _fw_shims = ('ok() { echo "OK $*"; }\n'
+                     'id() { echo "${FAKE_UID}"; }\n'
+                     'info() { echo "INFO $*"; echo "INFO $*" >> "${TRACE}"; }\n'
+                     'ufw() { echo "UFW $*" >> "${TRACE}"; }\n'
+                     'sudo() { echo "SUDO $*" >> "${TRACE}"; }\n'
+                     'tailscale() { echo "TS $*" >> "${TRACE}"; }\n')
+
+        def _fw_run(env):
+            open(_trace, "w").close()
+            _out = _su_run(_fw_region, "TRACE=%s\n" % _su_shlex.quote(_trace) + env,
+                           extra=_fw_shims)
+            return _out, open(_trace, encoding="utf-8").read()
+
+        _r, _tr = _fw_run('MODE=user\nFAKE_UID=1000\nPANEL_PORT=5000\n'
+                          'TS_DONE=0\nTS_CONF_UNREAD=0\nTS_MOUNT=/\n')
+        check("uninstall.sh: a PER-USER uninstall closes the port its installer opened",
+              "SUDO ufw delete allow 5000/tcp" in _tr,
+              "nothing deleted the rule on the user path: %r / %r" % (_tr, _r.stdout[-120:]))
+        check("uninstall.sh: ...and says so, rather than asking the operator to do it",
+              "OK Removed the panel's UFW rule for port 5000" in _r.stdout,
+              repr(_r.stdout[-160:]))
+        check("uninstall.sh: ...and no longer blames the operator for a port they never opened",
+              "If you opened a firewall port" not in _un_txt)
+
+        # ── not knowing the port is not the same as there being no rule ────────────────────────
+        # PANEL_PORT is blanked whenever data/config.json cannot be read or parsed, and the guard
+        # below it is `[ -n "${PANEL_PORT}" ]` — so that case skipped the whole block in SILENCE,
+        # leaving the rule the installer opened on a host with no panel behind it and saying
+        # nothing. The Tailscale teardown two blocks down already hedges out loud about the very
+        # same unreadable file. An empty read is not a measurement.
+        # Own names: the sudo-ordering check below reads the _r/_tr from the run ABOVE, and
+        # reusing them here made it assert against this run's trace instead. (It failed loudly
+        # rather than passing wrongly, which is the only reason it was cheap to find.)
+        _rnp, _trnp = _fw_run('MODE=user\nFAKE_UID=1000\nPANEL_PORT=\n'
+                              'TS_DONE=0\nTS_CONF_UNREAD=0\nTS_MOUNT=/\n')
+        check("uninstall.sh: a port it could not read is reported, not silently left open",
+              "Could not read the panel's port" in _rnp.stdout,
+              "said nothing about the rule it is leaving behind: %r" % (_rnp.stdout[-200:],))
+        check("uninstall.sh: ...and it does not guess a port to delete instead",
+              "ufw delete" not in _trnp,
+              "deleted a rule for a port it never read: %r" % (_trnp,))
+
+        # ── the account being ALREADY GONE must not end the uninstall ──────────────────────────
+        # `PANEL_HOME="$(getent passwd ... | cut -d: -f6)"` runs under this file's own
+        # `set -euo pipefail`. getent exits 2 when the account does not exist, pipefail carries
+        # that out of the pipeline, and the assignment's status is the substitution's — so the
+        # WHOLE uninstaller stopped there, printing nothing at all. Measured: exit 2, before the
+        # next line. And a missing account is not an error here, it is the ordinary state when
+        # someone re-runs this after a partial uninstall — precisely when they need it to work.
+        #
+        # The real line is lifted out of the file, not retyped, so a future edit is covered.
+        _ge_m = re.findall(r'^\s*(PANEL_HOME="\$\(getent passwd[^\n]*)$', _un_txt, re.M)
+        check("uninstall.sh: the service account's home is read by exactly one line",
+              len(_ge_m) == 1, "found %d candidates: %r" % (len(_ge_m), _ge_m))
+        if len(_ge_m) == 1:
+            _ge = _sh_sub.run(
+                ["bash", "-c", "set -euo pipefail\nPANEL_USER=no-such-account-for-a-test\n"
+                               + _ge_m[0].strip() + "\nprintf 'REACHED:%s\\n' \"${PANEL_HOME}\""],
+                capture_output=True, text=True)
+            check("uninstall.sh: an account that is already gone does not abort the uninstall",
+                  _ge.returncode == 0 and _ge.stdout.startswith("REACHED:"),
+                  "rc=%d out=%r err=%r" % (_ge.returncode, _ge.stdout, _ge.stderr[-160:]))
+            check("uninstall.sh: ...and reads back empty, so the default home path is used",
+                  _ge.stdout.strip() == "REACHED:", repr(_ge.stdout))
+            # Positive control: a real account still yields its real home, so the line was not
+            # simply neutered into always answering nothing.
+            _ge_ok = _sh_sub.run(
+                ["bash", "-c", "set -euo pipefail\nPANEL_USER=root\n" + _ge_m[0].strip()
+                               + "\nprintf 'REACHED:%s\\n' \"${PANEL_HOME}\""],
+                capture_output=True, text=True)
+            check("uninstall.sh: ...while an account that EXISTS still reports its home",
+                  _ge_ok.returncode == 0 and _ge_ok.stdout.strip() not in ("REACHED:", ""),
+                  "rc=%d out=%r" % (_ge_ok.returncode, _ge_ok.stdout))
+        # ...and the operator is told WHY sudo is about to be asked for before it is asked for.
+        # The explanation used to live beside the /usr/local removals further down, which stopped
+        # being the first sudo on this path the moment the firewall rule moved out of the
+        # system-only branch: a per-user uninstall reached a password prompt with nothing yet
+        # printed to say what it was for. Both streams are in the trace, so this reads the order.
+        # Both .index() calls are guarded. The `in` test short-circuits the first, but NOT the
+        # second: with the note printed and no sudo reached — a real state on a host with nothing
+        # left to remove — `_tr.index("SUDO ")` raised ValueError, and these parts are imported by
+        # tests/unit_test.py at module scope, so that killed the ENTIRE unit suite at import
+        # instead of failing this one check. A suite that dies reports nothing about the other
+        # 2800 checks; an assertion must fail, not explode.
+        _sudo_at = _tr.find("SUDO ")
+        _note_at = _tr.find("INFO Some pieces live outside")
+        check("uninstall.sh: a per-user uninstall says why it needs sudo BEFORE it asks",
+              _note_at >= 0 and (_sudo_at < 0 or _note_at < _sudo_at),
+              "sudo ran with no explanation printed first: %r" % _tr)
+        # The root path still behaves exactly as it did (positive control), and a host with no
+        # recorded port still touches nothing.
+        _r, _tr = _fw_run('MODE=system\nFAKE_UID=0\nPANEL_PORT=5000\n'
+                          'TS_DONE=0\nTS_CONF_UNREAD=0\nTS_MOUNT=/\n')
+        check("uninstall.sh: ...while a root uninstall still deletes it directly (positive control)",
+              "UFW delete allow 5000/tcp" in _tr, repr(_tr))
+        check("uninstall.sh: ...and is not told it needs a sudo it does not need (control)",
+              "INFO Some pieces live outside" not in _tr, repr(_tr))
+        _r, _tr = _fw_run('MODE=user\nFAKE_UID=1000\nPANEL_PORT=\n'
+                          'TS_DONE=0\nTS_CONF_UNREAD=0\nTS_MOUNT=/\n')
+        check("uninstall.sh: ...and an install with no recorded port touches no firewall rule",
+              "ufw" not in _tr.lower(), repr(_tr))
+
+        # ── and the Tailscale teardown removes the panel's mapping, not the host's whole config ──
+        # `tailscale serve reset` is "clear the entire serve/funnel config": it took every OTHER
+        # mapping on the node with it — a /grafana mount, a funnel for a stats page — unlisted,
+        # unlogged and unrecoverable, since serve config is not versioned. It then printed "it was
+        # pointing at the panel", which nothing here had established.
+        _r, _tr = _fw_run('MODE=system\nFAKE_UID=0\nPANEL_PORT=\n'
+                          'TS_DONE=1\nTS_CONF_UNREAD=0\nTS_MOUNT=/lgsm-panel\n')
+        check("uninstall.sh: the Tailscale teardown removes only the panel's own mount",
+              "TS serve --bg --remove /lgsm-panel" in _tr and "reset" not in _tr,
+              "this wipes every Serve/Funnel mapping on the host: %r" % _tr)
+        check("uninstall.sh: ...and names the mount it removed",
+              "at /lgsm-panel" in _r.stdout, repr(_r.stdout[-160:]))
+        # ...and a panel that never set Serve up is still left alone (positive control).
+        _r, _tr = _fw_run('MODE=system\nFAKE_UID=0\nPANEL_PORT=\n'
+                          'TS_DONE=0\nTS_CONF_UNREAD=0\nTS_MOUNT=/lgsm-panel\n')
+        check("uninstall.sh: ...and a host that never published the panel is untouched (control)",
+              _tr == "", repr(_tr))
+
+        # ── the Serve mapping a PER-USER panel published comes down too ──────────────────────
+        # The teardown was gated on `[ "${MODE}" = "system" ]`, four lines below the block that
+        # had just been moved OUT of that same gate for the same reason. Nothing about
+        # tailscale_setup_done is system-only: the running panel writes it whenever
+        # setup_tailscale_serve() succeeds (routes/tailscale.py, route_helpers.py), with no
+        # install-mode split anywhere in that path. So a per-user panel left its Serve mapping
+        # published on the tailnet, pointing at a backend that no longer exists.
+        _r, _tr = _fw_run('MODE=user\nFAKE_UID=1000\nPANEL_PORT=\n'
+                          'TS_DONE=1\nTS_CONF_UNREAD=0\nTS_MOUNT=/lgsm-panel\n')
+        check("uninstall.sh: a PER-USER panel's Tailscale Serve mapping is removed too",
+              "TS serve --bg --remove /lgsm-panel" in _tr,
+              "the mapping stays on the tailnet pointing at a dead backend: %r" % _tr)
+
+        # ── a mount that could not be read is never guessed at ───────────────────────────────
+        # The config read used to substitute "/" for a value it could not validate — and "/" is a
+        # real mount, the one most likely to belong to something ELSE on this node, so an
+        # unreadable or malformed config.json ended in `tailscale serve --bg --remove /`. The
+        # panel's own teardown refuses instead (disable_tailscale_serve() catches VerbError and
+        # returns "That isn't a usable mount point." without calling the CLI). Empty is how that
+        # reaches here, and nothing may be removed on it.
+        _r, _tr = _fw_run('MODE=system\nFAKE_UID=0\nPANEL_PORT=\n'
+                          'TS_DONE=1\nTS_CONF_UNREAD=1\nTS_MOUNT=\n')
+        check("uninstall.sh: an unreadable mount removes NOTHING, least of all the root mount",
+              "TS " not in _tr,
+              "removed a mount this script had to guess at: %r" % _tr)
+        check("uninstall.sh: ...and the operator is told where to look instead",
+              "tailscale serve status" in _r.stdout
+              and "Leaving this node's Tailscale Serve config alone" in _r.stdout,
+              repr(_r.stdout[-320:]))
+        # ...but a "/" the config genuinely RECORDS is still the panel's own mount, and still
+        # comes off: config.py defaults tailscale_mount to "/", so refusing it wholesale would
+        # strand the mapping of every panel that took the default (positive control).
+        _r, _tr = _fw_run('MODE=system\nFAKE_UID=0\nPANEL_PORT=\n'
+                          'TS_DONE=1\nTS_CONF_UNREAD=0\nTS_MOUNT=/\n')
+        check("uninstall.sh: ...while a recorded \"/\" is the panel's own mount and is removed",
+              "TS serve --bg --remove /\n" in _tr, repr(_tr))
+    finally:
+        _shutil.rmtree(_fw_tmp, ignore_errors=True)
+
+    # ...and the mount it removes is the one the panel recorded, read before its config is deleted.
+    _ts_read = (_su_between2('PANEL_PORT=""; TS_DONE=0', "\nfi\n")
+                + '\necho "M=[${TS_MOUNT}] UNREAD=${TS_CONF_UNREAD}"\n')
+    _ts_tmp = _tempfile.mkdtemp(prefix="uninst-ts-")
+    try:
+        os.makedirs(os.path.join(_ts_tmp, "data"))
+
+        def _ts_mount_read(value, raw=None):
+            """Read TS_MOUNT back out of a fixture config.json. `raw` writes the file verbatim."""
+            with open(os.path.join(_ts_tmp, "data", "config.json"), "w", encoding="utf-8") as _fh:
+                if raw is None:
+                    json.dump({"port": 5000, "tailscale_mount": value}, _fh)
+                else:
+                    _fh.write(raw)
+            return _su_run(_ts_read, "PANEL_DIR=%s\n" % _su_shlex.quote(_ts_tmp)).stdout
+
+        check("uninstall.sh: the Tailscale mount comes from the panel's own config",
+              "M=[/lgsm-panel]" in _ts_mount_read("/lgsm-panel"),
+              repr(_ts_mount_read("/lgsm-panel")))
+        check("uninstall.sh: ...defaulting to / for a panel that recorded nothing else (control)",
+              "M=[/] UNREAD=0" in _ts_mount_read("/"), repr(_ts_mount_read("/")))
+        # A mount beginning with "-" is an OPTION to `tailscale`, not a path, and this script runs
+        # as root. Rejected the same way privileged.py's _ts_mount rejects it — and rejected means
+        # EMPTY, not "/". Substituting "/" turned a value this script could not validate into the
+        # removal of the mount most likely to belong to something else on the node; the panel's own
+        # teardown answers the same input by refusing to call the CLI at all.
+        check("uninstall.sh: ...and a mount that is not a mount point never reaches the CLI",
+              "M=[] UNREAD=1" in _ts_mount_read("--set-path=/pwn"),
+              repr(_ts_mount_read("--set-path=/pwn")))
+        # ...and the same for a config.json that will not parse at all. The Serve flag is read out
+        # of that same file by a `grep -q` on its TEXT, which still matches — so this case reached
+        # the CLI too, with a mount nothing had read.
+        check("uninstall.sh: ...nor does one read out of a config.json that will not parse",
+              "M=[] UNREAD=1"
+              in _ts_mount_read(None, raw='oops not json "tailscale_setup_done": true\n'),
+              repr(_ts_mount_read(None, raw='oops not json "tailscale_setup_done": true\n')))
+    finally:
+        _shutil.rmtree(_ts_tmp, ignore_errors=True)
+
+    # ── "Removed the dedicated panel user" must mean the SSH key went with it ────────────────
+    # `rm -rf "${PANEL_DIR}"` only clears <home>/linuxgsm-panel. The key that authenticates to
+    # every remote host this panel managed lives OUTSIDE it, at <home>/.ssh/id_rsa (ssh_manager's
+    # default), and it is root-capable there — the remote grant is `sudo bash -c`. The teardown ran
+    # `userdel -r … || userdel …`, and that fallback is userdel WITHOUT -r, which by definition
+    # leaves the home; `userdel -r` itself exits 12 when it cannot remove the home, having already
+    # deleted the account. Both cases asked only whether the ACCOUNT was gone, so the key survived
+    # an uninstall that reported itself complete.
+    _ud_block = _su_between2('    if [ "${PANEL_USER}" = "${SERVICE_USER}" ]', "        fi\n    fi\n")
+    _ud_tmp = _tempfile.mkdtemp(prefix="uninst-user-")
+    try:
+        _ud_homes = os.path.join(_ud_tmp, "home")
+
+        def _ud_run(userdel_body, home="lgsmpanel"):
+            """Run the teardown against a fixture home, with the account state the shims decide."""
+            _shutil.rmtree(_ud_homes, ignore_errors=True)
+            _ph = os.path.join(_ud_homes, "lgsmpanel")
+            os.makedirs(os.path.join(_ph, ".ssh"))
+            with open(os.path.join(_ph, ".ssh", "id_rsa"), "w", encoding="utf-8") as _fh:
+                _fh.write("PRIVATE KEY\n")
+            # home="" stands for a passwd field that is the homes ROOT — the shape the rm -rf
+            # guard has to refuse.
+            _passwd_home = os.path.join(_ud_homes, home) if home else _ud_homes
+            _shim = ('ok() { echo "OK $*"; }\n'
+                     'loginctl() { :; }\n'
+                     '_gone=0\n'
+                     'getent() { echo "lgsmpanel:x:998:998::${PH}:/bin/bash"; }\n'
+                     'id() { if [ "${_gone}" = 1 ]; then return 1; fi; return 0; }\n'
+                     'userdel() { %s }\n' % userdel_body)
+            _out = _su_run(_ud_block,
+                           "PANEL_USER=lgsmpanel\nSERVICE_USER=lgsmpanel\n"
+                           "HOMES=%s\nPH=%s\n" % (_su_shlex.quote(_ud_homes),
+                                                  _su_shlex.quote(_passwd_home)),
+                           extra=_shim)
+            return _out, _ph
+
+        # (a) userdel -r fails (rc 12 — "can't remove home directory"); the fallback deletes the
+        #     account and leaves the home. This is the defect: the account is gone, so the old
+        #     branch printed the success line over a surviving id_rsa.
+        _r, _ph = _ud_run('if [ "${1:-}" = "-r" ]; then return 12; fi; _gone=1; return 0;')
+        check("uninstall.sh: the panel user's home goes with the account, not just the account",
+              not os.path.exists(os.path.join(_ph, ".ssh", "id_rsa")),
+              "the SSH key that reaches every managed remote survived the uninstall: %r"
+              % _r.stdout[-200:])
+        check("uninstall.sh: ...and only then is the user reported as removed",
+              "OK Removed the dedicated panel user" in _r.stdout, repr(_r.stdout[-200:]))
+        # (b) userdel -r does its own job (positive control): nothing left to clean up, same line.
+        _r, _ph = _ud_run('_gone=1; rm -rf "${PH}"; return 0;')
+        check("uninstall.sh: ...and a userdel -r that worked still reports success (control)",
+              "OK Removed the dedicated panel user" in _r.stdout and not os.path.isdir(_ph),
+              repr(_r.stdout[-200:]))
+        # (c) both attempts fail: the account is still live, so its home is NOT ours to delete —
+        #     and the operator is told, rather than shown a success line.
+        _r, _ph = _ud_run("return 1;")
+        check("uninstall.sh: ...but a panel user that survived keeps its home (control)",
+              os.path.exists(os.path.join(_ph, ".ssh", "id_rsa"))
+              and "WARN Could not remove the panel user" in _r.stdout,
+              repr(_r.stdout[-200:]))
+        # (d) a home that is not a plain <homes>/<name> is never handed to rm -rf — here the homes
+        #     root itself, which is what a passwd field of "/home" would resolve to. It is reported
+        #     instead, because "left on disk" is the truth in that case too.
+        _r, _ph = _ud_run('_gone=1; return 0;', home="")
+        check("uninstall.sh: ...and a home outside <homes>/<name> is reported, never rm -rf'd",
+              os.path.isdir(_ud_homes) and "WARN Removed the panel user" in _r.stdout,
+              repr(_r.stdout[-200:]))
+    finally:
+        _shutil.rmtree(_ud_tmp, ignore_errors=True)
 
     # ── recover.sh must not pair a directory with another install's service user ─────────────
     _rec_txt = open(os.path.join(_root, "recover.sh"), encoding="utf-8").read()

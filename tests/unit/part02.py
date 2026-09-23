@@ -2196,3 +2196,192 @@ try:
           _gsm.get_server_status(NS(id=1), _srv) == "unknown")
 finally:
     _gcore.run_as_game_user, _gps._remote_listening_ports = _g_rag, _g_rlp
+
+# ── Minting an API token must cost what the other credential changes on that page cost ────────
+# /account/api-token/generate was @login_required and nothing else, while the password change and
+# the 2FA switch-off in the same cards both demand the password and a live code. That was the
+# wrong way round: what this route hands out is a SECOND credential that outlives the session it
+# was minted from. by_api_token matches on the digest and is_active alone — no auth_epoch, so the
+# bump that sweeps every session cookie does not reach it and only an explicit revoke_api_token()
+# does (account_revoke_sessions and account_change_password each had to be taught to call one);
+# no totp_enabled, so it never meets the 2FA gate, which exists only in the /login form flow —
+# and bearer requests are CSRF-exempt. So one POST from a borrowed tab turned a minute of someone
+# else's session into a key with no IP/UA binding, no second factor and no expiry, which those two
+# controls take back only if the victim presses them — and nothing visible went wrong to suggest
+# they should. (An earlier draft of this comment said a password change and "sign out everywhere"
+# LEAVE IT WORKING, present tense, copied from smoke_test's account of the bug those two routes
+# were changed to fix. Both revoke it today and smoke_test asserts both do; the tense was the
+# whole claim.)
+#
+# Driven through the REAL view function on a bare Flask app rather than asserted from the source,
+# because the source says "check_password" either way — what has to be true is that no token comes
+# back. The route's collaborators are stubbed at panel.routes.auth_routes (the module the closure
+# reads its globals from) and restored in the finally; check_password and verify_totp_step are the
+# real ones, against a real bcrypt hash and a real TOTP secret.
+import flask as _atg_flask                                                          # noqa: E402
+import panel.routes.auth_routes as _atg_routes                                      # noqa: E402
+
+_atg_app = _atg_flask.Flask(__name__)
+_atg_app.secret_key = "unit-suite"
+_atg_app.config["LOGIN_DISABLED"] = True    # @login_required is not what is under test here
+_atg_routes.register(_atg_app)
+_atg_mint = _atg_app.view_functions.get("account_api_token_generate")
+_atg_revoke = _atg_app.view_functions.get("account_api_token_revoke")
+check("api token: the mint and revoke views registered (the checks below need them)",
+      _atg_mint is not None and _atg_revoke is not None,
+      "mint=%r revoke=%r" % (_atg_mint, _atg_revoke))
+
+_atg_pw = "Str0ng!passw0rd"
+_atg_hash = hash_password(_atg_pw)
+_atg_secret = generate_totp_secret()
+
+
+class _AtgUser:
+    """Just enough User for this route: the columns it reads and the two methods it calls."""
+
+    def __init__(self, totp=False):
+        self.username = "tokenholder"
+        self.password_hash = _atg_hash
+        self.totp_enabled = totp
+        self.totp_secret_plain = _atg_secret if totp else None
+        self.last_totp_step = 0
+        self.minted = 0
+        self.revoked = 0
+        self._spent_backup = set()
+
+    def _get_current_object(self):
+        return self
+
+    def generate_api_token(self):
+        self.minted += 1
+        return "lgsm_" + "0" * 48
+
+    def revoke_api_token(self):
+        self.revoked += 1
+
+    def use_backup_code(self, code):
+        if code == "aaaaa-bbbbb" and code not in self._spent_backup:
+            self._spent_backup.add(code)
+            return True
+        return False
+
+
+_atg_saved = {_k: getattr(_atg_routes, _k) for _k in
+              ("current_user", "db", "log_action", "render_template", "flash", "redirect", "url_for")}
+try:
+    _atg_routes.db = type("_AtgDb", (), {
+        "session": type("_AtgSess", (), {"commit": staticmethod(lambda: None)})()})()
+    _atg_routes.log_action = lambda *a, **k: None
+    _atg_routes.render_template = lambda _t, **kw: "TOKEN:%s" % (kw.get("new_token"),)
+    _atg_routes.flash = lambda _m, _c="message": None
+    _atg_routes.redirect = lambda _loc: "REDIRECTED"
+    _atg_routes.url_for = lambda _ep, **kw: "/" + _ep
+
+    def _atg_post(user, **form):
+        """POST the mint form as `user`; returns the rendered body (a redirect means refused)."""
+        _atg_routes.current_user = user
+        with _atg_app.test_request_context("/account/api-token/generate",
+                                           method="POST", data=form):
+            return _atg_mint()
+
+    # A FRESH user per case on purpose. Sharing one would make the mint counter cumulative, and
+    # then the positive controls below would fail alongside the refusals whenever the gate came
+    # off — a test that goes all-red proves only that something moved, not what.
+    #
+    # No password at all — everything a stolen cookie can manage on its own.
+    _atg_u = _AtgUser()
+    _atg_body = _atg_post(_atg_u)
+    check("api token: a mint with NO password mints nothing",
+          _atg_u.minted == 0, "minted=%d body=%r" % (_atg_u.minted, _atg_body))
+    _atg_u = _AtgUser()
+    _atg_body = _atg_post(_atg_u, password="wrong-password")
+    check("api token: ...and a WRONG password mints nothing",
+          _atg_u.minted == 0, "minted=%d body=%r" % (_atg_u.minted, _atg_body))
+    # Positive control: the gate must not be "refuse everything".
+    _atg_u = _AtgUser()
+    _atg_body = _atg_post(_atg_u, password=_atg_pw)
+    check("api token: the account holder's own password still mints one",
+          _atg_u.minted == 1 and "lgsm_" in _atg_body,
+          "minted=%d body=%r" % (_atg_u.minted, _atg_body))
+
+    # With 2FA on, the password is not the whole proof — same as account_2fa_disable.
+    _atg_t = _AtgUser(totp=True)
+    _atg_body = _atg_post(_atg_t, password=_atg_pw)
+    check("api token: with 2FA on, the password alone mints nothing",
+          _atg_t.minted == 0, "minted=%d body=%r" % (_atg_t.minted, _atg_body))
+    _atg_t = _AtgUser(totp=True)
+    _atg_body = _atg_post(_atg_t, password=_atg_pw, totp_code="000000")
+    check("api token: ...and a wrong authenticator code mints nothing",
+          _atg_t.minted == 0, "minted=%d body=%r" % (_atg_t.minted, _atg_body))
+    # Positive control again: a real code from the authenticator works.
+    _atg_t = _AtgUser(totp=True)
+    _atg_code = _pyotp.TOTP(_atg_secret).now()
+    _atg_body = _atg_post(_atg_t, password=_atg_pw, totp_code=_atg_code)
+    check("api token: ...while a valid authenticator code mints one",
+          _atg_t.minted == 1 and "lgsm_" in _atg_body,
+          "minted=%d body=%r" % (_atg_t.minted, _atg_body))
+    check("api token: ...and the step that code spent is recorded",
+          (_atg_t.last_totp_step or 0) > 0, "last_totp_step=%r" % _atg_t.last_totp_step)
+    # A TOTP code stays valid for ~90s, so "is it valid" is not enough — the step must be spent.
+    # Same user deliberately: the replay is only a replay against the step it already spent.
+    _atg_body = _atg_post(_atg_t, password=_atg_pw, totp_code=_atg_code)
+    check("api token: REPLAYING that same code mints nothing",
+          _atg_t.minted == 1, "minted=%d body=%r" % (_atg_t.minted, _atg_body))
+    # Someone who has lost their authenticator is not locked out of their own token.
+    _atg_b = _AtgUser(totp=True)
+    _atg_body = _atg_post(_atg_b, password=_atg_pw, totp_code="aaaaa-bbbbb")
+    check("api token: a one-time backup code mints one too",
+          _atg_b.minted == 1 and "lgsm_" in _atg_body,
+          "minted=%d body=%r" % (_atg_b.minted, _atg_body))
+    _atg_body = _atg_post(_atg_b, password=_atg_pw, totp_code="aaaaa-bbbbb")
+    check("api token: ...and that backup code is spent, not reusable",
+          _atg_b.minted == 1, "minted=%d body=%r" % (_atg_b.minted, _atg_body))
+
+    # Positive control on the OTHER direction: revoking must stay ungated. Taking a credential
+    # away is the safe direction, and a gate there is a reason not to press it in a panic.
+    _atg_r = _AtgUser()
+    _atg_routes.current_user = _atg_r
+    with _atg_app.test_request_context("/account/api-token/revoke", method="POST"):
+        _atg_revoke()
+    check("api token: revoking one still needs nothing but the session",
+          _atg_r.revoked == 1, "revoked=%d" % _atg_r.revoked)
+finally:
+    for _k, _v in _atg_saved.items():
+        setattr(_atg_routes, _k, _v)
+
+# ── ...and what it says when it refuses has to be readable in Spanish and French ──────────────
+# base.html hands the browser a catalog and walks the DOM, swapping any text whose exact
+# whitespace-collapsed form is a key — so a sentence the catalogs have never heard of stays
+# English whatever the user picked, and nothing anywhere fails. The i18n gate in part06 reads
+# templates/ and static/js/ only, so a sentence that lives in a ROUTE's source is invisible to it:
+# both refusals this gate added shipped untranslated, and the four template strings beside them
+# (which that gate does see) were translated in the same change. This one reads the flash calls
+# out of the route itself, so the NEXT refusal added here has to be translated too rather than
+# quietly joining them.
+_atg_mint_src = _totp_ast.parse(
+    open(os.path.join(_p02_root, "panel", "routes", "auth_routes.py"), encoding="utf-8").read())
+_atg_said = []
+for _n in _totp_ast.walk(_atg_mint_src):
+    if not (isinstance(_n, _totp_ast.FunctionDef) and _n.name == "account_api_token_generate"):
+        continue
+    for _c in _totp_ast.walk(_n):
+        if (isinstance(_c, _totp_ast.Call)
+                and getattr(_c.func, "id", getattr(_c.func, "attr", None)) == "flash"
+                and _c.args and isinstance(_c.args[0], _totp_ast.Constant)
+                and isinstance(_c.args[0].value, str)):
+            _atg_said.append(_c.args[0].value)
+# A floor, not an inventory: "every sentence found is translated" is satisfied by finding none,
+# which is exactly what a renamed route or a flash built from a variable would produce.
+check("api token: the mint's refusal sentences were found to check",
+      len(_atg_said) >= 3, "the AST walk found %r" % (_atg_said,))
+_atg_untranslated = {}
+for _lang in ("es", "fr"):
+    _atg_keys = set()
+    _atg_dir = os.path.join(_p02_root, "translations", _lang)
+    for _f in sorted(os.listdir(_atg_dir)):
+        if _f.endswith(".json"):
+            _atg_keys |= set(json.load(open(os.path.join(_atg_dir, _f), encoding="utf-8")))
+    _atg_untranslated[_lang] = [_s for _s in _atg_said if _s not in _atg_keys]
+check("api token: every refusal the mint flashes is in the es and fr catalogs",
+      not any(_atg_untranslated.values()),
+      "; ".join("%s missing %r" % (_l, _m) for _l, _m in sorted(_atg_untranslated.items()) if _m))
