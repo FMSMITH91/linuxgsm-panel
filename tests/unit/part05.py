@@ -3416,10 +3416,22 @@ finally:
 
 # install.sh must apply the same rule to the accounts it backfills.
 _inst_sh_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
-check("install.sh: the backfill skips an account that already has sudo rights",
-      'grep -qxE "sudo|admin|wheel|root"' in _inst_sh_src
-      and 'sudo -l -U "${_gu}"' in _inst_sh_src,
-      "guard missing from sync_game_user_group")
+# Scoped to the two functions rather than to the whole file, and it names the CALLER's use of the
+# answer as well as the check itself: the decision now lives in can_already_sudo(), which
+# tests/unit/part06.py drives against each reply sudo can really give. Searching the file as a
+# whole would pass on a guard that had been written and then never consulted.
+def _inst_fn(name):
+    i = _inst_sh_src.index(name + "() {")
+    return _inst_sh_src[i:_inst_sh_src.index("\n}\n", i)]
+
+check("install.sh: the backfill asks whether an account can already reach root",
+      'grep -qxE "sudo|admin|wheel|root"' in _inst_fn("can_already_sudo")
+      and 'sudo -l -U "${_cas_user}"' in _inst_fn("can_already_sudo"),
+      "the check is missing from can_already_sudo")
+check("install.sh: ...and the backfill acts on its answer, enrolling only on a definite no",
+      "can_already_sudo" in _inst_fn("sync_game_user_group")
+      and "usermod -aG" in _inst_fn("sync_game_user_group"),
+      "sync_game_user_group does not consult it")
 
 # ...and when the group database does not answer, the check must fail CLOSED. It used to swallow
 # the error and return whatever it had, so an unreadable group database produced an EMPTY set, no

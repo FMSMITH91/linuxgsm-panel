@@ -1239,6 +1239,44 @@ try:
     check("install.sh: install_recovery_command returns early when the origin is not trusted",
           _su_guard in _su_body("install_recovery_command"))
 
+    # ── the game-account enrolment guard must fail CLOSED ────────────────────────────────────
+    # GAME_GROUP is a grant: the panel's sudoers line says it may BECOME any member, so enrolling
+    # an account that can already run sudo turns the narrow grant into NOPASSWD:ALL with one extra
+    # hop. The guard was `sudo -l -U <u> | grep -q "may run the following"` — so every answer that
+    # is not that one English phrase read as "no sudo rights, safe to enrol". Run the real
+    # function against each reply sudo can actually give.
+    _cas = _su_between("can_already_sudo() {", "\n}\n")
+    _cas_cases = [
+        ("User x may run the following commands on h:", "yes",  "a sudo-capable account"),
+        ("User x is not allowed to run sudo on h.",     "no",   "a plain game account"),
+        ("sudo: unknown user x",                        "unknown", "sudo could not resolve it"),
+        ("",                                            "unknown", "sudo missing or errored"),
+        ("El usuario x puede ejecutar los siguientes comandos:",
+                                                        "unknown", "a localized reply"),
+    ]
+    _cas_bad = []
+    for _out, _want, _desc in _cas_cases:
+        _r = _su_run(_cas + '\ncan_already_sudo x\n', "",
+                     extra=("id() { echo 'x games'; }\n"
+                            "sudo() { printf '%s' " + _su_shlex.quote(_out) + "; }\n"))
+        _got = (_r.stdout or "").strip().splitlines()[-1:] or [""]
+        if _got[0] != _want:
+            _cas_bad.append("%s -> %r (want %s)" % (_desc, _got[0], _want))
+    check("install.sh: the enrolment guard answers yes/no/unknown, and unknown for anything unclear",
+          not _cas_bad, "; ".join(_cas_bad))
+    # ...and the group half still short-circuits without asking sudo at all.
+    _r = _su_run(_cas + '\ncan_already_sudo x\n', "",
+                 extra=("id() { echo 'x sudo'; }\n"
+                        "sudo() { echo 'SUDO WAS CALLED'; }\n"))
+    check("install.sh: ...and a member of a privileged GROUP is 'yes' without consulting sudo",
+          (_r.stdout or "").strip().endswith("yes") and "SUDO WAS CALLED" not in _r.stdout,
+          repr(_r.stdout[:120]))
+    # The caller must act on all three: only `no` may enrol.
+    _sync_body = _su_body("sync_game_user_group")
+    check("install.sh: ...and only a definite 'no' enrols the account",
+          "can_already_sudo" in _sync_body and "no)" in _sync_body
+          and "usermod -aG" in _sync_body, _sync_body[:200])
+
     # ...and prove it by RUNNING the function both ways, rather than trusting the source text.
     _su_recov = _su_between("install_recovery_command() {", "\n}\n") + "\ninstall_recovery_command\n"
     _su_rshim = ("id() { echo 0; }\n"
