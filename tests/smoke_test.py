@@ -3368,6 +3368,38 @@ try:
     finally:
         _dmapp.host_live_metrics, _dmapp.game_map = _sv_slm, _sv_map
 
+    # ── /api/servers must not COMMIT a status it could not read ───────────────────────────────
+    # _remote_listening_ports answers None for a scan that failed, and its docstring lists what
+    # happens when that is taken as "nothing listening": every server on the host written offline,
+    # which the bots and the dashboard then repeat and the one-shot "notify when empty" reads.
+    # This endpoint had the guard for it — `if ports is None: continue — this host's scan failed;
+    # leave its statuses alone` — and defeated it twelve lines earlier with `or set()`, so it could
+    # only ever fire on the except path.
+    import panel.routes.api as _apimod
+    _ap_saved = _apimod._remote_listening_ports
+    try:
+        with app.app_context():
+            _gs0 = db.session.get(GameServer, gs_id)
+            _gs0.installed, _gs0.status = True, "online"
+            db.session.commit()
+            _before_status = _gs0.status
+        _apimod._remote_listening_ports = lambda r: None          # the scan failed
+        c.get("/api/servers")
+        with app.app_context():
+            _after = db.session.get(GameServer, gs_id).status
+        check("api/servers: a failed port scan leaves the stored status alone",
+              _after == _before_status, "%s -> %s" % (_before_status, _after))
+        # positive control: a scan that really answered still updates the status, so the check
+        # above is measuring the guard and not an endpoint that stopped writing at all.
+        _apimod._remote_listening_ports = lambda r: set()         # answered: nothing listening
+        c.get("/api/servers")
+        with app.app_context():
+            _after2 = db.session.get(GameServer, gs_id).status
+        check("api/servers: a scan that ANSWERED 'nothing listening' still writes offline",
+              _after2 == "offline", "status is %s" % _after2)
+    finally:
+        _apimod._remote_listening_ports = _ap_saved
+
     # ── perf regression guard: NO N+1 on the hot paths ────────────
     # Seed 50 game servers across 5 hosts — enough that a per-server (rather than
     # per-host) query pattern would blow the budget — then assert the dashboard render
