@@ -852,6 +852,60 @@ _jail = SO._panel_f2b_jail_body("/data/auth.log", 5000, ["1.2.3.4", "junk"])
 check("f2b: the jail body carries an ignoreip line with the valid entry only",
       "\nignoreip = " in _jail and "1.2.3.4" in _jail and "junk" not in _jail)
 
+# ── the ban-watcher's tick decision ───────────────────────────────────────────────────────────
+# It DIFFS consecutive readings of the jail, so an unreadable jail answered as set() does not lose
+# information — it invents events: an unban row for every live ban immediately, then a ban row and
+# an "IP banned on the panel login" notification for each of them on the next good tick, plus a
+# "Login attack in progress" alert once three land together. A blip reading the jail manufactured
+# the exact event the alert exists to report. panel_fail2ban_banned_ips now answers None, matching
+# fail2ban_jail_detail two functions below it — same verb, same `rc != 0 or not out`.
+import app as _f2b_app                                                             # noqa: E402
+_A, _B, _C = "203.0.113.1", "203.0.113.2", "203.0.113.3"
+_seen0, _nb0, _ub0 = _f2b_app._f2b_ban_events(None, {_A, _B})
+check("f2b watch: the first successful reading seeds silently",
+      _seen0 == {_A, _B} and not _nb0 and not _ub0, "%r %r %r" % (_seen0, _nb0, _ub0))
+_seen1, _nb1, _ub1 = _f2b_app._f2b_ban_events({_A, _B}, None)
+check("f2b watch: an UNREADABLE jail invents nothing and keeps what it knew",
+      _seen1 == {_A, _B} and not _nb1 and not _ub1, "%r %r %r" % (_seen1, _nb1, _ub1))
+# ...and it must not seed from a failed read either — the watcher starts alongside _f2b_autostart,
+# which reloads fail2ban, and fail2ban-client exits non-zero during a reload.
+check("f2b watch: an unreadable first reading leaves it unseeded",
+      _f2b_app._f2b_ban_events(None, None)[0] is None)
+_seen2, _nb2, _ub2 = _f2b_app._f2b_ban_events({_A, _B}, {_B, _C})
+check("f2b watch: a real change reports exactly the delta, both ways",
+      _seen2 == {_B, _C} and _nb2 == (_C,) and _ub2 == (_A,), "%r %r %r" % (_seen2, _nb2, _ub2))
+check("f2b watch: an unchanged reading reports nothing",
+      _f2b_app._f2b_ban_events({_A}, {_A}) == ({_A}, (), ()))
+# A jail that really did release everything is still a real reading, and must be reported.
+_seen3, _nb3, _ub3 = _f2b_app._f2b_ban_events({_A, _B}, set())
+check("f2b watch: a jail that genuinely released every ban IS reported",
+      _ub3 == (_A, _B) and not _nb3 and _seen3 == set(), "%r %r %r" % (_seen3, _nb3, _ub3))
+
+# ...and the READER's half of that contract, driven through _run_verb. Without this the decision
+# above is pinned while the thing that feeds it is free to go back to answering set() — which is
+# exactly what a mutation showed: reverting the reader alone failed nothing.
+_orig_f2b_verb = SO._run_verb
+try:
+    SO._run_verb = lambda v, a=(), timeout=30, merge_stderr=True: ("", "Command timed out", -1)
+    check("f2b: an unreadable panel jail answers None, not an empty set",
+          SO.panel_fail2ban_banned_ips() is None)
+    SO._run_verb = lambda v, a=(), timeout=30, merge_stderr=True: ("", "", 1)
+    check("f2b: ...and a non-zero rc with no output is None too",
+          SO.panel_fail2ban_banned_ips() is None)
+    # A jail that is up with nobody banned is a real reading: an empty SET, not None.
+    SO._run_verb = lambda v, a=(), timeout=30, merge_stderr=True: (
+        "Status for the jail: linuxgsm-panel\n|- Filter\n`- Actions\n"
+        "   |- Currently banned: 0\n   `- Banned IP list:\n", "", 0)
+    check("f2b: a jail with nobody banned is an empty set, which is a reading",
+          SO.panel_fail2ban_banned_ips() == set())
+    SO._run_verb = lambda v, a=(), timeout=30, merge_stderr=True: (
+        "   |- Currently banned: 2\n   `- Banned IP list:\t203.0.113.1 203.0.113.2\n", "", 0)
+    check("f2b: ...and a populated jail parses to the banned IPs (positive control)",
+          SO.panel_fail2ban_banned_ips() == {"203.0.113.1", "203.0.113.2"},
+          repr(SO.panel_fail2ban_banned_ips()))
+finally:
+    SO._run_verb = _orig_f2b_verb
+
 # top-offenders parsing: the counting pipeline emits "<attempts>\t<bans>\t<ip>\t<jail,jail>"; each row
 # must surface which fail2ban jail(s) caught the IP. Old 3-field lines (no jail) parse with jails=[].
 _top = SO._parse_top_ips("9\t3\t1.2.3.4\tsshd,recidive\n5\t0\t5.6.7.8\tpanel-login\n2\t0\t9.9.9.9",

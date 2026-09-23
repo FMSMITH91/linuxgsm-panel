@@ -2250,6 +2250,57 @@ def _effective_https(cfg):
     return True
 
 
+def _f2b_ban_events(seen, cur):
+    """One ban-watcher tick, as a decision: (new_seen, new_bans, unbans).
+
+    Pure, and module level, because this is where the bug was and a `while True` with a
+    time.sleep() in it cannot be driven by a test. The loop below does the I/O and the logging;
+    what to CONCLUDE from two readings is here.
+
+    `cur is None` means the jail could not be read. That is not "nothing is banned": the watcher
+    diffs consecutive readings, so answering set() invents an unban for every live ban now, and a
+    ban plus a notification for each of them on the next good tick. The reading is discarded and
+    `seen` is handed back untouched.
+
+    `seen is None` is the first successful reading — adopt it silently, so bans that already
+    existed when the panel started are not announced as new.
+    """
+    if cur is None:
+        return seen, (), ()
+    if seen is None:
+        return cur, (), ()
+    if cur == seen:
+        return seen, (), ()
+    return cur, tuple(sorted(cur - seen)), tuple(sorted(seen - cur))
+
+
+def _f2b_record_events(app, new_bans, unbans):
+    """Write the audit rows and fire the notifications for one ban-watcher tick.
+
+    Separated from the loop for the same reason _f2b_ban_events is: the false NOTIFICATIONS were
+    half of what the unreadable-jail bug produced — an "IP banned on the panel login" message per
+    live ban, and a "Login attack in progress" alert once three arrived together — so what this
+    emits, and at what threshold, is behaviour worth driving directly rather than reaching through
+    a daemon thread.
+
+    Takes the events rather than deciding them, so it cannot re-introduce the judgement it is
+    paired with."""
+    if not new_bans and not unbans:
+        return
+    with app.test_request_context():   # gives log_action an (empty) request/DB context
+        for _ip in new_bans:
+            log_action(None, "fail2ban_ban", target=_ip,
+                       detail="banned after 5 failed panel logins in 10 min (1-hour ban)",
+                       success=False)
+            notifications.notify("ip_banned", "IP banned on the panel login",
+                                 "%s was banned by fail2ban (5 failed logins in 10 min)" % _ip)
+        for _ip in unbans:
+            log_action(None, "fail2ban_unban", target=_ip, detail="ban expired or lifted")
+    if len(new_bans) >= _BAN_SPIKE_THRESHOLD:   # a burst of bans at once = an attack wave
+        notifications.notify("ban_spike", "Login attack in progress",
+                             "%d IPs were just banned from the panel login at once." % len(new_bans))
+
+
 def _ts_backend_scheme(cfg):
     """Loopback scheme Tailscale Serve must use to reach us — has to match how the panel
     is actually listening right now, or Serve 502s. When we're terminating self-signed
@@ -2288,24 +2339,9 @@ if __name__ == "__main__":
         seen = None
         while True:
             try:
-                cur = so.panel_fail2ban_banned_ips()
-                if seen is None:
-                    seen = cur
-                elif cur != seen:
-                    new_bans = cur - seen
-                    with app.test_request_context():   # gives log_action an (empty) request/DB context
-                        for _ip in sorted(new_bans):
-                            log_action(None, "fail2ban_ban", target=_ip,
-                                       detail="banned after 5 failed panel logins in 10 min (1-hour ban)",
-                                       success=False)
-                            notifications.notify("ip_banned", "IP banned on the panel login",
-                                                 "%s was banned by fail2ban (5 failed logins in 10 min)" % _ip)
-                        for _ip in sorted(seen - cur):
-                            log_action(None, "fail2ban_unban", target=_ip, detail="ban expired or lifted")
-                    if len(new_bans) >= _BAN_SPIKE_THRESHOLD:   # a burst of bans at once = an attack wave
-                        notifications.notify("ban_spike", "Login attack in progress",
-                                             "%d IPs were just banned from the panel login at once." % len(new_bans))
-                    seen = cur
+                seen, new_bans, unbans = _f2b_ban_events(
+                    seen, so.panel_fail2ban_banned_ips())
+                _f2b_record_events(app, new_bans, unbans)
             except Exception:
                 _log.debug("fail2ban ban-watch tick failed", exc_info=True)
             time.sleep(90)

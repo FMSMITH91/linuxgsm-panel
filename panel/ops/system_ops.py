@@ -1721,11 +1721,27 @@ def panel_fail2ban_status():
 
 
 def panel_fail2ban_banned_ips():
-    """The set of IPs the panel-login jail is currently banning (empty if the jail isn't up).
-    Used by the ban-watcher to record new bans/unbans in the audit log."""
+    """The set of IPs the panel-login jail is currently banning, or **None** if it could not be
+    read. Used by the ban-watcher to record new bans/unbans in the audit log.
+
+    None, not set(), and the sibling two functions below settles it: fail2ban_jail_detail runs the
+    IDENTICAL `_run_verb("f2b-status-jail", ...)` and answers None on the IDENTICAL
+    `rc != 0 or not out`. Same verb, same failure test, opposite answer — and this was the one the
+    ban-watcher believed.
+
+    It diffs consecutive readings, so an empty set is not a quiet moment, it is "every ban was
+    lifted": one failed tick wrote a fail2ban_unban row for every live ban ("ban expired or
+    lifted"), and the next good tick re-logged all of them as NEW bans, each with an "IP banned on
+    the panel login" notification, plus a "Login attack in progress" alert once three or more
+    landed together. A blip in reading the jail thereby manufactured the exact event the alert
+    exists to report.
+
+    It also fixes the seeding race: the watcher starts alongside _f2b_autostart, which can reload
+    fail2ban — and fail2ban-client exits non-zero during a reload — so the very first reading could
+    seed `seen` from a failed read. None leaves it unseeded until a real one arrives."""
     out, _, rc = _run_verb("f2b-status-jail", ["linuxgsm-panel"], timeout=10, merge_stderr=False)
     if rc != 0 or not out:
-        return set()
+        return None
     m = re.search(r"Banned IP list:\s*(.*)", out)
     return set(p for p in (m.group(1).split() if m else []) if p)
 
