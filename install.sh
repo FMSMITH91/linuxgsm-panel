@@ -817,6 +817,33 @@ root_tools_present() {
     return 0
 }
 
+# Can this account already reach root by itself? Echoes yes / no / unknown.
+#
+# Its own function so it can be driven by a test: it is a security decision inside a loop over
+# /home, and a check that can only run against the real /home on a real host is a check nothing
+# exercises. tests/unit/part06.py lifts it out of this file and runs it with a shimmed `sudo`.
+#
+# UNKNOWN is a third answer on purpose, and the caller treats it as "do not enrol". Every ambiguous
+# reply used to mean "no sudo rights, safe to enrol": `sudo -l -U <unknown account>` prints
+# "sudo: unknown user ..." and exits 0, sudo missing or erroring prints nothing, and the phrase
+# being matched is NLS-translated so a non-English host answers in its own language. The group is a
+# GRANT — the panel's sudoers line says it may BECOME any member — so enrolling an account that can
+# already run sudo turns that narrow grant into NOPASSWD:ALL with one extra hop.
+#
+# LC_ALL=C so the two phrases are the English ones sudo compiles in.
+can_already_sudo() {
+    _cas_user="$1"
+    if id -nG "${_cas_user}" 2>/dev/null | tr " " "\n" | grep -qxE "sudo|admin|wheel|root"; then
+        echo yes; return 0
+    fi
+    _cas_out="$(LC_ALL=C sudo -l -U "${_cas_user}" 2>&1)" || true
+    case "${_cas_out}" in
+        *"may run the following"*)    echo yes ;;
+        *"not allowed to run sudo"*)  echo no ;;
+        *)                            echo unknown ;;
+    esac
+}
+
 # Every account the panel DRIVES — a game instance's user, the shared GMod content user — joins
 # GAME_GROUP, which the narrow grant's second line names. Idempotent, and run on updates too, so an
 # existing host picks up its accounts the first time it takes this version.
@@ -843,12 +870,18 @@ sync_game_user_group() {
         # LinuxGSM under your own sudo-capable account is an ordinary setup — it is what LinuxGSM's
         # own docs show, and the panel's discovery imports exactly those — so this is a likely
         # account to meet here, not an unlikely one.
-        if id -nG "${_gu}" 2>/dev/null | tr " " "\n" | grep -qxE "sudo|admin|wheel|root" \
-           || sudo -l -U "${_gu}" 2>/dev/null | grep -q "may run the following"; then
-            warn "Not enrolling '${_gu}' in ${GAME_GROUP}: it already has sudo rights."
-            warn "  The panel will not be able to manage that account's servers on this host."
-            continue
-        fi
+        case "$(can_already_sudo "${_gu}")" in
+            yes)
+                warn "Not enrolling '${_gu}' in ${GAME_GROUP}: it already has sudo rights."
+                warn "  The panel will not be able to manage that account's servers on this host."
+                continue ;;
+            no)
+                : ;;   # a definite no — safe to enrol
+            *)
+                warn "Not enrolling '${_gu}' in ${GAME_GROUP}: could not determine whether it can"
+                warn "  already use sudo, and this check has to fail closed."
+                continue ;;
+        esac
         if id -nG "${_gu}" 2>/dev/null | tr ' ' '\n' | grep -qx "${GAME_GROUP}"; then
             continue
         fi
