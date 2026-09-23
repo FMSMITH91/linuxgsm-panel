@@ -60,7 +60,14 @@ _CONSOLE_LINES_MAX = 2000
 # so a deleted server's id — which SQLite hands straight to the next INSERT — would show the NEW
 # server a content install frozen at "running". See panel_state.register_server_state.
 _gmod_content_apply_state = register_server_state({})   # server_id -> {"status", "msg", "ts"}
-_console_viewers = {}          # server_id -> set of socket session ids
+# server_id -> {socket session id: the user id that joined on it}.
+#
+# It was a set of sids. The user id is here because authorization on this stream was a ONE-TIME
+# question asked in the join handler, and the poller then streamed to the room for as long as the
+# socket stayed open — so revoking a group, removing a permission, or deactivating an account did
+# not stop the console output already flowing to that browser. The poller re-asks the question
+# each tick, and it needs to know whose socket it is asking about.
+_console_viewers = {}
 _viewers_lock = threading.Lock()
 
 
@@ -86,6 +93,60 @@ def _console_whole_lines(server_id, raw):
         return whole
     _console_partial[server_id] = chunk
     return ""
+
+
+def _evict_unauthorized_viewers(app, socketio, server_id):
+    """Drop any viewer of this console whose access no longer allows it. Returns how many.
+
+    Module level, and handed `app`/`socketio` rather than closing over them, so a test can
+    drive it directly — the behaviour it guards is an authorization boundary, and one that
+    only ran inside a background thread would be tested by watching the thread.
+
+    Asks the SAME three questions the join handler asks — authenticated (the row still exists
+    and is active), reaches this server, and holds VIEW_CONSOLE — but of the stored user id
+    rather than of a request, because there is no request here.
+
+    The socket is removed from the ROOM, not merely from the viewer map: the map governs
+    whether the panel POLLS the host, while the room governs who receives what it already
+    read. Dropping only the map entry would stop the reads and still deliver anything another
+    viewer's poll produced. Caller holds no lock; this takes it.
+
+    Must run inside an app context (the poller's). Never raises — a console that cannot
+    answer the question keeps its viewers rather than dropping everyone on a transient error,
+    and says so in the log."""
+    from panel.db.models import User
+    with _viewers_lock:
+        watchers = dict(_console_viewers.get(server_id) or {})
+    if not watchers:
+        return 0
+    dropped = 0
+    for sid, uid in watchers.items():
+        try:
+            user = db.session.get(User, uid) if uid is not None else None
+            allowed = bool(
+                user is not None
+                and getattr(user, "is_active", False)
+                and can_access_server(user, server_id)
+                and (user.is_superadmin or has_permission(user, VIEW_CONSOLE)))
+        except Exception:
+            app.logger.debug("console: could not re-check viewer %s", sid, exc_info=True)
+            continue          # unknown is not "revoked" — leave them be and try next tick
+        if allowed:
+            continue
+        with _viewers_lock:
+            if server_id in _console_viewers:
+                _console_viewers[server_id].pop(sid, None)
+                if not _console_viewers[server_id]:
+                    del _console_viewers[server_id]
+        try:
+            socketio.emit("console_output",
+                          {"server_id": server_id,
+                           "data": "[access to this console was revoked]"}, to=sid)
+            socketio.server.leave_room(sid, f"console_{server_id}", namespace="/")
+        except Exception:
+            app.logger.debug("console: could not evict %s", sid, exc_info=True)
+        dropped += 1
+    return dropped
 
 
 def register(app, supervise):
@@ -870,7 +931,7 @@ def register(app, supervise):
             return
         join_room(f"console_{server_id}")
         with _viewers_lock:
-            _console_viewers.setdefault(server_id, set()).add(request.sid)
+            _console_viewers.setdefault(server_id, {})[request.sid] = current_user.id
 
     @socketio.on("leave_console")
     def on_leave_console(data):
@@ -887,7 +948,7 @@ def register(app, supervise):
         leave_room(f"console_{server_id}")
         with _viewers_lock:
             if server_id in _console_viewers:
-                _console_viewers[server_id].discard(request.sid)
+                _console_viewers[server_id].pop(request.sid, None)
                 if not _console_viewers[server_id]:
                     del _console_viewers[server_id]
 
@@ -899,8 +960,8 @@ def register(app, supervise):
         sid = request.sid
         # A browser that closed without leave_console must still stop the poller.
         with _viewers_lock:
-            for sid_set in list(_console_viewers.values()):
-                sid_set.discard(sid)
+            for watchers in list(_console_viewers.values()):
+                watchers.pop(sid, None)
             for k in [k for k, v in _console_viewers.items() if not v]:
                 del _console_viewers[k]
         _socket_hooks.run_disconnect_hooks(sid)
@@ -918,6 +979,21 @@ def register(app, supervise):
                             gs = db.session.get(GameServer, server_id)
                             if not gs or not gs.remote:
                                 continue
+                            # RE-ASK who may watch this, every tick. The join handler's check is a
+                            # one-time question, and the answer can change while the socket stays
+                            # open: a group removed, a permission dropped, the account
+                            # deactivated. Until now none of that reached a console already
+                            # streaming — the browser kept receiving output until the user closed
+                            # the tab. Evicting from the ROOM is what actually stops the stream;
+                            # dropping the viewer entry alone would only stop the polling.
+                            _evicted = _evict_unauthorized_viewers(app, socketio, server_id)
+                            if _evicted:
+                                app.logger.info(
+                                    "console: dropped %d viewer(s) of server %s whose access no "
+                                    "longer permits it", _evicted, server_id)
+                            with _viewers_lock:
+                                if not _console_viewers.get(server_id):
+                                    continue      # nobody left who may see it — do not read
                             remote = gs.remote
                             try:
                                 # A long panel action (update/validate/backup/…) writes its output
