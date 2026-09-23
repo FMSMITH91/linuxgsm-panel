@@ -4151,3 +4151,232 @@ check("game os: ...and still tags it for anything that wants to react",
 # i18n walker — the gate that caught "(… only)" here.
 check("game os: ...without gluing static text to the interpolation",
       "only)" not in _tpl_is)
+
+# ── recover.sh must still find the install once the symlink stopped pointing at it ─────────────
+# The last resort of recover.sh's detection resolves /usr/local/bin/linuxgsm-panel-recover through
+# its symlink and tries the directory that comes back, on the premise that the link points into
+# the checkout. install_recovery_command stopped doing that: it stages a ROOT-OWNED copy of the
+# script in /usr/local/lib/linuxgsm-panel and points the link there, so readlink lands in the
+# helper directory — which has no manage.py — and the arm never matched on an installed host.
+#
+# What that cost: an install outside the two hardcoded locations (a per-user one whose systemd
+# unit had been lost, or whose home is outside ${HOMES}) is locked out, the operator runs the
+# documented `sudo linuxgsm-panel-recover`, and is told "Couldn't find a LinuxGSM Panel install on
+# this host" — while install_root_tools had already recorded the directory in panel.conf and
+# nothing read it.
+#
+# Driven by RUNNING the script the way the installed command runs it — a copy in a helper
+# directory, not the checkout — because the property under test is which install it ends up
+# driving, and running it from the checkout hands it the answer through ${selfdir}.
+_rc_root = _tempfile.mkdtemp(prefix="recover-conf-")
+try:
+    _rc_panel = os.path.join(_rc_root, "srv", "linuxgsm-panel")
+    os.makedirs(_rc_panel)
+    open(os.path.join(_rc_panel, "manage.py"), "w").close()   # empty: `list-users` is a no-op
+    os.makedirs(os.path.join(_rc_root, "emptyhomes"))
+    _rc_helper = os.path.join(_rc_root, "usr-local-lib")      # stands in for HELPER_DIR
+    os.makedirs(_rc_helper)
+    _shutil.copy(os.path.join(_root, "recover.sh"), os.path.join(_rc_helper, "recover.sh"))
+    _rc_conf = os.path.join(_rc_root, "panel.conf")
+    with open(_rc_conf, "w", encoding="utf-8") as _fh:        # exactly what install.sh writes
+        _fh.write("db_path=%s/data/panel.db\ndata_dir=%s/data\npanel_dir=%s\n"
+                  % (_rc_panel, _rc_panel, _rc_panel))
+    _rc_stale = os.path.join(_rc_root, "stale.conf")
+    with open(_rc_stale, "w", encoding="utf-8") as _fh:
+        _fh.write("panel_dir=%s\n" % os.path.join(_rc_root, "gone"))
+
+    def _rc_run(conf, home=None, trace=False, panel_dir=None):
+        """The staged copy, with every other route to an install closed: no system unit, no user
+        unit, an empty /home to scan, a HOME holding no linuxgsm-panel, and no inherited PANEL_DIR
+        — which outranks all detection and would skip it entirely.
+
+        `home` opens the ${HOME}/linuxgsm-panel arm back up, to measure it against the conf.
+        `trace` runs under `bash -x` so a caller can read an assignment the script makes but never
+        prints; `conf` of None then leaves PANEL_RECOVER_PANEL_CONF unset, i.e. the production
+        default applies, and `panel_dir` names the install outright so that a run made with the
+        real default cannot wander onto whatever this host has at /home/lgsmpanel."""
+        _env = {k: v for k, v in os.environ.items()
+                if k not in ("PANEL_DIR", "PANEL_RECOVER_PANEL_CONF")}
+        _env.update({"PANEL_RECOVER_HOMES": os.path.join(_rc_root, "emptyhomes"),
+                     "PANEL_RECOVER_SYSTEM_UNIT": os.path.join(_rc_root, "_no_system_unit"),
+                     "PANEL_RECOVER_USER_UNIT": os.path.join(_rc_root, "_no_user_unit"),
+                     "HOME": home or os.path.join(_rc_root, "_nohome")})
+        if conf is not None:
+            _env["PANEL_RECOVER_PANEL_CONF"] = conf
+        if panel_dir is not None:
+            _env["PANEL_DIR"] = panel_dir
+        _cmd = ["bash"] + (["-x"] if trace else []) + [os.path.join(_rc_helper, "recover.sh"),
+                                                       "list-users"]
+        return _sub.run(_cmd, capture_output=True, text=True, timeout=60, env=_env)
+
+    _rc_found = _rc_run(_rc_conf)
+    check("recover.sh: the install recorded in panel.conf is found when nothing else names it",
+          ("Using %s (service user " % _rc_panel) in _rc_found.stderr,
+          "rc=%d err=%r" % (_rc_found.returncode, _rc_found.stderr[-300:]))
+    check("recover.sh: ...so the recovery command is not told there is no install on this host",
+          "Couldn't find" not in _rc_found.stderr, _rc_found.stderr[-300:])
+
+
+    # Controls, so the two above cannot pass against a script that adopts whatever path it is
+    # handed, nor against a harness whose sandbox failed to close the other routes — in which case
+    # the run above found that install some other way entirely and the conf proved nothing. (That
+    # second one is not hypothetical: the first version of this harness ran recover.sh out of the
+    # checkout, ${selfdir} therefore WAS a panel directory, and both controls failed.)
+    #
+    # The /home/lgsmpanel arm is hardcoded, so on a host that really has an install there the run
+    # legitimately finds it and there is nothing to assert — skipped, not quietly passed.
+    _rc_conventional = os.path.isfile("/home/lgsmpanel/linuxgsm-panel/manage.py")
+    for _conf, _why in ((os.path.join(_rc_root, "_no_conf"), "no panel.conf"),
+                        (_rc_stale, "a panel.conf naming a directory with no manage.py")):
+        _n = "recover.sh: %s locates NOTHING, and says so (control)" % _why
+        if _rc_conventional:
+            skip(_n, "this host has /home/lgsmpanel/linuxgsm-panel, and that arm is not overridable")
+            continue
+        _rc_neg = _rc_run(_conf)
+        check(_n,
+              _rc_neg.returncode == 1 and "Couldn't find" in _rc_neg.stderr
+              and "Using " not in _rc_neg.stderr,
+              "rc=%d err=%r" % (_rc_neg.returncode, _rc_neg.stderr[-300:]))
+    # (Each of those two binds to something. Verified by mutation: dropping read_unit's
+    # `[ -f "$1" ] || return 0` — whose first UNGUARDED caller is the panel.conf read, every other
+    # one having tested the file first — fails 'no panel.conf locates NOTHING' alone, on awk's
+    # "cannot open file" under set -e; adopting the recorded path outright and dropping the final
+    # guard's manage.py clause fails 'a panel.conf naming a directory with no manage.py' alone.
+    # Not both at once, in either direction: with no conf the recorded path is empty, so a script
+    # that adopts it outright still ends up with nothing and still says so.)
+
+    # ── the conf outranks the guesses, and does not mask them when it is stale ─────────────────
+    # Ordering, not merely presence. The other arms are shaped like guesses, and one of them is
+    # aimed by the environment: this runs under sudo, so ${HOME} is ROOT's, and a leftover
+    # /root/linuxgsm-panel checkout (a half-finished install, a clone made while debugging) used
+    # to outrank the install install_root_tools had actually recorded — so the lockout remedy
+    # drove the wrong tree, and was handed the new superadmin password on the way. Which arm wins
+    # is not stated anywhere in the source, so it is measured by RUNNING the script with both
+    # present.
+    _rc_home = os.path.join(_rc_root, "roothome")
+    _rc_decoy = os.path.join(_rc_home, "linuxgsm-panel")
+    os.makedirs(_rc_decoy)
+    open(os.path.join(_rc_decoy, "manage.py"), "w").close()
+
+    _rc_ord = _rc_run(_rc_conf, home=_rc_home)
+    check("recover.sh: the install panel.conf RECORDS outranks a leftover checkout in $HOME",
+          ("Using %s (service user " % _rc_panel) in _rc_ord.stderr
+          and _rc_decoy not in _rc_ord.stderr,
+          "rc=%d err=%r" % (_rc_ord.returncode, _rc_ord.stderr[-300:]))
+
+    # ── a panel.conf that EXISTS but cannot be read must not kill the tool ──────────────────────
+    # read_unit guarded only on `[ -f ]`, so awk answered "cannot open file ... Permission denied"
+    # and exited 2. recover.sh runs under `set -euo pipefail`, so that status came straight back
+    # out of the `conf_dir="$(read_unit ...)"` assignment and ended the run — a raw awk error, none
+    # of this script's own output, and no install found. In the one tool an operator reaches for
+    # when they are ALREADY locked out. Measured before the fix by running read_unit verbatim
+    # against a chmod 000 file: exit 2, before the next line.
+    #
+    # Skipped for root, who can read a 0000 file, so the premise would not hold.
+    _rc_unread = os.path.join(_rc_root, "unreadable.conf")
+    with open(_rc_unread, "w", encoding="utf-8") as _fh:
+        _fh.write("panel_dir=%s\n" % _rc_panel)
+    os.chmod(_rc_unread, 0o000)
+    _n_unread = "recover.sh: an unreadable panel.conf does not kill the recovery tool outright"
+    if os.geteuid() == 0 or os.access(_rc_unread, os.R_OK):
+        skip(_n_unread, "this user can read a 0000 file, so the premise does not hold")
+    else:
+        _rc_ur = _rc_run(_rc_unread, home=_rc_home)
+        check(_n_unread,
+              "cannot open file" not in _rc_ur.stderr and _rc_ur.returncode != 2,
+              "rc=%d err=%r" % (_rc_ur.returncode, _rc_ur.stderr[-300:]))
+        # ...and having survived, it goes on to the arms that CAN answer. Same hardcoded-arm
+        # caveat as the controls around it.
+        _n_fall = "recover.sh: ...and falls through to the arm that can still name an install"
+        if _rc_conventional:
+            skip(_n_fall, "this host has /home/lgsmpanel/linuxgsm-panel, and that arm is not overridable")
+        else:
+            check(_n_fall,
+                  ("Using %s (service user " % _rc_decoy) in _rc_ur.stderr,
+                  "rc=%d err=%r" % (_rc_ur.returncode, _rc_ur.stderr[-300:]))
+    # Positive control, run for everyone: the SAME path, readable, still outranks the checkout —
+    # so the two checks above cannot be passing because panel.conf stopped being consulted.
+    os.chmod(_rc_unread, 0o644)
+    _rc_rd = _rc_run(_rc_unread, home=_rc_home)
+    check("recover.sh: ...while a readable panel.conf is still what decides",
+          ("Using %s (service user " % _rc_panel) in _rc_rd.stderr,
+          "rc=%d err=%r" % (_rc_rd.returncode, _rc_rd.stderr[-300:]))
+    # ...and the loser is genuinely reachable, so the check above is measuring the ORDER and not an
+    # arm that never fires at all. (Same hardcoded-arm caveat as the controls above.)
+    _n_ord = "recover.sh: ...and that checkout IS what wins when no conf records an install (control)"
+    if _rc_conventional:
+        skip(_n_ord, "this host has /home/lgsmpanel/linuxgsm-panel, and that arm is not overridable")
+    else:
+        _rc_noconf = _rc_run(os.path.join(_rc_root, "_no_conf"), home=_rc_home)
+        check(_n_ord, ("Using %s (service user " % _rc_decoy) in _rc_noconf.stderr,
+              "rc=%d err=%r" % (_rc_noconf.returncode, _rc_noconf.stderr[-300:]))
+
+    # A stale conf must not MASK an install another arm can still reach. The stale control above
+    # proves only that a stale conf finds nothing when there is nothing else to find, and it passes
+    # just as well against a script that adopts the recorded path WITHOUT testing for a manage.py:
+    # the final guard turns that bad adoption into the very same "Couldn't find". Put a real
+    # install behind the stale conf and the two answers separate.
+    _rc_mask = _rc_run(_rc_stale, home=_rc_home)
+    check("recover.sh: ...and a stale conf does not MASK an install another arm can reach",
+          "Couldn't find" not in _rc_mask.stderr
+          and os.path.join(_rc_root, "gone") not in _rc_mask.stderr,
+          "rc=%d err=%r" % (_rc_mask.returncode, _rc_mask.stderr[-300:]))
+
+    # ── the DEFAULT panel.conf path has to be the one install.sh writes ────────────────────────
+    # Everything above hands the path in through PANEL_RECOVER_PANEL_CONF, so it exercises the
+    # mechanism and never the address — and on a real host the address is the entire fix. The
+    # literal lives in two files with nothing joining them: recover.sh's default, and HELPER_DIR +
+    # PANEL_CONF in install.sh. Move HELPER_DIR, or mistype either, and the lockout remedy quietly
+    # goes back to "Couldn't find a LinuxGSM Panel install on this host" with every check above
+    # still green — measured: changing ONLY recover.sh's default to /nonexistent/wrong/panel.conf
+    # left the whole suite passing.
+    #
+    # Both sides are EVALUATED, not string-matched. install.sh's value is composed by the shell out
+    # of HELPER_DIR, and recover.sh's is read back out of a real run's `bash -x` trace, so this
+    # pins the path the script actually consults rather than how either file spells it.
+    # Read defensively: this runs at module scope, so an unreadable or non-UTF-8 install.sh would
+    # take the whole unit suite down at import rather than fail this one check. Empty text makes
+    # the findall below yield nothing, which the check already reports as a mismatch.
+    try:
+        _dp_inst = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+    except OSError:
+        _dp_inst = ""
+    _dp_lines = []
+    for _dp_name in ("HELPER_DIR", "PANEL_CONF"):
+        _dp_m = _re.findall(r'^[ \t]*(%s="[^"\n]*")[ \t]*$' % _dp_name, _dp_inst, _re.M)
+        _dp_lines.append(_dp_m[0] if len(_dp_m) == 1 else "")
+    _dp_want = ""
+    if all(_dp_lines):
+        _dp_want = _sub.run(["bash", "-c", "set -eu\n%s\nprintf '%%s' \"${PANEL_CONF}\""
+                                           % "\n".join(_dp_lines)],
+                            capture_output=True, text=True, timeout=60).stdout.strip()
+    # PANEL_DIR names the install outright: this is the one run made with the REAL default, and
+    # without it a host that happens to have /home/lgsmpanel/linuxgsm-panel would be driven.
+    _dp_trace = _rc_run(None, trace=True, panel_dir=_rc_panel)
+    _dp_got = _re.findall(r"^\++ PANEL_CONF=(\S*)$", _dp_trace.stderr, _re.M)
+    check("recover.sh: the default panel.conf path is the one install.sh writes",
+          bool(_dp_want) and _dp_got == [_dp_want],
+          "install.sh composes %r from %r; the run assigned %r" % (_dp_want, _dp_lines, _dp_got))
+    # ...and so is uninstall.sh's. That is a THIRD copy of the same literal, and it was unpinned:
+    # a mutation changing SHARED_CONF alone to /usr/local/lib/WRONG-panel/panel.conf left the
+    # entire suite green. It decides whether the uninstaller believes another install owns the
+    # host-shared pieces, so pointing it at a file that never exists makes every uninstall think
+    # it is the only one and take them.
+    try:
+        _dp_uninst = open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read()
+    except OSError:
+        _dp_uninst = ""
+    _dp_um = _re.findall(r'^[ \t]*(SHARED_CONF="[^"\n]*")[ \t]*$', _dp_uninst, _re.M)
+    _dp_ugot = ""
+    if len(_dp_um) == 1:
+        # Evaluated, not string-matched, so the ${SHARED_CONF:-...} override form is resolved the
+        # way the shell resolves it — with the variable unset, as a real uninstall runs it.
+        _dp_ugot = _sub.run(["bash", "-c", "set -eu\nunset SHARED_CONF\n%s\nprintf '%%s' \"${SHARED_CONF}\""
+                                           % _dp_um[0]],
+                            capture_output=True, text=True, timeout=60).stdout.strip()
+    check("uninstall.sh: ...and its shared-ownership file is that same one, not a third spelling",
+          bool(_dp_want) and _dp_ugot == _dp_want,
+          "install.sh composes %r; uninstall.sh defaults SHARED_CONF to %r (from %r)"
+          % (_dp_want, _dp_ugot, _dp_um))
+finally:
+    _shutil.rmtree(_rc_root, ignore_errors=True)

@@ -2030,3 +2030,395 @@ try:
           (_rc_cmds[0][:130] if _rc_cmds else "none"))
 finally:
     _sm_core.run_command = _rc_orig
+
+
+# ── install.sh: the update path's stopped-service window must survive its own failures ──────────
+# Two defects lived in the same stretch of install.sh, and both were invisible from the outside.
+#
+#  1. The data-dir tar ran TEN LINES BEFORE the service was stopped, i.e. against a live database.
+#     panel.db is in WAL mode with ~10 daemon threads committing into it, so tar read panel.db,
+#     panel.db-wal and panel.db-shm as three separate non-atomic reads while a writer was
+#     mid-commit. tar says "file changed as we read it" and exits 1 when that happens; `2>/dev/null
+#     … || true` discarded both, and snapshot_ok only asks whether the archive UNPACKS. So the
+#     script printed "Snapshot saved" over a torn copy — the only copy the rollback has, and it
+#     wipes data/ before unpacking it.
+#
+#  2. Between the stop and [5/6] there was no trap at all. Under `set -euo pipefail` a failed pip,
+#     an unreadable requirements.txt or a full disk mid-fetch simply ended the script with the
+#     panel stopped. The rollback block at the bottom is reachable only from a FAILED HEALTH
+#     CHECK, so it ran for none of them, and the in-panel self-update (which only watches the log)
+#     showed `=== installer exit 1 ===` next to a dead panel.
+#
+#  3. …and then the FIX for (2) reintroduced (2) for a whole class of exits: die() disarmed the
+#     trap, so every `die` reached through a function call inside the window — fetch_code's
+#     missing git, and the `visudo -cf` check in both sudoers grants — still ended with the panel
+#     stopped. Nothing here ran that stretch of the window, so nothing noticed. The gates below
+#     run it, and they ask about dies in general rather than about those three call sites, because
+#     the next `die` written in there inherits whatever answer die() gives.
+#
+# These gates EXECUTE the real extracted window in bash rather than grepping for `trap`, because
+# the question is what actually happens when a command inside it fails — and because a trap armed
+# over this stretch is itself dangerous: the window is full of `[ "${RUN_AS_ROOT}" -eq 1 ] && …`
+# lines, and a trap that fired on those would abort every non-root update. The controls below
+# cover both directions.
+import shlex as _iw_shlex        # noqa: E402
+import shutil as _iw_shutil      # noqa: E402
+import subprocess as _iw_sub     # noqa: E402
+import tempfile as _iw_tmp       # noqa: E402
+
+_iw_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+_iw_upd = _iw_src[_iw_src.index('if [ "${IS_UPDATE}" -eq 1 ]; then'):
+                  _iw_src.index("    # ── Health check FAILED")]
+
+# (1) Ordering: quiesce, THEN tar the database. The gates that MEASURE that ordering EXECUTE
+# [1/6] and [2/6] further down, because comparing the offset of `svc stop` against the offset of
+# the data tar is equally true of a stop moved to the WRONG side of the code snapshot, where it
+# would make [1/6]'s own die message ("update ABORTED, the panel is unchanged") false again.
+# This one gate stays textual because it is a property of the whole update block, which executing
+# a single stretch of it cannot see: there must be exactly one stop, not a second one added later.
+check("install.sh: ...and the update path still stops the service exactly once",
+      _iw_upd.count("svc stop linuxgsm-panel.service") == 1,
+      "found %d" % _iw_upd.count("svc stop linuxgsm-panel.service"))
+
+
+def _iw_seg(start, end):
+    """install.sh text from `start` through `end` inclusive — "" when either marker is gone.
+
+    Returning "" rather than raising is deliberate: a missing trap must make the BEHAVIOUR checks
+    below fail by name (the panel was never restarted), not blow the suite up with a ValueError
+    that reads like a broken harness."""
+    i = _iw_src.find(start)
+    j = _iw_src.find(end, i) if i >= 0 else -1
+    return _iw_src[i:j + len(end)] if j >= 0 else ""
+
+
+def _iw_upto(start, end):
+    """Same, but STOPPING at `end` instead of including it — for markers that are whole lines."""
+    i = _iw_src.find(start)
+    j = _iw_src.find(end, i) if i >= 0 else -1
+    return _iw_src[i:j] if j >= 0 else ""
+
+
+_iw_die = ([ln for ln in _iw_src.splitlines() if ln.startswith("die()")] or [""])[-1]
+# The handler + its arming, exactly as install.sh has them…
+_iw_window = _iw_seg("    _CODE_FETCHED=0", "trap _update_window_abort ERR EXIT")
+# …the real [3/6] call site, so the marker that tells the handler the tree has been replaced is
+# the one install.sh actually sets, not one this harness helpfully sets for it…
+_iw_fetch = _iw_seg("    fetch_code\n", "_CODE_FETCHED=1")
+# …and the whole of [5/6], which is where the window is handed back to the health check.
+_iw_disarm = _iw_seg('    info "[5/6] Starting the service', "trap - ERR EXIT HUP INT TERM")
+# The snapshot verifier, on its own, so the archives below can be fed to the real function…
+_iw_snapfn = ([ln.strip() for ln in _iw_src.splitlines()
+               if ln.strip().startswith("snapshot_ok() {")] or [""])[0]
+# …[1/6] and [2/6] entire, which is what the ordering above is actually a claim about…
+_iw_stage12 = _iw_upto('    info "[1/6] Snapshotting', '    info "[3/6] Fetching')
+# …and the root-owned refresh at the END of the window. A leading newline anchors it to the
+# 4-space-indented copy inside the window, not the 8-space one in the already-up-to-date branch.
+_iw_grants = _iw_upto("\n    check_origin_trusted\n", '\n    info "[5/6]')
+
+
+def _iw_run(scenario, panel_dir, backup):
+    """Run install.sh's real stopped-window code in bash, then `scenario`. → (rc, output).
+
+    Everything that would touch the host (systemctl, pip, the tuning drop-ins) is stubbed to echo,
+    so this measures the control flow and nothing else."""
+    script = "\n".join([
+        "set -euo pipefail",
+        "RED=''; GREEN=''; YELLOW=''; CYAN=''; NC=''",
+        'info() { echo "INFO $*"; }',
+        'ok()   { echo "OK $*"; }',
+        'warn() { echo "WARN $*"; }',
+        _iw_die,
+        'svc() { echo "SVC $*"; }',
+        "install_deps() { echo 'INSTALL_DEPS'; }",
+        "fetch_code() { echo 'FETCH_CODE'; }",
+        "ensure_service_tuning() { :; }",
+        "ensure_system_tuning() { :; }",
+        "install_recovery_command() { :; }",
+        "FROM_VER='1.2.3'",
+        "RUN_AS_ROOT=0",
+        "PANEL_USER='nobody'",
+        "PANEL_DIR=%s" % _iw_shlex.quote(panel_dir),
+        "BACKUP=%s" % _iw_shlex.quote(backup),
+        _iw_window,
+        scenario,
+        "echo 'WINDOW-COMPLETED'",
+    ])
+    p = _iw_sub.run(["bash", "-c", script], capture_output=True, text=True)
+    return p.returncode, p.stdout + p.stderr
+
+
+def _iw_run_stage12(panel_dir, backup, evlog, data_tar_empty=False):
+    """Execute install.sh's real [1/6]+[2/6] — snapshot, stop, database maintenance. → (rc, out, ev)
+
+    Only what would touch the host is stubbed (systemctl, the maintenance tool). tar and gzip are
+    REAL, so the archives are the archives install.sh would produce. The tar wrapper is there to
+    record WHICH snapshot is being taken WHEN: the claim these gates make is "the database is
+    copied while nothing is writing to it", and that is an ordering between two runtime events,
+    not between two offsets in the source."""
+    script = "\n".join([
+        "set -euo pipefail",
+        "RED=''; GREEN=''; YELLOW=''; CYAN=''; NC=''",
+        'info() { echo "INFO $*"; }',
+        'ok()   { echo "OK $*"; }',
+        'warn() { echo "WARN $*"; }',
+        _iw_die,
+        "EVLOG=%s" % _iw_shlex.quote(evlog),
+        '_ev() { echo "$*" >> "${EVLOG}"; }',
+        'svc() { _ev "SVC $*"; echo "SVC $*"; }',
+        "install_deps() { echo 'INSTALL_DEPS'; }",
+        # [2/6] picks the ROOT-owned maintenance tool when euid is 0; pin the unprivileged shape so
+        # this measures the same branch whoever runs the suite.
+        'id() { if [ "${1:-}" = "-u" ]; then echo 1000; else command id "$@"; fi; }',
+        "DATA_TAR_EMPTY=%s" % ("true" if data_tar_empty else "false"),
+        "tar() {",
+        '    case "$*" in',
+        '        *--exclude=./venv*)     _ev "TAR-CODE" ;;',
+        '        *--exclude=./.backups*) _ev "TAR-DATA"',
+        "                                if ${DATA_TAR_EMPTY}; then return 0; fi ;;",
+        '        *-tzf*)                 _ev "TAR-VERIFY" ;;',
+        "    esac",
+        '    command tar "$@"',
+        "}",
+        "FROM_VER='1.2.3'",
+        "RUN_AS_ROOT=0",
+        "PANEL_USER='nobody'",
+        "PANEL_DIR=%s" % _iw_shlex.quote(panel_dir),
+        "BACKUP=%s" % _iw_shlex.quote(backup),
+        _iw_stage12,
+        "trap - ERR EXIT HUP INT TERM",
+        "echo 'WINDOW-COMPLETED'",
+    ])
+    p = _iw_sub.run(["bash", "-c", script], capture_output=True, text=True)
+    _ev = []
+    if os.path.exists(evlog):
+        with open(evlog, encoding="utf-8") as _fh:
+            _ev = [ln for ln in _fh.read().splitlines() if ln]
+    return p.returncode, p.stdout + p.stderr, _ev
+
+
+def _iw_evat(events, prefix):
+    """Index of the first recorded event starting with `prefix`, or -1."""
+    for _i, _ln in enumerate(events):
+        if _ln.startswith(prefix):
+            return _i
+    return -1
+
+
+def _iw_snapshot_ok(path):
+    """install.sh's real snapshot_ok, run against one file. → its exit status."""
+    return _iw_sub.run(["bash", "-c", "\n".join([
+        "set -euo pipefail", _iw_snapfn, "snapshot_ok %s" % _iw_shlex.quote(path)])],
+        capture_output=True, text=True).returncode
+
+
+_iw_dir = _iw_tmp.mkdtemp(prefix="lgsmp-instwin-")
+try:
+    _iw_pd = os.path.join(_iw_dir, "linuxgsm-panel")
+    _iw_bk = os.path.join(_iw_dir, "snapshot")
+    os.makedirs(_iw_pd)
+    os.makedirs(_iw_bk)
+
+    # (2) THE DEFECT: a bare failure inside the window (pip could not reach PyPI) used to end the
+    # script here — panel stopped, nothing said.
+    _iw_rc, _iw_out = _iw_run("false   # e.g. install_deps: pip could not reach PyPI",
+                              _iw_pd, _iw_bk)
+    check("install.sh: a failure inside the stopped window still starts the panel back up",
+          "SVC start linuxgsm-panel.service" in _iw_out, _iw_out[-300:])
+    check("install.sh: ...and tells the operator where the snapshot of the attempt is",
+          _iw_bk in _iw_out, _iw_out[-300:])
+    check("install.sh: ...and says what happened, instead of ending the script with no message",
+          "aborted unexpectedly" in _iw_out and "WINDOW-COMPLETED" not in _iw_out and _iw_rc != 0,
+          "rc=%d %s" % (_iw_rc, _iw_out[-300:]))
+
+    # …and once fetch_code has swapped the tree, the abort has to put the OLD code back, not just
+    # restart the service on top of a half-installed new version. This runs the REAL [3/6] call
+    # site, so it covers the line that records the swap as well as the handler that reads it — the
+    # handler alone is untested code if nothing ever sets the marker.
+    with open(os.path.join(_iw_pd, "old.txt"), "w") as _fh:
+        _fh.write("previous version")
+    _iw_sub.run(["tar", "-C", _iw_pd, "-czf", os.path.join(_iw_bk, "code.tgz"), "."], check=True)
+    os.remove(os.path.join(_iw_pd, "old.txt"))
+    with open(os.path.join(_iw_pd, "new.txt"), "w") as _fh:
+        _fh.write("half-installed new version")
+    _iw_rc, _iw_out = _iw_run(
+        _iw_fetch + "\nfalse   # e.g. install_deps, AFTER fetch_code replaced the tree",
+        _iw_pd, _iw_bk)
+    check("install.sh: an abort after fetch_code restores the previous version from the snapshot",
+          os.path.exists(os.path.join(_iw_pd, "old.txt"))
+          and not os.path.exists(os.path.join(_iw_pd, "new.txt")),
+          "left behind: %s" % sorted(os.listdir(_iw_pd)))
+    check("install.sh: ...and starts the panel on it", "SVC start linuxgsm-panel.service" in _iw_out,
+          _iw_out[-300:])
+
+    # CONTROL A — a DELIBERATE die inside the window keeps its own, accurate message. If the trap
+    # also fired on it the operator would get a second, vaguer [ERROR] stacked on top.
+    _iw_rc, _iw_out = _iw_run('die "Couldn\'t snapshot the database/config — update ABORTED."',
+                              _iw_pd, _iw_bk)
+    check("install.sh: a deliberate die inside the window is not overwritten by the abort handler",
+          "Couldn't snapshot the database/config" in _iw_out
+          and "aborted unexpectedly" not in _iw_out, _iw_out[-300:])
+
+    # CONTROL B — the ordinary path must still finish. [5/6] starts the service and disarms, so a
+    # clean run reaches the health check with no abort message at all.
+    _iw_rc, _iw_out = _iw_run(_iw_disarm, _iw_pd, _iw_bk)
+    check("install.sh: a clean run reaches [5/6], starts the panel and hands over to the health check",
+          _iw_rc == 0 and "WINDOW-COMPLETED" in _iw_out and "aborted unexpectedly" not in _iw_out,
+          "rc=%d %s" % (_iw_rc, _iw_out[-300:]))
+
+    # CONTROL C — the window is full of `[ "${RUN_AS_ROOT}" -eq 1 ] && …` guards whose test fails
+    # on every non-root install. A trap that treated those as aborts would break every `--user`
+    # update, which is the common case.
+    _iw_rc, _iw_out = _iw_run('[ "${RUN_AS_ROOT}" -eq 1 ] && echo "ROOT-ONLY STEP"\n' + _iw_disarm,
+                              _iw_pd, _iw_bk)
+    check("install.sh: a skipped root-only step inside the window is not treated as an abort",
+          _iw_rc == 0 and "WINDOW-COMPLETED" in _iw_out and "aborted unexpectedly" not in _iw_out,
+          "rc=%d %s" % (_iw_rc, _iw_out[-300:]))
+
+    # CONTROL C2 — the rest of the window's ordinary vocabulary. A failure that the script itself
+    # is testing, or explicitly tolerating, is not an abort either.
+    for _desc, _snippet in (
+            ("an `if ! cmd` test", 'if ! false; then echo "BRANCH-TAKEN"; fi'),
+            ("a tolerated `cmd || true`", "false || true"),
+            ("a fallback command substitution", '_x="$(false || echo fallback)"; echo "X=${_x}"')):
+        _iw_rc, _iw_out = _iw_run(_snippet + "\n" + _iw_disarm, _iw_pd, _iw_bk)
+        check("install.sh: %s inside the window is not treated as an abort" % _desc,
+              _iw_rc == 0 and "WINDOW-COMPLETED" in _iw_out
+              and "aborted unexpectedly" not in _iw_out, "rc=%d %s" % (_iw_rc, _iw_out[-300:]))
+
+    # ── The regression the FIRST version of this fix introduced ────────────────────────────────
+    # That version made die() do `trap - ERR EXIT`, so the handler was skipped for every die in
+    # the file, and the two dies written out in the window's own text were hand-repaired with
+    # their own `svc start`. Three more are reachable through a FUNCTION CALL inside the window —
+    # fetch_code's missing git, and the `visudo -cf` check in write_sudoers_grant and
+    # write_terminal_sudo_grant — and each of those ended the run with the panel STOPPED: exactly
+    # the outcome the trap was added for, and a bug the next die added in there would inherit.
+    # So the gate is about dies in general, not about those three call sites.
+    _iw_rc, _iw_out = _iw_run(
+        'fetch_code() { die "git is required to fetch the panel.  apt install -y git"; }\n'
+        + _iw_fetch, _iw_pd, _iw_bk)
+    check("install.sh: a die raised inside a FUNCTION in the window still starts the panel back up",
+          "SVC start linuxgsm-panel.service" in _iw_out, _iw_out[-400:])
+    check("install.sh: ...and says the panel is back on the old version, and where the snapshot is",
+          "1.2.3" in _iw_out and _iw_bk in _iw_out, _iw_out[-400:])
+    check("install.sh: ...without burying the die's own accurate message under the generic one",
+          "git is required to fetch the panel" in _iw_out
+          and "aborted unexpectedly" not in _iw_out and _iw_rc != 0,
+          "rc=%d %s" % (_iw_rc, _iw_out[-400:]))
+
+    # …and at the END of the window, where the root-owned pieces are refreshed. This runs
+    # install.sh's REAL call site (check_origin_trusted → install_root_tools → write_sudoers_grant
+    # → write_terminal_sudo_grant); only the four functions are stubbed, and write_sudoers_grant
+    # does what the real one does when visudo rejects the file it has just written: remove the
+    # grant and die. Nothing else in the suite executes this stretch at all.
+    check("install.sh: the root-owned refresh really does run inside the stopped window",
+          bool(_iw_grants) and "write_sudoers_grant" in _iw_grants,
+          "extracted %d chars" % len(_iw_grants))
+    _iw_rc, _iw_out = _iw_run("\n".join([
+        "check_origin_trusted() { ORIGIN_TRUSTED=1; }",
+        "install_root_tools() { echo 'ROOT_TOOLS'; }",
+        'write_sudoers_grant() { rm -f "${PANEL_DIR}/sudoers"; die "sudoers entry invalid"; }',
+        "write_terminal_sudo_grant() { :; }",
+        _iw_grants,
+        _iw_disarm]), _iw_pd, _iw_bk)
+    check("install.sh: a sudoers grant that fails its visudo check does not leave the panel down",
+          "SVC start linuxgsm-panel.service" in _iw_out and "sudoers entry invalid" in _iw_out
+          and "WINDOW-COMPLETED" not in _iw_out and _iw_rc != 0,
+          "rc=%d %s" % (_iw_rc, _iw_out[-400:]))
+
+    # A KILL is not an exit status. Bash runs the EXIT trap when the installer is terminated, with
+    # `$?` still 0, and the handler reported that as "(exit 0)" — a false statement in the one
+    # message the operator gets about a half-finished update.
+    _iw_rc, _iw_out = _iw_run("kill -TERM $$\necho 'SIGNAL-IGNORED'", _iw_pd, _iw_bk)
+    check("install.sh: an update killed mid-window names the signal instead of claiming exit 0",
+          "SIGTERM" in _iw_out and "(exit 0)" not in _iw_out and "SIGNAL-IGNORED" not in _iw_out,
+          "rc=%d %s" % (_iw_rc, _iw_out[-400:]))
+    check("install.sh: ...and still restarts the panel the kill left stopped",
+          "SVC start linuxgsm-panel.service" in _iw_out and _iw_rc != 0,
+          "rc=%d %s" % (_iw_rc, _iw_out[-400:]))
+
+    # ── (1, continued) The ordering, MEASURED by running [1/6] and [2/6] ───────────────────────
+    def _iw_stage_fixture(tag):
+        """A panel dir shaped the way [1/6]+[2/6] reads it. → (panel_dir, backup, event log)"""
+        _pd = os.path.join(_iw_dir, tag)
+        os.makedirs(os.path.join(_pd, "data"))
+        os.makedirs(os.path.join(_pd, "venv", "bin"))
+        with open(os.path.join(_pd, "data", "panel.db"), "w") as _f:
+            _f.write("x" * 64)
+        with open(os.path.join(_pd, "db_maintenance.py"), "w") as _f:
+            _f.write("# stand-in for the installed maintenance tool\n")
+        _log = os.path.join(_iw_dir, tag + ".events")
+        _py = os.path.join(_pd, "venv", "bin", "python3")
+        with open(_py, "w") as _f:
+            _f.write('#!/bin/sh\necho DBM-UPDATE >> %s\necho "DBM $*"\n' % _iw_shlex.quote(_log))
+        os.chmod(_py, 0o755)
+        return _pd, os.path.join(_iw_dir, tag + "-backup"), _log
+
+    _o_pd, _o_bk, _o_log = _iw_stage_fixture("stage12")
+    _o_rc, _o_out, _o_ev = _iw_run_stage12(_o_pd, _o_bk, _o_log)
+    _o_code, _o_stop = _iw_evat(_o_ev, "TAR-CODE"), _iw_evat(_o_ev, "SVC stop")
+    _o_data, _o_dbm = _iw_evat(_o_ev, "TAR-DATA"), _iw_evat(_o_ev, "DBM-UPDATE")
+    check("install.sh: the panel is stopped BEFORE the database is tarred, not ten lines after",
+          0 <= _o_stop < _o_data, "stop@%d data@%d %r" % (_o_stop, _o_data, _o_ev))
+    check("install.sh: ...and [2/6]'s offline database maintenance still runs with it stopped",
+          0 <= _o_stop < _o_dbm, "stop@%d dbm@%d %r" % (_o_stop, _o_dbm, _o_ev))
+    # The other side of it: moving the stop EARLIER is not automatically safer. [1/6]'s own die
+    # tells the operator "the panel is unchanged", which is only true while it is still running.
+    check("install.sh: ...and the CODE snapshot is taken first, with the panel still running",
+          0 <= _o_code < _o_stop, "code@%d stop@%d %r" % (_o_code, _o_stop, _o_ev))
+    check("install.sh: a clean [1/6]+[2/6] saves both snapshots and checks the database",
+          _o_rc == 0 and "OK Snapshot saved" in _o_out and "OK Database checked" in _o_out
+          and "WINDOW-COMPLETED" in _o_out, "rc=%d %s" % (_o_rc, _o_out[-400:]))
+    check("install.sh: ...stopping the service exactly once while it does",
+          len([_e for _e in _o_ev if _e.startswith("SVC stop")]) == 1, repr(_o_ev))
+
+    # ── snapshot_ok: the only thing between a failed tar and a rollback that restores nothing ──
+    # The rollback wipes data/ BEFORE unpacking this archive, so "it unpacks" is not enough — it
+    # has to contain something. `printf '' | gzip -1` is a 20-byte file: non-empty, and GNU tar
+    # lists it happily as zero members.
+    _s_dir = os.path.join(_iw_dir, "archives")
+    os.makedirs(os.path.join(_s_dir, "src"))
+    # Several INCOMPRESSIBLE members on purpose: the truncated copy below has to be one that tar
+    # lists some of before it fails, which is what tells "count the members" apart from "count the
+    # members AND require tar to have finished". One small file would compress to a single deflate
+    # block that lists nothing at all, and the truncation gate would pass on a count-only check.
+    for _n in range(40):
+        with open(os.path.join(_s_dir, "src", "chunk%02d.bin" % _n), "wb") as _fh:
+            _fh.write(os.urandom(2000))
+    _s_real = os.path.join(_s_dir, "real.tgz")
+    _iw_sub.run(["tar", "-C", os.path.join(_s_dir, "src"), "-czf", _s_real, "."], check=True)
+    _s_empty = os.path.join(_s_dir, "empty.tgz")
+    with open(_s_empty, "wb") as _fh:
+        _fh.write(_iw_sub.run(["gzip", "-1"], input=b"", stdout=_iw_sub.PIPE, check=True).stdout)
+    _s_zero = os.path.join(_s_dir, "zero.tgz")
+    open(_s_zero, "wb").close()
+    _s_trunc = os.path.join(_s_dir, "truncated.tgz")
+    with open(_s_real, "rb") as _fh:
+        _s_head = _fh.read()
+    with open(_s_trunc, "wb") as _fh:
+        _fh.write(_s_head[:int(len(_s_head) * 0.7)])
+    _s_listed = _iw_sub.run(["bash", "-c", 'tar -tzf "$1" 2>/dev/null | wc -l', "_", _s_trunc],
+                            capture_output=True, text=True).stdout.strip()
+    check("install.sh: (premise) the truncated snapshot lists members before tar gives up",
+          _s_listed.isdigit() and int(_s_listed) > 0, "tar listed %r members" % _s_listed)
+    check("install.sh: snapshot_ok accepts an archive that actually holds the files",
+          _iw_snapshot_ok(_s_real) == 0, _s_real)
+    check("install.sh: ...and REJECTS a readable, valid, completely EMPTY archive",
+          _iw_snapshot_ok(_s_empty) != 0,
+          "%d bytes, tar -tzf lists nothing" % os.path.getsize(_s_empty))
+    check("install.sh: ...and still rejects a zero-byte file and a truncated archive",
+          _iw_snapshot_ok(_s_zero) != 0 and _iw_snapshot_ok(_s_trunc) != 0,
+          "zero=%d truncated=%d" % (_iw_snapshot_ok(_s_zero), _iw_snapshot_ok(_s_trunc)))
+
+    # …and what that means at the call site: a data tar that produced NOTHING must abort the
+    # update — with the panel put back up — not print "Snapshot saved" over it.
+    _e_pd, _e_bk, _e_log = _iw_stage_fixture("stage12-empty")
+    _e_rc, _e_out, _e_ev = _iw_run_stage12(_e_pd, _e_bk, _e_log, data_tar_empty=True)
+    check("install.sh: a data snapshot that came out EMPTY aborts instead of reporting it saved",
+          "Snapshot saved" not in _e_out and "Couldn't snapshot the database/config" in _e_out
+          and _e_rc != 0, "rc=%d %s" % (_e_rc, _e_out[-400:]))
+    check("install.sh: ...and puts the panel it had just stopped back up",
+          "SVC start linuxgsm-panel.service" in _e_out and _iw_evat(_e_ev, "SVC start") >= 0,
+          "%r %s" % (_e_ev, _e_out[-300:]))
+finally:
+    _iw_shutil.rmtree(_iw_dir, ignore_errors=True)

@@ -690,6 +690,71 @@ try:
         check("pro_status: a host without the pro client is 'not installed', not unreadable",
               _pn.get("installed") is False and not _pn.get("unreadable"), repr(_pn))
 
+        # ...and the memo is the other half of that. Flagging the non-reading was no use while
+        # pro_status stored it for _PRO_STATUS_TTL (a day) regardless: one timed-out read of a
+        # rebooting host pinned "unknown" on its card until the panel restarted, because nothing
+        # re-probes — only attach/detach/service invalidate the memo, and the page never forces.
+        # The checks above cleared the cache between reads, so they never saw this.
+        _pron = {"n": 0}
+
+        def _pro_timedout(s, v, a=(), **k):
+            _pron["n"] += 1
+            return ("", "SSH command timed out", -1)
+        _sm_core.run_privileged = _pro_timedout
+        _sm_hosts._pro_status_cache.clear()
+        _psrv_u = NS(id=48, host="h")
+        _sm_hosts.pro_status(_psrv_u)
+        _sm_hosts.pro_status(_psrv_u)
+        check("pro_status: a timed-out read is re-probed, not answered from the memo for a day",
+              _pron["n"] == 2, f"run_privileged calls={_pron['n']}")
+        check("pro_status: a timed-out read leaves nothing in the 24h cache",
+              _sm_hosts._pro_key(_psrv_u) not in _sm_hosts._pro_status_cache,
+              repr(_sm_hosts._pro_status_cache.get(_sm_hosts._pro_key(_psrv_u))))
+
+        def _pro_back_up(s, v, a=(), **k):
+            _pron["n"] += 1
+            return ('{"attached": true, "services": []}', "", 0)
+        _sm_core.run_privileged = _pro_back_up
+        _pb = _sm_hosts.pro_status(_psrv_u)
+        check("pro_status: the host coming back is believed, not the failed read before it",
+              _pb.get("attached") is True and not _pb.get("unreadable"), repr(_pb))
+        # Positive control, on a host that only ever reads cleanly: a GOOD read is still
+        # memoised. The pro client is slow, and not re-spawning it every page load is the whole
+        # point of this cache — the guard above must skip the non-reading, not the caching.
+        _psrv_ok = NS(id=49, host="h")
+        _pron_before_ok = _pron["n"]
+        _sm_hosts.pro_status(_psrv_ok)
+        _pb2 = _sm_hosts.pro_status(_psrv_ok)
+        check("pro_status: a good read is still cached for the day (positive control)",
+              _pron["n"] == _pron_before_ok + 1 and _pb2.get("attached") is True
+              and _sm_hosts._pro_key(_psrv_ok) in _sm_hosts._pro_status_cache,
+              f"run_privileged calls={_pron['n'] - _pron_before_ok} (expected 1)")
+
+        # ── the same defect through a second door: '{' that does not parse ──────────────────
+        # The memo guard above only skips a dict carrying `unreadable`, and the json.loads
+        # failure branch answered {"installed": True, "attached": False, "error": …} — no such
+        # key. So a reply truncated by run_command's 2 MiB cap (or any garbled stream) was still
+        # pinned for a day, persisted to the DB by _pro_status_cached, and painted as "Not
+        # attached" plus the attach-token pitch — `error` is rendered nowhere — on a host that
+        # may be fully attached. Unparseable bytes are a non-reading, not two facts about Pro.
+        _prog = {"n": 0}
+
+        def _pro_garbled(s, v, a=(), **k):
+            _prog["n"] += 1
+            return ('{"attached": true, "services": [{"name": "esm-in', "", 0)  # cut mid-object
+        _sm_core.run_privileged = _pro_garbled
+        _sm_hosts._pro_status_cache.clear()
+        _psrv_g = NS(id=50, host="h")
+        _pg = _sm_hosts.pro_status(_psrv_g)
+        check("pro_status: unparseable JSON is flagged unreadable, not 'not attached'",
+              _pg.get("unreadable") is True and _pg.get("installed") is not True, repr(_pg))
+        check("pro_status: an unparseable read leaves nothing in the 24h cache",
+              _sm_hosts._pro_key(_psrv_g) not in _sm_hosts._pro_status_cache,
+              repr(_sm_hosts._pro_status_cache.get(_sm_hosts._pro_key(_psrv_g))))
+        _sm_hosts.pro_status(_psrv_g)
+        check("pro_status: an unparseable read is re-probed, not answered from the memo for a day",
+              _prog["n"] == 2, f"run_privileged calls={_prog['n']}")
+
         # ── fail2ban overview: installed-but-unreadable is not "no jails" ────────────────────
         # rc 127 was handled; every OTHER failure fell through to {"installed": True,
         # "jails": []}, which the Security card renders as "No fail2ban jails found." — the same

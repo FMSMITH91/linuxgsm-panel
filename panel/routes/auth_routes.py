@@ -283,10 +283,96 @@ def register(app):
     @app.route("/account/api-token/generate", methods=["POST"])
     @login_required
     def account_api_token_generate():
-        """Mint a fresh API token (replacing any existing one) and show it ONCE."""
-        token = current_user.generate_api_token()
+        """Mint a fresh API token (replacing any existing one) and show it ONCE.
+
+        Needs the password AND — when 2FA is on — a current authenticator (or backup) code: the
+        same proof the password change and the 2FA switch-off on the same page already demand.
+
+        A live session used to be the entire gate, which made this the weakest-guarded control on
+        the account page while handing out the strongest thing on it. What it mints is a SECOND
+        credential that outlives the session that minted it: load_user_from_request authenticates
+        the bearer as its owner with that owner's whole permission set, by_api_token matches on
+        the digest and is_active and nothing else — no auth_epoch, so the epoch bump that sweeps
+        every session cookie does not reach it, and what takes it away instead is the explicit
+        revoke_api_token() that account_revoke_sessions and account_change_password each had to
+        be taught to call; no totp_enabled, so it never meets the 2FA gate, which exists only in
+        the /login form flow — and bearer requests are exempt from CSRF. So one POST from a
+        borrowed tab converted a minute of someone else's session into a key with no IP/UA
+        binding, no second factor and no expiry, which those two controls take back only if the
+        victim thinks to press them — and nothing visible went wrong to suggest they should.
+        Asking for the password and the code closes that: the two things a stolen cookie does not
+        carry are now the two things minting one costs.
+
+        (The sentence next door in account_revoke_sessions is in the PAST tense deliberately — it
+        describes what was true before that route started revoking. An earlier draft of this
+        docstring copied it without the tense and so claimed, in the present, that a password
+        change and "sign out everywhere" leave a token working. Both revoke it today, and
+        smoke_test asserts they do; a rationale that contradicts a passing test is worse than no
+        rationale, because the next reader believes it.)
+
+        Revoking stays ungated on purpose (see below) — taking a credential away is not the
+        direction that needs proof.
+        """
+        # The real row, not the proxy — last_totp_step and the backup-code list are written here,
+        # exactly as in account_2fa_disable.
+        u = current_user._get_current_object()
+
+        def _refused(why):
+            """Refuse, and SAY SO in the audit log.
+
+            log_action fired on the mint alone, so the one thing this gate produces that is worth
+            watching — somebody in a borrowed session trying passwords against it, which is now
+            the only way past it — left no trace anywhere, while the mint they were aiming at
+            left a tidy one. A gate whose refusals are invisible tells you afterwards that
+            nothing happened, which is exactly what it looks like when something did. Recorded
+            with success=False, the shape delete_group / uninstall_server / send_command already
+            use, so it reads as a refusal in the audit list rather than as a mint.
+
+            Recorded but NOT rate-limited, and that is a decision: the same unthrottled password
+            oracle already sits behind account_change_password and account_2fa_disable, which any
+            session holder can hit, so a limit on this route alone moves the guessing one route
+            over instead of closing it — while adding a way to lock somebody out of minting their
+            own token. Each attempt costs a bcrypt compare, which is its own floor on the rate. A
+            real limit belongs on all three at once, beside the login and bearer-token throttles
+            in panel/security/auth.py; what was missing here was the record of the attempt, and
+            that is what this is."""
+            log_action(u, "api_token_generate", target=u.username, detail=why, success=False)
+            return redirect(url_for("account"))
+
+        if not check_password(request.form.get("password", ""), u.password_hash):
+            flash("Password incorrect — no API token was minted.", "danger")
+            return _refused("wrong password")
+        # Checked LAST, and in this order, for the reasons account_2fa_disable spells out: a
+        # one-time backup code must never be spent on an otherwise-invalid request, and a TOTP
+        # code stays valid for ~90s, so verify_totp_STEP plus the last_totp_step comparison is
+        # what makes an observed code single-use rather than replayable for the rest of its window.
+        code = (request.form.get("totp_code") or "").strip()
+        if u.totp_enabled:
+            ok_2fa = False
+            _step = verify_totp_step(u.totp_secret_plain, code) if u.totp_secret_plain else None
+            if _step is not None:
+                if _step <= (u.last_totp_step or 0):
+                    flash("That code has already been used — wait for your authenticator to show "
+                          "the next one.", "danger")
+                    return _refused("replayed authenticator code")
+                u.last_totp_step = _step
+                ok_2fa = True
+            elif u.use_backup_code(code):
+                ok_2fa = True
+            if not ok_2fa:
+                flash("That authenticator code didn't match — no API token was minted.", "danger")
+                return _refused("wrong authenticator code")
+        token = u.generate_api_token()
+        # The token, and with it the spent step / backup code. NOT redundant with the commit
+        # inside log_action on the next line, even though that one happens to flush this same
+        # session today: deleting this line left both suites entirely green, which is how it came
+        # out that nothing asserted the credential being handed over is stored at all. That commit
+        # belongs to the audit writer, not to this route, and is one refactor away from not being
+        # there — at which point the plaintext would still be shown and the row would still be
+        # empty. smoke_test now re-reads the row in a FRESH app context after the POST, so the
+        # write is pinned to the database rather than to whoever commits next.
         db.session.commit()
-        log_action(current_user, "api_token_generate", target=current_user.username)
+        log_action(u, "api_token_generate", target=u.username)
         # Render directly (not a redirect) so the plaintext token is shown exactly once and never
         # stored in the session cookie.
         return render_template("account.html", languages=i18n.LANGUAGES, new_token=token)
@@ -294,6 +380,9 @@ def register(app):
     @app.route("/account/api-token/revoke", methods=["POST"])
     @login_required
     def account_api_token_revoke():
+        """Deliberately ungated, unlike the mint above. Revoking takes a credential AWAY, so the
+        worst a stolen session can do here is inconvenience the owner — and a gate would be a
+        reason not to press this in the one situation it exists for."""
         current_user.revoke_api_token()
         db.session.commit()
         log_action(current_user, "api_token_revoke", target=current_user.username)

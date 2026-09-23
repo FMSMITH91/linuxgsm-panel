@@ -75,7 +75,17 @@ def pro_status(server, force=False):
         if cached and cached[0] > now:
             return cached[1]
     result = _compute_pro_status(server)
-    _pro_status_cache[key] = (now + _PRO_STATUS_TTL, result)
+    # Only a READING gets memoised. _compute_pro_status tells "could not read" apart from "not
+    # installed" now, but this line cached either for _PRO_STATUS_TTL — a day — so one timed-out
+    # read of a rebooting host (the tailscale/local transports return ("", "…timed out", -1)
+    # instead of raising) pinned "Ubuntu Pro status unknown" onto its card until the panel
+    # restarted. The host being back up seconds later changed nothing, because nothing re-probed:
+    # only attach/detach/service invalidate this, and the page never sends force. A read that
+    # never happened is not an answer to remember, so leaving the memo empty is what makes the
+    # next page load ask again — same guard as remote_uptime's `if server is not None and out`
+    # and host_specs' "cache only a good read; a transient failure retries next time".
+    if not result.get("unreadable"):
+        _pro_status_cache[key] = (now + _PRO_STATUS_TTL, result)
     return result
 
 
@@ -103,7 +113,16 @@ def _compute_pro_status(server):
     try:
         data = json.loads(out)
     except Exception:
-        return {"installed": True, "attached": False, "services": [],
+        # Bytes that start with '{' and then fail to parse are the same non-reading as the branch
+        # above, arriving through a second door: output truncated by run_command's 2 MiB cap, a
+        # warning line glued onto the JSON, a stream cut off mid-object. This used to answer
+        # {"installed": True, "attached": False, "error": …} — two positive claims read out of
+        # text nobody could read, and no `unreadable` key, so pro_status memoised it for
+        # _PRO_STATUS_TTL and _pro_status_cached persisted it to the database. `error` is
+        # rendered nowhere, so what the operator saw for a day was "Not attached" plus the
+        # attach-token pitch on a host that may be fully attached. Flagging it unreadable is what
+        # keeps it out of both caches and makes the next page load ask the host again.
+        return {"installed": False, "attached": False, "services": [], "unreadable": True,
                 "error": "Could not parse pro status"}
     by_name = {s.get("name"): s for s in (data.get("services") or [])}
     featured = []

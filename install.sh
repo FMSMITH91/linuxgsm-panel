@@ -94,7 +94,19 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC
 info()  { echo -e "${CYAN}$*${NC}"; }
 ok()    { echo -e "${GREEN}✓${NC} $*"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
-die()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+# A `die` is a DELIBERATE, explained exit — it has already said what went wrong and what state the
+# panel is left in. The update path arms an EXIT trap over the window where the panel is stopped
+# (see [1/6]) to catch the UNexplained aborts: `set -e` on a failed pip, a full disk mid-fetch.
+# Letting that trap ALSO print its generic [ERROR] on top of the accurate one would just bury it,
+# so record that the operator has already been told and let the handler skip that one sentence.
+#
+# What this must NOT do is `trap - ERR EXIT`. That was tried, and it disarmed the handler for every
+# die in the file — including the three reached through a FUNCTION CALL inside the stopped window
+# (fetch_code's missing git, and the `visudo -cf` check in write_sudoers_grant and
+# write_terminal_sudo_grant), each of which then exited with the panel still stopped: the exact
+# outcome the trap was added to prevent, and a bug the next `die` added in there would inherit.
+# The recovery is the handler's job for ALL exits; only the wording is conditional.
+die()   { _DIE_SAID=1; echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 echo -e "${CYAN}╔═══════════════════════════════════════════╗"
 echo    "║     LinuxGSM Panel — install / update     ║"
@@ -744,15 +756,25 @@ install_root_tools() {
     # checkout is owned by the panel user and rewritten by `git pull` on every self-update. Root
     # executing it — or the checkout's venv interpreter — would make the boundary decorative. The
     # helper runs THIS copy with the SYSTEM python instead.
+    # panel.conf is written HERE, not inside the db_maintenance branch below, because it is the
+    # only record of WHERE this install lives and three separate things read it: the helper, the
+    # uninstaller's shared-ownership check, and recover.sh. It used to be written only when
+    # db_maintenance.py had been staged AND installed — but install_recovery_command is
+    # independent of both, so a host where that staging failed got the root-owned recovery tool
+    # and the documented `linuxgsm-panel-recover` symlink with NOTHING recording the directory
+    # they are meant to operate on. The lockout remedy then answered "Couldn't find a LinuxGSM
+    # Panel install on this host". Recording the path costs nothing and does not depend on any
+    # file having been copied.
+    CONF_OK=0
+    printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\n' \
+        "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" \
+        | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
+        && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
+        && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null && CONF_OK=1
+
     if _stage="$(stage_root_source db_maintenance.py db_maintenance.py)"; then
         if ${H_SUDO} install -o root -g root -m 0755 "${_stage}" "${DBM_DST}" 2>/dev/null; then
             ${H_SUDO} rm -f "${_stage}" 2>/dev/null || true
-            CONF_OK=0
-            printf 'db_path=%s\ndata_dir=%s\npanel_dir=%s\n' \
-                "${PANEL_DIR}/data/panel.db" "${PANEL_DIR}/data" "${PANEL_DIR}" \
-                | ${H_SUDO} tee "${PANEL_CONF}" >/dev/null 2>&1 \
-                && ${H_SUDO} chmod 0644 "${PANEL_CONF}" 2>/dev/null \
-                && ${H_SUDO} chown root:root "${PANEL_CONF}" 2>/dev/null && CONF_OK=1
             INST_OK=0
             # The installer itself, root-owned, for the same reason: the self-update runs it as
             # root, and the copy in the checkout is panel-writable.
@@ -1009,7 +1031,15 @@ write_sudoers_grant() {
     fi
     chmod 440 /etc/sudoers.d/linuxgsm-panel
     visudo -cf /etc/sudoers.d/linuxgsm-panel >/dev/null \
-        || { rm -f /etc/sudoers.d/linuxgsm-panel; die "sudoers entry invalid"; }
+        || { rm -f /etc/sudoers.d/linuxgsm-panel
+             # Name the damage. This `rm` has just taken the panel's sudo grant away, and the
+             # window handler that now catches this die goes on to restore the code and report
+             # "the panel has been restarted on <version>" — true, and reassuring, and silent
+             # about the one thing that changed for the worse. A panel running without its grant
+             # fails every privileged action with no clue why.
+             die "sudoers entry invalid — the grant at /etc/sudoers.d/linuxgsm-panel has been REMOVED,
+     so the panel's privileged actions (firewall, service control, game accounts) will fail until it
+     is rewritten. Re-run this installer once the cause is fixed."; }
     # Say which one loudly when it is the wide one. This runs on updates now, so a host that was
     # narrow and could not place the helper this time gets its grant widened again — a real
     # security downgrade, and it should not slide past in a wall of green ticks.
@@ -1105,23 +1135,117 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # rollback below then wiped PANEL_DIR and fed the truncated stream to tar. `tar -tz` reads the
     # whole thing: it fails on a broken gzip stream and on a truncated member, which is the actual
     # question ("can this be unpacked again?").
-    snapshot_ok() { [ -s "$1" ] && tar -tzf "$1" >/dev/null 2>&1; }
+    #
+    # "Can it be unpacked" is still not "is anything IN it", and both matter when this archive is
+    # the only surviving copy: the rollback wipes data/ before unpacking it. `printf '' | gzip -1`
+    # is a 20-byte file, so `-s` is true, and GNU tar reads it happily and lists zero members, so
+    # `-tz` is true as well — an empty snapshot would print "Snapshot saved" and restore nothing.
+    # So COUNT the members. `wc -l` and not `head -1`, which would SIGPIPE tar and (under
+    # pipefail, set at the top of this file) read as a broken archive; and the count comes from
+    # the same pipeline whose status still has to be 0, because a TRUNCATED archive lists the
+    # members it got to before tar failed. One line on purpose: tests/unit/part06.py extracts this
+    # function by line and executes it, rather than reimplementing what it hopes it says.
+    snapshot_ok() { local _n; [ -s "$1" ] && _n="$(tar -tzf "$1" 2>/dev/null | wc -l)" && [ "${_n}" -gt 0 ]; }
     snapshot_ok "${BACKUP}/code.tgz" || die "Couldn't snapshot the current version (the backup is empty or unreadable) —
      update ABORTED, the panel is unchanged. Check free disk space with 'df -h' and try again."
     # …and the whole data dir (DB + encryption keys + config), since the app runs a
     # startup migration that mutates the DB — we restore this verbatim on rollback.
+    #
+    # STOP THE PANEL FIRST. This tar used to run against a LIVE database, ten lines before the
+    # service was stopped for [2/6]. panel.db is in WAL mode with ~10 daemon threads committing
+    # into it continuously, so tar was reading panel.db, panel.db-wal and panel.db-shm as three
+    # separate, non-atomic reads while a writer was mid-commit — the archive can hold a main image
+    # that does not match its WAL, which SQLite reports on restore as "database disk image is
+    # malformed". tar says "file changed as we read it" and exits 1 when that happens, and
+    # `2>/dev/null … || true` threw away both the message and the status; snapshot_ok only asks
+    # whether the archive UNPACKS, which cannot see an inconsistent database inside it. So the
+    # script printed "Snapshot saved" over a torn copy — and this is the ONLY copy of the database
+    # on the rollback path, which wipes data/ before unpacking it. Quiescing first costs the
+    # seconds the tar takes, and [2/6] below needs the service down anyway.
+    svc stop linuxgsm-panel.service || true
+
+    # ── The panel is DOWN from here until [5/6] starts it again ──────────────────────────────
+    # Everything in that window can fail — the snapshot, the database maintenance, the fetch, pip
+    # — and every one of those failures used to fall straight off the end of the script under
+    # `set -e`: service stopped, no rollback, no message. The rollback block at the bottom is
+    # reachable only from a FAILED HEALTH CHECK, so it never ran for any of them, and the operator
+    # (or the in-panel self-update, which only watches the log) got `=== installer exit 1 ===` and
+    # a dead panel with no web UI left to read it from — flatly contradicting the promise at the
+    # top of this file that "a broken release can't leave you with a dead panel".
+    #
+    # This trap owns the window instead. It restores the CODE only when fetch_code has actually
+    # replaced the working tree; it deliberately does NOT restore data.tgz, because the new
+    # version never started inside this window, so the live database is still the pre-update one
+    # and unpacking over it would only risk losing it. Then it starts the service and says what
+    # failed and where the snapshot is. It fires for a `die` too — a deliberate exit still leaves
+    # the panel stopped, and the recovery is the same — but a die has already explained itself, so
+    # the handler drops its own generic sentence and adds only the one thing the die cannot know:
+    # that the panel is back up (see die() at the top of this file).
+    _CODE_FETCHED=0
+    _ABORT_SIG=""
+    _update_window_abort() {
+        local _rc=$?
+        trap - ERR EXIT HUP INT TERM
+        # What to call the reason. `$?` is 0 when bash runs an EXIT trap because the script was
+        # KILLED, so "(exit 0)" was a false statement in the one message the operator gets: name
+        # the signal when there was one, and say nothing at all when there is neither.
+        local _why=""
+        if [ -n "${_ABORT_SIG}" ]; then
+            _why=" (killed by ${_ABORT_SIG})"
+        elif [ "${_rc}" -ne 0 ]; then
+            _why=" (exit ${_rc})"
+        fi
+        # A `die` has already printed an accurate, specific message (see die() at the top), so the
+        # generic sentence is skipped — but only that sentence. The RECOVERY below runs for a die
+        # exactly as it does for an unexplained abort, because the panel is stopped either way.
+        [ "${_DIE_SAID:-0}" -eq 1 ] || warn "The update aborted unexpectedly${_why} with the panel stopped."
+        if [ "${_CODE_FETCHED}" -eq 1 ] && [ -f "${BACKUP}/code.tgz" ]; then
+            warn "Putting ${FROM_VER} back from the snapshot…"
+            find "${PANEL_DIR}" -mindepth 1 -maxdepth 1 \
+                ! -name data ! -name venv -exec rm -rf {} + 2>/dev/null || true
+            tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz" 2>/dev/null || true
+            install_deps || true
+        fi
+        [ "${RUN_AS_ROOT}" -eq 1 ] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}" 2>/dev/null || true
+        svc daemon-reload || true
+        svc start linuxgsm-panel.service || true
+        if [ "${_DIE_SAID:-0}" -eq 1 ]; then
+            # The what and the why are already on screen; add only what the die could not know —
+            # that the recovery above has run.
+            warn "The panel has been restarted on ${FROM_VER}. Snapshot of this attempt: ${BACKUP}"
+            if [ "${_rc}" -eq 0 ]; then _rc=1; fi
+            exit "${_rc}"
+        fi
+        die "Update ABORTED partway through${_why} — the panel has been restarted on ${FROM_VER}.
+     Snapshot of this attempt: ${BACKUP}"
+    }
+    # A kill is not an exit status. Catch the signals so the handler can NAME the one that arrived
+    # (bash runs the EXIT trap either way, with `$?` still 0), and let the EXIT trap keep doing the
+    # single, shared recovery.
+    _update_window_signal() { _ABORT_SIG="$1"; exit "$2"; }
+    trap '_update_window_signal SIGHUP 129' HUP
+    trap '_update_window_signal SIGINT 130' INT
+    trap '_update_window_signal SIGTERM 143' TERM
+    trap _update_window_abort ERR EXIT
+
     if [ -d "${PANEL_DIR}/data" ]; then
         tar -C "${PANEL_DIR}/data" --ignore-failed-read --exclude=./.backups -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/data.tgz" || true
-        snapshot_ok "${BACKUP}/data.tgz" || die "Couldn't snapshot the database/config (backup empty or unreadable) — update ABORTED, the panel is unchanged."
+        # The service is stopped by now, so this die must put it back — the message promises the
+        # panel is unchanged, and a panel that is down is not unchanged.
+        if ! snapshot_ok "${BACKUP}/data.tgz"; then
+            svc start linuxgsm-panel.service || true
+            die "Couldn't snapshot the database/config (backup empty or unreadable) — update ABORTED,
+     the panel is unchanged and has been restarted on ${FROM_VER}."
+        fi
     fi
     ok "Snapshot saved"
 
     # Database maintenance runs AFTER the snapshot (so nothing here can lose data — the
     # snapshot is the fallback) and with the service STOPPED (VACUUM and any rebuild need
-    # exclusive access). check -> repair only if needed -> optimize -> re-check. The tool is
+    # exclusive access — the stop now happens up at [1/6], so the snapshot gets a quiesced
+    # database too). check -> repair only if needed -> optimize -> re-check. The tool is
     # part of the INSTALLED version, so it's present whenever this newer install.sh runs.
     info "[2/6] Checking + optimising the database…"
-    svc stop linuxgsm-panel.service || true
     # WHICH python and WHICH script, as root, matters here — this runs at step [2/6], BEFORE any
     # git fetch, so nothing about it is "the new code we just verified". It used to be
     # ${PANEL_DIR}/venv/bin/python3 running ${PANEL_DIR}/db_maintenance.py: an interpreter and a
@@ -1162,6 +1286,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     info "[3/6] Fetching the new version…"
     REQ_BEFORE="$(sha256sum "${PANEL_DIR}/requirements.txt" 2>/dev/null | awk '{print $1}')"
     fetch_code
+    _CODE_FETCHED=1   # from here an abort has to put the old code back, not just restart the service
     TO_VER="$(panel_version)"
     REQ_AFTER="$(sha256sum "${PANEL_DIR}/requirements.txt" 2>/dev/null | awk '{print $1}')"
     ok "Code updated (${FROM_VER} → ${TO_VER})"
@@ -1192,7 +1317,10 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     ensure_service_tuning   # refresh the low-priority drop-in (existing installs get it on update)
     ensure_system_tuning    # prefer RAM over swap (applied on update too)
     svc daemon-reload || true
-    svc start linuxgsm-panel.service || true   # it was stopped in [2/6] for offline DB maintenance
+    svc start linuxgsm-panel.service || true   # it was stopped at [1/6] to quiesce the DB
+    # The panel is up again, so the stopped-window trap has nothing left to rescue: hand failures
+    # from here on to the health-check/rollback path below, which owns them.
+    trap - ERR EXIT HUP INT TERM
     # Ensure the path-independent recovery command exists on existing installs too — including
     # non-root (systemd --user) installs, where writing to /usr/local/bin needs sudo. This used to be
     # root-only, so `--user` installs never got `linuxgsm-panel-recover` (command not found).
