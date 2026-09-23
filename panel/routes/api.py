@@ -439,6 +439,13 @@ def register(app):
             "public_ip": remote.public_ip,
             "port": gs.port,
             "metrics": m,
+            # Ship the sentinel this route already computes. It was used here to refuse to PERSIST
+            # a guess ("report what we last knew, do not persist a guess") and then not told to
+            # the client, which paints every tile from `metrics` — so an unreadable host rendered
+            # as a confident 0% CPU / 0 MB RAM and pushed those zeros into the live chart, drawing
+            # a dip that never happened. The page has an existing idiom for this (`mounts_readable`
+            # in the same file's consumers); this is the same flag for the same reason.
+            "metrics_readable": _readable,
         })
 
 

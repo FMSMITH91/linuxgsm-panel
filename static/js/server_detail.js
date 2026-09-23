@@ -862,7 +862,8 @@ function pollStats() {
       if (d.error) return;
       _lastStatus = d.status || '';
       connectAddr = d.connect || '';
-      document.getElementById('connect-addr').textContent = connectAddr || 'unknown';
+      var _ca = document.getElementById('connect-addr');
+      if (_ca) _ca.textContent = connectAddr || 'unknown';
       // One-click join link (steam://connect/…) for games that support it.
       var join = document.getElementById('connect-join');
       if (join) {
@@ -871,17 +872,37 @@ function pollStats() {
       }
       setStatus(d.status);
       var m = d.metrics || {};
+      // A read that FAILED is not a server sitting idle at 0%. The route computes the sentinel
+      // (metrics builds its dict up front and comes back all-zero when the SSH read produced no
+      // output — truthy, so no `||` default catches it) and now ships it as metrics_readable.
+      // Tiles show '–' and the chart is not advanced, so the graph shows a GAP rather than a dip
+      // that never happened. `!== false` so an older payload without the field behaves as before.
+      var readable = d.metrics_readable !== false;
+      // Every id below lives inside the Controls panel, which the user can HIDE — hidePanel()
+      // removes the element and the layout is persisted, so it is absent from the DOM on every
+      // later load. These were unguarded `getElementById(...).textContent = ...`, so on a hidden
+      // panel the first one threw, the throw was swallowed by the .catch below, and everything
+      // after it in this handler stopped running — including setStatus's siblings further down.
+      // initChart two functions up already guards its canvas for exactly this reason.
+      function setText(id, value) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = value;
+      }
       // Game-specific tiles
-      document.getElementById('stat-gcpu').textContent = (m.game_cpu_percent!=null? m.game_cpu_percent : '–') + '%';
-      document.getElementById('stat-gcpu-sub').textContent = 'of ' + (m.cores||1) + '-core server';
-      document.getElementById('stat-gram').textContent = (m.game_ram_mb||0) + ' MB';
-      document.getElementById('stat-gram-sub').textContent = (m.game_ram_percent!=null? m.game_ram_percent+'% of RAM' : (m.game_procs||0)+' procs');
-      document.getElementById('stat-gup').textContent = m.game_procs ? fmtUptime(m.game_uptime_secs||0) : 'stopped';
-      document.getElementById('stat-gup-sub').textContent = (m.game_procs||0) + ' process' + ((m.game_procs===1)?'':'es');
+      setText('stat-gcpu', readable && m.game_cpu_percent!=null ? m.game_cpu_percent + '%' : '–');
+      setText('stat-gcpu-sub', readable ? 'of ' + (m.cores||1) + '-core server' : 'not read');
+      setText('stat-gram', readable ? (m.game_ram_mb||0) + ' MB' : '–');
+      setText('stat-gram-sub', !readable ? 'not read'
+              : (m.game_ram_percent!=null? m.game_ram_percent+'% of RAM' : (m.game_procs||0)+' procs'));
+      setText('stat-gup', !readable ? '–' : (m.game_procs ? fmtUptime(m.game_uptime_secs||0) : 'stopped'));
+      setText('stat-gup-sub', !readable ? 'not read'
+              : (m.game_procs||0) + ' process' + ((m.game_procs===1)?'':'es'));
       // Whole-server tile
-      document.getElementById('stat-scpu').textContent = (m.cpu_percent!=null? m.cpu_percent : '–') + '%';
-      document.getElementById('stat-server-sub').textContent = 'RAM ' + (m.ram_percent||0) + '% · disk ' + (m.disk_percent||0) + '%';
-      if (statsChart) {
+      setText('stat-scpu', readable && m.cpu_percent!=null ? m.cpu_percent + '%' : '–');
+      setText('stat-server-sub', readable
+              ? 'RAM ' + (m.ram_percent||0) + '% · disk ' + (m.disk_percent||0) + '%'
+              : 'The panel could not read this host');
+      if (statsChart && readable) {
         var t = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
         var L = statsChart.data.labels, A = statsChart.data.datasets[0].data, B = statsChart.data.datasets[1].data;
         L.push(t); A.push(m.game_cpu_percent||0); B.push(m.cpu_percent||0);

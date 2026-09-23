@@ -243,5 +243,6 @@
   "this game": "este juego",
   "— everything is downloaded automatically.": "— todo se descarga automáticamente.",
   "— this install failed.": "— esta instalación falló.",
-  "● Live": "● En vivo"
+  "● Live": "● En vivo",
+  "The panel could not read this host": "El panel no pudo leer este host."
 }

@@ -165,6 +165,19 @@ def _query_host_metrics(work):
         sample = host_live_metrics(remote)
     except Exception:
         return [(sid, None, getattr(remote, "id", None), "") for sid, _s, _p, _g, _q in games]
+    # The same ram_total sentinel the sampler below already applies, and for the same reason —
+    # this guarded only the RAISING transport. host_live_metrics builds its answer up front
+    # ({"cpu_percent": 0.0, "ram_total": 0, ...}), runs one command whose rc it discards, and
+    # returns that dict unchanged when the output is empty. Only paramiko raises; the tailscale
+    # and local transports return ("", "...timed out", -1), so on the transport the panel steers
+    # people towards a failed read arrived here as a fully populated, TRUTHY dict of zeros.
+    #
+    # /api/dashboard/metrics then passed it through its own `if not m` and wrote
+    # reachable/probed/metrics True with cpu 0, ram 0, disk 0 — so a host that was actually
+    # unreachable (or at 95% disk) rendered as "Reachable · CPU 0% · RAM 0% · Disk 0%". None is
+    # the answer the route already knows how to show, because it is what the raising path gives.
+    if not (sample.get("host") or {}).get("ram_total"):
+        return [(sid, None, getattr(remote, "id", None), "") for sid, _s, _p, _g, _q in games]
     out = []
     for sid, short_name, port, game_type, query_type in games:
         m = metrics_for_game(sample, short_name, port)
