@@ -12,6 +12,7 @@ is deliberate — routes may reach into monitoring; monitoring never reaches int
 import concurrent.futures
 import contextlib
 import ipaddress
+import itertools
 import logging
 import re
 import shlex
@@ -70,10 +71,27 @@ __all__ = [
 
 def _host_idle_state(remote):
     """'idle' (no players on any game server, confidently), 'busy' (someone is connected), or
-    'unknown' (at least one server couldn't be read). The reboot-when-empty poller only acts on
-    'idle', so a game the panel can't query is never rebooted out from under its players."""
+    'unknown' (at least one server couldn't be read, or one is mid-install). The reboot-when-empty
+    poller only acts on 'idle', so a game the panel can't query is never rebooted out from under
+    its players."""
     unknown = False
-    for gs in GameServer.query.filter_by(remote_id=remote.id, installed=True).all():
+    # EVERY row on the host, not just the installed ones. `installed=True` hid the one state in
+    # which a reboot does irreversible damage: through install steps 1-4 — the SteamCMD download,
+    # the long part — the row is installed=False/status="installing", so it was not in this query
+    # at all and contributed neither "busy" nor "unknown". A host part-way through a 30 GB download
+    # therefore reported a confident "idle", the watcher rebooted it inside 60s, and the install
+    # died mid-write to be reconciled later as "the panel restarted before this install finished".
+    # The two siblings in this file already filter on exactly these statuses (_refresh_player_counts
+    # and the _monitor_pass server loop); this is the same filter, read the other way round.
+    for gs in GameServer.query.filter_by(remote_id=remote.id).all():
+        if gs.status in ("installing", "configuring"):
+            unknown = True   # work in flight: no players to count, but certainly not idle
+            continue
+        # Not installed and nothing in flight (a failed or abandoned install): no game is running,
+        # so it is not something a reboot can interrupt — and treating it as unknown would strand
+        # "reboot when empty" on that host for as long as the row exists.
+        if not gs.installed:
+            continue
         pc = _server_players_confident(gs)
         if pc is None:
             unknown = True
@@ -244,15 +262,23 @@ def _refresh_player_counts(app):
             # fires the next time the server empties after the tag comes off — rather than being
             # silently consumed while nobody could be told.
             if gs.notify_when_empty and count == 0 and not notifications.alerts_muted(gs):
+                # DISARM FIRST, then send — the order the peak block below already uses.
+                # notifications.notify never raises (it dispatches on a thread of its own), so the
+                # only statement the except could ever catch was the commit; and when it did catch
+                # it, the alert had already gone out while the flag stayed armed in the database.
+                # This panel writes to one SQLite file from four places at once, so a "database is
+                # locked" here is ordinary, and the 45s poller then re-sent the "one-shot" every
+                # 45 seconds until a commit landed. Worst case now is one lost alert.
                 try:
-                    notifications.notify("server_empty", "Server is empty",
-                                         "%s on %s now has 0 players — safe to make changes."
-                                         % (gs.name, gs.remote.display_name))
                     gs.notify_when_empty = False
                     db.session.commit()
                 except Exception:
                     db.session.rollback()
                     _log.debug("notify-when-empty failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
+                else:
+                    notifications.notify("server_empty", "Server is empty",
+                                         "%s on %s now has 0 players — safe to make changes."
+                                         % (gs.name, gs.remote.display_name))
             # Server full — alert on the transition INTO full, re-arm when it drops below the cap.
             if isinstance(count, int) and isinstance(mx, int) and mx > 0:
                 if count >= mx and not _server_full_alerted.get(gs.id):
@@ -295,20 +321,30 @@ def _record_metric_samples(app):
     with app.app_context():
         # joinedload: the workers need each server's host, and lazily that is one query per server.
         from sqlalchemy.orm import joinedload
-        work = _metrics_work(GameServer.query.options(joinedload(GameServer.remote))
-                             .filter_by(installed=True).all())
+        # Grouped by HOST, like /api/dashboard/metrics already is. This built _metrics_work and
+        # mapped _query_server_metrics over it — one SSH round trip PER SERVER, each carrying the
+        # 0.25s sampling sleep, every 60s forever, to fetch whole-machine figures that are
+        # identical by definition and of which this pass writes exactly one HostSample per host
+        # anyway. 100 servers on 5 hosts opened 100 executions where 5 answer the same rows, in
+        # background threads competing with the console and the web requests for the same SSH
+        # connections. The tuple shape is identical, so the body below is unchanged — and the
+        # sampler now shares host_live_metrics' short cache with an open dashboard instead of
+        # each keeping its own.
+        work = _host_metrics_work(GameServer.query.options(joinedload(GameServer.remote))
+                                  .filter_by(installed=True).all())
         if not work:
             return
         now = utcnow()
         rows, hosts_seen = [], set()
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
-            for sid, m, rid, _mp in ex.map(_query_server_metrics, work):
+            for sid, m, rid, _mp in itertools.chain.from_iterable(ex.map(_query_host_metrics, work)):
                 # ram_total is the sentinel app.py's _live_run_state already uses: `free -b` never
-                # fails on a reachable host, so a zero there means the read did not happen.
-                # server_live_metrics builds its dict UP FRONT and returns it all-zero when the SSH
+                # fails on a reachable host, so a zero there means the read did not happen. The
+                # metrics readers build their dict UP FRONT and return it all-zero when the SSH
                 # read produces no output — truthy, so `if not m` passed it through and every blip
                 # wrote a 0% CPU / 0 MB sample per game and a 0/0/0 host sample. The trend charts
-                # then showed dips that never happened, and a host at 95% disk recorded 0%.
+                # then showed dips that never happened, and a host at 95% disk recorded 0%. Kept
+                # after the switch to the batched worker, which applies the same sentinel itself.
                 if not m or not m.get("ram_total"):
                     continue
                 rows.append(MetricSample(server_id=sid, ts=now,
@@ -560,6 +596,7 @@ def _monitor_pass():
             # State is tracked either way — only the ALERT is muted by a tag, so a server that goes
             # down while muted still reports "back online" correctly once it is unmuted.
             muted = notifications.alerts_muted(gs)
+            recorded = up      # what this pass writes to the transition state (not always `up`)
             if prev_up is True and not up:
                 # The panel's own stop/restart is already accounted for locally — check that FIRST so
                 # an intentional stop keeps its existing semantics and costs no SSH round trip.
@@ -569,13 +606,23 @@ def _monitor_pass():
                     # Leave the recorded state untouched so neither this pass nor the recovery pass
                     # alerts — otherwise suppressing "offline" would just produce "back online".
                     continue
-                if not expected and not muted:
+                if expected:
+                    # Same reasoning as the maintenance branch above, which this leg was missing:
+                    # the down-transition is deliberately never told, so recording False here made
+                    # the NEXT sweep read False -> True and push "Server back online" for an outage
+                    # the operator was never notified of — on roughly half the restarts of a
+                    # slow-booting game, which is what trains people to ignore the channel.
+                    # Keeping the previous value also preserves the case that matters: if the
+                    # restart never comes back, _EXPECT_OFFLINE_WINDOW expires and the next sweep
+                    # reports a genuine "went offline unexpectedly" from prev_up=True.
+                    recorded = prev_up
+                elif not muted:
                     notifications.notify("server_down", "Server offline",
                                          "%s on %s went offline unexpectedly." % (gs.name, remote.display_name))
             elif prev_up is False and up and not muted:
                 notifications.notify("server_up", "Server back online",
                                      "%s on %s is back online." % (gs.name, remote.display_name))
-            _monitor_state["servers"][gs.id] = up
+            _monitor_state["servers"][gs.id] = recorded
             # Persist what this pass just measured. Nothing else writes gs.status for a
             # running/stopped transition except the three browser-polled endpoints (/api/servers,
             # /api/server/<id>, /api/server/<id>/stats), so with nobody on the dashboard the column
@@ -665,10 +712,19 @@ def _reboot_when_empty_watch(app):
                         continue   # someone's connected, or a server's count is unknown — wait
                     with _rwe_lock:
                         info = _reboot_when_empty.pop(rid, None)
+                    # The pop is the COMMIT POINT. `pending` was snapshotted at the top of the
+                    # tick and the two probes above are tens of seconds of SSH, so an operator can
+                    # cancel (or /reboot?now can fire and dequeue) in that window: the route pops
+                    # the entry, answers "Auto-reboot canceled." and reboot-required then reports
+                    # pending_empty=false. This popped nothing and rebooted anyway, taking every
+                    # game server with it — and the `(info or {})` below logged it under "system",
+                    # so the audit row did not explain it either. Nothing queued, nothing to do.
+                    if info is None:
+                        continue
                     ok, msg = remote_reboot(remote)
                     log_action(None, "reboot_when_empty_fire", target=remote.name,
                                detail="host idle — %s" % msg, success=ok,
-                               actor=(info or {}).get("by") or "system")
+                               actor=info.get("by") or "system")
                     notifications.notify("auto_reboot", "Host auto-rebooted",
                                          "%s was empty of players, so its queued reboot ran." % remote.display_name)
                 except Exception:
@@ -778,18 +834,32 @@ def _autoblock_reconcile(remote):
     return added, removed
 
 
+# A cached capacity is re-read after this long. It used to be kept for the whole process lifetime
+# ("capacity is essentially static"), which is not true of a number this panel's OWN settings form
+# edits: nothing on the write path clears this map, so raising slots from 16 to 32 left the panel
+# answering 16 until it was restarted. That number is not only displayed — it is the `count >= mx`
+# the "Server full" alert fires on, so the panel pushed "full (16/16)" with 16 slots free, latched
+# _server_full_alerted, and was then silent when the server genuinely filled. An hour is still one
+# read per server per hour, and unlike a pop in the write path it also catches an edit made on the
+# host (LinuxGSM config, another panel, an admin in vim).
+_MAX_PLAYERS_TTL = 3600
+
+
 def _server_max_config(gs):
-    """Server capacity from the LinuxGSM config (maxplayers, else slots), cached — capacity is
-    essentially static, so a successful read is kept for the panel's lifetime and reused. Readable
-    even while the server is stopped (it's just a config file). None if unset/unreadable."""
+    """Server capacity from the LinuxGSM config (maxplayers, else slots), cached for
+    _MAX_PLAYERS_TTL seconds — capacity changes rarely, but it does change. Readable even while the
+    server is stopped (it's just a config file). None if unset/unreadable."""
     cached = _max_players_cache.get(gs.id)
+    prev = None
     if cached is not None:
-        return cached
+        prev, read_at = cached
+        if (time.time() - read_at) < _MAX_PLAYERS_TTL:
+            return prev
     mx = None
     try:
         # `or {}`: None is "the config could not be read". Both answers leave mx None here, and
         # the cache below deliberately stores only a real value, so an unreadable read is retried
-        # next time instead of being pinned for the panel's lifetime.
+        # on the next call rather than being written down as an answer.
         vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, ["maxplayers", "slots"]) or {}
         for key in ("maxplayers", "slots"):
             v = (vals.get(key) or "").strip()
@@ -799,8 +869,12 @@ def _server_max_config(gs):
     except Exception:
         _log.debug("max-players: config read failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
     if mx is not None:
-        _max_players_cache[gs.id] = mx   # only cache a real value; retry next time on unknown
-    return mx
+        _max_players_cache[gs.id] = (mx, time.time())   # only cache a real value
+        return mx
+    # The re-read failed (or the key is unset). A failed read is not a measurement: keep serving
+    # the last capacity actually read rather than blanking the UI and disarming the full alert,
+    # and retry on the next call — which is what an uncached server already does.
+    return prev
 
 
 def _server_slots(gs, allow_console=False):

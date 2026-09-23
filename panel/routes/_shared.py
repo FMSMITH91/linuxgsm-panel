@@ -183,6 +183,36 @@ def _server_action_buttons(app, gs):
     ]
     return actions, maintenance, all_commands, supports_update
 
+def _record_backup_outcome(app, sid, gname, ok, reason, action, title):
+    """Audit an unattended backup's outcome, and alert when it failed.
+
+    run_game_backup does not RAISE for a backup that fails: it returns (False, reason, False), and
+    a host that is down reaches it as rc=-1/255 from run_command rather than as an exception on
+    the tailscale and local transports. Both runners below alerted only from their `except`
+    branch, so the failure shape that actually happens in production took no branch at all: a
+    scheduled backup that failed sent no alert, wrote no audit row, and — because the ticker
+    records the clock for a genuine failure so it does not retry hourly — was not retried either.
+    The whole record was an in-memory dict the operator had to go and open a page to see, and they
+    learned of it when they needed a restore.
+
+    So: one audit row per unattended backup (success=ok, so /logs' failures filter shows it), and
+    the alert on every failure rather than only on an exception. Server-scoped, so a muting tag
+    still applies — the Tags UI promises muting keeps a server out of the alert channel."""
+    try:
+        log_action(None, action, target=gname, detail=(reason or "")[:500], success=bool(ok))
+        if ok:
+            return
+        _bk_gs = db.session.get(GameServer, sid)
+        if _bk_gs is not None and notifications.alerts_muted(_bk_gs):
+            return
+        notifications.notify("backup_failed", title,
+                             "The backup of %s failed: %s" % (gname, reason or "no reason given"))
+    except Exception:
+        # Never the thing that breaks the sweep: this is the reporting, and the callers below run
+        # the remaining servers after it.
+        app.logger.warning("could not record %s of %s", action, gname, exc_info=True)
+
+
 def _run_due_game_backups(app):
     """Scheduled per-server backups: back up each installed server whose OWN schedule is due
     (its override, or the global default). Serialised via the same lock as manual backups."""
@@ -219,14 +249,16 @@ def _run_due_game_backups(app):
                     _game_backup_status[sid] = {"running": False, "ok": ok,
                                                 "msg": (reason or ("Backed up" if ok else "failed")),
                                                 "ts": time.time()}
-                except Exception:
+                    # Outside the except on purpose — a failed backup RETURNS here, it does not
+                    # raise, and the clock was just recorded so this server will not be retried
+                    # for a whole interval. See _record_backup_outcome.
+                    _record_backup_outcome(app, sid, gname, ok, reason,
+                                           "scheduled_backup", "Scheduled backup failed")
+                except Exception as e:
                     app.logger.warning("scheduled backup of %s failed", gname, exc_info=True)
-                    # Server-scoped, so a muting tag applies here too — the Tags UI promises
-                    # muting keeps a server out of the alert channel, without qualification.
-                    _bk_gs = db.session.get(GameServer, sid)
-                    if not (_bk_gs is not None and notifications.alerts_muted(_bk_gs)):
-                        notifications.notify("backup_failed", "Scheduled backup failed",
-                                             "The scheduled backup of %s failed." % gname)
+                    _record_backup_outcome(app, sid, gname, False,
+                                           "backup error (%s)" % type(e).__name__,
+                                           "scheduled_backup", "Scheduled backup failed")
     finally:
         _full_backup_lock.release()
 
@@ -268,9 +300,17 @@ def _run_pending_backups(app):
                         _game_backup_status[gs.id] = {"running": False, "ok": ok,
                                                       "msg": (reason or ("Backed up" if ok else "failed")),
                                                       "ts": time.time()}
+                        # This sweep reported NOTHING at all — not even on the exception path.
+                        # A queued backup that fails has also just left the queue, so nothing
+                        # picks it up again until its own schedule comes round.
+                        _record_backup_outcome(app, gs.id, gs.name, ok, reason,
+                                               "queued_backup", "Queued backup failed")
                     # still players on → leave queued, retry next tick
-                except Exception:
+                except Exception as e:
                     app.logger.warning("queued backup of %s failed", gs.name, exc_info=True)
+                    _record_backup_outcome(app, gs.id, gs.name, False,
+                                           "backup error (%s)" % type(e).__name__,
+                                           "queued_backup", "Queued backup failed")
     finally:
         _full_backup_lock.release()
 
@@ -598,12 +638,21 @@ def _end_action_tail(app, server_id, remote, action, rc):
     The final drain is the point of doing this here rather than just deleting the entry: the
     poller ticks every two seconds, so the last — and most interesting — lines of a command that
     has just exited are the ones that would otherwise never be sent."""
-    try:
-        _drain_action_output(app, remote, server_id)
-    except Exception:
-        _log.debug("final action-output drain for server %s failed", server_id, exc_info=True)
-    finally:
-        _action_output.pop(server_id, None)
+    # Only OUR entry. _action_output is keyed by server_id alone and _begin_action_tail overwrites
+    # whatever is there, so two long actions on one server (nothing serialises them — every
+    # maintenance button posts the same route and returns within a second) left this popping the
+    # OTHER action's registration. The shorter one finishing then drained the longer one's file,
+    # deregistered it, and every later poller tick returned immediately: the ten-minute SteamCMD
+    # download the panel had just told the operator to watch the console for streamed nothing, and
+    # its own final drain found no entry, so the last lines were lost too.
+    own = (_action_output.get(server_id) or {}).get("action") == action
+    if own:
+        try:
+            _drain_action_output(app, remote, server_id)
+        except Exception:
+            _log.debug("final action-output drain for server %s failed", server_id, exc_info=True)
+        finally:
+            _action_output.pop(server_id, None)
     if rc == 0:
         _console_push(app, server_id, f"[panel] {action} finished successfully.")
     elif rc is None:

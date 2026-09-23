@@ -74,13 +74,42 @@ def _players_text(app, arg):
         if not players:
             return "%s — no players connected." % gs.name
         names = [str(p.get("name") or "?") for p in players]
-        return "%s — %d player(s):\n%s" % (gs.name, len(names), "\n".join("• " + n for n in names[:40]))
+        # Was `names[:40]` — a fixed slice that dropped the rest with nothing said, and still
+        # overflowed the transport when forty clan-tagged names ran past 1900 characters. The
+        # length cap subsumes it and reports what it left out.
+        return "%s — %d player(s):\n%s" % (gs.name, len(names),
+                                           _join_capped(["• " + n for n in names]))
 
 
 # A chat reply has to fit in one message on BOTH transports — Telegram truncates at 4000 chars,
 # Discord's bot REST send at 1900. Cap the variable-length bodies below that so the label and the
 # last line of a console tail are never the part that gets cut.
 _BOT_BODY_MAX = 1500
+
+
+def _join_capped(rows):
+    """Join `rows` into one body, dropping WHOLE rows off the end once the total passes
+    _BOT_BODY_MAX and saying how many went.
+
+    The cap above was written for all four variable-length builders and applied to exactly one of
+    them (_console_text). The other three built unbounded bodies, and on Discord the end of that
+    is discord_bot_send's bare `text[:1900]` — a hard slice, no ellipsis, mid-word, mid-row. A
+    panel with ~45 servers answered `!servers` with a list that stopped part-way through a name and
+    was missing roughly the last ten, with nothing saying so; an admin scanning it for a server
+    that was down read that as "not installed".
+
+    Truncated FORWARD, unlike _console_text: the newest lines are the point of a console tail,
+    while the head is the useful end of a server/host/player list. The first row is always kept,
+    so a single over-long row still produces a body rather than nothing."""
+    out, used = [], 0
+    for i, row in enumerate(rows):
+        row = str(row)
+        if out and used + len(row) + 1 > _BOT_BODY_MAX:
+            out.append("… and %d more" % (len(rows) - i))
+            break
+        out.append(row)
+        used += len(row) + 1
+    return "\n".join(out)
 
 
 def _console_text(app, arg, lines=20):
@@ -167,7 +196,7 @@ def _hosts_text(app):
             dot = "🟢" if r.is_online else "🔴"
             local = " (this panel)" if r.is_local else ""
             rows.append("%s %s%s — %d server%s" % (dot, r.display_name, local, n_srv, "" if n_srv == 1 else "s"))
-    return "\n".join(rows) if rows else "No hosts configured."
+    return _join_capped(rows) if rows else "No hosts configured."
 
 
 # ── "I'm working on it" wording, shared by both bots ───────────────────────────────────────────
@@ -301,9 +330,26 @@ def _status_text(app):
     with app.app_context():
         installed = GameServer.query.filter_by(installed=True).all()
         online = sum(1 for gs in installed if gs.status == "online")
-        players = sum((_player_counts.get(gs.id) or {}).get("count") or 0
-                      for gs in installed if isinstance((_player_counts.get(gs.id) or {}).get("count"), int))
-    return ("Version %s\nServers: %d online / %d installed\nPlayers online: %d"
+        counts = [(_player_counts.get(gs.id) or {}).get("count") for gs in installed]
+    known = [c for c in counts if isinstance(c, int)]
+    unknown = len(counts) - len(known)
+    # The isinstance filter used to be the ONLY handling of the unknown case: a server the panel
+    # could not ask contributed nothing and the total was then printed as a fact. Both ways in are
+    # ordinary — right after a restart the poller has not completed a pass, so _player_counts is
+    # empty and six busy servers read as "Players online: 0"; steady-state a server whose game
+    # query fails keeps count None (monitoring._refresh_player_counts: "an offline server is 0
+    # players without a query; a running one the panel can't read stays None", so an offline
+    # server is a real zero and is never counted here as unknown). An admin sent /status to check
+    # the box came back and was told nobody was playing by a panel that had not asked.
+    #
+    # Render the unknowns instead of folding them into the total, the way /servers already prints
+    # "?" for the same state six lines below.
+    if unknown:
+        players = "%s (%d server%s couldn't be queried)" % (
+            sum(known) if known else "?", unknown, "" if unknown == 1 else "s")
+    else:
+        players = "%d" % sum(known)
+    return ("Version %s\nServers: %d online / %d installed\nPlayers online: %s"
             % (_panel_ver_label(), online, len(installed), players))
 
 
@@ -316,7 +362,7 @@ def _servers_text(app):
             pc = ("%s/%s" % (count, slot.get("max"))) if isinstance(count, int) else "?"
             rows.append("%s %s — %s (%s players)"
                         % ("🟢" if gs.status == "online" else "⚪", gs.name, gs.status, pc))
-    return "\n".join(rows) if rows else "No servers installed."
+    return _join_capped(rows) if rows else "No servers installed."
 
 
 def _panel_ver_label():

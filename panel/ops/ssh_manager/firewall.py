@@ -131,27 +131,67 @@ def _ssh_ports(server):
     return ports
 
 
-def _panel_web_port(server):
+def _last_parsed_panel_port():
+    """The web port the RUNNING panel bound, for when config.json can no longer be parsed.
+
+    Not a guess. load_config() caches the last parse it managed and, when a later read fails,
+    drops only the cache KEY — the parsed data stays — so that dict is the file the live listener
+    was started from. A config.json that was ALREADY unreadable at boot never populated it, and
+    the boot path then read DEFAULT_CONFIG as well, so the default is the reading in that case
+    rather than a guess. None when even that cannot be reached."""
+    try:
+        from panel.core import config as _cfg
+        return int((_cfg._cfg_cache.get("data") or {}).get("port", _cfg.DEFAULT_CONFIG["port"]))
+    except Exception:
+        _core._log.debug("could not recover the last parsed panel web port", exc_info=True)
+        return None
+
+
+def _panel_web_port(server, ts_running=None):
     """If `server` is the panel's OWN host and the panel UI isn't reachable over Tailscale
-    yet, the public web port is the only way in — return it so its rule can be protected.
+    right now, the public web port is the only way in — return it so its rule can be protected.
     Returns None for a remote, or once Tailscale Serve is actually serving the panel.
 
     Note: a `tailscale0` UFW rule (Tailscale SSH being reachable) is NOT enough to unprotect
-    it — that's only a recovery path, not panel-UI access. The panel UI is only reachable
-    over the tailnet once Serve is configured (tailscale_setup_done), so gate on that."""
+    it — that's only a recovery path, not panel-UI access. The panel UI is only reachable over
+    the tailnet once Serve is configured (tailscale_setup_done) AND the tailnet is actually up,
+    so gate on both.
+
+    `ts_running` is the caller's LIVE tailnet reading. It defaults to None — "nobody established
+    that" — which keeps the port protected, because not knowing is not a route."""
     if not _core.is_local_server(server):
         return None
+    # A config.json that is THERE and unparseable degrades to DEFAULT_CONFIG and says nothing —
+    # the same trap _panel_served_over_tailscale below was written to close. `port` then answered
+    # 5000 about a panel listening on 8443: the live 8443 rule came back is_panel=False,
+    # protected=False AND warn=False (a plain delete × on the only route to the UI), while a
+    # phantom protection was computed for a port with no rule behind it. Answer from what this
+    # process actually parsed, and skip tailscale_setup_done entirely — it reads False out of
+    # those same defaults, which would un-protect the rule a second time in one function.
+    if _config_unreadable():
+        return _last_parsed_panel_port()
     try:
         from panel.core.config import load_config
         cfg = load_config()
     except Exception:
         return None
-    if cfg.get("tailscale_setup_done"):
-        return None  # served via Tailscale; the public port isn't the only way in
+    # `tailscale_setup_done` records that Serve was configured ONCE; it is not a statement about
+    # the tailnet being up now. tailscaled can be stopped or logged out and node keys expire by
+    # default, and nothing writes the flag back — only the panel's own disable button clears it.
+    # So a stale True un-protected the panel host's only remaining way in, and left warn False
+    # too: the UI drew an ordinary red × with no confirmation text. The live reading is the same
+    # one the tailscale0 rule already insists on twenty lines below ("a lingering rule with
+    # Tailscale down is no route at all"); this is that check on the other half of the pair.
+    if cfg.get("tailscale_setup_done") and ts_running:
+        return None  # served via Tailscale, and the tailnet is actually up
     try:
         return int(cfg.get("port", 5000))
     except (TypeError, ValueError):
-        return 5000
+        # Not a fallback port: a non-numeric `port` never reached socketio.run(), so there is no
+        # listening panel for this to be about. Answer with the same default the boot path would
+        # have read rather than a literal that can drift away from it.
+        from panel.core.config import DEFAULT_CONFIG
+        return DEFAULT_CONFIG["port"]
 
 
 def _config_unreadable():
@@ -233,17 +273,24 @@ def _annotate_firewall_protection(server, enabled, groups):
                              and inbound and _ts_iface)
         g["is_access"] = g["is_ssh"] or g["is_tailscale"]
 
-    panel_port = _panel_web_port(server)
-    served_over_ts = _panel_served_over_tailscale(server)
     ssh_count = sum(1 for g in groups if g.get("is_ssh"))
     has_ts_iface = any(g.get("is_tailscale") for g in groups)
 
     # A Tailscale rule only counts as a real fallback when Tailscale is ACTUALLY running —
     # a lingering `allow tailscale0` UFW rule with Tailscale down/uninstalled is no route at
     # all. Query the live state once (only when it could change a decision).
+    #
+    # Hoisted ABOVE _panel_web_port because it decides that too. The panel port was unprotected
+    # by `tailscale_setup_done` alone — a flag saying Serve was configured at some point — so a
+    # stopped tailscaled or an expired node key left the panel's only remaining door with an
+    # ordinary delete ×. On the panel's own host the probe therefore runs even when no access
+    # rule is in the table, because there the web-port rule is the one at risk.
     ts_running = ts_ssh_enabled = False
-    if enabled and any(g.get("is_access") for g in groups):
+    if enabled and (any(g.get("is_access") for g in groups) or _core.is_local_server(server)):
         ts_running, ts_ssh_enabled = hosts._tailscale_conn_state(server)
+
+    panel_port = _panel_web_port(server, ts_running=ts_running)
+    served_over_ts = _panel_served_over_tailscale(server)
     ts_ssh_ok = ts_running and ts_ssh_enabled    # Tailscale SSH → a way in regardless of UFW
     ts_iface_ok = ts_running and has_ts_iface     # regular SSH over the tailnet (needs the iface rule)
 
@@ -321,19 +368,58 @@ def _ufw_is_active(status_out):
     return False
 
 
+# Lines that mean "this was refused for want of privilege", not "the host is down". Anchored to
+# the line START and to the program's own prefix (`sudo:`, ufw's `ERROR:`, the helper's) on
+# purpose: a bare substring over `out` would also be matching rule comments, which operators type
+# on this page — the exact defect the "not installed" test below was fixed for. The prefix is what
+# makes it unforgeable from there: the comment validator is `[A-Za-z0-9 _.-]{0,60}`, which has no
+# colon, so no rule comment can begin a line with `sudo:` or `ERROR:`.
+_SUDO_REFUSED_RE = re.compile(
+    r"(?mi)^\s*(?:"
+    r"sudo:\s*(?:a password is required"
+    r"|a terminal is required to read the password"
+    r"|no tty present"
+    r"|sorry, you must have a tty"
+    r"|\d+ incorrect password attempts?"
+    r"|\S+ is not in the sudoers file)"
+    r"|ERROR:\s*You need to be root to run this script"
+    r"|panel-helper:\s*\S+ failed \(PermissionError\)"
+    r")")
+
+
 def remote_ufw_status(server):
     """Get UFW status and rules from the remote server."""
     # sudo=None keeps this host's own setting, as it always did — this is the one ufw read that
     # never forced escalation. `|| echo NOTINSTALLED` is gone with the shell; a missing tool is
     # rc 127 from both transports, which is what the check below now leads with.
     out, err, rc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15, sudo=None)
-    if rc == 127 or "NOTINSTALLED" in out or "not found" in (out + err) or "not installed" in (out + err):
+    # rc 127 ALONE. The substring tests that stood beside it also read `out` — the whole
+    # `ufw status numbered` listing, every rule's `# comment` included — and those comments are
+    # typed into this very page's "Open a Port" box, where the validator accepts
+    # `[A-Za-z0-9 _.-]{0,60}`: "plex not installed yet" is a legal comment. One of them made the
+    # ENTIRE host read as "UFW is not installed" — empty rules table, "No IPs are blocked", every
+    # delete refused with "there's no rule N to delete" — until someone removed that rule by hand
+    # over SSH. Rule text is operator input, not a protocol signal; rc 127 is the protocol signal,
+    # from the shell on the remote/no-helper paths and from the helper's own `resolve()` failure
+    # on this one. Same rule _ufw_is_active exists to enforce, one line further down.
+    if rc == 127:
         return {"installed": False, "enabled": False, "rules": [], "groups": []}
     # `ufw status` always prints a "Status:" line when it actually runs. If it's missing (or the
     # command failed), the host is unreachable / the command errored — don't claim UFW is installed
     # (that would show a misleading empty-rules "installed" firewall for a down remote).
     if rc != 0 or "Status:" not in out:
-        return {"installed": False, "enabled": False, "rules": [], "groups": [], "unreachable": True}
+        # ...but "unreachable" is a claim about the NETWORK, and not every failure here is one.
+        # This read is `sudo -n <helper> ufw-status` on the panel's own machine; when the sudoers
+        # grant is wrong — a documented failure of this install, where a file sorting after the
+        # narrow grant re-broadens it to password-required — sudo exits 1 with "a password is
+        # required", merge_stderr folds that into `out`, and the single answer sent the operator
+        # to debug connectivity to the host they were already connected to, with nothing anywhere
+        # naming sudo. `unreachable` keeps the transport meaning it has always had; the privilege
+        # refusal is reported as itself.
+        res = {"installed": False, "enabled": False, "rules": [], "groups": [], "unreachable": True}
+        if _SUDO_REFUSED_RE.search((out or "") + (err or "")):
+            res["permission_denied"] = True
+        return res
 
     # _ufw_is_active(), not a substring test — that helper exists in this file precisely so the
     # literal "Status: active" is not re-tested by hand, and a rule COMMENT carrying that text

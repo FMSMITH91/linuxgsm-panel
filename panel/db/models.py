@@ -1229,19 +1229,33 @@ def database_stats():
 
 def _run_maintenance(path):
     """Blocking sqlite maintenance over one short-lived autocommit connection.
-    Checkpoint + ANALYZE are cheap and reliable and run first; VACUUM needs an
-    exclusive lock, so it's best-effort — skipped (not fatal) if the DB is busy.
-    Returns True if VACUUM actually ran."""
+    ANALYZE is cheap and reliable; the checkpoint and VACUUM are not, and NEITHER of
+    them reports failure by raising, so both are read rather than assumed.
+    Returns (wal_trimmed, vacuumed): wal_trimmed is True when the TRUNCATE checkpoint
+    completed, False when SQLite reported it busy, and None when the pragma returned
+    nothing to read. vacuumed is True only if VACUUM actually ran."""
     import sqlite3
     con = sqlite3.connect(path, timeout=20, isolation_level=None)  # autocommit
     try:
-        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")   # merge + trim the WAL
+        # FETCH the row. PRAGMA wal_checkpoint does not raise when it cannot complete — it
+        # returns (busy, log, checkpointed) with busy = 1, which is precisely what TRUNCATE does
+        # while any other connection is still reading. The cursor used to be discarded, so this
+        # function had no idea whether the WAL had been trimmed, and optimize_database asserted
+        # "Checkpointed the WAL and refreshed stats" anyway — in the one branch that is reached
+        # BECAUSE the database was too busy for VACUUM, i.e. the state in which the checkpoint is
+        # most likely to have been refused as well. An operator chasing a growing panel.db was
+        # told the cheap half of the job had succeeded while the wal_size beside it never moved.
+        row = con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()   # merge + trim the WAL
+        try:
+            wal_trimmed = (int(row[0]) == 0) if row else None
+        except (TypeError, ValueError, IndexError):
+            wal_trimmed = None                           # unreadable is not "it worked"
         con.execute("ANALYZE")                           # refresh planner stats
         try:
             con.execute("VACUUM")                        # compact (needs exclusive lock)
-            return True
+            return wal_trimmed, True
         except sqlite3.OperationalError:
-            return False   # busy — checkpoint + ANALYZE already succeeded
+            return wal_trimmed, False   # busy — ANALYZE succeeded; the WAL is whatever it is
     finally:
         con.close()
 
@@ -1273,26 +1287,39 @@ def optimize_database():
     # freeze the whole event loop, and if a greenlet holds a DB lock VACUUM can't get
     # its own. Run the maintenance in a real worker thread via eventlet.tpool so the
     # hub keeps turning and lock holders can release. Direct call under tests.
-    vacuumed = False
+    # No initialiser here on purpose: all three branches below assign both names, and the
+    # `except` returns rather than falling through, so a default would only be dead code that
+    # reads like a fallback. CodeQL flagged it as redefined-before-use and was right.
     try:
         try:
             import eventlet.patcher
             if eventlet.patcher.is_monkey_patched("thread"):
                 from eventlet import tpool
-                vacuumed = tpool.execute(_run_maintenance, path)
+                wal_trimmed, vacuumed = tpool.execute(_run_maintenance, path)
             else:
-                vacuumed = _run_maintenance(path)
+                wal_trimmed, vacuumed = _run_maintenance(path)
         except ImportError:
-            vacuumed = _run_maintenance(path)
+            wal_trimmed, vacuumed = _run_maintenance(path)
     except Exception:
         _log.exception("database optimize failed")
         return (False, "Database optimize failed — see the panel logs.",
                 {"before": before, "after": before, "freed": 0})
 
     after = _size()
-    msg = ("Database optimized." if vacuumed else
-           "Checkpointed the WAL and refreshed stats — VACUUM was deferred because the "
-           "database was busy; run it again in a moment to compact.")
+    # Word this from what was OBSERVED, not from what was attempted. VACUUM rewrites the whole
+    # file and takes the WAL with it, so when it ran there is nothing left to qualify; when it did
+    # not, the checkpoint is a separate question and the answer is the one the pragma gave.
+    if vacuumed:
+        msg = "Database optimized."
+    elif wal_trimmed:
+        msg = ("Checkpointed the WAL and refreshed stats — VACUUM was deferred because the "
+               "database was busy; run it again in a moment to compact.")
+    elif wal_trimmed is False:
+        msg = ("Refreshed stats, but the WAL could not be trimmed and VACUUM was deferred — "
+               "the database was busy. Run it again in a moment.")
+    else:
+        msg = ("Refreshed stats — VACUUM was deferred because the database was busy, and the "
+               "WAL checkpoint returned no result to confirm it ran. Run it again in a moment.")
     return True, msg, {"before": before, "after": after, "freed": max(0, before - after)}
 
 
@@ -1436,6 +1463,41 @@ def _register_sample_pruning():
                                .values(revoked_at=utcnow()))
         except Exception:
             _log.debug("revoking a deleted user's invites failed", exc_info=True)
+
+    # ...and with the GROUP it delegates, for the same reason and the same rowid. Invite.group_ids
+    # is a JSON list of bare Group.id integers frozen at mint time and resolved at redemption
+    # purely by id, and Group.id is the same bare INTEGER PRIMARY KEY — so delete a group and
+    # create another, and the new one takes the freed rowid. Nothing downstream catches it:
+    # redeem_invite's group re-check is guarded by `if _creator is not None and not
+    # _creator.is_superadmin`, and minting is @superadmin_required, so for a creator who is still a
+    # superadmin the check is skipped entirely and user.groups is assigned from whatever rows hold
+    # those ids now. Measured shape: mint an invite granting "Trial" (id 3), delete Trial, create
+    # "Server owners" with MANAGE_USERS/MANAGE_REMOTES/MANAGE_SERVERS — which takes id 3 — and the
+    # link hands out permissions nobody ever granted to it. The non-recycled case is the mirror
+    # image: the group is simply gone and the invitee quietly gets less than the link promised.
+    # Same remedy as the user listener above: stamp revoked_at, which is_usable already honours.
+    @event.listens_for(Group, "after_delete")
+    def _revoke_invites_of_deleted_group(_mapper, connection, target):
+        try:
+            _t = Invite.__table__
+            rows = connection.execute(
+                db.select(_t.c.id, _t.c.group_ids)
+                .where(_t.c.used_at.is_(None))
+                .where(_t.c.revoked_at.is_(None))).fetchall()
+            doomed = []
+            for _iid, _gids in rows:
+                try:
+                    wanted = json.loads(_gids or "[]")
+                    wanted = {int(x) for x in wanted} if isinstance(wanted, list) else set()
+                except (ValueError, TypeError):
+                    continue          # unreadable group_ids: not this listener's call to make
+                if target.id in wanted:
+                    doomed.append(_iid)
+            if doomed:
+                connection.execute(_t.update().where(_t.c.id.in_(doomed))
+                                   .values(revoked_at=utcnow()))
+        except Exception:
+            _log.debug("revoking a deleted group's invites failed", exc_info=True)
 
     # AuditLog.user_id is a FK with no cascade, this app never sets PRAGMA foreign_keys, and the
     # rowid is recycled — so after a delete the column pointed at whoever took the freed id.

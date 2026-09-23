@@ -108,7 +108,15 @@ function loadBackups(){
           ? '<div class="table-responsive mt-1"><table class="table table-sm align-middle mb-0" style="font-size:.8rem;">'
             + '<thead><tr><th>Backup file</th><th>Size</th><th class="text-end">Actions</th></tr></thead>'
             + '<tbody>'+rows+'</tbody></table></div>'
-          : '<div class="small text-secondary mt-1">no backups yet</div>';
+          // "no backups yet" and "the host did not answer" are different facts, and only one of
+          // them means nothing is protecting this server. The endpoint has reported which it is
+          // since #330 (backups_unreadable, from the worker's `return sid, None`) and this page
+          // read the field nowhere: every server on an unreachable host rendered "no backups yet",
+          // while the SAME server's Files & Config card said the opposite. Same wording as the
+          // card (static/js/server_files.js), so the two pages cannot contradict each other.
+          : g.backups_unreadable
+            ? '<div class="small text-warning mt-1">' + escapeHtml("Couldn't read this server's backups — the host didn't answer. This is not the same as there being none.") + '</div>'
+            : '<div class="small text-secondary mt-1">no backups yet</div>';
         var st=g.status, stHtml='';
         if(st){
           if(st.running){ stHtml=' <span class="text-secondary"><i class="bi bi-arrow-repeat"></i> backing up…</span>'; }

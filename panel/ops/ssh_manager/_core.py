@@ -757,8 +757,19 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
     try:
         # errors="replace" like the other two transports — a game server's bytes are not
         # necessarily valid UTF-8, and a strict decode would blank the whole result (see _run_local).
+        #
+        # stdin=DEVNULL, like _POPEN_KW gives both local paths and files.py gives its own ssh argv.
+        # capture_output= redirects stdout and stderr ONLY, and there is no `-n` in ssh_cmd, so the
+        # child ssh inherited the panel's fd 0 and FORWARDED it to the remote session: every
+        # command this transport runs was reading the panel's own stdin. Production survived it
+        # only because the systemd unit sets StandardInput=null. Started from a shell, a tmux pane
+        # or the dev runner — how it is run in development and after a manual restart — the
+        # monitoring poller's ssh calls race to drain the operator's tty, and bytes typed there are
+        # forwarded to the remote instead, where a LinuxGSM prompt happily accepts them as its
+        # answer. A privileged child must never be handed the panel's input; see _POPEN_KW.
         r = subprocess.run(ssh_cmd, capture_output=True, text=True, encoding="utf-8",  # nosec B603  # nosemgrep - argv list, no shell; ssh_cmd is built here from validated parts
-                           errors="replace", timeout=timeout)
+                           errors="replace", timeout=timeout,
+                           stdin=subprocess.DEVNULL)
         return r.stdout.strip(), r.stderr.strip(), r.returncode
     except subprocess.TimeoutExpired:
         return "", "SSH command timed out", -1
@@ -878,6 +889,20 @@ def run_command(server, command, timeout=30, sudo=None):
         # nosec B601 - full_cmd is assembled HERE from _quote()d components; there is no
         # interpolation of caller text into it that has not been through _quote first.
         stdin, stdout, stderr = client.exec_command(full_cmd, timeout=timeout)  # nosec B601  # nosemgrep
+        # EOF on the remote's fd 0, immediately. `stdin` was bound and thrown away: nothing was
+        # ever written to it and it was never closed, so the remote process's stdin was an open SSH
+        # channel that receives nothing and never ends. Any command that READS stdin — a LinuxGSM
+        # action that prompts, run with no `answers` — blocked there forever, and nothing bounded
+        # it: _drain_exec's `settimeout(0.0)` replaces the channel timeout exec_command just set,
+        # and its only exit is exit_status_ready(), so the `timeout=` all 65 call sites pass bounds
+        # this transport not at all. The greenlet, its request, its DB session and the channel then
+        # leaked for the life of the process. This is the stdin=DEVNULL property the local
+        # transport has from _POPEN_KW, and the same shutdown_write files.py:911 already sends —
+        # and it is what the "deliberately no deadline" note above _drain_exec rests on.
+        try:
+            stdin.channel.shutdown_write()
+        except Exception:
+            _log.debug("could not shut down the exec channel's stdin", exc_info=True)
         out_b, err_b, exit_code, truncated = _drain_exec(stdout.channel)
         out = out_b.decode("utf-8", errors="replace")
         err = err_b.decode("utf-8", errors="replace")
@@ -1160,8 +1185,20 @@ def send_console_command(server, user, command, timeout=20, selfname=None):
     that don't expose LinuxGSM's own `send` subcommand. Returns rc 3 with
     NO_SESSION when the server isn't running (no tmux session to send to)."""
     selfname = selfname or user
+    # The same guard run_as_game_user applies, for the same reason it gives at length: the model's
+    # @validates hook fires on ASSIGNMENT and never on a row loaded from the database, so a row
+    # written before the validator existed, restored from a backup, or edited straight in
+    # data/panel.db reaches here unchecked. `user` sits AHEAD of the `bash -c`, so it breaks out at
+    # the shell that runs sudo — as the panel's SSH account, which on a remote host is the identity
+    # the panel escalates with — and `selfname` lands inside the script body via the grep and the
+    # has-session in _tmux_live_socket_sh. `command` was already quoted; these two were not, and
+    # this was the one `sudo -u <account>` builder in this file with no check at all. Returns the
+    # tuple every caller unpacks, never a raise (game.py reads out[2] as the rc).
+    if not (_SAFE_GAME_IDENT.match(user or "") and _SAFE_GAME_IDENT.match(selfname or "")):
+        _log.warning("refusing to send to an unsafe account/script name")
+        return "", "invalid account or script name", 1
     inner = _tmux_live_socket_sh(selfname) + f'tmux -L "$SOCK" send-keys -t {selfname} {_quote(command)} Enter'
-    cmd = f"sudo -u {user} bash -c {_quote(inner)}"
+    cmd = f"sudo -u {_quote(user)} bash -c {_quote(inner)}"
     return run_command(server, cmd, timeout=timeout, sudo=False)
 
 

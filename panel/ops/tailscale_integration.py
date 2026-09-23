@@ -33,6 +33,13 @@ class TailscaleInfo:
     accept_routes: bool = False
     version: str = ""
     serve_config: dict = field(default_factory=dict)
+    # serve_config is {} for BOTH "nothing is published" and "`tailscale serve status` did not
+    # answer", and the page stated the first of those as a fact about the host. The second is
+    # ordinary: when the panel's own account is not the tailscale operator the command exits
+    # non-zero with "Access denied: serve config denied", and /tailscale then said "No Serve routes
+    # configured yet." while the panel was being served over the very mapping it was reporting as
+    # absent. Defaults to False so a reader that never sets it keeps the old, positive wording.
+    serve_unreadable: bool = False
     funnel_enabled: bool = False
     peers: list = field(default_factory=list)  # List of peer dicts
 
@@ -186,7 +193,13 @@ def _get_tailscale_info() -> TailscaleInfo:
 
     # Get Serve status
     serve_out, _, serve_rc = _run_ts(["serve", "status"])
-    if serve_rc == 0 and serve_out:
+    # rc 0 with no output is a READING — `tailscale serve status` prints "No serve config" and
+    # exits 0 when nothing is published — so only a non-zero rc means the panel did not learn
+    # anything. Carried on the info rather than inferred from an empty serve_config, because
+    # emptiness cannot tell the two apart.
+    if serve_rc != 0:
+        info.serve_unreadable = True
+    elif serve_out:
         info.serve_config = _parse_serve_status(serve_out)
         info.funnel_enabled = any(
             srv.get("funnel", False) for srv in info.serve_config.get("services", [info.serve_config])

@@ -707,6 +707,23 @@ window.UPro = (function(){
   }
   function render(d){
     if(!EL) return;
+    // "could not read" before "not attached". The route used to answer a failed read as
+    // installed:false, so this branch offered an Attach form and the words "Not attached" about a
+    // host nobody had managed to ask — and that answer was persisted and served for a day.
+    // `unreachable` belongs in the SAME branch: _unreachable() answers a host that is off or
+    // rebooting with 200 {success:false, unreachable:true} — deliberately, so the UI can say so —
+    // and that object has no `installed` key at all, so it fell through both tests below and
+    // painted "Not attached" plus the attach pitch over a host that may be fully attached. The
+    // .catch() eight lines down already says "Could not read Ubuntu Pro status." for a transport
+    // that throws; this is the same answer arriving as a 200.
+    if(d && (d.unreadable || d.unreachable || d.success === false)){
+      EL.innerHTML = '<div class="d-flex align-items-center gap-2 mb-2">'
+        + '<span class="badge bg-warning text-dark">Unknown</span></div>'
+        + '<p class="small text-secondary mb-2">'
+        + 'Could not read Ubuntu Pro status on this host, so it is unknown.'
+        + '</p>';  // nosemgrep - fixed string, no interpolation
+      return;
+    }
     if(!d || d.installed === false){
       // nosemgrep - static literal; attachForm() is fixed markup too.
       EL.innerHTML = '<div class="d-flex align-items-center gap-2 mb-2"><span class="badge bg-secondary">Not attached</span></div>'
@@ -749,10 +766,16 @@ window.UPro = (function(){
       .then(render).catch(function(){ EL.innerHTML = '<div class="text-danger small">Could not read Ubuntu Pro status.</div>'; });
   }
   // Quietly re-read without blanking the card — keeps the shown value until the new one lands.
+  // "Until the new one lands" means a READING: a payload that says the host could not be read is
+  // not one, and overwriting the persisted status with it trades a known value for an unknown.
+  // load() passes `initial` precisely so the card never blanks; this used to undo that.
   function quietRefresh(){
     if(!EL) return;
     fetch(MOUNT + '/api/remote/' + HOST + '/pro-status').then(function(r){ return r.json(); })
-      .then(render).catch(function(){});
+      .then(function(d){
+        if(d && (d.unreadable || d.unreachable || d.success === false)) return;
+        render(d);
+      }).catch(function(){});
   }
   return {
     // `initial` (the persisted status) paints instantly so the card never blanks to a spinner;

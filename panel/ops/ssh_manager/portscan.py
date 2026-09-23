@@ -41,7 +41,19 @@ def _remote_listening_ports(remote):
         return hit[1]
     # No sudo: listing listening-socket *addresses* (no -p process info) is unprivileged, so this
     # frequent poll doesn't need root — avoids a sudo session per remote on every refresh.
-    out, _, _ = _core.run_command(remote, "ss -H -lntu 2>/dev/null | awk '{print $5}'", timeout=8)
+    #
+    # sudo=False EXPLICITLY. The default is None, and None does not mean "no sudo" — for a remote
+    # both transports read it as "the row's setting" (_core.py:866 and :744, `sudo if sudo is not
+    # None else server.sudo_enabled`), which the Add Remote checkbox ships checked. So the comment
+    # above was true only of the panel's own host, where the local branch coerces with bool(sudo):
+    # every remote was opening a PAM session and a root bash every few seconds to read
+    # world-readable socket state. On a host whose sudoers permits only named commands, or asks
+    # for a password, `sudo bash -c 'ss …'` fails outright, out is "" and the scan reads as
+    # unknown — which resolve_free_port turns into "no ports occupied" and hands a new game server
+    # a port that is already listening, when the unprivileged `ss` would have answered.
+    # Same idiom as the two siblings running this kind of read: _core.py:1258, firewall.py:395.
+    out, _, _ = _core.run_command(remote, "ss -H -lntu 2>/dev/null | awk '{print $5}'", timeout=8,
+                                  sudo=False)
     if not out:
         return None      # nothing came back — a blip, not a host with no listening sockets
     ports = set()

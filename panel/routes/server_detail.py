@@ -42,6 +42,28 @@ def _summarise_action_output(detail):
     return rows[-1][:200] if rows else ""
 
 
+def _console_send_failure(rc, err):
+    """Why a console send failed, in the words of what actually happened.
+
+    send_console_command documents exactly ONE failure code — rc 3 with NO_SESSION, meaning there
+    is no tmux session to send to, i.e. that server isn't running. Every other non-zero rc means
+    something else: -1 for a tailscale/local transport error, 255 for `ssh: connect to host … No
+    route to host`, 1 for a refused `sudo -u`, 127 for a missing tmux. All of them reported "Is the
+    server running?", which sends the operator to look at their game server when the panel could
+    not reach the MACHINE — on a page that is happily showing that server's cached status beside
+    the message. Worse, the answer depended on the transport: the identical click against a
+    paramiko remote raised ConnectionError and produced a different sentence entirely.
+
+    `err` is the command's own stderr (never exception text — that stays in the log, per
+    _log_and_generic), surfaced the way _run_action surfaces a LinuxGSM failure line."""
+    if rc == 3:
+        return "That server isn't running, so there's no console session to send to."
+    lines = [ln.strip() for ln in (err or "").splitlines() if ln.strip()]
+    if lines:
+        return "The panel could not run that on the host: %s" % lines[-1][:200]
+    return "The panel could not run that on the host, and it gave no reason."
+
+
 def _fire_on_done(on_done, ok, detail, action, server_id):
     """Deliver a backgrounded action's outcome to whoever asked to be told.
 
@@ -90,7 +112,14 @@ def register(app):
                       "retry or remove it.", "warning")
                 return redirect(url_for("index"))
             flash("That server is still installing — its console isn't available until it's done.", "info")
-            return redirect(url_for("manage_servers"))
+            # `index`, not `manage_servers`: that route is @permission_required(MANAGE_SERVERS,
+            # INSTALL_SERVER) and its whole body is `return redirect(url_for("index"))` anyway. A
+            # VIEW_CONSOLE-only member sent there failed the gate on a page they never asked for,
+            # so the hop added a red "You do not have permission to do that." beside the blue
+            # notice above — a false statement about their own rights, on the way to the same
+            # destination. Same rule as the failed-install branch just above: pick a target the
+            # viewer can actually enter.
+            return redirect(url_for("index"))
         remote = gs.remote
 
         # Render fast: no SSH on the render path. Live status, console output and
@@ -433,10 +462,19 @@ def register(app):
         # umbrella MODERATE_SERVER / superadmin still grant all three).
         if not can_moderate_action(current_user, action):
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        target = data.get("target", "")
-        steamid = data.get("steamid", "")
-        num = data.get("num", "")
-        scope = (data.get("scope") or "this").strip()
+        # Every one of these through _json_str, like `action` above and `reason` below. They were
+        # read raw off the body, and _json_body guarantees only that the BODY is a dict — it says
+        # nothing about the VALUES. `{"scope": 1}` has no .strip(), and that line sat ABOVE the
+        # try:, so nothing in the handler caught it: a malformed field came back as a JSON 500
+        # "Internal server error" with a traceback in the panel log, reading as a panel fault. The
+        # slices below ((target or steamid or message)[:120] at the audit row, (target or "")[:80]
+        # on the GlobalBan) are the same shape — `TypeError: unhashable type: 'slice'` for a dict
+        # value — caught, but still a 500 for a request that deserves a 400.
+        target = _json_str(data, "target")
+        steamid = _json_str(data, "steamid")
+        num = _json_str(data, "num")
+        scope = _json_str(data, "scope") or "this"
+        message = _json_str(data, "message")
         reason = _json_str(data, "reason")[:200]
         # A Valve ban needs the SteamID up front — to also fan it out and record a global ban. The
         # on-screen list may be gamedig-sourced (no id), so resolve it from the console once here;
@@ -463,10 +501,10 @@ def register(app):
                 except Exception:
                     _log.debug("ensure_persistent_bans failed for %s", gs.name, exc_info=True)
             ok, msg = _sm.moderate(gs.remote, gs.short_name, gs.game_type, action,
-                               target=target, message=data.get("message", ""),
+                               target=target, message=message,
                                selfname=gs.lgsm_name, steamid=steamid, num=num)
             log_action(current_user, "moderate_%s" % action, target=gs.name,
-                       detail=(target or steamid or data.get("message") or "")[:120], success=ok)
+                       detail=(target or steamid or message)[:120], success=ok)
             # Cross-server ban: on a successful ban with scope "all", apply the SAME ban to every
             # OTHER server the user can moderate that acts on this player's identifier — SteamID on
             # all Valve servers, name on all Minecraft servers. Slot-based (idTech3) bans reference a
@@ -485,10 +523,19 @@ def register(app):
                         targets.append(other.id)   # idTech3 slot bans don't port; skipped
 
                 def _ban_other(oid):
+                    """(server name, 'banned' | 'failed') — never a bare bool.
+
+                    It used to collapse every non-success to False, and the tally then counted only
+                    the servers it had succeeded on. Both halves of that are invisible failure:
+                    `except Exception: return False` swallows the ConnectionError a paramiko host
+                    raises, and _sm.moderate returns ok=False for a host reached over Tailscale or
+                    locally, because those transports return ("", "…", -1|255) instead of raising.
+                    A failed read is not a fact — which servers MISSED the ban is the half of this
+                    result an operator has to have."""
                     with app.app_context():
                         o = db.session.get(GameServer, oid)
                         if not o:
-                            return False
+                            return "#%d" % oid, "failed"
                         try:
                             # ...and on every server the fan-out touches, for the same reason.
                             try:
@@ -499,19 +546,41 @@ def register(app):
                             kw = {"steamid": steamid} if origin_eng == "valve" else {"target": target}
                             ok2, _m = _sm.moderate(o.remote, o.short_name, o.game_type, "ban",
                                                selfname=o.lgsm_name, **kw)
-                            return bool(ok2)
+                            return o.short_name, ("banned" if ok2 else "failed")
                         except Exception:
-                            return False
+                            _log.debug("ban fan-out failed for %s", getattr(o, "name", oid),
+                                       exc_info=True)
+                            return getattr(o, "short_name", "?"), "failed"
 
-                applied = 0
+                # Tally BOTH outcomes, and mirror _log_ban_fanout (app.py): the audit row goes in
+                # whatever happened, with success=not missed and the missed names in `detail`, so
+                # /logs shows the difference between "applied everywhere" and "applied where it
+                # could". The row used to be gated on `applied`, so a fan-out that reached nothing
+                # — the second host powered off — wrote no moderate_ban_all row at all and left
+                # `msg` as the origin server's "Done.", while the origin's own row still asserted
+                # success=True. The operator believed the player was banned install-wide.
+                applied, missed = [], []
                 if targets:
                     with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(targets))) as ex:
-                        applied = sum(1 for r in ex.map(_ban_other, targets) if r)
-                if applied:
-                    log_action(current_user, "moderate_ban_all", target="%d server(s)" % applied,
-                               detail=(steamid or target)[:120], success=True)
-                    msg = (msg + " ").strip() + " Also banned on %d other server%s." % (
-                        applied, "" if applied == 1 else "s")
+                        for _nm, _outcome in ex.map(_ban_other, targets):
+                            (applied if _outcome == "banned" else missed).append(_nm)
+                    _bits = ["%d applied" % len(applied)]
+                    if missed:
+                        _bits.append("%d missed (%s)" % (len(missed), ", ".join(sorted(missed)[:6])))
+                    log_action(current_user, "moderate_ban_all",
+                               target="%d of %d server(s)" % (len(applied), len(targets)),
+                               detail=("%s: %s" % ((steamid or target)[:120], "; ".join(_bits)))[:200],
+                               success=not missed)
+                    if missed:
+                        # Counts on BOTH sides, in a form that is grammatical at 0 and at 1. The
+                        # old sentence named only the successes, so a partial fan-out read as a
+                        # complete one and the servers that missed it were never mentioned.
+                        msg = (msg + " ").strip() + (
+                            " Other servers: %d of %d banned, %d could not be reached."
+                            % (len(applied), len(targets), len(missed)))
+                    else:
+                        msg = (msg + " ").strip() + " Also banned on %d other server%s." % (
+                            len(applied), "" if len(applied) == 1 else "s")
                 # Record a superadmin's cross-server SteamID ban on the MANAGED global list, so it
                 # shows on /global-bans and re-applies to servers added later (the fan-out above only
                 # hit servers that exist right now). Managing that list is superadmin-only, so gate it.
@@ -565,7 +634,7 @@ def register(app):
                        detail=("%s: %s" % (cmd.name, final))[:200], success=(rc == 0))
             if rc != 0:
                 return jsonify({"success": False,
-                                "message": "Console (tmux) not accessible. Is the server running?"}), 502
+                                "message": _console_send_failure(rc, err)}), 502
             return jsonify({"success": True, "message": "Ran '%s'." % cmd.name})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("custom command failed")}), 500
@@ -875,10 +944,14 @@ def register(app):
         try:
             # LinuxGSM runs each instance in a tmux session owned by its own user.
             out, err, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10, selfname=gs.lgsm_name)
+            # Logged whatever happened, with success=(rc == 0) — the JSON sibling
+            # (server_files.api_send_command) has always done that, while this branch logged only
+            # on success, so an attempt that failed left no audit row at all.
+            log_action(current_user, "send_command", target=gs.name, detail=cmd_text,
+                       success=(rc == 0))
             if rc != 0:
-                flash("Cannot send command: server console (tmux) not accessible. Is the server running?", "warning")
+                flash(_console_send_failure(rc, err), "warning")
                 return redirect(url_for("server_detail", server_id=server_id))
-            log_action(current_user, "send_command", target=gs.name, detail=cmd_text, success=True)
             flash(f"Command sent: {cmd_text}", "success")
 
         except Exception as e:

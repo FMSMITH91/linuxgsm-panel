@@ -83,11 +83,23 @@ def _compute_pro_status(server):
     """Run `pro status` and shape the result. Returns installed/attached plus the featured
     security services and their enabled/disabled state."""
     import json
-    # `|| true` swallowed a non-zero exit so the caller always got a string; the check below
-    # already treats anything that is not JSON as "not installed", so the rc can just be ignored.
-    out, _, _ = _core.run_privileged(server, "pro-status", [], timeout=25, merge_stderr=False)
-    if not out.strip() or not out.strip().startswith("{"):
+    # Three answers, not two. The comment here used to say "the check below already treats
+    # anything that is not JSON as 'not installed', so the rc can just be ignored" — and that is
+    # the assumption: it makes a read that never happened indistinguishable from a host without
+    # Ubuntu Pro. On the tailscale and local transports a timed-out command does not raise, it
+    # returns ("", "…timed out", -1), so the common failure produced "Ubuntu Pro is not installed"
+    # about a host that was never asked.
+    #
+    # That is not a passing glitch: _pro_status_cached PERSISTS this to the database and serves it
+    # for _PRO_MAX_AGE (a day), across restarts.
+    #
+    # rc 127 / "not found" IS a reading — `pro` is genuinely absent — and keeps the old answer.
+    out, err, rc = _core.run_privileged(server, "pro-status", [], timeout=25, merge_stderr=False)
+    _txt = (out or "") + (err or "")
+    if rc == 127 or "not found" in _txt or "No such file" in _txt:
         return {"installed": False, "attached": False, "services": []}
+    if not out.strip() or not out.strip().startswith("{"):
+        return {"installed": False, "attached": False, "services": [], "unreadable": True}
     try:
         data = json.loads(out)
     except Exception:
@@ -472,8 +484,16 @@ def host_os_slug(server):
     an extra SSH round trip on every install.
     """
     key = _pro_key(server)
-    if key in _OS_SLUG_CACHE:
-        return _OS_SLUG_CACHE[key]
+    # `.get()`, not `key in` — a membership test made a FAILED read a cache HIT. The read below is
+    # guarded (`rc == 0 and 3 < len(cand) < 24`), so a timed-out /etc/os-release leaves slug None —
+    # and this then stored that None in a cache with no TTL, so it was returned for the life of the
+    # process and nothing but deleting the host cleared it. None flows to deps_for_game →
+    # _load_deps_csv → lgsm_data.deps_name(None), which falls back to ubuntu-24.04.csv: a Debian 12
+    # box got Ubuntu's package list, and apt-get install is atomic, so one nonexistent package
+    # aborted the whole batch on every install from then on.
+    cached = _OS_SLUG_CACHE.get(key)
+    if cached:
+        return cached
     slug = None
     try:
         out, _, rc = _core.run_command(
@@ -486,7 +506,8 @@ def host_os_slug(server):
             slug = cand
     except Exception:
         _core._log.debug("could not read the host's os-release", exc_info=True)
-    _OS_SLUG_CACHE[key] = slug
+    if slug:      # never memoise a failed read — a retry must be able to win
+        _OS_SLUG_CACHE[key] = slug
     return slug
 
 
@@ -812,20 +833,33 @@ def remote_reboot_required(server):
     """Whether a host needs a reboot to finish applying updates. Debian/Ubuntu drop
     /var/run/reboot-required after a kernel/libc upgrade, and list the responsible packages in
     /var/run/reboot-required.pkgs. Works for the panel host too (run_command runs it locally when
-    the server is is_local). Returns {'required': bool, 'packages': [str, ...]}. Best-effort."""
+    the server is is_local). Returns {'required': bool, 'packages': [str, ...], 'known': bool}.
+
+    `known` is False when the probe did not answer, and it is not decoration: `required: False`
+    with `known: False` means "we could not look", which is a different fact from "this host does
+    not need a reboot" and must not retract a banner an earlier successful poll put up."""
+    # A NEGATIVE sentinel was the whole bug: `"YES" not in out` is True of "" as well, and the
+    # tailscale and local transports return ("", "SSH command timed out", -1) WITHOUT raising —
+    # so a probe that never ran was published as the definite answer "no reboot needed", and the
+    # kernel-update nag on an unpatched host disappeared. Require one of the probe's OWN two
+    # tokens plus rc 0, the way remote_bootstrap_vps requires EXISTS/NOTEXISTS below.
     try:
-        out, _, _ = _core.run_command(server, "test -f /var/run/reboot-required && echo YES || echo NO", timeout=12)
+        out, _, rc = _core.run_command(server, "test -f /var/run/reboot-required && echo YES || echo NO", timeout=12)
     except Exception:
-        return {"required": False, "packages": []}
-    if "YES" not in (out or ""):
-        return {"required": False, "packages": []}
+        return {"required": False, "packages": [], "known": False}
+    text = out or ""
+    if rc != 0 or not ("YES" in text or "NO" in text):
+        _core._log.debug("reboot-required probe did not answer (rc=%s)", rc)
+        return {"required": False, "packages": [], "known": False}
+    if "YES" not in text:
+        return {"required": False, "packages": [], "known": True}
     packages = []
     try:
         pk, _, _ = _core.run_command(server, "cat /var/run/reboot-required.pkgs 2>/dev/null", timeout=12)
         packages = sorted({p.strip() for p in (pk or "").splitlines() if p.strip()})
     except Exception:
         packages = []
-    return {"required": True, "packages": packages}
+    return {"required": True, "packages": packages, "known": True}
 
 
 _uptime_cache = _core.register_remote_cache({})   # server.id -> (expiry, dict), de-dups viewers
@@ -1483,8 +1517,19 @@ def remote_fail2ban_overview(server):
     out, err, rc = _core.run_privileged(server, "f2b-status", [], timeout=15, merge_stderr=False)
     if rc == 127 or "not found" in (out + err).lower():
         return {"installed": False, "jails": []}
+    # rc 127 above is a reading — fail2ban is genuinely absent. ANY other failure was not: with
+    # no "Jail list:" line the regex simply found nothing, jails came out empty, and this returned
+    # {"installed": True, "jails": []} — which the Security card renders as "fail2ban is installed
+    # and running with no jails configured". A host where the read timed out, or where fail2ban is
+    # installed but STOPPED, is exactly the host an operator needs told about, and it got the
+    # reassuring answer instead.
+    #
+    # `fail2ban-client status` always prints "Jail list:" when it really runs, which is the same
+    # positive-token test firewall.remote_ufw_status makes on "Status:".
     m = re.search(r"Jail list:\s*(.*)", out or "")
-    jails = [j.strip() for j in (m.group(1).split(",") if m else []) if _F2B_JAIL_RE.match(j.strip())]
+    if rc != 0 or not m:
+        return {"installed": True, "jails": [], "unreadable": True}
+    jails = [j.strip() for j in m.group(1).split(",") if _F2B_JAIL_RE.match(j.strip())]
     details = []
     for jail in jails:
         jo, _, jrc = _core.run_privileged(server, "f2b-status-jail", [jail], timeout=15,
@@ -1859,7 +1904,26 @@ def change_ssh_port(server, new_port, bind_addr=""):
                                "name — SSH would answer nowhere. Use one of the host's own "
                                "addresses." % bind_addr)
 
+    # Hoisted above old_ports (it used to be computed at step 2) because on a socket-activated
+    # host it CHANGES WHAT old_ports MEANS. _sshd_current_ports runs `sshd -T`, i.e. sshd_config —
+    # but when ssh.socket holds the listening socket the panel writes its port to the ssh.socket
+    # drop-in and sshd_config's Port is parsed and then ignored. So `sshd -T` still prints `port 22`
+    # however many times the panel has moved the port: moving 2222 -> 2022 read old_ports as ["22"]
+    # (truthy, so the stored-port fallback never fired), wrote a drop-in whose leading bare
+    # `ListenStream=` clears everything before it, and DROPPED 2222 — the port the operator, their
+    # backups and their monitoring were connected on — while reporting "The previous port is still
+    # available as a fallback" about a port that had just stopped listening.
+    socket_mode = _sshd_socket_activated(server)
     old_ports = _sshd_current_ports(server) or [str(int(getattr(server, "port", 22) or 22))]
+    if socket_mode:
+        # There is no read verb for the ssh.socket drop-in, so `sshd -T` is the best the helper can
+        # answer here — but the port the panel is CONNECTED ON is known for certain, and it is the
+        # one whose loss locks everybody out. Union it in unconditionally rather than only as the
+        # empty-read fallback. (Not done on the sshd_config path: there `sshd -T` is authoritative,
+        # and adding a stale stored port would re-open a port the operator had deliberately closed.)
+        _stored = str(int(getattr(server, "port", 22) or 22))
+        if _stored not in old_ports:
+            old_ports = old_ports + [_stored]
     if not bind_addr and old_ports == [str(new_port)]:
         return False, "SSH is already on port %d." % new_port
 
@@ -1874,7 +1938,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
 
     # 2. Snapshot any existing drop-in (so a failed bind change restores the EXACT prior state),
     #    then write the new one. Ubuntu 22.04/24.04 Include /etc/ssh/sshd_config.d/*.conf by default.
-    socket_mode = _sshd_socket_activated(server)
+    #    (socket_mode is read above — old_ports depends on it.)
     _backup_verb, _restore_verb, _discard_verb, _target = (
         ("sshd-socket-backup", "sshd-socket-restore", "sshd-socket-discard", "sshd-socket-dropin")
         if socket_mode else

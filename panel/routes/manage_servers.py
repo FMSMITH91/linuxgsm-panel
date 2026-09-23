@@ -123,10 +123,18 @@ def record_install_failure(row, name, detail="", retryable=True, explained=False
 
 
 def decide_port_adoption(real_port, cur_port, panel_ports, live_ports):
-    """Should the install adopt the port LinuxGSM reports? -> (adopt, taken_by).
+    """Should the install adopt the port LinuxGSM reports? -> (adopt, taken_by, unreadable).
 
-    `taken_by` is a phrase for the user when the answer is no and the reason is worth saying;
-    (False, None) just means there is nothing to adopt.
+    `taken_by` is a phrase for the user naming WHO holds the port, and is set only when a holder
+    was actually identified; (False, None, False) just means there is nothing to adopt.
+    `unreadable` is the separate third answer: the scan that would have told us never answered.
+
+    Three values, not two, because the third answer used to be carried only in `taken_by`'s
+    WORDING — "something the panel could not check for" — and the caller could not tell it apart
+    from a real holder. It then printed "it wants port X, which something the panel could not
+    check for already uses", logged the same, and wrote an `install_complete success=False
+    ... clashes with` audit entry: a statement about the host that the line above had just
+    established it could not make. A read that failed is not a reading.
 
     The panel's own table is only HALF of "is this port free". The other half is what is actually
     listening on the host — a hand-installed server, a container, anything never imported through
@@ -148,16 +156,16 @@ def decide_port_adoption(real_port, cur_port, panel_ports, live_ports):
     `panel_ports` maps port -> name for the OTHER servers on this host.
     """
     if not real_port or real_port == cur_port:
-        return False, None
+        return False, None, False
     other = panel_ports.get(real_port)
     if other:
-        return False, "'%s' on this host" % other
+        return False, "'%s' on this host" % other, False
     live = live_ports()
     if live is None:
-        return False, "something the panel could not check for"
+        return False, None, True
     if real_port in live:
-        return False, "another process on this host"
-    return True, None
+        return False, "another process on this host", False
+    return True, None, False
 
 
 def register(app):
@@ -597,9 +605,31 @@ def register(app):
                                 _log.debug("_run: ignored non-fatal error", exc_info=True)
                         # The real test — did the game files actually install? rc alone lies on a
                         # corrupt/truncated download.
-                        if _looks_installed(app, remote, short_name, lgsm_name) is True:
+                        #
+                        # THREE answers. `is True` was right about the true branch and wrong about
+                        # everything else: it sent None ("couldn't tell") down the same path as
+                        # False ("clearly not there"), and that path is destructive. It wipes
+                        # /home/<n>/lgsm/tmp and re-runs the 30-minute auto-install twice more,
+                        # then writes installed=False / status="failed" with "the download may be
+                        # corrupt or the mirror unreachable" — a diagnosis of a download it never
+                        # managed to look at. _looks_installed answers None exactly when the read
+                        # failed, which on a tailscale host is the ordinary outcome of reading a
+                        # box that has just written 20 GB (the `details` and `du` both time out,
+                        # and the transport returns ("", "…timed out", -1) without raising). A
+                        # fully installed Rust server therefore got ~90 minutes of re-downloading
+                        # and then a failure. 7d1d64f gave the helper its third state and taught
+                        # app.py and api.py to branch on it; this caller was missed.
+                        verdict = _looks_installed(app, remote, short_name, lgsm_name)
+                        if verdict is True:
                             installed_ok = True
                             break
+                        if verdict is None:
+                            # Could not read the host. Touch nothing, blame nothing, and say so —
+                            # retryable, because a retry is exactly what this needs.
+                            _fail("Couldn't check whether the game files installed — the panel "
+                                  "could not read the host. The files may well be there; try "
+                                  "again once the host is answering.",
+                                  last_out[-300:], retryable=True, explained=True); return
                         # Some failures a second download cannot fix: no Steam licence, no crash-dump
                         # slot, a game LinuxGSM does not support on this release. Retrying those
                         # costs up to an hour and ends with the same wrong "may be corrupt" advice.
@@ -772,7 +802,8 @@ def register(app):
                     # 6. Sync to LinuxGSM's real port(s) and open ALL of them (many
                     #    games need game+query+rcon+etc., not just the main port).
                     _p(6, "Detecting ports & opening firewall")
-                    port_conflict = None
+                    port_conflict = None      # (port, who holds it) — OBSERVED, never inferred
+                    port_unchecked = None     # the reported port whose owner could not be read
                     try:
                         info = detect_game_ports(remote, short_name, gs.lgsm_name)
                         real_port = info.get("game_port")
@@ -799,7 +830,7 @@ def register(app):
                                         for e in GameServer.query.filter_by(
                                             remote_id=remote.id).all()
                                         if e.id != gs.id and e.port}
-                        _adopt, _taken_by = decide_port_adoption(
+                        _adopt, _taken_by, _unreadable = decide_port_adoption(
                             real_port, gs.port, _panel_ports,
                             lambda: _remote_listening_ports(remote))
                         if _adopt:
@@ -813,12 +844,36 @@ def register(app):
                             _log.warning("install %s: %s reports port %s, which %s already has "
                                          "— keeping %s and not adopting it",
                                          short_name, lgsm_name, real_port, _taken_by, gs.port)
+                        elif _unreadable:
+                            # Kept apart from the branch above ON PURPOSE. Both keep the panel's
+                            # port, but only one of them SAW anything: this one is a scan that
+                            # never came back (an `ss` that timed out on a host still busy from a
+                            # 25-minute SteamCMD run returns ("", "…timed out", -1) and does not
+                            # raise). Folding it into port_conflict told the operator that
+                            # "something the panel could not check for already uses" the port and
+                            # filed a clash in the audit log — about a port that is very often
+                            # free.
+                            port_unchecked = real_port
+                            _log.warning("install %s: %s reports port %s, but the host's listening "
+                                         "ports could not be read — keeping %s and not adopting it",
+                                         short_name, lgsm_name, real_port, gs.port)
                         # Only open what this server is actually entitled to. On the conflict
                         # branch the panel has just REFUSED the reported port, so opening
                         # info["open_ports"] — which contains it — would hand a hole in the
                         # firewall to the other process, attributed to this server.
+                        #
+                        # The unchecked branch withholds that ONE port for the same reason (the
+                        # panel cannot say it is free, and `ufw allow <port> comment <name>`
+                        # REPLACES a rule differing only by comment) — but not the rest. Query and
+                        # rcon were never in question, and collapsing this into the conflict branch
+                        # left them closed over a clash nobody observed.
                         if port_conflict:
                             to_open = [gs.port] if gs.port else []
+                        elif port_unchecked:
+                            to_open = [p for p in (info.get("open_ports") or [])
+                                       if p != port_unchecked]
+                            if gs.port and gs.port not in to_open:
+                                to_open.append(gs.port)
                         else:
                             to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
                         remote_ufw_allow_game_ports(remote, to_open, short_name)
@@ -902,16 +957,37 @@ def register(app):
                     # This is a background job, so the wait costs the browser nothing; the progress
                     # row already says "Starting server" while it runs.
                     really_up = False
+                    scan_read = False        # did ANY poll actually READ the host's ports?
                     try:
                         for _ in range(30):                   # ~90s
                             time.sleep(3)
                             _sm._invalidate_port_scan(remote.id)  # force a fresh scan each try
-                            if gs.port and gs.port in (_remote_listening_ports(remote)
-                                                       or set()):
+                            live = _remote_listening_ports(remote)
+                            # `or set()` used to stand here, which turned "could not read the
+                            # host" into the measured claim "nothing is listening". The `except`
+                            # below shows the author knew this failure mode — but it only fires
+                            # for paramiko, which RAISES. The tailscale and local transports
+                            # return ("", "…timed out", -1) instead, so a loaded host (it has just
+                            # finished a 20 GB install) took the `or set()` path: 30 unreadable
+                            # polls were reported as 30 readings of an empty socket table, and a
+                            # running server was committed offline and told "it hasn't opened port
+                            # X yet". Three states, the same way decide_port_adoption above does.
+                            if live is None:
+                                continue
+                            scan_read = True
+                            if gs.port and gs.port in live:
                                 really_up = True
                                 break
                     except Exception:
-                        really_up = (s_rc == 0)               # host unreachable — fall back to the exit code
+                        scan_read = False
+                        _log.debug("_run: the listening-port poll failed", exc_info=True)
+                    if not really_up and not scan_read:
+                        # Not one of the 30 polls came back with an answer, so there is nothing
+                        # here about whether the port opened. Fall back to what WAS read — the
+                        # exit code of `start` — exactly as the unreachable-host branch always
+                        # has. This is also what keeps the "it hasn't opened port X yet" sentence
+                        # below honest: it is now only reachable when the host really was read.
+                        really_up = (s_rc == 0)
                     gs.status = "online" if really_up else "offline"
                     db.session.commit()
 
@@ -934,6 +1010,11 @@ def register(app):
                             # server's name, and uninstalling this one would then delete the rule
                             # protecting the other, still-running server.
                             extra = [p for p in extra if p != port_conflict[0]]
+                        elif port_unchecked:
+                            # Same reasoning, weaker evidence: step 6 did not adopt this port
+                            # because it could not read who has it, so it must not be re-opened
+                            # here under this server's name either. The rest of `extra` is fine.
+                            extra = [p for p in extra if p != port_unchecked]
                         if extra:
                             remote_ufw_allow_game_ports(remote, extra, short_name)
                     except Exception:
@@ -951,6 +1032,23 @@ def register(app):
                         log_action(None, "install_complete", target=gs.name, success=False,
                                    detail=("port %s clashes with %s"
                                            % (port_conflict[0], port_conflict[1]))[:300])
+                    elif port_unchecked:
+                        # This used to be the sentence above, with "something the panel could not
+                        # check for" spliced in where the holder's name goes — so the operator was
+                        # sent to free a port off a process that was never seen, and the audit log
+                        # recorded a clash that may never have happened. Say what actually
+                        # happened: the panel could not read the host, so it left its own port
+                        # alone. The install itself succeeded, and the audit entry says so.
+                        _finish(f"{short_name} installed, but {lgsm_name} reports port "
+                                f"{port_unchecked} and the panel could not read this host's "
+                                f"listening ports to check whether it is free. It kept port "
+                                f"{gs.port} and did not open {port_unchecked} in the firewall. "
+                                f"If the server can't be reached, check that port in the game's "
+                                f"own config (Files & Config) and on the host's firewall.",
+                                warn=True)
+                        log_action(None, "install_complete", target=gs.name, success=True,
+                                   detail=("port %s reported but the host's listening ports "
+                                           "could not be read" % port_unchecked)[:300])
                     elif really_up:
                         _finish(f"{short_name} installed and started")
                         log_action(None, "install_complete", target=gs.name, success=True)
@@ -982,7 +1080,20 @@ def register(app):
                 # — no reason, no Retry, and /delete refusing to remove it.
                 app.logger.exception("install job failed")
                 try:
-                    _fail("Install failed unexpectedly", str(e))
+                    # ...and PUSH the context to do it in. `with _app.app_context():` sits INSIDE
+                    # this try, so Python has already run its __exit__ by the time an exception
+                    # reaches here — there is no application context left. _fail's
+                    # `_db.session.get(...)` is scoped by flask-sqlalchemy's _app_ctx_id(), which
+                    # raises "Working outside of application context" with none pushed, and
+                    # _fail's own `except Exception` swallowed that at debug level. So the
+                    # paragraph above described the intent and not the behaviour: the in-memory
+                    # job (a plain dict, no context needed) showed "failed" in the corner widget
+                    # while the ROW stayed status="installing", install_error="" — no reason, no
+                    # Retry, /delete refusing it, and the reconciler answering None for ever
+                    # because step 1 never got as far as creating the account. Every
+                    # ConnectionError paramiko raises out of run_command landed here.
+                    with _app.app_context():
+                        _fail("Install failed unexpectedly", str(e))
                 except Exception:
                     _log.debug("could not record the unexpected install failure", exc_info=True)
                     with _install_lock:
@@ -1016,7 +1127,16 @@ def register(app):
         (a steamuser, say) clears the flag, because that IS a change worth retrying on.
         """
         gs = get_game(server_id)
-        if gs.status not in ("failed",) or gs.installed:
+        # status ALONE, as it used to be `or gs.installed` too. Everything else keys on the
+        # status: the dashboard's failed-install card (`srv.status == 'failed'`, which is what
+        # renders this very button), the console redirect, /delete. `installed` is a second
+        # signal, and it drifted — api.py's install-status poll writes status="failed" without
+        # clearing it, so a row reconciled from "configuring" (installed=True since step 4) landed
+        # in exactly the state this guard rejected: the card said the install failed and offered
+        # Retry, and Retry answered "That server's install didn't fail". The only way out was
+        # Remove, which is the dead end the retry flow exists to remove. The job is re-entrant
+        # either way, so an already-installed row is not a reason to refuse.
+        if gs.status != "failed":
             return _form_err("That server's install didn't fail, so there's nothing to retry.",
                              "manage_servers")
         with _install_lock:

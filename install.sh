@@ -243,11 +243,21 @@ def free(p):
     finally:
         s.close()
 
-port = desired
+port = None
 for cand in range(desired, desired + 51):   # 5000..5050 — plenty of headroom
     if free(cand):
         port = cand
         break
+
+# Exhausting the range is a THIRD answer, and it used to print as the happiest of the other two.
+# `port` started at `desired` — the value the loop's own first iteration had just measured as BUSY
+# — so a host with nothing free in 5000..5050 wrote 5000 into config.json and the caller, which
+# compares only against the input, printed "✓ Port 5000 is free for the panel". The service then
+# could not bind, systemd restarted it every 5s under Restart=always, the health check timed out,
+# and the operator was sent to the logs having been told the port was free. Record nothing and
+# print nothing; the caller turns the empty answer into a die() naming the range.
+if port is None:
+    raise SystemExit(0)
 
 cfg = {}
 try:
@@ -872,8 +882,31 @@ sync_game_user_group() {
         # account to meet here, not an unlikely one.
         case "$(can_already_sudo "${_gu}")" in
             yes)
-                warn "Not enrolling '${_gu}' in ${GAME_GROUP}: it already has sudo rights."
-                warn "  The panel will not be able to manage that account's servers on this host."
+                # "Already has sudo" and "is already enrolled" are two different accounts, and this
+                # branch used to tell both of them the same thing. It runs BEFORE the membership
+                # test below, and only ever `continue`d — so an account enrolled while it had no
+                # sudo and since given some (`usermod -aG sudo steam` for an afternoon's
+                # maintenance, left in place) kept its GAME_GROUP membership on every later run
+                # while being told "Not enrolling" and "The panel will not be able to manage that
+                # account's servers". Both sentences were false for it: it WAS enrolled, the panel
+                # could still become it, and from there `sudo -i` reaches root — the exact
+                # escalation the note above names. The one line that should have made the operator
+                # act read as reassurance instead. So ask the membership question here, and take
+                # the grant back rather than describing a state that is not this host's.
+                if id -nG "${_gu}" 2>/dev/null | tr ' ' '\n' | grep -qx "${GAME_GROUP}"; then
+                    if gpasswd -d "${_gu}" "${GAME_GROUP}" >/dev/null 2>&1; then
+                        warn "Removed '${_gu}' from ${GAME_GROUP}: it can now run sudo, which would"
+                        warn "  make the panel's grant a path to root. The panel can no longer"
+                        warn "  manage that account's servers on this host."
+                    else
+                        warn "'${_gu}' is in ${GAME_GROUP} AND can run sudo — the panel's grant is a"
+                        warn "  path to root, and the membership could not be removed. Run:"
+                        warn "    gpasswd -d ${_gu} ${GAME_GROUP}"
+                    fi
+                else
+                    warn "Not enrolling '${_gu}' in ${GAME_GROUP}: it already has sudo rights."
+                    warn "  The panel will not be able to manage that account's servers on this host."
+                fi
                 continue ;;
             no)
                 : ;;   # a definite no — safe to enrol
@@ -1036,6 +1069,16 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         install_root_tools
         [ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant
         write_terminal_sudo_grant
+        # And the recovery command, which was the one root-owned piece this branch backfilled
+        # everything EXCEPT. /usr/local/bin/linuxgsm-panel-recover lives outside the checkout and
+        # has exactly the staleness this branch exists for — an install that took new code by
+        # another route, or from a version that predates install_recovery_command, has current code
+        # and no recovery command. It is also what this installer prints as THE lockout remedy
+        # ("Forgot the admin password? … sudo linuxgsm-panel-recover"), so the operator who re-runs
+        # the installer to repair a lockout was the one person guaranteed to reach this branch —
+        # and got "Already up to date", exit 0, and `command not found` on the very next line they
+        # were told to type. It self-gates on ORIGIN_TRUSTED, which check_origin_trusted set above.
+        install_recovery_command
         ok "Already up to date (version ${FROM_VER}) — no snapshot taken, panel left running."
         exit 0
     fi
@@ -1317,7 +1360,15 @@ ensure_fail2ban  # brute-force protection for the panel login (jail is configure
 # the root-install path fixes ownership afterward.)
 DESIRED_PORT="$(panel_port)"
 PANEL_PORT="$(choose_and_record_port "${DESIRED_PORT}")"
-if [ "${PANEL_PORT}" != "${DESIRED_PORT}" ]; then
+# Empty = the probe found nothing free in the whole range and recorded nothing. Asked only "is it
+# the port we wanted?", these two branches could say "a different port" or "it is free" and nothing
+# else — so the one outcome where NONE of the three consumers named above would work printed as the
+# green tick. Stop here instead: the operator can free a port or pick one, and either beats a
+# service that restarts every 5s against an address the installer called free.
+if [ -z "${PANEL_PORT}" ]; then
+    die "No free port found in ${DESIRED_PORT}-$((DESIRED_PORT + 50)).
+     Free one of them, or set \"port\" in ${PANEL_DIR}/data/config.json, and re-run."
+elif [ "${PANEL_PORT}" != "${DESIRED_PORT}" ]; then
     warn "Port ${DESIRED_PORT} is already in use — the panel will use port ${PANEL_PORT} instead."
 else
     ok "Port ${PANEL_PORT} is free for the panel"

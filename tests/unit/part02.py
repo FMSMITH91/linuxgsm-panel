@@ -792,6 +792,35 @@ try:
     _fok, _fmsg, _fskip = _sm_game.run_game_backup(None, "gm", "gmodserver", 2, game_type="gmod", port=27015, force=True)
     check("run_game_backup: force=True backs up even with players online",
           _fok is True and _fskip is False and "./gmodserver backup" in " ".join(_cap_busy["cmds"]))
+    # ── the per-server query_type override reaches the guard ──────────────────────────────────
+    # run_game_backup had no query_type parameter at all, so player_count's fourth argument was
+    # always None and the gamedig type came from the 26-entry built-in map ALONE. A game the map
+    # does not cover — Project Zomboid, ARK, Mordhau, Killing Floor — whose operator set the
+    # override precisely so the panel could query it resolved to "", player_count answered None,
+    # and this function's documented rule reads None as empty: the hourly ticker ran LinuxGSM's
+    # `backup`, which STOPS the server, and disconnected everyone on it. Every other player and
+    # version read in game.py threads the override; only the one that decides whether to
+    # disconnect people did not.
+    _cap_busy["cmds"] = []
+    _qok, _qmsg, _qskip = _sm_game.run_game_backup(None, "gm", "zomboidserver", 2,
+                                                   game_type="pzomboid", port=16261,
+                                                   query_type="projectzomboid")
+    _q_joined = " ".join(_cap_busy["cmds"])
+    check("run_game_backup: an unmapped game's query_type override reaches the players guard",
+          "--type projectzomboid" in _q_joined,
+          "gamedig was called as %r" % (_q_joined[:200],))
+    check("run_game_backup: ...so 2 players online skips the backup on that server too",
+          _qok is False and _qskip is True and "./zomboidserver backup" not in _q_joined,
+          str((_qok, _qmsg, _qskip)))
+    # Positive control: the same unmapped game with NO override is still unqueryable, so the
+    # documented "unknown counts as empty" rule still lets it back up on schedule.
+    _cap_busy["cmds"] = []
+    _nok, _nmsg, _nskip = _sm_game.run_game_backup(None, "gm", "zomboidserver", 2,
+                                                   game_type="pzomboid", port=16261)
+    check("run_game_backup: ...while an unmapped game with no override still backs up (unknown)",
+          _nok is True and _nskip is False
+          and "./zomboidserver backup" in " ".join(_cap_busy["cmds"]),
+          str((_nok, _nmsg, _nskip)))
 finally:
     _sm_core.run_command = _orig_run8b
 
@@ -1195,21 +1224,31 @@ eq("bare port keeps comment", by_port["28960"]["comment"], "codserver")
 eq("udp suffix -> UDP", by_port["27015"]["proto_label"], "UDP")
 
 # ── firewall lock-out protection ──────────────────────────────
-def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(False, False)):
+def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(False, False),
+            cfg_unreadable=None):
     # Restores what it replaces. It used to leave sm.is_local_server stubbed for the REST of the
     # suite — every later test saw whatever the last protect() call happened to pass, which is how
     # a stub stops being scaffolding and starts being a silent global. Nothing depended on the leak
     # (this fix changed no other result), but the transport tests further down do read the real
     # is_local_server, and would have been testing the wrong branch.
-    _saved = (_sm_core.is_local_server, _sm_hosts._tailscale_conn_state, config.load_config)
+    _saved = (_sm_core.is_local_server, _sm_hosts._tailscale_conn_state, config.load_config,
+              _sm_firewall._config_unreadable)
     try:
         _sm_core.is_local_server = lambda s: is_local
         _sm_hosts._tailscale_conn_state = lambda s: tailscale   # (running, ssh_enabled) — deterministic
         if cfg is not None:
             config.load_config = lambda: cfg
+            # config.json is consulted TWICE now: through load_config, and RAW by
+            # _config_unreadable. Stubbing only the first would leave these checks reading
+            # whatever data/config.json happens to hold on the machine running the suite — a
+            # corrupt one there would silently change what every case below is testing.
+            _sm_firewall._config_unreadable = lambda: False
+        if cfg_unreadable is not None:
+            _sm_firewall._config_unreadable = lambda: cfg_unreadable
         return _sm_firewall._annotate_firewall_protection(server, enabled, _sm_firewall._group_ufw_rules(_rules(rules)))
     finally:
-        _sm_core.is_local_server, _sm_hosts._tailscale_conn_state, config.load_config = _saved
+        (_sm_core.is_local_server, _sm_hosts._tailscale_conn_state, config.load_config,
+         _sm_firewall._config_unreadable) = _saved
 
 
 # SSH-only: port 22 is the last way in -> protected.
@@ -1313,13 +1352,29 @@ g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywher
 gp = {x["port_num"]: x for x in g}
 check("local + tailscale0 but no Serve: panel 5000 STILL protected", gp["5000"]["protected"])
 
-# Once Tailscale Serve is configured, the panel IS reachable over the tailnet -> the public
-# port is no longer the only way in -> NOT protected.
+# Once Tailscale Serve is configured AND the tailnet is actually up, the panel IS reachable over
+# the tailnet -> the public port is no longer the only way in -> NOT protected.
 g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywhere",
                           "Anywhere ALLOW IN Anywhere on tailscale0"],
-            cfg={"port": 5000, "tailscale_setup_done": True}, is_local=True)
+            cfg={"port": 5000, "tailscale_setup_done": True}, is_local=True,
+            tailscale=(True, True))
 gp = {x["port_num"]: x for x in g}
-check("local + Serve set up: panel 5000 NOT protected", not gp["5000"]["protected"])
+check("local + Serve set up and the tailnet UP: panel 5000 NOT protected",
+      not gp["5000"]["protected"])
+
+# ...but `tailscale_setup_done` on its own is a STORED FLAG, not a statement about the tailnet
+# being up now. tailscaled can be stopped or logged out and node keys expire, and this function
+# already refuses to trust a stale tailscale0 RULE for the same reason. Trusting the flag alone
+# un-protected the only remaining route to the panel UI, so the Firewall page offered a plain
+# delete on it.
+g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywhere",
+                          "Anywhere ALLOW IN Anywhere on tailscale0"],
+            cfg={"port": 5000, "tailscale_setup_done": True}, is_local=True,
+            tailscale=(False, False))
+gp = {x["port_num"]: x for x in g}
+check("local + Serve flag set but the tailnet DOWN: panel 5000 stays protected",
+      gp["5000"]["protected"],
+      "a stale tailscale_setup_done must not un-protect the only way into the panel")
 # ...and with Serve serving the panel, the inbound tailscale0 rule is now what keeps the
 # panel reachable over the tailnet, so it must be PROTECTED (the reported bug: the UI let
 # you delete tailscale0 while the panel was served over it — a lock-out).
@@ -1331,6 +1386,108 @@ g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywher
             cfg={"port": 5000}, is_local=False)
 gp = {x["port_num"]: x for x in g}
 check("remote host: panel 5000 not protected", not gp["5000"]["protected"])
+
+# `tailscale_setup_done` records that Serve was configured ONCE — it is not a statement about the
+# tailnet being up now. tailscaled can be stopped or logged out and node keys expire by default,
+# and nothing writes the flag back. With the flag stale and Tailscale down, the panel host's own
+# web-port rule came back is_panel=False, protected=False AND warn=False: the UI drew an ordinary
+# red × with no confirmation text on the only remaining route into the panel. The same live
+# reading the tailscale0 rule already insists on decides this one now.
+g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywhere",
+                          "Anywhere ALLOW IN Anywhere on tailscale0"],
+            cfg={"port": 5000, "tailscale_setup_done": True}, is_local=True, tailscale=(False, False))
+gp = {x["port_num"]: x for x in g}
+check("panel port: Serve configured but Tailscale DOWN still protects the panel's web port",
+      gp["5000"]["is_panel"] and gp["5000"]["protected"],
+      "is_panel=%s protected=%s" % (gp["5000"]["is_panel"], gp["5000"]["protected"]))
+# Positive control: with the tailnet actually up, Serve really is another way in, so the public
+# port goes back to being closeable — which is the whole point of the flag.
+g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywhere",
+                          "Anywhere ALLOW IN Anywhere on tailscale0"],
+            cfg={"port": 5000, "tailscale_setup_done": True}, is_local=True, tailscale=(True, False))
+gp = {x["port_num"]: x for x in g}
+check("panel port: ...and with Tailscale UP it is closeable again",
+      not gp["5000"]["is_panel"] and not gp["5000"]["protected"],
+      "is_panel=%s protected=%s" % (gp["5000"]["is_panel"], gp["5000"]["protected"]))
+
+# An unreadable config.json degrades to DEFAULT_CONFIG and says nothing, so `port` answered 5000
+# about a panel listening on 8443: the live 8443 rule kept a plain ×, and a phantom protection was
+# computed for a port with no rule behind it. The last config this PROCESS parsed is the file the
+# running listener was started from, so that is the reading to answer with.
+_o_cfg_cache = dict(config._cfg_cache)
+try:
+    config._cfg_cache["data"] = {"port": 8443}
+    g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywhere",
+                              "8443/tcp ALLOW IN Anywhere"], is_local=True, cfg_unreadable=True)
+    gp = {x["port_num"]: x for x in g}
+    check("panel port: a CORRUPT config still protects the port the process actually bound",
+          gp["8443"]["is_panel"] and gp["8443"]["protected"],
+          "is_panel=%s protected=%s" % (gp["8443"]["is_panel"], gp["8443"]["protected"]))
+    check("panel port: ...and does not protect DEFAULT_CONFIG's 5000 in its place",
+          not gp["5000"]["is_panel"] and not gp["5000"]["protected"],
+          "is_panel=%s protected=%s" % (gp["5000"]["is_panel"], gp["5000"]["protected"]))
+    # Positive control: a READABLE config is still answered from the file, not from the cache.
+    config._cfg_cache["data"] = {"port": 8443}
+    g = protect(NS(port=22), ["22/tcp ALLOW IN Anywhere", "5000/tcp ALLOW IN Anywhere",
+                              "8443/tcp ALLOW IN Anywhere"], cfg={"port": 5000}, is_local=True)
+    gp = {x["port_num"]: x for x in g}
+    check("panel port: a readable config still answers from what it says (5000)",
+          gp["5000"]["is_panel"] and not gp["8443"]["is_panel"],
+          "5000=%s 8443=%s" % (gp["5000"]["is_panel"], gp["8443"]["is_panel"]))
+finally:
+    config._cfg_cache.clear()
+    config._cfg_cache.update(_o_cfg_cache)
+
+# ── remote_ufw_status: "not installed" is an EXIT CODE, never text out of the rule table ───────
+# `out` is the whole `ufw status numbered` listing, comments and all, and those comments are typed
+# into this page's own "Open a Port" box (the validator accepts `[A-Za-z0-9 _.-]{0,60}`). One rule
+# commented "plex not installed yet" made the entire host read as "UFW is not installed": empty
+# rules table, "No IPs are blocked", every delete refused with "there's no rule N to delete", and
+# nothing in the UI hinting why — until somebody removed that rule by hand over SSH.
+_o_rp_fw, _o_ts_fw = _sm_core.run_privileged, _sm_hosts._tailscale_conn_state
+try:
+    _sm_hosts._tailscale_conn_state = lambda s: (False, False)   # no live probe from a unit test
+    _UFW_OUT = ("Status: active\n\n"
+                "     To                         Action      From\n"
+                "     --                         ------      ----\n"
+                "[ 1] 22/tcp                     ALLOW IN    Anywhere\n"
+                "[ 2] 32400/tcp                  ALLOW IN    Anywhere   # plex not installed yet\n")
+    _sm_core.run_privileged = lambda *a, **k: (_UFW_OUT, "", 0)
+    _st = _sm_firewall.remote_ufw_status(NS(port=22))
+    check("ufw status: a rule COMMENT saying 'not installed' does not erase the firewall",
+          _st["installed"] is True and _st["enabled"] is True and len(_st["rules"]) == 2,
+          "installed=%s enabled=%s rules=%d" % (_st["installed"], _st["enabled"], len(_st["rules"])))
+    # Positive control: the tool genuinely being absent is rc 127, and still reads as absent —
+    # note the helper's own stderr for that case also contains "not installed".
+    _sm_core.run_privileged = lambda *a, **k: (
+        "panel-helper: the tool for ufw-status is not installed", "", 127)
+    _st = _sm_firewall.remote_ufw_status(NS(port=22))
+    check("ufw status: rc 127 still means UFW is genuinely not installed",
+          _st["installed"] is False and not _st.get("unreachable"), repr(_st))
+    # ...and a transport failure is still 'unreachable' rather than 'there is no firewall here'.
+    _sm_core.run_privileged = lambda *a, **k: ("", "SSH command timed out", -1)
+    _st = _sm_firewall.remote_ufw_status(NS(port=22))
+    check("ufw status: a timed-out read is unreachable, not 'UFW is not installed'",
+          _st.get("unreachable") is True and not _st.get("permission_denied"), repr(_st))
+    # A sudo refusal is not a network fact. On the panel's own host this read is
+    # `sudo -n <helper> ufw-status`, and a broadened sudoers grant makes it exit 1 with "a
+    # password is required" — which was reported as "the panel can't reach this host", about the
+    # machine the page was being served from, with nothing anywhere naming sudo.
+    for _refusal in ("sudo: a password is required",
+                     "sudo: no tty present and no askpass program available",
+                     "ERROR: You need to be root to run this script"):
+        _sm_core.run_privileged = lambda *a, _r=_refusal, **k: (_r, "", 1)
+        _st = _sm_firewall.remote_ufw_status(NS(port=22))
+        check("ufw status: %r is reported as a privilege refusal" % _refusal[:28],
+              _st.get("permission_denied") is True, repr(_st))
+    # ...and an operator's rule comment must not be able to forge that flag either.
+    _sm_core.run_privileged = lambda *a, **k: (
+        "[ 1] 22/tcp ALLOW IN Anywhere # sudo a password is required", "", 1)
+    _st = _sm_firewall.remote_ufw_status(NS(port=22))
+    check("ufw status: a rule comment cannot forge the privilege-refusal flag",
+          _st.get("unreachable") is True and not _st.get("permission_denied"), repr(_st))
+finally:
+    _sm_core.run_privileged, _sm_hosts._tailscale_conn_state = _o_rp_fw, _o_ts_fw
 
 # ── ssh-status: panel_port_open (gates the "Close public panel port" button) ──
 _orig_run = _sm_core.run_command
@@ -1453,6 +1610,65 @@ try:
 finally:
     (SO._git, SO._is_git_checkout, SO._launch_installer) = _sb_saved
     (SO_cfgmod.load_config, SO_cfgmod.update_config) = _sb_cfg_saved
+
+# ── ...and "Update started" has to mean the updater actually STARTED ──────────────────────────
+# The guard above only works if _launch_installer can say no. The non-helper path — the one the
+# live per-user install takes — launched the wrapper with subprocess.Popen, both streams to
+# DEVNULL, and returned success unconditionally. Popen reports only that the child was SPAWNED,
+# and `systemd-run --no-block` schedules the unit and exits within milliseconds with a REAL exit
+# status: a refusal (the unit name still held by a running panel-selfupdate, no user D-Bus
+# session, `sudo systemd-run` denied by a later sudoers.d rule) was completely silent while the
+# panel asserted the whole snapshot → update → health-check → auto-rollback sequence, and
+# panel_switch_branch's rollback never fired. The helper branch 25 lines up already checked rc.
+import tempfile as _li_tmp, shutil as _li_sh   # noqa: E402
+
+# A throwaway PANEL_DIR: _launch_installer writes its wrapper into <PANEL_DIR>/data, and no test
+# writes into a real data dir.
+_li_dir = _li_tmp.mkdtemp(prefix="panel-launch-")
+with open(os.path.join(_li_dir, "install.sh"), "w") as _li_fh:
+    _li_fh.write("#!/bin/bash\n")
+_li_saved = (SO.PANEL_DIR, SO._is_system_service, SO._helper_present,
+             SO.subprocess.Popen, SO.subprocess.run)
+_li_rc, _li_popen = {"rc": 1}, []
+try:
+    SO.PANEL_DIR = _li_dir
+    SO._is_system_service = lambda: False      # the per-user Popen path these checks describe
+    SO._helper_present = lambda: False
+    # Recorded, not raising: a regression back to Popen would otherwise land in the function's own
+    # `except Exception` and answer False, which is what the first check is looking for.
+    SO.subprocess.Popen = lambda *a, **k: (_li_popen.append(a), type("P", (), {})())[1]
+    SO.subprocess.run = lambda *a, **k: type(
+        "R", (), {"returncode": _li_rc["rc"],
+                  "stderr": "Unit panel-selfupdate.service already exists."})()
+    _li_ok, _li_msg = SO._launch_installer()
+    check("self-update: a launcher that REFUSED is not reported as an update that started",
+          _li_ok is False and "Could not start the updater" in _li_msg, str((_li_ok, _li_msg)))
+    check("self-update: ...and the launch is a CHECKED call, not fire-and-forget Popen",
+          not _li_popen, "subprocess.Popen was used, so the exit status is unreadable")
+    _li_rc["rc"] = 0
+    _li_ok2, _li_msg2 = SO._launch_installer()
+    check("self-update: ...while a launcher that started still reports the update (control)",
+          _li_ok2 is True and "Update started" in _li_msg2, str((_li_ok2, _li_msg2)))
+    # The same unconditional-True shape was in panel_repair_database's fallback: `systemd-run
+    # --on-active=2` also returns at once with a real status, so a refusal told the user their
+    # database was being repaired offline while nothing ever ran and the flagged DB stayed flagged.
+    os.makedirs(os.path.join(_li_dir, "venv", "bin"), exist_ok=True)
+    for _li_p in (os.path.join(_li_dir, "venv", "bin", "python3"),
+                  os.path.join(_li_dir, "db_maintenance.py")):
+        with open(_li_p, "w") as _li_fh2:
+            _li_fh2.write("")
+    _li_rc["rc"] = 1
+    _li_rok, _li_rmsg = SO.panel_repair_database()
+    check("db-repair: a repair job that never started is not reported as a repair in progress",
+          _li_rok is False and "Couldn't start the repair job" in _li_rmsg,
+          str((_li_rok, _li_rmsg)))
+    _li_rc["rc"] = 0
+    check("db-repair: ...while one that did start still reports it (control)",
+          SO.panel_repair_database()[0] is True, str(SO.panel_repair_database()))
+finally:
+    (SO.PANEL_DIR, SO._is_system_service, SO._helper_present,
+     SO.subprocess.Popen, SO.subprocess.run) = _li_saved
+    _li_sh.rmtree(_li_dir, ignore_errors=True)
 
 # ── remote_uptime says whether the host actually ANSWERED ────────────────────────────────────
 # Its placeholder dict ("uptime": "unknown", load/disk/memory/cpu all "?") is what comes back when

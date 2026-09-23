@@ -248,6 +248,11 @@
             </div>
             {% endfor %}
           </div>
+          {# Superadmin only, matching the route: add_user answers _form_err for a non-superadmin
+             who ticks this, which throws the whole filled-in form away — the username, the email
+             and the group choices — for a switch it was never going to accept. Same rule as the
+             Invite controls above. #}
+          {% if current_user.is_superadmin %}
           <hr class="border-secondary">
           <div>
             <label class="form-label mb-1">Account type</label>
@@ -261,6 +266,7 @@
               the groups above.
             </div>
           </div>
+          {% endif %}
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -335,6 +341,10 @@
             </div>
             {% endfor %}
           </div>
+          {# Same rule as the Add User modal: only a superadmin may grant the rank, so only a
+             superadmin is offered the switch. manage_users.js guards the lookup for exactly this
+             reason — see the comment there. #}
+          {% if current_user.is_superadmin %}
           <hr class="border-secondary">
           <div class="mb-3">
             <label class="form-label mb-1">Account type</label>
@@ -346,6 +356,7 @@
               Ignores groups entirely — full control of everything. Leave off for a standard user.
             </div>
           </div>
+          {% endif %}
           <hr class="border-secondary">
           <div>
             <label class="form-label mb-1">Status</label>

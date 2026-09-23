@@ -43,7 +43,13 @@ window.openEditUser = function (id) {
     cb.checked = groups.indexOf(parseInt(cb.value, 10)) !== -1;
   });
 
-  document.getElementById('eu-superadmin').checked = !!u.is_superadmin;
+  // The superadmin switch is rendered only for a superadmin — the route refuses the grant from
+  // anyone else, so offering it was a control that threw the whole form away. GUARDED, not
+  // assumed: an unguarded .checked on the absent element throws, and everything after it here —
+  // the active switch, the 2FA reset, the password reset, and the modal's own .show() — would
+  // never run, so the Edit dialog simply would not open for a delegated user admin.
+  var euSuper = document.getElementById('eu-superadmin');
+  if (euSuper) { euSuper.checked = !!u.is_superadmin; }
   document.getElementById('eu-active').checked = !!u.is_active;
 
   // The 2FA reset only applies to someone who has it on, but the control is SHOWN either way:

@@ -141,6 +141,7 @@
   "Your session expired — signing you back in.": "Tu sesión ha caducado: te estamos llevando de nuevo al inicio de sesión.",
   "just now": "ahora mismo",
   "Confirm your password and a current code to turn 2FA off": "Confirma tu contraseña y un código actual para desactivar 2FA",
+  "Confirm your password and the code from your app": "Confirma tu contraseña y el código de tu aplicación",
   "Code or backup code": "Código o código de respaldo",
   "This account doesn't have two-factor authentication enabled, so there's nothing to reset.": "Esta cuenta no tiene la autenticación de dos factores activada, así que no hay nada que restablecer."
 }

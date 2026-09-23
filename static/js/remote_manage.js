@@ -127,6 +127,21 @@ function removeWhitelist(ip){
 function loadSecurityBans(){
   var el=document.getElementById('sec-bans'); if(!el) return;
   fetch(secBase()+'/bans').then(function(r){return r.json();}).then(function(d){
+    // "could not read" comes FIRST, because both answers below are reassuring and only one of
+    // them is a fact. An unreadable host, or one where fail2ban is installed but stopped, used to
+    // render as "No fail2ban jails found." — the same thing a healthy host with nothing configured
+    // shows.
+    // `d.error` belongs in the same branch: both /bans routes answer a raised read with
+    // 200 {installed:false, jails:[], error:"…"}. installed:false there is the route's FALLBACK
+    // SHAPE, not a measurement, so a host whose SSH session was refused was told, on the page
+    // whose job is to say whether it is protected, that it has no brute-force protection
+    // installed. The response was already carrying the word that made it honest.
+    if(d && (d.unreadable || d.error)){
+      el.innerHTML='<div class="small text-danger">'
+        +'Could not read fail2ban on this host, so its jails are unknown.'
+        +'</div>';  // nosemgrep - fixed string, no interpolation
+      return;
+    }
     if(!d.installed){ el.innerHTML='<div class="small text-secondary">fail2ban isn\'t installed on this host.</div>'; return; }
     if(!d.jails||!d.jails.length){ el.innerHTML='<div class="small text-secondary">No fail2ban jails found.</div>'; return; }
     el.innerHTML=d.jails.map(function(j){  // nosemgrep

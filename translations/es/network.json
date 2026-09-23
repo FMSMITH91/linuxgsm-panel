@@ -60,6 +60,7 @@
   "Connection & SSH": "Conexión y SSH",
   "Contains secrets": "Contiene secretos",
   "Contains secrets — keep any downloads safe.": "Contiene secretos: guarda cualquier descarga en lugar seguro.",
+  "Could not reach the panel to open a terminal session. Reload the page to try again.": "No se pudo contactar con el panel para abrir una sesión de terminal. Recarga la página para intentarlo de nuevo.",
   "Could not refresh the firewall rules — the host may be unreachable.": "No se pudieron actualizar las reglas del cortafuegos: puede que el host no esté accesible.",
   "Couldn't reach the update source — it may be private or offline.": "No se pudo contactar con la fuente de actualizaciones: puede ser privada o estar sin conexión.",
   "Currently:": "Actualmente:",
@@ -263,6 +264,7 @@
   "The last check didn't complete — you can still run the upgrade.": "La última comprobación no se completó — aún puedes ejecutar la actualización.",
   "The latest commit didn't pass its checks; holding off on this update.": "El último commit no superó sus comprobaciones; se pospone esta actualización.",
   "The panel can't reach this host right now, so its firewall can't be read. Rules below are unavailable until it's back.": "El panel no puede contactar con este host ahora mismo, así que no se puede leer su cortafuegos. Las reglas de abajo no estarán disponibles hasta que vuelva.",
+  "The panel couldn't read this host's Serve configuration, so whether anything is published over Tailscale Serve is unknown.": "El panel no pudo leer la configuración de Serve de este host, así que se desconoce si hay algo publicado a través de Tailscale Serve.",
   "The panel isn't a git checkout, so it can't self-update.": "El panel no es una copia de git, así que no puede autoactualizarse.",
   "The panel restarts to apply — your Tailscale URL stays the same.": "El panel se reinicia para aplicarlo: tu URL de Tailscale no cambia.",
   "The panel restarts to apply; reconnect on the new address or port.": "El panel se reinicia para aplicarlo; vuelve a conectarte en la nueva dirección o puerto.",
@@ -299,5 +301,7 @@
   "tailnet-only": "solo tailnet",
   "· Auth:": "· Autenticación:",
   "🔒 Private tailnet — only your devices can reach it": "🔒 Tailnet privada: solo tus dispositivos pueden acceder",
-  "Could not read this fail2ban log, so recent offenders are unknown.": "No se pudo leer este registro de fail2ban, por lo que se desconocen los infractores recientes."
+  "Could not read this fail2ban log, so recent offenders are unknown.": "No se pudo leer este registro de fail2ban, por lo que se desconocen los infractores recientes.",
+  "Could not read fail2ban on this host, so its jails are unknown.": "No se pudo leer fail2ban en este host, por lo que se desconocen sus jaulas.",
+  "Could not read Ubuntu Pro status on this host, so it is unknown.": "No se pudo leer el estado de Ubuntu Pro en este host, por lo que se desconoce."
 }

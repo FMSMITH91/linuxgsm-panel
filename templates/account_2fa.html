@@ -19,11 +19,18 @@
       Can't scan? Enter this key manually: <code class="text-info">{{ secret }}</code>
     </div>
 
+    {# The password field is not optional decoration: the route requires it, exactly as the
+       DISABLE form on the account page does. Turning the second factor on installs a factor the
+       account holder does not hold, and only a live session was ever needed for it — so someone
+       sitting in front of an unlocked one could lock the owner out of their own account. #}
     <form method="POST" action="{{ url_for('account_2fa_enable') }}">
-      <label class="form-label">Authentication code</label>
-      <div class="d-flex gap-2" style="max-width: 420px;">
-        <input type="text" name="totp_code" class="form-control" inputmode="numeric"
-               autocomplete="one-time-code" placeholder="000000" maxlength="6" autofocus required>
+      <label class="form-label">Confirm your password and the code from your app</label>
+      <div class="d-flex gap-2 flex-wrap" style="max-width: 560px;">
+        <input type="password" name="password" class="form-control" style="min-width:12rem;flex:1 1 12rem;"
+               autocomplete="current-password" placeholder="Password" required>
+        <input type="text" name="totp_code" class="form-control" style="min-width:9rem;flex:0 1 9rem;"
+               inputmode="numeric" autocomplete="one-time-code" placeholder="000000" maxlength="6"
+               autofocus required>
         <button class="btn btn-primary text-nowrap" type="submit">Confirm &amp; enable</button>
       </div>
     </form>

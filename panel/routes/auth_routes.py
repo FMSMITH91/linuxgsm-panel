@@ -3,6 +3,7 @@
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
 import re
+from contextlib import (suppress)
 from flask import (flash, jsonify, redirect, render_template, request, session, url_for)
 from flask_login import (current_user, login_required, login_user, logout_user)
 from panel.core import (i18n)
@@ -212,6 +213,7 @@ def register(app):
         # session tracking we delete just THIS device's registry row, so its cookie fails the loader
         # while other devices stay signed in. A legacy cookie (no sid) has nothing to delete, so fall
         # back to bumping the epoch (which is global — the old all-devices behaviour).
+        revoked = False
         try:
             sid = getattr(current_user, "_sid", None)
             if sid:
@@ -220,10 +222,38 @@ def register(app):
             else:
                 current_user.auth_epoch = (current_user.auth_epoch or 0) + 1
             db.session.commit()
+            revoked = True
         except Exception:
             db.session.rollback()
+            # Do not report a revocation the rollback undid. This handler's stated purpose is the
+            # server-side invalidation described above, and the except swallowed the one statement
+            # that achieves it: after a rollback the UserSession row is intact and auth_epoch is
+            # unchanged, so every cookie that was valid before the request is still valid after it
+            # — including the captured copy the comment above names as the threat — and the user
+            # was told the opposite, with nothing logged for an operator to notice. Mirrors
+            # load_user's own except (panel/security/auth.py): warning, under suppress(), because
+            # logging must never be what turns a failed sign-out into a 500.
+            with suppress(Exception):
+                _log.warning("logout: could not revoke the session server-side", exc_info=True)
+            # One retry, in a FRESH transaction, on the fallback this handler already uses. The
+            # epoch bump is global, so it revokes this device even when the row delete is what
+            # failed — and a momentary SQLite lock (a concurrent backup, a WAL checkpoint during a
+            # monitor sweep) is exactly the failure it is for.
+            try:
+                _u = current_user._get_current_object()
+                _u.auth_epoch = (_u.auth_epoch or 0) + 1
+                db.session.commit()
+                revoked = True
+            except Exception:
+                db.session.rollback()
+                with suppress(Exception):
+                    _log.warning("logout: the auth_epoch fallback failed too", exc_info=True)
         logout_user()
-        flash("You have been logged out.", "info")
+        if revoked:
+            flash("You have been logged out.", "info")
+        else:
+            flash("Signed out on this device, but the server could not revoke the session — "
+                  "change your password to revoke it everywhere.", "warning")
         return redirect("/login")
 
 
@@ -314,6 +344,24 @@ def register(app):
             flash("Two-factor authentication is already enabled.", "info")
             return redirect(url_for("account"))
         if request.method == "POST":
+            # The account holder's PASSWORD, first. Enrolment used to need nothing but a live
+            # session, while its mirror — /account/2fa/disable — demands the password AND a code
+            # and reasons in its docstring about which direction is more dangerous. Installing a
+            # factor the holder does not have is the dangerous one, and it was the open one:
+            # anyone in front of a signed-in session (an unlocked workstation, a shared browser
+            # profile, a session or remember cookie captured before the password was rotated)
+            # could scan the QR with their own authenticator, submit the code, and own a second
+            # factor whose secret only they hold — with the backup codes rendered once, to them.
+            # The owner's next sign-in then stops at a prompt they cannot answer, and disable
+            # refuses them because it wants that same code or a backup code, so the takeover is
+            # ONE-WAY: recovery needs another superadmin's reset_2fa or shell access to the panel
+            # host. Same idiom and same order as account_2fa_disable and account_change_password.
+            _u = current_user._get_current_object()
+            if not check_password(request.form.get("password", ""), _u.password_hash):
+                flash("Password incorrect — two-factor authentication was not enabled.", "danger")
+                # Back to this page, not /account: the pending secret is still in the session, so
+                # the QR they have already scanned stays valid and they can simply try again.
+                return redirect(url_for("account_2fa_enable"))
             secret = session.get("_2fa_setup_secret", "")
             # verify_totp_STEP, not verify_totp — the third and last route that consumes a live
             # authenticator code, and the one the earlier audit missed. Login refuses a step that

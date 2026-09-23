@@ -235,6 +235,22 @@ check("moderation: cod (idTech3) supports kick + ban + say",
       _sm_game.moderation_caps("cod") == {"kick": True, "ban": True, "say": True})
 check("moderation: a non-console game (rust) supports nothing",
       _sm_game.moderation_caps("rust") == {"kick": False, "ban": False, "say": False})
+# Bedrock is in _ENG_MINECRAFT alongside the Java families, so it inherited ban=True — but BDS has
+# NO ban command (banning there is the allowlist; /ban is Java-only). `tmux send-keys` exits 0 for
+# keystrokes the game answers with "Unknown command", so the panel flashed "Done.", wrote a
+# success audit row, counted the Bedrock servers in "Also banned on N other servers", and the
+# griefer reconnected. Kick and say are real on Bedrock and must stay.
+check("moderation: a Bedrock server offers kick + say but NOT ban (BDS has no ban command)",
+      _sm_game.moderation_caps("mcb") == {"kick": True, "ban": False, "say": True}
+      and _sm_game.moderation_caps("mcbe") == {"kick": True, "ban": False, "say": True},
+      str((_sm_game.moderation_caps("mcb"), _sm_game.moderation_caps("mcbe"))))
+# ...and the API refuses it too, not just the button — the route is reachable directly.
+_mcb_ban = _sm_game.moderate(None, "u", "mcb", "ban", "Steve", selfname="mcbserver")
+_mc_ban_ok = _sm_game.moderation_caps("paper")["ban"]
+check("moderation: ...and moderate() refuses a Bedrock ban rather than reporting 'Done.'",
+      _mcb_ban[0] is False and "allowlist" in _mcb_ban[1],
+      str(_mcb_ban))
+check("moderation: ...while Java Minecraft keeps its ban (positive control)", _mc_ban_ok is True)
 check("engine: gmod->valve, cod->idtech3, mc->minecraft, rust->''",
       (_sm_game.game_engine("gmod"), _sm_game.game_engine("cod"), _sm_game.game_engine("mc"), _sm_game.game_engine("rust"))
       == ("valve", "idtech3", "minecraft", ""))
@@ -298,10 +314,49 @@ check("parser(valve): a second status reply still supersedes the first",
       str([p["name"] for p in _sm_game._parse_valve_status(_HDR + _SPOOF)]))
 
 _MC = "[12:34:56] [Server thread/INFO]: There are 2 of a max of 20 players online: Alice, Bob_1"
+
+
+def _mc_names(text):
+    """Names from a `list` reply, or the result itself when it is not a list.
+
+    These checks read `[p["name"] for p in _parse_minecraft_list(...)]` directly, and the parser
+    returns None for "could not read" — so a regression that made it stop matching raised
+    TypeError out of the check expression and killed the whole suite on a traceback, instead of
+    failing the one check by name. Proven by mutation: two separate breaks to the prefix stripper
+    both ended the run at this line with no check reported."""
+    got = _sm_game._parse_minecraft_list(text)
+    return [p["name"] for p in got] if isinstance(got, list) else got
+
 check("parser(minecraft): names from a prefixed log line",
-      [p["name"] for p in _sm_game._parse_minecraft_list(_MC)] == ["Alice", "Bob_1"])
+      _mc_names(_MC) == ["Alice", "Bob_1"])
 check("parser(minecraft): empty server -> no players",
       _sm_game._parse_minecraft_list("There are 0 of a max of 20 players online: ") == [])
+# ...and a line a PLAYER wrote is not the reply. This kept the LAST line containing the bare
+# substring "online:", and a Minecraft server logs chat to the same stdout the pane captures — so
+# typing "online: Notch" in chat put an attacker-chosen line after the real reply, the panel showed
+# one connected player under the name they picked (hiding everyone actually on, including them),
+# and Kick on that row sent the admin's kick to that name. The two sibling parsers were hardened
+# against this exact class; this one was left on a substring.
+_MC_CHAT = _MC + "\n[12:34:57] [Server thread/INFO]: <Steve> online: Notch"
+check("parser(minecraft): a chat line saying 'online:' does not become the player list",
+      _mc_names(_MC_CHAT) == ["Alice", "Bob_1"],
+      str(_sm_game._parse_minecraft_list(_MC_CHAT)))
+# ...including one that quotes the whole count prefix back: the reply is a line the SERVER wrote,
+# so only its own bracketed log prefix may precede it — a chat line always carries "<name>" first.
+_MC_FORGE = ("[12:34:56] [Server thread/INFO]: <Steve> There are 1 of a max of 20 "
+             "players online: Notch")
+check("parser(minecraft): ...and neither does a chat line that forges the whole count prefix",
+      _sm_game._parse_minecraft_list(_MC_FORGE) is None,
+      str(_sm_game._parse_minecraft_list(_MC_FORGE)))
+# NONE, not [] — a capture with no reply in it is "could not read", and [] is "confirmed empty".
+# With no reply in the window the newest OLDER "online:" line used to win, so the panel reported
+# players who left minutes ago; with no older line at all it reported a confirmed-empty server.
+check("parser(minecraft): a capture with no `list` reply in it is unknown, not empty",
+      _sm_game._parse_minecraft_list("[12:34:56] [Server thread/INFO]: Saving the game\n") is None)
+# Positive control for both: the ordinary reply still parses, and an empty one still reads as [].
+check("parser(minecraft): ...while a real reply is still a list, and a real empty one still []",
+      _mc_names(_MC) == ["Alice", "Bob_1"]
+      and _sm_game._parse_minecraft_list("There are 0 of a max of 20 players online:") == [])
 
 # ── the console capture must JOIN tmux's wrapped lines ────────────────────────────────────────
 # capture-pane returns the pane's VISUAL lines by default: every logical line hard-wrapped at the
@@ -318,11 +373,17 @@ _MC_LONG = ("[14:30:00] [Server thread/INFO]: There are 12 of a max of 20 player
                          "Peggy", "Victor", "Walter", "Yvonne", "Zach"]))
 _MC_WRAPPED = "\n".join(_MC_LONG[_i:_i + 80] for _i in range(0, len(_MC_LONG), 80))
 check("parser(minecraft): a 12-player reply parses when it arrives whole",
-      len(_sm_game._parse_minecraft_list(_MC_LONG)) == 12,
-      str([p["name"] for p in _sm_game._parse_minecraft_list(_MC_LONG)]))
+      _mc_names(_MC_LONG) is not None and len(_mc_names(_MC_LONG)) == 12,
+      str(_mc_names(_MC_LONG)))
 check("parser(minecraft): ...and is mangled if it arrives 80-column wrapped, which is why -J",
-      len(_sm_game._parse_minecraft_list(_MC_WRAPPED)) < 12,
+      len(_sm_game._parse_minecraft_list(_MC_WRAPPED) or []) < 12,
       "wrapping is harmless here, so the -J check below is the only thing holding this up")
+# Specifically: a wrapped reply says "12 players" and carries one truncated name, which is a
+# half-written reply — unknown. It must not read as a one-player server (nor, via the count, as
+# eleven who quietly left), so the count is cross-checked against the names before answering.
+check("parser(minecraft): a reply whose count and names disagree is unknown, not a short list",
+      _sm_game._parse_minecraft_list(_MC_WRAPPED) is None,
+      str(_sm_game._parse_minecraft_list(_MC_WRAPPED)))
 # The fix itself: the capture command has to carry -J.
 _cap_cmds = []
 _o_cap_run = _sm_game._core.run_command
@@ -1022,6 +1083,55 @@ try:
     check("telegram: set_commands rejects a malformed token", N.telegram_set_commands("nope") is False)
 finally:
     N._post = _orig_post
+
+# ── the post-restart update report must not state a git answer git never gave ─────────────────
+# _report_tg_pending_update compared the commit now against the one stored before the update, and
+# everything that was not "they differ" fell into one sentence: "Update finished — no new commit
+# landed (already current, or it rolled back)." Three conditions reach that branch and only one of
+# them supports it. An empty `now` means panel_commit() could not READ the commit — it shells out
+# to `git rev-parse --short HEAD` with a 10 s timeout, and this report fires 8 s after the new
+# process starts, while install.sh's health-check phase is still running and the box is at its
+# busiest. So a clean update was announced to the chat as one that had not landed, naming two
+# causes ("already current, or it rolled back") nothing had established, and the admin's
+# reasonable next move is to send /update again and restart the panel a second time for nothing.
+#
+# load_config/update_config are stubbed, not exercised: the real ones write the live data dir.
+import panel.services.bots.telegram as _tgm  # noqa: E402
+_tg_said = []
+_tg_saved = (_tgm.load_config, _tgm.update_config, _tgm._tg_reply, _tgm.decrypt_secret,
+             _tgm.so.panel_commit)
+try:
+    _tgm.update_config = lambda fn: None
+    _tgm.decrypt_secret = lambda s: s
+    _tgm._tg_reply = lambda tok, chat, text: _tg_said.append(text)
+
+    def _tg_pend(from_commit):
+        return {"notifications": {"telegram": {"token": "tok"}},
+                "telegram_pending_update": {"chat_id": "42", "from_commit": from_commit}}
+
+    def _tg_report(from_commit, now_commit):
+        _tgm.load_config = lambda: _tg_pend(from_commit)
+        _tgm.so.panel_commit = lambda: now_commit
+        _tg_said.clear()
+        _tgm._report_tg_pending_update()
+        return _tg_said[0] if len(_tg_said) == 1 else repr(_tg_said)
+
+    _tg_msg = _tg_report("abc1234", "")
+    check("telegram: a commit git could not read is not reported as 'no new commit landed'",
+          "couldn't read" in _tg_msg and "no new commit landed" not in _tg_msg, _tg_msg)
+    _tg_msg = _tg_report("", "def5678")
+    check("telegram: ...nor when it is the BEFORE commit that was never recorded",
+          "couldn't read" in _tg_msg and "no new commit landed" not in _tg_msg, _tg_msg)
+    # POSITIVE CONTROLS: both answers git DID give still read exactly as they did.
+    _tg_msg = _tg_report("abc1234", "def5678")
+    check("telegram: a commit that really moved is still reported as complete",
+          "Update complete" in _tg_msg and "abc1234" in _tg_msg, _tg_msg)
+    _tg_msg = _tg_report("abc1234", "abc1234")
+    check("telegram: ...and one that really did not still says no new commit landed",
+          "no new commit landed" in _tg_msg, _tg_msg)
+finally:
+    (_tgm.load_config, _tgm.update_config, _tgm._tg_reply, _tgm.decrypt_secret,
+     _tgm.so.panel_commit) = _tg_saved
 
 # ── Discord command bot (Gateway): parsing, SSRF-safe reply path, and the message pump ──
 from panel.services.bots.discord import _parse_dc_command  # noqa: E402

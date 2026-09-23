@@ -67,6 +67,118 @@ import inspect as _rfp_inspect
 check("resolve_free_port: propagates the None rather than inventing a port",
       "if p is None" in _rfp_inspect.getsource(_rfp))
 
+# ── a stopped valve sibling's CONFIGURED aux ports are occupied, and the allocator must know ────
+# _PORT_SPAN has no entry for any valve game, so each Source server reserved exactly ONE port here.
+# Its sourcetv/client ports were covered only by the LIVE listening scan — i.e. only while it was
+# running — so five STOPPED Source servers on 27015-27019 left 27020 looking free and the sixth
+# install was handed the first server's SourceTV port. That install succeeded; the cost landed
+# later, on whoever started the older server and got "Port 27020 was unavailable" from srcds.
+import app as _app_mod                                                             # noqa: E402
+_o_rlp, _o_gsq = _app_mod._remote_listening_ports, _app_mod.GameServer
+_o_lgv, _o_eng = _app_mod.lgsm_get_values, _app_mod.sm_game_engine
+try:
+    class _FakeQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter_by(self, **kw):
+            return self
+
+        def all(self):
+            return list(self._rows)
+
+    _sibs = [NS(game_type="csgo", port=27015 + i, short_name="csgo%d" % i,
+                lgsm_name="csgoserver") for i in range(5)]
+    _app_mod._remote_listening_ports = lambda remote: set()      # every sibling is STOPPED
+    _app_mod.GameServer = NS(query=_FakeQuery(_sibs))
+    _app_mod.sm_game_engine = lambda gt: "valve"
+    _app_mod.lgsm_get_values = lambda remote, user, selfname, keys: {
+        "clientport": "27005", "sourcetvport": str(27020 + int(user[-1]))}
+    _p, _ch = _app_mod.resolve_free_port(None, 1, 27015, "csgo")
+    check("free-port: a STOPPED Source sibling's configured SourceTV port is not handed out",
+          _p == 27025, "picked %s" % _p)
+    # The control that names the cause: with the aux read failing, the blocks are all the
+    # allocator has and it goes back to 27020 — so the check above is measuring the aux ports and
+    # not merely the five game-port blocks.
+    _app_mod.lgsm_get_values = lambda remote, user, selfname, keys: None
+    _p_noaux, _ = _app_mod.resolve_free_port(None, 1, 27015, "csgo")
+    check("free-port: ...and the blocks alone would have picked 27020, which is what this fixes",
+          _p_noaux == 27020, "picked %s" % _p_noaux)
+    # A non-valve host is not made to pay for it, and still allocates exactly as before.
+    _app_mod.sm_game_engine = lambda gt: "goldsrc"
+    _app_mod.lgsm_get_values = lambda *a, **k: (_ for _ in ()).throw(AssertionError("read anyway"))
+    _p_nv, _ = _app_mod.resolve_free_port(None, 1, 27015, "csgo")
+    check("free-port: a non-valve sibling is not read at all, and packs as before",
+          _p_nv == 27020, "picked %s" % _p_nv)
+    # Positive control: a genuinely free desired port still comes back unchanged.
+    _p_free, _ch_free = _app_mod.resolve_free_port(None, 1, 30000, "csgo")
+    check("free-port: a free desired port is still returned unchanged",
+          _p_free == 30000 and _ch_free is False, "%s/%s" % (_p_free, _ch_free))
+finally:
+    _app_mod._remote_listening_ports, _app_mod.GameServer = _o_rlp, _o_gsq
+    _app_mod.lgsm_get_values, _app_mod.sm_game_engine = _o_lgv, _o_eng
+
+# ── _find_game_backup: list_game_backups says None for "could not read the host" ────────────────
+# It returns [] for "this server has no backups", and None for a host it never reached — a
+# distinction PR #330 put there deliberately. Iterating the None raised TypeError, which on the
+# download route (a plain navigation, so the JSON handler re-raises) was Werkzeug's HTML 500 page.
+# Collapsing it into the callers' falsy check would be worse: both answer "Backup not found." and
+# a 404, telling the operator their archive is gone when the panel simply could not ask.
+from werkzeug.exceptions import HTTPException as _FGB_HE                           # noqa: E402
+_o_lgb = _app_mod.list_game_backups
+try:
+    _fgb_gs = NS(remote=None, short_name="gmodserver")
+    _app_mod.list_game_backups = lambda r, u: None
+    try:
+        _app_mod._find_game_backup(_fgb_gs, "b-1")
+        _fgb_exc = None
+    except _FGB_HE as _e:
+        _fgb_exc = _e
+    check("game backup: an unreadable host is refused with its own status, not 'not found'",
+          _fgb_exc is not None and _fgb_exc.code == 503,
+          "raised %r" % (_fgb_exc,))
+    check("game backup: ...and the refusal says the host could not be reached",
+          _fgb_exc is not None and "reach" in (_fgb_exc.description or "").lower(),
+          repr(getattr(_fgb_exc, "description", None))[:80])
+    # Positive controls: a real listing still matches, and an ABSENT backup is still a plain None
+    # (the 404 the routes want) rather than the new refusal.
+    _app_mod.list_game_backups = lambda r, u: [{"name": "b-1", "size": 5}]
+    check("game backup: a real listing still finds the archive",
+          (_app_mod._find_game_backup(_fgb_gs, "b-1") or {}).get("size") == 5)
+    _app_mod.list_game_backups = lambda r, u: []
+    check("game backup: a server with NO backups still answers 'not found', not a 503",
+          _app_mod._find_game_backup(_fgb_gs, "b-1") is None)
+finally:
+    _app_mod.list_game_backups = _o_lgb
+
+# ── the install reconcile ticker must not "reconcile" a row that already says failed ────────────
+# "failed" is IN the ticker's own filter set (deliberately — a repaired install has to be picked
+# up), so unlike the True branch that row comes back every tick. Writing the two values it already
+# holds re-fired a `servers_changed` broadcast to every open dashboard — each one re-requesting
+# /api/servers and restarting its install-progress poller — and logged "reconciled stranded
+# install 'X' -> failed" 144 times a day for a reconciliation that did not happen. Read as
+# structure: the ticker is a closure inside create_app(), so nothing can call it from here.
+import ast as _rt_ast                                                              # noqa: E402
+_rt_src = open(os.path.join(_root, "app.py"), encoding="utf-8").read()
+_rt_fn = next((n for n in _rt_ast.walk(_rt_ast.parse(_rt_src))
+               if isinstance(n, _rt_ast.FunctionDef) and n.name == "install_reconcile_ticker"), None)
+check("reconcile ticker: the function was located for the gate", _rt_fn is not None)
+_rt_false = next((n for n in _rt_ast.walk(_rt_fn or _rt_ast.parse(""))
+                  if isinstance(n, _rt_ast.If) and isinstance(n.test, _rt_ast.Compare)
+                  and getattr(n.test.left, "id", "") == "verdict"
+                  and isinstance(n.test.ops[0], _rt_ast.Is)
+                  and getattr(n.test.comparators[0], "value", None) is False), None)
+check("reconcile ticker: the `verdict is False` branch was located", _rt_false is not None)
+check("reconcile ticker: it commits/broadcasts/logs only when the row actually changed",
+      _rt_false is not None and len(_rt_false.body) == 1
+      and isinstance(_rt_false.body[0], _rt_ast.If),
+      "branch body is %s" % ([type(x).__name__ for x in (_rt_false.body if _rt_false else [])]))
+# ...and the guard must be about the two fields it is going to write, or it guards nothing.
+_rt_guard = _rt_ast.dump(_rt_false.body[0].test) if (
+    _rt_false is not None and _rt_false.body and isinstance(_rt_false.body[0], _rt_ast.If)) else ""
+check("reconcile ticker: ...comparing the values it is about to write",
+      "'installed'" in _rt_guard and "'status'" in _rt_guard, _rt_guard[:120])
+
 # _dedupe_aux_ports: a 2nd Source server must move its SourceTV/client ports off any already taken,
 # so -strictportbind doesn't quit it. Free ports keep their value (and are omitted from the result).
 from app import _dedupe_aux_ports
@@ -255,13 +367,22 @@ finally:
 # only ever covered it. On the test VPS, where the panel really is a system service, the stub
 # caught nothing — and on a host whose sudoers permits the verb, running this suite could have
 # scheduled a REAL panel restart. _run_verb is stubbed as the backstop.
-_orig_popen = _so.subprocess.Popen
+_orig_popen = (_so.subprocess.Popen, _so.subprocess.run)
 _orig_rp_verb, _orig_rp_sys = _so._run_verb, _so._is_system_service
 _cap = {}
 try:
     _so._run_verb = lambda v, a=(), **k: (_cap.update(verb=v, verb_args=list(a)), ("", "", 0))[1]
     _so._is_system_service = lambda: False        # the per-user branch these checks describe
+    # subprocess.RUN, not Popen: the per-user branch is a CHECKED call now. It used to be
+    # Popen with both streams to DEVNULL and the status never collected, so it reported only that
+    # the child was spawned — and `systemd-run --on-active` schedules a timer and exits at once
+    # with a real status, so a refusal (no user D-Bus session, the unit name still held) answered
+    # "Panel restart scheduled." to a user whose port change then silently never took effect.
+    # Popen is stubbed too, so a regression back to it cannot reach the real systemd-run.
     _so.subprocess.Popen = lambda a, **k: (_cap.update(args=a), type("P", (), {})())[1]
+    _so.subprocess.run = lambda a, **k: (_cap.update(args=a),
+                                         type("R", (), {"returncode": _cap.get("rc", 0),
+                                                        "stderr": ""})())[1]
     _ok, _ = _so.restart_panel()
     check("restart_panel: dispatches successfully", _ok is True)
     check("restart_panel: targets the panel service via systemd-run restart",
@@ -269,6 +390,16 @@ try:
           and "linuxgsm-panel.service" in _cap["args"])
     check("restart_panel: delays so the HTTP response can flush",
           any(str(x).startswith("--on-active=") for x in _cap["args"]))
+    # ...and a launcher that REFUSED is not a restart that was scheduled. The status was never
+    # collected, so "Panel restart scheduled." was the answer to a systemd-run that had already
+    # exited non-zero.
+    _cap["rc"] = 1
+    _rp_bad = _so.restart_panel()
+    check("restart_panel: a launcher that exits non-zero is reported as a failure, not scheduled",
+          _rp_bad[0] is False and "Could not restart" in _rp_bad[1], str(_rp_bad))
+    _cap.pop("rc", None)
+    check("restart_panel: ...and rc 0 still schedules it (positive control)",
+          _so.restart_panel()[0] is True)
     # ...and the SYSTEM-unit branch, which is what a real install actually runs. It must go
     # through the verb — never `sudo systemd-run`, since a sudoers rule permitting systemd-run is
     # equivalent to NOPASSWD:ALL — and hand it nothing but the clamped delay.
@@ -284,7 +415,7 @@ try:
     check("restart_panel: ...with the delay clamped to the documented 1..300",
           _cap.get("verb_args") == ["300"], str(_cap.get("verb_args")))
 finally:
-    _so.subprocess.Popen = _orig_popen
+    _so.subprocess.Popen, _so.subprocess.run = _orig_popen
     _so._run_verb, _so._is_system_service = _orig_rp_verb, _orig_rp_sys
 check("integrity: parses modified status",
       {"path": "app.py", "status": "modified"} in _intg["modified"])
@@ -538,6 +669,54 @@ try:
     _sm_hosts._pro_cache_invalidate(_psrv)
     _sm_hosts.pro_status(_psrv)
     check("pro_status: invalidate forces a refetch", _pro_n["n"] == 3)
+
+    # ── "could not read" is a third answer, and it must not be cached ────────────────────────
+    # The rc was discarded here under a comment saying anything non-JSON already reads as "not
+    # installed", so a timed-out read — which on the tailscale and local transports returns
+    # ("", "…timed out", -1) rather than raising — said "Ubuntu Pro is not installed" about a host
+    # nobody had asked. _pro_status_cached then PERSISTS that to the database and serves it for a
+    # day, across restarts.
+    _orig_pro_priv = _sm_core.run_privileged
+    try:
+        _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "SSH command timed out", -1)
+        _sm_hosts._pro_status_cache.clear()
+        _pu = _sm_hosts.pro_status(NS(id=43, host="h"))
+        check("pro_status: a timed-out read is flagged unreadable, not 'not installed'",
+              _pu.get("unreadable") is True, repr(_pu))
+        # ...and `pro` genuinely absent is still a READING, which keeps its old answer.
+        _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "pro: command not found", 127)
+        _sm_hosts._pro_status_cache.clear()
+        _pn = _sm_hosts.pro_status(NS(id=44, host="h"))
+        check("pro_status: a host without the pro client is 'not installed', not unreadable",
+              _pn.get("installed") is False and not _pn.get("unreadable"), repr(_pn))
+
+        # ── fail2ban overview: installed-but-unreadable is not "no jails" ────────────────────
+        # rc 127 was handled; every OTHER failure fell through to {"installed": True,
+        # "jails": []}, which the Security card renders as "No fail2ban jails found." — the same
+        # thing a healthy host with nothing configured shows. A host whose read timed out, or
+        # where fail2ban is installed but STOPPED, is exactly the one to tell the operator about.
+        _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "SSH command timed out", -1)
+        _ov = _sm_hosts.remote_fail2ban_overview(NS(id=45, host="h"))
+        check("f2b overview: an unreadable host is flagged, not reported as having no jails",
+              _ov.get("unreadable") is True and not _ov.get("jails"), repr(_ov))
+        _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "fail2ban-client: not found", 127)
+        _ov = _sm_hosts.remote_fail2ban_overview(NS(id=46, host="h"))
+        check("f2b overview: a host without fail2ban is 'not installed', not unreadable",
+              _ov.get("installed") is False and not _ov.get("unreadable"), repr(_ov))
+
+        def _ov_ok(s, v, a=(), **k):
+            if v == "f2b-status":
+                return ("Status\n|- Number of jail:\t1\n`- Jail list:\tsshd\n", "", 0)
+            return ("Status for the jail: sshd\n   |- Currently banned: 2\n"
+                    "   `- Banned IP list:\t203.0.113.1 203.0.113.2\n", "", 0)
+        _sm_core.run_privileged = _ov_ok
+        _ov = _sm_hosts.remote_fail2ban_overview(NS(id=47, host="h"))
+        check("f2b overview: a real read still parses its jails (positive control)",
+              _ov.get("installed") is True and not _ov.get("unreadable")
+              and [d["jail"] for d in _ov.get("jails") or []] == ["sshd"], repr(_ov)[:160])
+    finally:
+        _sm_core.run_privileged = _orig_pro_priv
+        _sm_hosts._pro_status_cache.clear()
 finally:
     _sm_core.run_command = _orig_pro_run
     _sm_hosts._pro_status_cache.clear()
@@ -826,8 +1005,12 @@ _o_ps_rc = _sm_core.run_command
 try:
     _scan_n = {"n": 0}
 
+    _scan_kw = {}
+
     def _fake_ss(remote, cmd, **k):
         _scan_n["n"] += 1
+        _scan_kw.clear()
+        _scan_kw.update(k)
         return ("127.0.0.1:22\n*:27015\n[::]:27016", "", 0)
 
     _sm_core.run_command = _fake_ss
@@ -837,6 +1020,14 @@ try:
     _app._remote_listening_ports(_rem)   # within TTL → cache hit, no 2nd ssh
     check("portscan: parses listening ports", 27015 in _p1 and 22 in _p1 and 27016 in _p1)
     check("portscan: second concurrent poll served from cache (one ssh)", _scan_n["n"] == 1)
+    # sudo=False EXPLICITLY, not omitted. run_command's default is None, and for a REMOTE both
+    # transports read None as "the row's sudo_enabled setting" — which the Add Remote checkbox
+    # ships checked. So the "no sudo" comment above this call was true only on the panel's own
+    # host, and every remote ran `sudo bash -c 'ss …'` as root every few seconds. Worse, on a host
+    # whose sudoers permits only named commands that fails, the scan reads as unknown, and
+    # resolve_free_port then hands out a port that is already listening.
+    check("portscan: the scan asks for NO sudo explicitly (None means the host's default)",
+          _scan_kw.get("sudo") is False, "kwargs were %r" % (_scan_kw,))
     _sm_portscan._invalidate_port_scan(99)
     _app._remote_listening_ports(_rem)   # invalidated → re-scans
     check("portscan: invalidate forces a fresh scan", _scan_n["n"] == 2)
@@ -1155,6 +1346,47 @@ try:
 finally:
     _tsi.get_tailscale_info = _orig_gti
     _tsi._cache["info"] = None
+
+# ── A Serve status the panel could not READ is not "nothing is configured" ───────────────────
+# serve_config is {} for both, and the page stated the first as a fact: /tailscale rendered the
+# daemon Online and said "No Serve routes configured yet." while the panel was, at that moment,
+# being served over the very mapping it was reporting as absent. The ordinary way in is that the
+# panel's own account is not the tailscale operator, so `tailscale serve status` exits non-zero
+# with "Access denied: serve config denied". rc 0 with no output is a READING — the CLI prints
+# "No serve config" and exits 0 when nothing is published — so only a non-zero rc is unreadable.
+_tsu_json = {"BackendState": "Running", "Self": None, "Peer": None,
+             "TailscaleIPs": ["100.64.0.5"]}
+
+
+def _tsu_stub(serve_rc, serve_out=""):
+    def _run(args, timeout=5):
+        if args and args[0] in ("version", "--version"):
+            return ("1.0", "", 0)
+        if args[:2] == ["serve", "status"]:
+            return (serve_out, "Access denied: serve config denied" if serve_rc else "", serve_rc)
+        return ("", "", 0)
+    _tsi._run_ts = _run
+    _tsi._run_ts_json = lambda args, timeout=5: dict(_tsu_json)
+    _tsi._cache["info"] = None
+    return _tsi._get_tailscale_info()
+
+
+_tsu_denied = _tsu_stub(1)
+check("tailscale: a `serve status` that was refused is flagged unreadable, not reported empty",
+      _tsu_denied.serve_unreadable is True and _tsu_denied.serve_config == {},
+      "serve_unreadable=%r serve_config=%r" % (_tsu_denied.serve_unreadable,
+                                               _tsu_denied.serve_config))
+_tsu_empty = _tsu_stub(0, "No serve config")
+check("tailscale: ...while an rc 0 that found nothing really is nothing (positive control)",
+      _tsu_empty.serve_unreadable is False,
+      "an ordinary host with no Serve mapping now reads as unreadable")
+_tsu_ok = _tsu_stub(0, "https://host.example.ts.net (tailnet only)\n|-- /lgsm proxy http://127.0.0.1:5000")
+check("tailscale: ...and a readable config still parses its routes (positive control)",
+      _tsu_ok.serve_unreadable is False
+      and [r["mount"] for s in _tsu_ok.serve_config.get("services", []) for r in s["routes"]]
+      == ["/lgsm"],
+      "serve_config=%r" % (_tsu_ok.serve_config,))
+_tsi._cache["info"] = None
 _tsi._run_ts, _tsi._run_ts_json = _orig_run_ts, _orig_run_ts_json   # restored, as above
 
 # ── Debug report: repeated tracebacks in the log tail get collapsed ───
@@ -1262,6 +1494,56 @@ check("mods: a real mods list is still 'supported'",
 check("mods: mods_action rejects an unsafe id",
       _sm_files.mods_action(None, "u", "u", "install", "foo; rm -rf x")[1] == "invalid mod id")
 
+# ── a mods list the panel could not READ is not "this game has no mods" ─────────────────────────
+# mods_available/mods_installed discarded the rc, and `supported` is `"unknown command" not in
+# text` — True of "" as well. run_as_game_user does not raise on the local or tailscale transports
+# (it returns ("", "SSH command timed out", -1)), and a refused account/script name returns
+# ("", "invalid account or script name", 1) the same way. Both came back as ([], True): "this game
+# has a mods installer, and it lists nothing" — which the Mods card renders as "This game doesn't
+# have any LinuxGSM-installable mods." about a host that was never asked, while hiding the Remove
+# button for every mod that IS installed. `supported` has no state for "we could not look", so the
+# LIST gets one: None, the same third state as browse_dir's `unreadable`.
+_o_rag = _sm_files._core.run_as_game_user
+try:
+    for _desc, _ans in (("a transport that timed out", ("", "SSH command timed out", -1)),
+                        ("a refused account/script name", ("", "invalid account or script name", 1)),
+                        ("a silent rc 0", ("", "", 0))):
+        _sm_files._core.run_as_game_user = lambda *a, _v=_ans, **k: _v
+        _ma, _ms = _sm_files.mods_available(NS(), "gmodserver", "gmodserver")
+        _mi, _mis = _sm_files.mods_installed(NS(), "gmodserver", "gmodserver")
+        check("mods: %s is not an empty mod list" % _desc,
+              _ma is None and _mi is None,
+              "available=%r installed=%r — the card claims the game has no mods" % (_ma, _mi))
+
+    # POSITIVE CONTROL 1: a real mods-install listing still parses, and still says supported.
+    _sm_files._core.run_as_game_user = lambda *a, **k: (_mods_avail_out, "", 0)
+    _ma_ok, _ms_ok = _sm_files.mods_available(NS(), "gmodserver", "gmodserver")
+    check("mods: ...while a real listing still comes back as a list",
+          [m["id"] for m in (_ma_ok or [])] == ["metamodsource", "sourcemod", "wiremod-extras"]
+          and _ms_ok is True, "%r %r" % (_ma_ok, _ms_ok))
+    _sm_files._core.run_as_game_user = lambda *a, **k: (_mods_inst_out, "", 0)
+    _mi_ok, _mis_ok = _sm_files.mods_installed(NS(), "gmodserver", "gmodserver")
+    check("mods: ...and a real installed list too",
+          [m["id"] for m in (_mi_ok or [])] == ["metamodsource"] and _mis_ok is True,
+          "%r %r" % (_mi_ok, _mis_ok))
+    # POSITIVE CONTROL 2: a game that genuinely HAS the installer and genuinely has nothing
+    # installed must still read as an EMPTY list, not as unreadable — that is the distinction the
+    # whole change exists to keep, in the other direction.
+    _sm_files._core.run_as_game_user = lambda *a, **k: (
+        "Garry's Mod Removing Mods\n=================================\n"
+        "Failure! No installed mods or addons were found\n", "", 0)
+    _mi_none, _mis_none = _sm_files.mods_installed(NS(), "gmodserver", "gmodserver")
+    check("mods: a game with the installer and nothing installed is [] , not unreadable",
+          _mi_none == [] and _mis_none is True, "%r %r" % (_mi_none, _mis_none))
+    # POSITIVE CONTROL 3: the no-installer game (cod) still answers supported=False with a list,
+    # so server_files.js can go on hiding the whole card for it.
+    _sm_files._core.run_as_game_user = lambda *a, **k: (_cod_out, "", 0)
+    _ma_cod, _ms_cod = _sm_files.mods_available(NS(), "codserver", "codserver")
+    check("mods: a game with no installer still answers supported=False, not unreadable",
+          _ma_cod == [] and _ms_cod is False, "%r %r" % (_ma_cod, _ms_cod))
+finally:
+    _sm_files._core.run_as_game_user = _o_rag
+
 # game-backup download/delete validate the file name before touching any path (server=None here,
 # so a passing regex would crash — proving rejection happens purely on the name)
 check("game backup: delete rejects an unsafe name",
@@ -1331,6 +1613,61 @@ with _so_stub(_run=lambda c, **k: ("NOPASS", "", 0), _run_verb=lambda *a, **k: (
           SO.os_run_update()[0] is False and SO.server_reboot()[0] is False)
 SO._HELPER_STATE["present"] = None
 
+# 14. Both background workers threw the privileged verb's (out, err, rc) away. _run_verb NEVER
+#     raises — it turns a refusal into a non-zero rc (a general sudoers.d rule sorting after the
+#     panel's narrow NOPASSWD grant answers "a password is required" and exits 1; a helper too old
+#     to know the verb exits 2) or into ("", "...", -1). So there was no exception, no log line and
+#     no user-visible trace at all: the route had already answered "Server will reboot in 5
+#     seconds." and written a server_reboot audit row, the host never rebooted, and an admin
+#     rebooting to clear a hung game server believed it had. Same for apt-upgrade on a held dpkg
+#     lock or a full disk. These threads outlive the HTTP response, so the log is where the outcome
+#     has to land — and every other _run_verb call site in the module already checks rc.
+import threading as _rbt  # noqa: E402
+
+_rb_errs = []
+_rb_reboot_done, _rb_apt_done = _rbt.Event(), _rbt.Event()
+
+
+def _rb_err(msg, *a, **k):
+    line = (str(msg) % a) if a else str(msg)
+    _rb_errs.append(line)
+    if line.startswith("reboot verb failed"):
+        _rb_reboot_done.set()
+    if line.startswith("apt-upgrade verb failed"):
+        _rb_apt_done.set()
+
+
+_rb_saved_log = SO._log.error
+SO._HELPER_STATE["present"] = True
+SO._SUDO_PROBE.update(at=0.0, ok=None)
+try:
+    SO._log.error = _rb_err
+    with _so_stub(_run=lambda c, **k: ("NOPASS", "", 0),
+                  _run_verb=lambda v, a=(), **k: ("", "sudo: a password is required", 1)):
+        SO.server_reboot(0)
+        # wait(), not sleep(): the worker is a daemon thread, and a leaked one lands in a later
+        # check's stub. The event is set from inside the log call, which is its last statement.
+        check("system_ops: a REFUSED reboot verb is logged, not dropped on the floor",
+              _rb_reboot_done.wait(5) and any("reboot verb failed" in e for e in _rb_errs),
+              str(_rb_errs))
+        SO.os_run_update()
+        check("system_ops: ...and so is a refused apt-upgrade",
+              _rb_apt_done.wait(5) and any("apt-upgrade verb failed" in e for e in _rb_errs),
+              str(_rb_errs))
+    # Positive control: the verb still RUNS, and a successful one logs nothing.
+    _rb_errs.clear()
+    _rb_calls, _rb_ran = [], _rbt.Event()
+    with _so_stub(_run=lambda c, **k: ("NOPASS", "", 0),
+                  _run_verb=lambda v, a=(), **k: (_rb_calls.append(v), _rb_ran.set(),
+                                                  ("", "", 0))[2]):
+        SO.server_reboot(0)
+        check("system_ops: ...while a reboot that the host ACCEPTS still runs and logs nothing",
+              _rb_ran.wait(5) and "reboot" in _rb_calls and not _rb_errs,
+              str((_rb_calls, _rb_errs)))
+finally:
+    SO._log.error = _rb_saved_log
+    SO._HELPER_STATE["present"] = None
+
 # 4. Tailscale on Linux is USERSPACE WireGuard over a TUN, so `ip link show type wireguard` can
 #    never list tailscale0 — the first detection method matched any name containing "wg" and could
 #    only ever return something that is not Tailscale. On a host running both, "Allow Tailscale"
@@ -1352,6 +1689,41 @@ with _so_stub(_run=lambda c, **k: (("tailscale-wg0\n", "", 0) if "type wireguard
                                    else ("", "", 0))):
     check("system_ops: ...but a wireguard device that says tailscale still counts",
           SO.detect_tailscale_interface() == "tailscale-wg0")
+
+
+# ...and the SAME bug through method 3, which was never fixed with the other three: it probed
+# ["tailscale0", "wg0", "utun"] by name and returned whichever `ip link show` found first. On a
+# host with plain WireGuard and no tailscale0 — Tailscale absent, or tailscaled running
+# --tun=userspace-networking (the container default), where there IS no TUN device — that is wg0,
+# and method 4 (`tailscale status --json`, which answers correctly) never ran. The button then
+# ran `ufw allow in on wg0`: all inbound on an unrelated VPN, reported as success naming it, and
+# get_server_status's substring match on that name read "Tailscale allowed" from any wg0 rule.
+def _ts_wg_only(cmd, **k):
+    if "type wireguard" in cmd or "grep -i tailscale" in cmd:
+        return "", "", 0                      # methods 1 and 2 find no tailscale-named device
+    if "ip link show wg0" in cmd or "ip link show utun" in cmd:
+        return "12: wg0: <POINTOPOINT,UP>\nFOUND\n", "", 0     # plain WireGuard IS up
+    return "", "", 0                          # tailscale0 absent; status --json says nothing
+
+
+with _so_stub(_run=_ts_wg_only):
+    _ts_wg = SO.detect_tailscale_interface()
+    check("system_ops: a host with wg0 and no tailscale0 gets NO interface, not wg0",
+          _ts_wg is None,
+          "answered %r — 'Allow Tailscale' would open all inbound on an unrelated VPN" % (_ts_wg,))
+
+
+# Positive control: method 3 must still find Tailscale's own device when it is the one present.
+def _ts_tailscale0(cmd, **k):
+    if "ip link show tailscale0" in cmd:
+        return "9: tailscale0: <POINTOPOINT,UP>\nFOUND\n", "", 0
+    return "", "", 0
+
+
+with _so_stub(_run=_ts_tailscale0):
+    check("system_ops: ...while method 3 still finds tailscale0 when that is what is there",
+          SO.detect_tailscale_interface() == "tailscale0",
+          str(SO.detect_tailscale_interface()))
 
 # 10. The verb runs `ufw status verbose`, which has no rule numbers — only `ufw status numbered`
 #     does. The branch tested parts[0][0].isdecimal() and called the result "num", so a port landed
@@ -1473,9 +1845,71 @@ try:
           _sm_hosts.host_os_slug(NS(id=7, host="h7")) == "debian-12"
           and _sm_hosts._OS_SLUG_CACHE.get(7) == "debian-12",
           str(_sm_hosts._OS_SLUG_CACHE))
+    # A FAILED read must not be memoised. The lookup was `if key in _OS_SLUG_CACHE` — a MEMBERSHIP
+    # test — and the store was unconditional, so a timed-out /etc/os-release put None into a cache
+    # with no TTL and every later call got that None back as a HIT for the life of the process.
+    # None reaches lgsm_data.deps_name, whose default is ubuntu-24.04.csv, so a Debian 12 box got
+    # Ubuntu's package list on every install from then on — and apt-get install is atomic, so one
+    # nonexistent package aborts the whole batch. Nothing but deleting the host cleared it.
+    _sm_hosts._OS_SLUG_CACHE.clear()
+    _sm_hosts._core.run_command = lambda *a, **k: ("", "SSH command timed out", -1)
+    _slug_fail = _sm_hosts.host_os_slug(NS(id=8, host="h8"))
+    check("hosts: a failed os-release read answers None, not a distro",
+          _slug_fail is None, repr(_slug_fail))
+    check("hosts: ...and is NOT memoised, so the host is not pinned to Ubuntu's package list",
+          8 not in _sm_hosts._OS_SLUG_CACHE,
+          "cached %r — every later install loads the wrong distro's deps"
+          % (_sm_hosts._OS_SLUG_CACHE,))
+    # POSITIVE CONTROL: the very next read wins, and IS cached.
+    _sm_hosts._core.run_command = lambda *a, **k: ("debian-12", "", 0)
+    check("hosts: ...so one round trip later the real answer lands and is cached",
+          _sm_hosts.host_os_slug(NS(id=8, host="h8")) == "debian-12"
+          and _sm_hosts._OS_SLUG_CACHE.get(8) == "debian-12",
+          str(_sm_hosts._OS_SLUG_CACHE))
 finally:
     _sm_hosts._core.run_command = _o_rc_h
     _sm_hosts._OS_SLUG_CACHE.clear()
+
+# ── "this host does not need a reboot" must be something the panel ESTABLISHED ──────────────────
+# The probe was the negative-sentinel shape: `test -f /var/run/reboot-required && echo YES || echo
+# NO` with the rc discarded, then `if "YES" not in out`. `"YES" not in ""` is True, and the
+# tailscale and local transports return ("", "SSH command timed out", -1) WITHOUT raising — so a
+# poll that never ran was published as the definite answer "no reboot needed", and nags.js removed
+# the banner from a host running an unpatched kernel. Require rc 0 AND one of the probe's own two
+# tokens, the way remote_bootstrap_vps requires EXISTS/NOTEXISTS.
+_o_rb = _sm_hosts._core.run_command
+try:
+    for _desc, _ans in (("a transport that timed out", ("", "SSH command timed out", -1)),
+                        ("a silent rc 0", ("", "", 0)),
+                        ("output with neither token", ("bash: test: command not found", "", 127))):
+        _sm_hosts._core.run_command = lambda *a, _v=_ans, **k: _v
+        _rb = _sm_hosts.remote_reboot_required(NS(id=91, host="203.0.113.91"))
+        check("reboot nag: %s answers 'we could not look', not 'no reboot needed'" % _desc,
+              _rb.get("known") is False and _rb.get("required") is False,
+              "%r — a failed poll retracts the banner a real one put up" % (_rb,))
+
+    def _rb_boom(*a, **k):
+        raise OSError("paramiko says no")
+    _sm_hosts._core.run_command = _rb_boom
+    _rb_x = _sm_hosts.remote_reboot_required(NS(id=91, host="203.0.113.91"))
+    check("reboot nag: ...and so does the raising (paramiko) transport",
+          _rb_x.get("known") is False and _rb_x.get("required") is False, repr(_rb_x))
+
+    # POSITIVE CONTROL 1: a host that really does NOT need a reboot is still a known answer, or
+    # the banner would never clear again.
+    _sm_hosts._core.run_command = lambda *a, **k: ("NO", "", 0)
+    _rb_no = _sm_hosts.remote_reboot_required(NS(id=92, host="203.0.113.92"))
+    check("reboot nag: a real 'NO' is a known answer, so the banner still clears",
+          _rb_no == {"required": False, "packages": [], "known": True}, repr(_rb_no))
+    # POSITIVE CONTROL 2: a host that does need one still reports it, with its packages.
+    _rb_seq = ["YES", "linux-image-generic\nlibc6\n"]
+    _sm_hosts._core.run_command = lambda *a, **k: (_rb_seq.pop(0) if _rb_seq else "", "", 0)
+    _rb_yes = _sm_hosts.remote_reboot_required(NS(id=93, host="203.0.113.93"))
+    check("reboot nag: a real 'YES' still raises the banner, with its packages",
+          _rb_yes.get("required") is True and _rb_yes.get("known") is True
+          and _rb_yes.get("packages") == ["libc6", "linux-image-generic"], repr(_rb_yes))
+finally:
+    _sm_hosts._core.run_command = _o_rb
 
 # forget_remote_caches has to reach TUPLE keys, or registering a cache keyed (remote id, port)
 # would look like protection while doing nothing.
@@ -1517,6 +1951,11 @@ class _FakeChan:
     window can never exit), so a stub that implements only recv_exit_status no longer models the
     object under test. These tests assert what reaches the WIRE, so the streams are empty — but
     they have to be empty in the shape the real channel would present."""
+    eofs = 0            # how many times run_command sent EOF on the exec channel's stdin
+
+    def shutdown_write(self):
+        type(self).eofs += 1
+
     def settimeout(self, _t):
         return None
 
@@ -1558,6 +1997,23 @@ try:
     _sm_core.run_command(_LgsmSrv(), "whoami", sudo=False)
     check("_core: ...and sudo=False is still unescalated",
           _wire == ["whoami"], str(_wire))
+    # ── the exec channel's stdin must reach EOF, or a command that READS it never ends ─────────
+    # `stdin` was bound and thrown away: never written to, never closed, shutdown_write never
+    # called. The remote's fd 0 was an open SSH channel that receives nothing and never EOFs, so a
+    # LinuxGSM action that prompts (validate, run with no `answers`) blocked there forever — and
+    # nothing bounded it, because _drain_exec's settimeout(0.0) replaces the channel timeout
+    # exec_command just set and its only exit is exit_status_ready(). The greenlet, its request,
+    # its DB session and the channel leaked for the life of the process. files.py:911 already
+    # sends this EOF, and _POPEN_KW gives the local transport the same property with stdin=DEVNULL.
+    _eofs_before = _FakeChan.eofs
+    _sm_core.run_command(_LgsmSrv(), "id", sudo=False)
+    check("_core: the paramiko transport sends EOF on the exec channel's stdin",
+          _FakeChan.eofs == _eofs_before + 1,
+          "shutdown_write() was not called — a remote command that reads stdin hangs forever, "
+          "and the timeout= every call site passes bounds nothing on this transport")
+    check("_core: ...and the command still reaches the wire and returns its rc (positive control)",
+          _wire[-1] == "id" and _sm_core.run_command(_LgsmSrv(), "id", sudo=False)[2] == 0,
+          str(_wire[-1:]))
 finally:
     _sm_core.get_connection = _o_conn
 
@@ -1725,6 +2181,63 @@ finally:
     (_sm_core.run_privileged, _sm_core.write_root_file, _sm_core._restart_sshd,
      _sm_core.is_local_server, _sm_hosts.remote_ufw_open_port,
      _sm_hosts.remote_ufw_close_port) = _orig
+
+
+# ── change_ssh_port must not drop the port the host is LISTENING on ─────────────────────────────
+# old_ports is the whole basis of this function's lockout-safety promise, and it came from
+# _sshd_current_ports — i.e. `sshd -T`, i.e. sshd_config. On a socket-activated host the panel
+# writes its port to the ssh.socket drop-in and sshd_config's Port is parsed and then IGNORED, so
+# `sshd -T` still prints `port 22` however many times the port has moved. Moving 2222 -> 2022 read
+# old_ports as ["22"] (truthy, so the stored-port fallback never fired), and the rewritten drop-in
+# — whose leading bare `ListenStream=` clears everything before it — contained only 2022 and 22.
+# Port 2222 stopped listening the moment ssh.socket restarted, while the success message said "The
+# previous port is still available as a fallback" about a port that was already gone.
+_o_sp = (_sm_core.run_privileged, _sm_core.write_root_file, _sm_core._restart_sshd,
+         _sm_core.is_local_server, _sm_hosts.remote_ufw_open_port, _sm_hosts.remote_ufw_close_port)
+try:
+    _sp = {"socket": "active", "effective": "port 22\n", "writes": []}
+
+    def _sp_priv(server, verb, args=(), timeout=30, merge_stderr=True, **k):
+        if verb == "sshd-socket-active":
+            return (_sp["socket"], "", 0 if _sp["socket"] == "active" else 3)
+        if verb == "sshd-effective-config":
+            return (_sp["effective"], "", 0)
+        if verb == "listening-sockets":
+            return ("LISTEN 0 128 0.0.0.0:2022 0.0.0.0:*\n", "", 0)
+        return ("", "", 0)
+
+    _sm_core.run_privileged = _sp_priv
+    _sm_core.write_root_file = lambda server, target, content, timeout=15: (
+        _sp["writes"].append((target, content)), ("", "", 0))[1]
+    _sm_core._restart_sshd = lambda *a, **k: ("", "", 0)
+    _sm_core.is_local_server = lambda s: True
+    _sm_hosts.remote_ufw_open_port = lambda *a, **k: (True, "")
+    _sm_hosts.remote_ufw_close_port = lambda *a, **k: (True, "")
+
+    # Socket-activated, panel connected on 2222, sshd -T stuck on 22, moving to 2022.
+    _sp["socket"], _sp["effective"], _sp["writes"] = "active", "port 22\n", []
+    _ok_sp, _msg_sp = _sm_hosts.change_ssh_port(NS(port=2222), 2022)
+    _sp_body = _sp["writes"][0][1] if _sp["writes"] else ""
+    check("ssh port: a socket-activated host keeps the port the panel is CONNECTED on",
+          _ok_sp is True and "ListenStream=0.0.0.0:2222\n" in _sp_body,
+          "%r — 2222 stops listening the moment ssh.socket restarts, and the success message "
+          "calls it a fallback: %r" % (_sp_body, _msg_sp[:80]))
+    check("ssh port: ...and still adds the new one",
+          "ListenStream=0.0.0.0:2022\n" in _sp_body, repr(_sp_body))
+    # POSITIVE CONTROL: the sshd_config path is authoritative there, so a STALE stored port must
+    # NOT be unioned in — that would re-open a port the operator had deliberately closed.
+    _sp["socket"], _sp["effective"], _sp["writes"] = "inactive", "port 2222\n", []
+    _ok_np, _msg_np = _sm_hosts.change_ssh_port(NS(port=22), 2022)
+    _np_body = _sp["writes"][0][1] if _sp["writes"] else ""
+    check("ssh port: a NON socket-activated host still takes its ports from sshd -T alone",
+          _ok_np is True
+          and [ln for ln in _np_body.splitlines() if ln.startswith("Port ")] == ["Port 2022",
+                                                                                "Port 2222"],
+          "%r — a stale stored port would re-open a port that was closed on purpose" % (_np_body,))
+finally:
+    (_sm_core.run_privileged, _sm_core.write_root_file, _sm_core._restart_sshd,
+     _sm_core.is_local_server, _sm_hosts.remote_ufw_open_port,
+     _sm_hosts.remote_ufw_close_port) = _o_sp
 
 
 # ── the panel-login fail2ban jail must actually READ the panel's auth.log ───────────────────────

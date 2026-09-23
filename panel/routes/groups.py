@@ -26,6 +26,18 @@ def register(app):
                                       selectinload(Group.servers),
                                       selectinload(Group.game_servers)).all())
         all_perms = ALL_PERMISSIONS
+        # ...and which of them THIS admin may actually toggle: the same set _grantable_perms will
+        # accept. Every permission in the table was rendered as an ordinary tick box to a
+        # delegated MANAGE_GROUPS admin, and the write path honours none outside this set — a
+        # requested one is dropped, and one the group already holds is PRESERVED whatever the box
+        # says. So the control was inert in both directions, and the un-tick case was worse than
+        # inert: unticking "Open a shell on a host" on a group that held it answered "Group 'X'
+        # updated." and revoked nothing, while every member kept a root shell on every host the
+        # group reaches. Rendered disabled and still ticked (manage_groups.html) rather than
+        # hidden — the group's real power stays visible to whoever is auditing it, and a disabled
+        # box is not submitted, which is exactly what the preserve rule already assumes.
+        grantable_perms = (set(all_perms) if current_user.is_superadmin else
+                           (get_user_permissions(current_user) - {SUPER_ADMIN}) & set(all_perms))
         # Only what THIS admin can actually grant. MANAGE_GROUPS is delegable to a non-superadmin
         # whose own access is a subset of hosts, and the page listed every host and every game
         # server on the panel to them — names, and a tick box beside each. The write path already
@@ -34,10 +46,26 @@ def register(app):
         # write path, so the form offers exactly what the POST will accept.
         _my_remotes = accessible_remote_ids(current_user)
         all_servers = get_user_servers(current_user)
-        all_remotes = [r for r in RemoteServer.query.all() if r.id in _my_remotes]
+        _remotes = RemoteServer.query.all()   # ONE query, filtered twice below — not two
+        all_remotes = [r for r in _remotes if r.id in _my_remotes]
+        # The per-server tick boxes are bucketed BY HOST, and bucketing them by _my_remotes alone
+        # (whole-host grants) meant a server reachable through an INDIVIDUAL grant, on a host the
+        # editor has no grant for, got no box anywhere on the page — while its id is in the write
+        # path's allow-set all the same ({g.id for g in get_user_servers}). grantable_object_ids
+        # preserves only the ids OUTSIDE that set, so an unrendered-but-allowed id is neither
+        # requested nor preserved: an edit that changed only the description revoked it, silently.
+        # The name="servers" host list stays bound to _my_remotes, since that IS its own allow-set.
+        _game_host_ids = _my_remotes | {gs.remote_id for gs in all_servers if gs.remote_id}
+        all_game_hosts = [r for r in _remotes if r.id in _game_host_ids]
         return render_template("manage_groups.html", groups=groups,
-                               all_perms=all_perms, all_servers=all_servers,
-                               all_remotes=all_remotes)
+                               all_perms=all_perms, grantable_perms=grantable_perms,
+                               all_servers=all_servers, all_remotes=all_remotes,
+                               all_game_hosts=all_game_hosts,
+                               # Both lists above are already filtered to what THIS admin may
+                               # grant, so their empty states cannot say "none configured yet" —
+                               # that is a claim about the install, and it was made to a delegated
+                               # admin on a panel full of hosts. This is what tells them apart.
+                               any_remotes=bool(_remotes))
 
 
 

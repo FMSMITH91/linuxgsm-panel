@@ -179,7 +179,11 @@
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-list-columns"></i> Open Ports &amp; Rules</span>
-        <span class="small text-secondary" id="rules-count">{{ open_groups|length }} {% if open_groups|length == 1 %}<span>rule</span>{% else %}<span>rules</span>{% endif %}</span>
+        {# "0 rules" is an arithmetic claim about a firewall nothing read. status.groups is [] on
+           every unreachable path, so this counted the empty list and printed it as a measurement,
+           directly above a body that (correctly) says the rules can't be read. An em dash, the
+           same thing static/js/remote_firewall.js already renders here on an unreachable refresh. #}
+        <span class="small text-secondary" id="rules-count">{% if status.unreachable %}&mdash;{% else %}{{ open_groups|length }} {% if open_groups|length == 1 %}<span>rule</span>{% else %}<span>rules</span>{% endif %}{% endif %}</span>
       </div>
       <div class="card-body p-0">
         <div id="rules-list" style="max-height: 500px; overflow: auto;">
@@ -252,7 +256,9 @@
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-shield-slash"></i> Blocked IPs</span>
-        <span class="small text-secondary" id="blocks-count">{{ block_groups|length }} <span>blocked</span></span>
+        {# Same reason as rules-count above: block_groups is derived from status.groups, which is
+           [] when the read failed, so "0 blocked" was an answer about a host nothing reached. #}
+        <span class="small text-secondary" id="blocks-count">{% if status.unreachable %}&mdash;{% else %}{{ block_groups|length }} <span>blocked</span>{% endif %}</span>
       </div>
       <div class="card-body">
         <p class="small text-secondary mb-2">
@@ -298,6 +304,13 @@
               {% endfor %}
             </tbody>
           </table>
+          {% elif status.unreachable %}
+          {# The Open Ports card eight rows up already refuses to answer here; this one went on to
+             state "No IPs are blocked." about a firewall nothing read. On the page where an
+             operator checks whether an abusive address is still denied, that is the worst possible
+             direction to be wrong in. Same sentence as the Open Ports branch on purpose — a UFW
+             deny IS a rule, and it is already in the catalog in both languages. #}
+          <div class="p-3 text-center text-secondary small">Rules can't be read while this host is unreachable.</div>
           {% else %}
           <div class="p-3 text-center text-secondary small">No IPs are blocked.</div>
           {% endif %}

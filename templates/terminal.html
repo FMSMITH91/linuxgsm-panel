@@ -19,7 +19,15 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
   <div>
-    <a href="{{ url_for('remote_manage', remote_id=remote.id) }}"
+    {# The panel host goes to the route that OWNS its card. remote_manage renders
+       remote_manage.html with remote/games/config and NO `status`, and status is what the
+       "Connection & SSH" card reads — Jinja's Undefined is silently falsy, so every gate in it
+       evaluated false and the page told a superadmin that Tailscale SSH is Disabled, tailscale0
+       is Not allowed in UFW and disabling public SSH would lock them out, on a host where
+       Tailscale is running with SSH enabled. Nothing had been probed: get_server_status() is
+       called only by server_management (panel/routes/host_local.py). Same is_local split as
+       app.py's nav and panel/routes/remotes.py's listing. #}
+    <a href="{% if remote.is_local %}{{ url_for('server_management') }}{% else %}{{ url_for('remote_manage', remote_id=remote.id) }}{% endif %}"
        class="text-secondary text-decoration-none small">
       <i class="bi bi-arrow-left"></i> <span>Back to host</span>
     </a>

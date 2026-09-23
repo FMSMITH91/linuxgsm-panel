@@ -69,7 +69,7 @@ from panel.core import terminal
 from panel.core.clock import utcnow
 
 import secrets
-from flask import (Flask, current_app, g, jsonify, redirect, request, session, url_for)
+from flask import (Flask, abort, current_app, g, jsonify, redirect, request, session, url_for)
 from markupsafe import Markup
 from panel.core import i18n
 from flask_login import (current_user)
@@ -341,6 +341,37 @@ def _dedupe_aux_ports(have, occupied):
     return updates
 
 
+def _add_sibling_ports(occupied, remote, remote_id, skip_short_name=None):
+    """Union into `occupied` every panel game server's reserved port block on this remote, plus
+    every OTHER valve server's CONFIGURED SourceTV/client ports. Returns `occupied`.
+
+    The aux ports belong in that set for the same reason the game-port block does: the panel wrote
+    them into that sibling's config, so they are authoritative even when it is STOPPED and so not
+    listening for _remote_listening_ports to find. This walk used to exist only here, and
+    resolve_free_port had the block half alone — while _PORT_SPAN has no entry for any valve game,
+    so each Source server reserved exactly one port. Five stopped Source servers on 27015-27019
+    therefore left 27020 (the first one's sourcetvport) looking free, and a sixth install took it.
+    The install succeeded; the cost landed later, on whoever started the older server and got
+    "Port 27020 was unavailable" out of a server nobody had touched. One walk now, so the two
+    cannot drift apart again.
+
+    `skip_short_name` is the instance being resolved: its own aux ports are the values being
+    moved, not a constraint on them."""
+    for e in GameServer.query.filter_by(remote_id=remote_id).all():
+        for k in range(_port_span(e.game_type)):
+            occupied.add(e.port + k)
+        if e.short_name == skip_short_name or sm_game_engine(e.game_type) != "valve":
+            continue
+        try:
+            sib = lgsm_get_values(remote, e.short_name, e.lgsm_name, _SOURCE_AUX_PORT_KEYS) or {}
+            for v in sib.values():
+                if str(v).strip().isdecimal():
+                    occupied.add(int(str(v).strip()))
+        except Exception:
+            _log.debug("aux-port: sibling servercfg read failed", exc_info=True)
+    return occupied
+
+
 def _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, main_port):
     """Config updates that move THIS instance's SourceTV/client ports off any already taken on the
     host, so a 2nd Source server can start under -strictportbind. Reads the instance's effective
@@ -363,18 +394,7 @@ def _resolve_source_aux_ports(remote, remote_id, short_name, lgsm_name, main_por
     # the same outcome this had before the scanner learned to say 'I could not read'.
     occupied = set(_remote_listening_ports(remote) or ())
     occupied.add(int(main_port))
-    for e in GameServer.query.filter_by(remote_id=remote_id).all():
-        for k in range(_port_span(e.game_type)):
-            occupied.add(e.port + k)
-        if e.short_name == short_name or sm_game_engine(e.game_type) != "valve":
-            continue
-        try:
-            sib = lgsm_get_values(remote, e.short_name, e.lgsm_name, _SOURCE_AUX_PORT_KEYS) or {}
-            for v in sib.values():
-                if str(v).strip().isdecimal():
-                    occupied.add(int(str(v).strip()))
-        except Exception:
-            _log.debug("aux-port: sibling servercfg read failed", exc_info=True)
+    _add_sibling_ports(occupied, remote, remote_id, skip_short_name=short_name)
     return {k: str(v) for k, v in _dedupe_aux_ports(have, occupied).items()}
 
 
@@ -1617,9 +1637,11 @@ def register_context_processors(app):
 
 def resolve_free_port(remote, remote_id, desired, game_type):
     """Find a free contiguous port block at/after `desired` on a remote for a `game_type`
-    server. A block of _port_span(game_type) ports must clear both (a) the ports other panel
-    game servers on this remote reserve — each per its own game's span — and (b) whatever is
-    actually listening on the host right now. Returns (start_port, changed), or (None, False)
+    server. A block of _port_span(game_type) ports must clear (a) the ports other panel
+    game servers on this remote reserve — each per its own game's span — (b) whatever is
+    actually listening on the host right now, and (c) the SourceTV/client ports the panel
+    configured on this remote's valve servers, which no span covers and which a stopped server
+    still owns. Returns (start_port, changed), or (None, False)
     when no free block exists near `desired` — see _first_free_block on why that is not a port.
 
     The span makes the increment game-correct: single-port games (most, incl. Call of Duty and
@@ -1633,10 +1655,10 @@ def resolve_free_port(remote, remote_id, desired, game_type):
     # a port that is actually taken — the install then fails with a clear error, which is
     # the same outcome this had before the scanner learned to say 'I could not read'.
     occupied = set(_remote_listening_ports(remote) or ())
-    # Plus every panel server's reserved block (covers STOPPED servers, which aren't listening).
-    for e in GameServer.query.filter_by(remote_id=remote_id).all():
-        for k in range(_port_span(e.game_type)):
-            occupied.add(e.port + k)
+    # Plus every panel server's reserved block (covers STOPPED servers, which aren't listening) —
+    # AND every valve sibling's configured SourceTV/client ports, which are reserved for exactly
+    # the same reason and were missing here. See _add_sibling_ports for what that cost.
+    _add_sibling_ports(occupied, remote, remote_id)
     p = _first_free_block(desired, span, occupied)
     if p is None:
         return None, False      # nothing free nearby — the caller must refuse, not guess
@@ -1829,7 +1851,19 @@ def _find_game_backup(gs, name):
     """Return the backup dict whose name matches `name` from the server's real backup list, or
     None. Validating against the listing (not building a path from user input) keeps this
     path-injection safe."""
-    for b in list_game_backups(gs.remote, gs.short_name):
+    listing = list_game_backups(gs.remote, gs.short_name)
+    # None is "the host could not be READ", which list_game_backups was deliberately taught to say
+    # apart from [] ("this server has no backups"). Iterating it raised TypeError: on the download
+    # route — a plain navigation, so the JSON error handler re-raises — that was Werkzeug's HTML
+    # 500 page, and on delete the generic "Something went wrong". Collapsing it into the callers'
+    # falsy check would be worse still: both answer "Backup not found." / 404, which tells the
+    # operator their archive is gone when the panel simply never reached the host. Both callers
+    # turn an HTTPException into their own shape, so say which failure this is.
+    if listing is None:
+        abort(503, description="Couldn't reach this server's host to read its backups, so the "
+                               "panel can't tell whether that archive is still there. Check the "
+                               "host is reachable and try again.")
+    for b in listing:
         if b["name"] == name:
             return b
     return None
@@ -1843,11 +1877,20 @@ def _pro_status_cached(remote, force=False):
     if cached and not force and (time.time() - cached.get("ts", 0)) < _PRO_MAX_AGE:
         return cached["data"]
     data = pro_status(remote, force=force)
-    try:
-        remote.update_pro_cache(data)
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
+    # Never persist a read that did not happen. This cache is served for _PRO_MAX_AGE — a day —
+    # and survives restarts, so storing an unreadable result pins "Ubuntu Pro is not installed"
+    # onto a host nobody managed to ask. The helper's own reader refuses to cache a failed read
+    # for the same reason; this is the database half of it.
+    if not data.get("unreadable"):
+        try:
+            remote.update_pro_cache(data)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+    elif cached:
+        # Something was known before. Hand that back rather than a blank — with the flag, so the
+        # page can say the figure is the last one read rather than the current truth.
+        return dict(cached["data"], unreadable=True, stale=True)
     return data
 
 def _refuse_on_panel_host(remote, what):
@@ -2163,11 +2206,21 @@ def register_routes(app):
                             _notify_servers_changed(app)
                             app.logger.info("reconciled stranded install '%s' -> installed", gs.short_name)
                         elif verdict is False:
-                            gs.installed = False
-                            gs.status = "failed"
-                            db.session.commit()
-                            _notify_servers_changed(app)
-                            app.logger.info("reconciled stranded install '%s' -> failed", gs.short_name)
+                            # Only when something ACTUALLY changed. "failed" is itself in the
+                            # query's filter set (deliberately — see above), so unlike the True
+                            # branch this row comes back every tick, and writing the two values it
+                            # already holds re-fired a `servers_changed` broadcast to every open
+                            # dashboard — each one then re-requesting /api/servers and restarting
+                            # its install-progress poller — and logged "reconciled stranded install
+                            # 'X' -> failed" 144 times a day about a reconciliation that did not
+                            # happen. _sync_toggles_from_cron compares before it commits for the
+                            # same reason.
+                            if gs.installed or gs.status != "failed":
+                                gs.installed = False
+                                gs.status = "failed"
+                                db.session.commit()
+                                _notify_servers_changed(app)
+                                app.logger.info("reconciled stranded install '%s' -> failed", gs.short_name)
                         # None (host unreachable): leave it; the next tick retries.
             except Exception:
                 app.logger.debug("install-reconcile tick failed", exc_info=True)
