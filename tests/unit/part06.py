@@ -1311,6 +1311,38 @@ try:
     check("install.sh: the URL banner says so when the firewall state is unknown",
           'UFW_READ}" -eq 0' in _su_txt and "firewall state unknown" in _su_txt)
 
+    # ── uninstall.sh must not report work it did not do ──────────────────────────────────────
+    _un_txt = open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read()
+
+    def _un_fn(marker, end="\n}\n"):
+        i = _un_txt.index(marker)
+        return _un_txt[i:_un_txt.index(end, i)]
+
+    # `systemctl --user` needs XDG_RUNTIME_DIR to reach the user bus. install.sh has defaulted it
+    # since it was written, with a comment saying why; uninstall.sh never did — and every svc call
+    # there ends in `|| true`, so a stop that never happened read exactly like one that did, and
+    # the rm -rf a few lines later deleted the files out from under a running process.
+    check("uninstall.sh: defaults XDG_RUNTIME_DIR, as install.sh does, so `systemctl --user` works",
+          'XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"' in _un_txt)
+    check("uninstall.sh: ...and refuses to delete the files of a service still running",
+          "is-active linuxgsm-panel.service" in _un_txt
+          and "Refusing to delete a running panel's files." in _un_txt)
+    # Two success lines that were printed unconditionally beside a command ending in `|| true`.
+    check("uninstall.sh: the UFW line reports what was actually removed",
+          "_ufw_gone" in _un_txt and "No UFW rule for port" in _un_txt)
+    # Searched FROM the userdel, not from the start of the file: `id "${PANEL_USER}"` also appears
+    # in the guard above it ("only ever remove the dedicated panel service user"), so a plain
+    # .index() finds that one and compares the wrong occurrence — the same trap a source-reading
+    # gate in this file hit before.
+    _un_del = _un_txt.index('userdel -r "${PANEL_USER}"')
+    check("uninstall.sh: the panel-user line asks whether the account is really gone",
+          'Could not remove the panel user' in _un_txt
+          and _un_txt.find('id "${PANEL_USER}" >/dev/null 2>&1; then', _un_del) > _un_del)
+    # ...and the residual warning names the credential, because that is what the operator thinks
+    # they just deleted.
+    check("uninstall.sh: ...and says the surviving user may still hold the remote SSH key",
+          "SSH key used for remote hosts" in _un_txt)
+
     # ...and prove it by RUNNING the function both ways, rather than trusting the source text.
     _su_recov = _su_between("install_recovery_command() {", "\n}\n") + "\ninstall_recovery_command\n"
     _su_rshim = ("id() { echo 0; }\n"
