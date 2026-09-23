@@ -1021,7 +1021,22 @@ def can_administer_user(actor, target):
         return False
     if actor.id == target.id:
         return True
-    return set(get_user_permissions(target)) <= set(get_user_permissions(actor))
+    if not set(get_user_permissions(target)) <= set(get_user_permissions(actor)):
+        return False
+    # ...and the OBJECTS, because permissions are only half of what an account carries. Two
+    # delegated admins can hold the identical permission set and reach different hosts, and the
+    # subset test above passes in both directions — so either could reset the other's password,
+    # read the new one straight off the response (_form_credential returns it so it can be shown
+    # once), sign in as them and reach hosts they were never granted.
+    #
+    # That is the same escalation this function was written to close, by the same route: not
+    # acquiring a permission, but BECOMING someone who has the access. grantable_object_ids
+    # directly below exists to stop a delegated admin granting objects they cannot reach; this is
+    # the other door into the same room, and it was open.
+    if not accessible_remote_ids(target) <= accessible_remote_ids(actor):
+        return False
+    return ({g.id for g in get_user_servers(target)}
+            <= {g.id for g in get_user_servers(actor)})
 
 
 def grantable_object_ids(requested_ids, existing_ids, allowed_ids):
