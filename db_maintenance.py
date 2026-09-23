@@ -16,6 +16,7 @@ Every function is best-effort and never raises; each returns a (ok, message) tup
 """
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import subprocess  # nosec B404 - only ever invokes the sqlite3 CLI with fixed args
@@ -142,6 +143,14 @@ def _aside(path):
         return ""
 
 
+# A table name this panel could have created: a plain SQL identifier. SQLite has no parameter
+# binding for identifiers, so counting rows per table means building the statement as text — and
+# `_row_census` is pointed at a DAMAGED or restored database file, which is not a source whose
+# sqlite_master contents should be trusted on sight. Validating the name first means the value
+# interpolated below is known-safe by construction rather than merely escaped.
+_SAFE_TABLE_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
+
+
 def _row_census(path):
     """Total rows across every ordinary table, or None if the file cannot be counted.
 
@@ -161,10 +170,17 @@ def _row_census(path):
                 "AND name NOT LIKE 'sqlite_%'").fetchall()]
             total = 0
             for name in names:
-                # Quoted, doubling any embedded quote: these come from sqlite_master rather than
-                # from a caller, but a table name is still an identifier being interpolated.
+                if not _SAFE_TABLE_RE.match(name):
+                    # Refuse rather than skip. Skipping would UNDERCOUNT, and an undercount here
+                    # is the same defect this whole function exists to prevent — repair() would
+                    # compare a too-small number against the backup and could discard the fuller
+                    # file. "I could not count this" is the honest answer, and the caller already
+                    # treats None as "unknown, do not overrule the rebuild".
+                    _log.debug("db repair: unexpected table name in %s; not counting", path)
+                    return None
+                # Still quoted, as defence in depth — the name is already known to hold no quote.
                 total += con.execute(
-                    'SELECT COUNT(*) FROM "%s"' % name.replace('"', '""')).fetchone()[0]
+                    'SELECT COUNT(*) FROM "%s"' % name).fetchone()[0]  # nosec B608  # nosemgrep - identifier validated against _SAFE_TABLE_RE above and quoted; sqlite3 executes one statement per call
             return total
         finally:
             con.close()

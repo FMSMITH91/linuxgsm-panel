@@ -657,6 +657,21 @@ try:
     _mk_db(_empty_db, rows=0)
     check("db-maint: ...and 0 for a database that really is empty",
           _dbm._row_census(_empty_db) == 0)
+    # A table name that is not a plain identifier is REFUSED, not skipped. SQLite has no parameter
+    # binding for identifiers, so the count statement is built as text, and this function is
+    # pointed at damaged or restored files whose sqlite_master is not a trusted source. Skipping
+    # would undercount — and an undercount is the very defect the census exists to prevent, since
+    # repair() would then compare a too-small number against the backup.
+    _odd = os.path.join(_dbm_dir, "odd.db")
+    _co = _sq_p.connect(_odd)
+    try:
+        _co.execute('CREATE TABLE "we ird" (id INTEGER PRIMARY KEY)')
+        _co.execute("INSERT INTO \"we ird\" (id) VALUES (1)")
+        _co.commit()
+    finally:
+        _co.close()
+    check("db-maint: a table name that is not a plain identifier is refused, not undercounted",
+          _dbm._row_census(_odd) is None, repr(_dbm._row_census(_odd)))
 finally:
     _sh.rmtree(_dbm_dir, ignore_errors=True)
 
