@@ -384,6 +384,31 @@ try:
     finally:
         _sm_core.run_as_game_user = _stat_saved
 
+    # ── /api/server/<id>/stats tells the page whether it actually READ anything ───────────────
+    # This route already computes the ram_total sentinel — it uses it to refuse to PERSIST a
+    # guess ("report what we last knew") — and then shipped `metrics` without it, so the detail
+    # page painted a confident 0% CPU / 0 MB RAM for a host nobody could read and pushed those
+    # zeros into the live chart as a dip that never happened. The route had no test at all.
+    _st_saved = _sm_core.server_live_metrics
+    try:
+        _sm_core.server_live_metrics = lambda *a, **k: {
+            "cpu_percent": 12.0, "ram_percent": 40, "ram_total": 8, "disk_percent": 20,
+            "cores": 4, "game_procs": 2, "game_cpu_percent": 5.0, "game_ram_mb": 1024,
+            "game_uptime_secs": 60, "port_open": True}
+        _sj = (c.get("/api/server/%d/stats" % gs_id).get_json() or {})
+        check("server stats: a real read is reported as readable",
+              _sj.get("metrics_readable") is True, str(_sj)[:140])
+        # ...and the all-zero dict, which is what the non-raising transports produce.
+        _sm_core.server_live_metrics = lambda *a, **k: {
+            "cpu_percent": 0.0, "ram_percent": 0, "ram_total": 0, "disk_percent": 0,
+            "cores": 1, "game_procs": 0, "game_cpu_percent": 0.0, "game_ram_mb": 0,
+            "game_uptime_secs": 0, "port_open": False}
+        _sj2 = (c.get("/api/server/%d/stats" % gs_id).get_json() or {})
+        check("server stats: an all-zero sample is reported as NOT readable",
+              _sj2.get("metrics_readable") is False, str(_sj2)[:140])
+    finally:
+        _sm_core.server_live_metrics = _st_saved
+
     # Alerts endpoint: GET returns the provider list; POST filters to known keys and never 500s
     # (the config write to the game host fails on the test box, but returns gracefully).
     #
@@ -3317,6 +3342,29 @@ try:
         check("dashboard metrics: ...while its servers drop out rather than report old figures",
               str(gs_id) not in (_dj2.get("servers") or {}),
               "the server kept a sample nothing measured")
+
+        # ── ...and the failure that does NOT raise, which is the common one ──────────────────
+        # Only paramiko raises. The tailscale and local transports return ("", "…timed out", -1),
+        # and host_live_metrics builds its answer UP FRONT and returns it unchanged when the
+        # output is empty — so the real shape of an unreachable host on the transport the panel
+        # steers people towards is this dict of zeros, which is fully populated and therefore
+        # TRUTHY. It sailed through `if not m` and the dashboard rendered the host as
+        # "Reachable · CPU 0% · RAM 0% · Disk 0%" — a host at 95% disk reading as idle.
+        def _zero_host(_remote, force=False):
+            return {"host": {"cpu_percent": 0.0, "ram_used": 0, "ram_total": 0, "disk_used": 0,
+                             "disk_total": 0, "uptime_secs": 0, "cores": 1},
+                    "users": {}, "ports": set()}
+
+        _dmapp.host_live_metrics = _zero_host
+        _dj3 = (c.get("/api/dashboard/metrics").get_json() or {})
+        _hb3 = (_dj3.get("hosts") or {}).get(str(_rid))
+        check("dashboard metrics: an all-zero sample is unmeasured, not a host idling at 0%",
+              (_hb3 or {}).get("metrics") is False, str(_hb3)[:140])
+        check("dashboard metrics: ...so it is not badged reachable on the strength of zeros",
+              (_hb3 or {}).get("cpu") is None and (_hb3 or {}).get("disk_pct") is None,
+              str(_hb3)[:140])
+        check("dashboard metrics: ...and its servers report no figures either",
+              str(gs_id) not in (_dj3.get("servers") or {}), str(_dj3.get("servers"))[:110])
     finally:
         _dmapp.host_live_metrics, _dmapp.game_map = _sv_slm, _sv_map
 
