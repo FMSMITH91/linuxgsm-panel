@@ -1108,9 +1108,20 @@ _REMOTE_ACTIONS = {
     # access is actually granted, so both transports share nothing until then.
     "content-dir-create": lambda a: "install -d -o %s -g %s -m 700 %s"
                           % (a[0], a[0], shlex.quote(content_path(a[0], CONTENT_SUBDIR))),
-    "content-game-present": lambda a: "test -d %s/. && echo Y || echo N"
+    # Exit status ONLY, because that is the whole of the helper's answer: do_content_game_present
+    # and do_content_script_present in tools/panel-helper return 0 or 1 and print nothing.
+    #
+    # These used to end in `&& echo Y || echo N`, which ALWAYS EXITS 0 — the `|| echo N` succeeds.
+    # Both callers ask `rc == 0 or "Y" in out`, so on every REMOTE host (the shell transport) the
+    # first clause was unconditionally true and the answer was always "present". content_present()
+    # therefore said yes for content that was never downloaded, and
+    # _installed_content_lgsm_names() wrote weekly update cron entries for scripts that do not
+    # exist. The `or "Y" in out` half was the correct one; the rc clause, added later under a
+    # comment reading "The verb's own rc says the same thing", was true of the helper and false
+    # here. One rendering, one answer, and the comment is now true of both.
+    "content-game-present": lambda a: "test -d %s/."
                             % shlex.quote(content_path(a[0], CONTENT_SUBDIR, a[1])),
-    "content-script-present": lambda a: "test -x %s && echo Y || echo N"
+    "content-script-present": lambda a: "test -x %s"
                               % shlex.quote(content_path(a[0], a[1])),
     "content-game-remove": lambda a: " ; ".join(
         "rm -rf %s" % shlex.quote(p) for p in
@@ -1121,9 +1132,16 @@ _REMOTE_ACTIONS = {
                            % shlex.quote("%s-%s" % (CONTENT_CRON_PREFIX, _username(a[0]))),
     # A remote has no helper, so it keeps the zcat|awk|grep read — but only the READ half; the
     # tallying awk is gone from both transports.
+    # `|| [ $? -eq 1 ]`: grep exits 1 for NO MATCHES and >=2 for a real error, and both callers read
+    # a non-zero rc as "the log could not be read" and answer None. So a perfectly healthy host —
+    # one with no Ban/Found lines in the window, which is what a quiet week looks like — reported a
+    # failed read forever, and _autoblock_reconcile skips its tick on None, so that host's expired
+    # auto-blocks were never released. Distinguishing the two grep statuses keeps the failure
+    # signal (a transport timeout still returns rc -1) while letting "nothing to report" be the
+    # success it is.
     "f2b-log-lines": lambda a: (
         "zcat -f %s 2>/dev/null | awk -v c=%s '$1 >= c' | "
-        "grep -E '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+'"
+        "{ grep -E '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+' || [ $? -eq 1 ]; }"
         % (F2B_LOG_GLOB, shlex.quote(a[0]))),
     "gmod-mount-read": lambda a: "cat %s 2>/dev/null || true"
                        % shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"),

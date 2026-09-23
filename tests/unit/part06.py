@@ -505,6 +505,53 @@ try:
           not any("198.51.100.9" in ln for ln in _got), str(_got))
     check("f2b log read: a line that is not a Ban/Found is dropped",
           not any("Unban" in ln for ln in _got), str(_got))
+
+    # ── a file it COULD NOT READ is not a file with nothing in it ─────────────────────────────
+    # This was a bare `except OSError: continue`, so a permission error or a corrupt .gz
+    # (gzip.BadGzipFile is an OSError) silently shrank the tally and still returned 0. Both
+    # callers — system_ops.fail2ban_top_ips and hosts.remote_fail2ban_top_ips — answer None on a
+    # non-zero rc precisely so an unreadable log cannot pass for a quiet one, and returning 0
+    # defeated that guard from the inside. A vanished rotation stays benign: logrotate really does
+    # remove files mid-read, and that one is a smaller TRUE answer.
+    _corrupt = os.path.join(_logdir, "fail2ban.log.3.gz")
+    with open(_corrupt, "wb") as _cf:
+        _cf.write(b"this is not gzip data at all")
+    _buf2 = _io_t.StringIO()
+    _stdout_save = sys.stdout
+    sys.stdout = _buf2
+    try:
+        _rc_corrupt = _hl.do_f2b_log_lines(["2026-09-02"], None)
+    finally:
+        sys.stdout = _stdout_save
+    check("f2b log read: a CORRUPT rotation fails the verb instead of shrinking the tally",
+          _rc_corrupt != 0, "rc=%r with output %r" % (_rc_corrupt, _buf2.getvalue()[:120]))
+    os.remove(_corrupt)
+    # ...and a rotation that vanishes mid-read is still the benign case it was written for.
+    _vanished = os.path.join(_logdir, "fail2ban.log.4")
+    open(_vanished, "w", encoding="utf-8").close()
+    # `open` is a BUILTIN, not an attribute of the module — reading _hl.open raises. Assigning it
+    # does work, because a module global shadows the builtin for code inside that module, so set it
+    # from the real builtin and delete it again afterwards.
+    _real_open = open
+
+    def _open_but_gone(path, *a, **k):
+        if path == _vanished:
+            raise FileNotFoundError(2, "No such file or directory", path)
+        return _real_open(path, *a, **k)
+
+    _hl.open = _open_but_gone
+    _buf3 = _io_t.StringIO()
+    _stdout_save = sys.stdout
+    sys.stdout = _buf3
+    try:
+        _rc_gone = _hl.do_f2b_log_lines(["2026-09-02"], None)
+    finally:
+        sys.stdout = _stdout_save
+        del _hl.open          # restore the builtin lookup, don't leave a module global behind
+    check("f2b log read: a rotation that VANISHED mid-read is still benign (rc 0)",
+          _rc_gone == 0 and "Found 203.0.113.5" in _buf3.getvalue(),
+          "rc=%r" % (_rc_gone,))
+    os.remove(_vanished)
     _shutil.rmtree(_logdir, ignore_errors=True)
 except OSError as _e:
     skip("f2b log read", _e)

@@ -195,11 +195,13 @@ def content_present(server, content_user, game):
     """True if <content_user>/serverfiles/<game> already exists on the host."""
     if not (_CU_NAME_RE.match(content_user or "") and game in GMOD_CONTENT_GAMES):
         return False
-    # `test -d … && echo Y || echo N` only turned an exit status into text so this could match a
-    # substring. The verb's own rc says the same thing.
+    # The verb answers with its EXIT STATUS on both transports — the helper returns 0/1 and prints
+    # nothing, and the remote rendering is now a bare `test -d`. It did not used to be: it ended in
+    # `&& echo Y || echo N`, which always exits 0, so `rc == 0 or ...` was unconditionally true on
+    # every remote host and this said "present" about content that had never been downloaded.
     _out, _err, rc = _core.run_privileged(server, "content-game-present", [content_user, game],
                                     timeout=10, merge_stderr=False)
-    return rc == 0 or "Y" in (_out or "")
+    return rc == 0
 
 
 
@@ -259,9 +261,11 @@ def _installed_content_lgsm_names(server, content_user):
     names = []
     for g, (_lbl, lgsm) in GMOD_CONTENT_GAMES.items():
         if lgsm and content_present(server, content_user, g):
+            # Exit status only, on both transports — see content_present above for why the
+            # `or "Y" in out` half had to go with the `&& echo Y || echo N` that produced it.
             _o, _e, _rc = _core.run_privileged(server, "content-script-present", [content_user, lgsm],
                                          timeout=10, merge_stderr=False)
-            if _rc == 0 or "Y" in (_o or ""):
+            if _rc == 0:
                 names.append(lgsm)
     return names
 
