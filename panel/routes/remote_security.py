@@ -37,13 +37,23 @@ def register(app):
     def api_remote_security_top_ips(remote_id):
         """Top offending IPs on a remote host (last 7 days), aggregated from its fail2ban log."""
         remote = get_remote(remote_id)
+        # The auto-block SETTINGS come from config.json, not from the host, so a host read that
+        # fails must not take them down with it. They were inside this try: an exception building
+        # the IP list answered {"ips": [], "error": ...} with no `autoblock` key at all, and the
+        # card repainted its toggle from the missing value — `tog.checked = !!(d && d.autoblock)`
+        # — showing OFF. saveThreshold then reads that toggle back, under a comment saying
+        # "preserve the on/off state", so one failed read followed by one Save silently disabled
+        # auto-blocking on a host that had it on.
+        _settings = {"autoblock": remote_id in _autoblock_hosts(),
+                     "threshold": _autoblock_threshold(),
+                     "whitelist": _security_whitelist()}
         try:
-            return jsonify({"ips": remote_fail2ban_top_ips(remote, 100, days=7) or [],
-                            "autoblock": remote_id in _autoblock_hosts(),
-                            "threshold": _autoblock_threshold(),
-                            "whitelist": _security_whitelist()})
+            _ips = remote_fail2ban_top_ips(remote, 100, days=7)
         except Exception:
-            return jsonify({"ips": [], "error": _log_and_generic("top-ips failed")}), 200
+            return jsonify(dict(_settings, ips=[], error=_log_and_generic("top-ips failed"))), 200
+        if _ips is None:
+            return jsonify(dict(_settings, ips=[], unreadable=True)), 200
+        return jsonify(dict(_settings, ips=_ips))
 
     @app.route("/api/remote/<int:remote_id>/security/block", methods=["POST"])
     @login_required

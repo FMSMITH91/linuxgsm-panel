@@ -298,5 +298,6 @@
   "rules": "reglas",
   "tailnet-only": "solo tailnet",
   "· Auth:": "· Autenticación:",
-  "🔒 Private tailnet — only your devices can reach it": "🔒 Tailnet privada: solo tus dispositivos pueden acceder"
+  "🔒 Private tailnet — only your devices can reach it": "🔒 Tailnet privada: solo tus dispositivos pueden acceder",
+  "Could not read this fail2ban log, so recent offenders are unknown.": "No se pudo leer este registro de fail2ban, por lo que se desconocen los infractores recientes."
 }

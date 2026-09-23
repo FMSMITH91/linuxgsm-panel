@@ -5927,6 +5927,51 @@ try:
     # the panel log", which is the panel accusing itself of a bug the caller caused, and which
     # makes 5xx alerting fire on a malformed request. Driven as a superadmin against every
     # mutating JSON endpoint the review named, with a NUMBER where a string belongs.
+    # ── the auto-block SETTINGS survive a host read that failed ───────────────────────────────
+    # They come from config.json, not from the host, and they were inside the same try as the IP
+    # read — so an exception answered {"ips": [], "error": ...} with no `autoblock` key, the card
+    # repainted its toggle from the missing value (`!!(d && d.autoblock)`) and showed OFF, and
+    # saveThreshold reads that toggle back "to preserve the on/off state". One failed read plus
+    # one Save turned auto-blocking off on a host that had it on.
+    import panel.ops.system_ops as _so_ab
+    _ab_saved = _so_ab.fail2ban_top_ips
+    try:
+        _so_ab.fail2ban_top_ips = lambda *a, **k: (_ for _ in ()).throw(OSError("log unreadable"))
+        _abj = (c.get("/api/panel/security/top-ips").get_json() or {})
+        check("security card: a failed offender read still reports the auto-block setting",
+              "autoblock" in _abj and "threshold" in _abj, str(_abj)[:160])
+        check("security card: ...and says the log was unreadable rather than showing no activity",
+              bool(_abj.get("error") or _abj.get("unreadable")), str(_abj)[:160])
+        # None (the reader's "I could not read") is the same answer, without an exception.
+        _so_ab.fail2ban_top_ips = lambda *a, **k: None
+        _abj2 = (c.get("/api/panel/security/top-ips").get_json() or {})
+        check("security card: a None offender read is flagged unreadable, not 'no activity'",
+              _abj2.get("unreadable") is True and "autoblock" in _abj2, str(_abj2)[:160])
+        # positive control: a real read still answers with the list and the settings.
+        _so_ab.fail2ban_top_ips = lambda *a, **k: [{"ip": "203.0.113.5", "attempts": 3, "bans": 1}]
+        _abj3 = (c.get("/api/panel/security/top-ips").get_json() or {})
+        check("security card: a real read reports the offenders and is not flagged unreadable",
+              len(_abj3.get("ips") or []) == 1 and not _abj3.get("unreadable")
+              and "autoblock" in _abj3, str(_abj3)[:160])
+    finally:
+        _so_ab.fail2ban_top_ips = _ab_saved
+
+    # The remote route is the same code with a different reader, and it had the same bug — so it
+    # gets the same check rather than being taken on the strength of the panel-host one passing.
+    import panel.routes.remote_security as _rs_ab
+    _rs_saved = _rs_ab.remote_fail2ban_top_ips
+    try:
+        _rs_ab.remote_fail2ban_top_ips = lambda *a, **k: None
+        _rabj = (c.get("/api/remote/%d/security/top-ips" % remote_id).get_json() or {})
+        check("security card (remote): an unreadable log still reports the auto-block setting",
+              "autoblock" in _rabj and _rabj.get("unreadable") is True, str(_rabj)[:160])
+        _rs_ab.remote_fail2ban_top_ips = lambda *a, **k: [{"ip": "203.0.113.9", "attempts": 1}]
+        _rabj2 = (c.get("/api/remote/%d/security/top-ips" % remote_id).get_json() or {})
+        check("security card (remote): a real read is not flagged unreadable (positive control)",
+              len(_rabj2.get("ips") or []) == 1 and not _rabj2.get("unreadable"), str(_rabj2)[:160])
+    finally:
+        _rs_ab.remote_fail2ban_top_ips = _rs_saved
+
     _typed = [
         ("/api/command/%d" % gs_id, {"command": 5}),
         ("/api/server/%d/action" % gs_id, {"action": 5}),

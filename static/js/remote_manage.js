@@ -13,10 +13,25 @@ function loadSecurity(){ loadSecurityBans(); loadSecurityTopIps(); loadSecurityE
 function loadSecurityTopIps(){
   var el=document.getElementById('sec-top'); if(!el) return;
   fetch(secBase()+'/top-ips').then(function(r){return r.json();}).then(function(d){
-    var tog=document.getElementById('sec-autoblock'); if(tog) tog.checked=!!(d&&d.autoblock);
-    var th=document.getElementById('sec-threshold'); if(th && d && d.threshold) th.value=d.threshold;
-    renderWhitelist((d&&d.whitelist)||[]);
+    // Only repaint a control from a value the payload ACTUALLY CARRIED. This was
+    // `tog.checked = !!(d && d.autoblock)`, and the error payload has no `autoblock` key — so a
+    // failed read showed the Auto-block toggle OFF. saveThreshold then reads that toggle back
+    // ("preserve the on/off state"), which turned one failed read plus one Save into
+    // auto-blocking being persistently disabled on a host that had it on.
+    var tog=document.getElementById('sec-autoblock');
+    if(tog && d && 'autoblock' in d) tog.checked=!!d.autoblock;
+    var th=document.getElementById('sec-threshold');
+    if(th && d && d.threshold!=null) th.value=d.threshold;
+    if(d && 'whitelist' in d) renderWhitelist(d.whitelist||[]);
     var ips=(d&&d.ips)||[];
+    // "nothing to report" and "the panel could not read the log" are different answers, and the
+    // second one must not read as a clean bill of health on a SECURITY card.
+    if(d && (d.error || d.unreadable)){
+      el.innerHTML='<div class="small text-danger">'
+        +'Could not read this fail2ban log, so recent offenders are unknown.'
+        +'</div>';  // nosemgrep - fixed string, no interpolation
+      return;
+    }
     if(!ips.length){ el.innerHTML='<div class="small text-secondary">No fail2ban activity logged yet.</div>'; return; }
     var rows=ips.map(function(o,i){
       var badge = o.banned_now ? '<span class="badge bg-danger">banned now</span>'
