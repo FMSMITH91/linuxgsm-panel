@@ -5866,7 +5866,11 @@ try:
         _lat_seen.clear()
         _lat_file["text"] = "SteamCMD: validating\n"
         with _r_sf._viewers_lock:
-            _r_sf._console_viewers.setdefault(gs_id, set()).add("test-sid")
+            # {sid: user_id} now — the poller re-checks each viewer's access every tick,
+            # so a viewer entry has to say WHOSE socket it is. None means "unknown", which
+            # the re-check treats as not-allowed; this block is about the action tail, so
+            # give it the seeded admin so it is not evicted mid-test.
+            _r_sf._console_viewers.setdefault(gs_id, {})["test-sid"] = admin_id
         try:
             _begin_action_tail(app, gs_id, "validate", _lat_logf, _lat_user)
             _lat_seen.clear()
@@ -6228,6 +6232,34 @@ try:
                   "viewers=%r" % (_r_sf._console_viewers.get(gs_id),))
             _sio_c.emit("leave_console", {"server_id": str(gs_id)})   # the string spelling
             check("console socket: leaving deregisters it however the id was spelled",
+                  not _r_sf._console_viewers.get(gs_id),
+                  "left behind: %r" % (_r_sf._console_viewers.get(gs_id),))
+
+            # ── access is re-checked while the socket is OPEN ─────────────────────────────────
+            # The join handler's check was the only one. After it passed, the poller streamed to
+            # the room for as long as the browser stayed connected, so revoking a group, dropping
+            # a permission or deactivating the account did not stop console output already
+            # flowing. _evict_unauthorized_viewers is what the poller calls each tick.
+            with _r_sf._viewers_lock:
+                _r_sf._console_viewers[gs_id] = {"still-allowed": admin_id,
+                                                 "gone-user": 10 ** 7,   # no such row
+                                                 "unknown-user": None}
+            with app.app_context():
+                _n_dropped = _r_sf._evict_unauthorized_viewers(app, app.socketio, gs_id)
+            _left = dict(_r_sf._console_viewers.get(gs_id) or {})
+            check("console socket: a viewer whose account no longer exists is dropped mid-stream",
+                  "gone-user" not in _left and "unknown-user" not in _left,
+                  "still watching: %r" % (_left,))
+            check("console socket: ...and the viewer who still qualifies is left alone",
+                  "still-allowed" in _left, "still watching: %r" % (_left,))
+            check("console socket: ...and it reports how many it dropped",
+                  _n_dropped == 2, "dropped=%r" % (_n_dropped,))
+            # ...and when the last qualifying viewer goes, the entry goes with it, so the poller
+            # stops SSH-ing at the host on nobody's behalf.
+            with app.app_context():
+                _r_sf._console_viewers[gs_id] = {"gone-user": 10 ** 7}
+                _r_sf._evict_unauthorized_viewers(app, app.socketio, gs_id)
+            check("console socket: ...and an emptied console stops being polled at all",
                   not _r_sf._console_viewers.get(gs_id),
                   "left behind: %r" % (_r_sf._console_viewers.get(gs_id),))
         finally:
