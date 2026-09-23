@@ -185,9 +185,26 @@ def _parse_idtech3_status(text):
 # A chat line carries the same prefix and then "<Steve> " or a plugin's tag before the message, so
 # it cannot reach "There are". Both vanilla spellings of the count are accepted ("N of a max of M"
 # and the older "N/M").
+#
+# The prefix is peeled off in a loop rather than written as `(?:\[[^\]]*\]\s*)*` inside the
+# pattern. That form is a quantifier inside a quantifier, which is what ReDoS scanners look for.
+# It happens to be linear — each repetition has to consume a literal `[`…`]`, so it cannot spin on
+# an empty match — but this pattern is applied to a line a hostile player can write, and "I read
+# the backtracking and it is fine" is a worse argument than not writing the shape at all. Each
+# pass below removes at least two characters, so the loop is bounded by the line length.
+_MC_LOG_PREFIX_RE = re.compile(r"^\s*\[[^\]]*\]\s*")
 _MC_LIST_RE = re.compile(
-    r"^\s*(?:\[[^\]]*\]\s*)*:?\s*there are\s+(\d+)\s*(?:of a max of\s+\d+|/\s*\d+)\s+players online:",
+    r"^:?\s*there are\s+(\d+)\s*(?:of a max of\s+\d+|/\s*\d+)\s+players online:",
     re.IGNORECASE)
+
+
+def _mc_strip_log_prefix(line):
+    """Strip the server's own bracketed log prefixes ('[12:34:56] [Server thread/INFO]: ')."""
+    prev = None
+    while prev != line:
+        prev = line
+        line = _MC_LOG_PREFIX_RE.sub("", line, count=1)
+    return line.lstrip()
 
 
 def _parse_minecraft_list(text):
@@ -210,9 +227,10 @@ def _parse_minecraft_list(text):
     wrapping, a capture taken mid-print) is unknown, never a short player list and never zero."""
     m, line = None, ""
     for ln in (text or "").splitlines():
-        hit = _MC_LIST_RE.match(ln)
+        body = _mc_strip_log_prefix(ln)
+        hit = _MC_LIST_RE.match(body)
         if hit:
-            m, line = hit, ln
+            m, line = hit, body
     if m is None:
         return None
     after = line[m.end():]

@@ -314,8 +314,21 @@ check("parser(valve): a second status reply still supersedes the first",
       str([p["name"] for p in _sm_game._parse_valve_status(_HDR + _SPOOF)]))
 
 _MC = "[12:34:56] [Server thread/INFO]: There are 2 of a max of 20 players online: Alice, Bob_1"
+
+
+def _mc_names(text):
+    """Names from a `list` reply, or the result itself when it is not a list.
+
+    These checks read `[p["name"] for p in _parse_minecraft_list(...)]` directly, and the parser
+    returns None for "could not read" — so a regression that made it stop matching raised
+    TypeError out of the check expression and killed the whole suite on a traceback, instead of
+    failing the one check by name. Proven by mutation: two separate breaks to the prefix stripper
+    both ended the run at this line with no check reported."""
+    got = _sm_game._parse_minecraft_list(text)
+    return [p["name"] for p in got] if isinstance(got, list) else got
+
 check("parser(minecraft): names from a prefixed log line",
-      [p["name"] for p in _sm_game._parse_minecraft_list(_MC)] == ["Alice", "Bob_1"])
+      _mc_names(_MC) == ["Alice", "Bob_1"])
 check("parser(minecraft): empty server -> no players",
       _sm_game._parse_minecraft_list("There are 0 of a max of 20 players online: ") == [])
 # ...and a line a PLAYER wrote is not the reply. This kept the LAST line containing the bare
@@ -326,7 +339,7 @@ check("parser(minecraft): empty server -> no players",
 # against this exact class; this one was left on a substring.
 _MC_CHAT = _MC + "\n[12:34:57] [Server thread/INFO]: <Steve> online: Notch"
 check("parser(minecraft): a chat line saying 'online:' does not become the player list",
-      [p["name"] for p in _sm_game._parse_minecraft_list(_MC_CHAT)] == ["Alice", "Bob_1"],
+      _mc_names(_MC_CHAT) == ["Alice", "Bob_1"],
       str(_sm_game._parse_minecraft_list(_MC_CHAT)))
 # ...including one that quotes the whole count prefix back: the reply is a line the SERVER wrote,
 # so only its own bracketed log prefix may precede it — a chat line always carries "<name>" first.
@@ -342,7 +355,7 @@ check("parser(minecraft): a capture with no `list` reply in it is unknown, not e
       _sm_game._parse_minecraft_list("[12:34:56] [Server thread/INFO]: Saving the game\n") is None)
 # Positive control for both: the ordinary reply still parses, and an empty one still reads as [].
 check("parser(minecraft): ...while a real reply is still a list, and a real empty one still []",
-      [p["name"] for p in _sm_game._parse_minecraft_list(_MC)] == ["Alice", "Bob_1"]
+      _mc_names(_MC) == ["Alice", "Bob_1"]
       and _sm_game._parse_minecraft_list("There are 0 of a max of 20 players online:") == [])
 
 # ── the console capture must JOIN tmux's wrapped lines ────────────────────────────────────────
@@ -360,8 +373,8 @@ _MC_LONG = ("[14:30:00] [Server thread/INFO]: There are 12 of a max of 20 player
                          "Peggy", "Victor", "Walter", "Yvonne", "Zach"]))
 _MC_WRAPPED = "\n".join(_MC_LONG[_i:_i + 80] for _i in range(0, len(_MC_LONG), 80))
 check("parser(minecraft): a 12-player reply parses when it arrives whole",
-      len(_sm_game._parse_minecraft_list(_MC_LONG)) == 12,
-      str([p["name"] for p in _sm_game._parse_minecraft_list(_MC_LONG)]))
+      _mc_names(_MC_LONG) is not None and len(_mc_names(_MC_LONG)) == 12,
+      str(_mc_names(_MC_LONG)))
 check("parser(minecraft): ...and is mangled if it arrives 80-column wrapped, which is why -J",
       len(_sm_game._parse_minecraft_list(_MC_WRAPPED) or []) < 12,
       "wrapping is harmless here, so the -J check below is the only thing holding this up")
