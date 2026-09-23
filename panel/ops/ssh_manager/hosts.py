@@ -786,8 +786,25 @@ def remote_os_update_status(server):
 
 
 def remote_reboot(server):
-    """Reboot the remote server."""
-    _core.run_privileged(server, "reboot", [], timeout=10)
+    """Reboot the remote server. (ok, msg).
+
+    A reboot is the one command whose SUCCESS looks like a failure: the host goes down mid-command,
+    so the transport reports a dropped connection. That is why this returned True unconditionally,
+    and why it must not simply start failing on non-zero — `rc == 0` would reject most real
+    reboots.
+
+    What it CAN tell apart is a refusal, which comes back promptly and positively: sudo declining
+    ("a password is required"), an unknown verb, a helper that is not installed. `_core` uses -1 for
+    "the transport gave up" (a timeout or a dropped connection), so a POSITIVE rc is the helper
+    having answered and said no. Only that is reported as a failure.
+
+    It matters because both callers use the boolean: panel/routes/remote_vps.py hands it to the
+    operator, and monitoring._reboot_when_empty_watch writes it as `success=ok` on the audit row —
+    so a refused auto-reboot was recorded as a reboot that happened, on a host that never went
+    down."""
+    out, err, rc = _core.run_privileged(server, "reboot", [], timeout=10)
+    if rc is not None and rc > 0:
+        return False, ((out or err or "Reboot refused").replace("\n", " ")[:200])
     return True, "Reboot command sent to remote"
 
 
@@ -1521,8 +1538,21 @@ def remote_ufw_undeny_ip(server, ip):
         ip = str(ipaddress.ip_address((ip or "").strip()))
     except (ValueError, TypeError):
         return False, "Invalid IP address."
-    _core.run_privileged(server, "ufw-delete-deny-ip", [ip], timeout=15)
-    return True, "Unblocked %s." % ip
+    # Read the result — the same fix system_ops.ufw_undeny_ip already carries, for the same
+    # reason, and this is the REMOTE twin that was missed. It discarded the tuple and returned
+    # True unconditionally, while remote_ufw_deny_ip six lines up captures (out, err, rc) and
+    # fails on non-zero. So a timeout ("", "Command timed out", -1), a missing helper, or a sudo
+    # refusal all reported "Unblocked", showed a green toast, and wrote an audit row saying the
+    # unblock succeeded — for a deny rule still in the firewall.
+    #
+    # monitoring._autoblock_reconcile is the caller that makes it worse than a wrong toast: its
+    # "count what applied" block tallies `removed` from this return value and collects failures
+    # into a list that could never fill, so the hourly reconcile reported releases that had not
+    # happened on every remote host, while the panel-host path (already fixed) told the truth.
+    out, err, rc = _core.run_privileged(server, "ufw-delete-deny-ip", [ip], timeout=15)
+    if rc == 0:
+        return True, "Unblocked %s." % ip
+    return False, ((out or err or "Unblock failed").replace("\n", " ")[:200])
 
 
 def remote_ufw_blocked_ips(server):
@@ -1941,7 +1971,31 @@ def remote_public_ssh_status(server, panel_port=None):
     `panel_port` is given, also report whether that port has a public ALLOW rule
     (`panel_port_open`) so the UI can disable "Close public panel port" once it's
     already closed."""
-    out, _, _ = _core.run_privileged(server, "ufw-status", ["plain"], timeout=12)
+    # rc, and the "Status:" line `ufw status` always prints when it really runs — the same pair
+    # firewall.remote_ufw_status uses on the same verb, and for the same reason it gives there:
+    # do not describe a firewall you could not read.
+    #
+    # This discarded both. An unreadable host produced out="" -> active=False, mode="off", which
+    # the UI states as "public SSH is disabled — this host is reachable over the tailnet only".
+    # That is the most dangerous direction for this particular sentence: it is the reassurance an
+    # operator acts on before closing port 22 or walking away from a host whose SSH may in fact be
+    # wide open. `unreachable` is the flag the sibling already established for it.
+    out, err, rc = _core.run_privileged(server, "ufw-status", ["plain"], timeout=12)
+    _txt = (out or "") + (err or "")
+    if rc == 127 or "not found" in _txt or "not installed" in _txt:
+        # ufw is ABSENT, which is a reading and not a failure to read — but it is still not
+        # "off". `off` in this function means "no rule, so tailnet-only", and with no firewall at
+        # all nothing governs port 22, so that label would point the wrong way.
+        res = {"active": False, "mode": "unknown", "installed": False}
+    elif rc != 0 or "Status:" not in (out or ""):
+        res = {"active": False, "mode": "unknown", "unreachable": True}
+    else:
+        res = None
+    if res is not None:
+        if panel_port:
+            res["panel_port"] = int(panel_port)
+            res["panel_port_open"] = False
+        return res
     active = "Status: active" in (out or "")
     mode = "off"
     panel_open = False
@@ -2099,6 +2153,12 @@ def remote_set_public_ssh(server, mode):
     # internet. The exit codes cannot answer it either: a delete of an absent rule is a normal
     # non-zero, which is exactly why they were being ignored.
     state = remote_public_ssh_status(server)
+    # "I could not read the firewall" is not "UFW is not active" — both refuse, but only one of
+    # them is a fact about the host, and the other message sends the operator to check a setting
+    # that may be fine.
+    if state.get("unreachable"):
+        return False, ("Could not read this host's firewall afterwards, so whether public SSH "
+                       "changed is unknown — check the host and try again.")
     if not state.get("active"):
         return False, ("UFW is not active on this host, so public SSH cannot be controlled from "
                        "here — port 22 is governed by whatever else is in front of it.")

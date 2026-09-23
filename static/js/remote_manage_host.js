@@ -34,9 +34,16 @@ function loadSshStatus(){
         else if (!b.hasAttribute('data-lockdown')) { b.disabled = false; b.removeAttribute('aria-current'); }
       });
       // "Close public panel port" is a no-op once the port is already closed — disable it.
+      // But `panel_port_open === false` now means one of two things, and only one of them is a
+      // fact: the route sets `unreachable` when it could not read the firewall at all, and in that
+      // case the port state is unknown rather than closed. Saying "already closed — the panel is
+      // tailnet-only" about a host nobody could read is the reassurance an operator acts on.
       var cp = document.getElementById('close-panel-btn');
       if (cp && !cp.hasAttribute('data-hard-disabled')) {
-        if (d.panel_port_open === false) {
+        if (d.unreachable) {
+          cp.disabled = true;
+          cp.title = 'The panel could not read this host’s firewall, so the public port state is unknown.';
+        } else if (d.panel_port_open === false) {
           cp.disabled = true;
           cp.title = 'The public panel port is already closed — the panel is tailnet-only.';
         } else if (d.panel_port_open === true) {
