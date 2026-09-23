@@ -391,7 +391,7 @@ def ensure_content_update_cron(server, content_user):
     # discarded here, so a host that did not answer read as "this user automates nothing", and the
     # panel went on to manage a cron next to one it could not see.
     ct, ct_err, ct_rc, ct_read = "", "", -1, False
-    for _try in (1, 2):
+    for _ in range(2):          # one timeout is a poor reason to leave an install un-updated
         ct, ct_err, ct_rc = _core.run_privileged(server, "crontab-list", [content_user], timeout=10,
                                                  merge_stderr=False)
         ct_read = ct_rc == 0 or bool(_NO_CRONTAB_RE.search("%s\n%s" % (ct_err or "", ct or "")))
