@@ -230,10 +230,20 @@ def register(app):
         def _scan(item):
             remote, gslist = item
             try:
-                # `or set()`: the scanner answers None for a failed read. Here that is the
-                # same as 'nothing listening' — this endpoint reports per-server status and a
-                # blip already shows as offline; it is the MONITOR that must not alert on it.
-                return gslist, remote, (_remote_listening_ports(remote) or set())
+                # Hand the scanner's answer back UNCHANGED. This was
+                # `(_remote_listening_ports(remote) or set())`, under a comment reasoning that a
+                # failed read "is the same as nothing listening here, and it is the MONITOR that
+                # must not alert on it" — but this endpoint does not merely display a status, it
+                # COMMITS one, and the guard twelve lines below (`if ports is None: continue —
+                # this host's scan failed; leave its statuses alone`) was written for precisely
+                # this case and could only ever fire on the `except` path, because the `or set()`
+                # had already turned None into an empty set.
+                #
+                # So an `ss` that never answered wrote "offline" into gs.status for every game
+                # server on that host — which is the damage _remote_listening_ports' own docstring
+                # exists to describe, arriving by a different route: the bots and the dashboard
+                # repeat the stored status, and it is what the one-shot "notify when empty" reads.
+                return gslist, remote, _remote_listening_ports(remote)
             except Exception:
                 _log.debug("api_servers: port scan failed", exc_info=True)
                 return gslist, remote, None
