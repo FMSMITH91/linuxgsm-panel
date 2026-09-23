@@ -552,6 +552,126 @@ try:
     _r3_ok, _ = _dbm.repair(_m2, os.path.join(_dbm_dir, "absent.backup"))
     check("db-maint: repair fails safely (keeps the original) when nothing is salvageable",
           _r3_ok is False and os.path.exists(_m2))
+
+    # ── PARTIAL salvage: the case the ordering was wrong for ─────────────────────────────────
+    # The checks above only exercise a source nothing can salvage, so the rebuild branch always
+    # failed and the backup branch was reached by default. The real hazard is a rebuild that
+    # SUCCEEDS structurally and holds almost nothing: _rebuild_via_dump returns on
+    # `getsize(dst) > 0` and integrity_check asks PRAGMA integrity_check, so a salvage of the
+    # schema plus a handful of rows passes both — and the backup, which was complete, was never
+    # consulted. Measured before the fix: 17 of 4000 rows swapped in over a 4000-row backup, and
+    # repair() reported "rebuilt from recoverable data". The loss then became permanent, because
+    # the panel restarts after a repair and _ensure_db_healthy refreshes the rolling backup from
+    # whatever panel.db now is.
+    import sqlite3 as _sq_p
+
+    def _rows_in(_p, _table="t"):
+        try:
+            _c = _sq_p.connect(_p)
+            try:
+                return _c.execute("select count(*) from %s" % _table).fetchone()[0]
+            finally:
+                _c.close()
+        except _sq_p.DatabaseError:
+            return None
+
+    def _bite(_p, _at=4096 * 3):
+        """Overwrite one data page, leaving the header and later pages intact — the shape that
+        makes a partial salvage possible at all. A wholly-garbage file cannot produce one."""
+        with open(_p, "r+b") as _fh:
+            _fh.seek(_at)
+            _fh.write(b"\xde\xad\xbe\xef" * 256)
+
+    _part = os.path.join(_dbm_dir, "partial.db")
+    _part_bk = _part + ".backup"
+    _mk_db(_part, rows=4000)
+    _sh.copy2(_part, _part_bk)          # a COMPLETE backup
+    _bite(_part)
+    _pok, _pmsg = _dbm.repair(_part, _part_bk)
+    _after = _rows_in(_part)
+    check("db-maint: repair does not swap in a gutted rebuild over a fuller backup",
+          _pok is True and _after == 4000,
+          "ok=%s rows=%s msg=%s" % (_pok, _after, _pmsg))
+    check("db-maint: ...and says which it chose, with the counts it compared",
+          "row(s)" in _pmsg and "salvaged" in _pmsg, _pmsg)
+
+    # ...and the comparison runs BOTH ways: a stale, emptier backup must NOT beat a good rebuild,
+    # or the fix would just be "always prefer the backup", which loses data in the other direction.
+    _part2 = os.path.join(_dbm_dir, "partial2.db")
+    _part2_bk = _part2 + ".backup"
+    _mk_db(_part2, rows=4000)
+    _mk_db(_part2_bk, rows=5)           # a STALE backup
+    _bite(_part2, 4096 * 200)           # damage late: most rows still salvageable
+    _p2ok, _p2msg = _dbm.repair(_part2, _part2_bk)
+    _after2 = _rows_in(_part2)
+    check("db-maint: a stale backup does not overrule a rebuild that salvaged more",
+          _p2ok is True and _after2 is not None and _after2 > 5,
+          "ok=%s rows=%s msg=%s" % (_p2ok, _after2, _p2msg))
+
+    # ── the two rebuild attempts must not share a tmp file ───────────────────────────────────
+    # `_rebuild_via_recover(...) or _rebuild_via_dump(...)` let the second attempt open whatever
+    # the first left behind when it failed AFTER creating the file. The dump then replays CREATE
+    # TABLE (fails — already exists, skipped) and its INSERTs (fail — primary keys already taken,
+    # skipped), so the rebuild keeps the first attempt's partial content and reports success.
+    #
+    # Only reachable when .recover runs and fails, so the real _rebuild_via_recover is stubbed —
+    # on a box with the sqlite3 CLI present it always succeeds and the dump path never executes,
+    # which is exactly why this went unnoticed.
+    _orig_recover = _dbm._rebuild_via_recover
+    try:
+        def _recover_leaves_a_stub(src_path, dst_path):
+            _c = _sq_p.connect(dst_path)
+            try:
+                _c.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+                _c.executemany("INSERT INTO t (id, v) VALUES (?,?)", [(i, "x") for i in range(1, 4)])
+                _c.commit()
+            finally:
+                _c.close()
+            return False          # ...and then reports failure, leaving that file behind
+
+        _dbm._rebuild_via_recover = _recover_leaves_a_stub
+        _share = os.path.join(_dbm_dir, "share.db")
+        _mk_db(_share, rows=400)
+        _sok, _smsg = _dbm.repair(_share, os.path.join(_dbm_dir, "no-such.backup"))
+        # By VALUE, not by count. The count does not discriminate: the dump's INSERTs for ids
+        # 4..400 succeed against the inherited file, so it still reaches 400 rows and a
+        # count-based check passes on the broken code — confirmed by mutation before this was
+        # rewritten. What survives is the CONTENT of the rows the stub had already written:
+        # _mk_db stores 80 characters, the stub stores one.
+        _c = _sq_p.connect(_share)
+        try:
+            _v1 = _c.execute("select v from t where id = 1").fetchone()
+        finally:
+            _c.close()
+        check("db-maint: a failed .recover does not leave its partial file for the dump to inherit",
+              _sok is True and _v1 is not None and len(_v1[0]) == 80,
+              "ok=%s row1=%r msg=%s" % (_sok, (_v1 or [None])[0], _smsg))
+    finally:
+        _dbm._rebuild_via_recover = _orig_recover
+
+    # _row_census itself: None for "could not count", never 0 — a caller comparing candidates has
+    # to be able to tell an empty database from one it failed to read.
+    check("db-maint: _row_census answers None for a file it cannot read, not 0",
+          _dbm._row_census(os.path.join(_dbm_dir, "bad.db")) is None)
+    _empty_db = os.path.join(_dbm_dir, "empty.db")
+    _mk_db(_empty_db, rows=0)
+    check("db-maint: ...and 0 for a database that really is empty",
+          _dbm._row_census(_empty_db) == 0)
+    # A table name that is not a plain identifier is REFUSED, not skipped. SQLite has no parameter
+    # binding for identifiers, so the count statement is built as text, and this function is
+    # pointed at damaged or restored files whose sqlite_master is not a trusted source. Skipping
+    # would undercount — and an undercount is the very defect the census exists to prevent, since
+    # repair() would then compare a too-small number against the backup.
+    _odd = os.path.join(_dbm_dir, "odd.db")
+    _co = _sq_p.connect(_odd)
+    try:
+        _co.execute('CREATE TABLE "we ird" (id INTEGER PRIMARY KEY)')
+        _co.execute("INSERT INTO \"we ird\" (id) VALUES (1)")
+        _co.commit()
+    finally:
+        _co.close()
+    check("db-maint: a table name that is not a plain identifier is refused, not undercounted",
+          _dbm._row_census(_odd) is None, repr(_dbm._row_census(_odd)))
 finally:
     _sh.rmtree(_dbm_dir, ignore_errors=True)
 

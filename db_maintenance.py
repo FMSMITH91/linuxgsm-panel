@@ -16,6 +16,7 @@ Every function is best-effort and never raises; each returns a (ok, message) tup
 """
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import subprocess  # nosec B404 - only ever invokes the sqlite3 CLI with fixed args
@@ -142,6 +143,57 @@ def _aside(path):
         return ""
 
 
+# A table name this panel could have created: a plain SQL identifier. SQLite has no parameter
+# binding for identifiers, so counting rows per table means building the statement as text — and
+# `_row_census` is pointed at a DAMAGED or restored database file, which is not a source whose
+# sqlite_master contents should be trusted on sight. Validating the name first means the value
+# interpolated below is known-safe by construction rather than merely escaped.
+_SAFE_TABLE_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
+
+
+def _row_census(path):
+    """Total rows across every ordinary table, or None if the file cannot be counted.
+
+    The one question `PRAGMA integrity_check` does not answer. It says whether a file is a
+    well-formed SQLite image; this says whether the data is still in it. repair() needs both,
+    because a salvage that recovered the schema and a handful of rows is structurally perfect and
+    is still the worse of the two candidates when a complete backup exists.
+
+    None means "could not count" and is deliberately NOT zero — a caller comparing candidates must
+    be able to tell an empty database from one it failed to read, which is the same distinction the
+    rest of this codebase draws for a failed probe. Never raises."""
+    try:
+        con = sqlite3.connect(path, timeout=15)
+        try:
+            names = [r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%'").fetchall()]
+            total = 0
+            for name in names:
+                if not _SAFE_TABLE_RE.match(name):
+                    # Refuse rather than skip. Skipping would UNDERCOUNT, and an undercount here
+                    # is the same defect this whole function exists to prevent — repair() would
+                    # compare a too-small number against the backup and could discard the fuller
+                    # file. "I could not count this" is the honest answer, and the caller already
+                    # treats None as "unknown, do not overrule the rebuild".
+                    _log.debug("db repair: unexpected table name in %s; not counting", path)
+                    return None
+                # Still quoted, as defence in depth — the name is already known to hold no quote.
+                # The suppressions sit on the lines the scanners report, and they are suppressions
+                # of a FALSE positive, not of a risk being accepted: SQLite has no parameter
+                # binding for identifiers, `name` has just been matched against _SAFE_TABLE_RE
+                # ([A-Za-z_][A-Za-z0-9_]*), and sqlite3's execute() runs exactly one statement per
+                # call, so neither a quote nor a statement separator can reach the query.
+                _count_sql = 'SELECT COUNT(*) FROM "%s"' % name  # nosec B608  # nosemgrep - validated identifier
+                total += con.execute(_count_sql).fetchone()[0]  # nosec B608  # nosemgrep - validated identifier
+            return total
+        finally:
+            con.close()
+    except (sqlite3.DatabaseError, OSError):
+        _log.debug("db repair: could not count rows in %s", path, exc_info=True)
+        return None
+
+
 def _rebuild_via_recover(src_path, dst_path):
     """Best salvage: the sqlite3 CLI '.recover' reads the file page-by-page and reconstructs
     what it can — it survives corruption a plain dump can't. Only used when the CLI exists."""
@@ -241,17 +293,57 @@ def repair(path=None, backup=None):
     aside = _aside(path)
     kept = (" (original kept at %s)" % os.path.basename(aside)) if aside else ""
     tmp = path + ".rebuilt"
+    _restored_note = ""     # set when the rebuild was measurably worse than the backup
     _silent_rm(tmp)
-    if _rebuild_via_recover(path, tmp) or _rebuild_via_dump(path, tmp):
+    # Split, with a _silent_rm between. These were `A(path, tmp) or B(path, tmp)`, so when the
+    # .recover attempt failed AFTER creating tmp, the iterdump attempt opened that same partial
+    # file: its CREATE TABLE statements then fail as "table already exists", get skipped by the
+    # salvage loop, and the rows that belong to them land nowhere. The same _silent_rm(tmp) already
+    # brackets this block on both sides.
+    _rebuilt = _rebuild_via_recover(path, tmp)
+    if not _rebuilt:
+        _silent_rm(tmp)
+        _rebuilt = _rebuild_via_dump(path, tmp)
+    if _rebuilt:
         ok, _ = integrity_check(tmp)
         if ok:
-            try:
-                os.replace(tmp, path)
-                for ext in ("-wal", "-shm"):
-                    _silent_rm(path + ext)   # stale WAL/SHM must not replay over the rebuilt file
-                return True, "rebuilt from recoverable data" + kept
-            except OSError:
-                _log.debug("db repair: could not swap in the rebuilt DB", exc_info=True)
+            # "Least data loss" is the docstring's promise, and nothing measured it. Both tests
+            # above are STRUCTURAL: _rebuild_via_dump returns on `os.path.getsize(dst) > 0` and
+            # integrity_check asks PRAGMA integrity_check — "is this a well-formed SQLite file",
+            # not "does it still hold the data". A rebuild that salvaged the schema and almost
+            # nothing else passes both, and the backup branch below is only reached when the
+            # rebuild fails ENTIRELY, so the healthy rolling backup was never even consulted.
+            #
+            # Measured, in a temp dir, against a 4000-row table with one early data page
+            # overwritten and a complete backup on disk: repair() reported
+            # "rebuilt from recoverable data" and swapped in a database holding 17 of 4000 rows,
+            # while panel.db.backup still had all 4000. The loss then becomes permanent — the
+            # panel restarts straight after a repair, and _ensure_db_healthy refreshes the rolling
+            # backup FROM the gutted file on that next boot.
+            #
+            # So compare them and take the fuller one. A census that cannot be read answers None,
+            # and an unknown does not get to overrule the rebuild — that keeps the previous
+            # behaviour for every case this can no longer measure.
+            _rebuilt_rows = _row_census(tmp)
+            _backup_rows = _row_census(backup) if (backup and os.path.exists(backup)) else None
+            _prefer_backup = (_rebuilt_rows is not None and _backup_rows is not None
+                              and _backup_rows > _rebuilt_rows
+                              and integrity_check(backup)[0])
+            if _prefer_backup:
+                _log.debug("db repair: backup holds %d row(s) vs %d rebuilt — restoring the backup",
+                           _backup_rows, _rebuilt_rows)
+                _silent_rm(tmp)
+                _restored_note = (" (restored the rolling backup: %d row(s), against %d salvaged "
+                                  "from the damaged file)" % (_backup_rows, _rebuilt_rows))
+            else:
+                try:
+                    os.replace(tmp, path)
+                    for ext in ("-wal", "-shm"):
+                        _silent_rm(path + ext)   # stale WAL/SHM must not replay over the rebuild
+                    _n = "" if _rebuilt_rows is None else (" (%d row(s) recovered)" % _rebuilt_rows)
+                    return True, "rebuilt from recoverable data" + _n + kept
+                except OSError:
+                    _log.debug("db repair: could not swap in the rebuilt DB", exc_info=True)
     _silent_rm(tmp)
 
     if backup and os.path.exists(backup):
@@ -269,7 +361,7 @@ def repair(path=None, backup=None):
                 os.replace(_restore_tmp, path)
                 for ext in ("-wal", "-shm"):
                     _silent_rm(path + ext)
-                return True, "restored the last healthy backup" + kept
+                return True, "restored the last healthy backup" + _restored_note + kept
             except OSError:
                 _silent_rm(path + ".restoring")
                 _log.debug("db repair: could not restore the backup", exc_info=True)
