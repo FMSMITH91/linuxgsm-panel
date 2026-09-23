@@ -7,13 +7,37 @@ import collections
 from flask import (jsonify)
 from flask_login import (current_user, login_required)
 from panel.db.models import (GameServer, db)
-from panel.ops.ssh_manager import (content_box_users, discover_linuxgsm_servers)
+from panel.ops.ssh_manager import (content_box_users, discover_linuxgsm_servers, run_command)
 from panel.security.auth import (MANAGE_SERVERS, can_access_remote, get_remote, log_action,
     permission_required)
 from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from panel.core.validation import (INSTANCE_NAME_RE)
 from app import (lgsm_name_to_game_type, load_game_list)
 from panel.routes._shared import (_bg_cache_commands)
+
+
+# "Could not read" is not "nothing is there", and discover_linuxgsm_servers cannot tell its caller
+# which one it meant: it returns [] for both (panel/ops/ssh_manager/_core.py — "Best-effort —
+# returns [] on any failure"). Until it can, confirm separately that the host answered at all, and
+# confirm it with a POSITIVE token: `rc == 0` on its own is satisfied by a transport that never ran
+# the command, and an empty stdout is what every failed read looks like.
+#
+# Deliberately NOT sudo, although the scan escalates. A sudo probe on the panel's OWN host fails
+# under the narrow helper grant — see run_command's note, `run_command(local, "echo ok")` answered
+# "sudo: a password is required" — so escalating here would turn a working local scan into
+# "unreadable", which is the same class of false statement pointing the other way.
+_PROBE_MARKER = "LGSM_SCAN_OK"
+
+
+def _host_answered(remote):
+    """True when the host answered a trivial command, so an empty scan really does mean 'nothing
+    here'. False when the panel could not reach it — paramiko raises, while the tailscale and
+    local transports return ("", "…timed out", -1) without raising."""
+    try:
+        out, _err, rc = run_command(remote, "echo %s" % _PROBE_MARKER, timeout=15, sudo=False)
+    except Exception:
+        return False
+    return rc == 0 and _PROBE_MARKER in (out or "")
 
 
 def register(app):
@@ -30,6 +54,19 @@ def register(app):
             found = discover_linuxgsm_servers(remote)
         except Exception:
             return jsonify({"error": _log_and_generic("server discovery failed")}), 200
+        if not found and not _host_answered(remote):
+            # An empty scan used to be reported as a fact: the card printed a green tick and "No
+            # new LinuxGSM servers found", and an admin stopped looking. It is not a fact.
+            # discover_linuxgsm_servers is best-effort and returns [] for BOTH "the scan ran and
+            # there is nothing new" and "the scan never ran" — the except branch above is dead
+            # because it swallows everything itself, and the tailscale and local transports do not
+            # raise at all: a host that is off gives ("", "SSH command timed out", -1), rc != 0,
+            # []. So when the list comes back empty, ask the host one question with a POSITIVE
+            # answer before saying anything about it. Only on an empty scan, so a host that does
+            # have servers pays nothing.
+            return jsonify({"error": "Couldn't read %s — the scan didn't run, so whether there are "
+                                     "LinuxGSM servers on it is unknown. Check the host is up and "
+                                     "reachable, then scan again." % remote.name}), 200
         existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
         games = {g["shortname"]: g["name"] for g in load_game_list()}
         # A GMod content box installs each mountable game through LinuxGSM, so every one of them

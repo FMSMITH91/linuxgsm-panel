@@ -261,6 +261,33 @@ def _valid_ntfy_server(server):
 _PROVIDER_LABELS = {"telegram": "telegram", "discord": "discord", "ntfy": "ntfy"}
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every 3xx. Returning None from redirect_request makes http_error_302 (which 301,
+    303, 307 and 308 all alias) fall through to HTTPDefaultErrorHandler, so the 3xx surfaces as
+    an HTTPError — which _post already reads as 'rejected' and LOGS."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# _post used the default global opener, which has urllib's HTTPRedirectHandler in it: a 301/302/303
+# was FOLLOWED, to a host no allow-list ever saw. CPython's redirect_request strips only
+# content-length and content-type, so `Authorization: Bearer <ntfy access token>` was carried
+# verbatim onto the new address, and http_error_302 permits http:// there. An ntfy instance that
+# started answering `302 Location: http://169.254.169.254/…` would therefore have handed the
+# operator's token to whoever controlled the redirect and turned the panel into a request proxy
+# onto exactly the addresses _NTFY_URL_RE exists to refuse — while _post still returned only the
+# word 'sent', so the admin saw alerts "working".
+#
+# A dedicated opener rather than install_opener(): that is global, and system_ops and lgsm_data
+# call urlopen for their own reasons. None of the three providers needs a redirect followed —
+# Telegram and Discord answer directly, and an ntfy server that 302s is the case to refuse. This
+# is also what finally makes two claims already written here true: the ntfy comment above
+# ("cannot smuggle ... a redirect target through it") and send_ntfy's docstring ("it cannot leak
+# via a redirect").
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _post(url, data, headers, allow_configured_host=False, provider="?"):
     """POST to a validated https URL. Returns (ok, reason): ok is True on a 2xx. `reason` is a FIXED
     word describing the outcome — 'sent' / 'rejected' (the provider answered with an error status) /
@@ -282,7 +309,9 @@ def _post(url, data, headers, allow_configured_host=False, provider="?"):
     req = urllib.request.Request(url, data=data, method="POST",
                                  headers={"User-Agent": "linuxgsm-panel", **headers})
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - https, host-allowlisted
+        # _OPENER, not urlopen: the allow-list above is only worth as much as the request that
+        # follows it, and the default opener follows redirects off the allow-listed host.
+        with _OPENER.open(req, timeout=8) as resp:  # nosec B310 - https, host-allowlisted, no redirects
             return (200 <= resp.getcode() < 300), "sent"
     except urllib.error.HTTPError as e:      # the provider answered with a 4xx/5xx
         # LOGGED, at WARNING. This is how alerting stops: a rotated bot token, a deleted webhook,

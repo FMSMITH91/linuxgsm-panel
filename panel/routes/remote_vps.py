@@ -619,8 +619,24 @@ def register(app):
         # said "Public panel access (port )" with the number missing, claimed Serve was not set
         # up when it was, and pre-filled the binding form with 0.0.0.0 and a blank port next to an
         # "Apply & restart" button. server_management passes it; this route did not.
+        #
+        # status=, for exactly the same reason, on the same call. The Connection & SSH card reads
+        # `status` six times inside `{% if remote.is_local and current_user.is_superadmin %}`, and
+        # Jinja's Undefined is silently falsy — so `ts_up` and `ssh_lockdown_safe` were both false
+        # and every gate read as if Tailscale were absent. On a panel host with Tailscale SSH
+        # running, reaching this page (the Terminal's "Back to host" link lands here) said
+        # "Tailscale SSH: Disabled" and "Not allowed", greyed out both setup buttons, and gave
+        # "Disable (tailnet-only)" `data-lockdown="1" disabled` — which remote_manage_host.js
+        # deliberately never re-enables, so the control was unreachable on that page by JS or by
+        # reload. Four false statements and three dead controls; /server-management, which passes
+        # status, renders the same card correctly.
+        #
+        # Only for the local host: get_server_status() reads THIS machine, and the card that
+        # consumes it is local-only. The template's `{% if status and … %}` / `… if status else …`
+        # forms already handle an explicit None for every remote.
+        status = so.get_server_status() if remote.is_local else None
         return render_template("remote_manage.html", remote=remote, games=games,
-                               config=load_config())
+                               status=status, config=load_config())
 
     @app.route("/api/remote/<int:remote_id>/specs")
     @login_required

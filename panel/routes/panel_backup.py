@@ -19,7 +19,6 @@ import threading
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from panel.core.validation import (_attachment_header)
-from app import (_find_game_backup)
 
 
 def register(app):
@@ -30,9 +29,11 @@ def register(app):
         force=True   → back up even servers with players (disconnects them).
         defer=True   → back up empty servers now; QUEUE busy ones (backup_pending) so the hourly
                        ticker backs them up automatically once they empty.
-        Neither      → back up empty servers, skip busy ones (no queue)."""
-        if not _full_backup_lock.acquire(blocking=False):
-            return
+        Neither      → back up empty servers, skip busy ones (no queue).
+
+        _trigger_full_backup hands the lock over ALREADY HELD; the finally below releases it. It
+        used to acquire here and return silently when it lost, which is the losing half of the
+        race described there."""
         try:
             # The keep is resolved PER SERVER inside the loop below, not once out here. A server
             # can carry its own retention override — the schedule route writes it,
@@ -102,9 +103,24 @@ def register(app):
             _full_backup_lock.release()
 
     def _trigger_full_backup(force=False, defer=False):
-        if _full_backup_lock.locked():
+        # Acquire HERE, atomically, and hand the held lock to the worker — the shape
+        # api_panel_backup_game below and both runners in _shared.py already use. A `locked()`
+        # test followed by a thread start is two steps: any of the three other holders (the manual
+        # per-server backup, the hourly ticker, the 'wait until empty' sweep) could take the lock
+        # in between, and _run_full_backup's own acquire then lost and returned in total silence.
+        # The route had already answered "Full backup started", written an audit row saying it ran
+        # — the very row whose success flag was corrected so /logs could not hide a refusal — and
+        # left "Last run" pointing at the previous run. Nothing anywhere recorded the refusal.
+        if not _full_backup_lock.acquire(blocking=False):
             return False
-        threading.Thread(target=lambda: _run_full_backup(force=force, defer=defer), daemon=True).start()
+        try:
+            threading.Thread(target=lambda: _run_full_backup(force=force, defer=defer),
+                             daemon=True).start()
+        except Exception:
+            # The hand-off never happened, so nothing will release it — a leaked lock wedges every
+            # backup path until a panel restart.
+            _full_backup_lock.release()
+            raise
         return True
 
 
@@ -236,6 +252,29 @@ def register(app):
         threading.Thread(target=_worker, daemon=True).start()
 
 
+    def _find_game_backup(gs, name):
+        """(match, unreadable) for the archive called `name` on this server's host.
+
+        Validating against the real listing — rather than building a path out of user input — is
+        what keeps this path-injection safe, and that part is unchanged. What is new is the THIRD
+        state: list_game_backups returns None when the host could not be READ, and app.py's
+        version iterates it (`for b in list_game_backups(...)`), so both buttons in the Backups
+        card raised TypeError on an unreachable host and answered a 500 whose body blamed the
+        panel. Coercing it back to [] would restore the older, calmer lie — "Backup not found."
+        about a directory nobody reached. Same three states the /info route below keeps."""
+        try:
+            listing = list_game_backups(gs.remote, gs.short_name) if gs.remote_id else []
+        except Exception:
+            listing = None
+        if listing is None:
+            return None, True
+        return next((b for b in listing if b.get("name") == name), None), False
+
+    # What to say when the listing could not be read — the wording the per-server card already
+    # uses (static/js/server_files.js), so the two do not contradict each other.
+    _BK_UNREADABLE = ("Couldn't read this server's backups — the host didn't answer. "
+                      "This is not the same as there being none.")
+
     @app.route("/api/panel/backup/game/<int:server_id>/delete", methods=["POST"])
     @login_required
     @superadmin_required
@@ -243,7 +282,14 @@ def register(app):
         """Delete one game-server backup archive."""
         gs = get_game(server_id)
         name = _json_body().get("name") or ""
-        match = _find_game_backup(gs, name)
+        match, unreadable = _find_game_backup(gs, name)
+        if unreadable:
+            # str(): `name` is whatever the JSON body carried, and this is the one path that
+            # records it before the listing has vouched for it.
+            log_action(current_user, "game_backup_delete", target=gs.name,
+                       detail="refused: could not read the host's backup listing (%s)"
+                              % str(name)[:120], success=False)
+            return jsonify({"success": False, "message": _BK_UNREADABLE}), 200
         if not match:
             return jsonify({"success": False, "message": "Backup not found."}), 404
         try:
@@ -261,7 +307,13 @@ def register(app):
         """Stream a game-server backup archive to the browser (files live in the game user's home,
         so they're read via sudo/SSH rather than served from disk)."""
         gs = get_game(server_id)
-        match = _find_game_backup(gs, request.args.get("name") or "")
+        match, unreadable = _find_game_backup(gs, request.args.get("name") or "")
+        if unreadable:
+            # 502, not 404: "no such backup" is a claim about the host's backup directory, and we
+            # never read it. It used to be a TypeError — Werkzeug's HTML 500 page where a file
+            # should have been, and a traceback in the panel log for a host that simply did not
+            # answer.
+            return Response(_BK_UNREADABLE + "\n", status=502, mimetype="text/plain")
         if not match:
             abort(404)
         log_action(current_user, "game_backup_download", target=gs.name, detail=match["name"])

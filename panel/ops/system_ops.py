@@ -370,8 +370,16 @@ def detect_tailscale_interface():
     if rc == 0 and out:
         return out.strip().split("\n")[0]
 
-    # Method 3: Check common names
-    for name in ["tailscale0", "wg0", "utun"]:
+    # Method 3: Check Tailscale's OWN device names. This list used to be
+    # ["tailscale0", "wg0", "utun"], and neither of the last two is Tailscale's: `wg0` is simply
+    # what `wg-quick up wg0` creates. So the one method that never got the docstring's name test
+    # broke the invariant the other three keep — on a host running plain WireGuard with no
+    # tailscale0 (Tailscale not installed, or tailscaled running --tun=userspace-networking, the
+    # container default, where there is no TUN device at all) it answered "wg0". That is the exact
+    # incident above, still live: the button ran `ufw allow in on wg0`, opening all inbound traffic
+    # on an unrelated VPN and reporting success naming it, and it ran BEFORE method 4, which reads
+    # `tailscale status --json` and would have answered tailscale0 correctly.
+    for name in ["tailscale0", "tailscale1"]:
         out, _, rc = _run(f"ip link show {name} 2>/dev/null && echo 'FOUND' || echo 'NOTFOUND'", timeout=5)
         # Both halves: "NOTFOUND" is not in "" either, so a probe that did not run named this
         # interface as present. rc is already captured here; the positive token is the cheaper
@@ -503,7 +511,15 @@ def os_run_update():
 
     # Run in background thread
     def _bg_update():
-        _run_verb("apt-upgrade", [], timeout=600)
+        # The tuple used to be dropped. _run_verb never raises — it turns every failure into a
+        # non-zero rc or ("", "...", -1) — so apt failing on a held dpkg lock, a full disk, a
+        # missing helper verb or a sudo refusal left NO trace anywhere: the route had already
+        # answered "OS update started in background" and written an os_update_run audit row.
+        # This thread outlives the HTTP response, so the log is the only place the outcome can
+        # still be reported; every other _run_verb call site in this file already checks rc.
+        _out, _err, _rc = _run_verb("apt-upgrade", [], timeout=600)
+        if _rc != 0:
+            _log.error("apt-upgrade verb failed: rc=%s %s", _rc, (_err or _out or "")[:200])
 
     thread = threading.Thread(target=_bg_update, daemon=True)
     thread.start()
@@ -570,7 +586,16 @@ def server_reboot(delay_seconds=5):
     def _do_reboot():
         import time
         time.sleep(delay)
-        _run_verb("reboot", [], timeout=30)
+        # Same omission the clamp above fixed from the other direction, and the same outcome: "a
+        # reboot that is logged and never happens". _run_verb never raises, so a sudoers.d rule
+        # sorting after the panel's narrow NOPASSWD grant ("a password is required", rc 1) or a
+        # helper too old to know the verb (rc 2) produced no exception, no log line and no
+        # user-visible trace — while the route had already answered success and written a
+        # server_reboot audit row. An admin rebooting to clear a hung game server believes it
+        # happened. The thread outlives the response, so the log is where the truth can land.
+        _out, _err, _rc = _run_verb("reboot", [], timeout=30)
+        if _rc != 0:
+            _log.error("reboot verb failed: rc=%s %s", _rc, (_err or _out or "")[:200])
 
     thread = threading.Thread(target=_do_reboot, daemon=True)
     thread.start()
@@ -1187,11 +1212,27 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
         # argv is literals (systemd-run, --no-block, --collect, --unit, /bin/bash) plus `path`,
         # a fixed location under DATA_DIR written at 0700 just above. No shell. Not a static
         # string only because the sudo/--user prefix varies with whether the panel runs as root.
+        #
+        # CHECKED, like the helper branch 25 lines up. This was subprocess.Popen with both streams
+        # to DEVNULL and the status never collected, so it only ever reported that the child was
+        # SPAWNED. `--no-block` means systemd-run schedules the unit and exits within milliseconds
+        # with a real exit status, so a refusal — unit name still held by a running
+        # panel-selfupdate, no user D-Bus session, a later sudoers.d rule re-imposing a password —
+        # was completely silent, and this returned True asserting the whole
+        # snapshot/update/health-check/auto-rollback sequence. That is also what defeated
+        # panel_switch_branch: it writes panel_branch to config FIRST and rolls it back only when
+        # this returns False, so a launcher that never ran left the config naming a branch the
+        # checkout was never moved to, which the next ordinary Update then reset onto.
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-        subprocess.Popen(
+        _r = subprocess.run(  # nosec B603
             launcher,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy(),
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+            text=True, timeout=15, check=False, env=os.environ.copy(),
         )
+        if _r.returncode != 0:
+            _log.error("self-update launcher failed: rc=%s %s",
+                       _r.returncode, (_r.stderr or "")[:200])
+            return False, "Could not start the updater — check the panel logs."
         _update_cache["ts"] = 0.0   # invalidate so the badge re-checks after the restart
         return True, (started_msg or
                       ("Update started — the panel is backing up, updating, and verifying it "
@@ -1303,11 +1344,21 @@ def restart_panel(delay_seconds=2):
             # B603/B607: the argv is a literal and `delay` is int-clamped to 1..300 before it gets
             # here. B607 (partial path) is deliberate — systemd-run is found on PATH, exactly as
             # this branch has always done; it runs as the panel user with no escalation at all.
-            subprocess.Popen(  # nosec B603 B607  # nosemgrep
+            #
+            # CHECKED, like the verb branch below. This was Popen with both streams to DEVNULL,
+            # so it reported only that the child was spawned: `--on-active` makes systemd-run
+            # schedule a timer and exit at once with a real status, and a refusal (no user D-Bus
+            # session, a unit name still held) answered "Panel restart scheduled." to a user whose
+            # port change then silently never took effect.
+            _r = subprocess.run(  # nosec B603 B607  # nosemgrep
                 ["systemd-run", "--user", "--on-active=%s" % delay, "--collect",
                  "systemctl", "--user", "restart", "linuxgsm-panel.service"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                env=os.environ.copy())
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                text=True, timeout=15, check=False, env=os.environ.copy())
+            if _r.returncode != 0:
+                _log.error("panel restart launcher failed: rc=%s %s",
+                           _r.returncode, (_r.stderr or "")[:200])
+                return False, "Could not restart the panel — check the panel logs."
             return True, "Panel restart scheduled."
         except Exception:
             _log.exception("panel restart failed to dispatch")
@@ -1373,8 +1424,18 @@ def panel_repair_database():
     script = ("%s stop linuxgsm-panel.service; ( cd %s && %s %s update ); %s start linuxgsm-panel.service"
               % (sc, shlex.quote(base), shlex.quote(py), shlex.quote(dbm), sc))
     try:
-        subprocess.Popen(run + ["bash", "-c", script],  # nosec B603  # nosemgrep - internal paths, shlex-quoted, no user input
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy())
+        # CHECKED, like the helper branch above. `--on-active=2` schedules a transient timer and
+        # returns at once with a real status, so Popen-with-DEVNULL reported only that the child
+        # was spawned: a systemd-run that refused (no user bus, `sudo systemd-run` denied) told the
+        # user their database was being repaired and nothing ever ran, while the flagged database
+        # stayed flagged.
+        _r = subprocess.run(run + ["bash", "-c", script],  # nosec B603  # nosemgrep - internal paths, shlex-quoted, no user input
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                            stdin=subprocess.DEVNULL, text=True, timeout=15, check=False,
+                            env=os.environ.copy())
+        if _r.returncode != 0:
+            _log.error("db repair launcher failed: rc=%s %s", _r.returncode, (_r.stderr or "")[:200])
+            return False, "Couldn't start the repair job — check the panel logs."
         return True, ("Repairing the database — the panel stops, repairs it offline (your data is copied "
                       "aside first), and restarts. Give it about a minute, then reload the page.")
     except Exception:
@@ -1806,6 +1867,19 @@ def ufw_blocked_ips():
     out, _, rc = _run_verb("ufw-status", ["plain"], timeout=15)
     if rc != 0:
         _log.debug("ufw_blocked_ips: the firewall read failed (rc=%s)", rc)
+        return None
+    # A DISABLED firewall reaches here through the SUCCESSFUL path the rc guard does not cover:
+    # `ufw status` on an installed-but-inactive host exits 0 and prints exactly one line,
+    # "Status: inactive", with no rule rows at all. The parse loop below then found no DENY lines
+    # and this returned {} — "the panel has blocked nobody" — for a firewall whose stored rules it
+    # simply cannot see. _autoblock_reconcile reads "not in blocked" as "needs blocking", and
+    # `ufw deny from <ip>` STORES a rule and exits 0 while inactive, so every offender was
+    # re-blocked and audited as applied, every hour, forever, with no packet being dropped.
+    # An inactive firewall cannot answer which IPs are blocked, so it is the None case — which
+    # makes monitoring's existing `if blocked is None` skip fire. ufw_status() draws the same
+    # distinction from the same text ("Status: active" in out).
+    if "Status: inactive" in (out or ""):
+        _log.debug("ufw_blocked_ips: UFW is inactive — its rule list is not readable")
         return None
     blocked = {}
     for line in (out or "").splitlines():

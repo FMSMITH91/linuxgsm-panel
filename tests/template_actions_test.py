@@ -2159,6 +2159,141 @@ check("else if (after &&" in _dr and "window[after]()" in _dr,
       "js: an ajax-form's after-hook runs even with no section to refresh",
       "data-ajax-after is dropped unless data-ajax-refresh is also set")
 
+# ── the Ubuntu Pro card must not read "Not attached" off a host it could not reach ────────────
+# _unreachable() answers a host that is off, rebooting or refusing SSH with 200
+# {success:false, unreachable:true} — deliberately, so the UI can say "host unreachable". That
+# payload carries no `installed` key at all, so UPro.render() fell past `d.installed === false`
+# and `!d.attached` into the grey "Not attached" badge, the attach pitch and a live token field,
+# about a machine that may be fully attached with ESM and Livepatch on. An operator who acts on
+# it attaches a host twice.
+#
+# Asserted on the BRANCH ORDER in the AST, not on the text: the honest wording also appears in a
+# comment beside it, so a string search would report the comment as the fix.
+if not esprima:
+    # Every name, not one: the tally is len(results), so a block that simply stops existing
+    # without esprima reports "N / N passed" with these gates gone. Same reason as the CSRF
+    # block near the top of this file.
+    for _n in ("sweep: the Ubuntu Pro card's render/quietRefresh were found to check",
+               "sweep: the Ubuntu Pro card reads its payload in more than one branch",
+               "ubuntu pro card: an unreachable host is 'unknown', not 'Not attached'",
+               "ubuntu pro card: ...and a host that DID answer is still rendered attached or not",
+               "ubuntu pro card: a quiet re-read that failed keeps the status already painted"):
+        skip(_n, "esprima not installed (pip install esprima)")
+else:
+    def _upro_fn(node, name, out):
+        if isinstance(node, dict):
+            if (node.get("type") == "FunctionDeclaration"
+                    and (node.get("id") or {}).get("name") == name):
+                out.append(node)
+            for _v in node.values():
+                _upro_fn(_v, name, out)
+        elif isinstance(node, list):
+            for _v in node:
+                _upro_fn(_v, name, out)
+
+    def _upro_reads(node, out):
+        """Every property read off the payload `d` inside this node."""
+        if isinstance(node, dict):
+            if (node.get("type") == "MemberExpression"
+                    and (node.get("object") or {}).get("type") == "Identifier"
+                    and (node.get("object") or {}).get("name") == "d"):
+                _n = (node.get("property") or {}).get("name")
+                if _n:
+                    out.add(_n)
+            for _v in node.values():
+                _upro_reads(_v, out)
+        elif isinstance(node, list):
+            for _v in node:
+                _upro_reads(_v, out)
+
+    _upro_ast = esprima.parseScript(_pj, {"loc": True}).toDict()
+    _upro_render, _upro_quiet = [], []
+    _upro_fn(_upro_ast, "render", _upro_render)
+    _upro_fn(_upro_ast, "quietRefresh", _upro_quiet)
+    # Anti-vacuity: without this every gate below passes on a rename or a refactor that left the
+    # scan looking at nothing.
+    check(len(_upro_render) == 1 and len(_upro_quiet) == 1,
+          "sweep: the Ubuntu Pro card's render/quietRefresh were found to check",
+          "render=%d quietRefresh=%d" % (len(_upro_render), len(_upro_quiet)))
+    _upro_branches = []
+    for _st in (_upro_render[0]["body"]["body"] if _upro_render else []):
+        if _st.get("type") != "IfStatement":
+            continue
+        _seen = set()
+        _upro_reads(_st["test"], _seen)
+        if _seen:                      # skip `if(!EL) return;`, which reads nothing off d
+            _upro_branches.append(_seen)
+    check(len(_upro_branches) >= 3,
+          "sweep: the Ubuntu Pro card reads its payload in more than one branch",
+          "branches=%s" % _upro_branches)
+    check(bool(_upro_branches) and {"unreachable", "success"} <= _upro_branches[0],
+          "ubuntu pro card: an unreachable host is 'unknown', not 'Not attached'",
+          "the first branch reads %s" % sorted(_upro_branches[0] if _upro_branches else []))
+    # Positive control: the honest branch was ADDED in front, not substituted for the real
+    # states — a card that answered "unknown" to everything would also pass the check above.
+    _upro_rest = set().union(*_upro_branches[1:]) if len(_upro_branches) > 1 else set()
+    check({"installed", "attached"} <= _upro_rest,
+          "ubuntu pro card: ...and a host that DID answer is still rendered attached or not",
+          "later branches read %s" % sorted(_upro_rest))
+    # The background re-read must not overwrite a persisted, known-good status with that answer:
+    # load() paints `initial` precisely so the card never blanks, and quietRefresh undid it.
+    _upro_q = set()
+    _upro_reads(_upro_quiet[0] if _upro_quiet else {}, _upro_q)
+    check({"unreachable", "unreadable"} <= _upro_q,
+          "ubuntu pro card: a quiet re-read that failed keeps the status already painted",
+          "quietRefresh reads %s" % sorted(_upro_q))
+
+# ── ...and the Banned IPs card must not call a failed read "fail2ban isn't installed" ─────────
+# Both /bans routes answer a raised read with 200 {installed:false, jails:[], error:"…"}:
+# installed:false is the FALLBACK SHAPE, not a measurement. loadSecurityBans read only
+# `d.installed`, so a host whose SSH session was refused (key rotated, sshd restarting, tailscale
+# timing out) was told it has no brute-force protection installed — on the page whose job is to
+# say whether it is protected. Same branch-order gate as the Ubuntu Pro card above.
+if not esprima:
+    for _n in ("sweep: loadSecurityBans was found to check",
+               "sweep: the Banned IPs card reads its payload in more than one branch",
+               "banned IPs card: a failed read is not 'fail2ban isn't installed'",
+               "banned IPs card: ...and a host that answered still reports its jails"):
+        skip(_n, "esprima not installed (pip install esprima)")
+else:
+    def _f2b_ifs(node, out):
+        if isinstance(node, dict):
+            if node.get("type") == "IfStatement":
+                out.append(node)
+            for _v in node.values():
+                _f2b_ifs(_v, out)
+        elif isinstance(node, list):
+            for _v in node:
+                _f2b_ifs(_v, out)
+
+    _rm_js = (ROOT / "static" / "js" / "remote_manage.js").read_text(encoding="utf-8")
+    _f2b_fn = []
+    _upro_fn(esprima.parseScript(_rm_js, {"loc": True}).toDict(), "loadSecurityBans", _f2b_fn)
+    check(len(_f2b_fn) == 1, "sweep: loadSecurityBans was found to check",
+          "found %d" % len(_f2b_fn))
+    _f2b_raw = []
+    _f2b_ifs(_f2b_fn[0] if _f2b_fn else {}, _f2b_raw)
+    # Document order, not walk order — the branches are nested in the .then() callback.
+    _f2b_raw.sort(key=lambda _s: ((_s["loc"]["start"]["line"]), (_s["loc"]["start"]["column"])))
+    _f2b_branches = []
+    for _st in _f2b_raw:
+        _seen = set()
+        _upro_reads(_st["test"], _seen)
+        if _seen:
+            _f2b_branches.append(_seen)
+    check(len(_f2b_branches) >= 3,
+          "sweep: the Banned IPs card reads its payload in more than one branch",
+          "branches=%s" % _f2b_branches)
+    check(bool(_f2b_branches) and {"error", "unreadable"} <= _f2b_branches[0],
+          "banned IPs card: a failed read is not 'fail2ban isn't installed'",
+          "the first branch reads %s" % sorted(_f2b_branches[0] if _f2b_branches else []))
+    # Positive control: the two reassuring answers are still reachable for a host that DID
+    # answer, so this cannot pass by the card refusing to render anything.
+    _f2b_rest = set().union(*_f2b_branches[1:]) if len(_f2b_branches) > 1 else set()
+    check({"installed", "jails"} <= _f2b_rest,
+          "banned IPs card: ...and a host that answered still reports its jails",
+          "later branches read %s" % sorted(_f2b_rest))
+
 # The widget names a server, and a server name is user-supplied. It must never be concatenated
 # into markup, and it must never be translated.
 _ip = (ROOT / "static" / "js" / "install_progress.js").read_text(encoding="utf-8")
@@ -2373,6 +2508,27 @@ check(_bk_py.count('"backups_unreadable"') == 2,
       "backups: BOTH payloads carry it — the per-server card and the all-servers list",
       "found %d of the 2 places that list backups"
       % _bk_py.count('"backups_unreadable"'))
+# ...and BOTH consumers branch on it. The count above is satisfied by a payload nobody reads,
+# which is exactly what the all-servers Backups page was: /api/panel/backups reported the third
+# state per server and this page rendered "no backups yet" regardless, next to a Files & Config
+# card on the same server saying the host had not answered. One fact, two pages, opposite answers.
+_bk_js2 = (ROOT / "static" / "js" / "remote_manage_backups.js").read_text(encoding="utf-8")
+_bk_win2 = _between(_bk_js2, "var table = rows", "var st=g.status")
+check(bool(_bk_win2),
+      "backups: the all-servers page's empty state is where this check thinks it is",
+      "the per-server table render was not found in remote_manage_backups.js")
+check("g.backups_unreadable" in _bk_win2,
+      "backups: the all-servers page asks whether the listing could be READ before saying none",
+      "an unreachable host still renders 'no backups yet' for every server on it")
+check(">no backups yet<" in _bk_win2,
+      "backups: ...and still says that for a host that genuinely has none (positive control)",
+      "the real empty case lost its message")
+# The two buttons on a backup ROW read the listing too, and app.py's _find_game_backup iterates
+# it — None included. Both answered a 500 with a traceback in the panel log for a host that
+# simply did not answer.
+check("unreadable" in _between(_bk_py, "def api_panel_backup_game_delete", "def api_panel_backup_game_schedule"),
+      "backups: deleting/downloading one distinguishes 'no such backup' from 'no answer'",
+      "the delete/download pair still treats an unreadable listing as 'Backup not found.'")
 check("return sid, None" in _bk_py,
       "backups: ...and the all-servers worker reports a failed read as unknown, not as empty",
       "its except branch still answers [] for a host it could not reach")

@@ -102,6 +102,12 @@ _CRON_RUNNER_SCRIPT = (
 )
 _CRON_WRAP_RE = re.compile(r"^/home/[^/\s]+/\.lgsm-cron/run\s+([0-9a-f]{6,})\s+([A-Za-z0-9+/=]+)\s*$")
 
+# Said when the runner could not be written, so nothing was scheduled. Worded to state both halves
+# — what failed AND that the crontab is untouched — because the old behaviour said "Added" and the
+# operator's next move was to wait for a job that could never fire.
+_RUNNER_FAILED = ("Couldn't install the job recorder on the host — nothing was scheduled. "
+                  "Check that the host is reachable and that ~/.lgsm-cron isn't a file.")
+
 
 def _cron_job_id(command):
     import hashlib
@@ -112,7 +118,15 @@ def _install_cron_runner(server, user):
     """Install the per-user cron wrapper script (idempotent). Runs AS THE GAME USER (like the
     file manager) — never as root — so it can only ever touch that user's own home. Writing
     the runner as root could be redirected through a symlink a compromised game process
-    planted in ~/.lgsm-cron; dropping to the user removes that escalation. Best-effort."""
+    planted in ~/.lgsm-cron; dropping to the user removes that escalation.
+
+    Returns the rc. It used to be discarded, and that rc is the only thing that says whether the
+    script the crontab line is about to point at actually exists: if ~/.lgsm-cron is already a
+    regular file the `mkdir -p` fails and the `&&` chain writes nothing, and the tailscale/local
+    transports answer a timeout with ("", "…", -1) rather than raising. Either way the crontab
+    was then rewritten to call a script that is not there, the panel said "Added", and the job
+    never ran — indistinguishable in the card from one that simply has not fired yet, because
+    Last run reads the .status file the missing runner never writes."""
     import base64
     b64 = base64.b64encode(_CRON_RUNNER_SCRIPT.encode()).decode()
     # Absolute path (not ~) — `sudo -u` doesn't reliably set $HOME, and the game user's home
@@ -122,7 +136,9 @@ def _install_cron_runner(server, user):
     inner = ('mkdir -p {d} && chmod 700 {d} && '
              'printf %s {b} | base64 -d > {d}/run && chmod 700 {d}/run'
              ).format(d=_core._quote(d), b=_core._quote(b64))
-    _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(inner)}", timeout=15, sudo=False)
+    _out, _err, rc = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(inner)}",
+                                       timeout=15, sudo=False)
+    return rc
 
 
 def _escape_cron_percent(cmd):
@@ -145,7 +161,11 @@ def _wrap_cron_command(server, user, command):
     """Return the crontab command that records `command`'s runs. Toggle-backed and plain commands are
     kept VISIBLE (inline recorder) so the Autostart / daily-restart detection still works after a
     reschedule; anything with `%`, quotes, or shell operators uses the base64 runner (robust, no
-    escaping needed)."""
+    escaping needed).
+
+    Returns None when the base64 runner could not be installed on the host — the caller must
+    refuse rather than schedule a line pointing at a script that is not there. The two visible
+    forms need nothing installed, so they can never fail here."""
     cmd = (command or "").strip()
     # ORDER MATTERS, and it was the other way round. The panel's OWN daily-restart line is
     # `touch /home/<u>/.restart-pending` — a plain command, which set_daily_restart writes WRAPPED
@@ -165,7 +185,8 @@ def _wrap_cron_command(server, user, command):
         # `… restart >> ~/log/r-` while the panel's editor showed the whole thing back.
         return _escape_cron_percent(cmd)
     import base64
-    _install_cron_runner(server, user)
+    if _install_cron_runner(server, user) != 0:
+        return None
     b64 = base64.b64encode(cmd.encode()).decode()
     return "/home/%s/.lgsm-cron/run %s %s" % (user, _cron_job_id(cmd), b64)
 
@@ -474,6 +495,11 @@ def add_cron_job(server, user, schedule, command, selfname=None):
         return False, msg
     schedule = " ".join(schedule.split())
     wrapped = _wrap_cron_command(server, user, command)
+    # The runner write is what makes this line runnable; scheduling it anyway produced a crontab
+    # entry that mails "No such file or directory" to a mailbox nobody reads, while the panel
+    # reported "Added" with a success audit row. Refuse instead — nothing has been written yet.
+    if wrapped is None:
+        return False, _RUNNER_FAILED
     return _core._rewrite_crontab(server, user, "", [f"{schedule} {wrapped}"])
 
 
@@ -489,6 +515,10 @@ def update_cron_job(server, user, old_raw, schedule, command, selfname=None):
         return False, msg
     schedule = " ".join(schedule.split())
     wrapped = _wrap_cron_command(server, user, command)
+    # Same as add_cron_job: refuse BEFORE the rewrite, which here also protects the existing line
+    # — the old entry would otherwise be dropped and replaced by one that cannot run.
+    if wrapped is None:
+        return False, _RUNNER_FAILED
     # -vxF: drop the line that exactly (whole-line, fixed-string) matches old_raw,
     # keep everything else, then append the rewritten (recorder-wrapped) entry.
     return _core._rewrite_crontab(server, user, "", [f"{schedule} {wrapped}"],

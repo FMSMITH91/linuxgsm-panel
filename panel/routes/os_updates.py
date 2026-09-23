@@ -25,6 +25,13 @@ def register(app, supervise):
             now = time.time()
             if not force and now - _os_update_state["last_run"] < _OS_UPDATE_EVERY:
                 return
+            # The first pass after a restart SEEDS; it does not announce. `hosts` is a plain
+            # in-memory dict (panel_state.py) and nothing persists it, so after a restart
+            # `had_count, had_sec` reads (0, 0) for every host and the edge test below fires for
+            # every update already pending — the identical list, re-announced ~30 s after boot.
+            # Any restart did it: a click on "Update now", a reboot, a config change. Same
+            # reasoning as app.py's refusal to re-arm on a failed check.
+            seeding = _os_update_state["last_run"] == 0.0
             with app.app_context():
                 remotes = RemoteServer.query.all()
                 # Armed only once the host list is actually in hand: a failure before this point
@@ -57,7 +64,9 @@ def register(app, supervise):
                     _os_update_state["hosts"][remote.id] = (count, sec)
                     # Security updates get their own arm: they routinely land on a host that already
                     # has ordinary updates pending, and keying on the total alone would swallow them.
-                    if not ((count and not had_count) or (sec and not had_sec)):
+                    # `seeding` first: the counts above are now recorded, the banner and the card
+                    # have their answer, and only a transition THIS process witnessed alerts.
+                    if seeding or not ((count and not had_count) or (sec and not had_sec)):
                         continue
                     what = ("%d security update%s of %d waiting"
                             % (sec, "" if sec == 1 else "s", count)) if sec else \

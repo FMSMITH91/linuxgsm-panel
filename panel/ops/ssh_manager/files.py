@@ -262,19 +262,41 @@ def lgsm_read_config(server, user, selfname):
     return {"path": inst, "raw": instance_text, "settings": settings, "groups": groups}
 
 
+# Printed by the `details` script AFTER LinuxGSM has finished, so its presence is the one thing
+# that separates "details ran and named no config file" from "details never ran".
+_DETAILS_DONE = "__LGSMP_DETAILS_DONE__"
+
+
 def lgsm_game_config(server, user, selfname):
     """Locate and read the game's OWN server config file (e.g. a Source server.cfg
     or cod's serverfiles/main/<name>.cfg) by parsing LinuxGSM `details`. This is the
     file where in-game settings like sv_maxclients actually live for many games.
-    Returns {rel, content, exists, error}."""
+    Returns {rel, content, exists, error}. A `details` run that never completed answers
+    "the host did not answer" — NOT "this game has no config file", which is a claim about
+    the game that a failed read never established."""
     if not _idents_ok(user, selfname):
         return {"rel": "", "content": "", "exists": False,
                 "error": "Invalid account or script name"}
+    # SENTINEL, for the same reason lgsm_read_config frames its sections and list_game_backups
+    # requires its DONE marker: `./<selfname> details` is a 45-second LinuxGSM invocation on a
+    # possibly-busy host, and when it does NOT run the tailscale and local transports return
+    # ("", "…timed out", -1) without raising. No output then matches the `config file:` regex, and
+    # this used to answer "No editable game config file was reported for this game." — a statement
+    # about the GAME made from a read that never reached the host. The admin concludes their
+    # server.cfg does not exist and stops looking. The sentinel only lands if the script ran to
+    # the end, so "details said nothing" and "details never answered" stay tellable apart.
+    inner = (f"cd /home/{_core._quote(user)} && {{ ./{_core._quote(selfname)} details 2>&1; "
+             f"printf %s {_core._quote(_DETAILS_DONE)}; }}")
     o, _, _ = _core.run_command(
-        server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(f'cd /home/{_core._quote(user)} && ./{_core._quote(selfname)} details 2>&1')}",
+        server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(inner)}",
         timeout=45, sudo=False,
     )
     text = terminal.strip_escapes(o or "")
+    if _DETAILS_DONE not in text:
+        _core._log.warning("lgsm_game_config: no DONE marker for %s — reporting a failed read", selfname)
+        return {"rel": None, "content": "", "exists": False,
+                "error": "Could not read the game config — the host did not answer."}
+    text = text.replace(_DETAILS_DONE, "")
     home = f"/home/{user}/"
     path = None
     for line in text.splitlines():
@@ -453,23 +475,57 @@ def _parse_mods_installed(out):
     return mods
 
 
+# Tokens the mods menus really print — taken from the live Garry's Mod and Call of Duty captures
+# in tests/unit/part03.py, not guessed: the command's own title ("<Game> Installing/Removing
+# Mods"), the section headers ("Available/Remove addons/mods"), the empty-install answer ("No
+# installed mods or addons were found"), and the no-installer answer ("Unknown command" + the
+# "LinuxGSM - <Game> - Version …" usage banner). Any ONE of them proves the host answered.
+_MODS_ANSWERED_RE = re.compile(
+    r"addons/mods|installing mods|removing mods|no installed mods|unknown command|linuxgsm", re.I)
+
+
+def _mods_read_ok(text):
+    """True when the mods menu really answered — a positive token, never the absence of one.
+
+    `supported` (below) is `"unknown command" not in text`, which is True of "" as well, so a read
+    that NEVER HAPPENED came back as ([], True): "this game has a mods installer, and it lists
+    nothing". run_as_game_user does not raise on the local or tailscale transports — it returns
+    ("", "SSH command timed out", -1) — and a refused account/script name returns
+    ("", "invalid account or script name", 1) the same way. Both parsed to "no mods", which the
+    Mods card renders as "This game doesn't have any LinuxGSM-installable mods." — a claim about
+    the GAME, made from a read that never reached the host, that simultaneously hides the Remove
+    button for every mod that IS installed. `supported` has no state for "we could not look", so
+    the mods list gets one: None. (Same third state as browse_dir's `unreadable` and
+    list_game_backups' None.)
+    """
+    return bool(_MODS_ANSWERED_RE.search(text or ""))
+
+
 def mods_available(server, user, selfname, timeout=60):
     """Returns (available_mods, supported). `supported` is False for games with no LinuxGSM mods
     installer (e.g. cod), where mods-install answers 'Unknown command' — so the UI can hide the
-    whole card rather than show an empty one."""
+    whole card rather than show an empty one.
+
+    The list is **None when the host did not answer at all**, which is a different thing from "this
+    game has no mods" and has to stay tellable apart — see _mods_read_ok."""
     out, err, _ = _core.run_as_game_user(server, user, "mods-install", timeout=timeout,
                                          selfname=selfname, answers=["abort"])
     text = (out or "") + "\n" + (err or "")
     supported = _game_supports_mods(text)
+    if not _mods_read_ok(text):
+        return None, supported
     return (_parse_mods_available(text) if supported else []), supported
 
 
 def mods_installed(server, user, selfname, timeout=60):
-    """Returns (installed_mods, supported). See mods_available for `supported`."""
+    """Returns (installed_mods, supported). See mods_available for `supported` and for why the
+    list is None when the read did not happen."""
     out, err, _ = _core.run_as_game_user(server, user, "mods-remove", timeout=timeout,
                                          selfname=selfname, answers=["abort"])
     text = (out or "") + "\n" + (err or "")
     supported = _game_supports_mods(text)
+    if not _mods_read_ok(text):
+        return None, supported
     return (_parse_mods_installed(text) if supported else []), supported
 
 
@@ -576,7 +632,19 @@ def read_file(server, user, relpath, max_bytes=1048576):
     # _write_file_as_user has always done it in the other direction.
     inner = (
         f"if [ ! -f {_core._quote(ap)} ]; then echo __NOFILE__; exit 0; fi; "
-        f"sz=$(stat -c %s {_core._quote(ap)} 2>/dev/null); "
+        # `stat -Lc`, matching stat_path below. Every OTHER operator in this script — [ -f ],
+        # [ -s ], grep, base64 — dereferences a symlink; `stat -c %s` does not, it reports the
+        # length of the link's own target string (tens of bytes). So for a symlink the cap was
+        # applied to the LINK while the read followed it to the target, and the 1 MB refusal this
+        # whole line exists for simply did not apply: a convenience link like
+        # `latest.log -> serverfiles/.../errors.log` pointing at a multi-GB log was base64'd
+        # whole, buffered as one Python string and serialised into a JSON response.
+        f"sz=$(stat -Lc %s {_core._quote(ap)} 2>/dev/null); "
+        # ...and a size we could not READ must refuse, not pass. `[ "" -gt N ]` is a bash
+        # "integer expression expected" error whose non-zero status makes the `if` false, so an
+        # unreadable size fell through to the uncapped read. Exiting with no output at all puts it
+        # on the unframed path below, which already says "could not read" rather than guessing.
+        f"case \"$sz\" in ''|*[!0-9]*) exit 0;; esac; "
         f"if [ \"$sz\" -gt {int(max_bytes)} ]; then echo __TOOBIG__; exit 0; fi; "
         f"if [ ! -s {_core._quote(ap)} ] || grep -qI . {_core._quote(ap)} 2>/dev/null; then "
         f"printf %s {_core._quote(_READ_BEGIN)}; base64 {_core._quote(ap)} | tr -d '\\n'; "

@@ -1092,8 +1092,34 @@ _REMOTE_ACTIONS = {
             "apt-get -y autoremove >> {L} 2>&1 || true; "
             "echo \"{S}$rc\" >> {L} 2>&1".format(L=OS_UPDATE_LOG, S=OS_UPDATE_DONE)),
            OS_UPDATE_STARTED)),
+    # `sed -i` exits 0 when its pattern matches nothing, leaving the file untouched — so on a host
+    # whose sshd_config does not already carry the directive (a CIS-hardened image, a file written
+    # by config management, a distro that keeps these keys only in sshd_config.d) this verb did
+    # NOTHING and reported success. The bootstrap printed "Hardening SSH configuration" and the
+    # host's setup log recorded PermitRootLogin / PasswordAuthentication as locked down while root
+    # password login stayed whatever the image shipped with. The helper's implementation of the
+    # same verb appends in that case (tools/panel-helper, do_sshd_set_directive's `if not
+    # replaced` branch), so the two transports disagreed about what the verb MEANS — and only the
+    # remote half lied. The pattern is the helper's too: `^#\?Key` never matched
+    # `#   PasswordAuthentication yes`, which is how Ubuntu ships it.
+    #
+    # if/then/else rather than `grep && sed || printf`: that chain appends whenever the sed fails
+    # as well, which is the precedence bug do_create_swapfile's docstring records about the shell
+    # form this table replaced. Key and value are still the closed SSHD_DIRECTIVES pair checked in
+    # check_args, so nothing user-shaped reaches the sed script.
     "sshd-set-directive": lambda a: (
-        "sed -i 's/^#\\?%s.*/%s %s/' %s" % (a[0], a[0], a[1], shlex.quote(SSHD_CONFIG))),
+        "if grep -qE '^[[:space:]]*#?[[:space:]]*%s\\b' %s; then "
+        "sed -i -E 's/^[[:space:]]*#?[[:space:]]*%s\\b.*/%s %s/' %s; "
+        # A file whose last line has no newline would otherwise get the directive glued onto it,
+        # producing an sshd_config that does not parse. `$(…)` strips trailing newlines, so this
+        # is empty exactly when the file already ends in one. do_sshd_set_directive guards the
+        # same case with `if out and not out[-1].endswith("\n")`.
+        "else { [ -n \"$(tail -c1 %s)\" ] && printf '\\n' >> %s; }; "
+        "printf '%%s %%s\\n' %s %s >> %s; fi"
+        % (a[0], shlex.quote(SSHD_CONFIG),
+           a[0], a[0], a[1], shlex.quote(SSHD_CONFIG),
+           shlex.quote(SSHD_CONFIG), shlex.quote(SSHD_CONFIG),
+           shlex.quote(a[0]), shlex.quote(a[1]), shlex.quote(SSHD_CONFIG))),
     "create-swapfile": lambda a: (
         "fallocate -l 2G %s && chmod 600 %s && mkswap %s && swapon %s && "
         "{ grep -q %s %s || echo %s >> %s ; }"

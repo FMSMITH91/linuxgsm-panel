@@ -241,6 +241,21 @@ SSHD_DIRECTIVES = {
     "PasswordAuthentication": ("no", "yes"),
 }
 SSHD_CONFIG = "/etc/ssh/sshd_config"
+# The panel's own hardening drop-in, and the reason it has to exist.
+#
+# sshd_config(5): "for each keyword, the first obtained value will be used". Ubuntu 22.04 and 24.04
+# ship `Include /etc/ssh/sshd_config.d/*.conf` as the FIRST directive of sshd_config, so EVERY
+# value in that directory is obtained before any line of sshd_config's own body — and cloud images
+# populate it: /etc/ssh/sshd_config.d/50-cloud-init.conf carries PasswordAuthentication, set from
+# the image's ssh_pwauth. Two of the four directives the panel hardens are the two that decide how
+# someone logs in, so writing them into sshd_config alone was a NO-OP on exactly the hosts the
+# panel is pointed at — and the verb reported success, because the write itself always succeeded.
+# 00- so it sorts BEFORE the distro's 50-cloud-init.conf: later files lose, so a 99- name (the one
+# the port drop-in above uses, where being last is what is wanted) would not have fixed it.
+SSHD_HARDENING_DROPIN = "/etc/ssh/sshd_config.d/00-panel-hardening.conf"
+SSHD_HARDENING_HEADER = (
+    "# Managed by linuxgsm-panel. Sorts before the distro's drop-ins on purpose:\n"
+    "# sshd uses the FIRST value it obtains for a keyword.\n")
 
 SWAPFILE = "/swapfile"
 SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
@@ -1459,13 +1474,95 @@ def do_reboot_delayed(args, content):
 REBOOT_DELAY_SECONDS = 2
 
 
+def _sshd_includes_dropin_dir():
+    """Whether sshd_config pulls in /etc/ssh/sshd_config.d at all.
+
+    Debian 11 and the RHEL family do not ship the Include line, and on those hosts a file in that
+    directory is inert — so the drop-in is written only where it is actually read, and the
+    sshd_config edit below is what hardens everywhere else."""
+    try:
+        with open(SSHD_CONFIG, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if re.match(r"^\s*Include\s+\S*sshd_config\.d", line, re.IGNORECASE):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _write_sshd_hardening_dropin(key, value):
+    """Set one directive in the panel's hardening drop-in, leaving the others it already holds.
+
+    Read-modify-write rather than an append, so setting PasswordAuthentication twice does not
+    leave two lines whose second one is dead. Only keys from SSHD_DIRECTIVES survive the rewrite:
+    this file is root-owned sshd config, and it should never be able to accumulate anything the
+    verb is not allowed to set in the first place."""
+    held = {}
+    try:
+        with open(SSHD_HARDENING_DROPIN, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                parts = line.split(None, 1)
+                if len(parts) == 2 and parts[0] in SSHD_DIRECTIVES:
+                    held[parts[0]] = parts[1].strip()
+    except OSError:
+        pass                              # not there yet, or unreadable: start from what we know
+    held[key] = value
+    body = SSHD_HARDENING_HEADER + "".join("%s %s\n" % (k, held[k]) for k in sorted(held))
+    d = os.path.dirname(SSHD_HARDENING_DROPIN)
+    os.makedirs(d, mode=0o755, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".panel-", suffix=".tmp")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(body)
+    os.chmod(tmp, 0o644)                  # what the distro's own drop-ins use
+    os.replace(tmp, SSHD_HARDENING_DROPIN)
+
+
+def _sshd_effective_value(key):
+    """What `sshd -T` says `key` is actually set to, or None when that could not be read.
+
+    None is NOT "unset": sshd -T prints every directive with its effective value, so a missing
+    line means the read did not happen — sshd absent, the config failing to parse, the binary
+    refusing to run. A failed read is not a fact, so the caller reports "could not verify"
+    separately rather than reporting the directive as wrong."""
+    try:
+        argv = [resolve("sshd"), "-T"]
+    except FileNotFoundError:
+        return None
+    try:
+        r = subprocess.run(argv, shell=False, capture_output=True, timeout=30)  # nosec B603
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    low = key.lower()
+    for line in r.stdout.decode("utf-8", "replace").splitlines():
+        parts = line.strip().split(None, 1)
+        if parts and parts[0].lower() == low:
+            return parts[1].strip() if len(parts) > 1 else ""
+    return None
+
+
 def do_sshd_set_directive(args, content):
-    """Set one sshd_config directive to one of its allowed values.
+    """Set one sshd_config directive to one of its allowed values, and CHECK that it took.
 
     Was `sed -i 's/^#\\?<Key>.*/<Key> <value>/' /etc/ssh/sshd_config` — a regex substitution
     running as root, once per directive. Same edit here: replace the first line that sets the
     directive (commented or not), or append it if there is none. Both the key and the value come
-    from SSHD_DIRECTIVES, so this cannot write a directive the panel does not harden."""
+    from SSHD_DIRECTIVES, so this cannot write a directive the panel does not harden.
+
+    Editing sshd_config was not enough, and the verb could not tell. sshd uses the FIRST value it
+    obtains for a keyword, Ubuntu's sshd_config Includes sshd_config.d before its own body, and
+    cloud images put PasswordAuthentication in 50-cloud-init.conf — so on a stock Ubuntu VPS the
+    panel wrote `PasswordAuthentication no`, `sshd -t` passed, sshd restarted, the bootstrap log
+    said "Hardening SSH configuration", and password SSH stayed open to the internet. The write
+    always succeeded, so rc 0 meant "written", never "in effect". Now the value also goes into a
+    00- drop-in that sorts ahead of the distro's, and `sshd -T` is read back afterwards.
+
+    Exit codes, because "not applied" and "could not check" are different answers:
+      0  written, and sshd -T confirms the requested value
+      4  written, but sshd -T still reports something else — another file wins
+      5  written, but sshd -T could not be read, so nothing here is verified
+    """
     key, value = args[0], args[1]
     try:
         with open(SSHD_CONFIG, encoding="utf-8", errors="replace") as fh:
@@ -1489,6 +1586,18 @@ def do_sshd_set_directive(args, content):
         fh.writelines(out)
     os.chmod(tmp, stat.S_IMODE(os.stat(SSHD_CONFIG).st_mode))   # keep sshd_config's own mode
     os.replace(tmp, SSHD_CONFIG)
+    # ...and again where it will actually be obtained first, on the distros that read it.
+    if _sshd_includes_dropin_dir():
+        _write_sshd_hardening_dropin(key, value)
+    effective = _sshd_effective_value(key)
+    if effective is None:
+        print("panel-helper: sshd-set-directive: wrote %s, but could not read sshd -T to "
+              "confirm it took effect" % key, file=sys.stderr)
+        return 5
+    if effective.lower() != value.lower():
+        print("panel-helper: sshd-set-directive: %s is still in effect as %r after the write — "
+              "another sshd_config.d file sets it first" % (key, effective), file=sys.stderr)
+        return 4
     return 0
 
 
@@ -2763,6 +2872,24 @@ def do_content_cron_remove(args, content):
     return 0
 
 
+def _emit_mount_cfg(path):
+    """_as_game_user's emit for mount.cfg: print the file, or print nothing if there is no file.
+
+    The two cases the caller has to be able to tell apart. A mount.cfg that was never created is a
+    real READING — a GMod server that has never mounted anything does not have one — so it emits
+    nothing and the verb succeeds. Anything else (a permission error, a read that dies part-way
+    through, something that is not a regular file) propagates out of the forked child, so
+    _as_game_user returns 1 and gmod_current_mounts reports "unknown" instead of "no mounts".
+
+    os.lstat rather than os.path.isfile, because isfile() answers False for a file it could not
+    stat as well as for one that is not there — the very conflation this exists to remove."""
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return                    # never created: nothing is mounted, and that IS a measurement
+    _emit_file(path, sys.stdout.buffer)
+
+
 def do_gmod_mount_read(args, content):
     """Print a GMod server's mount.cfg, or nothing. Was `cat <path> 2>/dev/null || true`.
 
@@ -2774,8 +2901,17 @@ def do_gmod_mount_read(args, content):
     pw, abspath = _game_home_path(args[0], GMOD_CFG_SUBPATH + "/mount.cfg")
     if pw is None:
         return 0                  # no such user: empty, which the caller reads as "no mounts"
-    _as_game_user(pw, abspath, lambda path: _emit_file(path, sys.stdout.buffer))
-    return 0                      # missing or unreadable is "no mounts", as it has always been
+    # Return what the read actually DID, the way do_game_file_read and do_game_dir_tar already do.
+    # This used to `return 0` unconditionally. _as_game_user returns 1 for a credential drop that
+    # did not take, a resolved path that leaves the home, a child killed by a signal, and any
+    # exception out of _emit_file — including one raised part-way through its chunk loop, which
+    # leaves TRUNCATED output already flushed on stdout. Every one of those reached
+    # gmod_current_mounts as rc 0, which reads it as "this server mounts nothing"; server_files
+    # then rewrote mount.cfg to exactly the visible selection and dropped every mount the panel had
+    # failed to read, reporting success. gmod_current_mounts is already written for this — it
+    # returns None on a non-zero rc — so the only thing missing was the helper telling the truth.
+    # An ABSENT mount.cfg is still rc 0: see _emit_mount_cfg, that one really is "no mounts".
+    return _as_game_user(pw, abspath, _emit_mount_cfg)
 
 
 def _chmod_nofollow(path, add, x_if_user=False, dir_fd=None):

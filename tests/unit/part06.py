@@ -410,6 +410,11 @@ try:
     open(_hh.SSHD_CONFIG, "w").write(
         "# a comment\n#ClientAliveInterval 120\nClientAliveCountMax 9\nPort 22\n")
     os.chmod(_hh.SSHD_CONFIG, 0o600)
+    # The verb reads `sshd -T` back after the write. Stand that in: this runs on a developer box
+    # with no root and possibly no sshd, and the read-back gets its own checks below.
+    _hh_eff = {"ClientAliveInterval": "300", "ClientAliveCountMax": "2",
+               "PermitRootLogin": "prohibit-password"}
+    _hh._sshd_effective_value = lambda key: _hh_eff.get(key)
     _hh.do_sshd_set_directive(["ClientAliveInterval", "300"], None)
     _hh.do_sshd_set_directive(["ClientAliveCountMax", "2"], None)
     _hh.do_sshd_set_directive(["PermitRootLogin", "prohibit-password"], None)
@@ -423,6 +428,62 @@ try:
     check("sshd hardening: unrelated lines are left alone", "Port 22" in _cfg, _cfg)
     check("sshd hardening: the file keeps the mode it had",
           _stat.S_IMODE(os.stat(_hh.SSHD_CONFIG).st_mode) == 0o600)
+
+    # ── the WRITE is not the measurement; sshd -T is ───────────────────────────────────────────
+    # sshd_config(5): "for each keyword, the first obtained value will be used". Ubuntu 22.04/24.04
+    # make `Include /etc/ssh/sshd_config.d/*.conf` the first directive of sshd_config, and cloud
+    # images put PasswordAuthentication in 50-cloud-init.conf — so everything this verb wrote into
+    # sshd_config lost, and the verb returned 0 because the WRITE had succeeded. Bootstrap logged
+    # "Hardening SSH configuration" on a host whose password login was still open to the internet,
+    # and then rate-limited port 22 as though that were the remaining exposure.
+    _hh_eff["PasswordAuthentication"] = "yes"          # what the distro drop-in still wins with
+    _rc_over = _hh.do_sshd_set_directive(["PasswordAuthentication", "no"], None)
+    check("sshd hardening: a directive another file overrides is NOT reported as applied",
+          _rc_over != 0, "rc=%s" % _rc_over)
+    # Positive control: the verb must still succeed when the value really did take effect, or the
+    # check above would pass with the whole write removed.
+    _hh_eff["PasswordAuthentication"] = "no"
+    _rc_ok = _hh.do_sshd_set_directive(["PasswordAuthentication", "no"], None)
+    check("sshd hardening: ...and one that really did take effect still reports success",
+          _rc_ok == 0, "rc=%s" % _rc_ok)
+    # A failed read is not a fact either way: "could not check" must not read as either answer.
+    _hh._sshd_effective_value = lambda key: None
+    _rc_unread = _hh.do_sshd_set_directive(["PasswordAuthentication", "no"], None)
+    check("sshd hardening: an unreadable sshd -T is neither 'applied' nor 'overridden'",
+          _rc_unread not in (0, _rc_over), "rc=%s, overridden is %s" % (_rc_unread, _rc_over))
+    _hh._sshd_effective_value = lambda key: _hh_eff.get(key)
+
+    # ...and the hardening has to land where sshd obtains it FIRST — a 00- drop-in, ahead of the
+    # distro's 50-cloud-init.conf. Later files lose, so a 99- name would not have fixed this.
+    _hh.SSHD_HARDENING_DROPIN = os.path.join(_hdir, "sshd_config.d", "00-panel-hardening.conf")
+    open(_hh.SSHD_CONFIG, "w").write(
+        "Include /etc/ssh/sshd_config.d/*.conf\n#PasswordAuthentication yes\nPort 22\n")
+    _hh.do_sshd_set_directive(["PasswordAuthentication", "no"], None)
+    _hh_drop = (open(_hh.SSHD_HARDENING_DROPIN).read()
+                if os.path.exists(_hh.SSHD_HARDENING_DROPIN) else "")
+    check("sshd hardening: an Include-style sshd_config also gets the panel's own drop-in",
+          "PasswordAuthentication no" in _hh_drop, repr(_hh_drop))
+    check("sshd hardening: ...whose name sorts BEFORE the distro's 50-cloud-init.conf",
+          os.path.basename(_hh.SSHD_HARDENING_DROPIN) < "50-cloud-init.conf",
+          os.path.basename(_hh.SSHD_HARDENING_DROPIN))
+    # Setting a second directive keeps the first: a read-modify-write, not an append that leaves
+    # a dead duplicate line behind it.
+    _hh_eff["PermitRootLogin"] = "no"
+    _hh.do_sshd_set_directive(["PermitRootLogin", "no"], None)
+    _hh_drop2 = open(_hh.SSHD_HARDENING_DROPIN).read()
+    check("sshd hardening: a second directive joins the drop-in without dropping the first",
+          "PermitRootLogin no" in _hh_drop2 and "PasswordAuthentication no" in _hh_drop2
+          and _hh_drop2.count("PasswordAuthentication") == 1, repr(_hh_drop2))
+    # The other direction: a host that does NOT Include sshd_config.d (Debian 11, the RHEL family)
+    # must not be left an inert file that looks like hardening and is read by nothing.
+    _hh.SSHD_HARDENING_DROPIN = os.path.join(_hdir, "sshd_config.d", "00-panel-unused.conf")
+    open(_hh.SSHD_CONFIG, "w").write("#PasswordAuthentication yes\nPort 22\n")
+    _hh.do_sshd_set_directive(["PasswordAuthentication", "no"], None)
+    check("sshd hardening: a host with no Include gets no inert drop-in",
+          not os.path.exists(_hh.SSHD_HARDENING_DROPIN),
+          "wrote a drop-in into a directory sshd never reads")
+    check("sshd hardening: ...and that host is still hardened in sshd_config itself",
+          "PasswordAuthentication no" in open(_hh.SSHD_CONFIG).read())
     _shutil.rmtree(_hdir, ignore_errors=True)
 except OSError as _e:
     skip("sshd hardening", _e)
@@ -1277,6 +1338,105 @@ try:
           "can_already_sudo" in _sync_body and "no)" in _sync_body
           and "usermod -aG" in _sync_body, _sync_body[:200])
 
+    # ...and an account that gained sudo AFTER it was enrolled must have the grant TAKEN BACK.
+    # The escalation test runs BEFORE the membership test and only ever `continue`d, and this
+    # function runs on updates too — so an account enrolled while it had no sudo and since added to
+    # `sudo` kept its GAME_GROUP membership on every later run while being told "Not enrolling" and
+    # "The panel will not be able to manage that account's servers on this host". Both sentences
+    # were false for it: the panel could still become it, and from there `sudo -i` reaches root.
+    # Driven, not grepped: the loop is re-pointed at a sandbox /home and every mutating command is
+    # a shim, so what is asserted is the argv that would have run.
+    _sync_fn = _su_body("sync_game_user_group") + "\n}\n"
+    _sync_home = _tempfile.mkdtemp(prefix="gamehome-")
+    try:
+        os.makedirs(os.path.join(_sync_home, "steam", "lgsm", "config-lgsm"))
+        _sync_src = _sync_fn.replace("for _gh in /home/*;", "for _gh in %s/*;" % _sync_home)
+        check("install.sh: (premise) the enrolment loop was found and re-pointed at a sandbox",
+              ("%s/*" % _sync_home) in _sync_src and "/home/*" not in _sync_src,
+              _sync_src[:200])
+        _sync_mark = os.path.join(_sync_home, "calls.log")
+
+        def _sync_run(groups, sudo_reply="User steam is not allowed to run sudo on h."):
+            """Run the real loop over one sandbox account whose `id -nG` answers `groups`."""
+            if os.path.exists(_sync_mark):
+                os.remove(_sync_mark)
+            # usermod/gpasswd are called with >/dev/null 2>&1, so the shims record to a file.
+            _shim = ("ok() { echo \"OK $*\"; }\n"
+                     "groupadd() { return 0; }\n"
+                     "id() { [ \"${1:-}\" = -nG ] && { echo %s; return 0; }; return 0; }\n"
+                     "sudo() { printf '%%s' %s; }\n"
+                     "usermod() { echo \"USERMOD $*\" >> %s; return 0; }\n"
+                     "gpasswd() { echo \"GPASSWD $*\" >> %s; return 0; }\n"
+                     % (_su_shlex.quote(groups), _su_shlex.quote(sudo_reply),
+                        _su_shlex.quote(_sync_mark), _su_shlex.quote(_sync_mark)))
+            _rr = _su_run(_cas + "\n" + _sync_src + "\nsync_game_user_group\n",
+                          "RUN_AS_ROOT=1\nGAME_GROUP=lgsmpanel-games\nPANEL_USER=lgsmpanel\n",
+                          extra=_shim)
+            _calls = (open(_sync_mark, encoding="utf-8").read()
+                      if os.path.exists(_sync_mark) else "")
+            return (_rr.stdout or "") + (_rr.stderr or ""), _calls
+
+        _out, _calls = _sync_run("steam sudo lgsmpanel-games")
+        check("install.sh: an enrolled account that GAINED sudo is removed from the game group",
+              "GPASSWD -d steam lgsmpanel-games" in _calls,
+              "the membership was left in place; calls=%r out=%r" % (_calls, _out[-200:]))
+        check("install.sh: ...and is not told the panel merely declined to enrol it",
+              "Not enrolling" not in _out and "Removed 'steam'" in _out,
+              "two false sentences about a member the panel CAN still become: %r" % (_out[-300:],))
+        _out, _calls = _sync_run("steam sudo")
+        check("install.sh: ...while an account that was never a member just reads 'not enrolling'",
+              "Not enrolling" in _out and "GPASSWD" not in _calls,
+              "calls=%r out=%r" % (_calls, _out[-200:]))
+        _out, _calls = _sync_run("steam")
+        check("install.sh: ...and a plain game account is still enrolled (positive control)",
+              "USERMOD -aG lgsmpanel-games steam" in _calls and "GPASSWD" not in _calls,
+              "calls=%r out=%r" % (_calls, _out[-200:]))
+    finally:
+        _shutil.rmtree(_sync_home, ignore_errors=True)
+
+    # ── "Port N is free for the panel" must not be printed when nothing was free ─────────────
+    # choose_and_record_port probes 5000..5050 and left `port` at `desired` when the loop found
+    # nothing — the value its own first iteration had just measured as BUSY. The caller compares
+    # only against the input, so its two branches could say "a different port" or "it is free" and
+    # nothing else: the one outcome where the service start, the health check and the firewall step
+    # would ALL point at a dead port printed as the green tick, and the operator was sent to the
+    # logs having been told the port was free.
+    _port_block = _su_between('PANEL_PORT="$(choose_and_record_port', "\nfi\n")
+    _port_shims = "die() { echo \"DIE $*\"; exit 7; }\nok() { echo \"OK $*\"; }\n"
+    _port_env = "DESIRED_PORT=5000\nPANEL_DIR=/opt/panel\n"
+    _r = _su_run(_port_block, _port_env,
+                 extra=_port_shims + "choose_and_record_port() { printf ''; }\n")
+    check("install.sh: a port probe that found nothing free stops the install",
+          "DIE" in _r.stdout and "OK" not in _r.stdout, repr(_r.stdout[-220:]))
+    check("install.sh: ...and says which range it searched",
+          "5000-5050" in _r.stdout, repr(_r.stdout[-220:]))
+    _r = _su_run(_port_block, _port_env,
+                 extra=_port_shims + "choose_and_record_port() { echo 5000; }\n")
+    check("install.sh: ...while a genuinely free desired port still reports free (positive control)",
+          "OK Port 5000 is free for the panel" in _r.stdout, repr(_r.stdout[-220:]))
+    _r = _su_run(_port_block, _port_env,
+                 extra=_port_shims + "choose_and_record_port() { echo 5003; }\n")
+    check("install.sh: ...and a fallback port is still reported as a fallback",
+          "WARN Port 5000 is already in use" in _r.stdout and "5003" in _r.stdout,
+          repr(_r.stdout[-220:]))
+    # ...and the probe itself must not record a port it never found free.
+    check("install.sh: the probe prints and records nothing when the range is exhausted",
+          "if port is None:" in _su_txt and "raise SystemExit(0)" in _su_txt
+          and _su_txt.index("if port is None:") < _su_txt.index('cfg["port"] = port'),
+          "the exhausted case still falls through to the config write")
+
+    # ── the "already up to date" branch has to backfill EVERY root-owned piece ───────────────
+    # That branch exists because root-owned state lives OUTSIDE the checkout and can be stale while
+    # the code is current. /usr/local/bin/linuxgsm-panel-recover is exactly that, and it is what
+    # this installer prints as THE lockout remedy — so the operator re-running the installer to
+    # repair a lockout was the one person guaranteed to reach this branch, and got "Already up to
+    # date", exit 0, and `command not found` on the very next line they were told to type.
+    _uptodate = _su_between("# Nothing to FETCH is not nothing to DO.", "Already up to date")
+    for _fn in ("check_origin_trusted", "install_root_tools", "write_sudoers_grant",
+                "write_terminal_sudo_grant", "install_recovery_command"):
+        check("install.sh: the 'already up to date' branch still runs %s" % _fn,
+              _fn in _uptodate, _uptodate[-400:])
+
     # ── the firewall probe has to use the SUDO computed beside it ────────────────────────────
     # `ufw status` requires uid 0 — as an ordinary user it errors to stderr (discarded) and exits
     # non-zero. The three probes ran WITHOUT ${SUDO}, which is set fifteen lines above, so on the
@@ -2019,10 +2179,90 @@ check("install.sh: ...with SCRIPT_PATH only as a fallback, still shebang-checked
 _ts_tpl = open(os.path.join(_root, "templates", "tailscale.html"), encoding="utf-8").read()
 check("tailscale.html: disableServe does not hardcode the mount",
       "action: 'disable', mount: '/'" not in _ts_tpl)
-check("tailscale.html: the Disable button carries the configured mount",
-      'data-mount="{{ config.tailscale_mount' in _ts_tpl)
 check("tailscale.html: the Mount Point field shows the configured mount, not a fixed /",
       "value=\"{{ config.tailscale_mount or '/' }}\"" in _ts_tpl)
+
+# The Serve card, RENDERED rather than grepped. Both defects below live in what the page says for
+# a given state, and a substring gate cannot tell a branch from the comment that explains it.
+from jinja2 import Environment as _TsEnv                                          # noqa: E402
+_ts_card = _ts_tpl[_ts_tpl.index("<!-- Serve Config Status -->"):
+                   _ts_tpl.index("<!-- Peers List -->")]
+check("tailscale.html: the Serve card was isolated for the checks below",
+      "Serve Configuration" in _ts_card and "disableServe" in _ts_card,
+      "the card markers moved — re-point this gate, it is measuring nothing")
+
+
+class _TsUser(object):
+    is_superadmin = True
+
+
+class _TsInfo(object):
+    """Only the attributes the card reads. A dataclass field that does not exist is Jinja's
+    Undefined (silently falsy), which is exactly the trap the unreadable flag has to survive."""
+
+    def __init__(self, **kw):
+        self.running, self.serve_config, self.serve_unreadable = True, {}, False
+        self.__dict__.update(kw)
+
+
+_ts_tmpl = _TsEnv().from_string(_ts_card)
+_ts_svc = {"url": "https://host.example.ts.net", "funnel": False,
+           "routes": [{"mount": "/panel", "target": "http://127.0.0.1:5000"}]}
+
+
+def _ts_card_html(info, config=None):
+    return _ts_tmpl.render(info=info, config=config or {}, current_user=_TsUser())
+
+
+# ...the mount the Disable button carries is the one the HOST reported, not the panel's
+# recollection of one it set. config.tailscale_mount is empty for any mapping the panel did not
+# create — an operator who ran `tailscale serve --bg --set-path /panel` by hand — and the button is
+# shown for those too, so `or '/'` put back the exact value the comment above it forbids:
+# `--remove /` exits 0 because removing an absent root mapping is not an error, so the toast said
+# the mapping was removed, the audit row recorded a success, tailscale_setup_done was cleared, and
+# Serve went on publishing the panel at /panel while the table beside the button still showed it.
+_ts_by_hand = _ts_card_html(_TsInfo(serve_config={"services": [_ts_svc]}))
+check("tailscale.html: Disable sends the mount the host reported, not a fallback '/'",
+      'data-mount="/panel"' in _ts_by_hand,
+      "the page displays /panel and the button would ask the host to remove something else")
+_ts_disagree = _ts_card_html(_TsInfo(serve_config={"services": [_ts_svc]}),
+                             {"tailscale_mount": "/lgsm"})
+check("tailscale.html: ...and the page's own value wins over a stale stored one",
+      'data-mount="/panel"' in _ts_disagree and 'data-mount="/lgsm"' not in _ts_disagree,
+      "the stored mount is sent while the table renders a different one")
+_ts_stored_only = _ts_card_html(
+    _TsInfo(serve_config={"services": [{"url": "https://h.ts.net", "funnel": False, "routes": []}]}),
+    {"tailscale_mount": "/lgsm"})
+check("tailscale.html: ...with the stored mount still the fallback when no route came back",
+      'data-mount="/lgsm"' in _ts_stored_only, _ts_stored_only[:200])
+
+# ...and an unread Serve config is not announced as "nothing is configured". serve_config is {} for
+# both "nothing is published" and "`tailscale serve status` was refused" (the panel's account is
+# not the tailscale operator), and the card stated the first as a fact — on a page that was itself
+# being served over the very mapping it was reporting as absent.
+_ts_denied = _ts_card_html(_TsInfo(serve_unreadable=True))
+check("tailscale.html: a Serve config the panel could not read is not reported as empty",
+      "No Serve routes configured yet." not in _ts_denied and "couldn't read" in _ts_denied,
+      " ".join(_ts_denied.split())[-160:])
+_ts_none = _ts_card_html(_TsInfo())
+check("tailscale.html: ...while a host that answered with none still says so (positive control)",
+      "No Serve routes configured yet." in _ts_none and "couldn't read" not in _ts_none,
+      " ".join(_ts_none.split())[-160:])
+# The flag is read the UNREADABLE way round on purpose: a TailscaleInfo without it leaves Jinja an
+# Undefined, which is silently falsy — so a missing flag has to fall back to the positive wording,
+# never to telling every healthy host its Serve config could not be read.
+
+
+class _TsInfoOld(object):
+    running, serve_config = True, {}
+
+
+check("tailscale.html: ...and an info object with no flag at all keeps the positive wording",
+      "No Serve routes configured yet." in _ts_card_html(_TsInfoOld()),
+      "a forgotten attribute would tell every host its Serve config is unreadable")
+_ts_down = _ts_card_html(_TsInfo(running=False, serve_unreadable=True))
+check("tailscale.html: ...and a stopped daemon still reads as stopped, not as unreadable",
+      "Tailscale is not running." in _ts_down, " ".join(_ts_down.split())[-160:])
 # Both serve handlers take the clicked button; enableServe used the implicit global `event`.
 check("tailscale.html: enableServe/disableServe receive @self rather than reading global event",
       "var btn = event.target" not in _ts_tpl
@@ -3167,14 +3407,22 @@ _nt_o_level = _nt_log.level
 _nt_log.setLevel(_nt_logging.WARNING)
 try:
     import urllib.error as _nt_urlerr                                              # noqa: E402
-    import urllib.request as _nt_urlreq                                            # noqa: E402
-    _o_open = _nt_urlreq.urlopen
-    _nt_urlreq.urlopen = lambda *a, **k: (_ for _ in ()).throw(
-        _nt_urlerr.HTTPError("https://api.telegram.org/x", 401, "Unauthorized", {}, None))
+
+    # The stub goes on _post's OPENER, not on urllib.request.urlopen: _post stopped using the
+    # global opener (it follows redirects off the allow-listed host, carrying Authorization with
+    # it). Stubbing urlopen here would intercept nothing and send this fake token to the real
+    # api.telegram.org.
+    class _RejectingOpener:
+        @staticmethod
+        def open(req, timeout=None):
+            raise _nt_urlerr.HTTPError("https://api.telegram.org/x", 401, "Unauthorized", {}, None)
+
+    _o_open = _nt._OPENER
+    _nt._OPENER = _RejectingOpener
     try:
         _nt_res = _nt.send_telegram("1234567890:" + "A" * 35, "12345", "hi")
     finally:
-        _nt_urlreq.urlopen = _o_open
+        _nt._OPENER = _o_open
 finally:
     _nt_log.removeHandler(_nt_h)
     _nt_log.setLevel(_nt_o_level)
@@ -3223,6 +3471,30 @@ try:
     check("players: a table that really is empty still reads as empty",
           _sm_game.player_list(None, "u", "cod", 28960, None, "codserver",
                                allow_console=True) == [])
+    # ── and the SEND has to have landed, not just the capture ─────────────────────────────────
+    # The send's (out, err, rc) was thrown away. On the tailscale and local transports a failed
+    # send does NOT raise — _run_via_ssh_cli returns ("", "SSH command timed out", -1) — so the
+    # except never saw it, while the capture is a separate round trip 0.8s later that succeeds
+    # happily. What came back was the pane's PREVIOUS `status` table, returned as the current
+    # player list: players who had already left, with their SteamIDs, on rows whose Ban fans out
+    # fleet-wide and into GlobalBan.
+    _STALE_TABLE = ('hostname: old\nversion : 1\n'
+                    '# userid name uniqueid connected ping loss state\n'
+                    '# 2 "Ghost" STEAM_0:1:5 01:02 40 0 active\n')
+    _sm_game.capture_console = lambda *a, **k: (_STALE_TABLE, "", 0)
+    _sm_game._core.send_console_command = lambda *a, **k: ("", "SSH command timed out", -1)
+    _stale = _sm_game.console_player_list(None, "u", "gmod", selfname="gmodserver")
+    check("players: a `status` that was never delivered does not read the pane's old table",
+          _stale is None,
+          "answered %r — that is the previous reply, presented as the current one" % (_stale,))
+    _stale_cs = _sm_game.console_status(None, "u", "gmod", selfname="gmodserver")
+    check("players: ...and console_status says unknown too, rather than ([], None)",
+          _stale_cs == (None, None), str(_stale_cs))
+    # Positive control: with the send accepted, the very same pane still parses.
+    _sm_game._core.send_console_command = lambda *a, **k: ("", "", 0)
+    _live = _sm_game.console_player_list(None, "u", "gmod", selfname="gmodserver")
+    check("players: ...while a delivered `status` still parses that table",
+          [p["name"] for p in (_live or [])] == ["Ghost"], str(_live))
 finally:
     _sm_game._core.send_console_command, _sm_game.capture_console = _pl_o_send, _pl_o_cap
 
@@ -3471,6 +3743,15 @@ _mu_js = open(os.path.join(_root, "static", "js", "manage_users.js"), encoding="
 check("users page: ...and the script disables it rather than hiding it",
       "box.disabled = !u.totp_enabled" in _mu_js,
       "nothing marks the switch inert for an account with no 2FA, so it would post a no-op")
+# The superadmin switch is rendered only for a superadmin (add_user refuses the grant from anyone
+# else and loses the whole form doing it), so the populate step must survive its absence. An
+# unguarded `getElementById('eu-superadmin').checked` throws, and EVERYTHING after it in that
+# function — the active switch, the 2FA reset, the password reset, and the modal's own .show() —
+# never runs: the Edit dialog would simply not open for a delegated user admin.
+check("users page: the edit dialog survives the superadmin switch not being rendered",
+      re.search(r"getElementById\('eu-superadmin'\)\s*;", _mu_js) is not None
+      and "if (euSuper)" in _mu_js,
+      "the lookup is dereferenced unguarded, so removing the control breaks the whole dialog")
 
 # ── exactly ONE handler per socket event ──────────────────────────────────────────────────────
 # flask-socketio does not chain handlers. python-socketio's BaseServer.on ends in
@@ -3905,6 +4186,19 @@ try:
     _empty6 = _so6.ufw_blocked_ips()
     check("firewall: ...and a firewall with genuinely nothing blocked still answers {}",
           _empty6 == {}, "answered %r — that would skip the reconcile instead" % (_empty6,))
+    # A DISABLED firewall reaches here through the SUCCESSFUL path, which the rc guard cannot see:
+    # `ufw status` on an installed-but-inactive host exits 0 and prints exactly one line,
+    # "Status: inactive", with no rule rows. The parse found no DENY lines and answered {} — "the
+    # panel has blocked nobody" — for a firewall whose stored rules it cannot read. _autoblock
+    # reads "not in blocked" as "needs blocking" and `ufw deny from <ip>` STORES a rule and exits 0
+    # while inactive, so every offender was re-blocked and audited as applied, hourly, forever,
+    # with no packet being dropped.
+    _so6._run_verb = lambda *a, **k: ("Status: inactive\n", "", 0)
+    _inactive6 = _so6.ufw_blocked_ips()
+    check("firewall: an INACTIVE firewall is unreadable (None), not a firewall with nothing in it",
+          _inactive6 is None,
+          "answered %r — autoblock would re-issue every block against a firewall that is off"
+          % (_inactive6,))
 finally:
     _so6._run_verb = _real_runverb6
 
@@ -4022,6 +4316,30 @@ check("terminal: ...claimed once, not on every chunk",
       _outh6 is not None and "sawOutput" in _outh6,
       "without a latch this re-sets the status on every chunk of output, overwriting anything "
       "the exit handler has since put there")
+
+# ── ...and the socket it all arrives on has to carry the mount ────────────────────────────────
+# `io()` with no options uses socket.io-client's built-in default path, "/socket.io" at the SITE
+# ROOT (confirmed in the vendored client, v4.7.5: (n=n||{}).path||"/socket.io"). Under a mount —
+# Tailscale Serve with tailscale_mount "/lgsm" — that handshake is outside the mount and 404s, so
+# `connect` never fires, term_open is never emitted, and the page sits on "Connecting…" over a
+# blank black box for ever: term_error and disconnect BOTH need a connection that was never made,
+# so nothing was ever shown. The console on the same panel keeps working, because panel.js and
+# server_detail.js prefix their path — this was the one socket in the panel that did not.
+_ht_io6 = re.search(r"sock\s*=\s*io\(([^;]*)\)", _ht_src6)
+check("terminal: the socket handshake path carries the mount prefix",
+      _ht_io6 is not None and "MOUNT" in _ht_io6.group(1) and "/socket.io" in _ht_io6.group(1),
+      "io(%s) — on a sub-path panel that asks the site root, and the page never connects"
+      % (_ht_io6.group(1) if _ht_io6 else "<no `sock = io(...)` call found>"))
+_pjs6 = open(os.path.join(_root, "static", "js", "panel.js"), encoding="utf-8").read()
+check("terminal: ...the same way its sibling client does (positive control)",
+      "MOUNT + '/socket.io'" in _pjs6,
+      "panel.js does not prefix it either, so the gate above is asserting a shape nothing has — "
+      "re-point it at whatever the siblings do now")
+_cerr6 = _handler_body6("connect_error")
+check("terminal: a handshake that never completes says so, instead of 'Connecting…' for ever",
+      _cerr6 is not None and "_status(" in _cerr6,
+      "nothing writes to #term-status when the socket never connects, so the only symptom of a "
+      "wrong path is a page that claims it is connecting and never stops")
 
 # ── a message must not send the reader to a file that is not there ────────────────────────────
 # PERMISSION_DESCRIPTIONS[USE_TERMINAL] read "powerful — see SECURITY.md", and SECURITY.md does

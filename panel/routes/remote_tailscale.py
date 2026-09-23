@@ -75,10 +75,24 @@ def register(app):
             status, log = remote_tailscale_finalize(remote)
             # Opens tailscale0 in the remote's UFW — a firewall change, and the only one of this
             # file's five Tailscale actions that was not audited.
+            #
+            # `log` is non-empty only when the host's UFW read came back ACTIVE and the allow was
+            # issued; remote_tailscale_finalize skips the allow otherwise and returns "". The audit
+            # row used to key off status["running"], which is tailscaled's BackendState and says
+            # nothing about the firewall — so a `ufw-status` that answered rc 127 (ufw absent) or
+            # ("", "…timed out", -1) (the tailscale transport, which never raises) recorded a
+            # successful firewall change that was never attempted. An audit row for an action that
+            # did not happen is worse than no row — same reasoning as remote_vps.py:338-346.
+            ufw_allowed = bool(log)
             log_action(current_user, "remote_tailscale_finalize", target=remote.name,
-                       success=bool(status.get("running")))
+                       success=ufw_allowed,
+                       detail=("tailscale0 allowed in UFW" if ufw_allowed
+                               else "UFW rule NOT applied (inactive, absent, or unreadable)"))
             return jsonify({
                 "success": True, "running": status.get("running", False),
+                # So the caller can say the UFW sentence only when it is true, rather than
+                # printing it on every finalize.
+                "ufw_allowed": ufw_allowed,
                 "tailscale_ip": status.get("tailscale_ip", ""),
                 "dns_name": status.get("dns_name", ""), "log": log,
             })

@@ -16,6 +16,10 @@
     if(!form) return;
     var set = PRESETS[btn.getAttribute('data-role-preset')] || [];
     form.querySelectorAll('input[name="permissions"]').forEach(function(cb){
+      // Skip the ones this admin cannot grant. They render disabled (manage_groups.html) because
+      // the server preserves them whatever the form says, so unticking one here would show a
+      // revocation that the next save does not make.
+      if(cb.disabled) return;
       cb.checked = set.indexOf(cb.value) !== -1;
     });
   });

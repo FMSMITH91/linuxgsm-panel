@@ -246,8 +246,18 @@
            --remove /` exits 0 on a node whose mapping is at /lgsm-panel, so the panel would report
            success, clear tailscale_setup_done and tailscale_mount, and leave Serve running. #}
         {% if current_user.is_superadmin %}
+        {# ...and it is the mount the HOST reported, not the panel's recollection of one it set.
+           config.tailscale_mount is empty for any mapping the panel did not create — an operator
+           who ran `tailscale serve --bg --set-path /panel` by hand — and this button is shown for
+           those too, so the fallback put back the exact '/' the note above says must not be sent:
+           `tailscale serve --remove /` exits 0 because removing an absent root mapping is not an
+           error, so the toast said the mapping was removed, the audit row recorded a success,
+           tailscale_setup_done was cleared, and Serve went on publishing the panel at /panel.
+           The table below is rendering this same route, so the button now sends what the page
+           shows. #}
+        {% set svc = info.serve_config.services[0] %}
         <button class="btn btn-outline-danger btn-sm" data-action="disableServe" data-args='["@self"]'
-                data-mount="{{ config.tailscale_mount or '/' }}">
+                data-mount="{{ (svc.routes[0].mount if svc.routes else config.tailscale_mount) or '/' }}">
           <i class="bi bi-x-circle"></i> Disable
         </button>
         {% endif %}
@@ -289,10 +299,20 @@
         </div>
         {% else %}
         <div class="p-3 text-center text-secondary small">
-          {% if info.running %}
-            No Serve routes configured yet.
-          {% else %}
+          {# An empty serve_config was read as "nothing is configured" and stated as a fact. It is
+             also what a FAILED `tailscale serve status` leaves behind — "Access denied: serve
+             config denied" when the panel's account is not the tailscale operator — and the page
+             that said "No Serve routes configured yet." was at that moment being served over the
+             mapping it was denying. The read outcome is carried on info.serve_unreadable rather
+             than inferred from emptiness (it is False on an older TailscaleInfo, so the positive
+             wording is what a missing flag falls back to, never the negative one). #}
+          {% if not info.running %}
             Tailscale is not running.
+          {% elif info.serve_unreadable %}
+            The panel couldn't read this host's Serve configuration, so whether anything is
+            published over Tailscale Serve is unknown.
+          {% else %}
+            No Serve routes configured yet.
           {% endif %}
         </div>
         {% endif %}

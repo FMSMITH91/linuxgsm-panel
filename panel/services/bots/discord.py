@@ -65,9 +65,24 @@ def _discord_command_watch(app):
                 time.sleep(_DC_CMD_BACKOFF)
                 continue
 
-            def _on_message(msg_channel, author_is_bot, content, author=None, _tok=bot_token, _chan=channel):
-                # Ignore our own (and every other bot's) messages; only the configured channel counts.
-                if author_is_bot or msg_channel != _chan:
+            def _on_message(msg_channel, author_is_bot, content, author=None, _tok=bot_token):
+                # Ignore our own (and every other bot's) messages.
+                if author_is_bot:
+                    return
+                # RE-READ the gate on every message, the way the Telegram twin re-reads it on every
+                # poll. It used to be frozen into this closure's default args at IDENTIFY time, and
+                # a Gateway session is deliberately long-lived — heartbeat every ~41s, reconnect
+                # only on op 7/9 or a dropped socket. So unticking "Accept commands from this
+                # channel" (or moving the bot to a locked-down channel) changed the settings page
+                # and nothing else: the old channel kept control, and the next `!stop codserver`
+                # posted there still stopped the server, for minutes or for days, with no bound the
+                # panel could put on it. Revocation has to take effect at the next message, not at
+                # the next socket drop.
+                _dc = notifications._cfg().get("discord") or {}
+                if not (_dc.get("enabled") and _dc.get("accept_commands")):
+                    return
+                _chan = (_dc.get("channel_id") or "").strip()
+                if not _chan or msg_channel != _chan:
                     return
                 if (content or "")[:1] not in ("!", "/"):
                     return

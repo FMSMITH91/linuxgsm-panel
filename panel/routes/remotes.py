@@ -9,8 +9,8 @@ from panel.core.config import (decrypt_secret, encrypt_secret, update_config)
 from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (tailscale_integration as ts)
 from panel.ops.ssh_manager import (close_connection, ssh_test_connection)
-from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, check_password,
-    get_remote, log_action, permission_required)
+from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, can_access_remote,
+    check_password, get_remote, log_action, permission_required)
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, LINUX_USER_RE, MAX_PORT,
     MIN_PORT, SAFE_LABEL_RE, _port_or)
@@ -185,6 +185,31 @@ def register(app):
         db.session.commit()
         log_action(current_user, "add_remote", target=name, detail=f"{ssh_user}@{host}")
 
+        # ── the creator has to be able to reach what they just created ──────────────────────
+        # Per-host access is purely group-derived — can_access_remote / accessible_remote_ids walk
+        # group.servers — and nothing attached the new row to any group. So for a non-superadmin
+        # the host was invisible and untouchable from the moment it committed: no card on
+        # /remotes, and get_remote() -> 403 from its manage page, its edit and its delete. Mean-
+        # while the panel held the host's SSH credential, the monitor sweep polled it, and on the
+        # "fresh" path a root bootstrap that apt full-upgrades, rewrites sshd_config and reboots
+        # the machine was already running, with no way for the person who started it to watch or
+        # stop it. Both exits below also stated something false about that: a card that will never
+        # appear, and a redirect to a page that answers 403.
+        #
+        # Granted to the creator's groups that carry MANAGE_REMOTES, not to every group they are
+        # in: those are the groups whose members are already allowed to add and manage hosts, so
+        # this widens nothing that was not already theirs to widen — the same "a new grant must
+        # not exceed its creator's reach" rule add_group applies through grantable_object_ids.
+        # The route's own decorator guarantees a non-superadmin has at least one such group.
+        if not current_user.is_superadmin:
+            for _g in (current_user.groups or []):
+                if _g.has_permission(MANAGE_REMOTES) and remote not in (_g.servers or []):
+                    _g.servers.append(remote)
+            db.session.commit()
+        # Belt and braces: if nothing granted it after all, say so rather than sending them to a
+        # page that 403s and promising a card they cannot see.
+        reachable = can_access_remote(current_user, remote.id)
+
         # Setup type. "fresh" runs the full Prepare & Secure bootstrap (updates, UFW, SSH hardening,
         # fail2ban, deps, then reboot) for a brand-new VPS. "existing" leaves the host untouched and
         # jumps straight to scanning it for LinuxGSM servers already installed. (The old auto_bootstrap
@@ -193,6 +218,10 @@ def register(app):
         if setup_type not in ("fresh", "existing"):
             setup_type = "fresh" if request.form.get("auto_bootstrap", "on") == "on" else "existing"
         if setup_type == "existing":
+            if not reachable:
+                return _form_ok(f"Remote '{name}' added, but your groups don't grant access to it "
+                                "— an administrator has to grant it before you can manage or scan "
+                                "it.", "manage_remotes")
             flash(f"Remote '{name}' added — scanning it for existing LinuxGSM servers…", "success")
             return redirect(url_for("remote_manage", remote_id=remote.id) + "?scan=1")
 
@@ -202,8 +231,17 @@ def register(app):
             "username": lgsm_user, "install_fail2ban": True, "do_reboot": True,
         }
         started, _ = _begin_bootstrap(app, remote.id, opts, current_user.id)
-        _m = (f"Remote '{name}' added. Preparing & securing it now — watch the progress on its card."
-              if started else f"Remote '{name}' added.")
+        # "watch the progress on its card" is a statement about a card. Only say it to someone who
+        # will be shown one — /remotes filters to accessible_remote_ids, and the bootstrap-status
+        # endpoint behind the card answers 403 to anyone else.
+        if started and reachable:
+            _m = f"Remote '{name}' added. Preparing & securing it now — watch the progress on its card."
+        elif started:
+            _m = (f"Remote '{name}' added and is being prepared & secured now, but your groups "
+                  "don't grant access to it — an administrator has to grant it before you can "
+                  "see or manage the host.")
+        else:
+            _m = f"Remote '{name}' added."
         return _form_ok(_m, "manage_remotes")
 
     @app.route("/remotes/<int:remote_id>/edit", methods=["POST"])

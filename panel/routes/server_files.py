@@ -60,6 +60,38 @@ _CONSOLE_LINES_MAX = 2000
 # so a deleted server's id — which SQLite hands straight to the next INSERT — would show the NEW
 # server a content install frozen at "running". See panel_state.register_server_state.
 _gmod_content_apply_state = register_server_state({})   # server_id -> {"status", "msg", "ts"}
+# How long a FINISHED content job stays visible to the status poll. Same 900s remote_bootstrap's
+# job poll gives its done/failed card, and for the same reason: without an expiry a failure from
+# last month reappears on every later visit to the server page.
+_GMOD_JOB_TTL = 900
+
+
+def _gmod_job_state(server_id):
+    """What the GMod content status poll should report: a running job, or a TERMINAL result the
+    card has not had time to show yet.
+
+    The poll used to answer `st if st.get("status") == "running" else None`, which discarded every
+    outcome the two workers take care to record — "No content storage could be prepared on the
+    host.", "Content setup failed — check the server logs.", gmod_mount_setup's "Couldn't read
+    <user>'s group, so the content mount was not granted", and the removal list the uninstall
+    worker builds. Their docstrings say the result is "stashed for the status poll"; the status
+    poll could not see it, so a job that ended in error was indistinguishable from no job at all:
+    the spinner vanished, nothing was said, and the operator restarted the server as instructed
+    into ERROR textures. A content install can run for up to two hours, and every one of its
+    failure modes behaved this way.
+
+    Module level so a test can drive the expiry without sleeping through it."""
+    st = _gmod_content_apply_state.get(server_id)
+    if not st:
+        return None
+    if st.get("status") == "running":
+        return st
+    if (time.time() - (st.get("ts") or 0)) > _GMOD_JOB_TTL:
+        _gmod_content_apply_state.pop(server_id, None)
+        return None
+    return st
+
+
 # server_id -> {socket session id: the user id that joined on it}.
 #
 # It was a set of sids. The user id is here because authorization on this stream was a ONE-TIME
@@ -74,19 +106,39 @@ _viewers_lock = threading.Lock()
 def _console_whole_lines(server_id, raw):
     """The COMPLETE lines in a byte-cut chunk; the trailing fragment is held for the next read.
 
+    Returns None when the chunk did not arrive framed, i.e. the read never ran — which is a
+    different thing from "" (it ran and held back a partial line), and the caller must treat it so.
+
     The poller reads the console log by byte range, so a chunk almost always ends mid-line. Emit
     that half and the console shows one line as two — seen in the wild as a bare "[20" where a
     LinuxGSM timestamp had been sliced across a 64KB read boundary.
 
-    `raw` carries a trailing 'E' sentinel from the shell, because run_command STRIPS what it
-    returns: without it the chunk's own final newline is eaten and a line that was complete looks
-    partial, so every read would hold back a line that is already whole.
+    `raw` arrives FRAMED — a 'B' before the byte range and an 'E' after it — because run_command
+    `.strip()`s what it returns, and strip() takes BOTH ends (_core.py: `out.strip()` on the
+    paramiko path, `r.stdout.strip()` on the ssh-CLI one, `(out or "").strip()` on the local one).
+    Only the trailing 'E' was here at first, which covered exactly half the problem: without it the
+    chunk's own final newline is eaten and a line that was complete looks partial. The LEADING half
+    had no sentinel at all, so when a byte-range chunk began with the newline that terminated the
+    previous chunk's last line, that newline was deleted in transit and the held fragment was
+    concatenated straight onto the next line's text — two real log lines reaching the screen as one
+    with a timestamp welded into the middle of it, which also defeats _console_rows' stamp parsing.
+    The same strip also ate a chunk's first line's indentation (Lua stack traces, LinuxGSM's own
+    indented output) and any leading blank line.
+
+    The frame is also the POSITIVE TOKEN for "the read actually ran": on the non-raising transports
+    (tailscale and local) a failed or timed-out read returns ("", "…timed out", -1), and "" is
+    indistinguishable from a chunk that held no complete line. Return None for that, so the caller
+    can refuse to advance its offset over bytes the host never sent — the absence of a token must
+    never read as success. The held fragment is deliberately NOT consumed on that path, so the next
+    tick can re-read the same range and reassemble it.
 
     Extracted rather than inlined so it can be driven directly by a test. It was inline first, and
     the test reimplemented the arithmetic instead of calling it — which passed happily with the
     carry deleted from the code it was supposed to be guarding."""
-    raw = raw[:-1] if raw.endswith("E") else raw
-    chunk = _console_partial.pop(server_id, "") + (raw or "")
+    if not (raw and raw.startswith("B") and raw.endswith("E")):
+        return None
+    raw = raw[1:-1]
+    chunk = _console_partial.pop(server_id, "") + raw
     whole, nl, rest = chunk.rpartition("\n")
     if nl:
         _console_partial[server_id] = rest
@@ -426,7 +478,18 @@ def register(app, supervise):
             _log.debug("download: could not stat the path", exc_info=True)
             return _refuse("Couldn't reach %s to read that file." % gs.name, "danger")
         if not info:
-            return _refuse("That file or folder isn't there any more.")
+            # stat_path answers None for THREE different things: a path that escapes the home
+            # directory, a path that is not there, and a read that never ran — on the non-raising
+            # transports (tailscale, local) a failed read returns ("", "…timed out", -1), so its
+            # `parts` is empty and it returns None exactly as it does for a deleted file. The
+            # "Couldn't reach" branch two lines up is only reachable from paramiko, the transport
+            # the panel steers people away from. This line used to state deletion as fact: an
+            # operator whose link flapped while downloading server.cfg was told the file was gone,
+            # and went looking for what deleted it — or restored a backup over a newer copy. Until
+            # stat_path grows the third answer browse_dir already has (`unreadable`, because "rc is
+            # the only thing that tells them apart"), say only what was actually checked.
+            return _refuse("%s didn't return that file. It may have been moved or deleted — or the "
+                           "host didn't answer. Reload the file browser to check." % gs.name)
         if info["rel"] in (".", ""):
             # The home directory itself — by an empty ?path=, or by any spelling that resolves
             # back to it ("." , "/", "cfg/.."). stream_path refuses it too; this is the half that
@@ -597,8 +660,31 @@ def register(app, supervise):
                                 "status": "error", "msg": "No content storage could be prepared on the host.",
                                 "ts": time.time()}
                             return
-                        install_gmod_content(remote, cu["user"], games)
-                        ok, msg = gmod_mount_setup(remote, gmod_user, cu["user"], games)
+                        # KEEP the result. `installed` is the games install_gmod_content verified
+                        # are on disk afterwards (it re-runs content_present after SteamCMD), and
+                        # throwing it away meant the mount was written for every game the operator
+                        # ticked whether or not its content existed: a 13GB CS:S install that ran
+                        # out of disk still produced mount.cfg pointing at a directory that is not
+                        # there, a stored result of "Mounted: Counter-Strike: Source — restart the
+                        # server to apply", and purple ERROR textures on every map for an operator
+                        # who had been told the content was mounted. The uninstall worker below
+                        # already reports what it actually removed rather than what was asked.
+                        _ok_i, installed, _imsg = install_gmod_content(remote, cu["user"], games)
+                        # Already on the host before this ran (ensure_content_user's scan), plus
+                        # whatever this run put there. Anything else is not on disk, so mounting it
+                        # would be the claim this card exists to make true.
+                        _on_disk = set(cu.get("present") or {}) | set(installed or [])
+                        _mountable = [g for g in games if g in _on_disk]
+                        _missing = [g for g in games if g not in _on_disk]
+                        ok, msg = gmod_mount_setup(remote, gmod_user, cu["user"], _mountable)
+                        if _missing:
+                            _labels = ", ".join(GMOD_CONTENT_GAMES[g][0] for g in _missing)
+                            _gmod_content_apply_state[server_id] = {
+                                "status": "error",
+                                "msg": ("Not installed, so not mounted: %s. Check free disk on "
+                                        "the host, then try again. %s" % (_labels, msg or "")).strip(),
+                                "ts": time.time()}
+                            return
                     else:
                         ok, msg = gmod_mount_setup(remote, gmod_user, "", [])
                     _gmod_content_apply_state[server_id] = {
@@ -678,7 +764,9 @@ def register(app, supervise):
                 games = [{"key": k, "label": GMOD_CONTENT_GAMES[k][0], "size": GMOD_CONTENT_SIZES.get(k, ""),
                           "present": (k in present), "mounted": (k in mounted),
                           "downloadable": GMOD_CONTENT_GAMES[k][1] is not None} for k in GMOD_CONTENT_GAMES]
-                st = _gmod_content_apply_state.get(server_id)
+                # The job, INCLUDING a terminal one the card has not shown yet — see
+                # _gmod_job_state for what filtering to "running" cost.
+                st = _gmod_job_state(server_id)
                 # Free disk on the filesystem where content is stored — so nobody starts a 13GB
                 # install without room. Uses the content user's serverfiles if one exists, else /home.
                 content_path = ("/home/%s/serverfiles" % cu["user"]) if cu else "/home"
@@ -688,7 +776,7 @@ def register(app, supervise):
                                 # Apply built on ticks it could not read.
                                 "mounts_readable": _mounts is not None,
                                 "disk_free": disk_free, "disk_total": disk_total,
-                                "job": st if (st and st.get("status") == "running") else None})
+                                "job": st})
             except Exception:
                 return jsonify({"error": _log_and_generic("gmod content status failed"), "games": []}), 200
         # POST: apply a selection (mutating). The MANAGE_SERVERS gate is at the top of the route.
@@ -798,12 +886,21 @@ def register(app, supervise):
             want = _CONSOLE_LINES
         want = max(50, min(want, _CONSOLE_LINES_MAX))
         host_tz = _host_timezone_cached(remote, app)
+        # Whether the log was actually READ, kept separate from what it held. The route knew this
+        # and threw it away: a host that did not answer, a `tail -2000` that timed out on a slow
+        # link, a log that does not exist and a genuinely empty log all left here as 200 with the
+        # same `lines: []`, and nothing in the payload told them apart. The browser's "Load older"
+        # believed it, emptied its own scrollback — the only copy, since the poller emits a sliding
+        # window and keeps nothing — and toasted "Loaded 0 lines from the log" about a log it never
+        # opened. Same answer api_server_upload_check gives with `checked`, for the same reason.
+        readable = False
         try:
             log_path = gs.console_log
             # AS THE GAME USER, not as root: the log sits inside a 0750 home. See
             # _core.read_as_game_user for why this was a root read and what that cost.
             out, err, rc = _sm.read_as_game_user(
                 remote, gs.short_name, f"tail -{want} {log_path} 2>/dev/null", timeout=15)
+            readable = (rc == 0)
             lines = _console_rows(_clean_console_text(out).split("\n"), host_tz) if rc == 0 else []
         except Exception:
             lines = []
@@ -823,6 +920,9 @@ def register(app, supervise):
         # the lines that are NEW since its last poll — those it did watch arrive. Sent from the
         # server rather than taken from Date.now() so every console time shares one clock.
         return jsonify({"lines": lines, "now": time.time(),
+                        # False = the console was not read, so `lines` is not a measurement of
+                        # what the log holds. A caller must not redraw a scrollback from it.
+                        "readable": readable,
                         "log_timestamps": any(r.get("t") for r in lines),
                         "panel_lines": list(_console_backlog.get(server_id, []))})
 
@@ -906,7 +1006,18 @@ def register(app, supervise):
         # the connection. Per-event checks (join_console) still apply on top of this.
         if not current_user.is_authenticated:
             return False
-        return True   # authenticated → accept the socket
+        # ...and not an account still holding a handed-over temporary password. That gate is an
+        # @app.before_request (app.py), and a before_request NEVER runs for a Socket.IO event —
+        # flask-socketio's middleware takes /socket.io/ ahead of the Flask app — so the whole
+        # socket surface sat outside it. Every HTTP route answered 403 password_change_required
+        # while a client on the same cookie could emit join_console and be streamed a live console:
+        # RCON output, admin commands, player names and connect lines, to a session the panel had
+        # decided may not use the panel yet. host_terminal's _may_use_terminal asks this for
+        # exactly this reason; this is THE connect handler for the namespace, so asking here covers
+        # every event on it.
+        if getattr(current_user, "must_change_password", False):
+            return False
+        return True   # authenticated, password their own → accept the socket
 
     @socketio.on("join_console")
     def on_join_console(data):
@@ -923,7 +1034,11 @@ def register(app, supervise):
         # Enforce the SAME access control as the HTTP console routes: the socket must
         # belong to a logged-in user who has access to this specific server AND holds
         # VIEW_CONSOLE. Without this, any socket could stream any server's console.
+        # must_change_password is asked again here, not only in the connect handler: a socket
+        # opened BEFORE an admin reset that account's password is already connected, and connect
+        # does not run a second time.
         if (not current_user.is_authenticated
+                or getattr(current_user, "must_change_password", False)
                 or not can_access_server(current_user, server_id)
                 or not (current_user.is_superadmin or has_permission(current_user, VIEW_CONSOLE))):
             emit("console_output", {"server_id": server_id,
@@ -1026,17 +1141,32 @@ def register(app, supervise):
                                         continue
                                     diff = min(current_size - last_pos, 65536)  # cap 64KB/poll
                                     # tail -c +N | head -c diff: two reads, not one-per-byte.
-                                    # The trailing 'E' is a SENTINEL, not decoration: run_command
-                                    # strips what it returns, which would eat the chunk's own
-                                    # trailing newline and make a COMPLETE last line look partial
-                                    # to the split below.
-                                    out, _, _ = _sm.read_as_game_user(
+                                    # 'B' and 'E' are SENTINELS, not decoration: run_command
+                                    # `.strip()`s what it returns, and strip() takes BOTH ends —
+                                    # the trailing one would eat the chunk's own final newline and
+                                    # make a COMPLETE last line look partial, the leading one eats
+                                    # the newline a chunk starts with and glues two real log lines
+                                    # into one. See _console_whole_lines.
+                                    out, _, rc = _sm.read_as_game_user(
                                         remote, gs.short_name,
-                                        f"{{ tail -c +{last_pos + 1} {log_path} 2>/dev/null "
-                                        f"| head -c {diff}; printf E; }}",
+                                        f"printf B; {{ tail -c +{last_pos + 1} {log_path} "
+                                        f"2>/dev/null | head -c {diff}; }}; printf E",
                                         timeout=5,
                                     )
-                                    out = _console_whole_lines(server_id, out)
+                                    # The frame is the POSITIVE TOKEN that this read ran at all.
+                                    # tailscale and local do not raise: a 64KB read that exceeds
+                                    # the 5s timeout returns ("", "SSH command timed out", -1)
+                                    # while the 20-byte stat in the same tick succeeded, so the
+                                    # advance below used to jump `diff` bytes over output the host
+                                    # never sent — gone for good, since last_pos only moves
+                                    # forward and "Load older" only ever sees what the poller
+                                    # emitted. The next tick then glued the stale fragment onto a
+                                    # line 64KB further on. Re-read the same range instead; this
+                                    # is the guard _drain_action_output already makes in
+                                    # routes/_shared.py for the same reason.
+                                    out = _console_whole_lines(server_id, out) if rc == 0 else None
+                                    if out is None:
+                                        continue
                                     if out:
                                         out = _clean_console_text(out)
                                     if out:
@@ -1062,6 +1192,8 @@ def register(app, supervise):
                                     # hypothetical: it is every GMod start, loading hundreds of Lua
                                     # modules, which is exactly when someone is watching. The
                                     # backlog now drains over the next few ticks instead.
+                                    # Reached only past the frame check above, so `diff` bytes
+                                    # really did arrive.
                                     last_positions[server_id] = last_pos + diff
                             except Exception:  # nosec B112 - try/except/continue is the point:
                                 # one unreadable console must not stop the poll for every OTHER

@@ -3,12 +3,13 @@
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
 from flask import (flash, jsonify, redirect, render_template, request, url_for)
-from flask_login import (current_user, login_required)
+from flask_login import (current_user, login_required, login_user)
 from panel.core import (i18n)
 from panel.core.config import (encrypt_secret, load_config, update_config)
 from panel.core.clock import utcnow
 from panel.db.models import (Group, Invite, User, db)
-from panel.security.auth import (MANAGE_USERS, can_administer_user, get_user_permissions,
+from panel.security.auth import (MANAGE_USERS, accessible_remote_ids, can_administer_user,
+                                 get_user_permissions, get_user_servers,
                                  grantable_groups, hash_password, log_action,
     permission_required, superadmin_required)
 from panel.services import (notifications)
@@ -17,7 +18,7 @@ from datetime import (timedelta)
 from panel.core.http import (_form_credential, _form_err, _form_ok, _json_body, _json_str)
 from panel.core.validation import (_int_or, _valid_hex_color, generate_password,
                                    password_problem, username_problem)
-from app import (_new_user_language)
+from app import (_has_remember_cookie, _new_user_language, _register_session)
 
 
 def register(app):
@@ -262,6 +263,10 @@ def register(app):
         # add_user. Resetting is an explicit tick, not a blank field that means "keep": an edit that
         # only renames someone must not quietly invalidate their login.
         new_password = None
+        # Set only on a SELF-reset, to which cookie keeps this login alive — see the note in the
+        # branch below. None means "not a self-reset"; False is a real answer, so the check after
+        # the commit is `is not None`.
+        _self_remember = None
         if request.form.get("reset_password") == "on":
             new_password = generate_password()
             # set_password, not a bare assignment: the outgoing password joins the history, so a
@@ -282,6 +287,25 @@ def register(app):
             # forcing them through a change screen would protect nothing.
             if user.id != current_user.id:
                 user.must_change_password = True
+            else:
+                # ...and a self-reset must not sign the admin out before they can READ the password
+                # it just generated. The epoch bump above kills every cookie for this account
+                # including the one that made this request — load_user compares the cookie's epoch
+                # and returns None the moment they differ — and panel.js runs
+                # refreshSection('#users-list') BEFORE it opens the credential modal, so the next
+                # request lands milliseconds later, is answered 401 + X-Auth-Required, and
+                # sessionExpired() replaces the tab with /login. Only the bcrypt hash is stored, so
+                # the password was gone; on a single-superadmin install (the common one) the
+                # account was then reachable only through manage.py reset-password on the host.
+                # Carry THIS device across the bump the way account_change_password already does
+                # (panel/routes/tags.py:396-403): note which cookie keeps this login alive now, and
+                # re-register + re-login after the commit below.
+                from panel.db.models import UserSession
+                _sid = getattr(current_user, "_sid", None)
+                _cur_sess = (UserSession.query.filter_by(sid=_sid, user_id=user.id).first()
+                             if _sid else None)
+                _self_remember = (bool(_cur_sess.remember) if _cur_sess is not None
+                                  else _has_remember_cookie())
             # DEFERRED, not written here. log_action commits, and a commit in the middle of a
             # handler makes every later guard unable to undo what came before it — see the lockout
             # note above, and the group-id parse below, which could 500 after this branch had
@@ -307,6 +331,12 @@ def register(app):
         user.groups = grantable_groups(group_ids, existing=list(user.groups or []))
 
         db.session.commit()
+        if _self_remember is not None:
+            # The self-reset re-login — see the branch above. After the commit, so a rollback on
+            # any guard between here and there cannot leave this device holding a session for an
+            # epoch the database never took.
+            _register_session(user, _self_remember)
+            login_user(user, remember=_self_remember)
         for _act, _tgt, _detail in _pending_audit:
             log_action(current_user, _act, target=_tgt, detail=_detail)
         if _new_username and _new_username != _old_username:
@@ -433,8 +463,17 @@ def register(app):
         # Claim the invite FIRST, conditionally on it still being unused, so two submissions of the
         # same link cannot both make an account. The UPDATE ... WHERE used_at IS NULL is what makes
         # that atomic; checking is_usable above and trusting it would be a race.
+        #
+        # revoked_at is in the WHERE for the same reason, and it was not. is_usable asks three
+        # questions (used, revoked, expired) and the claim asked one — so the race this comment
+        # names was still open for the revoke half: an admin clicking Revoke between the is_usable
+        # check above and this UPDATE did not stop the redemption. The account was created anyway,
+        # the row ended up stamped BOTH revoked and used, and the admin was told "Invite revoked —
+        # the link no longer works" about a link that had just worked. revoke_invite already claims
+        # its side with exactly this pair; this is the same shape from the other end.
         claimed = (db.session.query(Invite)
-                   .filter(Invite.id == inv.id, Invite.used_at.is_(None))
+                   .filter(Invite.id == inv.id, Invite.used_at.is_(None),
+                           Invite.revoked_at.is_(None))
                    .update({"used_at": utcnow()}, synchronize_session=False))
         if not claimed:
             db.session.rollback()
@@ -460,12 +499,33 @@ def register(app):
         # anyone else only a group whose permissions are a SUBSET of their own. Fail CLOSED on the
         # whole invite rather than quietly granting less than it promised — the person redeeming
         # it would otherwise get an account that silently lacks what they were told they'd have.
+        #
+        # ALL of that rule, though, and this copy applied a third of it. grantable_groups'
+        # _within_my_reach (panel/security/auth.py) asks three questions — permissions, whole-host
+        # grants (Group.servers) and per-server grants (Group.game_servers) — because a group's
+        # permission set is not the only thing membership hands you. The test here was the
+        # permissions subset alone, so a group whose permissions the demoted minter still held —
+        # or, worse, one carrying NO permissions at all, where `set() <= _mine` is trivially true —
+        # sailed through with its host and server grants intact, and the new account could reach
+        # every server on a host the minter had just lost. /users (grantable_groups) and /groups
+        # (grantable_object_ids) both refuse that same grant to that same person; the invite was
+        # the one door left open. Both helpers take an explicit user, so ask it about the creator.
         wanted = set(inv.groups_wanted)
         if wanted:
             _groups = Group.query.filter(Group.id.in_(wanted)).all()
             if _creator is not None and not _creator.is_superadmin:
                 _mine = set(get_user_permissions(_creator))
-                if any(not (g.get_permissions() <= _mine) for g in _groups):
+                _mine_remotes = set(accessible_remote_ids(_creator))
+                _mine_servers = {gs.id for gs in get_user_servers(_creator)}
+
+                def _beyond_creator(g):
+                    if not set(g.get_permissions()) <= _mine:
+                        return True
+                    if not {r.id for r in (g.servers or [])} <= _mine_remotes:
+                        return True
+                    return not {s.id for s in (g.game_servers or [])} <= _mine_servers
+
+                if any(_beyond_creator(g) for g in _groups):
                     db.session.rollback()
                     return render_template("invite.html", invalid=True), 404
             user.groups = _groups

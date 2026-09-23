@@ -598,6 +598,37 @@ try:
     check("escalation: joining a permission-subset group does not hand over its hosts",
           _got_host is False, "gained access to server %s on an ungranted host" % other_id)
 
+    # ── ...and the FORM must offer only the groups the POST will actually accept ────────────────
+    # /users passed `Group.query.all()` to the template, which renders a checkbox per group in the
+    # Add User, Edit User and Invite modals. grantable_groups then silently dropped the ones out of
+    # reach on save, and the route answered "User 'bob' created." regardless — the delegated admin
+    # ticked two groups, saw success, and the account landed in neither, with no signal at all.
+    _mu_page = cmu.get("/users").get_data(as_text=True)
+    check("manage_users offers only the groups this admin can actually grant",
+          ('name="groups" value="%d"' % _prize_gid) not in _mu_page
+          and ('name="groups" value="%d"' % _reach_gid) not in _mu_page,
+          "a group grantable_groups would discard is still rendered as a checkbox")
+    # Positive control: the scoping must not empty the form. The group they legitimately hold is
+    # within their own reach, so it has to stay tickable.
+    check("manage_users still offers the groups they CAN grant",
+          ('name="groups" value="%d"' % _mu_gid) in _mu_page,
+          "their own group vanished from the Add/Edit User form")
+    # ...and a superadmin still sees every group, since grantable_groups short-circuits for them.
+    _sa_page = client_as(admin_id).get("/users").get_data(as_text=True)
+    check("manage_users still offers every group to a superadmin",
+          ('name="groups" value="%d"' % _prize_gid) in _sa_page
+          and ('name="groups" value="%d"' % _reach_gid) in _sa_page,
+          "the scoping also hid groups from a superadmin")
+    # ...and the same rule for the Super Administrator switch. add_user answers _form_err when a
+    # non-superadmin ticks it, so the control could only ever throw the whole filled-in form away
+    # — the username, the email and the group choices with it.
+    check("manage_users does not offer the superadmin switch to a delegated user admin",
+          'name="is_superadmin"' not in _mu_page,
+          "a control the route always refuses is still rendered")
+    check("manage_users still offers the superadmin switch to a superadmin",
+          'name="is_superadmin"' in _sa_page,
+          "the switch vanished for the one role that may actually use it")
+
     # ── MANAGE_USERS must not reach an account holding permissions the actor lacks ──────────────
     # The superadmin flag was the ONLY actor-vs-target test, so MANAGE_USERS alone edited every
     # other account — and reset_password mints a new one and hands the plaintext straight back,
@@ -752,6 +783,104 @@ try:
     _sa_missing = [i for i in _unreachable if ('value="%d"' % i) not in _sa_html]
     check("groups page: ...while a superadmin is still offered every host",
           not _sa_missing, "a superadmin is missing host ids %s" % _sa_missing)
+
+    # ── ...and the same for the PERMISSION boxes, which were offered unfiltered ────────────────
+    # The host and game-server lists were narrowed to what the POST accepts; the permission list
+    # beside them still rendered every entry in ALL_PERMISSIONS as an ordinary tick box.
+    # _grantable_perms drops a requested permission the actor does not hold and PRESERVES one the
+    # group already holds, so the control was inert in both directions — and the un-tick case is
+    # the dangerous one: unticking "Open a shell on a host" on a group that holds it answered
+    # "Group 'X' updated." and revoked nothing, while every member kept that shell. grp5 holds
+    # MANAGE_USERS, which this admin cannot grant, and VIEW_SERVERS, which they can.
+    def _perm_box(html, gid, perm):
+        import re as _re
+        _m = _re.search(r'<input[^>]*id="perm-%d-%s"[^>]*>' % (gid, perm), html)
+        return _m.group(0) if _m else ""
+
+    _pb_locked = _perm_box(_gp_html, gid5, auth.MANAGE_USERS)
+    _pb_free = _perm_box(_gp_html, gid5, auth.VIEW_SERVERS)
+    check("groups page: the permission tick boxes are where this check thinks they are",
+          bool(_pb_locked) and bool(_pb_free),
+          "locked=%r free=%r — the checks below would prove nothing" % (_pb_locked, _pb_free))
+    check("groups page: a permission the admin cannot grant is not an ENABLED tick box",
+          "disabled" in _pb_locked,
+          "offers %r — unticking it reports 'updated' and revokes nothing" % _pb_locked)
+    check("groups page: ...but is still shown, ticked, so the group's real power stays visible",
+          "checked" in _pb_locked,
+          "the box was hidden instead: %r — the page now understates what the group can do"
+          % _pb_locked)
+    check("groups page: ...while one they DO hold stays editable (positive control)",
+          "disabled" not in _pb_free,
+          "every permission box is disabled, so the check above passes for the wrong reason: %r"
+          % _pb_free)
+
+    # ── A per-server grant the form cannot SHOW is stripped by any save ────────────────────────
+    # all_remotes (whole-host grants only) buckets the per-server tick boxes, but the write path's
+    # allow-set is get_user_servers() — which also includes servers granted INDIVIDUALLY, whose
+    # host carries no grant. grantable_object_ids preserves only ids outside the allow-set, so an
+    # id that is allowed but was never rendered is neither requested nor preserved: it is dropped.
+    # Driven the way the page actually submits — the ids its own form renders as checked — because
+    # that is the request a browser sends when the admin edits the description and nothing else.
+    with app.app_context():
+        _ind_grp = Group(name=tag + "_indadm", description="RBAC individual-grant admin (auto)",
+                         is_default=False)
+        _ind_grp.set_permissions([auth.MANAGE_GROUPS])
+        # NO whole-host grant — access to this one server and nothing else.
+        _ind_grp.game_servers.append(db.session.get(GameServer, accessible_id))
+        db.session.add(_ind_grp)
+        db.session.flush()
+        _ind_u = User(username=tag + "_indadm",
+                      password_hash=auth.hash_password(secrets.token_hex(16)),
+                      display_name="individual grant admin", is_superadmin=False, is_active=True)
+        _ind_u.groups.append(_ind_grp)
+        db.session.add(_ind_u)
+        _ind_tgt = Group(name=tag + "_indtgt", description="RBAC individual-grant target (auto)",
+                         is_default=False)
+        _ind_tgt.game_servers.append(db.session.get(GameServer, accessible_id))
+        db.session.add(_ind_tgt)
+        db.session.commit()
+        _ind_uid, _ind_tid = _ind_u.id, _ind_tgt.id
+    _ic = client_as(_ind_uid)
+    _ind_page = _ic.get("/groups")
+    _ind_html = _ind_page.get_data(as_text=True)
+
+    def _form_game_servers(html, gid):
+        """The game_servers ids THIS page renders as checked for that group's edit form."""
+        import re as _re
+        out = []
+        for _m in _re.finditer(r'<input[^>]*name="game_servers"[^>]*id="g%d-gs-(\d+)"[^>]*>'
+                               % gid, html):
+            if "checked" in _m.group(0):
+                out.append(_m.group(1))
+        return out
+
+    _ind_offered = _form_game_servers(_ind_html, _ind_tid)
+    check("groups page: it renders for an admin whose only access is a per-server grant",
+          _ind_page.status_code == 200,
+          "status %d — the checks below would prove nothing" % _ind_page.status_code)
+    # ...and the host list's empty state must not make a claim about the INSTALL. It is filtered
+    # to what this admin may grant, and it told them the panel had no hosts at all.
+    check("groups page: an empty host list says none are GRANTABLE, not none configured",
+          "No hosts configured yet." not in _ind_html and "No hosts you can grant." in _ind_html,
+          "the page still tells a delegated admin the install has no hosts")
+    check("groups page: ...and offers the server they were granted individually",
+          str(accessible_id) in _ind_offered,
+          "the form offers %s — server %d has no box anywhere, so the browser submits nothing "
+          "for it" % (_ind_offered, accessible_id))
+    _ic.post("/groups/%d/edit" % _ind_tid,
+             data={"name": tag + "_indtgt", "description": "description changed",
+                   "game_servers": _ind_offered})
+    with app.app_context():
+        _ind_kept = {g.id for g in db.session.get(Group, _ind_tid).game_servers}
+        _ind_desc = db.session.get(Group, _ind_tid).description
+    check("groups edit: an edit submitted as the page renders it keeps that per-server grant",
+          accessible_id in _ind_kept,
+          "group now grants %s — an edit that only changed the description revoked it, with no "
+          "message and an audit row that just says edit_group" % sorted(_ind_kept))
+    check("groups edit: ...and the edit itself went through (positive control)",
+          _ind_desc == "description changed",
+          "description is %r — the POST did nothing at all, so the check above proves nothing"
+          % _ind_desc)
 
     # ── Bulk actions are access-checked per id ────────────────────────────────────────────────────
     # /api/servers/bulk-action is not an /<int:server_id> route, so the structural sweep below
@@ -931,6 +1060,42 @@ try:
               "the claim is not conditional on used_at, so two requests in flight both win "
               "(status %s)" % _r_race.status_code)
 
+        # 2c. The OTHER half of that same race, which the claim did not ask about. is_usable tests
+        #     used_at, revoked_at and expiry; the claim tested used_at alone — so an admin clicking
+        #     Revoke between the is_usable check and the UPDATE did not stop the redemption. The
+        #     account was created anyway, the row ended up stamped BOTH revoked and used, and the
+        #     admin was told "the link no longer works" about a link that had just worked.
+        #     revoke_invite already claims its side on both columns; same window, same stub.
+        _iid_rev, _tok_rev = _mint(_sa)
+
+        def _pw_then_revoke(pw):
+            with app.app_context():
+                _row = db.session.get(_Inv, _iid_rev)
+                if _row is not None and _row.revoked_at is None:
+                    _row.revoked_at = _inv_utcnow()
+                    db.session.commit()
+            return _pw_real(pw)
+
+        _anmod.password_problem = _pw_then_revoke
+        try:
+            _r_rev = _accept(_tok_rev, _inv_tag + "_revoked")
+        finally:
+            _anmod.password_problem = _pw_real
+        with app.app_context():
+            _rev_row = db.session.get(_Inv, _iid_rev)
+            _rev_stamped = _rev_row is not None and _rev_row.revoked_at is not None
+            _rev_used = _rev_row is not None and _rev_row.used_at is not None
+        check("invite route: (premise) the revocation really did land mid-request",
+              _rev_stamped, "the window never opened, so the checks below prove nothing")
+        check("invite route: an invite revoked mid-request creates no account",
+              _user(_inv_tag + "_revoked") is None,
+              "the claim asks only about used_at, so a revoke in flight loses the race "
+              "(status %s)" % _r_rev.status_code)
+        check("invite route: ...and the row is not left stamped both revoked and used",
+              not _rev_used,
+              "the redemption claimed a revoked invite — the admin is told the link no longer "
+              "works about one that had just worked")
+
         # 3. The delegation must not outlive the authority behind it. A superadmin-granting invite
         #    from someone since DEMOTED must not still hand out the rank they lost.
         _iid_sa, _tok_sa = _mint(_sa, superadmin=True)
@@ -994,6 +1159,64 @@ try:
               _grp_ok is not None and (_inv_tag + "_priv") in _grp_ok,
               "the control failed (%s) — the refusal above proves nothing" % (_grp_ok,))
 
+        # 3c. The same rule on the OBJECT axis, which this re-validation never asked about.
+        #     grantable_groups' _within_my_reach tests three things — permissions, whole-host
+        #     grants (Group.servers) and per-server grants (Group.game_servers) — and the copy in
+        #     redeem_invite tested the permissions subset alone. A group carrying NO permissions
+        #     makes `set() <= _mine` trivially true, so a pure-ACCESS group sailed straight through
+        #     with its whole-host grant intact and the new account could reach every server on a
+        #     host the minter had just lost. /users (grantable_groups) and /groups
+        #     (grantable_object_ids) both refuse that same grant to that same person; the invite
+        #     was the one door left open. 3b cannot catch this — its group's permissions are what
+        #     the demotion takes away.
+        with app.app_context():
+            _host_grp = Group(name=_inv_tag + "_host", description="host access only (auto)",
+                              is_default=False)
+            _host_grp.set_permissions([])          # none at all: the subset test cannot catch it
+            _host_grp.servers.append(db.session.get(RemoteServer, granted_remote))
+            db.session.add(_host_grp)
+            db.session.commit()
+            _host_gid = _host_grp.id
+            _hinv, _tok_host = _Inv.mint(db.session.get(User, _sa_id), group_ids=[_host_gid])
+            db.session.add(_hinv)
+            db.session.commit()
+        with app.app_context():                    # the minter loses the reach behind the grant
+            db.session.get(User, _sa_id).is_superadmin = False
+            db.session.commit()
+        _r_host = _accept(_tok_host, _inv_tag + "_host")
+        _host_got = _groups_of(_inv_tag + "_host")
+        check("invite route: a WHOLE-HOST group grant does not outlive its minter's reach either",
+              _host_got is None,
+              "a demoted minter's invite still created an account carrying %s — a group with no "
+              "permissions at all, so a permissions-only subset test waves it through (status %s)"
+              % (_host_got, _r_host.status_code))
+        # ...and that is a REACH test, not a blanket refusal for anyone who is not a superadmin:
+        # hand the (still demoted) minter that same host through a group of their own, and the
+        # identical invite works again.
+        with app.app_context():
+            _reach_grp = Group(name=_inv_tag + "_reach", description="minter's own reach (auto)",
+                               is_default=False)
+            _reach_grp.set_permissions([])
+            _reach_grp.servers.append(db.session.get(RemoteServer, granted_remote))
+            db.session.add(_reach_grp)
+            _sa_row = db.session.get(User, _sa_id)
+            _sa_row.groups.append(_reach_grp)
+            db.session.commit()
+            _hinv2, _tok_host2 = _Inv.mint(_sa_row, group_ids=[_host_gid])
+            db.session.add(_hinv2)
+            db.session.commit()
+        _accept(_tok_host2, _inv_tag + "_host_ok")
+        _host_ok = _groups_of(_inv_tag + "_host_ok")
+        check("invite route: ...while a minter who still reaches that host can hand it out",
+              _host_ok is not None and (_inv_tag + "_host") in _host_ok,
+              "the control failed (%s) — the refusal above proves nothing" % (_host_ok,))
+        with app.app_context():                    # restore the fixture the next case expects
+            _sa_row = db.session.get(User, _sa_id)
+            _sa_row.groups = [_g for _g in _sa_row.groups
+                              if _g.name != _inv_tag + "_reach"]
+            _sa_row.is_superadmin = True
+            db.session.commit()
+
         # 4. Deactivated, not merely demoted: nobody is standing behind the invite at all.
         _iid_d, _tok_d = _mint(_sa)
         with app.app_context():
@@ -1048,7 +1271,8 @@ try:
               % (_r_exp.status_code, _r_bogus.status_code, " || ".join(_diff[:4])[:400]))
     finally:
         with app.app_context():
-            for _n in ("_ok", "_twice", "_demoted", "_inactive", "_exp", "_race", "_grp", "_grp_ok"):
+            for _n in ("_ok", "_twice", "_demoted", "_inactive", "_exp", "_race", "_revoked",
+                       "_grp", "_grp_ok", "_host", "_host_ok"):
                 _u = User.query.filter_by(username=_inv_tag + _n).first()
                 if _u is not None:
                     db.session.delete(_u)
@@ -1056,7 +1280,14 @@ try:
                 db.session.delete(_row)
             _sa_row = db.session.get(User, _sa_id)
             if _sa_row is not None:
+                # The reach fixture is a group ON the superadmin, so it has to come off before the
+                # groups are deleted — the rest of this suite runs against that account.
+                _sa_row.groups = [_g for _g in _sa_row.groups
+                                  if not _g.name.startswith(_inv_tag)]
                 _sa_row.is_superadmin, _sa_row.is_active = True, True
+            db.session.commit()
+            for _g in Group.query.filter(Group.name.like(_inv_tag + "%")).all():
+                db.session.delete(_g)
             db.session.commit()
 
     # ── deleting a user ───────────────────────────────────────────────────────────────────────

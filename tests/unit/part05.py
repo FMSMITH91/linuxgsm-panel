@@ -548,6 +548,29 @@ _nt_ok2, _nt_reason2 = N._post("https://ntfy.sh/a/b/c", b"x", {}, allow_configur
 check("ntfy: a multi-segment path is blocked at the sink too",
       _nt_ok2 is False and _nt_reason2 == "blocked", _nt_reason2)
 
+# ...and the allow-list is only worth as much as the request that FOLLOWS it. _post used the
+# default opener, which follows a 3xx to a host no allow-list ever sees — and CPython's
+# redirect_request strips only content-length/content-type, so an ntfy `Authorization: Bearer
+# <token>` rode along to wherever the redirect pointed (http:// included). Asserted on the handler
+# the opener actually holds, because a source-level grep would pass on a handler that never ran.
+import urllib.request as _nt_ureq                                                  # noqa: E402
+_nt_redir = [_h for _h in N._OPENER.handlers
+             if isinstance(_h, _nt_ureq.HTTPRedirectHandler)]
+_nt_req = _nt_ureq.Request("https://ntfy.example.org/alerts", data=b"x", method="POST",
+                           headers={"Authorization": "Bearer SEKRET"})
+check("ntfy: _post's opener refuses to follow a redirect",
+      len(_nt_redir) == 1 and _nt_redir[0].redirect_request(
+          _nt_req, None, 302, "Found", {}, "http://169.254.169.254/latest/") is None,
+      "handlers=%s" % [type(_h).__name__ for _h in N._OPENER.handlers])
+# Positive control: the stdlib default this replaces really would have followed it, carrying the
+# token — without this the check above passes on a urllib that stopped redirecting by itself.
+_nt_followed = _nt_ureq.HTTPRedirectHandler().redirect_request(
+    _nt_req, None, 302, "Found", {}, "http://169.254.169.254/latest/")
+check("ntfy: ...and the stdlib default WOULD have, carrying the Authorization header",
+      _nt_followed is not None
+      and _nt_followed.get_header("Authorization") == "Bearer SEKRET"
+      and _nt_followed.full_url == "http://169.254.169.254/latest/", repr(_nt_followed))
+
 # A token with a newline would split the request headers; send_ntfy must refuse rather than send.
 _sv_post = N._post
 try:
@@ -1861,6 +1884,60 @@ try:
           _cs_out == '"cstrike" "/home/cu/serverfiles/cstrike"\n'
           and _cs_seen == [os.path.join(_cs_cfg, "mount.cfg")],
           "out=%r handed=%s" % (_cs_out, _cs_seen))
+
+    # 4b. The rc has to say whether the read HAPPENED, not just whether the verb ran.
+    #     do_gmod_mount_read called _as_game_user and threw the result away — `return 0` whatever
+    #     came back. _as_game_user returns 1 for a credential drop that did not take, a path
+    #     resolving outside the home, a child killed by a signal, and any exception out of
+    #     _emit_file, including one raised PART-WAY through its chunk loop with bytes already
+    #     flushed. Every one of those reached gmod_current_mounts as rc 0, which reads it as "this
+    #     server mounts nothing" — and server_files then rewrote mount.cfg to exactly the visible
+    #     selection, dropping every mount the panel had failed to read, and reported success.
+    #     do_game_file_read and do_game_dir_tar already return it; only this verb did not.
+    def _cs_drop_stub(pw, p, emit):
+        """Stand-in for the fork-and-drop with its CONTRACT intact: 0 when emit() completed, 1
+        when it raised. The real one needs root, which is why it cannot run here."""
+        try:
+            emit(os.path.realpath(p))
+        except Exception:
+            return 1
+        return 0
+
+    _cs_mcfg = os.path.join(_cs_cfg, "mount.cfg")
+    _cs_real_pwd, _cs_real_drop = _helper.pwd, _helper._as_game_user
+    _helper.pwd = type("P", (), {"getpwnam": staticmethod(lambda n: _cs_fake)})()
+    _helper._as_game_user = _cs_drop_stub
+    _cs_r, _cs_w = os.pipe()
+    _cs_saved_fd = os.dup(1)
+    os.dup2(_cs_w, 1)
+    os.close(_cs_w)
+    try:
+        os.unlink(_cs_mcfg)                        # never created: genuinely "nothing mounted"
+        _cs_rc_absent = _helper.do_gmod_mount_read([_cs_me], "")
+        os.makedirs(_cs_mcfg)                      # present, and not something that can be read
+        _cs_rc_unread = _helper.do_gmod_mount_read([_cs_me], "")
+        os.rmdir(_cs_mcfg)
+        with open(_cs_mcfg, "w", encoding="utf-8") as _fh:
+            _fh.write('"cstrike" "/home/cu/serverfiles/cstrike"\n')
+        _cs_rc_ok = _helper.do_gmod_mount_read([_cs_me], "")
+    finally:
+        sys.stdout.flush()
+        os.dup2(_cs_saved_fd, 1)
+        os.close(_cs_saved_fd)
+        _helper.pwd, _helper._as_game_user = _cs_real_pwd, _cs_real_drop
+    _cs_out2 = os.read(_cs_r, 65536).decode("utf-8", "replace")
+    os.close(_cs_r)
+    check("helper gmod-mount-read: an ABSENT mount.cfg is still 'no mounts' (rc 0, no output)",
+          _cs_rc_absent == 0, "rc=%s" % _cs_rc_absent)
+    check("helper gmod-mount-read: a mount.cfg that is THERE and unreadable is not rc 0",
+          _cs_rc_unread != 0,
+          "rc=%s — gmod_current_mounts reads that as 'this server mounts nothing'"
+          % _cs_rc_unread)
+    # Positive control: the verb must still succeed, and still emit, on the ordinary path — or the
+    # check above would pass with the read removed altogether.
+    check("helper gmod-mount-read: a readable mount.cfg still reports success and its contents",
+          _cs_rc_ok == 0 and _cs_out2 == '"cstrike" "/home/cu/serverfiles/cstrike"\n',
+          "rc=%s out=%r" % (_cs_rc_ok, _cs_out2))
 finally:
     _helper.HOME_ROOT, _helper.CONTENT_CRON_PREFIX = _cs_saved_root, _cs_saved_cron
     _shutil.rmtree(_cs_tmp, ignore_errors=True)
@@ -2362,6 +2439,53 @@ for (_v, _a), _want in _REMOTE_EXPECTED.items():
         _wrong.append("%s: %r != %r" % (_v, _got, _want))
 check("privileged: the remote transport renders the same commands the SSH path always sent",
       not _wrong, "; ".join(_wrong[:2]))
+
+# ── the remote rendering of sshd-set-directive must mean what the HELPER's does ───────────────
+# It was `sed -i 's/^#\?<Key>.*/<Key> <value>/'`. `sed -i` exits 0 when its pattern matches
+# nothing and leaves the file untouched, so on a host whose sshd_config does not already carry the
+# directive — a CIS-hardened image, a config-management-written file, a distro that keeps these
+# keys only in sshd_config.d — the verb did nothing and reported success: the setup log recorded
+# PermitRootLogin and PasswordAuthentication as locked down while root password login stayed
+# whatever the host shipped with. The helper's do_sshd_set_directive appends in that case, so the
+# two halves of one operation disagreed and only the remote half lied.
+#
+# Driven for real against files rather than matched as a string: a rendering test would pass for
+# any command that merely CONTAINS an append, including one whose shell precedence never runs it.
+_sd_dir = _tempfile.mkdtemp(prefix="sshd-directive-")
+try:
+    _sd_cmd = _priv.remote_command("sshd-set-directive", ["PasswordAuthentication", "no"])
+    # ("case name", starting file, what must be in the file afterwards, what must NOT be)
+    _sd_cases = [
+        ("absent", "# nothing here\nPort 22\n", "PasswordAuthentication no\n", None),
+        ("hash-space", "#   PasswordAuthentication yes\n", "PasswordAuthentication no\n",
+         "yes"),
+        ("already set", "PasswordAuthentication yes\n", "PasswordAuthentication no\n", "yes"),
+        # No trailing newline: an append would otherwise be glued onto the last line and leave an
+        # sshd_config that does not parse.
+        ("no trailing newline", "Port 22", "\nPasswordAuthentication no\n", None),
+        # \b, so a LONGER key that merely starts with this one is left alone.
+        ("longer key nearby", "PasswordAuthenticationFoo yes\n",
+         "PasswordAuthenticationFoo yes\n", None),
+    ]
+    _sd_bad = []
+    for _name, _body, _want, _unwanted in _sd_cases:
+        _f = os.path.join(_sd_dir, _name.replace(" ", "-"))
+        with open(_f, "w", encoding="utf-8") as _fh:
+            _fh.write(_body)
+        _r = _sub.run(["bash", "-c", _sd_cmd.replace(_priv.SSHD_CONFIG, _f)],
+                      capture_output=True, text=True, timeout=30)
+        _after = open(_f, encoding="utf-8").read()
+        if _r.returncode != 0 or _want not in _after or (_unwanted and _unwanted in _after):
+            _sd_bad.append("%s: rc=%d -> %r" % (_name, _r.returncode, _after))
+    check("privileged: the remote sshd-set-directive applies in every shape the helper handles",
+          not _sd_bad, "; ".join(_sd_bad[:3]))
+    # POSITIVE CONTROL for the whole block: the command really is the one under test, and it
+    # really does edit the file it is pointed at (so the sweep above cannot pass on a no-op).
+    check("privileged: ...and that command is the rendering the SSH path sends",
+          "sshd_config" in _sd_cmd and "sed -i" in _sd_cmd and "printf" in _sd_cmd,
+          _sd_cmd[:160])
+finally:
+    _shutil.rmtree(_sd_dir, ignore_errors=True)
 
 # A comment with a space must survive shell-quoting on the remote side.
 check("privileged: remote rendering quotes a comment containing a space",
@@ -3593,6 +3717,51 @@ finally:
 _mon_src = open(os.path.join(_root, "panel", "services", "monitoring.py"), encoding="utf-8").read()
 check("restart flags: the consumer SKIPS an unknown answer instead of writing False",
       "if _rf is not None:" in _mon_src and "_rf = probe.get(\"restart_flagged\")" in _mon_src)
+
+# ── server capacity: a cache pinned for the process lifetime is not "essentially static" ───────
+# _server_max_config cached a successful read forever. The panel's OWN settings form edits
+# maxplayers/slots and no writer clears this map, so raising slots from 16 to 32 left the panel
+# answering 16 until it was restarted — and that number is not merely displayed, it is the
+# `count >= mx` the "Server full" alert fires on. The panel pushed "full (16/16)" with 16 slots
+# free, latched _server_full_alerted, and was then SILENT when the server genuinely filled at 32.
+from panel.core import panel_state as _ps_mx                                       # noqa: E402
+_o_lgv_mx = _mon.lgsm_get_values
+_gs_mx = NS(id=987654, remote=None, short_name="maxsrv", lgsm_name="csgoserver")
+try:
+    _ps_mx._max_players_cache.pop(_gs_mx.id, None)
+    _mon.lgsm_get_values = lambda *a, **k: {"slots": "16"}
+    check("max config: a real read is returned", _mon._server_max_config(_gs_mx) == 16)
+    # Positive control for the TTL: within the window it is still served from cache, so the check
+    # below cannot pass merely because caching stopped working.
+    _mon.lgsm_get_values = lambda *a, **k: {"slots": "32"}
+    check("max config: ...and reused inside the TTL rather than re-read every poll",
+          _mon._server_max_config(_gs_mx) == 16)
+    # Age the CLOCK the function reads, not the cache entry: that says nothing about how the entry
+    # is stored, so a panel without the TTL fails this check by name instead of blowing up on the
+    # shape and taking the rest of the suite with it.
+    _TTL_MX = getattr(_mon, "_MAX_PLAYERS_TTL", 3600)
+    _o_time_mx = _mon.time
+    try:
+        _mon.time = NS(time=lambda: _time.time() + _TTL_MX + 1)
+        _mx_after = _mon._server_max_config(_gs_mx)
+        check("max config: a capacity raised in the panel's own settings form takes effect",
+              _mx_after == 32, "still %r — the 'full' alert would fire at the old cap" % _mx_after)
+        # ...and an expired entry whose RE-READ fails keeps the last real answer: a failed read is
+        # not a measurement, and blanking it would both empty the UI and disarm the full alert.
+        _mon.lgsm_get_values = lambda *a, **k: None
+        _mon.time = NS(time=lambda: _time.time() + 2 * _TTL_MX + 2)
+        check("max config: a failed re-read keeps the last capacity actually read",
+              _mon._server_max_config(_gs_mx) == 32)
+    finally:
+        _mon.time = _o_time_mx
+    _ps_mx._max_players_cache.pop(_gs_mx.id, None)
+    check("max config: ...but an unreadable config with nothing cached is None, not a number",
+          _mon._server_max_config(_gs_mx) is None)
+    check("max config: an unreadable read is never written to the cache",
+          _gs_mx.id not in _ps_mx._max_players_cache)
+finally:
+    _mon.lgsm_get_values = _o_lgv_mx
+    _ps_mx._max_players_cache.pop(_gs_mx.id, None)
 
 
 # The default itself. Nothing may escalate on the panel's own host without asking.

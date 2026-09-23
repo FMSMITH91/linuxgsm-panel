@@ -847,6 +847,17 @@ finally:
 check("transport (ssh cli): decodes with errors='replace' like the other two",
       _sshkw.get("errors") == "replace" and _sshkw.get("encoding") == "utf-8"
       and _sshkw.get("text") is True)
+# ...and it must not hand the remote session the PANEL's stdin. capture_output= redirects stdout
+# and stderr ONLY, and there is no `-n` in the argv, so the child ssh inherited fd 0 and forwarded
+# it to the far side: every command this transport runs — the transport every Tailscale remote
+# uses — was reading the panel's own input. Production survived it only because the systemd unit
+# sets StandardInput=null; run from a shell, a tmux pane or the dev runner and the poller's ssh
+# calls race to drain the operator's tty, where a stray keystroke answers a LinuxGSM prompt on a
+# live game server. _POPEN_KW gives both local paths DEVNULL and files.py gives its own ssh argv
+# the same; this was the one transport that did not.
+check("transport (ssh cli): the remote session never gets the panel's own stdin",
+      _sshkw.get("stdin") == _sm_core.subprocess.DEVNULL,
+      "stdin=%r — expected DEVNULL (%r)" % (_sshkw.get("stdin"), _sm_core.subprocess.DEVNULL))
 
 # ── cron manager (pure logic; no crontab touched) ─────────────
 # schedule validation
@@ -918,6 +929,40 @@ try:
           _sm_cron._unwrap_cron_command(_wagain)[1] is not None, repr(_wagain))
     check("cron wrap: ...and it stays visible, which is what the flag-path grep matches on",
           "/home/gm/.restart-pending" in _wagain, repr(_wagain))
+    # ── the runner write is what makes the base64 line runnable ──────────────────────────────
+    # _install_cron_runner's rc was discarded. If ~/.lgsm-cron is already a regular file the
+    # `mkdir -p` fails and the && chain writes nothing — and on the tailscale/local transports a
+    # timeout answers ("", "…", -1) WITHOUT raising, so nothing upstream noticed either. The
+    # crontab was then rewritten to call a script that is not there: the panel said "Added" with
+    # a success audit row, cron mailed "No such file or directory" to a mailbox nobody reads, and
+    # Last run stayed "—" forever, which is exactly what a not-yet-due job looks like.
+    _sm_core.run_command = lambda *a, **k: ("", "mkdir: cannot create directory", 1)
+    check("cron wrap: a failed runner install answers None, not a line pointing at nothing",
+          _sm_cron._wrap_cron_command(None, "gm", "echo %H") is None)
+    _add_seen = []
+    _o_rw = _sm_core._rewrite_crontab
+    try:
+        _sm_core._rewrite_crontab = lambda *a, **k: (_add_seen.append(a), (True, "Added"))[1]
+        _ok_add, _msg_add = _sm_cron.add_cron_job(None, "gm", "30 5 * * *", "echo %H")
+        check("cron add: ...so the job is refused rather than reported Added",
+              _ok_add is False and "nothing was scheduled" in _msg_add, repr(_msg_add))
+        check("cron add: ...and the crontab was never rewritten",
+              not _add_seen, str(_add_seen)[:160])
+        # update_cron_job must refuse BEFORE the rewrite too — otherwise the working line it was
+        # replacing is dropped in favour of one that cannot run.
+        _ok_up, _msg_up = _sm_cron.update_cron_job(None, "gm", "0 6 * * * /home/gm/x.sh",
+                                                   "30 5 * * *", "echo %H")
+        check("cron update: ...same refusal, and the existing line is left alone",
+              _ok_up is False and "nothing was scheduled" in _msg_up and not _add_seen,
+              "%r / %s" % (_msg_up, str(_add_seen)[:120]))
+        # POSITIVE CONTROL: a runner that installs cleanly still schedules the job.
+        _sm_core.run_command = lambda *a, **k: ("", "", 0)
+        _ok_good, _msg_good = _sm_cron.add_cron_job(None, "gm", "30 5 * * *", "echo %H")
+        check("cron add: a host that DID take the runner still schedules the job",
+              _ok_good is True and len(_add_seen) == 1
+              and ".lgsm-cron/run " in str(_add_seen[0]), "%r / %s" % (_msg_good, str(_add_seen)[:160]))
+    finally:
+        _sm_core._rewrite_crontab = _o_rw
 finally:
     _sm_core.run_command = _orig_wrap_rc
 
@@ -980,7 +1025,9 @@ def _cr_drive(fn, *a, **kw):
         _sm_core.run_privileged = lambda *_a, **_k: (_CR_TAB.strip(), "", 0)
         _sm_cron._read_cron_status = lambda *_a, **_k: {}
         _sm_cron._read_cron_run_times = lambda *_a, **_k: {}
-        _sm_cron._install_cron_runner = lambda *_a, **_k: None
+        # 0, not None: the runner install now REPORTS its rc, and a non-zero one makes the cron
+        # editors refuse. A stub returning None would make every drive below refuse instead.
+        _sm_cron._install_cron_runner = lambda *_a, **_k: 0
         _sm_core.run_command = lambda s, c, **k: (seen.__setitem__("cmd", c), ("", "", 0))[1]
         fn(*a, **kw)
     finally:
@@ -1334,6 +1381,32 @@ try:
     check("shell idents: ...while a legitimate name still runs",
           len(_reached) == 1 and "sudo -u codserver" in _reached[0], str(_reached)[:120])
 
+    # ── the CONSOLE path was the one `sudo -u <account>` builder in _core.py with NO guard ─────
+    # read_as_game_user validates and _quote()s, run_as_game_user validates both names and
+    # _quote()s — send_console_command did neither: `command` was quoted, `user` and `selfname`
+    # were interpolated raw. `user` sits AHEAD of the `bash -c`, so it breaks out at the shell that
+    # runs sudo, as the panel's SSH account — on a remote host that is the identity the panel
+    # escalates with. `selfname` lands inside the script body via _tmux_live_socket_sh's grep and
+    # has-session. The same row is refused by run_as_game_user and _rewrite_crontab; only the
+    # console accepted it.
+    _reached.clear()
+    _con_bad_user = _sm_core.send_console_command(_FakeSrv(), _hostile, "status", selfname="codserver")
+    _con_bad_self = _sm_core.send_console_command(_FakeSrv(), "codserver", "status", selfname=_hostile)
+    check("console send: a hostile account/script name reaches no shell at all",
+          not _reached, str(_reached)[:200])
+    check("console send: ...and it answers the (out, err, rc) tuple every caller unpacks",
+          (isinstance(_con_bad_user, tuple) and len(_con_bad_user) == 3
+           and _con_bad_user[2] == 1 and _con_bad_self[2] == 1),
+          "%r / %r — game.py reads out[2] as the rc and never catches a raise"
+          % (_con_bad_user, _con_bad_self))
+    # ...and the guard is not a blanket refusal: a legitimate name still builds its command, with
+    # the account SHELL-QUOTED like read_as_game_user's.
+    _reached.clear()
+    _sm_core.send_console_command(_FakeSrv(), "codserver", "status", selfname="codserver")
+    check("console send: ...while a legitimate name still runs, quoted",
+          len(_reached) == 1 and _reached[0].startswith("sudo -u codserver bash -c "),
+          str(_reached)[:160])
+
     # ── the editor must get the file's bytes, not a stripped copy ──────────────────────────────
     # Both transports strip: _core._finish returns (out or "").strip() and the paramiko branch
     # does out.strip(). read_file returned run_command's stdout unchanged, so the editor was handed
@@ -1394,6 +1467,25 @@ try:
     check("read_file: the command tells the HOST to base64 the body, not cat it raw",
           len(_rf_cmds) == 1 and "base64 " in _rf_cmds[0] and "; cat " not in _rf_cmds[0],
           _rf_cmds[0][:150] if _rf_cmds else "no command captured")
+    # The 1 MB cap has to measure the FILE, not a symlink to it. GNU stat does not dereference
+    # without -L, so `stat -c %s` on `latest.log -> …/errors.log` reported the link's ~45-byte
+    # target string while [ -f ], [ -s ], grep and base64 all followed it — a multi-GB log sailed
+    # past the refusal and was base64'd into one Python string. stat_path already uses -Lc.
+    # Asserted on the COMMAND, because every check above stubs the transport and would pass either
+    # way. [[test-the-caller-not-just-the-helper]]
+    _rf_cmd1 = _rf_cmds[0] if _rf_cmds else ""
+    check("read_file: the size cap measures the symlink's TARGET (stat -Lc), not the link",
+          "stat -Lc %s" in _rf_cmd1 and "stat -c %s" not in _rf_cmd1,
+          _rf_cmd1[:200] or "no command captured")
+    # ...and a size that could not be READ must refuse. `[ "" -gt N ]` is a bash error whose
+    # non-zero status makes the `if` false, so an unreadable size fell through to an UNCAPPED read.
+    check("read_file: ...and a non-numeric/empty size stops the read instead of skipping the cap",
+          'case "$sz" in ' in _rf_cmd1 and "|*[!0-9]*) exit 0;;" in _rf_cmd1,
+          _rf_cmd1[:260] or "no command captured")
+    # Positive control: the cap itself is still applied and still answers __TOOBIG__ (the marker
+    # loop below re-checks the Python side), and the guard is not a blanket refusal.
+    check("read_file: ...while the cap is still there for a size that IS a number",
+          "-gt 1048576" in _rf_cmd1, _rf_cmd1[:200] or "no command captured")
     # ...and the markers the script really does emit are still recognised.
     for _mark, _want in (("__NOFILE__", "File not found"),
                          ("__TOOBIG__", "File is too large to edit in the browser"),
@@ -1422,6 +1514,54 @@ try:
         ("%s%s" % (_sm_files._READ_BEGIN, _sm_files._READ_END)).strip(), "", 0)
     eq("read_file: a file that really is empty still reads as empty",
        _sm_files.read_file(_FakeSrv(), "csgoserver", "cfg/server.cfg")[0], "")
+
+    # ── lgsm_game_config: "this game has no config file" is a claim about the GAME ─────────────
+    # `./<selfname> details` is a 45-second LinuxGSM run on a possibly-busy host — the most
+    # timeout-prone read in the module — and the rc was discarded. When it did not run, nothing
+    # matched the `config file:` regex and the panel stated as fact that LinuxGSM had reported no
+    # editable config for this game. It reported nothing, because it was never asked; the admin
+    # concludes their server.cfg does not exist and stops looking. A DONE marker printed after the
+    # run separates "details said nothing" from "details never answered", exactly as
+    # lgsm_read_config frames its sections.
+    _GC_LINE = "  Config file: /home/csgoserver/serverfiles/cfg/server.cfg\n"
+
+    def _gc_transport(details_out):
+        """Answer the `details` command with `details_out`; serve read_file a real framed body."""
+        _framed = "%s%s%s" % (_sm_files._READ_BEGIN,
+                              _rf_b64.b64encode(b"hostname \"x\"\n").decode(), _sm_files._READ_END)
+        return lambda s, c, **k: ((details_out, "", 0) if " details " in c else (_framed, "", 0))
+
+    _sm_core.run_command = lambda s, c, **k: ("", "SSH command timed out", -1)
+    _gc_dead = _sm_files.lgsm_game_config(_FakeSrv(), "csgoserver", "csgoserver")
+    check("game config: a details run that never answered is not 'this game has no config file'",
+          _gc_dead.get("rel") is None and "did not answer" in (_gc_dead.get("error") or ""),
+          "%r — the admin is told their game has no editable config" % (_gc_dead,))
+    # Output that arrived but was cut short (no marker) is the same unread state, not a reading.
+    _sm_core.run_command = _gc_transport("LinuxGSM - Counter-Strike\nDistro Details\n")
+    _gc_part = _sm_files.lgsm_game_config(_FakeSrv(), "csgoserver", "csgoserver")
+    check("game config: ...and neither is a truncated details run",
+          _gc_part.get("rel") is None and "did not answer" in (_gc_part.get("error") or ""),
+          repr(_gc_part))
+    # POSITIVE CONTROL 1: details really did run and really did name no config file — the original
+    # message must survive, or this "fix" just replaced one wrong answer with another.
+    _sm_core.run_command = _gc_transport("LinuxGSM - Call of Duty\nNo config here\n"
+                                         + _sm_files._DETAILS_DONE)
+    _gc_none = _sm_files.lgsm_game_config(_FakeSrv(), "csgoserver", "csgoserver")
+    check("game config: a details run that COMPLETED and named none still says so",
+          _gc_none.get("rel") is None
+          and "No editable game config file" in (_gc_none.get("error") or ""),
+          repr(_gc_none))
+    # POSITIVE CONTROL 2: the normal path still finds and reads the file.
+    _sm_core.run_command = _gc_transport("LinuxGSM - Counter-Strike\n" + _GC_LINE
+                                         + _sm_files._DETAILS_DONE)
+    _gc_ok = _sm_files.lgsm_game_config(_FakeSrv(), "csgoserver", "csgoserver")
+    eq("game config: a normal details run still yields the config path",
+       _gc_ok.get("rel"), "serverfiles/cfg/server.cfg")
+    check("game config: ...and its contents, with no error",
+          _gc_ok.get("exists") is True and _gc_ok.get("error") is None
+          and "hostname" in (_gc_ok.get("content") or ""), repr(_gc_ok)[:160])
+    check("game config: ...and the marker itself never reaches the editor",
+          _sm_files._DETAILS_DONE not in (_gc_ok.get("content") or ""), repr(_gc_ok)[:160])
 
     # The host-side symlink guard. _safe_abspath is lexical and cannot see a symlink planted under
     # the game user's home, so every file operation now carries a realpath check that runs WHERE

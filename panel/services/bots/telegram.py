@@ -277,7 +277,21 @@ def _report_tg_pending_update():
         return
     now = so.panel_commit()
     frm = pend.get("from_commit") or pend.get("from_version")   # from_version: older pending markers
-    if now and frm and now != frm:
+    # "no new commit landed (already current, or it rolled back)" is a claim about git, and the
+    # else-branch it sat in was reached by THREE conditions: the commits are equal, `now` is empty,
+    # or `frm` is empty. Only the first supports the sentence. An empty value means the panel could
+    # not READ the commit — panel_commit() shells out to `git rev-parse --short HEAD`, and this
+    # reporter fires 8 s after the new process starts, while install.sh's health-check phase is
+    # still running and the box is at its busiest — so a clean update was reported as one that had
+    # not landed, naming two specific causes nothing had established. The admin's reasonable next
+    # move is to send /update again and restart the panel a second time for nothing. Same split as
+    # _telegram_do_update above, which already refuses to conclude anything from `st` unless
+    # st["git"] is true.
+    if not (now and frm):
+        _tg_reply(token, chat, "ℹ️ I'm back online, but I couldn't read the panel's git commit, so "
+                               "I can't tell you whether the update landed — check Settings → "
+                               "Panel, or data/self-update.log.")
+    elif now != frm:
         _tg_reply(token, chat, "✅ Update complete — now on %s (was %s). Back online." % (_panel_ver_label(), frm))
     else:
         _tg_reply(token, chat, "ℹ️ Update finished — no new commit landed (already current, or it "

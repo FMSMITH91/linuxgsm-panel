@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Groups & Permissions{% endblock %}
 
-{% macro game_server_access(all_remotes, all_servers, selected_ids, idprefix) %}
+{% macro game_server_access(all_remotes, all_servers, selected_ids, idprefix, any_hosts=False) %}
 {# No `for`: this heads a LIST of per-server checkboxes, not one control. It used to point at
    manage-groups-name — the Group Name text box in a different card entirely — which gave that
    input the accessible name "Individual game servers". #}
@@ -22,7 +22,10 @@
     {% endfor %}
     {% endif %}
   {% else %}
-  <p class="text-secondary small">No game servers yet.</p>
+  {# "yet" is a claim about the INSTALL, and this list is already filtered to what the viewer may
+     grant — so a delegated admin who can grant nothing was told the panel had no game servers at
+     all. any_hosts says which of the two is true. #}
+  <p class="text-secondary small">{% if any_hosts %}No game servers you can grant.{% else %}No game servers yet.{% endif %}</p>
   {% endfor %}
 </div>
 {% endmacro %}
@@ -152,10 +155,19 @@
             {{ role_presets() }}
             <div style="max-height: 300px; overflow-y: auto;">
               {% for perm_key, perm_desc in all_perms.items() %}
+              {# Disabled where this admin cannot grant it. _grantable_perms drops a requested
+                 permission they don't hold and PRESERVES one the group already has, so an
+                 enabled box was inert in both directions — and the un-tick case was a revocation
+                 the page reported as done ("Group 'X' updated.") and the database never made.
+                 Still rendered, and still ticked, so the group's real power stays visible to
+                 whoever is auditing it; a disabled box is simply not submitted, which is exactly
+                 what the preserve rule assumes. #}
+              {% set perm_locked = perm_key not in grantable_perms %}
               <div class="form-check">
                 <input type="checkbox" name="permissions" value="{{ perm_key }}"
                        class="form-check-input" id="perm-{{ group.id }}-{{ perm_key }}"
-                       {% if perm_key in group.get_permissions() %}checked{% endif %}>
+                       {% if perm_key in group.get_permissions() %}checked{% endif %}
+                       {% if perm_locked %}disabled title="Only a superadmin can change this one — you don't hold this permission yourself."{% endif %}>
                 <label class="form-check-label" for="perm-{{ group.id }}-{{ perm_key }}">
                   <span class="small">{{ perm_desc }}</span>
                 </label>
@@ -177,10 +189,12 @@
                 </label>
               </div>
               {% else %}
-              <p class="text-secondary small">No hosts configured yet.</p>
+              {# Same as the macro's empty state: this list is what THIS admin may grant, not what
+                 the install has. #}
+              <p class="text-secondary small">{% if any_remotes %}No hosts you can grant.{% else %}No hosts configured yet.{% endif %}</p>
               {% endfor %}
             </div>
-            {{ game_server_access(all_remotes, all_servers, group.game_servers|map(attribute='id')|list, 'g' ~ group.id) }}
+            {{ game_server_access(all_game_hosts, all_servers, group.game_servers|map(attribute='id')|list, 'g' ~ group.id, any_hosts=any_remotes) }}
           </div>
         </div>
         <button type="submit" class="btn btn-primary mt-2">
@@ -227,9 +241,13 @@
               {{ role_presets() }}
               <div style="max-height: 350px; overflow-y: auto;">
                 {% for perm_key, perm_desc in all_perms.items() %}
+                {# Same rule as the edit form above: add_group filters through _grantable_perms
+                   too, so a box for a permission this admin does not hold would create the group
+                   without it and say nothing. #}
                 <div class="form-check">
                   <input type="checkbox" name="permissions" value="{{ perm_key }}"
-                         class="form-check-input" id="new-perm-{{ perm_key }}">
+                         class="form-check-input" id="new-perm-{{ perm_key }}"
+                         {% if perm_key not in grantable_perms %}disabled title="Only a superadmin can change this one — you don't hold this permission yourself."{% endif %}>
                   <label class="form-check-label small" for="new-perm-{{ perm_key }}">{{ perm_desc }}</label>
                 </div>
                 {% endfor %}
@@ -248,10 +266,11 @@
                   </label>
                 </div>
                 {% else %}
-                <p class="text-secondary small">No hosts yet</p>
+                {# Same filtered list as the edit form's, so the same two answers. #}
+                <p class="text-secondary small">{% if any_remotes %}No hosts you can grant.{% else %}No hosts yet{% endif %}</p>
                 {% endfor %}
               </div>
-              {{ game_server_access(all_remotes, all_servers, [], 'new') }}
+              {{ game_server_access(all_game_hosts, all_servers, [], 'new', any_hosts=any_remotes) }}
             </div>
           </div>
         </div>

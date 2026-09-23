@@ -180,23 +180,50 @@ def _parse_idtech3_status(text):
     return players
 
 
+# The `list` reply's OWN shape: the count prefix, anchored to the start of the line with nothing
+# in front of it but the server's own bracketed log prefix ("[12:34:56] [Server thread/INFO]: ").
+# A chat line carries the same prefix and then "<Steve> " or a plugin's tag before the message, so
+# it cannot reach "There are". Both vanilla spellings of the count are accepted ("N of a max of M"
+# and the older "N/M").
+_MC_LIST_RE = re.compile(
+    r"^\s*(?:\[[^\]]*\]\s*)*:?\s*there are\s+(\d+)\s*(?:of a max of\s+\d+|/\s*\d+)\s+players online:",
+    re.IGNORECASE)
+
+
 def _parse_minecraft_list(text):
     """Parse a Minecraft `list` reply ('There are N of M players online: Alice, Bob') into
-    [{name, …}]. Splits on the last 'online:' so a log-line timestamp prefix can't confuse it."""
-    line = ""
+    [{name, …}], or None when the capture holds no `list` reply at all.
+
+    This kept the LAST line containing the bare substring "online:", and that is a line a PLAYER
+    WRITES: a Minecraft server logs chat to the same stdout the tmux pane captures, so typing
+    "online: Notch" in chat once a second lands an attacker-chosen line after the real reply, and
+    the last match wins. The Players panel then showed exactly one connected player under the name
+    the attacker picked — hiding everyone actually on, including them — and Kick on that row sent
+    the admin's `kick` to that name. The two sibling parsers above were hardened against this same
+    class (a player called "my uniqueid"; a player called "numscoreping") and now require a shape a
+    chat line cannot forge; this one was the one left on a bare substring.
+
+    And None, not [], when nothing matched. [] here means "confirmed empty", so a server that did
+    not answer `list` inside the 0.8s capture window used to read as a server with nobody on it —
+    or, with an older reply still in the pane, as the players who were on minutes ago. The count is
+    cross-checked against the names for the same reason: a reply that arrived half-written (tmux
+    wrapping, a capture taken mid-print) is unknown, never a short player list and never zero."""
+    m, line = None, ""
     for ln in (text or "").splitlines():
-        if "online:" in ln.lower():
-            line = ln
-    idx = line.lower().rfind("online:")
-    if idx == -1:
-        return []
-    after = line[idx + len("online:"):]
+        hit = _MC_LIST_RE.match(ln)
+        if hit:
+            m, line = hit, ln
+    if m is None:
+        return None
+    after = line[m.end():]
     players, seen = [], set()
     for chunk in after.split(","):
         nm = re.sub(r"[^A-Za-z0-9_]", "", chunk)[:32]
         if nm and nm not in seen:
             seen.add(nm)
             players.append({"name": nm, "steamid": "", "num": None, "score": None, "time": None})
+    if len(players) != int(m.group(1)):
+        return None     # a truncated or partial reply is UNKNOWN — not a shorter list, not zero
     return players
 
 
@@ -215,7 +242,19 @@ def console_player_list(server, user, game_type, selfname=None):
     # docstring already draws the distinction ("an empty list for a confirmed-empty server, or
     # None when it can't be read"); only the code did not.
     try:
-        _core.send_console_command(server, user, cmd, timeout=12, selfname=selfname)
+        # The SEND's status, not just the capture's. send_console_command returns (out, err, rc)
+        # like every other call here and rc is meaningful (3 + NO_SESSION for no live tmux session,
+        # non-zero when `sudo -u` or the transport failed) — it was thrown away. On the tailscale
+        # and local transports a failed send does not RAISE (_run_via_ssh_cli returns
+        # ("", "SSH command timed out", -1)), so the `except` below never saw one; and the capture
+        # is a SEPARATE round trip 0.8s later, which can perfectly well succeed after the send
+        # failed. What came back then was whatever the pane already held — a PREVIOUS `status`
+        # table — parsed and returned as the answer to a question the server was never asked:
+        # players who had already disconnected, with their SteamIDs, on rows whose Ban fans out
+        # fleet-wide and into GlobalBan. Same idiom moderate() and console_steamid_ban() use.
+        _sent = _core.send_console_command(server, user, cmd, timeout=12, selfname=selfname)
+        if (_sent[2] if isinstance(_sent, tuple) and len(_sent) >= 3 else 1) != 0:
+            return None
         time.sleep(0.8)   # let the server print its reply into the pane before we capture it
         out, _, rc = capture_console(server, user, selfname=selfname, lines=180)
     except Exception:
@@ -236,20 +275,29 @@ def console_status(server, user, game_type, selfname=None):
     """One console `status`/`list` capture → (players, name): the parsed player list AND the server's
     advertised in-game name (the valve/idTech3 `hostname:` line), from a SINGLE round-trip. Used by
     the background poller so a server gamedig can't query (e.g. no GSLT) isn't hit with two separate
-    `status` sends per pass — which would spam the very console an admin is watching. Returns
-    ([], None) for a non-console game or on failure. Never raises."""
+    `status` sends per pass — which would spam the very console an admin is watching.
+
+    Returns (None, None) for a non-console game or on failure — NOT ([], None). An empty list is
+    "confirmed empty", and this returned it for a send that never arrived, a capture that failed
+    and a game with no console at all, which is the same conflation console_player_list's contract
+    exists to avoid. Never raises."""
     eng = game_engine(game_type)
     if not eng:
-        return [], None
+        return None, None
     cmd = "list" if eng == "minecraft" else "status"
     try:
-        _core.send_console_command(server, user, cmd, timeout=12, selfname=selfname)
+        # The send's status too — see console_player_list above for what dropping it cost: the
+        # capture is a separate round trip and succeeds happily after a send that never landed,
+        # so the pane's PREVIOUS table was returned as the current one.
+        _sent = _core.send_console_command(server, user, cmd, timeout=12, selfname=selfname)
+        if (_sent[2] if isinstance(_sent, tuple) and len(_sent) >= 3 else 1) != 0:
+            return None, None
         time.sleep(0.8)   # let the server print its reply into the pane
         out, _, rc = capture_console(server, user, selfname=selfname, lines=180)
     except Exception:
-        return [], None
+        return None, None
     if rc != 0 or not out:
-        return [], None
+        return None, None
     if eng == "idtech3":
         players = _parse_idtech3_status(out)
     elif eng == "minecraft":
@@ -327,11 +375,22 @@ def is_player_queryable(game_type, query_type=None):
     return bool(game_engine(game_type)) or bool(cron._gamedig_type(game_type, query_type))
 
 
+# Bedrock Dedicated Server's console has NO `ban` command. Banning on Bedrock is the allowlist
+# (`allowlist add/remove`, renamed from `whitelist` in 1.18.10); `/ban` is Java-only. PocketMine
+# does implement `ban`, so it is deliberately not in here.
+_MC_NO_BAN = frozenset({"mcbe", "mcb"})
+
+
 def moderation_caps(game_type):
     """Which moderation actions this game's console supports: {kick, ban, say}. Driven by the engine
-    family, so every game of a family is covered. Non-console games get nothing (view-only)."""
-    if game_engine(game_type):      # valve, idtech3 and minecraft all support all three
-        return {"kick": True, "ban": True, "say": True}
+    family, so every game of a family is covered. Non-console games get nothing (view-only).
+
+    `ban` is dropped for Bedrock: _ENG_MINECRAFT covers mcbe/mcb alongside the Java families, so
+    this answered ban=True for a console with no ban command, the detail page rendered the button,
+    and sending `ban <name>` into the pane got "Unknown command" while tmux send-keys exited 0 —
+    "Done.", a success audit row, and the griefer still connected."""
+    if game_engine(game_type):      # valve, idtech3 and minecraft all support kick + say
+        return {"kick": True, "ban": (game_type or "").lower() not in _MC_NO_BAN, "say": True}
     return {"kick": False, "ban": False, "say": False}
 
 
@@ -369,6 +428,17 @@ def moderate(server, user, game_type, action, target="", message="", selfname=No
     a console command. Returns (ok, msg)."""
     eng = game_engine(game_type)
     if action not in ("kick", "ban", "say") or not moderation_caps(game_type).get(action):
+        # Bedrock gets its own reason, because "isn't supported" is not actionable: BDS has no ban
+        # command at all (see _MC_NO_BAN), and banning there is the allowlist. Until moderation_caps
+        # dropped it, this fell through to the minecraft branch, sent `ban <name>` into the pane,
+        # and `tmux send-keys` exited 0 for a command the game answered with "Unknown command" — so
+        # the panel flashed "Done.", wrote a success audit row, counted the Bedrock servers in
+        # "Also banned on N other servers", and the griefer reconnected immediately. Same reasoning
+        # as the space-in-name refusal further down: a ban that silently does nothing is worse than
+        # a button that says why it stopped.
+        if action == "ban" and eng == "minecraft" and (game_type or "").lower() in _MC_NO_BAN:
+            return False, ("Bedrock servers have no ban command — remove the player from the "
+                           "server's allowlist instead.")
         return False, "That action isn't supported for this game."
 
     if action == "say":
@@ -492,7 +562,8 @@ def mod_restart_decision(status, players, force=False):
     return "pending"
 
 
-def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False):
+def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
+                    query_type=None):
     """Run LinuxGSM's own `backup` for a game instance (archives serverfiles into
     ~/lgsm/backup/), then prune to the newest `keep`. Runs AS THE GAME USER, non-interactively
     (like a cron backup). Long-running — archives can be large.
@@ -504,11 +575,21 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
       - (False, reason, False) backup attempted but failed
       - (False, "N player(s) online …", True) skipped because players were connected
     An unknown/unqueryable player count (None) is treated as empty, so games gamedig
-    can't query still back up on schedule (matching the daily-restart behaviour)."""
+    can't query still back up on schedule (matching the daily-restart behaviour) —
+    which is exactly why `query_type` has to be threaded in (see below)."""
     selfname = selfname or user
     keep = max(1, int(keep))
     if not force:
-        pc = cron.player_count(server, user, game_type, port)
+        # query_type, like every other player/version read in this file (_gamedig_player_list,
+        # _queried_version, is_player_queryable) and like the on-screen count in server_detail.
+        # This one call — the only one that decides whether to disconnect people — dropped it, so
+        # player_count resolved the gamedig type from the 26-entry built-in map ALONE. A game the
+        # map does not cover (Project Zomboid, ARK, Mordhau, Killing Floor) whose operator set the
+        # per-server override precisely so the panel could query it resolved to "", answered None,
+        # and the rule above reads None as empty — so the hourly ticker ran LinuxGSM's `backup`,
+        # which STOPS the server, and disconnected everyone on it. The override exists for exactly
+        # the servers this guard was blind on.
+        pc = cron.player_count(server, user, game_type, port, query_type)
         if pc is not None and pc > 0:
             return (False,
                     f"{pc} player(s) online — backup skipped so nobody gets disconnected",

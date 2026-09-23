@@ -58,9 +58,17 @@ function initTerminal() {
   });
   term.open(host);
 
-  // The panel has ONE socket connection; io() with no URL reuses the same origin and the same
-  // authenticated session the console uses. The server's connect handler refuses anonymous ones.
-  sock = io();
+  // The panel has ONE socket connection; io() reuses the same origin and the same authenticated
+  // session the console uses. The server's connect handler refuses anonymous ones.
+  //
+  // The PATH has to carry the mount. io() with no options uses socket.io-client's built-in
+  // default, "/socket.io" at the site root — so on a panel served under a sub-path (Tailscale
+  // Serve with mount /lgsm) the handshake went outside the mount and 404'd: `connect` never
+  // fired, term_open was never emitted, and the page sat on "Connecting…" over a blank black box
+  // for ever, because term_error and disconnect both need a connection that was never made. Every
+  // other socket in the panel already prefixes it — panel.js:7, server_detail.js:232 — and this
+  // is the same call they make.
+  sock = io({ path: (window.MOUNT || '') + '/socket.io', transports: ['websocket', 'polling'] });
 
   // Resize the emulator BEFORE telling the server, and tell it the size we actually applied.
   // These were two different numbers: the pty was opened at the computed size while xterm stayed
@@ -75,6 +83,16 @@ function initTerminal() {
     if (opened) return;              // a reconnect must not silently open a SECOND shell
     opened = true;
     sock.emit('term_open', { remote_id: REMOTE_ID, cols: term.cols, rows: term.rows });
+  });
+
+  // A handshake that never completes has to say so. Every other message on this page is emitted
+  // by the SERVER, so a page that never reached the server had nothing at all to show and left
+  // "Connecting…" standing indefinitely. Only before the first successful connect: after one,
+  // socket.io retries on its own and the disconnect handler owns the status line.
+  sock.on('connect_error', function () {
+    if (!opened) {
+      _status('Could not reach the panel to open a terminal session. Reload the page to try again.', 'bad');
+    }
   });
 
   // term_ready means the session was OPENED, which is not the same as connected. A pty and a

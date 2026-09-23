@@ -278,10 +278,25 @@ try:
                            game_type="gmod", port=27099, installed=False, status="installing")
         db.session.add(_inst); db.session.commit()
         _inst_id = _inst.id
+    _inst_r = c.get("/server/%d" % _inst_id)
     check("console of an installing server redirects (not 200)",
-          c.get("/server/%d" % _inst_id).status_code in (302, 303))
+          _inst_r.status_code in (302, 303))
     check("files of an installing server redirects (not 200)",
           c.get("/server/%d/files" % _inst_id).status_code in (302, 303))
+    # ...and it must redirect somewhere the VIEWER can enter. It sent them to manage_servers,
+    # which is @permission_required(MANAGE_SERVERS, INSTALL_SERVER) and whose whole body is
+    # `redirect(url_for("index"))`. A VIEW_CONSOLE-only member failed that gate on a page they
+    # never asked for, so the hop added a red "You do not have permission to do that." beside the
+    # blue "still installing" notice — a false statement about their own rights — and landed them
+    # on the dashboard anyway. Asserted on the LOCATION, not on the flash: a superadmin passes the
+    # gate, so the extra hop is invisible to this client and only the target shows it.
+    check("installing server: the redirect skips the permission-gated manage_servers hop",
+          "/servers/manage" not in (_inst_r.headers.get("Location") or ""),
+          "Location: %r — a viewer without MANAGE_SERVERS is told they lack a permission they "
+          "never asked for" % (_inst_r.headers.get("Location"),))
+    check("installing server: ...and goes straight to the dashboard (positive control)",
+          (_inst_r.headers.get("Location") or "x").split("?")[0].endswith("/"),
+          "Location: %r — expected the dashboard" % (_inst_r.headers.get("Location"),))
 
     # ── an install must not call a slow first boot a failure ────────────────────────────────────
     # The install started the server, then polled ~15s for its port and, if it wasn't up, finished
@@ -831,10 +846,121 @@ try:
     with app.app_context():
         db.session.delete(db.session.get(RemoteServer, _lh_id))
         db.session.commit()
+
+    # ── the Edit form must not offer a transport this panel cannot run ───────────────────────
+    # The Add form gates "Tailscale SSH" behind tailscale_installed; the per-remote Edit form
+    # offered it unconditionally. edit_remote accepts the value and answers "Remote '…' updated."
+    # — and every later command for that host then goes through `ssh 100.x.y.z`, which without
+    # tailscaled returns ("", …, -1) WITHOUT raising, so the firewall page, the backups card and
+    # ufw status read the host as reachable-but-empty rather than unreachable.
+    import panel.routes.remotes as _ts_mod
+    _ts_save = _ts_mod.ts
+
+    class _FakeTsInfo:
+        def __init__(self, installed):
+            self.installed = installed
+
+    class _FakeTs:
+        def __init__(self, installed):
+            self._installed = installed
+
+        def get_tailscale_info(self):
+            return _FakeTsInfo(self._installed)
+
+    with app.app_context():
+        _tsr_was = db.session.get(RemoteServer, remote2_id).auth_method
+    try:
+        _ts_mod.ts = _FakeTs(False)
+        _rno = c.get("/remotes").get_data(as_text=True)
+        check("remotes: the page renders with Tailscale absent",
+              "smoke-host" in _rno,
+              "an empty body would pass the next check having rendered nothing")
+        check("remotes: no form offers Tailscale SSH when the panel has no Tailscale",
+              _rno.count('value="tailscale"') == 0,
+              "%d tailscale options on a host with no tailscaled" % _rno.count('value="tailscale"'))
+        # A remote ALREADY on that transport keeps the option: hiding it there makes the select
+        # submit "key" on the next save and silently repoints a working host.
+        with app.app_context():
+            _tsr = db.session.get(RemoteServer, remote2_id)
+            _tsr.auth_method = "tailscale"
+            db.session.commit()
+        _rno2 = c.get("/remotes").get_data(as_text=True)
+        check("remotes: ...but a remote already on Tailscale SSH keeps its own option",
+              _rno2.count('value="tailscale"') == 1 and 'value="tailscale" selected' in _rno2,
+              "%d options, selected=%s" % (_rno2.count('value="tailscale"'),
+                                           'value="tailscale" selected' in _rno2))
+        with app.app_context():
+            _tsr = db.session.get(RemoteServer, remote2_id)
+            _tsr.auth_method = _tsr_was
+            db.session.commit()
+        # POSITIVE CONTROL: with Tailscale installed the option is back on every form — the gate
+        # is the panel's tailscaled, not a transport that was removed from the UI.
+        _ts_mod.ts = _FakeTs(True)
+        _rny = c.get("/remotes").get_data(as_text=True)
+        check("remotes: ...and every form offers it again once Tailscale is installed",
+              _rny.count('value="tailscale"') >= 2,
+              "%d tailscale options" % _rny.count('value="tailscale"'))
+    finally:
+        _ts_mod.ts = _ts_save
+        with app.app_context():
+            _tsr = db.session.get(RemoteServer, remote2_id)
+            if _tsr is not None and _tsr.auth_method != _tsr_was:
+                _tsr.auth_method = _tsr_was
+                db.session.commit()
+
     check("MANAGE_REMOTES user: non-granted remote -> 403",
           mrc.get("/api/remote/%d/firewall" % remote2_id).status_code == 403)
     check("MANAGE_REMOTES user: non-granted remote reboot -> 403",
           mrc.post("/api/remote/%d/reboot" % remote2_id).status_code == 403)
+
+    # ── a host you add has to be a host you can then reach ───────────────────────────────────
+    # add_remote committed the row and granted it to nothing. Access is purely group-derived, so
+    # for a non-superadmin creator the host was invisible on /remotes and answered 403 from its
+    # manage page, its edit and its delete — while the panel held its SSH credential, the sweep
+    # polled it, and on the "fresh" path a root bootstrap (apt full-upgrade, sshd_config rewrite,
+    # reboot) was already running with no way to watch or stop it. The success copy compounded it:
+    # "watch the progress on its card" about a card that never appears, and a redirect straight
+    # into a 403.
+    import panel.routes.remotes as _ar_mod
+    _ar_ssh = _ar_mod.ssh_test_connection
+    _ar_new_id = None
+    try:
+        _ar_mod.ssh_test_connection = lambda *a, **k: (True, "ok")
+        _ar = mrc.post("/remotes/add",
+                       data={"name": "smoke-added-by-mr", "host": "198.51.100.44",
+                             "ssh_user": "root", "ssh_port": "22", "auth_method": "password",
+                             "credential": "s3cret", "setup_type": "existing"},
+                       follow_redirects=False)
+        with app.app_context():
+            _ar_row = RemoteServer.query.filter_by(name="smoke-added-by-mr").first()
+            _ar_new_id = _ar_row.id if _ar_row else None
+        check("add_remote: the row is created (the checks below need it)",
+              _ar_new_id is not None, "no RemoteServer row was written")
+        if _ar_new_id is not None:
+            check("add_remote: a non-superadmin creator can reach the host they just added",
+                  mrc.get("/remote/%d/manage" % _ar_new_id).status_code != 403,
+                  "the creator is 403'd from their own new host")
+            check("add_remote: ...and it is listed on the page the flash sends them to",
+                  b"smoke-added-by-mr" in mrc.get("/remotes").data,
+                  "the card the success message points at does not exist")
+            check("add_remote: ...and the redirect goes to a page they can open",
+                  _ar.status_code in (301, 302, 303)
+                  and ("/remote/%d/manage" % _ar_new_id) in (_ar.headers.get("Location") or ""),
+                  "Location: %r" % (_ar.headers.get("Location"),))
+            # POSITIVE CONTROL: the grant is scoped to the row that was just created, not a
+            # blanket widening — the host this user was never granted is still refused.
+            check("add_remote: ...while a host they were never granted is still 403",
+                  mrc.get("/api/remote/%d/firewall" % remote2_id).status_code == 403,
+                  "the new grant widened access to hosts it should not have touched")
+    finally:
+        _ar_mod.ssh_test_connection = _ar_ssh
+        if _ar_new_id is not None:
+            with app.app_context():
+                _ar_row = db.session.get(RemoteServer, _ar_new_id)
+                if _ar_row is not None:
+                    _ar_row.groups = []
+                    db.session.delete(_ar_row)
+                    db.session.commit()
 
     # ── The firewall PAGE survives a host it cannot reach ────────────────────────────────────
     # A down / rebooting host makes remote_ufw_status() raise ConnectionError. The API route has
@@ -854,8 +980,74 @@ try:
         check("firewall page: ...and says it couldn't read the firewall, not that UFW is missing",
               b"can't reach this host" in _fw.data and b"UFW is not installed" not in _fw.data,
               "the unreachable banner is what should render")
+        # The Blocked IPs card shipped with no unreachable branch at all: block_groups is derived
+        # from status.groups, which is [] on every unreachable path, so the same screen that said
+        # "can't reach this host" went on to state "0 blocked" and "No IPs are blocked." An
+        # operator checking whether an abusive address is still denied was told it is not, about a
+        # firewall nothing read.
+        check("firewall page: ...and does not state 'No IPs are blocked' about a host it never read",
+              b"No IPs are blocked." not in _fw.data,
+              "the Blocked IPs card contradicts the banner above it")
+        check("firewall page: ...and neither count is an arithmetic claim about that host",
+              b'id="rules-count">&mdash;<' in _fw.data and b'id="blocks-count">&mdash;<' in _fw.data,
+              "a count is still printed for a firewall nothing read")
+        # Positive control: a host that ANSWERS and genuinely has nothing must still say so, with
+        # real counts — otherwise the three checks above pass by the page refusing to answer ever.
+        def _empty(_server):
+            return {"installed": True, "enabled": True, "rules": [], "groups": []}
+        _rvps.remote_ufw_status = _empty
+        _fw_ok = client_as(admin_id).get("/remote/%d/firewall" % remote_id)
+        check("firewall page: a REACHABLE host with nothing blocked still says so",
+              _fw_ok.status_code == 200 and b"No IPs are blocked." in _fw_ok.data
+              and b"No firewall rules yet." in _fw_ok.data,
+              "status=%d — the empty states were lost" % _fw_ok.status_code)
+        check("firewall page: ...and still counts, rather than dashing everything",
+              b'id="blocks-count">0 <' in _fw_ok.data and b"&mdash;" not in _fw_ok.data,
+              "the real empty case no longer reports a count")
     finally:
         _rvps.remote_ufw_status = _real_ufw
+
+    # ── tailscale-finalize must report the UFW change it actually made ───────────────────────
+    # The route's whole job is "allow tailscale0 in UFW", and it audited success=status["running"]
+    # — tailscaled's BackendState, which says nothing about the firewall. remote_tailscale_finalize
+    # only issues the allow when `ufw-status` came back ACTIVE; rc 127 (ufw absent, the normal case
+    # for setup_type="existing") and the tailscale transport's silent ("", "…timed out", -1) both
+    # make _ufw_is_active("") false, so the allow is skipped and `log` comes back empty. The route
+    # received that empty log, forwarded it, and never looked at it — recording a successful
+    # firewall change that never happened.
+    import panel.routes.remote_tailscale as _rts
+    from panel.db.models import AuditLog as _TSAudit
+    _real_fin = _rts.remote_tailscale_finalize
+    try:
+        _rts.remote_tailscale_finalize = lambda _s: ({"running": True, "tailscale_ip": "100.1.2.3",
+                                                      "dns_name": "h.ts.net"}, "")
+        _tf = client_as(admin_id).post("/api/remote/%d/tailscale-finalize" % remote_id)
+        _tfj = _tf.get_json() or {}
+        check("tailscale-finalize: a skipped UFW allow is not reported as one that happened",
+              _tfj.get("ufw_allowed") is False, "answered %r" % (_tfj,))
+        with app.app_context():
+            _tfa = (_TSAudit.query.filter_by(action="remote_tailscale_finalize")
+                    .order_by(_TSAudit.id.desc()).first())
+        check("tailscale-finalize: ...and the audit row does not record a firewall change",
+              _tfa is not None and not _tfa.success,
+              "audit row: %r" % (getattr(_tfa, "success", "no row"),))
+        # POSITIVE CONTROL: when the allow really was issued, both say so.
+        _rts.remote_tailscale_finalize = lambda _s: ({"running": True, "tailscale_ip": "100.1.2.3",
+                                                      "dns_name": "h.ts.net"},
+                                                     "UFW: allowed tailscale0 interface (in)")
+        _tf2 = client_as(admin_id).post("/api/remote/%d/tailscale-finalize" % remote_id)
+        _tfj2 = _tf2.get_json() or {}
+        check("tailscale-finalize: a UFW allow that DID happen is reported and audited",
+              _tfj2.get("ufw_allowed") is True and _tfj2.get("running") is True,
+              "answered %r" % (_tfj2,))
+        with app.app_context():
+            _tfa2 = (_TSAudit.query.filter_by(action="remote_tailscale_finalize")
+                     .order_by(_TSAudit.id.desc()).first())
+        check("tailscale-finalize: ...with a success row, so the gate is not refusing everything",
+              _tfa2 is not None and _tfa2.success,
+              "audit row: %r" % (getattr(_tfa2, "success", "no row"),))
+    finally:
+        _rts.remote_tailscale_finalize = _real_fin
 
     # ── Scheduled-tasks (cron) endpoints need MANAGE_SERVERS (same gate as the file
     #    editor). The MANAGE_REMOTES user CAN reach this server (its group grants the
@@ -958,7 +1150,7 @@ try:
         return f
 
     check("install: a reported port nobody holds is adopted",
-          _dpa(25565, 25566, {}, _live({22, 80})) == (True, None))
+          _dpa(25565, 25566, {}, _live({22, 80})) == (True, None, False))
     check("install: ...but not one another PANEL server on the host has",
           _dpa(25565, 25566, {25565: "mc"}, _live(set()))[0] is False)
     check("install: ...nor one a NON-panel process is already listening on",
@@ -969,10 +1161,25 @@ try:
           _dpa(25565, 25566, {}, _live(None))[0] is False,
           "a failed scan is not an empty one — 'could not look' must not read as 'free'")
     check("install: ...and each refusal says which of the three it was",
-          len({_dpa(25565, 25566, {25565: "mc"}, _live(set()))[1],
-               _dpa(25565, 25566, {}, _live({25565}))[1],
-               _dpa(25565, 25566, {}, _live(None))[1]}) == 3,
+          len({_dpa(25565, 25566, {25565: "mc"}, _live(set()))[1:],
+               _dpa(25565, 25566, {}, _live({25565}))[1:],
+               _dpa(25565, 25566, {}, _live(None))[1:]}) == 3,
           "two of the three reasons reach the user as the same sentence")
+    # The third answer has to be distinguishable BY THE CALLER, not only by its wording. It used
+    # to be carried in taken_by as the phrase "something the panel could not check for", so the
+    # caller could not tell it from a real holder and printed "it wants port 25565, which
+    # something the panel could not check for already uses" — plus a matching
+    # `install_complete success=False ... clashes with` audit entry — about a port that is very
+    # often free. So: a failed scan names NOBODY, and flags itself.
+    _dpa_unread = _dpa(25565, 25566, {}, _live(None))
+    check("install: ...and a scan that FAILED names no holder at all",
+          _dpa_unread[1] is None and _dpa_unread[2] is True,
+          "%r — a phrase here is spliced into 'which %%s already uses', a fact about the host "
+          "that this very branch established it could not read" % (_dpa_unread,))
+    check("install: ...while an observed holder is still named, and not flagged unreadable",
+          _dpa(25565, 25566, {}, _live({25565}))[1] == "another process on this host"
+          and _dpa(25565, 25566, {}, _live({25565}))[2] is False,
+          repr(_dpa(25565, 25566, {}, _live({25565}))))
     _scans.clear()
     _dpa(25565, 25565, {}, _live(set()))
     _dpa(25565, 25566, {25565: "mc"}, _live(set()))
@@ -1080,16 +1287,95 @@ try:
               'href="/server/%d/files"' % gs_id in _dash and "Edit its config" in _dash)
 
         # The retry itself. The real job runs in a background thread and its first step is an SSH
-        # round trip to a host this suite stubs, so it fails harmlessly — what is being checked
-        # here is the ROUTE's contract: accepted, row back to installing, reason cleared.
-        _rr = c.post("/servers/%d/retry-install" % gs_id)
+        # round trip to a host this suite does not run, so it fails — what is being checked here
+        # is the ROUTE's contract: accepted, row back to installing, reason cleared.
+        #
+        # HELD at that first SSH call while the contract is read, and drained before the next
+        # scenario is written. The crash path records the failure ON THE ROW now (it could not
+        # before — the `with _app.app_context():` had already exited by the time the handler ran,
+        # so db.session raised "Working outside of application context" into a debug log), and a
+        # worker that reaches the row a few milliseconds after this POST returns would both race
+        # this check and overwrite the scenario set up after it.
+        import threading as _rt_thr
+        import time as _rt_time
+
+        def _retry_under_gate():
+            _gate = _rt_thr.Event()
+            _saved_rc = _sm_core.run_command
+
+            def _blocked(*a, **k):
+                _gate.wait(30)
+                raise ConnectionError("no SSH host in this suite")
+            _sm_core.run_command = _blocked
+            try:
+                _resp = c.post("/servers/%d/retry-install" % gs_id)
+                with app.app_context():
+                    _row = db.session.get(GameServer, gs_id)
+                    return _resp, (_row.status, _row.install_error)
+            finally:
+                _gate.set()
+                for _ in range(600):
+                    with _install_lock_sm:
+                        _j = dict(_install_jobs_sm.get(gs_id) or {})
+                    with app.app_context():
+                        _r2 = db.session.get(GameServer, gs_id)
+                        _rs = _r2.status if _r2 is not None else "gone"
+                    if _j.get("status") not in ("running", None) and _rs != "installing":
+                        break
+                    _rt_time.sleep(0.05)
+                _sm_core.run_command = _saved_rc
+
+        _rr, _rr_state = _retry_under_gate()
         check("failed install: retry is accepted for a retryable failure",
               _rr.status_code in (200, 302), _rr.status_code)
+        check("failed install: ...and the row goes back to installing, with the reason cleared",
+              _rr_state[0] == "installing" and not _rr_state[1],
+              "status=%s error=%r" % _rr_state)
+        # ...and the job that then crashes leaves the row RECOVERABLE. The outer handler's own
+        # comment promised "a reason on the row, status failed, and the dashboard told"; what it
+        # did was set the in-memory job only, because the application context was already gone.
+        # The two diverged, and the divergence is what hid it: the corner widget said failed while
+        # the row said installing for ever — no reason, no Retry, and /delete refusing to remove
+        # it, since /delete will not touch a row that says it is installing.
+        with app.app_context():
+            _cr = db.session.get(GameServer, gs_id)
+            _cr_state = (_cr.status, _cr.install_error, _cr.install_retryable, _cr.installed)
+        with _install_lock_sm:
+            _cr_job = dict(_install_jobs_sm.get(gs_id) or {})
+        check("failed install: a job that dies mid-install writes the failure to the ROW",
+              _cr_state[0] == "failed" and bool(_cr_state[1]),
+              "status=%r error=%r — the row is stranded at 'installing' with no reason, which "
+              "/delete also refuses" % (_cr_state[0], _cr_state[1]))
+        check("failed install: ...and offers a retry, since a dropped SSH is worth trying again",
+              _cr_state[2] is True and _cr_state[3] is False, repr(_cr_state))
+        check("failed install: ...the in-memory job agreeing with it, not instead of it",
+              _cr_job.get("status") == "failed", repr(_cr_job.get("status")))
+        # The row that actually reaches this state most often. Step 4 commits
+        # installed=True/status="configuring"; a panel restart during steps 5-8 kills the worker,
+        # and api.py's install-status poll reconciles it by writing status="failed" and leaving
+        # installed alone. The dashboard's card is keyed on status ALONE, so it draws the Retry
+        # button for that row — and the guard, which also demanded `not gs.installed`, answered
+        # "That server's install didn't fail, so there's nothing to retry." to the button it had
+        # just drawn. Remove was the only way out, which is the dead end this flow exists to end.
+        with app.app_context():
+            _ri = db.session.get(GameServer, gs_id)
+            _ri.status, _ri.installed = "failed", True
+            _ri.install_error = "Interrupted by a panel restart during setup."
+            _ri.install_retryable = True
+            db.session.commit()
+        with _install_lock_sm:
+            _install_jobs_sm.pop(gs_id, None)
+        _dash_ri = c.get("/").get_data(as_text=True)
+        check("failed install: a failed row still marked installed is offered Retry",
+              ("/servers/%d/retry-install" % gs_id) in _dash_ri,
+              "the card is keyed on status alone, so this is the row the guard has to accept")
+        _rr_i, _rr_i_state = _retry_under_gate()
+        check("failed install: ...and the route accepts it instead of answering its own button",
+              _rr_i.status_code in (200, 302) and _rr_i_state[0] == "installing",
+              "status=%r http=%r — 'that server's install didn't fail' on a row that says failed"
+              % (_rr_i_state[0], _rr_i.status_code))
         with app.app_context():
             _after = db.session.get(GameServer, gs_id)
-            check("failed install: ...and the row goes back to installing, with the reason cleared",
-                  _after.status == "installing" and not _after.install_error, 
-                  "status=%s error=%r" % (_after.status, _after.install_error))
             # put it back to failed, this time with a cause no retry can fix
             _after.status, _after.installed = "failed", False
             _after.install_error = "This game is not downloadable with an anonymous Steam login."
@@ -1130,7 +1416,11 @@ try:
         _cg.install_error, _cg.install_retryable = "mirror unreachable", True
         db.session.commit()
     try:
-        c.post("/servers/%d/retry-install" % gs_id)
+        # Gated, like the retries above: the crash path records the failure ON THE ROW now, so a
+        # worker still running here writes status="failed" over whatever the `finally` below puts
+        # back — and gs_id is the row the rest of this suite goes on using. The job dict survives
+        # the drain, so `total` is still there to read.
+        _retry_under_gate()
         with _install_lock_sm:
             _cgj = dict(_install_jobs_sm.get(gs_id) or {})
         check("retry: a GMod retry counts the content step the original did",
@@ -1398,6 +1688,278 @@ try:
         for (_m, _n), _v in _cf_saved.items():
             setattr(_m, _n, _v)
 
+    # ...and the THIRD answer, which used to be told as the second. decide_port_adoption returns
+    # "could not look" as well as "taken" and "free", but it carried that answer only in the
+    # WORDING of taken_by — the phrase "something the panel could not check for" — so the caller
+    # could not tell it from a named holder. On a Tailscale host still busy from a 25-minute
+    # SteamCMD run the 8-second `ss` times out, the transport returns ("", "…timed out", -1)
+    # WITHOUT raising, and the operator was told: "it wants port 28998, which something the panel
+    # could not check for already uses. ... or free that port on the host." The audit log recorded
+    # `install_complete success=False detail="port 28998 clashes with something the panel could
+    # not check for"`, and the firewall was narrowed over a clash nobody observed — so the query
+    # port the game does need was left closed too. 28998 was very probably free.
+    _ur_saved, _ur_calls = {}, []
+
+    def _ur_stub(mod, name, fn):
+        _ur_saved[(mod, name)] = getattr(mod, name)
+        setattr(mod, name, fn)
+
+    # time.sleep, skipped. The post-start verification polls 30 × 3s, and with the host
+    # unreadable there is no early exit from it — 90 real seconds for one check. Only
+    # manage_servers' own `time` is swapped, and only inside this block.
+    import types as _ur_types
+    _ur_fast = _ur_types.SimpleNamespace(sleep=lambda _s: None, time=_ijw_time.time)
+
+    try:
+        _ur_stub(_msmod, "time", _ur_fast)
+        _ur_stub(_sm_core, "run_command", lambda *a, **k: ("", "", 0))
+        _ur_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _ur_stub(_sm_core, "run_as_game_user", lambda *a, **k: ("", "", 0))
+        _ur_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
+        _ur_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop"])
+        _ur_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
+        _ur_stub(_msmod, "_looks_installed", lambda *a, **k: True)
+        _ur_stub(_msmod, "install_game_dependencies", lambda *a, **k: ("", "", 0))
+        _ur_stub(_msmod, "parse_missing_deps", lambda *a, **k: [])
+        _ur_stub(_msmod, "lgsm_write_config", lambda *a, **k: (True, ""))
+        _ur_stub(_msmod, "install_game_cron", lambda *a, **k: None)
+        _ur_stub(_msmod, "ensure_persistent_bans", lambda *a, **k: None)
+        _ur_stub(_msmod, "sm_game_engine", lambda *a, **k: "source")
+        _ur_stub(_msmod, "set_autostart", lambda *a, **k: (True, ""))
+        _ur_stub(_msmod, "remote_ufw_close_game_port", lambda *a, **k: None)
+        # The scan never answers — the failure mode the paramiko-only `except` below it misses.
+        _ur_stub(_msmod, "_remote_listening_ports", lambda r: None)
+        _ur_stub(_msmod, "detect_game_ports",
+                 lambda *a, **k: {"game_port": 28998, "open_ports": [28998, 28999]})
+        _ur_stub(_msmod, "remote_ufw_allow_game_ports",
+                 lambda r, ports, name: _ur_calls.append(tuple(sorted(ports))))
+        _ur_saved[(_appmod_ij, "_remote_listening_ports")] = _appmod_ij._remote_listening_ports
+        _appmod_ij._remote_listening_ports = lambda r: {22}
+
+        c.post("/servers/add", data={"remote_id": str(_cg_remote_id), "game_type": "gmod",
+                                     "server_name": "jobunread", "port": "28997"},
+               follow_redirects=True)
+        with app.app_context():
+            _ur_row = GameServer.query.filter_by(short_name="jobunread").first()
+            _ur_id, _ur_name = (_ur_row.id, _ur_row.name) if _ur_row else (None, "")
+        check("install job (unreadable scan): the POST created a row", _ur_id is not None)
+        if _ur_id is not None:
+            _ujob, _urow_st, _ur_settled = _ij_wait(_ur_id)
+            check("install job (unreadable scan): the job finished before the stubs are handed back",
+                  _ur_settled, "job=%r row=%r" % (_ujob.get("status"), _urow_st))
+            _ur_msg = _ujob.get("message") or ""
+            with app.app_context():
+                _ur_done = db.session.get(GameServer, _ur_id)
+                _ur_port = _ur_done.port
+                _ur_audit = [(a.success, a.detail or "") for a in
+                             _TSAudit.query.filter_by(action="install_complete",
+                                                      target=_ur_name).all()]
+            check("install job (unreadable scan): the panel keeps its own port, as before",
+                  _ur_port == 28997, "port=%r" % (_ur_port,))
+            check("install job (unreadable scan): ...but does NOT report a clash it never saw",
+                  "already uses" not in _ur_msg,
+                  "the operator is sent to free a port off a process nobody observed: %r"
+                  % (_ur_msg[:220],))
+            check("install job (unreadable scan): ...it says it could not read the host",
+                  "could not read" in _ur_msg, repr(_ur_msg[:220]))
+            check("install job (unreadable scan): ...and the audit log records no clash either",
+                  bool(_ur_audit) and all(_s and "clashes with" not in d for _s, d in _ur_audit),
+                  "install_complete rows: %r — the trail said this install failed on a port "
+                  "clash that was never observed" % (_ur_audit,))
+            _ur_opened = sorted({p for call in _ur_calls for p in call})
+            check("install job (unreadable scan): ...the unverified port is still not opened",
+                  28998 not in _ur_opened,
+                  "`ufw allow <port> comment <name>` REPLACES a rule differing only by comment, "
+                  "and the panel cannot say this port is free: %s" % (_ur_opened,))
+            check("install job (unreadable scan): ...while the ports never in question ARE opened",
+                  28997 in _ur_opened and 28999 in _ur_opened,
+                  "opened %s — query/rcon were closed over a clash nobody observed"
+                  % (_ur_opened,))
+            with app.app_context():
+                _d = db.session.get(GameServer, _ur_id)
+                if _d is not None:
+                    db.session.delete(_d); db.session.commit()
+            with _install_lock_sm:
+                _install_jobs_sm.pop(_ur_id, None)
+    finally:
+        for (_m, _n), _v in _ur_saved.items():
+            setattr(_m, _n, _v)
+
+    # ...and the same read, in the OTHER place the install uses it: the 90-second wait after
+    # `start`. That was `gs.port in (_remote_listening_ports(remote) or set())`, so a scan that
+    # could not be read became the measured claim "nothing is listening" — thirty times. The
+    # `except Exception: really_up = (s_rc == 0)` two lines below shows the author knew about an
+    # unreachable host, but it only fires for paramiko, which RAISES; tailscale and local return
+    # ("", "…timed out", -1). A running server was therefore committed gs.status="offline" and the
+    # operator told "it hasn't opened port X yet", with `install_complete success=False detail=
+    # "started; port X not open after 90s"` in the audit log. Here the scan works at step 6 (so
+    # the port is adopted — the positive half) and stops answering from `start` onwards.
+    _pu_saved, _pu_state = {}, {"started": False}
+
+    def _pu_stub(mod, name, fn):
+        _pu_saved[(mod, name)] = getattr(mod, name)
+        setattr(mod, name, fn)
+
+    def _pu_run_as(remote, user, action, **k):
+        if action == "start":
+            _pu_state["started"] = True
+        return ("", "", 0)
+
+    try:
+        _pu_stub(_msmod, "time", _ur_fast)
+        _pu_stub(_sm_core, "run_command", lambda *a, **k: ("", "", 0))
+        _pu_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _pu_stub(_sm_core, "run_as_game_user", _pu_run_as)
+        _pu_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
+        _pu_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop"])
+        _pu_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
+        _pu_stub(_msmod, "_looks_installed", lambda *a, **k: True)
+        _pu_stub(_msmod, "install_game_dependencies", lambda *a, **k: ("", "", 0))
+        _pu_stub(_msmod, "parse_missing_deps", lambda *a, **k: [])
+        _pu_stub(_msmod, "lgsm_write_config", lambda *a, **k: (True, ""))
+        _pu_stub(_msmod, "install_game_cron", lambda *a, **k: None)
+        _pu_stub(_msmod, "ensure_persistent_bans", lambda *a, **k: None)
+        _pu_stub(_msmod, "sm_game_engine", lambda *a, **k: "source")
+        _pu_stub(_msmod, "set_autostart", lambda *a, **k: (True, ""))
+        _pu_stub(_msmod, "remote_ufw_close_game_port", lambda *a, **k: None)
+        _pu_stub(_msmod, "remote_ufw_allow_game_ports", lambda *a, **k: None)
+        _pu_stub(_msmod, "_remote_listening_ports",
+                 lambda r: (None if _pu_state["started"] else {22}))
+        _pu_stub(_msmod, "detect_game_ports",
+                 lambda *a, **k: {"game_port": 29002, "open_ports": [29002]})
+        _pu_saved[(_appmod_ij, "_remote_listening_ports")] = _appmod_ij._remote_listening_ports
+        _appmod_ij._remote_listening_ports = lambda r: {22}
+
+        c.post("/servers/add", data={"remote_id": str(_cg_remote_id), "game_type": "gmod",
+                                     "server_name": "jobpoll", "port": "29001"},
+               follow_redirects=True)
+        with app.app_context():
+            _pu_row = GameServer.query.filter_by(short_name="jobpoll").first()
+            _pu_id = _pu_row.id if _pu_row else None
+        check("install job (unreadable poll): the POST created a row", _pu_id is not None)
+        if _pu_id is not None:
+            _pjob, _prow_st, _pu_settled = _ij_wait(_pu_id)
+            check("install job (unreadable poll): the job finished before the stubs are handed back",
+                  _pu_settled, "job=%r row=%r" % (_pjob.get("status"), _prow_st))
+            _pu_msg = _pjob.get("message") or ""
+            with app.app_context():
+                _pu_done = db.session.get(GameServer, _pu_id)
+                _pu_status, _pu_port = _pu_done.status, _pu_done.port
+            check("install job (unreadable poll): a scan that could be READ is still used",
+                  _pu_port == 29002,
+                  "port=%r — step 6 adopted nothing, so this says the stub, not the fix" % (_pu_port,))
+            check("install job (unreadable poll): a start whose port could not be read is not "
+                  "written offline",
+                  _pu_status == "online",
+                  "status=%r — thirty unreadable scans were counted as thirty readings of an "
+                  "empty socket table, on a server that started fine (start rc 0)" % (_pu_status,))
+            check("install job (unreadable poll): ...and the operator is not told the port is shut",
+                  "hasn't opened port" not in _pu_msg, repr(_pu_msg[:220]))
+            with app.app_context():
+                _d = db.session.get(GameServer, _pu_id)
+                if _d is not None:
+                    db.session.delete(_d); db.session.commit()
+            with _install_lock_sm:
+                _install_jobs_sm.pop(_pu_id, None)
+    finally:
+        for (_m, _n), _v in _pu_saved.items():
+            setattr(_m, _n, _v)
+
+    # ── step 4: "couldn't tell" is not "not installed" ──────────────────────────────────────────
+    # _looks_installed answers True / False / None, and step 4 tested `is True`, which sent None
+    # down the False path. That path is destructive: it wipes /home/<n>/lgsm/tmp and re-runs the
+    # 30-minute auto-install twice more, then writes installed=False / status="failed" with "the
+    # download may be corrupt or the mirror unreachable" — a diagnosis of a download it never
+    # managed to look at. On a Tailscale host the verification read right after a 20 GB download
+    # times out without raising, so a fully installed Rust server got ~90 minutes of re-downloading
+    # and then a failure. Commit 7d1d64f gave the helper its third state and taught app.py and
+    # api.py to branch on it; this caller was missed. Both branches are driven here.
+    _lv_saved, _lv_cmds = {}, []
+
+    def _lv_stub(mod, name, fn):
+        _lv_saved[(mod, name)] = getattr(mod, name)
+        setattr(mod, name, fn)
+
+    def _lv_run_command(remote, cmd, **k):
+        _lv_cmds.append(cmd)
+        return ("", "", 0)
+
+    def _lv_install(short, verdict, port):
+        """Run one install with _looks_installed pinned to `verdict`; -> (row state, commands).
+
+        Re-pointed WITHOUT going through _lv_stub: that saves the current value, and by the second
+        call the current value is the first call's lambda — restoring it would leave the stub on
+        the module for every later check in this file. The real one is saved once, below."""
+        del _lv_cmds[:]
+        _msmod._looks_installed = lambda *a, **k: verdict
+        c.post("/servers/add", data={"remote_id": str(_cg_remote_id), "game_type": "gmod",
+                                     "server_name": short, "port": str(port)},
+               follow_redirects=True)
+        with app.app_context():
+            _row = GameServer.query.filter_by(short_name=short).first()
+            _rid = _row.id if _row else None
+        if _rid is None:
+            return None, list(_lv_cmds)
+        _ij_wait(_rid, 60)
+        with app.app_context():
+            _r = db.session.get(GameServer, _rid)
+            _state = (_r.status, _r.installed, _r.install_error or "", _r.install_retryable)
+            db.session.delete(_r); db.session.commit()
+        with _install_lock_sm:
+            _install_jobs_sm.pop(_rid, None)
+        return _state, list(_lv_cmds)
+
+    try:
+        _lv_stub(_msmod, "_looks_installed", _msmod._looks_installed)   # saved once, for restore
+        _lv_stub(_msmod, "time", _ur_fast)
+        _lv_stub(_sm_core, "run_command", _lv_run_command)
+        _lv_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _lv_stub(_sm_core, "run_as_game_user", lambda *a, **k: ("", "", 0))
+        _lv_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
+        _lv_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop"])
+        _lv_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
+        _lv_stub(_msmod, "install_game_dependencies", lambda *a, **k: ("", "", 0))
+        _lv_stub(_msmod, "parse_missing_deps", lambda *a, **k: [])
+        _lv_stub(_msmod, "lgsm_write_config", lambda *a, **k: (True, ""))
+        _lv_stub(_msmod, "_remote_listening_ports", lambda r: {22})
+        _lv_stub(_msmod, "detect_game_ports", lambda *a, **k: {"game_port": 0, "open_ports": []})
+        _lv_stub(_msmod, "remote_ufw_allow_game_ports", lambda *a, **k: None)
+        _lv_saved[(_appmod_ij, "_remote_listening_ports")] = _appmod_ij._remote_listening_ports
+        _appmod_ij._remote_listening_ports = lambda r: {22}
+
+        _lv_none, _lv_none_cmds = _lv_install("jobcantsay", None, 29011)
+        check("install step 4: a verification that could not be READ does not re-download",
+              _lv_none is not None
+              and sum(1 for _cmd in _lv_none_cmds if "auto-install" in _cmd) == 1,
+              "auto-install ran %r times — up to 90 minutes spent on a host that may already hold "
+              "the files" % (sum(1 for _cmd in _lv_none_cmds if "auto-install" in _cmd),))
+        check("install step 4: ...and does not wipe the download it never looked at",
+              not any("lgsm/tmp" in _cmd for _cmd in _lv_none_cmds),
+              "the cached archive is deleted on the strength of a read that failed")
+        check("install step 4: ...nor blame a corrupt download it never saw",
+              _lv_none is not None and "may be corrupt" not in _lv_none[2],
+              repr(_lv_none[2][:200]) if _lv_none else "no row")
+        check("install step 4: ...saying it could not read the host, and staying retryable",
+              _lv_none is not None and _lv_none[0] == "failed"
+              and "could not read the host" in _lv_none[2] and _lv_none[3] is True,
+              repr(_lv_none))
+        # The positive control, and the branch that must NOT change: a host that answered and
+        # said the files are not there really is a failed download — wiped, retried three times,
+        # and reported as what it is.
+        _lv_no, _lv_no_cmds = _lv_install("jobnofiles", False, 29012)
+        check("install step 4: a host that ANSWERED 'not installed' still retries the download",
+              sum(1 for _cmd in _lv_no_cmds if "auto-install" in _cmd) == 3,
+              "auto-install ran %r times"
+              % (sum(1 for _cmd in _lv_no_cmds if "auto-install" in _cmd),))
+        check("install step 4: ...still wipes the cached archive between tries",
+              any("lgsm/tmp" in _cmd for _cmd in _lv_no_cmds))
+        check("install step 4: ...and still reports the corrupt download it did observe",
+              _lv_no is not None and _lv_no[0] == "failed" and "may be corrupt" in _lv_no[2],
+              repr(_lv_no))
+    finally:
+        for (_m, _n), _v in _lv_saved.items():
+            setattr(_m, _n, _v)
+
     # ── /api/installs: the progress a corner widget can follow from any page ────────────────────
     # A game-server install runs for five to forty-five minutes, and its only progress row lived on
     # the Game Servers page. Start one from "Install a Server" and you got a toast reading
@@ -1498,6 +2060,82 @@ try:
     check("REUSE BLOCKED: stolen remember_token rejected after logout (not 200)",
           thief_rt.get("/").status_code != 200, "remember_token still valid after logout!")
 
+    # ── ...and logout must not CLAIM a revocation it did not make ──────────────────────────────
+    # The handler's stated purpose is server-side invalidation — "clearing the client's copy alone
+    # wouldn't stop a copy captured earlier from being replayed" — and the except swallowed the one
+    # statement that achieves it. After the rollback the UserSession row was intact and auth_epoch
+    # unchanged, so every cookie valid before the request was still valid after it, and the page
+    # said "You have been logged out." with nothing logged for an operator to notice. A momentary
+    # SQLite lock (a concurrent backup, a WAL checkpoint during a monitor sweep) is exactly this
+    # shape, so it is driven that way: the commits raise, the rest of the request is real.
+    import panel.routes.auth_routes as _lo_mod
+
+    class _FlakyDB:
+        """Stands in for the route module's own `db`: the first `fails` commits raise, the rest
+        are the real ones. Only the logout body reaches this — log_action holds its own import."""
+
+        def __init__(self, real, fails):
+            self._real, self._left = real, fails
+
+        @property
+        def session(self):
+            return self
+
+        def commit(self):
+            if self._left > 0:
+                self._left -= 1
+                raise RuntimeError("database is locked (simulated)")
+            return self._real.session.commit()
+
+        def rollback(self):
+            return self._real.session.rollback()
+
+    _lo_real_db = _lo_mod.db
+    _lo_name, _lo_pw = "smoke_logout", "Str0ng!passw0rd"
+    with app.app_context():
+        _lo_u = User(username=_lo_name, password_hash=auth.hash_password(_lo_pw),
+                     display_name=_lo_name, is_superadmin=False, is_active=True)
+        db.session.add(_lo_u)
+        db.session.commit()
+        _lo_uid = _lo_u.id
+    try:
+        # (a) the row delete fails, the auth_epoch fallback lands — the revoke still happens, so
+        #     "You have been logged out." is true and stays.
+        _lo_a = app.test_client()
+        _lo_a.post("/login", data={"username": _lo_name, "password": _lo_pw, "remember": "on"})
+        _lo_thief = _clone_cookies(_lo_a)
+        check("logout retry: the cloned cookie works before the sign-out (positive control)",
+              _lo_thief.get("/").status_code == 200,
+              "the login did not take, so the checks below would prove nothing")
+        _lo_mod.db = _FlakyDB(_lo_real_db, 1)
+        _lo_body_a = _lo_a.post("/logout", follow_redirects=True).get_data(as_text=True)
+        _lo_mod.db = _lo_real_db
+        check("logout: a failed revoke is retried, and the cookie really is dead afterwards",
+              _lo_thief.get("/").status_code != 200,
+              "the session outlived a sign-out the user was told had happened")
+        check("logout: ...and that user is still told plainly that they were logged out",
+              "could not revoke" not in _lo_body_a, _lo_body_a[:200])
+        # (b) both attempts fail: say so, rather than asserting the revocation anyway.
+        _lo_b = app.test_client()
+        _lo_b.post("/login", data={"username": _lo_name, "password": _lo_pw, "remember": "on"})
+        _lo_mod.db = _FlakyDB(_lo_real_db, 5)
+        _lo_body_b = _lo_b.post("/logout", follow_redirects=True).get_data(as_text=True)
+        _lo_mod.db = _lo_real_db
+        check("logout: a revoke that could NOT be made is not reported as one that was",
+              "could not revoke" in _lo_body_b,
+              "the page claimed the session was revoked after both attempts failed")
+    finally:
+        _lo_mod.db = _lo_real_db
+        with app.app_context():
+            from panel.db.models import UserSession as _LoSess
+            # (b) deliberately leaves its registry row behind — that IS the defect being driven —
+            # so clear it by hand rather than orphaning it on a deleted user_id.
+            _LoSess.query.filter_by(user_id=_lo_uid).delete()
+            _lo_row = db.session.get(User, _lo_uid)
+            if _lo_row is not None:
+                db.session.delete(_lo_row)
+            db.session.commit()
+
     # A login for a nonexistent user must not 5xx (it runs the anti-enumeration dummy
     # bcrypt path) and must not authenticate. One attempt stays under the throttle.
     r = app.test_client().post("/login", data={"username": "no_such_user_smoke",
@@ -1562,7 +2200,31 @@ try:
             _en_secret = _sess.get("_2fa_setup_secret")
         check("2FA enrol: the page issues a pending secret", bool(_en_secret))
         _en_code = _po.TOTP(_en_secret).now()
-        _en_r = _enc.post("/account/2fa/enable", data={"totp_code": _en_code})
+        # ── ...and enrolling needs the account holder's PASSWORD ───────────────────────────────
+        # /account/2fa/enable carried @login_required and nothing else, while its mirror
+        # /account/2fa/disable demands the password AND a live code and reasons in its docstring
+        # about which direction is more dangerous. That was backwards: enrolment INSTALLS a factor
+        # the holder does not have. Anyone in front of a signed-in session — an unlocked
+        # workstation, a shared browser profile, a cookie captured before a password rotation —
+        # could scan the QR with their own authenticator, submit the code, and take the account
+        # ONE-WAY: the backup codes are rendered once, to them, and disable then refuses the real
+        # owner because it wants the very code only the intruder holds.
+        _en_bad = _enc.post("/account/2fa/enable",
+                            data={"password": "wrong-password", "totp_code": _en_code})
+        with app.app_context():
+            check("2FA enrol: a valid code with the WRONG password does not enable 2FA",
+                  not db.session.get(User, _en_id).totp_enabled,
+                  "status=%s — a live session alone installed a second factor"
+                  % _en_bad.status_code)
+        _en_none = _enc.post("/account/2fa/enable", data={"totp_code": _en_code})
+        with app.app_context():
+            check("2FA enrol: ...nor does one with no password at all",
+                  not db.session.get(User, _en_id).totp_enabled,
+                  "status=%s" % _en_none.status_code)
+        # Positive control: the same code, with the right password, still enrols — so the two
+        # refusals above are a gate and not a broken route.
+        _en_r = _enc.post("/account/2fa/enable",
+                          data={"password": "Str0ng!passw0rd", "totp_code": _en_code})
         with app.app_context():
             _en_row = db.session.get(User, _en_id)
             check("2FA enrol: a valid code enables two-factor",
@@ -1817,6 +2479,41 @@ try:
         check("optimize: VACUUM/ANALYZE runs cleanly", _ok is True)
         check("optimize: reports before/after sizes with a live file",
               "before" in _info and _info.get("after", 0) > 0)
+
+        # ── the message must not assert a checkpoint nobody read ────────────────────────────────
+        # `PRAGMA wal_checkpoint(TRUNCATE)` does not raise when it cannot complete: it returns
+        # (busy, log, checkpointed) with busy = 1, which is exactly what TRUNCATE does while any
+        # other connection is still reading. The row was discarded, and optimize_database went on
+        # to say "Checkpointed the WAL and refreshed stats" — in the branch that is reached BECAUSE
+        # the database was too busy for VACUUM, i.e. the state in which the checkpoint is most
+        # likely to have been refused too. An operator chasing a growing panel.db was told the
+        # cheap half had been done while the wal_size beside it never moved.
+        import panel.db.models as _dbm
+        _rm_real = _dbm._run_maintenance(str(DB_PATH))
+        check("optimize: _run_maintenance reports the checkpoint AND the vacuum",
+              isinstance(_rm_real, tuple) and len(_rm_real) == 2
+              and _rm_real[0] in (True, False, None), "got %r" % (_rm_real,))
+        _rm_saved = _dbm._run_maintenance
+        try:
+            _dbm._run_maintenance = lambda p: (False, False)      # checkpoint busy, VACUUM busy
+            _ok_b, _msg_b, _ = _dbm.optimize_database()
+            check("optimize: a REFUSED WAL checkpoint is not reported as one that happened",
+                  "Checkpointed the WAL" not in _msg_b, _msg_b)
+            check("optimize: ...and the operator is still told VACUUM was deferred",
+                  "deferred" in _msg_b, _msg_b)
+            # Positive control: a checkpoint that DID complete is still reported as one, so the
+            # check above cannot pass by the message simply never mentioning the WAL.
+            _dbm._run_maintenance = lambda p: (True, False)
+            _ok_t, _msg_t, _ = _dbm.optimize_database()
+            check("optimize: a checkpoint that completed is still reported as completed",
+                  "Checkpointed the WAL" in _msg_t, _msg_t)
+            # ...and a pragma that returned nothing to read claims neither outcome.
+            _dbm._run_maintenance = lambda p: (None, False)
+            _ok_n, _msg_n, _ = _dbm.optimize_database()
+            check("optimize: an unreadable checkpoint result claims neither outcome",
+                  "Checkpointed the WAL" not in _msg_n and _msg_n != _msg_b, _msg_n)
+        finally:
+            _dbm._run_maintenance = _rm_saved
 
         # ── Debug report: generates, and never leaks the session/credential secrets ──
         from panel.ops.system_ops import generate_debug_report
@@ -2100,6 +2797,43 @@ try:
                                       json={"path": "", "names": ["x"]})
     check("upload-check: it is not reachable without a session",
           _uc_anon.status_code in (302, 401, 403), "got %d" % _uc_anon.status_code)
+
+    # ── A download the panel could not READ must not be reported as a deleted file ───────────
+    # stat_path answers None for three different things: a path that escapes the home directory, a
+    # path that is not there, and a read that never ran — on the non-raising transports (tailscale,
+    # local) a failed read returns ("", "…timed out", -1), so its `parts` is empty and it returns
+    # None exactly as it does for a file that really was deleted. The route's "Couldn't reach"
+    # branch sits behind an `except`, which only paramiko reaches. So an operator whose link
+    # flapped while downloading server.cfg was told the file was gone, and went looking for what
+    # deleted it — or restored a backup over a newer copy.
+    import panel.routes.server_files as _dl_mod
+    _dl_saved = (_dl_mod.stat_path, _dl_mod.stream_path)
+    try:
+        _dl_mod.stat_path = lambda *a, **k: None
+        c.get("/server/%d/download?path=cfg/server.cfg" % gs_id)
+        with c.session_transaction() as _dl_s:
+            _dl_msgs = [_m for _cat, _m in (_dl_s.get("_flashes") or [])]
+            _dl_s.pop("_flashes", None)
+        check("download: (setup) the refusal flashed something to read",
+              bool(_dl_msgs), "no flash at all — the checks below would pass vacuously")
+        check("download: a path the panel could not read is not called a deleted file",
+              not any("there any more" in _m for _m in _dl_msgs),
+              "flashed %r — it states a deletion the route never checked for" % (_dl_msgs,))
+        check("download: ...and the refusal names the host not answering as a possibility",
+              any("moved or deleted" in _m for _m in _dl_msgs),
+              "flashed %r" % (_dl_msgs,))
+        # The control: a stat that DID answer still serves the file, so the refusal above is the
+        # unreadable case and not this route turning every download down.
+        _dl_mod.stat_path = lambda *a, **k: {"type": "f", "size": 4, "name": "server.cfg",
+                                             "rel": "cfg/server.cfg"}
+        _dl_mod.stream_path = lambda *a, **k: iter([b"data"])
+        _dl_ok = c.get("/server/%d/download?path=cfg/server.cfg" % gs_id)
+        check("download: (control) a file the panel could stat is still served",
+              _dl_ok.status_code == 200, "got %d" % _dl_ok.status_code)
+    finally:
+        (_dl_mod.stat_path, _dl_mod.stream_path) = _dl_saved
+        with c.session_transaction() as _dl_s:
+            _dl_s.pop("_flashes", None)
 
     mod_bad = c.post("/api/server/%d/moderate" % gs_id, json={"action": "nope"})
     check("moderate: unknown action -> 400", mod_bad.status_code == 400)
@@ -2394,6 +3128,59 @@ try:
     with app.app_context():
         check("self-reset: ...but does not force yourself through the change screen",
               db.session.get(User, _sr_id).must_change_password is False)
+
+    # ...and it must not sign THIS device out before the password can be read. The reset bumps
+    # auth_epoch, which is exactly what makes every other cookie for the account stop matching —
+    # and it stopped matching the one that made the request too. panel.js runs
+    # refreshSection('#users-list') BEFORE showCredential(), so that next request arrived
+    # milliseconds later, was answered 401 + X-Auth-Required, and sessionExpired() replaced the tab
+    # with /login while the generated password (only its hash is stored) was still behind the
+    # modal. On a single-superadmin install that ends at manage.py reset-password.
+    #
+    # Driven through a REAL epoch-tagged cookie: client_as() injects a bare "<id>", which
+    # load_user's legacy branch accepts on the id alone, so this bug is invisible to it.
+    def _epoch_client(uid):
+        """A client holding the cookie flask-login actually issues: '<id>:<epoch>:<sid>'."""
+        import secrets as _ec_secrets
+        from panel.db.models import UserSession as _ECUS
+        with app.app_context():
+            _u = db.session.get(User, uid)
+            _sid = _ec_secrets.token_urlsafe(24)
+            db.session.add(_ECUS(user_id=uid, sid=_sid, remember=False, ip="", user_agent=""))
+            db.session.commit()
+            _val = "%d:%d:%s" % (uid, _u.auth_epoch or 0, _sid)
+        _cl = app.test_client()
+        with _cl.session_transaction() as _s:
+            _s["_user_id"] = _val
+            _s["_fresh"] = True
+        return _cl
+
+    _sr_this = _epoch_client(_sr_id)      # the browser doing the reset
+    _sr_other = _epoch_client(_sr_id)     # the same account signed in somewhere else
+    check("self-reset: (premise) an epoch-tagged cookie is accepted before the reset",
+          _sr_this.get("/users").status_code == 200,
+          "the fixture client could not load /users, so the checks below prove nothing")
+    _selfrst2 = _sr_this.post(
+        "/users/%d/edit" % _sr_id,
+        data={"display_name": "Self Reset", "is_active": "on", "is_superadmin": "on",
+              "reset_password": "on"},
+        headers={"X-Requested-With": "XMLHttpRequest"})
+    _sj2 = _selfrst2.get_json() or {}
+    check("self-reset: ...still hands back a generated password (positive control)",
+          bool((_sj2.get("credential") or {}).get("password")), str(_sj2)[:120])
+    # The request panel.js fires immediately afterwards, from the same browser.
+    _sr_after = _sr_this.get("/users", headers={"X-Requested-With": "XMLHttpRequest"})
+    check("self-reset: ...and does not sign this device out before the password can be read",
+          _sr_after.status_code == 200 and "X-Auth-Required" not in _sr_after.headers,
+          "the refresh panel.js fires after the reset answered %d %r — the credential modal opens "
+          "and the tab navigates to /login" % (_sr_after.status_code,
+                                               _sr_after.headers.get("X-Auth-Required")))
+    # ...while every OTHER session for that account really is revoked, which is what the bump is for.
+    _sr_elsewhere = _sr_other.get("/users", headers={"X-Requested-With": "XMLHttpRequest"})
+    check("self-reset: ...while the account's other devices ARE signed out",
+          _sr_elsewhere.status_code in (302, 401),
+          "a reset left another device signed in (%d) — the epoch bump revoked nothing"
+          % _sr_elsewhere.status_code)
 
     # ── An install that predates the `sha256$` format signs in, and is upgraded in place ──
     # Every existing installation hits this branch on its first login after the hash format
@@ -2909,10 +3696,29 @@ try:
           "status=%d — a user who cannot install must not reach the form" % _denied.status_code)
 
     # ── Discover / import existing LinuxGSM servers on a host ──
+    # The fixture host is a blackholed 192.0.2.x address, so the scan does not run — and an empty
+    # scan is no longer reported as "no servers found". This check used to assert that old
+    # behaviour, which is the bug: discover_linuxgsm_servers returns [] both for "nothing here"
+    # and for "never ran", so the card printed a green tick about a host it had not read.
     dsc = c.get("/api/remote/%d/discover" % remote_id)
-    check("discover: superadmin gets a servers list (SSH to the fixture host yields none)",
-          dsc.status_code == 200 and isinstance((dsc.get_json() or {}).get("servers"), list),
-          "got %d" % dsc.status_code)
+    check("discover: an unreachable host is reported as unread, not as having no servers",
+          dsc.status_code == 200 and "error" in (dsc.get_json() or {})
+          and "servers" not in (dsc.get_json() or {}),
+          "got %d %s" % (dsc.status_code, str(dsc.get_json())[:120]))
+    # ...and with the host answering, the list is a list again — the control that stops the check
+    # above passing on a route that simply refuses everything.
+    import panel.routes.discover as _dscmod
+    _dsc_saved = _dscmod.run_command
+    try:
+        _dscmod.run_command = lambda r, cmd, **k: (_dscmod._PROBE_MARKER, "", 0)
+        dsc_ok = c.get("/api/remote/%d/discover" % remote_id)
+        check("discover: superadmin gets a servers list when the host answers",
+              dsc_ok.status_code == 200
+              and isinstance((dsc_ok.get_json() or {}).get("servers"), list),
+              "got %d %s" % (dsc_ok.status_code, str(dsc_ok.get_json())[:120]))
+    finally:
+        _dscmod.run_command = _dsc_saved
+    dsc = dsc_ok
     imp_empty = c.post("/api/remote/%d/import" % remote_id, json={"servers": []})
     check("import: empty selection -> 400", imp_empty.status_code == 400)
     # Import validates each entry like a fresh install: a bad username or unknown game is
@@ -3000,6 +3806,51 @@ try:
               and len(_content[0]["games"]) == 4, str(_content)[:160])
     finally:
         _disc_mod.discover_linuxgsm_servers = _orig_disc
+
+    # ── A host the panel could not scan must not be reported as "nothing found" ───────────────
+    # discover_linuxgsm_servers is best-effort and returns [] for BOTH "scanned, nothing new" and
+    # "the scan never ran" — its own except branch swallows everything, and the tailscale and local
+    # transports do not raise at all, they answer ("", "SSH command timed out", -1). The route then
+    # returned {"servers": [], "content": []}, byte-for-byte what a healthy empty host looks like,
+    # and remote_manage_backups.js rendered a green tick and "No new LinuxGSM servers found" about
+    # a directory listing that never happened. An admin reads that and stops looking.
+    _orig_disc2 = _disc_mod.discover_linuxgsm_servers
+    _orig_disc_rc2 = _disc_mod.run_command
+    try:
+        _disc_mod.discover_linuxgsm_servers = lambda _s: []
+        # The transport answer for a host that is powered off / whose tailnet route is down.
+        _disc_mod.run_command = lambda *a, **k: ("", "SSH command timed out", -1)
+        _du = c.get("/api/remote/%d/discover" % remote_id).get_json() or {}
+        check("discover: a host the panel could not reach is reported as unread, not as empty",
+              bool(_du.get("error")) and not _du.get("servers"),
+              "the card shows a tick and 'No new LinuxGSM servers found': %s" % (str(_du)[:160],))
+        # rc 0 but no token back is the same thing wearing a success code — the `not in` form of
+        # this check is satisfied by "" as well, so the token has to be POSITIVE.
+        _disc_mod.run_command = lambda *a, **k: ("", "", 0)
+        _du0 = c.get("/api/remote/%d/discover" % remote_id).get_json() or {}
+        check("discover: ...and an rc 0 with nothing echoed back is not an answer either",
+              bool(_du0.get("error")), str(_du0)[:160])
+        # The control: a host that DID answer and genuinely has nothing new still reports nothing
+        # new, with no error — otherwise the two checks above would pass on a route that refuses
+        # every scan.
+        _disc_mod.run_command = lambda *a, **k: ("LGSM_SCAN_OK", "", 0)
+        _dok = c.get("/api/remote/%d/discover" % remote_id).get_json() or {}
+        check("discover: a host that answered with nothing new is still 'nothing new' (control)",
+              not _dok.get("error") and _dok.get("servers") == [], str(_dok)[:160])
+        # ...and a host with servers is never probed at all: the confirmation only runs when the
+        # scan came back empty, so a working scan costs no extra round trip.
+        _dprobed = []
+        _disc_mod.run_command = lambda *a, **k: (_dprobed.append(1), ("", "", -1))[1]
+        _disc_mod.discover_linuxgsm_servers = lambda _s: [
+            {"user": "smokedisc", "lgsm_name": "gmodserver", "port": 27015,
+             "backups": 1, "mods": 0, "cron": 2, "autostart": False}]
+        _dfull = c.get("/api/remote/%d/discover" % remote_id).get_json() or {}
+        check("discover: a scan that found something is not re-probed",
+              not _dprobed and [x["user"] for x in (_dfull.get("servers") or [])] == ["smokedisc"],
+              "probes=%s %s" % (_dprobed, str(_dfull)[:120]))
+    finally:
+        _disc_mod.discover_linuxgsm_servers = _orig_disc2
+        _disc_mod.run_command = _orig_disc_rc2
 
     # ── Session management: per-device login sessions + individual revoke ──
     from panel.db.models import UserSession
@@ -3367,6 +4218,61 @@ try:
               str(gs_id) not in (_dj3.get("servers") or {}), str(_dj3.get("servers"))[:110])
     finally:
         _dmapp.host_live_metrics, _dmapp.game_map = _sv_slm, _sv_map
+
+    # ── ...and the background metrics SAMPLER samples per host too ────────────────────────────
+    # _record_metric_samples still built _metrics_work and mapped _query_server_metrics over it:
+    # one SSH round trip PER SERVER, each carrying the 0.25s sampling sleep, every 60s forever —
+    # to fetch whole-machine figures that are identical by definition and of which it writes
+    # exactly one HostSample per host anyway. 100 servers on 5 hosts opened 100 executions where
+    # 5 answer the same rows, in background threads competing with the console and the web
+    # requests for the same SSH connections.
+    from panel.db.models import HostSample as _HSs
+    _sv_hlm2, _sv_slm2, _sv_map2 = (_dmapp.host_live_metrics, _dmapp.server_live_metrics,
+                                    _dmapp.game_map)
+    _host_calls, _srv_calls = [], []
+    try:
+        def _count_host(remote, force=False):
+            _host_calls.append(getattr(remote, "id", None))
+            return {"host": {"cpu_percent": 30.0, "ram_used": 4, "ram_total": 8, "disk_used": 1,
+                             "disk_total": 4, "uptime_secs": 86400, "cores": 4},
+                    "users": {"csgoserver": {"game_procs": 2, "game_cpu_percent": 12.5,
+                                             "game_ram_mb": 2048, "game_uptime_secs": 900}},
+                    "ports": set()}
+
+        def _count_server(remote, short_name=None, game_port=None, force=False):
+            _srv_calls.append(short_name)
+            raise AssertionError("the sampler queried a SERVER, not its host")
+
+        _dmapp.host_live_metrics, _dmapp.server_live_metrics = _count_host, _count_server
+        _dmapp.game_map = lambda *a, **k: "de_dust2"
+        with app.app_context():
+            _ms_before = {r[0] for r in db.session.query(MetricSample.id).all()}
+            _hs_before = {r[0] for r in db.session.query(_HSs.id).all()}
+            # The same rows the sampler itself feeds to _host_metrics_work, which skips a server
+            # with no host — so the expected counts below cannot drift from what it sampled.
+            _samp_rows = [_g for _g in GameServer.query.filter_by(installed=True).all()
+                          if _g.remote is not None]
+            _samp_srv, _samp_hosts = len(_samp_rows), {_g.remote_id for _g in _samp_rows}
+        _dmapp._record_metric_samples(app)
+        check("metrics sampler: one SSH sample per HOST, not one per server",
+              len(_host_calls) == len(_samp_hosts) and not _srv_calls,
+              "%d sample(s) for %d host(s) / %d installed server(s); per-server calls: %s"
+              % (len(_host_calls), len(_samp_hosts), _samp_srv, _srv_calls[:3]))
+        # Positive control: the pass still writes the rows the history charts read, so the check
+        # above cannot pass on a sampler that simply stopped sampling.
+        with app.app_context():
+            _ms_new = [r for r in MetricSample.query.all() if r.id not in _ms_before]
+            _hs_new = [r for r in _HSs.query.all() if r.id not in _hs_before]
+            check("metrics sampler: ...and still records a sample per server and one per host",
+                  len(_ms_new) == _samp_srv and len(_hs_new) == len(_samp_hosts),
+                  "%d metric / %d host rows for %d servers on %d hosts"
+                  % (len(_ms_new), len(_hs_new), _samp_srv, len(_samp_hosts)))
+            for _row in _ms_new + _hs_new:
+                db.session.delete(_row)
+            db.session.commit()
+    finally:
+        (_dmapp.host_live_metrics, _dmapp.server_live_metrics,
+         _dmapp.game_map) = _sv_hlm2, _sv_slm2, _sv_map2
 
     # ── /api/servers must not COMMIT a status it could not read ───────────────────────────────
     # _remote_listening_ports answers None for a scan that failed, and its docstring lists what
@@ -4103,6 +5009,35 @@ try:
             _monmod._remote_listening_ports = lambda r: set()
             _rec.clear(); _monmod._monitor_pass()
             check("monitor: a panel-issued stop suppresses server_down", "server_down" not in _rec)
+            # ...and the RECORDED state must not flip either. Only the alert was suppressed; the
+            # pass still wrote False, so the next sweep read False -> True and pushed "Server back
+            # online" for an outage the operator was deliberately never told about. With a 60s
+            # sweep and a ~30s restart that lands on roughly half the restarts of a slow-booting
+            # game — a channel showing recoveries from outages it never reported. This is the
+            # treatment the maintenance branch already had.
+            check("monitor: ...and leaves the recorded state alone, so there is no phantom recovery",
+                  _ps._monitor_state["servers"].get(_mon_id) is True,
+                  "recorded %r" % _ps._monitor_state["servers"].get(_mon_id))
+            # Drive the next sweep for real: _rec holds only event KEYS and other fixture servers
+            # transition too, so record the BODIES and look for this server by name.
+            _exp_bodies = []
+            _am.notifications.notify = lambda k, t, b="": (_rec.append(k), _exp_bodies.append((k, b)))[0]
+            _monmod._remote_listening_ports = lambda r: {27100}
+            _rec.clear(); _monmod._monitor_pass()
+            check("monitor: ...so coming back from a panel-issued restart is silent",
+                  not [b for k, b in _exp_bodies if k == "server_up" and "mon-srv" in b],
+                  str([b for k, b in _exp_bodies if k == "server_up"])[:140])
+            # Positive control: a recovery the panel did NOT cause still announces itself, so the
+            # silence above is the guard and not a monitor that stopped alerting.
+            _reset_mon()
+            _ps._expected_offline.pop(_mon_id, None)
+            _ps._monitor_state["servers"][_mon_id] = False
+            _exp_bodies.clear()
+            _rec.clear(); _monmod._monitor_pass()
+            check("monitor: ...while a recovery the panel did not cause IS announced",
+                  any(k == "server_up" and "mon-srv" in b for k, b in _exp_bodies),
+                  str(_exp_bodies)[:140])
+            _am.notifications.notify = lambda key, title, body="": _rec.append(key)
             _ps._expected_offline.pop(_mon_id, None)
 
             # ── The sweep must WRITE DOWN what it measured ────────────────────────────────────
@@ -4219,6 +5154,39 @@ try:
             check("poller: notify_when_empty is one-shot (clears its own flag)",
                   _mon.notify_when_empty is False)
 
+            # ...and it must not SEND before it has persisted the disarm. notifications.notify
+            # never raises — it dispatches on a thread of its own — so the only statement the
+            # except could ever catch was the commit, and when it caught it the alert had already
+            # gone out while the flag stayed armed in the database. This panel writes to one
+            # SQLite file from four places at once, so "database is locked" here is ordinary, and
+            # the 45s poller then re-sent the "one-shot" every 45s until a commit finally landed.
+            _mon.notify_when_empty = True; _mon_running()
+            _monmod._server_slots = _slots_for_mon((0, 16, None))
+            _real_db = _monmod.db
+
+            class _LockedDB:
+                """A db whose commits raise. rollback is the REAL one, so the session is left in
+                the state a genuine failed commit would leave it in."""
+                class session:
+                    @staticmethod
+                    def commit():
+                        raise RuntimeError("database is locked")
+
+                    @staticmethod
+                    def rollback():
+                        return db.session.rollback()
+
+            try:
+                _monmod.db = _LockedDB
+                _rec.clear(); _monmod._refresh_player_counts(app)
+            finally:
+                _monmod.db = _real_db
+            db.session.rollback(); db.session.refresh(_mon)
+            check("poller: a commit that fails does not send the one-shot empty alert",
+                  "server_empty" not in _rec, str(_rec))
+            check("poller: ...and the request stays armed rather than being silently consumed",
+                  _mon.notify_when_empty is True)
+
             # ...but it must NEVER fire on an unknown count (a running server the panel can't read).
             _mon.notify_when_empty = True; _mon_running()
 
@@ -4239,6 +5207,62 @@ try:
             _monmod._server_slots = _slots_for_mon((16, 16, None))
             _rec.clear(); _monmod._refresh_player_counts(app)
             check("poller: server_full fires when a server hits its cap", "server_full" in _rec)
+
+            # ── The unattended reboot must not fire into an install ───────────────────────────
+            # _host_idle_state is the gate on "reboot when empty", and it enumerated only
+            # installed=True rows. Through install steps 1-4 — the SteamCMD download, the long
+            # part — the row is installed=False / status="installing", so it was not in that query
+            # at all and contributed neither "busy" nor "unknown": an install in flight was
+            # indistinguishable from no server, the host answered a confident "idle", and the
+            # watcher rebooted it inside 60s — steamcmd killed, a half-written serverfiles tree,
+            # and the job reconciled later as "the panel restarted before this install finished".
+            _sv_slots_idle = _monmod._server_slots
+            _idle_extra = None
+            # Settle every row already on this host first. This suite is a flat script and earlier
+            # blocks leave rows behind mid-install; now that _host_idle_state enumerates ALL rows
+            # rather than installed=True only, one of those makes the baseline "unknown" and the
+            # checks below would be measuring the leftover instead of the change. Restored after.
+            _idle_saved = []
+            for _g in GameServer.query.filter_by(remote_id=_r1_id).all():
+                _idle_saved.append((_g.id, _g.installed, _g.status))
+                _g.installed, _g.status = True, "online"
+            db.session.commit()
+            try:
+                _monmod._server_slots = lambda gs: (0, 16, None)   # every server: a confident 0
+                check("idle state: a host whose servers all report 0 players is idle",
+                      _monmod._host_idle_state(_r1) == "idle", _monmod._host_idle_state(_r1))
+                _idle_extra = GameServer(remote_id=_r1_id, name="inst-srv", short_name="instserver",
+                                         game_type="csgo", port=27101, installed=False,
+                                         status="installing")
+                db.session.add(_idle_extra); db.session.commit()
+                check("idle state: a server mid-install makes the host NOT idle",
+                      _monmod._host_idle_state(_r1) != "idle",
+                      "answered %r — the watcher would reboot into a running install"
+                      % _monmod._host_idle_state(_r1))
+                # ...but a row that is merely not installed — a failed or abandoned install — is
+                # not work in flight, and blocking on it would strand "reboot when empty" on that
+                # host for as long as the row exists.
+                _idle_extra.installed, _idle_extra.status = False, "failed"
+                db.session.commit()
+                check("idle state: ...while a failed install does not block the reboot forever",
+                      _monmod._host_idle_state(_r1) == "idle", _monmod._host_idle_state(_r1))
+                # ...and a server with players on it is still 'busy', so the gate is not blanket.
+                _monmod._server_slots = lambda gs: (3, 16, None)
+                check("idle state: a host with players connected is busy",
+                      _monmod._host_idle_state(_r1) == "busy", _monmod._host_idle_state(_r1))
+                # ...and a count the panel could not read is 'unknown', never 'idle'.
+                _monmod._server_slots = lambda gs: (None, 16, None)
+                check("idle state: an unreadable count is unknown, not idle",
+                      _monmod._host_idle_state(_r1) == "unknown", _monmod._host_idle_state(_r1))
+            finally:
+                _monmod._server_slots = _sv_slots_idle
+                if _idle_extra is not None:
+                    db.session.delete(_idle_extra); db.session.commit()
+                for _gid, _inst, _st in _idle_saved:
+                    _g = db.session.get(GameServer, _gid)
+                    if _g is not None:
+                        _g.installed, _g.status = _inst, _st
+                db.session.commit()
 
             # ── The sweep probes hosts concurrently, not one after another ────────────────────
             # It used to walk them serially, so its duration was the SUM of every host's latency and
@@ -4418,6 +5442,86 @@ try:
             _ps._server_peak_notified.clear(); _ps._server_peak_notified.update(_saved_peak)
             _ps._player_counts.clear(); _ps._player_counts.update(_saved_pc)
             db.session.delete(_mon); db.session.commit()
+
+    # ── reboot-when-empty: the POP is the commit point ────────────────────────────────────────────
+    # The watcher snapshots the pending hosts at the top of a tick, then spends tens of seconds of
+    # SSH on _host_reachable + _host_idle_state before popping the entry. An operator who clicks
+    # Cancel inside that window is told "Auto-reboot canceled." and reboot-required then reports
+    # pending_empty=false — but the pop came back None and the watcher rebooted anyway, taking
+    # every game server on the host with it, and logged it under actor "system" so the audit row
+    # did not explain it either. The `(info or {})` fallback was the tell.
+    with app.app_context():
+        _rw_mod = sys.modules["panel.services.monitoring"]
+        _rw_ps = sys.modules["panel.core.panel_state"]
+        _rw_rid = RemoteServer.query.filter_by(name="smoke-host").first().id
+        _rw_saved = {n: getattr(_rw_mod, n) for n in
+                     ("time", "remote_reboot", "_host_reachable", "_host_idle_state", "log_action")}
+        _rw_saved_notify = _rw_mod.notifications.notify
+        _rw_saved_reg = dict(_rw_ps._reboot_when_empty)
+        _rw_reboots = []
+
+        class _OneTick(Exception):
+            """Breaks the watcher's `while True` after exactly one pass through the body."""
+
+        def _rw_run(idle_probe):
+            """Run ONE tick of the real watcher with the given _host_idle_state, and report what
+            it rebooted. time.sleep is what ends the loop, so nothing is left running behind us."""
+            _rw_reboots.clear()
+            _ticks = {"n": 0}
+
+            def _sleep(_secs):
+                _ticks["n"] += 1
+                if _ticks["n"] > 1:
+                    raise _OneTick()
+
+            _rw_mod.time = type(sys)("_rw_clock")
+            _rw_mod.time.sleep, _rw_mod.time.time = _sleep, _rw_saved["time"].time
+            _rw_mod._host_reachable = lambda r: True
+            _rw_mod._host_idle_state = idle_probe
+            _rw_mod.remote_reboot = lambda r: (_rw_reboots.append(r.id), (True, "rebooting"))[1]
+            _rw_mod.log_action = lambda *a, **k: None
+            _rw_mod.notifications.notify = lambda *a, **k: None
+            try:
+                _rw_mod._reboot_when_empty_watch(app)
+            except _OneTick:
+                pass
+            return list(_rw_reboots)
+
+        try:
+            # The probe CANCELS mid-flight, exactly as the route's Cancel button does.
+            def _idle_then_cancel(remote):
+                with _rw_ps._rwe_lock:
+                    _rw_ps._reboot_when_empty.pop(remote.id, None)
+                return "idle"
+
+            with _rw_ps._rwe_lock:
+                _rw_ps._reboot_when_empty.clear()
+                _rw_ps._reboot_when_empty[_rw_rid] = {"by": "smoke", "since": _time_mon.time()}
+            check("reboot-when-empty: a reboot cancelled while the idle probe ran does not fire",
+                  _rw_run(_idle_then_cancel) == [],
+                  "rebooted %s after the operator was told it was cancelled" % _rw_reboots)
+            # Positive control: still queued at the pop, so the host really does get rebooted.
+            with _rw_ps._rwe_lock:
+                _rw_ps._reboot_when_empty.clear()
+                _rw_ps._reboot_when_empty[_rw_rid] = {"by": "smoke", "since": _time_mon.time()}
+            check("reboot-when-empty: ...while a queued, idle host still reboots",
+                  _rw_run(lambda remote: "idle") == [_rw_rid], str(_rw_reboots))
+            check("reboot-when-empty: ...and firing removes it from the registry",
+                  _rw_rid not in _rw_ps._reboot_when_empty)
+            # ...and a host that is not idle is left alone, entry intact, as before.
+            with _rw_ps._rwe_lock:
+                _rw_ps._reboot_when_empty.clear()
+                _rw_ps._reboot_when_empty[_rw_rid] = {"by": "smoke", "since": _time_mon.time()}
+            check("reboot-when-empty: a busy host is not rebooted and stays queued",
+                  _rw_run(lambda remote: "busy") == [] and _rw_rid in _rw_ps._reboot_when_empty,
+                  str(_rw_reboots))
+        finally:
+            for _n, _v in _rw_saved.items():
+                setattr(_rw_mod, _n, _v)
+            _rw_mod.notifications.notify = _rw_saved_notify
+            with _rw_ps._rwe_lock:
+                _rw_ps._reboot_when_empty.clear()
+                _rw_ps._reboot_when_empty.update(_rw_saved_reg)
 
     # ── An unreachable host is a normal condition, not a panel fault ──────────────────────────────
     # The fixture hosts point at 127.0.0.1:22 with nothing listening, so every endpoint below has to
@@ -5006,6 +6110,33 @@ try:
         _sj2 = c.get("/api/os-updates/summary").get_json() or {}
         check("os updates: a patched host drops out of the banner",
               not [h for h in (_sj2.get("hosts") or []) if h["id"] == remote_id], str(_sj2)[:120])
+
+        # A RESTART must not re-announce this morning's list. `hosts` is in memory only and
+        # nothing persists it, so after a restart every host read (0, 0) and the 0 -> N edge fired
+        # for every update already pending — ~30 s after boot, with the identical package list, on
+        # any restart at all (the "Update now" button restarts the panel itself). The first pass
+        # after boot seeds instead. Driven through the sweep's own state, since nothing outward
+        # can see the window, and UNFORCED — that is how the ticker calls it.
+        _pkgs["n"] = [{"name": "openssl", "suite": "jammy-security"}]
+        _st_hosts.clear()
+        _ps._os_update_state["last_run"] = 0.0      # as if the panel had just come back up
+        _rec.clear()
+        _osu()
+        check("os updates: the first sweep after a restart seeds, it does not re-announce",
+              "os_updates" not in _rec, str(_rec))
+        check("os updates: ...and that sweep still records what is waiting",
+              _st_hosts.get(remote_id) == (1, 1), str(dict(_st_hosts))[:120])
+        # POSITIVE CONTROL: seeding must not be a mute button — a batch that appears AFTER it
+        # still alerts, or "no repeat after a restart" would be satisfied by never alerting again.
+        _pkgs["n"] = []
+        _osu(force=True)                     # host patched -> re-arm
+        _pkgs["n"] = [{"name": "bash", "suite": "jammy-updates"}]
+        _rec.clear()
+        _osu(force=True)
+        check("os updates: ...and a batch that appears after the seeding pass still alerts",
+              "os_updates" in _rec, str(_rec))
+        _pkgs["n"] = []
+        _osu(force=True)                     # leave the host clean for the checks below
 
         # An unreachable host is the monitor's problem — this must not even probe it. Assert on the
         # PROBE, not on silence: _os_updates_for swallows exceptions by design, so a stub that
@@ -5603,6 +6734,124 @@ try:
           not _only_tg and not _only_dc,
           "telegram-only: %s  discord-only: %s" % (_only_tg, _only_dc))
 
+    # ── Revoking Discord's "Accept commands" has to bite at the next MESSAGE ──────────────────
+    # _on_message froze the channel id and the permission into its default args at IDENTIFY time,
+    # and a Discord Gateway session is deliberately long-lived — heartbeat every ~41s, reconnect
+    # only on op 7/9 or a dropped socket. So unticking the box re-rendered the settings page and
+    # changed nothing else: the next `!stop codserver` in that channel still stopped the server,
+    # with an audit row attributed to discord:<username>, for minutes or for days, and the panel
+    # could put no bound on the window. Moving the bot to a new, locked-down channel had the
+    # mirror-image bug — the OLD channel kept control and the new one was ignored. The Telegram
+    # twin has always re-read its gate on every poll.
+    _dcg_cfg = {"discord": {"enabled": True, "accept_commands": True,
+                            "bot_token": "enc", "channel_id": "999"}}
+    _dcg_ran = []
+
+    class _DcgStop(Exception):
+        """Raised from the watch loop's own backoff sleep, which sits OUTSIDE its try/except — the
+        one clean way out of a `while True:` that swallows every other exception."""
+
+    class _DcgClock(object):
+        def sleep(self, _secs):
+            raise _DcgStop()
+
+    def _dcg_gateway(_tok, on_message, **_k):
+        """Stands in for discord_gateway_run: the session is now live and the handler is fixed for
+        the whole of its lifetime, which is the window the bug lived in."""
+        on_message("999", False, "!status")                 # still authorised
+        _dcg_cfg["discord"]["accept_commands"] = False       # the superadmin unticks the box
+        on_message("999", False, "!stop codserver")          # must not reach the dispatcher
+        _dcg_cfg["discord"]["accept_commands"] = True
+        _dcg_cfg["discord"]["channel_id"] = "1000"           # ...or moves the bot elsewhere
+        on_message("999", False, "!stop codserver")          # the old channel loses control
+        on_message("1000", False, "!hosts")                  # and the new one gains it
+
+    _dcg_saved = (_notif._cfg, _notif.discord_gateway_run, _dcmod._dc_dispatch,
+                  _dcmod.decrypt_secret, _dcmod.time)
+    try:
+        _notif._cfg = lambda: _dcg_cfg
+        _notif.discord_gateway_run = _dcg_gateway
+        _dcmod._dc_dispatch = lambda a, tok, chan, text, sender=None: _dcg_ran.append((chan, text))
+        _dcmod.decrypt_secret = lambda s: "A" * 50
+        _dcmod.time = _DcgClock()
+        try:
+            _dcmod._discord_command_watch(app)
+        except _DcgStop:
+            pass                      # one pass through the loop is the whole test
+    finally:
+        (_notif._cfg, _notif.discord_gateway_run, _dcmod._dc_dispatch,
+         _dcmod.decrypt_secret, _dcmod.time) = _dcg_saved
+    check("discord: a command in the authorised channel is honoured (positive control)",
+          ("999", "!status") in _dcg_ran, "dispatched=%s" % (_dcg_ran,))
+    check("discord: unticking 'Accept commands' takes effect at the next message, not the next "
+          "socket drop",
+          not any(_t.startswith("!stop") for _c, _t in _dcg_ran), "dispatched=%s" % (_dcg_ran,))
+    check("discord: ...and moving the bot to another channel takes control off the old one",
+          ("1000", "!hosts") in _dcg_ran
+          and not any(_c == "999" and _t.startswith("!stop") for _c, _t in _dcg_ran),
+          "dispatched=%s" % (_dcg_ran,))
+
+    # ── /status must not print a player total it never managed to read ───────────────────────
+    # The total was built with `isinstance(count, int)` as its only handling of the unknown case,
+    # so a server the panel could not ask contributed nothing and the remainder was then stated as
+    # a fact. Right after a restart _player_counts is empty because the poller has not completed a
+    # pass, and six servers with forty people on them answered "Players online: 0". /servers, six
+    # lines away in the same file, prints "?" for exactly this state.
+    from panel.services.bots import commands as _btc
+    _bps = sys.modules["panel.core.panel_state"]._player_counts
+    _bps_saved = dict(_bps)
+    with app.app_context():
+        _bst_ids = [_g.id for _g in GameServer.query.filter_by(installed=True).all()]
+    check("bots: /status has installed servers to report on (the checks below need them)",
+          len(_bst_ids) >= 1, "%d installed — the /status checks would prove nothing" % len(_bst_ids))
+    try:
+        _bps.clear()                       # nothing polled yet: the window after a restart
+        _bst_none = _btc._status_text(app)
+        check("bots: /status says the player total could not be read, instead of printing 0",
+              "Players online: 0" not in _bst_none and "couldn't be queried" in _bst_none,
+              _bst_none)
+        _bps.clear()
+        for _i in _bst_ids:
+            _bps[_i] = {"count": 3, "max": 16}
+        _bst_all = _btc._status_text(app)
+        check("bots: ...and a total it DID read is still printed plainly (positive control)",
+              "couldn't be queried" not in _bst_all
+              and ("Players online: %d" % (3 * len(_bst_ids))) in _bst_all, _bst_all)
+        # An offline server is a REAL zero (monitoring writes count=0 for it without querying), so
+        # this must not start reporting every stopped server as unreadable.
+        _bps.clear()
+        for _i in _bst_ids:
+            _bps[_i] = {"count": 0, "max": 16}
+        _bst_zero = _btc._status_text(app)
+        check("bots: ...and a confirmed zero is still a zero, not an unknown",
+              "couldn't be queried" not in _bst_zero and "Players online: 0" in _bst_zero,
+              _bst_zero)
+    finally:
+        _bps.clear()
+        _bps.update(_bps_saved)
+
+    # ── A list reply has to be capped where it is BUILT, not sliced by the transport ──────────
+    # _BOT_BODY_MAX exists with a comment saying it belongs in every variable-length builder, and
+    # was applied in one of the four. On Discord the end of an uncapped body is discord_bot_send's
+    # bare text[:1900] — a hard slice, no ellipsis, mid-word, mid-row — so a panel with ~45 servers
+    # answered !servers with a list that stopped part-way through a name and was missing roughly
+    # the last ten, with nothing saying so.
+    _cap_rows = ["row %03d %s" % (_i, "x" * 60) for _i in range(200)]
+    _cap_body = _btc._join_capped(_cap_rows)
+    _cap_lines = _cap_body.splitlines()
+    check("bots: a long list reply fits one Discord message and says how many rows it dropped",
+          len(_cap_body) < 1900 and _cap_lines[0].startswith("row 000")
+          and _cap_lines[-1] == "… and %d more" % (200 - (len(_cap_lines) - 1)),
+          "%d chars, %d lines, last=%r" % (len(_cap_body), len(_cap_lines), _cap_lines[-1:]))
+    check("bots: ...and a list that already fits is left exactly as it was (positive control)",
+          _btc._join_capped(["a", "b", "c"]) == "a\nb\nc",
+          repr(_btc._join_capped(["a", "b", "c"])))
+    import inspect as _bot_inspect
+    for _capfn in ("_players_text", "_servers_text", "_hosts_text"):
+        check("bots: %s caps its body before the transport can slice it" % _capfn,
+              "_join_capped" in _bot_inspect.getsource(getattr(_btc, _capfn)),
+              "uncapped — discord_bot_send will cut this at 1900 characters, mid-row")
+
     # ── A power action the panel already knows is a no-op must say so, not report success ────
     # /servers listed a server as online and the very next /start answered
     # "✅ 'start' issued — status updates in a few seconds". _run_action never consulted the status
@@ -5891,6 +7140,31 @@ try:
               any("Second run: validating" in (m or "")
                   for m in (_lat_trunc_now + _lat_trunc_next)),
               "now=%s next=%s" % (_lat_trunc_now, _lat_trunc_next))
+
+        # 2b. TWO long actions on one server, which nothing serialises: every maintenance button
+        # posts /api/server/<id>/action, the route hands a LONG_ACTION to a thread and answers
+        # within a second, and the button re-enables itself. _action_output is keyed by server_id
+        # alone, so the second registration overwrites the first — and _end_action_tail popped
+        # whatever was registered rather than its OWN entry. The shorter action finishing therefore
+        # deregistered the one still running: every later poller tick returned immediately, so the
+        # ten-minute SteamCMD download the panel had just told the operator to watch streamed
+        # nothing at all, and the update's own final drain then found no entry either, losing the
+        # last and most interesting lines as well.
+        with app.app_context():
+            _begin_action_tail(app, gs_id, "validate", _lat_logf, _lat_user)
+            _begin_action_tail(app, gs_id, "update", _lat_logf, _lat_user)   # overwrites it
+            _end_action_tail(app, gs_id, _lat_remote, "validate", 0)         # the OTHER one ends
+            _lat_after_other = dict(_ao.get(gs_id) or {})
+            _end_action_tail(app, gs_id, _lat_remote, "update", 0)           # ...then its owner
+            _lat_after_own = dict(_ao.get(gs_id) or {})
+        check("console tail: an action that ends does not deregister a DIFFERENT one still running",
+              _lat_after_other.get("action") == "update",
+              "left %r registered — the running update's output stops reaching the console the "
+              "panel told the operator to watch" % (_lat_after_other or None,))
+        check("console tail: ...and the action that owns the entry still clears it (positive control)",
+              not _lat_after_own,
+              "still registered: %r — the poller would tail a finished action forever, so the "
+              "check above would pass with the pop removed altogether" % (_lat_after_own,))
 
         # 3. The CALLER. Every assertion above passes just as well with a drain nothing invokes —
         # which is exactly the shape of the original bug. So drive the real console poller: give
@@ -6186,6 +7460,71 @@ try:
         db.session.delete(db.session.get(User, _ivu_id))
         db.session.commit()
 
+    # ── ...and deleting a GROUP kills the invites that grant it, for the same reason ────────────
+    # Invite.group_ids is a JSON list of bare Group.id integers, frozen at mint time and resolved
+    # at redemption purely by id — and Group.id is the same bare INTEGER PRIMARY KEY with the same
+    # rowid recycling. Nothing downstream catches it: redeem_invite's group re-check is guarded by
+    # `if _creator is not None and not _creator.is_superadmin`, and minting is @superadmin_required,
+    # so for a creator who is still a superadmin the check is skipped and user.groups is assigned
+    # from whatever rows hold those ids now. Driven with the freed id taken deliberately, the same
+    # way the user half above proves its own resurrection route is open.
+    with app.app_context():
+        _gi_creator = User.query.filter_by(is_superadmin=True).first()
+        _gi_grp = Group(name="smoke_trial_group", description="smoke (auto)", is_default=False)
+        _gi_grp.set_permissions([auth.VIEW_SERVERS])
+        db.session.add(_gi_grp)
+        db.session.commit()
+        _gi_gid = _gi_grp.id
+        _gi_inv, _ = _InvS.mint(_gi_creator, hours=48, group_ids=[_gi_gid])
+        db.session.add(_gi_inv)
+        db.session.commit()
+        _gi_iid = _gi_inv.id
+        check("invite: it is usable while the group it grants exists",
+              _gi_inv.is_usable and _gi_inv.groups_wanted == [_gi_gid],
+              "the next check would prove nothing otherwise")
+        db.session.delete(db.session.get(Group, _gi_gid))
+        db.session.commit()
+        _gi_after = db.session.get(_InvS, _gi_iid)
+        check("invite: deleting a group it grants revokes it",
+              _gi_after.revoked_at is not None, "revoked_at=%r" % _gi_after.revoked_at)
+        check("invite: ...so it is not usable", not _gi_after.is_usable)
+        # The resurrection route really is open: take the freed rowid with a group that grants far
+        # more than the deleted one did.
+        _gi_heir = Group(id=_gi_gid, name="smoke_server_owners", description="smoke (auto)",
+                         is_default=False)
+        _gi_heir.set_permissions([auth.MANAGE_USERS, auth.MANAGE_REMOTES, auth.MANAGE_SERVERS])
+        db.session.add(_gi_heir)
+        db.session.commit()
+        check("invite: the replacement group really does take the freed id",
+              _gi_heir.id == _gi_gid, "id=%d want=%d" % (_gi_heir.id, _gi_gid))
+        check("invite: ...but the stamped revocation still holds", not _gi_after.is_usable,
+              "a rowid cannot undo revoked_at")
+        # Positive control: an invite that names OTHER groups is untouched by the delete, so the
+        # listener is a targeted revoke and not a blanket one.
+        _gi_keep = Group(name="smoke_keep_group", description="smoke (auto)", is_default=False)
+        _gi_keep.set_permissions([auth.VIEW_SERVERS])
+        db.session.add(_gi_keep)
+        db.session.commit()
+        _gi_keep_id = _gi_keep.id
+        _gi_doomed = Group(name="smoke_doomed_group", description="smoke (auto)", is_default=False)
+        _gi_doomed.set_permissions([auth.VIEW_SERVERS])
+        db.session.add(_gi_doomed)
+        db.session.commit()
+        _gi_bystander, _ = _InvS.mint(_gi_creator, hours=48, group_ids=[_gi_keep_id])
+        db.session.add(_gi_bystander)
+        db.session.commit()
+        _gi_by_id = _gi_bystander.id
+        db.session.delete(db.session.get(Group, _gi_doomed.id))
+        db.session.commit()
+        check("invite: deleting an unrelated group leaves other invites alone",
+              db.session.get(_InvS, _gi_by_id).is_usable,
+              "a targeted revoke turned into a blanket one")
+        db.session.delete(db.session.get(_InvS, _gi_iid))
+        db.session.delete(db.session.get(_InvS, _gi_by_id))
+        db.session.delete(db.session.get(Group, _gi_gid))
+        db.session.delete(db.session.get(Group, _gi_keep_id))
+        db.session.commit()
+
     # ── Deleting a host forgets everything keyed on its id ─────────────────────────────────────
     # SQLite hands a deleted row's id straight to the next INSERT, and delete_remote is the one
     # route that removes a host — taking its game servers with it, without uninstall_server ever
@@ -6410,6 +7749,68 @@ try:
             except Exception:
                 pass
 
+    # ── The forced-password-change gate has to be asked ON THE SOCKET ────────────────────────
+    # must_change_password is enforced by an @app.before_request (app.py), and a before_request
+    # NEVER runs for a Socket.IO event — flask-socketio's middleware takes /socket.io/ ahead of the
+    # Flask app. So the whole socket surface sat outside the gate: an account holding a password an
+    # admin generated, read off a screen and relayed was answered 403 password_change_required by
+    # every HTTP route in the panel, and could still emit join_console and be streamed that
+    # server's live console — RCON output, admin commands, player names, connect lines.
+    # host_terminal's _may_use_terminal asks this question for exactly this reason; the console
+    # socket did not.
+    _pw_sio, _pw_new, _pw_before = None, None, None
+    try:
+        _pw_err0 = ""
+        try:
+            _pw_sio = app.socketio.test_client(app, flask_test_client=client_as(admin_id))
+        except Exception as _e:
+            _pw_err0 = "%s: %s" % (type(_e).__name__, _e)
+        # The control, taken BEFORE the flag is set: this account gets a socket normally, so a
+        # refusal below is the flag and not the harness refusing everything.
+        check("console socket: (control) the account gets a socket while its password is its own",
+              bool(_pw_sio is not None and _pw_sio.is_connected()), _pw_err0)
+        with app.app_context():
+            _pw_u = db.session.get(User, admin_id)
+            _pw_before = _pw_u.must_change_password
+            _pw_u.must_change_password = True
+            db.session.commit()
+        # An ALREADY-OPEN socket: connect does not run a second time, so join_console has to ask
+        # as well — this is the socket that was open when the admin reset the password.
+        with _r_sf._viewers_lock:
+            _r_sf._console_viewers.pop(gs_id, None)
+        if _pw_sio is not None and _pw_sio.is_connected():
+            _pw_sio.emit("join_console", {"server_id": gs_id})
+        check("console socket: an open socket cannot join a console once the account must change "
+              "its password",
+              not _r_sf._console_viewers.get(gs_id),
+              "viewers=%r — the poller streams that console to a session the panel answers 403 "
+              "on every other route" % (_r_sf._console_viewers.get(gs_id),))
+        # ...and a NEW socket is refused at connect, which is what covers every event on the
+        # namespace rather than the handful that remembered to check.
+        _pw_conn, _pw_err = True, ""
+        try:
+            _pw_new = app.socketio.test_client(app, flask_test_client=client_as(admin_id))
+            _pw_conn = _pw_new.is_connected()
+        except Exception as _e:
+            _pw_conn, _pw_err = False, "%s: %s" % (type(_e).__name__, _e)
+        check("console socket: ...and a new socket is refused at connect",
+              _pw_conn is False,
+              "connected — %s" % (_pw_err or "the connect gate admitted an account holding a "
+                                             "handed-over temporary password"))
+    finally:
+        if _pw_before is not None:
+            with app.app_context():
+                db.session.get(User, admin_id).must_change_password = _pw_before
+                db.session.commit()
+        for _pw_cl in (_pw_sio, _pw_new):
+            try:
+                if _pw_cl is not None:
+                    _pw_cl.disconnect()
+            except Exception:
+                pass
+        with _r_sf._viewers_lock:
+            _r_sf._console_viewers.pop(gs_id, None)
+
     # ── A long action's output survives a reload, and keeps LinuxGSM's colour ────────────────
     # Two follow-ups to the tail above, both reported straight after it shipped.
     #
@@ -6456,6 +7857,16 @@ try:
         check("console backlog: ...in its OWN field, not spliced into the game log's window",
               _blj.get("lines") == [] and "panel_lines" in _blj,
               "lines=%s" % (_blj.get("lines"),))
+        # A console the route COULD NOT READ must not be answered as a console that is empty.
+        # rc != 0 (the non-raising transports), an exception (paramiko), a log that does not exist
+        # and a genuinely empty log all left here as 200 with the same `lines: []`, and nothing in
+        # the payload told them apart — so "Load older" emptied the browser's scrollback, which is
+        # the only copy of it (the poller emits a sliding window and keeps nothing), and reported
+        # "Loaded 0 lines from the log" about a log it never opened.
+        check("console read: a console that could not be read says so",
+              _blj.get("readable") is False,
+              "readable=%r with lines=[] — indistinguishable from a server that has written "
+              "nothing" % (_blj.get("readable"),))
         # THE ONE THAT MATTERS MOST, and the one every other check here passes without: the game
         # log's window must carry NO time. Those lines are a fresh tail of a file that records no
         # per-line time for most games — the panel is reading them now but they were written at
@@ -6472,6 +7883,10 @@ try:
         check("console timestamps: an UNSTAMPED history line carries no invented time",
               all(r.get("t") is None for r in (_blj2.get("lines") or [])),
               "a line was dated to the moment the panel read it: %s" % (_blj2.get("lines"),))
+        # The control for the readable=False check above: a read that DID run still says so, or
+        # that gate would pass on a route that simply reported every console unreadable.
+        check("console read: ...and a console that WAS read says so too",
+              _blj2.get("readable") is True, "readable=%r" % (_blj2.get("readable"),))
         check("console backlog: the colour survives the round trip to the page",
               any("\x1b[32m" in (r.get("line") or "") for r in _bl_rows),
               "panel_lines=%s" % _bl_rows)
@@ -6770,8 +8185,8 @@ try:
         if _bs_pos >= len(_bs_log):
             break
         _bs_diff = min(len(_bs_log) - _bs_pos, 65536)
-        # exactly what the shell returns: the byte range, plus the sentinel
-        _bs_out = _bs_whole_lines(-99, _bs_log[_bs_pos:_bs_pos + _bs_diff] + "E")
+        # exactly what the shell returns: the byte range inside its B…E frame
+        _bs_out = _bs_whole_lines(-99, "B" + _bs_log[_bs_pos:_bs_pos + _bs_diff] + "E")
         if _bs_out:
             _bs_seen.extend(_bs_out.split("\n"))
         _bs_pos = _bs_pos + _bs_diff          # the fix: advance by what was READ
@@ -6799,6 +8214,84 @@ try:
     check("console burst: a rotated log drops the half-line held from the old file",
           "_console_partial.pop(server_id, None)" in _bs_src,
           "the fragment from the previous log survives the rotation and is glued to the new one")
+
+    # ── The chunk is framed at BOTH ends, because run_command strips both ────────────────────
+    # run_command returns `.strip()`ed output on every transport (_core.py: `out.strip()`,
+    # `r.stdout.strip()`, `(out or "").strip()`), and strip() is not rstrip(). Only the trailing
+    # 'E' sentinel existed, which covered exactly half the problem. When a byte-range chunk BEGAN
+    # with the newline that terminated the previous chunk's last line, that newline was deleted in
+    # transit and the held fragment was concatenated straight onto the next line's text: two real
+    # log lines reached the console as one, with a second timestamp welded into the middle of it —
+    # which also defeats _console_rows' stamp parsing for that line.
+    _bs_partial_state.pop(-98, None)
+    _lb_seen = []
+    for _lb_chunk in ("[2026-09-18 06:22:08] MODULE: cc_foo.lua",      # cut on a line boundary…
+                      "\n[2026-09-18 06:22:08] MODULE: cc_bar.lua\n"):  # …so the next byte is \n
+        # .strip() is what the transport does to the framed chunk before the route ever sees it
+        _lb_out = _bs_whole_lines(-98, ("B" + _lb_chunk + "E").strip())
+        if _lb_out:
+            _lb_seen.extend(_lb_out.split("\n"))
+    check("console chunk: a chunk that STARTS with a newline is not glued to the held fragment",
+          _lb_seen == ["[2026-09-18 06:22:08] MODULE: cc_foo.lua",
+                       "[2026-09-18 06:22:08] MODULE: cc_bar.lua"],
+          "reassembled as %r — a line that never existed in the log" % (_lb_seen,))
+    _bs_partial_state.pop(-98, None)
+    check("console chunk: ...and the poller frames the read at both ends to make that true",
+          "printf B; {" in _bs_src and "}; printf E" in _bs_src,
+          "the command sentinels only one end, so the transport's leading strip still bites")
+
+    # ── A read that never RAN must not advance the offset ────────────────────────────────────
+    # tailscale (_run_via_ssh_cli) and local do NOT raise: a 64KB `tail | head` that exceeds the
+    # 5s timeout returns ("", "SSH command timed out", -1), while the 20-byte stat in the same tick
+    # succeeded. "" was indistinguishable from "the chunk held no complete line", so the poller
+    # advanced last_pos by `diff` bytes the host never sent — gone permanently, because last_pos
+    # only moves forward and the browser only ever sees what the poller emitted. The frame is the
+    # positive token that proves the read ran; its ABSENCE must not read as success.
+    _bs_partial_state.pop(-97, None)
+    _bs_partial_state[-97] = "[2026-09-18 06:22:08] MODULE: cc_hal"   # half a line, held
+    _ur_out = _bs_whole_lines(-97, "")
+    check("console chunk: a read that did not run answers None, not an empty chunk",
+          _ur_out is None,
+          "answered %r — the caller cannot tell it from a log that wrote nothing" % (_ur_out,))
+    check("console chunk: ...and it does not consume the fragment held from the last read",
+          _bs_partial_state.get(-97) == "[2026-09-18 06:22:08] MODULE: cc_hal",
+          "held fragment is now %r — the next tick cannot re-read the range"
+          % (_bs_partial_state.get(-97),))
+    # The control: a framed chunk that is EMPTY is a reading — the log wrote nothing this tick —
+    # and must still come back as "", not None, or the poller would stall on an idle server.
+    check("console chunk: (control) a framed empty chunk is a reading, not a failure",
+          _bs_whole_lines(-97, "BE") == "",
+          "an idle server's empty read now looks like a failed one, and the offset never advances")
+    _bs_partial_state.pop(-97, None)
+
+    # Driven through the poller's own loop shape, because the damage is in the offset arithmetic
+    # rather than in one call: one tick's chunk read fails the way tailscale fails, and every byte
+    # of the burst must still arrive.
+    _bs_partial_state.pop(-96, None)
+    _fp_log = "".join("[2026-09-18 06:22:08] MODULE: fp_%05d.lua\n" % i for i in range(3000))
+    check("console poller: (setup) the fixture spans more than one capped read",
+          len(_fp_log) > 65536, "only %d bytes" % len(_fp_log))
+    _fp_pos, _fp_seen, _fp_tick = 0, [], 0
+    while _fp_pos < len(_fp_log) and _fp_tick < 20:
+        _fp_tick += 1
+        _fp_diff = min(len(_fp_log) - _fp_pos, 65536)
+        _fp_raw = ("" if _fp_tick == 2                     # the timed-out read: no frame, rc=-1
+                   else "B" + _fp_log[_fp_pos:_fp_pos + _fp_diff] + "E")
+        _fp_out = _bs_whole_lines(-96, _fp_raw)
+        if _fp_out is None:
+            continue                                       # the fix: do NOT advance last_pos
+        if _fp_out:
+            _fp_seen.extend(_fp_out.split("\n"))
+        _fp_pos += _fp_diff
+    _bs_partial_state.pop(-96, None)
+    check("console poller: a chunk read that never ran does not advance the offset past it",
+          _fp_seen == [_l for _l in _fp_log.split("\n") if _l],
+          "saw %d of %d lines — a window of console output was skipped and can never be "
+          "recovered" % (len(_fp_seen), 3000))
+    check("console poller: ...and the poller refuses the advance on that answer",
+          "if out is None:" in _bs_src
+          and "out = _console_whole_lines(server_id, out) if rc == 0 else None" in _bs_src,
+          "the offset still moves on a read whose result was never proven to have arrived")
 
 
     # ── The panel must never OFFER to turn LinuxGSM's logtimestamp on ───────────────────────
@@ -7468,11 +8961,103 @@ try:
         _gm_get2 = c.get("/api/server/%d/gmod-content" % gs_id).get_json() or {}
         check("gmod mounts: a readable state says so", _gm_get2.get("mounts_readable") is True,
               "%r" % (_gm_get2.get("mounts_readable"),))
-        _gm_post2 = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": ["cstrike"]},
-                           headers={"X-Requested-With": "XMLHttpRequest"})
-        check("gmod mounts: ...and an apply against it still goes through",
-              (_gm_post2.get_json() or {}).get("success") is True,
-              "the control failed — the refusal above proves nothing")
+        # From here the background APPLY worker's own dependencies are stubbed too. An apply spawns
+        # a thread, and left real it would SSH at this suite's unreachable host for a minute and
+        # land its write in the middle of a later check.
+        import time as _gm_time
+        _gm_state = _gm_mod._gmod_content_apply_state
+        _gm_saved2 = (_gm_mod.ensure_content_user, _gm_mod.install_gmod_content,
+                      _gm_mod.gmod_mount_setup)
+        _gm_mounted = []
+
+        def _gm_mount_spy(_remote, _gmod_user, _content_user, _games):
+            _gm_mounted.append(list(_games))
+            return True, "Mounted: %s — restart the server to apply" % (", ".join(_games) or "(none)")
+
+        def _gm_settle(_timeout=20):
+            _dl2 = _gm_time.time() + _timeout
+            while (_gm_time.time() < _dl2
+                   and (_gm_state.get(gs_id) or {}).get("status") == "running"):
+                _gm_time.sleep(0.02)
+            return dict(_gm_state.get(gs_id) or {})
+
+        try:
+            _gm_mod.ensure_content_user = lambda *a, **k: {"user": "gmodcontent",
+                                                           "group": "gmodcontent", "present": {}}
+            _gm_mod.gmod_mount_setup = _gm_mount_spy
+            # SteamCMD ran and put nothing on disk — the out-of-free-disk case that this card's
+            # own "Host disk" readout exists to warn about. ok=True, installed=[].
+            _gm_mod.install_gmod_content = lambda *a, **k: (True, [], "already present")
+            _gm_state.pop(gs_id, None)
+            _gm_post2 = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": ["cstrike"]},
+                               headers={"X-Requested-With": "XMLHttpRequest"})
+            check("gmod mounts: ...and an apply against it still goes through",
+                  (_gm_post2.get_json() or {}).get("success") is True,
+                  "the control failed — the refusal above proves nothing")
+
+            # ── content that never downloaded must not be reported as mounted ───────────────
+            # install_gmod_content returns (ok, installed, msg), where `installed` is the games it
+            # re-verified are on disk AFTERWARDS. The worker discarded it and wrote the mount for
+            # everything the operator ticked, then stored "Mounted: Counter-Strike: Source —
+            # restart the server to apply" as the job result. mount.cfg pointed at a directory
+            # that is not there, and the operator restarted as instructed into purple ERROR
+            # textures on every map. The uninstall worker below it already reports what it
+            # actually removed rather than what was asked.
+            _gm_res = _gm_settle()
+            check("gmod content: a game whose content did not install is NOT mounted",
+                  bool(_gm_mounted) and "cstrike" not in _gm_mounted[-1],
+                  "mount.cfg was written for %r — a mount pointing at content that is not on the "
+                  "host" % (_gm_mounted,))
+            check("gmod content: ...and the job says that, instead of reporting a mount",
+                  _gm_res.get("status") == "error"
+                  and "Counter-Strike" in (_gm_res.get("msg") or ""),
+                  "job=%r" % (_gm_res,))
+
+            # The control: content that IS on the host is mounted, and the job reports done — or
+            # the checks above would pass on a card that simply refuses every apply.
+            _gm_mod.install_gmod_content = lambda *a, **k: (True, ["cstrike"], "installed: cstrike")
+            _gm_mounted[:] = []
+            _gm_state.pop(gs_id, None)
+            c.post("/api/server/%d/gmod-content" % gs_id, json={"games": ["cstrike"]},
+                   headers={"X-Requested-With": "XMLHttpRequest"})
+            _gm_res2 = _gm_settle()
+            check("gmod content: (control) content that DID install is mounted and reported done",
+                  _gm_mounted and _gm_mounted[-1] == ["cstrike"]
+                  and _gm_res2.get("status") == "done",
+                  "mounted=%r job=%r" % (_gm_mounted, _gm_res2))
+
+            # ── every terminal result reaches the card that polls for it ────────────────────
+            # The status GET filtered to status == "running", so a job that ended in error — "No
+            # content storage could be prepared on the host.", "Content setup failed — check the
+            # server logs.", gmod_mount_setup's "Couldn't read <user>'s group, so the content
+            # mount was not granted" — was indistinguishable from no job at all: the spinner
+            # vanished, the card said nothing, and the operator restarted the server into ERROR
+            # textures. Every failure mode of a job that can run for two hours behaved this way.
+            _gm_state[gs_id] = {"status": "error", "ts": _gm_time.time(),
+                                "msg": "No content storage could be prepared on the host."}
+            _gm_j = (c.get("/api/server/%d/gmod-content" % gs_id).get_json() or {}).get("job") or {}
+            check("gmod content: a job that ended in error reaches the card that polls for it",
+                  _gm_j.get("status") == "error" and "content storage" in (_gm_j.get("msg") or ""),
+                  "job=%r — the failure was recorded and then filtered out of the only endpoint "
+                  "that reports it" % (_gm_j,))
+            _gm_state[gs_id] = {"status": "running", "msg": "", "ts": _gm_time.time()}
+            _gm_jr = (c.get("/api/server/%d/gmod-content" % gs_id).get_json() or {}).get("job") or {}
+            check("gmod content: (control) a running job is still reported",
+                  _gm_jr.get("status") == "running", "job=%r" % (_gm_jr,))
+            # ...and a long-finished one expires rather than greeting every later page load, the
+            # way remote_bootstrap's job poll expires its done/failed card.
+            _gm_state[gs_id] = {"status": "error", "msg": "an old failure",
+                                "ts": _gm_time.time() - (_gm_mod._GMOD_JOB_TTL + 60)}
+            _gm_je = (c.get("/api/server/%d/gmod-content" % gs_id).get_json() or {}).get("job")
+            check("gmod content: ...and a long-finished one expires instead of reappearing",
+                  _gm_je is None and gs_id not in _gm_state,
+                  "job=%r — a month-old error greets every later visit to this server"
+                  % (_gm_je,))
+        finally:
+            (_gm_mod.ensure_content_user, _gm_mod.install_gmod_content,
+             _gm_mod.gmod_mount_setup) = _gm_saved2
+            _gm_settle()
+            _gm_state.pop(gs_id, None)
     finally:
         (_gm_mod.gmod_current_mounts, _gm_mod.detect_content_user,
          _gm_mod.path_disk_free) = _gm_saved
@@ -7591,6 +9176,122 @@ try:
     finally:
         _bn_game.ensure_persistent_bans = _ban_saved["ensure"]
         _bn_game.moderate = _ban_saved["moderate"]
+
+    # ── a ban "on all servers" must say which servers it did NOT reach ────────────────────────
+    # The fan-out counted only its successes: `applied = sum(1 for r in ex.map(...) if r)`, with
+    # _ban_other collapsing every other outcome to False — its `except Exception: return False`
+    # swallowed the ConnectionError a paramiko host raises, and _sm.moderate returns ok=False for a
+    # host reached over Tailscale or locally, because those transports return ("", "…", -1|255)
+    # instead of raising. `if applied:` then gated BOTH the audit row and the message, so a
+    # fan-out that reached nothing wrote no moderate_ban_all row at all and answered with the
+    # origin server's bare "Done.", while the origin's own row still said success=True. An
+    # operator reading either one believed the player was banned install-wide.
+    from panel.db.models import AuditLog as _fo_AL
+    _fo_saved, _fo_ids = {}, []
+    try:
+        _fo_saved["ensure"] = _sm_game.ensure_persistent_bans
+        _fo_saved["moderate"] = _sm_game.moderate
+        _sm_game.ensure_persistent_bans = lambda r, u, sn=None: True
+        with app.app_context():
+            _fo_rid = db.session.get(GameServer, gs_id).remote_id
+            for _n, _sn in (("smoke-fanout-a", "fanoutaserver"), ("smoke-fanout-b", "fanoutbserver")):
+                _row = GameServer(remote_id=_fo_rid, name=_n, short_name=_sn, game_type="csgo",
+                                  port=27801 + len(_fo_ids), installed=True, status="offline")
+                db.session.add(_row)
+                db.session.commit()
+                _fo_ids.append(_row.id)
+
+        def _fo_moderate(r, u, gt, action, target="", message="", selfname=None, steamid="",
+                         num=None):
+            # The ORIGIN call succeeds; a named fan-out target is the unreachable host.
+            return (u != _fo_dead["name"]), "ok"
+
+        _fo_dead = {"name": "\0none"}      # nothing fails on the positive-control pass
+        _sm_game.moderate = _fo_moderate
+        with app.app_context():
+            _fo_before = _fo_AL.query.filter_by(action="moderate_ban_all").count()
+        _fo_ok = c.post("/api/server/%d/moderate" % gs_id,
+                        json={"action": "ban", "steamid": "STEAM_0:1:770001", "scope": "all"},
+                        headers={"X-Requested-With": "XMLHttpRequest"}).get_json() or {}
+        with app.app_context():
+            _fo_row = _fo_AL.query.filter_by(action="moderate_ban_all").order_by(
+                _fo_AL.id.desc()).first()
+            _fo_after = _fo_AL.query.filter_by(action="moderate_ban_all").count()
+        check("ban fan-out: an all-servers ban that reached every server logs success (control)",
+              _fo_after == _fo_before + 1 and _fo_row is not None and _fo_row.success is True
+              and "Also banned on" in (_fo_ok.get("message") or ""),
+              "rows %d->%d row=%r msg=%r" % (_fo_before, _fo_after,
+                                             getattr(_fo_row, "target", None),
+                                             _fo_ok.get("message")))
+        check("ban fan-out: ...and there were targets to fan out to, so this is not a vacuous pass",
+              _fo_row is not None and not (_fo_row.target or "").startswith("0 of 0"),
+              "target=%r — with no other valve server the checks below prove nothing"
+              % (getattr(_fo_row, "target", None),))
+        # Now one target is unreachable. That is the case the old code was silent about.
+        _fo_dead["name"] = "fanoutbserver"
+        with app.app_context():
+            _fo_before = _fo_AL.query.filter_by(action="moderate_ban_all").count()
+        _fo_bad = c.post("/api/server/%d/moderate" % gs_id,
+                         json={"action": "ban", "steamid": "STEAM_0:1:770002", "scope": "all"},
+                         headers={"X-Requested-With": "XMLHttpRequest"}).get_json() or {}
+        with app.app_context():
+            _fo_row2 = _fo_AL.query.filter_by(action="moderate_ban_all").order_by(
+                _fo_AL.id.desc()).first()
+            _fo_after = _fo_AL.query.filter_by(action="moderate_ban_all").count()
+        check("ban fan-out: a server the ban did not reach is recorded, not dropped",
+              _fo_after == _fo_before + 1 and _fo_row2 is not None
+              and _fo_row2.success is False and "fanoutbserver" in (_fo_row2.detail or ""),
+              "rows %d->%d success=%r detail=%r — the audit row used to be gated on `applied`, so "
+              "a partial or total miss left nothing to read"
+              % (_fo_before, _fo_after, getattr(_fo_row2, "success", None),
+                 getattr(_fo_row2, "detail", None)))
+        check("ban fan-out: ...and the reply says so instead of claiming the whole install",
+              "could not be reached" in (_fo_bad.get("message") or ""),
+              "message=%r" % (_fo_bad.get("message"),))
+    finally:
+        _sm_game.ensure_persistent_bans = _fo_saved["ensure"]
+        _sm_game.moderate = _fo_saved["moderate"]
+        with app.app_context():
+            for _fid in _fo_ids:
+                _row = db.session.get(GameServer, _fid)
+                if _row is not None:
+                    db.session.delete(_row)
+            db.session.commit()
+
+    # ── a moderate body whose VALUES are not strings is a 400, never a 500 ────────────────────
+    # `scope` was read as `(data.get("scope") or "this").strip()` — raw off the body, and ABOVE the
+    # handler's try:, so a truthy non-string raised AttributeError that nothing here caught and the
+    # app-wide handler turned into a JSON 500 "Internal server error" with a traceback in the log.
+    # _json_body guarantees the BODY is a dict and says nothing about the VALUES, which is exactly
+    # why _json_str exists and was already used on the next line for `reason`.
+    import panel.routes.server_detail as _ms_rt
+    _ms_saved = (_sm_game.moderate, _sm_game.ensure_persistent_bans, _ms_rt._resolve_from_console)
+    try:
+        _sm_game.moderate = (lambda r, u, gt, action, target="", message="", selfname=None,
+                             steamid="", num=None: (True, "ok"))
+        # The ban branch reaches these two before the try:, and both SSH. Stubbed so this block
+        # tests the TYPING and never opens a connection.
+        _sm_game.ensure_persistent_bans = lambda r, u, sn=None: True
+        _ms_rt._resolve_from_console = lambda *a, **k: None
+        for _lbl, _mb in (("scope", {"action": "kick", "target": "bob", "scope": 1}),
+                          ("target", {"action": "kick", "target": {"a": 1}}),
+                          ("message", {"action": "say", "message": ["x"]}),
+                          ("num", {"action": "kick", "target": "bob", "num": {"z": 2}}),
+                          ("steamid", {"action": "ban", "steamid": 5, "target": "bob"})):
+            _mr = c.post("/api/server/%d/moderate" % gs_id, json=_mb,
+                         headers={"X-Requested-With": "XMLHttpRequest"})
+            check("moderate: a non-string %s is not a 500" % _lbl,
+                  _mr.status_code < 500, "%r -> %d" % (_mb, _mr.status_code))
+        # Positive control: the ordinary body still works, so this is not "refuse everything".
+        _mr_ok = c.post("/api/server/%d/moderate" % gs_id,
+                        json={"action": "kick", "target": "bob"},
+                        headers={"X-Requested-With": "XMLHttpRequest"})
+        check("moderate: ...while a well-formed kick still succeeds",
+              _mr_ok.status_code == 200 and (_mr_ok.get_json() or {}).get("success") is True,
+              "%d %r" % (_mr_ok.status_code, _mr_ok.get_json()))
+    finally:
+        (_sm_game.moderate, _sm_game.ensure_persistent_bans,
+         _ms_rt._resolve_from_console) = _ms_saved
 
     # ── a backup must prune to THIS server's retention, not the global default ────────────────
     # The per-server override is first-class: the schedule route writes it, get_game_schedule
@@ -7988,6 +9689,54 @@ try:
             db.session.get(RemoteServer, remote_id).port = _sh_before
             db.session.commit()
 
+    # ── close-port-22, which removed public SSH with nothing checked at all ───────────────────
+    # The route ran `ufw delete allow 22/tcp` on whatever host id was posted and answered "Port 22
+    # rule removed from UFW" with a success audit row. On a key-auth host reachable only over its
+    # public IP that locks the panel AND the operator out, with no way back from the UI — while
+    # ssh-mode above, which makes the SAME change, has always refused without a tailnet path back.
+    # remote_ufw_close_port_22 checks nothing either; "safe if Tailscale SSH is active" is its
+    # docstring, not a guard.
+    import panel.routes.close_port22 as _cpmod
+    _cp_saved = (_cpmod._tailnet_ssh_state, _cpmod.remote_ufw_close_port_22)
+    _cp_closed = []
+    try:
+        _cpmod.remote_ufw_close_port_22 = lambda r: (_cp_closed.append(getattr(r, "id", "?")),
+                                                     (True, "Port 22 rule removed from UFW"))[1]
+        _cpmod._tailnet_ssh_state = lambda r: (False, False, False)      # no tailnet way back
+        _cpj = (c.post("/api/remote/%d/close-port-22" % remote_id).get_json() or {})
+        check("close port 22: refused when there is no Tailscale way back into the host",
+              _cpj.get("success") is False and not _cp_closed,
+              "answered %s and called ufw for %s" % (str(_cpj)[:120], _cp_closed))
+        check("close port 22: ...and the refusal is audited as a failure, not as a change",
+              (_al_last("remote_close_port_22") or {}).get("success") is False,
+              "audited %r" % ((_al_last("remote_close_port_22") or {}).get("success"),))
+        # Tailscale merely RUNNING is not a way in: with its SSH server off and tailscale0 not
+        # allowed in UFW there is still nothing listening for you. This is the state the Tailscale
+        # migrate path already refuses on, and the one the docstring's "safe if Tailscale SSH is
+        # active" was being read as covering.
+        _cpmod._tailnet_ssh_state = lambda r: (True, False, False)
+        _cpj2 = (c.post("/api/remote/%d/close-port-22" % remote_id).get_json() or {})
+        check("close port 22: ...and Tailscale running with SSH OFF is not a way back either",
+              _cpj2.get("success") is False and not _cp_closed,
+              "answered %s and called ufw for %s" % (str(_cpj2)[:120], _cp_closed))
+        # The control: a host that really can be reached over the tailnet still closes, so the two
+        # checks above cannot be passing on a route that refuses everything.
+        _cpmod._tailnet_ssh_state = lambda r: (True, True, False)
+        _cpj3 = (c.post("/api/remote/%d/close-port-22" % remote_id).get_json() or {})
+        check("close port 22: a host with Tailscale SSH working still closes (positive control)",
+              _cpj3.get("success") is True and _cp_closed == [remote_id],
+              "answered %s and called ufw for %s" % (str(_cpj3)[:120], _cp_closed))
+        # ...and so does one reachable only because tailscale0 is allowed in UFW, which is the
+        # other half of the gate remote_set_public_ssh("off") applies.
+        _cp_closed[:] = []
+        _cpmod._tailnet_ssh_state = lambda r: (True, False, True)
+        _cpj4 = (c.post("/api/remote/%d/close-port-22" % remote_id).get_json() or {})
+        check("close port 22: ...and an allowed tailscale0 interface counts as a way back too",
+              _cpj4.get("success") is True and _cp_closed == [remote_id],
+              "answered %s and called ufw for %s" % (str(_cpj4)[:120], _cp_closed))
+    finally:
+        (_cpmod._tailnet_ssh_state, _cpmod.remote_ufw_close_port_22) = _cp_saved
+
     # ── deleting a UFW rule by number, which nothing entered either ───────────────────────────
     # The route hands `num` to a helper whose whole job is refusing a delete that would lock the
     # operator out — including when the firewall could not be READ, because "I could not check"
@@ -8090,6 +9839,57 @@ try:
               "%d invite_revoked rows" % _iv_audit2)
     finally:
         _ivmod.utcnow = _iv_saved_now
+
+    # ── the invite list must be bounded over REDEEMABLE invites, not over all of them ───────────
+    # /users took `Invite.query.order_by(created_at.desc()).limit(25)` — the 25 newest rows of ANY
+    # state — while its own comment said the useful part of the list is what is still redeemable.
+    # The Revoke button is rendered only for rows in that list, and revoke_invite is linked from
+    # nowhere else, so 25 newer used/expired links pushed a live one off the page and left it
+    # working and unrevokable through the UI for the rest of its TTL.
+    from datetime import timedelta as _iv_td
+    from panel.core.clock import utcnow as _iv_now
+    _iv_made = []
+    try:
+        with app.app_context():
+            _iv_admin3 = db.session.get(User, admin_id)
+            _iv_live, _ = _IvR.mint(_iv_admin3, hours=720, note="smoke-live-invite")
+            _iv_live.created_at = _iv_now() - _iv_td(days=40)
+            db.session.add(_iv_live)
+            db.session.flush()
+            _iv_live_id = _iv_live.id
+            _iv_made.append(_iv_live_id)
+            # 30 NEWER rows, every one of them finished: under the old bound these alone filled
+            # the page and the live one above never appeared.
+            for _n in range(30):
+                _iv_dead, _ = _IvR.mint(_iv_admin3, hours=720, note="smoke-dead-%02d" % _n)
+                _iv_dead.created_at = _iv_now() - _iv_td(minutes=(30 - _n))
+                _iv_dead.used_at = _iv_dead.created_at
+                db.session.add(_iv_dead)
+                db.session.flush()
+                _iv_made.append(_iv_dead.id)
+            db.session.commit()
+            _iv_live_row = db.session.get(_IvR, _iv_live_id)
+            _iv_live_usable = _iv_live_row.is_usable
+            _iv_live_older = all(db.session.get(_IvR, i).created_at > _iv_live_row.created_at
+                                 for i in _iv_made[1:])
+        # The setup has to be the setup the bug needs, or the check below proves nothing.
+        check("invite list: the fixture really is one live invite behind 30 newer dead ones",
+              _iv_live_usable and _iv_live_older,
+              "live=%r, all 30 newer=%r" % (_iv_live_usable, _iv_live_older))
+        _iv_page = c.get("/users").get_data(as_text=True)
+        check("invite list: a still-redeemable invite is not crowded out by newer finished ones",
+              ("/users/invite/%d/revoke" % _iv_live_id) in _iv_page,
+              "the only Revoke button a live link ever gets was pushed off the page")
+        # Positive control: finished invites are still shown for context, so the fix is a
+        # re-bounding of the list and not a filter that emptied it.
+        check("invite list: finished invites are still listed for context",
+              "smoke-dead-29" in _iv_page,
+              "the page now shows nothing but live invites")
+    finally:
+        with app.app_context():
+            if _iv_made:
+                _IvR.query.filter(_IvR.id.in_(_iv_made)).delete(synchronize_session=False)
+                db.session.commit()
 
     # ── and the ROUTE must not publish a reading nobody took ──────────────────────────────────
     # The helper now says read_ok; this is the caller that has to act on it. Driven through the
@@ -8224,6 +10024,167 @@ try:
         check("queued backup: ...and the server leaves the queue (positive control)",
               _pend_after is False,
               "the sweep never backed this server up, so the check above proves nothing")
+
+        def _bk_settle():
+            """Wait for whatever the checks above started to let go of the backup lock."""
+            if _bk_lock.acquire(timeout=8):
+                _bk_lock.release()
+                return True
+            return False
+
+        # ── a scheduled backup that FAILS has to say so somewhere ─────────────────────────────
+        # run_game_backup does not raise for a failed backup: it returns (False, reason, False),
+        # and a host that is down reaches it as rc=-1/255 from run_command on the tailscale and
+        # local transports rather than as an exception. The ticker's only notify() sat in its
+        # `except`, so the failure shape that actually happens took no branch at all — and the
+        # ticker records the clock for a genuine failure (deliberately, so it does not retry
+        # hourly), which makes the silence last a whole interval: no alert, no audit row, no
+        # retry. The operator learns of it when they need a restore.
+        _bk_notes = []
+        _bk_notify_saved = _bksh.notifications.notify
+        _bk_due_saved = _bkops.game_backup_due
+        try:
+            _bksh.notifications.notify = lambda k, t, b="": _bk_notes.append((k, t))
+            _bkops.game_backup_due = lambda sid: sid == gs_id    # only OUR server is due
+            _bkops.record_game_backup(gs_id)                     # a clock: not "never run before"
+            _bkops.set_game_schedule(gs_id, 1, 2)                # ...and the schedule is ON
+            with app.app_context():
+                _AL.query.filter_by(action="scheduled_backup").delete()
+                db.session.commit()
+            _bksh.run_game_backup = lambda *a, **k: (False, "Not enough disk space to back up",
+                                                     False)
+            _bk_free = _bk_settle()
+            _bksh._run_due_game_backups(app)
+            with app.app_context():
+                _bk_row = (_AL.query.filter_by(action="scheduled_backup")
+                           .order_by(_AL.id.desc()).first())
+            check("scheduled backup: the lock was free, so the ticker actually ran",
+                  _bk_free, "a backup from an earlier check still held it — the checks below "
+                            "would fail for the wrong reason")
+            check("scheduled backup: a failure that RETURNS (rather than raises) is alerted",
+                  any(k == "backup_failed" for k, _ in _bk_notes),
+                  "notified %s — the alert lives in an except branch a returned failure never "
+                  "enters, on exactly the transports the panel steers users towards" % (_bk_notes,))
+            check("scheduled backup: ...and audited as a failure, so /logs' failures filter finds it",
+                  _bk_row is not None and _bk_row.success is False,
+                  "audit row %r — the whole record was an in-memory dict"
+                  % (None if _bk_row is None else (_bk_row.action, _bk_row.success),))
+            check("scheduled backup: ...with the reason, not just the fact",
+                  _bk_row is not None and "disk space" in (_bk_row.detail or ""),
+                  "detail=%r" % (None if _bk_row is None else _bk_row.detail,))
+            # Positive control: a backup that WORKED is recorded as a success and alerts nobody.
+            _bk_notes.clear()
+            with app.app_context():
+                _AL.query.filter_by(action="scheduled_backup").delete()
+                db.session.commit()
+            _bksh.run_game_backup = lambda *a, **k: (True, "", False)
+            _bk_settle()
+            _bksh._run_due_game_backups(app)
+            with app.app_context():
+                _bk_ok_row = (_AL.query.filter_by(action="scheduled_backup")
+                              .order_by(_AL.id.desc()).first())
+            check("scheduled backup: one that worked is recorded as a success, and alerts nobody",
+                  _bk_ok_row is not None and _bk_ok_row.success is True and not _bk_notes,
+                  "row success=%r, notified %s — the checks above would pass just as well with "
+                  "every backup reported as a failure"
+                  % (None if _bk_ok_row is None else _bk_ok_row.success, _bk_notes))
+            # The 'wait until empty' sweep reported nothing at all, on any path.
+            _bk_notes.clear()
+            with app.app_context():
+                _AL.query.filter_by(action="queued_backup").delete()
+                db.session.get(GameServer, gs_id).backup_pending = True
+                db.session.commit()
+            _bksh.run_game_backup = lambda *a, **k: (False, "Not enough disk space to back up",
+                                                     False)
+            _bk_settle()
+            _bksh._run_pending_backups(app)
+            with app.app_context():
+                _bk_q_row = (_AL.query.filter_by(action="queued_backup")
+                             .order_by(_AL.id.desc()).first())
+            check("queued backup: a failed one is alerted and audited too",
+                  _bk_q_row is not None and _bk_q_row.success is False
+                  and any(k == "backup_failed" for k, _ in _bk_notes),
+                  "row=%r notified %s — this sweep clears backup_pending either way, so nothing "
+                  "picks the server up again until its own schedule comes round"
+                  % (None if _bk_q_row is None else (_bk_q_row.action, _bk_q_row.success),
+                     _bk_notes))
+        finally:
+            _bksh.notifications.notify = _bk_notify_saved
+            _bkops.game_backup_due = _bk_due_saved
+            _bkops.set_game_schedule(gs_id, None, None)
+
+        # ── "Full backup started" must not be decided by a test the lock can lose ─────────────
+        # _trigger_full_backup checked `_full_backup_lock.locked()` and the worker acquired it
+        # later — two steps, with three other holders (the per-server backup, the hourly ticker,
+        # the 'wait until empty' sweep) able to take it in between. The worker's own acquire then
+        # lost and returned in total silence, while the route had already answered "Full backup
+        # started" and written the audit row whose success flag exists precisely so /logs cannot
+        # hide a refusal. Driven by never letting the worker run: after a started=True answer the
+        # lock must ALREADY be held by the request that answered.
+        class _BkNoThread:
+            class Thread:
+                def __init__(self, target=None, daemon=None, **kw):
+                    self.target = target
+
+                def start(self):
+                    _bk_spawned.append(self.target)   # ...and never run it
+
+        _bk_spawned = []
+        _bk_thr_saved = _bkmod.threading
+        _bk_held = False
+        try:
+            _bk_settle()
+            _bkmod.threading = _BkNoThread
+            _bk_full = c.post("/api/panel/backup/full", json={"mode": ""})
+            _bk_full_running = (_bk_full.get_json() or {}).get("running")
+            _bk_held = _bk_lock.locked()
+        finally:
+            _bkmod.threading = _bk_thr_saved
+            if _bk_held:
+                _bk_lock.release()
+        check("full backup: the REQUEST takes the lock, rather than leaving it to the thread it "
+              "spawns", _bk_held,
+              "the lock was free after a 'started' answer — anything that takes it before the "
+              "worker does makes that answer, and its success=True audit row, a record of a "
+              "backup that never ran")
+        check("full backup: ...and the request still reports it started (positive control)",
+              _bk_full_running is True and len(_bk_spawned) == 1,
+              "answered running=%r, spawned %d worker(s)" % (_bk_full_running, len(_bk_spawned)))
+
+        # ── the two buttons on a backup ROW, against a host that did not answer ───────────────
+        # list_game_backups returns None for "could not read" (#330) and _find_game_backup
+        # iterated it, so both raised TypeError: the browser got a 500 whose body says the panel
+        # is broken, a traceback went to the panel log, and the real cause — the host did not
+        # answer — was never stated. Before #330 they answered a calm, wrong "Backup not found."
+        _bk_lgb_saved = _bkmod.list_game_backups
+        try:
+            _bkmod.list_game_backups = lambda *a, **k: None       # the host did not answer
+            _bk_delr = c.post("/api/panel/backup/game/%d/delete" % gs_id,
+                              json={"name": "an-archive.tar.gz"})
+            _bk_delj = _bk_delr.get_json() or {}
+            _bk_dlr = c.get("/backup/game/%d/download?name=an-archive.tar.gz" % gs_id)
+            check("backup row: deleting one when the listing can't be read is not a 500",
+                  _bk_delr.status_code < 500 and _bk_delj.get("success") is False,
+                  "status %d, body %r" % (_bk_delr.status_code, _bk_delj))
+            check("backup row: ...and it says the host didn't answer, not 'Backup not found.'",
+                  "didn't answer" in (_bk_delj.get("message") or ""),
+                  "message %r — 'not found' is a claim about a directory nobody reached"
+                  % (_bk_delj.get("message"),))
+            check("backup row: downloading one is not a 500 either",
+                  _bk_dlr.status_code == 502,
+                  "status %d — a Werkzeug HTML error page where a file should be"
+                  % _bk_dlr.status_code)
+            # Positive control: a listing that WAS read still answers 404 for a name not in it.
+            _bkmod.list_game_backups = lambda *a, **k: []
+            _bk_delr2 = c.post("/api/panel/backup/game/%d/delete" % gs_id,
+                               json={"name": "an-archive.tar.gz"})
+            check("backup row: a listing that was READ still answers 'Backup not found.'",
+                  _bk_delr2.status_code == 404
+                  and "not found" in ((_bk_delr2.get_json() or {}).get("message") or "").lower(),
+                  "status %d, body %r — the route now refuses everything, so the checks above "
+                  "prove nothing" % (_bk_delr2.status_code, _bk_delr2.get_json()))
+        finally:
+            _bkmod.list_game_backups = _bk_lgb_saved
     finally:
         _bkmod.run_game_backup = _bk_saved_pb
         _bksh.run_game_backup = _bk_saved_sh
@@ -8502,6 +10463,37 @@ try:
         check("terminal page: ...it names the account the panel connects with",
               _tp_user in _tr and "the account the panel connects with" in _tr,
               "the remote's copy does not name %r as the account the session runs as" % (_tp_user,))
+
+        # ── ...and its way back must be a page that has actually read this host ──────────────
+        # "Back to host" pointed EVERY host at remote_manage, which renders remote_manage.html
+        # with no `status` — and status is what the Connection & SSH card reads. Jinja's Undefined
+        # is silently falsy, so on the PANEL host that page states Tailscale SSH is Disabled,
+        # tailscale0 is Not allowed in UFW and that disabling public SSH would lock you out,
+        # having probed nothing, with both firewall buttons disabled. server_management is the
+        # only route that calls get_server_status(), and the two checks below it pin exactly that
+        # gap. Read off the ANCHOR, not the page: base.html's nav links /server-management on
+        # every page for a superadmin, so `in html` would be true either way.
+        def _back_href(_html):
+            # The rendered SPAN, not the bare words: base.html embeds window.I18N inline, and in a
+            # non-English session that catalog carries "Back to host" as a key further up the page.
+            _i = _html.find("<span>Back to host</span>")
+            if _i < 0:
+                return ""
+            _a = _html.rfind('<a href="', 0, _i)
+            if _a < 0:
+                return ""
+            _s = _a + len('<a href="')
+            return _html[_s:_html.find('"', _s)]
+
+        check("terminal page: the panel host's way back is the route that owns its card",
+              _back_href(_tl).endswith("/server-management"),
+              "the local terminal's back link is %r — a page rendered without status"
+              % (_back_href(_tl),))
+        # POSITIVE CONTROL: a real remote still goes back to its own manage page, which IS the
+        # page that owns it — this must not have become "everything goes to /server-management".
+        check("terminal page: ...and a remote still goes back to its own manage page",
+              _back_href(_tr).endswith("/remote/%d/manage" % _tp_rem_id),
+              "the remote's back link is %r" % (_back_href(_tr),))
         # The card that links here carried the same sentence, so check it the same way.
         _c_local = _lc.get("/remote/%d/manage" % _tp_loc_id).get_data(as_text=True)
         _c_remote = _lc.get("/remote/%d/manage" % _tp_rem_id).get_data(as_text=True)
@@ -8511,6 +10503,40 @@ try:
               and _tp_user in _c_remote,
               "the card says 'the panel's own account' on a host where the account is %r"
               % (_tp_user,))
+        # ── ...and its Connection & SSH card must read the host, not an Undefined ────────────
+        # remote_manage() rendered this template without `status`. Jinja's Undefined is silently
+        # falsy, so `ts_up` and `ssh_lockdown_safe` were false on a panel host with Tailscale SSH
+        # running: "Tailscale SSH: Disabled", "Not allowed", both setup buttons greyed with "Set
+        # up Tailscale first", and "Disable (tailnet-only)" given data-lockdown="1" — which
+        # remote_manage_host.js deliberately never re-enables, so that control could not be
+        # reached on this page at all. /server-management renders the same card correctly, which
+        # is what made it look like a working gate.
+        import panel.ops.system_ops as _sso
+        _o_gss = _sso.get_server_status
+        try:
+            _sso.get_server_status = lambda force=False: {
+                "has_sudo": True, "ufw": {"enabled": True, "installed": True},
+                "tailscale_ssh": {"running": True, "enabled": True},
+                "tailscale_interface": "tailscale0", "tailscale_ufw_allowed": True,
+                "updates": {}, "uptime": "1 day"}
+            _ms_up = _lc.get("/remote/%d/manage" % _tp_loc_id).get_data(as_text=True)
+            check("host page: a panel host WITH Tailscale SSH is not told to set Tailscale up",
+                  "Set up Tailscale first" not in _ms_up and 'data-lockdown="1"' not in _ms_up
+                  and "Disable Tailscale SSH" in _ms_up,
+                  "the card still reads as if Tailscale were absent — status was not passed")
+            # POSITIVE CONTROL: a host that really has no Tailscale must still be guarded, or the
+            # check above would pass by the card simply never locking anything down.
+            _sso.get_server_status = lambda force=False: {
+                "has_sudo": True, "ufw": {"enabled": True, "installed": True},
+                "tailscale_ssh": {"running": False, "enabled": False},
+                "tailscale_interface": "", "tailscale_ufw_allowed": False,
+                "updates": {}, "uptime": "1 day"}
+            _ms_down = _lc.get("/remote/%d/manage" % _tp_loc_id).get_data(as_text=True)
+            check("host page: ...and a host without it still gets the lock-out guard",
+                  "Set up Tailscale first" in _ms_down and 'data-lockdown="1"' in _ms_down,
+                  "the guard no longer fires for a host with no way back in")
+        finally:
+            _sso.get_server_status = _o_gss
     finally:
         with app.app_context():
             for _tid in (_tp_loc_id, _tp_rem_id):
@@ -8585,6 +10611,90 @@ try:
                 _row.groups = []
                 db.session.delete(_row)
                 db.session.commit()
+
+    # ── "Is the server running?" must not be the panel's answer to every failure ──────────────
+    # send_console_command documents exactly ONE failure code: rc 3 with NO_SESSION, meaning there
+    # is no tmux session to send to. Both console routes branched on `rc != 0` alone and printed
+    # that one sentence for all of them — including rc 255 from `ssh: connect to host … No route to
+    # host`, which a Tailscale/local transport RETURNS rather than raising, so the except never
+    # fired. The operator was sent to look at their game server while the panel could not reach the
+    # machine, on a page still showing that server's cached status. And the form route logged only
+    # on success, so the failed attempt left no audit row at all — the JSON sibling in
+    # server_files.py has always logged unconditionally with success=(rc == 0).
+    from panel.db.models import AuditLog as _sc_AL
+    _sc_rc = {"v": ("", "", 0)}
+    _sc_saved = _cc_mod.send_console_command
+    try:
+        _cc_mod.send_console_command = (lambda remote, short, cmd, timeout=10, selfname=None:
+                                        _sc_rc["v"])
+
+        def _sc_post(rc, err):
+            """POST the detail page's command box and hand back (page html, new audit rows)."""
+            _sc_rc["v"] = ("", err, rc)
+            with app.app_context():
+                _before = _sc_AL.query.filter_by(action="send_command").count()
+            _h = _lc.post("/server/%d/command" % gs_id, data={"command": "changelevel de_dust2"},
+                          follow_redirects=True).get_data(as_text=True)
+            with app.app_context():
+                _rows = _sc_AL.query.filter_by(action="send_command").order_by(
+                    _sc_AL.id.desc()).limit(1).all()
+                _added = _sc_AL.query.filter_by(action="send_command").count() - _before
+            return _h, _added, (_rows[0] if _rows else None)
+
+        _h3, _n3, _r3 = _sc_post(3, "NO_SESSION")
+        check("console send: rc 3 is the one case that means 'that server isn't running'",
+              "no console session to send to" in _h3,
+              "the page does not say the server is stopped")
+        _h255, _n255, _r255 = _sc_post(255, "ssh: connect to host gmod1 port 22: No route to host")
+        check("console send: an unreachable HOST is not reported as a stopped game server",
+              "Is the server running" not in _h255
+              and "could not run that on the host" in _h255,
+              "the page still blames the game server for a host the panel never reached")
+        check("console send: ...and it surfaces what the host actually said",
+              "No route to host" in _h255, "the ssh error never reaches the operator")
+        check("console send: a failed attempt is audited, not silently dropped",
+              _n255 == 1 and _r255 is not None and _r255.success is False,
+              "rows added=%d success=%r — the form route used to log only on success"
+              % (_n255, getattr(_r255, "success", None)))
+        # Positive control: the ordinary send still works, and still logs a success.
+        _h0, _n0, _r0 = _sc_post(0, "")
+        check("console send: ...while a command that went through still reports and logs success",
+              "Command sent" in _h0 and _n0 == 1 and _r0 is not None and _r0.success is True,
+              "rows added=%d success=%r" % (_n0, getattr(_r0, "success", None)))
+        # The JSON custom-command route answers from the same helper, so it gets the same split.
+        with app.app_context():
+            _sc_cmd = CustomCommand(name="smoke-sendfail", command_template="status",
+                                    scope_type="all", scope_value="", enabled=True,
+                                    created_by="smoke_admin")
+            db.session.add(_sc_cmd)
+            db.session.commit()
+            _sc_cmd_id = _sc_cmd.id
+        try:
+            _sc_u = "/api/server/%d/custom-command/%d" % (gs_id, _sc_cmd_id)
+            _sc_rc["v"] = ("", "ssh: connect to host gmod1 port 22: No route to host", 255)
+            _sc_j = (_lc.post(_sc_u, json={}).get_json() or {})
+            check("custom command: an unreachable host is not 'Is the server running?' either",
+                  "Is the server running" not in (_sc_j.get("message") or "")
+                  and "could not run that on the host" in (_sc_j.get("message") or ""),
+                  "message=%r" % (_sc_j.get("message"),))
+            _sc_rc["v"] = ("", "NO_SESSION", 3)
+            _sc_j3 = (_lc.post(_sc_u, json={}).get_json() or {})
+            check("custom command: ...and rc 3 still says the server is not running",
+                  "no console session to send to" in (_sc_j3.get("message") or ""),
+                  "message=%r" % (_sc_j3.get("message"),))
+            _sc_rc["v"] = ("", "", 0)
+            _sc_j0 = (_lc.post(_sc_u, json={}).get_json() or {})
+            check("custom command: ...while a successful run is unchanged (positive control)",
+                  _sc_j0.get("success") is True, "json=%r" % (_sc_j0,))
+        finally:
+            with app.app_context():
+                _row = db.session.get(CustomCommand, _sc_cmd_id)
+                if _row is not None:
+                    _row.groups = []
+                    db.session.delete(_row)
+                    db.session.commit()
+    finally:
+        _cc_mod.send_console_command = _sc_saved
 
     # ── the terminal's two audit promises, driven through a real socket ──────────────────────
     # The feature claims "a row per session opened and closed, and NEVER what was typed", and

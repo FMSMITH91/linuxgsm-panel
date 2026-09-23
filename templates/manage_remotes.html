@@ -209,7 +209,18 @@
             <select id="manage-remotes-auth_method-{{ remote.id }}" name="auth_method" class="form-select" data-action="toggleEditCreds" data-args='["@self", {{ remote.id }}]' data-on="change">
               <option value="key" {% if remote.auth_method == 'key' %}selected{% endif %}>SSH Key</option>
               <option value="password" {% if remote.auth_method == 'password' %}selected{% endif %}>Password</option>
+              {# Gated like the Add form above (line ~45), which this did not do: the panel host
+                 with no Tailscale still offered "Tailscale SSH" here, edit_remote accepts it, and
+                 the save answers "Remote '…' updated." Every command for that host then goes
+                 through `ssh 100.x.y.z`, which without tailscaled returns ("", …, -1) WITHOUT
+                 raising — so the firewall page, the backups card and ufw status read the host as
+                 reachable-but-empty rather than unreachable, and the credential that used to work
+                 has been left behind a transport that cannot run.
+                 Still shown for a remote already ON tailscale: hiding it there would make the
+                 select submit "key" and silently repoint a working host. #}
+              {% if tailscale_installed or remote.auth_method == 'tailscale' %}
               <option value="tailscale" {% if remote.auth_method == 'tailscale' %}selected{% endif %}>Tailscale SSH</option>
+              {% endif %}
             </select>
           </div>
           <div class="col-md-2" id="edit-cred-group-{{ remote.id }}">
