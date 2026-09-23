@@ -164,7 +164,33 @@ fi
 # PANEL_DIR, and per-user is the ordinary way to install.
 U_SUDO=""
 [ "$(id -u)" -ne 0 ] && U_SUDO="sudo"
-if [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] \
+
+# WHOSE are they? None of the three paths below is per-install — /usr/local/lib/linuxgsm-panel,
+# /etc/cron.d/lgsm-node-tools and /usr/local/bin/linuxgsm-panel-recover are one shared set for the
+# whole host. This block used to sit inside the `system` branch and was moved out to fix a
+# per-user leftover; the move was right, but it turned a root-only deletion into one that ANY
+# unprivileged user's uninstall performs against host-wide state. Two panels on one box, and
+# removing the second took the first's helper, its recovery command and its weekly cron.
+#
+# The answer is already inside the directory being deleted: install.sh writes panel.conf there
+# recording `panel_dir=`, and tools/panel-helper reads it back for exactly this purpose. Read it
+# rather than assuming.
+# A variable, so a test can point it at a fixture: the decision below is the whole of the guard,
+# and one that can only run against a real /usr/local on a real host is one nothing exercises.
+SHARED_CONF="${SHARED_CONF:-/usr/local/lib/linuxgsm-panel/panel.conf}"
+SHARED_OWNER=""
+if [ -r "${SHARED_CONF}" ]; then
+    SHARED_OWNER="$(sed -n 's/^panel_dir=//p' "${SHARED_CONF}" | head -1)"
+fi
+SHARED_MINE=1
+if [ -n "${SHARED_OWNER}" ] && [ "${SHARED_OWNER}" != "${PANEL_DIR}" ]; then
+    SHARED_MINE=0
+fi
+if [ "${SHARED_MINE}" -eq 0 ]; then
+    warn "Leaving the host-wide pieces alone — panel.conf says they belong to another install:"
+    warn "    ${SHARED_OWNER}"
+    warn "  (the helper, the recovery command and the weekly node-tools cron are shared)"
+elif [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] \
    || [ -L /usr/local/bin/linuxgsm-panel-recover ]; then
     if [ -n "${U_SUDO}" ]; then
         info "Some pieces live outside your home directory and need sudo to remove…"
@@ -178,6 +204,29 @@ if [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] \
         else
             warn "Could not remove /usr/local/lib/linuxgsm-panel — remove it by hand."
         fi
+    fi
+    # The fail2ban jail the panel installs, and its filter and whitelist. These are root-owned
+    # files OUTSIDE the panel directory (privileged.py's WRITE_TARGETS is the authoritative list),
+    # and uninstall.sh did not mention fail2ban at all — so `rm -rf "${PANEL_DIR}"` deleted
+    # data/auth.log while leaving an ENABLED jail whose `logpath` points at it. fail2ban then runs
+    # on a host that no longer has a panel, watching a file that no longer exists.
+    #
+    # This file's own header calls removing what the installer wrote outside PANEL_DIR "the
+    # point", and these were missing from the list.
+    _f2b_removed=0
+    for _f2b_f in /etc/fail2ban/jail.d/linuxgsm-panel.conf \
+                  /etc/fail2ban/filter.d/linuxgsm-panel.conf \
+                  /etc/fail2ban/jail.d/zz-panel-whitelist.local; do
+        if [ -f "${_f2b_f}" ]; then
+            ${U_SUDO} rm -f "${_f2b_f}" && _f2b_removed=1
+        fi
+    done
+    if [ "${_f2b_removed}" -eq 1 ]; then
+        # Reload so the running fail2ban stops watching a log that is about to vanish. Best
+        # effort: a host where fail2ban is not running is not an error here.
+        ${U_SUDO} fail2ban-client reload >/dev/null 2>&1 \
+            || ${U_SUDO} systemctl restart fail2ban >/dev/null 2>&1 || true
+        ok "Removed the panel's fail2ban jail, filter and whitelist (other jails left intact)"
     fi
     # A weekly ROOT cron that keeps npm + gamedig current for player queries. With the panel gone
     # it has nothing to serve, and it would otherwise keep running `npm install -g` as root every
