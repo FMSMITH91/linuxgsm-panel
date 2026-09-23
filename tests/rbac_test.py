@@ -641,6 +641,48 @@ try:
     check("escalation: ...but MAY still administer an account within their own permissions",
           _low_changed, "a legitimate reset was refused too — the guard is too broad")
 
+    # ── ...and the same door, opened with OBJECTS instead of permissions ──────────────────────
+    # Permissions were the whole test, and they are only half of what an account carries. Two
+    # delegated admins can hold the IDENTICAL permission set and be granted different hosts: the
+    # subset test passes in both directions, so either could reset the other's password, read the
+    # new one straight off the response (_form_credential returns it so the page can show it once)
+    # and sign in as them — reaching a host they were never granted. Not by acquiring a
+    # permission, but by becoming someone who has the access, which is the escalation the block
+    # above exists to close.
+    with app.app_context():
+        _peer_grp = Group(name=tag + "_peer", description="RBAC test peer (auto)", is_default=False)
+        # The SAME permissions the acting admin's group holds, so only the objects differ.
+        _peer_grp.set_permissions(list(auth.get_user_permissions(db.session.get(User, _mu_uid))))
+        _peer_other = db.session.get(GameServer, other_id)
+        if _peer_other is not None and _peer_other.remote is not None:
+            _peer_grp.servers.append(_peer_other.remote)     # a host the actor cannot reach
+        db.session.add(_peer_grp)
+        db.session.flush()
+        _peer = User(username=tag + "_peer_admin",
+                     password_hash=auth.hash_password(secrets.token_hex(16)),
+                     display_name="peer", is_superadmin=False, is_active=True)
+        _peer.groups.append(_peer_grp)
+        db.session.add(_peer)
+        db.session.commit()
+        _peer_id, _peer_hash = _peer.id, _peer.password_hash
+        _actor_now = db.session.get(User, _mu_uid)
+        _peer_now = db.session.get(User, _peer_id)
+        # The premise: permissions really are equal, so this is testing the OBJECT half alone.
+        _perms_equal = (set(auth.get_user_permissions(_peer_now))
+                        == set(auth.get_user_permissions(_actor_now)))
+        _reach_wider = not (auth.accessible_remote_ids(_peer_now)
+                            <= auth.accessible_remote_ids(_actor_now))
+    check("escalation: (premise) the peer holds equal permissions but a host the actor cannot reach",
+          _perms_equal and _reach_wider,
+          "perms_equal=%s reach_wider=%s — the check below would prove nothing"
+          % (_perms_equal, _reach_wider))
+    cmu.post("/users/%d/edit" % _peer_id,
+             data={"display_name": "peer", "is_active": "on", "reset_password": "on"})
+    with app.app_context():
+        _peer_changed = db.session.get(User, _peer_id).password_hash != _peer_hash
+    check("escalation: MANAGE_USERS cannot take over a peer who can reach hosts the actor cannot",
+          not _peer_changed, "the peer's password hash was replaced")
+
     # The same via /users/add — creating the account in the privileged group, then logging in as it
     # (the generated password is handed straight back to the caller).
     _new_name = tag + "_mu_made"
