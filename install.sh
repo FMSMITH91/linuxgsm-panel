@@ -651,6 +651,24 @@ stage_root_source() {
 # the boundary on a host that has no root-owned anything.
 install_recovery_command() {
     local link="/usr/local/bin/linuxgsm-panel-recover" stage="" target=""
+    # The origin gate belongs HERE, not at the call sites, because this is the one root-owned file
+    # an untrusted origin could still place. On the update path fetch_code has already done
+    # `git reset --hard origin/<branch>`, so HEAD — which stage_root_source reads from — is the
+    # untrusted commit by the time check_origin_trusted runs. install_root_tools self-gates and
+    # write_sudoers_grant is gated at both its call sites, so the helper, db_maintenance, the
+    # installer and the grant were all correctly withheld; this was not, and it installs root:root
+    # 0755 and points `sudo linuxgsm-panel-recover` at the result. That is precisely the attack the
+    # comment above describes, with the added sting that the operator has just been TOLD
+    # "Root-owned components … will NOT be refreshed from it".
+    #
+    # Leaving the existing command untouched is the deliberate trade, the same one
+    # install_root_tools makes: a host keeps whatever recovery command it already had rather than
+    # being handed one from a source this installer does not trust. Returning before the fallback
+    # matters too — that branch points the symlink into ${PANEL_DIR}, which is panel-writable.
+    if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then
+        warn "Leaving \`linuxgsm-panel-recover\` as it is — it would have come from an untrusted origin."
+        return 0
+    fi
     H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
     if ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null \
        && stage="$(stage_root_source recover.sh recover.sh)" \

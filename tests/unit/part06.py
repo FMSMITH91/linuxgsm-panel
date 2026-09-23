@@ -1214,13 +1214,55 @@ try:
             _su_verdicts.append("%s -> %s (want %s)" % (_url or "(unset)", _got, _want))
     check("install.sh: a checkout whose origin is not this repository is not trusted for root installs",
           not _su_verdicts, "; ".join(_su_verdicts))
-    # ...and the flag has to actually gate both root-owned steps.
+    # ...and the flag has to actually gate EVERY root-owned step.
+    #
+    # Scoped to each function's own body. This used to be `_su_txt.index(<the guard>) >
+    # _su_txt.index("install_root_tools() {")`, which asks only "does the first guard in the file
+    # appear after this function starts" — so adding the same guard to an EARLIER function made it
+    # read the wrong one and fail, and a guard deleted from install_root_tools while another
+    # existed later would have passed. Take the function body and look in that.
+    def _su_body(name):
+        i = _su_txt.index(name + "() {")
+        return _su_txt[i:_su_txt.index("\n}\n", i)]
+
+    _su_guard = 'if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then'
     check("install.sh: install_root_tools returns early when the origin is not trusted",
-          'if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then' in _su_txt
-          and _su_txt.index('if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then')
-          > _su_txt.index("install_root_tools() {"))
+          _su_guard in _su_body("install_root_tools"))
     check("install.sh: ...and the sudoers grant is not rewritten from an untrusted checkout",
           '[ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant' in _su_txt)
+    # install_recovery_command is the one root-owned file an untrusted origin could still place,
+    # and it was NOT gated. On the update path fetch_code has already `git reset --hard`-ed to the
+    # untrusted commit before check_origin_trusted runs, and this function stages recover.sh from
+    # HEAD, installs it root:root 0755 and points `sudo linuxgsm-panel-recover` at it — the exact
+    # lockout remedy the installer and README tell the operator to run, and which runs as root
+    # until recover.sh:121. The gate lives inside the function because there are three call sites.
+    check("install.sh: install_recovery_command returns early when the origin is not trusted",
+          _su_guard in _su_body("install_recovery_command"))
+
+    # ...and prove it by RUNNING the function both ways, rather than trusting the source text.
+    _su_recov = _su_between("install_recovery_command() {", "\n}\n") + "\ninstall_recovery_command\n"
+    _su_rshim = ("id() { echo 0; }\n"
+                 "install() { echo \"INSTALL $*\"; }\n"
+                 "ln() { echo \"LN $*\"; }\n"
+                 "rm() { :; }\n"
+                 "stage_root_source() { echo /tmp/staged-recover.sh; }\n")
+    _r_untrusted = _su_run(_su_recov, "HELPER_DIR=/usr/local/lib/lgsmp\n"
+                           + _su_env + "ORIGIN_TRUSTED=0\n", extra=_su_rshim)
+    check("install.sh: an untrusted origin installs NO root-owned recover.sh",
+          "INSTALL" not in _r_untrusted.stdout,
+          repr(_r_untrusted.stdout[:200]))
+    check("install.sh: ...and does not repoint the recovery symlink either",
+          "LN" not in _r_untrusted.stdout, repr(_r_untrusted.stdout[:200]))
+    check("install.sh: ...and says so, rather than failing silently",
+          "WARN" in _r_untrusted.stdout, repr(_r_untrusted.stdout[:200]))
+    # positive control: with a trusted origin it still does its job, so the checks above are
+    # measuring the gate and not a function that no longer works.
+    _r_trusted = _su_run(_su_recov, "HELPER_DIR=/usr/local/lib/lgsmp\n"
+                         + _su_env + "ORIGIN_TRUSTED=1\n", extra=_su_rshim)
+    check("install.sh: a trusted origin still installs the root-owned recover.sh",
+          "INSTALL -o root -g root -m 0755" in _r_trusted.stdout
+          and "LN -sf /usr/local/lib/lgsmp/recover.sh" in _r_trusted.stdout,
+          repr(_r_trusted.stdout[:300]))
 finally:
     _shutil.rmtree(_su_sb, ignore_errors=True)
 
