@@ -179,8 +179,13 @@ def _row_census(path):
                     _log.debug("db repair: unexpected table name in %s; not counting", path)
                     return None
                 # Still quoted, as defence in depth — the name is already known to hold no quote.
-                total += con.execute(
-                    'SELECT COUNT(*) FROM "%s"' % name).fetchone()[0]  # nosec B608  # nosemgrep - identifier validated against _SAFE_TABLE_RE above and quoted; sqlite3 executes one statement per call
+                # The suppressions sit on the lines the scanners report, and they are suppressions
+                # of a FALSE positive, not of a risk being accepted: SQLite has no parameter
+                # binding for identifiers, `name` has just been matched against _SAFE_TABLE_RE
+                # ([A-Za-z_][A-Za-z0-9_]*), and sqlite3's execute() runs exactly one statement per
+                # call, so neither a quote nor a statement separator can reach the query.
+                _count_sql = 'SELECT COUNT(*) FROM "%s"' % name  # nosec B608  # nosemgrep - validated identifier
+                total += con.execute(_count_sql).fetchone()[0]  # nosec B608  # nosemgrep - validated identifier
             return total
         finally:
             con.close()
