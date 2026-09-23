@@ -2607,8 +2607,19 @@ def do_f2b_log_lines(args, content):
                     first = line.split(" ", 1)[0]
                     if first >= cutoff and F2B_EVENT_RE.search(line):
                         out.append(line.rstrip("\n"))
-        except OSError:
+        except FileNotFoundError:
             continue          # a rotated file that vanished mid-read; the others still count
+        except OSError as e:
+            # Anything ELSE — a permission error, a truncated or corrupt .gz (gzip.BadGzipFile is
+            # an OSError) — means this verb did not read what it was asked to read, and a PARTIAL
+            # tally is not a smaller true answer: it is a wrong one. The callers
+            # (system_ops.fail2ban_top_ips, hosts.remote_fail2ban_top_ips) both answer None on a
+            # non-zero rc precisely so an unreadable log cannot be mistaken for a quiet one, and
+            # returning 0 here defeated that guard from the inside. This used to be a bare
+            # `except OSError: continue`, which is the same defect as an empty read believed as
+            # fact — the handler turned "I could not look" into "there was nothing there".
+            sys.stderr.write("could not read %s: %s\n" % (path, e))
+            return 1
     sys.stdout.write("\n".join(out))
     return 0
 
