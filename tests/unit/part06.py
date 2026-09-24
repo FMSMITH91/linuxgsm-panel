@@ -1087,21 +1087,27 @@ try:
     _rs_git("add", "-A", cwd=_rs_up)
     _rs_git("commit", "-qm", "upstream", cwd=_rs_up)
 
-    def _rs_case(name, tamper, roots=False):
+    def _rs_case(name, tamper, roots=False, src=None, panel_user=None, script=None, seed=None):
         """Clone upstream as 'the panel's checkout', tamper with it, stage as 'root'."""
         d = os.path.join(_rs_sb, name)
         panel, helper = os.path.join(d, "panel"), os.path.join(d, "helper")
         os.makedirs(helper)
+        if seed:
+            seed(os.path.join(helper, ".source.git"))
         _rs_git("clone", "-q", "--no-hardlinks", _rs_up, panel)
         for _k, _v in (("user.email", "t@example.invalid"), ("user.name", "t"),
                        ("commit.gpgsign", "false")):
             _rs_git("config", _k, _v, cwd=panel)
         tamper(panel)
-        body = ("id() { [ \"${1:-}\" = -u ] && echo 0 || command id \"$@\"; }\n"
+        # Only a BARE `id -u` is root: `id -u <panel user>` must still name that user.
+        body = ("id() { [ \"$#\" -eq 1 ] && [ \"$1\" = -u ] && echo 0 || command id \"$@\"; }\n"
                 "sudo() { [ \"$1\" = -u ] && shift 2; \"$@\"; }\n"
                 "warn() { echo \"WARN $*\"; }\n"
                 "H_SUDO=''\nPANEL_DIR=%s\nHELPER_DIR=%s\nREPO_URL=%s\nDEFAULT_BRANCH=main\n"
                 % (_rs_q(panel), _rs_q(helper), _rs_q("file://" + _rs_up))
+                + ("SRC=%s\nPANEL_USER=%s\nSCRIPT_PATH=%s\n"
+                   % (_rs_q(src), _rs_q(panel_user),
+                      _rs_q(script or os.path.join(src, "install.sh"))) if src else "")
                 + _rs_fns
                 + ("_checkout_is_roots() { return 0; }\n" if roots else "")
                 + "_prepare_root_source\n"
@@ -1157,6 +1163,28 @@ try:
     _rs_out = _rs_case("nogit", _rs_no_git)
     check("install.sh: ...and deleting .git no longer makes root copy the tree",
           "STAGED-NOTHING" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    # The refusal is cached and shared by every caller, so it must not name files it did not try:
+    # a fresh install once asked it for recover.sh alone and was told the helper — placed seconds
+    # earlier — "was NOT refreshed".
+    check("install.sh: ...and the refusal does not claim the helper was left unrefreshed",
+          "WARN" in _rs_out and "privileged helper" not in _rs_out, _rs_out[-300:])
+    # Root's clone is kept between runs, and the panel's branch switcher changes which branch it
+    # fetches. A ref left by an earlier branch whose name is a directory of the new one (`fix`, then
+    # `fix/x`, or `main/x` then `main` as here) made git refuse the fetch on every later run, so
+    # the helper was never refreshed again.
+    def _rs_seed_branch_ref(git_dir):
+        _rs_git("init", "-q", "--bare", git_dir)
+        _rs_git("--git-dir", git_dir, "fetch", "-q", "--no-tags", "file://" + _rs_up,
+                "+refs/heads/main:refs/remotes/origin/main/x")
+    _rs_probe = os.path.join(_rs_sb, "dfprobe.git")
+    _rs_seed_branch_ref(_rs_probe)
+    check("install.sh: (premise) a ref under a branch-named directory blocks a fetch into it",
+          _rs_sub.run(["git", "--git-dir", _rs_probe, "fetch", "-q", "--no-tags",
+                       "file://" + _rs_up, "+refs/heads/main:refs/remotes/origin/main"],
+                      capture_output=True).returncode != 0)
+    _rs_out = _rs_case("branchref", lambda p: None, seed=_rs_seed_branch_ref)
+    check("install.sh: a ref left in root's clone by an earlier branch does not block the fetch",
+          "STAGED=GOOD-HELPER" in _rs_out and "Could not fetch" not in _rs_out, _rs_out[-300:])
     _rs_out = _rs_case("local", _rs_local_commit)
     check("install.sh: a HEAD that is not on upstream's branch is refused, and says so",
           "STAGED-NOTHING" in _rs_out and "LOCAL-HELPER" not in _rs_out
@@ -1166,6 +1194,103 @@ try:
     _rs_out = _rs_case("rootowned", _rs_local_commit, roots=True)
     check("install.sh: a checkout that is entirely root's is still staged from its own HEAD",
           "STAGED=LOCAL-HELPER" in _rs_out, _rs_out[-300:])
+
+    # ...and a root UPDATE from the operator's own tree (`sudo bash install.sh` in a clone or an
+    # unpacked tarball, SRC != PANEL_DIR) stages from THAT tree. Root's clone refused it — no .git,
+    # a local or feature-branch commit, no network — so the panel code was updated while the
+    # helper, db_maintenance and the installer stayed old, and a host still on the wide grant could
+    # never be narrowed. fetch_code copies exactly that working tree into the checkout, and the
+    # operator chose it as root, so refusing it protected nothing.
+    #
+    # "The panel user" is an account that owns none of it, except where the case says otherwise.
+    import pwd as _rs_pwd
+    _rs_me = _rs_pwd.getpwuid(os.getuid()).pw_name
+    _rs_other = None
+    for _n in ("nobody", "daemon", "bin"):
+        try:
+            if _n != _rs_me:
+                _rs_pwd.getpwnam(_n)
+                _rs_other = _n
+                break
+        except KeyError:
+            continue
+    check("install.sh: (premise) there is an account to play a panel user that owns nothing here",
+          _rs_other is not None)
+
+    def _rs_srctree(name, helper_text="SRC-HELPER\n", parent=None):
+        t = os.path.join(parent or _rs_sb, name + "-src")
+        os.makedirs(os.path.join(t, "tools"))
+        for _fn in ("app.py", "install.sh"):
+            open(os.path.join(t, _fn), "w").close()
+        with open(os.path.join(t, "tools", "panel-helper"), "w") as f:
+            f.write(helper_text)
+        return t
+
+    _rs_out = _rs_case("srctree", _rs_no_git, src=_rs_srctree("srctree"), panel_user=_rs_other)
+    check("install.sh: a root update from the operator's tree stages the helper from that tree",
+          "STAGED=SRC-HELPER" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    # Refusals: the panel user must not be able to nominate the tree root reads. The tree counts
+    # only while root is running ITS install.sh: the self-update verb runs the root-owned copy with
+    # its working directory in the checkout, wherever the panel user makes that lead.
+    _rs_out = _rs_case("srcself", _rs_no_git, src=_rs_srctree("srcself"), panel_user=_rs_other,
+                       script=os.path.join(_rs_sb, "srcself", "helper", "install.sh"))
+    check("install.sh: ...but not while the installer running is not that tree's own",
+          "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("srcpanel", _rs_no_git, src=_rs_srctree("srcpanel"), panel_user=_rs_me)
+    check("install.sh: ...but not from a tree the panel user owns",
+          "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
+    _rs_t = _rs_srctree("srcworld")
+    os.chmod(os.path.join(_rs_t, "tools"), 0o777)
+    _rs_out = _rs_case("srcworld", _rs_no_git, src=_rs_t, panel_user=_rs_other)
+    check("install.sh: ...nor through a directory anyone can write",
+          "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
+    # ...nor from a tree in a directory the panel user could swap it out of.
+    _rs_par = os.path.join(_rs_sb, "srcparent-dir")
+    os.makedirs(_rs_par)
+    os.chmod(_rs_par, 0o777)
+    _rs_out = _rs_case("srcparent", _rs_no_git, src=_rs_srctree("srcparent", parent=_rs_par),
+                       panel_user=_rs_other)
+    check("install.sh: ...nor from a tree whose parent directory anyone can write",
+          "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
+    # A tree the panel user owns cannot vouch for itself through links to root's own files: judged
+    # after following links, `app.py -> /etc/passwd` resolved somewhere root-owned, and the
+    # "helper" staged was /etc/passwd.
+    check("install.sh: (premise) /etc/passwd is root's, in a root-owned directory",
+          os.stat("/etc/passwd").st_uid == 0 and os.stat("/etc").st_uid == 0)
+    _rs_t = _rs_srctree("srcvouch")
+    for _rel in ("app.py", os.path.join("tools", "panel-helper")):
+        os.unlink(os.path.join(_rs_t, _rel))
+        os.symlink("/etc/passwd", os.path.join(_rs_t, _rel))
+    _rs_out = _rs_case("srcvouch", _rs_no_git, src=_rs_t, panel_user=_rs_me)
+    check("install.sh: ...nor from a panel-owned tree whose files link to root-owned ones",
+          "STAGED-NOTHING" in _rs_out and "root:" not in _rs_out, _rs_out[-300:])
+    # The checkout itself by another spelling (a symlinked home, or a link the panel user put in
+    # place of ${PANEL_DIR}) is not the operator's tree, whoever owns it.
+    _rs_t = os.path.join(_rs_sb, "srcsame-link")
+    os.symlink(os.path.join(_rs_sb, "srcsame", "panel"), _rs_t)
+    _rs_out = _rs_case("srcsame", _rs_no_git, src=_rs_t, panel_user=_rs_other)
+    check("install.sh: ...nor from the checkout itself reached by another path",
+          "STAGED-NOTHING" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    # Positive control for that: SRC is resolved, so an operator's tree reached through a link is
+    # still the operator's tree.
+    _rs_t = os.path.join(_rs_sb, "srcvia-link")
+    os.symlink(_rs_srctree("srcvia"), _rs_t)
+    _rs_out = _rs_case("srcvia", _rs_no_git, src=_rs_t, panel_user=_rs_other)
+    check("install.sh: an operator's tree reached through a link is still staged from",
+          "STAGED=SRC-HELPER" in _rs_out, _rs_out[-300:])
+    # No symlink on the way down to the file is followed: here one lands in a world-writable
+    # directory.
+    _rs_t = _rs_srctree("srclink")
+    _rs_drop = os.path.join(_rs_sb, "drop")
+    os.makedirs(_rs_drop)
+    os.chmod(_rs_drop, 0o777)
+    with open(os.path.join(_rs_drop, "helper"), "w") as _f:
+        _f.write("DROPPED-HELPER\n")
+    os.unlink(os.path.join(_rs_t, "tools", "panel-helper"))
+    os.symlink(os.path.join(_rs_drop, "helper"), os.path.join(_rs_t, "tools", "panel-helper"))
+    _rs_out = _rs_case("srclink", _rs_no_git, src=_rs_t, panel_user=_rs_other)
+    check("install.sh: ...nor through a symlink that lands somewhere the panel user can write",
+          "STAGED-NOTHING" in _rs_out and "DROPPED-HELPER" not in _rs_out, _rs_out[-300:])
 finally:
     _shutil.rmtree(_rs_sb, ignore_errors=True)
 for _src in ("HELPER_SRC", "DBM_SRC"):
@@ -2305,6 +2430,63 @@ try:
           "INSTALL -o root -g root -m 0755" in _r_trusted.stdout
           and "LN -sf /usr/local/lib/lgsmp/recover.sh" in _r_trusted.stdout,
           repr(_r_trusted.stdout[:300]))
+
+    # ...and when NO fresh copy can be staged, ROOT must still never aim the command into the
+    # checkout. It fell back to `ln -sf ${PANEL_DIR}/recover.sh` whenever staging failed, and root's
+    # own-clone staging refuses a tarball, a --src tree, a local commit and an offline host — all
+    # legitimate root installs — so `sudo linuxgsm-panel-recover` ran a panel-writable file as root,
+    # and on an update it REPOINTED a link that had been aimed at the root-owned copy.
+    _su_ppanel = os.path.join(_su_sb, "panel")
+    open(os.path.join(_su_ppanel, "recover.sh"), "w").close()
+    _su_rlib = os.path.join(_su_sb, "rootlib")
+
+    def _su_recfail(uid, helper_dir, owner="root", link_to="/elsewhere"):
+        shim = ("id() { echo %s; }\n" % uid
+                + "sudo() { \"$@\"; }\n"
+                  "install() { echo \"INSTALL $*\"; }\n"
+                  "ln() { echo \"LN $*\"; }\n"
+                  "rm() { echo \"RM $*\"; }\n"
+                  "stat() { echo %s; }\n" % owner
+                + "readlink() { echo %s; }\n" % _su_shlex.quote(link_to)
+                + "_prepare_root_source() { :; }\n"
+                  "stage_root_source() { return 1; }\n")
+        return _su_run(_su_recov, "HELPER_DIR=%s\n" % _su_shlex.quote(helper_dir)
+                       + _su_env + "ORIGIN_TRUSTED=1\n", extra=shim).stdout
+
+    _r = _su_recfail(0, "/usr/local/lib/lgsmp")
+    check("install.sh: as root, a failed staging never links the recovery command into the checkout",
+          "LN " not in _r and "WARN" in _r, repr(_r[:400]))
+    _r = _su_recfail(0, "/usr/local/lib/lgsmp", link_to=os.path.join(_su_ppanel, "recover.sh"))
+    check("install.sh: ...and unlinks one an older installer aimed at the checkout",
+          "RM -f /usr/local/bin/linuxgsm-panel-recover" in _r and "LN " not in _r, repr(_r[:400]))
+    _r = _su_recfail(0, "/usr/local/lib/lgsmp")
+    check("install.sh: ...but leaves a link that points anywhere else alone (control)",
+          "RM -f /usr/local/bin/linuxgsm-panel-recover" not in _r, repr(_r[:400]))
+    open(os.path.join(_su_rlib, "recover.sh"), "w").close()
+    _r = _su_recfail(0, _su_rlib)
+    check("install.sh: ...it keeps a root-owned copy already in place (stale, but not panel-writable)",
+          "LN -sf %s" % os.path.join(_su_rlib, "recover.sh") in _r
+          and "LN -sf %s" % os.path.join(_su_ppanel, "recover.sh") not in _r, repr(_r[:400]))
+    _r = _su_recfail(0, _su_rlib, owner="lgsmpanel")
+    check("install.sh: ...but not one the panel user owns",
+          "LN " not in _r, repr(_r[:400]))
+    # Control: the ACCOUNT that owns the checkout (a per-user install) still gets the fallback —
+    # it can rewrite what it runs anyway, and the gate above must not have removed that.
+    _r = _su_recfail(1000, "/usr/local/lib/lgsmp")
+    check("install.sh: a per-user run still falls back to the checkout's recover.sh (control)",
+          "LN -sf %s" % os.path.join(_su_ppanel, "recover.sh") in _r, repr(_r[:400]))
+
+    # The fresh ROOT path places recover.sh while the checkout is still root's, i.e. before its
+    # chown — as install_root_tools already is. After it, a tarball or --src install had no way to
+    # stage it at all. Comment lines stripped: this block's own prose names both.
+    _su_code = "\n".join(_ln for _ln in _su_txt.splitlines() if not _ln.lstrip().startswith("#"))
+    _su_fresh = _su_code[_su_code.index('info "[3/4] Registering the service'):]
+    _su_fresh = _su_fresh[:_su_fresh.index("\nelse\n")]
+    check("install.sh: the fresh root path installs the recovery command BEFORE the chown",
+          "install_recovery_command" in _su_fresh
+          and _su_fresh.index("install_recovery_command")
+          < _su_fresh.index('chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"'),
+          _su_fresh[:300])
 finally:
     _shutil.rmtree(_su_sb, ignore_errors=True)
 
@@ -4494,7 +4676,7 @@ try:
           '  case "$1" in\n'
           '    test|stat|mktemp|tee|rm) "$@" ;;\n'
           '    -u) echo "AS-USER $*" >> "$LOG" ;;\n'
-          '    env) shift; while [ "${1#*=}" != "$1" ]; do shift; done\n'
+          '    env) shift; while [ "${1#*=}" != "$1" ]; do echo "ROOT-ENV $1" >> "$LOG"; shift; done\n'
           '         echo "ROOT-EXEC $*" >> "$LOG"\n'
           '         [ "$1" = bash ] && echo "ROOT-BYTES $(cat "$2")" >> "$LOG" ;;\n'
           '    *) echo "ROOT-EXEC $*" >> "$LOG" ;;\n'
@@ -4506,9 +4688,11 @@ try:
     with open(os.path.join(_dp_runner, "install.sh"), "w") as _dp_f:
         _dp_f.write(_dp_shipped)
     _dp_stream = os.path.join(_dp_sb, "stream")
+    _dp_sha = ("0123456789abcdef" * 3)[:40]
     _dp_rr = _sh_sub.run(["bash", "-c", 'ssh() { cat > %s; }\n' % _shlex_q(_dp_stream) + _dp_run],
                          capture_output=True, text=True, cwd=_dp_runner,
-                         env=dict(os.environ, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu"))
+                         env=dict(os.environ, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu",
+                                  HEAD_SHA=_dp_sha))
     _dp_sent = open(_dp_stream).read() if os.path.exists(_dp_stream) else ""
     _dp_r = _sh_sub.run(["bash", "-c", _dp_shims + _dp_sent], capture_output=True, text=True,
                         cwd=_dp_sb, env=dict(os.environ, HOME=_dp_sb))
@@ -4528,8 +4712,70 @@ try:
           _dp_got[-400:])
     check("deploy: ...and nothing touches that checkout's git on root's behalf",
           "GIT " not in _dp_got and "AS-USER" not in _dp_got, _dp_got[-400:])
+    # ...pinned to the commit whose installer it shipped. Left to reset to origin/main's tip, this
+    # commit's installer installed a newer push's code, and that push's own deploy then found the
+    # host current and never ran its update steps.
+    check("deploy: ...and pins the code to the commit whose installer it shipped",
+          "ROOT-ENV PANEL_UPDATE_REF=%s" % _dp_sha in _dp_got.splitlines(), _dp_got[-400:])
+    # The id is spliced into the remote script, so anything but a commit id stops the job there.
+    _dp_bad = os.path.join(_dp_sb, "stream-bad")
+    _dp_rb = _sh_sub.run(["bash", "-c", 'ssh() { cat > %s; }\n' % _shlex_q(_dp_bad) + _dp_run],
+                         capture_output=True, text=True, cwd=_dp_runner,
+                         env=dict(os.environ, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu",
+                                  HEAD_SHA=_dp_sha[:39] + "\ntouch /tmp/x"))
+    check("deploy: ...and refuses a head_sha that is not a commit id, sending nothing",
+          _dp_rb.returncode != 0 and not os.path.exists(_dp_bad), _dp_rb.stderr[-200:])
 finally:
     _shutil.rmtree(_dp_sb, ignore_errors=True)
+
+# install.sh honours that pin only as an UPDATE: a pinned commit the checkout already contains
+# leaves it where it is. Deploy runs do not finish in push order — a re-run of an old commit's CI
+# deploys it last — and resetting to the pin would take the host backwards. Run the real
+# resolve_update_target against a real clone.
+_ru_fn = (_inst[_inst.index("_gitc() {"):_inst.index("\n}\n", _inst.index("_gitc() {")) + 3]
+          + _inst[_inst.index("resolve_update_target() {"):
+                  _inst.index("\n}\n", _inst.index("resolve_update_target() {")) + 3])
+_ru_sb = _tempfile.mkdtemp(prefix="updref-")
+try:
+    _ru_up, _ru_co = os.path.join(_ru_sb, "up"), os.path.join(_ru_sb, "co")
+
+    def _ru_git(*a):
+        return _sh_sub.run(["git", *a], capture_output=True, text=True).stdout.strip()
+
+    _ru_git("init", "-q", "-b", "main", _ru_up)
+    _ru_c = []
+    for _n in ("A", "B", "C"):
+        _ru_git("-C", _ru_up, "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+                "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", _n)
+        _ru_c.append(_ru_git("-C", _ru_up, "rev-parse", "HEAD"))
+    _ru_git("clone", "-q", _ru_up, _ru_co)
+
+    def _ru_target(head, ref):
+        _ru_git("-C", _ru_co, "reset", "-q", "--hard", head)
+        r = _sh_sub.run(["bash", "-c", "SRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n%s"
+                         "resolve_update_target\necho \"TARGET=${TARGET_SHA}\""
+                         % (_shlex_q(_ru_co), _ru_fn)],
+                        capture_output=True, text=True,
+                        env=dict(os.environ, PANEL_UPDATE_REF=ref))
+        return r.stdout.strip().rpartition("TARGET=")[2] or r.stderr[-200:]
+
+    _ru_a, _ru_b, _ru_cc = _ru_c
+    check("install.sh: a pinned update ref ahead of the checkout is the target (positive control)",
+          _ru_target(_ru_a, _ru_b) == _ru_b, _ru_target(_ru_a, _ru_b))
+    check("install.sh: ...with no pin, the target is the branch tip (positive control)",
+          _ru_target(_ru_a, "") == _ru_cc, _ru_target(_ru_a, ""))
+    check("install.sh: a pinned ref the checkout already contains never moves it backwards",
+          _ru_target(_ru_cc, _ru_a) == _ru_cc, _ru_target(_ru_cc, _ru_a))
+    # ...but a checkout carrying a commit upstream does not have is still reset to the pin, as it
+    # was before: "never backwards" is about newer UPSTREAM commits only.
+    _ru_git("-C", _ru_co, "reset", "-q", "--hard", _ru_cc)
+    _ru_git("-C", _ru_co, "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+            "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "local")
+    _ru_local = _ru_git("-C", _ru_co, "rev-parse", "HEAD")
+    check("install.sh: ...while a local commit on top is still reset to the pin",
+          _ru_target(_ru_local, _ru_a) == _ru_a, _ru_target(_ru_local, _ru_a))
+finally:
+    _shutil.rmtree(_ru_sb, ignore_errors=True)
 
 # ── the admin's 2FA reset must be VISIBLE, not just present ──────────────────────────────────
 # The switch lives in the Edit User modal and used to sit in a `display:none` block that JS

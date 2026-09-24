@@ -78,27 +78,44 @@ jobs:
         env:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           : "${DEPLOY_HOST:?Set repo variable DEPLOY_HOST to the tailnet host}"
           U="${DEPLOY_USER:-ubuntu}"
           [ -s install.sh ] || { echo "::error::The checkout has no install.sh to ship."; exit 1; }
+          # The commit whose installer is shipped is the commit the code is pinned to. Carried as
+          # a variable, so it has to be exactly a commit id.
+          case "${HEAD_SHA:-}" in
+              ""|*[!0-9a-f]*) echo "::error::head_sha '${HEAD_SHA:-}' is not a commit id."; exit 1 ;;
+          esac
+          [ "${#HEAD_SHA}" -eq 40 ] || { echo "::error::head_sha '${HEAD_SHA}' is not a commit id."; exit 1; }
           # Tailscale SSH handles auth (no key needed); install.sh does the safe update.
           # PANEL_NO_UPGRADE=1: the auto-deploy is a panel-only update — it must never
           # apt-upgrade or reboot the deploy host (that would drop this SSH session and fail
           # the job). OS updates on that host stay a manual/interactive decision.
-          # Run the NEWEST install.sh, not the one already on the host. The deploy executes the
+          # Run THIS COMMIT'S install.sh, not the one already on the host. The deploy executes the
           # updater, so a bug in a shipped install.sh would otherwise trap the host on that
           # broken version forever (it crashes before it can pull the fix). Taking just install.sh
           # first — the rest of the tree is still updated by install.sh under its own
           # snapshot/health-check/rollback — also means the deploy validates the CURRENT commit's
           # updater, not the previous one.
           #
+          # ...and pin the code to that same commit (PANEL_UPDATE_REF), on the system branch below,
+          # which is the one that ships an installer. Left to itself install.sh resets to
+          # origin/main's tip, so when a second push landed before this run, this commit's
+          # installer installed the NEXT commit's code — and that commit's own deploy then found the
+          # host already current and took the no-op branch, so its update steps never ran on the
+          # host. It also installed a tip whose CI had not finished. install.sh honours the pin
+          # only on origin/main, and never moves a checkout backwards to it, so a run that finishes
+          # late (a re-run of an old commit's CI) leaves a newer host where it is.
+          #
           # INSTALLER_B64 is that file from the runner's checkout, prepended to the remote script as
-          # a variable. base64 output needs no quoting, and stdin stays a single stream: under
-          # `bash -s` stdin IS the remote script.
+          # a variable, and PANEL_UPDATE_REF beside it. base64 output and a commit id need no
+          # quoting, and stdin stays a single stream: under `bash -s` stdin IS the remote script.
           {
               printf 'INSTALLER_B64=%s\n' "$(base64 -w0 install.sh)"
+              printf 'PANEL_UPDATE_REF=%s\n' "${HEAD_SHA}"
               cat <<'REMOTE'
           set -eu
           # WHERE the panel is, asked of the host instead of assumed.
@@ -134,7 +151,8 @@ jobs:
               # From /, not this account's home: install.sh treats a working directory that holds
               # app.py as the source to install FROM.
               cd /
-              sudo -n env PANEL_NO_UPGRADE=1 bash "${STAGE}/install.sh" </dev/null
+              sudo -n env PANEL_NO_UPGRADE=1 PANEL_UPDATE_REF="${PANEL_UPDATE_REF}" \
+                  bash "${STAGE}/install.sh" </dev/null
           elif [ -d "${HOME}/linuxgsm-panel" ]; then
               echo "Per-user install at ${HOME}/linuxgsm-panel"
               cd "${HOME}/linuxgsm-panel"
