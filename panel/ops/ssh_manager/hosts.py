@@ -1721,10 +1721,12 @@ def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
     # drift. It used to delete any deny for the address first, whoever wrote it (see
     # system_ops._ufw_deny_with for what that cost); a rule the panel did not write is left alone.
     from panel.ops import system_ops as _so
-    existing = (remote_ufw_blocked_ips(server) or {}).get(ip)
+    shadowed = {}
+    existing = (remote_ufw_blocked_ips(server, shadowed) or {}).get(ip)
     return _so._ufw_deny_with(
         ip, tag, existing,
-        lambda verb, args: _core.run_privileged(server, verb, args, timeout=20))
+        lambda verb, args: _core.run_privileged(server, verb, args, timeout=20),
+        shadowed.get(ip))
 
 
 def remote_ufw_undeny_ip(server, ip):
@@ -1751,10 +1753,11 @@ def remote_ufw_undeny_ip(server, ip):
     return False, ((out or err or "Unblock failed").replace("\n", " ")[:200])
 
 
-def remote_ufw_blocked_ips(server):
+def remote_ufw_blocked_ips(server, shadowed=None):
     """{ip: tag} for the host's UFW all-ports deny rules — the panel's own, tagged from the rule
     comment, and anyone else's, tagged "" (system_ops._ufw_deny_sources: skipping those made an
     operator's own block look like no block, and the reconcile replaced it and later lifted it).
+    An operator's deny below the allow rules blocks nothing, so it goes in `shadowed` instead.
 
     None when the host could not be read; see ufw_blocked_ips for why that is not {}. An INACTIVE
     firewall is None too, as it already was on the panel host: its stored rules drop nothing, and
@@ -1769,7 +1772,7 @@ def remote_ufw_blocked_ips(server):
         return None
     if not _so.ufw_status_active(out):
         return None
-    return _so._ufw_deny_sources(out)
+    return _so._ufw_deny_sources(out, shadowed)
 
 
 def remote_fail2ban_attempt_counts(server, days=7):

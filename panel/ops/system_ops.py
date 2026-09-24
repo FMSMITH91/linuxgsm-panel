@@ -1938,7 +1938,15 @@ def _ufw_deny_tag_rank(tag):
     return 2 if tag == "panel-autoblock" else 1
 
 
-def _ufw_deny_sources(status_out):
+def _ufw_shadowing_allows(allows, net):
+    """True when an inbound ALLOW/LIMIT already seen — `allows`, [(version, source network, or
+    None for Anywhere)] in rule order — matches traffic from `net`: same family, and a source that
+    covers any of it. ufw stops at the first rule a packet matches, so a deny below one of those
+    is never reached for the ports that rule lets in."""
+    return any(ver == net.version and (src is None or src.overlaps(net)) for ver, src in allows)
+
+
+def _ufw_deny_sources(status_out, shadowed=None):
     """{source: tag} for every INBOUND DENY/REJECT rule in `ufw status` output that blocks one
     address (or network) on ALL ports — the shape `ufw deny from <ip>` writes, whoever wrote it.
 
@@ -1948,21 +1956,51 @@ def _ufw_deny_sources(status_out):
     which removes a rule regardless of its comment — inserted a `panel-autoblock` rule in its place,
     and later RELEASED it once the (now firewalled, so silent) address aged below the threshold.
 
+    ...but only where ufw reaches it. ufw stops at the FIRST rule a packet matches, and a
+    hand-typed `ufw deny from <ip>` is APPENDED — below `22/tcp LIMIT`, `27015 ALLOW` and the
+    rest — so every packet to those ports meets the allow first and the deny blocks nothing.
+    Reporting it as a block made the reconcile skip the address, the offenders table badge it
+    "blocked", and the Block button answer "already blocked … (left as it is)", while the attacker
+    kept reaching SSH and every open port. So an operator's deny that sits below an inbound
+    ALLOW/LIMIT of its family covering its source is NOT a block here: it is left out, and put in
+    `shadowed` (a dict, when given) as {source: {"comment", "action"}} for _ufw_deny_with to move
+    to the top. The panel's own rules go in at position 1 and are reported wherever they sit.
+
     A single address is keyed by its canonical form; a network by its CIDR. Port-specific denies,
     interface rules and outbound rules are not blocks of an address and are left out."""
     import ipaddress
     found = {}
+    late = {}           # operator denies an allow above them shadows
+    allows = []         # (version, source network or None) of every inbound ALLOW/LIMIT so far
     for line in (status_out or "").splitlines():
         m = re.match(r"\s*\[\s*\d+\]\s*(.*)\Z", line)
         body, _, comment = (m.group(1) if m else line).partition("#")
+        v6 = "(v6)" in body
         toks = body.replace("(v6)", " ").split()
-        act = next((i for i, t in enumerate(toks) if t in ("DENY", "REJECT")), None)
-        if act is None or toks[:act] != ["Anywhere"]:
+        act = next((i for i, t in enumerate(toks) if t in ("DENY", "REJECT", "ALLOW", "LIMIT")), None)
+        if act is None:
             continue
         rest = toks[act + 1:]
-        if rest and rest[0] == "IN":
-            rest = rest[1:]
-        if len(rest) != 1:
+        direction = "IN"
+        if rest and rest[0] in ("IN", "OUT", "FWD"):
+            direction, rest = rest[0], rest[1:]
+        if direction != "IN":
+            continue
+        if toks[act] in ("ALLOW", "LIMIT"):
+            nets = []
+            for t in toks[:act] + rest:
+                try:
+                    nets.append(ipaddress.ip_network(t, strict=False))
+                except ValueError:
+                    pass
+            try:
+                src = (None if not rest or rest[0] == "Anywhere"
+                       else ipaddress.ip_network(rest[0], strict=False))
+            except ValueError:
+                src = None      # an app profile or anything unparsed: assume it covers everyone
+            allows.append((6 if v6 or any(n.version == 6 for n in nets) else 4, src))
+            continue
+        if toks[:act] != ["Anywhere"] or len(rest) != 1:
             continue
         try:
             net = ipaddress.ip_network(rest[0], strict=False)
@@ -1971,14 +2009,25 @@ def _ufw_deny_sources(status_out):
         key = str(net.network_address) if net.num_addresses == 1 else str(net)
         comment = comment.strip()
         tag = comment if re.fullmatch(r"panel-[a-z-]+", comment) else _UFW_EXTERNAL_TAG
+        if _ufw_deny_tag_rank(tag) == 0 and _ufw_shadowing_allows(allows, net):
+            late.setdefault(key, {"comment": comment, "action": toks[act]})
+            continue
         if key not in found or _ufw_deny_tag_rank(tag) < _ufw_deny_tag_rank(found[key]):
             found[key] = tag
+    for key, rule in late.items():
+        if key in found:
+            # A panel rule blocks it, but the operator's intent is there too: report theirs, so the
+            # reconcile never "releases" it (`ufw delete deny from <ip>` would take both).
+            found[key] = _UFW_EXTERNAL_TAG
+        elif shadowed is not None:
+            shadowed[key] = rule
     return found
 
 
-def ufw_blocked_ips():
+def ufw_blocked_ips(shadowed=None):
     """{ip: tag} for the panel host's UFW all-ports deny rules — the panel's own, tagged from the
-    rule comment, AND anyone else's, tagged _UFW_EXTERNAL_TAG (see _ufw_deny_sources).
+    rule comment, AND anyone else's, tagged _UFW_EXTERNAL_TAG (see _ufw_deny_sources, which also
+    fills `shadowed` with the operator denies that block nothing where they sit).
 
     None — NOT {} — when the firewall could not be read. The two are completely different answers
     and the caller that matters cannot tell them apart otherwise: _autoblock_reconcile treats
@@ -2004,25 +2053,66 @@ def ufw_blocked_ips():
     if not ufw_status_active(out):
         _log.debug("ufw_blocked_ips: UFW is inactive — its rule list is not readable")
         return None
-    return _ufw_deny_sources(out)
+    return _ufw_deny_sources(out, shadowed)
 
 
-def _ufw_deny_with(ip, tag, existing, run):
+def _ufw_raise_shadowed_deny(ip, rule, run):
+    """Move the operator's own deny for `ip` — `rule`, from _ufw_deny_sources' `shadowed` — from
+    below the rules that allow traffic, where it blocks nothing, to the top. (ok, msg).
+
+    ufw keeps one rule per match (a second `deny from <ip>` is "Skipping inserting existing
+    rule", exit 0 — a success that changed nothing), so a move is a delete and an insert. It goes
+    back in as THEIRS: their comment, cut to what the helper accepts, never a `panel-` tag, so the
+    reconcile still reads it as the operator's and never releases it. Only an IPv4 DENY is moved:
+    `ufw delete deny` does not match a REJECT, and an IPv6 rule cannot be put back at all — the
+    helper's only insert is `insert 1`, which ufw refuses for IPv6 while IPv4 rules exist."""
+    import ipaddress
+    if rule.get("action") != "DENY" or ipaddress.ip_address(ip).version != 4:
+        return False, ("%s already has a firewall rule of its own denying it, but the rule sits "
+                       "below rules that allow traffic, so it blocks nothing. The panel cannot "
+                       "move this one — put it above them on the host (`ufw prepend`)." % ip)
+    keep = re.sub(r"[^A-Za-z0-9 _.-]", "", rule.get("comment") or "")[:60].strip()
+    if re.fullmatch(r"panel-[a-z-]+", keep):
+        keep = ""       # stripping made it read as a panel tag, which the reconcile may release
+    out, err, rc = run("ufw-delete-deny-ip", [ip])
+    if rc != 0:
+        return False, ((out or err or "Could not move the existing deny rule for %s" % ip)
+                       .replace("\n", " ")[:200])
+    # The second attempt is the put-back: an insert at the top is the only write of a deny the
+    # helper has, so restoring the rule and retrying the move are the same command.
+    for _attempt in range(2):
+        out, err, rc = run("ufw-deny-ip", [ip, keep])
+        if rc == 0:
+            return True, ("Moved the existing deny rule for %s to the top — it sat below rules "
+                          "that allow traffic, so it was blocking nothing." % ip)
+    _log.warning("ufw: the deny rule for %s was removed to move it and could not be put back", ip)
+    return False, (("The existing deny rule for %s was removed to move it above the allow rules, "
+                    "and could not be put back: " % ip)
+                   + (out or err or "unknown error").replace("\n", " ")[:160])
+
+
+def _ufw_deny_with(ip, tag, existing, run, shadowed=None):
     """Block `ip` (canonical) under `tag`, given what already blocks it — the one implementation
     behind ufw_deny_ip and ssh_manager's remote_ufw_deny_ip. (ok, msg).
 
     `existing` is that address's tag from a blocked-IPs read: _UFW_EXTERNAL_TAG for a rule the
     panel did not write, a `panel-…` tag for its own, None for none — or for a read that failed,
-    which is why None only ever ADDS. `run(verb, args)` returns (out, err, rc).
+    which is why None only ever ADDS. `shadowed` is the same read's entry for an operator's deny
+    that blocks nothing where it sits: that one is moved (_ufw_raise_shadowed_deny), since a
+    plain insert would be skipped by ufw as a duplicate and report success.
+    `run(verb, args)` returns (out, err, rc).
 
     This deleted first and inserted second, every time. `ufw delete deny from <ip>` matches a rule
     whatever its comment, so the operator's own block was removed and replaced with a panel one
     the reconcile would later release; and when the insert then failed (`insert 1` is refused for
     an IPv6 address while IPv4 rules exist) the address was left with no block at all. Now a rule
-    the panel did not write is never touched, and the only delete is of the panel's own rule when
-    it is re-tagged (auto-block → manual) — put back if the new one does not go in."""
+    the panel did not write is left alone where it blocks, moved (never re-tagged) where it does
+    not, and the only other delete is of the panel's own rule when it is re-tagged (auto-block →
+    manual) — put back if the new one does not go in."""
     if existing is not None and _ufw_deny_tag_rank(existing) == 0:
         return True, "%s is already blocked by an existing firewall rule (left as it is)." % ip
+    if existing is None and shadowed:
+        return _ufw_raise_shadowed_deny(ip, shadowed, run)
     if existing == tag:
         return True, "%s is already blocked." % ip
     if existing:
@@ -2045,9 +2135,11 @@ def ufw_deny_ip(ip, tag=_UFW_BLOCK_TAG):
         return False, "Invalid IP address."
     tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
     # Separate verbs, never a "a; b" compound: _run prepends `sudo` to the FIRST command only.
-    existing = (ufw_blocked_ips() or {}).get(ip)
+    shadowed = {}
+    existing = (ufw_blocked_ips(shadowed) or {}).get(ip)
     return _ufw_deny_with(ip, tag, existing,
-                          lambda verb, args: _run_verb(verb, args, timeout=15))
+                          lambda verb, args: _run_verb(verb, args, timeout=15),
+                          shadowed.get(ip))
 
 
 def ufw_undeny_ip(ip):
