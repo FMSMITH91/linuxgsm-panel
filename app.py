@@ -69,15 +69,16 @@ from panel.core import terminal
 from panel.core.clock import utcnow
 
 import secrets
-from flask import (Flask, abort, current_app, g, jsonify, redirect, request, session, url_for)
+from flask import (Flask, abort, current_app, g, has_request_context, jsonify, redirect, request, session,
+                   url_for)
 from markupsafe import Markup
 from panel.core import i18n
 from flask_login import (current_user)
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.exceptions import HTTPException
 
-from panel.security.auth import (ALL_PERMISSIONS, client_ip, get_user_permissions, init_auth,
-    log_action, strip_legacy_superadmin_grants)
+from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, can_administer_user, client_ip,
+    get_user_permissions, init_auth, log_action, strip_legacy_superadmin_grants)
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
     encrypt_secret, is_encrypted, harden_data_permissions,
@@ -1616,7 +1617,12 @@ def register_context_processors(app):
             "install_default_layout": bool(cfg.get("default_ui_prefs")),
             "current_year": utcnow().year,
             "tailscale_url": tailscale_url,
-            "mount_prefix": app.config.get("_MOUNT_PREFIX", "/"),
+            # The prefix THIS request is served under — the SCRIPT_NAME PrefixMiddleware computed from
+            # the live tailscale_mount, which is what url_for builds from. It was the mount as it was
+            # at boot, so enabling or moving Tailscale Serve at runtime left window.MOUNT pointing at
+            # the old mount: the pages rendered, and every fetch() and the console socket missed.
+            "mount_prefix": (request.script_root if has_request_context()
+                             else app.config.get("_MOUNT_PREFIX", "/")),
             "panel_version": PANEL_VERSION,
             "panel_commit": PANEL_COMMIT,
             "panel_repo_url": PANEL_REPO_URL,

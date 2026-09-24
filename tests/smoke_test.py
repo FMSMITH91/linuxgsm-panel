@@ -249,6 +249,34 @@ try:
         code = c.get(path).status_code
         check("GET %s renders (200)" % path, code == 200, "got %d" % code)
 
+    # ── window.MOUNT follows the LIVE mount, like url_for does ────────────────────────────────
+    # It was the mount as it stood at boot, while PrefixMiddleware applies the live one to every
+    # request: after Serve was enabled (or moved) at runtime the pages rendered with correct links,
+    # and every fetch() and the console socket went to the old mount until a restart.
+    _mt_saved = load_config()
+    try:
+        _mt_cfg = dict(_mt_saved)
+        _mt_cfg["tailscale_mount"] = "/lgsm"
+        save_config(_mt_cfg)
+        _mt_r = c.get("/lgsm/account")
+        _mt_html = _mt_r.get_data(as_text=True)
+        check("mount: (control) the page is served under a mount set at runtime",
+              _mt_r.status_code == 200 and 'href="/lgsm/' in _mt_html, "got %d" % _mt_r.status_code)
+        check("mount: a mount set at runtime reaches window.MOUNT (not the boot-time one)",
+              'window.MOUNT = "/lgsm";' in _mt_html,
+              "fetch() and the socket would still use the boot-time mount")
+    finally:
+        save_config(_mt_saved)
+    check("mount: ...and with no mount, window.MOUNT is empty again",
+          'window.MOUNT = "";' in c.get("/account").get_data(as_text=True))
+    # panel.js arms its auth ping and session-expired redirect only where SIGNED_IN is true. They
+    # ran on signed-out pages too, and threw an invitee (or the first-run admin) off a half-filled
+    # form to /login with "Your session expired" — about a session that never existed.
+    check("session: (control) a page rendered for a signed-in user says so",
+          "window.SIGNED_IN = true;" in c.get("/account").get_data(as_text=True))
+    check("session: a signed-out page does not claim a session panel.js could 'expire'",
+          "window.SIGNED_IN = false;" in app.test_client().get("/login").get_data(as_text=True))
+
     # ── The notifications page must actually OFFER each channel ───────────────────────────────
     # "/notifications renders 200" passes just as well with a channel's whole card missing, which
     # is how a half-wired provider ships: the backend supports it and nobody can reach it.

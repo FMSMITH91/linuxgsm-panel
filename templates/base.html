@@ -289,7 +289,11 @@
 // Mount prefix (e.g. "/lgsm" when served behind Tailscale Serve). Every client-side
 // fetch()/socket.io URL must include it, or the request hits the site root — a
 // different app. Server-rendered links use url_for and already include it.
-window.MOUNT = "{{ mount_prefix if mount_prefix and mount_prefix != '/' else '' }}";
+window.MOUNT = {{ (mount_prefix if mount_prefix and mount_prefix != '/' else '')|tojson }};
+// Whether this page was rendered for a signed-in user. panel.js's auth ping and session-expired
+// redirect only mean something then: on /invite/<token> or the setup wizard there is no session to
+// expire, and they threw the visitor off a half-filled form to /login.
+window.SIGNED_IN = {{ 'true' if current_user.is_authenticated else 'false' }};
 
 // ── CSRF ──────────────────────────────────────────────────────────────────
 // One token per session. We inject it everywhere automatically so no individual

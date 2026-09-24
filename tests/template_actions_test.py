@@ -2434,6 +2434,24 @@ check("navigator.clipboard &&" in _bc and "execCommand" in _bc,
       "js: the backup-codes copy guards navigator.clipboard and falls back",
       "an http:// install gets a button that does nothing")
 
+# ── the auth ping only runs where there is a session to lose ──────────────────────────────────
+# panel.js loads on every page, signed out included, and its only guard was "not the login page".
+# On /invite/<token> or the setup wizard, coming back to the tab after a minute pinged, got a 401,
+# and location.replace'd the visitor to /login — form gone, Back unable to return.
+_pj_src = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+_pj_se = _pj_src[_pj_src.index("window.sessionExpired = function"):]
+_pj_se = _pj_se[:_pj_se.index("location.replace(")]
+_pj_ping = _pj_src[_pj_src.index("function _pingAuth()"):]
+_pj_ping = _pj_ping[:_pj_ping.index("window.fetch(")]
+check("_expiredHandled" in _pj_se and "_expiredHandled" in _pj_ping,
+      "session: (control) both slices are the guards this check is about", "sliced the wrong text")
+check("!_signedIn()" in _pj_se and "!_signedIn()" in _pj_ping
+      and "window.SIGNED_IN === true" in _pj_src
+      and "window.SIGNED_IN = {{ 'true' if current_user.is_authenticated else 'false' }};"
+      in (TEMPLATES / "base.html").read_text(encoding="utf-8"),
+      "session: the ping and the expired-session redirect return early on a signed-out page",
+      "an invitee is redirected to /login mid-form")
+
 # ── Settings says what Site domain actually does ──────────────────────────────────────────────
 # It said "Used for the TLS certificate and connect links." No connect link reads site_domain (they
 # use the remote's public IP or host), and the certificate is only named from it when the panel has

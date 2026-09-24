@@ -62,9 +62,15 @@ window.addEventListener('pageshow', function(ev){
   // server now answers those calls 401 + X-Auth-Required; this takes the whole tab to /login.
   function _loginPath(){ return (window.MOUNT || '') + '/login'; }
   function _onLoginPage(){ return location.pathname.indexOf(_loginPath()) === 0; }
+  // Only a page rendered for a signed-in user has a session that can expire. The login page was
+  // the one signed-out page special-cased: an invitee on /invite/<token> who switched apps for a
+  // minute came back to a ping, a 401, "Your session expired" and location.replace to /login —
+  // the form they were filling gone, and Back unable to return to it.
+  function _signedIn(){ return window.SIGNED_IN === true; }
   var _expiredHandled = false;
   window.sessionExpired = function(){
-    if (_expiredHandled || _onLoginPage()) return;   // in-flight polls all 401 at once: redirect once
+    // in-flight polls all 401 at once: redirect once
+    if (_expiredHandled || _onLoginPage() || !_signedIn()) return;
     _expiredHandled = true;
     var here = location.pathname + location.search;
     try { if (window.toast) toast('Your session expired — signing you back in.', 'warning'); } catch(e){}
@@ -96,7 +102,7 @@ window.addEventListener('pageshow', function(ev){
   // the rest. Cheap enough to also do when a long-backgrounded tab is focused again.
   var _lastPing = Date.now();
   function _pingAuth(){
-    if (_expiredHandled || _onLoginPage()) return;
+    if (_expiredHandled || _onLoginPage() || !_signedIn()) return;
     _lastPing = Date.now();
     window.fetch((window.MOUNT || '') + '/api/auth/ping', {cache: 'no-store'}).catch(function(){});
   }
