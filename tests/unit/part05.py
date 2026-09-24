@@ -224,7 +224,8 @@ def _run_watch(scripted, cfg=None):
     ran_inline = []
     saved = (_TG.notifications._cfg, _TG.notifications.telegram_get_updates,
              _TG.notifications.telegram_set_commands, _TG.decrypt_secret,
-             _TG._handle_telegram_command, _TG._tg_dispatch, _TG.time)
+             _TG._handle_telegram_command, _TG._tg_dispatch, _TG.time,
+             _TG.notifications.telegram_get_me)
     ft = _FakeTime()
     try:
         _default_cfg = {"telegram": {"enabled": True, "accept_commands": True,
@@ -240,12 +241,13 @@ def _run_watch(scripted, cfg=None):
         _TG.decrypt_secret = lambda v: v
         _TG.notifications.telegram_set_commands = \
             lambda tok, clear=False: (setcmds.append(clear), True)[1]
+        _TG.notifications.telegram_get_me = lambda tok: "PanelBot"   # never the network
         _TG._handle_telegram_command = lambda app, tok, chat, text, sender=None: ran_inline.append(text)
         _TG._tg_dispatch = lambda app, tok, chat, text, sender=None: handled.append(text)
         _TG.time = ft
 
         def _get(token, offset=None, timeout=25):
-            calls.append({"offset": offset, "timeout": timeout})
+            calls.append({"offset": offset, "timeout": timeout, "token": token})
             if not script:
                 raise _StopWatch()
             return script.pop(0)
@@ -257,7 +259,8 @@ def _run_watch(scripted, cfg=None):
     finally:
         (_TG.notifications._cfg, _TG.notifications.telegram_get_updates,
          _TG.notifications.telegram_set_commands, _TG.decrypt_secret,
-         _TG._handle_telegram_command, _TG._tg_dispatch, _TG.time) = saved
+         _TG._handle_telegram_command, _TG._tg_dispatch, _TG.time,
+         _TG.notifications.telegram_get_me) = saved
     return handled, calls, ft, setcmds, ran_inline
 
 
@@ -313,6 +316,38 @@ check("telegram watch: the '/' menu is registered while commands are on",
       False in _sc, str(_sc))
 check("telegram watch: turning commands off CLEARS the '/' menu, not leaving it advertising them",
       True in _sc, str(_sc))
+
+# 5. A NEW BOT TOKEN starts over. update_id sequences are per bot and unrelated, and offset,
+#    primed and registered were reset only when commands were switched off — so after the token was
+#    replaced the loop polled the new bot at the OLD bot's offset. Above its ids, every command was
+#    confirmed and dropped with no reply until a restart; below them, the priming read was skipped
+#    and a day of backlog replayed. And the new bot never got its '/' menu.
+_on_b = {"telegram": {"enabled": True, "accept_commands": True, "token": "tokB", "chat_id": "555"}}
+_handled, _calls, _ft, _sc, _inline = _run_watch(
+    [[{"update_id": 500, "message": {"text": "/old", "chat": {"id": "555"}}}], [], []],
+    cfg=[_on, _on, _on_b])
+_b_calls = [c for c in _calls if c["token"] == "tokB"]
+check("telegram watch: a replaced token is PRIMED afresh, not polled at the old bot's offset",
+      _b_calls[:1] == [{"offset": -1, "timeout": 0, "token": "tokB"}], str(_calls))
+check("telegram watch: ...and the new bot gets its own '/' menu",
+      _sc.count(False) == 2, str(_sc))
+check("telegram watch: ...while the old bot was polled past its backlog as before (control)",
+      {"offset": 501, "timeout": 25, "token": "tok"} in _calls, str(_calls))
+
+# 6. A command addressed to ANOTHER bot is that bot's. The '@target' was stripped and never read,
+#    so in a group where this bot sees every message, '/update@MinecraftBot' updated and restarted
+#    the panel. A command naming THIS bot, or none, still runs.
+_at = [{"update_id": 60, "message": {"text": "/update@MinecraftBot", "chat": {"id": "555"}}},
+       {"update_id": 61, "message": {"text": "/status@panelbot", "chat": {"id": "555"}}},
+       {"update_id": 62, "message": {"text": "/servers", "chat": {"id": "555"}}}]
+_handled, _calls, _, _sc, _inline = _run_watch([[], _at])
+check("telegram watch: '/update@OtherBot' is not run by this bot",
+      "/update@MinecraftBot" not in _handled, str(_handled))
+check("telegram watch: ...while '/cmd@ThisBot' (any case) and a bare '/cmd' still run (control)",
+      _handled == ["/status@panelbot", "/servers"], str(_handled))
+check("telegram: an '@' naming a bot this one cannot identify yet is not assumed to be it",
+      _TG._tg_addressed_elsewhere("/stop@AnyBot x", None) is True
+      and _TG._tg_addressed_elsewhere("/stop x", None) is False)
 
 # ── The ssh_manager package must keep resolving names at CALL time ────────────────────────────
 # The whole split rests on one property: nothing inside the package binds another submodule's

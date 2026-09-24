@@ -222,7 +222,7 @@ def _valid_discord_webhook(url):
 
 # The only Bot API methods the panel calls — pinning `method` to this set makes the URL path
 # provably not user-controlled (add here to use a new one).
-_TG_METHODS = ("sendMessage", "getUpdates", "setMyCommands")
+_TG_METHODS = ("sendMessage", "getUpdates", "setMyCommands", "getMe")
 
 
 def _tg_api_url(token, method):
@@ -388,6 +388,23 @@ def telegram_get_updates(token, offset=None, timeout=25):
         return (data.get("result") or []) if data.get("ok") else None
     except (urllib.error.URLError, OSError, ValueError):
         _log.debug("telegram getUpdates failed", exc_info=True)
+        return None
+
+
+def telegram_get_me(token):
+    """This bot's own @username (getMe), or None when it could not be read. Same SSRF-safe URL
+    builder as the other Telegram calls. Never raises."""
+    url = _tg_api_url(token, "getMe")
+    if not url:
+        return None
+    req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 - https, host-literal
+            data = json.loads(resp.read(200_000).decode("utf-8", "replace"))
+        name = (data.get("result") or {}).get("username") if data.get("ok") else None
+        return str(name) if name else None
+    except (urllib.error.URLError, OSError, ValueError, AttributeError):
+        _log.debug("telegram getMe failed", exc_info=True)
         return None
 
 
