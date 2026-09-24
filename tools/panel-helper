@@ -2009,12 +2009,13 @@ def _db_repair_account(db_path):
     """The account the offline repair runs as: whoever owns the directory the database lives in.
     None when that cannot be established, and the caller then does not repair at all.
 
-    It ran as root, and nothing handed the result back. Every file repair() makes is CREATED —
-    the rebuilt database is a new file renamed over panel.db, and so is a restored backup — so a
-    repair left panel.db root:root 0600 in the panel's own data directory, and the panel, started
-    again straight afterwards, could not open its own database. Run as the directory's owner,
-    everything the repair creates is the panel's, and root no longer works inside a directory the
-    panel user controls.
+    Every file repair() makes is CREATED — the rebuilt database is a new file renamed over
+    panel.db, and so is a restored backup — so it must be created as the panel's account, or the
+    panel, started again straight afterwards, cannot open its own database. db_maintenance already
+    confines itself to that owner when it starts as root; the helper drops before exec anyway, so
+    root runs none of the script's code in a directory the panel user controls, and the boundary
+    does not rest on the script. The one thing that drop skips — db_maintenance's reclaim of files
+    an older, root-run repair left root-owned — the helper does itself (_db_repair_reclaim).
 
     lstat, not stat: that directory entry is one the panel user can replace, and a symlink it put
     there must not borrow the owner of whatever it points at — a root-owned target would hand the
