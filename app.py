@@ -2023,20 +2023,48 @@ def _sync_toggles_from_cron(gs, jobs):
     return changed
 
 # ── WebSocket Console ───────────────────────────────────
-def _socketio_cors():
-    """Origins allowed to open the console WebSocket. Explicit config wins; else,
-    once the panel has a domain (served via Tailscale Serve/nginx), lock to that
-    origin instead of "*". Falls back to "*" only for plain IP:port access, where
-    there's no fixed origin to pin to. (join_console also requires an authenticated
-    session, and the SameSite=Lax cookie stops a cross-site page carrying it.)"""
+def _same_origins(environ):
+    """The origins a page served on THIS request's host would send: scheme://Host, and the
+    X-Forwarded-Proto/-Host form a reverse proxy passes on. The same rule engineio applies when it
+    is given cors_allowed_origins=None; spelled out here because the panel also allows site_domain."""
+    scheme, host = environ.get("wsgi.url_scheme"), environ.get("HTTP_HOST")
+    if not (scheme and host):
+        return []
+    out = ["%s://%s" % (scheme, host)]
+    if "HTTP_X_FORWARDED_PROTO" in environ or "HTTP_X_FORWARDED_HOST" in environ:
+        out.append("%s://%s" % (environ.get("HTTP_X_FORWARDED_PROTO", scheme).split(",")[0].strip(),
+                                environ.get("HTTP_X_FORWARDED_HOST", host).split(",")[0].strip()))
+    return out
+
+
+def _socket_origin_allowed(origin, environ=None):
+    """Whether a browser page at `origin` may open the console/terminal socket.
+
+    Explicit config (socketio_cors_origins) wins. Otherwise a page is allowed when it is served from
+    the host this request arrived on (same-origin, port included), or from site_domain.
+
+    It was a list built once at startup: ["https://<site_domain>", "http://<site_domain>"], with no
+    port, else "*". So the default direct install — https://panel.example.com:5000 with that domain
+    typed into the wizard — sent an Origin the list did not hold, every handshake was refused, and
+    the live console and terminal never connected; a site_domain edited in Settings did nothing until
+    a restart; and with no domain, ANY page could complete the handshake. Evaluated per request now,
+    so a Settings change applies at once. (The connect gate also requires an authenticated session,
+    and the SameSite=Lax cookie stops a cross-site page carrying one.)"""
     cfg = load_config()
     explicit = cfg.get("socketio_cors_origins")
     if explicit:
-        return explicit
+        allowed = [explicit] if isinstance(explicit, str) else list(explicit)
+        return "*" in allowed or origin in allowed
+    if origin in _same_origins(environ or {}):
+        return True
     dom = (cfg.get("site_domain") or "").strip()
-    if dom:
-        return ["https://%s" % dom, "http://%s" % dom]
-    return "*"
+    return bool(dom) and origin in ("https://%s" % dom, "http://%s" % dom)
+
+
+def _socketio_cors():
+    """What SocketIO(cors_allowed_origins=...) is given: the per-request check above. engineio calls
+    it as (origin, environ) for every request that carries an Origin header."""
+    return _socket_origin_allowed
 
 def _os_updates_for(remote):
     """One host's check result dict, or None if it could not be checked.

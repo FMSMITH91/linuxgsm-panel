@@ -336,7 +336,7 @@
   "Use a {} placeholder once, where the operator fills in a value. A command with no placeholder is one-click.": "Utilisez un espace réservé {} une seule fois, là où l'opérateur saisit une valeur. Une commande sans espace réservé se lance en un clic.",
   "Use sudo": "Utiliser sudo",
   "Use sudo for commands": "Utiliser sudo pour les commandes",
-  "Used for the TLS certificate and connect links.": "Utilisé pour le certificat TLS et les liens de connexion.",
+  "The name on the self-signed certificate the panel creates when it has none (an existing certificate is not reissued), and a browser origin allowed to open the live console and terminal.": "Le nom du certificat auto-signé que le panneau crée lorsqu'il n'en a pas (un certificat existant n'est pas réémis), et une origine de navigateur autorisée à ouvrir la console en direct et le terminal.",
   "User": "Utilisateur",
   "User Management": "Gestion des utilisateurs",
   "Username": "Nom d'utilisateur",

@@ -2434,6 +2434,21 @@ check("navigator.clipboard &&" in _bc and "execCommand" in _bc,
       "js: the backup-codes copy guards navigator.clipboard and falls back",
       "an http:// install gets a button that does nothing")
 
+# ── Settings says what Site domain actually does ──────────────────────────────────────────────
+# It said "Used for the TLS certificate and connect links." No connect link reads site_domain (they
+# use the remote's public IP or host), and the certificate is only named from it when the panel has
+# none — a changed value never reaches the existing 10-year cert. The one place it matters, the
+# console socket's allowed origins, went unmentioned.
+_st = (TEMPLATES / "settings.html").read_text(encoding="utf-8")
+_st_help = _st[_st.index('name="site_domain"'):]
+_st_help = _st_help[:_st_help.index("</div>")]
+check('<div class="small text-secondary mt-1">' in _st_help,
+      "settings: (control) the Site domain help is where this check is looking",
+      "sliced the wrong text — the check below proves nothing")
+check("connect links" not in _st_help and "not reissued" in _st_help,
+      "settings: Site domain's help no longer claims connect links, and says the cert is not reissued",
+      "the copy promises effects the setting does not have")
+
 # ── a Jinja comment is invisible to the browser and NOT to the HTML scanner ───────────────────
 # CodeQL parses the template as HTML, comments included, so prose describing a Flask route as
 # "/remote/<local id>/manage" is read as a start tag `local` carrying a valueless `id` attribute

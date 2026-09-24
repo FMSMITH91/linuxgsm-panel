@@ -12282,21 +12282,44 @@ try:
     check("cookie: ...and is not readable from JavaScript",
           app.config.get("SESSION_COOKIE_HTTPONLY") is True,
           "SESSION_COOKIE_HTTPONLY is %r" % (app.config.get("SESSION_COOKIE_HTTPONLY"),))
-    # ...and the socket's origin list is only permissive when there is genuinely no origin to pin.
-    from app import _socketio_cors as _sio_cors
+    # ...and the socket's origin check. Driven through the engineio server the app really built, so
+    # it covers the wiring too. It was a list fixed at startup — ["https://<site_domain>",
+    # "http://<site_domain>"], no port, else "*" — so the default direct install (site_domain typed
+    # into the wizard, browsed on :5000) had every handshake refused, a Settings change needed a
+    # restart, and with no domain ANY page could complete the handshake.
     from panel.core.config import load_config as _lc_cfg, save_config as _sc_cfg
+    _eio = app.socketio.server.eio
+
+    def _sio_ok(origin, scheme="https", host="panel.example.com:5000", **extra):
+        _env = dict({"wsgi.url_scheme": scheme, "HTTP_HOST": host, "HTTP_ORIGIN": origin}, **extra)
+        return _eio._cors_allowed_origins(_env) in (None, [origin])
+
     _cfg_before = _lc_cfg()
     try:
-        _sc_cfg(dict(_cfg_before, site_domain="panel.example.ts.net",
-                     socketio_cors_origins=None))
-        _pinned = _sio_cors()
-        check("socket: with a domain configured the origin list is pinned to it, not '*'",
-              _pinned != "*" and any("panel.example.ts.net" in o for o in (_pinned or [])),
-              "answered %r — a wildcard lets any page complete the handshake, leaving the session "
-              "cookie as the only thing between a visited page and a shell" % (_pinned,))
+        _sc_cfg(dict(_cfg_before, site_domain="panel.example.com", socketio_cors_origins=None))
+        check("socket: a page on the host:port the panel is reached on may connect (site_domain set)",
+              _sio_ok("https://panel.example.com:5000"),
+              "the default direct install's own origin was refused — no console, no terminal")
+        check("socket: ...and so may site_domain, reached through a proxy that rewrote Host",
+              _sio_ok("https://panel.example.com", scheme="http", host="127.0.0.1:5000"))
+        check("socket: ...and so may the origin a proxy forwards (X-Forwarded-Proto/Host)",
+              _sio_ok("https://node.example.ts.net", scheme="http", host="127.0.0.1:5000",
+                      HTTP_X_FORWARDED_PROTO="https", HTTP_X_FORWARDED_HOST="node.example.ts.net"))
+        check("socket: a page on any other origin may not",
+              not _sio_ok("https://evil.example"),
+              "a wildcard lets any page complete the handshake, leaving the session cookie as the "
+              "only thing between a visited page and a shell")
         _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=None))
-        check("socket: ...and falls back to '*' only when there is no domain to pin to",
-              _sio_cors() == "*", "answered %r with no site_domain set" % (_sio_cors(),))
+        check("socket: with no domain it is same-origin, not '*' — a foreign page is refused",
+              not _sio_ok("https://evil.example", scheme="http", host="203.0.113.5:5000"))
+        check("socket: ...while plain IP:port access still connects",
+              _sio_ok("http://203.0.113.5:5000", scheme="http", host="203.0.113.5:5000"))
+        _sc_cfg(dict(_cfg_before, site_domain="later.example", socketio_cors_origins=None))
+        check("socket: a site_domain saved at runtime applies without a restart",
+              _sio_ok("https://later.example", scheme="http", host="127.0.0.1:5000"))
+        _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=["https://only.example"]))
+        check("socket: an explicit socketio_cors_origins list still wins",
+              _sio_ok("https://only.example") and not _sio_ok("https://panel.example.com:5000"))
     finally:
         _sc_cfg(_cfg_before)
 
