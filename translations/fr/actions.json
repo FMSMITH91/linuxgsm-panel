@@ -170,5 +170,6 @@
   "Update the panel": "Mettre à jour le panneau",
   "Upload folders": "Téléverser des dossiers",
   "You'll be alerted once this server is empty (then it turns itself off)": "Vous serez alerté dès que ce serveur sera vide (puis l'alerte se désactive d'elle-même)",
-  "The panel could not read this host’s firewall, so the public port state is unknown.": "Le panneau n’a pas pu lire le pare-feu de cet hôte, l’état du port public est donc inconnu."
+  "The panel could not read this host’s firewall, so the public port state is unknown.": "Le panneau n’a pas pu lire le pare-feu de cet hôte, l’état du port public est donc inconnu.",
+  "UFW is not active on this host, so no firewall rule keeps the panel port closed — the panel is reachable on its public port.": "UFW n’est pas actif sur cet hôte : aucune règle de pare-feu ne garde le port du panneau fermé — le panneau est accessible sur son port public."
 }

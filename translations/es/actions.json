@@ -170,5 +170,6 @@
   "Update the panel": "Actualizar el panel",
   "Upload folders": "Subir carpetas",
   "You'll be alerted once this server is empty (then it turns itself off)": "Se te avisará cuando este servidor esté vacío (después se desactiva solo)",
-  "The panel could not read this host’s firewall, so the public port state is unknown.": "El panel no pudo leer el cortafuegos de este host, por lo que se desconoce el estado del puerto público."
+  "The panel could not read this host’s firewall, so the public port state is unknown.": "El panel no pudo leer el cortafuegos de este host, por lo que se desconoce el estado del puerto público.",
+  "UFW is not active on this host, so no firewall rule keeps the panel port closed — the panel is reachable on its public port.": "UFW no está activo en este host, así que ninguna regla del cortafuegos mantiene cerrado el puerto del panel: el panel es accesible en su puerto público."
 }

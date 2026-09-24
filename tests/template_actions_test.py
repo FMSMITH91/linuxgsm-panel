@@ -1963,6 +1963,28 @@ check(_rh.count("refreshSection('#conn-ssh-card', 'loadSshStatus')") == 4
       "js: every #conn-ssh-card refresh re-runs loadSshStatus",
       "%d of the call sites name the callback" % _rh.count("'loadSshStatus'"))
 
+# ── ...and it must not call an INACTIVE firewall "tailnet only" ──────────────────────────────
+# remote_public_ssh_status reads `mode` off UFW's rule list, so with UFW inactive (a fresh cloud
+# VPS, or any `ufw disable`) there are no rows and mode is "off" — which the card printed as
+# "disabled — tailnet only", marked "Disable (tailnet-only)" as the state in force and greyed it
+# out, and disabled "Close public panel port" as "already closed", about a host with sshd and the
+# panel on 0.0.0.0 and nothing in front of them. The mode means something only when active.
+_sml = _js_code_only(_js_function_body(_rh, "sshModeLabel"))
+_sml_i = [_sml.find(k) for k in ("d.installed === false", "d.active !== true", "SSH_LABELS[d.mode]")]
+check(-1 not in _sml_i and _sml_i == sorted(_sml_i)
+      and "'not filtered — UFW is inactive'" in _sml and "'not filtered — UFW is not installed'" in _sml,
+      "js: the SSH card says 'not filtered' for an inactive or absent UFW before reading its mode",
+      "positions %r — an inactive firewall is labelled from its (empty) rule list" % (_sml_i,))
+_lss = _js_code_only(_js_function_body(_rh, "loadSshStatus"))
+check("el.textContent = sshModeLabel(d)" in _lss
+      and "var enforced = !d.error && d.active === true" in _lss and "isCur = enforced &&" in _lss,
+      "js: ...and marks no public-SSH mode as current unless UFW is active",
+      "loadSshStatus labels or marks a mode without asking whether the firewall enforces it")
+_lss_i = [_lss.find(k) for k in ("d.unreachable", "d.active !== true", "d.panel_port_open === false")]
+check(-1 not in _lss_i and _lss_i == sorted(_lss_i),
+      "js: ...and never calls the panel port 'already closed' while UFW is off",
+      "positions %r — panel_port_open === false is read before the firewall's state" % (_lss_i,))
+
 # ── the update card's changelog links each commit ─────────────────────────────────────────────
 # "d456826 fix: a failed install was a dead end" told you a subject and a sha you then had to go
 # and look up by hand. The sha is now a link to the commit, at the repo THIS checkout tracks (a
