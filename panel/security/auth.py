@@ -1054,7 +1054,12 @@ def client_ip():
         xr = _ip_or_none(request.headers.get("X-Real-IP"))
         if xr:
             return xr
-    return remote
+    # The fallthrough is held to the same rule. Behind trust_proxy, ProxyFix has already copied the
+    # last X-Forwarded-For hop into remote_addr WITHOUT parsing it, so when a proxy passes a
+    # client's header through unappended, the "bogus-<n>" the branches above refused came straight
+    # back here as the key: a fresh throttle bucket per attempt. An unparseable value falls back to
+    # the socket peer that really connected (the proxy), which is an address and one bucket.
+    return _ip_or_none(remote) or _ip_or_none(peer) or remote
 
 
 def session_fingerprint():

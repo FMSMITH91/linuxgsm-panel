@@ -4102,6 +4102,15 @@ eq("client_ip: a direct connection ignores both headers",
 eq("client_ip: behind a declared proxy, the header the proxy sets wins over the rewritten peer",
    _ip_for({"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "100.64.0.5"},
            remote="9.9.9.9", trust_proxy=True, proxy_fix_orig="127.0.0.1"), "100.64.0.5")
+# ...and the FALLTHROUGH is held to the same rule. A proxy that passes the client's header through
+# unappended leaves ProxyFix copying "bogus-<n>" into remote_addr unparsed; both branches above
+# refused it, and `return remote` handed it straight back as the key — a fresh bucket per attempt.
+eq("client_ip: behind ProxyFix, a non-address hop does not come back via remote_addr",
+   _ip_for({"X-Forwarded-For": "bogus-7"}, remote="bogus-7", trust_proxy=True,
+           proxy_fix_orig="10.0.0.5"), "10.0.0.5")
+eq("client_ip: (control) ...while a real address in that same position is still the client",
+   _ip_for({"X-Forwarded-For": "198.51.100.7"}, remote="198.51.100.7", trust_proxy=True,
+           proxy_fix_orig="10.0.0.5"), "198.51.100.7")
 eq("client_ip: a NON-root loopback caller's headers are ignored (a local account, not Serve)",
    _ip_for({"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "100.64.0.5"}, root_peer=False),
    "127.0.0.1")
