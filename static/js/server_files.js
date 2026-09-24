@@ -190,17 +190,25 @@ function mkRow(opts){
   row.appendChild(left); row.appendChild(right);
   return row;
 }
+// curDir is committed only when the listing for the LATEST request arrives. It used to be set before
+// the fetch, so a folder that failed to open left the breadcrumb and #upload-dest naming the old
+// folder while uploads went to the new one, and two overlapping clicks could paint folder A's rows
+// (with A's names turned into delete paths) under folder B's breadcrumb. `want` is this call's own
+// path, and a response that is no longer the latest request is dropped.
+var _browseSeq = 0;
 function browse(path){
-  curDir = path||'';
-  fetch(MOUNT+'/api/server/'+serverId+'/browse?path='+encodeURIComponent(curDir)).then(r=>r.json()).then(d=>{
+  var want = path||'', seq = ++_browseSeq;
+  fetch(MOUNT+'/api/server/'+serverId+'/browse?path='+encodeURIComponent(want)).then(r=>r.json()).then(d=>{
+    if(seq !== _browseSeq) return;   // a later browse() owns the list now
     var l=document.getElementById('file-list'); l.innerHTML='';
     if(d.error){ l.innerHTML='<div class="text-danger small p-2">'+esc(d.error)+'</div>'; return; }  // nosemgrep
+    curDir = want;
     renderBreadcrumb();
-    if(curDir){
-      l.appendChild(mkRow({name:'..', path:curDir.split('/').slice(0,-1).join('/'), type:'up', icon:'<i class="bi bi-arrow-90deg-up text-secondary"></i>'}));
+    if(want){
+      l.appendChild(mkRow({name:'..', path:want.split('/').slice(0,-1).join('/'), type:'up', icon:'<i class="bi bi-arrow-90deg-up text-secondary"></i>'}));
     }
     (d.entries||[]).forEach(function(e){
-      var p = curDir? curDir+'/'+e.name : e.name;
+      var p = want? want+'/'+e.name : e.name;
       l.appendChild(mkRow({
         name:e.name, path:p, type:e.is_dir?'dir':'file', deletable:true, protected:e.protected,
         size: e.is_dir?null:e.size,
@@ -335,12 +343,12 @@ function _cmpLine(label, sizeText, whenText, muted){
 }
 // The overwrite prompt: one block per colliding name, each showing the file already on the server
 // against the one being uploaded, with a checkbox to replace it.
-function _conflictNode(conflicts, otherCount){
+function _conflictNode(conflicts, otherCount, base){
   var wrap=document.createElement('div');
   var intro=document.createElement('p'); intro.className='mb-2 small';
   intro.textContent = (conflicts.length===1
-      ? 'This file already exists in \u201c'+(curDir||'home')+'\u201d.'
-      : conflicts.length+' of these files already exist in \u201c'+(curDir||'home')+'\u201d.')
+      ? 'This file already exists in \u201c'+(base||'home')+'\u201d.'
+      : conflicts.length+' of these files already exist in \u201c'+(base||'home')+'\u201d.')
     + ' Tick the ones to replace \u2014 anything unticked is skipped.';
   wrap.appendChild(intro);
   conflicts.forEach(function(c, idx){
@@ -442,14 +450,20 @@ function _uploadStatus(text, cls){
 // per-file conflict dialog (it shows each clash's size and date, which is worth keeping); a set
 // with folders in it gets one summary dialog instead, because pre-checking every subdirectory
 // would be a round trip per directory and the server refuses individual clashes anyway.
-function uploadEntries(list){
+//
+// `base` is the folder the files were dropped INTO, captured once by whoever started the upload
+// and carried through to every request (see _doUpload). Reading the live curDir instead sent the
+// later files of a batch into whatever folder the user had browsed to meanwhile, with the
+// overwrite ticks granted for the original folder.
+function uploadEntries(list, base){
+  if(base === undefined) base = curDir;
   if(!list || !list.length){
     _uploadStatus('Nothing to upload \u2014 no files in what you dropped.');
     setTimeout(function(){ _uploadStatus(''); },5000);
     return;
   }
   if(!list.some(function(e){ return !!e.dir; })){
-    uploadFiles(list.map(function(e){ return e.file; }));
+    uploadFiles(list.map(function(e){ return e.file; }), base);
     return;
   }
   var tops={}, bytes=0, oversize=0;
@@ -463,7 +477,7 @@ function uploadEntries(list){
   var p=document.createElement('div');
   p.className='small';
   p.textContent='Upload '+list.length+' file'+(list.length===1?'':'s')+' ('+fmtSize(bytes)+') into '
-    +(curDir||'home')+'? Subfolders are recreated on the server.';
+    +(base||'home')+'? Subfolders are recreated on the server.';
   body.appendChild(p);
   var ul=document.createElement('div');
   ul.className='font-monospace mt-2';
@@ -495,7 +509,7 @@ function uploadEntries(list){
       // document.getElementById() returns null — which read as "not ticked" and silently made
       // Replace do nothing. A detached node keeps its .checked, so the reference still answers.
       _uploadChecked = true;   // the folder path asks once instead of pre-checking each directory
-      _doUpload(list, cb.checked ? true : {});
+      _doUpload(list, cb.checked ? true : Object.create(null), base);
     }
   });
 }
@@ -518,35 +532,36 @@ function doUploadDir(ev){
 }
 window._clickUploadDir = function(){ var i=document.getElementById('upload-dir-input'); if(i) i.click(); };
 
-function uploadFiles(files){
+function uploadFiles(files, base){
   if(!files || !files.length) return;
+  if(base === undefined) base = curDir;   // captured now: see uploadEntries
   var st=document.getElementById('upload-status');
   var arr=Array.prototype.slice.call(files);
   st.textContent='Checking '+arr.length+' file(s)\u2026'; st.className='small mt-2 text-secondary';
   fetch(MOUNT+'/api/server/'+serverId+'/upload-check',{
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({path:curDir, names:arr.map(function(f){ return f.name; })})
+      body:JSON.stringify({path:base, names:arr.map(function(f){ return f.name; })})
     })
     .then(r=>r.json()).then(function(d){ _uploadChecked = d.checked !== false; return d.existing||[]; })
     // A failed check must not become a silent overwrite: fall through with no known conflicts and
     // let the server refuse (409), which surfaces as "already exists" rather than a clobbered file.
     .catch(function(){ _uploadChecked = false; return []; })
     .then(function(existing){
-      var byName={}; existing.forEach(function(e){ byName[e.name]=e; });
+      var byName=Object.create(null); existing.forEach(function(e){ byName[e.name]=e; });
       var conflicts=[];
       arr.forEach(function(f){ if(byName[f.name]) conflicts.push({file:f, entry:byName[f.name]}); });
-      if(!conflicts.length){ _doUpload(arr.map(_flat), {}); return; }
+      if(!conflicts.length){ _doUpload(arr.map(_flat), {}, base); return; }
       st.textContent=''; 
       // Held in a variable so onConfirm can query THIS node rather than the document: the overlay
       // is gone by the time it runs (see the folder dialog above), so a document-wide query found
       // nothing and every tick was discarded — the per-file Replace has never actually replaced.
-      var cnode=_conflictNode(conflicts, arr.length-conflicts.length);
+      var cnode=_conflictNode(conflicts, arr.length-conflicts.length, base);
       confirmDialog({
         title: conflicts.length===1 ? 'Replace existing file?' : 'Replace existing files?',
         icon:'exclamation-triangle', confirmClass:'btn-warning', confirmLabel:'Upload',
         bodyNode:cnode,
         onConfirm:function(){
-          var ovw={};
+          var ovw=Object.create(null);
           cnode.querySelectorAll('[data-ovw]').forEach(function(cb){
             if(cb.checked) ovw[cb.getAttribute('data-ovw')]=true;
           });
@@ -554,14 +569,16 @@ function uploadFiles(files){
           // user's answer, not a failure to report back at them.
           var send=arr.filter(function(f){ return !byName[f.name] || ovw[f.name]; });
           if(!send.length){ st.textContent='Nothing uploaded \u2014 all files skipped.'; st.className='small mt-2 text-secondary'; setTimeout(function(){ st.textContent=''; },4000); return; }
-          _doUpload(send.map(_flat), ovw);
+          _doUpload(send.map(_flat), ovw, base);
         }
       });
     });
 }
 var _uploadChecked = true;   // did the pre-flight actually reach the host?
-// `entries` are {file, dir} — dir is the file's subdirectory RELATIVE to curDir, "" for a loose
-// file. The server creates missing parents itself (upload_file mkdir -p's the target's parent), so
+// `entries` are {file, dir} — dir is the file's subdirectory RELATIVE to `base`, "" for a loose
+// file. `base` is the folder the upload started in; never read curDir in here, because the user
+// can browse elsewhere while a batch is still going. The server creates missing parents itself
+// (upload_file mkdir -p's the target's parent), so
 // a whole tree needs no directory-creation round trips of its own.
 // `ovw` is either a per-name map (the loose-file dialog ticks them individually) or the literal
 // `true` (the folder dialog asks once for the whole tree).
@@ -572,15 +589,21 @@ var _uploadChecked = true;   // did the pre-flight actually reach the host?
 // VPS, so this is meant to fill the pipe, not to flood the box.
 var UPLOAD_CONCURRENCY = 4;
 
-function _doUpload(entries, ovw){
+// Name-keyed maps (existing names, overwrite ticks) are Object.create(null) and read through this.
+// A plain {} answers for inherited names too, so a file called `constructor` or `toString` showed
+// a bogus clash and was sent with overwrite=1 even with its box unticked.
+function _ownKey(map, name){ return !!map && Object.prototype.hasOwnProperty.call(map, name) && !!map[name]; }
+
+function _doUpload(entries, ovw, base){
   var st=document.getElementById('upload-status');
   var failed=0, clashed=0, done=0, all=ovw===true;
   var total=entries.length, many=total>1, next=0, active=0, finished=false;
+  base = base||'';
 
   function report(){
     var okCount=total-failed-clashed;
     var bits=[];
-    if(okCount) bits.push('\u2713 '+okCount+' uploaded to '+(curDir||'home'));
+    if(okCount) bits.push('\u2713 '+okCount+' uploaded to '+(base||'home'));
     if(clashed) bits.push(clashed+' already existed'+(_uploadChecked?'':' (the host could not be checked first)')+' \u2014 re-drop to replace');
     if(failed) bits.push(failed+' failed');
     st.textContent=bits.join(', ');
@@ -599,9 +622,9 @@ function _doUpload(entries, ovw){
     while(active < UPLOAD_CONCURRENCY && next < total){
       (function(e){
         active++; next++;
-        var dest = e.dir ? (curDir ? curDir+'/'+e.dir : e.dir) : curDir;
+        var dest = e.dir ? (base ? base+'/'+e.dir : e.dir) : base;
         var fd=new FormData(); fd.append('file', e.file); fd.append('path', dest);
-        if(all || ovw[e.file.name]) fd.append('overwrite','1');
+        if(all || _ownKey(ovw, e.file.name)) fd.append('overwrite','1');
         fetch(MOUNT+'/api/server/'+serverId+'/upload',{method:'POST',body:fd}).then(r=>r.json())
           .then(d=>{ if(d.conflict) clashed++; else if(!d.success) failed++; })
           .catch(()=>{failed++;})
@@ -695,16 +718,17 @@ if (_crumb) _crumb.addEventListener('click', function(ev){
   card.addEventListener('drop', function(ev){
     var dt=ev.dataTransfer; if(!dt) return;
     var roots=_dropRoots(dt);          // synchronous: the items list is emptied after this tick
+    var base=curDir;                   // the folder it was dropped INTO, before a long tree walk
     if(roots.length){
       _uploadStatus('Reading what you dropped\u2026');
       var out=[];
       Promise.all(roots.map(function(r){ return _walkEntry(r, '', out); }))
-        .then(function(){ uploadEntries(out); })
+        .then(function(){ uploadEntries(out, base); })
         .catch(function(){ _uploadStatus('Could not read the dropped folder.','text-danger'); });
       return;
     }
     // No entries API (or a drag that carried plain files only) — the original path.
-    if(dt.files && dt.files.length) uploadFiles(dt.files);
+    if(dt.files && dt.files.length) uploadFiles(dt.files, base);
   });
 })();
 
@@ -847,9 +871,10 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
         a=mv(seg[0]); b=(seg.length>1)?mv(seg[1]):(sl>=0?hi:a);
         if(isNaN(a)||isNaN(b)) return null;
       }
-      if(names===NM_DOW){ if(a===7)a=0; if(b===7)b=0; }
+      // Weekday 7 is Sunday, as 0 is. It is folded AFTER the range is expanded: folding the ends
+      // first turned the valid '1-7' and '5-7' into 1-0 and 5-0 ("invalid"), and '0-7' into Sunday.
       if(a>b || a<lo || b>hi) return null;
-      for(var v=a; v<=b; v+=step) out.add(v);
+      for(var v=a; v<=b; v+=step) out.add(names===NM_DOW && v===7 ? 0 : v);
     }
     return out;
   }
@@ -871,7 +896,9 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
     }
     var q=[];
     if(domR!=='*') q.push('on day-of-month '+joinList(toArr(sets.dom),String));
-    if(dowR!=='*'){ var dw=toArr(sets.dow); q.push((domR!=='*'?'and on ':'on ')+(contiguous(dw)?DOW[dw[0]]+'–'+DOW[dw[dw.length-1]]:joinList(dw,function(x){return DOW[x];}))); }
+    // Both day fields restricted: cron runs on EITHER ('or on'). One of them starting with '*'
+    // ('*/2'): on days matching both ('and on') — the same rule nextRuns applies.
+    if(dowR!=='*'){ var dw=toArr(sets.dow); q.push((domR!=='*'?((sets.domStar||sets.dowStar)?'and on ':'or on '):'on ')+(contiguous(dw)?DOW[dw[0]]+'–'+DOW[dw[dw.length-1]]:joinList(dw,function(x){return DOW[x];}))); }
     if(monR!=='*') q.push('in '+joinList(toArr(sets.mon),function(x){return MON[x];}));
     return time+(q.length?' '+q.join(' '):'');
   }
@@ -885,16 +912,18 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
     }
     var f=expr.split(' ');
     if(f.length!==5) return {error:'Needs 5 fields (min hour day month weekday) or an @shortcut.'};
-    var sets={min:parseField(f[0],0,59),hour:parseField(f[1],0,23),dom:parseField(f[2],1,31),mon:parseField(f[3],1,12,NM_MON),dow:parseField(f[4],0,6,NM_DOW)};
+    var sets={min:parseField(f[0],0,59),hour:parseField(f[1],0,23),dom:parseField(f[2],1,31),mon:parseField(f[3],1,12,NM_MON),dow:parseField(f[4],0,7,NM_DOW)};
     for(var kk in sets){ if(!sets[kk]||!sets[kk].size) return {error:'Invalid or out-of-range '+kk+' field.'}; }
-    sets.domStar=f[2]==='*'; sets.dowStar=f[4]==='*';
+    // cron sets DOM_STAR/DOW_STAR when the field STARTS with '*', so '*/2' counts as unrestricted
+    // for the day rule below (AND), not as a restriction (OR).
+    sets.domStar=f[2].charAt(0)==='*'; sets.dowStar=f[4].charAt(0)==='*';
     return {ok:true,text:describe(f,sets),sets:sets};
   }
   function nextRuns(sets,count){
     var res=[], d=new Date(); d.setSeconds(0,0); d.setMinutes(d.getMinutes()+1);
     for(var g=0; g<367*24*60 && res.length<count; g++){
       var domOk=sets.dom.has(d.getDate()), dowOk=sets.dow.has(d.getDay()), dayMatch;
-      if(sets.domStar&&sets.dowStar) dayMatch=true; else if(sets.domStar) dayMatch=dowOk; else if(sets.dowStar) dayMatch=domOk; else dayMatch=domOk||dowOk;
+      dayMatch = (sets.domStar||sets.dowStar) ? (domOk&&dowOk) : (domOk||dowOk);
       if(sets.min.has(d.getMinutes())&&sets.hour.has(d.getHours())&&sets.mon.has(d.getMonth()+1)&&dayMatch) res.push(new Date(d));
       d.setMinutes(d.getMinutes()+1);
     }

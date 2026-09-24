@@ -1405,6 +1405,212 @@ check("webkitGetAsEntry" in _sf and "webkitRelativePath" in _sf,
       "uploads: folders arrive by both routes — dropped (webkitGetAsEntry) and picked (webkitRelativePath)",
       "one of the two folder-upload paths is gone")
 
+# ── an upload goes to the folder it was dropped into, not wherever the user browsed since ──────
+# _doUpload built every file's destination from the live global curDir as each file was dispatched
+# (four at a time), and browse() reassigns curDir on any click. Clicking into another folder mid-
+# batch sent the rest of the files THERE, carrying the overwrite ticks granted for the original
+# folder, and the status line named the new folder. The base is now captured once by whoever starts
+# the upload and passed down. Read from the AST: comments in this file name curDir freely.
+if not esprima:
+    skip("uploads: every file of a batch goes to the folder the upload started in",
+         "esprima not installed")
+else:
+    _sfa = esprima.parseScript(_sf, {"loc": True}).toDict()
+
+    def _sfa_walk(n, fn, parents=()):
+        if isinstance(n, dict):
+            fn(n, parents)
+            for _v in n.values():
+                _sfa_walk(_v, fn, parents + (n,))
+        elif isinstance(n, list):
+            for _v in n:
+                _sfa_walk(_v, fn, parents)
+
+    def _sfa_fn(name):
+        for _n in _sfa["body"]:
+            if _n.get("type") == "FunctionDeclaration" and (_n.get("id") or {}).get("name") == name:
+                return _n
+        return None
+
+    def _sfa_idents(node, name):
+        """(node, parents) for every Identifier `name` under `node`."""
+        _out = []
+        _sfa_walk(node, lambda n, p: _out.append((n, p))
+                  if n.get("type") == "Identifier" and n.get("name") == name else None)
+        return _out
+
+    for _fname in ("_doUpload", "_conflictNode"):
+        _fnode = _sfa_fn(_fname)
+        check(_fnode is not None, "uploads: %s() was found in server_files.js" % _fname,
+              "renamed? the check below would pass by finding nothing")
+        # browse(curDir) at the end is the one legitimate read: it refreshes the folder the user
+        # is looking at NOW, which is the point.
+        _reads = [(_n, _p) for _n, _p in (_sfa_idents(_fnode, "curDir") if _fnode else [])
+                  if not (_p and _p[-1].get("type") == "CallExpression"
+                          and (_p[-1].get("callee") or {}).get("name") == "browse")]
+        check(not _reads,
+              "uploads: %s() never reads the live curDir (it is handed the base)" % _fname,
+              "curDir read at line(s) %s — the user can browse elsewhere while a batch runs"
+              % [(_n.get("loc") or {}).get("start", {}).get("line") for _n, _ in _reads])
+
+    # uploadFiles/uploadEntries read curDir ONLY as the default for a base nobody passed.
+    for _fname in ("uploadFiles", "uploadEntries"):
+        _fnode = _sfa_fn(_fname)
+        _bad = []
+        for _n, _p in (_sfa_idents(_fnode, "curDir") if _fnode else []):
+            _par = _p[-1] if _p else {}
+            if not (_par.get("type") == "AssignmentExpression" and _par.get("right") is _n
+                    and (_par.get("left") or {}).get("name") == "base"):
+                _bad.append((_n.get("loc") or {}).get("start", {}).get("line"))
+        check(_fnode is not None and not _bad,
+              "uploads: %s() reads curDir only to default an unpassed base" % _fname,
+              "found=%r, other curDir reads at line(s) %s" % (_fnode is not None, _bad))
+
+    # ...and every call hands the base on. Only the two synchronous <input> handlers may leave it
+    # to the default, because they run in the same tick as the user's choice.
+    _sfa_calls = []
+
+    def _sfa_call(n, p):
+        _c = n.get("callee") or {}
+        if n.get("type") == "CallExpression" and _c.get("type") == "Identifier" \
+                and _c.get("name") in ("_doUpload", "_conflictNode", "uploadFiles", "uploadEntries"):
+            _encl = [x for x in p if x.get("type") == "FunctionDeclaration"]
+            _sfa_calls.append((_c["name"], len(n.get("arguments") or []),
+                               (_encl[0].get("id") or {}).get("name") if _encl else None,
+                               (n.get("loc") or {}).get("start", {}).get("line")))
+    _sfa_walk(_sfa, _sfa_call)
+    _want_args = {"_doUpload": 3, "_conflictNode": 3, "uploadFiles": 2, "uploadEntries": 2}
+    _unpassed = [c for c in _sfa_calls
+                 if c[1] < _want_args[c[0]] and c[2] not in ("doUpload", "doUploadDir")]
+    check(len(_sfa_calls) >= 8, "uploads: the call scan found the upload call sites",
+          "found %d: %r" % (len(_sfa_calls), _sfa_calls))
+    check(not _unpassed, "uploads: every upload call passes the folder it started in",
+          "calls without a base: %r" % (_unpassed,))
+
+    # ── browse() commits curDir only for the latest request that succeeded ────────────────────
+    # It set curDir BEFORE the fetch. A folder that failed to open left the breadcrumb and
+    # #upload-dest on the old folder while uploads went to the new one, and a late response for
+    # folder A built its rows (delete paths included) from curDir after the user had moved to B.
+    _br = _sfa_fn("browse")
+    check(_br is not None, "browse: browse() was found in server_files.js", "renamed?")
+    _br_assign, _br_reads = [], []
+    for _n, _p in (_sfa_idents(_br, "curDir") if _br else []):
+        _par = _p[-1] if _p else {}
+        if _par.get("type") == "AssignmentExpression" and _par.get("left") is _n:
+            _br_assign.append(any(x.get("type") in ("FunctionExpression", "ArrowFunctionExpression")
+                                  for x in _p))
+        else:
+            _br_reads.append((_n.get("loc") or {}).get("start", {}).get("line"))
+    check(_br_assign and all(_br_assign),
+          "browse: curDir is assigned inside the response handler, not before the fetch",
+          "assignments nested-in-callback: %r" % (_br_assign,))
+    check(not _br_reads,
+          "browse: rows and the '..' link are built from the requested path, not the global",
+          "curDir read at line(s) %s" % _br_reads)
+    _br_guard = []
+    _sfa_walk(_br or {}, lambda n, p: _br_guard.append(1)
+              if n.get("type") == "BinaryExpression" and n.get("operator") in ("!==", "!=")
+              and "_browseSeq" in (((n.get("left") or {}).get("name"), (n.get("right") or {}).get("name")))
+              and any(x.get("type") in ("FunctionExpression", "ArrowFunctionExpression") for x in p)
+              else None)
+    check(bool(_br_guard), "browse: a response that is no longer the latest request is dropped",
+          "no _browseSeq comparison in the response handler")
+
+    # ── a file called `constructor` is not a clash, and an unticked box is not an overwrite ────
+    # byName and ovw were plain {} objects, so byName['constructor'] and ovw['toString'] found the
+    # inherited Object.prototype members: a bogus conflict, and overwrite=1 sent for a box the
+    # user had unticked. Both maps are prototype-free, and _doUpload reads ovw through _ownKey.
+    _map_inits = {}
+
+    def _sfa_decl(n, p):
+        if n.get("type") == "VariableDeclarator" and (n.get("id") or {}).get("name") in ("byName", "ovw"):
+            _i = n.get("init") or {}
+            _c = _i.get("callee") or {}
+            _map_inits.setdefault(n["id"]["name"], []).append(
+                _i.get("type") == "CallExpression"
+                and (_c.get("object") or {}).get("name") == "Object"
+                and (_c.get("property") or {}).get("name") == "create"
+                and [(a.get("type"), a.get("raw")) for a in (_i.get("arguments") or [])]
+                == [("Literal", "null")])
+    _sfa_walk(_sfa, _sfa_decl)
+    check(sorted(_map_inits) == ["byName", "ovw"] and all(all(v) for v in _map_inits.values()),
+          "uploads: the existing-name and overwrite maps have no prototype (Object.create(null))",
+          "initialisers: %r" % (_map_inits,))
+    _du = _sfa_fn("_doUpload")
+    _ovw_idx = []
+    _sfa_walk(_du or {}, lambda n, p: _ovw_idx.append((n.get("loc") or {}).get("start", {}).get("line"))
+              if n.get("type") == "MemberExpression" and n.get("computed")
+              and (n.get("object") or {}).get("name") == "ovw" else None)
+    _ok_fn = _sfa_fn("_ownKey")
+    _ok_hop = []
+    _sfa_walk(_ok_fn or {}, lambda n, p: _ok_hop.append(1)
+              if n.get("type") == "MemberExpression"
+              and (n.get("property") or {}).get("name") == "hasOwnProperty" else None)
+    check(_du is not None and not _ovw_idx and bool(_ok_hop),
+          "uploads: _doUpload asks _ownKey (hasOwnProperty) whether a name was ticked, never ovw[name]",
+          "ovw[...] at line(s) %s; _ownKey uses hasOwnProperty=%r" % (_ovw_idx, bool(_ok_hop)))
+
+    # ── the cron explainer agrees with cron about weekday 7 and about '*/n' ───────────────────
+    # parseField folded 7 to 0 on the range ENDS before checking a<=b, so the valid '1-7' and
+    # '5-7' became 1-0 and 5-0 ("Invalid or out-of-range dow field") and '0-7' became Sunday
+    # alone. And domStar/dowStar compared the whole field with '*', so '0 5 */2 * 1' previewed
+    # "every other day OR Monday" where cron (DOM_STAR is set when the field STARTS with '*')
+    # runs it on days that are both.
+    def _sfa_any_fn(name):
+        _hit = []
+        _sfa_walk(_sfa, lambda n, p: _hit.append(n) if n.get("type") == "FunctionDeclaration"
+                  and (n.get("id") or {}).get("name") == name else None)
+        return _hit[0] if _hit else None
+    _pf, _az, _nr = _sfa_any_fn("parseField"), _sfa_any_fn("analyze"), _sfa_any_fn("nextRuns")
+    check(_pf is not None and _az is not None and _nr is not None,
+          "cron explainer: parseField/analyze/nextRuns were found", "renamed?")
+    _pre_fold = []
+    _sfa_walk(_pf or {}, lambda n, p: _pre_fold.append((n.get("loc") or {}).get("start", {}).get("line"))
+              if n.get("type") == "AssignmentExpression"
+              and (n.get("left") or {}).get("name") in ("a", "b")
+              and (n.get("right") or {}).get("type") == "Literal" else None)
+    _dow_hi = []
+    _sfa_walk(_az or {}, lambda n, p: _dow_hi.append([a.get("value") for a in n["arguments"][1:3]])
+              if n.get("type") == "CallExpression" and (n.get("callee") or {}).get("name") == "parseField"
+              and (n["arguments"][-1] or {}).get("name") == "NM_DOW" else None)
+    check(not _pre_fold and _dow_hi == [[0, 7]],
+          "cron explainer: weekday 7 is accepted as a range end and folded to Sunday after expansion",
+          "range ends folded at line(s) %s; dow parsed with lo/hi %r" % (_pre_fold, _dow_hi))
+    _star = []
+
+    def _sfa_star(n, p):
+        _l = n.get("left") or {}
+        if n.get("type") == "AssignmentExpression" and (_l.get("property") or {}).get("name") in ("domStar", "dowStar"):
+            _r = n.get("right") or {}
+            _star.append(((_r.get("left") or {}).get("callee") or {}).get("property", {}).get("name"))
+    _sfa_walk(_az or {}, _sfa_star)
+    _and_rule = []
+    _sfa_walk(_nr or {}, lambda n, p: _and_rule.append(1)
+              if n.get("type") == "ConditionalExpression"
+              and (n.get("test") or {}).get("operator") == "||"
+              and (n.get("consequent") or {}).get("operator") == "&&"
+              and (n.get("alternate") or {}).get("operator") == "||" else None)
+    check(_star == ["charAt", "charAt"] and bool(_and_rule),
+          "cron explainer: a day field starting with '*' (so '*/2') uses cron's AND day rule",
+          "star tests %r; AND-when-either-starred rule found=%r" % (_star, bool(_and_rule)))
+    # ...and the sentence says the same: '0 5 1 * 1' ran on day 1 OR on Mondays while the text
+    # read "on day-of-month 1 and on Monday". The connector is chosen by the same two flags.
+    _ds = _sfa_any_fn("describe")
+    _conn = []
+
+    def _sfa_conn(n, p):
+        if n.get("type") == "ConditionalExpression":
+            _vals = sorted(str((x or {}).get("raw")) for x in (n.get("consequent"), n.get("alternate")))
+            if _vals == ["'and on '", "'or on '"]:
+                _names = []
+                _sfa_walk(n.get("test") or {}, lambda m, q: _names.append((m.get("property") or {}).get("name"))
+                          if m.get("type") == "MemberExpression" else None)
+                _conn.append(sorted(x for x in _names if x))
+    _sfa_walk(_ds or {}, _sfa_conn)
+    check(_ds is not None and _conn == [["domStar", "dowStar"]],
+          "cron explainer: two restricted day fields read 'or on', a '*'-led one 'and on'",
+          "and/or connector chosen on %r in describe()" % (_conn,))
+
 # ── dashboard: destructive actions must confirm, as the detail page has always done ────────────
 # Restart and Stop disconnect players. The server detail page confirms them; the dashboard did not,
 # which is the dangerous direction for the inconsistency to point — the dashboard is where the rows
