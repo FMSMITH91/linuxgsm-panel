@@ -1569,6 +1569,12 @@ def register_context_processors(app):
     # probed, so it is the exact signal — not a proxy like last_seen, which stays null for a host
     # that has been probed and genuinely never answered.
     app.jinja_env.globals["host_probed"] = lambda rid: rid in _monitor_state["remotes"]
+    # Whether the VIEWER may edit or delete `target` — the rule edit_user and delete_user enforce.
+    # The users page offered Edit and Delete on every row and shipped every account's email and
+    # 2FA state, including accounts (superadmins among them) the viewer can never administer.
+    app.jinja_env.globals["can_administer"] = (
+        lambda target: bool(getattr(current_user, "is_authenticated", False))
+        and can_administer_user(current_user, target))
 
     @app.context_processor
     def inject_globals():

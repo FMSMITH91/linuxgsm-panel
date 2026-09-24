@@ -35,10 +35,14 @@
       </thead>
       <tbody>
         {% for user in users %}
+        {# Controls and contact details only for accounts the viewer may administer — the same rule
+           edit_user and delete_user apply. A delegated user admin was offered Edit and Delete on
+           superadmins, and handed their emails, only for every save to be refused. #}
+        {% set may_admin = can_administer(user) %}
         <tr>
           <td><strong>{{ user.username }}</strong></td>
           <td>{{ user.display_name }}</td>
-          <td>{{ user.email_display or '—' }}</td>
+          <td>{% if may_admin %}{{ user.email_display or '—' }}{% else %}<span class="text-secondary small" title="Shown only for accounts you can administer">Hidden</span>{% endif %}</td>
           <td>
             {% for g in user.groups %}
               <span class="badge bg-secondary">{{ g.name }}</span>
@@ -62,12 +66,16 @@
           </td>
           <td class="text-secondary small">{{ user.last_login|datetime if user.last_login else 'Never' }}</td>
           <td class="text-end">
+            {% if may_admin %}
             <button class="btn btn-outline-secondary btn-sm"
                     data-action="openEditUser" data-args='[{{ user.id }}]'
                     aria-label="Edit {{ user.username }}" title="Edit {{ user.username }}">
               <i class="bi bi-pencil"></i>
             </button>
-            {% if not (user.is_superadmin and users|selectattr('is_superadmin', 'equalto', true)|list|length == 1) %}
+            {% endif %}
+            {# delete_user refuses your own account and the last superadmin, so neither gets the button. #}
+            {% if may_admin and user.id != current_user.id
+                  and not (user.is_superadmin and users|selectattr('is_superadmin', 'equalto', true)|list|length == 1) %}
             <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}" style="display:inline;"
                   class="ajax-form" data-ajax-refresh="#users-list"
                   data-confirm="Delete user “{{ user.username }}”? This can't be undone."
@@ -281,7 +289,7 @@
    ~210KB of duplicated markup in the page. The single modal below is populated from this. It lives
    INSIDE #users-list so an ajax refresh after a save keeps it current. #}
 <script type="application/json" id="users-data" nonce="{{ csp_nonce }}">
-[{% for user in users %}{"id": {{ user.id }},
+[{% for user in users if can_administer(user) %}{"id": {{ user.id }},
   "username": {{ user.username|tojson }},
   "display_name": {{ (user.display_name or '')|tojson }},
   "email": {{ (user.email_display or '')|tojson }},

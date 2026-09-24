@@ -1576,9 +1576,11 @@ try:
     # any single guard changes nothing, which is the point of having them.
     _del_tag = tag + "_del"      # from `tag`: its victim is an ACTIVE superadmin, if it survives
     with app.app_context():
+        from panel.core.config import encrypt_secret
         _victim_sa = User(username=_del_tag + "_sa",
                           password_hash=auth.hash_password(secrets.token_hex(16)),
-                          display_name="victim sa", is_superadmin=True, is_active=True)
+                          display_name="victim sa", is_superadmin=True, is_active=True,
+                          email=encrypt_secret("victim-sa@rbac.invalid"))
         _victim_ord = User(username=_del_tag + "_ord",
                            password_hash=auth.hash_password(secrets.token_hex(16)),
                            display_name="victim ord", is_superadmin=False, is_active=True)
@@ -1591,6 +1593,26 @@ try:
             return db.session.get(User, uid) is not None
 
     ca_del = client_as(admin_id)
+
+    # 0. ...and the users page does not OFFER what these refuse. It rendered Edit and Delete on
+    #    every row and put every account's email and 2FA state in #users-data, so a delegated admin
+    #    was handed superadmins' contact details and controls whose every save is refused.
+    import json as _ua_json
+    import re as _ua_re
+    _ua_html = cmu.get("/users").get_data(as_text=True)
+    _ua_m = _ua_re.search(r'id="users-data"[^>]*>(.*?)</script>', _ua_html, _ua_re.S)
+    _ua_ids = {r.get("id") for r in (_ua_json.loads(_ua_m.group(1)) if _ua_m else [])}
+    check("users page: (control) a delegated admin gets Edit and Delete for an account they may administer",
+          'data-action="openEditUser" data-args=\'[%d]\'' % _vord_id in _ua_html and ("/users/%d/delete" % _vord_id) in _ua_html
+          and _vord_id in _ua_ids, "the administerable row lost its controls")
+    check("users page: ...but neither control for a superadmin they may not",
+          'data-action="openEditUser" data-args=\'[%d]\'' % _vsa_id not in _ua_html and ("/users/%d/delete" % _vsa_id) not in _ua_html,
+          "Edit/Delete offered on an account edit_user/delete_user refuse")
+    check("users page: ...and that superadmin's email and 2FA state are not in the page data",
+          _vsa_id not in _ua_ids and "victim-sa@rbac.invalid" not in _ua_html,
+          "the page carries the email of an account the viewer cannot administer")
+    check("users page: nobody is offered Delete on their own account",
+          ("/users/%d/delete" % _mu_uid) not in _ua_html)
 
     # 1. A delegated admin must not remove a superadmin.
     cmu.post("/users/%d/delete" % _vsa_id)
