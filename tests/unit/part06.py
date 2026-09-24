@@ -2969,6 +2969,33 @@ check("codeql-alerts: the concurrency group separates a fork PR from the main ga
       and "github.event.workflow_run.head_repository.full_name" in _cqa_group
       and "github.event.workflow_run.head_branch" in _cqa_group, _cqa_group)
 
+# ── no workflow runs a remote script it did not pin, and a secret lives in one step's env ───────
+# ci.yml's coverage upload was `bash <(curl -Ls https://coverage.codacy.com/get.sh)`: unversioned,
+# unchecksummed, run on every push to main — with CODACY_PROJECT_TOKEN in the JOB env, so the
+# script, the pip install and both suites all had it. Everything else here downloads a pinned
+# release and checks its sha256. So: no `<(curl …)` and no `curl … | sh` in any workflow, and the
+# token is not in the coverage job's own env block, nor persisted in .git/config by its checkout.
+_wf_pipe = []
+_wf_files = sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml")))
+for _wf in _wf_files:
+    for _n, _l in enumerate(open(_wf, encoding="utf-8").read().splitlines(), 1):
+        if _l.lstrip().startswith("#"):
+            continue
+        if re.search(r"<\(\s*(curl|wget)\b|\b(curl|wget)\b[^#]*\|\s*(sudo\s+)?(ba|z)?sh\b", _l):
+            _wf_pipe.append("%s:%d" % (os.path.basename(_wf), _n))
+check("workflows: none pipes a downloaded script into a shell",
+      _wf_files and not _wf_pipe, "files=%d piped=%r" % (len(_wf_files), _wf_pipe))
+_ci_wf = open(os.path.join(_root, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
+_cov_job = _ci_wf[_ci_wf.index("\n  coverage:\n"):]
+_cov_env = _cov_job[_cov_job.index("\n    env:\n"):]
+_cov_env = _cov_env[:_cov_env.index("\n    steps:")]
+check("workflows: the Codacy token is not in the coverage job's env, only its upload step's",
+      "CODACY_PROJECT_TOKEN: ${{ secrets" not in _cov_env
+      and "CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}" in _cov_job
+      and "sha256sum -c" in _cov_job
+      and "persist-credentials: false" in _cov_job[:_cov_job.index("actions/setup-python")],
+      _cov_env[-200:])
+
 # ── gitleaks may not exempt a README from the secret scan ──────────────────────────────────────
 # The allowlist carried `paths = ['''README\\.md''']`. gitleaks path patterns are unanchored
 # searches, so that exempted all four READMEs outright, for placeholders the match regexes already
