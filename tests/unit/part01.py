@@ -1147,6 +1147,17 @@ try:
           _sm_cron._cron_log_command("1 h CRON[1]: (gm) CMD (a (b) c) ", "(gm) CMD ") == "a (b) c"
           and _sm_cron._cron_log_command("1 h CRON[1]: (gm) CMD (no close", "(gm) CMD ") is None,
           "")
+    # The verb prints 14 days OLDEST first and every transport keeps only the first 8 MB, so a
+    # busy host's read ends days ago: its "last run" is the last run before the cut. A read at the
+    # cap is reported as unknown, not as that stale time.
+    _crj_line = "1700000000 host CRON[9]: (gm) CMD (%s)\n" % _crj_cmd
+    _crj_out["v"] = _crj_line * (_sm_core._MAX_OUTPUT_BYTES // len(_crj_line) + 1)
+    _crj_out["v"] = _crj_out["v"][:_sm_core._MAX_OUTPUT_BYTES].strip()
+    check("cron journal: a read cut at the transport's output cap reports no (stale) last-run times",
+          _sm_cron._read_cron_run_times(NS(), "gm") == {}, "")
+    _crj_out["v"] = _crj_line * 100
+    check("cron journal: ...while a read under the cap still does (positive control)",
+          _sm_cron._read_cron_run_times(NS(), "gm") == {_crj_cmd: 1700000000}, "")
 finally:
     _sm_core.run_privileged = _crj_saved
 

@@ -322,6 +322,14 @@ def _read_cron_run_times(server, user):
     # Was `journalctl _COMM=cron … | grep -F '(<user>) CMD ' | tail -n 800` — the user name went
     # into a grep pattern running as root. The verb reads the window; the filtering is here.
     out, _, _ = _core.run_privileged(server, "journal-cron", [], timeout=12, merge_stderr=False)
+    # The verb prints 14 days OLDEST FIRST, and every transport keeps the first _MAX_OUTPUT_BYTES
+    # and discards the rest. A busy host's cron journal passes 8 MB well inside that window, so a
+    # read at the cap holds only the oldest days and "last run" would be the last run BEFORE the
+    # cut — days stale, shown as current. Such a read says nothing about when a job last ran.
+    if len((out or "").encode("utf-8", "replace")) >= _core._MAX_OUTPUT_BYTES - _JOURNAL_CAP_MARGIN:
+        _core._log.warning("cron journal read for %s reached the output cap; last-run times from "
+                           "it would be stale, so none are reported", user)
+        return {}
     marker = "(%s) CMD " % user
     # Over-long lines are skipped before anything else looks at them. The journal is the remote's
     # to write, and this runs on the request greenlet: the regex that used to pull the command out
@@ -345,6 +353,9 @@ def _read_cron_run_times(server, user):
 
 # A cron command line is a few hundred bytes; a journal line longer than this is not one.
 _MAX_CRON_LOG_LINE = 4096
+# How close to the transport's output cap a journal read may come before it counts as truncated:
+# the cut lands mid-line, and decoding and stripping move the length by a few bytes either way.
+_JOURNAL_CAP_MARGIN = 4096
 
 
 def _cron_log_command(line, marker):
