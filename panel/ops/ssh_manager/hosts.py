@@ -299,8 +299,13 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
     answer for any port where a person authenticates — SSH, RCON, a game's admin port — and the
     wrong one for gameplay traffic, where six connections in half a minute is a quiet evening.
 
-    Rules are per (port, proto), so this deletes the plain `allow` first: leaving it in place would
-    keep matching first and the limit would never be reached."""
+    ufw stops at the FIRST rule a connection matches, so a limit only works when nothing that
+    allows the port sits above it. `ufw limit N/tcp` rewrites an existing `N/tcp` allow in place.
+    A BARE `N` allow (tcp+udp — how the panel opens every game port) is a different rule to ufw:
+    it used to be left where it was, ahead of the appended limit, and this reported the port
+    limited while every connection matched the allow. That allow is now split — the other
+    protocol re-allowed with its comment, the bare rule removed — and the result is READ BACK:
+    success means the first rule for N/proto is the LIMIT."""
     try:
         port = _ufw_port_int(port)
     except (TypeError, ValueError):
@@ -310,18 +315,78 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
         # `ufw limit` takes one rule; "both" would need two and they would report separately.
         return False, "Rate limiting needs a single protocol (tcp or udp)"
     spec = "%d/%s" % (port, proto)
+    before, _, brc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
+    before = (before or "") if brc == 0 else ""
     if not limit:
-        out, err, rc = _core.run_privileged(server, "ufw-delete-limit-port", [spec], timeout=15)
+        # "Remove the rate limit", not "close the port": the LIMIT rule is what lets N/proto in,
+        # and deleting it closed a port the operator only wanted un-throttled — including the
+        # half of a game port the split below moved onto it. `ufw allow N/proto` rewrites the
+        # LIMIT in place. Only when there IS one: otherwise this would open a closed port.
+        if brc != 0:
+            return False, ("Could not read the firewall to find the rate limit on %s, so nothing "
+                           "was changed." % spec)
+        if not any(r["to"] == spec and r["action"] == "LIMIT" for r in _ufw_public_rules(before)):
+            return False, "%s has no rate limit to remove." % spec
+        out, err, rc = _core.run_privileged(server, "ufw-allow-port", [spec, ""], timeout=15)
         if rc == 0:
-            return True, "Rate limit removed from %s" % spec
+            return True, "Rate limit removed from %s (it stays open)" % spec
         return False, err or out or "Unknown error"
-    # Drop the unlimited allow so the limit rule is the one that matches. A missing rule makes ufw
-    # exit non-zero ("Could not delete non-existent rule"), which is fine and not worth reporting.
-    _core.run_privileged(server, "ufw-delete-allow-proto-port", [proto, str(port)], timeout=15)
     out, err, rc = _core.run_privileged(server, "ufw-limit-port", [spec], timeout=15)
-    if rc == 0:
-        return True, "%s is now rate limited (6 connections per 30s per address)" % spec
-    return False, err or out or "Unknown error"
+    if rc != 0:
+        return False, err or out or "Unknown error"
+    # A bare allow for this port covers BOTH protocols and matches ahead of the limit. Keep the
+    # other protocol open under the same comment, THEN drop the bare rule (this protocol is
+    # already covered by the limit above, so nothing is ever left unallowed).
+    other = "udp" if proto == "tcp" else "tcp"
+    for r in _ufw_public_rules(before):
+        if r["to"] == str(port) and r["action"] == "ALLOW":
+            _cmt = re.sub(r"[^A-Za-z0-9 _.-]", "", r["comment"])[:60]
+            _core.run_privileged(server, "ufw-allow-port", ["%d/%s" % (port, other), _cmt], timeout=15)
+            _core.run_privileged(server, "ufw-delete-allow-port", [str(port)], timeout=15)
+            break
+    after, _, arc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
+    if arc != 0 or "Status:" not in (after or ""):
+        return False, ("The limit for %s was added, but the firewall could not be read back to "
+                       "confirm it is the rule connections meet first." % spec)
+    if not firewall._ufw_is_active(after):
+        return False, ("The limit for %s is stored, but UFW is not active on this host, so "
+                       "nothing is limited until it is enabled." % spec)
+    first = _ufw_first_public_rule(after, port, proto)
+    if first is None or first["action"] != "LIMIT":
+        return False, ("%s is still matched first by `%s`, so the limit is never reached — remove "
+                       "or narrow that rule." % (spec, first["detail"] if first else "nothing"))
+    return True, "%s is now rate limited (6 connections per 30s per address)" % spec
+
+
+# `To` column of a port rule: a port or lo:hi range, optionally /tcp or /udp (none = both).
+_UFW_TO_PORT_RE = re.compile(r"^(\d{1,5})(?::(\d{1,5}))?(?:/(tcp|udp))?\Z")
+
+
+def _ufw_public_rules(status_out):
+    """The IPv4 rules in `ufw status [numbered]` output that govern traffic from ANYWHERE —
+    inbound, on no particular interface — in the order ufw evaluates them. Each is
+    _parse_ufw_rule's dict plus its `detail` text. Source-restricted rules, interface rules and
+    the (v6) twins are left out: none of them decides what the public meets first."""
+    rules = []
+    for line in (status_out or "").splitlines():
+        m = re.match(r"\s*\[\s*\d+\]\s*(.*)\Z", line)
+        detail = (m.group(1) if m else line).strip()
+        p = firewall._parse_ufw_rule(detail)
+        if (not p["action"] or p["v6"] or p["iface"] or p["direction"] not in ("", "IN")
+                or p["from"].lower() != "anywhere"):
+            continue
+        p["detail"] = re.sub(r"\s{2,}", "  ", detail)
+        rules.append(p)
+    return rules
+
+
+def _ufw_first_public_rule(status_out, port, proto):
+    """The first public rule a `proto` connection to `port` meets, or None."""
+    for p in _ufw_public_rules(status_out):
+        m = _UFW_TO_PORT_RE.match(p["to"])
+        if m and int(m.group(1)) <= port <= int(m.group(2) or m.group(1)) and m.group(3) in (None, proto):
+            return p
+    return None
 
 
 def remote_ufw_close_port(server, port, protocol=None):
@@ -1119,6 +1184,11 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         # a lower-numbered allow rule would match first and shadow the limit, leaving SSH
         # effectively unthrottled.
         _core.run_privileged(server, "ufw-limit-port", ["22/tcp"], timeout=15)
+        # The same goes for `ufw allow OpenSSH` / a bare `ufw allow 22` already on the host: to
+        # ufw neither is the `22/tcp` rule above, so the limit is appended AFTER them and never
+        # reached. Removed only now that the limit is in place, so SSH is never left unallowed.
+        for _verb, _args in _SSH22_SHADOWING:
+            _core.run_privileged(server, _verb, _args, timeout=15)
         _core.run_privileged(server, "ufw-default", ["deny", "incoming"], timeout=15)
         _core.run_privileged(server, "ufw-default", ["allow", "outgoing"], timeout=15)
         _core.run_privileged(server, "ufw-enable", [], timeout=15)
@@ -1137,6 +1207,27 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         hardening += [("PermitRootLogin", "prohibit-password"), ("PasswordAuthentication", "no")]
     for _key, _val in hardening:
         _core.run_privileged(server, "sshd-set-directive", [_key, _val], timeout=20, merge_stderr=False)
+    # The write is not the result. Ubuntu's sshd_config Includes sshd_config.d/*.conf at its top
+    # and sshd keeps the FIRST value it reads, so on a cloud image whose 50-cloud-init.conf says
+    # `PasswordAuthentication yes` the edit above changes nothing — and this step used to discard
+    # every tuple and say nothing, so the log read "Hardening SSH configuration … VPS bootstrap
+    # complete" about a host still taking password logins from the internet. Ask sshd what it will
+    # actually use (`sshd -T` parses the config; no restart needed) and say so when it disagrees.
+    hardening_failed = []
+    _unapplied, _readable = _sshd_unapplied_directives(server, hardening)
+    # Unknown is not "applied": the final message carries it, rather than a bare "complete".
+    hardening_unverified = (not _readable) and server.auth_method != "password"
+    if not _readable:
+        note("Could not read sshd's effective configuration to confirm the SSH hardening took "
+             "effect — check `sshd -T` on the host.")
+    for _key, _want, _got in _unapplied:
+        note("NOT IN EFFECT: sshd reports %s as '%s', not '%s' — something it reads first "
+             "overrides the edit (usually a file in /etc/ssh/sshd_config.d)."
+             % (_key, _got or "unset", _want))
+        if _key in _SSHD_SECURITY_DIRECTIVES:
+            hardening_failed.append((_key, _got or "unset"))
+    if any(k == "PasswordAuthentication" for k, _ in hardening_failed):
+        note("Password SSH login is still ENABLED on this host.")
     if server.auth_method != "password":
         _core._restart_sshd(server, timeout=15)
     else:
@@ -1245,11 +1336,22 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     else:
         note("Reboot check skipped — this is the panel's own host.")
 
+    if hardening_failed:
+        # Not "complete": the one step whose whole point is closing a door reported the door is
+        # still open. The rest of the work did happen, and the message says both.
+        return False, ("Bootstrap finished, but the SSH hardening did not take effect: sshd "
+                       "still reports %s. Something sshd reads first overrides the edit — look "
+                       "in /etc/ssh/sshd_config.d (cloud images ship 50-cloud-init.conf)."
+                       % "; ".join("%s %s" % kv for kv in hardening_failed)), "\n".join(log)
     if progress:
         try:
             progress(total, total, "Bootstrap complete", "done")
         except Exception:
             _core._log.debug("remote_bootstrap_vps: ignored non-fatal error", exc_info=True)
+    if hardening_unverified:
+        return True, (f"VPS bootstrap complete ({step}/{total} steps), but the SSH hardening could "
+                      "not be verified — sshd's effective configuration was unreadable. Check "
+                      "`sshd -T` on the host for passwordauthentication."), "\n".join(log)
     return True, f"VPS bootstrap complete ({step}/{total} steps).", "\n".join(log)
 
 
@@ -1505,6 +1607,39 @@ def _sshd_current_ports(server):
     return ports
 
 
+# The hardening directives whose failure leaves a door open, as opposed to the keepalive pair.
+_SSHD_SECURITY_DIRECTIVES = frozenset({"PermitRootLogin", "PasswordAuthentication"})
+# `sshd -T` prints one canonical name per value, and which one has changed between OpenSSH
+# releases: PERMIT_NO_PASSWD dumps as `without-password` on older sshd and `prohibit-password` on
+# current ones. Both are the same setting.
+_SSHD_VALUE_ALIASES = {"without-password": "prohibit-password"}
+
+
+def _sshd_unapplied_directives(server, wanted):
+    """([(key, wanted, effective)], readable) for the `wanted` (key, value) pairs sshd will NOT use.
+
+    Read from `sshd -T`, which parses the whole config the way the daemon does — Include order and
+    first-value-wins included — so a value written to sshd_config and overridden by a
+    sshd_config.d file shows up here as the override. `readable` is False when that read failed or
+    printed no settings at all: then nothing is known, and the list is empty rather than a claim
+    that everything took."""
+    out, _, rc = _core.run_privileged(server, "sshd-effective-config", [], timeout=15,
+                                      merge_stderr=False)
+    effective = {}
+    for line in (out or "").splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            effective[parts[0].lower()] = parts[1].strip().lower()
+    if rc != 0 or not effective:
+        return [], False
+    unapplied = []
+    for key, want in wanted:
+        got = effective.get(key.lower(), "")
+        if _SSHD_VALUE_ALIASES.get(got, got) != _SSHD_VALUE_ALIASES.get(want.lower(), want.lower()):
+            unapplied.append((key, want, got))
+    return unapplied, True
+
+
 def _canonical_ip(s):
     """`s` as its CANONICAL address string, or None if it isn't an IP.
 
@@ -1582,17 +1717,14 @@ def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
     except (ValueError, TypeError):
         return False, "Invalid IP address."
     tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
-    # Drop any existing deny for this IP first (no duplicate rules), then insert at position 1.
-    # run_command wraps the whole compound in `sudo bash -c`, so both parts run as root and rc is
-    # the insert's exit status.
-    # Two statements used to be joined with ';' inside one `sudo bash -c`. They are two verbs now;
-    # the delete's result is discarded exactly as `>/dev/null 2>&1` discarded it, and rc still comes
-    # from the insert.
-    _core.run_privileged(server, "ufw-delete-deny-ip", [ip], timeout=20)
-    out, err, rc = _core.run_privileged(server, "ufw-deny-ip", [ip, tag], timeout=20)
-    if rc == 0:
-        return True, "Blocked %s (all ports)." % ip
-    return False, ((out or err or "Block failed").replace("\n", " ")[:200])
+    # The same decision as the panel host's ufw_deny_ip — one implementation, so the twins cannot
+    # drift. It used to delete any deny for the address first, whoever wrote it (see
+    # system_ops._ufw_deny_with for what that cost); a rule the panel did not write is left alone.
+    from panel.ops import system_ops as _so
+    existing = (remote_ufw_blocked_ips(server) or {}).get(ip)
+    return _so._ufw_deny_with(
+        ip, tag, existing,
+        lambda verb, args: _core.run_privileged(server, verb, args, timeout=20))
 
 
 def remote_ufw_undeny_ip(server, ip):
@@ -1620,24 +1752,38 @@ def remote_ufw_undeny_ip(server, ip):
 
 
 def remote_ufw_blocked_ips(server):
-    """{ip: tag} for the panel's own UFW deny rules — tag read from the rule comment.
+    """{ip: tag} for the host's UFW all-ports deny rules — the panel's own, tagged from the rule
+    comment, and anyone else's, tagged "" (system_ops._ufw_deny_sources: skipping those made an
+    operator's own block look like no block, and the reconcile replaced it and later lifted it).
 
-    None when the host could not be read; see ufw_blocked_ips for why that is not {}.
+    None when the host could not be read; see ufw_blocked_ips for why that is not {}. An INACTIVE
+    firewall is None too, as it already was on the panel host: its stored rules drop nothing, and
+    answering {} for it had the reconcile re-block every offender, every hour, against a firewall
+    that is off.
     """
+    from panel.ops import system_ops as _so
     out, _, rc = _core.run_privileged(server, "ufw-status", ["plain"], timeout=15)
     if rc != 0:
         _core._log.debug("remote_ufw_blocked_ips: read failed on %s (rc=%s)",
                          getattr(server, "name", "?"), rc)
         return None
-    blocked = {}
-    for line in (out or "").splitlines():
-        if "DENY" not in line or "panel-" not in line:
-            continue
-        mi = re.search(r"DENY(?:\s+IN)?\s+([0-9a-fA-F:.]+)", line)
-        mt = re.search(r"#\s*(panel-[a-z-]+)", line)
-        if mi and mt:
-            blocked[mi.group(1)] = mt.group(1)
-    return blocked
+    if not _so.ufw_status_active(out):
+        return None
+    return _so._ufw_deny_sources(out)
+
+
+def remote_fail2ban_attempt_counts(server, days=7):
+    """{ip: detected attempts} for EVERY offender in a REMOTE host's fail2ban log over the last
+    `days` days, or None when the read failed — the remote twin of
+    system_ops.fail2ban_attempt_counts, for the auto-block reconcile (which must see every count,
+    not the display's top 100)."""
+    from panel.ops import system_ops as _so
+    out, _, rc = _core.run_privileged(server, "f2b-log-lines", [_so._f2b_cutoff(days)], timeout=25,
+                                      merge_stderr=False)
+    if rc != 0:
+        _core._log.debug("remote attempt counts: the fail2ban log read failed (rc=%s)", rc)
+        return None
+    return _so._tally_f2b_events(out)[0]
 
 
 def remote_fail2ban_top_ips(server, limit=20, days=7):
@@ -2047,6 +2193,12 @@ def change_ssh_port(server, new_port, bind_addr=""):
 # Anchored: the To column is the first thing on the line.
 _SSH22_RE = re.compile(r"\s*(?:22(?:/tcp)?|OpenSSH)\s", re.I)
 
+# The rules that open SSH without being `22/tcp` to ufw: the OpenSSH app profile and a bare `22`
+# (protocol any). ufw never matches either against a `22/tcp` rule, so a delete or a limit of
+# `22/tcp` leaves them in place — AHEAD of whatever was just appended, where every connection
+# meets them first. Removed wherever the panel sets what public SSH is.
+_SSH22_SHADOWING = (("ufw-delete-allow-app", ["OpenSSH"]), ("ufw-delete-allow-port", ["22"]))
+
 
 def remote_public_ssh_status(server, panel_port=None):
     """Report public SSH state on port 22: 'allow', 'limit', or 'off' (no rule —
@@ -2079,8 +2231,9 @@ def remote_public_ssh_status(server, panel_port=None):
             res["panel_port"] = int(panel_port)
             res["panel_port_open"] = False
         return res
-    active = "Status: active" in (out or "")
+    active = firewall._ufw_is_active(out)
     mode = "off"
+    first_found = False
     panel_open = False
     port_re = re.compile(r"\b%d\b" % int(panel_port)) if panel_port else None
     for line in (out or "").splitlines():
@@ -2091,11 +2244,18 @@ def remote_public_ssh_status(server, panel_port=None):
         # to, this still reported port 22 rate-limited, marked that button active-and-disabled,
         # and never once showed the true `off` state. 8022, 1022 and 22022 read the same way, and
         # so did a source address ending in .22 once you widen the test to a word boundary.
-        if _SSH22_RE.match(line) and " (v6)" not in low:
-            if "limit" in low:
-                mode = "limit"
-            elif "allow" in low:
-                mode = "allow" if mode != "limit" else mode
+        #
+        # And the FIRST such rule decides, because ufw stops at the first rule a packet matches.
+        # This read "any LIMIT anywhere wins", so `OpenSSH ALLOW` followed by `22/tcp LIMIT` —
+        # the list `ufw allow OpenSSH` plus the Limit button produce — was reported as
+        # rate-limited while every connection matched the ALLOW above it and nothing was ever
+        # throttled. Only rules that govern the PUBLIC: from Anywhere, inbound, on no interface.
+        if not first_found and _SSH22_RE.match(line) and " (v6)" not in low:
+            _p = firewall._parse_ufw_rule(line)
+            if (not _p["iface"] and _p["direction"] in ("", "IN")
+                    and _p["from"].lower() == "anywhere" and _p["action"]):
+                first_found = True
+                mode = {"LIMIT": "limit", "ALLOW": "allow"}.get(_p["action"], "off")
         # A public ALLOW rule for the panel port (ignore IPv6 duplicates and the
         # tailscale0 interface rule, which isn't the *public* port).
         if (port_re and "allow" in low and " (v6)" not in low
@@ -2213,18 +2373,24 @@ def remote_set_public_ssh(server, mode):
     Tailscale path back in (Tailscale running + SSH enabled or the tailscale0 interface
     allowed in UFW) — otherwise it would strand you with no way to reach the host."""
     mode = (mode or "").lower()
+    # The new rule goes in FIRST: ufw rewrites a rule that differs only in its action where it
+    # stands (`ufw limit 22/tcp` turns `22/tcp ALLOW` into `22/tcp LIMIT` in place), so there is
+    # no moment with nothing letting SSH in. Then everything else that would match port 22 AHEAD
+    # of it goes — `ufw allow OpenSSH` and a bare `ufw allow 22` are how most Ubuntu hosts opened
+    # SSH, neither is the same rule as `22/tcp` to ufw, and whichever sorts first is the one a
+    # connection meets. Leaving them made 'limit' a rule nothing ever reached.
+    _shadowing = list(_SSH22_SHADOWING)
     if mode == "allow":
-        steps = [("ufw-delete-limit-port", ["22/tcp"]), ("ufw-allow-port", ["22/tcp", ""])]
+        steps = [("ufw-allow-port", ["22/tcp", ""]), ("ufw-delete-limit-port", ["22/tcp"])] + _shadowing
     elif mode == "limit":
-        steps = [("ufw-delete-allow-port", ["22/tcp"]), ("ufw-limit-port", ["22/tcp"])]
+        steps = [("ufw-limit-port", ["22/tcp"]), ("ufw-delete-allow-port", ["22/tcp"])] + _shadowing
     elif mode == "off":
         running, ssh_enabled, iface_allowed = _tailnet_ssh_state(server)
         if not (running and (ssh_enabled or iface_allowed)):
             return False, ("Refused — there's no Tailscale way back into this host, so disabling "
                            "public SSH would lock you out. Enable Tailscale SSH, or make sure "
                            "Tailscale is running and the tailscale0 interface is allowed in UFW, first.")
-        steps = [("ufw-delete-allow-port", ["22/tcp"]), ("ufw-delete-limit-port", ["22/tcp"]),
-                 ("ufw-delete-allow-app", ["OpenSSH"])]
+        steps = [("ufw-delete-allow-port", ["22/tcp"]), ("ufw-delete-limit-port", ["22/tcp"])] + _shadowing
     else:
         return False, "Invalid mode"
     for verb, vargs in steps:

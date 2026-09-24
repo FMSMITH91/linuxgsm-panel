@@ -5640,15 +5640,15 @@ try:
         _r.is_local = True          # exercise the local (so.*) branch — no SSH
         db.session.commit()
         _denied, _undenied = [], []
-        _sv = {n: getattr(_am.so, n) for n in ("fail2ban_top_ips", "ufw_blocked_ips",
+        _sv = {n: getattr(_am.so, n) for n in ("fail2ban_attempt_counts", "ufw_blocked_ips",
                "ufw_deny_ip", "ufw_undeny_ip")}
         _sv_tn, _sv_th, _sv_wl = _monmod.tailnet_exempt_ips, _monmod._autoblock_threshold, _monmod._whitelist_networks
         try:
-            _am.so.fail2ban_top_ips = lambda limit=100, days=7: [
-                {"ip": "203.0.113.10", "attempts": 80, "bans": 0},   # over threshold  -> block
-                {"ip": "203.0.113.11", "attempts": 5, "bans": 0},    # under threshold -> ignore
-                {"ip": "10.9.9.9", "attempts": 500, "bans": 0},      # over, but WHITELISTED -> skip
-            ]
+            _am.so.fail2ban_attempt_counts = lambda days=7: {
+                "203.0.113.10": 80,    # over threshold  -> block
+                "203.0.113.11": 5,     # under threshold -> ignore
+                "10.9.9.9": 500,       # over, but WHITELISTED -> skip
+            }
             _am.so.ufw_blocked_ips = lambda: {"203.0.113.99": "panel-autoblock"}   # our stale block
             _am.so.ufw_deny_ip = lambda ip, tag=None: (_denied.append(ip), (True, "ok"))[1]
             _am.so.ufw_undeny_ip = lambda ip: (_undenied.append(ip), (True, "ok"))[1]

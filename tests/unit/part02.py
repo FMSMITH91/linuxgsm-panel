@@ -1131,6 +1131,127 @@ try:
     check("public ssh: a readable firewall still reports its actual mode (positive control)",
           _st.get("mode") == "limit" and not _st.get("unreachable"), str(_st))
 
+    # ── ufw stops at the FIRST rule a connection matches ─────────────────────────────────────
+    # Any LIMIT line used to win, so `OpenSSH ALLOW` above `22/tcp LIMIT` — what `ufw allow
+    # OpenSSH` plus the Limit button produce — read as rate-limited while every connection matched
+    # the ALLOW first. And 'limit' deleted only `allow 22/tcp`: to ufw the OpenSSH profile and a
+    # bare `22` are different rules, so both stayed ahead of the appended limit.
+    def _ufw_status_is(text):
+        _sm_core.run_privileged = lambda s, v, a=(), **k: (text, "", 0)
+        return _sm_hosts.remote_public_ssh_status(object()).get("mode")
+    _hdr = "Status: active\n\nTo                         Action      From\n--                         ------      ----\n"
+    check("public ssh: an ALLOW listed ahead of the LIMIT is what SSH gets",
+          _ufw_status_is(_hdr + "OpenSSH                    ALLOW IN    Anywhere\n"
+                                "22/tcp                     LIMIT IN    Anywhere\n") == "allow",
+          "reported rate-limited while every connection matches the OpenSSH ALLOW above it")
+    check("public ssh: ...and a LIMIT listed first is still limit (positive control)",
+          _ufw_status_is(_hdr + "22/tcp                     LIMIT IN    Anywhere\n"
+                                "OpenSSH                    ALLOW IN    Anywhere\n") == "limit")
+    check("public ssh: ...and an allow for ONE source address does not decide the public mode",
+          _ufw_status_is(_hdr + "22/tcp                     ALLOW IN    203.0.113.5\n"
+                                "22/tcp                     LIMIT IN    Anywhere\n") == "limit",
+          "`allow from <home ip> to 22` (this panel's own Restrict box) read as public SSH open")
+
+    def _fake_ufw(rules):
+        """A firewall that applies the verbs with ufw's own semantics: a rule that differs only in
+        action is rewritten IN PLACE, a new one is appended, and a delete removes only an exact
+        (To, action) match — the OpenSSH profile and a bare 22 are not `22/tcp`."""
+        def _rp(s, v, a=(), **k):
+            a = list(a)
+            if v == "ufw-status":
+                return (_hdr + "".join("%-26s %-11s Anywhere\n" % (t, act + " IN") for t, act in rules), "", 0)
+            want = {"ufw-limit-port": "LIMIT", "ufw-allow-port": "ALLOW"}.get(v)
+            if want:
+                for i, (t, _act) in enumerate(rules):
+                    if t == a[0]:
+                        rules[i] = (t, want)
+                        return ("Rule updated", "", 0)
+                rules.append((a[0], want))
+                return ("Rule added", "", 0)
+            gone = {"ufw-delete-allow-port": "ALLOW", "ufw-delete-limit-port": "LIMIT",
+                    "ufw-delete-allow-app": "ALLOW"}.get(v)
+            if gone and (a[0], gone) in rules:
+                rules.remove((a[0], gone))
+                return ("Rule deleted", "", 0)
+            return ("Could not delete non-existent rule", "", 1)
+        _sm_core.run_privileged = _rp
+    for _start in (["OpenSSH"], ["22"]):
+        _rules = [(_t, "ALLOW") for _t in _start]
+        _fake_ufw(_rules)
+        _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+        check("public ssh: 'limit' on a host opened with `ufw allow %s` is really limited" % _start[0],
+              _ok is True and _rules and _rules[0] == ("22/tcp", "LIMIT"),
+              "ok=%r msg=%r rules now %r" % (_ok, _msg, _rules))
+    _rules = [("22/tcp", "ALLOW")]
+    _fake_ufw(_rules)
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+    check("public ssh: ...and an existing 22/tcp allow is turned into the limit (positive control)",
+          _ok is True and _rules == [("22/tcp", "LIMIT")], "ok=%r rules %r" % (_ok, _rules))
+
+    # ── rate limiting a port the panel itself opened ─────────────────────────────────────────
+    # Every game port is opened BARE (`ufw allow 28016 comment rustserver`, tcp+udp). The limit
+    # path deleted only `allow proto tcp port 28016`, which ufw does not match against a bare rule,
+    # so the limit was appended after the ALLOW and the answer was "28016/tcp is now rate limited".
+    def _fake_ufw_n(rules):
+        """Numbered listing, comments included; same in-place/append/exact-delete semantics."""
+        def _rp(s, v, a=(), **k):
+            a = list(a)
+            if v == "ufw-status":
+                return ("Status: active\n\n     To                         Action      From\n"
+                        "     --                         ------      ----\n"
+                        + "".join("[%2d] %-26s %-11s Anywhere%s\n"
+                                  % (i + 1, r[0], r[1] + " IN", (" # " + r[2]) if r[2] else "")
+                                  for i, r in enumerate(rules)), "", 0)
+            want = {"ufw-limit-port": "LIMIT", "ufw-allow-port": "ALLOW"}.get(v)
+            if want:
+                for i, r in enumerate(rules):
+                    if r[0] == a[0]:
+                        rules[i] = (r[0], want, a[1] if len(a) > 1 else "")
+                        return ("Rule updated", "", 0)
+                rules.append((a[0], want, a[1] if len(a) > 1 else ""))
+                return ("Rule added", "", 0)
+            if v in ("ufw-delete-allow-port", "ufw-delete-limit-port"):
+                act = "ALLOW" if v == "ufw-delete-allow-port" else "LIMIT"
+                hit = [r for r in rules if r[0] == a[0] and r[1] == act]
+                for r in hit:
+                    rules.remove(r)
+                return (("Rule deleted", "", 0) if hit else ("Could not delete non-existent rule", "", 1))
+            return ("", "", 0)
+        _sm_core.run_privileged = _rp
+
+    def _first_for(rules, spec, proto):
+        """What a `proto` connection to `spec` meets first, as ufw evaluates it."""
+        for r in rules:
+            if r[0] in (spec, "%s/%s" % (spec, proto)):
+                return r[1]
+        return None
+    _rules = [("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: a port opened bare (tcp+udp) is really limited for tcp",
+          _ok is True and _first_for(_rules, "28016", "tcp") == "LIMIT",
+          "ok=%r msg=%r rules %r — the bare ALLOW still meets every connection first"
+          % (_ok, _msg, _rules))
+    check("ufw limit: ...and its udp half stays open, under the same comment",
+          _first_for(_rules, "28016", "udp") == "ALLOW" and ("28016/udp", "ALLOW", "rustserver") in _rules,
+          "rules %r" % (_rules,))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=False)
+    check("ufw limit: removing the limit leaves the port open, un-throttled",
+          _ok is True and _first_for(_rules, "28016", "tcp") == "ALLOW", "ok=%r rules %r" % (_ok, _rules))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28017, "tcp", limit=False)
+    check("ufw limit: ...and 'remove' on a port with no limit opens nothing",
+          _ok is False and not any(r[0].startswith("28017") for r in _rules), "ok=%r rules %r" % (_ok, _rules))
+    _rules = [("28000:28100/tcp", "ALLOW", "")]
+    _fake_ufw_n(_rules)
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: a rule it cannot remove that still matches first is reported, not hidden",
+          _ok is False and "28000:28100/tcp" in _msg, "ok=%r msg=%r" % (_ok, _msg))
+    _rules = []
+    _fake_ufw_n(_rules)
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: ...while a port with nothing ahead of it is limited (positive control)",
+          _ok is True and _rules == [("28016/tcp", "LIMIT", "")], "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
+
     # ── the unblock that always said it worked ───────────────────────────────────────────────
     # remote_ufw_undeny_ip discarded the verb's result and returned True unconditionally, while
     # remote_ufw_deny_ip six lines above it checks rc. Its LOCAL twin (system_ops.ufw_undeny_ip)
@@ -1222,6 +1343,25 @@ eq("22 merges v4+v6", by_port["22"]["family_label"], "IPv4 + IPv6")
 eq("bare port -> BOTH", by_port["28960"]["proto_label"], "BOTH")
 eq("bare port keeps comment", by_port["28960"]["comment"], "codserver")
 eq("udp suffix -> UDP", by_port["27015"]["proto_label"], "UDP")
+# The page deletes by rule NUMBER, and numbers are positions: the hourly auto-block inserts a deny
+# at 1 and every rule below moves down. A group's `key` is what the page re-finds it by before
+# each delete, so it must survive a renumbering and tell rules apart.
+_shifted = _sm_firewall._group_ufw_rules(_rules([
+    "Anywhere  DENY IN  203.0.113.9  # panel-autoblock",
+    "22/tcp  ALLOW IN  Anywhere",
+    "22/tcp (v6)  ALLOW IN  Anywhere (v6)",
+    "5000/tcp  ALLOW IN  Anywhere",
+    "28960  ALLOW IN  Anywhere  # codserver",
+    "27015/udp  ALLOW IN  Anywhere",
+]))
+_shifted_by = {g["port_num"]: g for g in _shifted}
+check("ufw grouping: a group's key survives the renumbering an inserted deny causes",
+      all(g.get("key") and g.get("key") == _shifted_by[p].get("key")
+          and g["nums"] != _shifted_by[p]["nums"] for p, g in by_port.items()),
+      "%r vs %r" % ([g.get("key") for g in groups], [g.get("key") for g in _shifted]))
+check("ufw grouping: ...and no two groups share one (positive control)",
+      len({g.get("key") for g in _shifted}) == len(_shifted) and all(g.get("key") for g in _shifted),
+      repr([g.get("key") for g in _shifted]))
 
 # ── firewall lock-out protection ──────────────────────────────
 def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(False, False),
@@ -1457,6 +1597,26 @@ try:
     check("ufw status: a rule COMMENT saying 'not installed' does not erase the firewall",
           _st["installed"] is True and _st["enabled"] is True and len(_st["rules"]) == 2,
           "installed=%s enabled=%s rules=%d" % (_st["installed"], _st["enabled"], len(_st["rules"])))
+    # ufw's Status line is gettext-translated whole — a Dutch host prints `Status: actief` — while
+    # the rule rows and the header's dashed underline never are. Comparing the value to "active"
+    # read that LIVE firewall as off: the badge said Inactive, and the lockout guard skips every
+    # rule when the firewall is off, so the host's only SSH rule got a plain delete ×.
+    _sm_core.run_privileged = lambda *a, **k: (
+        "Status: actief\n\n"
+        "     Naar                       Actie       Van\n"
+        "     ----                       -----       ---\n"
+        "[ 1] 22/tcp                     ALLOW IN    Anywhere\n", "", 0)
+    _st = _sm_firewall.remote_ufw_status(NS(port=22))
+    _ssh_g = [g for g in _st.get("groups", []) if g.get("port_num") == "22"]
+    check("ufw status: a translated Status line on a LIVE firewall still reads as active",
+          _st.get("enabled") is True, repr(_st)[:200])
+    check("ufw status: ...so its only SSH rule is still protected from deletion",
+          _ssh_g and _ssh_g[0].get("protected") is True,
+          "groups %r — the last way in is deletable" % (_st.get("groups"),))
+    _sm_core.run_privileged = lambda *a, **k: ("Status: inactief\n", "", 0)
+    _st = _sm_firewall.remote_ufw_status(NS(port=22))
+    check("ufw status: ...while a translated INACTIVE firewall (no rule listing) is inactive "
+          "(positive control)", _st.get("installed") is True and _st.get("enabled") is False, repr(_st))
     # Positive control: the tool genuinely being absent is rc 127, and still reads as absent —
     # note the helper's own stderr for that case also contains "not installed".
     _sm_core.run_privileged = lambda *a, **k: (

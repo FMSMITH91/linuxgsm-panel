@@ -52,7 +52,7 @@ function refreshFirewall() {
             + '<td><span class="text-secondary" style="font-size:.68rem;">' + esc(g.family_label) + '</span></td>'
             + '<td>' + (g.protected
                 ? '<button class="btn btn-outline-secondary btn-sm py-0 px-1" disabled title="' + esc(g.protect_reason) + '"><i class="bi bi-lock-fill"></i></button>'
-                : '<button class="btn btn-outline-danger btn-sm py-0 px-1"' + _da('deleteGroup', [g.nums, '@self', !!g.warn, (g.protect_reason || '')]) + '><i class="bi bi-x"></i></button>')
+                : '<button class="btn btn-outline-danger btn-sm py-0 px-1"' + _da('deleteGroup', [g.nums, '@self', !!g.warn, (g.protect_reason || ''), (g.key || '')]) + '><i class="bi bi-x"></i></button>')
             + '</td></tr>';
         });
         html += '</tbody></table>';
@@ -256,28 +256,55 @@ function unlimitPort() {
   if (a) _restrictPost('/firewall/limit', a, 'Removing...');
 }
 
-// Delete a whole rule group (its IPv4 + IPv6 entries). UFW renumbers rules above a
-// deleted one, so delete highest-number-first to keep the remaining indices valid.
-function deleteGroup(nums, btn, warn, reason) {
+// Delete a whole rule group (its IPv4 + IPv6 entries).
+//
+// A rule NUMBER is a position, and ufw renumbers every rule below one that is inserted or
+// removed. This posted the numbers captured when the table was drawn — and the hourly auto-block
+// inserts its denies at position 1 and releases them, as does a Block from another tab — so a
+// click could delete whatever had moved into that slot: another game's port, or the deny on an
+// attacker's address. So the group is looked up again by its identity (`key`, from the server's
+// grouping) before EACH delete, and its CURRENT highest number is the one removed. A group that
+// is gone, or has become protected, is not deleted at all.
+function deleteGroup(nums, btn, warn, reason, key) {
   if (!nums || !nums.length) return;
   var msg = warn ? ((reason || 'This may affect your access.') + '\n\nRemove this rule anyway?')
                  : 'Remove this firewall rule?';
+  function _say(text) { if (window.toast) toast(text, 'danger'); }
   confirmDialog({title:'Remove firewall rule', icon:'shield-exclamation',
     confirmClass: warn ? 'btn-danger' : 'btn-warning', confirmLabel:'Remove', bodyText: msg,
     onConfirm: function(){
       if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
-      var ordered = nums.slice().sort(function(a, b) { return b - a; });
-      (function next(i) {
-        if (i >= ordered.length) { refreshFirewall(); return; }
-        fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/delete-rule', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({num: ordered[i]}),
-        })
-        .then(r => r.json())
-        .then(function(d) { if (!d.success && window.toast) toast(d.message || 'Failed to delete rule', 'danger'); next(i + 1); })
-        .catch(function() { next(i + 1); });
-      })(0);
+      if (!key) { _say('This page is out of date — reload it and try again.'); refreshFirewall(); return; }
+      var budget = nums.length + 2, first = true;   // bounded: never loops on a rule that will not go
+      (function next() {
+        fetch(MOUNT + '/api/remote/' + remoteId + '/firewall')
+          .then(r => r.json())
+          .then(function(data) {
+            if (!data || data.unreachable || !data.groups) {
+              _say("Couldn't re-read the firewall, so the rule was not removed.");
+              refreshFirewall(); return;
+            }
+            var g = data.groups.filter(function(x) { return x.key === key; })[0];
+            if (!g || !g.nums || !g.nums.length) {
+              if (first) _say('That rule is no longer in the firewall — the list has been refreshed.');
+              refreshFirewall(); return;
+            }
+            if (g.protected) { _say(g.protect_reason || 'This rule protects your access to the host and can\'t be removed here.'); refreshFirewall(); return; }
+            if (budget-- <= 0) { refreshFirewall(); return; }
+            first = false;
+            return fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/delete-rule', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({num: Math.max.apply(null, g.nums)}),
+            })
+            .then(r => r.json())
+            .then(function(d) {
+              if (!d.success) { _say(d.message || 'Failed to delete rule'); refreshFirewall(); return; }
+              next();
+            });
+          })
+          .catch(function() { _say('Could not remove the rule — the host may be unreachable.'); refreshFirewall(); });
+      })();
     }});
 }
 

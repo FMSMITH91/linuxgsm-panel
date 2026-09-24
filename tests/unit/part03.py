@@ -2320,6 +2320,43 @@ check("f2b jail: ...and it is not the journal backend",
 check("f2b jail: ...and the logpath is still written",
       "logpath = /x/auth.log" in _so._panel_f2b_jail_body("/x/auth.log", 5000, []))
 
+# ── a ban on the web port does nothing to a client that connects to the PROXY ────────────────
+# Behind nginx/Caddy (trust_proxy) or Tailscale Serve, auth.log records the X-Forwarded-For client,
+# whose packets go to :443. The jail's default multiport action banned them on the backend port
+# only, matched nothing, and the panel still audited and notified the IP as banned.
+import panel.core.config as _f2bp_cfg                                              # noqa: E402
+_f2bp_saved = (_f2bp_cfg.load_config, _so.panel_fail2ban_status, _so._panel_f2b_jail_port,
+               _so._panel_f2b_jail_value, _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban)
+try:
+    for _f2bp_c, _f2bp_want in (({"trust_proxy": True}, True), ({"tailscale_setup_done": True}, True),
+                                ({"bind_host": "127.0.0.1"}, True),
+                                ({"bind_host": "0.0.0.0"}, False), ({}, False)):
+        _f2bp_cfg.load_config = lambda _c=dict(_f2bp_c): _c
+        _f2bp_body = _so._panel_f2b_jail_body("/x/auth.log", 5000, [])
+        check("f2b jail: %r bans on %s" % (_f2bp_c, "EVERY port" if _f2bp_want else "the web port"),
+              ("banaction = iptables-allports" in _f2bp_body) is _f2bp_want, _f2bp_body[:160])
+    # ...and a jail already written for the web port alone is rewritten once the panel is proxied:
+    # ensure_panel_fail2ban is the only thing that would ever rewrite it, and it returned early on
+    # "port, logpath, backend and whitelist all match".
+    _f2bp_calls = []
+    _so.panel_fail2ban_status = lambda: {"installed": True, "enabled": True}
+    _so._panel_f2b_jail_port = lambda: 5000
+    _so._panel_f2b_jail_value = lambda k: {"logpath": "/x/auth.log", "backend": "auto"}.get(k)
+    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line([]).split()
+    _so.configure_panel_fail2ban = lambda *a, **k: (_f2bp_calls.append(a), (True, "ok"))[1]
+    _f2bp_cfg.load_config = lambda: {"trust_proxy": True}
+    _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
+    check("f2b jail: a web-port-only jail on a proxied panel is rewritten, not left as healthy",
+          len(_f2bp_calls) == 1, "rewrites: %r" % (_f2bp_calls,))
+    _f2bp_calls.clear()
+    _f2bp_cfg.load_config = lambda: {}
+    _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
+    check("f2b jail: ...while the same jail on a directly-reached panel is left alone (positive control)",
+          not _f2bp_calls, "rewrites: %r" % (_f2bp_calls,))
+finally:
+    (_f2bp_cfg.load_config, _so.panel_fail2ban_status, _so._panel_f2b_jail_port,
+     _so._panel_f2b_jail_value, _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban) = _f2bp_saved
+
 # ensure_panel_fail2ban is the ONLY thing that would ever rewrite the jail, and it returned early
 # when the port and whitelist matched — so a jail carrying a logpath from a previous install path
 # (`/home/<old-user>/…`, which fail2ban tails forever without complaining) stayed broken for good.
@@ -2681,6 +2718,68 @@ try:
     check("bootstrap: an unread reboot-required check is not reported as 'no reboot needed'",
           "No reboot needed" not in _log2 and "Could not check whether a reboot is needed" in _log2,
           "a host that never answered was told it was up to date: %s" % _log2[-300:])
+
+    # ── ...and the SSH hardening is read back from sshd, not assumed from the write ──
+    # sshd keeps the FIRST value it reads and Ubuntu Includes sshd_config.d before sshd_config's
+    # own body, so on a cloud image whose 50-cloud-init.conf says `PasswordAuthentication yes` the
+    # edit changed nothing. The tuple was discarded and the job said "VPS bootstrap complete"
+    # about a host still taking password logins from the internet.
+    def _bs_harden(effective, rc=0, auth="key"):
+        _bs_priv.clear()
+        _sm_core.run_command = _bs_run(("NO\n", "", 0))
+
+        def _priv(s, verb, args=None, **k):
+            _bs_priv.append(verb)
+            if verb == "sshd-effective-config":
+                return (effective, "", rc)
+            return ("", "", 0)
+        _sm_core.run_privileged = _priv
+        return _sm_hosts.remote_bootstrap_vps(
+            NS(id=9102, host="203.0.113.11", auth_method=auth), set_timezone="", enable_ufw=False,
+            install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=False)
+    _eff_ok = ("port 22\nclientaliveinterval 300\nclientalivecountmax 2\n"
+               "permitrootlogin without-password\npasswordauthentication no\n")
+    _eff_cloud = _eff_ok.replace("passwordauthentication no", "passwordauthentication yes")
+    _hok, _hmsg, _hlog = _bs_harden(_eff_cloud)
+    check("bootstrap: hardening that sshd does not use is NOT reported as a complete bootstrap",
+          _hok is False and "PasswordAuthentication yes" in _hmsg,
+          "ok=%r msg=%r — password SSH still open and the job says it is done" % (_hok, _hmsg))
+    check("bootstrap: ...and the log says password login is still on",
+          "Password SSH login is still ENABLED" in _hlog and "NOT IN EFFECT" in _hlog,
+          _hlog[-400:])
+    check("bootstrap: ...having asked sshd for its effective configuration",
+          "sshd-effective-config" in _bs_priv, "verbs run: %r" % (_bs_priv[-8:],))
+    _hok, _hmsg, _hlog = _bs_harden(_eff_ok)
+    check("bootstrap: ...while hardening sshd DOES use completes (positive control; "
+          "without-password is prohibit-password)",
+          _hok is True and _hmsg.startswith("VPS bootstrap complete (") and "NOT IN EFFECT" not in _hlog,
+          "ok=%r msg=%r log=%r" % (_hok, _hmsg, _hlog[-300:]))
+    _hok, _hmsg, _ = _bs_harden("", rc=1)
+    check("bootstrap: an unreadable sshd -T is reported as unverified, not as hardened",
+          _hok is True and "could not be verified" in _hmsg, "msg=%r" % (_hmsg,))
+    _hok, _hmsg, _ = _bs_harden(_eff_cloud, auth="password")
+    check("bootstrap: ...and a password-auth remote, which never asks for it off, is not failed "
+          "for keeping it", _hok is True, "msg=%r" % (_hmsg,))
+
+    # The UFW step's `ufw limit 22/tcp` is appended AFTER an existing `ufw allow OpenSSH` or bare
+    # `allow 22` — neither is the 22/tcp rule to ufw — so SSH stayed unthrottled on exactly the
+    # hosts that had opened it the usual Ubuntu way. They go, and only after the limit is in.
+    _bs_ufw = []
+
+    def _priv_ufw(s, verb, args=None, **k):
+        _bs_ufw.append((verb, list(args or [])))
+        return ("", "", 0)
+    _sm_core.run_privileged = _priv_ufw
+    _sm_core.run_command = _bs_run(("NO\n", "", 0))
+    _sm_hosts.remote_bootstrap_vps(
+        NS(id=9103, host="203.0.113.12", auth_method="key"), set_timezone="", enable_ufw=True,
+        install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=False)
+    _i_lim = _bs_ufw.index(("ufw-limit-port", ["22/tcp"])) if ("ufw-limit-port", ["22/tcp"]) in _bs_ufw else -1
+    _i_app = _bs_ufw.index(("ufw-delete-allow-app", ["OpenSSH"])) if ("ufw-delete-allow-app", ["OpenSSH"]) in _bs_ufw else -1
+    _i_bare = _bs_ufw.index(("ufw-delete-allow-port", ["22"])) if ("ufw-delete-allow-port", ["22"]) in _bs_ufw else -1
+    check("bootstrap: the SSH limit is not left behind an OpenSSH / bare-22 allow",
+          _i_lim >= 0 and _i_app > _i_lim and _i_bare > _i_lim,
+          "limit at %d, delete OpenSSH at %d, delete bare 22 at %d" % (_i_lim, _i_app, _i_bare))
 finally:
     (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
      _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,
