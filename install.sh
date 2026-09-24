@@ -371,7 +371,11 @@ _gitc() {
 fetch_code() {
     mkdir -p "${PANEL_DIR}"
     if [ -n "${SRC}" ] && [ "${SRC}" != "${PANEL_DIR}" ]; then
-        tar -C "${SRC}" --exclude=./venv --exclude=./data --exclude='*.pyc' -cf - . | tar -C "${PANEL_DIR}" -xf -
+        # --no-same-owner: as root, tar would otherwise give the copy SRC's owners. A fresh install
+        # then chowns it to the panel user anyway; before that, stage_root_source reads the copy
+        # directly only when every file in it is root's.
+        tar -C "${SRC}" --exclude=./venv --exclude=./data --exclude='*.pyc' -cf - . \
+            | tar -C "${PANEL_DIR}" --no-same-owner -xf -
     elif [ -d "${PANEL_DIR}/.git" ]; then
         # The fresh clone below is shallow + single-branch (main only). Widen it so ANY branch is
         # fetchable and give it real history, so switching branches / updating on a branch works.
@@ -633,23 +637,121 @@ check_origin_trusted() {
 #
 # check_origin_trusted() compares the remote URL and is blind to both.
 #
-# `git cat-file blob <rev>:<path>` reads the object store: it returns the committed bytes, applies
-# no filter, and never consults the working tree or the index. Root stages that output inside
-# HELPER_DIR, which is root-owned 0755 and therefore not panel-writable — which is what closes the
-# window between staging and `install`.
+# Reading the committed blob instead (`git cat-file blob HEAD:<path>` through _gitc) closed those
+# two and left the rest of .git. The OBJECT STORE is panel-owned too, and git trusts it:
+#
+#   * a replace ref (`git replace <committed-blob> <attacker-blob>`, i.e. .git/refs/replace/<sha>)
+#     makes cat-file return the attacker's bytes, while `rev-parse HEAD` still names the real
+#     upstream commit;
+#   * a loose object written under the committed blob's name shadows the packed original, and git
+#     returns it without re-hashing.
+#
+# And with no .git at all, the tree was copied as-is. The panel user can delete its own .git.
+#
+# So when this runs as ROOT, a boundary file comes from something the panel user cannot write:
+#
+#   * a checkout that is still ROOT'S OWN, tree and .git (the fresh path, before the chown). It
+#     is read directly, exactly as before; or else
+#   * ROOT'S OWN CLONE of REPO_URL (ROOT_GIT, below), fetched by root's git with no user or system
+#     config. The panel's HEAD is only a request there: it is honoured only when root's clone has
+#     that commit on ${DEFAULT_BRANCH}. Nothing else from the panel's .git is read. A checkout at a
+#     commit upstream does not have, or with no .git at all, gets NO refresh, and the installer
+#     says so.
+#
+# Run as the account that owns the checkout (a per-user install), none of this applies: that
+# account can already rewrite the install.sh it is running.
+#
+# Either way the output is staged inside HELPER_DIR, which is root-owned 0755 and therefore not
+# panel-writable. That is what closes the window between staging and `install`.
 # Root-owned, outside the panel's checkout — see stage_root_source and SECURITY.md.
 HELPER_DIR="/usr/local/lib/linuxgsm-panel"
+ROOT_GIT="${HELPER_DIR}/.source.git"
+ROOT_SRC_COMMIT=""
+ROOT_SRC_TRIED=0
 
+# Root's git, on root's clone, with no config it did not write: no user or system gitconfig (a
+# `url.<x>.insteadOf` there would repoint REPO_URL, a credential helper would run as root), and no
+# inherited GIT_* environment. The proxy variables are the only ones passed through.
+_rootgit() {
+    ${H_SUDO:-} env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true \
+        ${https_proxy:+https_proxy="${https_proxy}"} ${HTTPS_PROXY:+HTTPS_PROXY="${HTTPS_PROXY}"} \
+        ${no_proxy:+no_proxy="${no_proxy}"} ${NO_PROXY:+NO_PROXY="${NO_PROXY}"} \
+        git --git-dir="${ROOT_GIT}" "$@"
+}
+
+# Does the panel user have no hand in this checkout? True only when every file and directory in
+# it, .git included, is root's. find does not follow symlinks, so a link is judged by its own owner.
+_checkout_is_roots() {
+    [ -d "${PANEL_DIR}" ] && [ ! -L "${PANEL_DIR}" ] || return 1
+    [ -z "$(find "${PANEL_DIR}" ! -uid 0 -print -quit 2>/dev/null)" ]
+}
+
+# Which commit root may stage from: the checkout's HEAD, once root's own clone shows that commit is
+# on REPO_URL's ${DEFAULT_BRANCH}. Sets ROOT_SRC_COMMIT; returns 1, having said why, otherwise.
+# Asked once per run, however many files are staged.
+root_source_commit() {
+    if [ "${ROOT_SRC_TRIED}" -eq 1 ]; then
+        [ -n "${ROOT_SRC_COMMIT}" ]
+        return
+    fi
+    ROOT_SRC_TRIED=1
+    local want=""
+    [ -d "${PANEL_DIR}/.git" ] \
+        && want="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null || true)"
+    # The panel's git produced this, so it is a request, not a fact: a commit id, or nothing.
+    case "${want}" in
+        ""|*[!0-9a-f]*)
+            warn "This checkout has no commit root can verify, so the root-owned components"
+            warn "(the privileged helper, db_maintenance, this installer) were NOT refreshed."
+            return 1 ;;
+    esac
+    if ! ${H_SUDO:-} test -d "${ROOT_GIT}"; then
+        _rootgit init --quiet --bare >/dev/null 2>&1 || {
+            warn "Could not create root's copy of the repository at ${ROOT_GIT}."
+            return 1; }
+    fi
+    if ! _rootgit fetch --quiet --no-tags "${REPO_URL}" \
+            "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" >/dev/null 2>&1; then
+        warn "Could not fetch ${REPO_URL} (${DEFAULT_BRANCH}) into root's own copy, so the"
+        warn "root-owned components were NOT refreshed. The panel still works; re-run to retry."
+        return 1
+    fi
+    if ! _rootgit merge-base --is-ancestor "${want}" "refs/remotes/origin/${DEFAULT_BRANCH}" \
+            >/dev/null 2>&1; then
+        warn "This checkout is at ${want}, which is not on ${REPO_URL}'s ${DEFAULT_BRANCH}."
+        warn "The root-owned components were NOT refreshed from it."
+        return 1
+    fi
+    ROOT_SRC_COMMIT="${want}"
+}
+
+# Answer root_source_commit in THIS shell, before any `x="$(stage_root_source …)"`. Those run in a
+# subshell, so an answer found there is lost when it exits (the fetch would repeat for every file),
+# and its warnings would land in the captured path instead of on the screen. Always returns 0: the
+# staging calls that follow each report their own failure.
+_prepare_root_source() {
+    if [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots; then
+        root_source_commit || true
+    fi
+    return 0
+}
 
 stage_root_source() {
     local rel="$1" out="${HELPER_DIR}/.stage-$2"
     ${H_SUDO} rm -f "${out}" 2>/dev/null || true
-    if [ -d "${PANEL_DIR}/.git" ]; then
+    if [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots; then
+        # Root, and the panel user owns some of the checkout: its tree, its .git, or both.
+        root_source_commit >&2 || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
+        _rootgit cat-file blob "${ROOT_SRC_COMMIT}:${rel}" 2>/dev/null \
+            | ${H_SUDO} tee "${out}" >/dev/null 2>&1 || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
+    elif [ -d "${PANEL_DIR}/.git" ]; then
+        # A checkout the running account owns outright: root's before the chown, or the invoking
+        # user's own on a per-user install.
         _gitc cat-file blob "HEAD:${rel}" 2>/dev/null \
             | ${H_SUDO} tee "${out}" >/dev/null 2>&1 || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
     else
-        # No git: a tarball / --src install, where the tree IS the operator's own copy and there is
-        # no object store to prefer over it.
+        # No git: a tarball / --src install, in a tree the running account owns.
         ${H_SUDO} cp -- "${PANEL_DIR}/${rel}" "${out}" 2>/dev/null \
             || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
     fi
@@ -693,6 +795,7 @@ install_recovery_command() {
     fi
     H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
     if ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null \
+       && _prepare_root_source \
        && stage="$(stage_root_source recover.sh recover.sh)" \
        && ${H_SUDO} install -o root -g root -m 0755 "${stage}" "${HELPER_DIR}/recover.sh" 2>/dev/null; then
         target="${HELPER_DIR}/recover.sh"
@@ -730,6 +833,7 @@ install_root_tools() {
         warn "installer as root to place the root-owned components."
         return 0
     fi
+    _prepare_root_source
 
     if _stage="$(stage_root_source tools/panel-helper panel-helper)"; then
         if ${H_SUDO} install -o root -g root -m 0755 "${_stage}" "${HELPER_DST}" 2>/dev/null; then

@@ -1052,6 +1052,122 @@ check("install.sh: the root-owned pieces are staged with git cat-file, not copie
       '_gitc cat-file blob "HEAD:${rel}"' in _inst)
 check("install.sh: staging lands in the root-owned HELPER_DIR, not a panel-writable path",
       'local rel="$1" out="${HELPER_DIR}/.stage-$2"' in _inst)
+
+# ...but the OBJECT STORE is panel-owned too, and git trusts it. A replace ref, or a loose object
+# written under the committed blob's name, makes `cat-file blob HEAD:<path>` return the panel's
+# bytes while HEAD still names the real upstream commit; and a checkout with no .git was copied
+# as-is. As root on a checkout the panel user has a hand in, a boundary file must come from ROOT'S
+# OWN clone of REPO_URL, at the panel's HEAD only once that clone shows it is upstream.
+#
+# Run the real functions against real repositories. `id -u` says 0, and the files are this test
+# user's, so the checkout reads as the panel user's, which is exactly the update-path condition.
+import subprocess as _rs_sub
+import zlib as _rs_zlib
+from shlex import quote as _rs_q
+
+
+def _rs_git(*a, cwd=None, inp=None):
+    return _rs_sub.run(["git", *a], cwd=cwd, input=inp, capture_output=True,
+                       text=True).stdout.strip()
+
+
+_rs_fns = (_inst[_inst.index("_gitc() {"):_inst.index("\n}\n", _inst.index("_gitc() {")) + 3]
+           + _inst[_inst.index('ROOT_GIT="${HELPER_DIR}/.source.git"'):
+                   _inst.index("\n}\n", _inst.index("stage_root_source() {")) + 3])
+_rs_sb = _tempfile.mkdtemp(prefix="rootsrc-")
+try:
+    _rs_up = os.path.join(_rs_sb, "upstream")
+    os.makedirs(os.path.join(_rs_up, "tools"))
+    _rs_git("init", "-q", "-b", "main", _rs_up)
+    for _k, _v in (("user.email", "t@example.invalid"), ("user.name", "t"),
+                   ("commit.gpgsign", "false")):
+        _rs_git("config", _k, _v, cwd=_rs_up)
+    with open(os.path.join(_rs_up, "tools", "panel-helper"), "w") as _f:
+        _f.write("GOOD-HELPER\n")
+    _rs_git("add", "-A", cwd=_rs_up)
+    _rs_git("commit", "-qm", "upstream", cwd=_rs_up)
+
+    def _rs_case(name, tamper, roots=False):
+        """Clone upstream as 'the panel's checkout', tamper with it, stage as 'root'."""
+        d = os.path.join(_rs_sb, name)
+        panel, helper = os.path.join(d, "panel"), os.path.join(d, "helper")
+        os.makedirs(helper)
+        _rs_git("clone", "-q", "--no-hardlinks", _rs_up, panel)
+        for _k, _v in (("user.email", "t@example.invalid"), ("user.name", "t"),
+                       ("commit.gpgsign", "false")):
+            _rs_git("config", _k, _v, cwd=panel)
+        tamper(panel)
+        body = ("id() { [ \"${1:-}\" = -u ] && echo 0 || command id \"$@\"; }\n"
+                "sudo() { [ \"$1\" = -u ] && shift 2; \"$@\"; }\n"
+                "warn() { echo \"WARN $*\"; }\n"
+                "H_SUDO=''\nPANEL_DIR=%s\nHELPER_DIR=%s\nREPO_URL=%s\nDEFAULT_BRANCH=main\n"
+                % (_rs_q(panel), _rs_q(helper), _rs_q("file://" + _rs_up))
+                + _rs_fns
+                + ("_checkout_is_roots() { return 0; }\n" if roots else "")
+                + "_prepare_root_source\n"
+                  "if s=\"$(stage_root_source tools/panel-helper panel-helper)\"; then\n"
+                  "  echo \"STAGED=$(cat \"$s\")\"\nelse\n  echo STAGED-NOTHING\nfi\n")
+        r = _rs_sub.run(["bash", "-c", body], capture_output=True, text=True)
+        return r.stdout + r.stderr
+
+    def _rs_replace_ref(panel):
+        good = _rs_git("rev-parse", "HEAD:tools/panel-helper", cwd=panel)
+        evil = _rs_git("hash-object", "-w", "--stdin", cwd=panel, inp="EVIL-HELPER\n")
+        _rs_git("replace", "-f", good, evil, cwd=panel)
+
+    def _rs_loose_shadow(panel):
+        # Pack everything, then write a LOOSE object under the committed blob's name with other
+        # content. git reads the loose one first and does not re-hash it.
+        _rs_git("gc", "-q", "--prune=now", cwd=panel)
+        good = _rs_git("rev-parse", "HEAD:tools/panel-helper", cwd=panel)
+        payload = b"EVIL-HELPER\n"
+        p = os.path.join(panel, ".git", "objects", good[:2], good[2:])
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        if os.path.exists(p):
+            os.unlink(p)
+        with open(p, "wb") as f:
+            f.write(_rs_zlib.compress(b"blob %d\0" % len(payload) + payload))
+
+    def _rs_no_git(panel):
+        _shutil.rmtree(os.path.join(panel, ".git"))
+        with open(os.path.join(panel, "tools", "panel-helper"), "w") as f:
+            f.write("EVIL-HELPER\n")
+
+    def _rs_local_commit(panel):
+        with open(os.path.join(panel, "tools", "panel-helper"), "w") as f:
+            f.write("LOCAL-HELPER\n")
+        _rs_git("commit", "-qam", "local only", cwd=panel)
+
+    # The attacks really do fool the panel's own git — otherwise the checks below prove nothing.
+    _rs_probe = os.path.join(_rs_sb, "probe")
+    _rs_git("clone", "-q", "--no-hardlinks", _rs_up, _rs_probe)
+    _rs_replace_ref(_rs_probe)
+    check("install.sh: (premise) a replace ref makes the panel's git return other bytes",
+          _rs_git("cat-file", "blob", "HEAD:tools/panel-helper", cwd=_rs_probe) == "EVIL-HELPER")
+
+    _rs_out = _rs_case("clean", lambda p: None)
+    check("install.sh: root stages an untouched upstream checkout's helper (positive control)",
+          "STAGED=GOOD-HELPER" in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("replace", _rs_replace_ref)
+    check("install.sh: as root, a replace ref in the panel's .git does not reach the staged helper",
+          "STAGED=GOOD-HELPER" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("loose", _rs_loose_shadow)
+    check("install.sh: ...nor does a loose object shadowing the committed blob",
+          "STAGED=GOOD-HELPER" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("nogit", _rs_no_git)
+    check("install.sh: ...and deleting .git no longer makes root copy the tree",
+          "STAGED-NOTHING" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("local", _rs_local_commit)
+    check("install.sh: a HEAD that is not on upstream's branch is refused, and says so",
+          "STAGED-NOTHING" in _rs_out and "LOCAL-HELPER" not in _rs_out
+          and "not on file://" in _rs_out, _rs_out[-300:])
+    # ...while a checkout that is ROOT'S OWN (a fresh install from an operator's clone, before the
+    # chown) is still read directly, local commits and all.
+    _rs_out = _rs_case("rootowned", _rs_local_commit, roots=True)
+    check("install.sh: a checkout that is entirely root's is still staged from its own HEAD",
+          "STAGED=LOCAL-HELPER" in _rs_out, _rs_out[-300:])
+finally:
+    _shutil.rmtree(_rs_sb, ignore_errors=True)
 for _src in ("HELPER_SRC", "DBM_SRC"):
     check("install.sh: no longer installs root-owned files straight from %s" % _src,
           _src not in _inst)
@@ -1995,6 +2111,7 @@ try:
                  "install() { echo \"INSTALL $*\"; }\n"
                  "ln() { echo \"LN $*\"; }\n"
                  "rm() { :; }\n"
+                 "_prepare_root_source() { :; }\n"
                  "stage_root_source() { echo /tmp/staged-recover.sh; }\n")
     _r_untrusted = _su_run(_su_recov, "HELPER_DIR=/usr/local/lib/lgsmp\n"
                            + _su_env + "ORIGIN_TRUSTED=0\n", extra=_su_rshim)
