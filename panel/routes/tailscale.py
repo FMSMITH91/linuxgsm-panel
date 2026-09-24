@@ -11,7 +11,7 @@ from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required
     superadmin_required)
 from panel.core.http import (_json_body, _json_str)
 from panel.db.models import LOCAL_HOST_LABEL
-from app import (_ts_backend_scheme)
+from app import (_effective_https, _ts_backend_scheme)
 
 
 def _sees_panel_host_tailnet(user):
@@ -24,6 +24,11 @@ def _sees_panel_host_tailnet(user):
     list is the operator's whole tailnet: other servers they were not granted, and personal devices
     ("alice-iphone", "nas") with their addresses, OS and when each was last online."""
     return bool(getattr(user, "is_superadmin", False))
+
+
+def _panel_scheme(cfg):
+    """How the panel is serving its own port right now — self-signed https by default."""
+    return "https" if _effective_https(cfg) else "http"
 
 
 def _serve_default_mount(info, cfg, port):
@@ -47,7 +52,7 @@ def register(app):
         info = ts.get_tailscale_info(force_refresh=request.args.get("refresh") == "1")
         cfg = load_config()
         port = cfg.get("port", 5000)
-        suggestion = ts.suggest_best_bind(port)
+        suggestion = ts.suggest_best_bind(port, scheme=_panel_scheme(cfg))
         # The Serve mappings that proxy THIS panel, read from the host. The Disable button removes
         # one of these, never "the first route listed" — Tailscale lists "/" first, and when the
         # panel sits at a sub-path "/" belongs to another app.
@@ -78,7 +83,8 @@ def register(app):
                 "tailscale_ips": info.tailscale_ips,
                 "peer_count": len(info.peers),
                 "serve": info.serve_config,
-                "suggestion": ts.suggest_best_bind(load_config().get("port", 5000)),
+                "suggestion": ts.suggest_best_bind(load_config().get("port", 5000),
+                                                   scheme=_panel_scheme(load_config())),
             })
         return jsonify(out)
 

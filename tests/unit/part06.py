@@ -3090,6 +3090,23 @@ _ts_rt_kw = {k.arg for n in _ts_ast.walk(_ts_page_fn) if isinstance(n, _ts_ast.C
              and getattr(n.func, "id", "") == "render_template" for k in n.keywords}
 check("tailscale page: the route passes panel_routes and serve_default_mount to the template",
       {"panel_routes", "serve_default_mount"} <= _ts_rt_kw, sorted(_ts_rt_kw))
+# Recommended Access built its direct URLs as http:// while the panel serves self-signed TLS by
+# default. Both routes that ask for the suggestion now say which scheme the panel is serving.
+_ts_sbb_calls = [n for n in _ts_ast.walk(_ts_ast.parse(_ts_rt_src)) if isinstance(n, _ts_ast.Call)
+                 and getattr(n.func, "attr", "") == "suggest_best_bind"]
+check("tailscale routes: every suggest_best_bind call passes the panel's scheme",
+      len(_ts_sbb_calls) == 2 and all("scheme" in {k.arg for k in c.keywords} for c in _ts_sbb_calls),
+      "%d call(s)" % len(_ts_sbb_calls))
+_ts_eh = _ts_routes._effective_https
+try:
+    _ts_routes._effective_https = lambda cfg: True
+    _ts_s1 = _ts_routes._panel_scheme({})
+    _ts_routes._effective_https = lambda cfg: False
+    _ts_s2 = _ts_routes._panel_scheme({})
+finally:
+    _ts_routes._effective_https = _ts_eh
+eq("tailscale routes: the scheme follows whether the panel terminates its own TLS", (_ts_s1, _ts_s2),
+   ("https", "http"))
 # Enabling Serve at a mount another app holds REPLACES that app's mapping. The form offered "/"
 # without looking; the setup wizard already moves the panel to /lgsm when "/" is taken.
 _ts_grafana = type("I", (), {"serve_config": {"services": [{"url": "https://h.ts.net", "routes": [

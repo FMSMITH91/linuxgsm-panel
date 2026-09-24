@@ -619,8 +619,12 @@ def is_tailscale_ip(host):
     return addr in _TS_V4_NET or addr in _TS_V6_NET
 
 
-def suggest_best_bind(port=5000):
+def suggest_best_bind(port=5000, scheme="http"):
     """Suggest the best way to expose the panel based on what's available.
+
+    `scheme` is how the panel itself is serving on `port` ("https" when it terminates its own
+    self-signed TLS, which is the default) — the direct URLs below are built with it. They were
+    hardcoded http://, so the page linked the operator to plain HTTP on a port that only speaks TLS.
 
     Returns a dict with keys:
       - method: "tailscale-serve", "tailscale-direct", "direct"
@@ -629,13 +633,19 @@ def suggest_best_bind(port=5000):
       - description: human-readable explanation
     """
     info = get_tailscale_info()
+    scheme = "https" if scheme == "https" else "http"
+    ours = panel_serve_routes(info.serve_config, port)
 
-    if info.running and info.dns_name and info.serve_config.get("services"):
+    if info.running and info.dns_name and ours:
         # Serve is ACTUALLY proxying the panel — bind to localhost and reach it via the ts.net cert.
         # (We must confirm Serve is configured, not just that Tailscale is up with a MagicDNS name —
         # otherwise a fresh Tailscale-enabled install would bind loopback with nothing proxying to it
-        # and be unreachable.)
-        url = f"https://{info.dns_name}"
+        # and be unreachable.) And "configured" means a route to THIS panel's port: any mapping used
+        # to count, so a node already serving Grafana bound a fresh panel to 127.0.0.1 with nothing
+        # proxying to it, and the first-run wizard — the only way to create the first admin — was
+        # reachable only through an SSH tunnel. app._resolved_bind uses this as the real bind
+        # address whenever bind_host is unset, which it is until the wizard's first step.
+        url = ours[0]["url"].rstrip("/") + ("" if ours[0]["mount"] == "/" else ours[0]["mount"])
         return {
             "method": "tailscale-serve",
             "bind_host": "127.0.0.1",
@@ -650,7 +660,7 @@ def suggest_best_bind(port=5000):
             "method": "tailscale-direct",
             "bind_host": ts_ip or "0.0.0.0",
             "port": port,
-            "url": f"http://{ts_ip}:{port}" if ts_ip else f"http://<tailscale-ip>:{port}",
+            "url": f"{scheme}://{ts_ip}:{port}" if ts_ip else f"{scheme}://<tailscale-ip>:{port}",
             "description": f"Bind to Tailscale IP {ts_ip} and access directly",
         }
     elif info.installed and info.backend_state == "NeedsLogin":
@@ -660,7 +670,7 @@ def suggest_best_bind(port=5000):
             "method": "direct",
             "bind_host": "0.0.0.0",
             "port": port,
-            "url": f"http://<your-server-ip>:{port}",
+            "url": f"{scheme}://<your-server-ip>:{port}",
             "description": ("Tailscale is installed but not linked yet. Link this machine above "
                             "to reach the panel privately over your tailnet."),
         }
@@ -669,6 +679,6 @@ def suggest_best_bind(port=5000):
             "method": "direct",
             "bind_host": "0.0.0.0",
             "port": port,
-            "url": f"http://<your-server-ip>:{port}",
+            "url": f"{scheme}://<your-server-ip>:{port}",
             "description": "No Tailscale detected. Bind to all interfaces.",
         }

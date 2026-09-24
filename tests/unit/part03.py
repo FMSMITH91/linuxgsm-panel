@@ -1544,11 +1544,33 @@ try:
     _tsi.get_tailscale_info = lambda *a, **k: TailscaleInfo(
         installed=True, running=True, backend_state="Running", tailscale_ips=["100.90.141.12"],
         dns_name="host.example.ts.net",
-        serve_config={"services": [{"url": "https://host.example.ts.net", "routes": [{}]}], "raw": "x"})
+        serve_config={"services": [{"url": "https://host.example.ts.net", "routes": [
+            {"mount": "/lgsm", "target": "http://127.0.0.1:5000"}]}], "raw": "x"})
     _tsi._cache["info"] = None
     _bys = _tsi.suggest_best_bind(5000)
     check("tailscale: up + DNS name + Serve configured -> binds loopback for Serve",
           _bys["bind_host"] == "127.0.0.1" and _bys["method"] == "tailscale-serve")
+    eq("tailscale: ...and the URL it recommends is the panel's own mapping, mount included",
+       _bys["url"], "https://host.example.ts.net/lgsm")
+    # ANY Serve route used to count, so a node already serving another app (Grafana on :3000) bound
+    # a fresh panel — whose bind_host is empty until the wizard's first step, and app._resolved_bind
+    # takes this answer — to 127.0.0.1 with nothing proxying to it: the first-run wizard, the only
+    # way to create the first admin, was unreachable except through an SSH tunnel.
+    _tsi.get_tailscale_info = lambda *a, **k: TailscaleInfo(
+        installed=True, running=True, backend_state="Running", tailscale_ips=["100.90.141.12"],
+        dns_name="host.example.ts.net",
+        serve_config={"services": [{"url": "https://host.example.ts.net", "routes": [
+            {"mount": "/", "target": "http://127.0.0.1:3000"}]}], "raw": "x"})
+    _tsi._cache["info"] = None
+    _bgf = _tsi.suggest_best_bind(5000)
+    check("tailscale: a Serve route to ANOTHER app does not bind the panel to loopback",
+          _bgf["bind_host"] != "127.0.0.1" and _bgf["method"] == "tailscale-direct", repr(_bgf))
+    # The direct URLs were hardcoded http:// while the panel serves self-signed TLS by default, so
+    # the page linked the operator to plain HTTP on a port that only speaks TLS.
+    eq("tailscale: the direct URL uses the scheme the panel is actually serving",
+       _tsi.suggest_best_bind(5000, scheme="https")["url"], "https://100.90.141.12:5000")
+    eq("tailscale: ...and http only when the panel serves http (control)",
+       _tsi.suggest_best_bind(5000, scheme="http")["url"], "http://100.90.141.12:5000")
 finally:
     _tsi.get_tailscale_info = _orig_gti
     _tsi._cache["info"] = None
