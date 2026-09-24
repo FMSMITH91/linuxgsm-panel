@@ -68,11 +68,12 @@ def register(app):
         # PERMANENTLY LOCKED for both GET and POST. Previously only GET was blocked, so
         # an unauthenticated POST /setup with step=admin_user could create a brand-new
         # superadmin (or step=welcome could rewrite bind_host/port). Lock everything.
-        # The LOCK deliberately checks the DB row alone, not is_setup_complete().
+        # The LOCK checks the completed SetupState row alone — the same test is_setup_complete()
+        # makes, so the wizard's show-condition and its lock can no longer disagree. config.json's
+        # setup_complete is still written but neither of them reads it.
         #
-        # is_setup_complete() is (DB row AND config flag), which is right for deciding whether to
-        # SHOW the wizard — a restored or blank DB must be able to run setup again. It is wrong for
-        # the lock: load_config() falls back to DEFAULT_CONFIG on any JSONDecodeError/OSError, and
+        # is_setup_complete() used to be (DB row AND config flag), and the lock had to differ from
+        # it: load_config() falls back to DEFAULT_CONFIG on any JSONDecodeError/OSError, and
         # DEFAULT_CONFIG has setup_complete=False. So a config.json that is deleted, or merely
         # hand-edited into invalid JSON, reopened this UNAUTHENTICATED wizard on a fully configured
         # install — where step=welcome rewrites bind_host/port (turning a loopback-only panel into

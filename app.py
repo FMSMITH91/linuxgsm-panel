@@ -1748,11 +1748,12 @@ def _setup_open():
     # comment on setup_wizard() above, which describes this exact failure and then only
     # defended /setup with it.
     #
-    # These four were gated on `not is_setup_complete()`, which is (DB row AND config flag).
-    # The config half fails OPEN: load_config() swallows JSONDecodeError/OSError and returns
-    # DEFAULT_CONFIG, where setup_complete is False. So on a fully configured install, a
-    # data/config.json that was deleted, truncated by a full disk, or hand-edited into invalid
-    # JSON made is_setup_complete() False and reopened all four to unauthenticated callers:
+    # These four were gated on `not is_setup_complete()`, which was then (DB row AND config flag);
+    # it reads the row alone now too, so the two agree. The config half failed OPEN:
+    # load_config() swallows JSONDecodeError/OSError and returns DEFAULT_CONFIG, where
+    # setup_complete is False. So on a fully configured install, a data/config.json that was
+    # deleted, truncated by a full disk, or hand-edited into invalid JSON made
+    # is_setup_complete() False and reopened all four to unauthenticated callers:
     # /install runs the Tailscale installer as root; /up returns an auth URL that joins THIS
     # HOST to whoever called it, with Tailscale SSH enabled; /serve rewrites bind_host and
     # site_domain. A missing config file should degrade the panel, not hand it over.

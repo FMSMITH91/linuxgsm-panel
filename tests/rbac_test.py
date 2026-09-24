@@ -1349,8 +1349,8 @@ try:
     # ── The setup-only endpoints must stay shut when config.json is LOST ───────────────────────────
     # /api/setup/tailscale/{status,install,up,serve} are deliberately unauthenticated — during a fresh
     # install there is no user to authenticate. They are safe only for as long as their "setup is still
-    # open" test is. That test used to be is_setup_complete(), which is (DB row AND config flag), and
-    # the config half fails open: load_config() swallows JSONDecodeError/OSError and hands back
+    # open" test is. That test used to be is_setup_complete(), which was then (DB row AND config flag),
+    # and the config half failed open: load_config() swallows JSONDecodeError/OSError and hands back
     # DEFAULT_CONFIG, where setup_complete is False.
     #
     # So this is the scenario: a fully configured panel whose data/config.json is deleted, truncated by

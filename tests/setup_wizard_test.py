@@ -14,14 +14,15 @@ described at length in route_helpers.py:
 
   1. only GET was blocked, so an unauthenticated POST /setup with step=admin_user still created a
      brand-new superadmin on a fully configured install.
-  2. the lock was gated on is_setup_complete(), which is (DB row AND config flag) — and the config
-     half FAILS OPEN, because load_config() swallows JSONDecodeError/OSError and returns
+  2. the lock was gated on is_setup_complete(), which was then (DB row AND config flag) — and the
+     config half FAILED OPEN, because load_config() swallows JSONDecodeError/OSError and returns
      DEFAULT_CONFIG, where setup_complete is False. So deleting data/config.json, or truncating it
      on a full disk, or hand-editing it into invalid JSON, reopened the wizard on a live install.
 
-Both are now defended by reading the SetupState row alone. Neither had a test. They do now: the
-config-corruption cases below are the ones that matter most, because nothing about them looks like
-an attack — a full disk produces the same file.
+Both are now defended by reading the SetupState row alone — which is also all is_setup_complete()
+reads now; config.json's setup_complete is written but no longer read. Neither had a test. They
+do now: the config-corruption cases below are the ones that matter most, because nothing about
+them looks like an attack — a full disk produces the same file.
 
 Runs against a throwaway database like the other suites, and deliberately does NOT pre-complete
 setup — that is the entire point.
