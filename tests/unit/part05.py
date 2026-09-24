@@ -3759,6 +3759,32 @@ try:
     check("create_game_user: an enrolment that FAILS still reports the account as created",
           _r3 == 0 and [v for v, _a in _cgu] == ["user-create", "gameuser-group"],
           "rc=%s %s" % (_r3, _cgu))
+
+    # enrol_game_user is the half an IMPORTED account needs as well: discovery adds a row for an
+    # account somebody else made, and on a narrow-grant host the helper refuses every per-account
+    # verb for an account outside the group. It returns the helper's refusal rather than only
+    # logging it, so the import can say which servers the panel cannot drive.
+    _sm_core.is_local_server = lambda s: True
+    _sm_core.run_privileged = lambda s, verb, args=(), **k: (
+        _cgu.append((verb, list(args))),
+        ("", "refusing to enrol steam in lgsmpanel-games: it can already run sudo\n", 1))[1]
+    _cgu.clear(); _eg_refused = _sm_core.enrol_game_user(NS(), "steam")
+    check("enrol_game_user: a helper refusal comes back as the reason, not swallowed",
+          _cgu == [("gameuser-group", ["steam"])] and "already run sudo" in (_eg_refused or ""),
+          "%s -> %r" % (_cgu, _eg_refused))
+    _sm_core.run_privileged = _cgu_rp
+    _cgu.clear(); _eg_ok = _sm_core.enrol_game_user(NS(), "rustserver")
+    check("enrol_game_user: ...and one that succeeds reports nothing",
+          _eg_ok is None and _cgu == [("gameuser-group", ["rustserver"])],
+          "%s -> %r" % (_cgu, _eg_ok))
+    import pwd as _eg_pwd
+    _cgu.clear(); _eg_self = _sm_core.enrol_game_user(NS(), _eg_pwd.getpwuid(os.getuid()).pw_name)
+    check("enrol_game_user: the panel's own account is not sent (the helper accepts its caller)",
+          _eg_self is None and _cgu == [], str(_cgu))
+    _sm_core.is_local_server = lambda s: False
+    _cgu.clear(); _eg_remote = _sm_core.enrol_game_user(NS(), "rustserver")
+    check("enrol_game_user: a remote host is not sent the local-only verb",
+          _eg_remote is None and _cgu == [], str(_cgu))
 finally:
     _sm_core.run_privileged, _sm_core.is_local_server = _o_rp, _o_local4
 
@@ -3832,6 +3858,16 @@ try:
                                 lambda _p=_pg: [_FakeGrp(_p, ["bob"])])
         check("enrolment: ...nor one in '%s'" % _pg,
               _helper._can_already_escalate("bob") is True)
+    # install.sh evicts a member of these from the group on every update, so the helper must refuse
+    # to enrol one too — or an import re-enrols what the next update takes away.
+    _ne_missed = []
+    for _pg in ("adm", "shadow", "staff", "incus-admin", "libvirt"):
+        _helper.grp = _fake_grp(lambda _g: _FakeGrp("users"),
+                                lambda _p=_pg: [_FakeGrp(_p, ["bob"])])
+        if _helper._can_already_escalate("bob") is not True:
+            _ne_missed.append(_pg)
+    check("enrolment: ...nor one in adm, shadow, staff, incus-admin or libvirt",
+          not _ne_missed, "enrolled anyway: %s" % _ne_missed)
     # A sudoers FILE naming the account directly, with no privileged group anywhere.
     _sg_dir = _sg_tmp.mkdtemp(prefix="sudoers-")
     with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
@@ -3862,6 +3898,11 @@ try:
         "netgroup": "+admins ALL=(ALL) ALL\n",
         "undefined-alias": "NOBODYKNOWS ALL=(ALL) ALL\n",
         "continued": "alice,\\\n  deploy ALL=(ALL) ALL\n",
+        # A comment runs to the end of its physical line even when that ends in a backslash —
+        # visudo parses the next line on its own. Joining continuations before stripping comments
+        # swallowed the rule below each of these into the comment, and deploy was enrolled.
+        "comment-then-rule": "# Cmnd_Alias OLD = /bin/true, \\\ndeploy ALL=(ALL) NOPASSWD: ALL\n",
+        "trailing-comment-then-rule": "alice ALL=(ALL) ALL # note \\\ndeploy ALL=(ALL) ALL\n",
     }
     _sg_missed = []
     for _case, _body in _sg_cases.items():
@@ -3892,6 +3933,15 @@ try:
                   "lgsmpanel ALL=(%lgsmpanel-games) NOPASSWD: ALL\n")
     check("enrolment: ...and rules naming other accounts still let a plain account in",
           _helper._can_already_escalate("deploy") is False)
+    # ...and a comment ending in a backslash, or a continuation with blanks after its backslash
+    # (which sudo accepts), is not read as a rule nor as an unparseable line.
+    with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+        _fh.write("# old: Cmnd_Alias X = /bin/true, \\\nalice,\\  \n  bob ALL=(ALL) ALL # b \\\n"
+                  "#999 ALL=(ALL) ALL\n")
+    check("enrolment: ...nor does a comment ending in a backslash, or a blank-tailed continuation",
+          _helper._can_already_escalate("deploy") is False
+          and _helper._sudoers_logical_lines("a,\\  \n b X=Y # c \\\n#9 Z=W\n")
+          == ["a, b X=Y", "#9 Z=W"])
 
     # The verb must consult it, not merely define it.
     _ran = []
@@ -4052,6 +4102,16 @@ check("install.sh: ...and the backfill acts on its answer, enrolling only on a d
       "can_already_sudo" in _inst_fn("sync_game_user_group")
       and "usermod -aG" in _inst_fn("sync_game_user_group"),
       "sync_game_user_group does not consult it")
+# The two lists are one contract. install.sh EVICTS an enrolled member of any group it names on
+# every update; a group only install.sh knew about was re-enrolled by the helper at the next import
+# or install and taken away again by the next update, round and round.
+_cas_m = _re.search(r'_cas_groups="([^"]*)"', _inst_fn("can_already_sudo"))
+_cas_set = set(_cas_m.group(1).split("|")) if _cas_m else set()
+check("install.sh and the helper refuse to enrol members of the SAME groups",
+      _cas_set and _cas_set == set(_helper.NEVER_ENROL_GROUPS),
+      "only install.sh: %s; only the helper: %s"
+      % (sorted(_cas_set - set(_helper.NEVER_ENROL_GROUPS)),
+         sorted(set(_helper.NEVER_ENROL_GROUPS) - _cas_set)))
 
 # ...and when the group database does not answer, the check must fail CLOSED. It used to swallow
 # the error and return whatever it had, so an unreadable group database produced an EMPTY set, no

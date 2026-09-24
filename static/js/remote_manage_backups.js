@@ -589,6 +589,23 @@ function appendSkippedNote(msg, skipped){
   span.textContent='Skipped '+sk.length+': '+sk.join(', ')+'.';
   msg.appendChild(span);
 }
+// An imported account the helper would not put in the panel's game-account group (it can already
+// reach root, or the enrolment failed). On a host where the panel's sudo is limited to its helper,
+// the panel cannot control that server, so say so here instead of on every later action.
+function appendEnrolNote(msg, notEnrolled){
+  if(!msg || !notEnrolled || !notEnrolled.length) return;
+  var box=document.createElement('div'); box.className='text-warning small mt-1';
+  var head=document.createElement('div');
+  head.textContent='Imported, but not added to the panel\u2019s game-account group. Where the panel\u2019s sudo is limited to its helper, it cannot control these servers.';
+  box.appendChild(head);
+  notEnrolled.forEach(function(n){
+    var row=document.createElement('div'); row.className='font-monospace text-break';
+    row.setAttribute('data-no-i18n','');
+    row.textContent=(n.user||'?')+': '+(n.reason||'');
+    box.appendChild(row);
+  });
+  msg.appendChild(box);
+}
 function prependContentNotes(out, content){
   if(!out || !content || !content.length) return;
   var frag=document.createDocumentFragment();
@@ -626,6 +643,7 @@ function importExisting(btn){
       else { if(msg) msg.innerHTML='<span class="text-danger">'+escapeHtml(d.message||'Nothing imported.')+'</span>';  // nosemgrep
              btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected'; }
       appendSkippedNote(msg, d.skipped);
+      appendEnrolNote(msg, d.not_enrolled);
     }).catch(function(){ if(msg) msg.innerHTML='<span class="text-danger">Import failed.</span>';
              btn.disabled=false; btn.innerHTML='<i class="bi bi-plus-circle"></i> Import selected'; });
 }

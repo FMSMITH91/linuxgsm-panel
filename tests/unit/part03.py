@@ -820,6 +820,36 @@ try:
     _gp_calls.clear()
     _sm_core.set_game_priority_bulk(None, [])
     check("set_game_priority_bulk: no users -> no call", _gp_calls == [])
+    # The helper refuses the WHOLE argument list when one account is outside the panel's game
+    # group (renice-users is Rest(v_game_account)), so one such account on the panel host left
+    # every game there un-reniced. A refused batch falls back to one call per account.
+    _gp_local = _sm_core.is_local_server
+    try:
+        _sm_core.run_privileged = lambda s, v, a=(), **k: (
+            _gp_calls.append((v, list(a))), ("", "", 2 if "ubuntu" in a else 0))[1]
+        _sm_core.is_local_server = lambda s: True
+        _gp_calls.clear()
+        _sm_core.set_game_priority_bulk(None, ["codserver", "ubuntu", "gmodserver"])
+        check("set_game_priority_bulk: one refused account does not cost the others their renice",
+              _gp_calls[1:] == [("renice-users", ["-1", "codserver"]),
+                                ("renice-users", ["-1", "ubuntu"]),
+                                ("renice-users", ["-1", "gmodserver"])], str(_gp_calls))
+        _sm_core.is_local_server = lambda s: False
+        _gp_calls.clear()
+        _sm_core.set_game_priority_bulk(None, ["codserver", "ubuntu", "gmodserver"])
+        check("set_game_priority_bulk: ...a remote host (no such gate there) is not retried",
+              len(_gp_calls) == 1, str(_gp_calls))
+        # renice's OWN failure is 1, and it fails whenever one listed account has no process — any
+        # stopped server — after renicing the rest. That is not a refusal and is not retried.
+        _sm_core.is_local_server = lambda s: True
+        _sm_core.run_privileged = lambda s, v, a=(), **k: (
+            _gp_calls.append((v, list(a))), ("", "renice: failed to get priority", 1))[1]
+        _gp_calls.clear()
+        _sm_core.set_game_priority_bulk(None, ["codserver", "ubuntu", "gmodserver"])
+        check("set_game_priority_bulk: ...renice's own 'no such process' (rc 1) is not retried",
+              len(_gp_calls) == 1, str(_gp_calls))
+    finally:
+        _sm_core.is_local_server = _gp_local
 finally:
     _sm_core.run_privileged = _orig_gp
 

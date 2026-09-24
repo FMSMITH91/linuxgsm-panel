@@ -4026,6 +4026,55 @@ try:
         with app.app_context():
             _root_rows = GameServer.query.filter_by(remote_id=remote_id, short_name="root").count()
         check("import: ...and no row was written for it", _root_rows == 0, "rows=%d" % _root_rows)
+
+        # An account imported on the panel's OWN host goes into the panel's game-account group —
+        # the step create_game_user takes for an account the panel makes. The import used to add
+        # the row and nothing else, and on a narrow-grant install the helper refuses every
+        # per-account verb (start, stop, update, downloads) for an account outside that group. An
+        # account the helper will not enrol, because it can already reach root, is REPORTED.
+        from panel.ops.ssh_manager import _core as _imp_core
+        _imp_saved = (_imp_core.run_privileged, _imp_core.is_local_server,
+                      _imp_mod._bg_cache_commands)
+        _imp_calls = []
+
+        def _imp_fake_rp(_s, verb, args=(), **_k):
+            _imp_calls.append((verb, list(args)))
+            if verb == "gameuser-group" and list(args) == ["importedsudo"]:
+                return ("", "refusing to enrol importedsudo in lgsmpanel-games: it can already "
+                            "run sudo\n", 1)
+            return ("", "", 0)
+        try:
+            _imp_core.run_privileged = _imp_fake_rp
+            _imp_core.is_local_server = lambda _s: True
+            # No worker to outlive the stubs — and the call is RECORDED, because the command-list
+            # read it starts runs as the game account and needs the membership granted first.
+            _imp_mod._bg_cache_commands = lambda *a, **k: _imp_calls.append(("bg-cache", []))
+            _imp_mod.discover_linuxgsm_servers = lambda _s: [
+                {"user": _u, "lgsm_name": "csgoserver", "port": 27015, "backups": 0, "mods": 0,
+                 "cron": 0, "autostart": False} for _u in ("importedplain", "importedsudo")]
+            imp_en = c.post("/api/remote/%d/import" % remote_id, json={"servers": [
+                {"user": "importedplain", "game_type": "csgo", "port": 27016},
+                {"user": "importedsudo", "game_type": "csgo", "port": 27017}]})
+        finally:
+            (_imp_core.run_privileged, _imp_core.is_local_server,
+             _imp_mod._bg_cache_commands) = _imp_saved
+        _ime = imp_en.get_json() or {}
+        _ime_enrolled = sorted(_a for _v, _a in _imp_calls if _v == "gameuser-group")
+        check("import: each account imported on the panel's own host is put in the game group",
+              sorted(_ime.get("added") or []) == ["importedplain", "importedsudo"]
+              and _ime_enrolled == [["importedplain"], ["importedsudo"]],
+              "added=%s enrolled=%s" % (_ime.get("added"), _ime_enrolled))
+        _ime_order = [_v for _v, _a in _imp_calls if _v in ("gameuser-group", "bg-cache")]
+        check("import: ...BEFORE the background command-list read that runs as those accounts",
+              _ime_order == ["gameuser-group", "gameuser-group", "bg-cache"], str(_ime_order))
+        _ime_ne = _ime.get("not_enrolled") or []
+        check("import: ...and the one the helper refuses is reported, with its reason; the other "
+              "is not", [_n.get("user") for _n in _ime_ne] == ["importedsudo"]
+              and "already run sudo" in (_ime_ne[0].get("reason") or ""), str(_ime_ne)[:160])
+        with app.app_context():
+            GameServer.query.filter(GameServer.remote_id == remote_id, GameServer.short_name.in_(
+                ["importedplain", "importedsudo"])).delete(synchronize_session=False)
+            db.session.commit()
     finally:
         _imp_mod.discover_linuxgsm_servers = _imp_orig
     imp_denied = client_as(mru_id).post("/api/remote/%d/import" % remote_id,

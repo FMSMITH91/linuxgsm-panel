@@ -1137,16 +1137,46 @@ def create_game_user(server, user, timeout=30):
     arrange and the group means nothing there, and an older helper without the verb must not turn
     a working server install into a failed one. Returns user-create's own (out, err, rc)."""
     out, err, rc = run_privileged(server, "user-create", [user], timeout=timeout)
-    if rc == 0 and is_local_server(server):
-        try:
-            _, g_err, g_rc = run_privileged(server, "gameuser-group", [user], timeout=15,
-                                            merge_stderr=False)
-            if g_rc != 0:
-                _log.warning("could not add %s to %s: %s", user, _priv.GAME_GROUP,
-                             (g_err or "")[:200])
-        except Exception:
-            _log.debug("gameuser-group failed (non-fatal)", exc_info=True)
+    if rc == 0:
+        enrol_game_user(server, user)
     return out, err, rc
+
+
+def enrol_game_user(server, user):
+    """Put an EXISTING account in the group the panel's narrow sudoers grant names, on the panel's
+    own host. Returns None when that is done or not needed, else the reason it was not — the
+    helper's own words when it refused (an account that can already reach root is never enrolled).
+
+    Two callers, because an account reaches the panel two ways: create_game_user makes one, and
+    discovery IMPORTS one somebody else made. The import used to add a GameServer row and nothing
+    else, and every per-account helper verb (lgsm-command, the file and backup reads, crontab-list)
+    refuses an account outside the group on a narrow-grant install — so an imported server showed
+    up, could not be started, stopped or downloaded from, and nothing said why until install.sh
+    next ran as root and enrolled it.
+
+    Not needed: a remote host (the group means nothing there), and the panel's OWN account — the
+    helper already accepts the account that invoked it, and would refuse to enrol it anyway, since
+    the panel user holds sudo rules of its own. Never raises: the caller's own work has succeeded
+    by the time this runs, and an older helper without the verb must not turn that into a failure."""
+    if not is_local_server(server):
+        return None
+    try:
+        import pwd
+        if user == pwd.getpwuid(os.getuid()).pw_name:
+            return None
+    except (ImportError, KeyError):
+        pass
+    try:
+        _, g_err, g_rc = run_privileged(server, "gameuser-group", [user], timeout=15,
+                                        merge_stderr=False)
+    except Exception:
+        _log.debug("gameuser-group failed (non-fatal)", exc_info=True)
+        return "the enrolment could not be run"
+    if g_rc != 0:
+        reason = (g_err or "").strip()[:200] or ("exit status %s" % g_rc)
+        _log.warning("could not add %s to %s: %s", user, _priv.GAME_GROUP, reason)
+        return reason
+    return None
 
 
 def read_as_game_user(server, user, sh, timeout=30):
@@ -1267,6 +1297,11 @@ def set_game_priority(server, user, nice=GAME_PRIORITY_NICE):
         _log.debug("set_game_priority failed (non-fatal)", exc_info=True)
 
 
+# tools/panel-helper's exit status when it refuses an argument (main(): validate() raised). Nothing
+# it runs exits with it for a verb here: renice reports failure as 1.
+_HELPER_REFUSED_ARGS = 2
+
+
 def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
     """Renice ALL processes of several game users in ONE root command (negative nice needs root).
     The panel boosts a game on its own start/restart, but the LinuxGSM monitor cron restarts a
@@ -1278,10 +1313,23 @@ def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
     if not users:
         return
     try:
-        run_privileged(server, "renice-users", [str(int(nice))] + list(users), timeout=20,
-                       merge_stderr=False)
+        _, _, rc = run_privileged(server, "renice-users", [str(int(nice))] + list(users),
+                                  timeout=20, merge_stderr=False)
     except Exception:
         _log.debug("set_game_priority_bulk failed (non-fatal)", exc_info=True)
+        return
+    if rc == _HELPER_REFUSED_ARGS and len(users) > 1 and is_local_server(server):
+        # The helper validates the whole argument list or none of it, and it refuses an account
+        # outside the panel's game-account group — an imported sudo-capable install, or one
+        # install.sh took out of the group. One such account on the panel host left EVERY game
+        # there at nice 0, every pass, silently. So when the batch is refused, go one account at a
+        # time: a refusal then costs only the account it is about.
+        #
+        # ONLY on that refusal. renice itself exits 1 whenever one listed account has no process
+        # ("failed to get priority ... No such process") — any stopped server — having reniced the
+        # rest; retrying on that would turn every keeper pass into one sudo call per server.
+        for user in users:
+            set_game_priority(server, user, nice)
 
 
 def _tmux_live_socket_sh(selfname):
