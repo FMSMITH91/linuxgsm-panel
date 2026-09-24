@@ -1609,6 +1609,59 @@ check("tailscale: ...while '(tailnet only)' is private, even with 'funnel' in a 
       and [s["funnel"] for s in _tsu_priv.serve_config.get("services", [])] == [False],
       "funnel_enabled=%r serve_config=%r" % (_tsu_priv.funnel_enabled, _tsu_priv.serve_config))
 _tsi._cache["info"] = None
+
+# ── Disabling Serve runs a command the CLI has, and removes only the PANEL's mapping ─────────
+# It ran `tailscale serve --bg --remove <mount>`. No Tailscale version has --remove: the CLI exits 2
+# ("flag provided but not defined: -remove") before doing anything, so every Disable failed —
+# including taking a Funnelled panel back off the internet. The CLI's removal is
+# `serve --https=<port> --set-path=<mount> off`; without --set-path, `off` drops EVERY mount on
+# the port. And the mount has to be the panel's: Tailscale lists "/" first, so on a node where
+# another app holds "/" and the panel sits at /lgsm, "the first route" was the other app.
+eq("serve-off: the removal argv is the CLI's own grammar, path always given",
+   _tsi.serve_off_args("https://node.example.ts.net", "/"),
+   ["serve", "--https=443", "--set-path=/", "off"])
+eq("serve-off: ...on the listener the mapping is actually on",
+   _tsi.serve_off_args("https://node.example.ts.net:8443", "/lgsm"),
+   ["serve", "--https=8443", "--set-path=/lgsm", "off"])
+_tsd_info = TailscaleInfo(
+    installed=True, running=True, backend_state="Running", dns_name="node.example.ts.net",
+    serve_config={"services": [{"url": "https://node.example.ts.net", "funnel": True, "routes": [
+        {"mount": "/", "target": "http://127.0.0.1:3000"},
+        {"mount": "/lgsm", "target": "https+insecure://127.0.0.1:5000"}]}], "raw": "x"})
+_tsd_saved = (_tsi.get_tailscale_info, _tsi._run_ts, _tsi.ensure_operator)
+_tsd_ran, _tsd_rc = [], {"rc": 0}
+try:
+    _tsi.get_tailscale_info = lambda force_refresh=False: _tsd_info
+    _tsi._run_ts = lambda args, timeout=5: (_tsd_ran.append(list(args)), ("", "err", _tsd_rc["rc"]))[1]
+    _tsi.ensure_operator = lambda: (True, "panel")
+    eq("serve-off: the panel's route is found by its backend, not by its place in the list",
+       [r["mount"] for r in _tsi.panel_serve_routes(_tsd_info.serve_config, 5000)], ["/lgsm"])
+    _tsd_r = _tsi.disable_tailscale_serve("/", 5000)
+    check("serve-off: asked to remove another app's '/', it removes NOTHING",
+          _tsd_r[0] is False and _tsd_ran == [], repr((_tsd_r, _tsd_ran)))
+    _tsd_r = _tsi.disable_tailscale_serve("/lgsm", 5000)
+    check("serve-off: the panel's own mapping is removed with `serve ... off`, never --remove",
+          _tsd_r[0] is True and _tsd_ran == [["serve", "--https=443", "--set-path=/lgsm", "off"]],
+          repr((_tsd_r, _tsd_ran)))
+    _tsd_ran.clear()
+    _tsd_rc["rc"] = 2
+    _tsd_r = _tsi.disable_tailscale_serve("/lgsm", 5000)
+    check("serve-off: ...and a CLI that refused is a failure, not 'removed' (control)",
+          _tsd_r[0] is False and len(_tsd_ran) == 1, repr((_tsd_r, _tsd_ran)))
+    _tsd_ran.clear()
+    _tsd_info.serve_unreadable = True
+    _tsd_r = _tsi.disable_tailscale_serve("/lgsm", 5000)
+    check("serve-off: an unreadable Serve config removes nothing (it can't tell whose mapping)",
+          _tsd_r[0] is False and _tsd_ran == [], repr((_tsd_r, _tsd_ran)))
+    _tsd_info.serve_unreadable = False
+    _tsd_info.serve_config = {"services": [{"url": "https://node.example.ts.net", "funnel": False,
+                                            "routes": [{"mount": "/", "target": "http://127.0.0.1:3000"}]}]}
+    _tsd_r = _tsi.disable_tailscale_serve("/", 5000)
+    check("serve-off: with nothing proxying the panel, disabling is done and touches nothing",
+          _tsd_r[0] is True and _tsd_ran == [], repr((_tsd_r, _tsd_ran)))
+finally:
+    _tsi.get_tailscale_info, _tsi._run_ts, _tsi.ensure_operator = _tsd_saved
+    _tsi._cache["info"] = None
 _tsi._run_ts, _tsi._run_ts_json = _orig_run_ts, _orig_run_ts_json   # restored, as above
 
 # ── Debug report: repeated tracebacks in the log tail get collapsed ───

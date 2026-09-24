@@ -214,7 +214,7 @@
             <div class="flex-grow-1">
               <label class="form-label small" for="tailscale-mount">Mount Point</label>
               <input id="tailscale-mount" type="text" name="mount" class="form-control form-control-sm"
-                     value="{{ config.tailscale_mount or '/' }}">
+                     value="{{ serve_default_mount }}">
             </div>
             {% if current_user.is_superadmin %}
             <button type="button" class="btn btn-success btn-sm" data-action="enableServe" data-args='["@self"]'>
@@ -241,26 +241,18 @@
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
         <span><i class="bi bi-hdd-stack"></i> Serve Configuration</span>
-        {% if info.running and info.serve_config and info.serve_config.get('services') %}
-        {# The mount is carried on the button, not hardcoded in the handler: `tailscale serve
-           --remove /` exits 0 on a node whose mapping is at /lgsm-panel, so the panel would report
-           success, clear tailscale_setup_done and tailscale_mount, and leave Serve running. #}
-        {% if current_user.is_superadmin %}
-        {# ...and it is the mount the HOST reported, not the panel's recollection of one it set.
-           config.tailscale_mount is empty for any mapping the panel did not create — an operator
-           who ran `tailscale serve --bg --set-path /panel` by hand — and this button is shown for
-           those too, so the fallback put back the exact '/' the note above says must not be sent:
-           `tailscale serve --remove /` exits 0 because removing an absent root mapping is not an
-           error, so the toast said the mapping was removed, the audit row recorded a success,
-           tailscale_setup_done was cleared, and Serve went on publishing the panel at /panel.
-           The table below is rendering this same route, so the button now sends what the page
-           shows. #}
-        {% set svc = info.serve_config.services[0] %}
+        {# Shown when the HOST reports a mapping that proxies this panel (panel_routes, matched on
+           the backend: loopback on the panel's port), or when the panel still records Serve as set
+           up — the second so a mapping removed by hand can be cleared here too, which stops the
+           boot path re-applying it. The mount is the panel's own route. It used to be
+           services[0].routes[0], and Tailscale lists "/" first, so on a node where the panel sits
+           at /lgsm because another app holds "/", Disable targeted the other app. The server
+           re-checks the mount against the host's config before removing anything. #}
+        {% if info.running and (panel_routes or config.tailscale_setup_done) and current_user.is_superadmin %}
         <button class="btn btn-outline-danger btn-sm" data-action="disableServe" data-args='["@self"]'
-                data-mount="{{ (svc.routes[0].mount if svc.routes else config.tailscale_mount) or '/' }}">
+                data-mount="{{ (panel_routes[0].mount if panel_routes else config.tailscale_mount) or '/' }}">
           <i class="bi bi-x-circle"></i> Disable
         </button>
-        {% endif %}
         {% endif %}
       </div>
       <div class="card-body p-0">

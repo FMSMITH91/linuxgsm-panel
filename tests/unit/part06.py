@@ -3077,8 +3077,30 @@ check("install.sh: ...with SCRIPT_PATH only as a fallback, still shebang-checked
 _ts_tpl = open(os.path.join(_root, "templates", "tailscale.html"), encoding="utf-8").read()
 check("tailscale.html: disableServe does not hardcode the mount",
       "action: 'disable', mount: '/'" not in _ts_tpl)
-check("tailscale.html: the Mount Point field shows the configured mount, not a fixed /",
-      "value=\"{{ config.tailscale_mount or '/' }}\"" in _ts_tpl)
+check("tailscale.html: the Mount Point field shows the route's default mount, not a fixed /",
+      "value=\"{{ serve_default_mount }}\"" in _ts_tpl)
+# The template reads two names only the route supplies; Jinja renders a forgotten one as a silent
+# Undefined. So the route is held to passing them, by AST.
+import ast as _ts_ast                                                              # noqa: E402
+from panel.routes import tailscale as _ts_routes                                   # noqa: E402
+_ts_rt_src = open(os.path.join(_root, "panel", "routes", "tailscale.py"), encoding="utf-8").read()
+_ts_page_fn = next(n for n in _ts_ast.walk(_ts_ast.parse(_ts_rt_src))
+                   if isinstance(n, _ts_ast.FunctionDef) and n.name == "tailscale_page")
+_ts_rt_kw = {k.arg for n in _ts_ast.walk(_ts_page_fn) if isinstance(n, _ts_ast.Call)
+             and getattr(n.func, "id", "") == "render_template" for k in n.keywords}
+check("tailscale page: the route passes panel_routes and serve_default_mount to the template",
+      {"panel_routes", "serve_default_mount"} <= _ts_rt_kw, sorted(_ts_rt_kw))
+# Enabling Serve at a mount another app holds REPLACES that app's mapping. The form offered "/"
+# without looking; the setup wizard already moves the panel to /lgsm when "/" is taken.
+_ts_grafana = type("I", (), {"serve_config": {"services": [{"url": "https://h.ts.net", "routes": [
+    {"mount": "/", "target": "http://127.0.0.1:3000"}]}]}})()
+eq("tailscale page: Enable does not offer a '/' another app already holds",
+   _ts_routes._serve_default_mount(_ts_grafana, {}, 5000), "/lgsm")
+_ts_panel_root = type("I", (), {"serve_config": {"services": [{"url": "https://h.ts.net", "routes": [
+    {"mount": "/", "target": "http://127.0.0.1:5000"}]}]}})()
+eq("tailscale page: ...while a '/' that is the panel's own, or free, stays '/' (control)",
+   (_ts_routes._serve_default_mount(_ts_panel_root, {}, 5000),
+    _ts_routes._serve_default_mount(type("I", (), {"serve_config": {}})(), {}, 5000)), ("/", "/"))
 
 # The Serve card, RENDERED rather than grepped. Both defects below live in what the page says for
 # a given state, and a substring gate cannot tell a branch from the comment that explains it.
@@ -3109,7 +3131,10 @@ _ts_svc = {"url": "https://host.example.ts.net", "funnel": False,
 
 
 def _ts_card_html(info, config=None):
-    return _ts_tmpl.render(info=info, config=config or {}, current_user=_TsUser())
+    # panel_routes as the route computes it, from the host's config and the panel's port.
+    from panel.ops import tailscale_integration as _ts_ti
+    return _ts_tmpl.render(info=info, config=config or {}, current_user=_TsUser(),
+                           panel_routes=_ts_ti.panel_serve_routes(info.serve_config, 5000))
 
 
 # ...the mount the Disable button carries is the one the HOST reported, not the panel's
@@ -3130,9 +3155,25 @@ check("tailscale.html: ...and the page's own value wins over a stale stored one"
       "the stored mount is sent while the table renders a different one")
 _ts_stored_only = _ts_card_html(
     _TsInfo(serve_config={"services": [{"url": "https://h.ts.net", "funnel": False, "routes": []}]}),
-    {"tailscale_mount": "/lgsm"})
+    {"tailscale_mount": "/lgsm", "tailscale_setup_done": True})
 check("tailscale.html: ...with the stored mount still the fallback when no route came back",
       'data-mount="/lgsm"' in _ts_stored_only, _ts_stored_only[:200])
+# ...and "the host reported" means the route that proxies the PANEL. It was services[0].routes[0],
+# and Tailscale lists "/" first: where another app holds "/" and the panel sits at /lgsm, Disable
+# targeted the other app.
+_ts_shared = _ts_card_html(_TsInfo(serve_config={"services": [
+    {"url": "https://host.example.ts.net", "funnel": True, "routes": [
+        {"mount": "/", "target": "http://127.0.0.1:3000"},
+        {"mount": "/lgsm", "target": "https+insecure://127.0.0.1:5000"}]}]}))
+check("tailscale.html: Disable carries the panel's mount, not another app's '/' listed first",
+      'data-mount="/lgsm"' in _ts_shared and 'data-mount="/"' not in _ts_shared,
+      [ln.strip() for ln in _ts_shared.splitlines() if "data-mount" in ln])
+_ts_other_only = _ts_card_html(_TsInfo(serve_config={"services": [
+    {"url": "https://host.example.ts.net", "funnel": False, "routes": [
+        {"mount": "/", "target": "http://127.0.0.1:3000"}]}]}))
+check("tailscale.html: ...and a node serving only another app offers no Disable at all",
+      'data-action="disableServe"' not in _ts_other_only,
+      [ln.strip() for ln in _ts_other_only.splitlines() if "data-mount" in ln])
 
 # ...and an unread Serve config is not announced as "nothing is configured". serve_config is {} for
 # both "nothing is published" and "`tailscale serve status` was refused" (the panel's account is

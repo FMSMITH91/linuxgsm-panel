@@ -14,6 +14,18 @@ from panel.db.models import LOCAL_HOST_LABEL
 from app import (_ts_backend_scheme)
 
 
+def _serve_default_mount(info, cfg, port):
+    """The mount the Enable form offers. Enabling Serve at a mount another app already holds
+    REPLACES that app's mapping, and the form offered "/" without looking — the setup wizard
+    already moves the panel to /lgsm when "/" is taken, and this is the same rule."""
+    mount = cfg.get("tailscale_mount") or "/"
+    for svc in (info.serve_config or {}).get("services") or []:
+        for r in svc.get("routes") or []:
+            if r.get("mount") == mount and not ts.route_targets_port(r.get("target"), port):
+                return "/lgsm" if mount == "/" else mount
+    return mount
+
+
 def register(app):
     @app.route("/tailscale")
     @login_required
@@ -22,8 +34,15 @@ def register(app):
         """Tailscale status and management page."""
         info = ts.get_tailscale_info(force_refresh=request.args.get("refresh") == "1")
         cfg = load_config()
-        suggestion = ts.suggest_best_bind(cfg.get("port", 5000))
-        return render_template("tailscale.html", info=info, config=cfg, suggestion=suggestion)
+        port = cfg.get("port", 5000)
+        suggestion = ts.suggest_best_bind(port)
+        # The Serve mappings that proxy THIS panel, read from the host. The Disable button removes
+        # one of these, never "the first route listed" — Tailscale lists "/" first, and when the
+        # panel sits at a sub-path "/" belongs to another app.
+        panel_routes = ts.panel_serve_routes(info.serve_config, port)
+        return render_template("tailscale.html", info=info, config=cfg, suggestion=suggestion,
+                               panel_routes=panel_routes,
+                               serve_default_mount=_serve_default_mount(info, cfg, port))
 
     @app.route("/api/tailscale")
     @login_required
@@ -124,7 +143,7 @@ def register(app):
             return jsonify({"success": False, "message": msg}), 500
 
         elif action == "disable":
-            success, msg = ts.disable_tailscale_serve(mount=mount)
+            success, msg = ts.disable_tailscale_serve(mount=mount, port=port)
             if success:
                 # Mirror the enable branch. Nothing else in the repo ever cleared these, so a
                 # disable left tailscale_setup_done True — which six readers treat as ground truth:

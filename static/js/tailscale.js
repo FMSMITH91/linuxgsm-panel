@@ -136,7 +136,7 @@ function enableServe(btn) {
 }
 
 function disableServe(btn) {
-  // The mount comes from the button's data-mount (what enable persisted), NOT a hardcoded '/'.
+  // The mount comes from the button's data-mount: the route the host reports proxying the panel.
   var mount = (btn && btn.dataset && btn.dataset.mount) || '/';
   confirmDialog({title:'Disable Tailscale Serve', icon:'exclamation-triangle', confirmClass:'btn-danger', confirmLabel:'Disable',
     bodyText:'Disable Tailscale Serve? The panel will no longer be accessible via the Tailscale URL.',

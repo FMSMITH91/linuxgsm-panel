@@ -249,6 +249,53 @@ try:
         code = c.get(path).status_code
         check("GET %s renders (200)" % path, code == 200, "got %d" % code)
 
+    # ── /tailscale's Disable takes down the PANEL's Serve mapping, not the first one listed ──
+    # The button sent services[0].routes[0].mount, and Tailscale lists "/" first — on a node where
+    # another app holds "/" and the panel sits at /lgsm, that was the other app. And the removal
+    # ran `tailscale serve --bg --remove`, a flag no Tailscale version has, so it never worked.
+    import panel.ops.tailscale_integration as _tsd
+    from panel.core.config import load_config as _tsd_load, save_config as _tsd_save
+    _tsd_saved = (_tsd.get_tailscale_info, _tsd._run_ts, _tsd.ensure_operator)
+    _tsd_cfg0 = dict(_tsd_load())
+    _tsd_port = _tsd_cfg0.get("port", 5000)
+    _tsd_ran = []
+    _tsd_info = _tsd.TailscaleInfo(
+        installed=True, running=True, backend_state="Running", dns_name="node.example.ts.net",
+        tailscale_ips=["100.64.0.9"],
+        serve_config={"services": [{"url": "https://node.example.ts.net", "funnel": True, "routes": [
+            {"mount": "/", "target": "http://127.0.0.1:3000"},
+            {"mount": "/lgsm", "target": "http://127.0.0.1:%d" % _tsd_port}]}], "raw": "x"})
+    try:
+        _tsd.get_tailscale_info = lambda force_refresh=False: _tsd_info
+        _tsd._run_ts = lambda args, timeout=5: (_tsd_ran.append(list(args)), ("", "", 0))[1]
+        _tsd.ensure_operator = lambda: (True, "panel")
+        _tsd_c = _tsd_load()
+        # No stored mount: the button's mount has to come from the host's routes, which only the
+        # route supplies — a stored "/lgsm" would let a route that passed nothing pass this too.
+        _tsd_c.update(tailscale_setup_done=True, tailscale_use_funnel=True, tailscale_mount="")
+        _tsd_save(_tsd_c)
+        _tsd_html = c.get("/tailscale").get_data(as_text=True)
+        check("tailscale page: Disable targets the panel's own mount, not another app's '/'",
+              'data-mount="/lgsm"' in _tsd_html and 'data-mount="/"' not in _tsd_html,
+              [ln.strip() for ln in _tsd_html.splitlines() if "data-mount" in ln][:3])
+        _tsd_r = c.post("/api/tailscale/serve", json={"action": "disable", "mount": "/"})
+        check("tailscale serve: disabling at another app's mount removes nothing and keeps the config",
+              _tsd_r.status_code != 200 and _tsd_ran == []
+              and _tsd_load().get("tailscale_setup_done") is True,
+              "%d %r ran=%r" % (_tsd_r.status_code, _tsd_r.get_json(), _tsd_ran))
+        _tsd_r = c.post("/api/tailscale/serve", json={"action": "disable", "mount": "/lgsm"})
+        check("tailscale serve: disabling the panel's mount runs the CLI's `serve ... off` removal",
+              _tsd_r.status_code == 200
+              and _tsd_ran == [["serve", "--https=443", "--set-path=/lgsm", "off"]],
+              "%d %r ran=%r" % (_tsd_r.status_code, _tsd_r.get_json(), _tsd_ran))
+        check("tailscale serve: ...and the boot path will no longer re-apply it (control)",
+              _tsd_load().get("tailscale_setup_done") is False
+              and not _tsd_load().get("tailscale_use_funnel"))
+    finally:
+        _tsd.get_tailscale_info, _tsd._run_ts, _tsd.ensure_operator = _tsd_saved
+        _tsd._cache["info"] = None
+        _tsd_save(_tsd_cfg0)
+
     # ── The notifications page must actually OFFER each channel ───────────────────────────────
     # "/notifications renders 200" passes just as well with a channel's whole card missing, which
     # is how a half-wired provider ships: the backend supports it and nobody can reach it.
