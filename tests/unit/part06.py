@@ -4128,9 +4128,61 @@ check("deploy: ...reads the system install through sudo",
       "sudo -n test -d" in _deploy_wf and "sudo -n stat -c %U" in _deploy_wf,
       "a plain [ -d ] / stat on the service user's home is false-y for the deploy user, and the "
       "script silently takes the wrong branch")
-check("deploy: ...and runs git as the checkout's owner, not as root",
-      'sudo -n -u "${OWNER}" git -C' in _deploy_wf,
-      "git as root on a repo owned by the service user trips safe.directory")
+# ...and ROOT EXECUTES NOTHING OUT OF THAT CHECKOUT. The system branch used to refresh
+# ${PD}/install.sh with `git checkout` as the service user and then run it with `sudo bash`, so on
+# every green merge root ran bytes from a tree AND a .git that the account the helper boundary
+# contains owns outright. Run the real remote script with sudo/systemctl/git shimmed: record what
+# root would execute, and what that file held at the moment it ran.
+_dp_remote = _deploy_raw[_deploy_raw.index("cat <<'REMOTE'\n") + len("cat <<'REMOTE'\n"):
+                         _deploy_raw.index("\n          REMOTE\n")]
+_dp_remote = "\n".join(_ln[10:] if _ln.startswith(" " * 10) else _ln
+                       for _ln in _dp_remote.splitlines())
+_dp_sb = _tempfile.mkdtemp(prefix="deploy-")
+try:
+    import base64 as _dp_b64
+    _dp_pd = os.path.join(_dp_sb, "lgsmpanel", "linuxgsm-panel")
+    os.makedirs(_dp_pd)
+    with open(os.path.join(_dp_pd, "install.sh"), "w") as _dp_f:
+        _dp_f.write("#!/bin/bash\necho PANEL-OWNED-INSTALLER\n")
+    _dp_log = os.path.join(_dp_sb, "log")
+    _dp_shipped = "#!/bin/bash\necho SHIPPED-INSTALLER\n"
+    _dp_shims = (
+        'LOG=%s\n' % _shlex_q(_dp_log)
+        + 'systemctl() { echo %s; }\n' % _shlex_q(_dp_pd)
+        + 'git() { echo "GIT $*" >> "$LOG"; }\n'
+        # sudo: file plumbing runs for real (unprivileged); anything that would EXECUTE as root is
+        # recorded together with the bytes it would have run.
+        + 'sudo() {\n'
+          '  [ "$1" = -n ] && shift\n'
+          '  case "$1" in\n'
+          '    test|stat|mktemp|tee|rm) "$@" ;;\n'
+          '    -u) echo "AS-USER $*" >> "$LOG" ;;\n'
+          '    env) shift; while [ "${1#*=}" != "$1" ]; do shift; done\n'
+          '         echo "ROOT-EXEC $*" >> "$LOG"\n'
+          '         [ "$1" = bash ] && echo "ROOT-BYTES $(cat "$2")" >> "$LOG" ;;\n'
+          '    *) echo "ROOT-EXEC $*" >> "$LOG" ;;\n'
+          '  esac\n'
+          '}\n'
+        + "INSTALLER_B64=%s\n" % _dp_b64.b64encode(_dp_shipped.encode()).decode())
+    _dp_r = _sh_sub.run(["bash", "-c", _dp_shims + _dp_remote], capture_output=True, text=True,
+                        cwd=_dp_sb, env=dict(os.environ, HOME=_dp_sb))
+    _dp_got = open(_dp_log).read() if os.path.exists(_dp_log) else ""
+    _dp_exec = [ln for ln in _dp_got.splitlines() if ln.startswith("ROOT-EXEC ")]
+    check("deploy: the system branch is taken for a unit-reported checkout (positive control)",
+          "System install at %s" % _dp_pd in _dp_r.stdout and _dp_exec,
+          "rc=%s out=%r err=%r log=%r" % (_dp_r.returncode, _dp_r.stdout[-200:],
+                                         _dp_r.stderr[-300:], _dp_got[-300:]))
+    check("deploy: ...and root executes nothing from the service user's checkout",
+          _dp_exec and not any(_dp_pd in ln for ln in _dp_exec)
+          and "PANEL-OWNED-INSTALLER" not in _dp_got,
+          _dp_got[-400:])
+    check("deploy: ...it runs the installer the job shipped, byte for byte",
+          "ROOT-BYTES " + _dp_shipped.strip() in _dp_got,
+          _dp_got[-400:])
+    check("deploy: ...and nothing touches that checkout's git on root's behalf",
+          "GIT " not in _dp_got and "AS-USER" not in _dp_got, _dp_got[-400:])
+finally:
+    _shutil.rmtree(_dp_sb, ignore_errors=True)
 
 # ── the admin's 2FA reset must be VISIBLE, not just present ──────────────────────────────────
 # The switch lives in the Edit User modal and used to sit in a `display:none` block that JS
