@@ -1903,7 +1903,46 @@ def do_panel_restore(args, content):
     return 0
 
 
-def _self_update_detached(panel_dir, log_path, ref, branch):
+SELF_UPDATE_LOG = "self-update.log"
+
+
+def _open_log_in_dir(dir_path, name):
+    """Open a FRESH log file `name` inside `dir_path` for writing, as root, and return it as a text
+    file object. Raises OSError.
+
+    For a directory the panel user owns — its data/ directory. `open(os.path.join(data_dir,
+    "self-update.log"), "w")` there followed a symlink and truncated whatever it named, so the panel
+    user could point that name at any file on the box and have root empty it (or create it) with
+    one panel-self-update call. And O_NOFOLLOW alone would still truncate a hard link.
+
+    So: the directory is opened once, O_NOFOLLOW, and everything happens relative to that
+    descriptor. The old name is unlinked (removing a link removes the link, never its target) and
+    the log is CREATED with O_EXCL, which fails on any name that reappears in between rather than
+    opening it. The new file is then given to the directory's owner through the descriptor, so the
+    panel can still read — and rotate — its own log."""
+    dfd = os.open(dir_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        owner = os.fstat(dfd)
+        try:
+            os.unlink(name, dir_fd=dfd)
+        except FileNotFoundError:
+            pass
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o640, dir_fd=dfd)
+        try:
+            os.fchown(fd, owner.st_uid, owner.st_gid)
+        except OSError:
+            # Only root can give a file away; unprivileged (a test, or a --user install that
+            # reaches this some other way) it is already the caller's own file.
+            if os.geteuid() == 0:
+                os.close(fd)
+                raise
+    finally:
+        os.close(dfd)
+    return os.fdopen(fd, "w", encoding="utf-8")
+
+
+def _self_update_detached(panel_dir, data_dir, ref, branch):
     """The self-update, in the grandchild. NEVER RETURNS — every path ends in os._exit.
 
     Runs the ROOT-OWNED installer, not the one in the panel's checkout. The panel used to write a
@@ -1935,7 +1974,7 @@ def _self_update_detached(panel_dir, log_path, ref, branch):
     # game server down mid-update. OS updates stay a separate, explicit action.
     env["PANEL_NO_UPGRADE"] = "1"
     try:
-        with open(log_path, "w", encoding="utf-8") as log:
+        with _open_log_in_dir(data_dir, SELF_UPDATE_LOG) as log:
             log.write("=== panel self-update ===\n")
             log.flush()
             subprocess.run([resolve("bash_installer"), INSTALLER_PATH],  # nosec B603 - fixed path
@@ -1961,7 +2000,7 @@ def do_panel_self_update(args, content):
         return 1
     pid = os.fork()
     if pid == 0:
-        _self_update_detached(panel_dir, os.path.join(data_dir, "self-update.log"), ref, branch)
+        _self_update_detached(panel_dir, data_dir, ref, branch)
     os.waitpid(pid, 0)
     sys.stdout.write("UPDATE_STARTED")
     return 0
