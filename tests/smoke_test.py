@@ -3890,6 +3890,31 @@ try:
           _act_denied.status_code in (403, 302, 401),
           "status=%d" % _act_denied.status_code)
 
+    # Bulk Update for a group holding update_server alone. The bar, the row checkboxes and
+    # select-all were all behind can_control (start/stop/restart), so the Update button the bar
+    # gates for exactly this user could never appear — they updated servers one page at a time.
+    _vo_dash = client_as(_viewer_id).get("/").get_data(as_text=True)
+    check("dashboard: a view-only user gets no bulk selection (the gate still exists)",
+          'class="form-check-input srv-check"' not in _vo_dash and "bulk-update-btn" not in _vo_dash,
+          "row checkboxes or the Update button rendered for a user who can do none of it")
+    with app.app_context():
+        Group.query.filter_by(name="smoke-viewonly").first().set_permissions(
+            [auth.VIEW_SERVERS, auth.UPDATE_SERVER])
+        db.session.commit()
+    try:
+        _up_dash = client_as(_viewer_id).get("/").get_data(as_text=True)
+        check("dashboard: update_server alone is enough to select servers and bulk-Update them",
+              'class="form-check-input srv-check"' in _up_dash and "bulk-update-btn" in _up_dash
+              and "srv-check-all" in _up_dash,
+              "checkboxes=%s select-all=%s update-button=%s — no way to select, so no bulk Update"
+              % ('class="form-check-input srv-check"' in _up_dash, "srv-check-all" in _up_dash,
+                 "bulk-update-btn" in _up_dash))
+    finally:
+        with app.app_context():
+            Group.query.filter_by(name="smoke-viewonly").first().set_permissions(
+                [auth.VIEW_SERVERS])
+            db.session.commit()
+
     # ── the install form lives on its own page now ───────────────────────────────────────────
     # It used to sit on /servers/manage above the list of servers you already have. Splitting it
     # out is only safe if the form still WORKS from its new home, so this checks the controls and

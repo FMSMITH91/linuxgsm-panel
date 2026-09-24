@@ -21,6 +21,11 @@
   </div>
 </div>
 {% endmacro %}
+{# Who may SELECT servers: anyone holding any bulk permission, Update included. can_control is
+   start/stop/restart only, so an update_server-only group got no checkbox, no select-all and no
+   bar, and the Update button the bar gates for exactly them could never appear. Each button in
+   the bar still follows its own permission. #}
+{% set can_bulk = can_control or current_user.is_superadmin or has_permission('update_server') %}
 
 <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
   <h1 class="page-title mb-0"><i class="bi bi-speedometer2"></i> Dashboard</h1>
@@ -47,7 +52,7 @@
               data-action="toggleTagFilter" data-args='[{{ tag.id }},"@self"]'
               aria-pressed="false">{{ tag.name }}</button>
       {% endfor %}
-      {% if can_control %}
+      {% if can_bulk %}
       {# Lives here rather than in the bulk bar: that bar only appears once something is selected,
          so it is the wrong place to START a selection. #}
       <button type="button" class="btn btn-sm btn-link text-decoration-none" data-action="selectAllShown"
@@ -176,7 +181,7 @@
 </div>
 {% endif %}
 
-{% if can_control %}{{ bulk_bar('top') }}{% endif %}
+{% if can_bulk %}{{ bulk_bar('top') }}{% endif %}
 
 <!-- Server cards grouped by remote -->
 <div id="server-cards">
@@ -282,7 +287,7 @@
       <table class="table table-hover mb-0">
         <thead>
           <tr>
-            {% if can_control %}<th style="width:1%;"><input type="checkbox" class="form-check-input srv-check-all" data-action="toggleAll" data-args='["@self"]' title="Select all on this host" aria-label="Select all servers on this host"></th>{% endif %}
+            {% if can_bulk %}<th style="width:1%;"><input type="checkbox" class="form-check-input srv-check-all" data-action="toggleAll" data-args='["@self"]' title="Select all on this host" aria-label="Select all servers on this host"></th>{% endif %}
             <th class="dash-sort" data-sortkey="name" style="cursor:pointer;" data-action="sortDashCol" data-args='["name","@self"]' title="Sort this host's servers by name">Server<span class="dash-caret"></span></th>
             <th class="d-none d-md-table-cell dash-sort" data-sortkey="type" style="cursor:pointer;" data-action="sortDashCol" data-args='["type","@self"]'>Type<span class="dash-caret"></span></th>
             <th class="dash-sort" data-sortkey="status" style="cursor:pointer;" data-action="sortDashCol" data-args='["status","@self"]'>Status<span class="dash-caret"></span></th>
@@ -295,7 +300,7 @@
         <tbody>
           {% for srv in remote_servers %}
           <tr data-server-id="{{ srv.id }}" data-name="{{ srv.name }}" data-type="{{ srv.game_display or srv.game_type }}" data-status="{{ srv.status }}" data-players="{{ player_counts.get(srv.id) if player_counts.get(srv.id) is not none else -1 }}">
-            {% if can_control %}<td><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" data-supports-update="{{ 'true' if srv.supports_update else 'false' }}" aria-label="Select {{ srv.name }}"></td>{% endif %}
+            {% if can_bulk %}<td><input type="checkbox" class="form-check-input srv-check" value="{{ srv.id }}" data-name="{{ srv.name }}" data-supports-update="{{ 'true' if srv.supports_update else 'false' }}" aria-label="Select {{ srv.name }}"></td>{% endif %}
             <td>
               {# data-no-i18n on all three, for the same reason the tag chips below already carry it:
                  these are USER-AUTHORED names, and the walker translates any text node whose exact
@@ -418,7 +423,7 @@
 <div id="srv-none" class="card" style="display:none;"><div class="card-body text-center text-secondary py-4">No servers match your filter.</div></div>
 </div>
 
-{% if can_control %}{{ bulk_bar('bottom') }}{% endif %}
+{% if can_bulk %}{{ bulk_bar('bottom') }}{% endif %}
 
 {% endif %}
 
