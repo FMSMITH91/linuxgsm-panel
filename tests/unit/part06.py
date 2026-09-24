@@ -4383,15 +4383,14 @@ check("deploy: ...reads the system install through sudo",
 # ...and ROOT EXECUTES NOTHING OUT OF THAT CHECKOUT. The system branch used to refresh
 # ${PD}/install.sh with `git checkout` as the service user and then run it with `sudo bash`, so on
 # every green merge root ran bytes from a tree AND a .git that the account the helper boundary
-# contains owns outright. Run the real remote script with sudo/systemctl/git shimmed: record what
-# root would execute, and what that file held at the moment it ran.
-_dp_remote = _deploy_raw[_deploy_raw.index("cat <<'REMOTE'\n") + len("cat <<'REMOTE'\n"):
-                         _deploy_raw.index("\n          REMOTE\n")]
-_dp_remote = "\n".join(_ln[10:] if _ln.startswith(" " * 10) else _ln
-                       for _ln in _dp_remote.splitlines())
+# contains owns outright. Run the job's real `run:` block with ssh capturing what it sends, then run
+# THAT on a shimmed "host" (sudo/systemctl/git): record what root would execute, and what the file
+# held at the moment it ran.
+_dp_run = _deploy_raw[_deploy_raw.index("        run: |\n") + len("        run: |\n"):]
+_dp_run = "\n".join(_ln[10:] if _ln.startswith(" " * 10) else _ln
+                    for _ln in _dp_run.splitlines()) + "\n"
 _dp_sb = _tempfile.mkdtemp(prefix="deploy-")
 try:
-    import base64 as _dp_b64
     _dp_pd = os.path.join(_dp_sb, "lgsmpanel", "linuxgsm-panel")
     os.makedirs(_dp_pd)
     with open(os.path.join(_dp_pd, "install.sh"), "w") as _dp_f:
@@ -4414,16 +4413,26 @@ try:
           '         [ "$1" = bash ] && echo "ROOT-BYTES $(cat "$2")" >> "$LOG" ;;\n'
           '    *) echo "ROOT-EXEC $*" >> "$LOG" ;;\n'
           '  esac\n'
-          '}\n'
-        + "INSTALLER_B64=%s\n" % _dp_b64.b64encode(_dp_shipped.encode()).decode())
-    _dp_r = _sh_sub.run(["bash", "-c", _dp_shims + _dp_remote], capture_output=True, text=True,
+          '}\n')
+    # The runner: its checkout holds the verified commit's install.sh; ssh just records the stream.
+    _dp_runner = os.path.join(_dp_sb, "runner")
+    os.makedirs(_dp_runner)
+    with open(os.path.join(_dp_runner, "install.sh"), "w") as _dp_f:
+        _dp_f.write(_dp_shipped)
+    _dp_stream = os.path.join(_dp_sb, "stream")
+    _dp_rr = _sh_sub.run(["bash", "-c", 'ssh() { cat > %s; }\n' % _shlex_q(_dp_stream) + _dp_run],
+                         capture_output=True, text=True, cwd=_dp_runner,
+                         env=dict(os.environ, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu"))
+    _dp_sent = open(_dp_stream).read() if os.path.exists(_dp_stream) else ""
+    _dp_r = _sh_sub.run(["bash", "-c", _dp_shims + _dp_sent], capture_output=True, text=True,
                         cwd=_dp_sb, env=dict(os.environ, HOME=_dp_sb))
     _dp_got = open(_dp_log).read() if os.path.exists(_dp_log) else ""
     _dp_exec = [ln for ln in _dp_got.splitlines() if ln.startswith("ROOT-EXEC ")]
     check("deploy: the system branch is taken for a unit-reported checkout (positive control)",
           "System install at %s" % _dp_pd in _dp_r.stdout and _dp_exec,
-          "rc=%s out=%r err=%r log=%r" % (_dp_r.returncode, _dp_r.stdout[-200:],
-                                         _dp_r.stderr[-300:], _dp_got[-300:]))
+          "runner rc=%s err=%r; host rc=%s out=%r err=%r log=%r" % (
+              _dp_rr.returncode, _dp_rr.stderr[-200:], _dp_r.returncode, _dp_r.stdout[-200:],
+              _dp_r.stderr[-300:], _dp_got[-300:]))
     check("deploy: ...and root executes nothing from the service user's checkout",
           _dp_exec and not any(_dp_pd in ln for ln in _dp_exec)
           and "PANEL-OWNED-INSTALLER" not in _dp_got,
