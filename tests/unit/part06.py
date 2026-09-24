@@ -5970,6 +5970,52 @@ check("terminal: ...while an uninterrupted open keeps its client (positive contr
 if _ok_sess7 is not None:
     _ok_sess7.close("done")
 
+# (b3) One socket's map entry must name the session that is actually live on it. close() popped
+# by sid, and teardown yields (kill grace, pump join) — so a term_open after the idle sweeper had
+# started closing the old shell registered a new one that the old close() then deleted from the
+# map. That shell ran on, unreachable by input, the disconnect hook, the sweeper and the caps.
+# The yield is stood in for by registering from inside the first teardown step.
+_own_a7 = _tsmod7.Session("own-sid", "own-a", lambda s, d: None, lambda s, r: None)
+_own_b7 = _tsmod7.Session("own-sid", "own-b", lambda s, d: None, lambda s, r: None)
+_own_a7.user_key = _own_b7.user_key = 5
+_tsmod7._register(_own_a7, 5)
+_own_mid7 = []
+
+
+def _own_mid_close7():
+    try:
+        _tsmod7._register(_own_b7, 5)
+        _own_mid7.append("registered")
+    except _tsmod7.TerminalError as e:
+        _own_mid7.append("refused: %s" % e)
+
+
+_own_a7._close_chan = _own_mid_close7
+_own_a7.close("closed after 15 minutes with no input")
+check("terminal: a session that finishes closing leaves a newer one on its socket registered",
+      _own_mid7 == ["registered"] and _tsmod7.get("own-sid") is _own_b7,
+      "during teardown: %r; registered now: %r — the new shell keeps running with nothing "
+      "able to reach or close it" % (_own_mid7, getattr(_tsmod7.get("own-sid"), "label", None)))
+_own_b7.close("done")
+check("terminal: ...while a session's own close still removes it (positive control)",
+      _tsmod7.get("own-sid") is None and _tsmod7.count() == 0,
+      "left registered: %d" % _tsmod7.count())
+
+_live_a7 = _tsmod7.Session("live-sid", "live-a", lambda s, d: None, lambda s, r: None)
+_live_b7 = _tsmod7.Session("live-sid", "live-b", lambda s, d: None, lambda s, r: None)
+_live_a7.user_key = _live_b7.user_key = 5
+_tsmod7._register(_live_a7, 5)
+try:
+    _tsmod7._register(_live_b7, 5)
+    _live_refused7 = False
+except _tsmod7.TerminalError:
+    _live_refused7 = True
+check("terminal: a second session is refused, not written over a LIVE one on the same socket",
+      _live_refused7 and _tsmod7.get("live-sid") is _live_a7,
+      "refused=%s, registered=%r — the overwritten shell keeps its pump running and can no "
+      "longer be closed" % (_live_refused7, getattr(_tsmod7.get("live-sid"), "label", None)))
+_live_a7.close("done")
+
 # (c) One decoder per SESSION, not per chunk: a read boundary lands wherever the kernel puts it,
 # so a multi-byte character split across two reads became two replacement characters forever.
 # Driven through the REAL pump over a real pty, in two writes with a pause between them so the

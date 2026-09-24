@@ -317,8 +317,13 @@ class Session:
                 return
             self._closed = True
         self._teardown()
+        # Only THIS session's entry. Teardown yields (the kill grace, the pump join), and a newer
+        # session can register under the same socket meanwhile — a term_open after the idle
+        # sweeper started closing this one. Popping by sid removed that live shell from the map,
+        # where input, the disconnect hook, the sweeper and the per-user cap all look for it.
         with _sessions_lock:
-            _sessions.pop(self.sid, None)
+            if _sessions.get(self.sid) is self:
+                del _sessions[self.sid]
         try:
             self._on_exit(self.sid, reason)
         except Exception:  # nosec B110
@@ -500,10 +505,19 @@ def start_idle_sweeper(supervise):
 
 def _register(sess, user_key):
     with _sessions_lock:
-        if len(_sessions) >= _MAX_SESSIONS_TOTAL:
+        # One shell per socket. A LIVE entry under this sid is refused, never overwritten: an
+        # overwritten session keeps running with its pump emitting to the room, but nothing can
+        # reach it any more to type into it or close it. An entry that is already closing is only
+        # waiting for its teardown and is replaced — and not counted against the caps below.
+        prior = _sessions.get(sess.sid)
+        if prior is not None and not prior.closed:
+            raise TerminalError("A terminal is already open on this connection. Reload the page "
+                                "to start another.")
+        others = [s for s in _sessions.values() if s is not prior]
+        if len(others) >= _MAX_SESSIONS_TOTAL:
             raise TerminalError("Too many terminal sessions are open on this panel (%d). Close one "
                                 "and try again." % _MAX_SESSIONS_TOTAL)
-        mine = sum(1 for s in _sessions.values() if s.user_key == user_key)
+        mine = sum(1 for s in others if s.user_key == user_key)
         if mine >= _MAX_SESSIONS_PER_USER:
             raise TerminalError("You already have %d terminals open. Close one and try again."
                                 % _MAX_SESSIONS_PER_USER)
