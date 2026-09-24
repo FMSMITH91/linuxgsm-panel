@@ -673,6 +673,14 @@ check_origin_trusted() {
 #
 #   * a checkout that is still ROOT'S OWN, tree and .git (the fresh path, before the chown). It
 #     is read directly, exactly as before; or else
+#   * the OPERATOR'S SOURCE TREE — `sudo bash install.sh` run from a clone or an unpacked tarball
+#     (SRC, when that is not ${PANEL_DIR}, and only while the installer running is that tree's own)
+#     — when that directory, every directory above it, and every entry down to the file are beyond
+#     the panel user's reach, with no symlink on the way down (_operator_src, _operator_file).
+#     fetch_code has just copied that very working tree into ${PANEL_DIR}, so this keeps the
+#     helper in step with the code it installed, and the operator chose it as root: refusing it
+#     (no .git, a local or feature-branch commit, no network) protected nothing and left the
+#     helper stale on every such update; or else
 #   * ROOT'S OWN CLONE of REPO_URL (ROOT_GIT, below), fetched by root's git with no user or system
 #     config. The panel's HEAD is only a request there: it is honoured only when root's clone has
 #     that commit on ${DEFAULT_BRANCH}. Nothing else from the panel's .git is read. A checkout at a
@@ -706,6 +714,76 @@ _rootgit() {
 _checkout_is_roots() {
     [ -d "${PANEL_DIR}" ] && [ ! -L "${PANEL_DIR}" ] || return 1
     [ -z "$(find "${PANEL_DIR}" ! -uid 0 -print -quit 2>/dev/null)" ]
+}
+
+# The panel user's uid and groups, for the reach tests below. Fails when there is no such account,
+# so every reach test fails closed with it.
+_panel_ids() {
+    _PR_UID="$(id -u "${PANEL_USER:-}" 2>/dev/null)" && [ -n "${_PR_UID}" ] || return 1
+    _PR_GIDS=" $(id -G "${PANEL_USER}" 2>/dev/null) "
+}
+
+# Can the panel user neither write this one entry nor replace what it holds? Judged on the entry
+# itself — stat does not follow a symlink: it must not be the panel user's, nor writable by it
+# through the group or other bits. A symlink's own mode means nothing, and a sticky directory
+# (/tmp) is exempt from the mode test, because there only an entry's owner can remove or rename
+# it; the callers judge every entry below on its own. Needs _panel_ids first.
+_panel_cannot_write() {
+    local st u g m
+    st="$(stat -c '%u %g %a' -- "$1" 2>/dev/null)" || return 1
+    read -r u g m <<< "${st}"
+    m=$((8#${m}))
+    [ -n "${_PR_UID:-}" ] && [ "${u}" != "${_PR_UID}" ] || return 1
+    [ ! -L "$1" ] || return 0
+    if [ ! -d "$1" ] || [ $((m & 01000)) -eq 0 ]; then
+        [ $((m & 02)) -eq 0 ] || return 1
+        [ $((m & 020)) -eq 0 ] || [ "${_PR_GIDS#* "${g}" }" = "${_PR_GIDS}" ] || return 1
+    fi
+}
+
+# The operator's own source tree, resolved: `sudo bash install.sh` run from a clone or an unpacked
+# tarball (SRC, the working directory) rather than inside ${PANEL_DIR}. Printed only when
+#   * the installer running now is THAT tree's install.sh. Root is already executing a file from
+#     it, so reading three more from it trusts nobody new — and that, not the working directory,
+#     is what makes it the operator's choice. The panel's self-update verb runs the root-owned
+#     copy in ${HELPER_DIR} with its working directory in the checkout, so it never qualifies,
+#     wherever the panel user makes that directory lead;
+#   * the directory is not ${PANEL_DIR} by any spelling (a symlinked home, or a link the panel
+#     user put in its place) — the string comparison above is only a shortcut; and
+#   * it and every directory above it are beyond the panel user's reach. Nothing INSIDE it is
+#     consulted to decide that: judged after following links, a panel-owned checkout could vouch
+#     for itself with `app.py -> /etc/passwd`.
+_operator_src() {
+    local rs p
+    [ -n "${SRC:-}" ] && [ "${SRC}" != "${PANEL_DIR}" ] && _panel_ids || return 1
+    rs="$(readlink -f -- "${SRC}" 2>/dev/null)" && [ -d "${rs}" ] || return 1
+    [ "$(readlink -f -- "${SCRIPT_PATH:-}" 2>/dev/null)" = "${rs}/install.sh" ] || return 1
+    [ "${rs}" != "$(readlink -f -- "${PANEL_DIR}" 2>/dev/null)" ] || return 1
+    p="${rs}"
+    while :; do
+        _panel_cannot_write "${p}" || return 1
+        [ "${p}" != "/" ] || break
+        p="$(dirname -- "${p}")"
+    done
+    printf '%s\n' "${rs}"
+}
+
+# One boundary file in the operator's tree ($1, as _operator_src printed it; $2, the path below
+# it). Every entry on the way down must be a real directory and the last a regular file — no
+# symlink anywhere, so nothing is read from where a link lands — and none may be writable by the
+# panel user. Prints the path to read.
+_operator_file() {
+    local p="$1" part
+    local -a parts
+    _panel_ids || return 1
+    IFS=/ read -ra parts <<< "$2"
+    for part in "${parts[@]}"; do
+        case "${part}" in ""|.|..) return 1 ;; esac
+        p="${p}/${part}"
+        [ ! -L "${p}" ] && _panel_cannot_write "${p}" || return 1
+    done
+    [ -f "${p}" ] || return 1
+    printf '%s\n' "${p}"
 }
 
 # Which commit root may stage from: the checkout's HEAD, once root's own clone shows that commit is
@@ -756,16 +834,21 @@ root_source_commit() {
 # and its warnings would land in the captured path instead of on the screen. Always returns 0: the
 # staging calls that follow each report their own failure.
 _prepare_root_source() {
-    if [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots; then
+    if [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots && ! _operator_src >/dev/null; then
         root_source_commit || true
     fi
     return 0
 }
 
 stage_root_source() {
-    local rel="$1" out="${HELPER_DIR}/.stage-$2"
+    local rel="$1" out="${HELPER_DIR}/.stage-$2" osrc="" from=""
     ${H_SUDO} rm -f "${out}" 2>/dev/null || true
-    if [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots; then
+    if [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots && osrc="$(_operator_src)" \
+       && from="$(_operator_file "${osrc}" "${rel}")"; then
+        # Root, installing from the operator's own tree: the working tree fetch_code just copied
+        # in, read at the path the reach test walked.
+        cp -- "${from}" "${out}" 2>/dev/null || { rm -f "${out}" 2>/dev/null; return 1; }
+    elif [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots; then
         # Root, and the panel user owns some of the checkout: its tree, its .git, or both.
         root_source_commit >&2 || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
         _rootgit cat-file blob "${ROOT_SRC_COMMIT}:${rel}" 2>/dev/null \
@@ -1254,7 +1337,8 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         # the grant naming the game-user group was never written, so the panel could not manage a
         # single server while reporting itself up to date.
         #
-        # All three are idempotent and cheap: the helper is re-copied from the checkout, the grant
+        # All three are idempotent and cheap: the helper is re-staged (see stage_root_source for
+        # where root takes it from — as root, never the panel-owned checkout itself), the grant
         # is rewritten and re-validated with visudo, and the group sync is `groupadd -f` plus an
         # append-only `usermod -aG`. So do them, then report.
         check_origin_trusted

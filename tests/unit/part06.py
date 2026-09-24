@@ -1087,7 +1087,7 @@ try:
     _rs_git("add", "-A", cwd=_rs_up)
     _rs_git("commit", "-qm", "upstream", cwd=_rs_up)
 
-    def _rs_case(name, tamper, roots=False):
+    def _rs_case(name, tamper, roots=False, src=None, panel_user=None, script=None):
         """Clone upstream as 'the panel's checkout', tamper with it, stage as 'root'."""
         d = os.path.join(_rs_sb, name)
         panel, helper = os.path.join(d, "panel"), os.path.join(d, "helper")
@@ -1097,11 +1097,15 @@ try:
                        ("commit.gpgsign", "false")):
             _rs_git("config", _k, _v, cwd=panel)
         tamper(panel)
-        body = ("id() { [ \"${1:-}\" = -u ] && echo 0 || command id \"$@\"; }\n"
+        # Only a BARE `id -u` is root: `id -u <panel user>` must still name that user.
+        body = ("id() { [ \"$#\" -eq 1 ] && [ \"$1\" = -u ] && echo 0 || command id \"$@\"; }\n"
                 "sudo() { [ \"$1\" = -u ] && shift 2; \"$@\"; }\n"
                 "warn() { echo \"WARN $*\"; }\n"
                 "H_SUDO=''\nPANEL_DIR=%s\nHELPER_DIR=%s\nREPO_URL=%s\nDEFAULT_BRANCH=main\n"
                 % (_rs_q(panel), _rs_q(helper), _rs_q("file://" + _rs_up))
+                + ("SRC=%s\nPANEL_USER=%s\nSCRIPT_PATH=%s\n"
+                   % (_rs_q(src), _rs_q(panel_user),
+                      _rs_q(script or os.path.join(src, "install.sh"))) if src else "")
                 + _rs_fns
                 + ("_checkout_is_roots() { return 0; }\n" if roots else "")
                 + "_prepare_root_source\n"
@@ -1171,6 +1175,103 @@ try:
     _rs_out = _rs_case("rootowned", _rs_local_commit, roots=True)
     check("install.sh: a checkout that is entirely root's is still staged from its own HEAD",
           "STAGED=LOCAL-HELPER" in _rs_out, _rs_out[-300:])
+
+    # ...and a root UPDATE from the operator's own tree (`sudo bash install.sh` in a clone or an
+    # unpacked tarball, SRC != PANEL_DIR) stages from THAT tree. Root's clone refused it — no .git,
+    # a local or feature-branch commit, no network — so the panel code was updated while the
+    # helper, db_maintenance and the installer stayed old, and a host still on the wide grant could
+    # never be narrowed. fetch_code copies exactly that working tree into the checkout, and the
+    # operator chose it as root, so refusing it protected nothing.
+    #
+    # "The panel user" is an account that owns none of it, except where the case says otherwise.
+    import pwd as _rs_pwd
+    _rs_me = _rs_pwd.getpwuid(os.getuid()).pw_name
+    _rs_other = None
+    for _n in ("nobody", "daemon", "bin"):
+        try:
+            if _n != _rs_me:
+                _rs_pwd.getpwnam(_n)
+                _rs_other = _n
+                break
+        except KeyError:
+            continue
+    check("install.sh: (premise) there is an account to play a panel user that owns nothing here",
+          _rs_other is not None)
+
+    def _rs_srctree(name, helper_text="SRC-HELPER\n", parent=None):
+        t = os.path.join(parent or _rs_sb, name + "-src")
+        os.makedirs(os.path.join(t, "tools"))
+        for _fn in ("app.py", "install.sh"):
+            open(os.path.join(t, _fn), "w").close()
+        with open(os.path.join(t, "tools", "panel-helper"), "w") as f:
+            f.write(helper_text)
+        return t
+
+    _rs_out = _rs_case("srctree", _rs_no_git, src=_rs_srctree("srctree"), panel_user=_rs_other)
+    check("install.sh: a root update from the operator's tree stages the helper from that tree",
+          "STAGED=SRC-HELPER" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    # Refusals: the panel user must not be able to nominate the tree root reads. The tree counts
+    # only while root is running ITS install.sh: the self-update verb runs the root-owned copy with
+    # its working directory in the checkout, wherever the panel user makes that lead.
+    _rs_out = _rs_case("srcself", _rs_no_git, src=_rs_srctree("srcself"), panel_user=_rs_other,
+                       script=os.path.join(_rs_sb, "srcself", "helper", "install.sh"))
+    check("install.sh: ...but not while the installer running is not that tree's own",
+          "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("srcpanel", _rs_no_git, src=_rs_srctree("srcpanel"), panel_user=_rs_me)
+    check("install.sh: ...but not from a tree the panel user owns",
+          "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
+    _rs_t = _rs_srctree("srcworld")
+    os.chmod(os.path.join(_rs_t, "tools"), 0o777)
+    _rs_out = _rs_case("srcworld", _rs_no_git, src=_rs_t, panel_user=_rs_other)
+    check("install.sh: ...nor through a directory anyone can write",
+          "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
+    # ...nor from a tree in a directory the panel user could swap it out of.
+    _rs_par = os.path.join(_rs_sb, "srcparent-dir")
+    os.makedirs(_rs_par)
+    os.chmod(_rs_par, 0o777)
+    _rs_out = _rs_case("srcparent", _rs_no_git, src=_rs_srctree("srcparent", parent=_rs_par),
+                       panel_user=_rs_other)
+    check("install.sh: ...nor from a tree whose parent directory anyone can write",
+          "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
+    # A tree the panel user owns cannot vouch for itself through links to root's own files: judged
+    # after following links, `app.py -> /etc/passwd` resolved somewhere root-owned, and the
+    # "helper" staged was /etc/passwd.
+    check("install.sh: (premise) /etc/passwd is root's, in a root-owned directory",
+          os.stat("/etc/passwd").st_uid == 0 and os.stat("/etc").st_uid == 0)
+    _rs_t = _rs_srctree("srcvouch")
+    for _rel in ("app.py", os.path.join("tools", "panel-helper")):
+        os.unlink(os.path.join(_rs_t, _rel))
+        os.symlink("/etc/passwd", os.path.join(_rs_t, _rel))
+    _rs_out = _rs_case("srcvouch", _rs_no_git, src=_rs_t, panel_user=_rs_me)
+    check("install.sh: ...nor from a panel-owned tree whose files link to root-owned ones",
+          "STAGED-NOTHING" in _rs_out and "root:" not in _rs_out, _rs_out[-300:])
+    # The checkout itself by another spelling (a symlinked home, or a link the panel user put in
+    # place of ${PANEL_DIR}) is not the operator's tree, whoever owns it.
+    _rs_t = os.path.join(_rs_sb, "srcsame-link")
+    os.symlink(os.path.join(_rs_sb, "srcsame", "panel"), _rs_t)
+    _rs_out = _rs_case("srcsame", _rs_no_git, src=_rs_t, panel_user=_rs_other)
+    check("install.sh: ...nor from the checkout itself reached by another path",
+          "STAGED-NOTHING" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    # Positive control for that: SRC is resolved, so an operator's tree reached through a link is
+    # still the operator's tree.
+    _rs_t = os.path.join(_rs_sb, "srcvia-link")
+    os.symlink(_rs_srctree("srcvia"), _rs_t)
+    _rs_out = _rs_case("srcvia", _rs_no_git, src=_rs_t, panel_user=_rs_other)
+    check("install.sh: an operator's tree reached through a link is still staged from",
+          "STAGED=SRC-HELPER" in _rs_out, _rs_out[-300:])
+    # No symlink on the way down to the file is followed: here one lands in a world-writable
+    # directory.
+    _rs_t = _rs_srctree("srclink")
+    _rs_drop = os.path.join(_rs_sb, "drop")
+    os.makedirs(_rs_drop)
+    os.chmod(_rs_drop, 0o777)
+    with open(os.path.join(_rs_drop, "helper"), "w") as _f:
+        _f.write("DROPPED-HELPER\n")
+    os.unlink(os.path.join(_rs_t, "tools", "panel-helper"))
+    os.symlink(os.path.join(_rs_drop, "helper"), os.path.join(_rs_t, "tools", "panel-helper"))
+    _rs_out = _rs_case("srclink", _rs_no_git, src=_rs_t, panel_user=_rs_other)
+    check("install.sh: ...nor through a symlink that lands somewhere the panel user can write",
+          "STAGED-NOTHING" in _rs_out and "DROPPED-HELPER" not in _rs_out, _rs_out[-300:])
 finally:
     _shutil.rmtree(_rs_sb, ignore_errors=True)
 for _src in ("HELPER_SRC", "DBM_SRC"):
