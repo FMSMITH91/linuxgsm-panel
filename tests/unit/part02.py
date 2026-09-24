@@ -496,6 +496,18 @@ try:
         check("backup/enc: restoring an encrypted archive succeeds end to end", _rok, str(_rmsg))
         check("backup/enc: ...and the message names the backup, not the temp file",
               _ename in str(_rmsg) and "/tmp" not in str(_rmsg), str(_rmsg))
+        # The REAL safety copy this restore wrote: encrypted, and it opens with the passphrase that
+        # was configured, which the message tells the operator.
+        _safety_names = [b["name"] for b in _bk.list_backups()
+                         if b["name"] in str(_rmsg) and "prerestore" in b["name"]]
+        _safety_p = _bk._safe_path(_safety_names[0]) if _safety_names else None
+        _kdf_probe_out = str(_pl.Path(_tf.mkdtemp()) / "safety.tar.gz")
+        check("backup/enc: the pre-restore safety copy is itself encrypted, not a plaintext key dump",
+              _safety_p is not None and _bk.is_encrypted_backup(_safety_p.name)
+              and not _bk._is_readable_tar(str(_safety_p))
+              and _bk._decrypt_archive(str(_safety_p), _kdf_probe_out, _bk_pass)[0]
+              and "passphrase this panel had before" in str(_rmsg),
+              "safety=%r msg=%r" % (_safety_names, _rmsg))
         # listdir must not raise when the restore failed: the dispatch swallows exceptions and
         # REMOVES the stage dir on its way out, so a broken restore leaves nothing to list — and
         # an abort here would hide this block's own verdict along with every later check.
@@ -512,8 +524,8 @@ try:
         # archive has been opened, so a mistyped passphrase costs nothing.
         _pre_calls = []
         _o_create = _bk.create_backup
-        _bk.create_backup = lambda kind="manual", encrypt=True: (
-            _pre_calls.append((kind, encrypt)), (True, "stub"))[1]
+        _bk.create_backup = lambda kind="manual", encrypt=True, passphrase=None: (
+            _pre_calls.append((kind, encrypt, passphrase)), (True, "stub"))[1]
         try:
             _wok, _wmsg = _bk.restore_backup(_ename, passphrase="not the passphrase")
         finally:
@@ -533,8 +545,8 @@ try:
         #    a few seconds". Losing cred_key that way makes every stored SSH credential unreadable.
         _sh2.rmtree(_stage_dir, ignore_errors=True)
         _pre_calls.clear()
-        _bk.create_backup = lambda kind="manual", encrypt=True: (
-            _pre_calls.append((kind, encrypt)), (False, "Backup failed — see panel logs."))[1]
+        _bk.create_backup = lambda kind="manual", encrypt=True, passphrase=None: (
+            _pre_calls.append((kind, encrypt, passphrase)), (False, "Backup failed — see panel logs."))[1]
         try:
             _fok, _fmsg = _bk.restore_backup(_ename, passphrase=_bk_pass)
         finally:
@@ -547,8 +559,8 @@ try:
         # The operator's override still works — refusing outright would strand exactly the person
         # who needs restore most, the one whose panel.db is already too damaged to snapshot.
         _pre_calls.clear()
-        _bk.create_backup = lambda kind="manual", encrypt=True: (
-            _pre_calls.append((kind, encrypt)), (False, "Backup failed — see panel logs."))[1]
+        _bk.create_backup = lambda kind="manual", encrypt=True, passphrase=None: (
+            _pre_calls.append((kind, encrypt, passphrase)), (False, "Backup failed — see panel logs."))[1]
         try:
             _sok, _smsg = _bk.restore_backup(_ename, passphrase=_bk_pass, skip_safety_backup=True)
         finally:
@@ -556,23 +568,67 @@ try:
         check("backup: ...unless the operator says to go ahead without one",
               _sok is True and _pre_calls == [] and "NO pre-restore safety copy" in _smsg,
               "%s %r" % (_smsg, _pre_calls))
-        # 2. It was encrypted with get_passphrase() — read from config.json under cred_key, BOTH
-        #    of which the next step overwrites from the archive being restored. Restoring an
-        #    archive written under a different passphrase (from before a set_passphrase, or from
-        #    another install — the case restore's own docstring calls out) left the safety net
-        #    locked by a key that no longer existed.
+        # 2. It was then written UNENCRYPTED, on the reasoning that the passphrase it would use is
+        #    about to be overwritten — but only the stored COPY is overwritten; the operator can
+        #    still type it, and restore_backup takes one typed in. Meanwhile each restore left a
+        #    permanent plaintext panel.db + secret_key + cred_key in the directory the operator
+        #    encrypts because it is synced off the box, and nothing ever pruned it.
         _sh2.rmtree(_stage_dir, ignore_errors=True)
         _pre_calls.clear()
-        _bk.create_backup = lambda kind="manual", encrypt=True: (
-            _pre_calls.append((kind, encrypt)), (True, "prerestore-stub"))[1]
+        _bk.create_backup = lambda kind="manual", encrypt=True, passphrase=None: (
+            _pre_calls.append((kind, encrypt, passphrase)), (True, "prerestore-stub"))[1]
+        # The archive opens with the TYPED passphrase; the configured one differs, and it is the
+        # configured one the safety copy must use — that is the passphrase the operator has now.
+        _bk.get_passphrase = lambda: "the configured passphrase"
         try:
             _eok3, _emsg3 = _bk.restore_backup(_ename, passphrase=_bk_pass)
         finally:
             _bk.create_backup = _o_create
-        check("backup: the pre-restore copy is written UNENCRYPTED, not under a key it is about to destroy",
-              _pre_calls == [("prerestore", False)], repr(_pre_calls))
+            _bk.get_passphrase = lambda: _bk_pass
+        check("backup: the pre-restore copy is encrypted under the passphrase configured BEFORE the restore",
+              _pre_calls == [("prerestore", True, "the configured passphrase")], repr(_pre_calls))
         check("backup: ...and the operator is told its name, since the panel is about to restart",
               _eok3 and "prerestore-stub" in _emsg3, str(_emsg3))
+        # A stored passphrase this host cannot decrypt falls back to the one the operator typed,
+        # and with neither the copy is REFUSED (the operator can still say go ahead without it)
+        # rather than quietly written in the clear.
+        _plain_ok, _plain_name = _o_create("manual", encrypt=False)
+
+        def _unreadable():
+            raise _bk.PassphraseUnreadable("stub")
+        for _typed, _want_calls, _label in (
+                ("typed-phrase", [("prerestore", True, "typed-phrase")], "uses the one the operator typed"),
+                (None, [], "refuses the copy rather than writing it in the clear")):
+            _sh2.rmtree(_stage_dir, ignore_errors=True)
+            _pre_calls.clear()
+            _bk.get_passphrase = _unreadable
+            _bk.create_backup = lambda kind="manual", encrypt=True, passphrase=None: (
+                _pre_calls.append((kind, encrypt, passphrase)), (True, "prerestore-stub.tar.gz.enc"))[1]
+            try:
+                _uok4, _umsg4 = _bk.restore_backup(_plain_name, passphrase=_typed)
+            finally:
+                _bk.create_backup = _o_create
+                _bk.get_passphrase = lambda: _bk_pass
+            # ...and when it used the TYPED one, the message says that one opens it — not "the
+            # passphrase this panel had before", which here is the one that could not be read.
+            check("backup: an undecryptable stored passphrase: the safety copy %s" % _label,
+                  _plain_ok and _pre_calls == _want_calls
+                  and (_typed is None or "the passphrase you entered for this restore" in _umsg4)
+                  and (_typed is not None or (_uok4 is False and "safety copy" in _umsg4)),
+                  "calls %r, result %r %r" % (_pre_calls, _uok4, _umsg4))
+        # Positive control: with encryption OFF the copy stays plain, as every backup does then.
+        _sh2.rmtree(_stage_dir, ignore_errors=True)
+        _pre_calls.clear()
+        _bk.get_passphrase = lambda: ""
+        _bk.create_backup = lambda kind="manual", encrypt=True, passphrase=None: (
+            _pre_calls.append((kind, encrypt, passphrase)), (True, "prerestore-stub"))[1]
+        try:
+            _bk.restore_backup(_plain_name)
+        finally:
+            _bk.create_backup = _o_create
+            _bk.get_passphrase = lambda: _bk_pass
+        check("backup: ...while with no passphrase configured the safety copy is plain, like every backup",
+              _pre_calls == [("prerestore", True, "")], repr(_pre_calls))
         # And create_backup honours that for real: a passphrase IS configured in this block.
         _uok, _uname = _bk.create_backup("prerestore", encrypt=False)
         check("backup: create_backup(encrypt=False) writes a plain archive despite a configured passphrase",
