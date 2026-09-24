@@ -942,6 +942,46 @@ finally:
     _sm_core.subprocess.Popen = _real_popen_ssh
     _sm_core._resolve_ts_host = _real_ts_host
 
+# ── the control-socket directory must be ours before a socket is trusted in it ──────────────────
+# It is a fixed name in world-writable /tmp, and makedirs(exist_ok=True) accepted whatever was
+# already there: a local account (a game-server user) could create it first after a reboot. ssh's
+# ControlMaster=auto CONNECTS to an existing socket before making one, without asking who listens,
+# so a planted socket would be handed every command sent to that host. Driven through the real
+# _ssh_mux_opts with _SSH_CM_DIR pointed at a scratch path.
+import tempfile as _cm_tf                                                          # noqa: E402
+import shutil as _cm_shutil                                                        # noqa: E402
+_cm_saved = _sm_core._SSH_CM_DIR
+_cm_root = _cm_tf.mkdtemp(prefix="cm-own-")
+_cm_res = {}
+try:
+    _sm_core._SSH_CM_DIR = os.path.join(_cm_root, "fresh")
+    _cm_res["fresh"] = _sm_core._ssh_mux_opts()
+    _sm_core._SSH_CM_DIR = os.path.join(_cm_root, "loose")
+    os.mkdir(_sm_core._SSH_CM_DIR)
+    os.chmod(_sm_core._SSH_CM_DIR, 0o777)
+    _cm_res["loose"] = _sm_core._ssh_mux_opts()
+    os.mkdir(os.path.join(_cm_root, "target"), 0o700)
+    _sm_core._SSH_CM_DIR = os.path.join(_cm_root, "link")
+    os.symlink(os.path.join(_cm_root, "target"), _sm_core._SSH_CM_DIR)
+    _cm_res["symlink"] = _sm_core._ssh_mux_opts()
+    _sm_core._SSH_CM_DIR = os.path.join(_cm_root, "fresh")
+    _cm_real_getuid = _sm_core.os.getuid
+    _sm_core.os.getuid = lambda: _cm_real_getuid() + 1      # someone else's directory
+    try:
+        _cm_res["foreign"] = _sm_core._ssh_mux_opts()
+    finally:
+        _sm_core.os.getuid = _cm_real_getuid
+finally:
+    _sm_core._SSH_CM_DIR = _cm_saved
+    _cm_shutil.rmtree(_cm_root, ignore_errors=True)
+check("ssh mux: a directory it creates itself is used (positive control)",
+      "ControlMaster=auto" in (_cm_res.get("fresh") or []), repr(_cm_res.get("fresh")))
+check("ssh mux: a pre-existing directory it does not own, a symlink, or one others can write is "
+      "not trusted with control sockets",
+      _cm_res.get("loose") == [] and _cm_res.get("symlink") == [] and _cm_res.get("foreign") == [],
+      "loose=%r symlink=%r foreign=%r — ssh connects to whatever socket is already there"
+      % (_cm_res.get("loose"), _cm_res.get("symlink"), _cm_res.get("foreign")))
+
 # The same ceiling on the panel host's own commands (both local paths go through _finish).
 _big = _sm_core._run_local("head -c %d /dev/zero | tr '\\0' b" % (
     _sm_core._MAX_OUTPUT_BYTES + 1024 * 1024), timeout=60, sudo=False)

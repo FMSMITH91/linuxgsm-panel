@@ -6,6 +6,7 @@ import re
 import shlex
 import signal
 import socket
+import stat
 import subprocess  # nosec B404 - every call site below passes an argv LIST, never a shell string
 import tempfile
 import threading
@@ -802,6 +803,29 @@ _SSH_CM_DIR = os.path.join(tempfile.gettempdir(),
                            ".lgsm-ssh-cm-%d" % (os.getuid() if hasattr(os, "getuid") else 0))
 
 
+def _cm_dir_is_ours(path):
+    """Is the control-socket directory one only this account can reach? A real directory (not a
+    symlink), owned by this uid, with no group or other permission bits.
+
+    makedirs(exist_ok=True) accepts whatever is already at the path, and the path is a fixed name
+    in world-writable /tmp: any local account (a game-server user) can create it first — after a
+    reboot empties /tmp — and own it. ControlMaster=auto CONNECTS to an existing socket before it
+    makes one, and the client does not check who is listening, so a socket planted there would be
+    handed every command the panel sends that host (as root on most remotes) and could answer with
+    whatever output it liked. Without the check ssh simply connects without multiplexing: slower,
+    never wrong."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    ok = (stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid()
+          and (st.st_mode & 0o077) == 0)
+    if not ok:
+        _log.warning("ssh multiplexing disabled: %s is not a private directory owned by this "
+                     "account (mode %o, uid %d)", path, st.st_mode, st.st_uid)
+    return ok
+
+
 def _ssh_mux_opts():
     """SSH options that reuse one persistent connection per host. ControlMaster=auto falls back to a
     fresh connection automatically if the master died, so it's safe. Returns [] if the socket dir
@@ -813,6 +837,8 @@ def _ssh_mux_opts():
     try:
         os.makedirs(_SSH_CM_DIR, mode=0o700, exist_ok=True)
     except OSError:
+        return []
+    if not _cm_dir_is_ours(_SSH_CM_DIR):
         return []
     return ["-o", "ControlMaster=auto",
             "-o", f"ControlPath={_SSH_CM_DIR}/%C",   # %C = short fixed-length hash of host/port/user
