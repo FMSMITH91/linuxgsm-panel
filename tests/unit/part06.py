@@ -4676,7 +4676,7 @@ try:
           '  case "$1" in\n'
           '    test|stat|mktemp|tee|rm) "$@" ;;\n'
           '    -u) echo "AS-USER $*" >> "$LOG" ;;\n'
-          '    env) shift; while [ "${1#*=}" != "$1" ]; do shift; done\n'
+          '    env) shift; while [ "${1#*=}" != "$1" ]; do echo "ROOT-ENV $1" >> "$LOG"; shift; done\n'
           '         echo "ROOT-EXEC $*" >> "$LOG"\n'
           '         [ "$1" = bash ] && echo "ROOT-BYTES $(cat "$2")" >> "$LOG" ;;\n'
           '    *) echo "ROOT-EXEC $*" >> "$LOG" ;;\n'
@@ -4688,9 +4688,11 @@ try:
     with open(os.path.join(_dp_runner, "install.sh"), "w") as _dp_f:
         _dp_f.write(_dp_shipped)
     _dp_stream = os.path.join(_dp_sb, "stream")
+    _dp_sha = ("0123456789abcdef" * 3)[:40]
     _dp_rr = _sh_sub.run(["bash", "-c", 'ssh() { cat > %s; }\n' % _shlex_q(_dp_stream) + _dp_run],
                          capture_output=True, text=True, cwd=_dp_runner,
-                         env=dict(os.environ, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu"))
+                         env=dict(os.environ, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu",
+                                  HEAD_SHA=_dp_sha))
     _dp_sent = open(_dp_stream).read() if os.path.exists(_dp_stream) else ""
     _dp_r = _sh_sub.run(["bash", "-c", _dp_shims + _dp_sent], capture_output=True, text=True,
                         cwd=_dp_sb, env=dict(os.environ, HOME=_dp_sb))
@@ -4710,8 +4712,70 @@ try:
           _dp_got[-400:])
     check("deploy: ...and nothing touches that checkout's git on root's behalf",
           "GIT " not in _dp_got and "AS-USER" not in _dp_got, _dp_got[-400:])
+    # ...pinned to the commit whose installer it shipped. Left to reset to origin/main's tip, this
+    # commit's installer installed a newer push's code, and that push's own deploy then found the
+    # host current and never ran its update steps.
+    check("deploy: ...and pins the code to the commit whose installer it shipped",
+          "ROOT-ENV PANEL_UPDATE_REF=%s" % _dp_sha in _dp_got.splitlines(), _dp_got[-400:])
+    # The id is spliced into the remote script, so anything but a commit id stops the job there.
+    _dp_bad = os.path.join(_dp_sb, "stream-bad")
+    _dp_rb = _sh_sub.run(["bash", "-c", 'ssh() { cat > %s; }\n' % _shlex_q(_dp_bad) + _dp_run],
+                         capture_output=True, text=True, cwd=_dp_runner,
+                         env=dict(os.environ, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu",
+                                  HEAD_SHA=_dp_sha[:39] + "\ntouch /tmp/x"))
+    check("deploy: ...and refuses a head_sha that is not a commit id, sending nothing",
+          _dp_rb.returncode != 0 and not os.path.exists(_dp_bad), _dp_rb.stderr[-200:])
 finally:
     _shutil.rmtree(_dp_sb, ignore_errors=True)
+
+# install.sh honours that pin only as an UPDATE: a pinned commit the checkout already contains
+# leaves it where it is. Deploy runs do not finish in push order — a re-run of an old commit's CI
+# deploys it last — and resetting to the pin would take the host backwards. Run the real
+# resolve_update_target against a real clone.
+_ru_fn = (_inst[_inst.index("_gitc() {"):_inst.index("\n}\n", _inst.index("_gitc() {")) + 3]
+          + _inst[_inst.index("resolve_update_target() {"):
+                  _inst.index("\n}\n", _inst.index("resolve_update_target() {")) + 3])
+_ru_sb = _tempfile.mkdtemp(prefix="updref-")
+try:
+    _ru_up, _ru_co = os.path.join(_ru_sb, "up"), os.path.join(_ru_sb, "co")
+
+    def _ru_git(*a):
+        return _sh_sub.run(["git", *a], capture_output=True, text=True).stdout.strip()
+
+    _ru_git("init", "-q", "-b", "main", _ru_up)
+    _ru_c = []
+    for _n in ("A", "B", "C"):
+        _ru_git("-C", _ru_up, "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+                "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", _n)
+        _ru_c.append(_ru_git("-C", _ru_up, "rev-parse", "HEAD"))
+    _ru_git("clone", "-q", _ru_up, _ru_co)
+
+    def _ru_target(head, ref):
+        _ru_git("-C", _ru_co, "reset", "-q", "--hard", head)
+        r = _sh_sub.run(["bash", "-c", "SRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n%s"
+                         "resolve_update_target\necho \"TARGET=${TARGET_SHA}\""
+                         % (_shlex_q(_ru_co), _ru_fn)],
+                        capture_output=True, text=True,
+                        env=dict(os.environ, PANEL_UPDATE_REF=ref))
+        return r.stdout.strip().rpartition("TARGET=")[2] or r.stderr[-200:]
+
+    _ru_a, _ru_b, _ru_cc = _ru_c
+    check("install.sh: a pinned update ref ahead of the checkout is the target (positive control)",
+          _ru_target(_ru_a, _ru_b) == _ru_b, _ru_target(_ru_a, _ru_b))
+    check("install.sh: ...with no pin, the target is the branch tip (positive control)",
+          _ru_target(_ru_a, "") == _ru_cc, _ru_target(_ru_a, ""))
+    check("install.sh: a pinned ref the checkout already contains never moves it backwards",
+          _ru_target(_ru_cc, _ru_a) == _ru_cc, _ru_target(_ru_cc, _ru_a))
+    # ...but a checkout carrying a commit upstream does not have is still reset to the pin, as it
+    # was before: "never backwards" is about newer UPSTREAM commits only.
+    _ru_git("-C", _ru_co, "reset", "-q", "--hard", _ru_cc)
+    _ru_git("-C", _ru_co, "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+            "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "local")
+    _ru_local = _ru_git("-C", _ru_co, "rev-parse", "HEAD")
+    check("install.sh: ...while a local commit on top is still reset to the pin",
+          _ru_target(_ru_local, _ru_a) == _ru_a, _ru_target(_ru_local, _ru_a))
+finally:
+    _shutil.rmtree(_ru_sb, ignore_errors=True)
 
 # ── the admin's 2FA reset must be VISIBLE, not just present ──────────────────────────────────
 # The switch lives in the Edit User modal and used to sit in a `display:none` block that JS

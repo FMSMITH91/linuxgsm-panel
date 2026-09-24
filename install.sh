@@ -439,6 +439,15 @@ resolve_update_target() {
     if [ -n "${PANEL_UPDATE_REF:-}" ] \
        && _gitc merge-base --is-ancestor "${PANEL_UPDATE_REF}" "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
         TARGET_REF="${PANEL_UPDATE_REF}"
+        # A pinned commit this checkout already contains is not an update when the checkout is
+        # itself a newer commit of the branch: stay put rather than reset backwards. The deploy
+        # pins each run to the commit whose CI passed, and those runs do not finish in push order
+        # (a re-run of an old commit's CI deploys it last). A HEAD that is NOT on the branch (a
+        # local commit) is still reset, as it always was.
+        if _gitc merge-base --is-ancestor "${PANEL_UPDATE_REF}" HEAD 2>/dev/null \
+           && _gitc merge-base --is-ancestor HEAD "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
+            TARGET_REF="HEAD"
+        fi
     fi
     TARGET_SHA="$(_gitc rev-parse "${TARGET_REF}" 2>/dev/null)"
     return 0
