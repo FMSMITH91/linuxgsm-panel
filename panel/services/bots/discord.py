@@ -230,7 +230,15 @@ def _report_dc_pending_update():
         return
     now = so.panel_commit()
     frm = pend.get("from_commit") or ""
-    if now and frm and now != frm:
+    # The same split as telegram.py's twin (see the note there): an EMPTY commit means git could
+    # not be read — panel_commit() returns "" when `git rev-parse` fails or times out, in the busy
+    # seconds after a restart — and that is not "no new commit landed". Reporting it as one, with
+    # "already current, or it rolled back" as the causes, sent the admin to !update a second time.
+    if not (now and frm):
+        _dc_reply(bot_token, channel, "ℹ️ I'm back online, but I couldn't read the panel's git "
+                                      "commit, so I can't tell you whether the update landed — "
+                                      "check Settings → Panel, or data/self-update.log.")
+    elif now != frm:
         _dc_reply(bot_token, channel, "✅ Update complete — now on %s (was %s). Back online."
                   % (_panel_ver_label(), frm))
     else:

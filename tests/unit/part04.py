@@ -1157,6 +1157,42 @@ finally:
     (_tgm.load_config, _tgm.update_config, _tgm._tg_reply, _tgm.decrypt_secret,
      _tgm.so.panel_commit) = _tg_saved
 
+# ...and its Discord twin, which kept the old branch: the module docstrings say the two bots behave
+# the same, and this one still told the channel "no new commit landed" whenever git could not be read.
+import panel.services.bots.discord as _dcm  # noqa: E402
+_dc_said = []
+_dc_saved = (_dcm.load_config, _dcm.update_config, _dcm._dc_reply, _dcm.decrypt_secret,
+             _dcm.so.panel_commit)
+try:
+    _dcm.update_config = lambda fn: None
+    _dcm.decrypt_secret = lambda s: s
+    _dcm._dc_reply = lambda tok, chan, text: _dc_said.append(text)
+
+    def _dc_report(from_commit, now_commit):
+        _dcm.load_config = lambda: {"notifications": {"discord": {"bot_token": "tok"}},
+                                    "discord_pending_update": {"channel_id": "42",
+                                                               "from_commit": from_commit}}
+        _dcm.so.panel_commit = lambda: now_commit
+        _dc_said.clear()
+        _dcm._report_dc_pending_update()
+        return _dc_said[0] if len(_dc_said) == 1 else repr(_dc_said)
+
+    _dc_msg = _dc_report("abc1234", "")
+    check("discord: a commit git could not read is not reported as 'no new commit landed'",
+          "couldn't read" in _dc_msg and "no new commit landed" not in _dc_msg, _dc_msg)
+    _dc_msg = _dc_report("", "def5678")
+    check("discord: ...nor when it is the BEFORE commit that was never recorded",
+          "couldn't read" in _dc_msg and "no new commit landed" not in _dc_msg, _dc_msg)
+    _dc_msg = _dc_report("abc1234", "def5678")
+    check("discord: a commit that really moved is still reported as complete (control)",
+          "Update complete" in _dc_msg and "abc1234" in _dc_msg, _dc_msg)
+    _dc_msg = _dc_report("abc1234", "abc1234")
+    check("discord: ...and one that really did not still says no new commit landed (control)",
+          "no new commit landed" in _dc_msg, _dc_msg)
+finally:
+    (_dcm.load_config, _dcm.update_config, _dcm._dc_reply, _dcm.decrypt_secret,
+     _dcm.so.panel_commit) = _dc_saved
+
 # ── Discord command bot (Gateway): parsing, SSRF-safe reply path, and the message pump ──
 from panel.services.bots.discord import _parse_dc_command  # noqa: E402
 
