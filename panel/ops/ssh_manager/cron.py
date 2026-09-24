@@ -636,12 +636,18 @@ def prune_game_backups(server, user, keep=3):
     quote") stopped the prune for good, and a space split a name into two. The game user — or
     anything that writes as it — could leave such a file, after which old backups piled up until
     the disk was full and real backups failed. Returns True when the prune ran cleanly; a failure
-    is logged rather than silently discarded."""
+    is logged rather than silently discarded.
+
+    `-H` follows the backup dir itself when it is a symlink, the way the old glob (and
+    list_game_backups) do. The path is fixed, so a symlink to a bigger disk is how an operator
+    moves backups; plain find does not descend a symlinked starting point, printed nothing and
+    exited 0, so every prune deleted nothing and reported success. Links INSIDE the dir are still
+    not followed (-type f skips them)."""
     if not files._SAFE_UNIX_USER_RE.match(str(user or "")):
         return False
     bdir = "/home/%s/lgsm/backup" % user
     keep = max(1, int(keep))
-    cmd = ("find %s -maxdepth 1 -type f -name '*.tar.*' ! -name '.*' -printf '%%T@ %%p\\0' "
+    cmd = ("find -H %s -maxdepth 1 -type f -name '*.tar.*' ! -name '.*' -printf '%%T@ %%p\\0' "
            "2>/dev/null | sort -z -rn | tail -z -n +%d | cut -z -d' ' -f2- | xargs -0 -r rm -f --"
            % (_core._quote(bdir), keep + 1))
     _o, err, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(cmd)}",
