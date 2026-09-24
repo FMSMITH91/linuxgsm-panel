@@ -348,6 +348,36 @@ def ufw_status():
 _UFW_RULE_RE = re.compile(r"^(.+?)\s{2,}(ALLOW|DENY|REJECT|LIMIT)\s+(IN|OUT|FWD)\s*(.*)$")
 
 
+def ufw_allows_iface_in(rules, iface):
+    """True when UFW's rules (ufw_status()["rules"], in the order UFW evaluates them) let all
+    inbound traffic in on `iface` — the `ufw allow in on <iface>` rule the panel's Allow button adds.
+
+    This decides whether the management page may offer "Disable (tailnet-only)", which removes
+    public port 22, so every doubt answers False. It used to be a substring match over the raw
+    `ufw status verbose` text, and any row naming the interface counted: `ALLOW OUT ... on
+    tailscale0` (which early installs added beside the IN rule, and which survives deleting it),
+    `on tailscale0 DENY IN`, or a comment. Any of those read "Allowed" and unlocked the lockdown
+    that then cut SSH off over the tailnet too.
+
+    UFW takes the first matching rule, so a DENY or REJECT IN on the interface above the allow
+    wins. A rule for one port on the interface is not "all traffic" and does not count."""
+    if not iface:
+        return False
+    whole = ("anywhere on " + iface).lower()
+    suffix = (" on " + iface).lower()
+    for r in rules or []:
+        if r.get("direction") != "IN":
+            continue
+        to = (r.get("to") or "").strip().lower()
+        if not to.endswith(suffix):
+            continue
+        if r.get("action") in ("DENY", "REJECT"):
+            return False
+        if to == whole and r.get("action") in ("ALLOW", "LIMIT"):
+            return True
+    return False
+
+
 def ufw_allow_tailscale(ts_interface=None):
     """Allow traffic on the Tailscale interface via UFW.
 
@@ -746,13 +776,9 @@ def get_server_status(force=False):
     has_sudo = _check_sudo()
     ts_iface = detect_tailscale_interface()
 
-    # Check if tailscale interface is already allowed in UFW
-    tailscale_ufw_allowed = False
-    if ts_iface and ufw["enabled"]:
-        out, _, _ = _run_verb("ufw-status", ["verbose"], timeout=10)
-        # The grep interpolated an interface name into a root command line; matching in Python is
-        # the same answer without that.
-        tailscale_ufw_allowed = any(ts_iface.lower() in ln.lower() for ln in (out or "").splitlines())
+    # Is the Tailscale interface already let in by UFW? Read from the rules ufw_status() parsed.
+    tailscale_ufw_allowed = bool(ts_iface and ufw["enabled"]
+                                 and ufw_allows_iface_in(ufw["rules"], ts_iface))
 
     result = {
         "has_sudo": has_sudo,

@@ -1876,6 +1876,41 @@ check("system_ops: ...and a DENY's source is the From column, not the To column"
       and _ufw_parsed["rules"][-1]["from"].startswith("203.0.113.9"),
       str(_ufw_parsed["rules"][-1]))
 
+# 10b. "Tailscale interface allowed" gates the button that removes public port 22, and it was a
+#      substring match over that same text: an `ALLOW OUT ... on tailscale0` row (early installs
+#      added one beside the IN rule, and it outlives deleting it) or a `DENY IN` on the interface
+#      read "Allowed". It is now read from the rules above, in UFW's first-match order.
+_UFW_HDR = _UFW_V.split("To  ")[0] + "To                         Action      From\n--                         ------      ----\n"
+
+
+def _ts_allowed_for(rows):
+    """Drive the REAL get_server_status over a `ufw status verbose` holding `rows`."""
+    with _so_stub(_run_verb=lambda v, a=(), **k: (_UFW_HDR + rows, "", 0),
+                  tailscale_ssh_status=lambda: {"enabled": False, "running": True},
+                  os_update_available=lambda refresh=False: {},
+                  server_uptime=lambda: "", _check_sudo=lambda: True,
+                  detect_tailscale_interface=lambda: "tailscale0"):
+        return SO.get_server_status(force=True)["tailscale_ufw_allowed"]
+
+
+try:
+    check("ufw-tailscale: an ALLOW OUT row on tailscale0 alone does not read as 'let in'",
+          _ts_allowed_for("Anywhere                   ALLOW OUT   Anywhere on tailscale0\n"
+                          "22/tcp                     ALLOW IN    Anywhere\n") is False)
+    check("ufw-tailscale: a DENY IN on tailscale0 is not 'allowed'",
+          _ts_allowed_for("Anywhere on tailscale0     DENY IN     Anywhere\n") is False)
+    check("ufw-tailscale: ...nor a DENY IN that UFW evaluates before the allow",
+          _ts_allowed_for("Anywhere on tailscale0     DENY IN     Anywhere\n"
+                          "Anywhere on tailscale0     ALLOW IN    Anywhere\n") is False)
+    check("ufw-tailscale: a comment naming the interface is not a rule for it",
+          _ts_allowed_for("27015                      ALLOW IN    Anywhere                   # tailscale0\n")
+          is False)
+    check("ufw-tailscale: the panel's own `allow in on tailscale0` rule reads as allowed (control)",
+          _ts_allowed_for("22/tcp                     LIMIT IN    Anywhere\n"
+                          "Anywhere on tailscale0     ALLOW IN    Anywhere\n"
+                          "Anywhere                   ALLOW OUT   Anywhere on tailscale0\n") is True)
+finally:
+    SO.invalidate_server_status()
 
 # 11. apt's history.log writes Install:/Upgrade:/Remove:/Purge:, never "Packages:" — so that list
 #     was always empty. And `tail -50` almost always starts mid-record, so the first entry used to
