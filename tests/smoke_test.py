@@ -13435,6 +13435,9 @@ try:
         _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=["https://only.example"]))
         check("socket: an explicit socketio_cors_origins list still wins",
               _sio_ok("https://only.example") and not _sio_ok("https://panel.example.com:5000"))
+        # No domain and NO explicit list: the check above leaves socketio_cors_origins set, and an
+        # explicit list wins outright — every case below would then pass or fail for that reason.
+        _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=None))
         # Two review fixes changed this check two ways; one survives, and the other's cases are
         # asserted against it here. A SITE ignores the port, so a page on another port of the
         # panel's own address (a game's web map) is same-site: the Lax cookie rides along, and only
