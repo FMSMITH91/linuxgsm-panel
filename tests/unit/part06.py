@@ -232,6 +232,24 @@ try:
           str(_rt_args[:1]))
     check("remote top-IPs: that cutoff is one privileged.py would accept",
           _priv.check_args("f2b-log-lines", _rt_args[0][1]) == _rt_args[0][1], str(_rt_args[:1]))
+    # The auto-block reconcile's read. A log answer that FILLS the transport ceiling was cut (the
+    # transports keep the oldest bytes), and a partial tally undercounts recent offenders — whom the
+    # reconcile then RELEASES. At the ceiling it must answer None ("unread"), which the reconcile
+    # treats as "leave every block where it is".
+    _ac_line = "2026-09-03 10:00:00 x [sshd] Found 203.0.113.5\n"
+    _ac_full = _ac_line * (_sm_core._MAX_OUTPUT_BYTES // len(_ac_line) + 1)
+    _sm_core.run_privileged = lambda *a, **k: (_ac_full[:_sm_core._MAX_OUTPUT_BYTES], "", 0)
+    check("remote attempt counts: a log read cut at the output ceiling is unread, not a partial tally",
+          _sm_hosts.remote_fail2ban_attempt_counts(object(), days=7) is None,
+          "a cut read was tallied — the reconcile would release the offenders it undercounts")
+    _sm_core.run_privileged = lambda *a, **k: (_RAW, "", 0)
+    check("remote attempt counts: (control) an ordinary read is tallied in full",
+          _sm_hosts.remote_fail2ban_attempt_counts(object(), days=7)
+          == {"203.0.113.5": 2, "198.51.100.9": 1},
+          repr(_sm_hosts.remote_fail2ban_attempt_counts(object(), days=7)))
+    _sm_core.run_privileged = lambda *a, **k: ("", "SSH command timed out", -1)
+    check("remote attempt counts: a failed read is unread too",
+          _sm_hosts.remote_fail2ban_attempt_counts(object(), days=7) is None, "")
 finally:
     _sm_core.run_privileged, _sm_hosts.remote_fail2ban_overview = _orig_rt_rp, _orig_rt_ov
 

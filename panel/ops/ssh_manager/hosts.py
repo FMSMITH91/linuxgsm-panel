@@ -1852,6 +1852,16 @@ def remote_fail2ban_attempt_counts(server, days=7):
     if rc != 0:
         _core._log.debug("remote attempt counts: the fail2ban log read failed (rc=%s)", rc)
         return None
+    # An answer AT the transport's output ceiling is a cut answer, and the transports keep the
+    # FIRST bytes — the oldest days. A partial tally undercounts the recent offenders, and the
+    # auto-block reconcile RELEASES any block whose IP falls below the threshold, so on a busy host
+    # (7 days of fail2ban log over 8 MB) a cut read unblocked the attackers it was built to hold.
+    # Tailscale and local hosts only acquired that ceiling with the memory-exhaustion fix; paramiko
+    # always had it. Unread, not partial: the reconcile leaves everything as it is on None.
+    if len((out or "").encode("utf-8", "replace")) >= _core._MAX_OUTPUT_BYTES - 65536:
+        _core._log.warning("remote attempt counts: the fail2ban log filled the transport's read "
+                           "limit; treated as unread so no block is released on a partial tally")
+        return None
     return _so._tally_f2b_events(out)[0]
 
 
