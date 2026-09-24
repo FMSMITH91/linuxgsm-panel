@@ -1009,6 +1009,35 @@ try:
     _fresh = _sm_files.lgsm_get_values(None, "gm", "gmodserver", ["discordalert"])
     check("lgsm_get_values: a fresh instance with no cfg yet reads as empty, not unreadable",
           _fresh == {"discordalert": ""}, repr(_fresh))
+
+    # ── a file with no trailing newline must not fuse into the next one ─────────────────────
+    # The three cats had nothing between them, so common.cfg ending in `discordalert="on"` with
+    # no newline swallowed the instance's first line: discordwebhook vanished, the Alerts card
+    # showed it empty, and Save wrote "" over the real webhook. The REAL command runs here, against
+    # a scratch config dir standing in for /home/gm.
+    import subprocess as _subp9
+    import tempfile as _tmpf9
+    import shutil as _sh9
+    _cfg9 = _tmpf9.mkdtemp(prefix="unit-lgv-")
+    try:
+        _cd9 = os.path.join(_cfg9, "lgsm", "config-lgsm", "gmodserver")
+        os.makedirs(_cd9)
+        for _fn9, _txt9 in (("_default.cfg", 'discordalert="off"\ndiscordwebhook=""\nport="27015"'),
+                            ("common.cfg", 'discordalert="on"'),
+                            ("gmodserver.cfg", 'discordwebhook="https://x/REAL"\nport="27016"')):
+            with open(os.path.join(_cd9, _fn9), "w") as _fh9:
+                _fh9.write(_txt9)          # deliberately no trailing newline on any of them
+
+        def _run_on_scratch(s, c, **k):
+            _r9 = _subp9.run(["bash", "-c", c.split(" ", 3)[3].replace("/home/gm/", _cfg9 + "/")],
+                             capture_output=True, text=True)
+            return _r9.stdout, _r9.stderr, _r9.returncode
+        _sm_core.run_command = _run_on_scratch
+        _fz = _sm_files.lgsm_get_values(None, "gm", "gmodserver", ["discordalert", "discordwebhook", "port"])
+        eq("lgsm_get_values: a file without a trailing newline does not swallow the next file's first key",
+           _fz, {"discordalert": "on", "discordwebhook": "https://x/REAL", "port": "27016"})
+    finally:
+        _sh9.rmtree(_cfg9, ignore_errors=True)
 finally:
     _sm_core.run_command = _orig_run9
 

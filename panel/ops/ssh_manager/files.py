@@ -348,13 +348,20 @@ def lgsm_get_values(server, user, selfname, keys):
 
     The frame is what makes the two cases distinguishable. `cat … 2>/dev/null` on three files that
     are all legitimately absent (a fresh instance) and a read that never happened both produce "";
-    the trailing sentinel only appears if the command really ran to the end."""
+    the trailing sentinel only appears if the command really ran to the end.
+
+    An `echo` follows each file. The three were concatenated with nothing between them, so a file
+    whose last line had no newline FUSED with the next file's first line: common.cfg ending in
+    `discordalert="on"` followed by an instance cfg opening with its webhook read back as
+    discordalert=`on"discordwebhook="https://…` and NO discordwebhook at all. The Alerts card then
+    showed an empty webhook, and its Save wrote "" over the real one. lgsm_read_config met the same
+    fusion and frames each file; a blank line between them is all this parser needs."""
     if not _idents_ok(user, selfname):
         return None
     d = _lgsm_cfg_dir(user, selfname)
-    inner = (f"cat {_core._quote(d + '/_default.cfg')} 2>/dev/null; "
-             f"cat {_core._quote(d + '/common.cfg')} 2>/dev/null; "
-             f"cat {_core._quote(d + '/' + selfname + '.cfg')} 2>/dev/null; "
+    inner = (f"cat {_core._quote(d + '/_default.cfg')} 2>/dev/null; echo; "
+             f"cat {_core._quote(d + '/common.cfg')} 2>/dev/null; echo; "
+             f"cat {_core._quote(d + '/' + selfname + '.cfg')} 2>/dev/null; echo; "
              f"printf %s {_core._quote(_READ_END)}")
     out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(inner)}", timeout=20, sudo=False)
     body = out or ""
