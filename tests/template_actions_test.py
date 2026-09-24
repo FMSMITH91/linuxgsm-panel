@@ -2883,6 +2883,39 @@ check(">no backups yet<" in _bk_win2,
       "backups: ...and still says that for a host that genuinely has none (positive control)",
       "the real empty case lost its message")
 
+# ── a safety-copy refusal after a typed passphrase has a way forward ─────────────────────────
+# restore_backup decrypts first and writes the safety copy second, so a right passphrase can
+# still meet "…Confirm again to restore without one." The passphrase dialog only showed that as
+# an error, and pressing Restore re-posted without skip_safety_backup: the same refusal forever,
+# during a disaster recovery. It must hand over to _bkAskSkipSafety carrying the typed passphrase.
+if not esprima:
+    skip("backups: the passphrase dialog hands a safety-copy refusal to the skip dialog",
+         "esprima not installed")
+else:
+    _rb_ast = esprima.parseScript(_bk_js2, {"loc": True}).toDict()
+    _rb_fn = next((n for n in _rb_ast["body"] if n.get("type") == "FunctionDeclaration"
+                   and (n.get("id") or {}).get("name") == "_bkAskPassphrase"), None)
+    _rb_calls = []
+
+    def _rb_walk(n):
+        if isinstance(n, dict):
+            if n.get("type") == "CallExpression" \
+                    and (n.get("callee") or {}).get("name") == "_bkAskSkipSafety":
+                _rb_calls.append([(a.get("name") if a.get("type") == "Identifier" else a.get("value"))
+                                  for a in (n.get("arguments") or [])])
+            for _v in n.values():
+                _rb_walk(_v)
+        elif isinstance(n, list):
+            for _v in n:
+                _rb_walk(_v)
+    _rb_walk(_rb_fn or {})
+    check(_rb_fn is not None, "backups: _bkAskPassphrase() was found in remote_manage_backups.js",
+          "renamed? the check below would pass by finding nothing")
+    check(any(len(c) >= 2 and c[0] == "name" and c[1] == "val" for c in _rb_calls),
+          "backups: the passphrase dialog hands a safety-copy refusal to the skip dialog, "
+          "with the passphrase that worked",
+          "_bkAskSkipSafety calls in _bkAskPassphrase: %r" % (_rb_calls,))
+
 # ── a schedule change posts only the field that changed ──────────────────────────────────────
 # Both schedule controls on each page fire one save, and it posted BOTH fields. Files & Config's
 # keep <select> has no option for 9 or 11-30, so a stored keep of 14 left it with no selection and
