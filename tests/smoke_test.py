@@ -7594,6 +7594,58 @@ try:
               _lat_after_other.get("action") == "update",
               "left %r registered — the running update's output stops reaching the console the "
               "panel told the operator to watch" % (_lat_after_other or None,))
+        # 2c. ...and two runs of the SAME action, each on its own worker, as _bg_action runs them.
+        # Ownership was decided by the action NAME, so the first validate to finish popped the
+        # registration of the second, still running. Each worker now ends only its own entry.
+        import threading as _lat_thr
+        _lat_go1, _lat_go2, _lat_b1, _lat_b2 = (_lat_thr.Event() for _ in range(4))
+
+        def _lat_worker(began, go):
+            with app.app_context():
+                _begin_action_tail(app, gs_id, "validate", _lat_logf, _lat_user)
+                began.set()
+                go.wait(10)
+                _end_action_tail(app, gs_id, _lat_remote, "validate", 0)
+        _lat_t1 = _lat_thr.Thread(target=_lat_worker, args=(_lat_b1, _lat_go1))
+        _lat_t1.start()
+        _lat_b1.wait(10)
+        _lat_t2 = _lat_thr.Thread(target=_lat_worker, args=(_lat_b2, _lat_go2))
+        _lat_t2.start()
+        _lat_b2.wait(10)
+        _lat_second = _ao.get(gs_id)
+        _lat_go1.set()
+        _lat_t1.join(10)                                   # the FIRST run finishes
+        _lat_still = _ao.get(gs_id)
+        _lat_go2.set()
+        _lat_t2.join(10)
+        check("console tail: a run that ends does not deregister a later run of the SAME action",
+              _lat_second is not None and _lat_still is _lat_second,
+              "after the first validate ended, %r was registered (the second run's entry was %r)"
+              % (_lat_still, _lat_second))
+        check("console tail: ...and that later run still deregisters itself when it ends",
+              gs_id not in _ao, "left %r registered" % (_ao.get(gs_id),))
+        # The other order, the finding's: the LATER run is refused fast and finishes first. It
+        # had displaced the earlier run's registration, so popping it left the earlier validate —
+        # still running — streaming nothing. The earlier run is registered again instead.
+        _lat_go1, _lat_go2, _lat_b1, _lat_b2 = (_lat_thr.Event() for _ in range(4))
+        _lat_t1 = _lat_thr.Thread(target=_lat_worker, args=(_lat_b1, _lat_go1))
+        _lat_t1.start()
+        _lat_b1.wait(10)
+        _lat_first = _ao.get(gs_id)
+        _lat_t2 = _lat_thr.Thread(target=_lat_worker, args=(_lat_b2, _lat_go2))
+        _lat_t2.start()
+        _lat_b2.wait(10)
+        _lat_go2.set()
+        _lat_t2.join(10)                                   # the LATER run finishes first
+        _lat_back = _ao.get(gs_id)
+        _lat_go1.set()
+        _lat_t1.join(10)
+        check("console tail: when the later run ends first, the earlier one still running is tailed again",
+              _lat_first is not None and _lat_back is _lat_first,
+              "after the second validate ended, %r was registered (the first run's entry was %r)"
+              % (_lat_back, _lat_first))
+        check("console tail: ...and once both have ended nothing is left registered",
+              gs_id not in _ao, "left %r registered" % (_ao.get(gs_id),))
         # How an action that the TRANSPORT gave up on is announced. The local and Tailscale
         # transports answer a timeout with rc -1 (they do not raise), and so does paramiko's
         # silent-channel give-up; only a raise leaves rc None. -1 is never a real exit status.

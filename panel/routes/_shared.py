@@ -683,9 +683,23 @@ def _drain_action_output(app, remote, server_id):
     return True
 
 
+# Which registration THIS worker made, per (server_id, action). A thread-local (a greenlet-local
+# under eventlet's monkey-patching), because the worker that begins a tail is the one that ends
+# it, and the caller does not hand anything back — see _end_action_tail.
+_action_tail_local = threading.local()
+
+
 def _begin_action_tail(app, server_id, action, path, user):
     """Register an action's output file for tailing and announce it in the console."""
-    _action_output[server_id] = {"action": action, "path": path, "user": user, "pos": 0}
+    # `prev` is the registration this one displaces, so that when this run ends first the one it
+    # displaced — still running — is tailed again rather than left streaming nothing.
+    entry = {"action": action, "path": path, "user": user, "pos": 0,
+             "prev": _action_output.get(server_id)}
+    _action_output[server_id] = entry
+    toks = getattr(_action_tail_local, "tokens", None)
+    if toks is None:
+        toks = _action_tail_local.tokens = {}
+    toks[(server_id, action)] = entry
     _console_push(app, server_id, f"[panel] {action} started — its output follows.")
 
 
@@ -702,14 +716,33 @@ def _end_action_tail(app, server_id, remote, action, rc):
     # deregistered it, and every later poller tick returned immediately: the ten-minute SteamCMD
     # download the panel had just told the operator to watch the console for streamed nothing, and
     # its own final drain found no entry, so the last lines were lost too.
-    own = (_action_output.get(server_id) or {}).get("action") == action
+    #
+    # The name alone only told DIFFERENT actions apart. Two runs of the SAME action (two operators,
+    # a bot and a click, a double submit) matched each other's name, so the first to finish popped
+    # the registration of the one still running. When this worker made a registration, "ours"
+    # means that very entry; the name check remains only for a caller that ends a tail it did not
+    # begin on this thread. And when ours had displaced a run that is STILL going, that run is
+    # registered again, so the later of two overlapping runs finishing first does not leave the
+    # earlier one streaming nothing for the rest of its life.
+    mine = (getattr(_action_tail_local, "tokens", None) or {}).pop((server_id, action), None)
+    if mine is not None:
+        mine["ended"] = True
+    cur = _action_output.get(server_id)
+    own = cur is not None and (cur is mine if mine is not None else cur.get("action") == action)
     if own:
+        cur["ended"] = True
         try:
             _drain_action_output(app, remote, server_id)
         except Exception:
             _log.debug("final action-output drain for server %s failed", server_id, exc_info=True)
         finally:
-            _action_output.pop(server_id, None)
+            nxt = cur.get("prev")
+            while nxt is not None and nxt.get("ended"):
+                nxt = nxt.get("prev")
+            if nxt is not None:
+                _action_output[server_id] = nxt
+            else:
+                _action_output.pop(server_id, None)
     if rc == 0:
         _console_push(app, server_id, f"[panel] {action} finished successfully.")
     elif rc is None or rc < 0:
