@@ -949,6 +949,36 @@ try:
         check("groups page: ...nor the game servers on them",
               not _boxes("game_servers", _unreach_games),
               "offers server ids %s" % sorted(_boxes("game_servers", _unreach_games)))
+    # ...and the group SUMMARIES do not name them either. The tick boxes were filtered for exactly
+    # this reason, while each group's summary still printed every host and game server it grants.
+    if other_remote and other_id:
+        import html as _sg_html
+        with app.app_context():
+            _sg = Group(name=tag + "_sumleak", description="", is_default=False)
+            _sg.servers.append(db.session.get(RemoteServer, granted_remote))
+            _sg.servers.append(db.session.get(RemoteServer, other_remote))
+            _sg.game_servers.append(db.session.get(GameServer, other_id))
+            db.session.add(_sg)
+            db.session.commit()
+            _sg_id = _sg.id
+            _sg_mine = ">%s</span>" % _sg_html.escape(db.session.get(RemoteServer, granted_remote).display_name)
+            _sg_host = ">%s</span>" % _sg_html.escape(db.session.get(RemoteServer, other_remote).display_name)
+            _sg_game = ">%s</span>" % _sg_html.escape(db.session.get(GameServer, other_id).name)
+        try:
+            _sg_page = c4.get("/groups").get_data(as_text=True)
+            _sg_card = _sg_page[_sg_page.index(tag + "_sumleak"):]
+            _sg_card = _sg_card[:_sg_card.index('id="edit-group-')]
+            check("groups page: (control) a group's summary names the host the viewer CAN reach",
+                  _sg_mine in _sg_card, "the summary names nothing — the check below is vacuous")
+            check("groups page: a group's summary does not name hosts or servers outside the viewer's reach",
+                  _sg_host not in _sg_card and _sg_game not in _sg_card,
+                  "the summary discloses what the tick boxes were filtered to hide")
+            check("groups page: ...and says how many it is not naming, so the reach is not understated",
+                  "+2 <span>outside your access</span>" in _sg_card)
+        finally:
+            with app.app_context():
+                db.session.delete(db.session.get(Group, _sg_id))
+                db.session.commit()
     # A superadmin still sees everything — the filter is per-viewer, not a blanket narrowing.
     _sa_html = _ac.get("/groups").get_data(as_text=True)
     _sa_missing = [i for i in _unreachable if ('value="%d"' % i) not in _sa_html]

@@ -175,7 +175,7 @@
     <a href="{{ url_for('account') }}" class="sidebar-user text-decoration-none" title="Account &amp; two-factor auth" style="color:inherit;">
       <div class="sidebar-user-avatar"><i class="bi bi-person"></i></div>
       <div class="sidebar-user-info">
-        <strong>{{ current_user.display_name or current_user.username }}</strong>
+        <strong data-no-i18n>{{ current_user.display_name or current_user.username }}</strong>
         <span>{% if current_user.is_superadmin %}Super Admin{% else %}Standard{% endif %} · <i class="bi bi-person-circle"></i> Account</span>
       </div>
     </a>

@@ -401,6 +401,32 @@ check("cur !== node.__i18nW" in _i18n_tt and "node.__i18nW = out" in _i18n_tt
       and "cur !== el[wk]" in _i18n_ta and "el[wk] = out" in _i18n_ta,
       "i18n: a value a script changed since the last translation is re-seeded as the English",
       "the first value ever seen stays the English, so setLang() writes a stale translation back")
+# User-authored names rendered by the SERVER need the same guard: the walker swaps any text node
+# that is a catalog key, so a group called "Admin" read "Administrador" beside an Edit box saying
+# "Admin", and a member or host called "Test" read "Probar".
+def _enclosing_tag(src, needle):
+    """The opening tag of the element directly around each occurrence of `needle`."""
+    out = []
+    for _m in re.finditer(re.escape(needle), src):
+        _lt = src.rindex("<", 0, _m.start())
+        out.append(src[_lt:src.index(">", _lt) + 1])
+    return out
+
+
+_ug_missing = []
+for _tpl, _expr in (("manage_groups.html", "{{ group.name }}</strong>"),
+                    ("manage_groups.html", "{{ group.description }}</span>"),
+                    ("manage_groups.html", "{{ u.username }}"),
+                    ("manage_groups.html", "{{ s.display_name }}"),
+                    ("manage_groups.html", "{{ r.display_name }}"),
+                    ("manage_groups.html", "{{ g.name }}"),
+                    ("base.html", "{{ current_user.display_name or current_user.username }}")):
+    _tags = _enclosing_tag((TEMPLATES / _tpl).read_text(encoding="utf-8"), _expr)
+    if not _tags or any("data-no-i18n" not in _t for _t in _tags):
+        _ug_missing.append("%s %s -> %s" % (_tpl, _expr, _tags[:1]))
+check(not _ug_missing,
+      "i18n: user-authored names on the groups page and the sidebar user are marked do-not-translate",
+      "unguarded: %s" % _ug_missing)
 
 # ── the flash sweep must not close a standing warning ─────────────────────────────────────────
 # chrome.js selected every `.alert-dismissible` in the document at T+6s, and nags.js gives the
