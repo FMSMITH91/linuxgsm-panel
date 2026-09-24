@@ -336,6 +336,17 @@ try:
     _so._run = lambda c, **k: ("127.0.0.1\n100.84.48.111\n45.76.63.211\n", "", 0)
     check("host_has_ip: recognises a local address", _so.host_has_ip("100.84.48.111") is True)
     check("host_has_ip: rejects an address not on the host", _so.host_has_ip("10.0.0.9") is False)
+    # Its docstring promises "on any error returns True", and _run never raises: a timeout or a
+    # missing `ip` is ("", ..., -1), and `ip in set()` refused the host's own Tailscale IP as
+    # "not an address on this host". Nothing read is not a measurement.
+    _so._run = lambda c, **k: ("", "Command timed out", -1)
+    check("host_has_ip: a read that timed out does not call the address foreign",
+          _so.host_has_ip("100.84.48.111") is True)
+    _so._run = lambda c, **k: ("127.0.0.1\n::1\nfd7a:115c:a1e0::1\n", "", 0)
+    check("host_has_ip: an IPv6 address typed in upper case is still this host's",
+          _so.host_has_ip("FD7A:115C:A1E0::1") is True)
+    check("host_has_ip: ...while one that really is absent is still refused (control)",
+          _so.host_has_ip("fd7a:115c:a1e0::2") is False and _so.host_has_ip("not-an-ip") is False)
 finally:
     _so._run = _orig_sorun2
 

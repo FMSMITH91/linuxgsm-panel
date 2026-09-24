@@ -1549,9 +1549,26 @@ def host_has_ip(ip):
     to it. Used to refuse binding the panel to an address that isn't local (a typo would fail
     to bind and take the panel down). Best-effort: on any error returns True, so a flaky check
     never blocks a legitimate change — the caller still guards the risky loopback case."""
+    #
+    # _run never raises — a timeout, a missing iproute2 or an exec error comes back as ("", ..., -1),
+    # and the pipeline's rc is cut's anyway — so the `except` below was never the error path, and
+    # a failed read answered "not on this host" as `ip in set()`. A host always has loopback, so
+    # nothing read means the check did not run. The comparison is on parsed addresses: an IPv6
+    # address typed in upper case ("FD7A:115C:A1E0::1") never equalled `ip`'s lowercase output.
+    import ipaddress
     try:
         out, _, _ = _run("ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1", timeout=8)
-        return str(ip) in set(out.split())
+        have = set()
+        for tok in (out or "").split():
+            try:
+                have.add(ipaddress.ip_address(tok))
+            except ValueError:
+                continue
+        if not have:
+            return True
+        return ipaddress.ip_address(str(ip).strip()) in have
+    except ValueError:
+        return False        # not an IP at all: it cannot be one of this host's addresses
     except Exception:
         return True
 
