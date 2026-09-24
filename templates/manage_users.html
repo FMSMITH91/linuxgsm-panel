@@ -308,7 +308,7 @@
       <form method="POST" action="" id="edit-user-form"
             class="ajax-form" data-ajax-refresh="#users-list" data-ajax-reset="off">
         <div class="modal-header">
-          <h5 class="modal-title"><i class="bi bi-pencil"></i> Edit User: <span id="eu-name"></span></h5>
+          <h5 class="modal-title"><i class="bi bi-pencil"></i> Edit User: <span id="eu-name" data-no-i18n></span></h5>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
@@ -414,7 +414,7 @@
         {# The username stands alone rather than sitting inside the sentence: the i18n walker
            translates whole text nodes, and a name in the middle of one splits it into fragments
            ("Give this to" … ". They'll be asked to") that no translator can word properly. #}
-        <div class="mb-2"><span class="font-monospace fw-semibold" id="cred-user"></span></div>
+        <div class="mb-2"><span class="font-monospace fw-semibold" id="cred-user" data-no-i18n></span></div>
         <p class="text-secondary small">
           They'll be asked to set their own password the first time they sign in, and this one
           stops working then.

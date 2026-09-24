@@ -427,6 +427,15 @@ for _tpl, _expr in (("manage_groups.html", "{{ group.name }}</strong>"),
 check(not _ug_missing,
       "i18n: user-authored names on the groups page and the sidebar user are marked do-not-translate",
       "unguarded: %s" % _ug_missing)
+# ...which only helps an element that CARRIES the guard. manage_users.js writes the username into
+# #eu-name (the Edit dialog's title) and #cred-user (beside a one-time password that is shown once)
+# and neither had it, so on a Spanish panel the account "Admin" was handed on as "Administrador".
+_mu_tpl = (TEMPLATES / "manage_users.html").read_text(encoding="utf-8")
+for _mu_id in ("eu-name", "cred-user"):
+    _mu_tag = re.search(r'<[a-z]+[^>]*\bid="%s"[^>]*>' % _mu_id, _mu_tpl)
+    check(_mu_tag is not None and "data-no-i18n" in _mu_tag.group(0),
+          "i18n: #%s, which manage_users.js fills with a username, is marked do-not-translate" % _mu_id,
+          "found %r" % (_mu_tag.group(0) if _mu_tag else None))
 
 # ── the flash sweep must not close a standing warning ─────────────────────────────────────────
 # chrome.js selected every `.alert-dismissible` in the document at T+6s, and nags.js gives the
