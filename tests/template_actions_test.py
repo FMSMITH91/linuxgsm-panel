@@ -2685,6 +2685,11 @@ check("num: Math.max.apply(null, g.nums)" in _fw_del and "ordered[" not in _fw_d
 check("g.protected" in _fw_del,
       "firewall delete: ...and a group that has since become protected is not deleted",
       "the re-read does not look at protected")
+# ...and the POST names the rule too, so the SERVER refuses a number that moved in the moment
+# between this read and its delete (the auto-block inserts at 1).
+check("JSON.stringify({num: Math.max.apply(null, g.nums), key: key})" in _fw_del,
+      "firewall delete: the delete request carries the rule's key, not just its position",
+      "the server deletes whatever rule the number names by then")
 # Both renderers hand the identity over, or every click refuses with "out of date".
 _fw_tpl_btn = _between(_fw_tpl, 'data-action="deleteGroup"', ">")
 check("{{ g.key|tojson }}" in _fw_tpl_btn,

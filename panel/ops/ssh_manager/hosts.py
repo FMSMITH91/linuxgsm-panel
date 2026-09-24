@@ -194,7 +194,11 @@ def pro_detach(server):
     _pro_cache_invalidate(server)
     out, err, rc = _core.run_privileged(server, "pro-detach", [], timeout=120)
     blob = (out or "") + " " + (err or "")
-    if rc == 0 or "detach" in blob.lower():
+    # pro's OWN success sentence, not the word. `"detach" in blob` was met by every failure that
+    # names the verb: the helper's "pro-detach timed out" / "failed" / "is not installed", an older
+    # helper's "unknown verb 'pro-detach'", and sudo's "not allowed to execute ... pro-detach" —
+    # each reported "Detached from Ubuntu Pro." with a success audit row on a host still attached.
+    if rc == 0 or "this machine is now detached" in blob.lower():
         return True, "Detached from Ubuntu Pro."
     return False, _pro_trim(blob) or "Detach failed"
 
@@ -441,19 +445,26 @@ def remote_ufw_close_port(server, port, protocol=None):
     return False, err or out or "Unknown error"
 
 
-def remote_ufw_delete_rule(server, num, force=False):
+def remote_ufw_delete_rule(server, num, force=False, expect_key=None):
     """Delete a UFW rule by its number (as shown by `ufw status numbered`). This is
     the reliable way to remove any rule — deleting by spec requires an exact match.
 
     Unless force=True, refuses to delete a rule that is the last thing keeping SSH or
-    Tailscale access open, so a click (or a direct API call) can't lock you out."""
+    Tailscale access open, so a click (or a direct API call) can't lock you out.
+
+    `expect_key` is the rule's identity (a group `key` from firewall.remote_ufw_status). ufw
+    numbers are POSITIONS and renumber on every insert (the auto-block inserts its denies at 1), so
+    a number read earlier can name a different rule by now; with a key, the delete happens only if
+    rule `num` is still that rule in a fresh read."""
     try:
         n = int(num)
     except (TypeError, ValueError):
         return False, "Invalid rule number"
     if n < 1:
         return False, "Invalid rule number"
-    if not force:
+    if expect_key is not None and not isinstance(expect_key, str):
+        return False, "Invalid rule identity"
+    if not force or expect_key is not None:
         # The guard reads the firewall to find out which rules are load-bearing. If that read
         # FAILS it returns no groups — and iterating nothing marked nothing protected, so every
         # rule became deletable, including the one keeping SSH or the tailnet open. The old
@@ -478,7 +489,12 @@ def remote_ufw_delete_rule(server, num, force=False):
             # rule numbered anything and the delete would fail regardless. Say that rather than
             # send someone checking a connection that is fine.
             return False, "UFW isn't installed on this host, so there's no rule %d to delete." % n
-        for g in status.get("groups", []):
+        if expect_key is not None and not any(
+                g.get("key") == expect_key and n in g.get("nums", [])
+                for g in status.get("groups", [])):
+            return False, ("Rule %d is no longer the rule that was picked — the firewall changed "
+                           "since it was read, so nothing was removed. Refresh and try again." % n)
+        for g in (status.get("groups", []) if not force else []):
             if n in g.get("nums", []) and g.get("protected"):
                 return False, g.get("protect_reason") or \
                     "This rule protects your access to the host and can't be removed here."
@@ -520,31 +536,50 @@ def remote_ufw_allow_game_ports(server, ports, name="Game"):
 
 def remote_ufw_close_by_name(server, name):
     """Delete ALL UFW rules tagged with a game server's name (its comment). Used on
-    uninstall so multi-port games are fully cleaned up. Deletes highest-numbered
-    rule first so the numbering stays valid as rules are removed."""
+    uninstall so multi-port games are fully cleaned up.
+
+    The firewall is RE-READ before every delete, and each delete names the rule it means
+    (expect_key). The numbers used to be read once and deleted highest-first, which kept them valid
+    only against this loop's own deletes: the hourly auto-block reconcile inserts its denies at
+    position 1 from another thread, and one insert mid-loop shifted every remaining number onto
+    the rule above it — another server's port, or the deny holding an attacker out — while this
+    reported "8 rule(s) removed"."""
     comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "")[:60]
     if not comment:
         return 0, "no name"
-    out, _, _ = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
-    nums = []
-    for line in (out or "").splitlines():
-        m = re.match(r"^\s*\[\s*(\d+)\]\s*(.*)$", line)
-        if m and re.search(r"#\s*" + re.escape(comment) + r"\s*$", m.group(2)):
-            nums.append(int(m.group(1)))
-    deleted = sum(1 for n in sorted(nums, reverse=True) if remote_ufw_delete_rule(server, n)[0])
+    deleted, refused = 0, set()
+    for _ in range(256):           # bounded: a rule that will not go is skipped, never retried
+        status = firewall.remote_ufw_status(server)
+        if status.get("unreachable") or not status.get("installed"):
+            break
+        tagged = [(n, g["key"]) for g in status.get("groups", [])
+                  if g.get("comment") == comment and g.get("key") not in refused
+                  for n in g.get("nums", [])]
+        if not tagged:
+            break
+        n, key = max(tagged)
+        if remote_ufw_delete_rule(server, n, expect_key=key)[0]:
+            deleted += 1
+        else:
+            refused.add(key)
     return deleted, f"{deleted} rule(s) removed for {comment}"
 
 
 def remote_ufw_close_game_port(server, port):
     """Remove the game server port rule (used on uninstall). Handles the new
-    single bare rule plus any legacy proto-specific / port+1 rules from older installs."""
+    single bare rule plus any legacy proto-specific rules on that port.
+
+    NOT port+1. That sweep deleted `port+1/tcp` and `/udp` with no idea whose they were — commonly
+    the NEXT server's game port, or a rule the operator opened from the Firewall page — so
+    uninstalling the server on 27015 closed 27016/udp and its neighbour stopped taking players,
+    with nothing in the uninstall output saying so. The server's tagged rules, extra ports
+    included, are removed by remote_ufw_close_by_name."""
     n = 0
     ok, _ = remote_ufw_close_port(server, port)  # new-style bare rule (both protocols)
     n += 1 if ok else 0
-    for p in (port, port + 1):  # legacy cleanup: old proto-specific + port+1 rules
-        for proto in ("tcp", "udp"):
-            ok, _ = remote_ufw_close_port(server, p, proto)
-            n += 1 if ok else 0
+    for proto in ("tcp", "udp"):  # legacy cleanup: old proto-specific rules on this port
+        ok, _ = remote_ufw_close_port(server, port, proto)
+        n += 1 if ok else 0
     return n, f"Port {port}: {n} rule(s) removed"
 
 

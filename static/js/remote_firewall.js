@@ -319,7 +319,9 @@ function deleteGroup(nums, btn, warn, reason, key) {
             return fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/delete-rule', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({num: Math.max.apply(null, g.nums)}),
+              // ...and WHICH rule it is, so the server refuses if that number has moved on in
+              // the moment between this read and its delete.
+              body: JSON.stringify({num: Math.max.apply(null, g.nums), key: key}),
             })
             .then(r => r.json())
             .then(function(d) {

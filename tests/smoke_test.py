@@ -6659,6 +6659,50 @@ try:
         _pkgs["n"] = []
         _osu(force=True)                     # leave the host clean for the checks below
 
+        # ...and seeding is PER HOST. Only the first sweep after a restart seeded, so a host that
+        # did not answer THAT sweep (rebooting, apt locked) read (0, 0) the next day and had the
+        # list it already had before the restart announced again.
+        from datetime import datetime as _sd_dt
+        from panel.core.clock import utcnow as _sd_now
+        with app.app_context():
+            _sd_created = {r.id: r.created_at for r in RemoteServer.query.all()}
+            for _sd_r in RemoteServer.query.all():
+                _sd_r.created_at = _sd_dt(2020, 1, 1)      # hosts that existed before this process
+            db.session.commit()
+        try:
+            _pkgs["n"] = [{"name": "openssl", "suite": "jammy-security"}]
+            _st_hosts.clear()
+            _ps._os_update_state["last_run"] = 0.0
+            _am._host_reachable = lambda r: r.id != remote_id     # this one is down for the seed pass
+            _rec.clear()
+            _osu()
+            _am._host_reachable = lambda r: True
+            _rec.clear()
+            _osu(force=True)
+            check("os updates: a host that missed the seeding pass seeds on its first reading",
+                  "os_updates" not in _rec and _st_hosts.get(remote_id) == (1, 1),
+                  "alerts %r, state %r" % (_rec, _st_hosts.get(remote_id)))
+            # POSITIVE CONTROL: a host ADDED since the panel started has had nothing announced, so
+            # its first batch is news, not a seed.
+            with app.app_context():
+                db.session.get(RemoteServer, remote_id).created_at = _sd_now()
+                db.session.commit()
+            _st_hosts.pop(remote_id, None)
+            _rec.clear()
+            _osu(force=True)
+            check("os updates: ...while a host added since the panel started has its first batch "
+                  "announced (positive control)", "os_updates" in _rec, str(_rec))
+        finally:
+            _am._host_reachable = lambda r: True
+            with app.app_context():
+                for _sd_id, _sd_at in _sd_created.items():
+                    _sd_row = db.session.get(RemoteServer, _sd_id)
+                    if _sd_row is not None:
+                        _sd_row.created_at = _sd_at
+                db.session.commit()
+            _pkgs["n"] = []
+            _osu(force=True)                 # leave every host clean again
+
         # An unreachable host is the monitor's problem — this must not even probe it. Assert on the
         # PROBE, not on silence: _os_updates_for swallows exceptions by design, so a stub that
         # raises proves nothing — the check would pass with the guard deleted.
@@ -10700,7 +10744,7 @@ try:
                             "unreachable": True})
         _fr_deleted = []
         _fr_stub(_rvmod, "remote_ufw_delete_rule",
-                 lambda r, n, force=False: _fr_deleted.append(n))
+                 lambda r, n, force=False, **k: _fr_deleted.append(n))
         _fr_r = c.post("/api/remote/%d/close-panel-port" % _fr_rid,
                        headers={"X-Requested-With": "XMLHttpRequest"})
         _fr_j = _fr_r.get_json() or {}
@@ -10710,6 +10754,22 @@ try:
               % (_fr_j.get("message"),))
         check("failed read: ...and nothing was deleted from a firewall it could not read",
               not _fr_deleted, "deleted rule numbers %s" % (_fr_deleted,))
+        # A READABLE firewall: its forced deletes by number must each name the rule they mean.
+        # The numbers are read once and the auto-block inserts at 1 from another thread, so a
+        # forced delete by bare number could take the rule above the panel port's.
+        _fr_port = int(_fr_cfg.get("port", 5000))
+        setattr(_rvmod, "remote_ufw_status",     # original already saved by _fr_stub above
+                 lambda r: {"installed": True, "enabled": True, "rules": [], "groups": [
+                     {"nums": [4, 9], "port_num": str(_fr_port), "action": "ALLOW",
+                      "direction": "IN", "is_iface": False, "key": "k-panel-port"}]})
+        _fr_keys = []
+        setattr(_rvmod, "remote_ufw_delete_rule",
+                 lambda r, n, force=False, expect_key=None, **k: (_fr_keys.append((n, expect_key)),
+                                                                  (True, ""))[1])
+        c.post("/api/remote/%d/close-panel-port" % _fr_rid,
+               headers={"X-Requested-With": "XMLHttpRequest"})
+        check("close panel port: each forced delete names the rule it means, not just its number",
+              _fr_keys == [(9, "k-panel-port"), (4, "k-panel-port")], "deleted %r" % (_fr_keys,))
     finally:
         for (_m, _n), _v in _fr_saved.items():
             setattr(_m, _n, _v)
@@ -11061,8 +11121,8 @@ try:
     _fw_saved = _fwmod.remote_ufw_delete_rule
     _fw_args = []
     try:
-        def _fw_stub(server, num, force=False):
-            _fw_args.append({"num": num, "force": force})
+        def _fw_stub(server, num, force=False, expect_key=None):
+            _fw_args.append({"num": num, "force": force, "key": expect_key})
             return (False, "refused")
         _fwmod.remote_ufw_delete_rule = _fw_stub
         c.post("/api/remote/%d/firewall/delete-rule" % remote_id, json={"num": 3})
@@ -11073,7 +11133,15 @@ try:
         check("ufw delete: a refusal is audited as a failure",
               (_al_last("remote_ufw_delete_rule") or {}).get("success") is False,
               "audited %r" % ((_al_last("remote_ufw_delete_rule") or {}).get("success"),))
-        _fwmod.remote_ufw_delete_rule = lambda s, n, force=False: (True, "deleted")
+        # The number is a position; the page sends the rule's key with it, and the route has to
+        # hand that on, or the helper cannot notice the number now names a different rule.
+        _fw_key = '["27015", "ALLOW", "IN", "Anywhere", "", "gamea"]'
+        c.post("/api/remote/%d/firewall/delete-rule" % remote_id, json={"num": 3, "key": _fw_key})
+        check("ufw delete: the route passes the rule's key on, so a moved number is refused",
+              _fw_args and _fw_args[-1]["key"] == _fw_key, "called with %r" % (_fw_args[-1:] or None,))
+        check("ufw delete: ...and a request with no key is no identity check, not an empty one",
+              len(_fw_args) >= 2 and _fw_args[-2]["key"] is None, "called with %r" % (_fw_args,))
+        _fwmod.remote_ufw_delete_rule = lambda s, n, force=False, expect_key=None: (True, "deleted")
         c.post("/api/remote/%d/firewall/delete-rule" % remote_id, json={"num": 3})
         check("ufw delete: ...and a delete that happened is audited as a success (control)",
               (_al_last("remote_ufw_delete_rule") or {}).get("success") is True,

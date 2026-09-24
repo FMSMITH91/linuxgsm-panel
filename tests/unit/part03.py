@@ -786,6 +786,26 @@ finally:
     _sm_core.run_command = _orig_pro_run
     _sm_hosts._pro_status_cache.clear()
 
+# ── pro_detach: a failure that names the verb is not a detach ────────────────────────────────
+# `"detach" in blob` accepted every helper and sudo failure, since each names `pro-detach`.
+_pd_saved = _sm_core.run_privileged
+try:
+    for _pd_ans in (("panel-helper: pro-detach timed out", "", 124),
+                    ("sudo: Sorry, user panel is not allowed to execute '/usr/local/sbin/panel-helper "
+                     "pro-detach' as root", "", 1),
+                    ("panel-helper: unknown verb 'pro-detach'", "", 2)):
+        _sm_core.run_privileged = lambda s, v, a=(), _x=_pd_ans, **k: _x
+        _pd_ok, _pd_msg = _sm_hosts.pro_detach(NS(id=9122, host="h"))
+        check("pro_detach: %r is a failure, not 'Detached'" % _pd_ans[0][:40],
+              _pd_ok is False, "ok=%r msg=%r" % (_pd_ok, _pd_msg))
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("This machine is now detached.", "", 0)
+    _pd_ok, _ = _sm_hosts.pro_detach(NS(id=9122, host="h"))
+    check("pro_detach: ...while pro's own success still reads as detached (positive control)",
+          _pd_ok is True)
+finally:
+    _sm_core.run_privileged = _pd_saved
+    _sm_hosts._pro_status_cache.clear()
+
 # ── host_specs is cached (static hardware — don't re-run lscpu every page load) ──
 _hs_n = {"n": 0}
 _orig_hs_run = _sm_core.run_command

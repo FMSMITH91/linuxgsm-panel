@@ -4783,8 +4783,78 @@ try:
     _ok_f, _ = _fw_h.remote_ufw_delete_rule(NS(), 3, force=True)
     check("ufw delete: force=True still overrides, so nothing is unrecoverable",
           _ok_f is True and len(_fw_deleted) == 1, "ok=%s sent=%s" % (_ok_f, _fw_deleted))
+    # A rule NUMBER is a position; with the rule's key the delete happens only if rule N is still
+    # that rule — even under force, which overrides the lockout guard, not the identity check.
+    _fw_f.remote_ufw_status = lambda _s: {"installed": True, "groups": [
+        {"nums": [3], "protected": False, "key": "k-deny-attacker"}]}
+    for _kforce in (False, True):
+        _fw_deleted.clear()
+        _ok_k, _msg_k = _fw_h.remote_ufw_delete_rule(NS(), 3, force=_kforce, expect_key="k-game-a")
+        check("ufw delete: a number that now holds a DIFFERENT rule is refused (force=%s)" % _kforce,
+              _ok_k is False and not _fw_deleted and "no longer the rule" in _msg_k,
+              "ok=%s sent=%s msg=%r" % (_ok_k, _fw_deleted, _msg_k))
+    _fw_deleted.clear()
+    _ok_k, _ = _fw_h.remote_ufw_delete_rule(NS(), 3, expect_key="k-deny-attacker")
+    check("ufw delete: ...while the rule it still names is deleted (positive control)",
+          _ok_k is True and len(_fw_deleted) == 1, "ok=%s sent=%s" % (_ok_k, _fw_deleted))
 finally:
     _sm_core.run_privileged, _fw_f.remote_ufw_status = _o_rp5, _o_status
+
+# ── uninstall's tagged-rule cleanup under a concurrent insert ─────────────────────────────────
+# remote_ufw_close_by_name read the numbers ONCE and deleted highest-first. The auto-block
+# reconcile inserts its denies at position 1 from another thread, and one insert mid-loop moved
+# every remaining number onto the rule above it: here, the deny holding an attacker out.
+_cbn_saved = (_sm_core.run_privileged, _fw_f.remote_ufw_status)
+try:
+    _cbn = {"rules": [], "inserted": False}
+
+    def _cbn_priv(s, verb, args=(), **k):
+        if verb == "ufw-status":
+            return ("Status: active\n\n" + "".join(
+                "[%2d] %s\n" % (i + 1, r) for i, r in enumerate(_cbn["rules"])), "", 0)
+        if verb == "ufw-delete-num":
+            _cbn["rules"].pop(int(list(args)[0]) - 1)
+            if not _cbn["inserted"]:          # the reconcile lands between two deletes
+                _cbn["inserted"] = True
+                _cbn["rules"].insert(0, "Anywhere                   DENY IN     203.0.113.9  # panel-autoblock")
+            return ("Rule deleted", "", 0)
+        return ("", "", 0)
+
+    def _cbn_status(_s):
+        return {"installed": True, "enabled": True, "groups": [
+            {"nums": [i + 1], "protected": False, "key": "k:%s" % r,
+             "comment": _fw_f._parse_ufw_rule(r)["comment"]} for i, r in enumerate(_cbn["rules"])]}
+    _sm_core.run_privileged, _fw_f.remote_ufw_status = _cbn_priv, _cbn_status
+    _cbn["rules"] = ["27015                      ALLOW IN    Anywhere     # gamea",
+                     "27016                      ALLOW IN    Anywhere     # gameb",
+                     "27017                      ALLOW IN    Anywhere     # gamea",
+                     "22/tcp                     LIMIT IN    Anywhere"]
+    _cbn_n, _ = _fw_h.remote_ufw_close_by_name(NS(), "gamea")
+    _cbn_left = [r.split("#")[-1].strip() if "#" in r else r.split()[0] for r in _cbn["rules"]]
+    check("ufw close-by-name: an insert mid-cleanup does not move a delete onto another rule",
+          sorted(_cbn_left) == ["22/tcp", "gameb", "panel-autoblock"] and _cbn_n == 2,
+          "left %r, reported %d removed — a rule that was not this server's went" % (_cbn_left, _cbn_n))
+finally:
+    _sm_core.run_privileged, _fw_f.remote_ufw_status = _cbn_saved
+
+# ── uninstall's legacy port cleanup does not reach the NEXT port ───────────────────────────────
+# `for p in (port, port + 1)` deleted port+1/tcp and /udp with no idea whose they were — usually
+# the neighbouring server's game port.
+_cgp_saved = _sm_core.run_privileged
+try:
+    _cgp_sent = []
+    _sm_core.run_privileged = lambda s, verb, args=(), **k: (_cgp_sent.append((verb, list(args))),
+                                                            ("", "", 0))[1]
+    _fw_h.remote_ufw_close_game_port(NS(), 27015)
+    check("ufw close-game-port: nothing is deleted on port+1 (another server's port)",
+          not any("27016" in a for _v, a in _cgp_sent), repr(_cgp_sent))
+    check("ufw close-game-port: ...while the port's own bare and tcp/udp rules still go "
+          "(positive control)",
+          ("ufw-delete-allow-port", ["27015"]) in _cgp_sent
+          and ("ufw-delete-allow-proto-port", ["tcp", "27015"]) in _cgp_sent
+          and ("ufw-delete-allow-proto-port", ["udp", "27015"]) in _cgp_sent, repr(_cgp_sent))
+finally:
+    _sm_core.run_privileged = _cgp_saved
 
 # load_user: a database error skipped the revoked-device AND cookie-expiry checks and returned the
 # user, so a revoked cookie authenticated for as long as the database stayed unhappy.
