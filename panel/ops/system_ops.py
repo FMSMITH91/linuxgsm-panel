@@ -1738,7 +1738,7 @@ def _panel_login_proxied():
 
 
 # Every tailnet peer's address: Tailscale's CGNAT IPv4 range and its IPv6 ULA prefix.
-_F2B_TAILNET_RANGES = ("100.64.0.0/10", "fd7a:115c:a1e0::/48")
+_TAILNET_RANGES = ("100.64.0.0/10", "fd7a:115c:a1e0::/48")
 
 
 def _panel_f2b_ignore(ignore_ips, allports):
@@ -1751,7 +1751,7 @@ def _panel_f2b_ignore(ignore_ips, allports):
     SSH is off), game and RCON ports. The panel never firewall-blocks a tailnet IP anywhere else
     (ssh_manager's note above _TAILNET_CGNAT; the auto-block exempts them), and a public attacker
     cannot have one. A web-port-only ban takes only the panel login from them, as it always did."""
-    return list(ignore_ips or []) + (list(_F2B_TAILNET_RANGES) if allports else [])
+    return list(ignore_ips or []) + (list(_TAILNET_RANGES) if allports else [])
 
 
 def _panel_f2b_jail_body(auth_log, web_port, ignore_ips=None, allports=None):
@@ -2016,7 +2016,14 @@ def _ufw_deny_sources(status_out, shadowed=None):
                        else ipaddress.ip_network(rest[0], strict=False))
             except ValueError:
                 src = None      # an app profile or anything unparsed: assume it covers everyone
-            allows.append((6 if v6 or any(n.version == 6 for n in nets) else 4, src))
+            ver = 6 if v6 or any(n.version == 6 for n in nets) else 4
+            # `ufw allow in on tailscale0` — which the panel itself adds, usually before any deny —
+            # only ever sees tailnet sources, so it shadows no public address. Read as "Anywhere",
+            # it made every operator deny below it look shadowed: badged unblocked, and moved.
+            _on = toks.index("on") if "on" in toks[:act] else -1
+            if src is None and 0 <= _on < act - 1 and toks[_on + 1].startswith("tailscale"):
+                src = ipaddress.ip_network(_TAILNET_RANGES[1 if ver == 6 else 0])
+            allows.append((ver, src))
             continue
         if toks[:act] != ["Anywhere"] or len(rest) != 1:
             continue

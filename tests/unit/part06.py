@@ -5131,6 +5131,21 @@ check("autoblock: ...while one ABOVE the allows, or below an allow for other sou
       "is (positive control)",
       SO._ufw_deny_sources(_sh_above6) == {"203.0.113.20": "", "203.0.113.21": ""},
       "read %r" % (SO._ufw_deny_sources(_sh_above6),))
+# `ufw allow in on tailscale0` — the panel adds it itself, usually before any deny — only ever
+# sees tailnet sources. Read as an allow from Anywhere, every operator deny below it looked
+# shadowed: badged unblocked while it blocked, and moved on the next Block.
+_sh_ts6 = ("Anywhere on tailscale0     ALLOW IN    Anywhere\n"
+           "Anywhere                   DENY        203.0.113.30\n"
+           "Anywhere                   DENY        100.101.2.3\n"
+           "Anywhere (v6) on tailscale0 ALLOW IN   Anywhere (v6)\n"
+           "Anywhere (v6)              DENY        2001:db8::30\n")
+_sh_ts_late6 = {}
+_sh_ts_read6 = SO._ufw_deny_sources(_sh_ts6, _sh_ts_late6)
+check("autoblock: an operator's deny below the tailscale0 allow still blocks a public address",
+      _sh_ts_read6 == {"203.0.113.30": "", "2001:db8::30": ""},
+      "read %r, shadowed %r" % (_sh_ts_read6, _sh_ts_late6))
+check("autoblock: ...while a tailnet address below it is shadowed (positive control)",
+      set(_sh_ts_late6) == {"100.101.2.3"}, "shadowed %r" % (_sh_ts_late6,))
 _ab_verbs6 = []
 _ab_saved6 = (SO._run_verb, _mon6.so.fail2ban_attempt_counts, _mon6.tailnet_exempt_ips,
               _mon6._autoblock_threshold, _mon6._whitelist_networks)
