@@ -2891,6 +2891,66 @@ if os.path.isfile(_acc_path):
               os.path.join(_root, ".github", "workflows", "codacy-alerts.yml"),
               encoding="utf-8").read())
 
+# ── ...and the gate script fails on any answer it cannot read, not only 401/403/404 ─────────────
+# Every other HTTP status printed a ::warning:: and exited 0, as did a 200 whose body was not JSON
+# (json's ValueError shared the "could not reach" branch). The workflow is schedule-only, so a
+# retired endpoint (410), a moved one (308 — urllib raises on a redirected POST) or a changed filter
+# shape (400/422) would have read green every day, forever. Driven through the real main() with
+# urlopen stubbed; an outage (5xx, no connection) stays non-fatal, and a well-formed empty answer
+# is the control that passes.
+import importlib.util as _cd_ilu
+import io as _cd_io
+import urllib.error as _cd_err
+_cd_spec = _cd_ilu.spec_from_file_location(
+    "codacy_gate", os.path.join(_root, ".github", "scripts", "codacy_open_errors.py"))
+_cd = _cd_ilu.module_from_spec(_cd_spec)
+_cd_spec.loader.exec_module(_cd)
+
+
+class _CdResp:
+    def __init__(self, body):
+        self._b = body
+
+    def read(self):
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _cd_run(behaviour):
+    def _urlopen(req, timeout=None):
+        if isinstance(behaviour, BaseException):
+            raise behaviour
+        return _CdResp(behaviour)
+    _saved = (_cd.urllib.request.urlopen, os.environ.pop("GITHUB_STEP_SUMMARY", None), sys.stdout)
+    _cd.urllib.request.urlopen = _urlopen
+    sys.stdout = _cd_io.StringIO()
+    try:
+        return _cd.main()
+    finally:
+        _cd.urllib.request.urlopen = _saved[0]
+        sys.stdout = _saved[2]
+        if _saved[1] is not None:
+            os.environ["GITHUB_STEP_SUMMARY"] = _saved[1]
+
+
+_cd_got = {_label: _cd_run(_b) for _label, _b in (
+    ("HTTP 400", _cd_err.HTTPError("u", 400, "bad", {}, None)),
+    ("HTTP 410", _cd_err.HTTPError("u", 410, "gone", {}, None)),
+    ("HTTP 422", _cd_err.HTTPError("u", 422, "unprocessable", {}, None)),
+    ("HTTP 308", _cd_err.HTTPError("u", 308, "moved", {}, None)),
+    ("HTML 200", b"<html>sign in</html>"),
+    ("HTTP 503", _cd_err.HTTPError("u", 503, "down", {}, None)),
+    ("unreachable", _cd_err.URLError("no route")),
+    ("clean", b'{"data": [], "pagination": {}}'))}
+check("codacy gate: an answer it cannot read fails the run; only an outage is a warning",
+      _cd_got == {"HTTP 400": 1, "HTTP 410": 1, "HTTP 422": 1, "HTTP 308": 1, "HTML 200": 1,
+                  "HTTP 503": 0, "unreachable": 0, "clean": 0}, repr(_cd_got))
+
 # ── gitleaks may not exempt a README from the secret scan ──────────────────────────────────────
 # The allowlist carried `paths = ['''README\\.md''']`. gitleaks path patterns are unanchored
 # searches, so that exempted all four READMEs outright, for placeholders the match regexes already
