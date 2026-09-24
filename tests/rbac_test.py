@@ -219,6 +219,55 @@ try:
         code = c.get(p).status_code
         check("limited user DENIED %s" % p, code != 200, "got %d" % code)
 
+    # ── the install picker's OS filter must answer the people who install ──────────────────────
+    # /specs was MANAGE_REMOTES only, but its os_slug is what manage_servers.js greys out games
+    # with, on a page for INSTALL_SERVER / MANAGE_SERVERS. They got 403, the filter read "OS unknown"
+    # and left every game selectable. They now get os_slug — and ONLY os_slug: the hardware card
+    # (kernel, hostname, CPU, disk) stays with MANAGE_REMOTES.
+    import panel.routes.remote_vps as _sp_rv
+    import panel.ops.ssh_manager.hosts as _sp_hosts
+    _sp_saved = (_sp_rv.host_specs, _sp_hosts.host_os_slug)
+    with app.app_context():
+        _spg = Group(name=tag + "_sp", description="RBAC test INSTALL_SERVER (auto)", is_default=False)
+        _spg.set_permissions([auth.VIEW_SERVERS, auth.INSTALL_SERVER])      # NOT manage_remotes
+        _spg.servers.append(RemoteServer.query.get(granted_remote))
+        _spm = Group(name=tag + "_spm", description="RBAC test MANAGE_REMOTES (auto)", is_default=False)
+        _spm.set_permissions([auth.VIEW_SERVERS, auth.MANAGE_REMOTES])
+        _spm.servers.append(RemoteServer.query.get(granted_remote))
+        db.session.add_all([_spg, _spm]); db.session.flush()
+        _spu = User(username=tag + "_sp", password_hash=auth.hash_password(secrets.token_hex(16)),
+                    display_name=tag + "_sp", is_superadmin=False, is_active=True)
+        _spu.groups.append(_spg)
+        _spmu = User(username=tag + "_spm", password_hash=auth.hash_password(secrets.token_hex(16)),
+                     display_name=tag + "_spm", is_superadmin=False, is_active=True)
+        _spmu.groups.append(_spm)
+        db.session.add_all([_spu, _spmu])
+        db.session.commit()
+        _spu_id, _spmu_id = _spu.id, _spmu.id
+    try:
+        _sp_rv.host_specs = lambda r, force=False: {"os": "Ubuntu 22.04", "kernel": "6.8.0-rbac",
+                                                    "hostname": "rbac-host"}
+        _sp_hosts.host_os_slug = lambda r: "ubuntu-22.04"
+        _spr = client_as(_spu_id).get("/api/remote/%d/specs" % granted_remote)
+        check("specs: an INSTALL_SERVER user gets the host's OS for the install picker",
+              _spr.status_code == 200 and (_spr.get_json() or {}).get("os_slug") == "ubuntu-22.04",
+              "got %d %s" % (_spr.status_code, _spr.get_data(as_text=True)[:80]))
+        check("specs: ...and nothing of the hardware card",
+              set((_spr.get_json() or {"x": 1}).keys()) == {"os_slug"},
+              "keys %r" % sorted((_spr.get_json() or {}).keys()))
+        _spmr = client_as(_spmu_id).get("/api/remote/%d/specs" % granted_remote)
+        check("specs: ...while MANAGE_REMOTES still gets the full specs",
+              _spmr.status_code == 200 and (_spmr.get_json() or {}).get("kernel") == "6.8.0-rbac"
+              and (_spmr.get_json() or {}).get("os_slug") == "ubuntu-22.04",
+              "got %d %s" % (_spmr.status_code, _spmr.get_data(as_text=True)[:80]))
+    finally:
+        _sp_rv.host_specs, _sp_hosts.host_os_slug = _sp_saved
+        with app.app_context():
+            for _obj in (db.session.get(User, _spu_id), db.session.get(User, _spmu_id)):
+                if _obj is not None:
+                    db.session.delete(_obj)
+            db.session.commit()
+
     # ── Two guards that each redirect to the other are an infinite loop ────────────────────────
     # A failed install sends the console to Files & Config, because that is where the LinuxGSM
     # config the failure talks about lives. Files & Config sends a user without MANAGE_SERVERS to

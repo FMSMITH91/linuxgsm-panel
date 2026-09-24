@@ -20,8 +20,8 @@ from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_gam
 # module would never be seen — attribute access resolves at call time and is stable
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
-from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, accessible_remote_ids,
-    can_access_remote, get_game,
+from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
+    accessible_remote_ids, can_access_remote, get_game,
     get_remote, has_permission, log_action, permission_required, server_access_required)
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
@@ -652,10 +652,21 @@ def register(app):
 
     @app.route("/api/remote/<int:remote_id>/specs")
     @login_required
-    @permission_required(MANAGE_REMOTES)
+    @permission_required(MANAGE_REMOTES, INSTALL_SERVER, MANAGE_SERVERS)
     def api_remote_specs(remote_id):
-        """Static hardware/OS specs for a remote host (loaded once, not polled)."""
+        """Static hardware/OS specs for a remote host (loaded once, not polled).
+
+        Also the install picker's OS filter (manage_servers.js filterGamesForHost), which is on a
+        page for INSTALL_SERVER / MANAGE_SERVERS. Gated on MANAGE_REMOTES alone, this answered
+        those users 403, the filter read that as "OS unknown" and left every game selectable —
+        the ones this host cannot run included — so they learned it only from the install
+        refusal. They get os_slug and nothing else: the hardware card stays MANAGE_REMOTES."""
         remote = get_remote(remote_id)
+        if not has_permission(current_user, MANAGE_REMOTES):
+            try:
+                return jsonify({"os_slug": _sm.host_os_slug(remote) or ""})
+            except Exception:
+                return jsonify({"os_slug": ""})
         # os_slug alongside the pretty OS name: LinuxGSM's own "<id>-<version>", which is what
         # decides whether this host can install a game LinuxGSM caps at an older release. That is
         # a property of THIS host — a 20.04 remote under a 24.04 panel runs those games fine — so
