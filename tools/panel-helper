@@ -1114,6 +1114,15 @@ GAME_GROUP = "lgsmpanel-games"
 # root without sudo: a container with / bind-mounted, a privileged LXD container, raw block access.
 PRIVILEGED_GROUPS = ("sudo", "admin", "wheel", "root", "docker", "lxd", "disk")
 
+# Groups that keep an account OUT of GAME_GROUP: the ones above, incus-admin and libvirt (root
+# through their daemon, like lxd), staff (root runs from /usr/local), and adm and shadow (logs and
+# password hashes — not root, but nothing the panel's grant should hand out either). This is
+# install.sh's can_already_sudo list, and the two must name the same groups: install.sh EVICTS a
+# member of one of these on every update, so a group only it knew about was enrolled again by the
+# next import or install here and taken away by the next update. Kept apart from PRIVILEGED_GROUPS
+# because _caller_reaches_root reads that one, and a panel user in adm does not reach root.
+NEVER_ENROL_GROUPS = PRIVILEGED_GROUPS + ("adm", "shadow", "staff", "incus-admin", "libvirt")
+
 
 def _groups_of(user):
     """Every group name `user` belongs to, primary included.
@@ -1161,7 +1170,7 @@ def _can_already_escalate(user):
         # the panel cannot drive, and says so; a false accept costs root.
         sys.stderr.write("could not read the group database for %s; refusing to enrol it\n" % user)
         return True
-    if names & set(PRIVILEGED_GROUPS):
+    if names & set(NEVER_ENROL_GROUPS):
         return True
     try:
         pw = pwd.getpwnam(user)

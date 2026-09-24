@@ -3832,6 +3832,16 @@ try:
                                 lambda _p=_pg: [_FakeGrp(_p, ["bob"])])
         check("enrolment: ...nor one in '%s'" % _pg,
               _helper._can_already_escalate("bob") is True)
+    # install.sh evicts a member of these from the group on every update, so the helper must refuse
+    # to enrol one too — or an import re-enrols what the next update takes away.
+    _ne_missed = []
+    for _pg in ("adm", "shadow", "staff", "incus-admin", "libvirt"):
+        _helper.grp = _fake_grp(lambda _g: _FakeGrp("users"),
+                                lambda _p=_pg: [_FakeGrp(_p, ["bob"])])
+        if _helper._can_already_escalate("bob") is not True:
+            _ne_missed.append(_pg)
+    check("enrolment: ...nor one in adm, shadow, staff, incus-admin or libvirt",
+          not _ne_missed, "enrolled anyway: %s" % _ne_missed)
     # A sudoers FILE naming the account directly, with no privileged group anywhere.
     _sg_dir = _sg_tmp.mkdtemp(prefix="sudoers-")
     with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
@@ -4066,6 +4076,16 @@ check("install.sh: ...and the backfill acts on its answer, enrolling only on a d
       "can_already_sudo" in _inst_fn("sync_game_user_group")
       and "usermod -aG" in _inst_fn("sync_game_user_group"),
       "sync_game_user_group does not consult it")
+# The two lists are one contract. install.sh EVICTS an enrolled member of any group it names on
+# every update; a group only install.sh knew about was re-enrolled by the helper at the next import
+# or install and taken away again by the next update, round and round.
+_cas_m = _re.search(r'_cas_groups="([^"]*)"', _inst_fn("can_already_sudo"))
+_cas_set = set(_cas_m.group(1).split("|")) if _cas_m else set()
+check("install.sh and the helper refuse to enrol members of the SAME groups",
+      _cas_set and _cas_set == set(_helper.NEVER_ENROL_GROUPS),
+      "only install.sh: %s; only the helper: %s"
+      % (sorted(_cas_set - set(_helper.NEVER_ENROL_GROUPS)),
+         sorted(set(_helper.NEVER_ENROL_GROUPS) - _cas_set)))
 
 # ...and when the group database does not answer, the check must fail CLOSED. It used to swallow
 # the error and return whatever it had, so an unreadable group database produced an EMPTY set, no
