@@ -10211,6 +10211,47 @@ try:
                   _gm_je is None and gs_id not in _gm_state,
                   "job=%r — a month-old error greets every later visit to this server"
                   % (_gm_je,))
+
+            # ── one content job per HOST ─────────────────────────────────────────────────────
+            # Content is host-wide (one content user, one ~/serverfiles), but nothing stopped a
+            # second job on the same host while the first ran: two SteamCMD installs into one
+            # directory, or an uninstall deleting what another server's job was mounting. The
+            # first job is held mid-install here, so the second request really does overlap it.
+            import threading as _gm_thr
+            _gm_gate = _gm_thr.Event()
+
+            def _gm_slow_install(*a, **k):
+                _gm_gate.wait(20)
+                return (True, ["cstrike"], "installed: cstrike")
+            _gm_mod.install_gmod_content = _gm_slow_install
+            _gm_state.pop(gs_id, None)
+            _gm_first = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": ["cstrike"]},
+                               headers={"X-Requested-With": "XMLHttpRequest"})
+            _gm_second = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": ["cstrike"]},
+                                headers={"X-Requested-With": "XMLHttpRequest"})
+            _gm_third = c.post("/api/server/%d/gmod-content" % gs_id,
+                               json={"action": "uninstall", "games": ["cstrike"]},
+                               headers={"X-Requested-With": "XMLHttpRequest"})
+            _gm_gate.set()
+            _gm_after = _gm_settle()
+            check("gmod content: a second apply on the same host while one runs is refused (409)",
+                  (_gm_first.get_json() or {}).get("success") is True
+                  and _gm_second.status_code == 409
+                  and "already running" in ((_gm_second.get_json() or {}).get("message") or ""),
+                  "first %r, second %d %r" % (_gm_first.get_json(), _gm_second.status_code,
+                                              _gm_second.get_json()))
+            check("gmod content: ...and so is an uninstall on that host",
+                  _gm_third.status_code == 409, "got %d %r" % (_gm_third.status_code, _gm_third.get_json()))
+            check("gmod content: ...and the first job still finished on its own",
+                  _gm_after.get("status") == "done", "job=%r" % (_gm_after,))
+            # Positive control: the host is free again the moment the job reports done.
+            _gm_mod.install_gmod_content = lambda *a, **k: (True, ["cstrike"], "installed: cstrike")
+            _gm_again = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": ["cstrike"]},
+                               headers={"X-Requested-With": "XMLHttpRequest"})
+            _gm_settle()
+            check("gmod content: (control) once it finishes, the next job on that host is accepted",
+                  (_gm_again.get_json() or {}).get("success") is True,
+                  "got %d %r — the host stayed held" % (_gm_again.status_code, _gm_again.get_json()))
         finally:
             (_gm_mod.ensure_content_user, _gm_mod.install_gmod_content,
              _gm_mod.gmod_mount_setup) = _gm_saved2
