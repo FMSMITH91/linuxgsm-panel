@@ -976,6 +976,116 @@ try:
                     db.session.delete(_ar_row)
                     db.session.commit()
 
+    # ── ...but only with a credential the delegated admin SUPPLIED ───────────────────────────
+    # add_remote decided a host was the creator's to have by logging in to it, then granted it to
+    # their MANAGE_REMOTES groups. With auth_method=key the credential is a PATH on the panel host
+    # (blank -> the panel user's ~/.ssh/id_rsa, and paramiko tries the agent and every ~/.ssh key
+    # besides), and tailscale is the panel node's own tailnet identity: the login proved the PANEL
+    # could reach the address, not the requester. edit_remote let the same user repoint a granted
+    # row anywhere on those credentials. A password is the one method that proves the requester.
+    _ar2_calls = []
+    _ar2_ids = []
+    _ar2_ssh = _ar_mod.ssh_test_connection
+    _jh = {"Accept": "application/json"}
+    with app.app_context():
+        _ed_row = db.session.get(RemoteServer, remote_id)
+        _ed_before = (_ed_row.name, _ed_row.host, _ed_row.port, _ed_row.username,
+                      _ed_row.auth_method, _ed_row.auth_credential, _ed_row.sudo_enabled)
+    try:
+        _ar_mod.ssh_test_connection = lambda *a, **k: (_ar2_calls.append(a), (True, "ok"))[1]
+        for _am in ("key", "tailscale"):
+            _before_n = len(_ar2_calls)
+            _r2 = mrc.post("/remotes/add", headers=_jh,
+                           data={"name": "smoke-deleg-%s" % _am, "host": "198.51.100.45",
+                                 "ssh_user": "root", "ssh_port": "22", "auth_method": _am,
+                                 "credential": "", "setup_type": "existing"})
+            with app.app_context():
+                _made = RemoteServer.query.filter_by(name="smoke-deleg-%s" % _am).first()
+                if _made is not None:
+                    _ar2_ids.append(_made.id)
+            check("add_remote: a delegated admin cannot add a host that signs in with the panel's "
+                  "own %s" % _am,
+                  _r2.status_code == 403 and _made is None and len(_ar2_calls) == _before_n,
+                  "status=%d row=%s logins=%d — the panel's credential was used to prove the "
+                  "requester's claim" % (_r2.status_code, _made is not None,
+                                         len(_ar2_calls) - _before_n))
+        # ...nor register the panel's own machine: that row is superadmin-only everywhere else
+        # (host_local), and from here it landed outside every group the creator is in.
+        _r2 = mrc.post("/remotes/add", headers=_jh,
+                       data={"name": "smoke-deleg-local", "is_local": "1", "ssh_port": "22"})
+        with app.app_context():
+            _made = RemoteServer.query.filter_by(name="smoke-deleg-local").first()
+            if _made is not None:
+                _ar2_ids.append(_made.id)
+        check("add_remote: ...nor register the panel's own machine as a host",
+              _r2.status_code == 403 and _made is None,
+              "status=%d row=%s" % (_r2.status_code, _made is not None))
+        # POSITIVE CONTROL: a superadmin still adds a key-auth host (the refusal is scoped).
+        _r2 = client_as(admin_id).post("/remotes/add", headers=_jh,
+                                       data={"name": "smoke-sa-key", "host": "198.51.100.46",
+                                             "ssh_user": "root", "ssh_port": "22",
+                                             "auth_method": "key", "credential": "",
+                                             "setup_type": "existing"})
+        with app.app_context():
+            _made = RemoteServer.query.filter_by(name="smoke-sa-key").first()
+            if _made is not None:
+                _ar2_ids.append(_made.id)
+        check("add_remote: ...while a superadmin still adds a key-auth host (positive control)",
+              _made is not None, "status=%d" % _r2.status_code)
+
+        # edit_remote: the delegated admin's own granted row, repointed on the panel's key.
+        def _ed(**f):
+            d = {"name": _ed_before[0], "host": _ed_before[1], "ssh_port": str(_ed_before[2]),
+                 "ssh_user": _ed_before[3], "auth_method": _ed_before[4], "credential": ""}
+            d.update(f)
+            return mrc.post("/remotes/%d/edit" % remote_id, headers=_jh, data=d)
+
+        def _ed_now():
+            with app.app_context():
+                _x = db.session.get(RemoteServer, remote_id)
+                return (_x.host, _x.port, _x.username, _x.auth_method)
+
+        _e = _ed(host="198.51.100.99")
+        check("edit_remote: a delegated admin cannot repoint a key-auth host to another address",
+              _e.status_code == 403 and _ed_now()[0] == _ed_before[1],
+              "status=%d now=%r" % (_e.status_code, _ed_now()))
+        _e = _ed(auth_method="tailscale")
+        check("edit_remote: ...nor switch it to the panel's tailnet identity",
+              _e.status_code == 403 and _ed_now()[3] == _ed_before[4],
+              "status=%d now=%r" % (_e.status_code, _ed_now()))
+        _e = _ed(ssh_user="admin")
+        check("edit_remote: ...nor change the SSH user the panel's key signs in as",
+              _e.status_code == 403 and _ed_now()[2] == _ed_before[3],
+              "status=%d now=%r" % (_e.status_code, _ed_now()))
+        _e = _ed(credential="/home/panel/.ssh/other_key")
+        check("edit_remote: ...nor point it at a different key file on the panel host",
+              _e.status_code == 403, "status=%d" % _e.status_code)
+        # POSITIVE CONTROLS: a rename is not a retarget, and a repoint that brings its own
+        # password is the requester's credential, not the panel's.
+        _e = _ed(name="smoke-host-renamed")
+        with app.app_context():
+            _nm = db.session.get(RemoteServer, remote_id).name
+        check("edit_remote: ...while a rename still saves (positive control)",
+              _e.status_code == 200 and _nm == "smoke-host-renamed",
+              "status=%d name=%r" % (_e.status_code, _nm))
+        _e = _ed(host="198.51.100.98", auth_method="password", credential="their-own-pw")
+        check("edit_remote: ...and a repoint WITH a password they supply is theirs to make",
+              _e.status_code == 200 and _ed_now()[0] == "198.51.100.98"
+              and _ed_now()[3] == "password",
+              "status=%d now=%r" % (_e.status_code, _ed_now()))
+    finally:
+        _ar_mod.ssh_test_connection = _ar2_ssh
+        with app.app_context():
+            _x = db.session.get(RemoteServer, remote_id)
+            (_x.name, _x.host, _x.port, _x.username, _x.auth_method, _x.auth_credential,
+             _x.sudo_enabled) = _ed_before
+            for _rid in _ar2_ids:
+                _row = db.session.get(RemoteServer, _rid)
+                if _row is not None:
+                    _row.groups = []
+                    db.session.delete(_row)
+            db.session.commit()
+
     # ── The firewall PAGE survives a host it cannot reach ────────────────────────────────────
     # A down / rebooting host makes remote_ufw_status() raise ConnectionError. The API route has
     # always caught that and answered "unreachable"; the page route called the same function bare
