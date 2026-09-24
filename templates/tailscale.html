@@ -89,6 +89,9 @@
       <div class="text-secondary small">Daemon Status</div>
     </div>
   </div>
+  {# ts_detail: the panel host's tailnet identity and inventory, superadmins only — see
+     _sees_panel_host_tailnet in panel/routes/tailscale.py for why MANAGE_REMOTES is not enough. #}
+  {% if ts_detail %}
   <div class="col-md-4">
     <div class="card text-center p-3">
       <div class="h4 mb-1">
@@ -103,6 +106,7 @@
       <div class="text-secondary small">Connected Peers</div>
     </div>
   </div>
+  {% endif %}
 </div>
 
 <div class="row">
@@ -113,14 +117,17 @@
       <div class="card-header"><i class="bi bi-info-circle-fill"></i> Node Details</div>
       <div class="card-body p-0">
         <table class="table table-borderless table-sm mb-0">
+          {% if ts_detail %}
           <tr>
             <td class="text-secondary ps-3" style="width:120px;">Hostname</td>
             <td><code>{{ info.hostname }}</code></td>
           </tr>
+          {% endif %}
           <tr>
             <td class="text-secondary ps-3">Version</td>
             <td>{{ info.version or '—' }}</td>
           </tr>
+          {% if ts_detail %}
           <tr>
             <td class="text-secondary ps-3">DNS Name</td>
             <td>
@@ -142,6 +149,7 @@
               {% endfor %}
             </td>
           </tr>
+          {% endif %}
           <tr>
             <td class="text-secondary ps-3">Accept Routes</td>
             <td>{{ "Yes" if info.accept_routes else "No" }}</td>
@@ -183,6 +191,7 @@
 
   <!-- Right column: Serve/Funnel + Suggestion -->
   <div class="col-md-6 mb-3">
+    {% if ts_detail %}
     <!-- Access Suggestion -->
     <div class="card mb-3">
       <div class="card-header">
@@ -372,6 +381,15 @@
         {% endif %}
       </div>
     </div>
+    {% else %}
+    <div class="card">
+      <div class="card-body text-secondary small">
+        <i class="bi bi-shield-lock"></i>
+        This host's tailnet address, its Tailscale Serve mappings and the other devices on its
+        tailnet are shown to superadmins only.
+      </div>
+    </div>
+    {% endif %}
   </div>
 </div>
 

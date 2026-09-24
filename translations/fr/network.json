@@ -308,5 +308,6 @@
   "🔒 Private tailnet — only your devices can reach it": "🔒 Tailnet privé — seuls vos appareils peuvent y accéder",
   "Could not read this fail2ban log, so recent offenders are unknown.": "Impossible de lire ce journal fail2ban, les contrevenants récents sont donc inconnus.",
   "Could not read fail2ban on this host, so its jails are unknown.": "Impossible de lire fail2ban sur cet hôte, ses prisons sont donc inconnues.",
-  "Could not read Ubuntu Pro status on this host, so it is unknown.": "Impossible de lire l’état d’Ubuntu Pro sur cet hôte, il est donc inconnu."
+  "Could not read Ubuntu Pro status on this host, so it is unknown.": "Impossible de lire l’état d’Ubuntu Pro sur cet hôte, il est donc inconnu.",
+  "This host's tailnet address, its Tailscale Serve mappings and the other devices on its tailnet are shown to superadmins only.": "L'adresse de cet hôte sur le tailnet, ses mappages Tailscale Serve et les autres appareils de son tailnet ne sont visibles que par les superadministrateurs."
 }
