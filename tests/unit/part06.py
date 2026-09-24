@@ -4218,6 +4218,44 @@ try:
 finally:
     _o_lc.load_config = _pm_o_cfg
 
+# ...and not by the back door. With trust_proxy on, app.py wraps the app in werkzeug's
+# ProxyFix(x_prefix=1), which runs FIRST and copies X-Forwarded-Prefix into SCRIPT_NAME with no
+# validation. The checks above use a constructor prefix, so the middleware always had a non-empty
+# mount to write over it; on the default mount "/" it wrote nothing and ProxyFix's raw value won.
+from werkzeug.middleware.proxy_fix import ProxyFix as _pm_PF                       # noqa: E402
+_pm_root = _pm_PF(_PM(_pm_app), x_for=1, x_proto=1, x_host=1, x_prefix=1)
+_o_lc.load_config = lambda: {"tailscale_mount": "/", "trust_proxy": True}
+try:
+    for _hdr, _want in (("/lgsm", "/lgsm"),                  # control: a real mount still applies
+                        ("//evil.example", ""), ("https://evil.example", "")):
+        _pm_seen.clear()
+        _pm_root({"PATH_INFO": "/login", "REMOTE_ADDR": "127.0.0.1", "SCRIPT_NAME": "",
+                  "REQUEST_METHOD": "GET", "wsgi.url_scheme": "http",
+                  "HTTP_X_FORWARDED_PREFIX": _hdr}, lambda *a, **k: None)
+        eq("prefix: behind ProxyFix on mount '/', X-Forwarded-Prefix %r gives SCRIPT_NAME %r"
+           % (_hdr, _want), _pm_seen[-1][0] if _pm_seen else None, _want)
+finally:
+    _o_lc.load_config = _pm_o_cfg
+
+# ── the setup wizard's default key path is a path paramiko can open ───────────────────────────
+# The form pre-fills "~/.ssh/id_rsa" and paramiko opens key_filename as given, so the literal tilde
+# was a file that never exists: key auth with the offered default always failed, blamed on the host.
+import ast as _wc_ast                                                              # noqa: E402
+from panel.routes import route_helpers as _wc_rh                                   # noqa: E402
+eq("setup: the wizard's default key path is expanded",
+   _wc_rh.wizard_credential("key", " ~/.ssh/id_rsa "),
+   os.path.join(os.path.expanduser("~"), ".ssh", "id_rsa"))
+eq("setup: (control) an absolute key path is kept as typed",
+   _wc_rh.wizard_credential("key", "/srv/keys/id_ed25519"), "/srv/keys/id_ed25519")
+eq("setup: a PASSWORD that starts with ~ is not treated as a path",
+   _wc_rh.wizard_credential("password", "~hunter2"), "~hunter2")
+_wc_fn = next(n for n in _wc_ast.walk(_wc_ast.parse(open(_wc_rh.__file__, encoding="utf-8").read()))
+              if isinstance(n, _wc_ast.FunctionDef) and n.name == "setup_wizard")
+check("setup: setup_wizard builds the credential it tests and stores with wizard_credential()",
+      any(isinstance(n, _wc_ast.Call) and getattr(n.func, "id", None) == "wizard_credential"
+          for n in _wc_ast.walk(_wc_fn)),
+      "the route reads the form value itself again — the helper is tested, the page is not")
+
 # ── disabling 2FA revokes its backup codes, on EVERY path ─────────────────────────────────────
 # Two web paths clear them and say so; the CLI was the one that did not, leaving bcrypt hashes of
 # credentials the operator had just revoked in panel.db.

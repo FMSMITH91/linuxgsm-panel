@@ -10,10 +10,24 @@ from panel.ops import (tailscale_integration as ts)
 from panel.ops.ssh_manager import (ssh_test_connection)
 from panel.security.auth import (hash_password)
 import json
+import os
 from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
     _port_or, bind_host_error, password_problem)
 from app import (_current_lang, _log, _setup_open, _setup_owner_ok, _ts_backend_scheme,
     is_setup_complete, issue_setup_owner_token)
+
+
+def wizard_credential(auth_method, raw):
+    """The credential the setup wizard tests and stores.
+
+    A key path is expanded. The form offers "~/.ssh/id_rsa" (the panel account's own key), and
+    paramiko opens key_filename exactly as given, with no expanduser, so the literal tilde named a
+    file that never exists: every key-auth attempt with the default failed, reported as "check the
+    host, port, credentials", and the wizard refused to add the host."""
+    cred = (raw or "").strip()
+    if auth_method == "key" and cred.startswith("~"):
+        cred = os.path.expanduser(cred)
+    return cred
 
 
 def register(app):
@@ -190,7 +204,7 @@ def register(app):
                     ssh_user = request.form.get("ssh_user", "root").strip()
                     ssh_port = _port_or(request.form.get("ssh_port"), None)
                     auth_method = request.form.get("auth_method", "key")
-                    credential = request.form.get("credential", "").strip()
+                    credential = wizard_credential(auth_method, request.form.get("credential", ""))
                     sudo_enabled = request.form.get("sudo_enabled") == "on"
                     lgsm_user = request.form.get("lgsm_user", "").strip()
 
