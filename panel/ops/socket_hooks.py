@@ -6,7 +6,7 @@ flask-socketio does NOT chain handlers. python-socketio's BaseServer.on ends in
 
 — a plain dict assignment, so a second ``@socketio.on("disconnect")`` on the same namespace
 silently REPLACES the first and the first never runs again. Verified against the pinned
-python-socketio 5.16.3 / flask-socketio 5.6.1.
+python-socketio 5.17.0 / flask-socketio 5.6.1.
 
 That is not a theoretical risk here: the host terminal registered its own disconnect handler and
 took out the console's viewer cleanup, which would have left every closed browser in
