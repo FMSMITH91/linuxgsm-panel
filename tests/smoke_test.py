@@ -5460,6 +5460,89 @@ try:
             _am.notifications.notify = lambda key, title, body="": _rec.append(key)
             _ps._expected_offline.pop(_mon_id, None)
 
+            # ── A reboot the PANEL fires is not "went offline unexpectedly" ─────────────────────
+            # Reboot-when-empty and Reboot now rebooted the host without marking its servers.
+            # While the host was down the monitor skipped them, so they stayed "up"; when it
+            # answered again the games were still waiting for LinuxGSM's */5 monitor cron, and
+            # each read up -> down: one "offline unexpectedly" per server, then "back online".
+            # Driven for real: the fire, then a sweep seven minutes later with the port still shut.
+            import panel.routes.remote_vps as _rw_route
+            _rw_saved = (_monmod.remote_reboot, _monmod.log_action, _monmod.time,
+                         _monmod._remote_listening_ports, _rw_route.remote_reboot)
+            _rw_bodies = []
+            _rw_real_time = _monmod.time
+
+            def _rw_sweep_later(secs):
+                """One real monitor pass `secs` from now, the port still shut, mon-srv last seen up.
+                Returns the server_down bodies that name mon-srv."""
+                _later = _rw_real_time.time() + secs
+                _monmod.time = type("_RwTime", (), {"time": staticmethod(lambda: _later),
+                                                    "sleep": staticmethod(_rw_real_time.sleep)})
+                try:
+                    _reset_mon()
+                    _ps._monitor_state["servers"][_mon_id] = True
+                    _monmod._remote_listening_ports = lambda r: set()
+                    _rw_bodies.clear(); _monmod._monitor_pass()
+                finally:
+                    _monmod.time = _rw_real_time
+                return [b for k, t, b in _rw_bodies if k == "server_down" and "mon-srv" in b]
+
+            try:
+                _monmod.remote_reboot = lambda r: (True, "Reboot scheduled")
+                _monmod.log_action = lambda *a, **k: None
+                _am.notifications.notify = \
+                    lambda k, t, b="": (_rec.append(k), _rw_bodies.append((k, t, b)))[0]
+                _ps._expected_offline.pop(_mon_id, None)
+                _monmod._fire_reboot_when_empty(RemoteServer.query.get(_r1_id), {"by": "admin"})
+                _rw_down = _rw_sweep_later(420)
+                check("monitor: a reboot the panel fired does not report its servers 'offline unexpectedly'",
+                      not _rw_down, str(_rw_down)[:160])
+                # Positive control: a reboot that was refused marks nothing and says it failed,
+                # and the SAME sweep then does alert — a real outage in that window is still told.
+                _ps._expected_offline.pop(_mon_id, None)
+                _monmod.remote_reboot = lambda r: (False, "the host refused")
+                _rw_bodies.clear()
+                _monmod._fire_reboot_when_empty(RemoteServer.query.get(_r1_id), {"by": "admin"})
+                _rw_titles = [t for k, t, b in _rw_bodies if k == "auto_reboot"]
+                _rw_down = _rw_sweep_later(420)
+                check("monitor: ...while a refused reboot leaves no mark, says it failed, and the outage alerts (control)",
+                      _mon_id not in _ps._expected_offline and _rw_titles == ["Auto-reboot failed"]
+                      and len(_rw_down) == 1, "%s %s" % (_rw_titles, _rw_down))
+
+                # Reboot now, through the real route: the same marks, from the route's own
+                # remote_reboot (stubbed where the route resolves it).
+                _rw_c = app.test_client()
+                _rw_c.post("/login", data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
+                _ps._expected_offline.pop(_mon_id, None)
+                _rw_route.remote_reboot = lambda r: (True, "Reboot command sent to remote")
+                _rw_resp = _rw_c.post("/api/remote/%d/reboot" % _r1_id, json={})
+                _rw_mark = _ps._expected_offline.get(_mon_id, 0)
+                check("reboot now: the host's servers are marked expected-offline past boot and the monitor cron",
+                      _rw_resp.status_code == 200 and _rw_mark >= _rw_real_time.time() + 250,
+                      "%s mark=%r" % (_rw_resp.status_code, _rw_mark))
+                _ps._expected_offline.pop(_mon_id, None)
+                _rw_route.remote_reboot = lambda r: (False, "a password is required")
+                _rw_resp = _rw_c.post("/api/remote/%d/reboot" % _r1_id, json={})
+                check("reboot now: ...while a refused reboot marks nothing (control)",
+                      _rw_resp.status_code == 200 and _mon_id not in _ps._expected_offline,
+                      "%s %r" % (_rw_resp.status_code, _ps._expected_offline.get(_mon_id)))
+                _rw_c.get("/logout")
+            finally:
+                (_monmod.remote_reboot, _monmod.log_action, _monmod.time,
+                 _monmod._remote_listening_ports, _rw_route.remote_reboot) = _rw_saved
+                _ps._expected_offline.pop(_mon_id, None)
+                _am.notifications.notify = lambda key, title, body="": _rec.append(key)
+            # ...and the watcher's loop is what calls it (by AST: comments name it too), with no
+            # remote_reboot of its own left beside it.
+            import ast as _rw_ast
+            import inspect as _rw_inspect
+            _rw_calls = [getattr(n.func, "id", "") for n in _rw_ast.walk(_rw_ast.parse(
+                _rw_inspect.getsource(_monmod._reboot_when_empty_watch)))
+                if isinstance(n, _rw_ast.Call)]
+            check("monitor: the reboot-when-empty loop fires through _fire_reboot_when_empty",
+                  "_fire_reboot_when_empty" in _rw_calls and "remote_reboot" not in _rw_calls,
+                  repr(_rw_calls))
+
             # ── The sweep must WRITE DOWN what it measured ────────────────────────────────────
             # It computed `up` from a live port scan every 60s and kept it only in an in-memory
             # dict. gs.status — what the chat bots' /servers and /status render, and what
@@ -5878,6 +5961,7 @@ try:
                      ("time", "remote_reboot", "_host_reachable", "_host_idle_state", "log_action")}
         _rw_saved_notify = _rw_mod.notifications.notify
         _rw_saved_reg = dict(_rw_ps._reboot_when_empty)
+        _rw_saved_exp = dict(_rw_ps._expected_offline)   # a fired reboot marks the host's servers
         _rw_reboots = []
 
         class _OneTick(Exception):
@@ -5942,6 +6026,8 @@ try:
             with _rw_ps._rwe_lock:
                 _rw_ps._reboot_when_empty.clear()
                 _rw_ps._reboot_when_empty.update(_rw_saved_reg)
+            _rw_ps._expected_offline.clear()
+            _rw_ps._expected_offline.update(_rw_saved_exp)
 
     # ── An unreachable host is a normal condition, not a panel fault ──────────────────────────────
     # The fixture hosts point at 127.0.0.1:22 with nothing listening, so every endpoint below has to

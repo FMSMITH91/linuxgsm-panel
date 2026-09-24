@@ -585,7 +585,10 @@ def register(app):
                                         "empty." % remote.name) + note})
         with _rwe_lock:
             _reboot_when_empty.pop(remote_id, None)
-        success, msg = remote_reboot(remote)
+        # Through the monitor, which marks the host's servers expected-offline first: without it
+        # each one alerted "went offline unexpectedly" when the host came back before its game did.
+        from panel.services.monitoring import _reboot_expecting_offline
+        success, msg = _reboot_expecting_offline(remote, remote_reboot)
         # success=, or log_action's default (True) records a refused reboot as one that happened —
         # and /logs filtered to failures hides it. The OS-update sibling on this page passes it.
         log_action(current_user, "remote_reboot", target=remote.name, success=success)
