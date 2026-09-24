@@ -1599,6 +1599,28 @@ def _tsu_stub(serve_rc, serve_out=""):
     return _tsi._get_tailscale_info()
 
 
+# "Accept Routes" is the RouteAll pref. It was read from status JSON's TUN field — kernel TUN vs
+# userspace networking, nothing to do with subnet routes — so a normal kernel-mode node that never
+# accepted routes read "Yes", and an operator chasing an unreachable subnet was told it was accepted.
+def _tsar_info(prefs_rc, route_all):
+    def _run(args, timeout=5):
+        if args and args[0] in ("version", "--version"):
+            return ("1.0", "", 0)
+        if args[:2] == ["debug", "prefs"]:
+            return ('{"RouteAll": %s, "RunSSH": false}' % ("true" if route_all else "false"),
+                    "", prefs_rc)
+        return ("", "", 0)
+    _tsi._run_ts = _run
+    _tsi._run_ts_json = lambda args, timeout=5: dict(_tsu_json, TUN=True)
+    _tsi._cache["info"] = None
+    return _tsi._get_tailscale_info().accept_routes
+
+
+eq("tailscale: Accept Routes is the RouteAll pref, not the TUN flag (kernel TUN, routes off)",
+   _tsar_info(0, False), False)
+eq("tailscale: ...a node that accepts routes says so (control)", _tsar_info(0, True), True)
+eq("tailscale: ...and prefs that could not be read are unknown, not 'No'", _tsar_info(1, True), None)
+
 _tsu_denied = _tsu_stub(1)
 check("tailscale: a `serve status` that was refused is flagged unreadable, not reported empty",
       _tsu_denied.serve_unreadable is True and _tsu_denied.serve_config == {},

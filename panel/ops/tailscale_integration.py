@@ -30,7 +30,11 @@ class TailscaleInfo:
     hostname: str = ""
     dns_name: str = ""
     magic_dns_enabled: bool = False
-    accept_routes: bool = False
+    # The --accept-routes pref (RouteAll, from `tailscale debug prefs`), or None when it could not
+    # be read. It was filled from status JSON's TUN field, which says whether tailscaled runs a
+    # kernel TUN device or userspace networking — nothing about subnet routes — so every ordinary
+    # kernel-mode node read "Accept Routes: Yes" whether or not routes were accepted.
+    accept_routes: Optional[bool] = None
     version: str = ""
     serve_config: dict = field(default_factory=dict)
     # serve_config is {} for BOTH "nothing is published" and "`tailscale serve status` did not
@@ -122,6 +126,18 @@ def _run_ts_json(args, timeout=5):
         return None
 
 
+def _read_route_all():
+    """The node's --accept-routes preference (RouteAll), or None when the prefs can't be read."""
+    out, _, rc = _run_ts(["debug", "prefs"])
+    if rc != 0 or not out:
+        return None
+    try:
+        v = json.loads(out).get("RouteAll")
+    except (ValueError, AttributeError):
+        return None
+    return v if isinstance(v, bool) else None
+
+
 def _get_tailscale_info() -> TailscaleInfo:
     """Internal - discover all Tailscale info by calling the CLI."""
     info = TailscaleInfo()
@@ -153,7 +169,7 @@ def _get_tailscale_info() -> TailscaleInfo:
             info.hostname = self_data.get("HostName", "")
             dns = self_data.get("DNSName", "")
             info.dns_name = dns.rstrip(".") if dns else ""
-        info.accept_routes = status.get("TUN", False)
+        info.accept_routes = _read_route_all()
         info.magic_dns_enabled = bool(info.dns_name)
 
         # Collect peers. Trust Tailscale's own `Online` field — it is authoritative.

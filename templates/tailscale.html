@@ -152,7 +152,8 @@
           {% endif %}
           <tr>
             <td class="text-secondary ps-3">Accept Routes</td>
-            <td>{{ "Yes" if info.accept_routes else "No" }}</td>
+            {# None: the prefs could not be read — not the same as "No". #}
+            <td>{% if info.accept_routes is none %}<span class="text-secondary">—</span>{% elif info.accept_routes %}Yes{% else %}No{% endif %}</td>
           </tr>
           <tr>
             <td class="text-secondary ps-3">Funnel</td>

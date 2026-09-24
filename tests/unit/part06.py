@@ -3089,7 +3089,7 @@ _ts_page_fn = next(n for n in _ts_ast.walk(_ts_ast.parse(_ts_rt_src))
 _ts_rt_kw = {k.arg for n in _ts_ast.walk(_ts_page_fn) if isinstance(n, _ts_ast.Call)
              and getattr(n.func, "id", "") == "render_template" for k in n.keywords}
 check("tailscale page: the route passes panel_routes and serve_default_mount to the template",
-      {"panel_routes", "serve_default_mount"} <= _ts_rt_kw, sorted(_ts_rt_kw))
+      {"panel_routes", "serve_default_mount"} <= _ts_rt_kw, repr(sorted(_ts_rt_kw)))
 # Recommended Access built its direct URLs as http:// while the panel serves self-signed TLS by
 # default. Both routes that ask for the suggestion now say which scheme the panel is serving.
 _ts_sbb_calls = [n for n in _ts_ast.walk(_ts_ast.parse(_ts_rt_src)) if isinstance(n, _ts_ast.Call)
@@ -3184,13 +3184,13 @@ _ts_shared = _ts_card_html(_TsInfo(serve_config={"services": [
         {"mount": "/lgsm", "target": "https+insecure://127.0.0.1:5000"}]}]}))
 check("tailscale.html: Disable carries the panel's mount, not another app's '/' listed first",
       'data-mount="/lgsm"' in _ts_shared and 'data-mount="/"' not in _ts_shared,
-      [ln.strip() for ln in _ts_shared.splitlines() if "data-mount" in ln])
+      repr([ln.strip() for ln in _ts_shared.splitlines() if "data-mount" in ln]))
 _ts_other_only = _ts_card_html(_TsInfo(serve_config={"services": [
     {"url": "https://host.example.ts.net", "funnel": False, "routes": [
         {"mount": "/", "target": "http://127.0.0.1:3000"}]}]}))
 check("tailscale.html: ...and a node serving only another app offers no Disable at all",
       'data-action="disableServe"' not in _ts_other_only,
-      [ln.strip() for ln in _ts_other_only.splitlines() if "data-mount" in ln])
+      repr([ln.strip() for ln in _ts_other_only.splitlines() if "data-mount" in ln]))
 
 # ...and an unread Serve config is not announced as "nothing is configured". serve_config is {} for
 # both "nothing is published" and "`tailscale serve status` was refused" (the panel's account is
@@ -3219,6 +3219,23 @@ check("tailscale.html: ...and an info object with no flag at all keeps the posit
 _ts_down = _ts_card_html(_TsInfo(running=False, serve_unreadable=True))
 check("tailscale.html: ...and a stopped daemon still reads as stopped, not as unreadable",
       "Tailscale is not running." in _ts_down, " ".join(_ts_down.split())[-160:])
+# The Accept Routes row: RouteAll, which is None when the prefs could not be read — and that is
+# not "No". (The row used to print the TUN flag as if it were this.)
+_ts_nd = _TsEnv().from_string(_ts_tpl[_ts_tpl.index("<!-- Node Details -->"):
+                                      _ts_tpl.index("<!-- Peer Reachability Checker -->")])
+
+
+def _ts_ar_row(v):
+    _h = _ts_nd.render(info=_TsInfo(accept_routes=v, funnel_enabled=False, tailscale_ips=[]),
+                       ts_detail=True)
+    return " ".join(_h[_h.index("Accept Routes"):].split("</tr>")[0].split())
+
+
+check("tailscale.html: unreadable prefs show Accept Routes as unknown, not 'No'",
+      "No" not in _ts_ar_row(None) and "Yes" not in _ts_ar_row(None), _ts_ar_row(None))
+check("tailscale.html: ...while a read pref says Yes / No (control)",
+      "Yes" in _ts_ar_row(True) and "No" in _ts_ar_row(False)
+      and "Yes" not in _ts_ar_row(False), "%s | %s" % (_ts_ar_row(True), _ts_ar_row(False)))
 # Both serve handlers take the clicked button; enableServe used the implicit global `event`.
 check("tailscale.html: enableServe/disableServe receive @self rather than reading global event",
       "var btn = event.target" not in _ts_tpl
