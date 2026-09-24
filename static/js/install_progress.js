@@ -56,6 +56,12 @@
       td.colSpan = srvRow.children.length;   // span whatever this table actually has
       row.appendChild(td);
       srvRow.parentNode.insertBefore(row, srvRow.nextSibling);
+    } else if (row.hasAttribute('data-settled')) {
+      // The same server is installing again (a retry) while its last ending is still on screen.
+      // That line has an .ip-step and no bar, so fill() would find the step, skip building, and
+      // throw on the missing bar — aborting apply() for every other job on this poll.
+      row.removeAttribute('data-settled');
+      row.firstChild.textContent = '';
     }
     fill(row.firstChild, job);
     return row;
@@ -64,6 +70,13 @@
   function dropDashRow(id) {
     var row = document.querySelector('tr[data-progress-for="' + id + '"]');
     if (row && row.parentNode) row.parentNode.removeChild(row);
+  }
+
+  // The delayed removal of a clean ending — which must not take the row with it if that server
+  // has started installing again in the meantime and the row is live progress once more.
+  function dropSettledRow(id) {
+    var row = document.querySelector('tr[data-progress-for="' + id + '"]');
+    if (row && row.hasAttribute('data-settled')) dropDashRow(id);
   }
 
   // ── Install a Server: a panel on the page you submitted from ────────────────────────────────
@@ -138,7 +151,11 @@
           var line = el('div', 'ip-step ' + view.cls, res.s.message || view.text);
           line.setAttribute('data-no-i18n', '');
           td.appendChild(line);
-          if (view.drop) setTimeout(function () { dropDashRow(id); }, view.drop);
+          // Settled once, for good: the row keeps data-progress-for, so without this every later
+          // poll (while any other install keeps the timer alive) fetched install-status again —
+          // for a lost job, another SSH probe of the host each time — and rewrote the row.
+          row.setAttribute('data-settled', res.kind);
+          if (view.drop) setTimeout(function () { dropSettledRow(id); }, view.drop);
           if (view.dismiss) {
             var btn = el('button', 'btn btn-sm btn-outline-secondary mt-1', 'Dismiss');
             btn.type = 'button';
@@ -159,7 +176,7 @@
     jobs.forEach(function (j) { live[j.id] = true; dashRow(j); });
     Array.prototype.forEach.call(document.querySelectorAll('tr[data-progress-for]'), function (r) {
       var id = r.getAttribute('data-progress-for');
-      if (!live[id]) settle(id);
+      if (!live[id] && !r.hasAttribute('data-settled')) settle(id);
     });
     pagePanel(jobs);
   }

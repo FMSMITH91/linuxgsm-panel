@@ -397,6 +397,96 @@ else:
           % (_ipo_settle is not None, bool(_ipo_settle and _calls_named(_ipo_settle, "outcome")),
              _ipo_timers))
 
+    # ── a settled row is settled ONCE ─────────────────────────────────────────────────────────
+    # The settled row keeps data-progress-for, and apply() settled every such row not in the live
+    # list — so while any other install kept the timer alive, each 3 s poll fetched install-status
+    # again for it (for a lost job, one more SSH probe of a host that may be down) and rewrote it.
+    # And if that server went live again, fill() found the settled .ip-step, skipped building the
+    # bar and threw on it, aborting apply() for every other job. Structural, from the AST: the
+    # settle() call in apply() must sit under a test that reads data-settled, settle() must set
+    # it, and dashRow() must clear a settled row before filling it.
+    def _member_calls(node, method, first_literal):
+        found = []
+
+        def walk(n):
+            if isinstance(n, dict):
+                c = n.get("callee") or {}
+                if (n.get("type") == "CallExpression" and c.get("type") == "MemberExpression"
+                        and (c.get("property") or {}).get("name") == method
+                        and (n.get("arguments") or [{}])[0].get("value") == first_literal):
+                    found.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+                for v in n.values():
+                    walk(v)
+            elif isinstance(n, list):
+                for v in n:
+                    walk(v)
+        walk(node)
+        return found
+
+    def _guarded_calls(node, name, tests=()):
+        """(line, [enclosing if-tests]) for every call to `name` under `node`."""
+        out = []
+        if isinstance(node, dict):
+            if (node.get("type") == "CallExpression"
+                    and (node.get("callee") or {}).get("name") == name):
+                out.append((((node.get("loc") or {}).get("start") or {}).get("line"), list(tests)))
+            if node.get("type") == "IfStatement":
+                out += _guarded_calls(node.get("test"), name, tests)
+                out += _guarded_calls(node.get("consequent"), name, tests + (node.get("test"),))
+                out += _guarded_calls(node.get("alternate"), name, tests)
+            else:
+                for v in node.values():
+                    out += _guarded_calls(v, name, tests)
+        elif isinstance(node, list):
+            for v in node:
+                out += _guarded_calls(v, name, tests)
+        return out
+
+    _ipa_apply = _js_find_fn(_ipo_ast, "apply")
+    _ipa_calls = _guarded_calls(_ipa_apply, "settle") if _ipa_apply else []
+    _ipa_unguarded = [ln for ln, tests in _ipa_calls
+                      if not any(_member_calls(t, "hasAttribute", "data-settled") for t in tests)]
+    check(bool(_ipa_calls) and not _ipa_unguarded,
+          "install_progress: a row that has already settled is not settled again on every poll",
+          "settle() calls in apply(): %r; not guarded by data-settled at line(s) %r"
+          % ([ln for ln, _ in _ipa_calls], _ipa_unguarded))
+    check(_ipo_settle is not None
+          and bool(_member_calls(_ipo_settle, "setAttribute", "data-settled")),
+          "install_progress: ...because settle() marks the row it has settled",
+          "settle() never sets data-settled, so the guard above never holds")
+    _ipa_dash = _js_find_fn(_ipo_ast, "dashRow")
+    _ipa_clears = []
+
+    def _scan_settled_branch(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "IfStatement"
+                    and _member_calls(n.get("test"), "hasAttribute", "data-settled")):
+                def _cl(m):
+                    if isinstance(m, dict):
+                        if (m.get("type") == "AssignmentExpression"
+                                and ((m.get("left") or {}).get("property") or {}).get("name")
+                                == "textContent"
+                                and (m.get("right") or {}).get("value") == ""):
+                            _ipa_clears.append(True)
+                        for v in m.values():
+                            _cl(v)
+                    elif isinstance(m, list):
+                        for v in m:
+                            _cl(v)
+                _cl(n.get("consequent"))
+            for v in n.values():
+                _scan_settled_branch(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_settled_branch(v)
+    if _ipa_dash:
+        _scan_settled_branch(_ipa_dash)
+    check(_ipa_dash is not None
+          and bool(_member_calls(_ipa_dash, "removeAttribute", "data-settled")) and _ipa_clears,
+          "install_progress: ...and a settled row that goes live again is rebuilt, not filled",
+          "dashRow() fills a settled row as it stands: fill() finds its .ip-step, skips building "
+          "the bar and throws on it")
+
 # ── a filter that only runs on `change` does not run on the common setup ─────────────────────
 # The install picker greys out the games LinuxGSM caps below the host's release, from the host
 # selector's change event. With ONE host the select is rendered already selected and never fires
