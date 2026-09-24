@@ -573,6 +573,63 @@ else:
           "nothing calls filterGamesForHost/hostChanged at load — with a single host the select "
           "never fires `change`, so every capped game stays selectable")
 
+    # ── ...and an answer about a host that is no longer selected is not applied ──────────────
+    # /specs and /api/free-port probe the host over SSH on first use, so replies arrive in the
+    # order the hosts answer. Each was applied on arrival: a slow 24.04 host's reply, landing after
+    # the operator had switched to a 20.04 one, greyed out four games and blamed "this host".
+    # From the AST: inside the fetch callbacks, filterGamesForHost applies only under a
+    # _hostStillSelected test, and suggestFreePort bails on one before it touches the port field.
+    def _cb_applies(n, tests=(), in_cb=False, out=None):
+        out = [] if out is None else out
+        if isinstance(n, dict):
+            t = n.get("type")
+            if t in ("FunctionExpression", "ArrowFunctionExpression"):
+                for v in n.values():
+                    _cb_applies(v, tests, True, out)
+                return out
+            if t == "IfStatement":
+                _cb_applies(n.get("test"), tests, in_cb, out)
+                _cb_applies(n.get("consequent"), tests + (n.get("test"),), in_cb, out)
+                _cb_applies(n.get("alternate"), tests, in_cb, out)
+                return out
+            if (t == "CallExpression" and (n.get("callee") or {}).get("name") == "apply"
+                    and in_cb):
+                out.append(any(_calls_named(x, "_hostStillSelected") for x in tests))
+            for v in n.values():
+                _cb_applies(v, tests, in_cb, out)
+        elif isinstance(n, list):
+            for v in n:
+                _cb_applies(v, tests, in_cb, out)
+        return out
+    _ms_fg = _js_find_fn(_ms_ast, "filterGamesForHost")
+    _ms_fg_calls = _cb_applies(((_ms_fg or {}).get("body") or {}).get("body") or [])
+    check(bool(_ms_fg_calls) and all(_ms_fg_calls),
+          "manage_servers: a host's OS answer is applied only while that host is still selected",
+          "callback apply() calls guarded: %r" % (_ms_fg_calls,))
+    _ms_fp = _js_find_fn(_ms_ast, "suggestFreePort")
+    _ms_fp_bail, _ms_fp_write = [], []
+
+    def _scan_fp(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "IfStatement" and _calls_named(n.get("test"), "_hostStillSelected")):
+                c = n.get("consequent") or {}
+                rets = c.get("body") if c.get("type") == "BlockStatement" else [c]
+                if any((r or {}).get("type") == "ReturnStatement" for r in rets):
+                    _ms_fp_bail.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            if (n.get("type") == "AssignmentExpression"
+                    and ((n.get("left") or {}).get("object") or {}).get("name") == "portEl"):
+                _ms_fp_write.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            for v in n.values():
+                _scan_fp(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_fp(v)
+    if _ms_fp:
+        _scan_fp(_ms_fp)
+    check(bool(_ms_fp_write) and bool(_ms_fp_bail) and min(_ms_fp_bail) < min(_ms_fp_write),
+          "manage_servers: a free-port answer for another host never rewrites the port field",
+          "host-still-selected bail at %r, port write at %r" % (_ms_fp_bail, _ms_fp_write))
+
 # ── A form that appears AFTER page load carries no CSRF token ─────────────────────────────────
 # panel.js gives every POST form a hidden csrf_token, once, on DOMContentLoaded, and wraps fetch()
 # so every mutating fetch carries the header. A form submitted with form.submit() has neither:
