@@ -1541,6 +1541,51 @@ try:
           and _su_txt.index("if port is None:") < _su_txt.index('cfg["port"] = port'),
           "the exhausted case still falls through to the config write")
 
+    # ...and it must not write THROUGH anything the panel user planted in data/. As root it used
+    # `open(cfg + ".tmp", "w")`, os.replace and os.chmod on paths inside a panel-owned directory,
+    # and all three follow a symlink, so root rewrote a file of the panel user's choosing. Run the
+    # real function, as this user, against the two plants that used to work.
+    _cp_fn = _su_between("choose_and_record_port() {", "\nPYEOF\n}\n")
+    _cp_sb = _tempfile.mkdtemp(prefix="portpick-")
+    try:
+        def _cp_run(plant, extra=""):
+            d = _tempfile.mkdtemp(dir=_cp_sb)
+            os.makedirs(os.path.join(d, "panel", "data"))
+            victim = os.path.join(d, "victim")
+            with open(victim, "w") as f:
+                f.write("VICTIM\n")
+            if plant:
+                os.symlink(victim, os.path.join(d, "panel", "data", plant))
+            r = _su_run(_cp_fn + '\nchoose_and_record_port 47100\necho "RC=$?"\n',
+                        "PANEL_DIR=%s\n" % _su_shlex.quote(os.path.join(d, "panel")), extra=extra)
+            cfg = os.path.join(d, "panel", "data", "config.json")
+            written = (open(cfg).read() if os.path.isfile(cfg) and not os.path.islink(cfg) else "")
+            return r, open(victim).read(), written
+
+        _r, _victim, _cfg = _cp_run(None)
+        check("install.sh: the port picker records the port it chose (positive control)",
+              '"port": 471' in _cfg and _victim == "VICTIM\n", repr((_r.stdout[-120:], _cfg)))
+        _r, _victim, _cfg = _cp_run("config.json.tmp")
+        check("install.sh: a symlink planted at the old temp name is not written through",
+              _victim == "VICTIM\n" and '"port": 471' in _cfg,
+              repr((_victim[:60], _r.stdout[-120:], _r.stderr[-160:])))
+        _r, _victim, _cfg = _cp_run("config.json")
+        check("install.sh: ...and a symlinked config.json is refused, not followed",
+              _victim == "VICTIM\n" and "RC=3" in _r.stdout
+              and "symbolic link" in _r.stderr, repr((_victim[:60], _r.stdout[-120:])))
+        # As root it drops to whoever owns PANEL_DIR, so the kernel refuses what the script misses.
+        _cp_sudo = ("id() { echo 0; }\n"
+                    "sudo() { echo \"SUDO $*\" >&2; shift 2; \"$@\"; }\n")
+        _r, _victim, _cfg = _cp_run(None, extra=_cp_sudo + "stat() { echo lgsmpanel; }\n")
+        check("install.sh: as root over a panel-owned PANEL_DIR, the port is written as its owner",
+              "SUDO -u lgsmpanel python3 -" in _r.stderr and '"port": 471' in _cfg,
+              repr(_r.stderr[-200:]))
+        _r, _victim, _cfg = _cp_run(None, extra=_cp_sudo + "stat() { echo root; }\n")
+        check("install.sh: ...while a root-owned PANEL_DIR (the fresh install) stays root (control)",
+              "SUDO" not in _r.stderr and '"port": 471' in _cfg, repr(_r.stderr[-200:]))
+    finally:
+        _shutil.rmtree(_cp_sb, ignore_errors=True)
+
     # ── the "already up to date" branch has to backfill EVERY root-owned piece ───────────────
     # That branch exists because root-owned state lives OUTSIDE the checkout and can be stale while
     # the code is current. /usr/local/bin/linuxgsm-panel-recover is exactly that, and it is what

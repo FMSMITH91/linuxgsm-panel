@@ -237,10 +237,22 @@ panel_port() {
 # desired port (5000, or a previously configured one) is already taken by another service,
 # the panel would fail to bind — so probe upward for a free port and persist the choice so
 # the first start, the health check, and the firewall step all agree. Prints the chosen port.
+#
+# AS THE OWNER of PANEL_DIR when that is not root. Every path this writes is inside data/, and on
+# any re-run after the first chown data/ belongs to the panel user. The panel user can force this
+# path by deleting its own app.py. As root, open("w"), os.replace and os.chmod follow a symlink the
+# panel user planted there (config.json.tmp used to be a fixed name), so root truncated, rewrote
+# and chmodded a file of the panel user's choosing. Dropping to the owner makes the kernel refuse
+# that. The script also refuses symlinks and uses an O_EXCL temp file itself, for the one case
+# that stays root: a fresh install, where root still owns the tree.
 choose_and_record_port() {
-    local desired="${1:-5000}"
-    python3 - "${desired}" "${PANEL_DIR}/data/config.json" <<'PYEOF'
-import json, os, socket, sys
+    local desired="${1:-5000}" as_owner="" owner=""
+    if [ "$(id -u)" -eq 0 ]; then
+        owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
+        [ "${owner}" != "root" ] && as_owner="sudo -u ${owner}"
+    fi
+    ${as_owner} python3 - "${desired}" "${PANEL_DIR}/data/config.json" <<'PYEOF'
+import json, os, socket, sys, tempfile
 desired, cfg_path = int(sys.argv[1]), sys.argv[2]
 
 def free(p):
@@ -271,6 +283,13 @@ for cand in range(desired, desired + 51):   # 5000..5050 — plenty of headroom
 if port is None:
     raise SystemExit(0)
 
+data_dir = os.path.dirname(cfg_path)
+os.makedirs(data_dir, exist_ok=True)
+# Never write through a link: open(), os.chmod and a fixed temp name all follow one.
+if os.path.islink(data_dir) or os.path.islink(cfg_path):
+    sys.stderr.write("Refusing to record the port: %s or its config.json is a symbolic link.\n"
+                     % data_dir)
+    raise SystemExit(3)
 cfg = {}
 try:
     with open(cfg_path) as f:
@@ -278,20 +297,22 @@ try:
 except Exception:
     cfg = {}
 cfg["port"] = port
-data_dir = os.path.dirname(cfg_path)
-os.makedirs(data_dir, exist_ok=True)
 try:
     os.chmod(data_dir, 0o700)   # owner-only: keep the DB/keys/config out of other local users' reach
 except OSError:
     pass
-tmp = cfg_path + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(cfg, f, indent=2)
-os.replace(tmp, cfg_path)
+# mkstemp opens O_CREAT|O_EXCL|O_NOFOLLOW under a random name, 0600 from the start.
+fd, tmp = tempfile.mkstemp(dir=data_dir, prefix=".config.json.")
 try:
-    os.chmod(cfg_path, 0o600)
-except OSError:
-    pass
+    with os.fdopen(fd, "w") as f:
+        json.dump(cfg, f, indent=2)
+    os.replace(tmp, cfg_path)
+except BaseException:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
 print(port)
 PYEOF
 }
