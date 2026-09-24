@@ -3196,17 +3196,48 @@ for _bad in (("gmodcontent", "../../etc"), ("gmodcontent", ".."), ("gmodcontent"
 # The helper's own group check: content-grant-read adds a user to a GROUP, and the group named by
 # the caller must actually be the content user's. Mutation showed this was untested — the suite
 # exercises argv building, not the action bodies.
+#
+# Run against a SANDBOXED copy of the helper. This drove the real module with the real account, so
+# the regression it exists to catch — the refusal gone — went on to run `usermod -aG root <me>` and
+# chmod g+x the developer's real /home/<me>, on exactly the run (a mutation test) that removes it.
+# The copy's home root is a temp dir and its subprocess.run records instead of running.
 import getpass as _getpass
 import grp as _grp
 import pwd as _pwd
+import types as _types_gr
+_gr_box = _tempfile.mkdtemp(prefix="panel-grant-")
 try:
     _me = _getpass.getuser()
     _my_group = _grp.getgrgid(_pwd.getpwnam(_me).pw_gid).gr_name
+    _spec_gr = _ilu.spec_from_loader("ph_grant", _machinery.SourceFileLoader("ph_grant", _helper_path))
+    _hgr = _ilu.module_from_spec(_spec_gr)
+    _spec_gr.loader.exec_module(_hgr)
+    _hgr.HOME_ROOT = _gr_box
+    _hgr.home_of = lambda u, _r=_gr_box: _r + "/" + _hgr.v_username(u)
+    _gr_runs = []
+    _hgr.subprocess = _types_gr.SimpleNamespace(
+        run=lambda argv, **kw: (_gr_runs.append(list(argv)),
+                                _sp.CompletedProcess(argv, 0, b"", b""))[1])
+    _hgr.resolve = lambda name: "/usr/sbin/" + name
+    os.makedirs(_gr_box + "/" + _me, mode=0o700)
+    os.chmod(_gr_box + "/" + _me, 0o700)
+    _gr_rc = _hgr.do_content_grant_read([_me, "root" if _my_group != "root" else "daemon", _me],
+                                        None)
     check("content-grant-read refuses a group that is not the content user's",
-          _helper.do_content_grant_read([_me, "root" if _my_group != "root" else "daemon",
-                                         _me], None) == 2)
+          _gr_rc == 2 and not _gr_runs
+          and _st2.S_IMODE(os.stat(_gr_box + "/" + _me).st_mode) == 0o700,
+          "rc=%r ran=%r" % (_gr_rc, _gr_runs))
+    # Control: the user's OWN group goes through — usermod recorded, the traversal bit set — and
+    # both land in the sandbox, so the refusal above is the check and not a copy that does nothing.
+    _gr_rc = _hgr.do_content_grant_read([_me, _my_group, _me], None)
+    check("content-grant-read: ...the content user's own group is granted, inside the sandbox",
+          _gr_rc == 0 and [a[1:] for a in _gr_runs] == [["-aG", _my_group, _me]]
+          and _st2.S_IMODE(os.stat(_gr_box + "/" + _me).st_mode) & _st2.S_IXGRP,
+          "rc=%r ran=%r" % (_gr_rc, _gr_runs))
 except (KeyError, OSError) as _e:
     skip("content-grant-read group check", _e)
+finally:
+    _shutil.rmtree(_gr_box, ignore_errors=True)
 
 # home_of() is the only place a path is built from a name, and it feeds an `rm -rf` running as
 # root. Both copies must agree, and neither may ever produce /home itself or escape it.
