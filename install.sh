@@ -814,14 +814,17 @@ root_source_commit() {
             warn "Could not create root's copy of the repository at ${ROOT_GIT}."
             return 1; }
     fi
+    # Into ONE fixed ref, whatever the branch. A ref named after the branch was never pruned, so
+    # once the panel had tracked `fix` and then switched to `fix/x` (or the reverse), git refused
+    # to create the new ref beside the old one and every later run warned "Could not fetch" and
+    # left the helper stale. The ref only has to hold the tip this run compares against.
     if ! _rootgit fetch --quiet --no-tags "${REPO_URL}" \
-            "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" >/dev/null 2>&1; then
+            "+refs/heads/${DEFAULT_BRANCH}:refs/root-src/tip" >/dev/null 2>&1; then
         warn "Could not fetch ${REPO_URL} (${DEFAULT_BRANCH}) into root's own copy, so root stages"
         warn "nothing from this checkout. The panel still works; re-run to retry."
         return 1
     fi
-    if ! _rootgit merge-base --is-ancestor "${want}" "refs/remotes/origin/${DEFAULT_BRANCH}" \
-            >/dev/null 2>&1; then
+    if ! _rootgit merge-base --is-ancestor "${want}" refs/root-src/tip >/dev/null 2>&1; then
         warn "This checkout is at ${want}, which is not on ${REPO_URL}'s ${DEFAULT_BRANCH}."
         warn "Root stages nothing from it."
         return 1

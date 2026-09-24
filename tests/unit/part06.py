@@ -1087,11 +1087,13 @@ try:
     _rs_git("add", "-A", cwd=_rs_up)
     _rs_git("commit", "-qm", "upstream", cwd=_rs_up)
 
-    def _rs_case(name, tamper, roots=False, src=None, panel_user=None, script=None):
+    def _rs_case(name, tamper, roots=False, src=None, panel_user=None, script=None, seed=None):
         """Clone upstream as 'the panel's checkout', tamper with it, stage as 'root'."""
         d = os.path.join(_rs_sb, name)
         panel, helper = os.path.join(d, "panel"), os.path.join(d, "helper")
         os.makedirs(helper)
+        if seed:
+            seed(os.path.join(helper, ".source.git"))
         _rs_git("clone", "-q", "--no-hardlinks", _rs_up, panel)
         for _k, _v in (("user.email", "t@example.invalid"), ("user.name", "t"),
                        ("commit.gpgsign", "false")):
@@ -1166,6 +1168,23 @@ try:
     # earlier — "was NOT refreshed".
     check("install.sh: ...and the refusal does not claim the helper was left unrefreshed",
           "WARN" in _rs_out and "privileged helper" not in _rs_out, _rs_out[-300:])
+    # Root's clone is kept between runs, and the panel's branch switcher changes which branch it
+    # fetches. A ref left by an earlier branch whose name is a directory of the new one (`fix`, then
+    # `fix/x`, or `main/x` then `main` as here) made git refuse the fetch on every later run, so
+    # the helper was never refreshed again.
+    def _rs_seed_branch_ref(git_dir):
+        _rs_git("init", "-q", "--bare", git_dir)
+        _rs_git("--git-dir", git_dir, "fetch", "-q", "--no-tags", "file://" + _rs_up,
+                "+refs/heads/main:refs/remotes/origin/main/x")
+    _rs_probe = os.path.join(_rs_sb, "dfprobe.git")
+    _rs_seed_branch_ref(_rs_probe)
+    check("install.sh: (premise) a ref under a branch-named directory blocks a fetch into it",
+          _rs_sub.run(["git", "--git-dir", _rs_probe, "fetch", "-q", "--no-tags",
+                       "file://" + _rs_up, "+refs/heads/main:refs/remotes/origin/main"],
+                      capture_output=True).returncode != 0)
+    _rs_out = _rs_case("branchref", lambda p: None, seed=_rs_seed_branch_ref)
+    check("install.sh: a ref left in root's clone by an earlier branch does not block the fetch",
+          "STAGED=GOOD-HELPER" in _rs_out and "Could not fetch" not in _rs_out, _rs_out[-300:])
     _rs_out = _rs_case("local", _rs_local_commit)
     check("install.sh: a HEAD that is not on upstream's branch is refused, and says so",
           "STAGED-NOTHING" in _rs_out and "LOCAL-HELPER" not in _rs_out
