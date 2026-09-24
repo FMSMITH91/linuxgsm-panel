@@ -575,8 +575,17 @@ def _is_protected_path(relpath, selfname):
     # Normalise BEFORE inspecting. delete_path deletes the resolved absolute path, so a guard that
     # reads the raw string is judging a different path than the one `rm -rf` receives: "./lgsm" and
     # "x/../serverfiles" look like ordinary sub-paths here while resolving onto the LinuxGSM control
-    # tree and the whole game install. Anything that climbs out collapses to "" and is refused.
-    r = _pp.normpath("/" + str(relpath or "")).strip("/")
+    # tree and the whole game install.
+    #
+    # Normalised RELATIVE to the home, and anything that climbs out of it is refused. This used to
+    # normalise against "/", where ".." is swallowed: "x/../../gs/lgsm" became "gs/lgsm", top "gs",
+    # not protected — while _safe_abspath resolved the same string under /home/gs to /home/gs/lgsm,
+    # the LinuxGSM control tree, and delete_path ran `rm -rf` on it. A path that leaves the home
+    # and walks back in by name is never one the file browser builds.
+    r = _pp.normpath(str(relpath or "").lstrip("/"))
+    if r == ".." or r.startswith("../"):
+        return True  # climbs out of the home dir, whatever it names on the way back in
+    r = r.strip("/")
     if not r or r == ".":
         return True  # the home dir itself
     parts = r.split("/")

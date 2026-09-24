@@ -1398,7 +1398,10 @@ for _p, _what in (("./lgsm", "the LinuxGSM control tree"),
                   ("x/../serverfiles", "the game install"),
                   ("a/b/../../.ssh", "the host's SSH keys"),
                   ("./linuxgsm.sh", "the LinuxGSM launcher"),
-                  ("./%s" % _SELF, "the server's own script")):
+                  ("./%s" % _SELF, "the server's own script"),
+                  ("x/../../%s/lgsm" % _SELF, "the LinuxGSM control tree"),
+                  ("../%s/serverfiles" % _SELF, "the game install"),
+                  ("/../%s/.ssh" % _SELF, "the host's SSH keys")):
     check("file guard: %r cannot sneak past and take %s" % (_p, _what),
           _sm_files._is_protected_path(_p, _SELF) is True)
 
