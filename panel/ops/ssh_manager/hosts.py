@@ -1210,20 +1210,35 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 
     # ── 5. Configure UFW ──
     ufw_not_enabled = None
+    # The ports SSH answers on, read ONCE for both steps that name them (UFW here, fail2ban's jail
+    # at step 10). Both said 22: a host whose sshd had been moved to 2222 had UFW switched on at
+    # deny-incoming with only 22 let in — the panel's next connection, and the operator's, met a
+    # closed port — and its fail2ban jail banned on a port nothing listened on.
+    ssh_ports = _bootstrap_ssh_ports(server) if (enable_ufw or install_fail2ban) else []
     if enable_ufw:
-        emit("Configuring UFW firewall (deny incoming, rate-limit SSH)")
+        emit("Configuring UFW firewall (deny incoming, rate-limit SSH on port %s)"
+             % ", ".join(ssh_ports))
         # Rate-limit SSH by default — `ufw limit` allows SSH (so we never lock ourselves
         # out) while throttling brute-force sources. We do NOT add a plain `allow 22`:
         # a lower-numbered allow rule would match first and shadow the limit, leaving SSH
-        # effectively unthrottled.
-        _l_out, _l_err, _l_rc = _core.run_privileged(server, "ufw-limit-port", ["22/tcp"], timeout=15)
+        # effectively unthrottled. EVERY SSH port, and all of them before anything is removed or
+        # switched on: one that failed would be a port UFW is about to close.
+        _l_rc, _l_why = 0, ""
+        for _sp in ssh_ports:
+            _l_out, _l_err, _l_rc = _core.run_privileged(server, "ufw-limit-port", ["%s/tcp" % _sp],
+                                                         timeout=15)
+            if _l_rc != 0:
+                _l_why = "`ufw limit %s/tcp` failed (%s)" % (
+                    _sp, (_l_err or _l_out or "exit %s" % _l_rc).replace("\n", " ").strip()[:160])
+                break
         if _l_rc == 0:
             # The same goes for `ufw allow OpenSSH` / a bare `ufw allow 22` already on the host:
             # to ufw neither is the `22/tcp` rule above, so the limit is appended AFTER them and
             # never reached. Removed only now that the limit is in place, so SSH is never left
-            # unallowed.
-            for _verb, _args in _SSH22_SHADOWING:
-                _core.run_privileged(server, _verb, _args, timeout=15)
+            # unallowed — and only when 22 IS one of the ports just limited.
+            if "22" in ssh_ports:
+                for _verb, _args in _SSH22_SHADOWING:
+                    _core.run_privileged(server, _verb, _args, timeout=15)
             _core.run_privileged(server, "ufw-default", ["deny", "incoming"], timeout=15)
             _core.run_privileged(server, "ufw-default", ["allow", "outgoing"], timeout=15)
             _core.run_privileged(server, "ufw-enable", [], timeout=15)
@@ -1232,10 +1247,9 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             # were deleted "now that the limit is in place" and UFW was switched on at deny-incoming
             # — a fresh host cut off from SSH mid-bootstrap. Nothing is removed and the firewall is
             # left as it was; the job says so rather than "complete".
-            ufw_not_enabled = ((_l_err or _l_out or "exit %s" % _l_rc)
-                               .replace("\n", " ").strip()[:160])
-            note("NOT DONE: `ufw limit 22/tcp` failed (%s). UFW was left as it was — turning it on "
-                 "without a rule letting SSH in would lock this host out." % ufw_not_enabled)
+            ufw_not_enabled = _l_why
+            note("NOT DONE: %s. UFW was left as it was — turning it on without a rule letting SSH "
+                 "in would lock this host out." % ufw_not_enabled)
 
     # ── 6. Basic SSH hardening ──
     emit("Hardening SSH configuration")
@@ -1323,9 +1337,11 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # ── 10. Configure fail2ban ──
     if install_fail2ban:
         emit("Configuring fail2ban (SSH brute-force protection)")
+        # The ports sshd answers on, not 22: this file is also where change_ssh_port keeps
+        # `port = <new>,<old>`, and writing 22 over it pointed every ban at a port nothing served.
         jail_content = (
             "[DEFAULT]\nbantime = 1h\nfindtime = 10m\nmaxretry = 5\n\n"
-            "[sshd]\nenabled = true\nport = 22\n"
+            "[sshd]\nenabled = true\nport = %s\n" % ",".join(ssh_ports)
         )
         _core.write_root_file(server, "fail2ban-jail-local", jail_content, timeout=15)
         _core.run_privileged(server, "service-enable-now", ["fail2ban"], timeout=20)
@@ -1381,9 +1397,9 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         note("Reboot check skipped — this is the panel's own host.")
 
     # The same reasoning for a firewall that was asked for and not switched on: a door left open.
-    ufw_msg = (("the firewall was NOT enabled: `ufw limit 22/tcp` failed (%s), and turning UFW on "
-                "without a rule letting SSH in would have locked this host out. Fix ufw on the "
-                "host and run the bootstrap again." % ufw_not_enabled) if ufw_not_enabled else "")
+    ufw_msg = (("the firewall was NOT enabled: %s, and turning UFW on without a rule letting SSH "
+                "in would have locked this host out. Fix ufw on the host and run the bootstrap "
+                "again." % ufw_not_enabled) if ufw_not_enabled else "")
     if hardening_failed:
         # Not "complete": the one step whose whole point is closing a door reported the door is
         # still open. The rest of the work did happen, and the message says both.
@@ -1643,6 +1659,22 @@ def remote_ufw_close_port_22(server):
     if rc == 0:
         return True, "Port 22 rule removed from UFW"
     return False, err or out or "Failed to remove port 22"
+
+
+def _bootstrap_ssh_ports(server):
+    """The ports SSH must stay reachable on when the bootstrap switches UFW on and writes the
+    fail2ban jail: every port sshd's effective config names, plus the one the panel connects on.
+
+    The stored port is unioned in, not only used as the empty-read fallback: under socket
+    activation `sshd -T` prints sshd_config's Port while ssh.socket listens elsewhere (see
+    change_ssh_port), and the port the panel reached the host on is the one whose loss locks
+    everybody out. An unread `sshd -T` leaves just that port — never nothing, which would switch
+    UFW on at deny-incoming with SSH shut."""
+    ports = []
+    for p in _sshd_current_ports(server) + [str(int(getattr(server, "port", 22) or 22))]:
+        if p not in ports:
+            ports.append(p)
+    return ports
 
 
 def _sshd_current_ports(server):
@@ -2035,6 +2067,12 @@ def _tcp_reachable(host, port, timeout=8):
         return False
 
 
+def _port_has_listener(ss_out, port):
+    """Whether `ss -lnt` output has a listener on `port` (any address). It names no process."""
+    # Was `ss -lnt | grep -qE '[:.]<port>[[:space:]]'` in a root shell; the same match in Python.
+    return bool(re.search(r"[:.]%d\s" % int(port), ss_out or ""))
+
+
 def _restart_ssh_listener(server, socket_mode):
     """Restart whichever unit owns the listening socket.
 
@@ -2177,6 +2215,23 @@ def change_ssh_port(server, new_port, bind_addr=""):
         if p not in ports:
             ports.append(p)
 
+    # 0. The new port must be FREE. The check that sshd came up on it (step 6) is `ss -lnt`, which
+    #    names no process, so any listener on the port answers it. With a web app on 8080, moving
+    #    SSH there left sshd failing to bind it and serving the old port only, while ss showed
+    #    0.0.0.0:8080, the snapshot was discarded, the route repointed the panel at a port that
+    #    answers HTTP, and the message told the operator to close the one real SSH port. A port sshd
+    #    already serves (a bind change on the current port) is its own listener and passes.
+    if str(new_port) not in old_ports:
+        pre, _, pre_rc = _core.run_privileged(server, "listening-sockets", [], timeout=15,
+                                              merge_stderr=False)
+        if pre_rc != 0 or not (pre or "").strip():
+            return False, ("Could not list the ports this host listens on, so the panel can't tell "
+                           "whether %d is free — nothing was changed." % new_port)
+        if _port_has_listener(pre, new_port):
+            return False, ("Something on this host is already listening on port %d, so sshd could "
+                           "not take it and the panel could not tell sshd from that service "
+                           "afterwards. Pick a free port — nothing was changed." % new_port)
+
     # 1. Open the new port in the firewall FIRST (best-effort; a host without UFW just no-ops).
     remote_ufw_open_port(server, new_port, "tcp", comment="SSH (panel)")
 
@@ -2251,7 +2306,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
             if not re.search(r"(?:^|\s)%s:%d\s" % (_a, new_port), out or "", re.M):
                 return _revert("sshd isn't listening on %s:%d — reverted. Your existing SSH still "
                                "works." % (bind_addr, new_port))
-        elif not re.search(r"[:.]%d\s" % new_port, out or ""):
+        elif not _port_has_listener(out, new_port):
             return _revert("sshd didn't come up on port %d — reverted. Your existing SSH still works." % new_port)
 
     _core.run_privileged(server, _discard_verb, [], timeout=10,

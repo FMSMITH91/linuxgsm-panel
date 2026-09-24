@@ -2320,7 +2320,10 @@ try:
         if verb == "sshd-socket-active":
             return (_cs["socket"], "", 0 if _cs["socket"] == "active" else 3)
         if verb == "listening-sockets":
-            return ("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n", "", 0)
+            # 2222 listens only once sshd has been restarted onto it: change_ssh_port now refuses a
+            # new port something ALREADY listens on, which is what a static answer would say.
+            return (("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n" if _cs.get("up") else "")
+                    + "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n", "", 0)
         if verb == "sshd-current-ports":
             return ("Port 22\n", "", 0)
         return ("", "", 0)
@@ -2328,7 +2331,7 @@ try:
     _sm_core.run_privileged = _cs_priv
     _sm_core.write_root_file = lambda server, target, content, timeout=15: (
         _cs["writes"].append((target, content)), ("", "", 0))[1]
-    _sm_core._restart_sshd = lambda *a, **k: ("", "", 0)
+    _sm_core._restart_sshd = lambda *a, **k: (_cs.__setitem__("up", True), ("", "", 0))[1]
     _sm_core.is_local_server = lambda s: True
     _sm_hosts.remote_ufw_open_port = lambda *a, **k: (True, "")
     _sm_hosts.remote_ufw_close_port = lambda *a, **k: (True, "")
@@ -2350,7 +2353,7 @@ try:
     check("ssh.socket: ...and the socket snapshot is the one discarded on success",
           any(v == "sshd-socket-discard" for v, _a in _cs["verbs"]))
 
-    _cs["writes"], _cs["verbs"], _cs["socket"] = [], [], "inactive"
+    _cs["writes"], _cs["verbs"], _cs["socket"], _cs["up"] = [], [], "inactive", False
     _ok2, _msg2 = _sm_hosts.change_ssh_port(NS(port=22), 2222)
     _t2 = [t for t, _c in _cs["writes"]]
     check("ssh.socket: a NON socket-activated host still gets the sshd_config drop-in",
@@ -2386,13 +2389,15 @@ try:
         if verb == "sshd-effective-config":
             return (_sp["effective"], "", 0)
         if verb == "listening-sockets":
-            return ("LISTEN 0 128 0.0.0.0:2022 0.0.0.0:*\n", "", 0)
+            # 2022 appears once sshd is restarted onto it (a new port must be free beforehand).
+            return ("LISTEN 0 128 0.0.0.0:2022 0.0.0.0:*\n" if _sp.get("up")
+                    else "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n", "", 0)
         return ("", "", 0)
 
     _sm_core.run_privileged = _sp_priv
     _sm_core.write_root_file = lambda server, target, content, timeout=15: (
         _sp["writes"].append((target, content)), ("", "", 0))[1]
-    _sm_core._restart_sshd = lambda *a, **k: ("", "", 0)
+    _sm_core._restart_sshd = lambda *a, **k: (_sp.__setitem__("up", True), ("", "", 0))[1]
     _sm_core.is_local_server = lambda s: True
     _sm_hosts.remote_ufw_open_port = lambda *a, **k: (True, "")
     _sm_hosts.remote_ufw_close_port = lambda *a, **k: (True, "")
@@ -2409,7 +2414,7 @@ try:
           "ListenStream=0.0.0.0:2022\n" in _sp_body, repr(_sp_body))
     # POSITIVE CONTROL: the sshd_config path is authoritative there, so a STALE stored port must
     # NOT be unioned in — that would re-open a port the operator had deliberately closed.
-    _sp["socket"], _sp["effective"], _sp["writes"] = "inactive", "port 2222\n", []
+    _sp["socket"], _sp["effective"], _sp["writes"], _sp["up"] = "inactive", "port 2222\n", [], False
     _ok_np, _msg_np = _sm_hosts.change_ssh_port(NS(port=22), 2022)
     _np_body = _sp["writes"][0][1] if _sp["writes"] else ""
     check("ssh port: a NON socket-activated host still takes its ports from sshd -T alone",
@@ -2569,15 +2574,16 @@ try:
             return ("inactive", "", 3)
         if verb == "listening-sockets":
             # Both ports, so the verification step is not what most of this block is testing.
+            # 2222 only once sshd is restarted onto it: a new port has to be free beforehand.
             return (_lb.get("listening") or
                     ("LISTEN 0 128 127.0.0.1:22 0.0.0.0:*\n"
                      "LISTEN 0 128 10.0.0.5:22 0.0.0.0:*\n"
-                     "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n"), "", 0)
+                     + ("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n" if _lb.get("up") else "")), "", 0)
         return ("", "", 0)
 
     _sm_core.run_privileged = _lb_priv
     _sm_core.write_root_file = lambda *a, **k: (_lb["touched"].append("WRITE"), ("", "", 0))[1]
-    _sm_core._restart_sshd = lambda *a, **k: ("", "", 0)
+    _sm_core._restart_sshd = lambda *a, **k: (_lb.__setitem__("up", True), ("", "", 0))[1]
     _sm_core.is_local_server = lambda s: True
     _sm_hosts.remote_ufw_open_port = lambda *a, **k: (_lb["touched"].append("UFW"), (True, ""))[1]
     _sm_hosts.remote_ufw_close_port = lambda *a, **k: (True, "")
@@ -2600,10 +2606,28 @@ try:
     check("ssh bind: ...and the message does NOT promise a fallback that does not exist",
           "fallback" not in _msg.lower() and "10.0.0.5:22" in _msg, _msg[:110])
 
-    _lb["touched"] = []
+    _lb["touched"], _lb["up"] = [], False
     _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 2222)
     check("ssh bind: a PORT-only change still says the old port remains a fallback",
           _ok is True and "fallback" in _msg.lower(), _msg[:110])
+    # ...but only onto a FREE port. `ss -lnt` names no process, so the check that sshd came up was
+    # answered by any listener: moving SSH onto 8080 where a web app listens left sshd on 22,
+    # reported "SSH now listens on port 8080", and the route repointed the panel at the web app.
+    _lb["touched"], _lb["up"] = [], False
+    _lb["listening"] = ("LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
+                        "LISTEN 0 511 0.0.0.0:8080 0.0.0.0:*\n")
+    _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 8080)
+    check("ssh port: a new port another service already listens on is refused",
+          _ok is False and "already listening on port 8080" in _msg, "ok=%r msg=%r" % (_ok, _msg))
+    check("ssh port: ...before anything is touched (no ufw hole, no drop-in written)",
+          "UFW" not in _lb["touched"] and "WRITE" not in _lb["touched"], repr(_lb["touched"]))
+    _lb["touched"] = []
+    _lb["listening"] = "\n"
+    _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 2222)
+    check("ssh port: ...and an unread listener list refuses too, rather than reading as free",
+          _ok is False and "Could not list" in _msg and "WRITE" not in _lb["touched"],
+          "ok=%r msg=%r" % (_ok, _msg))
+    _lb["listening"] = None
     # The address the host does NOT have: under socket activation systemd binds it anyway, so the
     # old port-only verification passed while SSH answered nowhere. Refused up front now.
     _lb["touched"] = []
@@ -2956,6 +2980,51 @@ try:
     check("bootstrap: ...and the job says the firewall was not enabled, not 'complete'",
           _bnok is False and "NOT enabled" in _bnmsg and "Could not acquire lock" in _bnmsg
           and "NOT DONE" in _bnlog, "ok=%r msg=%r" % (_bnok, _bnmsg))
+
+    # The SSH port was hard-coded 22 in both the UFW step and the fail2ban jail. A host whose
+    # sshd had been moved to 2222 had UFW switched on at deny-incoming with only 22 let in — the
+    # panel's own connection and the operator's then met a closed port — and its jail banned on
+    # a port nothing listened on. The ports are sshd's effective ones plus the one the panel uses.
+    def _bs_ports(eff, port, eff_rc=0):
+        _bs_ufw.clear()
+        _jail = []
+
+        def _priv(s, verb, args=None, **k):
+            _bs_ufw.append((verb, list(args or [])))
+            if verb == "sshd-effective-config":
+                return (eff, "", eff_rc)
+            return ("", "", 0)
+        _sm_core.run_privileged = _priv
+        _sm_core.write_root_file = lambda s, target, content, **k: (
+            _jail.append(content) if target == "fail2ban-jail-local" else None, ("", "", 0))[1]
+        _sm_hosts.remote_bootstrap_vps(
+            NS(id=9105, host="203.0.113.14", auth_method="key", port=port), set_timezone="",
+            enable_ufw=True, install_lgsm_deps=False, username="", install_fail2ban=True,
+            do_reboot=False)
+        _lim = [a[0] for v, a in _bs_ufw if v == "ufw-limit-port"]
+        _en = _bs_ufw.index(("ufw-enable", [])) if ("ufw-enable", []) in _bs_ufw else -1
+        _lim_before_enable = all(_bs_ufw.index(("ufw-limit-port", [x])) < _en for x in _lim)
+        return _lim, _en, _lim_before_enable, (_jail[0] if _jail else ""), [v for v, _a in _bs_ufw]
+    _lim, _en, _lbe, _jc, _ran = _bs_ports("port 2222\npermitrootlogin no\n", 2222)
+    check("bootstrap: sshd on 2222 is the port UFW lets in before it is switched on, not 22",
+          _lim == ["2222/tcp"] and _en >= 0 and _lbe,
+          "limited %r, enable at %d — UFW went on with SSH's real port shut" % (_lim, _en))
+    check("bootstrap: ...its fail2ban jail bans on 2222, not 22",
+          "port = 2222\n" in _jc and "port = 22\n" not in _jc, "jail.local %r" % (_jc,))
+    check("bootstrap: ...and no port-22 rule is deleted on a host whose SSH is not on 22",
+          "ufw-delete-allow-app" not in _ran, "ran %r" % (_ran,))
+    _lim, _en, _lbe, _jc, _ran = _bs_ports("port 22\nport 2222\n", 22)
+    check("bootstrap: every port sshd listens on is limited, and the jail names them all",
+          sorted(_lim) == ["22/tcp", "2222/tcp"] and _lbe and "port = 22,2222\n" in _jc,
+          "limited %r, jail %r" % (_lim, _jc))
+    _lim, _en, _lbe, _jc, _ran = _bs_ports("", 2222, eff_rc=1)
+    check("bootstrap: an unread sshd -T still keeps the port the panel connects on open",
+          _lim == ["2222/tcp"] and _lbe and "port = 2222\n" in _jc,
+          "limited %r, jail %r" % (_lim, _jc))
+    _lim, _en, _lbe, _jc, _ran = _bs_ports("port 22\n", 22)
+    check("bootstrap: ...while a stock host on 22 is limited on 22 alone, as before (positive control)",
+          _lim == ["22/tcp"] and _lbe and "port = 22\n" in _jc and "ufw-delete-allow-app" in _ran,
+          "limited %r, jail %r" % (_lim, _jc))
 finally:
     (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
      _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,
