@@ -322,8 +322,16 @@ WRITE_TARGETS = {
 # Each payload the panel actually sends is a fixed shape, so each gets a grammar that admits it and
 # nothing else. Validation is REQUIRED, not optional: a destination with no entry is refused, so
 # adding one to WRITE_TARGETS forces a decision about its content rather than inheriting "anything".
-_RE_APT_CONF = re.compile(r'APT::[A-Za-z][A-Za-z0-9:-]* "[0-9]+";')
-_RE_SYSCTL = re.compile(r"[a-z][a-z0-9_.]* *= *[0-9]+")
+#
+# Pinned to the KEYS the panel writes, not just a key-shaped key with a numeric value. Neither file
+# needs a command to be dangerous: `fs.protected_hardlinks = 0` (or protected_symlinks,
+# yama.ptrace_scope, kptr_restrict ...) turned host-wide kernel protections off for every local
+# user, persistently — 99-tailscale sorts after the distro defaults and sysctl-reload applies it at
+# once — and `APT::Get::AllowUnauthenticated "1";` let apt install unsigned packages as root. Both
+# were accepted by the old `any lowercase key = digits` and `any APT:: key "digits"` shapes.
+_RE_APT_CONF = re.compile(r'APT::Periodic::(?:Update-Package-Lists|Unattended-Upgrade'
+                          r'|AutocleanInterval|Download-Upgradeable-Packages) "[0-9]+";')
+_RE_SYSCTL = re.compile(r"(?:net\.ipv4\.ip_forward|net\.ipv6\.conf\.all\.forwarding) *= *1")
 _RE_SSHD_PORT = re.compile(r"(Port [0-9]{1,5}|ListenAddress \[?[0-9A-Fa-f:.]+\]?:[0-9]{1,5})")
 # A systemd unit file is NOT a config file of directives that only configure -- ExecStartPre= runs
 # a command as root the moment the unit starts. So this grammar admits the section header, the

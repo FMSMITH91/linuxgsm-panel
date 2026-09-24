@@ -2323,6 +2323,26 @@ for _k, _v in _ROOT_EXEC:
         _accepted_exec.append("%s: %s" % (_k, _v[:34]))
 check("helper: content that would execute as root is refused, and nothing is written",
       not _accepted_exec, "accepted: %s" % _accepted_exec)
+# Content that runs nothing but switches a protection off. The sysctl grammar was "any lowercase
+# key = digits" and the apt one "any APT:: key, numeric value": both admitted lines the panel never
+# sends, which turned host-wide kernel hardening off (persistently — sysctl.d is re-applied at
+# boot) or let apt install unsigned packages as root. fs.protected_hardlinks is the one the
+# helper's own restore copy used to lean on.
+_WEAKENING = [
+    ("sysctl-tailscale", "fs.protected_hardlinks = 0"),
+    ("sysctl-tailscale", "net.ipv4.ip_forward = 1\nfs.protected_symlinks=0"),
+    ("sysctl-tailscale", "kernel.yama.ptrace_scope = 0"),
+    ("sysctl-tailscale", "kernel.randomize_va_space = 0"),
+    ("apt-auto-upgrades", 'APT::Get::AllowUnauthenticated "1";'),
+    ("apt-auto-upgrades", 'APT::Periodic::Unattended-Upgrade "1";\nAPT::Sandbox::Verify "0";'),
+]
+_accepted_weak = []
+for _k, _v in _WEAKENING:
+    _rc, _written = _write_through_helper(_k, _v)
+    if _rc == 0 or _written is not None:
+        _accepted_weak.append("%s: %s" % (_k, _v[:40]))
+check("helper: a sysctl or apt key the panel never writes is refused (no protection switched off)",
+      not _accepted_weak, "accepted: %s" % _accepted_weak)
 _rc_cron, _written_cron = _write_through_helper("node-tools-cron", "* * * * * root id > /tmp/pwned")
 check("helper: a hostile cron body is replaced by the helper's own, not written",
       _rc_cron == 0 and _written_cron == _helper.NODE_TOOLS_CRON_BODY,
