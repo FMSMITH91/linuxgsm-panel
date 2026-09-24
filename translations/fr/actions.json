@@ -100,6 +100,7 @@
   "No swap configured": "Aucun espace d'échange configuré",
   "No upcoming runs within a year.": "Aucune exécution prévue dans l'année à venir.",
   "None of the selected servers support updating.": "Aucun des serveurs sélectionnés ne prend en charge la mise à jour.",
+  "Select at least one server first.": "Sélectionnez d'abord au moins un serveur.",
   "Not enabled.": "Non activé.",
   "Not permitted, or your session expired.": "Non autorisé, ou votre session a expiré.",
   "Nothing imported.": "Rien n'a été importé.",

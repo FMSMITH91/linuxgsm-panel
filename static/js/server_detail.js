@@ -109,7 +109,10 @@ function renderPlayers(d){
           + _da('moderatePlayer', ['@self', 'ban']) + '>Ban</button>';
       }
     }
-    return '<tr><td class="text-truncate" style="max-width:260px;">'+escapeHtml(p.name)+'</td>'
+    // data-no-i18n: a player's name is theirs. The catalog walker swaps any text node that
+    // exactly matches a key, so a player called "Admin" was listed — and offered for banning — as
+    // "Administrador", while the kick/ban itself still targeted "Admin".
+    return '<tr><td class="text-truncate" style="max-width:260px;" data-no-i18n>'+escapeHtml(p.name)+'</td>'
       +'<td class="text-nowrap">'+(p.score!=null?escapeHtml(String(p.score)):'—')+'</td>'
       +'<td class="text-nowrap">'+(p.time!=null?escapeHtml(plTime(p.time)):'—')+'</td>'
       +(_CAN_MODERATE?('<td class="text-nowrap">'+acts+'</td>'):'')+'</tr>';
@@ -145,7 +148,8 @@ function banScopeDialog(btn, name, steamid, num){
   if(window._plEngine!=='valve' && window._plEngine!=='minecraft'){
     confirmDialog({
       title: 'Ban player', icon: 'slash-circle', confirmLabel: 'Ban', confirmClass: 'btn-danger',
-      body: 'Ban <strong>' + _esc(name) + '</strong> from <strong>' + _esc(SERVER_NAME) + '</strong>?',
+      body: 'Ban <strong data-no-i18n>' + _esc(name) + '</strong> from <strong data-no-i18n>'
+            + _esc(SERVER_NAME) + '</strong>?',
       onConfirm: function(){ _doModerate(btn,'ban',name,steamid,num,'this'); }
     });
     return;
@@ -175,18 +179,35 @@ function banScopeDialog(btn, name, steamid, num){
   document.body.appendChild(ov);
 }
 
+// One announcement in flight at a time. Enter is bound on keydown, so a second Enter — or the key
+// held down and auto-repeating — sent the same `say` to every player again for each keystroke,
+// because the box was only cleared once the first answer came back.
+var _saying = false;
 function announceSay(){
+  if (_saying) return;
   var inp=document.getElementById('pl-say'); if(!inp) return;
   var msg=(inp.value||'').trim(); if(!msg) return;
+  // Disabling the box drops its focus; give it back only if it had it, so the next message can be
+  // typed straight away without taking focus from wherever the moderator has moved on to.
+  var hadFocus = document.activeElement === inp;
+  _saying = true; inp.disabled = true;
   fetch(MOUNT+'/api/server/'+serverId+'/moderate',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({action:'say', message:msg})})
     .then(function(r){return r.json();}).then(function(d){
       window.toast(d.message || (d.success?'Announced':'Failed'), d.success?'success':'danger');
       if(d.success) inp.value='';
-    }).catch(function(){ window.toast('Announce failed','danger'); });
+    }).catch(function(){ window.toast('Announce failed','danger'); })
+    .finally(function(){
+      _saying = false; inp.disabled = false;
+      if (hadFocus && document.activeElement === document.body) inp.focus();
+    });
 }
 
 function runCustomCommand(wrap, btn){
+  // Already running: a second Enter in the argument box re-sent the command (a give or a kick,
+  // twice), and captured the SPINNER as the button's "original" label, which the last .finally
+  // then restored for good.
+  if (btn.disabled) return;
   var cmdId = wrap.getAttribute('data-cmd-id');
   var hasArg = wrap.getAttribute('data-has-arg')==='1';
   var value = '';
@@ -222,20 +243,34 @@ loadPlayers();
 
 if(window.pollWhenVisible) pollWhenVisible(loadPlayers, 15000);
 
+// consoleEl can be NULL, and every path that touches it has to say so. The Console panel is
+// hideable, a hidden panel is not rendered on later loads, and a viewer with neither view_console
+// nor send_command is not given one at all. One unguarded top-level use — applyTsVisible() —
+// threw, and the rest of this script never ran: no version, no daily-restart time, no re-read
+// after an update, on every visit, for anyone who had hidden the panel.
 function consoleAtBottom() {
+  if (!consoleEl) return false;
   return consoleEl.scrollHeight - consoleEl.scrollTop - consoleEl.clientHeight < 48;
 }
 
-function stickConsole() { consoleEl.scrollTop = consoleEl.scrollHeight; }
+function stickConsole() { if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight; }
 
 var socket = (window.ensureSocket && window.ensureSocket())
   || io({ path: MOUNT + '/socket.io', transports: ['websocket', 'polling'] });
 
 var _socketEverConnected = false;
 socket.on('connect', function() {
-  wsStatus.textContent = '(connected)';
-  wsStatus.className = 'text-success small ms-2';
-  socket.emit('join_console', { server_id: serverId });
+  if (wsStatus) {
+    wsStatus.textContent = '(connected)';
+    wsStatus.className = 'text-success small ms-2';
+  }
+  // Only a viewer who may read the console joins it: the server refuses everyone else anyway.
+  // Joined with the panel hidden too: the update-finished marker that re-reads the game version
+  // (the second console_output handler, near the end) arrives on this room, and the line
+  // handler below already ignores output when there is no console to put it in.
+  if (window._CAN_VIEW_CONSOLE !== false) {
+    socket.emit('join_console', { server_id: serverId });
+  }
   // A RE-connect (a network blip, or the page coming back from the back/forward cache, which
   // closes the socket on pagehide) rejoins a poller that no longer holds this console's offset —
   // it forgets consoles nobody watches, so it starts again from "now". Whatever the game wrote
@@ -246,12 +281,13 @@ socket.on('connect', function() {
 });
 
 socket.on('disconnect', function() {
+  if (!wsStatus) return;
   wsStatus.textContent = '(disconnected)';
   wsStatus.className = 'text-danger small ms-2';
 });
 
 socket.on('console_output', function(data) {
-  if (data.server_id !== serverId || !data.data) return;
+  if (data.server_id !== serverId || !data.data || !consoleEl) return;
   var stick = consoleAtBottom();   // capture BEFORE appending
   // Only the POLLER's pushes are lines of the console log, and it always sends `rows`. Everything
   // else on this event — the panel's own "[panel] update started" markers and an action's output
@@ -377,7 +413,7 @@ function stampLine(div, ts) {
 }
 
 function applyTsVisible() {
-  consoleEl.classList.toggle('ts-hidden', !_tsOn);
+  if (consoleEl) consoleEl.classList.toggle('ts-hidden', !_tsOn);
   var b = document.getElementById('console-ts-toggle');
   if (b) { b.setAttribute('aria-pressed', _tsOn ? 'true' : 'false'); b.classList.toggle('active', _tsOn); }
   updateTsNotice();
@@ -392,7 +428,7 @@ function applyTsVisible() {
 // time, which is also the clearest possible demonstration of what the column does.
 function updateTsNotice() {
   var n = document.getElementById('console-ts-notice');
-  if (!n) return;
+  if (!n || !consoleEl) return;
   var anyStamped = !!consoleEl.querySelector('.console-line[data-ts]');
   n.hidden = anyStamped || !_tsOn;
 }
@@ -538,6 +574,8 @@ function _renderPanelLines(panelLines) {
 }
 
 function refreshConsole(forceScroll, wantLines, catchUp) {
+  // No console on this page, or one this viewer may not read: /api/console would answer 403.
+  if (!consoleEl || window._CAN_VIEW_CONSOLE === false) return;
   // Don't yank the user to the bottom unless they were already there (or it's the initial load).
   var stick = forceScroll || consoleAtBottom();
   fetch(MOUNT + '/api/console/' + serverId + (wantLines ? '?lines=' + wantLines : ''))
@@ -614,8 +652,16 @@ function loadMoreConsole(btn) {
   var orig = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
   fetch(MOUNT + '/api/console/' + serverId + '?lines=2000')
-    .then(r => r.json())
-    .then(function(data) {
+    .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+    .then(function(res) {
+      var data = res.d || {};
+      // A refusal is not an empty log. Without VIEW_CONSOLE the answer is 403 with `lines: []`,
+      // and this cleared the screen — the access-denied line with it — and toasted "Loaded 0
+      // lines from the log" in green.
+      if (!res.ok || data.error) {
+        if (window.toast) toast(data.error || 'Could not load more console output', 'danger');
+        return;
+      }
       // ROWS, not strings. /api/console returns lines as [{t, line}] — _console_rows builds
       // them — and this called l.trim() on each, which is `undefined` on an object: a TypeError
       // inside the .then, swallowed by the .catch below, so the button has only ever answered
@@ -671,6 +717,7 @@ function loadMoreConsole(btn) {
 })();
 
 function clearConsole() {
+  if (!consoleEl) return;        // the Clear button is in the control bar, the console may not be
   consoleEl.innerHTML = '';
   _consoleLines = [];
   _consoleSig = null;      // so the next poll repaints rather than deciding nothing changed

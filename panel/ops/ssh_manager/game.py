@@ -580,6 +580,28 @@ def mod_restart_decision(status, players, force=False):
     return "pending"
 
 
+def _stale_backup_lock_sweep(user, home=None):
+    """The shell that clears an ORPHANED backup.lock before a backup starts, run as the game user.
+
+    LinuxGSM writes the lock once, at the start, so its mtime is the backup's start time — and a
+    lock older than five minutes was deleted on the strength of a comment saying the panel "only
+    ever runs one game backup at a time (serialised by a lock in app.py)". Neither half held. The
+    lock that exists is _full_backup_lock in panel/core/panel_state.py, and it covers only the
+    panel's scheduled and manual backup runners: the control bar's and the chat bots' `backup`
+    maintenance action runs LinuxGSM's backup directly, outside it, and so does a host cron or an
+    operator in the terminal. Any of those still archiving after five minutes had its lock deleted
+    and a second backup of the same server started beside it.
+
+    So an old lock is orphaned only when no `tar` is running as this user: LinuxGSM's backup is a
+    tar of the install, and a game server runs none of its own. The match is on the process NAME
+    (-x), never the command line — this snippet's own `bash -c` line contains the word `backup`,
+    and a -f match would always find itself and never clear a stale lock again. `home` exists for
+    the test; the panel always passes the account's own."""
+    home = home or "/home/%s" % user
+    return (f"pgrep -u {user} -x tar >/dev/null 2>&1 || "
+            f"find {home} -maxdepth 4 -name '*backup.lock' -mmin +5 -delete 2>/dev/null; ")
+
+
 def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
                     query_type=None):
     """Run LinuxGSM's own `backup` for a game instance (archives serverfiles into
@@ -639,14 +661,9 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     except Exception:
         _core._log.debug("backup pre-flight space check failed", exc_info=True)
     # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
-    # which every backup refuses with "Lockfile found: Backup is currently running". The panel
-    # only ever runs one game backup at a time (serialised by a lock in app.py), so if we're here
-    # and a backup.lock exists that hasn't been touched in >5 min, it's orphaned — delete it.
-    # LinuxGSM writes the lock once at start and removes it on completion, so its mtime is the
-    # backup's start time; a real, freshly-started backup (<5 min) is left untouched.
-    precheck = (
-        f"find /home/{user} -maxdepth 4 -name '*backup.lock' -mmin +5 -delete 2>/dev/null; "
-    )
+    # which every backup refuses with "Lockfile found: Backup is currently running". See
+    # _stale_backup_lock_sweep for when a lock counts as orphaned.
+    precheck = _stale_backup_lock_sweep(user)
     # When the instance is running, LinuxGSM's `backup` warns + counts down, then STOPS the
     # server, archives it, and RESTARTS it (verified on a live box: ~1.5 min outage for a 6.5G
     # GMod install). It doesn't strictly need a y/N answer, but we feed a few harmless "y"s as a

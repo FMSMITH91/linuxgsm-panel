@@ -6,6 +6,7 @@ import re
 import shlex
 import signal
 import socket
+import stat
 import subprocess  # nosec B404 - every call site below passes an argv LIST, never a shell string
 import tempfile
 import threading
@@ -802,6 +803,29 @@ _SSH_CM_DIR = os.path.join(tempfile.gettempdir(),
                            ".lgsm-ssh-cm-%d" % (os.getuid() if hasattr(os, "getuid") else 0))
 
 
+def _cm_dir_is_ours(path):
+    """Is the control-socket directory one only this account can reach? A real directory (not a
+    symlink), owned by this uid, with no group or other permission bits.
+
+    makedirs(exist_ok=True) accepts whatever is already at the path, and the path is a fixed name
+    in world-writable /tmp: any local account (a game-server user) can create it first — after a
+    reboot empties /tmp — and own it. ControlMaster=auto CONNECTS to an existing socket before it
+    makes one, and the client does not check who is listening, so a socket planted there would be
+    handed every command the panel sends that host (as root on most remotes) and could answer with
+    whatever output it liked. Without the check ssh simply connects without multiplexing: slower,
+    never wrong."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    ok = (stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid()
+          and (st.st_mode & 0o077) == 0)
+    if not ok:
+        _log.warning("ssh multiplexing disabled: %s is not a private directory owned by this "
+                     "account (mode %o, uid %d)", path, st.st_mode, st.st_uid)
+    return ok
+
+
 def _ssh_mux_opts():
     """SSH options that reuse one persistent connection per host. ControlMaster=auto falls back to a
     fresh connection automatically if the master died, so it's safe. Returns [] if the socket dir
@@ -813,6 +837,8 @@ def _ssh_mux_opts():
     try:
         os.makedirs(_SSH_CM_DIR, mode=0o700, exist_ok=True)
     except OSError:
+        return []
+    if not _cm_dir_is_ours(_SSH_CM_DIR):
         return []
     return ["-o", "ControlMaster=auto",
             "-o", f"ControlPath={_SSH_CM_DIR}/%C",   # %C = short fixed-length hash of host/port/user
@@ -1565,6 +1591,22 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
         _hit = _live_metrics_cache.get(_ck)
         if _hit and _hit[0] > _now:
             return _hit[1]
+    # Re-validated HERE, like run_as_game_user, send_console_command and _rewrite_crontab: both
+    # values below are interpolated into the shell command unquoted, and GameServer's @validates
+    # fires on assignment only — never on a row loaded from the database, so a row written before
+    # the validator existed or restored from a tampered backup reaches this code unchecked. This
+    # one runs by itself on every dashboard and status poll, as server.username (root on most
+    # remotes). A name that fails is dropped rather than refused: the host's own figures are
+    # still worth reporting, and the game's read as zero instead of as a command.
+    if short_name and not _SAFE_GAME_IDENT.match(str(short_name)):
+        _log.warning("live metrics: refusing to interpolate game user %r", short_name)
+        short_name = None
+    if game_port:
+        try:
+            game_port = int(game_port)
+        except (TypeError, ValueError):
+            _log.warning("live metrics: refusing to interpolate game port %r", game_port)
+            game_port = None
     # Robust per-process jiffie sum (utime+stime). /proc/pid/stat's comm field can
     # contain spaces/parens, so split on the LAST ')' before reading numeric fields.
     def _gjiffies(tag):

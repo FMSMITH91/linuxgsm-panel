@@ -3890,6 +3890,31 @@ try:
           _act_denied.status_code in (403, 302, 401),
           "status=%d" % _act_denied.status_code)
 
+    # Bulk Update for a group holding update_server alone. The bar, the row checkboxes and
+    # select-all were all behind can_control (start/stop/restart), so the Update button the bar
+    # gates for exactly this user could never appear — they updated servers one page at a time.
+    _vo_dash = client_as(_viewer_id).get("/").get_data(as_text=True)
+    check("dashboard: a view-only user gets no bulk selection (the gate still exists)",
+          'class="form-check-input srv-check"' not in _vo_dash and "bulk-update-btn" not in _vo_dash,
+          "row checkboxes or the Update button rendered for a user who can do none of it")
+    with app.app_context():
+        Group.query.filter_by(name="smoke-viewonly").first().set_permissions(
+            [auth.VIEW_SERVERS, auth.UPDATE_SERVER])
+        db.session.commit()
+    try:
+        _up_dash = client_as(_viewer_id).get("/").get_data(as_text=True)
+        check("dashboard: update_server alone is enough to select servers and bulk-Update them",
+              'class="form-check-input srv-check"' in _up_dash and "bulk-update-btn" in _up_dash
+              and "srv-check-all" in _up_dash,
+              "checkboxes=%s select-all=%s update-button=%s — no way to select, so no bulk Update"
+              % ('class="form-check-input srv-check"' in _up_dash, "srv-check-all" in _up_dash,
+                 "bulk-update-btn" in _up_dash))
+    finally:
+        with app.app_context():
+            Group.query.filter_by(name="smoke-viewonly").first().set_permissions(
+                [auth.VIEW_SERVERS])
+            db.session.commit()
+
     # ── the install form lives on its own page now ───────────────────────────────────────────
     # It used to sit on /servers/manage above the list of servers you already have. Splitting it
     # out is only safe if the form still WORKS from its new home, so this checks the controls and
@@ -3922,6 +3947,18 @@ try:
         db.session.add(_noinst)
         db.session.commit()
         _noinst_id = _noinst.id
+    # The dashboard's empty state speaks for what THIS user can see. For an account with no host
+    # or server grant `servers` is [], however many the install runs, and it was told "No game
+    # servers are configured yet" — a claim about the install made to someone who sees none of it.
+    _ng_dash = client_as(_noinst_id).get("/")
+    _ng_html = _ng_dash.get_data(as_text=True)
+    check("dashboard: a user with no grants is told nothing is shared with them, not that the "
+          "install has no servers",
+          _ng_dash.status_code == 200 and "No game servers have been shared with you yet." in _ng_html
+          and "No game servers are configured yet." not in _ng_html,
+          "status=%d shared-copy=%s configured-copy=%s"
+          % (_ng_dash.status_code, "shared with you" in _ng_html,
+             "are configured yet" in _ng_html))
     # A one-host panel must not ask which host. The placeholder is a required field whose only
     # valid answer is the single option under it — a click that can only be made one way. With two
     # or more the placeholder stays, because then the choice is real and a silent default would
@@ -5980,6 +6017,15 @@ try:
             check("global-ban: an invalid SteamID is rejected (not stored)", GlobalBan.query.count() == _cnt)
             _pg = _gc.get("/global-bans")
             check("global-ban: page lists the ban", _pg.status_code == 200 and b"STEAM_0:1:99" in _pg.data)
+            # The fan-out goes through each server's LIVE console, so a server stopped when the
+            # ban is added never gets it until Sync is pressed while it runs. The page promised
+            # "gone everywhere" and counted every installed Source server as covered.
+            _pgt = _pg.get_data(as_text=True)
+            check("global-ban: the page does not promise every server gets it, and says how a "
+                  "stopped one does",
+                  "gone everywhere" not in _pgt and "Currently propagates" not in _pgt
+                  and "stopped or unreachable" in _pgt and "Sync to all servers" in _pgt,
+                  "the page still claims a coverage the console fan-out cannot deliver")
             _del = _gc.post("/global-bans/%d/delete" % _gb.id)
             check("global-ban: delete removes it",
                   _del.status_code in (302, 303) and db.session.get(GlobalBan, _gb.id) is None)
@@ -6335,6 +6381,85 @@ try:
                   db.session.get(GameServer, gs_id).restart_pending is False)
     finally:
         _ps._cron_restart_pending.pop(gs_id, None)
+
+    # ── "do it now" and the command-list refresh are offered only to who can use them ──────────
+    # Both rendered for anyone who could open the page. The banner's button calls the action
+    # endpoint (RESTART_SERVER / STOP_SERVER), and refresh_server_commands wants MODERATE_SERVER,
+    # SEND_COMMAND or MANAGE_SERVERS — so a view-only member was told "you can do it now" and
+    # "use the refresh button above", and both buttons answered with a refusal.
+    with app.app_context():
+        _g = db.session.get(GameServer, gs_id)
+        _g.restart_pending = True
+        _vo_grp = Group(name="smoke-detail-viewonly")
+        _vo_grp.set_permissions([auth.VIEW_SERVERS, auth.VIEW_CONSOLE])
+        _vo_grp.game_servers.append(_g)
+        db.session.add(_vo_grp)
+        db.session.flush()
+        _vo = User(username="detailviewer", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                   is_superadmin=False, is_active=True)
+        _vo.groups.append(_vo_grp)
+        db.session.add(_vo)
+        db.session.commit()
+        _vo_id, _vo_gid = _vo.id, _vo_grp.id
+    try:
+        _vo_resp = client_as(_vo_id).get("/server/%d" % gs_id)
+        _voh = _vo_resp.get_data(as_text=True)
+        _adh = c.get("/server/%d" % gs_id).get_data(as_text=True)
+        _refresh_url = "/server/%d/refresh-commands" % gs_id
+        check("server page: an admin is offered the banner's 'do it now' and the command refresh "
+              "(positive control)",
+              'data-action="bannerDoNow"' in _adh and _refresh_url in _adh
+              and "d-none" not in _banner_tag(_adh),
+              "button=%s refresh=%s" % ('data-action="bannerDoNow"' in _adh, _refresh_url in _adh))
+        check("server page: a view-only member sees the queued restart but no 'Restart now' button",
+              _vo_resp.status_code == 200 and "d-none" not in _banner_tag(_voh)
+              and 'data-action="bannerDoNow"' not in _voh
+              and "or you can do it now" not in _voh,
+              "status=%d banner shown=%s button=%s 'do it now' copy=%s"
+              % (_vo_resp.status_code, "d-none" not in _banner_tag(_voh),
+                 'data-action="bannerDoNow"' in _voh, "or you can do it now" in _voh))
+        check("server page: ...nor the command-list refresh the route would refuse them",
+              _refresh_url not in _voh and "Use the refresh button above" not in _voh,
+              "the refresh form is rendered for a viewer without moderate/send_command/manage")
+
+        # The Live Console panel without VIEW_CONSOLE. /api/console answers 403 with no lines, and
+        # "Load older" wiped the screen and toasted "Loaded 0 lines from the log". A viewer with
+        # neither view_console nor send_command gets no console panel; one with send_command
+        # alone keeps the command box but not the log controls, and is told why it is empty.
+        check("server page: a view_console holder is given the log controls (control for the next)",
+              'data-action="loadMoreConsole"' in _voh and 'data-panel="console"' in _voh,
+              "the console panel is missing for a viewer who may read it")
+        with app.app_context():
+            db.session.get(Group, _vo_gid).set_permissions([auth.VIEW_SERVERS])
+            db.session.commit()
+        _voh2 = client_as(_vo_id).get("/server/%d" % gs_id).get_data(as_text=True)
+        check("server page: without view_console or send_command there is no console panel",
+              'data-panel="console"' not in _voh2 and 'data-action="loadMoreConsole"' not in _voh2
+              and "_CAN_VIEW_CONSOLE = false" in _voh2,
+              "panel=%s load-older=%s" % ('data-panel="console"' in _voh2,
+                                          'data-action="loadMoreConsole"' in _voh2))
+        with app.app_context():
+            db.session.get(Group, _vo_gid).set_permissions([auth.VIEW_SERVERS, auth.SEND_COMMAND])
+            db.session.commit()
+        _voh3 = client_as(_vo_id).get("/server/%d" % gs_id).get_data(as_text=True)
+        check("server page: send_command alone keeps the command box, not the log controls",
+              'id="command-form"' in _voh3 and 'data-action="loadMoreConsole"' not in _voh3
+              and "permission to view this server's console" in _voh3,
+              "command box=%s load-older=%s notice=%s"
+              % ('id="command-form"' in _voh3, 'data-action="loadMoreConsole"' in _voh3,
+                 "permission to view this server's console" in _voh3))
+    finally:
+        with app.app_context():
+            db.session.get(GameServer, gs_id).restart_pending = False
+            _u = db.session.get(User, _vo_id)
+            if _u is not None:
+                _u.groups = []
+                db.session.delete(_u)
+            _gr = db.session.get(Group, _vo_gid)
+            if _gr is not None:
+                _gr.game_servers = []
+                db.session.delete(_gr)
+            db.session.commit()
 
     # ── The users page renders ONE edit modal, not one per user ───────────────────────────────────
     # It used to emit a full 2KB modal per row — 670KB of HTML at 100 accounts, all of it for a
@@ -12174,6 +12299,20 @@ try:
         _lt_pr = _lt_http.get("/terminal/%d" % _lt_rid)
         check("terminal: ...while the same grants still reach a REMOTE's terminal page "
               "(positive control)", _lt_pr.status_code == 200, "status=%d" % _lt_pr.status_code)
+        # The panel records no input, but the shell is an ordinary interactive one and writes its
+        # own history on the host. "Nothing typed here is recorded" was stated as absolute, on the
+        # page where operators type secrets.
+        _lt_prt = _lt_pr.get_data(as_text=True)
+        check("terminal: the page does not promise nothing typed is kept — the shell's own "
+              "history is",
+              "Nothing typed here is recorded" not in _lt_prt and "command history" in _lt_prt,
+              "the page still says nothing is recorded while ~/.bash_history is written")
+        # xterm's DOM renderer gives each colour run its own <span>, and the catalog walker swaps
+        # any text node equal to a key: a French viewer saw the host print ERREUR.
+        _lt_mount = _re_ab.search(r'<div[^>]*\bid="terminal"[^>]*>', _lt_prt)
+        check("terminal: the xterm mount point is exempt from the translation walker",
+              _lt_mount is not None and "data-no-i18n" in _lt_mount.group(0),
+              "mount tag: %r — host output gets translated" % (_lt_mount and _lt_mount.group(0)))
         import panel.ops.system_ops as _lt_so
         _lt_gss = _lt_so.get_server_status
         _lt_so.get_server_status = lambda force=False: None      # reads THIS machine; not the question
@@ -12222,6 +12361,77 @@ try:
         check("terminal: ...and once they are demoted the re-check refuses the panel host, "
               "though a group still grants it",
               "after-demotion" not in _lt_w, "writes=%r" % (_lt_w,))
+
+        # Losing the terminal ITSELF must close the shell, not only refuse the keystroke. When
+        # _may_use_terminal() said no, the handlers returned: the shell stayed up and its output
+        # kept streaming to the socket until the 15-minute idle sweep. Driven through the real
+        # events, with use_terminal taken off the user's only group between two keystrokes.
+        _lt_c2.disconnect()
+        _lt_sessions.clear()
+        _lt_c3 = app.socketio.test_client(app, flask_test_client=client_as(_lt_uid))
+        _lt_c3.emit("term_open", {"remote_id": _lt_rid, "cols": 80, "rows": 24})
+        _lt_c3.emit("term_input", {"data": "before-revoke"})
+        _lt_open3 = [k for k, v in _lt_sessions.items() if getattr(v, "host", None) == _lt_rid]
+        check("terminal: a delegated user's remote shell takes keystrokes (control for the next)",
+              bool(_lt_open3)
+              and "before-revoke" in [w for v in _lt_sessions.values() for w in v.writes],
+              "sessions=%r" % (list(_lt_sessions),))
+        with app.app_context():
+            db.session.get(Group, _lt_gid).set_permissions([auth.MANAGE_REMOTES])
+            db.session.commit()
+        _lt_c3.get_received()
+        _lt_c3.emit("term_input", {"data": "after-revoke"})
+        _lt_err3 = [e for e in _lt_c3.get_received() if e.get("name") == "term_error"]
+        check("terminal: taking use_terminal away CLOSES the open shell at its next event",
+              _lt_open3 and not any(k in _lt_sessions for k in _lt_open3) and _lt_err3,
+              "still open=%r, term_error=%r — the keystroke is refused but the shell and its "
+              "output stay up for another fifteen minutes"
+              % ([k for k in _lt_open3 if k in _lt_sessions], _lt_err3))
+        with app.app_context():
+            db.session.get(Group, _lt_gid).set_permissions([auth.USE_TERMINAL,
+                                                            auth.MANAGE_REMOTES])
+            db.session.commit()
+
+        # ...and with NO event at all. A shell following a log is sent nothing, so a check made
+        # only when a keystroke arrives never runs for it: the timer sweep has to. Signing the
+        # user out everywhere (auth_epoch bumped) must close it on the sweep alone.
+        _lt_c4 = app.socketio.test_client(app, flask_test_client=client_as(_lt_uid))
+        _lt_before4 = set(_lt_sessions)
+        _lt_c4.emit("term_open", {"remote_id": _lt_rid, "cols": 80, "rows": 24})
+        _lt_open4 = [k for k in _lt_sessions if k not in _lt_before4]
+        with app.app_context():
+            _htmod.sweep_revoked_terminals(app, app.socketio)
+        check("terminal: the revocation sweep leaves a shell whose login still holds alone "
+              "(positive control)",
+              bool(_lt_open4) and all(k in _lt_sessions for k in _lt_open4),
+              "opened=%r, still open=%r" % (_lt_open4, [k for k in _lt_open4 if k in _lt_sessions]))
+
+        def _lt_revoked_rows():
+            return _SPAudit.query.filter_by(action="terminal_close",
+                                            detail="terminal access was revoked",
+                                            username="smoke-term-deleg").count()
+        with app.app_context():
+            _lt_aud_before4 = _lt_revoked_rows()
+            _lt_u4 = db.session.get(User, _lt_uid)
+            _lt_u4.auth_epoch = (_lt_u4.auth_epoch or 0) + 1
+            db.session.commit()
+        _lt_c4.get_received()
+        with app.app_context():
+            _htmod.sweep_revoked_terminals(app, app.socketio)
+            _lt_aud4 = _lt_revoked_rows() - _lt_aud_before4
+        _lt_err4 = [e for e in _lt_c4.get_received() if e.get("name") == "term_error"]
+        check("terminal: a shell sent no input is closed by the sweep once its login is revoked",
+              _lt_open4 and not any(k in _lt_sessions for k in _lt_open4) and _lt_err4,
+              "still open=%r, term_error=%r — its output keeps reaching the signed-out browser"
+              % ([k for k in _lt_open4 if k in _lt_sessions], _lt_err4))
+        check("terminal: ...and the closing row names the user whose access went",
+              _lt_aud4 >= 1, "no new terminal_close row for smoke-term-deleg with that reason")
+        for _cl in (_lt_c3, _lt_c4):
+            try:
+                if _cl.is_connected():
+                    _cl.disconnect()
+            except Exception:
+                pass
     finally:
         (_tsmod.open_session, _tsmod.get, _tsmod.close_for_sid) = _ts_saved
         for _cl in (_lt_c, _lt_c2):

@@ -47,7 +47,11 @@
 </div>
 {% endif %}
 
-<div id="terminal"></div>
+{# data-no-i18n: xterm's DOM renderer puts each run of same-coloured cells in its own <span>, and
+   the catalog walker swaps any text node that exactly matches a key. A French viewer saw the host
+   print ERREUR, and a Spanish one saw an ls'd `console` directory as `consola` — a name that does
+   not exist when typed back. Host output is never ours to translate. #}
+<div id="terminal" data-no-i18n></div>
 
 <p class="text-secondary small mt-2">
   {# "not as root" was written for the panel host and printed on every host. On a REMOTE the
@@ -73,8 +77,11 @@
   <span data-no-i18n>This is a real shell on {{ remote.display_name }}, running as
     <code>{{ remote.username or 'root' }}</code> — the account the panel connects with.</span>
   {% endif %}
-  <span>Nothing typed here is recorded; only the session opening and closing is written to the
-  audit log.</span>
+  {# "Nothing typed here is recorded" was the panel's half only. The shell is an ordinary
+     interactive one (a login shell under a pty, or ssh's invoke_shell), so it writes its own
+     command history on the host like any other — including a password typed on a command line. #}
+  <span>The panel does not record what you type; only the session opening and closing is written
+  to the audit log. The shell itself keeps its usual command history on the host.</span>
 </p>
 {% endblock %}
 

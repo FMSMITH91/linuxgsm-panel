@@ -5882,6 +5882,140 @@ check("terminal: a shell that fails to start leaks no descriptors",
 check("terminal: ...and leaves no session registered either",
       _tsmod7.count() == 0, "sessions left behind: %d" % _tsmod7.count())
 
+# (b2) A close that lands while the transport is still CONNECTING. The session is registered
+# before the opener runs and a paramiko connect can take the whole ssh_timeout; a close in that
+# window found nothing attached, and the opener then hung a client and a login shell on a session
+# already marked closed. close() is idempotent, so nothing ever released them. Driven through the
+# real open_session with the connect stubbed on _core, closing the socket's session mid-connect.
+_core_ts7 = _il6.import_module("panel.ops.ssh_manager._core")
+
+
+class _RaceChan7:
+    def __init__(self):
+        self.closed = False
+
+    def settimeout(self, _t):
+        pass
+
+    def recv_ready(self):
+        return False
+
+    def exit_status_ready(self):
+        return self.closed
+
+    def resize_pty(self, **_k):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+class _RaceClient7:
+    def __init__(self):
+        self.closed, self.chan = False, None
+
+    def invoke_shell(self, **_k):
+        self.chan = _RaceChan7()
+        return self.chan
+
+    def close(self):
+        self.closed = True
+
+
+class _RaceRemote7:
+    name = "race"; host = "192.0.2.9"; port = 22; username = "root"
+    auth_method = "key"; is_local = False; display_name = "race"; id = 98
+
+
+def _open_racing7(close_mid_connect):
+    made = []
+
+    def _conn(server, force_new=False, pooled=True):
+        if close_mid_connect:
+            _tsmod7.close_for_sid("race-sid", "the connection closed")
+        made.append(_RaceClient7())
+        return made[-1]
+
+    saved = _core_ts7.get_connection
+    _core_ts7.get_connection = _conn
+    raised = sess = None
+    try:
+        try:
+            sess = _tsmod7.open_session("race-sid", _RaceRemote7(), False, user_key=7,
+                                        on_output=lambda s, d: None, on_exit=lambda s, r: None)
+        except _tsmod7.TerminalError as e:
+            raised = e
+    finally:
+        _core_ts7.get_connection = saved
+    return made, raised, sess
+
+
+_rc_made7, _rc_err7, _rc_sess7 = _open_racing7(True)
+_rc_client7 = _rc_made7[0] if _rc_made7 else None
+check("terminal: a session closed while connecting releases the client it then got",
+      _rc_client7 is not None and _rc_client7.closed
+      and _rc_client7.chan is not None and _rc_client7.chan.closed,
+      "client closed=%s, shell channel closed=%s — an authenticated SSH connection with a live "
+      "login shell stays open to that host until the panel restarts, outside the idle sweeper and "
+      "the session caps" % (getattr(_rc_client7, "closed", None),
+                            getattr(getattr(_rc_client7, "chan", None), "closed", None)))
+check("terminal: ...and open_session reports it rather than handing back a dead session",
+      _rc_err7 is not None and _rc_sess7 is None and _tsmod7.count() == 0,
+      "raised=%r returned=%r registered=%d — on_term_open then records the host and emits "
+      "term_ready for a socket that is gone" % (_rc_err7, _rc_sess7, _tsmod7.count()))
+_ok_made7, _ok_err7, _ok_sess7 = _open_racing7(False)
+check("terminal: ...while an uninterrupted open keeps its client (positive control)",
+      _ok_err7 is None and _ok_sess7 is not None and _ok_made7 and not _ok_made7[0].closed,
+      "raised=%r client closed=%s" % (_ok_err7, _ok_made7 and _ok_made7[0].closed))
+if _ok_sess7 is not None:
+    _ok_sess7.close("done")
+
+# (b3) One socket's map entry must name the session that is actually live on it. close() popped
+# by sid, and teardown yields (kill grace, pump join) — so a term_open after the idle sweeper had
+# started closing the old shell registered a new one that the old close() then deleted from the
+# map. That shell ran on, unreachable by input, the disconnect hook, the sweeper and the caps.
+# The yield is stood in for by registering from inside the first teardown step.
+_own_a7 = _tsmod7.Session("own-sid", "own-a", lambda s, d: None, lambda s, r: None)
+_own_b7 = _tsmod7.Session("own-sid", "own-b", lambda s, d: None, lambda s, r: None)
+_own_a7.user_key = _own_b7.user_key = 5
+_tsmod7._register(_own_a7, 5)
+_own_mid7 = []
+
+
+def _own_mid_close7():
+    try:
+        _tsmod7._register(_own_b7, 5)
+        _own_mid7.append("registered")
+    except _tsmod7.TerminalError as e:
+        _own_mid7.append("refused: %s" % e)
+
+
+_own_a7._close_chan = _own_mid_close7
+_own_a7.close("closed after 15 minutes with no input")
+check("terminal: a session that finishes closing leaves a newer one on its socket registered",
+      _own_mid7 == ["registered"] and _tsmod7.get("own-sid") is _own_b7,
+      "during teardown: %r; registered now: %r — the new shell keeps running with nothing "
+      "able to reach or close it" % (_own_mid7, getattr(_tsmod7.get("own-sid"), "label", None)))
+_own_b7.close("done")
+check("terminal: ...while a session's own close still removes it (positive control)",
+      _tsmod7.get("own-sid") is None and _tsmod7.count() == 0,
+      "left registered: %d" % _tsmod7.count())
+
+_live_a7 = _tsmod7.Session("live-sid", "live-a", lambda s, d: None, lambda s, r: None)
+_live_b7 = _tsmod7.Session("live-sid", "live-b", lambda s, d: None, lambda s, r: None)
+_live_a7.user_key = _live_b7.user_key = 5
+_tsmod7._register(_live_a7, 5)
+try:
+    _tsmod7._register(_live_b7, 5)
+    _live_refused7 = False
+except _tsmod7.TerminalError:
+    _live_refused7 = True
+check("terminal: a second session is refused, not written over a LIVE one on the same socket",
+      _live_refused7 and _tsmod7.get("live-sid") is _live_a7,
+      "refused=%s, registered=%r — the overwritten shell keeps its pump running and can no "
+      "longer be closed" % (_live_refused7, getattr(_tsmod7.get("live-sid"), "label", None)))
+_live_a7.close("done")
+
 # (c) One decoder per SESSION, not per chunk: a read boundary lands wherever the kernel puts it,
 # so a multi-byte character split across two reads became two replacement characters forever.
 # Driven through the REAL pump over a real pty, in two writes with a pause between them so the
@@ -5949,6 +6083,32 @@ check("terminal: host access is re-validated during a live session",
       and re.search(r"\bcan_access_remote\b", _htr_code7) is not None,
       "access is checked only at open, so revoking it leaves the live shell typing into the host")
 
+# (h) ...and on a TIMER, because a shell following a log sends no events at all. smoke_test drives
+# sweep_revoked_terminals itself; this pins that register() actually runs it: supervise() is
+# handed a function that calls it. From the AST — both names appear in comments and docstrings.
+_htr_tree7 = _ast.parse(_htr_src7)
+_htr_reg7 = next((n for n in _ast.walk(_htr_tree7)
+                  if isinstance(n, _ast.FunctionDef) and n.name == "register"), None)
+_htr_inner7 = {n.name: n for n in _ast.walk(_htr_reg7)
+               if isinstance(n, _ast.FunctionDef)} if _htr_reg7 else {}
+
+
+def _calls_name7(node, name):
+    return any(isinstance(c, _ast.Call) and isinstance(c.func, _ast.Name) and c.func.id == name
+               for c in _ast.walk(node))
+
+
+_htr_supervised7 = [c.args[1].id for c in _ast.walk(_htr_reg7 or _ast.Module(body=[]))
+                    if isinstance(c, _ast.Call) and isinstance(c.func, _ast.Name)
+                    and c.func.id == "supervise" and len(c.args) >= 2
+                    and isinstance(c.args[1], _ast.Name)]
+_htr_sweeps7 = [n for n in _htr_supervised7
+                if n in _htr_inner7 and _calls_name7(_htr_inner7[n], "sweep_revoked_terminals")]
+check("terminal: register() runs the revocation sweep on a timer",
+      bool(_htr_sweeps7),
+      "supervised: %r — none calls sweep_revoked_terminals, so a revoked login's shell that is "
+      "sent no input streams its output until the 15-minute idle sweep" % (_htr_supervised7,))
+
 # ── the local shell needs a CONTROLLING terminal, not just its own session ────────────────────
 # start_new_session=True calls setsid, which is necessary and not sufficient: the child inherits
 # the pty slave as a descriptor rather than opening it, so it ends up with no controlling terminal
@@ -5964,6 +6124,13 @@ check("terminal: host access is re-validated during a live session",
 _ctty_saved7 = _tsmod7._login_shell
 _tsmod7._login_shell = lambda: "/bin/bash"
 _ctty_out7 = []
+# ...and with SIGINT IGNORED in this process, on purpose. An ignored disposition survives fork and
+# exec and bash hands it to every job, so a panel started with it ignored (from a script, with `&`)
+# gave the local terminal jobs that ^C could not stop. This check failed exactly that way whenever
+# the suite itself was launched in the background, and passed in the foreground. The child now
+# resets it; ignoring it here makes the check cover that reset on every run instead of by launch.
+import signal as _ctty_sig7
+_ctty_sigint7 = _ctty_sig7.signal(_ctty_sig7.SIGINT, _ctty_sig7.SIG_IGN)
 
 
 class _CttyRemote7:
@@ -6009,6 +6176,29 @@ try:
     check("terminal: ...a foreground job really starts (the next check needs one)",
           bool(_ctty_started7),
           "nothing was running, so the Ctrl-C check below would pass against a dead shell")
+
+    def _ctty_is_fg7(pids):
+        """Is one of `pids` the job itself yet, holding the terminal's foreground? bash forks the
+        job, hands it the terminal (tcsetpgrp), and only then does the child reset its signal
+        handlers and exec `sleep`. A ^C before the exec lands on bash's own handler in the forked
+        child (or on bash's group, before the tcsetpgrp) and the job never sees it: the check
+        below failed on a loaded machine with nothing wrong in the code."""
+        for _p in pids:
+            try:
+                with open("/proc/%s/stat" % _p) as _fh:
+                    _raw = _fh.read()
+                _comm = _raw[_raw.index("(") + 1:_raw.rindex(")")]
+                _st = _raw[_raw.rindex(")") + 1:].split()
+            except (OSError, ValueError):
+                continue
+            # After the comm: state ppid pgrp session tty_nr tpgid.
+            if _comm == "sleep" and len(_st) > 5 and _st[2] == _st[5]:
+                return True
+        return False
+
+    _t0_7 = _time.time()
+    while _time.time() - _t0_7 < 6 and not _ctty_is_fg7(_ctty_children7()):
+        _time.sleep(0.1)
     _ctty_sess7.write("\x03")
     _t0_7 = _time.time()
     while _time.time() - _t0_7 < 6 and _ctty_children7():
@@ -6016,9 +6206,11 @@ try:
     check("terminal: ...and Ctrl-C interrupts it",
           bool(_ctty_started7) and not _ctty_children7(),
           "the job %r survived Ctrl-C — without a controlling terminal the line discipline has no "
-          "foreground process group to signal" % (_ctty_started7,))
+          "foreground process group to signal, and with SIGINT left ignored from the panel's own "
+          "launch the job ignores it" % (_ctty_started7,))
 finally:
     _tsmod7._login_shell = _ctty_saved7
+    _ctty_sig7.signal(_ctty_sig7.SIGINT, _ctty_sigint7)
     try:
         _tsmod7.close_for_sid("ctty-sid", "test over")
     except Exception:

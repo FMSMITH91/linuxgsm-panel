@@ -221,6 +221,316 @@ else:
     check(".ip-stale{" in _css,
           "install_progress: ...with a style, so 'stale' is visible and not just a class name")
 
+# ── how an install ENDED: four answers, not "failed" and "everything else" ────────────────────
+# settle() split endings into failed/interrupted and the rest, and showed the rest as a green
+# "Installed" that removed itself after 8 s. A `done` job with warn=true (the game took a port
+# another server uses; it installed but did not start) is shown nowhere else, so its caveat read
+# as a success and vanished. `{"status":"none"}` and a non-2xx error body were "Installed" too.
+# The classifier is DRIVEN here, through a small evaluator for pure functions over esprima's AST:
+# there is no JS runtime on the runners, and a text search for 'warn' passed with it unread.
+_JS_UNDEF = object()
+
+
+class _JsReturn(Exception):
+    pass
+
+
+def _js_truthy(v):
+    if v is _JS_UNDEF or v is None:
+        return False
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        return v != ""
+    return True
+
+
+def _js_eval(n, env):
+    """Evaluate the expression subset a pure classifier uses. Anything else raises, so a function
+    that grows beyond it fails the gate loudly instead of being evaluated wrongly."""
+    t = n.get("type")
+    if t == "Literal":
+        return n.get("value")
+    if t == "Identifier":
+        return env.get(n["name"], _JS_UNDEF)
+    if t == "MemberExpression" and not n.get("computed"):
+        o = _js_eval(n["object"], env)
+        return o.get(n["property"]["name"], _JS_UNDEF) if isinstance(o, dict) else _JS_UNDEF
+    if t == "UnaryExpression" and n.get("operator") == "!":
+        return not _js_truthy(_js_eval(n["argument"], env))
+    if t == "LogicalExpression":
+        left = _js_eval(n["left"], env)
+        if n["operator"] == "||":
+            return left if _js_truthy(left) else _js_eval(n["right"], env)
+        if n["operator"] == "&&":
+            return _js_eval(n["right"], env) if _js_truthy(left) else left
+    if t == "BinaryExpression" and n.get("operator") in ("===", "!=="):
+        a, b = _js_eval(n["left"], env), _js_eval(n["right"], env)
+        same = type(a) is type(b) and a == b
+        return same if n["operator"] == "===" else not same
+    if t == "ConditionalExpression":
+        return _js_eval(n["consequent"] if _js_truthy(_js_eval(n["test"], env)) else n["alternate"],
+                        env)
+    raise ValueError("unsupported JS expression %s" % t)
+
+
+def _js_run(stmts, env):
+    for s in stmts:
+        if s.get("type") == "ReturnStatement":
+            raise _JsReturn(_js_eval(s["argument"], env) if s.get("argument") else _JS_UNDEF)
+        if s.get("type") == "IfStatement":
+            br = s["consequent"] if _js_truthy(_js_eval(s["test"], env)) else s.get("alternate")
+            if br:
+                _js_run(br["body"] if br.get("type") == "BlockStatement" else [br], env)
+            continue
+        raise ValueError("unsupported JS statement %s" % s.get("type"))
+
+
+def _js_call(fn, *args):
+    env = {p["name"]: a for p, a in zip(fn["params"], args)}
+    try:
+        _js_run(fn["body"]["body"], env)
+    except _JsReturn as r:
+        return r.args[0]
+    return _JS_UNDEF
+
+
+def _js_find_fn(tree, name):
+    """The FunctionDeclaration called `name`, found anywhere in the tree."""
+    hit = []
+
+    def walk(n):
+        if isinstance(n, dict):
+            if n.get("type") == "FunctionDeclaration" and (n.get("id") or {}).get("name") == name:
+                hit.append(n)
+            for v in n.values():
+                walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                walk(v)
+    walk(tree)
+    return hit[0] if hit else None
+
+
+if not esprima:
+    skip("install_progress: a finished install is classified four ways", "esprima not installed")
+else:
+    _ipo_ast = esprima.parseScript(
+        (ROOT / "static" / "js" / "install_progress.js").read_text(encoding="utf-8"),
+        {"loc": True}).toDict()
+    _ipo_fn = _js_find_fn(_ipo_ast, "outcome")
+    _ipo_cases = [
+        ((True, {"status": "done"}), "ok"),
+        ((True, {"status": "done", "warn": True}), "warn"),
+        ((True, {"status": "failed"}), "bad"),
+        ((True, {"status": "interrupted"}), "bad"),
+        ((True, {"status": "none"}), "unknown"),
+        ((True, {"error": "Permission denied"}), "unknown"),
+        ((False, {"status": "done"}), "unknown"),
+    ]
+    _ipo_wrong = []
+    try:
+        for _a, _want in _ipo_cases:
+            _got = _js_call(_ipo_fn, *_a) if _ipo_fn else "<no outcome() function>"
+            if _got != _want:
+                _ipo_wrong.append("%r -> %r, want %r" % (_a, _got, _want))
+    except ValueError as _e:
+        _ipo_wrong.append(str(_e))
+    check(not _ipo_wrong,
+          "install_progress: a finished install is classified four ways — clean, caveat, failed, "
+          "and no verdict",
+          "; ".join(_ipo_wrong) + " — a done job's warning, or an answer that is not a job at all, "
+          "is shown as a green 'Installed'")
+
+    # SETTLED is data: which endings remove themselves, and in what colour.
+    _ipo_settled = {}
+
+    def _scan_settled(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "VariableDeclarator" and (n.get("id") or {}).get("name") == "SETTLED"
+                    and (n.get("init") or {}).get("type") == "ObjectExpression"):
+                for _p in n["init"]["properties"]:
+                    _k = _p["key"].get("name") or _p["key"].get("value")
+                    _ipo_settled[_k] = {(_q["key"].get("name") or _q["key"].get("value")):
+                                        _q["value"].get("value") for _q in _p["value"]["properties"]}
+            for v in n.values():
+                _scan_settled(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_settled(v)
+    _scan_settled(_ipo_ast)
+    _ipo_dropping = sorted(k for k, v in _ipo_settled.items() if v.get("drop"))
+    check(set(_ipo_settled) >= {"ok", "warn", "bad"} and _ipo_dropping == ["ok"],
+          "install_progress: only a clean install removes its own row",
+          "endings %r; auto-removed: %r — a caveat that disappears after 8 s was never read"
+          % (sorted(_ipo_settled), _ipo_dropping))
+    check((_ipo_settled.get("warn") or {}).get("cls") == "text-warning"
+          and (_ipo_settled.get("warn") or {}).get("dismiss") is True,
+          "install_progress: ...and a caveat is shown as a warning that stays until dismissed",
+          "warn renders as %r" % (_ipo_settled.get("warn"),))
+
+    # ...and settle() actually uses them: the verdict comes from outcome(), and the only timer it
+    # arms is the one SETTLED says to.
+    _ipo_settle = _js_find_fn(_ipo_ast, "settle")
+    _ipo_timers = []
+
+    def _scan_timers(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "CallExpression"
+                    and (n.get("callee") or {}).get("name") == "setTimeout"):
+                _d = (n.get("arguments") or [{}, {}])[1:2]
+                _ipo_timers.append(((_d[0].get("property") or {}).get("name")) if _d else None)
+            for v in n.values():
+                _scan_timers(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_timers(v)
+    if _ipo_settle:
+        _scan_timers(_ipo_settle)
+    check(_ipo_settle is not None and bool(_calls_named(_ipo_settle, "outcome"))
+          and _ipo_timers and all(_t == "drop" for _t in _ipo_timers),
+          "install_progress: settle() takes its verdict from outcome() and times out only what "
+          "SETTLED says to",
+          "settle found=%s, calls outcome=%s, setTimeout delays=%r"
+          % (_ipo_settle is not None, bool(_ipo_settle and _calls_named(_ipo_settle, "outcome")),
+             _ipo_timers))
+
+    # ── a settled row is settled ONCE ─────────────────────────────────────────────────────────
+    # The settled row keeps data-progress-for, and apply() settled every such row not in the live
+    # list — so while any other install kept the timer alive, each 3 s poll fetched install-status
+    # again for it (for a lost job, one more SSH probe of a host that may be down) and rewrote it.
+    # And if that server went live again, fill() found the settled .ip-step, skipped building the
+    # bar and threw on it, aborting apply() for every other job. Structural, from the AST: the
+    # settle() call in apply() must sit under a test that reads data-settled, settle() must set
+    # it, and dashRow() must clear a settled row before filling it.
+    def _member_calls(node, method, first_literal):
+        found = []
+
+        def walk(n):
+            if isinstance(n, dict):
+                c = n.get("callee") or {}
+                if (n.get("type") == "CallExpression" and c.get("type") == "MemberExpression"
+                        and (c.get("property") or {}).get("name") == method
+                        and (n.get("arguments") or [{}])[0].get("value") == first_literal):
+                    found.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+                for v in n.values():
+                    walk(v)
+            elif isinstance(n, list):
+                for v in n:
+                    walk(v)
+        walk(node)
+        return found
+
+    def _guarded_calls(node, name, tests=()):
+        """(line, [enclosing if-tests]) for every call to `name` under `node`."""
+        out = []
+        if isinstance(node, dict):
+            if (node.get("type") == "CallExpression"
+                    and (node.get("callee") or {}).get("name") == name):
+                out.append((((node.get("loc") or {}).get("start") or {}).get("line"), list(tests)))
+            if node.get("type") == "IfStatement":
+                out += _guarded_calls(node.get("test"), name, tests)
+                out += _guarded_calls(node.get("consequent"), name, tests + (node.get("test"),))
+                out += _guarded_calls(node.get("alternate"), name, tests)
+            else:
+                for v in node.values():
+                    out += _guarded_calls(v, name, tests)
+        elif isinstance(node, list):
+            for v in node:
+                out += _guarded_calls(v, name, tests)
+        return out
+
+    _ipa_apply = _js_find_fn(_ipo_ast, "apply")
+    _ipa_calls = _guarded_calls(_ipa_apply, "settle") if _ipa_apply else []
+    _ipa_unguarded = [ln for ln, tests in _ipa_calls
+                      if not any(_member_calls(t, "hasAttribute", "data-settled") for t in tests)]
+    check(bool(_ipa_calls) and not _ipa_unguarded,
+          "install_progress: a row that has already settled is not settled again on every poll",
+          "settle() calls in apply(): %r; not guarded by data-settled at line(s) %r"
+          % ([ln for ln, _ in _ipa_calls], _ipa_unguarded))
+    check(_ipo_settle is not None
+          and bool(_member_calls(_ipo_settle, "setAttribute", "data-settled")),
+          "install_progress: ...because settle() marks the row it has settled",
+          "settle() never sets data-settled, so the guard above never holds")
+    _ipa_dash = _js_find_fn(_ipo_ast, "dashRow")
+    _ipa_clears = []
+
+    def _scan_settled_branch(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "IfStatement"
+                    and _member_calls(n.get("test"), "hasAttribute", "data-settled")):
+                def _cl(m):
+                    if isinstance(m, dict):
+                        if (m.get("type") == "AssignmentExpression"
+                                and ((m.get("left") or {}).get("property") or {}).get("name")
+                                == "textContent"
+                                and (m.get("right") or {}).get("value") == ""):
+                            _ipa_clears.append(True)
+                        for v in m.values():
+                            _cl(v)
+                    elif isinstance(m, list):
+                        for v in m:
+                            _cl(v)
+                _cl(n.get("consequent"))
+            for v in n.values():
+                _scan_settled_branch(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_settled_branch(v)
+    if _ipa_dash:
+        _scan_settled_branch(_ipa_dash)
+    check(_ipa_dash is not None
+          and bool(_member_calls(_ipa_dash, "removeAttribute", "data-settled")) and _ipa_clears,
+          "install_progress: ...and a settled row that goes live again is rebuilt, not filled",
+          "dashRow() fills a settled row as it stands: fill() finds its .ip-step, skips building "
+          "the bar and throws on it")
+
+    # ── "still trying" has to reach the Install page's boxes too ─────────────────────────────
+    # markStale() selected only the dashboard's rows, so on Install a Server a dead poll left the
+    # box showing its last step, percent and elapsed seconds, undimmed: the frozen-reading-as-live
+    # defect the stale marking exists to prevent. The selector markStale() queries is resolved
+    # from the AST (a literal, or the variable it names) and must cover both hosts.
+    _ips_fn = _js_find_fn(_ipo_ast, "markStale")
+    _ips_consts = {}
+
+    def _scan_consts(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "VariableDeclarator" and (n.get("init") or {}).get("type") == "Literal"
+                    and isinstance(n["init"].get("value"), str)):
+                _ips_consts[(n.get("id") or {}).get("name")] = n["init"]["value"]
+            for v in n.values():
+                _scan_consts(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_consts(v)
+    _scan_consts(_ipo_ast)
+    _ips_sel = []
+
+    def _scan_qsa(n):
+        if isinstance(n, dict):
+            c = n.get("callee") or {}
+            if (n.get("type") == "CallExpression"
+                    and (c.get("property") or {}).get("name") == "querySelectorAll"):
+                a = (n.get("arguments") or [{}])[0]
+                _ips_sel.append(a.get("value") if a.get("type") == "Literal"
+                                else _ips_consts.get(a.get("name"), ""))
+            for v in n.values():
+                _scan_qsa(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_qsa(v)
+    if _ips_fn:
+        _scan_qsa(_ips_fn)
+    _ips_parts = [p.strip() for s in _ips_sel for p in (s or "").split(",")]
+    check("#install-running [data-install-id]" in _ips_parts
+          and any(p.startswith("tr[data-progress-for]") for p in _ips_parts),
+          "install_progress: a stalled poll is marked on the Install page's boxes as well as the "
+          "dashboard's rows",
+          "markStale() queries %r — the Install page's progress stays frozen and undimmed"
+          % (_ips_sel,))
+
 # ── a filter that only runs on `change` does not run on the common setup ─────────────────────
 # The install picker greys out the games LinuxGSM caps below the host's release, from the host
 # selector's change event. With ONE host the select is rendered already selected and never fires
@@ -262,6 +572,63 @@ else:
           "manage_servers: the game filter runs on page LOAD, not only on host change",
           "nothing calls filterGamesForHost/hostChanged at load — with a single host the select "
           "never fires `change`, so every capped game stays selectable")
+
+    # ── ...and an answer about a host that is no longer selected is not applied ──────────────
+    # /specs and /api/free-port probe the host over SSH on first use, so replies arrive in the
+    # order the hosts answer. Each was applied on arrival: a slow 24.04 host's reply, landing after
+    # the operator had switched to a 20.04 one, greyed out four games and blamed "this host".
+    # From the AST: inside the fetch callbacks, filterGamesForHost applies only under a
+    # _hostStillSelected test, and suggestFreePort bails on one before it touches the port field.
+    def _cb_applies(n, tests=(), in_cb=False, out=None):
+        out = [] if out is None else out
+        if isinstance(n, dict):
+            t = n.get("type")
+            if t in ("FunctionExpression", "ArrowFunctionExpression"):
+                for v in n.values():
+                    _cb_applies(v, tests, True, out)
+                return out
+            if t == "IfStatement":
+                _cb_applies(n.get("test"), tests, in_cb, out)
+                _cb_applies(n.get("consequent"), tests + (n.get("test"),), in_cb, out)
+                _cb_applies(n.get("alternate"), tests, in_cb, out)
+                return out
+            if (t == "CallExpression" and (n.get("callee") or {}).get("name") == "apply"
+                    and in_cb):
+                out.append(any(_calls_named(x, "_hostStillSelected") for x in tests))
+            for v in n.values():
+                _cb_applies(v, tests, in_cb, out)
+        elif isinstance(n, list):
+            for v in n:
+                _cb_applies(v, tests, in_cb, out)
+        return out
+    _ms_fg = _js_find_fn(_ms_ast, "filterGamesForHost")
+    _ms_fg_calls = _cb_applies(((_ms_fg or {}).get("body") or {}).get("body") or [])
+    check(bool(_ms_fg_calls) and all(_ms_fg_calls),
+          "manage_servers: a host's OS answer is applied only while that host is still selected",
+          "callback apply() calls guarded: %r" % (_ms_fg_calls,))
+    _ms_fp = _js_find_fn(_ms_ast, "suggestFreePort")
+    _ms_fp_bail, _ms_fp_write = [], []
+
+    def _scan_fp(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "IfStatement" and _calls_named(n.get("test"), "_hostStillSelected")):
+                c = n.get("consequent") or {}
+                rets = c.get("body") if c.get("type") == "BlockStatement" else [c]
+                if any((r or {}).get("type") == "ReturnStatement" for r in rets):
+                    _ms_fp_bail.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            if (n.get("type") == "AssignmentExpression"
+                    and ((n.get("left") or {}).get("object") or {}).get("name") == "portEl"):
+                _ms_fp_write.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            for v in n.values():
+                _scan_fp(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_fp(v)
+    if _ms_fp:
+        _scan_fp(_ms_fp)
+    check(bool(_ms_fp_write) and bool(_ms_fp_bail) and min(_ms_fp_bail) < min(_ms_fp_write),
+          "manage_servers: a free-port answer for another host never rewrites the port field",
+          "host-still-selected bail at %r, port write at %r" % (_ms_fp_bail, _ms_fp_write))
 
 # ── A form that appears AFTER page load carries no CSRF token ─────────────────────────────────
 # panel.js gives every POST form a hidden csrf_token, once, on DOMContentLoaded, and wraps fetch()
@@ -1719,6 +2086,263 @@ check(_sd_ver_tag and _sd_ver_tag.group(1).strip() != "",
       "version: it is rendered with a placeholder, not left empty until the fetch lands",
       "rendered as %r" % (_sd_ver_tag.group(1) if _sd_ver_tag else None))
 
+# ── an element server_detail.js shows and hides through style.display cannot carry d-* ────────
+# Bootstrap's display utilities are !important, so .d-flex beats both an inline display:none and
+# `el.style.display = 'none'`. #pl-announce carried d-flex: the Say box showed from first paint
+# on every game, including those with no console moderation, where pressing Say answers "not
+# supported". Every id whose display the script sets is resolved from the AST (a var bound to
+# getElementById, or the call itself) and its tag in the template is read for a d-* class.
+if not esprima:
+    skip("server page: no element the script shows/hides by style.display has a d-* class",
+         "esprima not installed")
+else:
+    _sdd_ast = esprima.parseScript(_sd_js, {"loc": True}).toDict()
+    _sdd_vars, _sdd_ids = {}, set()
+
+    def _gebi_id(n):
+        c = (n or {}).get("callee") or {}
+        if ((n or {}).get("type") == "CallExpression"
+                and (c.get("property") or {}).get("name") == "getElementById"):
+            a = (n.get("arguments") or [{}])[0]
+            return a.get("value") if a.get("type") == "Literal" else None
+        return None
+
+    def _scan_display(n):
+        if isinstance(n, dict):
+            if n.get("type") == "VariableDeclarator" and _gebi_id(n.get("init")):
+                _sdd_vars[(n.get("id") or {}).get("name")] = _gebi_id(n.get("init"))
+            if (n.get("type") == "AssignmentExpression"
+                    and (n.get("left") or {}).get("type") == "Identifier"
+                    and _gebi_id(n.get("right"))):
+                _sdd_vars[n["left"]["name"]] = _gebi_id(n.get("right"))
+            if n.get("type") == "AssignmentExpression":
+                lf = n.get("left") or {}
+                st = lf.get("object") or {}
+                if ((lf.get("property") or {}).get("name") == "display"
+                        and (st.get("property") or {}).get("name") == "style"):
+                    tgt = st.get("object") or {}
+                    _sdd_ids.add(_gebi_id(tgt) or ("var:" + str(tgt.get("name"))))
+            for v in n.values():
+                _scan_display(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_display(v)
+    _scan_display(_sdd_ast)
+    _sdd_resolved = {(_sdd_vars.get(i[4:]) if i.startswith("var:") else i) for i in _sdd_ids}
+    _sdd_resolved.discard(None)
+    _sdd_bad, _sdd_seen = [], []
+    for _id in sorted(_sdd_resolved):
+        _m = re.search(r'<[a-z]+\b[^>]*\bid="%s"[^>]*>' % re.escape(_id), _sd_src)
+        if not _m:
+            continue
+        _sdd_seen.append(_id)
+        _cls = re.search(r'\bclass="([^"]*)"', _m.group(0))
+        if _cls and re.search(r"\bd-(?:[a-z]+-)?(?:flex|block|inline|inline-block|inline-flex|grid|"
+                              r"table|none)\b", _cls.group(1)):
+            _sdd_bad.append("%s (%s)" % (_id, _cls.group(1)))
+    check("pl-announce" in _sdd_seen,
+          "server page: the style.display walker finds the announce box it has to judge",
+          "resolved ids in the template: %r — the next check would examine nothing" % _sdd_seen)
+    check(not _sdd_bad,
+          "server page: no element the script shows/hides by style.display has a d-* class",
+          "%s — Bootstrap's d-* is !important, so the script's display:none never applies"
+          % "; ".join(_sdd_bad))
+
+    # ── consoleEl may be null: nothing that runs at load or on a socket event may assume it ──
+    # The Console panel is hideable and a hidden panel is not rendered, so #console-output can be
+    # absent. applyTsVisible() is called at top level and did `consoleEl.classList...`: it threw,
+    # and everything after it — the daily-restart time, the game version, the post-update re-read
+    # — never ran, on every visit, for anyone who had hidden the panel. This walks what runs
+    # SYNCHRONOUSLY from top-level code and from each socket.on handler, following calls into
+    # named functions, and stops at a guard: `if (!consoleEl …) return` ends the path, and
+    # `if (consoleEl …) {…}` / `consoleEl && …` shelter what they guard. Callbacks (.then,
+    # timers) are not synchronous and are not followed.
+    _sdn_funcs = {}
+
+    def _sdn_collect(n):
+        if isinstance(n, dict):
+            if n.get("type") == "FunctionDeclaration" and n.get("id"):
+                _sdn_funcs[n["id"]["name"]] = n
+            for v in n.values():
+                _sdn_collect(v)
+        elif isinstance(n, list):
+            for v in n:
+                _sdn_collect(v)
+    _sdn_collect(_sdd_ast)
+
+    def _sdn_mentions(n, negated_only=None):
+        """Does `n` test the element? negated_only=True: only as `!el`; False: only bare."""
+        hit = []
+
+        def walk(m, under_not):
+            if isinstance(m, dict):
+                if m.get("type") == "Identifier" and m.get("name") == _sdn_name:
+                    hit.append(under_not)
+                    return
+                if m.get("type") == "UnaryExpression" and m.get("operator") == "!":
+                    walk(m.get("argument"), True)
+                    return
+                for v in m.values():
+                    walk(v, under_not)
+            elif isinstance(m, list):
+                for v in m:
+                    walk(v, under_not)
+        walk(n, False)
+        if negated_only is None:
+            return bool(hit)
+        return any(h == negated_only for h in hit)
+
+    def _sdn_is_bail(st):
+        if st.get("type") != "IfStatement" or not _sdn_mentions(st.get("test"), True):
+            return False
+        c = st.get("consequent") or {}
+        body = c.get("body") if c.get("type") == "BlockStatement" else [c]
+        return any((b or {}).get("type") == "ReturnStatement" for b in body)
+
+    def _sdn_stmts(stmts, seen):
+        out = []
+        for st in stmts or []:
+            if _sdn_is_bail(st):
+                break
+            out += _sdn_scan(st, seen)
+        return out
+
+    def _sdn_scan(n, seen):
+        if isinstance(n, list):
+            return [x for v in n for x in _sdn_scan(v, seen)]
+        if not isinstance(n, dict):
+            return []
+        t = n.get("type")
+        if t in ("FunctionExpression", "ArrowFunctionExpression", "FunctionDeclaration"):
+            return []
+        if t == "BlockStatement":
+            return _sdn_stmts(n.get("body"), seen)
+        if t == "IfStatement":
+            out = _sdn_scan(n.get("test"), seen)
+            if _sdn_mentions(n.get("test"), False):
+                return out + _sdn_scan(n.get("alternate"), seen)
+            return out + _sdn_scan(n.get("consequent"), seen) + _sdn_scan(n.get("alternate"), seen)
+        if (t == "LogicalExpression" and n.get("operator") == "&&"
+                and _sdn_mentions(n.get("left"), False)):
+            return _sdn_scan(n.get("left"), seen)
+        if (t == "MemberExpression" and (n.get("object") or {}).get("type") == "Identifier"
+                and n["object"].get("name") == _sdn_name):
+            return [((n.get("loc") or {}).get("start") or {}).get("line")]
+        out = []
+        if t == "CallExpression":
+            c = n.get("callee") or {}
+            if c.get("type") == "Identifier" and c.get("name") in _sdn_funcs \
+                    and c["name"] not in seen:
+                out += ["%s:%s" % (c["name"], ln) for ln in
+                        _sdn_stmts(_sdn_funcs[c["name"]]["body"]["body"], seen | {c["name"]})]
+            if c.get("type") == "FunctionExpression":            # an IIFE runs right now
+                out += _sdn_stmts(c["body"]["body"], seen)
+        for k, v in n.items():
+            if k != "loc":
+                out += _sdn_scan(v, seen)
+        return out
+
+    # Run once per element the Console panel carries: #console-output (consoleEl) and the
+    # connection label in its header (wsStatus). The connect handler did wsStatus.textContent
+    # first, so with the panel hidden it threw before it joined the console room.
+    _sdn_name = "consoleEl"
+    _sdn_entries = [("top level", _sdd_ast["body"])]
+    for _st in _sdd_ast["body"]:
+        _ex = (_st or {}).get("expression") or {}
+        _cal = _ex.get("callee") or {}
+        if (_ex.get("type") == "CallExpression" and (_cal.get("property") or {}).get("name") == "on"
+                and len(_ex.get("arguments") or []) >= 2
+                and _ex["arguments"][1].get("type") == "FunctionExpression"):
+            _sdn_entries.append(("socket.on(%r)" % _ex["arguments"][0].get("value"),
+                                 _ex["arguments"][1]["body"]["body"]))
+    _sdn_bad = []
+    _sdn_handlers = dict(_sdn_entries)
+    for _sdn_name in ("consoleEl", "wsStatus"):
+        for _nm, _body in _sdn_entries:
+            _hits = _sdn_stmts(_body, frozenset())
+            if _hits:
+                _sdn_bad.append("%s: %s -> %s" % (_sdn_name, _nm, _hits[:4]))
+    _sdn_name = "consoleEl"
+    _sdn_ctrl = _sdn_stmts(_sdn_funcs.get("clearConsole", {}).get("body", {}).get("body", [])[1:],
+                           frozenset())
+    # ...and for wsStatus: the disconnect handler's own derefs, read past its guard.
+    _sdn_name = "wsStatus"
+    _sdn_ctrl_ws = _sdn_stmts((_sdn_handlers.get("socket.on('disconnect')") or [])[1:], frozenset())
+    _sdn_name = "consoleEl"
+    check(len(_sdn_entries) >= 3 and bool(_sdn_ctrl) and bool(_sdn_ctrl_ws),
+          "server page: the null-console walker sees the socket handlers and finds a real deref "
+          "past a guard (positive control)",
+          "entries=%d, derefs in clearConsole's body after its guard=%r, in the disconnect "
+          "handler's after its guard=%r" % (len(_sdn_entries), _sdn_ctrl, _sdn_ctrl_ws))
+    check(not _sdn_bad,
+          "server page: nothing that runs at load or on a socket event assumes the console exists",
+          "; ".join(_sdn_bad) + " — with the Console panel hidden, #console-output is absent and "
+          "this throws; at top level it ends the script")
+
+    # ...and "Load older" does not read a refusal as an empty log.
+    _sdn_lmc = _sdn_funcs.get("loadMoreConsole")
+    _sdn_okret, _sdn_wipe = [], []
+
+    def _sdn_scan_lmc(n):
+        if isinstance(n, dict):
+            if n.get("type") == "IfStatement" and '"name": "ok"' in json.dumps(n.get("test")):
+                c = n.get("consequent") or {}
+                body = c.get("body") if c.get("type") == "BlockStatement" else [c]
+                if any((b or {}).get("type") == "ReturnStatement" for b in body):
+                    _sdn_okret.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            if (n.get("type") == "AssignmentExpression"
+                    and ((n.get("left") or {}).get("property") or {}).get("name") == "innerHTML"
+                    and ((n.get("left") or {}).get("object") or {}).get("name") == "consoleEl"):
+                _sdn_wipe.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            for v in n.values():
+                _sdn_scan_lmc(v)
+        elif isinstance(n, list):
+            for v in n:
+                _sdn_scan_lmc(v)
+    if _sdn_lmc:
+        _sdn_scan_lmc(_sdn_lmc)
+    check(bool(_sdn_wipe) and bool(_sdn_okret) and min(_sdn_okret) < min(_sdn_wipe),
+          "server page: 'Load older' stops on a refused answer before it clears the console",
+          "response-status bail at %r, console wipe at %r — a 403 wipes the screen and reports "
+          "'Loaded 0 lines'" % (_sdn_okret, _sdn_wipe))
+
+    # ── Enter does not re-send a command or an announcement that is still in flight ─────────
+    # Both are bound on keydown. runCustomCommand never looked at btn.disabled, so a second Enter
+    # ran the command twice and saved the spinner as the button's label; announceSay had no guard
+    # at all and cleared its box only on the answer, so each Enter (and key auto-repeat) broadcast
+    # the message to every player again. From the AST: each function's FIRST statement bails when
+    # a request is already running, and announceSay raises its flag before the fetch and drops it
+    # in a finally.
+    def _first_bail_on(fn, needle):
+        body = (((fn or {}).get("body") or {}).get("body") or [])
+        st = body[0] if body else {}
+        c = st.get("consequent") or {}
+        rets = c.get("body") if c.get("type") == "BlockStatement" else [c]
+        return (st.get("type") == "IfStatement" and needle in json.dumps(st.get("test"))
+                and any((r or {}).get("type") == "ReturnStatement" for r in rets))
+    _en_run = _sdn_funcs.get("runCustomCommand")
+    _en_say = _sdn_funcs.get("announceSay")
+    check(_first_bail_on(_en_run, '"name": "disabled"'),
+          "server page: a custom command already running is not sent again by another Enter",
+          "runCustomCommand does not start by returning while its button is disabled")
+    _en_say_src = json.dumps(_en_say or {})
+    check(_first_bail_on(_en_say, '"name": "_saying"') and '"finally"' in _en_say_src,
+          "server page: an announcement in flight is not broadcast again by another Enter",
+          "announceSay does not bail on an in-flight flag, or never clears it in a finally")
+
+    # ── player names are the players', not the catalog's ─────────────────────────────────────
+    # The walker swaps a text node that EXACTLY matches a key, so a player named "Admin" showed as
+    # "Administrador" in the list and in the ban confirmation, while the ban targeted "Admin".
+    _pn_row = re.search(r"'(<tr><td[^']*)'\s*\+\s*escapeHtml\(p\.name\)", _sd_js)
+    _pn_ban = re.search(r"'Ban (<strong[^']*)'\s*\+\s*_esc\(name\)", _sd_js)
+    check(_pn_row is not None and _pn_ban is not None,
+          "server page: the player-name cell and the ban confirmation were found",
+          "row=%s ban=%s — the check below would examine nothing" % (bool(_pn_row), bool(_pn_ban)))
+    check(bool(_pn_row and "data-no-i18n" in _pn_row.group(1)
+               and _pn_ban and "data-no-i18n" in _pn_ban.group(1)),
+          "server page: a player's name is exempt from translation in the list and the ban dialog",
+          "row cell %r, ban dialog %r" % (_pn_row and _pn_row.group(1), _pn_ban and _pn_ban.group(1)))
+
 # ── The console's poll delta is stamped, and an all-history console says why it is not ────────
 # refreshConsole has two branches: the PRIMING pass (history — a window of a log file written
 # before the panel looked, correctly unstamped) and the delta (new output the panel just watched
@@ -2247,6 +2871,66 @@ else:
 check("if (tr.hasAttribute('data-progress-for')) return;" in _dashjs3
       and "prog.style.display = match" in _dashjs3,
       "js: filtering hides a progress row with its server, not on its own text")
+
+# ── a card-region swap keeps the bulk selection, and the bar never claims one it lost ─────────
+# refreshSection('#server-cards') replaces every row checkbox with an unticked one, but both bulk
+# bars sit OUTSIDE #server-cards and kept "3 selected" with their buttons — which then found
+# nothing checked and returned without a word. From the AST: afterDashRefresh's FIRST statement
+# restores the selection (before filterServers or anything else reads the boxes), the restore
+# re-syncs the bar, updateBulkBar records what it counted, and an empty bulkAction says so.
+if not esprima:
+    skip("js: a card-region swap restores the bulk selection before anything reads it",
+         "esprima not installed")
+else:
+    _bs_ast = _d3_ast
+    _bs_after = []
+
+    def _scan_after(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "AssignmentExpression"
+                    and ((n.get("left") or {}).get("property") or {}).get("name") == "afterDashRefresh"
+                    and (n.get("right") or {}).get("type") == "FunctionExpression"):
+                _bs_after.append(n["right"]["body"]["body"])
+            for v in n.values():
+                _scan_after(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_after(v)
+    _scan_after(_bs_ast)
+    _bs_first = (_bs_after[0][0] if _bs_after and _bs_after[0] else {}).get("expression") or {}
+    check(((_bs_first.get("callee") or {}).get("name")) == "restoreBulkSelection",
+          "js: a card-region swap restores the bulk selection before anything reads it",
+          "afterDashRefresh starts with %r — the bars keep 'N selected' over unticked boxes"
+          % ((_bs_first.get("callee") or {}).get("name"),))
+    _bs_restore = _js_find_fn(_bs_ast, "restoreBulkSelection")
+    _bs_update = _js_find_fn(_bs_ast, "updateBulkBar")
+    check(_bs_restore is not None and bool(_calls_named(_bs_restore, "updateBulkBar"))
+          and _bs_update is not None and "_bulkSelected" in json.dumps(_bs_update),
+          "js: ...the restore re-syncs the bar, and the bar records what it counted",
+          "restoreBulkSelection calls updateBulkBar=%s; updateBulkBar records _bulkSelected=%s"
+          % (bool(_bs_restore and _calls_named(_bs_restore, "updateBulkBar")),
+             bool(_bs_update and "_bulkSelected" in json.dumps(_bs_update))))
+    _bs_bulk = _js_find_fn(_bs_ast, "bulkAction")
+    _bs_silent = []
+
+    def _scan_empty(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "IfStatement"
+                    and '"name": "length"' in json.dumps(n.get("test"))
+                    and (n.get("test") or {}).get("type") == "UnaryExpression"):
+                c = n.get("consequent") or {}
+                if not _calls_named(c, "toast"):
+                    _bs_silent.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            for v in n.values():
+                _scan_empty(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_empty(v)
+    if _bs_bulk:
+        _scan_empty(_bs_bulk)
+    check(_bs_bulk is not None and not _bs_silent,
+          "js: a bulk action with nothing selected says so instead of doing nothing",
+          "silent empty-selection return(s) at line(s) %r" % (_bs_silent,))
 
 # ── install progress has to be visible from wherever you are ──────────────────────────────────
 # The progress row lives on the Game Servers page and nowhere else, so an install started from

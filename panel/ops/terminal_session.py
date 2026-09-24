@@ -316,22 +316,33 @@ class Session:
             if self._closed:
                 return
             self._closed = True
-        # The process goes first, and only then the fd: killing the child closes the pty slave,
-        # the pump's next read returns EOF, and the pump closes the master itself. Closing the fd
-        # out from under a thread that is select()ing on it is a use-after-free for file
-        # descriptors — the number is immediately reusable, so the pump can wake up on some other
-        # session's socket and write ITS bytes into this browser.
+        self._teardown()
+        # Only THIS session's entry. Teardown yields (the kill grace, the pump join), and a newer
+        # session can register under the same socket meanwhile — a term_open after the idle
+        # sweeper started closing this one. Popping by sid removed that live shell from the map,
+        # where input, the disconnect hook, the sweeper and the per-user cap all look for it.
+        with _sessions_lock:
+            if _sessions.get(self.sid) is self:
+                del _sessions[self.sid]
+        try:
+            self._on_exit(self.sid, reason)
+        except Exception:  # nosec B110
+            _log.debug("terminal exit callback failed for %s", self.label, exc_info=True)
+
+    def _teardown(self):
+        """Release whatever transport is attached. Every step is safe to run twice.
+
+        The process goes first, and only then the fd: killing the child closes the pty slave,
+        the pump's next read returns EOF, and the pump closes the master itself. Closing the fd
+        out from under a thread that is select()ing on it is a use-after-free for file
+        descriptors — the number is immediately reusable, so the pump can wake up on some other
+        session's socket and write ITS bytes into this browser.
+        """
         for shut in (self._close_chan, self._close_proc, self._close_fd, self._close_client):
             try:
                 shut()
             except Exception:  # nosec B110
                 _log.debug("terminal teardown step failed for %s", self.label, exc_info=True)
-        with _sessions_lock:
-            _sessions.pop(self.sid, None)
-        try:
-            self._on_exit(self.sid, reason)
-        except Exception:  # nosec B110
-            _log.debug("terminal exit callback failed for %s", self.label, exc_info=True)
 
     def _close_chan(self):
         if self._chan is not None:
@@ -494,10 +505,19 @@ def start_idle_sweeper(supervise):
 
 def _register(sess, user_key):
     with _sessions_lock:
-        if len(_sessions) >= _MAX_SESSIONS_TOTAL:
+        # One shell per socket. A LIVE entry under this sid is refused, never overwritten: an
+        # overwritten session keeps running with its pump emitting to the room, but nothing can
+        # reach it any more to type into it or close it. An entry that is already closing is only
+        # waiting for its teardown and is replaced — and not counted against the caps below.
+        prior = _sessions.get(sess.sid)
+        if prior is not None and not prior.closed:
+            raise TerminalError("A terminal is already open on this connection. Reload the page "
+                                "to start another.")
+        others = [s for s in _sessions.values() if s is not prior]
+        if len(others) >= _MAX_SESSIONS_TOTAL:
             raise TerminalError("Too many terminal sessions are open on this panel (%d). Close one "
                                 "and try again." % _MAX_SESSIONS_TOTAL)
-        mine = sum(1 for s in _sessions.values() if s.user_key == user_key)
+        mine = sum(1 for s in others if s.user_key == user_key)
         if mine >= _MAX_SESSIONS_PER_USER:
             raise TerminalError("You already have %d terminals open. Close one and try again."
                                 % _MAX_SESSIONS_PER_USER)
@@ -524,6 +544,15 @@ def open_session(sid, server, is_local, user_key, on_output, on_exit, cols=80, r
         sess.close("")
         _log.warning("terminal open failed for %s", label, exc_info=True)
         raise TerminalError("Could not start a shell on %s (%s)." % (label, type(e).__name__))
+    # The session is registered BEFORE its transport opens, and a paramiko connect can take the
+    # whole ssh_timeout. A close in that window (the tab closing, term_close, a second term_open)
+    # found nothing attached and tore nothing down; the opener then attached a client and a live
+    # login shell to a session already marked closed, and close() — idempotent — never ran again.
+    # That connection stayed up until the panel restarted, outside the sweeper and the caps. So
+    # look again now that the transport exists, and release it here.
+    if sess.closed:
+        sess._teardown()
+        raise TerminalError("The terminal on %s closed while it was opening." % label)
     return sess
 
 
@@ -575,8 +604,23 @@ def _open_local(sess, cols, rows):
         job control in this shell") and carries on. fish refuses outright: "No TTY for interactive
         shell (tcgetpgrp failed)", and exits immediately — which is how this was finally noticed,
         on a machine whose passwd shell is fish.
+
+        Then SIGINT and SIGQUIT go back to their defaults. An ignored disposition survives fork
+        and exec, and the shell hands the dispositions it started with to every job it runs, so a
+        panel started with them ignored — from a script with `&`, where the shell ignores both for
+        a background command — gave every local terminal a `sleep`, a `tail -f` or a runaway loop
+        that ^C and ^\\ could not stop, with the foreground process group set up correctly. It
+        worked under systemd only because systemd starts the service with default dispositions.
         """
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+        # After the ioctl, and on its own: without a controlling terminal there is no Ctrl-C at
+        # all, while a failure here costs only the reset. signal.signal is allowed in this child —
+        # subprocess runs PyOS_AfterFork_Child before preexec_fn, making this its main thread.
+        try:
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+        except (OSError, ValueError):  # nosec B110
+            pass
 
     try:
         proc = subprocess.Popen(  # nosec B603  # nosemgrep - argv list, no shell=True; argv[0] is

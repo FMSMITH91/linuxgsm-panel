@@ -766,8 +766,58 @@ try:
     check("run_game_backup: runs LinuxGSM backup as the game user",
           _gok is True and _gskip is False and "sudo -u gm bash -c" in _joined and "./gmodserver backup" in _joined)
     check("run_game_backup: prunes to keep N (keep=2 -> tail +3)", "tail -n +3" in _joined)
+    # The inner script arrives shell-quoted inside `bash -c`, so unquote it before looking.
+    import shlex as _bl_shlex                                                      # noqa: E402
+    _bl_inner = [_bl_shlex.split(c)[-1] for c in _cap7["cmds"]
+                 if c.startswith("sudo -u gm bash -c ")]
+    check("run_game_backup: clears stale locks through _stale_backup_lock_sweep",
+          any(_sm_game._stale_backup_lock_sweep("gm") in _i for _i in _bl_inner),
+          "the backup command no longer uses the sweep the checks below execute: %r"
+          % ([_i[:160] for _i in _bl_inner],))
 finally:
     _sm_core.run_command = _orig_run8
+
+# ── a backup.lock is orphaned only when no backup is running ─────────────────────────────────
+# Any lock older than five minutes was deleted, on a comment's word that the panel runs one game
+# backup at a time under "a lock in app.py". The lock is in panel_state and covers only the
+# panel's own backup runners; the control bar's and the bots' `backup` action, a host cron and the
+# terminal all run LinuxGSM's backup outside it. A backup still archiving after five minutes lost
+# its lock and got a second backup started beside it. The sweep is EXECUTED here, in a scratch
+# home with a ten-minute-old lock, with `pgrep` swapped for one that answers as told.
+import tempfile as _bl_tf                                                          # noqa: E402
+import shutil as _bl_sh                                                            # noqa: E402
+import subprocess as _bl_sp                                                        # noqa: E402
+import time as _bl_time                                                            # noqa: E402
+_bl_root = _bl_tf.mkdtemp(prefix="bklock-")
+_bl_res = {}
+try:
+    _bl_bin = os.path.join(_bl_root, "bin")
+    os.mkdir(_bl_bin)
+    for _bl_case, _bl_rc in (("tar running", 0), ("nothing running", 1)):
+        _bl_home = os.path.join(_bl_root, _bl_case.replace(" ", "-"))
+        os.makedirs(os.path.join(_bl_home, "lgsm", "lock"))
+        _bl_lock = os.path.join(_bl_home, "lgsm", "lock", "backup.lock")
+        open(_bl_lock, "w").close()
+        _bl_old = _bl_time.time() - 600
+        os.utime(_bl_lock, (_bl_old, _bl_old))
+        with open(os.path.join(_bl_bin, "pgrep"), "w") as _bl_f:
+            _bl_f.write("#!/bin/sh\nexit %d\n" % _bl_rc)
+        os.chmod(os.path.join(_bl_bin, "pgrep"), 0o755)
+        _bl_sp.run(["bash", "-c", _sm_game._stale_backup_lock_sweep("gm", home=_bl_home) + "true"],
+                   env=dict(os.environ, PATH=_bl_bin + os.pathsep + os.environ.get("PATH", "")),
+                   timeout=20, check=False)
+        _bl_res[_bl_case] = os.path.exists(_bl_lock)
+finally:
+    _bl_sh.rmtree(_bl_root, ignore_errors=True)
+check("run_game_backup: an old backup.lock is KEPT while a tar is running as the game user",
+      _bl_res.get("tar running") is True,
+      "deleted=%s — a backup started outside the panel's lock (control bar, bot, cron, terminal) "
+      "that is still archiving after five minutes gets a second backup beside it"
+      % (_bl_res.get("tar running") is False,))
+check("run_game_backup: ...and cleared when nothing is archiving (positive control)",
+      _bl_res.get("nothing running") is False,
+      "still present=%s — a crashed backup's lock would block every backup after it"
+      % (_bl_res.get("nothing running"),))
 
 # ── players-online guard: don't kick players for a backup unless forced ──
 _orig_run8b = _sm_core.run_command
