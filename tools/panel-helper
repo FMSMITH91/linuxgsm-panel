@@ -3368,29 +3368,55 @@ def do_content_grant_read(args, content):
     # Traversal, outermost first: the home, then serverfiles, then each granted game tree. The
     # shell form skipped serverfiles because content-dir-create had already made it group-readable;
     # it does not any more, so the grant is what opens the path.
-    for _dir in (home_of(content_user), content_path(content_user, CONTENT_SUBDIR)):
+    #
+    # Every step below works from DESCRIPTORS pinned here. The home's parent is root's, so the home
+    # opened O_NOFOLLOW is the real one; serverfiles is opened O_NOFOLLOW relative to it. The walk
+    # used to start from the PATH .../serverfiles/<game>: fwalk's own check covers the last
+    # component only, so the content account could make ~/serverfiles a symlink to another tenant's
+    # directory and have root `chmod g+rX` that tenant's game tree for the content group — the same
+    # shape content-game-remove had with rmtree.
+    try:
+        home_fd = os.open(home_of(content_user), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return 0                  # no home to grant anything in; best-effort, as before
+    try:
         try:
-            _chmod_nofollow(_dir, stat.S_IXGRP)
+            _chmod_nofollow(home_of(content_user), stat.S_IXGRP)
         except OSError:
             pass                  # traversal bit is best-effort, as it was in the shell form
-    for game in games:
-        path = content_path(content_user, CONTENT_SUBDIR, game)
-        # fwalk, not walk, and follow_symlinks=False: it hands each level a DESCRIPTOR and checks
-        # that the directory it descended into is the one it stat'd, so a component swapped
-        # mid-walk stops the descent instead of redirecting it.
-        for _root, dirs, files, rootfd in os.fwalk(path, follow_symlinks=False,
-                                                   onerror=lambda _e: None):
-            for name in dirs + files:
-                try:
-                    _chmod_nofollow(name, stat.S_IRGRP, x_if_user=True, dir_fd=rootfd)
-                except OSError:
-                    continue
         try:
-            _chmod_nofollow(path, stat.S_IRGRP | stat.S_IXGRP)
+            sf_fd = os.open(CONTENT_SUBDIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=home_fd)
         except OSError:
-            # This game's tree is missing or not ours to chmod. The shell form was per-command
-            # best-effort for the same reason, and the other granted games must still be done.
-            pass
+            return 0              # no serverfiles, or a link where it should be: nothing to open
+        try:
+            try:
+                _chmod_nofollow(CONTENT_SUBDIR, stat.S_IXGRP, dir_fd=home_fd)
+            except OSError:
+                pass
+            for game in games:
+                name = v_ident(game)
+                # fwalk, not walk, and follow_symlinks=False: it hands each level a DESCRIPTOR and
+                # checks that the directory it descended into is the one it stat'd, so a component
+                # swapped mid-walk stops the descent instead of redirecting it.
+                for _root, dirs, files, rootfd in os.fwalk(
+                        name, dir_fd=sf_fd, follow_symlinks=False, onerror=lambda _e: None):
+                    for entry in dirs + files:
+                        try:
+                            _chmod_nofollow(entry, stat.S_IRGRP, x_if_user=True, dir_fd=rootfd)
+                        except OSError:
+                            continue
+                try:
+                    _chmod_nofollow(name, stat.S_IRGRP | stat.S_IXGRP, dir_fd=sf_fd)
+                except OSError:
+                    # This game's tree is missing or not ours to chmod. The shell form was
+                    # per-command best-effort for the same reason, and the other granted games
+                    # must still be done.
+                    pass
+        finally:
+            os.close(sf_fd)
+    finally:
+        os.close(home_fd)
     return 0
 
 

@@ -2121,6 +2121,30 @@ try:
           repr(os.listdir(_cs_home)))
     check("helper content-game-remove: ...a link INSIDE the tree is removed as a link, not followed",
           os.path.isfile(os.path.join(_cs_other, "serverfiles", "cstrike", "maps", "keep.bsp")))
+
+    # 6. content-grant-read had the same shape: fwalk started from the PATH .../serverfiles/<game>,
+    #    and fwalk's own check covers the last component only — so a symlinked ~/serverfiles had
+    #    root `chmod g+rX` another tenant's game tree for the content group to read.
+    _cs_o2 = os.path.join(_cs_tmp, "otherbox2")
+    os.makedirs(os.path.join(_cs_o2, "serverfiles", "cstrike", "cfg"))
+    _cs_o2_file = os.path.join(_cs_o2, "serverfiles", "cstrike", "cfg", "rcon.cfg")
+    with open(_cs_o2_file, "w", encoding="utf-8") as _fh:
+        _fh.write("rcon_password secret\n")
+    os.chmod(_cs_o2_file, 0o600)
+    os.chmod(os.path.join(_cs_o2, "serverfiles", "cstrike"), 0o700)
+    os.rename(_cs_sf, _cs_sf + ".real2")
+    os.symlink(os.path.join(_cs_o2, "serverfiles"), _cs_sf)
+    _cs_grpname = _cs_grp.getgrgid(__import__("pwd").getpwnam(_cs_me).pw_gid).gr_name
+    _helper.do_content_grant_read([_cs_me, _cs_grpname, _cs_me, "cstrike"], "")
+    check("helper content-grant-read: a symlinked ~/serverfiles is not walked into another tree",
+          _cs_stat.S_IMODE(os.stat(_cs_o2_file).st_mode) == 0o600
+          and _cs_stat.S_IMODE(os.stat(os.path.join(_cs_o2, "serverfiles", "cstrike")).st_mode)
+          == 0o700,
+          "file=%s dir=%s" % (oct(_cs_stat.S_IMODE(os.stat(_cs_o2_file).st_mode)),
+                              oct(_cs_stat.S_IMODE(os.stat(
+                                  os.path.join(_cs_o2, "serverfiles", "cstrike")).st_mode))))
+    os.unlink(_cs_sf)
+    os.rename(_cs_sf + ".real2", _cs_sf)
 finally:
     _helper.HOME_ROOT, _helper.CONTENT_CRON_PREFIX = _cs_saved_root, _cs_saved_cron
     _shutil.rmtree(_cs_tmp, ignore_errors=True)
