@@ -3862,6 +3862,11 @@ try:
         "netgroup": "+admins ALL=(ALL) ALL\n",
         "undefined-alias": "NOBODYKNOWS ALL=(ALL) ALL\n",
         "continued": "alice,\\\n  deploy ALL=(ALL) ALL\n",
+        # A comment runs to the end of its physical line even when that ends in a backslash —
+        # visudo parses the next line on its own. Joining continuations before stripping comments
+        # swallowed the rule below each of these into the comment, and deploy was enrolled.
+        "comment-then-rule": "# Cmnd_Alias OLD = /bin/true, \\\ndeploy ALL=(ALL) NOPASSWD: ALL\n",
+        "trailing-comment-then-rule": "alice ALL=(ALL) ALL # note \\\ndeploy ALL=(ALL) ALL\n",
     }
     _sg_missed = []
     for _case, _body in _sg_cases.items():
@@ -3892,6 +3897,15 @@ try:
                   "lgsmpanel ALL=(%lgsmpanel-games) NOPASSWD: ALL\n")
     check("enrolment: ...and rules naming other accounts still let a plain account in",
           _helper._can_already_escalate("deploy") is False)
+    # ...and a comment ending in a backslash, or a continuation with blanks after its backslash
+    # (which sudo accepts), is not read as a rule nor as an unparseable line.
+    with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+        _fh.write("# old: Cmnd_Alias X = /bin/true, \\\nalice,\\  \n  bob ALL=(ALL) ALL # b \\\n"
+                  "#999 ALL=(ALL) ALL\n")
+    check("enrolment: ...nor does a comment ending in a backslash, or a blank-tailed continuation",
+          _helper._can_already_escalate("deploy") is False
+          and _helper._sudoers_logical_lines("a,\\  \n b X=Y # c \\\n#9 Z=W\n")
+          == ["a, b X=Y", "#9 Z=W"])
 
     # The verb must consult it, not merely define it.
     _ran = []

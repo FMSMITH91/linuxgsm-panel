@@ -1207,8 +1207,7 @@ def _sudoers_lines(path, seen, depth=0):
     with open(path, encoding="utf-8", errors="replace") as fh:
         text = fh.read()
     out = []
-    for raw in text.replace("\\\n", " ").splitlines():
-        line = raw.strip()
+    for line in _sudoers_logical_lines(text):
         m = _SUDOERS_INCLUDE_RE.fullmatch(line)
         if m:
             target = m.group(2).strip()
@@ -1227,10 +1226,40 @@ def _sudoers_lines(path, seen, depth=0):
             else:
                 out.extend(_sudoers_lines(target, seen, depth + 1))
             continue
-        # `#` starts a comment, except where it introduces a uid (`#1000`, `%#1000`).
-        line = re.sub(r"#(?![0-9]).*", "", line).strip()
-        if line:
+        out.append(line)
+    return out
+
+
+def _sudoers_logical_lines(text):
+    """`text` as sudo's lexer reads it: comments removed, continuation lines joined. Include
+    directives come back whole (they look like comments, so they are recognised first).
+
+    The order is the point. A comment runs to the end of its PHYSICAL line and takes the newline
+    with it, so a backslash at the end of a comment continues nothing — visudo parses the next line
+    as a line of its own. Joining `\\<newline>` across the whole text first, as this used to, glued
+    that next line onto the comment and then deleted it with the comment: a `# ... \\` line followed
+    by `steam ALL=(ALL) NOPASSWD: ALL` read as no rule for steam, and steam was enrolled. The
+    continuation itself is `\\`, optional blanks, then the newline."""
+    out, pending = [], []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not pending and _SUDOERS_INCLUDE_RE.fullmatch(line):
             out.append(line)
+            continue
+        # `#` starts a comment, except where it introduces a uid (`#1000`, `%#1000`).
+        code, comments = re.subn(r"#(?![0-9]).*", "", line)
+        code = code.strip()
+        if not comments and code.endswith("\\"):
+            pending.append(code[:-1])
+            continue
+        joined = " ".join(pending + [code]).strip()
+        pending = []
+        if joined:
+            out.append(joined)
+    if pending:
+        joined = " ".join(pending).strip()
+        if joined:
+            out.append(joined)
     return out
 
 
