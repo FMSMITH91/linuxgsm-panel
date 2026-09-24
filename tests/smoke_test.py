@@ -12220,6 +12220,20 @@ try:
         _lt_pr = _lt_http.get("/terminal/%d" % _lt_rid)
         check("terminal: ...while the same grants still reach a REMOTE's terminal page "
               "(positive control)", _lt_pr.status_code == 200, "status=%d" % _lt_pr.status_code)
+        # The panel records no input, but the shell is an ordinary interactive one and writes its
+        # own history on the host. "Nothing typed here is recorded" was stated as absolute, on the
+        # page where operators type secrets.
+        _lt_prt = _lt_pr.get_data(as_text=True)
+        check("terminal: the page does not promise nothing typed is kept — the shell's own "
+              "history is",
+              "Nothing typed here is recorded" not in _lt_prt and "command history" in _lt_prt,
+              "the page still says nothing is recorded while ~/.bash_history is written")
+        # xterm's DOM renderer gives each colour run its own <span>, and the catalog walker swaps
+        # any text node equal to a key: a French viewer saw the host print ERREUR.
+        _lt_mount = _re_ab.search(r'<div[^>]*\bid="terminal"[^>]*>', _lt_prt)
+        check("terminal: the xterm mount point is exempt from the translation walker",
+              _lt_mount is not None and "data-no-i18n" in _lt_mount.group(0),
+              "mount tag: %r — host output gets translated" % (_lt_mount and _lt_mount.group(0)))
         import panel.ops.system_ops as _lt_so
         _lt_gss = _lt_so.get_server_status
         _lt_so.get_server_status = lambda force=False: None      # reads THIS machine; not the question

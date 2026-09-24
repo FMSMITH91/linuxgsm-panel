@@ -156,7 +156,7 @@
   "No servers match your filter.": "Ningún servidor coincide con tu filtro.",
   "None of these change what the panel runs — they are docs, tests or tooling.": "Ninguno de estos cambia lo que ejecuta el panel: son documentación, pruebas o herramientas.",
   "Nothing to install — the system is up to date.": "No hay nada que instalar — el sistema está actualizado.",
-  "Nothing typed here is recorded; only the session opening and closing is written to the audit log.": "Nada de lo que escriba aquí se registra; solo la apertura y el cierre de la sesión se anotan en el registro de auditoría.",
+  "The panel does not record what you type; only the session opening and closing is written to the audit log. The shell itself keeps its usual command history on the host.": "El panel no registra lo que escribe; solo la apertura y el cierre de la sesión se anotan en el registro de auditoría. La propia shell guarda su historial de comandos habitual en el host.",
   "OS": "SO",
   "Open Port": "Abrir puerto",
   "Open Ports & Rules": "Puertos y reglas abiertos",
