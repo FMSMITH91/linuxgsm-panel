@@ -338,49 +338,105 @@ _RE_SSHD_PORT = re.compile(r"(Port [0-9]{1,5}|ListenAddress \[?[0-9A-Fa-f:.]+\]?
 # empty ListenStream= that RESETS systemd's inherited list, and address:port entries. Nothing else:
 # no Exec*, no User=, no EnvironmentFile=, no Also=.
 _RE_SSHD_SOCKET = re.compile(r"(\[Socket\]|ListenStream=|ListenStream=\[?[0-9A-Fa-f:.]+\]?:[0-9]{1,5})")
-# fail2ban's config files are declarative and their content is genuinely open-ended — ignoreip
-# lists, ports, log paths, filter regexes — so a grammar over the whole file would break real
-# configs for no gain. Two KEYS are the exception, because they are the ones that decide what
-# fail2ban RUNS, and it runs it as root on reload:
+# fail2ban: an ALLOWLIST of the sections and keys the panel writes, each with a value grammar, and
+# checked over the WHOLE FILE rather than line by line.
 #
-#   action / banaction / action_*   names a definition in action.d/, whose actionstart and
-#                                   actionban are shell commands. fail2ban resolves the name by
-#                                   joining it onto "action.d", so a value carrying a path
-#                                   separator may reach a file outside that directory — and
-#                                   filter.d/linuxgsm-panel.conf IS a write target, so a caller
-#                                   could write its own actionban there and then point a jail at
-#                                   it. I could not verify the traversal (no fail2ban here to test
-#                                   against), so this is a guard against a maybe rather than a
-#                                   proven hole — but the panel never writes any of these keys, so
-#                                   refusing a separator in them costs nothing at all.
-#   filter                          same shape, one directory over.
+# This was a denylist — two "runnable" keys (action*/banaction*, filter, chain) held to a bare name,
+# every other line accepted — validated one stripped line at a time. fail2ban runs things as root on
+# ban and on reload, and far more than those keys decide what:
 #
-# A legitimate value for either is a bare name. Everything else in these files stays unconstrained.
-# Every action* spelling, not just "action": actionban, actionstart, actionstop, actionunban and
-# actioncheck are the lines that hold the COMMAND, and banaction/banactionallports name one.
-_RE_F2B_RUNNABLE_KEY = re.compile(r"(?:ban)?action[a-z0-9_]*|filter|chain", re.IGNORECASE)
-_RE_F2B_PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+#   * configparser treats an INDENTED line as a continuation of the previous value, and `action`
+#     is legitimately multi-line. The strip() erased the indent, so `    sendmail[actionban=<cmd>]`
+#     under `action = iptables` was checked as a line with no `=` and waved through, then parsed by
+#     fail2ban as a second action carrying an inline actionban override: root, on the next reload.
+#   * jail values are substituted UNESCAPED into action commands run through a shell — <port> in
+#     iptables-multiport's actionstart, <logpath> in *-whois-lines — and jail.conf's own default
+#     action builds `banaction[port="%(port)s", ...]` by interpolation, so `port = ssh", actionban="`
+#     reopened the override without naming any action key at all.
+#   * `ignorecommand` is a command fail2ban runs itself, and [INCLUDES] before/after pulls in a file
+#     this validator never sees. Neither was on the list.
+#
+# The panel writes a handful of fixed shapes (system_ops._panel_f2b_jail_body / _filter_body,
+# hosts.py's jail.local and _f2b_dropin_ignoreip_body), so every section, key and value it sends is
+# enumerable. Anything else is refused: an indented line, a key before any section, a `:` delimiter,
+# `%` interpolation, and any character outside printable ASCII (str.splitlines breaks on \x0c and
+# friends, which a file read does not, so a validator splitting differently from fail2ban could be
+# shown a different file).
+_F2B_JAIL_SECTIONS = re.compile(r"DEFAULT|sshd|linuxgsm-panel")
+_F2B_IP = r"[0-9A-Fa-f:.]+(?:/[0-9]{1,3})?"
+_F2B_JAIL_KEYS = {
+    "enabled": re.compile(r"true|false"),
+    "bantime": re.compile(r"[0-9]+[smhdw]?"),
+    "findtime": re.compile(r"[0-9]+[smhdw]?"),
+    "maxretry": re.compile(r"[0-9]+"),
+    "port": re.compile(r"[A-Za-z0-9]+(?:[,:][A-Za-z0-9]+)*"),
+    "filter": re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*"),     # a name in filter.d: no path, no [
+    "backend": re.compile(r"auto|polling|pyinotify|systemd|gamin"),
+    "logpath": re.compile(r"/[A-Za-z0-9._@+/-]+"),
+    # IPs and CIDRs only — no hostname, and no IPv6 zone id (`%eth0`), which ipaddress keeps
+    # verbatim, spaces and newlines included.
+    "ignoreip": re.compile(_F2B_IP + r"(?: +" + _F2B_IP + r")*"),
+}
+_F2B_FILTER_SECTIONS = re.compile(r"Definition")
+_F2B_FILTER_KEYS = {
+    # A regex is matched against log lines, never run; only `%` (interpolation) is kept out.
+    "failregex": re.compile(r"[^%]*"),
+    "ignoreregex": re.compile(r"[^%]*"),
+}
+_RE_F2B_TEXT = re.compile(r"[\x20-\x7e\n]*")
 
 
-def _fail2ban_line_ok(line):
-    """A fail2ban config line the panel may write. See the note above for the two keys that are
-    constrained and why every other key is not."""
-    if "=" not in line:
-        return True                       # a [section] header, or a bare flag
-    key, value = line.split("=", 1)
-    if not _RE_F2B_RUNNABLE_KEY.fullmatch(key.strip()):
-        return True
-    return bool(_RE_F2B_PLAIN_NAME.fullmatch(value.strip()))
+def _fail2ban_config_ok(content, sections, keys):
+    """True when `content` is made only of `[section]` headers from `sections` and `key = value`
+    lines whose key is in `keys` and whose value that key's grammar matches in full."""
+    content = content or ""
+    if not _RE_F2B_TEXT.fullmatch(content):
+        return False
+    section = None
+    for raw in content.split("\n"):
+        if not raw.strip():
+            continue
+        if raw[0] == " ":
+            return False                  # a continuation of the previous value
+        line = raw.rstrip()
+        if line.startswith(("#", ";")):
+            continue
+        if line.startswith("["):
+            if not (line.endswith("]") and sections.fullmatch(line[1:-1])):
+                return False
+            section = line[1:-1]
+            continue
+        if section is None or "=" not in line:
+            return False
+        key, value = line.split("=", 1)
+        rule = keys.get(key.strip())
+        if rule is None or not rule.fullmatch(value.strip()):
+            return False
+    return True
 
 
-_RE_FAIL2BAN_OPEN = _fail2ban_line_ok
+class _WholeFile:
+    """A content rule that must see the whole file at once, because what a line means depends on
+    the lines around it (a continuation, the section it sits in). _content_ok calls it with the
+    content; every other rule in WRITE_CONTENT is applied line by line by _lines_match."""
+
+    def __init__(self, fn):
+        self.fn = fn
+
+    def __call__(self, content):
+        return bool(self.fn(content))
+
+
+_F2B_JAIL_RULE = _WholeFile(
+    lambda c: _fail2ban_config_ok(c, _F2B_JAIL_SECTIONS, _F2B_JAIL_KEYS))
+_F2B_FILTER_RULE = _WholeFile(
+    lambda c: _fail2ban_config_ok(c, _F2B_FILTER_SECTIONS, _F2B_FILTER_KEYS))
 
 
 def _lines_match(content, pattern):
     """Every non-blank, non-comment line is accepted by `pattern`.
 
-    `pattern` is a compiled regex (matched in FULL) or a callable taking the line — the fail2ban
-    rule needs the second form, because only two of its keys are constrained."""
+    `pattern` is a compiled regex (matched in FULL) or a callable taking the line."""
     check = pattern if callable(pattern) and not hasattr(pattern, "fullmatch") \
         else pattern.fullmatch
     for line in (content or "").splitlines():
@@ -392,6 +448,13 @@ def _lines_match(content, pattern):
     return True
 
 
+def _content_ok(content, rule):
+    """Apply a WRITE_CONTENT rule: a _WholeFile sees the whole content, anything else each line."""
+    if isinstance(rule, _WholeFile):
+        return rule(content)
+    return _lines_match(content, rule)
+
+
 WRITE_CONTENT = {
     # A fixed body: the helper owns it, so the destination cannot be steered at all. The panel
     # still sends the same bytes; they are ignored rather than trusted, which also means a future
@@ -401,10 +464,10 @@ WRITE_CONTENT = {
     "sysctl-tailscale": _RE_SYSCTL,
     "sshd-port-dropin": _RE_SSHD_PORT,
     "sshd-socket-dropin": _RE_SSHD_SOCKET,
-    "fail2ban-jail-local": _RE_FAIL2BAN_OPEN,
-    "fail2ban-panel-whitelist": _RE_FAIL2BAN_OPEN,
-    "fail2ban-panel-filter": _RE_FAIL2BAN_OPEN,
-    "fail2ban-panel-jail": _RE_FAIL2BAN_OPEN,
+    "fail2ban-jail-local": _F2B_JAIL_RULE,
+    "fail2ban-panel-whitelist": _F2B_JAIL_RULE,
+    "fail2ban-panel-filter": _F2B_FILTER_RULE,
+    "fail2ban-panel-jail": _F2B_JAIL_RULE,
 }
 
 # The one body the helper writes itself. Kept byte-identical to what the panel has always sent
@@ -3149,7 +3212,7 @@ def do_write_file(args, content):
     rule = WRITE_CONTENT[target]
     if target == "node-tools-cron":
         content = NODE_TOOLS_CRON_BODY      # helper-owned; stdin is not trusted for a cron file
-    elif rule is not None and not _lines_match(content, rule):
+    elif rule is not None and not _content_ok(content, rule):
         print("panel-helper: content rejected for %s" % target, file=sys.stderr)
         return 2
     directory = os.path.dirname(path)

