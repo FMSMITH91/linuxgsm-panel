@@ -12222,6 +12222,77 @@ try:
         check("terminal: ...and once they are demoted the re-check refuses the panel host, "
               "though a group still grants it",
               "after-demotion" not in _lt_w, "writes=%r" % (_lt_w,))
+
+        # Losing the terminal ITSELF must close the shell, not only refuse the keystroke. When
+        # _may_use_terminal() said no, the handlers returned: the shell stayed up and its output
+        # kept streaming to the socket until the 15-minute idle sweep. Driven through the real
+        # events, with use_terminal taken off the user's only group between two keystrokes.
+        _lt_c2.disconnect()
+        _lt_sessions.clear()
+        _lt_c3 = app.socketio.test_client(app, flask_test_client=client_as(_lt_uid))
+        _lt_c3.emit("term_open", {"remote_id": _lt_rid, "cols": 80, "rows": 24})
+        _lt_c3.emit("term_input", {"data": "before-revoke"})
+        _lt_open3 = [k for k, v in _lt_sessions.items() if getattr(v, "host", None) == _lt_rid]
+        check("terminal: a delegated user's remote shell takes keystrokes (control for the next)",
+              bool(_lt_open3)
+              and "before-revoke" in [w for v in _lt_sessions.values() for w in v.writes],
+              "sessions=%r" % (list(_lt_sessions),))
+        with app.app_context():
+            db.session.get(Group, _lt_gid).set_permissions([auth.MANAGE_REMOTES])
+            db.session.commit()
+        _lt_c3.get_received()
+        _lt_c3.emit("term_input", {"data": "after-revoke"})
+        _lt_err3 = [e for e in _lt_c3.get_received() if e.get("name") == "term_error"]
+        check("terminal: taking use_terminal away CLOSES the open shell at its next event",
+              _lt_open3 and not any(k in _lt_sessions for k in _lt_open3) and _lt_err3,
+              "still open=%r, term_error=%r — the keystroke is refused but the shell and its "
+              "output stay up for another fifteen minutes"
+              % ([k for k in _lt_open3 if k in _lt_sessions], _lt_err3))
+        with app.app_context():
+            db.session.get(Group, _lt_gid).set_permissions([auth.USE_TERMINAL,
+                                                            auth.MANAGE_REMOTES])
+            db.session.commit()
+
+        # ...and with NO event at all. A shell following a log is sent nothing, so a check made
+        # only when a keystroke arrives never runs for it: the timer sweep has to. Signing the
+        # user out everywhere (auth_epoch bumped) must close it on the sweep alone.
+        _lt_c4 = app.socketio.test_client(app, flask_test_client=client_as(_lt_uid))
+        _lt_before4 = set(_lt_sessions)
+        _lt_c4.emit("term_open", {"remote_id": _lt_rid, "cols": 80, "rows": 24})
+        _lt_open4 = [k for k in _lt_sessions if k not in _lt_before4]
+        with app.app_context():
+            _htmod.sweep_revoked_terminals(app, app.socketio)
+        check("terminal: the revocation sweep leaves a shell whose login still holds alone "
+              "(positive control)",
+              bool(_lt_open4) and all(k in _lt_sessions for k in _lt_open4),
+              "opened=%r, still open=%r" % (_lt_open4, [k for k in _lt_open4 if k in _lt_sessions]))
+
+        def _lt_revoked_rows():
+            return _SPAudit.query.filter_by(action="terminal_close",
+                                            detail="terminal access was revoked",
+                                            username="smoke-term-deleg").count()
+        with app.app_context():
+            _lt_aud_before4 = _lt_revoked_rows()
+            _lt_u4 = db.session.get(User, _lt_uid)
+            _lt_u4.auth_epoch = (_lt_u4.auth_epoch or 0) + 1
+            db.session.commit()
+        _lt_c4.get_received()
+        with app.app_context():
+            _htmod.sweep_revoked_terminals(app, app.socketio)
+            _lt_aud4 = _lt_revoked_rows() - _lt_aud_before4
+        _lt_err4 = [e for e in _lt_c4.get_received() if e.get("name") == "term_error"]
+        check("terminal: a shell sent no input is closed by the sweep once its login is revoked",
+              _lt_open4 and not any(k in _lt_sessions for k in _lt_open4) and _lt_err4,
+              "still open=%r, term_error=%r — its output keeps reaching the signed-out browser"
+              % ([k for k in _lt_open4 if k in _lt_sessions], _lt_err4))
+        check("terminal: ...and the closing row names the user whose access went",
+              _lt_aud4 >= 1, "no new terminal_close row for smoke-term-deleg with that reason")
+        for _cl in (_lt_c3, _lt_c4):
+            try:
+                if _cl.is_connected():
+                    _cl.disconnect()
+            except Exception:
+                pass
     finally:
         (_tsmod.open_session, _tsmod.get, _tsmod.close_for_sid) = _ts_saved
         for _cl in (_lt_c, _lt_c2):

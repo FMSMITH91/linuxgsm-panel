@@ -6083,6 +6083,32 @@ check("terminal: host access is re-validated during a live session",
       and re.search(r"\bcan_access_remote\b", _htr_code7) is not None,
       "access is checked only at open, so revoking it leaves the live shell typing into the host")
 
+# (h) ...and on a TIMER, because a shell following a log sends no events at all. smoke_test drives
+# sweep_revoked_terminals itself; this pins that register() actually runs it: supervise() is
+# handed a function that calls it. From the AST — both names appear in comments and docstrings.
+_htr_tree7 = _ast.parse(_htr_src7)
+_htr_reg7 = next((n for n in _ast.walk(_htr_tree7)
+                  if isinstance(n, _ast.FunctionDef) and n.name == "register"), None)
+_htr_inner7 = {n.name: n for n in _ast.walk(_htr_reg7)
+               if isinstance(n, _ast.FunctionDef)} if _htr_reg7 else {}
+
+
+def _calls_name7(node, name):
+    return any(isinstance(c, _ast.Call) and isinstance(c.func, _ast.Name) and c.func.id == name
+               for c in _ast.walk(node))
+
+
+_htr_supervised7 = [c.args[1].id for c in _ast.walk(_htr_reg7 or _ast.Module(body=[]))
+                    if isinstance(c, _ast.Call) and isinstance(c.func, _ast.Name)
+                    and c.func.id == "supervise" and len(c.args) >= 2
+                    and isinstance(c.args[1], _ast.Name)]
+_htr_sweeps7 = [n for n in _htr_supervised7
+                if n in _htr_inner7 and _calls_name7(_htr_inner7[n], "sweep_revoked_terminals")]
+check("terminal: register() runs the revocation sweep on a timer",
+      bool(_htr_sweeps7),
+      "supervised: %r — none calls sweep_revoked_terminals, so a revoked login's shell that is "
+      "sent no input streams its output until the 15-minute idle sweep" % (_htr_supervised7,))
+
 # ── the local shell needs a CONTROLLING terminal, not just its own session ────────────────────
 # start_new_session=True calls setsid, which is necessary and not sufficient: the child inherits
 # the pty slave as a descriptor rather than opening it, so it ends up with no controlling terminal
