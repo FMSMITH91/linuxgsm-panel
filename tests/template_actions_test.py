@@ -2452,6 +2452,19 @@ check("!_signedIn()" in _pj_se and "!_signedIn()" in _pj_ping
       "session: the ping and the expired-session redirect return early on a signed-out page",
       "an invitee is redirected to /login mid-form")
 
+# ── the 2FA reminder's "don't remind me" reports success only on success ──────────────────────
+# It parsed the reply and ignored it. The error handler answers any failure on a fetch with
+# parseable JSON ({success:false}, status 500), so a save that failed removed the banner and said
+# "You won't be reminded again" — and the reminder was back on the next page load.
+_otp_src = (ROOT / "static" / "js" / "otp_nag.js").read_text(encoding="utf-8")
+_otp_fn = _otp_src[_otp_src.index("function dismissOtpNagForever"):]
+check("/account/2fa/dismiss-nag" in _otp_fn,
+      "otp nag: (control) the dismiss handler is where this check is looking", "sliced the wrong text")
+check(re.search(r"\.success\)\)\s*throw", _otp_fn) is not None
+      and _otp_fn.index(".success") < _otp_fn.index("hideOtpNag(false)"),
+      "otp nag: the banner is removed and success announced only when the reply says success",
+      "any parseable reply — including {success:false} — is reported as saved")
+
 # ── Settings says what Site domain actually does ──────────────────────────────────────────────
 # It said "Used for the TLS certificate and connect links." No connect link reads site_domain (they
 # use the remote's public IP or host), and the certificate is only named from it when the panel has
