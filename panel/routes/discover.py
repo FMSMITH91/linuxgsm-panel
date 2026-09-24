@@ -7,7 +7,8 @@ import collections
 from flask import (jsonify)
 from flask_login import (current_user, login_required)
 from panel.db.models import (GameServer, db)
-from panel.ops.ssh_manager import (content_box_users, discover_linuxgsm_servers, run_command)
+from panel.ops.ssh_manager import (content_box_users, discover_linuxgsm_servers,
+                                  enrol_game_user, run_command)
 from panel.security.auth import (MANAGE_SERVERS, can_access_remote, get_remote, log_action,
     permission_required)
 from panel.core.http import (_json_body, _json_str, _log_and_generic)
@@ -38,6 +39,23 @@ def _host_answered(remote):
     except Exception:
         return False
     return rc == 0 and _PROBE_MARKER in (out or "")
+
+
+def _enrol_imported(remote, users):
+    """Put each imported account inside the panel's grant — the step create_game_user takes for an
+    account the panel makes — and return the ones the helper would not take, with its reason.
+
+    Without it, on a narrow-grant install the helper refuses every per-account verb for an imported
+    server (start, stop, update, downloads, the command-list read) until the next root install.sh
+    run, and nothing says why. The helper still refuses an account that can already reach root;
+    that refusal is REPORTED to the importer rather than left for each later action to trip over.
+    Runs BEFORE the background command-list read, which needs the membership it grants."""
+    out = []
+    for user in users:
+        reason = enrol_game_user(remote, user)
+        if reason:
+            out.append({"user": user, "reason": reason})
+    return out
 
 
 def register(app):
@@ -169,14 +187,17 @@ def register(app):
                 autostart=False))
             existing.add(user)
             added.append(user)
+        not_enrolled = []
         if added:
             db.session.commit()
             log_action(current_user, "import_servers", target=remote.name,
                        detail="added=%s" % ",".join(added))
+            not_enrolled = _enrol_imported(remote, added)
             # Populate the imported servers' command lists so "Supported Commands" is ready
             # without a manual refresh (install caches these; import didn't).
             new_ids = [gs.id for gs in GameServer.query.filter(
                 GameServer.remote_id == remote_id,
                 GameServer.short_name.in_(added)).all()]
             _bg_cache_commands(app, new_ids)
-        return jsonify({"success": bool(added), "added": added, "skipped": skipped})
+        return jsonify({"success": bool(added), "added": added, "skipped": skipped,
+                        "not_enrolled": not_enrolled})

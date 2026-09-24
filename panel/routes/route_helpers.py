@@ -12,7 +12,8 @@ from panel.security.auth import (hash_password)
 import json
 from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
     _port_or, bind_host_error, password_problem)
-from app import (_current_lang, _log, _setup_open, _ts_backend_scheme, is_setup_complete)
+from app import (_current_lang, _log, _setup_open, _setup_owner_ok, _ts_backend_scheme,
+    is_setup_complete, issue_setup_owner_token)
 
 
 def register(app):
@@ -30,6 +31,13 @@ def register(app):
                 or request.path == "/robots.txt":
             return None          # exempt path: let the request through untouched
         if not is_setup_complete():
+            # /login stays reachable once the wizard has an admin: the rest of the wizard is
+            # bound to the browser that created it (_setup_owner_ok), and signing in as that
+            # superadmin is how the operator gets back in from any other browser. Before an admin
+            # exists there is no one to sign in as, so it funnels into the wizard as before.
+            if request.path == "/login" \
+                    and User.query.filter_by(is_superadmin=True).first() is not None:
+                return None
             return redirect("/setup")
         # Setup IS complete and the path is not exempt: fall through to the request. Spelled out
         # rather than dropping off the end, because a before_request handler returning None means
@@ -61,6 +69,10 @@ def register(app):
         # is false for the whole wizard and true only once it has finished.
         if SetupState.query.filter_by(complete=True).first() is not None:
             return redirect(url_for("login"))
+        # ...and once the admin exists, only its creator (or a signed-in superadmin) may go on.
+        if not _setup_owner_ok():
+            flash("Sign in as the administrator to finish setup.", "info")
+            return redirect(url_for("login", next="/setup"))
 
         state = SetupState.query.first()
         if not state:
@@ -156,6 +168,7 @@ def register(app):
                             admin.groups.append(everyone)
                         db.session.commit()
                         data["admin_created"] = True
+                        issue_setup_owner_token(data)   # the rest of the wizard is this browser's
                         state.step = "tailscale"
                         state.data = json.dumps(data)
                         db.session.commit()
@@ -290,7 +303,7 @@ def register(app):
 
     @app.route("/api/setup/tailscale/status")
     def api_setup_ts_status():
-        if not _setup_open():
+        if not _setup_open() or not _setup_owner_ok():
             return jsonify({"error": "forbidden"}), 403
         info = ts.get_tailscale_info(force_refresh=True)
         serve_url = next((s.get("url") for s in (info.serve_config or {}).get("services", [])), None)
@@ -303,14 +316,14 @@ def register(app):
 
     @app.route("/api/setup/tailscale/install", methods=["POST"])
     def api_setup_ts_install():
-        if not _setup_open():
+        if not _setup_open() or not _setup_owner_ok():
             return jsonify({"error": "forbidden"}), 403
         ok, log = ts.install_tailscale_local()
         return jsonify({"success": ok, "log": log})
 
     @app.route("/api/setup/tailscale/up", methods=["POST"])
     def api_setup_ts_up():
-        if not _setup_open():
+        if not _setup_open() or not _setup_owner_ok():
             return jsonify({"error": "forbidden"}), 403
         ok, res = ts.tailscale_up_local(enable_ssh=True)
         if not ok:
@@ -321,7 +334,7 @@ def register(app):
 
     @app.route("/api/setup/tailscale/serve", methods=["POST"])
     def api_setup_ts_serve():
-        if not _setup_open():
+        if not _setup_open() or not _setup_owner_ok():
             return jsonify({"error": "forbidden"}), 403
         cfg = load_config()
         port = cfg.get("port", 5000)

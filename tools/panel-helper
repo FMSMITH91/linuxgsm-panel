@@ -322,57 +322,125 @@ WRITE_TARGETS = {
 # Each payload the panel actually sends is a fixed shape, so each gets a grammar that admits it and
 # nothing else. Validation is REQUIRED, not optional: a destination with no entry is refused, so
 # adding one to WRITE_TARGETS forces a decision about its content rather than inheriting "anything".
-_RE_APT_CONF = re.compile(r'APT::[A-Za-z][A-Za-z0-9:-]* "[0-9]+";')
-_RE_SYSCTL = re.compile(r"[a-z][a-z0-9_.]* *= *[0-9]+")
+#
+# Pinned to the KEYS the panel writes, not just a key-shaped key with a numeric value. Neither file
+# needs a command to be dangerous: `fs.protected_hardlinks = 0` (or protected_symlinks,
+# yama.ptrace_scope, kptr_restrict ...) turned host-wide kernel protections off for every local
+# user, persistently — 99-tailscale sorts after the distro defaults and sysctl-reload applies it at
+# once — and `APT::Get::AllowUnauthenticated "1";` let apt install unsigned packages as root. Both
+# were accepted by the old `any lowercase key = digits` and `any APT:: key "digits"` shapes.
+_RE_APT_CONF = re.compile(r'APT::Periodic::(?:Update-Package-Lists|Unattended-Upgrade'
+                          r'|AutocleanInterval|Download-Upgradeable-Packages) "[0-9]+";')
+_RE_SYSCTL = re.compile(r"(?:net\.ipv4\.ip_forward|net\.ipv6\.conf\.all\.forwarding) *= *1")
 _RE_SSHD_PORT = re.compile(r"(Port [0-9]{1,5}|ListenAddress \[?[0-9A-Fa-f:.]+\]?:[0-9]{1,5})")
 # A systemd unit file is NOT a config file of directives that only configure -- ExecStartPre= runs
 # a command as root the moment the unit starts. So this grammar admits the section header, the
 # empty ListenStream= that RESETS systemd's inherited list, and address:port entries. Nothing else:
 # no Exec*, no User=, no EnvironmentFile=, no Also=.
 _RE_SSHD_SOCKET = re.compile(r"(\[Socket\]|ListenStream=|ListenStream=\[?[0-9A-Fa-f:.]+\]?:[0-9]{1,5})")
-# fail2ban's config files are declarative and their content is genuinely open-ended — ignoreip
-# lists, ports, log paths, filter regexes — so a grammar over the whole file would break real
-# configs for no gain. Two KEYS are the exception, because they are the ones that decide what
-# fail2ban RUNS, and it runs it as root on reload:
+# fail2ban: an ALLOWLIST of the sections and keys the panel writes, each with a value grammar, and
+# checked over the WHOLE FILE rather than line by line.
 #
-#   action / banaction / action_*   names a definition in action.d/, whose actionstart and
-#                                   actionban are shell commands. fail2ban resolves the name by
-#                                   joining it onto "action.d", so a value carrying a path
-#                                   separator may reach a file outside that directory — and
-#                                   filter.d/linuxgsm-panel.conf IS a write target, so a caller
-#                                   could write its own actionban there and then point a jail at
-#                                   it. I could not verify the traversal (no fail2ban here to test
-#                                   against), so this is a guard against a maybe rather than a
-#                                   proven hole — but the panel never writes any of these keys, so
-#                                   refusing a separator in them costs nothing at all.
-#   filter                          same shape, one directory over.
+# This was a denylist — two "runnable" keys (action*/banaction*, filter, chain) held to a bare name,
+# every other line accepted — validated one stripped line at a time. fail2ban runs things as root on
+# ban and on reload, and far more than those keys decide what:
 #
-# A legitimate value for either is a bare name. Everything else in these files stays unconstrained.
-# Every action* spelling, not just "action": actionban, actionstart, actionstop, actionunban and
-# actioncheck are the lines that hold the COMMAND, and banaction/banactionallports name one.
-_RE_F2B_RUNNABLE_KEY = re.compile(r"(?:ban)?action[a-z0-9_]*|filter|chain", re.IGNORECASE)
-_RE_F2B_PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+#   * configparser treats an INDENTED line as a continuation of the previous value, and `action`
+#     is legitimately multi-line. The strip() erased the indent, so `    sendmail[actionban=<cmd>]`
+#     under `action = iptables` was checked as a line with no `=` and waved through, then parsed by
+#     fail2ban as a second action carrying an inline actionban override: root, on the next reload.
+#   * jail values are substituted UNESCAPED into action commands run through a shell — <port> in
+#     iptables-multiport's actionstart, <logpath> in *-whois-lines — and jail.conf's own default
+#     action builds `banaction[port="%(port)s", ...]` by interpolation, so `port = ssh", actionban="`
+#     reopened the override without naming any action key at all.
+#   * `ignorecommand` is a command fail2ban runs itself, and [INCLUDES] before/after pulls in a file
+#     this validator never sees. Neither was on the list.
+#
+# The panel writes a handful of fixed shapes (system_ops._panel_f2b_jail_body / _filter_body,
+# hosts.py's jail.local and _f2b_dropin_ignoreip_body), so every section, key and value it sends is
+# enumerable. Anything else is refused: an indented line, a key before any section, a `:` delimiter,
+# `%` interpolation, and any character outside printable ASCII (str.splitlines breaks on \x0c and
+# friends, which a file read does not, so a validator splitting differently from fail2ban could be
+# shown a different file).
+_F2B_JAIL_SECTIONS = re.compile(r"DEFAULT|sshd|linuxgsm-panel")
+_F2B_IP = r"[0-9A-Fa-f:.]+(?:/[0-9]{1,3})?"
+_F2B_JAIL_KEYS = {
+    "enabled": re.compile(r"true|false"),
+    "bantime": re.compile(r"[0-9]+[smhdw]?"),
+    "findtime": re.compile(r"[0-9]+[smhdw]?"),
+    "maxretry": re.compile(r"[0-9]+"),
+    "port": re.compile(r"[A-Za-z0-9]+(?:[,:][A-Za-z0-9]+)*"),
+    "filter": re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*"),     # a name in filter.d: no path, no [
+    "backend": re.compile(r"auto|polling|pyinotify|systemd|gamin"),
+    "logpath": re.compile(r"/[A-Za-z0-9._@+/-]+"),
+    # IPs and CIDRs only — no hostname, and no IPv6 zone id (`%eth0`), which ipaddress keeps
+    # verbatim, spaces and newlines included.
+    "ignoreip": re.compile(_F2B_IP + r"(?: +" + _F2B_IP + r")*"),
+    # ONE fixed value, never a grammar: a banaction names a file in action.d that fail2ban runs as
+    # root, so the only acceptable names are stock actions the panel itself chooses. It sends
+    # exactly this one, for a panel reached through a proxy (system_ops._F2B_PANEL_ALLPORTS_ACTION).
+    "banaction": re.compile(r"iptables-allports"),
+}
+_F2B_FILTER_SECTIONS = re.compile(r"Definition")
+_F2B_FILTER_KEYS = {
+    # A regex is matched against log lines, never run; only `%` (interpolation) is kept out.
+    "failregex": re.compile(r"[^%]*"),
+    "ignoreregex": re.compile(r"[^%]*"),
+}
+_RE_F2B_TEXT = re.compile(r"[\x20-\x7e\n]*")
 
 
-def _fail2ban_line_ok(line):
-    """A fail2ban config line the panel may write. See the note above for the two keys that are
-    constrained and why every other key is not."""
-    if "=" not in line:
-        return True                       # a [section] header, or a bare flag
-    key, value = line.split("=", 1)
-    if not _RE_F2B_RUNNABLE_KEY.fullmatch(key.strip()):
-        return True
-    return bool(_RE_F2B_PLAIN_NAME.fullmatch(value.strip()))
+def _fail2ban_config_ok(content, sections, keys):
+    """True when `content` is made only of `[section]` headers from `sections` and `key = value`
+    lines whose key is in `keys` and whose value that key's grammar matches in full."""
+    content = content or ""
+    if not _RE_F2B_TEXT.fullmatch(content):
+        return False
+    section = None
+    for raw in content.split("\n"):
+        if not raw.strip():
+            continue
+        if raw[0] == " ":
+            return False                  # a continuation of the previous value
+        line = raw.rstrip()
+        if line.startswith(("#", ";")):
+            continue
+        if line.startswith("["):
+            if not (line.endswith("]") and sections.fullmatch(line[1:-1])):
+                return False
+            section = line[1:-1]
+            continue
+        if section is None or "=" not in line:
+            return False
+        key, value = line.split("=", 1)
+        rule = keys.get(key.strip())
+        if rule is None or not rule.fullmatch(value.strip()):
+            return False
+    return True
 
 
-_RE_FAIL2BAN_OPEN = _fail2ban_line_ok
+class _WholeFile:
+    """A content rule that must see the whole file at once, because what a line means depends on
+    the lines around it (a continuation, the section it sits in). _content_ok calls it with the
+    content; every other rule in WRITE_CONTENT is applied line by line by _lines_match."""
+
+    def __init__(self, fn):
+        self.fn = fn
+
+    def __call__(self, content):
+        return bool(self.fn(content))
+
+
+_F2B_JAIL_RULE = _WholeFile(
+    lambda c: _fail2ban_config_ok(c, _F2B_JAIL_SECTIONS, _F2B_JAIL_KEYS))
+_F2B_FILTER_RULE = _WholeFile(
+    lambda c: _fail2ban_config_ok(c, _F2B_FILTER_SECTIONS, _F2B_FILTER_KEYS))
 
 
 def _lines_match(content, pattern):
     """Every non-blank, non-comment line is accepted by `pattern`.
 
-    `pattern` is a compiled regex (matched in FULL) or a callable taking the line — the fail2ban
-    rule needs the second form, because only two of its keys are constrained."""
+    `pattern` is a compiled regex (matched in FULL) or a callable taking the line."""
     check = pattern if callable(pattern) and not hasattr(pattern, "fullmatch") \
         else pattern.fullmatch
     for line in (content or "").splitlines():
@@ -384,6 +452,13 @@ def _lines_match(content, pattern):
     return True
 
 
+def _content_ok(content, rule):
+    """Apply a WRITE_CONTENT rule: a _WholeFile sees the whole content, anything else each line."""
+    if isinstance(rule, _WholeFile):
+        return rule(content)
+    return _lines_match(content, rule)
+
+
 WRITE_CONTENT = {
     # A fixed body: the helper owns it, so the destination cannot be steered at all. The panel
     # still sends the same bytes; they are ignored rather than trusted, which also means a future
@@ -393,10 +468,10 @@ WRITE_CONTENT = {
     "sysctl-tailscale": _RE_SYSCTL,
     "sshd-port-dropin": _RE_SSHD_PORT,
     "sshd-socket-dropin": _RE_SSHD_SOCKET,
-    "fail2ban-jail-local": _RE_FAIL2BAN_OPEN,
-    "fail2ban-panel-whitelist": _RE_FAIL2BAN_OPEN,
-    "fail2ban-panel-filter": _RE_FAIL2BAN_OPEN,
-    "fail2ban-panel-jail": _RE_FAIL2BAN_OPEN,
+    "fail2ban-jail-local": _F2B_JAIL_RULE,
+    "fail2ban-panel-whitelist": _F2B_JAIL_RULE,
+    "fail2ban-panel-filter": _F2B_FILTER_RULE,
+    "fail2ban-panel-jail": _F2B_JAIL_RULE,
 }
 
 # The one body the helper writes itself. Kept byte-identical to what the panel has always sent
@@ -701,10 +776,89 @@ def v_destroyable_user(s):
     the panel, `game-file-read`, `game-dir-tar`, `game-backup-read` and `crontab-list` all take it
     too. Putting the refusal on v_managed_user broke every one of those — the file browser,
     downloads, backups, cron and Tailscale setup — to protect four verbs. Scope it to the four."""
-    s = v_managed_user(s)
+    s = v_game_account(s)
     if _is_panel_account(s):
         raise ValueError("refusing the panel's own account")
     return s
+
+
+def v_game_account(s):
+    """A Linux user the panel may READ AS, RUN AS or CHANGE — v_managed_user, and an account the
+    panel's own sudoers grant already lets it become.
+
+    install.sh bounds "accounts the panel may become" with a Runas GROUP —
+    `<panel> ALL=(%lgsmpanel-games) NOPASSWD: ALL` — and gameuser-group refuses to put an account
+    that can already sudo inside it. But every per-account verb here checked the name with
+    v_managed_user alone, which refuses uid 0 and nothing else. So the helper handed out the reach
+    the group withholds: game-file-read / game-dir-tar drop to the NAMED account and read its
+    0600 files (`game-file-read ubuntu .ssh/id_ed25519`), lgsm-command and content-cron-write run
+    that account's executables as it, content-grant-read adds a panel-reachable account to its
+    group, and the destroy verbs `userdel -r` it.
+
+    Accepted: an account that does not exist (the verb's own lookup fails a moment later), a
+    member of GAME_GROUP, the account that invoked the helper (the single-box install where
+    LinuxGSM runs as the panel's own user), and — when that invoking account can already reach
+    root WITHOUT the helper (a privileged group, or a NOPASSWD rule for every command as root) —
+    anything, because there is no boundary left for this check to hold and refusing would only
+    break that host. Invoked as root directly, with no sudo in between, the same holds."""
+    s = v_managed_user(s)
+    try:
+        pwd.getpwnam(s)
+    except KeyError:
+        return s
+    caller = _pw_name(_int_or_none(os.environ.get("SUDO_UID")))
+    if not caller or caller == s:
+        return s
+    try:
+        if GAME_GROUP in _groups_of(s):
+            return s
+    except Exception:
+        pass                  # the group database did not answer; the caller test below decides
+    if _caller_reaches_root(caller):
+        return s
+    raise ValueError("%s is not a game account (not in %s)" % (s, GAME_GROUP))
+
+
+def _caller_reaches_root(caller):
+    """True if `caller` can already run anything as root without the helper: a privileged group,
+    or a sudoers rule granting it every command as root with NOPASSWD.
+
+    Unlike _can_already_escalate this is not a guard against a hostile policy: sudoers is root's,
+    and the panel user cannot write it. So a policy this cannot read answers True — the check it
+    feeds is then simply off on that host, which is where it was before, rather than refusing
+    every game account there."""
+    try:
+        names = _groups_of(caller)
+        if names & set(PRIVILEGED_GROUPS):
+            return True
+        pw = pwd.getpwnam(caller)
+        gids = {pw.pw_gid} | {grp.getgrnam(n).gr_gid for n in names}
+        lines, seen = [], set()
+        for path in [SUDOERS_FILE] + sorted(glob.glob(os.path.join(SUDOERS_DIR, "*"))):
+            lines.extend(_sudoers_lines(path, seen))
+        rules = _sudoers_rules_for(lines, caller, names, pw.pw_uid, gids)
+    except Exception:
+        return True
+    return any(_rule_is_nopasswd_root_all(rest) for rest in rules)
+
+
+def _rule_is_nopasswd_root_all(rest):
+    """True for the part of a sudoers rule after its user list when it reads
+    `<hosts> = [(ALL|root[:...])] NOPASSWD: ... ALL` — every command, as root, no password."""
+    m = re.fullmatch(r"\S+\s*=\s*(?:\(([^)]*)\))?\s*(.*)", rest.strip())
+    if not m:
+        return False
+    runas, cmd = m.group(1), m.group(2)
+    if runas is not None and runas.split(":")[0].strip() not in ("ALL", "root"):
+        return False
+    tags = []
+    while True:
+        t = re.match(r"([A-Z_]+)\s*:\s*", cmd)
+        if not t:
+            break
+        tags.append(t.group(1))
+        cmd = cmd[t.end():]
+    return "NOPASSWD" in tags and "ALL" in [c.strip() for c in cmd.split(",")]
 
 
 def _home_holds_a_panel(name):
@@ -956,8 +1110,18 @@ def v_choice(*allowed):
 # a caller that could choose it could choose `root` and name the group it is already in.
 GAME_GROUP = "lgsmpanel-games"
 
-# Groups whose members can already reach root on a Debian/Ubuntu host.
-PRIVILEGED_GROUPS = ("sudo", "admin", "wheel", "root")
+# Groups whose members can already reach root on a Debian/Ubuntu host. docker, lxd and disk are
+# root without sudo: a container with / bind-mounted, a privileged LXD container, raw block access.
+PRIVILEGED_GROUPS = ("sudo", "admin", "wheel", "root", "docker", "lxd", "disk")
+
+# Groups that keep an account OUT of GAME_GROUP: the ones above, incus-admin and libvirt (root
+# through their daemon, like lxd), staff (root runs from /usr/local), and adm and shadow (logs and
+# password hashes — not root, but nothing the panel's grant should hand out either). This is
+# install.sh's can_already_sudo list, and the two must name the same groups: install.sh EVICTS a
+# member of one of these on every update, so a group only it knew about was enrolled again by the
+# next import or install here and taken away by the next update. Kept apart from PRIVILEGED_GROUPS
+# because _caller_reaches_root reads that one, and a panel user in adm does not reach root.
+NEVER_ENROL_GROUPS = PRIVILEGED_GROUPS + ("adm", "shadow", "staff", "incus-admin", "libvirt")
 
 
 def _groups_of(user):
@@ -1006,22 +1170,162 @@ def _can_already_escalate(user):
         # the panel cannot drive, and says so; a false accept costs root.
         sys.stderr.write("could not read the group database for %s; refusing to enrol it\n" % user)
         return True
-    if names & set(PRIVILEGED_GROUPS):
+    if names & set(NEVER_ENROL_GROUPS):
         return True
-    specs = set([user] + ["%" + n for n in names])
-    for path in ["/etc/sudoers"] + sorted(glob.glob("/etc/sudoers.d/*")):
-        try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    line = line.split("#")[0].strip()
-                    if not line or line.startswith(("Defaults", "@include", "#include")):
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        pw = None                        # not an account yet: no uid or gid a rule could name
+    uid, gids = (pw.pw_uid, {pw.pw_gid}) if pw is not None else (None, set())
+    try:
+        gids |= {grp.getgrnam(n).gr_gid for n in names}
+    except KeyError:
+        return True                      # a group of its own that cannot be resolved: unknown
+    try:
+        lines = []
+        seen = set()
+        for path in [SUDOERS_FILE] + sorted(glob.glob(os.path.join(SUDOERS_DIR, "*"))):
+            lines.extend(_sudoers_lines(path, seen))
+        return _sudoers_grants(lines, user, names, uid, gids)
+    except (OSError, ValueError) as e:
+        # A file it could not read, an include it could not follow, a construct it does not
+        # parse. It used to `continue` past an unreadable file, which read as "no grant in it".
+        sys.stderr.write("could not read the sudoers policy for %s (%s); refusing to enrol it\n"
+                         % (user, e))
+        return True
+
+
+# Where _can_already_escalate reads the sudo policy from. Module-level so a test can point it at a
+# sandbox; nothing outside this file sets them.
+SUDOERS_FILE = "/etc/sudoers"
+SUDOERS_DIR = "/etc/sudoers.d"
+_SUDOERS_INCLUDE_RE = re.compile(r"[@#]include(dir)?\s+(.+)")
+_SUDOERS_ALIAS_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]*")
+
+
+def _sudoers_lines(path, seen, depth=0):
+    """The logical lines of one sudoers file, comments removed, following @include/#include and
+    @includedir/#includedir the way sudo does. Raises OSError (unreadable) or ValueError (an
+    include it will not follow), which the caller turns into "can escalate"."""
+    if depth > 8:
+        raise ValueError("sudoers includes nest too deeply")
+    real = os.path.realpath(path)
+    if real in seen:
+        return []
+    seen.add(real)
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    out = []
+    for line in _sudoers_logical_lines(text):
+        m = _SUDOERS_INCLUDE_RE.fullmatch(line)
+        if m:
+            target = m.group(2).strip()
+            if target.startswith('"') and target.endswith('"'):
+                target = target[1:-1]
+            if "%" in target or "\\" in target:
+                raise ValueError("an include path with escapes or %%h: %s" % target)
+            if not os.path.isabs(target):
+                target = os.path.join(os.path.dirname(path), target)
+            if m.group(1):
+                for name in sorted(os.listdir(target)):
+                    # sudo skips these in an includedir, and so may we: they are not policy.
+                    if name.endswith("~") or "." in name:
                         continue
-                    parts = line.split()
-                    if parts and parts[0] in specs:
-                        return True
-        except OSError:
+                    out.extend(_sudoers_lines(os.path.join(target, name), seen, depth + 1))
+            else:
+                out.extend(_sudoers_lines(target, seen, depth + 1))
             continue
-    return False
+        out.append(line)
+    return out
+
+
+def _sudoers_logical_lines(text):
+    """`text` as sudo's lexer reads it: comments removed, continuation lines joined. Include
+    directives come back whole (they look like comments, so they are recognised first).
+
+    The order is the point. A comment runs to the end of its PHYSICAL line and takes the newline
+    with it, so a backslash at the end of a comment continues nothing — visudo parses the next line
+    as a line of its own. Joining `\\<newline>` across the whole text first, as this used to, glued
+    that next line onto the comment and then deleted it with the comment: a `# ... \\` line followed
+    by `steam ALL=(ALL) NOPASSWD: ALL` read as no rule for steam, and steam was enrolled. The
+    continuation itself is `\\`, optional blanks, then the newline."""
+    out, pending = [], []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not pending and _SUDOERS_INCLUDE_RE.fullmatch(line):
+            out.append(line)
+            continue
+        # `#` starts a comment, except where it introduces a uid (`#1000`, `%#1000`).
+        code, comments = re.subn(r"#(?![0-9]).*", "", line)
+        code = code.strip()
+        if not comments and code.endswith("\\"):
+            pending.append(code[:-1])
+            continue
+        joined = " ".join(pending + [code]).strip()
+        pending = []
+        if joined:
+            out.append(joined)
+    if pending:
+        joined = " ".join(pending).strip()
+        if joined:
+            out.append(joined)
+    return out
+
+
+def _sudoers_grants(lines, user, names, uid, gids):
+    """True if any user specification in `lines` can match `user`. See _sudoers_rules_for."""
+    return bool(_sudoers_rules_for(lines, user, names, uid, gids))
+
+
+def _sudoers_rules_for(lines, user, names, uid, gids):
+    """The rules in `lines` whose user list can match `user` — each as the text AFTER that list.
+
+    Resolves User_Alias definitions (recursively), comma-separated user lists, `ALL`, `#uid`,
+    `%group` and `%#gid`. Anything it cannot evaluate — a netgroup, a non-Unix group, an alias
+    that is never defined, a quoted or escaped name — counts as a match: this answers "may this
+    account be put inside the panel's sudo grant", and a false yes only refuses an account."""
+    aliases = {}
+    rules = []
+    for line in lines:
+        head = line.split(None, 1)[0]
+        if head.startswith("Defaults"):
+            continue
+        if head in ("Host_Alias", "Runas_Alias", "Cmnd_Alias", "Cmd_Alias"):
+            continue
+        if head == "User_Alias":
+            body = line[len("User_Alias"):]
+            for part in re.split(r":(?=\s*[A-Z][A-Z0-9_]*\s*=)", body):
+                if "=" not in part:
+                    raise ValueError("unparsed User_Alias: %s" % line)
+                name, members = part.split("=", 1)
+                aliases[name.strip()] = [x.strip() for x in members.split(",") if x.strip()]
+            continue
+        m = re.match(r"((?:[^\s,]+\s*,\s*)*[^\s,]+)\s", line)
+        if not m:
+            raise ValueError("unparsed sudoers line: %s" % line)
+        rules.append(([x.strip() for x in m.group(1).split(",")], line[m.end():]))
+
+    def matches(item, depth=0):
+        if depth > 16:
+            raise ValueError("User_Alias nests too deeply")
+        item = item.lstrip("!")        # a negation still names the account: treat it as a match
+        if item == "ALL" or item == user:
+            return True
+        if item.startswith("%#"):
+            return item[2:].isdigit() and int(item[2:]) in gids
+        if item.startswith("%:") or item.startswith("+") or '"' in item or "\\" in item:
+            return True                  # a non-Unix group, a netgroup, a quoted name: unknown
+        if item.startswith("%"):
+            return item[1:] in names
+        if item.startswith("#"):
+            return item[1:].isdigit() and uid is not None and int(item[1:]) == uid
+        if _SUDOERS_ALIAS_NAME_RE.fullmatch(item):
+            if item not in aliases:
+                return True              # an alias defined nowhere this can see
+            return any(matches(x, depth + 1) for x in aliases[item])
+        return False
+
+    return [rest for items, rest in rules if any(matches(item) for item in items)]
 
 
 LGSM_ACTIONS = ("start", "stop", "restart", "monitor", "update", "validate", "backup",
@@ -1125,19 +1429,19 @@ VERBS = {
 
     # ── the GMod shared-content box ──
     "content-scan": ([Rest(v_ident)], lambda a: [], None),
-    "content-dir-create": ([v_managed_user], lambda a: [], None),
-    "content-game-present": ([v_managed_user, v_ident], lambda a: [], None),
-    "content-script-present": ([v_managed_user, v_ident], lambda a: [], None),
+    "content-dir-create": ([v_game_account], lambda a: [], None),
+    "content-game-present": ([v_game_account, v_ident], lambda a: [], None),
+    "content-script-present": ([v_game_account, v_ident], lambda a: [], None),
     # script "-" means "this game has no LinuxGSM script"; anything else is validated.
-    "content-game-remove": ([v_managed_user, v_ident, v_choice_or_ident], lambda a: [], None),
-    "content-cron-write": ([v_managed_user], lambda a: [], None),
-    "content-cron-remove": ([v_managed_user], lambda a: [], None),
+    "content-game-remove": ([v_game_account, v_ident, v_choice_or_ident], lambda a: [], None),
+    "content-cron-write": ([v_game_account], lambda a: [], None),
+    "content-cron-remove": ([v_game_account], lambda a: [], None),
     # The group is passed rather than looked up, so the local and remote forms take the same
     # arguments — the caller already knows it. It is still checked against the content user's real
     # primary group below before anything is granted.
-    "content-grant-read": ([v_managed_user, v_username, v_managed_user, Rest(v_ident)],
+    "content-grant-read": ([v_game_account, v_username, v_game_account, Rest(v_ident)],
                            lambda a: [], None),
-    "gmod-mount-read": ([v_managed_user], lambda a: [], None),
+    "gmod-mount-read": ([v_game_account], lambda a: [], None),
 
     # ── Ubuntu Pro ──
     "pro-status": ([], lambda a: ["pro", "status", "--format", "json"], None),
@@ -1148,7 +1452,7 @@ VERBS = {
 
     # ── misc host controls ──
     # renice takes a LIST of users, so the game servers can all be re-niced in one call.
-    "renice-users": ([v_nice, Rest(v_managed_user)],
+    "renice-users": ([v_nice, Rest(v_game_account)],
                      lambda a: ["renice", "-n", a[0], "-u"] + a[1:], None),
     "set-timezone": ([v_timezone], lambda a: ["timedatectl", "set-timezone", a[0]], None),
     # Both of these used to end in `| awk '…'` running as root. The verb returns the raw output and
@@ -1195,16 +1499,16 @@ VERBS = {
     "reboot-delayed": ([], lambda a: [], None),
 
     # ── cron and user accounts ──
-    "crontab-list": ([v_managed_user], lambda a: ["crontab", "-u", a[0], "-l"], None),
+    "crontab-list": ([v_game_account], lambda a: ["crontab", "-u", a[0], "-l"], None),
     "user-create": ([v_managed_user],
                     lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
-    "user-lock-password": ([v_managed_user], lambda a: ["passwd", "-l", a[0]], None),
+    "user-lock-password": ([v_game_account], lambda a: ["passwd", "-l", a[0]], None),
     "user-delete": ([v_destroyable_user], lambda a: ["userdel", "-r", a[0]], None),
     "user-delete-force": ([v_destroyable_user], lambda a: ["userdel", "-r", "-f", a[0]], None),
     "user-kill-processes": ([v_destroyable_user], lambda a: ["pkill", "-9", "-u", a[0]], None),
     # Free Steam's per-user crash-dump slots (see do_steam_dumps_sweep). Takes an account name and
     # nothing else: the ten paths it may remove are a constant in this file.
-    "steam-dumps-sweep": ([v_managed_user], lambda a: [], None),
+    "steam-dumps-sweep": ([v_game_account], lambda a: [], None),
     # rm -rf as root. The path is CONSTRUCTED from a validated user name (home_of), never passed
     # in, so the argument this verb receives is a name and the thing it deletes can only ever be a
     # direct child of /home.
@@ -1238,16 +1542,16 @@ VERBS = {
     "panel-restore": ([], lambda a: [], None),
     "panel-self-update": ([v_git_ref, v_branch_name], lambda a: [], None),
     "tailscale-install": ([], lambda a: [], None),
-    "game-backup-read": ([v_managed_user, v_backup_name], lambda a: [], None),
+    "game-backup-read": ([v_game_account, v_backup_name], lambda a: [], None),
     # The file browser's download buttons: one file, or a .tar.gz of one directory, from under a
     # game user's home. Both read AS THAT USER — see do_game_file_read.
-    "game-file-read": ([v_managed_user, v_relpath], lambda a: [], None),
-    "game-dir-tar": ([v_managed_user, v_relpath], lambda a: [], None),
+    "game-file-read": ([v_game_account, v_relpath], lambda a: [], None),
+    "game-dir-tar": ([v_game_account, v_relpath], lambda a: [], None),
     "lgsm-discover": ([], lambda a: [], None),
     # Which game users have a pending cron restart -- see do_restart_flags.
     "restart-flags": ([], lambda a: [], None),
     # One LinuxGSM action, run as the game user -- see do_lgsm_command for why this verb exists.
-    "lgsm-command": ([v_managed_user, v_ident, v_choice(*LGSM_ACTIONS), v_answers,
+    "lgsm-command": ([v_game_account, v_ident, v_choice(*LGSM_ACTIONS), v_answers,
                       v_choice("yes", "no")], lambda a: [], None),
     # Put a game account in the group the sudoers grant names -- see do_gameuser_group.
     "gameuser-group": ([v_managed_user], lambda a: [], None),
@@ -1765,9 +2069,20 @@ def _copy_one_regular(src, dst, src_dir_fd=None, dst_dir_fd=None):
     S_ISREG as well, because O_NOFOLLOW alone still opens a fifo or a device node — a fifo would
     hang the restore holding the panel down, and /dev/zero would fill the disk.
 
-    Hardlinks are the one shape this cannot see: a hardlink is indistinguishable from the file.
-    They are covered by the kernel instead — fs.protected_hardlinks is 1 by default on every
-    distro the panel targets, which forbids linking to a file you can neither read nor own.
+    HARD LINKS are handled here too, not left to the kernel. This used to say they were "covered
+    by the kernel instead — fs.protected_hardlinks is 1 by default", but a sysctl is host state,
+    and not state this code controls. So a staged source with a second link is refused (the inode
+    is also some other file), and the destination is never opened over what is there: the copy is
+    written to a fresh O_EXCL temp beside it and RENAMED onto the member name. A rename replaces
+    the name, so whatever inode that name had — a link to anything — is left as it was.
+
+    OWNERSHIP AND MODE are this function's to set, never the staged file's. It copied the staged
+    file's mode with fchmod(S_IMODE(st_mode)) — set-uid, set-gid and sticky bits included — onto a
+    file root had just created, and never chowned it. A member missing before the restore came
+    back as a ROOT-owned file with whatever mode bits the panel user staged: a set-uid root file of
+    its choosing. And config.json restored onto a fresh install came back root:root 0600, which the
+    non-root service cannot even read, so its next save quietly replaced the restore with defaults.
+    Every restored member is now 0600 and owned by the data directory's owner.
     """
     try:
         sfd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=src_dir_fd)
@@ -1777,19 +2092,40 @@ def _copy_one_regular(src, dst, src_dir_fd=None, dst_dir_fd=None):
         return False
     try:
         st = os.fstat(sfd)
-        if not stat.S_ISREG(st.st_mode):
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
             return False
+        if dst_dir_fd is not None:
+            owner = os.fstat(dst_dir_fd)
+        else:
+            owner = os.stat(os.path.dirname(os.path.abspath(dst)))
+        tmp = ".%s.restoring-%s" % (os.path.basename(dst), os.urandom(6).hex())
         try:
-            dfd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600,
+            dfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
                           dir_fd=dst_dir_fd)
         except OSError:
-            return False            # the destination is a symlink, or cannot be created
+            return False            # the temp name could not be created fresh
+        placed = False
         try:
             with open(sfd, "rb", closefd=False) as fsrc, open(dfd, "wb", closefd=False) as fdst:
                 shutil.copyfileobj(fsrc, fdst)
-            os.fchmod(dfd, stat.S_IMODE(st.st_mode))
+            os.fchmod(dfd, 0o600)
+            try:
+                os.fchown(dfd, owner.st_uid, owner.st_gid)
+            except OSError:
+                # Only root can give a file away. Unprivileged it is already the caller's own.
+                if os.geteuid() == 0:
+                    raise
+            os.fsync(dfd)
+            os.rename(tmp, dst, src_dir_fd=dst_dir_fd, dst_dir_fd=dst_dir_fd)
+            placed = True
         finally:
             os.close(dfd)
+            if not placed:
+                try:
+                    os.unlink(tmp, dir_fd=dst_dir_fd)
+                except OSError:
+                    # A leftover dot-temp in the panel's own data dir; nothing reads it.
+                    pass
     finally:
         os.close(sfd)
     return True
@@ -1903,7 +2239,47 @@ def do_panel_restore(args, content):
     return 0
 
 
-def _self_update_detached(panel_dir, log_path, ref, branch):
+SELF_UPDATE_LOG = "self-update.log"
+
+
+def _open_log_in_dir(dir_path, name):
+    """Open a FRESH log file `name` inside `dir_path` for writing, as root, and return it as a text
+    file object. Raises OSError.
+
+    For a directory the panel user owns — its data/ directory. `open(os.path.join(data_dir,
+    "self-update.log"), "w")` there followed a symlink and truncated whatever it named, so the panel
+    user could point that name at any file on the box and have root empty it (or create it) with
+    one panel-self-update call. And O_NOFOLLOW alone would still truncate a hard link.
+
+    So: the directory is opened once, O_NOFOLLOW, and everything happens relative to that
+    descriptor. The old name is unlinked (removing a link removes the link, never its target) and
+    the log is CREATED with O_EXCL, which fails on any name that reappears in between rather than
+    opening it. The new file is then given to the directory's owner through the descriptor, so the
+    panel can still read — and rotate — its own log."""
+    dfd = os.open(dir_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        owner = os.fstat(dfd)
+        try:
+            os.unlink(name, dir_fd=dfd)
+        except FileNotFoundError:
+            # No previous log to replace: the O_EXCL create below is all that is needed.
+            pass
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600, dir_fd=dfd)
+        try:
+            os.fchown(fd, owner.st_uid, owner.st_gid)
+        except OSError:
+            # Only root can give a file away; unprivileged (a test, or a --user install that
+            # reaches this some other way) it is already the caller's own file.
+            if os.geteuid() == 0:
+                os.close(fd)
+                raise
+    finally:
+        os.close(dfd)
+    return os.fdopen(fd, "w", encoding="utf-8")
+
+
+def _self_update_detached(panel_dir, data_dir, ref, branch):
     """The self-update, in the grandchild. NEVER RETURNS — every path ends in os._exit.
 
     Runs the ROOT-OWNED installer, not the one in the panel's checkout. The panel used to write a
@@ -1935,7 +2311,7 @@ def _self_update_detached(panel_dir, log_path, ref, branch):
     # game server down mid-update. OS updates stay a separate, explicit action.
     env["PANEL_NO_UPGRADE"] = "1"
     try:
-        with open(log_path, "w", encoding="utf-8") as log:
+        with _open_log_in_dir(data_dir, SELF_UPDATE_LOG) as log:
             log.write("=== panel self-update ===\n")
             log.flush()
             subprocess.run([resolve("bash_installer"), INSTALLER_PATH],  # nosec B603 - fixed path
@@ -1961,7 +2337,7 @@ def do_panel_self_update(args, content):
         return 1
     pid = os.fork()
     if pid == 0:
-        _self_update_detached(panel_dir, os.path.join(data_dir, "self-update.log"), ref, branch)
+        _self_update_detached(panel_dir, data_dir, ref, branch)
     os.waitpid(pid, 0)
     sys.stdout.write("UPDATE_STARTED")
     return 0
@@ -2809,25 +3185,76 @@ def do_content_script_present(args, content):
     return 0 if (os.path.isfile(path) and os.access(path, os.X_OK)) else 1
 
 
+def _remove_at(parent_fd, name):
+    """Remove `name` — a file, a link, or a whole tree — relative to the directory `parent_fd`,
+    never following a symlink at ANY depth. A link is removed as a link.
+
+    Every directory is entered by descriptor with O_NOFOLLOW and checked to be the one just
+    lstat'ed, so a name swapped for a link between the two is left alone rather than followed."""
+    try:
+        st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(st.st_mode):
+        os.unlink(name, dir_fd=parent_fd)
+        return
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    except OSError:
+        return                    # became a link (ELOOP) or vanished: not ours to chase
+    try:
+        if not os.path.samestat(st, os.fstat(fd)):
+            return
+        with os.scandir(fd) as it:
+            names = [e.name for e in it]
+        for child in names:
+            _remove_at(fd, child)
+    finally:
+        os.close(fd)
+    os.rmdir(name, dir_fd=parent_fd)
+
+
+def _remove_under_home(user, parts):
+    """Remove home_of(user)/<parts...> as root, walking EVERY component by descriptor.
+
+    content_path() builds a correct STRING, and that is all it can do: the account owns its home,
+    so it can make `serverfiles` or `lgsm` a symlink to anywhere, and shutil.rmtree's own symlink
+    guard covers only the LAST component — an intermediate link is followed like any directory.
+    `rm -rf ~/serverfiles` + `ln -s /home/<another box>/serverfiles ~/serverfiles` then had root
+    delete another tenant's content. Here the home is opened O_NOFOLLOW (its parent, HOME_ROOT, is
+    root's), each intermediate directory is opened O_NOFOLLOW relative to the last, and the final
+    entry is removed relative to that pinned directory. A link anywhere on the way ends the walk."""
+    content_path(user, *parts)            # the same validation, for its refusals
+    fd = os.open(home_of(user), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts[:-1]:
+            nfd = os.open(v_ident(part), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        _remove_at(fd, v_ident(parts[-1]))
+    finally:
+        os.close(fd)
+
+
 def do_content_game_remove(args, content):
     """Remove one game's content and, if it has one, its LinuxGSM script and config.
 
-    Three `rm -rf`s as root. Every path comes from content_path(), so the only inputs are a
-    validated user name and a validated identifier — a caller cannot name what gets deleted."""
+    Three removals as root. Every path comes from validated pieces, so the only inputs are a
+    validated user name and a validated identifier — a caller cannot name what gets deleted. And
+    every one is walked by descriptor (_remove_under_home), because the account whose home this is
+    can turn any directory on the way into a symlink."""
     user, game, script = args[0], args[1], args[2]
-    targets = [content_path(user, CONTENT_SUBDIR, game)]
+    targets = [(CONTENT_SUBDIR, game)]
     if script != "-":
-        targets.append(content_path(user, script))
-        targets.append(content_path(user, "lgsm", "config-lgsm", script))
-    for path in targets:
-        shutil.rmtree(path, ignore_errors=True)
-        if os.path.isfile(path):
-            try:
-                os.unlink(path)
-            except OSError:
-                # Best effort, as the shell form was: a game whose files are already gone, or a
-                # path the filesystem will not let go of, must not abort the other removals.
-                pass
+        targets.append((script,))
+        targets.append(("lgsm", "config-lgsm", script))
+    for parts in targets:
+        try:
+            _remove_under_home(user, parts)
+        except OSError:
+            # Best effort, as the shell form was: a game whose files are already gone, a link on the
+            # way, or a path the filesystem will not let go of must not abort the other removals.
+            pass
     return 0
 
 
@@ -2946,6 +3373,12 @@ def _chmod_nofollow(path, add, x_if_user=False, dir_fd=None):
         os.close(fd)
 
 
+# Mirrors panel/security/privileged.py _NEVER_A_CONTENT_GROUP; root never imports panel code.
+NEVER_A_CONTENT_GROUP = frozenset({"root", "wheel", "sudo", "admin", "adm", "shadow", "docker",
+                                   "lxd", "disk", "staff",
+                                   "incus-admin", "libvirt"})
+
+
 def do_content_grant_read(args, content):
     """Let a GMod user read a content user's game trees.
 
@@ -2963,6 +3396,11 @@ def do_content_grant_read(args, content):
         print("panel-helper: refusing a gid-0 group", file=sys.stderr)
         return 2
     actual = grp.getgrgid(content_pw.pw_gid).gr_name
+    if actual in NEVER_A_CONTENT_GROUP:
+        # The same deny set privileged.py keeps (_NEVER_A_CONTENT_GROUP). A content account whose
+        # PRIMARY group is one of these would make the grant `usermod -aG sudo|docker|shadow ...`.
+        print("panel-helper: refusing to grant membership of that group", file=sys.stderr)
+        return 2
     if group != actual:
         # The caller named a group that is not this content user's. Adding the GMod user to an
         # arbitrary group is exactly the kind of thing this boundary exists to refuse.
@@ -2974,29 +3412,56 @@ def do_content_grant_read(args, content):
     # Traversal, outermost first: the home, then serverfiles, then each granted game tree. The
     # shell form skipped serverfiles because content-dir-create had already made it group-readable;
     # it does not any more, so the grant is what opens the path.
-    for _dir in (home_of(content_user), content_path(content_user, CONTENT_SUBDIR)):
+    #
+    # Every step below works from DESCRIPTORS pinned here. The home's parent is root's, so the home
+    # opened O_NOFOLLOW is the real one; serverfiles is opened O_NOFOLLOW relative to it. The walk
+    # used to start from the PATH .../serverfiles/<game>: fwalk's own check covers the last
+    # component only, so the content account could make ~/serverfiles a symlink to another tenant's
+    # directory and have root `chmod g+rX` that tenant's game tree for the content group — the same
+    # shape content-game-remove had with rmtree.
+    try:
+        home_fd = os.open(home_of(content_user), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return 0                  # no home to grant anything in; best-effort, as before
+    try:
         try:
-            _chmod_nofollow(_dir, stat.S_IXGRP)
+            _chmod_nofollow(home_of(content_user), stat.S_IXGRP)
         except OSError:
             pass                  # traversal bit is best-effort, as it was in the shell form
-    for game in games:
-        path = content_path(content_user, CONTENT_SUBDIR, game)
-        # fwalk, not walk, and follow_symlinks=False: it hands each level a DESCRIPTOR and checks
-        # that the directory it descended into is the one it stat'd, so a component swapped
-        # mid-walk stops the descent instead of redirecting it.
-        for _root, dirs, files, rootfd in os.fwalk(path, follow_symlinks=False,
-                                                   onerror=lambda _e: None):
-            for name in dirs + files:
-                try:
-                    _chmod_nofollow(name, stat.S_IRGRP, x_if_user=True, dir_fd=rootfd)
-                except OSError:
-                    continue
         try:
-            _chmod_nofollow(path, stat.S_IRGRP | stat.S_IXGRP)
+            sf_fd = os.open(CONTENT_SUBDIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=home_fd)
         except OSError:
-            # This game's tree is missing or not ours to chmod. The shell form was per-command
-            # best-effort for the same reason, and the other granted games must still be done.
-            pass
+            return 0              # no serverfiles, or a link where it should be: nothing to open
+        try:
+            try:
+                _chmod_nofollow(CONTENT_SUBDIR, stat.S_IXGRP, dir_fd=home_fd)
+            except OSError:
+                # No content subdir to open up (nothing mounted yet) — the grant still stands.
+                pass
+            for game in games:
+                name = v_ident(game)
+                # fwalk, not walk, and follow_symlinks=False: it hands each level a DESCRIPTOR and
+                # checks that the directory it descended into is the one it stat'd, so a component
+                # swapped mid-walk stops the descent instead of redirecting it.
+                for _root, dirs, files, rootfd in os.fwalk(
+                        name, dir_fd=sf_fd, follow_symlinks=False, onerror=lambda _e: None):
+                    for entry in dirs + files:
+                        try:
+                            _chmod_nofollow(entry, stat.S_IRGRP, x_if_user=True, dir_fd=rootfd)
+                        except OSError:
+                            continue
+                try:
+                    _chmod_nofollow(name, stat.S_IRGRP | stat.S_IXGRP, dir_fd=sf_fd)
+                except OSError:
+                    # This game's tree is missing or not ours to chmod. The shell form was
+                    # per-command best-effort for the same reason, and the other granted games
+                    # must still be done.
+                    pass
+        finally:
+            os.close(sf_fd)
+    finally:
+        os.close(home_fd)
     return 0
 
 
@@ -3019,7 +3484,7 @@ def do_write_file(args, content):
     rule = WRITE_CONTENT[target]
     if target == "node-tools-cron":
         content = NODE_TOOLS_CRON_BODY      # helper-owned; stdin is not trusted for a cron file
-    elif rule is not None and not _lines_match(content, rule):
+    elif rule is not None and not _content_ok(content, rule):
         print("panel-helper: content rejected for %s" % target, file=sys.stderr)
         return 2
     directory = os.path.dirname(path)

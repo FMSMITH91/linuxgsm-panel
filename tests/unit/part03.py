@@ -820,6 +820,36 @@ try:
     _gp_calls.clear()
     _sm_core.set_game_priority_bulk(None, [])
     check("set_game_priority_bulk: no users -> no call", _gp_calls == [])
+    # The helper refuses the WHOLE argument list when one account is outside the panel's game
+    # group (renice-users is Rest(v_game_account)), so one such account on the panel host left
+    # every game there un-reniced. A refused batch falls back to one call per account.
+    _gp_local = _sm_core.is_local_server
+    try:
+        _sm_core.run_privileged = lambda s, v, a=(), **k: (
+            _gp_calls.append((v, list(a))), ("", "", 2 if "ubuntu" in a else 0))[1]
+        _sm_core.is_local_server = lambda s: True
+        _gp_calls.clear()
+        _sm_core.set_game_priority_bulk(None, ["codserver", "ubuntu", "gmodserver"])
+        check("set_game_priority_bulk: one refused account does not cost the others their renice",
+              _gp_calls[1:] == [("renice-users", ["-1", "codserver"]),
+                                ("renice-users", ["-1", "ubuntu"]),
+                                ("renice-users", ["-1", "gmodserver"])], str(_gp_calls))
+        _sm_core.is_local_server = lambda s: False
+        _gp_calls.clear()
+        _sm_core.set_game_priority_bulk(None, ["codserver", "ubuntu", "gmodserver"])
+        check("set_game_priority_bulk: ...a remote host (no such gate there) is not retried",
+              len(_gp_calls) == 1, str(_gp_calls))
+        # renice's OWN failure is 1, and it fails whenever one listed account has no process — any
+        # stopped server — after renicing the rest. That is not a refusal and is not retried.
+        _sm_core.is_local_server = lambda s: True
+        _sm_core.run_privileged = lambda s, v, a=(), **k: (
+            _gp_calls.append((v, list(a))), ("", "renice: failed to get priority", 1))[1]
+        _gp_calls.clear()
+        _sm_core.set_game_priority_bulk(None, ["codserver", "ubuntu", "gmodserver"])
+        check("set_game_priority_bulk: ...renice's own 'no such process' (rc 1) is not retried",
+              len(_gp_calls) == 1, str(_gp_calls))
+    finally:
+        _sm_core.is_local_server = _gp_local
 finally:
     _sm_core.run_privileged = _orig_gp
 
@@ -2083,6 +2113,94 @@ finally:
     _sm_core.get_connection = _o_conn
 
 
+# ── a remote that goes SILENT must not hold the drain forever ──────────────────────────────────
+# _drain_exec's only exit was exit_status_ready(), and settimeout(0.0) threw away the channel
+# timeout. A remote that accepts the exec and then sends no byte and no exit status (compromised,
+# or wedged by OOM) held the loop for the life of the process: the monitor sweep's ex.map() blocked
+# on that one host, so alerting stopped for every host. The fake below answers after ~3 s, so a
+# drain without the bound returns rc 0 late instead of hanging this suite; with it, rc -1 at once.
+import time as _dtime  # noqa: E402
+
+
+class _SilentChan:
+    def __init__(self, trickle_until=0.0, end_after=3.0):
+        self.t0 = _dtime.monotonic()
+        self.trickle_until, self.end_after = trickle_until, end_after
+        self.closed = False
+        self._next = 0.0
+
+    def settimeout(self, _t):
+        return None
+
+    def recv_ready(self):
+        # Talks every 20 ms while trickling: a command making progress, however slowly.
+        el = _dtime.monotonic() - self.t0
+        if el < self.trickle_until and el >= self._next:
+            self._next = el + 0.02
+            return True
+        return False
+
+    def recv(self, _n):
+        return b"."
+
+    def recv_stderr_ready(self):
+        return False
+
+    def recv_stderr(self, _n):
+        return b""
+
+    def exit_status_ready(self):
+        return self.closed or _dtime.monotonic() - self.t0 > self.end_after
+
+    def recv_exit_status(self):
+        return 0
+
+    def close(self):
+        self.closed = True
+
+
+_sc = _SilentChan()
+_sd_t = _dtime.monotonic()
+_sd = _sm_core._drain_exec(_sc, idle_limit=0.1)
+check("_core: a remote that sends nothing and no exit status is given up on (rc -1)",
+      _sd[2] == -1 and _dtime.monotonic() - _sd_t < 2.0 and _sc.closed,
+      "rc=%r after %.1fs closed=%r — the drain waits as long as the remote likes"
+      % (_sd[2], _dtime.monotonic() - _sd_t, _sc.closed))
+check("_core: ...and says it timed out, like the other two transports",
+      b"timed out" in _sd[1], repr(_sd[1]))
+# POSITIVE CONTROL: silence is what is bounded, not duration. A command that keeps talking for
+# longer than the idle limit, then exits, is read to the end with its real rc.
+_sc = _SilentChan(trickle_until=0.4, end_after=0.45)
+_sd = _sm_core._drain_exec(_sc, idle_limit=0.1)
+check("_core: ...while a command still making progress past the limit runs to its exit",
+      _sd[2] == 0 and not _sc.closed and len(_sd[0]) >= 5,
+      "rc=%r closed=%r read=%d" % (_sd[2], _sc.closed, len(_sd[0])))
+
+# ...and run_command must PASS the bound: a helper that can stop is no use to a caller that
+# never asks it to. The floor is shrunk for the test; the caller's timeout of 0 leaves the floor.
+_o_conn2, _o_floor = _sm_core.get_connection, _sm_core._DRAIN_IDLE_FLOOR
+
+
+class _SilentStd:
+    def __init__(self, ch):
+        self.channel = ch
+
+
+try:
+    _rc_chan = _SilentChan()
+    _rc_chan.shutdown_write = lambda: None
+    _sm_core.get_connection = lambda s: NS(exec_command=lambda c, timeout=None: (
+        _SilentStd(_rc_chan), _SilentStd(_rc_chan), _SilentStd(_rc_chan)))
+    _sm_core._DRAIN_IDLE_FLOOR = 0.1
+    _rct = _dtime.monotonic()
+    _rcr = _sm_core.run_command(_LgsmSrv(), "id", timeout=0, sudo=False)
+    check("_core: run_command hands the drain its silence bound",
+          _rcr[2] == -1 and _dtime.monotonic() - _rct < 2.0,
+          "rc=%r after %.1fs" % (_rcr[2], _dtime.monotonic() - _rct))
+finally:
+    _sm_core.get_connection, _sm_core._DRAIN_IDLE_FLOOR = _o_conn2, _o_floor
+
+
 # ── the repo URL the panel links to is DERIVED from the checkout's origin ───────────────────────
 # The sidebar footer links "LinuxGSM Panel" to the repo and the running commit SHA to that exact
 # commit, so "what is actually deployed" is one click. Both come from github_repo_url(), which
@@ -2319,6 +2437,68 @@ check("f2b jail: ...and it is not the journal backend",
       "backend = systemd" not in _so._panel_f2b_jail_body("/x/auth.log", 5000, []))
 check("f2b jail: ...and the logpath is still written",
       "logpath = /x/auth.log" in _so._panel_f2b_jail_body("/x/auth.log", 5000, []))
+
+# ── a ban on the web port does nothing to a client that connects to the PROXY ────────────────
+# Behind nginx/Caddy (trust_proxy) or Tailscale Serve, auth.log records the X-Forwarded-For client,
+# whose packets go to :443. The jail's default multiport action banned them on the backend port
+# only, matched nothing, and the panel still audited and notified the IP as banned.
+import panel.core.config as _f2bp_cfg                                              # noqa: E402
+_f2bp_saved = (_f2bp_cfg.load_config, _so.panel_fail2ban_status, _so._panel_f2b_jail_port,
+               _so._panel_f2b_jail_value, _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban)
+try:
+    for _f2bp_c, _f2bp_want in (({"trust_proxy": True}, True), ({"tailscale_setup_done": True}, True),
+                                ({"bind_host": "127.0.0.1"}, True),
+                                ({"bind_host": "0.0.0.0"}, False), ({}, False)):
+        _f2bp_cfg.load_config = lambda _c=dict(_f2bp_c): _c
+        _f2bp_body = _so._panel_f2b_jail_body("/x/auth.log", 5000, [])
+        check("f2b jail: %r bans on %s" % (_f2bp_c, "EVERY port" if _f2bp_want else "the web port"),
+              ("banaction = iptables-allports" in _f2bp_body) is _f2bp_want, _f2bp_body[:160])
+        # An all-ports ban on a tailnet peer takes its SSH over tailscale0 and every game port:
+        # under Serve the forwarded client IS a tailnet address, and five mistyped passwords from an
+        # admin's laptop banned it for an hour. The panel never firewall-blocks the tailnet elsewhere.
+        _f2bp_ign = next((ln.split("=", 1)[1].split() for ln in _f2bp_body.splitlines()
+                          if ln.startswith("ignoreip")), [])
+        check("f2b jail: %r %s the tailnet (IPv4 and IPv6) from the ban"
+              % (_f2bp_c, "exempts" if _f2bp_want else "(web port only, as before) does not exempt"),
+              ({"100.64.0.0/10", "fd7a:115c:a1e0::/48"} <= set(_f2bp_ign)) is _f2bp_want
+              and {"127.0.0.1/8", "::1"} <= set(_f2bp_ign), "ignoreip %r" % (_f2bp_ign,))
+    # ...and a jail already written for the web port alone is rewritten once the panel is proxied:
+    # ensure_panel_fail2ban is the only thing that would ever rewrite it, and it returned early on
+    # "port, logpath, backend and whitelist all match". The stored ignoreip is what THIS config
+    # writes, so only the banaction differs.
+    _f2bp_calls = []
+    _so.panel_fail2ban_status = lambda: {"installed": True, "enabled": True}
+    _so._panel_f2b_jail_port = lambda: 5000
+    _so._panel_f2b_jail_value = lambda k: {"logpath": "/x/auth.log", "backend": "auto"}.get(k)
+    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line(
+        _so._panel_f2b_ignore([], _so._panel_login_proxied())).split()
+    _so.configure_panel_fail2ban = lambda *a, **k: (_f2bp_calls.append(a), (True, "ok"))[1]
+    _f2bp_cfg.load_config = lambda: {"trust_proxy": True}
+    _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
+    check("f2b jail: a web-port-only jail on a proxied panel is rewritten, not left as healthy",
+          len(_f2bp_calls) == 1, "rewrites: %r" % (_f2bp_calls,))
+    _f2bp_calls.clear()
+    _f2bp_cfg.load_config = lambda: {}
+    _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
+    check("f2b jail: ...while the same jail on a directly-reached panel is left alone (positive control)",
+          not _f2bp_calls, "rewrites: %r" % (_f2bp_calls,))
+    # An all-ports jail written before the tailnet was exempted is rewritten, not read as healthy.
+    _f2bp_cfg.load_config = lambda: {"tailscale_setup_done": True}
+    _so._panel_f2b_jail_value = lambda k: {"logpath": "/x/auth.log", "backend": "auto",
+                                           "banaction": "iptables-allports"}.get(k)
+    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line([]).split()
+    _f2bp_calls.clear()
+    _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
+    check("f2b jail: an all-ports jail that bans the tailnet is rewritten, not left as healthy",
+          len(_f2bp_calls) == 1, "rewrites: %r" % (_f2bp_calls,))
+    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line(_so._panel_f2b_ignore([], True)).split()
+    _f2bp_calls.clear()
+    _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
+    check("f2b jail: ...while one that already exempts it is left alone (positive control)",
+          not _f2bp_calls, "rewrites: %r" % (_f2bp_calls,))
+finally:
+    (_f2bp_cfg.load_config, _so.panel_fail2ban_status, _so._panel_f2b_jail_port,
+     _so._panel_f2b_jail_value, _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban) = _f2bp_saved
 
 # ensure_panel_fail2ban is the ONLY thing that would ever rewrite the jail, and it returned early
 # when the port and whitelist matched — so a jail carrying a logpath from a previous install path
@@ -2681,6 +2861,101 @@ try:
     check("bootstrap: an unread reboot-required check is not reported as 'no reboot needed'",
           "No reboot needed" not in _log2 and "Could not check whether a reboot is needed" in _log2,
           "a host that never answered was told it was up to date: %s" % _log2[-300:])
+
+    # ── ...and the SSH hardening is read back from sshd, not assumed from the write ──
+    # sshd keeps the FIRST value it reads and Ubuntu Includes sshd_config.d before sshd_config's
+    # own body, so on a cloud image whose 50-cloud-init.conf says `PasswordAuthentication yes` the
+    # edit changed nothing. The tuple was discarded and the job said "VPS bootstrap complete"
+    # about a host still taking password logins from the internet.
+    def _bs_harden(effective, rc=0, auth="key"):
+        _bs_priv.clear()
+        _sm_core.run_command = _bs_run(("NO\n", "", 0))
+
+        def _priv(s, verb, args=None, **k):
+            _bs_priv.append(verb)
+            if verb == "sshd-effective-config":
+                return (effective, "", rc)
+            return ("", "", 0)
+        _sm_core.run_privileged = _priv
+        return _sm_hosts.remote_bootstrap_vps(
+            NS(id=9102, host="203.0.113.11", auth_method=auth), set_timezone="", enable_ufw=False,
+            install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=False)
+    _eff_ok = ("port 22\nclientaliveinterval 300\nclientalivecountmax 2\n"
+               "permitrootlogin without-password\npasswordauthentication no\n")
+    _eff_cloud = _eff_ok.replace("passwordauthentication no", "passwordauthentication yes")
+    _hok, _hmsg, _hlog = _bs_harden(_eff_cloud)
+    check("bootstrap: hardening that sshd does not use is NOT reported as a complete bootstrap",
+          _hok is False and "PasswordAuthentication yes" in _hmsg,
+          "ok=%r msg=%r — password SSH still open and the job says it is done" % (_hok, _hmsg))
+    check("bootstrap: ...and the log says password login is still on",
+          "Password SSH login is still ENABLED" in _hlog and "NOT IN EFFECT" in _hlog,
+          _hlog[-400:])
+    check("bootstrap: ...having asked sshd for its effective configuration",
+          "sshd-effective-config" in _bs_priv, "verbs run: %r" % (_bs_priv[-8:],))
+    _hok, _hmsg, _hlog = _bs_harden(_eff_ok)
+    check("bootstrap: ...while hardening sshd DOES use completes (positive control; "
+          "without-password is prohibit-password)",
+          _hok is True and _hmsg.startswith("VPS bootstrap complete (") and "NOT IN EFFECT" not in _hlog,
+          "ok=%r msg=%r log=%r" % (_hok, _hmsg, _hlog[-300:]))
+    _hok, _hmsg, _ = _bs_harden("", rc=1)
+    check("bootstrap: an unreadable sshd -T is reported as unverified, not as hardened",
+          _hok is True and "could not be verified" in _hmsg, "msg=%r" % (_hmsg,))
+    _hok, _hmsg, _ = _bs_harden(_eff_cloud, auth="password")
+    check("bootstrap: ...and a password-auth remote, which never asks for it off, is not failed "
+          "for keeping it", _hok is True, "msg=%r" % (_hmsg,))
+    # ...but "not the value the panel wrote" is not "not hardened". A host with `PermitRootLogin no`
+    # in sshd_config.d — STRICTER than the prohibit-password the panel sets — was failed with "the
+    # SSH hardening did not take effect" and never marked online.
+    for _prl in ("no", "forced-commands-only"):
+        _hok, _hmsg, _hlog = _bs_harden(_eff_ok.replace("permitrootlogin without-password",
+                                                        "permitrootlogin " + _prl))
+        check("bootstrap: PermitRootLogin %s, stricter than asked, is hardened, not a failure" % _prl,
+              _hok is True and "NOT IN EFFECT" not in _hlog, "ok=%r msg=%r" % (_hok, _hmsg))
+    _hok, _hmsg, _ = _bs_harden(_eff_ok.replace("permitrootlogin without-password", "permitrootlogin yes"))
+    check("bootstrap: ...while PermitRootLogin yes still fails it (positive control)",
+          _hok is False and "PermitRootLogin yes" in _hmsg, "ok=%r msg=%r" % (_hok, _hmsg))
+
+    # The UFW step's `ufw limit 22/tcp` is appended AFTER an existing `ufw allow OpenSSH` or bare
+    # `allow 22` — neither is the 22/tcp rule to ufw — so SSH stayed unthrottled on exactly the
+    # hosts that had opened it the usual Ubuntu way. They go, and only after the limit is in.
+    _bs_ufw = []
+
+    def _priv_ufw(s, verb, args=None, **k):
+        _bs_ufw.append((verb, list(args or [])))
+        return ("", "", 0)
+    _sm_core.run_privileged = _priv_ufw
+    _sm_core.run_command = _bs_run(("NO\n", "", 0))
+    _sm_hosts.remote_bootstrap_vps(
+        NS(id=9103, host="203.0.113.12", auth_method="key"), set_timezone="", enable_ufw=True,
+        install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=False)
+    _i_lim = _bs_ufw.index(("ufw-limit-port", ["22/tcp"])) if ("ufw-limit-port", ["22/tcp"]) in _bs_ufw else -1
+    _i_app = _bs_ufw.index(("ufw-delete-allow-app", ["OpenSSH"])) if ("ufw-delete-allow-app", ["OpenSSH"]) in _bs_ufw else -1
+    _i_bare = _bs_ufw.index(("ufw-delete-allow-port", ["22"])) if ("ufw-delete-allow-port", ["22"]) in _bs_ufw else -1
+    check("bootstrap: the SSH limit is not left behind an OpenSSH / bare-22 allow",
+          _i_lim >= 0 and _i_app > _i_lim and _i_bare > _i_lim,
+          "limit at %d, delete OpenSSH at %d, delete bare 22 at %d" % (_i_lim, _i_app, _i_bare))
+    check("bootstrap: ...and with the limit in, UFW is switched on (positive control for below)",
+          ("ufw-enable", []) in _bs_ufw, "ran %r" % (_bs_ufw,))
+    # ...but only once the limit IS in. Its exit code was never read: when `ufw limit 22/tcp`
+    # failed, the rules that DO let SSH in were deleted anyway and UFW was switched on at
+    # deny-incoming — a fresh host cut off from SSH mid-bootstrap, reported as complete.
+    _bs_ufw.clear()
+
+    def _priv_ufw_nolimit(s, verb, args=None, **k):
+        _bs_ufw.append((verb, list(args or [])))
+        return ("", "ERROR: Could not acquire lock", 1) if verb == "ufw-limit-port" else ("", "", 0)
+    _sm_core.run_privileged = _priv_ufw_nolimit
+    _bnok, _bnmsg, _bnlog = _sm_hosts.remote_bootstrap_vps(
+        NS(id=9104, host="203.0.113.13", auth_method="key"), set_timezone="", enable_ufw=True,
+        install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=False)
+    _bn_ran = [v for v, _a in _bs_ufw]
+    check("bootstrap: a failed SSH limit removes no SSH allow and does not switch UFW on",
+          "ufw-limit-port" in _bn_ran and not {"ufw-delete-allow-app", "ufw-delete-allow-port",
+                                               "ufw-default", "ufw-enable"} & set(_bn_ran),
+          "ran %r" % (_bs_ufw,))
+    check("bootstrap: ...and the job says the firewall was not enabled, not 'complete'",
+          _bnok is False and "NOT enabled" in _bnmsg and "Could not acquire lock" in _bnmsg
+          and "NOT DONE" in _bnlog, "ok=%r msg=%r" % (_bnok, _bnmsg))
 finally:
     (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
      _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,

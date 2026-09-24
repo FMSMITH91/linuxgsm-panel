@@ -237,10 +237,22 @@ panel_port() {
 # desired port (5000, or a previously configured one) is already taken by another service,
 # the panel would fail to bind — so probe upward for a free port and persist the choice so
 # the first start, the health check, and the firewall step all agree. Prints the chosen port.
+#
+# AS THE OWNER of PANEL_DIR when that is not root. Every path this writes is inside data/, and on
+# any re-run after the first chown data/ belongs to the panel user. The panel user can force this
+# path by deleting its own app.py. As root, open("w"), os.replace and os.chmod follow a symlink the
+# panel user planted there (config.json.tmp used to be a fixed name), so root truncated, rewrote
+# and chmodded a file of the panel user's choosing. Dropping to the owner makes the kernel refuse
+# that. The script also refuses symlinks and uses an O_EXCL temp file itself, for the one case
+# that stays root: a fresh install, where root still owns the tree.
 choose_and_record_port() {
-    local desired="${1:-5000}"
-    python3 - "${desired}" "${PANEL_DIR}/data/config.json" <<'PYEOF'
-import json, os, socket, sys
+    local desired="${1:-5000}" as_owner="" owner=""
+    if [ "$(id -u)" -eq 0 ]; then
+        owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
+        [ "${owner}" != "root" ] && as_owner="sudo -u ${owner}"
+    fi
+    ${as_owner} python3 - "${desired}" "${PANEL_DIR}/data/config.json" <<'PYEOF'
+import json, os, socket, sys, tempfile
 desired, cfg_path = int(sys.argv[1]), sys.argv[2]
 
 def free(p):
@@ -271,6 +283,13 @@ for cand in range(desired, desired + 51):   # 5000..5050 — plenty of headroom
 if port is None:
     raise SystemExit(0)
 
+data_dir = os.path.dirname(cfg_path)
+os.makedirs(data_dir, exist_ok=True)
+# Never write through a link: open(), os.chmod and a fixed temp name all follow one.
+if os.path.islink(data_dir) or os.path.islink(cfg_path):
+    sys.stderr.write("Refusing to record the port: %s or its config.json is a symbolic link.\n"
+                     % data_dir)
+    raise SystemExit(3)
 cfg = {}
 try:
     with open(cfg_path) as f:
@@ -278,20 +297,22 @@ try:
 except Exception:
     cfg = {}
 cfg["port"] = port
-data_dir = os.path.dirname(cfg_path)
-os.makedirs(data_dir, exist_ok=True)
 try:
     os.chmod(data_dir, 0o700)   # owner-only: keep the DB/keys/config out of other local users' reach
 except OSError:
     pass
-tmp = cfg_path + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(cfg, f, indent=2)
-os.replace(tmp, cfg_path)
+# mkstemp opens O_CREAT|O_EXCL|O_NOFOLLOW under a random name, 0600 from the start.
+fd, tmp = tempfile.mkstemp(dir=data_dir, prefix=".config.json.")
 try:
-    os.chmod(cfg_path, 0o600)
-except OSError:
-    pass
+    with os.fdopen(fd, "w") as f:
+        json.dump(cfg, f, indent=2)
+    os.replace(tmp, cfg_path)
+except BaseException:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
 print(port)
 PYEOF
 }
@@ -371,7 +392,11 @@ _gitc() {
 fetch_code() {
     mkdir -p "${PANEL_DIR}"
     if [ -n "${SRC}" ] && [ "${SRC}" != "${PANEL_DIR}" ]; then
-        tar -C "${SRC}" --exclude=./venv --exclude=./data --exclude='*.pyc' -cf - . | tar -C "${PANEL_DIR}" -xf -
+        # --no-same-owner: as root, tar would otherwise give the copy SRC's owners. A fresh install
+        # then chowns it to the panel user anyway; before that, stage_root_source reads the copy
+        # directly only when every file in it is root's.
+        tar -C "${SRC}" --exclude=./venv --exclude=./data --exclude='*.pyc' -cf - . \
+            | tar -C "${PANEL_DIR}" --no-same-owner -xf -
     elif [ -d "${PANEL_DIR}/.git" ]; then
         # The fresh clone below is shallow + single-branch (main only). Widen it so ANY branch is
         # fetchable and give it real history, so switching branches / updating on a branch works.
@@ -414,6 +439,15 @@ resolve_update_target() {
     if [ -n "${PANEL_UPDATE_REF:-}" ] \
        && _gitc merge-base --is-ancestor "${PANEL_UPDATE_REF}" "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
         TARGET_REF="${PANEL_UPDATE_REF}"
+        # A pinned commit this checkout already contains is not an update when the checkout is
+        # itself a newer commit of the branch: stay put rather than reset backwards. The deploy
+        # pins each run to the commit whose CI passed, and those runs do not finish in push order
+        # (a re-run of an old commit's CI deploys it last). A HEAD that is NOT on the branch (a
+        # local commit) is still reset, as it always was.
+        if _gitc merge-base --is-ancestor "${PANEL_UPDATE_REF}" HEAD 2>/dev/null \
+           && _gitc merge-base --is-ancestor HEAD "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
+            TARGET_REF="HEAD"
+        fi
     fi
     TARGET_SHA="$(_gitc rev-parse "${TARGET_REF}" 2>/dev/null)"
     return 0
@@ -633,23 +667,211 @@ check_origin_trusted() {
 #
 # check_origin_trusted() compares the remote URL and is blind to both.
 #
-# `git cat-file blob <rev>:<path>` reads the object store: it returns the committed bytes, applies
-# no filter, and never consults the working tree or the index. Root stages that output inside
-# HELPER_DIR, which is root-owned 0755 and therefore not panel-writable — which is what closes the
-# window between staging and `install`.
+# Reading the committed blob instead (`git cat-file blob HEAD:<path>` through _gitc) closed those
+# two and left the rest of .git. The OBJECT STORE is panel-owned too, and git trusts it:
+#
+#   * a replace ref (`git replace <committed-blob> <attacker-blob>`, i.e. .git/refs/replace/<sha>)
+#     makes cat-file return the attacker's bytes, while `rev-parse HEAD` still names the real
+#     upstream commit;
+#   * a loose object written under the committed blob's name shadows the packed original, and git
+#     returns it without re-hashing.
+#
+# And with no .git at all, the tree was copied as-is. The panel user can delete its own .git.
+#
+# So when this runs as ROOT, a boundary file comes from something the panel user cannot write:
+#
+#   * a checkout that is still ROOT'S OWN, tree and .git (the fresh path, before the chown). It
+#     is read directly, exactly as before; or else
+#   * the OPERATOR'S SOURCE TREE — `sudo bash install.sh` run from a clone or an unpacked tarball
+#     (SRC, when that is not ${PANEL_DIR}, and only while the installer running is that tree's own)
+#     — when that directory, every directory above it, and every entry down to the file are beyond
+#     the panel user's reach, with no symlink on the way down (_operator_src, _operator_file).
+#     fetch_code has just copied that very working tree into ${PANEL_DIR}, so this keeps the
+#     helper in step with the code it installed, and the operator chose it as root: refusing it
+#     (no .git, a local or feature-branch commit, no network) protected nothing and left the
+#     helper stale on every such update; or else
+#   * ROOT'S OWN CLONE of REPO_URL (ROOT_GIT, below), fetched by root's git with no user or system
+#     config. The panel's HEAD is only a request there: it is honoured only when root's clone has
+#     that commit on ${DEFAULT_BRANCH}. Nothing else from the panel's .git is read. A checkout at a
+#     commit upstream does not have, or with no .git at all, gets NO refresh, and the installer
+#     says so.
+#
+# Run as the account that owns the checkout (a per-user install), none of this applies: that
+# account can already rewrite the install.sh it is running.
+#
+# Either way the output is staged inside HELPER_DIR, which is root-owned 0755 and therefore not
+# panel-writable. That is what closes the window between staging and `install`.
 # Root-owned, outside the panel's checkout — see stage_root_source and SECURITY.md.
 HELPER_DIR="/usr/local/lib/linuxgsm-panel"
+ROOT_GIT="${HELPER_DIR}/.source.git"
+ROOT_SRC_COMMIT=""
+ROOT_SRC_TRIED=0
 
+# Root's git, on root's clone, with no config it did not write: no user or system gitconfig (a
+# `url.<x>.insteadOf` there would repoint REPO_URL, a credential helper would run as root), and no
+# inherited GIT_* environment. The proxy variables are the only ones passed through.
+_rootgit() {
+    ${H_SUDO:-} env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true \
+        ${https_proxy:+https_proxy="${https_proxy}"} ${HTTPS_PROXY:+HTTPS_PROXY="${HTTPS_PROXY}"} \
+        ${no_proxy:+no_proxy="${no_proxy}"} ${NO_PROXY:+NO_PROXY="${NO_PROXY}"} \
+        git --git-dir="${ROOT_GIT}" "$@"
+}
+
+# Does the panel user have no hand in this checkout? True only when every file and directory in
+# it, .git included, is root's. find does not follow symlinks, so a link is judged by its own owner.
+_checkout_is_roots() {
+    [ -d "${PANEL_DIR}" ] && [ ! -L "${PANEL_DIR}" ] || return 1
+    [ -z "$(find "${PANEL_DIR}" ! -uid 0 -print -quit 2>/dev/null)" ]
+}
+
+# The panel user's uid and groups, for the reach tests below. Fails when there is no such account,
+# so every reach test fails closed with it.
+_panel_ids() {
+    _PR_UID="$(id -u "${PANEL_USER:-}" 2>/dev/null)" && [ -n "${_PR_UID}" ] || return 1
+    _PR_GIDS=" $(id -G "${PANEL_USER}" 2>/dev/null) "
+}
+
+# Can the panel user neither write this one entry nor replace what it holds? Judged on the entry
+# itself — stat does not follow a symlink: it must not be the panel user's, nor writable by it
+# through the group or other bits. A symlink's own mode means nothing, and a sticky directory
+# (/tmp) is exempt from the mode test, because there only an entry's owner can remove or rename
+# it; the callers judge every entry below on its own. Needs _panel_ids first.
+_panel_cannot_write() {
+    local st u g m
+    st="$(stat -c '%u %g %a' -- "$1" 2>/dev/null)" || return 1
+    read -r u g m <<< "${st}"
+    m=$((8#${m}))
+    [ -n "${_PR_UID:-}" ] && [ "${u}" != "${_PR_UID}" ] || return 1
+    [ ! -L "$1" ] || return 0
+    if [ ! -d "$1" ] || [ $((m & 01000)) -eq 0 ]; then
+        [ $((m & 02)) -eq 0 ] || return 1
+        [ $((m & 020)) -eq 0 ] || [ "${_PR_GIDS#* "${g}" }" = "${_PR_GIDS}" ] || return 1
+    fi
+}
+
+# The operator's own source tree, resolved: `sudo bash install.sh` run from a clone or an unpacked
+# tarball (SRC, the working directory) rather than inside ${PANEL_DIR}. Printed only when
+#   * the installer running now is THAT tree's install.sh. Root is already executing a file from
+#     it, so reading three more from it trusts nobody new — and that, not the working directory,
+#     is what makes it the operator's choice. The panel's self-update verb runs the root-owned
+#     copy in ${HELPER_DIR} with its working directory in the checkout, so it never qualifies,
+#     wherever the panel user makes that directory lead;
+#   * the directory is not ${PANEL_DIR} by any spelling (a symlinked home, or a link the panel
+#     user put in its place) — the string comparison above is only a shortcut; and
+#   * it and every directory above it are beyond the panel user's reach. Nothing INSIDE it is
+#     consulted to decide that: judged after following links, a panel-owned checkout could vouch
+#     for itself with `app.py -> /etc/passwd`.
+_operator_src() {
+    local rs p
+    [ -n "${SRC:-}" ] && [ "${SRC}" != "${PANEL_DIR}" ] && _panel_ids || return 1
+    rs="$(readlink -f -- "${SRC}" 2>/dev/null)" && [ -d "${rs}" ] || return 1
+    [ "$(readlink -f -- "${SCRIPT_PATH:-}" 2>/dev/null)" = "${rs}/install.sh" ] || return 1
+    [ "${rs}" != "$(readlink -f -- "${PANEL_DIR}" 2>/dev/null)" ] || return 1
+    p="${rs}"
+    while :; do
+        _panel_cannot_write "${p}" || return 1
+        [ "${p}" != "/" ] || break
+        p="$(dirname -- "${p}")"
+    done
+    printf '%s\n' "${rs}"
+}
+
+# One boundary file in the operator's tree ($1, as _operator_src printed it; $2, the path below
+# it). Every entry on the way down must be a real directory and the last a regular file — no
+# symlink anywhere, so nothing is read from where a link lands — and none may be writable by the
+# panel user. Prints the path to read.
+_operator_file() {
+    local p="$1" part
+    local -a parts
+    _panel_ids || return 1
+    IFS=/ read -ra parts <<< "$2"
+    for part in "${parts[@]}"; do
+        case "${part}" in ""|.|..) return 1 ;; esac
+        p="${p}/${part}"
+        [ ! -L "${p}" ] && _panel_cannot_write "${p}" || return 1
+    done
+    [ -f "${p}" ] || return 1
+    printf '%s\n' "${p}"
+}
+
+# Which commit root may stage from: the checkout's HEAD, once root's own clone shows that commit is
+# on REPO_URL's ${DEFAULT_BRANCH}. Sets ROOT_SRC_COMMIT; returns 1, having said why, otherwise.
+# Asked once per run, however many files are staged.
+root_source_commit() {
+    if [ "${ROOT_SRC_TRIED}" -eq 1 ]; then
+        [ -n "${ROOT_SRC_COMMIT}" ]
+        return
+    fi
+    ROOT_SRC_TRIED=1
+    local want=""
+    [ -d "${PANEL_DIR}/.git" ] \
+        && want="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null || true)"
+    # The panel's git produced this, so it is a request, not a fact: a commit id, or nothing.
+    #
+    # The warnings below say only that root will not stage FROM this checkout. Which file that
+    # leaves unrefreshed is each caller's to say — this answer is cached and shared, and the first
+    # caller to ask is not always install_root_tools (a fresh install once asked it for recover.sh
+    # alone, seconds after the helper had been placed, and was told the helper was not refreshed).
+    case "${want}" in
+        ""|*[!0-9a-f]*)
+            warn "This checkout has no commit root can verify, so root stages nothing from it."
+            return 1 ;;
+    esac
+    if ! ${H_SUDO:-} test -d "${ROOT_GIT}"; then
+        _rootgit init --quiet --bare >/dev/null 2>&1 || {
+            warn "Could not create root's copy of the repository at ${ROOT_GIT}."
+            return 1; }
+    fi
+    # Into ONE fixed ref, whatever the branch. A ref named after the branch was never pruned, so
+    # once the panel had tracked `fix` and then switched to `fix/x` (or the reverse), git refused
+    # to create the new ref beside the old one and every later run warned "Could not fetch" and
+    # left the helper stale. The ref only has to hold the tip this run compares against.
+    if ! _rootgit fetch --quiet --no-tags "${REPO_URL}" \
+            "+refs/heads/${DEFAULT_BRANCH}:refs/root-src/tip" >/dev/null 2>&1; then
+        warn "Could not fetch ${REPO_URL} (${DEFAULT_BRANCH}) into root's own copy, so root stages"
+        warn "nothing from this checkout. The panel still works; re-run to retry."
+        return 1
+    fi
+    if ! _rootgit merge-base --is-ancestor "${want}" refs/root-src/tip >/dev/null 2>&1; then
+        warn "This checkout is at ${want}, which is not on ${REPO_URL}'s ${DEFAULT_BRANCH}."
+        warn "Root stages nothing from it."
+        return 1
+    fi
+    ROOT_SRC_COMMIT="${want}"
+}
+
+# Answer root_source_commit in THIS shell, before any `x="$(stage_root_source …)"`. Those run in a
+# subshell, so an answer found there is lost when it exits (the fetch would repeat for every file),
+# and its warnings would land in the captured path instead of on the screen. Always returns 0: the
+# staging calls that follow each report their own failure.
+_prepare_root_source() {
+    if [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots && ! _operator_src >/dev/null; then
+        root_source_commit || true
+    fi
+    return 0
+}
 
 stage_root_source() {
-    local rel="$1" out="${HELPER_DIR}/.stage-$2"
+    local rel="$1" out="${HELPER_DIR}/.stage-$2" osrc="" from=""
     ${H_SUDO} rm -f "${out}" 2>/dev/null || true
-    if [ -d "${PANEL_DIR}/.git" ]; then
+    if [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots && osrc="$(_operator_src)" \
+       && from="$(_operator_file "${osrc}" "${rel}")"; then
+        # Root, installing from the operator's own tree: the working tree fetch_code just copied
+        # in, read at the path the reach test walked.
+        cp -- "${from}" "${out}" 2>/dev/null || { rm -f "${out}" 2>/dev/null; return 1; }
+    elif [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots; then
+        # Root, and the panel user owns some of the checkout: its tree, its .git, or both.
+        root_source_commit >&2 || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
+        _rootgit cat-file blob "${ROOT_SRC_COMMIT}:${rel}" 2>/dev/null \
+            | ${H_SUDO} tee "${out}" >/dev/null 2>&1 || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
+    elif [ -d "${PANEL_DIR}/.git" ]; then
+        # A checkout the running account owns outright: root's before the chown, or the invoking
+        # user's own on a per-user install.
         _gitc cat-file blob "HEAD:${rel}" 2>/dev/null \
             | ${H_SUDO} tee "${out}" >/dev/null 2>&1 || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
     else
-        # No git: a tarball / --src install, where the tree IS the operator's own copy and there is
-        # no object store to prefer over it.
+        # No git: a tarball / --src install, in a tree the running account owns.
         ${H_SUDO} cp -- "${PANEL_DIR}/${rel}" "${out}" 2>/dev/null \
             || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
     fi
@@ -668,9 +890,17 @@ stage_root_source() {
 #
 # So install a root-owned copy beside the helper, taken from the COMMIT rather than the working
 # tree (stage_root_source explains why that distinction matters), and point the symlink at that.
-# Falls back to the checkout only when no root-owned copy can be placed — the same trade
-# install_root_tools makes for the helper, because a working recovery command matters more than
-# the boundary on a host that has no root-owned anything.
+#
+# When no fresh copy can be staged, what happens depends on who is running this:
+#   * ROOT never points the link into ${PANEL_DIR}. A root run always hands that directory to the
+#     service user (the fresh path chowns it straight after), so a link there is the hole above.
+#     It keeps a root-owned copy already in place, stale but safe, or else links nothing — and
+#     unlinks one an older installer aimed at the checkout. root_source_commit refuses more than
+#     the old copy-the-tree path did (no .git, a commit not on upstream's branch, no network), so
+#     this is a branch real root installs reach, not a corner.
+#   * the ACCOUNT THAT OWNS THE CHECKOUT (a per-user install, run as that user) falls back to
+#     ${PANEL_DIR}/recover.sh. That account can already rewrite anything it would run, so the
+#     boundary is not what it loses, and a working recovery command is worth more there.
 install_recovery_command() {
     local link="/usr/local/bin/linuxgsm-panel-recover" stage="" target=""
     # The origin gate belongs HERE, not at the call sites, because this is the one root-owned file
@@ -693,10 +923,26 @@ install_recovery_command() {
     fi
     H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
     if ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null \
+       && _prepare_root_source \
        && stage="$(stage_root_source recover.sh recover.sh)" \
        && ${H_SUDO} install -o root -g root -m 0755 "${stage}" "${HELPER_DIR}/recover.sh" 2>/dev/null; then
         target="${HELPER_DIR}/recover.sh"
         ${H_SUDO} rm -f "${stage}" 2>/dev/null || true
+    elif [ "$(id -u)" -eq 0 ]; then
+        if [ -f "${HELPER_DIR}/recover.sh" ] && [ ! -L "${HELPER_DIR}/recover.sh" ] \
+           && [ "$(stat -c '%U' "${HELPER_DIR}/recover.sh" 2>/dev/null)" = "root" ]; then
+            target="${HELPER_DIR}/recover.sh"
+            warn "The recovery command was not refreshed; \`linuxgsm-panel-recover\` keeps the"
+            warn "root-owned copy already in ${HELPER_DIR}."
+        else
+            warn "No root-owned recovery command could be placed, so \`linuxgsm-panel-recover\` is not"
+            warn "linked: root must not run a file from the panel's checkout. Re-run this installer"
+            warn "once it can stage one (a clone of ${REPO_URL:-the repository}'s ${DEFAULT_BRANCH:-main}, or with network access)."
+            if [ "$(readlink "${link}" 2>/dev/null)" = "${PANEL_DIR}/recover.sh" ]; then
+                rm -f "${link}" 2>/dev/null || true
+                warn "Removed the old link that pointed it at ${PANEL_DIR}/recover.sh."
+            fi
+        fi
     elif [ -f "${PANEL_DIR}/recover.sh" ]; then
         target="${PANEL_DIR}/recover.sh"
         warn "Recovery command points into the checkout — no root-owned copy could be placed."
@@ -730,6 +976,7 @@ install_root_tools() {
         warn "installer as root to place the root-owned components."
         return 0
     fi
+    _prepare_root_source
 
     if _stage="$(stage_root_source tools/panel-helper panel-helper)"; then
         if ${H_SUDO} install -o root -g root -m 0755 "${_stage}" "${HELPER_DST}" 2>/dev/null; then
@@ -863,9 +1110,17 @@ root_tools_present() {
 # already run sudo turns that narrow grant into NOPASSWD:ALL with one extra hop.
 #
 # LC_ALL=C so the two phrases are the English ones sudo compiles in.
+#
+# The GROUP test is not only about sudo. docker, lxd, incus-admin and libvirt reach root through
+# their daemon (`docker run -v /:/host`), disk through the raw block device, staff through
+# /usr/local, which root runs from. adm and shadow read logs and password hashes. None of these
+# needs a sudoers entry, so `sudo -l -U` reports the account as "not allowed" and it was enrolled:
+# the one-hop NOPASSWD:ALL this function exists to prevent. The first ten are the set
+# panel/security/privileged.py already refuses as _NEVER_A_CONTENT_GROUP.
 can_already_sudo() {
     _cas_user="$1"
-    if id -nG "${_cas_user}" 2>/dev/null | tr " " "\n" | grep -qxE "sudo|admin|wheel|root"; then
+    _cas_groups="sudo|admin|wheel|root|adm|shadow|docker|lxd|disk|staff|incus-admin|libvirt"
+    if id -nG "${_cas_user}" 2>/dev/null | tr " " "\n" | grep -qxE "${_cas_groups}"; then
         echo yes; return 0
     fi
     _cas_out="$(LC_ALL=C sudo -l -U "${_cas_user}" 2>&1)" || true
@@ -917,16 +1172,18 @@ sync_game_user_group() {
                 # the grant back rather than describing a state that is not this host's.
                 if id -nG "${_gu}" 2>/dev/null | tr ' ' '\n' | grep -qx "${GAME_GROUP}"; then
                     if gpasswd -d "${_gu}" "${GAME_GROUP}" >/dev/null 2>&1; then
-                        warn "Removed '${_gu}' from ${GAME_GROUP}: it can now run sudo, which would"
-                        warn "  make the panel's grant a path to root. The panel can no longer"
-                        warn "  manage that account's servers on this host."
+                        warn "Removed '${_gu}' from ${GAME_GROUP}: it can now reach root (sudo, or a"
+                        warn "  group such as docker), which would make the panel's grant a path to"
+                        warn "  root. The panel can no longer manage that account's servers on this host."
                     else
-                        warn "'${_gu}' is in ${GAME_GROUP} AND can run sudo — the panel's grant is a"
-                        warn "  path to root, and the membership could not be removed. Run:"
+                        warn "'${_gu}' is in ${GAME_GROUP} AND can reach root (sudo, or a group such as"
+                        warn "  docker), so the panel's grant is a path to root, and the membership could"
+                        warn "  not be removed. Run:"
                         warn "    gpasswd -d ${_gu} ${GAME_GROUP}"
                     fi
                 else
-                    warn "Not enrolling '${_gu}' in ${GAME_GROUP}: it already has sudo rights."
+                    warn "Not enrolling '${_gu}' in ${GAME_GROUP}: it can already reach root (sudo,"
+                    warn "  or a group such as docker)."
                     warn "  The panel will not be able to manage that account's servers on this host."
                 fi
                 continue ;;
@@ -1092,7 +1349,8 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         # the grant naming the game-user group was never written, so the panel could not manage a
         # single server while reporting itself up to date.
         #
-        # All three are idempotent and cheap: the helper is re-copied from the checkout, the grant
+        # All three are idempotent and cheap: the helper is re-staged (see stage_root_source for
+        # where root takes it from — as root, never the panel-owned checkout itself), the grant
         # is rewritten and re-validated with visudo, and the group sync is `groupadd -f` plus an
         # append-only `usermod -aG`. So do them, then report.
         check_origin_trusted
@@ -1506,6 +1764,12 @@ install_root_tools
 
 info "[3/4] Registering the service…"
 if [ "${RUN_AS_ROOT}" -eq 1 ]; then
+    # Path-independent recovery command: `sudo linuxgsm-panel-recover` from anywhere. HERE, beside
+    # install_root_tools and before the chown below, for the same reason: until then the checkout
+    # is still root's own, so recover.sh is read straight from it. After the chown it is the panel
+    # user's, and root would need its own clone to agree — which a tarball, a --src tree with no
+    # .git or a local commit, or a host without network never gets, leaving no recovery command.
+    install_recovery_command
     # Own everything as the service user, then run a system service AS that user.
     chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
 
@@ -1539,8 +1803,6 @@ WantedBy=multi-user.target
 SERVICEEOF
     systemctl daemon-reload
     systemctl enable --now linuxgsm-panel.service
-    # Path-independent recovery command: `sudo linuxgsm-panel-recover` from anywhere.
-    install_recovery_command
     SERVICE_HINT="sudo systemctl status linuxgsm-panel"
     LOG_HINT="sudo journalctl -u linuxgsm-panel -f"
 else

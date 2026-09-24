@@ -70,6 +70,7 @@
   "Enable Tailscale SSH? This re-authenticates Tailscale with SSH support enabled.": "Activer Tailscale SSH ? Cela réauthentifie Tailscale avec la prise en charge SSH activée.",
   "Enter SSH password": "Saisissez le mot de passe SSH",
   "Enter a number of attempts (1 or more)": "Saisissez un nombre de tentatives (1 ou plus)",
+  "The auto-block settings are still loading. Save again once they show.": "Les réglages du blocage automatique sont encore en cours de chargement. Enregistrez à nouveau une fois qu’ils s’affichent.",
   "Enter a port between 1 and 65535.": "Saisissez un port entre 1 et 65535.",
   "Enter an IP or CIDR first": "Saisissez d'abord une IP ou un CIDR",
   "Enter the IP address to bind to.": "Saisissez l'adresse IP sur laquelle écouter.",
@@ -87,6 +88,7 @@
   "Failed to update daily restart": "Échec de la mise à jour du redémarrage quotidien",
   "Files upload one at a time, so a large tree takes a while — leave the page open.": "Les fichiers sont téléversés un par un : une arborescence volumineuse prend du temps — laissez la page ouverte.",
   "Game CPU %": "Processeur du jeu %",
+  "Imported, but not added to the panel’s game-account group. Where the panel’s sudo is limited to its helper, it cannot control these servers.": "Importé, mais non ajouté au groupe de comptes de jeu du panneau. Là où le sudo du panneau se limite à son assistant, il ne peut pas contrôler ces serveurs.",
   "Incorrect password.": "Mot de passe incorrect.",
   "Install and enable automatic security updates (unattended-upgrades)? This changes the system update settings.": "Installer et activer les mises à jour de sécurité automatiques (unattended-upgrades) ? Cela modifie les réglages de mise à jour du système.",
   "Install status unknown": "État d'installation inconnu",
@@ -170,5 +172,6 @@
   "Update the panel": "Mettre à jour le panneau",
   "Upload folders": "Téléverser des dossiers",
   "You'll be alerted once this server is empty (then it turns itself off)": "Vous serez alerté dès que ce serveur sera vide (puis l'alerte se désactive d'elle-même)",
-  "The panel could not read this host’s firewall, so the public port state is unknown.": "Le panneau n’a pas pu lire le pare-feu de cet hôte, l’état du port public est donc inconnu."
+  "The panel could not read this host’s firewall, so the public port state is unknown.": "Le panneau n’a pas pu lire le pare-feu de cet hôte, l’état du port public est donc inconnu.",
+  "UFW is not active on this host, so no firewall rule keeps the panel port closed — the panel is reachable on its public port.": "UFW n’est pas actif sur cet hôte : aucune règle de pare-feu ne garde le port du panneau fermé — le panneau est accessible sur son port public."
 }

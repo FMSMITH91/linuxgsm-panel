@@ -9,6 +9,7 @@ from panel.core.config import (encrypt_secret, load_config, update_config)
 from panel.core.clock import utcnow
 from panel.db.models import (Group, Invite, User, db)
 from panel.security.auth import (MANAGE_USERS, accessible_remote_ids, can_administer_user,
+                                 custom_command_ids,
                                  get_user_permissions, get_user_servers,
                                  grantable_groups, hash_password, log_action,
     permission_required, superadmin_required)
@@ -517,11 +518,14 @@ def register(app):
                 _mine = set(get_user_permissions(_creator))
                 _mine_remotes = set(accessible_remote_ids(_creator))
                 _mine_servers = {gs.id for gs in get_user_servers(_creator)}
+                _mine_commands = custom_command_ids(_creator)   # the fourth axis, as grantable_groups
 
                 def _beyond_creator(g):
                     if not set(g.get_permissions()) <= _mine:
                         return True
                     if not {r.id for r in (g.servers or [])} <= _mine_remotes:
+                        return True
+                    if not {c.id for c in (g.custom_commands or [])} <= _mine_commands:
                         return True
                     return not {s.id for s in (g.game_servers or [])} <= _mine_servers
 

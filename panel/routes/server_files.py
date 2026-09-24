@@ -126,6 +126,97 @@ def _gmod_removal_result(asked, removed):
 _console_viewers = {}
 _viewers_lock = threading.Lock()
 
+# socket sid -> (login id, token digest or None): the CREDENTIAL a console socket joined with, not
+# only whose it is. The per-tick re-check used to ask only about the user ROW, and none of the
+# panel's revocation controls change the row's answers: logout and a device revoke delete a
+# UserSession row, "sign out everywhere" and a password change bump auth_epoch, revoking an API
+# token clears its hash, and idle expiry lives on the session. load_user enforces every one of
+# those — on each socket EVENT — but the console is push-only: after join_console the client sends
+# nothing, so a stolen cookie that had been signed out everywhere kept receiving RCON replies,
+# admin commands and player IPs every two seconds for as long as it stayed connected. Guarded by
+# _viewers_lock, and cleared on disconnect.
+_viewer_creds = {}
+
+
+def _viewer_credential():
+    """What join_console records for this socket: (current_user's login id, bearer digest).
+
+    The login id is the string the session cookie carries ("<uid>:<epoch>[:<session sid>]"), so
+    running it back through _login_id_still_accepted later asks what a page load asks. The
+    digest is recorded only when this socket authenticated with a bearer token that is the
+    current user's: revoking a token changes neither the epoch nor any session row, so the token
+    itself has to be compared. Request context only."""
+    import hashlib
+    digest = None
+    hdr = request.headers.get("Authorization", "")
+    if hdr.startswith("Bearer "):
+        d = hashlib.sha256(hdr[7:].strip().encode()).hexdigest()
+        if getattr(current_user, "api_token", None) == d:
+            digest = d
+    return current_user.get_id(), digest
+
+
+def _login_id_still_accepted(login_id):
+    """The User a recorded login id still names, or None: load_user's verdict without its writes.
+
+    For the console poller, which holds each viewer's login id ("<uid>:<epoch>[:<sid>]",
+    User.get_id) outside any request and re-asks every tick whether the panel would still accept
+    it. It asks load_user's questions (the epoch still matches, the account is active, the
+    per-device UserSession row still exists and has not idled out) and nothing else, because
+    load_user is a REQUEST hook and two of its side effects are wrong here. It writes last_seen
+    every ~5 minutes, and idle expiry is measured from last_seen, so a poller calling it kept a
+    login alive for as long as a console socket stayed open (a stolen remember cookie included).
+    And it turns a database error into None ("deny this request"), which the poller read as
+    "revoked" and evicted a legitimate viewer on a transient lock.
+
+    So this writes and deletes nothing, and RAISES when it cannot look (after a rollback, so the
+    next viewer's query is not refused by a session left mid-failure). The per-request client
+    binding (_session_binding_ok) is not asked: there is no request. Keep it in step with
+    auth.load_user: smoke_test drives both over the same login ids."""
+    from panel.core.clock import utcnow
+    from panel.db.models import User, UserSession
+    s = str(login_id)
+    try:
+        if ":" not in s:      # legacy cookie from before epochs: load_user accepts the plain id
+            user = db.session.get(User, int(s)) if s.isdecimal() else None
+            return user if user is not None and user.is_active else None
+        parts = s.split(":")
+        uid, epoch = parts[0], parts[1]
+        sid = parts[2] if len(parts) > 2 and parts[2] else None
+        if not uid.isdecimal():
+            return None
+        user = db.session.get(User, int(uid))
+        if user is None or str(user.auth_epoch or 0) != epoch or not user.is_active:
+            return None
+        if sid:
+            sess = UserSession.query.filter_by(sid=sid, user_id=user.id).first()
+            if sess is None or sess.is_expired(utcnow()):
+                return None
+        return user
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def _credential_still_valid(uid, cred):
+    """Is the credential a viewer joined with still one the panel would accept? cred is what
+    _viewer_credential recorded, or None for a viewer registered without one (nothing to check).
+    A revoked device, a bumped auth_epoch, an idle-expired session and a deactivated account all
+    fail here as they fail a page load.
+
+    It asks _login_id_still_accepted, NOT the app's user_loader: load_user refreshed last_seen
+    from this poller (so an open console socket kept its login from ever idling out) and answered
+    a database error with None (so a transient lock evicted a legitimate viewer as "revoked").
+    _login_id_still_accepted writes nothing and RAISES when it cannot look, and
+    _evict_unauthorized_viewers keeps a viewer it could not check."""
+    if cred is None:
+        return True
+    login_id, digest = cred
+    user = _login_id_still_accepted(login_id)
+    if user is None or user.id != uid:
+        return False
+    return digest is None or getattr(user, "api_token", None) == digest
+
 
 def _console_whole_lines(server_id, raw):
     """The COMPLETE lines in a byte-cut chunk; the trailing fragment is held for the next read.
@@ -284,9 +375,11 @@ def _evict_unauthorized_viewers(app, socketio, server_id):
     drive it directly — the behaviour it guards is an authorization boundary, and one that
     only ran inside a background thread would be tested by watching the thread.
 
-    Asks the SAME three questions the join handler asks — authenticated (the row still exists
-    and is active), reaches this server, and holds VIEW_CONSOLE — but of the stored user id
-    rather than of a request, because there is no request here.
+    Asks the SAME questions the join handler asks, of what was stored at join rather than of a
+    request, because there is no request here: the row still exists and is active, it is not held
+    at a forced password change, it reaches this server and holds VIEW_CONSOLE — and the
+    CREDENTIAL the socket joined with is still accepted (_credential_still_valid: the session row,
+    its epoch and idle expiry via _login_id_still_accepted, and a bearer token's hash).
 
     The socket is removed from the ROOM, not merely from the viewer map: the map governs
     whether the panel POLLS the host, while the room governs who receives what it already
@@ -299,6 +392,7 @@ def _evict_unauthorized_viewers(app, socketio, server_id):
     from panel.db.models import User
     with _viewers_lock:
         watchers = dict(_console_viewers.get(server_id) or {})
+        creds = {sid: _viewer_creds.get(sid) for sid in watchers}
     if not watchers:
         return 0
     dropped = 0
@@ -308,8 +402,10 @@ def _evict_unauthorized_viewers(app, socketio, server_id):
             allowed = bool(
                 user is not None
                 and getattr(user, "is_active", False)
+                and not getattr(user, "must_change_password", False)
                 and can_access_server(user, server_id)
-                and (user.is_superadmin or has_permission(user, VIEW_CONSOLE)))
+                and (user.is_superadmin or has_permission(user, VIEW_CONSOLE))
+                and _credential_still_valid(uid, creds.get(sid)))
         except Exception:
             app.logger.debug("console: could not re-check viewer %s", sid, exc_info=True)
             continue          # unknown is not "revoked" — leave them be and try next tick
@@ -1204,8 +1300,10 @@ def register(app, supervise):
                                     "data": "[access denied — you don't have permission to view this console]"})
             return
         join_room(f"console_{server_id}")
+        _cred = _viewer_credential()
         with _viewers_lock:
             _console_viewers.setdefault(server_id, {})[request.sid] = current_user.id
+            _viewer_creds[request.sid] = _cred
 
     @socketio.on("leave_console")
     def on_leave_console(data):
@@ -1238,6 +1336,7 @@ def register(app, supervise):
                 watchers.pop(sid, None)
             for k in [k for k, v in _console_viewers.items() if not v]:
                 del _console_viewers[k]
+            _viewer_creds.pop(sid, None)
         _socket_hooks.run_disconnect_hooks(sid)
 
     # Console polling thread — streams new console output to WebSocket viewers.

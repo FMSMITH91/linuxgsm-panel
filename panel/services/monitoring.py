@@ -31,7 +31,7 @@ from panel.core.panel_state import (
 )
 from panel.ops.ssh_manager import (
     _remote_listening_ports, game_map, host_live_metrics, lgsm_get_values, metrics_for_game,
-    remote_fail2ban_top_ips, remote_reboot,
+    remote_fail2ban_attempt_counts, remote_reboot,
     remote_ufw_blocked_ips, remote_ufw_deny_ip, remote_ufw_undeny_ip, run_command,
     run_privileged,
     server_live_metrics, tailnet_exempt_ips,
@@ -773,16 +773,21 @@ def _autoblock_reconcile(remote):
     """Make the host's 'panel-autoblock' UFW rules match the current offenders: block any IP whose
     failed-attempt count over the last 7 days is at/above the threshold and isn't already blocked (by
     us or manually), tailnet-exempt, or whitelisted; and release only our own auto-blocks that have
-    since dropped below the threshold (or been whitelisted)."""
+    since dropped below the threshold (or been whitelisted).
+
+    "Manually" is real now: the blocked-IP readers return every all-ports deny, tagging one the
+    panel did not write "" — so it is never re-blocked (which deleted it) and never in `auto`
+    (which released it). And the counts are the FULL tally, not the display's top 100: ranked
+    below 100 meant never blocked, and falling below 100 meant released while over threshold."""
     threshold = _autoblock_threshold()
     if remote.is_local:
-        top = so.fail2ban_top_ips(100, days=7)
+        counts = so.fail2ban_attempt_counts(days=7)
         blocked = so.ufw_blocked_ips()
         def deny(ip):
             return so.ufw_deny_ip(ip, tag=_AUTOBLOCK_TAG)
         undeny = so.ufw_undeny_ip
     else:
-        top = remote_fail2ban_top_ips(remote, 100, days=7)
+        counts = remote_fail2ban_attempt_counts(remote, days=7)
         blocked = remote_ufw_blocked_ips(remote)
         def deny(ip):
             return remote_ufw_deny_ip(remote, ip, tag=_AUTOBLOCK_TAG)
@@ -791,7 +796,7 @@ def _autoblock_reconcile(remote):
     # A failed read answers None. Releasing on it would unblock every IP the panel has auto-blocked
     # — and they only come back if a LATER successful read still finds them over the threshold
     # inside the 7-day window, so anything that has since aged out is gone for good.
-    if top is None:
+    if counts is None:
         _log.debug("autoblock: skipping %s — the fail2ban read failed", remote.name)
         return 0, 0
     # The SAME reasoning for the firewall read, which was missing it. An unreadable firewall
@@ -801,7 +806,7 @@ def _autoblock_reconcile(remote):
     if blocked is None:
         _log.debug("autoblock: skipping %s — the firewall read failed", remote.name)
         return 0, 0
-    qualify = {r["ip"] for r in top if r.get("ip") and (r.get("attempts") or 0) >= threshold}
+    qualify = {ip for ip, n in counts.items() if ip and (n or 0) >= threshold}
     qualify -= tailnet_exempt_ips(remote, qualify)   # never auto-block your own tailnet (Tailscale up)
     _nets = _whitelist_networks()
     qualify = {ip for ip in qualify if not _whitelisted(ip, _nets)}   # never auto-block a whitelisted IP

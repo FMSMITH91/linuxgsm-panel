@@ -12,7 +12,7 @@ from panel.core.config import (encrypt_secret)
 from panel.db.models import (User, db)
 from panel.security.auth import (hash_password, needs_rehash, check_password, client_ip, dummy_password_check,
     generate_backup_codes, generate_totp_secret, log_action, totp_provisioning_uri,
-    verify_totp_step)
+    session_fingerprint, throttle_key, verify_totp_step)
 from panel.services import (notifications)
 import time
 from app import (LOGIN_MAX_FAILS, LOGIN_WINDOW, _LOGIN_BLOCK_LOGGED, _LOGIN_FAILS,
@@ -28,21 +28,24 @@ def register(app):
 
         if request.method == "POST":
             ip = client_ip() or "unknown"
+            # The throttle's bucket, not the address: an IPv6 client is counted by its /64, which
+            # is what one site or phone holds. `ip` itself still goes to the logs and fail2ban.
+            _tk = throttle_key(ip)
             now = time.time()
             # Brute-force throttle: drop stale failures, block if too many remain.
             with _LOGIN_FAILS_LOCK:
                 _prune_login_fails(now)   # keep the map bounded to recently-active IPs
-                fails = [t for t in _LOGIN_FAILS.get(ip, []) if now - t < LOGIN_WINDOW]
+                fails = [t for t in _LOGIN_FAILS.get(_tk, []) if now - t < LOGIN_WINDOW]
                 if fails:
-                    _LOGIN_FAILS[ip] = fails
+                    _LOGIN_FAILS[_tk] = fails
                 else:
-                    _LOGIN_FAILS.pop(ip, None)
+                    _LOGIN_FAILS.pop(_tk, None)
                 blocked = len(fails) >= LOGIN_MAX_FAILS
             if blocked:
                 with _LOGIN_FAILS_LOCK:
-                    _first_block = (now - _LOGIN_BLOCK_LOGGED.get(ip, 0)) >= LOGIN_WINDOW
+                    _first_block = (now - _LOGIN_BLOCK_LOGGED.get(_tk, 0)) >= LOGIN_WINDOW
                     if _first_block:
-                        _LOGIN_BLOCK_LOGGED[ip] = now
+                        _LOGIN_BLOCK_LOGGED[_tk] = now
                 if _first_block:   # one audit entry per block window, not per hammering request
                     _who = (request.form.get("username", "") or "").strip()[:64] or "(blank)"
                     log_action(None, "login_blocked", actor=_who,
@@ -53,7 +56,7 @@ def register(app):
 
             def _fail(msg, attempted=None, reason="login failed", **kw):
                 with _LOGIN_FAILS_LOCK:
-                    _LOGIN_FAILS.setdefault(ip, []).append(now)   # throttle counter (resets on success)
+                    _LOGIN_FAILS.setdefault(_tk, []).append(now)   # throttle counter (resets on success)
                 _authlog.warning("panel login failed from %s", _log_ip(ip))    # fail2ban tails data/auth.log
                 # The ATTEMPTED username (user-controlled → sanitised + capped) goes in the User
                 # column via `actor`; the reason + attempt count go in detail. log_action stores the IP.
@@ -69,7 +72,7 @@ def register(app):
                                                      AuditLog.ip_address == ip,
                                                      AuditLog.timestamp >= _since).count()
                 except Exception:
-                    _cnt = len(_LOGIN_FAILS.get(ip, []))
+                    _cnt = len(_LOGIN_FAILS.get(_tk, []))
                 log_action(None, "login_failed", actor=who,
                            detail="%s · attempt %d in %dm" % (reason, _cnt, LOGIN_WINDOW // 60), success=False)
                 _maybe_alert_admin_bruteforce(who, ip, now)   # alert if a super admin is being targeted
@@ -78,7 +81,7 @@ def register(app):
 
             def _succeed(user, remember):
                 with _LOGIN_FAILS_LOCK:
-                    _LOGIN_FAILS.pop(ip, None)   # clear on success
+                    _LOGIN_FAILS.pop(_tk, None)   # clear on success
                 # Drop everything the pre-login session carried before establishing the
                 # authenticated one. Session fixation: an attacker who can get a victim to browse
                 # with a cookie value of the attacker's choosing otherwise ends up holding a
@@ -94,6 +97,10 @@ def register(app):
                 session.permanent = True   # so PERMANENT_SESSION_LIFETIME applies
                 _register_session(user, remember)   # server-side row (sets user._sid) BEFORE
                 login_user(user, remember=remember)   # login_user, so get_id embeds the sid
+                # The client this session belongs to, for "strong" protection (auth.py
+                # _session_binding_ok) — flask-login's own strong mode never fires on a permanent
+                # session, and this one is permanent.
+                session["_bind"] = session_fingerprint()
                 user.last_login = utcnow()
                 db.session.commit()
                 log_action(user, "login", detail=f"User logged in from {ip}")
@@ -108,9 +115,16 @@ def register(app):
                 # the pattern matched. A same-site path is "/" plus segments of an explicit safe
                 # charset — which excludes the backslash, the second leading slash and the scheme
                 # colon that the four rejected cases rely on.
+                # The path group must not nest quantifiers. It was `(?:[seg]+/?)*`: the optional
+                # slash let a run of segment characters split into segments in 2^n ways, so
+                # "/"+"a"*30+"!" backtracked for ~50s — on the one eventlet hub, freezing every
+                # page, console and poller for anyone holding any valid login. `(?:[seg]+/)*[seg]*`
+                # accepts exactly the same strings (no leading "/", no "//") and each "/" fixes
+                # the split, so it runs in linear time.
                 _raw = request.args.get("next", "/")
                 _m = re.fullmatch(
-                    r"/(?P<path>(?:[A-Za-z0-9._~\-]+/?)*)(?:\?(?P<q>[A-Za-z0-9._~\-=&%]*))?",
+                    r"/(?P<path>(?:[A-Za-z0-9._~\-]+/)*[A-Za-z0-9._~\-]*)"
+                    r"(?:\?(?P<q>[A-Za-z0-9._~\-=&%]*))?",
                     _raw or "")
                 _segs = [s for s in (_m.group("path").split("/") if _m else []) if s]
                 next_page = "/" + "/".join(_segs)

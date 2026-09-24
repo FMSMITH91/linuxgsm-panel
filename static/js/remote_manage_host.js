@@ -12,6 +12,16 @@ function retrustHostKey(){
     }});
 }
 var SSH_LABELS={allow:'open (allow)',limit:'rate-limited (limit)',off:'disabled — tailnet only'};
+// What the card says public SSH IS. `mode` is read from UFW's rule list, so it describes the
+// firewall only when the firewall is on: remote_public_ssh_status answers mode "off" for an
+// INACTIVE UFW (no rule rows), and "off" was printed as "disabled — tailnet only" about a host
+// with sshd on 0.0.0.0:22 and nothing in front of it — a fresh cloud VPS, or any `ufw disable`.
+function sshModeLabel(d){
+  if(!d || d.error || d.unreachable) return 'unknown';
+  if(d.installed === false) return 'not filtered — UFW is not installed';
+  if(d.active !== true) return 'not filtered — UFW is inactive';
+  return SSH_LABELS[d.mode]||d.mode||'unknown';
+}
 // Named as refreshSection's `afterName` at all four call sites below. refreshSection only
 // re-runs a callback when one is given, and this is the only thing that fills the card's
 // live state — it ran ONCE, at load. So after Migrate to Tailscale SSH, Enable/Disable
@@ -22,13 +32,17 @@ function loadSshStatus(){
   var el=document.getElementById('ssh-mode'); if(!el) return;
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/ssh-status').then(r=>r.json())
     .then(d=>{
-      el.textContent = d.error?'unknown':(SSH_LABELS[d.mode]||d.mode||'unknown');
+      el.textContent = sshModeLabel(d);
       // Reflect the CURRENT public-SSH mode on the buttons: the active mode's button is
       // marked active + disabled (you're already in that state — clicking it is a no-op).
       // Other buttons become clickable again, EXCEPT the "off" button when it's disabled
       // by the lock-out guard (data-lockdown), which must stay disabled.
+      // Only when UFW is ACTIVE is any mode "current": with it inactive or absent the rules
+      // enforce nothing, and marking "Disable (tailnet-only)" as the state already in force
+      // greyed out the card's one control on a host with port 22 open to the internet.
+      var enforced = !d.error && d.active === true;
       document.querySelectorAll('[data-ssh-btn]').forEach(function(b){
-        var isCur = !d.error && b.getAttribute('data-ssh-btn') === d.mode;
+        var isCur = enforced && b.getAttribute('data-ssh-btn') === d.mode;
         b.classList.toggle('active', isCur);
         if (isCur) { b.disabled = true; b.setAttribute('aria-current', 'true'); }
         else if (!b.hasAttribute('data-lockdown')) { b.disabled = false; b.removeAttribute('aria-current'); }
@@ -43,6 +57,11 @@ function loadSshStatus(){
         if (d.unreachable) {
           cp.disabled = true;
           cp.title = 'The panel could not read this host’s firewall, so the public port state is unknown.';
+        } else if (!d.error && d.active !== true) {
+          // No rule is closing anything while UFW is off, so "already closed" is the one thing
+          // that cannot be said. Closing the port here would also do nothing.
+          cp.disabled = true;
+          cp.title = 'UFW is not active on this host, so no firewall rule keeps the panel port closed — the panel is reachable on its public port.';
         } else if (d.panel_port_open === false) {
           cp.disabled = true;
           cp.title = 'The public panel port is already closed — the panel is tailnet-only.';

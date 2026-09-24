@@ -1056,6 +1056,24 @@ loadMods(true);
 function bkFmt(b){ b=b||0; if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(0)+' KB'; if(b<1073741824)return (b/1048576).toFixed(1)+' MB'; if(b<1099511627776)return (b/1073741824).toFixed(1)+' GB'; return (b/1099511627776).toFixed(2)+' TB'; }  // NOPMD
 function bkWhen(sec){ try { return new Date(sec*1000).toLocaleString(); } catch(e){ return ''; } }
 var _bkPoll = null, _bkDefault = {interval_days:0, keep:2};
+// What each schedule <select> was last set to FROM THE SERVER, so a change posts only the field
+// the user touched. Posting both was how changing the interval cleared a keep override.
+var _bkShown = {interval:null, keep:null};
+
+// Put a stored value into its <select>, adding an <option> for it when the list has none. The
+// Backups page takes any keep from 1 to 30 and the API any interval, but these lists are short:
+// assigning a value no <option> carries leaves the select with NO selection, so it rendered blank
+// and its .value read '' — which the endpoint takes as "clear the override".
+function _bkShow(sel, field, v, label){
+  var has=false;
+  for(var i=0;i<sel.options.length;i++){ if(sel.options[i].value===v){ has=true; break; } }
+  if(!has){
+    var o=document.createElement('option'); o.value=v; o.textContent=label;
+    sel.appendChild(o);
+  }
+  sel.value=v;
+  _bkShown[field]=v;
+}
 
 function loadBackups(){
   if(!document.getElementById('backup-card')) return;
@@ -1073,8 +1091,9 @@ function renderBackups(d){
   var sc = d.schedule || {interval_days:0, keep:2, interval_set:false, keep_set:false};
   // Don't clobber a select the user is actively changing.
   var iv=document.getElementById('bk-interval'), kp=document.getElementById('bk-keep');
-  if(iv && document.activeElement!==iv) iv.value = sc.interval_set ? String(sc.interval_days) : 'default';
-  if(kp && document.activeElement!==kp) kp.value = sc.keep_set ? String(sc.keep) : 'default';
+  if(iv && document.activeElement!==iv) _bkShow(iv, 'interval', sc.interval_set ? String(sc.interval_days) : 'default',
+                                                'Every '+sc.interval_days+' days');
+  if(kp && document.activeElement!==kp) _bkShow(kp, 'keep', sc.keep_set ? String(sc.keep) : 'default', String(sc.keep));
   // Disk headroom + a rough projection for the retained set.
   var keepEff=sc.keep, est=d.est_backup||0, disk=d.disk||{free:0,total:0}, parts=[];
   if(disk.total){
@@ -1136,11 +1155,23 @@ function renderBackups(d){
 }
 
 function saveBkSchedule(){
-  var iv=document.getElementById('bk-interval').value, kp=document.getElementById('bk-keep').value;
+  // Only the field that CHANGED. Both selects fire this, and the route leaves an absent field
+  // alone — so a change to one can no longer overwrite the other with whatever the other happens
+  // to read (for a value it had no option for, that was '', i.e. "clear the override"). A select
+  // with no selection is never sent either way.
+  var body={};
+  [['interval','bk-interval'],['keep','bk-keep']].forEach(function(f){
+    var el=document.getElementById(f[1]);
+    if(el && el.value!=='' && el.value!==_bkShown[f[0]]) body[f[0]]=el.value;
+  });
+  if(!Object.keys(body).length) return;
   fetch(MOUNT+'/api/panel/backup/game/'+serverId+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({interval:iv, keep:kp})})
+    body:JSON.stringify(body)})
     .then(r=>r.json()).then(function(d){
-      if(d.success){ window.toast('Backup schedule saved','success'); loadBackups(); }
+      if(d.success){
+        Object.keys(body).forEach(function(k){ _bkShown[k]=body[k]; });
+        window.toast('Backup schedule saved','success'); loadBackups();
+      }
       else window.toast('Could not save schedule','danger');
     }).catch(function(){ window.toast('Could not save schedule','danger'); });
 }

@@ -1,7 +1,16 @@
-# Runtime dependencies, pinned to exact versions for reproducible, auditable
-# deploys (install.sh reinstalls from this file on every update). Bumps are
-# proposed automatically by Dependabot (grouped pip updates) so upgrades stay a
-# reviewed, deliberate step rather than whatever floats in at deploy time.
+# Runtime dependencies: the WHOLE resolved set, every package the panel imports at runtime and
+# everything those pull in, pinned to exact versions. Pinning only the direct dependencies left the
+# rest to float. install.sh skips pip when this file is unchanged, and `pip install -r` never
+# upgrades a package that already satisfies a range. So a security fix in a transitive package
+# (Werkzeug, python-engineio, Jinja2, ...) never reached an installed host. Dependabot proposed no
+# bump for a package it could not see, and pip-audit checked a freshly resolved set that no host ran.
+#
+# With every package listed, a bump to any of them changes this file. That makes install.sh re-run
+# pip, gives Dependabot something to propose (grouped pip updates, reviewed), and makes pip-audit
+# read the set that is deployed. tests/unit checks that the list stays closed: each package's own
+# requirements, for CPython 3.10-3.14 on Linux, must be pinned here too.
+
+# ── Direct dependencies ─────────────────────────────────────────────────────────────────────────
 flask==3.1.3
 flask-socketio==5.6.1
 flask-login==0.6.3
@@ -14,3 +23,26 @@ bcrypt==5.0.0
 eventlet==0.41.2
 cryptography==50.0.1
 websocket-client==1.9.2
+
+# ── What they pull in ───────────────────────────────────────────────────────────────────────────
+bidict==0.23.1
+blinker==1.9.0
+cffi==2.1.0
+click==8.4.2
+dnspython==2.8.0
+greenlet==3.3.2
+h11==0.16.0
+invoke==3.0.3
+itsdangerous==2.2.0
+jinja2==3.1.6
+markupsafe==3.0.3
+pycparser==3.0
+pynacl==1.6.2
+python-engineio==4.13.3
+python-socketio==5.16.3
+simple-websocket==1.1.0
+sqlalchemy==2.0.51
+typing-extensions==4.16.0
+werkzeug==3.1.8
+wsproto==1.3.2
+wtforms==3.2.2

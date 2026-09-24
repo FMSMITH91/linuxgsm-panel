@@ -1130,6 +1130,215 @@ try:
     _st = _sm_hosts.remote_public_ssh_status(object())
     check("public ssh: a readable firewall still reports its actual mode (positive control)",
           _st.get("mode") == "limit" and not _st.get("unreachable"), str(_st))
+    # ufw translates its Status line WHOLE (fr.po: `État : actif`); the rules listing is not. A
+    # literal "Status:" gate read such a host as unreachable before the locale-aware reading ran.
+    _FR_UFW = ("État : actif\n\n"
+               "Vers                       Action      De\n"
+               "----                       ------      --\n")
+    _sm_core.run_privileged = lambda s, v, a=(), **k: (
+        _FR_UFW + "22/tcp                     LIMIT IN    Anywhere\n", "", 0)
+    _st = _sm_hosts.remote_public_ssh_status(object())
+    check("public ssh: a host whose ufw prints a translated Status line is read, not 'unreachable'",
+          _st.get("mode") == "limit" and _st.get("active") is True and not _st.get("unreachable"),
+          str(_st))
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "", 0)
+    _st = _sm_hosts.remote_public_ssh_status(object())
+    check("public ssh: ...while an EMPTY answer with rc 0 is still unreadable, never 'off'",
+          _st.get("unreachable") is True and _st.get("mode") != "off", str(_st))
+
+    # ── ufw stops at the FIRST rule a connection matches ─────────────────────────────────────
+    # Any LIMIT line used to win, so `OpenSSH ALLOW` above `22/tcp LIMIT` — what `ufw allow
+    # OpenSSH` plus the Limit button produce — read as rate-limited while every connection matched
+    # the ALLOW first. And 'limit' deleted only `allow 22/tcp`: to ufw the OpenSSH profile and a
+    # bare `22` are different rules, so both stayed ahead of the appended limit.
+    def _ufw_status_is(text):
+        _sm_core.run_privileged = lambda s, v, a=(), **k: (text, "", 0)
+        return _sm_hosts.remote_public_ssh_status(object()).get("mode")
+    _hdr = "Status: active\n\nTo                         Action      From\n--                         ------      ----\n"
+    check("public ssh: an ALLOW listed ahead of the LIMIT is what SSH gets",
+          _ufw_status_is(_hdr + "OpenSSH                    ALLOW IN    Anywhere\n"
+                                "22/tcp                     LIMIT IN    Anywhere\n") == "allow",
+          "reported rate-limited while every connection matches the OpenSSH ALLOW above it")
+    check("public ssh: ...and a LIMIT listed first is still limit (positive control)",
+          _ufw_status_is(_hdr + "22/tcp                     LIMIT IN    Anywhere\n"
+                                "OpenSSH                    ALLOW IN    Anywhere\n") == "limit")
+    check("public ssh: ...and an allow for ONE source address does not decide the public mode",
+          _ufw_status_is(_hdr + "22/tcp                     ALLOW IN    203.0.113.5\n"
+                                "22/tcp                     LIMIT IN    Anywhere\n") == "limit",
+          "`allow from <home ip> to 22` (this panel's own Restrict box) read as public SSH open")
+
+    def _fake_ufw(rules):
+        """A firewall that applies the verbs with ufw's own semantics: a rule that differs only in
+        action is rewritten IN PLACE, a new one is appended, and a delete removes only an exact
+        (To, action) match — the OpenSSH profile and a bare 22 are not `22/tcp`."""
+        def _rp(s, v, a=(), **k):
+            a = list(a)
+            if v == "ufw-status":
+                return (_hdr + "".join("%-26s %-11s Anywhere\n" % (t, act + " IN") for t, act in rules), "", 0)
+            want = {"ufw-limit-port": "LIMIT", "ufw-allow-port": "ALLOW"}.get(v)
+            if want:
+                for i, (t, _act) in enumerate(rules):
+                    if t == a[0]:
+                        rules[i] = (t, want)
+                        return ("Rule updated", "", 0)
+                rules.append((a[0], want))
+                return ("Rule added", "", 0)
+            gone = {"ufw-delete-allow-port": "ALLOW", "ufw-delete-limit-port": "LIMIT",
+                    "ufw-delete-allow-app": "ALLOW"}.get(v)
+            if gone and (a[0], gone) in rules:
+                rules.remove((a[0], gone))
+                return ("Rule deleted", "", 0)
+            return ("Could not delete non-existent rule", "", 1)
+        _sm_core.run_privileged = _rp
+    for _start in (["OpenSSH"], ["22"]):
+        _rules = [(_t, "ALLOW") for _t in _start]
+        _fake_ufw(_rules)
+        _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+        check("public ssh: 'limit' on a host opened with `ufw allow %s` is really limited" % _start[0],
+              _ok is True and _rules and _rules[0] == ("22/tcp", "LIMIT"),
+              "ok=%r msg=%r rules now %r" % (_ok, _msg, _rules))
+    _rules = [("22/tcp", "ALLOW")]
+    _fake_ufw(_rules)
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+    check("public ssh: ...and an existing 22/tcp allow is turned into the limit (positive control)",
+          _ok is True and _rules == [("22/tcp", "LIMIT")], "ok=%r rules %r" % (_ok, _rules))
+    # ...and the new rule is the GATE for those deletes. The loop ignored every exit code, so when
+    # `ufw limit 22/tcp` failed (a timeout, a held lock) it deleted `allow OpenSSH` anyway and a host
+    # opened only by it had nothing left letting SSH in; 'allow' likewise deleted the LIMIT. The
+    # two cases above, where the add works, are the positive control.
+    for _mode_g, _add_g, _start_g in (("limit", "ufw-limit-port", [("OpenSSH", "ALLOW")]),
+                                      ("allow", "ufw-allow-port", [("22/tcp", "LIMIT")])):
+        _rules = list(_start_g)
+        _fake_ufw(_rules)
+        _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, _add=_add_g, **k:
+                                   ("", "ERROR: Could not acquire lock", 1) if v == _add
+                                   else _i(s, v, a, **k))
+        _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), _mode_g)
+        check("public ssh: '%s' whose new 22/tcp rule fails removes no rule that lets SSH in" % _mode_g,
+              _ok is False and _rules == _start_g and "Could not acquire lock" in _msg,
+              "ok=%r msg=%r rules now %r" % (_ok, _msg, _rules))
+
+    # ── rate limiting a port the panel itself opened ─────────────────────────────────────────
+    # Every game port is opened BARE (`ufw allow 28016 comment rustserver`, tcp+udp). The limit
+    # path deleted only `allow proto tcp port 28016`, which ufw does not match against a bare rule,
+    # so the limit was appended after the ALLOW and the answer was "28016/tcp is now rate limited".
+    def _fake_ufw_n(rules):
+        """Numbered listing, comments included; same in-place/append/exact-delete semantics."""
+        def _rp(s, v, a=(), **k):
+            a = list(a)
+            if v == "ufw-status":
+                return ("Status: active\n\n     To                         Action      From\n"
+                        "     --                         ------      ----\n"
+                        + "".join("[%2d] %-26s %-11s Anywhere%s\n"
+                                  % (i + 1, r[0], r[1] + " IN", (" # " + r[2]) if r[2] else "")
+                                  for i, r in enumerate(rules)), "", 0)
+            want = {"ufw-limit-port": "LIMIT", "ufw-allow-port": "ALLOW"}.get(v)
+            if want:
+                for i, r in enumerate(rules):
+                    if r[0] == a[0]:
+                        rules[i] = (r[0], want, a[1] if len(a) > 1 else "")
+                        return ("Rule updated", "", 0)
+                rules.append((a[0], want, a[1] if len(a) > 1 else ""))
+                return ("Rule added", "", 0)
+            if v in ("ufw-delete-allow-port", "ufw-delete-limit-port"):
+                act = "ALLOW" if v == "ufw-delete-allow-port" else "LIMIT"
+                hit = [r for r in rules if r[0] == a[0] and r[1] == act]
+                for r in hit:
+                    rules.remove(r)
+                return (("Rule deleted", "", 0) if hit else ("Could not delete non-existent rule", "", 1))
+            return ("", "", 0)
+        _sm_core.run_privileged = _rp
+
+    def _first_for(rules, spec, proto):
+        """What a `proto` connection to `spec` meets first, as ufw evaluates it."""
+        for r in rules:
+            if r[0] in (spec, "%s/%s" % (spec, proto)):
+                return r[1]
+        return None
+    _rules = [("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: a port opened bare (tcp+udp) is really limited for tcp",
+          _ok is True and _first_for(_rules, "28016", "tcp") == "LIMIT",
+          "ok=%r msg=%r rules %r — the bare ALLOW still meets every connection first"
+          % (_ok, _msg, _rules))
+    check("ufw limit: ...and its udp half stays open, under the same comment",
+          _first_for(_rules, "28016", "udp") == "ALLOW" and ("28016/udp", "ALLOW", "rustserver") in _rules,
+          "rules %r" % (_rules,))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=False)
+    check("ufw limit: removing the limit leaves the port open, un-throttled",
+          _ok is True and _first_for(_rules, "28016", "tcp") == "ALLOW", "ok=%r rules %r" % (_ok, _rules))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28017, "tcp", limit=False)
+    check("ufw limit: ...and 'remove' on a port with no limit opens nothing",
+          _ok is False and not any(r[0].startswith("28017") for r in _rules), "ok=%r rules %r" % (_ok, _rules))
+    check("ufw limit: ...saying it has no rate limit (positive control for the inactive case below)",
+          "no rate limit" in _msg, "msg=%r" % (_msg,))
+    # An INACTIVE ufw lists no rules at all, stored ones included, so the same test answered
+    # "22/tcp has no rate limit to remove" about a host whose stored rules hold one.
+    _inact_ran = []
+    _sm_core.run_privileged = lambda s, v, a=(), **k: (
+        ("Status: inactive\n", "", 0) if v == "ufw-status" else (_inact_ran.append(v), ("", "", 0))[1])
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 22, "tcp", limit=False)
+    check("ufw limit: removing a limit on an INACTIVE ufw says it cannot read the rules, not 'no limit'",
+          _ok is False and "not active" in _msg and "no rate limit" not in _msg and not _inact_ran,
+          "ok=%r msg=%r ran %r" % (_ok, _msg, _inact_ran))
+    _rules = [("28000:28100/tcp", "ALLOW", "")]
+    _fake_ufw_n(_rules)
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: a rule it cannot remove that still matches first is reported, not hidden",
+          _ok is False and "28000:28100/tcp" in _msg, "ok=%r msg=%r" % (_ok, _msg))
+    _rules = []
+    _fake_ufw_n(_rules)
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: ...while a port with nothing ahead of it is limited (positive control)",
+          _ok is True and _rules == [("28016/tcp", "LIMIT", "")], "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
+    # The bare rule goes only once the other protocol is re-opened on its own. The re-allow's exit
+    # code was ignored: when it failed, 28016/udp — gameplay — was closed, and the answer was "now
+    # rate limited", the read-back looking at tcp only. (The split above is the positive control.)
+    _rules = [("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, **k:
+                               ("", "ERROR: timed out", 1) if (v, list(a)[:1]) == ("ufw-allow-port", ["28016/udp"])
+                               else _i(s, v, a, **k))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: a failed re-allow of the other protocol leaves the bare rule, and says so",
+          _ok is False and ("28016", "ALLOW", "rustserver") in _rules and "28016/udp" in _msg,
+          "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
+    # ...but the read-back, not the failed re-allow, decides: where the limit rewrote a 28016/tcp
+    # allow ABOVE the bare rule, it is what tcp meets first, and udp is still open through the bare.
+    _rules = [("28016/tcp", "ALLOW", ""), ("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, **k:
+                               ("", "ERROR: timed out", 1) if (v, list(a)[:1]) == ("ufw-allow-port", ["28016/udp"])
+                               else _i(s, v, a, **k))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: ...while a limit already ahead of the bare rule is limited, udp left open",
+          _ok is True and _rules == [("28016/tcp", "LIMIT", ""), ("28016", "ALLOW", "rustserver")],
+          "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
+    # ...and a re-allow that "worked" without the rule appearing is caught by the read-back.
+    _rules = [("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, **k:
+                               ("Skipping", "", 0) if (v, list(a)[:1]) == ("ufw-allow-port", ["28016/udp"])
+                               else _i(s, v, a, **k))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: ...and a split that closed the other protocol anyway is reported, not 'limited'",
+          _ok is False and _first_for(_rules, "28016", "udp") is None and "28016/udp" in _msg,
+          "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
+    # The read-back required the literal "Status:" line, which ufw translates whole: on a French
+    # host a limit that fully applied, bare rule split and all, came back "could not be read back".
+    _rules = [("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, **k:
+                               (lambda r: (r[0].replace("Status: active", "État : actif"),) + r[1:])(
+                                   _i(s, v, a, **k)))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: a host whose ufw prints a translated Status line is read back, not 'unread'",
+          _ok is True and _first_for(_rules, "28016", "tcp") == "LIMIT", "ok=%r msg=%r" % (_ok, _msg))
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "", 0)
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: ...while an EMPTY read-back is still 'could not be read back' (positive control)",
+          _ok is False and "read back" in _msg, "ok=%r msg=%r" % (_ok, _msg))
 
     # ── the unblock that always said it worked ───────────────────────────────────────────────
     # remote_ufw_undeny_ip discarded the verb's result and returned True unconditionally, while
@@ -1222,6 +1431,25 @@ eq("22 merges v4+v6", by_port["22"]["family_label"], "IPv4 + IPv6")
 eq("bare port -> BOTH", by_port["28960"]["proto_label"], "BOTH")
 eq("bare port keeps comment", by_port["28960"]["comment"], "codserver")
 eq("udp suffix -> UDP", by_port["27015"]["proto_label"], "UDP")
+# The page deletes by rule NUMBER, and numbers are positions: the hourly auto-block inserts a deny
+# at 1 and every rule below moves down. A group's `key` is what the page re-finds it by before
+# each delete, so it must survive a renumbering and tell rules apart.
+_shifted = _sm_firewall._group_ufw_rules(_rules([
+    "Anywhere  DENY IN  203.0.113.9  # panel-autoblock",
+    "22/tcp  ALLOW IN  Anywhere",
+    "22/tcp (v6)  ALLOW IN  Anywhere (v6)",
+    "5000/tcp  ALLOW IN  Anywhere",
+    "28960  ALLOW IN  Anywhere  # codserver",
+    "27015/udp  ALLOW IN  Anywhere",
+]))
+_shifted_by = {g["port_num"]: g for g in _shifted}
+check("ufw grouping: a group's key survives the renumbering an inserted deny causes",
+      all(g.get("key") and g.get("key") == _shifted_by[p].get("key")
+          and g["nums"] != _shifted_by[p]["nums"] for p, g in by_port.items()),
+      "%r vs %r" % ([g.get("key") for g in groups], [g.get("key") for g in _shifted]))
+check("ufw grouping: ...and no two groups share one (positive control)",
+      len({g.get("key") for g in _shifted}) == len(_shifted) and all(g.get("key") for g in _shifted),
+      repr([g.get("key") for g in _shifted]))
 
 # ── firewall lock-out protection ──────────────────────────────
 def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(False, False),
@@ -1457,6 +1685,38 @@ try:
     check("ufw status: a rule COMMENT saying 'not installed' does not erase the firewall",
           _st["installed"] is True and _st["enabled"] is True and len(_st["rules"]) == 2,
           "installed=%s enabled=%s rules=%d" % (_st["installed"], _st["enabled"], len(_st["rules"])))
+    # ufw's Status line is gettext-translated whole — a Dutch host prints `Status: actief` — while
+    # the rule rows and the header's dashed underline never are. Comparing the value to "active"
+    # read that LIVE firewall as off: the badge said Inactive, and the lockout guard skips every
+    # rule when the firewall is off, so the host's only SSH rule got a plain delete ×.
+    _sm_core.run_privileged = lambda *a, **k: (
+        "Status: actief\n\n"
+        "     Naar                       Actie       Van\n"
+        "     ----                       -----       ---\n"
+        "[ 1] 22/tcp                     ALLOW IN    Anywhere\n", "", 0)
+    _st = _sm_firewall.remote_ufw_status(NS(port=22))
+    _ssh_g = [g for g in _st.get("groups", []) if g.get("port_num") == "22"]
+    check("ufw status: a translated Status line on a LIVE firewall still reads as active",
+          _st.get("enabled") is True, repr(_st)[:200])
+    check("ufw status: ...so its only SSH rule is still protected from deletion",
+          _ssh_g and _ssh_g[0].get("protected") is True,
+          "groups %r — the last way in is deletable" % (_st.get("groups"),))
+    # French translates the WORD too — `État : actif` — so the literal "Status:" is not there at
+    # all. The gate here required it and called a live French firewall unreachable, after the two
+    # copies of the same gate in hosts.py had already been fixed.
+    _sm_core.run_privileged = lambda *a, **k: (
+        "État : actif\n\n"
+        "     Vers                       Action      De\n"
+        "     ----                       ------      --\n"
+        "[ 1] 22/tcp                     ALLOW IN    Anywhere\n", "", 0)
+    _st = _sm_firewall.remote_ufw_status(NS(port=22))
+    check("ufw status: a French host (no literal 'Status:') is read, not called unreachable",
+          not _st.get("unreachable") and _st.get("enabled") is True and len(_st.get("rules") or []) == 1,
+          repr(_st)[:200])
+    _sm_core.run_privileged = lambda *a, **k: ("Status: inactief\n", "", 0)
+    _st = _sm_firewall.remote_ufw_status(NS(port=22))
+    check("ufw status: ...while a translated INACTIVE firewall (no rule listing) is inactive "
+          "(positive control)", _st.get("installed") is True and _st.get("enabled") is False, repr(_st))
     # Positive control: the tool genuinely being absent is rc 127, and still reads as absent —
     # note the helper's own stderr for that case also contains "not installed".
     _sm_core.run_privileged = lambda *a, **k: (
@@ -1557,11 +1817,182 @@ check("remote access: junk id denied", not can_access_remote(_user(False, 5), "a
 from flask import Flask as _Flask
 _app = _Flask(__name__)
 with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
-                               environ_base={"REMOTE_ADDR": "127.0.0.1"}):
-    eq("loopback proxy: trust XFF", client_ip(), "1.2.3.4")
-with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
                                environ_base={"REMOTE_ADDR": "203.0.113.9"}):
     eq("direct connection: ignore spoofed XFF, use socket", client_ip(), "203.0.113.9")
+
+# ...and loopback is not a proxy by itself. Every local account on the panel host can dial
+# 127.0.0.1 — the game-server users included — so trusting any loopback peer let one of them pick
+# a fresh throttle bucket per attempt, or name the admin's IP until fail2ban banned it. Only a
+# loopback peer whose socket ROOT owns (tailscaled) is believed. Proved against the real kernel:
+# a loopback pair opened here is owned by this (non-root) test process.
+import socket as _lp_sock                                                            # noqa: E402
+import tempfile as _lp_tmp                                                           # noqa: E402
+from panel.security import auth as _lp_auth                                          # noqa: E402
+from unit.part01 import skip as _lp_skip                                             # noqa: E402
+_lp_srv = _lp_sock.socket(_lp_sock.AF_INET, _lp_sock.SOCK_STREAM)
+_lp_srv.bind(("127.0.0.1", 0))
+_lp_srv.listen(1)
+_lp_cli = _lp_sock.socket(_lp_sock.AF_INET, _lp_sock.SOCK_STREAM)
+_lp_cli.connect(_lp_srv.getsockname())
+_lp_conn, _lp_peer = _lp_srv.accept()
+_lp_env = {"REMOTE_ADDR": "127.0.0.1", "REMOTE_PORT": str(_lp_peer[1]),
+           "SERVER_NAME": _lp_conn.getsockname()[0],       # what eventlet puts there
+           "SERVER_PORT": str(_lp_srv.getsockname()[1])}
+try:
+    eq("loopback peer: the kernel names who dialled (this process's uid)",
+       _lp_auth._loopback_peer_uid(_lp_env), os.getuid())
+    eq("loopback peer: a port that matches no connection answers None, not a guess",
+       _lp_auth._loopback_peer_uid(dict(_lp_env, REMOTE_PORT="1")), None)
+    with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
+                                   environ_overrides=_lp_env):
+        from flask import request as _lp_req
+        _lp_got = client_ip()
+        # ...and it was refused BECAUSE the kernel named a non-root owner, not because the lookup
+        # failed on a fixture environ (which would also answer 127.0.0.1).
+        _lp_uid_seen = _lp_auth._loopback_peer_uid(_lp_req.environ)
+    if os.getuid() != 0:
+        check("loopback peer: a NON-root local caller's X-Forwarded-For is ignored",
+              _lp_got == "127.0.0.1" and _lp_uid_seen == os.getuid(),
+              "client_ip=%r, owner seen=%r" % (_lp_got, _lp_uid_seen))
+    else:
+        _lp_skip("loopback peer: a NON-root local caller's X-Forwarded-For is ignored",
+             "the suite is running as root, so this connection IS root-owned")
+finally:
+    for _s in (_lp_conn, _lp_cli, _lp_srv):
+        _s.close()
+# ...and a local account that writes its request and hangs up at once is not root either. The
+# orphaned client end becomes a FIN_WAIT2 time-wait entry, which the kernel prints with uid 0 —
+# while the panel still reads the whole buffered request, forged X-Forwarded-For included. Matching
+# any row by its ports read that 0 as tailscaled and believed the header: auth.log and fail2ban
+# then named the admin's address, no response needed. Real kernel, real close().
+import time as _lp_time                                                              # noqa: E402
+_lp_srv = _lp_sock.socket(_lp_sock.AF_INET, _lp_sock.SOCK_STREAM)
+_lp_srv.bind(("127.0.0.1", 0))
+_lp_srv.listen(1)
+_lp_cli = _lp_sock.socket(_lp_sock.AF_INET, _lp_sock.SOCK_STREAM)
+_lp_cli.connect(_lp_srv.getsockname())
+_lp_conn, _lp_peer = _lp_srv.accept()
+_lp_env = {"REMOTE_ADDR": "127.0.0.1", "REMOTE_PORT": str(_lp_peer[1]),
+           "SERVER_NAME": _lp_conn.getsockname()[0], "SERVER_PORT": str(_lp_srv.getsockname()[1])}
+try:
+    _lp_cli.sendall(b"POST /login HTTP/1.1\r\nX-Forwarded-For: 1.2.3.4\r\n\r\n")
+    _lp_cli.close()
+    _lp_row = None
+    # Until the time-wait entry (FIN_WAIT2 05 / TIME_WAIT 06) — the uid-0 shape. FIN_WAIT1 comes
+    # first and lasts until the server's delayed ACK (up to ~200ms); on this kernel it still names
+    # the real owner, so stopping there tests nothing. Bounded, not a fixed sleep.
+    for _ in range(150):
+        with open("/proc/net/tcp") as _fh:
+            _lp_row = next((_c for _c in (_l.split() for _l in _fh)
+                            if _c[1:2] == ["0100007F:%04X" % _lp_peer[1]]), None)
+        if _lp_row is not None and _lp_row[3] in ("05", "06"):
+            break
+        _lp_time.sleep(0.02)
+    _lp_buffered = _lp_conn.recv(4096)
+    with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
+                                   environ_overrides=_lp_env):
+        _lp_got = client_ip()
+    check("loopback peer: a client that sent and hung up (its row now uid 0) is NOT trusted",
+          _lp_got == "127.0.0.1",
+          "client_ip=%r from a closed local socket whose row reads state=%s uid=%s inode=%s"
+          % (_lp_got, *(_lp_row[i] if _lp_row else "?" for i in (3, 7, 9))))
+    # ...and the row really is the root-looking time-wait one, and the request really was still
+    # there to act on — otherwise the check above passes on a vanished row, which proves nothing.
+    check("loopback peer: ...its row is still listed, as time-wait, and the request readable",
+          _lp_row is not None and _lp_row[3] in ("05", "06") and b"X-Forwarded-For" in _lp_buffered,
+          "row=%r buffered=%r" % (_lp_row and _lp_row[:10], _lp_buffered[:60]))
+finally:
+    for _s in (_lp_conn, _lp_cli, _lp_srv):
+        _s.close()
+# Rows are matched on whole addresses now, spelled the kernel's way — so ::1 (Serve dialling
+# "localhost") must still find its row, or tailscaled over IPv6 silently stops being trusted.
+try:
+    _lp6_srv = _lp_sock.socket(_lp_sock.AF_INET6, _lp_sock.SOCK_STREAM)
+    _lp6_srv.bind(("::1", 0))
+except OSError as _e:
+    _lp6_srv = None
+    _lp_skip("loopback peer: the kernel names who dialled over ::1 too", "no IPv6 here: %s" % _e)
+if _lp6_srv is not None:
+    _lp6_srv.listen(1)
+    _lp6_cli = _lp_sock.socket(_lp_sock.AF_INET6, _lp_sock.SOCK_STREAM)
+    _lp6_cli.connect(_lp6_srv.getsockname()[:2])
+    _lp6_conn, _lp6_peer = _lp6_srv.accept()
+    try:
+        eq("loopback peer: the kernel names who dialled over ::1 too",
+           _lp_auth._loopback_peer_uid({"REMOTE_ADDR": "::1", "REMOTE_PORT": str(_lp6_peer[1]),
+                                        "SERVER_NAME": _lp6_conn.getsockname()[0],
+                                        "SERVER_PORT": str(_lp6_conn.getsockname()[1])}),
+           os.getuid())
+    finally:
+        for _s in (_lp6_conn, _lp6_cli, _lp6_srv):
+            _s.close()
+# A panel bound DUAL-STACK ('::') sees an IPv4 client as ::ffff:127.0.0.1, while the client's own
+# row is in /proc/net/tcp. Looking it up in tcp6 found nothing, so Tailscale Serve dialling
+# 127.0.0.1 was never trusted there and every Serve user shared one throttle bucket.
+try:
+    _lpd_srv = _lp_sock.socket(_lp_sock.AF_INET6, _lp_sock.SOCK_STREAM)
+    _lpd_srv.setsockopt(_lp_sock.IPPROTO_IPV6, _lp_sock.IPV6_V6ONLY, 0)
+    _lpd_srv.bind(("::", 0))
+except OSError as _e:
+    _lpd_srv = None
+    _lp_skip("loopback peer: an IPv4 client of a dual-stack bind is found", "no dual-stack: %s" % _e)
+if _lpd_srv is not None:
+    _lpd_srv.listen(1)
+    _lpd_cli = _lp_sock.socket(_lp_sock.AF_INET, _lp_sock.SOCK_STREAM)
+    _lpd_cli.connect(("127.0.0.1", _lpd_srv.getsockname()[1]))
+    _lpd_conn, _lpd_peer = _lpd_srv.accept()
+    try:
+        check("loopback peer: (setup) the dual-stack socket sees the IPv4 client as mapped",
+              _lpd_peer[0] == "::ffff:127.0.0.1", repr(_lpd_peer))
+        eq("loopback peer: an IPv4 client of a dual-stack bind is found (not looked for in tcp6)",
+           _lp_auth._loopback_peer_uid({"REMOTE_ADDR": _lpd_peer[0], "REMOTE_PORT": str(_lpd_peer[1]),
+                                        "SERVER_NAME": _lpd_conn.getsockname()[0],
+                                        "SERVER_PORT": str(_lpd_conn.getsockname()[1])}),
+           os.getuid())
+    finally:
+        for _s in (_lpd_conn, _lpd_cli, _lpd_srv):
+            _s.close()
+# The trusted side, from a socket table naming root as the owner (the tailscaled shape).
+_lp_fix = os.path.join(_lp_tmp.mkdtemp(), "tcp")
+with open(_lp_fix, "w") as _fh:
+    _fh.write("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt"
+              "   uid  timeout inode\n"
+              "   0: 0100007F:A1B2 0100007F:1388 01 00000000:00000000 00:00000000 00000000"
+              "     0        0 12345 1 0000000000000000 20 4 30 10 -1\n"
+              "   1: 0100007F:C3D4 0100007F:1388 01 00000000:00000000 00:00000000 00000000"
+              "  1001        0 12346 1 0000000000000000 20 4 30 10 -1\n"
+              # A time-wait entry: what a local client's socket becomes once it sends and closes.
+              "   2: 0100007F:E5F6 0100007F:1388 06 00000000:00000000 03:00001770 00000000"
+              "     0        0 0 3 0000000000000000\n"
+              # A ROOT connection between two other addresses that happens to share BOTH port
+              # numbers with a uid-1001 loopback client listed after it.
+              "   3: 0A000005:B1B2 0A000009:1388 01 00000000:00000000 00:00000000 00000000"
+              "     0        0 22222 1 0000000000000000 20 4 30 10 -1\n"
+              "   4: 0100007F:B1B2 0100007F:1388 01 00000000:00000000 00:00000000 00000000"
+              "  1001        0 22223 1 0000000000000000 20 4 30 10 -1\n"
+              # No socket inode: no process owns this end, whatever the uid column says.
+              "   5: 0100007F:D7D8 0100007F:1388 01 00000000:00000000 00:00000000 00000000"
+              "     0        0 0 1 0000000000000000 20 4 30 10 -1\n")
+_lp_saved = dict(_lp_auth._PROC_NET_TCP)
+_lp_auth._PROC_NET_TCP[4] = _lp_fix
+try:
+    for _port, _want, _label in ((0xA1B2, "1.2.3.4", "a ROOT-owned loopback peer (tailscaled) is"),
+                                 (0xC3D4, "127.0.0.1", "a uid-1001 loopback peer is NOT"),
+                                 (0xE5F6, "127.0.0.1",
+                                  "a time-wait row (printed uid 0, inode 0) is NOT"),
+                                 (0xB1B2, "127.0.0.1",
+                                  "a root row on OTHER addresses with the same ports is NOT"),
+                                 (0xD7D8, "127.0.0.1",
+                                  "an ESTABLISHED row with no socket inode (no owner) is NOT")):
+        with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
+                                       environ_overrides={"REMOTE_ADDR": "127.0.0.1",
+                                                     "REMOTE_PORT": str(_port),
+                                                     "SERVER_NAME": "127.0.0.1",
+                                                     "SERVER_PORT": "5000"}):
+            eq("loopback proxy: %s trusted for X-Forwarded-For" % _label, client_ip(), _want)
+finally:
+    _lp_auth._PROC_NET_TCP.clear()
+    _lp_auth._PROC_NET_TCP.update(_lp_saved)
 
 # ── TOTP (2FA) ────────────────────────────────────────────────
 import time as _time
@@ -1757,6 +2188,71 @@ check("check_password: empty stored hash -> False (no raise)", not check_passwor
 check("check_password: None stored hash -> False (no raise)", not check_password("x", None))
 check("check_password: garbage stored hash -> False (no raise)", not check_password("x", "not-a-bcrypt-hash"))
 check("dummy_password_check always returns False", dummy_password_check("anything") is False)
+
+# ── bcrypt runs OFF the eventlet hub ────────────────────────────────────────────────────────
+# bcrypt is a native call that never yields, and the panel is one eventlet hub: every /login POST
+# (unauthenticated, including the dummy compare for an unknown username) held every page, console
+# and poller for a whole cost-12 hash. Under a monkey-patched runtime each bcrypt call must go
+# through eventlet.tpool. The suite is not monkey-patched, so the patch check and tpool.execute are
+# stubbed and the REAL password, dummy and backup-code functions are driven through them.
+import eventlet.patcher as _bh_patcher                                               # noqa: E402
+import eventlet.tpool as _bh_tpool                                                   # noqa: E402
+import bcrypt as _bh_bcrypt                                                          # noqa: E402
+from panel.db.models import User as _BhUser                                          # noqa: E402
+_bh_saved = (_bh_patcher.is_monkey_patched, _bh_tpool.execute)
+_bh_calls = []
+
+
+def _bh_exec(fn, *a, **k):
+    _bh_calls.append(fn)
+    return fn(*a, **k)
+
+
+try:
+    _bh_patcher.is_monkey_patched = lambda name: True
+    _bh_tpool.execute = _bh_exec
+    _bh_hash = hash_password("Off-hub1!pass")
+    _bh_ok = check_password("Off-hub1!pass", _bh_hash)
+    _bh_bad = check_password("wrong", _bh_hash)
+    _bh_calls_pw = list(_bh_calls)
+    del _bh_calls[:]
+    dummy_password_check("anything")
+    _bh_calls_dummy = list(_bh_calls)
+    del _bh_calls[:]
+    _bh_u = _BhUser(username="offhub")
+    _bh_u.set_backup_codes(["abcde-fghij"])
+    _bh_used = _bh_u.use_backup_code("ABCDE-FGHIJ")
+    _bh_calls_codes = list(_bh_calls)
+finally:
+    _bh_patcher.is_monkey_patched, _bh_tpool.execute = _bh_saved
+check("bcrypt off-hub: hash + both checks go through tpool, and still answer correctly",
+      _bh_calls_pw == [_bh_bcrypt.hashpw, _bh_bcrypt.checkpw, _bh_bcrypt.checkpw]
+      and _bh_ok is True and _bh_bad is False, "%r ok=%r bad=%r" % (_bh_calls_pw, _bh_ok, _bh_bad))
+check("bcrypt off-hub: the unknown-username dummy compare goes through tpool too",
+      _bh_bcrypt.checkpw in _bh_calls_dummy, repr(_bh_calls_dummy))
+check("bcrypt off-hub: backup codes are hashed and checked through tpool",
+      _bh_calls_codes == [_bh_bcrypt.hashpw, _bh_bcrypt.checkpw] and _bh_used is True,
+      "%r used=%r" % (_bh_calls_codes, _bh_used))
+# Off eventlet (manage.py, a bare script) it is a plain call: tpool is not touched at all. Stated
+# explicitly, because THIS suite is monkey-patched — importing app runs eventlet.monkey_patch().
+del _bh_calls[:]
+_bh_patcher.is_monkey_patched = lambda name: False
+_bh_tpool.execute = _bh_exec
+try:
+    _bh_plain = check_password("Off-hub1!pass", _bh_hash)
+finally:
+    _bh_patcher.is_monkey_patched, _bh_tpool.execute = _bh_saved
+check("bcrypt off-hub: without monkey-patching it is a direct call (control)",
+      _bh_plain is True and _bh_calls == [], repr(_bh_calls))
+
+# ── the login and token throttles count an IPv6 client by its /64 ───────────────────────────
+from panel.security.auth import throttle_key as _tk_fn                              # noqa: E402
+for _tk_in, _tk_want in (("203.0.113.9", "203.0.113.9"),
+                         ("2001:db8:1:2:aaaa::1", "2001:db8:1:2::/64"),
+                         ("2001:db8:1:2:ffff:ffff:ffff:ffff", "2001:db8:1:2::/64"),
+                         ("::ffff:203.0.113.9", "203.0.113.9"),
+                         ("unknown", "unknown")):
+    eq("throttle key: %s -> %s" % (_tk_in, _tk_want), _tk_fn(_tk_in), _tk_want)
 
 # ── login-throttle map must not grow unbounded (prune stale/empty IP buckets) ──
 # _LOGIN_FAILS is the same dict object app.py mutates, so in-place edits here are seen
@@ -2024,10 +2520,14 @@ finally:
 # three times over, for a server that had finished downloading.
 import panel.routes._shared as _sh
 
-_li_orig = _sh._sm.run_command
+# Stubbed on the DEFINING module. This used to assign _sh._sm.run_command — the ssh_manager
+# PACKAGE — and "restore" it by assigning the real function back, which left a concrete attribute
+# on the package that shadows its PEP 562 __getattr__ for the rest of the run: every later stub on
+# _core.run_command was then silently missed by any caller reaching it as `_sm.run_command`.
+_li_orig = _sm_core.run_command
 try:
     _li = {"details": ("", "", 0), "du": ("", "", 0)}
-    _sh._sm.run_command = lambda r, c, **k: (_li["du"] if "du -sm" in c else _li["details"])
+    _sm_core.run_command = lambda r, c, **k: (_li["du"] if "du -sm" in c else _li["details"])
     _app = NS(logger=NS(debug=lambda *a, **k: None))
 
     # THE BUG: both reads fail, nothing raises.
@@ -2062,13 +2562,13 @@ try:
     # The caller side: the command must carry the marker, or the checks above pass without it.
     _li_cmds = []
     _li["details"] = ("", "", 0)
-    _sh._sm.run_command = lambda r, c, **k: (_li_cmds.append(c),
+    _sm_core.run_command = lambda r, c, **k: (_li_cmds.append(c),
                                              ("50\n__DU_DONE__", "", 0) if "du -sm" in c else ("", "", 0))[1]
     _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver")
     check("_looks_installed: the du command carries the completion marker",
           any("__DU_DONE__" in c for c in _li_cmds), repr(_li_cmds)[-120:])
 finally:
-    _sh._sm.run_command = _li_orig
+    _sm_core.run_command = _li_orig
 
 
 # ── the stats endpoint must not persist a status it could not read ──────────────────────────────

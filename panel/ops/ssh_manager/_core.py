@@ -118,9 +118,13 @@ try:
     from eventlet import tpool as _tpool
     from eventlet.patcher import original as _ev_original
     _real_subprocess = _ev_original("subprocess")
+    # ...and the unpatched threading to go with it: _finish runs inside a tpool NATIVE thread,
+    # where a green thread (what threading.Thread is after monkey_patch) has no hub to run on.
+    _real_threading = _ev_original("threading")
 except Exception:
     _tpool = None
     _real_subprocess = subprocess
+    _real_threading = threading
 
 
 # In-memory SSH connection cache, keyed by _conn_key() below.
@@ -297,28 +301,109 @@ def _run_local(cmd, timeout=30, sudo=False):
 # Popen options shared by both local paths. start_new_session puts the child in a NEW process group
 # so that on timeout we can kill the whole group — subprocess's own timeout kills only the direct
 # child, and grandchildren (a stuck LinuxGSM command) are orphaned and run forever, burning CPU.
-# (Observed: mods commands stuck at ~100% CPU for hours.) errors="replace" matches the paramiko
-# path: command output is game-server output (player names, mod chatter, latin-1 logs) and is NOT
-# guaranteed valid UTF-8; a strict decode would raise, get swallowed, and return rc=-1 with empty
-# output — indistinguishable from "the command printed nothing".
+# (Observed: mods commands stuck at ~100% CPU for hours.) The pipes are BINARY: _finish reads
+# them with a byte ceiling and decodes with errors="replace" itself (see _decode_output), which
+# matches the paramiko path — command output is game-server output (player names, mod chatter,
+# latin-1 logs) and is NOT guaranteed valid UTF-8; a strict decode would raise, get swallowed, and
+# return rc=-1 with empty output — indistinguishable from "the command printed nothing".
 # stdin=DEVNULL, not the default of inheriting: a privileged child must never be handed the
 # panel's own stdin. The helper's Python-implemented verbs used to read stdin to EOF whether or
 # not they wanted a payload, so a panel whose fd 0 was a pipe or tty -- anything but the systemd
 # unit -- hung every such verb for its caller's full timeout. Both ends are fixed; this one stops
 # a child from reaching the panel's input at all, which is right regardless of what it does with it.
-_POPEN_KW = dict(stdout=_real_subprocess.PIPE, stderr=_real_subprocess.PIPE, text=True,
-                 encoding="utf-8", errors="replace", start_new_session=True,
-                 stdin=_real_subprocess.DEVNULL)
+_POPEN_KW = dict(stdout=_real_subprocess.PIPE, stderr=_real_subprocess.PIPE,
+                 start_new_session=True, stdin=_real_subprocess.DEVNULL)
+
+
+def _decode_output(b):
+    """Bytes from a pipe -> the text Popen(text=True) would have produced from them: UTF-8 with
+    errors="replace", and universal newlines (CRLF and a bare CR both become LF)."""
+    return b.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _collect_capped(p, timeout, kill, thread_cls, stdin_bytes=None, cap=None):
+    """communicate(), with a ceiling on what is KEPT. -> (out, err, rc, truncated) as bytes, or
+    None when the command outlived `timeout` (it has been killed by then).
+
+    communicate() buffers everything a command writes until it exits, and the two subprocess
+    transports used it: a remote reached over Tailscale that answers a five-second metrics probe
+    with gigabytes grew the panel until the OOM killer ended it, taking every other host's
+    management with it — and the next poll did it again. The paramiko path has had an 8 MB
+    ceiling all along. This is the same rule for these two: each stream is read to EOF in its own
+    thread (reading one to EOF first deadlocks the moment the other fills its pipe), the first
+    `cap` bytes are kept, and the rest is read and DISCARDED rather than left unread, so a command
+    still writing is not blocked into outliving its timeout.
+
+    `thread_cls` is the caller's to choose: a native thread inside tpool, where a green one has no
+    hub to run on; the patched (green) one in a request greenlet, where a native one would block
+    the hub on every read."""
+    cap = _MAX_OUTPUT_BYTES if cap is None else cap
+    out, err = bytearray(), bytearray()
+    flags = {"truncated": False}
+
+    def _pump(stream, buf):
+        rd = getattr(stream, "read1", None) or stream.read
+        try:
+            while True:
+                chunk = rd(65536)
+                if not chunk:
+                    return
+                room = cap - len(buf)
+                if room > 0:
+                    buf.extend(chunk[:room])
+                if len(chunk) > max(room, 0):
+                    flags["truncated"] = True
+        except (OSError, ValueError):
+            return          # the pipe was closed under us (a kill); what was read is kept
+
+    def _feed():
+        try:
+            if stdin_bytes:
+                p.stdin.write(stdin_bytes)
+        except (OSError, ValueError):
+            pass            # the command exited without reading it all; its rc says what happened
+        finally:
+            try:
+                p.stdin.close()
+            except (OSError, ValueError):
+                # Already closed by the exit or a kill — there is nothing left to close.
+                pass
+
+    workers = []
+    for stream, buf in ((p.stdout, out), (p.stderr, err)):
+        if stream is not None:
+            workers.append(thread_cls(target=_pump, args=(stream, buf), daemon=True))
+    if p.stdin is not None:
+        workers.append(thread_cls(target=_feed, daemon=True))
+    for w in workers:
+        w.start()
+    try:
+        rc = p.wait(timeout=timeout)
+    except (_real_subprocess.TimeoutExpired, subprocess.TimeoutExpired):
+        kill()
+        for w in workers:
+            w.join(timeout=5)
+        return None
+    # The direct child has exited. Its output normally reaches EOF with it; a grandchild still
+    # holding the pipe open gets five seconds, not the caller's whole timeout over again.
+    for w in workers:
+        w.join(timeout=5)
+    return bytes(out), bytes(err), rc, flags["truncated"]
 
 
 def _finish(p, timeout, stdin_text=None):
     """Collect a started process: (stdout, stderr, rc), killing the whole group on timeout."""
-    try:
-        out, err = p.communicate(input=stdin_text, timeout=timeout)
-        return (out or "").strip(), (err or "").strip(), p.returncode
-    except _real_subprocess.TimeoutExpired:
-        _kill_process_tree(p)
+    res = _collect_capped(p, timeout, kill=lambda: _kill_process_tree(p),
+                          thread_cls=_real_threading.Thread,
+                          stdin_bytes=(stdin_text.encode("utf-8")
+                                       if stdin_text is not None else None))
+    if res is None:
         return "", "Command timed out", -1
+    out, err, rc, truncated = res
+    if truncated:
+        _log.warning("local command output exceeded %d bytes and was truncated",
+                     _MAX_OUTPUT_BYTES)
+    return _decode_output(out).strip(), _decode_output(err).strip(), rc
 
 
 def _in_tpool(fn):
@@ -767,12 +852,22 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
         # monitoring poller's ssh calls race to drain the operator's tty, and bytes typed there are
         # forwarded to the remote instead, where a LinuxGSM prompt happily accepts them as its
         # answer. A privileged child must never be handed the panel's input; see _POPEN_KW.
-        r = subprocess.run(ssh_cmd, capture_output=True, text=True, encoding="utf-8",  # nosec B603  # nosemgrep - argv list, no shell; ssh_cmd is built here from validated parts
-                           errors="replace", timeout=timeout,
-                           stdin=subprocess.DEVNULL)
-        return r.stdout.strip(), r.stderr.strip(), r.returncode
-    except subprocess.TimeoutExpired:
-        return "", "SSH command timed out", -1
+        #
+        # Read through _collect_capped, not capture_output=: that buffered EVERYTHING the remote
+        # wrote until the timeout, and a hostile Tailscale remote could answer a routine metrics
+        # probe with gigabytes. The paramiko path's 8 MB ceiling applies here too now. The pipes
+        # are binary and _decode_output does the lenient decode itself, which also sidesteps the
+        # green Popen re-opening text pipes without the `errors=` it was given.
+        p = subprocess.Popen(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; ssh_cmd is built here from validated parts
+                             stdin=subprocess.DEVNULL)
+        res = _collect_capped(p, timeout, kill=p.kill, thread_cls=threading.Thread)
+        if res is None:
+            return "", "SSH command timed out", -1
+        out, err, rc, truncated = res
+        if truncated:
+            _log.warning("ssh command output exceeded %d bytes and was truncated",
+                         _MAX_OUTPUT_BYTES)
+        return _decode_output(out).strip(), _decode_output(err).strip(), rc
     except Exception:
         # Generic message only; the real error is logged, not returned (it can
         # reach API responses — CodeQL py/stack-trace-exposure).
@@ -802,14 +897,34 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
 # long-running work that has always succeeded (an `apt full-upgrade` under a nominal 30s timeout).
 # Past the byte cap the loop keeps reading and DISCARDS rather than stopping: continuing to read is
 # what keeps the remote's flow control moving, and stopping would re-create the hang this fixes.
+#
+# What IS bounded is SILENCE. "No deadline" was right for a command that keeps making progress and
+# wrong for one that never does: a remote that accepts the exec and then sends neither a byte nor
+# an exit status (a compromised host, or one wedged by OOM or a fork bomb) held the loop below
+# forever. Keepalives do not help, because the remote answers those. The monitor sweep iterates its
+# probes with ex.map(), so ONE such host stalled monitoring and alerting for every host until a
+# restart, and every request greenlet asking that host held a DB connection until the pool ran dry.
+# So the drain gives up after _DRAIN_IDLE_FLOOR seconds (or the caller's own timeout, if longer)
+# in which neither stream moved and no exit status arrived — the rc=-1 "timed out" answer the other
+# two transports already give. A long command that is still talking is not affected; the callers
+# that run long QUIET work (backups, installs, apt) already pass timeouts of 600-7200 s, and the
+# local and Tailscale transports hold those same timeouts as WALL-CLOCK limits. A command whose
+# output goes to a file is silent by construction, which is why run_as_game_user(tee_log=True)
+# streams its log back while the action runs rather than `cat`ing it at the end.
 _MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+_DRAIN_IDLE_FLOOR = 300
 
 
-def _drain_exec(chan, max_bytes=_MAX_OUTPUT_BYTES):
-    """Read stdout+stderr to EOF, then the exit status. Returns (out, err, rc, truncated)."""
+def _drain_exec(chan, max_bytes=_MAX_OUTPUT_BYTES, idle_limit=None):
+    """Read stdout+stderr to EOF, then the exit status. Returns (out, err, rc, truncated).
+
+    `idle_limit` (seconds): give up when neither stream has moved and no exit status has arrived
+    for that long — close the channel and answer rc -1. None waits as long as the remote keeps the
+    channel open, which is what the loop did before it had a bound."""
     out, err = bytearray(), bytearray()
     truncated = False
     chan.settimeout(0.0)          # non-blocking; we poll and yield rather than block on one stream
+    last_moved = time.monotonic()
     while True:
         moved = False
         try:
@@ -834,9 +949,19 @@ def _drain_exec(chan, max_bytes=_MAX_OUTPUT_BYTES):
         except (socket.timeout, OSError):
             pass                  # raced recv_ready(); the loop re-checks
         if moved:
+            last_moved = time.monotonic()
             continue
         if chan.exit_status_ready() and not chan.recv_ready() and not chan.recv_stderr_ready():
             break
+        if idle_limit is not None and time.monotonic() - last_moved > idle_limit:
+            try:
+                chan.close()
+            except Exception:
+                _log.debug("could not close a silent exec channel", exc_info=True)
+            _log.warning("remote command sent nothing and no exit status for %ds; gave up",
+                         int(idle_limit))
+            msg = b"command timed out: no output and no exit status for %ds" % int(idle_limit)
+            return bytes(out), (bytes(err) + b"\n" + msg).lstrip(), -1, truncated
         time.sleep(0.01)          # eventlet-patched, so this yields rather than burning the worker
     return bytes(out), bytes(err), chan.recv_exit_status(), truncated
 
@@ -903,7 +1028,8 @@ def run_command(server, command, timeout=30, sudo=None):
             stdin.channel.shutdown_write()
         except Exception:
             _log.debug("could not shut down the exec channel's stdin", exc_info=True)
-        out_b, err_b, exit_code, truncated = _drain_exec(stdout.channel)
+        out_b, err_b, exit_code, truncated = _drain_exec(
+            stdout.channel, idle_limit=max(timeout or 0, _DRAIN_IDLE_FLOOR))
         out = out_b.decode("utf-8", errors="replace")
         err = err_b.decode("utf-8", errors="replace")
         if truncated:
@@ -1015,16 +1141,47 @@ def create_game_user(server, user, timeout=30):
     arrange and the group means nothing there, and an older helper without the verb must not turn
     a working server install into a failed one. Returns user-create's own (out, err, rc)."""
     out, err, rc = run_privileged(server, "user-create", [user], timeout=timeout)
-    if rc == 0 and is_local_server(server):
-        try:
-            _, g_err, g_rc = run_privileged(server, "gameuser-group", [user], timeout=15,
-                                            merge_stderr=False)
-            if g_rc != 0:
-                _log.warning("could not add %s to %s: %s", user, _priv.GAME_GROUP,
-                             (g_err or "")[:200])
-        except Exception:
-            _log.debug("gameuser-group failed (non-fatal)", exc_info=True)
+    if rc == 0:
+        enrol_game_user(server, user)
     return out, err, rc
+
+
+def enrol_game_user(server, user):
+    """Put an EXISTING account in the group the panel's narrow sudoers grant names, on the panel's
+    own host. Returns None when that is done or not needed, else the reason it was not — the
+    helper's own words when it refused (an account that can already reach root is never enrolled).
+
+    Two callers, because an account reaches the panel two ways: create_game_user makes one, and
+    discovery IMPORTS one somebody else made. The import used to add a GameServer row and nothing
+    else, and every per-account helper verb (lgsm-command, the file and backup reads, crontab-list)
+    refuses an account outside the group on a narrow-grant install — so an imported server showed
+    up, could not be started, stopped or downloaded from, and nothing said why until install.sh
+    next ran as root and enrolled it.
+
+    Not needed: a remote host (the group means nothing there), and the panel's OWN account — the
+    helper already accepts the account that invoked it, and would refuse to enrol it anyway, since
+    the panel user holds sudo rules of its own. Never raises: the caller's own work has succeeded
+    by the time this runs, and an older helper without the verb must not turn that into a failure."""
+    if not is_local_server(server):
+        return None
+    try:
+        import pwd
+        if user == pwd.getpwuid(os.getuid()).pw_name:
+            return None
+    except (ImportError, KeyError):
+        # No passwd entry for our own uid: it cannot be the panel's own account, so enrol it.
+        pass
+    try:
+        _, g_err, g_rc = run_privileged(server, "gameuser-group", [user], timeout=15,
+                                        merge_stderr=False)
+    except Exception:
+        _log.debug("gameuser-group failed (non-fatal)", exc_info=True)
+        return "the enrolment could not be run"
+    if g_rc != 0:
+        reason = (g_err or "").strip()[:200] or ("exit status %s" % g_rc)
+        _log.warning("could not add %s to %s: %s", user, _priv.GAME_GROUP, reason)
+        return reason
+    return None
 
 
 def read_as_game_user(server, user, sh, timeout=30):
@@ -1115,10 +1272,23 @@ def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=No
         body = "printf '%s\\n' " + " ".join(_quote(a) for a in answers) + " | " + body
     if tee_log:
         # Mirrors panel/routes/_shared.py:_action_log_path, which is what the live console tails.
-        # `> log` truncates so each run starts the tail at byte 0; the trailing `cat` hands the
-        # whole output back anyway, and `exit $rc` keeps LinuxGSM's exit code rather than cat's.
+        # `: >` truncates so each run starts the tail at byte 0, BEFORE the follower opens it, so
+        # it never replays the previous run's output.
+        #
+        # The output is streamed back WHILE the action runs, by a follower (`tail --pid`) rather
+        # than a `cat` at the end. With the `cat`, the SSH channel carried nothing for the whole
+        # action, and _drain_exec's silence bound — which exists for a remote that never answers
+        # — turned the caller's timeout into a hard wall-clock limit on paramiko hosts: a 40-minute
+        # validate was cut off at 30 and reported as failed while LinuxGSM kept running. Now the
+        # channel goes quiet only when the console the operator is watching does.
+        #
+        # The ACTION writes to the file, never to the channel: `tee` in its pipeline would kill
+        # LinuxGSM with SIGPIPE on its next line once the channel is closed (the drain giving up,
+        # or the panel restarting), mid-update. Here only the follower dies; the action finishes
+        # and the file keeps its output. `wait` keeps LinuxGSM's exit code rather than tail's.
         logf = _quote(f"/home/{user}/.panel-{action}.log")
-        body = f"{body} > {logf} 2>&1; rc=$?; cat {logf} 2>/dev/null; exit $rc"
+        body = (f": > {logf}; {{ {body}; }} >> {logf} 2>&1 & pid=$!; "
+                f"tail -n +1 -f --pid=$pid {logf} 2>/dev/null; wait $pid; exit $?")
     else:
         body = f"{body} 2>&1"
     # `export`, not a `TERM=xterm cmd` prefix: with `answers` the command is a PIPELINE, and a
@@ -1145,6 +1315,11 @@ def set_game_priority(server, user, nice=GAME_PRIORITY_NICE):
         _log.debug("set_game_priority failed (non-fatal)", exc_info=True)
 
 
+# tools/panel-helper's exit status when it refuses an argument (main(): validate() raised). Nothing
+# it runs exits with it for a verb here: renice reports failure as 1.
+_HELPER_REFUSED_ARGS = 2
+
+
 def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
     """Renice ALL processes of several game users in ONE root command (negative nice needs root).
     The panel boosts a game on its own start/restart, but the LinuxGSM monitor cron restarts a
@@ -1156,10 +1331,23 @@ def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
     if not users:
         return
     try:
-        run_privileged(server, "renice-users", [str(int(nice))] + list(users), timeout=20,
-                       merge_stderr=False)
+        _, _, rc = run_privileged(server, "renice-users", [str(int(nice))] + list(users),
+                                  timeout=20, merge_stderr=False)
     except Exception:
         _log.debug("set_game_priority_bulk failed (non-fatal)", exc_info=True)
+        return
+    if rc == _HELPER_REFUSED_ARGS and len(users) > 1 and is_local_server(server):
+        # The helper validates the whole argument list or none of it, and it refuses an account
+        # outside the panel's game-account group — an imported sudo-capable install, or one
+        # install.sh took out of the group. One such account on the panel host left EVERY game
+        # there at nice 0, every pass, silently. So when the batch is refused, go one account at a
+        # time: a refusal then costs only the account it is about.
+        #
+        # ONLY on that refusal. renice itself exits 1 whenever one listed account has no process
+        # ("failed to get priority ... No such process") — any stopped server — having reniced the
+        # rest; retrying on that would turn every keeper pass into one sudo call per server.
+        for user in users:
+            set_game_priority(server, user, nice)
 
 
 def _tmux_live_socket_sh(selfname):

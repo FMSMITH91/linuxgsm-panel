@@ -43,14 +43,16 @@ jobs:
     # that fork's default branch, and an outside contributor's PR triggered an unattended
     # production deploy on the live host (service restart, health check, possible rollback).
     #
-    # Not a code-injection vector — the deploy SSHes in and runs `git checkout origin/main --
-    # install.sh`, i.e. the BASE repo's main, never the PR's code — but nobody asked for the
-    # deploy. codeql-alerts.yml already distinguishes the two event kinds for its own reasons;
-    # this is the mirror image of that clause.
+    # Not a code-injection vector — the deploy runs the BASE repo's main (the per-user branch
+    # takes install.sh from origin/main, the system branch ships it from a checkout of this run's
+    # head_sha, which the clause below makes a push to main), never the PR's code — but nobody
+    # asked for the deploy. codeql-alerts.yml already distinguishes the two event kinds for its
+    # own reasons; this is the mirror image of that clause.
     if: >-
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
       vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -62,26 +64,65 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
+      # The installer root runs on a system install comes from HERE: the commit CI just verified,
+      # checked out on the runner, carried to the host inside the SSH session. Not from the host's
+      # own checkout. The system-install branch below says why that one cannot be trusted.
+      # Not a pull request's code. The job's `if` admits only a completed CI run of a PUSH to
+      # this repository's main (event == 'push', head_branch == 'main', and head_repository is
+      # this repository), so head_sha is a commit already on main; a fork's pull request is
+      # event 'pull_request' and never reaches here. It is checked out, not executed, on the
+      # runner — the host runs it, which is the point: the host must NOT run its own copy.
+      - name: Check out the verified commit's installer  # nosemgrep: yaml.github-actions.security.workflow-run-target-code-checkout.workflow-run-target-code-checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+          sparse-checkout: /install.sh
+          sparse-checkout-cone-mode: false
+
       - name: Deploy via safe self-update (snapshot + health-check + rollback)
         env:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           : "${DEPLOY_HOST:?Set repo variable DEPLOY_HOST to the tailnet host}"
           U="${DEPLOY_USER:-ubuntu}"
+          [ -s install.sh ] || { echo "::error::The checkout has no install.sh to ship."; exit 1; }
+          # The commit whose installer is shipped is the commit the code is pinned to. Carried as
+          # a variable, so it has to be exactly a commit id.
+          case "${HEAD_SHA:-}" in
+              ""|*[!0-9a-f]*) echo "::error::head_sha '${HEAD_SHA:-}' is not a commit id."; exit 1 ;;
+          esac
+          [ "${#HEAD_SHA}" -eq 40 ] || { echo "::error::head_sha '${HEAD_SHA}' is not a commit id."; exit 1; }
           # Tailscale SSH handles auth (no key needed); install.sh does the safe update.
           # PANEL_NO_UPGRADE=1: the auto-deploy is a panel-only update — it must never
           # apt-upgrade or reboot the deploy host (that would drop this SSH session and fail
           # the job). OS updates on that host stay a manual/interactive decision.
-          # Refresh install.sh ITSELF to the latest before running it. The deploy executes the
-          # on-disk updater, so a bug in a shipped install.sh would otherwise trap the host on that
-          # broken version forever (it crashes before it can pull the fix). Updating just install.sh
+          # Run THIS COMMIT'S install.sh, not the one already on the host. The deploy executes the
+          # updater, so a bug in a shipped install.sh would otherwise trap the host on that
+          # broken version forever (it crashes before it can pull the fix). Taking just install.sh
           # first — the rest of the tree is still updated by install.sh under its own
           # snapshot/health-check/rollback — also means the deploy validates the CURRENT commit's
           # updater, not the previous one.
-          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
-            "$U@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          #
+          # ...and pin the code to that same commit (PANEL_UPDATE_REF), on the system branch below,
+          # which is the one that ships an installer. Left to itself install.sh resets to
+          # origin/main's tip, so when a second push landed before this run, this commit's
+          # installer installed the NEXT commit's code — and that commit's own deploy then found the
+          # host already current and took the no-op branch, so its update steps never ran on the
+          # host. It also installed a tip whose CI had not finished. install.sh honours the pin
+          # only on origin/main, and never moves a checkout backwards to it, so a run that finishes
+          # late (a re-run of an old commit's CI) leaves a newer host where it is.
+          #
+          # INSTALLER_B64 is that file from the runner's checkout, prepended to the remote script as
+          # a variable, and PANEL_UPDATE_REF beside it. base64 output and a commit id need no
+          # quoting, and stdin stays a single stream: under `bash -s` stdin IS the remote script.
+          {
+              printf 'INSTALLER_B64=%s\n' "$(base64 -w0 install.sh)"
+              printf 'PANEL_UPDATE_REF=%s\n' "${HEAD_SHA}"
+              cat <<'REMOTE'
           set -eu
           # WHERE the panel is, asked of the host instead of assumed.
           #
@@ -95,13 +136,29 @@ jobs:
 
           if [ -n "${PD}" ] && sudo -n test -d "${PD}"; then
               # System install. The service user's home is 0750, so the deploy user cannot even
-              # stat the checkout — every read here goes through sudo. The git work runs AS THE
-              # OWNER, not as root: root on a repo it does not own trips git's safe.directory.
+              # stat the checkout — every read here goes through sudo.
+              #
+              # ROOT RUNS NOTHING OUT OF ${PD}. The checkout belongs to the service user: the
+              # working tree AND .git, meaning its config, hooks, refs and object store. That is
+              # the account the helper boundary exists to contain. This step used to refresh
+              # ${PD}/install.sh with `git checkout` as that user and then run it with `sudo bash`.
+              # So on every green merge to main, root executed bytes a compromised panel could
+              # choose (rewrite the file, repoint origin, add a hook or a smudge filter), and every
+              # check inside install.sh ran too late to matter.
+              #
+              # Root runs the copy this job shipped instead, staged in a directory root created
+              # 0700. install.sh then fetches the code and places the root-owned helper itself,
+              # under its own origin and commit checks.
               OWNER="$(sudo -n stat -c %U "${PD}")"
               echo "System install at ${PD} (service user ${OWNER})"
-              sudo -n -u "${OWNER}" git -C "${PD}" fetch --quiet origin main
-              sudo -n -u "${OWNER}" git -C "${PD}" checkout origin/main -- install.sh
-              sudo -n env PANEL_NO_UPGRADE=1 bash "${PD}/install.sh"
+              STAGE="$(sudo -n mktemp -d /tmp/lgsm-deploy.XXXXXXXX)"
+              trap 'sudo -n rm -rf -- "${STAGE}"' EXIT
+              printf '%s' "${INSTALLER_B64}" | base64 -d | sudo -n tee "${STAGE}/install.sh" >/dev/null
+              # From /, not this account's home: install.sh treats a working directory that holds
+              # app.py as the source to install FROM.
+              cd /
+              sudo -n env PANEL_NO_UPGRADE=1 PANEL_UPDATE_REF="${PANEL_UPDATE_REF}" \
+                  bash "${STAGE}/install.sh" </dev/null
           elif [ -d "${HOME}/linuxgsm-panel" ]; then
               echo "Per-user install at ${HOME}/linuxgsm-panel"
               cd "${HOME}/linuxgsm-panel"
@@ -116,3 +173,5 @@ jobs:
               exit 1
           fi
           REMOTE
+          } | ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+                "$U@$DEPLOY_HOST" 'bash -s'

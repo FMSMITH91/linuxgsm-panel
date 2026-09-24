@@ -79,7 +79,7 @@ from werkzeug.exceptions import HTTPException
 from panel.security.auth import (ALL_PERMISSIONS, client_ip, get_user_permissions, init_auth,
     log_action, strip_legacy_superadmin_grants)
 from panel.core.config import (
-    DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config,
+    DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
     encrypt_secret, is_encrypted, harden_data_permissions,
 )
 from panel.services import notifications
@@ -604,7 +604,11 @@ def _security_whitelist():
 
 def _security_whitelist_add(value):
     canon = _valid_ip_or_cidr(value)
-    if not canon:
+    # A value can parse as an address and still not be one fail2ban may be given: ipaddress keeps an
+    # IPv6 zone id VERBATIM, and `::1%<anything>` survives it with spaces and newlines intact. Stored
+    # here, it reached the root-owned jail file as extra lines (bantime, [sshd] enabled = false, ...).
+    # A zone id means nothing to a ban list, so refuse it, and anything that is not one plain token.
+    if not canon or "%" in canon or any(c.isspace() or not c.isprintable() for c in canon):
         return None
 
     def _mut(cfg):   # read-modify-write under the config lock so a concurrent write can't clobber it
@@ -623,8 +627,16 @@ def _security_whitelist_remove(value):
 def _apply_whitelist_to_fail2ban():
     """Rewrite the panel-login jail so its ignoreip matches the current whitelist (no-op if the jail
     is already correct). Best-effort and panel-host-only — for remotes see _apply_whitelist_to_remotes."""
+    # ensure_panel_fail2ban REWRITES the jail. From an unreadable config.json it would write the
+    # defaults — no whitelist and port 5000 — so the admin's own whitelisted IP becomes bannable
+    # and the jail watches a port nobody listens on. Leave the jail as it is until the file reads.
+    _cfg = load_config()
+    if is_unreadable(_cfg):
+        _log.warning("config.json could not be read; the fail2ban jail was left as it is")
+        return False, "config.json could not be read; fail2ban was left as it is"
     try:
-        return so.ensure_panel_fail2ban(AUTH_LOG_PATH, load_config().get("port", 5000), _security_whitelist())
+        return so.ensure_panel_fail2ban(AUTH_LOG_PATH, _cfg.get("port", 5000),
+                                        list(_cfg.get("security_whitelist", []) or []))
     except Exception:
         _log.debug("applying whitelist to fail2ban failed", exc_info=True)
         return False, "could not update fail2ban"
@@ -635,7 +647,13 @@ def _apply_whitelist_to_remotes(app, unban_ip=None):
     banned on a remote either (parity with the panel host). Best-effort and backgrounded — one SSH
     round-trip per remote. Needs its own app context (runs from a background thread)."""
     with app.app_context():
-        wl = _security_whitelist()
+        _cfg = load_config()
+        if is_unreadable(_cfg):
+            # The same reason as _apply_whitelist_to_fail2ban: an empty list pushed from defaults
+            # would strip the whitelist out of every remote's jail.
+            _log.warning("config.json could not be read; remote fail2ban whitelists left as they are")
+            return
+        wl = list(_cfg.get("security_whitelist", []) or [])
         for remote in RemoteServer.query.filter_by(is_local=False).all():
             try:
                 remote_set_fail2ban_ignoreip(remote, wl, unban_ip=unban_ip)
@@ -1087,9 +1105,11 @@ def create_app():
     app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
     app.config["REMEMBER_COOKIE_SECURE"] = app.config["SESSION_COOKIE_SECURE"]
 
-    # flask-login session protection. "strong" rejects a session cookie replayed from a
-    # different client (IP+User-Agent binding); set "basic" if users roam between IPs a
-    # lot, or None to disable. Cookie theft is also recoverable via "sign out everywhere".
+    # Session protection. "strong" rejects a session cookie replayed from a different client
+    # (IP+User-Agent binding); set "basic" if users roam between IPs a lot, or None to disable.
+    # Enforced by auth._session_binding_ok, not by flask-login, whose own "strong" does nothing
+    # for the permanent sessions every login creates. Cookie theft is also recoverable via
+    # "sign out everywhere".
     app.config["SESSION_PROTECTION"] = cfg.get("session_protection", "strong")
 
 
@@ -1695,6 +1715,55 @@ def _setup_open():
     # first run no completed row exists, so the wizard's own endpoints behave identically.
     return SetupState.query.filter_by(complete=True).first() is None
 
+
+def _setup_owner_hash(token):
+    import hashlib
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+
+
+def issue_setup_owner_token(data):
+    """Bind the rest of the wizard to the browser that just created the admin.
+
+    Stores a random token in that browser's session and its hash in the wizard state `data`
+    (the caller commits it). See _setup_owner_ok for why."""
+    token = secrets.token_urlsafe(32)
+    session["_setup_owner"] = token
+    data["owner"] = _setup_owner_hash(token)
+    return token
+
+
+def _setup_owner_ok():
+    """May THIS caller drive the wizard past the admin step?
+
+    _setup_open() only says the wizard has not finished. From the moment the admin is created until
+    the last step, that left it open to anyone who could reach the port — and the steps in that
+    window are the dangerous ones: /api/setup/tailscale/up joins this host to the CALLER's tailnet
+    with Tailscale SSH on (a root shell under the default policy) and hands them the auth URL,
+    /install runs the installer as root, step=welcome rewrites the bind and port, and
+    step=remote_server makes the panel SSH to a host of their choosing. The operator already has
+    an account at that point and reasonably believes the install is theirs.
+
+    So once a superadmin exists, the caller must be the browser that created it (the token issued
+    then) or be signed in as a superadmin — which is also the way back in for an operator who
+    lost that session: /login stays reachable in this window (check_setup). Before any
+    superadmin exists the first-run steps are open by necessity, exactly as before."""
+    if User.query.filter_by(is_superadmin=True).first() is None:
+        return True
+    try:
+        if current_user.is_authenticated and current_user.is_superadmin:
+            return True
+    except Exception:
+        _log.debug("setup owner: no user context", exc_info=True)
+    import hmac
+    import json as _json
+    token = session.get("_setup_owner") or ""
+    state = SetupState.query.first()
+    try:
+        want = (_json.loads(state.data or "{}") if state else {}).get("owner") or ""
+    except (ValueError, TypeError, AttributeError):
+        want = ""
+    return bool(token and want) and hmac.compare_digest(_setup_owner_hash(token), want)
+
 # ── Account / Two-factor auth ───────────────────────────
 def _qr_svg(data):
     """Render `data` as an inline SVG QR code (no PIL needed)."""
@@ -2285,6 +2354,39 @@ def _https_ready(cfg):
                 or cfg.get("trust_proxy", False))
 
 
+def _bind_is_loopback(bind_host):
+    """True only for a concrete loopback address (127.0.0.0/8, ::1). "" (auto) is not: it can
+    resolve to 0.0.0.0 or a tailnet IP at boot."""
+    import ipaddress
+    try:
+        return ipaddress.ip_address(str(bind_host or "").strip()).is_loopback
+    except ValueError:
+        return False
+
+
+# The address this process binds, decided ONCE: bind_host when it is set, otherwise what boot picks
+# (loopback when Tailscale Serve is proxying the panel, else a tailnet IP or 0.0.0.0). Cached because
+# the process cannot rebind without a restart, and every caller has to agree with the boot's choice:
+# _ts_backend_scheme points Serve at the scheme _effective_https says is being served.
+_RESOLVED_BIND = {}
+
+
+def _resolved_bind(cfg):
+    host = (cfg.get("bind_host") or "").strip()
+    if host:
+        return host
+    port = cfg.get("port", 5000)
+    if port not in _RESOLVED_BIND:
+        try:
+            # nosec B104 - not a choice made here: the boot rule, unchanged, for a panel with no
+            # configured bind and no Serve in front, so the first-run wizard is reachable.
+            _RESOLVED_BIND[port] = ts.suggest_best_bind(port).get("bind_host") or "0.0.0.0"  # nosec B104
+        except Exception:
+            _log.debug("bind resolution failed; assuming 0.0.0.0", exc_info=True)
+            _RESOLVED_BIND[port] = "0.0.0.0"  # nosec B104 - the same fallback boot always used
+    return _RESOLVED_BIND[port]
+
+
 def _effective_https(cfg):
     """Should the panel terminate TLS itself with the built-in self-signed cert?
 
@@ -2292,11 +2394,22 @@ def _effective_https(cfg):
     box. But when Tailscale Serve or a reverse proxy is in front, THAT layer terminates
     TLS (with a real cert) and forwards plain HTTP to us on loopback — serving HTTPS
     underneath would just break their http:// upstream. So we stand down in those cases
-    and let them do it. This keeps existing Tailscale installs serving HTTP exactly as
-    before (zero change on upgrade)."""
+    and let them do it.
+
+    Tailscale stands TLS down only when the panel is bound to LOOPBACK. Serve reaching us on
+    127.0.0.1 is the one case where nothing else can see the plain HTTP. The wizard stores
+    bind_host 0.0.0.0 by default, and nothing that marks Serve done changes it, so this used to turn
+    a public, self-signed HTTPS panel into cleartext HTTP on every interface at the next restart.
+    Passwords and Bearer tokens then crossed the network in the clear. With any other bind (or an
+    unset one that resolves to a public address) the panel keeps its own TLS, and Serve is
+    pointed at https+insecure://127.0.0.1 (see _ts_backend_scheme, which reads this).
+
+    The bind is the RESOLVED one (_resolved_bind). An unset bind with Serve proxying already binds
+    127.0.0.1 at boot, and treating that as public switched such installs to self-signed HTTPS for
+    no gain — and made Serve's reachability depend on a re-point succeeding at every boot."""
     if not cfg.get("use_https", True):
         return False
-    if cfg.get("tailscale_setup_done", False):
+    if cfg.get("tailscale_setup_done", False) and _bind_is_loopback(_resolved_bind(cfg)):
         return False
     if cfg.get("trust_proxy", False):
         return False
@@ -2371,8 +2484,10 @@ if __name__ == "__main__":
     # change) so it's protected by default — no manual "enable" click. Backgrounded so it never
     # delays startup, and idempotent so a healthy jail just costs a quick status read.
     def _f2b_autostart():
+        # Through _apply_whitelist_to_fail2ban, not a direct ensure_panel_fail2ban: that is where
+        # an unreadable config.json is refused, instead of rewriting the jail from defaults.
         try:
-            _ok, _msg = so.ensure_panel_fail2ban(AUTH_LOG_PATH, port, _security_whitelist())
+            _ok, _msg = _apply_whitelist_to_fail2ban()
             _log.info("panel fail2ban: %s", _msg)
         except Exception:
             _log.debug("panel fail2ban autostart failed", exc_info=True)
@@ -2438,15 +2553,10 @@ if __name__ == "__main__":
                 _log.debug("bot pending-update report failed", exc_info=True)
     threading.Thread(target=_bot_update_report, daemon=True).start()
 
-    host = (cfg.get("bind_host") or "").strip()
-    if not host:
-        # Not explicitly configured: bind where the panel is actually reachable —
-        # 127.0.0.1 if Tailscale Serve is up to proxy to it, otherwise 0.0.0.0 so the
-        # first-run setup wizard is reachable over the network on a plain VPS.
-        try:
-            host = ts.suggest_best_bind(port).get("bind_host") or "0.0.0.0"
-        except Exception:
-            host = "0.0.0.0"
+    # Not explicitly configured: bind where the panel is actually reachable — 127.0.0.1 if
+    # Tailscale Serve is up to proxy to it, otherwise 0.0.0.0 so the first-run setup wizard is
+    # reachable over the network on a plain VPS. The SAME answer _effective_https reads.
+    host = _resolved_bind(cfg)
     _scheme = "https" if _effective_https(cfg) else "http"
     print(f"LinuxGSM Panel starting on {host}:{port}")
     print(f"Open {_scheme}://{host}:{port} in your browser")

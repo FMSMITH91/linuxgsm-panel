@@ -33,7 +33,7 @@ from panel.core.validation import (GAME_TYPE_RE, INSTANCE_NAME_RE, MAX_PORT, MIN
     SAFE_LABEL_RE, _port_or)
 from app import (_extract_start_error, _log, _prune_jobs,
     _resolve_source_aux_ports, game_os_unsupported, load_game_list, resolve_free_port)
-from panel.routes._shared import (_looks_installed, _notify_servers_changed)
+from panel.routes._shared import (_looks_installed, _notify_servers_changed, _record_game_clock)
 
 # Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
 # row). resolve_free_port yields on an SSH scan, so without this two concurrent installs on the same
@@ -166,6 +166,107 @@ def decide_port_adoption(real_port, cur_port, panel_ports, live_ports):
     if real_port in live:
         return False, "another process on this host", False
     return True, None, False
+
+
+# (remote_id, account) pairs THIS process created with user-create during an install. It is the
+# one piece of evidence that lets step 1 delete a half-finished account: the old job deleted ANY
+# existing account whose home had no linuxgsm.sh — `userdel -r` and an `rm -rf` of the home, as
+# root — which is every login on a host that is not a LinuxGSM one. INSTANCE_NAME_RE is a username
+# grammar, not an ownership check, so typing "ubuntu" (or any admin or service account) into the
+# install form ran exactly that against it, then bound the new row to the account so every later
+# game action, file-manager action and uninstall reached it too. In memory, so a restart loses it:
+# a retry after one keeps an account that HAS its linuxgsm.sh (step 1 reuses it as it is) and
+# REFUSES one that does not — it neither deletes nor installs into an account it cannot prove it
+# made. Its refusal names the way on (delete the leftover account on the host, after which the
+# retry creates it afresh, or remove the server). Rebuilding it automatically after a restart
+# would need this evidence persisted on the GameServer row, not a guess from the host.
+_accounts_created = set()
+
+
+def host_account_state(remote, name):
+    """Does account `name` exist on `remote`? "exists", "absent", or None when nobody answered.
+
+    Three answers, because a failed read is not "absent": run_command over tailscale or the local
+    transport returns ("", ..., -1) instead of raising, and the old caller read that as "no such
+    account" one line above creating (or, before that, deleting) one. Paramiko RAISES for the
+    same condition, so a raise is the same third answer here rather than a 500 from the route.
+    """
+    try:
+        out, _, _ = _sm.run_command(
+            remote, "id %s >/dev/null 2>&1 && echo EXISTS || echo NOTEXISTS" % shlex.quote(name),
+            timeout=10, sudo=False)
+    except Exception:
+        # The name is not logged: it arrives from the request (py/log-injection), and the
+        # traceback already says which probe failed.
+        _log.debug("account probe failed", exc_info=True)
+        return None
+    last = ((out or "").strip().splitlines() or [""])[-1].strip()
+    if last == "EXISTS":
+        return "exists"
+    if last == "NOTEXISTS":
+        return "absent"
+    return None
+
+
+def prepare_install_account(remote, remote_id, short_name, fresh):
+    """Step 1 of the install job: make sure the game account is one the panel may install into.
+    -> (ok, reason, retryable). Nothing is deleted unless this process created the account.
+
+    `fresh` is a first install, which the route only lets through for a name with NO account on
+    the host — so an account found here appeared since, and is not ours to touch or to use. A
+    retry (`fresh` False) finds the account an earlier attempt made. It is used as it is when its
+    linuxgsm.sh is there (a LinuxGSM account: what /discover would import). One without is rebuilt
+    when _accounts_created says this process made it; otherwise the panel cannot tell a leftover
+    of its own from somebody's login, and it refuses rather than delete or install into it. Every
+    return code that decides the next step is read, so a failed userdel or useradd stops the
+    install instead of carrying on into whatever account is there.
+    """
+    state = host_account_state(remote, short_name)
+    if state is None:
+        return False, ("Couldn't check whether an account named '%s' already exists — the host did "
+                       "not answer. Nothing was changed on it." % short_name), True
+    key = (remote_id, short_name)
+    if state == "exists":
+        if fresh:
+            return False, ("An account named '%s' already exists on this host, and the panel only "
+                           "installs into an account it creates itself. It has been left alone — "
+                           "remove this server and pick a different name." % short_name), False
+        # Probed AS the account: only that user can read a 0750 home, and a probe that fails
+        # (rc != 0) is no evidence of a leftover at all.
+        chk, _, chk_rc = _sm.read_as_game_user(
+            remote, short_name,
+            "test -x /home/%s/linuxgsm.sh && echo EXISTS || echo NOTEXISTS" % short_name,
+            timeout=10)
+        leftover = chk_rc == 0 and (chk or "").strip().endswith("NOTEXISTS")
+        if not leftover:
+            return True, "", True             # its linuxgsm.sh is there (or the probe said nothing)
+        with _install_lock:
+            ours = key in _accounts_created
+        if not ours:
+            return False, ("The account '%s' is on this host but has no LinuxGSM install, and the "
+                           "panel can't confirm it created it (it may have restarted since), so it "
+                           "won't delete it or install into it. If it is this install's leftover, "
+                           "delete the account on the host and retry, or remove the server (which "
+                           "deletes the account) and install again." % short_name), True
+        # A half-finished account an earlier attempt of THIS process made: rebuild it clean. Two
+        # verbs, and the home path is built by the helper from the validated name.
+        _, d_err, d_rc = _sm.run_privileged(remote, "user-delete", [short_name], timeout=15,
+                                            merge_stderr=False)
+        if d_rc != 0:
+            return False, ("Couldn't remove the half-finished account '%s' to start again: %s"
+                           % (short_name, (d_err or "userdel failed").strip()[-200:])), True
+        _sm.run_privileged(remote, "user-remove-home", [short_name], timeout=15,
+                           merge_stderr=False)
+        with _install_lock:
+            _accounts_created.discard(key)
+    c_out, c_err, c_rc = _sm.create_game_user(remote, short_name, timeout=15)
+    if c_rc != 0:
+        return False, ("Couldn't create the account '%s': %s"
+                       % (short_name, (c_err or c_out or "useradd failed").strip()[-200:])), True
+    with _install_lock:
+        _accounts_created.add(key)
+    time.sleep(0.3)
+    return True, "", True
 
 
 def register(app):
@@ -332,6 +433,7 @@ def register(app):
             def _name_taken(n):
                 return GameServer.query.filter_by(short_name=n, remote_id=remote_id).first() is not None
             name_changed = False
+            _n = 1
             if _name_taken(short_name):
                 if server_name:
                     return _form_err(f"A server named '{short_name}' already exists on this remote — "
@@ -341,6 +443,29 @@ def register(app):
                     _n += 1
                 short_name = f"{lgsm_name}{_n}"
                 name_changed = True
+            # ...and on the HOST. The name becomes the Linux account the install creates, runs
+            # LinuxGSM as, and that every later game action, file edit and uninstall acts on — so
+            # an account that already exists there (an admin login, a service account, "root")
+            # is someone else's, whatever the table says. The job used to find it, delete it as
+            # a "half-finished leftover" when its home had no linuxgsm.sh, and bind the row to it.
+            # A typed name is refused; the default name skips past it, the same courtesy as above.
+            _acct = host_account_state(remote, short_name)
+            while _acct == "exists" and not server_name and _n < 100:
+                _n += 1
+                while _name_taken(f"{lgsm_name}{_n}") and _n < 100:
+                    _n += 1
+                short_name = f"{lgsm_name}{_n}"
+                name_changed = True
+                _acct = host_account_state(remote, short_name)
+            if _acct is None:
+                return _form_err("Can't reach %s right now, so the panel can't check whether an "
+                                 "account named '%s' already exists there. Check the host is up "
+                                 "and try again." % (remote.name, short_name), "manage_servers")
+            if _acct == "exists":
+                return _form_err(f"An account named '{short_name}' already exists on this host, "
+                                 f"and the install would take it over. Pick a different name — or, "
+                                 f"if it is a LinuxGSM server, import it from the host's page.",
+                                 "manage_servers")
 
             # Create the DB row up-front in the "installing" state, then run the WHOLE
             # install in a background job with live step-by-step progress (polled by the
@@ -356,7 +481,10 @@ def register(app):
         # Start the server's scheduled-backup clock now, so a brand-new install isn't seen as
         # immediately "due" and backed up mid-install (its first scheduled backup is one interval
         # out). Without this, last=0 makes game_backup_due() true the moment installed flips True.
-        bk.record_game_backup(gs.id)
+        # Through _record_game_clock: record_game_backup REFUSES (ConfigUnreadable) while config.json
+        # is there but unparseable, and a raise here, one line after the row was committed, answered
+        # the install with a 500 and left the server "installing" with no job behind it.
+        _record_game_clock(app, gs.id, gs.name)
 
         # GMod is the one game that needs mounted content to render maps/props — offer the picked
         # games (validated against the known set). This adds a content step to the install job.
@@ -376,7 +504,8 @@ def register(app):
                 "message": "", "log": [], "started": time.time(), "updated": time.time(),
                 "name": gs.name,
             }
-        _run_install_job(gs.id, remote_id, short_name, game_type, lgsm_name, final_port, content_games)
+        _run_install_job(gs.id, remote_id, short_name, game_type, lgsm_name, final_port, content_games,
+                         fresh=True)
         _notify_servers_changed(app)   # new "installing" row → appears live on other sessions
 
         log_action(current_user, "install_server", target=gs.name,
@@ -391,7 +520,8 @@ def register(app):
         return _form_ok(f"Installing {short_name} on port {final_port}{port_note}{name_note}. "
                         f"Progress is shown in the corner while it runs.", "manage_servers")
 
-    def _run_install_job(gs_id, remote_id, short_name, game_type, lgsm_name, final_port, content_games=None):
+    def _run_install_job(gs_id, remote_id, short_name, game_type, lgsm_name, final_port, content_games=None,
+                         fresh=False):
         """Full game-server install as a tracked background job with step progress.
         Steps (8, or 9 for GMod-with-content): user → LinuxGSM → deps → game files → config →
         port/firewall → autostart → [GMod content] → start. Progress → _install_jobs[gs_id]."""
@@ -492,44 +622,17 @@ def register(app):
                         _fail("Preparing user account", "internal error: missing instance name")
                         return
 
-                    # 1. User account (clean any half-finished leftover first).
+                    # 1. User account. prepare_install_account decides, and it deletes nothing it
+                    #    did not create: the old inline version ran userdel -r and an rm -rf of the
+                    #    home against ANY existing account without a linuxgsm.sh — every ordinary
+                    #    login on the host — ignored both return codes and the useradd's, and went
+                    #    on to install as whatever account was left.
                     _p(1, "Preparing user account")
-                    # ORDER MATTERS, and the old order was a loaded gun. This asked whether
-                    # /home/<n>/linuxgsm.sh was executable and, on "no", ran user-delete +
-                    # user-remove-home — `userdel -r` and an rm of that home. The probe went out
-                    # with no `sudo=`, so it inherited the host row's sudo_enabled and ran as
-                    # ROOT, which is the only reason it could read a 0750 home at all. Unprivileged
-                    # it answers EACCES, `test -x` fails, and the shell prints the literal
-                    # NOTEXISTS — "cannot look" rendered as "nothing there", immediately before
-                    # the destructive branch.
-                    #
-                    # So ask about the ACCOUNT first: `id` needs no privilege and answers
-                    # definitively. Only if it exists is there anything to clean up, and only then
-                    # is the script probed — AS THAT USER, which is both what can read the home and
-                    # what the narrow grant permits. A probe that FAILS (rc != 0) is not evidence
-                    # of a half-finished install, so it cleans up nothing.
-                    idout, _, _ = _sm.run_command(
-                        remote, f"id {short_name} >/dev/null 2>&1 && echo EXISTS || echo NOTEXISTS",
-                        timeout=10)
-                    user_exists = "NOTEXISTS" not in idout and "EXISTS" in idout
-                    if user_exists:
-                        chk, _, chk_rc = _sm.read_as_game_user(
-                            remote, short_name,
-                            f"test -x /home/{short_name}/linuxgsm.sh && echo EXISTS "
-                            f"|| echo NOTEXISTS", timeout=10)
-                        if chk_rc == 0 and "NOTEXISTS" in chk:
-                            # A genuine half-finished leftover: the account is there, the script
-                            # is not. Was one root shell running `userdel -r X; rm -rf /home/X`.
-                            # Two verbs now, and the home path is built by the helper from the
-                            # validated name rather than interpolated into an `rm -rf`.
-                            _sm.run_privileged(remote, "user-delete", [short_name], timeout=15,
-                                               merge_stderr=False)
-                            _sm.run_privileged(remote, "user-remove-home", [short_name], timeout=15,
-                                               merge_stderr=False)
-                            user_exists = False
-                    if not user_exists:
-                        _sm.create_game_user(remote, short_name, timeout=15)
-                        time.sleep(0.3)
+                    _acct_ok, _acct_why, _acct_retry = prepare_install_account(
+                        remote, remote_id, short_name, fresh)
+                    if not _acct_ok:
+                        _fail("Preparing user account", _acct_why, retryable=_acct_retry)
+                        return
 
                     # 2. Download & set up LinuxGSM (canonical script name).
                     _p(2, "Downloading LinuxGSM")
@@ -1118,7 +1221,8 @@ def register(app):
         the panel restarted, and the only way forward was to delete the server and start over —
         which also throws away the LinuxGSM config the failure usually asks you to change. The
         install job is re-entrant by construction (step 1 keeps an account whose linuxgsm.sh is
-        there and rebuilds one whose isn't), so this simply runs it again on the same row.
+        there, and rebuilds one whose isn't only when this process created it — see
+        prepare_install_account), so this simply runs it again on the same row.
 
         Refused for a cause a retry cannot fix. install_retryable is False when the failure was
         classified — a game needing a Steam account that owns it, one LinuxGSM caps at an older

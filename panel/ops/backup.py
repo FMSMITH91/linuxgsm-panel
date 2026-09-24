@@ -28,7 +28,7 @@ from panel.ops.system_ops import _helper_present, _run_verb
 import time
 
 from panel.core.config import (DATA_DIR, DB_PATH, CONFIG_FILE, SECRET_FILE, CRED_KEY_FILE,
-                    load_config, update_config, encrypt_secret, decrypt_secret)
+                    load_config, update_config, encrypt_secret, decrypt_secret, is_unreadable)
 
 _log = logging.getLogger("panel.backup")
 
@@ -163,9 +163,15 @@ def get_passphrase():
     carry its own passphrase in the clear. It cannot be decrypted without cred_key, which lives
     only on the panel host."""
     try:
-        stored = load_config().get("backup_passphrase") or ""
+        _cfg = load_config()
+        stored = _cfg.get("backup_passphrase") or ""
     except Exception:
         _log.debug("could not read the panel config", exc_info=True)
+        raise PassphraseUnreadable("the panel config could not be read")
+    if is_unreadable(_cfg):
+        # load_config() does not raise for a config.json it could not parse — it hands back
+        # defaults, which carry no passphrase. Read as "not configured", that wrote the daily
+        # archive (panel.db, secret_key, cred_key) in the clear for an operator who set one.
         raise PassphraseUnreadable("the panel config could not be read")
     if not stored:
         return ""                     # genuinely not configured: unencrypted backups are the ask
@@ -694,20 +700,34 @@ def _game_schedules(cfg):
     return gs if isinstance(gs, dict) else {}
 
 
+# "Leave this half of the override as it is." A caller that changes ONE of the two fields has to
+# be able to say so. The Files & Config card has a <select> per field and posted BOTH on a change
+# to either, and a stored keep that select had no <option> for (9, or 11-30: the Backups page takes
+# any number up to MAX_FULL_KEEP) read back as ''. So changing only the interval sent keep:'', the
+# route read '' as "clear it", and the next backup pruned to the global default — deleting
+# archives nobody had asked to lose.
+UNCHANGED = object()
+
+
 def set_game_schedule(sid, interval_days, keep):
     """Set/clear a server's schedule override. For each of interval_days/keep: a number sets an
-    override, None clears it (inherit the global default). The server's last-run is preserved."""
+    override, None clears it (inherit the global default), UNCHANGED leaves it exactly as it is.
+    The server's last-run is preserved."""
     def _mut(cfg):
         sched = _game_schedules(cfg)
         cfg["game_schedules"] = sched   # normalise a corrupted value back to a dict
         entry = sched.get(str(sid))
         if not isinstance(entry, dict):
             entry = {}
-        if interval_days is None:
+        if interval_days is UNCHANGED:
+            pass
+        elif interval_days is None:
             entry.pop("interval_days", None)
         else:
             entry["interval_days"] = max(0, min(MAX_INTERVAL_DAYS, int(interval_days)))
-        if keep is None:
+        if keep is UNCHANGED:
+            pass
+        elif keep is None:
             entry.pop("keep", None)
         else:
             entry["keep"] = max(MIN_FULL_KEEP, min(MAX_FULL_KEEP, int(keep)))

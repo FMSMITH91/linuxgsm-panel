@@ -232,6 +232,24 @@ try:
           str(_rt_args[:1]))
     check("remote top-IPs: that cutoff is one privileged.py would accept",
           _priv.check_args("f2b-log-lines", _rt_args[0][1]) == _rt_args[0][1], str(_rt_args[:1]))
+    # The auto-block reconcile's read. A log answer that FILLS the transport ceiling was cut (the
+    # transports keep the oldest bytes), and a partial tally undercounts recent offenders — whom the
+    # reconcile then RELEASES. At the ceiling it must answer None ("unread"), which the reconcile
+    # treats as "leave every block where it is".
+    _ac_line = "2026-09-03 10:00:00 x [sshd] Found 203.0.113.5\n"
+    _ac_full = _ac_line * (_sm_core._MAX_OUTPUT_BYTES // len(_ac_line) + 1)
+    _sm_core.run_privileged = lambda *a, **k: (_ac_full[:_sm_core._MAX_OUTPUT_BYTES], "", 0)
+    check("remote attempt counts: a log read cut at the output ceiling is unread, not a partial tally",
+          _sm_hosts.remote_fail2ban_attempt_counts(object(), days=7) is None,
+          "a cut read was tallied — the reconcile would release the offenders it undercounts")
+    _sm_core.run_privileged = lambda *a, **k: (_RAW, "", 0)
+    check("remote attempt counts: (control) an ordinary read is tallied in full",
+          _sm_hosts.remote_fail2ban_attempt_counts(object(), days=7)
+          == {"203.0.113.5": 2, "198.51.100.9": 1},
+          repr(_sm_hosts.remote_fail2ban_attempt_counts(object(), days=7)))
+    _sm_core.run_privileged = lambda *a, **k: ("", "SSH command timed out", -1)
+    check("remote attempt counts: a failed read is unread too",
+          _sm_hosts.remote_fail2ban_attempt_counts(object(), days=7) is None, "")
 finally:
     _sm_core.run_privileged, _sm_hosts.remote_fail2ban_overview = _orig_rt_rp, _orig_rt_ov
 
@@ -1052,6 +1070,247 @@ check("install.sh: the root-owned pieces are staged with git cat-file, not copie
       '_gitc cat-file blob "HEAD:${rel}"' in _inst)
 check("install.sh: staging lands in the root-owned HELPER_DIR, not a panel-writable path",
       'local rel="$1" out="${HELPER_DIR}/.stage-$2"' in _inst)
+
+# ...but the OBJECT STORE is panel-owned too, and git trusts it. A replace ref, or a loose object
+# written under the committed blob's name, makes `cat-file blob HEAD:<path>` return the panel's
+# bytes while HEAD still names the real upstream commit; and a checkout with no .git was copied
+# as-is. As root on a checkout the panel user has a hand in, a boundary file must come from ROOT'S
+# OWN clone of REPO_URL, at the panel's HEAD only once that clone shows it is upstream.
+#
+# Run the real functions against real repositories. `id -u` says 0, and the files are this test
+# user's, so the checkout reads as the panel user's, which is exactly the update-path condition.
+import subprocess as _rs_sub
+import zlib as _rs_zlib
+from shlex import quote as _rs_q
+
+
+def _rs_git(*a, cwd=None, inp=None):
+    return _rs_sub.run(["git", *a], cwd=cwd, input=inp, capture_output=True,
+                       text=True).stdout.strip()
+
+
+_rs_fns = (_inst[_inst.index("_gitc() {"):_inst.index("\n}\n", _inst.index("_gitc() {")) + 3]
+           + _inst[_inst.index('ROOT_GIT="${HELPER_DIR}/.source.git"'):
+                   _inst.index("\n}\n", _inst.index("stage_root_source() {")) + 3])
+_rs_sb = _tempfile.mkdtemp(prefix="rootsrc-")
+try:
+    _rs_up = os.path.join(_rs_sb, "upstream")
+    os.makedirs(os.path.join(_rs_up, "tools"))
+    _rs_git("init", "-q", "-b", "main", _rs_up)
+    for _k, _v in (("user.email", "t@example.invalid"), ("user.name", "t"),
+                   ("commit.gpgsign", "false")):
+        _rs_git("config", _k, _v, cwd=_rs_up)
+    with open(os.path.join(_rs_up, "tools", "panel-helper"), "w") as _f:
+        _f.write("GOOD-HELPER\n")
+    _rs_git("add", "-A", cwd=_rs_up)
+    _rs_git("commit", "-qm", "upstream", cwd=_rs_up)
+
+    def _rs_case(name, tamper, roots=False, src=None, panel_user=None, script=None, seed=None):
+        """Clone upstream as 'the panel's checkout', tamper with it, stage as 'root'."""
+        d = os.path.join(_rs_sb, name)
+        panel, helper = os.path.join(d, "panel"), os.path.join(d, "helper")
+        os.makedirs(helper)
+        if seed:
+            seed(os.path.join(helper, ".source.git"))
+        _rs_git("clone", "-q", "--no-hardlinks", _rs_up, panel)
+        for _k, _v in (("user.email", "t@example.invalid"), ("user.name", "t"),
+                       ("commit.gpgsign", "false")):
+            _rs_git("config", _k, _v, cwd=panel)
+        tamper(panel)
+        # Only a BARE `id -u` is root: `id -u <panel user>` must still name that user.
+        body = ("id() { [ \"$#\" -eq 1 ] && [ \"$1\" = -u ] && echo 0 || command id \"$@\"; }\n"
+                "sudo() { [ \"$1\" = -u ] && shift 2; \"$@\"; }\n"
+                "warn() { echo \"WARN $*\"; }\n"
+                "H_SUDO=''\nPANEL_DIR=%s\nHELPER_DIR=%s\nREPO_URL=%s\nDEFAULT_BRANCH=main\n"
+                % (_rs_q(panel), _rs_q(helper), _rs_q("file://" + _rs_up))
+                + ("SRC=%s\nPANEL_USER=%s\nSCRIPT_PATH=%s\n"
+                   % (_rs_q(src), _rs_q(panel_user),
+                      _rs_q(script or os.path.join(src, "install.sh"))) if src else "")
+                + _rs_fns
+                + ("_checkout_is_roots() { return 0; }\n" if roots else "")
+                + "_prepare_root_source\n"
+                  "if s=\"$(stage_root_source tools/panel-helper panel-helper)\"; then\n"
+                  "  echo \"STAGED=$(cat \"$s\")\"\nelse\n  echo STAGED-NOTHING\nfi\n")
+        r = _rs_sub.run(["bash", "-c", body], capture_output=True, text=True)
+        return r.stdout + r.stderr
+
+    def _rs_replace_ref(panel):
+        good = _rs_git("rev-parse", "HEAD:tools/panel-helper", cwd=panel)
+        evil = _rs_git("hash-object", "-w", "--stdin", cwd=panel, inp="EVIL-HELPER\n")
+        _rs_git("replace", "-f", good, evil, cwd=panel)
+
+    def _rs_loose_shadow(panel):
+        # Pack everything, then write a LOOSE object under the committed blob's name with other
+        # content. git reads the loose one first and does not re-hash it.
+        _rs_git("gc", "-q", "--prune=now", cwd=panel)
+        good = _rs_git("rev-parse", "HEAD:tools/panel-helper", cwd=panel)
+        payload = b"EVIL-HELPER\n"
+        p = os.path.join(panel, ".git", "objects", good[:2], good[2:])
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        if os.path.exists(p):
+            os.unlink(p)
+        with open(p, "wb") as f:
+            f.write(_rs_zlib.compress(b"blob %d\0" % len(payload) + payload))
+
+    def _rs_no_git(panel):
+        _shutil.rmtree(os.path.join(panel, ".git"))
+        with open(os.path.join(panel, "tools", "panel-helper"), "w") as f:
+            f.write("EVIL-HELPER\n")
+
+    def _rs_local_commit(panel):
+        with open(os.path.join(panel, "tools", "panel-helper"), "w") as f:
+            f.write("LOCAL-HELPER\n")
+        _rs_git("commit", "-qam", "local only", cwd=panel)
+
+    # The attacks really do fool the panel's own git — otherwise the checks below prove nothing.
+    _rs_probe = os.path.join(_rs_sb, "probe")
+    _rs_git("clone", "-q", "--no-hardlinks", _rs_up, _rs_probe)
+    _rs_replace_ref(_rs_probe)
+    check("install.sh: (premise) a replace ref makes the panel's git return other bytes",
+          _rs_git("cat-file", "blob", "HEAD:tools/panel-helper", cwd=_rs_probe) == "EVIL-HELPER")
+
+    _rs_out = _rs_case("clean", lambda p: None)
+    check("install.sh: root stages an untouched upstream checkout's helper (positive control)",
+          "STAGED=GOOD-HELPER" in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("replace", _rs_replace_ref)
+    check("install.sh: as root, a replace ref in the panel's .git does not reach the staged helper",
+          "STAGED=GOOD-HELPER" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("loose", _rs_loose_shadow)
+    check("install.sh: ...nor does a loose object shadowing the committed blob",
+          "STAGED=GOOD-HELPER" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("nogit", _rs_no_git)
+    check("install.sh: ...and deleting .git no longer makes root copy the tree",
+          "STAGED-NOTHING" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    # The refusal is cached and shared by every caller, so it must not name files it did not try:
+    # a fresh install once asked it for recover.sh alone and was told the helper — placed seconds
+    # earlier — "was NOT refreshed".
+    check("install.sh: ...and the refusal does not claim the helper was left unrefreshed",
+          "WARN" in _rs_out and "privileged helper" not in _rs_out, _rs_out[-300:])
+    # Root's clone is kept between runs, and the panel's branch switcher changes which branch it
+    # fetches. A ref left by an earlier branch whose name is a directory of the new one (`fix`, then
+    # `fix/x`, or `main/x` then `main` as here) made git refuse the fetch on every later run, so
+    # the helper was never refreshed again.
+    def _rs_seed_branch_ref(git_dir):
+        _rs_git("init", "-q", "--bare", git_dir)
+        _rs_git("--git-dir", git_dir, "fetch", "-q", "--no-tags", "file://" + _rs_up,
+                "+refs/heads/main:refs/remotes/origin/main/x")
+    _rs_probe = os.path.join(_rs_sb, "dfprobe.git")
+    _rs_seed_branch_ref(_rs_probe)
+    check("install.sh: (premise) a ref under a branch-named directory blocks a fetch into it",
+          _rs_sub.run(["git", "--git-dir", _rs_probe, "fetch", "-q", "--no-tags",
+                       "file://" + _rs_up, "+refs/heads/main:refs/remotes/origin/main"],
+                      capture_output=True).returncode != 0)
+    _rs_out = _rs_case("branchref", lambda p: None, seed=_rs_seed_branch_ref)
+    check("install.sh: a ref left in root's clone by an earlier branch does not block the fetch",
+          "STAGED=GOOD-HELPER" in _rs_out and "Could not fetch" not in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("local", _rs_local_commit)
+    check("install.sh: a HEAD that is not on upstream's branch is refused, and says so",
+          "STAGED-NOTHING" in _rs_out and "LOCAL-HELPER" not in _rs_out
+          and "not on file://" in _rs_out, _rs_out[-300:])
+    # ...while a checkout that is ROOT'S OWN (a fresh install from an operator's clone, before the
+    # chown) is still read directly, local commits and all.
+    _rs_out = _rs_case("rootowned", _rs_local_commit, roots=True)
+    check("install.sh: a checkout that is entirely root's is still staged from its own HEAD",
+          "STAGED=LOCAL-HELPER" in _rs_out, _rs_out[-300:])
+
+    # ...and a root UPDATE from the operator's own tree (`sudo bash install.sh` in a clone or an
+    # unpacked tarball, SRC != PANEL_DIR) stages from THAT tree. Root's clone refused it — no .git,
+    # a local or feature-branch commit, no network — so the panel code was updated while the
+    # helper, db_maintenance and the installer stayed old, and a host still on the wide grant could
+    # never be narrowed. fetch_code copies exactly that working tree into the checkout, and the
+    # operator chose it as root, so refusing it protected nothing.
+    #
+    # "The panel user" is an account that owns none of it, except where the case says otherwise.
+    import pwd as _rs_pwd
+    _rs_me = _rs_pwd.getpwuid(os.getuid()).pw_name
+    _rs_other = None
+    for _n in ("nobody", "daemon", "bin"):
+        try:
+            if _n != _rs_me:
+                _rs_pwd.getpwnam(_n)
+                _rs_other = _n
+                break
+        except KeyError:
+            continue
+    check("install.sh: (premise) there is an account to play a panel user that owns nothing here",
+          _rs_other is not None)
+
+    def _rs_srctree(name, helper_text="SRC-HELPER\n", parent=None):
+        t = os.path.join(parent or _rs_sb, name + "-src")
+        os.makedirs(os.path.join(t, "tools"))
+        for _fn in ("app.py", "install.sh"):
+            open(os.path.join(t, _fn), "w").close()
+        with open(os.path.join(t, "tools", "panel-helper"), "w") as f:
+            f.write(helper_text)
+        return t
+
+    _rs_out = _rs_case("srctree", _rs_no_git, src=_rs_srctree("srctree"), panel_user=_rs_other)
+    check("install.sh: a root update from the operator's tree stages the helper from that tree",
+          "STAGED=SRC-HELPER" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    # Refusals: the panel user must not be able to nominate the tree root reads. The tree counts
+    # only while root is running ITS install.sh: the self-update verb runs the root-owned copy with
+    # its working directory in the checkout, wherever the panel user makes that lead.
+    _rs_out = _rs_case("srcself", _rs_no_git, src=_rs_srctree("srcself"), panel_user=_rs_other,
+                       script=os.path.join(_rs_sb, "srcself", "helper", "install.sh"))
+    check("install.sh: ...but not while the installer running is not that tree's own",
+          "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("srcpanel", _rs_no_git, src=_rs_srctree("srcpanel"), panel_user=_rs_me)
+    check("install.sh: ...but not from a tree the panel user owns",
+          "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
+    _rs_t = _rs_srctree("srcworld")
+    os.chmod(os.path.join(_rs_t, "tools"), 0o777)
+    _rs_out = _rs_case("srcworld", _rs_no_git, src=_rs_t, panel_user=_rs_other)
+    check("install.sh: ...nor through a directory anyone can write",
+          "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
+    # ...nor from a tree in a directory the panel user could swap it out of.
+    _rs_par = os.path.join(_rs_sb, "srcparent-dir")
+    os.makedirs(_rs_par)
+    os.chmod(_rs_par, 0o777)
+    _rs_out = _rs_case("srcparent", _rs_no_git, src=_rs_srctree("srcparent", parent=_rs_par),
+                       panel_user=_rs_other)
+    check("install.sh: ...nor from a tree whose parent directory anyone can write",
+          "STAGED-NOTHING" in _rs_out and "SRC-HELPER" not in _rs_out, _rs_out[-300:])
+    # A tree the panel user owns cannot vouch for itself through links to root's own files: judged
+    # after following links, `app.py -> /etc/passwd` resolved somewhere root-owned, and the
+    # "helper" staged was /etc/passwd.
+    check("install.sh: (premise) /etc/passwd is root's, in a root-owned directory",
+          os.stat("/etc/passwd").st_uid == 0 and os.stat("/etc").st_uid == 0)
+    _rs_t = _rs_srctree("srcvouch")
+    for _rel in ("app.py", os.path.join("tools", "panel-helper")):
+        os.unlink(os.path.join(_rs_t, _rel))
+        os.symlink("/etc/passwd", os.path.join(_rs_t, _rel))
+    _rs_out = _rs_case("srcvouch", _rs_no_git, src=_rs_t, panel_user=_rs_me)
+    check("install.sh: ...nor from a panel-owned tree whose files link to root-owned ones",
+          "STAGED-NOTHING" in _rs_out and "root:" not in _rs_out, _rs_out[-300:])
+    # The checkout itself by another spelling (a symlinked home, or a link the panel user put in
+    # place of ${PANEL_DIR}) is not the operator's tree, whoever owns it.
+    _rs_t = os.path.join(_rs_sb, "srcsame-link")
+    os.symlink(os.path.join(_rs_sb, "srcsame", "panel"), _rs_t)
+    _rs_out = _rs_case("srcsame", _rs_no_git, src=_rs_t, panel_user=_rs_other)
+    check("install.sh: ...nor from the checkout itself reached by another path",
+          "STAGED-NOTHING" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    # Positive control for that: SRC is resolved, so an operator's tree reached through a link is
+    # still the operator's tree.
+    _rs_t = os.path.join(_rs_sb, "srcvia-link")
+    os.symlink(_rs_srctree("srcvia"), _rs_t)
+    _rs_out = _rs_case("srcvia", _rs_no_git, src=_rs_t, panel_user=_rs_other)
+    check("install.sh: an operator's tree reached through a link is still staged from",
+          "STAGED=SRC-HELPER" in _rs_out, _rs_out[-300:])
+    # No symlink on the way down to the file is followed: here one lands in a world-writable
+    # directory.
+    _rs_t = _rs_srctree("srclink")
+    _rs_drop = os.path.join(_rs_sb, "drop")
+    os.makedirs(_rs_drop)
+    os.chmod(_rs_drop, 0o777)
+    with open(os.path.join(_rs_drop, "helper"), "w") as _f:
+        _f.write("DROPPED-HELPER\n")
+    os.unlink(os.path.join(_rs_t, "tools", "panel-helper"))
+    os.symlink(os.path.join(_rs_drop, "helper"), os.path.join(_rs_t, "tools", "panel-helper"))
+    _rs_out = _rs_case("srclink", _rs_no_git, src=_rs_t, panel_user=_rs_other)
+    check("install.sh: ...nor through a symlink that lands somewhere the panel user can write",
+          "STAGED-NOTHING" in _rs_out and "DROPPED-HELPER" not in _rs_out, _rs_out[-300:])
+finally:
+    _shutil.rmtree(_rs_sb, ignore_errors=True)
 for _src in ("HELPER_SRC", "DBM_SRC"):
     check("install.sh: no longer installs root-owned files straight from %s" % _src,
           _src not in _inst)
@@ -1175,6 +1434,46 @@ if len(_rt_set) == 1:
     check("install.sh: the installer copy records its own success rather than `|| true`",
           '"${_istage}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1' in _inst_txt)
 
+# ── panel-self-update: root opens its log inside the panel's own data dir ──────────────────────
+# _self_update_detached ran `open(os.path.join(data_dir, "self-update.log"), "w")` AS ROOT. data/
+# belongs to the panel user, so a symlink at that name made root truncate — or create — any file
+# on the box with one panel-self-update call. _open_log_in_dir pins the directory, unlinks the
+# name and CREATES the log O_EXCL; a symlink and a hard link planted there must both survive
+# untouched. Driven for real in a temp dir; the caller is then held to it by AST.
+import ast as _sul_ast
+_sul_tmp = _tempfile.mkdtemp(prefix="selfupdate-log-")
+_sul_victim = os.path.join(_sul_tmp, "root-owned-file")
+_sul_data = os.path.join(_sul_tmp, "data")
+os.makedirs(_sul_data)
+with open(_sul_victim, "w", encoding="utf-8") as _fh:
+    _fh.write("ORIGINAL")
+_sul_log = os.path.join(_sul_data, _helper.SELF_UPDATE_LOG)
+os.symlink(_sul_victim, _sul_log)
+with _helper._open_log_in_dir(_sul_data, _helper.SELF_UPDATE_LOG) as _fh:
+    _fh.write("=== panel self-update ===\n")
+check("helper self-update: a symlink at the log name is not written through",
+      open(_sul_victim, encoding="utf-8").read() == "ORIGINAL",
+      repr(open(_sul_victim, encoding="utf-8").read()))
+check("helper self-update: ...and the log is a real file holding what was written (positive control)",
+      not os.path.islink(_sul_log)
+      and open(_sul_log, encoding="utf-8").read() == "=== panel self-update ===\n")
+os.unlink(_sul_log)
+os.link(_sul_victim, _sul_log)
+with _helper._open_log_in_dir(_sul_data, _helper.SELF_UPDATE_LOG) as _fh:
+    _fh.write("new run\n")
+check("helper self-update: a HARD link at the log name is not truncated either",
+      open(_sul_victim, encoding="utf-8").read() == "ORIGINAL",
+      repr(open(_sul_victim, encoding="utf-8").read()))
+check("helper self-update: ...the log is a fresh file owned like its directory",
+      os.stat(_sul_log).st_nlink == 1 and os.stat(_sul_log).st_uid == os.stat(_sul_data).st_uid
+      and open(_sul_log, encoding="utf-8").read() == "new run\n")
+_sul_fn = next(n for n in _sul_ast.walk(_sul_ast.parse(open(_helper_path, encoding="utf-8").read()))
+               if isinstance(n, _sul_ast.FunctionDef) and n.name == "_self_update_detached")
+_sul_calls = [n.func.id for n in _sul_ast.walk(_sul_fn)
+              if isinstance(n, _sul_ast.Call) and isinstance(n.func, _sul_ast.Name)]
+check("helper self-update: the detached run opens its log through _open_log_in_dir, never open()",
+      "_open_log_in_dir" in _sul_calls and "open" not in _sul_calls, repr(_sul_calls))
+
 # ── panel-self-update: what root executes out of a directory the panel owns ────────────────────
 # `panel-self-update` runs the root-owned install.sh as root with cwd=PANEL_DIR, and its docstring
 # argues the ROOT-run part is "fixed and small". Three lines said otherwise, and a compromised
@@ -1251,6 +1550,76 @@ try:
                  extra=_su_shim % "root").stdout
     check("install.sh: ...and the fresh path, where PANEL_DIR is still root's, is unchanged",
           "SUDO" not in _r and "python3 -m venv" in _r, repr(_r[:200]))
+
+    # requirements.txt must pin the WHOLE closure, not just the direct dependencies. Pinning 12
+    # packages left the rest floating. install.sh skips pip when the file is unchanged, and
+    # `pip install -r` never upgrades a package that already satisfies a range, so a security fix
+    # in Werkzeug or python-engineio never reached a host. Dependabot bumps only what is listed,
+    # and pip-audit (now --no-deps) audits only what is listed. So: every listed package's own
+    # requirements, for CPython 3.10-3.14 on Linux, must be listed too, at a version that
+    # satisfies them. Read from the installed metadata, which must BE the pinned versions.
+    import importlib.metadata as _rq_md
+    try:
+        from packaging.requirements import Requirement as _RqReq
+        from packaging.utils import canonicalize_name as _rq_canon
+    except ImportError:
+        from pip._vendor.packaging.requirements import Requirement as _RqReq
+        from pip._vendor.packaging.utils import canonicalize_name as _rq_canon
+
+    def _rq_closure_gaps(text):
+        pins, gaps = {}, []
+        for ln in text.splitlines():
+            ln = ln.split("#", 1)[0].strip()
+            if not ln:
+                continue
+            req = _RqReq(ln)
+            spec = [s for s in req.specifier if s.operator == "=="]
+            if len(spec) != 1 or len(req.specifier) != 1:
+                gaps.append("%s is not pinned with ==" % ln)
+                continue
+            pins[_rq_canon(req.name)] = spec[0].version
+        envs = [{"python_version": "3.%d" % m, "python_full_version": "3.%d.0" % m,
+                 "sys_platform": "linux", "platform_system": "Linux", "platform_machine": mach,
+                 "implementation_name": "cpython", "platform_python_implementation": "CPython",
+                 "os_name": "posix", "extra": ""}
+                for m in (10, 11, 12, 13, 14) for mach in ("x86_64", "aarch64")]
+        for name, ver in sorted(pins.items()):
+            try:
+                dist = _rq_md.distribution(name)
+            except _rq_md.PackageNotFoundError:
+                gaps.append("%s==%s is not installed here, so its requirements cannot be read"
+                            % (name, ver))
+                continue
+            if dist.version != ver:
+                gaps.append("%s is installed at %s but pinned at %s (pip install -r "
+                            "requirements.txt)" % (name, dist.version, ver))
+                continue
+            for rd in dist.requires or []:
+                sub = _RqReq(rd)
+                if sub.marker is not None and not any(sub.marker.evaluate(e) for e in envs):
+                    continue
+                sub_name = _rq_canon(sub.name)
+                if sub_name not in pins:
+                    gaps.append("%s needs %s, which is not pinned" % (name, rd))
+                elif not sub.specifier.contains(pins[sub_name], prereleases=True):
+                    gaps.append("%s needs %s, but %s is pinned" % (name, rd, pins[sub_name]))
+        return pins, gaps
+
+    _rq_txt = open(os.path.join(_root, "requirements.txt"), encoding="utf-8").read()
+    _rq_pins, _rq_gaps = _rq_closure_gaps(_rq_txt)
+    check("requirements.txt: pins every package the panel's dependencies pull in",
+          len(_rq_pins) > 12 and not _rq_gaps, "; ".join(_rq_gaps[:6]))
+    # The gate catches a gap (so the pass above is not an empty list for want of looking): drop
+    # one transitive pin and it must be named.
+    _rq_cut = "\n".join(ln for ln in _rq_txt.splitlines() if not ln.startswith("werkzeug=="))
+    _rq_cut_gaps = _rq_closure_gaps(_rq_cut)[1]
+    check("requirements.txt: ...and the closure check names a dropped transitive pin (control)",
+          any("werkzeug" in g for g in _rq_cut_gaps), repr(_rq_cut_gaps[:3]))
+    _rq_sec = open(os.path.join(_root, ".github", "workflows", "security-code.yml"),
+                   encoding="utf-8").read()
+    check("security-code: pip-audit audits the pinned set itself, not a fresh resolution",
+          re.search(r"^\s*- run: pip-audit --no-deps -r requirements\.txt\s*$", _rq_sec, re.M)
+          is not None, "pip-audit resolves its own environment again")
 
     # origin: the URL the root-owned installs are taken from, compared against this file's own
     # REPO_URL — which the panel cannot edit, because install.sh runs from outside the checkout.
@@ -1332,6 +1701,26 @@ try:
     check("install.sh: ...and a member of a privileged GROUP is 'yes' without consulting sudo",
           (_r.stdout or "").strip().endswith("yes") and "SUDO WAS CALLED" not in _r.stdout,
           repr(_r.stdout[:120]))
+    # ...and "privileged" is not only sudo. docker/lxd/incus-admin/libvirt reach root through their
+    # daemon, disk through the block device, staff through /usr/local; adm and shadow read logs and
+    # hashes. None needs a sudoers entry, so `sudo -l -U` says "not allowed" and the account was
+    # enrolled into the become-any-member grant. Every group privileged.py already refuses as
+    # root-equivalent must be refused here too, with sudo answering the reassuring "no".
+    _cas_rootish = sorted(set(_privmod._NEVER_A_CONTENT_GROUP) | {"incus-admin", "libvirt"})
+    _cas_missed = []
+    for _g in _cas_rootish:
+        _r = _su_run(_cas + '\ncan_already_sudo x\n', "",
+                     extra=("id() { echo 'x games %s'; }\n" % _g
+                            + "sudo() { echo 'User x is not allowed to run sudo on h.'; }\n"))
+        if not (_r.stdout or "").strip().endswith("yes"):
+            _cas_missed.append("%s -> %r" % (_g, (_r.stdout or "").strip()[-20:]))
+    check("install.sh: ...including docker, lxd, disk and the other root-equivalent groups",
+          len(_cas_rootish) >= 12 and not _cas_missed, "; ".join(_cas_missed))
+    _r = _su_run(_cas + '\ncan_already_sudo x\n', "",
+                 extra=("id() { echo 'x games dockerish'; }\n"
+                        "sudo() { echo 'User x is not allowed to run sudo on h.'; }\n"))
+    check("install.sh: ...matched whole, so a lookalike group is still a plain 'no' (control)",
+          (_r.stdout or "").strip().endswith("no"), repr(_r.stdout[-40:]))
     # The caller must act on all three: only `no` may enrol.
     _sync_body = _su_body("sync_game_user_group")
     check("install.sh: ...and only a definite 'no' enrols the account",
@@ -1424,6 +1813,51 @@ try:
           "if port is None:" in _su_txt and "raise SystemExit(0)" in _su_txt
           and _su_txt.index("if port is None:") < _su_txt.index('cfg["port"] = port'),
           "the exhausted case still falls through to the config write")
+
+    # ...and it must not write THROUGH anything the panel user planted in data/. As root it used
+    # `open(cfg + ".tmp", "w")`, os.replace and os.chmod on paths inside a panel-owned directory,
+    # and all three follow a symlink, so root rewrote a file of the panel user's choosing. Run the
+    # real function, as this user, against the two plants that used to work.
+    _cp_fn = _su_between("choose_and_record_port() {", "\nPYEOF\n}\n")
+    _cp_sb = _tempfile.mkdtemp(prefix="portpick-")
+    try:
+        def _cp_run(plant, extra=""):
+            d = _tempfile.mkdtemp(dir=_cp_sb)
+            os.makedirs(os.path.join(d, "panel", "data"))
+            victim = os.path.join(d, "victim")
+            with open(victim, "w") as f:
+                f.write("VICTIM\n")
+            if plant:
+                os.symlink(victim, os.path.join(d, "panel", "data", plant))
+            r = _su_run(_cp_fn + '\nchoose_and_record_port 47100\necho "RC=$?"\n',
+                        "PANEL_DIR=%s\n" % _su_shlex.quote(os.path.join(d, "panel")), extra=extra)
+            cfg = os.path.join(d, "panel", "data", "config.json")
+            written = (open(cfg).read() if os.path.isfile(cfg) and not os.path.islink(cfg) else "")
+            return r, open(victim).read(), written
+
+        _r, _victim, _cfg = _cp_run(None)
+        check("install.sh: the port picker records the port it chose (positive control)",
+              '"port": 471' in _cfg and _victim == "VICTIM\n", repr((_r.stdout[-120:], _cfg)))
+        _r, _victim, _cfg = _cp_run("config.json.tmp")
+        check("install.sh: a symlink planted at the old temp name is not written through",
+              _victim == "VICTIM\n" and '"port": 471' in _cfg,
+              repr((_victim[:60], _r.stdout[-120:], _r.stderr[-160:])))
+        _r, _victim, _cfg = _cp_run("config.json")
+        check("install.sh: ...and a symlinked config.json is refused, not followed",
+              _victim == "VICTIM\n" and "RC=3" in _r.stdout
+              and "symbolic link" in _r.stderr, repr((_victim[:60], _r.stdout[-120:])))
+        # As root it drops to whoever owns PANEL_DIR, so the kernel refuses what the script misses.
+        _cp_sudo = ("id() { echo 0; }\n"
+                    "sudo() { echo \"SUDO $*\" >&2; shift 2; \"$@\"; }\n")
+        _r, _victim, _cfg = _cp_run(None, extra=_cp_sudo + "stat() { echo lgsmpanel; }\n")
+        check("install.sh: as root over a panel-owned PANEL_DIR, the port is written as its owner",
+              "SUDO -u lgsmpanel python3 -" in _r.stderr and '"port": 471' in _cfg,
+              repr(_r.stderr[-200:]))
+        _r, _victim, _cfg = _cp_run(None, extra=_cp_sudo + "stat() { echo root; }\n")
+        check("install.sh: ...while a root-owned PANEL_DIR (the fresh install) stays root (control)",
+              "SUDO" not in _r.stderr and '"port": 471' in _cfg, repr(_r.stderr[-200:]))
+    finally:
+        _shutil.rmtree(_cp_sb, ignore_errors=True)
 
     # ── the "already up to date" branch has to backfill EVERY root-owned piece ───────────────
     # That branch exists because root-owned state lives OUTSIDE the checkout and can be stale while
@@ -1995,6 +2429,7 @@ try:
                  "install() { echo \"INSTALL $*\"; }\n"
                  "ln() { echo \"LN $*\"; }\n"
                  "rm() { :; }\n"
+                 "_prepare_root_source() { :; }\n"
                  "stage_root_source() { echo /tmp/staged-recover.sh; }\n")
     _r_untrusted = _su_run(_su_recov, "HELPER_DIR=/usr/local/lib/lgsmp\n"
                            + _su_env + "ORIGIN_TRUSTED=0\n", extra=_su_rshim)
@@ -2013,6 +2448,63 @@ try:
           "INSTALL -o root -g root -m 0755" in _r_trusted.stdout
           and "LN -sf /usr/local/lib/lgsmp/recover.sh" in _r_trusted.stdout,
           repr(_r_trusted.stdout[:300]))
+
+    # ...and when NO fresh copy can be staged, ROOT must still never aim the command into the
+    # checkout. It fell back to `ln -sf ${PANEL_DIR}/recover.sh` whenever staging failed, and root's
+    # own-clone staging refuses a tarball, a --src tree, a local commit and an offline host — all
+    # legitimate root installs — so `sudo linuxgsm-panel-recover` ran a panel-writable file as root,
+    # and on an update it REPOINTED a link that had been aimed at the root-owned copy.
+    _su_ppanel = os.path.join(_su_sb, "panel")
+    open(os.path.join(_su_ppanel, "recover.sh"), "w").close()
+    _su_rlib = os.path.join(_su_sb, "rootlib")
+
+    def _su_recfail(uid, helper_dir, owner="root", link_to="/elsewhere"):
+        shim = ("id() { echo %s; }\n" % uid
+                + "sudo() { \"$@\"; }\n"
+                  "install() { echo \"INSTALL $*\"; }\n"
+                  "ln() { echo \"LN $*\"; }\n"
+                  "rm() { echo \"RM $*\"; }\n"
+                  "stat() { echo %s; }\n" % owner
+                + "readlink() { echo %s; }\n" % _su_shlex.quote(link_to)
+                + "_prepare_root_source() { :; }\n"
+                  "stage_root_source() { return 1; }\n")
+        return _su_run(_su_recov, "HELPER_DIR=%s\n" % _su_shlex.quote(helper_dir)
+                       + _su_env + "ORIGIN_TRUSTED=1\n", extra=shim).stdout
+
+    _r = _su_recfail(0, "/usr/local/lib/lgsmp")
+    check("install.sh: as root, a failed staging never links the recovery command into the checkout",
+          "LN " not in _r and "WARN" in _r, repr(_r[:400]))
+    _r = _su_recfail(0, "/usr/local/lib/lgsmp", link_to=os.path.join(_su_ppanel, "recover.sh"))
+    check("install.sh: ...and unlinks one an older installer aimed at the checkout",
+          "RM -f /usr/local/bin/linuxgsm-panel-recover" in _r and "LN " not in _r, repr(_r[:400]))
+    _r = _su_recfail(0, "/usr/local/lib/lgsmp")
+    check("install.sh: ...but leaves a link that points anywhere else alone (control)",
+          "RM -f /usr/local/bin/linuxgsm-panel-recover" not in _r, repr(_r[:400]))
+    open(os.path.join(_su_rlib, "recover.sh"), "w").close()
+    _r = _su_recfail(0, _su_rlib)
+    check("install.sh: ...it keeps a root-owned copy already in place (stale, but not panel-writable)",
+          "LN -sf %s" % os.path.join(_su_rlib, "recover.sh") in _r
+          and "LN -sf %s" % os.path.join(_su_ppanel, "recover.sh") not in _r, repr(_r[:400]))
+    _r = _su_recfail(0, _su_rlib, owner="lgsmpanel")
+    check("install.sh: ...but not one the panel user owns",
+          "LN " not in _r, repr(_r[:400]))
+    # Control: the ACCOUNT that owns the checkout (a per-user install) still gets the fallback —
+    # it can rewrite what it runs anyway, and the gate above must not have removed that.
+    _r = _su_recfail(1000, "/usr/local/lib/lgsmp")
+    check("install.sh: a per-user run still falls back to the checkout's recover.sh (control)",
+          "LN -sf %s" % os.path.join(_su_ppanel, "recover.sh") in _r, repr(_r[:400]))
+
+    # The fresh ROOT path places recover.sh while the checkout is still root's, i.e. before its
+    # chown — as install_root_tools already is. After it, a tarball or --src install had no way to
+    # stage it at all. Comment lines stripped: this block's own prose names both.
+    _su_code = "\n".join(_ln for _ln in _su_txt.splitlines() if not _ln.lstrip().startswith("#"))
+    _su_fresh = _su_code[_su_code.index('info "[3/4] Registering the service'):]
+    _su_fresh = _su_fresh[:_su_fresh.index("\nelse\n")]
+    check("install.sh: the fresh root path installs the recovery command BEFORE the chown",
+          "install_recovery_command" in _su_fresh
+          and _su_fresh.index("install_recovery_command")
+          < _su_fresh.index('chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"'),
+          _su_fresh[:300])
 finally:
     _shutil.rmtree(_su_sb, ignore_errors=True)
 
@@ -3565,13 +4057,20 @@ from flask import Flask as _IpFlask                                             
 _ip_app = _IpFlask(__name__)
 
 
-def _ip_for(headers, remote="127.0.0.1", trust_proxy=False, proxy_fix_orig=None):
+def _ip_for(headers, remote="127.0.0.1", trust_proxy=False, proxy_fix_orig=None, root_peer=True):
+    # root_peer: the loopback caller is tailscaled (a root-owned socket), the Serve shape these
+    # checks are about. A non-root loopback caller is not trusted at all — see part02.
     _ip_app.config["_TRUST_PROXY"] = trust_proxy
     env = {"REMOTE_ADDR": remote}
     if proxy_fix_orig is not None:
         env["werkzeug.proxy_fix.orig"] = {"REMOTE_ADDR": proxy_fix_orig}
-    with _ip_app.test_request_context("/", headers=headers, environ_overrides=env):
-        return _ip_auth.client_ip()
+    _saved_lpt = _ip_auth._loopback_proxy_trusted
+    _ip_auth._loopback_proxy_trusted = lambda: root_peer
+    try:
+        with _ip_app.test_request_context("/", headers=headers, environ_overrides=env):
+            return _ip_auth.client_ip()
+    finally:
+        _ip_auth._loopback_proxy_trusted = _saved_lpt
 
 
 # X-Forwarded-For's LAST hop wins, and X-Real-IP is only the fallback. The order used to be the
@@ -3603,6 +4102,11 @@ eq("client_ip: a direct connection ignores both headers",
 eq("client_ip: behind a declared proxy, the header the proxy sets wins over the rewritten peer",
    _ip_for({"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "100.64.0.5"},
            remote="9.9.9.9", trust_proxy=True, proxy_fix_orig="127.0.0.1"), "100.64.0.5")
+eq("client_ip: a NON-root loopback caller's headers are ignored (a local account, not Serve)",
+   _ip_for({"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "100.64.0.5"}, root_peer=False),
+   "127.0.0.1")
+eq("client_ip: ...but a declared proxy (trust_proxy) is still believed from any peer",
+   _ip_for({"X-Forwarded-For": "100.64.0.5"}, trust_proxy=True, root_peer=False), "100.64.0.5")
 eq("client_ip: no headers at all -> the socket address",
    _ip_for({}, remote="203.0.113.9"), "203.0.113.9")
 # ...and the deployment guide has to set the header it tells the panel to read.
@@ -3631,6 +4135,40 @@ for _label, _cfg, _want in (
     _got = _ck_app._https_ready(_cfg)
     check("cookies: Secure is %s for %s" % (_want, _label), _got is _want, "got %s" % _got)
 check("cookies: the Secure predicate reads trust_proxy", "trust_proxy" in _ck_expr, _ck_expr)
+# ── Tailscale Serve stands the panel's own TLS down ONLY on a loopback bind ──────────────────
+# It stood down whenever Serve had been set up. The wizard stores bind_host 0.0.0.0 by default and
+# nothing that marks Serve done changes it, so the next restart served cleartext HTTP on the public
+# interface — passwords and Bearer tokens in the clear. Serve must follow whichever scheme is used.
+# An UNSET bind is judged by what boot resolves it to, not by the empty string: with Serve proxying,
+# boot binds 127.0.0.1, and treating "" as public switched those installs (the live one among them)
+# to self-signed HTTPS for no gain, with Serve reachable only if a re-point succeeded at every boot.
+_ts_sbb = _ck_app.ts.suggest_best_bind
+try:
+    for _label, _bind, _resolves, _want_tls in (
+            ("0.0.0.0 (public + tailnet)", "0.0.0.0", None, True),
+            ("an unset bind that resolves public (Serve down)", "", "0.0.0.0", True),
+            ("an unset bind that resolves loopback (Serve up)", "", "127.0.0.1", False),
+            ("a public address", "203.0.113.5", None, True),
+            ("127.0.0.1", "127.0.0.1", None, False),
+            ("::1", "::1", None, False)):
+        _ck_app._RESOLVED_BIND.clear()
+        _ck_app.ts.suggest_best_bind = (lambda _r: lambda _p=5000: {"bind_host": _r})(_resolves)
+        _ts_cfg = {"use_https": True, "tailscale_setup_done": True, "bind_host": _bind}
+        check("https: with Serve set up and bind %s, own TLS is %s" % (_label, _want_tls),
+              _ck_app._effective_https(_ts_cfg) is _want_tls, repr(_ck_app._effective_https(_ts_cfg)))
+        check("https: ...and Serve is pointed at the scheme actually served (%s)" % _label,
+              _ck_app._ts_backend_scheme(_ts_cfg) == ("https+insecure" if _want_tls else "http"),
+              _ck_app._ts_backend_scheme(_ts_cfg))
+finally:
+    _ck_app.ts.suggest_best_bind = _ts_sbb
+    _ck_app._RESOLVED_BIND.clear()
+# ...and boot binds the same address the TLS decision was made for (one resolver, not two).
+with open(_ck_app.__file__, encoding="utf-8") as _ts_fh:
+    _ts_main = _ts_fh.read()
+_ts_boot = _ts_main[_ts_main.index('if __name__ == "__main__":'):]
+check("https: boot's bind comes from _resolved_bind, the same answer the TLS decision reads",
+      "host = _resolved_bind(cfg)" in _ts_boot and "suggest_best_bind" not in _ts_boot,
+      "boot resolves its bind separately — the scheme Serve is pointed at can disagree with it")
 check("cookies: ...and not site_domain, which is not evidence of TLS",
       "site_domain" not in _ck_expr, _ck_expr)
 
@@ -4128,9 +4666,134 @@ check("deploy: ...reads the system install through sudo",
       "sudo -n test -d" in _deploy_wf and "sudo -n stat -c %U" in _deploy_wf,
       "a plain [ -d ] / stat on the service user's home is false-y for the deploy user, and the "
       "script silently takes the wrong branch")
-check("deploy: ...and runs git as the checkout's owner, not as root",
-      'sudo -n -u "${OWNER}" git -C' in _deploy_wf,
-      "git as root on a repo owned by the service user trips safe.directory")
+# ...and ROOT EXECUTES NOTHING OUT OF THAT CHECKOUT. The system branch used to refresh
+# ${PD}/install.sh with `git checkout` as the service user and then run it with `sudo bash`, so on
+# every green merge root ran bytes from a tree AND a .git that the account the helper boundary
+# contains owns outright. Run the job's real `run:` block with ssh capturing what it sends, then run
+# THAT on a shimmed "host" (sudo/systemctl/git): record what root would execute, and what the file
+# held at the moment it ran.
+_dp_run = _deploy_raw[_deploy_raw.index("        run: |\n") + len("        run: |\n"):]
+_dp_run = "\n".join(_ln[10:] if _ln.startswith(" " * 10) else _ln
+                    for _ln in _dp_run.splitlines()) + "\n"
+_dp_sb = _tempfile.mkdtemp(prefix="deploy-")
+try:
+    _dp_pd = os.path.join(_dp_sb, "lgsmpanel", "linuxgsm-panel")
+    os.makedirs(_dp_pd)
+    with open(os.path.join(_dp_pd, "install.sh"), "w") as _dp_f:
+        _dp_f.write("#!/bin/bash\necho PANEL-OWNED-INSTALLER\n")
+    _dp_log = os.path.join(_dp_sb, "log")
+    _dp_shipped = "#!/bin/bash\necho SHIPPED-INSTALLER\n"
+    _dp_shims = (
+        'LOG=%s\n' % _shlex_q(_dp_log)
+        + 'systemctl() { echo %s; }\n' % _shlex_q(_dp_pd)
+        + 'git() { echo "GIT $*" >> "$LOG"; }\n'
+        # sudo: file plumbing runs for real (unprivileged); anything that would EXECUTE as root is
+        # recorded together with the bytes it would have run.
+        + 'sudo() {\n'
+          '  [ "$1" = -n ] && shift\n'
+          '  case "$1" in\n'
+          '    test|stat|mktemp|tee|rm) "$@" ;;\n'
+          '    -u) echo "AS-USER $*" >> "$LOG" ;;\n'
+          '    env) shift; while [ "${1#*=}" != "$1" ]; do echo "ROOT-ENV $1" >> "$LOG"; shift; done\n'
+          '         echo "ROOT-EXEC $*" >> "$LOG"\n'
+          '         [ "$1" = bash ] && echo "ROOT-BYTES $(cat "$2")" >> "$LOG" ;;\n'
+          '    *) echo "ROOT-EXEC $*" >> "$LOG" ;;\n'
+          '  esac\n'
+          '}\n')
+    # The runner: its checkout holds the verified commit's install.sh; ssh just records the stream.
+    _dp_runner = os.path.join(_dp_sb, "runner")
+    os.makedirs(_dp_runner)
+    with open(os.path.join(_dp_runner, "install.sh"), "w") as _dp_f:
+        _dp_f.write(_dp_shipped)
+    _dp_stream = os.path.join(_dp_sb, "stream")
+    _dp_sha = ("0123456789abcdef" * 3)[:40]
+    _dp_rr = _sh_sub.run(["bash", "-c", 'ssh() { cat > %s; }\n' % _shlex_q(_dp_stream) + _dp_run],
+                         capture_output=True, text=True, cwd=_dp_runner,
+                         env=dict(os.environ, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu",
+                                  HEAD_SHA=_dp_sha))
+    _dp_sent = open(_dp_stream).read() if os.path.exists(_dp_stream) else ""
+    _dp_r = _sh_sub.run(["bash", "-c", _dp_shims + _dp_sent], capture_output=True, text=True,
+                        cwd=_dp_sb, env=dict(os.environ, HOME=_dp_sb))
+    _dp_got = open(_dp_log).read() if os.path.exists(_dp_log) else ""
+    _dp_exec = [ln for ln in _dp_got.splitlines() if ln.startswith("ROOT-EXEC ")]
+    check("deploy: the system branch is taken for a unit-reported checkout (positive control)",
+          "System install at %s" % _dp_pd in _dp_r.stdout and _dp_exec,
+          "runner rc=%s err=%r; host rc=%s out=%r err=%r log=%r" % (
+              _dp_rr.returncode, _dp_rr.stderr[-200:], _dp_r.returncode, _dp_r.stdout[-200:],
+              _dp_r.stderr[-300:], _dp_got[-300:]))
+    check("deploy: ...and root executes nothing from the service user's checkout",
+          _dp_exec and not any(_dp_pd in ln for ln in _dp_exec)
+          and "PANEL-OWNED-INSTALLER" not in _dp_got,
+          _dp_got[-400:])
+    check("deploy: ...it runs the installer the job shipped, byte for byte",
+          "ROOT-BYTES " + _dp_shipped.strip() in _dp_got,
+          _dp_got[-400:])
+    check("deploy: ...and nothing touches that checkout's git on root's behalf",
+          "GIT " not in _dp_got and "AS-USER" not in _dp_got, _dp_got[-400:])
+    # ...pinned to the commit whose installer it shipped. Left to reset to origin/main's tip, this
+    # commit's installer installed a newer push's code, and that push's own deploy then found the
+    # host current and never ran its update steps.
+    check("deploy: ...and pins the code to the commit whose installer it shipped",
+          "ROOT-ENV PANEL_UPDATE_REF=%s" % _dp_sha in _dp_got.splitlines(), _dp_got[-400:])
+    # The id is spliced into the remote script, so anything but a commit id stops the job there.
+    _dp_bad = os.path.join(_dp_sb, "stream-bad")
+    _dp_rb = _sh_sub.run(["bash", "-c", 'ssh() { cat > %s; }\n' % _shlex_q(_dp_bad) + _dp_run],
+                         capture_output=True, text=True, cwd=_dp_runner,
+                         env=dict(os.environ, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu",
+                                  HEAD_SHA=_dp_sha[:39] + "\ntouch /tmp/x"))
+    check("deploy: ...and refuses a head_sha that is not a commit id, sending nothing",
+          _dp_rb.returncode != 0 and not os.path.exists(_dp_bad), _dp_rb.stderr[-200:])
+finally:
+    _shutil.rmtree(_dp_sb, ignore_errors=True)
+
+# install.sh honours that pin only as an UPDATE: a pinned commit the checkout already contains
+# leaves it where it is. Deploy runs do not finish in push order — a re-run of an old commit's CI
+# deploys it last — and resetting to the pin would take the host backwards. Run the real
+# resolve_update_target against a real clone.
+_ru_fn = (_inst[_inst.index("_gitc() {"):_inst.index("\n}\n", _inst.index("_gitc() {")) + 3]
+          + _inst[_inst.index("resolve_update_target() {"):
+                  _inst.index("\n}\n", _inst.index("resolve_update_target() {")) + 3])
+_ru_sb = _tempfile.mkdtemp(prefix="updref-")
+try:
+    _ru_up, _ru_co = os.path.join(_ru_sb, "up"), os.path.join(_ru_sb, "co")
+
+    def _ru_git(*a):
+        return _sh_sub.run(["git", *a], capture_output=True, text=True).stdout.strip()
+
+    _ru_git("init", "-q", "-b", "main", _ru_up)
+    _ru_c = []
+    for _n in ("A", "B", "C"):
+        _ru_git("-C", _ru_up, "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+                "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", _n)
+        _ru_c.append(_ru_git("-C", _ru_up, "rev-parse", "HEAD"))
+    _ru_git("clone", "-q", _ru_up, _ru_co)
+
+    def _ru_target(head, ref):
+        _ru_git("-C", _ru_co, "reset", "-q", "--hard", head)
+        r = _sh_sub.run(["bash", "-c", "SRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n%s"
+                         "resolve_update_target\necho \"TARGET=${TARGET_SHA}\""
+                         % (_shlex_q(_ru_co), _ru_fn)],
+                        capture_output=True, text=True,
+                        env=dict(os.environ, PANEL_UPDATE_REF=ref))
+        return r.stdout.strip().rpartition("TARGET=")[2] or r.stderr[-200:]
+
+    _ru_a, _ru_b, _ru_cc = _ru_c
+    check("install.sh: a pinned update ref ahead of the checkout is the target (positive control)",
+          _ru_target(_ru_a, _ru_b) == _ru_b, _ru_target(_ru_a, _ru_b))
+    check("install.sh: ...with no pin, the target is the branch tip (positive control)",
+          _ru_target(_ru_a, "") == _ru_cc, _ru_target(_ru_a, ""))
+    check("install.sh: a pinned ref the checkout already contains never moves it backwards",
+          _ru_target(_ru_cc, _ru_a) == _ru_cc, _ru_target(_ru_cc, _ru_a))
+    # ...but a checkout carrying a commit upstream does not have is still reset to the pin, as it
+    # was before: "never backwards" is about newer UPSTREAM commits only.
+    _ru_git("-C", _ru_co, "reset", "-q", "--hard", _ru_cc)
+    _ru_git("-C", _ru_co, "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+            "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "local")
+    _ru_local = _ru_git("-C", _ru_co, "rev-parse", "HEAD")
+    check("install.sh: ...while a local commit on top is still reset to the pin",
+          _ru_target(_ru_local, _ru_a) == _ru_a, _ru_target(_ru_local, _ru_a))
+finally:
+    _shutil.rmtree(_ru_sb, ignore_errors=True)
 
 # ── the admin's 2FA reset must be VISIBLE, not just present ──────────────────────────────────
 # The switch lives in the Edit User modal and used to sit in a `display:none` block that JS
@@ -4605,6 +5268,17 @@ try:
           _inactive6 is None,
           "answered %r — autoblock would re-issue every block against a firewall that is off"
           % (_inactive6,))
+    # ...in any language. ufw translates the Status line whole (Dutch: `Status: inactief`), so the
+    # English substring test missed it and the inactive firewall read as "nothing blocked" again.
+    _so6._run_verb = lambda *a, **k: ("Status: inactief\n", "", 0)
+    _inactive6 = _so6.ufw_blocked_ips()
+    check("firewall: a TRANSLATED inactive firewall is unreadable (None) too",
+          _inactive6 is None, "answered %r" % (_inactive6,))
+    _so6._run_verb = lambda *a, **k: (_UFW_SAMPLE6.replace("Status: active", "Status: actief")
+                                      .replace("From\n", "From\n--                         ------      ----\n"), "", 0)
+    _read6 = _so6.ufw_blocked_ips()
+    check("firewall: ...while a translated ACTIVE one still parses its rules (positive control)",
+          _read6 == {"203.0.113.9": "panel-autoblock"}, "parsed %r" % (_read6,))
 finally:
     _so6._run_verb = _real_runverb6
 
@@ -4620,10 +5294,10 @@ class _FakeRemote6:
 
 _denied6 = []
 _undenied6 = []
-_saved6 = (_mon6.so.fail2ban_top_ips, _mon6.so.ufw_blocked_ips,
+_saved6 = (_mon6.so.fail2ban_attempt_counts, _mon6.so.ufw_blocked_ips,
            _mon6.so.ufw_deny_ip, _mon6.so.ufw_undeny_ip)
 try:
-    _mon6.so.fail2ban_top_ips = lambda *a, **k: [{"ip": "203.0.113.9", "attempts": 99999}]
+    _mon6.so.fail2ban_attempt_counts = lambda *a, **k: {"203.0.113.9": 99999}
     _mon6.so.ufw_deny_ip = lambda ip, tag=None: (_denied6.append(ip), (True, "ok"))[1]
     _mon6.so.ufw_undeny_ip = lambda ip: (_undenied6.append(ip), (True, "ok"))[1]
     _mon6.so.ufw_blocked_ips = lambda: None            # the firewall could not be read
@@ -4657,8 +5331,228 @@ try:
           "returned %r after a deny that failed — the audit row would claim a rule that never "
           "landed (attempted: %r)" % (_res6, _denied6))
 finally:
-    (_mon6.so.fail2ban_top_ips, _mon6.so.ufw_blocked_ips,
+    (_mon6.so.fail2ban_attempt_counts, _mon6.so.ufw_blocked_ips,
      _mon6.so.ufw_deny_ip, _mon6.so.ufw_undeny_ip) = _saved6
+
+# ── auto-block must never touch a block the panel did not write ───────────────────────────────
+# The blocked-IP readers kept only `panel-` tagged DENY rows, so an operator's own
+# `ufw deny from <ip>` read as "not blocked". The reconcile then called ufw_deny_ip, which ran
+# `ufw delete deny from <ip>` FIRST — ufw removes a matching rule whatever its comment — and
+# inserted a panel-autoblock rule in its place, which it RELEASED once the firewalled (so silent)
+# address aged below the threshold. Driven through the real readers and writers: only the verb
+# runner is stubbed, and it records every privileged command.
+# The operator's denies sit ABOVE the allow: ufw stops at the first match, so only there do they
+# block anything (the rules below the allow are the shadowed case, further down). The IPv6 deny
+# sits below an IPv4 allow, which never sees its packets.
+_ab_listing6 = ("Status: active\n\n"
+                "To                         Action      From\n"
+                "--                         ------      ----\n"
+                "Anywhere                   DENY        203.0.113.9                # panel-autoblock\n"
+                "Anywhere                   DENY        203.0.113.7\n"
+                "Anywhere                   DENY        203.0.113.8                # ssh brute\n"
+                "Anywhere                   REJECT      198.51.100.0/24\n"
+                "22/tcp                     DENY        198.51.100.3\n"
+                "27015                      DENY        Anywhere\n"
+                "22/tcp                     ALLOW       Anywhere\n"
+                "Anywhere (v6)              DENY        2001:db8::66\n")
+check("autoblock: the deny reader sees EVERY all-ports block, tagging the ones the panel did not write",
+      SO._ufw_deny_sources(_ab_listing6) == {"203.0.113.9": "panel-autoblock", "203.0.113.7": "",
+                                              "203.0.113.8": "", "198.51.100.0/24": "",
+                                              "2001:db8::66": ""},
+      "read %r" % (SO._ufw_deny_sources(_ab_listing6),))
+check("autoblock: ...and an operator's rule for an address outranks the panel's own tag for it",
+      SO._ufw_deny_sources(_ab_listing6 + "Anywhere                   DENY        203.0.113.9\n")
+      .get("203.0.113.9") == "",
+      "the panel's tag won, so the reconcile could 'release' (delete) the operator's rule")
+# ...but an operator's deny BELOW an allow blocks nothing: ufw appends a hand-typed
+# `ufw deny from <ip>` after `22/tcp LIMIT` and `27015 ALLOW`, and every packet to those ports
+# meets the allow first. Read as "blocked", the reconcile skipped the address, the offenders
+# table badged it and the Block button left it alone — while it kept reaching SSH.
+_sh_listing6 = ("Status: active\n\n"
+                "To                         Action      From\n"
+                "--                         ------      ----\n"
+                "22/tcp                     LIMIT       Anywhere\n"
+                "27015                      ALLOW       Anywhere\n"
+                "Anywhere                   DENY        203.0.113.20               # ssh brute!\n"
+                "Anywhere                   DENY        203.0.113.21\n"
+                "Anywhere                   REJECT      203.0.113.22\n"
+                "22/tcp (v6)                LIMIT       Anywhere (v6)\n"
+                "Anywhere (v6)              DENY        2001:db8::20\n")
+_sh_late6 = {}
+_sh_read6 = SO._ufw_deny_sources(_sh_listing6, _sh_late6)
+check("autoblock: an operator's deny BELOW an allow of its family is not read as a block",
+      not {"203.0.113.20", "203.0.113.21", "203.0.113.22", "2001:db8::20"} & set(_sh_read6),
+      "read %r" % (_sh_read6,))
+check("autoblock: ...it is handed back as shadowed, with its comment and action",
+      _sh_late6.get("203.0.113.20") == {"comment": "ssh brute!", "action": "DENY"}
+      and _sh_late6.get("203.0.113.22", {}).get("action") == "REJECT"
+      and "2001:db8::20" in _sh_late6, "shadowed %r" % (_sh_late6,))
+_sh_above6 = ("Anywhere                   DENY        203.0.113.20\n"
+              "22/tcp                     ALLOW       10.0.0.0/8\n"
+              "Anywhere                   DENY        203.0.113.21\n"
+              "22/tcp                     LIMIT       Anywhere\n")
+check("autoblock: ...while one ABOVE the allows, or below an allow for other sources only, still "
+      "is (positive control)",
+      SO._ufw_deny_sources(_sh_above6) == {"203.0.113.20": "", "203.0.113.21": ""},
+      "read %r" % (SO._ufw_deny_sources(_sh_above6),))
+# `ufw allow in on tailscale0` — the panel adds it itself, usually before any deny — only ever
+# sees tailnet sources. Read as an allow from Anywhere, every operator deny below it looked
+# shadowed: badged unblocked while it blocked, and moved on the next Block.
+_sh_ts6 = ("Anywhere on tailscale0     ALLOW IN    Anywhere\n"
+           "Anywhere                   DENY        203.0.113.30\n"
+           "Anywhere                   DENY        100.101.2.3\n"
+           "Anywhere (v6) on tailscale0 ALLOW IN   Anywhere (v6)\n"
+           "Anywhere (v6)              DENY        2001:db8::30\n")
+_sh_ts_late6 = {}
+_sh_ts_read6 = SO._ufw_deny_sources(_sh_ts6, _sh_ts_late6)
+check("autoblock: an operator's deny below the tailscale0 allow still blocks a public address",
+      _sh_ts_read6 == {"203.0.113.30": "", "2001:db8::30": ""},
+      "read %r, shadowed %r" % (_sh_ts_read6, _sh_ts_late6))
+check("autoblock: ...while a tailnet address below it is shadowed (positive control)",
+      set(_sh_ts_late6) == {"100.101.2.3"}, "shadowed %r" % (_sh_ts_late6,))
+_ab_verbs6 = []
+_ab_saved6 = (SO._run_verb, _mon6.so.fail2ban_attempt_counts, _mon6.tailnet_exempt_ips,
+              _mon6._autoblock_threshold, _mon6._whitelist_networks)
+
+
+def _ab_run6(verb, args=(), **k):
+    if verb == "ufw-status":
+        return (_ab_listing6, "", 0)
+    _ab_verbs6.append((verb, list(args)))
+    return ("", "", 0)
+
+
+try:
+    SO._run_verb = _ab_run6
+    _mon6.tailnet_exempt_ips = lambda remote, ips: set()
+    _mon6._autoblock_threshold = lambda: 20
+    _mon6._whitelist_networks = lambda: []
+    # .7 and .8 are the operator's, over threshold; .10 has no rule, over threshold; .9 is ours and
+    # has aged to nothing; 2001:db8::66 is the operator's and has too.
+    _mon6.so.fail2ban_attempt_counts = lambda *a, **k: {"203.0.113.7": 50, "203.0.113.8": 40,
+                                                        "203.0.113.10": 30}
+    # ...and .11 carries BOTH a panel auto-block and the operator's own rule, and has aged out.
+    _ab_listing6 += ("Anywhere                   DENY        203.0.113.11               # panel-autoblock\n"
+                     "Anywhere                   DENY        203.0.113.11\n")
+    _res6 = _mon6._autoblock_reconcile(_FakeRemote6())
+    check("autoblock: an operator's own block is neither deleted nor replaced",
+          not any(a[0] in ("203.0.113.7", "203.0.113.8") for v, a in _ab_verbs6),
+          "commands run for the operator's addresses: %r" % (_ab_verbs6,))
+    check("autoblock: ...nor 'released' when its address falls below the threshold",
+          ("ufw-delete-deny-ip", ["2001:db8::66"]) not in _ab_verbs6, repr(_ab_verbs6))
+    check("autoblock: ...even when a panel auto-block sits beside it for the same address "
+          "(a release deletes both)",
+          ("ufw-delete-deny-ip", ["203.0.113.11"]) not in _ab_verbs6, repr(_ab_verbs6))
+    check("autoblock: ...while an unblocked offender is blocked with an INSERT alone (positive control)",
+          ("ufw-deny-ip", ["203.0.113.10", "panel-autoblock"]) in _ab_verbs6
+          and ("ufw-delete-deny-ip", ["203.0.113.10"]) not in _ab_verbs6, repr(_ab_verbs6))
+    check("autoblock: ...and the panel's own stale auto-block is still released (positive control)",
+          ("ufw-delete-deny-ip", ["203.0.113.9"]) in _ab_verbs6 and _res6 == (1, 1),
+          "returned %r, ran %r" % (_res6, _ab_verbs6))
+    # The Block button runs the same writer. On an operator's rule it must leave it alone; on the
+    # panel's own auto-block it re-tags it as manual (which the reconcile then never releases).
+    _ab_verbs6.clear()
+    _okb6, _msgb6 = SO.ufw_deny_ip("203.0.113.7")
+    check("block: an address the operator already blocked is left as it is",
+          _okb6 is True and not _ab_verbs6, "ran %r (%r)" % (_ab_verbs6, _msgb6))
+    _ab_verbs6.clear()
+    SO.ufw_deny_ip("203.0.113.9", tag="panel-block")
+    check("block: ...and an auto-block is re-tagged as manual (positive control)",
+          _ab_verbs6 == [("ufw-delete-deny-ip", ["203.0.113.9"]),
+                         ("ufw-deny-ip", ["203.0.113.9", "panel-block"])], repr(_ab_verbs6))
+    # The remote twin shares the decision; its reader must hand it the same answer.
+    _ab_rp6 = _sm_core.run_privileged
+    try:
+        _ab_rverbs6 = []
+        _sm_core.run_privileged = lambda s, v, a=(), **k: (
+            (_ab_listing6, "", 0) if v == "ufw-status" else (_ab_rverbs6.append((v, list(a))), ("", "", 0))[1])
+        _okr6, _ = _sm_hosts.remote_ufw_deny_ip(NS(name="h"), "203.0.113.8", tag="panel-autoblock")
+        check("block (remote): an operator's commented block is left as it is",
+              _okr6 is True and not _ab_rverbs6, "ran %r" % (_ab_rverbs6,))
+        _sm_core.run_privileged = lambda s, v, a=(), **k: ("Status: inactive\n", "", 0)
+        check("block (remote): an INACTIVE remote firewall is unreadable (None), as on the panel host",
+              _sm_hosts.remote_ufw_blocked_ips(NS(name="h")) is None,
+              "answered %r" % (_sm_hosts.remote_ufw_blocked_ips(NS(name="h")),))
+    finally:
+        _sm_core.run_privileged = _ab_rp6
+
+    # ── a shadowed operator deny is MOVED to the top, still theirs ──
+    # A plain insert does nothing here: ufw keeps one rule per match and answers a second
+    # `deny from <ip>` with "Skipping inserting existing rule", exit 0 — a "Blocked" that changed
+    # nothing. So the move is a delete and an insert carrying the operator's comment, never a
+    # panel- tag (which the reconcile would one day release).
+    _sh_verbs6, _sh_fail6 = [], set()
+
+    def _sh_run6(verb, args=(), **k):
+        if verb == "ufw-status":
+            return (_sh_listing6, "", 0)
+        _sh_verbs6.append((verb, list(args)))
+        return ("", "ERROR: boom", 1) if verb in _sh_fail6 else ("", "", 0)
+    SO._run_verb = _sh_run6
+    _okm6, _msgm6 = SO.ufw_deny_ip("203.0.113.20")
+    check("block: an operator's deny below the allows is moved to the top under THEIR comment",
+          _okm6 is True and _sh_verbs6 == [("ufw-delete-deny-ip", ["203.0.113.20"]),
+                                          ("ufw-deny-ip", ["203.0.113.20", "ssh brute"])],
+          "ran %r (%r)" % (_sh_verbs6, _msgm6))
+    check("block: ...and the blocked-IP read the offenders table uses no longer badges it",
+          "203.0.113.20" not in (SO.ufw_blocked_ips() or {}), repr(SO.ufw_blocked_ips()))
+    _sh_verbs6.clear()
+    _mon6.so.fail2ban_attempt_counts = lambda *a, **k: {"203.0.113.21": 50}
+    _resm6 = _mon6._autoblock_reconcile(_FakeRemote6())
+    check("autoblock: an offender whose own deny is shadowed is moved, not skipped or re-tagged",
+          _resm6 == (1, 0) and _sh_verbs6 == [("ufw-delete-deny-ip", ["203.0.113.21"]),
+                                             ("ufw-deny-ip", ["203.0.113.21", ""])],
+          "returned %r, ran %r" % (_resm6, _sh_verbs6))
+    _sh_verbs6.clear()
+    _okv6, _ = SO.ufw_deny_ip("2001:db8::20")
+    _okj6, _ = SO.ufw_deny_ip("203.0.113.22")
+    check("block: ...but an IPv6 or REJECT one, which could not be put back, is refused untouched",
+          _okv6 is False and _okj6 is False and not _sh_verbs6, "ran %r" % (_sh_verbs6,))
+    _sh_fail6.add("ufw-deny-ip")
+    _okf6, _msgf6 = SO.ufw_deny_ip("203.0.113.20")
+    check("block: ...and a move whose insert fails tries to put the rule back, and says it failed",
+          _okf6 is False and [v for v, a in _sh_verbs6].count("ufw-deny-ip") == 2
+          and "could not be put back" in _msgf6, "ran %r (%r)" % (_sh_verbs6, _msgf6))
+    _sh_fail6.clear()
+    _ab_rp6 = _sm_core.run_privileged
+    try:
+        _sh_verbs6.clear()
+        _sm_core.run_privileged = lambda s, v, a=(), **k: _sh_run6(v, a)
+        _okrm6, _ = _sm_hosts.remote_ufw_deny_ip(NS(name="h"), "203.0.113.20", tag="panel-autoblock")
+        check("block (remote): the remote twin moves a shadowed operator deny the same way",
+              _okrm6 is True and _sh_verbs6 == [("ufw-delete-deny-ip", ["203.0.113.20"]),
+                                                ("ufw-deny-ip", ["203.0.113.20", "ssh brute"])],
+              "ran %r" % (_sh_verbs6,))
+    finally:
+        _sm_core.run_privileged = _ab_rp6
+    SO._run_verb = _ab_run6
+
+    # ── ...and it sees every offender, not the display's top 100 ──
+    # The reconcile read fail2ban_top_ips(100): over-threshold addresses ranked below 100 were never
+    # blocked, and a blocked one — which logs nothing more — was released while still over the
+    # threshold once 100 newer ones out-counted it. Driven through the real count reader.
+    _mon6.so.fail2ban_attempt_counts = _ab_saved6[1]
+    _wave6 = ["198.18.%d.%d" % (i // 250, i % 250 + 1) for i in range(150)]
+    _loglines6 = "".join("2026-09-20 10:00:00,000 fail2ban.filter [1]: INFO [sshd] Found %s\n" % ip
+                         for i, ip in enumerate(_wave6) for _ in range(25 + i))
+    _loglines6 += "".join("2026-09-20 10:00:00,000 fail2ban.filter [1]: INFO [sshd] Found 203.0.113.9\n"
+                          for _ in range(21))     # ours: still over threshold, ranked 151st
+    _ab_verbs6.clear()
+
+    def _ab_run6b(verb, args=(), **k):
+        if verb == "f2b-log-lines":
+            return (_loglines6, "", 0)
+        return _ab_run6(verb, args, **k)
+    SO._run_verb = _ab_run6b
+    _res6 = _mon6._autoblock_reconcile(_FakeRemote6())
+    _blocked6 = {a[0] for v, a in _ab_verbs6 if v == "ufw-deny-ip"}
+    check("autoblock: every address over the threshold is blocked, not just the top 100",
+          _blocked6 == set(_wave6), "blocked %d of %d" % (len(_blocked6 & set(_wave6)), len(_wave6)))
+    check("autoblock: ...and an auto-block still over the threshold is not released for ranking low",
+          ("ufw-delete-deny-ip", ["203.0.113.9"]) not in _ab_verbs6, "released while at 21 >= 20")
+finally:
+    (SO._run_verb, _mon6.so.fail2ban_attempt_counts, _mon6.tailnet_exempt_ips,
+     _mon6._autoblock_threshold, _mon6._whitelist_networks) = _ab_saved6
 
 # ── "could not check" must not render as "all files match" ────────────────────────────────────
 # _compute_panel_integrity fails SAFE: when git cannot be run it answers clean:true WITH

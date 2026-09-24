@@ -19,6 +19,7 @@ import threading
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from panel.core.validation import (_attachment_header)
+from panel.routes._shared import (_record_full_clock, _record_game_clock)
 
 
 def register(app):
@@ -94,7 +95,7 @@ def register(app):
                 notifications.notify("backup_failed", "Backup failed",
                                      "%d server backup(s) failed: %s"
                                      % (len(alertable), "; ".join(alertable)))
-            bk.record_full_backup(summary[:500])
+            _record_full_clock(app, summary[:500])
         except Exception:
             app.logger.warning("full backup run failed", exc_info=True)
             notifications.notify("backup_failed", "Backup run failed",
@@ -234,7 +235,7 @@ def register(app):
                         # server again within the hour. Not recorded when SKIPPED: the ticker
                         # deliberately leaves the clock alone there so the server stays due and is
                         # retried once it empties.
-                        bk.record_game_backup(server_id)
+                        _record_game_clock(app, server_id, gname)
                 _game_backup_status[server_id] = {"running": False,
                                                   "ok": (None if was_skipped else ok),
                                                   "busy": was_skipped,
@@ -336,7 +337,8 @@ def register(app):
     @superadmin_required
     def api_panel_backup_game_schedule(server_id):
         """Set one server's backup schedule. `interval` and `keep` are each a number to override,
-        or "default" to inherit the global schedule."""
+        or "default" (or "") to inherit the global schedule. A field LEFT OUT of the body is left
+        as it is, so a client changing one of the two cannot clear the other by accident."""
         gs = get_game(server_id)
         data = _json_body()
 
@@ -352,7 +354,13 @@ def register(app):
                 return int(v)   # OverflowError guards against JSON infinity (e.g. 1e400)
             except (TypeError, ValueError, OverflowError):
                 return None
-        sched = bk.set_game_schedule(server_id, _field(data.get("interval")), _field(data.get("keep")))
+        # Absent means "not this one", which is a different request from "clear it". Both pages
+        # posted both fields on a change to either, and a select that had no option for the stored
+        # value turned an interval change into a silent reset of retention.
+        sched = bk.set_game_schedule(
+            server_id,
+            _field(data["interval"]) if "interval" in data else bk.UNCHANGED,
+            _field(data["keep"]) if "keep" in data else bk.UNCHANGED)
         log_action(current_user, "game_backup_schedule", target=gs.name,
                    detail="interval=%s keep=%s" % (sched["interval_days"], sched["keep"]))
         return jsonify({"success": True, "schedule": sched})
