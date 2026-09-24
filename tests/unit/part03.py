@@ -2083,6 +2083,94 @@ finally:
     _sm_core.get_connection = _o_conn
 
 
+# ── a remote that goes SILENT must not hold the drain forever ──────────────────────────────────
+# _drain_exec's only exit was exit_status_ready(), and settimeout(0.0) threw away the channel
+# timeout. A remote that accepts the exec and then sends no byte and no exit status (compromised,
+# or wedged by OOM) held the loop for the life of the process: the monitor sweep's ex.map() blocked
+# on that one host, so alerting stopped for every host. The fake below answers after ~3 s, so a
+# drain without the bound returns rc 0 late instead of hanging this suite; with it, rc -1 at once.
+import time as _dtime  # noqa: E402
+
+
+class _SilentChan:
+    def __init__(self, trickle_until=0.0, end_after=3.0):
+        self.t0 = _dtime.monotonic()
+        self.trickle_until, self.end_after = trickle_until, end_after
+        self.closed = False
+        self._next = 0.0
+
+    def settimeout(self, _t):
+        return None
+
+    def recv_ready(self):
+        # Talks every 20 ms while trickling: a command making progress, however slowly.
+        el = _dtime.monotonic() - self.t0
+        if el < self.trickle_until and el >= self._next:
+            self._next = el + 0.02
+            return True
+        return False
+
+    def recv(self, _n):
+        return b"."
+
+    def recv_stderr_ready(self):
+        return False
+
+    def recv_stderr(self, _n):
+        return b""
+
+    def exit_status_ready(self):
+        return self.closed or _dtime.monotonic() - self.t0 > self.end_after
+
+    def recv_exit_status(self):
+        return 0
+
+    def close(self):
+        self.closed = True
+
+
+_sc = _SilentChan()
+_sd_t = _dtime.monotonic()
+_sd = _sm_core._drain_exec(_sc, idle_limit=0.1)
+check("_core: a remote that sends nothing and no exit status is given up on (rc -1)",
+      _sd[2] == -1 and _dtime.monotonic() - _sd_t < 2.0 and _sc.closed,
+      "rc=%r after %.1fs closed=%r — the drain waits as long as the remote likes"
+      % (_sd[2], _dtime.monotonic() - _sd_t, _sc.closed))
+check("_core: ...and says it timed out, like the other two transports",
+      b"timed out" in _sd[1], repr(_sd[1]))
+# POSITIVE CONTROL: silence is what is bounded, not duration. A command that keeps talking for
+# longer than the idle limit, then exits, is read to the end with its real rc.
+_sc = _SilentChan(trickle_until=0.4, end_after=0.45)
+_sd = _sm_core._drain_exec(_sc, idle_limit=0.1)
+check("_core: ...while a command still making progress past the limit runs to its exit",
+      _sd[2] == 0 and not _sc.closed and len(_sd[0]) >= 5,
+      "rc=%r closed=%r read=%d" % (_sd[2], _sc.closed, len(_sd[0])))
+
+# ...and run_command must PASS the bound: a helper that can stop is no use to a caller that
+# never asks it to. The floor is shrunk for the test; the caller's timeout of 0 leaves the floor.
+_o_conn2, _o_floor = _sm_core.get_connection, _sm_core._DRAIN_IDLE_FLOOR
+
+
+class _SilentStd:
+    def __init__(self, ch):
+        self.channel = ch
+
+
+try:
+    _rc_chan = _SilentChan()
+    _rc_chan.shutdown_write = lambda: None
+    _sm_core.get_connection = lambda s: NS(exec_command=lambda c, timeout=None: (
+        _SilentStd(_rc_chan), _SilentStd(_rc_chan), _SilentStd(_rc_chan)))
+    _sm_core._DRAIN_IDLE_FLOOR = 0.1
+    _rct = _dtime.monotonic()
+    _rcr = _sm_core.run_command(_LgsmSrv(), "id", timeout=0, sudo=False)
+    check("_core: run_command hands the drain its silence bound",
+          _rcr[2] == -1 and _dtime.monotonic() - _rct < 2.0,
+          "rc=%r after %.1fs" % (_rcr[2], _dtime.monotonic() - _rct))
+finally:
+    _sm_core.get_connection, _sm_core._DRAIN_IDLE_FLOOR = _o_conn2, _o_floor
+
+
 # ── the repo URL the panel links to is DERIVED from the checkout's origin ───────────────────────
 # The sidebar footer links "LinuxGSM Panel" to the repo and the running commit SHA to that exact
 # commit, so "what is actually deployed" is one click. Both come from github_repo_url(), which
