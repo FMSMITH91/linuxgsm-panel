@@ -1691,6 +1691,26 @@ def panel_repair(paths=None):
                   "to load the corrected code." % len(targets)), targets
 
 
+def _apt_periodic_on(dump):
+    """Whether `apt-config dump` output turns APT::Periodic::Unattended-Upgrade ON.
+
+    The value is an INTERVAL (days, or with apt.systemd.daily's s/m/h/d suffixes, or "always"),
+    and anything but zero runs it. This tested for the exact text "1", so a host set to "7" in a
+    later apt.conf.d file (the last file read wins) was reported "not enabled", raised a
+    diagnostics warning, and made Enable answer "Could not confirm" while the host was applying
+    security updates every week. Absent, "0", or unreadable is off."""
+    m = None
+    for line in (dump or "").splitlines():
+        m = re.match(r'^\s*APT::Periodic::Unattended-Upgrade\s+"([^"]*)";', line) or m
+    if not m:
+        return False
+    val = m.group(1).strip().lower()
+    if val == "always":
+        return True
+    num = re.fullmatch(r"(\d+)[smhd]?", val)
+    return bool(num) and int(num.group(1)) > 0
+
+
 def unattended_upgrades_status():
     """Whether automatic security updates (the unattended-upgrades package) are
     installed AND actually enabled. Read-only, no sudo. Returns
@@ -1699,9 +1719,9 @@ def unattended_upgrades_status():
         "dpkg-query -W -f='${Status}' unattended-upgrades 2>/dev/null "
         "| grep -q 'install ok installed'", timeout=10)
     installed = (prc == 0)
-    # The package being present isn't enough — APT's periodic flag must be "1".
+    # The package being present isn't enough — APT's periodic interval must be on.
     out, _, _ = _run("apt-config dump APT::Periodic::Unattended-Upgrade 2>/dev/null", timeout=10)
-    enabled = installed and ('"1"' in (out or ""))
+    enabled = installed and _apt_periodic_on(out)
     if not installed:
         detail = "The unattended-upgrades package isn't installed."
     elif enabled:

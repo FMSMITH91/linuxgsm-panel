@@ -537,6 +537,18 @@ check("auto-updates: installed but disabled detected", _au["installed"] and not 
 _so._run = _mk_run(1, "")
 _au = _so.unattended_upgrades_status()
 check("auto-updates: not installed detected", not _au["installed"] and not _au["enabled"])
+# The value is an INTERVAL in days — any non-zero one runs it. Only the exact text "1" counted,
+# so a weekly "7" (set in a later apt.conf.d file, which wins) read "not enabled" and Enable
+# answered "Could not confirm" on a host that was applying updates.
+for _au_val, _au_want in (("7", True), ("2", True), ("always", True), ("12h", True),
+                          ("0", False), ("", False), ("off", False)):
+    _so._run = _mk_run(0, 'APT::Periodic::Unattended-Upgrade "%s";' % _au_val)
+    check("auto-updates: an interval of %r reads as %s" % (_au_val, "on" if _au_want else "off"),
+          _so.unattended_upgrades_status()["enabled"] is _au_want)
+_so._run = _mk_run(0, 'APT::Periodic::Update-Package-Lists "1";')
+check("auto-updates: a '1' on a DIFFERENT periodic key is not this one being on",
+      _so.unattended_upgrades_status()["enabled"] is False)
+_so._run = _mk_run(1, "")
 
 # ── shell-identifier validation (the core injection defense) ──
 from panel.db.models import _validate_shell_ident as _vsi
