@@ -447,6 +447,33 @@ try:
     # filters rows they can already see.
     check("tag list is readable without MANAGE_SERVERS -> 200",
           c.get("/api/tags").status_code == 200)
+    # ...but it names only the servers the caller can access. It listed every server's id under
+    # every tag: an inventory of what they cannot open, and what it is tagged with.
+    if other_id:
+        from panel.db.models import ServerTag as _TagR
+        with app.app_context():
+            _tr = _TagR(name=tag + "tagleak")
+            _tr.servers.extend([db.session.get(GameServer, accessible_id),
+                                db.session.get(GameServer, other_id)])
+            db.session.add(_tr)
+            db.session.commit()
+            _tr_id = _tr.id
+        try:
+            _tr_ids = next((t["server_ids"] for t in (c.get("/api/tags").get_json() or {})["tags"]
+                            if t["id"] == _tr_id), None)
+            check("tag list: (control) a tag on a server the caller CAN access lists that server",
+                  _tr_ids is not None and accessible_id in _tr_ids, "got %r" % (_tr_ids,))
+            check("IDOR: the tag list does not name a server the caller cannot access",
+                  _tr_ids is not None and other_id not in _tr_ids, "got %r" % (_tr_ids,))
+            _tr_admin = next((t["server_ids"] for t in
+                              (client_as(admin_id).get("/api/tags").get_json() or {})["tags"]
+                              if t["id"] == _tr_id), None)
+            check("tag list: ...while a superadmin still sees every server on it",
+                  _tr_admin is not None and other_id in _tr_admin, "got %r" % (_tr_admin,))
+        finally:
+            with app.app_context():
+                db.session.delete(db.session.get(_TagR, _tr_id))
+                db.session.commit()
 
     # ── A legacy "super_admin" group grant confers nothing ────────────────────────────────────
     c3 = client_as(uid3)
@@ -959,6 +986,36 @@ try:
         check("groups page: ...nor the game servers on them",
               not _boxes("game_servers", _unreach_games),
               "offers server ids %s" % sorted(_boxes("game_servers", _unreach_games)))
+    # ...and the group SUMMARIES do not name them either. The tick boxes were filtered for exactly
+    # this reason, while each group's summary still printed every host and game server it grants.
+    if other_remote and other_id:
+        import html as _sg_html
+        with app.app_context():
+            _sg = Group(name=tag + "_sumleak", description="", is_default=False)
+            _sg.servers.append(db.session.get(RemoteServer, granted_remote))
+            _sg.servers.append(db.session.get(RemoteServer, other_remote))
+            _sg.game_servers.append(db.session.get(GameServer, other_id))
+            db.session.add(_sg)
+            db.session.commit()
+            _sg_id = _sg.id
+            _sg_mine = ">%s</span>" % _sg_html.escape(db.session.get(RemoteServer, granted_remote).display_name)
+            _sg_host = ">%s</span>" % _sg_html.escape(db.session.get(RemoteServer, other_remote).display_name)
+            _sg_game = ">%s</span>" % _sg_html.escape(db.session.get(GameServer, other_id).name)
+        try:
+            _sg_page = c4.get("/groups").get_data(as_text=True)
+            _sg_card = _sg_page[_sg_page.index(tag + "_sumleak"):]
+            _sg_card = _sg_card[:_sg_card.index('id="edit-group-')]
+            check("groups page: (control) a group's summary names the host the viewer CAN reach",
+                  _sg_mine in _sg_card, "the summary names nothing — the check below is vacuous")
+            check("groups page: a group's summary does not name hosts or servers outside the viewer's reach",
+                  _sg_host not in _sg_card and _sg_game not in _sg_card,
+                  "the summary discloses what the tick boxes were filtered to hide")
+            check("groups page: ...and says how many it is not naming, so the reach is not understated",
+                  "+2 <span>outside your access</span>" in _sg_card)
+        finally:
+            with app.app_context():
+                db.session.delete(db.session.get(Group, _sg_id))
+                db.session.commit()
     # A superadmin still sees everything — the filter is per-viewer, not a blanket narrowing.
     _sa_html = _ac.get("/groups").get_data(as_text=True)
     _sa_missing = [i for i in _unreachable if ('value="%d"' % i) not in _sa_html]
@@ -1154,10 +1211,41 @@ try:
         _rw = _anon.get("/setup")
         check("the setup wizard stays locked with config.json gone",
               _rw.status_code in (301, 302), "/setup -> %d" % _rw.status_code)
+        # ...and the rest of the panel still WORKS. Every page redirected to /setup (config flag
+        # False), the locked wizard to /login, and /login sent a signed-in admin back to / —
+        # ERR_TOO_MANY_REDIRECTS for everyone, including the admin who could have repaired it.
+        _cg_dash = client_as(admin_id).get("/")
+        check("config.json gone: a signed-in admin's dashboard renders instead of looping via /setup",
+              _cg_dash.status_code == 200,
+              "/ -> %d %s" % (_cg_dash.status_code, _cg_dash.headers.get("Location")))
+        _cg_anon = _anon.get("/")
+        check("config.json gone: a signed-out visitor is sent to /login, not into the /setup loop",
+              _cg_anon.status_code in (301, 302) and "/setup" not in (_cg_anon.headers.get("Location") or ""),
+              "/ -> %d %s" % (_cg_anon.status_code, _cg_anon.headers.get("Location")))
+        check("config.json gone: /healthz still answers the monitor itself (no redirect)",
+              _anon.get("/healthz").status_code == 200)
     finally:
         _cfg_mod.CONFIG_FILE = _real_config_file
         _cfg_mod._cfg_cache.clear()
         _cfg_mod._cfg_cache.update(_real_cache)
+
+    # /healthz is a liveness probe, and it answers before setup has finished too: a first-run panel
+    # redirected it to /setup, and a monitor reading "302" learned nothing about the process or DB.
+    with app.app_context():
+        _hz_rows = [r.id for r in SetupState.query.filter_by(complete=True).all()]
+        for _r in SetupState.query.filter(SetupState.id.in_(_hz_rows)).all():
+            _r.complete = False
+        db.session.commit()
+    try:
+        check("first run: (control) the panel really is back in setup — / goes to /setup",
+              "/setup" in (app.test_client().get("/").headers.get("Location") or ""))
+        check("first run: /healthz answers 200 itself instead of redirecting to /setup",
+              app.test_client().get("/healthz").status_code == 200)
+    finally:
+        with app.app_context():
+            for _r in SetupState.query.filter(SetupState.id.in_(_hz_rows)).all():
+                _r.complete = True
+            db.session.commit()
 
     # ...and now DRIVEN, not read. The check above asserts the call exists in the source; it cannot
     # tell whether the route acts on the answer, and the whole acceptance path (the 61 lines from the
@@ -1586,9 +1674,11 @@ try:
     # any single guard changes nothing, which is the point of having them.
     _del_tag = tag + "_del"      # from `tag`: its victim is an ACTIVE superadmin, if it survives
     with app.app_context():
+        from panel.core.config import encrypt_secret
         _victim_sa = User(username=_del_tag + "_sa",
                           password_hash=auth.hash_password(secrets.token_hex(16)),
-                          display_name="victim sa", is_superadmin=True, is_active=True)
+                          display_name="victim sa", is_superadmin=True, is_active=True,
+                          email=encrypt_secret("victim-sa@rbac.invalid"))
         _victim_ord = User(username=_del_tag + "_ord",
                            password_hash=auth.hash_password(secrets.token_hex(16)),
                            display_name="victim ord", is_superadmin=False, is_active=True)
@@ -1601,6 +1691,26 @@ try:
             return db.session.get(User, uid) is not None
 
     ca_del = client_as(admin_id)
+
+    # 0. ...and the users page does not OFFER what these refuse. It rendered Edit and Delete on
+    #    every row and put every account's email and 2FA state in #users-data, so a delegated admin
+    #    was handed superadmins' contact details and controls whose every save is refused.
+    import json as _ua_json
+    import re as _ua_re
+    _ua_html = cmu.get("/users").get_data(as_text=True)
+    _ua_m = _ua_re.search(r'id="users-data"[^>]*>(.*?)</script>', _ua_html, _ua_re.S)
+    _ua_ids = {r.get("id") for r in (_ua_json.loads(_ua_m.group(1)) if _ua_m else [])}
+    check("users page: (control) a delegated admin gets Edit and Delete for an account they may administer",
+          'data-action="openEditUser" data-args=\'[%d]\'' % _vord_id in _ua_html and ("/users/%d/delete" % _vord_id) in _ua_html
+          and _vord_id in _ua_ids, "the administerable row lost its controls")
+    check("users page: ...but neither control for a superadmin they may not",
+          'data-action="openEditUser" data-args=\'[%d]\'' % _vsa_id not in _ua_html and ("/users/%d/delete" % _vsa_id) not in _ua_html,
+          "Edit/Delete offered on an account edit_user/delete_user refuse")
+    check("users page: ...and that superadmin's email and 2FA state are not in the page data",
+          _vsa_id not in _ua_ids and "victim-sa@rbac.invalid" not in _ua_html,
+          "the page carries the email of an account the viewer cannot administer")
+    check("users page: nobody is offered Delete on their own account",
+          ("/users/%d/delete" % _mu_uid) not in _ua_html)
 
     # 1. A delegated admin must not remove a superadmin.
     cmu.post("/users/%d/delete" % _vsa_id)

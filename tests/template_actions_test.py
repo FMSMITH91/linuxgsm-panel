@@ -737,6 +737,81 @@ _obs_walks = [ln for ln in _obs.splitlines() if "walk(" in ln]
 check(bool(_obs_walks) and all("guardedAbove" in ln for ln in _obs_walks),
       "i18n: every walk() the observer starts is gated on guardedAbove first",
       "ungated: %s" % [ln.strip()[:60] for ln in _obs_walks if "guardedAbove" not in ln])
+# Catalog lookups are own-property only. The catalog is an ordinary object, so window.I18N[key]
+# "found" Object.prototype too, and a player named "constructor" was displayed as
+# "function Object() { [native code] }" to anyone not reading English.
+_i18n_code = re.sub(r"//[^\n]*", "", _i18n_src)          # comments name the old form
+try:
+    _i18n_lk = _i18n_code[_i18n_code.index("function i18nLookup("):]
+    _i18n_lk = _i18n_lk[:_i18n_lk.index("\n}")]
+except ValueError:          # no i18nLookup at all: fail the check below by name, not crash the suite
+    _i18n_lk = ""
+check("hasOwnProperty.call(" in _i18n_lk and "typeof c[key] === 'string'" in _i18n_lk,
+      "i18n: i18nLookup() reads own string keys only", "it can return an inherited member")
+check(_i18n_code.count("i18nLookup(") >= 4 and not re.search(r"I18N\s*\[", _i18n_code),
+      "i18n: window.t, tText and tAttr all look keys up through it — no bare I18N[key] left",
+      "a lookup still indexes the catalog directly")
+# A value a SCRIPT changes after the first walk is translated too, and becomes the new English.
+# The observer did not watch attributes, and tText/tAttr kept the first value they ever saw as the
+# English for good: a poll-updated tooltip stayed English, the next setLang() re-walk wrote the
+# translation of the STALE value over it, and an in-place nodeValue update was reverted to the old
+# text. Measured in a browser against the old and new i18n.js (Spanish catalog): old — tooltip
+# stays English then reverts to "not checked yet", nodeValue 'Reachable' shows 'En línea'; new —
+# both translate, and survive setLang es->es and ->en.
+try:
+    _i18n_obs = _i18n_code[_i18n_code.index("new MutationObserver"):]
+    _i18n_obs = _i18n_obs[:_i18n_obs.index("});", _i18n_obs.index(".observe(")) + 3]
+except ValueError:
+    _i18n_obs = ""
+check("attributes:true" in _i18n_obs and "attributeFilter:ATTRS" in _i18n_obs
+      and re.search(r"m\.type === 'attributes'.*?guardedAbove\(el\).*?tAttr\(el, m\.attributeName\)",
+                    _i18n_obs, re.S) is not None,
+      "i18n: the observer translates a title/placeholder/aria-label a script sets later (guard honoured)",
+      "attribute changes are not observed, so JS-set tooltips stay English")
+try:
+    _i18n_tt = _i18n_code[_i18n_code.index("function tText("):_i18n_code.index("function tAttr(")]
+    _i18n_ta = _i18n_code[_i18n_code.index("function tAttr("):_i18n_code.index("function guardedAbove(")]
+except ValueError:
+    _i18n_tt = _i18n_ta = ""
+check("cur !== node.__i18nW" in _i18n_tt and "node.__i18nW = out" in _i18n_tt
+      and "cur !== el[wk]" in _i18n_ta and "el[wk] = out" in _i18n_ta,
+      "i18n: a value a script changed since the last translation is re-seeded as the English",
+      "the first value ever seen stays the English, so setLang() writes a stale translation back")
+# User-authored names rendered by the SERVER need the same guard: the walker swaps any text node
+# that is a catalog key, so a group called "Admin" read "Administrador" beside an Edit box saying
+# "Admin", and a member or host called "Test" read "Probar".
+def _enclosing_tag(src, needle):
+    """The opening tag of the element directly around each occurrence of `needle`."""
+    out = []
+    for _m in re.finditer(re.escape(needle), src):
+        _lt = src.rindex("<", 0, _m.start())
+        out.append(src[_lt:src.index(">", _lt) + 1])
+    return out
+
+
+_ug_missing = []
+for _tpl, _expr in (("manage_groups.html", "{{ group.name }}</strong>"),
+                    ("manage_groups.html", "{{ group.description }}</span>"),
+                    ("manage_groups.html", "{{ u.username }}"),
+                    ("manage_groups.html", "{{ s.display_name }}"),
+                    ("manage_groups.html", "{{ r.display_name }}"),
+                    ("manage_groups.html", "{{ g.name }}"),
+                    ("base.html", "{{ current_user.display_name or current_user.username }}")):
+    _tags = _enclosing_tag((TEMPLATES / _tpl).read_text(encoding="utf-8"), _expr)
+    if not _tags or any("data-no-i18n" not in _t for _t in _tags):
+        _ug_missing.append("%s %s -> %s" % (_tpl, _expr, _tags[:1]))
+check(not _ug_missing,
+      "i18n: user-authored names on the groups page and the sidebar user are marked do-not-translate",
+      "unguarded: %s" % _ug_missing)
+# ...which only helps an element that CARRIES the guard. manage_users.js writes the username into
+# #eu-name (the Edit dialog's title) and #cred-user (beside a one-time password that is shown once)
+# and neither had it, so on a Spanish panel the account "Admin" was handed on as "Administrador".
+_mu_tpl = (TEMPLATES / "manage_users.html").read_text(encoding="utf-8")
+for _mu_id in ("eu-name", "cred-user"):
+    _mu_tag = re.search(r'<[a-z]+[^>]*\bid="%s"[^>]*>' % _mu_id, _mu_tpl)
+    check(_mu_tag is not None and "data-no-i18n" in _mu_tag.group(0),
+          "i18n: #%s, which manage_users.js fills with a username, is marked do-not-translate" % _mu_id,
+          "found %r" % (_mu_tag.group(0) if _mu_tag else None))
 
 # ── the flash sweep must not close a standing warning ─────────────────────────────────────────
 # chrome.js selected every `.alert-dismissible` in the document at T+6s, and nags.js gives the
@@ -763,6 +838,17 @@ check("getElementById('srv-tags-' + serverId)" in _tags_src
       "still looking up msrv-tags-<id>")
 check('id="srv-tags-{{ srv.id }}"' in _dash_tpl,
       "tags: ...and the dashboard renders it", "no srv-tags-<id> container")
+# ...and the repainted chip is the SAME chip: the dashboard's carries a bell-slash and a title for
+# a tag that mutes alerts, and chip() built only name and colour, so every repaint (opening the
+# dialog, even to cancel; saving) silently dropped the sign that the server's alerts are muted.
+_chip_fn = _tags_src[_tags_src.index("function chip(tag)"):]
+_chip_fn = _chip_fn[:_chip_fn.index("\n  }\n")]
+check("el.textContent = tag.name" in _chip_fn,
+      "tags: (control) the chip() slice is the chip builder", "sliced the wrong function")
+check("bi bi-bell-slash" in _chip_fn and "Alerts are muted for this tag" in _chip_fn
+      and "tagMuted(tag)" in _chip_fn and "TAGS[i].notify" in _tags_src,
+      "tags: a repainted chip keeps the muted-alerts marker the dashboard renders",
+      "chip() drops the bell-slash/title, so a repaint hides that alerts are muted")
 
 # ── a file called "Backups" must not be renamed by the translator ─────────────────────────────
 # A directory can legitimately be called Backups, Console, Status or Log — all keys in
@@ -3366,6 +3452,100 @@ _bc = (ROOT / "static" / "js" / "backup_codes.js").read_text(encoding="utf-8")
 check("navigator.clipboard &&" in _bc and "execCommand" in _bc,
       "js: the backup-codes copy guards navigator.clipboard and falls back",
       "an http:// install gets a button that does nothing")
+
+# ── the auth ping only runs where there is a session to lose ──────────────────────────────────
+# panel.js loads on every page, signed out included, and its only guard was "not the login page".
+# On /invite/<token> or the setup wizard, coming back to the tab after a minute pinged, got a 401,
+# and location.replace'd the visitor to /login — form gone, Back unable to return.
+_pj_src = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+_pj_se = _pj_src[_pj_src.index("window.sessionExpired = function"):]
+_pj_se = _pj_se[:_pj_se.index("location.replace(")]
+_pj_ping = _pj_src[_pj_src.index("function _pingAuth()"):]
+_pj_ping = _pj_ping[:_pj_ping.index("window.fetch(")]
+check("_expiredHandled" in _pj_se and "_expiredHandled" in _pj_ping,
+      "session: (control) both slices are the guards this check is about", "sliced the wrong text")
+check("!_signedIn()" in _pj_se and "!_signedIn()" in _pj_ping
+      and "window.SIGNED_IN === true" in _pj_src
+      and "window.SIGNED_IN = {{ 'true' if current_user.is_authenticated else 'false' }};"
+      in (TEMPLATES / "base.html").read_text(encoding="utf-8"),
+      "session: the ping and the expired-session redirect return early on a signed-out page",
+      "an invitee is redirected to /login mid-form")
+
+# ── an in-place refresh keeps timestamps in the viewer's timezone ─────────────────────────────
+# refreshSection swaps in the SERVER's markup, whose |datetime spans read "… UTC" until
+# localizeTimes rewrites them — and that ran once, on load. After saving a user the whole Last
+# login column switched to UTC until a full reload.
+_pj_rs = _pj_src[_pj_src.index("window.refreshSection = function"):]
+_pj_rs = _pj_rs[:_pj_rs.index("\n};")]
+check("cur.innerHTML = fresh.innerHTML" in _pj_rs,
+      "refresh: (control) the refreshSection slice holds the swap", "sliced the wrong text")
+check("window.localizeTimes(cur)" in _pj_rs
+      and _pj_rs.index("cur.innerHTML = fresh.innerHTML") < _pj_rs.index("window.localizeTimes(cur)"),
+      "refresh: refreshSection re-localizes the timestamps it swaps in",
+      "swapped-in times stay in UTC")
+
+# ── the markup dispatchers refuse native functions and the panel's request primitives ─────────
+# fire() called whatever window[data-action] was: native fetch/open/eval, and this file's fetch
+# WRAPPER, which adds the CSRF token to any POST. The CSP stops injected markup running script; an
+# unguarded dispatcher turned that markup back into authenticated requests on the next click.
+# Measured in a browser: data-action="fetch", "setTimeout" and "confirmDialog" now do nothing,
+# while a window.x = function action and a function declared before panel.js both still fire.
+try:
+    _pj_af = _pj_src[_pj_src.index("function _actionFn("):]
+    _pj_af = _pj_af[:_pj_af.index("\n}")]
+except ValueError:          # no resolver at all: the checks below fail by name, not crash the suite
+    _pj_af = ""
+_pj_fire = _pj_src[_pj_src.index("function fire(el, e)"):]
+_pj_fire = _pj_fire[:_pj_fire.index("fn.apply(")]
+check("return fn;" in _pj_af, "dispatch: (control) the _actionFn slice is the resolver", "sliced the wrong text")
+check("native code" in _pj_af and "_ACTION_DENY[name]" in _pj_af
+      and re.search(r"_ACTION_DENY = \{[^}]*\bfetch: 1", _pj_src) is not None,
+      "dispatch: the resolver refuses native functions and the fetch wrapper",
+      "data-action can still name fetch/open/eval")
+check("_actionFn(el.getAttribute('data-action'))" in _pj_fire and "window[" not in _pj_fire
+      and "_actionFn(afterName)" in _pj_rs and "window[afterName]" not in _pj_rs,
+      "dispatch: data-action and data-ajax-after both resolve through it",
+      "a dispatcher still indexes window directly")
+
+# ── the 2FA reminder's "don't remind me" reports success only on success ──────────────────────
+# It parsed the reply and ignored it. The error handler answers any failure on a fetch with
+# parseable JSON ({success:false}, status 500), so a save that failed removed the banner and said
+# "You won't be reminded again" — and the reminder was back on the next page load.
+_otp_src = (ROOT / "static" / "js" / "otp_nag.js").read_text(encoding="utf-8")
+_otp_fn = _otp_src[_otp_src.index("function dismissOtpNagForever"):]
+check("/account/2fa/dismiss-nag" in _otp_fn,
+      "otp nag: (control) the dismiss handler is where this check is looking", "sliced the wrong text")
+check(re.search(r"\.success\)\)\s*throw", _otp_fn) is not None
+      and _otp_fn.index(".success") < _otp_fn.index("hideOtpNag(false)"),
+      "otp nag: the banner is removed and success announced only when the reply says success",
+      "any parseable reply — including {success:false} — is reported as saved")
+
+# ── the setup wizard takes an SSH password in a password field ────────────────────────────────
+# The shared credential input stayed type="text" when Password was chosen: the remote's root
+# password on screen in clear, and saved by the browser as plain autofill for "credential".
+_sr_src = (ROOT / "static" / "js" / "setup_remote.js").read_text(encoding="utf-8")
+_sr_pw = _sr_src[_sr_src.index("if (this.value === 'password')"):]
+_sr_pw = _sr_pw[:_sr_pw.index("} else")]
+check("label.textContent = 'SSH Password'" in _sr_pw,
+      "setup remote: (control) the password branch is where this check is looking", "sliced the wrong text")
+check("input.type = 'password'" in _sr_pw and _sr_src.count("input.type = 'text'") >= 2,
+      "setup remote: choosing Password makes the field a password input (and the others switch it back)",
+      "the SSH password is typed into a plain text field")
+
+# ── Settings says what Site domain actually does ──────────────────────────────────────────────
+# It said "Used for the TLS certificate and connect links." No connect link reads site_domain (they
+# use the remote's public IP or host), and the certificate is only named from it when the panel has
+# none — a changed value never reaches the existing 10-year cert. The one place it matters, the
+# console socket's allowed origins, went unmentioned.
+_st = (TEMPLATES / "settings.html").read_text(encoding="utf-8")
+_st_help = _st[_st.index('name="site_domain"'):]
+_st_help = _st_help[:_st_help.index("</div>")]
+check('<div class="small text-secondary mt-1">' in _st_help,
+      "settings: (control) the Site domain help is where this check is looking",
+      "sliced the wrong text — the check below proves nothing")
+check("connect links" not in _st_help and "not reissued" in _st_help,
+      "settings: Site domain's help no longer claims connect links, and says the cert is not reissued",
+      "the copy promises effects the setting does not have")
 
 # ── a Jinja comment is invisible to the browser and NOT to the HTML scanner ───────────────────
 # CodeQL parses the template as HTML, comments included, so prose describing a Flask route as

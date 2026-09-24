@@ -27,8 +27,6 @@ from panel.services import (lgsm_data)
 import re
 import threading
 import time
-from urllib.parse import urlsplit
-from panel.core.config import (load_config)
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from panel.core.validation import (_attachment_header)
 from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_BYTES,
@@ -101,58 +99,6 @@ def _publish_gmod_job(server_id, remote_id, state):
     _gmod_content_apply_state[server_id] = state or {
         "status": "error", "msg": "The host is no longer registered with the panel.",
         "ts": time.time()}
-
-
-def _socket_origin_ok(origin, environ=None):
-    """engineio's Origin check for the console socket when neither explicit origins nor a
-    site_domain are configured — the case _socketio_cors() answers with "*".
-
-    "*" rested on the session cookie being SameSite=Lax, so that a page on another site cannot
-    carry it. But a SITE ignores the port: a page at http://<panel-ip>:8123 (a game server's web
-    map, anything else served on the host) is same-site with the panel at http://<panel-ip>:5000,
-    the operator's browser sends the cookie with that page's handshake, and "*" (reflected, with
-    credentials) let it in to read every console the operator can see. So an Origin naming the
-    SAME host as the request on a DIFFERENT port is refused.
-
-    Everything else is accepted as before, on purpose: a cross-site page carries no cookie, and a
-    reverse proxy that rewrites Host (to 127.0.0.1:5000, or a LAN address) must not lose the
-    console over it — engineio's own same-origin mode (None) would refuse exactly that. The
-    scheme is not compared: both headers are written by the browser from one URL, and a proxy
-    terminating TLS changes it."""
-    try:
-        o = urlsplit(str(origin or ""))
-        o_host, o_port = (o.hostname or "").lower(), o.port
-    except ValueError:
-        return False
-    if o.scheme not in ("http", "https") or not o_host:
-        return False
-    dflt = 443 if o.scheme == "https" else 80
-    o_port = o_port or dflt
-    env = environ or {}
-    same_host_other_port = False
-    for h in (env.get("HTTP_HOST"), (env.get("HTTP_X_FORWARDED_HOST") or "").split(",")[0].strip()):
-        if not h:
-            continue
-        try:
-            r = urlsplit("//" + h)
-            r_host, r_port = (r.hostname or "").lower(), (r.port or dflt)
-        except ValueError:
-            continue
-        if r_host == o_host:
-            if r_port == o_port:
-                return True        # same origin (or the proxy's original host said so)
-            same_host_other_port = True
-    return not same_host_other_port
-
-
-def _socket_cors_setting():
-    """What the console socket's cors_allowed_origins is: _socketio_cors(), except that its "*"
-    fallback becomes _socket_origin_ok. An operator who wrote "*" into socketio_cors_origins
-    themselves still gets exactly that."""
-    cors = _socketio_cors()
-    if cors == "*" and not load_config().get("socketio_cors_origins"):
-        return _socket_origin_ok
-    return cors
 
 
 def _gmod_job_state(server_id):
@@ -1366,9 +1312,9 @@ def register(app, supervise):
             return jsonify({"error": _log_and_generic("request failed")}), 500
 
 
-    # _socket_cors_setting, not _socketio_cors() directly: its "*" fallback let a page on another
-    # port of the panel's own address (same SITE, so the session cookie rides along) open a console.
-    socketio = SocketIO(app, cors_allowed_origins=_socket_cors_setting(), async_mode="eventlet")
+    # A per-request check (app._socket_origin_allowed): same origin including the port, or
+    # site_domain, or the operator's explicit list. See _socketio_cors.
+    socketio = SocketIO(app, cors_allowed_origins=_socketio_cors(), async_mode="eventlet")
 
     # Track which sockets are viewing which server console, so the poller only
     # polls consoles that someone is actually watching (idle = ~0% CPU).

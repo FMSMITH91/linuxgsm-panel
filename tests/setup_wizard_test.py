@@ -176,8 +176,10 @@ try:
     c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
                            "port": "5052", "bind_host": "127.0.0.1"})
     _bind_before = load_config().get("bind_host")
+    # 192.0.2.123 (TEST-NET-1) is well-formed and on no host: it passed the parse, and the panel
+    # then failed to bind it with EADDRNOTAVAIL on the next start.
     for _bad in ("not-an-ip", "0.0.0.0; rm -rf /", "999.1.1.1",
-                 "example.com", "127.0.0.1:5000", "<script>", "localhost"):
+                 "example.com", "127.0.0.1:5000", "<script>", "localhost", "192.0.2.123"):
         r = c.post("/setup", data={"step": "welcome", "site_title": "Should Not Save",
                                    "port": "5052", "bind_host": _bad})
         check("open: step=welcome refuses bind_host=%r" % _bad,

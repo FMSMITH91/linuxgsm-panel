@@ -6,6 +6,8 @@
   "Account": "Cuenta",
   "Account & two-factor auth": "Cuenta y doble factor",
   "Account Type": "Tipo de cuenta",
+  "Hidden": "Oculto",
+  "Shown only for accounts you can administer": "Solo se muestra para las cuentas que puedes administrar",
   "Account type": "Tipo de cuenta",
   "Active Sessions": "Sesiones activas",
   "Add a second step to your login — a 6-digit code from an authenticator app (Google Authenticator, Authy, 1Password, etc.). Strongly recommended if the panel is reachable over the public internet.": "Añade un segundo paso al inicio de sesión: un código de 6 dígitos de una app de autenticación (Google Authenticator, Authy, 1Password, etc.). Muy recomendable si el panel es accesible desde Internet.",

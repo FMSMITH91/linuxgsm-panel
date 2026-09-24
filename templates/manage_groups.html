@@ -11,12 +11,12 @@
   {% for r in all_remotes %}
     {% set host_games = all_servers|selectattr('remote_id','equalto',r.id)|list %}
     {% if host_games %}
-    <div class="small text-secondary mt-1 fw-bold">{{ r.display_name }}</div>
+    <div class="small text-secondary mt-1 fw-bold" data-no-i18n>{{ r.display_name }}</div>
     {% for g in host_games %}
     <div class="form-check ms-2">
       <input type="checkbox" name="game_servers" value="{{ g.id }}" class="form-check-input"
              id="{{ idprefix }}-gs-{{ g.id }}" {% if g.id in selected_ids %}checked{% endif %}>
-      <label class="form-check-label small" for="{{ idprefix }}-gs-{{ g.id }}">{{ g.name }}
+      <label class="form-check-label small" for="{{ idprefix }}-gs-{{ g.id }}"><span data-no-i18n>{{ g.name }}</span>
         <span class="text-secondary">({{ g.game_type }})</span></label>
     </div>
     {% endfor %}
@@ -66,13 +66,19 @@
 </p>
 
 <div id="groups-list">
+{# The ids this viewer may see: the same filtered lists the edit forms below are built from. #}
+{% set my_remote_ids = all_remotes|map(attribute='id')|list %}
+{% set my_server_ids = all_servers|map(attribute='id')|list %}
 {% for group in groups %}
 <div class="card mb-3">
   <div class="card-header d-flex justify-content-between align-items-center">
     <div>
-      <strong>{{ group.name }}</strong>
+      {# data-no-i18n on every user-authored name here: the translator swaps any text node that is a
+         catalog key, so a group called "Admin" showed as "Administrador" beside an Edit box saying
+         "Admin". #}
+      <strong data-no-i18n>{{ group.name }}</strong>
       {% if group.is_default %}<span class="badge bg-secondary ms-2">Default</span>{% endif %}
-      {% if group.description %}<span class="text-secondary small ms-2">{{ group.description }}</span>{% endif %}
+      {% if group.description %}<span class="text-secondary small ms-2" data-no-i18n>{{ group.description }}</span>{% endif %}
     </div>
     <div>
       <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse"
@@ -98,7 +104,7 @@
         <span class="text-secondary small fw-bold"><span>Members</span> ({{ group.users|length }})</span>
         <div class="mt-1">
           {% for u in group.users %}
-            <span class="badge bg-info text-dark">{{ u.username }}</span>
+            <span class="badge bg-info text-dark" data-no-i18n>{{ u.username }}</span>
           {% else %}
             <span class="text-secondary small">No members</span>
           {% endfor %}
@@ -117,12 +123,24 @@
       <div class="col-md-4">
         <span class="text-secondary small fw-bold">Server Access</span>
         <div class="mt-1">
-          {% for s in group.servers %}
-            <span class="badge bg-secondary" title="Whole host">{{ s.display_name }}</span>
+          {# Only the hosts and servers within the viewer's own reach are NAMED. The route filters
+             the edit forms' lists for a delegated admin because they listed every host and server
+             on the panel; this summary still printed the names in every group, so a host admin
+             scoped to one tenant read the others' host and server names here. The rest is a count,
+             so the group's reach is not understated to whoever is auditing it. #}
+          {% set seen_hosts = group.servers|selectattr('id', 'in', my_remote_ids)|list %}
+          {% set seen_servers = group.game_servers|selectattr('id', 'in', my_server_ids)|list %}
+          {% set unseen = (group.servers|length - seen_hosts|length)
+                          + (group.game_servers|length - seen_servers|length) %}
+          {% for s in seen_hosts %}
+            <span class="badge bg-secondary" title="Whole host" data-no-i18n>{{ s.display_name }}</span>
           {% endfor %}
-          {% for g in group.game_servers %}
-            <span class="badge bg-dark border" title="Single game server">{{ g.name }}</span>
+          {% for g in seen_servers %}
+            <span class="badge bg-dark border" title="Single game server" data-no-i18n>{{ g.name }}</span>
           {% endfor %}
+          {% if unseen %}
+            <span class="text-secondary small group-unseen">+{{ unseen }} <span>outside your access</span></span>
+          {% endif %}
           {% if not group.servers and not group.game_servers %}
             <span class="text-secondary small">None</span>
           {% endif %}
@@ -185,7 +203,7 @@
                        class="form-check-input" id="srv-{{ group.id }}-{{ r.id }}"
                        {% if r in group.servers %}checked{% endif %}>
                 <label class="form-check-label" for="srv-{{ group.id }}-{{ r.id }}">
-                  <span class="small">{{ r.display_name }}</span>
+                  <span class="small" data-no-i18n>{{ r.display_name }}</span>
                 </label>
               </div>
               {% else %}
@@ -262,7 +280,7 @@
                   <input type="checkbox" name="servers" value="{{ r.id }}"
                          class="form-check-input" id="new-srv-{{ r.id }}">
                   <label class="form-check-label small" for="new-srv-{{ r.id }}">
-                    {{ r.display_name }}
+                    <span data-no-i18n>{{ r.display_name }}</span>
                   </label>
                 </div>
                 {% else %}

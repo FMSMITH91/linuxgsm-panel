@@ -295,6 +295,33 @@ try:
         _tsd.get_tailscale_info, _tsd._run_ts, _tsd.ensure_operator = _tsd_saved
         _tsd._cache["info"] = None
         _tsd_save(_tsd_cfg0)
+    # ── window.MOUNT follows the LIVE mount, like url_for does ────────────────────────────────
+    # It was the mount as it stood at boot, while PrefixMiddleware applies the live one to every
+    # request: after Serve was enabled (or moved) at runtime the pages rendered with correct links,
+    # and every fetch() and the console socket went to the old mount until a restart.
+    _mt_saved = load_config()
+    try:
+        _mt_cfg = dict(_mt_saved)
+        _mt_cfg["tailscale_mount"] = "/lgsm"
+        save_config(_mt_cfg)
+        _mt_r = c.get("/lgsm/account")
+        _mt_html = _mt_r.get_data(as_text=True)
+        check("mount: (control) the page is served under a mount set at runtime",
+              _mt_r.status_code == 200 and 'href="/lgsm/' in _mt_html, "got %d" % _mt_r.status_code)
+        check("mount: a mount set at runtime reaches window.MOUNT (not the boot-time one)",
+              'window.MOUNT = "/lgsm";' in _mt_html,
+              "fetch() and the socket would still use the boot-time mount")
+    finally:
+        save_config(_mt_saved)
+    check("mount: ...and with no mount, window.MOUNT is empty again",
+          'window.MOUNT = "";' in c.get("/account").get_data(as_text=True))
+    # panel.js arms its auth ping and session-expired redirect only where SIGNED_IN is true. They
+    # ran on signed-out pages too, and threw an invitee (or the first-run admin) off a half-filled
+    # form to /login with "Your session expired" — about a session that never existed.
+    check("session: (control) a page rendered for a signed-in user says so",
+          "window.SIGNED_IN = true;" in c.get("/account").get_data(as_text=True))
+    check("session: a signed-out page does not claim a session panel.js could 'expire'",
+          "window.SIGNED_IN = false;" in app.test_client().get("/login").get_data(as_text=True))
 
     # ── The notifications page must actually OFFER each channel ───────────────────────────────
     # "/notifications renders 200" passes just as well with a channel's whole card missing, which
@@ -327,6 +354,23 @@ try:
               "&q=%27%22%3B--&action=whatever&user=nobody")
     check("GET /logs with junk filter/sort params -> 200 (allowlisted)",
           r.status_code == 200, "got %d" % r.status_code)
+
+    # ── The audit log shows a detail's END, not just its first 100 characters ──
+    # Start/stop/restart store the LAST 400 characters of LinuxGSM's output on purpose — the
+    # [ OK ]/[FAIL] line and its reason are at the end — and the viewer cut every detail at 100
+    # characters, so the part kept on purpose was never visible anywhere in the panel.
+    from panel.db.models import AuditLog as _dtl_AL
+    _dtl_head = "DTLHEAD" + "x" * 150
+    _dtl_tail = "DTLTAIL_FAIL_REASON"
+    with app.app_context():
+        db.session.add(_dtl_AL(username="admin", action="server_start", target="dtl-probe",
+                               detail=_dtl_head + " ... " + _dtl_tail, success=False))
+        db.session.commit()
+    _dtl_html = c.get("/logs?q=DTLHEAD").get_data(as_text=True)
+    check("audit log: (control) the long entry is on the page at all",
+          "DTLHEAD" in _dtl_html, "the probe row did not render — the check below proves nothing")
+    check("audit log: a long detail's tail (where the outcome is) is rendered, not cut at 100 chars",
+          _dtl_tail in _dtl_html, "the FAIL reason stored at the end of the detail is not on /logs")
 
     # The Files & Config page (config editor + file browser + cron manager) must render.
     check("GET /server/<id>/files renders (200)",
@@ -1006,6 +1050,14 @@ try:
     mrc = client_as(mru_id)
     check("MANAGE_REMOTES user: /remotes renders (200)",
           mrc.get("/remotes").status_code == 200)
+    # ...and the sidebar, on every page, lists only the hosts their groups grant. It listed every
+    # remote's name and id to anyone holding the permission, undoing the per-host scoping above.
+    _nav_html = mrc.get("/account").get_data(as_text=True)
+    check("sidebar: (control) a host admin's sidebar links the host they are granted",
+          ("/remote/%d/manage" % remote_id) in _nav_html, "no granted-host link — the check below is vacuous")
+    check("sidebar: ...and does not name a host they are not granted",
+          ("/remote/%d/manage" % remote2_id) not in _nav_html and "smoke-host-2" not in _nav_html,
+          "the Infrastructure sidebar lists an ungranted host")
     # manage_remotes.html carries no is_local branch any more — six of them tested a flag that is
     # False for every row this route can hand it, including a "This Machine" badge and a "Runs
     # locally on this server" line no visitor was ever shown. That is only true while the route
@@ -2534,6 +2586,33 @@ try:
     check("2FA backup code is one-time (reuse rejected, not 302)", s3.status_code != 302,
           "got %d" % s3.status_code)
 
+    # ...and a wrong six-digit code does NOT try the backup codes. Each try is a cost-12 bcrypt
+    # per stored code (~2s for eight), for an entry that cannot match: anyone holding one password
+    # could spend that on every wrong TOTP they submitted.
+    import bcrypt as _bc_mod
+    from app import _LOGIN_FAILS as _bc_fails
+    _bc_real = _bc_mod.checkpw
+    _bc_calls = []
+
+    def _bc_count(*a):
+        _bc_calls.append(1)
+        return _bc_real(*a)
+    b4 = app.test_client()
+    b4.post("/login", data={"username": "smoke_2fa", "password": "Str0ng!passw0rd"})
+    _bc_mod.checkpw = _bc_count
+    try:
+        b4.post("/login", data={"totp_code": "123456"})
+        _bc_totp = len(_bc_calls)
+        b4.post("/login", data={"totp_code": "zzzzz-zzzzz"})
+        _bc_shaped = len(_bc_calls) - _bc_totp
+    finally:
+        _bc_mod.checkpw = _bc_real
+        _bc_fails.clear()      # two deliberate failures: don't leave this IP nearer the lockout
+    check("2FA: (control) a backup-shaped wrong code does try the stored backup codes",
+          _bc_shaped >= 1, "no bcrypt compare ran — the check below proves nothing")
+    check("2FA: a wrong six-digit code does not run a bcrypt per backup code",
+          _bc_totp == 0, "%d bcrypt compares for a mistyped TOTP" % _bc_totp)
+
     # A TOTP code is valid for ~90s (its step plus one either side for skew). Accepting it on
     # "is it valid" alone lets a code observed once — a phishing proxy, a shoulder-surf, a leaked
     # log — be replayed for the rest of that window. Each step must be spendable exactly once.
@@ -2574,8 +2653,16 @@ try:
         _enc = client_as(_en_id)
         _enc.get("/account/2fa/enable")                    # seeds the pending secret in-session
         with _enc.session_transaction() as _sess:
-            _en_secret = _sess.get("_2fa_setup_secret")
+            _en_in_cookie = _sess.get("_2fa_setup_secret") or ""
+        from panel.core.config import decrypt_secret as _en_dec
+        _en_secret = _en_dec(_en_in_cookie)
         check("2FA enrol: the page issues a pending secret", bool(_en_secret))
+        # Flask's session is a SIGNED cookie, readable by anyone who holds it, and on success this
+        # value becomes the account's permanent TOTP seed. A Set-Cookie captured during enrolment
+        # handed over a second factor that survives password changes and sign-out-everywhere.
+        check("2FA enrol: the pending secret is not in the session cookie in the clear",
+              _en_secret and _en_secret not in _en_in_cookie,
+              "the cookie carries the TOTP seed as plaintext")
         _en_code = _po.TOTP(_en_secret).now()
         # ── ...and enrolling needs the account holder's PASSWORD ───────────────────────────────
         # /account/2fa/enable carried @login_required and nothing else, while its mirror
@@ -5109,7 +5196,14 @@ try:
           "no container for an untagged server — its first tag could not appear without a reload")
     c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id]})
     # The muted-tag branch (bell-slash + title) only renders when a MUTED tag is actually assigned.
-    c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id, _mute_id]})
+    _mute_resp = (c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id, _mute_id]})
+                  .get_json() or {})
+    # server_tags.js repaints the row's chips from THIS response after a save; without `notify` in
+    # it the repainted chip could not say alerts are muted, and the marker vanished from the row.
+    _mute_flags = {t.get("id"): t.get("notify") for t in _mute_resp.get("tags") or []}
+    check("tags: the save response says which assigned tags mute alerts (control: and which do not)",
+          _mute_flags.get(_mute_id) is False and _mute_flags.get(_tag_id) is True,
+          "got %r" % (_mute_flags,))
     _muted_html = c.get("/").get_data(as_text=True)
     check("tags: a muted tag's chip says so (title + bell-slash icon)",
           'title="Alerts are muted for this tag"' in _muted_html
@@ -11103,6 +11197,37 @@ try:
           _cc_add("cc_badgame", "say hi", scope="game|nosuchgame") == 0)
     check("custom command form: ...and an engine that does not exist",
           _cc_add("cc_badengine", "say hi", scope="engine|nosuchengine") == 0)
+    # ...but an EXISTING command scoped to a game the current list lacks (dropped upstream, or no
+    # list could be fetched) keeps that scope. Its edit form had no matching option, the browser
+    # selected "All games", and a Save to fix the label widened the command to every game.
+    with app.app_context():
+        _oc = CustomCommand(name="cc_orphan", command_template="say hi", scope_type="game",
+                            scope_value="nosuchgame", enabled=True)
+        db.session.add(_oc)
+        db.session.commit()
+        _oc_id = _oc.id
+    try:
+        check("custom command edit form: a stored game scope the list lacks is offered, and selected",
+              'value="game|nosuchgame" selected' in c.get("/commands").get_data(as_text=True),
+              "no option matches, so the browser submits the first one — All games")
+        c.post("/commands/%d/edit" % _oc_id, data={"name": "cc_orphan", "command_template": "say hello",
+                                                    "scope": "game|nosuchgame", "enabled": "on"})
+        with app.app_context():
+            _oc2 = db.session.get(CustomCommand, _oc_id)
+            _oc_state = (_oc2.scope_type, _oc2.scope_value, _oc2.command_template)
+        check("custom command edit: saving it keeps that game scope and applies the edit",
+              _oc_state == ("game", "nosuchgame", "say hello"), "stored %r" % (_oc_state,))
+        c.post("/commands/%d/edit" % _oc_id, data={"name": "cc_orphan", "command_template": "say bye",
+                                                    "scope": "game|othernosuchgame", "enabled": "on"})
+        with app.app_context():
+            _oc3 = db.session.get(CustomCommand, _oc_id)
+            _oc_state = (_oc3.scope_value, _oc3.command_template)
+        check("custom command edit: ...while moving it to a DIFFERENT unknown game is still refused",
+              _oc_state == ("nosuchgame", "say hello"), "stored %r" % (_oc_state,))
+    finally:
+        with app.app_context():
+            db.session.delete(db.session.get(CustomCommand, _oc_id))
+            db.session.commit()
     # An unparseable argument pattern must not 500 or store itself — it falls back to the default.
     _cc_re_added = _cc_add("cc_badre", "say {}", argument_pattern="([unclosed")
     check("custom command form: an invalid argument pattern does not store a broken regex",
@@ -13033,62 +13158,82 @@ try:
     check("cookie: ...and is not readable from JavaScript",
           app.config.get("SESSION_COOKIE_HTTPONLY") is True,
           "SESSION_COOKIE_HTTPONLY is %r" % (app.config.get("SESSION_COOKIE_HTTPONLY"),))
-    # ...and the socket's origin list is only permissive when there is genuinely no origin to pin.
-    from app import _socketio_cors as _sio_cors
+    # ...and the socket's origin check. Driven through the engineio server the app really built, so
+    # it covers the wiring too. It was a list fixed at startup — ["https://<site_domain>",
+    # "http://<site_domain>"], no port, else "*" — so the default direct install (site_domain typed
+    # into the wizard, browsed on :5000) had every handshake refused, a Settings change needed a
+    # restart, and with no domain ANY page could complete the handshake.
     from panel.core.config import load_config as _lc_cfg, save_config as _sc_cfg
+    _eio = app.socketio.server.eio
+
+    def _sio_ok(origin, scheme="https", host="panel.example.com:5000", **extra):
+        _env = dict({"wsgi.url_scheme": scheme, "HTTP_HOST": host, "HTTP_ORIGIN": origin}, **extra)
+        return _eio._cors_allowed_origins(_env) in (None, [origin])
+
     _cfg_before = _lc_cfg()
     try:
-        _sc_cfg(dict(_cfg_before, site_domain="panel.example.ts.net",
-                     socketio_cors_origins=None))
-        _pinned = _sio_cors()
-        check("socket: with a domain configured the origin list is pinned to it, not '*'",
-              _pinned != "*" and any("panel.example.ts.net" in o for o in (_pinned or [])),
-              "answered %r — a wildcard lets any page complete the handshake, leaving the session "
-              "cookie as the only thing between a visited page and a shell" % (_pinned,))
+        _sc_cfg(dict(_cfg_before, site_domain="panel.example.com", socketio_cors_origins=None))
+        check("socket: a page on the host:port the panel is reached on may connect (site_domain set)",
+              _sio_ok("https://panel.example.com:5000"),
+              "the default direct install's own origin was refused — no console, no terminal")
+        check("socket: ...and so may site_domain, reached through a proxy that rewrote Host",
+              _sio_ok("https://panel.example.com", scheme="http", host="127.0.0.1:5000"))
+        check("socket: ...and so may the origin a proxy forwards (X-Forwarded-Proto/Host)",
+              _sio_ok("https://node.example.ts.net", scheme="http", host="127.0.0.1:5000",
+                      HTTP_X_FORWARDED_PROTO="https", HTTP_X_FORWARDED_HOST="node.example.ts.net"))
+        check("socket: a page on any other origin may not",
+              not _sio_ok("https://evil.example"),
+              "a wildcard lets any page complete the handshake, leaving the session cookie as the "
+              "only thing between a visited page and a shell")
         _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=None))
-        check("socket: ...and falls back to '*' only when there is no domain to pin to",
-              _sio_cors() == "*", "answered %r with no site_domain set" % (_sio_cors(),))
-        # ...but the socket itself never takes that "*" as it stands. A SITE ignores the port, so
-        # a page on another port of the panel's own address is same-site, the Lax cookie rides
-        # along, and "*" (reflected, with credentials) handed it every console the operator can
-        # see. The socket gets _socket_origin_ok instead, unless the operator wrote "*" himself.
-        from panel.routes import server_files as _sio_sf
-        check("socket: with no domain the socket's origin setting is the same-host/other-port check, not '*'",
-              _sio_sf._socket_cors_setting() is _sio_sf._socket_origin_ok,
-              "got %r" % (_sio_sf._socket_cors_setting(),))
-        _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins="*"))
-        check("socket: ...while an operator's own explicit '*' is still honoured (control)",
-              _sio_sf._socket_cors_setting() == "*", "got %r" % (_sio_sf._socket_cors_setting(),))
-        _sc_cfg(dict(_cfg_before, site_domain="panel.example.ts.net", socketio_cors_origins=None))
-        check("socket: ...and a configured domain still pins the list (control)",
-              _sio_sf._socket_cors_setting() == _sio_cors() and _sio_cors() != "*",
-              "got %r" % (_sio_sf._socket_cors_setting(),))
-        for _so_origin, _so_env, _so_want, _so_what in (
-                ("http://1.2.3.4:8123", {"HTTP_HOST": "1.2.3.4:5000"}, False,
+        check("socket: with no domain it is same-origin, not '*' — a foreign page is refused",
+              not _sio_ok("https://evil.example", scheme="http", host="203.0.113.5:5000"))
+        check("socket: ...while plain IP:port access still connects",
+              _sio_ok("http://203.0.113.5:5000", scheme="http", host="203.0.113.5:5000"))
+        _sc_cfg(dict(_cfg_before, site_domain="later.example", socketio_cors_origins=None))
+        check("socket: a site_domain saved at runtime applies without a restart",
+              _sio_ok("https://later.example", scheme="http", host="127.0.0.1:5000"))
+        _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=["https://only.example"]))
+        check("socket: an explicit socketio_cors_origins list still wins",
+              _sio_ok("https://only.example") and not _sio_ok("https://panel.example.com:5000"))
+        # Two review fixes changed this check two ways; one survives, and the other's cases are
+        # asserted against it here. A SITE ignores the port, so a page on another port of the
+        # panel's own address (a game's web map) is same-site: the Lax cookie rides along, and only
+        # the port refuses it. Compared as (scheme, host, port) with the default port filled in.
+        for _so_origin, _so_kw, _so_want, _so_what in (
+                ("http://1.2.3.4:8123", dict(scheme="http", host="1.2.3.4:5000"), False,
                  "a page on another port of the panel's own address"),
-                ("http://panel.lan:8123", {"HTTP_HOST": "panel.lan:5000"}, False,
+                ("http://panel.lan:8123", dict(scheme="http", host="panel.lan:5000"), False,
                  "...by hostname too"),
-                ("https://panel.lan:8443", {"HTTP_HOST": "127.0.0.1:5000",
-                                            "HTTP_X_FORWARDED_HOST": "panel.lan"}, False,
-                 "...and by the host a proxy forwarded"),
-                ("http://1.2.3.4:5000", {"HTTP_HOST": "1.2.3.4:5000"}, True, "the panel's own page"),
-                ("https://panel.lan", {"HTTP_HOST": "panel.lan:443"}, True, "an implied default port"),
-                ("https://panel.lan", {"HTTP_HOST": "127.0.0.1:5000"}, True,
-                 "a proxy that rewrote Host to loopback"),
-                ("https://panel.lan", {"HTTP_HOST": "panel.lan:5000", "HTTP_X_FORWARDED_HOST": "panel.lan"},
-                 True, "a proxy on the panel's own name that forwards the original host"),
-                ("null", {"HTTP_HOST": "1.2.3.4:5000"}, False, "an opaque origin")):
+                ("https://panel.lan:8443", dict(scheme="http", host="127.0.0.1:5000",
+                                                HTTP_X_FORWARDED_PROTO="https",
+                                                HTTP_X_FORWARDED_HOST="panel.lan"), False,
+                 "...and against the host a proxy forwarded"),
+                ("http://1.2.3.4:5000", dict(scheme="http", host="1.2.3.4:5000"), True,
+                 "the panel's own page"),
+                ("https://panel.lan", dict(scheme="https", host="panel.lan:443"), True,
+                 "an implied default port"),
+                ("https://panel.lan", dict(scheme="http", host="127.0.0.1:5000",
+                                           HTTP_X_FORWARDED_PROTO="https",
+                                           HTTP_X_FORWARDED_HOST="panel.lan"), True,
+                 "a proxy that forwards the original host and scheme"),
+                ("null", dict(scheme="http", host="1.2.3.4:5000"), False, "an opaque origin")):
             check("socket origin: %s is %s" % (_so_what, "accepted" if _so_want else "refused"),
-                  _sio_sf._socket_origin_ok(_so_origin, _so_env) is _so_want,
-                  "%r with %r" % (_so_origin, _so_env))
+                  _sio_ok(_so_origin, **_so_kw) is _so_want, "%r with %r" % (_so_origin, _so_kw))
+        # A proxy that rewrites Host to loopback and forwards NOTHING cannot be told from a local
+        # page, so with no site_domain it is refused: set site_domain (the README's nginx and
+        # Caddy examples, and Tailscale Serve, all forward the host).
+        check("socket origin: a proxy that hides the host is refused without a site_domain",
+              not _sio_ok("https://panel.lan", scheme="http", host="127.0.0.1:5000"))
     finally:
         _sc_cfg(_cfg_before)
     # The app's REAL engine.io server, driven over HTTP: its handshake refuses the other-port page
     # and still answers the panel's own. Only meaningful when the app came up without a domain,
     # which is how this suite builds it; the first check says so if that ever changes.
     _so_eio = app.socketio.server.eio
-    check("socket origin: the running engine.io server was built with the same-host/other-port check",
-          _so_eio.cors_allowed_origins is _sio_sf._socket_origin_ok,
+    import app as _so_app
+    check("socket origin: the running engine.io server was built with the per-request origin check",
+          _so_eio.cors_allowed_origins is _so_app._socket_origin_allowed,
           "cors_allowed_origins is %r" % (_so_eio.cors_allowed_origins,))
     _so_c = app.test_client()
     _so_bad = _so_c.get("/socket.io/?EIO=4&transport=polling", base_url="http://1.2.3.4:5000",

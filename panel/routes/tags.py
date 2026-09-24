@@ -18,13 +18,22 @@ def register(app):
     @app.route("/api/tags")
     @login_required
     def api_tags_list():
-        """Every tag, with the servers carrying it. Readable by any signed-in user — tags are how
-        the UI groups and filters, and the server ids here are only ever used to decorate rows the
-        caller can already see."""
+        """Every tag, with the servers carrying it that the CALLER can access. Readable by any
+        signed-in user — tags are how the UI groups and filters.
+
+        The server ids were every server's. The UI only uses them to decorate rows the caller can
+        already see, but the response is the caller's to read, and it listed the ids of servers
+        they cannot access and which tags those carry (an inventory server_access_required's
+        blanket 403 is careful not to give)."""
         from panel.db.models import ServerTag
         from sqlalchemy.orm import selectinload
         tags = ServerTag.query.options(selectinload(ServerTag.servers)).order_by(ServerTag.name).all()
-        return jsonify({"success": True, "tags": [_tag_json(t) for t in tags]})
+        out = [_tag_json(t) for t in tags]
+        if not current_user.is_superadmin:
+            visible = {gs.id for gs in get_user_servers(current_user)}
+            for t in out:
+                t["server_ids"] = [i for i in t["server_ids"] if i in visible]
+        return jsonify({"success": True, "tags": out})
 
     @app.route("/api/tags", methods=["POST"])
     @login_required
@@ -118,7 +127,8 @@ def register(app):
         log_action(current_user, "server_tags_set", target=gs.name,
                    detail="tags: " + (", ".join(t.name for t in gs.tags) or "(none)"))
         return jsonify({"success": True, "tags": [{"id": t.id, "name": t.name,
-                                                   "color": t.color or ""} for t in gs.tags]})
+                                                   "color": t.color or "", "notify": bool(t.notify)}
+                                                  for t in gs.tags]})
 
     @app.route("/api/account/ui-order", methods=["POST"])
     @login_required

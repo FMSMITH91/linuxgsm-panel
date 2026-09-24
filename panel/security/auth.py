@@ -115,9 +115,11 @@ def _prehash(password):
     pre-hash (Django and passlib's bcrypt_sha256 do the same thing for the same reason). The query
     sees sha256(password) and stops before the bcrypt call.
 
-    Alert 441 is dismissed on that basis. Dismissals are keyed to the path, so if this function
-    ever moves the alert reopens at the new location — re-read this note, and the two call sites,
-    before dismissing it again."""
+    Alert 441 was dismissed on that basis, and it reopened as 492 WITHOUT this function moving:
+    routing the bcrypt calls through run_off_hub changed the flow CodeQL traces, and a changed
+    flow is a new alert. So it reopens when this function moves OR when its callers' flow changes.
+    Before dismissing it again, re-read this note and both call sites (hash_password and
+    check_password) to confirm the digest still reaches only bcrypt."""
     return base64.b64encode(hashlib.sha256((password or "").encode("utf-8")).digest())
 
 
@@ -216,6 +218,18 @@ def generate_backup_codes(n=8, length=10):
         raw = "".join(secrets.choice(_BACKUP_CODE_ALPHABET) for _ in range(length))
         codes.append(raw[:length // 2] + "-" + raw[length // 2:])
     return codes
+
+
+def backup_code_shaped(code, length=10):
+    """Whether `code` could be one of generate_backup_codes()' codes: `length` characters from the
+    backup alphabet once the display dash and spaces are dropped (the same normalisation
+    User.use_backup_code compares with).
+
+    The login's 2FA step fell back to the backup codes after EVERY wrong entry, and trying them is
+    one cost-12 bcrypt per stored code — about 2s of work for a mistyped six-digit TOTP, which
+    can never match anyway: 0 and 1 are not in the alphabet and it is the wrong length."""
+    norm = (code or "").strip().lower().replace("-", "").replace(" ", "")
+    return len(norm) == length and all(c in _BACKUP_CODE_ALPHABET for c in norm)
 
 
 # ─── Two-factor auth (TOTP) ───────────────────────────────────
@@ -1042,7 +1056,12 @@ def client_ip():
         xr = _ip_or_none(request.headers.get("X-Real-IP"))
         if xr:
             return xr
-    return remote
+    # The fallthrough is held to the same rule. Behind trust_proxy, ProxyFix has already copied the
+    # last X-Forwarded-For hop into remote_addr WITHOUT parsing it, so when a proxy passes a
+    # client's header through unappended, the "bogus-<n>" the branches above refused came straight
+    # back here as the key: a fresh throttle bucket per attempt. An unparseable value falls back to
+    # the socket peer that really connected (the proxy), which is an address and one bucket.
+    return _ip_or_none(remote) or _ip_or_none(peer) or remote
 
 
 def session_fingerprint():

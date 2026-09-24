@@ -2466,6 +2466,14 @@ check("backup: valid code accepted (ignores case + dashes)",
       _u.use_backup_code(_codes[0].upper().replace("-", "")))
 check("backup: remaining drops to 7 after use", _u.backup_codes_remaining == 7)
 check("backup: a used code can't be reused (one-time)", not _u.use_backup_code(_codes[0]))
+# The login only tries the backup codes for an entry shaped like one — a bcrypt per stored code —
+# so the shape test must accept every code it can be handed, in every form the compare accepts.
+from panel.security.auth import backup_code_shaped as _bcs
+check("backup: every generated code is backup-shaped, as shown, uppercased or undashed",
+      all(_bcs(c) and _bcs(c.upper()) and _bcs(c.replace("-", "")) and _bcs(" %s " % c)
+          for c in generate_backup_codes(50)))
+check("backup: a six-digit TOTP entry is not backup-shaped (no bcrypt for a typo)",
+      not any(_bcs(x) for x in ("123456", "000000", "", None, "abcde-fghj", "abcde-fghjkm")))
 
 # ── Password history ──────────────────────────────────────────
 # "Change your password" is satisfiable by putting back the one you just left, which is exactly
