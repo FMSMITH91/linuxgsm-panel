@@ -326,9 +326,12 @@ def _run_due_game_backups(app):
                     if not bk.game_backup_due(sid):
                         continue
                     if _button_backup_running(sid):
-                        # A Backup-button run is archiving it now. run_game_backup would take its
-                        # 5-minute-old backup.lock for an orphan, delete it, and start a second
-                        # archive of the same files. It stays due; the next tick decides again.
+                        # A Backup-button run is archiving it now and holds LinuxGSM's backup.lock
+                        # (run_game_backup's sweep clears an old lock only while no tar runs as the
+                        # game user). A second run would fail on "Lockfile found" and be recorded
+                        # as a failed backup — or, once LinuxGSM's own 60-minute stale-lock rule
+                        # removes the lock, start a second archive of the same files. It stays
+                        # due; the next tick decides again.
                         continue
                     keep = sched["keep"]
                     ok, reason, was_skipped = _marked_backup(sid, remote, short, lgsm, keep,
