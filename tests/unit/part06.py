@@ -2891,6 +2891,30 @@ if os.path.isfile(_acc_path):
               os.path.join(_root, ".github", "workflows", "codacy-alerts.yml"),
               encoding="utf-8").read())
 
+# ── gitleaks may not exempt a README from the secret scan ──────────────────────────────────────
+# The allowlist carried `paths = ['''README\\.md''']`. gitleaks path patterns are unanchored
+# searches, so that exempted all four READMEs outright, for placeholders the match regexes already
+# cover — and a README is where a real token gets pasted while documenting a setup. Any path
+# exemption must now be anchored to one file (^...$) and must not match a README. Read as text,
+# with comment lines dropped first: this has to run on the 3.10 CI matrix, which has no tomllib.
+_gl_txt = "\n".join(_l for _l in open(os.path.join(_root, ".github", "gitleaks.toml"),
+                                       encoding="utf-8").read().splitlines()
+                     if not _l.lstrip().startswith("#"))
+_gl_paths_blk = re.search(r"^\s*paths\s*=\s*\[(.*?)\]", _gl_txt, re.M | re.S)
+_gl_paths = [_a or _b or _c for _a, _b, _c in
+             re.findall(r"'''(.*?)'''|'([^'\n]*)'|\x22([^\x22\n]*)\x22",
+                        _gl_paths_blk.group(1) if _gl_paths_blk else "")]
+_gl_readmes = sorted(os.path.relpath(_f, _root) for _f in
+                     glob.glob(os.path.join(_root, "**", "README*"), recursive=True)
+                     if ".venv" not in _f and "node_modules" not in _f)
+check("gitleaks: the config was read (it still carries its placeholder allowlist)",
+      "regexes = [" in _gl_txt and "tskey-auth-" in _gl_txt and "useDefault = true" in _gl_txt)
+_gl_bad = [_pp for _pp in _gl_paths
+           if not (_pp.startswith("^") and _pp.endswith("$"))
+           or any(re.search(_pp, _rf) for _rf in _gl_readmes + ["README.md"])]
+check("gitleaks: no path exemption is unanchored or takes a README out of the scan",
+      not _gl_bad, "exempts: %r" % _gl_bad)
+
 # ── The docs state numbers that the code owns — pin them ──────────────────────────────────────
 # Every one of these was wrong at the time of writing, and none of them could be. SECURITY.md said
 # "43 verbs" against 86; the CHANGELOG said 77 in the same release; README advertised 18 alert
