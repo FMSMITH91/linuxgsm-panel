@@ -172,6 +172,8 @@
   "Uninstall request failed": "La demande de désinstallation a échoué",
   "Uninstall server": "Désinstaller le serveur",
   "Update complete": "Mise à jour terminée",
+  "The panel restarted, but its new version could not be read — reloading to check.": "Le panneau a redémarré, mais sa nouvelle version n'a pas pu être lue ; rechargement pour vérifier.",
+  "The panel restarted on its previous version, so the change did not apply — see the log above.": "Le panneau a redémarré sur sa version précédente, donc le changement n'a pas été appliqué ; voir le journal ci-dessus.",
   "Update failed": "La mise à jour a échoué",
   "Update the panel": "Mettre à jour le panneau",
   "Upload folders": "Téléverser des dossiers",

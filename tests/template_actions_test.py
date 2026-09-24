@@ -2014,6 +2014,32 @@ check(-1 not in _lss_i and _lss_i == sorted(_lss_i),
       "js: ...and never calls the panel port 'already closed' while UFW is off",
       "positions %r — panel_port_open === false is read before the firewall's state" % (_lss_i,))
 
+# ── a panel restart is not a successful update ────────────────────────────────────────────────
+# install.sh restarts the service on ROLLBACK too, so the restored old process flips boot_id like
+# the new one — and a rolled-back update was announced "Update complete — reloading…", after which
+# the card offered the same update again. Success is the code having moved (a new commit for an
+# update, the target branch for a switch); a rollback line in the log says otherwise outright.
+_pro = _js_code_only(_js_function_body(_rh, "panelRestartOutcome"))
+_wpr = _js_code_only(_js_function_body(_rh, "watchPanelRestart"))
+check(len(_pro) > 150 and len(_wpr) > 400 and "boot_id" in _wpr,
+      "js: panelRestartOutcome and watchPanelRestart were found in remote_manage_host.js",
+      "extractor got %r / %r — the checks below would prove nothing" % (_pro[:40], _wpr[:40]))
+check("after.current_sha !== before.current_sha ? 'moved' : 'unchanged'" in _pro
+      and "after.branch === targetBranch ? 'moved' : 'unchanged'" in _pro
+      and "/rolled back|rolling back/i" in _pro,
+      "js: a panel restart counts as applied only when the commit (or branch) moved and no rollback ran",
+      "panelRestartOutcome no longer compares the version before and after")
+_wpr_moved = _js_block_after(_wpr, "if(outcome==='moved'){") or ""
+check("panelRestartOutcome(before, s, targetBranch" in _wpr
+      and "escapeHtml(doneLabel" in _wpr_moved and _wpr.count("doneLabel") == 1,
+      "js: ...and 'Update complete' / 'Switched to' is printed only on that outcome",
+      "the done label is printed outside the outcome==='moved' branch, i.e. on any restart")
+# Positive control: both flows hand the watcher what it compares against.
+check("watchPanelRestart(beforeBoot, msg, 'Update complete', before, '')" in _rh
+      and "watchPanelRestart(beforeBoot, msg, 'Switched to '+branch, before, branch)" in _rh,
+      "js: the update and branch-switch flows pass their pre-restart status to the watcher",
+      "a caller does not pass `before` (and the target branch), so every outcome reads 'unknown'")
+
 # ── saving the auto-block threshold must not switch auto-block OFF ───────────────────────────
 # saveThreshold posts the toggle's state as `enabled` ("preserve the on/off state"), but the toggle
 # is rendered unchecked and repainted only when /top-ips answers — after several SSH reads. A Save
