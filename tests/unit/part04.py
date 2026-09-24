@@ -912,6 +912,30 @@ check("f2b: ignoreip drops every non-IP token (no shell metachars reach the jail
 _jail = SO._panel_f2b_jail_body("/data/auth.log", 5000, ["1.2.3.4", "junk"])
 check("f2b: the jail body carries an ignoreip line with the valid entry only",
       "\nignoreip = " in _jail and "1.2.3.4" in _jail and "junk" not in _jail)
+# An IPv6 zone id PARSES — ipaddress keeps it verbatim, newlines included — so "re-parsed through
+# ipaddress" was not the guarantee the comment above claims. `::1%\n...` became extra lines in the
+# root-owned jail file: a neutered bantime, a disabled [sshd]. Refused where the whitelist is
+# stored, and dropped again where the jail line is built, in case an older value is on disk.
+_zone = "::1%\nbantime = 999999\nmaxretry = 0\n[sshd]\nenabled = false"
+check("f2b: the zone-id payload really does parse (so the checks below test something)",
+      _valid_ip_or_cidr(_zone) == _zone)
+_ign_z = SO._f2b_ignoreip_line(["1.2.3.4", _zone, "fe80::1%eth0"])
+check("f2b: ignoreip drops an entry carrying an IPv6 zone id, newline or not",
+      "\n" not in _ign_z and "%" not in _ign_z and "bantime" not in _ign_z, repr(_ign_z))
+check("f2b: ...and keeps the good entry beside it", "1.2.3.4" in _ign_z.split(), repr(_ign_z))
+import app as _wl_app                                                              # noqa: E402
+_wl_saved = []
+_wl_o_update = _wl_app.update_config
+try:
+    _wl_app.update_config = lambda fn: _wl_saved.append(fn)
+    _wl_z = [_wl_app._security_whitelist_add(v) for v in (_zone, "fe80::1%eth0")]
+    _wl_ok = _wl_app._security_whitelist_add("2001:db8::1")
+finally:
+    _wl_app.update_config = _wl_o_update
+check("whitelist: a value with an IPv6 zone id is refused and never stored",
+      _wl_z == [None, None] and len(_wl_saved) == 1, "got %r, stored %d" % (_wl_z, len(_wl_saved)))
+check("whitelist: ...while a plain IPv6 address is still accepted (positive control)",
+      _wl_ok == "2001:db8::1", repr(_wl_ok))
 
 # ── the ban-watcher's tick decision ───────────────────────────────────────────────────────────
 # It DIFFS consecutive readings of the jail, so an unreadable jail answered as set() does not lose

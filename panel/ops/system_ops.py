@@ -1653,10 +1653,16 @@ def _f2b_ignoreip_line(ignore_ips):
     for raw in (ignore_ips or []):
         s = (str(raw) or "").strip()
         try:
-            entries.append(str(ipaddress.ip_network(s, strict=False)) if "/" in s
-                           else str(ipaddress.ip_address(s)))
+            canon = (str(ipaddress.ip_network(s, strict=False)) if "/" in s
+                     else str(ipaddress.ip_address(s)))
         except ValueError:
             continue
+        # Parsing is not enough: ipaddress keeps an IPv6 zone id verbatim — `::1%\nbantime = 1`
+        # parses, newline and all — so a stored entry could still add lines to the jail. A value
+        # carrying a zone id or any whitespace/control character is dropped like any other bad one.
+        if "%" in canon or any(c.isspace() or not c.isprintable() for c in canon):
+            continue
+        entries.append(canon)
     seen, out = set(), []
     for e in entries:
         if e not in seen:
