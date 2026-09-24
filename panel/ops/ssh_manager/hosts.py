@@ -1632,6 +1632,21 @@ _SSHD_SECURITY_DIRECTIVES = frozenset({"PermitRootLogin", "PasswordAuthenticatio
 # releases: PERMIT_NO_PASSWD dumps as `without-password` on older sshd and `prohibit-password` on
 # current ones. Both are the same setting.
 _SSHD_VALUE_ALIASES = {"without-password": "prohibit-password"}
+# A directive whose values are ORDERED, least to most restrictive: any value at least as strict as
+# the one the panel sets does what the hardening is for. Compared for equality, a host with
+# `PermitRootLogin no` in sshd_config.d — stricter than the panel asks — read as "hardening did not
+# take effect", and the bootstrap FAILED on it. PasswordAuthentication has only `no` to accept.
+_SSHD_VALUE_ORDER = {"permitrootlogin": ("yes", "prohibit-password", "forced-commands-only", "no")}
+
+
+def _sshd_value_applied(key, want, got):
+    """True when sshd's effective `got` for `key` gives at least what `want` asks for."""
+    want = _SSHD_VALUE_ALIASES.get(want.lower(), want.lower())
+    got = _SSHD_VALUE_ALIASES.get(got, got)
+    order = _SSHD_VALUE_ORDER.get(key.lower())
+    if order and want in order and got in order:
+        return order.index(got) >= order.index(want)
+    return got == want
 
 
 def _sshd_unapplied_directives(server, wanted):
@@ -1654,7 +1669,7 @@ def _sshd_unapplied_directives(server, wanted):
     unapplied = []
     for key, want in wanted:
         got = effective.get(key.lower(), "")
-        if _SSHD_VALUE_ALIASES.get(got, got) != _SSHD_VALUE_ALIASES.get(want.lower(), want.lower()):
+        if not _sshd_value_applied(key, want, got):
             unapplied.append((key, want, got))
     return unapplied, True
 

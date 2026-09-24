@@ -2873,6 +2873,17 @@ try:
     _hok, _hmsg, _ = _bs_harden(_eff_cloud, auth="password")
     check("bootstrap: ...and a password-auth remote, which never asks for it off, is not failed "
           "for keeping it", _hok is True, "msg=%r" % (_hmsg,))
+    # ...but "not the value the panel wrote" is not "not hardened". A host with `PermitRootLogin no`
+    # in sshd_config.d — STRICTER than the prohibit-password the panel sets — was failed with "the
+    # SSH hardening did not take effect" and never marked online.
+    for _prl in ("no", "forced-commands-only"):
+        _hok, _hmsg, _hlog = _bs_harden(_eff_ok.replace("permitrootlogin without-password",
+                                                        "permitrootlogin " + _prl))
+        check("bootstrap: PermitRootLogin %s, stricter than asked, is hardened, not a failure" % _prl,
+              _hok is True and "NOT IN EFFECT" not in _hlog, "ok=%r msg=%r" % (_hok, _hmsg))
+    _hok, _hmsg, _ = _bs_harden(_eff_ok.replace("permitrootlogin without-password", "permitrootlogin yes"))
+    check("bootstrap: ...while PermitRootLogin yes still fails it (positive control)",
+          _hok is False and "PermitRootLogin yes" in _hmsg, "ok=%r msg=%r" % (_hok, _hmsg))
 
     # The UFW step's `ufw limit 22/tcp` is appended AFTER an existing `ufw allow OpenSSH` or bare
     # `allow 22` — neither is the 22/tcp rule to ufw — so SSH stayed unthrottled on exactly the
