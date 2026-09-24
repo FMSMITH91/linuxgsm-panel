@@ -108,9 +108,16 @@ def register(app):
                 # the pattern matched. A same-site path is "/" plus segments of an explicit safe
                 # charset — which excludes the backslash, the second leading slash and the scheme
                 # colon that the four rejected cases rely on.
+                # The path group must not nest quantifiers. It was `(?:[seg]+/?)*`: the optional
+                # slash let a run of segment characters split into segments in 2^n ways, so
+                # "/"+"a"*30+"!" backtracked for ~50s — on the one eventlet hub, freezing every
+                # page, console and poller for anyone holding any valid login. `(?:[seg]+/)*[seg]*`
+                # accepts exactly the same strings (no leading "/", no "//") and each "/" fixes
+                # the split, so it runs in linear time.
                 _raw = request.args.get("next", "/")
                 _m = re.fullmatch(
-                    r"/(?P<path>(?:[A-Za-z0-9._~\-]+/?)*)(?:\?(?P<q>[A-Za-z0-9._~\-=&%]*))?",
+                    r"/(?P<path>(?:[A-Za-z0-9._~\-]+/)*[A-Za-z0-9._~\-]*)"
+                    r"(?:\?(?P<q>[A-Za-z0-9._~\-=&%]*))?",
                     _raw or "")
                 _segs = [s for s in (_m.group("path").split("/") if _m else []) if s]
                 next_page = "/" + "/".join(_segs)

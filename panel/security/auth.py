@@ -709,8 +709,11 @@ def init_auth(app):
         # never the raw value — so this can't become an open redirect (same shape as /login's).
         nxt = request.full_path if request.method == "GET" else ""
         nxt = nxt[:-1] if nxt.endswith("?") else nxt
-        # Same charset /login itself will accept back, so the round trip actually survives.
-        m = re.fullmatch(r"/(?:[A-Za-z0-9._~\-]+/?)*(?:\?[A-Za-z0-9._~\-=&%]*)?", nxt or "")
+        # Same charset /login itself will accept back, so the round trip actually survives. No
+        # nested quantifier (see /login's copy): `(?:[seg]+/?)*` backtracked exponentially on an
+        # unauthenticated GET like /server/<30 digits>?! and stalled the whole eventlet hub.
+        m = re.fullmatch(r"/(?:[A-Za-z0-9._~\-]+/)*[A-Za-z0-9._~\-]*(?:\?[A-Za-z0-9._~\-=&%]*)?",
+                         nxt or "")
         if m and not nxt.startswith(target):
             target += "?next=" + quote(m.group(0), safe="")
         return redirect(target)

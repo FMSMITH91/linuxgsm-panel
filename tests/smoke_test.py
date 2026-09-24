@@ -5853,6 +5853,42 @@ try:
           _okr.status_code == 302 and _okr.headers.get("Location", "").endswith("/settings"),
           "%d %r" % (_okr.status_code, _okr.headers.get("Location")))
     _okc.get("/logout")
+    # ...and the guard answers in linear time. Its path group was `(?:[seg]+/?)*`, which split a
+    # run of segment characters 2^n ways before failing: "/"+"a"*30+"!" held the one eventlet hub
+    # for ~50s, freezing every other user, console and poller. 26 characters is ~3s with the old
+    # pattern and microseconds with the new, so the bound below is far from either.
+    import time as _rd_time
+    _rd_c = app.test_client()
+    _rd_t0 = _rd_time.monotonic()
+    _rd_r = _rd_c.post("/login?next=/" + "a" * 26 + "!",
+                       data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
+    _rd_dt = _rd_time.monotonic() - _rd_t0
+    check("login redirect: a pathological ?next= is refused without backtracking",
+          _rd_dt < 0.75 and _rd_r.status_code == 302
+          and _rd_r.headers.get("Location", "").split("localhost", 1)[-1] == "/",
+          "%.2fs %s %r" % (_rd_dt, _rd_r.status_code, _rd_r.headers.get("Location")))
+    _rd_c.get("/logout")
+    # The unauthenticated twin: the login redirect's ?next= is built from the requested path by
+    # the same kind of pattern, and an <int:> converter takes any number of digits.
+    _rd_t0 = _rd_time.monotonic()
+    _rd_r = app.test_client().get("/server/" + "0" * 26 + "?!")
+    _rd_dt = _rd_time.monotonic() - _rd_t0
+    check("auth redirect: an anonymous pathological path is answered without backtracking",
+          _rd_dt < 0.75 and _rd_r.status_code in (301, 302, 303)
+          and "/login" in (_rd_r.headers.get("Location") or ""),
+          "%.2fs %s" % (_rd_dt, _rd_r.status_code))
+    # Positive control for the rewrite: a nested same-site path with a query still survives both.
+    _rd_c = app.test_client()
+    _rd_r = _rd_c.post("/login?next=/server/1/files?tab=config",
+                       data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
+    check("login redirect: a nested path with a query is still followed intact",
+          _rd_r.headers.get("Location", "").endswith("/server/1/files?tab=config"),
+          _rd_r.headers.get("Location"))
+    _rd_c.get("/logout")
+    _rd_r = app.test_client().get("/server/5?tab=files")
+    check("auth redirect: ...and the anonymous redirect still carries it back",
+          "next=%2Fserver%2F5%3Ftab%3Dfiles" in (_rd_r.headers.get("Location") or ""),
+          _rd_r.headers.get("Location"))
     with app.app_context():
         from app import (_LOGIN_FAILS as _LF)
         _LF.clear()   # those logins were all successful, but keep the throttle clean for later tests
