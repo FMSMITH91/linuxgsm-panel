@@ -2423,14 +2423,25 @@ try:
         _f2bp_body = _so._panel_f2b_jail_body("/x/auth.log", 5000, [])
         check("f2b jail: %r bans on %s" % (_f2bp_c, "EVERY port" if _f2bp_want else "the web port"),
               ("banaction = iptables-allports" in _f2bp_body) is _f2bp_want, _f2bp_body[:160])
+        # An all-ports ban on a tailnet peer takes its SSH over tailscale0 and every game port:
+        # under Serve the forwarded client IS a tailnet address, and five mistyped passwords from an
+        # admin's laptop banned it for an hour. The panel never firewall-blocks the tailnet elsewhere.
+        _f2bp_ign = next((ln.split("=", 1)[1].split() for ln in _f2bp_body.splitlines()
+                          if ln.startswith("ignoreip")), [])
+        check("f2b jail: %r %s the tailnet (IPv4 and IPv6) from the ban"
+              % (_f2bp_c, "exempts" if _f2bp_want else "(web port only, as before) does not exempt"),
+              ({"100.64.0.0/10", "fd7a:115c:a1e0::/48"} <= set(_f2bp_ign)) is _f2bp_want
+              and {"127.0.0.1/8", "::1"} <= set(_f2bp_ign), "ignoreip %r" % (_f2bp_ign,))
     # ...and a jail already written for the web port alone is rewritten once the panel is proxied:
     # ensure_panel_fail2ban is the only thing that would ever rewrite it, and it returned early on
-    # "port, logpath, backend and whitelist all match".
+    # "port, logpath, backend and whitelist all match". The stored ignoreip is what THIS config
+    # writes, so only the banaction differs.
     _f2bp_calls = []
     _so.panel_fail2ban_status = lambda: {"installed": True, "enabled": True}
     _so._panel_f2b_jail_port = lambda: 5000
     _so._panel_f2b_jail_value = lambda k: {"logpath": "/x/auth.log", "backend": "auto"}.get(k)
-    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line([]).split()
+    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line(
+        _so._panel_f2b_ignore([], _so._panel_login_proxied())).split()
     _so.configure_panel_fail2ban = lambda *a, **k: (_f2bp_calls.append(a), (True, "ok"))[1]
     _f2bp_cfg.load_config = lambda: {"trust_proxy": True}
     _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
@@ -2440,6 +2451,20 @@ try:
     _f2bp_cfg.load_config = lambda: {}
     _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
     check("f2b jail: ...while the same jail on a directly-reached panel is left alone (positive control)",
+          not _f2bp_calls, "rewrites: %r" % (_f2bp_calls,))
+    # An all-ports jail written before the tailnet was exempted is rewritten, not read as healthy.
+    _f2bp_cfg.load_config = lambda: {"tailscale_setup_done": True}
+    _so._panel_f2b_jail_value = lambda k: {"logpath": "/x/auth.log", "backend": "auto",
+                                           "banaction": "iptables-allports"}.get(k)
+    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line([]).split()
+    _f2bp_calls.clear()
+    _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
+    check("f2b jail: an all-ports jail that bans the tailnet is rewritten, not left as healthy",
+          len(_f2bp_calls) == 1, "rewrites: %r" % (_f2bp_calls,))
+    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line(_so._panel_f2b_ignore([], True)).split()
+    _f2bp_calls.clear()
+    _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
+    check("f2b jail: ...while one that already exempts it is left alone (positive control)",
           not _f2bp_calls, "rewrites: %r" % (_f2bp_calls,))
 finally:
     (_f2bp_cfg.load_config, _so.panel_fail2ban_status, _so._panel_f2b_jail_port,

@@ -1737,6 +1737,23 @@ def _panel_login_proxied():
                 or bind in ("127.0.0.1", "::1", "localhost"))
 
 
+# Every tailnet peer's address: Tailscale's CGNAT IPv4 range and its IPv6 ULA prefix.
+_F2B_TAILNET_RANGES = ("100.64.0.0/10", "fd7a:115c:a1e0::/48")
+
+
+def _panel_f2b_ignore(ignore_ips, allports):
+    """The panel jail's ignoreip entries (before _f2b_ignoreip_line validates them): the whitelist,
+    plus — when the ban is on EVERY port — the tailnet.
+
+    An all-ports ban on a tailnet peer is a ban on its way in: under Serve the forwarded client IS
+    a tailnet address, and five mistyped panel passwords from an admin's laptop REJECTed that
+    100.x address on every TCP port for an hour — sshd over tailscale0 (the way back in once public
+    SSH is off), game and RCON ports. The panel never firewall-blocks a tailnet IP anywhere else
+    (ssh_manager's note above _TAILNET_CGNAT; the auto-block exempts them), and a public attacker
+    cannot have one. A web-port-only ban takes only the panel login from them, as it always did."""
+    return list(ignore_ips or []) + (list(_F2B_TAILNET_RANGES) if allports else [])
+
+
 def _panel_f2b_jail_body(auth_log, web_port, ignore_ips=None, allports=None):
     """Jail: 5 failures in 10 min → 1-hour ban, on the panel's web port. In jail.d/ so it sits
     alongside (doesn't conflict with) any [sshd] jail. `ignore_ips` (validated) are never banned.
@@ -1758,7 +1775,8 @@ def _panel_f2b_jail_body(auth_log, web_port, ignore_ips=None, allports=None):
             "maxretry = 5\n"
             "findtime = 10m\n"
             "bantime = 1h\n"
-            "ignoreip = %s\n" % (web_port, auth_log, _f2b_ignoreip_line(ignore_ips)))
+            "ignoreip = %s\n" % (web_port, auth_log,
+                                 _f2b_ignoreip_line(_panel_f2b_ignore(ignore_ips, allports))))
 
 
 def _panel_f2b_jail_value(key):
@@ -2442,12 +2460,15 @@ def ensure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     st = panel_fail2ban_status()
     if not st.get("installed"):
         return False, "fail2ban isn't installed on this host."
-    want_ignore = _f2b_ignoreip_line(ignore_ips).split()
     # The logpath and the backend are part of "healthy", not just the port and the whitelist.
     # Checking only the latter two let a jail that monitors NOTHING report itself as already
     # active, forever: this function is the only thing that would ever rewrite it, and it returned
     # early. Found on a host whose jail still carried a logpath from a previous install path.
-    want_action = _F2B_PANEL_ALLPORTS_ACTION if _panel_login_proxied() else None
+    allports = _panel_login_proxied()
+    want_action = _F2B_PANEL_ALLPORTS_ACTION if allports else None
+    # Built exactly as _panel_f2b_jail_body builds it — tailnet included on an all-ports jail — or
+    # a jail written without it would read as healthy and never be rewritten.
+    want_ignore = _f2b_ignoreip_line(_panel_f2b_ignore(ignore_ips, allports)).split()
     if (st.get("enabled") and _panel_f2b_jail_port() == web_port
             and _panel_f2b_jail_value("banaction") == want_action
             and _panel_f2b_jail_value("logpath") == str(auth_log)
