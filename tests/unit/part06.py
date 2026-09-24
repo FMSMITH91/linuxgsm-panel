@@ -3145,6 +3145,23 @@ _gl_bad = [_pp for _pp in _gl_paths
            or any(re.search(_pp, _rf) for _rf in _gl_readmes + ["README.md"])]
 check("gitleaks: no path exemption is unanchored or takes a README out of the scan",
       not _gl_bad, "exempts: %r" % _gl_bad)
+# install.sh pins NodeSource's public key fingerprint as NODESOURCE_KEY_FPR="<40 hex>", and the
+# default generic-api-key rule reads that as a credential: the blocking secret scan went red on the
+# PR range and, after merge, on every full-history run of main (the literal is in history from
+# 4bc9cba; history is not rewritten). The allowlist must carry THIS assignment — the whole match,
+# since regexTarget = "match" — and must not be a wildcard over the variable, so a rotated key is
+# looked at. gitleaks searches each allowlist regex in the match; Go and Python agree on literals.
+_gl_rx_blk = re.search(r"^\s*regexes\s*=\s*\[(.*?)^\s*\]", _gl_txt, re.M | re.S)
+_gl_rxs = re.findall(r"'''(.*?)'''", _gl_rx_blk.group(1) if _gl_rx_blk else "")
+_gl_fpr = re.findall(r'^\s*(NODESOURCE_KEY_FPR="[0-9A-F]{40}")\s*$',
+                     open(os.path.join(_root, "install.sh"), encoding="utf-8").read(), re.M)
+check("gitleaks: install.sh still pins the NodeSource fingerprint (the gate below has a subject)",
+      len(_gl_fpr) == 1, repr(_gl_fpr))
+check("gitleaks: the allowlist clears install.sh's NodeSource fingerprint assignment",
+      bool(_gl_fpr) and all(any(re.search(_rx, _m) for _rx in _gl_rxs) for _m in _gl_fpr),
+      "assignments %r, allowlist %r" % (_gl_fpr, _gl_rxs))
+check("gitleaks: the fingerprint exemption is that one value, not every NODESOURCE_KEY_FPR",
+      not any(re.search(_rx, 'NODESOURCE_KEY_FPR="' + "0" * 40 + '"') for _rx in _gl_rxs))
 
 # ── The docs state numbers that the code owns — pin them ──────────────────────────────────────
 # Every one of these was wrong at the time of writing, and none of them could be. SECURITY.md said
