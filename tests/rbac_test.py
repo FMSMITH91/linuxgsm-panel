@@ -714,6 +714,132 @@ try:
     check("escalation: MANAGE_USERS cannot take over a peer who can reach hosts the actor cannot",
           not _peer_changed, "the peer's password hash was replaced")
 
+    # ── ...and with CUSTOM COMMANDS, which need no permission at all to run ──────────────────
+    # can_run_custom_command authorises on group membership alone, and the reach tests compared
+    # permissions, hosts and game servers — never Group.custom_commands. So a group whose
+    # permissions sit inside the actor's but which carries a superadmin-authored `exec {}` was
+    # joinable, and a member of one could be taken over, by a delegated user admin.
+    with app.app_context():
+        from panel.db.models import CustomCommand as _CCmd
+        _mu_cmd = _CCmd(name=tag + "_cmd", command_template="exec {}", enabled=True)
+        db.session.add(_mu_cmd)
+        _cmd_grp = Group(name=tag + "_cmdgrp", description="RBAC test command grant (auto)",
+                         is_default=False)
+        _cmd_grp.set_permissions([auth.MANAGE_USERS])       # a SUBSET of what the actor holds
+        _cmd_grp.custom_commands.append(_mu_cmd)
+        _plain_grp = Group(name=tag + "_plaingrp", description="RBAC test same, no command (auto)",
+                           is_default=False)
+        _plain_grp.set_permissions([auth.MANAGE_USERS])
+        db.session.add_all([_cmd_grp, _plain_grp])
+        db.session.flush()
+        _cmd_peer = User(username=tag + "_cmd_peer",
+                         password_hash=auth.hash_password(secrets.token_hex(16)),
+                         display_name="cmd peer", is_superadmin=False, is_active=True)
+        _cmd_peer.groups.append(_cmd_grp)
+        _plain_peer = User(username=tag + "_plain_peer",
+                           password_hash=auth.hash_password(secrets.token_hex(16)),
+                           display_name="plain peer", is_superadmin=False, is_active=True)
+        _plain_peer.groups.append(_plain_grp)
+        db.session.add_all([_cmd_peer, _plain_peer])
+        db.session.commit()
+        _mu_cmd_id, _cmd_gid, _plain_gid = _mu_cmd.id, _cmd_grp.id, _plain_grp.id
+        _cmd_peer_id, _cmd_peer_hash = _cmd_peer.id, _cmd_peer.password_hash
+        _plain_peer_id, _plain_peer_hash = _plain_peer.id, _plain_peer.password_hash
+    cmu.post("/users/%d/edit" % _mu_uid,
+             data={"display_name": "MU admin", "is_active": "on",
+                   "groups": [str(_mu_gid), str(_cmd_gid), str(_plain_gid)]})
+    with app.app_context():
+        _mu_row = db.session.get(User, _mu_uid)
+        _mu_cmds, _mu_gids = auth.custom_command_ids(_mu_row), {g.id for g in _mu_row.groups}
+    check("escalation: MANAGE_USERS cannot join a group to pick up its custom command",
+          _mu_cmd_id not in _mu_cmds and _cmd_gid not in _mu_gids,
+          "now in groups %s, holding commands %s" % (sorted(_mu_gids), sorted(_mu_cmds)))
+    check("escalation: ...while the same group WITHOUT the command is still joined",
+          _plain_gid in _mu_gids, "the plain group was refused too — the guard is too broad")
+    cmu.post("/users/%d/edit" % _cmd_peer_id,
+             data={"display_name": "cmd peer", "is_active": "on", "reset_password": "on"})
+    cmu.post("/users/%d/edit" % _plain_peer_id,
+             data={"display_name": "plain peer", "is_active": "on", "reset_password": "on"})
+    with app.app_context():
+        _cmd_peer_changed = db.session.get(User, _cmd_peer_id).password_hash != _cmd_peer_hash
+        _plain_peer_changed = (db.session.get(User, _plain_peer_id).password_hash
+                               != _plain_peer_hash)
+    check("escalation: MANAGE_USERS cannot take over a peer whose extra reach is a command",
+          not _cmd_peer_changed, "the command holder's password hash was replaced")
+    check("escalation: ...but may still reset a peer with the same permissions and no command",
+          _plain_peer_changed, "a legitimate reset was refused — the guard is too broad")
+
+    # ── VIEW_LOGS is scoped to what the viewer can reach ─────────────────────────────────────
+    # It was install-wide: a moderator given view_logs with ONE server read every server's console
+    # commands (`rcon_password …`), every admin's sign-in address, and the attempted username of
+    # every failed login — where people paste their password by mistake.
+    if other_id is not None:
+        from panel.db.models import AuditLog as _AL
+        from panel.core.clock import utcnow as _al_now
+        with app.app_context():
+            _lv_grp = Group(name=tag + "_logs", description="RBAC test log viewer (auto)",
+                            is_default=False)
+            _lv_grp.set_permissions([auth.VIEW_LOGS, auth.VIEW_SERVERS])
+            _lv_grp.game_servers.append(db.session.get(GameServer, accessible_id))
+            db.session.add(_lv_grp)
+            db.session.flush()
+            _lv = User(username=tag + "_logviewer",
+                       password_hash=auth.hash_password(secrets.token_hex(16)),
+                       display_name="log viewer", is_superadmin=False, is_active=True)
+            _lv.groups.append(_lv_grp)
+            db.session.add(_lv)
+            db.session.flush()
+            _lv_id = _lv.id
+            _mine_name = db.session.get(GameServer, accessible_id).name
+            _other_name = db.session.get(GameServer, other_id).name
+            _lt = tag + "LOGROW"
+            for _uid_, _who, _act, _tgt, _det, _ip in (
+                    (admin_id, "admin", "send_command", _mine_name, _lt + "_mine_srv", "198.51.100.1"),
+                    (admin_id, "admin", "send_command", _other_name,
+                     _lt + "_other_srv rcon_password S3cret", "198.51.100.5"),
+                    (None, tag + "Sup3rSecretPw", "login_failed", "", _lt + "_failed", "198.51.100.2"),
+                    (admin_id, "admin", "login", "", _lt + "_adminlogin", "198.51.100.3"),
+                    # An ACCOUNT row whose free-text target happens to name their server (an
+                    # invite's note is whatever the minter typed): still not theirs to read.
+                    (admin_id, "admin", "invite_created", _mine_name, _lt + "_invite",
+                     "198.51.100.6"),
+                    (_lv_id, tag + "_logviewer", "logout", "", _lt + "_own", "198.51.100.4")):
+                db.session.add(_AL(user_id=_uid_, username=_who, action=_act, target=_tgt,
+                                   detail=_det, ip_address=_ip, success=True,
+                                   timestamp=_al_now()))
+            db.session.commit()
+        try:
+            _lv_page = client_as(_lv_id).get("/logs?q=" + _lt).get_data(as_text=True)
+            _sa_logs = client_as(admin_id).get("/logs?q=" + _lt).get_data(as_text=True)
+            check("view_logs: a scoped viewer sees rows about the server they can access",
+                  _lt + "_mine_srv" in _lv_page and _lt + "_own" in _lv_page,
+                  "their own server's / their own row is missing — the scope is too tight")
+            check("view_logs: ...but not another server's console commands",
+                  _lt + "_other_srv" not in _lv_page and "S3cret" not in _lv_page,
+                  "a server outside their grants leaked its console history")
+            check("view_logs: ...nor anyone's sign-ins or failed-login usernames",
+                  _lt + "_failed" not in _lv_page and _lt + "_adminlogin" not in _lv_page
+                  and (tag + "Sup3rSecretPw") not in _lv_page,
+                  "account rows (or the failed-login username in the filter list) leaked")
+            check("view_logs: ...nor an account row whose target merely names their server",
+                  _lt + "_invite" not in _lv_page,
+                  "an invite row reached a server-scoped viewer by its target")
+            check("view_logs: ...nor another user's address, while their own is shown",
+                  "198.51.100.1" not in _lv_page and "198.51.100.4" in _lv_page,
+                  "another admin's IP is visible, or the viewer's own is hidden")
+            check("view_logs: a superadmin still sees every row and address (control)",
+                  all(_lt + s in _sa_logs for s in ("_mine_srv", "_other_srv", "_failed",
+                                                    "_adminlogin", "_own", "_invite"))
+                  and "198.51.100.1" in _sa_logs and (tag + "Sup3rSecretPw") in _sa_logs,
+                  "the scoping also narrowed the superadmin's view")
+        finally:
+            with app.app_context():
+                for _row in _AL.query.filter(_AL.detail.like(_lt + "%")).all():
+                    db.session.delete(_row)
+                db.session.commit()
+    check("view_logs: (premise) the fixture has a second host to be scoped out",
+          other_id is not None, "the scoping checks above did not run")
+
     # The same via /users/add — creating the account in the privileged group, then logging in as it
     # (the generated password is handed straight back to the caller).
     _new_name = tag + "_mu_made"
@@ -1010,11 +1136,29 @@ try:
 
 
     _inv_tag = "inv_" + secrets.token_hex(3)
+    # This block borrows a REAL superadmin as the minter and toggles is_superadmin / is_active on
+    # it, and this suite is documented to run against a configured install. It used to take the
+    # first superadmin row whatever its state, restore it to (True, True) regardless, and delete
+    # every invite in the database — so a deactivated setup-time admin came back ACTIVE, with its
+    # old password, and the operator's outstanding invites were gone. Now: an ACTIVE minter, its
+    # exact state snapshotted and restored, and only this run's invites removed.
+    #
+    # The dormant superadmin below is the fixture that case needs: deactivated, and sorting FIRST
+    # (id 0), exactly where `.first()` found the setup-time account.
+    with app.app_context():
+        _dormant = User(id=0, username=_inv_tag + "_dormant",
+                        password_hash=auth.hash_password(secrets.token_hex(16)),
+                        display_name="dormant", is_superadmin=True, is_active=False)
+        db.session.add(_dormant)
+        _pre_inv, _ = _Inv.mint(db.session.get(User, admin_id), note=_inv_tag + " pre-existing")
+        db.session.add(_pre_inv)
+        db.session.commit()
+        _pre_inv_id = _pre_inv.id
+        _sa = User.query.filter_by(is_superadmin=True, is_active=True).order_by(User.id).first()
+        _sa_id = _sa.id
+        _sa_before = (_sa.is_superadmin, _sa.is_active, [_g.id for _g in _sa.groups])
+        _inv_before = {_i.id for _i in _Inv.query.all()}
     try:
-        with app.app_context():
-            _sa = User.query.filter_by(is_superadmin=True).first()
-            _sa_id = _sa.id
-
         # 1. The happy path, so the refusals below are not passing for the wrong reason.
         _iid, _tok = _mint(_sa)
         check("invite route: a valid invite is accepted and creates the account",
@@ -1217,6 +1361,55 @@ try:
             _sa_row.is_superadmin = True
             db.session.commit()
 
+        # 3d. The fourth axis, custom commands: a group holding nothing but a superadmin-authored
+        #     command passes the permission, host and server tests trivially, and membership alone
+        #     authorises the command.
+        with app.app_context():
+            from panel.db.models import CustomCommand as _ICC
+            _inv_cmd = _ICC(name=_inv_tag + "_cmd", command_template="exec {}", enabled=True)
+            db.session.add(_inv_cmd)
+            _icmd_grp = Group(name=_inv_tag + "_cmdgrp", description="a command only (auto)",
+                              is_default=False)
+            _icmd_grp.set_permissions([])
+            _icmd_grp.custom_commands.append(_inv_cmd)
+            db.session.add(_icmd_grp)
+            db.session.commit()
+            _inv_cmd_id, _icmd_gid = _inv_cmd.id, _icmd_grp.id
+            _cinv, _tok_cmd = _Inv.mint(db.session.get(User, _sa_id), group_ids=[_icmd_gid])
+            db.session.add(_cinv)
+            db.session.commit()
+        with app.app_context():                    # the minter loses the command with the demotion
+            db.session.get(User, _sa_id).is_superadmin = False
+            db.session.commit()
+        _r_cmd = _accept(_tok_cmd, _inv_tag + "_cmd")
+        check("invite route: a CUSTOM-COMMAND group grant does not outlive its minter's reach",
+              _groups_of(_inv_tag + "_cmd") is None,
+              "a demoted minter's invite created an account carrying %s (status %s)"
+              % (_groups_of(_inv_tag + "_cmd"), _r_cmd.status_code))
+        with app.app_context():                    # positive control: the minter holds it too
+            _own_cmd = Group(name=_inv_tag + "_owncmd", description="minter's command (auto)",
+                             is_default=False)
+            _own_cmd.set_permissions([])
+            _own_cmd.custom_commands.append(db.session.get(_ICC, _inv_cmd_id))
+            db.session.add(_own_cmd)
+            _sa_row = db.session.get(User, _sa_id)
+            _sa_row.groups.append(_own_cmd)
+            db.session.commit()
+            _cinv2, _tok_cmd2 = _Inv.mint(_sa_row, group_ids=[_icmd_gid])
+            db.session.add(_cinv2)
+            db.session.commit()
+        _accept(_tok_cmd2, _inv_tag + "_cmd_ok")
+        _cmd_ok = _groups_of(_inv_tag + "_cmd_ok")
+        check("invite route: ...while a minter who holds that command can hand it out",
+              _cmd_ok is not None and (_inv_tag + "_cmdgrp") in _cmd_ok,
+              "the control failed (%s) — the refusal above proves nothing" % (_cmd_ok,))
+        with app.app_context():                    # restore the fixture the next case expects
+            _sa_row = db.session.get(User, _sa_id)
+            _sa_row.groups = [_g for _g in _sa_row.groups
+                              if _g.name != _inv_tag + "_owncmd"]
+            _sa_row.is_superadmin = True
+            db.session.commit()
+
         # 4. Deactivated, not merely demoted: nobody is standing behind the invite at all.
         _iid_d, _tok_d = _mint(_sa)
         with app.app_context():
@@ -1272,23 +1465,49 @@ try:
     finally:
         with app.app_context():
             for _n in ("_ok", "_twice", "_demoted", "_inactive", "_exp", "_race", "_revoked",
-                       "_grp", "_grp_ok", "_host", "_host_ok"):
+                       "_grp", "_grp_ok", "_host", "_host_ok", "_cmd", "_cmd_ok"):
                 _u = User.query.filter_by(username=_inv_tag + _n).first()
                 if _u is not None:
                     db.session.delete(_u)
             for _row in _Inv.query.all():
-                db.session.delete(_row)
+                if _row.id not in _inv_before:     # this run's invites only, never the operator's
+                    db.session.delete(_row)
             _sa_row = db.session.get(User, _sa_id)
             if _sa_row is not None:
                 # The reach fixture is a group ON the superadmin, so it has to come off before the
-                # groups are deleted — the rest of this suite runs against that account.
-                _sa_row.groups = [_g for _g in _sa_row.groups
-                                  if not _g.name.startswith(_inv_tag)]
-                _sa_row.is_superadmin, _sa_row.is_active = True, True
+                # groups are deleted — the rest of this suite runs against that account. Restored
+                # to exactly what it was, not to a literal (True, True).
+                _sa_row.groups = [_g for _g in (db.session.get(Group, _i) for _i in _sa_before[2])
+                                  if _g is not None]
+                _sa_row.is_superadmin, _sa_row.is_active = _sa_before[0], _sa_before[1]
             db.session.commit()
             for _g in Group.query.filter(Group.name.like(_inv_tag + "%")).all():
                 db.session.delete(_g)
             db.session.commit()
+            from panel.db.models import CustomCommand as _ICC_rm
+            for _c in _ICC_rm.query.filter(_ICC_rm.name.like(_inv_tag + "%")).all():
+                db.session.delete(_c)
+            db.session.commit()
+    with app.app_context():
+        _dorm = User.query.filter_by(username=_inv_tag + "_dormant").first()
+        check("invite fixtures: a DEACTIVATED superadmin is still deactivated after the run",
+              _dorm is not None and _dorm.is_active is False,
+              "the suite re-enabled a dormant superadmin: %r" % (getattr(_dorm, "is_active", None),))
+        check("invite fixtures: an invite that predates the run survives it",
+              db.session.get(_Inv, _pre_inv_id) is not None, "the operator's invite was deleted")
+        check("invite fixtures: ...while every invite this run minted is gone (positive control)",
+              {_i.id for _i in _Inv.query.all()} <= _inv_before,
+              "left behind: %s" % sorted({_i.id for _i in _Inv.query.all()} - _inv_before))
+        _minter = db.session.get(User, _sa_id)
+        check("invite fixtures: the borrowed minter is back exactly as it was",
+              _minter is not None and (_minter.is_superadmin, _minter.is_active,
+                                       [_g.id for _g in _minter.groups]) == _sa_before,
+              "%r vs %r" % (_sa_before, _minter and (_minter.is_superadmin, _minter.is_active,
+                                                     [_g.id for _g in _minter.groups])))
+        for _gone in (_dorm, db.session.get(_Inv, _pre_inv_id)):
+            if _gone is not None:
+                db.session.delete(_gone)
+        db.session.commit()
 
     # ── deleting a user ───────────────────────────────────────────────────────────────────────
     # /users/<id>/delete had no test executing it at all. It refuses on four counts, but only two
@@ -1377,6 +1596,10 @@ finally:
                 db.session.delete(_u)
             for _g in Group.query.filter(Group.name.like(tag + "%")).all():
                 db.session.delete(_g)
+            db.session.commit()
+            from panel.db.models import CustomCommand as _CC_rm
+            for _c in _CC_rm.query.filter(_CC_rm.name.like(tag + "%")).all():
+                db.session.delete(_c)
             db.session.commit()
     print("Fixtures cleaned up.\n")
 

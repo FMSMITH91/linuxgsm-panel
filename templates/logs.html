@@ -85,7 +85,7 @@
             <td><code>{{ entry.action }}</code></td>
             <td>{{ entry.target }}</td>
             <td class="small text-secondary">{{ entry.detail[:100] }}</td>
-            <td class="small text-secondary">{{ entry.ip_address }}</td>
+            <td class="small text-secondary">{% if show_all_ips or entry.user_id == current_user.id %}{{ entry.ip_address }}{% endif %}</td>
             <td>
               {% if entry.success %}
                 <span class="status-dot status-online"></span>

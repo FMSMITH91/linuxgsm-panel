@@ -1717,11 +1717,70 @@ check("remote access: junk id denied", not can_access_remote(_user(False, 5), "a
 from flask import Flask as _Flask
 _app = _Flask(__name__)
 with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
-                               environ_base={"REMOTE_ADDR": "127.0.0.1"}):
-    eq("loopback proxy: trust XFF", client_ip(), "1.2.3.4")
-with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
                                environ_base={"REMOTE_ADDR": "203.0.113.9"}):
     eq("direct connection: ignore spoofed XFF, use socket", client_ip(), "203.0.113.9")
+
+# ...and loopback is not a proxy by itself. Every local account on the panel host can dial
+# 127.0.0.1 — the game-server users included — so trusting any loopback peer let one of them pick
+# a fresh throttle bucket per attempt, or name the admin's IP until fail2ban banned it. Only a
+# loopback peer whose socket ROOT owns (tailscaled) is believed. Proved against the real kernel:
+# a loopback pair opened here is owned by this (non-root) test process.
+import socket as _lp_sock                                                            # noqa: E402
+import tempfile as _lp_tmp                                                           # noqa: E402
+from panel.security import auth as _lp_auth                                          # noqa: E402
+from unit.part01 import skip as _lp_skip                                             # noqa: E402
+_lp_srv = _lp_sock.socket(_lp_sock.AF_INET, _lp_sock.SOCK_STREAM)
+_lp_srv.bind(("127.0.0.1", 0))
+_lp_srv.listen(1)
+_lp_cli = _lp_sock.socket(_lp_sock.AF_INET, _lp_sock.SOCK_STREAM)
+_lp_cli.connect(_lp_srv.getsockname())
+_lp_conn, _lp_peer = _lp_srv.accept()
+_lp_env = {"REMOTE_ADDR": "127.0.0.1", "REMOTE_PORT": str(_lp_peer[1]),
+           "SERVER_PORT": str(_lp_srv.getsockname()[1])}
+try:
+    eq("loopback peer: the kernel names who dialled (this process's uid)",
+       _lp_auth._loopback_peer_uid(_lp_env), os.getuid())
+    eq("loopback peer: a port that matches no connection answers None, not a guess",
+       _lp_auth._loopback_peer_uid(dict(_lp_env, REMOTE_PORT="1")), None)
+    with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
+                                   environ_overrides=_lp_env):
+        from flask import request as _lp_req
+        _lp_got = client_ip()
+        # ...and it was refused BECAUSE the kernel named a non-root owner, not because the lookup
+        # failed on a fixture environ (which would also answer 127.0.0.1).
+        _lp_uid_seen = _lp_auth._loopback_peer_uid(_lp_req.environ)
+    if os.getuid() != 0:
+        check("loopback peer: a NON-root local caller's X-Forwarded-For is ignored",
+              _lp_got == "127.0.0.1" and _lp_uid_seen == os.getuid(),
+              "client_ip=%r, owner seen=%r" % (_lp_got, _lp_uid_seen))
+    else:
+        _lp_skip("loopback peer: a NON-root local caller's X-Forwarded-For is ignored",
+             "the suite is running as root, so this connection IS root-owned")
+finally:
+    for _s in (_lp_conn, _lp_cli, _lp_srv):
+        _s.close()
+# The trusted side, from a socket table naming root as the owner (the tailscaled shape).
+_lp_fix = os.path.join(_lp_tmp.mkdtemp(), "tcp")
+with open(_lp_fix, "w") as _fh:
+    _fh.write("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt"
+              "   uid  timeout inode\n"
+              "   0: 0100007F:A1B2 0100007F:1388 01 00000000:00000000 00:00000000 00000000"
+              "     0        0 12345 1 0000000000000000 20 4 30 10 -1\n"
+              "   1: 0100007F:C3D4 0100007F:1388 01 00000000:00000000 00:00000000 00000000"
+              "  1001        0 12346 1 0000000000000000 20 4 30 10 -1\n")
+_lp_saved = dict(_lp_auth._PROC_NET_TCP)
+_lp_auth._PROC_NET_TCP[4] = _lp_fix
+try:
+    for _port, _want, _label in ((0xA1B2, "1.2.3.4", "a ROOT-owned loopback peer (tailscaled) is"),
+                                 (0xC3D4, "127.0.0.1", "a uid-1001 loopback peer is NOT")):
+        with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
+                                       environ_overrides={"REMOTE_ADDR": "127.0.0.1",
+                                                     "REMOTE_PORT": str(_port),
+                                                     "SERVER_PORT": "5000"}):
+            eq("loopback proxy: %s trusted for X-Forwarded-For" % _label, client_ip(), _want)
+finally:
+    _lp_auth._PROC_NET_TCP.clear()
+    _lp_auth._PROC_NET_TCP.update(_lp_saved)
 
 # ── TOTP (2FA) ────────────────────────────────────────────────
 import time as _time
@@ -1917,6 +1976,71 @@ check("check_password: empty stored hash -> False (no raise)", not check_passwor
 check("check_password: None stored hash -> False (no raise)", not check_password("x", None))
 check("check_password: garbage stored hash -> False (no raise)", not check_password("x", "not-a-bcrypt-hash"))
 check("dummy_password_check always returns False", dummy_password_check("anything") is False)
+
+# ── bcrypt runs OFF the eventlet hub ────────────────────────────────────────────────────────
+# bcrypt is a native call that never yields, and the panel is one eventlet hub: every /login POST
+# (unauthenticated, including the dummy compare for an unknown username) held every page, console
+# and poller for a whole cost-12 hash. Under a monkey-patched runtime each bcrypt call must go
+# through eventlet.tpool. The suite is not monkey-patched, so the patch check and tpool.execute are
+# stubbed and the REAL password, dummy and backup-code functions are driven through them.
+import eventlet.patcher as _bh_patcher                                               # noqa: E402
+import eventlet.tpool as _bh_tpool                                                   # noqa: E402
+import bcrypt as _bh_bcrypt                                                          # noqa: E402
+from panel.db.models import User as _BhUser                                          # noqa: E402
+_bh_saved = (_bh_patcher.is_monkey_patched, _bh_tpool.execute)
+_bh_calls = []
+
+
+def _bh_exec(fn, *a, **k):
+    _bh_calls.append(fn)
+    return fn(*a, **k)
+
+
+try:
+    _bh_patcher.is_monkey_patched = lambda name: True
+    _bh_tpool.execute = _bh_exec
+    _bh_hash = hash_password("Off-hub1!pass")
+    _bh_ok = check_password("Off-hub1!pass", _bh_hash)
+    _bh_bad = check_password("wrong", _bh_hash)
+    _bh_calls_pw = list(_bh_calls)
+    del _bh_calls[:]
+    dummy_password_check("anything")
+    _bh_calls_dummy = list(_bh_calls)
+    del _bh_calls[:]
+    _bh_u = _BhUser(username="offhub")
+    _bh_u.set_backup_codes(["abcde-fghij"])
+    _bh_used = _bh_u.use_backup_code("ABCDE-FGHIJ")
+    _bh_calls_codes = list(_bh_calls)
+finally:
+    _bh_patcher.is_monkey_patched, _bh_tpool.execute = _bh_saved
+check("bcrypt off-hub: hash + both checks go through tpool, and still answer correctly",
+      _bh_calls_pw == [_bh_bcrypt.hashpw, _bh_bcrypt.checkpw, _bh_bcrypt.checkpw]
+      and _bh_ok is True and _bh_bad is False, "%r ok=%r bad=%r" % (_bh_calls_pw, _bh_ok, _bh_bad))
+check("bcrypt off-hub: the unknown-username dummy compare goes through tpool too",
+      _bh_bcrypt.checkpw in _bh_calls_dummy, repr(_bh_calls_dummy))
+check("bcrypt off-hub: backup codes are hashed and checked through tpool",
+      _bh_calls_codes == [_bh_bcrypt.hashpw, _bh_bcrypt.checkpw] and _bh_used is True,
+      "%r used=%r" % (_bh_calls_codes, _bh_used))
+# Off eventlet (manage.py, a bare script) it is a plain call: tpool is not touched at all. Stated
+# explicitly, because THIS suite is monkey-patched — importing app runs eventlet.monkey_patch().
+del _bh_calls[:]
+_bh_patcher.is_monkey_patched = lambda name: False
+_bh_tpool.execute = _bh_exec
+try:
+    _bh_plain = check_password("Off-hub1!pass", _bh_hash)
+finally:
+    _bh_patcher.is_monkey_patched, _bh_tpool.execute = _bh_saved
+check("bcrypt off-hub: without monkey-patching it is a direct call (control)",
+      _bh_plain is True and _bh_calls == [], repr(_bh_calls))
+
+# ── the login and token throttles count an IPv6 client by its /64 ───────────────────────────
+from panel.security.auth import throttle_key as _tk_fn                              # noqa: E402
+for _tk_in, _tk_want in (("203.0.113.9", "203.0.113.9"),
+                         ("2001:db8:1:2:aaaa::1", "2001:db8:1:2::/64"),
+                         ("2001:db8:1:2:ffff:ffff:ffff:ffff", "2001:db8:1:2::/64"),
+                         ("::ffff:203.0.113.9", "203.0.113.9"),
+                         ("unknown", "unknown")):
+    eq("throttle key: %s -> %s" % (_tk_in, _tk_want), _tk_fn(_tk_in), _tk_want)
 
 # ── login-throttle map must not grow unbounded (prune stale/empty IP buckets) ──
 # _LOGIN_FAILS is the same dict object app.py mutates, so in-place edits here are seen

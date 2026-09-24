@@ -254,6 +254,67 @@ try:
         check("open: their email is encrypted at rest, not stored in the clear",
               _u is not None and "admin@example.com" not in (_u.email or ""))
 
+    # ── From here the wizard belongs to the browser that created the admin ────────────────────
+    # It stayed open to ANY caller until the last step, and the steps after the admin are the
+    # dangerous ones: /api/setup/tailscale/up joined this host to the caller's tailnet with
+    # Tailscale SSH on and handed them the auth URL, and step=welcome rewrote the bind.
+    def _wiz_step():
+        with app.app_context():
+            return SetupState.query.first().step
+
+    _att = app.test_client()
+    r = _att.get("/setup", follow_redirects=False)
+    check("owner: another browser's GET /setup is sent to sign in, not shown the wizard",
+          r.status_code in (301, 302, 303) and "/login" in (r.headers.get("Location") or ""),
+          "%d -> %s" % (r.status_code, r.headers.get("Location")))
+    # The three that act on the host are stubbed, so a broken gate records a call instead of
+    # installing Tailscale or joining a tailnet from a test run.
+    from panel.ops import tailscale_integration as _ts_mod
+    _ts_saved = (_ts_mod.install_tailscale_local, _ts_mod.tailscale_up_local,
+                 _ts_mod.setup_tailscale_serve)
+    _ts_calls = []
+    _ts_mod.install_tailscale_local = lambda *a, **k: (_ts_calls.append("install") or (True, ""))
+    _ts_mod.tailscale_up_local = lambda *a, **k: (_ts_calls.append("up") or (True, "https://x"))
+    _ts_mod.setup_tailscale_serve = lambda *a, **k: (_ts_calls.append("serve") or (True, ""))
+    try:
+        for _ep, _meth in (("/api/setup/tailscale/up", "post"),
+                           ("/api/setup/tailscale/install", "post"),
+                           ("/api/setup/tailscale/serve", "post"),
+                           ("/api/setup/tailscale/status", "get")):
+            rr = getattr(_att, _meth)(_ep, json={}) if _meth == "post" else _att.get(_ep)
+            check("owner: another browser is refused %s" % _ep, rr.status_code == 403,
+                  "got %d" % rr.status_code)
+        check("owner: ...and nothing was run on the host for it", _ts_calls == [], repr(_ts_calls))
+    finally:
+        (_ts_mod.install_tailscale_local, _ts_mod.tailscale_up_local,
+         _ts_mod.setup_tailscale_serve) = _ts_saved
+    _bind_owner = load_config().get("bind_host")
+    _att.post("/setup", data={"step": "welcome", "site_title": "Hijacked", "port": "5099",
+                              "bind_host": "0.0.0.0"})
+    check("owner: another browser cannot rewrite the bind or port",
+          load_config().get("bind_host") == _bind_owner and load_config().get("port") != 5099,
+          "%s %s" % (load_config().get("bind_host"), load_config().get("port")))
+    _att.post("/setup", data={"step": "tailscale"})
+    check("owner: another browser cannot advance the wizard", _wiz_step() == "tailscale",
+          _wiz_step())
+    # The owner's own browser carries on (positive control for every refusal above)...
+    rr = c.get("/api/setup/tailscale/status")
+    check("owner: the creating browser still reaches the Tailscale step's API",
+          rr.status_code == 200, "got %d" % rr.status_code)
+    # ...and the way back in from any other browser is to sign in as the admin.
+    r = _att.get("/login", follow_redirects=False)
+    check("owner: /login is reachable once an admin exists (not bounced into the wizard)",
+          r.status_code == 200, "got %d -> %s" % (r.status_code, r.headers.get("Location")))
+    _rec = app.test_client()
+    _rec.post("/login?next=/setup", data={"username": "firstadmin",
+                                          "password": "Sufficient1!pass"})
+    r = _rec.get("/setup", follow_redirects=False)
+    check("owner: a browser signed in as the superadmin may finish the wizard",
+          r.status_code == 200, "got %d -> %s" % (r.status_code, r.headers.get("Location")))
+    c.post("/setup", data={"step": "tailscale"})
+    check("owner: the creating browser advances the wizard", _wiz_step() == "remote_server",
+          _wiz_step())
+
     # A second admin_user POST must be refused even while the wizard is still open — the wizard
     # creates the FIRST admin only (defence in depth behind the completion lock).
     c.post("/setup", data={"step": "admin_user", "username": "sneak",
@@ -333,7 +394,9 @@ try:
               rr.status_code in (401, 403, 301, 302, 303), "got %d" % rr.status_code)
 
     # Put a valid config back so the final state is sane for cleanup.
-    save_config({"setup_complete": True})
+    # Written directly: save_config now REFUSES to replace a config.json it cannot read (the file
+    # the loop above left as invalid JSON), which is the point of that refusal.
+    CONFIG_FILE.write_text('{"setup_complete": true}', encoding="utf-8")
 
 except Exception:
     import traceback

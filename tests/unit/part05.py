@@ -4478,6 +4478,97 @@ try:
 finally:
     _bk.load_config = _o_lc
 
+# ── an UNREADABLE config.json is not "nothing configured" ──────────────────────────────────────
+# load_config() never raises: a config.json it cannot parse comes back as defaults. get_passphrase's
+# except could never fire, so it read "no passphrase" and the daily backup went out in the CLEAR
+# (panel.db, secret_key, cred_key); the health page said "config.json loads cleanly"; and the boot
+# jail sync rewrote fail2ban's ignoreip from defaults, i.e. with the whitelist removed. Driven with
+# CONFIG_FILE on a temp path — the real one is never read or written here.
+import ast as _cu_ast                                                               # noqa: E402
+import tempfile as _cu_tmp                                                          # noqa: E402
+import flask as _cu_flask                                                           # noqa: E402
+import app as _cu_app                                                               # noqa: E402
+from panel.core import config as _cu_cfg                                            # noqa: E402
+from panel.ops import system_ops as _cu_so                                          # noqa: E402
+_cu_saved = (_cu_cfg.CONFIG_FILE, _cu_so.ensure_panel_fail2ban, _cu_app.RemoteServer,
+             _cu_app.remote_set_fail2ban_ignoreip)
+_cu_file = _tp.Path(_cu_tmp.mkdtemp()) / "config.json"
+_cu_jail, _cu_remote = [], []
+
+
+class _CuQuery:
+    def filter_by(self, **_k):
+        return self
+
+    def all(self):
+        return [NS(id=1, name="r1")]
+
+
+def _cu_diag_level():
+    _cu_cfg._cfg_cache["key"] = None
+    return next((c["level"] for c in _cu_so.panel_diagnostics()["checks"]
+                 if c["name"] == "Configuration"), "missing")
+
+
+try:
+    _cu_cfg.CONFIG_FILE = _cu_file
+    _cu_so.ensure_panel_fail2ban = lambda log, port, wl: (_cu_jail.append((port, list(wl))) or
+                                                         (True, "ok"))
+    _cu_app.RemoteServer = NS(query=_CuQuery())
+    _cu_app.remote_set_fail2ban_ignoreip = (
+        lambda r, wl, unban_ip=None: _cu_remote.append(list(wl)))
+    _cu_file.write_text('{"backup_passphrase": "gAAAA-x", "security_whitelist": ["198.51.100.7"],'
+                        ' "port": 8443,}', encoding="utf-8")
+    _cu_cfg._cfg_cache["key"] = None
+    _cu_raised = None
+    try:
+        _bk.get_passphrase()
+    except _bk.PassphraseUnreadable as _e:
+        _cu_raised = _e
+    check("config unreadable: get_passphrase RAISES instead of answering 'not configured'",
+          _cu_raised is not None)
+    check("config unreadable: the health check reports it as a failure",
+          _cu_diag_level() == "fail", _cu_diag_level())
+    _cu_cfg._cfg_cache["key"] = None
+    check("config unreadable: the fail2ban jail is NOT rewritten from defaults",
+          _cu_app._apply_whitelist_to_fail2ban()[0] is False and _cu_jail == [], repr(_cu_jail))
+    _cu_cfg._cfg_cache["key"] = None
+    _cu_app._apply_whitelist_to_remotes(_cu_flask.Flask("cu"))
+    check("config unreadable: ...nor is any remote's whitelist emptied", _cu_remote == [],
+          repr(_cu_remote))
+    # Positive controls: the same calls on a readable file do their work.
+    _cu_file.write_text('{"security_whitelist": ["198.51.100.7"], "port": 8443}', encoding="utf-8")
+    _cu_cfg._cfg_cache["key"] = None
+    check("config readable: an unset passphrase is still '' (the guard is not 'always refuse')",
+          _bk.get_passphrase() == "")
+    check("config readable: the health check says ok", _cu_diag_level() == "ok", _cu_diag_level())
+    _cu_cfg._cfg_cache["key"] = None
+    _cu_app._apply_whitelist_to_fail2ban()
+    check("config readable: the jail gets the configured port AND whitelist",
+          _cu_jail == [(8443, ["198.51.100.7"])], repr(_cu_jail))
+    _cu_cfg._cfg_cache["key"] = None
+    _cu_app._apply_whitelist_to_remotes(_cu_flask.Flask("cu"))
+    check("config readable: ...and every remote gets the whitelist",
+          _cu_remote == [["198.51.100.7"]], repr(_cu_remote))
+finally:
+    (_cu_cfg.CONFIG_FILE, _cu_so.ensure_panel_fail2ban, _cu_app.RemoteServer,
+     _cu_app.remote_set_fail2ban_ignoreip) = _cu_saved
+    _cu_cfg._cfg_cache["key"] = None
+
+# The boot-time jail sync is a closure under __main__, so it is pinned by what it CALLS: the guarded
+# helper, and never ensure_panel_fail2ban directly (which is what rewrote the jail from defaults).
+_cu_src = open(os.path.join(_UNIT_ROOT, "app.py"), encoding="utf-8").read()
+_cu_fn = next((n for n in _cu_ast.walk(_cu_ast.parse(_cu_src))
+               if isinstance(n, _cu_ast.FunctionDef) and n.name == "_f2b_autostart"), None)
+_cu_calls = set()
+for _n in _cu_ast.walk(_cu_fn) if _cu_fn else ():
+    if isinstance(_n, _cu_ast.Call):
+        _f = _n.func
+        _cu_calls.add(_f.attr if isinstance(_f, _cu_ast.Attribute) else getattr(_f, "id", ""))
+check("config unreadable: the boot jail sync goes through _apply_whitelist_to_fail2ban",
+      _cu_fn is not None and "_apply_whitelist_to_fail2ban" in _cu_calls
+      and "ensure_panel_fail2ban" not in _cu_calls, sorted(_cu_calls))
+
 # host-key pin: an unreadable pin is not first contact
 _pin_row = _RS(name="box", auth_method="key")
 _pin_row.__dict__["host_key"] = _US()

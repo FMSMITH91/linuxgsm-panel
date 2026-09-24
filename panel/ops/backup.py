@@ -28,7 +28,7 @@ from panel.ops.system_ops import _helper_present, _run_verb
 import time
 
 from panel.core.config import (DATA_DIR, DB_PATH, CONFIG_FILE, SECRET_FILE, CRED_KEY_FILE,
-                    load_config, update_config, encrypt_secret, decrypt_secret)
+                    load_config, update_config, encrypt_secret, decrypt_secret, is_unreadable)
 
 _log = logging.getLogger("panel.backup")
 
@@ -163,9 +163,15 @@ def get_passphrase():
     carry its own passphrase in the clear. It cannot be decrypted without cred_key, which lives
     only on the panel host."""
     try:
-        stored = load_config().get("backup_passphrase") or ""
+        _cfg = load_config()
+        stored = _cfg.get("backup_passphrase") or ""
     except Exception:
         _log.debug("could not read the panel config", exc_info=True)
+        raise PassphraseUnreadable("the panel config could not be read")
+    if is_unreadable(_cfg):
+        # load_config() does not raise for a config.json it could not parse — it hands back
+        # defaults, which carry no passphrase. Read as "not configured", that wrote the daily
+        # archive (panel.db, secret_key, cred_key) in the clear for an operator who set one.
         raise PassphraseUnreadable("the panel config could not be read")
     if not stored:
         return ""                     # genuinely not configured: unencrypted backups are the ask

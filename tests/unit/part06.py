@@ -3857,13 +3857,20 @@ from flask import Flask as _IpFlask                                             
 _ip_app = _IpFlask(__name__)
 
 
-def _ip_for(headers, remote="127.0.0.1", trust_proxy=False, proxy_fix_orig=None):
+def _ip_for(headers, remote="127.0.0.1", trust_proxy=False, proxy_fix_orig=None, root_peer=True):
+    # root_peer: the loopback caller is tailscaled (a root-owned socket), the Serve shape these
+    # checks are about. A non-root loopback caller is not trusted at all — see part02.
     _ip_app.config["_TRUST_PROXY"] = trust_proxy
     env = {"REMOTE_ADDR": remote}
     if proxy_fix_orig is not None:
         env["werkzeug.proxy_fix.orig"] = {"REMOTE_ADDR": proxy_fix_orig}
-    with _ip_app.test_request_context("/", headers=headers, environ_overrides=env):
-        return _ip_auth.client_ip()
+    _saved_lpt = _ip_auth._loopback_proxy_trusted
+    _ip_auth._loopback_proxy_trusted = lambda: root_peer
+    try:
+        with _ip_app.test_request_context("/", headers=headers, environ_overrides=env):
+            return _ip_auth.client_ip()
+    finally:
+        _ip_auth._loopback_proxy_trusted = _saved_lpt
 
 
 # X-Forwarded-For's LAST hop wins, and X-Real-IP is only the fallback. The order used to be the
@@ -3895,6 +3902,11 @@ eq("client_ip: a direct connection ignores both headers",
 eq("client_ip: behind a declared proxy, the header the proxy sets wins over the rewritten peer",
    _ip_for({"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "100.64.0.5"},
            remote="9.9.9.9", trust_proxy=True, proxy_fix_orig="127.0.0.1"), "100.64.0.5")
+eq("client_ip: a NON-root loopback caller's headers are ignored (a local account, not Serve)",
+   _ip_for({"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "100.64.0.5"}, root_peer=False),
+   "127.0.0.1")
+eq("client_ip: ...but a declared proxy (trust_proxy) is still believed from any peer",
+   _ip_for({"X-Forwarded-For": "100.64.0.5"}, trust_proxy=True, root_peer=False), "100.64.0.5")
 eq("client_ip: no headers at all -> the socket address",
    _ip_for({}, remote="203.0.113.9"), "203.0.113.9")
 # ...and the deployment guide has to set the header it tells the panel to read.
@@ -3923,6 +3935,21 @@ for _label, _cfg, _want in (
     _got = _ck_app._https_ready(_cfg)
     check("cookies: Secure is %s for %s" % (_want, _label), _got is _want, "got %s" % _got)
 check("cookies: the Secure predicate reads trust_proxy", "trust_proxy" in _ck_expr, _ck_expr)
+# ── Tailscale Serve stands the panel's own TLS down ONLY on a loopback bind ──────────────────
+# It stood down whenever Serve had been set up. The wizard stores bind_host 0.0.0.0 by default and
+# nothing that marks Serve done changes it, so the next restart served cleartext HTTP on the public
+# interface — passwords and Bearer tokens in the clear. Serve must follow whichever scheme is used.
+for _label, _bind, _want_tls in (("0.0.0.0 (public + tailnet)", "0.0.0.0", True),
+                                 ("an unset (auto) bind", "", True),
+                                 ("a public address", "203.0.113.5", True),
+                                 ("127.0.0.1", "127.0.0.1", False),
+                                 ("::1", "::1", False)):
+    _ts_cfg = {"use_https": True, "tailscale_setup_done": True, "bind_host": _bind}
+    check("https: with Serve set up and bind %s, own TLS is %s" % (_label, _want_tls),
+          _ck_app._effective_https(_ts_cfg) is _want_tls, repr(_ck_app._effective_https(_ts_cfg)))
+    check("https: ...and Serve is pointed at the scheme actually served (%s)" % _label,
+          _ck_app._ts_backend_scheme(_ts_cfg) == ("https+insecure" if _want_tls else "http"),
+          _ck_app._ts_backend_scheme(_ts_cfg))
 check("cookies: ...and not site_domain, which is not evidence of TLS",
       "site_domain" not in _ck_expr, _ck_expr)
 

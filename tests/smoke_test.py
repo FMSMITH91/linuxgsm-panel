@@ -2662,6 +2662,13 @@ try:
     # so a client-supplied one arrived verbatim — and client_ip() used to prefer it. Below, the
     # proxy-set header is constant (one real client) while the client-supplied one rotates: the
     # lockout has to follow the proxy's value.
+    #
+    # "Loopback" means Serve only when the socket is tailscaled's, i.e. root-owned; the test client
+    # is not, so these two blocks declare that shape explicitly. The block after them drives the
+    # other shape: a local account dialling 127.0.0.1 itself.
+    from panel.security import auth as _xff_auth
+    _xff_saved = _xff_auth._loopback_proxy_trusted
+    _xff_auth._loopback_proxy_trusted = lambda: True
     _LOGIN_FAILS.clear()
     lc2 = app.test_client()
     _locked_hdr = False
@@ -2688,6 +2695,48 @@ try:
             break
     check("login: only the LAST X-Forwarded-For hop keys the throttle, so forged hops don't help",
           _locked_xff, "%d attempts, never locked" % (LOGIN_MAX_FAILS + 2))
+
+    # A local account on the panel host (a game-server user with a shell) dials loopback too.
+    # Believing its X-Forwarded-For gave it a fresh throttle bucket per attempt — unlimited
+    # password guessing — and let it name any address for fail2ban and the auto-block to ban.
+    def _rotating_xff_locks():
+        _LOGIN_FAILS.clear()
+        _c = app.test_client()
+        for _j in range(LOGIN_MAX_FAILS + 2):
+            _r = _c.post("/login", data={"username": "nobody_lockout4", "password": "wrong"},
+                         headers={"X-Forwarded-For": "198.51.100.%d" % (_j + 1)})
+            if b"Too many failed attempts" in _r.data:
+                return True
+        return False
+
+    try:
+        _xff_auth._loopback_proxy_trusted = lambda: True
+        _serve_locks = _rotating_xff_locks()
+    finally:
+        _xff_auth._loopback_proxy_trusted = _xff_saved     # the REAL check from here on
+    _local_locks = _rotating_xff_locks()
+    check("login: a NON-root local caller rotating X-Forwarded-For is still throttled",
+          _local_locks, "%d attempts, never locked" % (LOGIN_MAX_FAILS + 2))
+    check("login: ...while through Serve each forwarded client keeps its own bucket (control)",
+          not _serve_locks, "Serve's distinct clients were pooled into one bucket")
+
+    # An IPv6 client holds a whole /64. Keyed per ADDRESS, rotating the interface id gave a fresh
+    # bucket every attempt; the throttle now counts the /64.
+    _LOGIN_FAILS.clear()
+    _v6 = app.test_client()
+    _v6_locked = False
+    for _j in range(LOGIN_MAX_FAILS + 2):
+        _r = _v6.post("/login", data={"username": "nobody_lockout5", "password": "wrong"},
+                      environ_overrides={"REMOTE_ADDR": "2001:db8:5:6::%x" % (_j + 1)})
+        if b"Too many failed attempts" in _r.data:
+            _v6_locked = True
+            break
+    check("login: rotating addresses inside one IPv6 /64 is still throttled", _v6_locked,
+          "%d attempts, never locked" % (LOGIN_MAX_FAILS + 2))
+    _r = _v6.post("/login", data={"username": "nobody_lockout5", "password": "wrong"},
+                  environ_overrides={"REMOTE_ADDR": "2001:db8:5:7::1"})
+    check("login: ...while the neighbouring /64 is its own bucket (control)",
+          b"Too many failed attempts" not in _r.data, "a different /64 was blocked too")
     _LOGIN_FAILS.clear()
 
     # ── Database maintenance: stats + VACUUM/ANALYZE optimize ─────
@@ -4281,6 +4330,39 @@ try:
           (_xhr.get_json() or {}).get("success") is False
           and (_xhr.get_json() or {}).get("error") == "auth_required",
           _xhr.get_data(as_text=True)[:120])
+
+    # ── "strong" session protection must actually bind the cookie to its client ──────────────
+    # flask-login only acts on "strong" for a NON-permanent session, and every panel login is
+    # permanent, so a copied cookie replayed from another IP and browser stayed signed in while
+    # the settings page promised a re-check on an IP or device change. Driven through the real
+    # /login with protection switched to strong for this block (the suite runs with it off).
+    _sp_saved = app.config.get("SESSION_PROTECTION")
+    app.config["SESSION_PROTECTION"] = "strong"
+    try:
+        _sp = app.test_client()
+        _sp_ua = {"User-Agent": "SmokeBrowser/1.0", "X-Requested-With": "XMLHttpRequest"}
+        _sp.post("/login", data={"username": "smoke_admin", "password": "Str0ng!passw0rd"},
+                 headers=_sp_ua)
+        _sp_ok = _sp.get("/api/account/sessions", headers=_sp_ua).status_code
+        _sp_other_ua = _sp.get("/api/account/sessions",
+                               headers=dict(_sp_ua, **{"User-Agent": "Stolen/9.9"})).status_code
+        _sp_other_ip = _sp.get("/api/account/sessions", headers=_sp_ua,
+                               environ_overrides={"REMOTE_ADDR": "203.0.113.77"}).status_code
+        _sp_back = _sp.get("/api/account/sessions", headers=_sp_ua).status_code
+        check("session protection: the signed-in client keeps its session (control)",
+              _sp_ok == 200 and _sp_back == 200, "first %s, after replays %s" % (_sp_ok, _sp_back))
+        check("session protection: strong refuses the cookie from another browser",
+              _sp_other_ua == 401, "got %s" % _sp_other_ua)
+        check("session protection: strong refuses the cookie from another address",
+              _sp_other_ip == 401, "got %s" % _sp_other_ip)
+        app.config["SESSION_PROTECTION"] = "basic"
+        _sp_basic = _sp.get("/api/account/sessions",
+                            headers=dict(_sp_ua, **{"User-Agent": "Stolen/9.9"})).status_code
+        check("session protection: basic does not bind (the mode really is what decides)",
+              _sp_basic == 200, "got %s" % _sp_basic)
+        _sp.get("/logout", headers=_sp_ua)
+    finally:
+        app.config["SESSION_PROTECTION"] = _sp_saved
     _ping = s1.get("/api/auth/ping")
     check("auth: the wake-up ping confirms a live session",
           _ping.status_code == 200 and (_ping.get_json() or {}).get("success") is True,
@@ -5991,6 +6073,42 @@ try:
           _okr.status_code == 302 and _okr.headers.get("Location", "").endswith("/settings"),
           "%d %r" % (_okr.status_code, _okr.headers.get("Location")))
     _okc.get("/logout")
+    # ...and the guard answers in linear time. Its path group was `(?:[seg]+/?)*`, which split a
+    # run of segment characters 2^n ways before failing: "/"+"a"*30+"!" held the one eventlet hub
+    # for ~50s, freezing every other user, console and poller. 26 characters is ~3s with the old
+    # pattern and microseconds with the new, so the bound below is far from either.
+    import time as _rd_time
+    _rd_c = app.test_client()
+    _rd_t0 = _rd_time.monotonic()
+    _rd_r = _rd_c.post("/login?next=/" + "a" * 26 + "!",
+                       data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
+    _rd_dt = _rd_time.monotonic() - _rd_t0
+    check("login redirect: a pathological ?next= is refused without backtracking",
+          _rd_dt < 0.75 and _rd_r.status_code == 302
+          and _rd_r.headers.get("Location", "").split("localhost", 1)[-1] == "/",
+          "%.2fs %s %r" % (_rd_dt, _rd_r.status_code, _rd_r.headers.get("Location")))
+    _rd_c.get("/logout")
+    # The unauthenticated twin: the login redirect's ?next= is built from the requested path by
+    # the same kind of pattern, and an <int:> converter takes any number of digits.
+    _rd_t0 = _rd_time.monotonic()
+    _rd_r = app.test_client().get("/server/" + "0" * 26 + "?!")
+    _rd_dt = _rd_time.monotonic() - _rd_t0
+    check("auth redirect: an anonymous pathological path is answered without backtracking",
+          _rd_dt < 0.75 and _rd_r.status_code in (301, 302, 303)
+          and "/login" in (_rd_r.headers.get("Location") or ""),
+          "%.2fs %s" % (_rd_dt, _rd_r.status_code))
+    # Positive control for the rewrite: a nested same-site path with a query still survives both.
+    _rd_c = app.test_client()
+    _rd_r = _rd_c.post("/login?next=/server/1/files?tab=config",
+                       data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
+    check("login redirect: a nested path with a query is still followed intact",
+          _rd_r.headers.get("Location", "").endswith("/server/1/files?tab=config"),
+          _rd_r.headers.get("Location"))
+    _rd_c.get("/logout")
+    _rd_r = app.test_client().get("/server/5?tab=files")
+    check("auth redirect: ...and the anonymous redirect still carries it back",
+          "next=%2Fserver%2F5%3Ftab%3Dfiles" in (_rd_r.headers.get("Location") or ""),
+          _rd_r.headers.get("Location"))
     with app.app_context():
         from app import (_LOGIN_FAILS as _LF)
         _LF.clear()   # those logins were all successful, but keep the throttle clean for later tests
