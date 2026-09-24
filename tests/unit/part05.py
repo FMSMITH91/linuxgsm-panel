@@ -1584,6 +1584,148 @@ check("db repair: ...to a healthy file", _dbr.integrity_check(_dbr_db)[0], "not 
 check("db repair: ...leaving no .restoring temp behind",
       not os.path.exists(_dbr_db + ".restoring"))
 
+# The names repair() CREATES beside the database are just as plantable as the two it reads. The
+# aside copy was `<db>.corrupt-<unix time>` written with shutil.copy2, which follows a symlink at
+# its destination, so one link per second of the window (all aimed at a root path) made root write
+# panel.db's bytes there — with no corruption needed, because the aside step is unconditional.
+# `.restoring` and `.rebuilt` had the same shape, and _silent_rm kept a DANGLING link in place
+# because os.path.exists() follows it. Planted here as real links; the targets must never appear.
+import time as _dbr_time                                                           # noqa: E402
+_dbr_pl = _tempfile.mkdtemp(prefix="dbrepair-plant-")
+_dbr_pl_db = os.path.join(_dbr_pl, "panel.db")
+_dbr_pl_bak = _dbr_pl_db + ".backup"
+_dbr_pl_tgt = {k: os.path.join(_dbr_pl, "root-owned-" + k) for k in ("aside", "restoring", "rebuilt")}
+with open(_dbr_pl_db, "wb") as _fh:
+    _fh.write(b"* * * * * root id > /tmp/pwned\n")
+_dbr_now = int(_dbr_time.time())
+for _t in range(_dbr_now - 2, _dbr_now + 30):
+    os.symlink(_dbr_pl_tgt["aside"], "%s.corrupt-%d" % (_dbr_pl_db, _t))
+_dbr_aside = _dbr._aside(_dbr_pl_db)
+check("db repair: the aside copy never writes through a planted symlink",
+      not os.path.exists(_dbr_pl_tgt["aside"]), "the link's target was created")
+_dbr_aside_bytes = b""
+if _dbr_aside and not os.path.islink(_dbr_aside):
+    with open(_dbr_aside, "rb") as _fh:
+        _dbr_aside_bytes = _fh.read()
+check("db repair: ...and still makes the aside copy, as a real file of the database's bytes",
+      _dbr_aside_bytes == b"* * * * * root id > /tmp/pwned\n", repr(_dbr_aside))
+# Now the two temps, through a whole repair: a corrupt database and a healthy, fuller backup, so
+# both the rebuild branch and the restore branch run.
+_dbr_c = _dbr_sqlite.connect(_dbr_pl_bak)
+_dbr_c.execute("create table t(x)")
+_dbr_c.executemany("insert into t values(?)", [("row%d" % _i,) for _i in range(50)])
+_dbr_c.commit()
+_dbr_c.close()
+os.symlink(_dbr_pl_tgt["restoring"], _dbr_pl_db + ".restoring")
+os.symlink(_dbr_pl_tgt["rebuilt"], _dbr_pl_db + ".rebuilt")
+_dbr_pl_ok, _dbr_pl_msg = _dbr.repair(path=_dbr_pl_db, backup=_dbr_pl_bak)
+check("db repair: a planted .restoring link is not written through",
+      not os.path.exists(_dbr_pl_tgt["restoring"]), _dbr_pl_msg)
+check("db repair: a planted .rebuilt link is not written through",
+      not os.path.exists(_dbr_pl_tgt["rebuilt"]), _dbr_pl_msg)
+check("db repair: ...and the repair still restores a healthy, real database file",
+      _dbr_pl_ok is True and not os.path.islink(_dbr_pl_db)
+      and _dbr.integrity_check(_dbr_pl_db)[0], _dbr_pl_msg)
+
+# Refusing a link at each name is not enough on its own: sqlite opens the database, its -wal and
+# its -shm companions following links, and a name checked a moment ago can be swapped before use.
+# So as ROOT, main() pins the database's directory by descriptor and becomes the account that owns
+# it before any file work — for every command, since install.sh's update step runs this as root
+# too. Driven through main() with the euid and the drop stubbed on the module.
+import pwd as _dbr_pwd                                                             # noqa: E402
+_dbr_cf = _tempfile.mkdtemp(prefix="dbrepair-confine-")
+_dbr_cf_db = os.path.join(_dbr_cf, "panel.db")
+with open(_dbr_cf_db, "wb") as _fh:
+    _fh.write(b"not a database")
+_dbr_c = _dbr_sqlite.connect(_dbr_cf_db + ".backup")
+_dbr_c.execute("create table t(x)")
+_dbr_c.execute("insert into t values(1)")
+_dbr_c.commit()
+_dbr_c.close()
+os.symlink(_dbr_cf, _dbr_cf + "-link")
+_dbr_o = (_dbr._euid, _dbr._become, _dbr.repair, _dbr._reclaim_db_files)
+_dbr_became, _dbr_repaired, _dbr_reclaimed = [], [], []
+_dbr_cwd = os.getcwd()
+try:
+    _dbr._euid = lambda: 0
+    _dbr._become = lambda uid, gid: _dbr_became.append((uid, gid))
+    _dbr._reclaim_db_files = lambda fd, name, uid, gid: (
+        _dbr_reclaimed.append((name, uid, list(_dbr_became))), _dbr_o[3](fd, name, uid, gid))
+    _dbr_rc = _dbr.main(["db_maintenance.py", "repair", _dbr_cf_db])
+    os.chdir(_dbr_cwd)
+    check("db repair as root: main() drops to the database directory's owner first",
+          _dbr_became == [(os.getuid(), _dbr_pwd.getpwuid(os.getuid()).pw_gid)], repr(_dbr_became))
+    check("db repair as root: ...after handing the database's own files back to that owner",
+          _dbr_reclaimed == [("panel.db", os.getuid(), [])], repr(_dbr_reclaimed))
+    check("db repair as root: ...and the repair still works from inside that directory",
+          _dbr_rc == 0 and _dbr.integrity_check(_dbr_cf_db)[0], "rc=%r" % _dbr_rc)
+    _dbr.repair = lambda p, b: (_dbr_repaired.append(p), (True, ""))[1]
+    del _dbr_became[:]
+    _dbr_rc = _dbr.main(["db_maintenance.py", "repair", os.path.join(_dbr_cf + "-link", "panel.db")])
+    os.chdir(_dbr_cwd)
+    check("db repair as root: a symlinked database directory is refused, and nothing runs",
+          _dbr_rc == 1 and not _dbr_repaired and not _dbr_became,
+          "rc=%r repaired=%r became=%r" % (_dbr_rc, _dbr_repaired, _dbr_became))
+    if os.stat("/").st_uid == 0 and not os.stat("/").st_mode & 0o022:
+        _dbr_rc = _dbr.main(["db_maintenance.py", "repair", "/panel-db-that-is-not-there.db"])
+        os.chdir(_dbr_cwd)
+        check("db repair as root: a root-owned directory is worked in as root (no drop)",
+              _dbr_rc == 0 and not _dbr_became and _dbr_repaired == ["panel-db-that-is-not-there.db"],
+              "rc=%r repaired=%r became=%r" % (_dbr_rc, _dbr_repaired, _dbr_became))
+    else:
+        skip("db repair as root: a root-owned directory is worked in as root (no drop)",
+             "/ is not a root-owned, non-writable directory here")
+    _tmp_st = os.stat("/tmp")
+    if _tmp_st.st_uid == 0 and _tmp_st.st_mode & 0o002:
+        del _dbr_repaired[:]
+        _dbr_rc = _dbr.main(["db_maintenance.py", "repair", "/tmp/panel-db-that-is-not-there.db"])
+        os.chdir(_dbr_cwd)
+        check("db repair as root: a root-owned directory others can write is refused",
+              _dbr_rc == 1 and not _dbr_repaired and not _dbr_became,
+              "rc=%r repaired=%r became=%r" % (_dbr_rc, _dbr_repaired, _dbr_became))
+    else:
+        skip("db repair as root: a root-owned directory others can write is refused",
+             "/tmp is not a root-owned world-writable directory here")
+finally:
+    os.chdir(_dbr_cwd)
+    _dbr._euid, _dbr._become, _dbr.repair, _dbr._reclaim_db_files = _dbr_o
+
+# What that reclaim hands over, and what it must not. A database an earlier root-run repair left
+# root-owned is given back, so the drop does not turn it into an update that aborts on a file the
+# owner cannot open — but only a regular file with ONE link, opened O_NOFOLLOW: a symlink or a
+# second hard link would make root give away some other file. fchown is stubbed (this suite is not
+# root); what it is called on is the evidence.
+_dbr_rc_dir = _tempfile.mkdtemp(prefix="dbrepair-reclaim-")
+for _n in ("panel.db", "panel.db.backup", "elsewhere", "other-file"):
+    with open(os.path.join(_dbr_rc_dir, _n), "wb") as _fh:
+        _fh.write(b"x")
+os.link(os.path.join(_dbr_rc_dir, "elsewhere"), os.path.join(_dbr_rc_dir, "panel.db-wal"))
+os.symlink(os.path.join(_dbr_rc_dir, "other-file"), os.path.join(_dbr_rc_dir, "panel.db-shm"))
+_dbr_ino = {_n: os.lstat(os.path.join(_dbr_rc_dir, _n)).st_ino
+            for _n in ("panel.db", "panel.db.backup", "elsewhere", "other-file")}
+_dbr_chowned = []
+_dbr_o_fchown = _dbr.os.fchown
+_dbr_rfd = os.open(_dbr_rc_dir, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    _dbr.os.fchown = lambda fd, uid, gid: _dbr_chowned.append((os.fstat(fd).st_ino, uid))
+    _dbr._reclaim_db_files(_dbr_rfd, "panel.db", os.getuid() + 4242, 4242)
+    _dbr_other = list(_dbr_chowned)
+    del _dbr_chowned[:]
+    _dbr._reclaim_db_files(_dbr_rfd, "panel.db", os.getuid(), 4242)
+    _dbr_same = list(_dbr_chowned)
+finally:
+    _dbr.os.fchown = _dbr_o_fchown
+    os.close(_dbr_rfd)
+check("db repair as root: the database and its backup are handed back to the directory's owner",
+      sorted(_dbr_other) == sorted([(_dbr_ino["panel.db"], os.getuid() + 4242),
+                                    (_dbr_ino["panel.db.backup"], os.getuid() + 4242)]),
+      repr(_dbr_other))
+check("db repair as root: ...never a hard-linked or symlinked member's other file",
+      not any(_i in (_dbr_ino["elsewhere"], _dbr_ino["other-file"]) for _i, _u in _dbr_other),
+      repr(_dbr_other))
+check("db repair as root: ...and nothing already owned by that account is touched",
+      _dbr_same == [], repr(_dbr_same))
+
 
 # ── The root dependency install must not take package names from a panel-writable file ────────
 # install_game_dependencies interpolates its package list BARE into a pipeline it runs with

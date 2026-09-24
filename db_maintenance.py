@@ -17,8 +17,10 @@ Every function is best-effort and never raises; each returns a (ok, message) tup
 import logging
 import os
 import re
+import secrets
 import shutil
 import sqlite3
+import stat
 import subprocess  # nosec B404 - only ever invokes the sqlite3 CLI with fixed args
 import sys
 import time
@@ -61,11 +63,60 @@ def _paths():
 
 
 def _silent_rm(path):
+    # lexists, not exists: exists() FOLLOWS a symlink, so a dangling one planted at a temp name
+    # (aimed at a root path that does not exist yet) read as "nothing there", survived this, and
+    # the copy that followed wrote through it. os.remove on a link removes the link itself.
     try:
-        if path and os.path.exists(path):
+        if path and os.path.lexists(path):
             os.remove(path)
     except OSError:
         _log.debug("db_maintenance: could not remove %s", path, exc_info=True)
+
+
+# Create-only, never-follow. O_CREAT|O_EXCL fails on ANY existing name, a symlink included (the
+# kernel does not follow a link under O_EXCL), so a name planted in data/ before we get there is a
+# refusal rather than a destination.
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_NEW_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _CLOEXEC
+
+
+def _claim_new(path):
+    """Create `path` empty, as a name nothing else holds. True if this call created it."""
+    try:
+        os.close(os.open(path, _NEW_FILE_FLAGS, 0o600))
+        return True
+    except OSError:
+        return False
+
+
+def _copy_to_new_file(src, dst):
+    """Copy src's bytes into a file this call CREATES at dst (mode 0600). Raises OSError —
+    FileExistsError when anything, a symlink included, already holds the name.
+
+    Replaces shutil.copy2 for every copy repair() makes. copy2 opens its destination with
+    open(dst, "wb"), which follows a symlink and writes THROUGH it, and copystat() then gives the
+    link's target the source's mode. repair() runs as root over the panel user's own data/
+    directory, so every destination name there is one that user can plant first."""
+    sfd = os.open(src, os.O_RDONLY | _NOFOLLOW | _CLOEXEC)
+    try:
+        dfd = os.open(dst, _NEW_FILE_FLAGS, 0o600)
+        try:
+            while True:
+                chunk = os.read(sfd, 1 << 20)
+                if not chunk:
+                    break
+                view = memoryview(chunk)
+                while view:
+                    view = view[os.write(dfd, view):]
+            os.fsync(dfd)
+        except OSError:
+            os.close(dfd)
+            _silent_rm(dst)
+            raise
+        os.close(dfd)
+    finally:
+        os.close(sfd)
 
 
 def integrity_check(path):
@@ -134,13 +185,26 @@ def _fmt_bytes(n):
 
 def _aside(path):
     """Copy (not move) the flagged DB aside so the original stays in place as the rebuild
-    source and as a forensic/recovery copy. Returns the aside path (or '' on failure)."""
-    dst = "%s.corrupt-%d" % (path, int(time.time()))
-    try:
-        shutil.copy2(path, dst)
-        return dst
-    except OSError:
-        return ""
+    source and as a forensic/recovery copy. Returns the aside path (or '' on failure).
+
+    The copy is CREATED, never opened over something already there. The name was
+    `<path>.corrupt-<unix time>` written with shutil.copy2 — a name the panel user could predict
+    and plant as a symlink (one per second of the window) in its own data/ directory, and a copy
+    that writes through a link. Root ran this unconditionally, straight after the symlink checks
+    on path and backup, so a single panel-db-repair call wrote panel.db's bytes (chosen by the
+    same user) to any root path — /etc/cron.d included. A planted name is now skipped, and the
+    fallback names carry a random part so planting cannot exhaust them either."""
+    base = "%s.corrupt-%d" % (path, int(time.time()))
+    for attempt in range(8):
+        dst = base if attempt == 0 else "%s-%s" % (base, secrets.token_hex(4))
+        try:
+            _copy_to_new_file(path, dst)
+            return dst
+        except FileExistsError:
+            continue
+        except OSError:
+            return ""
+    return ""
 
 
 # A table name this panel could have created: a plain SQL identifier. SQLite has no parameter
@@ -300,10 +364,15 @@ def repair(path=None, backup=None):
     # file: its CREATE TABLE statements then fail as "table already exists", get skipped by the
     # salvage loop, and the rows that belong to them land nowhere. The same _silent_rm(tmp) already
     # brackets this block on both sides.
-    _rebuilt = _rebuild_via_recover(path, tmp)
+    #
+    # Each attempt starts from a file THIS call created (_claim_new: O_EXCL|O_NOFOLLOW), not from
+    # whatever the name held. sqlite opens its database path following links, so a symlink left at
+    # panel.db.rebuilt was a destination for the salvaged output. A name that cannot be claimed is
+    # a skipped rebuild, and the backup branch below still runs.
+    _rebuilt = _claim_new(tmp) and _rebuild_via_recover(path, tmp)
     if not _rebuilt:
         _silent_rm(tmp)
-        _rebuilt = _rebuild_via_dump(path, tmp)
+        _rebuilt = _claim_new(tmp) and _rebuild_via_dump(path, tmp)
     if _rebuilt:
         ok, _ = integrity_check(tmp)
         if ok:
@@ -355,9 +424,13 @@ def repair(path=None, backup=None):
                 # so even if the islink check above were ever removed or raced, the write cannot
                 # land on whatever the link points at. Same reason the rebuild branch above is
                 # safe: it already goes through os.replace.
+                #
+                # The temp itself is CREATED (_copy_to_new_file), not copy2'd over: copy2 wrote
+                # through a symlink planted at panel.db.restoring, and _silent_rm used to leave a
+                # DANGLING one in place because exists() follows it.
                 _restore_tmp = path + ".restoring"
                 _silent_rm(_restore_tmp)
-                shutil.copy2(backup, _restore_tmp)
+                _copy_to_new_file(backup, _restore_tmp)
                 os.replace(_restore_tmp, path)
                 for ext in ("-wal", "-shm"):
                     _silent_rm(path + ext)
@@ -368,12 +441,15 @@ def repair(path=None, backup=None):
     return False, "could not repair — rebuild failed and no healthy backup exists" + kept
 
 
-def run_update_maintenance():
+def run_update_maintenance(path=None, backup=None):
     """The updater's post-snapshot DB step (service already stopped):
         health check -> repair only if needed -> optimize -> health check again.
     Prints progress for the update log. Returns 0 to CONTINUE the update, 2 to ABORT (the
     database could not be made healthy — the updater then restores the original and stops)."""
-    path, backup = _paths()
+    if path is None:
+        path, backup = _paths()
+    elif backup is None:
+        backup = path + ".backup"
     try:
         if not os.path.exists(path) or os.path.getsize(path) == 0:
             print("  no database yet — nothing to maintain")
@@ -405,29 +481,127 @@ def run_update_maintenance():
     return 0
 
 
+def _euid():
+    return os.geteuid()
+
+
+def _become(uid, gid):
+    """Drop to uid/gid for good: no supplementary groups, and real, effective and saved ids all
+    changed, so nothing later in this process can take root back."""
+    os.setgroups([])
+    os.setgid(gid)
+    os.setuid(uid)
+
+
+def _confine_to_db_dir(path):
+    """ROOT ONLY. Pin the database's directory, become the account that owns it, and work from
+    inside it. Returns (name, why): `name` is the database's name relative to the new working
+    directory, or None with `why` saying why that could not be done safely.
+
+    Every file this module creates or opens sits in the panel's data/ directory, which the panel
+    user owns — and this runs as root twice: panel-helper's panel-db-repair, and install.sh's
+    update step (which that same user can start through panel-self-update). Refusing a symlink at
+    each name cannot make that safe. sqlite itself opens the -wal and -shm companions, and the
+    database path, following links, and a name checked a moment ago can be swapped before it is
+    used. So root does none of the file work: it becomes the directory's owner, and then every
+    create, copy and rename happens with exactly the access that account already had. The
+    directory is pinned by descriptor first (O_NOFOLLOW, then fchdir), so renaming it or putting
+    a symlink where it was afterwards changes nothing about where this process is working.
+
+    A root-owned directory stays root's, since nothing below root can plant a name in it unless
+    its mode lets group or others write — and that is refused."""
+    d = os.path.dirname(os.path.abspath(path))
+    try:
+        fd = os.open(d, os.O_RDONLY | os.O_DIRECTORY | _NOFOLLOW | _CLOEXEC)
+    except FileNotFoundError:
+        return None, "missing"
+    except OSError as e:
+        return None, "cannot open the database directory safely (%s)" % type(e).__name__
+    try:
+        st = os.fstat(fd)
+        if st.st_uid == 0:
+            if st.st_mode & 0o022:
+                return None, "the database directory is writable by accounts other than root"
+        else:
+            try:
+                import pwd
+                gid = pwd.getpwuid(st.st_uid).pw_gid
+            except (ImportError, KeyError):
+                gid = st.st_gid
+            _reclaim_db_files(fd, os.path.basename(path), st.st_uid, gid)
+            try:
+                _become(st.st_uid, gid)
+            except OSError as e:
+                return None, "could not drop to the database's owner (%s)" % type(e).__name__
+        os.fchdir(fd)
+    finally:
+        os.close(fd)
+    return os.path.basename(path), ""
+
+
+def _reclaim_db_files(dir_fd, name, uid, gid):
+    """Give the database's own files back to the directory's owner before dropping to it.
+
+    Earlier versions ran the whole repair as root, and a database it rebuilt or restored came out
+    root-owned (sqlite and shutil.copy2 create as the caller) — one the panel service cannot write,
+    or, restored from a 0600 backup, cannot even read. Dropping to the owner without this would turn
+    that leftover into an update that ABORTS on a database the owner can no longer open.
+
+    Each file is opened by descriptor with O_NOFOLLOW and fchown'd only if it is a regular file with
+    ONE link: a symlink is refused at open, and a second link would mean the inode is also some
+    other file's, which must not change hands."""
+    for member in (name, name + "-wal", name + "-shm", name + ".backup"):
+        try:
+            mfd = os.open(member, os.O_RDONLY | _NOFOLLOW | _CLOEXEC | getattr(os, "O_NONBLOCK", 0),
+                          dir_fd=dir_fd)
+        except OSError:
+            continue          # absent, a symlink, or unopenable: nothing to reclaim here
+        try:
+            mst = os.fstat(mfd)
+            if stat.S_ISREG(mst.st_mode) and mst.st_nlink == 1 and mst.st_uid != uid:
+                os.fchown(mfd, uid, gid)
+        except OSError:
+            _log.debug("db_maintenance: could not reclaim %s", member, exc_info=True)
+        finally:
+            os.close(mfd)
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else "check"
+    if cmd not in ("update", "check", "optimize", "repair"):
+        print("usage: db_maintenance.py [update|check|optimize|repair]")
+        return 64
+    # An explicit DB path makes repair runnable WITHOUT importing config — which is what lets the
+    # privileged helper run a root-owned copy of this file with the system interpreter, instead
+    # of root executing the panel's own checkout. _paths() (and therefore config) is only
+    # touched when no path is given, i.e. when a human runs it from the panel directory.
+    if cmd == "repair" and len(argv) > 2:
+        path = argv[2]
+    else:
+        path = _paths()[0]
+    if _euid() == 0:
+        name, why = _confine_to_db_dir(path)
+        if name is None:
+            if why == "missing":
+                print("no database yet — nothing to maintain")
+                return 0 if cmd in ("update", "check") else 1
+            print("refusing: %s" % why)
+            return 1
+        path = name
+    backup = path + ".backup"
     if cmd == "update":
-        return run_update_maintenance()
+        return run_update_maintenance(path, backup)
     if cmd == "check":
-        ok, detail = integrity_check(_paths()[0])
+        ok, detail = integrity_check(path)
         print(detail)
         return 0 if ok else 1
     if cmd == "optimize":
-        ok, msg = optimize()
+        ok, msg = optimize(path)
         print(msg)
         return 0 if ok else 1
-    if cmd == "repair":
-        # An explicit DB path makes this runnable WITHOUT importing config — which is what lets the
-        # privileged helper run a root-owned copy of this file with the system interpreter, instead
-        # of root executing the panel's own checkout. _paths() (and therefore config) is only
-        # touched when no path is given, i.e. when a human runs it from the panel directory.
-        path = argv[2] if len(argv) > 2 else None
-        ok, msg = repair(path, (path + ".backup") if path else None)
-        print(msg)
-        return 0 if ok else 1
-    print("usage: db_maintenance.py [update|check|optimize|repair]")
-    return 64
+    ok, msg = repair(path, backup)
+    print(msg)
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
