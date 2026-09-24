@@ -363,7 +363,11 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
             split = True
             break
     after, _, arc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
-    if arc != 0 or "Status:" not in (after or ""):
+    # Unread is a failed call or an empty answer — NOT a missing English "Status:". ufw translates
+    # that whole line (`État : actif`), so on a French or Spanish host a limit that fully applied,
+    # bare rule split and all, came back as "could not be read back". Active or not, in any
+    # locale, is _ufw_is_active's question, one line down.
+    if arc != 0 or not (after or "").strip():
         return False, ("The limit for %s was added, but the firewall could not be read back to "
                        "confirm it is the rule connections meet first." % spec)
     if not firewall._ufw_is_active(after):
@@ -2269,9 +2273,10 @@ def remote_public_ssh_status(server, panel_port=None):
     `panel_port` is given, also report whether that port has a public ALLOW rule
     (`panel_port_open`) so the UI can disable "Close public panel port" once it's
     already closed."""
-    # rc, and the "Status:" line `ufw status` always prints when it really runs — the same pair
-    # firewall.remote_ufw_status uses on the same verb, and for the same reason it gives there:
-    # do not describe a firewall you could not read.
+    # rc, and an answer at all — do not describe a firewall you could not read. (This required
+    # the literal "Status:" line, as firewall.remote_ufw_status does; ufw translates that line
+    # whole, so a French host — `État : actif` — read as unreachable and _ufw_is_active's
+    # locale-aware reading below was never reached.)
     #
     # This discarded both. An unreadable host produced out="" -> active=False, mode="off", which
     # the UI states as "public SSH is disabled — this host is reachable over the tailnet only".
@@ -2285,7 +2290,7 @@ def remote_public_ssh_status(server, panel_port=None):
         # "off". `off` in this function means "no rule, so tailnet-only", and with no firewall at
         # all nothing governs port 22, so that label would point the wrong way.
         res = {"active": False, "mode": "unknown", "installed": False}
-    elif rc != 0 or "Status:" not in (out or ""):
+    elif rc != 0 or not (out or "").strip():
         res = {"active": False, "mode": "unknown", "unreachable": True}
     else:
         res = None
