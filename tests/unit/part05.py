@@ -2449,7 +2449,43 @@ check("helper: a hostile cron body is replaced by the helper's own, not written"
       "rc=%s wrote=%r" % (_rc_cron, (_written_cron or "")[:60]))
 check("helper: the cron body is the helper's own, not the caller's",
       _helper.WRITE_CONTENT["node-tools-cron"] is None
-      and "npm install -g npm gamedig" in _helper.NODE_TOOLS_CRON_BODY)
+      and "npm install -g --ignore-scripts gamedig@5" in _helper.NODE_TOOLS_CRON_BODY)
+
+# ── the weekly root npm cron: one body in three places, and what that body may run ─────────────
+# It ran `npm install -g npm gamedig` as root every Sunday, unattended: the newest npm, gamedig and
+# their whole dependency tree, install hooks included — so a compromise of any of them at any later
+# point became root on every host by the next Sunday. The body lives in three places that must say
+# the same thing (install.sh writes it at install, the helper on the panel host, hosts.py on
+# remotes — and app.py rewrites it on every host daily): a copy left behind would put the old line
+# back. So the three are compared, and the ONE body is held to: gamedig only, pinned to a major,
+# --ignore-scripts, and no `npm install -g npm` (root running a freshly fetched npm).
+import re as _re_ntc
+from panel.ops.ssh_manager import hosts as _ntc_hosts
+_ntc_sh = open(os.path.join(_UNIT_ROOT, "install.sh"), encoding="utf-8").read()
+_ntc_fn = _ntc_sh[_ntc_sh.index("\nensure_gamedig() {"):]
+_ntc_fn = _ntc_fn[:_ntc_fn.index("\n}\n")]
+_ntc_blk = _ntc_fn[_ntc_fn.index('local cf="/etc/cron.d/lgsm-node-tools"'):]
+_ntc_blk = _ntc_blk[:_ntc_blk.index("| ${S} tee")]
+_ntc_install = "".join(_l + "\n" for _l in _re_ntc.findall(r"^\s*'([^']*)' \\$", _ntc_blk, _re_ntc.M))
+check("node-tools cron: install.sh, the helper and hosts.py write the SAME body",
+      _ntc_install == _helper.NODE_TOOLS_CRON_BODY == _ntc_hosts._NODE_TOOLS_CRON,
+      "install.sh=%r helper=%r hosts=%r" % (_ntc_install[-90:], _helper.NODE_TOOLS_CRON_BODY[-90:],
+                                            _ntc_hosts._NODE_TOOLS_CRON[-90:]))
+_ntc_cmd = [_l for _l in _helper.NODE_TOOLS_CRON_BODY.splitlines() if _l.startswith("30 4 * * 0 root ")]
+check("node-tools cron: root installs gamedig pinned to a major, with no install hooks, and never npm",
+      len(_ntc_cmd) == 1 and "npm install -g --ignore-scripts gamedig@5 " in _ntc_cmd[0]
+      and not _re_ntc.search(r"install -g[^>]*\bnpm\b", _ntc_cmd[0]),
+      repr(_ntc_cmd))
+# The verb the remote bootstrap installs gamedig through, and install.sh's own first install, say
+# the same: a v6 from the bootstrap would fight the cron's v5 every week.
+check("npm-install-global: installs the pinned spec with --ignore-scripts, in both tables",
+      _helper.VERBS["npm-install-global"][1](_helper.validate("npm-install-global", ["gamedig"]))
+      == _priv.tool_argv("npm-install-global", ["gamedig"])
+      == ["npm", "install", "-g", "--ignore-scripts", "gamedig@5"]
+      and "npm install -g --ignore-scripts gamedig@5 " in _ntc_fn,
+      repr(_priv.tool_argv("npm-install-global", ["gamedig"])))
+check("npm-install-global: ...and refuses `npm` itself",
+      _ufw_raises_verb(lambda: _priv.check_args("npm-install-global", ["npm"])))
 check("helper: every write destination has a content rule (a new one cannot inherit 'anything')",
       set(_helper.WRITE_TARGETS) == set(_helper.WRITE_CONTENT),
       "targets without a rule: %s" % sorted(set(_helper.WRITE_TARGETS) - set(_helper.WRITE_CONTENT)))

@@ -1326,9 +1326,9 @@ try:
 finally:
     _cr_shutil.rmtree(_cr_sb, ignore_errors=True)
 
-# node-tools auto-update: a weekly ROOT cron keeps npm + gamedig (player-query tools) current.
-check("node-tools: the cron updates npm + gamedig weekly and logs it",
-      "npm install -g npm gamedig" in _sm_hosts._NODE_TOOLS_CRON
+# node-tools auto-update: a weekly ROOT cron keeps gamedig (the player-query tool) current.
+check("node-tools: the cron updates gamedig weekly and logs it",
+      "npm install -g --ignore-scripts gamedig@5" in _sm_hosts._NODE_TOOLS_CRON
       and _sm_hosts._NODE_TOOLS_CRON.lstrip().startswith("#")
       and "/var/log/lgsm-node-tools.log" in _sm_hosts._NODE_TOOLS_CRON
       and _privmod.WRITE_TARGETS["node-tools-cron"][0] == "/etc/cron.d/lgsm-node-tools")

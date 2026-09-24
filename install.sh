@@ -534,19 +534,22 @@ ensure_gamedig() {
     fi
     if command -v npm >/dev/null 2>&1 && ! command -v gamedig >/dev/null 2>&1; then
         info "Installing gamedig globally…"
-        ${S} npm install -g gamedig >/dev/null 2>&1 \
+        # The spec the panel's npm-install-global verb and the weekly cron use: v5, no install hooks.
+        ${S} npm install -g --ignore-scripts gamedig@5 >/dev/null 2>&1 \
             || warn "gamedig install failed — player queries unavailable."
     fi
     if command -v gamedig >/dev/null 2>&1; then
         ok "gamedig ready for player queries"
     fi
-    # Weekly auto-update for npm + gamedig, alongside the host's other automatic updates, so player
-    # queries don't silently break as games/gamedig evolve. Idempotent; no-op if npm isn't installed.
+    # Weekly auto-update for gamedig, alongside the host's other automatic updates, so player queries
+    # don't silently break as games/gamedig evolve. Idempotent; no-op if npm isn't installed. Pinned to
+    # v5 with --ignore-scripts, and npm itself is not updated: this runs as root, unattended, every
+    # week. Byte-identical to the helper's NODE_TOOLS_CRON_BODY and hosts.py's (a unit gate).
     local cf="/etc/cron.d/lgsm-node-tools"
     if printf '%s\n' \
-        '# LinuxGSM Panel - keep npm + gamedig current for player queries (managed by the panel).' \
+        '# LinuxGSM Panel - keep gamedig current for player queries (managed by the panel).' \
         'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
-        '30 4 * * 0 root command -v npm >/dev/null 2>&1 && npm install -g npm gamedig >/var/log/lgsm-node-tools.log 2>&1' \
+        '30 4 * * 0 root command -v npm >/dev/null 2>&1 && npm install -g --ignore-scripts gamedig@5 >/var/log/lgsm-node-tools.log 2>&1' \
         | ${S} tee "${cf}" >/dev/null 2>&1; then
         ${S} chmod 644 "${cf}" 2>/dev/null || true
     fi

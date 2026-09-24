@@ -266,8 +266,12 @@ SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
 FSTAB = "/etc/fstab"
 
 
-# npm packages the panel installs globally.
-NPM_GLOBAL_PACKAGES = ("gamedig", "npm")
+# npm packages the panel installs globally, and the spec each one installs as. Pinned to the major
+# the panel's query types are written for, and installed with --ignore-scripts, so root never runs
+# a package's install hook. "npm" itself is gone: `npm install -g npm` as root fetched the newest npm
+# and made root run it, and nothing in the panel asked for it.
+NPM_GLOBAL_PACKAGES = ("gamedig",)
+NPM_GLOBAL_SPECS = {"gamedig": "gamedig@5"}
 
 F2B_EVENT_RE = re.compile(r"\[[A-Za-z0-9._-]+\] (?:Ban|Found) [0-9a-fA-F:.]+")
 
@@ -478,13 +482,14 @@ WRITE_CONTENT = {
     "fail2ban-panel-jail": _F2B_JAIL_RULE,
 }
 
-# The one body the helper writes itself. Kept byte-identical to what the panel has always sent
-# (panel/ops/ssh_manager/hosts.py:_NODE_TOOLS_CRON) so an existing host sees no change.
+# The one body the helper writes itself. Byte-identical to what the panel sends remote hosts
+# (panel/ops/ssh_manager/hosts.py:_NODE_TOOLS_CRON) and to install.sh's copy — a unit gate holds the
+# three together. gamedig only, pinned to v5, --ignore-scripts: see the note on _NODE_TOOLS_CRON.
 NODE_TOOLS_CRON_BODY = (
-    "# LinuxGSM Panel - keep npm + gamedig current for player queries (managed by the panel).\n"
+    "# LinuxGSM Panel - keep gamedig current for player queries (managed by the panel).\n"
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
     "30 4 * * 0 root command -v npm >/dev/null 2>&1 && "
-    "npm install -g npm gamedig >/var/log/lgsm-node-tools.log 2>&1\n"
+    "npm install -g --ignore-scripts gamedig@5 >/var/log/lgsm-node-tools.log 2>&1\n"
 )
 
 
@@ -1479,7 +1484,8 @@ VERBS = {
     "sshd-set-directive": ([v_sshd_key, v_ident_free], lambda a: [], None),
     "create-swapfile": ([], lambda a: [], None),
     "npm-install-global": ([v_choice(*NPM_GLOBAL_PACKAGES)],
-                           lambda a: ["npm", "install", "-g", a[0]], None),
+                           lambda a: ["npm", "install", "-g", "--ignore-scripts",
+                                      NPM_GLOBAL_SPECS[a[0]]], None),
 
     # ── sshd port changes ──
     # Every step of the panel's port change, so the sequence that protects the operator — snapshot,

@@ -150,7 +150,10 @@ SSHD_CONFIG = "/etc/ssh/sshd_config"
 SWAPFILE = "/swapfile"
 SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
 FSTAB = "/etc/fstab"
-NPM_GLOBAL_PACKAGES = ("gamedig", "npm")
+# The spec each is installed as: pinned to the major the query types are written for, and always
+# with --ignore-scripts (see npm-install-global). Mirrors tools/panel-helper.
+NPM_GLOBAL_PACKAGES = ("gamedig",)
+NPM_GLOBAL_SPECS = {"gamedig": "gamedig@5"}
 
 
 # The GMod shared-content box — see tools/panel-helper. Every path is BUILT from a validated user
@@ -817,7 +820,8 @@ _ARGV = {
     "sshd-set-directive": ([_sshd_key, _directive_value], lambda a: [], None),
     "create-swapfile": ([], lambda a: [], None),
     "npm-install-global": ([_choice(*NPM_GLOBAL_PACKAGES)],
-                           lambda a: ["npm", "install", "-g", a[0]], None),
+                           lambda a: ["npm", "install", "-g", "--ignore-scripts",
+                                      NPM_GLOBAL_SPECS[a[0]]], None),
 
     # ── sshd port changes ──
     "sshd-backup-dropin": ([], lambda a: [], None),

@@ -15,16 +15,23 @@ from panel.ops.ssh_manager import (_core, firewall)  # noqa: E402,F401  (module 
 
 
 
-# ── Keep the node player-query tools (npm + gamedig) current ───────────────────
+# ── Keep the node player-query tool (gamedig) current ───────────────────────────
 # gamedig is installed once (bootstrap / install.sh) and never updates itself, so player queries can
-# silently break as games and gamedig evolve. This weekly ROOT cron refreshes npm + gamedig alongside
-# the host's other automatic updates (unattended-upgrades). Written to /etc/cron.d as root, idempotent;
-# the `command -v npm` guard makes it a harmless no-op on a host that never got node.
+# silently break as games and gamedig evolve. This weekly ROOT cron refreshes it alongside the host's
+# other automatic updates (unattended-upgrades). Written to /etc/cron.d as root, idempotent; the
+# `command -v npm` guard makes it a harmless no-op on a host that never got node.
+#
+# It ran `npm install -g npm gamedig`: the LATEST npm, gamedig and whole dependency tree, with their
+# install scripts, as root, every week, with nobody watching — a standing path from any later
+# compromise of those packages to root on every host. Now: gamedig only, held to the major the
+# panel's query types are written for (v5), with --ignore-scripts so no package code runs as root
+# at install. npm itself is left to the OS: updating it here made root run a freshly fetched npm.
+# Byte-identical to tools/panel-helper's NODE_TOOLS_CRON_BODY and install.sh's copy (a unit gate).
 _NODE_TOOLS_CRON = (
-    "# LinuxGSM Panel - keep npm + gamedig current for player queries (managed by the panel).\n"
+    "# LinuxGSM Panel - keep gamedig current for player queries (managed by the panel).\n"
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
     "30 4 * * 0 root command -v npm >/dev/null 2>&1 && "
-    "npm install -g npm gamedig >/var/log/lgsm-node-tools.log 2>&1\n"
+    "npm install -g --ignore-scripts gamedig@5 >/var/log/lgsm-node-tools.log 2>&1\n"
 )
 
 
