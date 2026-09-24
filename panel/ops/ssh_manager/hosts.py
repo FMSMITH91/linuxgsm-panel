@@ -36,8 +36,9 @@ _NODE_TOOLS_CRON = (
 
 
 def ensure_node_tools_cron(server):
-    """Idempotently install the weekly root cron that keeps npm + gamedig current on `server`, so the
-    panel's player queries don't rot. Best-effort; never raises. Returns True if the write succeeded.
+    """Idempotently install the weekly root cron that keeps gamedig (pinned v5, no install scripts)
+    current on `server`, so the panel's player queries don't rot; npm itself is left to the OS.
+    Best-effort; never raises. Returns True if the write succeeded.
     Root-owned: locally the helper does the write itself, and remotely it is `sudo bash -c` with
     base64 so no quoting or `%` can mangle it. This used to claim it landed root-owned "regardless
     of any per-remote linuxgsm_user", which was the opposite of what happened — that field turned
@@ -1245,7 +1246,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # npm install -g is idempotent, so the guard only saved time — and it cost a root shell.
     gd_out, _, _ = _core.run_privileged(server, "npm-install-global", ["gamedig"], timeout=300)
     note(_core._last_lines(gd_out, 3) or "gamedig installed")
-    ensure_node_tools_cron(server)   # weekly auto-update for npm + gamedig, alongside apt auto-updates
+    ensure_node_tools_cron(server)   # weekly gamedig (pinned v5, no install scripts), beside apt's
     note("weekly npm/gamedig auto-update scheduled")
 
     # ── 3c. Enable + configure unattended-upgrades (auto security updates) ──

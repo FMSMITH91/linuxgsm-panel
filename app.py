@@ -2652,8 +2652,8 @@ if __name__ == "__main__":
     # Record CPU/RAM/player samples into history (for the trend charts on the server page).
     threading.Thread(target=lambda: _metrics_history_watch(app), daemon=True).start()
 
-    # Keep the npm + gamedig player-query tools auto-updating on every host (weekly cron; this ensures
-    # the cron exists on hosts that predate it).
+    # Keep gamedig, the player-query tool (pinned v5, no install scripts), current on every host
+    # (weekly cron; this ensures the cron exists on hosts that predate it). npm is left to the OS.
     threading.Thread(target=lambda: _node_tools_cron_watch(app), daemon=True).start()
 
     # Proactive monitor: server-down / host-unreachable / disk-low admin notifications.
