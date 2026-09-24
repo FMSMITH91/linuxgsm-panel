@@ -1546,31 +1546,68 @@ def port_in_use(port):
 
 def host_has_ip(ip):
     """True if `ip` is assigned to an interface on this host, so the panel could actually bind
-    to it. Used to refuse binding the panel to an address that isn't local (a typo would fail
-    to bind and take the panel down). Best-effort: on any error returns True, so a flaky check
-    never blocks a legitimate change — the caller still guards the risky loopback case."""
-    #
-    # _run never raises — a timeout, a missing iproute2 or an exec error comes back as ("", ..., -1),
-    # and the pipeline's rc is cut's anyway — so the `except` below was never the error path, and
-    # a failed read answered "not on this host" as `ip in set()`. A host always has loopback, so
-    # nothing read means the check did not run. The comparison is on parsed addresses: an IPv6
-    # address typed in upper case ("FD7A:115C:A1E0::1") never equalled `ip`'s lowercase output.
+    to it; False when it is not, or when that cannot be established.
+
+    Both callers are lockout guards, and neither has a backstop: /api/panel/change-port saves the
+    bind and restarts onto it (an address the host lacks fails to bind and the panel does not come
+    back), and change_ssh_port on the panel's own host, where socket activation binds a missing
+    address anyway. So "could not tell" must not read as yes. It did for a while: an unreadable
+    list answered True, and a typo'd bind made while `ip` timed out was accepted by both.
+
+    Nor may it read as a bare no, which is what it did before THAT: _run never raises — a timeout,
+    a missing iproute2 or an exec error comes back as ("", ..., -1) — and `ip in set()` called the
+    host's own Tailscale IP "not an address on this host". A host always has loopback, so nothing
+    read means the list was not read, and the kernel is asked instead (_kernel_has_ip). The
+    comparison is on parsed addresses: an IPv6 address typed in upper case ("FD7A:115C:A1E0::1")
+    never equalled `ip`'s lowercase output."""
     import ipaddress
     try:
-        out, _, _ = _run("ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1", timeout=8)
-        have = set()
-        for tok in (out or "").split():
-            try:
-                have.add(ipaddress.ip_address(tok))
-            except ValueError:
-                continue
-        if not have:
-            return True
-        return ipaddress.ip_address(str(ip).strip()) in have
+        want = ipaddress.ip_address(str(ip).strip())
     except ValueError:
         return False        # not an IP at all: it cannot be one of this host's addresses
+    try:
+        out, _, _ = _run("ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1", timeout=8)
     except Exception:
+        out = ""
+    have = set()
+    for tok in (out or "").split():
+        try:
+            have.add(ipaddress.ip_address(tok))
+        except ValueError:
+            continue
+    if have:
+        return want in have
+    return _kernel_has_ip(want)
+
+
+def _nonlocal_bind_allowed(version):
+    """Whether this host lets a process bind an address it does not have (net.ipv4/ipv6
+    ip_nonlocal_bind). An absent sysctl is the kernel default: off."""
+    try:
+        with open("/proc/sys/net/ipv%d/ip_nonlocal_bind" % version) as f:
+            return f.read().strip() not in ("", "0")
+    except OSError:
+        return False
+
+
+def _kernel_has_ip(addr):
+    """host_has_ip's answer when the address list could not be read: whether the kernel lets this
+    process bind `addr` (an ipaddress object) on port 0. EADDRNOTAVAIL is the kernel's "not an
+    address on this host", with no command output to parse.
+
+    Only a successful bind is a yes — any other error is "could not tell", and both callers are
+    lockout guards. And a host with ip_nonlocal_bind set binds ANY address, so there a bind proves
+    nothing and the answer is no."""
+    import socket
+    if _nonlocal_bind_allowed(addr.version):
+        return False
+    fam = socket.AF_INET6 if addr.version == 6 else socket.AF_INET
+    try:
+        with socket.socket(fam, socket.SOCK_STREAM) as sock:
+            sock.bind((str(addr), 0))
         return True
+    except OSError:
+        return False
 
 
 def panel_update_log(max_bytes=20000):
@@ -2183,11 +2220,12 @@ def _ufw_raise_shadowed_deny(ip, rule, run):
     ufw keeps one rule per match (a second `deny from <ip>` is "Skipping inserting existing
     rule", exit 0 — a success that changed nothing), so a move is a delete and an insert. It goes
     back in as THEIRS: their comment, cut to what the helper accepts, never a `panel-` tag, so the
-    reconcile still reads it as the operator's and never releases it. Only an IPv4 DENY is moved:
-    `ufw delete deny` does not match a REJECT, and an IPv6 rule cannot be put back at all — the
-    helper's only insert is `insert 1`, which ufw refuses for IPv6 while IPv4 rules exist."""
-    import ipaddress
-    if rule.get("action") != "DENY" or ipaddress.ip_address(ip).version != 4:
+    reconcile still reads it as the operator's and never releases it. Only a DENY is moved:
+    `ufw delete deny` does not match a REJECT. IPv6 is moved like IPv4 — ufw-deny-ip is
+    `ufw prepend`, which puts a rule at the top of its own address family. (It was `insert 1`,
+    which ufw refuses for IPv6 while IPv4 rules exist, and IPv6 was refused here for that reason
+    after the verb stopped using it: the answer told the operator to run `ufw prepend` by hand.)"""
+    if rule.get("action") != "DENY":
         return False, ("%s already has a firewall rule of its own denying it, but the rule sits "
                        "below rules that allow traffic, so it blocks nothing. The panel cannot "
                        "move this one — put it above them on the host (`ufw prepend`)." % ip)
@@ -2224,8 +2262,9 @@ def _ufw_deny_with(ip, tag, existing, run, shadowed=None):
 
     This deleted first and inserted second, every time. `ufw delete deny from <ip>` matches a rule
     whatever its comment, so the operator's own block was removed and replaced with a panel one
-    the reconcile would later release; and when the insert then failed (`insert 1` is refused for
-    an IPv6 address while IPv4 rules exist) the address was left with no block at all. Now a rule
+    the reconcile would later release; and when the insert then failed (as `insert 1`, the verb
+    then, did for an IPv6 address while IPv4 rules existed) the address was left with no block at
+    all. Now a rule
     the panel did not write is left alone where it blocks, moved (never re-tagged) where it does
     not, and the only other delete is of the panel's own rule when it is re-tagged (auto-block →
     manual) — put back if the new one does not go in."""

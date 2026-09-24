@@ -336,12 +336,35 @@ try:
     _so._run = lambda c, **k: ("127.0.0.1\n100.84.48.111\n45.76.63.211\n", "", 0)
     check("host_has_ip: recognises a local address", _so.host_has_ip("100.84.48.111") is True)
     check("host_has_ip: rejects an address not on the host", _so.host_has_ip("10.0.0.9") is False)
-    # Its docstring promises "on any error returns True", and _run never raises: a timeout or a
-    # missing `ip` is ("", ..., -1), and `ip in set()` refused the host's own Tailscale IP as
-    # "not an address on this host". Nothing read is not a measurement.
+    # _run never raises: a timeout or a missing `ip` is ("", ..., -1). `ip in set()` refused the
+    # host's own Tailscale IP as "not an address on this host"; answering True instead accepted a
+    # typo'd address in both lockout guards (change-port, and sshd on the panel host). Nothing
+    # read is not a measurement either way — the kernel is asked instead.
     _so._run = lambda c, **k: ("", "Command timed out", -1)
-    check("host_has_ip: a read that timed out does not call the address foreign",
-          _so.host_has_ip("100.84.48.111") is True)
+    _hh_kern = _so._kernel_has_ip
+    try:
+        _so._kernel_has_ip = lambda addr: str(addr) == "100.84.48.111"
+        check("host_has_ip: a read that timed out does not call the host's own address foreign",
+              _so.host_has_ip("100.84.48.111") is True)
+        check("host_has_ip: ...nor accept an address the host does not have",
+              _so.host_has_ip("10.0.0.51") is False)
+    finally:
+        _so._kernel_has_ip = _hh_kern
+    # The kernel fallback itself, on the real kernel: loopback binds, TEST-NET does not.
+    import ipaddress as _hh_ip
+    _hh_nl = _so._nonlocal_bind_allowed
+    try:
+        _so._nonlocal_bind_allowed = lambda v: False
+        check("host_has_ip kernel fallback: an address the host has binds (positive control)",
+              _so._kernel_has_ip(_hh_ip.ip_address("127.0.0.1")) is True)
+        check("host_has_ip kernel fallback: an address it lacks is EADDRNOTAVAIL, not a yes",
+              _so._kernel_has_ip(_hh_ip.ip_address("192.0.2.99")) is False)
+        # With ip_nonlocal_bind set the kernel binds ANY address, so the bind proves nothing.
+        _so._nonlocal_bind_allowed = lambda v: True
+        check("host_has_ip kernel fallback: with ip_nonlocal_bind on, a bind is not a yes",
+              _so._kernel_has_ip(_hh_ip.ip_address("127.0.0.1")) is False)
+    finally:
+        _so._nonlocal_bind_allowed = _hh_nl
     _so._run = lambda c, **k: ("127.0.0.1\n::1\nfd7a:115c:a1e0::1\n", "", 0)
     check("host_has_ip: an IPv6 address typed in upper case is still this host's",
           _so.host_has_ip("FD7A:115C:A1E0::1") is True)
@@ -1063,6 +1086,21 @@ try:
           "(positive control)",
           _osu_a["running"] is False and _osu_b["done"] is True and _osu_b["rc"] == 0,
           "%r %r" % (_osu_a, _osu_b))
+    # A log that does not exist is an ANSWER: an update the panel did not start ("already running
+    # — watching it") never writes /run/panel-os-update.log, tail exits 1 naming it, and every poll
+    # read as unread — "Lost contact with the host" about a host answering every call.
+    _osu_nofile = ("", "tail: cannot open '%s' for reading: No such file or directory"
+                   % _sm_hosts._priv.OS_UPDATE_LOG, 1)
+    _sm_core.run_privileged = _osu_stub(_osu_nofile, 0)
+    _osu = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: a missing log file is an answered read, and apt is still asked",
+          not _osu.get("unread") and _osu["running"] is True and _osu["log"] == ""
+          and _osu["done"] is False, repr(_osu))
+    # ...while sudo refusing (also exit 1, and no path in its message) stays unread.
+    _sm_core.run_privileged = _osu_stub(("", "sudo: a password is required", 1), 0)
+    _osu = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: ...while a refusal with the same exit code is still unread (control)",
+          _osu.get("unread") is True and _osu["running"] is None, repr(_osu))
 finally:
     _sm_core.run_privileged = _osu_saved
 
@@ -3020,6 +3058,28 @@ try:
           _ok is False and "isn't an address on this host" in _msg, _msg[:80])
     check("ssh bind: ...and that too is refused before anything is touched",
           _lb["touched"] == [], repr(_lb["touched"]))
+    # ...and when the host's address list could not be READ (`ip` timed out, or iproute2 is
+    # missing). host_has_ip answered True then, so this guard — the only one on the panel's own
+    # host — let the missing address through and SSH answered nowhere. The REAL host_has_ip here,
+    # with the kernel fallback stubbed: the caller has to reach it, not a stub of it.
+    _so.host_has_ip = _lb_orig[6]
+    _lb_sorun, _lb_kern = _so._run, _so._kernel_has_ip
+    try:
+        _so._run = lambda c, **k: ("", "Command timed out", -1)
+        _so._kernel_has_ip = lambda addr: False
+        _lb["touched"] = []
+        _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 22, bind_addr="192.0.2.99")
+        check("ssh bind: an unreadable address list does not let a foreign address through",
+              _ok is False and "isn't an address on this host" in _msg and _lb["touched"] == [],
+              "ok=%r msg=%r touched=%r" % (_ok, _msg[:80], _lb["touched"]))
+        _so._kernel_has_ip = lambda addr: str(addr) == "10.0.0.5"
+        _lb["touched"] = []
+        _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 22, bind_addr="10.0.0.5")
+        check("ssh bind: ...while the host's own address still proceeds when the kernel says so "
+              "(control)", _ok is True and "WRITE" in _lb["touched"], "ok=%r msg=%r" % (_ok, _msg[:80]))
+    finally:
+        _so._run, _so._kernel_has_ip = _lb_sorun, _lb_kern
+        _so.host_has_ip = lambda ip: ip in _lb["host_ips"]
 
     # The backstop, for an address that IS on the host but where sshd ends up somewhere else: the
     # verification must look for that ADDRESS, not merely something on that port. A port-only match

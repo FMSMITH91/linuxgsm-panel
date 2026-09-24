@@ -272,7 +272,10 @@ try:
         _tsd_c = _tsd_load()
         # No stored mount: the button's mount has to come from the host's routes, which only the
         # route supplies — a stored "/lgsm" would let a route that passed nothing pass this too.
-        _tsd_c.update(tailscale_setup_done=True, tailscale_use_funnel=True, tailscale_mount="")
+        # bind_host 0.0.0.0: the panel is reachable without Serve, so disabling it strands nothing
+        # (the loopback case, where it does, is refused below).
+        _tsd_c.update(tailscale_setup_done=True, tailscale_use_funnel=True, tailscale_mount="",
+                      bind_host="0.0.0.0")
         _tsd_save(_tsd_c)
         _tsd_html = c.get("/tailscale").get_data(as_text=True)
         check("tailscale page: Disable targets the panel's own mount, not another app's '/'",
@@ -283,6 +286,38 @@ try:
               _tsd_r.status_code != 200 and _tsd_ran == []
               and _tsd_load().get("tailscale_setup_done") is True,
               "%d %r ran=%r" % (_tsd_r.status_code, _tsd_r.get_json(), _tsd_ran))
+        # A loopback-bound panel is reached ONLY through Serve. Removing it ended the admin's session
+        # and nothing could reach the process again — a restart re-binds 127.0.0.1 and no longer
+        # re-applies Serve — so getting back in took host SSH. change-port refuses to create that
+        # state; Disable created it with one click. Both a stored 127.0.0.1 and an unset bind that
+        # boot resolved to 127.0.0.1 are that state.
+        import app as _tsd_app
+        _tsd_rb = dict(_tsd_app._RESOLVED_BIND)
+        try:
+            for _tsd_label, _tsd_bind, _tsd_resolved in (
+                    ("a stored 127.0.0.1 bind", "127.0.0.1", None),
+                    ("an unset bind that boot resolved to 127.0.0.1", "", "127.0.0.1")):
+                _tsd_app._RESOLVED_BIND.clear()
+                if _tsd_resolved:
+                    _tsd_app._RESOLVED_BIND[_tsd_port] = _tsd_resolved
+                _tsd_lb = _tsd_load()
+                _tsd_lb["bind_host"] = _tsd_bind
+                _tsd_save(_tsd_lb)
+                _tsd_r = c.post("/api/tailscale/serve", json={"action": "disable", "mount": "/lgsm"})
+                check("tailscale serve: Disable is refused with %s (it would lock the admin out)"
+                      % _tsd_label,
+                      _tsd_r.status_code == 400 and _tsd_ran == []
+                      and _tsd_load().get("tailscale_setup_done") is True
+                      and "0.0.0.0" in ((_tsd_r.get_json() or {}).get("message") or ""),
+                      "%d %r ran=%r" % (_tsd_r.status_code, _tsd_r.get_json(), _tsd_ran))
+        finally:
+            _tsd_app._RESOLVED_BIND.clear()
+            _tsd_app._RESOLVED_BIND.update(_tsd_rb)
+        # The same POST with the panel reachable without Serve goes through: the control that the
+        # refusal above is about the bind, not about Disable.
+        _tsd_lb = _tsd_load()
+        _tsd_lb["bind_host"] = "0.0.0.0"
+        _tsd_save(_tsd_lb)
         _tsd_r = c.post("/api/tailscale/serve", json={"action": "disable", "mount": "/lgsm"})
         check("tailscale serve: disabling the panel's mount runs the CLI's `serve ... off` removal",
               _tsd_r.status_code == 200
@@ -7515,6 +7550,28 @@ try:
         check("change-port: ...while a Tailscale address still closes the public port (positive control)",
               _bst == 200 and ("close", _bind_port) in _bind_fw and ("open", _bind_port) not in _bind_fw
               and "kept tailnet-only" in _bmsg, "status=%d fw=%r msg=%r" % (_bst, _bind_fw, _bmsg))
+        # The REAL host_has_ip, with `ip -o addr` timing out. It answered True on an unreadable
+        # list, so a typo'd bind was saved and the panel restarted onto an address it could not
+        # bind — down until linuxgsm-panel-recover. The kernel is asked instead now (stubbed here:
+        # this machine's addresses are not the test's).
+        _bind_so_saved = (_am.so._run, _am.so._kernel_has_ip)
+        _am.so.host_has_ip = _bind_saved[2]
+        try:
+            _am.so._run = lambda cmd, **k: (("", "Command timed out", -1) if "ip -o addr" in cmd
+                                            else _bind_so_saved[0](cmd, **k))
+            _am.so._kernel_has_ip = lambda addr: str(addr) == "100.101.102.103"
+            _bind_before = _am.load_config().get("bind_host")
+            _bst, _bmsg = _bind_post("10.0.0.51")
+            check("change-port: an unreadable address list does not let a foreign bind through",
+                  _bst == 400 and "isn't an address on this host" in _bmsg
+                  and _am.load_config().get("bind_host") == _bind_before,
+                  "status=%d msg=%r" % (_bst, _bmsg))
+            _am.update_config(lambda cfg: cfg.update({"bind_host": "0.0.0.0"}))
+            _bst, _bmsg = _bind_post("100.101.102.103")
+            check("change-port: ...while the host's own address still goes through (control)",
+                  _bst == 200, "status=%d msg=%r" % (_bst, _bmsg))
+        finally:
+            _am.so._run, _am.so._kernel_has_ip = _bind_so_saved
     finally:
         (_rs_bind.remote_ufw_open_port, _rs_bind.remote_ufw_close_port,
          _am.so.host_has_ip, _am.so.restart_panel, _am.so.ensure_panel_fail2ban) = _bind_saved
@@ -13528,11 +13585,13 @@ try:
     # cookie is SameSite=Lax and so is not sent cross-site, which leaves the socket's connect gate
     # seeing an anonymous client and refusing it.
     #
-    # _socketio_cors() says so in as many words ("the SameSite=Lax cookie stops a cross-site page
-    # carrying it") and falls back to "*" for plain IP:port access on the strength of it, and the
-    # CSRF Bearer exemption a few hundred lines above rests on the same sentence. Nothing asserted
-    # it. Setting it to "None" — which is what anyone embedding the panel in an iframe would reach
-    # for — silently removes the floor under both.
+    # The socket's origin check is the first layer: with no site_domain and no explicit
+    # socketio_cors_origins it is same-origin, port included (the 'socket origin' checks below),
+    # never "*" unless the operator lists it. This cookie is the second layer under it — where the
+    # check does let a cross-site page through (an operator's "*"), that page still reaches the
+    # connect gate anonymously — and the CSRF Bearer exemption a few hundred lines above rests on
+    # it alone. Nothing asserted it. Setting it to "None" — which is what anyone embedding the
+    # panel in an iframe would reach for — silently removes the floor under both.
     check("cookie: the session cookie is SameSite-restricted",
           app.config.get("SESSION_COOKIE_SAMESITE") in ("Lax", "Strict"),
           "SESSION_COOKIE_SAMESITE is %r — the socket connect gate and the CSRF Bearer exemption "
@@ -13585,10 +13644,25 @@ try:
         # Two review fixes changed this check two ways; one survives, and the other's cases are
         # asserted against it here. A SITE ignores the port, so a page on another port of the
         # panel's own address (a game's web map) is same-site: the Lax cookie rides along, and only
-        # the port refuses it. Compared as (scheme, host, port) with the default port filled in.
+        # the port refuses it. Compared as (host, port): a Host with no port takes the ORIGIN's
+        # scheme default, so a TLS proxy that forwards the host but not X-Forwarded-Proto still
+        # matches — requiring the scheme too refused exactly those proxies, with no message.
         for _so_origin, _so_kw, _so_want, _so_what in (
                 ("http://1.2.3.4:8123", dict(scheme="http", host="1.2.3.4:5000"), False,
                  "a page on another port of the panel's own address"),
+                ("http://127.0.0.1:8123", dict(scheme="http", host="127.0.0.1:5000"), False,
+                 "...on loopback too"),
+                ("https://panel.example.com", dict(scheme="http", host="panel.example.com"), True,
+                 "TLS proxy forwards Host without X-Forwarded-Proto"),
+                ("https://panel.example.com", dict(scheme="http", host="127.0.0.1:5000",
+                                                   HTTP_X_FORWARDED_HOST="panel.example.com"), True,
+                 "TLS proxy forwards X-Forwarded-Host without X-Forwarded-Proto"),
+                ("https://other.example.ts.net", dict(scheme="http", host="127.0.0.1:5000",
+                                                      HTTP_X_FORWARDED_PROTO="https",
+                                                      HTTP_X_FORWARDED_HOST="node.example.ts.net"),
+                 False, "a sibling host on the same site (another tailnet node)"),
+                ("https://panel.example.com:8443", dict(scheme="http", host="panel.example.com"),
+                 False, "another port of a host forwarded without a port"),
                 ("http://panel.lan:8123", dict(scheme="http", host="panel.lan:5000"), False,
                  "...by hostname too"),
                 ("https://panel.lan:8443", dict(scheme="http", host="127.0.0.1:5000",

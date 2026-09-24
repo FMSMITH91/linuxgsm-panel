@@ -36,8 +36,9 @@ _NODE_TOOLS_CRON = (
 
 
 def ensure_node_tools_cron(server):
-    """Idempotently install the weekly root cron that keeps npm + gamedig current on `server`, so the
-    panel's player queries don't rot. Best-effort; never raises. Returns True if the write succeeded.
+    """Idempotently install the weekly root cron that keeps gamedig (pinned v5, no install scripts)
+    current on `server`, so the panel's player queries don't rot; npm itself is left to the OS.
+    Best-effort; never raises. Returns True if the write succeeded.
     Root-owned: locally the helper does the write itself, and remotely it is `sudo bash -c` with
     base64 so no quoting or `%` can mangle it. This used to claim it landed root-owned "regardless
     of any per-remote linuxgsm_user", which was the opposite of what happened — that field turned
@@ -951,9 +952,19 @@ def remote_os_update_status(server):
     return ("", ..., -1) rather than raising, and that read as {done: False, log: ""} plus
     `running: False` from a probe that did not answer either: the watch popup wiped apt's output
     and, three polls later, declared an update that was still unpacking "ended without a
-    completion marker". `running` is None when its own probe did not answer."""
-    out, _, lrc = _core.run_privileged(server, "os-update-log", [], timeout=15, merge_stderr=False)
-    if lrc != 0:
+    completion marker". `running` is None when its own probe did not answer.
+
+    A log that does not EXIST is an answer, though: the verb is `tail` of a file on /run (tmpfs),
+    which only the panel's own job writes, and tail exits 1 naming the file. An update the panel did
+    not start — one already running when Start was pressed ("watching it") — has no such file, and
+    every poll of it read as unread, so the popup said "Lost contact with the host" about a host
+    that answered every call. That case reads as an empty log and still asks apt whether it is
+    running. Matched on the path in tail's own error, which no locale translates and which sudo's
+    refusal (also exit 1) does not contain."""
+    out, err, lrc = _core.run_privileged(server, "os-update-log", [], timeout=15, merge_stderr=False)
+    if lrc == 1 and _priv.OS_UPDATE_LOG in (err or ""):
+        out = ""                              # answered: there is no log (yet)
+    elif lrc != 0:
         return {"running": None, "done": False, "rc": None, "log": "", "unread": True}
     log = out or ""
     m = re.search(re.escape(_OS_UPDATE_DONE) + r"(-?\d+)", log)
@@ -1235,7 +1246,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # npm install -g is idempotent, so the guard only saved time — and it cost a root shell.
     gd_out, _, _ = _core.run_privileged(server, "npm-install-global", ["gamedig"], timeout=300)
     note(_core._last_lines(gd_out, 3) or "gamedig installed")
-    ensure_node_tools_cron(server)   # weekly auto-update for npm + gamedig, alongside apt auto-updates
+    ensure_node_tools_cron(server)   # weekly gamedig (pinned v5, no install scripts), beside apt's
     note("weekly npm/gamedig auto-update scheduled")
 
     # ── 3c. Enable + configure unattended-upgrades (auto security updates) ──

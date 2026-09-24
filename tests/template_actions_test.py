@@ -849,6 +849,16 @@ check("bi bi-bell-slash" in _chip_fn and "Alerts are muted for this tag" in _chi
       and "tagMuted(tag)" in _chip_fn and "TAGS[i].notify" in _tags_src,
       "tags: a repainted chip keeps the muted-alerts marker the dashboard renders",
       "chip() drops the bell-slash/title, so a repaint hides that alerts are muted")
+# ...and each row's "N server(s)" is how many servers a Delete would strip the tag from. /api/tags
+# filters server_ids to the viewer's own servers, so counting them showed a delegated admin
+# "0 server(s)" on a tag other hosts' servers carry; server_count is the panel-wide total.
+_rtl_fn = _tags_src[_tags_src.index("function renderTagList()"):]
+_rtl_fn = re.sub(r"//[^\n]*", "", _rtl_fn[:_rtl_fn.index("\n  }\n")])
+check("' server(s)'" in _rtl_fn,
+      "tags: (control) the renderTagList() slice is the row renderer", "sliced the wrong function")
+check("tag.server_count" in _rtl_fn and "(tag.server_ids || []).length + ' server(s)'" not in _rtl_fn,
+      "tags: the tag list counts every server a Delete would touch, not only the viewer's",
+      "renderTagList counts the filtered server_ids")
 
 # ── a file called "Backups" must not be renamed by the translator ─────────────────────────────
 # A directory can legitimately be called Backups, Console, Status or Log — all keys in

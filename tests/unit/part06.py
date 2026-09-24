@@ -6079,10 +6079,21 @@ try:
                                              ("ufw-deny-ip", ["203.0.113.21", ""])],
           "returned %r, ran %r" % (_resm6, _sh_verbs6))
     _sh_verbs6.clear()
-    _okv6, _ = SO.ufw_deny_ip("2001:db8::20")
     _okj6, _ = SO.ufw_deny_ip("203.0.113.22")
-    check("block: ...but an IPv6 or REJECT one, which could not be put back, is refused untouched",
-          _okv6 is False and _okj6 is False and not _sh_verbs6, "ran %r" % (_sh_verbs6,))
+    check("block: ...but a REJECT one, which `ufw delete deny` does not match, is refused untouched",
+          _okj6 is False and not _sh_verbs6, "ran %r" % (_sh_verbs6,))
+    # IPv6 was refused too, because the verb's `insert 1` is refused for IPv6 while IPv4 rules
+    # exist — and the refusal told the operator to run `ufw prepend` by hand, which is what the
+    # verb itself has done since. It is moved like an IPv4 one.
+    _okv6, _msgv6 = SO.ufw_deny_ip("2001:db8::20")
+    check("block: ...while a shadowed IPv6 DENY is moved to the top like an IPv4 one",
+          _okv6 is True and _sh_verbs6 == [("ufw-delete-deny-ip", ["2001:db8::20"]),
+                                          ("ufw-deny-ip", ["2001:db8::20", ""])],
+          "ran %r (%r)" % (_sh_verbs6, _msgv6))
+    check("block: ...and the verb that puts it back is `ufw prepend`, which IPv6 accepts",
+          SO._priv.tool_argv("ufw-deny-ip", ["2001:db8::20", ""])[1:3] == ["prepend", "deny"],
+          repr(SO._priv.tool_argv("ufw-deny-ip", ["2001:db8::20", ""])))
+    _sh_verbs6.clear()
     _sh_fail6.add("ufw-deny-ip")
     _okf6, _msgf6 = SO.ufw_deny_ip("203.0.113.20")
     check("block: ...and a move whose insert fails tries to put the rule back, and says it failed",

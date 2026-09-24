@@ -75,7 +75,9 @@ from panel.core.config import load_config, save_config  # noqa: E402
 
 
 def mark_setup_complete():
-    """Flip setup_complete so the panel serves pages instead of the first-run wizard.
+    """Flip setup_complete so config.json matches a finished install. (It no longer decides whether
+    the panel serves pages or the first-run wizard: is_setup_complete() reads only the completed
+    SetupState row, which seed() adds. The history below is from when it did.)
 
     Called after EVERY cleanup(), not once at import. cleanup() deletes config.json to give each
     size a virgin install, which silently undid the flip — so from the first cleanup() onward every

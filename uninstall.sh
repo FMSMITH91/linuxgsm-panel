@@ -361,7 +361,7 @@ elif [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] 
             || ${U_SUDO} systemctl restart fail2ban >/dev/null 2>&1 || true
         ok "Removed the panel's fail2ban jail, filter and whitelist (other jails left intact)"
     fi
-    # A weekly ROOT cron that keeps npm + gamedig current for player queries. With the panel gone
+    # A weekly ROOT cron that keeps gamedig (pinned v5) current for player queries. With the panel gone
     # it has nothing to serve, and it would otherwise keep running `npm install -g` as root every
     # Sunday forever.
     if [ -f /etc/cron.d/lgsm-node-tools ]; then
