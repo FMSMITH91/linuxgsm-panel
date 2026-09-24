@@ -482,8 +482,38 @@ try:
               c.get("/api/console/%d" % other_id).status_code != 200)
         check("IDOR: stats of non-granted server BLOCKED",
               c.get("/api/server/%d/stats" % other_id).status_code != 200)
-        check("IDOR: action on non-granted server BLOCKED",
-              c.post("/api/server/%d/action" % other_id, json={"action": "start"}).status_code != 200)
+        # Probed as a user who HOLDS the action's permission (and MANAGE_SERVERS, for the tag
+        # probe below) on the granted host only. As `c`, who holds neither, the route answered 403
+        # "Permission denied" whatever the server-access result, so the check could not fail on
+        # the cross-host regression it is named for. The payloads are invalid ON PURPOSE: the
+        # access decorator runs first, so a refused server is a 403, and a server that got past
+        # it is a 400 for the payload — nothing starts and nothing is written on either branch.
+        # The same request on the accessible server is the control that the 400 is reachable.
+        with app.app_context():
+            _ig = Group(name=tag + "_idor", description="RBAC IDOR (auto)", is_default=False)
+            _ig.set_permissions([auth.VIEW_SERVERS, auth.START_SERVER, auth.MANAGE_SERVERS])
+            _ig.servers.append(RemoteServer.query.get(granted_remote))
+            db.session.add(_ig)
+            db.session.flush()
+            _iu = User(username=tag + "_idor", password_hash=auth.hash_password(secrets.token_hex(16)),
+                       display_name=tag + "_idor", is_superadmin=False, is_active=True)
+            _iu.groups.append(_ig)
+            db.session.add(_iu)
+            db.session.commit()
+            _idor_uid = _iu.id
+        _ci = client_as(_idor_uid)
+        _ia = _ci.post("/api/server/%d/action" % other_id, json={"action": "not-an-action"})
+        check("IDOR: action on non-granted server BLOCKED (for a START_SERVER holder)",
+              _ia.status_code == 403, "got %d" % _ia.status_code)
+        _ia = _ci.post("/api/server/%d/action" % accessible_id, json={"action": "not-an-action"})
+        check("IDOR: ...while the same request on the granted server gets past access (control)",
+              _ia.status_code == 400, "got %d" % _ia.status_code)
+        _it = _ci.post("/api/server/%d/tags" % other_id, json={"tag_ids": "not-a-list"})
+        check("IDOR: assigning tags on a non-granted server BLOCKED (for a MANAGE_SERVERS holder)",
+              _it.status_code == 403, "got %d" % _it.status_code)
+        _it = _ci.post("/api/server/%d/tags" % accessible_id, json={"tag_ids": "not-a-list"})
+        check("IDOR: ...while tagging the granted server gets past access (control)",
+              _it.status_code == 400, "got %d" % _it.status_code)
 
     check("action 'start' without START_SERVER -> 403",
           c.post("/api/server/%d/action" % accessible_id, json={"action": "start"}).status_code == 403)
@@ -527,9 +557,7 @@ try:
           c.post("/api/tags/1/delete").status_code == 403)
     check("assign tags without MANAGE_SERVERS -> 403",
           c.post("/api/server/%d/tags" % accessible_id, json={"tag_ids": [1]}).status_code == 403)
-    if other_id:
-        check("IDOR: assigning tags on a non-granted server BLOCKED",
-              c.post("/api/server/%d/tags" % other_id, json={"tag_ids": []}).status_code != 200)
+    # (The cross-host tag probe is with the other IDOR probes above, as a MANAGE_SERVERS holder.)
     # Reading the tag list is deliberately open to any signed-in user: it is what decorates and
     # filters rows they can already see.
     check("tag list is readable without MANAGE_SERVERS -> 200",
