@@ -35,6 +35,7 @@
   "All": "Todos",
   "All actions": "Todas las acciones",
   "All games": "Todos los juegos",
+  "This game is not in the current LinuxGSM game list. Saving keeps the command scoped to it.": "Este juego no está en la lista actual de juegos de LinuxGSM. Al guardar, el comando sigue limitado a él.",
   "Allow": "Permitir",
   "Allowed": "Permitido",
   "Applies to": "Se aplica a",

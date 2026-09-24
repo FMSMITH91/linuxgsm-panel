@@ -1911,7 +1911,12 @@ def _custom_cmd_form(cmd=None):
         scope_type = "all"
     if scope_type == "engine" and scope_value not in _CUSTOM_CMD_ENGINES:
         return None, "Pick a valid engine for the engine scope."
-    if scope_type == "game" and scope_value not in {g["shortname"] for g in load_game_list()}:
+    # A command already scoped to a game keeps it even when the current list lacks that game
+    # (dropped or renamed upstream, or no list could be fetched): refusing it would make the
+    # command uneditable, and the form offers its stored scope precisely so a save does not change it.
+    _kept_game = (cmd is not None and cmd.scope_type == "game" and scope_value == cmd.scope_value)
+    if scope_type == "game" and not _kept_game \
+            and scope_value not in {g["shortname"] for g in load_game_list()}:
         return None, "Pick a valid game for the game scope."
     if scope_type == "all":
         scope_value = ""

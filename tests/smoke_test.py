@@ -10715,6 +10715,37 @@ try:
           _cc_add("cc_badgame", "say hi", scope="game|nosuchgame") == 0)
     check("custom command form: ...and an engine that does not exist",
           _cc_add("cc_badengine", "say hi", scope="engine|nosuchengine") == 0)
+    # ...but an EXISTING command scoped to a game the current list lacks (dropped upstream, or no
+    # list could be fetched) keeps that scope. Its edit form had no matching option, the browser
+    # selected "All games", and a Save to fix the label widened the command to every game.
+    with app.app_context():
+        _oc = CustomCommand(name="cc_orphan", command_template="say hi", scope_type="game",
+                            scope_value="nosuchgame", enabled=True)
+        db.session.add(_oc)
+        db.session.commit()
+        _oc_id = _oc.id
+    try:
+        check("custom command edit form: a stored game scope the list lacks is offered, and selected",
+              'value="game|nosuchgame" selected' in c.get("/commands").get_data(as_text=True),
+              "no option matches, so the browser submits the first one — All games")
+        c.post("/commands/%d/edit" % _oc_id, data={"name": "cc_orphan", "command_template": "say hello",
+                                                    "scope": "game|nosuchgame", "enabled": "on"})
+        with app.app_context():
+            _oc2 = db.session.get(CustomCommand, _oc_id)
+            _oc_state = (_oc2.scope_type, _oc2.scope_value, _oc2.command_template)
+        check("custom command edit: saving it keeps that game scope and applies the edit",
+              _oc_state == ("game", "nosuchgame", "say hello"), "stored %r" % (_oc_state,))
+        c.post("/commands/%d/edit" % _oc_id, data={"name": "cc_orphan", "command_template": "say bye",
+                                                    "scope": "game|othernosuchgame", "enabled": "on"})
+        with app.app_context():
+            _oc3 = db.session.get(CustomCommand, _oc_id)
+            _oc_state = (_oc3.scope_value, _oc3.command_template)
+        check("custom command edit: ...while moving it to a DIFFERENT unknown game is still refused",
+              _oc_state == ("nosuchgame", "say hello"), "stored %r" % (_oc_state,))
+    finally:
+        with app.app_context():
+            db.session.delete(db.session.get(CustomCommand, _oc_id))
+            db.session.commit()
     # An unparseable argument pattern must not 500 or store itself — it falls back to the default.
     _cc_re_added = _cc_add("cc_badre", "say {}", argument_pattern="([unclosed")
     check("custom command form: an invalid argument pattern does not store a broken regex",
