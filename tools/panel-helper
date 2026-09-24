@@ -2045,6 +2045,58 @@ def _db_repair_as(account):
     return {"preexec_fn": _become_owner, "env": dict(os.environ, HOME=account.pw_dir)}
 
 
+def _db_reclaim_files(dir_fd, name, uid, gid):
+    """Hand the database's own files in `dir_fd` back to uid:gid. The same rule as
+    db_maintenance._reclaim_db_files, on the root side of the drop (see _db_repair_reclaim).
+
+    Each file is opened relative to the pinned directory with O_NOFOLLOW (a symlink is refused at
+    open) and O_NONBLOCK (a fifo cannot hang root), and fchown'd only if it is a regular file with
+    ONE link: a second link would mean the inode is also some other file, which must not change
+    hands."""
+    for member in (name, name + "-wal", name + "-shm", name + ".backup"):
+        try:
+            mfd = os.open(member, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                          dir_fd=dir_fd)
+        except OSError:
+            continue          # absent, a symlink, or unopenable: nothing to hand back
+        try:
+            mst = os.fstat(mfd)
+            if stat.S_ISREG(mst.st_mode) and mst.st_nlink == 1 and mst.st_uid != uid:
+                os.fchown(mfd, uid, gid)
+        except OSError:
+            pass              # best effort: the repair reports a database it still cannot open
+        finally:
+            os.close(mfd)
+
+
+def _db_repair_reclaim(db_path, account):
+    """ROOT, before the repair drops to `account`: give back the database files an earlier
+    root-run repair left root-owned.
+
+    db_maintenance does this itself when it starts as root, and then becomes the directory's owner.
+    Dropping here, before exec, means it never starts as root, so its reclaim never runs — and a
+    panel.db, -wal, -shm or .backup that is root:root 0600 is then one the repair cannot open: it
+    fails, or restores a backup beside a stale -wal the panel cannot read, and the panel comes back
+    up on a database it cannot open. So the helper does that reclaim here, and only that.
+
+    The directory is opened once and checked by DESCRIPTOR to still belong to `account`: the
+    directory entry is one the panel user can swap after _db_repair_account looked, and a link to
+    somebody else's directory must not get that directory's files handed to the panel user."""
+    if account.pw_uid == 0:
+        return                # a root-owned data directory: root keeps its files, nothing to give
+    try:
+        dfd = os.open(os.path.dirname(db_path), os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except OSError:
+        return
+    try:
+        if os.fstat(dfd).st_uid == account.pw_uid:
+            _db_reclaim_files(dfd, os.path.basename(db_path), account.pw_uid, account.pw_gid)
+    except OSError:
+        pass
+    finally:
+        os.close(dfd)
+
+
 def _db_repair_detached(db_path):
     """The offline repair itself, in the grandchild. NEVER RETURNS — every path ends in os._exit.
 
@@ -2081,6 +2133,9 @@ def _db_repair_detached(db_path):
         # The panel is holding the database open; it has to go down before the file can be rebuilt.
         subprocess.run([systemctl, "stop", PANEL_UNIT],  # nosec B603 - fixed argv
                        check=False, timeout=120)
+        # The drop below means db_maintenance never starts as root, so its own reclaim of files a
+        # root-run repair left root-owned never runs; do it here, as root, before dropping.
+        _db_repair_reclaim(db_path, account)
         subprocess.run([python, DBM_PATH, "repair", db_path],  # nosec B603 - root-owned script
                        check=False, timeout=900, **_db_repair_as(account))
     except Exception:

@@ -929,7 +929,8 @@ import pwd as _pwd_dbo
 _dbo = _sandboxed_helper()
 _dbo_dir = _tempfile.mkdtemp(prefix="panel-dbrepair-")
 # A helper without these fails the checks below by name instead of crashing the part.
-for _dbo_fn, _dbo_dflt in (("_db_repair_account", lambda p: None), ("_db_repair_as", lambda a: None)):
+for _dbo_fn, _dbo_dflt in (("_db_repair_account", lambda p: None), ("_db_repair_as", lambda a: None),
+                           ("_db_repair_reclaim", lambda p, a: None)):
     if not hasattr(_dbo, _dbo_fn):
         setattr(_dbo, _dbo_fn, _dbo_dflt)
 try:
@@ -999,6 +1000,64 @@ try:
           len(_dbo_rep) == 1 and _dbo_rep[0][1].get("env", {}).get("HOME") == _dbo_me.pw_dir)
     check("db-repair: systemctl stop/start stay root (no drop on them)",
           all("preexec_fn" not in c[1] for c in _dbo_calls if "systemctl" in c[0][0]))
+    # Dropping before exec means db_maintenance never starts as root, so ITS reclaim of files an
+    # earlier root-run repair left root:root 0600 never ran, and the repair could not open the
+    # database it was asked to fix. The helper reclaims, as root, after the stop and before the
+    # repair: the recorder notes how many subprocess calls came before it.
+    _dbo_rec = []
+    _dbo_real_reclaim = _dbo._db_repair_reclaim
+    _dbo._db_repair_reclaim = lambda p, a: _dbo_rec.append((p, a.pw_uid, len(_dbo_calls)))
+    try:
+        _dbo_drive()
+    finally:
+        _dbo._db_repair_reclaim = _dbo_real_reclaim
+    check("db-repair: the files are handed back to the owner after the stop, before the repair",
+          _dbo_rec == [(_dbo_db, _dbo_me.pw_uid, 1)] and len(_dbo_calls) == 3,
+          "reclaims=%r calls=%r" % (_dbo_rec, [c[0] for c in _dbo_calls]))
+    # What the reclaim hands over. This suite is not root, so fstat reports the regular files as
+    # root's and fchown records: a regular, single-link panel.db and .backup go to the owner; a
+    # symlinked -shm and a hard-linked -wal must not (root would be giving away another file); and
+    # nothing moves when the directory is not the account's (a link swapped in after the lookup).
+    _dbo_rd = os.path.join(_dbo_dir, "reclaim")
+    os.makedirs(_dbo_rd)
+    for _n in ("panel.db", "panel.db.backup", "elsewhere", "other-file"):
+        open(os.path.join(_dbo_rd, _n), "wb").close()
+    os.link(os.path.join(_dbo_rd, "elsewhere"), os.path.join(_dbo_rd, "panel.db-wal"))
+    os.symlink(os.path.join(_dbo_rd, "other-file"), os.path.join(_dbo_rd, "panel.db-shm"))
+    _dbo_ino = {_n: os.lstat(os.path.join(_dbo_rd, _n)).st_ino
+                for _n in ("panel.db", "panel.db.backup", "elsewhere", "other-file")}
+    _dbo_chowned = []
+
+    def _dbo_fstat(fd):
+        _st = os.fstat(fd)
+        if not _stat.S_ISREG(_st.st_mode):
+            return _st
+        _f = list(_st[:10])
+        _f[4] = 0          # st_uid: root's, as an earlier root-run repair left it
+        return os.stat_result(_f)
+
+    _dbo_os_before = _dbo.os
+    _dbo.os = _DboProxy(os, fstat=_dbo_fstat,
+                        fchown=lambda fd, uid, gid: _dbo_chowned.append((os.fstat(fd).st_ino,
+                                                                         uid, gid)))
+    try:
+        _dbo._db_repair_reclaim(os.path.join(_dbo_rd, "panel.db"), _dbo_me)
+        _dbo_mine = sorted(_dbo_chowned)
+        del _dbo_chowned[:]
+        _dbo._db_repair_reclaim(os.path.join(_dbo_rd, "panel.db"), _pwd_dbo.struct_passwd(
+            (_dbo_me.pw_name, "x", _dbo_me.pw_uid + 4242, _dbo_me.pw_gid, "", _dbo_me.pw_dir,
+             "/bin/sh")))
+        _dbo_notmine = list(_dbo_chowned)
+    finally:
+        _dbo.os = _dbo_os_before
+    check("db-repair: a root-owned panel.db and .backup are handed back to the directory's owner",
+          _dbo_mine == sorted([(_dbo_ino["panel.db"], _dbo_me.pw_uid, _dbo_me.pw_gid),
+                               (_dbo_ino["panel.db.backup"], _dbo_me.pw_uid, _dbo_me.pw_gid)]),
+          "chowned=%r inodes=%r" % (_dbo_mine, _dbo_ino))
+    check("db-repair: a symlinked or hard-linked member is not handed over",
+          not {_i for _i, _u, _g in _dbo_mine} & {_dbo_ino["elsewhere"], _dbo_ino["other-file"]})
+    check("db-repair: nothing is handed over when the directory is not that account's",
+          _dbo_notmine == [], repr(_dbo_notmine))
     # A drop that does not take must stop the repair, not let it carry on as root.
     _dbo._drop_to = lambda pw, own_groups=False: False
     _dbo_raised = False
