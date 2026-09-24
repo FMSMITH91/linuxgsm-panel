@@ -25,7 +25,8 @@ cryptography==50.0.1
 websocket-client==1.9.2
 
 # ── What they pull in ───────────────────────────────────────────────────────────────────────────
-bidict==0.24.1
+# bidict 0.24 needs Python >= 3.11, and Ubuntu 22.04 ships 3.10. Held in .github/dependabot.yml.
+bidict==0.23.1
 blinker==1.9.0
 cffi==2.1.1
 click==8.5.0

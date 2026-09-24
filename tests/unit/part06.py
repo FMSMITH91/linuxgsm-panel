@@ -1796,10 +1796,27 @@ try:
     import importlib.metadata as _rq_md
     try:
         from packaging.requirements import Requirement as _RqReq
+        from packaging.specifiers import SpecifierSet as _RqSpec
         from packaging.utils import canonicalize_name as _rq_canon
     except ImportError:
         from pip._vendor.packaging.requirements import Requirement as _RqReq
+        from pip._vendor.packaging.specifiers import SpecifierSet as _RqSpec
         from pip._vendor.packaging.utils import canonicalize_name as _rq_canon
+
+    # Every pin must also install on every Python the panel supports. Dependabot proposed bidict
+    # 0.24.1, which requires Python >= 3.11: pip refused it on the 3.10 leg alone (Ubuntu 22.04's
+    # python3), and every other leg ran green on a set that host could not install.
+    _RQ_PYTHONS = ("3.10.0", "3.11.0", "3.12.0", "3.13.0", "3.14.0")
+
+    def _rq_python_gap(name, ver, requires_python):
+        if not requires_python:
+            return None
+        missed = [v for v in _RQ_PYTHONS
+                  if not _RqSpec(requires_python).contains(v, prereleases=True)]
+        if not missed:
+            return None
+        return "%s==%s requires Python %s, so it cannot install on %s" % (
+            name, ver, requires_python, ", ".join(v[:-2] for v in missed))
 
     def _rq_closure_gaps(text):
         pins, gaps = {}, []
@@ -1817,7 +1834,8 @@ try:
                  "sys_platform": "linux", "platform_system": "Linux", "platform_machine": mach,
                  "implementation_name": "cpython", "platform_python_implementation": "CPython",
                  "os_name": "posix", "extra": ""}
-                for m in (10, 11, 12, 13, 14) for mach in ("x86_64", "aarch64")]
+                for m in (int(v.split(".")[1]) for v in _RQ_PYTHONS)
+                for mach in ("x86_64", "aarch64")]
         for name, ver in sorted(pins.items()):
             try:
                 dist = _rq_md.distribution(name)
@@ -1829,6 +1847,9 @@ try:
                 gaps.append("%s is installed at %s but pinned at %s (pip install -r "
                             "requirements.txt)" % (name, dist.version, ver))
                 continue
+            py_gap = _rq_python_gap(name, ver, dist.metadata.get("Requires-Python"))
+            if py_gap:
+                gaps.append(py_gap)
             for rd in dist.requires or []:
                 sub = _RqReq(rd)
                 if sub.marker is not None and not any(sub.marker.evaluate(e) for e in envs):
@@ -1850,6 +1871,12 @@ try:
     _rq_cut_gaps = _rq_closure_gaps(_rq_cut)[1]
     check("requirements.txt: ...and the closure check names a dropped transitive pin (control)",
           any("werkzeug" in g for g in _rq_cut_gaps), repr(_rq_cut_gaps[:3]))
+    # ...and it reads Requires-Python: the pin that started this, and a ceiling that shuts out 3.14.
+    check("requirements.txt: ...and a pin that drops a supported Python is named (control)",
+          "cannot install on 3.10" in (_rq_python_gap("bidict", "0.24.1", ">=3.11") or "")
+          and _rq_python_gap("bidict", "0.23.1", ">=3.8") is None
+          and "3.14" in (_rq_python_gap("x", "1", "<3.14") or ""),
+          repr(_rq_python_gap("bidict", "0.24.1", ">=3.11")))
     _rq_sec = open(os.path.join(_root, ".github", "workflows", "security-code.yml"),
                    encoding="utf-8").read()
     check("security-code: pip-audit audits the pinned set itself, not a fresh resolution",

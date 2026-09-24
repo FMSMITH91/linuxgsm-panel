@@ -13,6 +13,12 @@ updates:
       # don't trickle in and hit the open-PR limit.
       python-dependencies:
         patterns: ["*"]
+    ignore:
+      # bidict 0.24 requires Python >= 3.11. The panel supports 3.10 (Ubuntu 22.04's python3), where
+      # pip cannot install it at all. python-socketio needs only bidict >= 0.21. Lift this when 3.10
+      # support ends.
+      - dependency-name: "bidict"
+        versions: [">=0.24"]
 
   # Keep the GitHub Actions themselves current (this is what clears the
   # "Node.js 20 is deprecated" runner warning once new majors ship).
