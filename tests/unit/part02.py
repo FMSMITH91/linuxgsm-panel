@@ -1256,6 +1256,17 @@ try:
     _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28017, "tcp", limit=False)
     check("ufw limit: ...and 'remove' on a port with no limit opens nothing",
           _ok is False and not any(r[0].startswith("28017") for r in _rules), "ok=%r rules %r" % (_ok, _rules))
+    check("ufw limit: ...saying it has no rate limit (positive control for the inactive case below)",
+          "no rate limit" in _msg, "msg=%r" % (_msg,))
+    # An INACTIVE ufw lists no rules at all, stored ones included, so the same test answered
+    # "22/tcp has no rate limit to remove" about a host whose stored rules hold one.
+    _inact_ran = []
+    _sm_core.run_privileged = lambda s, v, a=(), **k: (
+        ("Status: inactive\n", "", 0) if v == "ufw-status" else (_inact_ran.append(v), ("", "", 0))[1])
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 22, "tcp", limit=False)
+    check("ufw limit: removing a limit on an INACTIVE ufw says it cannot read the rules, not 'no limit'",
+          _ok is False and "not active" in _msg and "no rate limit" not in _msg and not _inact_ran,
+          "ok=%r msg=%r ran %r" % (_ok, _msg, _inact_ran))
     _rules = [("28000:28100/tcp", "ALLOW", "")]
     _fake_ufw_n(_rules)
     _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)

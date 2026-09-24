@@ -325,6 +325,11 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
         if brc != 0:
             return False, ("Could not read the firewall to find the rate limit on %s, so nothing "
                            "was changed." % spec)
+        # An inactive ufw lists NO rules, stored ones included, so the test below found none and
+        # answered "has no rate limit to remove" about a host whose stored rules hold one.
+        if not firewall._ufw_is_active(before):
+            return False, ("UFW is not active on this host, so its stored rules cannot be read "
+                           "here to find the rate limit on %s — nothing was changed." % spec)
         if not any(r["to"] == spec and r["action"] == "LIMIT" for r in _ufw_public_rules(before)):
             return False, "%s has no rate limit to remove." % spec
         out, err, rc = _core.run_privileged(server, "ufw-allow-port", [spec, ""], timeout=15)
