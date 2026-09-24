@@ -483,6 +483,14 @@ function _bkAskPassphrase(name, btn){
         .then(r=>r.json()).then(function(d){
           if(d.success){ api.close(); bkMsg('✓ '+(d.message||'Restoring…'),'text-success');
                          setTimeout(function(){ location.reload(); }, 8000); }
+          // The passphrase opened the archive, and THEN the safety copy could not be written. That
+          // refusal says "Confirm again to restore without one", but pressing Restore here re-posts
+          // without skip_safety_backup and gets the same refusal for ever. Hand it to the same
+          // dialog _bkRestore uses, carrying the passphrase that worked.
+          else if(/safety copy/i.test(d.message||'')){
+            api.close();
+            _bkAskSkipSafety(name, val, btn, true, d.message||'');
+          }
           else api.error(d.message||'Could not restore.');
         })
         .catch(function(){ api.close(); bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });

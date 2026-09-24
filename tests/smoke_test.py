@@ -581,6 +581,114 @@ try:
             if _l is not None:
                 db.session.delete(_l); db.session.commit()
 
+    # ── a queued stop that FAILED must stay queued, and the sweep must count with the override ─
+    # The sweep discarded run_as_game_user's (out, err, rc) and cleared both flags whatever
+    # happened. That call does not raise on the tailscale/local transports: a timeout comes back as
+    # rc=-1, so a stop that never happened left the queue and nobody retried. It also counted
+    # players without the server's gamedig override, so a Project Zomboid/ARK server read as None
+    # ("unknown") on every tick and its queued restart never fired.
+    from panel.db.models import AuditLog as _QAL
+    _qa_saved = (_shmod.get_server_status, _shmod.sm_player_count, _sm_core.run_as_game_user,
+                 _sm_core.set_game_priority)
+    _qa_pc_args, _qa_rc = [], [-1]
+    _qa_id = None
+    try:
+        with app.app_context():
+            _rm = RemoteServer.query.first()
+            _qa = _UGS(remote_id=_rm.id, name="queued-stop-rc", short_name="queuedstoprc",
+                       game_type="pz", port=16261, installed=True, status="online")
+            _qa.stop_pending = True
+            _qa.query_type = "projectzomboid"
+            db.session.add(_qa); db.session.commit()
+            _qa_id = _qa.id
+            _QAL.query.filter_by(target="queued-stop-rc").delete(); db.session.commit()
+        _shmod.get_server_status = lambda srv, gs, distinguish_unresponsive=False: "online"
+
+        def _qa_pc(*a, **k):
+            if a[1] == "queuedstoprc":
+                _qa_pc_args.append((a, k))
+            return 0
+        _shmod.sm_player_count = _qa_pc
+        _sm_core.run_as_game_user = lambda *a, **k: (("", "SSH command timed out", _qa_rc[0])
+                                                     if a[1] == "queuedstoprc" else ("", "", 0))
+        _sm_core.set_game_priority = lambda *a, **k: None
+
+        def _qa_state():
+            with app.app_context():
+                _g = db.session.get(_UGS, _qa_id)
+                _rows = (_QAL.query.filter_by(target="queued-stop-rc", action="stop_server")
+                         .order_by(_QAL.id).all())
+                return bool(_g.stop_pending), [(r.success, r.detail) for r in _rows]
+
+        _shmod._run_due_restarts(app)
+        _qa_qt = [k.get("query_type", a[4] if len(a) > 4 else None) for a, k in _qa_pc_args]
+        check("queued stop: the sweep counts players with the server's gamedig override",
+              _qa_qt == ["projectzomboid"],
+              "player_count got query_type %r — without it an overridden game reads as unknown "
+              "and its queued action never fires" % (_qa_qt,))
+        _qa_pend, _qa_rows = _qa_state()
+        check("queued stop: a stop that timed out (rc=-1) stays queued for the next tick",
+              _qa_pend is True, "stop_pending was cleared although the stop never happened")
+        check("queued stop: ...and the failed attempt is audited as a failure",
+              len(_qa_rows) == 1 and _qa_rows[0][0] is False and "still queued" in (_qa_rows[0][1] or ""),
+              "audit rows %r" % (_qa_rows,))
+        # The failure count belongs to the queued action: cancel it, and a later re-queue starts
+        # from zero instead of being given up on early with the old attempts.
+        _qa_count_before = _shmod._queued_action_failures.get(_qa_id)
+        with app.app_context():
+            db.session.get(_UGS, _qa_id).stop_pending = False
+            db.session.commit()
+        _shmod._run_due_restarts(app)
+        _qa_count_after = _shmod._queued_action_failures.get(_qa_id)
+        with app.app_context():
+            db.session.get(_UGS, _qa_id).stop_pending = True
+            db.session.commit()
+            _QAL.query.filter_by(target="queued-stop-rc").delete(); db.session.commit()
+        check("queued stop: cancelling the queue drops its failure count",
+              _qa_count_before == 1 and _qa_count_after is None,
+              "count %r before the cancel, %r after" % (_qa_count_before, _qa_count_after))
+        # Bounded: a queued action that keeps failing is given up on, not retried for ever (a
+        # restart LinuxGSM answers non-zero would otherwise bounce the server on every tick).
+        _shmod._run_due_restarts(app)
+        _shmod._run_due_restarts(app)
+        _shmod._run_due_restarts(app)
+        _qa_pend, _qa_rows = _qa_state()
+        check("queued stop: ...and is given up on after %d failed attempts, saying so"
+              % _shmod._QUEUED_ACTION_ATTEMPTS,
+              _qa_pend is False and len(_qa_rows) == _shmod._QUEUED_ACTION_ATTEMPTS
+              and "no longer queued" in (_qa_rows[-1][1] or ""),
+              "pending=%r rows=%r" % (_qa_pend, _qa_rows))
+        # Positive control: a stop that WORKED clears the queue at once and is audited as a success.
+        with app.app_context():
+            db.session.get(_UGS, _qa_id).stop_pending = True
+            db.session.commit()
+            _QAL.query.filter_by(target="queued-stop-rc").delete(); db.session.commit()
+        _qa_rc[0] = 0
+        # While the maintenance menu's Backup button is archiving the server, the queued stop
+        # waits: that long action holds no flag the sweep used to read.
+        from panel.core.panel_state import _action_output as _qa_ao
+        _qa_ao[_qa_id] = {"action": "backup", "path": "/dev/null", "user": "queuedstoprc", "pos": 0}
+        try:
+            _shmod._run_due_restarts(app)
+        finally:
+            _qa_ao.pop(_qa_id, None)
+        _qa_pend, _qa_rows = _qa_state()
+        check("queued stop: ...waits while a Backup-button run is archiving the server",
+              _qa_pend is True and not _qa_rows, "pending=%r rows=%r" % (_qa_pend, _qa_rows))
+        _shmod._run_due_restarts(app)
+        _qa_pend, _qa_rows = _qa_state()
+        check("queued stop: one that exits 0 clears the queue and is audited as a success",
+              _qa_pend is False and [r[0] for r in _qa_rows] == [True],
+              "pending=%r rows=%r" % (_qa_pend, _qa_rows))
+    finally:
+        (_shmod.get_server_status, _shmod.sm_player_count, _sm_core.run_as_game_user,
+         _sm_core.set_game_priority) = _qa_saved
+        _shmod._queued_action_failures.pop(_qa_id, None)
+        with app.app_context():
+            _l = db.session.get(_UGS, _qa_id) if _qa_id else None
+            if _l is not None:
+                db.session.delete(_l); db.session.commit()
+
     # ── an install that dies EARLY must still leave a row you can act on ──────────────────────
     # Only the step-4 path wrote status="failed". Every earlier exit — a bad game type, an
     # unreachable host during LinuxGSM setup, an unhandled exception — wrote the REASON and left
@@ -3105,6 +3213,30 @@ try:
         (_dl_mod.stat_path, _dl_mod.stream_path) = _dl_saved
         with c.session_transaction() as _dl_s:
             _dl_s.pop("_flashes", None)
+
+    # ── the file-save API must not write an empty file for a body with no text in it ─────────────
+    # `data.get("content", "")` turned a missing key — an API script's typo like "contents" — into
+    # "", and write_file does `(content or "").encode()`, so null/0/false/[] did the same: the
+    # target was truncated to 0 bytes and the answer was {"success": true, "message": "Saved"}.
+    _fs_writes = []
+    _fs_saved = _dl_mod.write_file
+    try:
+        _dl_mod.write_file = lambda srv, user, rel, content: (_fs_writes.append((rel, content)), (True, ""))[1]
+        for _fs_body in ({"path": "cfg/server.cfg", "contents": "typo"}, {"path": "cfg/server.cfg", "content": None},
+                         {"path": "cfg/server.cfg", "content": 0}, {"path": "cfg/server.cfg", "content": []}):
+            _fs_r = c.post("/api/server/%d/file" % gs_id, json=_fs_body)
+            check("file save: %r is refused, not written as an empty file" % (sorted(_fs_body.items()),),
+                  _fs_r.status_code == 400 and not _fs_writes
+                  and (_fs_r.get_json() or {}).get("success") is False,
+                  "status %d, writes %r" % (_fs_r.status_code, _fs_writes))
+            del _fs_writes[:]
+        # Positive control: an intentionally EMPTY file is still text, and is saved.
+        _fs_ok = c.post("/api/server/%d/file" % gs_id, json={"path": "cfg/empty.cfg", "content": ""})
+        check("file save: an intentionally empty file (content \"\") is still saved",
+              _fs_ok.status_code == 200 and _fs_writes == [("cfg/empty.cfg", "")],
+              "status %d, writes %r" % (_fs_ok.status_code, _fs_writes))
+    finally:
+        _dl_mod.write_file = _fs_saved
 
     mod_bad = c.post("/api/server/%d/moderate" % gs_id, json={"action": "nope"})
     check("moderate: unknown action -> 400", mod_bad.status_code == 400)
@@ -7695,6 +7827,58 @@ try:
               _lat_after_other.get("action") == "update",
               "left %r registered — the running update's output stops reaching the console the "
               "panel told the operator to watch" % (_lat_after_other or None,))
+        # 2c. ...and two runs of the SAME action, each on its own worker, as _bg_action runs them.
+        # Ownership was decided by the action NAME, so the first validate to finish popped the
+        # registration of the second, still running. Each worker now ends only its own entry.
+        import threading as _lat_thr
+        _lat_go1, _lat_go2, _lat_b1, _lat_b2 = (_lat_thr.Event() for _ in range(4))
+
+        def _lat_worker(began, go):
+            with app.app_context():
+                _begin_action_tail(app, gs_id, "validate", _lat_logf, _lat_user)
+                began.set()
+                go.wait(10)
+                _end_action_tail(app, gs_id, _lat_remote, "validate", 0)
+        _lat_t1 = _lat_thr.Thread(target=_lat_worker, args=(_lat_b1, _lat_go1))
+        _lat_t1.start()
+        _lat_b1.wait(10)
+        _lat_t2 = _lat_thr.Thread(target=_lat_worker, args=(_lat_b2, _lat_go2))
+        _lat_t2.start()
+        _lat_b2.wait(10)
+        _lat_second = _ao.get(gs_id)
+        _lat_go1.set()
+        _lat_t1.join(10)                                   # the FIRST run finishes
+        _lat_still = _ao.get(gs_id)
+        _lat_go2.set()
+        _lat_t2.join(10)
+        check("console tail: a run that ends does not deregister a later run of the SAME action",
+              _lat_second is not None and _lat_still is _lat_second,
+              "after the first validate ended, %r was registered (the second run's entry was %r)"
+              % (_lat_still, _lat_second))
+        check("console tail: ...and that later run still deregisters itself when it ends",
+              gs_id not in _ao, "left %r registered" % (_ao.get(gs_id),))
+        # The other order, the finding's: the LATER run is refused fast and finishes first. It
+        # had displaced the earlier run's registration, so popping it left the earlier validate —
+        # still running — streaming nothing. The earlier run is registered again instead.
+        _lat_go1, _lat_go2, _lat_b1, _lat_b2 = (_lat_thr.Event() for _ in range(4))
+        _lat_t1 = _lat_thr.Thread(target=_lat_worker, args=(_lat_b1, _lat_go1))
+        _lat_t1.start()
+        _lat_b1.wait(10)
+        _lat_first = _ao.get(gs_id)
+        _lat_t2 = _lat_thr.Thread(target=_lat_worker, args=(_lat_b2, _lat_go2))
+        _lat_t2.start()
+        _lat_b2.wait(10)
+        _lat_go2.set()
+        _lat_t2.join(10)                                   # the LATER run finishes first
+        _lat_back = _ao.get(gs_id)
+        _lat_go1.set()
+        _lat_t1.join(10)
+        check("console tail: when the later run ends first, the earlier one still running is tailed again",
+              _lat_first is not None and _lat_back is _lat_first,
+              "after the second validate ended, %r was registered (the first run's entry was %r)"
+              % (_lat_back, _lat_first))
+        check("console tail: ...and once both have ended nothing is left registered",
+              gs_id not in _ao, "left %r registered" % (_ao.get(gs_id),))
         # How an action that the TRANSPORT gave up on is announced. The local and Tailscale
         # transports answer a timeout with rc -1 (they do not raise), and so does paramiko's
         # silent-channel give-up; only a raise leaves rc None. -1 is never a real exit status.
@@ -10312,6 +10496,47 @@ try:
                   _gm_je is None and gs_id not in _gm_state,
                   "job=%r — a month-old error greets every later visit to this server"
                   % (_gm_je,))
+
+            # ── one content job per HOST ─────────────────────────────────────────────────────
+            # Content is host-wide (one content user, one ~/serverfiles), but nothing stopped a
+            # second job on the same host while the first ran: two SteamCMD installs into one
+            # directory, or an uninstall deleting what another server's job was mounting. The
+            # first job is held mid-install here, so the second request really does overlap it.
+            import threading as _gm_thr
+            _gm_gate = _gm_thr.Event()
+
+            def _gm_slow_install(*a, **k):
+                _gm_gate.wait(20)
+                return (True, ["cstrike"], "installed: cstrike")
+            _gm_mod.install_gmod_content = _gm_slow_install
+            _gm_state.pop(gs_id, None)
+            _gm_first = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": ["cstrike"]},
+                               headers={"X-Requested-With": "XMLHttpRequest"})
+            _gm_second = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": ["cstrike"]},
+                                headers={"X-Requested-With": "XMLHttpRequest"})
+            _gm_third = c.post("/api/server/%d/gmod-content" % gs_id,
+                               json={"action": "uninstall", "games": ["cstrike"]},
+                               headers={"X-Requested-With": "XMLHttpRequest"})
+            _gm_gate.set()
+            _gm_after = _gm_settle()
+            check("gmod content: a second apply on the same host while one runs is refused (409)",
+                  (_gm_first.get_json() or {}).get("success") is True
+                  and _gm_second.status_code == 409
+                  and "already running" in ((_gm_second.get_json() or {}).get("message") or ""),
+                  "first %r, second %d %r" % (_gm_first.get_json(), _gm_second.status_code,
+                                              _gm_second.get_json()))
+            check("gmod content: ...and so is an uninstall on that host",
+                  _gm_third.status_code == 409, "got %d %r" % (_gm_third.status_code, _gm_third.get_json()))
+            check("gmod content: ...and the first job still finished on its own",
+                  _gm_after.get("status") == "done", "job=%r" % (_gm_after,))
+            # Positive control: the host is free again the moment the job reports done.
+            _gm_mod.install_gmod_content = lambda *a, **k: (True, ["cstrike"], "installed: cstrike")
+            _gm_again = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": ["cstrike"]},
+                               headers={"X-Requested-With": "XMLHttpRequest"})
+            _gm_settle()
+            check("gmod content: (control) once it finishes, the next job on that host is accepted",
+                  (_gm_again.get_json() or {}).get("success") is True,
+                  "got %d %r — the host stayed held" % (_gm_again.status_code, _gm_again.get_json()))
         finally:
             (_gm_mod.ensure_content_user, _gm_mod.install_gmod_content,
              _gm_mod.gmod_mount_setup) = _gm_saved2
@@ -11299,6 +11524,206 @@ try:
                 _bk_lock.release()
                 return True
             return False
+
+        # ── every backup path hands run_game_backup the server's gamedig override ──────────────
+        # Without query_type, player_count has no gamedig type for the games that need an override
+        # (Project Zomboid, ARK, Mordhau, Killing Floor), answers None, and run_game_backup reads
+        # None as "empty" and runs LinuxGSM `backup`, which STOPS the server with players on it.
+        # All four callers left it out. Driven through each real path.
+        _qt_seen = []
+        with app.app_context():
+            _qt_short = db.session.get(GameServer, gs_id).short_name
+
+        def _qt_rgb(*a, **k):
+            if a[1] == _qt_short:
+                _qt_seen.append(k.get("query_type"))
+            return (True, "", False)
+        _qt_due_saved = _bkops.game_backup_due
+        _qt_prev_sh, _qt_prev_pb = _bksh.run_game_backup, _bkmod.run_game_backup
+        try:
+            with app.app_context():
+                _qt_gs = db.session.get(GameServer, gs_id)
+                _qt_gs.query_type = "projectzomboid"
+                _qt_gs.backup_pending = True
+                db.session.commit()
+            _bksh.run_game_backup = _bkmod.run_game_backup = _qt_rgb
+            _bkops.game_backup_due = lambda sid: sid == gs_id
+            _bkops.record_game_backup(gs_id)
+            _bkops.set_game_schedule(gs_id, 1, 2)
+            for _qt_label, _qt_run in (
+                    ("the 'wait until empty' sweep", lambda: _bksh._run_pending_backups(app)),
+                    ("the scheduled ticker", lambda: _bksh._run_due_game_backups(app)),
+                    ("'back up now'", lambda: c.post("/api/panel/backup/game/%d" % gs_id, json={})),
+                    ("the full backup", lambda: c.post("/api/panel/backup/full", json={"mode": ""}))):
+                del _qt_seen[:]
+                _bk_settle()
+                _qt_run()
+                _bk_settle()
+                check("backup query_type: %s passes the server's gamedig override" % _qt_label,
+                      _qt_seen == ["projectzomboid"],
+                      "run_game_backup saw query_type %r ([] = never called for this server) — "
+                      "player_count answers None, and None reads as empty" % (_qt_seen,))
+        finally:
+            _bksh.run_game_backup = _qt_prev_sh
+            _bkmod.run_game_backup = _qt_prev_pb
+            _bkops.game_backup_due = _qt_due_saved
+            _bkops.set_game_schedule(gs_id, None, None)
+            with app.app_context():
+                _qt_gs = db.session.get(GameServer, gs_id)
+                _qt_gs.query_type = None
+                _qt_gs.backup_pending = False
+                db.session.commit()
+
+        # ── the backup runners say a backup is RUNNING, and stand aside for the Backup button ──
+        # Only the manual route set _game_backup_status running, so _run_due_restarts (its own
+        # 90 s thread, whose guard reads exactly that flag) could stop or restart a server a
+        # scheduled backup had just stopped to archive. And the maintenance menu's Backup button
+        # runs outside the backup lock with no flag at all: the hourly ticker took its live
+        # backup.lock for an orphan and started a second archive of the same files.
+        from panel.core.panel_state import _action_output as _rb_ao, _game_backup_status as _rb_st
+        _rb_seen = []
+        _rb_prev = _bksh.run_game_backup
+        _rb_due_saved = _bkops.game_backup_due
+        with app.app_context():
+            _rb_short = db.session.get(GameServer, gs_id).short_name
+
+        def _rb_rgb(*a, **k):
+            if a[1] == _rb_short:
+                _rb_seen.append((_rb_st.get(gs_id) or {}).get("running"))
+            return (True, "", False)
+        try:
+            _bkops.game_backup_due = lambda sid: sid == gs_id
+            _bkops.record_game_backup(gs_id)
+            _bkops.set_game_schedule(gs_id, 1, 2)
+            _bksh.run_game_backup = _rb_rgb
+            for _rb_label, _rb_pend, _rb_run in (
+                    ("the scheduled ticker", False, lambda: _bksh._run_due_game_backups(app)),
+                    ("the 'wait until empty' sweep", True, lambda: _bksh._run_pending_backups(app))):
+                del _rb_seen[:]
+                _rb_st.pop(gs_id, None)
+                with app.app_context():
+                    db.session.get(GameServer, gs_id).backup_pending = _rb_pend
+                    db.session.commit()
+                _bk_settle()
+                _rb_run()
+                check("backup running flag: %s marks the server running while it backs up" % _rb_label,
+                      _rb_seen == [True] and (_rb_st.get(gs_id) or {}).get("running") is False,
+                      "running during=%r, after=%r" % (_rb_seen, _rb_st.get(gs_id)))
+                # ...and stands aside while the Backup button is archiving the same server.
+                del _rb_seen[:]
+                with app.app_context():
+                    db.session.get(GameServer, gs_id).backup_pending = _rb_pend
+                    db.session.commit()
+                _rb_ao[gs_id] = {"action": "backup", "path": "/dev/null", "user": _rb_short, "pos": 0}
+                try:
+                    _bk_settle()
+                    _rb_run()
+                finally:
+                    _rb_ao.pop(gs_id, None)
+                check("backup running flag: %s does not start a second archive over a Backup-button run"
+                      % _rb_label, _rb_seen == [], "run_game_backup called %d time(s)" % len(_rb_seen))
+            # The FULL run (panel_backup, its own reference to run_game_backup) set no flag either,
+            # and it too must leave a server alone while the Backup button is archiving it.
+            _rb_prev_pb = _bkmod.run_game_backup
+            _bkmod.run_game_backup = _rb_rgb
+            try:
+                del _rb_seen[:]
+                _rb_st.pop(gs_id, None)
+                _bk_settle()
+                c.post("/api/panel/backup/full", json={"mode": ""})
+                _bk_settle()
+                check("backup running flag: the full backup marks the server running while it backs up",
+                      _rb_seen == [True] and (_rb_st.get(gs_id) or {}).get("running") is False,
+                      "running during=%r, after=%r" % (_rb_seen, _rb_st.get(gs_id)))
+                del _rb_seen[:]
+                _rb_ao[gs_id] = {"action": "backup", "path": "/dev/null", "user": _rb_short, "pos": 0}
+                try:
+                    _bk_settle()
+                    c.post("/api/panel/backup/full", json={"mode": ""})
+                    _bk_settle()
+                    _rb_now = c.post("/api/panel/backup/game/%d" % gs_id, json={})
+                    _bk_settle()
+                finally:
+                    _rb_ao.pop(gs_id, None)
+                check("backup running flag: the full backup does not start a second archive over a "
+                      "Backup-button run", _rb_seen == [], "run_game_backup called %d time(s)" % len(_rb_seen))
+                check("backup running flag: ...nor does 'back up now', and it says why",
+                      (_rb_now.get_json() or {}).get("success") is False
+                      and "already being backed up" in ((_rb_now.get_json() or {}).get("message") or ""),
+                      "answered %r" % (_rb_now.get_json(),))
+                # Positive control: the chain is walked, so a backup DISPLACED by a later long action
+                # (an update started while it runs) still counts; an ended one does not.
+                _rb_ao[gs_id] = {"action": "update", "path": "/dev/null", "user": _rb_short, "pos": 0,
+                                 "prev": {"action": "backup", "path": "/dev/null", "user": _rb_short,
+                                          "pos": 0}}
+                try:
+                    _rb_disp = _bksh._button_backup_running(gs_id)
+                    _rb_ao[gs_id]["prev"]["ended"] = True
+                    _rb_ended = _bksh._button_backup_running(gs_id)
+                finally:
+                    _rb_ao.pop(gs_id, None)
+                check("backup running flag: a Backup-button run displaced by a later action still counts; "
+                      "an ended one does not", _rb_disp is True and _rb_ended is False,
+                      "displaced=%r ended=%r" % (_rb_disp, _rb_ended))
+            finally:
+                _bkmod.run_game_backup = _rb_prev_pb
+            # A run that RAISES must not leave the flag set, or the restart sweep skips it for ever.
+
+            def _rb_boom(*a, **k):
+                raise RuntimeError("ssh fell over")
+            _bksh.run_game_backup = _rb_boom
+            _rb_st.pop(gs_id, None)
+            _bk_settle()
+            _bksh._run_due_game_backups(app)
+            check("backup running flag: a run that raises clears the flag",
+                  (_rb_st.get(gs_id) or {}).get("running") is False, "status %r" % (_rb_st.get(gs_id),))
+        finally:
+            _bksh.run_game_backup = _rb_prev
+            _bkops.game_backup_due = _rb_due_saved
+            _bkops.set_game_schedule(gs_id, None, None)
+            _rb_st.pop(gs_id, None)
+            with app.app_context():
+                db.session.get(GameServer, gs_id).backup_pending = False
+                db.session.commit()
+
+        # ── an unreadable config.json must not prune a server past its own retention ──────────
+        # get_game_schedule answers the DEFAULT keep (2) when config.json cannot be read, and
+        # "Back up now" and the full run pruned to it: a server set to keep 10 lost 8 archives.
+        # The sweeps skip in that state; these two now prune no lower than the largest retention
+        # any setting can hold.
+        #
+        # The unreadable file is what the BACKUP module reads (its load_config), not the real
+        # config.json: with that broken the app redirects every request before a route runs.
+        from panel.core.config import UnreadableConfig as _PkUC
+        _pk_seen = []
+        _pk_prev_pb, _pk_load = _bkmod.run_game_backup, _bkops.load_config
+        with app.app_context():
+            _pk_short = db.session.get(GameServer, gs_id).short_name
+        try:
+            _bkops.set_game_schedule(gs_id, 1, 10)
+            _bkmod.run_game_backup = lambda *a, **k: (
+                _pk_seen.append(a[3]) if a[1] == _pk_short else None, (True, "", False))[1]
+            for _pk_label, _pk_run in (
+                    ("'back up now'", lambda: c.post("/api/panel/backup/game/%d" % gs_id, json={})),
+                    ("the full backup", lambda: c.post("/api/panel/backup/full", json={"mode": ""}))):
+                for _pk_bad, _pk_want in ((True, _bkops.MAX_FULL_KEEP), (False, 10)):
+                    del _pk_seen[:]
+                    _bk_settle()
+                    if _pk_bad:
+                        _bkops.load_config = lambda: _PkUC(_pk_load())
+                    try:
+                        _pk_r = _pk_run()
+                        _bk_settle()
+                    finally:
+                        _bkops.load_config = _pk_load
+                    check("backup keep: %s with config.json %s prunes to %d"
+                          % (_pk_label, "UNREADABLE" if _pk_bad else "readable (control)", _pk_want),
+                          _pk_seen == [_pk_want],
+                          "run_game_backup got keep %r (status %d)" % (_pk_seen, _pk_r.status_code))
+        finally:
+            _bkmod.run_game_backup = _pk_prev_pb
+            _bkops.load_config = _pk_load
+            _bkops.set_game_schedule(gs_id, None, None)
 
         # ── a scheduled backup that FAILS has to say so somewhere ─────────────────────────────
         # run_game_backup does not raise for a failed backup: it returns (False, reason, False),
@@ -12490,8 +12915,57 @@ try:
         _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=None))
         check("socket: ...and falls back to '*' only when there is no domain to pin to",
               _sio_cors() == "*", "answered %r with no site_domain set" % (_sio_cors(),))
+        # ...but the socket itself never takes that "*" as it stands. A SITE ignores the port, so
+        # a page on another port of the panel's own address is same-site, the Lax cookie rides
+        # along, and "*" (reflected, with credentials) handed it every console the operator can
+        # see. The socket gets _socket_origin_ok instead, unless the operator wrote "*" himself.
+        from panel.routes import server_files as _sio_sf
+        check("socket: with no domain the socket's origin setting is the same-host/other-port check, not '*'",
+              _sio_sf._socket_cors_setting() is _sio_sf._socket_origin_ok,
+              "got %r" % (_sio_sf._socket_cors_setting(),))
+        _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins="*"))
+        check("socket: ...while an operator's own explicit '*' is still honoured (control)",
+              _sio_sf._socket_cors_setting() == "*", "got %r" % (_sio_sf._socket_cors_setting(),))
+        _sc_cfg(dict(_cfg_before, site_domain="panel.example.ts.net", socketio_cors_origins=None))
+        check("socket: ...and a configured domain still pins the list (control)",
+              _sio_sf._socket_cors_setting() == _sio_cors() and _sio_cors() != "*",
+              "got %r" % (_sio_sf._socket_cors_setting(),))
+        for _so_origin, _so_env, _so_want, _so_what in (
+                ("http://1.2.3.4:8123", {"HTTP_HOST": "1.2.3.4:5000"}, False,
+                 "a page on another port of the panel's own address"),
+                ("http://panel.lan:8123", {"HTTP_HOST": "panel.lan:5000"}, False,
+                 "...by hostname too"),
+                ("https://panel.lan:8443", {"HTTP_HOST": "127.0.0.1:5000",
+                                            "HTTP_X_FORWARDED_HOST": "panel.lan"}, False,
+                 "...and by the host a proxy forwarded"),
+                ("http://1.2.3.4:5000", {"HTTP_HOST": "1.2.3.4:5000"}, True, "the panel's own page"),
+                ("https://panel.lan", {"HTTP_HOST": "panel.lan:443"}, True, "an implied default port"),
+                ("https://panel.lan", {"HTTP_HOST": "127.0.0.1:5000"}, True,
+                 "a proxy that rewrote Host to loopback"),
+                ("https://panel.lan", {"HTTP_HOST": "panel.lan:5000", "HTTP_X_FORWARDED_HOST": "panel.lan"},
+                 True, "a proxy on the panel's own name that forwards the original host"),
+                ("null", {"HTTP_HOST": "1.2.3.4:5000"}, False, "an opaque origin")):
+            check("socket origin: %s is %s" % (_so_what, "accepted" if _so_want else "refused"),
+                  _sio_sf._socket_origin_ok(_so_origin, _so_env) is _so_want,
+                  "%r with %r" % (_so_origin, _so_env))
     finally:
         _sc_cfg(_cfg_before)
+    # The app's REAL engine.io server, driven over HTTP: its handshake refuses the other-port page
+    # and still answers the panel's own. Only meaningful when the app came up without a domain,
+    # which is how this suite builds it; the first check says so if that ever changes.
+    _so_eio = app.socketio.server.eio
+    check("socket origin: the running engine.io server was built with the same-host/other-port check",
+          _so_eio.cors_allowed_origins is _sio_sf._socket_origin_ok,
+          "cors_allowed_origins is %r" % (_so_eio.cors_allowed_origins,))
+    _so_c = app.test_client()
+    _so_bad = _so_c.get("/socket.io/?EIO=4&transport=polling", base_url="http://1.2.3.4:5000",
+                        headers={"Origin": "http://1.2.3.4:8123"})
+    _so_ok = _so_c.get("/socket.io/?EIO=4&transport=polling", base_url="http://1.2.3.4:5000",
+                       headers={"Origin": "http://1.2.3.4:5000"})
+    check("socket origin: the live handshake refuses a page on another port of the same address",
+          _so_bad.status_code == 400, "status %d %r" % (_so_bad.status_code, _so_bad.data[:80]))
+    check("socket origin: ...and completes for the panel's own origin (control)",
+          _so_ok.status_code == 200, "status %d %r" % (_so_ok.status_code, _so_ok.data[:80]))
 
 except Exception:
     # A crash part-way through otherwise just prints fewer checks and still reads as green-ish.

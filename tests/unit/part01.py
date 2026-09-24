@@ -1187,6 +1187,17 @@ try:
           _sm_cron._cron_log_command("1 h CRON[1]: (gm) CMD (a (b) c) ", "(gm) CMD ") == "a (b) c"
           and _sm_cron._cron_log_command("1 h CRON[1]: (gm) CMD (no close", "(gm) CMD ") is None,
           "")
+    # The verb prints 14 days OLDEST first and every transport keeps only the first 8 MB, so a
+    # busy host's read ends days ago: its "last run" is the last run before the cut. A read at the
+    # cap is reported as unknown, not as that stale time.
+    _crj_line = "1700000000 host CRON[9]: (gm) CMD (%s)\n" % _crj_cmd
+    _crj_out["v"] = _crj_line * (_sm_core._MAX_OUTPUT_BYTES // len(_crj_line) + 1)
+    _crj_out["v"] = _crj_out["v"][:_sm_core._MAX_OUTPUT_BYTES].strip()
+    check("cron journal: a read cut at the transport's output cap reports no (stale) last-run times",
+          _sm_cron._read_cron_run_times(NS(), "gm") == {}, "")
+    _crj_out["v"] = _crj_line * 100
+    check("cron journal: ...while a read under the cap still does (positive control)",
+          _sm_cron._read_cron_run_times(NS(), "gm") == {_crj_cmd: 1700000000}, "")
 finally:
     _sm_core.run_privileged = _crj_saved
 
@@ -1799,6 +1810,43 @@ try:
           _ok_big is True and len(_wcalls) > 1, "%r %d calls" % (_ok_big, len(_wcalls)))
     check("upload: the large path guards its FIRST command, before any byte is written",
           "realpath -m" in _wcalls[0], _wcalls[0][:110])
+
+    # The rename replaces the destination's inode, so without copying the mode across every save
+    # reset the file to the umask default: LinuxGSM's 0755 launch script lost its exec bit (start
+    # and monitor then fail) and a 0600 file became 0644. The generated commands are RUN here, in
+    # a scratch dir, with the /home guard and the `sudo -u` prefix peeled off — the only parts that
+    # need a real host.
+    import subprocess as _subp
+    import tempfile as _tmpf
+    _orig_guarded = _sm_files._guarded
+    _mode_dir = _tmpf.mkdtemp(prefix="unit-keepmode-")
+    try:
+        _sm_files._guarded = lambda u, a, inner: inner
+
+        def _run_peeled(s, c, **k):
+            _r = _subp.run(["bash", "-c", c.split(" ", 3)[3]], capture_output=True, text=True)
+            return _r.stdout, _r.stderr, _r.returncode
+        _sm_core.run_command = _run_peeled
+        for _label, _size in (("one-shot", 64), ("chunked", 200 * 1024)):
+            for _mode in (0o755, 0o600):
+                _mp = os.path.join(_mode_dir, "f-%s-%o" % (_label, _mode))
+                with open(_mp, "wb") as _fh:
+                    _fh.write(b"old")
+                os.chmod(_mp, _mode)
+                _okm, _ = _sm_files._write_file_as_user(_FakeSrv(), "u", _mp, b"N" * _size)
+                with open(_mp, "rb") as _fh:
+                    _got = _fh.read()
+                eq("write keeps the destination's mode (%s, 0%o)" % (_label, _mode),
+                   (_okm, oct(os.stat(_mp).st_mode & 0o7777), len(_got)), (True, oct(_mode), _size))
+            # Positive control: a NEW file is still created (the mode copy is skipped, not fatal).
+            _np = os.path.join(_mode_dir, "new-%s" % _label)
+            _okn, _ = _sm_files._write_file_as_user(_FakeSrv(), "u", _np, b"N" * _size)
+            check("write still creates a file that did not exist (%s)" % _label,
+                  _okn is True and os.path.getsize(_np) == _size, "%r" % _okn)
+    finally:
+        _sm_files._guarded = _orig_guarded
+        import shutil as _shm
+        _shm.rmtree(_mode_dir, ignore_errors=True)
 
     # The server-side half: overwrite is opt-in. The UI asks first, but check and write are two
     # round trips, so a file that appears in between must be refused rather than clobbered.

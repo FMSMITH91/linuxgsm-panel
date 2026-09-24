@@ -16,7 +16,7 @@ from panel.core.clock import (utcnow)
 from panel.core.config import (ConfigUnreadable, is_unreadable, load_config)
 from panel.core.http import (_json_str)
 from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
-    _game_backup_status, register_remote_state)
+    _game_backup_status, register_remote_state, register_server_state)
 from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (backup as bk)
 from panel.ops.ssh_manager import (get_server_status, mod_restart_decision, player_count as
@@ -260,6 +260,42 @@ def _record_full_clock(app, summary):
         return False
 
 
+def _button_backup_running(sid):
+    """True while the maintenance menu's Backup button is archiving server `sid`. That runs
+    LinuxGSM `backup` as a long action — registered in _action_output, outside _full_backup_lock
+    and without the _game_backup_status flag — so neither the lock nor the flag can see it.
+
+    The whole registration chain, not just its head: a later long action (an update started while
+    the backup runs) displaces the backup's entry into `prev` — see _begin_action_tail — and the
+    backup is still archiving underneath it."""
+    e = _action_output.get(sid)
+    while e is not None:
+        if e.get("action") == "backup" and not e.get("ended"):
+            return True
+        e = e.get("prev")
+    return False
+
+
+def _marked_backup(sid, *args, runner=None, **kwargs):
+    """run_game_backup, with the server marked RUNNING in _game_backup_status while it runs.
+
+    Only the manual per-server route set that flag, so the two tickers backed servers up
+    invisibly: _run_due_restarts — a separate 90 s thread whose own guard reads exactly this
+    flag — stopped or restarted a server a scheduled backup had just stopped to archive, and the
+    'backing up' state never reached the page. The caller overwrites the entry with the outcome,
+    as it always did; a raise clears it here, so a failed run cannot leave the flag set.
+
+    `runner` is the caller's own reference to run_game_backup (panel_backup imports it by name, and
+    that name is the seam its tests stub); None means this module's."""
+    _game_backup_status[sid] = {"running": True, "ok": None, "msg": "", "ts": time.time()}
+    try:
+        return (runner or run_game_backup)(*args, **kwargs)
+    except Exception as e:
+        _game_backup_status[sid] = {"running": False, "ok": False,
+                                    "msg": "backup error (%s)" % type(e).__name__, "ts": time.time()}
+        raise
+
+
 def _run_due_game_backups(app):
     """Scheduled per-server backups: back up each installed server whose OWN schedule is due
     (its override, or the global default). Serialised via the same lock as manual backups."""
@@ -269,9 +305,14 @@ def _run_due_game_backups(app):
         return
     try:
         with app.app_context():
-            targets = [(gs.id, gs.remote, gs.short_name, gs.lgsm_name, gs.name, gs.game_type, gs.port)
+            # query_type rides along: without the server's gamedig override, player_count has no
+            # type for the games that need one (Project Zomboid, ARK, ...), answers None, and
+            # run_game_backup reads None as EMPTY and runs LinuxGSM `backup`, which stops the
+            # server with its players on it. Every backup and player-count caller passes it.
+            targets = [(gs.id, gs.remote, gs.short_name, gs.lgsm_name, gs.name, gs.game_type, gs.port,
+                        gs.query_type)
                        for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
-            for sid, remote, short, lgsm, gname, gtype, port in targets:
+            for sid, remote, short, lgsm, gname, gtype, port, qtype in targets:
                 try:
                     sched = bk.get_game_schedule(sid)
                     if sched["interval_days"] <= 0:
@@ -284,9 +325,15 @@ def _run_due_game_backups(app):
                         continue
                     if not bk.game_backup_due(sid):
                         continue
+                    if _button_backup_running(sid):
+                        # A Backup-button run is archiving it now. run_game_backup would take its
+                        # 5-minute-old backup.lock for an orphan, delete it, and start a second
+                        # archive of the same files. It stays due; the next tick decides again.
+                        continue
                     keep = sched["keep"]
-                    ok, reason, was_skipped = run_game_backup(remote, short, lgsm, keep,
-                                                              game_type=gtype, port=port)
+                    ok, reason, was_skipped = _marked_backup(sid, remote, short, lgsm, keep,
+                                                             game_type=gtype, port=port,
+                                                             query_type=qtype)
                     if was_skipped:
                         # Players online — leave the clock untouched so it stays "due" and we
                         # retry on the next hourly tick, backing up once the server empties.
@@ -326,13 +373,17 @@ def _run_pending_backups(app):
             # archives a server's own retention override said to retain.
             pending = GameServer.query.filter_by(installed=True, backup_pending=True).all()
             for gs in pending:
-                if not gs.remote_id:
-                    continue
+                if not gs.remote_id or _button_backup_running(gs.id):
+                    continue   # (a Backup-button run in flight: stays queued, see the ticker)
                 try:
-                    ok, reason, was_skipped = run_game_backup(
-                        gs.remote, gs.short_name, gs.lgsm_name,
+                    ok, reason, was_skipped = _marked_backup(
+                        gs.id, gs.remote, gs.short_name, gs.lgsm_name,
                         bk.get_game_schedule(gs.id)["keep"],
-                        game_type=gs.game_type, port=gs.port)
+                        game_type=gs.game_type, port=gs.port, query_type=gs.query_type)
+                    if was_skipped:
+                        # Still players on: stays queued. Clear the running mark set above.
+                        _game_backup_status[gs.id] = {"running": False, "ok": None, "busy": True,
+                                                      "msg": reason, "ts": time.time()}
                     if not was_skipped:
                         # Backed up (or genuinely failed) — either way the wait is over.
                         gs.backup_pending = False
@@ -365,6 +416,63 @@ def _run_pending_backups(app):
     finally:
         _full_backup_lock.release()
 
+# Consecutive failed attempts at a queued stop/restart, per server id (registered, so a deleted
+# server's count is not inherited by the next server SQLite gives its id). In memory on purpose: a
+# panel restart starting the count again costs at most a few more attempts.
+_queued_action_failures = register_server_state({})
+# How many failed attempts before a queued stop/restart is given up on. Retrying at all is what the
+# queue needs (a timed-out stop has not happened); retrying for ever is not, because a restart that
+# LinuxGSM answers non-zero while the server comes back fine would otherwise bounce that server
+# on every tick.
+_QUEUED_ACTION_ATTEMPTS = 3
+
+
+def _run_queued_action(app, gs):
+    """Run the queued 'stop/restart when empty' for an online, empty server. Called from
+    _run_due_restarts once it has decided to act.
+
+    The result was thrown away and both flags were cleared whatever happened. run_as_game_user
+    does not raise: a timeout or an unreachable host on the tailscale and local transports comes
+    back as ("", "…timed out", -1), so a stop that never happened cleared stop_pending, nothing
+    retried, and players rejoined a server the panel no longer showed as queued. No audit row was
+    written for the unattended stop/restart either way.
+
+    Now the flags clear only when the action exited 0, or after _QUEUED_ACTION_ATTEMPTS failures in
+    a row (so a restart that exits non-zero cannot bounce the server on every tick), and every
+    attempt is audited."""
+    act = "stop" if gs.stop_pending else "restart"
+    _out, err, rc = _sm.run_as_game_user(gs.remote, gs.short_name, act,
+                                         timeout=90, selfname=gs.lgsm_name)
+    ok = (rc == 0)
+    if ok and act == "restart":
+        try:
+            _sm.set_game_priority(gs.remote, gs.short_name)
+        except Exception:
+            app.logger.debug("priority boost failed", exc_info=True)
+    fails = 0 if ok else _queued_action_failures.get(gs.id, 0) + 1
+    give_up = fails >= _QUEUED_ACTION_ATTEMPTS
+    if ok:
+        detail = "queued '%s when empty' ran" % act
+    else:
+        why = [ln.strip() for ln in terminal.strip_escapes(err or _out or "").splitlines() if ln.strip()]
+        detail = ("queued '%s when empty' failed (exit %s, attempt %d of %d)%s: %s"
+                  % (act, rc, fails, _QUEUED_ACTION_ATTEMPTS,
+                     " — no longer queued" if give_up else " — still queued, will retry",
+                     why[-1][:200] if why else "no output"))
+    try:
+        log_action(None, "%s_server" % act, target=gs.name, detail=detail[:500], success=ok)
+    except Exception:
+        db.session.rollback()
+        app.logger.warning("could not audit the queued %s of %s", act, gs.name, exc_info=True)
+    if ok or give_up:
+        _queued_action_failures.pop(gs.id, None)
+        gs.restart_pending = gs.stop_pending = False
+    else:
+        _queued_action_failures[gs.id] = fails
+    db.session.commit()
+    return ok
+
+
 def _run_due_restarts(app):
     """Servers queued to restart OR stop once they empty — mod-restarts and the user's
     'restart/stop when empty'. Once empty, run the queued action (rechecked hourly). A stopped
@@ -372,11 +480,18 @@ def _run_due_restarts(app):
     with app.app_context():
         pending = [gs for gs in GameServer.query.filter_by(installed=True).all()
                    if gs.remote_id and (gs.restart_pending or gs.stop_pending)]
+        # A failure count belongs to a queued action. One the operator cancelled has none, so a
+        # later re-queue must start from zero rather than inherit the old attempts.
+        _queued_ids = {gs.id for gs in pending}
+        for _sid in [s for s in list(_queued_action_failures) if s not in _queued_ids]:
+            _queued_action_failures.pop(_sid, None)
         for gs in pending:
             # Don't restart/stop a server that's being backed up right now — the backup already
             # stops+starts it, and racing it could fail the backup. Leave it queued for next tick.
+            # Both ways a backup can be running: the runners' flag, and the Backup button's long
+            # action, which sets no flag at all.
             _bst = _game_backup_status.get(gs.id)
-            if _bst and _bst.get("running"):
+            if (_bst and _bst.get("running")) or _button_backup_running(gs.id):
                 continue
             try:
                 # distinguish_unresponsive, because this loop is deciding whether there is
@@ -386,24 +501,16 @@ def _run_due_restarts(app):
                 # for a crashed server permanently. That is the very state the port check exists
                 # to detect, and it is exactly when a queued "stop" most needs to happen.
                 status = get_server_status(gs.remote, gs, distinguish_unresponsive=True)
-                pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port) \
-                    if status == "online" else None
+                pc = sm_player_count(gs.remote, gs.short_name, gs.game_type, gs.port,
+                                     gs.query_type) if status == "online" else None
                 # 'restart' here means "online + empty -> act now"; 'idle' = already stopped.
                 decision = mod_restart_decision(status, pc)
                 if decision == "idle":
+                    _queued_action_failures.pop(gs.id, None)
                     gs.restart_pending = gs.stop_pending = False
                     db.session.commit()
                 elif decision == "restart":
-                    act = "stop" if gs.stop_pending else "restart"
-                    _sm.run_as_game_user(gs.remote, gs.short_name, act,
-                                     timeout=90, selfname=gs.lgsm_name)
-                    if act == "restart":
-                        try:
-                            _sm.set_game_priority(gs.remote, gs.short_name)
-                        except Exception:
-                            app.logger.debug("priority boost failed", exc_info=True)
-                    gs.restart_pending = gs.stop_pending = False
-                    db.session.commit()
+                    _run_queued_action(app, gs)
                 # 'pending' (players on / unknown): leave the flags, retry next tick
             except Exception:
                 app.logger.debug("pending restart/stop of %s failed", gs.name, exc_info=True)
@@ -683,9 +790,23 @@ def _drain_action_output(app, remote, server_id):
     return True
 
 
+# Which registration THIS worker made, per (server_id, action). A thread-local (a greenlet-local
+# under eventlet's monkey-patching), because the worker that begins a tail is the one that ends
+# it, and the caller does not hand anything back — see _end_action_tail.
+_action_tail_local = threading.local()
+
+
 def _begin_action_tail(app, server_id, action, path, user):
     """Register an action's output file for tailing and announce it in the console."""
-    _action_output[server_id] = {"action": action, "path": path, "user": user, "pos": 0}
+    # `prev` is the registration this one displaces, so that when this run ends first the one it
+    # displaced — still running — is tailed again rather than left streaming nothing.
+    entry = {"action": action, "path": path, "user": user, "pos": 0,
+             "prev": _action_output.get(server_id)}
+    _action_output[server_id] = entry
+    toks = getattr(_action_tail_local, "tokens", None)
+    if toks is None:
+        toks = _action_tail_local.tokens = {}
+    toks[(server_id, action)] = entry
     _console_push(app, server_id, f"[panel] {action} started — its output follows.")
 
 
@@ -702,14 +823,33 @@ def _end_action_tail(app, server_id, remote, action, rc):
     # deregistered it, and every later poller tick returned immediately: the ten-minute SteamCMD
     # download the panel had just told the operator to watch the console for streamed nothing, and
     # its own final drain found no entry, so the last lines were lost too.
-    own = (_action_output.get(server_id) or {}).get("action") == action
+    #
+    # The name alone only told DIFFERENT actions apart. Two runs of the SAME action (two operators,
+    # a bot and a click, a double submit) matched each other's name, so the first to finish popped
+    # the registration of the one still running. When this worker made a registration, "ours"
+    # means that very entry; the name check remains only for a caller that ends a tail it did not
+    # begin on this thread. And when ours had displaced a run that is STILL going, that run is
+    # registered again, so the later of two overlapping runs finishing first does not leave the
+    # earlier one streaming nothing for the rest of its life.
+    mine = (getattr(_action_tail_local, "tokens", None) or {}).pop((server_id, action), None)
+    if mine is not None:
+        mine["ended"] = True
+    cur = _action_output.get(server_id)
+    own = cur is not None and (cur is mine if mine is not None else cur.get("action") == action)
     if own:
+        cur["ended"] = True
         try:
             _drain_action_output(app, remote, server_id)
         except Exception:
             _log.debug("final action-output drain for server %s failed", server_id, exc_info=True)
         finally:
-            _action_output.pop(server_id, None)
+            nxt = cur.get("prev")
+            while nxt is not None and nxt.get("ended"):
+                nxt = nxt.get("prev")
+            if nxt is not None:
+                _action_output[server_id] = nxt
+            else:
+                _action_output.pop(server_id, None)
     if rc == 0:
         _console_push(app, server_id, f"[panel] {action} finished successfully.")
     elif rc is None or rc < 0:

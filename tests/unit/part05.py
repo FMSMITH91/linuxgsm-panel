@@ -26,6 +26,12 @@ try:
     check("file guard: delete_path refuses a traversal onto serverfiles",
           _ok2 is False and not _sent_rm, "ran: %s" % _sent_rm[:1])
     _sent_rm.clear()
+    # Out of the home and back in by name: _safe_abspath resolves this to /home/<user>/lgsm, and
+    # the guard used to normalise it against "/" into "<user>/lgsm", which is not protected.
+    _ok4, _ = _sm_files.delete_path(object(), _SELF, "x/../../%s/lgsm" % _SELF, selfname=_SELF)
+    check("file guard: delete_path refuses a path that climbs out and back in onto lgsm",
+          _ok4 is False and not _sent_rm, "ran: %s" % _sent_rm[:1])
+    _sent_rm.clear()
     _ok3, _ = _sm_files.delete_path(object(), _SELF, "addons/junk.txt", selfname=_SELF)
     check("file guard: a real file still gets deleted, at its resolved path",
           _ok3 is True and len(_sent_rm) == 1

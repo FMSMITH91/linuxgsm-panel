@@ -322,6 +322,14 @@ def _read_cron_run_times(server, user):
     # Was `journalctl _COMM=cron … | grep -F '(<user>) CMD ' | tail -n 800` — the user name went
     # into a grep pattern running as root. The verb reads the window; the filtering is here.
     out, _, _ = _core.run_privileged(server, "journal-cron", [], timeout=12, merge_stderr=False)
+    # The verb prints 14 days OLDEST FIRST, and every transport keeps the first _MAX_OUTPUT_BYTES
+    # and discards the rest. A busy host's cron journal passes 8 MB well inside that window, so a
+    # read at the cap holds only the oldest days and "last run" would be the last run BEFORE the
+    # cut — days stale, shown as current. Such a read says nothing about when a job last ran.
+    if len((out or "").encode("utf-8", "replace")) >= _core._MAX_OUTPUT_BYTES - _JOURNAL_CAP_MARGIN:
+        _core._log.warning("cron journal read for %s reached the output cap; last-run times from "
+                           "it would be stale, so none are reported", user)
+        return {}
     marker = "(%s) CMD " % user
     # Over-long lines are skipped before anything else looks at them. The journal is the remote's
     # to write, and this runs on the request greenlet: the regex that used to pull the command out
@@ -345,6 +353,9 @@ def _read_cron_run_times(server, user):
 
 # A cron command line is a few hundred bytes; a journal line longer than this is not one.
 _MAX_CRON_LOG_LINE = 4096
+# How close to the transport's output cap a journal read may come before it counts as truncated:
+# the cut lands mid-line, and decoding and stripping move the length by a few bytes either way.
+_JOURNAL_CAP_MARGIN = 4096
 
 
 def _cron_log_command(line, marker):
@@ -618,11 +629,26 @@ def list_game_backups(server, user):
 def prune_game_backups(server, user, keep=3):
     """Keep only the newest `keep` LinuxGSM backups for a game server; delete the rest.
     Matches every archive type LinuxGSM produces (.tar.zst / .tar.gz / …), not just .tar.gz —
-    otherwise large zstd backups would never be pruned and could fill the disk."""
+    otherwise large zstd backups would never be pruned and could fill the disk.
+
+    NUL-delimited end to end. This was `ls -1t … | tail | xargs -r rm -f`, and xargs parses
+    quotes and blanks: one file in the backup dir with a quote in its name ("unmatched single
+    quote") stopped the prune for good, and a space split a name into two. The game user — or
+    anything that writes as it — could leave such a file, after which old backups piled up until
+    the disk was full and real backups failed. Returns True when the prune ran cleanly; a failure
+    is logged rather than silently discarded."""
+    if not files._SAFE_UNIX_USER_RE.match(str(user or "")):
+        return False
     bdir = "/home/%s/lgsm/backup" % user
     keep = max(1, int(keep))
-    cmd = "ls -1t %s/*.tar.* 2>/dev/null | tail -n +%d | xargs -r rm -f" % (bdir, keep + 1)
-    _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(cmd)}", timeout=30, sudo=False)
+    cmd = ("find %s -maxdepth 1 -type f -name '*.tar.*' ! -name '.*' -printf '%%T@ %%p\\0' "
+           "2>/dev/null | sort -z -rn | tail -z -n +%d | cut -z -d' ' -f2- | xargs -0 -r rm -f --"
+           % (_core._quote(bdir), keep + 1))
+    _o, err, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(cmd)}",
+                                    timeout=30, sudo=False)
+    if rc != 0:
+        _core._log.warning("backup prune for %s failed (rc=%s): %s", user, rc, (err or "")[:200])
+    return rc == 0
 
 
 def _fmt_size(nbytes):

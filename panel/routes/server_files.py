@@ -27,6 +27,8 @@ from panel.services import (lgsm_data)
 import re
 import threading
 import time
+from urllib.parse import urlsplit
+from panel.core.config import (load_config)
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from panel.core.validation import (_attachment_header)
 from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_BYTES,
@@ -64,6 +66,93 @@ _gmod_content_apply_state = register_server_state({})   # server_id -> {"status"
 # job poll gives its done/failed card, and for the same reason: without an expiry a failure from
 # last month reappears on every later visit to the server page.
 _GMOD_JOB_TTL = 900
+
+# Hosts (remote ids) with a GMod content job in flight. Content is HOST-wide — one content user,
+# one ~/serverfiles, shared by every GMod server there — but job state is kept per game server, so
+# nothing stopped a second job on the same host: two SteamCMD installs writing one content
+# directory, or an uninstall `rm`-ing content another server's job was still downloading and
+# mounting. One job per host; a second is refused (409) until the first finishes.
+_gmod_content_busy_hosts = set()
+_gmod_content_busy_lock = threading.Lock()
+
+
+def _claim_gmod_content_host(remote_id):
+    """True, and the host is now held, when no content job is running on it; False otherwise."""
+    with _gmod_content_busy_lock:
+        if remote_id in _gmod_content_busy_hosts:
+            return False
+        _gmod_content_busy_hosts.add(remote_id)
+        return True
+
+
+def _release_gmod_content_host(remote_id):
+    with _gmod_content_busy_lock:
+        _gmod_content_busy_hosts.discard(remote_id)
+
+
+def _publish_gmod_job(server_id, remote_id, state):
+    """A content worker's last step: release the host, THEN publish the job's terminal state.
+
+    In that order so a poller that sees the job finish can start the next one at once — the other
+    way round left a moment where the card said "done" and the next apply was refused as busy.
+    `state` None means the worker left without recording one (its host was deleted mid-job), which
+    used to leave the card spinning on "running" for ever."""
+    _release_gmod_content_host(remote_id)
+    _gmod_content_apply_state[server_id] = state or {
+        "status": "error", "msg": "The host is no longer registered with the panel.",
+        "ts": time.time()}
+
+
+def _socket_origin_ok(origin, environ=None):
+    """engineio's Origin check for the console socket when neither explicit origins nor a
+    site_domain are configured — the case _socketio_cors() answers with "*".
+
+    "*" rested on the session cookie being SameSite=Lax, so that a page on another site cannot
+    carry it. But a SITE ignores the port: a page at http://<panel-ip>:8123 (a game server's web
+    map, anything else served on the host) is same-site with the panel at http://<panel-ip>:5000,
+    the operator's browser sends the cookie with that page's handshake, and "*" (reflected, with
+    credentials) let it in to read every console the operator can see. So an Origin naming the
+    SAME host as the request on a DIFFERENT port is refused.
+
+    Everything else is accepted as before, on purpose: a cross-site page carries no cookie, and a
+    reverse proxy that rewrites Host (to 127.0.0.1:5000, or a LAN address) must not lose the
+    console over it — engineio's own same-origin mode (None) would refuse exactly that. The
+    scheme is not compared: both headers are written by the browser from one URL, and a proxy
+    terminating TLS changes it."""
+    try:
+        o = urlsplit(str(origin or ""))
+        o_host, o_port = (o.hostname or "").lower(), o.port
+    except ValueError:
+        return False
+    if o.scheme not in ("http", "https") or not o_host:
+        return False
+    dflt = 443 if o.scheme == "https" else 80
+    o_port = o_port or dflt
+    env = environ or {}
+    same_host_other_port = False
+    for h in (env.get("HTTP_HOST"), (env.get("HTTP_X_FORWARDED_HOST") or "").split(",")[0].strip()):
+        if not h:
+            continue
+        try:
+            r = urlsplit("//" + h)
+            r_host, r_port = (r.hostname or "").lower(), (r.port or dflt)
+        except ValueError:
+            continue
+        if r_host == o_host:
+            if r_port == o_port:
+                return True        # same origin (or the proxy's original host said so)
+            same_host_other_port = True
+    return not same_host_other_port
+
+
+def _socket_cors_setting():
+    """What the console socket's cors_allowed_origins is: _socketio_cors(), except that its "*"
+    fallback becomes _socket_origin_ok. An operator who wrote "*" into socketio_cors_origins
+    themselves still gets exactly that."""
+    cors = _socketio_cors()
+    if cors == "*" and not load_config().get("socketio_cors_origins"):
+        return _socket_origin_ok
+    return cors
 
 
 def _gmod_job_state(server_id):
@@ -647,8 +736,14 @@ def register(app, supervise):
             return jsonify({"content": content, "path": request.args.get("path", "")})
         data = _json_body()
         rel = data.get("path", "")
+        # The contents must be present and be TEXT, as api_server_config's `raw` must. This was
+        # data.get("content", ""), and write_file encodes (content or ""), so a missing key (an API
+        # script's typo) or a null/0/false/[] truncated the file to nothing and answered "Saved".
+        # An intentionally empty file is "", which is text, and still saves.
+        if not isinstance(data.get("content"), str):
+            return jsonify({"success": False, "message": "The file contents must be text."}), 400
         try:
-            ok, msg = write_file(gs.remote, gs.short_name, rel, data.get("content", ""))
+            ok, msg = write_file(gs.remote, gs.short_name, rel, data["content"])
             log_action(current_user, "edit_file", target=gs.name, detail=rel, success=ok)
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
         except Exception:
@@ -873,6 +968,8 @@ def register(app, supervise):
         _app = app
         _gmod_content_apply_state[server_id] = {"status": "running", "msg": "", "ts": time.time()}
 
+        _result = [None]   # the terminal state, published only once the host is released
+
         def _run():
             with _app.app_context():
                 try:
@@ -882,7 +979,7 @@ def register(app, supervise):
                     if games:
                         cu = ensure_content_user(remote)
                         if not cu:
-                            _gmod_content_apply_state[server_id] = {
+                            _result[0] = {
                                 "status": "error", "msg": "No content storage could be prepared on the host.",
                                 "ts": time.time()}
                             return
@@ -905,7 +1002,7 @@ def register(app, supervise):
                         ok, msg = gmod_mount_setup(remote, gmod_user, cu["user"], _mountable)
                         if _missing:
                             _labels = ", ".join(GMOD_CONTENT_GAMES[g][0] for g in _missing)
-                            _gmod_content_apply_state[server_id] = {
+                            _result[0] = {
                                 "status": "error",
                                 "msg": ("Not installed, so not mounted: %s. Check free disk on "
                                         "the host, then try again. %s" % (_labels, msg or "")).strip(),
@@ -913,21 +1010,25 @@ def register(app, supervise):
                             return
                     else:
                         ok, msg = gmod_mount_setup(remote, gmod_user, "", [])
-                    _gmod_content_apply_state[server_id] = {
+                    _result[0] = {
                         "status": "done" if ok else "error", "msg": msg, "ts": time.time()}
                 except Exception:
                     _log.warning("gmod content apply failed for %s", gmod_user, exc_info=True)
-                    _gmod_content_apply_state[server_id] = {
+                    _result[0] = {
                         "status": "error", "msg": "Content setup failed — check the server logs.",
                         "ts": time.time()}
+                finally:
+                    _publish_gmod_job(server_id, remote_id, _result[0])
 
-        threading.Thread(target=_run, daemon=True).start()
+        _start_gmod_content_worker(remote_id, _run)
 
     def _bg_gmod_content_uninstall(server_id, remote_id, gmod_user, games):
         """Uninstall content from the host (host-wide) in the background, then drop the removed games
         from THIS server's mounts. Result is stashed for the status poll."""
         _app = app
         _gmod_content_apply_state[server_id] = {"status": "running", "msg": "", "ts": time.time()}
+
+        _result = [None]
 
         def _run():
             with _app.app_context():
@@ -955,15 +1056,26 @@ def register(app, supervise):
                         gmod_mount_setup(remote, gmod_user, (cu or {}).get("user", ""),
                                          [g for g in _cur if g not in games])
                     _st, _msg = _gmod_removal_result(_asked, removed)
-                    _gmod_content_apply_state[server_id] = {
+                    _result[0] = {
                         "status": _st, "msg": _msg, "ts": time.time()}
                 except Exception:
                     _log.warning("gmod content uninstall failed for %s", gmod_user, exc_info=True)
-                    _gmod_content_apply_state[server_id] = {
+                    _result[0] = {
                         "status": "error", "msg": "Uninstall failed — check the server logs.",
                         "ts": time.time()}
+                finally:
+                    _publish_gmod_job(server_id, remote_id, _result[0])
 
-        threading.Thread(target=_run, daemon=True).start()
+        _start_gmod_content_worker(remote_id, _run)
+
+    def _start_gmod_content_worker(remote_id, run):
+        """Start a content worker; the host the route claimed is released by the worker's own
+        finally — or here, if the thread never starts, so a failed start cannot wedge the host."""
+        try:
+            threading.Thread(target=run, daemon=True).start()
+        except Exception:
+            _release_gmod_content_host(remote_id)
+            raise
 
     @app.route("/api/server/<int:server_id>/gmod-content", methods=["GET", "POST"])
     @login_required
@@ -1013,7 +1125,12 @@ def register(app, supervise):
         body = _json_body()
         action = body.get("action") or "mount"
         sel = [g for g in (body.get("games") or []) if g in GMOD_CONTENT_GAMES]
+        _busy = jsonify({"success": False, "message": (
+            "A Garry's Mod content job is already running on this host. Content is shared by every "
+            "GMod server here, so wait for that one to finish, then try again.")}), 409
         if action == "uninstall":
+            if not _claim_gmod_content_host(remote.id):
+                return _busy
             _bg_gmod_content_uninstall(gs.id, remote.id, gs.short_name, sel)
             log_action(current_user, "gmod_content_uninstall", target=gs.name, detail=",".join(sel))
             return jsonify({"success": True, "games": sel,
@@ -1028,6 +1145,8 @@ def register(app, supervise):
                 "Couldn't read this server's current mounts, so the panel won't rewrite them — "
                 "applying now could unmount content the server already has. Check the host is "
                 "reachable and reload this card.")}), 409
+        if not _claim_gmod_content_host(remote.id):
+            return _busy
         _bg_gmod_content_apply(gs.id, remote.id, gs.short_name, sel)
         log_action(current_user, "gmod_content", target=gs.name, detail=(",".join(sel) or "(none)"))
         return jsonify({"success": True, "games": sel,
@@ -1247,7 +1366,9 @@ def register(app, supervise):
             return jsonify({"error": _log_and_generic("request failed")}), 500
 
 
-    socketio = SocketIO(app, cors_allowed_origins=_socketio_cors(), async_mode="eventlet")
+    # _socket_cors_setting, not _socketio_cors() directly: its "*" fallback let a page on another
+    # port of the panel's own address (same SITE, so the session cookie rides along) open a console.
+    socketio = SocketIO(app, cors_allowed_origins=_socket_cors_setting(), async_mode="eventlet")
 
     # Track which sockets are viewing which server console, so the poller only
     # polls consoles that someone is actually watching (idle = ~0% CPU).
