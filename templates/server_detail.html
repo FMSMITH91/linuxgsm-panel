@@ -42,9 +42,16 @@
    writes the column from it), so the two queues stay independent and nothing restarts twice.
    The "do it now" button calls the same action endpoint as the control bar, so it is offered only
    to a viewer who holds the matching permission. The bar itself is filtered per permission, and a
-   view-only member was shown "Restart now" (and told they could do it now) only to be refused. #}
-{% set _can_do_pending = current_user.is_superadmin
-     or has_permission('stop_server' if server.stop_pending else 'restart_server') %}
+   view-only member was shown "Restart now" (and told they could do it now) only to be refused.
+   WHICH permission depends on the queued action, and that can change without a reload:
+   showPendingBanner() switches it when this viewer queues a stop or restart from the dialog. So
+   the button (and its clause) is rendered for a viewer who holds EITHER, the two permissions ride
+   on data-can-stop / data-can-restart, and each switch shows it only for the one that is queued.
+   Decided once at render time, a stop-only member on a page loaded clean had no button after
+   queueing a stop, and a restart-only one kept a button the switch relabelled "Stop now". #}
+{% set _can_stop_now = current_user.is_superadmin or has_permission('stop_server') %}
+{% set _can_restart_now = current_user.is_superadmin or has_permission('restart_server') %}
+{% set _can_do_pending = _can_stop_now if server.stop_pending else _can_restart_now %}
 <div class="alert alert-warning py-2 px-3 d-flex justify-content-between align-items-center flex-wrap gap-2 {% if not (server.restart_pending or server.stop_pending or cron_restart_pending) %}d-none{% endif %}"
      {# data-PENDING-action, not data-action: panel.js's dispatcher calls window[<data-action>]
         on any click inside a [data-action] element, and `stop` is a real Window method. Clicking
@@ -53,7 +60,8 @@
         and console with fetch() and socket.io's polling transport uses XHR, so the poll's .catch
         then reported a connection error on a page that was working fine. (`restart` was simply
         undefined, so that half was a silent no-op.) #}
-     id="restart-pending-banner" data-pending-action="{{ 'stop' if server.stop_pending else 'restart' }}">
+     id="restart-pending-banner" data-pending-action="{{ 'stop' if server.stop_pending else 'restart' }}"
+     data-can-stop="{{ '1' if _can_stop_now else '0' }}" data-can-restart="{{ '1' if _can_restart_now else '0' }}">
   {# The verb is its OWN complete sentence, not a word spliced into one. Written as
      "A <span>{{ verb }}</span> is queued" the only text nodes were "A" and "is queued", and no
      catalog can translate a sentence it only ever sees in two halves — nor can a language that
@@ -61,9 +69,9 @@
   <span><i class="bi bi-exclamation-triangle-fill"></i>
     <span id="rpb-verb">{% if server.stop_pending %}A stop is queued.{% else %}A restart is queued.{% endif %}</span>
     {% if cron_restart_pending and not (server.restart_pending or server.stop_pending) %}<span>It was queued by the daily-restart schedule.</span>{% endif %}
-    {% if _can_do_pending %}<span>It will run automatically once the server is empty, or you can do it now.</span>{% else %}<span>It will run automatically once the server is empty.</span>{% endif %}</span>
-  {% if _can_do_pending %}
-  <button class="btn btn-sm btn-warning" data-action="bannerDoNow" data-args='["@self"]'>
+    {% if _can_stop_now or _can_restart_now %}<span id="rpb-now"{% if not _can_do_pending %} class="d-none"{% endif %}>It will run automatically once the server is empty, or you can do it now.</span>{% endif %}<span id="rpb-auto"{% if _can_do_pending %} class="d-none"{% endif %}>It will run automatically once the server is empty.</span></span>
+  {% if _can_stop_now or _can_restart_now %}
+  <button id="rpb-do" class="btn btn-sm btn-warning {% if not _can_do_pending %}d-none{% endif %}" data-action="bannerDoNow" data-args='["@self"]'>
     <i class="bi bi-lightning-charge"></i> <span id="rpb-btn">{% if server.stop_pending %}<span>Stop now</span>{% else %}<span>Restart now</span>{% endif %}</span>
   </button>
   {% endif %}

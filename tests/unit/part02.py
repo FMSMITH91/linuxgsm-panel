@@ -1202,6 +1202,20 @@ try:
     eq("prune_game_backups: keeps the newest `keep` and removes the rest, quote and space included",
        (_pr_ok, sorted(os.listdir(_pr_dir))),
        (True, ["gm-2026-01-04.tar.zst", "gm-2026-01-05.tar.gz", "notes.txt"]))
+    # ~/lgsm/backup as a SYMLINK to a bigger disk — the only way to move it, the path is fixed.
+    # Plain `find` does not descend a symlinked starting point: it printed nothing, exited 0, and
+    # every prune deleted nothing while reporting success.
+    _pr_disk = os.path.join(_pr_home, "bigdisk")
+    os.makedirs(_pr_disk)
+    for _i, _n in enumerate(["gm-a.tar.gz", "gm-b.tar.zst", "gm-c.tar.gz", "gm-d.tar.zst"]):
+        _p = os.path.join(_pr_disk, _n)
+        open(_p, "w").write("x")
+        os.utime(_p, (1700000000 + _i * 100, 1700000000 + _i * 100))
+    _sh_pr.rmtree(_pr_dir)
+    os.symlink(_pr_disk, _pr_dir)
+    _pr_ok = _sm_cron.prune_game_backups(None, "gm", keep=2)
+    eq("prune_game_backups: prunes through a symlinked ~/lgsm/backup",
+       (_pr_ok, sorted(os.listdir(_pr_disk))), (True, ["gm-c.tar.gz", "gm-d.tar.zst"]))
 finally:
     _sm_core.run_command = _pr_saved
     _sh_pr.rmtree(_pr_home, ignore_errors=True)
