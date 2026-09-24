@@ -7,8 +7,10 @@ Run it against a configured install (from anywhere):
 
 It creates a throwaway limited group + user (view-only, access to ONE host),
 exercises the real HTTP endpoints via Flask's test client, and deletes the fixtures
-again. Privileged actions are asserted to be BLOCKED *before* they execute, so it has
-no side effects on your game servers. Use it as a regression guard after auth changes.
+again. Privileged actions are asserted to be BLOCKED *before* they execute — and every
+destructive action a probe here aims at (Tailscale install/join, VPS bootstrap, a panel-host or
+remote reboot, an uninstall) is TRAPPED for the whole run, so a guard that regresses fails its
+check instead of doing the thing on your hosts. Use it as a regression guard after auth changes.
 
 IMPORTANT: HTTP requests run WITHOUT an outer app_context. flask-login caches the
 loaded user on the app-context global `g`; a single shared app_context would leak the
@@ -210,6 +212,64 @@ def client_as(user_id=None):
     return c
 
 
+# ── Traps: nothing this suite drives may DO the privileged thing it probes ────────────────────────
+# The refusal under test used to be the only thing between a probe and the action. A regressed
+# guard would have bootstrapped (apt full-upgrade, sshd rewrite, reboot) or rebooted the panel's
+# own host, or rebooted a real remote — and the "a REMOTE host is not refused" control ran its
+# action for real on every run: `apt-get install curl`, then the upstream Tailscale installer piped
+# into a root shell, on the first real remote of the configured install this is documented to run
+# against. Each of those is a recorder for the whole run instead, bound where the route looks it
+# up, and the checks below assert which ones were (and were not) reached.
+import panel.routes.remote_bootstrap as _rb_mod  # noqa: E402
+import panel.routes.remote_tailscale as _rts_mod  # noqa: E402
+import panel.routes.remote_vps as _rvps_mod  # noqa: E402
+from panel.ops import system_ops as _so_mod  # noqa: E402
+_trapped = []
+
+
+def _trap(name, ret):
+    def _trapped_call(*a, **k):
+        _trapped.append(name)
+        return ret
+    return _trapped_call
+
+
+_TRAPS = ((_rts_mod, "remote_install_tailscale", (False, "trapped by rbac_test", "")),
+          (_rts_mod, "remote_bootstrap_tailscale", (False, "trapped by rbac_test", "")),
+          (_rts_mod, "remote_tailscale_up_url", (False, "trapped by rbac_test")),
+          (_rb_mod, "_begin_bootstrap", (False, "trapped by rbac_test")),
+          (_so_mod, "server_reboot", (False, "trapped by rbac_test")),
+          (_rvps_mod, "remote_reboot", (False, "trapped by rbac_test")))
+_traps_saved = [(_m, _n, getattr(_m, _n)) for _m, _n, _r in _TRAPS]
+for _m, _n, _r in _TRAPS:
+    setattr(_m, _n, _trap(_n, _r))
+# ...and the install job's worker thread, which retry-install starts: a bare
+# `threading.Thread(target=_run)` in manage_servers, so it is captured through that module's
+# `threading` and never started. Unstubbed, the Retry probe below ran a real install of `bsserver`
+# (useradd, LinuxGSM, apt) on the first host of the install this is run against.
+import threading as _thr_rb  # noqa: E402
+import panel.routes.manage_servers as _ms_rb  # noqa: E402
+
+
+class _TrappedThread:
+    def __init__(self, target=None, **kw):
+        self.target = target
+        _trapped.append("install job")
+
+    def start(self):
+        """Trapped: never run."""
+
+
+class _ThreadingTrap:
+    Thread = _TrappedThread
+
+    def __getattr__(self, name):
+        return getattr(_thr_rb, name)
+
+
+_ms_threading_saved = _ms_rb.threading
+_ms_rb.threading = _ThreadingTrap()
+
 try:
     # ── Limited user (VIEW_SERVERS + VIEW_CONSOLE, access to ONE remote) ──
     c = client_as(uid)
@@ -334,7 +394,21 @@ try:
         db.session.add(_ugs)
         db.session.commit()
         _uu_id, _ugs_id = _uu.id, _ugs.id
+    # The route now takes its 409 exit only for a LIVE job (an _install_jobs entry), not for the
+    # row's status — so with none, this "no SSH at all" probe ran the real uninstall on the install's
+    # first host (pkill -u, userdel -r -f). A live entry is seeded, and the host side is trapped so a
+    # probe that stops taking that exit fails below instead of reaching a host.
+    import time as _un_time
+    from panel.core.panel_state import _install_jobs as _un_jobs, _install_lock as _un_lock
+    with _un_lock:
+        _un_jobs[_ugs_id] = {"status": "running", "step": 0, "total": 8, "step_name": "Queued",
+                             "message": "", "log": [], "started": _un_time.time(),
+                             "updated": _un_time.time(), "name": "rbac-uninstall"}
+    _un_exec = (_sm_core.run_privileged, _sm_core.run_as_game_user, _sm_core.run_command)
+    _un_trapped_at = len(_trapped)
     try:
+        _sm_core.run_privileged = _sm_core.run_as_game_user = _sm_core.run_command = (
+            lambda *a, **k: (_trapped.append("uninstall"), ("", "trapped by rbac_test", 1))[1])
         _uc = client_as(_uu_id)
         # The 409 "still installing" exit is the one an uninstall-only user can reach without any
         # SSH at all, and it takes the same redirect as the success path.
@@ -344,7 +418,12 @@ try:
               "do not have permission" not in _utext.lower(), "landed on a refusal")
         check("uninstall-only user: ...and it actually rendered", _ur.status_code == 200,
               "got %d" % _ur.status_code)
+        check("uninstall-only user: ...through the still-installing exit, reaching no host",
+              not _trapped[_un_trapped_at:], "reached: %r" % (_trapped[_un_trapped_at:],))
     finally:
+        _sm_core.run_privileged, _sm_core.run_as_game_user, _sm_core.run_command = _un_exec
+        with _un_lock:
+            _un_jobs.pop(_ugs_id, None)
         with app.app_context():
             for _obj in (db.session.get(GameServer, _ugs_id), db.session.get(User, _uu_id)):
                 if _obj is not None:
@@ -384,6 +463,8 @@ try:
               "the button was not rendered, so this proves nothing about the route")
         check("MANAGE_SERVERS: ...and the route it posts to accepts them",
               _posted.status_code != 403, "got %d" % _posted.status_code)
+        check("MANAGE_SERVERS: ...starting the install job, which is trapped and never run",
+              _trapped.count("install job") == 1, "trapped: %r" % (_trapped,))
     finally:
         with app.app_context():
             _r = db.session.get(GameServer, _rt_id)
@@ -412,6 +493,7 @@ try:
         _rem = RemoteServer.query.filter(RemoteServer.auth_method != "local").first()
         _rem_id = _rem.id if _rem else None
     _ac = client_as(admin_id)
+    _trapped_at = len(_trapped)
     for _path, _label in (("/api/remote/%d/bootstrap" % _local_id, "VPS bootstrap"),
                           ("/api/remote/%d/tailscale-install" % _local_id, "Tailscale install"),
                           ("/api/remote/%d/tailscale-bootstrap" % _local_id, "Tailscale join"),
@@ -426,12 +508,17 @@ try:
               _r.status_code == 400, "%s -> %d" % (_path, _r.status_code))
         check("%s refusal says why, in JSON" % _label,
               b"panel's own host" in _r.data, _r.data[:120])
+    check("...and none of those four reached the action on the panel's own host",
+          not _trapped[_trapped_at:], "reached: %r" % (_trapped[_trapped_at:],))
     # A remote host must NOT be refused by that guard — refusing everything is the easy way to make
     # the assertions above pass for the wrong reason.
     if _rem_id is not None:
         _r2 = _ac.post("/api/remote/%d/tailscale-install" % _rem_id)
         check("a REMOTE host is not refused by that guard",
               b"panel's own host" not in _r2.data, "%d %s" % (_r2.status_code, _r2.data[:80]))
+        check("...it reaches the install, which is trapped here and never run",
+              _trapped[_trapped_at:] == ["remote_install_tailscale"],
+              "reached: %r" % (_trapped[_trapped_at:],))
     if _local_made:
         with app.app_context():
             _l = db.session.get(RemoteServer, _local_id)
@@ -444,8 +531,38 @@ try:
               c.get("/api/console/%d" % other_id).status_code != 200)
         check("IDOR: stats of non-granted server BLOCKED",
               c.get("/api/server/%d/stats" % other_id).status_code != 200)
-        check("IDOR: action on non-granted server BLOCKED",
-              c.post("/api/server/%d/action" % other_id, json={"action": "start"}).status_code != 200)
+        # Probed as a user who HOLDS the action's permission (and MANAGE_SERVERS, for the tag
+        # probe below) on the granted host only. As `c`, who holds neither, the route answered 403
+        # "Permission denied" whatever the server-access result, so the check could not fail on
+        # the cross-host regression it is named for. The payloads are invalid ON PURPOSE: the
+        # access decorator runs first, so a refused server is a 403, and a server that got past
+        # it is a 400 for the payload — nothing starts and nothing is written on either branch.
+        # The same request on the accessible server is the control that the 400 is reachable.
+        with app.app_context():
+            _ig = Group(name=tag + "_idor", description="RBAC IDOR (auto)", is_default=False)
+            _ig.set_permissions([auth.VIEW_SERVERS, auth.START_SERVER, auth.MANAGE_SERVERS])
+            _ig.servers.append(RemoteServer.query.get(granted_remote))
+            db.session.add(_ig)
+            db.session.flush()
+            _iu = User(username=tag + "_idor", password_hash=auth.hash_password(secrets.token_hex(16)),
+                       display_name=tag + "_idor", is_superadmin=False, is_active=True)
+            _iu.groups.append(_ig)
+            db.session.add(_iu)
+            db.session.commit()
+            _idor_uid = _iu.id
+        _ci = client_as(_idor_uid)
+        _ia = _ci.post("/api/server/%d/action" % other_id, json={"action": "not-an-action"})
+        check("IDOR: action on non-granted server BLOCKED (for a START_SERVER holder)",
+              _ia.status_code == 403, "got %d" % _ia.status_code)
+        _ia = _ci.post("/api/server/%d/action" % accessible_id, json={"action": "not-an-action"})
+        check("IDOR: ...while the same request on the granted server gets past access (control)",
+              _ia.status_code == 400, "got %d" % _ia.status_code)
+        _it = _ci.post("/api/server/%d/tags" % other_id, json={"tag_ids": "not-a-list"})
+        check("IDOR: assigning tags on a non-granted server BLOCKED (for a MANAGE_SERVERS holder)",
+              _it.status_code == 403, "got %d" % _it.status_code)
+        _it = _ci.post("/api/server/%d/tags" % accessible_id, json={"tag_ids": "not-a-list"})
+        check("IDOR: ...while tagging the granted server gets past access (control)",
+              _it.status_code == 400, "got %d" % _it.status_code)
 
     check("action 'start' without START_SERVER -> 403",
           c.post("/api/server/%d/action" % accessible_id, json={"action": "start"}).status_code == 403)
@@ -489,9 +606,7 @@ try:
           c.post("/api/tags/1/delete").status_code == 403)
     check("assign tags without MANAGE_SERVERS -> 403",
           c.post("/api/server/%d/tags" % accessible_id, json={"tag_ids": [1]}).status_code == 403)
-    if other_id:
-        check("IDOR: assigning tags on a non-granted server BLOCKED",
-              c.post("/api/server/%d/tags" % other_id, json={"tag_ids": []}).status_code != 200)
+    # (The cross-host tag probe is with the other IDOR probes above, as a MANAGE_SERVERS holder.)
     # Reading the tag list is deliberately open to any signed-in user: it is what decorates and
     # filters rows they can already see.
     check("tag list is readable without MANAGE_SERVERS -> 200",
@@ -550,14 +665,24 @@ try:
     check("denial (API, decorator-gated): body is JSON with success=false",
           (_api_denied.get_json() or {}).get("success") is False,
           _api_denied.get_data(as_text=True)[:100])
-    _fetch_denied = c.post("/servers/%d/delete" % accessible_id,
-                           headers={"X-Requested-With": "XMLHttpRequest"})
+    # These post an UNINSTALL of a real server of the install (accessible_id), refused only by the
+    # permission guard under test. The host side of the uninstall is trapped around them — every
+    # exec primitive answers a failure, so a regressed guard fails the check below and keeps the
+    # row (the route deletes it only on rc 0) instead of removing the server.
+    _o_exec = (_sm_core.run_privileged, _sm_core.run_as_game_user, _sm_core.run_command)
+    _sm_core.run_privileged = _sm_core.run_as_game_user = _sm_core.run_command = (
+        lambda *a, **k: (_trapped.append("uninstall"), ("", "trapped by rbac_test", 1))[1])
+    try:
+        _fetch_denied = c.post("/servers/%d/delete" % accessible_id,
+                               headers={"X-Requested-With": "XMLHttpRequest"})
+        _browser_denied = c.post("/servers/%d/delete" % accessible_id,
+                                 headers={"Accept": "text/html"})
+    finally:
+        _sm_core.run_privileged, _sm_core.run_as_game_user, _sm_core.run_command = _o_exec
     check("denial (in-page fetch): JSON, so it cannot be mistaken for success",
           _fetch_denied.status_code == 403
           and (_fetch_denied.get_json() or {}).get("success") is False,
           "status=%d" % _fetch_denied.status_code)
-    _browser_denied = c.post("/servers/%d/delete" % accessible_id,
-                             headers={"Accept": "text/html"})
     check("denial (browser form): still a redirect, not JSON",
           _browser_denied.status_code in (301, 302, 303),
           "got %d" % _browser_denied.status_code)
@@ -1777,10 +1902,27 @@ try:
     check("delete user: a superadmin can delete an ordinary account", not _alive(_vord_id))
 
     # 4. Nobody deletes themselves — the one guard here that is reachable on its own, and the one
-    #    standing between a panel and having no administrator at all.
-    ca_del.post("/users/%d/delete" % admin_id)
-    check("delete user: you cannot delete your own account", _alive(admin_id),
+    #    standing between a panel and having no administrator at all. Probed with a THROWAWAY
+    #    superadmin acting on itself (named from `tag`, so the final cleanup finds it whatever
+    #    happens): this used to post the delete as admin_id, the install's own first superadmin,
+    #    so a regressed guard would have removed the operator's real account.
+    with app.app_context():
+        _self_sa = User(username=_del_tag + "_self",
+                        password_hash=auth.hash_password(secrets.token_hex(16)),
+                        display_name="self-delete probe", is_superadmin=True, is_active=True)
+        db.session.add(_self_sa)
+        db.session.commit()
+        _self_id = _self_sa.id
+    client_as(_self_id).post("/users/%d/delete" % _self_id)
+    check("delete user: you cannot delete your own account", _alive(_self_id),
           "the acting superadmin deleted themselves — the panel would have no admin left")
+
+    # Every trap except the two the controls above reach on purpose must still be untouched: the
+    # reboot probes (legacy grant -> panel host, delegated admin -> a non-granted remote), the
+    # denied uninstalls and the panel-host bootstraps all end here, refused before their action.
+    _unexpected = [t for t in _trapped if t not in ("install job", "remote_install_tailscale")]
+    check("traps: no refused probe reached a reboot, an uninstall or a bootstrap",
+          not _unexpected, "reached: %r" % (_unexpected,))
 
     # ── Superadmin sanity: still full access ──
     ca = client_as(admin_id)
@@ -1789,6 +1931,9 @@ try:
         code = ca.get(p).status_code
         check("superadmin CAN access %s" % p, code == 200, "got %d" % code)
 finally:
+    for _m, _n, _f in _traps_saved:
+        setattr(_m, _n, _f)
+    _ms_rb.threading = _ms_threading_saved
     if any(seeded.values()):
         # The whole DB was seeded by us (it started empty) — drop the throwaway DB file(s) entirely,
         # so nothing is left behind (a leftover empty panel.db would make smoke_test skip next run).

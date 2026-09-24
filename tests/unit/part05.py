@@ -2490,7 +2490,146 @@ check("helper: a hostile cron body is replaced by the helper's own, not written"
       "rc=%s wrote=%r" % (_rc_cron, (_written_cron or "")[:60]))
 check("helper: the cron body is the helper's own, not the caller's",
       _helper.WRITE_CONTENT["node-tools-cron"] is None
-      and "npm install -g npm gamedig" in _helper.NODE_TOOLS_CRON_BODY)
+      and "npm install -g --ignore-scripts gamedig@5" in _helper.NODE_TOOLS_CRON_BODY)
+
+# ── the weekly root npm cron: one body in three places, and what that body may run ─────────────
+# It ran `npm install -g npm gamedig` as root every Sunday, unattended: the newest npm, gamedig and
+# their whole dependency tree, install hooks included — so a compromise of any of them at any later
+# point became root on every host by the next Sunday. The body lives in three places that must say
+# the same thing (install.sh writes it at install, the helper on the panel host, hosts.py on
+# remotes — and app.py rewrites it on every host daily): a copy left behind would put the old line
+# back. So the three are compared, and the ONE body is held to: gamedig only, pinned to a major,
+# --ignore-scripts, and no `npm install -g npm` (root running a freshly fetched npm).
+import re as _re_ntc
+from panel.ops.ssh_manager import hosts as _ntc_hosts
+_ntc_sh = open(os.path.join(_UNIT_ROOT, "install.sh"), encoding="utf-8").read()
+_ntc_fn = _ntc_sh[_ntc_sh.index("\nensure_gamedig() {"):]
+_ntc_fn = _ntc_fn[:_ntc_fn.index("\n}\n")]
+_ntc_blk = _ntc_fn[_ntc_fn.index('local cf="/etc/cron.d/lgsm-node-tools"'):]
+_ntc_blk = _ntc_blk[:_ntc_blk.index("| ${S} tee")]
+_ntc_install = "".join(_l + "\n" for _l in _re_ntc.findall(r"^\s*'([^']*)' \\$", _ntc_blk, _re_ntc.M))
+check("node-tools cron: install.sh, the helper and hosts.py write the SAME body",
+      _ntc_install == _helper.NODE_TOOLS_CRON_BODY == _ntc_hosts._NODE_TOOLS_CRON,
+      "install.sh=%r helper=%r hosts=%r" % (_ntc_install[-90:], _helper.NODE_TOOLS_CRON_BODY[-90:],
+                                            _ntc_hosts._NODE_TOOLS_CRON[-90:]))
+_ntc_cmd = [_l for _l in _helper.NODE_TOOLS_CRON_BODY.splitlines() if _l.startswith("30 4 * * 0 root ")]
+check("node-tools cron: root installs gamedig pinned to a major, with no install hooks, and never npm",
+      len(_ntc_cmd) == 1 and "npm install -g --ignore-scripts gamedig@5 " in _ntc_cmd[0]
+      and not _re_ntc.search(r"install -g[^>]*\bnpm\b", _ntc_cmd[0]),
+      repr(_ntc_cmd))
+# The verb the remote bootstrap installs gamedig through, and install.sh's own first install, say
+# the same: a v6 from the bootstrap would fight the cron's v5 every week.
+check("npm-install-global: installs the pinned spec with --ignore-scripts, in both tables",
+      _helper.VERBS["npm-install-global"][1](_helper.validate("npm-install-global", ["gamedig"]))
+      == _priv.tool_argv("npm-install-global", ["gamedig"])
+      == ["npm", "install", "-g", "--ignore-scripts", "gamedig@5"]
+      and "npm install -g --ignore-scripts gamedig@5 " in _ntc_fn,
+      repr(_priv.tool_argv("npm-install-global", ["gamedig"])))
+check("npm-install-global: ...and refuses `npm` itself",
+      _ufw_raises_verb(lambda: _priv.check_args("npm-install-global", ["npm"])))
+
+# ── NodeSource: its repository, with the signing key pinned — never its setup script run as root ──
+# ensure_gamedig downloaded https://deb.nodesource.com/setup_lts.x and ran it as root with nothing
+# checked, so whoever could serve that URL ran code as root on every host installing Node.
+# nodesource_setup fetches only the signing key, and trusts it only if the file holds exactly ONE
+# primary key with the pinned fingerprint. Driven in bash with curl, dpkg and apt-get as shell
+# functions and the three destinations in a temp dir, against throwaway keys made here.
+import shlex as _shlex_ns
+import shutil as _shutil_ns
+import subprocess as _sp_ns
+
+
+def _ns_fn(name):
+    """The function's text, or "" when install.sh has no such function (the checks below then fail
+    by name rather than crashing the part)."""
+    _i = _ntc_sh.find("\n%s() {" % name)
+    return "" if _i < 0 else _ntc_sh[_i:_ntc_sh.index("\n}\n", _i) + 3]
+
+
+_ns_code_lines = [_l for _l in _ntc_sh.splitlines() if not _l.lstrip().startswith("#")]
+_ns_code = "\n".join(_ns_code_lines)
+check("install.sh: no downloaded script is run — NodeSource's setup script is gone",
+      "setup_lts.x" not in _ns_code and not _re_ntc.search(r'bash "\$\{?ns\}?"', _ns_code)
+      and not _re_ntc.search(r"\bcurl\b[^\n]*\|\s*(sudo\s+)?(ba)?sh\b", _ns_code))
+check("install.sh: ensure_gamedig configures NodeSource through the pinned-key setup",
+      any(_re_ntc.fullmatch(r'\s*if nodesource_setup "\$\{S\}"; then', _l)
+          for _l in _ntc_fn.splitlines()))
+if not _shutil_ns.which("gpg"):
+    skip("install.sh: NodeSource key pinning, driven", "no gpg on this machine")
+else:
+    _ns_dir = _tempfile.mkdtemp(prefix="panel-nodesource-")
+    try:
+        _ns_gh = os.path.join(_ns_dir, "gnupg")
+        os.mkdir(_ns_gh, 0o700)
+
+        def _ns_gpg(*a):
+            return _sp_ns.run(["gpg", "--batch", "--homedir", _ns_gh] + list(a),
+                              capture_output=True, text=True, timeout=60)
+
+        for _uid in ("ns-a <a@example.invalid>", "ns-b <b@example.invalid>"):
+            _ns_gpg("--pinentry-mode", "loopback", "--passphrase", "", "--quick-gen-key", _uid,
+                    "ed25519", "sign", "never")
+        _ns_fprs, _ns_after_pub = [], False
+        for _l in _ns_gpg("--with-colons", "--list-keys").stdout.splitlines():
+            if _l.startswith("pub:"):
+                _ns_after_pub = True
+            elif _l.startswith("fpr:") and _ns_after_pub:
+                _ns_fprs.append(_l.split(":")[9])
+                _ns_after_pub = False
+        _ns_keys = {}
+        for _nm, _which in (("a", _ns_fprs[:1]), ("ab", _ns_fprs[:2])):
+            _ns_keys[_nm] = os.path.join(_ns_dir, _nm + ".asc")
+            with open(_ns_keys[_nm], "w") as _fh:
+                _fh.write(_ns_gpg("--armor", "--export", *_which).stdout)
+        _ns_keys["empty"] = os.path.join(_ns_dir, "empty.asc")
+        open(_ns_keys["empty"], "w").close()
+        _ns_globals = "\n".join(_l for _l in _ns_code_lines if _l.startswith("NODESOURCE_"))
+
+        def _ns_run(keyfile, fpr):
+            _out = os.path.join(_ns_dir, "out")
+            _shutil_ns.rmtree(_out, ignore_errors=True)
+            os.makedirs(os.path.join(_out, "sources.list.d"))
+            os.makedirs(os.path.join(_out, "preferences.d"))
+            _q = _shlex_ns.quote
+            _script = "\n".join([
+                _ns_globals, _ns_fn("nodesource_key_ok"), _ns_fn("nodesource_setup"),
+                "NODESOURCE_KEY_FPR=%s" % _q(fpr),
+                "NODESOURCE_KEYRING=%s" % _q(os.path.join(_out, "keyrings", "nodesource.gpg")),
+                "NODESOURCE_SOURCES=%s" % _q(os.path.join(_out, "sources.list.d", "nodesource.sources")),
+                "NODESOURCE_PREFS=%s" % _q(os.path.join(_out, "preferences.d", "nodejs")),
+                "dpkg() { echo amd64; }",
+                'curl() { cp %s "${@: -1}"; }' % _q(keyfile),
+                'apt-get() { echo "$*" >> %s; }' % _q(os.path.join(_out, "apt.log")),
+                "nodesource_setup ''; echo \"RC=$?\"",
+            ])
+            _p = _sp_ns.run(["bash", "-c", _script], capture_output=True, text=True, timeout=120)
+
+            def _rd(*parts):
+                try:
+                    with open(os.path.join(_out, *parts), "rb") as _f:
+                        return _f.read()
+                except OSError:
+                    return None
+            return (_p.stdout.strip().endswith("RC=0"), _rd("keyrings", "nodesource.gpg"),
+                    _rd("sources.list.d", "nodesource.sources"), _rd("preferences.d", "nodejs"),
+                    _rd("apt.log"), _p.stdout[-300:] + _p.stderr[-300:])
+
+        _ok, _kr, _src, _pref, _apt, _dbg = _ns_run(_ns_keys["a"], _ns_fprs[0])
+        check("nodesource: the pinned key is trusted, the source written, apt updated (positive control)",
+              _ok and bool(_kr) and _apt is not None and b"update" in _apt
+              and _src is not None and b"URIs: https://deb.nodesource.com/node_" in _src
+              and b"Architectures: amd64\n" in _src
+              and ("Signed-By: %s" % os.path.join(_ns_dir, "out", "keyrings", "nodesource.gpg")).encode() in _src
+              and _pref == b"Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n",
+              _dbg)
+        for _nm, _keyf, _fpr in (("a key that is not the pinned one", _ns_keys["a"], _ns_fprs[1]),
+                                 ("the pinned key plus a second key", _ns_keys["ab"], _ns_fprs[0]),
+                                 ("an empty download", _ns_keys["empty"], _ns_fprs[0])):
+            _ok, _kr, _src, _pref, _apt, _dbg = _ns_run(_keyf, _fpr)
+            check("nodesource: %s is refused, and nothing is trusted or written" % _nm,
+                  not _ok and _kr is None and _src is None and _pref is None and _apt is None, _dbg)
+    finally:
+        _shutil_ns.rmtree(_ns_dir, ignore_errors=True)
 check("helper: every write destination has a content rule (a new one cannot inherit 'anything')",
       set(_helper.WRITE_TARGETS) == set(_helper.WRITE_CONTENT),
       "targets without a rule: %s" % sorted(set(_helper.WRITE_TARGETS) - set(_helper.WRITE_CONTENT)))
@@ -2737,7 +2876,7 @@ _REMOTE_EXPECTED = {
     ("ufw-allow-iface", ("tailscale0",)): "ufw allow in on tailscale0 2>&1",
     ("ufw-delete-num", ("3",)): "yes | ufw delete 3 2>&1",
     ("ufw-deny-ip", ("203.0.113.5", "panel-autoblock")):
-        "ufw insert 1 deny from 203.0.113.5 comment panel-autoblock 2>&1",
+        "ufw prepend deny from 203.0.113.5 comment panel-autoblock 2>&1",
     ("f2b-status", ()): "fail2ban-client status 2>&1",
     ("f2b-status-jail", ("sshd",)): "fail2ban-client status sshd 2>&1",
     ("f2b-unban", ("sshd", "203.0.113.5")): "fail2ban-client set sshd unbanip 203.0.113.5 2>&1",
@@ -2794,6 +2933,23 @@ for (_v, _a), _want in _REMOTE_EXPECTED.items():
 check("privileged: the remote transport renders the same commands the SSH path always sent",
       not _wrong, "; ".join(_wrong[:2]))
 
+# ── ufw-deny-ip must PREPEND, never `insert 1` ────────────────────────────────────────────────
+# ufw numbers IPv4 user rules before IPv6 ones and refuses an IPv6 rule at a position that is an
+# IPv4 slot (ufw/frontend.py set_rule: "Invalid position '1'"), which position 1 is whenever ANY
+# IPv4 rule exists — `allow OpenSSH` alone makes one. So every IPv6 block, auto or manual, failed on
+# a firewalled host. `prepend` tops the rule's own family. Helper, panel, and the remote rendering,
+# for an IPv6 address; the IPv4 row beside it is the control that the verb still renders at all.
+_ud_h6 = _helper.VERBS["ufw-deny-ip"][1](_helper.validate("ufw-deny-ip", ["2001:db8::5", "panel-autoblock"]))
+_ud_p6 = _priv.tool_argv("ufw-deny-ip", ["2001:db8::5", "panel-autoblock"])
+_ud_r6 = _priv.remote_command("ufw-deny-ip", ["2001:db8::5", "panel-autoblock"])
+check("privileged: ufw-deny-ip prepends an IPv6 block (insert 1 is refused for IPv6 while IPv4 rules exist)",
+      _ud_h6[1:] == ["prepend", "deny", "from", "2001:db8::5", "comment", "panel-autoblock"]
+      and _ud_p6 == _ud_h6 and _ud_r6.startswith("ufw prepend deny from 2001:db8::5 "),
+      "helper=%r panel=%r remote=%r" % (_ud_h6, _ud_p6, _ud_r6))
+check("privileged: ufw-deny-ip still renders an IPv4 block the same way (control)",
+      _priv.tool_argv("ufw-deny-ip", ["203.0.113.5", ""])[1:] == ["prepend", "deny", "from", "203.0.113.5"],
+      repr(_priv.tool_argv("ufw-deny-ip", ["203.0.113.5", ""])))
+
 # ── the remote rendering of sshd-set-directive must mean what the HELPER's does ───────────────
 # It was `sed -i 's/^#\?<Key>.*/<Key> <value>/'`. `sed -i` exits 0 when its pattern matches
 # nothing and leaves the file untouched, so on a host whose sshd_config does not already carry the
@@ -2840,6 +2996,74 @@ try:
           _sd_cmd[:160])
 finally:
     _shutil.rmtree(_sd_dir, ignore_errors=True)
+
+# ── ...and it must write the panel's drop-in where sshd reads one, as the helper does ─────────────
+# Editing sshd_config is a no-op on a stock Ubuntu cloud image: sshd_config Includes sshd_config.d
+# FIRST, sshd keeps the first value it obtains, and 50-cloud-init.conf says PasswordAuthentication
+# yes. The helper writes a 00- drop-in on the panel host; every REMOTE host still got only the
+# sshd_config edit, so bootstrap's own sshd -T check found the hardening not in effect and password
+# SSH stayed open. Driven for real, and compared BYTE FOR BYTE with the helper's own drop-in write
+# from the same starting file — the two transports write one file, so they must agree on it.
+import stat as _stat_dr
+_dr_dir = _tempfile.mkdtemp(prefix="sshd-dropin-")
+try:
+    _dr_cfg = os.path.join(_dr_dir, "sshd_config")
+    _dr_d = os.path.join(_dr_dir, "sshd_config.d")
+    _dr_f = os.path.join(_dr_d, os.path.basename(_priv.SSHD_HARDENING_DROPIN))
+    _dr_cmd = (_priv.remote_command("sshd-set-directive", ["PasswordAuthentication", "no"])
+               .replace(_priv.SSHD_HARDENING_DROPIN, _dr_f)
+               .replace(os.path.dirname(_priv.SSHD_HARDENING_DROPIN), _dr_d)
+               .replace(_priv.SSHD_CONFIG, _dr_cfg))
+    # What an earlier run left: one directive held, a line the drop-in must not keep, a stale value
+    # for the one being set, and whitespace the helper normalises.
+    _dr_prior = (_priv.SSHD_HARDENING_HEADER + "PermitRootLogin   no  \n"
+                 + "Match all\nPasswordAuthentication yes\n")
+    os.makedirs(_dr_d)
+    with open(_dr_cfg, "w", encoding="utf-8") as _fh:
+        _fh.write("Include /etc/ssh/sshd_config.d/*.conf\n#PasswordAuthentication yes\nPort 22\n")
+    with open(_dr_f, "w", encoding="utf-8") as _fh:
+        _fh.write(_dr_prior)
+    _dr_r = _sub.run(["bash", "-c", _dr_cmd], capture_output=True, text=True, timeout=30)
+    _dr_remote = open(_dr_f, encoding="utf-8").read()
+    # The helper, on a module copy whose drop-in path is a second temp file with the same content.
+    _spec_dr = _ilu.spec_from_loader("ph_dropin", _machinery.SourceFileLoader("ph_dropin", _helper_path))
+    _hdr = _ilu.module_from_spec(_spec_dr)
+    _spec_dr.loader.exec_module(_hdr)
+    _hdr.SSHD_HARDENING_DROPIN = os.path.join(_dr_dir, "helper.d", "00-panel-hardening.conf")
+    os.makedirs(os.path.dirname(_hdr.SSHD_HARDENING_DROPIN))
+    with open(_hdr.SSHD_HARDENING_DROPIN, "w", encoding="utf-8") as _fh:
+        _fh.write(_dr_prior)
+    _hdr._write_sshd_hardening_dropin("PasswordAuthentication", "no")
+    _dr_helper = open(_hdr.SSHD_HARDENING_DROPIN, encoding="utf-8").read()
+    check("privileged: the remote sshd-set-directive writes the panel's drop-in, byte-identical "
+          "to the helper's",
+          _dr_r.returncode == 0 and _dr_remote == _dr_helper
+          and "PasswordAuthentication no\n" in _dr_remote and "Match" not in _dr_remote
+          and _stat_dr.S_IMODE(os.stat(_dr_f).st_mode) == 0o600,
+          "rc=%d remote=%r helper=%r err=%r" % (_dr_r.returncode, _dr_remote, _dr_helper,
+                                               _dr_r.stderr[:120]))
+    check("privileged: ...and it keeps the directive an earlier run held (positive control)",
+          "PermitRootLogin no\n" in _dr_remote, repr(_dr_remote))
+    check("privileged: the remote and helper drop-in path and header are the same",
+          (_priv.SSHD_HARDENING_DROPIN, _priv.SSHD_HARDENING_HEADER)
+          == (_helper.SSHD_HARDENING_DROPIN, _helper.SSHD_HARDENING_HEADER))
+    # A host whose sshd_config does NOT Include sshd_config.d gets no inert file that looks like
+    # hardening — the helper's rule too.
+    _dr_d2 = os.path.join(_dr_dir, "noinclude.d")
+    _dr_cfg2 = os.path.join(_dr_dir, "sshd_config_noinclude")
+    with open(_dr_cfg2, "w", encoding="utf-8") as _fh:
+        _fh.write("#PasswordAuthentication yes\nPort 22\n")
+    _dr_cmd2 = (_priv.remote_command("sshd-set-directive", ["PasswordAuthentication", "no"])
+                .replace(_priv.SSHD_HARDENING_DROPIN, os.path.join(_dr_d2, "00-x.conf"))
+                .replace(os.path.dirname(_priv.SSHD_HARDENING_DROPIN), _dr_d2)
+                .replace(_priv.SSHD_CONFIG, _dr_cfg2))
+    _dr_r2 = _sub.run(["bash", "-c", _dr_cmd2], capture_output=True, text=True, timeout=30)
+    check("privileged: ...and a host with no Include gets no drop-in, only the sshd_config edit",
+          _dr_r2.returncode == 0 and not os.path.exists(_dr_d2)
+          and "PasswordAuthentication no" in open(_dr_cfg2, encoding="utf-8").read(),
+          "rc=%d" % _dr_r2.returncode)
+finally:
+    _shutil.rmtree(_dr_dir, ignore_errors=True)
 
 # A comment with a space must survive shell-quoting on the remote side.
 check("privileged: remote rendering quotes a comment containing a space",
@@ -3220,17 +3444,48 @@ for _bad in (("gmodcontent", "../../etc"), ("gmodcontent", ".."), ("gmodcontent"
 # The helper's own group check: content-grant-read adds a user to a GROUP, and the group named by
 # the caller must actually be the content user's. Mutation showed this was untested — the suite
 # exercises argv building, not the action bodies.
+#
+# Run against a SANDBOXED copy of the helper. This drove the real module with the real account, so
+# the regression it exists to catch — the refusal gone — went on to run `usermod -aG root <me>` and
+# chmod g+x the developer's real /home/<me>, on exactly the run (a mutation test) that removes it.
+# The copy's home root is a temp dir and its subprocess.run records instead of running.
 import getpass as _getpass
 import grp as _grp
 import pwd as _pwd
+import types as _types_gr
+_gr_box = _tempfile.mkdtemp(prefix="panel-grant-")
 try:
     _me = _getpass.getuser()
     _my_group = _grp.getgrgid(_pwd.getpwnam(_me).pw_gid).gr_name
+    _spec_gr = _ilu.spec_from_loader("ph_grant", _machinery.SourceFileLoader("ph_grant", _helper_path))
+    _hgr = _ilu.module_from_spec(_spec_gr)
+    _spec_gr.loader.exec_module(_hgr)
+    _hgr.HOME_ROOT = _gr_box
+    _hgr.home_of = lambda u, _r=_gr_box: _r + "/" + _hgr.v_username(u)
+    _gr_runs = []
+    _hgr.subprocess = _types_gr.SimpleNamespace(
+        run=lambda argv, **kw: (_gr_runs.append(list(argv)),
+                                _sp.CompletedProcess(argv, 0, b"", b""))[1])
+    _hgr.resolve = lambda name: "/usr/sbin/" + name
+    os.makedirs(_gr_box + "/" + _me, mode=0o700)
+    os.chmod(_gr_box + "/" + _me, 0o700)
+    _gr_rc = _hgr.do_content_grant_read([_me, "root" if _my_group != "root" else "daemon", _me],
+                                        None)
     check("content-grant-read refuses a group that is not the content user's",
-          _helper.do_content_grant_read([_me, "root" if _my_group != "root" else "daemon",
-                                         _me], None) == 2)
+          _gr_rc == 2 and not _gr_runs
+          and _st2.S_IMODE(os.stat(_gr_box + "/" + _me).st_mode) == 0o700,
+          "rc=%r ran=%r" % (_gr_rc, _gr_runs))
+    # Control: the user's OWN group goes through — usermod recorded, the traversal bit set — and
+    # both land in the sandbox, so the refusal above is the check and not a copy that does nothing.
+    _gr_rc = _hgr.do_content_grant_read([_me, _my_group, _me], None)
+    check("content-grant-read: ...the content user's own group is granted, inside the sandbox",
+          _gr_rc == 0 and [a[1:] for a in _gr_runs] == [["-aG", _my_group, _me]]
+          and _st2.S_IMODE(os.stat(_gr_box + "/" + _me).st_mode) & _st2.S_IXGRP,
+          "rc=%r ran=%r" % (_gr_rc, _gr_runs))
 except (KeyError, OSError) as _e:
     skip("content-grant-read group check", _e)
+finally:
+    _shutil.rmtree(_gr_box, ignore_errors=True)
 
 # home_of() is the only place a path is built from a name, and it feeds an `rm -rf` running as
 # root. Both copies must agree, and neither may ever produce /home itself or escape it.

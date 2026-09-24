@@ -16,6 +16,18 @@ updates:
 
   # Keep the GitHub Actions themselves current (this is what clears the
   # "Node.js 20 is deprecated" runner warning once new majors ship).
+  # The CI tool pins (hash-locked): the Bandit job holds security-events: write, so its tools are
+  # pinned, and bumped here like everything else rather than floating to whatever is newest.
+  - package-ecosystem: "pip"
+    directory: "/.github/ci-requirements"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["ci"]
+    groups:
+      ci-python-tools:
+        patterns: ["*"]
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

@@ -35,8 +35,16 @@ permissions:
   contents: read
 
 concurrency:
-  # Keyed by the ref being judged, so a PR check and the main gate never cancel one another.
-  group: codeql-alerts-${{ github.event.workflow_run.head_branch || github.ref }}
+  # Keyed by WHAT is being judged: the event kind, the repository the head came from, and the
+  # branch. The branch alone was not enough — a workflow_run for a FORK's pull request carries the
+  # fork's branch name (deploy.yml notes the same), and a fork's default branch is main, so a fork
+  # PR opened from it joined `codeql-alerts-main`. GitHub keeps one PENDING run per group and
+  # cancels the older one even with cancel-in-progress: false, so that PR could cancel a queued
+  # main gate: that commit's alerts were never judged, and a new one was blamed on the next push.
+  group: >-
+    codeql-alerts-${{ github.event.workflow_run.event || github.event_name
+    }}-${{ github.event.workflow_run.head_repository.full_name || github.repository
+    }}-${{ github.event.workflow_run.head_branch || github.ref }}
   cancel-in-progress: false
 
 jobs:

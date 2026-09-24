@@ -27,8 +27,8 @@ try:
     check("ufw_deny_ip: non-IP rejected, runs nothing", _ok is False and not _so)
     _so.clear()
     _ok, _ = SO.ufw_deny_ip("10.0.0.5", tag="panel-test")
-    check("ufw_deny_ip: valid IP reaches ufw insert",
-          _ok is True and any("ufw insert 1 deny from 10.0.0.5" in c for c in _so))
+    check("ufw_deny_ip: valid IP reaches ufw prepend",
+          _ok is True and any("ufw prepend deny from 10.0.0.5" in c for c in _so))
     _so.clear()
     SO.ufw_deny_ip("10.0.0.6", tag="ev;il`x`")   # tag must be charset-stripped
     check("ufw_deny_ip: tag stripped of shell metacharacters",
@@ -399,7 +399,16 @@ _bk.BACKUP_DIR = _bktmp / "backups"; _bk.DATA_DIR = _bktmp; _bk.DB_PATH = _bktmp
 _bk.CONFIG_FILE = _bktmp / "config.json"; _bk.SECRET_FILE = _bktmp / "secret_key"; _bk.CRED_KEY_FILE = _bktmp / "cred_key"
 _dbc = _sq.connect(str(_bk.DB_PATH)); _dbc.execute("create table t(x)"); _dbc.commit(); _dbc.close()
 _bk.CONFIG_FILE.write_text("{}"); _bk.SECRET_FILE.write_text("s"); _bk.CRED_KEY_FILE.write_text("k")
-_bok, _bname = _bk.create_backup("manual")
+# A PLAIN archive, whatever this machine's own config says. The path constants above are the
+# backup module's; get_passphrase() reads panel.core.config's, which is the real data/config.json —
+# so on a host with backup encryption on this wrote a .enc and the tar.open below killed the suite
+# at import, and with the passphrase undecryptable create_backup refused and did the same.
+_orig_getpass_plain = _bk.get_passphrase
+_bk.get_passphrase = lambda: ""
+try:
+    _bok, _bname = _bk.create_backup("manual")
+finally:
+    _bk.get_passphrase = _orig_getpass_plain
 check("backup: create returns a valid name", _bok and bool(_bk._NAME_RE.match(_bname)))
 _blist = _bk.list_backups()
 check("backup: appears in the list as 'manual'",

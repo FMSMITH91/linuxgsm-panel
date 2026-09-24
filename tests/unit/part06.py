@@ -1,6 +1,5 @@
 """Part 6 of the unit suite. Imported for its side effects."""
 from unit.part01 import (N, NS, SO, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, check, eq, skip, glob, json, os, re, sys)  # noqa: F401,E402
-from unit import REPO_ROOT as _UNIT_ROOT  # noqa: E402
 
 from unit.part05 import (_ast_scan, _helper, _helper_path, _ilu, _machinery, _priv, _re, _root, _shutil, _sp, _t, _tempfile, _time)  # noqa: F401,E402
 check("ufw: _ufw_is_active is false for empty output", _sm_firewall._ufw_is_active("") is False)
@@ -262,8 +261,22 @@ finally:
 try:
     _scanroot = _tempfile.mkdtemp(prefix="panel-scan-")
     for _d in ("srcds/serverfiles/cstrike", "srcds/serverfiles/hl2",
-               "gmodserver/serverfiles/tf2", "nothing", "bad;name/serverfiles/cstrike"):
+               "gmodserver/serverfiles/tf2", "nothing", "bad;name/serverfiles/cstrike", "linker"):
         os.makedirs(os.path.join(_scanroot, _d), exist_ok=True)
+    # The account owns everything below its home, so it can point any of it anywhere. As root the
+    # probes FOLLOWED those links: `ln -s /root ~/serverfiles` made them an existence oracle over
+    # places the account cannot look. Here the targets are another user's real content, so a probe
+    # that follows reports what is not the account's — a whole serverfiles, and one game entry.
+    os.symlink(os.path.join(_scanroot, "srcds", "serverfiles"),
+               os.path.join(_scanroot, "linker", "serverfiles"))
+    os.symlink(os.path.join(_scanroot, "srcds", "serverfiles", "hl2"),
+               os.path.join(_scanroot, "gmodserver", "serverfiles", "hl2"))
+    for _sn, _sm in (("srcds/cssserver", 0o755), ("srcds/notexec", 0o644)):
+        with open(os.path.join(_scanroot, _sn), "w") as _fh:
+            _fh.write("#!/bin/sh\n")
+        os.chmod(os.path.join(_scanroot, _sn), _sm)
+    os.symlink(os.path.join(_scanroot, "srcds", "cssserver"),
+               os.path.join(_scanroot, "linker", "cssserver"))
     _spec_s = _ilu.spec_from_loader("ph_scan", _machinery.SourceFileLoader("ph_scan", _helper_path))
     _hs = _ilu.module_from_spec(_spec_s)
     _spec_s.loader.exec_module(_hs)
@@ -286,6 +299,18 @@ try:
           not any("nothing" in h for h in _hits), str(_hits))
     check("content scan: a /home entry whose NAME the panel would never use is skipped",
           not any("bad" in h for h in _hits), str(_hits))
+    check("content scan: a symlinked serverfiles or game entry is not followed",
+          not any(h.startswith(("HIT|linker|", "HIT|gmodserver|")) for h in _hits), str(_hits))
+    _cp_got = (_hs.do_content_game_present(["srcds", "cstrike"], None),
+               _hs.do_content_game_present(["linker", "cstrike"], None),
+               _hs.do_content_game_present(["gmodserver", "hl2"], None))
+    check("content-game-present: a real game dir is present; one reached through a link the "
+          "account planted is not", _cp_got == (0, 1, 1), repr(_cp_got))
+    _cs_got = (_hs.do_content_script_present(["srcds", "cssserver"], None),
+               _hs.do_content_script_present(["linker", "cssserver"], None),
+               _hs.do_content_script_present(["srcds", "notexec"], None))
+    check("content-script-present: a real executable is present; a link to one, or a file with no "
+          "execute bit, is not", _cs_got == (0, 1, 1), repr(_cs_got))
     _shutil.rmtree(_scanroot, ignore_errors=True)
 except OSError as _e:
     skip("content scan", _e)
@@ -893,6 +918,106 @@ try:
 finally:
     _helper.PANEL_CONF = _dbr_conf
     _helper.DBM_PATH = _dbr_dbm
+
+# ── ...and it runs as the database directory's owner, not as root ──────────────────────────────
+# It ran as root and nothing handed the result back: repair() CREATES every file it leaves (the
+# rebuilt database, or a restored backup, is renamed over panel.db), so a repair made panel.db
+# root:root 0600 and the panel, started again straight afterwards, could not open its own
+# database. Driven through the real _db_repair_detached on a helper copy whose fork, setsid, _exit,
+# dup2 and subprocess.run are recorders, so nothing forks, detaches or runs.
+import pwd as _pwd_dbo
+_dbo = _sandboxed_helper()
+_dbo_dir = _tempfile.mkdtemp(prefix="panel-dbrepair-")
+# A helper without these fails the checks below by name instead of crashing the part.
+for _dbo_fn, _dbo_dflt in (("_db_repair_account", lambda p: None), ("_db_repair_as", lambda a: None)):
+    if not hasattr(_dbo, _dbo_fn):
+        setattr(_dbo, _dbo_fn, _dbo_dflt)
+try:
+    _dbo_data = os.path.join(_dbo_dir, "data")
+    os.makedirs(_dbo_data)
+    _dbo_db = os.path.join(_dbo_data, "panel.db")
+    open(_dbo_db, "wb").close()
+    _dbo_me = _pwd_dbo.getpwuid(os.getuid())
+    eq("db-repair: the repair account is the owner of the database's directory",
+       getattr(_dbo._db_repair_account(_dbo_db), "pw_uid", None), _dbo_me.pw_uid)
+    # A data/ the panel user swapped for a link to a root-owned directory: the LINK's owner decides,
+    # or the link would hand the repair back to root.
+    _dbo_link = os.path.join(_dbo_dir, "linked")
+    os.symlink("/", _dbo_link)
+    eq("db-repair: a data dir replaced by a link to a root-owned dir still runs as the link's owner",
+       getattr(_dbo._db_repair_account(os.path.join(_dbo_link, "panel.db")), "pw_uid", None),
+       _dbo_me.pw_uid)
+    check("db-repair: no directory to ask means no account (the repair does not run)",
+          _dbo._db_repair_account(os.path.join(_dbo_dir, "absent", "panel.db")) is None)
+    check("db-repair: a root-owned data directory runs as root, with nothing to drop",
+          _dbo._db_repair_as(_pwd_dbo.getpwuid(0)) == {})
+
+    class _DboExit(BaseException):
+        pass
+
+    class _DboProxy:
+        def __init__(self, real, **over):
+            self._real = real
+            self.__dict__.update(over)
+
+        def __getattr__(self, n):
+            return getattr(self._real, n)
+
+    def _dbo_exit(code):
+        raise _DboExit(code)
+
+    _dbo_calls = []
+    _dbo_drops = []
+    _dbo.os = _DboProxy(os, setsid=lambda: None, fork=lambda: 0, _exit=_dbo_exit,
+                        dup2=lambda a, b: None)
+    _dbo.subprocess = _DboProxy(_sp, run=lambda argv, **kw: (_dbo_calls.append((list(argv), kw))
+                                                             or _sp.CompletedProcess(argv, 0)))
+    _dbo.resolve = lambda n: "/usr/bin/" + n
+    _dbo.SYSTEM_PYTHON = (sys.executable,)
+    _dbo._drop_to = lambda pw, own_groups=False: _dbo_drops.append(pw.pw_uid) or True
+
+    def _dbo_drive():
+        del _dbo_calls[:]
+        del _dbo_drops[:]
+        try:
+            _dbo._db_repair_detached(_dbo_db)
+        except _DboExit:
+            pass
+        return [c for c in _dbo_calls if "repair" in c[0]]
+
+    _dbo_rep = _dbo_drive()
+    check("db-repair: stop, repair, start — the positive control",
+          [c[0][-2:] for c in _dbo_calls] == [["stop", _dbo.PANEL_UNIT], ["repair", _dbo_db],
+                                              ["start", _dbo.PANEL_UNIT]],
+          repr([c[0] for c in _dbo_calls]))
+    _dbo_pre = _dbo_rep[0][1].get("preexec_fn") if len(_dbo_rep) == 1 else None
+    if _dbo_pre is not None:
+        _dbo_pre()     # the stubbed _drop_to records; nothing here changes this process's uid
+    check("db-repair: the repair itself drops to the directory's owner before it runs",
+          _dbo_drops == [_dbo_me.pw_uid], "drops=%r calls=%r" % (_dbo_drops, _dbo_rep))
+    check("db-repair: with that account's HOME, not root's",
+          len(_dbo_rep) == 1 and _dbo_rep[0][1].get("env", {}).get("HOME") == _dbo_me.pw_dir)
+    check("db-repair: systemctl stop/start stay root (no drop on them)",
+          all("preexec_fn" not in c[1] for c in _dbo_calls if "systemctl" in c[0][0]))
+    # A drop that does not take must stop the repair, not let it carry on as root.
+    _dbo._drop_to = lambda pw, own_groups=False: False
+    _dbo_raised = False
+    try:
+        _dbo_pre()
+    except OSError:
+        _dbo_raised = True
+    except Exception:
+        pass
+    check("db-repair: a drop that does not take raises in the child instead of running as root",
+          _dbo_raised)
+    # And with no account at all, nothing is stopped and nothing is repaired.
+    _dbo._db_repair_account = lambda p: None
+    _dbo_drive()
+    check("db-repair: no account means no stop and no repair",
+          not [c for c in _dbo_calls if "stop" in c[0] or "repair" in c[0]],
+          repr([c[0] for c in _dbo_calls]))
+finally:
+    _shutil.rmtree(_dbo_dir, ignore_errors=True)
 
 def _module_toplevel_names(path):
     """Every name a module defines or imports at top level, by AST — no importing.
@@ -2532,6 +2657,18 @@ try:
     _launcher = os.path.join(_u, "csgoserver")
     open(_launcher, "w").close()
     os.chmod(_launcher, 0o755)
+    # A game account names its own config-lgsm entries, and the scan is a newline- and '|'-split
+    # line protocol: these are the forgeries (a second record naming ANOTHER account, a shifted
+    # field), plus a second real instance and a /home name that is not an account name.
+    _disc_names = {"gmodserver": ["x\nFOUND|lgsmpanel|pzserver|16261|0|0|0|0", "y|lgsmpanel",
+                                  "gmodserver-2"],
+                   "bad user": ["badserver"]}
+    for _du, _dinsts in _disc_names.items():
+        for _di in _dinsts:
+            os.makedirs(os.path.join(_disc_home, _du, "lgsm", "config-lgsm", _di))
+            _dl = os.path.join(_disc_home, _du, _di)
+            open(_dl, "w").close()
+            os.chmod(_dl, 0o755)
 
     class _DiscCap:
         def write(self, t):
@@ -2548,7 +2685,13 @@ finally:
     import shutil as _sh_disc
     _sh_disc.rmtree(_disc_home, ignore_errors=True)
 
-_disc_line = "".join(_disc_out).strip()
+_disc_lines = "".join(_disc_out).splitlines()
+_disc_line = next((_l for _l in _disc_lines if _l.startswith("FOUND|csgoserver|")), "")
+check("helper: lgsm-discover reports only real instances — no record forged by a newline or '|' "
+      "in an instance name, none for a /home name that is not an account",
+      sorted(tuple(_l.split("|")[1:3]) + (len(_l.split("|")),) for _l in _disc_lines)
+      == [("csgoserver", "csgoserver", 8), ("gmodserver", "gmodserver-2", 8)],
+      repr(_disc_lines))
 check("helper: lgsm-discover emits a FOUND line for an installed instance",
       _disc_line.startswith("FOUND|"), repr(_disc_line[:120]))
 _disc_parts = _disc_line.split("|")
@@ -2848,6 +2991,161 @@ if os.path.isfile(_acc_path):
               os.path.join(_root, ".github", "workflows", "codacy-alerts.yml"),
               encoding="utf-8").read())
 
+# ── ...and the gate script fails on any answer it cannot read, not only 401/403/404 ─────────────
+# Every other HTTP status printed a ::warning:: and exited 0, as did a 200 whose body was not JSON
+# (json's ValueError shared the "could not reach" branch). The workflow is schedule-only, so a
+# retired endpoint (410), a moved one (308 — urllib raises on a redirected POST) or a changed filter
+# shape (400/422) would have read green every day, forever. Driven through the real main() with
+# urlopen stubbed; an outage (5xx, no connection) stays non-fatal, and a well-formed empty answer
+# is the control that passes.
+import importlib.util as _cd_ilu
+import io as _cd_io
+import urllib.error as _cd_err
+_cd_spec = _cd_ilu.spec_from_file_location(
+    "codacy_gate", os.path.join(_root, ".github", "scripts", "codacy_open_errors.py"))
+_cd = _cd_ilu.module_from_spec(_cd_spec)
+_cd_spec.loader.exec_module(_cd)
+
+
+class _CdResp:
+    def __init__(self, body):
+        self._b = body
+
+    def read(self):
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _cd_run(behaviour):
+    def _urlopen(req, timeout=None):
+        if isinstance(behaviour, BaseException):
+            raise behaviour
+        return _CdResp(behaviour)
+    _saved = (_cd.urllib.request.urlopen, os.environ.pop("GITHUB_STEP_SUMMARY", None), sys.stdout)
+    _cd.urllib.request.urlopen = _urlopen
+    sys.stdout = _cd_io.StringIO()
+    try:
+        return _cd.main()
+    finally:
+        _cd.urllib.request.urlopen = _saved[0]
+        sys.stdout = _saved[2]
+        if _saved[1] is not None:
+            os.environ["GITHUB_STEP_SUMMARY"] = _saved[1]
+
+
+_cd_got = {_label: _cd_run(_b) for _label, _b in (
+    ("HTTP 400", _cd_err.HTTPError("u", 400, "bad", {}, None)),
+    ("HTTP 410", _cd_err.HTTPError("u", 410, "gone", {}, None)),
+    ("HTTP 422", _cd_err.HTTPError("u", 422, "unprocessable", {}, None)),
+    ("HTTP 308", _cd_err.HTTPError("u", 308, "moved", {}, None)),
+    ("HTML 200", b"<html>sign in</html>"),
+    ("HTTP 503", _cd_err.HTTPError("u", 503, "down", {}, None)),
+    ("unreachable", _cd_err.URLError("no route")),
+    ("clean", b'{"data": [], "pagination": {}}'))}
+check("codacy gate: an answer it cannot read fails the run; only an outage is a warning",
+      _cd_got == {"HTTP 400": 1, "HTTP 410": 1, "HTTP 422": 1, "HTTP 308": 1, "HTML 200": 1,
+                  "HTTP 503": 0, "unreachable": 0, "clean": 0}, repr(_cd_got))
+
+# ── the code-scanning gate's concurrency group tells a fork PR from main ─────────────────────────
+# Keyed on head_branch alone, a fork PR opened from the fork's default branch (main) shared
+# `codeql-alerts-main` with the main gate, and GitHub cancels the older PENDING run in a group even
+# with cancel-in-progress: false — so an outside PR could cancel a queued main gate, leaving that
+# commit's alerts unjudged. The group has to carry the event and the head repository too; the
+# branch stays in it (the control), so main's own runs still queue behind one another.
+# Read as text with comment lines dropped (PyYAML is not a dependency of this suite).
+_cqa_txt = "\n".join(_l for _l in open(os.path.join(_root, ".github", "workflows",
+                                                     "codeql-alerts.yml"),
+                                        encoding="utf-8").read().splitlines()
+                      if not _l.lstrip().startswith("#"))
+_cqa_blk = _cqa_txt[_cqa_txt.index("\nconcurrency:"):]
+_cqa_group = " ".join(_cqa_blk[_cqa_blk.index("group:"):_cqa_blk.index("cancel-in-progress")].split())
+check("codeql-alerts: the concurrency group separates a fork PR from the main gate",
+      "github.event.workflow_run.event" in _cqa_group
+      and "github.event.workflow_run.head_repository.full_name" in _cqa_group
+      and "github.event.workflow_run.head_branch" in _cqa_group, _cqa_group)
+
+# ── no workflow runs a remote script it did not pin, and a secret lives in one step's env ───────
+# ci.yml's coverage upload was `bash <(curl -Ls https://coverage.codacy.com/get.sh)`: unversioned,
+# unchecksummed, run on every push to main — with CODACY_PROJECT_TOKEN in the JOB env, so the
+# script, the pip install and both suites all had it. Everything else here downloads a pinned
+# release and checks its sha256. So: no `<(curl …)` and no `curl … | sh` in any workflow, and the
+# token is not in the coverage job's own env block, nor persisted in .git/config by its checkout.
+_wf_pipe = []
+_wf_files = sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml")))
+for _wf in _wf_files:
+    for _n, _l in enumerate(open(_wf, encoding="utf-8").read().splitlines(), 1):
+        if _l.lstrip().startswith("#"):
+            continue
+        if re.search(r"<\(\s*(curl|wget)\b|\b(curl|wget)\b[^#]*\|\s*(sudo\s+)?(ba|z)?sh\b", _l):
+            _wf_pipe.append("%s:%d" % (os.path.basename(_wf), _n))
+check("workflows: none pipes a downloaded script into a shell",
+      _wf_files and not _wf_pipe, "files=%d piped=%r" % (len(_wf_files), _wf_pipe))
+_ci_wf = open(os.path.join(_root, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
+_cov_job = _ci_wf[_ci_wf.index("\n  coverage:\n"):]
+_cov_env = _cov_job[_cov_job.index("\n    env:\n"):]
+_cov_env = _cov_env[:_cov_env.index("\n    steps:")]
+check("workflows: the Codacy token is not in the coverage job's env, only its upload step's",
+      "CODACY_PROJECT_TOKEN: ${{ secrets" not in _cov_env
+      and "CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}" in _cov_job
+      and "sha256sum -c" in _cov_job
+      and "persist-credentials: false" in _cov_job[:_cov_job.index("actions/setup-python")],
+      _cov_env[-200:])
+
+# ── the Bandit job holds security-events: write, so its tools are hash-pinned and no token persists ──
+# It ran `pip install bandit bandit-sarif-formatter` — whatever PyPI had newest — in a job whose
+# token can write the code-scanning alert state that codeql-alerts.yml and codeql.yml's PR gate
+# read as the truth, with that token left in .git/config by checkout. Every requirement in the
+# pin file must be `name==version` with at least one hash, and the job must install that file,
+# with --require-hashes and wheels only, and nothing else.
+_bd_path = os.path.join(_root, ".github", "ci-requirements", "bandit.txt")
+_bd_entries = [" ".join(_e.split()) for _e in re.sub(r"\\\n", " ", "\n".join(
+    _l for _l in open(_bd_path, encoding="utf-8").read().splitlines()
+    if not _l.lstrip().startswith("#"))).splitlines() if _e.strip()]
+_bd_bad = [_e for _e in _bd_entries
+           if not re.fullmatch(r"[A-Za-z0-9._-]+==[0-9][A-Za-z0-9.]*( --hash=sha256:[0-9a-f]{64})+", _e)]
+check("workflows: every Bandit tool is pinned to one version and a hash",
+      any(_e.startswith("bandit==") for _e in _bd_entries) and not _bd_bad,
+      "entries=%d bad=%r" % (len(_bd_entries), _bd_bad[:3]))
+_sc_wf = open(os.path.join(_root, ".github", "workflows", "security-code.yml"), encoding="utf-8").read()
+_bd_job = _sc_wf[_sc_wf.index("\n  sast-bandit:\n"):_sc_wf.index("\n  sast-semgrep:\n")]
+_bd_code = "\n".join(_l for _l in _bd_job.splitlines() if not _l.lstrip().startswith("#"))
+# A folded `run: >-` continues on more-indented lines; a new step (`- `) or key (`name:`) ends it.
+_bd_pip = re.findall(r"pip install[^\n]*(?:\n\s+(?!- )(?![A-Za-z_-]+:\s)\S[^\n]*)*", _bd_code)
+check("workflows: the Bandit job installs only that file, hash-checked, wheels only",
+      len(_bd_pip) == 1 and "--require-hashes" in _bd_pip[0] and "--only-binary :all:" in _bd_pip[0]
+      and "-r .github/ci-requirements/bandit.txt" in " ".join(_bd_pip[0].split()), repr(_bd_pip))
+check("workflows: the Bandit job's checkout does not persist the job token",
+      "persist-credentials: false" in _bd_code[:_bd_code.index("actions/setup-python")])
+
+# ── gitleaks may not exempt a README from the secret scan ──────────────────────────────────────
+# The allowlist carried `paths = ['''README\\.md''']`. gitleaks path patterns are unanchored
+# searches, so that exempted all four READMEs outright, for placeholders the match regexes already
+# cover — and a README is where a real token gets pasted while documenting a setup. Any path
+# exemption must now be anchored to one file (^...$) and must not match a README. Read as text,
+# with comment lines dropped first: this has to run on the 3.10 CI matrix, which has no tomllib.
+_gl_txt = "\n".join(_l for _l in open(os.path.join(_root, ".github", "gitleaks.toml"),
+                                       encoding="utf-8").read().splitlines()
+                     if not _l.lstrip().startswith("#"))
+_gl_paths_blk = re.search(r"^\s*paths\s*=\s*\[(.*?)\]", _gl_txt, re.M | re.S)
+_gl_paths = [_a or _b or _c for _a, _b, _c in
+             re.findall(r"'''(.*?)'''|'([^'\n]*)'|\x22([^\x22\n]*)\x22",
+                        _gl_paths_blk.group(1) if _gl_paths_blk else "")]
+_gl_readmes = sorted(os.path.relpath(_f, _root) for _f in
+                     glob.glob(os.path.join(_root, "**", "README*"), recursive=True)
+                     if ".venv" not in _f and "node_modules" not in _f)
+check("gitleaks: the config was read (it still carries its placeholder allowlist)",
+      "regexes = [" in _gl_txt and "tskey-auth-" in _gl_txt and "useDefault = true" in _gl_txt)
+_gl_bad = [_pp for _pp in _gl_paths
+           if not (_pp.startswith("^") and _pp.endswith("$"))
+           or any(re.search(_pp, _rf) for _rf in _gl_readmes + ["README.md"])]
+check("gitleaks: no path exemption is unanchored or takes a README out of the scan",
+      not _gl_bad, "exempts: %r" % _gl_bad)
+
 # ── The docs state numbers that the code owns — pin them ──────────────────────────────────────
 # Every one of these was wrong at the time of writing, and none of them could be. SECURITY.md said
 # "43 verbs" against 86; the CHANGELOG said 77 in the same release; README advertised 18 alert
@@ -2918,6 +3216,73 @@ for _mod in ("ssh_manager.py", "system_ops.py", "panel/core/terminal.py"):
     _want = os.path.relpath(_p, _root).replace(os.sep, "/") + ("/**" if os.path.isdir(_p) else "")
     check("docs: the fuzz workflow watches %s (as '%s')" % (_mod, _want),
           ("'%s'" % _want) in _fuzz_wf, "not in fuzz.yml paths:")
+
+# fuzz_console must feed render_colour — the renderer the LIVE console uses (_console_push,
+# app._clean_console_text), and the one that int()-parses player-authored SGR — and hold its output
+# to "no ESC but an SGR it wrote". It called only strip_escapes/render/render_line, none of which
+# the console reaches. Imported with a stand-in atheris (the unit job has none installed), and its
+# `terminal` swapped for a proxy on the harness module only, so the real module is never touched.
+import contextlib as _fz_ctx
+import types as _fz_types
+_fz_fake = _fz_types.ModuleType("atheris")
+
+
+class _FzFDP:
+    def __init__(self, data):
+        self._d = data
+
+    def remaining_bytes(self):
+        return len(self._d)
+
+    def ConsumeUnicodeNoSurrogates(self, _n):
+        return self._d.decode("utf-8", "replace")
+
+
+_fz_fake.FuzzedDataProvider = _FzFDP
+_fz_fake.instrument_imports = _fz_ctx.nullcontext
+_fz_had = "atheris" in sys.modules
+_fz_saved = sys.modules.get("atheris")
+sys.modules["atheris"] = _fz_fake
+try:
+    _fz_spec = _ilu.spec_from_file_location("fz_console_unit", os.path.join(_fuzz_dir, "fuzz_console.py"))
+    _fz = _ilu.module_from_spec(_fz_spec)
+    _fz_spec.loader.exec_module(_fz)
+    _fz_real_term = _fz.terminal
+
+    def _fz_try(data):
+        try:
+            _fz.TestOneInput(data)
+            return None
+        except AssertionError as _e:
+            return str(_e)
+
+    _fz_line = "\x1b[1;31mred\x1b[0m \x1b[38;5;99mx\x1b[m tail\r\nnext \x1b]0;t\x07 \x1b[2K".encode()
+    check("fuzz_console: a coloured console line passes the harness (positive control)",
+          _fz_try(_fz_line) is None, repr(_fz_try(_fz_line)))
+
+    class _FzTerm:
+        def __init__(self, leak):
+            self._leak = leak
+
+        def __getattr__(self, n):
+            return getattr(_fz_real_term, n)
+
+        def render_colour(self, text):
+            return self._leak + _fz_real_term.render_colour(text)
+
+    for _fz_leak, _fz_what in (("\x1b]0;title\x07", "an OSC"), ("\x1b[2J", "a non-SGR CSI"),
+                               ("\r", "a carriage return")):
+        _fz.terminal = _FzTerm(_fz_leak)
+        check("fuzz_console: %s leaking out of render_colour fails the harness" % _fz_what,
+              (_fz_try(b"plain") or "").startswith("render_colour()"), repr(_fz_try(b"plain")))
+    _fz.terminal = _FzTerm("\x1b[1;31m")
+    check("fuzz_console: ...and the SGR render_colour writes itself does not",
+          _fz_try(b"plain") is None, repr(_fz_try(b"plain")))
+finally:
+    if _fz_had:
+        sys.modules["atheris"] = _fz_saved
+    else:
+        sys.modules.pop("atheris", None)
 
 # ── ufw_allow_tailscale builds a VERB, and does not raise ─────────────────────────────────────
 # It read `_run("ufw-allow-iface", [iface], timeout=15)` — _run's signature is
@@ -3857,16 +4222,8 @@ check("suites: no check() hands its reporter something that is not a string",
 
 # The suite is now a runner plus tests/unit/part*.py, and the runner names the parts explicitly.
 # Drop one from that list — or add a part and forget to — and the suite reports a smaller total
-# and still exits 0. That is the same silent pass as a suite that SKIPs, and it is the failure this
-# file exists to catch, so the shape of the file is not allowed to have it.
-import pathlib as _upl
-_upart_files = sorted(q.name[:-3] for q in _upl.Path(_UNIT_ROOT, "tests", "unit").glob("part*.py"))
-_urunner = open(os.path.join(_UNIT_ROOT, "tests", "unit_test.py"), encoding="utf-8").read()
-_umissing = [p for p in _upart_files if p not in _urunner]
-check("unit suite: every tests/unit/part*.py is imported by the runner",
-      not _umissing, "never run: %s" % _umissing)
-check("unit suite: the runner imports at least as many parts as exist",
-      len(_upart_files) >= 6, "found %d part files" % len(_upart_files))
+# and still exits 0. The check that every part RAN lives in tests/unit_test.py, after the imports:
+# one here, in a part, disappeared along with this part when it was the one dropped.
 
 # ── every _run() command is a literal, or shlex.quote()d ─────────────────────────────────────
 # _run() executes with shell=True. Bandit rates that HIGH (B602) and the repo suppresses it,
@@ -4815,24 +5172,10 @@ check("install.sh: ...with the grant still gated on a trusted origin",
 # and the machines it goes wrong on are the real installs.
 #
 # The rule: touch config through a redirected CONFIG_FILE or a stubbed load_config, never the
-# module's own path. Checked per FILE, because the redirect and the use are rarely adjacent.
-_cfg_guard = []
-for _f in sorted(os.listdir(os.path.join(_root, "tests", "unit"))):
-    if not _f.endswith(".py"):
-        continue
-    _src = open(os.path.join(_root, "tests", "unit", _f), encoding="utf-8").read()
-    _uses = sum(1 for _n in _ast.walk(_ast.parse(_src))
-                if isinstance(_n, _ast.Call)
-                and getattr(_n.func, "attr", getattr(_n.func, "id", "")) in
-                ("load_config", "save_config"))
-    if not _uses:
-        continue
-    _redirects = ("CONFIG_FILE =" in _src or ".CONFIG_FILE=" in _src
-                  or "load_config =" in _src)
-    if not _redirects:
-        _cfg_guard.append("%s (%d call(s), no redirect)" % (_f, _uses))
-check("suites: no unit file reads or writes the machine's own config.json",
-      not _cfg_guard, "; ".join(_cfg_guard))
+# module's own path. It is enforced at RUNTIME by tests/unit_test.py, which watches every
+# config entry point for the whole run. The per-file text check that stood here could not see a
+# call made BEFORE a file's redirect, nor an indirect read through a panel helper, and was green
+# while part01 rewrote data/config.json seven times.
 
 # ── the deploy must ASK where the panel is, not assume it ────────────────────────────────────
 # install.sh has supported two service models since 2026-07-04: a per-user install under the
@@ -4947,6 +5290,34 @@ try:
                                   HEAD_SHA=_dp_sha[:39] + "\ntouch /tmp/x"))
     check("deploy: ...and refuses a head_sha that is not a commit id, sending nothing",
           _dp_rb.returncode != 0 and not os.path.exists(_dp_bad), _dp_rb.stderr[-200:])
+    # The PER-USER branch too. It took install.sh from origin/main and ran it unpinned, so the
+    # deploy of a verified commit installed whatever main's tip was by then — a later push whose CI
+    # had not finished, or had failed. Same stream, a host whose unit reports nothing and whose
+    # deploy account has ~/linuxgsm-panel: record what install.sh ran with, and which bytes.
+    _dp_home = os.path.join(_dp_sb, "peruser")
+    os.makedirs(os.path.join(_dp_home, "linuxgsm-panel"))
+    with open(os.path.join(_dp_home, "linuxgsm-panel", "install.sh"), "w") as _dp_f:
+        _dp_f.write("#!/bin/bash\necho HOST-OWN-INSTALLER\n")
+    _dp_ulog = os.path.join(_dp_sb, "ulog")
+    _dp_ushims = ('LOG=%s\n' % _shlex_q(_dp_ulog)
+                  + 'systemctl() { :; }\n'
+                  + 'git() { echo "GIT $*" >> "$LOG"; }\n'
+                  + 'sudo() { echo "SUDO $*" >> "$LOG"; return 1; }\n'
+                  # `env`, an external command, sees only what install.sh would: the EXPORTED
+                  # environment. The remote script's own PANEL_UPDATE_REF is a plain shell
+                  # variable, so only a prefix assignment on the call reaches the installer.
+                  + 'bash() { env | sed -n "s/^PANEL_UPDATE_REF=/USER-ENV PANEL_UPDATE_REF=/p"'
+                  + ' >> "$LOG"; echo "USER-BYTES $(cat "$1")" >> "$LOG"; }\n')
+    _dp_ur = _sh_sub.run(["/bin/bash", "-c", _dp_ushims + _dp_sent], capture_output=True, text=True,
+                         cwd=_dp_sb, env=dict(os.environ, HOME=_dp_home))
+    _dp_ugot = open(_dp_ulog).read() if os.path.exists(_dp_ulog) else ""
+    check("deploy: the per-user branch runs the shipped installer, pinned to the verified commit",
+          "Per-user install at" in _dp_ur.stdout
+          and "USER-ENV PANEL_UPDATE_REF=%s" % _dp_sha in _dp_ugot.splitlines()
+          and "USER-BYTES " + _dp_shipped.strip() in _dp_ugot
+          and "origin/main" not in _dp_ugot,
+          "rc=%s out=%r err=%r log=%r" % (_dp_ur.returncode, _dp_ur.stdout[-200:],
+                                         _dp_ur.stderr[-200:], _dp_ugot[-300:]))
 finally:
     _shutil.rmtree(_dp_sb, ignore_errors=True)
 

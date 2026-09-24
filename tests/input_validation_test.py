@@ -21,9 +21,11 @@ against an endpoint that is broken outright and refuses everything — so each f
 with a GOOD value, and the good value must be accepted and stored. Refusing bad input is only
 interesting if accepting good input still works.
 
-SAFETY: refuses to run when a real database exists, and removes what it created. Like the smoke
-suite, it needs no network — the fixture host is unreachable by design and every assertion here is
-about what the ROUTE did before anything reached it.
+SAFETY: refuses to run when a real database exists, and removes what it created. The fixture's
+remote host is unreachable by design. The positive controls run against a LOCAL host record, so
+they do reach this machine — but only for read-only probes (its listening ports, `id <name>`). The
+install job an accepted /servers/add starts, and the Tailscale Serve change an accepted mount
+makes, are captured and never run: both used to run for real on whatever machine ran the suite.
 
     python tests/input_validation_test.py     # exits 0 if all checks pass, 1 otherwise
 """
@@ -136,6 +138,41 @@ _BAD_PORTS = ["0", "-1", "65536", "99999", "abc", "", " ", "27015.5", "1e4", "0x
 # so a change that starts rejecting them is visible rather than silent.
 _ODD_BUT_VALID = ["+2302", " 2302 "]
 
+# ── nothing here may INSTALL a game server on the machine running the suite ─────────────────────
+# Every accepted /servers/add commits a row and starts the install job's worker thread. The
+# positive controls post to the LOCAL host, and nothing was stubbed past the port allocator — so
+# each one ran the real job here: useradd, fetch and run linuxgsm.sh as the new account, apt-get as
+# root, auto-install. Five accounts per run on every CI runner; and on a host that already runs a
+# LinuxGSM `codserver` (the default name of the auto-named controls), the installer ran inside the
+# live server's home. The worker is captured here instead, and never started. Its target is the only
+# thing that identifies it (a bare `threading.Thread(target=_run)`), so the check below asserts one
+# was captured per row — a job that stops going through this seam fails that, not silently.
+import threading as _iv_thr  # noqa: E402
+import panel.routes.manage_servers as _ms_mod  # noqa: E402
+_iv_workers = []
+
+
+class _IvCapturedThread:
+    def __init__(self, target=None, **kw):
+        self.target = target
+        _iv_workers.append(self)
+
+    def start(self):
+        """Captured: never run."""
+
+
+class _IvThreadingShim:
+    Thread = _IvCapturedThread
+
+    def __getattr__(self, name):
+        return getattr(_iv_thr, name)
+
+
+_iv_o_threading = _ms_mod.threading
+_ms_mod.threading = _IvThreadingShim()
+# Saved here so the outer finally can put it back whatever happens (see the Tailscale block).
+from panel.ops import tailscale_integration as _ts_mod  # noqa: E402
+_o_ts_setup = _ts_mod.setup_tailscale_serve
 
 try:
     with app.app_context():
@@ -173,16 +210,29 @@ try:
     # ── /servers/add — the endpoint that had no bounds at all ────────────────────────────────
     # A refusal here must leave NO row. That is the assertion that matters: the route used to
     # commit the GameServer first and only fail later, on the host, as the game's own error.
-    for bad in _BAD_PORTS:
-        before = servers_count()
-        r = c.post("/servers/add", data={"remote_id": str(remote_id), "game_type": "cod",
-                                         "server_name": "", "port": bad},
-                   follow_redirects=False)
-        label = repr(bad)[:22]
-        check("/servers/add port=%s does not 5xx" % label, r.status_code < 500,
-              "got %d" % r.status_code)
-        check("/servers/add port=%s writes no server row" % label, servers_count() == before,
-              "row count went %d -> %d" % (before, servers_count()))
+    #
+    # Driven at the LOCAL host with the port allocator and the account probe stubbed to succeed,
+    # each with its own name, so the range check is the only thing left that can refuse. This
+    # posted to the unreachable host, which refuses every add by itself ("on an unreachable host
+    # writes no server row" below, with a VALID port): the loop passed with the range check
+    # deleted. A blank port is not in it — on this form blank means "the game's default port".
+    import panel.routes.manage_servers as _ms_mod
+    _o_rfp_bad, _o_has_bad = _ms_mod.resolve_free_port, _ms_mod.host_account_state
+    try:
+        _ms_mod.resolve_free_port = lambda remote, remote_id, desired, game_type: (desired, False)
+        _ms_mod.host_account_state = lambda remote, n: "absent"
+        for _bad_i, bad in enumerate(b for b in _BAD_PORTS if b.strip()):
+            before = servers_count()
+            r = c.post("/servers/add", data={"remote_id": str(local_id), "game_type": "cod",
+                                             "server_name": "ivbad%d" % _bad_i, "port": bad},
+                       follow_redirects=False)
+            label = repr(bad)[:22]
+            check("/servers/add port=%s does not 5xx" % label, r.status_code < 500,
+                  "got %d" % r.status_code)
+            check("/servers/add port=%s writes no server row" % label, servers_count() == before,
+                  "row count went %d -> %d" % (before, servers_count()))
+    finally:
+        _ms_mod.resolve_free_port, _ms_mod.host_account_state = _o_rfp_bad, _o_has_bad
 
     # Positive control: a valid port IS accepted and IS what gets stored. Without this the block
     # above would pass against a route that refuses everything.
@@ -266,12 +316,22 @@ try:
         _ms_mod.resolve_free_port = _o_rfp2
 
     # int() accepts these and they name a real port, so they must still work.
-    for ok_val in _ODD_BUT_VALID:
+    # Typed throwaway names: an auto-named row is `codserver`, a real account on a host that runs
+    # CoD, which is where this suite gets run.
+    for _odd_i, ok_val in enumerate(_ODD_BUT_VALID):
         before = servers_count()
         c.post("/servers/add", data={"remote_id": str(local_id), "game_type": "cod",
-                                     "server_name": "", "port": ok_val}, follow_redirects=False)
+                                     "server_name": "ivodd%d" % _odd_i, "port": ok_val},
+               follow_redirects=False)
         check("/servers/add accepts %r (int() does)" % ok_val, servers_count() == before + 1,
               "row count went %d -> %d" % (before, servers_count()))
+
+    with app.app_context():
+        _iv_local_rows = GameServer.query.filter_by(remote_id=local_id).count()
+    check("/servers/add on this machine: every install job was captured, none ran",
+          _iv_local_rows >= 1 and len(_iv_workers) == _iv_local_rows
+          and all(getattr(w.target, "__qualname__", "").endswith("._run") for w in _iv_workers),
+          "%d local rows, %d install workers captured" % (_iv_local_rows, len(_iv_workers)))
 
     # An unreachable host is a NORMAL condition for this panel, not a fault in it. Picking a free
     # port scans the host over SSH, so this route raised straight through as a 500 — the exact
@@ -286,17 +346,28 @@ try:
           "row count went %d -> %d" % (before, servers_count()))
 
     # ── /remotes/add and /remotes/<id>/edit — the SSH port ───────────────────────────────────
-    for bad in _BAD_PORTS:
-        before = remotes_count()
-        r = c.post("/remotes/add", data={"name": "iv-bad", "host": "192.0.2.11",
-                                         "ssh_user": "root", "ssh_port": bad,
-                                         "auth_method": "key", "credential": ""},
-                   follow_redirects=False)
-        label = repr(bad)[:22]
-        check("/remotes/add ssh_port=%s does not 5xx" % label, r.status_code < 500,
-              "got %d" % r.status_code)
-        check("/remotes/add ssh_port=%s writes no host row" % label, remotes_count() == before,
-              "row count went %d -> %d" % (before, remotes_count()))
+    # The connection test is stubbed SUCCESSFUL, as the auth_method block below does and for its
+    # reason: left real, the unreachable 192.0.2.11 refused every add on its own, and this loop
+    # passed with the port's range check deleted. The positive control is "accepts
+    # auth_method=key" below — the same POST with the same stub, a valid port, and a new row.
+    import panel.routes.remotes as _rr
+    _saved_test_bad = _rr.ssh_test_connection
+    try:
+        _rr.ssh_test_connection = lambda *a, **k: (True, "stubbed OK")
+        for _bad_i, bad in enumerate(_BAD_PORTS):
+            before = remotes_count()
+            r = c.post("/remotes/add", data={"name": "iv-bad-%d" % _bad_i, "host": "192.0.2.11",
+                                             "ssh_user": "root", "ssh_port": bad,
+                                             "auth_method": "key", "credential": "",
+                                             "setup_type": "existing"},
+                       follow_redirects=False)
+            label = repr(bad)[:22]
+            check("/remotes/add ssh_port=%s does not 5xx" % label, r.status_code < 500,
+                  "got %d" % r.status_code)
+            check("/remotes/add ssh_port=%s writes no host row" % label, remotes_count() == before,
+                  "row count went %d -> %d" % (before, remotes_count()))
+    finally:
+        _rr.ssh_test_connection = _saved_test_bad
 
     for bad in _BAD_PORTS:
         r = c.post("/remotes/%d/edit" % remote_id,
@@ -402,11 +473,24 @@ try:
               "got %d" % r.status_code)
 
     # ── /api/free-port — the read-only suggestion the install form uses ──────────────────────
-    for bad in ("0", "-1", "65536", "abc", ""):
-        r = c.get("/api/free-port?remote_id=%d&game=cod&desired=%s" % (remote_id, bad))
-        check("free-port desired=%r suggests nothing" % bad,
-              r.status_code == 200 and (r.get_json() or {}).get("port") is None,
-              "got %d %s" % (r.status_code, r.get_data(as_text=True)[:60]))
+    # At the LOCAL host with the allocator stubbed to hand back whatever it is asked for, so the
+    # route's own range check is what answers None. Aimed at the unreachable host, the allocator
+    # raised and the route's `except` answered None for every value, range check or not.
+    import panel.routes.api as _api_mod
+    _o_rfp_api = _api_mod.resolve_free_port
+    try:
+        _api_mod.resolve_free_port = lambda remote, remote_id, desired, game: (desired, False)
+        for bad in ("0", "-1", "65536", "abc", ""):
+            r = c.get("/api/free-port?remote_id=%d&game=cod&desired=%s" % (local_id, bad))
+            check("free-port desired=%r suggests nothing" % bad,
+                  r.status_code == 200 and (r.get_json() or {}).get("port") is None,
+                  "got %d %s" % (r.status_code, r.get_data(as_text=True)[:60]))
+        r = c.get("/api/free-port?remote_id=%d&game=cod&desired=28960" % local_id)
+        check("free-port: ...while the same stubbed request with a valid port suggests it "
+              "(control)", (r.get_json() or {}).get("port") == 28960,
+              r.get_data(as_text=True)[:80])
+    finally:
+        _api_mod.resolve_free_port = _o_rfp_api
     r = c.get("/api/free-port?remote_id=%d&game=cod&desired=28960" % local_id)
     _fp = (r.get_json() or {}).get("port")
     check("free-port suggests a real port for a valid request (positive control)",
@@ -441,6 +525,14 @@ try:
     # Nothing is stored either way (the route only writes tailscale_mount when Serve succeeded),
     # so this is about the ANSWER, not about a bad value reaching the config.
     from panel.core.config import load_config as _tsl
+    # setup_tailscale_serve is a RECORDER here. The real one makes the current user the Tailscale
+    # operator, adds a UFW allow on tailscale0, and runs `tailscale serve --bg` UNPRIVILEGED first —
+    # which nosudo_runner cannot refuse, since it names no sudo. So the positive control below left
+    # a persistent Serve route publishing this machine's 127.0.0.1:5000 at <node>.ts.net/lgsm to
+    # every tailnet peer, on every developer box where the user is the operator. The recorder
+    # answers "not done" so nothing is stored, and what it received is asserted instead.
+    _ts_calls = []
+    _ts_mod.setup_tailscale_serve = lambda **kw: (_ts_calls.append(kw), (False, "stub: not run"))[1]
     _mount_before = _tsl().get("tailscale_mount")
     for _bad in ("../etc", "/a/../../b", "not-a-path", "/" + "x" * 40, "/a;b", "//host"):
         r = c.post("/api/tailscale/serve", json={"action": "enable", "mount": _bad})
@@ -463,11 +555,18 @@ try:
     # asserted `status_code < 500` and passed locally — where the no-sudo test runner fails the
     # command differently — then failed in CI on all three matrix jobs. The status was never the
     # thing being tested; the 400-with-"mount point" is.
-    r = c.post("/api/tailscale/serve", json={"action": "enable", "mount": "/lgsm"})
+    check("tailscale serve: a refused mount never reaches the host",
+          not _ts_calls, "setup_tailscale_serve was called with %r" % (_ts_calls,))
+    try:
+        r = c.post("/api/tailscale/serve", json={"action": "enable", "mount": "/lgsm"})
+    finally:
+        _ts_mod.setup_tailscale_serve = _o_ts_setup
     check("tailscale serve: a valid mount is not rejected as invalid (positive control)",
           r.status_code != 400
           and "mount point" not in ((r.get_json() or {}).get("message") or "").lower(),
           "got %d %s" % (r.status_code, r.get_data(as_text=True)[:100]))
+    check("tailscale serve: ...and it reaches Serve with that mount, recorded and not run",
+          [k.get("mount") for k in _ts_calls] == ["/lgsm"], repr(_ts_calls))
 
     # ── Structural: a port field must go through the bounded parser ──────────────────────────
     # This is the check that generalises. _int_or guarantees "an int" and carries no range; every
@@ -505,6 +604,8 @@ except Exception as exc:                      # a crash in the harness is a fail
     traceback.print_exc()
     results.append((False, "suite ran to completion", "%s: %s" % (type(exc).__name__, exc)))
 finally:
+    _ms_mod.threading = _iv_o_threading
+    _ts_mod.setup_tailscale_serve = _o_ts_setup
     cleanup()
 
 passed = sum(1 for ok, _, _ in results if ok)

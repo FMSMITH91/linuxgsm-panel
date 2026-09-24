@@ -16,8 +16,11 @@ Deliberately NOT a wall-clock benchmark: timings on a CI runner are too noisy to
 query count is the thing that actually explains why a page gets slow as an install grows.
 tools/perf_bench.py is the one that walks the timing curve.
 
-No SSH and no sudo: the exec primitives are stubbed at the definition site, which is the one target
-that reaches both the route modules and ssh_manager's own internals.
+No SSH, no sudo, no git in the checkout and no GitHub API: ssh_manager's exec primitives are
+stubbed at the definition site, which is the one target that reaches both the route modules and
+ssh_manager's own internals, and system_ops' own (the panel-host pages never go through
+ssh_manager) are refused too. A tripwire records anything that still reaches a process, and a
+check fails on it.
 
     python tests/perf_budget_test.py     # exits 0 if all pages stay host-bounded
 """
@@ -68,7 +71,94 @@ _cfg["ssh_timeout"] = 1
 save_config(_cfg)
 
 from panel.ops import system_ops as _so  # noqa: E402
+from panel.ops import backup as _pb_backup  # noqa: E402
+from panel.ops import tailscale_integration as _pb_ts  # noqa: E402
 _so._check_sudo = lambda force=False: False
+
+# ...and system_ops' OWN exec primitives, which the ssh_manager stubs below never reach: the
+# panel-host pages call them directly, and _run_verb never consults _check_sudo. Without these the
+# every-GET sweep ran `sudo apt-get update` (the OS-update check, twice per sweep), `sudo ufw status
+# verbose` and a sudo read of the fail2ban log - each waiting at a password prompt on a machine
+# without passwordless sudo, each really running as root on one with it (CI, or a host with the
+# helper, where it is `sudo -n <helper>`) - and, in a git checkout, `git remote set-branches origin
+# '*'` plus `git fetch --prune --unshallow` against the checkout itself (the branch list) and the
+# GitHub check-runs API (update-status). Every caller already handles "could not run it", which is
+# what an unprivileged install answers, so refusing changes no query count. backup.py imported
+# _run_verb by name, so it holds its own reference.
+_PB_REFUSED = []
+
+
+def _pb_refuse(what):
+    def _refused(*a, **k):
+        _PB_REFUSED.append(what)
+        return "", "refused by perf_budget", 1
+    return _refused
+
+
+_so._run_verb = _pb_refuse("_run_verb")
+_pb_backup._run_verb = _pb_refuse("_run_verb")
+_so._git = _pb_refuse("_git")
+_so._remote_ci_state = lambda *a, **k: (_PB_REFUSED.append("_remote_ci_state") or "unknown")
+
+# The tripwire. It sits in front of whatever these modules would run a process through (under
+# tools/nosudo_runner that is its shim, which refuses sudo itself - so a stub missing above would
+# otherwise read green there), records any command that escalates or runs git, and runs /bin/false
+# in its place. The stubs above are the fix; this is how a check below knows they are on the path.
+import re as _pb_re  # noqa: E402
+_PB_TRIPPED = []
+
+
+def _pb_hits(cmd):
+    text = cmd if isinstance(cmd, str) else " ".join(str(c) for c in cmd)
+    first = text.split(None, 1)[0] if text.strip() else ""
+    return bool(_pb_re.search(r"(?:^|[\s;&|(/])sudo(?:\s|$)", text)
+                or os.path.basename(first) == "git")
+
+
+class _PbTrip:
+    def __init__(self, inner, where):
+        self._inner, self._where = inner, where
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def _hit(self, cmd):
+        if _pb_hits(cmd):
+            _PB_TRIPPED.append((self._where, (cmd if isinstance(cmd, str) else " ".join(map(str, cmd)))[:100]))
+            return True
+        return False
+
+    def run(self, cmd, *a, **k):
+        if self._hit(cmd):
+            return self._inner.CompletedProcess(cmd, 1, "", "refused by perf_budget's tripwire")
+        return self._inner.run(cmd, *a, **k)
+
+    def Popen(self, cmd, *a, **k):
+        if self._hit(cmd):
+            k.pop("shell", None)
+            return self._inner.Popen(["/bin/false"], *a, **k)
+        return self._inner.Popen(cmd, *a, **k)
+
+    def check_output(self, cmd, *a, **k):
+        if self._hit(cmd):
+            raise self._inner.CalledProcessError(1, cmd)
+        return self._inner.check_output(cmd, *a, **k)
+
+
+for _pb_mod in (_so, _pb_backup, _pb_ts):
+    if getattr(_pb_mod, "subprocess", None) is not None:
+        _pb_mod.subprocess = _PbTrip(_pb_mod.subprocess, _pb_mod.__name__)
+_pb_inner_run = _so._run
+
+
+def _pb_so_run(cmd, timeout=30, sudo=False, text=True):
+    if sudo or _pb_hits(cmd):
+        _PB_TRIPPED.append(("system_ops._run", str(cmd)[:100]))
+        return "", "refused by perf_budget's tripwire", 1
+    return _pb_inner_run(cmd, timeout=timeout, sudo=sudo, text=text)
+
+
+_so._run = _pb_so_run
 
 from panel.services import lgsm_data as _lgsm  # noqa: E402
 import tempfile as _tf  # noqa: E402
@@ -232,6 +322,15 @@ try:
 
     check("perf: the probe actually rendered pages (a run that measures nothing proves nothing)",
           len(small) >= 40 and len(large) >= 40, "%d / %d pages" % (len(small), len(large)))
+    check("perf: the sweep started no sudo, and no git in the checkout",
+          not _PB_TRIPPED, "%d: %r" % (len(_PB_TRIPPED), _PB_TRIPPED[:4]))
+    check("perf: ...and it did reach the privileged path, where the stub refused it",
+          "_run_verb" in _PB_REFUSED, repr(sorted(set(_PB_REFUSED))))
+    _trip_before = len(_PB_TRIPPED)
+    _so.subprocess.run(["sudo", "-n", "true"])
+    _so._run("true", sudo=True)
+    check("perf: the tripwire catches a sudo argv and a sudo shell run (its positive control)",
+          len(_PB_TRIPPED) == _trip_before + 2, repr(_PB_TRIPPED[_trip_before:]))
 
     # Host-bounded pages do not move at all. Allow a couple of queries of slack for pagination and
     # the like; a real per-server N+1 adds ~80 here (4x the servers added), not 2.

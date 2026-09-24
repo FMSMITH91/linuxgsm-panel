@@ -154,6 +154,10 @@ OS_UPDATE_LOG = "/run/panel-os-update.log"
 # (-o, --system), a path fragment (., ..), or empty. This one validator is what makes the home
 # directory safe to CONSTRUCT below rather than accept.
 USERNAME_RE = r"[A-Za-z_][A-Za-z0-9._-]{0,31}"
+# A LinuxGSM instance name lgsm-discover will report: the grammar ssh_manager's _SAFE_GAME_IDENT
+# accepts, so nothing the panel could use is dropped — and nothing that can carry a '|' or a line
+# break into the FOUND| protocol gets through.
+DISCOVER_INSTANCE_RE = r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}"
 HOME_ROOT = "/home"
 
 # The sshd drop-in the panel manages, and the snapshot it keeps beside it while changing the port.
@@ -262,8 +266,12 @@ SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
 FSTAB = "/etc/fstab"
 
 
-# npm packages the panel installs globally.
-NPM_GLOBAL_PACKAGES = ("gamedig", "npm")
+# npm packages the panel installs globally, and the spec each one installs as. Pinned to the major
+# the panel's query types are written for, and installed with --ignore-scripts, so root never runs
+# a package's install hook. "npm" itself is gone: `npm install -g npm` as root fetched the newest npm
+# and made root run it, and nothing in the panel asked for it.
+NPM_GLOBAL_PACKAGES = ("gamedig",)
+NPM_GLOBAL_SPECS = {"gamedig": "gamedig@5"}
 
 F2B_EVENT_RE = re.compile(r"\[[A-Za-z0-9._-]+\] (?:Ban|Found) [0-9a-fA-F:.]+")
 
@@ -474,13 +482,14 @@ WRITE_CONTENT = {
     "fail2ban-panel-jail": _F2B_JAIL_RULE,
 }
 
-# The one body the helper writes itself. Kept byte-identical to what the panel has always sent
-# (panel/ops/ssh_manager/hosts.py:_NODE_TOOLS_CRON) so an existing host sees no change.
+# The one body the helper writes itself. Byte-identical to what the panel sends remote hosts
+# (panel/ops/ssh_manager/hosts.py:_NODE_TOOLS_CRON) and to install.sh's copy — a unit gate holds the
+# three together. gamedig only, pinned to v5, --ignore-scripts: see the note on _NODE_TOOLS_CRON.
 NODE_TOOLS_CRON_BODY = (
-    "# LinuxGSM Panel - keep npm + gamedig current for player queries (managed by the panel).\n"
+    "# LinuxGSM Panel - keep gamedig current for player queries (managed by the panel).\n"
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
     "30 4 * * 0 root command -v npm >/dev/null 2>&1 && "
-    "npm install -g npm gamedig >/var/log/lgsm-node-tools.log 2>&1\n"
+    "npm install -g --ignore-scripts gamedig@5 >/var/log/lgsm-node-tools.log 2>&1\n"
 )
 
 
@@ -1475,7 +1484,8 @@ VERBS = {
     "sshd-set-directive": ([v_sshd_key, v_ident_free], lambda a: [], None),
     "create-swapfile": ([], lambda a: [], None),
     "npm-install-global": ([v_choice(*NPM_GLOBAL_PACKAGES)],
-                           lambda a: ["npm", "install", "-g", a[0]], None),
+                           lambda a: ["npm", "install", "-g", "--ignore-scripts",
+                                      NPM_GLOBAL_SPECS[a[0]]], None),
 
     # ── sshd port changes ──
     # Every step of the panel's port change, so the sequence that protects the operator — snapshot,
@@ -1619,9 +1629,12 @@ VERBS = {
         [v_cidr, v_portspec_bare, v_choice("tcp", "udp")],
         lambda a: [UFW, "delete", "allow", "from", a[0], "to", "any", "port", a[1], "proto", a[2]],
         None),
+    # `prepend`, never `insert 1`: ufw refuses an IPv6 rule at position 1 while any IPv4 rule
+    # exists (IPv4 rules are numbered first), so every IPv6 block failed. `prepend` tops the
+    # rule's own address family's list. Mirrors privileged.py — the parity gate compares them.
     "ufw-deny-ip": (
         [v_cidr, v_comment],
-        lambda a: [UFW, "insert", "1", "deny", "from", a[0]] + (["comment", a[1]] if a[1] else []),
+        lambda a: [UFW, "prepend", "deny", "from", a[0]] + (["comment", a[1]] if a[1] else []),
         None),
     "ufw-delete-deny-ip": (
         [v_cidr],
@@ -1990,13 +2003,56 @@ def _os_update_detached():
     os._exit(1)
 
 
+def _db_repair_account(db_path):
+    """The account the offline repair runs as: whoever owns the directory the database lives in.
+    None when that cannot be established, and the caller then does not repair at all.
+
+    It ran as root, and nothing handed the result back. Every file repair() makes is CREATED —
+    the rebuilt database is a new file renamed over panel.db, and so is a restored backup — so a
+    repair left panel.db root:root 0600 in the panel's own data directory, and the panel, started
+    again straight afterwards, could not open its own database. Run as the directory's owner,
+    everything the repair creates is the panel's, and root no longer works inside a directory the
+    panel user controls.
+
+    lstat, not stat: that directory entry is one the panel user can replace, and a symlink it put
+    there must not borrow the owner of whatever it points at — a root-owned target would hand the
+    repair back to root. A link ROOT made (an operator who moved data/ to another disk) is
+    followed, because then the directory it names is the panel's."""
+    d = os.path.dirname(db_path)
+    try:
+        st = os.lstat(d)
+        if stat.S_ISLNK(st.st_mode) and st.st_uid == 0:
+            st = os.stat(d)
+        return pwd.getpwuid(st.st_uid)
+    except (OSError, KeyError):
+        return None
+
+
+def _db_repair_as(account):
+    """subprocess.run keyword arguments that run the repair as `account` (see _db_repair_account).
+
+    Nothing for root: a panel whose data directory root owns runs as root, and its files are
+    root's. Otherwise the child drops to the account before exec, through _drop_to — which refuses
+    to report success in any state that is still root — and a drop that does not take raises in
+    the child, so subprocess.run raises here and the repair does not run as root instead."""
+    if account.pw_uid == 0:
+        return {}
+
+    def _become_owner():
+        if not _drop_to(account):
+            raise OSError("could not become %s" % account.pw_name)
+
+    return {"preexec_fn": _become_owner, "env": dict(os.environ, HOME=account.pw_dir)}
+
+
 def _db_repair_detached(db_path):
     """The offline repair itself, in the grandchild. NEVER RETURNS — every path ends in os._exit.
 
     stop -> repair -> start, as three argv calls with no shell between them. The panel used to
     compose this as a `bash -c` string and hand it to `sudo systemd-run`; the string was built from
     the panel's OWN directory, so root ran the panel user's interpreter on the panel user's script.
-    Here the interpreter is the system one and the script is the root-owned copy beside this file.
+    Here the interpreter is the system one and the script is the root-owned copy beside this file,
+    and it runs as the database's owner, not as root (_db_repair_account says why).
     """
     os.setsid()
     if os.fork() != 0:
@@ -2017,11 +2073,16 @@ def _db_repair_detached(db_path):
                       None)
         if python is None:
             os._exit(1)
+        # No account, no repair — and no stop either, so the panel is left as it was. Running it as
+        # root instead is exactly what leaves the database unopenable.
+        account = _db_repair_account(db_path)
+        if account is None:
+            os._exit(1)
         # The panel is holding the database open; it has to go down before the file can be rebuilt.
         subprocess.run([systemctl, "stop", PANEL_UNIT],  # nosec B603 - fixed argv
                        check=False, timeout=120)
         subprocess.run([python, DBM_PATH, "repair", db_path],  # nosec B603 - root-owned script
-                       check=False, timeout=900)
+                       check=False, timeout=900, **_db_repair_as(account))
     except Exception:
         # Swallowed so the finally below ALWAYS runs. This is a detached grandchild with no stderr
         # anyone reads, and the only thing that matters after a failed repair is that the panel is
@@ -2367,6 +2428,8 @@ def do_lgsm_discover(args, content):
     except OSError:
         return 0                       # no /home is not an error, just nothing to find
     for user in users:
+        if not re.fullmatch(USERNAME_RE, user):
+            continue                   # not an account name: it could not be a FOUND field either
         cfg_dir = os.path.join(HOME_ROOT, user, "lgsm", "config-lgsm")
         if not os.path.isdir(cfg_dir):
             continue
@@ -2407,6 +2470,12 @@ def _discover_user(user, cfg_dir, cron_lines, autostart):
         except OSError:
             return
         for inst in instances:
+            # The name is a file name the GAME account chose, and it lands in a line protocol the
+            # panel splits on newlines and '|'. `x\nFOUND|<any account>|pzserver|...` forged a
+            # second record naming another account, which the import route then trusted as "the
+            # scan found it". Only a name in the panel's own identifier grammar is reported.
+            if not re.fullmatch(DISCOVER_INSTANCE_RE, inst):
+                continue
             if not os.access(os.path.join(HOME_ROOT, user, inst), os.X_OK):
                 continue               # the launcher script is what makes it a real instance
             port = 0
@@ -3134,14 +3203,44 @@ def do_content_scan(args, content):
             user = v_username(entry)
         except ValueError:
             continue
-        base = home_of(user) + "/" + CONTENT_SUBDIR
-        if not os.path.isdir(base):
-            continue
         for game in args:
-            if os.path.isdir(os.path.join(base, game)):
+            if _is_dir_in_home(user, CONTENT_SUBDIR, game):
                 hits.append("HIT|%s|%s" % (user, game))
     sys.stdout.write("\n".join(hits))
     return 0
+
+
+def _lstat_in_home(user, *parts):
+    """lstat <user's home>/<parts...> as root WITHOUT following a symlink at any component below
+    the home, or None when any step is missing, unopenable, or a link. The names go through
+    content_path first, so the same grammar applies as everywhere else they are used.
+
+    The three content probes answered with os.path.isdir / isfile / access, as root, and all three
+    FOLLOW links. Everything below the home is the content account's to replace, so
+    `ln -s /root ~/serverfiles` made content-game-present answer whether /root/<game> exists, and a
+    link at the script name whether any path is an executable — a root-side existence oracle over
+    places the account cannot look. Walked by descriptor with O_NOFOLLOW (the home's parent is
+    root's, so the home opened O_NOFOLLOW is the real one), and the last name lstat'd, not stat'd."""
+    content_path(user, *parts)                     # validation only; raises on a bad piece
+    try:
+        fd = os.open(home_of(user), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        for part in parts[:-1]:
+            nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        return os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _is_dir_in_home(user, *parts):
+    st = _lstat_in_home(user, *parts)
+    return st is not None and stat.S_ISDIR(st.st_mode)
 
 
 def do_content_dir_create(args, content):
@@ -3175,14 +3274,16 @@ def do_content_dir_create(args, content):
 
 
 def do_content_game_present(args, content):
-    """Exit 0 when <content user>/serverfiles/<game> is a directory — `test -d`, without a shell."""
-    return 0 if os.path.isdir(content_path(args[0], CONTENT_SUBDIR, args[1])) else 1
+    """Exit 0 when <content user>/serverfiles/<game> is a directory — `test -d`, without a shell,
+    and without following a link the account planted (see _lstat_in_home)."""
+    return 0 if _is_dir_in_home(args[0], CONTENT_SUBDIR, args[1]) else 1
 
 
 def do_content_script_present(args, content):
-    """Exit 0 when <content user>/<script> is executable — `test -x`, without a shell."""
-    path = content_path(args[0], args[1])
-    return 0 if (os.path.isfile(path) and os.access(path, os.X_OK)) else 1
+    """Exit 0 when <content user>/<script> is an executable regular file — `test -x` as root, which
+    any execute bit satisfies — without following a link at the script's name."""
+    st = _lstat_in_home(args[0], args[1])
+    return 0 if (st is not None and stat.S_ISREG(st.st_mode) and st.st_mode & 0o111) else 1
 
 
 def _remove_at(parent_fd, name):

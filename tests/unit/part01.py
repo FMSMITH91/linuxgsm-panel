@@ -247,8 +247,24 @@ check("config: every DEFAULT_CONFIG key has a reader",
 # and tests/smoke_test.py now writes ssh_timeout=1 (see the note there), so the assertion
 # depended on suite ORDER for its truth. Driving the value directly is both stronger and
 # order-independent: a helper that ignored config would fail this, where it passed before.
-_sshto_saved = _cfgmod.load_config().get("ssh_timeout")
+#
+# All of it on a TEMP config.json. This block used to drive the values through the module's own
+# CONFIG_FILE — the machine's data/config.json — saving seven times and "restoring" in a finally:
+# every run pinned all of DEFAULT_CONFIG into the operator's file, and a run killed mid-block left
+# ssh_timeout at 0 or 9999 there. The "no override" state is likewise CREATED here (an empty
+# object), not assumed of the host: a machine whose config sets ssh_timeout failed that check
+# against correct code.
+import pathlib as _pl_sshto
+import shutil as _sh_sshto
+import tempfile as _tf_sshto
+_sshto_file_saved = _cfgmod.CONFIG_FILE
+_sshto_dir = _tf_sshto.mkdtemp()
 try:
+    _cfgmod.CONFIG_FILE = _pl_sshto.Path(_sshto_dir) / "config.json"
+    _cfgmod.CONFIG_FILE.write_text("{}", encoding="utf-8")
+    _cfgmod._cfg_cache["key"] = None
+    eq("config: with no override the SSH layer uses the documented default",
+       _sm_core._ssh_connect_timeout(), _cfgmod.DEFAULT_CONFIG["ssh_timeout"])
     for _want in (7, 30):
         _c = _cfgmod.load_config()
         _c["ssh_timeout"] = _want
@@ -264,12 +280,9 @@ try:
         eq("config: ssh_timeout=%r clamps to %d" % (_set, _want),
            _sm_core._ssh_connect_timeout(), _want)
 finally:
-    _c = _cfgmod.load_config()
-    if _sshto_saved is None:
-        _c.pop("ssh_timeout", None)
-    else:
-        _c["ssh_timeout"] = _sshto_saved
-    _cfgmod.save_config(_c)
+    _cfgmod.CONFIG_FILE = _sshto_file_saved
+    _cfgmod._cfg_cache["key"] = None
+    _sh_sshto.rmtree(_sshto_dir, ignore_errors=True)
 # ── a config.json that is valid JSON but not an OBJECT ───────────────────────────────────────
 # config.json is explicitly a file a human can hand-edit, and load_config() is on every request
 # path and in every background poller. The except caught a MALFORMED file; it did not catch
@@ -371,8 +384,6 @@ finally:
     _cfgmod.CONFIG_FILE = _cfg_file_saved
     _cfgmod._cfg_cache["key"] = None
 
-eq("config: with no override the SSH layer uses the documented default",
-   _sm_core._ssh_connect_timeout(), _cfgmod.DEFAULT_CONFIG["ssh_timeout"])
 # Reads app.py AND the route modules: the line moved out with its section when register_routes
 # was split, and pinning it to one file would have made this gate quietly stop checking anything.
 _autoblock_src = _modsrc("app") + "".join(
@@ -400,12 +411,19 @@ from panel.core import i18n as _i18n
 
 _CHECKOUT = _Path(_root).resolve()
 eq("paths: panel.REPO_ROOT is the checkout root", _panelpkg.REPO_ROOT.resolve(), _CHECKOUT)
+# The runner points these three at a throwaway dir for the whole run (tests/unit_test.py), and
+# keeps what the module computed in unit.LIVE_PATHS — that is what these checks are about.
+import unit as _unit_pkg  # noqa: E402
+_live_paths = getattr(_unit_pkg, "LIVE_PATHS", {})
 for _label, _got, _want in (
         ("config.DATA_DIR", _cfgmod.DATA_DIR, "data"),
         ("config.DB_PATH", _cfgmod.DB_PATH, "data/panel.db"),
-        ("config.SECRET_FILE", _cfgmod.SECRET_FILE, "data/secret_key"),
-        ("config.CRED_KEY_FILE", _cfgmod.CRED_KEY_FILE, "data/cred_key"),
-        ("config.CONFIG_FILE", _cfgmod.CONFIG_FILE, "data/config.json"),
+        ("config.SECRET_FILE", _live_paths.get("SECRET_FILE", _cfgmod.SECRET_FILE),
+         "data/secret_key"),
+        ("config.CRED_KEY_FILE", _live_paths.get("CRED_KEY_FILE", _cfgmod.CRED_KEY_FILE),
+         "data/cred_key"),
+        ("config.CONFIG_FILE", _live_paths.get("CONFIG_FILE", _cfgmod.CONFIG_FILE),
+         "data/config.json"),
         ("i18n translations dir", _i18n._DIR, "translations"),
         ("lgsm_data cache dir", _lgd._CACHE_DIR, "data/lgsm"),
         ("system_ops.PANEL_DIR", SO.PANEL_DIR, "."),
@@ -1394,9 +1412,9 @@ try:
 finally:
     _cr_shutil.rmtree(_cr_sb, ignore_errors=True)
 
-# node-tools auto-update: a weekly ROOT cron keeps npm + gamedig (player-query tools) current.
-check("node-tools: the cron updates npm + gamedig weekly and logs it",
-      "npm install -g npm gamedig" in _sm_hosts._NODE_TOOLS_CRON
+# node-tools auto-update: a weekly ROOT cron keeps gamedig (the player-query tool) current.
+check("node-tools: the cron updates gamedig weekly and logs it",
+      "npm install -g --ignore-scripts gamedig@5" in _sm_hosts._NODE_TOOLS_CRON
       and _sm_hosts._NODE_TOOLS_CRON.lstrip().startswith("#")
       and "/var/log/lgsm-node-tools.log" in _sm_hosts._NODE_TOOLS_CRON
       and _privmod.WRITE_TARGETS["node-tools-cron"][0] == "/etc/cron.d/lgsm-node-tools")

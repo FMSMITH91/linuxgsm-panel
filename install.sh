@@ -479,6 +479,64 @@ install_deps() {
 # own nodejs is too old for current gamedig (needs Node >=18), so we pin LTS via NodeSource.
 # Fully idempotent + best-effort — a failure here must never break the install; player queries
 # simply stay unavailable until it's sorted.
+
+# NodeSource's apt repository, configured HERE rather than by running their setup script. That
+# script (setup_lts.x) was downloaded and executed as root with nothing checked: whoever could
+# serve that one URL — a compromised web host, or anything able to alter the fetch — ran code as
+# root on every host installing Node. What the script does is small and fixed (fetch the signing
+# key, write a deb822 source and an apt pin), so it is done here, and the one thing fetched — the
+# signing key — must be exactly the key below, by fingerprint, before apt is told to trust it.
+# Packages are then verified by apt against that key, not against whatever a URL served.
+# Bump NODESOURCE_NODE_MAJOR deliberately (setup_lts.x chose 24.x when this was written); the
+# fingerprint is NodeSource's published repository key and changes only if they rotate it.
+NODESOURCE_KEY_FPR="6F71F525282841EEDAF851B42F59B5F99B1BE0B4"
+NODESOURCE_NODE_MAJOR="24"
+NODESOURCE_KEY_URL="https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
+NODESOURCE_KEYRING="/usr/share/keyrings/nodesource.gpg"
+NODESOURCE_SOURCES="/etc/apt/sources.list.d/nodesource.sources"
+NODESOURCE_PREFS="/etc/apt/preferences.d/nodejs"
+
+# 0 if the ASCII-armored key file $1 holds exactly ONE primary key and it is NODESOURCE_KEY_FPR.
+# One, not "includes": a file carrying the real key plus a second one would have apt trust both.
+nodesource_key_ok() {
+    command -v gpg >/dev/null 2>&1 || return 1
+    local gh listing
+    gh="$(mktemp -d 2>/dev/null)" || return 1
+    listing="$(GNUPGHOME="${gh}" gpg --batch --with-colons --show-keys "$1" 2>/dev/null || true)"
+    rm -rf "${gh}"
+    [ "$(printf '%s\n' "${listing}" | awk -F: '$1=="pub"{n++} END{print n+0}')" = "1" ] || return 1
+    [ "$(printf '%s\n' "${listing}" | awk -F: '$1=="fpr"{print $10; exit}')" = "${NODESOURCE_KEY_FPR}" ]
+}
+
+# Configure NodeSource's repository with the pinned key. $1 is the sudo prefix ("" or "sudo").
+# 0 once the source is written and apt has read it; 1, having trusted nothing, otherwise.
+nodesource_setup() {
+    local S="$1" arch key gh rc=1
+    arch="$(dpkg --print-architecture 2>/dev/null || true)"
+    case "${arch}" in amd64|arm64) ;; *) return 1 ;; esac   # the only two NodeSource builds
+    command -v gpg >/dev/null 2>&1 || ${S} apt-get install -y gnupg >/dev/null 2>&1 || true
+    key="$(mktemp 2>/dev/null)" || return 1
+    gh="$(mktemp -d 2>/dev/null)" || { rm -f "${key}"; return 1; }
+    if curl -fsSL --connect-timeout 15 --max-time 60 "${NODESOURCE_KEY_URL}" -o "${key}" 2>/dev/null \
+        && nodesource_key_ok "${key}" \
+        && GNUPGHOME="${gh}" gpg --batch --yes --dearmor -o "${key}.gpg" "${key}" 2>/dev/null \
+        && ${S} install -d -m 0755 "$(dirname "${NODESOURCE_KEYRING}")" 2>/dev/null \
+        && ${S} install -m 0644 "${key}.gpg" "${NODESOURCE_KEYRING}" 2>/dev/null; then
+        # The one-line nodesource.list an older setup script wrote would name the same repo twice.
+        ${S} rm -f "$(dirname "${NODESOURCE_SOURCES}")/nodesource.list" 2>/dev/null || true
+        if printf 'Types: deb\nURIs: https://deb.nodesource.com/node_%s.x\nSuites: nodistro\nComponents: main\nArchitectures: %s\nSigned-By: %s\n' \
+                "${NODESOURCE_NODE_MAJOR}" "${arch}" "${NODESOURCE_KEYRING}" \
+                | ${S} tee "${NODESOURCE_SOURCES}" >/dev/null 2>&1 \
+            && printf 'Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n' \
+                | ${S} tee "${NODESOURCE_PREFS}" >/dev/null 2>&1 \
+            && ${S} apt-get update >/dev/null 2>&1; then
+            rc=0
+        fi
+    fi
+    rm -rf "${key}" "${key}.gpg" "${gh}"
+    return "${rc}"
+}
+
 ensure_gamedig() {
     command -v apt-get >/dev/null 2>&1 || return 0
     # Every command below is guarded so it returns 0 — the script runs under `set -euo pipefail`,
@@ -517,36 +575,34 @@ ensure_gamedig() {
         fi
     fi
     if [ "${nmaj:-0}" -lt 18 ] 2>/dev/null; then
-        info "Installing Node.js LTS from NodeSource (gamedig needs it for player queries)…"
-        # Download the NodeSource setup script to a file and run it, rather than piping curl
-        # straight into a shell — one less way for a hijacked fetch to run unseen code inline.
-        local ns
-        ns="$(mktemp 2>/dev/null || echo "/tmp/nodesource-setup.$$")"
-        if curl -fsSL --connect-timeout 15 --max-time 120 \
-                https://deb.nodesource.com/setup_lts.x -o "${ns}" 2>/dev/null; then
-            ${S} bash "${ns}" >/dev/null 2>&1 || true
+        info "Installing Node.js ${NODESOURCE_NODE_MAJOR} from NodeSource (gamedig needs it for player queries)…"
+        # NodeSource's repository with its signing key pinned by fingerprint — see nodesource_setup.
+        # Their setup script is no longer downloaded and run as root.
+        if nodesource_setup "${S}"; then
             ${S} apt-get install -y nodejs >/dev/null 2>&1 \
-                || warn "Node.js LTS install failed — player queries stay unavailable until installed."
+                || warn "Node.js install failed — player queries stay unavailable until installed."
         else
-            warn "Node.js LTS install failed — player queries stay unavailable until it's installed."
+            warn "NodeSource's repository could not be set up with its pinned signing key — Node.js was not installed, and player queries stay unavailable until Node.js 18+ is."
         fi
-        rm -f "${ns}"
     fi
     if command -v npm >/dev/null 2>&1 && ! command -v gamedig >/dev/null 2>&1; then
         info "Installing gamedig globally…"
-        ${S} npm install -g gamedig >/dev/null 2>&1 \
+        # The spec the panel's npm-install-global verb and the weekly cron use: v5, no install hooks.
+        ${S} npm install -g --ignore-scripts gamedig@5 >/dev/null 2>&1 \
             || warn "gamedig install failed — player queries unavailable."
     fi
     if command -v gamedig >/dev/null 2>&1; then
         ok "gamedig ready for player queries"
     fi
-    # Weekly auto-update for npm + gamedig, alongside the host's other automatic updates, so player
-    # queries don't silently break as games/gamedig evolve. Idempotent; no-op if npm isn't installed.
+    # Weekly auto-update for gamedig, alongside the host's other automatic updates, so player queries
+    # don't silently break as games/gamedig evolve. Idempotent; no-op if npm isn't installed. Pinned to
+    # v5 with --ignore-scripts, and npm itself is not updated: this runs as root, unattended, every
+    # week. Byte-identical to the helper's NODE_TOOLS_CRON_BODY and hosts.py's (a unit gate).
     local cf="/etc/cron.d/lgsm-node-tools"
     if printf '%s\n' \
-        '# LinuxGSM Panel - keep npm + gamedig current for player queries (managed by the panel).' \
+        '# LinuxGSM Panel - keep gamedig current for player queries (managed by the panel).' \
         'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
-        '30 4 * * 0 root command -v npm >/dev/null 2>&1 && npm install -g npm gamedig >/var/log/lgsm-node-tools.log 2>&1' \
+        '30 4 * * 0 root command -v npm >/dev/null 2>&1 && npm install -g --ignore-scripts gamedig@5 >/var/log/lgsm-node-tools.log 2>&1' \
         | ${S} tee "${cf}" >/dev/null 2>&1; then
         ${S} chmod 644 "${cf}" 2>/dev/null || true
     fi
