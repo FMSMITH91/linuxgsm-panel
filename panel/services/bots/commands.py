@@ -133,8 +133,16 @@ def _console_text(app, arg, lines=20):
         # to STDOUT, so the `if not rows` guard below could never fire. The command that exists to
         # answer "why did the start fail?" answered NO_SESSION. Both other callers of
         # capture_console guard on rc (game.py:205 and :232).
-        if rc != 0 or "NO_SESSION" in (out or ""):
+        #
+        # ...and ONLY that sentinel says so. Any other non-zero rc is the panel failing to reach the
+        # console: the local and tailscale transports return ("", "…timed out", -1) without
+        # raising, and a `sudo -u` refusal is rc 1. Those were answered "the server isn't running",
+        # a confident fact about a server the panel never observed — to an admin asking because a
+        # start had failed.
+        if rc == 3 and "NO_SESSION" in (out or ""):
             return "%s — the server isn't running, so there's no console to read." % gs.name
+        if rc != 0:
+            return "%s — couldn't read the console (the host didn't answer)." % gs.name
         text = terminal.strip_escapes(out or "")
         rows = [r.rstrip() for r in text.splitlines() if r.strip()][-lines:]
         if not rows:

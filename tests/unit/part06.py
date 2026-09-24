@@ -4356,6 +4356,31 @@ from panel.services.bots import commands as _botcmd                             
 _bc_src = _tg_inspect.getsource(_botcmd._console_text)
 check("bots: /console reads capture_console's rc instead of printing NO_SESSION",
       "NO_SESSION" in _bc_src and "rc != 0" in _bc_src, _bc_src[:200])
+# ...and only the sentinel (rc 3 + NO_SESSION) means "not running". Every other non-zero rc was
+# answered the same way — a transport timeout (rc -1, which the local and tailscale transports
+# return without raising) or a `sudo -u` refusal told the admin the server wasn't running when the
+# panel had never reached it. Driven, not grepped.
+import contextlib as _bc_ctx                                                       # noqa: E402
+from panel.ops.ssh_manager import game as _bc_game                                 # noqa: E402
+_bc_app = type("A", (), {"app_context": lambda self: _bc_ctx.nullcontext()})()
+_bc_gs = NS(name="Rust", remote=None, short_name="rustserver", lgsm_name="rustserver")
+_bc_saved = (_botcmd._find_server, _bc_game.capture_console)
+try:
+    _botcmd._find_server = lambda arg: (_bc_gs, None)
+    _bc_game.capture_console = lambda *a, **k: ("", "SSH command timed out", -1)
+    _bc_out = _botcmd._console_text(_bc_app, "rust")
+    check("bots: /console on a host that timed out says it couldn't read, not 'isn't running'",
+          "isn't running" not in _bc_out and "couldn't read" in _bc_out, _bc_out)
+    _bc_game.capture_console = lambda *a, **k: ("NO_SESSION\n", "", 3)
+    _bc_out = _botcmd._console_text(_bc_app, "rust")
+    check("bots: ...while capture_console's own sentinel still means not running (control)",
+          "isn't running" in _bc_out, _bc_out)
+    _bc_game.capture_console = lambda *a, **k: ("[chat] Bob: NO_SESSION lol\nServer started\n", "", 0)
+    _bc_out = _botcmd._console_text(_bc_app, "rust")
+    check("bots: ...and a player SAYING the sentinel word is console output, not a stopped server",
+          "isn't running" not in _bc_out and "Server started" in _bc_out, _bc_out)
+finally:
+    _botcmd._find_server, _bc_game.capture_console = _bc_saved
 
 # ── Discord replies must not be able to ping the channel ──────────────────────────────────────
 # The content is not ours: player names (!players), the tail of the live console (which on most
