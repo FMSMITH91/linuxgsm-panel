@@ -281,6 +281,23 @@ try:
     check("GET /logs with junk filter/sort params -> 200 (allowlisted)",
           r.status_code == 200, "got %d" % r.status_code)
 
+    # ── The audit log shows a detail's END, not just its first 100 characters ──
+    # Start/stop/restart store the LAST 400 characters of LinuxGSM's output on purpose — the
+    # [ OK ]/[FAIL] line and its reason are at the end — and the viewer cut every detail at 100
+    # characters, so the part kept on purpose was never visible anywhere in the panel.
+    from panel.db.models import AuditLog as _dtl_AL
+    _dtl_head = "DTLHEAD" + "x" * 150
+    _dtl_tail = "DTLTAIL_FAIL_REASON"
+    with app.app_context():
+        db.session.add(_dtl_AL(username="admin", action="server_start", target="dtl-probe",
+                               detail=_dtl_head + " ... " + _dtl_tail, success=False))
+        db.session.commit()
+    _dtl_html = c.get("/logs?q=DTLHEAD").get_data(as_text=True)
+    check("audit log: (control) the long entry is on the page at all",
+          "DTLHEAD" in _dtl_html, "the probe row did not render — the check below proves nothing")
+    check("audit log: a long detail's tail (where the outcome is) is rendered, not cut at 100 chars",
+          _dtl_tail in _dtl_html, "the FAIL reason stored at the end of the detail is not on /logs")
+
     # The Files & Config page (config editor + file browser + cron manager) must render.
     check("GET /server/<id>/files renders (200)",
           c.get("/server/%d/files" % gs_id).status_code == 200)
