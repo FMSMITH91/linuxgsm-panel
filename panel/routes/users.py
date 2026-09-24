@@ -7,7 +7,8 @@ from flask_login import (current_user, login_required)
 from sqlalchemy import (or_)
 from panel.core.clock import (utcnow)
 from panel.db.models import (Group, Invite, User)
-from panel.security.auth import (MANAGE_USERS, grantable_groups, permission_required)
+from panel.security.auth import (MANAGE_USERS, can_administer_user, grantable_groups,
+    permission_required)
 
 
 def register(app):
@@ -19,6 +20,15 @@ def register(app):
         # The page prints each user's groups, so lazily this costs one query per user (108 queries
         # for 100 accounts). selectinload folds them into a single extra statement.
         users = User.query.options(selectinload(User.groups)).all()
+        # Which rows the viewer may edit or delete (the rule edit_user and delete_user apply),
+        # decided ONCE per account here. The template asked can_administer() per row twice — the
+        # table and the #users-data island — and each call recomputed the viewer's own reach as
+        # well as the target's, so a delegated admin's /users cost several queries per account,
+        # twice over. The memo keeps the viewer's side across the loop; superadmins
+        # short-circuit before any of it.
+        _memo = {}
+        administrable = {u.id for u in users
+                         if can_administer_user(current_user, u, actor_memo=_memo)}
         # Only the groups THIS admin can actually grant. The modals rendered a checkbox for every
         # group on the panel, but add_user/edit_user run the submitted list through
         # grantable_groups, which drops any group whose permissions or host/server reach is not a
@@ -67,4 +77,5 @@ def register(app):
                          if _cids else {})
             for _i in invites:
                 _i.authority_ok = _i.authority_intact(_creators.get(_i.created_by_id))
-        return render_template("manage_users.html", users=users, groups=groups, invites=invites)
+        return render_template("manage_users.html", users=users, groups=groups, invites=invites,
+                               administrable=administrable)

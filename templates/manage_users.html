@@ -37,8 +37,9 @@
         {% for user in users %}
         {# Controls and contact details only for accounts the viewer may administer — the same rule
            edit_user and delete_user apply. A delegated user admin was offered Edit and Delete on
-           superadmins, and handed their emails, only for every save to be refused. #}
-        {% set may_admin = can_administer(user) %}
+           superadmins, and handed their emails, only for every save to be refused. `administrable`
+           is decided once per account by the route: asking per row, twice, was an N+1. #}
+        {% set may_admin = user.id in administrable %}
         <tr>
           <td><strong>{{ user.username }}</strong></td>
           <td>{{ user.display_name }}</td>
@@ -289,7 +290,7 @@
    ~210KB of duplicated markup in the page. The single modal below is populated from this. It lives
    INSIDE #users-list so an ajax refresh after a save keeps it current. #}
 <script type="application/json" id="users-data" nonce="{{ csp_nonce }}">
-[{% for user in users if can_administer(user) %}{"id": {{ user.id }},
+[{% for user in users if user.id in administrable %}{"id": {{ user.id }},
   "username": {{ user.username|tojson }},
   "display_name": {{ (user.display_name or '')|tojson }},
   "email": {{ (user.email_display or '')|tojson }},

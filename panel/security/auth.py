@@ -1240,8 +1240,12 @@ def grantable_groups(requested_ids, existing=()):
     return list(keepable | (existing - {g for g in existing if _within_my_reach(g)}))
 
 
-def can_administer_user(actor, target):
+def can_administer_user(actor, target, actor_memo=None):
     """Whether `actor` may edit or delete `target`.
+
+    `actor_memo`: a dict the caller keeps across calls, so a page deciding this for every account
+    (/users) computes the actor's own reach once rather than once per row. Only the actor's side is
+    kept, and only for the actor it was computed for; the rule is the same either way.
 
     MANAGE_USERS was a single gate. Holding it let you edit EVERY non-superadmin account —
     including one whose permissions you do not have — and the edit form's own branches then hand
@@ -1262,7 +1266,18 @@ def can_administer_user(actor, target):
         return False
     if actor.id == target.id:
         return True
-    if not set(get_user_permissions(target)) <= set(get_user_permissions(actor)):
+    memo = actor_memo if actor_memo is not None else {}
+    if memo.get("actor") != actor.id:
+        memo.clear()
+        memo["actor"] = actor.id
+
+    def mine(key, compute):
+        if key not in memo:
+            memo[key] = compute()
+        return memo[key]
+
+    if not (set(get_user_permissions(target))
+            <= mine("perms", lambda: set(get_user_permissions(actor)))):
         return False
     # ...and the OBJECTS, because permissions are only half of what an account carries. Two
     # delegated admins can hold the identical permission set and reach different hosts, and the
@@ -1274,14 +1289,14 @@ def can_administer_user(actor, target):
     # acquiring a permission, but BECOMING someone who has the access. grantable_object_ids
     # directly below exists to stop a delegated admin granting objects they cannot reach; this is
     # the other door into the same room, and it was open.
-    if not accessible_remote_ids(target) <= accessible_remote_ids(actor):
+    if not accessible_remote_ids(target) <= mine("remotes", lambda: accessible_remote_ids(actor)):
         return False
     # The same door opened with custom commands, which need no permission to run: a peer whose
     # only extra reach is a superadmin-authored command is still someone to become.
-    if not custom_command_ids(target) <= custom_command_ids(actor):
+    if not custom_command_ids(target) <= mine("commands", lambda: custom_command_ids(actor)):
         return False
     return ({g.id for g in get_user_servers(target)}
-            <= {g.id for g in get_user_servers(actor)})
+            <= mine("servers", lambda: {g.id for g in get_user_servers(actor)}))
 
 
 def grantable_object_ids(requested_ids, existing_ids, allowed_ids):

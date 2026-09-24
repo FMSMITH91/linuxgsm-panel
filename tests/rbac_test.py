@@ -1898,6 +1898,55 @@ try:
           "the page carries the email of an account the viewer cannot administer")
     check("users page: nobody is offered Delete on their own account",
           ("/users/%d/delete" % _mu_uid) not in _ua_html)
+    # ...and it decides that ONCE per account, with the viewer's own reach computed once. The
+    # template asked per row twice (the table and #users-data), and every call recomputed the
+    # viewer's server set as well as the target's: several queries per account, twice over, for a
+    # delegated admin. Measured as a shape: three more administrable accounts must not add a single
+    # call on the viewer's side, and no account is looked up twice.
+    from panel.security import auth as _ua_auth
+    from collections import Counter as _UaCounter
+    _ua_gus = _ua_auth.get_user_servers
+
+    def _ua_render():
+        _calls = []
+        _ua_auth.get_user_servers = lambda u: (_calls.append(u.id), _ua_gus(u))[1]
+        try:
+            _html = cmu.get("/users").get_data(as_text=True)
+        finally:
+            _ua_auth.get_user_servers = _ua_gus
+        return _html, _UaCounter(_calls)
+
+    _ua_extra = []
+    try:
+        _, _ua_before = _ua_render()
+        with app.app_context():
+            for _k in range(3):
+                _xu = User(username="%s_ua%d" % (_del_tag, _k),
+                           password_hash=auth.hash_password(secrets.token_hex(16)),
+                           display_name="ua %d" % _k, is_superadmin=False, is_active=True)
+                db.session.add(_xu)
+                db.session.flush()
+                _ua_extra.append(_xu.id)
+            db.session.commit()
+        _ua_html3, _ua_after = _ua_render()
+        check("users page: (control) the added accounts are offered Edit, so they were decided",
+              all('data-action="openEditUser" data-args=\'[%d]\'' % _x in _ua_html3
+                  for _x in _ua_extra), "an added account lost its controls")
+        check("users page: more accounts add no lookups of the viewer's own servers",
+              _ua_after[_mu_uid] == _ua_before[_mu_uid],
+              "viewer's lookups %d -> %d with 3 more accounts"
+              % (_ua_before[_mu_uid], _ua_after[_mu_uid]))
+        check("users page: ...and each account's servers are looked up once, not twice",
+              all(_ua_after[_x] == 1 for _x in _ua_extra)
+              and max(n for u, n in _ua_after.items() if u != _mu_uid) == 1,
+              repr(dict(_ua_after)))
+    finally:
+        with app.app_context():
+            for _x in _ua_extra:
+                _gone = db.session.get(User, _x)
+                if _gone is not None:
+                    db.session.delete(_gone)
+            db.session.commit()
 
     # 1. A delegated admin must not remove a superadmin.
     cmu.post("/users/%d/delete" % _vsa_id)
