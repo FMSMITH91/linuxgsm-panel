@@ -6988,6 +6988,54 @@ try:
         check("server page: ...nor the command-list refresh the route would refuse them",
               _refresh_url not in _voh and "Use the refresh button above" not in _voh,
               "the refresh form is rendered for a viewer without moderate/send_command/manage")
+        # The button's permission follows the QUEUED action, which showPendingBanner() switches
+        # without a reload. Gated once at render on whatever was queued then, a stop-only member
+        # on a page with a restart (or nothing) queued had no button to reveal after queueing a
+        # stop. It is rendered for either permission, hidden unless it matches the queued one,
+        # with both permissions on the banner for the switch to read.
+        def _rpb(html):
+            def _first(pat, text, grp=0):
+                _m = _re_ab.search(pat, text)
+                return _m.group(grp) if _m else None
+            _t = _banner_tag(html)
+            return (_first(r'<button[^>]*id="rpb-do"[^>]*>', html),
+                    _first(r'<span id="rpb-now"[^>]*>', html),
+                    _first(r'data-can-stop="(\d)"', _t, 1), _first(r'data-can-restart="(\d)"', _t, 1))
+        try:
+            with app.app_context():
+                db.session.get(Group, _vo_gid).set_permissions([auth.VIEW_SERVERS, auth.STOP_SERVER])
+                db.session.commit()
+            _so_btn, _so_now, _so_cs, _so_cr = _rpb(client_as(_vo_id).get("/server/%d" % gs_id).get_data(as_text=True))
+            check("server page: a stop-only member with a RESTART queued still gets the banner button, "
+                  "hidden, for the stop they may queue",
+                  _so_btn is not None and "d-none" in _so_btn and _so_now is not None
+                  and "d-none" in _so_now and (_so_cs, _so_cr) == ("1", "0"),
+                  "button=%r clause=%r can-stop=%r can-restart=%r" % (_so_btn, _so_now, _so_cs, _so_cr))
+            with app.app_context():
+                _g = db.session.get(GameServer, gs_id)
+                _g.restart_pending, _g.stop_pending = False, True
+                db.session.commit()
+            _so_btn, _so_now, _so_cs, _so_cr = _rpb(client_as(_vo_id).get("/server/%d" % gs_id).get_data(as_text=True))
+            check("server page: ...and with a STOP queued it is shown, with the 'do it now' clause "
+                  "(positive control)",
+                  _so_btn is not None and "d-none" not in _so_btn
+                  and _so_now is not None and "d-none" not in _so_now,
+                  "button=%r clause=%r" % (_so_btn, _so_now))
+            with app.app_context():
+                db.session.get(Group, _vo_gid).set_permissions([auth.VIEW_SERVERS, auth.RESTART_SERVER])
+                db.session.commit()
+            _ro_btn, _ro_now, _ro_cs, _ro_cr = _rpb(client_as(_vo_id).get("/server/%d" % gs_id).get_data(as_text=True))
+            check("server page: a restart-only member with a STOP queued is not offered 'Stop now' "
+                  "(the button is there, hidden, for a restart they queue)",
+                  _ro_btn is not None and "d-none" in _ro_btn and "d-none" in (_ro_now or "")
+                  and (_ro_cs, _ro_cr) == ("0", "1"),
+                  "button=%r clause=%r can-stop=%r can-restart=%r" % (_ro_btn, _ro_now, _ro_cs, _ro_cr))
+        finally:
+            with app.app_context():
+                _g = db.session.get(GameServer, gs_id)
+                _g.restart_pending, _g.stop_pending = True, False
+                db.session.get(Group, _vo_gid).set_permissions([auth.VIEW_SERVERS, auth.VIEW_CONSOLE])
+                db.session.commit()
 
         # The Live Console panel without VIEW_CONSOLE. /api/console answers 403 with no lines, and
         # "Load older" wiped the screen and toasted "Loaded 0 lines from the log". A viewer with

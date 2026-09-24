@@ -2125,6 +2125,26 @@ check(".catch(() => toast('Action failed" not in _sa_js and ".catch(()=>toast('A
       "control bar: a handler bug cannot be reported as a connection error",
       "the connection-error toast is back in a trailing .catch, so any bug in the success handler "
       "will tell the operator their action failed when it succeeded")
+# The pending banner's "do it now" follows the QUEUED action's permission. showPendingBanner()
+# switches the action without a reload (this viewer queued a stop or a restart from the players
+# dialog), and it used to leave the button as the page rendered it: a stop-only member whose page
+# loaded clean got no button, a restart-only one kept one relabelled "Stop now" that the endpoint
+# refuses. The template renders it for either permission (the smoke suite checks those values);
+# the switch must pick per action from the banner's data-can-* flags. Comments stripped, since
+# they name the very identifiers this looks for.
+_spb = _js_function_body(_sa_js, "showPendingBanner")
+_spb_code = re.sub(r"//[^\n]*", "", _spb or "")
+check(_spb is not None and "dataset.canStop" in _spb_code and "dataset.canRestart" in _spb_code
+      and "'rpb-do'" in _spb_code and "'rpb-now'" in _spb_code and "'rpb-auto'" in _spb_code
+      and _spb_code.count(".toggle('d-none'") >= 3,
+      "pending banner: switching the queued action re-decides 'do it now' from its permission",
+      "showPendingBanner no longer shows/hides the button and its clause per data-can-stop / "
+      "data-can-restart — a queued stop keeps whatever the page rendered for a restart")
+_sd_tpl = (ROOT / "templates" / "server_detail.html").read_text(encoding="utf-8")
+check(all(('id="%s"' % _i) in _sd_tpl for _i in ("rpb-do", "rpb-now", "rpb-auto"))
+      and "data-can-stop=" in _sd_tpl and "data-can-restart=" in _sd_tpl,
+      "pending banner: every element and flag showPendingBanner reads is in the template",
+      "an id or data-can-* flag the banner switch reads is gone from server_detail.html")
 
 # ── console: select-all is scoped, and the log is downloadable ────────────────────────────────
 # Ctrl+A in the console used to select the WHOLE PAGE, because the console is a plain <div> and the

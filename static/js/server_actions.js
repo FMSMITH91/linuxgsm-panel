@@ -155,5 +155,15 @@ function showPendingBanner(action){
   // the button is right immediately instead of waiting for the walker.
   var bt = document.getElementById('rpb-btn');
   if (bt) bt.textContent = t(action === 'stop' ? 'Stop now' : 'Restart now');
+  // "Do it now" calls the action endpoint, so it is offered only for an action this viewer may
+  // run. The template renders it for either permission and says which on data-can-*; deciding
+  // here, per action, is what keeps it right after a switch the page was not rendered for.
+  var can = (action === 'stop' ? b.dataset.canStop : b.dataset.canRestart) === '1';
+  var doNow = document.getElementById('rpb-do');
+  if (doNow) doNow.classList.toggle('d-none', !can);
+  var nowCopy = document.getElementById('rpb-now');
+  if (nowCopy) nowCopy.classList.toggle('d-none', !can);
+  var autoCopy = document.getElementById('rpb-auto');
+  if (autoCopy) autoCopy.classList.toggle('d-none', can);
   b.classList.remove('d-none');
 }
