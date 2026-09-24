@@ -1033,9 +1033,15 @@ def session_fingerprint():
     """The client a session is bound to under "strong" protection: client_ip() + User-Agent.
 
     client_ip(), not flask-login's own identifier, which reads the FIRST X-Forwarded-For hop — the
-    one part of that header a client always writes itself."""
+    one part of that header a client always writes itself.
+
+    The address at the granularity one client legitimately holds it, which is throttle_key's: an
+    IPv6 client by its /64, a mapped IPv4 address as that IPv4. Temporary ("privacy") IPv6
+    addresses rotate inside the /64 about daily and every new connection takes the newest, so
+    binding the exact address signed IPv6 users out each time it rotated. A replayed cookie still
+    has to come from the same /64 — the same LAN, as behind an IPv4 NAT — with the same User-Agent."""
     ua = request.headers.get("User-Agent", "") if request else ""
-    return hashlib.sha256(("%s|%s" % (client_ip() or "", ua))
+    return hashlib.sha256(("%s|%s" % (throttle_key(client_ip() or ""), ua))
                           .encode("utf-8", "replace")).hexdigest()[:32]
 
 

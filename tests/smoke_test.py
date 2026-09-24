@@ -4361,6 +4361,26 @@ try:
         check("session protection: basic does not bind (the mode really is what decides)",
               _sp_basic == 200, "got %s" % _sp_basic)
         _sp.get("/logout", headers=_sp_ua)
+        # IPv6: bound to the /64, as the login throttle counts it. A temporary ("privacy") address
+        # rotates inside it about daily and each new connection takes the newest, so an exact
+        # address signed every IPv6 user out whenever theirs rotated.
+        app.config["SESSION_PROTECTION"] = "strong"
+        _sp6 = app.test_client()
+        _sp6.post("/login", data={"username": "smoke_admin", "password": "Str0ng!passw0rd"},
+                  headers=_sp_ua, environ_overrides={"REMOTE_ADDR": "2001:db8:1:2::10"})
+        _sp6_same = _sp6.get("/api/account/sessions", headers=_sp_ua,
+                             environ_overrides={"REMOTE_ADDR": "2001:db8:1:2::10"}).status_code
+        _sp6_rot = _sp6.get("/api/account/sessions", headers=_sp_ua,
+                            environ_overrides={"REMOTE_ADDR": "2001:db8:1:2:a1b2:c3d4:e5f6:7"}
+                            ).status_code
+        _sp6_away = _sp6.get("/api/account/sessions", headers=_sp_ua,
+                             environ_overrides={"REMOTE_ADDR": "2001:db8:1:3::10"}).status_code
+        check("session protection: an IPv6 client keeps its session when its temporary address "
+              "rotates inside the /64", _sp6_same == 200 and _sp6_rot == 200,
+              "same address %s, rotated address %s" % (_sp6_same, _sp6_rot))
+        check("session protection: ...and strong still refuses it from another /64 (control)",
+              _sp6_away == 401, "got %s" % _sp6_away)
+        _sp6.get("/logout", headers=_sp_ua, environ_overrides={"REMOTE_ADDR": "2001:db8:1:2::10"})
     finally:
         app.config["SESSION_PROTECTION"] = _sp_saved
     _ping = s1.get("/api/auth/ping")
