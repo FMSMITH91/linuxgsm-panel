@@ -1708,10 +1708,16 @@ def resolve_free_port(remote, remote_id, desired, game_type):
 
 # ── Setup Wizard ────────────────────────────────────────
 def is_setup_complete():
-    """Check if setup wizard has been completed."""
-    state = SetupState.query.filter_by(complete=True).first()
-    cfg = load_config()
-    return state is not None and cfg.get("setup_complete", False)
+    """Whether the setup wizard has finished: a completed SetupState row.
+
+    It was (that row AND config.json's setup_complete flag). The flag half fails open the other
+    way too: load_config() falls back to DEFAULT_CONFIG (setup_complete False) when config.json is
+    missing, truncated or not JSON, while the wizard's lock reads the row alone. So a finished
+    install that lost its config redirected every page to /setup, and the locked wizard redirected
+    to /login, which sent a signed-in admin back to / — ERR_TOO_MANY_REDIRECTS for everyone, with
+    no way into Settings to repair it. The row is the one signal that cannot fall back to a
+    default, and it is what the lock (_setup_open) already uses; the flag is still written."""
+    return SetupState.query.filter_by(complete=True).first() is not None
 
 # ── Setup-only Tailscale endpoints ─────────────────────────
 # No login exists yet during setup, so these are unauthenticated BUT usable ONLY

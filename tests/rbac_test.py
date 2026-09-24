@@ -1144,10 +1144,41 @@ try:
         _rw = _anon.get("/setup")
         check("the setup wizard stays locked with config.json gone",
               _rw.status_code in (301, 302), "/setup -> %d" % _rw.status_code)
+        # ...and the rest of the panel still WORKS. Every page redirected to /setup (config flag
+        # False), the locked wizard to /login, and /login sent a signed-in admin back to / —
+        # ERR_TOO_MANY_REDIRECTS for everyone, including the admin who could have repaired it.
+        _cg_dash = client_as(admin_id).get("/")
+        check("config.json gone: a signed-in admin's dashboard renders instead of looping via /setup",
+              _cg_dash.status_code == 200,
+              "/ -> %d %s" % (_cg_dash.status_code, _cg_dash.headers.get("Location")))
+        _cg_anon = _anon.get("/")
+        check("config.json gone: a signed-out visitor is sent to /login, not into the /setup loop",
+              _cg_anon.status_code in (301, 302) and "/setup" not in (_cg_anon.headers.get("Location") or ""),
+              "/ -> %d %s" % (_cg_anon.status_code, _cg_anon.headers.get("Location")))
+        check("config.json gone: /healthz still answers the monitor itself (no redirect)",
+              _anon.get("/healthz").status_code == 200)
     finally:
         _cfg_mod.CONFIG_FILE = _real_config_file
         _cfg_mod._cfg_cache.clear()
         _cfg_mod._cfg_cache.update(_real_cache)
+
+    # /healthz is a liveness probe, and it answers before setup has finished too: a first-run panel
+    # redirected it to /setup, and a monitor reading "302" learned nothing about the process or DB.
+    with app.app_context():
+        _hz_rows = [r.id for r in SetupState.query.filter_by(complete=True).all()]
+        for _r in SetupState.query.filter(SetupState.id.in_(_hz_rows)).all():
+            _r.complete = False
+        db.session.commit()
+    try:
+        check("first run: (control) the panel really is back in setup — / goes to /setup",
+              "/setup" in (app.test_client().get("/").headers.get("Location") or ""))
+        check("first run: /healthz answers 200 itself instead of redirecting to /setup",
+              app.test_client().get("/healthz").status_code == 200)
+    finally:
+        with app.app_context():
+            for _r in SetupState.query.filter(SetupState.id.in_(_hz_rows)).all():
+                _r.complete = True
+            db.session.commit()
 
     # ...and now DRIVEN, not read. The check above asserts the call exists in the source; it cannot
     # tell whether the route acts on the answer, and the whole acceptance path (the 61 lines from the

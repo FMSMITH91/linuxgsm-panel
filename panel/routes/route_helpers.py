@@ -42,7 +42,9 @@ def register(app):
         # setup is done), so exempting them here is safe.
         if request.path.startswith("/static/") or request.path == "/setup" \
                 or request.path.startswith("/setup/") or request.path.startswith("/api/setup/") \
-                or request.path == "/robots.txt":
+                or request.path in ("/robots.txt", "/healthz"):
+            # /healthz is a liveness probe: it says whether the process and DB answer, which is as
+            # true before setup as after, and a monitor should not read "302 to /setup" as health.
             return None          # exempt path: let the request through untouched
         if not is_setup_complete():
             # /login stays reachable once the wizard has an admin: the rest of the wizard is
