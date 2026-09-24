@@ -421,10 +421,34 @@ def _run_pending_backups(app):
 # panel restart starting the count again costs at most a few more attempts.
 _queued_action_failures = register_server_state({})
 # How many failed attempts before a queued stop/restart is given up on. Retrying at all is what the
-# queue needs (a timed-out stop has not happened); retrying for ever is not, because a restart that
-# LinuxGSM answers non-zero while the server comes back fine would otherwise bounce that server
-# on every tick.
+# queue needs (a timed-out stop has not happened); retrying for ever is not, because an action that
+# never gets an answer would otherwise be sent on every tick.
 _QUEUED_ACTION_ATTEMPTS = 3
+
+
+def _no_exit_status(rc):
+    """rc that is the transport's rather than LinuxGSM's: < 0 (or None) when no exit status came
+    back — a timeout, a dropped channel — and 255, the ssh client's own failure on the tailscale
+    transport (LinuxGSM's core_exit uses 0-4)."""
+    return rc is None or rc < 0 or rc == 255
+
+
+def _queued_action_retries(act, rc):
+    """Whether a queued stop/restart that did not exit 0 stays queued for the next tick.
+
+    Only a retry the next tick can see through is safe. With _no_exit_status, LinuxGSM's answer
+    never arrived, so the action may not have happened, and both actions retry. Any other exit is
+    LinuxGSM's own, and LinuxGSM exits non-zero on runs that did the job: exitcode is a global
+    the last log line sets, so a failed status alert after a good restart ends it at 1.
+      stop    — retries: the next tick asks the server first, and a stopped one reads 'idle'
+                and is cleared, so a stop that worked is never repeated.
+      restart — does NOT: a restart that worked leaves the server online and empty, which is
+                exactly what triggers it, so every tick restarted it again up to the limit."""
+    if rc == 0:
+        return False
+    if _no_exit_status(rc):
+        return True
+    return act == "stop"
 
 
 def _run_queued_action(app, gs):
@@ -437,34 +461,44 @@ def _run_queued_action(app, gs):
     retried, and players rejoined a server the panel no longer showed as queued. No audit row was
     written for the unattended stop/restart either way.
 
-    Now the flags clear only when the action exited 0, or after _QUEUED_ACTION_ATTEMPTS failures in
-    a row (so a restart that exits non-zero cannot bounce the server on every tick), and every
-    attempt is audited."""
+    Now the flags clear when the action exited 0, when _queued_action_retries says a retry is not
+    safe, or after _QUEUED_ACTION_ATTEMPTS failures in a row, and every attempt is audited."""
     act = "stop" if gs.stop_pending else "restart"
     _out, err, rc = _sm.run_as_game_user(gs.remote, gs.short_name, act,
                                          timeout=90, selfname=gs.lgsm_name)
     ok = (rc == 0)
-    if ok and act == "restart":
+    retry = _queued_action_retries(act, rc)
+    if act == "restart" and not retry:
         try:
             _sm.set_game_priority(gs.remote, gs.short_name)
         except Exception:
             app.logger.debug("priority boost failed", exc_info=True)
     fails = 0 if ok else _queued_action_failures.get(gs.id, 0) + 1
-    give_up = fails >= _QUEUED_ACTION_ATTEMPTS
+    give_up = retry and fails >= _QUEUED_ACTION_ATTEMPTS
     if ok:
         detail = "queued '%s when empty' ran" % act
     else:
         why = [ln.strip() for ln in terminal.strip_escapes(err or _out or "").splitlines() if ln.strip()]
-        detail = ("queued '%s when empty' failed (exit %s, attempt %d of %d)%s: %s"
-                  % (act, rc, fails, _QUEUED_ACTION_ATTEMPTS,
-                     " — no longer queued" if give_up else " — still queued, will retry",
-                     why[-1][:200] if why else "no output"))
+        last = why[-1][:200] if why else "no output"
+        if not retry:
+            detail = ("queued '%s when empty' exited %s: %s — no longer queued (LinuxGSM also "
+                      "exits non-zero after a run that worked, and a retry would run it a second "
+                      "time)" % (act, rc, last))
+        elif _no_exit_status(rc):
+            detail = ("queued '%s when empty' got no answer (exit %s, attempt %d of %d)%s: %s"
+                      % (act, rc, fails, _QUEUED_ACTION_ATTEMPTS,
+                         " — no longer queued" if give_up else " — still queued, will retry", last))
+        else:
+            detail = ("queued '%s when empty' exited %s (attempt %d of %d)%s: %s"
+                      % (act, rc, fails, _QUEUED_ACTION_ATTEMPTS,
+                         " — no longer queued" if give_up
+                         else " — still queued until the server is seen stopped", last))
     try:
         log_action(None, "%s_server" % act, target=gs.name, detail=detail[:500], success=ok)
     except Exception:
         db.session.rollback()
         app.logger.warning("could not audit the queued %s of %s", act, gs.name, exc_info=True)
-    if ok or give_up:
+    if not retry or give_up:
         _queued_action_failures.pop(gs.id, None)
         gs.restart_pending = gs.stop_pending = False
     else:

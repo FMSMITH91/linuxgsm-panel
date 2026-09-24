@@ -780,6 +780,102 @@ try:
             if _l is not None:
                 db.session.delete(_l); db.session.commit()
 
+    # ── a queued restart LinuxGSM answers non-zero ran, and must not run again ─────────────────
+    # Every rc but 0 read as "did not happen" and the restart was retried on each tick, up to the
+    # attempt limit. But LinuxGSM's exit code is whatever its last log line set: a failed status
+    # alert after a good restart ends it at 1. The next tick finds the server online and empty —
+    # the very trigger — so it was restarted up to three times. Only a missing exit status (the
+    # transport's -1, or ssh's own 255) may be retried; a stop still retries on LinuxGSM's
+    # non-zero, because the next tick asks the server first and clears a stopped one.
+    _qr_saved = (_shmod.get_server_status, _shmod.sm_player_count, _sm_core.run_as_game_user,
+                 _sm_core.set_game_priority)
+    _qr_calls, _qr_rc, _qr_status = [], [1], ["online"]
+    _qr_id = None
+    try:
+        with app.app_context():
+            _rm = RemoteServer.query.first()
+            _qr = _UGS(remote_id=_rm.id, name="queued-restart-rc", short_name="queuedrestartrc",
+                       game_type="pz", port=16261, installed=True, status="online")
+            _qr.restart_pending = True
+            db.session.add(_qr); db.session.commit()
+            _qr_id = _qr.id
+            _QAL.query.filter_by(target="queued-restart-rc").delete(); db.session.commit()
+        _shmod.get_server_status = lambda srv, gs, distinguish_unresponsive=False: _qr_status[0]
+        _shmod.sm_player_count = lambda *a, **k: 0
+
+        def _qr_run(*a, **k):
+            if a[1] != "queuedrestartrc":
+                return "", "", 0
+            _qr_calls.append(a[2])
+            return "Started queuedrestartrc\nSending Discord alert: FAIL", "", _qr_rc[0]
+        _sm_core.run_as_game_user = _qr_run
+        _sm_core.set_game_priority = lambda *a, **k: None
+
+        def _qr_state():
+            with app.app_context():
+                _g = db.session.get(_UGS, _qr_id)
+                _rows = (_QAL.query.filter(_QAL.target == "queued-restart-rc")
+                         .order_by(_QAL.id).all())
+                return (bool(_g.restart_pending), bool(_g.stop_pending),
+                        [(r.action, r.success, r.detail) for r in _rows])
+
+        def _qr_reset(restart=False, stop=False, rc=1):
+            with app.app_context():
+                _g = db.session.get(_UGS, _qr_id)
+                _g.restart_pending, _g.stop_pending = restart, stop
+                db.session.commit()
+                _QAL.query.filter_by(target="queued-restart-rc").delete(); db.session.commit()
+            _shmod._queued_action_failures.pop(_qr_id, None)
+            _qr_calls[:] = []
+            _qr_rc[0] = rc
+            _qr_status[0] = "online"
+
+        _shmod._run_due_restarts(app)
+        _shmod._run_due_restarts(app)   # still online and empty: a retry would restart it again
+        _qr_rp, _qr_sp, _qr_rows = _qr_state()
+        check("queued restart: LinuxGSM exiting 1 after it ran restarts the server ONCE",
+              _qr_calls == ["restart"] and _qr_rp is False,
+              "calls=%r restart_pending=%r" % (_qr_calls, _qr_rp))
+        check("queued restart: ...and the audit row gives the exit code and its line, unqueued",
+              len(_qr_rows) == 1 and _qr_rows[0][1] is False
+              and "exited 1: " in (_qr_rows[0][2] or "")
+              and "no longer queued" in (_qr_rows[0][2] or "")
+              and "Discord alert: FAIL" in (_qr_rows[0][2] or ""),
+              "rows %r" % (_qr_rows,))
+        # Positive controls: no exit status at all is still retried — the hole the retry closed.
+        for _qr_code in (-1, 255):
+            _qr_reset(restart=True, rc=_qr_code)
+            _shmod._run_due_restarts(app)
+            _qr_rp, _qr_sp, _qr_rows = _qr_state()
+            check("queued restart: one with no answer (rc=%d) stays queued for the next tick" % _qr_code,
+                  _qr_calls == ["restart"] and _qr_rp is True
+                  and len(_qr_rows) == 1 and "still queued" in (_qr_rows[0][2] or ""),
+                  "calls=%r pending=%r rows=%r" % (_qr_calls, _qr_rp, _qr_rows))
+        # A stop LinuxGSM answers non-zero stays queued without calling itself a failure, and is
+        # cleared, not repeated, once the next tick sees the server stopped.
+        _qr_reset(stop=True, rc=2)
+        _shmod._run_due_restarts(app)
+        _qr_rp, _qr_sp, _qr_rows = _qr_state()
+        check("queued stop: LinuxGSM exiting 2 stays queued until the server is seen stopped",
+              _qr_sp is True and len(_qr_rows) == 1
+              and "exited 2" in (_qr_rows[0][2] or "") and "failed" not in (_qr_rows[0][2] or ""),
+              "stop_pending=%r rows=%r" % (_qr_sp, _qr_rows))
+        _qr_status[0] = "offline"
+        _shmod._run_due_restarts(app)
+        _qr_rp, _qr_sp, _qr_rows = _qr_state()
+        check("queued stop: ...and a stopped server clears it without a second stop",
+              _qr_sp is False and _qr_calls == ["stop"],
+              "stop_pending=%r calls=%r" % (_qr_sp, _qr_calls))
+    finally:
+        (_shmod.get_server_status, _shmod.sm_player_count, _sm_core.run_as_game_user,
+         _sm_core.set_game_priority) = _qr_saved
+        _shmod._queued_action_failures.pop(_qr_id, None)
+        with app.app_context():
+            _l = db.session.get(_UGS, _qr_id) if _qr_id else None
+            if _l is not None:
+                db.session.delete(_l); db.session.commit()
+            _QAL.query.filter_by(target="queued-restart-rc").delete(); db.session.commit()
+
     # ── an install that dies EARLY must still leave a row you can act on ──────────────────────
     # Only the step-4 path wrote status="failed". Every earlier exit — a bad game type, an
     # unreachable host during LinuxGSM setup, an unhandled exception — wrote the REASON and left
