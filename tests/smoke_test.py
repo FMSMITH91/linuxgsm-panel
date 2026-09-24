@@ -272,7 +272,10 @@ try:
         _tsd_c = _tsd_load()
         # No stored mount: the button's mount has to come from the host's routes, which only the
         # route supplies — a stored "/lgsm" would let a route that passed nothing pass this too.
-        _tsd_c.update(tailscale_setup_done=True, tailscale_use_funnel=True, tailscale_mount="")
+        # bind_host 0.0.0.0: the panel is reachable without Serve, so disabling it strands nothing
+        # (the loopback case, where it does, is refused below).
+        _tsd_c.update(tailscale_setup_done=True, tailscale_use_funnel=True, tailscale_mount="",
+                      bind_host="0.0.0.0")
         _tsd_save(_tsd_c)
         _tsd_html = c.get("/tailscale").get_data(as_text=True)
         check("tailscale page: Disable targets the panel's own mount, not another app's '/'",
@@ -283,6 +286,38 @@ try:
               _tsd_r.status_code != 200 and _tsd_ran == []
               and _tsd_load().get("tailscale_setup_done") is True,
               "%d %r ran=%r" % (_tsd_r.status_code, _tsd_r.get_json(), _tsd_ran))
+        # A loopback-bound panel is reached ONLY through Serve. Removing it ended the admin's session
+        # and nothing could reach the process again — a restart re-binds 127.0.0.1 and no longer
+        # re-applies Serve — so getting back in took host SSH. change-port refuses to create that
+        # state; Disable created it with one click. Both a stored 127.0.0.1 and an unset bind that
+        # boot resolved to 127.0.0.1 are that state.
+        import app as _tsd_app
+        _tsd_rb = dict(_tsd_app._RESOLVED_BIND)
+        try:
+            for _tsd_label, _tsd_bind, _tsd_resolved in (
+                    ("a stored 127.0.0.1 bind", "127.0.0.1", None),
+                    ("an unset bind that boot resolved to 127.0.0.1", "", "127.0.0.1")):
+                _tsd_app._RESOLVED_BIND.clear()
+                if _tsd_resolved:
+                    _tsd_app._RESOLVED_BIND[_tsd_port] = _tsd_resolved
+                _tsd_lb = _tsd_load()
+                _tsd_lb["bind_host"] = _tsd_bind
+                _tsd_save(_tsd_lb)
+                _tsd_r = c.post("/api/tailscale/serve", json={"action": "disable", "mount": "/lgsm"})
+                check("tailscale serve: Disable is refused with %s (it would lock the admin out)"
+                      % _tsd_label,
+                      _tsd_r.status_code == 400 and _tsd_ran == []
+                      and _tsd_load().get("tailscale_setup_done") is True
+                      and "0.0.0.0" in ((_tsd_r.get_json() or {}).get("message") or ""),
+                      "%d %r ran=%r" % (_tsd_r.status_code, _tsd_r.get_json(), _tsd_ran))
+        finally:
+            _tsd_app._RESOLVED_BIND.clear()
+            _tsd_app._RESOLVED_BIND.update(_tsd_rb)
+        # The same POST with the panel reachable without Serve goes through: the control that the
+        # refusal above is about the bind, not about Disable.
+        _tsd_lb = _tsd_load()
+        _tsd_lb["bind_host"] = "0.0.0.0"
+        _tsd_save(_tsd_lb)
         _tsd_r = c.post("/api/tailscale/serve", json={"action": "disable", "mount": "/lgsm"})
         check("tailscale serve: disabling the panel's mount runs the CLI's `serve ... off` removal",
               _tsd_r.status_code == 200

@@ -11,7 +11,7 @@ from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required
     superadmin_required)
 from panel.core.http import (_json_body, _json_str)
 from panel.db.models import LOCAL_HOST_LABEL
-from app import (_effective_https, _ts_backend_scheme)
+from app import (_bind_is_loopback, _effective_https, _resolved_bind, _ts_backend_scheme)
 
 
 def _sees_panel_host_tailnet(user):
@@ -41,6 +41,24 @@ def _serve_default_mount(info, cfg, port):
             if r.get("mount") == mount and not ts.route_targets_port(r.get("target"), port):
                 return "/lgsm" if mount == "/" else mount
     return mount
+
+
+def _disable_would_strand_panel(cfg):
+    """Why removing Serve now would leave nothing able to reach the panel, or "" when it would not.
+
+    A panel bound to loopback is reached ONLY through Serve. Removing the mapping ends the session
+    the admin is using, and nothing else can reach the process; a restart does not help either,
+    because the stored bind is still 127.0.0.1 and the boot path re-applies Serve only while
+    tailscale_setup_done is set, which the disable clears. Getting back in took host SSH and
+    linuxgsm-panel-recover. /api/panel/change-port refuses to create this same state ("Binding to
+    localhost only would lock you out unless Tailscale Serve is set up"); this is that rule seen
+    from the other side. The bind is the RESOLVED one: an unset bind_host that boot resolved to
+    127.0.0.1 is just as stranded until someone restarts the panel from the host."""
+    if not _bind_is_loopback(_resolved_bind(cfg)):
+        return ""
+    return ("The panel is bound to localhost only, so Tailscale Serve is the only way to reach it. "
+            "Disabling Serve would lock you out. Change the panel's bind address to 0.0.0.0 "
+            "(all interfaces) under System → Panel Server first, then disable Serve.")
 
 
 def register(app):
@@ -164,6 +182,9 @@ def register(app):
             return jsonify({"success": False, "message": msg}), 500
 
         elif action == "disable":
+            refusal = _disable_would_strand_panel(load_config())
+            if refusal:
+                return jsonify({"success": False, "message": refusal}), 400
             success, msg = ts.disable_tailscale_serve(mount=mount, port=port)
             if success:
                 # Mirror the enable branch. Nothing else in the repo ever cleared these, so a
