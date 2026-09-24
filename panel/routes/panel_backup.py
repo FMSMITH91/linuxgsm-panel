@@ -19,6 +19,7 @@ import threading
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from panel.core.validation import (_attachment_header)
+from panel.routes._shared import (_record_full_clock, _record_game_clock)
 
 
 def register(app):
@@ -94,7 +95,7 @@ def register(app):
                 notifications.notify("backup_failed", "Backup failed",
                                      "%d server backup(s) failed: %s"
                                      % (len(alertable), "; ".join(alertable)))
-            bk.record_full_backup(summary[:500])
+            _record_full_clock(app, summary[:500])
         except Exception:
             app.logger.warning("full backup run failed", exc_info=True)
             notifications.notify("backup_failed", "Backup run failed",
@@ -234,7 +235,7 @@ def register(app):
                         # server again within the hour. Not recorded when SKIPPED: the ticker
                         # deliberately leaves the clock alone there so the server stays due and is
                         # retried once it empties.
-                        bk.record_game_backup(server_id)
+                        _record_game_clock(app, server_id, gname)
                 _game_backup_status[server_id] = {"running": False,
                                                   "ok": (None if was_skipped else ok),
                                                   "busy": was_skipped,

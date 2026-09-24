@@ -13,6 +13,7 @@ broken route is the exact failure this repo keeps finding; here the F821 gate wa
 from flask import (jsonify)
 from flask_login import (current_user)
 from panel.core.clock import (utcnow)
+from panel.core.config import (ConfigUnreadable, is_unreadable, load_config)
 from panel.core.http import (_json_str)
 from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
     _game_backup_status, register_remote_state)
@@ -213,9 +214,57 @@ def _record_backup_outcome(app, sid, gname, ok, reason, action, title):
         app.logger.warning("could not record %s of %s", action, gname, exc_info=True)
 
 
+def _backups_blocked_by_config(app, sweep):
+    """True, logged, when config.json is there but unreadable — so `sweep` must not run.
+
+    Both sweeps act on config: each server's schedule, and its `keep`, which decides what the
+    prune after an archive DELETES. Read from an unreadable file those are the defaults, so a
+    queued backup pruned to the default keep past a server's own retention, and every clock the
+    sweeps then tried to record was refused (update_config raises ConfigUnreadable) and reported
+    as a failed backup. Leaving them alone costs nothing that is not recovered: queued servers
+    stay queued and due ones stay due until the file reads. The health check reports the file."""
+    if not is_unreadable(load_config()):
+        return False
+    app.logger.warning("config.json could not be read; %s skipped until it can", sweep)
+    return True
+
+
+def _record_game_clock(app, sid, gname):
+    """Move a server's backup schedule clock. False, logged, when config.json refused the write.
+
+    record_game_backup writes config.json, and update_config refuses while the file is there but
+    unparseable. That can happen between the archive being written and this call, and it is not
+    the backup failing: letting it reach the sweep's `except` audited and alerted a backup that
+    worked as "backup error (ConfigUnreadable)", and skipped recording what really happened."""
+    try:
+        bk.record_game_backup(sid)
+        return True
+    except ConfigUnreadable:
+        app.logger.warning("config.json could not be read; the backup clock of %s was not saved",
+                           gname)
+        return False
+
+
+def _record_full_clock(app, summary):
+    """record_full_backup, with a refused write logged rather than raised — see _record_game_clock.
+
+    It runs after every server in a full backup has been archived; raising there reached the
+    run's `except` and alerted "The panel backup run errored before completing." about a run that
+    had completed."""
+    try:
+        bk.record_full_backup(summary)
+        return True
+    except ConfigUnreadable:
+        app.logger.warning("config.json could not be read; the full backup's time and summary "
+                           "were not saved")
+        return False
+
+
 def _run_due_game_backups(app):
     """Scheduled per-server backups: back up each installed server whose OWN schedule is due
     (its override, or the global default). Serialised via the same lock as manual backups."""
+    if _backups_blocked_by_config(app, "scheduled backups"):
+        return
     if not _full_backup_lock.acquire(blocking=False):
         return
     try:
@@ -231,7 +280,7 @@ def _run_due_game_backups(app):
                         # Never backed up on a schedule yet (fresh install / pre-existing server):
                         # start its clock now instead of backing up immediately, so the first
                         # scheduled backup is one interval out — not the moment it's installed.
-                        bk.record_game_backup(sid)
+                        _record_game_clock(app, sid, gname)
                         continue
                     if not bk.game_backup_due(sid):
                         continue
@@ -245,7 +294,7 @@ def _run_due_game_backups(app):
                         _game_backup_status[sid] = {"running": False, "ok": None, "busy": True,
                                                     "msg": reason, "ts": time.time()}
                         continue
-                    bk.record_game_backup(sid)
+                    _record_game_clock(app, sid, gname)
                     _game_backup_status[sid] = {"running": False, "ok": ok,
                                                 "msg": (reason or ("Backed up" if ok else "failed")),
                                                 "ts": time.time()}
@@ -266,6 +315,8 @@ def _run_pending_backups(app):
     """Servers queued via 'wait until empty' (backup_pending): back up each one that's now empty
     and clear its flag; leave the still-busy ones queued for the next tick. Serialised via the
     same lock as the other backup paths."""
+    if _backups_blocked_by_config(app, "queued backups"):
+        return
     if not _full_backup_lock.acquire(blocking=False):
         return
     try:
@@ -296,7 +347,7 @@ def _run_pending_backups(app):
                             # failure here leaves the clock alone and the ticker picks the server
                             # up on its own schedule — one retry, not a loop, because this sweep
                             # has already cleared backup_pending.
-                            bk.record_game_backup(gs.id)
+                            _record_game_clock(app, gs.id, gs.name)
                         _game_backup_status[gs.id] = {"running": False, "ok": ok,
                                                       "msg": (reason or ("Backed up" if ok else "failed")),
                                                       "ts": time.time()}
