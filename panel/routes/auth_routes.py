@@ -12,7 +12,7 @@ from panel.core.config import (encrypt_secret)
 from panel.db.models import (User, db)
 from panel.security.auth import (hash_password, needs_rehash, check_password, client_ip, dummy_password_check,
     generate_backup_codes, generate_totp_secret, log_action, totp_provisioning_uri,
-    verify_totp_step)
+    session_fingerprint, verify_totp_step)
 from panel.services import (notifications)
 import time
 from app import (LOGIN_MAX_FAILS, LOGIN_WINDOW, _LOGIN_BLOCK_LOGGED, _LOGIN_FAILS,
@@ -94,6 +94,10 @@ def register(app):
                 session.permanent = True   # so PERMANENT_SESSION_LIFETIME applies
                 _register_session(user, remember)   # server-side row (sets user._sid) BEFORE
                 login_user(user, remember=remember)   # login_user, so get_id embeds the sid
+                # The client this session belongs to, for "strong" protection (auth.py
+                # _session_binding_ok) — flask-login's own strong mode never fires on a permanent
+                # session, and this one is permanent.
+                session["_bind"] = session_fingerprint()
                 user.last_login = utcnow()
                 db.session.commit()
                 log_action(user, "login", detail=f"User logged in from {ip}")

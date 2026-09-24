@@ -1557,11 +1557,70 @@ check("remote access: junk id denied", not can_access_remote(_user(False, 5), "a
 from flask import Flask as _Flask
 _app = _Flask(__name__)
 with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
-                               environ_base={"REMOTE_ADDR": "127.0.0.1"}):
-    eq("loopback proxy: trust XFF", client_ip(), "1.2.3.4")
-with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
                                environ_base={"REMOTE_ADDR": "203.0.113.9"}):
     eq("direct connection: ignore spoofed XFF, use socket", client_ip(), "203.0.113.9")
+
+# ...and loopback is not a proxy by itself. Every local account on the panel host can dial
+# 127.0.0.1 — the game-server users included — so trusting any loopback peer let one of them pick
+# a fresh throttle bucket per attempt, or name the admin's IP until fail2ban banned it. Only a
+# loopback peer whose socket ROOT owns (tailscaled) is believed. Proved against the real kernel:
+# a loopback pair opened here is owned by this (non-root) test process.
+import socket as _lp_sock                                                            # noqa: E402
+import tempfile as _lp_tmp                                                           # noqa: E402
+from panel.security import auth as _lp_auth                                          # noqa: E402
+from unit.part01 import skip as _lp_skip                                             # noqa: E402
+_lp_srv = _lp_sock.socket(_lp_sock.AF_INET, _lp_sock.SOCK_STREAM)
+_lp_srv.bind(("127.0.0.1", 0))
+_lp_srv.listen(1)
+_lp_cli = _lp_sock.socket(_lp_sock.AF_INET, _lp_sock.SOCK_STREAM)
+_lp_cli.connect(_lp_srv.getsockname())
+_lp_conn, _lp_peer = _lp_srv.accept()
+_lp_env = {"REMOTE_ADDR": "127.0.0.1", "REMOTE_PORT": str(_lp_peer[1]),
+           "SERVER_PORT": str(_lp_srv.getsockname()[1])}
+try:
+    eq("loopback peer: the kernel names who dialled (this process's uid)",
+       _lp_auth._loopback_peer_uid(_lp_env), os.getuid())
+    eq("loopback peer: a port that matches no connection answers None, not a guess",
+       _lp_auth._loopback_peer_uid(dict(_lp_env, REMOTE_PORT="1")), None)
+    with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
+                                   environ_overrides=_lp_env):
+        from flask import request as _lp_req
+        _lp_got = client_ip()
+        # ...and it was refused BECAUSE the kernel named a non-root owner, not because the lookup
+        # failed on a fixture environ (which would also answer 127.0.0.1).
+        _lp_uid_seen = _lp_auth._loopback_peer_uid(_lp_req.environ)
+    if os.getuid() != 0:
+        check("loopback peer: a NON-root local caller's X-Forwarded-For is ignored",
+              _lp_got == "127.0.0.1" and _lp_uid_seen == os.getuid(),
+              "client_ip=%r, owner seen=%r" % (_lp_got, _lp_uid_seen))
+    else:
+        _lp_skip("loopback peer: a NON-root local caller's X-Forwarded-For is ignored",
+             "the suite is running as root, so this connection IS root-owned")
+finally:
+    for _s in (_lp_conn, _lp_cli, _lp_srv):
+        _s.close()
+# The trusted side, from a socket table naming root as the owner (the tailscaled shape).
+_lp_fix = os.path.join(_lp_tmp.mkdtemp(), "tcp")
+with open(_lp_fix, "w") as _fh:
+    _fh.write("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt"
+              "   uid  timeout inode\n"
+              "   0: 0100007F:A1B2 0100007F:1388 01 00000000:00000000 00:00000000 00000000"
+              "     0        0 12345 1 0000000000000000 20 4 30 10 -1\n"
+              "   1: 0100007F:C3D4 0100007F:1388 01 00000000:00000000 00:00000000 00000000"
+              "  1001        0 12346 1 0000000000000000 20 4 30 10 -1\n")
+_lp_saved = dict(_lp_auth._PROC_NET_TCP)
+_lp_auth._PROC_NET_TCP[4] = _lp_fix
+try:
+    for _port, _want, _label in ((0xA1B2, "1.2.3.4", "a ROOT-owned loopback peer (tailscaled) is"),
+                                 (0xC3D4, "127.0.0.1", "a uid-1001 loopback peer is NOT")):
+        with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
+                                       environ_overrides={"REMOTE_ADDR": "127.0.0.1",
+                                                     "REMOTE_PORT": str(_port),
+                                                     "SERVER_PORT": "5000"}):
+            eq("loopback proxy: %s trusted for X-Forwarded-For" % _label, client_ip(), _want)
+finally:
+    _lp_auth._PROC_NET_TCP.clear()
+    _lp_auth._PROC_NET_TCP.update(_lp_saved)
 
 # ── TOTP (2FA) ────────────────────────────────────────────────
 import time as _time

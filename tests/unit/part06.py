@@ -3565,13 +3565,20 @@ from flask import Flask as _IpFlask                                             
 _ip_app = _IpFlask(__name__)
 
 
-def _ip_for(headers, remote="127.0.0.1", trust_proxy=False, proxy_fix_orig=None):
+def _ip_for(headers, remote="127.0.0.1", trust_proxy=False, proxy_fix_orig=None, root_peer=True):
+    # root_peer: the loopback caller is tailscaled (a root-owned socket), the Serve shape these
+    # checks are about. A non-root loopback caller is not trusted at all — see part02.
     _ip_app.config["_TRUST_PROXY"] = trust_proxy
     env = {"REMOTE_ADDR": remote}
     if proxy_fix_orig is not None:
         env["werkzeug.proxy_fix.orig"] = {"REMOTE_ADDR": proxy_fix_orig}
-    with _ip_app.test_request_context("/", headers=headers, environ_overrides=env):
-        return _ip_auth.client_ip()
+    _saved_lpt = _ip_auth._loopback_proxy_trusted
+    _ip_auth._loopback_proxy_trusted = lambda: root_peer
+    try:
+        with _ip_app.test_request_context("/", headers=headers, environ_overrides=env):
+            return _ip_auth.client_ip()
+    finally:
+        _ip_auth._loopback_proxy_trusted = _saved_lpt
 
 
 # X-Forwarded-For's LAST hop wins, and X-Real-IP is only the fallback. The order used to be the
@@ -3603,6 +3610,11 @@ eq("client_ip: a direct connection ignores both headers",
 eq("client_ip: behind a declared proxy, the header the proxy sets wins over the rewritten peer",
    _ip_for({"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "100.64.0.5"},
            remote="9.9.9.9", trust_proxy=True, proxy_fix_orig="127.0.0.1"), "100.64.0.5")
+eq("client_ip: a NON-root loopback caller's headers are ignored (a local account, not Serve)",
+   _ip_for({"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "100.64.0.5"}, root_peer=False),
+   "127.0.0.1")
+eq("client_ip: ...but a declared proxy (trust_proxy) is still believed from any peer",
+   _ip_for({"X-Forwarded-For": "100.64.0.5"}, trust_proxy=True, root_peer=False), "100.64.0.5")
 eq("client_ip: no headers at all -> the socket address",
    _ip_for({}, remote="203.0.113.9"), "203.0.113.9")
 # ...and the deployment guide has to set the header it tells the panel to read.

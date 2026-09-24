@@ -1101,9 +1101,11 @@ def create_app():
     app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
     app.config["REMEMBER_COOKIE_SECURE"] = app.config["SESSION_COOKIE_SECURE"]
 
-    # flask-login session protection. "strong" rejects a session cookie replayed from a
-    # different client (IP+User-Agent binding); set "basic" if users roam between IPs a
-    # lot, or None to disable. Cookie theft is also recoverable via "sign out everywhere".
+    # Session protection. "strong" rejects a session cookie replayed from a different client
+    # (IP+User-Agent binding); set "basic" if users roam between IPs a lot, or None to disable.
+    # Enforced by auth._session_binding_ok, not by flask-login, whose own "strong" does nothing
+    # for the permanent sessions every login creates. Cookie theft is also recoverable via
+    # "sign out everywhere".
     app.config["SESSION_PROTECTION"] = cfg.get("session_protection", "strong")
 
 
