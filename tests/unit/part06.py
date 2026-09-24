@@ -4436,6 +4436,48 @@ finally:
 check("discord: every send declares allowed_mentions, so a player name cannot ping the channel",
       len(_nt_posts) == 2 and all(p.get("allowed_mentions") == {"parse": []} for p in _nt_posts),
       str(_nt_posts))
+# ...and allowed_mentions stops only pings. Discord still rendered the rest of its markdown in the
+# bot's own message, so a player named "[Panel login expired](https://evil.example/login)", or one
+# saying "# Re-authenticate at [panel](https://evil.example)" in chat, had the operator's bot post a
+# clickable masked link or a headline in the admin channel. Driven through the real dispatcher.
+from panel.services.bots import discord as _dcb                                   # noqa: E402
+_dcm_sent = []
+_dcm_link = "[Panel login expired](https://evil.example/login)"
+_dcm_chat = "# Re-authenticate at [panel](https://evil.example)\n```\n# out of the fence"
+_dcm_saved = (_nt.discord_bot_send, _botcmd._find_server, _botcmd.player_list,
+              _bc_game.capture_console)
+
+
+def _dcm_fenced(msg, needle):
+    """True when `needle` sits inside the message's ONE code block and nothing can close it early."""
+    parts = msg.split("```")
+    return len(parts) == 3 and needle in parts[1] and needle not in parts[0] + parts[2]
+
+
+try:
+    _nt.discord_bot_send = lambda tok, ch, text: _dcm_sent.append(text)
+    _botcmd._find_server = lambda arg: (NS(name="Rust", remote=None, short_name="rustserver",
+                                           lgsm_name="rustserver", game_type="rust", port=28015,
+                                           query_type=None), None)
+    _botcmd.player_list = lambda *a, **k: [{"name": _dcm_link}, {"name": "x`` `y"}]
+    _bc_game.capture_console = lambda *a, **k: (_dcm_chat + "\nServer started\n", "", 0)
+    _dcb._handle_discord_command(_bc_app, "tok", "9" * 18, "!players rust")
+    _dcb._handle_discord_command(_bc_app, "tok", "9" * 18, "!console rust")
+    _dcm_players, _dcm_console = (_dcm_sent + ["", ""])[:2]
+    check("discord: !players shows a player's name as text, not a masked link",
+          _dcm_fenced(_dcm_players, _dcm_link) and "Rust — 2 player(s):" in _dcm_players.split("```")[0],
+          _dcm_players)
+    check("discord: !console shows chat as text, and a backtick in it cannot close the block",
+          _dcm_fenced(_dcm_console, "# Re-authenticate") and "Server started" in _dcm_console.split("```")[1],
+          _dcm_console)
+    # Control: Telegram sends no parse_mode, so its text stays exactly as it was — the same builder
+    # with no fence.
+    _dcm_tg = _botcmd._players_text(_bc_app, "rust")
+    check("discord: ...while Telegram's /players is plain text as before (control)",
+          "```" not in _dcm_tg and ("• " + _dcm_link) in _dcm_tg, _dcm_tg)
+finally:
+    (_nt.discord_bot_send, _botcmd._find_server, _botcmd.player_list,
+     _bc_game.capture_console) = _dcm_saved
 
 # ── A provider that refuses every message must leave a trace ──────────────────────────────────
 # _post's HTTPError branch logged nothing and notify()'s sender calls were bare statements, so a
