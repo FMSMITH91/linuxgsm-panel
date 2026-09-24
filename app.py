@@ -1709,6 +1709,55 @@ def _setup_open():
     # first run no completed row exists, so the wizard's own endpoints behave identically.
     return SetupState.query.filter_by(complete=True).first() is None
 
+
+def _setup_owner_hash(token):
+    import hashlib
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+
+
+def issue_setup_owner_token(data):
+    """Bind the rest of the wizard to the browser that just created the admin.
+
+    Stores a random token in that browser's session and its hash in the wizard state `data`
+    (the caller commits it). See _setup_owner_ok for why."""
+    token = secrets.token_urlsafe(32)
+    session["_setup_owner"] = token
+    data["owner"] = _setup_owner_hash(token)
+    return token
+
+
+def _setup_owner_ok():
+    """May THIS caller drive the wizard past the admin step?
+
+    _setup_open() only says the wizard has not finished. From the moment the admin is created until
+    the last step, that left it open to anyone who could reach the port — and the steps in that
+    window are the dangerous ones: /api/setup/tailscale/up joins this host to the CALLER's tailnet
+    with Tailscale SSH on (a root shell under the default policy) and hands them the auth URL,
+    /install runs the installer as root, step=welcome rewrites the bind and port, and
+    step=remote_server makes the panel SSH to a host of their choosing. The operator already has
+    an account at that point and reasonably believes the install is theirs.
+
+    So once a superadmin exists, the caller must be the browser that created it (the token issued
+    then) or be signed in as a superadmin — which is also the way back in for an operator who
+    lost that session: /login stays reachable in this window (check_setup). Before any
+    superadmin exists the first-run steps are open by necessity, exactly as before."""
+    if User.query.filter_by(is_superadmin=True).first() is None:
+        return True
+    try:
+        if current_user.is_authenticated and current_user.is_superadmin:
+            return True
+    except Exception:
+        _log.debug("setup owner: no user context", exc_info=True)
+    import hmac
+    import json as _json
+    token = session.get("_setup_owner") or ""
+    state = SetupState.query.first()
+    try:
+        want = (_json.loads(state.data or "{}") if state else {}).get("owner") or ""
+    except (ValueError, TypeError, AttributeError):
+        want = ""
+    return bool(token and want) and hmac.compare_digest(_setup_owner_hash(token), want)
+
 # ── Account / Two-factor auth ───────────────────────────
 def _qr_svg(data):
     """Render `data` as an inline SVG QR code (no PIL needed)."""
