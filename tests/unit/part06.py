@@ -1157,6 +1157,11 @@ try:
     _rs_out = _rs_case("nogit", _rs_no_git)
     check("install.sh: ...and deleting .git no longer makes root copy the tree",
           "STAGED-NOTHING" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    # The refusal is cached and shared by every caller, so it must not name files it did not try:
+    # a fresh install once asked it for recover.sh alone and was told the helper — placed seconds
+    # earlier — "was NOT refreshed".
+    check("install.sh: ...and the refusal does not claim the helper was left unrefreshed",
+          "WARN" in _rs_out and "privileged helper" not in _rs_out, _rs_out[-300:])
     _rs_out = _rs_case("local", _rs_local_commit)
     check("install.sh: a HEAD that is not on upstream's branch is refused, and says so",
           "STAGED-NOTHING" in _rs_out and "LOCAL-HELPER" not in _rs_out
@@ -2305,6 +2310,63 @@ try:
           "INSTALL -o root -g root -m 0755" in _r_trusted.stdout
           and "LN -sf /usr/local/lib/lgsmp/recover.sh" in _r_trusted.stdout,
           repr(_r_trusted.stdout[:300]))
+
+    # ...and when NO fresh copy can be staged, ROOT must still never aim the command into the
+    # checkout. It fell back to `ln -sf ${PANEL_DIR}/recover.sh` whenever staging failed, and root's
+    # own-clone staging refuses a tarball, a --src tree, a local commit and an offline host — all
+    # legitimate root installs — so `sudo linuxgsm-panel-recover` ran a panel-writable file as root,
+    # and on an update it REPOINTED a link that had been aimed at the root-owned copy.
+    _su_ppanel = os.path.join(_su_sb, "panel")
+    open(os.path.join(_su_ppanel, "recover.sh"), "w").close()
+    _su_rlib = os.path.join(_su_sb, "rootlib")
+
+    def _su_recfail(uid, helper_dir, owner="root", link_to="/elsewhere"):
+        shim = ("id() { echo %s; }\n" % uid
+                + "sudo() { \"$@\"; }\n"
+                  "install() { echo \"INSTALL $*\"; }\n"
+                  "ln() { echo \"LN $*\"; }\n"
+                  "rm() { echo \"RM $*\"; }\n"
+                  "stat() { echo %s; }\n" % owner
+                + "readlink() { echo %s; }\n" % _su_shlex.quote(link_to)
+                + "_prepare_root_source() { :; }\n"
+                  "stage_root_source() { return 1; }\n")
+        return _su_run(_su_recov, "HELPER_DIR=%s\n" % _su_shlex.quote(helper_dir)
+                       + _su_env + "ORIGIN_TRUSTED=1\n", extra=shim).stdout
+
+    _r = _su_recfail(0, "/usr/local/lib/lgsmp")
+    check("install.sh: as root, a failed staging never links the recovery command into the checkout",
+          "LN " not in _r and "WARN" in _r, repr(_r[:400]))
+    _r = _su_recfail(0, "/usr/local/lib/lgsmp", link_to=os.path.join(_su_ppanel, "recover.sh"))
+    check("install.sh: ...and unlinks one an older installer aimed at the checkout",
+          "RM -f /usr/local/bin/linuxgsm-panel-recover" in _r and "LN " not in _r, repr(_r[:400]))
+    _r = _su_recfail(0, "/usr/local/lib/lgsmp")
+    check("install.sh: ...but leaves a link that points anywhere else alone (control)",
+          "RM -f /usr/local/bin/linuxgsm-panel-recover" not in _r, repr(_r[:400]))
+    open(os.path.join(_su_rlib, "recover.sh"), "w").close()
+    _r = _su_recfail(0, _su_rlib)
+    check("install.sh: ...it keeps a root-owned copy already in place (stale, but not panel-writable)",
+          "LN -sf %s" % os.path.join(_su_rlib, "recover.sh") in _r
+          and "LN -sf %s" % os.path.join(_su_ppanel, "recover.sh") not in _r, repr(_r[:400]))
+    _r = _su_recfail(0, _su_rlib, owner="lgsmpanel")
+    check("install.sh: ...but not one the panel user owns",
+          "LN " not in _r, repr(_r[:400]))
+    # Control: the ACCOUNT that owns the checkout (a per-user install) still gets the fallback —
+    # it can rewrite what it runs anyway, and the gate above must not have removed that.
+    _r = _su_recfail(1000, "/usr/local/lib/lgsmp")
+    check("install.sh: a per-user run still falls back to the checkout's recover.sh (control)",
+          "LN -sf %s" % os.path.join(_su_ppanel, "recover.sh") in _r, repr(_r[:400]))
+
+    # The fresh ROOT path places recover.sh while the checkout is still root's, i.e. before its
+    # chown — as install_root_tools already is. After it, a tarball or --src install had no way to
+    # stage it at all. Comment lines stripped: this block's own prose names both.
+    _su_code = "\n".join(_ln for _ln in _su_txt.splitlines() if not _ln.lstrip().startswith("#"))
+    _su_fresh = _su_code[_su_code.index('info "[3/4] Registering the service'):]
+    _su_fresh = _su_fresh[:_su_fresh.index("\nelse\n")]
+    check("install.sh: the fresh root path installs the recovery command BEFORE the chown",
+          "install_recovery_command" in _su_fresh
+          and _su_fresh.index("install_recovery_command")
+          < _su_fresh.index('chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"'),
+          _su_fresh[:300])
 finally:
     _shutil.rmtree(_su_sb, ignore_errors=True)
 

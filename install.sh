@@ -721,10 +721,14 @@ root_source_commit() {
     [ -d "${PANEL_DIR}/.git" ] \
         && want="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null || true)"
     # The panel's git produced this, so it is a request, not a fact: a commit id, or nothing.
+    #
+    # The warnings below say only that root will not stage FROM this checkout. Which file that
+    # leaves unrefreshed is each caller's to say — this answer is cached and shared, and the first
+    # caller to ask is not always install_root_tools (a fresh install once asked it for recover.sh
+    # alone, seconds after the helper had been placed, and was told the helper was not refreshed).
     case "${want}" in
         ""|*[!0-9a-f]*)
-            warn "This checkout has no commit root can verify, so the root-owned components"
-            warn "(the privileged helper, db_maintenance, this installer) were NOT refreshed."
+            warn "This checkout has no commit root can verify, so root stages nothing from it."
             return 1 ;;
     esac
     if ! ${H_SUDO:-} test -d "${ROOT_GIT}"; then
@@ -734,14 +738,14 @@ root_source_commit() {
     fi
     if ! _rootgit fetch --quiet --no-tags "${REPO_URL}" \
             "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" >/dev/null 2>&1; then
-        warn "Could not fetch ${REPO_URL} (${DEFAULT_BRANCH}) into root's own copy, so the"
-        warn "root-owned components were NOT refreshed. The panel still works; re-run to retry."
+        warn "Could not fetch ${REPO_URL} (${DEFAULT_BRANCH}) into root's own copy, so root stages"
+        warn "nothing from this checkout. The panel still works; re-run to retry."
         return 1
     fi
     if ! _rootgit merge-base --is-ancestor "${want}" "refs/remotes/origin/${DEFAULT_BRANCH}" \
             >/dev/null 2>&1; then
         warn "This checkout is at ${want}, which is not on ${REPO_URL}'s ${DEFAULT_BRANCH}."
-        warn "The root-owned components were NOT refreshed from it."
+        warn "Root stages nothing from it."
         return 1
     fi
     ROOT_SRC_COMMIT="${want}"
@@ -791,9 +795,17 @@ stage_root_source() {
 #
 # So install a root-owned copy beside the helper, taken from the COMMIT rather than the working
 # tree (stage_root_source explains why that distinction matters), and point the symlink at that.
-# Falls back to the checkout only when no root-owned copy can be placed — the same trade
-# install_root_tools makes for the helper, because a working recovery command matters more than
-# the boundary on a host that has no root-owned anything.
+#
+# When no fresh copy can be staged, what happens depends on who is running this:
+#   * ROOT never points the link into ${PANEL_DIR}. A root run always hands that directory to the
+#     service user (the fresh path chowns it straight after), so a link there is the hole above.
+#     It keeps a root-owned copy already in place, stale but safe, or else links nothing — and
+#     unlinks one an older installer aimed at the checkout. root_source_commit refuses more than
+#     the old copy-the-tree path did (no .git, a commit not on upstream's branch, no network), so
+#     this is a branch real root installs reach, not a corner.
+#   * the ACCOUNT THAT OWNS THE CHECKOUT (a per-user install, run as that user) falls back to
+#     ${PANEL_DIR}/recover.sh. That account can already rewrite anything it would run, so the
+#     boundary is not what it loses, and a working recovery command is worth more there.
 install_recovery_command() {
     local link="/usr/local/bin/linuxgsm-panel-recover" stage="" target=""
     # The origin gate belongs HERE, not at the call sites, because this is the one root-owned file
@@ -821,6 +833,21 @@ install_recovery_command() {
        && ${H_SUDO} install -o root -g root -m 0755 "${stage}" "${HELPER_DIR}/recover.sh" 2>/dev/null; then
         target="${HELPER_DIR}/recover.sh"
         ${H_SUDO} rm -f "${stage}" 2>/dev/null || true
+    elif [ "$(id -u)" -eq 0 ]; then
+        if [ -f "${HELPER_DIR}/recover.sh" ] && [ ! -L "${HELPER_DIR}/recover.sh" ] \
+           && [ "$(stat -c '%U' "${HELPER_DIR}/recover.sh" 2>/dev/null)" = "root" ]; then
+            target="${HELPER_DIR}/recover.sh"
+            warn "The recovery command was not refreshed; \`linuxgsm-panel-recover\` keeps the"
+            warn "root-owned copy already in ${HELPER_DIR}."
+        else
+            warn "No root-owned recovery command could be placed, so \`linuxgsm-panel-recover\` is not"
+            warn "linked: root must not run a file from the panel's checkout. Re-run this installer"
+            warn "once it can stage one (a clone of ${REPO_URL:-the repository}'s ${DEFAULT_BRANCH:-main}, or with network access)."
+            if [ "$(readlink "${link}" 2>/dev/null)" = "${PANEL_DIR}/recover.sh" ]; then
+                rm -f "${link}" 2>/dev/null || true
+                warn "Removed the old link that pointed it at ${PANEL_DIR}/recover.sh."
+            fi
+        fi
     elif [ -f "${PANEL_DIR}/recover.sh" ]; then
         target="${PANEL_DIR}/recover.sh"
         warn "Recovery command points into the checkout — no root-owned copy could be placed."
@@ -1641,6 +1668,12 @@ install_root_tools
 
 info "[3/4] Registering the service…"
 if [ "${RUN_AS_ROOT}" -eq 1 ]; then
+    # Path-independent recovery command: `sudo linuxgsm-panel-recover` from anywhere. HERE, beside
+    # install_root_tools and before the chown below, for the same reason: until then the checkout
+    # is still root's own, so recover.sh is read straight from it. After the chown it is the panel
+    # user's, and root would need its own clone to agree — which a tarball, a --src tree with no
+    # .git or a local commit, or a host without network never gets, leaving no recovery command.
+    install_recovery_command
     # Own everything as the service user, then run a system service AS that user.
     chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
 
@@ -1674,8 +1707,6 @@ WantedBy=multi-user.target
 SERVICEEOF
     systemctl daemon-reload
     systemctl enable --now linuxgsm-panel.service
-    # Path-independent recovery command: `sudo linuxgsm-panel-recover` from anywhere.
-    install_recovery_command
     SERVICE_HINT="sudo systemctl status linuxgsm-panel"
     LOG_HINT="sudo journalctl -u linuxgsm-panel -f"
 else
