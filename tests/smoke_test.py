@@ -13476,10 +13476,25 @@ try:
         # Two review fixes changed this check two ways; one survives, and the other's cases are
         # asserted against it here. A SITE ignores the port, so a page on another port of the
         # panel's own address (a game's web map) is same-site: the Lax cookie rides along, and only
-        # the port refuses it. Compared as (scheme, host, port) with the default port filled in.
+        # the port refuses it. Compared as (host, port): a Host with no port takes the ORIGIN's
+        # scheme default, so a TLS proxy that forwards the host but not X-Forwarded-Proto still
+        # matches — requiring the scheme too refused exactly those proxies, with no message.
         for _so_origin, _so_kw, _so_want, _so_what in (
                 ("http://1.2.3.4:8123", dict(scheme="http", host="1.2.3.4:5000"), False,
                  "a page on another port of the panel's own address"),
+                ("http://127.0.0.1:8123", dict(scheme="http", host="127.0.0.1:5000"), False,
+                 "...on loopback too"),
+                ("https://panel.example.com", dict(scheme="http", host="panel.example.com"), True,
+                 "TLS proxy forwards Host without X-Forwarded-Proto"),
+                ("https://panel.example.com", dict(scheme="http", host="127.0.0.1:5000",
+                                                   HTTP_X_FORWARDED_HOST="panel.example.com"), True,
+                 "TLS proxy forwards X-Forwarded-Host without X-Forwarded-Proto"),
+                ("https://other.example.ts.net", dict(scheme="http", host="127.0.0.1:5000",
+                                                      HTTP_X_FORWARDED_PROTO="https",
+                                                      HTTP_X_FORWARDED_HOST="node.example.ts.net"),
+                 False, "a sibling host on the same site (another tailnet node)"),
+                ("https://panel.example.com:8443", dict(scheme="http", host="panel.example.com"),
+                 False, "another port of a host forwarded without a port"),
                 ("http://panel.lan:8123", dict(scheme="http", host="panel.lan:5000"), False,
                  "...by hostname too"),
                 ("https://panel.lan:8443", dict(scheme="http", host="127.0.0.1:5000",

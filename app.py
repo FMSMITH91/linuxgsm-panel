@@ -2082,25 +2082,36 @@ def _sync_toggles_from_cron(gs, jobs):
     return changed
 
 # ── WebSocket Console ───────────────────────────────────
-def _same_origins(environ):
-    """The origins a page served on THIS request's host would send: scheme://Host, and the
-    X-Forwarded-Proto/-Host form a reverse proxy passes on. The same rule engineio applies when it
-    is given cors_allowed_origins=None; spelled out here because the panel also allows site_domain."""
-    scheme, host = environ.get("wsgi.url_scheme"), environ.get("HTTP_HOST")
-    if not (scheme and host):
-        return []
-    out = ["%s://%s" % (scheme, host)]
-    if "HTTP_X_FORWARDED_PROTO" in environ or "HTTP_X_FORWARDED_HOST" in environ:
-        out.append("%s://%s" % (environ.get("HTTP_X_FORWARDED_PROTO", scheme).split(",")[0].strip(),
-                                environ.get("HTTP_X_FORWARDED_HOST", host).split(",")[0].strip()))
-    return out
+def _origin_candidates(environ, cfg):
+    """The hosts a page allowed to open the socket may be served from, as Host-header strings:
+    the Host this request arrived with, the X-Forwarded-Host a reverse proxy passes on, and
+    site_domain. Each may carry an explicit port or none."""
+    out = [environ.get("HTTP_HOST") or ""]
+    fwd = environ.get("HTTP_X_FORWARDED_HOST")
+    if fwd:
+        out.append(fwd.split(",")[0].strip())
+    out.append((cfg.get("site_domain") or "").strip())
+    return [h for h in out if h]
+
+
+def _host_port(value):
+    """(host, port) of a Host-header-like value, port None when none is given; None when it names
+    no host. A value written with a scheme (a site_domain typed as a URL) is read the same way."""
+    from urllib.parse import urlsplit
+    value = str(value or "").strip()
+    try:
+        u = urlsplit(value if "://" in value else "//" + value)
+        host, port = (u.hostname or "").lower(), u.port
+    except ValueError:
+        return None
+    return (host, port) if host else None
 
 
 def _socket_origin_allowed(origin, environ=None):
     """Whether a browser page at `origin` may open the console/terminal socket.
 
     Explicit config (socketio_cors_origins) wins. Otherwise a page is allowed when it is served from
-    the host this request arrived on (same-origin, port included), or from site_domain.
+    the host this request arrived on, the host a proxy forwarded, or site_domain — PORT INCLUDED.
 
     It was a list built once at startup: ["https://<site_domain>", "http://<site_domain>"], with no
     port, else "*". So the default direct install — https://panel.example.com:5000 with that domain
@@ -2114,17 +2125,28 @@ def _socket_origin_allowed(origin, environ=None):
     if explicit:
         allowed = [explicit] if isinstance(explicit, str) else list(explicit)
         return "*" in allowed or origin in allowed
-    # Compared as (scheme, host, port) with the default port filled in, not as strings: a Host of
-    # "panel.lan:443" and an Origin of "https://panel.lan" are the same place, and so are the two
-    # spellings of a site_domain. Scheme and port still have to match, which is what refuses a page
-    # served on ANOTHER port of the panel's own address — same-site, so the Lax cookie rides along.
     key = _origin_key(origin)
     if key is None:
         return False                      # "null", a file: page, anything that is not http(s)
-    if key in {_origin_key(o) for o in _same_origins(environ or {})}:
-        return True
-    dom = (cfg.get("site_domain") or "").strip()
-    return bool(dom) and key in {_origin_key("https://%s" % dom), _origin_key("http://%s" % dom)}
+    scheme, host, port = key
+    # Compared as (host, port), and the PORT is what refuses a page served on another port of the
+    # panel's own address (a game's web map): a site ignores the port, so that page is same-site
+    # and the Lax cookie rides along. A candidate with an explicit port must equal the origin's.
+    # One with no port takes the ORIGIN's scheme default — a browser leaves the port out of Host
+    # only for its scheme's default, and a TLS proxy that forwards Host (nginx `Host $host`) or
+    # X-Forwarded-Host without X-Forwarded-Proto hands the panel a plain-http request for an https
+    # page. Matching the scheme too, via wsgi.url_scheme, refused exactly those proxies: no console,
+    # no terminal, and no message. The scheme itself adds nothing here — one port speaks one scheme.
+    # Not accepted: a proxy that rewrites Host to loopback and forwards no host at all. Its page
+    # cannot be told from any other, so it needs site_domain set (the README's nginx and Caddy
+    # examples, and Tailscale Serve, all forward the host). Nor is any other host: a sibling
+    # subdomain (another node on the same *.ts.net tailnet) is same-site, so the cookie is sent.
+    default = 443 if scheme == "https" else 80
+    for cand in _origin_candidates(environ or {}, cfg):
+        hp = _host_port(cand)
+        if hp and hp[0] == host and (hp[1] or default) == port:
+            return True
+    return False
 
 
 def _origin_key(origin):
