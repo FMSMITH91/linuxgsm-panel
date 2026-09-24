@@ -1267,6 +1267,11 @@ def set_game_priority(server, user, nice=GAME_PRIORITY_NICE):
         _log.debug("set_game_priority failed (non-fatal)", exc_info=True)
 
 
+# tools/panel-helper's exit status when it refuses an argument (main(): validate() raised). Nothing
+# it runs exits with it for a verb here: renice reports failure as 1.
+_HELPER_REFUSED_ARGS = 2
+
+
 def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
     """Renice ALL processes of several game users in ONE root command (negative nice needs root).
     The panel boosts a game on its own start/restart, but the LinuxGSM monitor cron restarts a
@@ -1278,10 +1283,23 @@ def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
     if not users:
         return
     try:
-        run_privileged(server, "renice-users", [str(int(nice))] + list(users), timeout=20,
-                       merge_stderr=False)
+        _, _, rc = run_privileged(server, "renice-users", [str(int(nice))] + list(users),
+                                  timeout=20, merge_stderr=False)
     except Exception:
         _log.debug("set_game_priority_bulk failed (non-fatal)", exc_info=True)
+        return
+    if rc == _HELPER_REFUSED_ARGS and len(users) > 1 and is_local_server(server):
+        # The helper validates the whole argument list or none of it, and it refuses an account
+        # outside the panel's game-account group — an imported sudo-capable install, or one
+        # install.sh took out of the group. One such account on the panel host left EVERY game
+        # there at nice 0, every pass, silently. So when the batch is refused, go one account at a
+        # time: a refusal then costs only the account it is about.
+        #
+        # ONLY on that refusal. renice itself exits 1 whenever one listed account has no process
+        # ("failed to get priority ... No such process") — any stopped server — having reniced the
+        # rest; retrying on that would turn every keeper pass into one sudo call per server.
+        for user in users:
+            set_game_priority(server, user, nice)
 
 
 def _tmux_live_socket_sh(selfname):
