@@ -2220,11 +2220,12 @@ def _ufw_raise_shadowed_deny(ip, rule, run):
     ufw keeps one rule per match (a second `deny from <ip>` is "Skipping inserting existing
     rule", exit 0 — a success that changed nothing), so a move is a delete and an insert. It goes
     back in as THEIRS: their comment, cut to what the helper accepts, never a `panel-` tag, so the
-    reconcile still reads it as the operator's and never releases it. Only an IPv4 DENY is moved:
-    `ufw delete deny` does not match a REJECT, and an IPv6 rule cannot be put back at all — the
-    helper's only insert is `insert 1`, which ufw refuses for IPv6 while IPv4 rules exist."""
-    import ipaddress
-    if rule.get("action") != "DENY" or ipaddress.ip_address(ip).version != 4:
+    reconcile still reads it as the operator's and never releases it. Only a DENY is moved:
+    `ufw delete deny` does not match a REJECT. IPv6 is moved like IPv4 — ufw-deny-ip is
+    `ufw prepend`, which puts a rule at the top of its own address family. (It was `insert 1`,
+    which ufw refuses for IPv6 while IPv4 rules exist, and IPv6 was refused here for that reason
+    after the verb stopped using it: the answer told the operator to run `ufw prepend` by hand.)"""
+    if rule.get("action") != "DENY":
         return False, ("%s already has a firewall rule of its own denying it, but the rule sits "
                        "below rules that allow traffic, so it blocks nothing. The panel cannot "
                        "move this one — put it above them on the host (`ufw prepend`)." % ip)
@@ -2261,8 +2262,9 @@ def _ufw_deny_with(ip, tag, existing, run, shadowed=None):
 
     This deleted first and inserted second, every time. `ufw delete deny from <ip>` matches a rule
     whatever its comment, so the operator's own block was removed and replaced with a panel one
-    the reconcile would later release; and when the insert then failed (`insert 1` is refused for
-    an IPv6 address while IPv4 rules exist) the address was left with no block at all. Now a rule
+    the reconcile would later release; and when the insert then failed (as `insert 1`, the verb
+    then, did for an IPv6 address while IPv4 rules existed) the address was left with no block at
+    all. Now a rule
     the panel did not write is left alone where it blocks, moved (never re-tagged) where it does
     not, and the only other delete is of the panel's own rule when it is re-tagged (auto-block →
     manual) — put back if the new one does not go in."""
