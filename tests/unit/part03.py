@@ -633,6 +633,28 @@ check("metrics: port_open true when a socket is listening", _m["port_open"] is T
 eq("metrics: cpu_percent from the /proc/stat delta", _m["cpu_percent"], 20.0)
 eq("metrics: game_cpu_percent from the jiffie delta", _m["game_cpu_percent"], 100.0)
 
+# ...and a game user or port that is not an identifier / a number is never interpolated. Both go
+# into the command unquoted, and @validates runs on assignment only: a legacy or restored row
+# reaches this, on every dashboard poll, as the SSH user (root on most remotes). Its siblings
+# (run_as_game_user, send_console_command, _rewrite_crontab) re-validate; this did not.
+_lm_sent = []
+_o_lm_rc = _sm_core.run_command
+_sm_core.run_command = lambda server, cmd, timeout=30, sudo=None: (_lm_sent.append(cmd)
+                                                                   or (_METRICS_OUT, "", 0))
+try:
+    _sm_core.server_live_metrics(None, "x $(id>/tmp/pwn)", "1; id", force=True)
+    _lm_bad = _lm_sent[-1] if _lm_sent else ""
+    _sm_core.server_live_metrics(None, "gmodserver", "27015", force=True)
+    _lm_good = _lm_sent[-1] if _lm_sent else ""
+finally:
+    _sm_core.run_command = _o_lm_rc
+check("metrics: a hostile game user or port from a stored row never reaches the shell",
+      _lm_bad and "$(id" not in _lm_bad and "ps -u x" not in _lm_bad and "; id'" not in _lm_bad,
+      "command sent: %r" % (_lm_bad[:300],))
+check("metrics: ...while a real game user and port are still measured (positive control)",
+      "ps -u gmodserver" in _lm_good and "sport = :27015" in _lm_good,
+      "command sent: %r" % (_lm_good[:300],))
+
 # ── remote_live_metrics parses CPU/MEM/DISK sections (incl. new disk fields) ──
 _RLM_OUT = "\n".join([
     "===A", "cpu 100 0 100 800 0 0 0", "cpu0 25 0 25 200 0 0 0",

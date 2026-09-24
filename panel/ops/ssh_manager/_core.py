@@ -1591,6 +1591,22 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
         _hit = _live_metrics_cache.get(_ck)
         if _hit and _hit[0] > _now:
             return _hit[1]
+    # Re-validated HERE, like run_as_game_user, send_console_command and _rewrite_crontab: both
+    # values below are interpolated into the shell command unquoted, and GameServer's @validates
+    # fires on assignment only — never on a row loaded from the database, so a row written before
+    # the validator existed or restored from a tampered backup reaches this code unchecked. This
+    # one runs by itself on every dashboard and status poll, as server.username (root on most
+    # remotes). A name that fails is dropped rather than refused: the host's own figures are
+    # still worth reporting, and the game's read as zero instead of as a command.
+    if short_name and not _SAFE_GAME_IDENT.match(str(short_name)):
+        _log.warning("live metrics: refusing to interpolate game user %r", short_name)
+        short_name = None
+    if game_port:
+        try:
+            game_port = int(game_port)
+        except (TypeError, ValueError):
+            _log.warning("live metrics: refusing to interpolate game port %r", game_port)
+            game_port = None
     # Robust per-process jiffie sum (utime+stime). /proc/pid/stat's comm field can
     # contain spaces/parens, so split on the LAST ')' before reading numeric fields.
     def _gjiffies(tag):
