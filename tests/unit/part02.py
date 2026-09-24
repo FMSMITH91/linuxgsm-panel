@@ -1304,6 +1304,17 @@ try:
     check("ufw limit: a failed re-allow of the other protocol leaves the bare rule, and says so",
           _ok is False and ("28016", "ALLOW", "rustserver") in _rules and "28016/udp" in _msg,
           "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
+    # ...but the read-back, not the failed re-allow, decides: where the limit rewrote a 28016/tcp
+    # allow ABOVE the bare rule, it is what tcp meets first, and udp is still open through the bare.
+    _rules = [("28016/tcp", "ALLOW", ""), ("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, **k:
+                               ("", "ERROR: timed out", 1) if (v, list(a)[:1]) == ("ufw-allow-port", ["28016/udp"])
+                               else _i(s, v, a, **k))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: ...while a limit already ahead of the bare rule is limited, udp left open",
+          _ok is True and _rules == [("28016/tcp", "LIMIT", ""), ("28016", "ALLOW", "rustserver")],
+          "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
     # ...and a re-allow that "worked" without the rule appearing is caught by the read-back.
     _rules = [("28016", "ALLOW", "rustserver")]
     _fake_ufw_n(_rules)

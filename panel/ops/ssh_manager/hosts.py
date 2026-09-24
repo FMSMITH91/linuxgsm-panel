@@ -343,7 +343,7 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
     # other protocol open under the same comment, THEN drop the bare rule (this protocol is
     # already covered by the limit above, so nothing is ever left unallowed).
     other = "udp" if proto == "tcp" else "tcp"
-    split = False
+    split, unsplit = False, ""
     for r in _ufw_public_rules(before):
         if r["to"] == str(port) and r["action"] == "ALLOW":
             _cmt = re.sub(r"[^A-Za-z0-9 _.-]", "", r["comment"])[:60]
@@ -352,13 +352,14 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
             # ...and ONLY once it is. Its exit code was ignored, so when the re-allow failed (the
             # timeout, on a ufw slowed by hundreds of auto-block rules) the bare rule went anyway:
             # the other protocol closed — gameplay, on a Source-style server — and the read-back,
-            # which looked at the limited protocol only, answered "now rate limited".
+            # which looked at the limited protocol only, answered "now rate limited". Now the bare
+            # rule stays, and the read-back decides whether the limit is reached anyway.
             if o_rc != 0:
-                return False, ("The limit for %s was added, but %d/%s could not be re-opened on its "
-                               "own (%s), so the `%d` rule that opens both was left in place — and "
-                               "it is still matched ahead of the limit."
-                               % (spec, port, other, (o_err or o_out or "exit %s" % o_rc)
-                                  .replace("\n", " ").strip()[:120], port))
+                unsplit = (" The panel could not split it: re-opening %d/%s on its own failed (%s), "
+                           "so the rule opening both was left in place."
+                           % (port, other, (o_err or o_out or "exit %s" % o_rc)
+                              .replace("\n", " ").strip()[:120]))
+                break
             _core.run_privileged(server, "ufw-delete-allow-port", [str(port)], timeout=15)
             split = True
             break
@@ -376,7 +377,8 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
     first = _ufw_first_public_rule(after, port, proto)
     if first is None or first["action"] != "LIMIT":
         return False, ("%s is still matched first by `%s`, so the limit is never reached — remove "
-                       "or narrow that rule." % (spec, first["detail"] if first else "nothing"))
+                       "or narrow that rule.%s" % (spec, first["detail"] if first else "nothing",
+                                                   unsplit))
     if split:
         # The split must not have closed what the bare rule kept open for the other protocol.
         o_was = _ufw_first_public_rule(before, port, other)
