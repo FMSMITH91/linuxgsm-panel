@@ -2888,25 +2888,76 @@ def do_content_script_present(args, content):
     return 0 if (os.path.isfile(path) and os.access(path, os.X_OK)) else 1
 
 
+def _remove_at(parent_fd, name):
+    """Remove `name` — a file, a link, or a whole tree — relative to the directory `parent_fd`,
+    never following a symlink at ANY depth. A link is removed as a link.
+
+    Every directory is entered by descriptor with O_NOFOLLOW and checked to be the one just
+    lstat'ed, so a name swapped for a link between the two is left alone rather than followed."""
+    try:
+        st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(st.st_mode):
+        os.unlink(name, dir_fd=parent_fd)
+        return
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    except OSError:
+        return                    # became a link (ELOOP) or vanished: not ours to chase
+    try:
+        if not os.path.samestat(st, os.fstat(fd)):
+            return
+        with os.scandir(fd) as it:
+            names = [e.name for e in it]
+        for child in names:
+            _remove_at(fd, child)
+    finally:
+        os.close(fd)
+    os.rmdir(name, dir_fd=parent_fd)
+
+
+def _remove_under_home(user, parts):
+    """Remove home_of(user)/<parts...> as root, walking EVERY component by descriptor.
+
+    content_path() builds a correct STRING, and that is all it can do: the account owns its home,
+    so it can make `serverfiles` or `lgsm` a symlink to anywhere, and shutil.rmtree's own symlink
+    guard covers only the LAST component — an intermediate link is followed like any directory.
+    `rm -rf ~/serverfiles` + `ln -s /home/<another box>/serverfiles ~/serverfiles` then had root
+    delete another tenant's content. Here the home is opened O_NOFOLLOW (its parent, HOME_ROOT, is
+    root's), each intermediate directory is opened O_NOFOLLOW relative to the last, and the final
+    entry is removed relative to that pinned directory. A link anywhere on the way ends the walk."""
+    content_path(user, *parts)            # the same validation, for its refusals
+    fd = os.open(home_of(user), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts[:-1]:
+            nfd = os.open(v_ident(part), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        _remove_at(fd, v_ident(parts[-1]))
+    finally:
+        os.close(fd)
+
+
 def do_content_game_remove(args, content):
     """Remove one game's content and, if it has one, its LinuxGSM script and config.
 
-    Three `rm -rf`s as root. Every path comes from content_path(), so the only inputs are a
-    validated user name and a validated identifier — a caller cannot name what gets deleted."""
+    Three removals as root. Every path comes from validated pieces, so the only inputs are a
+    validated user name and a validated identifier — a caller cannot name what gets deleted. And
+    every one is walked by descriptor (_remove_under_home), because the account whose home this is
+    can turn any directory on the way into a symlink."""
     user, game, script = args[0], args[1], args[2]
-    targets = [content_path(user, CONTENT_SUBDIR, game)]
+    targets = [(CONTENT_SUBDIR, game)]
     if script != "-":
-        targets.append(content_path(user, script))
-        targets.append(content_path(user, "lgsm", "config-lgsm", script))
-    for path in targets:
-        shutil.rmtree(path, ignore_errors=True)
-        if os.path.isfile(path):
-            try:
-                os.unlink(path)
-            except OSError:
-                # Best effort, as the shell form was: a game whose files are already gone, or a
-                # path the filesystem will not let go of, must not abort the other removals.
-                pass
+        targets.append((script,))
+        targets.append(("lgsm", "config-lgsm", script))
+    for parts in targets:
+        try:
+            _remove_under_home(user, parts)
+        except OSError:
+            # Best effort, as the shell form was: a game whose files are already gone, a link on the
+            # way, or a path the filesystem will not let go of must not abort the other removals.
+            pass
     return 0
 
 

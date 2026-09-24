@@ -2080,6 +2080,47 @@ try:
     check("helper gmod-mount-read: a readable mount.cfg still reports success and its contents",
           _cs_rc_ok == 0 and _cs_out2 == '"cstrike" "/home/cu/serverfiles/cstrike"\n',
           "rc=%s out=%r" % (_cs_rc_ok, _cs_out2))
+
+    # 5. content-game-remove: three shutil.rmtree calls as root on paths content_path() built as
+    #    STRINGS. rmtree's symlink guard covers the last component only, and the account owns its
+    #    home — so `ln -s /home/<another box>/serverfiles ~/serverfiles` (or the same for ~/lgsm)
+    #    had root delete another tenant's content. Both intermediate links are planted here, aimed
+    #    at directories outside the home holding the exact names the verb removes.
+    _cs_other = os.path.join(_cs_tmp, "otherbox")
+    os.makedirs(os.path.join(_cs_other, "serverfiles", "cstrike", "maps"))
+    os.makedirs(os.path.join(_cs_other, "lgsm", "config-lgsm", "cssserver"))
+    with open(os.path.join(_cs_other, "serverfiles", "cstrike", "maps", "keep.bsp"), "w") as _fh:
+        _fh.write("x")
+    os.rename(_cs_sf, _cs_sf + ".real")
+    os.symlink(os.path.join(_cs_other, "serverfiles"), _cs_sf)
+    os.symlink(os.path.join(_cs_other, "lgsm"), os.path.join(_cs_home, "lgsm"))
+    _helper.do_content_game_remove([_cs_me, "cstrike", "cssserver"], "")
+    check("helper content-game-remove: a symlinked ~/serverfiles is not followed out of the home",
+          os.path.isfile(os.path.join(_cs_other, "serverfiles", "cstrike", "maps", "keep.bsp")),
+          "the other box's content was deleted")
+    check("helper content-game-remove: ...nor a symlinked ~/lgsm",
+          os.path.isdir(os.path.join(_cs_other, "lgsm", "config-lgsm", "cssserver")),
+          "the other box's LinuxGSM config was deleted")
+    check("helper content-game-remove: ...and the links themselves are left, not replaced",
+          os.path.islink(_cs_sf) and os.path.islink(os.path.join(_cs_home, "lgsm")))
+    # Positive control: the real layout is still removed — content tree, script, config — or the
+    # checks above would pass against a verb that deletes nothing.
+    os.unlink(_cs_sf)
+    os.unlink(os.path.join(_cs_home, "lgsm"))
+    os.rename(_cs_sf + ".real", _cs_sf)
+    os.makedirs(os.path.join(_cs_home, "lgsm", "config-lgsm", "cssserver", "sub"))
+    with open(os.path.join(_cs_home, "cssserver"), "w") as _fh:
+        _fh.write("#!/bin/bash\n")
+    os.symlink(_cs_other, os.path.join(_cs_sf, "cstrike", "maps", "escape"))
+    _helper.do_content_game_remove([_cs_me, "cstrike", "cssserver"], "")
+    check("helper content-game-remove: the real content, script and config are all removed",
+          not os.path.lexists(os.path.join(_cs_sf, "cstrike"))
+          and not os.path.lexists(os.path.join(_cs_home, "cssserver"))
+          and not os.path.lexists(os.path.join(_cs_home, "lgsm", "config-lgsm", "cssserver"))
+          and os.path.isdir(os.path.join(_cs_home, "lgsm", "config-lgsm")),
+          repr(os.listdir(_cs_home)))
+    check("helper content-game-remove: ...a link INSIDE the tree is removed as a link, not followed",
+          os.path.isfile(os.path.join(_cs_other, "serverfiles", "cstrike", "maps", "keep.bsp")))
 finally:
     _helper.HOME_ROOT, _helper.CONTENT_CRON_PREFIX = _cs_saved_root, _cs_saved_cron
     _shutil.rmtree(_cs_tmp, ignore_errors=True)
