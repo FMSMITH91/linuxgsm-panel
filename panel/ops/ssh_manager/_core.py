@@ -1137,16 +1137,46 @@ def create_game_user(server, user, timeout=30):
     arrange and the group means nothing there, and an older helper without the verb must not turn
     a working server install into a failed one. Returns user-create's own (out, err, rc)."""
     out, err, rc = run_privileged(server, "user-create", [user], timeout=timeout)
-    if rc == 0 and is_local_server(server):
-        try:
-            _, g_err, g_rc = run_privileged(server, "gameuser-group", [user], timeout=15,
-                                            merge_stderr=False)
-            if g_rc != 0:
-                _log.warning("could not add %s to %s: %s", user, _priv.GAME_GROUP,
-                             (g_err or "")[:200])
-        except Exception:
-            _log.debug("gameuser-group failed (non-fatal)", exc_info=True)
+    if rc == 0:
+        enrol_game_user(server, user)
     return out, err, rc
+
+
+def enrol_game_user(server, user):
+    """Put an EXISTING account in the group the panel's narrow sudoers grant names, on the panel's
+    own host. Returns None when that is done or not needed, else the reason it was not — the
+    helper's own words when it refused (an account that can already reach root is never enrolled).
+
+    Two callers, because an account reaches the panel two ways: create_game_user makes one, and
+    discovery IMPORTS one somebody else made. The import used to add a GameServer row and nothing
+    else, and every per-account helper verb (lgsm-command, the file and backup reads, crontab-list)
+    refuses an account outside the group on a narrow-grant install — so an imported server showed
+    up, could not be started, stopped or downloaded from, and nothing said why until install.sh
+    next ran as root and enrolled it.
+
+    Not needed: a remote host (the group means nothing there), and the panel's OWN account — the
+    helper already accepts the account that invoked it, and would refuse to enrol it anyway, since
+    the panel user holds sudo rules of its own. Never raises: the caller's own work has succeeded
+    by the time this runs, and an older helper without the verb must not turn that into a failure."""
+    if not is_local_server(server):
+        return None
+    try:
+        import pwd
+        if user == pwd.getpwuid(os.getuid()).pw_name:
+            return None
+    except (ImportError, KeyError):
+        pass
+    try:
+        _, g_err, g_rc = run_privileged(server, "gameuser-group", [user], timeout=15,
+                                        merge_stderr=False)
+    except Exception:
+        _log.debug("gameuser-group failed (non-fatal)", exc_info=True)
+        return "the enrolment could not be run"
+    if g_rc != 0:
+        reason = (g_err or "").strip()[:200] or ("exit status %s" % g_rc)
+        _log.warning("could not add %s to %s: %s", user, _priv.GAME_GROUP, reason)
+        return reason
+    return None
 
 
 def read_as_game_user(server, user, sh, timeout=30):

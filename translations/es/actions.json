@@ -88,6 +88,7 @@
   "Failed to update daily restart": "No se pudo actualizar el reinicio diario",
   "Files upload one at a time, so a large tree takes a while — leave the page open.": "Los archivos se suben de uno en uno, así que un árbol grande tarda un rato: deja la página abierta.",
   "Game CPU %": "CPU del juego %",
+  "Imported, but not added to the panel’s game-account group. Where the panel’s sudo is limited to its helper, it cannot control these servers.": "Importado, pero no se añadió al grupo de cuentas de juego del panel. Donde el sudo del panel se limita a su asistente, no puede controlar estos servidores.",
   "Incorrect password.": "Contraseña incorrecta.",
   "Install and enable automatic security updates (unattended-upgrades)? This changes the system update settings.": "¿Instalar y activar las actualizaciones de seguridad automáticas (unattended-upgrades)? Esto cambia los ajustes de actualización del sistema.",
   "Install status unknown": "Estado de instalación desconocido",

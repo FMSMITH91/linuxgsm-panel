@@ -3759,6 +3759,32 @@ try:
     check("create_game_user: an enrolment that FAILS still reports the account as created",
           _r3 == 0 and [v for v, _a in _cgu] == ["user-create", "gameuser-group"],
           "rc=%s %s" % (_r3, _cgu))
+
+    # enrol_game_user is the half an IMPORTED account needs as well: discovery adds a row for an
+    # account somebody else made, and on a narrow-grant host the helper refuses every per-account
+    # verb for an account outside the group. It returns the helper's refusal rather than only
+    # logging it, so the import can say which servers the panel cannot drive.
+    _sm_core.is_local_server = lambda s: True
+    _sm_core.run_privileged = lambda s, verb, args=(), **k: (
+        _cgu.append((verb, list(args))),
+        ("", "refusing to enrol steam in lgsmpanel-games: it can already run sudo\n", 1))[1]
+    _cgu.clear(); _eg_refused = _sm_core.enrol_game_user(NS(), "steam")
+    check("enrol_game_user: a helper refusal comes back as the reason, not swallowed",
+          _cgu == [("gameuser-group", ["steam"])] and "already run sudo" in (_eg_refused or ""),
+          "%s -> %r" % (_cgu, _eg_refused))
+    _sm_core.run_privileged = _cgu_rp
+    _cgu.clear(); _eg_ok = _sm_core.enrol_game_user(NS(), "rustserver")
+    check("enrol_game_user: ...and one that succeeds reports nothing",
+          _eg_ok is None and _cgu == [("gameuser-group", ["rustserver"])],
+          "%s -> %r" % (_cgu, _eg_ok))
+    import pwd as _eg_pwd
+    _cgu.clear(); _eg_self = _sm_core.enrol_game_user(NS(), _eg_pwd.getpwuid(os.getuid()).pw_name)
+    check("enrol_game_user: the panel's own account is not sent (the helper accepts its caller)",
+          _eg_self is None and _cgu == [], str(_cgu))
+    _sm_core.is_local_server = lambda s: False
+    _cgu.clear(); _eg_remote = _sm_core.enrol_game_user(NS(), "rustserver")
+    check("enrol_game_user: a remote host is not sent the local-only verb",
+          _eg_remote is None and _cgu == [], str(_cgu))
 finally:
     _sm_core.run_privileged, _sm_core.is_local_server = _o_rp, _o_local4
 
