@@ -60,7 +60,11 @@
       row.appendChild(chip(tag));
       var meta = document.createElement('span');
       meta.className = 'text-secondary small';
-      meta.textContent = (tag.server_ids || []).length + ' server(s)'
+      // server_count, not server_ids.length: the ids are only the viewer's servers, and a Delete
+      // strips the tag from every server that carries it.
+      var count = (typeof tag.server_count === 'number') ? tag.server_count
+                                                          : (tag.server_ids || []).length;
+      meta.textContent = count + ' server(s)'
                          + (tag.notify ? '' : ' · alerts muted');
       row.appendChild(meta);
       var del = document.createElement('button');

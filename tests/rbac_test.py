@@ -634,6 +634,19 @@ try:
                               if t["id"] == _tr_id), None)
             check("tag list: ...while a superadmin still sees every server on it",
                   _tr_admin is not None and other_id in _tr_admin, "got %r" % (_tr_admin,))
+            # A MANAGE_SERVERS holder scoped to one host can DELETE the tag, which strips it from
+            # every server panel-wide — so the count they are shown is every server's. The Tags
+            # card printed the length of the filtered ids: "0 server(s)" on a tag other hosts'
+            # servers carry, one click from removing it (and its alert muting) from all of them.
+            _tr_ci = next((t for t in (_ci.get("/api/tags").get_json() or {})["tags"]
+                           if t["id"] == _tr_id), None)
+            check("tag list: a scoped admin who can delete a tag is told how many servers carry it",
+                  _tr_ci is not None and _tr_ci.get("server_count") == 2
+                  and _tr_ci.get("server_ids") == [accessible_id], "got %r" % (_tr_ci,))
+            _tr_c = next((t for t in (c.get("/api/tags").get_json() or {})["tags"]
+                          if t["id"] == _tr_id), None)
+            check("tag list: ...while a caller who cannot delete it gets only their own count",
+                  _tr_c is not None and _tr_c.get("server_count") == 1, "got %r" % (_tr_c,))
         finally:
             with app.app_context():
                 db.session.delete(db.session.get(_TagR, _tr_id))
