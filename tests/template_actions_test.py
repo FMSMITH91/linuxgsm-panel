@@ -374,8 +374,11 @@ check(bool(_obs_walks) and all("guardedAbove" in ln for ln in _obs_walks),
 # "found" Object.prototype too, and a player named "constructor" was displayed as
 # "function Object() { [native code] }" to anyone not reading English.
 _i18n_code = re.sub(r"//[^\n]*", "", _i18n_src)          # comments name the old form
-_i18n_lk = _i18n_code[_i18n_code.index("function i18nLookup("):]
-_i18n_lk = _i18n_lk[:_i18n_lk.index("\n}")]
+try:
+    _i18n_lk = _i18n_code[_i18n_code.index("function i18nLookup("):]
+    _i18n_lk = _i18n_lk[:_i18n_lk.index("\n}")]
+except ValueError:          # no i18nLookup at all: fail the check below by name, not crash the suite
+    _i18n_lk = ""
 check("hasOwnProperty.call(" in _i18n_lk and "typeof c[key] === 'string'" in _i18n_lk,
       "i18n: i18nLookup() reads own string keys only", "it can return an inherited member")
 check(_i18n_code.count("i18nLookup(") >= 4 and not re.search(r"I18N\s*\[", _i18n_code),
@@ -388,15 +391,21 @@ check(_i18n_code.count("i18nLookup(") >= 4 and not re.search(r"I18N\s*\[", _i18n
 # text. Measured in a browser against the old and new i18n.js (Spanish catalog): old — tooltip
 # stays English then reverts to "not checked yet", nodeValue 'Reachable' shows 'En línea'; new —
 # both translate, and survive setLang es->es and ->en.
-_i18n_obs = _i18n_code[_i18n_code.index("new MutationObserver"):]
-_i18n_obs = _i18n_obs[:_i18n_obs.index("});", _i18n_obs.index(".observe(")) + 3]
+try:
+    _i18n_obs = _i18n_code[_i18n_code.index("new MutationObserver"):]
+    _i18n_obs = _i18n_obs[:_i18n_obs.index("});", _i18n_obs.index(".observe(")) + 3]
+except ValueError:
+    _i18n_obs = ""
 check("attributes:true" in _i18n_obs and "attributeFilter:ATTRS" in _i18n_obs
       and re.search(r"m\.type === 'attributes'.*?guardedAbove\(el\).*?tAttr\(el, m\.attributeName\)",
                     _i18n_obs, re.S) is not None,
       "i18n: the observer translates a title/placeholder/aria-label a script sets later (guard honoured)",
       "attribute changes are not observed, so JS-set tooltips stay English")
-_i18n_tt = _i18n_code[_i18n_code.index("function tText("):_i18n_code.index("function tAttr(")]
-_i18n_ta = _i18n_code[_i18n_code.index("function tAttr("):_i18n_code.index("function guardedAbove(")]
+try:
+    _i18n_tt = _i18n_code[_i18n_code.index("function tText("):_i18n_code.index("function tAttr(")]
+    _i18n_ta = _i18n_code[_i18n_code.index("function tAttr("):_i18n_code.index("function guardedAbove(")]
+except ValueError:
+    _i18n_tt = _i18n_ta = ""
 check("cur !== node.__i18nW" in _i18n_tt and "node.__i18nW = out" in _i18n_tt
       and "cur !== el[wk]" in _i18n_ta and "el[wk] = out" in _i18n_ta,
       "i18n: a value a script changed since the last translation is re-seeded as the English",
@@ -2548,8 +2557,11 @@ check("window.localizeTimes(cur)" in _pj_rs
 # unguarded dispatcher turned that markup back into authenticated requests on the next click.
 # Measured in a browser: data-action="fetch", "setTimeout" and "confirmDialog" now do nothing,
 # while a window.x = function action and a function declared before panel.js both still fire.
-_pj_af = _pj_src[_pj_src.index("function _actionFn("):]
-_pj_af = _pj_af[:_pj_af.index("\n}")]
+try:
+    _pj_af = _pj_src[_pj_src.index("function _actionFn("):]
+    _pj_af = _pj_af[:_pj_af.index("\n}")]
+except ValueError:          # no resolver at all: the checks below fail by name, not crash the suite
+    _pj_af = ""
 _pj_fire = _pj_src[_pj_src.index("function fire(el, e)"):]
 _pj_fire = _pj_fire[:_pj_fire.index("fn.apply(")]
 check("return fn;" in _pj_af, "dispatch: (control) the _actionFn slice is the resolver", "sliced the wrong text")
