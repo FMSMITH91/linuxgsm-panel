@@ -1052,6 +1052,122 @@ check("install.sh: the root-owned pieces are staged with git cat-file, not copie
       '_gitc cat-file blob "HEAD:${rel}"' in _inst)
 check("install.sh: staging lands in the root-owned HELPER_DIR, not a panel-writable path",
       'local rel="$1" out="${HELPER_DIR}/.stage-$2"' in _inst)
+
+# ...but the OBJECT STORE is panel-owned too, and git trusts it. A replace ref, or a loose object
+# written under the committed blob's name, makes `cat-file blob HEAD:<path>` return the panel's
+# bytes while HEAD still names the real upstream commit; and a checkout with no .git was copied
+# as-is. As root on a checkout the panel user has a hand in, a boundary file must come from ROOT'S
+# OWN clone of REPO_URL, at the panel's HEAD only once that clone shows it is upstream.
+#
+# Run the real functions against real repositories. `id -u` says 0, and the files are this test
+# user's, so the checkout reads as the panel user's, which is exactly the update-path condition.
+import subprocess as _rs_sub
+import zlib as _rs_zlib
+from shlex import quote as _rs_q
+
+
+def _rs_git(*a, cwd=None, inp=None):
+    return _rs_sub.run(["git", *a], cwd=cwd, input=inp, capture_output=True,
+                       text=True).stdout.strip()
+
+
+_rs_fns = (_inst[_inst.index("_gitc() {"):_inst.index("\n}\n", _inst.index("_gitc() {")) + 3]
+           + _inst[_inst.index('ROOT_GIT="${HELPER_DIR}/.source.git"'):
+                   _inst.index("\n}\n", _inst.index("stage_root_source() {")) + 3])
+_rs_sb = _tempfile.mkdtemp(prefix="rootsrc-")
+try:
+    _rs_up = os.path.join(_rs_sb, "upstream")
+    os.makedirs(os.path.join(_rs_up, "tools"))
+    _rs_git("init", "-q", "-b", "main", _rs_up)
+    for _k, _v in (("user.email", "t@example.invalid"), ("user.name", "t"),
+                   ("commit.gpgsign", "false")):
+        _rs_git("config", _k, _v, cwd=_rs_up)
+    with open(os.path.join(_rs_up, "tools", "panel-helper"), "w") as _f:
+        _f.write("GOOD-HELPER\n")
+    _rs_git("add", "-A", cwd=_rs_up)
+    _rs_git("commit", "-qm", "upstream", cwd=_rs_up)
+
+    def _rs_case(name, tamper, roots=False):
+        """Clone upstream as 'the panel's checkout', tamper with it, stage as 'root'."""
+        d = os.path.join(_rs_sb, name)
+        panel, helper = os.path.join(d, "panel"), os.path.join(d, "helper")
+        os.makedirs(helper)
+        _rs_git("clone", "-q", "--no-hardlinks", _rs_up, panel)
+        for _k, _v in (("user.email", "t@example.invalid"), ("user.name", "t"),
+                       ("commit.gpgsign", "false")):
+            _rs_git("config", _k, _v, cwd=panel)
+        tamper(panel)
+        body = ("id() { [ \"${1:-}\" = -u ] && echo 0 || command id \"$@\"; }\n"
+                "sudo() { [ \"$1\" = -u ] && shift 2; \"$@\"; }\n"
+                "warn() { echo \"WARN $*\"; }\n"
+                "H_SUDO=''\nPANEL_DIR=%s\nHELPER_DIR=%s\nREPO_URL=%s\nDEFAULT_BRANCH=main\n"
+                % (_rs_q(panel), _rs_q(helper), _rs_q("file://" + _rs_up))
+                + _rs_fns
+                + ("_checkout_is_roots() { return 0; }\n" if roots else "")
+                + "_prepare_root_source\n"
+                  "if s=\"$(stage_root_source tools/panel-helper panel-helper)\"; then\n"
+                  "  echo \"STAGED=$(cat \"$s\")\"\nelse\n  echo STAGED-NOTHING\nfi\n")
+        r = _rs_sub.run(["bash", "-c", body], capture_output=True, text=True)
+        return r.stdout + r.stderr
+
+    def _rs_replace_ref(panel):
+        good = _rs_git("rev-parse", "HEAD:tools/panel-helper", cwd=panel)
+        evil = _rs_git("hash-object", "-w", "--stdin", cwd=panel, inp="EVIL-HELPER\n")
+        _rs_git("replace", "-f", good, evil, cwd=panel)
+
+    def _rs_loose_shadow(panel):
+        # Pack everything, then write a LOOSE object under the committed blob's name with other
+        # content. git reads the loose one first and does not re-hash it.
+        _rs_git("gc", "-q", "--prune=now", cwd=panel)
+        good = _rs_git("rev-parse", "HEAD:tools/panel-helper", cwd=panel)
+        payload = b"EVIL-HELPER\n"
+        p = os.path.join(panel, ".git", "objects", good[:2], good[2:])
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        if os.path.exists(p):
+            os.unlink(p)
+        with open(p, "wb") as f:
+            f.write(_rs_zlib.compress(b"blob %d\0" % len(payload) + payload))
+
+    def _rs_no_git(panel):
+        _shutil.rmtree(os.path.join(panel, ".git"))
+        with open(os.path.join(panel, "tools", "panel-helper"), "w") as f:
+            f.write("EVIL-HELPER\n")
+
+    def _rs_local_commit(panel):
+        with open(os.path.join(panel, "tools", "panel-helper"), "w") as f:
+            f.write("LOCAL-HELPER\n")
+        _rs_git("commit", "-qam", "local only", cwd=panel)
+
+    # The attacks really do fool the panel's own git — otherwise the checks below prove nothing.
+    _rs_probe = os.path.join(_rs_sb, "probe")
+    _rs_git("clone", "-q", "--no-hardlinks", _rs_up, _rs_probe)
+    _rs_replace_ref(_rs_probe)
+    check("install.sh: (premise) a replace ref makes the panel's git return other bytes",
+          _rs_git("cat-file", "blob", "HEAD:tools/panel-helper", cwd=_rs_probe) == "EVIL-HELPER")
+
+    _rs_out = _rs_case("clean", lambda p: None)
+    check("install.sh: root stages an untouched upstream checkout's helper (positive control)",
+          "STAGED=GOOD-HELPER" in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("replace", _rs_replace_ref)
+    check("install.sh: as root, a replace ref in the panel's .git does not reach the staged helper",
+          "STAGED=GOOD-HELPER" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("loose", _rs_loose_shadow)
+    check("install.sh: ...nor does a loose object shadowing the committed blob",
+          "STAGED=GOOD-HELPER" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("nogit", _rs_no_git)
+    check("install.sh: ...and deleting .git no longer makes root copy the tree",
+          "STAGED-NOTHING" in _rs_out and "EVIL" not in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("local", _rs_local_commit)
+    check("install.sh: a HEAD that is not on upstream's branch is refused, and says so",
+          "STAGED-NOTHING" in _rs_out and "LOCAL-HELPER" not in _rs_out
+          and "not on file://" in _rs_out, _rs_out[-300:])
+    # ...while a checkout that is ROOT'S OWN (a fresh install from an operator's clone, before the
+    # chown) is still read directly, local commits and all.
+    _rs_out = _rs_case("rootowned", _rs_local_commit, roots=True)
+    check("install.sh: a checkout that is entirely root's is still staged from its own HEAD",
+          "STAGED=LOCAL-HELPER" in _rs_out, _rs_out[-300:])
+finally:
+    _shutil.rmtree(_rs_sb, ignore_errors=True)
 for _src in ("HELPER_SRC", "DBM_SRC"):
     check("install.sh: no longer installs root-owned files straight from %s" % _src,
           _src not in _inst)
@@ -1292,6 +1408,76 @@ try:
     check("install.sh: ...and the fresh path, where PANEL_DIR is still root's, is unchanged",
           "SUDO" not in _r and "python3 -m venv" in _r, repr(_r[:200]))
 
+    # requirements.txt must pin the WHOLE closure, not just the direct dependencies. Pinning 12
+    # packages left the rest floating. install.sh skips pip when the file is unchanged, and
+    # `pip install -r` never upgrades a package that already satisfies a range, so a security fix
+    # in Werkzeug or python-engineio never reached a host. Dependabot bumps only what is listed,
+    # and pip-audit (now --no-deps) audits only what is listed. So: every listed package's own
+    # requirements, for CPython 3.10-3.14 on Linux, must be listed too, at a version that
+    # satisfies them. Read from the installed metadata, which must BE the pinned versions.
+    import importlib.metadata as _rq_md
+    try:
+        from packaging.requirements import Requirement as _RqReq
+        from packaging.utils import canonicalize_name as _rq_canon
+    except ImportError:
+        from pip._vendor.packaging.requirements import Requirement as _RqReq
+        from pip._vendor.packaging.utils import canonicalize_name as _rq_canon
+
+    def _rq_closure_gaps(text):
+        pins, gaps = {}, []
+        for ln in text.splitlines():
+            ln = ln.split("#", 1)[0].strip()
+            if not ln:
+                continue
+            req = _RqReq(ln)
+            spec = [s for s in req.specifier if s.operator == "=="]
+            if len(spec) != 1 or len(req.specifier) != 1:
+                gaps.append("%s is not pinned with ==" % ln)
+                continue
+            pins[_rq_canon(req.name)] = spec[0].version
+        envs = [{"python_version": "3.%d" % m, "python_full_version": "3.%d.0" % m,
+                 "sys_platform": "linux", "platform_system": "Linux", "platform_machine": mach,
+                 "implementation_name": "cpython", "platform_python_implementation": "CPython",
+                 "os_name": "posix", "extra": ""}
+                for m in (10, 11, 12, 13, 14) for mach in ("x86_64", "aarch64")]
+        for name, ver in sorted(pins.items()):
+            try:
+                dist = _rq_md.distribution(name)
+            except _rq_md.PackageNotFoundError:
+                gaps.append("%s==%s is not installed here, so its requirements cannot be read"
+                            % (name, ver))
+                continue
+            if dist.version != ver:
+                gaps.append("%s is installed at %s but pinned at %s (pip install -r "
+                            "requirements.txt)" % (name, dist.version, ver))
+                continue
+            for rd in dist.requires or []:
+                sub = _RqReq(rd)
+                if sub.marker is not None and not any(sub.marker.evaluate(e) for e in envs):
+                    continue
+                sub_name = _rq_canon(sub.name)
+                if sub_name not in pins:
+                    gaps.append("%s needs %s, which is not pinned" % (name, rd))
+                elif not sub.specifier.contains(pins[sub_name], prereleases=True):
+                    gaps.append("%s needs %s, but %s is pinned" % (name, rd, pins[sub_name]))
+        return pins, gaps
+
+    _rq_txt = open(os.path.join(_root, "requirements.txt"), encoding="utf-8").read()
+    _rq_pins, _rq_gaps = _rq_closure_gaps(_rq_txt)
+    check("requirements.txt: pins every package the panel's dependencies pull in",
+          len(_rq_pins) > 12 and not _rq_gaps, "; ".join(_rq_gaps[:6]))
+    # The gate catches a gap (so the pass above is not an empty list for want of looking): drop
+    # one transitive pin and it must be named.
+    _rq_cut = "\n".join(ln for ln in _rq_txt.splitlines() if not ln.startswith("werkzeug=="))
+    _rq_cut_gaps = _rq_closure_gaps(_rq_cut)[1]
+    check("requirements.txt: ...and the closure check names a dropped transitive pin (control)",
+          any("werkzeug" in g for g in _rq_cut_gaps), repr(_rq_cut_gaps[:3]))
+    _rq_sec = open(os.path.join(_root, ".github", "workflows", "security-code.yml"),
+                   encoding="utf-8").read()
+    check("security-code: pip-audit audits the pinned set itself, not a fresh resolution",
+          re.search(r"^\s*- run: pip-audit --no-deps -r requirements\.txt\s*$", _rq_sec, re.M)
+          is not None, "pip-audit resolves its own environment again")
+
     # origin: the URL the root-owned installs are taken from, compared against this file's own
     # REPO_URL — which the panel cannot edit, because install.sh runs from outside the checkout.
     _su_git = os.path.join(_su_sb, "git")
@@ -1372,6 +1558,26 @@ try:
     check("install.sh: ...and a member of a privileged GROUP is 'yes' without consulting sudo",
           (_r.stdout or "").strip().endswith("yes") and "SUDO WAS CALLED" not in _r.stdout,
           repr(_r.stdout[:120]))
+    # ...and "privileged" is not only sudo. docker/lxd/incus-admin/libvirt reach root through their
+    # daemon, disk through the block device, staff through /usr/local; adm and shadow read logs and
+    # hashes. None needs a sudoers entry, so `sudo -l -U` says "not allowed" and the account was
+    # enrolled into the become-any-member grant. Every group privileged.py already refuses as
+    # root-equivalent must be refused here too, with sudo answering the reassuring "no".
+    _cas_rootish = sorted(set(_privmod._NEVER_A_CONTENT_GROUP) | {"incus-admin", "libvirt"})
+    _cas_missed = []
+    for _g in _cas_rootish:
+        _r = _su_run(_cas + '\ncan_already_sudo x\n', "",
+                     extra=("id() { echo 'x games %s'; }\n" % _g
+                            + "sudo() { echo 'User x is not allowed to run sudo on h.'; }\n"))
+        if not (_r.stdout or "").strip().endswith("yes"):
+            _cas_missed.append("%s -> %r" % (_g, (_r.stdout or "").strip()[-20:]))
+    check("install.sh: ...including docker, lxd, disk and the other root-equivalent groups",
+          len(_cas_rootish) >= 12 and not _cas_missed, "; ".join(_cas_missed))
+    _r = _su_run(_cas + '\ncan_already_sudo x\n', "",
+                 extra=("id() { echo 'x games dockerish'; }\n"
+                        "sudo() { echo 'User x is not allowed to run sudo on h.'; }\n"))
+    check("install.sh: ...matched whole, so a lookalike group is still a plain 'no' (control)",
+          (_r.stdout or "").strip().endswith("no"), repr(_r.stdout[-40:]))
     # The caller must act on all three: only `no` may enrol.
     _sync_body = _su_body("sync_game_user_group")
     check("install.sh: ...and only a definite 'no' enrols the account",
@@ -1464,6 +1670,51 @@ try:
           "if port is None:" in _su_txt and "raise SystemExit(0)" in _su_txt
           and _su_txt.index("if port is None:") < _su_txt.index('cfg["port"] = port'),
           "the exhausted case still falls through to the config write")
+
+    # ...and it must not write THROUGH anything the panel user planted in data/. As root it used
+    # `open(cfg + ".tmp", "w")`, os.replace and os.chmod on paths inside a panel-owned directory,
+    # and all three follow a symlink, so root rewrote a file of the panel user's choosing. Run the
+    # real function, as this user, against the two plants that used to work.
+    _cp_fn = _su_between("choose_and_record_port() {", "\nPYEOF\n}\n")
+    _cp_sb = _tempfile.mkdtemp(prefix="portpick-")
+    try:
+        def _cp_run(plant, extra=""):
+            d = _tempfile.mkdtemp(dir=_cp_sb)
+            os.makedirs(os.path.join(d, "panel", "data"))
+            victim = os.path.join(d, "victim")
+            with open(victim, "w") as f:
+                f.write("VICTIM\n")
+            if plant:
+                os.symlink(victim, os.path.join(d, "panel", "data", plant))
+            r = _su_run(_cp_fn + '\nchoose_and_record_port 47100\necho "RC=$?"\n',
+                        "PANEL_DIR=%s\n" % _su_shlex.quote(os.path.join(d, "panel")), extra=extra)
+            cfg = os.path.join(d, "panel", "data", "config.json")
+            written = (open(cfg).read() if os.path.isfile(cfg) and not os.path.islink(cfg) else "")
+            return r, open(victim).read(), written
+
+        _r, _victim, _cfg = _cp_run(None)
+        check("install.sh: the port picker records the port it chose (positive control)",
+              '"port": 471' in _cfg and _victim == "VICTIM\n", repr((_r.stdout[-120:], _cfg)))
+        _r, _victim, _cfg = _cp_run("config.json.tmp")
+        check("install.sh: a symlink planted at the old temp name is not written through",
+              _victim == "VICTIM\n" and '"port": 471' in _cfg,
+              repr((_victim[:60], _r.stdout[-120:], _r.stderr[-160:])))
+        _r, _victim, _cfg = _cp_run("config.json")
+        check("install.sh: ...and a symlinked config.json is refused, not followed",
+              _victim == "VICTIM\n" and "RC=3" in _r.stdout
+              and "symbolic link" in _r.stderr, repr((_victim[:60], _r.stdout[-120:])))
+        # As root it drops to whoever owns PANEL_DIR, so the kernel refuses what the script misses.
+        _cp_sudo = ("id() { echo 0; }\n"
+                    "sudo() { echo \"SUDO $*\" >&2; shift 2; \"$@\"; }\n")
+        _r, _victim, _cfg = _cp_run(None, extra=_cp_sudo + "stat() { echo lgsmpanel; }\n")
+        check("install.sh: as root over a panel-owned PANEL_DIR, the port is written as its owner",
+              "SUDO -u lgsmpanel python3 -" in _r.stderr and '"port": 471' in _cfg,
+              repr(_r.stderr[-200:]))
+        _r, _victim, _cfg = _cp_run(None, extra=_cp_sudo + "stat() { echo root; }\n")
+        check("install.sh: ...while a root-owned PANEL_DIR (the fresh install) stays root (control)",
+              "SUDO" not in _r.stderr and '"port": 471' in _cfg, repr(_r.stderr[-200:]))
+    finally:
+        _shutil.rmtree(_cp_sb, ignore_errors=True)
 
     # ── the "already up to date" branch has to backfill EVERY root-owned piece ───────────────
     # That branch exists because root-owned state lives OUTSIDE the checkout and can be stale while
@@ -2035,6 +2286,7 @@ try:
                  "install() { echo \"INSTALL $*\"; }\n"
                  "ln() { echo \"LN $*\"; }\n"
                  "rm() { :; }\n"
+                 "_prepare_root_source() { :; }\n"
                  "stage_root_source() { echo /tmp/staged-recover.sh; }\n")
     _r_untrusted = _su_run(_su_recov, "HELPER_DIR=/usr/local/lib/lgsmp\n"
                            + _su_env + "ORIGIN_TRUSTED=0\n", extra=_su_rshim)
@@ -4168,9 +4420,70 @@ check("deploy: ...reads the system install through sudo",
       "sudo -n test -d" in _deploy_wf and "sudo -n stat -c %U" in _deploy_wf,
       "a plain [ -d ] / stat on the service user's home is false-y for the deploy user, and the "
       "script silently takes the wrong branch")
-check("deploy: ...and runs git as the checkout's owner, not as root",
-      'sudo -n -u "${OWNER}" git -C' in _deploy_wf,
-      "git as root on a repo owned by the service user trips safe.directory")
+# ...and ROOT EXECUTES NOTHING OUT OF THAT CHECKOUT. The system branch used to refresh
+# ${PD}/install.sh with `git checkout` as the service user and then run it with `sudo bash`, so on
+# every green merge root ran bytes from a tree AND a .git that the account the helper boundary
+# contains owns outright. Run the job's real `run:` block with ssh capturing what it sends, then run
+# THAT on a shimmed "host" (sudo/systemctl/git): record what root would execute, and what the file
+# held at the moment it ran.
+_dp_run = _deploy_raw[_deploy_raw.index("        run: |\n") + len("        run: |\n"):]
+_dp_run = "\n".join(_ln[10:] if _ln.startswith(" " * 10) else _ln
+                    for _ln in _dp_run.splitlines()) + "\n"
+_dp_sb = _tempfile.mkdtemp(prefix="deploy-")
+try:
+    _dp_pd = os.path.join(_dp_sb, "lgsmpanel", "linuxgsm-panel")
+    os.makedirs(_dp_pd)
+    with open(os.path.join(_dp_pd, "install.sh"), "w") as _dp_f:
+        _dp_f.write("#!/bin/bash\necho PANEL-OWNED-INSTALLER\n")
+    _dp_log = os.path.join(_dp_sb, "log")
+    _dp_shipped = "#!/bin/bash\necho SHIPPED-INSTALLER\n"
+    _dp_shims = (
+        'LOG=%s\n' % _shlex_q(_dp_log)
+        + 'systemctl() { echo %s; }\n' % _shlex_q(_dp_pd)
+        + 'git() { echo "GIT $*" >> "$LOG"; }\n'
+        # sudo: file plumbing runs for real (unprivileged); anything that would EXECUTE as root is
+        # recorded together with the bytes it would have run.
+        + 'sudo() {\n'
+          '  [ "$1" = -n ] && shift\n'
+          '  case "$1" in\n'
+          '    test|stat|mktemp|tee|rm) "$@" ;;\n'
+          '    -u) echo "AS-USER $*" >> "$LOG" ;;\n'
+          '    env) shift; while [ "${1#*=}" != "$1" ]; do shift; done\n'
+          '         echo "ROOT-EXEC $*" >> "$LOG"\n'
+          '         [ "$1" = bash ] && echo "ROOT-BYTES $(cat "$2")" >> "$LOG" ;;\n'
+          '    *) echo "ROOT-EXEC $*" >> "$LOG" ;;\n'
+          '  esac\n'
+          '}\n')
+    # The runner: its checkout holds the verified commit's install.sh; ssh just records the stream.
+    _dp_runner = os.path.join(_dp_sb, "runner")
+    os.makedirs(_dp_runner)
+    with open(os.path.join(_dp_runner, "install.sh"), "w") as _dp_f:
+        _dp_f.write(_dp_shipped)
+    _dp_stream = os.path.join(_dp_sb, "stream")
+    _dp_rr = _sh_sub.run(["bash", "-c", 'ssh() { cat > %s; }\n' % _shlex_q(_dp_stream) + _dp_run],
+                         capture_output=True, text=True, cwd=_dp_runner,
+                         env=dict(os.environ, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu"))
+    _dp_sent = open(_dp_stream).read() if os.path.exists(_dp_stream) else ""
+    _dp_r = _sh_sub.run(["bash", "-c", _dp_shims + _dp_sent], capture_output=True, text=True,
+                        cwd=_dp_sb, env=dict(os.environ, HOME=_dp_sb))
+    _dp_got = open(_dp_log).read() if os.path.exists(_dp_log) else ""
+    _dp_exec = [ln for ln in _dp_got.splitlines() if ln.startswith("ROOT-EXEC ")]
+    check("deploy: the system branch is taken for a unit-reported checkout (positive control)",
+          "System install at %s" % _dp_pd in _dp_r.stdout and _dp_exec,
+          "runner rc=%s err=%r; host rc=%s out=%r err=%r log=%r" % (
+              _dp_rr.returncode, _dp_rr.stderr[-200:], _dp_r.returncode, _dp_r.stdout[-200:],
+              _dp_r.stderr[-300:], _dp_got[-300:]))
+    check("deploy: ...and root executes nothing from the service user's checkout",
+          _dp_exec and not any(_dp_pd in ln for ln in _dp_exec)
+          and "PANEL-OWNED-INSTALLER" not in _dp_got,
+          _dp_got[-400:])
+    check("deploy: ...it runs the installer the job shipped, byte for byte",
+          "ROOT-BYTES " + _dp_shipped.strip() in _dp_got,
+          _dp_got[-400:])
+    check("deploy: ...and nothing touches that checkout's git on root's behalf",
+          "GIT " not in _dp_got and "AS-USER" not in _dp_got, _dp_got[-400:])
+finally:
+    _shutil.rmtree(_dp_sb, ignore_errors=True)
 
 # ── the admin's 2FA reset must be VISIBLE, not just present ──────────────────────────────────
 # The switch lives in the Edit User modal and used to sit in a `display:none` block that JS

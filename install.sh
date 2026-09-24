@@ -237,10 +237,22 @@ panel_port() {
 # desired port (5000, or a previously configured one) is already taken by another service,
 # the panel would fail to bind — so probe upward for a free port and persist the choice so
 # the first start, the health check, and the firewall step all agree. Prints the chosen port.
+#
+# AS THE OWNER of PANEL_DIR when that is not root. Every path this writes is inside data/, and on
+# any re-run after the first chown data/ belongs to the panel user. The panel user can force this
+# path by deleting its own app.py. As root, open("w"), os.replace and os.chmod follow a symlink the
+# panel user planted there (config.json.tmp used to be a fixed name), so root truncated, rewrote
+# and chmodded a file of the panel user's choosing. Dropping to the owner makes the kernel refuse
+# that. The script also refuses symlinks and uses an O_EXCL temp file itself, for the one case
+# that stays root: a fresh install, where root still owns the tree.
 choose_and_record_port() {
-    local desired="${1:-5000}"
-    python3 - "${desired}" "${PANEL_DIR}/data/config.json" <<'PYEOF'
-import json, os, socket, sys
+    local desired="${1:-5000}" as_owner="" owner=""
+    if [ "$(id -u)" -eq 0 ]; then
+        owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
+        [ "${owner}" != "root" ] && as_owner="sudo -u ${owner}"
+    fi
+    ${as_owner} python3 - "${desired}" "${PANEL_DIR}/data/config.json" <<'PYEOF'
+import json, os, socket, sys, tempfile
 desired, cfg_path = int(sys.argv[1]), sys.argv[2]
 
 def free(p):
@@ -271,6 +283,13 @@ for cand in range(desired, desired + 51):   # 5000..5050 — plenty of headroom
 if port is None:
     raise SystemExit(0)
 
+data_dir = os.path.dirname(cfg_path)
+os.makedirs(data_dir, exist_ok=True)
+# Never write through a link: open(), os.chmod and a fixed temp name all follow one.
+if os.path.islink(data_dir) or os.path.islink(cfg_path):
+    sys.stderr.write("Refusing to record the port: %s or its config.json is a symbolic link.\n"
+                     % data_dir)
+    raise SystemExit(3)
 cfg = {}
 try:
     with open(cfg_path) as f:
@@ -278,20 +297,22 @@ try:
 except Exception:
     cfg = {}
 cfg["port"] = port
-data_dir = os.path.dirname(cfg_path)
-os.makedirs(data_dir, exist_ok=True)
 try:
     os.chmod(data_dir, 0o700)   # owner-only: keep the DB/keys/config out of other local users' reach
 except OSError:
     pass
-tmp = cfg_path + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(cfg, f, indent=2)
-os.replace(tmp, cfg_path)
+# mkstemp opens O_CREAT|O_EXCL|O_NOFOLLOW under a random name, 0600 from the start.
+fd, tmp = tempfile.mkstemp(dir=data_dir, prefix=".config.json.")
 try:
-    os.chmod(cfg_path, 0o600)
-except OSError:
-    pass
+    with os.fdopen(fd, "w") as f:
+        json.dump(cfg, f, indent=2)
+    os.replace(tmp, cfg_path)
+except BaseException:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
 print(port)
 PYEOF
 }
@@ -371,7 +392,11 @@ _gitc() {
 fetch_code() {
     mkdir -p "${PANEL_DIR}"
     if [ -n "${SRC}" ] && [ "${SRC}" != "${PANEL_DIR}" ]; then
-        tar -C "${SRC}" --exclude=./venv --exclude=./data --exclude='*.pyc' -cf - . | tar -C "${PANEL_DIR}" -xf -
+        # --no-same-owner: as root, tar would otherwise give the copy SRC's owners. A fresh install
+        # then chowns it to the panel user anyway; before that, stage_root_source reads the copy
+        # directly only when every file in it is root's.
+        tar -C "${SRC}" --exclude=./venv --exclude=./data --exclude='*.pyc' -cf - . \
+            | tar -C "${PANEL_DIR}" --no-same-owner -xf -
     elif [ -d "${PANEL_DIR}/.git" ]; then
         # The fresh clone below is shallow + single-branch (main only). Widen it so ANY branch is
         # fetchable and give it real history, so switching branches / updating on a branch works.
@@ -633,23 +658,121 @@ check_origin_trusted() {
 #
 # check_origin_trusted() compares the remote URL and is blind to both.
 #
-# `git cat-file blob <rev>:<path>` reads the object store: it returns the committed bytes, applies
-# no filter, and never consults the working tree or the index. Root stages that output inside
-# HELPER_DIR, which is root-owned 0755 and therefore not panel-writable — which is what closes the
-# window between staging and `install`.
+# Reading the committed blob instead (`git cat-file blob HEAD:<path>` through _gitc) closed those
+# two and left the rest of .git. The OBJECT STORE is panel-owned too, and git trusts it:
+#
+#   * a replace ref (`git replace <committed-blob> <attacker-blob>`, i.e. .git/refs/replace/<sha>)
+#     makes cat-file return the attacker's bytes, while `rev-parse HEAD` still names the real
+#     upstream commit;
+#   * a loose object written under the committed blob's name shadows the packed original, and git
+#     returns it without re-hashing.
+#
+# And with no .git at all, the tree was copied as-is. The panel user can delete its own .git.
+#
+# So when this runs as ROOT, a boundary file comes from something the panel user cannot write:
+#
+#   * a checkout that is still ROOT'S OWN, tree and .git (the fresh path, before the chown). It
+#     is read directly, exactly as before; or else
+#   * ROOT'S OWN CLONE of REPO_URL (ROOT_GIT, below), fetched by root's git with no user or system
+#     config. The panel's HEAD is only a request there: it is honoured only when root's clone has
+#     that commit on ${DEFAULT_BRANCH}. Nothing else from the panel's .git is read. A checkout at a
+#     commit upstream does not have, or with no .git at all, gets NO refresh, and the installer
+#     says so.
+#
+# Run as the account that owns the checkout (a per-user install), none of this applies: that
+# account can already rewrite the install.sh it is running.
+#
+# Either way the output is staged inside HELPER_DIR, which is root-owned 0755 and therefore not
+# panel-writable. That is what closes the window between staging and `install`.
 # Root-owned, outside the panel's checkout — see stage_root_source and SECURITY.md.
 HELPER_DIR="/usr/local/lib/linuxgsm-panel"
+ROOT_GIT="${HELPER_DIR}/.source.git"
+ROOT_SRC_COMMIT=""
+ROOT_SRC_TRIED=0
 
+# Root's git, on root's clone, with no config it did not write: no user or system gitconfig (a
+# `url.<x>.insteadOf` there would repoint REPO_URL, a credential helper would run as root), and no
+# inherited GIT_* environment. The proxy variables are the only ones passed through.
+_rootgit() {
+    ${H_SUDO:-} env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=true \
+        ${https_proxy:+https_proxy="${https_proxy}"} ${HTTPS_PROXY:+HTTPS_PROXY="${HTTPS_PROXY}"} \
+        ${no_proxy:+no_proxy="${no_proxy}"} ${NO_PROXY:+NO_PROXY="${NO_PROXY}"} \
+        git --git-dir="${ROOT_GIT}" "$@"
+}
+
+# Does the panel user have no hand in this checkout? True only when every file and directory in
+# it, .git included, is root's. find does not follow symlinks, so a link is judged by its own owner.
+_checkout_is_roots() {
+    [ -d "${PANEL_DIR}" ] && [ ! -L "${PANEL_DIR}" ] || return 1
+    [ -z "$(find "${PANEL_DIR}" ! -uid 0 -print -quit 2>/dev/null)" ]
+}
+
+# Which commit root may stage from: the checkout's HEAD, once root's own clone shows that commit is
+# on REPO_URL's ${DEFAULT_BRANCH}. Sets ROOT_SRC_COMMIT; returns 1, having said why, otherwise.
+# Asked once per run, however many files are staged.
+root_source_commit() {
+    if [ "${ROOT_SRC_TRIED}" -eq 1 ]; then
+        [ -n "${ROOT_SRC_COMMIT}" ]
+        return
+    fi
+    ROOT_SRC_TRIED=1
+    local want=""
+    [ -d "${PANEL_DIR}/.git" ] \
+        && want="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null || true)"
+    # The panel's git produced this, so it is a request, not a fact: a commit id, or nothing.
+    case "${want}" in
+        ""|*[!0-9a-f]*)
+            warn "This checkout has no commit root can verify, so the root-owned components"
+            warn "(the privileged helper, db_maintenance, this installer) were NOT refreshed."
+            return 1 ;;
+    esac
+    if ! ${H_SUDO:-} test -d "${ROOT_GIT}"; then
+        _rootgit init --quiet --bare >/dev/null 2>&1 || {
+            warn "Could not create root's copy of the repository at ${ROOT_GIT}."
+            return 1; }
+    fi
+    if ! _rootgit fetch --quiet --no-tags "${REPO_URL}" \
+            "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" >/dev/null 2>&1; then
+        warn "Could not fetch ${REPO_URL} (${DEFAULT_BRANCH}) into root's own copy, so the"
+        warn "root-owned components were NOT refreshed. The panel still works; re-run to retry."
+        return 1
+    fi
+    if ! _rootgit merge-base --is-ancestor "${want}" "refs/remotes/origin/${DEFAULT_BRANCH}" \
+            >/dev/null 2>&1; then
+        warn "This checkout is at ${want}, which is not on ${REPO_URL}'s ${DEFAULT_BRANCH}."
+        warn "The root-owned components were NOT refreshed from it."
+        return 1
+    fi
+    ROOT_SRC_COMMIT="${want}"
+}
+
+# Answer root_source_commit in THIS shell, before any `x="$(stage_root_source …)"`. Those run in a
+# subshell, so an answer found there is lost when it exits (the fetch would repeat for every file),
+# and its warnings would land in the captured path instead of on the screen. Always returns 0: the
+# staging calls that follow each report their own failure.
+_prepare_root_source() {
+    if [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots; then
+        root_source_commit || true
+    fi
+    return 0
+}
 
 stage_root_source() {
     local rel="$1" out="${HELPER_DIR}/.stage-$2"
     ${H_SUDO} rm -f "${out}" 2>/dev/null || true
-    if [ -d "${PANEL_DIR}/.git" ]; then
+    if [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots; then
+        # Root, and the panel user owns some of the checkout: its tree, its .git, or both.
+        root_source_commit >&2 || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
+        _rootgit cat-file blob "${ROOT_SRC_COMMIT}:${rel}" 2>/dev/null \
+            | ${H_SUDO} tee "${out}" >/dev/null 2>&1 || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
+    elif [ -d "${PANEL_DIR}/.git" ]; then
+        # A checkout the running account owns outright: root's before the chown, or the invoking
+        # user's own on a per-user install.
         _gitc cat-file blob "HEAD:${rel}" 2>/dev/null \
             | ${H_SUDO} tee "${out}" >/dev/null 2>&1 || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
     else
-        # No git: a tarball / --src install, where the tree IS the operator's own copy and there is
-        # no object store to prefer over it.
+        # No git: a tarball / --src install, in a tree the running account owns.
         ${H_SUDO} cp -- "${PANEL_DIR}/${rel}" "${out}" 2>/dev/null \
             || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
     fi
@@ -693,6 +816,7 @@ install_recovery_command() {
     fi
     H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
     if ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null \
+       && _prepare_root_source \
        && stage="$(stage_root_source recover.sh recover.sh)" \
        && ${H_SUDO} install -o root -g root -m 0755 "${stage}" "${HELPER_DIR}/recover.sh" 2>/dev/null; then
         target="${HELPER_DIR}/recover.sh"
@@ -730,6 +854,7 @@ install_root_tools() {
         warn "installer as root to place the root-owned components."
         return 0
     fi
+    _prepare_root_source
 
     if _stage="$(stage_root_source tools/panel-helper panel-helper)"; then
         if ${H_SUDO} install -o root -g root -m 0755 "${_stage}" "${HELPER_DST}" 2>/dev/null; then
@@ -863,9 +988,17 @@ root_tools_present() {
 # already run sudo turns that narrow grant into NOPASSWD:ALL with one extra hop.
 #
 # LC_ALL=C so the two phrases are the English ones sudo compiles in.
+#
+# The GROUP test is not only about sudo. docker, lxd, incus-admin and libvirt reach root through
+# their daemon (`docker run -v /:/host`), disk through the raw block device, staff through
+# /usr/local, which root runs from. adm and shadow read logs and password hashes. None of these
+# needs a sudoers entry, so `sudo -l -U` reports the account as "not allowed" and it was enrolled:
+# the one-hop NOPASSWD:ALL this function exists to prevent. The first ten are the set
+# panel/security/privileged.py already refuses as _NEVER_A_CONTENT_GROUP.
 can_already_sudo() {
     _cas_user="$1"
-    if id -nG "${_cas_user}" 2>/dev/null | tr " " "\n" | grep -qxE "sudo|admin|wheel|root"; then
+    _cas_groups="sudo|admin|wheel|root|adm|shadow|docker|lxd|disk|staff|incus-admin|libvirt"
+    if id -nG "${_cas_user}" 2>/dev/null | tr " " "\n" | grep -qxE "${_cas_groups}"; then
         echo yes; return 0
     fi
     _cas_out="$(LC_ALL=C sudo -l -U "${_cas_user}" 2>&1)" || true
@@ -917,16 +1050,18 @@ sync_game_user_group() {
                 # the grant back rather than describing a state that is not this host's.
                 if id -nG "${_gu}" 2>/dev/null | tr ' ' '\n' | grep -qx "${GAME_GROUP}"; then
                     if gpasswd -d "${_gu}" "${GAME_GROUP}" >/dev/null 2>&1; then
-                        warn "Removed '${_gu}' from ${GAME_GROUP}: it can now run sudo, which would"
-                        warn "  make the panel's grant a path to root. The panel can no longer"
-                        warn "  manage that account's servers on this host."
+                        warn "Removed '${_gu}' from ${GAME_GROUP}: it can now reach root (sudo, or a"
+                        warn "  group such as docker), which would make the panel's grant a path to"
+                        warn "  root. The panel can no longer manage that account's servers on this host."
                     else
-                        warn "'${_gu}' is in ${GAME_GROUP} AND can run sudo — the panel's grant is a"
-                        warn "  path to root, and the membership could not be removed. Run:"
+                        warn "'${_gu}' is in ${GAME_GROUP} AND can reach root (sudo, or a group such as"
+                        warn "  docker), so the panel's grant is a path to root, and the membership could"
+                        warn "  not be removed. Run:"
                         warn "    gpasswd -d ${_gu} ${GAME_GROUP}"
                     fi
                 else
-                    warn "Not enrolling '${_gu}' in ${GAME_GROUP}: it already has sudo rights."
+                    warn "Not enrolling '${_gu}' in ${GAME_GROUP}: it can already reach root (sudo,"
+                    warn "  or a group such as docker)."
                     warn "  The panel will not be able to manage that account's servers on this host."
                 fi
                 continue ;;

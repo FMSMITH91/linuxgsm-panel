@@ -55,7 +55,11 @@ jobs:
       - run: python -m pip install --quiet pip-audit
       # FAILS the run if any declared dependency has a known vulnerability — this
       # is actionable (bump the version), so it's a hard gate.
-      - run: pip-audit -r requirements.txt
+      # --no-deps: audit exactly the pinned set, which is what a host installs. Without it,
+      # pip-audit resolved a fresh environment and audited whatever was newest that day.
+      # requirements.txt lists the whole closure (a unit check keeps it closed), so nothing is
+      # left out by not resolving.
+      - run: pip-audit --no-deps -r requirements.txt
 
   sast-bandit:
     name: Python security lint (Bandit)

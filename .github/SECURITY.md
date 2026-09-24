@@ -348,7 +348,10 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   it either.** `PANEL_DIR` is owned by the service user and rewritten by `git pull` on every
   self-update, so a boundary that let root run files from there would have been decorative. The
   offline DB repair and the self-update run root-owned copies placed only by `install.sh`, never
-  by a verb.
+  by a verb. The CI auto-deploy (`deploy.yml`) follows the same rule on a root install. It used to
+  refresh `${PANEL_DIR}/install.sh` with `git checkout` as the service user and run that with
+  `sudo bash`. It now ships the verified commit's `install.sh` from the runner over SSH and runs
+  that copy from a directory root created.
 
   The second half of that sentence was missing, and it mattered: `install_root_tools` *copied*
   those root-owned pieces **out of the working tree**, and the integrity argument was that
@@ -362,12 +365,24 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   with `NOPASSWD:ALL` — the panel user could remove its own sudo restriction by deleting a file it
   owned.
 
-  Both are closed. The three pieces are now staged with `git cat-file blob HEAD:<path>`, which
-  returns the committed bytes and consults neither the working tree nor the index nor any filter,
-  into `HELPER_DIR` — root-owned 0755, so there is no window in which the panel user can swap the
-  staged copy. And the grant asks `root_tools_present`, i.e. whether the helper root will execute
-  actually exists and is root-owned, so a failure to *refresh* can no longer widen a grant that is
-  already narrow.
+  The first fix staged the pieces with `git cat-file blob HEAD:<path>`, which consults neither the
+  working tree nor the index nor any filter. It still read the panel-owned **object store**, and
+  git trusts that too. A replace ref (`git replace <committed-blob> <other-blob>`) or a loose object
+  written under the committed blob's name makes `cat-file` return other bytes while `HEAD` still
+  names the real upstream commit. With no `.git` at all, the tree was copied as-is, and the panel
+  user can delete its own `.git`.
+
+  All of these are now closed. Run as root against a checkout the panel user has any hand in,
+  `stage_root_source` reads from **root's own clone** of the repository
+  (`/usr/local/lib/linuxgsm-panel/.source.git`). Root's git fetches it with no user or system
+  git config and no inherited `GIT_*` environment. The panel's `HEAD` is only a request: it is
+  honoured once root's clone shows that commit on the tracked upstream branch. A checkout at a
+  commit upstream does not have, or with no `.git`, gets no refresh, and the installer says so. A
+  checkout that is still entirely root's (the fresh install, before the chown) is read directly.
+  The output is staged into `HELPER_DIR`, which is root-owned 0755, so the panel user has no window
+  to swap the staged copy. And the grant asks `root_tools_present`, i.e. whether the helper root
+  will execute actually exists and is root-owned. A failure to *refresh* can no longer widen a
+  grant that is already narrow.
 
 * **The installed helper has to stay in step with the panel's code.** It lives outside the
   checkout, so the panel cannot refresh it — only `install.sh` can, as root. The verb table grows
