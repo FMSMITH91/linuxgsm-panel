@@ -447,6 +447,33 @@ try:
     # filters rows they can already see.
     check("tag list is readable without MANAGE_SERVERS -> 200",
           c.get("/api/tags").status_code == 200)
+    # ...but it names only the servers the caller can access. It listed every server's id under
+    # every tag: an inventory of what they cannot open, and what it is tagged with.
+    if other_id:
+        from panel.db.models import ServerTag as _TagR
+        with app.app_context():
+            _tr = _TagR(name=tag + "tagleak")
+            _tr.servers.extend([db.session.get(GameServer, accessible_id),
+                                db.session.get(GameServer, other_id)])
+            db.session.add(_tr)
+            db.session.commit()
+            _tr_id = _tr.id
+        try:
+            _tr_ids = next((t["server_ids"] for t in (c.get("/api/tags").get_json() or {})["tags"]
+                            if t["id"] == _tr_id), None)
+            check("tag list: (control) a tag on a server the caller CAN access lists that server",
+                  _tr_ids is not None and accessible_id in _tr_ids, "got %r" % (_tr_ids,))
+            check("IDOR: the tag list does not name a server the caller cannot access",
+                  _tr_ids is not None and other_id not in _tr_ids, "got %r" % (_tr_ids,))
+            _tr_admin = next((t["server_ids"] for t in
+                              (client_as(admin_id).get("/api/tags").get_json() or {})["tags"]
+                              if t["id"] == _tr_id), None)
+            check("tag list: ...while a superadmin still sees every server on it",
+                  _tr_admin is not None and other_id in _tr_admin, "got %r" % (_tr_admin,))
+        finally:
+            with app.app_context():
+                db.session.delete(db.session.get(_TagR, _tr_id))
+                db.session.commit()
 
     # ── A legacy "super_admin" group grant confers nothing ────────────────────────────────────
     c3 = client_as(uid3)
