@@ -2615,6 +2615,66 @@ check("if (tr.hasAttribute('data-progress-for')) return;" in _dashjs3
       and "prog.style.display = match" in _dashjs3,
       "js: filtering hides a progress row with its server, not on its own text")
 
+# ── a card-region swap keeps the bulk selection, and the bar never claims one it lost ─────────
+# refreshSection('#server-cards') replaces every row checkbox with an unticked one, but both bulk
+# bars sit OUTSIDE #server-cards and kept "3 selected" with their buttons — which then found
+# nothing checked and returned without a word. From the AST: afterDashRefresh's FIRST statement
+# restores the selection (before filterServers or anything else reads the boxes), the restore
+# re-syncs the bar, updateBulkBar records what it counted, and an empty bulkAction says so.
+if not esprima:
+    skip("js: a card-region swap restores the bulk selection before anything reads it",
+         "esprima not installed")
+else:
+    _bs_ast = _d3_ast
+    _bs_after = []
+
+    def _scan_after(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "AssignmentExpression"
+                    and ((n.get("left") or {}).get("property") or {}).get("name") == "afterDashRefresh"
+                    and (n.get("right") or {}).get("type") == "FunctionExpression"):
+                _bs_after.append(n["right"]["body"]["body"])
+            for v in n.values():
+                _scan_after(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_after(v)
+    _scan_after(_bs_ast)
+    _bs_first = (_bs_after[0][0] if _bs_after and _bs_after[0] else {}).get("expression") or {}
+    check(((_bs_first.get("callee") or {}).get("name")) == "restoreBulkSelection",
+          "js: a card-region swap restores the bulk selection before anything reads it",
+          "afterDashRefresh starts with %r — the bars keep 'N selected' over unticked boxes"
+          % ((_bs_first.get("callee") or {}).get("name"),))
+    _bs_restore = _js_find_fn(_bs_ast, "restoreBulkSelection")
+    _bs_update = _js_find_fn(_bs_ast, "updateBulkBar")
+    check(_bs_restore is not None and bool(_calls_named(_bs_restore, "updateBulkBar"))
+          and _bs_update is not None and "_bulkSelected" in json.dumps(_bs_update),
+          "js: ...the restore re-syncs the bar, and the bar records what it counted",
+          "restoreBulkSelection calls updateBulkBar=%s; updateBulkBar records _bulkSelected=%s"
+          % (bool(_bs_restore and _calls_named(_bs_restore, "updateBulkBar")),
+             bool(_bs_update and "_bulkSelected" in json.dumps(_bs_update))))
+    _bs_bulk = _js_find_fn(_bs_ast, "bulkAction")
+    _bs_silent = []
+
+    def _scan_empty(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "IfStatement"
+                    and '"name": "length"' in json.dumps(n.get("test"))
+                    and (n.get("test") or {}).get("type") == "UnaryExpression"):
+                c = n.get("consequent") or {}
+                if not _calls_named(c, "toast"):
+                    _bs_silent.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            for v in n.values():
+                _scan_empty(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_empty(v)
+    if _bs_bulk:
+        _scan_empty(_bs_bulk)
+    check(_bs_bulk is not None and not _bs_silent,
+          "js: a bulk action with nothing selected says so instead of doing nothing",
+          "silent empty-selection return(s) at line(s) %r" % (_bs_silent,))
+
 # ── install progress has to be visible from wherever you are ──────────────────────────────────
 # The progress row lives on the Game Servers page and nowhere else, so an install started from
 # "Install a Server" showed a toast and then nothing at all, and the dashboard listed the server as

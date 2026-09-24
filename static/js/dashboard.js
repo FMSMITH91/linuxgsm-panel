@@ -342,6 +342,10 @@ function bindDragRegions(){
 }
 
 window.afterDashRefresh = function(){
+  // FIRST, before anything reads the boxes: the swap replaced every row checkbox with an unticked
+  // one, while both bulk bars live OUTSIDE #server-cards and kept their "N selected" and their
+  // buttons — which then found nothing checked and did nothing, with no message at all.
+  restoreBulkSelection();
   if (typeof filterServers === 'function') filterServers();
   refreshStatus();
   // #server-cards itself survives a refreshSection (only its innerHTML is replaced), so its own
@@ -607,8 +611,19 @@ function selectedChecks() {
 function selectedIds() {
   return selectedChecks().map(function (c) { return c.value; });
 }
+// The selection as of the last updateBulkBar(), by server id — what restoreBulkSelection() puts back
+// after the card region is re-rendered underneath it.
+var _bulkSelected = {};
+function restoreBulkSelection() {
+  document.querySelectorAll('.srv-check').forEach(function (c) {
+    if (_bulkSelected[c.value]) c.checked = true;
+  });
+  updateBulkBar();   // re-counts from the boxes: a server that is gone drops out of the count
+}
 function updateBulkBar() {
   var checks = selectedChecks(), n = checks.length;
+  _bulkSelected = {};
+  checks.forEach(function (c) { _bulkSelected[c.value] = true; });
   document.querySelectorAll('.bulk-count').forEach(function (el) { el.textContent = n; });
   document.querySelectorAll('.bulk-bar').forEach(function (bar) { bar.style.display = n ? '' : 'none'; });
   // Hide the Update button when NONE of the selected servers support updating (e.g. a lone cod
@@ -631,7 +646,7 @@ function clearSelection() {
 function bulkAction(action) {
   var checks = selectedChecks();
   var ids = checks.map(function (c) { return Number(c.value); });
-  if (!ids.length) return;
+  if (!ids.length) { toast('Select at least one server first.', 'warning'); updateBulkBar(); return; }
   var skippedNoUpdate = 0;
   if (action === 'update') {
     // Mixed selection: only update servers whose game has a LinuxGSM update command; skip the
