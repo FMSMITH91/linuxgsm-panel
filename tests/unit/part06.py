@@ -1368,6 +1368,76 @@ try:
     check("install.sh: ...and the fresh path, where PANEL_DIR is still root's, is unchanged",
           "SUDO" not in _r and "python3 -m venv" in _r, repr(_r[:200]))
 
+    # requirements.txt must pin the WHOLE closure, not just the direct dependencies. Pinning 12
+    # packages left the rest floating. install.sh skips pip when the file is unchanged, and
+    # `pip install -r` never upgrades a package that already satisfies a range, so a security fix
+    # in Werkzeug or python-engineio never reached a host. Dependabot bumps only what is listed,
+    # and pip-audit (now --no-deps) audits only what is listed. So: every listed package's own
+    # requirements, for CPython 3.10-3.14 on Linux, must be listed too, at a version that
+    # satisfies them. Read from the installed metadata, which must BE the pinned versions.
+    import importlib.metadata as _rq_md
+    try:
+        from packaging.requirements import Requirement as _RqReq
+        from packaging.utils import canonicalize_name as _rq_canon
+    except ImportError:
+        from pip._vendor.packaging.requirements import Requirement as _RqReq
+        from pip._vendor.packaging.utils import canonicalize_name as _rq_canon
+
+    def _rq_closure_gaps(text):
+        pins, gaps = {}, []
+        for ln in text.splitlines():
+            ln = ln.split("#", 1)[0].strip()
+            if not ln:
+                continue
+            req = _RqReq(ln)
+            spec = [s for s in req.specifier if s.operator == "=="]
+            if len(spec) != 1 or len(req.specifier) != 1:
+                gaps.append("%s is not pinned with ==" % ln)
+                continue
+            pins[_rq_canon(req.name)] = spec[0].version
+        envs = [{"python_version": "3.%d" % m, "python_full_version": "3.%d.0" % m,
+                 "sys_platform": "linux", "platform_system": "Linux", "platform_machine": mach,
+                 "implementation_name": "cpython", "platform_python_implementation": "CPython",
+                 "os_name": "posix", "extra": ""}
+                for m in (10, 11, 12, 13, 14) for mach in ("x86_64", "aarch64")]
+        for name, ver in sorted(pins.items()):
+            try:
+                dist = _rq_md.distribution(name)
+            except _rq_md.PackageNotFoundError:
+                gaps.append("%s==%s is not installed here, so its requirements cannot be read"
+                            % (name, ver))
+                continue
+            if dist.version != ver:
+                gaps.append("%s is installed at %s but pinned at %s (pip install -r "
+                            "requirements.txt)" % (name, dist.version, ver))
+                continue
+            for rd in dist.requires or []:
+                sub = _RqReq(rd)
+                if sub.marker is not None and not any(sub.marker.evaluate(e) for e in envs):
+                    continue
+                sub_name = _rq_canon(sub.name)
+                if sub_name not in pins:
+                    gaps.append("%s needs %s, which is not pinned" % (name, rd))
+                elif not sub.specifier.contains(pins[sub_name], prereleases=True):
+                    gaps.append("%s needs %s, but %s is pinned" % (name, rd, pins[sub_name]))
+        return pins, gaps
+
+    _rq_txt = open(os.path.join(_root, "requirements.txt"), encoding="utf-8").read()
+    _rq_pins, _rq_gaps = _rq_closure_gaps(_rq_txt)
+    check("requirements.txt: pins every package the panel's dependencies pull in",
+          len(_rq_pins) > 12 and not _rq_gaps, "; ".join(_rq_gaps[:6]))
+    # The gate catches a gap (so the pass above is not an empty list for want of looking): drop
+    # one transitive pin and it must be named.
+    _rq_cut = "\n".join(ln for ln in _rq_txt.splitlines() if not ln.startswith("werkzeug=="))
+    _rq_cut_gaps = _rq_closure_gaps(_rq_cut)[1]
+    check("requirements.txt: ...and the closure check names a dropped transitive pin (control)",
+          any("werkzeug" in g for g in _rq_cut_gaps), repr(_rq_cut_gaps[:3]))
+    _rq_sec = open(os.path.join(_root, ".github", "workflows", "security-code.yml"),
+                   encoding="utf-8").read()
+    check("security-code: pip-audit audits the pinned set itself, not a fresh resolution",
+          re.search(r"^\s*- run: pip-audit --no-deps -r requirements\.txt\s*$", _rq_sec, re.M)
+          is not None, "pip-audit resolves its own environment again")
+
     # origin: the URL the root-owned installs are taken from, compared against this file's own
     # REPO_URL — which the panel cannot edit, because install.sh runs from outside the checkout.
     _su_git = os.path.join(_su_sb, "git")
