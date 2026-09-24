@@ -8,9 +8,10 @@ from flask import (flash, jsonify, redirect, render_template, request, session, 
 from flask_login import (current_user, login_required, login_user, logout_user)
 from panel.core import (i18n)
 from panel.core.clock import (utcnow)
-from panel.core.config import (encrypt_secret)
+from panel.core.config import (decrypt_secret, encrypt_secret)
 from panel.db.models import (User, db)
-from panel.security.auth import (hash_password, needs_rehash, check_password, client_ip, dummy_password_check,
+from panel.security.auth import (backup_code_shaped, hash_password, needs_rehash, check_password, client_ip,
+    dummy_password_check,
     generate_backup_codes, generate_totp_secret, log_action, totp_provisioning_uri,
     session_fingerprint, throttle_key, verify_totp_step)
 from panel.services import (notifications)
@@ -165,8 +166,10 @@ def register(app):
                         u.last_totp_step = _step
                         db.session.commit()
                         return _succeed(u, bool(session.get("_2fa_remember")))
-                    # Fall back to a one-time backup code (for a lost authenticator).
-                    if u.use_backup_code(entered):
+                    # Fall back to a one-time backup code (for a lost authenticator) — only for
+                    # an entry shaped like one: trying them costs a bcrypt per stored code, and a
+                    # mistyped six-digit TOTP can never match.
+                    if backup_code_shaped(entered) and u.use_backup_code(entered):
                         db.session.commit()
                         log_action(u, "2fa_backup_code_used", target=u.username,
                                    detail=f"{u.backup_codes_remaining} codes left")
@@ -465,7 +468,7 @@ def register(app):
                 # Back to this page, not /account: the pending secret is still in the session, so
                 # the QR they have already scanned stays valid and they can simply try again.
                 return redirect(url_for("account_2fa_enable"))
-            secret = session.get("_2fa_setup_secret", "")
+            secret = decrypt_secret(session.get("_2fa_setup_secret", ""))
             # verify_totp_STEP, not verify_totp — the third and last route that consumes a live
             # authenticator code, and the one the earlier audit missed. Login refuses a step that
             # has already been spent (see the comment there), and last_totp_step defaults to 0, so
@@ -488,9 +491,13 @@ def register(app):
                 # Show the one-time backup codes once, right now — they're never shown again.
                 return render_template("backup_codes.html", codes=codes, first_time=True)
             flash("That code didn't match — check your device's time and try again.", "danger")
-        # (Re)issue a pending secret for this enrolment attempt.
-        secret = session.get("_2fa_setup_secret") or generate_totp_secret()
-        session["_2fa_setup_secret"] = secret
+        # (Re)issue a pending secret for this enrolment attempt. Encrypted in the session: Flask's
+        # session is a SIGNED cookie, not an encrypted one, and on success this exact value becomes
+        # the account's permanent TOTP seed — so a Set-Cookie captured during enrolment (a proxy log,
+        # a synced browser profile) handed over a second factor that outlives password changes and
+        # "sign out everywhere". Same rule panel/core/http.py applies to generated passwords.
+        secret = decrypt_secret(session.get("_2fa_setup_secret", "")) or generate_totp_secret()
+        session["_2fa_setup_secret"] = encrypt_secret(secret)
         uri = totp_provisioning_uri(secret, current_user.username)
         return render_template("account_2fa.html", secret=secret, qr_svg=_qr_svg(uri))
 

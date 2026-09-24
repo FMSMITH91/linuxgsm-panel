@@ -218,6 +218,18 @@ def generate_backup_codes(n=8, length=10):
     return codes
 
 
+def backup_code_shaped(code, length=10):
+    """Whether `code` could be one of generate_backup_codes()' codes: `length` characters from the
+    backup alphabet once the display dash and spaces are dropped (the same normalisation
+    User.use_backup_code compares with).
+
+    The login's 2FA step fell back to the backup codes after EVERY wrong entry, and trying them is
+    one cost-12 bcrypt per stored code — about 2s of work for a mistyped six-digit TOTP, which
+    can never match anyway: 0 and 1 are not in the alphabet and it is the wrong length."""
+    norm = (code or "").strip().lower().replace("-", "").replace(" ", "")
+    return len(norm) == length and all(c in _BACKUP_CODE_ALPHABET for c in norm)
+
+
 # ─── Two-factor auth (TOTP) ───────────────────────────────────
 def generate_totp_secret():
     """A fresh base32 TOTP secret (what a new authenticator enrolment gets)."""

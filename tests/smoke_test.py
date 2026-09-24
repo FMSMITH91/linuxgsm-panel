@@ -2396,6 +2396,33 @@ try:
     check("2FA backup code is one-time (reuse rejected, not 302)", s3.status_code != 302,
           "got %d" % s3.status_code)
 
+    # ...and a wrong six-digit code does NOT try the backup codes. Each try is a cost-12 bcrypt
+    # per stored code (~2s for eight), for an entry that cannot match: anyone holding one password
+    # could spend that on every wrong TOTP they submitted.
+    import bcrypt as _bc_mod
+    from app import _LOGIN_FAILS as _bc_fails
+    _bc_real = _bc_mod.checkpw
+    _bc_calls = []
+
+    def _bc_count(*a):
+        _bc_calls.append(1)
+        return _bc_real(*a)
+    b4 = app.test_client()
+    b4.post("/login", data={"username": "smoke_2fa", "password": "Str0ng!passw0rd"})
+    _bc_mod.checkpw = _bc_count
+    try:
+        b4.post("/login", data={"totp_code": "123456"})
+        _bc_totp = len(_bc_calls)
+        b4.post("/login", data={"totp_code": "zzzzz-zzzzz"})
+        _bc_shaped = len(_bc_calls) - _bc_totp
+    finally:
+        _bc_mod.checkpw = _bc_real
+        _bc_fails.clear()      # two deliberate failures: don't leave this IP nearer the lockout
+    check("2FA: (control) a backup-shaped wrong code does try the stored backup codes",
+          _bc_shaped >= 1, "no bcrypt compare ran — the check below proves nothing")
+    check("2FA: a wrong six-digit code does not run a bcrypt per backup code",
+          _bc_totp == 0, "%d bcrypt compares for a mistyped TOTP" % _bc_totp)
+
     # A TOTP code is valid for ~90s (its step plus one either side for skew). Accepting it on
     # "is it valid" alone lets a code observed once — a phishing proxy, a shoulder-surf, a leaked
     # log — be replayed for the rest of that window. Each step must be spendable exactly once.
@@ -2436,8 +2463,16 @@ try:
         _enc = client_as(_en_id)
         _enc.get("/account/2fa/enable")                    # seeds the pending secret in-session
         with _enc.session_transaction() as _sess:
-            _en_secret = _sess.get("_2fa_setup_secret")
+            _en_in_cookie = _sess.get("_2fa_setup_secret") or ""
+        from panel.core.config import decrypt_secret as _en_dec
+        _en_secret = _en_dec(_en_in_cookie)
         check("2FA enrol: the page issues a pending secret", bool(_en_secret))
+        # Flask's session is a SIGNED cookie, readable by anyone who holds it, and on success this
+        # value becomes the account's permanent TOTP seed. A Set-Cookie captured during enrolment
+        # handed over a second factor that survives password changes and sign-out-everywhere.
+        check("2FA enrol: the pending secret is not in the session cookie in the clear",
+              _en_secret and _en_secret not in _en_in_cookie,
+              "the cookie carries the TOTP seed as plaintext")
         _en_code = _po.TOTP(_en_secret).now()
         # ── ...and enrolling needs the account holder's PASSWORD ───────────────────────────────
         # /account/2fa/enable carried @login_required and nothing else, while its mirror
