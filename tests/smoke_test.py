@@ -7971,6 +7971,120 @@ try:
             except Exception:
                 pass
 
+    # ── ...and so is the CREDENTIAL the socket joined with ───────────────────────────────────
+    # The per-tick re-check asked only about the user ROW. None of the panel's revocation controls
+    # change the row's answers: a device revoke deletes a UserSession row, "sign out everywhere"
+    # bumps auth_epoch, revoking an API token clears its hash. load_user enforces all of them on
+    # every socket EVENT — but the console is push-only, so after join_console nothing re-ran it,
+    # and a stolen cookie that had been signed out everywhere kept receiving the console.
+    import hashlib as _cv_hl
+    from panel.db.models import UserSession as _CvUS
+    with app.app_context():
+        _cv_u = db.session.get(User, admin_id)
+        _cv_saved = (_cv_u.auth_epoch, _cv_u.api_token, _cv_u.must_change_password)
+        db.session.add(_CvUS(user_id=admin_id, sid="smoke_console_sid", ip="", user_agent=""))
+        db.session.commit()
+        _cv_login = "%d:%d:smoke_console_sid" % (admin_id, _cv_u.auth_epoch or 0)
+
+    def _cv_socket(**hdr):
+        _fc = app.test_client()
+        if not hdr:
+            with _fc.session_transaction() as _ss:
+                _ss["_user_id"] = _cv_login
+                _ss["_fresh"] = True
+        _c = app.socketio.test_client(app, flask_test_client=_fc, headers=hdr or None)
+        with _r_sf._viewers_lock:
+            _r_sf._console_viewers.pop(gs_id, None)
+        _c.emit("join_console", {"server_id": gs_id})
+        _vsid = next(iter(_r_sf._console_viewers.get(gs_id) or {}), None)
+        _cv_sids.append(_vsid)
+        return _c, _vsid
+
+    def _cv_evict():
+        with app.app_context():
+            _r_sf._evict_unauthorized_viewers(app, app.socketio, gs_id)
+        return bool(_r_sf._console_viewers.get(gs_id))
+
+    _cv_clients, _cv_sids = [], []
+    try:
+        # A cookie tied to one UserSession row: revoking that device must end the stream.
+        _cv_c, _cv_sid = _cv_socket()
+        _cv_clients.append(_cv_c)
+        check("console socket: a session-cookie viewer joins, and its login id is recorded",
+              _cv_sid is not None and (_r_sf._viewer_creds.get(_cv_sid) or ("",))[0] == _cv_login,
+              "viewer=%r cred=%r" % (_cv_sid, _r_sf._viewer_creds.get(_cv_sid)))
+        check("console socket: ...and the re-check keeps it while that login stands (control)",
+              _cv_evict(), "a valid viewer was evicted")
+        with app.app_context():
+            _CvUS.query.filter_by(sid="smoke_console_sid").delete()
+            db.session.commit()
+        check("console socket: revoking the viewer's DEVICE ends the stream at the next tick",
+              not _cv_evict(), "the socket of a revoked session is still being streamed to")
+
+        # "Sign out everywhere" / a password change: the epoch moves, every cookie stops matching.
+        with app.app_context():
+            db.session.add(_CvUS(user_id=admin_id, sid="smoke_console_sid", ip="", user_agent=""))
+            db.session.commit()
+        _cv_c, _cv_sid = _cv_socket()
+        _cv_clients.append(_cv_c)
+        check("console socket: (control) a fresh viewer is kept before the epoch moves",
+              _cv_evict(), "a valid viewer was evicted")
+        with app.app_context():
+            db.session.get(User, admin_id).auth_epoch = (_cv_saved[0] or 0) + 1
+            db.session.commit()
+        check("console socket: 'sign out everywhere' ends the stream at the next tick",
+              not _cv_evict(), "the socket outlived a bumped auth_epoch")
+        with app.app_context():
+            db.session.get(User, admin_id).auth_epoch = _cv_saved[0]
+            db.session.commit()
+
+        # A bearer token: revoking it changes neither the epoch nor any session row.
+        with app.app_context():
+            db.session.get(User, admin_id).api_token = _cv_hl.sha256(b"smoke-console-token").hexdigest()
+            db.session.commit()
+        _cv_c, _cv_sid = _cv_socket(Authorization="Bearer smoke-console-token")
+        _cv_clients.append(_cv_c)
+        check("console socket: (control) a bearer-token viewer joins and is kept while the token "
+              "stands", _cv_sid is not None and _cv_evict(),
+              "viewer=%r cred=%r" % (_cv_sid, _r_sf._viewer_creds.get(_cv_sid)))
+        with app.app_context():
+            db.session.get(User, admin_id).api_token = None
+            db.session.commit()
+        check("console socket: revoking the API TOKEN ends the stream at the next tick",
+              not _cv_evict(), "the socket outlived its revoked token")
+
+        # A forced password change is refused at join; the re-check must refuse it too.
+        with app.app_context():
+            db.session.add(_CvUS(user_id=admin_id, sid="smoke_console_sid2", ip="", user_agent=""))
+            db.session.commit()
+        _cv_login = "%d:%d:smoke_console_sid2" % (admin_id, _cv_saved[0] or 0)
+        _cv_c, _cv_sid = _cv_socket()
+        _cv_clients.append(_cv_c)
+        with app.app_context():
+            db.session.get(User, admin_id).must_change_password = True
+            db.session.commit()
+        check("console socket: a password reset mid-stream ends it at the next tick",
+              _cv_sid is not None and not _cv_evict(),
+              "the socket kept streaming to an account held at a forced password change")
+    finally:
+        for _c in _cv_clients:
+            try:
+                _c.disconnect()
+            except Exception:
+                pass
+        with _r_sf._viewers_lock:
+            _r_sf._console_viewers.pop(gs_id, None)
+        with app.app_context():
+            _cv_u = db.session.get(User, admin_id)
+            (_cv_u.auth_epoch, _cv_u.api_token, _cv_u.must_change_password) = _cv_saved
+            _CvUS.query.filter(_CvUS.sid.in_(["smoke_console_sid", "smoke_console_sid2"])).delete(
+                synchronize_session=False)
+            db.session.commit()
+    check("console socket: a disconnect forgets the socket's recorded credential",
+          len([k for k in _cv_sids if k is not None]) == 4
+          and not any(k in _r_sf._viewer_creds for k in _cv_sids),
+          "sids=%r left behind: %r" % (_cv_sids, [k for k in _cv_sids if k in _r_sf._viewer_creds]))
+
     # ── The forced-password-change gate has to be asked ON THE SOCKET ────────────────────────
     # must_change_password is enforced by an @app.before_request (app.py), and a before_request
     # NEVER runs for a Socket.IO event — flask-socketio's middleware takes /socket.io/ ahead of the
