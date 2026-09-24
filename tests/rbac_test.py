@@ -769,6 +769,77 @@ try:
     check("escalation: ...but may still reset a peer with the same permissions and no command",
           _plain_peer_changed, "a legitimate reset was refused — the guard is too broad")
 
+    # ── VIEW_LOGS is scoped to what the viewer can reach ─────────────────────────────────────
+    # It was install-wide: a moderator given view_logs with ONE server read every server's console
+    # commands (`rcon_password …`), every admin's sign-in address, and the attempted username of
+    # every failed login — where people paste their password by mistake.
+    if other_id is not None:
+        from panel.db.models import AuditLog as _AL
+        from panel.core.clock import utcnow as _al_now
+        with app.app_context():
+            _lv_grp = Group(name=tag + "_logs", description="RBAC test log viewer (auto)",
+                            is_default=False)
+            _lv_grp.set_permissions([auth.VIEW_LOGS, auth.VIEW_SERVERS])
+            _lv_grp.game_servers.append(db.session.get(GameServer, accessible_id))
+            db.session.add(_lv_grp)
+            db.session.flush()
+            _lv = User(username=tag + "_logviewer",
+                       password_hash=auth.hash_password(secrets.token_hex(16)),
+                       display_name="log viewer", is_superadmin=False, is_active=True)
+            _lv.groups.append(_lv_grp)
+            db.session.add(_lv)
+            db.session.flush()
+            _lv_id = _lv.id
+            _mine_name = db.session.get(GameServer, accessible_id).name
+            _other_name = db.session.get(GameServer, other_id).name
+            _lt = tag + "LOGROW"
+            for _uid_, _who, _act, _tgt, _det, _ip in (
+                    (admin_id, "admin", "send_command", _mine_name, _lt + "_mine_srv", "198.51.100.1"),
+                    (admin_id, "admin", "send_command", _other_name,
+                     _lt + "_other_srv rcon_password S3cret", "198.51.100.5"),
+                    (None, tag + "Sup3rSecretPw", "login_failed", "", _lt + "_failed", "198.51.100.2"),
+                    (admin_id, "admin", "login", "", _lt + "_adminlogin", "198.51.100.3"),
+                    # An ACCOUNT row whose free-text target happens to name their server (an
+                    # invite's note is whatever the minter typed): still not theirs to read.
+                    (admin_id, "admin", "invite_created", _mine_name, _lt + "_invite",
+                     "198.51.100.6"),
+                    (_lv_id, tag + "_logviewer", "logout", "", _lt + "_own", "198.51.100.4")):
+                db.session.add(_AL(user_id=_uid_, username=_who, action=_act, target=_tgt,
+                                   detail=_det, ip_address=_ip, success=True,
+                                   timestamp=_al_now()))
+            db.session.commit()
+        try:
+            _lv_page = client_as(_lv_id).get("/logs?q=" + _lt).get_data(as_text=True)
+            _sa_logs = client_as(admin_id).get("/logs?q=" + _lt).get_data(as_text=True)
+            check("view_logs: a scoped viewer sees rows about the server they can access",
+                  _lt + "_mine_srv" in _lv_page and _lt + "_own" in _lv_page,
+                  "their own server's / their own row is missing — the scope is too tight")
+            check("view_logs: ...but not another server's console commands",
+                  _lt + "_other_srv" not in _lv_page and "S3cret" not in _lv_page,
+                  "a server outside their grants leaked its console history")
+            check("view_logs: ...nor anyone's sign-ins or failed-login usernames",
+                  _lt + "_failed" not in _lv_page and _lt + "_adminlogin" not in _lv_page
+                  and (tag + "Sup3rSecretPw") not in _lv_page,
+                  "account rows (or the failed-login username in the filter list) leaked")
+            check("view_logs: ...nor an account row whose target merely names their server",
+                  _lt + "_invite" not in _lv_page,
+                  "an invite row reached a server-scoped viewer by its target")
+            check("view_logs: ...nor another user's address, while their own is shown",
+                  "198.51.100.1" not in _lv_page and "198.51.100.4" in _lv_page,
+                  "another admin's IP is visible, or the viewer's own is hidden")
+            check("view_logs: a superadmin still sees every row and address (control)",
+                  all(_lt + s in _sa_logs for s in ("_mine_srv", "_other_srv", "_failed",
+                                                    "_adminlogin", "_own", "_invite"))
+                  and "198.51.100.1" in _sa_logs and (tag + "Sup3rSecretPw") in _sa_logs,
+                  "the scoping also narrowed the superadmin's view")
+        finally:
+            with app.app_context():
+                for _row in _AL.query.filter(_AL.detail.like(_lt + "%")).all():
+                    db.session.delete(_row)
+                db.session.commit()
+    check("view_logs: (premise) the fixture has a second host to be scoped out",
+          other_id is not None, "the scoping checks above did not run")
+
     # The same via /users/add — creating the account in the privileged group, then logging in as it
     # (the generated password is handed straight back to the caller).
     _new_name = tag + "_mu_made"
