@@ -1971,14 +1971,18 @@ check("helper fail2ban: ...and every other key, paths and regexes included, is u
 from panel.ops.ssh_manager import hosts as _f2b_hosts                              # noqa: E402
 _F2B_BODIES = {
     "fail2ban-panel-jail": _nsr_so._panel_f2b_jail_body("/var/log/auth.log", 5000, ["10.0.0.0/8"]),
+    # ...including the all-ports ban a proxied panel writes: `%(banaction_allports)s` would be
+    # refused by the helper's banaction rule and the jail would never be written at all.
+    "fail2ban-panel-jail/allports": _nsr_so._panel_f2b_jail_body("/var/log/auth.log", 5000, [],
+                                                                  allports=True),
     "fail2ban-panel-filter": _nsr_so._panel_f2b_filter_body(),
     "fail2ban-jail-local": ("[DEFAULT]\nbantime = 1h\nfindtime = 10m\nmaxretry = 5\n\n"
                             "[sshd]\nenabled = true\nport = 22\n"),
     "fail2ban-panel-whitelist": _f2b_hosts._f2b_dropin_ignoreip_body(["10.0.0.0/8", "100.64.0.1"]),
 }
 _f2b_rejected = [n for n, b in _F2B_BODIES.items()
-                 if _helper.WRITE_CONTENT[n] is None
-                 or not _helper._lines_match(b, _helper.WRITE_CONTENT[n])]
+                 if _helper.WRITE_CONTENT[n.split("/")[0]] is None
+                 or not _helper._lines_match(b, _helper.WRITE_CONTENT[n.split("/")[0]])]
 check("helper fail2ban: every body the panel writes is still accepted", not _f2b_rejected,
       "rejected: %s" % _f2b_rejected)
 

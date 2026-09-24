@@ -1706,12 +1706,45 @@ def _f2b_ignoreip_line(ignore_ips):
 _F2B_PANEL_BACKEND = "auto"
 
 
-def _panel_f2b_jail_body(auth_log, web_port, ignore_ips=None):
+# The ban action for a panel reached THROUGH something: every port, not the web port. A plain name,
+# not `%(banaction_allports)s` — the helper admits only a bare action name in a banaction line
+# (tools/panel-helper, _fail2ban_line_ok), and iptables is present wherever ufw is.
+_F2B_PANEL_ALLPORTS_ACTION = "iptables-allports"
+
+
+def _panel_login_proxied():
+    """Does a panel login arrive through something in front of the panel rather than straight at
+    its web port? Then the address in auth.log is the X-Forwarded-For client (auth.client_ip), whose
+    packets go to the PROXY's port — so a ban on the web port matches none of them. That is
+    trust_proxy (nginx/Caddy), Tailscale Serve, or a loopback bind nothing else can reach.
+
+    Unreadable config answers True: the wider ban is the one that is sure to take effect."""
+    try:
+        from panel.core import config as _cfg
+        cfg = _cfg.load_config()
+    except Exception:
+        _log.debug("f2b: config unreadable; banning on all ports", exc_info=True)
+        return True
+    bind = (cfg.get("bind_host") or "").strip().lower()
+    return bool(cfg.get("trust_proxy") or cfg.get("tailscale_setup_done")
+                or bind in ("127.0.0.1", "::1", "localhost"))
+
+
+def _panel_f2b_jail_body(auth_log, web_port, ignore_ips=None, allports=None):
     """Jail: 5 failures in 10 min → 1-hour ban, on the panel's web port. In jail.d/ so it sits
-    alongside (doesn't conflict with) any [sshd] jail. `ignore_ips` (validated) are never banned."""
+    alongside (doesn't conflict with) any [sshd] jail. `ignore_ips` (validated) are never banned.
+
+    On the web port ONLY when clients connect to it directly. Behind nginx/Caddy or Serve the
+    banned address is the forwarded client, whose traffic reaches the proxy's port: the ban
+    matched nothing, while the panel audited "banned after 5 failed panel logins" and notified
+    "IP banned on the panel login" — and the attacker carried on through :443. There the ban is
+    on every port (`allports`, default _panel_login_proxied())."""
+    if allports is None:
+        allports = _panel_login_proxied()
     return ("[linuxgsm-panel]\n"
             "enabled = true\n"
             "backend = " + _F2B_PANEL_BACKEND + "\n"
+            + ("banaction = %s\n" % _F2B_PANEL_ALLPORTS_ACTION if allports else "") +
             "port = %d\n"
             "filter = linuxgsm-panel\n"
             "logpath = %s\n"
@@ -2315,7 +2348,9 @@ def ensure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     # Checking only the latter two let a jail that monitors NOTHING report itself as already
     # active, forever: this function is the only thing that would ever rewrite it, and it returned
     # early. Found on a host whose jail still carried a logpath from a previous install path.
+    want_action = _F2B_PANEL_ALLPORTS_ACTION if _panel_login_proxied() else None
     if (st.get("enabled") and _panel_f2b_jail_port() == web_port
+            and _panel_f2b_jail_value("banaction") == want_action
             and _panel_f2b_jail_value("logpath") == str(auth_log)
             and _panel_f2b_jail_value("backend") == _F2B_PANEL_BACKEND
             and (_panel_f2b_jail_ignoreip() or []) == want_ignore):
