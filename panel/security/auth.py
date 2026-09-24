@@ -115,9 +115,11 @@ def _prehash(password):
     pre-hash (Django and passlib's bcrypt_sha256 do the same thing for the same reason). The query
     sees sha256(password) and stops before the bcrypt call.
 
-    Alert 441 is dismissed on that basis. Dismissals are keyed to the path, so if this function
-    ever moves the alert reopens at the new location — re-read this note, and the two call sites,
-    before dismissing it again."""
+    Alert 441 was dismissed on that basis, and it reopened as 492 WITHOUT this function moving:
+    routing the bcrypt calls through run_off_hub changed the flow CodeQL traces, and a changed
+    flow is a new alert. So it reopens when this function moves OR when its callers' flow changes.
+    Before dismissing it again, re-read this note and both call sites (hash_password and
+    check_password) to confirm the digest still reaches only bcrypt."""
     return base64.b64encode(hashlib.sha256((password or "").encode("utf-8")).digest())
 
 
