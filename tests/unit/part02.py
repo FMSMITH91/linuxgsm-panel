@@ -1701,6 +1701,18 @@ try:
     check("ufw status: ...so its only SSH rule is still protected from deletion",
           _ssh_g and _ssh_g[0].get("protected") is True,
           "groups %r — the last way in is deletable" % (_st.get("groups"),))
+    # French translates the WORD too — `État : actif` — so the literal "Status:" is not there at
+    # all. The gate here required it and called a live French firewall unreachable, after the two
+    # copies of the same gate in hosts.py had already been fixed.
+    _sm_core.run_privileged = lambda *a, **k: (
+        "État : actif\n\n"
+        "     Vers                       Action      De\n"
+        "     ----                       ------      --\n"
+        "[ 1] 22/tcp                     ALLOW IN    Anywhere\n", "", 0)
+    _st = _sm_firewall.remote_ufw_status(NS(port=22))
+    check("ufw status: a French host (no literal 'Status:') is read, not called unreachable",
+          not _st.get("unreachable") and _st.get("enabled") is True and len(_st.get("rules") or []) == 1,
+          repr(_st)[:200])
     _sm_core.run_privileged = lambda *a, **k: ("Status: inactief\n", "", 0)
     _st = _sm_firewall.remote_ufw_status(NS(port=22))
     check("ufw status: ...while a translated INACTIVE firewall (no rule listing) is inactive "
@@ -1913,6 +1925,32 @@ if _lp6_srv is not None:
            os.getuid())
     finally:
         for _s in (_lp6_conn, _lp6_cli, _lp6_srv):
+            _s.close()
+# A panel bound DUAL-STACK ('::') sees an IPv4 client as ::ffff:127.0.0.1, while the client's own
+# row is in /proc/net/tcp. Looking it up in tcp6 found nothing, so Tailscale Serve dialling
+# 127.0.0.1 was never trusted there and every Serve user shared one throttle bucket.
+try:
+    _lpd_srv = _lp_sock.socket(_lp_sock.AF_INET6, _lp_sock.SOCK_STREAM)
+    _lpd_srv.setsockopt(_lp_sock.IPPROTO_IPV6, _lp_sock.IPV6_V6ONLY, 0)
+    _lpd_srv.bind(("::", 0))
+except OSError as _e:
+    _lpd_srv = None
+    _lp_skip("loopback peer: an IPv4 client of a dual-stack bind is found", "no dual-stack: %s" % _e)
+if _lpd_srv is not None:
+    _lpd_srv.listen(1)
+    _lpd_cli = _lp_sock.socket(_lp_sock.AF_INET, _lp_sock.SOCK_STREAM)
+    _lpd_cli.connect(("127.0.0.1", _lpd_srv.getsockname()[1]))
+    _lpd_conn, _lpd_peer = _lpd_srv.accept()
+    try:
+        check("loopback peer: (setup) the dual-stack socket sees the IPv4 client as mapped",
+              _lpd_peer[0] == "::ffff:127.0.0.1", repr(_lpd_peer))
+        eq("loopback peer: an IPv4 client of a dual-stack bind is found (not looked for in tcp6)",
+           _lp_auth._loopback_peer_uid({"REMOTE_ADDR": _lpd_peer[0], "REMOTE_PORT": str(_lpd_peer[1]),
+                                        "SERVER_NAME": _lpd_conn.getsockname()[0],
+                                        "SERVER_PORT": str(_lpd_conn.getsockname()[1])}),
+           os.getuid())
+    finally:
+        for _s in (_lpd_conn, _lpd_cli, _lpd_srv):
             _s.close()
 # The trusted side, from a socket table naming root as the owner (the tailscaled shape).
 _lp_fix = os.path.join(_lp_tmp.mkdtemp(), "tcp")

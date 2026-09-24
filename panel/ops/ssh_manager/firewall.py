@@ -411,10 +411,12 @@ def remote_ufw_status(server):
     # on this one. Same rule _ufw_is_active exists to enforce, one line further down.
     if rc == 127:
         return {"installed": False, "enabled": False, "rules": [], "groups": []}
-    # `ufw status` always prints a "Status:" line when it actually runs. If it's missing (or the
-    # command failed), the host is unreachable / the command errored — don't claim UFW is installed
-    # (that would show a misleading empty-rules "installed" firewall for a down remote).
-    if rc != 0 or "Status:" not in out:
+    # A failed call, or no answer at all, means the host is unreachable / the command errored —
+    # don't claim UFW is installed (that would show a misleading empty-rules "installed" firewall
+    # for a down remote). NOT a missing English "Status:": ufw translates that whole line, and a
+    # French host prints `État : actif`, which read as unreachable here while hosts.py's two copies
+    # of this gate were already fixed. Whether it is active, in any locale, is _ufw_is_active's.
+    if rc != 0 or not (out or "").strip():
         # ...but "unreachable" is a claim about the NETWORK, and not every failure here is one.
         # This read is `sudo -n <helper> ufw-status` on the panel's own machine; when the sudoers
         # grant is wrong — a documented failure of this install, where a file sorting after the

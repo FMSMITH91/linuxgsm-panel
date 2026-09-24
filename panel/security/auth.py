@@ -884,6 +884,16 @@ def _proc_net_address(addr, port):
     return "%s:%04X" % ("".join("%08X" % w for w in words), port)
 
 
+def _unmapped(addr):
+    """An IPv4-mapped IPv6 address (::ffff:a.b.c.d) as the IPv4 address it carries; else as given."""
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(addr)
+    except ValueError:
+        return addr
+    return str(a.ipv4_mapped) if a.version == 6 and a.ipv4_mapped else addr
+
+
 def _loopback_peer_uid(environ):
     """The uid that owns the CLIENT end of this loopback TCP connection, or None if unknown.
 
@@ -914,6 +924,11 @@ def _loopback_peer_uid(environ):
         return None
     if not peer_port or not our_port:
         return None
+    # A panel bound dual-stack ('::') accepts an IPv4 client as ::ffff:127.0.0.1, but the CLIENT's
+    # socket is IPv4 and its row is in /proc/net/tcp, not tcp6. Looking in tcp6 found nothing, so
+    # Tailscale Serve dialling 127.0.0.1 was never trusted and every Serve user shared one
+    # loopback throttle bucket — one attacker's failures locked all of them out.
+    peer, ours = _unmapped(peer), _unmapped(ours)
     local, remote = _proc_net_address(peer, peer_port), _proc_net_address(ours, our_port)
     if local is None or remote is None:
         return None
