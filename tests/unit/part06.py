@@ -2532,6 +2532,18 @@ try:
     _launcher = os.path.join(_u, "csgoserver")
     open(_launcher, "w").close()
     os.chmod(_launcher, 0o755)
+    # A game account names its own config-lgsm entries, and the scan is a newline- and '|'-split
+    # line protocol: these are the forgeries (a second record naming ANOTHER account, a shifted
+    # field), plus a second real instance and a /home name that is not an account name.
+    _disc_names = {"gmodserver": ["x\nFOUND|lgsmpanel|pzserver|16261|0|0|0|0", "y|lgsmpanel",
+                                  "gmodserver-2"],
+                   "bad user": ["badserver"]}
+    for _du, _dinsts in _disc_names.items():
+        for _di in _dinsts:
+            os.makedirs(os.path.join(_disc_home, _du, "lgsm", "config-lgsm", _di))
+            _dl = os.path.join(_disc_home, _du, _di)
+            open(_dl, "w").close()
+            os.chmod(_dl, 0o755)
 
     class _DiscCap:
         def write(self, t):
@@ -2548,7 +2560,13 @@ finally:
     import shutil as _sh_disc
     _sh_disc.rmtree(_disc_home, ignore_errors=True)
 
-_disc_line = "".join(_disc_out).strip()
+_disc_lines = "".join(_disc_out).splitlines()
+_disc_line = next((_l for _l in _disc_lines if _l.startswith("FOUND|csgoserver|")), "")
+check("helper: lgsm-discover reports only real instances — no record forged by a newline or '|' "
+      "in an instance name, none for a /home name that is not an account",
+      sorted(tuple(_l.split("|")[1:3]) + (len(_l.split("|")),) for _l in _disc_lines)
+      == [("csgoserver", "csgoserver", 8), ("gmodserver", "gmodserver-2", 8)],
+      repr(_disc_lines))
 check("helper: lgsm-discover emits a FOUND line for an installed instance",
       _disc_line.startswith("FOUND|"), repr(_disc_line[:120]))
 _disc_parts = _disc_line.split("|")

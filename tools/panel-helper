@@ -154,6 +154,10 @@ OS_UPDATE_LOG = "/run/panel-os-update.log"
 # (-o, --system), a path fragment (., ..), or empty. This one validator is what makes the home
 # directory safe to CONSTRUCT below rather than accept.
 USERNAME_RE = r"[A-Za-z_][A-Za-z0-9._-]{0,31}"
+# A LinuxGSM instance name lgsm-discover will report: the grammar ssh_manager's _SAFE_GAME_IDENT
+# accepts, so nothing the panel could use is dropped — and nothing that can carry a '|' or a line
+# break into the FOUND| protocol gets through.
+DISCOVER_INSTANCE_RE = r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}"
 HOME_ROOT = "/home"
 
 # The sshd drop-in the panel manages, and the snapshot it keeps beside it while changing the port.
@@ -2370,6 +2374,8 @@ def do_lgsm_discover(args, content):
     except OSError:
         return 0                       # no /home is not an error, just nothing to find
     for user in users:
+        if not re.fullmatch(USERNAME_RE, user):
+            continue                   # not an account name: it could not be a FOUND field either
         cfg_dir = os.path.join(HOME_ROOT, user, "lgsm", "config-lgsm")
         if not os.path.isdir(cfg_dir):
             continue
@@ -2410,6 +2416,12 @@ def _discover_user(user, cfg_dir, cron_lines, autostart):
         except OSError:
             return
         for inst in instances:
+            # The name is a file name the GAME account chose, and it lands in a line protocol the
+            # panel splits on newlines and '|'. `x\nFOUND|<any account>|pzserver|...` forged a
+            # second record naming another account, which the import route then trusted as "the
+            # scan found it". Only a name in the panel's own identifier grammar is reported.
+            if not re.fullmatch(DISCOVER_INSTANCE_RE, inst):
+                continue
             if not os.access(os.path.join(HOME_ROOT, user, inst), os.X_OK):
                 continue               # the launcher script is what makes it a real instance
             port = 0
