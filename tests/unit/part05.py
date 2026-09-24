@@ -3766,47 +3766,110 @@ class _FakeGrp:
         self.gr_name, self.gr_mem, self.gr_gid = name, list(mem), 1234
 
 
+_sudoers_saved = (_helper.SUDOERS_FILE, _helper.SUDOERS_DIR)
+import tempfile as _sg_tmp
+_sg_root = _sg_tmp.mkdtemp(prefix="sudoers-root-")
+_sg_main = os.path.join(_sg_root, "sudoers")
+with open(_sg_main, "w", encoding="utf-8") as _fh:
+    _fh.write("Defaults env_reset\nroot ALL=(ALL:ALL) ALL\n%sudo ALL=(ALL:ALL) ALL\n")
+
+
+def _fake_grp(getgrgid, getgrall):
+    """A grp stand-in; getgrnam answers every group name with the same gid as _FakeGrp."""
+    return NS(getgrgid=getgrgid, getgrall=getgrall, getgrnam=lambda _n: _FakeGrp(_n))
+
+
 try:
+    # The real /etc/sudoers is root-only, and an unreadable policy now counts as "can escalate",
+    # so every check here reads a sandbox copy instead.
+    _helper.SUDOERS_FILE, _helper.SUDOERS_DIR = _sg_main, os.path.join(_sg_root, "none")
     _helper.glob = NS(glob=lambda _p: [])        # no sudoers.d to read in the unit environment
     _helper.pwd = NS(getpwnam=lambda _u: NS(pw_gid=1234, pw_uid=1234, pw_name=_u))
-    _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("gmodserver"),
-                     getgrall=lambda: [_FakeGrp("sudo", ["alice"]),
-                                       _FakeGrp("gmodcontent", ["gmodserver"])])
+    _helper.grp = _fake_grp(lambda _g: _FakeGrp("gmodserver"),
+                            lambda: [_FakeGrp("sudo", ["alice"]),
+                                     _FakeGrp("gmodcontent", ["gmodserver"])])
     check("enrolment: a plain game account can be enrolled",
           _helper._can_already_escalate("gmodserver") is False)
     check("enrolment: an account in the sudo group cannot",
           _helper._can_already_escalate("alice") is True)
     for _pg in ("admin", "wheel", "root"):
-        _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"),
-                         getgrall=lambda _p=_pg: [_FakeGrp(_p, ["bob"])])
+        _helper.grp = _fake_grp(lambda _g: _FakeGrp("users"),
+                                lambda _p=_pg: [_FakeGrp(_p, ["bob"])])
         check("enrolment: ...nor one in '%s'" % _pg,
               _helper._can_already_escalate("bob") is True)
     # A sudoers FILE naming the account directly, with no privileged group anywhere.
-    import tempfile as _sg_tmp
     _sg_dir = _sg_tmp.mkdtemp(prefix="sudoers-")
     with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
         _fh.write("# a comment naming gmodserver must not count\n"
                   "Defaults env_reset\n"
                   "carol ALL=(ALL) NOPASSWD:ALL\n")
     _helper.glob = NS(glob=lambda _p: [os.path.join(_sg_dir, "90-ops")])
-    _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"), getgrall=lambda: [])
+    _helper.grp = _fake_grp(lambda _g: _FakeGrp("users"), lambda: [])
     check("enrolment: an account named in a sudoers.d file cannot be enrolled",
           _helper._can_already_escalate("carol") is True)
     check("enrolment: ...but being MENTIONED in a comment there is not a grant",
           _helper._can_already_escalate("gmodserver") is False)
+
+    # Grants that do not put the account's own name first. The scan matched a sudoers line only when
+    # its FIRST token was literally the user or `%group`, so every one of these read as "cannot
+    # escalate" — the opposite of the docstring's own rule that what it cannot parse counts as yes:
+    # a User_Alias (resolved, and nested), a comma-separated user list, ALL, a `#uid` (the old
+    # `split("#")` threw the whole line away as a comment), `%#gid`, a grant in a file reached only
+    # through @include, a netgroup, and a policy file it could not read at all.
+    _sg_cases = {
+        "user-alias": "User_Alias OPS = deploy, alice\nOPS ALL=(ALL) NOPASSWD:ALL\n",
+        "nested-alias": "User_Alias INNER = deploy : OUTER = INNER, bob\nOUTER ALL=(ALL) ALL\n",
+        "user-list": "alice,deploy ALL=(ALL) ALL\n",
+        "user-list-spaced": "alice, deploy ALL=(ALL) ALL\n",
+        "all": "ALL ALL=(ALL) NOPASSWD: /usr/bin/id\n",
+        "uid": "#1234 ALL=(ALL) ALL\n",
+        "gid": "%#1234 ALL=(ALL) ALL\n",
+        "netgroup": "+admins ALL=(ALL) ALL\n",
+        "undefined-alias": "NOBODYKNOWS ALL=(ALL) ALL\n",
+        "continued": "alice,\\\n  deploy ALL=(ALL) ALL\n",
+    }
+    _sg_missed = []
+    for _case, _body in _sg_cases.items():
+        with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+            _fh.write(_body)
+        if _helper._can_already_escalate("deploy") is not True:
+            _sg_missed.append(_case)
+    check("enrolment: a grant through an alias, a user list, ALL, #uid, %#gid, a netgroup or a "
+          "continuation line is seen", not _sg_missed, "missed: %s" % _sg_missed)
+    _sg_extra = os.path.join(_sg_root, "elsewhere")
+    with open(_sg_extra, "w", encoding="utf-8") as _fh:
+        _fh.write("deploy ALL=(ALL) NOPASSWD:ALL\n")
+    with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+        _fh.write("@include %s\n" % _sg_extra)
+    check("enrolment: a grant in a file reached only through @include is seen",
+          _helper._can_already_escalate("deploy") is True)
+    with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+        _fh.write("@include %s\n" % os.path.join(_sg_root, "no-such-file"))
+    check("enrolment: a policy file that cannot be read counts as 'can escalate'",
+          _helper._can_already_escalate("deploy") is True)
+    # Positive control: the same shapes naming OTHER accounts must still let a game account in,
+    # or the checks above pass against a function that refuses everyone.
+    with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+        _fh.write("User_Alias OPS = alice, bob\nOPS ALL=(ALL) ALL\nalice, bob ALL=(ALL) ALL\n"
+                  "#999 ALL=(ALL) ALL\n%#999 ALL=(ALL) ALL\n%admins ALL=(ALL) ALL\n"
+                  "Cmnd_Alias SHUT = /sbin/shutdown : REB = /sbin/reboot\n"
+                  "Defaults:alice !requiretty\n#includedir-style comment deploy\n"
+                  "lgsmpanel ALL=(%lgsmpanel-games) NOPASSWD: ALL\n")
+    check("enrolment: ...and rules naming other accounts still let a plain account in",
+          _helper._can_already_escalate("deploy") is False)
 
     # The verb must consult it, not merely define it.
     _ran = []
     _sub_saved = _helper.subprocess
     try:
         _helper.subprocess = NS(run=lambda *a, **k: (_ran.append(a), NS(returncode=0, stderr=b""))[1])
-        _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"),
-                         getgrall=lambda: [_FakeGrp("sudo", ["carol"])])
+        _helper.grp = _fake_grp(lambda _g: _FakeGrp("users"),
+                                lambda: [_FakeGrp("sudo", ["carol"])])
         _rc_bad = _helper.do_gameuser_group(["carol"], "")
         check("enrolment: do_gameuser_group REFUSES a sudo-capable account",
               _rc_bad == 1 and not _ran, "rc=%s ran=%s" % (_rc_bad, _ran))
         _ran.clear()
-        _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("gmodserver"), getgrall=lambda: [])
+        _helper.grp = _fake_grp(lambda _g: _FakeGrp("gmodserver"), lambda: [])
         _rc_ok = _helper.do_gameuser_group(["gmodserver"], "")
         check("enrolment: ...and still enrols a plain game account",
               _rc_ok == 0 and len(_ran) == 2, "rc=%s ran=%s" % (_rc_ok, _ran))
@@ -3815,6 +3878,8 @@ try:
     _shutil.rmtree(_sg_dir, ignore_errors=True)
 finally:
     _helper.grp, _helper.pwd, _helper.glob = _grp_saved, _pwd_saved, _glob_saved
+    _helper.SUDOERS_FILE, _helper.SUDOERS_DIR = _sudoers_saved
+    _shutil.rmtree(_sg_root, ignore_errors=True)
 
 # install.sh must apply the same rule to the accounts it backfills.
 _inst_sh_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()

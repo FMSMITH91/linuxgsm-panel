@@ -1079,20 +1079,126 @@ def _can_already_escalate(user):
         return True
     if names & set(PRIVILEGED_GROUPS):
         return True
-    specs = set([user] + ["%" + n for n in names])
-    for path in ["/etc/sudoers"] + sorted(glob.glob("/etc/sudoers.d/*")):
-        try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    line = line.split("#")[0].strip()
-                    if not line or line.startswith(("Defaults", "@include", "#include")):
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        pw = None                        # not an account yet: no uid or gid a rule could name
+    uid, gids = (pw.pw_uid, {pw.pw_gid}) if pw is not None else (None, set())
+    try:
+        gids |= {grp.getgrnam(n).gr_gid for n in names}
+    except KeyError:
+        return True                      # a group of its own that cannot be resolved: unknown
+    try:
+        lines = []
+        seen = set()
+        for path in [SUDOERS_FILE] + sorted(glob.glob(os.path.join(SUDOERS_DIR, "*"))):
+            lines.extend(_sudoers_lines(path, seen))
+        return _sudoers_grants(lines, user, names, uid, gids)
+    except (OSError, ValueError) as e:
+        # A file it could not read, an include it could not follow, a construct it does not
+        # parse. It used to `continue` past an unreadable file, which read as "no grant in it".
+        sys.stderr.write("could not read the sudoers policy for %s (%s); refusing to enrol it\n"
+                         % (user, e))
+        return True
+
+
+# Where _can_already_escalate reads the sudo policy from. Module-level so a test can point it at a
+# sandbox; nothing outside this file sets them.
+SUDOERS_FILE = "/etc/sudoers"
+SUDOERS_DIR = "/etc/sudoers.d"
+_SUDOERS_INCLUDE_RE = re.compile(r"[@#]include(dir)?\s+(.+)")
+_SUDOERS_ALIAS_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]*")
+
+
+def _sudoers_lines(path, seen, depth=0):
+    """The logical lines of one sudoers file, comments removed, following @include/#include and
+    @includedir/#includedir the way sudo does. Raises OSError (unreadable) or ValueError (an
+    include it will not follow), which the caller turns into "can escalate"."""
+    if depth > 8:
+        raise ValueError("sudoers includes nest too deeply")
+    real = os.path.realpath(path)
+    if real in seen:
+        return []
+    seen.add(real)
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    out = []
+    for raw in text.replace("\\\n", " ").splitlines():
+        line = raw.strip()
+        m = _SUDOERS_INCLUDE_RE.fullmatch(line)
+        if m:
+            target = m.group(2).strip()
+            if target.startswith('"') and target.endswith('"'):
+                target = target[1:-1]
+            if "%" in target or "\\" in target:
+                raise ValueError("an include path with escapes or %%h: %s" % target)
+            if not os.path.isabs(target):
+                target = os.path.join(os.path.dirname(path), target)
+            if m.group(1):
+                for name in sorted(os.listdir(target)):
+                    # sudo skips these in an includedir, and so may we: they are not policy.
+                    if name.endswith("~") or "." in name:
                         continue
-                    parts = line.split()
-                    if parts and parts[0] in specs:
-                        return True
-        except OSError:
+                    out.extend(_sudoers_lines(os.path.join(target, name), seen, depth + 1))
+            else:
+                out.extend(_sudoers_lines(target, seen, depth + 1))
             continue
-    return False
+        # `#` starts a comment, except where it introduces a uid (`#1000`, `%#1000`).
+        line = re.sub(r"#(?![0-9]).*", "", line).strip()
+        if line:
+            out.append(line)
+    return out
+
+
+def _sudoers_grants(lines, user, names, uid, gids):
+    """True if any user specification in `lines` can match `user`.
+
+    Resolves User_Alias definitions (recursively), comma-separated user lists, `ALL`, `#uid`,
+    `%group` and `%#gid`. Anything it cannot evaluate — a netgroup, a non-Unix group, an alias
+    that is never defined, a quoted or escaped name — counts as a match: this answers "may this
+    account be put inside the panel's sudo grant", and a false yes only refuses an account."""
+    aliases = {}
+    rules = []
+    for line in lines:
+        head = line.split(None, 1)[0]
+        if head.startswith("Defaults"):
+            continue
+        if head in ("Host_Alias", "Runas_Alias", "Cmnd_Alias", "Cmd_Alias"):
+            continue
+        if head == "User_Alias":
+            body = line[len("User_Alias"):]
+            for part in re.split(r":(?=\s*[A-Z][A-Z0-9_]*\s*=)", body):
+                if "=" not in part:
+                    raise ValueError("unparsed User_Alias: %s" % line)
+                name, members = part.split("=", 1)
+                aliases[name.strip()] = [x.strip() for x in members.split(",") if x.strip()]
+            continue
+        m = re.match(r"((?:[^\s,]+\s*,\s*)*[^\s,]+)\s", line)
+        if not m:
+            raise ValueError("unparsed sudoers line: %s" % line)
+        rules.append([x.strip() for x in m.group(1).split(",")])
+
+    def matches(item, depth=0):
+        if depth > 16:
+            raise ValueError("User_Alias nests too deeply")
+        item = item.lstrip("!")        # a negation still names the account: treat it as a match
+        if item == "ALL" or item == user:
+            return True
+        if item.startswith("%#"):
+            return item[2:].isdigit() and int(item[2:]) in gids
+        if item.startswith("%:") or item.startswith("+") or '"' in item or "\\" in item:
+            return True                  # a non-Unix group, a netgroup, a quoted name: unknown
+        if item.startswith("%"):
+            return item[1:] in names
+        if item.startswith("#"):
+            return item[1:].isdigit() and uid is not None and int(item[1:]) == uid
+        if _SUDOERS_ALIAS_NAME_RE.fullmatch(item):
+            if item not in aliases:
+                return True              # an alias defined nowhere this can see
+            return any(matches(x, depth + 1) for x in aliases[item])
+        return False
+
+    return any(matches(item) for items in rules for item in items)
 
 
 LGSM_ACTIONS = ("start", "stop", "restart", "monitor", "update", "validate", "backup",
