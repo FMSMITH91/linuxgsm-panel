@@ -604,7 +604,11 @@ def _security_whitelist():
 
 def _security_whitelist_add(value):
     canon = _valid_ip_or_cidr(value)
-    if not canon:
+    # A value can parse as an address and still not be one fail2ban may be given: ipaddress keeps an
+    # IPv6 zone id VERBATIM, and `::1%<anything>` survives it with spaces and newlines intact. Stored
+    # here, it reached the root-owned jail file as extra lines (bantime, [sshd] enabled = false, ...).
+    # A zone id means nothing to a ban list, so refuse it, and anything that is not one plain token.
+    if not canon or "%" in canon or any(c.isspace() or not c.isprintable() for c in canon):
         return None
 
     def _mut(cfg):   # read-modify-write under the config lock so a concurrent write can't clobber it

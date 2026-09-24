@@ -1175,6 +1175,46 @@ if len(_rt_set) == 1:
     check("install.sh: the installer copy records its own success rather than `|| true`",
           '"${_istage}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1' in _inst_txt)
 
+# ── panel-self-update: root opens its log inside the panel's own data dir ──────────────────────
+# _self_update_detached ran `open(os.path.join(data_dir, "self-update.log"), "w")` AS ROOT. data/
+# belongs to the panel user, so a symlink at that name made root truncate — or create — any file
+# on the box with one panel-self-update call. _open_log_in_dir pins the directory, unlinks the
+# name and CREATES the log O_EXCL; a symlink and a hard link planted there must both survive
+# untouched. Driven for real in a temp dir; the caller is then held to it by AST.
+import ast as _sul_ast
+_sul_tmp = _tempfile.mkdtemp(prefix="selfupdate-log-")
+_sul_victim = os.path.join(_sul_tmp, "root-owned-file")
+_sul_data = os.path.join(_sul_tmp, "data")
+os.makedirs(_sul_data)
+with open(_sul_victim, "w", encoding="utf-8") as _fh:
+    _fh.write("ORIGINAL")
+_sul_log = os.path.join(_sul_data, _helper.SELF_UPDATE_LOG)
+os.symlink(_sul_victim, _sul_log)
+with _helper._open_log_in_dir(_sul_data, _helper.SELF_UPDATE_LOG) as _fh:
+    _fh.write("=== panel self-update ===\n")
+check("helper self-update: a symlink at the log name is not written through",
+      open(_sul_victim, encoding="utf-8").read() == "ORIGINAL",
+      repr(open(_sul_victim, encoding="utf-8").read()))
+check("helper self-update: ...and the log is a real file holding what was written (positive control)",
+      not os.path.islink(_sul_log)
+      and open(_sul_log, encoding="utf-8").read() == "=== panel self-update ===\n")
+os.unlink(_sul_log)
+os.link(_sul_victim, _sul_log)
+with _helper._open_log_in_dir(_sul_data, _helper.SELF_UPDATE_LOG) as _fh:
+    _fh.write("new run\n")
+check("helper self-update: a HARD link at the log name is not truncated either",
+      open(_sul_victim, encoding="utf-8").read() == "ORIGINAL",
+      repr(open(_sul_victim, encoding="utf-8").read()))
+check("helper self-update: ...the log is a fresh file owned like its directory",
+      os.stat(_sul_log).st_nlink == 1 and os.stat(_sul_log).st_uid == os.stat(_sul_data).st_uid
+      and open(_sul_log, encoding="utf-8").read() == "new run\n")
+_sul_fn = next(n for n in _sul_ast.walk(_sul_ast.parse(open(_helper_path, encoding="utf-8").read()))
+               if isinstance(n, _sul_ast.FunctionDef) and n.name == "_self_update_detached")
+_sul_calls = [n.func.id for n in _sul_ast.walk(_sul_fn)
+              if isinstance(n, _sul_ast.Call) and isinstance(n.func, _sul_ast.Name)]
+check("helper self-update: the detached run opens its log through _open_log_in_dir, never open()",
+      "_open_log_in_dir" in _sul_calls and "open" not in _sul_calls, repr(_sul_calls))
+
 # ── panel-self-update: what root executes out of a directory the panel owns ────────────────────
 # `panel-self-update` runs the root-owned install.sh as root with cwd=PANEL_DIR, and its docstring
 # argues the ROOT-run part is "fixed and small". Three lines said otherwise, and a compromised
