@@ -2591,6 +2591,32 @@ check("g.backups_unreadable" in _bk_win2,
 check(">no backups yet<" in _bk_win2,
       "backups: ...and still says that for a host that genuinely has none (positive control)",
       "the real empty case lost its message")
+
+# ── a schedule change posts only the field that changed ──────────────────────────────────────
+# Both schedule controls on each page fire one save, and it posted BOTH fields. Files & Config's
+# keep <select> has no option for 9 or 11-30, so a stored keep of 14 left it with no selection and
+# .value read '' — which the route takes as "clear the override". Changing only the interval
+# therefore reset retention to the global 2, and the next backup deleted twelve archives. The
+# route now leaves an absent field alone (smoke), and these pin the two halves in the browser.
+_sbk = _js_code_only(_js_function_body(_bk_js, "saveBkSchedule"))
+check("JSON.stringify(body)" in _sbk and "keep:kp" not in _sbk
+      and "!==_bkShown[f[0]]" in _sbk and "el.value!==''" in _sbk,
+      "backups: Files & Config posts only the schedule field that changed, never an empty one",
+      "saveBkSchedule still posts {interval, keep} — a change to one resets the other")
+_rbk = _js_code_only(_js_function_body(_bk_js, "renderBackups"))
+_bks = _js_code_only(_js_function_body(_bk_js, "_bkShow"))
+check(_rbk.count("_bkShow(") == 2 and not re.search(r"\b(?:iv|kp)\.value\s*=", _rbk)
+      and "createElement('option')" in _bks and "_bkShown[field]=v" in _bks,
+      "backups: ...and a stored value with no <option> gets one, so the select is never blank",
+      "renderBackups assigns .value directly — a keep of 14 leaves the select with no selection")
+_gss = _js_code_only(_js_function_body(_bk_js2, "setGameSchedule"))
+check("JSON.stringify(body)" in _gss and "{interval:iv,keep:kp}" not in _gss.replace(" ", ""),
+      "backups: the Backups page posts only the schedule field that changed, too",
+      "setGameSchedule still posts {interval, keep} — a keep edit resets a 3-day interval")
+_gsch = _js_code_only(_js_function_body(_bk_js2, "gameSchedule"))
+check("['3','Every 3 days']" in _gsch and "ivOpts.push([ivVal" in _gsch,
+      "backups: ...and its interval list offers every value Files & Config does, plus the stored one",
+      "a 3-day override renders as 'Default' beside a note saying 'Custom — every 3 days'")
 # The two buttons on a backup ROW read the listing too, and app.py's _find_game_backup iterates
 # it — None included. Both answered a 500 with a traceback in the panel log for a host that
 # simply did not answer.

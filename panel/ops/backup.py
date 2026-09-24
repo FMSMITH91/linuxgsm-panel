@@ -694,20 +694,34 @@ def _game_schedules(cfg):
     return gs if isinstance(gs, dict) else {}
 
 
+# "Leave this half of the override as it is." A caller that changes ONE of the two fields has to
+# be able to say so. The Files & Config card has a <select> per field and posted BOTH on a change
+# to either, and a stored keep that select had no <option> for (9, or 11-30: the Backups page takes
+# any number up to MAX_FULL_KEEP) read back as ''. So changing only the interval sent keep:'', the
+# route read '' as "clear it", and the next backup pruned to the global default — deleting
+# archives nobody had asked to lose.
+UNCHANGED = object()
+
+
 def set_game_schedule(sid, interval_days, keep):
     """Set/clear a server's schedule override. For each of interval_days/keep: a number sets an
-    override, None clears it (inherit the global default). The server's last-run is preserved."""
+    override, None clears it (inherit the global default), UNCHANGED leaves it exactly as it is.
+    The server's last-run is preserved."""
     def _mut(cfg):
         sched = _game_schedules(cfg)
         cfg["game_schedules"] = sched   # normalise a corrupted value back to a dict
         entry = sched.get(str(sid))
         if not isinstance(entry, dict):
             entry = {}
-        if interval_days is None:
+        if interval_days is UNCHANGED:
+            pass
+        elif interval_days is None:
             entry.pop("interval_days", None)
         else:
             entry["interval_days"] = max(0, min(MAX_INTERVAL_DAYS, int(interval_days)))
-        if keep is None:
+        if keep is UNCHANGED:
+            pass
+        elif keep is None:
             entry.pop("keep", None)
         else:
             entry["keep"] = max(MIN_FULL_KEEP, min(MAX_FULL_KEEP, int(keep)))

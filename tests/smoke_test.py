@@ -714,6 +714,23 @@ try:
                   json={"interval": "default", "keep": ""}).get_json() or {}
     check("backups: an EMPTY per-server keep clears the override (inherits the default)",
           _sch.get("schedule", {}).get("keep_set") is False, str(_sch.get("schedule")))
+    # A field LEFT OUT is left alone. Both pages posted both fields on a change to either, and
+    # Files & Config's keep <select> has no option for 14, so it read '' and an interval change
+    # cleared the keep override: the next backup pruned to the global 2 and deleted 12 archives.
+    c.post("/api/panel/backup/game/%d/schedule" % gs_id, json={"interval": "7", "keep": "14"})
+    _sch = c.post("/api/panel/backup/game/%d/schedule" % gs_id,
+                  json={"interval": "1"}).get_json() or {}
+    check("backups: changing only the interval leaves the keep override where it was",
+          _sch.get("schedule", {}).get("keep") == 14 and _sch["schedule"].get("keep_set") is True
+          and _sch["schedule"].get("interval_days") == 1,
+          str(_sch.get("schedule")))
+    _sch = c.post("/api/panel/backup/game/%d/schedule" % gs_id,
+                  json={"keep": "4"}).get_json() or {}
+    check("backups: ...and changing only keep leaves the interval override (both directions)",
+          _sch.get("schedule", {}).get("interval_days") == 1
+          and _sch["schedule"].get("interval_set") is True and _sch["schedule"].get("keep") == 4,
+          str(_sch.get("schedule")))
+    c.post("/api/panel/backup/game/%d/schedule" % gs_id, json={"interval": "", "keep": ""})
 
     bdel = c.post("/api/panel/backup/delete", json={"name": "../../etc/passwd"})
     check("backups: delete rejects a traversal name", not (bdel.get_json() or {}).get("success"))
