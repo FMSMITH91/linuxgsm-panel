@@ -1249,10 +1249,13 @@ class _FakeWS:
     def __init__(self, frames):
         self._frames = list(frames)
         self.sent = []
+        self.timeout = 40.0        # what create_connection(timeout=40) leaves on the real socket
     def recv(self):
         return self._frames.pop(0) if self._frames else ""   # "" == EOF -> the loop breaks
     def send(self, s):
         self.sent.append(s)
+    def settimeout(self, t):
+        self.timeout = t
     def close(self):
         pass
 
@@ -1269,6 +1272,38 @@ check("discord: the gateway IDENTIFYs with the message-content intent",
 check("discord: a MESSAGE_CREATE is delivered to the handler with (channel, is_bot, content)",
       _dc_seen == [("999", False, "!status")])
 check("discord: the message-content intent bit (1<<15) is set", N._DISCORD_INTENTS & (1 << 15))
+
+
+# A QUIET session must outlive its own heartbeat. create_connection(timeout=40) is also the timeout of
+# every later recv(), and an idle guild sends nothing but heartbeat ACKs — the first a full
+# heartbeat_interval (~41s) after IDENTIFY. recv() raised first, the session "ended", and the bot
+# re-IDENTIFYed every ~56s: ~1500 a day against Discord's limit of 1000, which resets the token.
+# This fake behaves like websocket-client: a gap longer than the socket's timeout raises.
+class _QuietWS(_FakeWS):
+    def __init__(self, frames, gap):
+        _FakeWS.__init__(self, frames)
+        self._gap = gap
+    def recv(self):
+        if len(self._frames) == 1 and self.timeout is not None and self.timeout < self._gap:
+            raise TimeoutError("Connection timed out")      # WebSocketTimeoutException's shape
+        return _FakeWS.recv(self)
+
+
+_dcq_seen = []
+_dcq_ws = _QuietWS(['{"op":10,"d":{"heartbeat_interval":600000}}',
+                    '{"op":0,"s":1,"t":"MESSAGE_CREATE","d":{"channel_id":"7","author":{"bot":false},'
+                    '"content":"!status"}}'], gap=600 + 5)     # the first ACK: one interval later
+N.discord_gateway_run("A" * 50, lambda ch, is_bot, content, author=None: _dcq_seen.append(content),
+                      _connect=lambda: _dcq_ws)
+check("discord: a quiet session is not torn down before its first heartbeat ACK can arrive",
+      _dcq_seen == ["!status"] and (_dcq_ws.timeout or 0) > 600,
+      "recv timeout %r for a 600s heartbeat interval; delivered %r" % (_dcq_ws.timeout, _dcq_seen))
+_dcq_seen2 = []
+_dcq_ws2 = _QuietWS(['{"op":10,"d":{"heartbeat_interval":600000}}', '{"op":0}'], gap=10 ** 6)
+N.discord_gateway_run("A" * 50, lambda ch, is_bot, content, author=None: _dcq_seen2.append(content),
+                      _connect=lambda: _dcq_ws2)
+check("discord: ...while a recv that really times out still ends the session (control)",
+      _dcq_seen2 == [] and _dcq_ws2._frames == ['{"op":0}'], repr(_dcq_ws2._frames))
 
 # player_slots parses gamedig's compact JSON into (count, max, name); a name with spaces/quotes
 # round-trips and junk output is rejected. run_command is stubbed so no SSH/gamedig is needed.

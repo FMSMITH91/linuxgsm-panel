@@ -556,6 +556,14 @@ def discord_gateway_run(bot_token, on_message, _connect=None):
         ws = _connect()
         hello = json.loads(ws.recv())
         interval = float((hello.get("d") or {}).get("heartbeat_interval", 41250)) / 1000.0
+        # The 40s given to create_connection is ALSO the timeout of every later recv(), and a
+        # quiet guild sends nothing but heartbeat ACKs — the first of which comes a full interval
+        # (~41s) after IDENTIFY. So recv() timed out before the first heartbeat was even sent, the
+        # session "ended", and the watcher identified again ~56s later, around the clock: ~1500
+        # IDENTIFYs a day against Discord's 1000, which gets the bot token reset. recv() now has
+        # room for two intervals; a dead link is still caught by the unACKed-heartbeat check below,
+        # which closes the socket and so unblocks recv().
+        ws.settimeout(interval * 2 + 10)
         ws.send(json.dumps({"op": 2, "d": {
             "token": bot_token, "intents": _DISCORD_INTENTS,
             "properties": {"os": "linux", "browser": "linuxgsm-panel", "device": "linuxgsm-panel"},
