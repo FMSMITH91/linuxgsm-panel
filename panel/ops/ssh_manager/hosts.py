@@ -1137,6 +1137,27 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         hardening += [("PermitRootLogin", "prohibit-password"), ("PasswordAuthentication", "no")]
     for _key, _val in hardening:
         _core.run_privileged(server, "sshd-set-directive", [_key, _val], timeout=20, merge_stderr=False)
+    # The write is not the result. Ubuntu's sshd_config Includes sshd_config.d/*.conf at its top
+    # and sshd keeps the FIRST value it reads, so on a cloud image whose 50-cloud-init.conf says
+    # `PasswordAuthentication yes` the edit above changes nothing — and this step used to discard
+    # every tuple and say nothing, so the log read "Hardening SSH configuration … VPS bootstrap
+    # complete" about a host still taking password logins from the internet. Ask sshd what it will
+    # actually use (`sshd -T` parses the config; no restart needed) and say so when it disagrees.
+    hardening_failed = []
+    _unapplied, _readable = _sshd_unapplied_directives(server, hardening)
+    # Unknown is not "applied": the final message carries it, rather than a bare "complete".
+    hardening_unverified = (not _readable) and server.auth_method != "password"
+    if not _readable:
+        note("Could not read sshd's effective configuration to confirm the SSH hardening took "
+             "effect — check `sshd -T` on the host.")
+    for _key, _want, _got in _unapplied:
+        note("NOT IN EFFECT: sshd reports %s as '%s', not '%s' — something it reads first "
+             "overrides the edit (usually a file in /etc/ssh/sshd_config.d)."
+             % (_key, _got or "unset", _want))
+        if _key in _SSHD_SECURITY_DIRECTIVES:
+            hardening_failed.append((_key, _got or "unset"))
+    if any(k == "PasswordAuthentication" for k, _ in hardening_failed):
+        note("Password SSH login is still ENABLED on this host.")
     if server.auth_method != "password":
         _core._restart_sshd(server, timeout=15)
     else:
@@ -1245,11 +1266,22 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     else:
         note("Reboot check skipped — this is the panel's own host.")
 
+    if hardening_failed:
+        # Not "complete": the one step whose whole point is closing a door reported the door is
+        # still open. The rest of the work did happen, and the message says both.
+        return False, ("Bootstrap finished, but the SSH hardening did not take effect: sshd "
+                       "still reports %s. Something sshd reads first overrides the edit — look "
+                       "in /etc/ssh/sshd_config.d (cloud images ship 50-cloud-init.conf)."
+                       % "; ".join("%s %s" % kv for kv in hardening_failed)), "\n".join(log)
     if progress:
         try:
             progress(total, total, "Bootstrap complete", "done")
         except Exception:
             _core._log.debug("remote_bootstrap_vps: ignored non-fatal error", exc_info=True)
+    if hardening_unverified:
+        return True, (f"VPS bootstrap complete ({step}/{total} steps), but the SSH hardening could "
+                      "not be verified — sshd's effective configuration was unreadable. Check "
+                      "`sshd -T` on the host for passwordauthentication."), "\n".join(log)
     return True, f"VPS bootstrap complete ({step}/{total} steps).", "\n".join(log)
 
 
@@ -1503,6 +1535,39 @@ def _sshd_current_ports(server):
         if len(parts) >= 2 and parts[0].lower() == "port" and parts[1].isdecimal():
             ports.append(parts[1])
     return ports
+
+
+# The hardening directives whose failure leaves a door open, as opposed to the keepalive pair.
+_SSHD_SECURITY_DIRECTIVES = frozenset({"PermitRootLogin", "PasswordAuthentication"})
+# `sshd -T` prints one canonical name per value, and which one has changed between OpenSSH
+# releases: PERMIT_NO_PASSWD dumps as `without-password` on older sshd and `prohibit-password` on
+# current ones. Both are the same setting.
+_SSHD_VALUE_ALIASES = {"without-password": "prohibit-password"}
+
+
+def _sshd_unapplied_directives(server, wanted):
+    """([(key, wanted, effective)], readable) for the `wanted` (key, value) pairs sshd will NOT use.
+
+    Read from `sshd -T`, which parses the whole config the way the daemon does — Include order and
+    first-value-wins included — so a value written to sshd_config and overridden by a
+    sshd_config.d file shows up here as the override. `readable` is False when that read failed or
+    printed no settings at all: then nothing is known, and the list is empty rather than a claim
+    that everything took."""
+    out, _, rc = _core.run_privileged(server, "sshd-effective-config", [], timeout=15,
+                                      merge_stderr=False)
+    effective = {}
+    for line in (out or "").splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            effective[parts[0].lower()] = parts[1].strip().lower()
+    if rc != 0 or not effective:
+        return [], False
+    unapplied = []
+    for key, want in wanted:
+        got = effective.get(key.lower(), "")
+        if _SSHD_VALUE_ALIASES.get(got, got) != _SSHD_VALUE_ALIASES.get(want.lower(), want.lower()):
+            unapplied.append((key, want, got))
+    return unapplied, True
 
 
 def _canonical_ip(s):

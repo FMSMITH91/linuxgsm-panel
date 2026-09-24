@@ -2681,6 +2681,48 @@ try:
     check("bootstrap: an unread reboot-required check is not reported as 'no reboot needed'",
           "No reboot needed" not in _log2 and "Could not check whether a reboot is needed" in _log2,
           "a host that never answered was told it was up to date: %s" % _log2[-300:])
+
+    # ── ...and the SSH hardening is read back from sshd, not assumed from the write ──
+    # sshd keeps the FIRST value it reads and Ubuntu Includes sshd_config.d before sshd_config's
+    # own body, so on a cloud image whose 50-cloud-init.conf says `PasswordAuthentication yes` the
+    # edit changed nothing. The tuple was discarded and the job said "VPS bootstrap complete"
+    # about a host still taking password logins from the internet.
+    def _bs_harden(effective, rc=0, auth="key"):
+        _bs_priv.clear()
+        _sm_core.run_command = _bs_run(("NO\n", "", 0))
+
+        def _priv(s, verb, args=None, **k):
+            _bs_priv.append(verb)
+            if verb == "sshd-effective-config":
+                return (effective, "", rc)
+            return ("", "", 0)
+        _sm_core.run_privileged = _priv
+        return _sm_hosts.remote_bootstrap_vps(
+            NS(id=9102, host="203.0.113.11", auth_method=auth), set_timezone="", enable_ufw=False,
+            install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=False)
+    _eff_ok = ("port 22\nclientaliveinterval 300\nclientalivecountmax 2\n"
+               "permitrootlogin without-password\npasswordauthentication no\n")
+    _eff_cloud = _eff_ok.replace("passwordauthentication no", "passwordauthentication yes")
+    _hok, _hmsg, _hlog = _bs_harden(_eff_cloud)
+    check("bootstrap: hardening that sshd does not use is NOT reported as a complete bootstrap",
+          _hok is False and "PasswordAuthentication yes" in _hmsg,
+          "ok=%r msg=%r — password SSH still open and the job says it is done" % (_hok, _hmsg))
+    check("bootstrap: ...and the log says password login is still on",
+          "Password SSH login is still ENABLED" in _hlog and "NOT IN EFFECT" in _hlog,
+          _hlog[-400:])
+    check("bootstrap: ...having asked sshd for its effective configuration",
+          "sshd-effective-config" in _bs_priv, "verbs run: %r" % (_bs_priv[-8:],))
+    _hok, _hmsg, _hlog = _bs_harden(_eff_ok)
+    check("bootstrap: ...while hardening sshd DOES use completes (positive control; "
+          "without-password is prohibit-password)",
+          _hok is True and _hmsg.startswith("VPS bootstrap complete (") and "NOT IN EFFECT" not in _hlog,
+          "ok=%r msg=%r log=%r" % (_hok, _hmsg, _hlog[-300:]))
+    _hok, _hmsg, _ = _bs_harden("", rc=1)
+    check("bootstrap: an unreadable sshd -T is reported as unverified, not as hardened",
+          _hok is True and "could not be verified" in _hmsg, "msg=%r" % (_hmsg,))
+    _hok, _hmsg, _ = _bs_harden(_eff_cloud, auth="password")
+    check("bootstrap: ...and a password-auth remote, which never asks for it off, is not failed "
+          "for keeping it", _hok is True, "msg=%r" % (_hmsg,))
 finally:
     (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
      _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,
