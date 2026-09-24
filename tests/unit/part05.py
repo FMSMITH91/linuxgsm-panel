@@ -2437,7 +2437,10 @@ for _k, _v in _F2B_ROOT:
         _accepted_f2b.append("%s: %s" % (_k, _v[:40]))
 check("helper: write-file refuses a fail2ban body that would run a command as root",
       not _accepted_f2b, "accepted: %s" % _accepted_f2b)
-_f2b_real_written = [_k for _k, _v in _F2B_BODIES.items() if _write_through_helper(_k, _v) != (0, _v)]
+# A key can carry a "/variant" suffix (the proxied panel's all-ports jail is written to the same
+# target as the plain one); the helper target is the part before it.
+_f2b_real_written = [_k for _k, _v in _F2B_BODIES.items()
+                     if _write_through_helper(_k.split("/")[0], _v) != (0, _v)]
 check("helper: ...and still writes every fail2ban body the panel sends (positive control)",
       not _f2b_real_written, "refused: %s" % _f2b_real_written)
 _rc_cron, _written_cron = _write_through_helper("node-tools-cron", "* * * * * root id > /tmp/pwned")
