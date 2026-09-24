@@ -13419,11 +13419,13 @@ try:
     # cookie is SameSite=Lax and so is not sent cross-site, which leaves the socket's connect gate
     # seeing an anonymous client and refusing it.
     #
-    # _socketio_cors() says so in as many words ("the SameSite=Lax cookie stops a cross-site page
-    # carrying it") and falls back to "*" for plain IP:port access on the strength of it, and the
-    # CSRF Bearer exemption a few hundred lines above rests on the same sentence. Nothing asserted
-    # it. Setting it to "None" — which is what anyone embedding the panel in an iframe would reach
-    # for — silently removes the floor under both.
+    # The socket's origin check is the first layer: with no site_domain and no explicit
+    # socketio_cors_origins it is same-origin, port included (the 'socket origin' checks below),
+    # never "*" unless the operator lists it. This cookie is the second layer under it — where the
+    # check does let a cross-site page through (an operator's "*"), that page still reaches the
+    # connect gate anonymously — and the CSRF Bearer exemption a few hundred lines above rests on
+    # it alone. Nothing asserted it. Setting it to "None" — which is what anyone embedding the
+    # panel in an iframe would reach for — silently removes the floor under both.
     check("cookie: the session cookie is SameSite-restricted",
           app.config.get("SESSION_COOKIE_SAMESITE") in ("Lax", "Strict"),
           "SESSION_COOKIE_SAMESITE is %r — the socket connect gate and the CSRF Bearer exemption "
