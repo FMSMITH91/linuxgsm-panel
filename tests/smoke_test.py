@@ -7570,6 +7570,25 @@ try:
               _lat_after_other.get("action") == "update",
               "left %r registered — the running update's output stops reaching the console the "
               "panel told the operator to watch" % (_lat_after_other or None,))
+        # How an action that the TRANSPORT gave up on is announced. The local and Tailscale
+        # transports answer a timeout with rc -1 (they do not raise), and so does paramiko's
+        # silent-channel give-up; only a raise leaves rc None. -1 is never a real exit status.
+        _lat_end = {}
+        with app.app_context():
+            for _lat_rc in (None, -1, 2, 0):
+                _lat_seen.clear()
+                _begin_action_tail(app, gs_id, "update", _lat_logf, _lat_user)
+                _end_action_tail(app, gs_id, _lat_remote, "update", _lat_rc)
+                _lat_end[_lat_rc] = " ".join(p.get("data") or "" for (e, p, r) in _lat_seen
+                                             if e == "console_output")
+        check("console tail: a transport timeout (rc -1) is 'stopped reporting', not 'failed'",
+              "stopped reporting" in _lat_end[-1] and "failed" not in _lat_end[-1],
+              "said %r — an update still running on the host was declared failed" % _lat_end[-1])
+        check("console tail: ...as a raised call (rc None) already was",
+              "stopped reporting" in _lat_end[None], _lat_end[None])
+        check("console tail: ...while a real non-zero exit is still a failure, and 0 a success",
+              "failed (exit 2)" in _lat_end[2] and "finished successfully" in _lat_end[0],
+              "2=%r 0=%r" % (_lat_end[2], _lat_end[0]))
         check("console tail: ...and the action that owns the entry still clears it (positive control)",
               not _lat_after_own,
               "still registered: %r — the poller would tail a finished action forever, so the "
@@ -11236,6 +11255,29 @@ try:
             _bksh.notifications.notify = _bk_notify_saved
             _bkops.game_backup_due = _bk_due_saved
             _bkops.set_game_schedule(gs_id, None, None)
+
+        # ── every clock write goes through the helpers that survive an unreadable config ───────
+        # record_game_backup / record_full_backup RAISE ConfigUnreadable while config.json is there
+        # but unparseable. The backup paths below were moved onto _record_game_clock; the install
+        # route was not, and its call sat one line after committing the new server row — so an
+        # install started while the file was bad answered 500 and left a row "installing" with no
+        # job behind it. Gate the class: only the two helpers may call the raising writers.
+        import ast as _bkc_ast
+        _bkc_direct = []
+        for _bkc_py in sorted((_lgsm_pathlib.Path(_repo_root) / "panel").rglob("*.py")) + [
+                _lgsm_pathlib.Path(_repo_root) / "app.py"]:
+            for _bkc_fn in _bkc_ast.walk(_bkc_ast.parse(_bkc_py.read_text(encoding="utf-8"))):
+                if not isinstance(_bkc_fn, _bkc_ast.FunctionDef) or _bkc_fn.name in (
+                        "_record_game_clock", "_record_full_clock"):
+                    continue
+                for _bkc_c in _bkc_ast.walk(_bkc_fn):
+                    if (isinstance(_bkc_c, _bkc_ast.Call) and isinstance(_bkc_c.func, _bkc_ast.Attribute)
+                            and _bkc_c.func.attr in ("record_game_backup", "record_full_backup")):
+                        _bkc_direct.append("%s:%d in %s()" % (_bkc_py.name, _bkc_c.lineno, _bkc_fn.name))
+        check("backup clock: nothing but the two safe helpers calls the writers that raise on a bad "
+              "config.json", not _bkc_direct,
+              "direct calls: %s — each one turns a readable-later config into a 500 or a false "
+              "failure" % sorted(set(_bkc_direct)))
 
         # ── config.json going bad under a backup that WORKED ──────────────────────────────────
         # update_config now refuses to write while config.json is there but unparseable (it used

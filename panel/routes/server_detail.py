@@ -842,9 +842,9 @@ def register(app):
                                                             timeout=1800, selfname=selfname,
                                                             answers=answers, tee_log=True)
                     finally:
-                        # rc is still None if the SSH call raised or timed out, and _end_action_tail
-                        # says so rather than guessing — a 30-minute timeout does not mean the
-                        # update stopped running on the host.
+                        # rc is None if the SSH call raised and -1 if the transport gave up
+                        # waiting; _end_action_tail says "stopped reporting" for both rather than
+                        # guessing — a 30-minute timeout does not mean the update stopped running.
                         _end_action_tail(_app, server_id, remote, action, rc)
                     ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
                     gs = db.session.get(GameServer, server_id)

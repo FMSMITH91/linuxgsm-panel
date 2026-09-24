@@ -712,10 +712,12 @@ def _end_action_tail(app, server_id, remote, action, rc):
             _action_output.pop(server_id, None)
     if rc == 0:
         _console_push(app, server_id, f"[panel] {action} finished successfully.")
-    elif rc is None:
-        # The SSH call raised, or timed out — we never got an exit code. Deliberately not
-        # reported as a failure of the action itself: on a 30-minute timeout the update may well
-        # still be running on the host.
+    elif rc is None or rc < 0:
+        # We never got an exit code: the SSH call raised (rc None), or the transport gave up — a
+        # local or Tailscale timeout, or paramiko's silent-channel give-up, all answer rc -1. An
+        # exit STATUS is 0-255, so a negative rc is never the action's own. This used to test only
+        # None, so a 30-minute update the transport stopped waiting for was announced as
+        # "failed (exit -1)" while it may well still have been running on the host.
         _console_push(app, server_id, f"[panel] {action} stopped reporting — see the audit log.")
     else:
         _console_push(app, server_id, f"[panel] {action} failed (exit {rc}) — see above.")

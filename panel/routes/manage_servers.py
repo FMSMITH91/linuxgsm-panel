@@ -33,7 +33,7 @@ from panel.core.validation import (GAME_TYPE_RE, INSTANCE_NAME_RE, MAX_PORT, MIN
     SAFE_LABEL_RE, _port_or)
 from app import (_extract_start_error, _log, _prune_jobs,
     _resolve_source_aux_ports, game_os_unsupported, load_game_list, resolve_free_port)
-from panel.routes._shared import (_looks_installed, _notify_servers_changed)
+from panel.routes._shared import (_looks_installed, _notify_servers_changed, _record_game_clock)
 
 # Serializes the install "slot" allocation (pick a free port → reject a duplicate name → create the
 # row). resolve_free_port yields on an SSH scan, so without this two concurrent installs on the same
@@ -479,7 +479,10 @@ def register(app):
         # Start the server's scheduled-backup clock now, so a brand-new install isn't seen as
         # immediately "due" and backed up mid-install (its first scheduled backup is one interval
         # out). Without this, last=0 makes game_backup_due() true the moment installed flips True.
-        bk.record_game_backup(gs.id)
+        # Through _record_game_clock: record_game_backup REFUSES (ConfigUnreadable) while config.json
+        # is there but unparseable, and a raise here, one line after the row was committed, answered
+        # the install with a 500 and left the server "installing" with no job behind it.
+        _record_game_clock(app, gs.id, gs.name)
 
         # GMod is the one game that needs mounted content to render maps/props — offer the picked
         # games (validated against the known set). This adds a content step to the install job.
