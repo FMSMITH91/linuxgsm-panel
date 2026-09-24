@@ -27,8 +27,8 @@ try:
     check("ufw_deny_ip: non-IP rejected, runs nothing", _ok is False and not _so)
     _so.clear()
     _ok, _ = SO.ufw_deny_ip("10.0.0.5", tag="panel-test")
-    check("ufw_deny_ip: valid IP reaches ufw insert",
-          _ok is True and any("ufw insert 1 deny from 10.0.0.5" in c for c in _so))
+    check("ufw_deny_ip: valid IP reaches ufw prepend",
+          _ok is True and any("ufw prepend deny from 10.0.0.5" in c for c in _so))
     _so.clear()
     SO.ufw_deny_ip("10.0.0.6", tag="ev;il`x`")   # tag must be charset-stripped
     check("ufw_deny_ip: tag stripped of shell metacharacters",

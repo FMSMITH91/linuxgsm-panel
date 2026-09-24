@@ -945,8 +945,12 @@ _ARGV = {
     "ufw-delete-allow-from-port": ([_cidr, _portspec_bare, _choice("tcp", "udp")],
                                    lambda a: [UFW, "delete", "allow", "from", a[0], "to", "any",
                                               "port", a[1], "proto", a[2]], None),
+    # `prepend`, never `insert 1`: ufw numbers IPv4 rules first, so position 1 is always an IPv4
+    # slot and it refuses an IPv6 rule there ("Invalid position '1'") whenever any IPv4 rule
+    # exists — and `allow OpenSSH` alone makes one. Every IPv6 block failed on a firewalled host.
+    # `prepend` puts the rule at the top of its own address family's list, for either family.
     "ufw-deny-ip": ([_cidr, _comment],
-                    lambda a: [UFW, "insert", "1", "deny", "from", a[0]]
+                    lambda a: [UFW, "prepend", "deny", "from", a[0]]
                     + (["comment", a[1]] if a[1] else []), None),
     "ufw-delete-deny-ip": ([_cidr], lambda a: [UFW, "delete", "deny", "from", a[0]], None),
     "ufw-delete-num": ([_rulenum], lambda a: [UFW, "delete", a[0]], "y\n"),

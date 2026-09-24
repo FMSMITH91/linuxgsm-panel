@@ -2696,7 +2696,7 @@ _REMOTE_EXPECTED = {
     ("ufw-allow-iface", ("tailscale0",)): "ufw allow in on tailscale0 2>&1",
     ("ufw-delete-num", ("3",)): "yes | ufw delete 3 2>&1",
     ("ufw-deny-ip", ("203.0.113.5", "panel-autoblock")):
-        "ufw insert 1 deny from 203.0.113.5 comment panel-autoblock 2>&1",
+        "ufw prepend deny from 203.0.113.5 comment panel-autoblock 2>&1",
     ("f2b-status", ()): "fail2ban-client status 2>&1",
     ("f2b-status-jail", ("sshd",)): "fail2ban-client status sshd 2>&1",
     ("f2b-unban", ("sshd", "203.0.113.5")): "fail2ban-client set sshd unbanip 203.0.113.5 2>&1",
@@ -2752,6 +2752,23 @@ for (_v, _a), _want in _REMOTE_EXPECTED.items():
         _wrong.append("%s: %r != %r" % (_v, _got, _want))
 check("privileged: the remote transport renders the same commands the SSH path always sent",
       not _wrong, "; ".join(_wrong[:2]))
+
+# ── ufw-deny-ip must PREPEND, never `insert 1` ────────────────────────────────────────────────
+# ufw numbers IPv4 user rules before IPv6 ones and refuses an IPv6 rule at a position that is an
+# IPv4 slot (ufw/frontend.py set_rule: "Invalid position '1'"), which position 1 is whenever ANY
+# IPv4 rule exists — `allow OpenSSH` alone makes one. So every IPv6 block, auto or manual, failed on
+# a firewalled host. `prepend` tops the rule's own family. Helper, panel, and the remote rendering,
+# for an IPv6 address; the IPv4 row beside it is the control that the verb still renders at all.
+_ud_h6 = _helper.VERBS["ufw-deny-ip"][1](_helper.validate("ufw-deny-ip", ["2001:db8::5", "panel-autoblock"]))
+_ud_p6 = _priv.tool_argv("ufw-deny-ip", ["2001:db8::5", "panel-autoblock"])
+_ud_r6 = _priv.remote_command("ufw-deny-ip", ["2001:db8::5", "panel-autoblock"])
+check("privileged: ufw-deny-ip prepends an IPv6 block (insert 1 is refused for IPv6 while IPv4 rules exist)",
+      _ud_h6[1:] == ["prepend", "deny", "from", "2001:db8::5", "comment", "panel-autoblock"]
+      and _ud_p6 == _ud_h6 and _ud_r6.startswith("ufw prepend deny from 2001:db8::5 "),
+      "helper=%r panel=%r remote=%r" % (_ud_h6, _ud_p6, _ud_r6))
+check("privileged: ufw-deny-ip still renders an IPv4 block the same way (control)",
+      _priv.tool_argv("ufw-deny-ip", ["203.0.113.5", ""])[1:] == ["prepend", "deny", "from", "203.0.113.5"],
+      repr(_priv.tool_argv("ufw-deny-ip", ["203.0.113.5", ""])))
 
 # ── the remote rendering of sshd-set-directive must mean what the HELPER's does ───────────────
 # It was `sed -i 's/^#\?<Key>.*/<Key> <value>/'`. `sed -i` exits 0 when its pattern matches

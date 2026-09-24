@@ -1619,9 +1619,12 @@ VERBS = {
         [v_cidr, v_portspec_bare, v_choice("tcp", "udp")],
         lambda a: [UFW, "delete", "allow", "from", a[0], "to", "any", "port", a[1], "proto", a[2]],
         None),
+    # `prepend`, never `insert 1`: ufw refuses an IPv6 rule at position 1 while any IPv4 rule
+    # exists (IPv4 rules are numbered first), so every IPv6 block failed. `prepend` tops the
+    # rule's own address family's list. Mirrors privileged.py — the parity gate compares them.
     "ufw-deny-ip": (
         [v_cidr, v_comment],
-        lambda a: [UFW, "insert", "1", "deny", "from", a[0]] + (["comment", a[1]] if a[1] else []),
+        lambda a: [UFW, "prepend", "deny", "from", a[0]] + (["comment", a[1]] if a[1] else []),
         None),
     "ufw-delete-deny-ip": (
         [v_cidr],
