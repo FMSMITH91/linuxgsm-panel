@@ -1454,7 +1454,8 @@ VERBS = {
 
     # ── Ubuntu Pro ──
     "pro-status": ([], lambda a: ["pro", "status", "--format", "json"], None),
-    "pro-attach": ([v_pro_token], lambda a: ["pro", "attach", a[0]], None),
+    # The token is not an argument: it arrives on stdin and goes to pro on ITS stdin. SECRET_STDIN.
+    "pro-attach": ([], lambda a: ["pro", "attach", "--attach-config", "-"], None),
     "pro-service": ([v_choice("enable", "disable"), v_choice(*PRO_SERVICES)],
                     lambda a: ["pro", a[0], a[1], "--assume-yes"], None),
     "pro-detach": ([], lambda a: ["pro", "detach", "--assume-yes"], None),
@@ -1474,8 +1475,9 @@ VERBS = {
     # interactive one that prints a login URL for the operator to open. Every flag is assembled
     # from a validated piece — routes are PARSED as networks, tags must be `tag:name`, and the auth
     # key is charset-checked and never echoed back, not even in a rejection.
-    "tailscale-up-key": ([v_authkey, v_yesno, v_routes, v_tags],
-                         lambda a: ts_up_argv(a[1], a[2], a[3], auth_key=a[0]), None),
+    # The auth key is not an argument either: stdin in, `--auth-key file:/dev/stdin` out.
+    "tailscale-up-key": ([v_yesno, v_routes, v_tags],
+                         lambda a: ts_up_argv(a[0], a[1], a[2], auth_key="file:/dev/stdin"), None),
     "tailscale-up-login": ([v_yesno, v_routes], lambda a: [], None),
 
     # ── host hardening ──
@@ -3766,6 +3768,20 @@ ACTIONS = {
 # that reads stdin without listing it here cannot silently start returning "".
 STDIN_VERBS = frozenset({"write-file", "content-cron-write"})
 
+# Argv verbs whose SECRET comes on stdin: {verb: (its validator, the text the tool reads)}.
+#
+# `pro-attach <token>` ran `pro attach <token>`, and `tailscale-up-key <key> ...` ran `tailscale up
+# --auth-key <key>`: the secret sat in this process's argv and the tool's, and /proc/<pid>/cmdline
+# is world-readable unless /proc is mounted hidepid — so any local account, a game-server user
+# included, could read a subscription token or a reusable tailnet key while the command ran. It is
+# read from stdin here, validated like the argument it was (and, like it, never echoed), and handed
+# to the tool on the tool's stdin. privileged.SECRET_STDIN is the panel's copy; a unit test keeps
+# the two producing the same bytes.
+SECRET_STDIN = {
+    "pro-attach": (v_pro_token, lambda secret: 'token: "%s"\n' % secret),
+    "tailscale-up-key": (v_authkey, lambda secret: secret + "\n"),
+}
+
 
 
 def validate(verb, args):
@@ -3821,6 +3837,14 @@ def main(argv):
         # the panel UI, so repeating attacker-controlled text here would be a reflection.
         print("panel-helper: %s" % e, file=sys.stderr)
         return 2
+    if verb in SECRET_STDIN:
+        check_secret, tool_doc = SECRET_STDIN[verb]
+        try:
+            stdin_text = tool_doc(check_secret(sys.stdin.read(4096).strip()))
+        except ValueError:
+            # Not echoed, not even in a rejection: it is a secret.
+            print("panel-helper: %s: the secret on stdin was rejected" % verb, file=sys.stderr)
+            return 2
     action = ACTIONS.get(verb)
     if action is not None:
         # The payload is this process's stdin. It is never an argument, so no amount of it can

@@ -1048,12 +1048,271 @@ _drift = []
 for _v, _a in _VERB_SAMPLES.items():
     if _v not in _helper.VERBS or _v not in _priv.verbs():
         continue
-    _hv = _helper.VERBS[_v][1](_helper.validate(_v, _a))
+    # What the helper is actually handed: helper_argv's arguments, which for a SECRET_STDIN verb
+    # leave the secret out (it goes on stdin).
+    # A helper that refuses what the panel sends (an arity drift) is drift too — reported by name,
+    # not left to crash the part.
+    try:
+        _hv = _helper.VERBS[_v][1](_helper.validate(_v, _priv.helper_argv(_v, _a)[4:]))
+    except ValueError as _e:
+        _hv = "refused: %s" % _e
     _pv = _priv.tool_argv(_v, _a)
     if _hv != _pv:
         _drift.append("%s: helper=%r panel=%r" % (_v, _hv, _pv))
 check("privileged: helper and panel build an identical argv for every verb",
       not _drift, "; ".join(_drift[:2]))
+
+# ── a secret is never on a command line ───────────────────────────────────────────────────────
+# The Ubuntu Pro token and the Tailscale auth key were argv elements on every path: `sudo -n
+# panel-helper pro-attach <token>` then `pro attach <token>` locally, `sudo bash -c 'pro attach
+# <token>'` and `tailscale up --auth-key <key>` over SSH. /proc/<pid>/cmdline is world-readable
+# without hidepid, so any local account (a game-server user) could read them while the command ran.
+# They now travel on stdin only. Checked on every rendering, then driven: the helper's main(), each
+# run_privileged path, each run_command transport, and the remote rendering run for real.
+_SEC_ARGS = {"pro-attach": ["Zq7Tok3nSecretX9"],
+             "tailscale-up-key": ["tskey-auth-SeCrEtKeY42", "yes", "10.0.0.0/24", "tag:server"]}
+check("secrets: exactly the two secret-carrying verbs are declared, on both sides",
+      set(_priv.SECRET_STDIN) == set(_SEC_ARGS) == set(getattr(_helper, "SECRET_STDIN", {})),
+      "panel=%s helper=%s" % (sorted(_priv.SECRET_STDIN), sorted(getattr(_helper, "SECRET_STDIN", {}))))
+_sec_on_argv, _sec_in_stdin, _sec_doc_drift = [], [], []
+for _v, _a in _SEC_ARGS.items():
+    _secret = _a[0]
+    for _label, _cmd in (("helper argv", " ".join(_priv.helper_argv(_v, _a))),
+                         ("tool argv", " ".join(_priv.tool_argv(_v, _a))),
+                         ("remote", _priv.remote_command(_v, _a)),
+                         ("remote unmerged", _priv.remote_command(_v, _a, merge_stderr=False))):
+        if _secret in _cmd:
+            _sec_on_argv.append("%s %s" % (_v, _label))
+    for _label, _in in (("helper stdin", _priv.helper_stdin(_v, _a)),
+                        ("tool stdin", _priv.stdin_for(_v, _a)),
+                        ("remote stdin", _priv.remote_stdin(_v, _a))):
+        if _secret not in (_in or ""):
+            _sec_in_stdin.append("%s %s" % (_v, _label))
+    if _v in getattr(_helper, "SECRET_STDIN", {}):
+        _hchk, _hdoc = _helper.SECRET_STDIN[_v]
+        if _hdoc(_hchk(_secret)) != _priv.stdin_for(_v, _a):
+            _sec_doc_drift.append(_v)
+check("secrets: the token and the auth key are on no argv and in no remote command line",
+      not _sec_on_argv, repr(_sec_on_argv))
+check("secrets: ...they travel on stdin instead, on every path (the positive control)",
+      not _sec_in_stdin, repr(_sec_in_stdin))
+check("secrets: the helper hands the tool the same bytes a remote gets",
+      not _sec_doc_drift, repr(_sec_doc_drift))
+check("secrets: the other tailscale arguments are still ARGUMENTS",
+      _priv.helper_argv("tailscale-up-key", _SEC_ARGS["tailscale-up-key"])[4:]
+      == ["yes", "10.0.0.0/24", "tag:server"]
+      and "--advertise-routes=10.0.0.0/24" in _priv.remote_command(
+          "tailscale-up-key", _SEC_ARGS["tailscale-up-key"]))
+check("secrets: a non-secret verb sends nothing extra on stdin",
+      _priv.remote_stdin("ufw-status", ["plain"]) is None
+      and _priv.helper_stdin("ufw-delete-num", ["3"]) == _priv.stdin_for("ufw-delete-num"))
+
+# The helper's side, through its real main(): the secret is read from stdin and checked, and the
+# tool gets it on ITS stdin; a bad one is refused without being echoed; and the old shape, with the
+# secret as an argument, is refused rather than run.
+import io as _sec_io
+import types as _sec_types
+_sec_runs = []
+_sec_saved = (_helper.subprocess, _helper.resolve, sys.stdin, sys.stderr, sys.stdout)
+
+
+def _sec_helper(argv, stdin):
+    del _sec_runs[:]
+    sys.stdin, sys.stderr, sys.stdout = _sec_io.StringIO(stdin), _sec_io.StringIO(), _sec_io.StringIO()
+    try:
+        rc = _helper.main(["panel-helper"] + argv)
+        return rc, sys.stderr.getvalue()
+    finally:
+        sys.stdin, sys.stderr, sys.stdout = _sec_saved[2], _sec_saved[3], _sec_saved[4]
+
+
+try:
+    _helper.subprocess = _sec_types.SimpleNamespace(
+        run=lambda argv, **kw: (_sec_runs.append((list(argv), kw.get("input"))),
+                                _sub.CompletedProcess(argv, 0, "", ""))[1],
+        TimeoutExpired=_sub.TimeoutExpired)
+    _helper.resolve = lambda n: "/usr/bin/" + n
+    _sec_pro = _sec_helper(["pro-attach"], "Zq7Tok3nSecretX9\n")
+    check("secrets: the helper runs pro attach with the token on pro's stdin, not its argv",
+          _sec_pro[0] == 0 and len(_sec_runs) == 1
+          and _sec_runs[0][0] == ["/usr/bin/pro", "attach", "--attach-config", "-"]
+          # Built, not written out: a `token: "<16 alnum>"` literal is what gitleaks'
+          # generic-api-key rule flags, and the history it scans is not rewritten.
+          and _sec_runs[0][1] == 'token: "%s"\n' % _SEC_ARGS["pro-attach"][0],
+          repr((_sec_pro, _sec_runs)))
+    _sec_ts = _sec_helper(["tailscale-up-key", "yes", "-", "-"], "tskey-auth-SeCrEtKeY42\n")
+    check("secrets: the helper runs tailscale up reading the key from stdin, not its argv",
+          _sec_ts[0] == 0 and len(_sec_runs) == 1
+          and "file:/dev/stdin" in _sec_runs[0][0]
+          and not any("SeCrEt" in _x for _x in _sec_runs[0][0])
+          and _sec_runs[0][1] == "tskey-auth-SeCrEtKeY42\n", repr((_sec_ts, _sec_runs)))
+    _sec_bad = _sec_helper(["pro-attach"], "Zq7Tok3n;SecretX9\n")
+    check("secrets: a malformed token on stdin is refused, runs nothing, and is not echoed",
+          _sec_bad[0] == 2 and not _sec_runs and "SecretX9" not in _sec_bad[1], repr(_sec_bad))
+    _sec_old = _sec_helper(["pro-attach", "Zq7Tok3nSecretX9"], "")
+    check("secrets: the token as an ARGUMENT (the old shape) is refused, not run",
+          _sec_old[0] == 2 and not _sec_runs, repr(_sec_old))
+finally:
+    _helper.subprocess, _helper.resolve = _sec_saved[0], _sec_saved[1]
+
+# ...and the panel's side: every run_privileged path sends the secret on stdin and no command line
+# carries it. The transports are stubbed on _core, where run_privileged looks them up.
+_sec_core_saved = (_sm_core.run_command, _sm_core._exec_local_argv, _sm_core._run_local,
+                   _sm_core.is_local_server, _sm_core.helper_present)
+_sec_seen = []
+try:
+    _sm_core.run_command = lambda s, c, **k: (_sec_seen.append(("remote", c, k.get("stdin_text"))),
+                                              ("", "", 0))[1]
+    _sm_core._exec_local_argv = lambda argv, **k: (
+        _sec_seen.append(("argv", " ".join(argv), k.get("stdin_text"))), ("", "", 0))[1]
+    _sm_core._run_local = lambda c, **k: (_sec_seen.append(("fallback", c, k.get("stdin_text"))),
+                                          ("", "", 0))[1]
+    for _v, _a in _SEC_ARGS.items():
+        _sm_core.is_local_server = lambda s: False
+        _sm_core.run_privileged(object(), _v, _a)
+        _sm_core.is_local_server = lambda s: True
+        _sm_core.helper_present = lambda: True
+        _sm_core.run_privileged(object(), _v, _a)
+        _sm_core.run_privileged(object(), _v, _a, sudo=False)
+        _sm_core.helper_present = lambda: False
+        _sm_core.run_privileged(object(), _v, _a)
+    _sm_core.is_local_server = lambda s: False
+    _sm_core.run_privileged(object(), "ufw-status", ["plain"])
+finally:
+    (_sm_core.run_command, _sm_core._exec_local_argv, _sm_core._run_local,
+     _sm_core.is_local_server, _sm_core.helper_present) = _sec_core_saved
+_sec_paths = [(_k, _c, _i) for _k, _c, _i in _sec_seen if "ufw" not in _c]
+check("secrets: run_privileged took all four paths for both verbs (the gate has a subject)",
+      sorted(_k for _k, _c, _i in _sec_paths)
+      == sorted(["remote", "argv", "argv", "fallback"] * 2), repr([_k for _k, _c, _i in _sec_paths]))
+check("secrets: run_privileged puts the secret on no command line, on any path",
+      not [_k for _k, _c, _i in _sec_paths if "Zq7Tok3nSecretX9" in _c or "SeCrEtKeY42" in _c],
+      repr([(_k, _c) for _k, _c, _i in _sec_paths]))
+check("secrets: ...and hands it to every one of them on stdin",
+      all(_i and ("Zq7Tok3nSecretX9" in _i or "SeCrEtKeY42" in _i) for _k, _c, _i in _sec_paths),
+      repr([(_k, _i) for _k, _c, _i in _sec_paths]))
+check("secrets: a verb with no secret passes no stdin to the remote transport",
+      [(_k, _i) for _k, _c, _i in _sec_seen if "ufw" in _c] == [("remote", None)],
+      repr([(_k, _i) for _k, _c, _i in _sec_seen if "ufw" in _c]))
+
+# The transports carry it. Local: a real shell, with `cat` as the command, so what comes back IS
+# what reached its stdin. The paramiko path, with a recording client: written, then EOF, in that
+# order. The ssh CLI path, with Popen swapped for `cat`, so the stdin it pipes comes back out.
+_sec_t_saved = (_sm_core.is_local_server, _sm_core.get_connection, _sm_core._drain_exec,
+                _sm_core.subprocess, _sm_core._resolve_ts_host, _sm_core._ssh_mux_opts,
+                _sm_core._ssh_connect_timeout)
+try:
+    _sm_core.is_local_server = lambda s: True
+    _sec_local = _sm_core.run_command(object(), "cat", sudo=False, stdin_text="s3cret-on-stdin\n")
+    _sec_local0 = _sm_core.run_command(object(), "cat", sudo=False)
+    check("secrets: the local transport feeds stdin_text to the command",
+          _sec_local == ("s3cret-on-stdin", "", 0), repr(_sec_local))
+    check("secrets: ...and without it the command still gets EOF, not the panel's stdin",
+          _sec_local0 == ("", "", 0), repr(_sec_local0))
+    _sm_core.is_local_server = lambda s: False
+    _sec_order = []
+
+    class _SecChan:
+        def shutdown_write(self):
+            _sec_order.append("eof")
+
+    class _SecIn:
+        channel = _SecChan()
+
+        def write(self, d):
+            _sec_order.append(("write", d))
+
+        def flush(self):
+            pass
+
+    class _SecClient:
+        def exec_command(self, cmd, timeout=None):
+            _sec_order.append(("exec", cmd))
+            return _SecIn(), NS(channel=None), NS(channel=None)
+
+    _sm_core.get_connection = lambda s: _SecClient()
+    _sm_core._drain_exec = lambda ch, **k: (b"", b"", 0, False)
+    _sec_srv = NS(auth_method="key", sudo_enabled=True, port=22, username="u", host="h")
+    _sm_core.run_command(_sec_srv, "cat > /dev/null", sudo=True, stdin_text="s3cret-on-stdin\n")
+    check("secrets: the paramiko transport writes stdin_text, THEN sends EOF",
+          [_x if isinstance(_x, str) else _x[0] for _x in _sec_order] == ["exec", "write", "eof"]
+          and _sec_order[1] == ("write", "s3cret-on-stdin\n")
+          and "s3cret" not in _sec_order[0][1], repr(_sec_order))
+    del _sec_order[:]
+    _sm_core.run_command(_sec_srv, "true", sudo=True)
+    check("secrets: ...and with none, only the EOF (the control)",
+          [_x if isinstance(_x, str) else _x[0] for _x in _sec_order] == ["exec", "eof"],
+          repr(_sec_order))
+
+    class _SecSub:
+        PIPE, DEVNULL, TimeoutExpired = _sub.PIPE, _sub.DEVNULL, _sub.TimeoutExpired
+
+        @staticmethod
+        def Popen(argv, **kw):
+            _sec_order.append(("ssh", list(argv), kw.get("stdin")))
+            return _sub.Popen(["cat"], **kw)
+
+    _sm_core.subprocess = _SecSub
+    _sm_core._resolve_ts_host = lambda s: "h"
+    _sm_core._ssh_mux_opts = lambda: []
+    _sm_core._ssh_connect_timeout = lambda: 5
+    del _sec_order[:]
+    _sec_ts_srv = NS(auth_method="tailscale", sudo_enabled=True, port=22, username="u", host="h")
+    _sec_cli = _sm_core.run_command(_sec_ts_srv, "cat", sudo=True, stdin_text="s3cret-on-stdin\n")
+    check("secrets: the ssh CLI transport pipes stdin_text to ssh, and not in its argv",
+          _sec_cli == ("s3cret-on-stdin", "", 0)
+          and not any("s3cret" in _x for _x in _sec_order[0][1]), repr((_sec_cli, _sec_order)))
+    del _sec_order[:]
+    _sec_cli0 = _sm_core.run_command(_sec_ts_srv, "cat", sudo=True)
+    check("secrets: ...and without it ssh still gets /dev/null, never the panel's stdin",
+          _sec_cli0 == ("", "", 0) and _sec_order[0][2] == _sub.DEVNULL, repr((_sec_cli0, _sec_order)))
+finally:
+    (_sm_core.is_local_server, _sm_core.get_connection, _sm_core._drain_exec,
+     _sm_core.subprocess, _sm_core._resolve_ts_host, _sm_core._ssh_mux_opts,
+     _sm_core._ssh_connect_timeout) = _sec_t_saved
+
+# And the remote rendering, RUN: through the real local transport, with fake `pro` and `tailscale`
+# first on PATH that record their argv and read the file they were pointed at. The secret must reach
+# the tool through a root-only temp FILE (an SSH session's fd 0 can be a socket, which /dev/stdin
+# cannot reopen), never its argv, and the file must be gone afterwards.
+import tempfile as _sec_tf
+_sec_dir = _sec_tf.mkdtemp(prefix="panel-secret-")
+try:
+    _sec_bin = os.path.join(_sec_dir, "bin")
+    os.makedirs(_sec_bin)
+    for _tool in ("pro", "tailscale"):
+        with open(os.path.join(_sec_bin, _tool), "w") as _fh:
+            _fh.write('#!/bin/bash\nprintf "%s\\n" "$@" > "$OUT/argv"\nprev=\n'
+                      'for a in "$@"; do case "$a" in file:*) f="${a#file:}";; esac\n'
+                      '  [ "$prev" = --attach-config ] && f="$a"; prev="$a"; done\n'
+                      'echo "$f" > "$OUT/path"; stat -c %a "$f" > "$OUT/mode"; cat "$f" > "$OUT/got"\n')
+        os.chmod(os.path.join(_sec_bin, _tool), 0o755)
+    _sm_core_isl = _sm_core.is_local_server
+    _sm_core.is_local_server = lambda s: True
+    _sec_ran = {}
+    try:
+        for _v, _a in _SEC_ARGS.items():
+            for _n in ("argv", "path", "got", "mode"):
+                if os.path.exists(os.path.join(_sec_dir, _n)):
+                    os.remove(os.path.join(_sec_dir, _n))
+            _pre = "export PATH=%s:\"$PATH\" OUT=%s TMPDIR=%s; " % (_sec_bin, _sec_dir, _sec_dir)
+            _r = _sm_core.run_command(object(), _pre + _priv.remote_command(_v, _a), sudo=False,
+                                      stdin_text=_priv.remote_stdin(_v, _a))
+            _rd = lambda n: open(os.path.join(_sec_dir, n)).read() if os.path.exists(
+                os.path.join(_sec_dir, n)) else ""
+            _sec_ran[_v] = (_r[2], _rd("argv"), _rd("path").strip(), _rd("got"), _rd("mode").strip())
+    finally:
+        _sm_core.is_local_server = _sm_core_isl
+    for _v, (_rc, _argv, _path, _got, _mode) in _sec_ran.items():
+        check("secrets: the %s remote rendering runs, and the tool reads the secret from a file" % _v,
+              _rc == 0 and _SEC_ARGS[_v][0] in _got and _path.startswith(_sec_dir + "/")
+              and _mode == "600", repr((_rc, _path, _got, _mode)))
+        check("secrets: ...which is not on the tool's argv, and is removed afterwards (%s)" % _v,
+              _SEC_ARGS[_v][0] not in _argv and _path and not os.path.exists(_path),
+              repr((_argv, _path)))
+finally:
+    import shutil as _sec_sh
+    _sec_sh.rmtree(_sec_dir, ignore_errors=True)
 
 
 # ── a verb must not render to an EMPTY command on a remote host ───────────────────────────────

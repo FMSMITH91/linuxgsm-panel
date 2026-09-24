@@ -267,9 +267,10 @@ def _already_escalated(cmd):
     return cmd.strip().startswith("sudo ")
 
 
-def _run_local(cmd, timeout=30, sudo=False):
+def _run_local(cmd, timeout=30, sudo=False, stdin_text=None):
     """Run a command locally on the panel's own machine.
-    If the command already uses privilege escalation, don't double-wrap.
+    If the command already uses privilege escalation, don't double-wrap. `stdin_text`, when given,
+    is the command's stdin (a secret that must not be in the command — see run_privileged).
 
     NOTE: eventlet monkey-patches subprocess. Its green subprocess is unreliable
     when called from a WSGI green thread (an API handler) — the child can be
@@ -296,7 +297,7 @@ def _run_local(cmd, timeout=30, sudo=False):
         # be root").
         full_cmd = f"sudo bash -c {_quote(cmd)}"
 
-    return _exec_local_shell(full_cmd, timeout=timeout)
+    return _exec_local_shell(full_cmd, timeout=timeout, stdin_text=stdin_text)
 
 
 # Popen options shared by both local paths. start_new_session puts the child in a NEW process group
@@ -414,7 +415,7 @@ def _in_tpool(fn):
     return fn()
 
 
-def _exec_local_shell(shell_cmd, timeout=30):
+def _exec_local_shell(shell_cmd, timeout=30, stdin_text=None):
     """Run a composed SHELL command on the panel's own machine.
 
     The literal ["/bin/bash", "-c", ...] is written out here rather than passed in: an argv that
@@ -424,8 +425,11 @@ def _exec_local_shell(shell_cmd, timeout=30):
     def _do():
         p = None
         try:
-            p = _real_subprocess.Popen(["/bin/bash", "-c", shell_cmd], **_POPEN_KW)
-            return _finish(p, timeout)
+            kw = dict(_POPEN_KW)
+            if stdin_text is not None:
+                kw["stdin"] = _real_subprocess.PIPE
+            p = _real_subprocess.Popen(["/bin/bash", "-c", shell_cmd], **kw)
+            return _finish(p, timeout, stdin_text=stdin_text)
         except Exception:
             # Never surface raw exception text — it can flow into API responses
             # (CodeQL py/stack-trace-exposure). Log it; callers act on rc == -1.
@@ -576,20 +580,25 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
     Where they did not, the host keeps NOPASSWD:ALL, because it still falls back to the line below
     and narrowing under that would break every privileged action rather than secure anything. The
     installer prints which one it wrote; SECURITY.md carries the full account."""
+    # A verb with a SECRET argument (privileged.SECRET_STDIN) sends it on stdin on every path
+    # below, and no command line carries it. Passed only when there is one, so a transport stubbed
+    # without the keyword still sees exactly the call it always did.
+    _secret_in = _priv.remote_stdin(verb, args)
+    _secret_kw = {"stdin_text": _secret_in} if _secret_in is not None else {}
     if not is_local_server(server):
         return run_command(server, _priv.remote_command(verb, args, merge_stderr=merge_stderr),
-                           timeout=timeout, sudo=sudo)
+                           timeout=timeout, sudo=sudo, **_secret_kw)
 
     # sudo=None means "whatever this host is configured for", the same defaulting run_command does.
     # A host with sudo disabled runs the tool directly — still argv, still no shell, just no root.
     use_sudo = sudo if sudo is not None else getattr(server, "sudo_enabled", False)
     if not use_sudo:
         return _exec_local_argv(_priv.tool_argv(verb, args), timeout=timeout,
-                                stdin_text=_priv.stdin_for(verb))
+                                stdin_text=_priv.stdin_for(verb, args))
 
     if helper_present():
         out, err, rc = _exec_local_argv(_priv.helper_argv(verb, args), timeout=timeout,
-                                        stdin_text=_priv.stdin_for(verb))
+                                        stdin_text=_priv.helper_stdin(verb, args))
         if merge_stderr:
             # The shell form used `2>&1`, and callers read tool errors out of stdout. Merge here so
             # switching transport does not move a message from one stream to the other.
@@ -598,7 +607,7 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
 
     # No helper on this host yet: the pre-helper path, byte-for-byte.
     return _run_local(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
-                      timeout=timeout, sudo=True)
+                      timeout=timeout, sudo=True, **_secret_kw)
 
 
 
@@ -847,7 +856,7 @@ def _ssh_mux_opts():
             "-o", "ServerAliveCountMax=3"]
 
 
-def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
+def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
     """Run a command over the system `ssh` binary — used for Tailscale SSH remotes,
     where auth happens at the tailscaled level (paramiko can't do it, but the ssh CLI,
     running from this tailnet node, can — exactly like PuTTY does). Uses connection
@@ -884,9 +893,14 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
         # probe with gigabytes. The paramiko path's 8 MB ceiling applies here too now. The pipes
         # are binary and _decode_output does the lenient decode itself, which also sidesteps the
         # green Popen re-opening text pipes without the `errors=` it was given.
+        # stdin_text is the one exception: a secret run_privileged keeps off the command line,
+        # written to the pipe and then closed, so the remote still sees EOF.
         p = subprocess.Popen(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; ssh_cmd is built here from validated parts
-                             stdin=subprocess.DEVNULL)
-        res = _collect_capped(p, timeout, kill=p.kill, thread_cls=threading.Thread)
+                             stdin=(subprocess.PIPE if stdin_text is not None
+                                    else subprocess.DEVNULL))
+        res = _collect_capped(p, timeout, kill=p.kill, thread_cls=threading.Thread,
+                              stdin_bytes=(stdin_text.encode("utf-8")
+                                           if stdin_text is not None else None))
         if res is None:
             return "", "SSH command timed out", -1
         out, err, rc, truncated = res
@@ -992,10 +1006,12 @@ def _drain_exec(chan, max_bytes=_MAX_OUTPUT_BYTES, idle_limit=None):
     return bytes(out), bytes(err), chan.recv_exit_status(), truncated
 
 
-def run_command(server, command, timeout=30, sudo=None):
+def run_command(server, command, timeout=30, sudo=None, stdin_text=None):
     """Run a command on the remote server via SSH, or locally if it's the local machine.
-    Returns (stdout, stderr, exit_code).
+    Returns (stdout, stderr, exit_code). `stdin_text`, when given, is written to the command's
+    stdin and then closed — how run_privileged sends a secret that must not be in `command`.
     """
+    _stdin_kw = {"stdin_text": stdin_text} if stdin_text is not None else {}
     if is_local_server(server):
         # NO IMPLICIT ESCALATION on the panel's own host. `sudo` defaulted to server.sudo_enabled,
         # and the local host row is created with sudo_enabled=True (panel/routes/host_local.py,
@@ -1017,12 +1033,12 @@ def run_command(server, command, timeout=30, sudo=None):
         # change: the console log reads go through read_as_game_user (a 0750 home), and the cron
         # restart flags through the restart-flags verb. Flipping this default without them would
         # have broken the console on every host with the wide grant, where it works today.
-        return _run_local(command, timeout=timeout, sudo=bool(sudo))
+        return _run_local(command, timeout=timeout, sudo=bool(sudo), **_stdin_kw)
 
     # Tailscale SSH is not doable with paramiko (auth is handled by tailscaled),
     # so use the system ssh client for those remotes.
     if server.auth_method == "tailscale":
-        return _run_via_ssh_cli(server, command, timeout=timeout, sudo=sudo)
+        return _run_via_ssh_cli(server, command, timeout=timeout, sudo=sudo, **_stdin_kw)
 
     client = get_connection(server)
     use_sudo = sudo if sudo is not None else server.sudo_enabled
@@ -1050,6 +1066,10 @@ def run_command(server, command, timeout=30, sudo=None):
         # leaked for the life of the process. This is the stdin=DEVNULL property the local
         # transport has from _POPEN_KW, and the same shutdown_write files.py:911 already sends —
         # and it is what the "deliberately no deadline" note above _drain_exec rests on.
+        # A secret from run_privileged goes down the channel first; the EOF still follows.
+        if stdin_text is not None:
+            stdin.write(stdin_text)
+            stdin.flush()
         try:
             stdin.channel.shutdown_write()
         except Exception:
