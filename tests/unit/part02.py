@@ -659,6 +659,16 @@ check("backup/enc: ...and so is an absurd r, an absurd p, and an oversized salt"
 check("backup/enc: the parameters this panel itself writes are still accepted",
       _bk._decrypt_archive(_kdf_blob(), _kdf_out, "pw")[1]
       != "The encrypted backup's header asks for parameters this panel will not use.")
+# The old ceiling was n<=2**20, r<=32, p<=16: about 4 GiB and ~2000x the default derivation time,
+# run as one blocking call on the eventlet hub. Each parameter is refused at the old ceiling alone.
+for _kw in ({"n": 2 ** 20}, {"r": 32}, {"p": 16}, {"n": 2 ** 17}, {"r": 9}, {"p": 3}):
+    check("backup/enc: a costly scrypt header %r is refused before deriving" % (_kw,),
+          _bk._decrypt_archive(_kdf_blob(**_kw), _kdf_out, "pw")
+          == (False, "The encrypted backup's header asks for parameters this panel will not use."))
+# ...while one step above the defaults, the most the bound allows, is still accepted.
+check("backup/enc: the bound's own ceiling (n=2**16, r=8, p=2) is still accepted",
+      _bk._decrypt_archive(_kdf_blob(n=2 ** 16, r=8, p=2), _kdf_out, "pw")[1]
+      != "The encrypted backup's header asks for parameters this panel will not use.")
 _sh2.rmtree(_kdf_tmp, ignore_errors=True)
 
 _sh2.rmtree(_bktmp, ignore_errors=True)

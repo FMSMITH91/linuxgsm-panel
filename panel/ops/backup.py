@@ -118,11 +118,13 @@ def _decrypt_archive(src_path, dest_path, passphrase):
     except Exception:
         return False, "The encrypted backup's header is damaged."
     # The header is part of the FILE, so these are only as trustworthy as the archive. Nothing can
-    # upload one today — every archive here was written by this panel — but scrypt's `n` is a
-    # memory parameter, and n=2**30 asks for a gigabyte before it fails. Bound them now, while the
-    # only cost is three lines, rather than the day a "restore from a file you upload" feature
-    # makes the header attacker-supplied.
-    if not (2 ** 12 <= n <= 2 ** 20) or not (1 <= r <= 32) or not (1 <= p <= 16) or len(salt) > 64:
+    # upload one today — every archive here was written by this panel — but they decide what the
+    # derivation costs, and it runs as ONE blocking call on the eventlet hub, so every request
+    # waits for it. scrypt needs about 128·n·r bytes and time in proportion to n·r·p: the defaults
+    # (2**15, 8, 1) are 32 MiB and roughly a tenth of a second. The old ceiling (2**20, 32, 16) was
+    # 4 GiB and some 2000 times as long — a panel frozen for minutes by one file. This panel has
+    # only ever written the defaults, so the bound is one step above them: 64 MiB, ~4x the time.
+    if not (2 ** 12 <= n <= 2 ** 16) or not (1 <= r <= 8) or not (1 <= p <= 2) or len(salt) > 64:
         return False, "The encrypted backup's header asks for parameters this panel will not use."
     if head.get("kdf") != "scrypt":
         return False, "This backup uses an encryption scheme this panel does not know."
