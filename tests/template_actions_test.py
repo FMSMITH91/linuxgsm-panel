@@ -414,6 +414,16 @@ for _label, _needle in (
         _sf_missing.append(_label)
 check(not _sf_missing, "files: every element holding a path segment is marked do-not-translate",
       "unguarded: %s" % _sf_missing)
+# A LinuxGSM setting's KEY is an identifier the operator types into the Raw tab, not prose: `port`
+# is a catalog key (es: "puerto") and is in nearly every _default.cfg, so a Spanish operator saw a
+# setting called "puerto" and could write puerto="27016", which LinuxGSM ignores. The input is
+# guarded too — its placeholder is the setting's default VALUE.
+_fh_at = _sf_src.find("function fieldHtml(")
+_fh_body = _sf_src[_fh_at:_sf_src.find("\n}\n", _fh_at)] if _fh_at != -1 else ""
+check("'<span class=\"fb-key\" data-no-i18n>'+esc(s.key)" in _fh_body
+      and "form-control-sm\" data-no-i18n data-key=" in _fh_body,
+      "files: a LinuxGSM setting's key (and its default placeholder) is never translated",
+      "fieldHtml found=%r; the .fb-key span or the input lost data-no-i18n" % bool(_fh_body))
 
 # ── the document-wide drop suppression must not take the textareas with it ────────────────────
 # preventDefault() on a bubbled event still cancels the default action, so suppressing the

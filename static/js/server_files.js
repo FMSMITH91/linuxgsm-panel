@@ -34,10 +34,10 @@ function fieldHtml(s){
   var def = s['default'];
   return '<div class="col-6 col-md-4 col-xl-3 mb-1">'
     + '<label class="form-label mb-1 d-flex align-items-center gap-1" style="font-size:.7rem;">'
-    + '<span class="fb-key">'+esc(s.key)+'</span>'
+    + '<span class="fb-key" data-no-i18n>'+esc(s.key)+'</span>'
     + '<span class="badge bg-info text-dark cfg-set-badge" style="font-size:.5rem;'+(s.overridden?'':'display:none;')+'">set</span>'
     + '</label>'
-    + '<input type="text" class="form-control form-control-sm" data-key="'+esc(s.key)+'" data-orig="'+esc(s.value)+'" value="'+esc(s.value)+'"'
+    + '<input type="text" class="form-control form-control-sm" data-no-i18n data-key="'+esc(s.key)+'" data-orig="'+esc(s.value)+'" value="'+esc(s.value)+'"'
     + (def!==''?' placeholder="'+esc(def)+'"':'') + '>'
     + (def!==''?'<div class="text-secondary text-truncate" style="font-size:.62rem;">default: '
         + '<code class="cfg-copy-default" data-copy="'+esc(def)+'" style="cursor:pointer;" '
