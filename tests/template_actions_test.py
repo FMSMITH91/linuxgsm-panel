@@ -2465,6 +2465,18 @@ check(re.search(r"\.success\)\)\s*throw", _otp_fn) is not None
       "otp nag: the banner is removed and success announced only when the reply says success",
       "any parseable reply — including {success:false} — is reported as saved")
 
+# ── the setup wizard takes an SSH password in a password field ────────────────────────────────
+# The shared credential input stayed type="text" when Password was chosen: the remote's root
+# password on screen in clear, and saved by the browser as plain autofill for "credential".
+_sr_src = (ROOT / "static" / "js" / "setup_remote.js").read_text(encoding="utf-8")
+_sr_pw = _sr_src[_sr_src.index("if (this.value === 'password')"):]
+_sr_pw = _sr_pw[:_sr_pw.index("} else")]
+check("label.textContent = 'SSH Password'" in _sr_pw,
+      "setup remote: (control) the password branch is where this check is looking", "sliced the wrong text")
+check("input.type = 'password'" in _sr_pw and _sr_src.count("input.type = 'text'") >= 2,
+      "setup remote: choosing Password makes the field a password input (and the others switch it back)",
+      "the SSH password is typed into a plain text field")
+
 # ── Settings says what Site domain actually does ──────────────────────────────────────────────
 # It said "Used for the TLS certificate and connect links." No connect link reads site_domain (they
 # use the remote's public IP or host), and the certificate is only named from it when the panel has
