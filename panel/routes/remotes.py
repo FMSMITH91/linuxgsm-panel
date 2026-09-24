@@ -101,6 +101,73 @@ def _forget_deleted_from_ui_prefs(remote_id, game_server_ids):
         _log.debug("could not clear ui_prefs for deleted remote %s", remote_id, exc_info=True)
 
 
+# The ways of signing in to a host that prove the REQUESTER controls it. Only a password does:
+# ssh_test_connection and _core.get_connection offer it with allow_agent=False and
+# look_for_keys=False, so a login that succeeds used the requester's credential and nothing else.
+# "key" is not key material — the credential field is a PATH ON THE PANEL HOST, a blank one falls
+# back to the panel user's ~/.ssh/id_rsa (hosts.ssh_test_connection, _core.get_connection), and
+# paramiko's defaults then try the agent and every ~/.ssh/id_* as well, so even a bogus path signs
+# in with whatever the panel holds. "tailscale" is the panel node's own tailnet identity. A login
+# that succeeds with either proves the PANEL can reach the host, not that the person asking may.
+_REQUESTER_HELD_AUTH = frozenset({"password"})
+
+
+def _delegated_add_refusal(is_local, auth_method):
+    """Why the signed-in user may not add this host, or None when they may.
+
+    add_remote grants a new host to the creator's MANAGE_REMOTES groups (see below), and it
+    decides that the host is theirs to have by logging in to it. That was sound only for a
+    credential the creator supplied. With the panel's own key or tailnet identity, a delegated
+    admin could name ANY address the superadmin manages that way — leaving the form's
+    pre-filled ~/.ssh/id_rsa in place — pass the test on the panel's credentials, and be granted
+    root-level MANAGE_REMOTES (firewall, reboot, OS updates, a bootstrap that rewrites sshd and
+    reboots) on a host nobody gave them.
+
+    The panel's own host is superadmin-only on every other path that creates or manages it
+    (host_local.server_management); from here a delegated admin got a row outside all of their
+    groups and a message promising they could install on it."""
+    if current_user.is_superadmin:
+        return None
+    if is_local:
+        return ("Only a superadmin can register the panel's own machine as a host.")
+    if auth_method not in _REQUESTER_HELD_AUTH:
+        return ("Only a superadmin can add a host that signs in with the panel's own SSH key or "
+                "Tailscale identity — a successful login with those proves the panel can reach "
+                "the host, not that you can. Use password authentication with the host's own "
+                "credentials, or ask a superadmin to add it.")
+    return None
+
+
+def _delegated_retarget_refusal(remote, new_host, new_port, new_user, new_auth, new_cred):
+    """Why the signed-in user may not repoint `remote` this way, or None when they may.
+
+    get_remote() scopes a delegated admin to the ROW, but the row's credential can be the
+    panel's own (see _REQUESTER_HELD_AUTH). So editing the address of a host they were granted
+    moved that grant, and the panel's key or tailnet identity with it, onto any machine they
+    typed in — the next command for "their" host ran as root on one they were never given.
+    Changing the SSH user on the panel's key is the same move on the same machine: from a
+    limited account to whichever one the key also opens.
+
+    So for anyone but a superadmin, a change to where or as whom the panel signs in has to come
+    with a credential they supply in the same request: password authentication, and a new
+    password. A new key PATH is the same move without touching the address — it picks which of
+    the panel's own keys signs in — so it needs the same. Everything else on the form — the name,
+    sudo, rotating the password in place — is unaffected. The panel's own row never leaves the
+    local transport whatever its host says (is_local_server), so it is not a retarget."""
+    if current_user.is_superadmin or remote.is_local:
+        return None
+    moved = (new_host, new_port, new_user, new_auth) != (remote.host, remote.port,
+                                                         remote.username, remote.auth_method)
+    new_key_path = bool(new_cred) and new_auth not in _REQUESTER_HELD_AUTH
+    if not moved and not new_key_path:
+        return None
+    if new_auth in _REQUESTER_HELD_AUTH and new_cred:
+        return None
+    return ("Only a superadmin can change a host's address, SSH port, SSH user, sign-in method "
+            "or key without a new password. Choose password authentication and enter the host's "
+            "password to repoint it yourself, or ask a superadmin.")
+
+
 def register(app):
     @app.route("/remotes")
     @login_required
@@ -153,6 +220,9 @@ def register(app):
         # non-local path — the branch below hardcodes auth_method="local" on purpose.
         if not is_local and auth_method not in EDITABLE_AUTH_METHODS:
             return _form_err("Unknown authentication method.", "manage_remotes")
+        _refused = _delegated_add_refusal(is_local, auth_method)
+        if _refused:
+            return _form_err(_refused, "manage_remotes", code=403)
 
         if is_local:
             remote = RemoteServer(
@@ -270,6 +340,14 @@ def register(app):
         if new_port is None:
             return _form_err("SSH port must be a number between %d and %d." % (MIN_PORT, MAX_PORT),
                              "manage_remotes")
+        # Before anything on the row changes: a delegated admin may not move where, or as whom,
+        # the panel signs in on its own credentials. See _delegated_retarget_refusal.
+        _refused = _delegated_retarget_refusal(
+            remote, new_host, new_port, new_user,
+            (request.form.get("auth_method") or "").strip() or remote.auth_method,
+            request.form.get("credential", "").strip())
+        if _refused:
+            return _form_err(_refused, "manage_remotes", code=403)
         # Repointing to a different host/port means the pinned key no longer applies —
         # clear it so the new target is re-pinned (TOFU) instead of failing as a mismatch.
         if (new_host, new_port) != (remote.host, remote.port):

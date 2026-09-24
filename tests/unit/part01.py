@@ -828,36 +828,77 @@ _bad2_out, _bad2_err, _bad2_rc = _sm_core._run_local(r"printf 'x\200y\n' >&2; pr
 check("transport (local): invalid UTF-8 on stderr does not blank stdout",
       _bad2_rc == 0 and _bad2_out == "ok" and _bad2_err.startswith("x"))
 _sshkw = {}
+_ssh_script = {"v": "printf 'out\\n'"}
+_real_popen_ssh = _sm_core.subprocess.Popen
+_ssh_srv = type("S", (), {"sudo_enabled": False, "linuxgsm_user": None, "port": 22,
+                          "username": "u", "host": "h", "auth_method": "tailscale"})()
 
 
-class _FakeCompleted:
-    stdout = "out"
-    stderr = ""
-    returncode = 0
+def _fake_ssh_popen(argv, **kw):
+    """The REAL transport function, with `ssh ...` swapped for a local command whose output the
+    check controls. Everything after the spawn — the reading, the ceiling, the decode — is real."""
+    _sshkw.clear()
+    _sshkw.update(kw)
+    _sshkw["argv0"] = argv[0]
+    return _real_popen_ssh(["/bin/bash", "-c", _ssh_script["v"]], **kw)
 
 
-_orig_sprun = _sm_core.subprocess.run
+_real_ts_host = _sm_core._resolve_ts_host
 try:
-    _sm_core.subprocess.run = lambda cmd, **kw: (_sshkw.update(kw), _FakeCompleted())[1]
-    _sm_core._run_via_ssh_cli(type("S", (), {"sudo_enabled": False, "linuxgsm_user": None, "port": 22,
-                                       "username": "u", "host": "h", "auth_method": "tailscale"})(),
-                        "echo hi", timeout=5, sudo=False)
+    _sm_core.subprocess.Popen = _fake_ssh_popen
+    # Loopback, so a regression that stops going through Popen dials nothing off this machine.
+    _sm_core._resolve_ts_host = lambda srv: "127.0.0.1"
+    _ssh_script["v"] = r"printf 'caf\351: cannot start\n'"
+    _sshr = _sm_core._run_via_ssh_cli(_ssh_srv, "echo hi", timeout=10, sudo=False)
+    check("transport (ssh cli): decodes with errors='replace' like the other two",
+          _sshr[2] == 0 and _sshr[0].startswith("caf") and "\ufffd" in _sshr[0], repr(_sshr))
+    # ...and it must not hand the remote session the PANEL's stdin. capture_output= redirected
+    # stdout and stderr ONLY, and there is no `-n` in the argv, so the child ssh inherited fd 0
+    # and forwarded it to the far side: every command this transport runs — the transport every
+    # Tailscale remote uses — was reading the panel's own input. Production survived it only
+    # because the systemd unit sets StandardInput=null; run from a shell, a tmux pane or the dev
+    # runner and the poller's ssh calls race to drain the operator's tty, where a stray keystroke
+    # answers a LinuxGSM prompt on a live game server. _POPEN_KW gives both local paths DEVNULL
+    # and files.py gives its own ssh argv the same; this was the one transport that did not.
+    check("transport (ssh cli): the remote session never gets the panel's own stdin",
+          _sshkw.get("stdin") == _sm_core.subprocess.DEVNULL and _sshkw.get("argv0") == "ssh",
+          "stdin=%r argv0=%r — expected DEVNULL (%r)"
+          % (_sshkw.get("stdin"), _sshkw.get("argv0"), _sm_core.subprocess.DEVNULL))
+    # ── ...and what it KEEPS has a ceiling ───────────────────────────────────────────────────
+    # capture_output= buffered everything the remote wrote until the timeout, so a hostile
+    # Tailscale remote answering a metrics probe with gigabytes grew the panel until the OOM
+    # killer took it — and every other host's management with it. The paramiko path has capped
+    # each stream at _MAX_OUTPUT_BYTES since it was written; this transport now does too.
+    _ssh_script["v"] = "head -c %d /dev/zero | tr '\\0' a; echo tail >&2" % (
+        _sm_core._MAX_OUTPUT_BYTES + 3 * 1024 * 1024)
+    _sshr = _sm_core._run_via_ssh_cli(_ssh_srv, "echo hi", timeout=60, sudo=False)
+    check("transport (ssh cli): output past the ceiling is dropped, not buffered",
+          _sshr[2] == 0 and len(_sshr[0]) == _sm_core._MAX_OUTPUT_BYTES and _sshr[1] == "tail",
+          "rc=%r kept=%d err=%r" % (_sshr[2], len(_sshr[0]), _sshr[1][:40]))
+    _ssh_script["v"] = "printf 'a\\r\\nb\\n'; exit 3"
+    _sshr = _sm_core._run_via_ssh_cli(_ssh_srv, "echo hi", timeout=10, sudo=False)
+    check("transport (ssh cli): ...while ordinary output, its newlines and its rc come through "
+          "unchanged (positive control)", _sshr == ("a\nb", "", 3), repr(_sshr))
+    _ssh_script["v"] = "sleep 5"
+    _sshr = _sm_core._run_via_ssh_cli(_ssh_srv, "echo hi", timeout=0.5, sudo=False)
+    check("transport (ssh cli): ...and a command that outlives its timeout is still cut off",
+          _sshr == ("", "SSH command timed out", -1), repr(_sshr))
 finally:
-    _sm_core.subprocess.run = _orig_sprun
-check("transport (ssh cli): decodes with errors='replace' like the other two",
-      _sshkw.get("errors") == "replace" and _sshkw.get("encoding") == "utf-8"
-      and _sshkw.get("text") is True)
-# ...and it must not hand the remote session the PANEL's stdin. capture_output= redirects stdout
-# and stderr ONLY, and there is no `-n` in the argv, so the child ssh inherited fd 0 and forwarded
-# it to the far side: every command this transport runs — the transport every Tailscale remote
-# uses — was reading the panel's own input. Production survived it only because the systemd unit
-# sets StandardInput=null; run from a shell, a tmux pane or the dev runner and the poller's ssh
-# calls race to drain the operator's tty, where a stray keystroke answers a LinuxGSM prompt on a
-# live game server. _POPEN_KW gives both local paths DEVNULL and files.py gives its own ssh argv
-# the same; this was the one transport that did not.
-check("transport (ssh cli): the remote session never gets the panel's own stdin",
-      _sshkw.get("stdin") == _sm_core.subprocess.DEVNULL,
-      "stdin=%r — expected DEVNULL (%r)" % (_sshkw.get("stdin"), _sm_core.subprocess.DEVNULL))
+    _sm_core.subprocess.Popen = _real_popen_ssh
+    _sm_core._resolve_ts_host = _real_ts_host
+
+# The same ceiling on the panel host's own commands (both local paths go through _finish).
+_big = _sm_core._run_local("head -c %d /dev/zero | tr '\\0' b" % (
+    _sm_core._MAX_OUTPUT_BYTES + 1024 * 1024), timeout=60, sudo=False)
+check("transport (local): output past the ceiling is dropped, not buffered",
+      _big[2] == 0 and len(_big[0]) == _sm_core._MAX_OUTPUT_BYTES,
+      "rc=%r kept=%d" % (_big[2], len(_big[0])))
+check("transport (local): ...while a payload on stdin still reaches the command (positive control)",
+      _sm_core._exec_local_argv(["cat"], timeout=10, stdin_text="hello\n") == ("hello", "", 0),
+      repr(_sm_core._exec_local_argv(["cat"], timeout=10, stdin_text="hello\n")))
+_slow = _sm_core._run_local("sleep 5", timeout=0.5, sudo=False)
+check("transport (local): ...and a command that outlives its timeout is still cut off",
+      _slow == ("", "Command timed out", -1), repr(_slow))
 
 # ── cron manager (pure logic; no crontab touched) ─────────────
 # schedule validation
@@ -1013,6 +1054,46 @@ try:
           str(_rc_seen)[:200])
 finally:
     _sm_core.run_command = _rc_o_run
+
+
+# ── the cron journal is the remote's to write, so its parser has to be linear ─────────────────
+# _read_cron_run_times pulled the command out of each journal line with
+# `\)\s+CMD\s+\((.*)\)\s*$`, which is quadratic on a line of repeated ") CMD (" fragments with no
+# closing parenthesis — 0.5 s at 42 KB, minutes at a megabyte — and it runs on the request
+# greenlet, so one hostile line froze every user and host until it finished. Driven for real, with
+# only the privileged read stubbed.
+import time as _crj_time                                                            # noqa: E402
+_crj_saved = _sm_core.run_privileged
+_crj_out = {"v": ""}
+try:
+    _sm_core.run_privileged = lambda *a, **k: (_crj_out["v"], "", 0)
+    _crj_cmd = "/home/gm/gmodserver monitor > /dev/null 2>&1"
+    _crj_long = "echo " + "x" * 5000
+    _crj_out["v"] = "\n".join([
+        "1700000000.5 host CRON[1]: (gm) CMD (%s)" % _crj_cmd,
+        "1700000100.0 host CRON[2]: (gm) CMD (%s)" % _crj_cmd,
+        "1700000150.0 host CRON[3]: (other) CMD (/home/other/x start)",
+        "1700000160.0 host CRON[4]: (gm) CMD (%s)" % _crj_long,
+    ])
+    _crj = _sm_cron._read_cron_run_times(NS(), "gm")
+    check("cron journal: a normal line is read, and the LAST run wins (positive control)",
+          _crj.get(_crj_cmd) == 1700000100 and len([k for k in _crj if "other" in k]) == 0,
+          repr({k[:40]: v for k, v in _crj.items()}))
+    check("cron journal: a line past the length ceiling is skipped before it is parsed",
+          _crj_long not in _crj, "a %d-byte journal line was parsed" % len(_crj_long))
+    _crj_out["v"] = "1700000200 host CRON[5]: (gm) CMD " + ") CMD (" * 20000 + "x"
+    _crj_t = _crj_time.monotonic()
+    _crj = _sm_cron._read_cron_run_times(NS(), "gm")
+    _crj_el = _crj_time.monotonic() - _crj_t
+    check("cron journal: a hostile 140 KB line costs nothing (the old regex took seconds)",
+          _crj_el < 2.0 and _crj == {}, "%.2fs, %r" % (_crj_el, list(_crj)[:1]))
+    # The extraction itself, on a line UNDER the ceiling: marker, "(", up to the final ")".
+    check("cron journal: the command is everything between the marker's ( and the final )",
+          _sm_cron._cron_log_command("1 h CRON[1]: (gm) CMD (a (b) c) ", "(gm) CMD ") == "a (b) c"
+          and _sm_cron._cron_log_command("1 h CRON[1]: (gm) CMD (no close", "(gm) CMD ") is None,
+          "")
+finally:
+    _sm_core.run_privileged = _crj_saved
 
 
 def _cr_drive(fn, *a, **kw):

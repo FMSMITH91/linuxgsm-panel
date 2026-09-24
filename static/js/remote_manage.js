@@ -9,6 +9,11 @@ if (!IS_LOCAL && window.rebootNagCheck) { window.rebootNagCheck(REMOTE_ID, REMOT
 // ── Security tab: fail2ban bans (panel + ssh), recent events, raw logs ──────────
 // Panel host hits /api/panel/security/*; a remote hits /api/remote/<id>/security/* (over SSH).
 function secBase(){ return IS_LOCAL ? MOUNT+'/api/panel/security' : MOUNT+'/api/remote/'+REMOTE_ID+'/security'; }
+// True once the Auto-block toggle shows the host's REAL state. The toggle is rendered unchecked and
+// repainted only when /top-ips answers, which comes after several SSH reads (25 s and more on a
+// slow host) — and saveThreshold posts the toggle's state back as `enabled`. Saving before that
+// answer switched auto-block OFF for the host while the toast said it was blocking at N+.
+var _autoblockKnown = false;
 function loadSecurity(){ loadSecurityBans(); loadSecurityTopIps(); loadSecurityEvents(); }
 function loadSecurityTopIps(){
   var el=document.getElementById('sec-top'); if(!el) return;
@@ -19,7 +24,7 @@ function loadSecurityTopIps(){
     // ("preserve the on/off state"), which turned one failed read plus one Save into
     // auto-blocking being persistently disabled on a host that had it on.
     var tog=document.getElementById('sec-autoblock');
-    if(tog && d && 'autoblock' in d) tog.checked=!!d.autoblock;
+    if(tog && d && 'autoblock' in d){ tog.checked=!!d.autoblock; _autoblockKnown=true; }
     var th=document.getElementById('sec-threshold');
     if(th && d && d.threshold!=null) th.value=d.threshold;
     if(d && 'whitelist' in d) renderWhitelist(d.whitelist||[]);
@@ -86,14 +91,27 @@ function toggleAutoblock(cb){
 function saveThreshold(btn){
   var inp=document.getElementById('sec-threshold'); var v=parseInt(inp&&inp.value,10);
   if(!v||v<1){ if(window.toast) toast('Enter a number of attempts (1 or more)','info'); return; }
+  // The on/off state rides along (the endpoint sets both), so it has to be the host's real one:
+  // an unpainted toggle reads OFF whatever the host has. Refuse until it has been read.
+  if(!_autoblockKnown){ if(window.toast) toast('The auto-block settings are still loading. Save again once they show.','info'); return; }
   var on=!!(document.getElementById('sec-autoblock')||{}).checked;   // preserve the on/off state
   if(btn) btn.disabled=true;
   fetch(secBase()+'/autoblock',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on,threshold:v})})
     .then(function(r){return r.json();}).then(function(d){
       if(btn) btn.disabled=false;
-      if(window.toast) toast('Threshold saved — auto-blocking IPs with '+(d.threshold||v)+'+ attempts / 7 days.', 'success');
+      if(window.toast) toast.apply(null, thresholdSaveToast(d, v));
       setTimeout(loadSecurityTopIps, on?2500:300);
     }).catch(function(){ if(btn) btn.disabled=false; if(window.toast) toast('Couldn\'t save the threshold','danger'); });
+}
+// [message, level] for what the endpoint ACTUALLY did. It answered "Threshold saved" whatever
+// happened: the threshold is install-wide, so for anyone but a superadmin the endpoint ignores it
+// and still succeeds — and the saved state includes auto-block being on or off for this host.
+function thresholdSaveToast(d, asked){
+  if(!d || !d.success) return [(d && d.message) || 'Couldn\'t save the threshold', 'danger'];
+  var t = Number(d.threshold);
+  if(t !== asked) return ['Threshold unchanged at '+t+'+ attempts / 7 days — it applies to every host, so only a superadmin can change it.', 'warning'];
+  if(!d.enabled) return ['Threshold saved at '+t+'+ attempts / 7 days — auto-block is off for this host.', 'info'];
+  return ['Threshold saved — auto-blocking IPs with '+t+'+ attempts / 7 days.', 'success'];
 }
 function renderWhitelist(list){
   var el=document.getElementById('sec-wl-list'); if(!el) return;

@@ -118,9 +118,13 @@ try:
     from eventlet import tpool as _tpool
     from eventlet.patcher import original as _ev_original
     _real_subprocess = _ev_original("subprocess")
+    # ...and the unpatched threading to go with it: _finish runs inside a tpool NATIVE thread,
+    # where a green thread (what threading.Thread is after monkey_patch) has no hub to run on.
+    _real_threading = _ev_original("threading")
 except Exception:
     _tpool = None
     _real_subprocess = subprocess
+    _real_threading = threading
 
 
 # In-memory SSH connection cache, keyed by _conn_key() below.
@@ -297,28 +301,108 @@ def _run_local(cmd, timeout=30, sudo=False):
 # Popen options shared by both local paths. start_new_session puts the child in a NEW process group
 # so that on timeout we can kill the whole group — subprocess's own timeout kills only the direct
 # child, and grandchildren (a stuck LinuxGSM command) are orphaned and run forever, burning CPU.
-# (Observed: mods commands stuck at ~100% CPU for hours.) errors="replace" matches the paramiko
-# path: command output is game-server output (player names, mod chatter, latin-1 logs) and is NOT
-# guaranteed valid UTF-8; a strict decode would raise, get swallowed, and return rc=-1 with empty
-# output — indistinguishable from "the command printed nothing".
+# (Observed: mods commands stuck at ~100% CPU for hours.) The pipes are BINARY: _finish reads
+# them with a byte ceiling and decodes with errors="replace" itself (see _decode_output), which
+# matches the paramiko path — command output is game-server output (player names, mod chatter,
+# latin-1 logs) and is NOT guaranteed valid UTF-8; a strict decode would raise, get swallowed, and
+# return rc=-1 with empty output — indistinguishable from "the command printed nothing".
 # stdin=DEVNULL, not the default of inheriting: a privileged child must never be handed the
 # panel's own stdin. The helper's Python-implemented verbs used to read stdin to EOF whether or
 # not they wanted a payload, so a panel whose fd 0 was a pipe or tty -- anything but the systemd
 # unit -- hung every such verb for its caller's full timeout. Both ends are fixed; this one stops
 # a child from reaching the panel's input at all, which is right regardless of what it does with it.
-_POPEN_KW = dict(stdout=_real_subprocess.PIPE, stderr=_real_subprocess.PIPE, text=True,
-                 encoding="utf-8", errors="replace", start_new_session=True,
-                 stdin=_real_subprocess.DEVNULL)
+_POPEN_KW = dict(stdout=_real_subprocess.PIPE, stderr=_real_subprocess.PIPE,
+                 start_new_session=True, stdin=_real_subprocess.DEVNULL)
+
+
+def _decode_output(b):
+    """Bytes from a pipe -> the text Popen(text=True) would have produced from them: UTF-8 with
+    errors="replace", and universal newlines (CRLF and a bare CR both become LF)."""
+    return b.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _collect_capped(p, timeout, kill, thread_cls, stdin_bytes=None, cap=None):
+    """communicate(), with a ceiling on what is KEPT. -> (out, err, rc, truncated) as bytes, or
+    None when the command outlived `timeout` (it has been killed by then).
+
+    communicate() buffers everything a command writes until it exits, and the two subprocess
+    transports used it: a remote reached over Tailscale that answers a five-second metrics probe
+    with gigabytes grew the panel until the OOM killer ended it, taking every other host's
+    management with it — and the next poll did it again. The paramiko path has had an 8 MB
+    ceiling all along. This is the same rule for these two: each stream is read to EOF in its own
+    thread (reading one to EOF first deadlocks the moment the other fills its pipe), the first
+    `cap` bytes are kept, and the rest is read and DISCARDED rather than left unread, so a command
+    still writing is not blocked into outliving its timeout.
+
+    `thread_cls` is the caller's to choose: a native thread inside tpool, where a green one has no
+    hub to run on; the patched (green) one in a request greenlet, where a native one would block
+    the hub on every read."""
+    cap = _MAX_OUTPUT_BYTES if cap is None else cap
+    out, err = bytearray(), bytearray()
+    flags = {"truncated": False}
+
+    def _pump(stream, buf):
+        rd = getattr(stream, "read1", None) or stream.read
+        try:
+            while True:
+                chunk = rd(65536)
+                if not chunk:
+                    return
+                room = cap - len(buf)
+                if room > 0:
+                    buf.extend(chunk[:room])
+                if len(chunk) > max(room, 0):
+                    flags["truncated"] = True
+        except (OSError, ValueError):
+            return          # the pipe was closed under us (a kill); what was read is kept
+
+    def _feed():
+        try:
+            if stdin_bytes:
+                p.stdin.write(stdin_bytes)
+        except (OSError, ValueError):
+            pass            # the command exited without reading it all; its rc says what happened
+        finally:
+            try:
+                p.stdin.close()
+            except (OSError, ValueError):
+                pass
+
+    workers = []
+    for stream, buf in ((p.stdout, out), (p.stderr, err)):
+        if stream is not None:
+            workers.append(thread_cls(target=_pump, args=(stream, buf), daemon=True))
+    if p.stdin is not None:
+        workers.append(thread_cls(target=_feed, daemon=True))
+    for w in workers:
+        w.start()
+    try:
+        rc = p.wait(timeout=timeout)
+    except (_real_subprocess.TimeoutExpired, subprocess.TimeoutExpired):
+        kill()
+        for w in workers:
+            w.join(timeout=5)
+        return None
+    # The direct child has exited. Its output normally reaches EOF with it; a grandchild still
+    # holding the pipe open gets five seconds, not the caller's whole timeout over again.
+    for w in workers:
+        w.join(timeout=5)
+    return bytes(out), bytes(err), rc, flags["truncated"]
 
 
 def _finish(p, timeout, stdin_text=None):
     """Collect a started process: (stdout, stderr, rc), killing the whole group on timeout."""
-    try:
-        out, err = p.communicate(input=stdin_text, timeout=timeout)
-        return (out or "").strip(), (err or "").strip(), p.returncode
-    except _real_subprocess.TimeoutExpired:
-        _kill_process_tree(p)
+    res = _collect_capped(p, timeout, kill=lambda: _kill_process_tree(p),
+                          thread_cls=_real_threading.Thread,
+                          stdin_bytes=(stdin_text.encode("utf-8")
+                                       if stdin_text is not None else None))
+    if res is None:
         return "", "Command timed out", -1
+    out, err, rc, truncated = res
+    if truncated:
+        _log.warning("local command output exceeded %d bytes and was truncated",
+                     _MAX_OUTPUT_BYTES)
+    return _decode_output(out).strip(), _decode_output(err).strip(), rc
 
 
 def _in_tpool(fn):
@@ -767,12 +851,22 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
         # monitoring poller's ssh calls race to drain the operator's tty, and bytes typed there are
         # forwarded to the remote instead, where a LinuxGSM prompt happily accepts them as its
         # answer. A privileged child must never be handed the panel's input; see _POPEN_KW.
-        r = subprocess.run(ssh_cmd, capture_output=True, text=True, encoding="utf-8",  # nosec B603  # nosemgrep - argv list, no shell; ssh_cmd is built here from validated parts
-                           errors="replace", timeout=timeout,
-                           stdin=subprocess.DEVNULL)
-        return r.stdout.strip(), r.stderr.strip(), r.returncode
-    except subprocess.TimeoutExpired:
-        return "", "SSH command timed out", -1
+        #
+        # Read through _collect_capped, not capture_output=: that buffered EVERYTHING the remote
+        # wrote until the timeout, and a hostile Tailscale remote could answer a routine metrics
+        # probe with gigabytes. The paramiko path's 8 MB ceiling applies here too now. The pipes
+        # are binary and _decode_output does the lenient decode itself, which also sidesteps the
+        # green Popen re-opening text pipes without the `errors=` it was given.
+        p = subprocess.Popen(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; ssh_cmd is built here from validated parts
+                             stdin=subprocess.DEVNULL)
+        res = _collect_capped(p, timeout, kill=p.kill, thread_cls=threading.Thread)
+        if res is None:
+            return "", "SSH command timed out", -1
+        out, err, rc, truncated = res
+        if truncated:
+            _log.warning("ssh command output exceeded %d bytes and was truncated",
+                         _MAX_OUTPUT_BYTES)
+        return _decode_output(out).strip(), _decode_output(err).strip(), rc
     except Exception:
         # Generic message only; the real error is logged, not returned (it can
         # reach API responses — CodeQL py/stack-trace-exposure).
@@ -802,14 +896,31 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
 # long-running work that has always succeeded (an `apt full-upgrade` under a nominal 30s timeout).
 # Past the byte cap the loop keeps reading and DISCARDS rather than stopping: continuing to read is
 # what keeps the remote's flow control moving, and stopping would re-create the hang this fixes.
+#
+# What IS bounded is SILENCE. "No deadline" was right for a command that keeps making progress and
+# wrong for one that never does: a remote that accepts the exec and then sends neither a byte nor
+# an exit status (a compromised host, or one wedged by OOM or a fork bomb) held the loop below
+# forever. Keepalives do not help, because the remote answers those. The monitor sweep iterates its
+# probes with ex.map(), so ONE such host stalled monitoring and alerting for every host until a
+# restart, and every request greenlet asking that host held a DB connection until the pool ran dry.
+# So the drain gives up after _DRAIN_IDLE_FLOOR seconds (or the caller's own timeout, if longer)
+# in which neither stream moved and no exit status arrived — the rc=-1 "timed out" answer the other
+# two transports already give. A long command that is still talking is not affected; the callers
+# that run long QUIET work (backups, installs, apt) already pass timeouts of 600-7200 s.
 _MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+_DRAIN_IDLE_FLOOR = 300
 
 
-def _drain_exec(chan, max_bytes=_MAX_OUTPUT_BYTES):
-    """Read stdout+stderr to EOF, then the exit status. Returns (out, err, rc, truncated)."""
+def _drain_exec(chan, max_bytes=_MAX_OUTPUT_BYTES, idle_limit=None):
+    """Read stdout+stderr to EOF, then the exit status. Returns (out, err, rc, truncated).
+
+    `idle_limit` (seconds): give up when neither stream has moved and no exit status has arrived
+    for that long — close the channel and answer rc -1. None waits as long as the remote keeps the
+    channel open, which is what the loop did before it had a bound."""
     out, err = bytearray(), bytearray()
     truncated = False
     chan.settimeout(0.0)          # non-blocking; we poll and yield rather than block on one stream
+    last_moved = time.monotonic()
     while True:
         moved = False
         try:
@@ -834,9 +945,19 @@ def _drain_exec(chan, max_bytes=_MAX_OUTPUT_BYTES):
         except (socket.timeout, OSError):
             pass                  # raced recv_ready(); the loop re-checks
         if moved:
+            last_moved = time.monotonic()
             continue
         if chan.exit_status_ready() and not chan.recv_ready() and not chan.recv_stderr_ready():
             break
+        if idle_limit is not None and time.monotonic() - last_moved > idle_limit:
+            try:
+                chan.close()
+            except Exception:
+                _log.debug("could not close a silent exec channel", exc_info=True)
+            _log.warning("remote command sent nothing and no exit status for %ds; gave up",
+                         int(idle_limit))
+            msg = b"command timed out: no output and no exit status for %ds" % int(idle_limit)
+            return bytes(out), (bytes(err) + b"\n" + msg).lstrip(), -1, truncated
         time.sleep(0.01)          # eventlet-patched, so this yields rather than burning the worker
     return bytes(out), bytes(err), chan.recv_exit_status(), truncated
 
@@ -903,7 +1024,8 @@ def run_command(server, command, timeout=30, sudo=None):
             stdin.channel.shutdown_write()
         except Exception:
             _log.debug("could not shut down the exec channel's stdin", exc_info=True)
-        out_b, err_b, exit_code, truncated = _drain_exec(stdout.channel)
+        out_b, err_b, exit_code, truncated = _drain_exec(
+            stdout.channel, idle_limit=max(timeout or 0, _DRAIN_IDLE_FLOOR))
         out = out_b.decode("utf-8", errors="replace")
         err = err_b.decode("utf-8", errors="replace")
         if truncated:

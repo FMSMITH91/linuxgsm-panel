@@ -714,6 +714,23 @@ try:
                   json={"interval": "default", "keep": ""}).get_json() or {}
     check("backups: an EMPTY per-server keep clears the override (inherits the default)",
           _sch.get("schedule", {}).get("keep_set") is False, str(_sch.get("schedule")))
+    # A field LEFT OUT is left alone. Both pages posted both fields on a change to either, and
+    # Files & Config's keep <select> has no option for 14, so it read '' and an interval change
+    # cleared the keep override: the next backup pruned to the global 2 and deleted 12 archives.
+    c.post("/api/panel/backup/game/%d/schedule" % gs_id, json={"interval": "7", "keep": "14"})
+    _sch = c.post("/api/panel/backup/game/%d/schedule" % gs_id,
+                  json={"interval": "1"}).get_json() or {}
+    check("backups: changing only the interval leaves the keep override where it was",
+          _sch.get("schedule", {}).get("keep") == 14 and _sch["schedule"].get("keep_set") is True
+          and _sch["schedule"].get("interval_days") == 1,
+          str(_sch.get("schedule")))
+    _sch = c.post("/api/panel/backup/game/%d/schedule" % gs_id,
+                  json={"keep": "4"}).get_json() or {}
+    check("backups: ...and changing only keep leaves the interval override (both directions)",
+          _sch.get("schedule", {}).get("interval_days") == 1
+          and _sch["schedule"].get("interval_set") is True and _sch["schedule"].get("keep") == 4,
+          str(_sch.get("schedule")))
+    c.post("/api/panel/backup/game/%d/schedule" % gs_id, json={"interval": "", "keep": ""})
 
     bdel = c.post("/api/panel/backup/delete", json={"name": "../../etc/passwd"})
     check("backups: delete rejects a traversal name", not (bdel.get_json() or {}).get("success"))
@@ -975,6 +992,116 @@ try:
                     _ar_row.groups = []
                     db.session.delete(_ar_row)
                     db.session.commit()
+
+    # ── ...but only with a credential the delegated admin SUPPLIED ───────────────────────────
+    # add_remote decided a host was the creator's to have by logging in to it, then granted it to
+    # their MANAGE_REMOTES groups. With auth_method=key the credential is a PATH on the panel host
+    # (blank -> the panel user's ~/.ssh/id_rsa, and paramiko tries the agent and every ~/.ssh key
+    # besides), and tailscale is the panel node's own tailnet identity: the login proved the PANEL
+    # could reach the address, not the requester. edit_remote let the same user repoint a granted
+    # row anywhere on those credentials. A password is the one method that proves the requester.
+    _ar2_calls = []
+    _ar2_ids = []
+    _ar2_ssh = _ar_mod.ssh_test_connection
+    _jh = {"Accept": "application/json"}
+    with app.app_context():
+        _ed_row = db.session.get(RemoteServer, remote_id)
+        _ed_before = (_ed_row.name, _ed_row.host, _ed_row.port, _ed_row.username,
+                      _ed_row.auth_method, _ed_row.auth_credential, _ed_row.sudo_enabled)
+    try:
+        _ar_mod.ssh_test_connection = lambda *a, **k: (_ar2_calls.append(a), (True, "ok"))[1]
+        for _am in ("key", "tailscale"):
+            _before_n = len(_ar2_calls)
+            _r2 = mrc.post("/remotes/add", headers=_jh,
+                           data={"name": "smoke-deleg-%s" % _am, "host": "198.51.100.45",
+                                 "ssh_user": "root", "ssh_port": "22", "auth_method": _am,
+                                 "credential": "", "setup_type": "existing"})
+            with app.app_context():
+                _made = RemoteServer.query.filter_by(name="smoke-deleg-%s" % _am).first()
+                if _made is not None:
+                    _ar2_ids.append(_made.id)
+            check("add_remote: a delegated admin cannot add a host that signs in with the panel's "
+                  "own %s" % _am,
+                  _r2.status_code == 403 and _made is None and len(_ar2_calls) == _before_n,
+                  "status=%d row=%s logins=%d — the panel's credential was used to prove the "
+                  "requester's claim" % (_r2.status_code, _made is not None,
+                                         len(_ar2_calls) - _before_n))
+        # ...nor register the panel's own machine: that row is superadmin-only everywhere else
+        # (host_local), and from here it landed outside every group the creator is in.
+        _r2 = mrc.post("/remotes/add", headers=_jh,
+                       data={"name": "smoke-deleg-local", "is_local": "1", "ssh_port": "22"})
+        with app.app_context():
+            _made = RemoteServer.query.filter_by(name="smoke-deleg-local").first()
+            if _made is not None:
+                _ar2_ids.append(_made.id)
+        check("add_remote: ...nor register the panel's own machine as a host",
+              _r2.status_code == 403 and _made is None,
+              "status=%d row=%s" % (_r2.status_code, _made is not None))
+        # POSITIVE CONTROL: a superadmin still adds a key-auth host (the refusal is scoped).
+        _r2 = client_as(admin_id).post("/remotes/add", headers=_jh,
+                                       data={"name": "smoke-sa-key", "host": "198.51.100.46",
+                                             "ssh_user": "root", "ssh_port": "22",
+                                             "auth_method": "key", "credential": "",
+                                             "setup_type": "existing"})
+        with app.app_context():
+            _made = RemoteServer.query.filter_by(name="smoke-sa-key").first()
+            if _made is not None:
+                _ar2_ids.append(_made.id)
+        check("add_remote: ...while a superadmin still adds a key-auth host (positive control)",
+              _made is not None, "status=%d" % _r2.status_code)
+
+        # edit_remote: the delegated admin's own granted row, repointed on the panel's key.
+        def _ed(**f):
+            d = {"name": _ed_before[0], "host": _ed_before[1], "ssh_port": str(_ed_before[2]),
+                 "ssh_user": _ed_before[3], "auth_method": _ed_before[4], "credential": ""}
+            d.update(f)
+            return mrc.post("/remotes/%d/edit" % remote_id, headers=_jh, data=d)
+
+        def _ed_now():
+            with app.app_context():
+                _x = db.session.get(RemoteServer, remote_id)
+                return (_x.host, _x.port, _x.username, _x.auth_method)
+
+        _e = _ed(host="198.51.100.99")
+        check("edit_remote: a delegated admin cannot repoint a key-auth host to another address",
+              _e.status_code == 403 and _ed_now()[0] == _ed_before[1],
+              "status=%d now=%r" % (_e.status_code, _ed_now()))
+        _e = _ed(auth_method="tailscale")
+        check("edit_remote: ...nor switch it to the panel's tailnet identity",
+              _e.status_code == 403 and _ed_now()[3] == _ed_before[4],
+              "status=%d now=%r" % (_e.status_code, _ed_now()))
+        _e = _ed(ssh_user="admin")
+        check("edit_remote: ...nor change the SSH user the panel's key signs in as",
+              _e.status_code == 403 and _ed_now()[2] == _ed_before[3],
+              "status=%d now=%r" % (_e.status_code, _ed_now()))
+        _e = _ed(credential="/home/panel/.ssh/other_key")
+        check("edit_remote: ...nor point it at a different key file on the panel host",
+              _e.status_code == 403, "status=%d" % _e.status_code)
+        # POSITIVE CONTROLS: a rename is not a retarget, and a repoint that brings its own
+        # password is the requester's credential, not the panel's.
+        _e = _ed(name="smoke-host-renamed")
+        with app.app_context():
+            _nm = db.session.get(RemoteServer, remote_id).name
+        check("edit_remote: ...while a rename still saves (positive control)",
+              _e.status_code == 200 and _nm == "smoke-host-renamed",
+              "status=%d name=%r" % (_e.status_code, _nm))
+        _e = _ed(host="198.51.100.98", auth_method="password", credential="their-own-pw")
+        check("edit_remote: ...and a repoint WITH a password they supply is theirs to make",
+              _e.status_code == 200 and _ed_now()[0] == "198.51.100.98"
+              and _ed_now()[3] == "password",
+              "status=%d now=%r" % (_e.status_code, _ed_now()))
+    finally:
+        _ar_mod.ssh_test_connection = _ar2_ssh
+        with app.app_context():
+            _x = db.session.get(RemoteServer, remote_id)
+            (_x.name, _x.host, _x.port, _x.username, _x.auth_method, _x.auth_credential,
+             _x.sudo_enabled) = _ed_before
+            for _rid in _ar2_ids:
+                _row = db.session.get(RemoteServer, _rid)
+                if _row is not None:
+                    _row.groups = []
+                    db.session.delete(_row)
+            db.session.commit()
 
     # ── The firewall PAGE survives a host it cannot reach ────────────────────────────────────
     # A down / rebooting host makes remote_ufw_status() raise ConnectionError. The API route has
@@ -1502,6 +1629,11 @@ try:
         _appmod_cg = sys.modules["app"]
         _cg_rlp = _appmod_cg._remote_listening_ports
         _appmod_cg._remote_listening_ports = lambda r: {22}
+        # ...and the route now also asks the host whether the account already exists (an existing
+        # one is someone else's, not a leftover), which the same dead host cannot answer either.
+        import panel.routes.manage_servers as _cg_msmod
+        _cg_has = _cg_msmod.host_account_state
+        _cg_msmod.host_account_state = lambda r, n: "absent"
         # Under the seam, and drained before the row goes: this POST starts a real install thread,
         # and the row it belongs to is deleted a few lines down. SQLite then hands that freed id
         # to the next INSERT — the install-job block's row — and this worker, still running, wrote
@@ -1513,6 +1645,7 @@ try:
                 "content_games": ["cstrike", "tf"],
             }, follow_redirects=True)
         _appmod_cg._remote_listening_ports = _cg_rlp
+        _cg_msmod.host_account_state = _cg_has
         with app.app_context():
             _new = GameServer.query.filter_by(short_name="cgcapture").first()
             _captured = (_new.content_games or "") if _new is not None else "<no row>"
@@ -1616,7 +1749,8 @@ try:
                                     "block does not stub reached the transport")))
         _ij_stub(_sm_core, "read_as_game_user", lambda *a, **k: ("", "", 0))
         _ij_stub(_sm_core, "run_command", lambda *a, **k: ("", "", 0))
-        _ij_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _ij_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
+        _ij_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
         _ij_stub(_sm_core, "run_as_game_user", _ij_run_as)
         _ij_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
         _ij_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop", "monitor"])
@@ -1698,7 +1832,8 @@ try:
 
     try:
         _cf_stub(_sm_core, "run_command", lambda *a, **k: ("", "", 0))
-        _cf_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _cf_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
+        _cf_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
         # The clash is about the port LinuxGSM REPORTS, not necessarily the one the game binds:
         # here the game honours the panel's config and comes up on 28994, while 28995 stays
         # someone else's. That also lets the post-start poll exit on its first tick instead of
@@ -1797,7 +1932,8 @@ try:
     try:
         _ur_stub(_msmod, "time", _ur_fast)
         _ur_stub(_sm_core, "run_command", lambda *a, **k: ("", "", 0))
-        _ur_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _ur_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
+        _ur_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
         _ur_stub(_sm_core, "run_as_game_user", lambda *a, **k: ("", "", 0))
         _ur_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
         _ur_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop"])
@@ -1892,7 +2028,8 @@ try:
     try:
         _pu_stub(_msmod, "time", _ur_fast)
         _pu_stub(_sm_core, "run_command", lambda *a, **k: ("", "", 0))
-        _pu_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _pu_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
+        _pu_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
         _pu_stub(_sm_core, "run_as_game_user", _pu_run_as)
         _pu_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
         _pu_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop"])
@@ -1997,7 +2134,8 @@ try:
         _lv_stub(_msmod, "_looks_installed", _msmod._looks_installed)   # saved once, for restore
         _lv_stub(_msmod, "time", _ur_fast)
         _lv_stub(_sm_core, "run_command", _lv_run_command)
-        _lv_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _lv_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
+        _lv_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
         _lv_stub(_sm_core, "run_as_game_user", lambda *a, **k: ("", "", 0))
         _lv_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
         _lv_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop"])
@@ -7833,6 +7971,120 @@ try:
             except Exception:
                 pass
 
+    # ── ...and so is the CREDENTIAL the socket joined with ───────────────────────────────────
+    # The per-tick re-check asked only about the user ROW. None of the panel's revocation controls
+    # change the row's answers: a device revoke deletes a UserSession row, "sign out everywhere"
+    # bumps auth_epoch, revoking an API token clears its hash. load_user enforces all of them on
+    # every socket EVENT — but the console is push-only, so after join_console nothing re-ran it,
+    # and a stolen cookie that had been signed out everywhere kept receiving the console.
+    import hashlib as _cv_hl
+    from panel.db.models import UserSession as _CvUS
+    with app.app_context():
+        _cv_u = db.session.get(User, admin_id)
+        _cv_saved = (_cv_u.auth_epoch, _cv_u.api_token, _cv_u.must_change_password)
+        db.session.add(_CvUS(user_id=admin_id, sid="smoke_console_sid", ip="", user_agent=""))
+        db.session.commit()
+        _cv_login = "%d:%d:smoke_console_sid" % (admin_id, _cv_u.auth_epoch or 0)
+
+    def _cv_socket(**hdr):
+        _fc = app.test_client()
+        if not hdr:
+            with _fc.session_transaction() as _ss:
+                _ss["_user_id"] = _cv_login
+                _ss["_fresh"] = True
+        _c = app.socketio.test_client(app, flask_test_client=_fc, headers=hdr or None)
+        with _r_sf._viewers_lock:
+            _r_sf._console_viewers.pop(gs_id, None)
+        _c.emit("join_console", {"server_id": gs_id})
+        _vsid = next(iter(_r_sf._console_viewers.get(gs_id) or {}), None)
+        _cv_sids.append(_vsid)
+        return _c, _vsid
+
+    def _cv_evict():
+        with app.app_context():
+            _r_sf._evict_unauthorized_viewers(app, app.socketio, gs_id)
+        return bool(_r_sf._console_viewers.get(gs_id))
+
+    _cv_clients, _cv_sids = [], []
+    try:
+        # A cookie tied to one UserSession row: revoking that device must end the stream.
+        _cv_c, _cv_sid = _cv_socket()
+        _cv_clients.append(_cv_c)
+        check("console socket: a session-cookie viewer joins, and its login id is recorded",
+              _cv_sid is not None and (_r_sf._viewer_creds.get(_cv_sid) or ("",))[0] == _cv_login,
+              "viewer=%r cred=%r" % (_cv_sid, _r_sf._viewer_creds.get(_cv_sid)))
+        check("console socket: ...and the re-check keeps it while that login stands (control)",
+              _cv_evict(), "a valid viewer was evicted")
+        with app.app_context():
+            _CvUS.query.filter_by(sid="smoke_console_sid").delete()
+            db.session.commit()
+        check("console socket: revoking the viewer's DEVICE ends the stream at the next tick",
+              not _cv_evict(), "the socket of a revoked session is still being streamed to")
+
+        # "Sign out everywhere" / a password change: the epoch moves, every cookie stops matching.
+        with app.app_context():
+            db.session.add(_CvUS(user_id=admin_id, sid="smoke_console_sid", ip="", user_agent=""))
+            db.session.commit()
+        _cv_c, _cv_sid = _cv_socket()
+        _cv_clients.append(_cv_c)
+        check("console socket: (control) a fresh viewer is kept before the epoch moves",
+              _cv_evict(), "a valid viewer was evicted")
+        with app.app_context():
+            db.session.get(User, admin_id).auth_epoch = (_cv_saved[0] or 0) + 1
+            db.session.commit()
+        check("console socket: 'sign out everywhere' ends the stream at the next tick",
+              not _cv_evict(), "the socket outlived a bumped auth_epoch")
+        with app.app_context():
+            db.session.get(User, admin_id).auth_epoch = _cv_saved[0]
+            db.session.commit()
+
+        # A bearer token: revoking it changes neither the epoch nor any session row.
+        with app.app_context():
+            db.session.get(User, admin_id).api_token = _cv_hl.sha256(b"smoke-console-token").hexdigest()
+            db.session.commit()
+        _cv_c, _cv_sid = _cv_socket(Authorization="Bearer smoke-console-token")
+        _cv_clients.append(_cv_c)
+        check("console socket: (control) a bearer-token viewer joins and is kept while the token "
+              "stands", _cv_sid is not None and _cv_evict(),
+              "viewer=%r cred=%r" % (_cv_sid, _r_sf._viewer_creds.get(_cv_sid)))
+        with app.app_context():
+            db.session.get(User, admin_id).api_token = None
+            db.session.commit()
+        check("console socket: revoking the API TOKEN ends the stream at the next tick",
+              not _cv_evict(), "the socket outlived its revoked token")
+
+        # A forced password change is refused at join; the re-check must refuse it too.
+        with app.app_context():
+            db.session.add(_CvUS(user_id=admin_id, sid="smoke_console_sid2", ip="", user_agent=""))
+            db.session.commit()
+        _cv_login = "%d:%d:smoke_console_sid2" % (admin_id, _cv_saved[0] or 0)
+        _cv_c, _cv_sid = _cv_socket()
+        _cv_clients.append(_cv_c)
+        with app.app_context():
+            db.session.get(User, admin_id).must_change_password = True
+            db.session.commit()
+        check("console socket: a password reset mid-stream ends it at the next tick",
+              _cv_sid is not None and not _cv_evict(),
+              "the socket kept streaming to an account held at a forced password change")
+    finally:
+        for _c in _cv_clients:
+            try:
+                _c.disconnect()
+            except Exception:
+                pass
+        with _r_sf._viewers_lock:
+            _r_sf._console_viewers.pop(gs_id, None)
+        with app.app_context():
+            _cv_u = db.session.get(User, admin_id)
+            (_cv_u.auth_epoch, _cv_u.api_token, _cv_u.must_change_password) = _cv_saved
+            _CvUS.query.filter(_CvUS.sid.in_(["smoke_console_sid", "smoke_console_sid2"])).delete(
+                synchronize_session=False)
+            db.session.commit()
+    check("console socket: a disconnect forgets the socket's recorded credential",
+          len([k for k in _cv_sids if k is not None]) == 4
+          and not any(k in _r_sf._viewer_creds for k in _cv_sids),
+          "sids=%r left behind: %r" % (_cv_sids, [k for k in _cv_sids if k in _r_sf._viewer_creds]))
+
     # ── The forced-password-change gate has to be asked ON THE SOCKET ────────────────────────
     # must_change_password is enforced by an @app.before_request (app.py), and a before_request
     # NEVER runs for a Socket.IO event — flask-socketio's middleware takes /socket.io/ ahead of the
@@ -9691,8 +9943,10 @@ try:
                 db.session.commit()
         return _made
 
+    _os_has = _os_mod.host_account_state
     try:
         _appmod_ij._remote_listening_ports = lambda r: {22}
+        _os_mod.host_account_state = lambda r, n: "absent"
         _os_mod.load_game_list = lambda: [
             {"shortname": "btl", "name": "BATTALION: Legacy", "os": "ubuntu-20.04",
              "legacy_os": "ubuntu-20.04"},
@@ -9733,6 +9987,7 @@ try:
               "the 20.04 cap is real whatever the host is, and a 26.04 box is further past it")
     finally:
         _os_mod.load_game_list = _os_real_list
+        _os_mod.host_account_state = _os_has
         _os_sm.host_os_slug = _os_saved
         _appmod_ij._remote_listening_ports = _os_before
 
@@ -11373,6 +11628,126 @@ try:
             if _row is not None:
                 db.session.delete(_row)
                 db.session.commit()
+
+    # ── a terminal on the PANEL'S OWN host is superadmin-only, whatever the grants say ──────────
+    # A shell there runs as the account that owns panel.db, secret_key and cred_key, so it is the
+    # panel itself. It was reachable with USE_TERMINAL plus any group granting the panel host —
+    # two ordinary, delegable grants that together added up to superadmin. The page route, the
+    # term_open event and the per-keystroke re-check all refuse it now; a REMOTE stays reachable
+    # on the same grants (the positive controls), since the panel is root there by design.
+    import panel.routes.host_terminal as _htmod
+    _lt_sessions = {}
+
+    def _lt_open(sid, server, is_local, user_key, on_output, on_exit, cols=80, rows=24):
+        _lt_sessions[sid] = _FakeTermSess()
+        _lt_sessions[sid].host = server.id
+        return _lt_sessions[sid]
+
+    with app.app_context():
+        _lt_local = RemoteServer(name="smoke-lt-local", host="127.0.0.1", port=22,
+                                 username="panel", auth_method="local", auth_credential="",
+                                 is_local=True)
+        _lt_remote = RemoteServer(name="smoke-lt-remote", host="192.0.2.77", port=22,
+                                  username="root", auth_method="key", auth_credential="",
+                                  is_local=False)
+        db.session.add_all([_lt_local, _lt_remote])
+        db.session.flush()
+        _lt_grp = Group(name="smoke-term-both", description="", is_default=False)
+        _lt_grp.set_permissions([auth.USE_TERMINAL, auth.MANAGE_REMOTES])
+        _lt_grp.servers.append(_lt_local)
+        _lt_grp.servers.append(_lt_remote)
+        db.session.add(_lt_grp)
+        db.session.flush()
+        _lt_u = User(username="smoke-term-deleg", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                     is_superadmin=False, is_active=True)
+        _lt_u.groups.append(_lt_grp)
+        db.session.add(_lt_u)
+        db.session.commit()
+        _lt_lid, _lt_rid, _lt_uid, _lt_gid = _lt_local.id, _lt_remote.id, _lt_u.id, _lt_grp.id
+    _tsmod.open_session = _lt_open
+    _tsmod.get = lambda sid: _lt_sessions.get(sid)
+    _tsmod.close_for_sid = lambda sid, reason="": _lt_sessions.pop(sid, None)
+    _lt_c = _lt_c2 = None
+    try:
+        _lt_http = client_as(_lt_uid)
+        _lt_pg = _lt_http.get("/terminal/%d" % _lt_lid, headers={"Accept": "application/json"})
+        check("terminal: a non-superadmin with use_terminal and a panel-host grant is refused the "
+              "panel host's terminal PAGE", _lt_pg.status_code == 403,
+              "status=%d — the page offers a shell as the account that owns panel.db and the keys"
+              % _lt_pg.status_code)
+        _lt_pr = _lt_http.get("/terminal/%d" % _lt_rid)
+        check("terminal: ...while the same grants still reach a REMOTE's terminal page "
+              "(positive control)", _lt_pr.status_code == 200, "status=%d" % _lt_pr.status_code)
+        import panel.ops.system_ops as _lt_so
+        _lt_gss = _lt_so.get_server_status
+        _lt_so.get_server_status = lambda force=False: None      # reads THIS machine; not the question
+        try:
+            _lt_mg = _lt_http.get("/remote/%d/manage" % _lt_lid).get_data(as_text=True)
+            _lt_mr = _lt_http.get("/remote/%d/manage" % _lt_rid).get_data(as_text=True)
+        finally:
+            _lt_so.get_server_status = _lt_gss
+        check("terminal: ...and the manage page hides the panel host's terminal card from them",
+              ("/terminal/%d" % _lt_lid) not in _lt_mg and ("/terminal/%d" % _lt_rid) in _lt_mr,
+              "local card shown=%s, remote card shown=%s"
+              % (("/terminal/%d" % _lt_lid) in _lt_mg, ("/terminal/%d" % _lt_rid) in _lt_mr))
+
+        _lt_c = app.socketio.test_client(app, flask_test_client=client_as(_lt_uid))
+        _lt_c.emit("term_open", {"remote_id": _lt_lid, "cols": 80, "rows": 24})
+        _lt_err = [e for e in _lt_c.get_received() if e.get("name") == "term_error"]
+        check("terminal: ...and term_open on the panel host opens NO shell for them",
+              not any(getattr(v, "host", None) == _lt_lid for v in _lt_sessions.values())
+              and _lt_err and _htmod.LOCAL_HOST_REFUSAL in str(_lt_err[0].get("args")),
+              "sessions=%r errors=%r" % ({k: getattr(v, "host", None)
+                                          for k, v in _lt_sessions.items()}, _lt_err))
+        _lt_c.emit("term_open", {"remote_id": _lt_rid, "cols": 80, "rows": 24})
+        check("terminal: ...while term_open on a granted REMOTE does (positive control)",
+              any(getattr(v, "host", None) == _lt_rid for v in _lt_sessions.values()),
+              "no session on the remote — the gate refuses everything")
+        _lt_c.disconnect()
+        _lt_sessions.clear()
+
+        # The per-keystroke re-check asks the same question: a superadmin with a panel-host shell
+        # open who is demoted keeps nothing, even though their groups still grant the host.
+        with app.app_context():
+            db.session.get(User, _lt_uid).is_superadmin = True
+            db.session.commit()
+        _lt_c2 = app.socketio.test_client(app, flask_test_client=client_as(_lt_uid))
+        _lt_c2.emit("term_open", {"remote_id": _lt_lid, "cols": 80, "rows": 24})
+        _lt_c2.emit("term_input", {"data": "before-demotion"})
+        _lt_w = [w for v in _lt_sessions.values() for w in v.writes]
+        check("terminal: a superadmin's panel-host shell takes keystrokes (control for the next)",
+              "before-demotion" in _lt_w, "writes=%r" % (_lt_w,))
+        with app.app_context():
+            db.session.get(User, _lt_uid).is_superadmin = False
+            db.session.commit()
+        _htmod._sid_access.clear()          # the 10 s cache, not the question under test
+        _lt_c2.emit("term_input", {"data": "after-demotion"})
+        _lt_w = [w for v in _lt_sessions.values() for w in v.writes]
+        check("terminal: ...and once they are demoted the re-check refuses the panel host, "
+              "though a group still grants it",
+              "after-demotion" not in _lt_w, "writes=%r" % (_lt_w,))
+    finally:
+        (_tsmod.open_session, _tsmod.get, _tsmod.close_for_sid) = _ts_saved
+        for _cl in (_lt_c, _lt_c2):
+            try:
+                if _cl is not None and _cl.is_connected():
+                    _cl.disconnect()
+            except Exception:
+                pass
+        with app.app_context():
+            _u = db.session.get(User, _lt_uid)
+            if _u is not None:
+                _u.groups = []
+                db.session.delete(_u)
+            _g = db.session.get(Group, _lt_gid)
+            if _g is not None:
+                _g.servers = []
+                db.session.delete(_g)
+            for _rid in (_lt_lid, _lt_rid):
+                _row = db.session.get(RemoteServer, _rid)
+                if _row is not None:
+                    db.session.delete(_row)
+            db.session.commit()
 
     # ── the two exemptions that rest on SameSite ─────────────────────────────────────────────
     # A WebSocket handshake is NOT subject to the same-origin policy: any page the operator visits

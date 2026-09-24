@@ -331,8 +331,14 @@ function gameSchedule(g){
   (window._bkSched || (window._bkSched = {}))[g.id] = sc;
   var ivVal=sc.interval_set?String(sc.interval_days):'default';
   function opt(v,label,cur){ return '<option value="'+v+'"'+(String(v)===cur?' selected':'')+'>'+label+'</option>'; }
+  // The same choices Files & Config offers, '3' included, plus one for any other stored interval
+  // (the API accepts 0-365). A value with no <option> left the select showing its FIRST entry —
+  // "Default" — beside a note saying "Custom — every 3 days", and the next save posted that.
+  var ivOpts=[['default','Default'],['0','Off'],['1','Daily'],['3','Every 3 days'],['7','Weekly'],
+              ['14','Every 2 weeks'],['30','Monthly']];
+  if(!ivOpts.some(function(o){ return o[0]===ivVal; })) ivOpts.push([ivVal, 'Every '+Number(sc.interval_days)+' days']);
   var ivSel='<select class="form-select form-select-sm py-0" style="width:auto;" id="gsi-'+g.id+'"' + _da('setGameSchedule', [g.id], 'change') + '>'
-    +opt('default','Default',ivVal)+opt('0','Off',ivVal)+opt('1','Daily',ivVal)+opt('7','Weekly',ivVal)+opt('14','Every 2 weeks',ivVal)+opt('30','Monthly',ivVal)+'</select>';
+    +ivOpts.map(function(o){ return opt(escapeHtml(o[0]), o[1], ivVal); }).join('')+'</select>';
   // Typed, not picked — the same change as the two global boxes above. A <select> could carry a
   // labelled "Default" option; a number box says it by being EMPTY, so the placeholder has to
   // carry that meaning and the endpoint has to read "" as "inherit".
@@ -363,8 +369,17 @@ function bkRefreshDefaultNotes(full){
 function setGameSchedule(id){
   var kpEl=document.getElementById('gsk-'+id);
   var iv=document.getElementById('gsi-'+id).value, kp=kpEl.value.trim();   // "" = inherit the default
+  // Only the field that CHANGED from what is stored. The select and the box both fire this, and
+  // the route leaves an absent field alone; posting both meant a change to one re-sent the other
+  // as whatever it happened to read, which for an interval the list had no option for was
+  // "Default" — clearing the override the note beside it said was in force.
+  var cur=(window._bkSched||{})[id]||{};
+  var body={};
+  if(iv!=='' && iv!==(cur.interval_set?String(cur.interval_days):'default')) body.interval=iv;
+  if(kp!==(cur.keep_set?String(cur.keep):'')) body.keep=kp;
+  if(!Object.keys(body).length) return;
   bkMsg('Saving schedule…','text-secondary');
-  fetch(MOUNT+'/api/panel/backup/game/'+id+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({interval:iv,keep:kp})})
+  fetch(MOUNT+'/api/panel/backup/game/'+id+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(function(d){
       if(d.success&&d.schedule){
         if(window._bkSched) window._bkSched[id]=d.schedule;

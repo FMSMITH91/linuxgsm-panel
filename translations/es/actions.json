@@ -70,6 +70,7 @@
   "Enable Tailscale SSH? This re-authenticates Tailscale with SSH support enabled.": "¿Activar Tailscale SSH? Esto vuelve a autenticar Tailscale con el soporte de SSH activado.",
   "Enter SSH password": "Introduce la contraseña SSH",
   "Enter a number of attempts (1 or more)": "Introduce un número de intentos (1 o más)",
+  "The auto-block settings are still loading. Save again once they show.": "La configuración del bloqueo automático aún se está cargando. Vuelve a guardar cuando aparezca.",
   "Enter a port between 1 and 65535.": "Introduce un puerto entre 1 y 65535.",
   "Enter an IP or CIDR first": "Introduce primero una IP o CIDR",
   "Enter the IP address to bind to.": "Introduce la dirección IP en la que escuchar.",
@@ -170,5 +171,6 @@
   "Update the panel": "Actualizar el panel",
   "Upload folders": "Subir carpetas",
   "You'll be alerted once this server is empty (then it turns itself off)": "Se te avisará cuando este servidor esté vacío (después se desactiva solo)",
-  "The panel could not read this host’s firewall, so the public port state is unknown.": "El panel no pudo leer el cortafuegos de este host, por lo que se desconoce el estado del puerto público."
+  "The panel could not read this host’s firewall, so the public port state is unknown.": "El panel no pudo leer el cortafuegos de este host, por lo que se desconoce el estado del puerto público.",
+  "UFW is not active on this host, so no firewall rule keeps the panel port closed — the panel is reachable on its public port.": "UFW no está activo en este host, así que ninguna regla del cortafuegos mantiene cerrado el puerto del panel: el panel es accesible en su puerto público."
 }

@@ -1963,6 +1963,50 @@ check(_rh.count("refreshSection('#conn-ssh-card', 'loadSshStatus')") == 4
       "js: every #conn-ssh-card refresh re-runs loadSshStatus",
       "%d of the call sites name the callback" % _rh.count("'loadSshStatus'"))
 
+# ── ...and it must not call an INACTIVE firewall "tailnet only" ──────────────────────────────
+# remote_public_ssh_status reads `mode` off UFW's rule list, so with UFW inactive (a fresh cloud
+# VPS, or any `ufw disable`) there are no rows and mode is "off" — which the card printed as
+# "disabled — tailnet only", marked "Disable (tailnet-only)" as the state in force and greyed it
+# out, and disabled "Close public panel port" as "already closed", about a host with sshd and the
+# panel on 0.0.0.0 and nothing in front of them. The mode means something only when active.
+_sml = _js_code_only(_js_function_body(_rh, "sshModeLabel"))
+_sml_i = [_sml.find(k) for k in ("d.installed === false", "d.active !== true", "SSH_LABELS[d.mode]")]
+check(-1 not in _sml_i and _sml_i == sorted(_sml_i)
+      and "'not filtered — UFW is inactive'" in _sml and "'not filtered — UFW is not installed'" in _sml,
+      "js: the SSH card says 'not filtered' for an inactive or absent UFW before reading its mode",
+      "positions %r — an inactive firewall is labelled from its (empty) rule list" % (_sml_i,))
+_lss = _js_code_only(_js_function_body(_rh, "loadSshStatus"))
+check("el.textContent = sshModeLabel(d)" in _lss
+      and "var enforced = !d.error && d.active === true" in _lss and "isCur = enforced &&" in _lss,
+      "js: ...and marks no public-SSH mode as current unless UFW is active",
+      "loadSshStatus labels or marks a mode without asking whether the firewall enforces it")
+_lss_i = [_lss.find(k) for k in ("d.unreachable", "d.active !== true", "d.panel_port_open === false")]
+check(-1 not in _lss_i and _lss_i == sorted(_lss_i),
+      "js: ...and never calls the panel port 'already closed' while UFW is off",
+      "positions %r — panel_port_open === false is read before the firewall's state" % (_lss_i,))
+
+# ── saving the auto-block threshold must not switch auto-block OFF ───────────────────────────
+# saveThreshold posts the toggle's state as `enabled` ("preserve the on/off state"), but the toggle
+# is rendered unchecked and repainted only when /top-ips answers — after several SSH reads. A Save
+# pressed before that turned auto-block off for the host, and the toast said "auto-blocking IPs
+# with N+ attempts" regardless — also for a non-superadmin, whose threshold the endpoint ignores.
+_rmj = (ROOT / "static" / "js" / "remote_manage.js").read_text(encoding="utf-8")
+_st_fn = _js_code_only(_js_function_body(_rmj, "saveThreshold"))
+check(re.search(r"^var _autoblockKnown = false;", _rmj, re.M) is not None
+      and "if(!_autoblockKnown){" in _st_fn and "return; }" in _st_fn.split("if(!_autoblockKnown){")[-1][:200]
+      and _st_fn.find("if(!_autoblockKnown){") < _st_fn.find("fetch("),
+      "js: the threshold Save refuses until the host's auto-block state has been read",
+      "saveThreshold posts the toggle as `enabled` before anything has painted it")
+_lst_fn = _js_code_only(_js_function_body(_rmj, "loadSecurityTopIps"))
+check("if(tog && d && 'autoblock' in d){ tog.checked=!!d.autoblock; _autoblockKnown=true; }" in _lst_fn,
+      "js: ...and it is 'read' only when a payload that carried `autoblock` painted the toggle",
+      "_autoblockKnown is set somewhere other than the repaint that makes the toggle true")
+_tst_fn = _js_code_only(_js_function_body(_rmj, "thresholdSaveToast"))
+check("thresholdSaveToast(d, v)" in _st_fn and "!d.success" in _tst_fn
+      and "Number(d.threshold)" in _tst_fn and "t !== asked" in _tst_fn and "!d.enabled" in _tst_fn,
+      "js: ...and the toast says what the endpoint did — refused, ignored, saved with auto-block off",
+      "the toast still says 'Threshold saved' whatever came back")
+
 # ── the update card's changelog links each commit ─────────────────────────────────────────────
 # "d456826 fix: a failed install was a dead end" told you a subject and a sha you then had to go
 # and look up by hand. The sha is now a link to the commit, at the repo THIS checkout tracks (a
@@ -2622,6 +2666,32 @@ check("g.backups_unreadable" in _bk_win2,
 check(">no backups yet<" in _bk_win2,
       "backups: ...and still says that for a host that genuinely has none (positive control)",
       "the real empty case lost its message")
+
+# ── a schedule change posts only the field that changed ──────────────────────────────────────
+# Both schedule controls on each page fire one save, and it posted BOTH fields. Files & Config's
+# keep <select> has no option for 9 or 11-30, so a stored keep of 14 left it with no selection and
+# .value read '' — which the route takes as "clear the override". Changing only the interval
+# therefore reset retention to the global 2, and the next backup deleted twelve archives. The
+# route now leaves an absent field alone (smoke), and these pin the two halves in the browser.
+_sbk = _js_code_only(_js_function_body(_bk_js, "saveBkSchedule"))
+check("JSON.stringify(body)" in _sbk and "keep:kp" not in _sbk
+      and "!==_bkShown[f[0]]" in _sbk and "el.value!==''" in _sbk,
+      "backups: Files & Config posts only the schedule field that changed, never an empty one",
+      "saveBkSchedule still posts {interval, keep} — a change to one resets the other")
+_rbk = _js_code_only(_js_function_body(_bk_js, "renderBackups"))
+_bks = _js_code_only(_js_function_body(_bk_js, "_bkShow"))
+check(_rbk.count("_bkShow(") == 2 and not re.search(r"\b(?:iv|kp)\.value\s*=", _rbk)
+      and "createElement('option')" in _bks and "_bkShown[field]=v" in _bks,
+      "backups: ...and a stored value with no <option> gets one, so the select is never blank",
+      "renderBackups assigns .value directly — a keep of 14 leaves the select with no selection")
+_gss = _js_code_only(_js_function_body(_bk_js2, "setGameSchedule"))
+check("JSON.stringify(body)" in _gss and "{interval:iv,keep:kp}" not in _gss.replace(" ", ""),
+      "backups: the Backups page posts only the schedule field that changed, too",
+      "setGameSchedule still posts {interval, keep} — a keep edit resets a 3-day interval")
+_gsch = _js_code_only(_js_function_body(_bk_js2, "gameSchedule"))
+check("['3','Every 3 days']" in _gsch and "ivOpts.push([ivVal" in _gsch,
+      "backups: ...and its interval list offers every value Files & Config does, plus the stored one",
+      "a 3-day override renders as 'Default' beside a note saying 'Custom — every 3 days'")
 # The two buttons on a backup ROW read the listing too, and app.py's _find_game_backup iterates
 # it — None included. Both answered a 500 with a traceback in the panel log for a host that
 # simply did not answer.

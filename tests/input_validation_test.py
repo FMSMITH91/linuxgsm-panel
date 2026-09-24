@@ -224,6 +224,47 @@ try:
     finally:
         _ms_mod.resolve_free_port = _o_rfp
 
+    # ── a server name that is ALREADY an account on the host ─────────────────────────────────
+    # The name becomes the Linux account the install creates and acts as. INSTANCE_NAME_RE is a
+    # username grammar, not an ownership check, so "root" or "ubuntu" passed it; the job then
+    # deleted such an account as a "half-finished leftover" (userdel -r, rm -rf of the home) and
+    # bound the row to it. The route now asks the HOST first. "root" exists on every host, so this
+    # needs no stub: the real probe runs on the local transport.
+    before = servers_count()
+    r = c.post("/servers/add", data={"remote_id": str(local_id), "game_type": "cod",
+                                     "server_name": "root", "port": "28960"},
+               follow_redirects=False)
+    check("/servers/add refuses a name that is already an account on the host (root)",
+          servers_count() == before and r.status_code < 500,
+          "row count went %d -> %d, status %d" % (before, servers_count(), r.status_code))
+    # A typed name the host has no account for still installs: the ivgood/ivtaken rows above are
+    # the positive control. The DEFAULT name skips past an existing account instead of refusing,
+    # the courtesy it already gets for a panel row of the same name.
+    _o_has = _ms_mod.host_account_state
+    _o_rfp2 = _ms_mod.resolve_free_port
+    try:
+        _ms_mod.resolve_free_port = lambda remote, remote_id, desired, game_type: (desired, False)
+        _ms_mod.host_account_state = lambda remote, n: ("exists" if n in ("gmodserver", "gmodserver2")
+                                                        else "absent")
+        c.post("/servers/add", data={"remote_id": str(local_id), "game_type": "gmod",
+                                     "server_name": "", "port": "27015"},
+               follow_redirects=False)
+        with app.app_context():
+            _gm_rows = sorted(g.short_name for g in GameServer.query.filter_by(game_type="gmod").all())
+        check("/servers/add's default name skips accounts the host already has",
+              _gm_rows == ["gmodserver3"], "gmod rows: %r" % (_gm_rows,))
+        # ...and a host that does not answer is refused, not read as "no such account".
+        _ms_mod.host_account_state = lambda remote, n: None
+        before = servers_count()
+        c.post("/servers/add", data={"remote_id": str(local_id), "game_type": "cod",
+                                     "server_name": "ivnoanswer", "port": "28960"},
+               follow_redirects=False)
+        check("/servers/add refuses when the host cannot say whether the account exists",
+              servers_count() == before, "row count went %d -> %d" % (before, servers_count()))
+    finally:
+        _ms_mod.host_account_state = _o_has
+        _ms_mod.resolve_free_port = _o_rfp2
+
     # int() accepts these and they name a real port, so they must still work.
     for ok_val in _ODD_BUT_VALID:
         before = servers_count()
