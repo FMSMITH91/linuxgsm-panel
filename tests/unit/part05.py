@@ -4932,6 +4932,19 @@ try:
         _cfg2.CONFIG_FILE = _f
         check("config probe: %s -> unreadable=%s" % (_name, _want),
               _fw2._config_unreadable() is _want)
+    # ...and it is the SHARED predicate answering, not a private copy of it. firewall.py kept its
+    # own, already drifted (it read the file as UTF-8, load_config reads it in the locale's
+    # encoding). With config.json valid, only a delegating guard can report the stub's True.
+    _o_cu = _cfg2.config_unreadable
+    try:
+        _cfg2.config_unreadable = lambda: True
+        check("config probe: firewall asks panel.core.config.config_unreadable, not a copy",
+              _fw2._config_unreadable() is True,
+              "answered from its own read of a valid config.json")
+    finally:
+        _cfg2.config_unreadable = _o_cu
+    check("config probe: ...and with the real predicate back, the valid file reads as readable",
+          _fw2._config_unreadable() is False)
     # ...and the CALLER has to consult it. Covering _config_unreadable is not covering the guard:
     # a mutation that deleted the `if _config_unreadable(): return True` line survived a green run.
     _o_local6 = _core_mod_is_local = _sm_core.is_local_server
