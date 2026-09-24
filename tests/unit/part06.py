@@ -1448,6 +1448,26 @@ try:
     check("install.sh: ...and a member of a privileged GROUP is 'yes' without consulting sudo",
           (_r.stdout or "").strip().endswith("yes") and "SUDO WAS CALLED" not in _r.stdout,
           repr(_r.stdout[:120]))
+    # ...and "privileged" is not only sudo. docker/lxd/incus-admin/libvirt reach root through their
+    # daemon, disk through the block device, staff through /usr/local; adm and shadow read logs and
+    # hashes. None needs a sudoers entry, so `sudo -l -U` says "not allowed" and the account was
+    # enrolled into the become-any-member grant. Every group privileged.py already refuses as
+    # root-equivalent must be refused here too, with sudo answering the reassuring "no".
+    _cas_rootish = sorted(set(_privmod._NEVER_A_CONTENT_GROUP) | {"incus-admin", "libvirt"})
+    _cas_missed = []
+    for _g in _cas_rootish:
+        _r = _su_run(_cas + '\ncan_already_sudo x\n', "",
+                     extra=("id() { echo 'x games %s'; }\n" % _g
+                            + "sudo() { echo 'User x is not allowed to run sudo on h.'; }\n"))
+        if not (_r.stdout or "").strip().endswith("yes"):
+            _cas_missed.append("%s -> %r" % (_g, (_r.stdout or "").strip()[-20:]))
+    check("install.sh: ...including docker, lxd, disk and the other root-equivalent groups",
+          len(_cas_rootish) >= 12 and not _cas_missed, "; ".join(_cas_missed))
+    _r = _su_run(_cas + '\ncan_already_sudo x\n', "",
+                 extra=("id() { echo 'x games dockerish'; }\n"
+                        "sudo() { echo 'User x is not allowed to run sudo on h.'; }\n"))
+    check("install.sh: ...matched whole, so a lookalike group is still a plain 'no' (control)",
+          (_r.stdout or "").strip().endswith("no"), repr(_r.stdout[-40:]))
     # The caller must act on all three: only `no` may enrol.
     _sync_body = _su_body("sync_game_user_group")
     check("install.sh: ...and only a definite 'no' enrols the account",

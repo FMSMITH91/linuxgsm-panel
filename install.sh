@@ -988,9 +988,17 @@ root_tools_present() {
 # already run sudo turns that narrow grant into NOPASSWD:ALL with one extra hop.
 #
 # LC_ALL=C so the two phrases are the English ones sudo compiles in.
+#
+# The GROUP test is not only about sudo. docker, lxd, incus-admin and libvirt reach root through
+# their daemon (`docker run -v /:/host`), disk through the raw block device, staff through
+# /usr/local, which root runs from. adm and shadow read logs and password hashes. None of these
+# needs a sudoers entry, so `sudo -l -U` reports the account as "not allowed" and it was enrolled:
+# the one-hop NOPASSWD:ALL this function exists to prevent. The first ten are the set
+# panel/security/privileged.py already refuses as _NEVER_A_CONTENT_GROUP.
 can_already_sudo() {
     _cas_user="$1"
-    if id -nG "${_cas_user}" 2>/dev/null | tr " " "\n" | grep -qxE "sudo|admin|wheel|root"; then
+    _cas_groups="sudo|admin|wheel|root|adm|shadow|docker|lxd|disk|staff|incus-admin|libvirt"
+    if id -nG "${_cas_user}" 2>/dev/null | tr " " "\n" | grep -qxE "${_cas_groups}"; then
         echo yes; return 0
     fi
     _cas_out="$(LC_ALL=C sudo -l -U "${_cas_user}" 2>&1)" || true
@@ -1042,16 +1050,18 @@ sync_game_user_group() {
                 # the grant back rather than describing a state that is not this host's.
                 if id -nG "${_gu}" 2>/dev/null | tr ' ' '\n' | grep -qx "${GAME_GROUP}"; then
                     if gpasswd -d "${_gu}" "${GAME_GROUP}" >/dev/null 2>&1; then
-                        warn "Removed '${_gu}' from ${GAME_GROUP}: it can now run sudo, which would"
-                        warn "  make the panel's grant a path to root. The panel can no longer"
-                        warn "  manage that account's servers on this host."
+                        warn "Removed '${_gu}' from ${GAME_GROUP}: it can now reach root (sudo, or a"
+                        warn "  group such as docker), which would make the panel's grant a path to"
+                        warn "  root. The panel can no longer manage that account's servers on this host."
                     else
-                        warn "'${_gu}' is in ${GAME_GROUP} AND can run sudo — the panel's grant is a"
-                        warn "  path to root, and the membership could not be removed. Run:"
+                        warn "'${_gu}' is in ${GAME_GROUP} AND can reach root (sudo, or a group such as"
+                        warn "  docker), so the panel's grant is a path to root, and the membership could"
+                        warn "  not be removed. Run:"
                         warn "    gpasswd -d ${_gu} ${GAME_GROUP}"
                     fi
                 else
-                    warn "Not enrolling '${_gu}' in ${GAME_GROUP}: it already has sudo rights."
+                    warn "Not enrolling '${_gu}' in ${GAME_GROUP}: it can already reach root (sudo,"
+                    warn "  or a group such as docker)."
                     warn "  The panel will not be able to manage that account's servers on this host."
                 fi
                 continue ;;

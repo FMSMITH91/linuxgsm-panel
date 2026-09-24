@@ -3549,7 +3549,8 @@ def _inst_fn(name):
     return _inst_sh_src[i:_inst_sh_src.index("\n}\n", i)]
 
 check("install.sh: the backfill asks whether an account can already reach root",
-      'grep -qxE "sudo|admin|wheel|root"' in _inst_fn("can_already_sudo")
+      'grep -qxE "${_cas_groups}"' in _inst_fn("can_already_sudo")
+      and '_cas_groups="sudo|admin|wheel|root|' in _inst_fn("can_already_sudo")
       and 'sudo -l -U "${_cas_user}"' in _inst_fn("can_already_sudo"),
       "the check is missing from can_already_sudo")
 check("install.sh: ...and the backfill acts on its answer, enrolling only on a definite no",
