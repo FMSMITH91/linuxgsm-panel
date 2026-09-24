@@ -261,8 +261,22 @@ finally:
 try:
     _scanroot = _tempfile.mkdtemp(prefix="panel-scan-")
     for _d in ("srcds/serverfiles/cstrike", "srcds/serverfiles/hl2",
-               "gmodserver/serverfiles/tf2", "nothing", "bad;name/serverfiles/cstrike"):
+               "gmodserver/serverfiles/tf2", "nothing", "bad;name/serverfiles/cstrike", "linker"):
         os.makedirs(os.path.join(_scanroot, _d), exist_ok=True)
+    # The account owns everything below its home, so it can point any of it anywhere. As root the
+    # probes FOLLOWED those links: `ln -s /root ~/serverfiles` made them an existence oracle over
+    # places the account cannot look. Here the targets are another user's real content, so a probe
+    # that follows reports what is not the account's — a whole serverfiles, and one game entry.
+    os.symlink(os.path.join(_scanroot, "srcds", "serverfiles"),
+               os.path.join(_scanroot, "linker", "serverfiles"))
+    os.symlink(os.path.join(_scanroot, "srcds", "serverfiles", "hl2"),
+               os.path.join(_scanroot, "gmodserver", "serverfiles", "hl2"))
+    for _sn, _sm in (("srcds/cssserver", 0o755), ("srcds/notexec", 0o644)):
+        with open(os.path.join(_scanroot, _sn), "w") as _fh:
+            _fh.write("#!/bin/sh\n")
+        os.chmod(os.path.join(_scanroot, _sn), _sm)
+    os.symlink(os.path.join(_scanroot, "srcds", "cssserver"),
+               os.path.join(_scanroot, "linker", "cssserver"))
     _spec_s = _ilu.spec_from_loader("ph_scan", _machinery.SourceFileLoader("ph_scan", _helper_path))
     _hs = _ilu.module_from_spec(_spec_s)
     _spec_s.loader.exec_module(_hs)
@@ -285,6 +299,18 @@ try:
           not any("nothing" in h for h in _hits), str(_hits))
     check("content scan: a /home entry whose NAME the panel would never use is skipped",
           not any("bad" in h for h in _hits), str(_hits))
+    check("content scan: a symlinked serverfiles or game entry is not followed",
+          not any(h.startswith(("HIT|linker|", "HIT|gmodserver|")) for h in _hits), str(_hits))
+    _cp_got = (_hs.do_content_game_present(["srcds", "cstrike"], None),
+               _hs.do_content_game_present(["linker", "cstrike"], None),
+               _hs.do_content_game_present(["gmodserver", "hl2"], None))
+    check("content-game-present: a real game dir is present; one reached through a link the "
+          "account planted is not", _cp_got == (0, 1, 1), repr(_cp_got))
+    _cs_got = (_hs.do_content_script_present(["srcds", "cssserver"], None),
+               _hs.do_content_script_present(["linker", "cssserver"], None),
+               _hs.do_content_script_present(["srcds", "notexec"], None))
+    check("content-script-present: a real executable is present; a link to one, or a file with no "
+          "execute bit, is not", _cs_got == (0, 1, 1), repr(_cs_got))
     _shutil.rmtree(_scanroot, ignore_errors=True)
 except OSError as _e:
     skip("content scan", _e)

@@ -3155,14 +3155,44 @@ def do_content_scan(args, content):
             user = v_username(entry)
         except ValueError:
             continue
-        base = home_of(user) + "/" + CONTENT_SUBDIR
-        if not os.path.isdir(base):
-            continue
         for game in args:
-            if os.path.isdir(os.path.join(base, game)):
+            if _is_dir_in_home(user, CONTENT_SUBDIR, game):
                 hits.append("HIT|%s|%s" % (user, game))
     sys.stdout.write("\n".join(hits))
     return 0
+
+
+def _lstat_in_home(user, *parts):
+    """lstat <user's home>/<parts...> as root WITHOUT following a symlink at any component below
+    the home, or None when any step is missing, unopenable, or a link. The names go through
+    content_path first, so the same grammar applies as everywhere else they are used.
+
+    The three content probes answered with os.path.isdir / isfile / access, as root, and all three
+    FOLLOW links. Everything below the home is the content account's to replace, so
+    `ln -s /root ~/serverfiles` made content-game-present answer whether /root/<game> exists, and a
+    link at the script name whether any path is an executable — a root-side existence oracle over
+    places the account cannot look. Walked by descriptor with O_NOFOLLOW (the home's parent is
+    root's, so the home opened O_NOFOLLOW is the real one), and the last name lstat'd, not stat'd."""
+    content_path(user, *parts)                     # validation only; raises on a bad piece
+    try:
+        fd = os.open(home_of(user), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        for part in parts[:-1]:
+            nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        return os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _is_dir_in_home(user, *parts):
+    st = _lstat_in_home(user, *parts)
+    return st is not None and stat.S_ISDIR(st.st_mode)
 
 
 def do_content_dir_create(args, content):
@@ -3196,14 +3226,16 @@ def do_content_dir_create(args, content):
 
 
 def do_content_game_present(args, content):
-    """Exit 0 when <content user>/serverfiles/<game> is a directory — `test -d`, without a shell."""
-    return 0 if os.path.isdir(content_path(args[0], CONTENT_SUBDIR, args[1])) else 1
+    """Exit 0 when <content user>/serverfiles/<game> is a directory — `test -d`, without a shell,
+    and without following a link the account planted (see _lstat_in_home)."""
+    return 0 if _is_dir_in_home(args[0], CONTENT_SUBDIR, args[1]) else 1
 
 
 def do_content_script_present(args, content):
-    """Exit 0 when <content user>/<script> is executable — `test -x`, without a shell."""
-    path = content_path(args[0], args[1])
-    return 0 if (os.path.isfile(path) and os.access(path, os.X_OK)) else 1
+    """Exit 0 when <content user>/<script> is an executable regular file — `test -x` as root, which
+    any execute bit satisfies — without following a link at the script's name."""
+    st = _lstat_in_home(args[0], args[1])
+    return 0 if (st is not None and stat.S_ISREG(st.st_mode) and st.st_mode & 0o111) else 1
 
 
 def _remove_at(parent_fd, name):
