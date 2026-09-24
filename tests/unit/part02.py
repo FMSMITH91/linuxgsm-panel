@@ -765,7 +765,7 @@ try:
     _joined = " ".join(_cap7["cmds"])
     check("run_game_backup: runs LinuxGSM backup as the game user",
           _gok is True and _gskip is False and "sudo -u gm bash -c" in _joined and "./gmodserver backup" in _joined)
-    check("run_game_backup: prunes to keep N (keep=2 -> tail +3)", "tail -n +3" in _joined)
+    check("run_game_backup: prunes to keep N (keep=2 -> tail +3)", "tail -z -n +3" in _joined)
 finally:
     _sm_core.run_command = _orig_run8
 
@@ -1045,6 +1045,41 @@ finally:
 eq("cron: split 5-field", _sm_cron._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 3 * * *", "/home/gm/b.sh a"))
 eq("cron: split @shortcut", _sm_cron._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))
 eq("cron: split rejects short line", _sm_cron._split_cron_line("0 3 * *"), (None, None))
+
+# ── prune_game_backups survives an oddly named file in the backup dir ─────────────────────────
+# It was `ls -1t … | tail | xargs -r rm -f`, and xargs parses quotes and blanks: one file with a
+# quote in its name stopped every later prune ("unmatched single quote"), so old backups piled up
+# until the disk filled. The REAL command runs here against a scratch dir standing in for
+# /home/gm/lgsm/backup, with the `sudo -u` prefix peeled off.
+import subprocess as _subp_pr
+import tempfile as _tmpf_pr
+import shutil as _sh_pr
+_pr_home = _tmpf_pr.mkdtemp(prefix="unit-prune-")
+_pr_saved = _sm_core.run_command
+try:
+    _pr_dir = os.path.join(_pr_home, "lgsm", "backup")
+    os.makedirs(_pr_dir)
+    # Oldest first. The two newest must survive keep=2; everything else must go, odd names too.
+    _pr_names = ["old-1.tar.gz", "x'quote.tar.zst", "sp ace.tar.gz", "gm-2026-01-04.tar.zst",
+                 "gm-2026-01-05.tar.gz"]
+    for _i, _n in enumerate(_pr_names):
+        _p = os.path.join(_pr_dir, _n)
+        open(_p, "w").write("x")
+        os.utime(_p, (1700000000 + _i * 100, 1700000000 + _i * 100))
+    open(os.path.join(_pr_dir, "notes.txt"), "w").write("not a backup")
+
+    def _pr_run(s, c, **k):
+        _r = _subp_pr.run(["bash", "-c", c.split(" ", 3)[3].replace("/home/gm/", _pr_home + "/")],
+                          capture_output=True, text=True)
+        return _r.stdout, _r.stderr, _r.returncode
+    _sm_core.run_command = _pr_run
+    _pr_ok = _sm_cron.prune_game_backups(None, "gm", keep=2)
+    eq("prune_game_backups: keeps the newest `keep` and removes the rest, quote and space included",
+       (_pr_ok, sorted(os.listdir(_pr_dir))),
+       (True, ["gm-2026-01-04.tar.zst", "gm-2026-01-05.tar.gz", "notes.txt"]))
+finally:
+    _sm_core.run_command = _pr_saved
+    _sh_pr.rmtree(_pr_home, ignore_errors=True)
 
 # ── anti-lockout: disabling public SSH must be refused with no Tailscale path back in ──
 # ...and the RESULT must be read back off the host. remote_set_public_ssh used to return True

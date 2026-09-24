@@ -618,11 +618,26 @@ def list_game_backups(server, user):
 def prune_game_backups(server, user, keep=3):
     """Keep only the newest `keep` LinuxGSM backups for a game server; delete the rest.
     Matches every archive type LinuxGSM produces (.tar.zst / .tar.gz / …), not just .tar.gz —
-    otherwise large zstd backups would never be pruned and could fill the disk."""
+    otherwise large zstd backups would never be pruned and could fill the disk.
+
+    NUL-delimited end to end. This was `ls -1t … | tail | xargs -r rm -f`, and xargs parses
+    quotes and blanks: one file in the backup dir with a quote in its name ("unmatched single
+    quote") stopped the prune for good, and a space split a name into two. The game user — or
+    anything that writes as it — could leave such a file, after which old backups piled up until
+    the disk was full and real backups failed. Returns True when the prune ran cleanly; a failure
+    is logged rather than silently discarded."""
+    if not files._SAFE_UNIX_USER_RE.match(str(user or "")):
+        return False
     bdir = "/home/%s/lgsm/backup" % user
     keep = max(1, int(keep))
-    cmd = "ls -1t %s/*.tar.* 2>/dev/null | tail -n +%d | xargs -r rm -f" % (bdir, keep + 1)
-    _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(cmd)}", timeout=30, sudo=False)
+    cmd = ("find %s -maxdepth 1 -type f -name '*.tar.*' ! -name '.*' -printf '%%T@ %%p\\0' "
+           "2>/dev/null | sort -z -rn | tail -z -n +%d | cut -z -d' ' -f2- | xargs -0 -r rm -f --"
+           % (_core._quote(bdir), keep + 1))
+    _o, err, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(cmd)}",
+                                    timeout=30, sudo=False)
+    if rc != 0:
+        _core._log.warning("backup prune for %s failed (rc=%s): %s", user, rc, (err or "")[:200])
+    return rc == 0
 
 
 def _fmt_size(nbytes):
