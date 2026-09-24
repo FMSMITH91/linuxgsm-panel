@@ -1266,6 +1266,28 @@ try:
     _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
     check("ufw limit: ...while a port with nothing ahead of it is limited (positive control)",
           _ok is True and _rules == [("28016/tcp", "LIMIT", "")], "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
+    # The bare rule goes only once the other protocol is re-opened on its own. The re-allow's exit
+    # code was ignored: when it failed, 28016/udp — gameplay — was closed, and the answer was "now
+    # rate limited", the read-back looking at tcp only. (The split above is the positive control.)
+    _rules = [("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, **k:
+                               ("", "ERROR: timed out", 1) if (v, list(a)[:1]) == ("ufw-allow-port", ["28016/udp"])
+                               else _i(s, v, a, **k))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: a failed re-allow of the other protocol leaves the bare rule, and says so",
+          _ok is False and ("28016", "ALLOW", "rustserver") in _rules and "28016/udp" in _msg,
+          "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
+    # ...and a re-allow that "worked" without the rule appearing is caught by the read-back.
+    _rules = [("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, **k:
+                               ("Skipping", "", 0) if (v, list(a)[:1]) == ("ufw-allow-port", ["28016/udp"])
+                               else _i(s, v, a, **k))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: ...and a split that closed the other protocol anyway is reported, not 'limited'",
+          _ok is False and _first_for(_rules, "28016", "udp") is None and "28016/udp" in _msg,
+          "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
 
     # ── the unblock that always said it worked ───────────────────────────────────────────────
     # remote_ufw_undeny_ip discarded the verb's result and returned True unconditionally, while
