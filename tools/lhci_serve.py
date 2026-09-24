@@ -65,6 +65,12 @@ def _cleanup():
 # page — including /login — funnels into the setup wizard.
 cfg = load_config()
 cfg["setup_complete"] = True
+# "basic", not the default "strong". Strong binds a session to the client's IP and User-Agent, and
+# Lighthouse audits under its OWN emulated User-Agent after lhci-login.js signed in with Chrome's —
+# so every audited page answered with a redirect to /login and the run measured the login page
+# eight times. A real browser does not change its User-Agent mid-session; this harness does, and
+# what it audits is layout and accessibility, not session binding.
+cfg["session_protection"] = "basic"
 save_config(cfg)
 
 from app import create_app

@@ -2378,10 +2378,12 @@ def _resolved_bind(cfg):
     port = cfg.get("port", 5000)
     if port not in _RESOLVED_BIND:
         try:
-            _RESOLVED_BIND[port] = ts.suggest_best_bind(port).get("bind_host") or "0.0.0.0"
+            # nosec B104 - not a choice made here: the boot rule, unchanged, for a panel with no
+            # configured bind and no Serve in front, so the first-run wizard is reachable.
+            _RESOLVED_BIND[port] = ts.suggest_best_bind(port).get("bind_host") or "0.0.0.0"  # nosec B104
         except Exception:
             _log.debug("bind resolution failed; assuming 0.0.0.0", exc_info=True)
-            _RESOLVED_BIND[port] = "0.0.0.0"
+            _RESOLVED_BIND[port] = "0.0.0.0"  # nosec B104 - the same fallback boot always used
     return _RESOLVED_BIND[port]
 
 

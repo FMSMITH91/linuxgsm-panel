@@ -196,7 +196,9 @@ def host_account_state(remote, name):
             remote, "id %s >/dev/null 2>&1 && echo EXISTS || echo NOTEXISTS" % shlex.quote(name),
             timeout=10, sudo=False)
     except Exception:
-        _log.debug("account probe for %s failed", name, exc_info=True)
+        # The name is not logged: it arrives from the request (py/log-injection), and the
+        # traceback already says which probe failed.
+        _log.debug("account probe failed", exc_info=True)
         return None
     last = ((out or "").strip().splitlines() or [""])[-1].strip()
     if last == "EXISTS":

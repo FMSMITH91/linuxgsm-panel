@@ -136,6 +136,7 @@ def run_off_hub(fn, *args):
             from eventlet import tpool
             return tpool.execute(fn, *args)
     except ImportError:
+        # No eventlet (tests, tools): there is no hub to keep free, so call it directly below.
         pass
     return fn(*args)
 

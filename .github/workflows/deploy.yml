@@ -52,6 +52,7 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
       vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -66,7 +67,12 @@ jobs:
       # The installer root runs on a system install comes from HERE: the commit CI just verified,
       # checked out on the runner, carried to the host inside the SSH session. Not from the host's
       # own checkout. The system-install branch below says why that one cannot be trusted.
-      - name: Check out the verified commit's installer
+      # Not a pull request's code. The job's `if` admits only a completed CI run of a PUSH to
+      # this repository's main (event == 'push', head_branch == 'main', and head_repository is
+      # this repository), so head_sha is a commit already on main; a fork's pull request is
+      # event 'pull_request' and never reaches here. It is checked out, not executed, on the
+      # runner — the host runs it, which is the point: the host must NOT run its own copy.
+      - name: Check out the verified commit's installer  # nosemgrep: yaml.github-actions.security.workflow-run-target-code-checkout.workflow-run-target-code-checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}

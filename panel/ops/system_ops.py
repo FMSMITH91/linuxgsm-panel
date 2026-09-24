@@ -2010,6 +2010,7 @@ def _ufw_deny_sources(status_out, shadowed=None):
                 try:
                     nets.append(ipaddress.ip_network(t, strict=False))
                 except ValueError:
+                    # A token that is not a network (a port, an interface) is not a source.
                     pass
             try:
                 src = (None if not rest or rest[0] == "Anywhere"

@@ -366,6 +366,7 @@ def _collect_capped(p, timeout, kill, thread_cls, stdin_bytes=None, cap=None):
             try:
                 p.stdin.close()
             except (OSError, ValueError):
+                # Already closed by the exit or a kill — there is nothing left to close.
                 pass
 
     workers = []
@@ -1168,6 +1169,7 @@ def enrol_game_user(server, user):
         if user == pwd.getpwuid(os.getuid()).pw_name:
             return None
     except (ImportError, KeyError):
+        # No passwd entry for our own uid: it cannot be the panel's own account, so enrol it.
         pass
     try:
         _, g_err, g_rc = run_privileged(server, "gameuser-group", [user], timeout=15,

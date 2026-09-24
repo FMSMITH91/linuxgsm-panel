@@ -2262,9 +2262,10 @@ def _open_log_in_dir(dir_path, name):
         try:
             os.unlink(name, dir_fd=dfd)
         except FileNotFoundError:
+            # No previous log to replace: the O_EXCL create below is all that is needed.
             pass
         fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-                     0o640, dir_fd=dfd)
+                     0o600, dir_fd=dfd)
         try:
             os.fchown(fd, owner.st_uid, owner.st_gid)
         except OSError:
@@ -3436,6 +3437,7 @@ def do_content_grant_read(args, content):
             try:
                 _chmod_nofollow(CONTENT_SUBDIR, stat.S_IXGRP, dir_fd=home_fd)
             except OSError:
+                # No content subdir to open up (nothing mounted yet) — the grant still stands.
                 pass
             for game in games:
                 name = v_ident(game)
