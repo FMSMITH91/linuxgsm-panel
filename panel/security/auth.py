@@ -869,15 +869,44 @@ def _ip_or_none(value):
 _PROC_NET_TCP = {4: "/proc/net/tcp", 6: "/proc/net/tcp6"}
 
 
+def _proc_net_address(addr, port):
+    """`addr`:`port` spelled the way /proc/net/tcp{,6} prints it, or None if `addr` is not an IP.
+
+    The kernel prints each 32-bit word of the address as the raw integer in HOST byte order, so
+    127.0.0.1 is 0100007F on a little-endian machine; struct's native order reproduces that."""
+    import ipaddress
+    import struct
+    try:
+        packed = ipaddress.ip_address(addr).packed
+    except ValueError:
+        return None
+    words = struct.unpack("=%dI" % (len(packed) // 4), packed)
+    return "%s:%04X" % ("".join("%08X" % w for w in words), port)
+
+
 def _loopback_peer_uid(environ):
     """The uid that owns the CLIENT end of this loopback TCP connection, or None if unknown.
 
     Both ends of a loopback connection live in this host's own socket table, so the kernel can
     say who dialled: /proc/net/tcp{,6} lists each socket with its owner's uid. The client end is
-    the row whose local port is our peer's port and whose remote port is the port we accepted
-    on. Anything that cannot be matched answers None, which callers treat as "not trusted"."""
+    the row whose local address is our peer's address and port and whose remote address is the
+    one we accepted on (eventlet's SERVER_NAME/SERVER_PORT are the accepted socket's own name).
+    Anything that cannot be matched answers None, which callers treat as "not trusted".
+
+    Only a row with a socket INODE is believed — one a live process owns. A client that writes
+    its request and calls close() at once leaves an orphan (FIN_WAIT1), then a time-wait entry
+    (FIN_WAIT2/TIME_WAIT), and the kernel prints uid 0 for every time-wait socket
+    (get_timewait4_sock) and, on kernels that read the owner through the detached inode, for the
+    orphan too. The panel still reads the buffered request, so "any local account, send and hang
+    up" read as root and its forged X-Forwarded-For was believed. Every such row prints inode 0.
+    The inode is the test rather than the state: a live socket is the only owner of its 4-tuple,
+    so whatever state it is in, its uid is who dialled.
+
+    Whole addresses, not port suffixes: a root-owned connection between two OTHER addresses can
+    share both port numbers with this one, and the first row whose ports matched used to answer."""
     orig = environ.get("werkzeug.proxy_fix.orig") or {}
     peer = orig.get("REMOTE_ADDR") or environ.get("REMOTE_ADDR") or ""
+    ours = orig.get("SERVER_NAME") or environ.get("SERVER_NAME") or ""
     try:
         peer_port = int(environ.get("REMOTE_PORT") or 0)
         our_port = int(orig.get("SERVER_PORT") or environ.get("SERVER_PORT") or 0)
@@ -885,14 +914,16 @@ def _loopback_peer_uid(environ):
         return None
     if not peer_port or not our_port:
         return None
-    local_suffix, remote_suffix = ":%04X" % peer_port, ":%04X" % our_port
+    local, remote = _proc_net_address(peer, peer_port), _proc_net_address(ours, our_port)
+    if local is None or remote is None:
+        return None
     try:
         with open(_PROC_NET_TCP[6 if ":" in peer else 4]) as fh:
             next(fh, None)                              # the header row
             for line in fh:
                 cols = line.split()
-                if (len(cols) > 7 and cols[1].endswith(local_suffix)
-                        and cols[2].endswith(remote_suffix)):
+                # 1 local address, 2 remote address, 7 uid, 9 inode ("0" = no owning socket)
+                if len(cols) > 9 and cols[1] == local and cols[2] == remote and cols[9] != "0":
                     return int(cols[7])
     except (OSError, ValueError):
         return None
