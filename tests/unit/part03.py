@@ -2762,6 +2762,36 @@ try:
 finally:
     _sm_core.run_command = _ns_saved
 
+# ── tailscale finalize must not claim a UFW rule that was refused ──────────────────────────────
+# The route reports ufw_allowed = bool(log), to the UI ("UFW now allows the tailscale0 interface")
+# and to the audit row. The log line was appended whatever the allow answered, so a refused or
+# timed-out `ufw allow in on tailscale0` was reported as a firewall change that happened.
+_tf_saved = (_sm_core.run_privileged, _sm_hosts.remote_check_tailscale)
+try:
+    _sm_hosts.remote_check_tailscale = lambda s: {"installed": True, "running": True,
+                                                  "tailscale_ip": "100.64.0.9", "dns_name": ""}
+
+    def _tf_priv(allow_rc):
+        def _run(s, verb, args=(), **k):
+            if verb == "ufw-status":
+                return ("Status: active\n", "", 0)
+            if verb == "ufw-allow-iface":
+                return (("Rule added" if allow_rc == 0 else "ERROR: problem running iptables"),
+                        "", allow_rc)
+            return ("", "", 0)
+        return _run
+    _sm_core.run_privileged = _tf_priv(1)
+    _tf_st, _tf_log = _sm_hosts.remote_tailscale_finalize(NS(name="h"))
+    check("tailscale finalize: a refused tailscale0 allow is not reported as applied",
+          _tf_log == "", "log %r would read as ufw_allowed=True" % (_tf_log,))
+    _sm_core.run_privileged = _tf_priv(0)
+    _tf_st, _tf_log = _sm_hosts.remote_tailscale_finalize(NS(name="h"))
+    check("tailscale finalize: ...while an allow that succeeded still is",
+          "allowed tailscale0" in _tf_log and _tf_st.get("running") is True,
+          "the control failed (log %r) — the check above proves nothing" % (_tf_log,))
+finally:
+    _sm_core.run_privileged, _sm_hosts.remote_check_tailscale = _tf_saved
+
 # ── migrating to Tailscale SSH must not burn the bridge before testing the new one ───────────
 # remote_migrate_to_tailscale closes port 22, and its caller then blanks auth_credential — the
 # record's ONLY credential — and sets auth_method="tailscale". That all used to happen on the

@@ -1947,6 +1947,20 @@ for _sf, _needle in (("manage_remotes.js", "_tsUpPolls"), ("tailscale.js", "_tsU
           "js: %s's tailscale-up poll is deduped and has a deadline" % _sf,
           "no single-poll registry or no deadline")
 
+# ── "UFW now allows tailscale0" only when the finalize says it did ────────────────────────────
+# The route answers ufw_allowed=false when UFW was inactive, absent, unreadable or refused the
+# rule (and a refused/unreachable finalize has no such key), yet the sentence printed on all of them.
+_mr_ts = _js_code_only(_js_function_body(
+    (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "tailscaleUp") or "")
+_ufw_ok_i = _mr_ts.find("f.ufw_allowed === true")
+_ufw_line_i = _mr_ts.find("'UFW now allows the <code>tailscale0</code> interface.'")
+check(len(_mr_ts) > 300 and "tailscale-finalize" in _mr_ts,
+      "js: the tailscale-up flow was found in manage_remotes.js", "extractor found %d chars" % len(_mr_ts))
+check(-1 < _ufw_ok_i < _ufw_line_i and _mr_ts.count("tailscale0</code> interface") == 1
+      and "+ ufwLine +" in _mr_ts,
+      "js: 'UFW now allows tailscale0' is printed only when the finalize reports ufw_allowed",
+      "positions ok=%d line=%d — the sentence is not gated on f.ufw_allowed" % (_ufw_ok_i, _ufw_line_i))
+
 # ── the bootstrap poll's teardown sat below the line that returned ────────────────────────────
 _mr = (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
 _pb = _js_code_only(_js_function_body(_mr, "pollBootstrap"))

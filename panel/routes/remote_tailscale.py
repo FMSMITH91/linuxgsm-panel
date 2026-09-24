@@ -87,7 +87,7 @@ def register(app):
             log_action(current_user, "remote_tailscale_finalize", target=remote.name,
                        success=ufw_allowed,
                        detail=("tailscale0 allowed in UFW" if ufw_allowed
-                               else "UFW rule NOT applied (inactive, absent, or unreadable)"))
+                               else "UFW rule NOT applied (inactive, absent, unreadable, or refused)"))
             return jsonify({
                 "success": True, "running": status.get("running", False),
                 # So the caller can say the UFW sentence only when it is true, rather than

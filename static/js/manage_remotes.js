@@ -263,8 +263,15 @@ function tailscaleUp(remoteId) {
           fetch(MOUNT + '/api/remote/' + remoteId + '/tailscale-finalize', {method:'POST'})
             .then(r => r.json()).then(f => {
               var ip = ((f.tailscale_ip || s.tailscale_ip || '').split(',')[0] || '').trim();
+              // Only when the finalize says it happened. The route answers ufw_allowed=false when UFW
+              // was inactive, absent or unreadable (so no allow was issued) — and a refused or
+              // unreachable finalize carries no such key at all — yet this sentence printed on all
+              // of them, about a firewall nobody had touched.
+              var ufwLine = f.ufw_allowed === true
+                ? 'UFW now allows the <code>tailscale0</code> interface.'
+                : escapeHtml('UFW was not changed: it is inactive, not installed, or could not be read or updated.');
               if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! IP: <code>' + escapeHtml(ip) + '</code>'  // nosemgrep
-                + '<br><span class="small">UFW now allows the <code>tailscale0</code> interface.</span></span>'
+                + '<br><span class="small">' + ufwLine + '</span></span>'
                 + '<div class="mt-2"><button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '>'
                 + '<i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button></div>';
             })

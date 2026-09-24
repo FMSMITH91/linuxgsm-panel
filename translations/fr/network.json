@@ -214,6 +214,7 @@
   "UFW is installed but inactive: nothing on this page is enforced, and ufw does not list its stored rules until it is enabled.": "UFW est installé mais inactif : rien sur cette page n'est appliqué, et ufw ne liste pas ses règles enregistrées tant qu'il n'est pas activé.",
   "Rules can't be read: sudo refused the firewall read on this host.": "Les règles ne peuvent pas être lues : sudo a refusé la lecture du pare-feu sur cet hôte.",
   "UFW is inactive, so its rules are neither listed nor enforced.": "UFW est inactif, donc ses règles ne sont ni listées ni appliquées.",
+  "UFW was not changed: it is inactive, not installed, or could not be read or updated.": "UFW n'a pas été modifié : il est inactif, non installé, ou n'a pas pu être lu ni mis à jour.",
   "While UFW is inactive a block is only stored — it denies nothing until UFW is enabled.": "Tant qu'UFW est inactif, un blocage est seulement enregistré : il ne refuse rien tant qu'UFW n'est pas activé.",
   "Runs locally on this server": "S'exécute localement sur ce serveur",
   "Runs unattended and answers prompts safely — it keeps any config file you've edited and assumes yes to installs, so it never gets stuck waiting. You'll see here if it kept a config file.": "S'exécute sans surveillance et répond aux invites en toute sécurité — il conserve tout fichier de configuration que vous avez modifié et accepte les installations, il ne reste donc jamais bloqué. Vous verrez ici s'il a conservé un fichier de configuration.",

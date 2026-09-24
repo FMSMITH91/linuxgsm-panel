@@ -1692,8 +1692,18 @@ def remote_tailscale_finalize(server):
     log = []
     ufw_out, _, _ = _core.run_privileged(server, "ufw-status", ["plain"], timeout=10)
     if firewall._ufw_is_active(ufw_out):
-        _core.run_privileged(server, "ufw-allow-iface", ["tailscale0"], timeout=15)
-        log.append("UFW: allowed tailscale0 interface (in)")
+        # The log line is the caller's evidence that the rule went in (the route reports
+        # ufw_allowed = bool(log), to the UI and the audit row), so it follows the allow's exit
+        # code. It was appended whatever the allow answered: a refused or timed-out rule read as
+        # "UFW now allows tailscale0" on a firewall that still blocks it.
+        a_out, a_err, a_rc = _core.run_privileged(server, "ufw-allow-iface", ["tailscale0"],
+                                                  timeout=15)
+        if a_rc == 0:
+            log.append("UFW: allowed tailscale0 interface (in)")
+        else:
+            _core._log.warning("tailscale finalize: allowing tailscale0 in UFW failed on %s "
+                               "(rc=%s): %s", getattr(server, "name", "?"), a_rc,
+                               (a_err or a_out or "")[:200])
     status = remote_check_tailscale(server)
     return status, "\n".join(log)
 
