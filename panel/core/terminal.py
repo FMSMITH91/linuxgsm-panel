@@ -148,7 +148,11 @@ def _sgr_apply(style, codes):
     nums = []
     for part in (codes or "0").split(";"):
         part = part.strip()
-        nums.append(int(part) if part.isdecimal() else 0)   # `ESC[;32m` — an empty field is 0
+        # `ESC[;32m` — an empty field is 0. A field too long to be any real code is -1, which no
+        # rule below acts on: int() of more than 4300 digits RAISES (CPython's int_max_str_digits),
+        # and the console poller renders every chunk through here — one such sequence in a log
+        # made each tick raise before it advanced, so that console re-read the same chunk forever.
+        nums.append((int(part) if len(part) <= 4 else -1) if part.isdecimal() else 0)
     i = 0
     while i < len(nums):
         n = nums[i]

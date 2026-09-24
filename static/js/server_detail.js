@@ -231,10 +231,18 @@ function stickConsole() { consoleEl.scrollTop = consoleEl.scrollHeight; }
 var socket = (window.ensureSocket && window.ensureSocket())
   || io({ path: MOUNT + '/socket.io', transports: ['websocket', 'polling'] });
 
+var _socketEverConnected = false;
 socket.on('connect', function() {
   wsStatus.textContent = '(connected)';
   wsStatus.className = 'text-success small ms-2';
   socket.emit('join_console', { server_id: serverId });
+  // A RE-connect (a network blip, or the page coming back from the back/forward cache, which
+  // closes the socket on pagehide) rejoins a poller that no longer holds this console's offset —
+  // it forgets consoles nobody watches, so it starts again from "now". Whatever the game wrote
+  // during the gap is only in the log file, so catch up from it once: this one poll may append
+  // its delta even though the socket is connected again.
+  if (_socketEverConnected) refreshConsole(false, null, true);
+  _socketEverConnected = true;
 });
 
 socket.on('disconnect', function() {
@@ -245,7 +253,14 @@ socket.on('disconnect', function() {
 socket.on('console_output', function(data) {
   if (data.server_id !== serverId || !data.data) return;
   var stick = consoleAtBottom();   // capture BEFORE appending
-  if (data.rows && data.rows.length) {
+  // Only the POLLER's pushes are lines of the console log, and it always sends `rows`. Everything
+  // else on this event — the panel's own "[panel] update started" markers and an action's output
+  // (`panel: true`), an access-denied or revoked notice — was never written to that file. Those
+  // are shown but kept OUT of _consoleLines: that copy exists to be matched against /api/console
+  // windows, and a line the file does not contain can never match, so the first poll after an
+  // update found no overlap and appended the whole window again beneath the update's output.
+  var fromLog = Array.isArray(data.rows) && !data.panel;
+  if (fromLog && data.rows.length) {
     // Per-line rows: a LinuxGSM-stamped line carries the time the GAME wrote it, which beats the
     // moment the poller happened to read it. data.ts is the fallback for lines with no stamp —
     // those the panel did watch arrive, so it is an honest time for them.
@@ -254,7 +269,7 @@ socket.on('console_output', function(data) {
     }), data.ts);
     updateTsNotice();
   } else {
-    appendConsole(data.data, data.ts);
+    appendConsole(data.data, data.ts, fromLog);
   }
   if (stick) stickConsole();
 });
@@ -264,9 +279,9 @@ socket.on('console_output', function(data) {
 // provided, the next chat message trimmed the console back to 500 lines. It also appended without
 // telling the scrollback buffer, which would then let the next poll re-append the same lines as if
 // they were new. Both paths go through _appendConsole now: one cap, one buffer, no duplicates.
-function appendConsole(text, ts) {
+function appendConsole(text, ts, track) {
   var stick = consoleAtBottom();   // capture BEFORE appending
-  _appendConsole(String(text).split('\n').filter(function(l){ return l.trim(); }), ts);
+  _appendConsole(String(text).split('\n').filter(function(l){ return l.trim(); }), ts, track);
   updateTsNotice();
   if (stick) stickConsole();       // only auto-follow if they were at the bottom
 }
@@ -300,8 +315,15 @@ var CONSOLE_MAX_LINES = 5000;
 // that is also a prefix of what arrived, and keep only the remainder. When nothing matches, the
 // log moved further than one window between polls (a very busy server, a long pause, a rotation),
 // and the whole batch is new.
+// Compared with surrounding whitespace trimmed. The two sides reach the page by different reads —
+// the poller's framed byte ranges and /api/console's tail — and a line that differs only by a
+// trailing space ("…players online: ") is the same line. An exact compare turned that one space
+// into "no overlap", and no overlap means the whole window is appended again.
+function _sameLine(a, b) {
+  return a === b || (typeof a === 'string' && typeof b === 'string' && a.trim() === b.trim());
+}
 function _eqRange(a, ai, b, bi, n) {
-  for (var i = 0; i < n; i++) if (a[ai + i] !== b[bi + i]) return false;
+  for (var i = 0; i < n; i++) if (!_sameLine(a[ai + i], b[bi + i])) return false;
   return true;
 }
 function _newConsoleLines(have, incoming) {
@@ -318,7 +340,7 @@ function _newConsoleLines(have, incoming) {
   // only the first shape duplicated every server-rendered line on every page load.
   var lastHave = have[have.length - 1];
   for (var k = incoming.length - 1; k >= 0; k--) {
-    if (incoming[k] !== lastHave) continue;
+    if (!_sameLine(incoming[k], lastHave)) continue;
     var n = Math.min(have.length, k + 1);
     if (_eqRange(have, have.length - n, incoming, k + 1 - n, n)) return incoming.slice(k + 1);
   }
@@ -447,7 +469,9 @@ function _appendConsoleRows(rows, fallbackTs) {
   _trimConsole();
 }
 
-function _appendConsole(lines, ts) {
+// `track === false` renders lines that are not in the console log (see the socket handler) without
+// adding them to _consoleLines, the copy the overlap match reads.
+function _appendConsole(lines, ts, track) {
   if (!lines.length) return;
   var frag = document.createDocumentFragment();
   lines.forEach(function(line) {
@@ -458,7 +482,7 @@ function _appendConsole(lines, ts) {
     frag.appendChild(div);
   });
   consoleEl.appendChild(frag);
-  _consoleLines = _consoleLines.concat(lines);
+  if (track !== false) _consoleLines = _consoleLines.concat(lines);
   _trimConsole();
 }
 
@@ -490,6 +514,10 @@ var _panelBacklogShown = false;
 function showPanelBacklog(panelLines) {
   if (_panelBacklogShown || !panelLines.length) return;
   _panelBacklogShown = true;
+  _renderPanelLines(panelLines);
+}
+
+function _renderPanelLines(panelLines) {
   // Appended after the game-log window rather than merged into it. These are a different stream
   // with no shared ordering, and every one of them carries a "[panel]" marker saying so — inventing
   // an interleaving would be guessing. They are also deliberately NOT added to _consoleLines: that
@@ -509,7 +537,7 @@ function showPanelBacklog(panelLines) {
   consoleEl.appendChild(frag);
 }
 
-function refreshConsole(forceScroll, wantLines) {
+function refreshConsole(forceScroll, wantLines, catchUp) {
   // Don't yank the user to the bottom unless they were already there (or it's the initial load).
   var stick = forceScroll || consoleAtBottom();
   fetch(MOUNT + '/api/console/' + serverId + (wantLines ? '?lines=' + wantLines : ''))
@@ -547,14 +575,21 @@ function refreshConsole(forceScroll, wantLines) {
         // LinuxGSM's own stamp keeps it, which is the whole point: that one is a real time for a
         // line written long before the panel looked.
         _appendConsoleRows(rows);
-      } else {
+      } else if (!socket.connected || catchUp) {
         // A poll DELTA is new output the panel just watched arrive — accurate to the poll
         // interval — so it is stamped, exactly like a socket push. Only the priming window above
         // goes unstamped, because that is history written before the panel looked.
         //
-        // This is also the path that carries everything when the websocket is unavailable (a
-        // proxy that won't upgrade, say). Leaving it unstamped meant that on such an install NO
-        // line ever got a time, and the feature looked simply broken.
+        // ONLY while the socket is down. Connected, the poller pushes every line of the log as it
+        // is written, so a delta can add nothing true — only a mistake: when the overlap match
+        // misses (a line the poller skipped, a line only the page has) the "delta" is the whole
+        // window, appended again beneath the live output. After an update and a start that
+        // happened on every poll, and it read as a console that had stopped responding until
+        // "Load older" rebuilt it. Measured on the test VPS before this: +82, +29 and +33 repeated
+        // lines on three consecutive polls with the websocket connected the whole time.
+        //
+        // This remains the path that carries everything when the socket cannot connect, and
+        // leaving it unstamped meant that on such an install NO line ever got a time.
         _appendConsoleRows(_newConsoleRows(_consoleLines, rows), data.now);
       }
       showPanelBacklog(panelLines);
@@ -587,12 +622,25 @@ function loadMoreConsole(btn) {
       // "Could not load more console output". Verified in a browser against the real payload:
       // `TypeError: l.trim is not a function`. refreshConsole, one screen up, has always read
       // the same payload correctly; this call site simply was not updated with the API.
+      // A log that was not READ is not a log with nothing in it. api_console says which with
+      // `readable`, and this wiped the scrollback — the only copy of what the poller had pushed —
+      // and toasted "Loaded 0 lines" about a file it never opened.
+      if (data.readable === false) {
+        if (window.toast) toast('Could not read the console log on this host', 'danger');
+        return;
+      }
       var older = (data.lines || []).filter(function (r) {
         return r && typeof r.line === 'string' && r.line.trim();
       });
       _consoleLines = [];
       consoleEl.innerHTML = '';
       _appendConsoleRows(older, null);
+      // The panel's own lines (an update's output and markers) are not in the log, so a rebuild
+      // from the log alone threw them away for good. Put the kept backlog back after it, the same
+      // way the first load does.
+      _renderPanelLines((data.panel_lines || []).filter(function (r) {
+        return r && typeof r.line === 'string' && r.line.trim();
+      }));
       _consoleSig = null;   // let the next poll re-evaluate against the new buffer
       if (window.toast) toast('Loaded ' + older.length + ' lines from the log', 'success');
     })

@@ -34,6 +34,7 @@
   "Could not add it": "No se pudo añadir",
   "Could not check update status.": "No se pudo comprobar el estado de las actualizaciones.",
   "Could not load more console output": "No se pudo cargar más salida de la consola",
+  "Could not read the console log on this host": "No se pudo leer el registro de la consola en este host",
   "Could not read database stats.": "No se pudieron leer las estadísticas de la base de datos.",
   "Could not read the dropped folder.": "No se pudo leer la carpeta soltada.",
   "Could not read the log.": "No se pudo leer el registro.",
