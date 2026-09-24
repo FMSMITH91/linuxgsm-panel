@@ -14,14 +14,15 @@ described at length in route_helpers.py:
 
   1. only GET was blocked, so an unauthenticated POST /setup with step=admin_user still created a
      brand-new superadmin on a fully configured install.
-  2. the lock was gated on is_setup_complete(), which is (DB row AND config flag) — and the config
-     half FAILS OPEN, because load_config() swallows JSONDecodeError/OSError and returns
+  2. the lock was gated on is_setup_complete(), which was then (DB row AND config flag) — and the
+     config half FAILED OPEN, because load_config() swallows JSONDecodeError/OSError and returns
      DEFAULT_CONFIG, where setup_complete is False. So deleting data/config.json, or truncating it
      on a full disk, or hand-editing it into invalid JSON, reopened the wizard on a live install.
 
-Both are now defended by reading the SetupState row alone. Neither had a test. They do now: the
-config-corruption cases below are the ones that matter most, because nothing about them looks like
-an attack — a full disk produces the same file.
+Both are now defended by reading the SetupState row alone — which is also all is_setup_complete()
+reads now; config.json's setup_complete is written but no longer read. Neither had a test. They
+do now: the config-corruption cases below are the ones that matter most, because nothing about
+them looks like an attack — a full disk produces the same file.
 
 Runs against a throwaway database like the other suites, and deliberately does NOT pre-complete
 setup — that is the entire point.
@@ -176,8 +177,10 @@ try:
     c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
                            "port": "5052", "bind_host": "127.0.0.1"})
     _bind_before = load_config().get("bind_host")
+    # 192.0.2.123 (TEST-NET-1) is well-formed and on no host: it passed the parse, and the panel
+    # then failed to bind it with EADDRNOTAVAIL on the next start.
     for _bad in ("not-an-ip", "0.0.0.0; rm -rf /", "999.1.1.1",
-                 "example.com", "127.0.0.1:5000", "<script>", "localhost"):
+                 "example.com", "127.0.0.1:5000", "<script>", "localhost", "192.0.2.123"):
         r = c.post("/setup", data={"step": "welcome", "site_title": "Should Not Save",
                                    "port": "5052", "bind_host": _bad})
         check("open: step=welcome refuses bind_host=%r" % _bad,

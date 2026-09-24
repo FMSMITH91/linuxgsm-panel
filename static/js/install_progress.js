@@ -56,6 +56,12 @@
       td.colSpan = srvRow.children.length;   // span whatever this table actually has
       row.appendChild(td);
       srvRow.parentNode.insertBefore(row, srvRow.nextSibling);
+    } else if (row.hasAttribute('data-settled')) {
+      // The same server is installing again (a retry) while its last ending is still on screen.
+      // That line has an .ip-step and no bar, so fill() would find the step, skip building, and
+      // throw on the missing bar — aborting apply() for every other job on this poll.
+      row.removeAttribute('data-settled');
+      row.firstChild.textContent = '';
     }
     fill(row.firstChild, job);
     return row;
@@ -64,6 +70,13 @@
   function dropDashRow(id) {
     var row = document.querySelector('tr[data-progress-for="' + id + '"]');
     if (row && row.parentNode) row.parentNode.removeChild(row);
+  }
+
+  // The delayed removal of a clean ending — which must not take the row with it if that server
+  // has started installing again in the meantime and the row is live progress once more.
+  function dropSettledRow(id) {
+    var row = document.querySelector('tr[data-progress-for="' + id + '"]');
+    if (row && row.hasAttribute('data-settled')) dropDashRow(id);
   }
 
   // ── Install a Server: a panel on the page you submitted from ────────────────────────────────
@@ -94,27 +107,61 @@
     });
   }
 
+  // How an install that has left the live list ENDED, from its /install-status answer. Four
+  // answers, not two. A `done` job can carry a caveat (warn: the game took a port another server
+  // already uses, or it installed and did not start) that is shown nowhere else. And an answer
+  // that is not a finished job at all — `none` once the job was pruned or dismissed, an error
+  // body, a non-2xx — says nothing about how it went. Everything that was not failed used to be
+  // shown as a green "Installed" and removed after eight seconds, caveats included.
+  function outcome(ok, s) {
+    if (!ok || !s) return 'unknown';
+    if (s.status === 'done') return s.warn ? 'warn' : 'ok';
+    if (s.status === 'failed' || s.status === 'interrupted') return 'bad';
+    return 'unknown';
+  }
+
+  // What each ending looks like. Only a clean success has nothing left to say and removes itself;
+  // a failure stays until the card region re-renders with the banner that can act on it, and a
+  // caveat stays until the operator dismisses it, because this row is the only place it appears.
+  var SETTLED = {
+    ok:   { cls: 'text-success', text: 'Installed', drop: 8000 },
+    warn: { cls: 'text-warning', text: 'Installed, with a warning', dismiss: true },
+    bad:  { cls: 'text-danger', text: 'Install failed' }
+  };
+
   // An install that has left the live list has finished or failed. The dashboard already re-renders
   // its card region when the failed set changes (that is what brings up the reason and its
-  // buttons), so here the row only has to say how it ended and then get out of the way.
+  // buttons), so here the row only has to say how it ended.
   function settle(id) {
     if (settling[id]) return;
     settling[id] = true;
     fetch(MOUNT + '/api/server/' + id + '/install-status')
-      .then(function (r) { return r.json(); })
-      .then(function (s) {
+      .then(function (r) {
+        return r.json().then(function (s) { return { kind: outcome(r.ok, s), s: s || {} }; });
+      })
+      .then(function (res) {
         var row = document.querySelector('tr[data-progress-for="' + id + '"]');
-        if (row) {
-          var bad = (s.status === 'failed' || s.status === 'interrupted');
+        var view = SETTLED[res.kind];
+        if (row && !view) {
+          // No verdict to show, so show none: the card region says what state the server is in.
+          dropDashRow(id);
+        } else if (row) {
           var td = row.firstChild;
           td.textContent = '';
-          var line = el('div', 'ip-step ' + (bad ? 'text-danger' : 'text-success'),
-                        s.message || (bad ? 'Install failed' : 'Installed'));
+          var line = el('div', 'ip-step ' + view.cls, res.s.message || view.text);
           line.setAttribute('data-no-i18n', '');
           td.appendChild(line);
-          // A failure stays until the card region re-renders with the banner that can act on it;
-          // a success has nothing left to say.
-          if (!bad) setTimeout(function () { dropDashRow(id); }, 8000);
+          // Settled once, for good: the row keeps data-progress-for, so without this every later
+          // poll (while any other install keeps the timer alive) fetched install-status again —
+          // for a lost job, another SSH probe of the host each time — and rewrote the row.
+          row.setAttribute('data-settled', res.kind);
+          if (view.drop) setTimeout(function () { dropSettledRow(id); }, view.drop);
+          if (view.dismiss) {
+            var btn = el('button', 'btn btn-sm btn-outline-secondary mt-1', 'Dismiss');
+            btn.type = 'button';
+            btn.addEventListener('click', function () { dropDashRow(id); });
+            td.appendChild(btn);
+          }
         }
         pagePanel([]);   // the page panel only ever shows what is RUNNING
       })
@@ -129,7 +176,7 @@
     jobs.forEach(function (j) { live[j.id] = true; dashRow(j); });
     Array.prototype.forEach.call(document.querySelectorAll('tr[data-progress-for]'), function (r) {
       var id = r.getAttribute('data-progress-for');
-      if (!live[id]) settle(id);
+      if (!live[id] && !r.hasAttribute('data-settled')) settle(id);
     });
     pagePanel(jobs);
   }
@@ -143,8 +190,14 @@
   // panel is no longer watching.
   var missed = 0;
 
+  // BOTH places progress is shown. This read only the dashboard's rows, so on Install a Server —
+  // where the operator who just started it is watching — the box kept the last step, percent and
+  // elapsed time it received, frozen and undimmed, exactly the false reading described above.
+  // A settled row is excluded: it reports an ending, not a reading that can go stale.
+  var PROGRESS_HOSTS = 'tr[data-progress-for]:not([data-settled]), #install-running [data-install-id]';
+
   function markStale(on) {
-    Array.prototype.forEach.call(document.querySelectorAll('tr[data-progress-for]'),
+    Array.prototype.forEach.call(document.querySelectorAll(PROGRESS_HOSTS),
       function (r) {
         r.classList.toggle('ip-stale', !!on);
         var meta = r.querySelector('.ip-meta');

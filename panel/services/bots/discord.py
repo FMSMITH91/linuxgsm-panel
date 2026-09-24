@@ -32,6 +32,19 @@ def _dc_reply(bot_token, channel_id, text):
     notifications.discord_bot_send(bot_token, channel_id, "%s\n%s" % (_reply_header(), text))
 
 
+def _dc_literal(body):
+    """Show `body` exactly as written: in a code block, with no backtick left to close it.
+
+    For the text a player controls: their names (!players) and the console tail (!console), which on
+    most engines carries in-game chat. allowed_mentions stops that pinging anyone, but Discord still
+    rendered the rest of its markdown in the bot's own message, so a player named
+    `[Panel login expired](https://evil.example/login)`, or one saying `# Re-authenticate at ...` in
+    chat, had the operator's bot post a clickable masked link or a headline in the admin channel.
+    Nothing in a code block is rendered or linked; U+02CB stands in for each backtick so the block
+    cannot be ended from inside it."""
+    return "```\n%s\n```" % (body or "").replace("`", "\u02cb")
+
+
 def _dc_ack(bot_token, channel_id, text):
     """The immediate "working on it" line — see telegram._tg_ack for the reasoning; this is its
     twin, and the two bots deliberately behave the same way. No _reply_header(), because the ack
@@ -171,9 +184,9 @@ def _handle_discord_command(app, bot_token, channel_id, text, sender=None):
     elif cmd == "hosts":
         _dc_reply(bot_token, channel_id, _hosts_text(app))
     elif cmd == "players":
-        _dc_reply(bot_token, channel_id, _players_text(app, arg))
+        _dc_reply(bot_token, channel_id, _players_text(app, arg, fence=_dc_literal))
     elif cmd == "console":
-        _dc_reply(bot_token, channel_id, _console_text(app, arg))
+        _dc_reply(bot_token, channel_id, _console_text(app, arg, fence=_dc_literal))
     elif cmd == "say":
         _dc_reply(bot_token, channel_id, _say_text(app, arg))
     elif cmd == "connect":
@@ -230,7 +243,15 @@ def _report_dc_pending_update():
         return
     now = so.panel_commit()
     frm = pend.get("from_commit") or ""
-    if now and frm and now != frm:
+    # The same split as telegram.py's twin (see the note there): an EMPTY commit means git could
+    # not be read — panel_commit() returns "" when `git rev-parse` fails or times out, in the busy
+    # seconds after a restart — and that is not "no new commit landed". Reporting it as one, with
+    # "already current, or it rolled back" as the causes, sent the admin to !update a second time.
+    if not (now and frm):
+        _dc_reply(bot_token, channel, "ℹ️ I'm back online, but I couldn't read the panel's git "
+                                      "commit, so I can't tell you whether the update landed — "
+                                      "check Settings → Panel, or data/self-update.log.")
+    elif now != frm:
         _dc_reply(bot_token, channel, "✅ Update complete — now on %s (was %s). Back online."
                   % (_panel_ver_label(), frm))
     else:

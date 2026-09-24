@@ -10,9 +10,29 @@ from panel.services.certs import (_maybe_alert_cert_expiring)
 from panel.services.monitoring import (_MONITOR_HOST_WORKERS)
 import concurrent.futures
 import time
+from panel.core.clock import utcnow
 from app import (_is_security_pkg, _log, _os_update_note, _os_updates_for)
 
 _OS_UPDATE_EVERY = 24 * 3600
+# When this process started, as the stored created_at columns are (naive UTC). A host that existed
+# before it may already have been told about what it has waiting; one added since cannot have been.
+_PROCESS_STARTED = utcnow()
+
+
+def _os_update_seeds(remote, seeding, first_read):
+    """Whether this host's reading only SEEDS the alert state (recorded, never announced).
+
+    Seeding was process-wide: only the first sweep after a restart seeded, so a host that did not
+    answer THAT sweep (rebooting, apt locked) got no entry, read (0, 0) on the next day's sweep,
+    and had the list it already had before the restart — already announced — announced again. Any
+    host's first reading in this process seeds, unless the host was added after the process
+    started: its first batch is news to everyone."""
+    if seeding:
+        return True
+    if not first_read:
+        return False
+    created = getattr(remote, "created_at", None)
+    return created is None or created < _PROCESS_STARTED
 
 
 def register(app, supervise):
@@ -60,13 +80,15 @@ def register(app, supervise):
                     sec = sum(1 for p in pkgs if _is_security_pkg(p))
                     names = [p.get("name", "?") for p in
                              ([p for p in pkgs if _is_security_pkg(p)] or pkgs)][:5]
+                    first_read = remote.id not in _os_update_state["hosts"]
                     had_count, had_sec = _os_update_state["hosts"].get(remote.id) or (0, 0)
                     _os_update_state["hosts"][remote.id] = (count, sec)
                     # Security updates get their own arm: they routinely land on a host that already
                     # has ordinary updates pending, and keying on the total alone would swallow them.
                     # `seeding` first: the counts above are now recorded, the banner and the card
                     # have their answer, and only a transition THIS process witnessed alerts.
-                    if seeding or not ((count and not had_count) or (sec and not had_sec)):
+                    if (_os_update_seeds(remote, seeding, first_read)
+                            or not ((count and not had_count) or (sec and not had_sec))):
                         continue
                     what = ("%d security update%s of %d waiting"
                             % (sec, "" if sec == 1 else "s", count)) if sec else \

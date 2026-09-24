@@ -58,19 +58,18 @@ def bind_host_error(value, host_has_ip=None):
     `bind_host` is written to config.json and read back by the entry point as the address to
     listen on, so a value that cannot be bound produces a panel that does not come up on its next
     boot — recoverable only with linuxgsm-panel-recover or by editing the file by hand. It is the
-    same hazard as `port`, and it is shared by the two places that write the key: the setup wizard
-    and /api/panel/change-port.
+    same hazard as `port`.
 
     It lives here because the wizard wrote it UNCHECKED under a comment saying
     "api_panel_change_port validates whatever they choose" — a different route, which the wizard
-    never calls. The port on the line above had already been fixed for exactly that reason, and
-    its comment says so; the bind address two lines below kept the claim. One function both
-    callers use is the version of that fix which cannot come apart again.
+    never calls. Its ONE caller is the wizard. /api/panel/change-port (remote_security.py) keeps
+    its own inline copy of these rules plus two more (the address must be on this host, and a
+    loopback bind needs Tailscale Serve); this docstring used to claim both writers shared it.
 
     `host_has_ip` is passed in rather than imported: this module is the low-level validation layer
-    and must not depend on panel.ops. When it is None the local-address check is skipped, which is
-    right for the wizard — it runs during first-boot setup, before the panel knows much about the
-    host, and the parse plus the wildcard/loopback rules are what stop the unbootable values."""
+    and must not depend on panel.ops. When it is None the local-address check is skipped. The wizard
+    passes can_bind_address below: a well-formed IP that is not on this host passes the parse and
+    the wildcard/loopback rules, and then fails to bind at the next start."""
     text = (value or "").strip()
     if not text:
         return "Pick a bind address — e.g. 0.0.0.0 (all interfaces) or 127.0.0.1 (localhost)."
@@ -87,6 +86,33 @@ def bind_host_error(value, host_has_ip=None):
     if host_has_ip is not None and not host_has_ip(text):
         return "%s isn't an address on this host — the panel couldn't bind to it." % text
     return None
+
+
+def can_bind_address(ip):
+    """Whether this process can listen on `ip` — asked of the kernel, by binding port 0 on it.
+
+    The exact question the next start will ask: it follows interface addresses, IPv6, and even
+    net.ipv4.ip_nonlocal_bind, with no command output to parse (an empty read from a missing `ip`
+    binary would read as "not on this host"). Only EADDRNOTAVAIL means no; any other error is
+    "could not tell" and does not block the operator."""
+    import errno
+    import ipaddress
+    import socket
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    # A wildcard is not an address this host HAS: binding 0.0.0.0 or :: always succeeds, which would
+    # answer yes for every host. Callers that accept a wildcard bind test for it themselves.
+    if addr.is_unspecified:
+        return False
+    fam = socket.AF_INET6 if addr.version == 6 else socket.AF_INET
+    try:
+        with socket.socket(fam, socket.SOCK_STREAM) as sock:
+            sock.bind((str(addr), 0))
+        return True
+    except OSError as exc:
+        return exc.errno != errno.EADDRNOTAVAIL
 
 
 # Filenames reach a Content-Disposition header, whose WSGI value is latin-1 — see

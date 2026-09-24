@@ -238,9 +238,12 @@ types rather than in the command names:
 - **Tailscale's join** took the auth key, the advertised routes and the tags straight from the
   request and shell-quoted them into a root command. They are validated arguments now: routes are
   *parsed* as networks, each tag must be `tag:name`, and the auth key is charset-checked and never
-  echoed back — not even in a rejection, since the value is a secret. The interactive login flow's
-  poll log also moved from `/tmp` to `/run`: in `/tmp` any local user could pre-create the file the
-  root poll then reads.
+  echoed back — not even in a rejection, since the value is a secret. Nor is it ever on a command
+  line, and neither is the Ubuntu Pro token: `/proc/<pid>/cmdline` is world-readable, so a game
+  user could read either while the command ran. Both travel on stdin — through the helper into the
+  tool's own stdin on the panel host, and into a root-only temp file the tool is pointed at on a
+  remote. The interactive login flow's poll log also moved from `/tmp` to `/run`: in `/tmp` any
+  local user could pre-create the file the root poll then reads.
 - **The sshd hardening** set four directives with `sed -i 's/^#\?Key.*/Key value/'` in a joined
   root shell. Both halves are closed sets now: the panel may set exactly those four directives, to
   exactly the values it hardens them to. `PermitRootLogin yes` is individually well-formed and

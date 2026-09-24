@@ -30,7 +30,11 @@ class TailscaleInfo:
     hostname: str = ""
     dns_name: str = ""
     magic_dns_enabled: bool = False
-    accept_routes: bool = False
+    # The --accept-routes pref (RouteAll, from `tailscale debug prefs`), or None when it could not
+    # be read. It was filled from status JSON's TUN field, which says whether tailscaled runs a
+    # kernel TUN device or userspace networking — nothing about subnet routes — so every ordinary
+    # kernel-mode node read "Accept Routes: Yes" whether or not routes were accepted.
+    accept_routes: Optional[bool] = None
     version: str = ""
     serve_config: dict = field(default_factory=dict)
     # serve_config is {} for BOTH "nothing is published" and "`tailscale serve status` did not
@@ -122,6 +126,18 @@ def _run_ts_json(args, timeout=5):
         return None
 
 
+def _read_route_all():
+    """The node's --accept-routes preference (RouteAll), or None when the prefs can't be read."""
+    out, _, rc = _run_ts(["debug", "prefs"])
+    if rc != 0 or not out:
+        return None
+    try:
+        v = json.loads(out).get("RouteAll")
+    except (ValueError, AttributeError):
+        return None
+    return v if isinstance(v, bool) else None
+
+
 def _get_tailscale_info() -> TailscaleInfo:
     """Internal - discover all Tailscale info by calling the CLI."""
     info = TailscaleInfo()
@@ -153,7 +169,7 @@ def _get_tailscale_info() -> TailscaleInfo:
             info.hostname = self_data.get("HostName", "")
             dns = self_data.get("DNSName", "")
             info.dns_name = dns.rstrip(".") if dns else ""
-        info.accept_routes = status.get("TUN", False)
+        info.accept_routes = _read_route_all()
         info.magic_dns_enabled = bool(info.dns_name)
 
         # Collect peers. Trust Tailscale's own `Online` field — it is authoritative.
@@ -241,7 +257,10 @@ def _parse_serve_status(text):
                     "routes": current_routes,
                 })
             current_url = url_match.group(1).rstrip(".")
-            current_funnel = "funnel" in (url_match.group(2) or "")
+            # Tailscale prints "(Funnel on)" or "(tailnet only)" after the URL, with a CAPITAL F.
+            # This compared case-sensitively against "funnel", so it was always False, and the page
+            # called a panel that was on the public internet "private - tailnet only".
+            current_funnel = "funnel on" in (url_match.group(2) or "").lower()
             current_routes = []
             continue
 
@@ -252,10 +271,9 @@ def _parse_serve_status(text):
                 "mount": route_match.group(1),
                 "target": route_match.group(2),
             })
-
-        # Funnel-only line
-        if "funnel" in stripped.lower() and current_url and not current_funnel:
-            current_funnel = True
+        # There used to be a "funnel anywhere in the line" fallback here. It could never see the
+        # URL line (that `continue`s above), and the "# Funnel on:" header comes before any URL, so
+        # all it could ever match was a ROUTE — a mount or backend with "funnel" in its name.
 
     if current_url and current_routes:
         result["services"].append({
@@ -486,31 +504,107 @@ def tailscale_up_local(enable_ssh=True):
     return False, (r.stderr or r.stdout or "Could not get a login link — is Tailscale installed on this host?")
 
 
-def disable_tailscale_serve(mount="/"):
-    """Remove a Tailscale Serve/Funnel mapping.
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
 
-    The mount is validated before it becomes an argument, for the same reason the enable path
-    validates it — CodeQL #375, py/command-line-injection. This function was left out of that
-    change: it hand-builds its argv instead of going through ts_serve_argv, so the mount reached
-    the CLI unchecked and a value beginning with "-" would be read by `tailscale` as an OPTION
-    rather than as a path. No shell is involved either way, so this was never command injection;
-    it is argument injection, which is the thing _ts_mount exists to stop. _run_ts's own docstring
-    already claimed every argument reaching it was built by a validating builder — this is what
-    makes that true.
-    """
+
+def route_targets_port(target, port):
+    """True when a Serve route's backend, as `tailscale serve status` prints it
+    ("http://127.0.0.1:5000", "https+insecure://localhost:5000", ...), is loopback on `port` —
+    i.e. the route proxies an app listening on THIS machine at that port, whatever the scheme."""
+    t = (target or "").strip()
+    if "://" in t:
+        t = t.split("://", 1)[1]
+    host, sep, p = t.split("/", 1)[0].rpartition(":")
+    if not sep:
+        return False
+    try:
+        return host.lower() in _LOOPBACK_HOSTS and int(p) == int(port)
+    except (TypeError, ValueError):
+        return False
+
+
+def panel_serve_routes(serve_config, port):
+    """The Serve mappings on this node that proxy the PANEL (loopback on its `port`), as
+    [{"url", "mount", "target", "funnel"}], in the order the host printed them.
+
+    A node can serve other apps beside the panel — the setup wizard picks /lgsm precisely because
+    something else already holds "/" — so "the first route listed" is not the panel's. Tailscale
+    prints routes shortest mount first, so it was the OTHER app's "/" whenever one existed."""
+    out = []
+    for svc in (serve_config or {}).get("services") or []:
+        for r in svc.get("routes") or []:
+            if route_targets_port(r.get("target"), port):
+                out.append({"url": svc.get("url", ""), "mount": r.get("mount", ""),
+                            "target": r.get("target", ""), "funnel": bool(svc.get("funnel"))})
+    return out
+
+
+def _serve_port_flag(url):
+    """`--https=<port>` / `--http=<port>` naming the listener a Serve URL is on (443/80 by default)."""
+    m = re.match(r"^(https?)://[^/:]+(?::(\d{1,5}))?(?:/|$)", url or "")
+    if not m:
+        return None
+    port = int(m.group(2)) if m.group(2) else (443 if m.group(1) == "https" else 80)
+    if not 1 <= port <= 65535:
+        return None
+    return "--%s=%d" % (m.group(1), port)
+
+
+def serve_off_args(url, mount):
+    """The `tailscale serve` arguments that remove ONE mapping: `mount` on the listener `url` is on.
+
+    `tailscale serve --https=443 --set-path=<mount> off` is the CLI's own removal grammar. The path
+    is always given, "/" included: with no --set-path, `off` removes EVERY mount on that port — the
+    other apps' mappings with the panel's. Removing the last mount on a port also clears that
+    port's Funnel flag. Returns None for a URL whose listener cannot be read."""
+    flag = _serve_port_flag(url)
+    if not flag:
+        return None
+    return ["serve", flag, "--set-path=%s" % _priv._ts_mount(mount), "off"]
+
+
+def disable_tailscale_serve(mount, port):
+    """Stop publishing the panel over Tailscale Serve/Funnel: remove the mapping at `mount` — and
+    only if that mapping proxies the panel (loopback on `port`). Returns (ok, message).
+
+    This ran `tailscale serve --bg --remove <mount>`. No Tailscale version has a --remove flag, so
+    the CLI exited 2 ("flag provided but not defined: -remove") before doing anything, and every
+    Disable failed — including the one meant to take a Funnelled panel back off the internet.
+
+    The mount is validated before it becomes an argument (CodeQL #375, py/command-line-injection:
+    a value beginning with "-" would be read by `tailscale` as an OPTION). The host's Serve config
+    is then read fresh, and a mapping is removed only when it is the panel's: another app's mapping
+    at that mount is never touched. When nothing proxies the panel at all there is nothing to take
+    down, and that is reported as done, so the caller stops re-applying Serve at boot."""
     try:
         mount = _priv._ts_mount(mount or "/")
     except _priv.VerbError:
         return False, "That isn't a usable mount point."
-    out, err, rc = _run_ts(
-        ["serve", "--bg", "--remove", mount],
-        timeout=10,
-    )
-    if rc == 0:
-        with _cache_lock:
-            _cache["info"] = None
-        return True, "Tailscale Serve mapping removed"
-    return False, f"Failed to remove: {err or out}"
+    info = get_tailscale_info(force_refresh=True)
+    if info.serve_unreadable:
+        return False, ("Couldn't read this host's Tailscale Serve configuration, so nothing was "
+                       "removed.")
+    ours = panel_serve_routes(info.serve_config, port)
+    at_mount = [r for r in ours if r["mount"] == mount]
+    if not at_mount:
+        # Nothing at `mount` proxies the panel. Another app's mapping there is never touched.
+        if ours:
+            return False, ("The panel is published at %s, not at %s, so nothing was removed."
+                           % (ours[0]["mount"], mount))
+        return True, "Tailscale Serve wasn't publishing the panel, so there was nothing to remove."
+    # The panel user has to be the Tailscale operator to change Serve config — the same step the
+    # enable path takes first.
+    ensure_operator()
+    for r in at_mount:
+        args = serve_off_args(r["url"], mount)
+        if args is None:
+            return False, "Couldn't tell which listener %s is on, so nothing was removed." % r["url"]
+        out, err, rc = _run_ts(args, timeout=10)
+        if rc != 0:
+            return False, f"Failed to remove: {err or out}"
+    with _cache_lock:
+        _cache["info"] = None
+    return True, "Tailscale Serve mapping removed"
 
 
 # A tailnet's MagicDNS name is <host>.<tailnet>.ts.net, and Tailscale's own IPv4 range is the
@@ -541,8 +635,12 @@ def is_tailscale_ip(host):
     return addr in _TS_V4_NET or addr in _TS_V6_NET
 
 
-def suggest_best_bind(port=5000):
+def suggest_best_bind(port=5000, scheme="http"):
     """Suggest the best way to expose the panel based on what's available.
+
+    `scheme` is how the panel itself is serving on `port` ("https" when it terminates its own
+    self-signed TLS, which is the default) — the direct URLs below are built with it. They were
+    hardcoded http://, so the page linked the operator to plain HTTP on a port that only speaks TLS.
 
     Returns a dict with keys:
       - method: "tailscale-serve", "tailscale-direct", "direct"
@@ -551,13 +649,19 @@ def suggest_best_bind(port=5000):
       - description: human-readable explanation
     """
     info = get_tailscale_info()
+    scheme = "https" if scheme == "https" else "http"
+    ours = panel_serve_routes(info.serve_config, port)
 
-    if info.running and info.dns_name and info.serve_config.get("services"):
+    if info.running and info.dns_name and ours:
         # Serve is ACTUALLY proxying the panel — bind to localhost and reach it via the ts.net cert.
         # (We must confirm Serve is configured, not just that Tailscale is up with a MagicDNS name —
         # otherwise a fresh Tailscale-enabled install would bind loopback with nothing proxying to it
-        # and be unreachable.)
-        url = f"https://{info.dns_name}"
+        # and be unreachable.) And "configured" means a route to THIS panel's port: any mapping used
+        # to count, so a node already serving Grafana bound a fresh panel to 127.0.0.1 with nothing
+        # proxying to it, and the first-run wizard — the only way to create the first admin — was
+        # reachable only through an SSH tunnel. app._resolved_bind uses this as the real bind
+        # address whenever bind_host is unset, which it is until the wizard's first step.
+        url = ours[0]["url"].rstrip("/") + ("" if ours[0]["mount"] == "/" else ours[0]["mount"])
         return {
             "method": "tailscale-serve",
             "bind_host": "127.0.0.1",
@@ -572,7 +676,7 @@ def suggest_best_bind(port=5000):
             "method": "tailscale-direct",
             "bind_host": ts_ip or "0.0.0.0",
             "port": port,
-            "url": f"http://{ts_ip}:{port}" if ts_ip else f"http://<tailscale-ip>:{port}",
+            "url": f"{scheme}://{ts_ip}:{port}" if ts_ip else f"{scheme}://<tailscale-ip>:{port}",
             "description": f"Bind to Tailscale IP {ts_ip} and access directly",
         }
     elif info.installed and info.backend_state == "NeedsLogin":
@@ -582,7 +686,7 @@ def suggest_best_bind(port=5000):
             "method": "direct",
             "bind_host": "0.0.0.0",
             "port": port,
-            "url": f"http://<your-server-ip>:{port}",
+            "url": f"{scheme}://<your-server-ip>:{port}",
             "description": ("Tailscale is installed but not linked yet. Link this machine above "
                             "to reach the panel privately over your tailnet."),
         }
@@ -591,6 +695,6 @@ def suggest_best_bind(port=5000):
             "method": "direct",
             "bind_host": "0.0.0.0",
             "port": port,
-            "url": f"http://<your-server-ip>:{port}",
+            "url": f"{scheme}://<your-server-ip>:{port}",
             "description": "No Tailscale detected. Bind to all interfaces.",
         }

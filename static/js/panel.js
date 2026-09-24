@@ -1,3 +1,23 @@
+// ── What the markup-driven dispatchers may call ─────────────────────────────────────────────
+// data-action and data-ajax-after name a global function, and the dispatcher called whatever
+// window[name] was — native fetch, open or eval included, and this file's own fetch WRAPPER, which
+// adds the CSRF token to every POST. The nonce CSP stops injected markup running script; an
+// unguarded dispatcher turned that same markup back into authenticated, CSRF-valid requests on the
+// next click. Refused: any native function, and the panel's own request/markup primitives. An
+// action is a function a panel script defined for the purpose, and none of those is one.
+var _ACTION_DENY = {fetch: 1, refreshSection: 1, confirmDialog: 1, sessionExpired: 1,
+                    _submitAjaxForm: 1, ensureCsrfFields: 1};
+function _actionFn(name){
+  if (typeof name !== 'string' || !name || _ACTION_DENY[name]) return null;
+  if (!Object.prototype.hasOwnProperty.call(window, name)) return null;
+  var fn = window[name];
+  if (typeof fn !== 'function') return null;
+  try {
+    if (/\{\s*\[native code\]\s*\}\s*$/.test(Function.prototype.toString.call(fn))) return null;
+  } catch (e) { return null; }
+  return fn;
+}
+
 // ── Live cross-user updates ───────────────────────────────────────────────
 // A shared Socket.IO connection (created lazily, reused by the console page) plus a
 // helper to subscribe to server-pushed events. Used so that when one user adds or
@@ -62,9 +82,15 @@ window.addEventListener('pageshow', function(ev){
   // server now answers those calls 401 + X-Auth-Required; this takes the whole tab to /login.
   function _loginPath(){ return (window.MOUNT || '') + '/login'; }
   function _onLoginPage(){ return location.pathname.indexOf(_loginPath()) === 0; }
+  // Only a page rendered for a signed-in user has a session that can expire. The login page was
+  // the one signed-out page special-cased: an invitee on /invite/<token> who switched apps for a
+  // minute came back to a ping, a 401, "Your session expired" and location.replace to /login —
+  // the form they were filling gone, and Back unable to return to it.
+  function _signedIn(){ return window.SIGNED_IN === true; }
   var _expiredHandled = false;
   window.sessionExpired = function(){
-    if (_expiredHandled || _onLoginPage()) return;   // in-flight polls all 401 at once: redirect once
+    // in-flight polls all 401 at once: redirect once
+    if (_expiredHandled || _onLoginPage() || !_signedIn()) return;
     _expiredHandled = true;
     var here = location.pathname + location.search;
     try { if (window.toast) toast('Your session expired — signing you back in.', 'warning'); } catch(e){}
@@ -96,7 +122,7 @@ window.addEventListener('pageshow', function(ev){
   // the rest. Cheap enough to also do when a long-backgrounded tab is focused again.
   var _lastPing = Date.now();
   function _pingAuth(){
-    if (_expiredHandled || _onLoginPage()) return;
+    if (_expiredHandled || _onLoginPage() || !_signedIn()) return;
     _lastPing = Date.now();
     window.fetch((window.MOUNT || '') + '/api/auth/ping', {cache: 'no-store'}).catch(function(){});
   }
@@ -361,9 +387,13 @@ window.refreshSection = function(sel, afterName){
       // The swapped-in markup is what the SERVER rendered, so any POST form in it arrives without
       // the hidden token — see ensureCsrfFields.
       if (cur && window.ensureCsrfFields) window.ensureCsrfFields(cur);
+      // ...and its timestamps arrive as the server's UTC text. localizeTimes ran once, on load, so
+      // after an in-place refresh (saving a user) the whole Last login column switched to UTC.
+      if (cur && window.localizeTimes) window.localizeTimes(cur);
       // nosemgrep - the delegated dispatcher this whole UI is built on: afterName comes from a
-      // data- attribute in our own template, and the typeof guard is the contract.
-      if (afterName && typeof window[afterName] === 'function') { try { window[afterName](); } catch(e){} }  // nosemgrep
+      // data- attribute in our own template, and _actionFn is the contract.
+      var afterFn = afterName ? _actionFn(afterName) : null;
+      if (afterFn) { try { afterFn(); } catch(e){} }  // nosemgrep
     }).catch(function(){});
 };
 function _submitAjaxForm(form){
@@ -502,8 +532,8 @@ window._acctSignOutAll = function(){
 };
 (function(){
   function fire(el, e){
-    var fn = window[el.getAttribute('data-action')];
-    if (typeof fn !== 'function') return;
+    var fn = _actionFn(el.getAttribute('data-action'));
+    if (!fn) return;
     var args = [];
     var raw = el.getAttribute('data-args');
     if (raw){ try { args = JSON.parse(raw); } catch (_e){ args = []; } }

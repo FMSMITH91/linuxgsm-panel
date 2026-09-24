@@ -102,8 +102,17 @@ function filterGamesForHost() {
   if (!remote) { apply(''); return; }
   fetch(MOUNT + '/api/remote/' + encodeURIComponent(remote) + '/specs')
     .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (d) { apply((d && d.os_slug) || ''); })
-    .catch(function () { apply(''); });   // unreadable host: leave everything selectable
+    .then(function (d) { if (_hostStillSelected(remote)) apply((d && d.os_slug) || ''); })
+    .catch(function () { if (_hostStillSelected(remote)) apply(''); });   // unreadable host: leave everything selectable
+}
+
+// Is `remote` still the host the form is pointed at? Both lookups below probe the host over SSH
+// on first use, so answers come back in whatever order the hosts answer — and each was applied on
+// arrival. Pick a slow 24.04 host, then a fast 20.04 one: the 24.04 answer landed last, greyed out
+// four games and said they were "capped at an older Ubuntu than this host runs" about the 20.04
+// host on screen. A late free-port answer rewrote the port field the same way.
+function _hostStillSelected(remote) {
+  return ((document.getElementById('remote-select') || {}).value || '') === String(remote);
 }
 
 // Once a target host + game are chosen, ask the panel for a free port near the default and bump the
@@ -121,6 +130,9 @@ function suggestFreePort() {
     .then(function(r){ return r.ok ? r.json() : null; })
     .then(function(d){
       if (!d || !d.port || !hint) return;
+      // An answer for a host or game that is no longer the one chosen says nothing about this one.
+      if (!_hostStillSelected(remote)
+          || (document.getElementById('game-type-select') || {}).value !== game) return;
       if (d.changed) {
         portEl.value = d.port;
         hint.textContent = 'Port ' + desired + ' is in use — using free port ' + d.port + '.';   // textContent: never treat the port value as HTML

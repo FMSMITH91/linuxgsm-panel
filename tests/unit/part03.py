@@ -336,8 +336,68 @@ try:
     _so._run = lambda c, **k: ("127.0.0.1\n100.84.48.111\n45.76.63.211\n", "", 0)
     check("host_has_ip: recognises a local address", _so.host_has_ip("100.84.48.111") is True)
     check("host_has_ip: rejects an address not on the host", _so.host_has_ip("10.0.0.9") is False)
+    # _run never raises: a timeout or a missing `ip` is ("", ..., -1). `ip in set()` refused the
+    # host's own Tailscale IP as "not an address on this host"; answering True instead accepted a
+    # typo'd address in both lockout guards (change-port, and sshd on the panel host). Nothing
+    # read is not a measurement either way — the kernel is asked instead.
+    _so._run = lambda c, **k: ("", "Command timed out", -1)
+    _hh_kern = _so._kernel_has_ip
+    try:
+        _so._kernel_has_ip = lambda addr: str(addr) == "100.84.48.111"
+        check("host_has_ip: a read that timed out does not call the host's own address foreign",
+              _so.host_has_ip("100.84.48.111") is True)
+        check("host_has_ip: ...nor accept an address the host does not have",
+              _so.host_has_ip("10.0.0.51") is False)
+    finally:
+        _so._kernel_has_ip = _hh_kern
+    # The kernel fallback itself, on the real kernel: loopback binds, TEST-NET does not.
+    import ipaddress as _hh_ip
+    _hh_nl = _so._nonlocal_bind_allowed
+    try:
+        _so._nonlocal_bind_allowed = lambda v: False
+        check("host_has_ip kernel fallback: an address the host has binds (positive control)",
+              _so._kernel_has_ip(_hh_ip.ip_address("127.0.0.1")) is True)
+        check("host_has_ip kernel fallback: an address it lacks is EADDRNOTAVAIL, not a yes",
+              _so._kernel_has_ip(_hh_ip.ip_address("192.0.2.99")) is False)
+        # With ip_nonlocal_bind set the kernel binds ANY address, so the bind proves nothing.
+        _so._nonlocal_bind_allowed = lambda v: True
+        check("host_has_ip kernel fallback: with ip_nonlocal_bind on, a bind is not a yes",
+              _so._kernel_has_ip(_hh_ip.ip_address("127.0.0.1")) is False)
+    finally:
+        _so._nonlocal_bind_allowed = _hh_nl
+    _so._run = lambda c, **k: ("127.0.0.1\n::1\nfd7a:115c:a1e0::1\n", "", 0)
+    check("host_has_ip: an IPv6 address typed in upper case is still this host's",
+          _so.host_has_ip("FD7A:115C:A1E0::1") is True)
+    check("host_has_ip: ...while one that really is absent is still refused (control)",
+          _so.host_has_ip("fd7a:115c:a1e0::2") is False and _so.host_has_ip("not-an-ip") is False)
 finally:
     _so._run = _orig_sorun2
+
+# ── The Tailscale SSH toggle changes RunSSH and nothing else ─────────────────────────────────
+# It ran `tailscale up --ssh --accept-routes --accept-dns --reset`. `--reset` puts every pref not
+# on that command line back to its default, so turning SSH on withdrew advertised subnet routes and
+# an exit node, dropped a hand-set hostname (and the Serve URL built on it) and forced accept-routes
+# on — reported as "Tailscale SSH enabled". `tailscale set --ssh[=false]` touches only RunSSH.
+import shlex as _tss_shlex   # noqa: E402
+_tss_cmds, _tss_rc = [], {"rc": 0}
+_tss_orig = _so._run
+try:
+    _so._run = lambda c, **k: (_tss_cmds.append(c), ("", "boom", _tss_rc["rc"]))[1]
+    _tss_on = _so.tailscale_ssh_enable()
+    _tss_off = _so.tailscale_ssh_disable()
+    _tss_argv = [[t for t in _tss_shlex.split(c) if t != "2>&1"] for c in _tss_cmds]
+    check("tailscale-ssh: enabling runs `tailscale set --ssh` and nothing that resets other prefs",
+          _tss_argv[:1] == [["tailscale", "set", "--ssh"]], repr(_tss_cmds))
+    check("tailscale-ssh: disabling runs `tailscale set --ssh=false` and nothing else",
+          _tss_argv[1:2] == [["tailscale", "set", "--ssh=false"]], repr(_tss_cmds))
+    check("tailscale-ssh: ...and a toggle that ran reports it (control)",
+          _tss_on == (True, "Tailscale SSH enabled") and _tss_off == (True, "Tailscale SSH disabled"),
+          repr((_tss_on, _tss_off)))
+    _tss_rc["rc"] = 1
+    check("tailscale-ssh: ...while one the CLI refused is reported as a failure (control)",
+          _so.tailscale_ssh_enable()[0] is False and _so.tailscale_ssh_disable()[0] is False)
+finally:
+    _so._run = _tss_orig
 
 # ── perf guard: the /server-management host probe (sudo ufw + tailscale + apt, ~1.2s of
 #    CPU across several subprocesses) is cached for _STATUS_TTL, so a page render and its
@@ -500,6 +560,18 @@ check("auto-updates: installed but disabled detected", _au["installed"] and not 
 _so._run = _mk_run(1, "")
 _au = _so.unattended_upgrades_status()
 check("auto-updates: not installed detected", not _au["installed"] and not _au["enabled"])
+# The value is an INTERVAL in days — any non-zero one runs it. Only the exact text "1" counted,
+# so a weekly "7" (set in a later apt.conf.d file, which wins) read "not enabled" and Enable
+# answered "Could not confirm" on a host that was applying updates.
+for _au_val, _au_want in (("7", True), ("2", True), ("always", True), ("12h", True),
+                          ("0", False), ("", False), ("off", False)):
+    _so._run = _mk_run(0, 'APT::Periodic::Unattended-Upgrade "%s";' % _au_val)
+    check("auto-updates: an interval of %r reads as %s" % (_au_val, "on" if _au_want else "off"),
+          _so.unattended_upgrades_status()["enabled"] is _au_want)
+_so._run = _mk_run(0, 'APT::Periodic::Update-Package-Lists "1";')
+check("auto-updates: a '1' on a DIFFERENT periodic key is not this one being on",
+      _so.unattended_upgrades_status()["enabled"] is False)
+_so._run = _mk_run(1, "")
 
 # ── shell-identifier validation (the core injection defense) ──
 from panel.db.models import _validate_shell_ident as _vsi
@@ -632,6 +704,28 @@ eq("metrics: game_procs parsed", _m["game_procs"], 3)
 check("metrics: port_open true when a socket is listening", _m["port_open"] is True)
 eq("metrics: cpu_percent from the /proc/stat delta", _m["cpu_percent"], 20.0)
 eq("metrics: game_cpu_percent from the jiffie delta", _m["game_cpu_percent"], 100.0)
+
+# ...and a game user or port that is not an identifier / a number is never interpolated. Both go
+# into the command unquoted, and @validates runs on assignment only: a legacy or restored row
+# reaches this, on every dashboard poll, as the SSH user (root on most remotes). Its siblings
+# (run_as_game_user, send_console_command, _rewrite_crontab) re-validate; this did not.
+_lm_sent = []
+_o_lm_rc = _sm_core.run_command
+_sm_core.run_command = lambda server, cmd, timeout=30, sudo=None: (_lm_sent.append(cmd)
+                                                                   or (_METRICS_OUT, "", 0))
+try:
+    _sm_core.server_live_metrics(None, "x $(id>/tmp/pwn)", "1; id", force=True)
+    _lm_bad = _lm_sent[-1] if _lm_sent else ""
+    _sm_core.server_live_metrics(None, "gmodserver", "27015", force=True)
+    _lm_good = _lm_sent[-1] if _lm_sent else ""
+finally:
+    _sm_core.run_command = _o_lm_rc
+check("metrics: a hostile game user or port from a stored row never reaches the shell",
+      _lm_bad and "$(id" not in _lm_bad and "ps -u x" not in _lm_bad and "; id'" not in _lm_bad,
+      "command sent: %r" % (_lm_bad[:300],))
+check("metrics: ...while a real game user and port are still measured (positive control)",
+      "ps -u gmodserver" in _lm_good and "sport = :27015" in _lm_good,
+      "command sent: %r" % (_lm_good[:300],))
 
 # ── remote_live_metrics parses CPU/MEM/DISK sections (incl. new disk fields) ──
 _RLM_OUT = "\n".join([
@@ -784,6 +878,26 @@ try:
         _sm_hosts._pro_status_cache.clear()
 finally:
     _sm_core.run_command = _orig_pro_run
+    _sm_hosts._pro_status_cache.clear()
+
+# ── pro_detach: a failure that names the verb is not a detach ────────────────────────────────
+# `"detach" in blob` accepted every helper and sudo failure, since each names `pro-detach`.
+_pd_saved = _sm_core.run_privileged
+try:
+    for _pd_ans in (("panel-helper: pro-detach timed out", "", 124),
+                    ("sudo: Sorry, user panel is not allowed to execute '/usr/local/sbin/panel-helper "
+                     "pro-detach' as root", "", 1),
+                    ("panel-helper: unknown verb 'pro-detach'", "", 2)):
+        _sm_core.run_privileged = lambda s, v, a=(), _x=_pd_ans, **k: _x
+        _pd_ok, _pd_msg = _sm_hosts.pro_detach(NS(id=9122, host="h"))
+        check("pro_detach: %r is a failure, not 'Detached'" % _pd_ans[0][:40],
+              _pd_ok is False, "ok=%r msg=%r" % (_pd_ok, _pd_msg))
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("This machine is now detached.", "", 0)
+    _pd_ok, _ = _sm_hosts.pro_detach(NS(id=9122, host="h"))
+    check("pro_detach: ...while pro's own success still reads as detached (positive control)",
+          _pd_ok is True)
+finally:
+    _sm_core.run_privileged = _pd_saved
     _sm_hosts._pro_status_cache.clear()
 
 # ── host_specs is cached (static hardware — don't re-run lscpu every page load) ──
@@ -941,6 +1055,80 @@ try:
           _bad["ok"] is False and _bad["count"] == 0)
 finally:
     SO._run = _sv_run
+
+# ── the OS-update watch: a status read that did not answer is not the update stopping ────────
+# Tailscale SSH and the panel host return ("", ..., -1) rather than raising, so an unanswered read
+# came back {done: False, log: "", running: False} — `running` from a pgrep that did not answer
+# either. The popup wiped apt's output and, three polls later, declared an update still unpacking
+# "ended without a completion marker".
+_osu_saved = _sm_core.run_privileged
+try:
+    def _osu_stub(log_ans, alive_rc):
+        return lambda s, verb, args=(), **k: (
+            log_ans if verb == "os-update-log" else ("", "", alive_rc) if verb == "apt-any-running"
+            else ("", "", 0))
+    _sm_core.run_privileged = _osu_stub(("", "ssh: connect timed out", -1), -1)
+    _osu = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: an unread log is flagged unread, not an empty running-less log",
+          _osu.get("unread") is True and _osu["done"] is False and _osu["running"] is None,
+          repr(_osu))
+    _sm_core.run_privileged = _osu_stub(("Unpacking libc6 ...\n", "", 0), -1)
+    _osu = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: an unanswered apt probe is running=None, not 'apt has stopped'",
+          _osu["running"] is None and not _osu.get("unread") and "Unpacking" in _osu["log"],
+          repr(_osu))
+    # Positive controls: the two real answers still read as themselves.
+    _sm_core.run_privileged = _osu_stub(("Unpacking libc6 ...\n", "", 0), 1)
+    _osu_a = _sm_hosts.remote_os_update_status(NS(id=9120))
+    _sm_core.run_privileged = _osu_stub(("done\n%s0\n" % _sm_hosts._OS_UPDATE_DONE, "", 0), 1)
+    _osu_b = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: ...while pgrep's 'no match' is running=False and a sentinel is done "
+          "(positive control)",
+          _osu_a["running"] is False and _osu_b["done"] is True and _osu_b["rc"] == 0,
+          "%r %r" % (_osu_a, _osu_b))
+    # A log that does not exist is an ANSWER: an update the panel did not start ("already running
+    # — watching it") never writes /run/panel-os-update.log, tail exits 1 naming it, and every poll
+    # read as unread — "Lost contact with the host" about a host answering every call.
+    _osu_nofile = ("", "tail: cannot open '%s' for reading: No such file or directory"
+                   % _sm_hosts._priv.OS_UPDATE_LOG, 1)
+    _sm_core.run_privileged = _osu_stub(_osu_nofile, 0)
+    _osu = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: a missing log file is an answered read, and apt is still asked",
+          not _osu.get("unread") and _osu["running"] is True and _osu["log"] == ""
+          and _osu["done"] is False, repr(_osu))
+    # ...while sudo refusing (also exit 1, and no path in its message) stays unread.
+    _sm_core.run_privileged = _osu_stub(("", "sudo: a password is required", 1), 0)
+    _osu = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: ...while a refusal with the same exit code is still unread (control)",
+          _osu.get("unread") is True and _osu["running"] is None, repr(_osu))
+finally:
+    _sm_core.run_privileged = _osu_saved
+
+# ── the raw security log: two unanswered reads are not an empty log ─────────────────────────
+# Joined to "", they were shown as "(log is empty)" — no SSH or ban activity — on the card that
+# exists to show attacks, about a host that never answered.
+_sl_saved = _sm_core.run_privileged
+try:
+    def _sl_stub(answers):
+        return lambda s, verb, args=(), **k: answers.get((verb, list(args)[0]), ("", "", 0))
+    _sm_core.run_privileged = _sl_stub({("journal", "ssh"): ("", "timed out", -1),
+                                        ("log-tail", "auth"): ("", "timed out", -1)})
+    _sl_a = _sm_hosts.remote_security_log(NS(id=9121), "ssh")
+    _sm_core.run_privileged = _sl_stub({("log-tail", "fail2ban"): ("", "timed out", -1),
+                                        ("journal", "fail2ban"): ("", "timed out", -1)})
+    _sl_b = _sm_hosts.remote_security_log(NS(id=9121), "fail2ban")
+    check("security log: reads that never answered are None (unknown), not an empty log",
+          _sl_a is None and _sl_b is None, "ssh=%r fail2ban=%r" % (_sl_a, _sl_b))
+    # Positive control: a journal that ANSWERED with nothing, and no auth.log, is a real empty log.
+    _sm_core.run_privileged = _sl_stub({("journal", "ssh"): ("", "", 0),
+                                        ("log-tail", "auth"): ("", "tail: No such file", 1)})
+    _sl_c = _sm_hosts.remote_security_log(NS(id=9121), "ssh")
+    _sm_core.run_privileged = _sl_stub({("log-tail", "fail2ban"): ("Ban 203.0.113.9\n", "", 0)})
+    _sl_d = _sm_hosts.remote_security_log(NS(id=9121), "fail2ban")
+    check("security log: ...while an answered empty log is '' and a real one is its text "
+          "(positive control)", _sl_c == "" and _sl_d == "Ban 203.0.113.9", "%r %r" % (_sl_c, _sl_d))
+finally:
+    _sm_core.run_privileged = _sl_saved
 
 # ── The snapshot the login banner and the OS Updates card read ────────────────────────
 # Both used to show nothing until someone pressed "Check": the panel knew what each host had
@@ -1202,6 +1390,32 @@ try:
     _so.urllib.request.urlopen = _boom
     eq("ci-gate: network error -> unknown (never raises)", _so._remote_ci_state("a"*40), "unknown")
 
+    # GitHub's anonymous rate limit (403/429) is an ANSWER, not an outage, and this gate's own
+    # polling reaches it during a red streak. HTTPError is a URLError, so it read 'unknown' — which
+    # the caller accepts as installable — and a tip CI had marked failing was offered and installed.
+    def _http_err(code):
+        def _op(req, timeout=8):
+            raise _so.urllib.error.HTTPError(req.full_url, code, "limit", {}, None)
+        return _op
+    _so.urllib.request.urlopen = _http_err(403)
+    eq("ci-gate: GitHub's 403 rate limit is 'pending', not the installable 'unknown'",
+       _so._remote_ci_state("a" * 40), "pending")
+    _so.urllib.request.urlopen = _http_err(429)
+    eq("ci-gate: ...and so is a 429", _so._remote_ci_state("a" * 40), "pending")
+    _so.urllib.request.urlopen = _http_err(502)
+    eq("ci-gate: ...while a GitHub outage (5xx) stays 'unknown' (control)",
+       _so._remote_ci_state("a" * 40), "unknown")
+
+    def _truncated(req, timeout=8):
+        raise _so.http.client.IncompleteRead(b'{"check_runs":[', 400)
+    _so.urllib.request.urlopen = _truncated
+    try:
+        _ir_state = _so._remote_ci_state("a" * 40)
+    except Exception as _ir_e:   # noqa: BLE001 - the regression IS the raise
+        _ir_state = "raised %s" % type(_ir_e).__name__
+    eq("ci-gate: a truncated response (IncompleteRead) is 'unknown', it does not escape",
+       _ir_state, "unknown")
+
     # PAGINATION. The call asked for per_page=100 and read exactly one page. That was enough for
     # the workflows that exist today, but the failure mode if it ever stopped being enough is the
     # wrong one: a check that did not fit on page 1 is simply not seen, so a commit whose only
@@ -1257,7 +1471,8 @@ try:
     # A CI-passing commit must get PAST the gate. Make install.sh look missing so it stops
     # there (proving the gate let it through) instead of actually launching an update.
     _so.os.path.isfile = lambda p: False
-    _so.panel_update_status = lambda force=False: {"behind": 1, "ci_state": "passing"}
+    _so.panel_update_status = lambda force=False: {"behind": 1, "ci_state": "passing",
+                                                   "update_available": True, "target_sha": "b" * 40}
     _ok, _m = _so.panel_self_update()
     check("self-update: a CI-passing commit is NOT blocked by the gate",
           _ok is False and "install.sh is missing" in _m)
@@ -1265,6 +1480,46 @@ finally:
     _so._is_git_checkout = _orig_isgit
     _so.panel_update_status = _orig_pus
     _so.os.path.isfile = _orig_isfile
+
+# ...and a gate that could not be EVALUATED does not open. A status computation that raised (a
+# truncated GitHub reply, a git read that would not decode) set st = {}, which skipped the gate and
+# left no target, so install.sh reset onto the origin tip — fetched after the check, verified by
+# nobody. Any status without a verified target fell back to that same tip.
+_sug_saved = (_so._is_git_checkout, _so.panel_update_status, _so._launch_installer, _so.os.path.isfile)
+_sug_launched = []
+try:
+    _so._is_git_checkout = lambda: True
+    _so.os.path.isfile = lambda p: True
+    _so._launch_installer = lambda **k: (_sug_launched.append(k), (True, "Update started"))[1]
+
+    def _sug_raise(force=False):
+        raise _so.http.client.IncompleteRead(b"", 10)
+    _so.panel_update_status = _sug_raise
+    _sug_r = _so.panel_self_update()
+    check("self-update: a status check that RAISED refuses the update instead of skipping the gate",
+          _sug_r[0] is False and not _sug_launched, repr((_sug_r, _sug_launched)))
+    _so.panel_update_status = lambda force=False: {"git": True, "behind": 2, "ci_state": "unknown",
+                                                   "update_available": True, "target_sha": ""}
+    _sug_r = _so.panel_self_update()
+    check("self-update: an update with no verified target is refused, not sent to the origin tip",
+          _sug_r[0] is False and not _sug_launched, repr((_sug_r, _sug_launched)))
+    _so.panel_update_status = lambda force=False: {"git": True, "fetched": False,
+                                                   "update_available": False,
+                                                   "message": "Couldn't reach the update source."}
+    _sug_r = _so.panel_self_update()
+    check("self-update: ...nor is one whose remote could not even be fetched",
+          _sug_r == (False, "Couldn't reach the update source.") and not _sug_launched,
+          repr((_sug_r, _sug_launched)))
+    _so.panel_update_status = lambda force=False: {"git": True, "behind": 2, "ci_state": "passing",
+                                                   "update_available": True, "target_sha": "c" * 40}
+    _sug_launched.clear()
+    _sug_r = _so.panel_self_update()
+    check("self-update: ...while a verified target is launched, pinned to that commit (control)",
+          _sug_r[0] is True and len(_sug_launched) == 1
+          and _sug_launched[0].get("target_ref") == "c" * 40, repr((_sug_r, _sug_launched)))
+finally:
+    (_so._is_git_checkout, _so.panel_update_status, _so._launch_installer,
+     _so.os.path.isfile) = _sug_saved
 
 # ── _compute_update_status targets the newest VERIFIED commit ──
 # When the tip is still verifying but an earlier commit already passed CI, the panel must
@@ -1390,6 +1645,24 @@ try:
     check("update-target: a verified commit under a pending tip is still offered",
           _rm["update_available"] is True and _rm["target_sha"] == "b" * 40,
           "available=%s target=%s" % (_rm.get("update_available"), _rm.get("target_sha")))
+
+    # The caller, over the REAL _remote_ci_state: once GitHub rate-limits the panel, nothing in
+    # range is verified, so nothing is offered. It used to read every commit as 'unknown' and
+    # offer the tip — failing CI or not.
+    _rl_saved = (_so._repo_slug, _so.urllib.request.urlopen)
+    try:
+        _so._remote_ci_state = _cus_ci
+        _so._repo_slug = lambda: "o/r"
+
+        def _rl_open(req, timeout=8):
+            raise _so.urllib.error.HTTPError(req.full_url, 403, "rate limit exceeded", {}, None)
+        _so.urllib.request.urlopen = _rl_open
+        _r_rl = _so._compute_update_status()
+        check("update-target: a rate-limited CI read offers NO update (was: the unverified tip)",
+              _r_rl["update_available"] is False and _r_rl.get("ci_state") == "pending",
+              "available=%s ci=%s" % (_r_rl.get("update_available"), _r_rl.get("ci_state")))
+    finally:
+        _so._repo_slug, _so.urllib.request.urlopen = _rl_saved
 finally:
     _so._git = _cus_git
     _so._is_git_checkout = _cus_isco
@@ -1433,11 +1706,33 @@ try:
     _tsi.get_tailscale_info = lambda *a, **k: TailscaleInfo(
         installed=True, running=True, backend_state="Running", tailscale_ips=["100.90.141.12"],
         dns_name="host.example.ts.net",
-        serve_config={"services": [{"url": "https://host.example.ts.net", "routes": [{}]}], "raw": "x"})
+        serve_config={"services": [{"url": "https://host.example.ts.net", "routes": [
+            {"mount": "/lgsm", "target": "http://127.0.0.1:5000"}]}], "raw": "x"})
     _tsi._cache["info"] = None
     _bys = _tsi.suggest_best_bind(5000)
     check("tailscale: up + DNS name + Serve configured -> binds loopback for Serve",
           _bys["bind_host"] == "127.0.0.1" and _bys["method"] == "tailscale-serve")
+    eq("tailscale: ...and the URL it recommends is the panel's own mapping, mount included",
+       _bys["url"], "https://host.example.ts.net/lgsm")
+    # ANY Serve route used to count, so a node already serving another app (Grafana on :3000) bound
+    # a fresh panel — whose bind_host is empty until the wizard's first step, and app._resolved_bind
+    # takes this answer — to 127.0.0.1 with nothing proxying to it: the first-run wizard, the only
+    # way to create the first admin, was unreachable except through an SSH tunnel.
+    _tsi.get_tailscale_info = lambda *a, **k: TailscaleInfo(
+        installed=True, running=True, backend_state="Running", tailscale_ips=["100.90.141.12"],
+        dns_name="host.example.ts.net",
+        serve_config={"services": [{"url": "https://host.example.ts.net", "routes": [
+            {"mount": "/", "target": "http://127.0.0.1:3000"}]}], "raw": "x"})
+    _tsi._cache["info"] = None
+    _bgf = _tsi.suggest_best_bind(5000)
+    check("tailscale: a Serve route to ANOTHER app does not bind the panel to loopback",
+          _bgf["bind_host"] != "127.0.0.1" and _bgf["method"] == "tailscale-direct", repr(_bgf))
+    # The direct URLs were hardcoded http:// while the panel serves self-signed TLS by default, so
+    # the page linked the operator to plain HTTP on a port that only speaks TLS.
+    eq("tailscale: the direct URL uses the scheme the panel is actually serving",
+       _tsi.suggest_best_bind(5000, scheme="https")["url"], "https://100.90.141.12:5000")
+    eq("tailscale: ...and http only when the panel serves http (control)",
+       _tsi.suggest_best_bind(5000, scheme="http")["url"], "http://100.90.141.12:5000")
 finally:
     _tsi.get_tailscale_info = _orig_gti
     _tsi._cache["info"] = None
@@ -1466,6 +1761,28 @@ def _tsu_stub(serve_rc, serve_out=""):
     return _tsi._get_tailscale_info()
 
 
+# "Accept Routes" is the RouteAll pref. It was read from status JSON's TUN field — kernel TUN vs
+# userspace networking, nothing to do with subnet routes — so a normal kernel-mode node that never
+# accepted routes read "Yes", and an operator chasing an unreachable subnet was told it was accepted.
+def _tsar_info(prefs_rc, route_all):
+    def _run(args, timeout=5):
+        if args and args[0] in ("version", "--version"):
+            return ("1.0", "", 0)
+        if args[:2] == ["debug", "prefs"]:
+            return ('{"RouteAll": %s, "RunSSH": false}' % ("true" if route_all else "false"),
+                    "", prefs_rc)
+        return ("", "", 0)
+    _tsi._run_ts = _run
+    _tsi._run_ts_json = lambda args, timeout=5: dict(_tsu_json, TUN=True)
+    _tsi._cache["info"] = None
+    return _tsi._get_tailscale_info().accept_routes
+
+
+eq("tailscale: Accept Routes is the RouteAll pref, not the TUN flag (kernel TUN, routes off)",
+   _tsar_info(0, False), False)
+eq("tailscale: ...a node that accepts routes says so (control)", _tsar_info(0, True), True)
+eq("tailscale: ...and prefs that could not be read are unknown, not 'No'", _tsar_info(1, True), None)
+
 _tsu_denied = _tsu_stub(1)
 check("tailscale: a `serve status` that was refused is flagged unreadable, not reported empty",
       _tsu_denied.serve_unreadable is True and _tsu_denied.serve_config == {},
@@ -1481,7 +1798,76 @@ check("tailscale: ...and a readable config still parses its routes (positive con
       and [r["mount"] for s in _tsu_ok.serve_config.get("services", []) for r in s["routes"]]
       == ["/lgsm"],
       "serve_config=%r" % (_tsu_ok.serve_config,))
+
+# A FUNNELLED mapping reads as one. Tailscale prints "(Funnel on)" with a capital F after the URL,
+# and the parser compared case-sensitively against "funnel": info.funnel_enabled was always False,
+# so /tailscale told the operator a panel on the public internet was "private - tailnet only".
+_tsu_fun = _tsu_stub(0, "# Funnel on:\n#     - https://host.example.ts.net\n\n"
+                        "https://host.example.ts.net (Funnel on)\n|-- / proxy http://127.0.0.1:5000")
+check("tailscale: a mapping Tailscale prints as '(Funnel on)' is reported as funnelled",
+      _tsu_fun.funnel_enabled is True
+      and [s["funnel"] for s in _tsu_fun.serve_config.get("services", [])] == [True],
+      "funnel_enabled=%r serve_config=%r" % (_tsu_fun.funnel_enabled, _tsu_fun.serve_config))
+_tsu_priv = _tsu_stub(0, "https://host.example.ts.net (tailnet only)\n"
+                         "|-- /funnel-stats proxy http://127.0.0.1:3000")
+check("tailscale: ...while '(tailnet only)' is private, even with 'funnel' in a route (control)",
+      _tsu_priv.funnel_enabled is False
+      and [s["funnel"] for s in _tsu_priv.serve_config.get("services", [])] == [False],
+      "funnel_enabled=%r serve_config=%r" % (_tsu_priv.funnel_enabled, _tsu_priv.serve_config))
 _tsi._cache["info"] = None
+
+# ── Disabling Serve runs a command the CLI has, and removes only the PANEL's mapping ─────────
+# It ran `tailscale serve --bg --remove <mount>`. No Tailscale version has --remove: the CLI exits 2
+# ("flag provided but not defined: -remove") before doing anything, so every Disable failed —
+# including taking a Funnelled panel back off the internet. The CLI's removal is
+# `serve --https=<port> --set-path=<mount> off`; without --set-path, `off` drops EVERY mount on
+# the port. And the mount has to be the panel's: Tailscale lists "/" first, so on a node where
+# another app holds "/" and the panel sits at /lgsm, "the first route" was the other app.
+eq("serve-off: the removal argv is the CLI's own grammar, path always given",
+   _tsi.serve_off_args("https://node.example.ts.net", "/"),
+   ["serve", "--https=443", "--set-path=/", "off"])
+eq("serve-off: ...on the listener the mapping is actually on",
+   _tsi.serve_off_args("https://node.example.ts.net:8443", "/lgsm"),
+   ["serve", "--https=8443", "--set-path=/lgsm", "off"])
+_tsd_info = TailscaleInfo(
+    installed=True, running=True, backend_state="Running", dns_name="node.example.ts.net",
+    serve_config={"services": [{"url": "https://node.example.ts.net", "funnel": True, "routes": [
+        {"mount": "/", "target": "http://127.0.0.1:3000"},
+        {"mount": "/lgsm", "target": "https+insecure://127.0.0.1:5000"}]}], "raw": "x"})
+_tsd_saved = (_tsi.get_tailscale_info, _tsi._run_ts, _tsi.ensure_operator)
+_tsd_ran, _tsd_rc = [], {"rc": 0}
+try:
+    _tsi.get_tailscale_info = lambda force_refresh=False: _tsd_info
+    _tsi._run_ts = lambda args, timeout=5: (_tsd_ran.append(list(args)), ("", "err", _tsd_rc["rc"]))[1]
+    _tsi.ensure_operator = lambda: (True, "panel")
+    eq("serve-off: the panel's route is found by its backend, not by its place in the list",
+       [r["mount"] for r in _tsi.panel_serve_routes(_tsd_info.serve_config, 5000)], ["/lgsm"])
+    _tsd_r = _tsi.disable_tailscale_serve("/", 5000)
+    check("serve-off: asked to remove another app's '/', it removes NOTHING",
+          _tsd_r[0] is False and _tsd_ran == [], repr((_tsd_r, _tsd_ran)))
+    _tsd_r = _tsi.disable_tailscale_serve("/lgsm", 5000)
+    check("serve-off: the panel's own mapping is removed with `serve ... off`, never --remove",
+          _tsd_r[0] is True and _tsd_ran == [["serve", "--https=443", "--set-path=/lgsm", "off"]],
+          repr((_tsd_r, _tsd_ran)))
+    _tsd_ran.clear()
+    _tsd_rc["rc"] = 2
+    _tsd_r = _tsi.disable_tailscale_serve("/lgsm", 5000)
+    check("serve-off: ...and a CLI that refused is a failure, not 'removed' (control)",
+          _tsd_r[0] is False and len(_tsd_ran) == 1, repr((_tsd_r, _tsd_ran)))
+    _tsd_ran.clear()
+    _tsd_info.serve_unreadable = True
+    _tsd_r = _tsi.disable_tailscale_serve("/lgsm", 5000)
+    check("serve-off: an unreadable Serve config removes nothing (it can't tell whose mapping)",
+          _tsd_r[0] is False and _tsd_ran == [], repr((_tsd_r, _tsd_ran)))
+    _tsd_info.serve_unreadable = False
+    _tsd_info.serve_config = {"services": [{"url": "https://node.example.ts.net", "funnel": False,
+                                            "routes": [{"mount": "/", "target": "http://127.0.0.1:3000"}]}]}
+    _tsd_r = _tsi.disable_tailscale_serve("/", 5000)
+    check("serve-off: with nothing proxying the panel, disabling is done and touches nothing",
+          _tsd_r[0] is True and _tsd_ran == [], repr((_tsd_r, _tsd_ran)))
+finally:
+    _tsi.get_tailscale_info, _tsi._run_ts, _tsi.ensure_operator = _tsd_saved
+    _tsi._cache["info"] = None
 _tsi._run_ts, _tsi._run_ts_json = _orig_run_ts, _orig_run_ts_json   # restored, as above
 
 # ── Debug report: repeated tracebacks in the log tail get collapsed ───
@@ -1849,6 +2235,42 @@ check("system_ops: ...and a DENY's source is the From column, not the To column"
       _ufw_parsed["rules"][-1]["action"] == "DENY"
       and _ufw_parsed["rules"][-1]["from"].startswith("203.0.113.9"),
       str(_ufw_parsed["rules"][-1]))
+
+# 10b. "Tailscale interface allowed" gates the button that removes public port 22, and it was a
+#      substring match over that same text: an `ALLOW OUT ... on tailscale0` row (early installs
+#      added one beside the IN rule, and it outlives deleting it) or a `DENY IN` on the interface
+#      read "Allowed". It is now read from the rules above, in UFW's first-match order.
+_UFW_HDR = _UFW_V.split("To  ")[0] + "To                         Action      From\n--                         ------      ----\n"
+
+
+def _ts_allowed_for(rows):
+    """Drive the REAL get_server_status over a `ufw status verbose` holding `rows`."""
+    with _so_stub(_run_verb=lambda v, a=(), **k: (_UFW_HDR + rows, "", 0),
+                  tailscale_ssh_status=lambda: {"enabled": False, "running": True},
+                  os_update_available=lambda refresh=False: {},
+                  server_uptime=lambda: "", _check_sudo=lambda: True,
+                  detect_tailscale_interface=lambda: "tailscale0"):
+        return SO.get_server_status(force=True)["tailscale_ufw_allowed"]
+
+
+try:
+    check("ufw-tailscale: an ALLOW OUT row on tailscale0 alone does not read as 'let in'",
+          _ts_allowed_for("Anywhere                   ALLOW OUT   Anywhere on tailscale0\n"
+                          "22/tcp                     ALLOW IN    Anywhere\n") is False)
+    check("ufw-tailscale: a DENY IN on tailscale0 is not 'allowed'",
+          _ts_allowed_for("Anywhere on tailscale0     DENY IN     Anywhere\n") is False)
+    check("ufw-tailscale: ...nor a DENY IN that UFW evaluates before the allow",
+          _ts_allowed_for("Anywhere on tailscale0     DENY IN     Anywhere\n"
+                          "Anywhere on tailscale0     ALLOW IN    Anywhere\n") is False)
+    check("ufw-tailscale: a comment naming the interface is not a rule for it",
+          _ts_allowed_for("27015                      ALLOW IN    Anywhere                   # tailscale0\n")
+          is False)
+    check("ufw-tailscale: the panel's own `allow in on tailscale0` rule reads as allowed (control)",
+          _ts_allowed_for("22/tcp                     LIMIT IN    Anywhere\n"
+                          "Anywhere on tailscale0     ALLOW IN    Anywhere\n"
+                          "Anywhere                   ALLOW OUT   Anywhere on tailscale0\n") is True)
+finally:
+    SO.invalidate_server_status()
 
 # 11. apt's history.log writes Install:/Upgrade:/Remove:/Purge:, never "Packages:" — so that list
 #     was always empty. And `tail -50` almost always starts mid-record, so the first entry used to
@@ -2320,7 +2742,10 @@ try:
         if verb == "sshd-socket-active":
             return (_cs["socket"], "", 0 if _cs["socket"] == "active" else 3)
         if verb == "listening-sockets":
-            return ("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n", "", 0)
+            # 2222 listens only once sshd has been restarted onto it: change_ssh_port now refuses a
+            # new port something ALREADY listens on, which is what a static answer would say.
+            return (("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n" if _cs.get("up") else "")
+                    + "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n", "", 0)
         if verb == "sshd-current-ports":
             return ("Port 22\n", "", 0)
         return ("", "", 0)
@@ -2328,7 +2753,7 @@ try:
     _sm_core.run_privileged = _cs_priv
     _sm_core.write_root_file = lambda server, target, content, timeout=15: (
         _cs["writes"].append((target, content)), ("", "", 0))[1]
-    _sm_core._restart_sshd = lambda *a, **k: ("", "", 0)
+    _sm_core._restart_sshd = lambda *a, **k: (_cs.__setitem__("up", True), ("", "", 0))[1]
     _sm_core.is_local_server = lambda s: True
     _sm_hosts.remote_ufw_open_port = lambda *a, **k: (True, "")
     _sm_hosts.remote_ufw_close_port = lambda *a, **k: (True, "")
@@ -2350,7 +2775,7 @@ try:
     check("ssh.socket: ...and the socket snapshot is the one discarded on success",
           any(v == "sshd-socket-discard" for v, _a in _cs["verbs"]))
 
-    _cs["writes"], _cs["verbs"], _cs["socket"] = [], [], "inactive"
+    _cs["writes"], _cs["verbs"], _cs["socket"], _cs["up"] = [], [], "inactive", False
     _ok2, _msg2 = _sm_hosts.change_ssh_port(NS(port=22), 2222)
     _t2 = [t for t, _c in _cs["writes"]]
     check("ssh.socket: a NON socket-activated host still gets the sshd_config drop-in",
@@ -2386,13 +2811,15 @@ try:
         if verb == "sshd-effective-config":
             return (_sp["effective"], "", 0)
         if verb == "listening-sockets":
-            return ("LISTEN 0 128 0.0.0.0:2022 0.0.0.0:*\n", "", 0)
+            # 2022 appears once sshd is restarted onto it (a new port must be free beforehand).
+            return ("LISTEN 0 128 0.0.0.0:2022 0.0.0.0:*\n" if _sp.get("up")
+                    else "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n", "", 0)
         return ("", "", 0)
 
     _sm_core.run_privileged = _sp_priv
     _sm_core.write_root_file = lambda server, target, content, timeout=15: (
         _sp["writes"].append((target, content)), ("", "", 0))[1]
-    _sm_core._restart_sshd = lambda *a, **k: ("", "", 0)
+    _sm_core._restart_sshd = lambda *a, **k: (_sp.__setitem__("up", True), ("", "", 0))[1]
     _sm_core.is_local_server = lambda s: True
     _sm_hosts.remote_ufw_open_port = lambda *a, **k: (True, "")
     _sm_hosts.remote_ufw_close_port = lambda *a, **k: (True, "")
@@ -2409,7 +2836,7 @@ try:
           "ListenStream=0.0.0.0:2022\n" in _sp_body, repr(_sp_body))
     # POSITIVE CONTROL: the sshd_config path is authoritative there, so a STALE stored port must
     # NOT be unioned in — that would re-open a port the operator had deliberately closed.
-    _sp["socket"], _sp["effective"], _sp["writes"] = "inactive", "port 2222\n", []
+    _sp["socket"], _sp["effective"], _sp["writes"], _sp["up"] = "inactive", "port 2222\n", [], False
     _ok_np, _msg_np = _sm_hosts.change_ssh_port(NS(port=22), 2022)
     _np_body = _sp["writes"][0][1] if _sp["writes"] else ""
     check("ssh port: a NON socket-activated host still takes its ports from sshd -T alone",
@@ -2569,15 +2996,16 @@ try:
             return ("inactive", "", 3)
         if verb == "listening-sockets":
             # Both ports, so the verification step is not what most of this block is testing.
+            # 2222 only once sshd is restarted onto it: a new port has to be free beforehand.
             return (_lb.get("listening") or
                     ("LISTEN 0 128 127.0.0.1:22 0.0.0.0:*\n"
                      "LISTEN 0 128 10.0.0.5:22 0.0.0.0:*\n"
-                     "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n"), "", 0)
+                     + ("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n" if _lb.get("up") else "")), "", 0)
         return ("", "", 0)
 
     _sm_core.run_privileged = _lb_priv
     _sm_core.write_root_file = lambda *a, **k: (_lb["touched"].append("WRITE"), ("", "", 0))[1]
-    _sm_core._restart_sshd = lambda *a, **k: ("", "", 0)
+    _sm_core._restart_sshd = lambda *a, **k: (_lb.__setitem__("up", True), ("", "", 0))[1]
     _sm_core.is_local_server = lambda s: True
     _sm_hosts.remote_ufw_open_port = lambda *a, **k: (_lb["touched"].append("UFW"), (True, ""))[1]
     _sm_hosts.remote_ufw_close_port = lambda *a, **k: (True, "")
@@ -2600,10 +3028,28 @@ try:
     check("ssh bind: ...and the message does NOT promise a fallback that does not exist",
           "fallback" not in _msg.lower() and "10.0.0.5:22" in _msg, _msg[:110])
 
-    _lb["touched"] = []
+    _lb["touched"], _lb["up"] = [], False
     _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 2222)
     check("ssh bind: a PORT-only change still says the old port remains a fallback",
           _ok is True and "fallback" in _msg.lower(), _msg[:110])
+    # ...but only onto a FREE port. `ss -lnt` names no process, so the check that sshd came up was
+    # answered by any listener: moving SSH onto 8080 where a web app listens left sshd on 22,
+    # reported "SSH now listens on port 8080", and the route repointed the panel at the web app.
+    _lb["touched"], _lb["up"] = [], False
+    _lb["listening"] = ("LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
+                        "LISTEN 0 511 0.0.0.0:8080 0.0.0.0:*\n")
+    _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 8080)
+    check("ssh port: a new port another service already listens on is refused",
+          _ok is False and "already listening on port 8080" in _msg, "ok=%r msg=%r" % (_ok, _msg))
+    check("ssh port: ...before anything is touched (no ufw hole, no drop-in written)",
+          "UFW" not in _lb["touched"] and "WRITE" not in _lb["touched"], repr(_lb["touched"]))
+    _lb["touched"] = []
+    _lb["listening"] = "\n"
+    _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 2222)
+    check("ssh port: ...and an unread listener list refuses too, rather than reading as free",
+          _ok is False and "Could not list" in _msg and "WRITE" not in _lb["touched"],
+          "ok=%r msg=%r" % (_ok, _msg))
+    _lb["listening"] = None
     # The address the host does NOT have: under socket activation systemd binds it anyway, so the
     # old port-only verification passed while SSH answered nowhere. Refused up front now.
     _lb["touched"] = []
@@ -2612,6 +3058,28 @@ try:
           _ok is False and "isn't an address on this host" in _msg, _msg[:80])
     check("ssh bind: ...and that too is refused before anything is touched",
           _lb["touched"] == [], repr(_lb["touched"]))
+    # ...and when the host's address list could not be READ (`ip` timed out, or iproute2 is
+    # missing). host_has_ip answered True then, so this guard — the only one on the panel's own
+    # host — let the missing address through and SSH answered nowhere. The REAL host_has_ip here,
+    # with the kernel fallback stubbed: the caller has to reach it, not a stub of it.
+    _so.host_has_ip = _lb_orig[6]
+    _lb_sorun, _lb_kern = _so._run, _so._kernel_has_ip
+    try:
+        _so._run = lambda c, **k: ("", "Command timed out", -1)
+        _so._kernel_has_ip = lambda addr: False
+        _lb["touched"] = []
+        _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 22, bind_addr="192.0.2.99")
+        check("ssh bind: an unreadable address list does not let a foreign address through",
+              _ok is False and "isn't an address on this host" in _msg and _lb["touched"] == [],
+              "ok=%r msg=%r touched=%r" % (_ok, _msg[:80], _lb["touched"]))
+        _so._kernel_has_ip = lambda addr: str(addr) == "10.0.0.5"
+        _lb["touched"] = []
+        _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 22, bind_addr="10.0.0.5")
+        check("ssh bind: ...while the host's own address still proceeds when the kernel says so "
+              "(control)", _ok is True and "WRITE" in _lb["touched"], "ok=%r msg=%r" % (_ok, _msg[:80]))
+    finally:
+        _so._run, _so._kernel_has_ip = _lb_sorun, _lb_kern
+        _so.host_has_ip = lambda ip: ip in _lb["host_ips"]
 
     # The backstop, for an address that IS on the host but where sshd ends up somewhere else: the
     # verification must look for that ADDRESS, not merely something on that port. A port-only match
@@ -2656,8 +3124,61 @@ try:
     _sm_core.run_command = lambda *a, **k: ("NOTINSTALLED\n", "", 0)
     check("sentinel: ...and a clear 'not installed' is still not installed",
           _sm_hosts.remote_check_tailscale(NS(id=8003)).get("installed") is False)
+    # ...and "not installed" is only a READING when the probe answered. The unread probe came back
+    # as {"installed": False} and nothing else, which the Tailscale modal printed as "Tailscale is
+    # not installed on <host>" with an Install button, about a host nobody reached.
+    _sm_core.run_command = lambda *a, **k: ("", "ssh: connect to host ... timed out", -1)
+    check("sentinel: ...and says it could not read a host that never answered",
+          _sm_hosts.remote_check_tailscale(NS(id=8004)).get("unreachable") is True,
+          "an unread probe is indistinguishable from 'not installed'")
+    _sm_core.run_command = lambda *a, **k: ("NOTINSTALLED\n", "", 0)
+    check("sentinel: ...while an answered 'not installed' is not flagged unreadable",
+          "unreachable" not in _sm_hosts.remote_check_tailscale(NS(id=8005)),
+          "the control failed — every answer is flagged, so the check above proves nothing")
+    # Installed, but the status probe never answered: not "installed but not running", which
+    # offers to re-authenticate the node. `|| echo '{}'` makes an ANSWERED failure "{}".
+    _ts_ans = iter([("/usr/bin/tailscale\nINSTALLED\n", "", 0), ("", "timed out", -1)])
+    _sm_core.run_command = lambda *a, **k: next(_ts_ans)
+    check("sentinel: an unanswered status probe is flagged, not read as 'not running'",
+          _sm_hosts.remote_check_tailscale(NS(id=8006)).get("unreachable") is True)
+    _ts_ans = iter([("/usr/bin/tailscale\nINSTALLED\n", "", 0), ("{}", "", 0)])
+    _sm_core.run_command = lambda *a, **k: next(_ts_ans)
+    _ts_r = _sm_hosts.remote_check_tailscale(NS(id=8007))
+    check("sentinel: ...while an answered '{}' is a real 'installed, not running'",
+          "unreachable" not in _ts_r and _ts_r.get("installed") is True and _ts_r.get("running") is False,
+          repr(_ts_r))
 finally:
     _sm_core.run_command = _ns_saved
+
+# ── tailscale finalize must not claim a UFW rule that was refused ──────────────────────────────
+# The route reports ufw_allowed = bool(log), to the UI ("UFW now allows the tailscale0 interface")
+# and to the audit row. The log line was appended whatever the allow answered, so a refused or
+# timed-out `ufw allow in on tailscale0` was reported as a firewall change that happened.
+_tf_saved = (_sm_core.run_privileged, _sm_hosts.remote_check_tailscale)
+try:
+    _sm_hosts.remote_check_tailscale = lambda s: {"installed": True, "running": True,
+                                                  "tailscale_ip": "100.64.0.9", "dns_name": ""}
+
+    def _tf_priv(allow_rc):
+        def _run(s, verb, args=(), **k):
+            if verb == "ufw-status":
+                return ("Status: active\n", "", 0)
+            if verb == "ufw-allow-iface":
+                return (("Rule added" if allow_rc == 0 else "ERROR: problem running iptables"),
+                        "", allow_rc)
+            return ("", "", 0)
+        return _run
+    _sm_core.run_privileged = _tf_priv(1)
+    _tf_st, _tf_log = _sm_hosts.remote_tailscale_finalize(NS(name="h"))
+    check("tailscale finalize: a refused tailscale0 allow is not reported as applied",
+          _tf_log == "", "log %r would read as ufw_allowed=True" % (_tf_log,))
+    _sm_core.run_privileged = _tf_priv(0)
+    _tf_st, _tf_log = _sm_hosts.remote_tailscale_finalize(NS(name="h"))
+    check("tailscale finalize: ...while an allow that succeeded still is",
+          "allowed tailscale0" in _tf_log and _tf_st.get("running") is True,
+          "the control failed (log %r) — the check above proves nothing" % (_tf_log,))
+finally:
+    _sm_core.run_privileged, _sm_hosts.remote_check_tailscale = _tf_saved
 
 # ── migrating to Tailscale SSH must not burn the bridge before testing the new one ───────────
 # remote_migrate_to_tailscale closes port 22, and its caller then blanks auth_credential — the
@@ -2956,6 +3477,51 @@ try:
     check("bootstrap: ...and the job says the firewall was not enabled, not 'complete'",
           _bnok is False and "NOT enabled" in _bnmsg and "Could not acquire lock" in _bnmsg
           and "NOT DONE" in _bnlog, "ok=%r msg=%r" % (_bnok, _bnmsg))
+
+    # The SSH port was hard-coded 22 in both the UFW step and the fail2ban jail. A host whose
+    # sshd had been moved to 2222 had UFW switched on at deny-incoming with only 22 let in — the
+    # panel's own connection and the operator's then met a closed port — and its jail banned on
+    # a port nothing listened on. The ports are sshd's effective ones plus the one the panel uses.
+    def _bs_ports(eff, port, eff_rc=0):
+        _bs_ufw.clear()
+        _jail = []
+
+        def _priv(s, verb, args=None, **k):
+            _bs_ufw.append((verb, list(args or [])))
+            if verb == "sshd-effective-config":
+                return (eff, "", eff_rc)
+            return ("", "", 0)
+        _sm_core.run_privileged = _priv
+        _sm_core.write_root_file = lambda s, target, content, **k: (
+            _jail.append(content) if target == "fail2ban-jail-local" else None, ("", "", 0))[1]
+        _sm_hosts.remote_bootstrap_vps(
+            NS(id=9105, host="203.0.113.14", auth_method="key", port=port), set_timezone="",
+            enable_ufw=True, install_lgsm_deps=False, username="", install_fail2ban=True,
+            do_reboot=False)
+        _lim = [a[0] for v, a in _bs_ufw if v == "ufw-limit-port"]
+        _en = _bs_ufw.index(("ufw-enable", [])) if ("ufw-enable", []) in _bs_ufw else -1
+        _lim_before_enable = all(_bs_ufw.index(("ufw-limit-port", [x])) < _en for x in _lim)
+        return _lim, _en, _lim_before_enable, (_jail[0] if _jail else ""), [v for v, _a in _bs_ufw]
+    _lim, _en, _lbe, _jc, _ran = _bs_ports("port 2222\npermitrootlogin no\n", 2222)
+    check("bootstrap: sshd on 2222 is the port UFW lets in before it is switched on, not 22",
+          _lim == ["2222/tcp"] and _en >= 0 and _lbe,
+          "limited %r, enable at %d — UFW went on with SSH's real port shut" % (_lim, _en))
+    check("bootstrap: ...its fail2ban jail bans on 2222, not 22",
+          "port = 2222\n" in _jc and "port = 22\n" not in _jc, "jail.local %r" % (_jc,))
+    check("bootstrap: ...and no port-22 rule is deleted on a host whose SSH is not on 22",
+          "ufw-delete-allow-app" not in _ran, "ran %r" % (_ran,))
+    _lim, _en, _lbe, _jc, _ran = _bs_ports("port 22\nport 2222\n", 22)
+    check("bootstrap: every port sshd listens on is limited, and the jail names them all",
+          sorted(_lim) == ["22/tcp", "2222/tcp"] and _lbe and "port = 22,2222\n" in _jc,
+          "limited %r, jail %r" % (_lim, _jc))
+    _lim, _en, _lbe, _jc, _ran = _bs_ports("", 2222, eff_rc=1)
+    check("bootstrap: an unread sshd -T still keeps the port the panel connects on open",
+          _lim == ["2222/tcp"] and _lbe and "port = 2222\n" in _jc,
+          "limited %r, jail %r" % (_lim, _jc))
+    _lim, _en, _lbe, _jc, _ran = _bs_ports("port 22\n", 22)
+    check("bootstrap: ...while a stock host on 22 is limited on 22 alone, as before (positive control)",
+          _lim == ["22/tcp"] and _lbe and "port = 22\n" in _jc and "ufw-delete-allow-app" in _ran,
+          "limited %r, jail %r" % (_lim, _jc))
 finally:
     (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
      _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,

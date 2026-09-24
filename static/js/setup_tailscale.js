@@ -24,6 +24,14 @@ function tsRender(s){
     }
     return;
   }
+  if(s.running){
+    // Running, but no tailnet name came back (a `status --json` that timed out on a busy host is
+    // enough). This fell through to "Tailscale isn't installed on this host yet" with an Install
+    // button — right after the operator had approved the machine.
+    tsBox.innerHTML='<div class="small text-secondary mb-2">Connected to your tailnet, but its name couldn\'t be read yet.</div>'  // nosemgrep - literals plus _da('tsRefresh'), a constant action name
+      + '<button type="button" class="btn btn-outline-secondary w-100"' + _da('tsRefresh') + '><i class="bi bi-arrow-repeat"></i> Check again</button>';
+    return;
+  }
   if(s.installed && !s.running){
     tsBox.innerHTML='<div class="small text-secondary mb-2">Tailscale is installed but not connected to a tailnet yet.</div>'
       + '<button type="button" class="btn btn-primary w-100" id="ts-up"><i class="bi bi-box-arrow-up-right"></i> Connect to my tailnet</button>'
@@ -65,7 +73,16 @@ function tsDoUp(){
     if (_tsPoll) clearInterval(_tsPoll);
     var _tsEnd = Date.now() + 5 * 60 * 1000;
     var t = setInterval(function(){
-      if (Date.now() > _tsEnd) { clearInterval(t); _tsPoll = null; return; }
+      if (Date.now() > _tsEnd) {
+        // Stopping used to change nothing on screen: "Waiting for you to authorize…" stayed up with
+        // nothing watching, and on the install path there was no enabled button left to retry.
+        clearInterval(t); _tsPoll = null;
+        var w = document.getElementById('ts-wait');
+        if (w) w.innerHTML = '<span class="text-secondary">Stopped waiting. Once you have approved '  // nosemgrep - literals only
+          + 'this machine:</span> <button type="button" class="btn btn-sm btn-outline-secondary py-0"'
+          + _da('tsRefresh') + '><i class="bi bi-arrow-repeat"></i> Check again</button>';
+        return;
+      }
       tsApi('status').then(function(s){
         if (s.running) { clearInterval(t); _tsPoll = null; tsRender(s); }
       }).catch(function(){});

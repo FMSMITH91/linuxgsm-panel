@@ -70,10 +70,18 @@ jobs:
       security-events: write   # upload SARIF to the Security tab (code scanning)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The job token can write code-scanning alert state, which the open-alerts gates read
+          # as the truth. Only upload-sarif needs it, and it is handed that directly; leaving it
+          # in .git/config put it in reach of every tool this job installs and runs.
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
-      - run: python -m pip install --quiet bandit bandit-sarif-formatter
+      # Exact versions and hashes, wheels only — see the header of that file for why.
+      - run: >-
+          python -m pip install --quiet --require-hashes --only-binary :all:
+          -r .github/ci-requirements/bandit.txt
       # Emit SARIF and publish it to GitHub code scanning (the Security tab), alongside
       # CodeQL. The skips drop checks that don't apply to this app by design: assert,
       # bind-all, the subprocess/shell + paramiko command family (commands are _quote()'d

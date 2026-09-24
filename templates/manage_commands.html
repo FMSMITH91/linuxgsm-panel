@@ -2,6 +2,13 @@
 {% block title %}Custom Commands{% endblock %}
 
 {% macro scope_select(cmd) %}
+{# A command scoped to a game the current list does not hold — LinuxGSM dropped or renamed it, or
+   the list could not be fetched and nothing is cached (load_game_list() is then []). No option
+   matched, so the browser selected the first, "All games", and pressing Save on an unrelated edit
+   silently widened the command to every game its groups reach. The stored scope is always offered,
+   and selected. #}
+{% set orphan_game = cmd and cmd.scope_type == 'game'
+                     and cmd.scope_value not in games|map(attribute='shortname')|list %}
 <select name="scope" class="form-select form-select-sm">
   <option value="all|" {% if not cmd or cmd.scope_type == 'all' %}selected{% endif %}>All games</option>
   <optgroup label="By engine">
@@ -11,12 +18,18 @@
     {% endfor %}
   </optgroup>
   <optgroup label="By game">
+    {% if orphan_game %}
+    <option value="game|{{ cmd.scope_value }}" selected data-no-i18n>{{ cmd.scope_value }}</option>
+    {% endif %}
     {% for g in games %}
     <option value="game|{{ g.shortname }}"
             {% if cmd and cmd.scope_type == 'game' and cmd.scope_value == g.shortname %}selected{% endif %}>{{ g.name }}</option>
     {% endfor %}
   </optgroup>
 </select>
+{% if orphan_game %}
+<div class="form-text">This game is not in the current LinuxGSM game list. Saving keeps the command scoped to it.</div>
+{% endif %}
 {% endmacro %}
 
 {# Every id here is prefixed with `idp` — the macro renders once per command AND once for the

@@ -26,6 +26,12 @@ try:
     check("file guard: delete_path refuses a traversal onto serverfiles",
           _ok2 is False and not _sent_rm, "ran: %s" % _sent_rm[:1])
     _sent_rm.clear()
+    # Out of the home and back in by name: _safe_abspath resolves this to /home/<user>/lgsm, and
+    # the guard used to normalise it against "/" into "<user>/lgsm", which is not protected.
+    _ok4, _ = _sm_files.delete_path(object(), _SELF, "x/../../%s/lgsm" % _SELF, selfname=_SELF)
+    check("file guard: delete_path refuses a path that climbs out and back in onto lgsm",
+          _ok4 is False and not _sent_rm, "ran: %s" % _sent_rm[:1])
+    _sent_rm.clear()
     _ok3, _ = _sm_files.delete_path(object(), _SELF, "addons/junk.txt", selfname=_SELF)
     check("file guard: a real file still gets deleted, at its resolved path",
           _ok3 is True and len(_sent_rm) == 1
@@ -224,7 +230,8 @@ def _run_watch(scripted, cfg=None):
     ran_inline = []
     saved = (_TG.notifications._cfg, _TG.notifications.telegram_get_updates,
              _TG.notifications.telegram_set_commands, _TG.decrypt_secret,
-             _TG._handle_telegram_command, _TG._tg_dispatch, _TG.time)
+             _TG._handle_telegram_command, _TG._tg_dispatch, _TG.time,
+             _TG.notifications.telegram_get_me)
     ft = _FakeTime()
     try:
         _default_cfg = {"telegram": {"enabled": True, "accept_commands": True,
@@ -240,12 +247,13 @@ def _run_watch(scripted, cfg=None):
         _TG.decrypt_secret = lambda v: v
         _TG.notifications.telegram_set_commands = \
             lambda tok, clear=False: (setcmds.append(clear), True)[1]
+        _TG.notifications.telegram_get_me = lambda tok: "PanelBot"   # never the network
         _TG._handle_telegram_command = lambda app, tok, chat, text, sender=None: ran_inline.append(text)
         _TG._tg_dispatch = lambda app, tok, chat, text, sender=None: handled.append(text)
         _TG.time = ft
 
         def _get(token, offset=None, timeout=25):
-            calls.append({"offset": offset, "timeout": timeout})
+            calls.append({"offset": offset, "timeout": timeout, "token": token})
             if not script:
                 raise _StopWatch()
             return script.pop(0)
@@ -257,7 +265,8 @@ def _run_watch(scripted, cfg=None):
     finally:
         (_TG.notifications._cfg, _TG.notifications.telegram_get_updates,
          _TG.notifications.telegram_set_commands, _TG.decrypt_secret,
-         _TG._handle_telegram_command, _TG._tg_dispatch, _TG.time) = saved
+         _TG._handle_telegram_command, _TG._tg_dispatch, _TG.time,
+         _TG.notifications.telegram_get_me) = saved
     return handled, calls, ft, setcmds, ran_inline
 
 
@@ -313,6 +322,38 @@ check("telegram watch: the '/' menu is registered while commands are on",
       False in _sc, str(_sc))
 check("telegram watch: turning commands off CLEARS the '/' menu, not leaving it advertising them",
       True in _sc, str(_sc))
+
+# 5. A NEW BOT TOKEN starts over. update_id sequences are per bot and unrelated, and offset,
+#    primed and registered were reset only when commands were switched off — so after the token was
+#    replaced the loop polled the new bot at the OLD bot's offset. Above its ids, every command was
+#    confirmed and dropped with no reply until a restart; below them, the priming read was skipped
+#    and a day of backlog replayed. And the new bot never got its '/' menu.
+_on_b = {"telegram": {"enabled": True, "accept_commands": True, "token": "tokB", "chat_id": "555"}}
+_handled, _calls, _ft, _sc, _inline = _run_watch(
+    [[{"update_id": 500, "message": {"text": "/old", "chat": {"id": "555"}}}], [], []],
+    cfg=[_on, _on, _on_b])
+_b_calls = [c for c in _calls if c["token"] == "tokB"]
+check("telegram watch: a replaced token is PRIMED afresh, not polled at the old bot's offset",
+      _b_calls[:1] == [{"offset": -1, "timeout": 0, "token": "tokB"}], str(_calls))
+check("telegram watch: ...and the new bot gets its own '/' menu",
+      _sc.count(False) == 2, str(_sc))
+check("telegram watch: ...while the old bot was polled past its backlog as before (control)",
+      {"offset": 501, "timeout": 25, "token": "tok"} in _calls, str(_calls))
+
+# 6. A command addressed to ANOTHER bot is that bot's. The '@target' was stripped and never read,
+#    so in a group where this bot sees every message, '/update@MinecraftBot' updated and restarted
+#    the panel. A command naming THIS bot, or none, still runs.
+_at = [{"update_id": 60, "message": {"text": "/update@MinecraftBot", "chat": {"id": "555"}}},
+       {"update_id": 61, "message": {"text": "/status@panelbot", "chat": {"id": "555"}}},
+       {"update_id": 62, "message": {"text": "/servers", "chat": {"id": "555"}}}]
+_handled, _calls, _, _sc, _inline = _run_watch([[], _at])
+check("telegram watch: '/update@OtherBot' is not run by this bot",
+      "/update@MinecraftBot" not in _handled, str(_handled))
+check("telegram watch: ...while '/cmd@ThisBot' (any case) and a bare '/cmd' still run (control)",
+      _handled == ["/status@panelbot", "/servers"], str(_handled))
+check("telegram: an '@' naming a bot this one cannot identify yet is not assumed to be it",
+      _TG._tg_addressed_elsewhere("/stop@AnyBot x", None) is True
+      and _TG._tg_addressed_elsewhere("/stop x", None) is False)
 
 # ── The ssh_manager package must keep resolving names at CALL time ────────────────────────────
 # The whole split rests on one property: nothing inside the package binds another submodule's
@@ -1007,12 +1048,271 @@ _drift = []
 for _v, _a in _VERB_SAMPLES.items():
     if _v not in _helper.VERBS or _v not in _priv.verbs():
         continue
-    _hv = _helper.VERBS[_v][1](_helper.validate(_v, _a))
+    # What the helper is actually handed: helper_argv's arguments, which for a SECRET_STDIN verb
+    # leave the secret out (it goes on stdin).
+    # A helper that refuses what the panel sends (an arity drift) is drift too — reported by name,
+    # not left to crash the part.
+    try:
+        _hv = _helper.VERBS[_v][1](_helper.validate(_v, _priv.helper_argv(_v, _a)[4:]))
+    except ValueError as _e:
+        _hv = "refused: %s" % _e
     _pv = _priv.tool_argv(_v, _a)
     if _hv != _pv:
         _drift.append("%s: helper=%r panel=%r" % (_v, _hv, _pv))
 check("privileged: helper and panel build an identical argv for every verb",
       not _drift, "; ".join(_drift[:2]))
+
+# ── a secret is never on a command line ───────────────────────────────────────────────────────
+# The Ubuntu Pro token and the Tailscale auth key were argv elements on every path: `sudo -n
+# panel-helper pro-attach <token>` then `pro attach <token>` locally, `sudo bash -c 'pro attach
+# <token>'` and `tailscale up --auth-key <key>` over SSH. /proc/<pid>/cmdline is world-readable
+# without hidepid, so any local account (a game-server user) could read them while the command ran.
+# They now travel on stdin only. Checked on every rendering, then driven: the helper's main(), each
+# run_privileged path, each run_command transport, and the remote rendering run for real.
+_SEC_ARGS = {"pro-attach": ["Zq7Tok3nSecretX9"],
+             "tailscale-up-key": ["tskey-auth-SeCrEtKeY42", "yes", "10.0.0.0/24", "tag:server"]}
+check("secrets: exactly the two secret-carrying verbs are declared, on both sides",
+      set(_priv.SECRET_STDIN) == set(_SEC_ARGS) == set(getattr(_helper, "SECRET_STDIN", {})),
+      "panel=%s helper=%s" % (sorted(_priv.SECRET_STDIN), sorted(getattr(_helper, "SECRET_STDIN", {}))))
+_sec_on_argv, _sec_in_stdin, _sec_doc_drift = [], [], []
+for _v, _a in _SEC_ARGS.items():
+    _secret = _a[0]
+    for _label, _cmd in (("helper argv", " ".join(_priv.helper_argv(_v, _a))),
+                         ("tool argv", " ".join(_priv.tool_argv(_v, _a))),
+                         ("remote", _priv.remote_command(_v, _a)),
+                         ("remote unmerged", _priv.remote_command(_v, _a, merge_stderr=False))):
+        if _secret in _cmd:
+            _sec_on_argv.append("%s %s" % (_v, _label))
+    for _label, _in in (("helper stdin", _priv.helper_stdin(_v, _a)),
+                        ("tool stdin", _priv.stdin_for(_v, _a)),
+                        ("remote stdin", _priv.remote_stdin(_v, _a))):
+        if _secret not in (_in or ""):
+            _sec_in_stdin.append("%s %s" % (_v, _label))
+    if _v in getattr(_helper, "SECRET_STDIN", {}):
+        _hchk, _hdoc = _helper.SECRET_STDIN[_v]
+        if _hdoc(_hchk(_secret)) != _priv.stdin_for(_v, _a):
+            _sec_doc_drift.append(_v)
+check("secrets: the token and the auth key are on no argv and in no remote command line",
+      not _sec_on_argv, repr(_sec_on_argv))
+check("secrets: ...they travel on stdin instead, on every path (the positive control)",
+      not _sec_in_stdin, repr(_sec_in_stdin))
+check("secrets: the helper hands the tool the same bytes a remote gets",
+      not _sec_doc_drift, repr(_sec_doc_drift))
+check("secrets: the other tailscale arguments are still ARGUMENTS",
+      _priv.helper_argv("tailscale-up-key", _SEC_ARGS["tailscale-up-key"])[4:]
+      == ["yes", "10.0.0.0/24", "tag:server"]
+      and "--advertise-routes=10.0.0.0/24" in _priv.remote_command(
+          "tailscale-up-key", _SEC_ARGS["tailscale-up-key"]))
+check("secrets: a non-secret verb sends nothing extra on stdin",
+      _priv.remote_stdin("ufw-status", ["plain"]) is None
+      and _priv.helper_stdin("ufw-delete-num", ["3"]) == _priv.stdin_for("ufw-delete-num"))
+
+# The helper's side, through its real main(): the secret is read from stdin and checked, and the
+# tool gets it on ITS stdin; a bad one is refused without being echoed; and the old shape, with the
+# secret as an argument, is refused rather than run.
+import io as _sec_io
+import types as _sec_types
+_sec_runs = []
+_sec_saved = (_helper.subprocess, _helper.resolve, sys.stdin, sys.stderr, sys.stdout)
+
+
+def _sec_helper(argv, stdin):
+    del _sec_runs[:]
+    sys.stdin, sys.stderr, sys.stdout = _sec_io.StringIO(stdin), _sec_io.StringIO(), _sec_io.StringIO()
+    try:
+        rc = _helper.main(["panel-helper"] + argv)
+        return rc, sys.stderr.getvalue()
+    finally:
+        sys.stdin, sys.stderr, sys.stdout = _sec_saved[2], _sec_saved[3], _sec_saved[4]
+
+
+try:
+    _helper.subprocess = _sec_types.SimpleNamespace(
+        run=lambda argv, **kw: (_sec_runs.append((list(argv), kw.get("input"))),
+                                _sub.CompletedProcess(argv, 0, "", ""))[1],
+        TimeoutExpired=_sub.TimeoutExpired)
+    _helper.resolve = lambda n: "/usr/bin/" + n
+    _sec_pro = _sec_helper(["pro-attach"], "Zq7Tok3nSecretX9\n")
+    check("secrets: the helper runs pro attach with the token on pro's stdin, not its argv",
+          _sec_pro[0] == 0 and len(_sec_runs) == 1
+          and _sec_runs[0][0] == ["/usr/bin/pro", "attach", "--attach-config", "-"]
+          # Built, not written out: a `token: "<16 alnum>"` literal is what gitleaks'
+          # generic-api-key rule flags, and the history it scans is not rewritten.
+          and _sec_runs[0][1] == 'token: "%s"\n' % _SEC_ARGS["pro-attach"][0],
+          repr((_sec_pro, _sec_runs)))
+    _sec_ts = _sec_helper(["tailscale-up-key", "yes", "-", "-"], "tskey-auth-SeCrEtKeY42\n")
+    check("secrets: the helper runs tailscale up reading the key from stdin, not its argv",
+          _sec_ts[0] == 0 and len(_sec_runs) == 1
+          and "file:/dev/stdin" in _sec_runs[0][0]
+          and not any("SeCrEt" in _x for _x in _sec_runs[0][0])
+          and _sec_runs[0][1] == "tskey-auth-SeCrEtKeY42\n", repr((_sec_ts, _sec_runs)))
+    _sec_bad = _sec_helper(["pro-attach"], "Zq7Tok3n;SecretX9\n")
+    check("secrets: a malformed token on stdin is refused, runs nothing, and is not echoed",
+          _sec_bad[0] == 2 and not _sec_runs and "SecretX9" not in _sec_bad[1], repr(_sec_bad))
+    _sec_old = _sec_helper(["pro-attach", "Zq7Tok3nSecretX9"], "")
+    check("secrets: the token as an ARGUMENT (the old shape) is refused, not run",
+          _sec_old[0] == 2 and not _sec_runs, repr(_sec_old))
+finally:
+    _helper.subprocess, _helper.resolve = _sec_saved[0], _sec_saved[1]
+
+# ...and the panel's side: every run_privileged path sends the secret on stdin and no command line
+# carries it. The transports are stubbed on _core, where run_privileged looks them up.
+_sec_core_saved = (_sm_core.run_command, _sm_core._exec_local_argv, _sm_core._run_local,
+                   _sm_core.is_local_server, _sm_core.helper_present)
+_sec_seen = []
+try:
+    _sm_core.run_command = lambda s, c, **k: (_sec_seen.append(("remote", c, k.get("stdin_text"))),
+                                              ("", "", 0))[1]
+    _sm_core._exec_local_argv = lambda argv, **k: (
+        _sec_seen.append(("argv", " ".join(argv), k.get("stdin_text"))), ("", "", 0))[1]
+    _sm_core._run_local = lambda c, **k: (_sec_seen.append(("fallback", c, k.get("stdin_text"))),
+                                          ("", "", 0))[1]
+    for _v, _a in _SEC_ARGS.items():
+        _sm_core.is_local_server = lambda s: False
+        _sm_core.run_privileged(object(), _v, _a)
+        _sm_core.is_local_server = lambda s: True
+        _sm_core.helper_present = lambda: True
+        _sm_core.run_privileged(object(), _v, _a)
+        _sm_core.run_privileged(object(), _v, _a, sudo=False)
+        _sm_core.helper_present = lambda: False
+        _sm_core.run_privileged(object(), _v, _a)
+    _sm_core.is_local_server = lambda s: False
+    _sm_core.run_privileged(object(), "ufw-status", ["plain"])
+finally:
+    (_sm_core.run_command, _sm_core._exec_local_argv, _sm_core._run_local,
+     _sm_core.is_local_server, _sm_core.helper_present) = _sec_core_saved
+_sec_paths = [(_k, _c, _i) for _k, _c, _i in _sec_seen if "ufw" not in _c]
+check("secrets: run_privileged took all four paths for both verbs (the gate has a subject)",
+      sorted(_k for _k, _c, _i in _sec_paths)
+      == sorted(["remote", "argv", "argv", "fallback"] * 2), repr([_k for _k, _c, _i in _sec_paths]))
+check("secrets: run_privileged puts the secret on no command line, on any path",
+      not [_k for _k, _c, _i in _sec_paths if "Zq7Tok3nSecretX9" in _c or "SeCrEtKeY42" in _c],
+      repr([(_k, _c) for _k, _c, _i in _sec_paths]))
+check("secrets: ...and hands it to every one of them on stdin",
+      all(_i and ("Zq7Tok3nSecretX9" in _i or "SeCrEtKeY42" in _i) for _k, _c, _i in _sec_paths),
+      repr([(_k, _i) for _k, _c, _i in _sec_paths]))
+check("secrets: a verb with no secret passes no stdin to the remote transport",
+      [(_k, _i) for _k, _c, _i in _sec_seen if "ufw" in _c] == [("remote", None)],
+      repr([(_k, _i) for _k, _c, _i in _sec_seen if "ufw" in _c]))
+
+# The transports carry it. Local: a real shell, with `cat` as the command, so what comes back IS
+# what reached its stdin. The paramiko path, with a recording client: written, then EOF, in that
+# order. The ssh CLI path, with Popen swapped for `cat`, so the stdin it pipes comes back out.
+_sec_t_saved = (_sm_core.is_local_server, _sm_core.get_connection, _sm_core._drain_exec,
+                _sm_core.subprocess, _sm_core._resolve_ts_host, _sm_core._ssh_mux_opts,
+                _sm_core._ssh_connect_timeout)
+try:
+    _sm_core.is_local_server = lambda s: True
+    _sec_local = _sm_core.run_command(object(), "cat", sudo=False, stdin_text="s3cret-on-stdin\n")
+    _sec_local0 = _sm_core.run_command(object(), "cat", sudo=False)
+    check("secrets: the local transport feeds stdin_text to the command",
+          _sec_local == ("s3cret-on-stdin", "", 0), repr(_sec_local))
+    check("secrets: ...and without it the command still gets EOF, not the panel's stdin",
+          _sec_local0 == ("", "", 0), repr(_sec_local0))
+    _sm_core.is_local_server = lambda s: False
+    _sec_order = []
+
+    class _SecChan:
+        def shutdown_write(self):
+            _sec_order.append("eof")
+
+    class _SecIn:
+        channel = _SecChan()
+
+        def write(self, d):
+            _sec_order.append(("write", d))
+
+        def flush(self):
+            pass
+
+    class _SecClient:
+        def exec_command(self, cmd, timeout=None):
+            _sec_order.append(("exec", cmd))
+            return _SecIn(), NS(channel=None), NS(channel=None)
+
+    _sm_core.get_connection = lambda s: _SecClient()
+    _sm_core._drain_exec = lambda ch, **k: (b"", b"", 0, False)
+    _sec_srv = NS(auth_method="key", sudo_enabled=True, port=22, username="u", host="h")
+    _sm_core.run_command(_sec_srv, "cat > /dev/null", sudo=True, stdin_text="s3cret-on-stdin\n")
+    check("secrets: the paramiko transport writes stdin_text, THEN sends EOF",
+          [_x if isinstance(_x, str) else _x[0] for _x in _sec_order] == ["exec", "write", "eof"]
+          and _sec_order[1] == ("write", "s3cret-on-stdin\n")
+          and "s3cret" not in _sec_order[0][1], repr(_sec_order))
+    del _sec_order[:]
+    _sm_core.run_command(_sec_srv, "true", sudo=True)
+    check("secrets: ...and with none, only the EOF (the control)",
+          [_x if isinstance(_x, str) else _x[0] for _x in _sec_order] == ["exec", "eof"],
+          repr(_sec_order))
+
+    class _SecSub:
+        PIPE, DEVNULL, TimeoutExpired = _sub.PIPE, _sub.DEVNULL, _sub.TimeoutExpired
+
+        @staticmethod
+        def Popen(argv, **kw):
+            _sec_order.append(("ssh", list(argv), kw.get("stdin")))
+            return _sub.Popen(["cat"], **kw)
+
+    _sm_core.subprocess = _SecSub
+    _sm_core._resolve_ts_host = lambda s: "h"
+    _sm_core._ssh_mux_opts = lambda: []
+    _sm_core._ssh_connect_timeout = lambda: 5
+    del _sec_order[:]
+    _sec_ts_srv = NS(auth_method="tailscale", sudo_enabled=True, port=22, username="u", host="h")
+    _sec_cli = _sm_core.run_command(_sec_ts_srv, "cat", sudo=True, stdin_text="s3cret-on-stdin\n")
+    check("secrets: the ssh CLI transport pipes stdin_text to ssh, and not in its argv",
+          _sec_cli == ("s3cret-on-stdin", "", 0)
+          and not any("s3cret" in _x for _x in _sec_order[0][1]), repr((_sec_cli, _sec_order)))
+    del _sec_order[:]
+    _sec_cli0 = _sm_core.run_command(_sec_ts_srv, "cat", sudo=True)
+    check("secrets: ...and without it ssh still gets /dev/null, never the panel's stdin",
+          _sec_cli0 == ("", "", 0) and _sec_order[0][2] == _sub.DEVNULL, repr((_sec_cli0, _sec_order)))
+finally:
+    (_sm_core.is_local_server, _sm_core.get_connection, _sm_core._drain_exec,
+     _sm_core.subprocess, _sm_core._resolve_ts_host, _sm_core._ssh_mux_opts,
+     _sm_core._ssh_connect_timeout) = _sec_t_saved
+
+# And the remote rendering, RUN: through the real local transport, with fake `pro` and `tailscale`
+# first on PATH that record their argv and read the file they were pointed at. The secret must reach
+# the tool through a root-only temp FILE (an SSH session's fd 0 can be a socket, which /dev/stdin
+# cannot reopen), never its argv, and the file must be gone afterwards.
+import tempfile as _sec_tf
+_sec_dir = _sec_tf.mkdtemp(prefix="panel-secret-")
+try:
+    _sec_bin = os.path.join(_sec_dir, "bin")
+    os.makedirs(_sec_bin)
+    for _tool in ("pro", "tailscale"):
+        with open(os.path.join(_sec_bin, _tool), "w") as _fh:
+            _fh.write('#!/bin/bash\nprintf "%s\\n" "$@" > "$OUT/argv"\nprev=\n'
+                      'for a in "$@"; do case "$a" in file:*) f="${a#file:}";; esac\n'
+                      '  [ "$prev" = --attach-config ] && f="$a"; prev="$a"; done\n'
+                      'echo "$f" > "$OUT/path"; stat -c %a "$f" > "$OUT/mode"; cat "$f" > "$OUT/got"\n')
+        os.chmod(os.path.join(_sec_bin, _tool), 0o755)
+    _sm_core_isl = _sm_core.is_local_server
+    _sm_core.is_local_server = lambda s: True
+    _sec_ran = {}
+    try:
+        for _v, _a in _SEC_ARGS.items():
+            for _n in ("argv", "path", "got", "mode"):
+                if os.path.exists(os.path.join(_sec_dir, _n)):
+                    os.remove(os.path.join(_sec_dir, _n))
+            _pre = "export PATH=%s:\"$PATH\" OUT=%s TMPDIR=%s; " % (_sec_bin, _sec_dir, _sec_dir)
+            _r = _sm_core.run_command(object(), _pre + _priv.remote_command(_v, _a), sudo=False,
+                                      stdin_text=_priv.remote_stdin(_v, _a))
+            _rd = lambda n: open(os.path.join(_sec_dir, n)).read() if os.path.exists(
+                os.path.join(_sec_dir, n)) else ""
+            _sec_ran[_v] = (_r[2], _rd("argv"), _rd("path").strip(), _rd("got"), _rd("mode").strip())
+    finally:
+        _sm_core.is_local_server = _sm_core_isl
+    for _v, (_rc, _argv, _path, _got, _mode) in _sec_ran.items():
+        check("secrets: the %s remote rendering runs, and the tool reads the secret from a file" % _v,
+              _rc == 0 and _SEC_ARGS[_v][0] in _got and _path.startswith(_sec_dir + "/")
+              and _mode == "600", repr((_rc, _path, _got, _mode)))
+        check("secrets: ...which is not on the tool's argv, and is removed afterwards (%s)" % _v,
+              _SEC_ARGS[_v][0] not in _argv and _path and not os.path.exists(_path),
+              repr((_argv, _path)))
+finally:
+    import shutil as _sec_sh
+    _sec_sh.rmtree(_sec_dir, ignore_errors=True)
 
 
 # ── a verb must not render to an EMPTY command on a remote host ───────────────────────────────
@@ -2449,7 +2749,146 @@ check("helper: a hostile cron body is replaced by the helper's own, not written"
       "rc=%s wrote=%r" % (_rc_cron, (_written_cron or "")[:60]))
 check("helper: the cron body is the helper's own, not the caller's",
       _helper.WRITE_CONTENT["node-tools-cron"] is None
-      and "npm install -g npm gamedig" in _helper.NODE_TOOLS_CRON_BODY)
+      and "npm install -g --ignore-scripts gamedig@5" in _helper.NODE_TOOLS_CRON_BODY)
+
+# ── the weekly root npm cron: one body in three places, and what that body may run ─────────────
+# It ran `npm install -g npm gamedig` as root every Sunday, unattended: the newest npm, gamedig and
+# their whole dependency tree, install hooks included — so a compromise of any of them at any later
+# point became root on every host by the next Sunday. The body lives in three places that must say
+# the same thing (install.sh writes it at install, the helper on the panel host, hosts.py on
+# remotes — and app.py rewrites it on every host daily): a copy left behind would put the old line
+# back. So the three are compared, and the ONE body is held to: gamedig only, pinned to a major,
+# --ignore-scripts, and no `npm install -g npm` (root running a freshly fetched npm).
+import re as _re_ntc
+from panel.ops.ssh_manager import hosts as _ntc_hosts
+_ntc_sh = open(os.path.join(_UNIT_ROOT, "install.sh"), encoding="utf-8").read()
+_ntc_fn = _ntc_sh[_ntc_sh.index("\nensure_gamedig() {"):]
+_ntc_fn = _ntc_fn[:_ntc_fn.index("\n}\n")]
+_ntc_blk = _ntc_fn[_ntc_fn.index('local cf="/etc/cron.d/lgsm-node-tools"'):]
+_ntc_blk = _ntc_blk[:_ntc_blk.index("| ${S} tee")]
+_ntc_install = "".join(_l + "\n" for _l in _re_ntc.findall(r"^\s*'([^']*)' \\$", _ntc_blk, _re_ntc.M))
+check("node-tools cron: install.sh, the helper and hosts.py write the SAME body",
+      _ntc_install == _helper.NODE_TOOLS_CRON_BODY == _ntc_hosts._NODE_TOOLS_CRON,
+      "install.sh=%r helper=%r hosts=%r" % (_ntc_install[-90:], _helper.NODE_TOOLS_CRON_BODY[-90:],
+                                            _ntc_hosts._NODE_TOOLS_CRON[-90:]))
+_ntc_cmd = [_l for _l in _helper.NODE_TOOLS_CRON_BODY.splitlines() if _l.startswith("30 4 * * 0 root ")]
+check("node-tools cron: root installs gamedig pinned to a major, with no install hooks, and never npm",
+      len(_ntc_cmd) == 1 and "npm install -g --ignore-scripts gamedig@5 " in _ntc_cmd[0]
+      and not _re_ntc.search(r"install -g[^>]*\bnpm\b", _ntc_cmd[0]),
+      repr(_ntc_cmd))
+# The verb the remote bootstrap installs gamedig through, and install.sh's own first install, say
+# the same: a v6 from the bootstrap would fight the cron's v5 every week.
+check("npm-install-global: installs the pinned spec with --ignore-scripts, in both tables",
+      _helper.VERBS["npm-install-global"][1](_helper.validate("npm-install-global", ["gamedig"]))
+      == _priv.tool_argv("npm-install-global", ["gamedig"])
+      == ["npm", "install", "-g", "--ignore-scripts", "gamedig@5"]
+      and "npm install -g --ignore-scripts gamedig@5 " in _ntc_fn,
+      repr(_priv.tool_argv("npm-install-global", ["gamedig"])))
+check("npm-install-global: ...and refuses `npm` itself",
+      _ufw_raises_verb(lambda: _priv.check_args("npm-install-global", ["npm"])))
+
+# ── NodeSource: its repository, with the signing key pinned — never its setup script run as root ──
+# ensure_gamedig downloaded https://deb.nodesource.com/setup_lts.x and ran it as root with nothing
+# checked, so whoever could serve that URL ran code as root on every host installing Node.
+# nodesource_setup fetches only the signing key, and trusts it only if the file holds exactly ONE
+# primary key with the pinned fingerprint. Driven in bash with curl, dpkg and apt-get as shell
+# functions and the three destinations in a temp dir, against throwaway keys made here.
+import shlex as _shlex_ns
+import shutil as _shutil_ns
+import subprocess as _sp_ns
+
+
+def _ns_fn(name):
+    """The function's text, or "" when install.sh has no such function (the checks below then fail
+    by name rather than crashing the part)."""
+    _i = _ntc_sh.find("\n%s() {" % name)
+    return "" if _i < 0 else _ntc_sh[_i:_ntc_sh.index("\n}\n", _i) + 3]
+
+
+_ns_code_lines = [_l for _l in _ntc_sh.splitlines() if not _l.lstrip().startswith("#")]
+_ns_code = "\n".join(_ns_code_lines)
+check("install.sh: no downloaded script is run — NodeSource's setup script is gone",
+      "setup_lts.x" not in _ns_code and not _re_ntc.search(r'bash "\$\{?ns\}?"', _ns_code)
+      and not _re_ntc.search(r"\bcurl\b[^\n]*\|\s*(sudo\s+)?(ba)?sh\b", _ns_code))
+check("install.sh: ensure_gamedig configures NodeSource through the pinned-key setup",
+      any(_re_ntc.fullmatch(r'\s*if nodesource_setup "\$\{S\}"; then', _l)
+          for _l in _ntc_fn.splitlines()))
+if not _shutil_ns.which("gpg"):
+    skip("install.sh: NodeSource key pinning, driven", "no gpg on this machine")
+else:
+    _ns_dir = _tempfile.mkdtemp(prefix="panel-nodesource-")
+    try:
+        _ns_gh = os.path.join(_ns_dir, "gnupg")
+        os.mkdir(_ns_gh, 0o700)
+
+        def _ns_gpg(*a):
+            return _sp_ns.run(["gpg", "--batch", "--homedir", _ns_gh] + list(a),
+                              capture_output=True, text=True, timeout=60)
+
+        for _uid in ("ns-a <a@example.invalid>", "ns-b <b@example.invalid>"):
+            _ns_gpg("--pinentry-mode", "loopback", "--passphrase", "", "--quick-gen-key", _uid,
+                    "ed25519", "sign", "never")
+        _ns_fprs, _ns_after_pub = [], False
+        for _l in _ns_gpg("--with-colons", "--list-keys").stdout.splitlines():
+            if _l.startswith("pub:"):
+                _ns_after_pub = True
+            elif _l.startswith("fpr:") and _ns_after_pub:
+                _ns_fprs.append(_l.split(":")[9])
+                _ns_after_pub = False
+        _ns_keys = {}
+        for _nm, _which in (("a", _ns_fprs[:1]), ("ab", _ns_fprs[:2])):
+            _ns_keys[_nm] = os.path.join(_ns_dir, _nm + ".asc")
+            with open(_ns_keys[_nm], "w") as _fh:
+                _fh.write(_ns_gpg("--armor", "--export", *_which).stdout)
+        _ns_keys["empty"] = os.path.join(_ns_dir, "empty.asc")
+        open(_ns_keys["empty"], "w").close()
+        _ns_globals = "\n".join(_l for _l in _ns_code_lines if _l.startswith("NODESOURCE_"))
+
+        def _ns_run(keyfile, fpr):
+            _out = os.path.join(_ns_dir, "out")
+            _shutil_ns.rmtree(_out, ignore_errors=True)
+            os.makedirs(os.path.join(_out, "sources.list.d"))
+            os.makedirs(os.path.join(_out, "preferences.d"))
+            _q = _shlex_ns.quote
+            _script = "\n".join([
+                _ns_globals, _ns_fn("nodesource_key_ok"), _ns_fn("nodesource_setup"),
+                "NODESOURCE_KEY_FPR=%s" % _q(fpr),
+                "NODESOURCE_KEYRING=%s" % _q(os.path.join(_out, "keyrings", "nodesource.gpg")),
+                "NODESOURCE_SOURCES=%s" % _q(os.path.join(_out, "sources.list.d", "nodesource.sources")),
+                "NODESOURCE_PREFS=%s" % _q(os.path.join(_out, "preferences.d", "nodejs")),
+                "dpkg() { echo amd64; }",
+                'curl() { cp %s "${@: -1}"; }' % _q(keyfile),
+                'apt-get() { echo "$*" >> %s; }' % _q(os.path.join(_out, "apt.log")),
+                "nodesource_setup ''; echo \"RC=$?\"",
+            ])
+            _p = _sp_ns.run(["bash", "-c", _script], capture_output=True, text=True, timeout=120)
+
+            def _rd(*parts):
+                try:
+                    with open(os.path.join(_out, *parts), "rb") as _f:
+                        return _f.read()
+                except OSError:
+                    return None
+            return (_p.stdout.strip().endswith("RC=0"), _rd("keyrings", "nodesource.gpg"),
+                    _rd("sources.list.d", "nodesource.sources"), _rd("preferences.d", "nodejs"),
+                    _rd("apt.log"), _p.stdout[-300:] + _p.stderr[-300:])
+
+        _ok, _kr, _src, _pref, _apt, _dbg = _ns_run(_ns_keys["a"], _ns_fprs[0])
+        check("nodesource: the pinned key is trusted, the source written, apt updated (positive control)",
+              _ok and bool(_kr) and _apt is not None and b"update" in _apt
+              and _src is not None and b"URIs: https://deb.nodesource.com/node_" in _src
+              and b"Architectures: amd64\n" in _src
+              and ("Signed-By: %s" % os.path.join(_ns_dir, "out", "keyrings", "nodesource.gpg")).encode() in _src
+              and _pref == b"Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n",
+              _dbg)
+        for _nm, _keyf, _fpr in (("a key that is not the pinned one", _ns_keys["a"], _ns_fprs[1]),
+                                 ("the pinned key plus a second key", _ns_keys["ab"], _ns_fprs[0]),
+                                 ("an empty download", _ns_keys["empty"], _ns_fprs[0])):
+            _ok, _kr, _src, _pref, _apt, _dbg = _ns_run(_keyf, _fpr)
+            check("nodesource: %s is refused, and nothing is trusted or written" % _nm,
+                  not _ok and _kr is None and _src is None and _pref is None and _apt is None, _dbg)
+    finally:
+        _shutil_ns.rmtree(_ns_dir, ignore_errors=True)
 check("helper: every write destination has a content rule (a new one cannot inherit 'anything')",
       set(_helper.WRITE_TARGETS) == set(_helper.WRITE_CONTENT),
       "targets without a rule: %s" % sorted(set(_helper.WRITE_TARGETS) - set(_helper.WRITE_CONTENT)))
@@ -2696,7 +3135,7 @@ _REMOTE_EXPECTED = {
     ("ufw-allow-iface", ("tailscale0",)): "ufw allow in on tailscale0 2>&1",
     ("ufw-delete-num", ("3",)): "yes | ufw delete 3 2>&1",
     ("ufw-deny-ip", ("203.0.113.5", "panel-autoblock")):
-        "ufw insert 1 deny from 203.0.113.5 comment panel-autoblock 2>&1",
+        "ufw prepend deny from 203.0.113.5 comment panel-autoblock 2>&1",
     ("f2b-status", ()): "fail2ban-client status 2>&1",
     ("f2b-status-jail", ("sshd",)): "fail2ban-client status sshd 2>&1",
     ("f2b-unban", ("sshd", "203.0.113.5")): "fail2ban-client set sshd unbanip 203.0.113.5 2>&1",
@@ -2753,6 +3192,23 @@ for (_v, _a), _want in _REMOTE_EXPECTED.items():
 check("privileged: the remote transport renders the same commands the SSH path always sent",
       not _wrong, "; ".join(_wrong[:2]))
 
+# ── ufw-deny-ip must PREPEND, never `insert 1` ────────────────────────────────────────────────
+# ufw numbers IPv4 user rules before IPv6 ones and refuses an IPv6 rule at a position that is an
+# IPv4 slot (ufw/frontend.py set_rule: "Invalid position '1'"), which position 1 is whenever ANY
+# IPv4 rule exists — `allow OpenSSH` alone makes one. So every IPv6 block, auto or manual, failed on
+# a firewalled host. `prepend` tops the rule's own family. Helper, panel, and the remote rendering,
+# for an IPv6 address; the IPv4 row beside it is the control that the verb still renders at all.
+_ud_h6 = _helper.VERBS["ufw-deny-ip"][1](_helper.validate("ufw-deny-ip", ["2001:db8::5", "panel-autoblock"]))
+_ud_p6 = _priv.tool_argv("ufw-deny-ip", ["2001:db8::5", "panel-autoblock"])
+_ud_r6 = _priv.remote_command("ufw-deny-ip", ["2001:db8::5", "panel-autoblock"])
+check("privileged: ufw-deny-ip prepends an IPv6 block (insert 1 is refused for IPv6 while IPv4 rules exist)",
+      _ud_h6[1:] == ["prepend", "deny", "from", "2001:db8::5", "comment", "panel-autoblock"]
+      and _ud_p6 == _ud_h6 and _ud_r6.startswith("ufw prepend deny from 2001:db8::5 "),
+      "helper=%r panel=%r remote=%r" % (_ud_h6, _ud_p6, _ud_r6))
+check("privileged: ufw-deny-ip still renders an IPv4 block the same way (control)",
+      _priv.tool_argv("ufw-deny-ip", ["203.0.113.5", ""])[1:] == ["prepend", "deny", "from", "203.0.113.5"],
+      repr(_priv.tool_argv("ufw-deny-ip", ["203.0.113.5", ""])))
+
 # ── the remote rendering of sshd-set-directive must mean what the HELPER's does ───────────────
 # It was `sed -i 's/^#\?<Key>.*/<Key> <value>/'`. `sed -i` exits 0 when its pattern matches
 # nothing and leaves the file untouched, so on a host whose sshd_config does not already carry the
@@ -2799,6 +3255,74 @@ try:
           _sd_cmd[:160])
 finally:
     _shutil.rmtree(_sd_dir, ignore_errors=True)
+
+# ── ...and it must write the panel's drop-in where sshd reads one, as the helper does ─────────────
+# Editing sshd_config is a no-op on a stock Ubuntu cloud image: sshd_config Includes sshd_config.d
+# FIRST, sshd keeps the first value it obtains, and 50-cloud-init.conf says PasswordAuthentication
+# yes. The helper writes a 00- drop-in on the panel host; every REMOTE host still got only the
+# sshd_config edit, so bootstrap's own sshd -T check found the hardening not in effect and password
+# SSH stayed open. Driven for real, and compared BYTE FOR BYTE with the helper's own drop-in write
+# from the same starting file — the two transports write one file, so they must agree on it.
+import stat as _stat_dr
+_dr_dir = _tempfile.mkdtemp(prefix="sshd-dropin-")
+try:
+    _dr_cfg = os.path.join(_dr_dir, "sshd_config")
+    _dr_d = os.path.join(_dr_dir, "sshd_config.d")
+    _dr_f = os.path.join(_dr_d, os.path.basename(_priv.SSHD_HARDENING_DROPIN))
+    _dr_cmd = (_priv.remote_command("sshd-set-directive", ["PasswordAuthentication", "no"])
+               .replace(_priv.SSHD_HARDENING_DROPIN, _dr_f)
+               .replace(os.path.dirname(_priv.SSHD_HARDENING_DROPIN), _dr_d)
+               .replace(_priv.SSHD_CONFIG, _dr_cfg))
+    # What an earlier run left: one directive held, a line the drop-in must not keep, a stale value
+    # for the one being set, and whitespace the helper normalises.
+    _dr_prior = (_priv.SSHD_HARDENING_HEADER + "PermitRootLogin   no  \n"
+                 + "Match all\nPasswordAuthentication yes\n")
+    os.makedirs(_dr_d)
+    with open(_dr_cfg, "w", encoding="utf-8") as _fh:
+        _fh.write("Include /etc/ssh/sshd_config.d/*.conf\n#PasswordAuthentication yes\nPort 22\n")
+    with open(_dr_f, "w", encoding="utf-8") as _fh:
+        _fh.write(_dr_prior)
+    _dr_r = _sub.run(["bash", "-c", _dr_cmd], capture_output=True, text=True, timeout=30)
+    _dr_remote = open(_dr_f, encoding="utf-8").read()
+    # The helper, on a module copy whose drop-in path is a second temp file with the same content.
+    _spec_dr = _ilu.spec_from_loader("ph_dropin", _machinery.SourceFileLoader("ph_dropin", _helper_path))
+    _hdr = _ilu.module_from_spec(_spec_dr)
+    _spec_dr.loader.exec_module(_hdr)
+    _hdr.SSHD_HARDENING_DROPIN = os.path.join(_dr_dir, "helper.d", "00-panel-hardening.conf")
+    os.makedirs(os.path.dirname(_hdr.SSHD_HARDENING_DROPIN))
+    with open(_hdr.SSHD_HARDENING_DROPIN, "w", encoding="utf-8") as _fh:
+        _fh.write(_dr_prior)
+    _hdr._write_sshd_hardening_dropin("PasswordAuthentication", "no")
+    _dr_helper = open(_hdr.SSHD_HARDENING_DROPIN, encoding="utf-8").read()
+    check("privileged: the remote sshd-set-directive writes the panel's drop-in, byte-identical "
+          "to the helper's",
+          _dr_r.returncode == 0 and _dr_remote == _dr_helper
+          and "PasswordAuthentication no\n" in _dr_remote and "Match" not in _dr_remote
+          and _stat_dr.S_IMODE(os.stat(_dr_f).st_mode) == 0o600,
+          "rc=%d remote=%r helper=%r err=%r" % (_dr_r.returncode, _dr_remote, _dr_helper,
+                                               _dr_r.stderr[:120]))
+    check("privileged: ...and it keeps the directive an earlier run held (positive control)",
+          "PermitRootLogin no\n" in _dr_remote, repr(_dr_remote))
+    check("privileged: the remote and helper drop-in path and header are the same",
+          (_priv.SSHD_HARDENING_DROPIN, _priv.SSHD_HARDENING_HEADER)
+          == (_helper.SSHD_HARDENING_DROPIN, _helper.SSHD_HARDENING_HEADER))
+    # A host whose sshd_config does NOT Include sshd_config.d gets no inert file that looks like
+    # hardening — the helper's rule too.
+    _dr_d2 = os.path.join(_dr_dir, "noinclude.d")
+    _dr_cfg2 = os.path.join(_dr_dir, "sshd_config_noinclude")
+    with open(_dr_cfg2, "w", encoding="utf-8") as _fh:
+        _fh.write("#PasswordAuthentication yes\nPort 22\n")
+    _dr_cmd2 = (_priv.remote_command("sshd-set-directive", ["PasswordAuthentication", "no"])
+                .replace(_priv.SSHD_HARDENING_DROPIN, os.path.join(_dr_d2, "00-x.conf"))
+                .replace(os.path.dirname(_priv.SSHD_HARDENING_DROPIN), _dr_d2)
+                .replace(_priv.SSHD_CONFIG, _dr_cfg2))
+    _dr_r2 = _sub.run(["bash", "-c", _dr_cmd2], capture_output=True, text=True, timeout=30)
+    check("privileged: ...and a host with no Include gets no drop-in, only the sshd_config edit",
+          _dr_r2.returncode == 0 and not os.path.exists(_dr_d2)
+          and "PasswordAuthentication no" in open(_dr_cfg2, encoding="utf-8").read(),
+          "rc=%d" % _dr_r2.returncode)
+finally:
+    _shutil.rmtree(_dr_dir, ignore_errors=True)
 
 # A comment with a space must survive shell-quoting on the remote side.
 check("privileged: remote rendering quotes a comment containing a space",
@@ -3179,17 +3703,48 @@ for _bad in (("gmodcontent", "../../etc"), ("gmodcontent", ".."), ("gmodcontent"
 # The helper's own group check: content-grant-read adds a user to a GROUP, and the group named by
 # the caller must actually be the content user's. Mutation showed this was untested — the suite
 # exercises argv building, not the action bodies.
+#
+# Run against a SANDBOXED copy of the helper. This drove the real module with the real account, so
+# the regression it exists to catch — the refusal gone — went on to run `usermod -aG root <me>` and
+# chmod g+x the developer's real /home/<me>, on exactly the run (a mutation test) that removes it.
+# The copy's home root is a temp dir and its subprocess.run records instead of running.
 import getpass as _getpass
 import grp as _grp
 import pwd as _pwd
+import types as _types_gr
+_gr_box = _tempfile.mkdtemp(prefix="panel-grant-")
 try:
     _me = _getpass.getuser()
     _my_group = _grp.getgrgid(_pwd.getpwnam(_me).pw_gid).gr_name
+    _spec_gr = _ilu.spec_from_loader("ph_grant", _machinery.SourceFileLoader("ph_grant", _helper_path))
+    _hgr = _ilu.module_from_spec(_spec_gr)
+    _spec_gr.loader.exec_module(_hgr)
+    _hgr.HOME_ROOT = _gr_box
+    _hgr.home_of = lambda u, _r=_gr_box: _r + "/" + _hgr.v_username(u)
+    _gr_runs = []
+    _hgr.subprocess = _types_gr.SimpleNamespace(
+        run=lambda argv, **kw: (_gr_runs.append(list(argv)),
+                                _sp.CompletedProcess(argv, 0, b"", b""))[1])
+    _hgr.resolve = lambda name: "/usr/sbin/" + name
+    os.makedirs(_gr_box + "/" + _me, mode=0o700)
+    os.chmod(_gr_box + "/" + _me, 0o700)
+    _gr_rc = _hgr.do_content_grant_read([_me, "root" if _my_group != "root" else "daemon", _me],
+                                        None)
     check("content-grant-read refuses a group that is not the content user's",
-          _helper.do_content_grant_read([_me, "root" if _my_group != "root" else "daemon",
-                                         _me], None) == 2)
+          _gr_rc == 2 and not _gr_runs
+          and _st2.S_IMODE(os.stat(_gr_box + "/" + _me).st_mode) == 0o700,
+          "rc=%r ran=%r" % (_gr_rc, _gr_runs))
+    # Control: the user's OWN group goes through — usermod recorded, the traversal bit set — and
+    # both land in the sandbox, so the refusal above is the check and not a copy that does nothing.
+    _gr_rc = _hgr.do_content_grant_read([_me, _my_group, _me], None)
+    check("content-grant-read: ...the content user's own group is granted, inside the sandbox",
+          _gr_rc == 0 and [a[1:] for a in _gr_runs] == [["-aG", _my_group, _me]]
+          and _st2.S_IMODE(os.stat(_gr_box + "/" + _me).st_mode) & _st2.S_IXGRP,
+          "rc=%r ran=%r" % (_gr_rc, _gr_runs))
 except (KeyError, OSError) as _e:
     skip("content-grant-read group check", _e)
+finally:
+    _shutil.rmtree(_gr_box, ignore_errors=True)
 
 # home_of() is the only place a path is built from a name, and it feeds an `rm -rf` running as
 # root. Both copies must agree, and neither may ever produce /home itself or escape it.
@@ -4783,8 +5338,78 @@ try:
     _ok_f, _ = _fw_h.remote_ufw_delete_rule(NS(), 3, force=True)
     check("ufw delete: force=True still overrides, so nothing is unrecoverable",
           _ok_f is True and len(_fw_deleted) == 1, "ok=%s sent=%s" % (_ok_f, _fw_deleted))
+    # A rule NUMBER is a position; with the rule's key the delete happens only if rule N is still
+    # that rule — even under force, which overrides the lockout guard, not the identity check.
+    _fw_f.remote_ufw_status = lambda _s: {"installed": True, "groups": [
+        {"nums": [3], "protected": False, "key": "k-deny-attacker"}]}
+    for _kforce in (False, True):
+        _fw_deleted.clear()
+        _ok_k, _msg_k = _fw_h.remote_ufw_delete_rule(NS(), 3, force=_kforce, expect_key="k-game-a")
+        check("ufw delete: a number that now holds a DIFFERENT rule is refused (force=%s)" % _kforce,
+              _ok_k is False and not _fw_deleted and "no longer the rule" in _msg_k,
+              "ok=%s sent=%s msg=%r" % (_ok_k, _fw_deleted, _msg_k))
+    _fw_deleted.clear()
+    _ok_k, _ = _fw_h.remote_ufw_delete_rule(NS(), 3, expect_key="k-deny-attacker")
+    check("ufw delete: ...while the rule it still names is deleted (positive control)",
+          _ok_k is True and len(_fw_deleted) == 1, "ok=%s sent=%s" % (_ok_k, _fw_deleted))
 finally:
     _sm_core.run_privileged, _fw_f.remote_ufw_status = _o_rp5, _o_status
+
+# ── uninstall's tagged-rule cleanup under a concurrent insert ─────────────────────────────────
+# remote_ufw_close_by_name read the numbers ONCE and deleted highest-first. The auto-block
+# reconcile inserts its denies at position 1 from another thread, and one insert mid-loop moved
+# every remaining number onto the rule above it: here, the deny holding an attacker out.
+_cbn_saved = (_sm_core.run_privileged, _fw_f.remote_ufw_status)
+try:
+    _cbn = {"rules": [], "inserted": False}
+
+    def _cbn_priv(s, verb, args=(), **k):
+        if verb == "ufw-status":
+            return ("Status: active\n\n" + "".join(
+                "[%2d] %s\n" % (i + 1, r) for i, r in enumerate(_cbn["rules"])), "", 0)
+        if verb == "ufw-delete-num":
+            _cbn["rules"].pop(int(list(args)[0]) - 1)
+            if not _cbn["inserted"]:          # the reconcile lands between two deletes
+                _cbn["inserted"] = True
+                _cbn["rules"].insert(0, "Anywhere                   DENY IN     203.0.113.9  # panel-autoblock")
+            return ("Rule deleted", "", 0)
+        return ("", "", 0)
+
+    def _cbn_status(_s):
+        return {"installed": True, "enabled": True, "groups": [
+            {"nums": [i + 1], "protected": False, "key": "k:%s" % r,
+             "comment": _fw_f._parse_ufw_rule(r)["comment"]} for i, r in enumerate(_cbn["rules"])]}
+    _sm_core.run_privileged, _fw_f.remote_ufw_status = _cbn_priv, _cbn_status
+    _cbn["rules"] = ["27015                      ALLOW IN    Anywhere     # gamea",
+                     "27016                      ALLOW IN    Anywhere     # gameb",
+                     "27017                      ALLOW IN    Anywhere     # gamea",
+                     "22/tcp                     LIMIT IN    Anywhere"]
+    _cbn_n, _ = _fw_h.remote_ufw_close_by_name(NS(), "gamea")
+    _cbn_left = [r.split("#")[-1].strip() if "#" in r else r.split()[0] for r in _cbn["rules"]]
+    check("ufw close-by-name: an insert mid-cleanup does not move a delete onto another rule",
+          sorted(_cbn_left) == ["22/tcp", "gameb", "panel-autoblock"] and _cbn_n == 2,
+          "left %r, reported %d removed — a rule that was not this server's went" % (_cbn_left, _cbn_n))
+finally:
+    _sm_core.run_privileged, _fw_f.remote_ufw_status = _cbn_saved
+
+# ── uninstall's legacy port cleanup does not reach the NEXT port ───────────────────────────────
+# `for p in (port, port + 1)` deleted port+1/tcp and /udp with no idea whose they were — usually
+# the neighbouring server's game port.
+_cgp_saved = _sm_core.run_privileged
+try:
+    _cgp_sent = []
+    _sm_core.run_privileged = lambda s, verb, args=(), **k: (_cgp_sent.append((verb, list(args))),
+                                                            ("", "", 0))[1]
+    _fw_h.remote_ufw_close_game_port(NS(), 27015)
+    check("ufw close-game-port: nothing is deleted on port+1 (another server's port)",
+          not any("27016" in a for _v, a in _cgp_sent), repr(_cgp_sent))
+    check("ufw close-game-port: ...while the port's own bare and tcp/udp rules still go "
+          "(positive control)",
+          ("ufw-delete-allow-port", ["27015"]) in _cgp_sent
+          and ("ufw-delete-allow-proto-port", ["tcp", "27015"]) in _cgp_sent
+          and ("ufw-delete-allow-proto-port", ["udp", "27015"]) in _cgp_sent, repr(_cgp_sent))
+finally:
+    _sm_core.run_privileged = _cgp_saved
 
 # load_user: a database error skipped the revoked-device AND cookie-expiry checks and returned the
 # user, so a revoked cookie authenticated for as long as the database stayed unhappy.
@@ -4862,6 +5487,19 @@ try:
         _cfg2.CONFIG_FILE = _f
         check("config probe: %s -> unreadable=%s" % (_name, _want),
               _fw2._config_unreadable() is _want)
+    # ...and it is the SHARED predicate answering, not a private copy of it. firewall.py kept its
+    # own, already drifted (it read the file as UTF-8, load_config reads it in the locale's
+    # encoding). With config.json valid, only a delegating guard can report the stub's True.
+    _o_cu = _cfg2.config_unreadable
+    try:
+        _cfg2.config_unreadable = lambda: True
+        check("config probe: firewall asks panel.core.config.config_unreadable, not a copy",
+              _fw2._config_unreadable() is True,
+              "answered from its own read of a valid config.json")
+    finally:
+        _cfg2.config_unreadable = _o_cu
+    check("config probe: ...and with the real predicate back, the valid file reads as readable",
+          _fw2._config_unreadable() is False)
     # ...and the CALLER has to consult it. Covering _config_unreadable is not covering the guard:
     # a mutation that deleted the `if _config_unreadable(): return True` line survived a green run.
     _o_local6 = _core_mod_is_local = _sm_core.is_local_server

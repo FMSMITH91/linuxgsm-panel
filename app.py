@@ -69,15 +69,16 @@ from panel.core import terminal
 from panel.core.clock import utcnow
 
 import secrets
-from flask import (Flask, abort, current_app, g, jsonify, redirect, request, session, url_for)
+from flask import (Flask, abort, current_app, g, has_request_context, jsonify, redirect, request, session,
+                   url_for)
 from markupsafe import Markup
 from panel.core import i18n
 from flask_login import (current_user)
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.exceptions import HTTPException
 
-from panel.security.auth import (ALL_PERMISSIONS, client_ip, get_user_permissions, init_auth,
-    log_action, strip_legacy_superadmin_grants)
+from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, client_ip,
+    get_user_permissions, init_auth, log_action, strip_legacy_superadmin_grants)
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
     encrypt_secret, is_encrypted, harden_data_permissions,
@@ -901,10 +902,14 @@ def load_game_list():
     could not be had; `lgsm_data.status()` says why, and the install page surfaces it rather than
     rendering an empty menu.
     """
-    if _GAME_LIST_CACHE["games"] is not None:
+    # Keyed on the rows it was built from: lgsm_data hands back the same list object until its
+    # weekly re-read, so a new object means new data. This used to be kept for the life of the
+    # process, and a game LinuxGSM added after the panel started never reached the install menu.
+    rows = lgsm_data.serverlist()
+    if _GAME_LIST_CACHE["games"] is not None and _GAME_LIST_CACHE.get("rows") is rows:
         return _GAME_LIST_CACHE["games"]
     games = []
-    for row in lgsm_data.serverlist():
+    for row in rows:
         sn = (row.get("shortname") or "").strip()
         name = (row.get("gamename") or "").strip()
         if sn and name:
@@ -929,6 +934,7 @@ def load_game_list():
     # of the process, so a later retry (or the background warm) could never take effect.
     if games:
         _GAME_LIST_CACHE["games"] = games
+        _GAME_LIST_CACHE["rows"] = rows
     return games
 
 
@@ -939,15 +945,17 @@ def lgsm_name_to_game_type(lgsm_name):
     """Map a LinuxGSM 'gameservername' (e.g. 'gmodserver') to the panel's game_type / shortname
     (e.g. 'gmod'), from LinuxGSM's serverlist. Used when importing servers discovered on a host.
     Returns None for a game the panel doesn't know."""
-    if _LGSM_NAME_MAP["data"] is None:
+    rows = lgsm_data.serverlist()      # same object until lgsm_data re-reads it — see load_game_list
+    if _LGSM_NAME_MAP["data"] is None or _LGSM_NAME_MAP.get("rows") is not rows:
         m = {}
-        for row in lgsm_data.serverlist():
+        for row in rows:
             gsn = (row.get("gameservername") or "").strip()
             sn = (row.get("shortname") or "").strip()
             if gsn and sn:
                 m[gsn] = sn
         if m:                      # same reasoning as load_game_list: never memoise a failure
             _LGSM_NAME_MAP["data"] = m
+            _LGSM_NAME_MAP["rows"] = rows
         return m.get(lgsm_name)
     return _LGSM_NAME_MAP["data"].get(lgsm_name)
 
@@ -1041,6 +1049,25 @@ def _clean_console_text(text):
                       if not _CONSOLE_PROMPT_RE.match(_sgr_bare.sub("", ln)))
 
 
+def _session_lifetimes(cfg):
+    """(PERMANENT_SESSION_LIFETIME seconds, REMEMBER_COOKIE_DURATION) from config.json, coerced
+    and held to the ranges the Settings form enforces (1-168 hours, 1-90 days).
+
+    config.json is hand-editable and these were read raw. "session_lifetime_hours": "8" made the
+    lifetime a 3,600-character STRING, which only fails when Flask adds it to a datetime while
+    saving a permanent session — so the panel started, and every sign-in answered 500. A
+    non-numeric remember_days raised in int() and the panel did not start at all."""
+    def _num(value, default, lo, hi):
+        try:
+            n = int(float(value))
+        except (TypeError, ValueError, OverflowError):
+            return default
+        return max(lo, min(n, hi))
+    hours = _num(cfg.get("session_lifetime_hours", 8), 8, 1, 168)
+    days = _num(cfg.get("remember_days", 3), 3, 1, 90)
+    return hours * 3600, timedelta(days=days)
+
+
 def create_app():
     app = Flask(__name__)
     cfg = load_config()
@@ -1068,7 +1095,7 @@ def create_app():
     app.config["SESSION_COOKIE_NAME"] = "lgpanel_session"
     # Idle session timeout (sliding — refreshed on each request). 8h by default so a
     # forgotten browser doesn't stay logged in overnight; configurable.
-    app.config["PERMANENT_SESSION_LIFETIME"] = cfg.get("session_lifetime_hours", 8) * 3600
+    app.config["PERMANENT_SESSION_LIFETIME"] = _session_lifetimes(cfg)[0]
 
     # Cookie path must cover the mount point — always use root to be safe
     # since we don't know the final mount until after setup
@@ -1100,7 +1127,7 @@ def create_app():
     # max 90 — see settings.html) instead of
     # flask-login's 365-day default — a stolen remember-token shouldn't be valid for a
     # year — and give it the same hardening as the session cookie.
-    app.config["REMEMBER_COOKIE_DURATION"] = timedelta(days=int(cfg.get("remember_days", 3)))
+    app.config["REMEMBER_COOKIE_DURATION"] = _session_lifetimes(cfg)[1]
     app.config["REMEMBER_COOKIE_HTTPONLY"] = True
     app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
     app.config["REMEMBER_COOKIE_SECURE"] = app.config["SESSION_COOKIE_SECURE"]
@@ -1588,6 +1615,12 @@ def register_context_processors(app):
             ):
                 nav_remotes = (RemoteServer.query.filter_by(is_local=False)
                                .order_by(RemoteServer.name).all())
+                # Only the hosts this admin's groups grant. manage_remotes() and get_remote() scope
+                # hosts per group, but this list did not, so a host admin granted one remote saw
+                # every other host's name and id in the sidebar on every page.
+                if not current_user.is_superadmin:
+                    _mine = accessible_remote_ids(current_user)
+                    nav_remotes = [r for r in nav_remotes if r.id in _mine]
         except Exception:
             nav_remotes = []
         # The panel host's own remote-row id, so any page can render its "reboot required" banner
@@ -1599,6 +1632,10 @@ def register_context_processors(app):
             ):
                 _lr = RemoteServer.query.filter_by(is_local=True).first()
                 local_remote_id = _lr.id if _lr else None
+                # Same scope as the sidebar: a banner for a host they cannot act on is a dead end.
+                if local_remote_id is not None and not current_user.is_superadmin \
+                        and local_remote_id not in accessible_remote_ids(current_user):
+                    local_remote_id = None
         except Exception:
             local_remote_id = None
         lang = _current_lang()
@@ -1616,7 +1653,12 @@ def register_context_processors(app):
             "install_default_layout": bool(cfg.get("default_ui_prefs")),
             "current_year": utcnow().year,
             "tailscale_url": tailscale_url,
-            "mount_prefix": app.config.get("_MOUNT_PREFIX", "/"),
+            # The prefix THIS request is served under — the SCRIPT_NAME PrefixMiddleware computed from
+            # the live tailscale_mount, which is what url_for builds from. It was the mount as it was
+            # at boot, so enabling or moving Tailscale Serve at runtime left window.MOUNT pointing at
+            # the old mount: the pages rendered, and every fetch() and the console socket missed.
+            "mount_prefix": (request.script_root if has_request_context()
+                             else app.config.get("_MOUNT_PREFIX", "/")),
             "panel_version": PANEL_VERSION,
             "panel_commit": PANEL_COMMIT,
             "panel_repo_url": PANEL_REPO_URL,
@@ -1686,10 +1728,16 @@ def resolve_free_port(remote, remote_id, desired, game_type):
 
 # ── Setup Wizard ────────────────────────────────────────
 def is_setup_complete():
-    """Check if setup wizard has been completed."""
-    state = SetupState.query.filter_by(complete=True).first()
-    cfg = load_config()
-    return state is not None and cfg.get("setup_complete", False)
+    """Whether the setup wizard has finished: a completed SetupState row.
+
+    It was (that row AND config.json's setup_complete flag). The flag half fails open the other
+    way too: load_config() falls back to DEFAULT_CONFIG (setup_complete False) when config.json is
+    missing, truncated or not JSON, while the wizard's lock reads the row alone. So a finished
+    install that lost its config redirected every page to /setup, and the locked wizard redirected
+    to /login, which sent a signed-in admin back to / — ERR_TOO_MANY_REDIRECTS for everyone, with
+    no way into Settings to repair it. The row is the one signal that cannot fall back to a
+    default, and it is what the lock (_setup_open) already uses; the flag is still written."""
+    return SetupState.query.filter_by(complete=True).first() is not None
 
 # ── Setup-only Tailscale endpoints ─────────────────────────
 # No login exists yet during setup, so these are unauthenticated BUT usable ONLY
@@ -1700,11 +1748,12 @@ def _setup_open():
     # comment on setup_wizard() above, which describes this exact failure and then only
     # defended /setup with it.
     #
-    # These four were gated on `not is_setup_complete()`, which is (DB row AND config flag).
-    # The config half fails OPEN: load_config() swallows JSONDecodeError/OSError and returns
-    # DEFAULT_CONFIG, where setup_complete is False. So on a fully configured install, a
-    # data/config.json that was deleted, truncated by a full disk, or hand-edited into invalid
-    # JSON made is_setup_complete() False and reopened all four to unauthenticated callers:
+    # These four were gated on `not is_setup_complete()`, which was then (DB row AND config flag);
+    # it reads the row alone now too, so the two agree. The config half failed OPEN:
+    # load_config() swallows JSONDecodeError/OSError and returns DEFAULT_CONFIG, where
+    # setup_complete is False. So on a fully configured install, a data/config.json that was
+    # deleted, truncated by a full disk, or hand-edited into invalid JSON made
+    # is_setup_complete() False and reopened all four to unauthenticated callers:
     # /install runs the Tailscale installer as root; /up returns an auth URL that joins THIS
     # HOST to whoever called it, with Tailscale SSH enabled; /serve rewrites bind_host and
     # site_domain. A missing config file should degrade the panel, not hand it over.
@@ -1864,7 +1913,12 @@ def _custom_cmd_form(cmd=None):
         scope_type = "all"
     if scope_type == "engine" and scope_value not in _CUSTOM_CMD_ENGINES:
         return None, "Pick a valid engine for the engine scope."
-    if scope_type == "game" and scope_value not in {g["shortname"] for g in load_game_list()}:
+    # A command already scoped to a game keeps it even when the current list lacks that game
+    # (dropped or renamed upstream, or no list could be fetched): refusing it would make the
+    # command uneditable, and the form offers its stored scope precisely so a save does not change it.
+    _kept_game = (cmd is not None and cmd.scope_type == "game" and scope_value == cmd.scope_value)
+    if scope_type == "game" and not _kept_game \
+            and scope_value not in {g["shortname"] for g in load_game_list()}:
         return None, "Pick a valid game for the game scope."
     if scope_type == "all":
         scope_value = ""
@@ -2023,20 +2077,91 @@ def _sync_toggles_from_cron(gs, jobs):
     return changed
 
 # ── WebSocket Console ───────────────────────────────────
-def _socketio_cors():
-    """Origins allowed to open the console WebSocket. Explicit config wins; else,
-    once the panel has a domain (served via Tailscale Serve/nginx), lock to that
-    origin instead of "*". Falls back to "*" only for plain IP:port access, where
-    there's no fixed origin to pin to. (join_console also requires an authenticated
-    session, and the SameSite=Lax cookie stops a cross-site page carrying it.)"""
+def _origin_candidates(environ, cfg):
+    """The hosts a page allowed to open the socket may be served from, as Host-header strings:
+    the Host this request arrived with, the X-Forwarded-Host a reverse proxy passes on, and
+    site_domain. Each may carry an explicit port or none."""
+    out = [environ.get("HTTP_HOST") or ""]
+    fwd = environ.get("HTTP_X_FORWARDED_HOST")
+    if fwd:
+        out.append(fwd.split(",")[0].strip())
+    out.append((cfg.get("site_domain") or "").strip())
+    return [h for h in out if h]
+
+
+def _host_port(value):
+    """(host, port) of a Host-header-like value, port None when none is given; None when it names
+    no host. A value written with a scheme (a site_domain typed as a URL) is read the same way."""
+    from urllib.parse import urlsplit
+    value = str(value or "").strip()
+    try:
+        u = urlsplit(value if "://" in value else "//" + value)
+        host, port = (u.hostname or "").lower(), u.port
+    except ValueError:
+        return None
+    return (host, port) if host else None
+
+
+def _socket_origin_allowed(origin, environ=None):
+    """Whether a browser page at `origin` may open the console/terminal socket.
+
+    Explicit config (socketio_cors_origins) wins. Otherwise a page is allowed when it is served from
+    the host this request arrived on, the host a proxy forwarded, or site_domain — PORT INCLUDED.
+
+    It was a list built once at startup: ["https://<site_domain>", "http://<site_domain>"], with no
+    port, else "*". So the default direct install — https://panel.example.com:5000 with that domain
+    typed into the wizard — sent an Origin the list did not hold, every handshake was refused, and
+    the live console and terminal never connected; a site_domain edited in Settings did nothing until
+    a restart; and with no domain, ANY page could complete the handshake. Evaluated per request now,
+    so a Settings change applies at once. (The connect gate also requires an authenticated session,
+    and the SameSite=Lax cookie stops a cross-site page carrying one.)"""
     cfg = load_config()
     explicit = cfg.get("socketio_cors_origins")
     if explicit:
-        return explicit
-    dom = (cfg.get("site_domain") or "").strip()
-    if dom:
-        return ["https://%s" % dom, "http://%s" % dom]
-    return "*"
+        allowed = [explicit] if isinstance(explicit, str) else list(explicit)
+        return "*" in allowed or origin in allowed
+    key = _origin_key(origin)
+    if key is None:
+        return False                      # "null", a file: page, anything that is not http(s)
+    scheme, host, port = key
+    # Compared as (host, port), and the PORT is what refuses a page served on another port of the
+    # panel's own address (a game's web map): a site ignores the port, so that page is same-site
+    # and the Lax cookie rides along. A candidate with an explicit port must equal the origin's.
+    # One with no port takes the ORIGIN's scheme default — a browser leaves the port out of Host
+    # only for its scheme's default, and a TLS proxy that forwards Host (nginx `Host $host`) or
+    # X-Forwarded-Host without X-Forwarded-Proto hands the panel a plain-http request for an https
+    # page. Matching the scheme too, via wsgi.url_scheme, refused exactly those proxies: no console,
+    # no terminal, and no message. The scheme itself adds nothing here — one port speaks one scheme.
+    # Not accepted: a proxy that rewrites Host to loopback and forwards no host at all. Its page
+    # cannot be told from any other, so it needs site_domain set (the README's nginx and Caddy
+    # examples, and Tailscale Serve, all forward the host). Nor is any other host: a sibling
+    # subdomain (another node on the same *.ts.net tailnet) is same-site, so the cookie is sent.
+    default = 443 if scheme == "https" else 80
+    for cand in _origin_candidates(environ or {}, cfg):
+        hp = _host_port(cand)
+        if hp and hp[0] == host and (hp[1] or default) == port:
+            return True
+    return False
+
+
+def _origin_key(origin):
+    """(scheme, host, port) of an origin, the default port filled in; None for anything that is not
+    an http(s) origin with a host."""
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(str(origin or ""))
+        host, port = (u.hostname or "").lower(), u.port
+    except ValueError:
+        return None
+    if u.scheme not in ("http", "https") or not host:
+        return None
+    return (u.scheme, host, port or (443 if u.scheme == "https" else 80))
+
+
+def _socketio_cors():
+    """What SocketIO(cors_allowed_origins=...) is given: the per-request check above. engineio calls
+    it as (origin, environ) for every request that carries an Origin header."""
+    return _socket_origin_allowed
 
 def _os_updates_for(remote):
     """One host's check result dict, or None if it could not be checked.
@@ -2528,8 +2653,8 @@ if __name__ == "__main__":
     # Record CPU/RAM/player samples into history (for the trend charts on the server page).
     threading.Thread(target=lambda: _metrics_history_watch(app), daemon=True).start()
 
-    # Keep the npm + gamedig player-query tools auto-updating on every host (weekly cron; this ensures
-    # the cron exists on hosts that predate it).
+    # Keep gamedig, the player-query tool (pinned v5, no install scripts), current on every host
+    # (weekly cron; this ensures the cron exists on hosts that predate it). npm is left to the OS.
     threading.Thread(target=lambda: _node_tools_cron_watch(app), daemon=True).start()
 
     # Proactive monitor: server-down / host-unreachable / disk-low admin notifications.

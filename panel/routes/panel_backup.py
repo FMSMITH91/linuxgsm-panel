@@ -19,7 +19,8 @@ import threading
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic)
 from panel.core.validation import (_attachment_header)
-from panel.routes._shared import (_record_full_clock, _record_game_clock)
+from panel.routes._shared import (_button_backup_running, _marked_backup, _record_full_clock,
+    _record_game_clock)
 
 
 def register(app):
@@ -47,16 +48,38 @@ def register(app):
             failures = []      # every failure, for the recorded summary
             alertable = []     # the subset whose servers aren't muted by a tag, for the alert
             queued = []
+            in_flight = []     # already being archived by the maintenance menu's Backup button
+            keep_unread = False   # config.json unreadable: pruned to the maximum, not the setting
             # Keep the whole run inside ONE app context: run_command touches the remote's ORM
             # attributes, which would raise DetachedInstanceError once the session is gone.
             with app.app_context():
                 servers = [gs for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
                 for gs in servers:
+                    if _button_backup_running(gs.id):
+                        # That run holds no lock this one can see: run_game_backup would take its
+                        # backup.lock for an orphan once it is 5 minutes old and start a second
+                        # archive of the same files. It is being backed up; say so, move on.
+                        in_flight.append(gs.name)
+                        continue
                     try:
-                        ok, reason, was_skipped = run_game_backup(
-                            gs.remote, gs.short_name, gs.lgsm_name,
-                            bk.get_game_schedule(gs.id)["keep"],
-                            game_type=gs.game_type, port=gs.port, force=force)
+                        # game_prune_keep, not get_game_schedule: with config.json unreadable the
+                        # latter answers the default keep, and the prune deleted past the server's
+                        # own retention.
+                        _keep, _keep_read = bk.game_prune_keep(gs.id)
+                        keep_unread = keep_unread or not _keep_read
+                        # Marked RUNNING while it runs, like the two tickers: _run_due_restarts
+                        # (its own thread) reads that flag to keep its hands off a server a
+                        # backup has just stopped to archive, and this run set nothing.
+                        ok, reason, was_skipped = _marked_backup(
+                            gs.id, gs.remote, gs.short_name, gs.lgsm_name, _keep,
+                            game_type=gs.game_type, port=gs.port, force=force,
+                            query_type=gs.query_type, runner=run_game_backup)
+                        # ...and the outcome replaces the mark, which would otherwise hold the
+                        # restart sweep off this server for good.
+                        _game_backup_status[gs.id] = {
+                            "running": False, "ok": (None if was_skipped else ok),
+                            "busy": was_skipped,
+                            "msg": (reason or ("Backed up" if ok else "failed")), "ts": time.time()}
                         if was_skipped:
                             skip_n += 1
                             if defer:
@@ -88,6 +111,12 @@ def register(app):
                 summary += " — " + "; ".join(failures)
             if queued:
                 summary += " — will back up once empty: " + ", ".join(queued)
+            if in_flight:
+                summary += " — already being backed up from the server page: " + ", ".join(in_flight)
+            if keep_unread:
+                summary += (" — config.json could not be read, so old backups were kept up to "
+                            "the maximum (%d) rather than pruned to each server's setting"
+                            % bk.MAX_FULL_KEEP)
             # The recorded summary keeps EVERY failure (it is the operator's record); the alert
             # carries only the servers whose tags haven't muted them, and is skipped entirely when
             # every failure came from a muted server.
@@ -189,6 +218,11 @@ def register(app):
         # `force` = the admin already saw the "players online" prompt and chose to back up anyway
         # (which will disconnect them). Default off, so a normal click never kicks players.
         force = bool(_json_body().get("force"))
+        if _button_backup_running(server_id):
+            # The maintenance menu's Backup is archiving it now, outside the lock below; a second
+            # run would take that backup's lock for an orphan and archive the same files again.
+            return jsonify({"success": False, "message": "This server is already being backed up "
+                            "from its page — wait for that to finish."}), 200
         if not _full_backup_lock.acquire(blocking=False):
             return jsonify({"success": False, "message": "A backup is already running — try again in a moment."}), 200
         # From here the lock is HELD; the worker's finally releases it. But if we fail to even hand
@@ -197,8 +231,9 @@ def register(app):
         try:
             # This server's own retention, not the global default — see the comment in
             # _run_full_backup. "Back up now" pruning to the global number deleted archives the
-            # per-server override said to keep.
-            keep = bk.get_game_schedule(server_id)["keep"]
+            # per-server override said to keep. game_prune_keep, because with config.json unreadable
+            # that lookup answers the DEFAULT, which is the same deletion by another route.
+            keep, keep_read = bk.game_prune_keep(server_id)
             gname = gs.name   # plain string for logging; the ORM objects are re-fetched in the worker
             _game_backup_status[server_id] = {"running": True, "ok": None, "msg": "", "ts": time.time()}
             _start_backup_worker(server_id, gname, keep, force)
@@ -209,7 +244,10 @@ def register(app):
             return jsonify({"success": False, "message": _log_and_generic("could not start backup")}), 500
         log_action(current_user, "game_backup", target=gname, success=True)
         return jsonify({"success": True, "running": True,
-                        "message": "Backing up " + gname + " — it'll appear below when done."})
+                        "message": "Backing up " + gname + " — it'll appear below when done."
+                                   + ("" if keep_read else
+                                      " config.json could not be read, so no older backup within "
+                                      "the maximum retention (%d) will be pruned." % bk.MAX_FULL_KEEP)})
 
     def _start_backup_worker(server_id, gname, keep, force):
         def _worker():
@@ -226,7 +264,8 @@ def register(app):
                         return
                     ok, reason, was_skipped = run_game_backup(
                         g.remote, g.short_name, g.lgsm_name, keep,
-                        game_type=g.game_type, port=g.port, force=force)
+                        game_type=g.game_type, port=g.port, force=force,
+                        query_type=g.query_type)
                     if ok and not was_skipped:
                         # Move this server's schedule clock, exactly as the scheduled path does.
                         # record_game_backup is what game_backup_due measures against, and it was

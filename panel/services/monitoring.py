@@ -688,6 +688,69 @@ def _forget_deleted_rows(remote_ids, server_ids):
                     m.pop(gone, None)
 
 
+# How long PAST _EXPECT_OFFLINE_WINDOW a reboot the panel fires keeps its servers' "down" quiet. The
+# host has to boot, and the games do not come back with it: LinuxGSM's own `*/5 * * * * monitor`
+# cron starts them, up to five minutes after the host answers again.
+_REBOOT_EXPECT_OFFLINE_EXTRA = 300
+
+
+def _mark_host_expected_offline(remote_id, extra=_REBOOT_EXPECT_OFFLINE_EXTRA):
+    """Mark every game server on a host the panel is about to reboot as expected-offline, the way a
+    panel-issued stop marks one server. Returns the previous marks, so a reboot that did not happen
+    can put them back."""
+    until = time.time() + extra
+    prev = {}
+    for (gid,) in db.session.query(GameServer.id).filter_by(remote_id=remote_id).all():
+        prev[gid] = _expected_offline.get(gid)
+        _expected_offline[gid] = until
+    return prev
+
+
+def _reboot_expecting_offline(remote, reboot):
+    """Run `reboot(remote)` -> (ok, msg) with the host's servers marked expected-offline first.
+
+    Both reboots the panel issues go through this: reboot-when-empty below, and Reboot now
+    (routes/remote_vps.py, which passes its own `remote_reboot`). They rebooted the host without
+    marking anything; while the host was down the monitor skipped its servers, so they stayed "up"
+    in its memory, and when the host answered again — before LinuxGSM's monitor cron had started
+    any game — each one read up -> down and pushed "went offline unexpectedly", then "back online"
+    minutes later: two alerts per server about a reboot the panel had itself just made.
+
+    A reboot that was refused (or raised) restores the previous marks, so a real outage in the
+    next eight minutes still alerts."""
+    prev = _mark_host_expected_offline(remote.id)
+    ok = False
+    try:
+        ok, msg = reboot(remote)
+    finally:
+        if not ok:
+            for gid, ts in prev.items():
+                if ts is None:
+                    _expected_offline.pop(gid, None)
+                else:
+                    _expected_offline[gid] = ts
+    return ok, msg
+
+
+def _fire_reboot_when_empty(remote, info):
+    """Reboot an idle host whose reboot-when-empty was queued: log it, announce it.
+
+    It announced "Host auto-rebooted" whatever remote_reboot answered, so a refused reboot was
+    reported as one that happened."""
+    ok, msg = _reboot_expecting_offline(remote, remote_reboot)
+    log_action(None, "reboot_when_empty_fire", target=remote.name,
+               detail="host idle — %s" % msg, success=ok,
+               actor=info.get("by") or "system")
+    if ok:
+        notifications.notify("auto_reboot", "Host auto-rebooted",
+                             "%s was empty of players, so its queued reboot ran." % remote.display_name)
+    else:
+        notifications.notify("auto_reboot", "Auto-reboot failed",
+                             "%s was empty of players, but its queued reboot couldn't be started."
+                             % remote.display_name)
+    return ok, msg
+
+
 def _reboot_when_empty_watch(app):
     """Reboot each 'reboot when empty' host once it is reachable AND every game server on it reports
     0 players. Unreachable hosts are skipped (never rebooted on a guess), so a host that can't be
@@ -721,12 +784,7 @@ def _reboot_when_empty_watch(app):
                     # so the audit row did not explain it either. Nothing queued, nothing to do.
                     if info is None:
                         continue
-                    ok, msg = remote_reboot(remote)
-                    log_action(None, "reboot_when_empty_fire", target=remote.name,
-                               detail="host idle — %s" % msg, success=ok,
-                               actor=info.get("by") or "system")
-                    notifications.notify("auto_reboot", "Host auto-rebooted",
-                                         "%s was empty of players, so its queued reboot ran." % remote.display_name)
+                    _fire_reboot_when_empty(remote, info)
                 except Exception:
                     _log.debug("reboot-when-empty tick failed for remote %s", rid, exc_info=True)
 

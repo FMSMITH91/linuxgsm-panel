@@ -36,9 +36,17 @@ regexes = [
   # after, because an allowlist that does not actually match is indistinguishable from a fixed
   # gate until CI says otherwise.
   '''FourKeyMap=''',
+  # NodeSource's PUBLIC signing-key fingerprint, pinned in install.sh so the apt key is verified
+  # before it is trusted. generic-api-key reads `..._KEY_FPR="<40 hex>"` as a credential. A
+  # fingerprint is published by design; exempted as the whole assignment with this exact value
+  # (regexTarget = "match"), because the literal is in branch history from commit 4bc9cba on and
+  # history is not rewritten. A key rotation changes the value, the gate goes red, and the new
+  # fingerprint gets looked at — a unit gate ties this entry to install.sh so that happens there.
+  '''NODESOURCE_KEY_FPR="6F71F525282841EEDAF851B42F59B5F99B1BE0B4"''',
 ]
-# Belt-and-suspenders: these files only contain example/placeholder strings, never
-# real credentials.
-paths = [
-  '''README\.md''',
-]
+# No `paths` exemptions. There was one — '''README\.md''' — and gitleaks' path patterns are
+# unanchored searches, so it took every README in the repo (the root one, static/js/,
+# tests/fuzz/, .clusterfuzzlite/) out of the scan entirely, for placeholders the regexes above
+# already cover. A README is exactly where a real token gets pasted while documenting a setup,
+# which is why security.yml refuses to be path-filtered. A unit gate keeps any future path
+# exemption anchored to one named file and off every README.

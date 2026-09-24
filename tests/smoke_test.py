@@ -249,6 +249,115 @@ try:
         code = c.get(path).status_code
         check("GET %s renders (200)" % path, code == 200, "got %d" % code)
 
+    # ── /tailscale's Disable takes down the PANEL's Serve mapping, not the first one listed ──
+    # The button sent services[0].routes[0].mount, and Tailscale lists "/" first — on a node where
+    # another app holds "/" and the panel sits at /lgsm, that was the other app. And the removal
+    # ran `tailscale serve --bg --remove`, a flag no Tailscale version has, so it never worked.
+    import panel.ops.tailscale_integration as _tsd
+    from panel.core.config import load_config as _tsd_load, save_config as _tsd_save
+    _tsd_saved = (_tsd.get_tailscale_info, _tsd._run_ts, _tsd.ensure_operator)
+    _tsd_cfg0 = dict(_tsd_load())
+    _tsd_port = _tsd_cfg0.get("port", 5000)
+    _tsd_ran = []
+    _tsd_info = _tsd.TailscaleInfo(
+        installed=True, running=True, backend_state="Running", dns_name="node.example.ts.net",
+        tailscale_ips=["100.64.0.9"],
+        serve_config={"services": [{"url": "https://node.example.ts.net", "funnel": True, "routes": [
+            {"mount": "/", "target": "http://127.0.0.1:3000"},
+            {"mount": "/lgsm", "target": "http://127.0.0.1:%d" % _tsd_port}]}], "raw": "x"})
+    try:
+        _tsd.get_tailscale_info = lambda force_refresh=False: _tsd_info
+        _tsd._run_ts = lambda args, timeout=5: (_tsd_ran.append(list(args)), ("", "", 0))[1]
+        _tsd.ensure_operator = lambda: (True, "panel")
+        _tsd_c = _tsd_load()
+        # No stored mount: the button's mount has to come from the host's routes, which only the
+        # route supplies — a stored "/lgsm" would let a route that passed nothing pass this too.
+        # bind_host 0.0.0.0: the panel is reachable without Serve, so disabling it strands nothing
+        # (the loopback case, where it does, is refused below).
+        _tsd_c.update(tailscale_setup_done=True, tailscale_use_funnel=True, tailscale_mount="",
+                      bind_host="0.0.0.0")
+        _tsd_save(_tsd_c)
+        _tsd_html = c.get("/tailscale").get_data(as_text=True)
+        check("tailscale page: Disable targets the panel's own mount, not another app's '/'",
+              'data-mount="/lgsm"' in _tsd_html and 'data-mount="/"' not in _tsd_html,
+              repr([ln.strip() for ln in _tsd_html.splitlines() if "data-mount" in ln][:3]))
+        _tsd_r = c.post("/api/tailscale/serve", json={"action": "disable", "mount": "/"})
+        check("tailscale serve: disabling at another app's mount removes nothing and keeps the config",
+              _tsd_r.status_code != 200 and _tsd_ran == []
+              and _tsd_load().get("tailscale_setup_done") is True,
+              "%d %r ran=%r" % (_tsd_r.status_code, _tsd_r.get_json(), _tsd_ran))
+        # A loopback-bound panel is reached ONLY through Serve. Removing it ended the admin's session
+        # and nothing could reach the process again — a restart re-binds 127.0.0.1 and no longer
+        # re-applies Serve — so getting back in took host SSH. change-port refuses to create that
+        # state; Disable created it with one click. Both a stored 127.0.0.1 and an unset bind that
+        # boot resolved to 127.0.0.1 are that state.
+        import app as _tsd_app
+        _tsd_rb = dict(_tsd_app._RESOLVED_BIND)
+        try:
+            for _tsd_label, _tsd_bind, _tsd_resolved in (
+                    ("a stored 127.0.0.1 bind", "127.0.0.1", None),
+                    ("an unset bind that boot resolved to 127.0.0.1", "", "127.0.0.1")):
+                _tsd_app._RESOLVED_BIND.clear()
+                if _tsd_resolved:
+                    _tsd_app._RESOLVED_BIND[_tsd_port] = _tsd_resolved
+                _tsd_lb = _tsd_load()
+                _tsd_lb["bind_host"] = _tsd_bind
+                _tsd_save(_tsd_lb)
+                _tsd_r = c.post("/api/tailscale/serve", json={"action": "disable", "mount": "/lgsm"})
+                check("tailscale serve: Disable is refused with %s (it would lock the admin out)"
+                      % _tsd_label,
+                      _tsd_r.status_code == 400 and _tsd_ran == []
+                      and _tsd_load().get("tailscale_setup_done") is True
+                      and "0.0.0.0" in ((_tsd_r.get_json() or {}).get("message") or ""),
+                      "%d %r ran=%r" % (_tsd_r.status_code, _tsd_r.get_json(), _tsd_ran))
+        finally:
+            _tsd_app._RESOLVED_BIND.clear()
+            _tsd_app._RESOLVED_BIND.update(_tsd_rb)
+        # The same POST with the panel reachable without Serve goes through: the control that the
+        # refusal above is about the bind, not about Disable.
+        _tsd_lb = _tsd_load()
+        _tsd_lb["bind_host"] = "0.0.0.0"
+        _tsd_save(_tsd_lb)
+        _tsd_r = c.post("/api/tailscale/serve", json={"action": "disable", "mount": "/lgsm"})
+        check("tailscale serve: disabling the panel's mount runs the CLI's `serve ... off` removal",
+              _tsd_r.status_code == 200
+              and _tsd_ran == [["serve", "--https=443", "--set-path=/lgsm", "off"]],
+              "%d %r ran=%r" % (_tsd_r.status_code, _tsd_r.get_json(), _tsd_ran))
+        check("tailscale serve: ...and the boot path will no longer re-apply it (control)",
+              _tsd_load().get("tailscale_setup_done") is False
+              and not _tsd_load().get("tailscale_use_funnel"))
+    finally:
+        _tsd.get_tailscale_info, _tsd._run_ts, _tsd.ensure_operator = _tsd_saved
+        _tsd._cache["info"] = None
+        _tsd_save(_tsd_cfg0)
+    # ── window.MOUNT follows the LIVE mount, like url_for does ────────────────────────────────
+    # It was the mount as it stood at boot, while PrefixMiddleware applies the live one to every
+    # request: after Serve was enabled (or moved) at runtime the pages rendered with correct links,
+    # and every fetch() and the console socket went to the old mount until a restart.
+    _mt_saved = load_config()
+    try:
+        _mt_cfg = dict(_mt_saved)
+        _mt_cfg["tailscale_mount"] = "/lgsm"
+        save_config(_mt_cfg)
+        _mt_r = c.get("/lgsm/account")
+        _mt_html = _mt_r.get_data(as_text=True)
+        check("mount: (control) the page is served under a mount set at runtime",
+              _mt_r.status_code == 200 and 'href="/lgsm/' in _mt_html, "got %d" % _mt_r.status_code)
+        check("mount: a mount set at runtime reaches window.MOUNT (not the boot-time one)",
+              'window.MOUNT = "/lgsm";' in _mt_html,
+              "fetch() and the socket would still use the boot-time mount")
+    finally:
+        save_config(_mt_saved)
+    check("mount: ...and with no mount, window.MOUNT is empty again",
+          'window.MOUNT = "";' in c.get("/account").get_data(as_text=True))
+    # panel.js arms its auth ping and session-expired redirect only where SIGNED_IN is true. They
+    # ran on signed-out pages too, and threw an invitee (or the first-run admin) off a half-filled
+    # form to /login with "Your session expired" — about a session that never existed.
+    check("session: (control) a page rendered for a signed-in user says so",
+          "window.SIGNED_IN = true;" in c.get("/account").get_data(as_text=True))
+    check("session: a signed-out page does not claim a session panel.js could 'expire'",
+          "window.SIGNED_IN = false;" in app.test_client().get("/login").get_data(as_text=True))
+
     # ── The notifications page must actually OFFER each channel ───────────────────────────────
     # "/notifications renders 200" passes just as well with a channel's whole card missing, which
     # is how a half-wired provider ships: the backend supports it and nobody can reach it.
@@ -280,6 +389,23 @@ try:
               "&q=%27%22%3B--&action=whatever&user=nobody")
     check("GET /logs with junk filter/sort params -> 200 (allowlisted)",
           r.status_code == 200, "got %d" % r.status_code)
+
+    # ── The audit log shows a detail's END, not just its first 100 characters ──
+    # Start/stop/restart store the LAST 400 characters of LinuxGSM's output on purpose — the
+    # [ OK ]/[FAIL] line and its reason are at the end — and the viewer cut every detail at 100
+    # characters, so the part kept on purpose was never visible anywhere in the panel.
+    from panel.db.models import AuditLog as _dtl_AL
+    _dtl_head = "DTLHEAD" + "x" * 150
+    _dtl_tail = "DTLTAIL_FAIL_REASON"
+    with app.app_context():
+        db.session.add(_dtl_AL(username="admin", action="server_start", target="dtl-probe",
+                               detail=_dtl_head + " ... " + _dtl_tail, success=False))
+        db.session.commit()
+    _dtl_html = c.get("/logs?q=DTLHEAD").get_data(as_text=True)
+    check("audit log: (control) the long entry is on the page at all",
+          "DTLHEAD" in _dtl_html, "the probe row did not render — the check below proves nothing")
+    check("audit log: a long detail's tail (where the outcome is) is rendered, not cut at 100 chars",
+          _dtl_tail in _dtl_html, "the FAIL reason stored at the end of the detail is not on /logs")
 
     # The Files & Config page (config editor + file browser + cron manager) must render.
     check("GET /server/<id>/files renders (200)",
@@ -581,6 +707,210 @@ try:
             if _l is not None:
                 db.session.delete(_l); db.session.commit()
 
+    # ── a queued stop that FAILED must stay queued, and the sweep must count with the override ─
+    # The sweep discarded run_as_game_user's (out, err, rc) and cleared both flags whatever
+    # happened. That call does not raise on the tailscale/local transports: a timeout comes back as
+    # rc=-1, so a stop that never happened left the queue and nobody retried. It also counted
+    # players without the server's gamedig override, so a Project Zomboid/ARK server read as None
+    # ("unknown") on every tick and its queued restart never fired.
+    from panel.db.models import AuditLog as _QAL
+    _qa_saved = (_shmod.get_server_status, _shmod.sm_player_count, _sm_core.run_as_game_user,
+                 _sm_core.set_game_priority)
+    _qa_pc_args, _qa_rc = [], [-1]
+    _qa_id = None
+    try:
+        with app.app_context():
+            _rm = RemoteServer.query.first()
+            _qa = _UGS(remote_id=_rm.id, name="queued-stop-rc", short_name="queuedstoprc",
+                       game_type="pz", port=16261, installed=True, status="online")
+            _qa.stop_pending = True
+            _qa.query_type = "projectzomboid"
+            db.session.add(_qa); db.session.commit()
+            _qa_id = _qa.id
+            _QAL.query.filter_by(target="queued-stop-rc").delete(); db.session.commit()
+        _shmod.get_server_status = lambda srv, gs, distinguish_unresponsive=False: "online"
+
+        def _qa_pc(*a, **k):
+            if a[1] == "queuedstoprc":
+                _qa_pc_args.append((a, k))
+            return 0
+        _shmod.sm_player_count = _qa_pc
+        _sm_core.run_as_game_user = lambda *a, **k: (("", "SSH command timed out", _qa_rc[0])
+                                                     if a[1] == "queuedstoprc" else ("", "", 0))
+        _sm_core.set_game_priority = lambda *a, **k: None
+
+        def _qa_state():
+            with app.app_context():
+                _g = db.session.get(_UGS, _qa_id)
+                _rows = (_QAL.query.filter_by(target="queued-stop-rc", action="stop_server")
+                         .order_by(_QAL.id).all())
+                return bool(_g.stop_pending), [(r.success, r.detail) for r in _rows]
+
+        _shmod._run_due_restarts(app)
+        _qa_qt = [k.get("query_type", a[4] if len(a) > 4 else None) for a, k in _qa_pc_args]
+        check("queued stop: the sweep counts players with the server's gamedig override",
+              _qa_qt == ["projectzomboid"],
+              "player_count got query_type %r — without it an overridden game reads as unknown "
+              "and its queued action never fires" % (_qa_qt,))
+        _qa_pend, _qa_rows = _qa_state()
+        check("queued stop: a stop that timed out (rc=-1) stays queued for the next tick",
+              _qa_pend is True, "stop_pending was cleared although the stop never happened")
+        check("queued stop: ...and the failed attempt is audited as a failure",
+              len(_qa_rows) == 1 and _qa_rows[0][0] is False and "still queued" in (_qa_rows[0][1] or ""),
+              "audit rows %r" % (_qa_rows,))
+        # The failure count belongs to the queued action: cancel it, and a later re-queue starts
+        # from zero instead of being given up on early with the old attempts.
+        _qa_count_before = _shmod._queued_action_failures.get(_qa_id)
+        with app.app_context():
+            db.session.get(_UGS, _qa_id).stop_pending = False
+            db.session.commit()
+        _shmod._run_due_restarts(app)
+        _qa_count_after = _shmod._queued_action_failures.get(_qa_id)
+        with app.app_context():
+            db.session.get(_UGS, _qa_id).stop_pending = True
+            db.session.commit()
+            _QAL.query.filter_by(target="queued-stop-rc").delete(); db.session.commit()
+        check("queued stop: cancelling the queue drops its failure count",
+              _qa_count_before == 1 and _qa_count_after is None,
+              "count %r before the cancel, %r after" % (_qa_count_before, _qa_count_after))
+        # Bounded: a queued action that keeps failing is given up on, not retried for ever (a
+        # restart LinuxGSM answers non-zero would otherwise bounce the server on every tick).
+        _shmod._run_due_restarts(app)
+        _shmod._run_due_restarts(app)
+        _shmod._run_due_restarts(app)
+        _qa_pend, _qa_rows = _qa_state()
+        check("queued stop: ...and is given up on after %d failed attempts, saying so"
+              % _shmod._QUEUED_ACTION_ATTEMPTS,
+              _qa_pend is False and len(_qa_rows) == _shmod._QUEUED_ACTION_ATTEMPTS
+              and "no longer queued" in (_qa_rows[-1][1] or ""),
+              "pending=%r rows=%r" % (_qa_pend, _qa_rows))
+        # Positive control: a stop that WORKED clears the queue at once and is audited as a success.
+        with app.app_context():
+            db.session.get(_UGS, _qa_id).stop_pending = True
+            db.session.commit()
+            _QAL.query.filter_by(target="queued-stop-rc").delete(); db.session.commit()
+        _qa_rc[0] = 0
+        # While the maintenance menu's Backup button is archiving the server, the queued stop
+        # waits: that long action holds no flag the sweep used to read.
+        from panel.core.panel_state import _action_output as _qa_ao
+        _qa_ao[_qa_id] = {"action": "backup", "path": "/dev/null", "user": "queuedstoprc", "pos": 0}
+        try:
+            _shmod._run_due_restarts(app)
+        finally:
+            _qa_ao.pop(_qa_id, None)
+        _qa_pend, _qa_rows = _qa_state()
+        check("queued stop: ...waits while a Backup-button run is archiving the server",
+              _qa_pend is True and not _qa_rows, "pending=%r rows=%r" % (_qa_pend, _qa_rows))
+        _shmod._run_due_restarts(app)
+        _qa_pend, _qa_rows = _qa_state()
+        check("queued stop: one that exits 0 clears the queue and is audited as a success",
+              _qa_pend is False and [r[0] for r in _qa_rows] == [True],
+              "pending=%r rows=%r" % (_qa_pend, _qa_rows))
+    finally:
+        (_shmod.get_server_status, _shmod.sm_player_count, _sm_core.run_as_game_user,
+         _sm_core.set_game_priority) = _qa_saved
+        _shmod._queued_action_failures.pop(_qa_id, None)
+        with app.app_context():
+            _l = db.session.get(_UGS, _qa_id) if _qa_id else None
+            if _l is not None:
+                db.session.delete(_l); db.session.commit()
+
+    # ── a queued restart LinuxGSM answers non-zero ran, and must not run again ─────────────────
+    # Every rc but 0 read as "did not happen" and the restart was retried on each tick, up to the
+    # attempt limit. But LinuxGSM's exit code is whatever its last log line set: a failed status
+    # alert after a good restart ends it at 1. The next tick finds the server online and empty —
+    # the very trigger — so it was restarted up to three times. Only a missing exit status (the
+    # transport's -1, or ssh's own 255) may be retried; a stop still retries on LinuxGSM's
+    # non-zero, because the next tick asks the server first and clears a stopped one.
+    _qr_saved = (_shmod.get_server_status, _shmod.sm_player_count, _sm_core.run_as_game_user,
+                 _sm_core.set_game_priority)
+    _qr_calls, _qr_rc, _qr_status = [], [1], ["online"]
+    _qr_id = None
+    try:
+        with app.app_context():
+            _rm = RemoteServer.query.first()
+            _qr = _UGS(remote_id=_rm.id, name="queued-restart-rc", short_name="queuedrestartrc",
+                       game_type="pz", port=16261, installed=True, status="online")
+            _qr.restart_pending = True
+            db.session.add(_qr); db.session.commit()
+            _qr_id = _qr.id
+            _QAL.query.filter_by(target="queued-restart-rc").delete(); db.session.commit()
+        _shmod.get_server_status = lambda srv, gs, distinguish_unresponsive=False: _qr_status[0]
+        _shmod.sm_player_count = lambda *a, **k: 0
+
+        def _qr_run(*a, **k):
+            if a[1] != "queuedrestartrc":
+                return "", "", 0
+            _qr_calls.append(a[2])
+            return "Started queuedrestartrc\nSending Discord alert: FAIL", "", _qr_rc[0]
+        _sm_core.run_as_game_user = _qr_run
+        _sm_core.set_game_priority = lambda *a, **k: None
+
+        def _qr_state():
+            with app.app_context():
+                _g = db.session.get(_UGS, _qr_id)
+                _rows = (_QAL.query.filter(_QAL.target == "queued-restart-rc")
+                         .order_by(_QAL.id).all())
+                return (bool(_g.restart_pending), bool(_g.stop_pending),
+                        [(r.action, r.success, r.detail) for r in _rows])
+
+        def _qr_reset(restart=False, stop=False, rc=1):
+            with app.app_context():
+                _g = db.session.get(_UGS, _qr_id)
+                _g.restart_pending, _g.stop_pending = restart, stop
+                db.session.commit()
+                _QAL.query.filter_by(target="queued-restart-rc").delete(); db.session.commit()
+            _shmod._queued_action_failures.pop(_qr_id, None)
+            _qr_calls[:] = []
+            _qr_rc[0] = rc
+            _qr_status[0] = "online"
+
+        _shmod._run_due_restarts(app)
+        _shmod._run_due_restarts(app)   # still online and empty: a retry would restart it again
+        _qr_rp, _qr_sp, _qr_rows = _qr_state()
+        check("queued restart: LinuxGSM exiting 1 after it ran restarts the server ONCE",
+              _qr_calls == ["restart"] and _qr_rp is False,
+              "calls=%r restart_pending=%r" % (_qr_calls, _qr_rp))
+        check("queued restart: ...and the audit row gives the exit code and its line, unqueued",
+              len(_qr_rows) == 1 and _qr_rows[0][1] is False
+              and "exited 1: " in (_qr_rows[0][2] or "")
+              and "no longer queued" in (_qr_rows[0][2] or "")
+              and "Discord alert: FAIL" in (_qr_rows[0][2] or ""),
+              "rows %r" % (_qr_rows,))
+        # Positive controls: no exit status at all is still retried — the hole the retry closed.
+        for _qr_code in (-1, 255):
+            _qr_reset(restart=True, rc=_qr_code)
+            _shmod._run_due_restarts(app)
+            _qr_rp, _qr_sp, _qr_rows = _qr_state()
+            check("queued restart: one with no answer (rc=%d) stays queued for the next tick" % _qr_code,
+                  _qr_calls == ["restart"] and _qr_rp is True
+                  and len(_qr_rows) == 1 and "still queued" in (_qr_rows[0][2] or ""),
+                  "calls=%r pending=%r rows=%r" % (_qr_calls, _qr_rp, _qr_rows))
+        # A stop LinuxGSM answers non-zero stays queued without calling itself a failure, and is
+        # cleared, not repeated, once the next tick sees the server stopped.
+        _qr_reset(stop=True, rc=2)
+        _shmod._run_due_restarts(app)
+        _qr_rp, _qr_sp, _qr_rows = _qr_state()
+        check("queued stop: LinuxGSM exiting 2 stays queued until the server is seen stopped",
+              _qr_sp is True and len(_qr_rows) == 1
+              and "exited 2" in (_qr_rows[0][2] or "") and "failed" not in (_qr_rows[0][2] or ""),
+              "stop_pending=%r rows=%r" % (_qr_sp, _qr_rows))
+        _qr_status[0] = "offline"
+        _shmod._run_due_restarts(app)
+        _qr_rp, _qr_sp, _qr_rows = _qr_state()
+        check("queued stop: ...and a stopped server clears it without a second stop",
+              _qr_sp is False and _qr_calls == ["stop"],
+              "stop_pending=%r calls=%r" % (_qr_sp, _qr_calls))
+    finally:
+        (_shmod.get_server_status, _shmod.sm_player_count, _sm_core.run_as_game_user,
+         _sm_core.set_game_priority) = _qr_saved
+        _shmod._queued_action_failures.pop(_qr_id, None)
+        with app.app_context():
+            _l = db.session.get(_UGS, _qr_id) if _qr_id else None
+            if _l is not None:
+                db.session.delete(_l); db.session.commit()
+            _QAL.query.filter_by(target="queued-restart-rc").delete(); db.session.commit()
+
     # ── an install that dies EARLY must still leave a row you can act on ──────────────────────
     # Only the step-4 path wrote status="failed". Every earlier exit — a bad game type, an
     # unreachable host during LinuxGSM setup, an unhandled exception — wrote the REASON and left
@@ -851,6 +1181,14 @@ try:
     mrc = client_as(mru_id)
     check("MANAGE_REMOTES user: /remotes renders (200)",
           mrc.get("/remotes").status_code == 200)
+    # ...and the sidebar, on every page, lists only the hosts their groups grant. It listed every
+    # remote's name and id to anyone holding the permission, undoing the per-host scoping above.
+    _nav_html = mrc.get("/account").get_data(as_text=True)
+    check("sidebar: (control) a host admin's sidebar links the host they are granted",
+          ("/remote/%d/manage" % remote_id) in _nav_html, "no granted-host link — the check below is vacuous")
+    check("sidebar: ...and does not name a host they are not granted",
+          ("/remote/%d/manage" % remote2_id) not in _nav_html and "smoke-host-2" not in _nav_html,
+          "the Infrastructure sidebar lists an ungranted host")
     # manage_remotes.html carries no is_local branch any more — six of them tested a flag that is
     # False for every row this route can hand it, including a "This Machine" badge and a "Runs
     # locally on this server" line no visitor was ever shown. That is only true while the route
@@ -943,6 +1281,80 @@ try:
           mrc.get("/api/remote/%d/firewall" % remote2_id).status_code == 403)
     check("MANAGE_REMOTES user: non-granted remote reboot -> 403",
           mrc.post("/api/remote/%d/reboot" % remote2_id).status_code == 403)
+
+    # ── the host page offers a host operator only what their rights can do ──────────────────
+    # remote_manage needs MANAGE_REMOTES alone. It offered this operator the game table's
+    # Uninstall (a typed-name confirm, then refused) and Files & Config, the install-wide threshold
+    # Save and whitelist Add/× (the endpoints ignore or 403 them, and the page said "saved" /
+    # "removed"), and top-ips handed them the whole install's whitelist.
+    import panel.routes.remote_security as _hp_rs
+    _hp_saved = (_hp_rs.remote_fail2ban_top_ips, _hp_rs.remote_security_log)
+    _hp_lid = None
+    try:
+        _hp_rs.remote_fail2ban_top_ips = lambda *a, **k: []
+        _hp_rem = mrc.get("/remote/%d/manage" % remote_id).get_data(as_text=True)
+        _hp_adm = c.get("/remote/%d/manage" % remote_id).get_data(as_text=True)
+        _hp_files = "/server/%d/files" % gs_id
+        check("host page: a MANAGE_REMOTES-only operator is not offered Uninstall or Files & Config",
+              "smoke-cs" in _hp_rem and "uninstall-form" not in _hp_rem and _hp_files not in _hp_rem,
+              "the game row offers controls whose routes refuse this user")
+        check("host page: ...while a superadmin still is (positive control)",
+              "uninstall-form" in _hp_adm and _hp_files in _hp_adm, "the gate hides them from everyone")
+        check("host page: the install-wide threshold Save and whitelist Add are superadmin-only",
+              'data-action="saveThreshold"' not in _hp_rem and 'data-action="addWhitelist"' not in _hp_rem
+              and 'id="sec-wl-readonly"' in _hp_rem, "an operator is offered writes that are refused")
+        check("host page: ...and a superadmin keeps them (positive control)",
+              'data-action="saveThreshold"' in _hp_adm and 'data-action="addWhitelist"' in _hp_adm,
+              "the superadmin lost the threshold/whitelist controls")
+        _hp_ti = mrc.get("/api/remote/%d/security/top-ips" % remote_id).get_json(silent=True) or {}
+        _hp_ta = c.get("/api/remote/%d/security/top-ips" % remote_id).get_json(silent=True) or {}
+        check("top-ips: a host operator is not sent the install-wide whitelist",
+              "whitelist" not in _hp_ti and "autoblock" in _hp_ti, repr(_hp_ti)[:200])
+        check("top-ips: ...a superadmin is (positive control)", "whitelist" in _hp_ta, repr(_hp_ta)[:200])
+        # An unanswered log read is not an empty log.
+        _hp_rs.remote_security_log = lambda *a, **k: None
+        _hp_lg = c.get("/api/remote/%d/security/log?which=ssh" % remote_id).get_json(silent=True) or {}
+        check("security log: a read no host answered comes back as an error, not empty text",
+              _hp_lg.get("error") and _hp_lg.get("text") == "", repr(_hp_lg))
+        _hp_rs.remote_security_log = lambda *a, **k: ""
+        _hp_lg = c.get("/api/remote/%d/security/log?which=ssh" % remote_id).get_json(silent=True) or {}
+        check("security log: ...while an answered empty log is still just empty (positive control)",
+              "error" not in _hp_lg and _hp_lg.get("text") == "", repr(_hp_lg))
+        # The PANEL HOST's page, granted to the same operator (Groups offers it as a checkbox). Its
+        # Security endpoints are all superadmin-only, and its Connection card's else-branch spoke
+        # of an SSH login, a Migrate button and a pinned host key the panel host does not have.
+        with app.app_context():
+            _hp_l = RemoteServer(name="smoke-hp-local", host="127.0.0.1", port=22, username="local",
+                                 auth_method="local", auth_credential="", is_local=True)
+            db.session.add(_hp_l)
+            db.session.flush()
+            _hp_g = Group.query.filter_by(name="smoke_mr").first()   # held: a chained append
+            _hp_g.servers.append(_hp_l)                              # loses it to the GC
+            db.session.commit()
+            _hp_lid = _hp_l.id
+        _hp_loc = mrc.get("/remote/%d/manage" % _hp_lid).get_data(as_text=True)
+        check("panel host page: a non-superadmin is not shown the Security tab its endpoints refuse",
+              'id="ssh-port-input"' in _hp_loc and 'data-mtab-btn="security"' not in _hp_loc
+              and 'id="sec-bans"' not in _hp_loc, "the tab renders 403s as an all-clear")
+        check("panel host page: ...nor an SSH login, Migrate button or host key it does not have",
+              "Migrate to Tailscale SSH" not in _hp_loc and "Panel connects via" not in _hp_loc
+              and "Pinned SSH host key" not in _hp_loc, "remote-only copy on the panel host")
+        check("host page: ...while a REMOTE's page keeps all of them (positive control)",
+              'data-mtab-btn="security"' in _hp_rem and "Migrate to Tailscale SSH" in _hp_rem
+              and "Pinned SSH host key" in _hp_rem, "the gate hides them on every host")
+        _hp_loc_a = c.get("/remote/%d/manage" % _hp_lid).get_data(as_text=True)
+        check("panel host page: ...and a superadmin still gets the Security tab there (positive control)",
+              'data-mtab-btn="security"' in _hp_loc_a and 'id="sec-bans"' in _hp_loc_a,
+              "the Security tab is gone for the superadmin too")
+    finally:
+        _hp_rs.remote_fail2ban_top_ips, _hp_rs.remote_security_log = _hp_saved
+        if _hp_lid is not None:
+            with app.app_context():
+                _hp_row = db.session.get(RemoteServer, _hp_lid)
+                if _hp_row is not None:
+                    _hp_row.groups = []
+                    db.session.delete(_hp_row)
+                    db.session.commit()
 
     # ── a host you add has to be a host you can then reach ───────────────────────────────────
     # add_remote committed the row and granted it to nothing. Access is purely group-derived, so
@@ -1145,6 +1557,37 @@ try:
         check("firewall page: ...and still counts, rather than dashing everything",
               b'id="blocks-count">0 <' in _fw_ok.data and b"&mdash;" not in _fw_ok.data,
               "the real empty case no longer reports a count")
+        check("firewall page: ...and an ACTIVE firewall does not show the inactive note",
+              b'class="text-warning d-none">While UFW is inactive' in _fw_ok.data
+              and b"installed but inactive" not in _fw_ok.data, "the inactive copy shows on an active host")
+        # An INACTIVE ufw (stock Ubuntu) prints only its Status line — stored rules are neither
+        # listed nor enforced — so groups is [] and the page said "0 rules", "No firewall rules
+        # yet." and "No IPs are blocked." over a block that denies nothing.
+        def _inactive(_server):
+            return {"installed": True, "enabled": False, "rules": [], "groups": []}
+        _rvps.remote_ufw_status = _inactive
+        _fw_in = client_as(admin_id).get("/remote/%d/firewall" % remote_id)
+        check("firewall page: an INACTIVE ufw is said to be inactive and unenforced",
+              _fw_in.status_code == 200 and b"installed but inactive" in _fw_in.data
+              and b"neither listed nor enforced" in _fw_in.data,
+              "status=%d" % _fw_in.status_code)
+        check("firewall page: ...with no rule or block count, and no 'none blocked' claim",
+              b'id="rules-count">&mdash;<' in _fw_in.data and b'id="blocks-count">&mdash;<' in _fw_in.data
+              and b"No IPs are blocked." not in _fw_in.data and b"No firewall rules yet." not in _fw_in.data,
+              "an inactive firewall's empty listing is still counted")
+        check("firewall page: ...and says a block there denies nothing",
+              b'class="text-warning">While UFW is inactive' in _fw_in.data, "the block copy is unqualified")
+        # A sudo refusal comes back as unreachable + permission_denied; the page blamed the network.
+        def _sudo_refused(_server):
+            return {"installed": False, "enabled": False, "rules": [], "groups": [],
+                    "unreachable": True, "permission_denied": True}
+        _rvps.remote_ufw_status = _sudo_refused
+        _fw_pd = client_as(admin_id).get("/remote/%d/firewall" % remote_id)
+        check("firewall page: a sudo refusal names sudo, not an unreachable host",
+              _fw_pd.status_code == 200 and b"sudo refused the firewall read" in _fw_pd.data
+              and b"can't reach this host" not in _fw_pd.data
+              and b"while this host is unreachable" not in _fw_pd.data,
+              "status=%d" % _fw_pd.status_code)
     finally:
         _rvps.remote_ufw_status = _real_ufw
 
@@ -2379,6 +2822,33 @@ try:
     check("2FA backup code is one-time (reuse rejected, not 302)", s3.status_code != 302,
           "got %d" % s3.status_code)
 
+    # ...and a wrong six-digit code does NOT try the backup codes. Each try is a cost-12 bcrypt
+    # per stored code (~2s for eight), for an entry that cannot match: anyone holding one password
+    # could spend that on every wrong TOTP they submitted.
+    import bcrypt as _bc_mod
+    from app import _LOGIN_FAILS as _bc_fails
+    _bc_real = _bc_mod.checkpw
+    _bc_calls = []
+
+    def _bc_count(*a):
+        _bc_calls.append(1)
+        return _bc_real(*a)
+    b4 = app.test_client()
+    b4.post("/login", data={"username": "smoke_2fa", "password": "Str0ng!passw0rd"})
+    _bc_mod.checkpw = _bc_count
+    try:
+        b4.post("/login", data={"totp_code": "123456"})
+        _bc_totp = len(_bc_calls)
+        b4.post("/login", data={"totp_code": "zzzzz-zzzzz"})
+        _bc_shaped = len(_bc_calls) - _bc_totp
+    finally:
+        _bc_mod.checkpw = _bc_real
+        _bc_fails.clear()      # two deliberate failures: don't leave this IP nearer the lockout
+    check("2FA: (control) a backup-shaped wrong code does try the stored backup codes",
+          _bc_shaped >= 1, "no bcrypt compare ran — the check below proves nothing")
+    check("2FA: a wrong six-digit code does not run a bcrypt per backup code",
+          _bc_totp == 0, "%d bcrypt compares for a mistyped TOTP" % _bc_totp)
+
     # A TOTP code is valid for ~90s (its step plus one either side for skew). Accepting it on
     # "is it valid" alone lets a code observed once — a phishing proxy, a shoulder-surf, a leaked
     # log — be replayed for the rest of that window. Each step must be spendable exactly once.
@@ -2419,8 +2889,16 @@ try:
         _enc = client_as(_en_id)
         _enc.get("/account/2fa/enable")                    # seeds the pending secret in-session
         with _enc.session_transaction() as _sess:
-            _en_secret = _sess.get("_2fa_setup_secret")
+            _en_in_cookie = _sess.get("_2fa_setup_secret") or ""
+        from panel.core.config import decrypt_secret as _en_dec
+        _en_secret = _en_dec(_en_in_cookie)
         check("2FA enrol: the page issues a pending secret", bool(_en_secret))
+        # Flask's session is a SIGNED cookie, readable by anyone who holds it, and on success this
+        # value becomes the account's permanent TOTP seed. A Set-Cookie captured during enrolment
+        # handed over a second factor that survives password changes and sign-out-everywhere.
+        check("2FA enrol: the pending secret is not in the session cookie in the clear",
+              _en_secret and _en_secret not in _en_in_cookie,
+              "the cookie carries the TOTP seed as plaintext")
         _en_code = _po.TOTP(_en_secret).now()
         # ── ...and enrolling needs the account holder's PASSWORD ───────────────────────────────
         # /account/2fa/enable carried @login_required and nothing else, while its mirror
@@ -3105,6 +3583,30 @@ try:
         (_dl_mod.stat_path, _dl_mod.stream_path) = _dl_saved
         with c.session_transaction() as _dl_s:
             _dl_s.pop("_flashes", None)
+
+    # ── the file-save API must not write an empty file for a body with no text in it ─────────────
+    # `data.get("content", "")` turned a missing key — an API script's typo like "contents" — into
+    # "", and write_file does `(content or "").encode()`, so null/0/false/[] did the same: the
+    # target was truncated to 0 bytes and the answer was {"success": true, "message": "Saved"}.
+    _fs_writes = []
+    _fs_saved = _dl_mod.write_file
+    try:
+        _dl_mod.write_file = lambda srv, user, rel, content: (_fs_writes.append((rel, content)), (True, ""))[1]
+        for _fs_body in ({"path": "cfg/server.cfg", "contents": "typo"}, {"path": "cfg/server.cfg", "content": None},
+                         {"path": "cfg/server.cfg", "content": 0}, {"path": "cfg/server.cfg", "content": []}):
+            _fs_r = c.post("/api/server/%d/file" % gs_id, json=_fs_body)
+            check("file save: %r is refused, not written as an empty file" % (sorted(_fs_body.items()),),
+                  _fs_r.status_code == 400 and not _fs_writes
+                  and (_fs_r.get_json() or {}).get("success") is False,
+                  "status %d, writes %r" % (_fs_r.status_code, _fs_writes))
+            del _fs_writes[:]
+        # Positive control: an intentionally EMPTY file is still text, and is saved.
+        _fs_ok = c.post("/api/server/%d/file" % gs_id, json={"path": "cfg/empty.cfg", "content": ""})
+        check("file save: an intentionally empty file (content \"\") is still saved",
+              _fs_ok.status_code == 200 and _fs_writes == [("cfg/empty.cfg", "")],
+              "status %d, writes %r" % (_fs_ok.status_code, _fs_writes))
+    finally:
+        _dl_mod.write_file = _fs_saved
 
     mod_bad = c.post("/api/server/%d/moderate" % gs_id, json={"action": "nope"})
     check("moderate: unknown action -> 400", mod_bad.status_code == 400)
@@ -3890,6 +4392,31 @@ try:
           _act_denied.status_code in (403, 302, 401),
           "status=%d" % _act_denied.status_code)
 
+    # Bulk Update for a group holding update_server alone. The bar, the row checkboxes and
+    # select-all were all behind can_control (start/stop/restart), so the Update button the bar
+    # gates for exactly this user could never appear — they updated servers one page at a time.
+    _vo_dash = client_as(_viewer_id).get("/").get_data(as_text=True)
+    check("dashboard: a view-only user gets no bulk selection (the gate still exists)",
+          'class="form-check-input srv-check"' not in _vo_dash and "bulk-update-btn" not in _vo_dash,
+          "row checkboxes or the Update button rendered for a user who can do none of it")
+    with app.app_context():
+        Group.query.filter_by(name="smoke-viewonly").first().set_permissions(
+            [auth.VIEW_SERVERS, auth.UPDATE_SERVER])
+        db.session.commit()
+    try:
+        _up_dash = client_as(_viewer_id).get("/").get_data(as_text=True)
+        check("dashboard: update_server alone is enough to select servers and bulk-Update them",
+              'class="form-check-input srv-check"' in _up_dash and "bulk-update-btn" in _up_dash
+              and "srv-check-all" in _up_dash,
+              "checkboxes=%s select-all=%s update-button=%s — no way to select, so no bulk Update"
+              % ('class="form-check-input srv-check"' in _up_dash, "srv-check-all" in _up_dash,
+                 "bulk-update-btn" in _up_dash))
+    finally:
+        with app.app_context():
+            Group.query.filter_by(name="smoke-viewonly").first().set_permissions(
+                [auth.VIEW_SERVERS])
+            db.session.commit()
+
     # ── the install form lives on its own page now ───────────────────────────────────────────
     # It used to sit on /servers/manage above the list of servers you already have. Splitting it
     # out is only safe if the form still WORKS from its new home, so this checks the controls and
@@ -3922,6 +4449,18 @@ try:
         db.session.add(_noinst)
         db.session.commit()
         _noinst_id = _noinst.id
+    # The dashboard's empty state speaks for what THIS user can see. For an account with no host
+    # or server grant `servers` is [], however many the install runs, and it was told "No game
+    # servers are configured yet" — a claim about the install made to someone who sees none of it.
+    _ng_dash = client_as(_noinst_id).get("/")
+    _ng_html = _ng_dash.get_data(as_text=True)
+    check("dashboard: a user with no grants is told nothing is shared with them, not that the "
+          "install has no servers",
+          _ng_dash.status_code == 200 and "No game servers have been shared with you yet." in _ng_html
+          and "No game servers are configured yet." not in _ng_html,
+          "status=%d shared-copy=%s configured-copy=%s"
+          % (_ng_dash.status_code, "shared with you" in _ng_html,
+             "are configured yet" in _ng_html))
     # A one-host panel must not ask which host. The placeholder is a required field whose only
     # valid answer is the single option under it — a click that can only be made one way. With two
     # or more the placeholder stays, because then the choice is real and a silent default would
@@ -4893,7 +5432,14 @@ try:
           "no container for an untagged server — its first tag could not appear without a reload")
     c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id]})
     # The muted-tag branch (bell-slash + title) only renders when a MUTED tag is actually assigned.
-    c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id, _mute_id]})
+    _mute_resp = (c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id, _mute_id]})
+                  .get_json() or {})
+    # server_tags.js repaints the row's chips from THIS response after a save; without `notify` in
+    # it the repainted chip could not say alerts are muted, and the marker vanished from the row.
+    _mute_flags = {t.get("id"): t.get("notify") for t in _mute_resp.get("tags") or []}
+    check("tags: the save response says which assigned tags mute alerts (control: and which do not)",
+          _mute_flags.get(_mute_id) is False and _mute_flags.get(_tag_id) is True,
+          "got %r" % (_mute_flags,))
     _muted_html = c.get("/").get_data(as_text=True)
     check("tags: a muted tag's chip says so (title + bell-slash icon)",
           'title="Alerts are muted for this tag"' in _muted_html
@@ -5413,6 +5959,89 @@ try:
             _am.notifications.notify = lambda key, title, body="": _rec.append(key)
             _ps._expected_offline.pop(_mon_id, None)
 
+            # ── A reboot the PANEL fires is not "went offline unexpectedly" ─────────────────────
+            # Reboot-when-empty and Reboot now rebooted the host without marking its servers.
+            # While the host was down the monitor skipped them, so they stayed "up"; when it
+            # answered again the games were still waiting for LinuxGSM's */5 monitor cron, and
+            # each read up -> down: one "offline unexpectedly" per server, then "back online".
+            # Driven for real: the fire, then a sweep seven minutes later with the port still shut.
+            import panel.routes.remote_vps as _rw_route
+            _rw_saved = (_monmod.remote_reboot, _monmod.log_action, _monmod.time,
+                         _monmod._remote_listening_ports, _rw_route.remote_reboot)
+            _rw_bodies = []
+            _rw_real_time = _monmod.time
+
+            def _rw_sweep_later(secs):
+                """One real monitor pass `secs` from now, the port still shut, mon-srv last seen up.
+                Returns the server_down bodies that name mon-srv."""
+                _later = _rw_real_time.time() + secs
+                _monmod.time = type("_RwTime", (), {"time": staticmethod(lambda: _later),
+                                                    "sleep": staticmethod(_rw_real_time.sleep)})
+                try:
+                    _reset_mon()
+                    _ps._monitor_state["servers"][_mon_id] = True
+                    _monmod._remote_listening_ports = lambda r: set()
+                    _rw_bodies.clear(); _monmod._monitor_pass()
+                finally:
+                    _monmod.time = _rw_real_time
+                return [b for k, t, b in _rw_bodies if k == "server_down" and "mon-srv" in b]
+
+            try:
+                _monmod.remote_reboot = lambda r: (True, "Reboot scheduled")
+                _monmod.log_action = lambda *a, **k: None
+                _am.notifications.notify = \
+                    lambda k, t, b="": (_rec.append(k), _rw_bodies.append((k, t, b)))[0]
+                _ps._expected_offline.pop(_mon_id, None)
+                _monmod._fire_reboot_when_empty(RemoteServer.query.get(_r1_id), {"by": "admin"})
+                _rw_down = _rw_sweep_later(420)
+                check("monitor: a reboot the panel fired does not report its servers 'offline unexpectedly'",
+                      not _rw_down, str(_rw_down)[:160])
+                # Positive control: a reboot that was refused marks nothing and says it failed,
+                # and the SAME sweep then does alert — a real outage in that window is still told.
+                _ps._expected_offline.pop(_mon_id, None)
+                _monmod.remote_reboot = lambda r: (False, "the host refused")
+                _rw_bodies.clear()
+                _monmod._fire_reboot_when_empty(RemoteServer.query.get(_r1_id), {"by": "admin"})
+                _rw_titles = [t for k, t, b in _rw_bodies if k == "auto_reboot"]
+                _rw_down = _rw_sweep_later(420)
+                check("monitor: ...while a refused reboot leaves no mark, says it failed, and the outage alerts (control)",
+                      _mon_id not in _ps._expected_offline and _rw_titles == ["Auto-reboot failed"]
+                      and len(_rw_down) == 1, "%s %s" % (_rw_titles, _rw_down))
+
+                # Reboot now, through the real route: the same marks, from the route's own
+                # remote_reboot (stubbed where the route resolves it).
+                _rw_c = app.test_client()
+                _rw_c.post("/login", data={"username": "smoke_admin", "password": "Str0ng!passw0rd"})
+                _ps._expected_offline.pop(_mon_id, None)
+                _rw_route.remote_reboot = lambda r: (True, "Reboot command sent to remote")
+                _rw_resp = _rw_c.post("/api/remote/%d/reboot" % _r1_id, json={})
+                _rw_mark = _ps._expected_offline.get(_mon_id, 0)
+                check("reboot now: the host's servers are marked expected-offline past boot and the monitor cron",
+                      _rw_resp.status_code == 200 and _rw_mark >= _rw_real_time.time() + 250,
+                      "%s mark=%r" % (_rw_resp.status_code, _rw_mark))
+                _ps._expected_offline.pop(_mon_id, None)
+                _rw_route.remote_reboot = lambda r: (False, "a password is required")
+                _rw_resp = _rw_c.post("/api/remote/%d/reboot" % _r1_id, json={})
+                check("reboot now: ...while a refused reboot marks nothing (control)",
+                      _rw_resp.status_code == 200 and _mon_id not in _ps._expected_offline,
+                      "%s %r" % (_rw_resp.status_code, _ps._expected_offline.get(_mon_id)))
+                _rw_c.get("/logout")
+            finally:
+                (_monmod.remote_reboot, _monmod.log_action, _monmod.time,
+                 _monmod._remote_listening_ports, _rw_route.remote_reboot) = _rw_saved
+                _ps._expected_offline.pop(_mon_id, None)
+                _am.notifications.notify = lambda key, title, body="": _rec.append(key)
+            # ...and the watcher's loop is what calls it (by AST: comments name it too), with no
+            # remote_reboot of its own left beside it.
+            import ast as _rw_ast
+            import inspect as _rw_inspect
+            _rw_calls = [getattr(n.func, "id", "") for n in _rw_ast.walk(_rw_ast.parse(
+                _rw_inspect.getsource(_monmod._reboot_when_empty_watch)))
+                if isinstance(n, _rw_ast.Call)]
+            check("monitor: the reboot-when-empty loop fires through _fire_reboot_when_empty",
+                  "_fire_reboot_when_empty" in _rw_calls and "remote_reboot" not in _rw_calls,
+                  repr(_rw_calls))
+
             # ── The sweep must WRITE DOWN what it measured ────────────────────────────────────
             # It computed `up` from a live port scan every 60s and kept it only in an in-memory
             # dict. gs.status — what the chat bots' /servers and /status render, and what
@@ -5831,6 +6460,7 @@ try:
                      ("time", "remote_reboot", "_host_reachable", "_host_idle_state", "log_action")}
         _rw_saved_notify = _rw_mod.notifications.notify
         _rw_saved_reg = dict(_rw_ps._reboot_when_empty)
+        _rw_saved_exp = dict(_rw_ps._expected_offline)   # a fired reboot marks the host's servers
         _rw_reboots = []
 
         class _OneTick(Exception):
@@ -5895,6 +6525,8 @@ try:
             with _rw_ps._rwe_lock:
                 _rw_ps._reboot_when_empty.clear()
                 _rw_ps._reboot_when_empty.update(_rw_saved_reg)
+            _rw_ps._expected_offline.clear()
+            _rw_ps._expected_offline.update(_rw_saved_exp)
 
     # ── An unreachable host is a normal condition, not a panel fault ──────────────────────────────
     # The fixture hosts point at 127.0.0.1:22 with nothing listening, so every endpoint below has to
@@ -5915,6 +6547,13 @@ try:
         _r = _urc.get("/api/remote/%d/%s" % (_ur_id, _ep))
         check("unreachable host: /api/remote/<id>/%s does not 5xx" % _ep,
               _r.status_code < 500, "%s -> %d" % (_ep, _r.status_code))
+    # The OS-update watch polls this while apt runs; a read that failed answered done:true, and the
+    # popup declared the update finished with errors and stopped watching a live dpkg run.
+    _r = _urc.get("/api/remote/%d/os-update/status" % _ur_id)
+    _rj = _r.get_json(silent=True) or {}
+    check("unreachable host: an OS-update status read that failed is not 'done'",
+          _r.status_code == 200 and _rj.get("done") is False and _rj.get("unread") is True,
+          "%d %r" % (_r.status_code, _rj))
 
     # ── Auto-block reconcile: attempts-threshold selection + whitelist exemption ───────────────────
     # Drive _autoblock_reconcile against a stubbed offender list / UFW so no SSH or real firewall is
@@ -5980,6 +6619,15 @@ try:
             check("global-ban: an invalid SteamID is rejected (not stored)", GlobalBan.query.count() == _cnt)
             _pg = _gc.get("/global-bans")
             check("global-ban: page lists the ban", _pg.status_code == 200 and b"STEAM_0:1:99" in _pg.data)
+            # The fan-out goes through each server's LIVE console, so a server stopped when the
+            # ban is added never gets it until Sync is pressed while it runs. The page promised
+            # "gone everywhere" and counted every installed Source server as covered.
+            _pgt = _pg.get_data(as_text=True)
+            check("global-ban: the page does not promise every server gets it, and says how a "
+                  "stopped one does",
+                  "gone everywhere" not in _pgt and "Currently propagates" not in _pgt
+                  and "stopped or unreachable" in _pgt and "Sync to all servers" in _pgt,
+                  "the page still claims a coverage the console fan-out cannot deliver")
             _del = _gc.post("/global-bans/%d/delete" % _gb.id)
             check("global-ban: delete removes it",
                   _del.status_code in (302, 303) and db.session.get(GlobalBan, _gb.id) is None)
@@ -6336,6 +6984,133 @@ try:
     finally:
         _ps._cron_restart_pending.pop(gs_id, None)
 
+    # ── "do it now" and the command-list refresh are offered only to who can use them ──────────
+    # Both rendered for anyone who could open the page. The banner's button calls the action
+    # endpoint (RESTART_SERVER / STOP_SERVER), and refresh_server_commands wants MODERATE_SERVER,
+    # SEND_COMMAND or MANAGE_SERVERS — so a view-only member was told "you can do it now" and
+    # "use the refresh button above", and both buttons answered with a refusal.
+    with app.app_context():
+        _g = db.session.get(GameServer, gs_id)
+        _g.restart_pending = True
+        _vo_grp = Group(name="smoke-detail-viewonly")
+        _vo_grp.set_permissions([auth.VIEW_SERVERS, auth.VIEW_CONSOLE])
+        _vo_grp.game_servers.append(_g)
+        db.session.add(_vo_grp)
+        db.session.flush()
+        _vo = User(username="detailviewer", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                   is_superadmin=False, is_active=True)
+        _vo.groups.append(_vo_grp)
+        db.session.add(_vo)
+        db.session.commit()
+        _vo_id, _vo_gid = _vo.id, _vo_grp.id
+    try:
+        _vo_resp = client_as(_vo_id).get("/server/%d" % gs_id)
+        _voh = _vo_resp.get_data(as_text=True)
+        _adh = c.get("/server/%d" % gs_id).get_data(as_text=True)
+        _refresh_url = "/server/%d/refresh-commands" % gs_id
+        check("server page: an admin is offered the banner's 'do it now' and the command refresh "
+              "(positive control)",
+              'data-action="bannerDoNow"' in _adh and _refresh_url in _adh
+              and "d-none" not in _banner_tag(_adh),
+              "button=%s refresh=%s" % ('data-action="bannerDoNow"' in _adh, _refresh_url in _adh))
+        check("server page: a view-only member sees the queued restart but no 'Restart now' button",
+              _vo_resp.status_code == 200 and "d-none" not in _banner_tag(_voh)
+              and 'data-action="bannerDoNow"' not in _voh
+              and "or you can do it now" not in _voh,
+              "status=%d banner shown=%s button=%s 'do it now' copy=%s"
+              % (_vo_resp.status_code, "d-none" not in _banner_tag(_voh),
+                 'data-action="bannerDoNow"' in _voh, "or you can do it now" in _voh))
+        check("server page: ...nor the command-list refresh the route would refuse them",
+              _refresh_url not in _voh and "Use the refresh button above" not in _voh,
+              "the refresh form is rendered for a viewer without moderate/send_command/manage")
+        # The button's permission follows the QUEUED action, which showPendingBanner() switches
+        # without a reload. Gated once at render on whatever was queued then, a stop-only member
+        # on a page with a restart (or nothing) queued had no button to reveal after queueing a
+        # stop. It is rendered for either permission, hidden unless it matches the queued one,
+        # with both permissions on the banner for the switch to read.
+        def _rpb(html):
+            def _first(pat, text, grp=0):
+                _m = _re_ab.search(pat, text)
+                return _m.group(grp) if _m else None
+            _t = _banner_tag(html)
+            return (_first(r'<button[^>]*id="rpb-do"[^>]*>', html),
+                    _first(r'<span id="rpb-now"[^>]*>', html),
+                    _first(r'data-can-stop="(\d)"', _t, 1), _first(r'data-can-restart="(\d)"', _t, 1))
+        try:
+            with app.app_context():
+                db.session.get(Group, _vo_gid).set_permissions([auth.VIEW_SERVERS, auth.STOP_SERVER])
+                db.session.commit()
+            _so_btn, _so_now, _so_cs, _so_cr = _rpb(client_as(_vo_id).get("/server/%d" % gs_id).get_data(as_text=True))
+            check("server page: a stop-only member with a RESTART queued still gets the banner button, "
+                  "hidden, for the stop they may queue",
+                  _so_btn is not None and "d-none" in _so_btn and _so_now is not None
+                  and "d-none" in _so_now and (_so_cs, _so_cr) == ("1", "0"),
+                  "button=%r clause=%r can-stop=%r can-restart=%r" % (_so_btn, _so_now, _so_cs, _so_cr))
+            with app.app_context():
+                _g = db.session.get(GameServer, gs_id)
+                _g.restart_pending, _g.stop_pending = False, True
+                db.session.commit()
+            _so_btn, _so_now, _so_cs, _so_cr = _rpb(client_as(_vo_id).get("/server/%d" % gs_id).get_data(as_text=True))
+            check("server page: ...and with a STOP queued it is shown, with the 'do it now' clause "
+                  "(positive control)",
+                  _so_btn is not None and "d-none" not in _so_btn
+                  and _so_now is not None and "d-none" not in _so_now,
+                  "button=%r clause=%r" % (_so_btn, _so_now))
+            with app.app_context():
+                db.session.get(Group, _vo_gid).set_permissions([auth.VIEW_SERVERS, auth.RESTART_SERVER])
+                db.session.commit()
+            _ro_btn, _ro_now, _ro_cs, _ro_cr = _rpb(client_as(_vo_id).get("/server/%d" % gs_id).get_data(as_text=True))
+            check("server page: a restart-only member with a STOP queued is not offered 'Stop now' "
+                  "(the button is there, hidden, for a restart they queue)",
+                  _ro_btn is not None and "d-none" in _ro_btn and "d-none" in (_ro_now or "")
+                  and (_ro_cs, _ro_cr) == ("0", "1"),
+                  "button=%r clause=%r can-stop=%r can-restart=%r" % (_ro_btn, _ro_now, _ro_cs, _ro_cr))
+        finally:
+            with app.app_context():
+                _g = db.session.get(GameServer, gs_id)
+                _g.restart_pending, _g.stop_pending = True, False
+                db.session.get(Group, _vo_gid).set_permissions([auth.VIEW_SERVERS, auth.VIEW_CONSOLE])
+                db.session.commit()
+
+        # The Live Console panel without VIEW_CONSOLE. /api/console answers 403 with no lines, and
+        # "Load older" wiped the screen and toasted "Loaded 0 lines from the log". A viewer with
+        # neither view_console nor send_command gets no console panel; one with send_command
+        # alone keeps the command box but not the log controls, and is told why it is empty.
+        check("server page: a view_console holder is given the log controls (control for the next)",
+              'data-action="loadMoreConsole"' in _voh and 'data-panel="console"' in _voh,
+              "the console panel is missing for a viewer who may read it")
+        with app.app_context():
+            db.session.get(Group, _vo_gid).set_permissions([auth.VIEW_SERVERS])
+            db.session.commit()
+        _voh2 = client_as(_vo_id).get("/server/%d" % gs_id).get_data(as_text=True)
+        check("server page: without view_console or send_command there is no console panel",
+              'data-panel="console"' not in _voh2 and 'data-action="loadMoreConsole"' not in _voh2
+              and "_CAN_VIEW_CONSOLE = false" in _voh2,
+              "panel=%s load-older=%s" % ('data-panel="console"' in _voh2,
+                                          'data-action="loadMoreConsole"' in _voh2))
+        with app.app_context():
+            db.session.get(Group, _vo_gid).set_permissions([auth.VIEW_SERVERS, auth.SEND_COMMAND])
+            db.session.commit()
+        _voh3 = client_as(_vo_id).get("/server/%d" % gs_id).get_data(as_text=True)
+        check("server page: send_command alone keeps the command box, not the log controls",
+              'id="command-form"' in _voh3 and 'data-action="loadMoreConsole"' not in _voh3
+              and "permission to view this server's console" in _voh3,
+              "command box=%s load-older=%s notice=%s"
+              % ('id="command-form"' in _voh3, 'data-action="loadMoreConsole"' in _voh3,
+                 "permission to view this server's console" in _voh3))
+    finally:
+        with app.app_context():
+            db.session.get(GameServer, gs_id).restart_pending = False
+            _u = db.session.get(User, _vo_id)
+            if _u is not None:
+                _u.groups = []
+                db.session.delete(_u)
+            _gr = db.session.get(Group, _vo_gid)
+            if _gr is not None:
+                _gr.game_servers = []
+                db.session.delete(_gr)
+            db.session.commit()
+
     # ── The users page renders ONE edit modal, not one per user ───────────────────────────────────
     # It used to emit a full 2KB modal per row — 670KB of HTML at 100 accounts, all of it for a
     # dialog you can only have open once. The rows now carry an id and the data comes from a single
@@ -6547,6 +7322,50 @@ try:
         _pkgs["n"] = []
         _osu(force=True)                     # leave the host clean for the checks below
 
+        # ...and seeding is PER HOST. Only the first sweep after a restart seeded, so a host that
+        # did not answer THAT sweep (rebooting, apt locked) read (0, 0) the next day and had the
+        # list it already had before the restart announced again.
+        from datetime import datetime as _sd_dt
+        from panel.core.clock import utcnow as _sd_now
+        with app.app_context():
+            _sd_created = {r.id: r.created_at for r in RemoteServer.query.all()}
+            for _sd_r in RemoteServer.query.all():
+                _sd_r.created_at = _sd_dt(2020, 1, 1)      # hosts that existed before this process
+            db.session.commit()
+        try:
+            _pkgs["n"] = [{"name": "openssl", "suite": "jammy-security"}]
+            _st_hosts.clear()
+            _ps._os_update_state["last_run"] = 0.0
+            _am._host_reachable = lambda r: r.id != remote_id     # this one is down for the seed pass
+            _rec.clear()
+            _osu()
+            _am._host_reachable = lambda r: True
+            _rec.clear()
+            _osu(force=True)
+            check("os updates: a host that missed the seeding pass seeds on its first reading",
+                  "os_updates" not in _rec and _st_hosts.get(remote_id) == (1, 1),
+                  "alerts %r, state %r" % (_rec, _st_hosts.get(remote_id)))
+            # POSITIVE CONTROL: a host ADDED since the panel started has had nothing announced, so
+            # its first batch is news, not a seed.
+            with app.app_context():
+                db.session.get(RemoteServer, remote_id).created_at = _sd_now()
+                db.session.commit()
+            _st_hosts.pop(remote_id, None)
+            _rec.clear()
+            _osu(force=True)
+            check("os updates: ...while a host added since the panel started has its first batch "
+                  "announced (positive control)", "os_updates" in _rec, str(_rec))
+        finally:
+            _am._host_reachable = lambda r: True
+            with app.app_context():
+                for _sd_id, _sd_at in _sd_created.items():
+                    _sd_row = db.session.get(RemoteServer, _sd_id)
+                    if _sd_row is not None:
+                        _sd_row.created_at = _sd_at
+                db.session.commit()
+            _pkgs["n"] = []
+            _osu(force=True)                 # leave every host clean again
+
         # An unreachable host is the monitor's problem — this must not even probe it. Assert on the
         # PROBE, not on silence: _os_updates_for swallows exceptions by design, so a stub that
         # raises proves nothing — the check would pass with the guard deleted.
@@ -6690,6 +7509,87 @@ try:
             _am.update_config(lambda cfg: cfg.update({"port": _cp_port}))
         except Exception:
             pass
+
+    # ── change-port: a panel bound to the host's own public/LAN address keeps its port OPEN ──
+    # Only the wildcard counted as public, so binding to the host's public IP deleted the allow
+    # rule for the port the panel was about to listen on — UFW's default-deny then shut it — and
+    # the answer said "kept tailnet-only". Its own seeded is_local row: none survives to here.
+    from panel.routes import remote_security as _rs_bind
+    _bind_saved = (_rs_bind.remote_ufw_open_port, _rs_bind.remote_ufw_close_port,
+                   _am.so.host_has_ip, _am.so.restart_panel, _am.so.ensure_panel_fail2ban)
+    _bind_fw = []
+    with app.app_context():
+        _bind_lh = RemoteServer(name="smoke-bind-local", host="127.0.0.1", port=22,
+                                username="root", auth_method="key", is_local=True)
+        db.session.add(_bind_lh)
+        db.session.commit()
+        _bind_lh_id = _bind_lh.id
+        _bind_cfg0 = _am.load_config()
+    _bind_port = _bind_cfg0.get("port", 5000)
+    try:
+        _rs_bind.remote_ufw_open_port = lambda srv, port, proto=None, comment="": (
+            _bind_fw.append(("open", port)), (True, ""))[1]
+        _rs_bind.remote_ufw_close_port = lambda srv, port, proto=None: (
+            _bind_fw.append(("close", port)), (True, ""))[1]
+        _am.so.host_has_ip = lambda ip: True
+        _am.so.restart_panel = lambda *a, **k: (True, "stubbed")
+        _am.so.ensure_panel_fail2ban = lambda *a, **k: (True, "ok")
+
+        def _bind_post(addr):
+            del _bind_fw[:]
+            _r = c.post("/api/panel/change-port", json={"port": _bind_port, "bind_host": addr})
+            return _r.status_code, (_r.get_json(silent=True) or {}).get("message", "")
+        _bst, _bmsg = _bind_post("203.0.113.5")
+        check("change-port: binding to the host's own PUBLIC address opens its port, not closes it",
+              _bst == 200 and ("open", _bind_port) in _bind_fw and ("close", _bind_port) not in _bind_fw,
+              "status=%d fw=%r msg=%r" % (_bst, _bind_fw, _bmsg))
+        check("change-port: ...and does not call that tailnet-only",
+              "tailnet-only" not in _bmsg, _bmsg)
+        # Positive control: a Tailscale address really is reached without the public rule.
+        _bst, _bmsg = _bind_post("100.101.102.103")
+        check("change-port: ...while a Tailscale address still closes the public port (positive control)",
+              _bst == 200 and ("close", _bind_port) in _bind_fw and ("open", _bind_port) not in _bind_fw
+              and "kept tailnet-only" in _bmsg, "status=%d fw=%r msg=%r" % (_bst, _bind_fw, _bmsg))
+        # The REAL host_has_ip, with `ip -o addr` timing out. It answered True on an unreadable
+        # list, so a typo'd bind was saved and the panel restarted onto an address it could not
+        # bind — down until linuxgsm-panel-recover. The kernel is asked instead now (stubbed here:
+        # this machine's addresses are not the test's).
+        _bind_so_saved = (_am.so._run, _am.so._kernel_has_ip)
+        _am.so.host_has_ip = _bind_saved[2]
+        try:
+            _am.so._run = lambda cmd, **k: (("", "Command timed out", -1) if "ip -o addr" in cmd
+                                            else _bind_so_saved[0](cmd, **k))
+            _am.so._kernel_has_ip = lambda addr: str(addr) == "100.101.102.103"
+            _bind_before = _am.load_config().get("bind_host")
+            _bst, _bmsg = _bind_post("10.0.0.51")
+            check("change-port: an unreadable address list does not let a foreign bind through",
+                  _bst == 400 and "isn't an address on this host" in _bmsg
+                  and _am.load_config().get("bind_host") == _bind_before,
+                  "status=%d msg=%r" % (_bst, _bmsg))
+            _am.update_config(lambda cfg: cfg.update({"bind_host": "0.0.0.0"}))
+            _bst, _bmsg = _bind_post("100.101.102.103")
+            check("change-port: ...while the host's own address still goes through (control)",
+                  _bst == 200, "status=%d msg=%r" % (_bst, _bmsg))
+        finally:
+            _am.so._run, _am.so._kernel_has_ip = _bind_so_saved
+    finally:
+        (_rs_bind.remote_ufw_open_port, _rs_bind.remote_ufw_close_port,
+         _am.so.host_has_ip, _am.so.restart_panel, _am.so.ensure_panel_fail2ban) = _bind_saved
+        def _bind_restore(cfg):
+            cfg["port"] = _bind_port
+            if "bind_host" in _bind_cfg0:
+                cfg["bind_host"] = _bind_cfg0["bind_host"]
+            else:
+                cfg.pop("bind_host", None)
+        try:
+            _am.update_config(_bind_restore)
+        except Exception:
+            pass
+        with app.app_context():
+            _bind_row = db.session.get(RemoteServer, _bind_lh_id)
+            if _bind_row is not None:
+                db.session.delete(_bind_row)
+                db.session.commit()
 
     # ── Bearer API tokens: the other way into every route ─────────────────────────────────────────
     # A token authenticates AS its owner and inherits exactly that user's RBAC, and app.py exempts
@@ -7570,6 +8470,58 @@ try:
               _lat_after_other.get("action") == "update",
               "left %r registered — the running update's output stops reaching the console the "
               "panel told the operator to watch" % (_lat_after_other or None,))
+        # 2c. ...and two runs of the SAME action, each on its own worker, as _bg_action runs them.
+        # Ownership was decided by the action NAME, so the first validate to finish popped the
+        # registration of the second, still running. Each worker now ends only its own entry.
+        import threading as _lat_thr
+        _lat_go1, _lat_go2, _lat_b1, _lat_b2 = (_lat_thr.Event() for _ in range(4))
+
+        def _lat_worker(began, go):
+            with app.app_context():
+                _begin_action_tail(app, gs_id, "validate", _lat_logf, _lat_user)
+                began.set()
+                go.wait(10)
+                _end_action_tail(app, gs_id, _lat_remote, "validate", 0)
+        _lat_t1 = _lat_thr.Thread(target=_lat_worker, args=(_lat_b1, _lat_go1))
+        _lat_t1.start()
+        _lat_b1.wait(10)
+        _lat_t2 = _lat_thr.Thread(target=_lat_worker, args=(_lat_b2, _lat_go2))
+        _lat_t2.start()
+        _lat_b2.wait(10)
+        _lat_second = _ao.get(gs_id)
+        _lat_go1.set()
+        _lat_t1.join(10)                                   # the FIRST run finishes
+        _lat_still = _ao.get(gs_id)
+        _lat_go2.set()
+        _lat_t2.join(10)
+        check("console tail: a run that ends does not deregister a later run of the SAME action",
+              _lat_second is not None and _lat_still is _lat_second,
+              "after the first validate ended, %r was registered (the second run's entry was %r)"
+              % (_lat_still, _lat_second))
+        check("console tail: ...and that later run still deregisters itself when it ends",
+              gs_id not in _ao, "left %r registered" % (_ao.get(gs_id),))
+        # The other order, the finding's: the LATER run is refused fast and finishes first. It
+        # had displaced the earlier run's registration, so popping it left the earlier validate —
+        # still running — streaming nothing. The earlier run is registered again instead.
+        _lat_go1, _lat_go2, _lat_b1, _lat_b2 = (_lat_thr.Event() for _ in range(4))
+        _lat_t1 = _lat_thr.Thread(target=_lat_worker, args=(_lat_b1, _lat_go1))
+        _lat_t1.start()
+        _lat_b1.wait(10)
+        _lat_first = _ao.get(gs_id)
+        _lat_t2 = _lat_thr.Thread(target=_lat_worker, args=(_lat_b2, _lat_go2))
+        _lat_t2.start()
+        _lat_b2.wait(10)
+        _lat_go2.set()
+        _lat_t2.join(10)                                   # the LATER run finishes first
+        _lat_back = _ao.get(gs_id)
+        _lat_go1.set()
+        _lat_t1.join(10)
+        check("console tail: when the later run ends first, the earlier one still running is tailed again",
+              _lat_first is not None and _lat_back is _lat_first,
+              "after the second validate ended, %r was registered (the first run's entry was %r)"
+              % (_lat_back, _lat_first))
+        check("console tail: ...and once both have ended nothing is left registered",
+              gs_id not in _ao, "left %r registered" % (_ao.get(gs_id),))
         # How an action that the TRANSPORT gave up on is announced. The local and Tailscale
         # transports answer a timeout with rc -1 (they do not raise), and so does paramiko's
         # silent-channel give-up; only a raise leaves rc None. -1 is never a real exit status.
@@ -10187,6 +11139,47 @@ try:
                   _gm_je is None and gs_id not in _gm_state,
                   "job=%r — a month-old error greets every later visit to this server"
                   % (_gm_je,))
+
+            # ── one content job per HOST ─────────────────────────────────────────────────────
+            # Content is host-wide (one content user, one ~/serverfiles), but nothing stopped a
+            # second job on the same host while the first ran: two SteamCMD installs into one
+            # directory, or an uninstall deleting what another server's job was mounting. The
+            # first job is held mid-install here, so the second request really does overlap it.
+            import threading as _gm_thr
+            _gm_gate = _gm_thr.Event()
+
+            def _gm_slow_install(*a, **k):
+                _gm_gate.wait(20)
+                return (True, ["cstrike"], "installed: cstrike")
+            _gm_mod.install_gmod_content = _gm_slow_install
+            _gm_state.pop(gs_id, None)
+            _gm_first = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": ["cstrike"]},
+                               headers={"X-Requested-With": "XMLHttpRequest"})
+            _gm_second = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": ["cstrike"]},
+                                headers={"X-Requested-With": "XMLHttpRequest"})
+            _gm_third = c.post("/api/server/%d/gmod-content" % gs_id,
+                               json={"action": "uninstall", "games": ["cstrike"]},
+                               headers={"X-Requested-With": "XMLHttpRequest"})
+            _gm_gate.set()
+            _gm_after = _gm_settle()
+            check("gmod content: a second apply on the same host while one runs is refused (409)",
+                  (_gm_first.get_json() or {}).get("success") is True
+                  and _gm_second.status_code == 409
+                  and "already running" in ((_gm_second.get_json() or {}).get("message") or ""),
+                  "first %r, second %d %r" % (_gm_first.get_json(), _gm_second.status_code,
+                                              _gm_second.get_json()))
+            check("gmod content: ...and so is an uninstall on that host",
+                  _gm_third.status_code == 409, "got %d %r" % (_gm_third.status_code, _gm_third.get_json()))
+            check("gmod content: ...and the first job still finished on its own",
+                  _gm_after.get("status") == "done", "job=%r" % (_gm_after,))
+            # Positive control: the host is free again the moment the job reports done.
+            _gm_mod.install_gmod_content = lambda *a, **k: (True, ["cstrike"], "installed: cstrike")
+            _gm_again = c.post("/api/server/%d/gmod-content" % gs_id, json={"games": ["cstrike"]},
+                               headers={"X-Requested-With": "XMLHttpRequest"})
+            _gm_settle()
+            check("gmod content: (control) once it finishes, the next job on that host is accepted",
+                  (_gm_again.get_json() or {}).get("success") is True,
+                  "got %d %r — the host stayed held" % (_gm_again.status_code, _gm_again.get_json()))
         finally:
             (_gm_mod.ensure_content_user, _gm_mod.install_gmod_content,
              _gm_mod.gmod_mount_setup) = _gm_saved2
@@ -10529,7 +11522,7 @@ try:
                             "unreachable": True})
         _fr_deleted = []
         _fr_stub(_rvmod, "remote_ufw_delete_rule",
-                 lambda r, n, force=False: _fr_deleted.append(n))
+                 lambda r, n, force=False, **k: _fr_deleted.append(n))
         _fr_r = c.post("/api/remote/%d/close-panel-port" % _fr_rid,
                        headers={"X-Requested-With": "XMLHttpRequest"})
         _fr_j = _fr_r.get_json() or {}
@@ -10539,6 +11532,22 @@ try:
               % (_fr_j.get("message"),))
         check("failed read: ...and nothing was deleted from a firewall it could not read",
               not _fr_deleted, "deleted rule numbers %s" % (_fr_deleted,))
+        # A READABLE firewall: its forced deletes by number must each name the rule they mean.
+        # The numbers are read once and the auto-block inserts at 1 from another thread, so a
+        # forced delete by bare number could take the rule above the panel port's.
+        _fr_port = int(_fr_cfg.get("port", 5000))
+        setattr(_rvmod, "remote_ufw_status",     # original already saved by _fr_stub above
+                 lambda r: {"installed": True, "enabled": True, "rules": [], "groups": [
+                     {"nums": [4, 9], "port_num": str(_fr_port), "action": "ALLOW",
+                      "direction": "IN", "is_iface": False, "key": "k-panel-port"}]})
+        _fr_keys = []
+        setattr(_rvmod, "remote_ufw_delete_rule",
+                 lambda r, n, force=False, expect_key=None, **k: (_fr_keys.append((n, expect_key)),
+                                                                  (True, ""))[1])
+        c.post("/api/remote/%d/close-panel-port" % _fr_rid,
+               headers={"X-Requested-With": "XMLHttpRequest"})
+        check("close panel port: each forced delete names the rule it means, not just its number",
+              _fr_keys == [(9, "k-panel-port"), (4, "k-panel-port")], "deleted %r" % (_fr_keys,))
     finally:
         for (_m, _n), _v in _fr_saved.items():
             setattr(_m, _n, _v)
@@ -10620,6 +11629,37 @@ try:
           _cc_add("cc_badgame", "say hi", scope="game|nosuchgame") == 0)
     check("custom command form: ...and an engine that does not exist",
           _cc_add("cc_badengine", "say hi", scope="engine|nosuchengine") == 0)
+    # ...but an EXISTING command scoped to a game the current list lacks (dropped upstream, or no
+    # list could be fetched) keeps that scope. Its edit form had no matching option, the browser
+    # selected "All games", and a Save to fix the label widened the command to every game.
+    with app.app_context():
+        _oc = CustomCommand(name="cc_orphan", command_template="say hi", scope_type="game",
+                            scope_value="nosuchgame", enabled=True)
+        db.session.add(_oc)
+        db.session.commit()
+        _oc_id = _oc.id
+    try:
+        check("custom command edit form: a stored game scope the list lacks is offered, and selected",
+              'value="game|nosuchgame" selected' in c.get("/commands").get_data(as_text=True),
+              "no option matches, so the browser submits the first one — All games")
+        c.post("/commands/%d/edit" % _oc_id, data={"name": "cc_orphan", "command_template": "say hello",
+                                                    "scope": "game|nosuchgame", "enabled": "on"})
+        with app.app_context():
+            _oc2 = db.session.get(CustomCommand, _oc_id)
+            _oc_state = (_oc2.scope_type, _oc2.scope_value, _oc2.command_template)
+        check("custom command edit: saving it keeps that game scope and applies the edit",
+              _oc_state == ("game", "nosuchgame", "say hello"), "stored %r" % (_oc_state,))
+        c.post("/commands/%d/edit" % _oc_id, data={"name": "cc_orphan", "command_template": "say bye",
+                                                    "scope": "game|othernosuchgame", "enabled": "on"})
+        with app.app_context():
+            _oc3 = db.session.get(CustomCommand, _oc_id)
+            _oc_state = (_oc3.scope_value, _oc3.command_template)
+        check("custom command edit: ...while moving it to a DIFFERENT unknown game is still refused",
+              _oc_state == ("nosuchgame", "say hello"), "stored %r" % (_oc_state,))
+    finally:
+        with app.app_context():
+            db.session.delete(db.session.get(CustomCommand, _oc_id))
+            db.session.commit()
     # An unparseable argument pattern must not 500 or store itself — it falls back to the default.
     _cc_re_added = _cc_add("cc_badre", "say {}", argument_pattern="([unclosed")
     check("custom command form: an invalid argument pattern does not store a broken regex",
@@ -10890,8 +11930,8 @@ try:
     _fw_saved = _fwmod.remote_ufw_delete_rule
     _fw_args = []
     try:
-        def _fw_stub(server, num, force=False):
-            _fw_args.append({"num": num, "force": force})
+        def _fw_stub(server, num, force=False, expect_key=None):
+            _fw_args.append({"num": num, "force": force, "key": expect_key})
             return (False, "refused")
         _fwmod.remote_ufw_delete_rule = _fw_stub
         c.post("/api/remote/%d/firewall/delete-rule" % remote_id, json={"num": 3})
@@ -10902,7 +11942,15 @@ try:
         check("ufw delete: a refusal is audited as a failure",
               (_al_last("remote_ufw_delete_rule") or {}).get("success") is False,
               "audited %r" % ((_al_last("remote_ufw_delete_rule") or {}).get("success"),))
-        _fwmod.remote_ufw_delete_rule = lambda s, n, force=False: (True, "deleted")
+        # The number is a position; the page sends the rule's key with it, and the route has to
+        # hand that on, or the helper cannot notice the number now names a different rule.
+        _fw_key = '["27015", "ALLOW", "IN", "Anywhere", "", "gamea"]'
+        c.post("/api/remote/%d/firewall/delete-rule" % remote_id, json={"num": 3, "key": _fw_key})
+        check("ufw delete: the route passes the rule's key on, so a moved number is refused",
+              _fw_args and _fw_args[-1]["key"] == _fw_key, "called with %r" % (_fw_args[-1:] or None,))
+        check("ufw delete: ...and a request with no key is no identity check, not an empty one",
+              len(_fw_args) >= 2 and _fw_args[-2]["key"] is None, "called with %r" % (_fw_args,))
+        _fwmod.remote_ufw_delete_rule = lambda s, n, force=False, expect_key=None: (True, "deleted")
         c.post("/api/remote/%d/firewall/delete-rule" % remote_id, json={"num": 3})
         check("ufw delete: ...and a delete that happened is audited as a success (control)",
               (_al_last("remote_ufw_delete_rule") or {}).get("success") is True,
@@ -11174,6 +12222,206 @@ try:
                 _bk_lock.release()
                 return True
             return False
+
+        # ── every backup path hands run_game_backup the server's gamedig override ──────────────
+        # Without query_type, player_count has no gamedig type for the games that need an override
+        # (Project Zomboid, ARK, Mordhau, Killing Floor), answers None, and run_game_backup reads
+        # None as "empty" and runs LinuxGSM `backup`, which STOPS the server with players on it.
+        # All four callers left it out. Driven through each real path.
+        _qt_seen = []
+        with app.app_context():
+            _qt_short = db.session.get(GameServer, gs_id).short_name
+
+        def _qt_rgb(*a, **k):
+            if a[1] == _qt_short:
+                _qt_seen.append(k.get("query_type"))
+            return (True, "", False)
+        _qt_due_saved = _bkops.game_backup_due
+        _qt_prev_sh, _qt_prev_pb = _bksh.run_game_backup, _bkmod.run_game_backup
+        try:
+            with app.app_context():
+                _qt_gs = db.session.get(GameServer, gs_id)
+                _qt_gs.query_type = "projectzomboid"
+                _qt_gs.backup_pending = True
+                db.session.commit()
+            _bksh.run_game_backup = _bkmod.run_game_backup = _qt_rgb
+            _bkops.game_backup_due = lambda sid: sid == gs_id
+            _bkops.record_game_backup(gs_id)
+            _bkops.set_game_schedule(gs_id, 1, 2)
+            for _qt_label, _qt_run in (
+                    ("the 'wait until empty' sweep", lambda: _bksh._run_pending_backups(app)),
+                    ("the scheduled ticker", lambda: _bksh._run_due_game_backups(app)),
+                    ("'back up now'", lambda: c.post("/api/panel/backup/game/%d" % gs_id, json={})),
+                    ("the full backup", lambda: c.post("/api/panel/backup/full", json={"mode": ""}))):
+                del _qt_seen[:]
+                _bk_settle()
+                _qt_run()
+                _bk_settle()
+                check("backup query_type: %s passes the server's gamedig override" % _qt_label,
+                      _qt_seen == ["projectzomboid"],
+                      "run_game_backup saw query_type %r ([] = never called for this server) — "
+                      "player_count answers None, and None reads as empty" % (_qt_seen,))
+        finally:
+            _bksh.run_game_backup = _qt_prev_sh
+            _bkmod.run_game_backup = _qt_prev_pb
+            _bkops.game_backup_due = _qt_due_saved
+            _bkops.set_game_schedule(gs_id, None, None)
+            with app.app_context():
+                _qt_gs = db.session.get(GameServer, gs_id)
+                _qt_gs.query_type = None
+                _qt_gs.backup_pending = False
+                db.session.commit()
+
+        # ── the backup runners say a backup is RUNNING, and stand aside for the Backup button ──
+        # Only the manual route set _game_backup_status running, so _run_due_restarts (its own
+        # 90 s thread, whose guard reads exactly that flag) could stop or restart a server a
+        # scheduled backup had just stopped to archive. And the maintenance menu's Backup button
+        # runs outside the backup lock with no flag at all: the hourly ticker took its live
+        # backup.lock for an orphan and started a second archive of the same files.
+        from panel.core.panel_state import _action_output as _rb_ao, _game_backup_status as _rb_st
+        _rb_seen = []
+        _rb_prev = _bksh.run_game_backup
+        _rb_due_saved = _bkops.game_backup_due
+        with app.app_context():
+            _rb_short = db.session.get(GameServer, gs_id).short_name
+
+        def _rb_rgb(*a, **k):
+            if a[1] == _rb_short:
+                _rb_seen.append((_rb_st.get(gs_id) or {}).get("running"))
+            return (True, "", False)
+        try:
+            _bkops.game_backup_due = lambda sid: sid == gs_id
+            _bkops.record_game_backup(gs_id)
+            _bkops.set_game_schedule(gs_id, 1, 2)
+            _bksh.run_game_backup = _rb_rgb
+            for _rb_label, _rb_pend, _rb_run in (
+                    ("the scheduled ticker", False, lambda: _bksh._run_due_game_backups(app)),
+                    ("the 'wait until empty' sweep", True, lambda: _bksh._run_pending_backups(app))):
+                del _rb_seen[:]
+                _rb_st.pop(gs_id, None)
+                with app.app_context():
+                    db.session.get(GameServer, gs_id).backup_pending = _rb_pend
+                    db.session.commit()
+                _bk_settle()
+                _rb_run()
+                check("backup running flag: %s marks the server running while it backs up" % _rb_label,
+                      _rb_seen == [True] and (_rb_st.get(gs_id) or {}).get("running") is False,
+                      "running during=%r, after=%r" % (_rb_seen, _rb_st.get(gs_id)))
+                # ...and stands aside while the Backup button is archiving the same server.
+                del _rb_seen[:]
+                with app.app_context():
+                    db.session.get(GameServer, gs_id).backup_pending = _rb_pend
+                    db.session.commit()
+                _rb_ao[gs_id] = {"action": "backup", "path": "/dev/null", "user": _rb_short, "pos": 0}
+                try:
+                    _bk_settle()
+                    _rb_run()
+                finally:
+                    _rb_ao.pop(gs_id, None)
+                check("backup running flag: %s does not start a second archive over a Backup-button run"
+                      % _rb_label, _rb_seen == [], "run_game_backup called %d time(s)" % len(_rb_seen))
+            # The FULL run (panel_backup, its own reference to run_game_backup) set no flag either,
+            # and it too must leave a server alone while the Backup button is archiving it.
+            _rb_prev_pb = _bkmod.run_game_backup
+            _bkmod.run_game_backup = _rb_rgb
+            try:
+                del _rb_seen[:]
+                _rb_st.pop(gs_id, None)
+                _bk_settle()
+                c.post("/api/panel/backup/full", json={"mode": ""})
+                _bk_settle()
+                check("backup running flag: the full backup marks the server running while it backs up",
+                      _rb_seen == [True] and (_rb_st.get(gs_id) or {}).get("running") is False,
+                      "running during=%r, after=%r" % (_rb_seen, _rb_st.get(gs_id)))
+                del _rb_seen[:]
+                _rb_ao[gs_id] = {"action": "backup", "path": "/dev/null", "user": _rb_short, "pos": 0}
+                try:
+                    _bk_settle()
+                    c.post("/api/panel/backup/full", json={"mode": ""})
+                    _bk_settle()
+                    _rb_now = c.post("/api/panel/backup/game/%d" % gs_id, json={})
+                    _bk_settle()
+                finally:
+                    _rb_ao.pop(gs_id, None)
+                check("backup running flag: the full backup does not start a second archive over a "
+                      "Backup-button run", _rb_seen == [], "run_game_backup called %d time(s)" % len(_rb_seen))
+                check("backup running flag: ...nor does 'back up now', and it says why",
+                      (_rb_now.get_json() or {}).get("success") is False
+                      and "already being backed up" in ((_rb_now.get_json() or {}).get("message") or ""),
+                      "answered %r" % (_rb_now.get_json(),))
+                # Positive control: the chain is walked, so a backup DISPLACED by a later long action
+                # (an update started while it runs) still counts; an ended one does not.
+                _rb_ao[gs_id] = {"action": "update", "path": "/dev/null", "user": _rb_short, "pos": 0,
+                                 "prev": {"action": "backup", "path": "/dev/null", "user": _rb_short,
+                                          "pos": 0}}
+                try:
+                    _rb_disp = _bksh._button_backup_running(gs_id)
+                    _rb_ao[gs_id]["prev"]["ended"] = True
+                    _rb_ended = _bksh._button_backup_running(gs_id)
+                finally:
+                    _rb_ao.pop(gs_id, None)
+                check("backup running flag: a Backup-button run displaced by a later action still counts; "
+                      "an ended one does not", _rb_disp is True and _rb_ended is False,
+                      "displaced=%r ended=%r" % (_rb_disp, _rb_ended))
+            finally:
+                _bkmod.run_game_backup = _rb_prev_pb
+            # A run that RAISES must not leave the flag set, or the restart sweep skips it for ever.
+
+            def _rb_boom(*a, **k):
+                raise RuntimeError("ssh fell over")
+            _bksh.run_game_backup = _rb_boom
+            _rb_st.pop(gs_id, None)
+            _bk_settle()
+            _bksh._run_due_game_backups(app)
+            check("backup running flag: a run that raises clears the flag",
+                  (_rb_st.get(gs_id) or {}).get("running") is False, "status %r" % (_rb_st.get(gs_id),))
+        finally:
+            _bksh.run_game_backup = _rb_prev
+            _bkops.game_backup_due = _rb_due_saved
+            _bkops.set_game_schedule(gs_id, None, None)
+            _rb_st.pop(gs_id, None)
+            with app.app_context():
+                db.session.get(GameServer, gs_id).backup_pending = False
+                db.session.commit()
+
+        # ── an unreadable config.json must not prune a server past its own retention ──────────
+        # get_game_schedule answers the DEFAULT keep (2) when config.json cannot be read, and
+        # "Back up now" and the full run pruned to it: a server set to keep 10 lost 8 archives.
+        # The sweeps skip in that state; these two now prune no lower than the largest retention
+        # any setting can hold.
+        #
+        # The unreadable file is what the BACKUP module reads (its load_config), not the real
+        # config.json: with that broken the app redirects every request before a route runs.
+        from panel.core.config import UnreadableConfig as _PkUC
+        _pk_seen = []
+        _pk_prev_pb, _pk_load = _bkmod.run_game_backup, _bkops.load_config
+        with app.app_context():
+            _pk_short = db.session.get(GameServer, gs_id).short_name
+        try:
+            _bkops.set_game_schedule(gs_id, 1, 10)
+            _bkmod.run_game_backup = lambda *a, **k: (
+                _pk_seen.append(a[3]) if a[1] == _pk_short else None, (True, "", False))[1]
+            for _pk_label, _pk_run in (
+                    ("'back up now'", lambda: c.post("/api/panel/backup/game/%d" % gs_id, json={})),
+                    ("the full backup", lambda: c.post("/api/panel/backup/full", json={"mode": ""}))):
+                for _pk_bad, _pk_want in ((True, _bkops.MAX_FULL_KEEP), (False, 10)):
+                    del _pk_seen[:]
+                    _bk_settle()
+                    if _pk_bad:
+                        _bkops.load_config = lambda: _PkUC(_pk_load())
+                    try:
+                        _pk_r = _pk_run()
+                        _bk_settle()
+                    finally:
+                        _bkops.load_config = _pk_load
+                    check("backup keep: %s with config.json %s prunes to %d"
+                          % (_pk_label, "UNREADABLE" if _pk_bad else "readable (control)", _pk_want),
+                          _pk_seen == [_pk_want],
+                          "run_game_backup got keep %r (status %d)" % (_pk_seen, _pk_r.status_code))
+        finally:
+            _bkmod.run_game_backup = _pk_prev_pb
+            _bkops.load_config = _pk_load
+            _bkops.set_game_schedule(gs_id, None, None)
 
         # ── a scheduled backup that FAILS has to say so somewhere ─────────────────────────────
         # run_game_backup does not raise for a failed backup: it returns (False, reason, False),
@@ -12174,6 +13422,20 @@ try:
         _lt_pr = _lt_http.get("/terminal/%d" % _lt_rid)
         check("terminal: ...while the same grants still reach a REMOTE's terminal page "
               "(positive control)", _lt_pr.status_code == 200, "status=%d" % _lt_pr.status_code)
+        # The panel records no input, but the shell is an ordinary interactive one and writes its
+        # own history on the host. "Nothing typed here is recorded" was stated as absolute, on the
+        # page where operators type secrets.
+        _lt_prt = _lt_pr.get_data(as_text=True)
+        check("terminal: the page does not promise nothing typed is kept — the shell's own "
+              "history is",
+              "Nothing typed here is recorded" not in _lt_prt and "command history" in _lt_prt,
+              "the page still says nothing is recorded while ~/.bash_history is written")
+        # xterm's DOM renderer gives each colour run its own <span>, and the catalog walker swaps
+        # any text node equal to a key: a French viewer saw the host print ERREUR.
+        _lt_mount = _re_ab.search(r'<div[^>]*\bid="terminal"[^>]*>', _lt_prt)
+        check("terminal: the xterm mount point is exempt from the translation walker",
+              _lt_mount is not None and "data-no-i18n" in _lt_mount.group(0),
+              "mount tag: %r — host output gets translated" % (_lt_mount and _lt_mount.group(0)))
         import panel.ops.system_ops as _lt_so
         _lt_gss = _lt_so.get_server_status
         _lt_so.get_server_status = lambda force=False: None      # reads THIS machine; not the question
@@ -12222,6 +13484,77 @@ try:
         check("terminal: ...and once they are demoted the re-check refuses the panel host, "
               "though a group still grants it",
               "after-demotion" not in _lt_w, "writes=%r" % (_lt_w,))
+
+        # Losing the terminal ITSELF must close the shell, not only refuse the keystroke. When
+        # _may_use_terminal() said no, the handlers returned: the shell stayed up and its output
+        # kept streaming to the socket until the 15-minute idle sweep. Driven through the real
+        # events, with use_terminal taken off the user's only group between two keystrokes.
+        _lt_c2.disconnect()
+        _lt_sessions.clear()
+        _lt_c3 = app.socketio.test_client(app, flask_test_client=client_as(_lt_uid))
+        _lt_c3.emit("term_open", {"remote_id": _lt_rid, "cols": 80, "rows": 24})
+        _lt_c3.emit("term_input", {"data": "before-revoke"})
+        _lt_open3 = [k for k, v in _lt_sessions.items() if getattr(v, "host", None) == _lt_rid]
+        check("terminal: a delegated user's remote shell takes keystrokes (control for the next)",
+              bool(_lt_open3)
+              and "before-revoke" in [w for v in _lt_sessions.values() for w in v.writes],
+              "sessions=%r" % (list(_lt_sessions),))
+        with app.app_context():
+            db.session.get(Group, _lt_gid).set_permissions([auth.MANAGE_REMOTES])
+            db.session.commit()
+        _lt_c3.get_received()
+        _lt_c3.emit("term_input", {"data": "after-revoke"})
+        _lt_err3 = [e for e in _lt_c3.get_received() if e.get("name") == "term_error"]
+        check("terminal: taking use_terminal away CLOSES the open shell at its next event",
+              _lt_open3 and not any(k in _lt_sessions for k in _lt_open3) and _lt_err3,
+              "still open=%r, term_error=%r — the keystroke is refused but the shell and its "
+              "output stay up for another fifteen minutes"
+              % ([k for k in _lt_open3 if k in _lt_sessions], _lt_err3))
+        with app.app_context():
+            db.session.get(Group, _lt_gid).set_permissions([auth.USE_TERMINAL,
+                                                            auth.MANAGE_REMOTES])
+            db.session.commit()
+
+        # ...and with NO event at all. A shell following a log is sent nothing, so a check made
+        # only when a keystroke arrives never runs for it: the timer sweep has to. Signing the
+        # user out everywhere (auth_epoch bumped) must close it on the sweep alone.
+        _lt_c4 = app.socketio.test_client(app, flask_test_client=client_as(_lt_uid))
+        _lt_before4 = set(_lt_sessions)
+        _lt_c4.emit("term_open", {"remote_id": _lt_rid, "cols": 80, "rows": 24})
+        _lt_open4 = [k for k in _lt_sessions if k not in _lt_before4]
+        with app.app_context():
+            _htmod.sweep_revoked_terminals(app, app.socketio)
+        check("terminal: the revocation sweep leaves a shell whose login still holds alone "
+              "(positive control)",
+              bool(_lt_open4) and all(k in _lt_sessions for k in _lt_open4),
+              "opened=%r, still open=%r" % (_lt_open4, [k for k in _lt_open4 if k in _lt_sessions]))
+
+        def _lt_revoked_rows():
+            return _SPAudit.query.filter_by(action="terminal_close",
+                                            detail="terminal access was revoked",
+                                            username="smoke-term-deleg").count()
+        with app.app_context():
+            _lt_aud_before4 = _lt_revoked_rows()
+            _lt_u4 = db.session.get(User, _lt_uid)
+            _lt_u4.auth_epoch = (_lt_u4.auth_epoch or 0) + 1
+            db.session.commit()
+        _lt_c4.get_received()
+        with app.app_context():
+            _htmod.sweep_revoked_terminals(app, app.socketio)
+            _lt_aud4 = _lt_revoked_rows() - _lt_aud_before4
+        _lt_err4 = [e for e in _lt_c4.get_received() if e.get("name") == "term_error"]
+        check("terminal: a shell sent no input is closed by the sweep once its login is revoked",
+              _lt_open4 and not any(k in _lt_sessions for k in _lt_open4) and _lt_err4,
+              "still open=%r, term_error=%r — its output keeps reaching the signed-out browser"
+              % ([k for k in _lt_open4 if k in _lt_sessions], _lt_err4))
+        check("terminal: ...and the closing row names the user whose access went",
+              _lt_aud4 >= 1, "no new terminal_close row for smoke-term-deleg with that reason")
+        for _cl in (_lt_c3, _lt_c4):
+            try:
+                if _cl.is_connected():
+                    _cl.disconnect()
+            except Exception:
+                pass
     finally:
         (_tsmod.open_session, _tsmod.get, _tsmod.close_for_sid) = _ts_saved
         for _cl in (_lt_c, _lt_c2):
@@ -12252,11 +13585,13 @@ try:
     # cookie is SameSite=Lax and so is not sent cross-site, which leaves the socket's connect gate
     # seeing an anonymous client and refusing it.
     #
-    # _socketio_cors() says so in as many words ("the SameSite=Lax cookie stops a cross-site page
-    # carrying it") and falls back to "*" for plain IP:port access on the strength of it, and the
-    # CSRF Bearer exemption a few hundred lines above rests on the same sentence. Nothing asserted
-    # it. Setting it to "None" — which is what anyone embedding the panel in an iframe would reach
-    # for — silently removes the floor under both.
+    # The socket's origin check is the first layer: with no site_domain and no explicit
+    # socketio_cors_origins it is same-origin, port included (the 'socket origin' checks below),
+    # never "*" unless the operator lists it. This cookie is the second layer under it — where the
+    # check does let a cross-site page through (an operator's "*"), that page still reaches the
+    # connect gate anonymously — and the CSRF Bearer exemption a few hundred lines above rests on
+    # it alone. Nothing asserted it. Setting it to "None" — which is what anyone embedding the
+    # panel in an iframe would reach for — silently removes the floor under both.
     check("cookie: the session cookie is SameSite-restricted",
           app.config.get("SESSION_COOKIE_SAMESITE") in ("Lax", "Strict"),
           "SESSION_COOKIE_SAMESITE is %r — the socket connect gate and the CSRF Bearer exemption "
@@ -12265,23 +13600,110 @@ try:
     check("cookie: ...and is not readable from JavaScript",
           app.config.get("SESSION_COOKIE_HTTPONLY") is True,
           "SESSION_COOKIE_HTTPONLY is %r" % (app.config.get("SESSION_COOKIE_HTTPONLY"),))
-    # ...and the socket's origin list is only permissive when there is genuinely no origin to pin.
-    from app import _socketio_cors as _sio_cors
+    # ...and the socket's origin check. Driven through the engineio server the app really built, so
+    # it covers the wiring too. It was a list fixed at startup — ["https://<site_domain>",
+    # "http://<site_domain>"], no port, else "*" — so the default direct install (site_domain typed
+    # into the wizard, browsed on :5000) had every handshake refused, a Settings change needed a
+    # restart, and with no domain ANY page could complete the handshake.
     from panel.core.config import load_config as _lc_cfg, save_config as _sc_cfg
+    _eio = app.socketio.server.eio
+
+    def _sio_ok(origin, scheme="https", host="panel.example.com:5000", **extra):
+        _env = dict({"wsgi.url_scheme": scheme, "HTTP_HOST": host, "HTTP_ORIGIN": origin}, **extra)
+        return _eio._cors_allowed_origins(_env) in (None, [origin])
+
     _cfg_before = _lc_cfg()
     try:
-        _sc_cfg(dict(_cfg_before, site_domain="panel.example.ts.net",
-                     socketio_cors_origins=None))
-        _pinned = _sio_cors()
-        check("socket: with a domain configured the origin list is pinned to it, not '*'",
-              _pinned != "*" and any("panel.example.ts.net" in o for o in (_pinned or [])),
-              "answered %r — a wildcard lets any page complete the handshake, leaving the session "
-              "cookie as the only thing between a visited page and a shell" % (_pinned,))
+        _sc_cfg(dict(_cfg_before, site_domain="panel.example.com", socketio_cors_origins=None))
+        check("socket: a page on the host:port the panel is reached on may connect (site_domain set)",
+              _sio_ok("https://panel.example.com:5000"),
+              "the default direct install's own origin was refused — no console, no terminal")
+        check("socket: ...and so may site_domain, reached through a proxy that rewrote Host",
+              _sio_ok("https://panel.example.com", scheme="http", host="127.0.0.1:5000"))
+        check("socket: ...and so may the origin a proxy forwards (X-Forwarded-Proto/Host)",
+              _sio_ok("https://node.example.ts.net", scheme="http", host="127.0.0.1:5000",
+                      HTTP_X_FORWARDED_PROTO="https", HTTP_X_FORWARDED_HOST="node.example.ts.net"))
+        check("socket: a page on any other origin may not",
+              not _sio_ok("https://evil.example"),
+              "a wildcard lets any page complete the handshake, leaving the session cookie as the "
+              "only thing between a visited page and a shell")
         _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=None))
-        check("socket: ...and falls back to '*' only when there is no domain to pin to",
-              _sio_cors() == "*", "answered %r with no site_domain set" % (_sio_cors(),))
+        check("socket: with no domain it is same-origin, not '*' — a foreign page is refused",
+              not _sio_ok("https://evil.example", scheme="http", host="203.0.113.5:5000"))
+        check("socket: ...while plain IP:port access still connects",
+              _sio_ok("http://203.0.113.5:5000", scheme="http", host="203.0.113.5:5000"))
+        _sc_cfg(dict(_cfg_before, site_domain="later.example", socketio_cors_origins=None))
+        check("socket: a site_domain saved at runtime applies without a restart",
+              _sio_ok("https://later.example", scheme="http", host="127.0.0.1:5000"))
+        _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=["https://only.example"]))
+        check("socket: an explicit socketio_cors_origins list still wins",
+              _sio_ok("https://only.example") and not _sio_ok("https://panel.example.com:5000"))
+        # No domain and NO explicit list: the check above leaves socketio_cors_origins set, and an
+        # explicit list wins outright — every case below would then pass or fail for that reason.
+        _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=None))
+        # Two review fixes changed this check two ways; one survives, and the other's cases are
+        # asserted against it here. A SITE ignores the port, so a page on another port of the
+        # panel's own address (a game's web map) is same-site: the Lax cookie rides along, and only
+        # the port refuses it. Compared as (host, port): a Host with no port takes the ORIGIN's
+        # scheme default, so a TLS proxy that forwards the host but not X-Forwarded-Proto still
+        # matches — requiring the scheme too refused exactly those proxies, with no message.
+        for _so_origin, _so_kw, _so_want, _so_what in (
+                ("http://1.2.3.4:8123", dict(scheme="http", host="1.2.3.4:5000"), False,
+                 "a page on another port of the panel's own address"),
+                ("http://127.0.0.1:8123", dict(scheme="http", host="127.0.0.1:5000"), False,
+                 "...on loopback too"),
+                ("https://panel.example.com", dict(scheme="http", host="panel.example.com"), True,
+                 "TLS proxy forwards Host without X-Forwarded-Proto"),
+                ("https://panel.example.com", dict(scheme="http", host="127.0.0.1:5000",
+                                                   HTTP_X_FORWARDED_HOST="panel.example.com"), True,
+                 "TLS proxy forwards X-Forwarded-Host without X-Forwarded-Proto"),
+                ("https://other.example.ts.net", dict(scheme="http", host="127.0.0.1:5000",
+                                                      HTTP_X_FORWARDED_PROTO="https",
+                                                      HTTP_X_FORWARDED_HOST="node.example.ts.net"),
+                 False, "a sibling host on the same site (another tailnet node)"),
+                ("https://panel.example.com:8443", dict(scheme="http", host="panel.example.com"),
+                 False, "another port of a host forwarded without a port"),
+                ("http://panel.lan:8123", dict(scheme="http", host="panel.lan:5000"), False,
+                 "...by hostname too"),
+                ("https://panel.lan:8443", dict(scheme="http", host="127.0.0.1:5000",
+                                                HTTP_X_FORWARDED_PROTO="https",
+                                                HTTP_X_FORWARDED_HOST="panel.lan"), False,
+                 "...and against the host a proxy forwarded"),
+                ("http://1.2.3.4:5000", dict(scheme="http", host="1.2.3.4:5000"), True,
+                 "the panel's own page"),
+                ("https://panel.lan", dict(scheme="https", host="panel.lan:443"), True,
+                 "an implied default port"),
+                ("https://panel.lan", dict(scheme="http", host="127.0.0.1:5000",
+                                           HTTP_X_FORWARDED_PROTO="https",
+                                           HTTP_X_FORWARDED_HOST="panel.lan"), True,
+                 "a proxy that forwards the original host and scheme"),
+                ("null", dict(scheme="http", host="1.2.3.4:5000"), False, "an opaque origin")):
+            check("socket origin: %s is %s" % (_so_what, "accepted" if _so_want else "refused"),
+                  _sio_ok(_so_origin, **_so_kw) is _so_want, "%r with %r" % (_so_origin, _so_kw))
+        # A proxy that rewrites Host to loopback and forwards NOTHING cannot be told from a local
+        # page, so with no site_domain it is refused: set site_domain (the README's nginx and
+        # Caddy examples, and Tailscale Serve, all forward the host).
+        check("socket origin: a proxy that hides the host is refused without a site_domain",
+              not _sio_ok("https://panel.lan", scheme="http", host="127.0.0.1:5000"))
     finally:
         _sc_cfg(_cfg_before)
+    # The app's REAL engine.io server, driven over HTTP: its handshake refuses the other-port page
+    # and still answers the panel's own. Only meaningful when the app came up without a domain,
+    # which is how this suite builds it; the first check says so if that ever changes.
+    _so_eio = app.socketio.server.eio
+    import app as _so_app
+    check("socket origin: the running engine.io server was built with the per-request origin check",
+          _so_eio.cors_allowed_origins is _so_app._socket_origin_allowed,
+          "cors_allowed_origins is %r" % (_so_eio.cors_allowed_origins,))
+    _so_c = app.test_client()
+    _so_bad = _so_c.get("/socket.io/?EIO=4&transport=polling", base_url="http://1.2.3.4:5000",
+                        headers={"Origin": "http://1.2.3.4:8123"})
+    _so_ok = _so_c.get("/socket.io/?EIO=4&transport=polling", base_url="http://1.2.3.4:5000",
+                       headers={"Origin": "http://1.2.3.4:5000"})
+    check("socket origin: the live handshake refuses a page on another port of the same address",
+          _so_bad.status_code == 400, "status %d %r" % (_so_bad.status_code, _so_bad.data[:80]))
+    check("socket origin: ...and completes for the panel's own origin (control)",
+          _so_ok.status_code == 200, "status %d %r" % (_so_ok.status_code, _so_ok.data[:80]))
 
 except Exception:
     # A crash part-way through otherwise just prints fewer checks and still reads as green-ish.

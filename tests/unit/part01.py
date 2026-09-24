@@ -247,8 +247,24 @@ check("config: every DEFAULT_CONFIG key has a reader",
 # and tests/smoke_test.py now writes ssh_timeout=1 (see the note there), so the assertion
 # depended on suite ORDER for its truth. Driving the value directly is both stronger and
 # order-independent: a helper that ignored config would fail this, where it passed before.
-_sshto_saved = _cfgmod.load_config().get("ssh_timeout")
+#
+# All of it on a TEMP config.json. This block used to drive the values through the module's own
+# CONFIG_FILE — the machine's data/config.json — saving seven times and "restoring" in a finally:
+# every run pinned all of DEFAULT_CONFIG into the operator's file, and a run killed mid-block left
+# ssh_timeout at 0 or 9999 there. The "no override" state is likewise CREATED here (an empty
+# object), not assumed of the host: a machine whose config sets ssh_timeout failed that check
+# against correct code.
+import pathlib as _pl_sshto
+import shutil as _sh_sshto
+import tempfile as _tf_sshto
+_sshto_file_saved = _cfgmod.CONFIG_FILE
+_sshto_dir = _tf_sshto.mkdtemp()
 try:
+    _cfgmod.CONFIG_FILE = _pl_sshto.Path(_sshto_dir) / "config.json"
+    _cfgmod.CONFIG_FILE.write_text("{}", encoding="utf-8")
+    _cfgmod._cfg_cache["key"] = None
+    eq("config: with no override the SSH layer uses the documented default",
+       _sm_core._ssh_connect_timeout(), _cfgmod.DEFAULT_CONFIG["ssh_timeout"])
     for _want in (7, 30):
         _c = _cfgmod.load_config()
         _c["ssh_timeout"] = _want
@@ -264,12 +280,9 @@ try:
         eq("config: ssh_timeout=%r clamps to %d" % (_set, _want),
            _sm_core._ssh_connect_timeout(), _want)
 finally:
-    _c = _cfgmod.load_config()
-    if _sshto_saved is None:
-        _c.pop("ssh_timeout", None)
-    else:
-        _c["ssh_timeout"] = _sshto_saved
-    _cfgmod.save_config(_c)
+    _cfgmod.CONFIG_FILE = _sshto_file_saved
+    _cfgmod._cfg_cache["key"] = None
+    _sh_sshto.rmtree(_sshto_dir, ignore_errors=True)
 # ── a config.json that is valid JSON but not an OBJECT ───────────────────────────────────────
 # config.json is explicitly a file a human can hand-edit, and load_config() is on every request
 # path and in every background poller. The except caught a MALFORMED file; it did not catch
@@ -371,8 +384,6 @@ finally:
     _cfgmod.CONFIG_FILE = _cfg_file_saved
     _cfgmod._cfg_cache["key"] = None
 
-eq("config: with no override the SSH layer uses the documented default",
-   _sm_core._ssh_connect_timeout(), _cfgmod.DEFAULT_CONFIG["ssh_timeout"])
 # Reads app.py AND the route modules: the line moved out with its section when register_routes
 # was split, and pinning it to one file would have made this gate quietly stop checking anything.
 _autoblock_src = _modsrc("app") + "".join(
@@ -400,12 +411,19 @@ from panel.core import i18n as _i18n
 
 _CHECKOUT = _Path(_root).resolve()
 eq("paths: panel.REPO_ROOT is the checkout root", _panelpkg.REPO_ROOT.resolve(), _CHECKOUT)
+# The runner points these three at a throwaway dir for the whole run (tests/unit_test.py), and
+# keeps what the module computed in unit.LIVE_PATHS — that is what these checks are about.
+import unit as _unit_pkg  # noqa: E402
+_live_paths = getattr(_unit_pkg, "LIVE_PATHS", {})
 for _label, _got, _want in (
         ("config.DATA_DIR", _cfgmod.DATA_DIR, "data"),
         ("config.DB_PATH", _cfgmod.DB_PATH, "data/panel.db"),
-        ("config.SECRET_FILE", _cfgmod.SECRET_FILE, "data/secret_key"),
-        ("config.CRED_KEY_FILE", _cfgmod.CRED_KEY_FILE, "data/cred_key"),
-        ("config.CONFIG_FILE", _cfgmod.CONFIG_FILE, "data/config.json"),
+        ("config.SECRET_FILE", _live_paths.get("SECRET_FILE", _cfgmod.SECRET_FILE),
+         "data/secret_key"),
+        ("config.CRED_KEY_FILE", _live_paths.get("CRED_KEY_FILE", _cfgmod.CRED_KEY_FILE),
+         "data/cred_key"),
+        ("config.CONFIG_FILE", _live_paths.get("CONFIG_FILE", _cfgmod.CONFIG_FILE),
+         "data/config.json"),
         ("i18n translations dir", _i18n._DIR, "translations"),
         ("lgsm_data cache dir", _lgd._CACHE_DIR, "data/lgsm"),
         ("system_ops.PANEL_DIR", SO.PANEL_DIR, "."),
@@ -761,6 +779,41 @@ eq("new-user lang: a language no longer supported cannot be assigned",
    _nul({"default_language": "de"}, _LANGS), "en")
 eq("new-user lang: junk in the config cannot be assigned", _nul({"default_language": 42}, _LANGS), "en")
 
+# ── session lifetimes read from a hand-editable config.json ──────────────────────────────────────
+# "session_lifetime_hours": "8" made PERMANENT_SESSION_LIFETIME a 3,600-character string; the panel
+# started, and every sign-in then 500'd when Flask added it to a datetime. A non-numeric
+# remember_days raised in int() at boot. Both are coerced, and held to the Settings form's range.
+import ast as _sl_ast                                                              # noqa: E402
+from datetime import timedelta as _sl_td                                           # noqa: E402
+from app import _session_lifetimes as _slt                                         # noqa: E402
+
+
+def _slt_safe(cfg):
+    """_session_lifetimes, with a raise reported as a value: raising IS the boot failure, and it
+    must fail the check by name rather than take the whole unit suite down with it."""
+    try:
+        return _slt(cfg)
+    except Exception as exc:
+        return "raised %s" % type(exc).__name__
+
+
+eq("session lifetime: (control) numbers pass through",
+   _slt_safe({"session_lifetime_hours": 12, "remember_days": 7}), (12 * 3600, _sl_td(days=7)))
+eq("session lifetime: a numeric STRING is a number, not a 3,600-character string",
+   _slt_safe({"session_lifetime_hours": "8", "remember_days": "3"}), (8 * 3600, _sl_td(days=3)))
+eq("session lifetime: junk falls back to the defaults instead of breaking sign-in or boot",
+   _slt_safe({"session_lifetime_hours": "eight", "remember_days": "three"}), (8 * 3600, _sl_td(days=3)))
+eq("session lifetime: 0 cannot expire every session on arrival; the form's bounds apply",
+   _slt_safe({"session_lifetime_hours": 0, "remember_days": 10 ** 9}), (3600, _sl_td(days=90)))
+eq("session lifetime: missing keys are the defaults", _slt_safe({}), (8 * 3600, _sl_td(days=3)))
+_sl_src = open(os.path.join(_root, "app.py"), encoding="utf-8").read()
+_sl_fn = next(n for n in _sl_ast.walk(_sl_ast.parse(_sl_src))
+              if isinstance(n, _sl_ast.FunctionDef) and n.name == "create_app")
+check("session lifetime: create_app sets both lifetimes through _session_lifetimes()",
+      sum(1 for n in _sl_ast.walk(_sl_fn) if isinstance(n, _sl_ast.Call)
+          and getattr(n.func, "id", None) == "_session_lifetimes") >= 2,
+      "create_app reads the config values raw again")
+
 # ── the install default layout: a superadmin's published arrangement sits UNDER each user's own, and
 # the merge is per-KEY so someone who only reordered their tiles still gets the house host order.
 from panel.db.prefs import (_effective_prefs as _ep)
@@ -941,6 +994,46 @@ try:
 finally:
     _sm_core.subprocess.Popen = _real_popen_ssh
     _sm_core._resolve_ts_host = _real_ts_host
+
+# ── the control-socket directory must be ours before a socket is trusted in it ──────────────────
+# It is a fixed name in world-writable /tmp, and makedirs(exist_ok=True) accepted whatever was
+# already there: a local account (a game-server user) could create it first after a reboot. ssh's
+# ControlMaster=auto CONNECTS to an existing socket before making one, without asking who listens,
+# so a planted socket would be handed every command sent to that host. Driven through the real
+# _ssh_mux_opts with _SSH_CM_DIR pointed at a scratch path.
+import tempfile as _cm_tf                                                          # noqa: E402
+import shutil as _cm_shutil                                                        # noqa: E402
+_cm_saved = _sm_core._SSH_CM_DIR
+_cm_root = _cm_tf.mkdtemp(prefix="cm-own-")
+_cm_res = {}
+try:
+    _sm_core._SSH_CM_DIR = os.path.join(_cm_root, "fresh")
+    _cm_res["fresh"] = _sm_core._ssh_mux_opts()
+    _sm_core._SSH_CM_DIR = os.path.join(_cm_root, "loose")
+    os.mkdir(_sm_core._SSH_CM_DIR)
+    os.chmod(_sm_core._SSH_CM_DIR, 0o777)
+    _cm_res["loose"] = _sm_core._ssh_mux_opts()
+    os.mkdir(os.path.join(_cm_root, "target"), 0o700)
+    _sm_core._SSH_CM_DIR = os.path.join(_cm_root, "link")
+    os.symlink(os.path.join(_cm_root, "target"), _sm_core._SSH_CM_DIR)
+    _cm_res["symlink"] = _sm_core._ssh_mux_opts()
+    _sm_core._SSH_CM_DIR = os.path.join(_cm_root, "fresh")
+    _cm_real_getuid = _sm_core.os.getuid
+    _sm_core.os.getuid = lambda: _cm_real_getuid() + 1      # someone else's directory
+    try:
+        _cm_res["foreign"] = _sm_core._ssh_mux_opts()
+    finally:
+        _sm_core.os.getuid = _cm_real_getuid
+finally:
+    _sm_core._SSH_CM_DIR = _cm_saved
+    _cm_shutil.rmtree(_cm_root, ignore_errors=True)
+check("ssh mux: a directory it creates itself is used (positive control)",
+      "ControlMaster=auto" in (_cm_res.get("fresh") or []), repr(_cm_res.get("fresh")))
+check("ssh mux: a pre-existing directory it does not own, a symlink, or one others can write is "
+      "not trusted with control sockets",
+      _cm_res.get("loose") == [] and _cm_res.get("symlink") == [] and _cm_res.get("foreign") == [],
+      "loose=%r symlink=%r foreign=%r — ssh connects to whatever socket is already there"
+      % (_cm_res.get("loose"), _cm_res.get("symlink"), _cm_res.get("foreign")))
 
 # The same ceiling on the panel host's own commands (both local paths go through _finish).
 _big = _sm_core._run_local("head -c %d /dev/zero | tr '\\0' b" % (
@@ -1147,6 +1240,17 @@ try:
           _sm_cron._cron_log_command("1 h CRON[1]: (gm) CMD (a (b) c) ", "(gm) CMD ") == "a (b) c"
           and _sm_cron._cron_log_command("1 h CRON[1]: (gm) CMD (no close", "(gm) CMD ") is None,
           "")
+    # The verb prints 14 days OLDEST first and every transport keeps only the first 8 MB, so a
+    # busy host's read ends days ago: its "last run" is the last run before the cut. A read at the
+    # cap is reported as unknown, not as that stale time.
+    _crj_line = "1700000000 host CRON[9]: (gm) CMD (%s)\n" % _crj_cmd
+    _crj_out["v"] = _crj_line * (_sm_core._MAX_OUTPUT_BYTES // len(_crj_line) + 1)
+    _crj_out["v"] = _crj_out["v"][:_sm_core._MAX_OUTPUT_BYTES].strip()
+    check("cron journal: a read cut at the transport's output cap reports no (stale) last-run times",
+          _sm_cron._read_cron_run_times(NS(), "gm") == {}, "")
+    _crj_out["v"] = _crj_line * 100
+    check("cron journal: ...while a read under the cap still does (positive control)",
+          _sm_cron._read_cron_run_times(NS(), "gm") == {_crj_cmd: 1700000000}, "")
 finally:
     _sm_core.run_privileged = _crj_saved
 
@@ -1308,9 +1412,9 @@ try:
 finally:
     _cr_shutil.rmtree(_cr_sb, ignore_errors=True)
 
-# node-tools auto-update: a weekly ROOT cron keeps npm + gamedig (player-query tools) current.
-check("node-tools: the cron updates npm + gamedig weekly and logs it",
-      "npm install -g npm gamedig" in _sm_hosts._NODE_TOOLS_CRON
+# node-tools auto-update: a weekly ROOT cron keeps gamedig (the player-query tool) current.
+check("node-tools: the cron updates gamedig weekly and logs it",
+      "npm install -g --ignore-scripts gamedig@5" in _sm_hosts._NODE_TOOLS_CRON
       and _sm_hosts._NODE_TOOLS_CRON.lstrip().startswith("#")
       and "/var/log/lgsm-node-tools.log" in _sm_hosts._NODE_TOOLS_CRON
       and _privmod.WRITE_TARGETS["node-tools-cron"][0] == "/etc/cron.d/lgsm-node-tools")
@@ -1759,6 +1863,43 @@ try:
           _ok_big is True and len(_wcalls) > 1, "%r %d calls" % (_ok_big, len(_wcalls)))
     check("upload: the large path guards its FIRST command, before any byte is written",
           "realpath -m" in _wcalls[0], _wcalls[0][:110])
+
+    # The rename replaces the destination's inode, so without copying the mode across every save
+    # reset the file to the umask default: LinuxGSM's 0755 launch script lost its exec bit (start
+    # and monitor then fail) and a 0600 file became 0644. The generated commands are RUN here, in
+    # a scratch dir, with the /home guard and the `sudo -u` prefix peeled off — the only parts that
+    # need a real host.
+    import subprocess as _subp
+    import tempfile as _tmpf
+    _orig_guarded = _sm_files._guarded
+    _mode_dir = _tmpf.mkdtemp(prefix="unit-keepmode-")
+    try:
+        _sm_files._guarded = lambda u, a, inner: inner
+
+        def _run_peeled(s, c, **k):
+            _r = _subp.run(["bash", "-c", c.split(" ", 3)[3]], capture_output=True, text=True)
+            return _r.stdout, _r.stderr, _r.returncode
+        _sm_core.run_command = _run_peeled
+        for _label, _size in (("one-shot", 64), ("chunked", 200 * 1024)):
+            for _mode in (0o755, 0o600):
+                _mp = os.path.join(_mode_dir, "f-%s-%o" % (_label, _mode))
+                with open(_mp, "wb") as _fh:
+                    _fh.write(b"old")
+                os.chmod(_mp, _mode)
+                _okm, _ = _sm_files._write_file_as_user(_FakeSrv(), "u", _mp, b"N" * _size)
+                with open(_mp, "rb") as _fh:
+                    _got = _fh.read()
+                eq("write keeps the destination's mode (%s, 0%o)" % (_label, _mode),
+                   (_okm, oct(os.stat(_mp).st_mode & 0o7777), len(_got)), (True, oct(_mode), _size))
+            # Positive control: a NEW file is still created (the mode copy is skipped, not fatal).
+            _np = os.path.join(_mode_dir, "new-%s" % _label)
+            _okn, _ = _sm_files._write_file_as_user(_FakeSrv(), "u", _np, b"N" * _size)
+            check("write still creates a file that did not exist (%s)" % _label,
+                  _okn is True and os.path.getsize(_np) == _size, "%r" % _okn)
+    finally:
+        _sm_files._guarded = _orig_guarded
+        import shutil as _shm
+        _shm.rmtree(_mode_dir, ignore_errors=True)
 
     # The server-side half: overwrite is opt-in. The UI asks first, but check and write are two
     # round trips, so a file that appears in between must be refused rather than clobbered.

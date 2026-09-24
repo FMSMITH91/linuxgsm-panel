@@ -13,13 +13,20 @@
 
 <div class="card mb-3">
   <div class="card-body">
+    {# What this page promises has to be what the fan-out does. A ban is applied through each
+       server's LIVE console (app.py _fan_out_global_ban), so a server that is stopped or on an
+       unreachable host when the ban is added never gets it, and nothing re-applies the list when it
+       starts: only Sync, pressed while it runs. The page said "gone everywhere" and counted every
+       installed Source server as covered, so a cheater could join the two that were stopped. #}
     <p class="small text-secondary mb-3">
-      <span class="d-block">A SteamID added here is banned on every Source / GoldSrc server across all
-        your hosts — ban a cheater once and they're gone everywhere.</span>
+      <span class="d-block">A SteamID added here is banned on every Source / GoldSrc server, across
+        all your hosts, that is running when you add it.</span>
       <span class="d-block mt-1">It's applied through each server's own console, using the game's native
         banid and writeid commands, so it uses the game's own ban list and survives restarts.</span>
-      <span class="d-block mt-1">Currently propagates to
-        <strong>{{ valve_count }}</strong> {% if valve_count == 1 %}<span>Source server</span>{% else %}<span>Source servers</span>{% endif %}.</span>
+      <span class="d-block mt-1">A server that is stopped or unreachable at that moment does not get it.
+        Press Sync to all servers while it is running to apply the whole list to it.</span>
+      <span class="d-block mt-1"><span>Source servers installed:</span>
+        <strong>{{ valve_count }}</strong></span>
       <span class="d-block mt-1 text-secondary">Other engines (Minecraft bans by name, Call of Duty by slot) don't use SteamIDs, so they aren't covered here.</span>
     </p>
     <form method="POST" action="{{ url_for('global_bans_add') }}" class="row g-2 align-items-end">

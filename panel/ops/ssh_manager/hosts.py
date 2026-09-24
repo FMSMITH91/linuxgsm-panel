@@ -15,22 +15,30 @@ from panel.ops.ssh_manager import (_core, firewall)  # noqa: E402,F401  (module 
 
 
 
-# ── Keep the node player-query tools (npm + gamedig) current ───────────────────
+# ── Keep the node player-query tool (gamedig) current ───────────────────────────
 # gamedig is installed once (bootstrap / install.sh) and never updates itself, so player queries can
-# silently break as games and gamedig evolve. This weekly ROOT cron refreshes npm + gamedig alongside
-# the host's other automatic updates (unattended-upgrades). Written to /etc/cron.d as root, idempotent;
-# the `command -v npm` guard makes it a harmless no-op on a host that never got node.
+# silently break as games and gamedig evolve. This weekly ROOT cron refreshes it alongside the host's
+# other automatic updates (unattended-upgrades). Written to /etc/cron.d as root, idempotent; the
+# `command -v npm` guard makes it a harmless no-op on a host that never got node.
+#
+# It ran `npm install -g npm gamedig`: the LATEST npm, gamedig and whole dependency tree, with their
+# install scripts, as root, every week, with nobody watching — a standing path from any later
+# compromise of those packages to root on every host. Now: gamedig only, held to the major the
+# panel's query types are written for (v5), with --ignore-scripts so no package code runs as root
+# at install. npm itself is left to the OS: updating it here made root run a freshly fetched npm.
+# Byte-identical to tools/panel-helper's NODE_TOOLS_CRON_BODY and install.sh's copy (a unit gate).
 _NODE_TOOLS_CRON = (
-    "# LinuxGSM Panel - keep npm + gamedig current for player queries (managed by the panel).\n"
+    "# LinuxGSM Panel - keep gamedig current for player queries (managed by the panel).\n"
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
     "30 4 * * 0 root command -v npm >/dev/null 2>&1 && "
-    "npm install -g npm gamedig >/var/log/lgsm-node-tools.log 2>&1\n"
+    "npm install -g --ignore-scripts gamedig@5 >/var/log/lgsm-node-tools.log 2>&1\n"
 )
 
 
 def ensure_node_tools_cron(server):
-    """Idempotently install the weekly root cron that keeps npm + gamedig current on `server`, so the
-    panel's player queries don't rot. Best-effort; never raises. Returns True if the write succeeded.
+    """Idempotently install the weekly root cron that keeps gamedig (pinned v5, no install scripts)
+    current on `server`, so the panel's player queries don't rot; npm itself is left to the OS.
+    Best-effort; never raises. Returns True if the write succeeded.
     Root-owned: locally the helper does the write itself, and remotely it is `sudo bash -c` with
     base64 so no quoting or `%` can mangle it. This used to claim it landed root-owned "regardless
     of any per-remote linuxgsm_user", which was the opposite of what happened — that field turned
@@ -194,7 +202,11 @@ def pro_detach(server):
     _pro_cache_invalidate(server)
     out, err, rc = _core.run_privileged(server, "pro-detach", [], timeout=120)
     blob = (out or "") + " " + (err or "")
-    if rc == 0 or "detach" in blob.lower():
+    # pro's OWN success sentence, not the word. `"detach" in blob` was met by every failure that
+    # names the verb: the helper's "pro-detach timed out" / "failed" / "is not installed", an older
+    # helper's "unknown verb 'pro-detach'", and sudo's "not allowed to execute ... pro-detach" —
+    # each reported "Detached from Ubuntu Pro." with a success audit row on a host still attached.
+    if rc == 0 or "this machine is now detached" in blob.lower():
         return True, "Detached from Ubuntu Pro."
     return False, _pro_trim(blob) or "Detach failed"
 
@@ -267,11 +279,12 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
     if not spec:
         return False, "Port required"
     # Validated HERE, like remote_ufw_open_port's sibling checks. The verb validates too, but it
-    # signals failure by RAISING VerbError — run_privileged does not catch it, nor does the route,
-    # and the project has no Flask errorhandler — so a hostname in the "allow from" box or a
-    # malformed port returned a bare 500 HTML page. The caller's `.then(r => r.json())` then failed
-    # to parse it, so the user saw a generic "Failed" with no reason and the panel log got a
-    # traceback. Same two answers the sibling gives, as (ok, msg).
+    # signals failure by RAISING VerbError — run_privileged does not catch it, nor does the route —
+    # so a hostname in the "allow from" box or a malformed port returned a bare 500 HTML page that
+    # the caller's `.then(r => r.json())` could not parse. app.py's _json_for_api_errors now makes
+    # that 500 JSON, but its message is the generic "Something went wrong — see the panel log.",
+    # so the user still got no reason and the panel log still got a traceback. Same two answers
+    # the sibling gives, as (ok, msg).
     try:
         _ipaddress.ip_network(src, strict=False)
     except ValueError:
@@ -441,19 +454,26 @@ def remote_ufw_close_port(server, port, protocol=None):
     return False, err or out or "Unknown error"
 
 
-def remote_ufw_delete_rule(server, num, force=False):
+def remote_ufw_delete_rule(server, num, force=False, expect_key=None):
     """Delete a UFW rule by its number (as shown by `ufw status numbered`). This is
     the reliable way to remove any rule — deleting by spec requires an exact match.
 
     Unless force=True, refuses to delete a rule that is the last thing keeping SSH or
-    Tailscale access open, so a click (or a direct API call) can't lock you out."""
+    Tailscale access open, so a click (or a direct API call) can't lock you out.
+
+    `expect_key` is the rule's identity (a group `key` from firewall.remote_ufw_status). ufw
+    numbers are POSITIONS and renumber on every insert (the auto-block inserts its denies at 1), so
+    a number read earlier can name a different rule by now; with a key, the delete happens only if
+    rule `num` is still that rule in a fresh read."""
     try:
         n = int(num)
     except (TypeError, ValueError):
         return False, "Invalid rule number"
     if n < 1:
         return False, "Invalid rule number"
-    if not force:
+    if expect_key is not None and not isinstance(expect_key, str):
+        return False, "Invalid rule identity"
+    if not force or expect_key is not None:
         # The guard reads the firewall to find out which rules are load-bearing. If that read
         # FAILS it returns no groups — and iterating nothing marked nothing protected, so every
         # rule became deletable, including the one keeping SSH or the tailnet open. The old
@@ -478,7 +498,12 @@ def remote_ufw_delete_rule(server, num, force=False):
             # rule numbered anything and the delete would fail regardless. Say that rather than
             # send someone checking a connection that is fine.
             return False, "UFW isn't installed on this host, so there's no rule %d to delete." % n
-        for g in status.get("groups", []):
+        if expect_key is not None and not any(
+                g.get("key") == expect_key and n in g.get("nums", [])
+                for g in status.get("groups", [])):
+            return False, ("Rule %d is no longer the rule that was picked — the firewall changed "
+                           "since it was read, so nothing was removed. Refresh and try again." % n)
+        for g in (status.get("groups", []) if not force else []):
             if n in g.get("nums", []) and g.get("protected"):
                 return False, g.get("protect_reason") or \
                     "This rule protects your access to the host and can't be removed here."
@@ -520,31 +545,50 @@ def remote_ufw_allow_game_ports(server, ports, name="Game"):
 
 def remote_ufw_close_by_name(server, name):
     """Delete ALL UFW rules tagged with a game server's name (its comment). Used on
-    uninstall so multi-port games are fully cleaned up. Deletes highest-numbered
-    rule first so the numbering stays valid as rules are removed."""
+    uninstall so multi-port games are fully cleaned up.
+
+    The firewall is RE-READ before every delete, and each delete names the rule it means
+    (expect_key). The numbers used to be read once and deleted highest-first, which kept them valid
+    only against this loop's own deletes: the hourly auto-block reconcile inserts its denies at
+    position 1 from another thread, and one insert mid-loop shifted every remaining number onto
+    the rule above it — another server's port, or the deny holding an attacker out — while this
+    reported "8 rule(s) removed"."""
     comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "")[:60]
     if not comment:
         return 0, "no name"
-    out, _, _ = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
-    nums = []
-    for line in (out or "").splitlines():
-        m = re.match(r"^\s*\[\s*(\d+)\]\s*(.*)$", line)
-        if m and re.search(r"#\s*" + re.escape(comment) + r"\s*$", m.group(2)):
-            nums.append(int(m.group(1)))
-    deleted = sum(1 for n in sorted(nums, reverse=True) if remote_ufw_delete_rule(server, n)[0])
+    deleted, refused = 0, set()
+    for _ in range(256):           # bounded: a rule that will not go is skipped, never retried
+        status = firewall.remote_ufw_status(server)
+        if status.get("unreachable") or not status.get("installed"):
+            break
+        tagged = [(n, g["key"]) for g in status.get("groups", [])
+                  if g.get("comment") == comment and g.get("key") not in refused
+                  for n in g.get("nums", [])]
+        if not tagged:
+            break
+        n, key = max(tagged)
+        if remote_ufw_delete_rule(server, n, expect_key=key)[0]:
+            deleted += 1
+        else:
+            refused.add(key)
     return deleted, f"{deleted} rule(s) removed for {comment}"
 
 
 def remote_ufw_close_game_port(server, port):
     """Remove the game server port rule (used on uninstall). Handles the new
-    single bare rule plus any legacy proto-specific / port+1 rules from older installs."""
+    single bare rule plus any legacy proto-specific rules on that port.
+
+    NOT port+1. That sweep deleted `port+1/tcp` and `/udp` with no idea whose they were — commonly
+    the NEXT server's game port, or a rule the operator opened from the Firewall page — so
+    uninstalling the server on 27015 closed 27016/udp and its neighbour stopped taking players,
+    with nothing in the uninstall output saying so. The server's tagged rules, extra ports
+    included, are removed by remote_ufw_close_by_name."""
     n = 0
     ok, _ = remote_ufw_close_port(server, port)  # new-style bare rule (both protocols)
     n += 1 if ok else 0
-    for p in (port, port + 1):  # legacy cleanup: old proto-specific + port+1 rules
-        for proto in ("tcp", "udp"):
-            ok, _ = remote_ufw_close_port(server, p, proto)
-            n += 1 if ok else 0
+    for proto in ("tcp", "udp"):  # legacy cleanup: old proto-specific rules on this port
+        ok, _ = remote_ufw_close_port(server, port, proto)
+        n += 1 if ok else 0
     return n, f"Port {port}: {n} rule(s) removed"
 
 
@@ -574,9 +618,6 @@ LGSM_COMMON_DEPS = (
     # ancient libstdc++.so.5 that old titles like Call of Duty need to start.
     "lib32gcc-s1 lib32stdc++6 lib32z1 libsdl2-2.0-0:i386 libc6:i386 libstdc++5:i386"
 )
-
-
-_DEPS_CSV_CACHE = {}
 
 
 # Per-distro package lists, keyed by slug — one host may be 22.04 and another 24.04.
@@ -632,13 +673,10 @@ def _load_deps_csv(os_slug=None):
     'steamcmd', and each game shortname. Fetched and cached rather than committed here — see
     lgsm_data — and chosen per distro rather than always Ubuntu 24.04."""
     from panel.services import lgsm_data
-    name = lgsm_data.deps_name(os_slug)
-    if _DEPS_CSV_CACHE.get(name) is not None:
-        return _DEPS_CSV_CACHE[name]
-    data = lgsm_data.deps(os_slug)
-    if data:                       # never memoise a failed fetch — a retry must be able to win
-        _DEPS_CSV_CACHE[name] = data
-    return data
+    # lgsm_data keeps the parsed list itself, and re-reads it weekly. A second copy here was kept
+    # for the life of the process, so an upstream package fix (a package renamed for a distro)
+    # never reached an install until the panel restarted.
+    return lgsm_data.deps(os_slug)
 
 
 def deps_for_game(game_type, os_slug=None):
@@ -908,8 +946,26 @@ def remote_os_update_start(server):
 
 def remote_os_update_status(server):
     """Live status of the running/last OS update: {running, done, rc, log}. `done` is set once the
-    detached job appends its sentinel; `running` reflects whether apt is still working."""
-    out, _, _ = _core.run_privileged(server, "os-update-log", [], timeout=15, merge_stderr=False)
+    detached job appends its sentinel; `running` reflects whether apt is still working.
+
+    `unread` is set when the log could not be read at all. The Tailscale and local transports
+    return ("", ..., -1) rather than raising, and that read as {done: False, log: ""} plus
+    `running: False` from a probe that did not answer either: the watch popup wiped apt's output
+    and, three polls later, declared an update that was still unpacking "ended without a
+    completion marker". `running` is None when its own probe did not answer.
+
+    A log that does not EXIST is an answer, though: the verb is `tail` of a file on /run (tmpfs),
+    which only the panel's own job writes, and tail exits 1 naming the file. An update the panel did
+    not start — one already running when Start was pressed ("watching it") — has no such file, and
+    every poll of it read as unread, so the popup said "Lost contact with the host" about a host
+    that answered every call. That case reads as an empty log and still asks apt whether it is
+    running. Matched on the path in tail's own error, which no locale translates and which sudo's
+    refusal (also exit 1) does not contain."""
+    out, err, lrc = _core.run_privileged(server, "os-update-log", [], timeout=15, merge_stderr=False)
+    if lrc == 1 and _priv.OS_UPDATE_LOG in (err or ""):
+        out = ""                              # answered: there is no log (yet)
+    elif lrc != 0:
+        return {"running": None, "done": False, "rc": None, "log": "", "unread": True}
     log = out or ""
     m = re.search(re.escape(_OS_UPDATE_DONE) + r"(-?\d+)", log)
     done = m is not None
@@ -917,9 +973,11 @@ def remote_os_update_status(server):
     if done:
         log = re.sub(r"\n?" + re.escape(_OS_UPDATE_DONE) + r"-?\d+\s*$", "", log)
         return {"running": False, "done": True, "rc": rc, "log": log}
-    # No sentinel yet — is apt still working?
+    # No sentinel yet — is apt still working? pgrep answers 0 (yes) or 1 (no); anything else is no
+    # answer, which is not "apt has stopped".
     _, _, alive_rc = _core.run_privileged(server, "apt-any-running", [], timeout=10, merge_stderr=False)
-    return {"running": alive_rc == 0, "done": False, "rc": None, "log": log}
+    running = True if alive_rc == 0 else False if alive_rc == 1 else None
+    return {"running": running, "done": False, "rc": None, "log": log}
 
 
 def remote_reboot(server):
@@ -1188,7 +1246,7 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # npm install -g is idempotent, so the guard only saved time — and it cost a root shell.
     gd_out, _, _ = _core.run_privileged(server, "npm-install-global", ["gamedig"], timeout=300)
     note(_core._last_lines(gd_out, 3) or "gamedig installed")
-    ensure_node_tools_cron(server)   # weekly auto-update for npm + gamedig, alongside apt auto-updates
+    ensure_node_tools_cron(server)   # weekly gamedig (pinned v5, no install scripts), beside apt's
     note("weekly npm/gamedig auto-update scheduled")
 
     # ── 3c. Enable + configure unattended-upgrades (auto security updates) ──
@@ -1210,20 +1268,35 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
 
     # ── 5. Configure UFW ──
     ufw_not_enabled = None
+    # The ports SSH answers on, read ONCE for both steps that name them (UFW here, fail2ban's jail
+    # at step 10). Both said 22: a host whose sshd had been moved to 2222 had UFW switched on at
+    # deny-incoming with only 22 let in — the panel's next connection, and the operator's, met a
+    # closed port — and its fail2ban jail banned on a port nothing listened on.
+    ssh_ports = _bootstrap_ssh_ports(server) if (enable_ufw or install_fail2ban) else []
     if enable_ufw:
-        emit("Configuring UFW firewall (deny incoming, rate-limit SSH)")
+        emit("Configuring UFW firewall (deny incoming, rate-limit SSH on port %s)"
+             % ", ".join(ssh_ports))
         # Rate-limit SSH by default — `ufw limit` allows SSH (so we never lock ourselves
         # out) while throttling brute-force sources. We do NOT add a plain `allow 22`:
         # a lower-numbered allow rule would match first and shadow the limit, leaving SSH
-        # effectively unthrottled.
-        _l_out, _l_err, _l_rc = _core.run_privileged(server, "ufw-limit-port", ["22/tcp"], timeout=15)
+        # effectively unthrottled. EVERY SSH port, and all of them before anything is removed or
+        # switched on: one that failed would be a port UFW is about to close.
+        _l_rc, _l_why = 0, ""
+        for _sp in ssh_ports:
+            _l_out, _l_err, _l_rc = _core.run_privileged(server, "ufw-limit-port", ["%s/tcp" % _sp],
+                                                         timeout=15)
+            if _l_rc != 0:
+                _l_why = "`ufw limit %s/tcp` failed (%s)" % (
+                    _sp, (_l_err or _l_out or "exit %s" % _l_rc).replace("\n", " ").strip()[:160])
+                break
         if _l_rc == 0:
             # The same goes for `ufw allow OpenSSH` / a bare `ufw allow 22` already on the host:
             # to ufw neither is the `22/tcp` rule above, so the limit is appended AFTER them and
             # never reached. Removed only now that the limit is in place, so SSH is never left
-            # unallowed.
-            for _verb, _args in _SSH22_SHADOWING:
-                _core.run_privileged(server, _verb, _args, timeout=15)
+            # unallowed — and only when 22 IS one of the ports just limited.
+            if "22" in ssh_ports:
+                for _verb, _args in _SSH22_SHADOWING:
+                    _core.run_privileged(server, _verb, _args, timeout=15)
             _core.run_privileged(server, "ufw-default", ["deny", "incoming"], timeout=15)
             _core.run_privileged(server, "ufw-default", ["allow", "outgoing"], timeout=15)
             _core.run_privileged(server, "ufw-enable", [], timeout=15)
@@ -1232,10 +1305,9 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
             # were deleted "now that the limit is in place" and UFW was switched on at deny-incoming
             # — a fresh host cut off from SSH mid-bootstrap. Nothing is removed and the firewall is
             # left as it was; the job says so rather than "complete".
-            ufw_not_enabled = ((_l_err or _l_out or "exit %s" % _l_rc)
-                               .replace("\n", " ").strip()[:160])
-            note("NOT DONE: `ufw limit 22/tcp` failed (%s). UFW was left as it was — turning it on "
-                 "without a rule letting SSH in would lock this host out." % ufw_not_enabled)
+            ufw_not_enabled = _l_why
+            note("NOT DONE: %s. UFW was left as it was — turning it on without a rule letting SSH "
+                 "in would lock this host out." % ufw_not_enabled)
 
     # ── 6. Basic SSH hardening ──
     emit("Hardening SSH configuration")
@@ -1323,9 +1395,11 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # ── 10. Configure fail2ban ──
     if install_fail2ban:
         emit("Configuring fail2ban (SSH brute-force protection)")
+        # The ports sshd answers on, not 22: this file is also where change_ssh_port keeps
+        # `port = <new>,<old>`, and writing 22 over it pointed every ban at a port nothing served.
         jail_content = (
             "[DEFAULT]\nbantime = 1h\nfindtime = 10m\nmaxretry = 5\n\n"
-            "[sshd]\nenabled = true\nport = 22\n"
+            "[sshd]\nenabled = true\nport = %s\n" % ",".join(ssh_ports)
         )
         _core.write_root_file(server, "fail2ban-jail-local", jail_content, timeout=15)
         _core.run_privileged(server, "service-enable-now", ["fail2ban"], timeout=20)
@@ -1381,9 +1455,9 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         note("Reboot check skipped — this is the panel's own host.")
 
     # The same reasoning for a firewall that was asked for and not switched on: a door left open.
-    ufw_msg = (("the firewall was NOT enabled: `ufw limit 22/tcp` failed (%s), and turning UFW on "
-                "without a rule letting SSH in would have locked this host out. Fix ufw on the "
-                "host and run the bootstrap again." % ufw_not_enabled) if ufw_not_enabled else "")
+    ufw_msg = (("the firewall was NOT enabled: %s, and turning UFW on without a rule letting SSH "
+                "in would have locked this host out. Fix ufw on the host and run the bootstrap "
+                "again." % ufw_not_enabled) if ufw_not_enabled else "")
     if hardening_failed:
         # Not "complete": the one step whose whole point is closing a door reported the door is
         # still open. The rest of the work did happen, and the message says both.
@@ -1419,12 +1493,20 @@ def remote_check_tailscale(server):
     # and Tailscale transports, so that is the ordinary unreachable case, not a rare one.
     installed = ("NOTINSTALLED" not in installed_out    # "INSTALLED" is a substring of it
                  and "INSTALLED" in installed_out)
+    # ...but "not installed" is itself only a reading when the probe ANSWERED — one sentinel or the
+    # other. An empty answer came back as {"installed": False}, and the Tailscale modal printed
+    # "Tailscale is not installed on <host>" with an Install button, about a host nobody reached.
+    # `installed` stays falsy so every existing caller keeps refusing; `unreachable` says why.
+    unread = "INSTALLED" not in (installed_out or "")
 
     running = False
     ts_ip = ""
     dns_name = ""
     if installed:
         out, _, rc = _core.run_command(server, "tailscale status --json 2>/dev/null || echo '{}'", timeout=10)
+        # `|| echo '{}'` makes an answered failure "{}", so nothing at all is the probe not running
+        # — not "installed but not running", which offers to re-authenticate the node.
+        unread = unread or not (out or "").strip()
         if rc == 0 and out:
             try:
                 import json
@@ -1438,12 +1520,15 @@ def remote_check_tailscale(server):
             except Exception:
                 _core._log.debug("remote_check_tailscale: ignored non-fatal error", exc_info=True)
 
-    return {
+    res = {
         "installed": installed,
         "running": running,
         "tailscale_ip": ts_ip,
         "dns_name": dns_name,
     }
+    if unread:
+        res["unreachable"] = True
+    return res
 
 
 def remote_install_tailscale(server):
@@ -1631,8 +1716,18 @@ def remote_tailscale_finalize(server):
     log = []
     ufw_out, _, _ = _core.run_privileged(server, "ufw-status", ["plain"], timeout=10)
     if firewall._ufw_is_active(ufw_out):
-        _core.run_privileged(server, "ufw-allow-iface", ["tailscale0"], timeout=15)
-        log.append("UFW: allowed tailscale0 interface (in)")
+        # The log line is the caller's evidence that the rule went in (the route reports
+        # ufw_allowed = bool(log), to the UI and the audit row), so it follows the allow's exit
+        # code. It was appended whatever the allow answered: a refused or timed-out rule read as
+        # "UFW now allows tailscale0" on a firewall that still blocks it.
+        a_out, a_err, a_rc = _core.run_privileged(server, "ufw-allow-iface", ["tailscale0"],
+                                                  timeout=15)
+        if a_rc == 0:
+            log.append("UFW: allowed tailscale0 interface (in)")
+        else:
+            _core._log.warning("tailscale finalize: allowing tailscale0 in UFW failed on %s "
+                               "(rc=%s): %s", getattr(server, "name", "?"), a_rc,
+                               (a_err or a_out or "")[:200])
     status = remote_check_tailscale(server)
     return status, "\n".join(log)
 
@@ -1643,6 +1738,22 @@ def remote_ufw_close_port_22(server):
     if rc == 0:
         return True, "Port 22 rule removed from UFW"
     return False, err or out or "Failed to remove port 22"
+
+
+def _bootstrap_ssh_ports(server):
+    """The ports SSH must stay reachable on when the bootstrap switches UFW on and writes the
+    fail2ban jail: every port sshd's effective config names, plus the one the panel connects on.
+
+    The stored port is unioned in, not only used as the empty-read fallback: under socket
+    activation `sshd -T` prints sshd_config's Port while ssh.socket listens elsewhere (see
+    change_ssh_port), and the port the panel reached the host on is the one whose loss locks
+    everybody out. An unread `sshd -T` leaves just that port — never nothing, which would switch
+    UFW on at deny-incoming with SSH shut."""
+    ports = []
+    for p in _sshd_current_ports(server) + [str(int(getattr(server, "port", 22) or 22))]:
+        if p not in ports:
+            ports.append(p)
+    return ports
 
 
 def _sshd_current_ports(server):
@@ -1997,16 +2108,25 @@ def remote_set_fail2ban_ignoreip(server, ignore_ips, unban_ip=None):
 def remote_security_log(server, which, lines=200, jail=None):
     """Tail of a whitelisted security log on a REMOTE host: 'fail2ban' or 'ssh'. `which` is a fixed
     set, never a path from the request. For 'fail2ban', an optional charset-validated `jail` narrows
-    the activity to that one jail. Returns text."""
+    the activity to that one jail. Returns text, or None when NO read answered.
+
+    None, not "": the Tailscale and local transports return ("", ..., -1) rather than raising, and
+    two unanswered reads joined to "" were shown as "(log is empty)", i.e. no SSH or ban activity,
+    on the card whose job is showing attacks. A read that ANSWERED (rc 0) with nothing in it is a
+    real empty log and still comes back as ""."""
     lines = max(20, min(int(lines or 200), 1000))
     if which == "fail2ban":
         # /var/log/fail2ban.log holds the real Ban/Unban/Found activity (journalctl only has the
         # unit's start/stop noise), so read the file first and fall back to the journal.
-        out, _, _ = _core.run_privileged(server, "log-tail", ["fail2ban", "4000"], timeout=20,
-                                   merge_stderr=False)
+        out, _, frc = _core.run_privileged(server, "log-tail", ["fail2ban", "4000"], timeout=20,
+                                           merge_stderr=False)
+        answered = frc == 0
         if not out:
-            out, _, _ = _core.run_privileged(server, "journal", ["fail2ban", "4000"], timeout=20,
-                                       merge_stderr=False)
+            out, _, jrc = _core.run_privileged(server, "journal", ["fail2ban", "4000"], timeout=20,
+                                               merge_stderr=False)
+            answered = answered or jrc == 0
+        if not answered and not out:
+            return None
         rows = (out or "").splitlines()
         if jail and _F2B_JAIL_RE.match(jail):   # charset-only guard; used solely for in-Python filtering
             tag = "[%s]" % jail
@@ -2016,11 +2136,15 @@ def remote_security_log(server, which, lines=200, jail=None):
         # journalctl first, auth.log as the fallback — that was `journalctl ... || tail ...`, where
         # the `||` fired on journalctl's exit status. Systemd exits 0 with no output on a host that
         # keeps no journal, so checking the OUTPUT is what the fallback was actually for.
-        out, _, _ = _core.run_privileged(server, "journal", ["ssh", str(lines * 2)], timeout=20,
-                                   merge_stderr=False)
+        out, _, jrc = _core.run_privileged(server, "journal", ["ssh", str(lines * 2)], timeout=20,
+                                           merge_stderr=False)
+        answered = jrc == 0
         if not (out or "").strip():
-            out, _, _ = _core.run_privileged(server, "log-tail", ["auth", str(lines)], timeout=20,
-                                       merge_stderr=False)
+            out, _, arc = _core.run_privileged(server, "log-tail", ["auth", str(lines)], timeout=20,
+                                               merge_stderr=False)
+            answered = answered or arc == 0
+        if not answered and not (out or "").strip():
+            return None
         return "\n".join((out or "").splitlines()[-lines:])
     return ""
 
@@ -2033,6 +2157,12 @@ def _tcp_reachable(host, port, timeout=8):
             return True
     except OSError:
         return False
+
+
+def _port_has_listener(ss_out, port):
+    """Whether `ss -lnt` output has a listener on `port` (any address). It names no process."""
+    # Was `ss -lnt | grep -qE '[:.]<port>[[:space:]]'` in a root shell; the same match in Python.
+    return bool(re.search(r"[:.]%d\s" % int(port), ss_out or ""))
 
 
 def _restart_ssh_listener(server, socket_mode):
@@ -2177,6 +2307,23 @@ def change_ssh_port(server, new_port, bind_addr=""):
         if p not in ports:
             ports.append(p)
 
+    # 0. The new port must be FREE. The check that sshd came up on it (step 6) is `ss -lnt`, which
+    #    names no process, so any listener on the port answers it. With a web app on 8080, moving
+    #    SSH there left sshd failing to bind it and serving the old port only, while ss showed
+    #    0.0.0.0:8080, the snapshot was discarded, the route repointed the panel at a port that
+    #    answers HTTP, and the message told the operator to close the one real SSH port. A port sshd
+    #    already serves (a bind change on the current port) is its own listener and passes.
+    if str(new_port) not in old_ports:
+        pre, _, pre_rc = _core.run_privileged(server, "listening-sockets", [], timeout=15,
+                                              merge_stderr=False)
+        if pre_rc != 0 or not (pre or "").strip():
+            return False, ("Could not list the ports this host listens on, so the panel can't tell "
+                           "whether %d is free — nothing was changed." % new_port)
+        if _port_has_listener(pre, new_port):
+            return False, ("Something on this host is already listening on port %d, so sshd could "
+                           "not take it and the panel could not tell sshd from that service "
+                           "afterwards. Pick a free port — nothing was changed." % new_port)
+
     # 1. Open the new port in the firewall FIRST (best-effort; a host without UFW just no-ops).
     remote_ufw_open_port(server, new_port, "tcp", comment="SSH (panel)")
 
@@ -2251,7 +2398,7 @@ def change_ssh_port(server, new_port, bind_addr=""):
             if not re.search(r"(?:^|\s)%s:%d\s" % (_a, new_port), out or "", re.M):
                 return _revert("sshd isn't listening on %s:%d — reverted. Your existing SSH still "
                                "works." % (bind_addr, new_port))
-        elif not re.search(r"[:.]%d\s" % new_port, out or ""):
+        elif not _port_has_listener(out, new_port):
             return _revert("sshd didn't come up on port %d — reverted. Your existing SSH still works." % new_port)
 
     _core.run_privileged(server, _discard_verb, [], timeout=10,

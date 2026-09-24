@@ -221,6 +221,316 @@ else:
     check(".ip-stale{" in _css,
           "install_progress: ...with a style, so 'stale' is visible and not just a class name")
 
+# ── how an install ENDED: four answers, not "failed" and "everything else" ────────────────────
+# settle() split endings into failed/interrupted and the rest, and showed the rest as a green
+# "Installed" that removed itself after 8 s. A `done` job with warn=true (the game took a port
+# another server uses; it installed but did not start) is shown nowhere else, so its caveat read
+# as a success and vanished. `{"status":"none"}` and a non-2xx error body were "Installed" too.
+# The classifier is DRIVEN here, through a small evaluator for pure functions over esprima's AST:
+# there is no JS runtime on the runners, and a text search for 'warn' passed with it unread.
+_JS_UNDEF = object()
+
+
+class _JsReturn(Exception):
+    pass
+
+
+def _js_truthy(v):
+    if v is _JS_UNDEF or v is None:
+        return False
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        return v != ""
+    return True
+
+
+def _js_eval(n, env):
+    """Evaluate the expression subset a pure classifier uses. Anything else raises, so a function
+    that grows beyond it fails the gate loudly instead of being evaluated wrongly."""
+    t = n.get("type")
+    if t == "Literal":
+        return n.get("value")
+    if t == "Identifier":
+        return env.get(n["name"], _JS_UNDEF)
+    if t == "MemberExpression" and not n.get("computed"):
+        o = _js_eval(n["object"], env)
+        return o.get(n["property"]["name"], _JS_UNDEF) if isinstance(o, dict) else _JS_UNDEF
+    if t == "UnaryExpression" and n.get("operator") == "!":
+        return not _js_truthy(_js_eval(n["argument"], env))
+    if t == "LogicalExpression":
+        left = _js_eval(n["left"], env)
+        if n["operator"] == "||":
+            return left if _js_truthy(left) else _js_eval(n["right"], env)
+        if n["operator"] == "&&":
+            return _js_eval(n["right"], env) if _js_truthy(left) else left
+    if t == "BinaryExpression" and n.get("operator") in ("===", "!=="):
+        a, b = _js_eval(n["left"], env), _js_eval(n["right"], env)
+        same = type(a) is type(b) and a == b
+        return same if n["operator"] == "===" else not same
+    if t == "ConditionalExpression":
+        return _js_eval(n["consequent"] if _js_truthy(_js_eval(n["test"], env)) else n["alternate"],
+                        env)
+    raise ValueError("unsupported JS expression %s" % t)
+
+
+def _js_run(stmts, env):
+    for s in stmts:
+        if s.get("type") == "ReturnStatement":
+            raise _JsReturn(_js_eval(s["argument"], env) if s.get("argument") else _JS_UNDEF)
+        if s.get("type") == "IfStatement":
+            br = s["consequent"] if _js_truthy(_js_eval(s["test"], env)) else s.get("alternate")
+            if br:
+                _js_run(br["body"] if br.get("type") == "BlockStatement" else [br], env)
+            continue
+        raise ValueError("unsupported JS statement %s" % s.get("type"))
+
+
+def _js_call(fn, *args):
+    env = {p["name"]: a for p, a in zip(fn["params"], args)}
+    try:
+        _js_run(fn["body"]["body"], env)
+    except _JsReturn as r:
+        return r.args[0]
+    return _JS_UNDEF
+
+
+def _js_find_fn(tree, name):
+    """The FunctionDeclaration called `name`, found anywhere in the tree."""
+    hit = []
+
+    def walk(n):
+        if isinstance(n, dict):
+            if n.get("type") == "FunctionDeclaration" and (n.get("id") or {}).get("name") == name:
+                hit.append(n)
+            for v in n.values():
+                walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                walk(v)
+    walk(tree)
+    return hit[0] if hit else None
+
+
+if not esprima:
+    skip("install_progress: a finished install is classified four ways", "esprima not installed")
+else:
+    _ipo_ast = esprima.parseScript(
+        (ROOT / "static" / "js" / "install_progress.js").read_text(encoding="utf-8"),
+        {"loc": True}).toDict()
+    _ipo_fn = _js_find_fn(_ipo_ast, "outcome")
+    _ipo_cases = [
+        ((True, {"status": "done"}), "ok"),
+        ((True, {"status": "done", "warn": True}), "warn"),
+        ((True, {"status": "failed"}), "bad"),
+        ((True, {"status": "interrupted"}), "bad"),
+        ((True, {"status": "none"}), "unknown"),
+        ((True, {"error": "Permission denied"}), "unknown"),
+        ((False, {"status": "done"}), "unknown"),
+    ]
+    _ipo_wrong = []
+    try:
+        for _a, _want in _ipo_cases:
+            _got = _js_call(_ipo_fn, *_a) if _ipo_fn else "<no outcome() function>"
+            if _got != _want:
+                _ipo_wrong.append("%r -> %r, want %r" % (_a, _got, _want))
+    except ValueError as _e:
+        _ipo_wrong.append(str(_e))
+    check(not _ipo_wrong,
+          "install_progress: a finished install is classified four ways — clean, caveat, failed, "
+          "and no verdict",
+          "; ".join(_ipo_wrong) + " — a done job's warning, or an answer that is not a job at all, "
+          "is shown as a green 'Installed'")
+
+    # SETTLED is data: which endings remove themselves, and in what colour.
+    _ipo_settled = {}
+
+    def _scan_settled(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "VariableDeclarator" and (n.get("id") or {}).get("name") == "SETTLED"
+                    and (n.get("init") or {}).get("type") == "ObjectExpression"):
+                for _p in n["init"]["properties"]:
+                    _k = _p["key"].get("name") or _p["key"].get("value")
+                    _ipo_settled[_k] = {(_q["key"].get("name") or _q["key"].get("value")):
+                                        _q["value"].get("value") for _q in _p["value"]["properties"]}
+            for v in n.values():
+                _scan_settled(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_settled(v)
+    _scan_settled(_ipo_ast)
+    _ipo_dropping = sorted(k for k, v in _ipo_settled.items() if v.get("drop"))
+    check(set(_ipo_settled) >= {"ok", "warn", "bad"} and _ipo_dropping == ["ok"],
+          "install_progress: only a clean install removes its own row",
+          "endings %r; auto-removed: %r — a caveat that disappears after 8 s was never read"
+          % (sorted(_ipo_settled), _ipo_dropping))
+    check((_ipo_settled.get("warn") or {}).get("cls") == "text-warning"
+          and (_ipo_settled.get("warn") or {}).get("dismiss") is True,
+          "install_progress: ...and a caveat is shown as a warning that stays until dismissed",
+          "warn renders as %r" % (_ipo_settled.get("warn"),))
+
+    # ...and settle() actually uses them: the verdict comes from outcome(), and the only timer it
+    # arms is the one SETTLED says to.
+    _ipo_settle = _js_find_fn(_ipo_ast, "settle")
+    _ipo_timers = []
+
+    def _scan_timers(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "CallExpression"
+                    and (n.get("callee") or {}).get("name") == "setTimeout"):
+                _d = (n.get("arguments") or [{}, {}])[1:2]
+                _ipo_timers.append(((_d[0].get("property") or {}).get("name")) if _d else None)
+            for v in n.values():
+                _scan_timers(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_timers(v)
+    if _ipo_settle:
+        _scan_timers(_ipo_settle)
+    check(_ipo_settle is not None and bool(_calls_named(_ipo_settle, "outcome"))
+          and _ipo_timers and all(_t == "drop" for _t in _ipo_timers),
+          "install_progress: settle() takes its verdict from outcome() and times out only what "
+          "SETTLED says to",
+          "settle found=%s, calls outcome=%s, setTimeout delays=%r"
+          % (_ipo_settle is not None, bool(_ipo_settle and _calls_named(_ipo_settle, "outcome")),
+             _ipo_timers))
+
+    # ── a settled row is settled ONCE ─────────────────────────────────────────────────────────
+    # The settled row keeps data-progress-for, and apply() settled every such row not in the live
+    # list — so while any other install kept the timer alive, each 3 s poll fetched install-status
+    # again for it (for a lost job, one more SSH probe of a host that may be down) and rewrote it.
+    # And if that server went live again, fill() found the settled .ip-step, skipped building the
+    # bar and threw on it, aborting apply() for every other job. Structural, from the AST: the
+    # settle() call in apply() must sit under a test that reads data-settled, settle() must set
+    # it, and dashRow() must clear a settled row before filling it.
+    def _member_calls(node, method, first_literal):
+        found = []
+
+        def walk(n):
+            if isinstance(n, dict):
+                c = n.get("callee") or {}
+                if (n.get("type") == "CallExpression" and c.get("type") == "MemberExpression"
+                        and (c.get("property") or {}).get("name") == method
+                        and (n.get("arguments") or [{}])[0].get("value") == first_literal):
+                    found.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+                for v in n.values():
+                    walk(v)
+            elif isinstance(n, list):
+                for v in n:
+                    walk(v)
+        walk(node)
+        return found
+
+    def _guarded_calls(node, name, tests=()):
+        """(line, [enclosing if-tests]) for every call to `name` under `node`."""
+        out = []
+        if isinstance(node, dict):
+            if (node.get("type") == "CallExpression"
+                    and (node.get("callee") or {}).get("name") == name):
+                out.append((((node.get("loc") or {}).get("start") or {}).get("line"), list(tests)))
+            if node.get("type") == "IfStatement":
+                out += _guarded_calls(node.get("test"), name, tests)
+                out += _guarded_calls(node.get("consequent"), name, tests + (node.get("test"),))
+                out += _guarded_calls(node.get("alternate"), name, tests)
+            else:
+                for v in node.values():
+                    out += _guarded_calls(v, name, tests)
+        elif isinstance(node, list):
+            for v in node:
+                out += _guarded_calls(v, name, tests)
+        return out
+
+    _ipa_apply = _js_find_fn(_ipo_ast, "apply")
+    _ipa_calls = _guarded_calls(_ipa_apply, "settle") if _ipa_apply else []
+    _ipa_unguarded = [ln for ln, tests in _ipa_calls
+                      if not any(_member_calls(t, "hasAttribute", "data-settled") for t in tests)]
+    check(bool(_ipa_calls) and not _ipa_unguarded,
+          "install_progress: a row that has already settled is not settled again on every poll",
+          "settle() calls in apply(): %r; not guarded by data-settled at line(s) %r"
+          % ([ln for ln, _ in _ipa_calls], _ipa_unguarded))
+    check(_ipo_settle is not None
+          and bool(_member_calls(_ipo_settle, "setAttribute", "data-settled")),
+          "install_progress: ...because settle() marks the row it has settled",
+          "settle() never sets data-settled, so the guard above never holds")
+    _ipa_dash = _js_find_fn(_ipo_ast, "dashRow")
+    _ipa_clears = []
+
+    def _scan_settled_branch(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "IfStatement"
+                    and _member_calls(n.get("test"), "hasAttribute", "data-settled")):
+                def _cl(m):
+                    if isinstance(m, dict):
+                        if (m.get("type") == "AssignmentExpression"
+                                and ((m.get("left") or {}).get("property") or {}).get("name")
+                                == "textContent"
+                                and (m.get("right") or {}).get("value") == ""):
+                            _ipa_clears.append(True)
+                        for v in m.values():
+                            _cl(v)
+                    elif isinstance(m, list):
+                        for v in m:
+                            _cl(v)
+                _cl(n.get("consequent"))
+            for v in n.values():
+                _scan_settled_branch(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_settled_branch(v)
+    if _ipa_dash:
+        _scan_settled_branch(_ipa_dash)
+    check(_ipa_dash is not None
+          and bool(_member_calls(_ipa_dash, "removeAttribute", "data-settled")) and _ipa_clears,
+          "install_progress: ...and a settled row that goes live again is rebuilt, not filled",
+          "dashRow() fills a settled row as it stands: fill() finds its .ip-step, skips building "
+          "the bar and throws on it")
+
+    # ── "still trying" has to reach the Install page's boxes too ─────────────────────────────
+    # markStale() selected only the dashboard's rows, so on Install a Server a dead poll left the
+    # box showing its last step, percent and elapsed seconds, undimmed: the frozen-reading-as-live
+    # defect the stale marking exists to prevent. The selector markStale() queries is resolved
+    # from the AST (a literal, or the variable it names) and must cover both hosts.
+    _ips_fn = _js_find_fn(_ipo_ast, "markStale")
+    _ips_consts = {}
+
+    def _scan_consts(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "VariableDeclarator" and (n.get("init") or {}).get("type") == "Literal"
+                    and isinstance(n["init"].get("value"), str)):
+                _ips_consts[(n.get("id") or {}).get("name")] = n["init"]["value"]
+            for v in n.values():
+                _scan_consts(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_consts(v)
+    _scan_consts(_ipo_ast)
+    _ips_sel = []
+
+    def _scan_qsa(n):
+        if isinstance(n, dict):
+            c = n.get("callee") or {}
+            if (n.get("type") == "CallExpression"
+                    and (c.get("property") or {}).get("name") == "querySelectorAll"):
+                a = (n.get("arguments") or [{}])[0]
+                _ips_sel.append(a.get("value") if a.get("type") == "Literal"
+                                else _ips_consts.get(a.get("name"), ""))
+            for v in n.values():
+                _scan_qsa(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_qsa(v)
+    if _ips_fn:
+        _scan_qsa(_ips_fn)
+    _ips_parts = [p.strip() for s in _ips_sel for p in (s or "").split(",")]
+    check("#install-running [data-install-id]" in _ips_parts
+          and any(p.startswith("tr[data-progress-for]") for p in _ips_parts),
+          "install_progress: a stalled poll is marked on the Install page's boxes as well as the "
+          "dashboard's rows",
+          "markStale() queries %r — the Install page's progress stays frozen and undimmed"
+          % (_ips_sel,))
+
 # ── a filter that only runs on `change` does not run on the common setup ─────────────────────
 # The install picker greys out the games LinuxGSM caps below the host's release, from the host
 # selector's change event. With ONE host the select is rendered already selected and never fires
@@ -262,6 +572,63 @@ else:
           "manage_servers: the game filter runs on page LOAD, not only on host change",
           "nothing calls filterGamesForHost/hostChanged at load — with a single host the select "
           "never fires `change`, so every capped game stays selectable")
+
+    # ── ...and an answer about a host that is no longer selected is not applied ──────────────
+    # /specs and /api/free-port probe the host over SSH on first use, so replies arrive in the
+    # order the hosts answer. Each was applied on arrival: a slow 24.04 host's reply, landing after
+    # the operator had switched to a 20.04 one, greyed out four games and blamed "this host".
+    # From the AST: inside the fetch callbacks, filterGamesForHost applies only under a
+    # _hostStillSelected test, and suggestFreePort bails on one before it touches the port field.
+    def _cb_applies(n, tests=(), in_cb=False, out=None):
+        out = [] if out is None else out
+        if isinstance(n, dict):
+            t = n.get("type")
+            if t in ("FunctionExpression", "ArrowFunctionExpression"):
+                for v in n.values():
+                    _cb_applies(v, tests, True, out)
+                return out
+            if t == "IfStatement":
+                _cb_applies(n.get("test"), tests, in_cb, out)
+                _cb_applies(n.get("consequent"), tests + (n.get("test"),), in_cb, out)
+                _cb_applies(n.get("alternate"), tests, in_cb, out)
+                return out
+            if (t == "CallExpression" and (n.get("callee") or {}).get("name") == "apply"
+                    and in_cb):
+                out.append(any(_calls_named(x, "_hostStillSelected") for x in tests))
+            for v in n.values():
+                _cb_applies(v, tests, in_cb, out)
+        elif isinstance(n, list):
+            for v in n:
+                _cb_applies(v, tests, in_cb, out)
+        return out
+    _ms_fg = _js_find_fn(_ms_ast, "filterGamesForHost")
+    _ms_fg_calls = _cb_applies(((_ms_fg or {}).get("body") or {}).get("body") or [])
+    check(bool(_ms_fg_calls) and all(_ms_fg_calls),
+          "manage_servers: a host's OS answer is applied only while that host is still selected",
+          "callback apply() calls guarded: %r" % (_ms_fg_calls,))
+    _ms_fp = _js_find_fn(_ms_ast, "suggestFreePort")
+    _ms_fp_bail, _ms_fp_write = [], []
+
+    def _scan_fp(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "IfStatement" and _calls_named(n.get("test"), "_hostStillSelected")):
+                c = n.get("consequent") or {}
+                rets = c.get("body") if c.get("type") == "BlockStatement" else [c]
+                if any((r or {}).get("type") == "ReturnStatement" for r in rets):
+                    _ms_fp_bail.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            if (n.get("type") == "AssignmentExpression"
+                    and ((n.get("left") or {}).get("object") or {}).get("name") == "portEl"):
+                _ms_fp_write.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            for v in n.values():
+                _scan_fp(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_fp(v)
+    if _ms_fp:
+        _scan_fp(_ms_fp)
+    check(bool(_ms_fp_write) and bool(_ms_fp_bail) and min(_ms_fp_bail) < min(_ms_fp_write),
+          "manage_servers: a free-port answer for another host never rewrites the port field",
+          "host-still-selected bail at %r, port write at %r" % (_ms_fp_bail, _ms_fp_write))
 
 # ── A form that appears AFTER page load carries no CSRF token ─────────────────────────────────
 # panel.js gives every POST form a hidden csrf_token, once, on DOMContentLoaded, and wraps fetch()
@@ -370,6 +737,81 @@ _obs_walks = [ln for ln in _obs.splitlines() if "walk(" in ln]
 check(bool(_obs_walks) and all("guardedAbove" in ln for ln in _obs_walks),
       "i18n: every walk() the observer starts is gated on guardedAbove first",
       "ungated: %s" % [ln.strip()[:60] for ln in _obs_walks if "guardedAbove" not in ln])
+# Catalog lookups are own-property only. The catalog is an ordinary object, so window.I18N[key]
+# "found" Object.prototype too, and a player named "constructor" was displayed as
+# "function Object() { [native code] }" to anyone not reading English.
+_i18n_code = re.sub(r"//[^\n]*", "", _i18n_src)          # comments name the old form
+try:
+    _i18n_lk = _i18n_code[_i18n_code.index("function i18nLookup("):]
+    _i18n_lk = _i18n_lk[:_i18n_lk.index("\n}")]
+except ValueError:          # no i18nLookup at all: fail the check below by name, not crash the suite
+    _i18n_lk = ""
+check("hasOwnProperty.call(" in _i18n_lk and "typeof c[key] === 'string'" in _i18n_lk,
+      "i18n: i18nLookup() reads own string keys only", "it can return an inherited member")
+check(_i18n_code.count("i18nLookup(") >= 4 and not re.search(r"I18N\s*\[", _i18n_code),
+      "i18n: window.t, tText and tAttr all look keys up through it — no bare I18N[key] left",
+      "a lookup still indexes the catalog directly")
+# A value a SCRIPT changes after the first walk is translated too, and becomes the new English.
+# The observer did not watch attributes, and tText/tAttr kept the first value they ever saw as the
+# English for good: a poll-updated tooltip stayed English, the next setLang() re-walk wrote the
+# translation of the STALE value over it, and an in-place nodeValue update was reverted to the old
+# text. Measured in a browser against the old and new i18n.js (Spanish catalog): old — tooltip
+# stays English then reverts to "not checked yet", nodeValue 'Reachable' shows 'En línea'; new —
+# both translate, and survive setLang es->es and ->en.
+try:
+    _i18n_obs = _i18n_code[_i18n_code.index("new MutationObserver"):]
+    _i18n_obs = _i18n_obs[:_i18n_obs.index("});", _i18n_obs.index(".observe(")) + 3]
+except ValueError:
+    _i18n_obs = ""
+check("attributes:true" in _i18n_obs and "attributeFilter:ATTRS" in _i18n_obs
+      and re.search(r"m\.type === 'attributes'.*?guardedAbove\(el\).*?tAttr\(el, m\.attributeName\)",
+                    _i18n_obs, re.S) is not None,
+      "i18n: the observer translates a title/placeholder/aria-label a script sets later (guard honoured)",
+      "attribute changes are not observed, so JS-set tooltips stay English")
+try:
+    _i18n_tt = _i18n_code[_i18n_code.index("function tText("):_i18n_code.index("function tAttr(")]
+    _i18n_ta = _i18n_code[_i18n_code.index("function tAttr("):_i18n_code.index("function guardedAbove(")]
+except ValueError:
+    _i18n_tt = _i18n_ta = ""
+check("cur !== node.__i18nW" in _i18n_tt and "node.__i18nW = out" in _i18n_tt
+      and "cur !== el[wk]" in _i18n_ta and "el[wk] = out" in _i18n_ta,
+      "i18n: a value a script changed since the last translation is re-seeded as the English",
+      "the first value ever seen stays the English, so setLang() writes a stale translation back")
+# User-authored names rendered by the SERVER need the same guard: the walker swaps any text node
+# that is a catalog key, so a group called "Admin" read "Administrador" beside an Edit box saying
+# "Admin", and a member or host called "Test" read "Probar".
+def _enclosing_tag(src, needle):
+    """The opening tag of the element directly around each occurrence of `needle`."""
+    out = []
+    for _m in re.finditer(re.escape(needle), src):
+        _lt = src.rindex("<", 0, _m.start())
+        out.append(src[_lt:src.index(">", _lt) + 1])
+    return out
+
+
+_ug_missing = []
+for _tpl, _expr in (("manage_groups.html", "{{ group.name }}</strong>"),
+                    ("manage_groups.html", "{{ group.description }}</span>"),
+                    ("manage_groups.html", "{{ u.username }}"),
+                    ("manage_groups.html", "{{ s.display_name }}"),
+                    ("manage_groups.html", "{{ r.display_name }}"),
+                    ("manage_groups.html", "{{ g.name }}"),
+                    ("base.html", "{{ current_user.display_name or current_user.username }}")):
+    _tags = _enclosing_tag((TEMPLATES / _tpl).read_text(encoding="utf-8"), _expr)
+    if not _tags or any("data-no-i18n" not in _t for _t in _tags):
+        _ug_missing.append("%s %s -> %s" % (_tpl, _expr, _tags[:1]))
+check(not _ug_missing,
+      "i18n: user-authored names on the groups page and the sidebar user are marked do-not-translate",
+      "unguarded: %s" % _ug_missing)
+# ...which only helps an element that CARRIES the guard. manage_users.js writes the username into
+# #eu-name (the Edit dialog's title) and #cred-user (beside a one-time password that is shown once)
+# and neither had it, so on a Spanish panel the account "Admin" was handed on as "Administrador".
+_mu_tpl = (TEMPLATES / "manage_users.html").read_text(encoding="utf-8")
+for _mu_id in ("eu-name", "cred-user"):
+    _mu_tag = re.search(r'<[a-z]+[^>]*\bid="%s"[^>]*>' % _mu_id, _mu_tpl)
+    check(_mu_tag is not None and "data-no-i18n" in _mu_tag.group(0),
+          "i18n: #%s, which manage_users.js fills with a username, is marked do-not-translate" % _mu_id,
+          "found %r" % (_mu_tag.group(0) if _mu_tag else None))
 
 # ── the flash sweep must not close a standing warning ─────────────────────────────────────────
 # chrome.js selected every `.alert-dismissible` in the document at T+6s, and nags.js gives the
@@ -396,6 +838,27 @@ check("getElementById('srv-tags-' + serverId)" in _tags_src
       "still looking up msrv-tags-<id>")
 check('id="srv-tags-{{ srv.id }}"' in _dash_tpl,
       "tags: ...and the dashboard renders it", "no srv-tags-<id> container")
+# ...and the repainted chip is the SAME chip: the dashboard's carries a bell-slash and a title for
+# a tag that mutes alerts, and chip() built only name and colour, so every repaint (opening the
+# dialog, even to cancel; saving) silently dropped the sign that the server's alerts are muted.
+_chip_fn = _tags_src[_tags_src.index("function chip(tag)"):]
+_chip_fn = _chip_fn[:_chip_fn.index("\n  }\n")]
+check("el.textContent = tag.name" in _chip_fn,
+      "tags: (control) the chip() slice is the chip builder", "sliced the wrong function")
+check("bi bi-bell-slash" in _chip_fn and "Alerts are muted for this tag" in _chip_fn
+      and "tagMuted(tag)" in _chip_fn and "TAGS[i].notify" in _tags_src,
+      "tags: a repainted chip keeps the muted-alerts marker the dashboard renders",
+      "chip() drops the bell-slash/title, so a repaint hides that alerts are muted")
+# ...and each row's "N server(s)" is how many servers a Delete would strip the tag from. /api/tags
+# filters server_ids to the viewer's own servers, so counting them showed a delegated admin
+# "0 server(s)" on a tag other hosts' servers carry; server_count is the panel-wide total.
+_rtl_fn = _tags_src[_tags_src.index("function renderTagList()"):]
+_rtl_fn = re.sub(r"//[^\n]*", "", _rtl_fn[:_rtl_fn.index("\n  }\n")])
+check("' server(s)'" in _rtl_fn,
+      "tags: (control) the renderTagList() slice is the row renderer", "sliced the wrong function")
+check("tag.server_count" in _rtl_fn and "(tag.server_ids || []).length + ' server(s)'" not in _rtl_fn,
+      "tags: the tag list counts every server a Delete would touch, not only the viewer's",
+      "renderTagList counts the filtered server_ids")
 
 # ── a file called "Backups" must not be renamed by the translator ─────────────────────────────
 # A directory can legitimately be called Backups, Console, Status or Log — all keys in
@@ -414,6 +877,16 @@ for _label, _needle in (
         _sf_missing.append(_label)
 check(not _sf_missing, "files: every element holding a path segment is marked do-not-translate",
       "unguarded: %s" % _sf_missing)
+# A LinuxGSM setting's KEY is an identifier the operator types into the Raw tab, not prose: `port`
+# is a catalog key (es: "puerto") and is in nearly every _default.cfg, so a Spanish operator saw a
+# setting called "puerto" and could write puerto="27016", which LinuxGSM ignores. The input is
+# guarded too — its placeholder is the setting's default VALUE.
+_fh_at = _sf_src.find("function fieldHtml(")
+_fh_body = _sf_src[_fh_at:_sf_src.find("\n}\n", _fh_at)] if _fh_at != -1 else ""
+check("'<span class=\"fb-key\" data-no-i18n>'+esc(s.key)" in _fh_body
+      and "form-control-sm\" data-no-i18n data-key=" in _fh_body,
+      "files: a LinuxGSM setting's key (and its default placeholder) is never translated",
+      "fieldHtml found=%r; the .fb-key span or the input lost data-no-i18n" % bool(_fh_body))
 
 # ── the document-wide drop suppression must not take the textareas with it ────────────────────
 # preventDefault() on a bubbled event still cancels the default action, so suppressing the
@@ -1395,6 +1868,212 @@ check("webkitGetAsEntry" in _sf and "webkitRelativePath" in _sf,
       "uploads: folders arrive by both routes — dropped (webkitGetAsEntry) and picked (webkitRelativePath)",
       "one of the two folder-upload paths is gone")
 
+# ── an upload goes to the folder it was dropped into, not wherever the user browsed since ──────
+# _doUpload built every file's destination from the live global curDir as each file was dispatched
+# (four at a time), and browse() reassigns curDir on any click. Clicking into another folder mid-
+# batch sent the rest of the files THERE, carrying the overwrite ticks granted for the original
+# folder, and the status line named the new folder. The base is now captured once by whoever starts
+# the upload and passed down. Read from the AST: comments in this file name curDir freely.
+if not esprima:
+    skip("uploads: every file of a batch goes to the folder the upload started in",
+         "esprima not installed")
+else:
+    _sfa = esprima.parseScript(_sf, {"loc": True}).toDict()
+
+    def _sfa_walk(n, fn, parents=()):
+        if isinstance(n, dict):
+            fn(n, parents)
+            for _v in n.values():
+                _sfa_walk(_v, fn, parents + (n,))
+        elif isinstance(n, list):
+            for _v in n:
+                _sfa_walk(_v, fn, parents)
+
+    def _sfa_fn(name):
+        for _n in _sfa["body"]:
+            if _n.get("type") == "FunctionDeclaration" and (_n.get("id") or {}).get("name") == name:
+                return _n
+        return None
+
+    def _sfa_idents(node, name):
+        """(node, parents) for every Identifier `name` under `node`."""
+        _out = []
+        _sfa_walk(node, lambda n, p: _out.append((n, p))
+                  if n.get("type") == "Identifier" and n.get("name") == name else None)
+        return _out
+
+    for _fname in ("_doUpload", "_conflictNode"):
+        _fnode = _sfa_fn(_fname)
+        check(_fnode is not None, "uploads: %s() was found in server_files.js" % _fname,
+              "renamed? the check below would pass by finding nothing")
+        # browse(curDir) at the end is the one legitimate read: it refreshes the folder the user
+        # is looking at NOW, which is the point.
+        _reads = [(_n, _p) for _n, _p in (_sfa_idents(_fnode, "curDir") if _fnode else [])
+                  if not (_p and _p[-1].get("type") == "CallExpression"
+                          and (_p[-1].get("callee") or {}).get("name") == "browse")]
+        check(not _reads,
+              "uploads: %s() never reads the live curDir (it is handed the base)" % _fname,
+              "curDir read at line(s) %s — the user can browse elsewhere while a batch runs"
+              % [(_n.get("loc") or {}).get("start", {}).get("line") for _n, _ in _reads])
+
+    # uploadFiles/uploadEntries read curDir ONLY as the default for a base nobody passed.
+    for _fname in ("uploadFiles", "uploadEntries"):
+        _fnode = _sfa_fn(_fname)
+        _bad = []
+        for _n, _p in (_sfa_idents(_fnode, "curDir") if _fnode else []):
+            _par = _p[-1] if _p else {}
+            if not (_par.get("type") == "AssignmentExpression" and _par.get("right") is _n
+                    and (_par.get("left") or {}).get("name") == "base"):
+                _bad.append((_n.get("loc") or {}).get("start", {}).get("line"))
+        check(_fnode is not None and not _bad,
+              "uploads: %s() reads curDir only to default an unpassed base" % _fname,
+              "found=%r, other curDir reads at line(s) %s" % (_fnode is not None, _bad))
+
+    # ...and every call hands the base on. Only the two synchronous <input> handlers may leave it
+    # to the default, because they run in the same tick as the user's choice.
+    _sfa_calls = []
+
+    def _sfa_call(n, p):
+        _c = n.get("callee") or {}
+        if n.get("type") == "CallExpression" and _c.get("type") == "Identifier" \
+                and _c.get("name") in ("_doUpload", "_conflictNode", "uploadFiles", "uploadEntries"):
+            _encl = [x for x in p if x.get("type") == "FunctionDeclaration"]
+            _sfa_calls.append((_c["name"], len(n.get("arguments") or []),
+                               (_encl[0].get("id") or {}).get("name") if _encl else None,
+                               (n.get("loc") or {}).get("start", {}).get("line")))
+    _sfa_walk(_sfa, _sfa_call)
+    _want_args = {"_doUpload": 3, "_conflictNode": 3, "uploadFiles": 2, "uploadEntries": 2}
+    _unpassed = [c for c in _sfa_calls
+                 if c[1] < _want_args[c[0]] and c[2] not in ("doUpload", "doUploadDir")]
+    check(len(_sfa_calls) >= 8, "uploads: the call scan found the upload call sites",
+          "found %d: %r" % (len(_sfa_calls), _sfa_calls))
+    check(not _unpassed, "uploads: every upload call passes the folder it started in",
+          "calls without a base: %r" % (_unpassed,))
+
+    # ── browse() commits curDir only for the latest request that succeeded ────────────────────
+    # It set curDir BEFORE the fetch. A folder that failed to open left the breadcrumb and
+    # #upload-dest on the old folder while uploads went to the new one, and a late response for
+    # folder A built its rows (delete paths included) from curDir after the user had moved to B.
+    _br = _sfa_fn("browse")
+    check(_br is not None, "browse: browse() was found in server_files.js", "renamed?")
+    _br_assign, _br_reads = [], []
+    for _n, _p in (_sfa_idents(_br, "curDir") if _br else []):
+        _par = _p[-1] if _p else {}
+        if _par.get("type") == "AssignmentExpression" and _par.get("left") is _n:
+            _br_assign.append(any(x.get("type") in ("FunctionExpression", "ArrowFunctionExpression")
+                                  for x in _p))
+        else:
+            _br_reads.append((_n.get("loc") or {}).get("start", {}).get("line"))
+    check(_br_assign and all(_br_assign),
+          "browse: curDir is assigned inside the response handler, not before the fetch",
+          "assignments nested-in-callback: %r" % (_br_assign,))
+    check(not _br_reads,
+          "browse: rows and the '..' link are built from the requested path, not the global",
+          "curDir read at line(s) %s" % _br_reads)
+    _br_guard = []
+    _sfa_walk(_br or {}, lambda n, p: _br_guard.append(1)
+              if n.get("type") == "BinaryExpression" and n.get("operator") in ("!==", "!=")
+              and "_browseSeq" in (((n.get("left") or {}).get("name"), (n.get("right") or {}).get("name")))
+              and any(x.get("type") in ("FunctionExpression", "ArrowFunctionExpression") for x in p)
+              else None)
+    check(bool(_br_guard), "browse: a response that is no longer the latest request is dropped",
+          "no _browseSeq comparison in the response handler")
+
+    # ── a file called `constructor` is not a clash, and an unticked box is not an overwrite ────
+    # byName and ovw were plain {} objects, so byName['constructor'] and ovw['toString'] found the
+    # inherited Object.prototype members: a bogus conflict, and overwrite=1 sent for a box the
+    # user had unticked. Both maps are prototype-free, and _doUpload reads ovw through _ownKey.
+    _map_inits = {}
+
+    def _sfa_decl(n, p):
+        if n.get("type") == "VariableDeclarator" and (n.get("id") or {}).get("name") in ("byName", "ovw"):
+            _i = n.get("init") or {}
+            _c = _i.get("callee") or {}
+            _map_inits.setdefault(n["id"]["name"], []).append(
+                _i.get("type") == "CallExpression"
+                and (_c.get("object") or {}).get("name") == "Object"
+                and (_c.get("property") or {}).get("name") == "create"
+                and [(a.get("type"), a.get("raw")) for a in (_i.get("arguments") or [])]
+                == [("Literal", "null")])
+    _sfa_walk(_sfa, _sfa_decl)
+    check(sorted(_map_inits) == ["byName", "ovw"] and all(all(v) for v in _map_inits.values()),
+          "uploads: the existing-name and overwrite maps have no prototype (Object.create(null))",
+          "initialisers: %r" % (_map_inits,))
+    _du = _sfa_fn("_doUpload")
+    _ovw_idx = []
+    _sfa_walk(_du or {}, lambda n, p: _ovw_idx.append((n.get("loc") or {}).get("start", {}).get("line"))
+              if n.get("type") == "MemberExpression" and n.get("computed")
+              and (n.get("object") or {}).get("name") == "ovw" else None)
+    _ok_fn = _sfa_fn("_ownKey")
+    _ok_hop = []
+    _sfa_walk(_ok_fn or {}, lambda n, p: _ok_hop.append(1)
+              if n.get("type") == "MemberExpression"
+              and (n.get("property") or {}).get("name") == "hasOwnProperty" else None)
+    check(_du is not None and not _ovw_idx and bool(_ok_hop),
+          "uploads: _doUpload asks _ownKey (hasOwnProperty) whether a name was ticked, never ovw[name]",
+          "ovw[...] at line(s) %s; _ownKey uses hasOwnProperty=%r" % (_ovw_idx, bool(_ok_hop)))
+
+    # ── the cron explainer agrees with cron about weekday 7 and about '*/n' ───────────────────
+    # parseField folded 7 to 0 on the range ENDS before checking a<=b, so the valid '1-7' and
+    # '5-7' became 1-0 and 5-0 ("Invalid or out-of-range dow field") and '0-7' became Sunday
+    # alone. And domStar/dowStar compared the whole field with '*', so '0 5 */2 * 1' previewed
+    # "every other day OR Monday" where cron (DOM_STAR is set when the field STARTS with '*')
+    # runs it on days that are both.
+    def _sfa_any_fn(name):
+        _hit = []
+        _sfa_walk(_sfa, lambda n, p: _hit.append(n) if n.get("type") == "FunctionDeclaration"
+                  and (n.get("id") or {}).get("name") == name else None)
+        return _hit[0] if _hit else None
+    _pf, _az, _nr = _sfa_any_fn("parseField"), _sfa_any_fn("analyze"), _sfa_any_fn("nextRuns")
+    check(_pf is not None and _az is not None and _nr is not None,
+          "cron explainer: parseField/analyze/nextRuns were found", "renamed?")
+    _pre_fold = []
+    _sfa_walk(_pf or {}, lambda n, p: _pre_fold.append((n.get("loc") or {}).get("start", {}).get("line"))
+              if n.get("type") == "AssignmentExpression"
+              and (n.get("left") or {}).get("name") in ("a", "b")
+              and (n.get("right") or {}).get("type") == "Literal" else None)
+    _dow_hi = []
+    _sfa_walk(_az or {}, lambda n, p: _dow_hi.append([a.get("value") for a in n["arguments"][1:3]])
+              if n.get("type") == "CallExpression" and (n.get("callee") or {}).get("name") == "parseField"
+              and (n["arguments"][-1] or {}).get("name") == "NM_DOW" else None)
+    check(not _pre_fold and _dow_hi == [[0, 7]],
+          "cron explainer: weekday 7 is accepted as a range end and folded to Sunday after expansion",
+          "range ends folded at line(s) %s; dow parsed with lo/hi %r" % (_pre_fold, _dow_hi))
+    _star = []
+
+    def _sfa_star(n, p):
+        _l = n.get("left") or {}
+        if n.get("type") == "AssignmentExpression" and (_l.get("property") or {}).get("name") in ("domStar", "dowStar"):
+            _r = n.get("right") or {}
+            _star.append(((_r.get("left") or {}).get("callee") or {}).get("property", {}).get("name"))
+    _sfa_walk(_az or {}, _sfa_star)
+    _and_rule = []
+    _sfa_walk(_nr or {}, lambda n, p: _and_rule.append(1)
+              if n.get("type") == "ConditionalExpression"
+              and (n.get("test") or {}).get("operator") == "||"
+              and (n.get("consequent") or {}).get("operator") == "&&"
+              and (n.get("alternate") or {}).get("operator") == "||" else None)
+    check(_star == ["charAt", "charAt"] and bool(_and_rule),
+          "cron explainer: a day field starting with '*' (so '*/2') uses cron's AND day rule",
+          "star tests %r; AND-when-either-starred rule found=%r" % (_star, bool(_and_rule)))
+    # ...and the sentence says the same: '0 5 1 * 1' ran on day 1 OR on Mondays while the text
+    # read "on day-of-month 1 and on Monday". The connector is chosen by the same two flags.
+    _ds = _sfa_any_fn("describe")
+    _conn = []
+
+    def _sfa_conn(n, p):
+        if n.get("type") == "ConditionalExpression":
+            _vals = sorted(str((x or {}).get("raw")) for x in (n.get("consequent"), n.get("alternate")))
+            if _vals == ["'and on '", "'or on '"]:
+                _names = []
+                _sfa_walk(n.get("test") or {}, lambda m, q: _names.append((m.get("property") or {}).get("name"))
+                          if m.get("type") == "MemberExpression" else None)
+                _conn.append(sorted(x for x in _names if x))
+    _sfa_walk(_ds or {}, _sfa_conn)
+    check(_ds is not None and _conn == [["domStar", "dowStar"]],
+          "cron explainer: two restricted day fields read 'or on', a '*'-led one 'and on'",
+          "and/or connector chosen on %r in describe()" % (_conn,))
+
 # ── dashboard: destructive actions must confirm, as the detail page has always done ────────────
 # Restart and Stop disconnect players. The server detail page confirms them; the dashboard did not,
 # which is the dangerous direction for the inconsistency to point — the dashboard is where the rows
@@ -1456,6 +2135,26 @@ check(".catch(() => toast('Action failed" not in _sa_js and ".catch(()=>toast('A
       "control bar: a handler bug cannot be reported as a connection error",
       "the connection-error toast is back in a trailing .catch, so any bug in the success handler "
       "will tell the operator their action failed when it succeeded")
+# The pending banner's "do it now" follows the QUEUED action's permission. showPendingBanner()
+# switches the action without a reload (this viewer queued a stop or a restart from the players
+# dialog), and it used to leave the button as the page rendered it: a stop-only member whose page
+# loaded clean got no button, a restart-only one kept one relabelled "Stop now" that the endpoint
+# refuses. The template renders it for either permission (the smoke suite checks those values);
+# the switch must pick per action from the banner's data-can-* flags. Comments stripped, since
+# they name the very identifiers this looks for.
+_spb = _js_function_body(_sa_js, "showPendingBanner")
+_spb_code = re.sub(r"//[^\n]*", "", _spb or "")
+check(_spb is not None and "dataset.canStop" in _spb_code and "dataset.canRestart" in _spb_code
+      and "'rpb-do'" in _spb_code and "'rpb-now'" in _spb_code and "'rpb-auto'" in _spb_code
+      and _spb_code.count(".toggle('d-none'") >= 3,
+      "pending banner: switching the queued action re-decides 'do it now' from its permission",
+      "showPendingBanner no longer shows/hides the button and its clause per data-can-stop / "
+      "data-can-restart — a queued stop keeps whatever the page rendered for a restart")
+_sd_tpl = (ROOT / "templates" / "server_detail.html").read_text(encoding="utf-8")
+check(all(('id="%s"' % _i) in _sd_tpl for _i in ("rpb-do", "rpb-now", "rpb-auto"))
+      and "data-can-stop=" in _sd_tpl and "data-can-restart=" in _sd_tpl,
+      "pending banner: every element and flag showPendingBanner reads is in the template",
+      "an id or data-can-* flag the banner switch reads is gone from server_detail.html")
 
 # ── console: select-all is scoped, and the log is downloadable ────────────────────────────────
 # Ctrl+A in the console used to select the WHOLE PAGE, because the console is a plain <div> and the
@@ -1719,6 +2418,263 @@ check(_sd_ver_tag and _sd_ver_tag.group(1).strip() != "",
       "version: it is rendered with a placeholder, not left empty until the fetch lands",
       "rendered as %r" % (_sd_ver_tag.group(1) if _sd_ver_tag else None))
 
+# ── an element server_detail.js shows and hides through style.display cannot carry d-* ────────
+# Bootstrap's display utilities are !important, so .d-flex beats both an inline display:none and
+# `el.style.display = 'none'`. #pl-announce carried d-flex: the Say box showed from first paint
+# on every game, including those with no console moderation, where pressing Say answers "not
+# supported". Every id whose display the script sets is resolved from the AST (a var bound to
+# getElementById, or the call itself) and its tag in the template is read for a d-* class.
+if not esprima:
+    skip("server page: no element the script shows/hides by style.display has a d-* class",
+         "esprima not installed")
+else:
+    _sdd_ast = esprima.parseScript(_sd_js, {"loc": True}).toDict()
+    _sdd_vars, _sdd_ids = {}, set()
+
+    def _gebi_id(n):
+        c = (n or {}).get("callee") or {}
+        if ((n or {}).get("type") == "CallExpression"
+                and (c.get("property") or {}).get("name") == "getElementById"):
+            a = (n.get("arguments") or [{}])[0]
+            return a.get("value") if a.get("type") == "Literal" else None
+        return None
+
+    def _scan_display(n):
+        if isinstance(n, dict):
+            if n.get("type") == "VariableDeclarator" and _gebi_id(n.get("init")):
+                _sdd_vars[(n.get("id") or {}).get("name")] = _gebi_id(n.get("init"))
+            if (n.get("type") == "AssignmentExpression"
+                    and (n.get("left") or {}).get("type") == "Identifier"
+                    and _gebi_id(n.get("right"))):
+                _sdd_vars[n["left"]["name"]] = _gebi_id(n.get("right"))
+            if n.get("type") == "AssignmentExpression":
+                lf = n.get("left") or {}
+                st = lf.get("object") or {}
+                if ((lf.get("property") or {}).get("name") == "display"
+                        and (st.get("property") or {}).get("name") == "style"):
+                    tgt = st.get("object") or {}
+                    _sdd_ids.add(_gebi_id(tgt) or ("var:" + str(tgt.get("name"))))
+            for v in n.values():
+                _scan_display(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_display(v)
+    _scan_display(_sdd_ast)
+    _sdd_resolved = {(_sdd_vars.get(i[4:]) if i.startswith("var:") else i) for i in _sdd_ids}
+    _sdd_resolved.discard(None)
+    _sdd_bad, _sdd_seen = [], []
+    for _id in sorted(_sdd_resolved):
+        _m = re.search(r'<[a-z]+\b[^>]*\bid="%s"[^>]*>' % re.escape(_id), _sd_src)
+        if not _m:
+            continue
+        _sdd_seen.append(_id)
+        _cls = re.search(r'\bclass="([^"]*)"', _m.group(0))
+        if _cls and re.search(r"\bd-(?:[a-z]+-)?(?:flex|block|inline|inline-block|inline-flex|grid|"
+                              r"table|none)\b", _cls.group(1)):
+            _sdd_bad.append("%s (%s)" % (_id, _cls.group(1)))
+    check("pl-announce" in _sdd_seen,
+          "server page: the style.display walker finds the announce box it has to judge",
+          "resolved ids in the template: %r — the next check would examine nothing" % _sdd_seen)
+    check(not _sdd_bad,
+          "server page: no element the script shows/hides by style.display has a d-* class",
+          "%s — Bootstrap's d-* is !important, so the script's display:none never applies"
+          % "; ".join(_sdd_bad))
+
+    # ── consoleEl may be null: nothing that runs at load or on a socket event may assume it ──
+    # The Console panel is hideable and a hidden panel is not rendered, so #console-output can be
+    # absent. applyTsVisible() is called at top level and did `consoleEl.classList...`: it threw,
+    # and everything after it — the daily-restart time, the game version, the post-update re-read
+    # — never ran, on every visit, for anyone who had hidden the panel. This walks what runs
+    # SYNCHRONOUSLY from top-level code and from each socket.on handler, following calls into
+    # named functions, and stops at a guard: `if (!consoleEl …) return` ends the path, and
+    # `if (consoleEl …) {…}` / `consoleEl && …` shelter what they guard. Callbacks (.then,
+    # timers) are not synchronous and are not followed.
+    _sdn_funcs = {}
+
+    def _sdn_collect(n):
+        if isinstance(n, dict):
+            if n.get("type") == "FunctionDeclaration" and n.get("id"):
+                _sdn_funcs[n["id"]["name"]] = n
+            for v in n.values():
+                _sdn_collect(v)
+        elif isinstance(n, list):
+            for v in n:
+                _sdn_collect(v)
+    _sdn_collect(_sdd_ast)
+
+    def _sdn_mentions(n, negated_only=None):
+        """Does `n` test the element? negated_only=True: only as `!el`; False: only bare."""
+        hit = []
+
+        def walk(m, under_not):
+            if isinstance(m, dict):
+                if m.get("type") == "Identifier" and m.get("name") == _sdn_name:
+                    hit.append(under_not)
+                    return
+                if m.get("type") == "UnaryExpression" and m.get("operator") == "!":
+                    walk(m.get("argument"), True)
+                    return
+                for v in m.values():
+                    walk(v, under_not)
+            elif isinstance(m, list):
+                for v in m:
+                    walk(v, under_not)
+        walk(n, False)
+        if negated_only is None:
+            return bool(hit)
+        return any(h == negated_only for h in hit)
+
+    def _sdn_is_bail(st):
+        if st.get("type") != "IfStatement" or not _sdn_mentions(st.get("test"), True):
+            return False
+        c = st.get("consequent") or {}
+        body = c.get("body") if c.get("type") == "BlockStatement" else [c]
+        return any((b or {}).get("type") == "ReturnStatement" for b in body)
+
+    def _sdn_stmts(stmts, seen):
+        out = []
+        for st in stmts or []:
+            if _sdn_is_bail(st):
+                break
+            out += _sdn_scan(st, seen)
+        return out
+
+    def _sdn_scan(n, seen):
+        if isinstance(n, list):
+            return [x for v in n for x in _sdn_scan(v, seen)]
+        if not isinstance(n, dict):
+            return []
+        t = n.get("type")
+        if t in ("FunctionExpression", "ArrowFunctionExpression", "FunctionDeclaration"):
+            return []
+        if t == "BlockStatement":
+            return _sdn_stmts(n.get("body"), seen)
+        if t == "IfStatement":
+            out = _sdn_scan(n.get("test"), seen)
+            if _sdn_mentions(n.get("test"), False):
+                return out + _sdn_scan(n.get("alternate"), seen)
+            return out + _sdn_scan(n.get("consequent"), seen) + _sdn_scan(n.get("alternate"), seen)
+        if (t == "LogicalExpression" and n.get("operator") == "&&"
+                and _sdn_mentions(n.get("left"), False)):
+            return _sdn_scan(n.get("left"), seen)
+        if (t == "MemberExpression" and (n.get("object") or {}).get("type") == "Identifier"
+                and n["object"].get("name") == _sdn_name):
+            return [((n.get("loc") or {}).get("start") or {}).get("line")]
+        out = []
+        if t == "CallExpression":
+            c = n.get("callee") or {}
+            if c.get("type") == "Identifier" and c.get("name") in _sdn_funcs \
+                    and c["name"] not in seen:
+                out += ["%s:%s" % (c["name"], ln) for ln in
+                        _sdn_stmts(_sdn_funcs[c["name"]]["body"]["body"], seen | {c["name"]})]
+            if c.get("type") == "FunctionExpression":            # an IIFE runs right now
+                out += _sdn_stmts(c["body"]["body"], seen)
+        for k, v in n.items():
+            if k != "loc":
+                out += _sdn_scan(v, seen)
+        return out
+
+    # Run once per element the Console panel carries: #console-output (consoleEl) and the
+    # connection label in its header (wsStatus). The connect handler did wsStatus.textContent
+    # first, so with the panel hidden it threw before it joined the console room.
+    _sdn_name = "consoleEl"
+    _sdn_entries = [("top level", _sdd_ast["body"])]
+    for _st in _sdd_ast["body"]:
+        _ex = (_st or {}).get("expression") or {}
+        _cal = _ex.get("callee") or {}
+        if (_ex.get("type") == "CallExpression" and (_cal.get("property") or {}).get("name") == "on"
+                and len(_ex.get("arguments") or []) >= 2
+                and _ex["arguments"][1].get("type") == "FunctionExpression"):
+            _sdn_entries.append(("socket.on(%r)" % _ex["arguments"][0].get("value"),
+                                 _ex["arguments"][1]["body"]["body"]))
+    _sdn_bad = []
+    _sdn_handlers = dict(_sdn_entries)
+    for _sdn_name in ("consoleEl", "wsStatus"):
+        for _nm, _body in _sdn_entries:
+            _hits = _sdn_stmts(_body, frozenset())
+            if _hits:
+                _sdn_bad.append("%s: %s -> %s" % (_sdn_name, _nm, _hits[:4]))
+    _sdn_name = "consoleEl"
+    _sdn_ctrl = _sdn_stmts(_sdn_funcs.get("clearConsole", {}).get("body", {}).get("body", [])[1:],
+                           frozenset())
+    # ...and for wsStatus: the disconnect handler's own derefs, read past its guard.
+    _sdn_name = "wsStatus"
+    _sdn_ctrl_ws = _sdn_stmts((_sdn_handlers.get("socket.on('disconnect')") or [])[1:], frozenset())
+    _sdn_name = "consoleEl"
+    check(len(_sdn_entries) >= 3 and bool(_sdn_ctrl) and bool(_sdn_ctrl_ws),
+          "server page: the null-console walker sees the socket handlers and finds a real deref "
+          "past a guard (positive control)",
+          "entries=%d, derefs in clearConsole's body after its guard=%r, in the disconnect "
+          "handler's after its guard=%r" % (len(_sdn_entries), _sdn_ctrl, _sdn_ctrl_ws))
+    check(not _sdn_bad,
+          "server page: nothing that runs at load or on a socket event assumes the console exists",
+          "; ".join(_sdn_bad) + " — with the Console panel hidden, #console-output is absent and "
+          "this throws; at top level it ends the script")
+
+    # ...and "Load older" does not read a refusal as an empty log.
+    _sdn_lmc = _sdn_funcs.get("loadMoreConsole")
+    _sdn_okret, _sdn_wipe = [], []
+
+    def _sdn_scan_lmc(n):
+        if isinstance(n, dict):
+            if n.get("type") == "IfStatement" and '"name": "ok"' in json.dumps(n.get("test")):
+                c = n.get("consequent") or {}
+                body = c.get("body") if c.get("type") == "BlockStatement" else [c]
+                if any((b or {}).get("type") == "ReturnStatement" for b in body):
+                    _sdn_okret.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            if (n.get("type") == "AssignmentExpression"
+                    and ((n.get("left") or {}).get("property") or {}).get("name") == "innerHTML"
+                    and ((n.get("left") or {}).get("object") or {}).get("name") == "consoleEl"):
+                _sdn_wipe.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            for v in n.values():
+                _sdn_scan_lmc(v)
+        elif isinstance(n, list):
+            for v in n:
+                _sdn_scan_lmc(v)
+    if _sdn_lmc:
+        _sdn_scan_lmc(_sdn_lmc)
+    check(bool(_sdn_wipe) and bool(_sdn_okret) and min(_sdn_okret) < min(_sdn_wipe),
+          "server page: 'Load older' stops on a refused answer before it clears the console",
+          "response-status bail at %r, console wipe at %r — a 403 wipes the screen and reports "
+          "'Loaded 0 lines'" % (_sdn_okret, _sdn_wipe))
+
+    # ── Enter does not re-send a command or an announcement that is still in flight ─────────
+    # Both are bound on keydown. runCustomCommand never looked at btn.disabled, so a second Enter
+    # ran the command twice and saved the spinner as the button's label; announceSay had no guard
+    # at all and cleared its box only on the answer, so each Enter (and key auto-repeat) broadcast
+    # the message to every player again. From the AST: each function's FIRST statement bails when
+    # a request is already running, and announceSay raises its flag before the fetch and drops it
+    # in a finally.
+    def _first_bail_on(fn, needle):
+        body = (((fn or {}).get("body") or {}).get("body") or [])
+        st = body[0] if body else {}
+        c = st.get("consequent") or {}
+        rets = c.get("body") if c.get("type") == "BlockStatement" else [c]
+        return (st.get("type") == "IfStatement" and needle in json.dumps(st.get("test"))
+                and any((r or {}).get("type") == "ReturnStatement" for r in rets))
+    _en_run = _sdn_funcs.get("runCustomCommand")
+    _en_say = _sdn_funcs.get("announceSay")
+    check(_first_bail_on(_en_run, '"name": "disabled"'),
+          "server page: a custom command already running is not sent again by another Enter",
+          "runCustomCommand does not start by returning while its button is disabled")
+    _en_say_src = json.dumps(_en_say or {})
+    check(_first_bail_on(_en_say, '"name": "_saying"') and '"finally"' in _en_say_src,
+          "server page: an announcement in flight is not broadcast again by another Enter",
+          "announceSay does not bail on an in-flight flag, or never clears it in a finally")
+
+    # ── player names are the players', not the catalog's ─────────────────────────────────────
+    # The walker swaps a text node that EXACTLY matches a key, so a player named "Admin" showed as
+    # "Administrador" in the list and in the ban confirmation, while the ban targeted "Admin".
+    _pn_row = re.search(r"'(<tr><td[^']*)'\s*\+\s*escapeHtml\(p\.name\)", _sd_js)
+    _pn_ban = re.search(r"'Ban (<strong[^']*)'\s*\+\s*_esc\(name\)", _sd_js)
+    check(_pn_row is not None and _pn_ban is not None,
+          "server page: the player-name cell and the ban confirmation were found",
+          "row=%s ban=%s — the check below would examine nothing" % (bool(_pn_row), bool(_pn_ban)))
+    check(bool(_pn_row and "data-no-i18n" in _pn_row.group(1)
+               and _pn_ban and "data-no-i18n" in _pn_ban.group(1)),
+          "server page: a player's name is exempt from translation in the list and the ban dialog",
+          "row cell %r, ban dialog %r" % (_pn_row and _pn_row.group(1), _pn_ban and _pn_ban.group(1)))
+
 # ── The console's poll delta is stamped, and an all-history console says why it is not ────────
 # refreshConsole has two branches: the PRIMING pass (history — a window of a log file written
 # before the panel looked, correctly unstamped) and the delta (new output the panel just watched
@@ -1947,11 +2903,100 @@ for _sf, _needle in (("manage_remotes.js", "_tsUpPolls"), ("tailscale.js", "_tsU
           "js: %s's tailscale-up poll is deduped and has a deadline" % _sf,
           "no single-poll registry or no deadline")
 
+# ...and reaching that deadline has to leave the operator a way ON. tailscale.js told them to "press
+# the button again" — a button this flow had disabled and never re-enabled — and setup_tailscale.js
+# changed nothing at all, leaving "Waiting for you to authorize…" up with nothing watching. Both now
+# put a "Check again" control in the waiting line, wired to a function that re-reads the host.
+for _sf, _anchor, _fn in (("tailscale.js", "if (Date.now() > _deadline)", "tsCheckAgain"),
+                          ("setup_tailscale.js", "if (Date.now() > _tsEnd)", "tsRefresh")):
+    _src = (ROOT / "static" / "js" / _sf).read_text(encoding="utf-8")
+    _dl = _js_code_only(_js_block_after(_src, _anchor) or "")
+    check("ts-wait" in _dl and "_da('%s')" % _fn in _dl and "Check again" in _dl
+          and "press the button again" not in _dl,
+          "js: %s's poll deadline offers a working 'Check again', not a dead end" % _sf,
+          " ".join(_dl.split())[:200])
+    check(re.search(r"(?m)^function\s+%s\s*\(" % _fn, _src) is not None,
+          "js: ...and %s is a global function the dispatcher can call" % _fn, _sf)
+_tsc = (ROOT / "static" / "js" / "tailscale.js").read_text(encoding="utf-8")
+check("refreshSection('#ts-page'" in (_js_function_body(_tsc, "tsCheckAgain") or ""),
+      "js: tailscale.js's Check again re-renders the page from the host",
+      _js_function_body(_tsc, "tsCheckAgain") or "no tsCheckAgain")
+
+# The setup wizard's tsRender had branches for "running with a tailnet name" and "installed, not
+# running"; RUNNING WITHOUT A NAME (a `status --json` that timed out) fell through to "Tailscale
+# isn't installed on this host yet" and an Install button, right after the operator approved the
+# machine — and the wizard's own poll stops on `running` alone, handing it exactly that state.
+_str = _js_code_only(_js_function_body(
+    (ROOT / "static" / "js" / "setup_tailscale.js").read_text(encoding="utf-8"), "tsRender") or "")
+_str_named, _str_running = _str.find("if(s.running && s.dns_name)"), _str.find("if(s.running){")
+_str_absent = _str.find("isn\\'t installed on this host yet")
+check(-1 not in (_str_named, _str_running, _str_absent)
+      and _str_named < _str_running < _str_absent
+      and "Check again" in _str[_str_running:_str_absent],
+      "js: setup wizard: a running Tailscale with no name read is not called 'not installed'",
+      "named=%d running=%d not-installed=%d" % (_str_named, _str_running, _str_absent))
+
+# ── "UFW now allows tailscale0" only when the finalize says it did ────────────────────────────
+# The route answers ufw_allowed=false when UFW was inactive, absent, unreadable or refused the
+# rule (and a refused/unreachable finalize has no such key), yet the sentence printed on all of them.
+_mr_ts = _js_code_only(_js_function_body(
+    (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "tailscaleUp") or "")
+_ufw_ok_i = _mr_ts.find("f.ufw_allowed === true")
+_ufw_line_i = _mr_ts.find("'UFW now allows the tailscale0 interface.'")
+check(len(_mr_ts) > 300 and "tailscale-finalize" in _mr_ts,
+      "js: the tailscale-up flow was found in manage_remotes.js", "extractor found %d chars" % len(_mr_ts))
+check(-1 < _ufw_ok_i < _ufw_line_i and _mr_ts.count("allows the tailscale0") == 1
+      and "+ escapeHtml(ufwText) +" in _mr_ts,
+      "js: 'UFW now allows tailscale0' is printed only when the finalize reports ufw_allowed",
+      "positions ok=%d line=%d — the sentence is not gated on f.ufw_allowed" % (_ufw_ok_i, _ufw_line_i))
+
+# ── an unanswered Tailscale probe is not "not installed" ─────────────────────────────────────
+_rts_js = _js_code_only(_js_function_body(
+    (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "renderTailscaleStatus") or "")
+_rts_unr = _rts_js.find("if (status.unreachable) {")
+_rts_first = min([i for i in (_rts_js.find("if (installed && running)"), _rts_js.find("not installed"))
+                  if i >= 0] or [-1])
+_rts_blk = _js_block_after(_rts_js, "if (status.unreachable) {") or ""
+check(len(_rts_js) > 300 and -1 < _rts_unr < _rts_first
+      and "data-install-ts" not in _rts_blk and "renderAuthKeyForm" not in _rts_blk,
+      "js: the Tailscale modal reports an unanswered probe as unknown, with no Install offer",
+      "positions unreachable=%d installed-branches=%d — an unread host reads as 'not installed'"
+      % (_rts_unr, _rts_first))
+
 # ── the bootstrap poll's teardown sat below the line that returned ────────────────────────────
 _mr = (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
-check("if (!stepEl) { clearInterval(_bootstrapPoll)" in _mr,
+_pb = _js_code_only(_js_function_body(_mr, "pollBootstrap"))
+check(len(_pb) > 400 and "bootstrap-status" in _pb,
+      "js: pollBootstrap was found in manage_remotes.js",
+      "extractor got %r — the checks below would prove nothing" % _pb[:60])
+check(re.search(r"if \(!stepEl \|\|.*\) \{ stop\(\); return; \}", _pb) is not None,
       "js: the bootstrap poll stops when its modal is gone, instead of bailing forever",
       "showModal removes #ts-modal, and every clearInterval sits below the early return")
+
+# ── ...when the modal belongs to ANOTHER host, and when its job is gone ───────────────────────
+# Prepare on host B builds the same ids, so host A's poll found them and painted A's steps, log and
+# "Server prepared & secured!" into "Prepare & Secure: B" — over B's refusal when B's start failed.
+# And `s.status === 'none'` (panel restarted, job expired) returned ABOVE that teardown, so the
+# poll ran for the life of the page with the button stuck at "Running…".
+_sb = _js_function_body(_mr, "showBootstrap") or ""
+check('id="bootstrap-step" class="text-info" data-remote="\' + escapeHtml(String(remoteId)) + \'"' in _sb,
+      "js: the Prepare modal records which host it was opened for",
+      "#bootstrap-step carries no data-remote, so a poll cannot tell its modal from another's")
+_pb_own = _pb.find("stepEl.getAttribute('data-remote') !== String(remoteId)")
+_pb_none = _pb.find("if (s.status === 'none') {")
+_pb_none_blk = _js_block_after(_pb, "if (s.status === 'none') {") or ""
+check(-1 < _pb_own < _pb_none and "stop();" in _pb_none_blk and "return;" in _pb_none_blk
+      and "btn.disabled = false" in _pb_none_blk,
+      "js: the bootstrap poll paints only its own host's modal, and stops when the job is gone",
+      "positions own=%d none=%d; none-branch %r" % (_pb_own, _pb_none, _pb_none_blk[:80]))
+# Positive control: the terminal branches still stop the poll, and stop() only ever clears ITS
+# interval — a late fetch from the previous poll must not stop the one that replaced it.
+check(re.search(r"function stop\(\) \{ clearInterval\(handle\); if \(_bootstrapPoll === handle\) "
+                r"_bootstrapPoll = null; \}", _pb) is not None
+      and "clearInterval(_bootstrapPoll)" not in _pb.split("function tick()")[1]
+      and _pb.count("stop();") >= 4,
+      "js: ...and a stale poll's stop() never clears the poll that replaced it",
+      "tick() clears _bootstrapPoll directly, or a terminal branch lost its stop()")
 
 # ── the SSH card's live state is refilled after the section is swapped ────────────────────────
 # refreshSection only re-runs a callback when one is NAMED, and loadSshStatus is the only thing
@@ -1985,6 +3030,32 @@ check(-1 not in _lss_i and _lss_i == sorted(_lss_i),
       "js: ...and never calls the panel port 'already closed' while UFW is off",
       "positions %r — panel_port_open === false is read before the firewall's state" % (_lss_i,))
 
+# ── a panel restart is not a successful update ────────────────────────────────────────────────
+# install.sh restarts the service on ROLLBACK too, so the restored old process flips boot_id like
+# the new one — and a rolled-back update was announced "Update complete — reloading…", after which
+# the card offered the same update again. Success is the code having moved (a new commit for an
+# update, the target branch for a switch); a rollback line in the log says otherwise outright.
+_pro = _js_code_only(_js_function_body(_rh, "panelRestartOutcome"))
+_wpr = _js_code_only(_js_function_body(_rh, "watchPanelRestart"))
+check(len(_pro) > 150 and len(_wpr) > 400 and "boot_id" in _wpr,
+      "js: panelRestartOutcome and watchPanelRestart were found in remote_manage_host.js",
+      "extractor got %r / %r — the checks below would prove nothing" % (_pro[:40], _wpr[:40]))
+check("after.current_sha !== before.current_sha ? 'moved' : 'unchanged'" in _pro
+      and "after.branch === targetBranch ? 'moved' : 'unchanged'" in _pro
+      and "/rolled back|rolling back/i" in _pro,
+      "js: a panel restart counts as applied only when the commit (or branch) moved and no rollback ran",
+      "panelRestartOutcome no longer compares the version before and after")
+_wpr_moved = _js_block_after(_wpr, "if(outcome==='moved'){") or ""
+check("panelRestartOutcome(before, s, targetBranch" in _wpr
+      and "escapeHtml(doneLabel" in _wpr_moved and _wpr.count("doneLabel") == 1,
+      "js: ...and 'Update complete' / 'Switched to' is printed only on that outcome",
+      "the done label is printed outside the outcome==='moved' branch, i.e. on any restart")
+# Positive control: both flows hand the watcher what it compares against.
+check("watchPanelRestart(beforeBoot, msg, 'Update complete', before, '')" in _rh
+      and "watchPanelRestart(beforeBoot, msg, 'Switched to '+branch, before, branch)" in _rh,
+      "js: the update and branch-switch flows pass their pre-restart status to the watcher",
+      "a caller does not pass `before` (and the target branch), so every outcome reads 'unknown'")
+
 # ── saving the auto-block threshold must not switch auto-block OFF ───────────────────────────
 # saveThreshold posts the toggle's state as `enabled` ("preserve the on/off state"), but the toggle
 # is rendered unchecked and repainted only when /top-ips answers — after several SSH reads. A Save
@@ -2006,6 +3077,47 @@ check("thresholdSaveToast(d, v)" in _st_fn and "!d.success" in _tst_fn
       and "Number(d.threshold)" in _tst_fn and "t !== asked" in _tst_fn and "!d.enabled" in _tst_fn,
       "js: ...and the toast says what the endpoint did — refused, ignored, saved with auto-block off",
       "the toast still says 'Threshold saved' whatever came back")
+
+# ── the OS Updates card: only a positive `ok` is a reading ────────────────────────────────────
+# An unreachable host answers {success:false, unreachable:true} with no `ok` key, and `d.ok===false`
+# let that through to renderUpdates: a green "System is up to date." with Install disabled.
+_cu_fn = _js_code_only(_js_function_body(_rmj, "checkUpdates"))
+check("if(d.ok!==true){" in _cu_fn and "d.ok===false" not in _cu_fn
+      and _cu_fn.find("if(d.ok!==true){") < _cu_fn.find("renderUpdates("),
+      "js: a check-updates answer without ok:true is 'unknown', never 'up to date'",
+      _cu_fn[:300])
+# ── the OS-update watch: one failed status read is not the update finishing ──────────────────
+# The route's exception answer was done:true, rc:null, log:"", and the popup wiped apt's output,
+# said "Finished with errors (exit null)" and stopped polling while dpkg was still running.
+_po_fn = _js_code_only(_js_function_body(_rmj, "_pollOsUpdate"))
+_pu_fn = _js_code_only(_js_function_body(_rmj, "_osuPollUnread"))
+check("d.error" in _pu_fn and "d.unread" in _pu_fn and "typeof d.rc !== 'number'" in _pu_fn,
+      "js: an errored, unread or sentinel-less status poll is recognised as unread",
+      _pu_fn[:200])
+check(0 <= _po_fn.find("if(_osuPollUnread(d)){") < _po_fn.find("logEl.textContent=")
+      and _po_fn.find("if(_osuPollUnread(d)){") < _po_fn.find("if(d.done){")
+      and "_osuTimer=setTimeout(_pollOsUpdate" in _po_fn[_po_fn.find("if(_osuPollUnread(d)){"):
+                                                          _po_fn.find("_osuMiss=0;")],
+      "js: ...and such a poll keeps the log, is not taken as done, and polls again",
+      _po_fn[:400])
+check("d.running === false ? (_osuStale+1)" in _po_fn,
+      "js: ...and only a definite 'apt is not running' counts towards giving up",
+      "an unanswered probe (running null) is counted as apt having stopped")
+# ── the raw log viewer: a failed read is not "(log is empty)" ─────────────────────────────────
+_lsl_fn = _js_code_only(_js_function_body(_rmj, "loadSecurityLog"))
+check(0 <= _lsl_fn.find("if(!d || d.error){") < _lsl_fn.find("'(log is empty)'"),
+      "js: the raw security log says it could not be read before it can say 'empty'",
+      _lsl_fn[:300])
+# ── removing a whitelist entry: a refusal is not "removed" ───────────────────────────────────
+_rwl_fn = _js_code_only(_js_function_body(_rmj, "removeWhitelist"))
+check(0 <= _rwl_fn.find("if(!d || !d.success){") < _rwl_fn.find("renderWhitelist(")
+      and "'whitelist' in d" in _rwl_fn,
+      "js: a refused whitelist removal is reported, not painted as an empty whitelist",
+      _rwl_fn[:300])
+# ── #security opens only a tab the page renders ───────────────────────────────────────────────
+check("nav.querySelector('[data-mtab-btn=\"' + h + '\"]')" in _js_code_only(_rmj),
+      "js: a #tab hash opens only a tab whose button is on the page",
+      "#security opens the panel host's hidden Security tab and fires its 403 reads")
 
 # ── the update card's changelog links each commit ─────────────────────────────────────────────
 # "d456826 fix: a failed install was a dead end" told you a subject and a sha you then had to go
@@ -2248,6 +3360,66 @@ check("if (tr.hasAttribute('data-progress-for')) return;" in _dashjs3
       and "prog.style.display = match" in _dashjs3,
       "js: filtering hides a progress row with its server, not on its own text")
 
+# ── a card-region swap keeps the bulk selection, and the bar never claims one it lost ─────────
+# refreshSection('#server-cards') replaces every row checkbox with an unticked one, but both bulk
+# bars sit OUTSIDE #server-cards and kept "3 selected" with their buttons — which then found
+# nothing checked and returned without a word. From the AST: afterDashRefresh's FIRST statement
+# restores the selection (before filterServers or anything else reads the boxes), the restore
+# re-syncs the bar, updateBulkBar records what it counted, and an empty bulkAction says so.
+if not esprima:
+    skip("js: a card-region swap restores the bulk selection before anything reads it",
+         "esprima not installed")
+else:
+    _bs_ast = _d3_ast
+    _bs_after = []
+
+    def _scan_after(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "AssignmentExpression"
+                    and ((n.get("left") or {}).get("property") or {}).get("name") == "afterDashRefresh"
+                    and (n.get("right") or {}).get("type") == "FunctionExpression"):
+                _bs_after.append(n["right"]["body"]["body"])
+            for v in n.values():
+                _scan_after(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_after(v)
+    _scan_after(_bs_ast)
+    _bs_first = (_bs_after[0][0] if _bs_after and _bs_after[0] else {}).get("expression") or {}
+    check(((_bs_first.get("callee") or {}).get("name")) == "restoreBulkSelection",
+          "js: a card-region swap restores the bulk selection before anything reads it",
+          "afterDashRefresh starts with %r — the bars keep 'N selected' over unticked boxes"
+          % ((_bs_first.get("callee") or {}).get("name"),))
+    _bs_restore = _js_find_fn(_bs_ast, "restoreBulkSelection")
+    _bs_update = _js_find_fn(_bs_ast, "updateBulkBar")
+    check(_bs_restore is not None and bool(_calls_named(_bs_restore, "updateBulkBar"))
+          and _bs_update is not None and "_bulkSelected" in json.dumps(_bs_update),
+          "js: ...the restore re-syncs the bar, and the bar records what it counted",
+          "restoreBulkSelection calls updateBulkBar=%s; updateBulkBar records _bulkSelected=%s"
+          % (bool(_bs_restore and _calls_named(_bs_restore, "updateBulkBar")),
+             bool(_bs_update and "_bulkSelected" in json.dumps(_bs_update))))
+    _bs_bulk = _js_find_fn(_bs_ast, "bulkAction")
+    _bs_silent = []
+
+    def _scan_empty(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "IfStatement"
+                    and '"name": "length"' in json.dumps(n.get("test"))
+                    and (n.get("test") or {}).get("type") == "UnaryExpression"):
+                c = n.get("consequent") or {}
+                if not _calls_named(c, "toast"):
+                    _bs_silent.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            for v in n.values():
+                _scan_empty(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_empty(v)
+    if _bs_bulk:
+        _scan_empty(_bs_bulk)
+    check(_bs_bulk is not None and not _bs_silent,
+          "js: a bulk action with nothing selected says so instead of doing nothing",
+          "silent empty-selection return(s) at line(s) %r" % (_bs_silent,))
+
 # ── install progress has to be visible from wherever you are ──────────────────────────────────
 # The progress row lives on the Game Servers page and nowhere else, so an install started from
 # "Install a Server" showed a toast and then nothing at all, and the dashboard listed the server as
@@ -2434,6 +3606,100 @@ check("navigator.clipboard &&" in _bc and "execCommand" in _bc,
       "js: the backup-codes copy guards navigator.clipboard and falls back",
       "an http:// install gets a button that does nothing")
 
+# ── the auth ping only runs where there is a session to lose ──────────────────────────────────
+# panel.js loads on every page, signed out included, and its only guard was "not the login page".
+# On /invite/<token> or the setup wizard, coming back to the tab after a minute pinged, got a 401,
+# and location.replace'd the visitor to /login — form gone, Back unable to return.
+_pj_src = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+_pj_se = _pj_src[_pj_src.index("window.sessionExpired = function"):]
+_pj_se = _pj_se[:_pj_se.index("location.replace(")]
+_pj_ping = _pj_src[_pj_src.index("function _pingAuth()"):]
+_pj_ping = _pj_ping[:_pj_ping.index("window.fetch(")]
+check("_expiredHandled" in _pj_se and "_expiredHandled" in _pj_ping,
+      "session: (control) both slices are the guards this check is about", "sliced the wrong text")
+check("!_signedIn()" in _pj_se and "!_signedIn()" in _pj_ping
+      and "window.SIGNED_IN === true" in _pj_src
+      and "window.SIGNED_IN = {{ 'true' if current_user.is_authenticated else 'false' }};"
+      in (TEMPLATES / "base.html").read_text(encoding="utf-8"),
+      "session: the ping and the expired-session redirect return early on a signed-out page",
+      "an invitee is redirected to /login mid-form")
+
+# ── an in-place refresh keeps timestamps in the viewer's timezone ─────────────────────────────
+# refreshSection swaps in the SERVER's markup, whose |datetime spans read "… UTC" until
+# localizeTimes rewrites them — and that ran once, on load. After saving a user the whole Last
+# login column switched to UTC until a full reload.
+_pj_rs = _pj_src[_pj_src.index("window.refreshSection = function"):]
+_pj_rs = _pj_rs[:_pj_rs.index("\n};")]
+check("cur.innerHTML = fresh.innerHTML" in _pj_rs,
+      "refresh: (control) the refreshSection slice holds the swap", "sliced the wrong text")
+check("window.localizeTimes(cur)" in _pj_rs
+      and _pj_rs.index("cur.innerHTML = fresh.innerHTML") < _pj_rs.index("window.localizeTimes(cur)"),
+      "refresh: refreshSection re-localizes the timestamps it swaps in",
+      "swapped-in times stay in UTC")
+
+# ── the markup dispatchers refuse native functions and the panel's request primitives ─────────
+# fire() called whatever window[data-action] was: native fetch/open/eval, and this file's fetch
+# WRAPPER, which adds the CSRF token to any POST. The CSP stops injected markup running script; an
+# unguarded dispatcher turned that markup back into authenticated requests on the next click.
+# Measured in a browser: data-action="fetch", "setTimeout" and "confirmDialog" now do nothing,
+# while a window.x = function action and a function declared before panel.js both still fire.
+try:
+    _pj_af = _pj_src[_pj_src.index("function _actionFn("):]
+    _pj_af = _pj_af[:_pj_af.index("\n}")]
+except ValueError:          # no resolver at all: the checks below fail by name, not crash the suite
+    _pj_af = ""
+_pj_fire = _pj_src[_pj_src.index("function fire(el, e)"):]
+_pj_fire = _pj_fire[:_pj_fire.index("fn.apply(")]
+check("return fn;" in _pj_af, "dispatch: (control) the _actionFn slice is the resolver", "sliced the wrong text")
+check("native code" in _pj_af and "_ACTION_DENY[name]" in _pj_af
+      and re.search(r"_ACTION_DENY = \{[^}]*\bfetch: 1", _pj_src) is not None,
+      "dispatch: the resolver refuses native functions and the fetch wrapper",
+      "data-action can still name fetch/open/eval")
+check("_actionFn(el.getAttribute('data-action'))" in _pj_fire and "window[" not in _pj_fire
+      and "_actionFn(afterName)" in _pj_rs and "window[afterName]" not in _pj_rs,
+      "dispatch: data-action and data-ajax-after both resolve through it",
+      "a dispatcher still indexes window directly")
+
+# ── the 2FA reminder's "don't remind me" reports success only on success ──────────────────────
+# It parsed the reply and ignored it. The error handler answers any failure on a fetch with
+# parseable JSON ({success:false}, status 500), so a save that failed removed the banner and said
+# "You won't be reminded again" — and the reminder was back on the next page load.
+_otp_src = (ROOT / "static" / "js" / "otp_nag.js").read_text(encoding="utf-8")
+_otp_fn = _otp_src[_otp_src.index("function dismissOtpNagForever"):]
+check("/account/2fa/dismiss-nag" in _otp_fn,
+      "otp nag: (control) the dismiss handler is where this check is looking", "sliced the wrong text")
+check(re.search(r"\.success\)\)\s*throw", _otp_fn) is not None
+      and _otp_fn.index(".success") < _otp_fn.index("hideOtpNag(false)"),
+      "otp nag: the banner is removed and success announced only when the reply says success",
+      "any parseable reply — including {success:false} — is reported as saved")
+
+# ── the setup wizard takes an SSH password in a password field ────────────────────────────────
+# The shared credential input stayed type="text" when Password was chosen: the remote's root
+# password on screen in clear, and saved by the browser as plain autofill for "credential".
+_sr_src = (ROOT / "static" / "js" / "setup_remote.js").read_text(encoding="utf-8")
+_sr_pw = _sr_src[_sr_src.index("if (this.value === 'password')"):]
+_sr_pw = _sr_pw[:_sr_pw.index("} else")]
+check("label.textContent = 'SSH Password'" in _sr_pw,
+      "setup remote: (control) the password branch is where this check is looking", "sliced the wrong text")
+check("input.type = 'password'" in _sr_pw and _sr_src.count("input.type = 'text'") >= 2,
+      "setup remote: choosing Password makes the field a password input (and the others switch it back)",
+      "the SSH password is typed into a plain text field")
+
+# ── Settings says what Site domain actually does ──────────────────────────────────────────────
+# It said "Used for the TLS certificate and connect links." No connect link reads site_domain (they
+# use the remote's public IP or host), and the certificate is only named from it when the panel has
+# none — a changed value never reaches the existing 10-year cert. The one place it matters, the
+# console socket's allowed origins, went unmentioned.
+_st = (TEMPLATES / "settings.html").read_text(encoding="utf-8")
+_st_help = _st[_st.index('name="site_domain"'):]
+_st_help = _st_help[:_st_help.index("</div>")]
+check('<div class="small text-secondary mt-1">' in _st_help,
+      "settings: (control) the Site domain help is where this check is looking",
+      "sliced the wrong text — the check below proves nothing")
+check("connect links" not in _st_help and "not reissued" in _st_help,
+      "settings: Site domain's help no longer claims connect links, and says the cert is not reissued",
+      "the copy promises effects the setting does not have")
+
 # ── a Jinja comment is invisible to the browser and NOT to the HTML scanner ───────────────────
 # CodeQL parses the template as HTML, comments included, so prose describing a Flask route as
 # "/remote/<local id>/manage" is read as a start tag `local` carrying a valueless `id` attribute
@@ -2592,9 +3858,35 @@ check(_fw_msg in _fw_tpl and _fw_msg in _fw_js,
       "template and refresh word the same state differently")
 # The count is an arithmetic claim. "0 rules" above "the rules cannot be read" is the same defect
 # in miniature as an update card announcing a commit count it could not list.
-check("rules-count" in _fw_win,
+_fw_unl = _js_code_only(_js_function_body(_fw_js, "_fwUnlisted") or "")
+_fw_win_code = _js_code_only(_fw_win)
+check("_fwUnlisted(" in _fw_win_code and "'rules-count'" in _fw_unl,
       "firewall: ...and the rule COUNT is cleared too, not left reading 0",
       "the page states a count for a firewall nothing read")
+# ...and the Blocked IPs card with it. Only the rules card was repainted, so a refresh that found
+# the host gone left "3 blocked" and three live Unblock buttons on screen as the current firewall.
+check("'blocks-list'" in _fw_unl and "'blocks-count'" in _fw_unl and "'\\u2014'" in _fw_unl,
+      "firewall: an unreadable refresh clears the Blocked IPs list and count as well",
+      "_fwUnlisted: %r" % _fw_unl[:300])
+# A sudo refusal arrives flagged unreachable too; the page named the network for it.
+check("data.permission_denied" in _fw_win_code and "sudo refused the firewall read" in _fw_win_code,
+      "firewall: a refresh refused by sudo says sudo, not 'unreachable'",
+      "the refresh reads only data.unreachable")
+# An INACTIVE ufw lists nothing, stored rules included: "No open ports yet." / "0 blocked" about it
+# were claims about rules nobody saw, and a block there denies nothing.
+_fw_after_badge = _js_code_only(_between(_fw_js, "data.enabled ? 'Active' : 'Inactive'",
+                                         "var groups = data.groups"))
+check("if (inactive)" in _fw_after_badge and "_fwUnlisted(" in _fw_after_badge
+      and "data.installed === true && data.enabled !== true" in _fw_win_code,
+      "firewall: a refresh of an INACTIVE ufw prints no rule or block count",
+      _fw_after_badge[:300])
+check("blocks-inactive-note" in _fw_win_code and 'id="blocks-inactive-note"' in _fw_tpl,
+      "firewall: ...and the 'a block denies nothing while inactive' note follows the refresh",
+      "the note is not toggled")
+# The × tooltip listed a group's UFW rule NUMBERS as "ports 3, 7".
+check("'rules ' + (g.nums|join(', '))" in _fw_tpl and "'ports ' + (g.nums" not in _fw_tpl,
+      "firewall: the rule-delete tooltip calls rule numbers rules, not ports",
+      "the × tooltip names ufw rule numbers as ports")
 
 # ── a delete removes the rule that was clicked, not whatever now holds its old number ─────────
 # ufw numbers are POSITIONS and renumber on every insert/delete; the hourly auto-block inserts its
@@ -2618,6 +3910,11 @@ check("num: Math.max.apply(null, g.nums)" in _fw_del and "ordered[" not in _fw_d
 check("g.protected" in _fw_del,
       "firewall delete: ...and a group that has since become protected is not deleted",
       "the re-read does not look at protected")
+# ...and the POST names the rule too, so the SERVER refuses a number that moved in the moment
+# between this read and its delete (the auto-block inserts at 1).
+check("JSON.stringify({num: Math.max.apply(null, g.nums), key: key})" in _fw_del,
+      "firewall delete: the delete request carries the rule's key, not just its position",
+      "the server deletes whatever rule the number names by then")
 # Both renderers hand the identity over, or every click refuses with "out of date".
 _fw_tpl_btn = _between(_fw_tpl, 'data-action="deleteGroup"', ">")
 check("{{ g.key|tojson }}" in _fw_tpl_btn,
@@ -2666,6 +3963,39 @@ check("g.backups_unreadable" in _bk_win2,
 check(">no backups yet<" in _bk_win2,
       "backups: ...and still says that for a host that genuinely has none (positive control)",
       "the real empty case lost its message")
+
+# ── a safety-copy refusal after a typed passphrase has a way forward ─────────────────────────
+# restore_backup decrypts first and writes the safety copy second, so a right passphrase can
+# still meet "…Confirm again to restore without one." The passphrase dialog only showed that as
+# an error, and pressing Restore re-posted without skip_safety_backup: the same refusal forever,
+# during a disaster recovery. It must hand over to _bkAskSkipSafety carrying the typed passphrase.
+if not esprima:
+    skip("backups: the passphrase dialog hands a safety-copy refusal to the skip dialog",
+         "esprima not installed")
+else:
+    _rb_ast = esprima.parseScript(_bk_js2, {"loc": True}).toDict()
+    _rb_fn = next((n for n in _rb_ast["body"] if n.get("type") == "FunctionDeclaration"
+                   and (n.get("id") or {}).get("name") == "_bkAskPassphrase"), None)
+    _rb_calls = []
+
+    def _rb_walk(n):
+        if isinstance(n, dict):
+            if n.get("type") == "CallExpression" \
+                    and (n.get("callee") or {}).get("name") == "_bkAskSkipSafety":
+                _rb_calls.append([(a.get("name") if a.get("type") == "Identifier" else a.get("value"))
+                                  for a in (n.get("arguments") or [])])
+            for _v in n.values():
+                _rb_walk(_v)
+        elif isinstance(n, list):
+            for _v in n:
+                _rb_walk(_v)
+    _rb_walk(_rb_fn or {})
+    check(_rb_fn is not None, "backups: _bkAskPassphrase() was found in remote_manage_backups.js",
+          "renamed? the check below would pass by finding nothing")
+    check(any(len(c) >= 2 and c[0] == "name" and c[1] == "val" for c in _rb_calls),
+          "backups: the passphrase dialog hands a safety-copy refusal to the skip dialog, "
+          "with the passphrase that worked",
+          "_bkAskSkipSafety calls in _bkAskPassphrase: %r" % (_rb_calls,))
 
 # ── a schedule change posts only the field that changed ──────────────────────────────────────
 # Both schedule controls on each page fire one save, and it posted BOTH fields. Files & Config's

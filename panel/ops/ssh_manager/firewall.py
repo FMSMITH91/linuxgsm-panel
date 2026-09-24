@@ -204,15 +204,14 @@ def _config_unreadable():
 
     Deliberately not "load_config returned defaults": a host with no config.json yet is a normal,
     answerable state and defaults really are the answer. The dangerous case is narrower — a file
-    that is there and unusable, where every setting silently reads as its default."""
-    try:
-        from panel.core.config import CONFIG_FILE
-        with open(CONFIG_FILE, encoding="utf-8") as fh:
-            return not isinstance(_json.load(fh), dict)
-    except FileNotFoundError:
-        return False
-    except (OSError, ValueError):
-        return True
+    that is there and unusable, where every setting silently reads as its default.
+
+    The shared predicate, not a copy of it. This kept its own, which had already drifted: it read
+    the file as UTF-8 while load_config reads it in the locale's encoding, so on a non-UTF-8
+    locale the two could disagree about the very file whose defaults this guards against. Kept
+    as a name because it is the stub seam the unit suite patches."""
+    from panel.core.config import config_unreadable
+    return config_unreadable()
 
 
 def _panel_served_over_tailscale(server):

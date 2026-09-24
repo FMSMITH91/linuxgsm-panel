@@ -25,9 +25,14 @@ function tsUp(outEl, btn){
     var t = setInterval(function(){
       if (Date.now() > _deadline) {
         clearInterval(t); _tsUpPoll = null;
+        // It said "press the button again" — but the button was disabled when this flow started
+        // and nothing re-enables it on this path, so the only way on was a full reload. The page
+        // now offers its own re-check, which re-renders from the host: connected, or a fresh
+        // "Link this machine" button. (Re-enabling the INSTALL button would reinstall Tailscale.)
         var w = document.getElementById('ts-wait');
-        if (w) w.innerHTML = '<span class="text-secondary">Still waiting — press the button again '
-          + 'once you have approved this machine.</span>';
+        if (w) w.innerHTML = '<span class="text-secondary">Stopped waiting. Once you have approved '  // nosemgrep - literals only
+          + 'this machine:</span> <button type="button" class="btn btn-sm btn-outline-secondary py-0"'
+          + _da('tsCheckAgain') + '><i class="bi bi-arrow-repeat"></i> Check again</button>';
         return;
       }
       fetch(MOUNT + '/api/tailscale').then(function(r){return r.json();}).then(function(s){
@@ -38,6 +43,9 @@ function tsUp(outEl, btn){
     _tsUpPoll = t;
   }).catch(function(){ outEl.innerHTML = '<span class="text-danger">Request failed.</span>'; if(btn) btn.disabled = false; });
 }
+
+// "Check again" after the link flow stopped waiting: re-render the page from the host's state.
+function tsCheckAgain(){ window.refreshSection('#ts-page','wireTsButtons'); }
 
 // Wire the buttons/inputs that use direct listeners (install / connect / peer-check Enter). Called
 // on load AND after the page is swapped in place via refreshSection('#ts-page', ...), so the fresh
@@ -136,7 +144,7 @@ function enableServe(btn) {
 }
 
 function disableServe(btn) {
-  // The mount comes from the button's data-mount (what enable persisted), NOT a hardcoded '/'.
+  // The mount comes from the button's data-mount: the route the host reports proxying the panel.
   var mount = (btn && btn.dataset && btn.dataset.mount) || '/';
   confirmDialog({title:'Disable Tailscale Serve', icon:'exclamation-triangle', confirmClass:'btn-danger', confirmLabel:'Disable',
     bodyText:'Disable Tailscale Serve? The panel will no longer be accessible via the Tailscale URL.',

@@ -50,16 +50,41 @@ def _parse_tg_command(text):
     return text.split()[0].split("@")[0].lstrip("/").lower()
 
 
+def _tg_addressed_elsewhere(text, bot_username):
+    """True when a command names a bot with '@' and that bot is not this one ('/update@OtherBot').
+
+    _parse_tg_command drops the '@target' — right for '/status@ThisBot', which Telegram clients
+    append in groups — so a command addressed to ANOTHER bot in the authorised group ran here too:
+    with privacy mode off, or this bot a group admin (admins receive every message),
+    '/update@MinecraftBot' self-updated and restarted the panel. An '@' naming a bot this one cannot
+    identify (getMe has not answered yet) is not assumed to be this one."""
+    first = (text or "").strip().split()[0] if (text or "").strip() else ""
+    if "@" not in first:
+        return False
+    target = first.split("@", 1)[1]
+    return not (bot_username and target.lower() == bot_username.lower())
+
+
 def _telegram_command_watch(app):
     """Long-poll loop: honour commands from the authorised chat only. Skips any backlog on (re)start
     so a command sent while we were down — including the /update that caused our own restart — is
     never replayed."""
     offset, primed, registered = None, False, False
+    state_token = None     # the bot the three values above belong to
+    bot_username = None    # this bot's @username (getMe), so '/cmd@OtherBot' is not run here
     while True:
         try:
             cfg = notifications._cfg()
             tg = cfg.get("telegram") or {}
             token = decrypt_secret(tg.get("token") or "")
+            if token != state_token:
+                # A DIFFERENT BOT. update_id sequences are per bot and unrelated, so the old bot's
+                # offset either sat above every id the new one had — each poll then confirmed and
+                # discarded all of its commands, with no answer and no error, until a restart — or
+                # below them, skipping the priming read and replaying up to 24h of the new bot's
+                # backlog. `registered` stayed True too, so the new bot never got its '/' menu.
+                offset, primed, registered = None, False, False
+                state_token, bot_username = token, None
             if not (tg.get("enabled") and tg.get("accept_commands")):
                 if registered and token:
                     notifications.telegram_set_commands(token, clear=True)   # drop the '/' menu
@@ -74,6 +99,8 @@ def _telegram_command_watch(app):
             if not registered:
                 # Populate Telegram's '/' autocomplete menu with the bot's commands.
                 registered = bool(notifications.telegram_set_commands(token))
+            if bot_username is None:
+                bot_username = notifications.telegram_get_me(token)   # None: asked again next tick
             if not primed:
                 # PRIMED ONLY IF THE POLL ANSWERED. telegram_get_updates returns None on a network
                 # error, on a 409 (a second poller) and on ok:false — and `primed = True` used to
@@ -103,6 +130,8 @@ def _telegram_command_watch(app):
                 if chat != authorized:
                     _log.info("telegram: ignoring a command from unauthorised chat %s", chat[:32])
                     continue
+                if _tg_addressed_elsewhere(text, bot_username):
+                    continue          # '/update@OtherBot' in the group is that bot's command
                 _tg_dispatch(app, token, authorized, text, msg.get("from"))
         except Exception:
             _log.debug("telegram command-watch tick failed", exc_info=True)

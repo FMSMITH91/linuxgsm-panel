@@ -18,13 +18,32 @@ def register(app):
     @app.route("/api/tags")
     @login_required
     def api_tags_list():
-        """Every tag, with the servers carrying it. Readable by any signed-in user — tags are how
-        the UI groups and filters, and the server ids here are only ever used to decorate rows the
-        caller can already see."""
+        """Every tag, with the servers carrying it that the CALLER can access. Readable by any
+        signed-in user — tags are how the UI groups and filters.
+
+        The server ids were every server's. The UI only uses them to decorate rows the caller can
+        already see, but the response is the caller's to read, and it listed the ids of servers
+        they cannot access and which tags those carry (an inventory server_access_required's
+        blanket 403 is careful not to give)."""
         from panel.db.models import ServerTag
         from sqlalchemy.orm import selectinload
         tags = ServerTag.query.options(selectinload(ServerTag.servers)).order_by(ServerTag.name).all()
-        return jsonify({"success": True, "tags": [_tag_json(t) for t in tags]})
+        out = [_tag_json(t) for t in tags]
+        # server_count is how many servers a Delete would strip the tag from: every server that
+        # carries it, panel-wide, for anyone who may delete it. The Tags card printed the length
+        # of the FILTERED ids, so a delegated admin saw "production — 0 server(s)" on a tag twelve
+        # servers on other hosts carry, and one click removed it (and its alert muting) from all
+        # twelve. A caller who cannot delete gets the count of what they can see: the total is
+        # inventory, and they have no decision to make with it.
+        may_delete = _can_edit_tags()
+        visible = (None if current_user.is_superadmin
+                   else {gs.id for gs in get_user_servers(current_user)})
+        for t in out:
+            total = len(t["server_ids"])
+            if visible is not None:
+                t["server_ids"] = [i for i in t["server_ids"] if i in visible]
+            t["server_count"] = total if may_delete else len(t["server_ids"])
+        return jsonify({"success": True, "tags": out})
 
     @app.route("/api/tags", methods=["POST"])
     @login_required
@@ -118,7 +137,8 @@ def register(app):
         log_action(current_user, "server_tags_set", target=gs.name,
                    detail="tags: " + (", ".join(t.name for t in gs.tags) or "(none)"))
         return jsonify({"success": True, "tags": [{"id": t.id, "name": t.name,
-                                                   "color": t.color or ""} for t in gs.tags]})
+                                                   "color": t.color or "", "notify": bool(t.notify)}
+                                                  for t in gs.tags]})
 
     @app.route("/api/account/ui-order", methods=["POST"])
     @login_required

@@ -10,10 +10,24 @@ from panel.ops import (tailscale_integration as ts)
 from panel.ops.ssh_manager import (ssh_test_connection)
 from panel.security.auth import (hash_password)
 import json
+import os
 from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
-    _port_or, bind_host_error, password_problem)
+    _port_or, bind_host_error, can_bind_address, password_problem)
 from app import (_current_lang, _log, _setup_open, _setup_owner_ok, _ts_backend_scheme,
     is_setup_complete, issue_setup_owner_token)
+
+
+def wizard_credential(auth_method, raw):
+    """The credential the setup wizard tests and stores.
+
+    A key path is expanded. The form offers "~/.ssh/id_rsa" (the panel account's own key), and
+    paramiko opens key_filename exactly as given, with no expanduser, so the literal tilde named a
+    file that never exists: every key-auth attempt with the default failed, reported as "check the
+    host, port, credentials", and the wizard refused to add the host."""
+    cred = (raw or "").strip()
+    if auth_method == "key" and cred.startswith("~"):
+        cred = os.path.expanduser(cred)
+    return cred
 
 
 def register(app):
@@ -28,7 +42,9 @@ def register(app):
         # setup is done), so exempting them here is safe.
         if request.path.startswith("/static/") or request.path == "/setup" \
                 or request.path.startswith("/setup/") or request.path.startswith("/api/setup/") \
-                or request.path == "/robots.txt":
+                or request.path in ("/robots.txt", "/healthz"):
+            # /healthz is a liveness probe: it says whether the process and DB answer, which is as
+            # true before setup as after, and a monitor should not read "302 to /setup" as health.
             return None          # exempt path: let the request through untouched
         if not is_setup_complete():
             # /login stays reachable once the wizard has an admin: the rest of the wizard is
@@ -52,11 +68,12 @@ def register(app):
         # PERMANENTLY LOCKED for both GET and POST. Previously only GET was blocked, so
         # an unauthenticated POST /setup with step=admin_user could create a brand-new
         # superadmin (or step=welcome could rewrite bind_host/port). Lock everything.
-        # The LOCK deliberately checks the DB row alone, not is_setup_complete().
+        # The LOCK checks the completed SetupState row alone — the same test is_setup_complete()
+        # makes, so the wizard's show-condition and its lock can no longer disagree. config.json's
+        # setup_complete is still written but neither of them reads it.
         #
-        # is_setup_complete() is (DB row AND config flag), which is right for deciding whether to
-        # SHOW the wizard — a restored or blank DB must be able to run setup again. It is wrong for
-        # the lock: load_config() falls back to DEFAULT_CONFIG on any JSONDecodeError/OSError, and
+        # is_setup_complete() used to be (DB row AND config flag), and the lock had to differ from
+        # it: load_config() falls back to DEFAULT_CONFIG on any JSONDecodeError/OSError, and
         # DEFAULT_CONFIG has setup_complete=False. So a config.json that is deleted, or merely
         # hand-edited into invalid JSON, reopened this UNAUTHENTICATED wizard on a fully configured
         # install — where step=welcome rewrites bind_host/port (turning a loopback-only panel into
@@ -109,13 +126,15 @@ def register(app):
                 # different route and the wizard never calls it, so this wrote whatever was
                 # posted — and an address the host cannot bind produces a panel that does not come
                 # back up, recoverable only with linuxgsm-panel-recover or by hand-editing
-                # config.json. bind_host_error is now the single rule both writers use.
+                # config.json. can_bind_address asks the kernel whether that address is really
+                # on this host: a well-formed IP that is not (10.0.0.51 on 10.0.0.50) passed the
+                # parse and failed with EADDRNOTAVAIL on the next start.
                 #
                 # nosec B104 - not a hardcoded bind: 0.0.0.0 is the DEFAULT offered when the
                 # operator leaves the field blank, and it is what a panel reached over a tailnet
                 # or a LAN has to listen on. The value is the operator's to set.
                 _wiz_bind = (request.form.get("bind_host") or "0.0.0.0").strip()  # nosec B104
-                _bind_err = bind_host_error(_wiz_bind)
+                _bind_err = bind_host_error(_wiz_bind, can_bind_address)
                 if _bind_err:
                     flash(_bind_err, "danger")
                     return redirect("/setup")
@@ -190,7 +209,7 @@ def register(app):
                     ssh_user = request.form.get("ssh_user", "root").strip()
                     ssh_port = _port_or(request.form.get("ssh_port"), None)
                     auth_method = request.form.get("auth_method", "key")
-                    credential = request.form.get("credential", "").strip()
+                    credential = wizard_credential(auth_method, request.form.get("credential", ""))
                     sudo_enabled = request.form.get("sudo_enabled") == "on"
                     lgsm_user = request.form.get("lgsm_user", "").strip()
 

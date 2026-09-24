@@ -27,8 +27,8 @@ try:
     check("ufw_deny_ip: non-IP rejected, runs nothing", _ok is False and not _so)
     _so.clear()
     _ok, _ = SO.ufw_deny_ip("10.0.0.5", tag="panel-test")
-    check("ufw_deny_ip: valid IP reaches ufw insert",
-          _ok is True and any("ufw insert 1 deny from 10.0.0.5" in c for c in _so))
+    check("ufw_deny_ip: valid IP reaches ufw prepend",
+          _ok is True and any("ufw prepend deny from 10.0.0.5" in c for c in _so))
     _so.clear()
     SO.ufw_deny_ip("10.0.0.6", tag="ev;il`x`")   # tag must be charset-stripped
     check("ufw_deny_ip: tag stripped of shell metacharacters",
@@ -399,7 +399,16 @@ _bk.BACKUP_DIR = _bktmp / "backups"; _bk.DATA_DIR = _bktmp; _bk.DB_PATH = _bktmp
 _bk.CONFIG_FILE = _bktmp / "config.json"; _bk.SECRET_FILE = _bktmp / "secret_key"; _bk.CRED_KEY_FILE = _bktmp / "cred_key"
 _dbc = _sq.connect(str(_bk.DB_PATH)); _dbc.execute("create table t(x)"); _dbc.commit(); _dbc.close()
 _bk.CONFIG_FILE.write_text("{}"); _bk.SECRET_FILE.write_text("s"); _bk.CRED_KEY_FILE.write_text("k")
-_bok, _bname = _bk.create_backup("manual")
+# A PLAIN archive, whatever this machine's own config says. The path constants above are the
+# backup module's; get_passphrase() reads panel.core.config's, which is the real data/config.json —
+# so on a host with backup encryption on this wrote a .enc and the tar.open below killed the suite
+# at import, and with the passphrase undecryptable create_backup refused and did the same.
+_orig_getpass_plain = _bk.get_passphrase
+_bk.get_passphrase = lambda: ""
+try:
+    _bok, _bname = _bk.create_backup("manual")
+finally:
+    _bk.get_passphrase = _orig_getpass_plain
 check("backup: create returns a valid name", _bok and bool(_bk._NAME_RE.match(_bname)))
 _blist = _bk.list_backups()
 check("backup: appears in the list as 'manual'",
@@ -496,6 +505,18 @@ try:
         check("backup/enc: restoring an encrypted archive succeeds end to end", _rok, str(_rmsg))
         check("backup/enc: ...and the message names the backup, not the temp file",
               _ename in str(_rmsg) and "/tmp" not in str(_rmsg), str(_rmsg))
+        # The REAL safety copy this restore wrote: encrypted, and it opens with the passphrase that
+        # was configured, which the message tells the operator.
+        _safety_names = [b["name"] for b in _bk.list_backups()
+                         if b["name"] in str(_rmsg) and "prerestore" in b["name"]]
+        _safety_p = _bk._safe_path(_safety_names[0]) if _safety_names else None
+        _kdf_probe_out = str(_pl.Path(_tf.mkdtemp()) / "safety.tar.gz")
+        check("backup/enc: the pre-restore safety copy is itself encrypted, not a plaintext key dump",
+              _safety_p is not None and _bk.is_encrypted_backup(_safety_p.name)
+              and not _bk._is_readable_tar(str(_safety_p))
+              and _bk._decrypt_archive(str(_safety_p), _kdf_probe_out, _bk_pass)[0]
+              and "passphrase this panel had before" in str(_rmsg),
+              "safety=%r msg=%r" % (_safety_names, _rmsg))
         # listdir must not raise when the restore failed: the dispatch swallows exceptions and
         # REMOVES the stage dir on its way out, so a broken restore leaves nothing to list — and
         # an abort here would hide this block's own verdict along with every later check.
@@ -512,8 +533,8 @@ try:
         # archive has been opened, so a mistyped passphrase costs nothing.
         _pre_calls = []
         _o_create = _bk.create_backup
-        _bk.create_backup = lambda kind="manual", encrypt=True: (
-            _pre_calls.append((kind, encrypt)), (True, "stub"))[1]
+        _bk.create_backup = lambda kind="manual", encrypt=True, passphrase=None: (
+            _pre_calls.append((kind, encrypt, passphrase)), (True, "stub"))[1]
         try:
             _wok, _wmsg = _bk.restore_backup(_ename, passphrase="not the passphrase")
         finally:
@@ -533,8 +554,8 @@ try:
         #    a few seconds". Losing cred_key that way makes every stored SSH credential unreadable.
         _sh2.rmtree(_stage_dir, ignore_errors=True)
         _pre_calls.clear()
-        _bk.create_backup = lambda kind="manual", encrypt=True: (
-            _pre_calls.append((kind, encrypt)), (False, "Backup failed — see panel logs."))[1]
+        _bk.create_backup = lambda kind="manual", encrypt=True, passphrase=None: (
+            _pre_calls.append((kind, encrypt, passphrase)), (False, "Backup failed — see panel logs."))[1]
         try:
             _fok, _fmsg = _bk.restore_backup(_ename, passphrase=_bk_pass)
         finally:
@@ -547,8 +568,8 @@ try:
         # The operator's override still works — refusing outright would strand exactly the person
         # who needs restore most, the one whose panel.db is already too damaged to snapshot.
         _pre_calls.clear()
-        _bk.create_backup = lambda kind="manual", encrypt=True: (
-            _pre_calls.append((kind, encrypt)), (False, "Backup failed — see panel logs."))[1]
+        _bk.create_backup = lambda kind="manual", encrypt=True, passphrase=None: (
+            _pre_calls.append((kind, encrypt, passphrase)), (False, "Backup failed — see panel logs."))[1]
         try:
             _sok, _smsg = _bk.restore_backup(_ename, passphrase=_bk_pass, skip_safety_backup=True)
         finally:
@@ -556,23 +577,67 @@ try:
         check("backup: ...unless the operator says to go ahead without one",
               _sok is True and _pre_calls == [] and "NO pre-restore safety copy" in _smsg,
               "%s %r" % (_smsg, _pre_calls))
-        # 2. It was encrypted with get_passphrase() — read from config.json under cred_key, BOTH
-        #    of which the next step overwrites from the archive being restored. Restoring an
-        #    archive written under a different passphrase (from before a set_passphrase, or from
-        #    another install — the case restore's own docstring calls out) left the safety net
-        #    locked by a key that no longer existed.
+        # 2. It was then written UNENCRYPTED, on the reasoning that the passphrase it would use is
+        #    about to be overwritten — but only the stored COPY is overwritten; the operator can
+        #    still type it, and restore_backup takes one typed in. Meanwhile each restore left a
+        #    permanent plaintext panel.db + secret_key + cred_key in the directory the operator
+        #    encrypts because it is synced off the box, and nothing ever pruned it.
         _sh2.rmtree(_stage_dir, ignore_errors=True)
         _pre_calls.clear()
-        _bk.create_backup = lambda kind="manual", encrypt=True: (
-            _pre_calls.append((kind, encrypt)), (True, "prerestore-stub"))[1]
+        _bk.create_backup = lambda kind="manual", encrypt=True, passphrase=None: (
+            _pre_calls.append((kind, encrypt, passphrase)), (True, "prerestore-stub"))[1]
+        # The archive opens with the TYPED passphrase; the configured one differs, and it is the
+        # configured one the safety copy must use — that is the passphrase the operator has now.
+        _bk.get_passphrase = lambda: "the configured passphrase"
         try:
             _eok3, _emsg3 = _bk.restore_backup(_ename, passphrase=_bk_pass)
         finally:
             _bk.create_backup = _o_create
-        check("backup: the pre-restore copy is written UNENCRYPTED, not under a key it is about to destroy",
-              _pre_calls == [("prerestore", False)], repr(_pre_calls))
+            _bk.get_passphrase = lambda: _bk_pass
+        check("backup: the pre-restore copy is encrypted under the passphrase configured BEFORE the restore",
+              _pre_calls == [("prerestore", True, "the configured passphrase")], repr(_pre_calls))
         check("backup: ...and the operator is told its name, since the panel is about to restart",
               _eok3 and "prerestore-stub" in _emsg3, str(_emsg3))
+        # A stored passphrase this host cannot decrypt falls back to the one the operator typed,
+        # and with neither the copy is REFUSED (the operator can still say go ahead without it)
+        # rather than quietly written in the clear.
+        _plain_ok, _plain_name = _o_create("manual", encrypt=False)
+
+        def _unreadable():
+            raise _bk.PassphraseUnreadable("stub")
+        for _typed, _want_calls, _label in (
+                ("typed-phrase", [("prerestore", True, "typed-phrase")], "uses the one the operator typed"),
+                (None, [], "refuses the copy rather than writing it in the clear")):
+            _sh2.rmtree(_stage_dir, ignore_errors=True)
+            _pre_calls.clear()
+            _bk.get_passphrase = _unreadable
+            _bk.create_backup = lambda kind="manual", encrypt=True, passphrase=None: (
+                _pre_calls.append((kind, encrypt, passphrase)), (True, "prerestore-stub.tar.gz.enc"))[1]
+            try:
+                _uok4, _umsg4 = _bk.restore_backup(_plain_name, passphrase=_typed)
+            finally:
+                _bk.create_backup = _o_create
+                _bk.get_passphrase = lambda: _bk_pass
+            # ...and when it used the TYPED one, the message says that one opens it — not "the
+            # passphrase this panel had before", which here is the one that could not be read.
+            check("backup: an undecryptable stored passphrase: the safety copy %s" % _label,
+                  _plain_ok and _pre_calls == _want_calls
+                  and (_typed is None or "the passphrase you entered for this restore" in _umsg4)
+                  and (_typed is not None or (_uok4 is False and "safety copy" in _umsg4)),
+                  "calls %r, result %r %r" % (_pre_calls, _uok4, _umsg4))
+        # Positive control: with encryption OFF the copy stays plain, as every backup does then.
+        _sh2.rmtree(_stage_dir, ignore_errors=True)
+        _pre_calls.clear()
+        _bk.get_passphrase = lambda: ""
+        _bk.create_backup = lambda kind="manual", encrypt=True, passphrase=None: (
+            _pre_calls.append((kind, encrypt, passphrase)), (True, "prerestore-stub"))[1]
+        try:
+            _bk.restore_backup(_plain_name)
+        finally:
+            _bk.create_backup = _o_create
+            _bk.get_passphrase = lambda: _bk_pass
+        check("backup: ...while with no passphrase configured the safety copy is plain, like every backup",
+              _pre_calls == [("prerestore", True, "")], repr(_pre_calls))
         # And create_backup honours that for real: a passphrase IS configured in this block.
         _uok, _uname = _bk.create_backup("prerestore", encrypt=False)
         check("backup: create_backup(encrypt=False) writes a plain archive despite a configured passphrase",
@@ -658,6 +723,16 @@ check("backup/enc: ...and so is an absurd r, an absurd p, and an oversized salt"
       and not _bk._decrypt_archive(_kdf_blob(salt_len=8192), _kdf_out, "pw")[0])
 check("backup/enc: the parameters this panel itself writes are still accepted",
       _bk._decrypt_archive(_kdf_blob(), _kdf_out, "pw")[1]
+      != "The encrypted backup's header asks for parameters this panel will not use.")
+# The old ceiling was n<=2**20, r<=32, p<=16: about 4 GiB and ~2000x the default derivation time,
+# run as one blocking call on the eventlet hub. Each parameter is refused at the old ceiling alone.
+for _kw in ({"n": 2 ** 20}, {"r": 32}, {"p": 16}, {"n": 2 ** 17}, {"r": 9}, {"p": 3}):
+    check("backup/enc: a costly scrypt header %r is refused before deriving" % (_kw,),
+          _bk._decrypt_archive(_kdf_blob(**_kw), _kdf_out, "pw")
+          == (False, "The encrypted backup's header asks for parameters this panel will not use."))
+# ...while one step above the defaults, the most the bound allows, is still accepted.
+check("backup/enc: the bound's own ceiling (n=2**16, r=8, p=2) is still accepted",
+      _bk._decrypt_archive(_kdf_blob(n=2 ** 16, r=8, p=2), _kdf_out, "pw")[1]
       != "The encrypted backup's header asks for parameters this panel will not use.")
 _sh2.rmtree(_kdf_tmp, ignore_errors=True)
 
@@ -765,9 +840,59 @@ try:
     _joined = " ".join(_cap7["cmds"])
     check("run_game_backup: runs LinuxGSM backup as the game user",
           _gok is True and _gskip is False and "sudo -u gm bash -c" in _joined and "./gmodserver backup" in _joined)
-    check("run_game_backup: prunes to keep N (keep=2 -> tail +3)", "tail -n +3" in _joined)
+    check("run_game_backup: prunes to keep N (keep=2 -> tail +3)", "tail -z -n +3" in _joined)
+    # The inner script arrives shell-quoted inside `bash -c`, so unquote it before looking.
+    import shlex as _bl_shlex                                                      # noqa: E402
+    _bl_inner = [_bl_shlex.split(c)[-1] for c in _cap7["cmds"]
+                 if c.startswith("sudo -u gm bash -c ")]
+    check("run_game_backup: clears stale locks through _stale_backup_lock_sweep",
+          any(_sm_game._stale_backup_lock_sweep("gm") in _i for _i in _bl_inner),
+          "the backup command no longer uses the sweep the checks below execute: %r"
+          % ([_i[:160] for _i in _bl_inner],))
 finally:
     _sm_core.run_command = _orig_run8
+
+# ── a backup.lock is orphaned only when no backup is running ─────────────────────────────────
+# Any lock older than five minutes was deleted, on a comment's word that the panel runs one game
+# backup at a time under "a lock in app.py". The lock is in panel_state and covers only the
+# panel's own backup runners; the control bar's and the bots' `backup` action, a host cron and the
+# terminal all run LinuxGSM's backup outside it. A backup still archiving after five minutes lost
+# its lock and got a second backup started beside it. The sweep is EXECUTED here, in a scratch
+# home with a ten-minute-old lock, with `pgrep` swapped for one that answers as told.
+import tempfile as _bl_tf                                                          # noqa: E402
+import shutil as _bl_sh                                                            # noqa: E402
+import subprocess as _bl_sp                                                        # noqa: E402
+import time as _bl_time                                                            # noqa: E402
+_bl_root = _bl_tf.mkdtemp(prefix="bklock-")
+_bl_res = {}
+try:
+    _bl_bin = os.path.join(_bl_root, "bin")
+    os.mkdir(_bl_bin)
+    for _bl_case, _bl_rc in (("tar running", 0), ("nothing running", 1)):
+        _bl_home = os.path.join(_bl_root, _bl_case.replace(" ", "-"))
+        os.makedirs(os.path.join(_bl_home, "lgsm", "lock"))
+        _bl_lock = os.path.join(_bl_home, "lgsm", "lock", "backup.lock")
+        open(_bl_lock, "w").close()
+        _bl_old = _bl_time.time() - 600
+        os.utime(_bl_lock, (_bl_old, _bl_old))
+        with open(os.path.join(_bl_bin, "pgrep"), "w") as _bl_f:
+            _bl_f.write("#!/bin/sh\nexit %d\n" % _bl_rc)
+        os.chmod(os.path.join(_bl_bin, "pgrep"), 0o755)
+        _bl_sp.run(["bash", "-c", _sm_game._stale_backup_lock_sweep("gm", home=_bl_home) + "true"],
+                   env=dict(os.environ, PATH=_bl_bin + os.pathsep + os.environ.get("PATH", "")),
+                   timeout=20, check=False)
+        _bl_res[_bl_case] = os.path.exists(_bl_lock)
+finally:
+    _bl_sh.rmtree(_bl_root, ignore_errors=True)
+check("run_game_backup: an old backup.lock is KEPT while a tar is running as the game user",
+      _bl_res.get("tar running") is True,
+      "deleted=%s — a backup started outside the panel's lock (control bar, bot, cron, terminal) "
+      "that is still archiving after five minutes gets a second backup beside it"
+      % (_bl_res.get("tar running") is False,))
+check("run_game_backup: ...and cleared when nothing is archiving (positive control)",
+      _bl_res.get("nothing running") is False,
+      "still present=%s — a crashed backup's lock would block every backup after it"
+      % (_bl_res.get("nothing running"),))
 
 # ── players-online guard: don't kick players for a backup unless forced ──
 _orig_run8b = _sm_core.run_command
@@ -1009,6 +1134,35 @@ try:
     _fresh = _sm_files.lgsm_get_values(None, "gm", "gmodserver", ["discordalert"])
     check("lgsm_get_values: a fresh instance with no cfg yet reads as empty, not unreadable",
           _fresh == {"discordalert": ""}, repr(_fresh))
+
+    # ── a file with no trailing newline must not fuse into the next one ─────────────────────
+    # The three cats had nothing between them, so common.cfg ending in `discordalert="on"` with
+    # no newline swallowed the instance's first line: discordwebhook vanished, the Alerts card
+    # showed it empty, and Save wrote "" over the real webhook. The REAL command runs here, against
+    # a scratch config dir standing in for /home/gm.
+    import subprocess as _subp9
+    import tempfile as _tmpf9
+    import shutil as _sh9
+    _cfg9 = _tmpf9.mkdtemp(prefix="unit-lgv-")
+    try:
+        _cd9 = os.path.join(_cfg9, "lgsm", "config-lgsm", "gmodserver")
+        os.makedirs(_cd9)
+        for _fn9, _txt9 in (("_default.cfg", 'discordalert="off"\ndiscordwebhook=""\nport="27015"'),
+                            ("common.cfg", 'discordalert="on"'),
+                            ("gmodserver.cfg", 'discordwebhook="https://x/REAL"\nport="27016"')):
+            with open(os.path.join(_cd9, _fn9), "w") as _fh9:
+                _fh9.write(_txt9)          # deliberately no trailing newline on any of them
+
+        def _run_on_scratch(s, c, **k):
+            _r9 = _subp9.run(["bash", "-c", c.split(" ", 3)[3].replace("/home/gm/", _cfg9 + "/")],
+                             capture_output=True, text=True)
+            return _r9.stdout, _r9.stderr, _r9.returncode
+        _sm_core.run_command = _run_on_scratch
+        _fz = _sm_files.lgsm_get_values(None, "gm", "gmodserver", ["discordalert", "discordwebhook", "port"])
+        eq("lgsm_get_values: a file without a trailing newline does not swallow the next file's first key",
+           _fz, {"discordalert": "on", "discordwebhook": "https://x/REAL", "port": "27016"})
+    finally:
+        _sh9.rmtree(_cfg9, ignore_errors=True)
 finally:
     _sm_core.run_command = _orig_run9
 
@@ -1016,6 +1170,55 @@ finally:
 eq("cron: split 5-field", _sm_cron._split_cron_line("0 3 * * * /home/gm/b.sh a"), ("0 3 * * *", "/home/gm/b.sh a"))
 eq("cron: split @shortcut", _sm_cron._split_cron_line("@reboot /home/gm/x start"), ("@reboot", "/home/gm/x start"))
 eq("cron: split rejects short line", _sm_cron._split_cron_line("0 3 * *"), (None, None))
+
+# ── prune_game_backups survives an oddly named file in the backup dir ─────────────────────────
+# It was `ls -1t … | tail | xargs -r rm -f`, and xargs parses quotes and blanks: one file with a
+# quote in its name stopped every later prune ("unmatched single quote"), so old backups piled up
+# until the disk filled. The REAL command runs here against a scratch dir standing in for
+# /home/gm/lgsm/backup, with the `sudo -u` prefix peeled off.
+import subprocess as _subp_pr
+import tempfile as _tmpf_pr
+import shutil as _sh_pr
+_pr_home = _tmpf_pr.mkdtemp(prefix="unit-prune-")
+_pr_saved = _sm_core.run_command
+try:
+    _pr_dir = os.path.join(_pr_home, "lgsm", "backup")
+    os.makedirs(_pr_dir)
+    # Oldest first. The two newest must survive keep=2; everything else must go, odd names too.
+    _pr_names = ["old-1.tar.gz", "x'quote.tar.zst", "sp ace.tar.gz", "gm-2026-01-04.tar.zst",
+                 "gm-2026-01-05.tar.gz"]
+    for _i, _n in enumerate(_pr_names):
+        _p = os.path.join(_pr_dir, _n)
+        open(_p, "w").write("x")
+        os.utime(_p, (1700000000 + _i * 100, 1700000000 + _i * 100))
+    open(os.path.join(_pr_dir, "notes.txt"), "w").write("not a backup")
+
+    def _pr_run(s, c, **k):
+        _r = _subp_pr.run(["bash", "-c", c.split(" ", 3)[3].replace("/home/gm/", _pr_home + "/")],
+                          capture_output=True, text=True)
+        return _r.stdout, _r.stderr, _r.returncode
+    _sm_core.run_command = _pr_run
+    _pr_ok = _sm_cron.prune_game_backups(None, "gm", keep=2)
+    eq("prune_game_backups: keeps the newest `keep` and removes the rest, quote and space included",
+       (_pr_ok, sorted(os.listdir(_pr_dir))),
+       (True, ["gm-2026-01-04.tar.zst", "gm-2026-01-05.tar.gz", "notes.txt"]))
+    # ~/lgsm/backup as a SYMLINK to a bigger disk — the only way to move it, the path is fixed.
+    # Plain `find` does not descend a symlinked starting point: it printed nothing, exited 0, and
+    # every prune deleted nothing while reporting success.
+    _pr_disk = os.path.join(_pr_home, "bigdisk")
+    os.makedirs(_pr_disk)
+    for _i, _n in enumerate(["gm-a.tar.gz", "gm-b.tar.zst", "gm-c.tar.gz", "gm-d.tar.zst"]):
+        _p = os.path.join(_pr_disk, _n)
+        open(_p, "w").write("x")
+        os.utime(_p, (1700000000 + _i * 100, 1700000000 + _i * 100))
+    _sh_pr.rmtree(_pr_dir)
+    os.symlink(_pr_disk, _pr_dir)
+    _pr_ok = _sm_cron.prune_game_backups(None, "gm", keep=2)
+    eq("prune_game_backups: prunes through a symlinked ~/lgsm/backup",
+       (_pr_ok, sorted(os.listdir(_pr_disk))), (True, ["gm-c.tar.gz", "gm-d.tar.zst"]))
+finally:
+    _sm_core.run_command = _pr_saved
+    _sh_pr.rmtree(_pr_home, ignore_errors=True)
 
 # ── anti-lockout: disabling public SSH must be refused with no Tailscale path back in ──
 # ...and the RESULT must be read back off the host. remote_set_public_ssh used to return True
@@ -2286,6 +2489,14 @@ check("backup: valid code accepted (ignores case + dashes)",
       _u.use_backup_code(_codes[0].upper().replace("-", "")))
 check("backup: remaining drops to 7 after use", _u.backup_codes_remaining == 7)
 check("backup: a used code can't be reused (one-time)", not _u.use_backup_code(_codes[0]))
+# The login only tries the backup codes for an entry shaped like one — a bcrypt per stored code —
+# so the shape test must accept every code it can be handed, in every form the compare accepts.
+from panel.security.auth import backup_code_shaped as _bcs
+check("backup: every generated code is backup-shaped, as shown, uppercased or undashed",
+      all(_bcs(c) and _bcs(c.upper()) and _bcs(c.replace("-", "")) and _bcs(" %s " % c)
+          for c in generate_backup_codes(50)))
+check("backup: a six-digit TOTP entry is not backup-shaped (no bcrypt for a typo)",
+      not any(_bcs(x) for x in ("123456", "000000", "", None, "abcde-fghj", "abcde-fghjkm")))
 
 # ── Password history ──────────────────────────────────────────
 # "Change your password" is satisfiable by putting back the one you just left, which is exactly

@@ -61,8 +61,9 @@ def _cleanup():
                   file=sys.stderr)
 
 
-# is_setup_complete() needs this flag AND a SetupState row (added below), or every
-# page — including /login — funnels into the setup wizard.
+# is_setup_complete() needs a completed SetupState row (added below), or every page — including
+# /login — funnels into the setup wizard. The flag is set too, as the wizard would, though nothing
+# reads it for that decision any more.
 cfg = load_config()
 cfg["setup_complete"] = True
 # "basic", not the default "strong". Strong binds a session to the client's IP and User-Agent, and

@@ -26,7 +26,7 @@
           <input type="text" id="s-domain" name="site_domain" maxlength="255"
                  class="form-control form-control-sm" value="{{ settings.site_domain }}"
                  placeholder="panel.example.com">
-          <div class="small text-secondary mt-1">Used for the TLS certificate and connect links.</div>
+          <div class="small text-secondary mt-1">The name on the self-signed certificate the panel creates when it has none (an existing certificate is not reissued), and a browser origin allowed to open the live console and terminal.</div>
 
           <label class="form-label small mb-1 mt-3" for="s-tagline">Login tagline</label>
           <input type="text" id="s-tagline" name="login_tagline" maxlength="200"

@@ -365,7 +365,7 @@ function _doPanelUpdate(){
     var beforeBoot=(before&&before.boot_id)||'';
     fetch(MOUNT+'/api/panel/update',{method:'POST'}).then(function(r){return r.json();}).then(function(d){
       if(!d.success){ msg.innerHTML='<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message||'Update failed'):(d.message||'Update failed'))+'</span>'; btn.disabled=false; return; }  // nosemgrep
-      watchPanelRestart(beforeBoot, msg, 'Update complete');
+      watchPanelRestart(beforeBoot, msg, 'Update complete', before, '');
     }).catch(function(){ msg.innerHTML='<span class="text-danger">Update request failed.</span>'; btn.disabled=false; });
   }).catch(function(){ msg.innerHTML='<span class="text-danger">Couldn\'t read the current version.</span>'; btn.disabled=false; });
 }
@@ -373,7 +373,25 @@ function _doPanelUpdate(){
 // Watch for the panel restarting after a detached update/branch-switch: stream the installer's
 // step log, and finish when boot_id flips (the new process is live), then reload. Shared by the
 // "Update now" and "Switch branch" flows since both back up → change code → restart.
-function watchPanelRestart(beforeBoot, msg, doneLabel){
+//
+// A restart is not a success. install.sh restarts the service on ROLLBACK too ("Health check
+// FAILED … Rolling back", then `svc restart`), so the restored old process flips boot_id exactly
+// like the new one — and a rolled-back update was announced "Update complete — reloading…", after
+// which the card offered the same update again. Success is the code having MOVED: a new commit for
+// an update, the target branch for a switch. (The log is a second witness only: a rollback also
+// restores data/, which replaces the file the log is read from with its pre-update snapshot.)
+function panelRestartOutcome(before, after, targetBranch, lines){
+  var rolled = (lines||[]).some(function(ln){ return /rolled back|rolling back/i.test(ln); });
+  if (rolled) return 'rolledback';
+  if (!after || !before) return 'unknown';
+  if (targetBranch) {
+    if (!after.branch) return 'unknown';
+    return after.branch === targetBranch ? 'moved' : 'unchanged';
+  }
+  if (!after.current_sha || !before.current_sha) return 'unknown';
+  return after.current_sha !== before.current_sha ? 'moved' : 'unchanged';
+}
+function watchPanelRestart(beforeBoot, msg, doneLabel, before, targetBranch){
   var tries=0, restarted=false, done=false;
   var iv=setInterval(function(){
     tries++;
@@ -383,11 +401,26 @@ function watchPanelRestart(beforeBoot, msg, doneLabel){
       if(!s){ if(!restarted){ restarted=true; msg.innerHTML='<span class="text-warning"><i class="bi bi-arrow-repeat"></i> Restarting the panel…</span>'; } return; }
       if(s.boot_id && beforeBoot && s.boot_id!==beforeBoot && !done){
         done=true; clearInterval(iv);
-        fetch(MOUNT+'/api/panel/update-log').then(function(r){ return r.ok?r.json():null; }).then(function(l){
+        var finish=function(l){
           if(l && l.lines) renderPuLog(l.lines);
-          msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+escapeHtml(doneLabel||'Done')+' — reloading…</span>';  // nosemgrep
-          setTimeout(function(){ location.reload(); }, 2500);
-        });
+          var outcome=panelRestartOutcome(before, s, targetBranch, l && l.lines);
+          if(outcome==='moved'){
+            msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+escapeHtml(doneLabel||'Done')+' — reloading…</span>';  // nosemgrep
+            setTimeout(function(){ location.reload(); }, 2500);
+          } else if(outcome==='unknown'){
+            msg.innerHTML='<span class="text-warning"><i class="bi bi-question-circle"></i> '+escapeHtml('The panel restarted, but its new version could not be read — reloading to check.')+'</span>';  // nosemgrep
+            setTimeout(function(){ location.reload(); }, 2500);
+          } else {
+            // Rolled back, or restarted on the code it had: the change did not apply. No reload —
+            // it would wipe the log above, which is the only account of why.
+            msg.innerHTML='<span class="text-danger"><i class="bi bi-x-circle"></i> '+escapeHtml('The panel restarted on its previous version, so the change did not apply — see the log above.')+'</span>';  // nosemgrep
+            var ub=document.getElementById('pu-update-btn'), sb=document.getElementById('pu-branch-switch');
+            if(ub) ub.disabled=false;
+            if(sb) sb.disabled=false;
+          }
+        };
+        fetch(MOUNT+'/api/panel/update-log').then(function(r){ return r.ok?r.json():null; })
+          .catch(function(){ return null; }).then(finish);
       }
     }).catch(function(){ if(!restarted){ restarted=true; msg.innerHTML='<span class="text-warning"><i class="bi bi-arrow-repeat"></i> Restarting the panel…</span>'; } });
     if(tries>120){ clearInterval(iv); msg.innerHTML='<span class="text-warning">Still working — reload the page to check.</span>'; }
@@ -424,7 +457,7 @@ function switchPanelBranch(){
         fetch(MOUNT+'/api/panel/switch-branch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({branch:branch})})
           .then(function(r){return r.json();}).then(function(d){
             if(!d.success){ msg.innerHTML='<span class="text-danger">'+(window.escapeHtml?escapeHtml(d.message||'Switch failed'):(d.message||'Switch failed'))+'</span>'; btn.disabled=false; return; }  // nosemgrep
-            watchPanelRestart(beforeBoot, msg, 'Switched to '+branch);
+            watchPanelRestart(beforeBoot, msg, 'Switched to '+branch, before, branch);
           }).catch(function(){ msg.innerHTML='<span class="text-danger">Switch request failed.</span>'; btn.disabled=false; });
       }).catch(function(){ msg.innerHTML='<span class="text-danger">Couldn\'t read the current version.</span>'; btn.disabled=false; });
     }});

@@ -222,7 +222,7 @@ def _valid_discord_webhook(url):
 
 # The only Bot API methods the panel calls — pinning `method` to this set makes the URL path
 # provably not user-controlled (add here to use a new one).
-_TG_METHODS = ("sendMessage", "getUpdates", "setMyCommands")
+_TG_METHODS = ("sendMessage", "getUpdates", "setMyCommands", "getMe")
 
 
 def _tg_api_url(token, method):
@@ -391,6 +391,23 @@ def telegram_get_updates(token, offset=None, timeout=25):
         return None
 
 
+def telegram_get_me(token):
+    """This bot's own @username (getMe), or None when it could not be read. Same SSRF-safe URL
+    builder as the other Telegram calls. Never raises."""
+    url = _tg_api_url(token, "getMe")
+    if not url:
+        return None
+    req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 - https, host-literal
+            data = json.loads(resp.read(200_000).decode("utf-8", "replace"))
+        name = (data.get("result") or {}).get("username") if data.get("ok") else None
+        return str(name) if name else None
+    except (urllib.error.URLError, OSError, ValueError, AttributeError):
+        _log.debug("telegram getMe failed", exc_info=True)
+        return None
+
+
 # The bot's command menu — what Telegram shows when you type '/'. Keep in sync with the commands
 # _handle_telegram_command actually handles.
 TG_COMMANDS = [
@@ -556,6 +573,14 @@ def discord_gateway_run(bot_token, on_message, _connect=None):
         ws = _connect()
         hello = json.loads(ws.recv())
         interval = float((hello.get("d") or {}).get("heartbeat_interval", 41250)) / 1000.0
+        # The 40s given to create_connection is ALSO the timeout of every later recv(), and a
+        # quiet guild sends nothing but heartbeat ACKs — the first of which comes a full interval
+        # (~41s) after IDENTIFY. So recv() timed out before the first heartbeat was even sent, the
+        # session "ended", and the watcher identified again ~56s later, around the clock: ~1500
+        # IDENTIFYs a day against Discord's 1000, which gets the bot token reset. recv() now has
+        # room for two intervals; a dead link is still caught by the unACKed-heartbeat check below,
+        # which closes the socket and so unblocks recv().
+        ws.settimeout(interval * 2 + 10)
         ws.send(json.dumps({"op": 2, "d": {
             "token": bot_token, "intents": _DISCORD_INTENTS,
             "properties": {"os": "linux", "browser": "linuxgsm-panel", "device": "linuxgsm-panel"},

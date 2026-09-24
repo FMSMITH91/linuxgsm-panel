@@ -70,8 +70,13 @@ class PrefixMiddleware:
 
         prefix = prefix.rstrip("/")
 
+        # Assigned even when it is "": this middleware alone decides the mount. With trust_proxy on,
+        # werkzeug's ProxyFix(x_prefix=1) runs first and copies X-Forwarded-Prefix into SCRIPT_NAME
+        # unvalidated; when _clean_prefix refused that same header and the mount was "/", nothing
+        # here overwrote it, so "//evil.example" survived as SCRIPT_NAME and every url_for() and
+        # window.MOUNT on the page pointed off-site.
+        environ["SCRIPT_NAME"] = prefix
         if prefix:
-            environ["SCRIPT_NAME"] = prefix
             path_info = environ.get("PATH_INFO", "")
             # "under the prefix" means the prefix itself or a path below it — the same rule the
             # outgoing Location rewrite below spells out, applied to the INCOMING path, where it

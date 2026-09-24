@@ -154,6 +154,10 @@ OS_UPDATE_LOG = "/run/panel-os-update.log"
 # (-o, --system), a path fragment (., ..), or empty. This one validator is what makes the home
 # directory safe to CONSTRUCT below rather than accept.
 USERNAME_RE = r"[A-Za-z_][A-Za-z0-9._-]{0,31}"
+# A LinuxGSM instance name lgsm-discover will report: the grammar ssh_manager's _SAFE_GAME_IDENT
+# accepts, so nothing the panel could use is dropped — and nothing that can carry a '|' or a line
+# break into the FOUND| protocol gets through.
+DISCOVER_INSTANCE_RE = r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}"
 HOME_ROOT = "/home"
 
 # The sshd drop-in the panel manages, and the snapshot it keeps beside it while changing the port.
@@ -262,8 +266,12 @@ SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
 FSTAB = "/etc/fstab"
 
 
-# npm packages the panel installs globally.
-NPM_GLOBAL_PACKAGES = ("gamedig", "npm")
+# npm packages the panel installs globally, and the spec each one installs as. Pinned to the major
+# the panel's query types are written for, and installed with --ignore-scripts, so root never runs
+# a package's install hook. "npm" itself is gone: `npm install -g npm` as root fetched the newest npm
+# and made root run it, and nothing in the panel asked for it.
+NPM_GLOBAL_PACKAGES = ("gamedig",)
+NPM_GLOBAL_SPECS = {"gamedig": "gamedig@5"}
 
 F2B_EVENT_RE = re.compile(r"\[[A-Za-z0-9._-]+\] (?:Ban|Found) [0-9a-fA-F:.]+")
 
@@ -474,13 +482,14 @@ WRITE_CONTENT = {
     "fail2ban-panel-jail": _F2B_JAIL_RULE,
 }
 
-# The one body the helper writes itself. Kept byte-identical to what the panel has always sent
-# (panel/ops/ssh_manager/hosts.py:_NODE_TOOLS_CRON) so an existing host sees no change.
+# The one body the helper writes itself. Byte-identical to what the panel sends remote hosts
+# (panel/ops/ssh_manager/hosts.py:_NODE_TOOLS_CRON) and to install.sh's copy — a unit gate holds the
+# three together. gamedig only, pinned to v5, --ignore-scripts: see the note on _NODE_TOOLS_CRON.
 NODE_TOOLS_CRON_BODY = (
-    "# LinuxGSM Panel - keep npm + gamedig current for player queries (managed by the panel).\n"
+    "# LinuxGSM Panel - keep gamedig current for player queries (managed by the panel).\n"
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
     "30 4 * * 0 root command -v npm >/dev/null 2>&1 && "
-    "npm install -g npm gamedig >/var/log/lgsm-node-tools.log 2>&1\n"
+    "npm install -g --ignore-scripts gamedig@5 >/var/log/lgsm-node-tools.log 2>&1\n"
 )
 
 
@@ -1445,7 +1454,8 @@ VERBS = {
 
     # ── Ubuntu Pro ──
     "pro-status": ([], lambda a: ["pro", "status", "--format", "json"], None),
-    "pro-attach": ([v_pro_token], lambda a: ["pro", "attach", a[0]], None),
+    # The token is not an argument: it arrives on stdin and goes to pro on ITS stdin. SECRET_STDIN.
+    "pro-attach": ([], lambda a: ["pro", "attach", "--attach-config", "-"], None),
     "pro-service": ([v_choice("enable", "disable"), v_choice(*PRO_SERVICES)],
                     lambda a: ["pro", a[0], a[1], "--assume-yes"], None),
     "pro-detach": ([], lambda a: ["pro", "detach", "--assume-yes"], None),
@@ -1465,8 +1475,9 @@ VERBS = {
     # interactive one that prints a login URL for the operator to open. Every flag is assembled
     # from a validated piece — routes are PARSED as networks, tags must be `tag:name`, and the auth
     # key is charset-checked and never echoed back, not even in a rejection.
-    "tailscale-up-key": ([v_authkey, v_yesno, v_routes, v_tags],
-                         lambda a: ts_up_argv(a[1], a[2], a[3], auth_key=a[0]), None),
+    # The auth key is not an argument either: stdin in, `--auth-key file:/dev/stdin` out.
+    "tailscale-up-key": ([v_yesno, v_routes, v_tags],
+                         lambda a: ts_up_argv(a[0], a[1], a[2], auth_key="file:/dev/stdin"), None),
     "tailscale-up-login": ([v_yesno, v_routes], lambda a: [], None),
 
     # ── host hardening ──
@@ -1475,7 +1486,8 @@ VERBS = {
     "sshd-set-directive": ([v_sshd_key, v_ident_free], lambda a: [], None),
     "create-swapfile": ([], lambda a: [], None),
     "npm-install-global": ([v_choice(*NPM_GLOBAL_PACKAGES)],
-                           lambda a: ["npm", "install", "-g", a[0]], None),
+                           lambda a: ["npm", "install", "-g", "--ignore-scripts",
+                                      NPM_GLOBAL_SPECS[a[0]]], None),
 
     # ── sshd port changes ──
     # Every step of the panel's port change, so the sequence that protects the operator — snapshot,
@@ -1619,9 +1631,12 @@ VERBS = {
         [v_cidr, v_portspec_bare, v_choice("tcp", "udp")],
         lambda a: [UFW, "delete", "allow", "from", a[0], "to", "any", "port", a[1], "proto", a[2]],
         None),
+    # `prepend`, never `insert 1`: ufw refuses an IPv6 rule at position 1 while any IPv4 rule
+    # exists (IPv4 rules are numbered first), so every IPv6 block failed. `prepend` tops the
+    # rule's own address family's list. Mirrors privileged.py — the parity gate compares them.
     "ufw-deny-ip": (
         [v_cidr, v_comment],
-        lambda a: [UFW, "insert", "1", "deny", "from", a[0]] + (["comment", a[1]] if a[1] else []),
+        lambda a: [UFW, "prepend", "deny", "from", a[0]] + (["comment", a[1]] if a[1] else []),
         None),
     "ufw-delete-deny-ip": (
         [v_cidr],
@@ -1990,13 +2005,111 @@ def _os_update_detached():
     os._exit(1)
 
 
+def _db_repair_account(db_path):
+    """The account the offline repair runs as: whoever owns the directory the database lives in.
+    None when that cannot be established, and the caller then does not repair at all.
+
+    Every file repair() makes is CREATED — the rebuilt database is a new file renamed over
+    panel.db, and so is a restored backup — so it must be created as the panel's account, or the
+    panel, started again straight afterwards, cannot open its own database. db_maintenance already
+    confines itself to that owner when it starts as root; the helper drops before exec anyway, so
+    root runs none of the script's code in a directory the panel user controls, and the boundary
+    does not rest on the script. The one thing that drop skips — db_maintenance's reclaim of files
+    an older, root-run repair left root-owned — the helper does itself (_db_repair_reclaim).
+
+    lstat, not stat: that directory entry is one the panel user can replace, and a symlink it put
+    there must not borrow the owner of whatever it points at — a root-owned target would hand the
+    repair back to root. A link ROOT made (an operator who moved data/ to another disk) is
+    followed, because then the directory it names is the panel's."""
+    d = os.path.dirname(db_path)
+    try:
+        st = os.lstat(d)
+        if stat.S_ISLNK(st.st_mode) and st.st_uid == 0:
+            st = os.stat(d)
+        return pwd.getpwuid(st.st_uid)
+    except (OSError, KeyError):
+        return None
+
+
+def _db_repair_as(account):
+    """subprocess.run keyword arguments that run the repair as `account` (see _db_repair_account).
+
+    Nothing for root: a panel whose data directory root owns runs as root, and its files are
+    root's. Otherwise the child drops to the account before exec, through _drop_to — which refuses
+    to report success in any state that is still root — and a drop that does not take raises in
+    the child, so subprocess.run raises here and the repair does not run as root instead."""
+    if account.pw_uid == 0:
+        return {}
+
+    def _become_owner():
+        if not _drop_to(account):
+            raise OSError("could not become %s" % account.pw_name)
+
+    return {"preexec_fn": _become_owner, "env": dict(os.environ, HOME=account.pw_dir)}
+
+
+def _db_reclaim_files(dir_fd, name, uid, gid):
+    """Hand the database's own files in `dir_fd` back to uid:gid. The same rule as
+    db_maintenance._reclaim_db_files, on the root side of the drop (see _db_repair_reclaim).
+
+    Each file is opened relative to the pinned directory with O_NOFOLLOW (a symlink is refused at
+    open) and O_NONBLOCK (a fifo cannot hang root), and fchown'd only if it is a regular file with
+    ONE link: a second link would mean the inode is also some other file, which must not change
+    hands."""
+    for member in (name, name + "-wal", name + "-shm", name + ".backup"):
+        try:
+            mfd = os.open(member, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                          dir_fd=dir_fd)
+        except OSError:
+            continue          # absent, a symlink, or unopenable: nothing to hand back
+        try:
+            mst = os.fstat(mfd)
+            if stat.S_ISREG(mst.st_mode) and mst.st_nlink == 1 and mst.st_uid != uid:
+                os.fchown(mfd, uid, gid)
+        except OSError:
+            pass              # best effort: the repair reports a database it still cannot open
+        finally:
+            os.close(mfd)
+
+
+def _db_repair_reclaim(db_path, account):
+    """ROOT, before the repair drops to `account`: give back the database files an earlier
+    root-run repair left root-owned.
+
+    db_maintenance does this itself when it starts as root, and then becomes the directory's owner.
+    Dropping here, before exec, means it never starts as root, so its reclaim never runs — and a
+    panel.db, -wal, -shm or .backup that is root:root 0600 is then one the repair cannot open: it
+    fails, or restores a backup beside a stale -wal the panel cannot read, and the panel comes back
+    up on a database it cannot open. So the helper does that reclaim here, and only that.
+
+    The directory is opened once and checked by DESCRIPTOR to still belong to `account`: the
+    directory entry is one the panel user can swap after _db_repair_account looked, and a link to
+    somebody else's directory must not get that directory's files handed to the panel user."""
+    if account.pw_uid == 0:
+        return                # a root-owned data directory: root keeps its files, nothing to give
+    try:
+        dfd = os.open(os.path.dirname(db_path), os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except OSError:
+        return
+    try:
+        if os.fstat(dfd).st_uid == account.pw_uid:
+            _db_reclaim_files(dfd, os.path.basename(db_path), account.pw_uid, account.pw_gid)
+    except OSError:
+        # Best effort: the repair still runs as the owner, and a file it cannot reclaim is reported
+        # by db_maintenance's own write check rather than raised from here.
+        pass
+    finally:
+        os.close(dfd)
+
+
 def _db_repair_detached(db_path):
     """The offline repair itself, in the grandchild. NEVER RETURNS — every path ends in os._exit.
 
     stop -> repair -> start, as three argv calls with no shell between them. The panel used to
     compose this as a `bash -c` string and hand it to `sudo systemd-run`; the string was built from
     the panel's OWN directory, so root ran the panel user's interpreter on the panel user's script.
-    Here the interpreter is the system one and the script is the root-owned copy beside this file.
+    Here the interpreter is the system one and the script is the root-owned copy beside this file,
+    and it runs as the database's owner, not as root (_db_repair_account says why).
     """
     os.setsid()
     if os.fork() != 0:
@@ -2017,11 +2130,19 @@ def _db_repair_detached(db_path):
                       None)
         if python is None:
             os._exit(1)
+        # No account, no repair — and no stop either, so the panel is left as it was. Running it as
+        # root instead is exactly what leaves the database unopenable.
+        account = _db_repair_account(db_path)
+        if account is None:
+            os._exit(1)
         # The panel is holding the database open; it has to go down before the file can be rebuilt.
         subprocess.run([systemctl, "stop", PANEL_UNIT],  # nosec B603 - fixed argv
                        check=False, timeout=120)
+        # The drop below means db_maintenance never starts as root, so its own reclaim of files a
+        # root-run repair left root-owned never runs; do it here, as root, before dropping.
+        _db_repair_reclaim(db_path, account)
         subprocess.run([python, DBM_PATH, "repair", db_path],  # nosec B603 - root-owned script
-                       check=False, timeout=900)
+                       check=False, timeout=900, **_db_repair_as(account))
     except Exception:
         # Swallowed so the finally below ALWAYS runs. This is a detached grandchild with no stderr
         # anyone reads, and the only thing that matters after a failed repair is that the panel is
@@ -2367,6 +2488,8 @@ def do_lgsm_discover(args, content):
     except OSError:
         return 0                       # no /home is not an error, just nothing to find
     for user in users:
+        if not re.fullmatch(USERNAME_RE, user):
+            continue                   # not an account name: it could not be a FOUND field either
         cfg_dir = os.path.join(HOME_ROOT, user, "lgsm", "config-lgsm")
         if not os.path.isdir(cfg_dir):
             continue
@@ -2407,6 +2530,12 @@ def _discover_user(user, cfg_dir, cron_lines, autostart):
         except OSError:
             return
         for inst in instances:
+            # The name is a file name the GAME account chose, and it lands in a line protocol the
+            # panel splits on newlines and '|'. `x\nFOUND|<any account>|pzserver|...` forged a
+            # second record naming another account, which the import route then trusted as "the
+            # scan found it". Only a name in the panel's own identifier grammar is reported.
+            if not re.fullmatch(DISCOVER_INSTANCE_RE, inst):
+                continue
             if not os.access(os.path.join(HOME_ROOT, user, inst), os.X_OK):
                 continue               # the launcher script is what makes it a real instance
             port = 0
@@ -3123,7 +3252,9 @@ def do_content_scan(args, content):
 
     A user name that would not survive v_username is skipped rather than reported: the caller acts
     on what comes back, and a directory in /home whose name is not a name we would ever pass to a
-    verb is not a candidate."""
+    verb is not a candidate. So is a name no account has, and one whose probe could not be asked
+    (see _probe_as): the panel then installs content afresh, which is the answer it had before the
+    scan found anything. Each user's games are looked at AS THAT USER, following its own links."""
     try:
         entries = sorted(os.listdir(HOME_ROOT))
     except OSError:
@@ -3132,16 +3263,94 @@ def do_content_scan(args, content):
     for entry in entries:
         try:
             user = v_username(entry)
+            paths = [(game, content_path(user, CONTENT_SUBDIR, game)) for game in args]
         except ValueError:
             continue
-        base = home_of(user) + "/" + CONTENT_SUBDIR
-        if not os.path.isdir(base):
-            continue
-        for game in args:
-            if os.path.isdir(os.path.join(base, game)):
-                hits.append("HIT|%s|%s" % (user, game))
+        found = _probe_as(user, lambda paths=paths: "\n".join(
+            game for game, path in paths if os.path.isdir(path)))
+        for game in (found or "").splitlines():
+            hits.append("HIT|%s|%s" % (user, game))
     sys.stdout.write("\n".join(hits))
     return 0
+
+
+def _probe_as(user, probe):
+    """Run probe() — which returns a str — AS `user`, with that account's own groups, in a forked
+    child, and return what it returned. None when no account has that name, when it is root, or
+    when the drop did not take: the question could not be asked, which is not the same answer as
+    "absent".
+
+    The three content probes used to answer as root with isdir / isfile / access, which FOLLOW
+    links, and everything below the home is the content account's to replace: `ln -s /root
+    ~/serverfiles` made content-game-present an existence oracle over /root. They were then made to
+    refuse a link at every step below the home, which closed that and broke the layout it is
+    normal to have — serverfiles moved to a bigger disk and linked back, which the game itself
+    reads through. The panel host then said "absent" where a remote (`test -d` through the link)
+    said "present", and the panel downloaded the content again, ran auto-install over it, dropped
+    it from the update cron, and reported it removed when nothing was.
+
+    Asked as the account, a link is followed with exactly that account's access, so the answer is
+    only ever something the account could learn for itself — the oracle is gone, and the link it
+    made on purpose still works. Groups are its own (initgroups), as its shell and the game have."""
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        return None
+    if pw.pw_uid == 0:
+        return None
+    rfd, wfd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            os.close(rfd)
+            if _drop_to(pw, own_groups=True):
+                data = probe().encode("utf-8")
+                while data:
+                    data = data[os.write(wfd, data):]
+                code = 0
+        finally:
+            # code is 0 only past a complete write; anything raised leaves it 1. os._exit, so the
+            # child never unwinds into the helper's own code with the account's identity.
+            os._exit(code)
+    os.close(wfd)
+    chunks = []
+    try:
+        while True:
+            chunk = os.read(rfd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        os.close(rfd)
+    _pid, status = os.waitpid(pid, 0)
+    if not (os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0):
+        return None
+    return b"".join(chunks).decode("utf-8", "replace")
+
+
+def _probe_rc(user, path, test):
+    """A probe verb's exit status: 0 when test(path) holds as `user`, 1 when it does not — and
+    when there is no such account, which then has nothing — and 2 when the question could not be
+    asked. content_present and _installed_content_lgsm_names read 2 as "unknown", not "absent"."""
+    try:
+        pwd.getpwnam(user)
+    except KeyError:
+        return 1
+    answer = _probe_as(user, lambda: "1" if test(path) else "0")
+    if answer is None:
+        return 2
+    return 0 if answer == "1" else 1
+
+
+def _is_exec_file(path):
+    """`test -x` as the rule was written for it: a regular file with any execute bit, links
+    followed (with whatever access the caller has)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode) and bool(st.st_mode & 0o111)
 
 
 def do_content_dir_create(args, content):
@@ -3175,14 +3384,16 @@ def do_content_dir_create(args, content):
 
 
 def do_content_game_present(args, content):
-    """Exit 0 when <content user>/serverfiles/<game> is a directory — `test -d`, without a shell."""
-    return 0 if os.path.isdir(content_path(args[0], CONTENT_SUBDIR, args[1])) else 1
+    """Exit 0 when <content user>/serverfiles/<game> is a directory — `test -d`, without a shell,
+    asked as the content account so a link it made is followed with its access only (_probe_as).
+    Exit 2 when the account could not be asked."""
+    return _probe_rc(args[0], content_path(args[0], CONTENT_SUBDIR, args[1]), os.path.isdir)
 
 
 def do_content_script_present(args, content):
-    """Exit 0 when <content user>/<script> is executable — `test -x`, without a shell."""
-    path = content_path(args[0], args[1])
-    return 0 if (os.path.isfile(path) and os.access(path, os.X_OK)) else 1
+    """Exit 0 when <content user>/<script> is an executable regular file — `test -x`, which any
+    execute bit satisfies — asked as the content account (_probe_as). Exit 2 when it could not be."""
+    return _probe_rc(args[0], content_path(args[0], args[1]), _is_exec_file)
 
 
 def _remove_at(parent_fd, name):
@@ -3560,6 +3771,20 @@ ACTIONS = {
 # that reads stdin without listing it here cannot silently start returning "".
 STDIN_VERBS = frozenset({"write-file", "content-cron-write"})
 
+# Argv verbs whose SECRET comes on stdin: {verb: (its validator, the text the tool reads)}.
+#
+# `pro-attach <token>` ran `pro attach <token>`, and `tailscale-up-key <key> ...` ran `tailscale up
+# --auth-key <key>`: the secret sat in this process's argv and the tool's, and /proc/<pid>/cmdline
+# is world-readable unless /proc is mounted hidepid — so any local account, a game-server user
+# included, could read a subscription token or a reusable tailnet key while the command ran. It is
+# read from stdin here, validated like the argument it was (and, like it, never echoed), and handed
+# to the tool on the tool's stdin. privileged.SECRET_STDIN is the panel's copy; a unit test keeps
+# the two producing the same bytes.
+SECRET_STDIN = {
+    "pro-attach": (v_pro_token, lambda secret: 'token: "%s"\n' % secret),
+    "tailscale-up-key": (v_authkey, lambda secret: secret + "\n"),
+}
+
 
 
 def validate(verb, args):
@@ -3615,6 +3840,14 @@ def main(argv):
         # the panel UI, so repeating attacker-controlled text here would be a reflection.
         print("panel-helper: %s" % e, file=sys.stderr)
         return 2
+    if verb in SECRET_STDIN:
+        check_secret, tool_doc = SECRET_STDIN[verb]
+        try:
+            stdin_text = tool_doc(check_secret(sys.stdin.read(4096).strip()))
+        except ValueError:
+            # Not echoed, not even in a rejection: it is a secret.
+            print("panel-helper: %s: the secret on stdin was rejected" % verb, file=sys.stderr)
+            return 2
     action = ACTIONS.get(verb)
     if action is not None:
         # The payload is this process's stdin. It is never an argument, so no amount of it can

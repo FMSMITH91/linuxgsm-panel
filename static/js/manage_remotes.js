@@ -174,7 +174,11 @@ function renderTailscaleStatus(remoteId, name, status) {
   var html = '';
 
   // Status badge
-  if (installed && running) {
+  if (status.unreachable) {
+    // The probe did not answer (the Tailscale and local transports return "" rather than raising),
+    // so "not installed" — with an Install button — would be a guess stated as a reading.
+    html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> ' + escapeHtml("Couldn't read Tailscale's state on this host — it did not answer. Try again once it is reachable.") + '</div>';  // nosemgrep
+  } else if (installed && running) {
     html += '<div class="alert alert-success py-2 small"><i class="bi bi-check-circle"></i> Tailscale is <strong>installed</strong> and <strong>running</strong> on ' + safe + '.</div>';
     // escapeHtml: tailscale_ip and dns_name are parsed out of `tailscale status --json` run on
     // the REMOTE host, so a compromised or hostile host picks these bytes. They land in innerHTML
@@ -263,8 +267,15 @@ function tailscaleUp(remoteId) {
           fetch(MOUNT + '/api/remote/' + remoteId + '/tailscale-finalize', {method:'POST'})
             .then(r => r.json()).then(f => {
               var ip = ((f.tailscale_ip || s.tailscale_ip || '').split(',')[0] || '').trim();
+              // Only when the finalize says it happened. The route answers ufw_allowed=false when UFW
+              // was inactive, absent or unreadable (so no allow was issued) — and a refused or
+              // unreachable finalize carries no such key at all — yet this sentence printed on all
+              // of them, about a firewall nobody had touched.
+              var ufwText = f.ufw_allowed === true
+                ? 'UFW now allows the tailscale0 interface.'
+                : 'UFW was not changed: it is inactive, not installed, or could not be read or updated.';
               if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! IP: <code>' + escapeHtml(ip) + '</code>'  // nosemgrep
-                + '<br><span class="small">UFW now allows the <code>tailscale0</code> interface.</span></span>'
+                + '<br><span class="small">' + escapeHtml(ufwText) + '</span></span>'
                 + '<div class="mt-2"><button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '>'
                 + '<i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button></div>';
             })
@@ -416,7 +427,7 @@ function showBootstrap(remoteId, name) {
         + '<div class="alert alert-warning small py-2 mb-2"><i class="bi bi-exclamation-triangle"></i> Runs a full apt upgrade and (if enabled) reboots the server. This can take 5-15 minutes — you can watch progress live below.</div>'
         + '<button class="btn btn-primary btn-sm" id="bootstrap-run-btn"' + _da('runBootstrap', [remoteId]) + '><i class="bi bi-rocket-takeoff"></i> Prepare &amp; Secure Server</button>'
     + '<div id="bootstrap-progress-wrap" class="mt-3" style="display:none;">'
-        + '<div class="d-flex justify-content-between small mb-1"><span id="bootstrap-step" class="text-info">Starting…</span><span id="bootstrap-pct" class="text-secondary"></span></div>'
+        + '<div class="d-flex justify-content-between small mb-1"><span id="bootstrap-step" class="text-info" data-remote="' + escapeHtml(String(remoteId)) + '">Starting…</span><span id="bootstrap-pct" class="text-secondary"></span></div>'
         + '<div class="progress" style="height:18px;"><div id="bootstrap-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div></div>'
         + '<div id="bootstrap-elapsed" class="text-secondary" style="font-size:.7rem;margin-top:4px;"></div>'
       + '</div>'
@@ -465,11 +476,15 @@ function runBootstrap(remoteId) {
 
 function pollBootstrap(remoteId, btn) {
   if (_bootstrapPoll) clearInterval(_bootstrapPoll);
+  var handle = null;
+  // Stops THIS poll only. A fetch already in flight when the next pollBootstrap() started lands
+  // after _bootstrapPoll names the new interval, and clearing _bootstrapPoll from here would have
+  // stopped that one instead.
+  function stop() { clearInterval(handle); if (_bootstrapPoll === handle) _bootstrapPoll = null; }
   function tick() {
     fetch(MOUNT + '/api/remote/' + remoteId + '/bootstrap-status')  // nosemgrep
       .then(r => r.json())
       .then(s => {
-        if (s.status === 'none') return;
         var stepEl = document.getElementById('bootstrap-step');
         var barEl = document.getElementById('bootstrap-bar');
         var pctEl = document.getElementById('bootstrap-pct');
@@ -481,7 +496,21 @@ function pollBootstrap(remoteId, btn) {
         // poll then hit /api/remote/<id>/bootstrap-status every 2.5s, bailed here every time, and
         // ran until the page was closed. watchBootstrap keeps the card's own copy alive, so
         // nothing is lost by stopping this one.
-        if (!stepEl) { clearInterval(_bootstrapPoll); _bootstrapPoll = null; return; }
+        //
+        // And the node being THERE is not enough: Prepare on another host builds the same ids, so
+        // this poll found them and painted host A's steps, log and "Server prepared & secured!"
+        // into the modal titled "Prepare & Secure: B" — over B's own refusal, when B's start was
+        // refused. The modal carries the host it was opened for.
+        if (!stepEl || stepEl.getAttribute('data-remote') !== String(remoteId)) { stop(); return; }
+        // "none" is the job being gone — the panel restarted, or a finished job expired. It was
+        // checked ABOVE the teardown and returned without stopping, so the poll ran for the life
+        // of the page and the modal sat on its last step with the button stuck at "Running…".
+        if (s.status === 'none') {
+          stop();
+          stepEl.innerHTML = '<span class="text-warning">' + escapeHtml('The panel is no longer tracking this job — it may have restarted. Check the host before running it again.') + '</span>';  // nosemgrep
+          if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-rocket-takeoff"></i> Prepare &amp; Secure Server'; }
+          return;
+        }
         pctEl.textContent = (s.total ? (s.step + '/' + s.total) : '') + '  ' + s.percent + '%';
         barEl.style.width = s.percent + '%';
         elEl.textContent = 'Elapsed: ' + s.elapsed + 's';
@@ -493,13 +522,13 @@ function pollBootstrap(remoteId, btn) {
           barEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
           stepEl.innerHTML = '<i class="bi bi-arrow-clockwise"></i> ' + escapeHtml(s.step_name);  // nosemgrep
         } else if (s.status === 'done') {
-          clearInterval(_bootstrapPoll); _bootstrapPoll = null;
+          stop();
           barEl.className = 'progress-bar bg-success'; barEl.style.width = '100%';
           stepEl.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + escapeHtml(s.message || 'Server prepared & secured!');  // nosemgrep
           pctEl.textContent = '100%';
           if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-check2"></i> Done — Run Again'; }
         } else if (s.status === 'failed') {
-          clearInterval(_bootstrapPoll); _bootstrapPoll = null;
+          stop();
           barEl.className = 'progress-bar bg-danger';
           stepEl.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + escapeHtml(s.message || 'Bootstrap failed');  // nosemgrep
           if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-rocket-takeoff"></i> Retry'; }
@@ -509,8 +538,8 @@ function pollBootstrap(remoteId, btn) {
       })
       .catch(function(){ /* transient poll error, keep going */ });
   }
+  handle = _bootstrapPoll = setInterval(tick, 2500);
   tick();
-  _bootstrapPoll = setInterval(tick, 2500);
 }
 
 // ── Modal helpers ──────────────────────────────────────────

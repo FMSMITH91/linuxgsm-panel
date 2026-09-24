@@ -162,9 +162,18 @@ jobs:
           elif [ -d "${HOME}/linuxgsm-panel" ]; then
               echo "Per-user install at ${HOME}/linuxgsm-panel"
               cd "${HOME}/linuxgsm-panel"
-              git fetch --quiet origin main
-              git checkout origin/main -- install.sh
-              PANEL_NO_UPGRADE=1 bash install.sh
+              # The same pin as the system branch. This took install.sh from origin/main and ran
+              # it unpinned, so it installed whatever main's tip was when the SSH session ran —
+              # including a later push whose CI had not finished, or had failed — under the deploy
+              # of a commit that passed. It runs the installer this job shipped (the verified
+              # commit's), pinned to that commit; install.sh never moves a checkout backwards to
+              # the pin, so a late run of an old commit leaves a newer host where it is — and the
+              # older installer written over the checkout's own is then put back from HEAD.
+              printf '%s' "${INSTALLER_B64}" | base64 -d > install.sh
+              rc=0
+              PANEL_NO_UPGRADE=1 PANEL_UPDATE_REF="${PANEL_UPDATE_REF}" bash install.sh || rc=$?
+              git checkout -q HEAD -- install.sh 2>/dev/null || true
+              exit "${rc}"
           else
               echo "No panel install found on this host, so there was nothing to deploy to." >&2
               echo "  - the linuxgsm-panel unit reported WorkingDirectory='${PD}'" >&2
