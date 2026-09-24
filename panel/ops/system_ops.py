@@ -281,13 +281,42 @@ def _check_sudo(force=False):
 
 # ─── UFW ──────────────────────────────────────────────────────
 
+# `ufw status` runs through gettext, and its Status line is translated whole: a Dutch host prints
+# `Status: actief`. Testing for the English word read that host's LIVE firewall as inactive — the
+# badge said "Inactive", and the lockout guard (which skips every rule when the firewall is off)
+# let the last SSH rule be deleted. What ufw never translates is the rule rows' actions and the
+# dashed underline of its rules header, and it prints those ONLY while the firewall is loaded
+# (backend_iptables.get_status returns the bare inactive line before listing anything).
+_UFW_RULES_UNDERLINE_RE = re.compile(r"(?m)^[ \t]*-+[ \t]+-+[ \t]+-+[ \t]*(?=\r?\n|\Z)")
+
+
+def ufw_status_active(status_out):
+    """True when `ufw status` (any format) reports a loaded firewall, in any locale.
+
+    The English Status value answers directly. A translated one answers through the rules listing:
+    present means active. A translated firewall that is active with NO rules is indistinguishable
+    from an inactive one and reads False — there is nothing on it to protect or parse. A rule
+    comment cannot forge either answer: the Status test reads only the line's value, and a comment
+    shares its line with the rule, so it can never be a line of dashes on its own."""
+    text = status_out or ""
+    for line in text.splitlines():
+        if line.strip().lower().startswith("status:"):
+            value = line.split(":", 1)[1].strip().lower()
+            if value == "active":
+                return True
+            if value == "inactive":
+                return False
+            break
+    return bool(_UFW_RULES_UNDERLINE_RE.search(text))
+
+
 def ufw_status():
     """Get UFW status and rules."""
     out, err, rc = _run_verb("ufw-status", ["verbose"], timeout=15)
     if rc != 0:
         return {"enabled": False, "status_text": "not_installed" if "not found" in err or "not installed" in err else "inactive", "rules": []}
 
-    enabled = "Status: active" in out
+    enabled = ufw_status_active(out)
     status_text = "active" if enabled else "inactive"
     rules = []
 
@@ -1877,8 +1906,9 @@ def ufw_blocked_ips():
     # re-blocked and audited as applied, every hour, forever, with no packet being dropped.
     # An inactive firewall cannot answer which IPs are blocked, so it is the None case — which
     # makes monitoring's existing `if blocked is None` skip fire. ufw_status() draws the same
-    # distinction from the same text ("Status: active" in out).
-    if "Status: inactive" in (out or ""):
+    # distinction from the same text (ufw_status_active, which also reads a translated Status
+    # line — a Dutch `Status: inactief` is not the English substring this used to look for).
+    if not ufw_status_active(out):
         _log.debug("ufw_blocked_ips: UFW is inactive — its rule list is not readable")
         return None
     blocked = {}

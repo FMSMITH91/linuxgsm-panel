@@ -2220,7 +2220,7 @@ def remote_public_ssh_status(server, panel_port=None):
             res["panel_port"] = int(panel_port)
             res["panel_port_open"] = False
         return res
-    active = "Status: active" in (out or "")
+    active = firewall._ufw_is_active(out)
     mode = "off"
     first_found = False
     panel_open = False

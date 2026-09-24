@@ -4605,6 +4605,17 @@ try:
           _inactive6 is None,
           "answered %r — autoblock would re-issue every block against a firewall that is off"
           % (_inactive6,))
+    # ...in any language. ufw translates the Status line whole (Dutch: `Status: inactief`), so the
+    # English substring test missed it and the inactive firewall read as "nothing blocked" again.
+    _so6._run_verb = lambda *a, **k: ("Status: inactief\n", "", 0)
+    _inactive6 = _so6.ufw_blocked_ips()
+    check("firewall: a TRANSLATED inactive firewall is unreadable (None) too",
+          _inactive6 is None, "answered %r" % (_inactive6,))
+    _so6._run_verb = lambda *a, **k: (_UFW_SAMPLE6.replace("Status: active", "Status: actief")
+                                      .replace("From\n", "From\n--                         ------      ----\n"), "", 0)
+    _read6 = _so6.ufw_blocked_ips()
+    check("firewall: ...while a translated ACTIVE one still parses its rules (positive control)",
+          _read6 == {"203.0.113.9": "panel-autoblock"}, "parsed %r" % (_read6,))
 finally:
     _so6._run_verb = _real_runverb6
 

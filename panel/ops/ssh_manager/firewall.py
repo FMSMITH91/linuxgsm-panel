@@ -361,11 +361,13 @@ def _ufw_is_active(status_out):
 
     Was `ufw status | grep -q active && echo ACTIVE || echo INACTIVE`, read back with
     `"INACTIVE" not in out` — which needed a comment explaining that ACTIVE is a substring of
-    INACTIVE. Reading the Status: line directly needs no such warning."""
-    for line in (status_out or "").splitlines():
-        if line.strip().lower().startswith("status:"):
-            return line.split(":", 1)[1].strip().lower() == "active"
-    return False
+    INACTIVE. Reading the Status: line directly needs no such warning.
+
+    ...in English. The line is translated (`Status: actief`), so the reading is shared with the
+    panel host's own ufw code and falls back to the untranslated rules listing — see
+    system_ops.ufw_status_active."""
+    from panel.ops import system_ops as _so
+    return _so.ufw_status_active(status_out)
 
 
 # Lines that mean "this was refused for want of privilege", not "the host is down". Anchored to

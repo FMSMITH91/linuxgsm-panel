@@ -1578,6 +1578,26 @@ try:
     check("ufw status: a rule COMMENT saying 'not installed' does not erase the firewall",
           _st["installed"] is True and _st["enabled"] is True and len(_st["rules"]) == 2,
           "installed=%s enabled=%s rules=%d" % (_st["installed"], _st["enabled"], len(_st["rules"])))
+    # ufw's Status line is gettext-translated whole — a Dutch host prints `Status: actief` — while
+    # the rule rows and the header's dashed underline never are. Comparing the value to "active"
+    # read that LIVE firewall as off: the badge said Inactive, and the lockout guard skips every
+    # rule when the firewall is off, so the host's only SSH rule got a plain delete ×.
+    _sm_core.run_privileged = lambda *a, **k: (
+        "Status: actief\n\n"
+        "     Naar                       Actie       Van\n"
+        "     ----                       -----       ---\n"
+        "[ 1] 22/tcp                     ALLOW IN    Anywhere\n", "", 0)
+    _st = _sm_firewall.remote_ufw_status(NS(port=22))
+    _ssh_g = [g for g in _st.get("groups", []) if g.get("port_num") == "22"]
+    check("ufw status: a translated Status line on a LIVE firewall still reads as active",
+          _st.get("enabled") is True, repr(_st)[:200])
+    check("ufw status: ...so its only SSH rule is still protected from deletion",
+          _ssh_g and _ssh_g[0].get("protected") is True,
+          "groups %r — the last way in is deletable" % (_st.get("groups"),))
+    _sm_core.run_privileged = lambda *a, **k: ("Status: inactief\n", "", 0)
+    _st = _sm_firewall.remote_ufw_status(NS(port=22))
+    check("ufw status: ...while a translated INACTIVE firewall (no rule listing) is inactive "
+          "(positive control)", _st.get("installed") is True and _st.get("enabled") is False, repr(_st))
     # Positive control: the tool genuinely being absent is rc 127, and still reads as absent —
     # note the helper's own stderr for that case also contains "not installed".
     _sm_core.run_privileged = lambda *a, **k: (
