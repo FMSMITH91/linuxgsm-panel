@@ -857,6 +857,26 @@ finally:
     _sm_core.run_command = _orig_pro_run
     _sm_hosts._pro_status_cache.clear()
 
+# ── pro_detach: a failure that names the verb is not a detach ────────────────────────────────
+# `"detach" in blob` accepted every helper and sudo failure, since each names `pro-detach`.
+_pd_saved = _sm_core.run_privileged
+try:
+    for _pd_ans in (("panel-helper: pro-detach timed out", "", 124),
+                    ("sudo: Sorry, user panel is not allowed to execute '/usr/local/sbin/panel-helper "
+                     "pro-detach' as root", "", 1),
+                    ("panel-helper: unknown verb 'pro-detach'", "", 2)):
+        _sm_core.run_privileged = lambda s, v, a=(), _x=_pd_ans, **k: _x
+        _pd_ok, _pd_msg = _sm_hosts.pro_detach(NS(id=9122, host="h"))
+        check("pro_detach: %r is a failure, not 'Detached'" % _pd_ans[0][:40],
+              _pd_ok is False, "ok=%r msg=%r" % (_pd_ok, _pd_msg))
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("This machine is now detached.", "", 0)
+    _pd_ok, _ = _sm_hosts.pro_detach(NS(id=9122, host="h"))
+    check("pro_detach: ...while pro's own success still reads as detached (positive control)",
+          _pd_ok is True)
+finally:
+    _sm_core.run_privileged = _pd_saved
+    _sm_hosts._pro_status_cache.clear()
+
 # ── host_specs is cached (static hardware — don't re-run lscpu every page load) ──
 _hs_n = {"n": 0}
 _orig_hs_run = _sm_core.run_command
@@ -1012,6 +1032,65 @@ try:
           _bad["ok"] is False and _bad["count"] == 0)
 finally:
     SO._run = _sv_run
+
+# ── the OS-update watch: a status read that did not answer is not the update stopping ────────
+# Tailscale SSH and the panel host return ("", ..., -1) rather than raising, so an unanswered read
+# came back {done: False, log: "", running: False} — `running` from a pgrep that did not answer
+# either. The popup wiped apt's output and, three polls later, declared an update still unpacking
+# "ended without a completion marker".
+_osu_saved = _sm_core.run_privileged
+try:
+    def _osu_stub(log_ans, alive_rc):
+        return lambda s, verb, args=(), **k: (
+            log_ans if verb == "os-update-log" else ("", "", alive_rc) if verb == "apt-any-running"
+            else ("", "", 0))
+    _sm_core.run_privileged = _osu_stub(("", "ssh: connect timed out", -1), -1)
+    _osu = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: an unread log is flagged unread, not an empty running-less log",
+          _osu.get("unread") is True and _osu["done"] is False and _osu["running"] is None,
+          repr(_osu))
+    _sm_core.run_privileged = _osu_stub(("Unpacking libc6 ...\n", "", 0), -1)
+    _osu = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: an unanswered apt probe is running=None, not 'apt has stopped'",
+          _osu["running"] is None and not _osu.get("unread") and "Unpacking" in _osu["log"],
+          repr(_osu))
+    # Positive controls: the two real answers still read as themselves.
+    _sm_core.run_privileged = _osu_stub(("Unpacking libc6 ...\n", "", 0), 1)
+    _osu_a = _sm_hosts.remote_os_update_status(NS(id=9120))
+    _sm_core.run_privileged = _osu_stub(("done\n%s0\n" % _sm_hosts._OS_UPDATE_DONE, "", 0), 1)
+    _osu_b = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: ...while pgrep's 'no match' is running=False and a sentinel is done "
+          "(positive control)",
+          _osu_a["running"] is False and _osu_b["done"] is True and _osu_b["rc"] == 0,
+          "%r %r" % (_osu_a, _osu_b))
+finally:
+    _sm_core.run_privileged = _osu_saved
+
+# ── the raw security log: two unanswered reads are not an empty log ─────────────────────────
+# Joined to "", they were shown as "(log is empty)" — no SSH or ban activity — on the card that
+# exists to show attacks, about a host that never answered.
+_sl_saved = _sm_core.run_privileged
+try:
+    def _sl_stub(answers):
+        return lambda s, verb, args=(), **k: answers.get((verb, list(args)[0]), ("", "", 0))
+    _sm_core.run_privileged = _sl_stub({("journal", "ssh"): ("", "timed out", -1),
+                                        ("log-tail", "auth"): ("", "timed out", -1)})
+    _sl_a = _sm_hosts.remote_security_log(NS(id=9121), "ssh")
+    _sm_core.run_privileged = _sl_stub({("log-tail", "fail2ban"): ("", "timed out", -1),
+                                        ("journal", "fail2ban"): ("", "timed out", -1)})
+    _sl_b = _sm_hosts.remote_security_log(NS(id=9121), "fail2ban")
+    check("security log: reads that never answered are None (unknown), not an empty log",
+          _sl_a is None and _sl_b is None, "ssh=%r fail2ban=%r" % (_sl_a, _sl_b))
+    # Positive control: a journal that ANSWERED with nothing, and no auth.log, is a real empty log.
+    _sm_core.run_privileged = _sl_stub({("journal", "ssh"): ("", "", 0),
+                                        ("log-tail", "auth"): ("", "tail: No such file", 1)})
+    _sl_c = _sm_hosts.remote_security_log(NS(id=9121), "ssh")
+    _sm_core.run_privileged = _sl_stub({("log-tail", "fail2ban"): ("Ban 203.0.113.9\n", "", 0)})
+    _sl_d = _sm_hosts.remote_security_log(NS(id=9121), "fail2ban")
+    check("security log: ...while an answered empty log is '' and a real one is its text "
+          "(positive control)", _sl_c == "" and _sl_d == "Ban 203.0.113.9", "%r %r" % (_sl_c, _sl_d))
+finally:
+    _sm_core.run_privileged = _sl_saved
 
 # ── The snapshot the login banner and the OS Updates card read ────────────────────────
 # Both used to show nothing until someone pressed "Check": the panel knew what each host had
@@ -2625,7 +2704,10 @@ try:
         if verb == "sshd-socket-active":
             return (_cs["socket"], "", 0 if _cs["socket"] == "active" else 3)
         if verb == "listening-sockets":
-            return ("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n", "", 0)
+            # 2222 listens only once sshd has been restarted onto it: change_ssh_port now refuses a
+            # new port something ALREADY listens on, which is what a static answer would say.
+            return (("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n" if _cs.get("up") else "")
+                    + "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n", "", 0)
         if verb == "sshd-current-ports":
             return ("Port 22\n", "", 0)
         return ("", "", 0)
@@ -2633,7 +2715,7 @@ try:
     _sm_core.run_privileged = _cs_priv
     _sm_core.write_root_file = lambda server, target, content, timeout=15: (
         _cs["writes"].append((target, content)), ("", "", 0))[1]
-    _sm_core._restart_sshd = lambda *a, **k: ("", "", 0)
+    _sm_core._restart_sshd = lambda *a, **k: (_cs.__setitem__("up", True), ("", "", 0))[1]
     _sm_core.is_local_server = lambda s: True
     _sm_hosts.remote_ufw_open_port = lambda *a, **k: (True, "")
     _sm_hosts.remote_ufw_close_port = lambda *a, **k: (True, "")
@@ -2655,7 +2737,7 @@ try:
     check("ssh.socket: ...and the socket snapshot is the one discarded on success",
           any(v == "sshd-socket-discard" for v, _a in _cs["verbs"]))
 
-    _cs["writes"], _cs["verbs"], _cs["socket"] = [], [], "inactive"
+    _cs["writes"], _cs["verbs"], _cs["socket"], _cs["up"] = [], [], "inactive", False
     _ok2, _msg2 = _sm_hosts.change_ssh_port(NS(port=22), 2222)
     _t2 = [t for t, _c in _cs["writes"]]
     check("ssh.socket: a NON socket-activated host still gets the sshd_config drop-in",
@@ -2691,13 +2773,15 @@ try:
         if verb == "sshd-effective-config":
             return (_sp["effective"], "", 0)
         if verb == "listening-sockets":
-            return ("LISTEN 0 128 0.0.0.0:2022 0.0.0.0:*\n", "", 0)
+            # 2022 appears once sshd is restarted onto it (a new port must be free beforehand).
+            return ("LISTEN 0 128 0.0.0.0:2022 0.0.0.0:*\n" if _sp.get("up")
+                    else "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n", "", 0)
         return ("", "", 0)
 
     _sm_core.run_privileged = _sp_priv
     _sm_core.write_root_file = lambda server, target, content, timeout=15: (
         _sp["writes"].append((target, content)), ("", "", 0))[1]
-    _sm_core._restart_sshd = lambda *a, **k: ("", "", 0)
+    _sm_core._restart_sshd = lambda *a, **k: (_sp.__setitem__("up", True), ("", "", 0))[1]
     _sm_core.is_local_server = lambda s: True
     _sm_hosts.remote_ufw_open_port = lambda *a, **k: (True, "")
     _sm_hosts.remote_ufw_close_port = lambda *a, **k: (True, "")
@@ -2714,7 +2798,7 @@ try:
           "ListenStream=0.0.0.0:2022\n" in _sp_body, repr(_sp_body))
     # POSITIVE CONTROL: the sshd_config path is authoritative there, so a STALE stored port must
     # NOT be unioned in — that would re-open a port the operator had deliberately closed.
-    _sp["socket"], _sp["effective"], _sp["writes"] = "inactive", "port 2222\n", []
+    _sp["socket"], _sp["effective"], _sp["writes"], _sp["up"] = "inactive", "port 2222\n", [], False
     _ok_np, _msg_np = _sm_hosts.change_ssh_port(NS(port=22), 2022)
     _np_body = _sp["writes"][0][1] if _sp["writes"] else ""
     check("ssh port: a NON socket-activated host still takes its ports from sshd -T alone",
@@ -2874,15 +2958,16 @@ try:
             return ("inactive", "", 3)
         if verb == "listening-sockets":
             # Both ports, so the verification step is not what most of this block is testing.
+            # 2222 only once sshd is restarted onto it: a new port has to be free beforehand.
             return (_lb.get("listening") or
                     ("LISTEN 0 128 127.0.0.1:22 0.0.0.0:*\n"
                      "LISTEN 0 128 10.0.0.5:22 0.0.0.0:*\n"
-                     "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n"), "", 0)
+                     + ("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\n" if _lb.get("up") else "")), "", 0)
         return ("", "", 0)
 
     _sm_core.run_privileged = _lb_priv
     _sm_core.write_root_file = lambda *a, **k: (_lb["touched"].append("WRITE"), ("", "", 0))[1]
-    _sm_core._restart_sshd = lambda *a, **k: ("", "", 0)
+    _sm_core._restart_sshd = lambda *a, **k: (_lb.__setitem__("up", True), ("", "", 0))[1]
     _sm_core.is_local_server = lambda s: True
     _sm_hosts.remote_ufw_open_port = lambda *a, **k: (_lb["touched"].append("UFW"), (True, ""))[1]
     _sm_hosts.remote_ufw_close_port = lambda *a, **k: (True, "")
@@ -2905,10 +2990,28 @@ try:
     check("ssh bind: ...and the message does NOT promise a fallback that does not exist",
           "fallback" not in _msg.lower() and "10.0.0.5:22" in _msg, _msg[:110])
 
-    _lb["touched"] = []
+    _lb["touched"], _lb["up"] = [], False
     _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 2222)
     check("ssh bind: a PORT-only change still says the old port remains a fallback",
           _ok is True and "fallback" in _msg.lower(), _msg[:110])
+    # ...but only onto a FREE port. `ss -lnt` names no process, so the check that sshd came up was
+    # answered by any listener: moving SSH onto 8080 where a web app listens left sshd on 22,
+    # reported "SSH now listens on port 8080", and the route repointed the panel at the web app.
+    _lb["touched"], _lb["up"] = [], False
+    _lb["listening"] = ("LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
+                        "LISTEN 0 511 0.0.0.0:8080 0.0.0.0:*\n")
+    _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 8080)
+    check("ssh port: a new port another service already listens on is refused",
+          _ok is False and "already listening on port 8080" in _msg, "ok=%r msg=%r" % (_ok, _msg))
+    check("ssh port: ...before anything is touched (no ufw hole, no drop-in written)",
+          "UFW" not in _lb["touched"] and "WRITE" not in _lb["touched"], repr(_lb["touched"]))
+    _lb["touched"] = []
+    _lb["listening"] = "\n"
+    _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 2222)
+    check("ssh port: ...and an unread listener list refuses too, rather than reading as free",
+          _ok is False and "Could not list" in _msg and "WRITE" not in _lb["touched"],
+          "ok=%r msg=%r" % (_ok, _msg))
+    _lb["listening"] = None
     # The address the host does NOT have: under socket activation systemd binds it anyway, so the
     # old port-only verification passed while SSH answered nowhere. Refused up front now.
     _lb["touched"] = []
@@ -2961,8 +3064,61 @@ try:
     _sm_core.run_command = lambda *a, **k: ("NOTINSTALLED\n", "", 0)
     check("sentinel: ...and a clear 'not installed' is still not installed",
           _sm_hosts.remote_check_tailscale(NS(id=8003)).get("installed") is False)
+    # ...and "not installed" is only a READING when the probe answered. The unread probe came back
+    # as {"installed": False} and nothing else, which the Tailscale modal printed as "Tailscale is
+    # not installed on <host>" with an Install button, about a host nobody reached.
+    _sm_core.run_command = lambda *a, **k: ("", "ssh: connect to host ... timed out", -1)
+    check("sentinel: ...and says it could not read a host that never answered",
+          _sm_hosts.remote_check_tailscale(NS(id=8004)).get("unreachable") is True,
+          "an unread probe is indistinguishable from 'not installed'")
+    _sm_core.run_command = lambda *a, **k: ("NOTINSTALLED\n", "", 0)
+    check("sentinel: ...while an answered 'not installed' is not flagged unreadable",
+          "unreachable" not in _sm_hosts.remote_check_tailscale(NS(id=8005)),
+          "the control failed — every answer is flagged, so the check above proves nothing")
+    # Installed, but the status probe never answered: not "installed but not running", which
+    # offers to re-authenticate the node. `|| echo '{}'` makes an ANSWERED failure "{}".
+    _ts_ans = iter([("/usr/bin/tailscale\nINSTALLED\n", "", 0), ("", "timed out", -1)])
+    _sm_core.run_command = lambda *a, **k: next(_ts_ans)
+    check("sentinel: an unanswered status probe is flagged, not read as 'not running'",
+          _sm_hosts.remote_check_tailscale(NS(id=8006)).get("unreachable") is True)
+    _ts_ans = iter([("/usr/bin/tailscale\nINSTALLED\n", "", 0), ("{}", "", 0)])
+    _sm_core.run_command = lambda *a, **k: next(_ts_ans)
+    _ts_r = _sm_hosts.remote_check_tailscale(NS(id=8007))
+    check("sentinel: ...while an answered '{}' is a real 'installed, not running'",
+          "unreachable" not in _ts_r and _ts_r.get("installed") is True and _ts_r.get("running") is False,
+          repr(_ts_r))
 finally:
     _sm_core.run_command = _ns_saved
+
+# ── tailscale finalize must not claim a UFW rule that was refused ──────────────────────────────
+# The route reports ufw_allowed = bool(log), to the UI ("UFW now allows the tailscale0 interface")
+# and to the audit row. The log line was appended whatever the allow answered, so a refused or
+# timed-out `ufw allow in on tailscale0` was reported as a firewall change that happened.
+_tf_saved = (_sm_core.run_privileged, _sm_hosts.remote_check_tailscale)
+try:
+    _sm_hosts.remote_check_tailscale = lambda s: {"installed": True, "running": True,
+                                                  "tailscale_ip": "100.64.0.9", "dns_name": ""}
+
+    def _tf_priv(allow_rc):
+        def _run(s, verb, args=(), **k):
+            if verb == "ufw-status":
+                return ("Status: active\n", "", 0)
+            if verb == "ufw-allow-iface":
+                return (("Rule added" if allow_rc == 0 else "ERROR: problem running iptables"),
+                        "", allow_rc)
+            return ("", "", 0)
+        return _run
+    _sm_core.run_privileged = _tf_priv(1)
+    _tf_st, _tf_log = _sm_hosts.remote_tailscale_finalize(NS(name="h"))
+    check("tailscale finalize: a refused tailscale0 allow is not reported as applied",
+          _tf_log == "", "log %r would read as ufw_allowed=True" % (_tf_log,))
+    _sm_core.run_privileged = _tf_priv(0)
+    _tf_st, _tf_log = _sm_hosts.remote_tailscale_finalize(NS(name="h"))
+    check("tailscale finalize: ...while an allow that succeeded still is",
+          "allowed tailscale0" in _tf_log and _tf_st.get("running") is True,
+          "the control failed (log %r) — the check above proves nothing" % (_tf_log,))
+finally:
+    _sm_core.run_privileged, _sm_hosts.remote_check_tailscale = _tf_saved
 
 # ── migrating to Tailscale SSH must not burn the bridge before testing the new one ───────────
 # remote_migrate_to_tailscale closes port 22, and its caller then blanks auth_credential — the
@@ -3261,6 +3417,51 @@ try:
     check("bootstrap: ...and the job says the firewall was not enabled, not 'complete'",
           _bnok is False and "NOT enabled" in _bnmsg and "Could not acquire lock" in _bnmsg
           and "NOT DONE" in _bnlog, "ok=%r msg=%r" % (_bnok, _bnmsg))
+
+    # The SSH port was hard-coded 22 in both the UFW step and the fail2ban jail. A host whose
+    # sshd had been moved to 2222 had UFW switched on at deny-incoming with only 22 let in — the
+    # panel's own connection and the operator's then met a closed port — and its jail banned on
+    # a port nothing listened on. The ports are sshd's effective ones plus the one the panel uses.
+    def _bs_ports(eff, port, eff_rc=0):
+        _bs_ufw.clear()
+        _jail = []
+
+        def _priv(s, verb, args=None, **k):
+            _bs_ufw.append((verb, list(args or [])))
+            if verb == "sshd-effective-config":
+                return (eff, "", eff_rc)
+            return ("", "", 0)
+        _sm_core.run_privileged = _priv
+        _sm_core.write_root_file = lambda s, target, content, **k: (
+            _jail.append(content) if target == "fail2ban-jail-local" else None, ("", "", 0))[1]
+        _sm_hosts.remote_bootstrap_vps(
+            NS(id=9105, host="203.0.113.14", auth_method="key", port=port), set_timezone="",
+            enable_ufw=True, install_lgsm_deps=False, username="", install_fail2ban=True,
+            do_reboot=False)
+        _lim = [a[0] for v, a in _bs_ufw if v == "ufw-limit-port"]
+        _en = _bs_ufw.index(("ufw-enable", [])) if ("ufw-enable", []) in _bs_ufw else -1
+        _lim_before_enable = all(_bs_ufw.index(("ufw-limit-port", [x])) < _en for x in _lim)
+        return _lim, _en, _lim_before_enable, (_jail[0] if _jail else ""), [v for v, _a in _bs_ufw]
+    _lim, _en, _lbe, _jc, _ran = _bs_ports("port 2222\npermitrootlogin no\n", 2222)
+    check("bootstrap: sshd on 2222 is the port UFW lets in before it is switched on, not 22",
+          _lim == ["2222/tcp"] and _en >= 0 and _lbe,
+          "limited %r, enable at %d — UFW went on with SSH's real port shut" % (_lim, _en))
+    check("bootstrap: ...its fail2ban jail bans on 2222, not 22",
+          "port = 2222\n" in _jc and "port = 22\n" not in _jc, "jail.local %r" % (_jc,))
+    check("bootstrap: ...and no port-22 rule is deleted on a host whose SSH is not on 22",
+          "ufw-delete-allow-app" not in _ran, "ran %r" % (_ran,))
+    _lim, _en, _lbe, _jc, _ran = _bs_ports("port 22\nport 2222\n", 22)
+    check("bootstrap: every port sshd listens on is limited, and the jail names them all",
+          sorted(_lim) == ["22/tcp", "2222/tcp"] and _lbe and "port = 22,2222\n" in _jc,
+          "limited %r, jail %r" % (_lim, _jc))
+    _lim, _en, _lbe, _jc, _ran = _bs_ports("", 2222, eff_rc=1)
+    check("bootstrap: an unread sshd -T still keeps the port the panel connects on open",
+          _lim == ["2222/tcp"] and _lbe and "port = 2222\n" in _jc,
+          "limited %r, jail %r" % (_lim, _jc))
+    _lim, _en, _lbe, _jc, _ran = _bs_ports("port 22\n", 22)
+    check("bootstrap: ...while a stock host on 22 is limited on 22 alone, as before (positive control)",
+          _lim == ["22/tcp"] and _lbe and "port = 22\n" in _jc and "ufw-delete-allow-app" in _ran,
+          "limited %r, jail %r" % (_lim, _jc))
 finally:
     (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
      _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,

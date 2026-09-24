@@ -1050,8 +1050,8 @@
   "/api/remote/<int:remote_id>/specs": {
     "endpoint": "api_remote_specs",
     "guards": [
-      "utils.py:decorated_view(manage_remotes)",
-      "auth.py:decorated_function(manage_remotes)",
+      "utils.py:decorated_view(install_server,manage_remotes,manage_servers)",
+      "auth.py:decorated_function(install_server,manage_remotes,manage_servers)",
       "view:api_remote_specs"
     ],
     "methods": [

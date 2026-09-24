@@ -42,7 +42,12 @@
   <li class="nav-item"><button type="button" class="nav-link active" data-mtab-btn="overview"><i class="bi bi-speedometer2"></i> Overview</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="controls"><i class="bi bi-sliders"></i> Host Controls</button></li>
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="maintenance"><i class="bi bi-tools"></i> Maintenance</button></li>
+  {# Same rule as the Connection & SSH card: on the panel host every Security endpoint is
+     /api/panel/security/*, all @superadmin_required, and their 403 JSON rendered as "fail2ban isn't
+     installed", "No security events yet." and a green "Auto-block on" that wrote nothing. #}
+  {% if not remote.is_local or current_user.is_superadmin %}
   <li class="nav-item"><button type="button" class="nav-link" data-mtab-btn="security"><i class="bi bi-shield-lock"></i> Security</button></li>
+  {% endif %}
 </ul>
 
 <!-- System Specs (static hardware & OS) -->
@@ -506,6 +511,7 @@
 {% endif %}
 
 <!-- ─── Security tab: fail2ban bans (panel + ssh) + raw logs ─────── -->
+{% if not remote.is_local or current_user.is_superadmin %}
 <div class="card mb-3" data-mtab="security">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-slash-circle"></i> Banned IPs (fail2ban)</span>
@@ -547,17 +553,32 @@
       <div>
         <label class="form-label small mb-1" for="sec-threshold">Auto-block at <span class="text-secondary">(failed attempts / 7 days)</span></label>
         <div class="input-group input-group-sm" style="max-width:230px;">
+          {# The threshold and the whitelist are INSTALL-WIDE, and only a superadmin can change
+             either: the endpoint ignores anyone else's threshold, and the whitelist route is
+             @superadmin_required. Offered to a host operator, Save toasted "Threshold saved" over
+             an unchanged value and × repainted an empty whitelist while the address stayed exempt
+             on every host. #}
+          {% if current_user.is_superadmin %}
           <input type="number" min="1" class="form-control" id="sec-threshold" value="20">
           <button class="btn btn-outline-secondary" data-action="saveThreshold" data-args='["@self"]'><i class="bi bi-save"></i> Save</button>
+          {% else %}
+          <input type="number" min="1" class="form-control" id="sec-threshold" value="20" disabled
+                 title="Applies to every host — only a superadmin can change it.">
+          {% endif %}
         </div>
       </div>
       <div class="flex-grow-1" style="min-width:260px;">
+        {% if current_user.is_superadmin %}
         <label class="form-label small mb-1" for="sec-wl-input">Whitelist <span class="text-secondary">(never banned or blocked, IP or CIDR)</span></label>
         <div class="input-group input-group-sm mb-1" style="max-width:340px;">
           <input type="text" class="form-control" id="sec-wl-input" placeholder="e.g. 1.2.3.4 or 10.0.0.0/8">
           <button class="btn btn-outline-primary" data-action="addWhitelist" data-args='["@self"]'><i class="bi bi-plus-lg"></i> Add</button>
         </div>
         <div id="sec-wl-list" class="d-flex flex-wrap gap-1 align-items-center"></div>
+        {% else %}
+        <div class="form-label small mb-1">Whitelist <span class="text-secondary">(never banned or blocked, IP or CIDR)</span></div>
+        <p class="small text-secondary mb-0" id="sec-wl-readonly">The whitelist applies to every host, so only a superadmin can view or change it.</p>
+        {% endif %}
       </div>
     </div>
     <div id="sec-top"><div class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Loading…</div></div>
@@ -588,6 +609,7 @@
     <pre id="sec-log" style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:.5rem .7rem;max-height:340px;overflow:auto;font-size:.72rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;margin:0;">Pick a log above, or "view log" on a jail above, to see its recent lines.</pre>
   </div>
 </div>
+{% endif %}
 
 <!-- Ubuntu Pro -->
 <div class="card mb-3" data-mtab="maintenance">
@@ -731,7 +753,13 @@
       </div>
     </div>
     {% else %}
+    {# This branch also renders for the PANEL HOST when the viewer is not a superadmin. The panel
+       reaches its own host locally, not over SSH, so "Panel connects via local → local@127.0.0.1",
+       a Migrate button whose test login as the user "local" always fails, and a host key that
+       "pins automatically on first connection" (there is none) were all false there. Only the
+       public-SSH and SSH-port rows, whose endpoints work for the panel host, are shown for it. #}
     <div class="row g-3">
+      {% if not remote.is_local %}
       <div class="col-md-6">
         {# The arrow, not the word "to": a bare " to " between two value elements is its own text
            node, and a two-letter preposition is not a phrase any catalog can translate usefully. #}
@@ -746,6 +774,7 @@
         <p class="small text-success mb-0"><i class="bi bi-check-circle"></i> Already using Tailscale SSH.</p>
         {% endif %}
       </div>
+      {% endif %}
       <div class="col-md-6">
         <div class="small text-secondary mb-1">Public SSH (port 22 from the internet) <span class="ms-1">Currently: <strong id="ssh-mode">…</strong></span></div>
         <p class="small text-secondary mb-1">Tailscale SSH keeps working regardless — rate-limit or disable public SSH once you're on the tailnet.</p>
@@ -779,7 +808,7 @@
         <div id="ssh-port-msg" class="small mt-1"></div>
       </div>
     </div>
-    {% if remote.auth_method != 'tailscale' %}
+    {% if remote.auth_method != 'tailscale' and not remote.is_local %}
     <div class="row g-3">
       <div class="col-12 mt-2 pt-3 border-top">
         <div class="small text-secondary mb-1"><i class="bi bi-fingerprint"></i> Pinned SSH host key:
@@ -825,11 +854,18 @@
           <td><span class="badge {% if gs.status == 'online' %}bg-success{% elif gs.status in ('installing', 'configuring') %}bg-info text-dark{% else %}bg-secondary{% endif %}">{{ gs.status|title }}</span></td>
           <td class="text-end text-nowrap">
             <a href="{{ url_for('server_detail', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Console, commands, restart"><i class="bi bi-terminal-fill"></i> Console</a>
+            {# Gated as the dashboard gates them (can_files / can_uninstall): this page needs only
+               MANAGE_REMOTES, and a host operator without these rights was walked through the
+               typed-name uninstall confirm to be refused at the end of it. #}
+            {% if current_user.is_superadmin or has_permission('manage_servers') %}
             <a href="{{ url_for('server_files', server_id=gs.id) }}" class="btn btn-sm btn-outline-secondary" title="Edit config &amp; browse/upload files"><i class="bi bi-folder2-open"></i> Files &amp; Config</a>
+            {% endif %}
+            {% if current_user.is_superadmin or has_permission('uninstall_server') %}
             <form method="POST" action="{{ url_for('uninstall_server', server_id=gs.id) }}" style="display:inline;"
                   class="uninstall-form" data-server-name="{{ gs.name }}" data-server-short="{{ gs.short_name }}">
               <button type="button" class="btn btn-sm btn-outline-danger uninstall-trigger" title="Delete server and all data"><i class="bi bi-trash"></i> Uninstall</button>
             </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}

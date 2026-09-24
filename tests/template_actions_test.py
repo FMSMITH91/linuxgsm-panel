@@ -2906,11 +2906,67 @@ check(-1 not in (_str_named, _str_running, _str_absent)
       "js: setup wizard: a running Tailscale with no name read is not called 'not installed'",
       "named=%d running=%d not-installed=%d" % (_str_named, _str_running, _str_absent))
 
+# ── "UFW now allows tailscale0" only when the finalize says it did ────────────────────────────
+# The route answers ufw_allowed=false when UFW was inactive, absent, unreadable or refused the
+# rule (and a refused/unreachable finalize has no such key), yet the sentence printed on all of them.
+_mr_ts = _js_code_only(_js_function_body(
+    (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "tailscaleUp") or "")
+_ufw_ok_i = _mr_ts.find("f.ufw_allowed === true")
+_ufw_line_i = _mr_ts.find("'UFW now allows the tailscale0 interface.'")
+check(len(_mr_ts) > 300 and "tailscale-finalize" in _mr_ts,
+      "js: the tailscale-up flow was found in manage_remotes.js", "extractor found %d chars" % len(_mr_ts))
+check(-1 < _ufw_ok_i < _ufw_line_i and _mr_ts.count("allows the tailscale0") == 1
+      and "+ escapeHtml(ufwText) +" in _mr_ts,
+      "js: 'UFW now allows tailscale0' is printed only when the finalize reports ufw_allowed",
+      "positions ok=%d line=%d — the sentence is not gated on f.ufw_allowed" % (_ufw_ok_i, _ufw_line_i))
+
+# ── an unanswered Tailscale probe is not "not installed" ─────────────────────────────────────
+_rts_js = _js_code_only(_js_function_body(
+    (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "renderTailscaleStatus") or "")
+_rts_unr = _rts_js.find("if (status.unreachable) {")
+_rts_first = min([i for i in (_rts_js.find("if (installed && running)"), _rts_js.find("not installed"))
+                  if i >= 0] or [-1])
+_rts_blk = _js_block_after(_rts_js, "if (status.unreachable) {") or ""
+check(len(_rts_js) > 300 and -1 < _rts_unr < _rts_first
+      and "data-install-ts" not in _rts_blk and "renderAuthKeyForm" not in _rts_blk,
+      "js: the Tailscale modal reports an unanswered probe as unknown, with no Install offer",
+      "positions unreachable=%d installed-branches=%d — an unread host reads as 'not installed'"
+      % (_rts_unr, _rts_first))
+
 # ── the bootstrap poll's teardown sat below the line that returned ────────────────────────────
 _mr = (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
-check("if (!stepEl) { clearInterval(_bootstrapPoll)" in _mr,
+_pb = _js_code_only(_js_function_body(_mr, "pollBootstrap"))
+check(len(_pb) > 400 and "bootstrap-status" in _pb,
+      "js: pollBootstrap was found in manage_remotes.js",
+      "extractor got %r — the checks below would prove nothing" % _pb[:60])
+check(re.search(r"if \(!stepEl \|\|.*\) \{ stop\(\); return; \}", _pb) is not None,
       "js: the bootstrap poll stops when its modal is gone, instead of bailing forever",
       "showModal removes #ts-modal, and every clearInterval sits below the early return")
+
+# ── ...when the modal belongs to ANOTHER host, and when its job is gone ───────────────────────
+# Prepare on host B builds the same ids, so host A's poll found them and painted A's steps, log and
+# "Server prepared & secured!" into "Prepare & Secure: B" — over B's refusal when B's start failed.
+# And `s.status === 'none'` (panel restarted, job expired) returned ABOVE that teardown, so the
+# poll ran for the life of the page with the button stuck at "Running…".
+_sb = _js_function_body(_mr, "showBootstrap") or ""
+check('id="bootstrap-step" class="text-info" data-remote="\' + escapeHtml(String(remoteId)) + \'"' in _sb,
+      "js: the Prepare modal records which host it was opened for",
+      "#bootstrap-step carries no data-remote, so a poll cannot tell its modal from another's")
+_pb_own = _pb.find("stepEl.getAttribute('data-remote') !== String(remoteId)")
+_pb_none = _pb.find("if (s.status === 'none') {")
+_pb_none_blk = _js_block_after(_pb, "if (s.status === 'none') {") or ""
+check(-1 < _pb_own < _pb_none and "stop();" in _pb_none_blk and "return;" in _pb_none_blk
+      and "btn.disabled = false" in _pb_none_blk,
+      "js: the bootstrap poll paints only its own host's modal, and stops when the job is gone",
+      "positions own=%d none=%d; none-branch %r" % (_pb_own, _pb_none, _pb_none_blk[:80]))
+# Positive control: the terminal branches still stop the poll, and stop() only ever clears ITS
+# interval — a late fetch from the previous poll must not stop the one that replaced it.
+check(re.search(r"function stop\(\) \{ clearInterval\(handle\); if \(_bootstrapPoll === handle\) "
+                r"_bootstrapPoll = null; \}", _pb) is not None
+      and "clearInterval(_bootstrapPoll)" not in _pb.split("function tick()")[1]
+      and _pb.count("stop();") >= 4,
+      "js: ...and a stale poll's stop() never clears the poll that replaced it",
+      "tick() clears _bootstrapPoll directly, or a terminal branch lost its stop()")
 
 # ── the SSH card's live state is refilled after the section is swapped ────────────────────────
 # refreshSection only re-runs a callback when one is NAMED, and loadSshStatus is the only thing
@@ -2944,6 +3000,32 @@ check(-1 not in _lss_i and _lss_i == sorted(_lss_i),
       "js: ...and never calls the panel port 'already closed' while UFW is off",
       "positions %r — panel_port_open === false is read before the firewall's state" % (_lss_i,))
 
+# ── a panel restart is not a successful update ────────────────────────────────────────────────
+# install.sh restarts the service on ROLLBACK too, so the restored old process flips boot_id like
+# the new one — and a rolled-back update was announced "Update complete — reloading…", after which
+# the card offered the same update again. Success is the code having moved (a new commit for an
+# update, the target branch for a switch); a rollback line in the log says otherwise outright.
+_pro = _js_code_only(_js_function_body(_rh, "panelRestartOutcome"))
+_wpr = _js_code_only(_js_function_body(_rh, "watchPanelRestart"))
+check(len(_pro) > 150 and len(_wpr) > 400 and "boot_id" in _wpr,
+      "js: panelRestartOutcome and watchPanelRestart were found in remote_manage_host.js",
+      "extractor got %r / %r — the checks below would prove nothing" % (_pro[:40], _wpr[:40]))
+check("after.current_sha !== before.current_sha ? 'moved' : 'unchanged'" in _pro
+      and "after.branch === targetBranch ? 'moved' : 'unchanged'" in _pro
+      and "/rolled back|rolling back/i" in _pro,
+      "js: a panel restart counts as applied only when the commit (or branch) moved and no rollback ran",
+      "panelRestartOutcome no longer compares the version before and after")
+_wpr_moved = _js_block_after(_wpr, "if(outcome==='moved'){") or ""
+check("panelRestartOutcome(before, s, targetBranch" in _wpr
+      and "escapeHtml(doneLabel" in _wpr_moved and _wpr.count("doneLabel") == 1,
+      "js: ...and 'Update complete' / 'Switched to' is printed only on that outcome",
+      "the done label is printed outside the outcome==='moved' branch, i.e. on any restart")
+# Positive control: both flows hand the watcher what it compares against.
+check("watchPanelRestart(beforeBoot, msg, 'Update complete', before, '')" in _rh
+      and "watchPanelRestart(beforeBoot, msg, 'Switched to '+branch, before, branch)" in _rh,
+      "js: the update and branch-switch flows pass their pre-restart status to the watcher",
+      "a caller does not pass `before` (and the target branch), so every outcome reads 'unknown'")
+
 # ── saving the auto-block threshold must not switch auto-block OFF ───────────────────────────
 # saveThreshold posts the toggle's state as `enabled` ("preserve the on/off state"), but the toggle
 # is rendered unchecked and repainted only when /top-ips answers — after several SSH reads. A Save
@@ -2965,6 +3047,47 @@ check("thresholdSaveToast(d, v)" in _st_fn and "!d.success" in _tst_fn
       and "Number(d.threshold)" in _tst_fn and "t !== asked" in _tst_fn and "!d.enabled" in _tst_fn,
       "js: ...and the toast says what the endpoint did — refused, ignored, saved with auto-block off",
       "the toast still says 'Threshold saved' whatever came back")
+
+# ── the OS Updates card: only a positive `ok` is a reading ────────────────────────────────────
+# An unreachable host answers {success:false, unreachable:true} with no `ok` key, and `d.ok===false`
+# let that through to renderUpdates: a green "System is up to date." with Install disabled.
+_cu_fn = _js_code_only(_js_function_body(_rmj, "checkUpdates"))
+check("if(d.ok!==true){" in _cu_fn and "d.ok===false" not in _cu_fn
+      and _cu_fn.find("if(d.ok!==true){") < _cu_fn.find("renderUpdates("),
+      "js: a check-updates answer without ok:true is 'unknown', never 'up to date'",
+      _cu_fn[:300])
+# ── the OS-update watch: one failed status read is not the update finishing ──────────────────
+# The route's exception answer was done:true, rc:null, log:"", and the popup wiped apt's output,
+# said "Finished with errors (exit null)" and stopped polling while dpkg was still running.
+_po_fn = _js_code_only(_js_function_body(_rmj, "_pollOsUpdate"))
+_pu_fn = _js_code_only(_js_function_body(_rmj, "_osuPollUnread"))
+check("d.error" in _pu_fn and "d.unread" in _pu_fn and "typeof d.rc !== 'number'" in _pu_fn,
+      "js: an errored, unread or sentinel-less status poll is recognised as unread",
+      _pu_fn[:200])
+check(0 <= _po_fn.find("if(_osuPollUnread(d)){") < _po_fn.find("logEl.textContent=")
+      and _po_fn.find("if(_osuPollUnread(d)){") < _po_fn.find("if(d.done){")
+      and "_osuTimer=setTimeout(_pollOsUpdate" in _po_fn[_po_fn.find("if(_osuPollUnread(d)){"):
+                                                          _po_fn.find("_osuMiss=0;")],
+      "js: ...and such a poll keeps the log, is not taken as done, and polls again",
+      _po_fn[:400])
+check("d.running === false ? (_osuStale+1)" in _po_fn,
+      "js: ...and only a definite 'apt is not running' counts towards giving up",
+      "an unanswered probe (running null) is counted as apt having stopped")
+# ── the raw log viewer: a failed read is not "(log is empty)" ─────────────────────────────────
+_lsl_fn = _js_code_only(_js_function_body(_rmj, "loadSecurityLog"))
+check(0 <= _lsl_fn.find("if(!d || d.error){") < _lsl_fn.find("'(log is empty)'"),
+      "js: the raw security log says it could not be read before it can say 'empty'",
+      _lsl_fn[:300])
+# ── removing a whitelist entry: a refusal is not "removed" ───────────────────────────────────
+_rwl_fn = _js_code_only(_js_function_body(_rmj, "removeWhitelist"))
+check(0 <= _rwl_fn.find("if(!d || !d.success){") < _rwl_fn.find("renderWhitelist(")
+      and "'whitelist' in d" in _rwl_fn,
+      "js: a refused whitelist removal is reported, not painted as an empty whitelist",
+      _rwl_fn[:300])
+# ── #security opens only a tab the page renders ───────────────────────────────────────────────
+check("nav.querySelector('[data-mtab-btn=\"' + h + '\"]')" in _js_code_only(_rmj),
+      "js: a #tab hash opens only a tab whose button is on the page",
+      "#security opens the panel host's hidden Security tab and fires its 403 reads")
 
 # ── the update card's changelog links each commit ─────────────────────────────────────────────
 # "d456826 fix: a failed install was a dead end" told you a subject and a sha you then had to go
@@ -3705,9 +3828,35 @@ check(_fw_msg in _fw_tpl and _fw_msg in _fw_js,
       "template and refresh word the same state differently")
 # The count is an arithmetic claim. "0 rules" above "the rules cannot be read" is the same defect
 # in miniature as an update card announcing a commit count it could not list.
-check("rules-count" in _fw_win,
+_fw_unl = _js_code_only(_js_function_body(_fw_js, "_fwUnlisted") or "")
+_fw_win_code = _js_code_only(_fw_win)
+check("_fwUnlisted(" in _fw_win_code and "'rules-count'" in _fw_unl,
       "firewall: ...and the rule COUNT is cleared too, not left reading 0",
       "the page states a count for a firewall nothing read")
+# ...and the Blocked IPs card with it. Only the rules card was repainted, so a refresh that found
+# the host gone left "3 blocked" and three live Unblock buttons on screen as the current firewall.
+check("'blocks-list'" in _fw_unl and "'blocks-count'" in _fw_unl and "'\\u2014'" in _fw_unl,
+      "firewall: an unreadable refresh clears the Blocked IPs list and count as well",
+      "_fwUnlisted: %r" % _fw_unl[:300])
+# A sudo refusal arrives flagged unreachable too; the page named the network for it.
+check("data.permission_denied" in _fw_win_code and "sudo refused the firewall read" in _fw_win_code,
+      "firewall: a refresh refused by sudo says sudo, not 'unreachable'",
+      "the refresh reads only data.unreachable")
+# An INACTIVE ufw lists nothing, stored rules included: "No open ports yet." / "0 blocked" about it
+# were claims about rules nobody saw, and a block there denies nothing.
+_fw_after_badge = _js_code_only(_between(_fw_js, "data.enabled ? 'Active' : 'Inactive'",
+                                         "var groups = data.groups"))
+check("if (inactive)" in _fw_after_badge and "_fwUnlisted(" in _fw_after_badge
+      and "data.installed === true && data.enabled !== true" in _fw_win_code,
+      "firewall: a refresh of an INACTIVE ufw prints no rule or block count",
+      _fw_after_badge[:300])
+check("blocks-inactive-note" in _fw_win_code and 'id="blocks-inactive-note"' in _fw_tpl,
+      "firewall: ...and the 'a block denies nothing while inactive' note follows the refresh",
+      "the note is not toggled")
+# The × tooltip listed a group's UFW rule NUMBERS as "ports 3, 7".
+check("'rules ' + (g.nums|join(', '))" in _fw_tpl and "'ports ' + (g.nums" not in _fw_tpl,
+      "firewall: the rule-delete tooltip calls rule numbers rules, not ports",
+      "the × tooltip names ufw rule numbers as ports")
 
 # ── a delete removes the rule that was clicked, not whatever now holds its old number ─────────
 # ufw numbers are POSITIONS and renumber on every insert/delete; the hourly auto-block inserts its
@@ -3731,6 +3880,11 @@ check("num: Math.max.apply(null, g.nums)" in _fw_del and "ordered[" not in _fw_d
 check("g.protected" in _fw_del,
       "firewall delete: ...and a group that has since become protected is not deleted",
       "the re-read does not look at protected")
+# ...and the POST names the rule too, so the SERVER refuses a number that moved in the moment
+# between this read and its delete (the auto-block inserts at 1).
+check("JSON.stringify({num: Math.max.apply(null, g.nums), key: key})" in _fw_del,
+      "firewall delete: the delete request carries the rule's key, not just its position",
+      "the server deletes whatever rule the number names by then")
 # Both renderers hand the identity over, or every click refuses with "out of date".
 _fw_tpl_btn = _between(_fw_tpl, 'data-action="deleteGroup"', ">")
 check("{{ g.key|tojson }}" in _fw_tpl_btn,

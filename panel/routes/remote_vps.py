@@ -20,8 +20,8 @@ from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_gam
 # module would never be seen — attribute access resolves at call time and is stable
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
-from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, accessible_remote_ids,
-    can_access_remote, get_game,
+from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
+    accessible_remote_ids, can_access_remote, get_game,
     get_remote, has_permission, log_action, permission_required, server_access_required)
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
@@ -162,7 +162,12 @@ def register(app):
         """Delete a UFW rule by its number (the reliable way to remove any rule)."""
         remote = get_remote(remote_id)
         num = _json_body().get("num")
-        success, msg = remote_ufw_delete_rule(remote, num)
+        # The rule's identity, when the page sends it: the number is a position, and anything
+        # inserted since the page re-read the firewall (the auto-block inserts at 1) moves it onto
+        # another rule. The delete then happens only if `num` is still that rule.
+        key = _json_body().get("key")
+        success, msg = remote_ufw_delete_rule(remote, num,
+                                              expect_key=key if isinstance(key, str) and key else None)
         log_action(current_user, "remote_ufw_delete_rule", target=f"{remote.name}:#{num}", success=success)
         return jsonify({"success": success, "message": msg})
 
@@ -244,7 +249,7 @@ def register(app):
             port = 5000
 
         def _panel_port_rule_nums():
-            """(rule numbers, read_ok). An unread firewall is NOT an empty one."""
+            """([(rule number, rule key)], read_ok). An unread firewall is NOT an empty one."""
             st = remote_ufw_status(remote)
             # remote_ufw_status answers {"installed": False, ..., "groups": []} when ufw is
             # missing, and adds "unreachable": True when the command failed or printed no
@@ -266,7 +271,7 @@ def register(app):
                 if (not g.get("is_iface") and str(g.get("port_num", "")) == str(port)
                         and g.get("action", "ALLOW") in ("ALLOW", "LIMIT")
                         and g.get("direction", "IN") != "OUT"):
-                    nums.extend(g.get("nums", []))
+                    nums.extend((n, g.get("key")) for n in g.get("nums", []))
             return sorted(set(nums), reverse=True), True   # highest first so numbering stays valid
 
         nums, read_ok = _panel_port_rule_nums()
@@ -278,8 +283,12 @@ def register(app):
             return jsonify({"success": True, "message": f"Public port {port} is already closed."})
         # Delete by rule NUMBER (reliable across any rule format), force=True since this is
         # the intentional guided close and Serve is already confirmed as the way in.
-        for n in nums:
-            remote_ufw_delete_rule(remote, n, force=True)
+        # Each with the rule's KEY: highest-first keeps the numbers valid only against this loop's
+        # own deletes, and the auto-block reconcile inserts its denies at 1 from another thread —
+        # one insert mid-loop and a forced delete by number took the rule above the panel port's
+        # (an attacker's deny, a game port). A moved number is refused; the verify read reports it.
+        for n, key in nums:
+            remote_ufw_delete_rule(remote, n, force=True, expect_key=key)
         _left, _verify_ok = _panel_port_rule_nums()
         # A verify read that FAILED cannot say the port is closed either.
         ok = _verify_ok and not _left
@@ -503,7 +512,10 @@ def register(app):
         try:
             return jsonify(remote_os_update_status(remote))
         except Exception:
-            return jsonify({"running": False, "done": True, "rc": None,
+            # NOT done. A status read that raised (a dropped paramiko session mid-upgrade) said
+            # done:true, and the popup declared the update finished with errors and stopped
+            # watching while apt was still running on the host.
+            return jsonify({"running": None, "done": False, "rc": None, "unread": True,
                             "log": "", "error": _log_and_generic("status read failed")}), 200
 
     @app.route("/api/remote/<int:remote_id>/players")
@@ -643,10 +655,21 @@ def register(app):
 
     @app.route("/api/remote/<int:remote_id>/specs")
     @login_required
-    @permission_required(MANAGE_REMOTES)
+    @permission_required(MANAGE_REMOTES, INSTALL_SERVER, MANAGE_SERVERS)
     def api_remote_specs(remote_id):
-        """Static hardware/OS specs for a remote host (loaded once, not polled)."""
+        """Static hardware/OS specs for a remote host (loaded once, not polled).
+
+        Also the install picker's OS filter (manage_servers.js filterGamesForHost), which is on a
+        page for INSTALL_SERVER / MANAGE_SERVERS. Gated on MANAGE_REMOTES alone, this answered
+        those users 403, the filter read that as "OS unknown" and left every game selectable —
+        the ones this host cannot run included — so they learned it only from the install
+        refusal. They get os_slug and nothing else: the hardware card stays MANAGE_REMOTES."""
         remote = get_remote(remote_id)
+        if not has_permission(current_user, MANAGE_REMOTES):
+            try:
+                return jsonify({"os_slug": _sm.host_os_slug(remote) or ""})
+            except Exception:
+                return jsonify({"os_slug": ""})
         # os_slug alongside the pretty OS name: LinuxGSM's own "<id>-<version>", which is what
         # decides whether this host can install a game LinuxGSM caps at an older release. That is
         # a property of THIS host — a 20.04 remote under a 24.04 panel runs those games fine — so
