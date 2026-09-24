@@ -1,3 +1,23 @@
+// ── What the markup-driven dispatchers may call ─────────────────────────────────────────────
+// data-action and data-ajax-after name a global function, and the dispatcher called whatever
+// window[name] was — native fetch, open or eval included, and this file's own fetch WRAPPER, which
+// adds the CSRF token to every POST. The nonce CSP stops injected markup running script; an
+// unguarded dispatcher turned that same markup back into authenticated, CSRF-valid requests on the
+// next click. Refused: any native function, and the panel's own request/markup primitives. An
+// action is a function a panel script defined for the purpose, and none of those is one.
+var _ACTION_DENY = {fetch: 1, refreshSection: 1, confirmDialog: 1, sessionExpired: 1,
+                    _submitAjaxForm: 1, ensureCsrfFields: 1};
+function _actionFn(name){
+  if (typeof name !== 'string' || !name || _ACTION_DENY[name]) return null;
+  if (!Object.prototype.hasOwnProperty.call(window, name)) return null;
+  var fn = window[name];
+  if (typeof fn !== 'function') return null;
+  try {
+    if (/\{\s*\[native code\]\s*\}\s*$/.test(Function.prototype.toString.call(fn))) return null;
+  } catch (e) { return null; }
+  return fn;
+}
+
 // ── Live cross-user updates ───────────────────────────────────────────────
 // A shared Socket.IO connection (created lazily, reused by the console page) plus a
 // helper to subscribe to server-pushed events. Used so that when one user adds or
@@ -367,9 +387,13 @@ window.refreshSection = function(sel, afterName){
       // The swapped-in markup is what the SERVER rendered, so any POST form in it arrives without
       // the hidden token — see ensureCsrfFields.
       if (cur && window.ensureCsrfFields) window.ensureCsrfFields(cur);
+      // ...and its timestamps arrive as the server's UTC text. localizeTimes ran once, on load, so
+      // after an in-place refresh (saving a user) the whole Last login column switched to UTC.
+      if (cur && window.localizeTimes) window.localizeTimes(cur);
       // nosemgrep - the delegated dispatcher this whole UI is built on: afterName comes from a
-      // data- attribute in our own template, and the typeof guard is the contract.
-      if (afterName && typeof window[afterName] === 'function') { try { window[afterName](); } catch(e){} }  // nosemgrep
+      // data- attribute in our own template, and _actionFn is the contract.
+      var afterFn = afterName ? _actionFn(afterName) : null;
+      if (afterFn) { try { afterFn(); } catch(e){} }  // nosemgrep
     }).catch(function(){});
 };
 function _submitAjaxForm(form){
@@ -508,8 +532,8 @@ window._acctSignOutAll = function(){
 };
 (function(){
   function fire(el, e){
-    var fn = window[el.getAttribute('data-action')];
-    if (typeof fn !== 'function') return;
+    var fn = _actionFn(el.getAttribute('data-action'));
+    if (!fn) return;
     var args = [];
     var raw = el.getAttribute('data-args');
     if (raw){ try { args = JSON.parse(raw); } catch (_e){ args = []; } }

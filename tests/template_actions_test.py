@@ -2452,6 +2452,39 @@ check("!_signedIn()" in _pj_se and "!_signedIn()" in _pj_ping
       "session: the ping and the expired-session redirect return early on a signed-out page",
       "an invitee is redirected to /login mid-form")
 
+# ── an in-place refresh keeps timestamps in the viewer's timezone ─────────────────────────────
+# refreshSection swaps in the SERVER's markup, whose |datetime spans read "… UTC" until
+# localizeTimes rewrites them — and that ran once, on load. After saving a user the whole Last
+# login column switched to UTC until a full reload.
+_pj_rs = _pj_src[_pj_src.index("window.refreshSection = function"):]
+_pj_rs = _pj_rs[:_pj_rs.index("\n};")]
+check("cur.innerHTML = fresh.innerHTML" in _pj_rs,
+      "refresh: (control) the refreshSection slice holds the swap", "sliced the wrong text")
+check("window.localizeTimes(cur)" in _pj_rs
+      and _pj_rs.index("cur.innerHTML = fresh.innerHTML") < _pj_rs.index("window.localizeTimes(cur)"),
+      "refresh: refreshSection re-localizes the timestamps it swaps in",
+      "swapped-in times stay in UTC")
+
+# ── the markup dispatchers refuse native functions and the panel's request primitives ─────────
+# fire() called whatever window[data-action] was: native fetch/open/eval, and this file's fetch
+# WRAPPER, which adds the CSRF token to any POST. The CSP stops injected markup running script; an
+# unguarded dispatcher turned that markup back into authenticated requests on the next click.
+# Measured in a browser: data-action="fetch", "setTimeout" and "confirmDialog" now do nothing,
+# while a window.x = function action and a function declared before panel.js both still fire.
+_pj_af = _pj_src[_pj_src.index("function _actionFn("):]
+_pj_af = _pj_af[:_pj_af.index("\n}")]
+_pj_fire = _pj_src[_pj_src.index("function fire(el, e)"):]
+_pj_fire = _pj_fire[:_pj_fire.index("fn.apply(")]
+check("return fn;" in _pj_af, "dispatch: (control) the _actionFn slice is the resolver", "sliced the wrong text")
+check("native code" in _pj_af and "_ACTION_DENY[name]" in _pj_af
+      and re.search(r"_ACTION_DENY = \{[^}]*\bfetch: 1", _pj_src) is not None,
+      "dispatch: the resolver refuses native functions and the fetch wrapper",
+      "data-action can still name fetch/open/eval")
+check("_actionFn(el.getAttribute('data-action'))" in _pj_fire and "window[" not in _pj_fire
+      and "_actionFn(afterName)" in _pj_rs and "window[afterName]" not in _pj_rs,
+      "dispatch: data-action and data-ajax-after both resolve through it",
+      "a dispatcher still indexes window directly")
+
 # ── the 2FA reminder's "don't remind me" reports success only on success ──────────────────────
 # It parsed the reply and ignored it. The error handler answers any failure on a fetch with
 # parseable JSON ({success:false}, status 500), so a save that failed removed the banner and said
