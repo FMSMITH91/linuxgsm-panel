@@ -2024,10 +2024,14 @@ finally:
 # three times over, for a server that had finished downloading.
 import panel.routes._shared as _sh
 
-_li_orig = _sh._sm.run_command
+# Stubbed on the DEFINING module. This used to assign _sh._sm.run_command — the ssh_manager
+# PACKAGE — and "restore" it by assigning the real function back, which left a concrete attribute
+# on the package that shadows its PEP 562 __getattr__ for the rest of the run: every later stub on
+# _core.run_command was then silently missed by any caller reaching it as `_sm.run_command`.
+_li_orig = _sm_core.run_command
 try:
     _li = {"details": ("", "", 0), "du": ("", "", 0)}
-    _sh._sm.run_command = lambda r, c, **k: (_li["du"] if "du -sm" in c else _li["details"])
+    _sm_core.run_command = lambda r, c, **k: (_li["du"] if "du -sm" in c else _li["details"])
     _app = NS(logger=NS(debug=lambda *a, **k: None))
 
     # THE BUG: both reads fail, nothing raises.
@@ -2062,13 +2066,13 @@ try:
     # The caller side: the command must carry the marker, or the checks above pass without it.
     _li_cmds = []
     _li["details"] = ("", "", 0)
-    _sh._sm.run_command = lambda r, c, **k: (_li_cmds.append(c),
+    _sm_core.run_command = lambda r, c, **k: (_li_cmds.append(c),
                                              ("50\n__DU_DONE__", "", 0) if "du -sm" in c else ("", "", 0))[1]
     _sh._looks_installed(_app, NS(), "gmodserver", "gmodserver")
     check("_looks_installed: the du command carries the completion marker",
           any("__DU_DONE__" in c for c in _li_cmds), repr(_li_cmds)[-120:])
 finally:
-    _sh._sm.run_command = _li_orig
+    _sm_core.run_command = _li_orig
 
 
 # ── the stats endpoint must not persist a status it could not read ──────────────────────────────

@@ -1502,6 +1502,11 @@ try:
         _appmod_cg = sys.modules["app"]
         _cg_rlp = _appmod_cg._remote_listening_ports
         _appmod_cg._remote_listening_ports = lambda r: {22}
+        # ...and the route now also asks the host whether the account already exists (an existing
+        # one is someone else's, not a leftover), which the same dead host cannot answer either.
+        import panel.routes.manage_servers as _cg_msmod
+        _cg_has = _cg_msmod.host_account_state
+        _cg_msmod.host_account_state = lambda r, n: "absent"
         # Under the seam, and drained before the row goes: this POST starts a real install thread,
         # and the row it belongs to is deleted a few lines down. SQLite then hands that freed id
         # to the next INSERT — the install-job block's row — and this worker, still running, wrote
@@ -1513,6 +1518,7 @@ try:
                 "content_games": ["cstrike", "tf"],
             }, follow_redirects=True)
         _appmod_cg._remote_listening_ports = _cg_rlp
+        _cg_msmod.host_account_state = _cg_has
         with app.app_context():
             _new = GameServer.query.filter_by(short_name="cgcapture").first()
             _captured = (_new.content_games or "") if _new is not None else "<no row>"
@@ -1616,7 +1622,8 @@ try:
                                     "block does not stub reached the transport")))
         _ij_stub(_sm_core, "read_as_game_user", lambda *a, **k: ("", "", 0))
         _ij_stub(_sm_core, "run_command", lambda *a, **k: ("", "", 0))
-        _ij_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _ij_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
+        _ij_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
         _ij_stub(_sm_core, "run_as_game_user", _ij_run_as)
         _ij_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
         _ij_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop", "monitor"])
@@ -1698,7 +1705,8 @@ try:
 
     try:
         _cf_stub(_sm_core, "run_command", lambda *a, **k: ("", "", 0))
-        _cf_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _cf_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
+        _cf_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
         # The clash is about the port LinuxGSM REPORTS, not necessarily the one the game binds:
         # here the game honours the panel's config and comes up on 28994, while 28995 stays
         # someone else's. That also lets the post-start poll exit on its first tick instead of
@@ -1797,7 +1805,8 @@ try:
     try:
         _ur_stub(_msmod, "time", _ur_fast)
         _ur_stub(_sm_core, "run_command", lambda *a, **k: ("", "", 0))
-        _ur_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _ur_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
+        _ur_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
         _ur_stub(_sm_core, "run_as_game_user", lambda *a, **k: ("", "", 0))
         _ur_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
         _ur_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop"])
@@ -1892,7 +1901,8 @@ try:
     try:
         _pu_stub(_msmod, "time", _ur_fast)
         _pu_stub(_sm_core, "run_command", lambda *a, **k: ("", "", 0))
-        _pu_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _pu_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
+        _pu_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
         _pu_stub(_sm_core, "run_as_game_user", _pu_run_as)
         _pu_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
         _pu_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop"])
@@ -1997,7 +2007,8 @@ try:
         _lv_stub(_msmod, "_looks_installed", _msmod._looks_installed)   # saved once, for restore
         _lv_stub(_msmod, "time", _ur_fast)
         _lv_stub(_sm_core, "run_command", _lv_run_command)
-        _lv_stub(_sm_core, "create_game_user", lambda *a, **k: None)
+        _lv_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
+        _lv_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
         _lv_stub(_sm_core, "run_as_game_user", lambda *a, **k: ("", "", 0))
         _lv_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
         _lv_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop"])
@@ -9691,8 +9702,10 @@ try:
                 db.session.commit()
         return _made
 
+    _os_has = _os_mod.host_account_state
     try:
         _appmod_ij._remote_listening_ports = lambda r: {22}
+        _os_mod.host_account_state = lambda r, n: "absent"
         _os_mod.load_game_list = lambda: [
             {"shortname": "btl", "name": "BATTALION: Legacy", "os": "ubuntu-20.04",
              "legacy_os": "ubuntu-20.04"},
@@ -9733,6 +9746,7 @@ try:
               "the 20.04 cap is real whatever the host is, and a 26.04 box is further past it")
     finally:
         _os_mod.load_game_list = _os_real_list
+        _os_mod.host_account_state = _os_has
         _os_sm.host_os_slug = _os_saved
         _appmod_ij._remote_listening_ports = _os_before
 

@@ -3785,29 +3785,152 @@ finally:
 
 # ── The install job's leftover-cleanup probe drives userdel -r and an rm of the home ───────────
 # It asked "is /home/<n>/linuxgsm.sh executable?" and, on "no", deleted the account and its home.
-# The probe ran as ROOT only because it inherited the host row's sudo_enabled — which is the one
-# thing that let it read a 0750 home. Unprivileged it answers EACCES, `test -x` fails, and the
-# shell prints the literal NOTEXISTS: "cannot look" rendered as "nothing there", one line above
-# the destructive branch. Order is the fix — ask about the ACCOUNT first, then the script AS that
-# account, and treat a failed probe as no evidence at all.
-_ms_src2 = open(os.path.join(_root, "panel", "routes", "manage_servers.py"), encoding="utf-8").read()
-_probe_at = _ms_src2.find("user_exists =")
-_del_at = _ms_src2.find('"user-delete"')
-check("install probe: the account check comes BEFORE the destructive branch",
-      _probe_at != -1 and _del_at > _probe_at, "probe=%d delete=%d" % (_probe_at, _del_at))
-check("install probe: the script is read AS THE GAME USER, not as root",
-      "read_as_game_user(" in _ms_src2
-      and "test -x /home/{short_name}/linuxgsm.sh" in _ms_src2)
-check("install probe: a FAILED probe is not evidence of a leftover",
-      'if chk_rc == 0 and "NOTEXISTS" in chk:' in _ms_src2, "the rc is not consulted")
-_ue_at = _ms_src2.find("if user_exists:")
-check("install probe: ...and nothing is deleted unless the account actually exists",
-      _ue_at != -1 and _ue_at < _del_at,
-      "guard at %d, delete at %d (-1 = the guard is gone)" % (_ue_at, _del_at))
-# "NOTEXISTS" CONTAINS "EXISTS" — a naive `"EXISTS" in out` is true for both answers, which would
-# make every fresh install look like an existing account and skip creating it.
-check("install probe: the EXISTS test is not fooled by NOTEXISTS",
-      '"NOTEXISTS" not in idout and "EXISTS" in idout' in _ms_src2)
+# Two bugs lived there. The probe ran as ROOT only because it inherited sudo_enabled, and a failed
+# probe printed NOTEXISTS ("cannot look" as "nothing there"). And the account it deleted was ANY
+# account without a linuxgsm.sh: INSTANCE_NAME_RE is a username grammar, so typing "ubuntu" into
+# the install form ran `userdel -r ubuntu` and an rm -rf of its home as root, ignored both return
+# codes and the useradd's, and bound the new row to whatever account was left. Step 1 is now
+# prepare_install_account, driven here for real with the host stubbed on _core.
+import panel.routes.manage_servers as _ms_acct                                    # noqa: E402
+_acct_sent = []
+_acct_host = {}          # what the stub host answers: id -> "EXISTS"/"NOTEXISTS"/"", script -> ...
+_acct_saved = (_sm_core.run_command, _sm_core.read_as_game_user, _sm_core.run_privileged,
+               _sm_core.create_game_user)
+
+
+def _acct_run(server, cmd, timeout=30, sudo=None, **k):
+    _acct_sent.append(("run", cmd, sudo))
+    a = _acct_host.get("id", "")
+    return (a + "\n" if a else ""), "", (0 if a else -1)
+
+
+def _acct_read(server, user, sh, timeout=30):
+    _acct_sent.append(("read_as", user, sh))
+    return _acct_host.get("script", "NOTEXISTS") + "\n", "", _acct_host.get("script_rc", 0)
+
+
+def _acct_priv(server, verb, args, timeout=30, merge_stderr=True):
+    _acct_sent.append(("priv", verb, tuple(args)))
+    return "", _acct_host.get(verb + "_err", ""), _acct_host.get(verb + "_rc", 0)
+
+
+def _acct_create(server, user, timeout=30):
+    _acct_sent.append(("create", user))
+    return "", "", _acct_host.get("create_rc", 0)
+
+
+def _acct_case(fresh, **host):
+    del _acct_sent[:]
+    _acct_host.clear()
+    _acct_host.update(host)
+    return _ms_acct.prepare_install_account(NS(is_local=False, auth_method="key"), 7, "ubuntu",
+                                            fresh)
+
+
+def _acct_destroyed():
+    return [x for x in _acct_sent if x[0] == "priv" and x[1] in ("user-delete", "user-remove-home")]
+
+
+try:
+    _sm_core.run_command, _sm_core.read_as_game_user = _acct_run, _acct_read
+    _sm_core.run_privileged, _sm_core.create_game_user = _acct_priv, _acct_create
+    _ms_acct._accounts_created.discard((7, "ubuntu"))
+
+    # A FIRST install that finds the account already there: an admin login, no linuxgsm.sh.
+    _r = _acct_case(True, id="EXISTS", script="NOTEXISTS")
+    check("install account: a fresh install into an EXISTING account is refused",
+          _r[0] is False and "already exists" in _r[1], repr(_r))
+    check("install account: ...and nothing is deleted, created or installed into",
+          not _acct_destroyed() and not any(x[0] == "create" for x in _acct_sent), repr(_acct_sent))
+    check("install account: ...and a retry cannot walk into it either (not retryable)",
+          _r[2] is False, repr(_r))
+    # A retry that finds a script-less account this process did NOT create: same refusal.
+    _r = _acct_case(False, id="EXISTS", script="NOTEXISTS")
+    check("install account: a retry does not delete a script-less account it cannot prove it made",
+          _r[0] is False and not _acct_destroyed(), "%r %r" % (_r, _acct_sent))
+    # The host did not answer: "unknown" stops the install; it is not "absent".
+    _r = _acct_case(True, id="")
+    check("install account: a failed id probe is not 'absent' — nothing is created",
+          _r[0] is False and not any(x[0] in ("create", "priv") for x in _acct_sent),
+          "%r %r" % (_r, _acct_sent))
+    # "NOTEXISTS" CONTAINS "EXISTS", so a naive substring test calls every fresh name taken.
+    _acct_case(True, id="NOTEXISTS")
+    _st_absent = _ms_acct.host_account_state(NS(), "ubuntu")
+    _acct_host["id"] = "EXISTS"
+    _st_exists = _ms_acct.host_account_state(NS(), "ubuntu")
+    check("install account: the id probe reads NOTEXISTS as absent and EXISTS as exists",
+          (_st_absent, _st_exists) == ("absent", "exists"), repr((_st_absent, _st_exists)))
+    check("install account: ...and the id probe itself is unprivileged",
+          all(x[2] is False for x in _acct_sent if x[0] == "run"), repr(_acct_sent))
+
+    # POSITIVE CONTROLS. An absent account is created, and remembered as ours...
+    _r = _acct_case(True, id="NOTEXISTS")
+    check("install account: an absent account is created (positive control)",
+          _r == (True, "", True) and ("create", "ubuntu") in _acct_sent, "%r %r" % (_r, _acct_sent))
+    # ...so a retry that finds it half-finished rebuilds it: this is the cleanup that must survive.
+    _r = _acct_case(False, id="EXISTS", script="NOTEXISTS")
+    check("install account: a retry REBUILDS a half-finished account this process created",
+          _r[0] is True and [x[1] for x in _acct_destroyed()] == ["user-delete", "user-remove-home"]
+          and ("create", "ubuntu") in _acct_sent, "%r %r" % (_r, _acct_sent))
+    # ...and the script probe is AS the account, and a FAILED probe is no evidence of a leftover.
+    check("install account: the script is probed AS the game user",
+          any(x[0] == "read_as" and x[1] == "ubuntu" and "linuxgsm.sh" in x[2] for x in _acct_sent),
+          repr(_acct_sent))
+    _r = _acct_case(False, id="EXISTS", script="", script_rc=1)
+    check("install account: a FAILED script probe deletes nothing (kept as it is)",
+          _r[0] is True and not _acct_destroyed(), "%r %r" % (_r, _acct_sent))
+    _r = _acct_case(False, id="EXISTS", script="EXISTS")
+    check("install account: an account WITH linuxgsm.sh is kept, not rebuilt",
+          _r[0] is True and not _acct_destroyed() and not any(x[0] == "create" for x in _acct_sent),
+          "%r %r" % (_r, _acct_sent))
+    # Return codes decide: a failed userdel or useradd stops the install.
+    _ms_acct._accounts_created.add((7, "ubuntu"))
+    _r = _acct_case(False, id="EXISTS", script="NOTEXISTS",
+                    **{"user-delete_rc": 8, "user-delete_err": "user is logged in"})
+    check("install account: a failed userdel stops the install, and does not rm the home",
+          _r[0] is False and "logged in" in _r[1]
+          and not any(x[1] == "user-remove-home" for x in _acct_destroyed()),
+          "%r %r" % (_r, _acct_sent))
+    _ms_acct._accounts_created.discard((7, "ubuntu"))
+    _r = _acct_case(True, id="NOTEXISTS", create_rc=9)
+    check("install account: a failed useradd stops the install",
+          _r[0] is False and (7, "ubuntu") not in _ms_acct._accounts_created, repr(_r))
+finally:
+    (_sm_core.run_command, _sm_core.read_as_game_user, _sm_core.run_privileged,
+     _sm_core.create_game_user) = _acct_saved
+    _ms_acct._accounts_created.discard((7, "ubuntu"))
+
+# The job's step 1 must CALL it, not keep an inline copy beside it: read the AST of the route
+# module, not its text (the comments name the function too).
+import ast as _ast_acct                                                            # noqa: E402
+_ms_tree = _ast_acct.parse(open(os.path.join(_root, "panel", "routes", "manage_servers.py"),
+                                encoding="utf-8").read())
+_ms_calls, _ms_consts = {}, {}
+for _fn in _ast_acct.walk(_ms_tree):
+    if isinstance(_fn, _ast_acct.FunctionDef):
+        _ms_calls[_fn.name] = {getattr(c.func, "id", getattr(c.func, "attr", None))
+                               for c in _ast_acct.walk(_fn) if isinstance(c, _ast_acct.Call)}
+        _ms_consts[_fn.name] = {c.value for c in _ast_acct.walk(_fn)
+                                if isinstance(c, _ast_acct.Constant) and isinstance(c.value, str)}
+check("install account: the install job's _run calls prepare_install_account",
+      "prepare_install_account" in _ms_calls.get("_run", set()),
+      "the job no longer goes through the function the checks above drive")
+check("install account: ...and runs no user-delete of its own beside it",
+      "_run" in _ms_consts and not ({"user-delete", "user-remove-home"} & _ms_consts["_run"]),
+      "an inline userdel is back in the job")
+check("install account: the install ROUTE asks the host whether the account exists",
+      "host_account_state" in _ms_calls.get("install_game_server", set()),
+      "/servers/add no longer checks the host before creating the row")
+_fresh_kw = {}
+for _fn in _ast_acct.walk(_ms_tree):
+    if isinstance(_fn, _ast_acct.FunctionDef) and _fn.name in ("install_game_server", "retry_install"):
+        for _c in _ast_acct.walk(_fn):
+            if isinstance(_c, _ast_acct.Call) and getattr(_c.func, "id", None) == "_run_install_job":
+                _fresh_kw[_fn.name] = [getattr(k.value, "value", None) for k in _c.keywords
+                                       if k.arg == "fresh"]
+check("install account: a new install runs the job as FRESH, a retry does not",
+      _fresh_kw.get("install_game_server") == [True] and _fresh_kw.get("retry_install") == [],
+      repr(_fresh_kw))
 # ── "could not decrypt it" must never read as "nothing is set" ─────────────────────────────────
 # decrypt_secret answers "" for BOTH, and two callers acted on the difference: an undecryptable
 # SSH host-key pin read as "never pinned" and was re-pinned to whatever key was presented, and an
