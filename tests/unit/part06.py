@@ -3939,17 +3939,36 @@ check("cookies: the Secure predicate reads trust_proxy", "trust_proxy" in _ck_ex
 # It stood down whenever Serve had been set up. The wizard stores bind_host 0.0.0.0 by default and
 # nothing that marks Serve done changes it, so the next restart served cleartext HTTP on the public
 # interface — passwords and Bearer tokens in the clear. Serve must follow whichever scheme is used.
-for _label, _bind, _want_tls in (("0.0.0.0 (public + tailnet)", "0.0.0.0", True),
-                                 ("an unset (auto) bind", "", True),
-                                 ("a public address", "203.0.113.5", True),
-                                 ("127.0.0.1", "127.0.0.1", False),
-                                 ("::1", "::1", False)):
-    _ts_cfg = {"use_https": True, "tailscale_setup_done": True, "bind_host": _bind}
-    check("https: with Serve set up and bind %s, own TLS is %s" % (_label, _want_tls),
-          _ck_app._effective_https(_ts_cfg) is _want_tls, repr(_ck_app._effective_https(_ts_cfg)))
-    check("https: ...and Serve is pointed at the scheme actually served (%s)" % _label,
-          _ck_app._ts_backend_scheme(_ts_cfg) == ("https+insecure" if _want_tls else "http"),
-          _ck_app._ts_backend_scheme(_ts_cfg))
+# An UNSET bind is judged by what boot resolves it to, not by the empty string: with Serve proxying,
+# boot binds 127.0.0.1, and treating "" as public switched those installs (the live one among them)
+# to self-signed HTTPS for no gain, with Serve reachable only if a re-point succeeded at every boot.
+_ts_sbb = _ck_app.ts.suggest_best_bind
+try:
+    for _label, _bind, _resolves, _want_tls in (
+            ("0.0.0.0 (public + tailnet)", "0.0.0.0", None, True),
+            ("an unset bind that resolves public (Serve down)", "", "0.0.0.0", True),
+            ("an unset bind that resolves loopback (Serve up)", "", "127.0.0.1", False),
+            ("a public address", "203.0.113.5", None, True),
+            ("127.0.0.1", "127.0.0.1", None, False),
+            ("::1", "::1", None, False)):
+        _ck_app._RESOLVED_BIND.clear()
+        _ck_app.ts.suggest_best_bind = (lambda _r: lambda _p=5000: {"bind_host": _r})(_resolves)
+        _ts_cfg = {"use_https": True, "tailscale_setup_done": True, "bind_host": _bind}
+        check("https: with Serve set up and bind %s, own TLS is %s" % (_label, _want_tls),
+              _ck_app._effective_https(_ts_cfg) is _want_tls, repr(_ck_app._effective_https(_ts_cfg)))
+        check("https: ...and Serve is pointed at the scheme actually served (%s)" % _label,
+              _ck_app._ts_backend_scheme(_ts_cfg) == ("https+insecure" if _want_tls else "http"),
+              _ck_app._ts_backend_scheme(_ts_cfg))
+finally:
+    _ck_app.ts.suggest_best_bind = _ts_sbb
+    _ck_app._RESOLVED_BIND.clear()
+# ...and boot binds the same address the TLS decision was made for (one resolver, not two).
+with open(_ck_app.__file__, encoding="utf-8") as _ts_fh:
+    _ts_main = _ts_fh.read()
+_ts_boot = _ts_main[_ts_main.index('if __name__ == "__main__":'):]
+check("https: boot's bind comes from _resolved_bind, the same answer the TLS decision reads",
+      "host = _resolved_bind(cfg)" in _ts_boot and "suggest_best_bind" not in _ts_boot,
+      "boot resolves its bind separately — the scheme Serve is pointed at can disagree with it")
 check("cookies: ...and not site_domain, which is not evidence of TLS",
       "site_domain" not in _ck_expr, _ck_expr)
 

@@ -2364,6 +2364,27 @@ def _bind_is_loopback(bind_host):
         return False
 
 
+# The address this process binds, decided ONCE: bind_host when it is set, otherwise what boot picks
+# (loopback when Tailscale Serve is proxying the panel, else a tailnet IP or 0.0.0.0). Cached because
+# the process cannot rebind without a restart, and every caller has to agree with the boot's choice:
+# _ts_backend_scheme points Serve at the scheme _effective_https says is being served.
+_RESOLVED_BIND = {}
+
+
+def _resolved_bind(cfg):
+    host = (cfg.get("bind_host") or "").strip()
+    if host:
+        return host
+    port = cfg.get("port", 5000)
+    if port not in _RESOLVED_BIND:
+        try:
+            _RESOLVED_BIND[port] = ts.suggest_best_bind(port).get("bind_host") or "0.0.0.0"
+        except Exception:
+            _log.debug("bind resolution failed; assuming 0.0.0.0", exc_info=True)
+            _RESOLVED_BIND[port] = "0.0.0.0"
+    return _RESOLVED_BIND[port]
+
+
 def _effective_https(cfg):
     """Should the panel terminate TLS itself with the built-in self-signed cert?
 
@@ -2378,11 +2399,15 @@ def _effective_https(cfg):
     bind_host 0.0.0.0 by default, and nothing that marks Serve done changes it, so this used to turn
     a public, self-signed HTTPS panel into cleartext HTTP on every interface at the next restart.
     Passwords and Bearer tokens then crossed the network in the clear. With any other bind (or an
-    unset one, which may resolve to a public address) the panel keeps its own TLS, and Serve is
-    pointed at https+insecure://127.0.0.1 (see _ts_backend_scheme, which reads this)."""
+    unset one that resolves to a public address) the panel keeps its own TLS, and Serve is
+    pointed at https+insecure://127.0.0.1 (see _ts_backend_scheme, which reads this).
+
+    The bind is the RESOLVED one (_resolved_bind). An unset bind with Serve proxying already binds
+    127.0.0.1 at boot, and treating that as public switched such installs to self-signed HTTPS for
+    no gain — and made Serve's reachability depend on a re-point succeeding at every boot."""
     if not cfg.get("use_https", True):
         return False
-    if cfg.get("tailscale_setup_done", False) and _bind_is_loopback(cfg.get("bind_host")):
+    if cfg.get("tailscale_setup_done", False) and _bind_is_loopback(_resolved_bind(cfg)):
         return False
     if cfg.get("trust_proxy", False):
         return False
@@ -2526,15 +2551,10 @@ if __name__ == "__main__":
                 _log.debug("bot pending-update report failed", exc_info=True)
     threading.Thread(target=_bot_update_report, daemon=True).start()
 
-    host = (cfg.get("bind_host") or "").strip()
-    if not host:
-        # Not explicitly configured: bind where the panel is actually reachable —
-        # 127.0.0.1 if Tailscale Serve is up to proxy to it, otherwise 0.0.0.0 so the
-        # first-run setup wizard is reachable over the network on a plain VPS.
-        try:
-            host = ts.suggest_best_bind(port).get("bind_host") or "0.0.0.0"
-        except Exception:
-            host = "0.0.0.0"
+    # Not explicitly configured: bind where the panel is actually reachable — 127.0.0.1 if
+    # Tailscale Serve is up to proxy to it, otherwise 0.0.0.0 so the first-run setup wizard is
+    # reachable over the network on a plain VPS. The SAME answer _effective_https reads.
+    host = _resolved_bind(cfg)
     _scheme = "https" if _effective_https(cfg) else "http"
     print(f"LinuxGSM Panel starting on {host}:{port}")
     print(f"Open {_scheme}://{host}:{port} in your browser")
