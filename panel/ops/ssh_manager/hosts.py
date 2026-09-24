@@ -271,11 +271,12 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
     if not spec:
         return False, "Port required"
     # Validated HERE, like remote_ufw_open_port's sibling checks. The verb validates too, but it
-    # signals failure by RAISING VerbError — run_privileged does not catch it, nor does the route,
-    # and the project has no Flask errorhandler — so a hostname in the "allow from" box or a
-    # malformed port returned a bare 500 HTML page. The caller's `.then(r => r.json())` then failed
-    # to parse it, so the user saw a generic "Failed" with no reason and the panel log got a
-    # traceback. Same two answers the sibling gives, as (ok, msg).
+    # signals failure by RAISING VerbError — run_privileged does not catch it, nor does the route —
+    # so a hostname in the "allow from" box or a malformed port returned a bare 500 HTML page that
+    # the caller's `.then(r => r.json())` could not parse. app.py's _json_for_api_errors now makes
+    # that 500 JSON, but its message is the generic "Something went wrong — see the panel log.",
+    # so the user still got no reason and the panel log still got a traceback. Same two answers
+    # the sibling gives, as (ok, msg).
     try:
         _ipaddress.ip_network(src, strict=False)
     except ValueError:
