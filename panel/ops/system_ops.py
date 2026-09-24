@@ -1599,7 +1599,8 @@ def _kernel_has_ip(addr):
     lockout guards. And a host with ip_nonlocal_bind set binds ANY address, so there a bind proves
     nothing and the answer is no."""
     import socket
-    if _nonlocal_bind_allowed(addr.version):
+    # A wildcard is not an address this host HAS: binding it always succeeds.
+    if addr.is_unspecified or _nonlocal_bind_allowed(addr.version):
         return False
     fam = socket.AF_INET6 if addr.version == 6 else socket.AF_INET
     try:

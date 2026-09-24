@@ -290,7 +290,7 @@ def create_backup(kind="manual", encrypt=True, passphrase=None):
     _ensure_dir()
     try:
         if not encrypt:
-            passphrase = ""
+            passphrase = ""  # nosec B105 - empty means "not encrypted", not a stored secret
         elif passphrase is None:
             passphrase = get_passphrase()
     except PassphraseUnreadable as exc:

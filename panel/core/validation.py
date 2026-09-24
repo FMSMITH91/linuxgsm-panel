@@ -99,12 +99,17 @@ def can_bind_address(ip):
     import ipaddress
     import socket
     try:
-        fam = socket.AF_INET6 if ipaddress.ip_address(ip).version == 6 else socket.AF_INET
+        addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
+    # A wildcard is not an address this host HAS: binding 0.0.0.0 or :: always succeeds, which would
+    # answer yes for every host. Callers that accept a wildcard bind test for it themselves.
+    if addr.is_unspecified:
+        return False
+    fam = socket.AF_INET6 if addr.version == 6 else socket.AF_INET
     try:
         with socket.socket(fam, socket.SOCK_STREAM) as sock:
-            sock.bind((str(ip), 0))
+            sock.bind((str(addr), 0))
         return True
     except OSError as exc:
         return exc.errno != errno.EADDRNOTAVAIL

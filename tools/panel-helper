@@ -2095,6 +2095,8 @@ def _db_repair_reclaim(db_path, account):
         if os.fstat(dfd).st_uid == account.pw_uid:
             _db_reclaim_files(dfd, os.path.basename(db_path), account.pw_uid, account.pw_gid)
     except OSError:
+        # Best effort: the repair still runs as the owner, and a file it cannot reclaim is reported
+        # by db_maintenance's own write check rather than raised from here.
         pass
     finally:
         os.close(dfd)
@@ -3307,9 +3309,9 @@ def _probe_as(user, probe):
                 while data:
                     data = data[os.write(wfd, data):]
                 code = 0
-        except BaseException:
-            code = 1
         finally:
+            # code is 0 only past a complete write; anything raised leaves it 1. os._exit, so the
+            # child never unwinds into the helper's own code with the account's identity.
             os._exit(code)
     os.close(wfd)
     chunks = []

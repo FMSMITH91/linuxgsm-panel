@@ -28,7 +28,7 @@ function tsRender(s){
     // Running, but no tailnet name came back (a `status --json` that timed out on a busy host is
     // enough). This fell through to "Tailscale isn't installed on this host yet" with an Install
     // button — right after the operator had approved the machine.
-    tsBox.innerHTML='<div class="small text-secondary mb-2">Connected to your tailnet, but its name couldn\'t be read yet.</div>'
+    tsBox.innerHTML='<div class="small text-secondary mb-2">Connected to your tailnet, but its name couldn\'t be read yet.</div>'  // nosemgrep - literals plus _da('tsRefresh'), a constant action name
       + '<button type="button" class="btn btn-outline-secondary w-100"' + _da('tsRefresh') + '><i class="bi bi-arrow-repeat"></i> Check again</button>';
     return;
   }

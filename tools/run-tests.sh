@@ -47,10 +47,13 @@ run_suite() {
         echo "  !! ${path} exited ${rc}" >&2
         return "$rc"
     fi
-    # Both spellings: the DB-owning suites print "SKIP: ..." at the start of a line, and
-    # template_actions_test prints an indented "  SKIP  name  [reason]". The anchored pattern
-    # matched only the first, so an all-skipped run of the second sailed through as a pass.
-    if printf '%s' "$out" | grep -qiE '(^|[[:space:]])SKIP[: ]'; then
+    # The spellings a suite really uses: the DB-owning suites print "SKIP: ..." at the start of a
+    # line, and the check-level suites print "SKIP  name" (two spaces), indented in their summary.
+    # An anchored "^SKIP:" matched only the first, so an all-skipped run of the second sailed
+    # through as a pass. The fix after that was case-insensitive and matched "skip" ANYWHERE
+    # before a space — so a passing check named "...to the skip dialog" failed CI as a skipped
+    # suite. Uppercase, at the start of the line after indentation, then a colon or two spaces.
+    if printf '%s' "$out" | grep -qE '^[[:space:]]*SKIP(:|  )'; then
         echo "  !! ${path} SKIPPED — that is a gap, not a pass. See the note in $0." >&2
         return 1
     fi

@@ -4842,6 +4842,11 @@ check("setup: setup_wizard builds the credential it tests and stores with wizard
 from panel.core.validation import bind_host_error as _bhe, can_bind_address as _cba  # noqa: E402
 check("bind: (control) the kernel says 127.0.0.1 is bindable here", _cba("127.0.0.1") is True)
 check("bind: a well-formed address on no interface (TEST-NET-1) is not", _cba("192.0.2.123") is False)
+# Binding a wildcard always succeeds, so a bind probe of 0.0.0.0 or :: answered "this host has it"
+# for any host. It is not an address the host HAS; callers that accept a wildcard test for it first.
+check("bind: a wildcard is not reported as an address on this host",
+      _cba("0.0.0.0") is False and _cba("::") is False,
+      "0.0.0.0=%r ::=%r" % (_cba("0.0.0.0"), _cba("::")))
 check("bind: bind_host_error refuses it when given the check",
       _bhe("192.0.2.123", _cba) is not None and _bhe("127.0.0.1", _cba) is None)
 check("bind: setup_wizard passes can_bind_address to bind_host_error",
@@ -6407,6 +6412,39 @@ _rc_code6 = "\n".join(_ln for _ln in _rc_src6.splitlines()
 # matched that copy and the gate passed with the clearing deleted from the loop — which is the
 # only place it prevents anything. Caught by mutation, which is the entire point of doing it.
 _rc_loop6 = _rc_code6.split("def _run_suites", 1)[-1].split("\ndef ", 1)[0]
+
+# ── run-tests.sh's skip detector reads a SKIP line, not the word "skip" in a check name ─────
+# It was case-insensitive and matched "skip" anywhere before a space, so a PASSING check named
+# "...hands a safety-copy refusal to the skip dialog..." failed CI as a skipped suite. Run the
+# real run_suite function under bash against a stub suite that prints each shape.
+import subprocess as _rs6_sp
+import tempfile as _rs6_tmp
+with open(os.path.join(_root, "tools", "run-tests.sh"), encoding="utf-8") as _rs6_fh:
+    _rs6_src = _rs6_fh.read()
+_rs6_i = _rs6_src.index("run_suite() {")
+_rs6_fn = _rs6_src[_rs6_i:_rs6_src.index("\n}\n", _rs6_i) + 3]
+_rs6_dir = _rs6_tmp.mkdtemp()
+
+
+def _rs6_verdict(text):
+    """rc of run_suite for a suite that prints `text` and exits 0."""
+    stub = os.path.join(_rs6_dir, "suite.py")
+    with open(stub, "w", encoding="utf-8") as fh:
+        fh.write("print(%r)\n" % text)
+    r = _rs6_sp.run(["bash", "-c", 'set -e; PY=%s; %s run_suite label %s'
+                     % (sys.executable, _rs6_fn, stub)],
+                    cwd=_rs6_dir, capture_output=True, text=True, timeout=30)
+    return r.returncode
+
+
+for _rs6_text, _rs6_want, _rs6_what in (
+        ("SKIP: panel.db already exists", 1, "a DB suite's 'SKIP:' line"),
+        ("PASS  a\n\n1 CHECK(S) DID NOT RUN:\n  SKIP  x   [no esprima]", 1, "an indented summary SKIP"),
+        ("SKIP  some check   [reason]", 1, "a check-level SKIP row"),
+        ("PASS  backups: hands a refusal to the skip dialog\n\n1 / 1 checks passed", 0,
+         "a passing check whose NAME says 'skip'")):
+    check("run-tests: run_suite reads %s as %s" % (_rs6_what, "a skip" if _rs6_want else "a pass"),
+          _rs6_verdict(_rs6_text) == _rs6_want, "rc=%r for %r" % (_rs6_verdict(_rs6_text), _rs6_text[:60]))
 check("route_coverage: data/ is cleared before each suite runs",
       "rmtree" in _rc_loop6 and '"data"' in _rc_loop6,
       "nothing removes data/ inside the suite loop, so the suites that refuse to run against an "
