@@ -258,30 +258,63 @@ finally:
 # root. Read-only, but still a composed root command. Exercised against a sandboxed /home holding
 # a user with two of the wanted games, one with none of them, one with no serverfiles at all, and
 # one whose NAME is not something the panel would ever pass to a verb.
+#
+# And AS WHOM it looks. As root the probes followed the account's links, so `ln -s /root
+# ~/serverfiles` made them an existence oracle over /root; refusing every link instead broke the
+# layout operators actually use — serverfiles moved to a bigger disk and linked back — and the
+# panel host then called installed content absent: downloaded it again, ran auto-install over it,
+# dropped it from the update cron, and reported it removed when nothing was. Now each probe runs in
+# a child that has dropped to the account (own groups), following links with that account's access
+# only. This suite is not root, so the drop is a stub that RECORDS (to a file — it runs in the
+# forked child) and the accounts are a stub passwd mapping every name to this uid; "nodrop" is an
+# account whose drop does not take, "rootish" one with uid 0, "ghost" a /home dir with no account.
 try:
     _scanroot = _tempfile.mkdtemp(prefix="panel-scan-")
+    _scandisk = _tempfile.mkdtemp(prefix="panel-scan-disk-")
     for _d in ("srcds/serverfiles/cstrike", "srcds/serverfiles/hl2",
-               "gmodserver/serverfiles/tf2", "nothing", "bad;name/serverfiles/cstrike", "linker"):
+               "gmodserver/serverfiles/tf2", "nothing", "bad;name/serverfiles/cstrike", "moved",
+               "locked", "ghost/serverfiles/cstrike", "nodrop/serverfiles/cstrike",
+               "rootish/serverfiles/cstrike"):
         os.makedirs(os.path.join(_scanroot, _d), exist_ok=True)
-    # The account owns everything below its home, so it can point any of it anywhere. As root the
-    # probes FOLLOWED those links: `ln -s /root ~/serverfiles` made them an existence oracle over
-    # places the account cannot look. Here the targets are another user's real content, so a probe
-    # that follows reports what is not the account's — a whole serverfiles, and one game entry.
-    os.symlink(os.path.join(_scanroot, "srcds", "serverfiles"),
-               os.path.join(_scanroot, "linker", "serverfiles"))
-    os.symlink(os.path.join(_scanroot, "srcds", "serverfiles", "hl2"),
-               os.path.join(_scanroot, "gmodserver", "serverfiles", "hl2"))
-    for _sn, _sm in (("srcds/cssserver", 0o755), ("srcds/notexec", 0o644)):
+    os.makedirs(os.path.join(_scandisk, "css", "cstrike"))
+    os.makedirs(os.path.join(_scandisk, "shut", "sf", "cstrike"))
+    # The operator's layout: serverfiles on another disk, linked back into the home.
+    os.symlink(os.path.join(_scandisk, "css"), os.path.join(_scanroot, "moved", "serverfiles"))
+    # A link to somewhere the account cannot look: it must learn nothing it could not itself.
+    os.symlink(os.path.join(_scandisk, "shut", "sf"), os.path.join(_scanroot, "locked", "serverfiles"))
+    os.chmod(os.path.join(_scandisk, "shut"), 0)
+    for _sn, _sm in (("srcds/cssserver", 0o755), ("srcds/notexec", 0o644),
+                     ("nodrop/cssserver", 0o755)):
         with open(os.path.join(_scanroot, _sn), "w") as _fh:
             _fh.write("#!/bin/sh\n")
         os.chmod(os.path.join(_scanroot, _sn), _sm)
     os.symlink(os.path.join(_scanroot, "srcds", "cssserver"),
-               os.path.join(_scanroot, "linker", "cssserver"))
+               os.path.join(_scanroot, "moved", "cssserver"))
     _spec_s = _ilu.spec_from_loader("ph_scan", _machinery.SourceFileLoader("ph_scan", _helper_path))
     _hs = _ilu.module_from_spec(_spec_s)
     _spec_s.loader.exec_module(_hs)
     _hs.HOME_ROOT = _scanroot
     _hs.home_of = lambda u, _r=_scanroot: _r + "/" + _hs.v_username(u)
+    import pwd as _pwd_s
+    import types as _types_s
+    _s_me = _pwd_s.getpwuid(os.getuid())
+
+    def _s_getpwnam(name):
+        if name == "ghost" or name not in ("srcds", "gmodserver", "nothing", "moved", "locked",
+                                            "nodrop", "rootish"):
+            raise KeyError(name)
+        return _pwd_s.struct_passwd((name, "x", 0 if name == "rootish" else _s_me.pw_uid,
+                                     _s_me.pw_gid, "", os.path.join(_scanroot, name), "/bin/sh"))
+
+    _hs.pwd = _types_s.SimpleNamespace(getpwnam=_s_getpwnam)
+    _s_droplog = os.path.join(_scandisk, "drops")
+
+    def _s_drop(pw, own_groups=False):
+        with open(_s_droplog, "a") as _fh:
+            _fh.write("%s:%s\n" % (pw.pw_name, own_groups))
+        return pw.pw_name != "nodrop"
+
+    _hs._drop_to = _s_drop
     import io as _io_s
     _sbuf = _io_s.StringIO()
     _ssave = sys.stdout
@@ -291,27 +324,45 @@ try:
     finally:
         sys.stdout = _ssave
     _hits = sorted(ln for ln in _sbuf.getvalue().splitlines() if ln)
+    _s_drops = sorted(open(_s_droplog).read().split()) if os.path.exists(_s_droplog) else []
     eq("content scan: reports every wanted game a user actually has",
-       _hits, ["HIT|srcds|cstrike", "HIT|srcds|hl2"])
+       [h for h in _hits if h.startswith("HIT|srcds|")], ["HIT|srcds|cstrike", "HIT|srcds|hl2"])
     check("content scan: a user with serverfiles but none of the wanted games is not reported",
           not any("gmodserver" in h for h in _hits), str(_hits))
     check("content scan: a user with no serverfiles at all is not reported",
           not any("nothing" in h for h in _hits), str(_hits))
     check("content scan: a /home entry whose NAME the panel would never use is skipped",
           not any("bad" in h for h in _hits), str(_hits))
-    check("content scan: a symlinked serverfiles or game entry is not followed",
-          not any(h.startswith(("HIT|linker|", "HIT|gmodserver|")) for h in _hits), str(_hits))
-    _cp_got = (_hs.do_content_game_present(["srcds", "cstrike"], None),
-               _hs.do_content_game_present(["linker", "cstrike"], None),
-               _hs.do_content_game_present(["gmodserver", "hl2"], None))
-    check("content-game-present: a real game dir is present; one reached through a link the "
-          "account planted is not", _cp_got == (0, 1, 1), repr(_cp_got))
-    _cs_got = (_hs.do_content_script_present(["srcds", "cssserver"], None),
-               _hs.do_content_script_present(["linker", "cssserver"], None),
-               _hs.do_content_script_present(["srcds", "notexec"], None))
-    check("content-script-present: a real executable is present; a link to one, or a file with no "
-          "execute bit, is not", _cs_got == (0, 1, 1), repr(_cs_got))
+    check("content scan: serverfiles moved to another disk and linked back is found (as on a remote)",
+          "HIT|moved|cstrike" in _hits, str(_hits))
+    check("content scan: a link to where the account cannot look reports nothing",
+          os.geteuid() == 0 or not any(h.startswith("HIT|locked|") for h in _hits), str(_hits))
+    check("content scan: a /home dir with no account, a uid-0 account, or a drop that did not take "
+          "is not reported", not any(h.split("|")[1] in ("ghost", "rootish", "nodrop")
+                                     for h in _hits), str(_hits))
+    check("content scan: every user is looked at AS that user, with its own groups, and only them",
+          _s_drops == sorted("%s:True" % _u for _u in ("srcds", "gmodserver", "nothing", "moved",
+                                                        "locked", "nodrop")), repr(_s_drops))
+    if os.path.exists(_s_droplog):
+        os.remove(_s_droplog)
+    _cp_got = tuple(_hs.do_content_game_present([_u, _g], None) for _u, _g in (
+        ("srcds", "cstrike"), ("moved", "cstrike"), ("gmodserver", "hl2"), ("locked", "cstrike"),
+        ("ghost", "cstrike"), ("nodrop", "cstrike"), ("rootish", "cstrike")))
+    check("content-game-present: present, present through the account's own link, absent, absent "
+          "past a place it cannot look, absent with no account; 2 (unknown) when it cannot be asked",
+          _cp_got == (0, 0, 1, 0 if os.geteuid() == 0 else 1, 1, 2, 2), repr(_cp_got))
+    _cs_got = tuple(_hs.do_content_script_present([_u, _sc], None) for _u, _sc in (
+        ("srcds", "cssserver"), ("moved", "cssserver"), ("srcds", "notexec"), ("nodrop", "cssserver")))
+    check("content-script-present: an executable is present, directly or through the account's own "
+          "link; one with no execute bit is not; 2 when the account cannot be asked",
+          _cs_got == (0, 0, 1, 2), repr(_cs_got))
+    _s_drops = sorted(set(open(_s_droplog).read().split())) if os.path.exists(_s_droplog) else []
+    check("content-game-present / -script-present: asked as the named account, never as root",
+          _s_drops == sorted("%s:True" % _u for _u in ("srcds", "moved", "gmodserver", "locked",
+                                                        "nodrop")), repr(_s_drops))
+    os.chmod(os.path.join(_scandisk, "shut"), 0o700)
     _shutil.rmtree(_scanroot, ignore_errors=True)
+    _shutil.rmtree(_scandisk, ignore_errors=True)
 except OSError as _e:
     skip("content scan", _e)
 
