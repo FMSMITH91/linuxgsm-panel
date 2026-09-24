@@ -2453,14 +2453,25 @@ try:
         _f2bp_body = _so._panel_f2b_jail_body("/x/auth.log", 5000, [])
         check("f2b jail: %r bans on %s" % (_f2bp_c, "EVERY port" if _f2bp_want else "the web port"),
               ("banaction = iptables-allports" in _f2bp_body) is _f2bp_want, _f2bp_body[:160])
+        # An all-ports ban on a tailnet peer takes its SSH over tailscale0 and every game port:
+        # under Serve the forwarded client IS a tailnet address, and five mistyped passwords from an
+        # admin's laptop banned it for an hour. The panel never firewall-blocks the tailnet elsewhere.
+        _f2bp_ign = next((ln.split("=", 1)[1].split() for ln in _f2bp_body.splitlines()
+                          if ln.startswith("ignoreip")), [])
+        check("f2b jail: %r %s the tailnet (IPv4 and IPv6) from the ban"
+              % (_f2bp_c, "exempts" if _f2bp_want else "(web port only, as before) does not exempt"),
+              ({"100.64.0.0/10", "fd7a:115c:a1e0::/48"} <= set(_f2bp_ign)) is _f2bp_want
+              and {"127.0.0.1/8", "::1"} <= set(_f2bp_ign), "ignoreip %r" % (_f2bp_ign,))
     # ...and a jail already written for the web port alone is rewritten once the panel is proxied:
     # ensure_panel_fail2ban is the only thing that would ever rewrite it, and it returned early on
-    # "port, logpath, backend and whitelist all match".
+    # "port, logpath, backend and whitelist all match". The stored ignoreip is what THIS config
+    # writes, so only the banaction differs.
     _f2bp_calls = []
     _so.panel_fail2ban_status = lambda: {"installed": True, "enabled": True}
     _so._panel_f2b_jail_port = lambda: 5000
     _so._panel_f2b_jail_value = lambda k: {"logpath": "/x/auth.log", "backend": "auto"}.get(k)
-    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line([]).split()
+    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line(
+        _so._panel_f2b_ignore([], _so._panel_login_proxied())).split()
     _so.configure_panel_fail2ban = lambda *a, **k: (_f2bp_calls.append(a), (True, "ok"))[1]
     _f2bp_cfg.load_config = lambda: {"trust_proxy": True}
     _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
@@ -2470,6 +2481,20 @@ try:
     _f2bp_cfg.load_config = lambda: {}
     _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
     check("f2b jail: ...while the same jail on a directly-reached panel is left alone (positive control)",
+          not _f2bp_calls, "rewrites: %r" % (_f2bp_calls,))
+    # An all-ports jail written before the tailnet was exempted is rewritten, not read as healthy.
+    _f2bp_cfg.load_config = lambda: {"tailscale_setup_done": True}
+    _so._panel_f2b_jail_value = lambda k: {"logpath": "/x/auth.log", "backend": "auto",
+                                           "banaction": "iptables-allports"}.get(k)
+    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line([]).split()
+    _f2bp_calls.clear()
+    _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
+    check("f2b jail: an all-ports jail that bans the tailnet is rewritten, not left as healthy",
+          len(_f2bp_calls) == 1, "rewrites: %r" % (_f2bp_calls,))
+    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line(_so._panel_f2b_ignore([], True)).split()
+    _f2bp_calls.clear()
+    _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
+    check("f2b jail: ...while one that already exempts it is left alone (positive control)",
           not _f2bp_calls, "rewrites: %r" % (_f2bp_calls,))
 finally:
     (_f2bp_cfg.load_config, _so.panel_fail2ban_status, _so._panel_f2b_jail_port,
@@ -2878,6 +2903,17 @@ try:
     _hok, _hmsg, _ = _bs_harden(_eff_cloud, auth="password")
     check("bootstrap: ...and a password-auth remote, which never asks for it off, is not failed "
           "for keeping it", _hok is True, "msg=%r" % (_hmsg,))
+    # ...but "not the value the panel wrote" is not "not hardened". A host with `PermitRootLogin no`
+    # in sshd_config.d — STRICTER than the prohibit-password the panel sets — was failed with "the
+    # SSH hardening did not take effect" and never marked online.
+    for _prl in ("no", "forced-commands-only"):
+        _hok, _hmsg, _hlog = _bs_harden(_eff_ok.replace("permitrootlogin without-password",
+                                                        "permitrootlogin " + _prl))
+        check("bootstrap: PermitRootLogin %s, stricter than asked, is hardened, not a failure" % _prl,
+              _hok is True and "NOT IN EFFECT" not in _hlog, "ok=%r msg=%r" % (_hok, _hmsg))
+    _hok, _hmsg, _ = _bs_harden(_eff_ok.replace("permitrootlogin without-password", "permitrootlogin yes"))
+    check("bootstrap: ...while PermitRootLogin yes still fails it (positive control)",
+          _hok is False and "PermitRootLogin yes" in _hmsg, "ok=%r msg=%r" % (_hok, _hmsg))
 
     # The UFW step's `ufw limit 22/tcp` is appended AFTER an existing `ufw allow OpenSSH` or bare
     # `allow 22` — neither is the 22/tcp rule to ufw — so SSH stayed unthrottled on exactly the
@@ -2898,6 +2934,28 @@ try:
     check("bootstrap: the SSH limit is not left behind an OpenSSH / bare-22 allow",
           _i_lim >= 0 and _i_app > _i_lim and _i_bare > _i_lim,
           "limit at %d, delete OpenSSH at %d, delete bare 22 at %d" % (_i_lim, _i_app, _i_bare))
+    check("bootstrap: ...and with the limit in, UFW is switched on (positive control for below)",
+          ("ufw-enable", []) in _bs_ufw, "ran %r" % (_bs_ufw,))
+    # ...but only once the limit IS in. Its exit code was never read: when `ufw limit 22/tcp`
+    # failed, the rules that DO let SSH in were deleted anyway and UFW was switched on at
+    # deny-incoming — a fresh host cut off from SSH mid-bootstrap, reported as complete.
+    _bs_ufw.clear()
+
+    def _priv_ufw_nolimit(s, verb, args=None, **k):
+        _bs_ufw.append((verb, list(args or [])))
+        return ("", "ERROR: Could not acquire lock", 1) if verb == "ufw-limit-port" else ("", "", 0)
+    _sm_core.run_privileged = _priv_ufw_nolimit
+    _bnok, _bnmsg, _bnlog = _sm_hosts.remote_bootstrap_vps(
+        NS(id=9104, host="203.0.113.13", auth_method="key"), set_timezone="", enable_ufw=True,
+        install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=False)
+    _bn_ran = [v for v, _a in _bs_ufw]
+    check("bootstrap: a failed SSH limit removes no SSH allow and does not switch UFW on",
+          "ufw-limit-port" in _bn_ran and not {"ufw-delete-allow-app", "ufw-delete-allow-port",
+                                               "ufw-default", "ufw-enable"} & set(_bn_ran),
+          "ran %r" % (_bs_ufw,))
+    check("bootstrap: ...and the job says the firewall was not enabled, not 'complete'",
+          _bnok is False and "NOT enabled" in _bnmsg and "Could not acquire lock" in _bnmsg
+          and "NOT DONE" in _bnlog, "ok=%r msg=%r" % (_bnok, _bnmsg))
 finally:
     (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
      _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,

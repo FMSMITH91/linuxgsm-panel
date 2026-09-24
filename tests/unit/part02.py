@@ -1130,6 +1130,21 @@ try:
     _st = _sm_hosts.remote_public_ssh_status(object())
     check("public ssh: a readable firewall still reports its actual mode (positive control)",
           _st.get("mode") == "limit" and not _st.get("unreachable"), str(_st))
+    # ufw translates its Status line WHOLE (fr.po: `État : actif`); the rules listing is not. A
+    # literal "Status:" gate read such a host as unreachable before the locale-aware reading ran.
+    _FR_UFW = ("État : actif\n\n"
+               "Vers                       Action      De\n"
+               "----                       ------      --\n")
+    _sm_core.run_privileged = lambda s, v, a=(), **k: (
+        _FR_UFW + "22/tcp                     LIMIT IN    Anywhere\n", "", 0)
+    _st = _sm_hosts.remote_public_ssh_status(object())
+    check("public ssh: a host whose ufw prints a translated Status line is read, not 'unreachable'",
+          _st.get("mode") == "limit" and _st.get("active") is True and not _st.get("unreachable"),
+          str(_st))
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "", 0)
+    _st = _sm_hosts.remote_public_ssh_status(object())
+    check("public ssh: ...while an EMPTY answer with rc 0 is still unreadable, never 'off'",
+          _st.get("unreachable") is True and _st.get("mode") != "off", str(_st))
 
     # ── ufw stops at the FIRST rule a connection matches ─────────────────────────────────────
     # Any LIMIT line used to win, so `OpenSSH ALLOW` above `22/tcp LIMIT` — what `ufw allow
@@ -1187,6 +1202,21 @@ try:
     _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
     check("public ssh: ...and an existing 22/tcp allow is turned into the limit (positive control)",
           _ok is True and _rules == [("22/tcp", "LIMIT")], "ok=%r rules %r" % (_ok, _rules))
+    # ...and the new rule is the GATE for those deletes. The loop ignored every exit code, so when
+    # `ufw limit 22/tcp` failed (a timeout, a held lock) it deleted `allow OpenSSH` anyway and a host
+    # opened only by it had nothing left letting SSH in; 'allow' likewise deleted the LIMIT. The
+    # two cases above, where the add works, are the positive control.
+    for _mode_g, _add_g, _start_g in (("limit", "ufw-limit-port", [("OpenSSH", "ALLOW")]),
+                                      ("allow", "ufw-allow-port", [("22/tcp", "LIMIT")])):
+        _rules = list(_start_g)
+        _fake_ufw(_rules)
+        _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, _add=_add_g, **k:
+                                   ("", "ERROR: Could not acquire lock", 1) if v == _add
+                                   else _i(s, v, a, **k))
+        _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), _mode_g)
+        check("public ssh: '%s' whose new 22/tcp rule fails removes no rule that lets SSH in" % _mode_g,
+              _ok is False and _rules == _start_g and "Could not acquire lock" in _msg,
+              "ok=%r msg=%r rules now %r" % (_ok, _msg, _rules))
 
     # ── rate limiting a port the panel itself opened ─────────────────────────────────────────
     # Every game port is opened BARE (`ufw allow 28016 comment rustserver`, tcp+udp). The limit
@@ -1241,6 +1271,17 @@ try:
     _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28017, "tcp", limit=False)
     check("ufw limit: ...and 'remove' on a port with no limit opens nothing",
           _ok is False and not any(r[0].startswith("28017") for r in _rules), "ok=%r rules %r" % (_ok, _rules))
+    check("ufw limit: ...saying it has no rate limit (positive control for the inactive case below)",
+          "no rate limit" in _msg, "msg=%r" % (_msg,))
+    # An INACTIVE ufw lists no rules at all, stored ones included, so the same test answered
+    # "22/tcp has no rate limit to remove" about a host whose stored rules hold one.
+    _inact_ran = []
+    _sm_core.run_privileged = lambda s, v, a=(), **k: (
+        ("Status: inactive\n", "", 0) if v == "ufw-status" else (_inact_ran.append(v), ("", "", 0))[1])
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 22, "tcp", limit=False)
+    check("ufw limit: removing a limit on an INACTIVE ufw says it cannot read the rules, not 'no limit'",
+          _ok is False and "not active" in _msg and "no rate limit" not in _msg and not _inact_ran,
+          "ok=%r msg=%r ran %r" % (_ok, _msg, _inact_ran))
     _rules = [("28000:28100/tcp", "ALLOW", "")]
     _fake_ufw_n(_rules)
     _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
@@ -1251,6 +1292,53 @@ try:
     _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
     check("ufw limit: ...while a port with nothing ahead of it is limited (positive control)",
           _ok is True and _rules == [("28016/tcp", "LIMIT", "")], "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
+    # The bare rule goes only once the other protocol is re-opened on its own. The re-allow's exit
+    # code was ignored: when it failed, 28016/udp — gameplay — was closed, and the answer was "now
+    # rate limited", the read-back looking at tcp only. (The split above is the positive control.)
+    _rules = [("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, **k:
+                               ("", "ERROR: timed out", 1) if (v, list(a)[:1]) == ("ufw-allow-port", ["28016/udp"])
+                               else _i(s, v, a, **k))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: a failed re-allow of the other protocol leaves the bare rule, and says so",
+          _ok is False and ("28016", "ALLOW", "rustserver") in _rules and "28016/udp" in _msg,
+          "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
+    # ...but the read-back, not the failed re-allow, decides: where the limit rewrote a 28016/tcp
+    # allow ABOVE the bare rule, it is what tcp meets first, and udp is still open through the bare.
+    _rules = [("28016/tcp", "ALLOW", ""), ("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, **k:
+                               ("", "ERROR: timed out", 1) if (v, list(a)[:1]) == ("ufw-allow-port", ["28016/udp"])
+                               else _i(s, v, a, **k))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: ...while a limit already ahead of the bare rule is limited, udp left open",
+          _ok is True and _rules == [("28016/tcp", "LIMIT", ""), ("28016", "ALLOW", "rustserver")],
+          "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
+    # ...and a re-allow that "worked" without the rule appearing is caught by the read-back.
+    _rules = [("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, **k:
+                               ("Skipping", "", 0) if (v, list(a)[:1]) == ("ufw-allow-port", ["28016/udp"])
+                               else _i(s, v, a, **k))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: ...and a split that closed the other protocol anyway is reported, not 'limited'",
+          _ok is False and _first_for(_rules, "28016", "udp") is None and "28016/udp" in _msg,
+          "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
+    # The read-back required the literal "Status:" line, which ufw translates whole: on a French
+    # host a limit that fully applied, bare rule split and all, came back "could not be read back".
+    _rules = [("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, **k:
+                               (lambda r: (r[0].replace("Status: active", "État : actif"),) + r[1:])(
+                                   _i(s, v, a, **k)))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: a host whose ufw prints a translated Status line is read back, not 'unread'",
+          _ok is True and _first_for(_rules, "28016", "tcp") == "LIMIT", "ok=%r msg=%r" % (_ok, _msg))
+    _sm_core.run_privileged = lambda s, v, a=(), **k: ("", "", 0)
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: ...while an EMPTY read-back is still 'could not be read back' (positive control)",
+          _ok is False and "read back" in _msg, "ok=%r msg=%r" % (_ok, _msg))
 
     # ── the unblock that always said it worked ───────────────────────────────────────────────
     # remote_ufw_undeny_ip discarded the verb's result and returned True unconditionally, while

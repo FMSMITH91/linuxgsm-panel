@@ -5323,16 +5323,19 @@ finally:
 # inserted a panel-autoblock rule in its place, which it RELEASED once the firewalled (so silent)
 # address aged below the threshold. Driven through the real readers and writers: only the verb
 # runner is stubbed, and it records every privileged command.
+# The operator's denies sit ABOVE the allow: ufw stops at the first match, so only there do they
+# block anything (the rules below the allow are the shadowed case, further down). The IPv6 deny
+# sits below an IPv4 allow, which never sees its packets.
 _ab_listing6 = ("Status: active\n\n"
                 "To                         Action      From\n"
                 "--                         ------      ----\n"
-                "22/tcp                     ALLOW       Anywhere\n"
                 "Anywhere                   DENY        203.0.113.9                # panel-autoblock\n"
                 "Anywhere                   DENY        203.0.113.7\n"
                 "Anywhere                   DENY        203.0.113.8                # ssh brute\n"
                 "Anywhere                   REJECT      198.51.100.0/24\n"
                 "22/tcp                     DENY        198.51.100.3\n"
                 "27015                      DENY        Anywhere\n"
+                "22/tcp                     ALLOW       Anywhere\n"
                 "Anywhere (v6)              DENY        2001:db8::66\n")
 check("autoblock: the deny reader sees EVERY all-ports block, tagging the ones the panel did not write",
       SO._ufw_deny_sources(_ab_listing6) == {"203.0.113.9": "panel-autoblock", "203.0.113.7": "",
@@ -5343,6 +5346,52 @@ check("autoblock: ...and an operator's rule for an address outranks the panel's 
       SO._ufw_deny_sources(_ab_listing6 + "Anywhere                   DENY        203.0.113.9\n")
       .get("203.0.113.9") == "",
       "the panel's tag won, so the reconcile could 'release' (delete) the operator's rule")
+# ...but an operator's deny BELOW an allow blocks nothing: ufw appends a hand-typed
+# `ufw deny from <ip>` after `22/tcp LIMIT` and `27015 ALLOW`, and every packet to those ports
+# meets the allow first. Read as "blocked", the reconcile skipped the address, the offenders
+# table badged it and the Block button left it alone — while it kept reaching SSH.
+_sh_listing6 = ("Status: active\n\n"
+                "To                         Action      From\n"
+                "--                         ------      ----\n"
+                "22/tcp                     LIMIT       Anywhere\n"
+                "27015                      ALLOW       Anywhere\n"
+                "Anywhere                   DENY        203.0.113.20               # ssh brute!\n"
+                "Anywhere                   DENY        203.0.113.21\n"
+                "Anywhere                   REJECT      203.0.113.22\n"
+                "22/tcp (v6)                LIMIT       Anywhere (v6)\n"
+                "Anywhere (v6)              DENY        2001:db8::20\n")
+_sh_late6 = {}
+_sh_read6 = SO._ufw_deny_sources(_sh_listing6, _sh_late6)
+check("autoblock: an operator's deny BELOW an allow of its family is not read as a block",
+      not {"203.0.113.20", "203.0.113.21", "203.0.113.22", "2001:db8::20"} & set(_sh_read6),
+      "read %r" % (_sh_read6,))
+check("autoblock: ...it is handed back as shadowed, with its comment and action",
+      _sh_late6.get("203.0.113.20") == {"comment": "ssh brute!", "action": "DENY"}
+      and _sh_late6.get("203.0.113.22", {}).get("action") == "REJECT"
+      and "2001:db8::20" in _sh_late6, "shadowed %r" % (_sh_late6,))
+_sh_above6 = ("Anywhere                   DENY        203.0.113.20\n"
+              "22/tcp                     ALLOW       10.0.0.0/8\n"
+              "Anywhere                   DENY        203.0.113.21\n"
+              "22/tcp                     LIMIT       Anywhere\n")
+check("autoblock: ...while one ABOVE the allows, or below an allow for other sources only, still "
+      "is (positive control)",
+      SO._ufw_deny_sources(_sh_above6) == {"203.0.113.20": "", "203.0.113.21": ""},
+      "read %r" % (SO._ufw_deny_sources(_sh_above6),))
+# `ufw allow in on tailscale0` — the panel adds it itself, usually before any deny — only ever
+# sees tailnet sources. Read as an allow from Anywhere, every operator deny below it looked
+# shadowed: badged unblocked while it blocked, and moved on the next Block.
+_sh_ts6 = ("Anywhere on tailscale0     ALLOW IN    Anywhere\n"
+           "Anywhere                   DENY        203.0.113.30\n"
+           "Anywhere                   DENY        100.101.2.3\n"
+           "Anywhere (v6) on tailscale0 ALLOW IN   Anywhere (v6)\n"
+           "Anywhere (v6)              DENY        2001:db8::30\n")
+_sh_ts_late6 = {}
+_sh_ts_read6 = SO._ufw_deny_sources(_sh_ts6, _sh_ts_late6)
+check("autoblock: an operator's deny below the tailscale0 allow still blocks a public address",
+      _sh_ts_read6 == {"203.0.113.30": "", "2001:db8::30": ""},
+      "read %r, shadowed %r" % (_sh_ts_read6, _sh_ts_late6))
+check("autoblock: ...while a tailnet address below it is shadowed (positive control)",
+      set(_sh_ts_late6) == {"100.101.2.3"}, "shadowed %r" % (_sh_ts_late6,))
 _ab_verbs6 = []
 _ab_saved6 = (SO._run_verb, _mon6.so.fail2ban_attempt_counts, _mon6.tailnet_exempt_ips,
               _mon6._autoblock_threshold, _mon6._whitelist_networks)
@@ -5408,6 +5457,57 @@ try:
               "answered %r" % (_sm_hosts.remote_ufw_blocked_ips(NS(name="h")),))
     finally:
         _sm_core.run_privileged = _ab_rp6
+
+    # ── a shadowed operator deny is MOVED to the top, still theirs ──
+    # A plain insert does nothing here: ufw keeps one rule per match and answers a second
+    # `deny from <ip>` with "Skipping inserting existing rule", exit 0 — a "Blocked" that changed
+    # nothing. So the move is a delete and an insert carrying the operator's comment, never a
+    # panel- tag (which the reconcile would one day release).
+    _sh_verbs6, _sh_fail6 = [], set()
+
+    def _sh_run6(verb, args=(), **k):
+        if verb == "ufw-status":
+            return (_sh_listing6, "", 0)
+        _sh_verbs6.append((verb, list(args)))
+        return ("", "ERROR: boom", 1) if verb in _sh_fail6 else ("", "", 0)
+    SO._run_verb = _sh_run6
+    _okm6, _msgm6 = SO.ufw_deny_ip("203.0.113.20")
+    check("block: an operator's deny below the allows is moved to the top under THEIR comment",
+          _okm6 is True and _sh_verbs6 == [("ufw-delete-deny-ip", ["203.0.113.20"]),
+                                          ("ufw-deny-ip", ["203.0.113.20", "ssh brute"])],
+          "ran %r (%r)" % (_sh_verbs6, _msgm6))
+    check("block: ...and the blocked-IP read the offenders table uses no longer badges it",
+          "203.0.113.20" not in (SO.ufw_blocked_ips() or {}), repr(SO.ufw_blocked_ips()))
+    _sh_verbs6.clear()
+    _mon6.so.fail2ban_attempt_counts = lambda *a, **k: {"203.0.113.21": 50}
+    _resm6 = _mon6._autoblock_reconcile(_FakeRemote6())
+    check("autoblock: an offender whose own deny is shadowed is moved, not skipped or re-tagged",
+          _resm6 == (1, 0) and _sh_verbs6 == [("ufw-delete-deny-ip", ["203.0.113.21"]),
+                                             ("ufw-deny-ip", ["203.0.113.21", ""])],
+          "returned %r, ran %r" % (_resm6, _sh_verbs6))
+    _sh_verbs6.clear()
+    _okv6, _ = SO.ufw_deny_ip("2001:db8::20")
+    _okj6, _ = SO.ufw_deny_ip("203.0.113.22")
+    check("block: ...but an IPv6 or REJECT one, which could not be put back, is refused untouched",
+          _okv6 is False and _okj6 is False and not _sh_verbs6, "ran %r" % (_sh_verbs6,))
+    _sh_fail6.add("ufw-deny-ip")
+    _okf6, _msgf6 = SO.ufw_deny_ip("203.0.113.20")
+    check("block: ...and a move whose insert fails tries to put the rule back, and says it failed",
+          _okf6 is False and [v for v, a in _sh_verbs6].count("ufw-deny-ip") == 2
+          and "could not be put back" in _msgf6, "ran %r (%r)" % (_sh_verbs6, _msgf6))
+    _sh_fail6.clear()
+    _ab_rp6 = _sm_core.run_privileged
+    try:
+        _sh_verbs6.clear()
+        _sm_core.run_privileged = lambda s, v, a=(), **k: _sh_run6(v, a)
+        _okrm6, _ = _sm_hosts.remote_ufw_deny_ip(NS(name="h"), "203.0.113.20", tag="panel-autoblock")
+        check("block (remote): the remote twin moves a shadowed operator deny the same way",
+              _okrm6 is True and _sh_verbs6 == [("ufw-delete-deny-ip", ["203.0.113.20"]),
+                                                ("ufw-deny-ip", ["203.0.113.20", "ssh brute"])],
+              "ran %r" % (_sh_verbs6,))
+    finally:
+        _sm_core.run_privileged = _ab_rp6
+    SO._run_verb = _ab_run6
 
     # ── ...and it sees every offender, not the display's top 100 ──
     # The reconcile read fail2ban_top_ips(100): over-threshold addresses ranked below 100 were never
