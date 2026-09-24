@@ -416,7 +416,7 @@ function showBootstrap(remoteId, name) {
         + '<div class="alert alert-warning small py-2 mb-2"><i class="bi bi-exclamation-triangle"></i> Runs a full apt upgrade and (if enabled) reboots the server. This can take 5-15 minutes — you can watch progress live below.</div>'
         + '<button class="btn btn-primary btn-sm" id="bootstrap-run-btn"' + _da('runBootstrap', [remoteId]) + '><i class="bi bi-rocket-takeoff"></i> Prepare &amp; Secure Server</button>'
     + '<div id="bootstrap-progress-wrap" class="mt-3" style="display:none;">'
-        + '<div class="d-flex justify-content-between small mb-1"><span id="bootstrap-step" class="text-info">Starting…</span><span id="bootstrap-pct" class="text-secondary"></span></div>'
+        + '<div class="d-flex justify-content-between small mb-1"><span id="bootstrap-step" class="text-info" data-remote="' + escapeHtml(String(remoteId)) + '">Starting…</span><span id="bootstrap-pct" class="text-secondary"></span></div>'
         + '<div class="progress" style="height:18px;"><div id="bootstrap-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div></div>'
         + '<div id="bootstrap-elapsed" class="text-secondary" style="font-size:.7rem;margin-top:4px;"></div>'
       + '</div>'
@@ -465,11 +465,15 @@ function runBootstrap(remoteId) {
 
 function pollBootstrap(remoteId, btn) {
   if (_bootstrapPoll) clearInterval(_bootstrapPoll);
+  var handle = null;
+  // Stops THIS poll only. A fetch already in flight when the next pollBootstrap() started lands
+  // after _bootstrapPoll names the new interval, and clearing _bootstrapPoll from here would have
+  // stopped that one instead.
+  function stop() { clearInterval(handle); if (_bootstrapPoll === handle) _bootstrapPoll = null; }
   function tick() {
     fetch(MOUNT + '/api/remote/' + remoteId + '/bootstrap-status')  // nosemgrep
       .then(r => r.json())
       .then(s => {
-        if (s.status === 'none') return;
         var stepEl = document.getElementById('bootstrap-step');
         var barEl = document.getElementById('bootstrap-bar');
         var pctEl = document.getElementById('bootstrap-pct');
@@ -481,7 +485,21 @@ function pollBootstrap(remoteId, btn) {
         // poll then hit /api/remote/<id>/bootstrap-status every 2.5s, bailed here every time, and
         // ran until the page was closed. watchBootstrap keeps the card's own copy alive, so
         // nothing is lost by stopping this one.
-        if (!stepEl) { clearInterval(_bootstrapPoll); _bootstrapPoll = null; return; }
+        //
+        // And the node being THERE is not enough: Prepare on another host builds the same ids, so
+        // this poll found them and painted host A's steps, log and "Server prepared & secured!"
+        // into the modal titled "Prepare & Secure: B" — over B's own refusal, when B's start was
+        // refused. The modal carries the host it was opened for.
+        if (!stepEl || stepEl.getAttribute('data-remote') !== String(remoteId)) { stop(); return; }
+        // "none" is the job being gone — the panel restarted, or a finished job expired. It was
+        // checked ABOVE the teardown and returned without stopping, so the poll ran for the life
+        // of the page and the modal sat on its last step with the button stuck at "Running…".
+        if (s.status === 'none') {
+          stop();
+          stepEl.innerHTML = '<span class="text-warning">' + escapeHtml('The panel is no longer tracking this job — it may have restarted. Check the host before running it again.') + '</span>';  // nosemgrep
+          if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-rocket-takeoff"></i> Prepare &amp; Secure Server'; }
+          return;
+        }
         pctEl.textContent = (s.total ? (s.step + '/' + s.total) : '') + '  ' + s.percent + '%';
         barEl.style.width = s.percent + '%';
         elEl.textContent = 'Elapsed: ' + s.elapsed + 's';
@@ -493,13 +511,13 @@ function pollBootstrap(remoteId, btn) {
           barEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
           stepEl.innerHTML = '<i class="bi bi-arrow-clockwise"></i> ' + escapeHtml(s.step_name);  // nosemgrep
         } else if (s.status === 'done') {
-          clearInterval(_bootstrapPoll); _bootstrapPoll = null;
+          stop();
           barEl.className = 'progress-bar bg-success'; barEl.style.width = '100%';
           stepEl.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + escapeHtml(s.message || 'Server prepared & secured!');  // nosemgrep
           pctEl.textContent = '100%';
           if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-check2"></i> Done — Run Again'; }
         } else if (s.status === 'failed') {
-          clearInterval(_bootstrapPoll); _bootstrapPoll = null;
+          stop();
           barEl.className = 'progress-bar bg-danger';
           stepEl.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + escapeHtml(s.message || 'Bootstrap failed');  // nosemgrep
           if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-rocket-takeoff"></i> Retry'; }
@@ -509,8 +527,8 @@ function pollBootstrap(remoteId, btn) {
       })
       .catch(function(){ /* transient poll error, keep going */ });
   }
+  handle = _bootstrapPoll = setInterval(tick, 2500);
   tick();
-  _bootstrapPoll = setInterval(tick, 2500);
 }
 
 // ── Modal helpers ──────────────────────────────────────────

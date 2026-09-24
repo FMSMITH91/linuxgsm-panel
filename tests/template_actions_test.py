@@ -1949,9 +1949,38 @@ for _sf, _needle in (("manage_remotes.js", "_tsUpPolls"), ("tailscale.js", "_tsU
 
 # ── the bootstrap poll's teardown sat below the line that returned ────────────────────────────
 _mr = (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
-check("if (!stepEl) { clearInterval(_bootstrapPoll)" in _mr,
+_pb = _js_code_only(_js_function_body(_mr, "pollBootstrap"))
+check(len(_pb) > 400 and "bootstrap-status" in _pb,
+      "js: pollBootstrap was found in manage_remotes.js",
+      "extractor got %r — the checks below would prove nothing" % _pb[:60])
+check(re.search(r"if \(!stepEl \|\|.*\) \{ stop\(\); return; \}", _pb) is not None,
       "js: the bootstrap poll stops when its modal is gone, instead of bailing forever",
       "showModal removes #ts-modal, and every clearInterval sits below the early return")
+
+# ── ...when the modal belongs to ANOTHER host, and when its job is gone ───────────────────────
+# Prepare on host B builds the same ids, so host A's poll found them and painted A's steps, log and
+# "Server prepared & secured!" into "Prepare & Secure: B" — over B's refusal when B's start failed.
+# And `s.status === 'none'` (panel restarted, job expired) returned ABOVE that teardown, so the
+# poll ran for the life of the page with the button stuck at "Running…".
+_sb = _js_function_body(_mr, "showBootstrap") or ""
+check('id="bootstrap-step" class="text-info" data-remote="\' + escapeHtml(String(remoteId)) + \'"' in _sb,
+      "js: the Prepare modal records which host it was opened for",
+      "#bootstrap-step carries no data-remote, so a poll cannot tell its modal from another's")
+_pb_own = _pb.find("stepEl.getAttribute('data-remote') !== String(remoteId)")
+_pb_none = _pb.find("if (s.status === 'none') {")
+_pb_none_blk = _js_block_after(_pb, "if (s.status === 'none') {") or ""
+check(-1 < _pb_own < _pb_none and "stop();" in _pb_none_blk and "return;" in _pb_none_blk
+      and "btn.disabled = false" in _pb_none_blk,
+      "js: the bootstrap poll paints only its own host's modal, and stops when the job is gone",
+      "positions own=%d none=%d; none-branch %r" % (_pb_own, _pb_none, _pb_none_blk[:80]))
+# Positive control: the terminal branches still stop the poll, and stop() only ever clears ITS
+# interval — a late fetch from the previous poll must not stop the one that replaced it.
+check(re.search(r"function stop\(\) \{ clearInterval\(handle\); if \(_bootstrapPoll === handle\) "
+                r"_bootstrapPoll = null; \}", _pb) is not None
+      and "clearInterval(_bootstrapPoll)" not in _pb.split("function tick()")[1]
+      and _pb.count("stop();") >= 4,
+      "js: ...and a stale poll's stop() never clears the poll that replaced it",
+      "tick() clears _bootstrapPoll directly, or a terminal branch lost its stop()")
 
 # ── the SSH card's live state is refilled after the section is swapped ────────────────────────
 # refreshSection only re-runs a callback when one is NAMED, and loadSshStatus is the only thing

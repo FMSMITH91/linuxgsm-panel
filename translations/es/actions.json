@@ -18,6 +18,7 @@
   "Block (all ports)": "Bloquear (todos los puertos)",
   "Block failed": "El bloqueo falló",
   "Bootstrap failed": "La preparación inicial falló",
+  "The panel is no longer tracking this job — it may have restarted. Check the host before running it again.": "El panel ya no sigue esta tarea; puede que se haya reiniciado. Revisa el host antes de volver a ejecutarla.",
   "Bulk action failed": "La acción masiva falló",
   "CPU %": "CPU %",
   "CPU Cores": "Núcleos de CPU",
