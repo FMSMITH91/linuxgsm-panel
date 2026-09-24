@@ -1177,21 +1177,33 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         _core.run_privileged(server, "set-timezone", [set_timezone], timeout=10)
 
     # ── 5. Configure UFW ──
+    ufw_not_enabled = None
     if enable_ufw:
         emit("Configuring UFW firewall (deny incoming, rate-limit SSH)")
         # Rate-limit SSH by default — `ufw limit` allows SSH (so we never lock ourselves
         # out) while throttling brute-force sources. We do NOT add a plain `allow 22`:
         # a lower-numbered allow rule would match first and shadow the limit, leaving SSH
         # effectively unthrottled.
-        _core.run_privileged(server, "ufw-limit-port", ["22/tcp"], timeout=15)
-        # The same goes for `ufw allow OpenSSH` / a bare `ufw allow 22` already on the host: to
-        # ufw neither is the `22/tcp` rule above, so the limit is appended AFTER them and never
-        # reached. Removed only now that the limit is in place, so SSH is never left unallowed.
-        for _verb, _args in _SSH22_SHADOWING:
-            _core.run_privileged(server, _verb, _args, timeout=15)
-        _core.run_privileged(server, "ufw-default", ["deny", "incoming"], timeout=15)
-        _core.run_privileged(server, "ufw-default", ["allow", "outgoing"], timeout=15)
-        _core.run_privileged(server, "ufw-enable", [], timeout=15)
+        _l_out, _l_err, _l_rc = _core.run_privileged(server, "ufw-limit-port", ["22/tcp"], timeout=15)
+        if _l_rc == 0:
+            # The same goes for `ufw allow OpenSSH` / a bare `ufw allow 22` already on the host:
+            # to ufw neither is the `22/tcp` rule above, so the limit is appended AFTER them and
+            # never reached. Removed only now that the limit is in place, so SSH is never left
+            # unallowed.
+            for _verb, _args in _SSH22_SHADOWING:
+                _core.run_privileged(server, _verb, _args, timeout=15)
+            _core.run_privileged(server, "ufw-default", ["deny", "incoming"], timeout=15)
+            _core.run_privileged(server, "ufw-default", ["allow", "outgoing"], timeout=15)
+            _core.run_privileged(server, "ufw-enable", [], timeout=15)
+        else:
+            # The limit's exit code was never read, so when it failed the rules that DO let SSH in
+            # were deleted "now that the limit is in place" and UFW was switched on at deny-incoming
+            # — a fresh host cut off from SSH mid-bootstrap. Nothing is removed and the firewall is
+            # left as it was; the job says so rather than "complete".
+            ufw_not_enabled = ((_l_err or _l_out or "exit %s" % _l_rc)
+                               .replace("\n", " ").strip()[:160])
+            note("NOT DONE: `ufw limit 22/tcp` failed (%s). UFW was left as it was — turning it on "
+                 "without a rule letting SSH in would lock this host out." % ufw_not_enabled)
 
     # ── 6. Basic SSH hardening ──
     emit("Hardening SSH configuration")
@@ -1336,13 +1348,20 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     else:
         note("Reboot check skipped — this is the panel's own host.")
 
+    # The same reasoning for a firewall that was asked for and not switched on: a door left open.
+    ufw_msg = (("the firewall was NOT enabled: `ufw limit 22/tcp` failed (%s), and turning UFW on "
+                "without a rule letting SSH in would have locked this host out. Fix ufw on the "
+                "host and run the bootstrap again." % ufw_not_enabled) if ufw_not_enabled else "")
     if hardening_failed:
         # Not "complete": the one step whose whole point is closing a door reported the door is
         # still open. The rest of the work did happen, and the message says both.
         return False, ("Bootstrap finished, but the SSH hardening did not take effect: sshd "
                        "still reports %s. Something sshd reads first overrides the edit — look "
                        "in /etc/ssh/sshd_config.d (cloud images ship 50-cloud-init.conf)."
-                       % "; ".join("%s %s" % kv for kv in hardening_failed)), "\n".join(log)
+                       % "; ".join("%s %s" % kv for kv in hardening_failed)
+                       + (" And " + ufw_msg if ufw_msg else "")), "\n".join(log)
+    if ufw_msg:
+        return False, "Bootstrap finished, but " + ufw_msg, "\n".join(log)
     if progress:
         try:
             progress(total, total, "Bootstrap complete", "done")
@@ -2396,6 +2415,20 @@ def remote_set_public_ssh(server, mode):
         steps = [("ufw-delete-allow-port", ["22/tcp"]), ("ufw-delete-limit-port", ["22/tcp"])] + _shadowing
     else:
         return False, "Invalid mode"
+    # ...but only once it IS in. The loop below ignores every exit code, because a delete of an
+    # absent rule is a normal non-zero — and it ignored the add's too, so when `ufw limit 22/tcp`
+    # failed (a timeout, a held lock) it went on to delete the OpenSSH and bare-22 allows anyway,
+    # and a host opened only by `ufw allow OpenSSH` was left with nothing letting SSH in. The
+    # read-back below reported the failure after the lockout. The add is the gate: if it fails,
+    # nothing that lets SSH in is removed.
+    gate_err = None
+    if mode in ("allow", "limit"):
+        _g_out, _g_err, _g_rc = _core.run_privileged(server, steps[0][0], steps[0][1], timeout=15)
+        if _g_rc != 0:
+            gate_err = ((_g_err or _g_out or "exit %s" % _g_rc).replace("\n", " ").strip()[:160])
+            steps = []
+        else:
+            steps = steps[1:]
     for verb, vargs in steps:
         _core.run_privileged(server, verb, vargs, timeout=15)  # deletes of absent rules are harmless
     labels = {"allow": "open (allow)", "limit": "rate-limited", "off": "disabled (tailnet-only)"}
@@ -2415,8 +2448,10 @@ def remote_set_public_ssh(server, mode):
         return False, ("UFW is not active on this host, so public SSH cannot be controlled from "
                        "here — port 22 is governed by whatever else is in front of it.")
     if state.get("mode") != mode:
-        return False, ("Could not set public SSH to %s — the firewall still reports it as %s."
-                       % (labels[mode], labels.get(state.get("mode"), state.get("mode"))))
+        return False, ("Could not set public SSH to %s — the firewall still reports it as %s.%s"
+                       % (labels[mode], labels.get(state.get("mode"), state.get("mode")),
+                          (" The new 22/tcp rule was refused (%s), so no other SSH rule was "
+                           "removed." % gate_err) if gate_err else ""))
     return True, f"Public SSH is now {labels[mode]}"
 
 

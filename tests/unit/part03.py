@@ -2893,6 +2893,28 @@ try:
     check("bootstrap: the SSH limit is not left behind an OpenSSH / bare-22 allow",
           _i_lim >= 0 and _i_app > _i_lim and _i_bare > _i_lim,
           "limit at %d, delete OpenSSH at %d, delete bare 22 at %d" % (_i_lim, _i_app, _i_bare))
+    check("bootstrap: ...and with the limit in, UFW is switched on (positive control for below)",
+          ("ufw-enable", []) in _bs_ufw, "ran %r" % (_bs_ufw,))
+    # ...but only once the limit IS in. Its exit code was never read: when `ufw limit 22/tcp`
+    # failed, the rules that DO let SSH in were deleted anyway and UFW was switched on at
+    # deny-incoming — a fresh host cut off from SSH mid-bootstrap, reported as complete.
+    _bs_ufw.clear()
+
+    def _priv_ufw_nolimit(s, verb, args=None, **k):
+        _bs_ufw.append((verb, list(args or [])))
+        return ("", "ERROR: Could not acquire lock", 1) if verb == "ufw-limit-port" else ("", "", 0)
+    _sm_core.run_privileged = _priv_ufw_nolimit
+    _bnok, _bnmsg, _bnlog = _sm_hosts.remote_bootstrap_vps(
+        NS(id=9104, host="203.0.113.13", auth_method="key"), set_timezone="", enable_ufw=True,
+        install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=False)
+    _bn_ran = [v for v, _a in _bs_ufw]
+    check("bootstrap: a failed SSH limit removes no SSH allow and does not switch UFW on",
+          "ufw-limit-port" in _bn_ran and not {"ufw-delete-allow-app", "ufw-delete-allow-port",
+                                               "ufw-default", "ufw-enable"} & set(_bn_ran),
+          "ran %r" % (_bs_ufw,))
+    check("bootstrap: ...and the job says the firewall was not enabled, not 'complete'",
+          _bnok is False and "NOT enabled" in _bnmsg and "Could not acquire lock" in _bnmsg
+          and "NOT DONE" in _bnlog, "ok=%r msg=%r" % (_bnok, _bnmsg))
 finally:
     (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
      _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,

@@ -1187,6 +1187,21 @@ try:
     _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
     check("public ssh: ...and an existing 22/tcp allow is turned into the limit (positive control)",
           _ok is True and _rules == [("22/tcp", "LIMIT")], "ok=%r rules %r" % (_ok, _rules))
+    # ...and the new rule is the GATE for those deletes. The loop ignored every exit code, so when
+    # `ufw limit 22/tcp` failed (a timeout, a held lock) it deleted `allow OpenSSH` anyway and a host
+    # opened only by it had nothing left letting SSH in; 'allow' likewise deleted the LIMIT. The
+    # two cases above, where the add works, are the positive control.
+    for _mode_g, _add_g, _start_g in (("limit", "ufw-limit-port", [("OpenSSH", "ALLOW")]),
+                                      ("allow", "ufw-allow-port", [("22/tcp", "LIMIT")])):
+        _rules = list(_start_g)
+        _fake_ufw(_rules)
+        _sm_core.run_privileged = (lambda s, v, a=(), _i=_sm_core.run_privileged, _add=_add_g, **k:
+                                   ("", "ERROR: Could not acquire lock", 1) if v == _add
+                                   else _i(s, v, a, **k))
+        _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), _mode_g)
+        check("public ssh: '%s' whose new 22/tcp rule fails removes no rule that lets SSH in" % _mode_g,
+              _ok is False and _rules == _start_g and "Could not acquire lock" in _msg,
+              "ok=%r msg=%r rules now %r" % (_ok, _msg, _rules))
 
     # ── rate limiting a port the panel itself opened ─────────────────────────────────────────
     # Every game port is opened BARE (`ufw allow 28016 comment rustserver`, tcp+udp). The limit
