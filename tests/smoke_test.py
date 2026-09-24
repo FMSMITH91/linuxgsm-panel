@@ -6382,6 +6382,85 @@ try:
     finally:
         _ps._cron_restart_pending.pop(gs_id, None)
 
+    # ── "do it now" and the command-list refresh are offered only to who can use them ──────────
+    # Both rendered for anyone who could open the page. The banner's button calls the action
+    # endpoint (RESTART_SERVER / STOP_SERVER), and refresh_server_commands wants MODERATE_SERVER,
+    # SEND_COMMAND or MANAGE_SERVERS — so a view-only member was told "you can do it now" and
+    # "use the refresh button above", and both buttons answered with a refusal.
+    with app.app_context():
+        _g = db.session.get(GameServer, gs_id)
+        _g.restart_pending = True
+        _vo_grp = Group(name="smoke-detail-viewonly")
+        _vo_grp.set_permissions([auth.VIEW_SERVERS, auth.VIEW_CONSOLE])
+        _vo_grp.game_servers.append(_g)
+        db.session.add(_vo_grp)
+        db.session.flush()
+        _vo = User(username="detailviewer", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                   is_superadmin=False, is_active=True)
+        _vo.groups.append(_vo_grp)
+        db.session.add(_vo)
+        db.session.commit()
+        _vo_id, _vo_gid = _vo.id, _vo_grp.id
+    try:
+        _vo_resp = client_as(_vo_id).get("/server/%d" % gs_id)
+        _voh = _vo_resp.get_data(as_text=True)
+        _adh = c.get("/server/%d" % gs_id).get_data(as_text=True)
+        _refresh_url = "/server/%d/refresh-commands" % gs_id
+        check("server page: an admin is offered the banner's 'do it now' and the command refresh "
+              "(positive control)",
+              'data-action="bannerDoNow"' in _adh and _refresh_url in _adh
+              and "d-none" not in _banner_tag(_adh),
+              "button=%s refresh=%s" % ('data-action="bannerDoNow"' in _adh, _refresh_url in _adh))
+        check("server page: a view-only member sees the queued restart but no 'Restart now' button",
+              _vo_resp.status_code == 200 and "d-none" not in _banner_tag(_voh)
+              and 'data-action="bannerDoNow"' not in _voh
+              and "or you can do it now" not in _voh,
+              "status=%d banner shown=%s button=%s 'do it now' copy=%s"
+              % (_vo_resp.status_code, "d-none" not in _banner_tag(_voh),
+                 'data-action="bannerDoNow"' in _voh, "or you can do it now" in _voh))
+        check("server page: ...nor the command-list refresh the route would refuse them",
+              _refresh_url not in _voh and "Use the refresh button above" not in _voh,
+              "the refresh form is rendered for a viewer without moderate/send_command/manage")
+
+        # The Live Console panel without VIEW_CONSOLE. /api/console answers 403 with no lines, and
+        # "Load older" wiped the screen and toasted "Loaded 0 lines from the log". A viewer with
+        # neither view_console nor send_command gets no console panel; one with send_command
+        # alone keeps the command box but not the log controls, and is told why it is empty.
+        check("server page: a view_console holder is given the log controls (control for the next)",
+              'data-action="loadMoreConsole"' in _voh and 'data-panel="console"' in _voh,
+              "the console panel is missing for a viewer who may read it")
+        with app.app_context():
+            db.session.get(Group, _vo_gid).set_permissions([auth.VIEW_SERVERS])
+            db.session.commit()
+        _voh2 = client_as(_vo_id).get("/server/%d" % gs_id).get_data(as_text=True)
+        check("server page: without view_console or send_command there is no console panel",
+              'data-panel="console"' not in _voh2 and 'data-action="loadMoreConsole"' not in _voh2
+              and "_CAN_VIEW_CONSOLE = false" in _voh2,
+              "panel=%s load-older=%s" % ('data-panel="console"' in _voh2,
+                                          'data-action="loadMoreConsole"' in _voh2))
+        with app.app_context():
+            db.session.get(Group, _vo_gid).set_permissions([auth.VIEW_SERVERS, auth.SEND_COMMAND])
+            db.session.commit()
+        _voh3 = client_as(_vo_id).get("/server/%d" % gs_id).get_data(as_text=True)
+        check("server page: send_command alone keeps the command box, not the log controls",
+              'id="command-form"' in _voh3 and 'data-action="loadMoreConsole"' not in _voh3
+              and "permission to view this server's console" in _voh3,
+              "command box=%s load-older=%s notice=%s"
+              % ('id="command-form"' in _voh3, 'data-action="loadMoreConsole"' in _voh3,
+                 "permission to view this server's console" in _voh3))
+    finally:
+        with app.app_context():
+            db.session.get(GameServer, gs_id).restart_pending = False
+            _u = db.session.get(User, _vo_id)
+            if _u is not None:
+                _u.groups = []
+                db.session.delete(_u)
+            _gr = db.session.get(Group, _vo_gid)
+            if _gr is not None:
+                _gr.game_servers = []
+                db.session.delete(_gr)
+            db.session.commit()
+
     # ── The users page renders ONE edit modal, not one per user ───────────────────────────────────
     # It used to emit a full 2KB modal per row — 670KB of HTML at 100 accounts, all of it for a
     # dialog you can only have open once. The rows now carry an id and the data comes from a single

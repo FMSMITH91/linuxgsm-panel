@@ -2086,6 +2086,263 @@ check(_sd_ver_tag and _sd_ver_tag.group(1).strip() != "",
       "version: it is rendered with a placeholder, not left empty until the fetch lands",
       "rendered as %r" % (_sd_ver_tag.group(1) if _sd_ver_tag else None))
 
+# ── an element server_detail.js shows and hides through style.display cannot carry d-* ────────
+# Bootstrap's display utilities are !important, so .d-flex beats both an inline display:none and
+# `el.style.display = 'none'`. #pl-announce carried d-flex: the Say box showed from first paint
+# on every game, including those with no console moderation, where pressing Say answers "not
+# supported". Every id whose display the script sets is resolved from the AST (a var bound to
+# getElementById, or the call itself) and its tag in the template is read for a d-* class.
+if not esprima:
+    skip("server page: no element the script shows/hides by style.display has a d-* class",
+         "esprima not installed")
+else:
+    _sdd_ast = esprima.parseScript(_sd_js, {"loc": True}).toDict()
+    _sdd_vars, _sdd_ids = {}, set()
+
+    def _gebi_id(n):
+        c = (n or {}).get("callee") or {}
+        if ((n or {}).get("type") == "CallExpression"
+                and (c.get("property") or {}).get("name") == "getElementById"):
+            a = (n.get("arguments") or [{}])[0]
+            return a.get("value") if a.get("type") == "Literal" else None
+        return None
+
+    def _scan_display(n):
+        if isinstance(n, dict):
+            if n.get("type") == "VariableDeclarator" and _gebi_id(n.get("init")):
+                _sdd_vars[(n.get("id") or {}).get("name")] = _gebi_id(n.get("init"))
+            if (n.get("type") == "AssignmentExpression"
+                    and (n.get("left") or {}).get("type") == "Identifier"
+                    and _gebi_id(n.get("right"))):
+                _sdd_vars[n["left"]["name"]] = _gebi_id(n.get("right"))
+            if n.get("type") == "AssignmentExpression":
+                lf = n.get("left") or {}
+                st = lf.get("object") or {}
+                if ((lf.get("property") or {}).get("name") == "display"
+                        and (st.get("property") or {}).get("name") == "style"):
+                    tgt = st.get("object") or {}
+                    _sdd_ids.add(_gebi_id(tgt) or ("var:" + str(tgt.get("name"))))
+            for v in n.values():
+                _scan_display(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_display(v)
+    _scan_display(_sdd_ast)
+    _sdd_resolved = {(_sdd_vars.get(i[4:]) if i.startswith("var:") else i) for i in _sdd_ids}
+    _sdd_resolved.discard(None)
+    _sdd_bad, _sdd_seen = [], []
+    for _id in sorted(_sdd_resolved):
+        _m = re.search(r'<[a-z]+\b[^>]*\bid="%s"[^>]*>' % re.escape(_id), _sd_src)
+        if not _m:
+            continue
+        _sdd_seen.append(_id)
+        _cls = re.search(r'\bclass="([^"]*)"', _m.group(0))
+        if _cls and re.search(r"\bd-(?:[a-z]+-)?(?:flex|block|inline|inline-block|inline-flex|grid|"
+                              r"table|none)\b", _cls.group(1)):
+            _sdd_bad.append("%s (%s)" % (_id, _cls.group(1)))
+    check("pl-announce" in _sdd_seen,
+          "server page: the style.display walker finds the announce box it has to judge",
+          "resolved ids in the template: %r — the next check would examine nothing" % _sdd_seen)
+    check(not _sdd_bad,
+          "server page: no element the script shows/hides by style.display has a d-* class",
+          "%s — Bootstrap's d-* is !important, so the script's display:none never applies"
+          % "; ".join(_sdd_bad))
+
+    # ── consoleEl may be null: nothing that runs at load or on a socket event may assume it ──
+    # The Console panel is hideable and a hidden panel is not rendered, so #console-output can be
+    # absent. applyTsVisible() is called at top level and did `consoleEl.classList...`: it threw,
+    # and everything after it — the daily-restart time, the game version, the post-update re-read
+    # — never ran, on every visit, for anyone who had hidden the panel. This walks what runs
+    # SYNCHRONOUSLY from top-level code and from each socket.on handler, following calls into
+    # named functions, and stops at a guard: `if (!consoleEl …) return` ends the path, and
+    # `if (consoleEl …) {…}` / `consoleEl && …` shelter what they guard. Callbacks (.then,
+    # timers) are not synchronous and are not followed.
+    _sdn_funcs = {}
+
+    def _sdn_collect(n):
+        if isinstance(n, dict):
+            if n.get("type") == "FunctionDeclaration" and n.get("id"):
+                _sdn_funcs[n["id"]["name"]] = n
+            for v in n.values():
+                _sdn_collect(v)
+        elif isinstance(n, list):
+            for v in n:
+                _sdn_collect(v)
+    _sdn_collect(_sdd_ast)
+
+    def _sdn_mentions(n, negated_only=None):
+        """Does `n` test the element? negated_only=True: only as `!el`; False: only bare."""
+        hit = []
+
+        def walk(m, under_not):
+            if isinstance(m, dict):
+                if m.get("type") == "Identifier" and m.get("name") == _sdn_name:
+                    hit.append(under_not)
+                    return
+                if m.get("type") == "UnaryExpression" and m.get("operator") == "!":
+                    walk(m.get("argument"), True)
+                    return
+                for v in m.values():
+                    walk(v, under_not)
+            elif isinstance(m, list):
+                for v in m:
+                    walk(v, under_not)
+        walk(n, False)
+        if negated_only is None:
+            return bool(hit)
+        return any(h == negated_only for h in hit)
+
+    def _sdn_is_bail(st):
+        if st.get("type") != "IfStatement" or not _sdn_mentions(st.get("test"), True):
+            return False
+        c = st.get("consequent") or {}
+        body = c.get("body") if c.get("type") == "BlockStatement" else [c]
+        return any((b or {}).get("type") == "ReturnStatement" for b in body)
+
+    def _sdn_stmts(stmts, seen):
+        out = []
+        for st in stmts or []:
+            if _sdn_is_bail(st):
+                break
+            out += _sdn_scan(st, seen)
+        return out
+
+    def _sdn_scan(n, seen):
+        if isinstance(n, list):
+            return [x for v in n for x in _sdn_scan(v, seen)]
+        if not isinstance(n, dict):
+            return []
+        t = n.get("type")
+        if t in ("FunctionExpression", "ArrowFunctionExpression", "FunctionDeclaration"):
+            return []
+        if t == "BlockStatement":
+            return _sdn_stmts(n.get("body"), seen)
+        if t == "IfStatement":
+            out = _sdn_scan(n.get("test"), seen)
+            if _sdn_mentions(n.get("test"), False):
+                return out + _sdn_scan(n.get("alternate"), seen)
+            return out + _sdn_scan(n.get("consequent"), seen) + _sdn_scan(n.get("alternate"), seen)
+        if (t == "LogicalExpression" and n.get("operator") == "&&"
+                and _sdn_mentions(n.get("left"), False)):
+            return _sdn_scan(n.get("left"), seen)
+        if (t == "MemberExpression" and (n.get("object") or {}).get("type") == "Identifier"
+                and n["object"].get("name") == _sdn_name):
+            return [((n.get("loc") or {}).get("start") or {}).get("line")]
+        out = []
+        if t == "CallExpression":
+            c = n.get("callee") or {}
+            if c.get("type") == "Identifier" and c.get("name") in _sdn_funcs \
+                    and c["name"] not in seen:
+                out += ["%s:%s" % (c["name"], ln) for ln in
+                        _sdn_stmts(_sdn_funcs[c["name"]]["body"]["body"], seen | {c["name"]})]
+            if c.get("type") == "FunctionExpression":            # an IIFE runs right now
+                out += _sdn_stmts(c["body"]["body"], seen)
+        for k, v in n.items():
+            if k != "loc":
+                out += _sdn_scan(v, seen)
+        return out
+
+    # Run once per element the Console panel carries: #console-output (consoleEl) and the
+    # connection label in its header (wsStatus). The connect handler did wsStatus.textContent
+    # first, so with the panel hidden it threw before it joined the console room.
+    _sdn_name = "consoleEl"
+    _sdn_entries = [("top level", _sdd_ast["body"])]
+    for _st in _sdd_ast["body"]:
+        _ex = (_st or {}).get("expression") or {}
+        _cal = _ex.get("callee") or {}
+        if (_ex.get("type") == "CallExpression" and (_cal.get("property") or {}).get("name") == "on"
+                and len(_ex.get("arguments") or []) >= 2
+                and _ex["arguments"][1].get("type") == "FunctionExpression"):
+            _sdn_entries.append(("socket.on(%r)" % _ex["arguments"][0].get("value"),
+                                 _ex["arguments"][1]["body"]["body"]))
+    _sdn_bad = []
+    _sdn_handlers = dict(_sdn_entries)
+    for _sdn_name in ("consoleEl", "wsStatus"):
+        for _nm, _body in _sdn_entries:
+            _hits = _sdn_stmts(_body, frozenset())
+            if _hits:
+                _sdn_bad.append("%s: %s -> %s" % (_sdn_name, _nm, _hits[:4]))
+    _sdn_name = "consoleEl"
+    _sdn_ctrl = _sdn_stmts(_sdn_funcs.get("clearConsole", {}).get("body", {}).get("body", [])[1:],
+                           frozenset())
+    # ...and for wsStatus: the disconnect handler's own derefs, read past its guard.
+    _sdn_name = "wsStatus"
+    _sdn_ctrl_ws = _sdn_stmts((_sdn_handlers.get("socket.on('disconnect')") or [])[1:], frozenset())
+    _sdn_name = "consoleEl"
+    check(len(_sdn_entries) >= 3 and bool(_sdn_ctrl) and bool(_sdn_ctrl_ws),
+          "server page: the null-console walker sees the socket handlers and finds a real deref "
+          "past a guard (positive control)",
+          "entries=%d, derefs in clearConsole's body after its guard=%r, in the disconnect "
+          "handler's after its guard=%r" % (len(_sdn_entries), _sdn_ctrl, _sdn_ctrl_ws))
+    check(not _sdn_bad,
+          "server page: nothing that runs at load or on a socket event assumes the console exists",
+          "; ".join(_sdn_bad) + " — with the Console panel hidden, #console-output is absent and "
+          "this throws; at top level it ends the script")
+
+    # ...and "Load older" does not read a refusal as an empty log.
+    _sdn_lmc = _sdn_funcs.get("loadMoreConsole")
+    _sdn_okret, _sdn_wipe = [], []
+
+    def _sdn_scan_lmc(n):
+        if isinstance(n, dict):
+            if n.get("type") == "IfStatement" and '"name": "ok"' in json.dumps(n.get("test")):
+                c = n.get("consequent") or {}
+                body = c.get("body") if c.get("type") == "BlockStatement" else [c]
+                if any((b or {}).get("type") == "ReturnStatement" for b in body):
+                    _sdn_okret.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            if (n.get("type") == "AssignmentExpression"
+                    and ((n.get("left") or {}).get("property") or {}).get("name") == "innerHTML"
+                    and ((n.get("left") or {}).get("object") or {}).get("name") == "consoleEl"):
+                _sdn_wipe.append(((n.get("loc") or {}).get("start") or {}).get("line"))
+            for v in n.values():
+                _sdn_scan_lmc(v)
+        elif isinstance(n, list):
+            for v in n:
+                _sdn_scan_lmc(v)
+    if _sdn_lmc:
+        _sdn_scan_lmc(_sdn_lmc)
+    check(bool(_sdn_wipe) and bool(_sdn_okret) and min(_sdn_okret) < min(_sdn_wipe),
+          "server page: 'Load older' stops on a refused answer before it clears the console",
+          "response-status bail at %r, console wipe at %r — a 403 wipes the screen and reports "
+          "'Loaded 0 lines'" % (_sdn_okret, _sdn_wipe))
+
+    # ── Enter does not re-send a command or an announcement that is still in flight ─────────
+    # Both are bound on keydown. runCustomCommand never looked at btn.disabled, so a second Enter
+    # ran the command twice and saved the spinner as the button's label; announceSay had no guard
+    # at all and cleared its box only on the answer, so each Enter (and key auto-repeat) broadcast
+    # the message to every player again. From the AST: each function's FIRST statement bails when
+    # a request is already running, and announceSay raises its flag before the fetch and drops it
+    # in a finally.
+    def _first_bail_on(fn, needle):
+        body = (((fn or {}).get("body") or {}).get("body") or [])
+        st = body[0] if body else {}
+        c = st.get("consequent") or {}
+        rets = c.get("body") if c.get("type") == "BlockStatement" else [c]
+        return (st.get("type") == "IfStatement" and needle in json.dumps(st.get("test"))
+                and any((r or {}).get("type") == "ReturnStatement" for r in rets))
+    _en_run = _sdn_funcs.get("runCustomCommand")
+    _en_say = _sdn_funcs.get("announceSay")
+    check(_first_bail_on(_en_run, '"name": "disabled"'),
+          "server page: a custom command already running is not sent again by another Enter",
+          "runCustomCommand does not start by returning while its button is disabled")
+    _en_say_src = json.dumps(_en_say or {})
+    check(_first_bail_on(_en_say, '"name": "_saying"') and '"finally"' in _en_say_src,
+          "server page: an announcement in flight is not broadcast again by another Enter",
+          "announceSay does not bail on an in-flight flag, or never clears it in a finally")
+
+    # ── player names are the players', not the catalog's ─────────────────────────────────────
+    # The walker swaps a text node that EXACTLY matches a key, so a player named "Admin" showed as
+    # "Administrador" in the list and in the ban confirmation, while the ban targeted "Admin".
+    _pn_row = re.search(r"'(<tr><td[^']*)'\s*\+\s*escapeHtml\(p\.name\)", _sd_js)
+    _pn_ban = re.search(r"'Ban (<strong[^']*)'\s*\+\s*_esc\(name\)", _sd_js)
+    check(_pn_row is not None and _pn_ban is not None,
+          "server page: the player-name cell and the ban confirmation were found",
+          "row=%s ban=%s — the check below would examine nothing" % (bool(_pn_row), bool(_pn_ban)))
+    check(bool(_pn_row and "data-no-i18n" in _pn_row.group(1)
+               and _pn_ban and "data-no-i18n" in _pn_ban.group(1)),
+          "server page: a player's name is exempt from translation in the list and the ban dialog",
+          "row cell %r, ban dialog %r" % (_pn_row and _pn_row.group(1), _pn_ban and _pn_ban.group(1)))
+
 # ── The console's poll delta is stamped, and an all-history console says why it is not ────────
 # refreshConsole has two branches: the PRIMING pass (history — a window of a log file written
 # before the panel looked, correctly unstamped) and the delta (new output the panel just watched
