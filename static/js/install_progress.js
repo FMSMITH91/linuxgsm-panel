@@ -94,27 +94,57 @@
     });
   }
 
+  // How an install that has left the live list ENDED, from its /install-status answer. Four
+  // answers, not two. A `done` job can carry a caveat (warn: the game took a port another server
+  // already uses, or it installed and did not start) that is shown nowhere else. And an answer
+  // that is not a finished job at all — `none` once the job was pruned or dismissed, an error
+  // body, a non-2xx — says nothing about how it went. Everything that was not failed used to be
+  // shown as a green "Installed" and removed after eight seconds, caveats included.
+  function outcome(ok, s) {
+    if (!ok || !s) return 'unknown';
+    if (s.status === 'done') return s.warn ? 'warn' : 'ok';
+    if (s.status === 'failed' || s.status === 'interrupted') return 'bad';
+    return 'unknown';
+  }
+
+  // What each ending looks like. Only a clean success has nothing left to say and removes itself;
+  // a failure stays until the card region re-renders with the banner that can act on it, and a
+  // caveat stays until the operator dismisses it, because this row is the only place it appears.
+  var SETTLED = {
+    ok:   { cls: 'text-success', text: 'Installed', drop: 8000 },
+    warn: { cls: 'text-warning', text: 'Installed, with a warning', dismiss: true },
+    bad:  { cls: 'text-danger', text: 'Install failed' }
+  };
+
   // An install that has left the live list has finished or failed. The dashboard already re-renders
   // its card region when the failed set changes (that is what brings up the reason and its
-  // buttons), so here the row only has to say how it ended and then get out of the way.
+  // buttons), so here the row only has to say how it ended.
   function settle(id) {
     if (settling[id]) return;
     settling[id] = true;
     fetch(MOUNT + '/api/server/' + id + '/install-status')
-      .then(function (r) { return r.json(); })
-      .then(function (s) {
+      .then(function (r) {
+        return r.json().then(function (s) { return { kind: outcome(r.ok, s), s: s || {} }; });
+      })
+      .then(function (res) {
         var row = document.querySelector('tr[data-progress-for="' + id + '"]');
-        if (row) {
-          var bad = (s.status === 'failed' || s.status === 'interrupted');
+        var view = SETTLED[res.kind];
+        if (row && !view) {
+          // No verdict to show, so show none: the card region says what state the server is in.
+          dropDashRow(id);
+        } else if (row) {
           var td = row.firstChild;
           td.textContent = '';
-          var line = el('div', 'ip-step ' + (bad ? 'text-danger' : 'text-success'),
-                        s.message || (bad ? 'Install failed' : 'Installed'));
+          var line = el('div', 'ip-step ' + view.cls, res.s.message || view.text);
           line.setAttribute('data-no-i18n', '');
           td.appendChild(line);
-          // A failure stays until the card region re-renders with the banner that can act on it;
-          // a success has nothing left to say.
-          if (!bad) setTimeout(function () { dropDashRow(id); }, 8000);
+          if (view.drop) setTimeout(function () { dropDashRow(id); }, view.drop);
+          if (view.dismiss) {
+            var btn = el('button', 'btn btn-sm btn-outline-secondary mt-1', 'Dismiss');
+            btn.type = 'button';
+            btn.addEventListener('click', function () { dropDashRow(id); });
+            td.appendChild(btn);
+          }
         }
         pagePanel([]);   // the page panel only ever shows what is RUNNING
       })

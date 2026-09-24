@@ -221,6 +221,182 @@ else:
     check(".ip-stale{" in _css,
           "install_progress: ...with a style, so 'stale' is visible and not just a class name")
 
+# ── how an install ENDED: four answers, not "failed" and "everything else" ────────────────────
+# settle() split endings into failed/interrupted and the rest, and showed the rest as a green
+# "Installed" that removed itself after 8 s. A `done` job with warn=true (the game took a port
+# another server uses; it installed but did not start) is shown nowhere else, so its caveat read
+# as a success and vanished. `{"status":"none"}` and a non-2xx error body were "Installed" too.
+# The classifier is DRIVEN here, through a small evaluator for pure functions over esprima's AST:
+# there is no JS runtime on the runners, and a text search for 'warn' passed with it unread.
+_JS_UNDEF = object()
+
+
+class _JsReturn(Exception):
+    pass
+
+
+def _js_truthy(v):
+    if v is _JS_UNDEF or v is None:
+        return False
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        return v != ""
+    return True
+
+
+def _js_eval(n, env):
+    """Evaluate the expression subset a pure classifier uses. Anything else raises, so a function
+    that grows beyond it fails the gate loudly instead of being evaluated wrongly."""
+    t = n.get("type")
+    if t == "Literal":
+        return n.get("value")
+    if t == "Identifier":
+        return env.get(n["name"], _JS_UNDEF)
+    if t == "MemberExpression" and not n.get("computed"):
+        o = _js_eval(n["object"], env)
+        return o.get(n["property"]["name"], _JS_UNDEF) if isinstance(o, dict) else _JS_UNDEF
+    if t == "UnaryExpression" and n.get("operator") == "!":
+        return not _js_truthy(_js_eval(n["argument"], env))
+    if t == "LogicalExpression":
+        left = _js_eval(n["left"], env)
+        if n["operator"] == "||":
+            return left if _js_truthy(left) else _js_eval(n["right"], env)
+        if n["operator"] == "&&":
+            return _js_eval(n["right"], env) if _js_truthy(left) else left
+    if t == "BinaryExpression" and n.get("operator") in ("===", "!=="):
+        a, b = _js_eval(n["left"], env), _js_eval(n["right"], env)
+        same = type(a) is type(b) and a == b
+        return same if n["operator"] == "===" else not same
+    if t == "ConditionalExpression":
+        return _js_eval(n["consequent"] if _js_truthy(_js_eval(n["test"], env)) else n["alternate"],
+                        env)
+    raise ValueError("unsupported JS expression %s" % t)
+
+
+def _js_run(stmts, env):
+    for s in stmts:
+        if s.get("type") == "ReturnStatement":
+            raise _JsReturn(_js_eval(s["argument"], env) if s.get("argument") else _JS_UNDEF)
+        if s.get("type") == "IfStatement":
+            br = s["consequent"] if _js_truthy(_js_eval(s["test"], env)) else s.get("alternate")
+            if br:
+                _js_run(br["body"] if br.get("type") == "BlockStatement" else [br], env)
+            continue
+        raise ValueError("unsupported JS statement %s" % s.get("type"))
+
+
+def _js_call(fn, *args):
+    env = {p["name"]: a for p, a in zip(fn["params"], args)}
+    try:
+        _js_run(fn["body"]["body"], env)
+    except _JsReturn as r:
+        return r.args[0]
+    return _JS_UNDEF
+
+
+def _js_find_fn(tree, name):
+    """The FunctionDeclaration called `name`, found anywhere in the tree."""
+    hit = []
+
+    def walk(n):
+        if isinstance(n, dict):
+            if n.get("type") == "FunctionDeclaration" and (n.get("id") or {}).get("name") == name:
+                hit.append(n)
+            for v in n.values():
+                walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                walk(v)
+    walk(tree)
+    return hit[0] if hit else None
+
+
+if not esprima:
+    skip("install_progress: a finished install is classified four ways", "esprima not installed")
+else:
+    _ipo_ast = esprima.parseScript(
+        (ROOT / "static" / "js" / "install_progress.js").read_text(encoding="utf-8"),
+        {"loc": True}).toDict()
+    _ipo_fn = _js_find_fn(_ipo_ast, "outcome")
+    _ipo_cases = [
+        ((True, {"status": "done"}), "ok"),
+        ((True, {"status": "done", "warn": True}), "warn"),
+        ((True, {"status": "failed"}), "bad"),
+        ((True, {"status": "interrupted"}), "bad"),
+        ((True, {"status": "none"}), "unknown"),
+        ((True, {"error": "Permission denied"}), "unknown"),
+        ((False, {"status": "done"}), "unknown"),
+    ]
+    _ipo_wrong = []
+    try:
+        for _a, _want in _ipo_cases:
+            _got = _js_call(_ipo_fn, *_a) if _ipo_fn else "<no outcome() function>"
+            if _got != _want:
+                _ipo_wrong.append("%r -> %r, want %r" % (_a, _got, _want))
+    except ValueError as _e:
+        _ipo_wrong.append(str(_e))
+    check(not _ipo_wrong,
+          "install_progress: a finished install is classified four ways — clean, caveat, failed, "
+          "and no verdict",
+          "; ".join(_ipo_wrong) + " — a done job's warning, or an answer that is not a job at all, "
+          "is shown as a green 'Installed'")
+
+    # SETTLED is data: which endings remove themselves, and in what colour.
+    _ipo_settled = {}
+
+    def _scan_settled(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "VariableDeclarator" and (n.get("id") or {}).get("name") == "SETTLED"
+                    and (n.get("init") or {}).get("type") == "ObjectExpression"):
+                for _p in n["init"]["properties"]:
+                    _k = _p["key"].get("name") or _p["key"].get("value")
+                    _ipo_settled[_k] = {(_q["key"].get("name") or _q["key"].get("value")):
+                                        _q["value"].get("value") for _q in _p["value"]["properties"]}
+            for v in n.values():
+                _scan_settled(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_settled(v)
+    _scan_settled(_ipo_ast)
+    _ipo_dropping = sorted(k for k, v in _ipo_settled.items() if v.get("drop"))
+    check(set(_ipo_settled) >= {"ok", "warn", "bad"} and _ipo_dropping == ["ok"],
+          "install_progress: only a clean install removes its own row",
+          "endings %r; auto-removed: %r — a caveat that disappears after 8 s was never read"
+          % (sorted(_ipo_settled), _ipo_dropping))
+    check((_ipo_settled.get("warn") or {}).get("cls") == "text-warning"
+          and (_ipo_settled.get("warn") or {}).get("dismiss") is True,
+          "install_progress: ...and a caveat is shown as a warning that stays until dismissed",
+          "warn renders as %r" % (_ipo_settled.get("warn"),))
+
+    # ...and settle() actually uses them: the verdict comes from outcome(), and the only timer it
+    # arms is the one SETTLED says to.
+    _ipo_settle = _js_find_fn(_ipo_ast, "settle")
+    _ipo_timers = []
+
+    def _scan_timers(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "CallExpression"
+                    and (n.get("callee") or {}).get("name") == "setTimeout"):
+                _d = (n.get("arguments") or [{}, {}])[1:2]
+                _ipo_timers.append(((_d[0].get("property") or {}).get("name")) if _d else None)
+            for v in n.values():
+                _scan_timers(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_timers(v)
+    if _ipo_settle:
+        _scan_timers(_ipo_settle)
+    check(_ipo_settle is not None and bool(_calls_named(_ipo_settle, "outcome"))
+          and _ipo_timers and all(_t == "drop" for _t in _ipo_timers),
+          "install_progress: settle() takes its verdict from outcome() and times out only what "
+          "SETTLED says to",
+          "settle found=%s, calls outcome=%s, setTimeout delays=%r"
+          % (_ipo_settle is not None, bool(_ipo_settle and _calls_named(_ipo_settle, "outcome")),
+             _ipo_timers))
+
 # ── a filter that only runs on `change` does not run on the common setup ─────────────────────
 # The install picker greys out the games LinuxGSM caps below the host's release, from the host
 # selector's change event. With ONE host the select is rendered already selected and never fires
