@@ -125,6 +125,20 @@ def _check_template_url_for():
 _check_template_url_for()
 
 
+def _console_window_stub(text):
+    """run_command as the real shell answers /api/console's FRAMED tail: B<content>E, stripped.
+
+    The route reads `printf B; tail -N log; printf E` so the window's first and last lines keep
+    their whitespace; a stub that returned bare text for every command would now read as a failed
+    (unframed) read. Any other command gets the bare text, as these stubs always gave it."""
+    def _run(*a, **k):
+        cmd = a[1] if len(a) > 1 else k.get("command", "")
+        if "printf B;" in cmd:
+            return ("B" + text + "\nE").strip(), "", 0
+        return text.strip(), "", 0
+    return _run
+
+
 def client_as(user_id):
     c = app.test_client()
     with c.session_transaction() as s:
@@ -7897,6 +7911,21 @@ try:
     from panel.routes._shared import (_CONSOLE_BACKLOG_MAX, _console_push)
     _cb.clear()
     _bl_saved = _sm_core.run_command
+    # What the panel pushes is NOT a line of the game's console log, and the payload must say so:
+    # the browser de-duplicates the log by matching its own copy against each /api/console window,
+    # and a line only the page holds can never match — the first poll after an update found no
+    # overlap and appended the whole window again beneath "[panel] update finished".
+    _pf_seen, _pf_emit = [], app.socketio.emit
+    try:
+        app.socketio.emit = lambda ev, payload, **k: _pf_seen.append((ev, payload))
+        _console_push(app, gs_id, "[panel] probe line", ts=1700000000.0)
+    finally:
+        app.socketio.emit = _pf_emit
+    check("console backlog: a panel push is marked as not coming from the console log",
+          _pf_seen and _pf_seen[-1][0] == "console_output" and _pf_seen[-1][1].get("panel") is True
+          and "rows" not in _pf_seen[-1][1],
+          "emitted %r" % (_pf_seen,))
+    _cb.clear()
     try:
         _console_push(app, gs_id, "[panel] update started — its output follows.", ts=1700000000.0)
         _console_push(app, gs_id, "\x1b[32m[  OK  ]\x1b[0m Update complete", ts=1700000042.0)
@@ -7945,7 +7974,7 @@ try:
         # looks exactly right until you notice every old line claims the moment you opened the
         # page. Asserted on a reachable host so `lines` is non-empty and the check has something
         # to be wrong about.
-        _sm_core.run_command = lambda *a, **k: ("old line one\nold line two", "", 0)
+        _sm_core.run_command = _console_window_stub("old line one\nold line two")
         _blj2 = c.get("/api/console/%d" % gs_id).get_json() or {}
         check("console timestamps: (setup) the game-log window came back non-empty",
               len(_blj2.get("lines") or []) >= 2,
@@ -8051,7 +8080,7 @@ try:
     #     the feature looks broken rather than correct.
     _pd_saved = _sm_core.run_command
     try:
-        _sm_core.run_command = lambda *a, **k: ("first\nsecond", "", 0)
+        _sm_core.run_command = _console_window_stub("first\nsecond")
         _pdj = c.get("/api/console/%d" % gs_id).get_json() or {}
         check("console timestamps: the window carries the panel's clock for the browser to stamp "
               "its new lines with",
@@ -8066,6 +8095,69 @@ try:
         check("console timestamps: ...but an unstamped window stays undated, as history",
               _pd_lines and all(r.get("t") is None for r in _pd_lines),
               "lines=%s" % (_pd_lines,))
+
+        # ── The window keeps its edge whitespace, because the page matches it EXACTLY ────────
+        # run_command strips its output, so an unframed `tail` lost the window's LAST line's
+        # trailing space and its FIRST line's indentation. The browser de-duplicates this window
+        # against the lines the poller pushed — which are framed, and were not stripped — so
+        # after Minecraft's "…players online: " the page found no overlap and appended the whole
+        # window again under the reply, every poll. Reported as "the live console stops
+        # responding till I load more of the old log"; measured on the test VPS as +29 and +33
+        # repeated lines after each `list`.
+        _sm_core.run_command = _console_window_stub(
+            "    at lua/includes/init.lua:12\n[03:30:35] There are 0 of a max of 20 players online: ")
+        _ws_lines = [r.get("line") for r in (c.get("/api/console/%d" % gs_id).get_json() or {})
+                     .get("lines") or []]
+        check("console window: the last line keeps its trailing whitespace",
+              _ws_lines[-1:] == ["[03:30:35] There are 0 of a max of 20 players online: "],
+              "last line %r — the page's exact-match stitching cannot find it" % (_ws_lines[-1:],))
+        check("console window: ...and the first line keeps its indentation",
+              _ws_lines[:1] == ["    at lua/includes/init.lua:12"], "first line %r" % (_ws_lines[:1],))
+        check("console window: ...and the file's final newline is not an extra empty line",
+              len(_ws_lines) == 2, "lines=%r" % (_ws_lines,))
+        # tail's OWN status must survive the frame. Run the route's actual command through a
+        # real bash — a stub cannot tell `…; printf E` from `…; printf E; exit $r`, and without
+        # the exit a MISSING log (LinuxGSM's start is mv-then-touch) reads as "readable, empty",
+        # which Load older answers by wiping the console.
+        import subprocess as _rs_sp
+        import tempfile as _rs_tmp
+        with app.app_context():
+            _rs_path = db.session.get(GameServer, gs_id).console_log
+        _rs_dir = _rs_tmp.mkdtemp()
+        _rs_target = [os.path.join(_rs_dir, "console.log")]
+        _rs_saved = _sm_core.read_as_game_user
+
+        def _rs_read(_server, _user, sh, timeout=30):
+            r = _rs_sp.run(["bash", "-c", sh.replace(_rs_path, _rs_target[0])],
+                           capture_output=True, text=True, timeout=10)
+            return r.stdout.strip(), r.stderr.strip(), r.returncode   # .strip(): the transport
+        try:
+            _sm_core.read_as_game_user = _rs_read
+            with open(_rs_target[0], "w") as _rs_fh:
+                _rs_fh.write("first line\nThere are 0 of a max of 20 players online: \n")
+            _rs_ok = c.get("/api/console/%d" % gs_id).get_json() or {}
+            check("console window: (real shell) a present log is read, edge whitespace intact",
+                  _rs_ok.get("readable") is True
+                  and [r.get("line") for r in _rs_ok.get("lines") or []]
+                  == ["first line", "There are 0 of a max of 20 players online: "],
+                  "readable=%r lines=%r" % (_rs_ok.get("readable"), _rs_ok.get("lines")))
+            _rs_target[0] = os.path.join(_rs_dir, "does-not-exist.log")
+            _rs_missing = c.get("/api/console/%d" % gs_id).get_json() or {}
+            check("console window: (real shell) a MISSING log is not reported as readable",
+                  _rs_missing.get("readable") is False,
+                  "readable=%r — Load older would wipe the console for a log that is not there"
+                  % (_rs_missing.get("readable"),))
+        finally:
+            _sm_core.read_as_game_user = _rs_saved
+            import shutil as _rs_sh
+            _rs_sh.rmtree(_rs_dir, ignore_errors=True)
+        # The frame is also the positive token that the read ran: output without it (a transport
+        # that returned something else entirely) is not a window of the log.
+        _sm_core.run_command = lambda *a, **k: ("sudo: a password is required", "", 0)
+        _ws_bad = c.get("/api/console/%d" % gs_id).get_json() or {}
+        check("console window: an unframed answer is reported unreadable, not shown as the log",
+              _ws_bad.get("readable") is False and _ws_bad.get("lines") == [],
+              "readable=%r lines=%r" % (_ws_bad.get("readable"), _ws_bad.get("lines")))
     finally:
         _sm_core.run_command = _pd_saved
 
@@ -8197,7 +8289,7 @@ try:
         with app.app_context():
             db.session.get(RemoteServer, remote_id).timezone = "Asia/Tokyo"
             db.session.commit()
-        _sm_core.run_command = lambda *a, **k: ("[2026-09-18 05:09:57] stamped line\nplain line", "", 0)
+        _sm_core.run_command = _console_window_stub("[2026-09-18 05:09:57] stamped line\nplain line")
         _ltj = c.get("/api/console/%d" % gs_id).get_json() or {}
         _lt_got = _ltj.get("lines") or []
         check("log stamps: the console window carries the real time for a stamped line",
@@ -8224,6 +8316,15 @@ try:
             check("log stamps: ...and says it needs a restart, because pipe-pane is set up at start",
                   _ltp2.get("success") is True and _ltp2.get("needs_restart") is True,
                   "got %s" % _ltp2)
+            # The page has no ON control; the endpoint must not have one either. Turning it on
+            # routes the console through gawk, which block-buffers to the file — a console that
+            # looks frozen until 4KB accumulate.
+            _lt_writes.clear()
+            _ltp_on = c.post("/api/server/%d/log-timestamps" % gs_id, json={"enabled": True})
+            check("log stamps: the endpoint REFUSES to turn stamping on",
+                  _ltp_on.status_code == 400 and not _lt_writes,
+                  "status %s, wrote %s — one request still freezes every viewer's console"
+                  % (_ltp_on.status_code, _lt_writes))
         finally:
             _lt_sf.lgsm_write_config = _lt_wr
     finally:
@@ -8274,13 +8375,6 @@ try:
     # read is what threw the rest away.
     _bs_src = open(os.path.join(_repo_root, "panel", "routes", "server_files.py"),
                    encoding="utf-8").read()
-    check("console burst: the poller advances by bytes READ, not to the file's current size",
-          "last_positions[server_id] = last_pos + diff" in _bs_src
-          and "last_positions[server_id] = current_size\n" not in _bs_src.replace(
-              "                                        last_positions[server_id] = current_size\n",
-              "", 1),
-          "it still jumps to current_size somewhere past the first-read case — that discards "
-          "everything beyond the 64KB cap")
     check("console burst: a rotated log drops the half-line held from the old file",
           "_console_partial.pop(server_id, None)" in _bs_src,
           "the fragment from the previous log survives the rotation and is glued to the new one")
@@ -8362,6 +8456,208 @@ try:
           "if out is None:" in _bs_src
           and "out = _console_whole_lines(server_id, out) if rc == 0 else None" in _bs_src,
           "the offset still moves on a read whose result was never proven to have arrived")
+
+    # ── The REAL tick, against a fake log that rotates the way LinuxGSM rotates it ───────────
+    # Everything above drives _console_whole_lines; the offset arithmetic around it lived in the
+    # poller's closure, so it could only be checked by reading its source — and a source check
+    # cannot tell a rotation the poller handles from one it misses. It missed one. LinuxGSM's
+    # start is `mv consolelog <dated>; touch consolelog`, and rotation was detected only by the
+    # file SHRINKING. On the test VPS a Minecraft start wrote 4.5KB in under two seconds, outgrew
+    # the old log's 4528-byte offset before the next tick, and the poller read the NEW log from
+    # the OLD offset: the boot output was never shown and the first push began
+    # 'l:joml:1.10.9) to libraries/…'. _console_tick is the extracted body; this drives it.
+    import re as _ct_re
+    import types as _ct_types
+    import panel.routes.server_files as _ct_sf
+    from panel.core.panel_state import _console_offsets as _ct_offsets
+
+    class _CtLog:
+        """A console log on a fake host, answering exactly the two reads _console_tick makes."""
+        def __init__(self):
+            self.ino, self.data, self.exists, self.fail_chunk = 5000, "", True, False
+
+        def rotate(self, text=""):             # mv consolelog <dated>; touch consolelog
+            self.ino, self.data = self.ino + 1, text
+
+        def read(self, _server, _user, sh, timeout=30):
+            if sh.startswith("stat -c '%i %s'"):
+                return ("%d %d" % (self.ino, len(self.data)) if self.exists else "MISSING"), "", 0
+            m = _ct_re.match(r"printf B; \{ tail -c \+(\d+) \S+ 2>/dev/null \| head -c (\d+); \}; "
+                             r"printf E$", sh)
+            if not m:
+                return "", "unexpected command %r" % sh, 1
+            if self.fail_chunk:
+                self.fail_chunk = False
+                return "", "SSH command timed out", -1      # tailscale/local: no raise, no frame
+            a = int(m.group(1)) - 1
+            # .strip(): what every transport does to the output before the caller sees it
+            return ("B" + self.data[a:a + int(m.group(2))] + "E").strip(), "", 0
+
+    class _CtSio:
+        def __init__(self):
+            self.lines = []
+
+        def emit(self, event, payload, room=None, **_k):
+            if event == "console_output":
+                self.lines.extend(r["line"] for r in payload.get("rows") or [])
+
+    _ct_log, _ct_sio = _CtLog(), _CtSio()
+    _ct_gs = _ct_types.SimpleNamespace(console_log="/home/mcserver/log/console/mc-console.log",
+                                       remote=object(), short_name="mcserver")
+    # On _core, the defining module: the package resolves names through __getattr__, and a stub
+    # set on the package itself would shadow that (the unit suite's stub-seam gate says so).
+    _ct_saved = (_sm_core.read_as_game_user, _ct_sf._host_timezone_cached)
+    _CT = -95
+
+    def _ct_tick():
+        _ct_sf._console_tick(app, _ct_sio, _ct_gs, _CT)
+
+    try:
+        _sm_core.read_as_game_user = _ct_log.read
+        _ct_sf._host_timezone_cached = lambda *_a, **_k: ""
+        _ct_offsets.pop(_CT, None)
+        _bs_partial_state.pop(_CT, None)
+        _ct_log.data = "".join("[03:30:%02d] old line %d\n" % (i, i) for i in range(40))
+        _ct_tick()
+        check("console tick: first sight reads nothing — history is /api/console's to show",
+              _ct_sio.lines == [] and _ct_offsets.get(_CT, {}).get("pos") == len(_ct_log.data),
+              "pushed %d lines / offset %r" % (len(_ct_sio.lines), _ct_offsets.get(_CT)))
+        _ct_log.data += "list\n[03:30:35] There are 0 of a max of 20 players online: \n"
+        _ct_tick()
+        check("console tick: (control) new output after first sight is pushed, whitespace intact",
+              _ct_sio.lines == ["list", "[03:30:35] There are 0 of a max of 20 players online: "],
+              "pushed %r" % (_ct_sio.lines,))
+
+        # THE REPORTED CASE: a start rotates the log and the new one is already LONGER than the
+        # old offset by the time the poller next looks.
+        _ct_sio.lines = []
+        _ct_boot = ["Unpacking io/netty/netty-codec/4.2.7/netty-codec-4.2.7.jar (libraries:io.netty:"
+                    "netty-codec:4.2.7) to libraries/io/netty/netty-codec/4.2.7/netty-codec.jar %03d"
+                    % i for i in range(60)] + ["Starting net.minecraft.server.Main"]
+        _ct_log.rotate("".join(l + "\n" for l in _ct_boot))
+        check("console tick: (setup) the new log outgrew the old offset before the tick",
+              len(_ct_log.data) > _ct_offsets[_CT]["pos"],
+              "new %d <= old %d — the size check alone would already catch it"
+              % (len(_ct_log.data), _ct_offsets[_CT]["pos"]))
+        _ct_tick()
+        check("console tick: a rotated log is read from its FIRST byte, not from the old offset",
+              _ct_sio.lines[:1] == _ct_boot[:1],
+              "first pushed line %r — the boot output before it was skipped, and it began "
+              "mid-line" % (_ct_sio.lines[:1],))
+        check("console tick: ...and every line of the new log arrives, in order, whole",
+              _ct_sio.lines == _ct_boot, "pushed %d of %d lines" % (len(_ct_sio.lines),
+                                                                  len(_ct_boot)))
+
+        # A rotation that SHRINKS the file (the older, size-only detection) must still work, and
+        # read from byte 0 rather than skipping the new log's first chunk as "first sight".
+        _ct_sio.lines = []
+        _ct_log.rotate("[03:40:00] Starting minecraft server version 26.3\n")
+        _ct_tick()
+        check("console tick: a smaller rotated log is read from byte 0, not skipped",
+              _ct_sio.lines == ["[03:40:00] Starting minecraft server version 26.3"],
+              "pushed %r" % (_ct_sio.lines,))
+
+        # Between LinuxGSM's mv and its touch there is no file at all. That is not an empty log
+        # and not a rotation, and it must not disturb the offset.
+        _ct_before = dict(_ct_offsets[_CT])
+        _ct_log.exists = False
+        _ct_tick()
+        _ct_log.exists = True
+        check("console tick: a log that is briefly MISSING changes nothing",
+              _ct_offsets[_CT] == _ct_before, "offset %r -> %r" % (_ct_before, _ct_offsets[_CT]))
+
+        # A chunk read that does not run (the non-raising transports) must not advance: the next
+        # tick re-reads the range. This is the case the loop-shaped check above simulates; here
+        # it goes through the real function.
+        _ct_sio.lines = []
+        _ct_log.data += "[03:40:05] Done (4.2s)! For help, type \"help\"\n"
+        _ct_log.fail_chunk = True
+        _ct_tick()
+        _ct_mid = list(_ct_sio.lines)
+        _ct_tick()
+        check("console tick: a chunk read that never ran is retried, not skipped",
+              _ct_mid == [] and _ct_sio.lines == ['[03:40:05] Done (4.2s)! For help, type "help"'],
+              "after the failed read %r, after the retry %r" % (_ct_mid, _ct_sio.lines))
+
+        # A burst over the per-tick cap drains over several ticks with nothing lost or cut.
+        _ct_sio.lines = []
+        # Unstamped: a LinuxGSM "[YYYY-MM-DD HH:MM:SS] " prefix is parsed off into the row's `t`,
+        # so a stamped fixture would compare unequal for a reason that has nothing to do with this.
+        _ct_burst = ["MODULE: ct_%05d.lua loaded" % i for i in range(3000)]
+        _ct_log.data += "".join(l + "\n" for l in _ct_burst)
+        for _ in range(12):
+            _ct_tick()
+        check("console tick: a burst bigger than one read arrives complete, in order, unsplit",
+              _ct_sio.lines == _ct_burst,
+              "pushed %d of 3000; first bad %r" % (len(_ct_sio.lines),
+                                                  [l for l in _ct_sio.lines if not l.endswith(" loaded")][:1]))
+
+        # One absurd colour code must not wedge the console. int() of more than 4300 digits
+        # RAISES in CPython, the renderer runs on every chunk, and a tick that raises never
+        # advances — so the same chunk was re-read, and re-raised, every two seconds, forever.
+        _ct_sio.lines = []
+        _ct_log.data += "before \x1b[" + "9" * 5000 + "mstill here\nthe next line\n"
+        try:
+            _ct_tick()
+            _ct_wedge = None
+        except Exception as _ct_exc:        # the poller swallows this and retries forever
+            _ct_wedge = "%s: %s" % (type(_ct_exc).__name__, str(_ct_exc)[:80])
+        check("console tick: a colour code too long to parse does not wedge the console",
+              _ct_wedge is None and _ct_sio.lines == ["before still here", "the next line"],
+              "tick raised %s; pushed %r" % (_ct_wedge, [l[:40] for l in _ct_sio.lines]))
+
+        # A line that never ends must not be held forever. It grew by a whole read every tick.
+        _ct_sio.lines = []
+        _ct_log.data += "x" * 70000
+        for _ in range(3):
+            _ct_tick()
+        check("console tick: an unterminated line past the cap is shown, not held without bound",
+              len(_ct_sio.lines) == 1 and _ct_sio.lines[0] == "x" * 70000
+              and not _bs_partial_state.get(_CT),
+              "pushed %d line(s); still holding %d chars"
+              % (len(_ct_sio.lines), len(_bs_partial_state.get(_CT) or "")))
+        _ct_log.data += "\n"
+        _ct_tick()
+        _ct_sio.lines = []
+        _ct_log.data += "half a li"
+        _ct_tick()
+        _ct_log.data += "ne\n"
+        _ct_tick()
+        check("console tick: (control) a SHORT fragment is still held and completed",
+              _ct_sio.lines == ["half a line"], "pushed %r" % (_ct_sio.lines,))
+
+        # Nobody watching: the offset goes, so reopening the console starts from NOW rather than
+        # replaying everything written while it was closed as if it were live.
+        _ct_sf._forget_unwatched_consoles([])
+        _ct_sio.lines = []
+        _ct_log.data += "".join("[04:%02d:00] written while nobody watched %d\n" % (i, i)
+                                for i in range(50))
+        _ct_tick()
+        check("console tick: a console nobody watched does not replay its backlog on reopen",
+              _ct_sio.lines == [], "replayed %d lines as live" % len(_ct_sio.lines))
+        _ct_log.data += "[05:00:00] after reopening\n"
+        _ct_tick()
+        check("console tick: ...and streams what is written after it is reopened",
+              _ct_sio.lines == ["[05:00:00] after reopening"], "pushed %r" % (_ct_sio.lines,))
+        _ct_sf._forget_unwatched_consoles([_CT])
+        check("console tick: (control) a WATCHED console keeps its offset",
+              _CT in _ct_offsets, "the offset of a console someone has open was dropped")
+    finally:
+        _sm_core.read_as_game_user, _ct_sf._host_timezone_cached = _ct_saved
+        _ct_offsets.pop(_CT, None)
+        _bs_partial_state.pop(_CT, None)
+
+    # ...and the poller really calls those two, every tick. Read as AST, not text: the comment
+    # explaining the fix names both functions.
+    import ast as _ct_ast
+    _ct_tree = _ct_ast.parse(_bs_src)
+    _ct_poller = next((n for n in _ct_ast.walk(_ct_tree)
+                       if isinstance(n, _ct_ast.FunctionDef) and n.name == "console_poller"), None)
+    _ct_calls = {c.func.id for c in _ct_ast.walk(_ct_poller or _ct_ast.Module(body=[]))
+                 if isinstance(c, _ct_ast.Call) and isinstance(c.func, _ct_ast.Name)}
+    check("console poller: it drives _console_tick and forgets unwatched consoles",
+          _ct_poller is not None and {"_console_tick", "_forget_unwatched_consoles"} <= _ct_calls,
+          "console_poller calls %s" % sorted(_ct_calls))
 
 
     # ── The panel must never OFFER to turn LinuxGSM's logtimestamp on ───────────────────────

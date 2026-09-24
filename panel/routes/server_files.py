@@ -32,7 +32,7 @@ from panel.core.validation import (_attachment_header)
 from app import (ALERT_PROVIDERS, _GAME_LIST_CACHE, _LGSM_NAME_MAP, _MAX_UPLOAD_BYTES,
     _apply_mod_restart, _clean_console_text, _log, _socketio_cors, _sync_toggles_from_cron,
     load_game_list)
-from panel.core.panel_state import (_console_backlog, _console_partial,
+from panel.core.panel_state import (_console_backlog, _console_offsets, _console_partial,
     register_server_state)
 from panel.routes._shared import (_console_rows, _drain_action_output,
     _host_timezone_cached, _server_action_buttons)
@@ -164,11 +164,117 @@ def _console_whole_lines(server_id, raw):
     raw = raw[1:-1]
     chunk = _console_partial.pop(server_id, "") + raw
     whole, nl, rest = chunk.rpartition("\n")
+    # A fragment is held only while it could still be finished. A game that writes without ever
+    # ending the line (a progress bar redrawn with \r, a binary blob) grew the held text by a
+    # whole read every tick with no bound, and it was re-concatenated and re-scanned each time.
+    # Past the cap it is shown as a line of its own rather than held forever.
+    if len(rest if nl else chunk) > _CONSOLE_PARTIAL_MAX:
+        return chunk
     if nl:
         _console_partial[server_id] = rest
         return whole
     _console_partial[server_id] = chunk
     return ""
+
+
+_CONSOLE_READ_CAP = 65536   # bytes per server per tick; a bigger backlog drains over later ticks
+_CONSOLE_PARTIAL_MAX = 65536   # longest unterminated line held back waiting for its end
+
+
+def _console_tick(app, socketio, gs, server_id):
+    """One poll of one server's console log: push whatever is new to its viewers.
+
+    Module level, and handed everything it touches, so a test can drive it against a fake host.
+    It was the body of a `while True` inside a closure, which is why every earlier check of it had
+    to read its SOURCE — and a source gate cannot tell a rotation it handles from one it misses.
+
+    Offsets live in _console_offsets as {"ino", "pos"}, and the three cases are kept apart:
+
+    * FIRST SIGHT (no entry): record the end and read nothing. History is /api/console's job — the
+      page primed itself from it — and pushing the whole file here would print it twice.
+    * ROTATED (the inode changed, or the file shrank): read the NEW log from byte 0. This is a
+      server that has just started, and its boot output is exactly what someone is watching for.
+      Offset 0 used to mean both "first sight" and "rotated", so a rotation skipped the new log's
+      first chunk; and rotation was detected only by shrinking, so a new log that outgrew the old
+      offset before the next tick was read from the OLD offset — the boot never shown, and the
+      first line pushed began mid-line ('l:joml:1.10.9) to libraries/…' on the test VPS).
+    * GROWN: read from where we were, at most _CONSOLE_READ_CAP bytes, and advance by what was
+      READ — never to the file's size, which discarded everything past the cap.
+
+    A read that did not run leaves the offset alone so the next tick re-reads the same range."""
+    log_path = gs.console_log
+    remote = gs.remote
+    # Inode and size in one round trip. MISSING is its own answer, not a size of 0: between
+    # LinuxGSM's `mv` and its `touch` there is briefly no file, and calling that "empty" would
+    # record a bogus rotation. An unparseable reply (a failed read on a non-raising transport
+    # comes back as "") is not a measurement either — try again next tick.
+    st_out, _, _ = _sm.read_as_game_user(
+        remote, gs.short_name,
+        f"stat -c '%i %s' {log_path} 2>/dev/null || echo MISSING", timeout=5)
+    parts = (st_out or "").split()
+    if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
+        return
+    ino, size = int(parts[0]), int(parts[1])
+    state = _console_offsets.get(server_id)
+    if state is None:
+        _console_offsets[server_id] = {"ino": ino, "pos": size}
+        return
+    pos = state["pos"]
+    if ino != state["ino"] or size < pos:
+        # Rotated (LinuxGSM's start mv's the log to a dated name) or truncated. Persist the reset
+        # BEFORE reading, so a read that fails below retries from 0 of the NEW file next tick
+        # rather than detecting the same rotation again. Drop the half-line held from the OLD
+        # file — gluing it onto the new one's first line is a line that never existed.
+        pos = 0
+        state["ino"], state["pos"] = ino, 0
+        _console_partial.pop(server_id, None)
+    if size <= pos:
+        return
+    diff = min(size - pos, _CONSOLE_READ_CAP)
+    # tail -c +N | head -c diff: two reads, not one-per-byte. 'B' and 'E' are SENTINELS, not
+    # decoration: run_command `.strip()`s what it returns, and strip() takes BOTH ends — the
+    # trailing one would eat the chunk's own final newline and make a COMPLETE last line look
+    # partial, the leading one eats the newline a chunk starts with and glues two real log lines
+    # into one. See _console_whole_lines.
+    out, _, rc = _sm.read_as_game_user(
+        remote, gs.short_name,
+        f"printf B; {{ tail -c +{pos + 1} {log_path} 2>/dev/null | head -c {diff}; }}; printf E",
+        timeout=5,
+    )
+    # The frame is the POSITIVE TOKEN that this read ran at all. tailscale and local do not
+    # raise: a 64KB read that exceeds the 5s timeout returns ("", "SSH command timed out", -1)
+    # while the 20-byte stat in the same tick succeeded, so advancing here would jump `diff` bytes
+    # over output the host never sent. Re-read the same range next tick instead — the guard
+    # _drain_action_output makes in routes/_shared.py for the same reason.
+    out = _console_whole_lines(server_id, out) if rc == 0 else None
+    if out is None:
+        return
+    if out:
+        out = _clean_console_text(out)
+    if out:
+        # Parsed per line: a LinuxGSM-stamped line carries its OWN time, which is more accurate
+        # than the moment the poller happened to read it. `ts` is when the panel READ these
+        # bytes, alongside the payload rather than inside it (see _console_push).
+        rows = _console_rows(out.split("\n"), _host_timezone_cached(remote))
+        socketio.emit("console_output",
+                      {"server_id": server_id, "data": out, "rows": rows, "ts": time.time()},
+                      room=f"console_{server_id}")
+    # Advance by what was ACTUALLY READ. `head -c diff` emits exactly diff bytes (diff is clamped
+    # to what the file holds), and this line is reached only past the frame check above.
+    state["pos"] = pos + diff
+
+
+def _forget_unwatched_consoles(watched_ids):
+    """Drop poll state for every server nobody is watching.
+
+    The offsets used to outlive the last viewer. Close a console, let the server write for an
+    hour, open it again, and the poller resumed from where it had stopped — replaying the hour at
+    64KB a tick, as if it were live, ahead of anything actually happening now. The page had
+    already primed itself from /api/console, so every one of those lines was also a duplicate."""
+    watched = set(watched_ids)
+    for sid in [k for k in list(_console_offsets) if k not in watched]:
+        _console_offsets.pop(sid, None)
+        _console_partial.pop(sid, None)
 
 
 def _evict_unauthorized_viewers(app, socketio, server_id):
@@ -926,10 +1032,26 @@ def register(app, supervise):
             log_path = gs.console_log
             # AS THE GAME USER, not as root: the log sits inside a 0750 home. See
             # _core.read_as_game_user for why this was a root read and what that cost.
+            # FRAMED, like the poller's reads, and for the same reason: run_command strips the
+            # output, so the window's LAST line lost its trailing whitespace and its FIRST line its
+            # indentation. The browser de-duplicates this window against lines the poller pushed,
+            # by exact string — and the pushed copies were not stripped. Minecraft's "There are 0
+            # of a max of 20 players online: " ends in a space, so after every `list` the page
+            # found no overlap and appended the whole window again beneath the reply: the
+            # "console stops responding until I press Load older" report.
             out, err, rc = _sm.read_as_game_user(
-                remote, gs.short_name, f"tail -{want} {log_path} 2>/dev/null", timeout=15)
-            readable = (rc == 0)
-            lines = _console_rows(_clean_console_text(out).split("\n"), host_tz) if rc == 0 else []
+                remote, gs.short_name,
+                # tail's OWN status is the answer, not printf's: without `exit $r` a log that does
+                # not exist (LinuxGSM's start is `mv` then `touch`) came back framed, rc 0, empty —
+                # "readable, and nothing in it" — and Load older wiped the console on that.
+                f"printf B; tail -{want} {log_path} 2>/dev/null; r=$?; printf E; exit $r",
+                timeout=15)
+            framed = rc == 0 and (out or "").startswith("B") and (out or "").endswith("E")
+            readable = framed
+            body = out[1:-1] if framed else ""
+            if body.endswith("\n"):
+                body = body[:-1]     # the file's own final newline, not an empty last line
+            lines = _console_rows(_clean_console_text(body).split("\n"), host_tz) if framed else []
         except Exception:
             lines = []
         # What the PANEL pushed into this console (a long action's markers and output) — its own
@@ -958,7 +1080,7 @@ def register(app, supervise):
     @login_required
     @server_access_required
     def api_server_log_timestamps(server_id):
-        """Read or set LinuxGSM's own `logtimestamp`, which stamps the console log AT WRITE TIME.
+        """Read LinuxGSM's own `logtimestamp`, or turn it OFF. It stamps the console log AT WRITE TIME.
 
         This is the only way a line written while nobody was watching can carry a real time — the
         panel tails the file, so on its own it can date only what it saw arrive, and an idle
@@ -973,7 +1095,16 @@ def register(app, supervise):
             return jsonify({"error": "Permission denied"}), 403
         try:
             if request.method == "POST":
-                want = "on" if _json_body().get("enabled") else "off"
+                # OFF only. The page withdrew its "turn on" control once it was measured that
+                # LinuxGSM's stamping pipeline (`cat | gawk strftime >> consolelog`) block-buffers
+                # to the file and freezes the live console for as long as 4KB takes to accumulate
+                # — but this endpoint still accepted `enabled: true`, so anyone with the config
+                # permission could still freeze every viewer's console with one request. The
+                # reading side stays: a log someone stamped by hand is still parsed.
+                if _json_body().get("enabled"):
+                    return jsonify({"error": "Turning LinuxGSM's log timestamps on freezes the "
+                                             "live console, so the panel only turns them off."}), 400
+                want = "off"
                 ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name,
                                             {"logtimestamp": want})
                 if not ok:
@@ -1111,11 +1242,13 @@ def register(app, supervise):
 
     # Console polling thread — streams new console output to WebSocket viewers.
     def console_poller():
-        last_positions = {}
         while True:
             try:
                 with _viewers_lock:
                     active_ids = list(_console_viewers.keys())
+                # Before the early-out: a console whose last viewer just left must lose its offset
+                # now, or reopening it replays everything written in between as if it were live.
+                _forget_unwatched_consoles(active_ids)
                 if active_ids:
                     with app.app_context():
                         for server_id in active_ids:
@@ -1125,10 +1258,8 @@ def register(app, supervise):
                             # RE-ASK who may watch this, every tick. The join handler's check is a
                             # one-time question, and the answer can change while the socket stays
                             # open: a group removed, a permission dropped, the account
-                            # deactivated. Until now none of that reached a console already
-                            # streaming — the browser kept receiving output until the user closed
-                            # the tab. Evicting from the ROOM is what actually stops the stream;
-                            # dropping the viewer entry alone would only stop the polling.
+                            # deactivated. Evicting from the ROOM is what actually stops the
+                            # stream; dropping the viewer entry alone would only stop the polling.
                             _evicted = _evict_unauthorized_viewers(app, socketio, server_id)
                             if _evicted:
                                 app.logger.info(
@@ -1137,92 +1268,14 @@ def register(app, supervise):
                             with _viewers_lock:
                                 if not _console_viewers.get(server_id):
                                     continue      # nobody left who may see it — do not read
-                            remote = gs.remote
                             try:
                                 # A long panel action (update/validate/backup/…) writes its output
                                 # to its own file on the host, NOT to the game's console log — so
                                 # tail that too while one is running. Without this the console
                                 # stayed silent for the whole of an update the panel had just told
                                 # the operator to watch it for.
-                                _drain_action_output(app, remote, server_id)
-                                log_path = gs.console_log
-                                size_out, _, _ = _sm.read_as_game_user(
-                                    remote, gs.short_name,
-                                    f"stat -c%s {log_path} 2>/dev/null || echo 0", timeout=5
-                                )
-                                try:
-                                    current_size = int(size_out.strip())
-                                except ValueError:
-                                    continue
-                                last_pos = last_positions.get(server_id, 0)
-                                if current_size < last_pos:  # log rotated/truncated
-                                    # LinuxGSM rotates the console log on every start
-                                    # (command_start.sh mv's it to a dated name), so this fires on
-                                    # each restart. Drop the half-line held from the OLD file —
-                                    # gluing it onto the new one's first line is a line that never
-                                    # existed.
-                                    last_pos = 0
-                                    _console_partial.pop(server_id, None)
-                                if current_size > last_pos:
-                                    if last_pos == 0:
-                                        last_positions[server_id] = current_size
-                                        continue
-                                    diff = min(current_size - last_pos, 65536)  # cap 64KB/poll
-                                    # tail -c +N | head -c diff: two reads, not one-per-byte.
-                                    # 'B' and 'E' are SENTINELS, not decoration: run_command
-                                    # `.strip()`s what it returns, and strip() takes BOTH ends —
-                                    # the trailing one would eat the chunk's own final newline and
-                                    # make a COMPLETE last line look partial, the leading one eats
-                                    # the newline a chunk starts with and glues two real log lines
-                                    # into one. See _console_whole_lines.
-                                    out, _, rc = _sm.read_as_game_user(
-                                        remote, gs.short_name,
-                                        f"printf B; {{ tail -c +{last_pos + 1} {log_path} "
-                                        f"2>/dev/null | head -c {diff}; }}; printf E",
-                                        timeout=5,
-                                    )
-                                    # The frame is the POSITIVE TOKEN that this read ran at all.
-                                    # tailscale and local do not raise: a 64KB read that exceeds
-                                    # the 5s timeout returns ("", "SSH command timed out", -1)
-                                    # while the 20-byte stat in the same tick succeeded, so the
-                                    # advance below used to jump `diff` bytes over output the host
-                                    # never sent — gone for good, since last_pos only moves
-                                    # forward and "Load older" only ever sees what the poller
-                                    # emitted. The next tick then glued the stale fragment onto a
-                                    # line 64KB further on. Re-read the same range instead; this
-                                    # is the guard _drain_action_output already makes in
-                                    # routes/_shared.py for the same reason.
-                                    out = _console_whole_lines(server_id, out) if rc == 0 else None
-                                    if out is None:
-                                        continue
-                                    if out:
-                                        out = _clean_console_text(out)
-                                    if out:
-                                        # Parsed per line: a LinuxGSM-stamped line carries its OWN
-                                        # time, which is more accurate than the moment the poller
-                                        # happened to read it.
-                                        rows = _console_rows(out.split("\n"),
-                                                             _host_timezone_cached(remote))
-                                        # ts = when the panel READ these bytes, alongside the
-                                        # payload rather than inside it (see _console_push). It is
-                                        # accurate to one poll interval, which is the best anything
-                                        # tailing a file can claim — the log carries no per-line
-                                        # time of its own for most games.
-                                        socketio.emit("console_output",
-                                                      {"server_id": server_id, "data": out,
-                                                       "rows": rows, "ts": time.time()},
-                                                      room=f"console_{server_id}")
-                                    # Advance by what was ACTUALLY READ, never to current_size.
-                                    # `head -c diff` emits exactly diff bytes (diff is clamped to
-                                    # what the file holds), so this is exact — where jumping to
-                                    # current_size silently DISCARDED everything past the 64KB cap.
-                                    # A server that writes more than that between two polls is not
-                                    # hypothetical: it is every GMod start, loading hundreds of Lua
-                                    # modules, which is exactly when someone is watching. The
-                                    # backlog now drains over the next few ticks instead.
-                                    # Reached only past the frame check above, so `diff` bytes
-                                    # really did arrive.
-                                    last_positions[server_id] = last_pos + diff
+                                _drain_action_output(app, gs.remote, server_id)
+                                _console_tick(app, socketio, gs, server_id)
                             except Exception:  # nosec B112 - try/except/continue is the point:
                                 # one unreadable console must not stop the poll for every OTHER
                                 # server. The next tick retries this one; the failure is visible

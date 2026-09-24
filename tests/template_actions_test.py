@@ -884,6 +884,74 @@ check(not re.search(r"\bel\.textContent\s*=", _js_function_body(_sd_js, "renderA
       "console render: renderAnsi appends to the line, never replaces its contents",
       "it assigns el.textContent, which wipes the timestamp gutter put there before it")
 
+
+# ── 0d-bis. the console's scrollback must not re-append the log after an update + start ─────
+# The page keeps its own copy of the log (_consoleLines) and stitches each /api/console window
+# onto it by matching that copy's newest lines against the window. Any line the copy holds that
+# the FILE does not (the panel's "[panel] update …" markers), any line that differs by a space,
+# and any gap the poller left makes the match miss — and a miss appends the WHOLE window again,
+# beneath the live output. Reported as "after I update then start the server the live console
+# stops responding till I load more of the old log"; measured on the test VPS at +82, +29 and
+# +33 repeated lines on three consecutive polls with the websocket connected throughout.
+def _js_code_only(body):
+    """`body` with // comments removed, so an explanation of a fix cannot satisfy its own gate."""
+    return re.sub(r"(?m)(^|[^:'\"\\])//.*$", r"\1", body or "")
+
+
+def _js_block_after(src, anchor):
+    """The brace-matched block that opens at the first `{` after `anchor`, or None."""
+    i = src.find(anchor)
+    if i < 0:
+        return None
+    j = src.index("{", i)
+    depth = 0
+    for k in range(j, len(src)):
+        depth += {"{": 1, "}": -1}.get(src[k], 0)
+        if depth == 0:
+            return src[j + 1:k]
+    return None
+
+
+_co_handler = _js_code_only(_js_block_after(_sd_js, "socket.on('console_output', function(data)"))
+check(len(_co_handler) > 200 and "_appendConsoleRows(" in _co_handler,
+      "console stitch: (setup) found the socket handler that renders console output",
+      "extractor got %r" % _co_handler[:80])
+check(re.search(r"var fromLog = Array\.isArray\(data\.rows\) && !data\.panel;", _co_handler)
+      and re.search(r"if \(fromLog && data\.rows\.length\)", _co_handler)
+      and "appendConsole(data.data, data.ts, fromLog)" in _co_handler,
+      "console stitch: a push that is not from the log is rendered but not tracked",
+      "panel/system pushes reach _consoleLines, and the next poll's overlap match cannot find them")
+check("if (track !== false) _consoleLines = _consoleLines.concat(lines);"
+      in _js_code_only(_js_function_body(_sd_js, "_appendConsole")),
+      "console stitch: _appendConsole leaves untracked lines out of the overlap copy",
+      "every rendered line is still concatenated onto _consoleLines")
+_rc_body = _js_code_only(_js_function_body(_sd_js, "refreshConsole"))
+_rc_delta = _js_block_after(_rc_body, "} else if (!socket.connected || catchUp)") or ""
+check("_newConsoleRows(" in _rc_delta and _rc_body.count("_newConsoleRows(") == 1,
+      "console stitch: the poll appends a delta ONLY while the socket is down (or to catch up)",
+      "a poll delta is appended with the websocket live — a missed overlap re-appends the window")
+# ...and a RE-connect catches up once from the log. The poller forgets a console nobody watches,
+# so a socket that dropped for a moment rejoins at "now", and what was written in the gap is only
+# in the file.
+_cn_handler = _js_code_only(_js_block_after(_sd_js, "socket.on('connect', function()"))
+check(re.search(r"if \(_socketEverConnected\) refreshConsole\(false, null, true\);", _cn_handler)
+      and "_socketEverConnected = true;" in _cn_handler,
+      "console stitch: a reconnect catches up the gap from the log",
+      "a socket that dropped and rejoined silently loses whatever was written while it was down")
+_lm_body = _js_code_only(_js_function_body(_sd_js, "loadMoreConsole"))
+check(0 <= _lm_body.find("data.readable === false") < _lm_body.find("consoleEl.innerHTML = ''"),
+      "console stitch: Load older does not wipe the scrollback for a log it could not read",
+      "it empties the console (the only copy of what was pushed) before checking readable")
+check("_renderPanelLines(" in _lm_body,
+      "console stitch: Load older puts the panel's own lines back after rebuilding",
+      "an update's output is lost for good the first time Load older is pressed")
+check("a.trim() === b.trim()" in _js_code_only(_js_function_body(_sd_js, "_sameLine"))
+      and "_sameLine(" in _js_code_only(_js_function_body(_sd_js, "_eqRange"))
+      and "_sameLine(incoming[k], lastHave)" in _js_code_only(_js_function_body(_sd_js,
+                                                                                 "_newConsoleLines")),
+      "console stitch: the overlap match ignores surrounding whitespace",
+      "an exact compare turns one trailing space into 'no overlap' and a whole re-appended window")
+
 # ── 0e. no template renders the same id= twice ────────────────────────────────────────────────
 # getElementById returns the FIRST match, so a duplicate id does not fail loudly — it silently
 # points every handler at the wrong element. remote_manage.html carried id="diag-repair-btn" on

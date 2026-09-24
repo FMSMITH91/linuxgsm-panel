@@ -33,6 +33,7 @@ __all__ = [
     "_action_output",
     "_console_backlog",
     "_console_partial",
+    "_console_offsets",
     "_install_jobs",
     "_install_lock",
     "_full_backup_lock",
@@ -174,6 +175,16 @@ _console_backlog = register_server_state({})   # server_id -> [line, ...]
 # next read completes it. Without it a 64KB boundary lands inside a line and the console shows the
 # halves as two — seen in the wild as a bare "[20" where a LinuxGSM timestamp had been sliced.
 _console_partial = register_server_state({})   # server_id -> str
+
+# Where the console poller has read each server's log up to: {"ino": inode, "pos": byte offset}.
+# The INODE is what tells a rotated log from a grown one. LinuxGSM's start does `mv consolelog
+# <dated name>; touch consolelog`, and a size-only check ("did it shrink?") misses every rotation
+# where the new log outgrows the old offset within one poll — measured on the test VPS, a Minecraft
+# start writes 4.5KB of library unpacking in under two seconds, so the poller read the NEW file
+# from the OLD offset: the boot output was never shown and the first line it pushed began mid-line.
+# Dropped for a server once nobody is watching it (see server_files._console_tick), so reopening a
+# console starts from "now" instead of replaying everything written while it was closed as if live.
+_console_offsets = register_server_state({})   # server_id -> {"ino": int, "pos": int}
 
 # ── Background-job state ─────────────────────────────────────────────────────────────────────
 # These lived at module level in app.py, which was fine while the only readers were app.py's own

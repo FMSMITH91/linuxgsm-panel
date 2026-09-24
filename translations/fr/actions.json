@@ -34,6 +34,7 @@
   "Could not add it": "Impossible de l'ajouter",
   "Could not check update status.": "Impossible de vérifier l'état des mises à jour.",
   "Could not load more console output": "Impossible de charger davantage de sortie console",
+  "Could not read the console log on this host": "Impossible de lire le journal de la console sur cet hôte",
   "Could not read database stats.": "Impossible de lire les statistiques de la base de données.",
   "Could not read the dropped folder.": "Impossible de lire le dossier déposé.",
   "Could not read the log.": "Impossible de lire le journal.",

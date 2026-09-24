@@ -572,7 +572,13 @@ def _console_push(app, server_id, text, ts=None):
     try:
         sio = getattr(app, "socketio", None)
         if sio is not None:
-            sio.emit("console_output", {"server_id": server_id, "data": text, "ts": ts},
+            # `panel: True` because these lines are NOT in the game's console log. The browser
+            # de-duplicates the log by matching its own copy against each /api/console window, so
+            # a line that exists only on the page can never match — the first poll after an
+            # update found no overlap and appended the whole window again beneath "[panel] update
+            # finished". It renders these, and leaves them out of that copy.
+            sio.emit("console_output",
+                     {"server_id": server_id, "data": text, "ts": ts, "panel": True},
                      room=f"console_{server_id}")
     except Exception:
         _log.debug("console push for server %s failed (non-fatal)", server_id, exc_info=True)
