@@ -4848,6 +4848,34 @@ try:
                                   HEAD_SHA=_dp_sha[:39] + "\ntouch /tmp/x"))
     check("deploy: ...and refuses a head_sha that is not a commit id, sending nothing",
           _dp_rb.returncode != 0 and not os.path.exists(_dp_bad), _dp_rb.stderr[-200:])
+    # The PER-USER branch too. It took install.sh from origin/main and ran it unpinned, so the
+    # deploy of a verified commit installed whatever main's tip was by then — a later push whose CI
+    # had not finished, or had failed. Same stream, a host whose unit reports nothing and whose
+    # deploy account has ~/linuxgsm-panel: record what install.sh ran with, and which bytes.
+    _dp_home = os.path.join(_dp_sb, "peruser")
+    os.makedirs(os.path.join(_dp_home, "linuxgsm-panel"))
+    with open(os.path.join(_dp_home, "linuxgsm-panel", "install.sh"), "w") as _dp_f:
+        _dp_f.write("#!/bin/bash\necho HOST-OWN-INSTALLER\n")
+    _dp_ulog = os.path.join(_dp_sb, "ulog")
+    _dp_ushims = ('LOG=%s\n' % _shlex_q(_dp_ulog)
+                  + 'systemctl() { :; }\n'
+                  + 'git() { echo "GIT $*" >> "$LOG"; }\n'
+                  + 'sudo() { echo "SUDO $*" >> "$LOG"; return 1; }\n'
+                  # `env`, an external command, sees only what install.sh would: the EXPORTED
+                  # environment. The remote script's own PANEL_UPDATE_REF is a plain shell
+                  # variable, so only a prefix assignment on the call reaches the installer.
+                  + 'bash() { env | sed -n "s/^PANEL_UPDATE_REF=/USER-ENV PANEL_UPDATE_REF=/p"'
+                  + ' >> "$LOG"; echo "USER-BYTES $(cat "$1")" >> "$LOG"; }\n')
+    _dp_ur = _sh_sub.run(["/bin/bash", "-c", _dp_ushims + _dp_sent], capture_output=True, text=True,
+                         cwd=_dp_sb, env=dict(os.environ, HOME=_dp_home))
+    _dp_ugot = open(_dp_ulog).read() if os.path.exists(_dp_ulog) else ""
+    check("deploy: the per-user branch runs the shipped installer, pinned to the verified commit",
+          "Per-user install at" in _dp_ur.stdout
+          and "USER-ENV PANEL_UPDATE_REF=%s" % _dp_sha in _dp_ugot.splitlines()
+          and "USER-BYTES " + _dp_shipped.strip() in _dp_ugot
+          and "origin/main" not in _dp_ugot,
+          "rc=%s out=%r err=%r log=%r" % (_dp_ur.returncode, _dp_ur.stdout[-200:],
+                                         _dp_ur.stderr[-200:], _dp_ugot[-300:]))
 finally:
     _shutil.rmtree(_dp_sb, ignore_errors=True)
 
