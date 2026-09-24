@@ -3631,6 +3631,21 @@ for _label, _cfg, _want in (
     _got = _ck_app._https_ready(_cfg)
     check("cookies: Secure is %s for %s" % (_want, _label), _got is _want, "got %s" % _got)
 check("cookies: the Secure predicate reads trust_proxy", "trust_proxy" in _ck_expr, _ck_expr)
+# ── Tailscale Serve stands the panel's own TLS down ONLY on a loopback bind ──────────────────
+# It stood down whenever Serve had been set up. The wizard stores bind_host 0.0.0.0 by default and
+# nothing that marks Serve done changes it, so the next restart served cleartext HTTP on the public
+# interface — passwords and Bearer tokens in the clear. Serve must follow whichever scheme is used.
+for _label, _bind, _want_tls in (("0.0.0.0 (public + tailnet)", "0.0.0.0", True),
+                                 ("an unset (auto) bind", "", True),
+                                 ("a public address", "203.0.113.5", True),
+                                 ("127.0.0.1", "127.0.0.1", False),
+                                 ("::1", "::1", False)):
+    _ts_cfg = {"use_https": True, "tailscale_setup_done": True, "bind_host": _bind}
+    check("https: with Serve set up and bind %s, own TLS is %s" % (_label, _want_tls),
+          _ck_app._effective_https(_ts_cfg) is _want_tls, repr(_ck_app._effective_https(_ts_cfg)))
+    check("https: ...and Serve is pointed at the scheme actually served (%s)" % _label,
+          _ck_app._ts_backend_scheme(_ts_cfg) == ("https+insecure" if _want_tls else "http"),
+          _ck_app._ts_backend_scheme(_ts_cfg))
 check("cookies: ...and not site_domain, which is not evidence of TLS",
       "site_domain" not in _ck_expr, _ck_expr)
 

@@ -2348,6 +2348,16 @@ def _https_ready(cfg):
                 or cfg.get("trust_proxy", False))
 
 
+def _bind_is_loopback(bind_host):
+    """True only for a concrete loopback address (127.0.0.0/8, ::1). "" (auto) is not: it can
+    resolve to 0.0.0.0 or a tailnet IP at boot."""
+    import ipaddress
+    try:
+        return ipaddress.ip_address(str(bind_host or "").strip()).is_loopback
+    except ValueError:
+        return False
+
+
 def _effective_https(cfg):
     """Should the panel terminate TLS itself with the built-in self-signed cert?
 
@@ -2355,11 +2365,18 @@ def _effective_https(cfg):
     box. But when Tailscale Serve or a reverse proxy is in front, THAT layer terminates
     TLS (with a real cert) and forwards plain HTTP to us on loopback — serving HTTPS
     underneath would just break their http:// upstream. So we stand down in those cases
-    and let them do it. This keeps existing Tailscale installs serving HTTP exactly as
-    before (zero change on upgrade)."""
+    and let them do it.
+
+    Tailscale stands TLS down only when the panel is bound to LOOPBACK. Serve reaching us on
+    127.0.0.1 is the one case where nothing else can see the plain HTTP. The wizard stores
+    bind_host 0.0.0.0 by default, and nothing that marks Serve done changes it, so this used to turn
+    a public, self-signed HTTPS panel into cleartext HTTP on every interface at the next restart.
+    Passwords and Bearer tokens then crossed the network in the clear. With any other bind (or an
+    unset one, which may resolve to a public address) the panel keeps its own TLS, and Serve is
+    pointed at https+insecure://127.0.0.1 (see _ts_backend_scheme, which reads this)."""
     if not cfg.get("use_https", True):
         return False
-    if cfg.get("tailscale_setup_done", False):
+    if cfg.get("tailscale_setup_done", False) and _bind_is_loopback(cfg.get("bind_host")):
         return False
     if cfg.get("trust_proxy", False):
         return False
