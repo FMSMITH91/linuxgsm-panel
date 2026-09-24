@@ -1131,6 +1131,63 @@ try:
     check("public ssh: a readable firewall still reports its actual mode (positive control)",
           _st.get("mode") == "limit" and not _st.get("unreachable"), str(_st))
 
+    # ── ufw stops at the FIRST rule a connection matches ─────────────────────────────────────
+    # Any LIMIT line used to win, so `OpenSSH ALLOW` above `22/tcp LIMIT` — what `ufw allow
+    # OpenSSH` plus the Limit button produce — read as rate-limited while every connection matched
+    # the ALLOW first. And 'limit' deleted only `allow 22/tcp`: to ufw the OpenSSH profile and a
+    # bare `22` are different rules, so both stayed ahead of the appended limit.
+    def _ufw_status_is(text):
+        _sm_core.run_privileged = lambda s, v, a=(), **k: (text, "", 0)
+        return _sm_hosts.remote_public_ssh_status(object()).get("mode")
+    _hdr = "Status: active\n\nTo                         Action      From\n--                         ------      ----\n"
+    check("public ssh: an ALLOW listed ahead of the LIMIT is what SSH gets",
+          _ufw_status_is(_hdr + "OpenSSH                    ALLOW IN    Anywhere\n"
+                                "22/tcp                     LIMIT IN    Anywhere\n") == "allow",
+          "reported rate-limited while every connection matches the OpenSSH ALLOW above it")
+    check("public ssh: ...and a LIMIT listed first is still limit (positive control)",
+          _ufw_status_is(_hdr + "22/tcp                     LIMIT IN    Anywhere\n"
+                                "OpenSSH                    ALLOW IN    Anywhere\n") == "limit")
+    check("public ssh: ...and an allow for ONE source address does not decide the public mode",
+          _ufw_status_is(_hdr + "22/tcp                     ALLOW IN    203.0.113.5\n"
+                                "22/tcp                     LIMIT IN    Anywhere\n") == "limit",
+          "`allow from <home ip> to 22` (this panel's own Restrict box) read as public SSH open")
+
+    def _fake_ufw(rules):
+        """A firewall that applies the verbs with ufw's own semantics: a rule that differs only in
+        action is rewritten IN PLACE, a new one is appended, and a delete removes only an exact
+        (To, action) match — the OpenSSH profile and a bare 22 are not `22/tcp`."""
+        def _rp(s, v, a=(), **k):
+            a = list(a)
+            if v == "ufw-status":
+                return (_hdr + "".join("%-26s %-11s Anywhere\n" % (t, act + " IN") for t, act in rules), "", 0)
+            want = {"ufw-limit-port": "LIMIT", "ufw-allow-port": "ALLOW"}.get(v)
+            if want:
+                for i, (t, _act) in enumerate(rules):
+                    if t == a[0]:
+                        rules[i] = (t, want)
+                        return ("Rule updated", "", 0)
+                rules.append((a[0], want))
+                return ("Rule added", "", 0)
+            gone = {"ufw-delete-allow-port": "ALLOW", "ufw-delete-limit-port": "LIMIT",
+                    "ufw-delete-allow-app": "ALLOW"}.get(v)
+            if gone and (a[0], gone) in rules:
+                rules.remove((a[0], gone))
+                return ("Rule deleted", "", 0)
+            return ("Could not delete non-existent rule", "", 1)
+        _sm_core.run_privileged = _rp
+    for _start in (["OpenSSH"], ["22"]):
+        _rules = [(_t, "ALLOW") for _t in _start]
+        _fake_ufw(_rules)
+        _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+        check("public ssh: 'limit' on a host opened with `ufw allow %s` is really limited" % _start[0],
+              _ok is True and _rules and _rules[0] == ("22/tcp", "LIMIT"),
+              "ok=%r msg=%r rules now %r" % (_ok, _msg, _rules))
+    _rules = [("22/tcp", "ALLOW")]
+    _fake_ufw(_rules)
+    _ok, _msg = _sm_hosts.remote_set_public_ssh(object(), "limit")
+    check("public ssh: ...and an existing 22/tcp allow is turned into the limit (positive control)",
+          _ok is True and _rules == [("22/tcp", "LIMIT")], "ok=%r rules %r" % (_ok, _rules))
+
     # ── the unblock that always said it worked ───────────────────────────────────────────────
     # remote_ufw_undeny_ip discarded the verb's result and returned True unconditionally, while
     # remote_ufw_deny_ip six lines above it checks rc. Its LOCAL twin (system_ops.ufw_undeny_ip)

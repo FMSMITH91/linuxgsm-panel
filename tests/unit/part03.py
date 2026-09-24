@@ -2723,6 +2723,26 @@ try:
     _hok, _hmsg, _ = _bs_harden(_eff_cloud, auth="password")
     check("bootstrap: ...and a password-auth remote, which never asks for it off, is not failed "
           "for keeping it", _hok is True, "msg=%r" % (_hmsg,))
+
+    # The UFW step's `ufw limit 22/tcp` is appended AFTER an existing `ufw allow OpenSSH` or bare
+    # `allow 22` — neither is the 22/tcp rule to ufw — so SSH stayed unthrottled on exactly the
+    # hosts that had opened it the usual Ubuntu way. They go, and only after the limit is in.
+    _bs_ufw = []
+
+    def _priv_ufw(s, verb, args=None, **k):
+        _bs_ufw.append((verb, list(args or [])))
+        return ("", "", 0)
+    _sm_core.run_privileged = _priv_ufw
+    _sm_core.run_command = _bs_run(("NO\n", "", 0))
+    _sm_hosts.remote_bootstrap_vps(
+        NS(id=9103, host="203.0.113.12", auth_method="key"), set_timezone="", enable_ufw=True,
+        install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=False)
+    _i_lim = _bs_ufw.index(("ufw-limit-port", ["22/tcp"])) if ("ufw-limit-port", ["22/tcp"]) in _bs_ufw else -1
+    _i_app = _bs_ufw.index(("ufw-delete-allow-app", ["OpenSSH"])) if ("ufw-delete-allow-app", ["OpenSSH"]) in _bs_ufw else -1
+    _i_bare = _bs_ufw.index(("ufw-delete-allow-port", ["22"])) if ("ufw-delete-allow-port", ["22"]) in _bs_ufw else -1
+    check("bootstrap: the SSH limit is not left behind an OpenSSH / bare-22 allow",
+          _i_lim >= 0 and _i_app > _i_lim and _i_bare > _i_lim,
+          "limit at %d, delete OpenSSH at %d, delete bare 22 at %d" % (_i_lim, _i_app, _i_bare))
 finally:
     (_sm_core.run_command, _sm_core.run_privileged, _sm_core.write_root_file,
      _sm_core.create_game_user, _sm_core.is_local_server, _sm_core.close_connection,

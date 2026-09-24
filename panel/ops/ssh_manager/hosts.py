@@ -1119,6 +1119,11 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
         # a lower-numbered allow rule would match first and shadow the limit, leaving SSH
         # effectively unthrottled.
         _core.run_privileged(server, "ufw-limit-port", ["22/tcp"], timeout=15)
+        # The same goes for `ufw allow OpenSSH` / a bare `ufw allow 22` already on the host: to
+        # ufw neither is the `22/tcp` rule above, so the limit is appended AFTER them and never
+        # reached. Removed only now that the limit is in place, so SSH is never left unallowed.
+        for _verb, _args in _SSH22_SHADOWING:
+            _core.run_privileged(server, _verb, _args, timeout=15)
         _core.run_privileged(server, "ufw-default", ["deny", "incoming"], timeout=15)
         _core.run_privileged(server, "ufw-default", ["allow", "outgoing"], timeout=15)
         _core.run_privileged(server, "ufw-enable", [], timeout=15)
@@ -2112,6 +2117,12 @@ def change_ssh_port(server, new_port, bind_addr=""):
 # Anchored: the To column is the first thing on the line.
 _SSH22_RE = re.compile(r"\s*(?:22(?:/tcp)?|OpenSSH)\s", re.I)
 
+# The rules that open SSH without being `22/tcp` to ufw: the OpenSSH app profile and a bare `22`
+# (protocol any). ufw never matches either against a `22/tcp` rule, so a delete or a limit of
+# `22/tcp` leaves them in place — AHEAD of whatever was just appended, where every connection
+# meets them first. Removed wherever the panel sets what public SSH is.
+_SSH22_SHADOWING = (("ufw-delete-allow-app", ["OpenSSH"]), ("ufw-delete-allow-port", ["22"]))
+
 
 def remote_public_ssh_status(server, panel_port=None):
     """Report public SSH state on port 22: 'allow', 'limit', or 'off' (no rule —
@@ -2146,6 +2157,7 @@ def remote_public_ssh_status(server, panel_port=None):
         return res
     active = "Status: active" in (out or "")
     mode = "off"
+    first_found = False
     panel_open = False
     port_re = re.compile(r"\b%d\b" % int(panel_port)) if panel_port else None
     for line in (out or "").splitlines():
@@ -2156,11 +2168,18 @@ def remote_public_ssh_status(server, panel_port=None):
         # to, this still reported port 22 rate-limited, marked that button active-and-disabled,
         # and never once showed the true `off` state. 8022, 1022 and 22022 read the same way, and
         # so did a source address ending in .22 once you widen the test to a word boundary.
-        if _SSH22_RE.match(line) and " (v6)" not in low:
-            if "limit" in low:
-                mode = "limit"
-            elif "allow" in low:
-                mode = "allow" if mode != "limit" else mode
+        #
+        # And the FIRST such rule decides, because ufw stops at the first rule a packet matches.
+        # This read "any LIMIT anywhere wins", so `OpenSSH ALLOW` followed by `22/tcp LIMIT` —
+        # the list `ufw allow OpenSSH` plus the Limit button produce — was reported as
+        # rate-limited while every connection matched the ALLOW above it and nothing was ever
+        # throttled. Only rules that govern the PUBLIC: from Anywhere, inbound, on no interface.
+        if not first_found and _SSH22_RE.match(line) and " (v6)" not in low:
+            _p = firewall._parse_ufw_rule(line)
+            if (not _p["iface"] and _p["direction"] in ("", "IN")
+                    and _p["from"].lower() == "anywhere" and _p["action"]):
+                first_found = True
+                mode = {"LIMIT": "limit", "ALLOW": "allow"}.get(_p["action"], "off")
         # A public ALLOW rule for the panel port (ignore IPv6 duplicates and the
         # tailscale0 interface rule, which isn't the *public* port).
         if (port_re and "allow" in low and " (v6)" not in low
@@ -2278,18 +2297,24 @@ def remote_set_public_ssh(server, mode):
     Tailscale path back in (Tailscale running + SSH enabled or the tailscale0 interface
     allowed in UFW) — otherwise it would strand you with no way to reach the host."""
     mode = (mode or "").lower()
+    # The new rule goes in FIRST: ufw rewrites a rule that differs only in its action where it
+    # stands (`ufw limit 22/tcp` turns `22/tcp ALLOW` into `22/tcp LIMIT` in place), so there is
+    # no moment with nothing letting SSH in. Then everything else that would match port 22 AHEAD
+    # of it goes — `ufw allow OpenSSH` and a bare `ufw allow 22` are how most Ubuntu hosts opened
+    # SSH, neither is the same rule as `22/tcp` to ufw, and whichever sorts first is the one a
+    # connection meets. Leaving them made 'limit' a rule nothing ever reached.
+    _shadowing = list(_SSH22_SHADOWING)
     if mode == "allow":
-        steps = [("ufw-delete-limit-port", ["22/tcp"]), ("ufw-allow-port", ["22/tcp", ""])]
+        steps = [("ufw-allow-port", ["22/tcp", ""]), ("ufw-delete-limit-port", ["22/tcp"])] + _shadowing
     elif mode == "limit":
-        steps = [("ufw-delete-allow-port", ["22/tcp"]), ("ufw-limit-port", ["22/tcp"])]
+        steps = [("ufw-limit-port", ["22/tcp"]), ("ufw-delete-allow-port", ["22/tcp"])] + _shadowing
     elif mode == "off":
         running, ssh_enabled, iface_allowed = _tailnet_ssh_state(server)
         if not (running and (ssh_enabled or iface_allowed)):
             return False, ("Refused — there's no Tailscale way back into this host, so disabling "
                            "public SSH would lock you out. Enable Tailscale SSH, or make sure "
                            "Tailscale is running and the tailscale0 interface is allowed in UFW, first.")
-        steps = [("ufw-delete-allow-port", ["22/tcp"]), ("ufw-delete-limit-port", ["22/tcp"]),
-                 ("ufw-delete-allow-app", ["OpenSSH"])]
+        steps = [("ufw-delete-allow-port", ["22/tcp"]), ("ufw-delete-limit-port", ["22/tcp"])] + _shadowing
     else:
         return False, "Invalid mode"
     for verb, vargs in steps:
