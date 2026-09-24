@@ -399,7 +399,16 @@ _bk.BACKUP_DIR = _bktmp / "backups"; _bk.DATA_DIR = _bktmp; _bk.DB_PATH = _bktmp
 _bk.CONFIG_FILE = _bktmp / "config.json"; _bk.SECRET_FILE = _bktmp / "secret_key"; _bk.CRED_KEY_FILE = _bktmp / "cred_key"
 _dbc = _sq.connect(str(_bk.DB_PATH)); _dbc.execute("create table t(x)"); _dbc.commit(); _dbc.close()
 _bk.CONFIG_FILE.write_text("{}"); _bk.SECRET_FILE.write_text("s"); _bk.CRED_KEY_FILE.write_text("k")
-_bok, _bname = _bk.create_backup("manual")
+# A PLAIN archive, whatever this machine's own config says. The path constants above are the
+# backup module's; get_passphrase() reads panel.core.config's, which is the real data/config.json —
+# so on a host with backup encryption on this wrote a .enc and the tar.open below killed the suite
+# at import, and with the passphrase undecryptable create_backup refused and did the same.
+_orig_getpass_plain = _bk.get_passphrase
+_bk.get_passphrase = lambda: ""
+try:
+    _bok, _bname = _bk.create_backup("manual")
+finally:
+    _bk.get_passphrase = _orig_getpass_plain
 check("backup: create returns a valid name", _bok and bool(_bk._NAME_RE.match(_bname)))
 _blist = _bk.list_backups()
 check("backup: appears in the list as 'manual'",

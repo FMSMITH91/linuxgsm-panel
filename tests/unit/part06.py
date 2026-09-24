@@ -1,6 +1,5 @@
 """Part 6 of the unit suite. Imported for its side effects."""
 from unit.part01 import (N, NS, SO, _modfiles, _modpath, _modsrc, _privmod, _sm_core, _sm_cron, _sm_firewall, _sm_hosts, _sub, _ufw_raises_verb, check, eq, skip, glob, json, os, re, sys)  # noqa: F401,E402
-from unit import REPO_ROOT as _UNIT_ROOT  # noqa: E402
 
 from unit.part05 import (_ast_scan, _helper, _helper_path, _ilu, _machinery, _priv, _re, _root, _shutil, _sp, _t, _tempfile, _time)  # noqa: F401,E402
 check("ufw: _ufw_is_active is false for empty output", _sm_firewall._ufw_is_active("") is False)
@@ -3800,16 +3799,8 @@ check("suites: no check() hands its reporter something that is not a string",
 
 # The suite is now a runner plus tests/unit/part*.py, and the runner names the parts explicitly.
 # Drop one from that list — or add a part and forget to — and the suite reports a smaller total
-# and still exits 0. That is the same silent pass as a suite that SKIPs, and it is the failure this
-# file exists to catch, so the shape of the file is not allowed to have it.
-import pathlib as _upl
-_upart_files = sorted(q.name[:-3] for q in _upl.Path(_UNIT_ROOT, "tests", "unit").glob("part*.py"))
-_urunner = open(os.path.join(_UNIT_ROOT, "tests", "unit_test.py"), encoding="utf-8").read()
-_umissing = [p for p in _upart_files if p not in _urunner]
-check("unit suite: every tests/unit/part*.py is imported by the runner",
-      not _umissing, "never run: %s" % _umissing)
-check("unit suite: the runner imports at least as many parts as exist",
-      len(_upart_files) >= 6, "found %d part files" % len(_upart_files))
+# and still exits 0. The check that every part RAN lives in tests/unit_test.py, after the imports:
+# one here, in a part, disappeared along with this part when it was the one dropped.
 
 # ── every _run() command is a literal, or shlex.quote()d ─────────────────────────────────────
 # _run() executes with shell=True. Bandit rates that HIGH (B602) and the repo suppresses it,
@@ -4629,24 +4620,10 @@ check("install.sh: ...with the grant still gated on a trusted origin",
 # and the machines it goes wrong on are the real installs.
 #
 # The rule: touch config through a redirected CONFIG_FILE or a stubbed load_config, never the
-# module's own path. Checked per FILE, because the redirect and the use are rarely adjacent.
-_cfg_guard = []
-for _f in sorted(os.listdir(os.path.join(_root, "tests", "unit"))):
-    if not _f.endswith(".py"):
-        continue
-    _src = open(os.path.join(_root, "tests", "unit", _f), encoding="utf-8").read()
-    _uses = sum(1 for _n in _ast.walk(_ast.parse(_src))
-                if isinstance(_n, _ast.Call)
-                and getattr(_n.func, "attr", getattr(_n.func, "id", "")) in
-                ("load_config", "save_config"))
-    if not _uses:
-        continue
-    _redirects = ("CONFIG_FILE =" in _src or ".CONFIG_FILE=" in _src
-                  or "load_config =" in _src)
-    if not _redirects:
-        _cfg_guard.append("%s (%d call(s), no redirect)" % (_f, _uses))
-check("suites: no unit file reads or writes the machine's own config.json",
-      not _cfg_guard, "; ".join(_cfg_guard))
+# module's own path. It is enforced at RUNTIME by tests/unit_test.py, which watches every
+# config entry point for the whole run. The per-file text check that stood here could not see a
+# call made BEFORE a file's redirect, nor an indirect read through a panel helper, and was green
+# while part01 rewrote data/config.json seven times.
 
 # ── the deploy must ASK where the panel is, not assume it ────────────────────────────────────
 # install.sh has supported two service models since 2026-07-04: a per-user install under the
