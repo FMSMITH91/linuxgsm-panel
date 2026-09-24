@@ -277,7 +277,7 @@ try:
         _tsd_html = c.get("/tailscale").get_data(as_text=True)
         check("tailscale page: Disable targets the panel's own mount, not another app's '/'",
               'data-mount="/lgsm"' in _tsd_html and 'data-mount="/"' not in _tsd_html,
-              [ln.strip() for ln in _tsd_html.splitlines() if "data-mount" in ln][:3])
+              repr([ln.strip() for ln in _tsd_html.splitlines() if "data-mount" in ln][:3]))
         _tsd_r = c.post("/api/tailscale/serve", json={"action": "disable", "mount": "/"})
         check("tailscale serve: disabling at another app's mount removes nothing and keeps the config",
               _tsd_r.status_code != 200 and _tsd_ran == []

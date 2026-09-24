@@ -524,14 +524,14 @@ try:
               _rts_page.status_code == 200, "got %d" % _rts_page.status_code)
         check("tailscale page: ...but is shown none of the PANEL HOST's tailnet inventory",
               not [x for x in _rts_leaks if x in _rts_html],
-              [x for x in _rts_leaks if x in _rts_html])
+              repr([x for x in _rts_leaks if x in _rts_html]))
         _rts_api = _rts_json.dumps(cmr.get("/api/tailscale").get_json() or {})
         check("/api/tailscale: ...nor does its JSON carry it",
-              not [x for x in _rts_leaks if x in _rts_api], [x for x in _rts_leaks if x in _rts_api])
+              not [x for x in _rts_leaks if x in _rts_api], repr([x for x in _rts_leaks if x in _rts_api]))
         _rts_admin = client_as(admin_id).get("/tailscale").get_data(as_text=True)
         check("tailscale page: a superadmin still sees all of it (control)",
               all(x in _rts_admin for x in _rts_leaks),
-              [x for x in _rts_leaks if x not in _rts_admin])
+              repr([x for x in _rts_leaks if x not in _rts_admin]))
     finally:
         _rts.get_tailscale_info = _rts_saved
         _rts._cache["info"] = None
