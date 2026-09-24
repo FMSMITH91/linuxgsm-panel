@@ -3092,6 +3092,32 @@ check("workflows: the Codacy token is not in the coverage job's env, only its up
       and "persist-credentials: false" in _cov_job[:_cov_job.index("actions/setup-python")],
       _cov_env[-200:])
 
+# ── the Bandit job holds security-events: write, so its tools are hash-pinned and no token persists ──
+# It ran `pip install bandit bandit-sarif-formatter` — whatever PyPI had newest — in a job whose
+# token can write the code-scanning alert state that codeql-alerts.yml and codeql.yml's PR gate
+# read as the truth, with that token left in .git/config by checkout. Every requirement in the
+# pin file must be `name==version` with at least one hash, and the job must install that file,
+# with --require-hashes and wheels only, and nothing else.
+_bd_path = os.path.join(_root, ".github", "ci-requirements", "bandit.txt")
+_bd_entries = [" ".join(_e.split()) for _e in re.sub(r"\\\n", " ", "\n".join(
+    _l for _l in open(_bd_path, encoding="utf-8").read().splitlines()
+    if not _l.lstrip().startswith("#"))).splitlines() if _e.strip()]
+_bd_bad = [_e for _e in _bd_entries
+           if not re.fullmatch(r"[A-Za-z0-9._-]+==[0-9][A-Za-z0-9.]*( --hash=sha256:[0-9a-f]{64})+", _e)]
+check("workflows: every Bandit tool is pinned to one version and a hash",
+      any(_e.startswith("bandit==") for _e in _bd_entries) and not _bd_bad,
+      "entries=%d bad=%r" % (len(_bd_entries), _bd_bad[:3]))
+_sc_wf = open(os.path.join(_root, ".github", "workflows", "security-code.yml"), encoding="utf-8").read()
+_bd_job = _sc_wf[_sc_wf.index("\n  sast-bandit:\n"):_sc_wf.index("\n  sast-semgrep:\n")]
+_bd_code = "\n".join(_l for _l in _bd_job.splitlines() if not _l.lstrip().startswith("#"))
+# A folded `run: >-` continues on more-indented lines; a new step (`- `) or key (`name:`) ends it.
+_bd_pip = re.findall(r"pip install[^\n]*(?:\n\s+(?!- )(?![A-Za-z_-]+:\s)\S[^\n]*)*", _bd_code)
+check("workflows: the Bandit job installs only that file, hash-checked, wheels only",
+      len(_bd_pip) == 1 and "--require-hashes" in _bd_pip[0] and "--only-binary :all:" in _bd_pip[0]
+      and "-r .github/ci-requirements/bandit.txt" in " ".join(_bd_pip[0].split()), repr(_bd_pip))
+check("workflows: the Bandit job's checkout does not persist the job token",
+      "persist-credentials: false" in _bd_code[:_bd_code.index("actions/setup-python")])
+
 # ── gitleaks may not exempt a README from the secret scan ──────────────────────────────────────
 # The allowlist carried `paths = ['''README\\.md''']`. gitleaks path patterns are unanchored
 # searches, so that exempted all four READMEs outright, for placeholders the match regexes already
