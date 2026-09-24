@@ -4631,10 +4631,10 @@ class _FakeRemote6:
 
 _denied6 = []
 _undenied6 = []
-_saved6 = (_mon6.so.fail2ban_top_ips, _mon6.so.ufw_blocked_ips,
+_saved6 = (_mon6.so.fail2ban_attempt_counts, _mon6.so.ufw_blocked_ips,
            _mon6.so.ufw_deny_ip, _mon6.so.ufw_undeny_ip)
 try:
-    _mon6.so.fail2ban_top_ips = lambda *a, **k: [{"ip": "203.0.113.9", "attempts": 99999}]
+    _mon6.so.fail2ban_attempt_counts = lambda *a, **k: {"203.0.113.9": 99999}
     _mon6.so.ufw_deny_ip = lambda ip, tag=None: (_denied6.append(ip), (True, "ok"))[1]
     _mon6.so.ufw_undeny_ip = lambda ip: (_undenied6.append(ip), (True, "ok"))[1]
     _mon6.so.ufw_blocked_ips = lambda: None            # the firewall could not be read
@@ -4668,8 +4668,128 @@ try:
           "returned %r after a deny that failed — the audit row would claim a rule that never "
           "landed (attempted: %r)" % (_res6, _denied6))
 finally:
-    (_mon6.so.fail2ban_top_ips, _mon6.so.ufw_blocked_ips,
+    (_mon6.so.fail2ban_attempt_counts, _mon6.so.ufw_blocked_ips,
      _mon6.so.ufw_deny_ip, _mon6.so.ufw_undeny_ip) = _saved6
+
+# ── auto-block must never touch a block the panel did not write ───────────────────────────────
+# The blocked-IP readers kept only `panel-` tagged DENY rows, so an operator's own
+# `ufw deny from <ip>` read as "not blocked". The reconcile then called ufw_deny_ip, which ran
+# `ufw delete deny from <ip>` FIRST — ufw removes a matching rule whatever its comment — and
+# inserted a panel-autoblock rule in its place, which it RELEASED once the firewalled (so silent)
+# address aged below the threshold. Driven through the real readers and writers: only the verb
+# runner is stubbed, and it records every privileged command.
+_ab_listing6 = ("Status: active\n\n"
+                "To                         Action      From\n"
+                "--                         ------      ----\n"
+                "22/tcp                     ALLOW       Anywhere\n"
+                "Anywhere                   DENY        203.0.113.9                # panel-autoblock\n"
+                "Anywhere                   DENY        203.0.113.7\n"
+                "Anywhere                   DENY        203.0.113.8                # ssh brute\n"
+                "Anywhere                   REJECT      198.51.100.0/24\n"
+                "22/tcp                     DENY        198.51.100.3\n"
+                "27015                      DENY        Anywhere\n"
+                "Anywhere (v6)              DENY        2001:db8::66\n")
+check("autoblock: the deny reader sees EVERY all-ports block, tagging the ones the panel did not write",
+      SO._ufw_deny_sources(_ab_listing6) == {"203.0.113.9": "panel-autoblock", "203.0.113.7": "",
+                                              "203.0.113.8": "", "198.51.100.0/24": "",
+                                              "2001:db8::66": ""},
+      "read %r" % (SO._ufw_deny_sources(_ab_listing6),))
+check("autoblock: ...and an operator's rule for an address outranks the panel's own tag for it",
+      SO._ufw_deny_sources(_ab_listing6 + "Anywhere                   DENY        203.0.113.9\n")
+      .get("203.0.113.9") == "",
+      "the panel's tag won, so the reconcile could 'release' (delete) the operator's rule")
+_ab_verbs6 = []
+_ab_saved6 = (SO._run_verb, _mon6.so.fail2ban_attempt_counts, _mon6.tailnet_exempt_ips,
+              _mon6._autoblock_threshold, _mon6._whitelist_networks)
+
+
+def _ab_run6(verb, args=(), **k):
+    if verb == "ufw-status":
+        return (_ab_listing6, "", 0)
+    _ab_verbs6.append((verb, list(args)))
+    return ("", "", 0)
+
+
+try:
+    SO._run_verb = _ab_run6
+    _mon6.tailnet_exempt_ips = lambda remote, ips: set()
+    _mon6._autoblock_threshold = lambda: 20
+    _mon6._whitelist_networks = lambda: []
+    # .7 and .8 are the operator's, over threshold; .10 has no rule, over threshold; .9 is ours and
+    # has aged to nothing; 2001:db8::66 is the operator's and has too.
+    _mon6.so.fail2ban_attempt_counts = lambda *a, **k: {"203.0.113.7": 50, "203.0.113.8": 40,
+                                                        "203.0.113.10": 30}
+    # ...and .11 carries BOTH a panel auto-block and the operator's own rule, and has aged out.
+    _ab_listing6 += ("Anywhere                   DENY        203.0.113.11               # panel-autoblock\n"
+                     "Anywhere                   DENY        203.0.113.11\n")
+    _res6 = _mon6._autoblock_reconcile(_FakeRemote6())
+    check("autoblock: an operator's own block is neither deleted nor replaced",
+          not any(a[0] in ("203.0.113.7", "203.0.113.8") for v, a in _ab_verbs6),
+          "commands run for the operator's addresses: %r" % (_ab_verbs6,))
+    check("autoblock: ...nor 'released' when its address falls below the threshold",
+          ("ufw-delete-deny-ip", ["2001:db8::66"]) not in _ab_verbs6, repr(_ab_verbs6))
+    check("autoblock: ...even when a panel auto-block sits beside it for the same address "
+          "(a release deletes both)",
+          ("ufw-delete-deny-ip", ["203.0.113.11"]) not in _ab_verbs6, repr(_ab_verbs6))
+    check("autoblock: ...while an unblocked offender is blocked with an INSERT alone (positive control)",
+          ("ufw-deny-ip", ["203.0.113.10", "panel-autoblock"]) in _ab_verbs6
+          and ("ufw-delete-deny-ip", ["203.0.113.10"]) not in _ab_verbs6, repr(_ab_verbs6))
+    check("autoblock: ...and the panel's own stale auto-block is still released (positive control)",
+          ("ufw-delete-deny-ip", ["203.0.113.9"]) in _ab_verbs6 and _res6 == (1, 1),
+          "returned %r, ran %r" % (_res6, _ab_verbs6))
+    # The Block button runs the same writer. On an operator's rule it must leave it alone; on the
+    # panel's own auto-block it re-tags it as manual (which the reconcile then never releases).
+    _ab_verbs6.clear()
+    _okb6, _msgb6 = SO.ufw_deny_ip("203.0.113.7")
+    check("block: an address the operator already blocked is left as it is",
+          _okb6 is True and not _ab_verbs6, "ran %r (%r)" % (_ab_verbs6, _msgb6))
+    _ab_verbs6.clear()
+    SO.ufw_deny_ip("203.0.113.9", tag="panel-block")
+    check("block: ...and an auto-block is re-tagged as manual (positive control)",
+          _ab_verbs6 == [("ufw-delete-deny-ip", ["203.0.113.9"]),
+                         ("ufw-deny-ip", ["203.0.113.9", "panel-block"])], repr(_ab_verbs6))
+    # The remote twin shares the decision; its reader must hand it the same answer.
+    _ab_rp6 = _sm_core.run_privileged
+    try:
+        _ab_rverbs6 = []
+        _sm_core.run_privileged = lambda s, v, a=(), **k: (
+            (_ab_listing6, "", 0) if v == "ufw-status" else (_ab_rverbs6.append((v, list(a))), ("", "", 0))[1])
+        _okr6, _ = _sm_hosts.remote_ufw_deny_ip(NS(name="h"), "203.0.113.8", tag="panel-autoblock")
+        check("block (remote): an operator's commented block is left as it is",
+              _okr6 is True and not _ab_rverbs6, "ran %r" % (_ab_rverbs6,))
+        _sm_core.run_privileged = lambda s, v, a=(), **k: ("Status: inactive\n", "", 0)
+        check("block (remote): an INACTIVE remote firewall is unreadable (None), as on the panel host",
+              _sm_hosts.remote_ufw_blocked_ips(NS(name="h")) is None,
+              "answered %r" % (_sm_hosts.remote_ufw_blocked_ips(NS(name="h")),))
+    finally:
+        _sm_core.run_privileged = _ab_rp6
+
+    # ── ...and it sees every offender, not the display's top 100 ──
+    # The reconcile read fail2ban_top_ips(100): over-threshold addresses ranked below 100 were never
+    # blocked, and a blocked one — which logs nothing more — was released while still over the
+    # threshold once 100 newer ones out-counted it. Driven through the real count reader.
+    _mon6.so.fail2ban_attempt_counts = _ab_saved6[1]
+    _wave6 = ["198.18.%d.%d" % (i // 250, i % 250 + 1) for i in range(150)]
+    _loglines6 = "".join("2026-09-20 10:00:00,000 fail2ban.filter [1]: INFO [sshd] Found %s\n" % ip
+                         for i, ip in enumerate(_wave6) for _ in range(25 + i))
+    _loglines6 += "".join("2026-09-20 10:00:00,000 fail2ban.filter [1]: INFO [sshd] Found 203.0.113.9\n"
+                          for _ in range(21))     # ours: still over threshold, ranked 151st
+    _ab_verbs6.clear()
+
+    def _ab_run6b(verb, args=(), **k):
+        if verb == "f2b-log-lines":
+            return (_loglines6, "", 0)
+        return _ab_run6(verb, args, **k)
+    SO._run_verb = _ab_run6b
+    _res6 = _mon6._autoblock_reconcile(_FakeRemote6())
+    _blocked6 = {a[0] for v, a in _ab_verbs6 if v == "ufw-deny-ip"}
+    check("autoblock: every address over the threshold is blocked, not just the top 100",
+          _blocked6 == set(_wave6), "blocked %d of %d" % (len(_blocked6 & set(_wave6)), len(_wave6)))
+    check("autoblock: ...and an auto-block still over the threshold is not released for ranking low",
+          ("ufw-delete-deny-ip", ["203.0.113.9"]) not in _ab_verbs6, "released while at 21 >= 20")
+finally:
+    (SO._run_verb, _mon6.so.fail2ban_attempt_counts, _mon6.tailnet_exempt_ips,
+     _mon6._autoblock_threshold, _mon6._whitelist_networks) = _ab_saved6
 
 # ── "could not check" must not render as "all files match" ────────────────────────────────────
 # _compute_panel_integrity fails SAFE: when git cannot be run it answers clean:true WITH

@@ -1884,8 +1884,61 @@ def fail2ban_overview():
 _UFW_BLOCK_TAG = "panel-block"          # one-off manual block
 
 
+# A deny rule's tag when the panel did not write it — no comment, or an operator's own.
+_UFW_EXTERNAL_TAG = ""
+
+
+def _ufw_deny_tag_rank(tag):
+    """Which tag an address reports when several rules block it. A rule the panel did not write
+    wins: the reconcile must count that address as blocked and never "release" it (a release is
+    `ufw delete deny from <ip>`, which removes every deny for the address, the operator's too).
+    A manual block beats an auto-block for the same reason — it is not the reconcile's to lift."""
+    if not tag.startswith("panel-"):
+        return 0
+    return 2 if tag == "panel-autoblock" else 1
+
+
+def _ufw_deny_sources(status_out):
+    """{source: tag} for every INBOUND DENY/REJECT rule in `ufw status` output that blocks one
+    address (or network) on ALL ports — the shape `ufw deny from <ip>` writes, whoever wrote it.
+
+    The tag is the rule's `panel-…` comment, or _UFW_EXTERNAL_TAG for a rule the panel did not
+    write. Those used to be skipped (`"panel-" not in line`), so an operator's own
+    `ufw deny from <ip>` read as "not blocked": the reconcile then ran `ufw delete deny from <ip>` —
+    which removes a rule regardless of its comment — inserted a `panel-autoblock` rule in its place,
+    and later RELEASED it once the (now firewalled, so silent) address aged below the threshold.
+
+    A single address is keyed by its canonical form; a network by its CIDR. Port-specific denies,
+    interface rules and outbound rules are not blocks of an address and are left out."""
+    import ipaddress
+    found = {}
+    for line in (status_out or "").splitlines():
+        m = re.match(r"\s*\[\s*\d+\]\s*(.*)\Z", line)
+        body, _, comment = (m.group(1) if m else line).partition("#")
+        toks = body.replace("(v6)", " ").split()
+        act = next((i for i, t in enumerate(toks) if t in ("DENY", "REJECT")), None)
+        if act is None or toks[:act] != ["Anywhere"]:
+            continue
+        rest = toks[act + 1:]
+        if rest and rest[0] == "IN":
+            rest = rest[1:]
+        if len(rest) != 1:
+            continue
+        try:
+            net = ipaddress.ip_network(rest[0], strict=False)
+        except ValueError:
+            continue
+        key = str(net.network_address) if net.num_addresses == 1 else str(net)
+        comment = comment.strip()
+        tag = comment if re.fullmatch(r"panel-[a-z-]+", comment) else _UFW_EXTERNAL_TAG
+        if key not in found or _ufw_deny_tag_rank(tag) < _ufw_deny_tag_rank(found[key]):
+            found[key] = tag
+    return found
+
+
 def ufw_blocked_ips():
-    """{ip: tag} for the panel host's own UFW deny rules (tag from the rule comment).
+    """{ip: tag} for the panel host's UFW all-ports deny rules — the panel's own, tagged from the
+    rule comment, AND anyone else's, tagged _UFW_EXTERNAL_TAG (see _ufw_deny_sources).
 
     None — NOT {} — when the firewall could not be read. The two are completely different answers
     and the caller that matters cannot tell them apart otherwise: _autoblock_reconcile treats
@@ -1911,15 +1964,35 @@ def ufw_blocked_ips():
     if not ufw_status_active(out):
         _log.debug("ufw_blocked_ips: UFW is inactive — its rule list is not readable")
         return None
-    blocked = {}
-    for line in (out or "").splitlines():
-        if "DENY" not in line or "panel-" not in line:
-            continue
-        mi = re.search(r"DENY(?:\s+IN)?\s+([0-9a-fA-F:.]+)", line)
-        mt = re.search(r"#\s*(panel-[a-z-]+)", line)
-        if mi and mt:
-            blocked[mi.group(1)] = mt.group(1)
-    return blocked
+    return _ufw_deny_sources(out)
+
+
+def _ufw_deny_with(ip, tag, existing, run):
+    """Block `ip` (canonical) under `tag`, given what already blocks it — the one implementation
+    behind ufw_deny_ip and ssh_manager's remote_ufw_deny_ip. (ok, msg).
+
+    `existing` is that address's tag from a blocked-IPs read: _UFW_EXTERNAL_TAG for a rule the
+    panel did not write, a `panel-…` tag for its own, None for none — or for a read that failed,
+    which is why None only ever ADDS. `run(verb, args)` returns (out, err, rc).
+
+    This deleted first and inserted second, every time. `ufw delete deny from <ip>` matches a rule
+    whatever its comment, so the operator's own block was removed and replaced with a panel one
+    the reconcile would later release; and when the insert then failed (`insert 1` is refused for
+    an IPv6 address while IPv4 rules exist) the address was left with no block at all. Now a rule
+    the panel did not write is never touched, and the only delete is of the panel's own rule when
+    it is re-tagged (auto-block → manual) — put back if the new one does not go in."""
+    if existing is not None and _ufw_deny_tag_rank(existing) == 0:
+        return True, "%s is already blocked by an existing firewall rule (left as it is)." % ip
+    if existing == tag:
+        return True, "%s is already blocked." % ip
+    if existing:
+        run("ufw-delete-deny-ip", [ip])
+    out, err, rc = run("ufw-deny-ip", [ip, tag])
+    if rc == 0:
+        return True, "Blocked %s (all ports)." % ip
+    if existing:
+        run("ufw-deny-ip", [ip, existing])
+    return False, ((out or err or "Block failed").replace("\n", " ")[:200])
 
 
 def ufw_deny_ip(ip, tag=_UFW_BLOCK_TAG):
@@ -1931,13 +2004,10 @@ def ufw_deny_ip(ip, tag=_UFW_BLOCK_TAG):
     except (ValueError, TypeError):
         return False, "Invalid IP address."
     tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
-    # Two separate sudo'd commands: _run prepends `sudo` to the FIRST command only, so a "a; b"
-    # compound would run `b` unprivileged. Drop any existing rule first (harmless if none), then add.
-    _run_verb("ufw-delete-deny-ip", [ip], timeout=15)
-    out, err, rc = _run_verb("ufw-deny-ip", [ip, tag], timeout=15)
-    if rc == 0:
-        return True, "Blocked %s (all ports)." % ip
-    return False, ((out or err or "Block failed").replace("\n", " ")[:200])
+    # Separate verbs, never a "a; b" compound: _run prepends `sudo` to the FIRST command only.
+    existing = (ufw_blocked_ips() or {}).get(ip)
+    return _ufw_deny_with(ip, tag, existing,
+                          lambda verb, args: _run_verb(verb, args, timeout=15))
 
 
 def ufw_undeny_ip(ip):
@@ -1961,12 +2031,9 @@ def ufw_undeny_ip(ip):
 _F2B_EVENT_RE = re.compile(r"\[([A-Za-z0-9._-]+)\] (Ban|Found) ([0-9a-fA-F:.]+)")
 
 
-def _tally_f2b_lines(text, limit):
-    """Tally Ban/Found events per IP from raw fail2ban log lines.
-
-    This is what the awk half of the old shell pipeline did: for each `[jail] Ban|Found <ip>` match,
-    count Founds and Bans per IP and collect the distinct jails, then rank by attempts and take the
-    top `limit`. Emitted in the same tab-separated shape _parse_top_ips already reads."""
+def _tally_f2b_events(text):
+    """(found, bans, jails) per IP from raw fail2ban log lines: for each `[jail] Ban|Found <ip>`
+    match, count Founds and Bans and collect the distinct jails. Every IP — no ranking, no cut."""
     found, bans, jails = {}, {}, {}
     for line in (text or "").splitlines():
         m = _F2B_EVENT_RE.search(line)
@@ -1980,6 +2047,16 @@ def _tally_f2b_lines(text, limit):
         seen = jails.setdefault(ip, [])
         if jail not in seen:
             seen.append(jail)
+    return found, bans, jails
+
+
+def _tally_f2b_lines(text, limit):
+    """Tally Ban/Found events per IP from raw fail2ban log lines.
+
+    This is what the awk half of the old shell pipeline did: count per IP (_tally_f2b_events),
+    then rank by attempts and take the top `limit`. Emitted in the same tab-separated shape
+    _parse_top_ips already reads."""
+    found, bans, jails = _tally_f2b_events(text)
     rows = sorted(found.keys() | bans.keys(),
                   key=lambda ip: (found.get(ip, 0), bans.get(ip, 0)), reverse=True)
     return "\n".join("%d\t%d\t%s\t%s" % (found.get(ip, 0), bans.get(ip, 0), ip,
@@ -2041,6 +2118,32 @@ def fail2ban_top_ips(limit=20, days=7):
         _log.debug("top-ips: couldn't read ufw blocks", exc_info=True)
         blocked = {}
     return _parse_top_ips(out, banned_now, blocked)
+
+
+def _f2b_cutoff(days):
+    """The fail2ban log cutoff date, `days` (clamped 1..90, default 7) before now."""
+    from datetime import datetime, timedelta
+    try:
+        days = max(1, min(int(days or 7), 90))
+    except (TypeError, ValueError):
+        days = 7
+    return (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def fail2ban_attempt_counts(days=7):
+    """{ip: detected attempts} for EVERY offender in the fail2ban log over the last `days` days.
+    None when the read failed, exactly as fail2ban_top_ips answers it.
+
+    For the auto-block reconcile, which read the DISPLAY list instead — fail2ban_top_ips(100), cut
+    at the top 100 by attempts. Anything over the threshold ranked below 100 was never blocked;
+    and a blocked address, which logs nothing more and so stops climbing, dropped out of the top
+    100 as a wave of new ones passed it and was RELEASED while still over the threshold. The
+    threshold is a count, so the reconcile needs every count."""
+    out, _, rc = _run_verb("f2b-log-lines", [_f2b_cutoff(days)], timeout=25, merge_stderr=False)
+    if rc != 0:
+        _log.debug("attempt counts: the fail2ban log read failed (rc=%s)", rc)
+        return None
+    return _tally_f2b_events(out)[0]
 
 
 def fail2ban_unban(jail, ip):

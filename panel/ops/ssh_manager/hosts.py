@@ -1717,17 +1717,14 @@ def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
     except (ValueError, TypeError):
         return False, "Invalid IP address."
     tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
-    # Drop any existing deny for this IP first (no duplicate rules), then insert at position 1.
-    # run_command wraps the whole compound in `sudo bash -c`, so both parts run as root and rc is
-    # the insert's exit status.
-    # Two statements used to be joined with ';' inside one `sudo bash -c`. They are two verbs now;
-    # the delete's result is discarded exactly as `>/dev/null 2>&1` discarded it, and rc still comes
-    # from the insert.
-    _core.run_privileged(server, "ufw-delete-deny-ip", [ip], timeout=20)
-    out, err, rc = _core.run_privileged(server, "ufw-deny-ip", [ip, tag], timeout=20)
-    if rc == 0:
-        return True, "Blocked %s (all ports)." % ip
-    return False, ((out or err or "Block failed").replace("\n", " ")[:200])
+    # The same decision as the panel host's ufw_deny_ip — one implementation, so the twins cannot
+    # drift. It used to delete any deny for the address first, whoever wrote it (see
+    # system_ops._ufw_deny_with for what that cost); a rule the panel did not write is left alone.
+    from panel.ops import system_ops as _so
+    existing = (remote_ufw_blocked_ips(server) or {}).get(ip)
+    return _so._ufw_deny_with(
+        ip, tag, existing,
+        lambda verb, args: _core.run_privileged(server, verb, args, timeout=20))
 
 
 def remote_ufw_undeny_ip(server, ip):
@@ -1755,24 +1752,38 @@ def remote_ufw_undeny_ip(server, ip):
 
 
 def remote_ufw_blocked_ips(server):
-    """{ip: tag} for the panel's own UFW deny rules — tag read from the rule comment.
+    """{ip: tag} for the host's UFW all-ports deny rules — the panel's own, tagged from the rule
+    comment, and anyone else's, tagged "" (system_ops._ufw_deny_sources: skipping those made an
+    operator's own block look like no block, and the reconcile replaced it and later lifted it).
 
-    None when the host could not be read; see ufw_blocked_ips for why that is not {}.
+    None when the host could not be read; see ufw_blocked_ips for why that is not {}. An INACTIVE
+    firewall is None too, as it already was on the panel host: its stored rules drop nothing, and
+    answering {} for it had the reconcile re-block every offender, every hour, against a firewall
+    that is off.
     """
+    from panel.ops import system_ops as _so
     out, _, rc = _core.run_privileged(server, "ufw-status", ["plain"], timeout=15)
     if rc != 0:
         _core._log.debug("remote_ufw_blocked_ips: read failed on %s (rc=%s)",
                          getattr(server, "name", "?"), rc)
         return None
-    blocked = {}
-    for line in (out or "").splitlines():
-        if "DENY" not in line or "panel-" not in line:
-            continue
-        mi = re.search(r"DENY(?:\s+IN)?\s+([0-9a-fA-F:.]+)", line)
-        mt = re.search(r"#\s*(panel-[a-z-]+)", line)
-        if mi and mt:
-            blocked[mi.group(1)] = mt.group(1)
-    return blocked
+    if not _so.ufw_status_active(out):
+        return None
+    return _so._ufw_deny_sources(out)
+
+
+def remote_fail2ban_attempt_counts(server, days=7):
+    """{ip: detected attempts} for EVERY offender in a REMOTE host's fail2ban log over the last
+    `days` days, or None when the read failed — the remote twin of
+    system_ops.fail2ban_attempt_counts, for the auto-block reconcile (which must see every count,
+    not the display's top 100)."""
+    from panel.ops import system_ops as _so
+    out, _, rc = _core.run_privileged(server, "f2b-log-lines", [_so._f2b_cutoff(days)], timeout=25,
+                                      merge_stderr=False)
+    if rc != 0:
+        _core._log.debug("remote attempt counts: the fail2ban log read failed (rc=%s)", rc)
+        return None
+    return _so._tally_f2b_events(out)[0]
 
 
 def remote_fail2ban_top_ips(server, limit=20, days=7):
