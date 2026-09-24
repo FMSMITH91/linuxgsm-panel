@@ -761,6 +761,31 @@ eq("new-user lang: a language no longer supported cannot be assigned",
    _nul({"default_language": "de"}, _LANGS), "en")
 eq("new-user lang: junk in the config cannot be assigned", _nul({"default_language": 42}, _LANGS), "en")
 
+# ── session lifetimes read from a hand-editable config.json ──────────────────────────────────────
+# "session_lifetime_hours": "8" made PERMANENT_SESSION_LIFETIME a 3,600-character string; the panel
+# started, and every sign-in then 500'd when Flask added it to a datetime. A non-numeric
+# remember_days raised in int() at boot. Both are coerced, and held to the Settings form's range.
+import ast as _sl_ast                                                              # noqa: E402
+from datetime import timedelta as _sl_td                                           # noqa: E402
+from app import _session_lifetimes as _slt                                         # noqa: E402
+eq("session lifetime: (control) numbers pass through", _slt({"session_lifetime_hours": 12,
+                                                            "remember_days": 7}),
+   (12 * 3600, _sl_td(days=7)))
+eq("session lifetime: a numeric STRING is a number, not a 3,600-character string",
+   _slt({"session_lifetime_hours": "8", "remember_days": "3"}), (8 * 3600, _sl_td(days=3)))
+eq("session lifetime: junk falls back to the defaults instead of breaking sign-in or boot",
+   _slt({"session_lifetime_hours": "eight", "remember_days": "three"}), (8 * 3600, _sl_td(days=3)))
+eq("session lifetime: 0 cannot expire every session on arrival; the form's bounds apply",
+   _slt({"session_lifetime_hours": 0, "remember_days": 10 ** 9}), (3600, _sl_td(days=90)))
+eq("session lifetime: missing keys are the defaults", _slt({}), (8 * 3600, _sl_td(days=3)))
+_sl_src = open(os.path.join(_root, "app.py"), encoding="utf-8").read()
+_sl_fn = next(n for n in _sl_ast.walk(_sl_ast.parse(_sl_src))
+              if isinstance(n, _sl_ast.FunctionDef) and n.name == "create_app")
+check("session lifetime: create_app sets both lifetimes through _session_lifetimes()",
+      sum(1 for n in _sl_ast.walk(_sl_fn) if isinstance(n, _sl_ast.Call)
+          and getattr(n.func, "id", None) == "_session_lifetimes") >= 2,
+      "create_app reads the config values raw again")
+
 # ── the install default layout: a superadmin's published arrangement sits UNDER each user's own, and
 # the merge is per-KEY so someone who only reordered their tiles still gets the house host order.
 from panel.db.prefs import (_effective_prefs as _ep)

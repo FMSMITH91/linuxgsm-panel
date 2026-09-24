@@ -1042,6 +1042,25 @@ def _clean_console_text(text):
                       if not _CONSOLE_PROMPT_RE.match(_sgr_bare.sub("", ln)))
 
 
+def _session_lifetimes(cfg):
+    """(PERMANENT_SESSION_LIFETIME seconds, REMEMBER_COOKIE_DURATION) from config.json, coerced
+    and held to the ranges the Settings form enforces (1-168 hours, 1-90 days).
+
+    config.json is hand-editable and these were read raw. "session_lifetime_hours": "8" made the
+    lifetime a 3,600-character STRING, which only fails when Flask adds it to a datetime while
+    saving a permanent session — so the panel started, and every sign-in answered 500. A
+    non-numeric remember_days raised in int() and the panel did not start at all."""
+    def _num(value, default, lo, hi):
+        try:
+            n = int(float(value))
+        except (TypeError, ValueError, OverflowError):
+            return default
+        return max(lo, min(n, hi))
+    hours = _num(cfg.get("session_lifetime_hours", 8), 8, 1, 168)
+    days = _num(cfg.get("remember_days", 3), 3, 1, 90)
+    return hours * 3600, timedelta(days=days)
+
+
 def create_app():
     app = Flask(__name__)
     cfg = load_config()
@@ -1069,7 +1088,7 @@ def create_app():
     app.config["SESSION_COOKIE_NAME"] = "lgpanel_session"
     # Idle session timeout (sliding — refreshed on each request). 8h by default so a
     # forgotten browser doesn't stay logged in overnight; configurable.
-    app.config["PERMANENT_SESSION_LIFETIME"] = cfg.get("session_lifetime_hours", 8) * 3600
+    app.config["PERMANENT_SESSION_LIFETIME"] = _session_lifetimes(cfg)[0]
 
     # Cookie path must cover the mount point — always use root to be safe
     # since we don't know the final mount until after setup
@@ -1101,7 +1120,7 @@ def create_app():
     # max 90 — see settings.html) instead of
     # flask-login's 365-day default — a stolen remember-token shouldn't be valid for a
     # year — and give it the same hardening as the session cookie.
-    app.config["REMEMBER_COOKIE_DURATION"] = timedelta(days=int(cfg.get("remember_days", 3)))
+    app.config["REMEMBER_COOKIE_DURATION"] = _session_lifetimes(cfg)[1]
     app.config["REMEMBER_COOKIE_HTTPONLY"] = True
     app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
     app.config["REMEMBER_COOKIE_SECURE"] = app.config["SESSION_COOKIE_SECURE"]
