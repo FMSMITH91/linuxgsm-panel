@@ -453,23 +453,22 @@ def tailscale_ssh_status():
     return {"enabled": False, "running": running, "error": "Could not read Tailscale prefs"}
 
 
+# `tailscale set` changes the one pref it is given. This toggle used to run `tailscale up --ssh
+# --accept-routes --accept-dns --reset`, and `--reset` puts every pref NOT on the command line back
+# to its default: a hand-set hostname (and with it the Serve URL the admins reach the panel on),
+# advertised subnet routes, an exit node, shields-up and advertised tags were all withdrawn, and
+# accept-routes was forced on, while the panel reported only "Tailscale SSH enabled".
 def tailscale_ssh_enable():
-    """Enable Tailscale SSH by re-authenticating with --ssh flag."""
-    out, err, rc = _run(
-        "tailscale up --ssh --accept-routes --accept-dns --reset 2>&1",
-        timeout=30
-    )
+    """Turn this node's Tailscale SSH server on, and change nothing else (see above)."""
+    out, err, rc = _run("tailscale set --ssh 2>&1", timeout=30)
     if rc == 0:
         return True, "Tailscale SSH enabled"
     return False, err or out or "Failed to enable Tailscale SSH"
 
 
 def tailscale_ssh_disable():
-    """Disable Tailscale SSH by re-authenticating without --ssh flag."""
-    out, err, rc = _run(
-        "tailscale up --accept-routes --accept-dns --reset 2>&1",
-        timeout=30
-    )
+    """Turn this node's Tailscale SSH server off, and change nothing else."""
+    out, err, rc = _run("tailscale set --ssh=false 2>&1", timeout=30)
     if rc == 0:
         return True, "Tailscale SSH disabled"
     return False, err or out or "Failed to disable Tailscale SSH"

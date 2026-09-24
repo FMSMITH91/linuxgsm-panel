@@ -339,6 +339,32 @@ try:
 finally:
     _so._run = _orig_sorun2
 
+# ── The Tailscale SSH toggle changes RunSSH and nothing else ─────────────────────────────────
+# It ran `tailscale up --ssh --accept-routes --accept-dns --reset`. `--reset` puts every pref not
+# on that command line back to its default, so turning SSH on withdrew advertised subnet routes and
+# an exit node, dropped a hand-set hostname (and the Serve URL built on it) and forced accept-routes
+# on — reported as "Tailscale SSH enabled". `tailscale set --ssh[=false]` touches only RunSSH.
+import shlex as _tss_shlex   # noqa: E402
+_tss_cmds, _tss_rc = [], {"rc": 0}
+_tss_orig = _so._run
+try:
+    _so._run = lambda c, **k: (_tss_cmds.append(c), ("", "boom", _tss_rc["rc"]))[1]
+    _tss_on = _so.tailscale_ssh_enable()
+    _tss_off = _so.tailscale_ssh_disable()
+    _tss_argv = [[t for t in _tss_shlex.split(c) if t != "2>&1"] for c in _tss_cmds]
+    check("tailscale-ssh: enabling runs `tailscale set --ssh` and nothing that resets other prefs",
+          _tss_argv[:1] == [["tailscale", "set", "--ssh"]], repr(_tss_cmds))
+    check("tailscale-ssh: disabling runs `tailscale set --ssh=false` and nothing else",
+          _tss_argv[1:2] == [["tailscale", "set", "--ssh=false"]], repr(_tss_cmds))
+    check("tailscale-ssh: ...and a toggle that ran reports it (control)",
+          _tss_on == (True, "Tailscale SSH enabled") and _tss_off == (True, "Tailscale SSH disabled"),
+          repr((_tss_on, _tss_off)))
+    _tss_rc["rc"] = 1
+    check("tailscale-ssh: ...while one the CLI refused is reported as a failure (control)",
+          _so.tailscale_ssh_enable()[0] is False and _so.tailscale_ssh_disable()[0] is False)
+finally:
+    _so._run = _tss_orig
+
 # ── perf guard: the /server-management host probe (sudo ufw + tailscale + apt, ~1.2s of
 #    CPU across several subprocesses) is cached for _STATUS_TTL, so a page render and its
 #    follow-up poll don't each re-run it. Mock the single subprocess entrypoint and count
@@ -1849,6 +1875,7 @@ check("system_ops: ...and a DENY's source is the From column, not the To column"
       _ufw_parsed["rules"][-1]["action"] == "DENY"
       and _ufw_parsed["rules"][-1]["from"].startswith("203.0.113.9"),
       str(_ufw_parsed["rules"][-1]))
+
 
 # 11. apt's history.log writes Install:/Upgrade:/Remove:/Purge:, never "Packages:" — so that list
 #     was always empty. And `tail -50` almost always starts mid-record, so the first entry used to
