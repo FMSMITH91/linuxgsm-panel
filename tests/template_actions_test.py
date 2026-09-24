@@ -487,6 +487,50 @@ else:
           "dashRow() fills a settled row as it stands: fill() finds its .ip-step, skips building "
           "the bar and throws on it")
 
+    # ── "still trying" has to reach the Install page's boxes too ─────────────────────────────
+    # markStale() selected only the dashboard's rows, so on Install a Server a dead poll left the
+    # box showing its last step, percent and elapsed seconds, undimmed: the frozen-reading-as-live
+    # defect the stale marking exists to prevent. The selector markStale() queries is resolved
+    # from the AST (a literal, or the variable it names) and must cover both hosts.
+    _ips_fn = _js_find_fn(_ipo_ast, "markStale")
+    _ips_consts = {}
+
+    def _scan_consts(n):
+        if isinstance(n, dict):
+            if (n.get("type") == "VariableDeclarator" and (n.get("init") or {}).get("type") == "Literal"
+                    and isinstance(n["init"].get("value"), str)):
+                _ips_consts[(n.get("id") or {}).get("name")] = n["init"]["value"]
+            for v in n.values():
+                _scan_consts(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_consts(v)
+    _scan_consts(_ipo_ast)
+    _ips_sel = []
+
+    def _scan_qsa(n):
+        if isinstance(n, dict):
+            c = n.get("callee") or {}
+            if (n.get("type") == "CallExpression"
+                    and (c.get("property") or {}).get("name") == "querySelectorAll"):
+                a = (n.get("arguments") or [{}])[0]
+                _ips_sel.append(a.get("value") if a.get("type") == "Literal"
+                                else _ips_consts.get(a.get("name"), ""))
+            for v in n.values():
+                _scan_qsa(v)
+        elif isinstance(n, list):
+            for v in n:
+                _scan_qsa(v)
+    if _ips_fn:
+        _scan_qsa(_ips_fn)
+    _ips_parts = [p.strip() for s in _ips_sel for p in (s or "").split(",")]
+    check("#install-running [data-install-id]" in _ips_parts
+          and any(p.startswith("tr[data-progress-for]") for p in _ips_parts),
+          "install_progress: a stalled poll is marked on the Install page's boxes as well as the "
+          "dashboard's rows",
+          "markStale() queries %r — the Install page's progress stays frozen and undimmed"
+          % (_ips_sel,))
+
 # ── a filter that only runs on `change` does not run on the common setup ─────────────────────
 # The install picker greys out the games LinuxGSM caps below the host's release, from the host
 # selector's change event. With ONE host the select is rendered already selected and never fires

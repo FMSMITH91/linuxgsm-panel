@@ -190,8 +190,14 @@
   // panel is no longer watching.
   var missed = 0;
 
+  // BOTH places progress is shown. This read only the dashboard's rows, so on Install a Server —
+  // where the operator who just started it is watching — the box kept the last step, percent and
+  // elapsed time it received, frozen and undimmed, exactly the false reading described above.
+  // A settled row is excluded: it reports an ending, not a reading that can go stale.
+  var PROGRESS_HOSTS = 'tr[data-progress-for]:not([data-settled]), #install-running [data-install-id]';
+
   function markStale(on) {
-    Array.prototype.forEach.call(document.querySelectorAll('tr[data-progress-for]'),
+    Array.prototype.forEach.call(document.querySelectorAll(PROGRESS_HOSTS),
       function (r) {
         r.classList.toggle('ip-stale', !!on);
         var meta = r.querySelector('.ip-meta');
