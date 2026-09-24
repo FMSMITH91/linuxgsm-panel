@@ -210,16 +210,29 @@ try:
     # ── /servers/add — the endpoint that had no bounds at all ────────────────────────────────
     # A refusal here must leave NO row. That is the assertion that matters: the route used to
     # commit the GameServer first and only fail later, on the host, as the game's own error.
-    for bad in _BAD_PORTS:
-        before = servers_count()
-        r = c.post("/servers/add", data={"remote_id": str(remote_id), "game_type": "cod",
-                                         "server_name": "", "port": bad},
-                   follow_redirects=False)
-        label = repr(bad)[:22]
-        check("/servers/add port=%s does not 5xx" % label, r.status_code < 500,
-              "got %d" % r.status_code)
-        check("/servers/add port=%s writes no server row" % label, servers_count() == before,
-              "row count went %d -> %d" % (before, servers_count()))
+    #
+    # Driven at the LOCAL host with the port allocator and the account probe stubbed to succeed,
+    # each with its own name, so the range check is the only thing left that can refuse. This
+    # posted to the unreachable host, which refuses every add by itself ("on an unreachable host
+    # writes no server row" below, with a VALID port): the loop passed with the range check
+    # deleted. A blank port is not in it — on this form blank means "the game's default port".
+    import panel.routes.manage_servers as _ms_mod
+    _o_rfp_bad, _o_has_bad = _ms_mod.resolve_free_port, _ms_mod.host_account_state
+    try:
+        _ms_mod.resolve_free_port = lambda remote, remote_id, desired, game_type: (desired, False)
+        _ms_mod.host_account_state = lambda remote, n: "absent"
+        for _bad_i, bad in enumerate(b for b in _BAD_PORTS if b.strip()):
+            before = servers_count()
+            r = c.post("/servers/add", data={"remote_id": str(local_id), "game_type": "cod",
+                                             "server_name": "ivbad%d" % _bad_i, "port": bad},
+                       follow_redirects=False)
+            label = repr(bad)[:22]
+            check("/servers/add port=%s does not 5xx" % label, r.status_code < 500,
+                  "got %d" % r.status_code)
+            check("/servers/add port=%s writes no server row" % label, servers_count() == before,
+                  "row count went %d -> %d" % (before, servers_count()))
+    finally:
+        _ms_mod.resolve_free_port, _ms_mod.host_account_state = _o_rfp_bad, _o_has_bad
 
     # Positive control: a valid port IS accepted and IS what gets stored. Without this the block
     # above would pass against a route that refuses everything.
@@ -333,17 +346,28 @@ try:
           "row count went %d -> %d" % (before, servers_count()))
 
     # ── /remotes/add and /remotes/<id>/edit — the SSH port ───────────────────────────────────
-    for bad in _BAD_PORTS:
-        before = remotes_count()
-        r = c.post("/remotes/add", data={"name": "iv-bad", "host": "192.0.2.11",
-                                         "ssh_user": "root", "ssh_port": bad,
-                                         "auth_method": "key", "credential": ""},
-                   follow_redirects=False)
-        label = repr(bad)[:22]
-        check("/remotes/add ssh_port=%s does not 5xx" % label, r.status_code < 500,
-              "got %d" % r.status_code)
-        check("/remotes/add ssh_port=%s writes no host row" % label, remotes_count() == before,
-              "row count went %d -> %d" % (before, remotes_count()))
+    # The connection test is stubbed SUCCESSFUL, as the auth_method block below does and for its
+    # reason: left real, the unreachable 192.0.2.11 refused every add on its own, and this loop
+    # passed with the port's range check deleted. The positive control is "accepts
+    # auth_method=key" below — the same POST with the same stub, a valid port, and a new row.
+    import panel.routes.remotes as _rr
+    _saved_test_bad = _rr.ssh_test_connection
+    try:
+        _rr.ssh_test_connection = lambda *a, **k: (True, "stubbed OK")
+        for _bad_i, bad in enumerate(_BAD_PORTS):
+            before = remotes_count()
+            r = c.post("/remotes/add", data={"name": "iv-bad-%d" % _bad_i, "host": "192.0.2.11",
+                                             "ssh_user": "root", "ssh_port": bad,
+                                             "auth_method": "key", "credential": "",
+                                             "setup_type": "existing"},
+                       follow_redirects=False)
+            label = repr(bad)[:22]
+            check("/remotes/add ssh_port=%s does not 5xx" % label, r.status_code < 500,
+                  "got %d" % r.status_code)
+            check("/remotes/add ssh_port=%s writes no host row" % label, remotes_count() == before,
+                  "row count went %d -> %d" % (before, remotes_count()))
+    finally:
+        _rr.ssh_test_connection = _saved_test_bad
 
     for bad in _BAD_PORTS:
         r = c.post("/remotes/%d/edit" % remote_id,
@@ -449,11 +473,24 @@ try:
               "got %d" % r.status_code)
 
     # ── /api/free-port — the read-only suggestion the install form uses ──────────────────────
-    for bad in ("0", "-1", "65536", "abc", ""):
-        r = c.get("/api/free-port?remote_id=%d&game=cod&desired=%s" % (remote_id, bad))
-        check("free-port desired=%r suggests nothing" % bad,
-              r.status_code == 200 and (r.get_json() or {}).get("port") is None,
-              "got %d %s" % (r.status_code, r.get_data(as_text=True)[:60]))
+    # At the LOCAL host with the allocator stubbed to hand back whatever it is asked for, so the
+    # route's own range check is what answers None. Aimed at the unreachable host, the allocator
+    # raised and the route's `except` answered None for every value, range check or not.
+    import panel.routes.api as _api_mod
+    _o_rfp_api = _api_mod.resolve_free_port
+    try:
+        _api_mod.resolve_free_port = lambda remote, remote_id, desired, game: (desired, False)
+        for bad in ("0", "-1", "65536", "abc", ""):
+            r = c.get("/api/free-port?remote_id=%d&game=cod&desired=%s" % (local_id, bad))
+            check("free-port desired=%r suggests nothing" % bad,
+                  r.status_code == 200 and (r.get_json() or {}).get("port") is None,
+                  "got %d %s" % (r.status_code, r.get_data(as_text=True)[:60]))
+        r = c.get("/api/free-port?remote_id=%d&game=cod&desired=28960" % local_id)
+        check("free-port: ...while the same stubbed request with a valid port suggests it "
+              "(control)", (r.get_json() or {}).get("port") == 28960,
+              r.get_data(as_text=True)[:80])
+    finally:
+        _api_mod.resolve_free_port = _o_rfp_api
     r = c.get("/api/free-port?remote_id=%d&game=cod&desired=28960" % local_id)
     _fp = (r.get_json() or {}).get("port")
     check("free-port suggests a real port for a valid request (positive control)",
