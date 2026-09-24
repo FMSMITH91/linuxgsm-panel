@@ -928,6 +928,10 @@ finally:
 import pwd as _pwd_dbo
 _dbo = _sandboxed_helper()
 _dbo_dir = _tempfile.mkdtemp(prefix="panel-dbrepair-")
+# A helper without these fails the checks below by name instead of crashing the part.
+for _dbo_fn, _dbo_dflt in (("_db_repair_account", lambda p: None), ("_db_repair_as", lambda a: None)):
+    if not hasattr(_dbo, _dbo_fn):
+        setattr(_dbo, _dbo_fn, _dbo_dflt)
 try:
     _dbo_data = os.path.join(_dbo_dir, "data")
     os.makedirs(_dbo_data)

@@ -2499,8 +2499,10 @@ import subprocess as _sp_ns
 
 
 def _ns_fn(name):
-    _i = _ntc_sh.index("\n%s() {" % name)
-    return _ntc_sh[_i:_ntc_sh.index("\n}\n", _i) + 3]
+    """The function's text, or "" when install.sh has no such function (the checks below then fail
+    by name rather than crashing the part)."""
+    _i = _ntc_sh.find("\n%s() {" % name)
+    return "" if _i < 0 else _ntc_sh[_i:_ntc_sh.index("\n}\n", _i) + 3]
 
 
 _ns_code_lines = [_l for _l in _ntc_sh.splitlines() if not _l.lstrip().startswith("#")]
