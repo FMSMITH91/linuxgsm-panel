@@ -142,7 +142,7 @@ def _viewer_credential():
     """What join_console records for this socket: (current_user's login id, bearer digest).
 
     The login id is the string the session cookie carries ("<uid>:<epoch>[:<session sid>]"), so
-    running it back through the app's user_loader later asks exactly what a page load asks. The
+    running it back through _login_id_still_accepted later asks what a page load asks. The
     digest is recorded only when this socket authenticated with a bearer token that is the
     current user's: revoking a token changes neither the epoch nor any session row, so the token
     itself has to be compared. Request context only."""
@@ -156,16 +156,63 @@ def _viewer_credential():
     return current_user.get_id(), digest
 
 
-def _credential_still_valid(app, uid, cred):
+def _login_id_still_accepted(login_id):
+    """The User a recorded login id still names, or None: load_user's verdict without its writes.
+
+    For the console poller, which holds each viewer's login id ("<uid>:<epoch>[:<sid>]",
+    User.get_id) outside any request and re-asks every tick whether the panel would still accept
+    it. It asks load_user's questions (the epoch still matches, the account is active, the
+    per-device UserSession row still exists and has not idled out) and nothing else, because
+    load_user is a REQUEST hook and two of its side effects are wrong here. It writes last_seen
+    every ~5 minutes, and idle expiry is measured from last_seen, so a poller calling it kept a
+    login alive for as long as a console socket stayed open (a stolen remember cookie included).
+    And it turns a database error into None ("deny this request"), which the poller read as
+    "revoked" and evicted a legitimate viewer on a transient lock.
+
+    So this writes and deletes nothing, and RAISES when it cannot look (after a rollback, so the
+    next viewer's query is not refused by a session left mid-failure). The per-request client
+    binding (_session_binding_ok) is not asked: there is no request. Keep it in step with
+    auth.load_user: smoke_test drives both over the same login ids."""
+    from panel.core.clock import utcnow
+    from panel.db.models import User, UserSession
+    s = str(login_id)
+    try:
+        if ":" not in s:      # legacy cookie from before epochs: load_user accepts the plain id
+            user = db.session.get(User, int(s)) if s.isdecimal() else None
+            return user if user is not None and user.is_active else None
+        parts = s.split(":")
+        uid, epoch = parts[0], parts[1]
+        sid = parts[2] if len(parts) > 2 and parts[2] else None
+        if not uid.isdecimal():
+            return None
+        user = db.session.get(User, int(uid))
+        if user is None or str(user.auth_epoch or 0) != epoch or not user.is_active:
+            return None
+        if sid:
+            sess = UserSession.query.filter_by(sid=sid, user_id=user.id).first()
+            if sess is None or sess.is_expired(utcnow()):
+                return None
+        return user
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def _credential_still_valid(uid, cred):
     """Is the credential a viewer joined with still one the panel would accept? cred is what
     _viewer_credential recorded, or None for a viewer registered without one (nothing to check).
-    The login id goes back through the app's own user_loader, so a revoked device, a bumped
-    auth_epoch, an idle-expired session and a deactivated account all fail here exactly as they
-    fail a page load — one definition of "still signed in", not two."""
+    A revoked device, a bumped auth_epoch, an idle-expired session and a deactivated account all
+    fail here as they fail a page load.
+
+    It asks _login_id_still_accepted, NOT the app's user_loader: load_user refreshed last_seen
+    from this poller (so an open console socket kept its login from ever idling out) and answered
+    a database error with None (so a transient lock evicted a legitimate viewer as "revoked").
+    _login_id_still_accepted writes nothing and RAISES when it cannot look, and
+    _evict_unauthorized_viewers keeps a viewer it could not check."""
     if cred is None:
         return True
     login_id, digest = cred
-    user = app.login_manager.user_callback(login_id)
+    user = _login_id_still_accepted(login_id)
     if user is None or user.id != uid:
         return False
     return digest is None or getattr(user, "api_token", None) == digest
@@ -332,7 +379,7 @@ def _evict_unauthorized_viewers(app, socketio, server_id):
     request, because there is no request here: the row still exists and is active, it is not held
     at a forced password change, it reaches this server and holds VIEW_CONSOLE — and the
     CREDENTIAL the socket joined with is still accepted (_credential_still_valid: the session row,
-    its epoch and idle expiry via the app's user_loader, and a bearer token's hash).
+    its epoch and idle expiry via _login_id_still_accepted, and a bearer token's hash).
 
     The socket is removed from the ROOM, not merely from the viewer map: the map governs
     whether the panel POLLS the host, while the room governs who receives what it already
@@ -358,7 +405,7 @@ def _evict_unauthorized_viewers(app, socketio, server_id):
                 and not getattr(user, "must_change_password", False)
                 and can_access_server(user, server_id)
                 and (user.is_superadmin or has_permission(user, VIEW_CONSOLE))
-                and _credential_still_valid(app, uid, creds.get(sid)))
+                and _credential_still_valid(uid, creds.get(sid)))
         except Exception:
             app.logger.debug("console: could not re-check viewer %s", sid, exc_info=True)
             continue          # unknown is not "revoked" — leave them be and try next tick

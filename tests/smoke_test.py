@@ -8253,6 +8253,94 @@ try:
         check("console socket: a password reset mid-stream ends it at the next tick",
               _cv_sid is not None and not _cv_evict(),
               "the socket kept streaming to an account held at a forced password change")
+        with app.app_context():
+            db.session.get(User, admin_id).must_change_password = _cv_saved[2]
+            db.session.commit()
+
+        # The re-check must not itself keep the login alive. It ran load_user, a REQUEST hook that
+        # writes UserSession.last_seen every ~5 minutes, and idle expiry is measured from
+        # last_seen: a login with a console socket open (a stolen remember cookie included) never
+        # idled out server-side.
+        from datetime import timedelta as _cv_td
+        from panel.core.clock import utcnow as _cv_now
+        from panel.db.models import session_idle_limits as _cv_limits
+        _cv_c, _cv_sid = _cv_socket()     # joining runs load_user itself: age the row AFTER it
+        _cv_clients.append(_cv_c)
+        _cv_old = (_cv_now() - _cv_td(seconds=400)).replace(microsecond=0)
+        with app.app_context():
+            _CvUS.query.filter_by(sid="smoke_console_sid2").update({"last_seen": _cv_old})
+            db.session.commit()
+        _cv_kept = _cv_sid is not None and _cv_evict()
+        with app.app_context():
+            _cv_seen = _CvUS.query.filter_by(sid="smoke_console_sid2").first().last_seen
+        check("console socket: (control) a viewer whose login sat idle 400s is still kept",
+              _cv_kept, "viewer=%r" % (_cv_sid,))
+        check("console socket: the per-tick re-check does not refresh the login's last_seen",
+              _cv_seen == _cv_old, "last_seen %r became %r" % (_cv_old, _cv_seen))
+
+        # "Could not look" is not "revoked". load_user answers a database error with None (deny
+        # this request), which the poller read as a revocation: a transient lock evicted a
+        # legitimate viewer with "[access to this console was revoked]" until they reloaded.
+        from sqlalchemy.exc import OperationalError as _cv_OpErr
+        _cv_ie = _CvUS.is_expired
+
+        def _cv_locked(self, now=None):
+            raise _cv_OpErr("SELECT", {}, Exception("database is locked"))
+
+        _CvUS.is_expired = _cv_locked
+        try:
+            _cv_kept_locked = _cv_evict()
+        finally:
+            _CvUS.is_expired = _cv_ie
+        check("console socket: a database error in the credential re-check keeps the viewer",
+              _cv_kept_locked, "a viewer was evicted as revoked because the session row could "
+              "not be read")
+
+        # ...while a login that HAS idled out still ends the stream (the check that last_seen
+        # feeds, so the one a refreshing re-check had disabled).
+        with app.app_context():
+            _CvUS.query.filter_by(sid="smoke_console_sid2").update(
+                {"last_seen": _cv_now() - _cv_td(seconds=max(_cv_limits()) + 60)})
+            db.session.commit()
+        check("console socket: a login that idled out ends the stream at the next tick",
+              not _cv_evict(), "the socket outlived its session's idle expiry")
+
+        # One definition of "still signed in": the side-effect-free check must agree with the
+        # request hook on every login id, so a control added to one and not the other shows here.
+        with app.app_context():
+            db.session.add(_CvUS(user_id=admin_id, sid="smoke_console_sid3", ip="", user_agent=""))
+            db.session.commit()
+        _cv_ep = _cv_saved[0] or 0
+        _cv_cases = ["%d:%d:smoke_console_sid3" % (admin_id, _cv_ep),
+                     "%d:%d:smoke_console_nosuch" % (admin_id, _cv_ep),
+                     "%d:%d" % (admin_id, _cv_ep),
+                     "%d:%d:smoke_console_sid3" % (admin_id, _cv_ep + 1),
+                     "%d" % admin_id, "x:0", "%d:0" % (10 ** 7),
+                     "%d:%d:smoke_console_sid2" % (admin_id, _cv_ep)]     # idled out, above
+        _cv_mismatch, _cv_accepted = [], []
+        _cv_load = app.login_manager.user_callback
+        for _cv_inactive in (False, True):
+            for _cv_lid in _cv_cases:
+                with app.test_request_context("/"):
+                    _cv_u = db.session.get(User, admin_id)
+                    _cv_u.is_active = not _cv_inactive
+                    try:
+                        _cv_a = _r_sf._login_id_still_accepted(_cv_lid)
+                        _cv_b = _cv_load(_cv_lid)
+                    finally:
+                        _cv_u.is_active = True
+                        db.session.commit()
+                    _cv_ida, _cv_idb = getattr(_cv_a, "id", None), getattr(_cv_b, "id", None)
+                    if _cv_ida != _cv_idb:
+                        _cv_mismatch.append((_cv_lid, _cv_inactive, _cv_ida, _cv_idb))
+                    elif _cv_ida is not None:
+                        _cv_accepted.append((_cv_lid, _cv_inactive))
+        check("console socket: _login_id_still_accepted and load_user agree on every login id",
+              not _cv_mismatch, "disagree (id, inactive, still_accepted, load_user): %r"
+              % (_cv_mismatch,))
+        check("console socket: (control) ...and both accept exactly the valid ones",
+              _cv_accepted == [(_cv_cases[i], False) for i in (0, 2, 4)],
+              "accepted by both: %r" % (_cv_accepted,))
     finally:
         for _c in _cv_clients:
             try:
@@ -8264,11 +8352,12 @@ try:
         with app.app_context():
             _cv_u = db.session.get(User, admin_id)
             (_cv_u.auth_epoch, _cv_u.api_token, _cv_u.must_change_password) = _cv_saved
-            _CvUS.query.filter(_CvUS.sid.in_(["smoke_console_sid", "smoke_console_sid2"])).delete(
+            _CvUS.query.filter(_CvUS.sid.in_(["smoke_console_sid", "smoke_console_sid2",
+                                               "smoke_console_sid3"])).delete(
                 synchronize_session=False)
             db.session.commit()
     check("console socket: a disconnect forgets the socket's recorded credential",
-          len([k for k in _cv_sids if k is not None]) == 4
+          len([k for k in _cv_sids if k is not None]) == 5
           and not any(k in _r_sf._viewer_creds for k in _cv_sids),
           "sids=%r left behind: %r" % (_cv_sids, [k for k in _cv_sids if k in _r_sf._viewer_creds]))
 

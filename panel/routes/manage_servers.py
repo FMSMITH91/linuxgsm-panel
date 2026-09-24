@@ -174,8 +174,12 @@ def decide_port_adoption(real_port, cur_port, panel_ports, live_ports):
 # root — which is every login on a host that is not a LinuxGSM one. INSTANCE_NAME_RE is a username
 # grammar, not an ownership check, so typing "ubuntu" (or any admin or service account) into the
 # install form ran exactly that against it, then bound the new row to the account so every later
-# game action, file-manager action and uninstall reached it too. In memory on purpose: after a
-# restart the evidence is gone, and the answer is then to reuse the account, never to delete it.
+# game action, file-manager action and uninstall reached it too. In memory, so a restart loses it:
+# a retry after one keeps an account that HAS its linuxgsm.sh (step 1 reuses it as it is) and
+# REFUSES one that does not — it neither deletes nor installs into an account it cannot prove it
+# made. Its refusal names the way on (delete the leftover account on the host, after which the
+# retry creates it afresh, or remove the server). Rebuilding it automatically after a restart
+# would need this evidence persisted on the GameServer row, not a guess from the host.
 _accounts_created = set()
 
 
