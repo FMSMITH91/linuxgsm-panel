@@ -121,10 +121,30 @@ def _prehash(password):
     return base64.b64encode(hashlib.sha256((password or "").encode("utf-8")).digest())
 
 
+def run_off_hub(fn, *args):
+    """Run a CPU-bound call that never yields — bcrypt — on a real OS thread under eventlet.
+
+    The panel is one eventlet hub. bcrypt is a native call that holds it for the whole cost-12
+    hash (~250-400ms), and every /login POST ran one, unauthenticated, including the dummy compare
+    for an unknown username: a few hundred source addresses each spending their allowed failures
+    kept the hub busy hashing, and every page, console stream and poller with it stalled. tpool
+    hands the call to a worker thread and parks only the calling greenlet. Off eventlet (the test
+    suites, manage.py) it is a direct call; inside a tpool worker tpool runs it inline itself."""
+    try:
+        import eventlet.patcher
+        if eventlet.patcher.is_monkey_patched("thread"):
+            from eventlet import tpool
+            return tpool.execute(fn, *args)
+    except ImportError:
+        pass
+    return fn(*args)
+
+
 def hash_password(password):
     """Hash a password of ANY length. Stored as `sha256$<bcrypt>` so check_password can tell the
     two schemes apart — a bare `$2b$...` row is a legacy hash of the raw password."""
-    return _SHA256_PREFIX + bcrypt.hashpw(_prehash(password), bcrypt.gensalt()).decode()
+    return _SHA256_PREFIX + run_off_hub(bcrypt.hashpw, _prehash(password),
+                                        bcrypt.gensalt()).decode()
 
 
 def check_password(password, password_hash):
@@ -135,16 +155,17 @@ def check_password(password, password_hash):
         return False
     try:
         if stored.startswith(_SHA256_PREFIX):
-            return bcrypt.checkpw(_prehash(password), stored[len(_SHA256_PREFIX):].encode())
+            return run_off_hub(bcrypt.checkpw, _prehash(password),
+                               stored[len(_SHA256_PREFIX):].encode())
         # Legacy: bcrypt over the raw password.
         raw = (password or "").encode("utf-8")
         if len(raw) <= 72:
-            return bcrypt.checkpw(raw, stored.encode())
+            return run_off_hub(bcrypt.checkpw, raw, stored.encode())
         # Over 72 bytes against a legacy hash: whatever wrote it truncated to 72 (that is what
         # bcrypt 4.x did), so compare the same 72 bytes rather than refusing. This is the line
         # that lets an account stranded by the 4.x -> 5.0 upgrade sign in again — and it accepts
         # nothing a 4.x panel would not have accepted from the same person.
-        return bcrypt.checkpw(raw[:72], stored.encode())
+        return run_off_hub(bcrypt.checkpw, raw[:72], stored.encode())
     except (ValueError, TypeError):
         return False
 
@@ -775,8 +796,28 @@ TOKEN_MAX_FAILS = 20
 TOKEN_WINDOW = 300      # seconds
 
 
+def throttle_key(ip):
+    """The bucket a failed-auth throttle counts `ip` in.
+
+    An IPv4 address is its own bucket. An IPv6 address is bucketed by its /64: that is the
+    smallest block a site or a phone is normally handed, so one attacker holds 2^64 addresses
+    and a per-ADDRESS limit gave them that many fresh buckets. An IPv4-mapped IPv6 address is the
+    IPv4 address it maps. Anything that is not an address is returned unchanged."""
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if addr.version == 6:
+        if addr.ipv4_mapped is not None:
+            return str(addr.ipv4_mapped)
+        return str(ipaddress.ip_network("%s/64" % addr, strict=False))
+    return str(addr)
+
+
 def _token_auth_blocked(ip):
     """True when this IP has failed too many token authentications recently."""
+    ip = throttle_key(ip)
     now = time.time()
     with _TOKEN_FAILS_LOCK:
         # Prune whole IPs whose failures have aged out. Without this the map grows one entry per
@@ -791,6 +832,7 @@ def _token_auth_blocked(ip):
 
 def _token_auth_record(ip, ok):
     """Record the outcome of a token authentication: clear the counter on success, count a miss."""
+    ip = throttle_key(ip)
     with _TOKEN_FAILS_LOCK:
         if ok:
             _TOKEN_FAILS.pop(ip, None)

@@ -2581,6 +2581,24 @@ try:
           _local_locks, "%d attempts, never locked" % (LOGIN_MAX_FAILS + 2))
     check("login: ...while through Serve each forwarded client keeps its own bucket (control)",
           not _serve_locks, "Serve's distinct clients were pooled into one bucket")
+
+    # An IPv6 client holds a whole /64. Keyed per ADDRESS, rotating the interface id gave a fresh
+    # bucket every attempt; the throttle now counts the /64.
+    _LOGIN_FAILS.clear()
+    _v6 = app.test_client()
+    _v6_locked = False
+    for _j in range(LOGIN_MAX_FAILS + 2):
+        _r = _v6.post("/login", data={"username": "nobody_lockout5", "password": "wrong"},
+                      environ_overrides={"REMOTE_ADDR": "2001:db8:5:6::%x" % (_j + 1)})
+        if b"Too many failed attempts" in _r.data:
+            _v6_locked = True
+            break
+    check("login: rotating addresses inside one IPv6 /64 is still throttled", _v6_locked,
+          "%d attempts, never locked" % (LOGIN_MAX_FAILS + 2))
+    _r = _v6.post("/login", data={"username": "nobody_lockout5", "password": "wrong"},
+                  environ_overrides={"REMOTE_ADDR": "2001:db8:5:7::1"})
+    check("login: ...while the neighbouring /64 is its own bucket (control)",
+          b"Too many failed attempts" not in _r.data, "a different /64 was blocked too")
     _LOGIN_FAILS.clear()
 
     # ── Database maintenance: stats + VACUUM/ANALYZE optimize ─────

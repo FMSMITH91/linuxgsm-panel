@@ -1817,6 +1817,71 @@ check("check_password: None stored hash -> False (no raise)", not check_password
 check("check_password: garbage stored hash -> False (no raise)", not check_password("x", "not-a-bcrypt-hash"))
 check("dummy_password_check always returns False", dummy_password_check("anything") is False)
 
+# ── bcrypt runs OFF the eventlet hub ────────────────────────────────────────────────────────
+# bcrypt is a native call that never yields, and the panel is one eventlet hub: every /login POST
+# (unauthenticated, including the dummy compare for an unknown username) held every page, console
+# and poller for a whole cost-12 hash. Under a monkey-patched runtime each bcrypt call must go
+# through eventlet.tpool. The suite is not monkey-patched, so the patch check and tpool.execute are
+# stubbed and the REAL password, dummy and backup-code functions are driven through them.
+import eventlet.patcher as _bh_patcher                                               # noqa: E402
+import eventlet.tpool as _bh_tpool                                                   # noqa: E402
+import bcrypt as _bh_bcrypt                                                          # noqa: E402
+from panel.db.models import User as _BhUser                                          # noqa: E402
+_bh_saved = (_bh_patcher.is_monkey_patched, _bh_tpool.execute)
+_bh_calls = []
+
+
+def _bh_exec(fn, *a, **k):
+    _bh_calls.append(fn)
+    return fn(*a, **k)
+
+
+try:
+    _bh_patcher.is_monkey_patched = lambda name: True
+    _bh_tpool.execute = _bh_exec
+    _bh_hash = hash_password("Off-hub1!pass")
+    _bh_ok = check_password("Off-hub1!pass", _bh_hash)
+    _bh_bad = check_password("wrong", _bh_hash)
+    _bh_calls_pw = list(_bh_calls)
+    del _bh_calls[:]
+    dummy_password_check("anything")
+    _bh_calls_dummy = list(_bh_calls)
+    del _bh_calls[:]
+    _bh_u = _BhUser(username="offhub")
+    _bh_u.set_backup_codes(["abcde-fghij"])
+    _bh_used = _bh_u.use_backup_code("ABCDE-FGHIJ")
+    _bh_calls_codes = list(_bh_calls)
+finally:
+    _bh_patcher.is_monkey_patched, _bh_tpool.execute = _bh_saved
+check("bcrypt off-hub: hash + both checks go through tpool, and still answer correctly",
+      _bh_calls_pw == [_bh_bcrypt.hashpw, _bh_bcrypt.checkpw, _bh_bcrypt.checkpw]
+      and _bh_ok is True and _bh_bad is False, "%r ok=%r bad=%r" % (_bh_calls_pw, _bh_ok, _bh_bad))
+check("bcrypt off-hub: the unknown-username dummy compare goes through tpool too",
+      _bh_bcrypt.checkpw in _bh_calls_dummy, repr(_bh_calls_dummy))
+check("bcrypt off-hub: backup codes are hashed and checked through tpool",
+      _bh_calls_codes == [_bh_bcrypt.hashpw, _bh_bcrypt.checkpw] and _bh_used is True,
+      "%r used=%r" % (_bh_calls_codes, _bh_used))
+# Off eventlet (manage.py, a bare script) it is a plain call: tpool is not touched at all. Stated
+# explicitly, because THIS suite is monkey-patched — importing app runs eventlet.monkey_patch().
+del _bh_calls[:]
+_bh_patcher.is_monkey_patched = lambda name: False
+_bh_tpool.execute = _bh_exec
+try:
+    _bh_plain = check_password("Off-hub1!pass", _bh_hash)
+finally:
+    _bh_patcher.is_monkey_patched, _bh_tpool.execute = _bh_saved
+check("bcrypt off-hub: without monkey-patching it is a direct call (control)",
+      _bh_plain is True and _bh_calls == [], repr(_bh_calls))
+
+# ── the login and token throttles count an IPv6 client by its /64 ───────────────────────────
+from panel.security.auth import throttle_key as _tk_fn                              # noqa: E402
+for _tk_in, _tk_want in (("203.0.113.9", "203.0.113.9"),
+                         ("2001:db8:1:2:aaaa::1", "2001:db8:1:2::/64"),
+                         ("2001:db8:1:2:ffff:ffff:ffff:ffff", "2001:db8:1:2::/64"),
+                         ("::ffff:203.0.113.9", "203.0.113.9"),
+                         ("unknown", "unknown")):
+    eq("throttle key: %s -> %s" % (_tk_in, _tk_want), _tk_fn(_tk_in), _tk_want)
+
 # ── login-throttle map must not grow unbounded (prune stale/empty IP buckets) ──
 # _LOGIN_FAILS is the same dict object app.py mutates, so in-place edits here are seen
 # by _prune_login_fails. (Single import style — CodeQL flags mixing import/from-import.)

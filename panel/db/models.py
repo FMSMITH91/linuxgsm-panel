@@ -245,8 +245,10 @@ class User(UserMixin, db.Model):
     def set_backup_codes(self, plain_codes):
         """Store one-time 2FA backup codes as bcrypt hashes (the plaintext is shown to
         the user once and never persisted)."""
+        from panel.security.auth import run_off_hub   # lazy: auth imports this module
+        # Off the eventlet hub: eight cost-12 hashes held every other request for ~2-3s.
         self.backup_codes = json.dumps([
-            bcrypt.hashpw(self._norm_code(c).encode(), bcrypt.gensalt()).decode()
+            run_off_hub(bcrypt.hashpw, self._norm_code(c).encode(), bcrypt.gensalt()).decode()
             for c in plain_codes
         ])
 
@@ -260,9 +262,10 @@ class User(UserMixin, db.Model):
             hashes = json.loads(self.backup_codes)
         except (ValueError, TypeError):
             return False
+        from panel.security.auth import run_off_hub   # lazy: auth imports this module
         for h in hashes:
             try:
-                if bcrypt.checkpw(code.encode(), h.encode()):
+                if run_off_hub(bcrypt.checkpw, code.encode(), h.encode()):
                     hashes.remove(h)
                     self.backup_codes = json.dumps(hashes)
                     return True
