@@ -12,7 +12,7 @@ from panel.security.auth import (hash_password)
 import json
 import os
 from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
-    _port_or, bind_host_error, password_problem)
+    _port_or, bind_host_error, can_bind_address, password_problem)
 from app import (_current_lang, _log, _setup_open, _setup_owner_ok, _ts_backend_scheme,
     is_setup_complete, issue_setup_owner_token)
 
@@ -125,13 +125,15 @@ def register(app):
                 # different route and the wizard never calls it, so this wrote whatever was
                 # posted — and an address the host cannot bind produces a panel that does not come
                 # back up, recoverable only with linuxgsm-panel-recover or by hand-editing
-                # config.json. bind_host_error is now the single rule both writers use.
+                # config.json. can_bind_address asks the kernel whether that address is really
+                # on this host: a well-formed IP that is not (10.0.0.51 on 10.0.0.50) passed the
+                # parse and failed with EADDRNOTAVAIL on the next start.
                 #
                 # nosec B104 - not a hardcoded bind: 0.0.0.0 is the DEFAULT offered when the
                 # operator leaves the field blank, and it is what a panel reached over a tailnet
                 # or a LAN has to listen on. The value is the operator's to set.
                 _wiz_bind = (request.form.get("bind_host") or "0.0.0.0").strip()  # nosec B104
-                _bind_err = bind_host_error(_wiz_bind)
+                _bind_err = bind_host_error(_wiz_bind, can_bind_address)
                 if _bind_err:
                     flash(_bind_err, "danger")
                     return redirect("/setup")

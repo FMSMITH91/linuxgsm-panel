@@ -4265,6 +4265,21 @@ check("setup: setup_wizard builds the credential it tests and stores with wizard
           for n in _wc_ast.walk(_wc_fn)),
       "the route reads the form value itself again — the helper is tested, the page is not")
 
+# ── ...and its bind address is one this host can actually bind ──────────────────────────────
+# bind_host_error skipped the local-address check when no host_has_ip was passed, and the wizard
+# (its only caller) passed none: 10.0.0.51 on a 10.0.0.50 box was saved, and the next start failed
+# with EADDRNOTAVAIL. Asked of the kernel by binding port 0, so there is no command output to parse.
+from panel.core.validation import bind_host_error as _bhe, can_bind_address as _cba  # noqa: E402
+check("bind: (control) the kernel says 127.0.0.1 is bindable here", _cba("127.0.0.1") is True)
+check("bind: a well-formed address on no interface (TEST-NET-1) is not", _cba("192.0.2.123") is False)
+check("bind: bind_host_error refuses it when given the check",
+      _bhe("192.0.2.123", _cba) is not None and _bhe("127.0.0.1", _cba) is None)
+check("bind: setup_wizard passes can_bind_address to bind_host_error",
+      any(isinstance(n, _wc_ast.Call) and getattr(n.func, "id", None) == "bind_host_error"
+          and any(getattr(a, "id", None) == "can_bind_address" for a in n.args)
+          for n in _wc_ast.walk(_wc_fn)),
+      "the wizard validates the bind address without asking whether it is on this host")
+
 # ── disabling 2FA revokes its backup codes, on EVERY path ─────────────────────────────────────
 # Two web paths clear them and say so; the CLI was the one that did not, leaving bcrypt hashes of
 # credentials the operator had just revoked in panel.db.
