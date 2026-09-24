@@ -370,6 +370,37 @@ _obs_walks = [ln for ln in _obs.splitlines() if "walk(" in ln]
 check(bool(_obs_walks) and all("guardedAbove" in ln for ln in _obs_walks),
       "i18n: every walk() the observer starts is gated on guardedAbove first",
       "ungated: %s" % [ln.strip()[:60] for ln in _obs_walks if "guardedAbove" not in ln])
+# Catalog lookups are own-property only. The catalog is an ordinary object, so window.I18N[key]
+# "found" Object.prototype too, and a player named "constructor" was displayed as
+# "function Object() { [native code] }" to anyone not reading English.
+_i18n_code = re.sub(r"//[^\n]*", "", _i18n_src)          # comments name the old form
+_i18n_lk = _i18n_code[_i18n_code.index("function i18nLookup("):]
+_i18n_lk = _i18n_lk[:_i18n_lk.index("\n}")]
+check("hasOwnProperty.call(" in _i18n_lk and "typeof c[key] === 'string'" in _i18n_lk,
+      "i18n: i18nLookup() reads own string keys only", "it can return an inherited member")
+check(_i18n_code.count("i18nLookup(") >= 4 and not re.search(r"I18N\s*\[", _i18n_code),
+      "i18n: window.t, tText and tAttr all look keys up through it — no bare I18N[key] left",
+      "a lookup still indexes the catalog directly")
+# A value a SCRIPT changes after the first walk is translated too, and becomes the new English.
+# The observer did not watch attributes, and tText/tAttr kept the first value they ever saw as the
+# English for good: a poll-updated tooltip stayed English, the next setLang() re-walk wrote the
+# translation of the STALE value over it, and an in-place nodeValue update was reverted to the old
+# text. Measured in a browser against the old and new i18n.js (Spanish catalog): old — tooltip
+# stays English then reverts to "not checked yet", nodeValue 'Reachable' shows 'En línea'; new —
+# both translate, and survive setLang es->es and ->en.
+_i18n_obs = _i18n_code[_i18n_code.index("new MutationObserver"):]
+_i18n_obs = _i18n_obs[:_i18n_obs.index("});", _i18n_obs.index(".observe(")) + 3]
+check("attributes:true" in _i18n_obs and "attributeFilter:ATTRS" in _i18n_obs
+      and re.search(r"m\.type === 'attributes'.*?guardedAbove\(el\).*?tAttr\(el, m\.attributeName\)",
+                    _i18n_obs, re.S) is not None,
+      "i18n: the observer translates a title/placeholder/aria-label a script sets later (guard honoured)",
+      "attribute changes are not observed, so JS-set tooltips stay English")
+_i18n_tt = _i18n_code[_i18n_code.index("function tText("):_i18n_code.index("function tAttr(")]
+_i18n_ta = _i18n_code[_i18n_code.index("function tAttr("):_i18n_code.index("function guardedAbove(")]
+check("cur !== node.__i18nW" in _i18n_tt and "node.__i18nW = out" in _i18n_tt
+      and "cur !== el[wk]" in _i18n_ta and "el[wk] = out" in _i18n_ta,
+      "i18n: a value a script changed since the last translation is re-seeded as the English",
+      "the first value ever seen stays the English, so setLang() writes a stale translation back")
 
 # ── the flash sweep must not close a standing warning ─────────────────────────────────────────
 # chrome.js selected every `.alert-dismissible` in the document at T+6s, and nags.js gives the
