@@ -1589,6 +1589,12 @@ def register_context_processors(app):
             ):
                 nav_remotes = (RemoteServer.query.filter_by(is_local=False)
                                .order_by(RemoteServer.name).all())
+                # Only the hosts this admin's groups grant. manage_remotes() and get_remote() scope
+                # hosts per group, but this list did not, so a host admin granted one remote saw
+                # every other host's name and id in the sidebar on every page.
+                if not current_user.is_superadmin:
+                    _mine = accessible_remote_ids(current_user)
+                    nav_remotes = [r for r in nav_remotes if r.id in _mine]
         except Exception:
             nav_remotes = []
         # The panel host's own remote-row id, so any page can render its "reboot required" banner
@@ -1600,6 +1606,10 @@ def register_context_processors(app):
             ):
                 _lr = RemoteServer.query.filter_by(is_local=True).first()
                 local_remote_id = _lr.id if _lr else None
+                # Same scope as the sidebar: a banner for a host they cannot act on is a dead end.
+                if local_remote_id is not None and not current_user.is_superadmin \
+                        and local_remote_id not in accessible_remote_ids(current_user):
+                    local_remote_id = None
         except Exception:
             local_remote_id = None
         lang = _current_lang()

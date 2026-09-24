@@ -896,6 +896,14 @@ try:
     mrc = client_as(mru_id)
     check("MANAGE_REMOTES user: /remotes renders (200)",
           mrc.get("/remotes").status_code == 200)
+    # ...and the sidebar, on every page, lists only the hosts their groups grant. It listed every
+    # remote's name and id to anyone holding the permission, undoing the per-host scoping above.
+    _nav_html = mrc.get("/account").get_data(as_text=True)
+    check("sidebar: (control) a host admin's sidebar links the host they are granted",
+          ("/remote/%d/manage" % remote_id) in _nav_html, "no granted-host link — the check below is vacuous")
+    check("sidebar: ...and does not name a host they are not granted",
+          ("/remote/%d/manage" % remote2_id) not in _nav_html and "smoke-host-2" not in _nav_html,
+          "the Infrastructure sidebar lists an ungranted host")
     # manage_remotes.html carries no is_local branch any more — six of them tested a flag that is
     # False for every row this route can hand it, including a "This Machine" badge and a "Runs
     # locally on this server" line no visitor was ever shown. That is only true while the route
