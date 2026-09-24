@@ -2853,6 +2853,74 @@ try:
 finally:
     _shutil.rmtree(_sd_dir, ignore_errors=True)
 
+# ── ...and it must write the panel's drop-in where sshd reads one, as the helper does ─────────────
+# Editing sshd_config is a no-op on a stock Ubuntu cloud image: sshd_config Includes sshd_config.d
+# FIRST, sshd keeps the first value it obtains, and 50-cloud-init.conf says PasswordAuthentication
+# yes. The helper writes a 00- drop-in on the panel host; every REMOTE host still got only the
+# sshd_config edit, so bootstrap's own sshd -T check found the hardening not in effect and password
+# SSH stayed open. Driven for real, and compared BYTE FOR BYTE with the helper's own drop-in write
+# from the same starting file — the two transports write one file, so they must agree on it.
+import stat as _stat_dr
+_dr_dir = _tempfile.mkdtemp(prefix="sshd-dropin-")
+try:
+    _dr_cfg = os.path.join(_dr_dir, "sshd_config")
+    _dr_d = os.path.join(_dr_dir, "sshd_config.d")
+    _dr_f = os.path.join(_dr_d, os.path.basename(_priv.SSHD_HARDENING_DROPIN))
+    _dr_cmd = (_priv.remote_command("sshd-set-directive", ["PasswordAuthentication", "no"])
+               .replace(_priv.SSHD_HARDENING_DROPIN, _dr_f)
+               .replace(os.path.dirname(_priv.SSHD_HARDENING_DROPIN), _dr_d)
+               .replace(_priv.SSHD_CONFIG, _dr_cfg))
+    # What an earlier run left: one directive held, a line the drop-in must not keep, a stale value
+    # for the one being set, and whitespace the helper normalises.
+    _dr_prior = (_priv.SSHD_HARDENING_HEADER + "PermitRootLogin   no  \n"
+                 + "Match all\nPasswordAuthentication yes\n")
+    os.makedirs(_dr_d)
+    with open(_dr_cfg, "w", encoding="utf-8") as _fh:
+        _fh.write("Include /etc/ssh/sshd_config.d/*.conf\n#PasswordAuthentication yes\nPort 22\n")
+    with open(_dr_f, "w", encoding="utf-8") as _fh:
+        _fh.write(_dr_prior)
+    _dr_r = _sub.run(["bash", "-c", _dr_cmd], capture_output=True, text=True, timeout=30)
+    _dr_remote = open(_dr_f, encoding="utf-8").read()
+    # The helper, on a module copy whose drop-in path is a second temp file with the same content.
+    _spec_dr = _ilu.spec_from_loader("ph_dropin", _machinery.SourceFileLoader("ph_dropin", _helper_path))
+    _hdr = _ilu.module_from_spec(_spec_dr)
+    _spec_dr.loader.exec_module(_hdr)
+    _hdr.SSHD_HARDENING_DROPIN = os.path.join(_dr_dir, "helper.d", "00-panel-hardening.conf")
+    os.makedirs(os.path.dirname(_hdr.SSHD_HARDENING_DROPIN))
+    with open(_hdr.SSHD_HARDENING_DROPIN, "w", encoding="utf-8") as _fh:
+        _fh.write(_dr_prior)
+    _hdr._write_sshd_hardening_dropin("PasswordAuthentication", "no")
+    _dr_helper = open(_hdr.SSHD_HARDENING_DROPIN, encoding="utf-8").read()
+    check("privileged: the remote sshd-set-directive writes the panel's drop-in, byte-identical "
+          "to the helper's",
+          _dr_r.returncode == 0 and _dr_remote == _dr_helper
+          and "PasswordAuthentication no\n" in _dr_remote and "Match" not in _dr_remote
+          and _stat_dr.S_IMODE(os.stat(_dr_f).st_mode) == 0o600,
+          "rc=%d remote=%r helper=%r err=%r" % (_dr_r.returncode, _dr_remote, _dr_helper,
+                                               _dr_r.stderr[:120]))
+    check("privileged: ...and it keeps the directive an earlier run held (positive control)",
+          "PermitRootLogin no\n" in _dr_remote, repr(_dr_remote))
+    check("privileged: the remote and helper drop-in path and header are the same",
+          (_priv.SSHD_HARDENING_DROPIN, _priv.SSHD_HARDENING_HEADER)
+          == (_helper.SSHD_HARDENING_DROPIN, _helper.SSHD_HARDENING_HEADER))
+    # A host whose sshd_config does NOT Include sshd_config.d gets no inert file that looks like
+    # hardening — the helper's rule too.
+    _dr_d2 = os.path.join(_dr_dir, "noinclude.d")
+    _dr_cfg2 = os.path.join(_dr_dir, "sshd_config_noinclude")
+    with open(_dr_cfg2, "w", encoding="utf-8") as _fh:
+        _fh.write("#PasswordAuthentication yes\nPort 22\n")
+    _dr_cmd2 = (_priv.remote_command("sshd-set-directive", ["PasswordAuthentication", "no"])
+                .replace(_priv.SSHD_HARDENING_DROPIN, os.path.join(_dr_d2, "00-x.conf"))
+                .replace(os.path.dirname(_priv.SSHD_HARDENING_DROPIN), _dr_d2)
+                .replace(_priv.SSHD_CONFIG, _dr_cfg2))
+    _dr_r2 = _sub.run(["bash", "-c", _dr_cmd2], capture_output=True, text=True, timeout=30)
+    check("privileged: ...and a host with no Include gets no drop-in, only the sshd_config edit",
+          _dr_r2.returncode == 0 and not os.path.exists(_dr_d2)
+          and "PasswordAuthentication no" in open(_dr_cfg2, encoding="utf-8").read(),
+          "rc=%d" % _dr_r2.returncode)
+finally:
+    _shutil.rmtree(_dr_dir, ignore_errors=True)
+
 # A comment with a space must survive shell-quoting on the remote side.
 check("privileged: remote rendering quotes a comment containing a space",
       _priv.remote_command("ufw-allow-port", ["27015", "cod server"])

@@ -147,6 +147,13 @@ SSHD_DIRECTIVES = {
     "PasswordAuthentication": ("no", "yes"),
 }
 SSHD_CONFIG = "/etc/ssh/sshd_config"
+# The panel's own hardening drop-in, and its header — both mirror tools/panel-helper exactly (a unit
+# gate compares them), because the helper writes this file on the panel host and the remote
+# rendering of sshd-set-directive writes the same file on every other host.
+SSHD_HARDENING_DROPIN = "/etc/ssh/sshd_config.d/00-panel-hardening.conf"
+SSHD_HARDENING_HEADER = (
+    "# Managed by linuxgsm-panel. Sorts before the distro's drop-ins on purpose:\n"
+    "# sshd uses the FIRST value it obtains for a keyword.\n")
 SWAPFILE = "/swapfile"
 SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
 FSTAB = "/etc/fstab"
@@ -1021,6 +1028,37 @@ STEAM_DUMP_SLOTS = ("/tmp/dumps",) + tuple("/tmp/dumps%02d" % i  # nosec B108 - 
 _STEAM_DUMP_SLOTS_SH = " ".join(shlex.quote(p) for p in STEAM_DUMP_SLOTS)
 
 
+def _sshd_hardening_dropin_remote(key, value):
+    """The remote half of do_sshd_set_directive's drop-in write, as shell. Appended to the
+    sshd_config edit in sshd-set-directive's remote rendering.
+
+    Editing sshd_config alone is a no-op on a stock Ubuntu cloud image: its sshd_config Includes
+    sshd_config.d as the FIRST directive, sshd keeps the first value it obtains, and
+    50-cloud-init.conf says `PasswordAuthentication yes`. The helper has written a 00- drop-in on
+    the panel host since that was found, but every REMOTE host — the normal case — still got only
+    the sshd_config edit, so bootstrap's sshd -T check reported "NOT IN EFFECT" and left password
+    SSH open. Same rules as the helper: only where sshd_config Includes sshd_config.d, a
+    read-modify-write that keeps only SSHD_DIRECTIVES keys (the last value per key, as the helper's
+    dict does), sorted in byte order, the helper's header, mode 0600, replaced atomically. key and
+    value are the closed SSHD_DIRECTIVES pair check_args enforced."""
+    d = os.path.dirname(SSHD_HARDENING_DROPIN)
+    return (
+        "; if grep -qiE '^[[:space:]]*Include[[:space:]]+[^[:space:]]*sshd_config[.]d' %(cfg)s; "
+        "then d=%(d)s; f=%(f)s; "
+        "{ [ -d \"$d\" ] || mkdir -m 755 \"$d\"; } && t=$(mktemp \"$d/.panel-XXXXXX\") && "
+        "{ printf '%%s' %(hdr)s; "
+        "{ [ -f \"$f\" ] && cat \"$f\"; } | awk -v k=%(k)s -v v=%(v)s -v ok=%(ok)s "
+        "'BEGIN { n = split(ok, a, \" \"); for (i = 1; i <= n; i++) want[a[i]] = 1 } "
+        "NF >= 2 && ($1 in want) { key = $1; sub(/^[ \\t]*[^ \\t]+[ \\t]+/, \"\"); "
+        "sub(/[ \\t\\r]+$/, \"\"); held[key] = $0 } "
+        "END { held[k] = v; for (x in held) print x \" \" held[x] }' | LC_ALL=C sort; } "
+        "> \"$t\" && chmod 600 \"$t\" && mv -f \"$t\" \"$f\"; fi"
+        % {"cfg": shlex.quote(SSHD_CONFIG), "d": shlex.quote(d),
+           "f": shlex.quote(SSHD_HARDENING_DROPIN), "hdr": shlex.quote(SSHD_HARDENING_HEADER),
+           "k": shlex.quote(key), "v": shlex.quote(value),
+           "ok": shlex.quote(" ".join(sorted(SSHD_DIRECTIVES)))})
+
+
 _REMOTE_ACTIONS = {
     "sshd-backup-dropin": lambda a: "[ -f %s ] && cp -f %s %s || true"
                           % (shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN),
@@ -1128,7 +1166,8 @@ _REMOTE_ACTIONS = {
         % (a[0], shlex.quote(SSHD_CONFIG),
            a[0], a[0], a[1], shlex.quote(SSHD_CONFIG),
            shlex.quote(SSHD_CONFIG), shlex.quote(SSHD_CONFIG),
-           shlex.quote(a[0]), shlex.quote(a[1]), shlex.quote(SSHD_CONFIG))),
+           shlex.quote(a[0]), shlex.quote(a[1]), shlex.quote(SSHD_CONFIG))
+        + _sshd_hardening_dropin_remote(a[0], a[1])),
     "create-swapfile": lambda a: (
         "fallocate -l 2G %s && chmod 600 %s && mkswap %s && swapon %s && "
         "{ grep -q %s %s || echo %s >> %s ; }"
