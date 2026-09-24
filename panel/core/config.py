@@ -72,6 +72,46 @@ _cfg_cache = {"key": None, "data": {}}
 _write_lock = threading.RLock()
 
 
+class ConfigUnreadable(Exception):
+    """config.json EXISTS but could not be read or parsed into an object, so a write was refused.
+
+    Its own exception because the only safe response is to leave the file alone. Every writer
+    here is read-modify-write, and a read of an unusable file returns bare DEFAULT_CONFIG; saving
+    that replaced the operator's config with the defaults plus one key — the encrypted backup
+    passphrase, the login whitelist, the notification tokens, the bind and the port all gone, on
+    the next background tick after one trailing comma in a hand edit."""
+
+
+class UnreadableConfig(dict):
+    """The defaults load_config() hands back when config.json is THERE but unusable.
+
+    A dict like any other, so every reader keeps working on defaults exactly as before. What it
+    adds is provenance that travels with the value: save_config refuses to write one back, and a
+    caller that must not act on defaults (the backup passphrase, the health check) can ask
+    is_unreadable() instead of reading "not configured" out of a file it could not read. Carried
+    on the value rather than re-checked on disk, because the read that failed may have been a
+    transient OSError that a second look would not see."""
+
+
+def is_unreadable(cfg):
+    """True when `cfg` came from a config.json that exists but could not be read."""
+    return isinstance(cfg, UnreadableConfig)
+
+
+def config_unreadable():
+    """True when config.json EXISTS on disk now but does not parse into an object.
+
+    Not "load_config would return defaults": a host with no config.json yet is a normal state and
+    defaults really are the answer there."""
+    try:
+        with open(CONFIG_FILE) as f:
+            return not isinstance(json.load(f), dict)
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return True
+
+
 def load_config():
     config = dict(DEFAULT_CONFIG)
     try:
@@ -93,8 +133,11 @@ def load_config():
             _cfg_cache["data"] = loaded
             _cfg_cache["key"] = key
         config.update(copy.deepcopy(_cfg_cache["data"]))
+    except FileNotFoundError:
+        _cfg_cache["key"] = None   # no config.json yet: defaults ARE the configuration
     except (json.JSONDecodeError, ValueError, OSError):
-        _cfg_cache["key"] = None   # missing/unreadable/not-an-object → defaults, drop stale cache
+        _cfg_cache["key"] = None   # unreadable/not-an-object → defaults, drop stale cache
+        return UnreadableConfig(config)   # ...marked, so nothing writes them back over the file
     return config
 
 
@@ -105,6 +148,15 @@ def save_config(config):
     # A UNIQUE temp file per write (mkstemp) means two concurrent writers never clobber a shared
     # temp; the lock serialises the replace. fsync + os.replace = atomic on the same FS.
     with _write_lock:
+        # Refuse to replace a config.json that could not be read. The dict being saved was built
+        # from defaults — either it says so itself (is_unreadable), or the file is unparseable on
+        # disk right now, in which case no caller can have read it. The file is left exactly as
+        # it is, so a hand-edit mistake stays a one-character fix instead of a lost config.
+        if is_unreadable(config) or config_unreadable():
+            _log.error("config.json exists but could not be read; refusing to overwrite it "
+                       "with defaults — fix or restore %s", CONFIG_FILE)
+            raise ConfigUnreadable("config.json exists but could not be read; it was not "
+                                   "overwritten — fix or restore it")
         fd, tmp = tempfile.mkstemp(dir=str(CONFIG_FILE.parent), prefix=".config-", suffix=".tmp")
         os.close(fd)   # we only wanted a unique name; reopen by path (avoids eventlet fd wrapping)
         try:
@@ -129,6 +181,11 @@ def update_config(mutator):
     the dict in place. Returns the saved config."""
     with _write_lock:
         cfg = load_config()
+        if is_unreadable(cfg):
+            # Before the mutator, not only in save_config: a mutator can copy the dict, and the
+            # copy would no longer carry the mark.
+            raise ConfigUnreadable("config.json exists but could not be read; it was not "
+                                   "overwritten — fix or restore it")
         mutator(cfg)
         save_config(cfg)
         return cfg

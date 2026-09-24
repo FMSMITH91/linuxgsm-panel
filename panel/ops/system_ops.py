@@ -2306,11 +2306,16 @@ def panel_diagnostics():
             "sudoers grant cannot be narrowed. Re-run install.sh as root to place it.")
 
     # 5. config loads
+    # load_config() never raises: an unreadable file comes back as defaults, MARKED. The except
+    # alone reported "loads cleanly" for any corrupt file, because it could never fire.
     try:
-        _cfg.load_config()
-        add("Configuration", "ok", "config.json loads cleanly.")
+        _unreadable = _cfg.is_unreadable(_cfg.load_config())
     except Exception:
+        _unreadable = True
+    if _unreadable:
         add("Configuration", "fail", "config.json could not be read or parsed.")
+    else:
+        add("Configuration", "ok", "config.json loads cleanly.")
 
     # 6. disk space
     try:

@@ -312,6 +312,61 @@ try:
     _cfg_tmp.write_text("null", encoding="utf-8")
     eq("config: ...and a non-object falls back to the documented default",
        _port(), _cfgmod.DEFAULT_CONFIG["port"])
+
+    # ── ...but defaults read from an unreadable file must never be WRITTEN back over it ──────
+    # Every writer is read-modify-write. update_config/save_config replaced a config.json with a
+    # trailing comma by DEFAULT_CONFIG plus one key, on the next background tick: the encrypted
+    # backup passphrase, the whitelist, the tokens, the bind and the port all gone for good.
+    _bad = '{"port": 8443, "backup_passphrase": "gAAAA-kept",}'   # one trailing comma
+
+    def _raises_unreadable(fn):
+        try:
+            fn()
+        except _cfgmod.ConfigUnreadable:
+            return True
+        except Exception as _e:
+            return "RAISED %s" % type(_e).__name__
+        return False
+
+    _cfg_tmp.write_text(_bad, encoding="utf-8")
+    _cfgmod._cfg_cache["key"] = None
+    check("config: update_config REFUSES an unparseable config.json",
+          _raises_unreadable(lambda: _cfgmod.update_config(
+              lambda c: c.update({"game_schedules": {"x": 1}}))) is True)
+    check("config: ...and leaves the file byte-for-byte as the operator wrote it",
+          _cfg_tmp.read_text(encoding="utf-8") == _bad, _cfg_tmp.read_text(encoding="utf-8")[:80])
+    _cfgmod._cfg_cache["key"] = None
+    _loaded_bad = _cfgmod.load_config()
+    check("config: the direct load_config()+save_config() path refuses too",
+          _raises_unreadable(lambda: _cfgmod.save_config(_loaded_bad)) is True
+          and _cfg_tmp.read_text(encoding="utf-8") == _bad)
+    check("config: a COPY of the defaults (the mark lost) is refused on the file's own state",
+          _raises_unreadable(lambda: _cfgmod.save_config(dict(_loaded_bad))) is True
+          and _cfg_tmp.read_text(encoding="utf-8") == _bad)
+    check("config: load_config still answers defaults for it, marked unreadable",
+          _loaded_bad.get("port") == _cfgmod.DEFAULT_CONFIG["port"]
+          and _cfgmod.is_unreadable(_loaded_bad))
+    # A read that failed once (a transient OSError) and a file that reads fine by the time of the
+    # write: the dict is still defaults, and the mark on it is the only thing that says so.
+    _cfg_tmp.write_text('{"port": 8443, "site_title": "Mine"}', encoding="utf-8")
+    check("config: defaults from a FAILED read are refused even once the file reads again",
+          _raises_unreadable(lambda: _cfgmod.save_config(_loaded_bad)) is True
+          and '"Mine"' in _cfg_tmp.read_text(encoding="utf-8"))
+    # Positive controls: a readable file and a missing file still write normally.
+    _cfgmod._cfg_cache["key"] = None
+    _cfgmod.update_config(lambda c: c.update({"ssh_timeout": 17}))
+    _cfgmod._cfg_cache["key"] = None
+    _after = _cfgmod.load_config()
+    check("config: a readable file is still updated, its other keys kept",
+          _after.get("ssh_timeout") == 17 and _after.get("site_title") == "Mine"
+          and _after.get("port") == 8443 and not _cfgmod.is_unreadable(_after), repr(_after)[:120])
+    _cfg_tmp.unlink()
+    _cfgmod._cfg_cache["key"] = None
+    check("config: a MISSING config.json is not unreadable (a fresh install)",
+          not _cfgmod.is_unreadable(_cfgmod.load_config()) and not _cfgmod.config_unreadable())
+    _cfgmod.update_config(lambda c: c.update({"site_title": "Fresh"}))
+    check("config: ...and update_config creates it",
+          _cfg_tmp.exists() and '"Fresh"' in _cfg_tmp.read_text(encoding="utf-8"))
 finally:
     _cfgmod.CONFIG_FILE = _cfg_file_saved
     _cfgmod._cfg_cache["key"] = None

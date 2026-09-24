@@ -79,7 +79,7 @@ from werkzeug.exceptions import HTTPException
 from panel.security.auth import (ALL_PERMISSIONS, client_ip, get_user_permissions, init_auth,
     log_action, strip_legacy_superadmin_grants)
 from panel.core.config import (
-    DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config,
+    DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
     encrypt_secret, is_encrypted, harden_data_permissions,
 )
 from panel.services import notifications
@@ -623,8 +623,16 @@ def _security_whitelist_remove(value):
 def _apply_whitelist_to_fail2ban():
     """Rewrite the panel-login jail so its ignoreip matches the current whitelist (no-op if the jail
     is already correct). Best-effort and panel-host-only — for remotes see _apply_whitelist_to_remotes."""
+    # ensure_panel_fail2ban REWRITES the jail. From an unreadable config.json it would write the
+    # defaults — no whitelist and port 5000 — so the admin's own whitelisted IP becomes bannable
+    # and the jail watches a port nobody listens on. Leave the jail as it is until the file reads.
+    _cfg = load_config()
+    if is_unreadable(_cfg):
+        _log.warning("config.json could not be read; the fail2ban jail was left as it is")
+        return False, "config.json could not be read; fail2ban was left as it is"
     try:
-        return so.ensure_panel_fail2ban(AUTH_LOG_PATH, load_config().get("port", 5000), _security_whitelist())
+        return so.ensure_panel_fail2ban(AUTH_LOG_PATH, _cfg.get("port", 5000),
+                                        list(_cfg.get("security_whitelist", []) or []))
     except Exception:
         _log.debug("applying whitelist to fail2ban failed", exc_info=True)
         return False, "could not update fail2ban"
@@ -635,7 +643,13 @@ def _apply_whitelist_to_remotes(app, unban_ip=None):
     banned on a remote either (parity with the panel host). Best-effort and backgrounded — one SSH
     round-trip per remote. Needs its own app context (runs from a background thread)."""
     with app.app_context():
-        wl = _security_whitelist()
+        _cfg = load_config()
+        if is_unreadable(_cfg):
+            # The same reason as _apply_whitelist_to_fail2ban: an empty list pushed from defaults
+            # would strip the whitelist out of every remote's jail.
+            _log.warning("config.json could not be read; remote fail2ban whitelists left as they are")
+            return
+        wl = list(_cfg.get("security_whitelist", []) or [])
         for remote in RemoteServer.query.filter_by(is_local=False).all():
             try:
                 remote_set_fail2ban_ignoreip(remote, wl, unban_ip=unban_ip)
@@ -2371,8 +2385,10 @@ if __name__ == "__main__":
     # change) so it's protected by default — no manual "enable" click. Backgrounded so it never
     # delays startup, and idempotent so a healthy jail just costs a quick status read.
     def _f2b_autostart():
+        # Through _apply_whitelist_to_fail2ban, not a direct ensure_panel_fail2ban: that is where
+        # an unreadable config.json is refused, instead of rewriting the jail from defaults.
         try:
-            _ok, _msg = so.ensure_panel_fail2ban(AUTH_LOG_PATH, port, _security_whitelist())
+            _ok, _msg = _apply_whitelist_to_fail2ban()
             _log.info("panel fail2ban: %s", _msg)
         except Exception:
             _log.debug("panel fail2ban autostart failed", exc_info=True)
