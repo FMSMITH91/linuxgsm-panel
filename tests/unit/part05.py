@@ -2486,6 +2486,107 @@ check("npm-install-global: installs the pinned spec with --ignore-scripts, in bo
       repr(_priv.tool_argv("npm-install-global", ["gamedig"])))
 check("npm-install-global: ...and refuses `npm` itself",
       _ufw_raises_verb(lambda: _priv.check_args("npm-install-global", ["npm"])))
+
+# ── NodeSource: its repository, with the signing key pinned — never its setup script run as root ──
+# ensure_gamedig downloaded https://deb.nodesource.com/setup_lts.x and ran it as root with nothing
+# checked, so whoever could serve that URL ran code as root on every host installing Node.
+# nodesource_setup fetches only the signing key, and trusts it only if the file holds exactly ONE
+# primary key with the pinned fingerprint. Driven in bash with curl, dpkg and apt-get as shell
+# functions and the three destinations in a temp dir, against throwaway keys made here.
+import shlex as _shlex_ns
+import shutil as _shutil_ns
+import subprocess as _sp_ns
+
+
+def _ns_fn(name):
+    _i = _ntc_sh.index("\n%s() {" % name)
+    return _ntc_sh[_i:_ntc_sh.index("\n}\n", _i) + 3]
+
+
+_ns_code_lines = [_l for _l in _ntc_sh.splitlines() if not _l.lstrip().startswith("#")]
+_ns_code = "\n".join(_ns_code_lines)
+check("install.sh: no downloaded script is run — NodeSource's setup script is gone",
+      "setup_lts.x" not in _ns_code and not _re_ntc.search(r'bash "\$\{?ns\}?"', _ns_code)
+      and not _re_ntc.search(r"\bcurl\b[^\n]*\|\s*(sudo\s+)?(ba)?sh\b", _ns_code))
+check("install.sh: ensure_gamedig configures NodeSource through the pinned-key setup",
+      any(_re_ntc.fullmatch(r'\s*if nodesource_setup "\$\{S\}"; then', _l)
+          for _l in _ntc_fn.splitlines()))
+if not _shutil_ns.which("gpg"):
+    skip("install.sh: NodeSource key pinning, driven", "no gpg on this machine")
+else:
+    _ns_dir = _tempfile.mkdtemp(prefix="panel-nodesource-")
+    try:
+        _ns_gh = os.path.join(_ns_dir, "gnupg")
+        os.mkdir(_ns_gh, 0o700)
+
+        def _ns_gpg(*a):
+            return _sp_ns.run(["gpg", "--batch", "--homedir", _ns_gh] + list(a),
+                              capture_output=True, text=True, timeout=60)
+
+        for _uid in ("ns-a <a@example.invalid>", "ns-b <b@example.invalid>"):
+            _ns_gpg("--pinentry-mode", "loopback", "--passphrase", "", "--quick-gen-key", _uid,
+                    "ed25519", "sign", "never")
+        _ns_fprs, _ns_after_pub = [], False
+        for _l in _ns_gpg("--with-colons", "--list-keys").stdout.splitlines():
+            if _l.startswith("pub:"):
+                _ns_after_pub = True
+            elif _l.startswith("fpr:") and _ns_after_pub:
+                _ns_fprs.append(_l.split(":")[9])
+                _ns_after_pub = False
+        _ns_keys = {}
+        for _nm, _which in (("a", _ns_fprs[:1]), ("ab", _ns_fprs[:2])):
+            _ns_keys[_nm] = os.path.join(_ns_dir, _nm + ".asc")
+            with open(_ns_keys[_nm], "w") as _fh:
+                _fh.write(_ns_gpg("--armor", "--export", *_which).stdout)
+        _ns_keys["empty"] = os.path.join(_ns_dir, "empty.asc")
+        open(_ns_keys["empty"], "w").close()
+        _ns_globals = "\n".join(_l for _l in _ns_code_lines if _l.startswith("NODESOURCE_"))
+
+        def _ns_run(keyfile, fpr):
+            _out = os.path.join(_ns_dir, "out")
+            _shutil_ns.rmtree(_out, ignore_errors=True)
+            os.makedirs(os.path.join(_out, "sources.list.d"))
+            os.makedirs(os.path.join(_out, "preferences.d"))
+            _q = _shlex_ns.quote
+            _script = "\n".join([
+                _ns_globals, _ns_fn("nodesource_key_ok"), _ns_fn("nodesource_setup"),
+                "NODESOURCE_KEY_FPR=%s" % _q(fpr),
+                "NODESOURCE_KEYRING=%s" % _q(os.path.join(_out, "keyrings", "nodesource.gpg")),
+                "NODESOURCE_SOURCES=%s" % _q(os.path.join(_out, "sources.list.d", "nodesource.sources")),
+                "NODESOURCE_PREFS=%s" % _q(os.path.join(_out, "preferences.d", "nodejs")),
+                "dpkg() { echo amd64; }",
+                'curl() { cp %s "${@: -1}"; }' % _q(keyfile),
+                'apt-get() { echo "$*" >> %s; }' % _q(os.path.join(_out, "apt.log")),
+                "nodesource_setup ''; echo \"RC=$?\"",
+            ])
+            _p = _sp_ns.run(["bash", "-c", _script], capture_output=True, text=True, timeout=120)
+
+            def _rd(*parts):
+                try:
+                    with open(os.path.join(_out, *parts), "rb") as _f:
+                        return _f.read()
+                except OSError:
+                    return None
+            return (_p.stdout.strip().endswith("RC=0"), _rd("keyrings", "nodesource.gpg"),
+                    _rd("sources.list.d", "nodesource.sources"), _rd("preferences.d", "nodejs"),
+                    _rd("apt.log"), _p.stdout[-300:] + _p.stderr[-300:])
+
+        _ok, _kr, _src, _pref, _apt, _dbg = _ns_run(_ns_keys["a"], _ns_fprs[0])
+        check("nodesource: the pinned key is trusted, the source written, apt updated (positive control)",
+              _ok and bool(_kr) and _apt is not None and b"update" in _apt
+              and _src is not None and b"URIs: https://deb.nodesource.com/node_" in _src
+              and b"Architectures: amd64\n" in _src
+              and ("Signed-By: %s" % os.path.join(_ns_dir, "out", "keyrings", "nodesource.gpg")).encode() in _src
+              and _pref == b"Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n",
+              _dbg)
+        for _nm, _keyf, _fpr in (("a key that is not the pinned one", _ns_keys["a"], _ns_fprs[1]),
+                                 ("the pinned key plus a second key", _ns_keys["ab"], _ns_fprs[0]),
+                                 ("an empty download", _ns_keys["empty"], _ns_fprs[0])):
+            _ok, _kr, _src, _pref, _apt, _dbg = _ns_run(_keyf, _fpr)
+            check("nodesource: %s is refused, and nothing is trusted or written" % _nm,
+                  not _ok and _kr is None and _src is None and _pref is None and _apt is None, _dbg)
+    finally:
+        _shutil_ns.rmtree(_ns_dir, ignore_errors=True)
 check("helper: every write destination has a content rule (a new one cannot inherit 'anything')",
       set(_helper.WRITE_TARGETS) == set(_helper.WRITE_CONTENT),
       "targets without a rule: %s" % sorted(set(_helper.WRITE_TARGETS) - set(_helper.WRITE_CONTENT)))
