@@ -299,8 +299,13 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
     answer for any port where a person authenticates — SSH, RCON, a game's admin port — and the
     wrong one for gameplay traffic, where six connections in half a minute is a quiet evening.
 
-    Rules are per (port, proto), so this deletes the plain `allow` first: leaving it in place would
-    keep matching first and the limit would never be reached."""
+    ufw stops at the FIRST rule a connection matches, so a limit only works when nothing that
+    allows the port sits above it. `ufw limit N/tcp` rewrites an existing `N/tcp` allow in place.
+    A BARE `N` allow (tcp+udp — how the panel opens every game port) is a different rule to ufw:
+    it used to be left where it was, ahead of the appended limit, and this reported the port
+    limited while every connection matched the allow. That allow is now split — the other
+    protocol re-allowed with its comment, the bare rule removed — and the result is READ BACK:
+    success means the first rule for N/proto is the LIMIT."""
     try:
         port = _ufw_port_int(port)
     except (TypeError, ValueError):
@@ -310,18 +315,78 @@ def remote_ufw_limit_port(server, port, protocol="tcp", limit=True):
         # `ufw limit` takes one rule; "both" would need two and they would report separately.
         return False, "Rate limiting needs a single protocol (tcp or udp)"
     spec = "%d/%s" % (port, proto)
+    before, _, brc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
+    before = (before or "") if brc == 0 else ""
     if not limit:
-        out, err, rc = _core.run_privileged(server, "ufw-delete-limit-port", [spec], timeout=15)
+        # "Remove the rate limit", not "close the port": the LIMIT rule is what lets N/proto in,
+        # and deleting it closed a port the operator only wanted un-throttled — including the
+        # half of a game port the split below moved onto it. `ufw allow N/proto` rewrites the
+        # LIMIT in place. Only when there IS one: otherwise this would open a closed port.
+        if brc != 0:
+            return False, ("Could not read the firewall to find the rate limit on %s, so nothing "
+                           "was changed." % spec)
+        if not any(r["to"] == spec and r["action"] == "LIMIT" for r in _ufw_public_rules(before)):
+            return False, "%s has no rate limit to remove." % spec
+        out, err, rc = _core.run_privileged(server, "ufw-allow-port", [spec, ""], timeout=15)
         if rc == 0:
-            return True, "Rate limit removed from %s" % spec
+            return True, "Rate limit removed from %s (it stays open)" % spec
         return False, err or out or "Unknown error"
-    # Drop the unlimited allow so the limit rule is the one that matches. A missing rule makes ufw
-    # exit non-zero ("Could not delete non-existent rule"), which is fine and not worth reporting.
-    _core.run_privileged(server, "ufw-delete-allow-proto-port", [proto, str(port)], timeout=15)
     out, err, rc = _core.run_privileged(server, "ufw-limit-port", [spec], timeout=15)
-    if rc == 0:
-        return True, "%s is now rate limited (6 connections per 30s per address)" % spec
-    return False, err or out or "Unknown error"
+    if rc != 0:
+        return False, err or out or "Unknown error"
+    # A bare allow for this port covers BOTH protocols and matches ahead of the limit. Keep the
+    # other protocol open under the same comment, THEN drop the bare rule (this protocol is
+    # already covered by the limit above, so nothing is ever left unallowed).
+    other = "udp" if proto == "tcp" else "tcp"
+    for r in _ufw_public_rules(before):
+        if r["to"] == str(port) and r["action"] == "ALLOW":
+            _cmt = re.sub(r"[^A-Za-z0-9 _.-]", "", r["comment"])[:60]
+            _core.run_privileged(server, "ufw-allow-port", ["%d/%s" % (port, other), _cmt], timeout=15)
+            _core.run_privileged(server, "ufw-delete-allow-port", [str(port)], timeout=15)
+            break
+    after, _, arc = _core.run_privileged(server, "ufw-status", ["numbered"], timeout=15)
+    if arc != 0 or "Status:" not in (after or ""):
+        return False, ("The limit for %s was added, but the firewall could not be read back to "
+                       "confirm it is the rule connections meet first." % spec)
+    if not firewall._ufw_is_active(after):
+        return False, ("The limit for %s is stored, but UFW is not active on this host, so "
+                       "nothing is limited until it is enabled." % spec)
+    first = _ufw_first_public_rule(after, port, proto)
+    if first is None or first["action"] != "LIMIT":
+        return False, ("%s is still matched first by `%s`, so the limit is never reached — remove "
+                       "or narrow that rule." % (spec, first["detail"] if first else "nothing"))
+    return True, "%s is now rate limited (6 connections per 30s per address)" % spec
+
+
+# `To` column of a port rule: a port or lo:hi range, optionally /tcp or /udp (none = both).
+_UFW_TO_PORT_RE = re.compile(r"^(\d{1,5})(?::(\d{1,5}))?(?:/(tcp|udp))?\Z")
+
+
+def _ufw_public_rules(status_out):
+    """The IPv4 rules in `ufw status [numbered]` output that govern traffic from ANYWHERE —
+    inbound, on no particular interface — in the order ufw evaluates them. Each is
+    _parse_ufw_rule's dict plus its `detail` text. Source-restricted rules, interface rules and
+    the (v6) twins are left out: none of them decides what the public meets first."""
+    rules = []
+    for line in (status_out or "").splitlines():
+        m = re.match(r"\s*\[\s*\d+\]\s*(.*)\Z", line)
+        detail = (m.group(1) if m else line).strip()
+        p = firewall._parse_ufw_rule(detail)
+        if (not p["action"] or p["v6"] or p["iface"] or p["direction"] not in ("", "IN")
+                or p["from"].lower() != "anywhere"):
+            continue
+        p["detail"] = re.sub(r"\s{2,}", "  ", detail)
+        rules.append(p)
+    return rules
+
+
+def _ufw_first_public_rule(status_out, port, proto):
+    """The first public rule a `proto` connection to `port` meets, or None."""
+    for p in _ufw_public_rules(status_out):
+        m = _UFW_TO_PORT_RE.match(p["to"])
+        if m and int(m.group(1)) <= port <= int(m.group(2) or m.group(1)) and m.group(3) in (None, proto):
+            return p
+    return None
 
 
 def remote_ufw_close_port(server, port, protocol=None):

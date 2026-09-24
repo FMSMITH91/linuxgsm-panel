@@ -1188,6 +1188,70 @@ try:
     check("public ssh: ...and an existing 22/tcp allow is turned into the limit (positive control)",
           _ok is True and _rules == [("22/tcp", "LIMIT")], "ok=%r rules %r" % (_ok, _rules))
 
+    # ── rate limiting a port the panel itself opened ─────────────────────────────────────────
+    # Every game port is opened BARE (`ufw allow 28016 comment rustserver`, tcp+udp). The limit
+    # path deleted only `allow proto tcp port 28016`, which ufw does not match against a bare rule,
+    # so the limit was appended after the ALLOW and the answer was "28016/tcp is now rate limited".
+    def _fake_ufw_n(rules):
+        """Numbered listing, comments included; same in-place/append/exact-delete semantics."""
+        def _rp(s, v, a=(), **k):
+            a = list(a)
+            if v == "ufw-status":
+                return ("Status: active\n\n     To                         Action      From\n"
+                        "     --                         ------      ----\n"
+                        + "".join("[%2d] %-26s %-11s Anywhere%s\n"
+                                  % (i + 1, r[0], r[1] + " IN", (" # " + r[2]) if r[2] else "")
+                                  for i, r in enumerate(rules)), "", 0)
+            want = {"ufw-limit-port": "LIMIT", "ufw-allow-port": "ALLOW"}.get(v)
+            if want:
+                for i, r in enumerate(rules):
+                    if r[0] == a[0]:
+                        rules[i] = (r[0], want, a[1] if len(a) > 1 else "")
+                        return ("Rule updated", "", 0)
+                rules.append((a[0], want, a[1] if len(a) > 1 else ""))
+                return ("Rule added", "", 0)
+            if v in ("ufw-delete-allow-port", "ufw-delete-limit-port"):
+                act = "ALLOW" if v == "ufw-delete-allow-port" else "LIMIT"
+                hit = [r for r in rules if r[0] == a[0] and r[1] == act]
+                for r in hit:
+                    rules.remove(r)
+                return (("Rule deleted", "", 0) if hit else ("Could not delete non-existent rule", "", 1))
+            return ("", "", 0)
+        _sm_core.run_privileged = _rp
+
+    def _first_for(rules, spec, proto):
+        """What a `proto` connection to `spec` meets first, as ufw evaluates it."""
+        for r in rules:
+            if r[0] in (spec, "%s/%s" % (spec, proto)):
+                return r[1]
+        return None
+    _rules = [("28016", "ALLOW", "rustserver")]
+    _fake_ufw_n(_rules)
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: a port opened bare (tcp+udp) is really limited for tcp",
+          _ok is True and _first_for(_rules, "28016", "tcp") == "LIMIT",
+          "ok=%r msg=%r rules %r — the bare ALLOW still meets every connection first"
+          % (_ok, _msg, _rules))
+    check("ufw limit: ...and its udp half stays open, under the same comment",
+          _first_for(_rules, "28016", "udp") == "ALLOW" and ("28016/udp", "ALLOW", "rustserver") in _rules,
+          "rules %r" % (_rules,))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=False)
+    check("ufw limit: removing the limit leaves the port open, un-throttled",
+          _ok is True and _first_for(_rules, "28016", "tcp") == "ALLOW", "ok=%r rules %r" % (_ok, _rules))
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28017, "tcp", limit=False)
+    check("ufw limit: ...and 'remove' on a port with no limit opens nothing",
+          _ok is False and not any(r[0].startswith("28017") for r in _rules), "ok=%r rules %r" % (_ok, _rules))
+    _rules = [("28000:28100/tcp", "ALLOW", "")]
+    _fake_ufw_n(_rules)
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: a rule it cannot remove that still matches first is reported, not hidden",
+          _ok is False and "28000:28100/tcp" in _msg, "ok=%r msg=%r" % (_ok, _msg))
+    _rules = []
+    _fake_ufw_n(_rules)
+    _ok, _msg = _sm_hosts.remote_ufw_limit_port(object(), 28016, "tcp", limit=True)
+    check("ufw limit: ...while a port with nothing ahead of it is limited (positive control)",
+          _ok is True and _rules == [("28016/tcp", "LIMIT", "")], "ok=%r msg=%r rules %r" % (_ok, _msg, _rules))
+
     # ── the unblock that always said it worked ───────────────────────────────────────────────
     # remote_ufw_undeny_ip discarded the verb's result and returned True unconditionally, while
     # remote_ufw_deny_ip six lines above it checks rc. Its LOCAL twin (system_ops.ufw_undeny_ip)
