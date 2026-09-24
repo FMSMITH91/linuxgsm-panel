@@ -1086,6 +1086,21 @@ try:
           "(positive control)",
           _osu_a["running"] is False and _osu_b["done"] is True and _osu_b["rc"] == 0,
           "%r %r" % (_osu_a, _osu_b))
+    # A log that does not exist is an ANSWER: an update the panel did not start ("already running
+    # — watching it") never writes /run/panel-os-update.log, tail exits 1 naming it, and every poll
+    # read as unread — "Lost contact with the host" about a host answering every call.
+    _osu_nofile = ("", "tail: cannot open '%s' for reading: No such file or directory"
+                   % _sm_hosts._priv.OS_UPDATE_LOG, 1)
+    _sm_core.run_privileged = _osu_stub(_osu_nofile, 0)
+    _osu = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: a missing log file is an answered read, and apt is still asked",
+          not _osu.get("unread") and _osu["running"] is True and _osu["log"] == ""
+          and _osu["done"] is False, repr(_osu))
+    # ...while sudo refusing (also exit 1, and no path in its message) stays unread.
+    _sm_core.run_privileged = _osu_stub(("", "sudo: a password is required", 1), 0)
+    _osu = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: ...while a refusal with the same exit code is still unread (control)",
+          _osu.get("unread") is True and _osu["running"] is None, repr(_osu))
 finally:
     _sm_core.run_privileged = _osu_saved
 
