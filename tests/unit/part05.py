@@ -4415,6 +4415,16 @@ try:
     _r = _acct_case(False, id="EXISTS", script="NOTEXISTS")
     check("install account: a retry does not delete a script-less account it cannot prove it made",
           _r[0] is False and not _acct_destroyed(), "%r %r" % (_r, _acct_sent))
+    # That refusal is what a retry after a panel RESTART meets for its own leftover (the evidence
+    # is in memory). It is not a dead end, and the Retry button it keeps is the second half of its
+    # instruction: delete the leftover on the host, and the next retry creates the account afresh.
+    check("install account: ...the refusal says how to get past it, and Retry stays offered",
+          _r[2] is True and "delete the account on the host and retry" in _r[1], repr(_r))
+    _r = _acct_case(False, id="NOTEXISTS")
+    check("install account: ...and once the leftover is gone, the retry creates the account",
+          _r == (True, "", True) and ("create", "ubuntu") in _acct_sent
+          and (7, "ubuntu") in _ms_acct._accounts_created, "%r %r" % (_r, _acct_sent))
+    _ms_acct._accounts_created.discard((7, "ubuntu"))
     # The host did not answer: "unknown" stops the install; it is not "absent".
     _r = _acct_case(True, id="")
     check("install account: a failed id probe is not 'absent' — nothing is created",
