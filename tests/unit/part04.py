@@ -808,6 +808,46 @@ check("branch: rejects space", not _so._valid_branch("a b"))
 check("branch: rejects ; metachar", not _so._valid_branch("a;reboot"))
 check("branch: rejects command substitution", not _so._valid_branch("$(id)"))
 check("branch: rejects empty", not _so._valid_branch(""))
+# The panel's check and the root verb's must agree. _valid_branch took a leading "_" or "." that
+# panel-self-update's _branch_name refuses: switching to `_wip` saved it as the tracked branch, then
+# the launch raised VerbError out of _run_verb — a 500 with no audit row — and so did every update
+# after, until someone switched back by hand.
+from panel.security import privileged as _br_priv  # noqa: E402
+
+
+def _br_verb_ok(n):
+    try:
+        _br_priv._branch_name(n)
+        return True
+    except _br_priv.VerbError:
+        return False
+
+
+_br_names = ["main", "feature/x", "_wip", ".hidden", "a", "A_b-c.d/e", "9lives", "-x", "a..b", "x" * 100]
+_br_disagree = [n for n in _br_names if _so._valid_branch(n) != _br_verb_ok(n)]
+check("branch: the panel accepts exactly the branch names the root verb accepts",
+      not _br_disagree, repr(_br_disagree))
+check("branch: ...so a leading '_' is refused up front, not by the verb mid-switch",
+      not _so._valid_branch("_wip") and _so._valid_branch("wip_2"))
+# And _run_verb keeps its "never raises" contract when a verb refuses an argument: callers are
+# written on it and have no handler for VerbError.
+_rv_saved = (_so._helper_present, _so.subprocess.run)
+_rv_ran = []
+try:
+    _so._helper_present = lambda: True
+    _so.subprocess.run = lambda *a, **k: (_rv_ran.append(a), type(
+        "R", (), {"returncode": 0, "stdout": "ok", "stderr": ""})())[1]
+    try:
+        _rv_r = _so._run_verb("panel-self-update", ["-", "-oops"])
+    except Exception as _rv_e:  # noqa: BLE001 - the regression IS the raise
+        _rv_r = "raised %s" % type(_rv_e).__name__
+    check("run_verb: an argument the verb refuses is a failed result, not an exception",
+          _rv_r == ("", "invalid argument", -1) and not _rv_ran, repr((_rv_r, _rv_ran)))
+    check("run_verb: ...while a valid one still runs (control)",
+          _so._run_verb("panel-self-update", ["-", "main"])[2] == 0 and len(_rv_ran) == 1,
+          repr(_rv_ran))
+finally:
+    _so._helper_present, _so.subprocess.run = _rv_saved
 
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):

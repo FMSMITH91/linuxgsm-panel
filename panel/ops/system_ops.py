@@ -26,7 +26,10 @@ _DEFAULT_BRANCH = "main"
 # A deliberately strict git-ref charset: no spaces, no leading dash (option injection) and
 # no ".." (traversal). Defence-in-depth — git is invoked without a shell (see _git) and the
 # installer re-validates PANEL_BRANCH — but we still refuse anything outside this shape.
-_BRANCH_RE = r"^[A-Za-z0-9._/-]{1,100}$"
+# First character alphanumeric, like the helper's v_branch_name and privileged._branch_name: this
+# accepted a leading "_" or "." that the verb then refused, so a branch named `_wip` was saved as
+# the tracked branch and every update after it failed the same way.
+_BRANCH_RE = r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}\Z"
 
 
 def _is_system_service():
@@ -193,13 +196,20 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
     That last branch is why this is not yet a privilege boundary: see run_privileged() in
     ssh_manager for the same caveat. It exists so a host that has the new code but has not had
     install.sh re-run as root keeps working."""
-    if _helper_present():
-        argv = _priv.helper_argv(verb, args)
-    elif hasattr(os, "geteuid") and os.geteuid() == 0:
-        argv = _priv.tool_argv(verb, args)
-    else:
-        return _run(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
-                    timeout=timeout, sudo=True)
+    # NEVER RAISES, which its callers are written on (see os_run_update, server_reboot):
+    # the argv builders validate the arguments and raise VerbError on a refusal, and that used to
+    # escape from here into callers with no handler for it — a 500, with no audit row.
+    try:
+        if _helper_present():
+            argv = _priv.helper_argv(verb, args)
+        elif hasattr(os, "geteuid") and os.geteuid() == 0:
+            argv = _priv.tool_argv(verb, args)
+        else:
+            return _run(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
+                        timeout=timeout, sudo=True)
+    except _priv.VerbError:
+        _log.warning("privileged verb %s refused its arguments", verb)
+        return "", "invalid argument", -1
     try:
         # Semgrep's dangerous-subprocess-use rules flag any subprocess call whose first argument is
         # not a literal string. That is the shape here and it is the point of the change: `argv`
@@ -1393,7 +1403,7 @@ def panel_switch_branch(branch):
             # The branch name is deliberately NOT interpolated here. It arrives from a request,
             # and this is the only place it would reach a log; CodeQL flags that as
             # py/log-injection. It cannot actually forge an entry — it has already cleared
-            # _valid_branch, ^[A-Za-z0-9._/-]{1,100}$, which admits no newline — and an explicit
+            # _valid_branch, whose pattern admits no newline — and an explicit
             # re.sub() at the log site did not satisfy the query either. The value adds nothing
             # an operator cannot read straight from panel_branch in config.json, which is exactly
             # what this message tells them to check, so the simplest correct answer is not to
