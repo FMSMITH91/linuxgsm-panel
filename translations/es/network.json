@@ -309,5 +309,8 @@
   "Could not read this fail2ban log, so recent offenders are unknown.": "No se pudo leer este registro de fail2ban, por lo que se desconocen los infractores recientes.",
   "Could not read fail2ban on this host, so its jails are unknown.": "No se pudo leer fail2ban en este host, por lo que se desconocen sus jaulas.",
   "Could not read Ubuntu Pro status on this host, so it is unknown.": "No se pudo leer el estado de Ubuntu Pro en este host, por lo que se desconoce.",
-  "This host's tailnet address, its Tailscale Serve mappings and the other devices on its tailnet are shown to superadmins only.": "La dirección de este host en la tailnet, sus asignaciones de Tailscale Serve y los demás dispositivos de su tailnet solo se muestran a los superadministradores."
+  "This host's tailnet address, its Tailscale Serve mappings and the other devices on its tailnet are shown to superadmins only.": "La dirección de este host en la tailnet, sus asignaciones de Tailscale Serve y los demás dispositivos de su tailnet solo se muestran a los superadministradores.",
+  "Stopped waiting. Once you have approved this machine:": "Se dejó de esperar. Cuando hayas aprobado esta máquina:",
+  "Check again": "Comprobar de nuevo",
+  "Connected to your tailnet, but its name couldn't be read yet.": "Conectado a tu tailnet, pero todavía no se pudo leer su nombre."
 }
