@@ -2207,9 +2207,60 @@ check("helper restore: a real staged file IS still copied (positive control)",
       "config.json" in _rs_ok and os.path.isfile(_rs_dst)
       and open(_rs_dst, encoding="utf-8").read() == "{\"real\": true}",
       "copied=%s" % (_rs_ok,))
-check("helper restore: ...and it keeps the staged file's mode",
+check("helper restore: ...at mode 0600",
       _rs_stat.S_IMODE(os.stat(_rs_dst).st_mode) == 0o600,
       oct(_rs_stat.S_IMODE(os.stat(_rs_dst).st_mode)))
+
+# 3b. The mode and owner are the helper's to set, never the staged file's. It ran
+#     fchmod(S_IMODE(staged mode)) — set-id bits included — on a file ROOT had just created, and
+#     never chowned it: a member missing before the restore came back root-owned with whatever bits
+#     the panel user staged. Staged 04755 onto a missing destination here; the result must be 0600
+#     and owned by the data directory's owner. (This suite is not root, so the owner is also the
+#     caller — the fchown is observed through a stub to prove it is asked for, with the dir's ids.)
+with open(os.path.join(_rs_stage, "cred_key"), "w", encoding="utf-8") as _fh:
+    _fh.write("KEY")
+os.chmod(os.path.join(_rs_stage, "cred_key"), 0o4755)
+_rs_chown = []
+_rs_o_fchown = _helper.os.fchown
+try:
+    _helper.os.fchown = lambda fd, u, g: (_rs_chown.append((u, g)), _rs_o_fchown(fd, u, g))
+    _rs_setid = _helper.restore_copy_members(_rs_stage, _rs_data)
+finally:
+    _helper.os.fchown = _rs_o_fchown
+_rs_ck = os.path.join(_rs_data, "cred_key")
+check("helper restore: a staged set-id mode never reaches the restored file (it is 0600)",
+      "cred_key" in _rs_setid and _rs_stat.S_IMODE(os.stat(_rs_ck).st_mode) == 0o600,
+      "copied=%s mode=%s" % (_rs_setid, oct(_rs_stat.S_IMODE(os.stat(_rs_ck).st_mode))
+                             if os.path.exists(_rs_ck) else None))
+check("helper restore: ...and every restored member is chowned to the data directory's owner",
+      _rs_chown and set(_rs_chown) == {(os.stat(_rs_data).st_uid, os.stat(_rs_data).st_gid)},
+      repr(_rs_chown))
+
+# 3c. Hard links, which the copy had left to fs.protected_hardlinks — a sysctl, not something this
+#     code controls. A staged member with a second link is refused (that inode is also some other
+#     file), and a hard link AT the destination keeps its contents: the copy goes to a fresh temp
+#     and is renamed onto the name, so the old inode is never opened, let alone truncated.
+_rs_other = os.path.join(_rs_tmp, "other-file")
+with open(_rs_other, "w", encoding="utf-8") as _fh:
+    _fh.write("OTHER")
+os.unlink(os.path.join(_rs_stage, "cred_key"))
+os.link(_rs_other, os.path.join(_rs_stage, "cred_key"))
+check("helper restore: a hard-linked staged member is refused",
+      "cred_key" not in _helper.restore_copy_members(_rs_stage, _rs_data))
+os.unlink(os.path.join(_rs_stage, "cred_key"))
+with open(os.path.join(_rs_stage, "cred_key"), "w", encoding="utf-8") as _fh:
+    _fh.write("NEWKEY")
+os.unlink(_rs_ck)
+os.link(_rs_other, _rs_ck)
+_rs_hl = _helper.restore_copy_members(_rs_stage, _rs_data)
+check("helper restore: a hard link at the destination is not written through",
+      open(_rs_other, encoding="utf-8").read() == "OTHER",
+      repr(open(_rs_other, encoding="utf-8").read()))
+check("helper restore: ...and the member itself is restored (positive control)",
+      "cred_key" in _rs_hl and open(_rs_ck, encoding="utf-8").read() == "NEWKEY"
+      and os.stat(_rs_ck).st_nlink == 1, "copied=%s" % (_rs_hl,))
+check("helper restore: ...leaving no temp file behind in the data directory",
+      not [n for n in os.listdir(_rs_data) if ".restoring-" in n], repr(os.listdir(_rs_data)))
 
 # 4. A staging directory that is itself a symlink is refused outright.
 _rs_data2 = os.path.join(_rs_tmp, "data2")
