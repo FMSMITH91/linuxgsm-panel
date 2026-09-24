@@ -4981,7 +4981,14 @@ try:
           "no container for an untagged server — its first tag could not appear without a reload")
     c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id]})
     # The muted-tag branch (bell-slash + title) only renders when a MUTED tag is actually assigned.
-    c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id, _mute_id]})
+    _mute_resp = (c.post("/api/server/%d/tags" % gs_id, json={"tag_ids": [_tag_id, _mute_id]})
+                  .get_json() or {})
+    # server_tags.js repaints the row's chips from THIS response after a save; without `notify` in
+    # it the repainted chip could not say alerts are muted, and the marker vanished from the row.
+    _mute_flags = {t.get("id"): t.get("notify") for t in _mute_resp.get("tags") or []}
+    check("tags: the save response says which assigned tags mute alerts (control: and which do not)",
+          _mute_flags.get(_mute_id) is False and _mute_flags.get(_tag_id) is True,
+          "got %r" % (_mute_flags,))
     _muted_html = c.get("/").get_data(as_text=True)
     check("tags: a muted tag's chip says so (title + bell-slash icon)",
           'title="Alerts are muted for this tag"' in _muted_html

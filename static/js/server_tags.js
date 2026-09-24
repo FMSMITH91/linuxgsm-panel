@@ -14,6 +14,17 @@
 
   function mp(){ return window.MOUNT || ''; }
 
+  // Whether a tag mutes alerts, from the authoritative /api/tags list when it has the tag.
+  function tagMuted(tag){
+    for (var i = 0; i < TAGS.length; i++){
+      if (TAGS[i].id === tag.id) return TAGS[i].notify === false;
+    }
+    return tag.notify === false;
+  }
+
+  // Same chip the dashboard renders, muted marker included. It built only the name and colour, and
+  // every repaint (opening the tag dialog, even to cancel, and saving) replaced the server-rendered
+  // chip — so a server whose alerts a tag mutes stopped showing it.
   function chip(tag){
     var el = document.createElement('span');
     el.className = 'badge tag-chip';
@@ -21,6 +32,13 @@
     el.setAttribute('data-no-i18n', '');
     if (tag.color) el.style.backgroundColor = tag.color;
     el.textContent = tag.name;
+    if (tagMuted(tag)){
+      el.title = window.t ? window.t('Alerts are muted for this tag') : 'Alerts are muted for this tag';
+      var bell = document.createElement('i');
+      bell.className = 'bi bi-bell-slash';
+      el.appendChild(document.createTextNode(' '));
+      el.appendChild(bell);
+    }
     return el;
   }
 

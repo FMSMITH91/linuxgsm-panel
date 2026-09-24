@@ -127,7 +127,8 @@ def register(app):
         log_action(current_user, "server_tags_set", target=gs.name,
                    detail="tags: " + (", ".join(t.name for t in gs.tags) or "(none)"))
         return jsonify({"success": True, "tags": [{"id": t.id, "name": t.name,
-                                                   "color": t.color or ""} for t in gs.tags]})
+                                                   "color": t.color or "", "notify": bool(t.notify)}
+                                                  for t in gs.tags]})
 
     @app.route("/api/account/ui-order", methods=["POST"])
     @login_required

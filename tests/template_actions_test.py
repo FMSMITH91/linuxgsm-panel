@@ -462,6 +462,17 @@ check("getElementById('srv-tags-' + serverId)" in _tags_src
       "still looking up msrv-tags-<id>")
 check('id="srv-tags-{{ srv.id }}"' in _dash_tpl,
       "tags: ...and the dashboard renders it", "no srv-tags-<id> container")
+# ...and the repainted chip is the SAME chip: the dashboard's carries a bell-slash and a title for
+# a tag that mutes alerts, and chip() built only name and colour, so every repaint (opening the
+# dialog, even to cancel; saving) silently dropped the sign that the server's alerts are muted.
+_chip_fn = _tags_src[_tags_src.index("function chip(tag)"):]
+_chip_fn = _chip_fn[:_chip_fn.index("\n  }\n")]
+check("el.textContent = tag.name" in _chip_fn,
+      "tags: (control) the chip() slice is the chip builder", "sliced the wrong function")
+check("bi bi-bell-slash" in _chip_fn and "Alerts are muted for this tag" in _chip_fn
+      and "tagMuted(tag)" in _chip_fn and "TAGS[i].notify" in _tags_src,
+      "tags: a repainted chip keeps the muted-alerts marker the dashboard renders",
+      "chip() drops the bell-slash/title, so a repaint hides that alerts are muted")
 
 # ── a file called "Backups" must not be renamed by the translator ─────────────────────────────
 # A directory can legitimately be called Backups, Console, Status or Log — all keys in
