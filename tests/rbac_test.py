@@ -108,7 +108,11 @@ with app.app_context():
     other_remote = next((r for r in rids if r != granted_remote), None)
     accessible_id = by_remote[granted_remote][0].id
     other_id = by_remote[other_remote][0].id if other_remote else None
-    admin_id = User.query.filter_by(is_superadmin=True).first().id
+    # An ACTIVE one, lowest id first. The invite block below plants a deactivated superadmin that
+    # sorts first, and a configured install can hold one of its own (a retired setup-time admin):
+    # acting as that account, every "superadmin CAN" check below fails for the wrong reason.
+    admin_id = (User.query.filter_by(is_superadmin=True, is_active=True)
+                .order_by(User.id).first().id)
 
     tag = "rbactest_" + secrets.token_hex(3)
     grp = Group(name=tag, description="RBAC test (auto)", is_default=False)
@@ -182,6 +186,20 @@ with app.app_context():
 print("Fixtures: limited user id=%d, group grants remote %d only." % (uid, granted_remote))
 print("Accessible server id=%d (remote %d); non-granted server id=%s (remote %s)\n"
       % (accessible_id, granted_remote, other_id, other_remote))
+
+def _run_fixture_rows():
+    """Every row this run leaves on a configured install, found by name — what the final cleanup
+    deletes. A fixture named from `tag` is in here BY CONSTRUCTION, so a block that raises halfway
+    through still leaves nothing in the operator's panel. One named any other way is not: the
+    invite block's deactivated SUPERADMIN and its "pre-existing" invite were named "inv_<hex>",
+    deleted only on the success path, and left behind by any exception. Needs an app context."""
+    from panel.db.models import CustomCommand, Invite
+    _like = tag + "%"
+    return (Invite.query.filter(Invite.note.like(_like)).all()
+            + User.query.filter(User.username.like(_like)).all()
+            + Group.query.filter(Group.name.like(_like)).all()
+            + CustomCommand.query.filter(CustomCommand.name.like(_like)).all())
+
 
 def client_as(user_id=None):
     c = app.test_client()
@@ -1135,7 +1153,7 @@ try:
             return User.query.filter_by(username=username).first()
 
 
-    _inv_tag = "inv_" + secrets.token_hex(3)
+    _inv_tag = tag + "_inv"      # from `tag`, so the final cleanup removes it even if this raises
     # This block borrows a REAL superadmin as the minter and toggles is_superadmin / is_active on
     # it, and this suite is documented to run against a configured install. It used to take the
     # first superadmin row whatever its state, restore it to (True, True) regardless, and delete
@@ -1144,20 +1162,32 @@ try:
     # exact state snapshotted and restored, and only this run's invites removed.
     #
     # The dormant superadmin below is the fixture that case needs: deactivated, and sorting FIRST
-    # (id 0), exactly where `.first()` found the setup-time account.
+    # (below every existing id), exactly where `.first()` found the setup-time account. Not a
+    # literal 0: a run killed before its cleanup leaves that row, and the next run's insert then
+    # died on the primary key, at this line, on every run until someone deleted it by hand.
     with app.app_context():
-        _dormant = User(id=0, username=_inv_tag + "_dormant",
+        _lowest = db.session.query(db.func.min(User.id)).scalar()      # 0 is falsy: no `or`
+        _dormant = User(id=(1 if _lowest is None else _lowest) - 1,
+                        username=_inv_tag + "_dormant",
                         password_hash=auth.hash_password(secrets.token_hex(16)),
                         display_name="dormant", is_superadmin=True, is_active=False)
         db.session.add(_dormant)
         _pre_inv, _ = _Inv.mint(db.session.get(User, admin_id), note=_inv_tag + " pre-existing")
         db.session.add(_pre_inv)
         db.session.commit()
-        _pre_inv_id = _pre_inv.id
+        _pre_inv_id, _dormant_id = _pre_inv.id, _dormant.id
         _sa = User.query.filter_by(is_superadmin=True, is_active=True).order_by(User.id).first()
         _sa_id = _sa.id
         _sa_before = (_sa.is_superadmin, _sa.is_active, [_g.id for _g in _sa.groups])
         _inv_before = {_i.id for _i in _Inv.query.all()}
+        _swept = {(type(_r).__name__, _r.id) for _r in _run_fixture_rows()}
+    check("invite fixtures: the planted superadmin and invite are ones the final cleanup removes, "
+          "so an exception anywhere in this block cannot leave them in the operator's panel",
+          ("User", _dormant_id) in _swept and ("Invite", _pre_inv_id) in _swept,
+          "dormant swept=%s, pre-existing invite swept=%s"
+          % (("User", _dormant_id) in _swept, ("Invite", _pre_inv_id) in _swept))
+    check("invite fixtures: ...and that cleanup finds this run's ordinary fixtures too (positive "
+          "control)", ("User", uid) in _swept, "swept %s" % sorted(_swept)[:6])
     try:
         # 1. The happy path, so the refusals below are not passing for the wrong reason.
         _iid, _tok = _mint(_sa)
@@ -1517,7 +1547,7 @@ try:
     # the only superadmin — which can only be the caller, caught first by the self check. Both are
     # belt-and-braces. So these assert the OUTCOME rather than which line produced it: removing
     # any single guard changes nothing, which is the point of having them.
-    _del_tag = "del_" + secrets.token_hex(3)
+    _del_tag = tag + "_del"      # from `tag`: its victim is an ACTIVE superadmin, if it survives
     with app.app_context():
         _victim_sa = User(username=_del_tag + "_sa",
                           password_hash=auth.hash_password(secrets.token_hex(16)),
@@ -1592,16 +1622,25 @@ finally:
                     if _u:
                         db.session.delete(_u)
             # Belt and braces: anything whose name starts with this run's unique tag is ours.
-            for _u in User.query.filter(User.username.like(tag + "%")).all():
-                db.session.delete(_u)
-            for _g in Group.query.filter(Group.name.like(tag + "%")).all():
-                db.session.delete(_g)
-            db.session.commit()
-            from panel.db.models import CustomCommand as _CC_rm
-            for _c in _CC_rm.query.filter(_CC_rm.name.like(tag + "%")).all():
-                db.session.delete(_c)
+            for _row in _run_fixture_rows():
+                db.session.delete(_row)
             db.session.commit()
     print("Fixtures cleaned up.\n")
+
+# The configured-install cleanup above is what the invite block's "the final cleanup removes it"
+# check vouches for, and no CI run reaches it: an empty database is seeded and dropped whole. So
+# that it deletes every row _run_fixture_rows names is read from the source.
+_fx_deletes = [
+    _n for _t in ast.parse(pathlib.Path(__file__).read_text(encoding="utf-8")).body
+    if isinstance(_t, ast.Try) for _f in _t.finalbody for _n in ast.walk(_f)
+    if isinstance(_n, ast.For) and isinstance(_n.iter, ast.Call)
+    and getattr(_n.iter.func, "id", None) == "_run_fixture_rows"
+    and any(isinstance(_c, ast.Call) and getattr(_c.func, "attr", None) == "delete"
+            for _s in _n.body for _c in ast.walk(_s))]
+check("fixtures: the configured-install cleanup deletes every row _run_fixture_rows names",
+      len(_fx_deletes) == 1,
+      "found %d such loop(s) in a top-level finally — the invite and delete-user blocks rely on "
+      "it to remove a planted superadmin if they raise" % len(_fx_deletes))
 
 # ── Structural: EVERY <int:server_id> route must check server access ───────────────────────────
 # A permission decorator is not enough — get_game() is a bare get_or_404, so a user holding e.g.

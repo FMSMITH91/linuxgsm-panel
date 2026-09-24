@@ -4410,6 +4410,26 @@ try:
         check("session protection: basic does not bind (the mode really is what decides)",
               _sp_basic == 200, "got %s" % _sp_basic)
         _sp.get("/logout", headers=_sp_ua)
+        # IPv6: bound to the /64, as the login throttle counts it. A temporary ("privacy") address
+        # rotates inside it about daily and each new connection takes the newest, so an exact
+        # address signed every IPv6 user out whenever theirs rotated.
+        app.config["SESSION_PROTECTION"] = "strong"
+        _sp6 = app.test_client()
+        _sp6.post("/login", data={"username": "smoke_admin", "password": "Str0ng!passw0rd"},
+                  headers=_sp_ua, environ_overrides={"REMOTE_ADDR": "2001:db8:1:2::10"})
+        _sp6_same = _sp6.get("/api/account/sessions", headers=_sp_ua,
+                             environ_overrides={"REMOTE_ADDR": "2001:db8:1:2::10"}).status_code
+        _sp6_rot = _sp6.get("/api/account/sessions", headers=_sp_ua,
+                            environ_overrides={"REMOTE_ADDR": "2001:db8:1:2:a1b2:c3d4:e5f6:7"}
+                            ).status_code
+        _sp6_away = _sp6.get("/api/account/sessions", headers=_sp_ua,
+                             environ_overrides={"REMOTE_ADDR": "2001:db8:1:3::10"}).status_code
+        check("session protection: an IPv6 client keeps its session when its temporary address "
+              "rotates inside the /64", _sp6_same == 200 and _sp6_rot == 200,
+              "same address %s, rotated address %s" % (_sp6_same, _sp6_rot))
+        check("session protection: ...and strong still refuses it from another /64 (control)",
+              _sp6_away == 401, "got %s" % _sp6_away)
+        _sp6.get("/logout", headers=_sp_ua, environ_overrides={"REMOTE_ADDR": "2001:db8:1:2::10"})
     finally:
         app.config["SESSION_PROTECTION"] = _sp_saved
     _ping = s1.get("/api/auth/ping")
@@ -11127,6 +11147,184 @@ try:
             _bksh.notifications.notify = _bk_notify_saved
             _bkops.game_backup_due = _bk_due_saved
             _bkops.set_game_schedule(gs_id, None, None)
+
+        # ── config.json going bad under a backup that WORKED ──────────────────────────────────
+        # update_config now refuses to write while config.json is there but unparseable (it used
+        # to replace it with the defaults). Every backup path writes its clock AFTER the archive,
+        # and that refusal reached each path's `except`: a backup that worked was audited and
+        # alerted as "backup error (ConfigUnreadable)", a manual one told the user to check the
+        # host's disk, and a full run alerted that it "errored before completing". And a sweep
+        # that STARTS on an unreadable file works from the defaults — including the `keep` its
+        # prune deletes past.
+        from panel.core.config import ConfigUnreadable as _BkcCU
+        from panel.core.panel_state import _game_backup_status as _bkc_status
+        _bkc_good = CONFIG_FILE.read_bytes()
+        _bkc_bad = b"{ not valid json"
+        _bkc_notes, _bkc_ran, _bkc_refused, _bkc_full_refused, _bkc_spawned = [], [], [], [], []
+
+        def _bkc_break_config(*a, **k):
+            """A backup that works — and config.json goes bad while it runs."""
+            _bkc_ran.append(1)
+            CONFIG_FILE.write_bytes(_bkc_bad)
+            return True, "", False
+
+        _bkc_rec_real, _bkc_full_real = _bkops.record_game_backup, _bkops.record_full_backup
+        _bkc_sched_real = _bkops.get_game_schedule
+
+        def _bkc_rec(sid):
+            try:
+                return _bkc_rec_real(sid)
+            except _BkcCU:
+                _bkc_refused.append(sid)
+                raise
+
+        def _bkc_full(summary):
+            try:
+                return _bkc_full_real(summary)
+            except _BkcCU:
+                _bkc_full_refused.append(summary)
+                raise
+
+        def _bkc_rows(action):
+            with app.app_context():
+                return [(r.success, r.detail) for r in _AL.query.filter_by(action=action).all()]
+
+        def _bkc_reset(pending=False):
+            CONFIG_FILE.write_bytes(_bkc_good)
+            for _l in (_bkc_notes, _bkc_ran, _bkc_refused, _bkc_full_refused):
+                del _l[:]
+            _bkc_status.pop(gs_id, None)
+            with app.app_context():
+                _AL.query.filter(_AL.action.in_(("queued_backup", "scheduled_backup"))).delete(
+                    synchronize_session=False)
+                db.session.get(GameServer, gs_id).backup_pending = pending
+                db.session.commit()
+            _bk_settle()
+
+        class _BkcNoThread:
+            class Thread:
+                def __init__(self, target=None, daemon=None, **kw):
+                    self.target = target
+
+                def start(self):
+                    _bkc_spawned.append(self.target)
+
+        _bkc_saved = (_bksh.notifications.notify, _bkops.game_backup_due, _bksh.run_game_backup,
+                      _bkmod.run_game_backup, _bkmod.threading)
+        try:
+            _bksh.notifications.notify = lambda k, t, b="": _bkc_notes.append((k, t))
+            _bkops.game_backup_due = lambda sid: sid == gs_id    # only OUR server is due
+            _bkops.record_game_backup, _bkops.record_full_backup = _bkc_rec, _bkc_full
+            _bkc_rec_real(gs_id)                                 # a clock: not "never run before"
+            _bkops.set_game_schedule(gs_id, 1, 2)                # ...and the schedule is ON
+            _bksh.run_game_backup = _bkmod.run_game_backup = _bkc_break_config
+            _bkc_good = CONFIG_FILE.read_bytes()                 # what each case starts from
+
+            # The 'wait until empty' sweep.
+            _bkc_reset(pending=True)
+            _bksh._run_pending_backups(app)
+            _bkc_left = CONFIG_FILE.read_bytes()
+            _bkc_rs = _bkc_rows("queued_backup")
+            check("backup + bad config: a QUEUED backup that worked is not reported as failed",
+                  _bkc_rs and all(_s is True for _s, _ in _bkc_rs) and not _bkc_notes
+                  and (_bkc_status.get(gs_id) or {}).get("ok") is True,
+                  "audit %r, notified %s, status %r — the refused clock write reached the sweep's "
+                  "except" % (_bkc_rs, _bkc_notes, _bkc_status.get(gs_id)))
+            check("backup + bad config: ...it did back up, and its clock write WAS refused, "
+                  "leaving the file alone (positive control)",
+                  _bkc_ran and gs_id in _bkc_refused and _bkc_left == _bkc_bad,
+                  "ran=%r refused=%r file=%r" % (_bkc_ran, _bkc_refused, _bkc_left[:20]))
+
+            # The scheduled ticker, after an archive...
+            _bkc_reset()
+            _bksh._run_due_game_backups(app)
+            _bkc_rs = _bkc_rows("scheduled_backup")
+            check("backup + bad config: a SCHEDULED backup that worked is not reported as failed",
+                  _bkc_rs and all(_s is True for _s, _ in _bkc_rs) and not _bkc_notes
+                  and (_bkc_status.get(gs_id) or {}).get("ok") is True,
+                  "audit %r, notified %s, status %r" % (_bkc_rs, _bkc_notes, _bkc_status.get(gs_id)))
+            check("backup + bad config: ...it did back up, and its clock write WAS refused "
+                  "(positive control)", _bkc_ran and gs_id in _bkc_refused,
+                  "ran=%r refused=%r" % (_bkc_ran, _bkc_refused))
+
+            # ...and where it only STARTS a never-run server's clock, which archives nothing.
+            def _bkc_fresh(sid):
+                if sid != gs_id:
+                    return _bkc_sched_real(sid)
+                CONFIG_FILE.write_bytes(_bkc_bad)
+                return {"interval_days": 1, "keep": 2, "last": 0}
+            _bkc_reset()
+            _bkops.get_game_schedule = _bkc_fresh
+            try:
+                _bksh._run_due_game_backups(app)
+            finally:
+                _bkops.get_game_schedule = _bkc_sched_real
+            _bkc_rs = _bkc_rows("scheduled_backup")
+            check("backup + bad config: starting a new server's clock is not a failed backup",
+                  not any(_s is False for _s, _ in _bkc_rs) and not _bkc_notes,
+                  "audit %r, notified %s — no backup was even attempted" % (_bkc_rs, _bkc_notes))
+            check("backup + bad config: ...that clock write WAS refused (positive control)",
+                  gs_id in _bkc_refused and not _bkc_ran,
+                  "refused=%r ran=%r" % (_bkc_refused, _bkc_ran))
+
+            # "Back up now": the worker's own status is what the page shows.
+            _bkc_reset()
+            c.post("/api/panel/backup/game/%d" % gs_id, json={})
+            _bk_settle()
+            _bkc_st = _bkc_status.get(gs_id) or {}
+            check("backup + bad config: a MANUAL backup that worked says so, not 'check the host "
+                  "is reachable and has free disk space'",
+                  _bkc_st.get("ok") is True and "error" not in (_bkc_st.get("msg") or ""),
+                  "status %r" % (_bkc_st,))
+            check("backup + bad config: ...it did back up, and its clock write WAS refused "
+                  "(positive control)", _bkc_ran and gs_id in _bkc_refused,
+                  "ran=%r refused=%r" % (_bkc_ran, _bkc_refused))
+
+            # A full run: its one clock write comes after every server is archived.
+            _bkc_reset()
+            _bkmod.threading = _BkcNoThread
+            c.post("/api/panel/backup/full", json={"mode": ""})
+            _bkmod.threading = _bkc_saved[4]
+            for _t in _bkc_spawned:
+                _t()                                             # the worker, here, to the end
+            check("backup + bad config: a FULL run that completed is not alerted as one that "
+                  "'errored before completing'",
+                  _bkc_spawned and not any(k == "backup_failed" for k, _ in _bkc_notes),
+                  "spawned %d, notified %s" % (len(_bkc_spawned), _bkc_notes))
+            check("backup + bad config: ...it did back up, and its clock write WAS refused "
+                  "(positive control)", _bkc_ran and _bkc_full_refused and not _bk_lock.locked(),
+                  "ran=%r refused=%r lock held=%r" % (_bkc_ran, _bkc_full_refused, _bk_lock.locked()))
+
+            # A sweep that STARTS on an unreadable file does nothing: its schedules and its prune's
+            # `keep` would all be the defaults, and nothing it did could be recorded.
+            _bkc_reset(pending=True)
+            _bksh.run_game_backup = lambda *a, **k: (_bkc_ran.append(a), (True, "", False))[1]
+            CONFIG_FILE.write_bytes(_bkc_bad)
+            _bksh._run_pending_backups(app)
+            _bksh._run_due_game_backups(app)
+            CONFIG_FILE.write_bytes(_bkc_good)
+            with app.app_context():
+                _bkc_still = db.session.get(GameServer, gs_id).backup_pending
+            check("backup + bad config: a sweep that starts on an unreadable config.json backs "
+                  "nothing up and writes nothing",
+                  not _bkc_ran and not _bkc_refused and _bkc_still is True
+                  and _bkc_rows("queued_backup") == [] and _bkc_rows("scheduled_backup") == [],
+                  "ran=%r refused=%r still queued=%r — a prune to the DEFAULT keep deletes "
+                  "archives a server's own retention kept" % (_bkc_ran, _bkc_refused, _bkc_still))
+            _bksh._run_pending_backups(app)
+            _bksh._run_due_game_backups(app)
+            check("backup + bad config: ...and both sweeps run once it reads (positive control)",
+                  len(_bkc_ran) >= 2, "ran %d time(s)" % len(_bkc_ran))
+        finally:
+            CONFIG_FILE.write_bytes(_bkc_good)
+            (_bksh.notifications.notify, _bkops.game_backup_due, _bksh.run_game_backup,
+             _bkmod.run_game_backup, _bkmod.threading) = _bkc_saved
+            _bkops.record_game_backup, _bkops.record_full_backup = _bkc_rec_real, _bkc_full_real
+            _bkops.get_game_schedule = _bkc_sched_real
+            _bkops.set_game_schedule(gs_id, None, None)
+            with app.app_context():
+                db.session.get(GameServer, gs_id).backup_pending = False
+                db.session.commit()
 
         # ── "Full backup started" must not be decided by a test the lock can lose ─────────────
         # _trigger_full_backup checked `_full_backup_lock.locked()` and the worker acquired it

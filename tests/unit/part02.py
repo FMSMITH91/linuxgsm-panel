@@ -1824,6 +1824,7 @@ _lp_cli = _lp_sock.socket(_lp_sock.AF_INET, _lp_sock.SOCK_STREAM)
 _lp_cli.connect(_lp_srv.getsockname())
 _lp_conn, _lp_peer = _lp_srv.accept()
 _lp_env = {"REMOTE_ADDR": "127.0.0.1", "REMOTE_PORT": str(_lp_peer[1]),
+           "SERVER_NAME": _lp_conn.getsockname()[0],       # what eventlet puts there
            "SERVER_PORT": str(_lp_srv.getsockname()[1])}
 try:
     eq("loopback peer: the kernel names who dialled (this process's uid)",
@@ -1847,6 +1848,72 @@ try:
 finally:
     for _s in (_lp_conn, _lp_cli, _lp_srv):
         _s.close()
+# ...and a local account that writes its request and hangs up at once is not root either. The
+# orphaned client end becomes a FIN_WAIT2 time-wait entry, which the kernel prints with uid 0 —
+# while the panel still reads the whole buffered request, forged X-Forwarded-For included. Matching
+# any row by its ports read that 0 as tailscaled and believed the header: auth.log and fail2ban
+# then named the admin's address, no response needed. Real kernel, real close().
+import time as _lp_time                                                              # noqa: E402
+_lp_srv = _lp_sock.socket(_lp_sock.AF_INET, _lp_sock.SOCK_STREAM)
+_lp_srv.bind(("127.0.0.1", 0))
+_lp_srv.listen(1)
+_lp_cli = _lp_sock.socket(_lp_sock.AF_INET, _lp_sock.SOCK_STREAM)
+_lp_cli.connect(_lp_srv.getsockname())
+_lp_conn, _lp_peer = _lp_srv.accept()
+_lp_env = {"REMOTE_ADDR": "127.0.0.1", "REMOTE_PORT": str(_lp_peer[1]),
+           "SERVER_NAME": _lp_conn.getsockname()[0], "SERVER_PORT": str(_lp_srv.getsockname()[1])}
+try:
+    _lp_cli.sendall(b"POST /login HTTP/1.1\r\nX-Forwarded-For: 1.2.3.4\r\n\r\n")
+    _lp_cli.close()
+    _lp_row = None
+    # Until the time-wait entry (FIN_WAIT2 05 / TIME_WAIT 06) — the uid-0 shape. FIN_WAIT1 comes
+    # first and lasts until the server's delayed ACK (up to ~200ms); on this kernel it still names
+    # the real owner, so stopping there tests nothing. Bounded, not a fixed sleep.
+    for _ in range(150):
+        with open("/proc/net/tcp") as _fh:
+            _lp_row = next((_c for _c in (_l.split() for _l in _fh)
+                            if _c[1:2] == ["0100007F:%04X" % _lp_peer[1]]), None)
+        if _lp_row is not None and _lp_row[3] in ("05", "06"):
+            break
+        _lp_time.sleep(0.02)
+    _lp_buffered = _lp_conn.recv(4096)
+    with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
+                                   environ_overrides=_lp_env):
+        _lp_got = client_ip()
+    check("loopback peer: a client that sent and hung up (its row now uid 0) is NOT trusted",
+          _lp_got == "127.0.0.1",
+          "client_ip=%r from a closed local socket whose row reads state=%s uid=%s inode=%s"
+          % (_lp_got, *(_lp_row[i] if _lp_row else "?" for i in (3, 7, 9))))
+    # ...and the row really is the root-looking time-wait one, and the request really was still
+    # there to act on — otherwise the check above passes on a vanished row, which proves nothing.
+    check("loopback peer: ...its row is still listed, as time-wait, and the request readable",
+          _lp_row is not None and _lp_row[3] in ("05", "06") and b"X-Forwarded-For" in _lp_buffered,
+          "row=%r buffered=%r" % (_lp_row and _lp_row[:10], _lp_buffered[:60]))
+finally:
+    for _s in (_lp_conn, _lp_cli, _lp_srv):
+        _s.close()
+# Rows are matched on whole addresses now, spelled the kernel's way — so ::1 (Serve dialling
+# "localhost") must still find its row, or tailscaled over IPv6 silently stops being trusted.
+try:
+    _lp6_srv = _lp_sock.socket(_lp_sock.AF_INET6, _lp_sock.SOCK_STREAM)
+    _lp6_srv.bind(("::1", 0))
+except OSError as _e:
+    _lp6_srv = None
+    _lp_skip("loopback peer: the kernel names who dialled over ::1 too", "no IPv6 here: %s" % _e)
+if _lp6_srv is not None:
+    _lp6_srv.listen(1)
+    _lp6_cli = _lp_sock.socket(_lp_sock.AF_INET6, _lp_sock.SOCK_STREAM)
+    _lp6_cli.connect(_lp6_srv.getsockname()[:2])
+    _lp6_conn, _lp6_peer = _lp6_srv.accept()
+    try:
+        eq("loopback peer: the kernel names who dialled over ::1 too",
+           _lp_auth._loopback_peer_uid({"REMOTE_ADDR": "::1", "REMOTE_PORT": str(_lp6_peer[1]),
+                                        "SERVER_NAME": _lp6_conn.getsockname()[0],
+                                        "SERVER_PORT": str(_lp6_conn.getsockname()[1])}),
+           os.getuid())
+    finally:
+        for _s in (_lp6_conn, _lp6_cli, _lp6_srv):
+            _s.close()
 # The trusted side, from a socket table naming root as the owner (the tailscaled shape).
 _lp_fix = os.path.join(_lp_tmp.mkdtemp(), "tcp")
 with open(_lp_fix, "w") as _fh:
@@ -1855,15 +1922,34 @@ with open(_lp_fix, "w") as _fh:
               "   0: 0100007F:A1B2 0100007F:1388 01 00000000:00000000 00:00000000 00000000"
               "     0        0 12345 1 0000000000000000 20 4 30 10 -1\n"
               "   1: 0100007F:C3D4 0100007F:1388 01 00000000:00000000 00:00000000 00000000"
-              "  1001        0 12346 1 0000000000000000 20 4 30 10 -1\n")
+              "  1001        0 12346 1 0000000000000000 20 4 30 10 -1\n"
+              # A time-wait entry: what a local client's socket becomes once it sends and closes.
+              "   2: 0100007F:E5F6 0100007F:1388 06 00000000:00000000 03:00001770 00000000"
+              "     0        0 0 3 0000000000000000\n"
+              # A ROOT connection between two other addresses that happens to share BOTH port
+              # numbers with a uid-1001 loopback client listed after it.
+              "   3: 0A000005:B1B2 0A000009:1388 01 00000000:00000000 00:00000000 00000000"
+              "     0        0 22222 1 0000000000000000 20 4 30 10 -1\n"
+              "   4: 0100007F:B1B2 0100007F:1388 01 00000000:00000000 00:00000000 00000000"
+              "  1001        0 22223 1 0000000000000000 20 4 30 10 -1\n"
+              # No socket inode: no process owns this end, whatever the uid column says.
+              "   5: 0100007F:D7D8 0100007F:1388 01 00000000:00000000 00:00000000 00000000"
+              "     0        0 0 1 0000000000000000 20 4 30 10 -1\n")
 _lp_saved = dict(_lp_auth._PROC_NET_TCP)
 _lp_auth._PROC_NET_TCP[4] = _lp_fix
 try:
     for _port, _want, _label in ((0xA1B2, "1.2.3.4", "a ROOT-owned loopback peer (tailscaled) is"),
-                                 (0xC3D4, "127.0.0.1", "a uid-1001 loopback peer is NOT")):
+                                 (0xC3D4, "127.0.0.1", "a uid-1001 loopback peer is NOT"),
+                                 (0xE5F6, "127.0.0.1",
+                                  "a time-wait row (printed uid 0, inode 0) is NOT"),
+                                 (0xB1B2, "127.0.0.1",
+                                  "a root row on OTHER addresses with the same ports is NOT"),
+                                 (0xD7D8, "127.0.0.1",
+                                  "an ESTABLISHED row with no socket inode (no owner) is NOT")):
         with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
                                        environ_overrides={"REMOTE_ADDR": "127.0.0.1",
                                                      "REMOTE_PORT": str(_port),
+                                                     "SERVER_NAME": "127.0.0.1",
                                                      "SERVER_PORT": "5000"}):
             eq("loopback proxy: %s trusted for X-Forwarded-For" % _label, client_ip(), _want)
 finally:
