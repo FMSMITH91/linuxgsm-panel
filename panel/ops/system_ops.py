@@ -1,4 +1,5 @@
 """System operations for the local server — UFW, Tailscale SSH, OS updates, reboot."""
+import http.client
 import json
 import logging
 import os
@@ -880,7 +881,8 @@ def _remote_ci_state(sha):
     a commit while anything is still running or after any check failed. (The `deploy` action is
     ignored: it's the deployment, not a verification.) Reads GitHub's public check-runs API
     anonymously (the production panel has no token); any network/parse error → 'unknown', which
-    the caller treats leniently so an API hiccup never hides a real update.
+    the caller treats leniently so an API hiccup never hides a real update. GitHub's rate limit is
+    not a hiccup — it is 'pending' (see the handler below).
 
     Registration timing isn't a problem in practice: every check here is push-triggered, so they
     all register within seconds of the push — long before CI (minutes) completes — so seeing
@@ -907,7 +909,18 @@ def _remote_ci_state(sha):
             runs.extend(batch)
             if len(batch) < 100:
                 break        # short page = last page
-    except (urllib.error.URLError, ValueError, OSError):
+    except urllib.error.HTTPError as e:
+        # GitHub ANSWERED, and the answer was not the checks. 403 and 429 are its anonymous rate
+        # limit (60 requests an hour per IP), which this gate's own polling reaches during a red
+        # streak on main: every recompute re-queries the tip and each commit under it. HTTPError
+        # is a URLError, so it used to land below as 'unknown' — which the caller accepts as
+        # installable — and from then on a tip CI had marked FAILING was offered and installed.
+        # A limit that lasts the rest of the hour is not an outage; it means "not verified yet".
+        _log.debug("CI-gate: GitHub answered HTTP %s for %s", e.code, sha, exc_info=True)
+        return "pending" if e.code in (403, 429) else "unknown"
+    except (urllib.error.URLError, ValueError, OSError, http.client.HTTPException):
+        # HTTPException: a truncated body (IncompleteRead) is not an OSError, and escaped this
+        # function entirely.
         _log.debug("CI-gate: couldn't read check-runs for %s", sha, exc_info=True)
         return "unknown"     # a partial read must not be judged: 'unknown' is treated leniently
     runs = [r for r in runs if r.get("name") not in _CI_IGNORE]
@@ -1170,10 +1183,12 @@ def panel_self_update():
     try:
         st = panel_update_status(force=True)
     except Exception:
-        # A failure to compute status must not crash the endpoint or block a legitimate
-        # update — fall through as if the CI state were unknown (lenient).
-        _log.warning("self-update CI-gate: status check failed; allowing", exc_info=True)
-        st = {}
+        # REFUSE. This used to carry on with st = {}, which skipped the gate below AND left no
+        # target, so install.sh reset onto the origin tip — the one commit nobody had verified.
+        # Status could not be computed, so nothing here knows what would be installed.
+        _log.warning("self-update CI-gate: status check failed; refusing", exc_info=True)
+        return False, ("Couldn't check the update just now, so it wasn't started. "
+                       "Try again in a minute.")
     if st.get("behind", 0) > 0 and st.get("ci_state") in ("pending", "failing"):
         if st.get("ci_state") == "failing":
             return False, ("This update is blocked: the latest commit didn't pass its "
@@ -1187,9 +1202,16 @@ def panel_self_update():
     # tip when newer commits are still verifying. install.sh resets to it (validated there as an
     # ancestor of the fetched tip). Only ever a bare hex SHA from git rev-list; guard the shape
     # anyway before it's exported into a root-run script.
+    #
+    # No target means no update: nothing is behind, the remote could not be fetched, or no commit
+    # cleared the gate. Each of those used to fall back to install.sh's default, the origin/<branch>
+    # tip — which install.sh fetches AFTER this check, so it could be a commit that landed a moment
+    # ago and was never verified at all. update_available is true exactly when an install is allowed.
+    if not st.get("update_available"):
+        return False, (st.get("message") or "The panel is already up to date.")
     target_ref = (st.get("target_sha") or "").strip()
     if not re.fullmatch(r"[0-9a-fA-F]{7,40}", target_ref):
-        target_ref = ""   # fall back to install.sh's default (origin/<branch> tip)
+        return False, "Couldn't tell which commit to update to, so the update wasn't started."
     # Follow whatever branch the panel is tracking (default 'main'); the launcher passes it to
     # install.sh so a panel that has switched branches keeps updating on THAT branch.
     return _launch_installer(target_ref=target_ref, branch=_tracked_branch())

@@ -1228,6 +1228,32 @@ try:
     _so.urllib.request.urlopen = _boom
     eq("ci-gate: network error -> unknown (never raises)", _so._remote_ci_state("a"*40), "unknown")
 
+    # GitHub's anonymous rate limit (403/429) is an ANSWER, not an outage, and this gate's own
+    # polling reaches it during a red streak. HTTPError is a URLError, so it read 'unknown' — which
+    # the caller accepts as installable — and a tip CI had marked failing was offered and installed.
+    def _http_err(code):
+        def _op(req, timeout=8):
+            raise _so.urllib.error.HTTPError(req.full_url, code, "limit", {}, None)
+        return _op
+    _so.urllib.request.urlopen = _http_err(403)
+    eq("ci-gate: GitHub's 403 rate limit is 'pending', not the installable 'unknown'",
+       _so._remote_ci_state("a" * 40), "pending")
+    _so.urllib.request.urlopen = _http_err(429)
+    eq("ci-gate: ...and so is a 429", _so._remote_ci_state("a" * 40), "pending")
+    _so.urllib.request.urlopen = _http_err(502)
+    eq("ci-gate: ...while a GitHub outage (5xx) stays 'unknown' (control)",
+       _so._remote_ci_state("a" * 40), "unknown")
+
+    def _truncated(req, timeout=8):
+        raise _so.http.client.IncompleteRead(b'{"check_runs":[', 400)
+    _so.urllib.request.urlopen = _truncated
+    try:
+        _ir_state = _so._remote_ci_state("a" * 40)
+    except Exception as _ir_e:   # noqa: BLE001 - the regression IS the raise
+        _ir_state = "raised %s" % type(_ir_e).__name__
+    eq("ci-gate: a truncated response (IncompleteRead) is 'unknown', it does not escape",
+       _ir_state, "unknown")
+
     # PAGINATION. The call asked for per_page=100 and read exactly one page. That was enough for
     # the workflows that exist today, but the failure mode if it ever stopped being enough is the
     # wrong one: a check that did not fit on page 1 is simply not seen, so a commit whose only
@@ -1283,7 +1309,8 @@ try:
     # A CI-passing commit must get PAST the gate. Make install.sh look missing so it stops
     # there (proving the gate let it through) instead of actually launching an update.
     _so.os.path.isfile = lambda p: False
-    _so.panel_update_status = lambda force=False: {"behind": 1, "ci_state": "passing"}
+    _so.panel_update_status = lambda force=False: {"behind": 1, "ci_state": "passing",
+                                                   "update_available": True, "target_sha": "b" * 40}
     _ok, _m = _so.panel_self_update()
     check("self-update: a CI-passing commit is NOT blocked by the gate",
           _ok is False and "install.sh is missing" in _m)
@@ -1291,6 +1318,46 @@ finally:
     _so._is_git_checkout = _orig_isgit
     _so.panel_update_status = _orig_pus
     _so.os.path.isfile = _orig_isfile
+
+# ...and a gate that could not be EVALUATED does not open. A status computation that raised (a
+# truncated GitHub reply, a git read that would not decode) set st = {}, which skipped the gate and
+# left no target, so install.sh reset onto the origin tip — fetched after the check, verified by
+# nobody. Any status without a verified target fell back to that same tip.
+_sug_saved = (_so._is_git_checkout, _so.panel_update_status, _so._launch_installer, _so.os.path.isfile)
+_sug_launched = []
+try:
+    _so._is_git_checkout = lambda: True
+    _so.os.path.isfile = lambda p: True
+    _so._launch_installer = lambda **k: (_sug_launched.append(k), (True, "Update started"))[1]
+
+    def _sug_raise(force=False):
+        raise _so.http.client.IncompleteRead(b"", 10)
+    _so.panel_update_status = _sug_raise
+    _sug_r = _so.panel_self_update()
+    check("self-update: a status check that RAISED refuses the update instead of skipping the gate",
+          _sug_r[0] is False and not _sug_launched, repr((_sug_r, _sug_launched)))
+    _so.panel_update_status = lambda force=False: {"git": True, "behind": 2, "ci_state": "unknown",
+                                                   "update_available": True, "target_sha": ""}
+    _sug_r = _so.panel_self_update()
+    check("self-update: an update with no verified target is refused, not sent to the origin tip",
+          _sug_r[0] is False and not _sug_launched, repr((_sug_r, _sug_launched)))
+    _so.panel_update_status = lambda force=False: {"git": True, "fetched": False,
+                                                   "update_available": False,
+                                                   "message": "Couldn't reach the update source."}
+    _sug_r = _so.panel_self_update()
+    check("self-update: ...nor is one whose remote could not even be fetched",
+          _sug_r == (False, "Couldn't reach the update source.") and not _sug_launched,
+          repr((_sug_r, _sug_launched)))
+    _so.panel_update_status = lambda force=False: {"git": True, "behind": 2, "ci_state": "passing",
+                                                   "update_available": True, "target_sha": "c" * 40}
+    _sug_launched.clear()
+    _sug_r = _so.panel_self_update()
+    check("self-update: ...while a verified target is launched, pinned to that commit (control)",
+          _sug_r[0] is True and len(_sug_launched) == 1
+          and _sug_launched[0].get("target_ref") == "c" * 40, repr((_sug_r, _sug_launched)))
+finally:
+    (_so._is_git_checkout, _so.panel_update_status, _so._launch_installer,
+     _so.os.path.isfile) = _sug_saved
 
 # ── _compute_update_status targets the newest VERIFIED commit ──
 # When the tip is still verifying but an earlier commit already passed CI, the panel must
@@ -1416,6 +1483,24 @@ try:
     check("update-target: a verified commit under a pending tip is still offered",
           _rm["update_available"] is True and _rm["target_sha"] == "b" * 40,
           "available=%s target=%s" % (_rm.get("update_available"), _rm.get("target_sha")))
+
+    # The caller, over the REAL _remote_ci_state: once GitHub rate-limits the panel, nothing in
+    # range is verified, so nothing is offered. It used to read every commit as 'unknown' and
+    # offer the tip — failing CI or not.
+    _rl_saved = (_so._repo_slug, _so.urllib.request.urlopen)
+    try:
+        _so._remote_ci_state = _cus_ci
+        _so._repo_slug = lambda: "o/r"
+
+        def _rl_open(req, timeout=8):
+            raise _so.urllib.error.HTTPError(req.full_url, 403, "rate limit exceeded", {}, None)
+        _so.urllib.request.urlopen = _rl_open
+        _r_rl = _so._compute_update_status()
+        check("update-target: a rate-limited CI read offers NO update (was: the unverified tip)",
+              _r_rl["update_available"] is False and _r_rl.get("ci_state") == "pending",
+              "available=%s ci=%s" % (_r_rl.get("update_available"), _r_rl.get("ci_state")))
+    finally:
+        _so._repo_slug, _so.urllib.request.urlopen = _rl_saved
 finally:
     _so._git = _cus_git
     _so._is_git_checkout = _cus_isco
