@@ -7406,6 +7406,28 @@ try:
         check("change-port: ...while a Tailscale address still closes the public port (positive control)",
               _bst == 200 and ("close", _bind_port) in _bind_fw and ("open", _bind_port) not in _bind_fw
               and "kept tailnet-only" in _bmsg, "status=%d fw=%r msg=%r" % (_bst, _bind_fw, _bmsg))
+        # The REAL host_has_ip, with `ip -o addr` timing out. It answered True on an unreadable
+        # list, so a typo'd bind was saved and the panel restarted onto an address it could not
+        # bind — down until linuxgsm-panel-recover. The kernel is asked instead now (stubbed here:
+        # this machine's addresses are not the test's).
+        _bind_so_saved = (_am.so._run, _am.so._kernel_has_ip)
+        _am.so.host_has_ip = _bind_saved[2]
+        try:
+            _am.so._run = lambda cmd, **k: (("", "Command timed out", -1) if "ip -o addr" in cmd
+                                            else _bind_so_saved[0](cmd, **k))
+            _am.so._kernel_has_ip = lambda addr: str(addr) == "100.101.102.103"
+            _bind_before = _am.load_config().get("bind_host")
+            _bst, _bmsg = _bind_post("10.0.0.51")
+            check("change-port: an unreadable address list does not let a foreign bind through",
+                  _bst == 400 and "isn't an address on this host" in _bmsg
+                  and _am.load_config().get("bind_host") == _bind_before,
+                  "status=%d msg=%r" % (_bst, _bmsg))
+            _am.update_config(lambda cfg: cfg.update({"bind_host": "0.0.0.0"}))
+            _bst, _bmsg = _bind_post("100.101.102.103")
+            check("change-port: ...while the host's own address still goes through (control)",
+                  _bst == 200, "status=%d msg=%r" % (_bst, _bmsg))
+        finally:
+            _am.so._run, _am.so._kernel_has_ip = _bind_so_saved
     finally:
         (_rs_bind.remote_ufw_open_port, _rs_bind.remote_ufw_close_port,
          _am.so.host_has_ip, _am.so.restart_panel, _am.so.ensure_panel_fail2ban) = _bind_saved

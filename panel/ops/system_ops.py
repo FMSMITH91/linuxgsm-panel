@@ -1546,31 +1546,68 @@ def port_in_use(port):
 
 def host_has_ip(ip):
     """True if `ip` is assigned to an interface on this host, so the panel could actually bind
-    to it. Used to refuse binding the panel to an address that isn't local (a typo would fail
-    to bind and take the panel down). Best-effort: on any error returns True, so a flaky check
-    never blocks a legitimate change — the caller still guards the risky loopback case."""
-    #
-    # _run never raises — a timeout, a missing iproute2 or an exec error comes back as ("", ..., -1),
-    # and the pipeline's rc is cut's anyway — so the `except` below was never the error path, and
-    # a failed read answered "not on this host" as `ip in set()`. A host always has loopback, so
-    # nothing read means the check did not run. The comparison is on parsed addresses: an IPv6
-    # address typed in upper case ("FD7A:115C:A1E0::1") never equalled `ip`'s lowercase output.
+    to it; False when it is not, or when that cannot be established.
+
+    Both callers are lockout guards, and neither has a backstop: /api/panel/change-port saves the
+    bind and restarts onto it (an address the host lacks fails to bind and the panel does not come
+    back), and change_ssh_port on the panel's own host, where socket activation binds a missing
+    address anyway. So "could not tell" must not read as yes. It did for a while: an unreadable
+    list answered True, and a typo'd bind made while `ip` timed out was accepted by both.
+
+    Nor may it read as a bare no, which is what it did before THAT: _run never raises — a timeout,
+    a missing iproute2 or an exec error comes back as ("", ..., -1) — and `ip in set()` called the
+    host's own Tailscale IP "not an address on this host". A host always has loopback, so nothing
+    read means the list was not read, and the kernel is asked instead (_kernel_has_ip). The
+    comparison is on parsed addresses: an IPv6 address typed in upper case ("FD7A:115C:A1E0::1")
+    never equalled `ip`'s lowercase output."""
     import ipaddress
     try:
-        out, _, _ = _run("ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1", timeout=8)
-        have = set()
-        for tok in (out or "").split():
-            try:
-                have.add(ipaddress.ip_address(tok))
-            except ValueError:
-                continue
-        if not have:
-            return True
-        return ipaddress.ip_address(str(ip).strip()) in have
+        want = ipaddress.ip_address(str(ip).strip())
     except ValueError:
         return False        # not an IP at all: it cannot be one of this host's addresses
+    try:
+        out, _, _ = _run("ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1", timeout=8)
     except Exception:
+        out = ""
+    have = set()
+    for tok in (out or "").split():
+        try:
+            have.add(ipaddress.ip_address(tok))
+        except ValueError:
+            continue
+    if have:
+        return want in have
+    return _kernel_has_ip(want)
+
+
+def _nonlocal_bind_allowed(version):
+    """Whether this host lets a process bind an address it does not have (net.ipv4/ipv6
+    ip_nonlocal_bind). An absent sysctl is the kernel default: off."""
+    try:
+        with open("/proc/sys/net/ipv%d/ip_nonlocal_bind" % version) as f:
+            return f.read().strip() not in ("", "0")
+    except OSError:
+        return False
+
+
+def _kernel_has_ip(addr):
+    """host_has_ip's answer when the address list could not be read: whether the kernel lets this
+    process bind `addr` (an ipaddress object) on port 0. EADDRNOTAVAIL is the kernel's "not an
+    address on this host", with no command output to parse.
+
+    Only a successful bind is a yes — any other error is "could not tell", and both callers are
+    lockout guards. And a host with ip_nonlocal_bind set binds ANY address, so there a bind proves
+    nothing and the answer is no."""
+    import socket
+    if _nonlocal_bind_allowed(addr.version):
+        return False
+    fam = socket.AF_INET6 if addr.version == 6 else socket.AF_INET
+    try:
+        with socket.socket(fam, socket.SOCK_STREAM) as sock:
+            sock.bind((str(addr), 0))
         return True
+    except OSError:
+        return False
 
 
 def panel_update_log(max_bytes=20000):
