@@ -1480,12 +1480,20 @@ def remote_check_tailscale(server):
     # and Tailscale transports, so that is the ordinary unreachable case, not a rare one.
     installed = ("NOTINSTALLED" not in installed_out    # "INSTALLED" is a substring of it
                  and "INSTALLED" in installed_out)
+    # ...but "not installed" is itself only a reading when the probe ANSWERED — one sentinel or the
+    # other. An empty answer came back as {"installed": False}, and the Tailscale modal printed
+    # "Tailscale is not installed on <host>" with an Install button, about a host nobody reached.
+    # `installed` stays falsy so every existing caller keeps refusing; `unreachable` says why.
+    unread = "INSTALLED" not in (installed_out or "")
 
     running = False
     ts_ip = ""
     dns_name = ""
     if installed:
         out, _, rc = _core.run_command(server, "tailscale status --json 2>/dev/null || echo '{}'", timeout=10)
+        # `|| echo '{}'` makes an answered failure "{}", so nothing at all is the probe not running
+        # — not "installed but not running", which offers to re-authenticate the node.
+        unread = unread or not (out or "").strip()
         if rc == 0 and out:
             try:
                 import json
@@ -1499,12 +1507,15 @@ def remote_check_tailscale(server):
             except Exception:
                 _core._log.debug("remote_check_tailscale: ignored non-fatal error", exc_info=True)
 
-    return {
+    res = {
         "installed": installed,
         "running": running,
         "tailscale_ip": ts_ip,
         "dns_name": dns_name,
     }
+    if unread:
+        res["unreachable"] = True
+    return res
 
 
 def remote_install_tailscale(server):

@@ -1953,13 +1953,26 @@ for _sf, _needle in (("manage_remotes.js", "_tsUpPolls"), ("tailscale.js", "_tsU
 _mr_ts = _js_code_only(_js_function_body(
     (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "tailscaleUp") or "")
 _ufw_ok_i = _mr_ts.find("f.ufw_allowed === true")
-_ufw_line_i = _mr_ts.find("'UFW now allows the <code>tailscale0</code> interface.'")
+_ufw_line_i = _mr_ts.find("'UFW now allows the tailscale0 interface.'")
 check(len(_mr_ts) > 300 and "tailscale-finalize" in _mr_ts,
       "js: the tailscale-up flow was found in manage_remotes.js", "extractor found %d chars" % len(_mr_ts))
-check(-1 < _ufw_ok_i < _ufw_line_i and _mr_ts.count("tailscale0</code> interface") == 1
-      and "+ ufwLine +" in _mr_ts,
+check(-1 < _ufw_ok_i < _ufw_line_i and _mr_ts.count("allows the tailscale0") == 1
+      and "+ escapeHtml(ufwText) +" in _mr_ts,
       "js: 'UFW now allows tailscale0' is printed only when the finalize reports ufw_allowed",
       "positions ok=%d line=%d — the sentence is not gated on f.ufw_allowed" % (_ufw_ok_i, _ufw_line_i))
+
+# ── an unanswered Tailscale probe is not "not installed" ─────────────────────────────────────
+_rts_js = _js_code_only(_js_function_body(
+    (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8"), "renderTailscaleStatus") or "")
+_rts_unr = _rts_js.find("if (status.unreachable) {")
+_rts_first = min([i for i in (_rts_js.find("if (installed && running)"), _rts_js.find("not installed"))
+                  if i >= 0] or [-1])
+_rts_blk = _js_block_after(_rts_js, "if (status.unreachable) {") or ""
+check(len(_rts_js) > 300 and -1 < _rts_unr < _rts_first
+      and "data-install-ts" not in _rts_blk and "renderAuthKeyForm" not in _rts_blk,
+      "js: the Tailscale modal reports an unanswered probe as unknown, with no Install offer",
+      "positions unreachable=%d installed-branches=%d — an unread host reads as 'not installed'"
+      % (_rts_unr, _rts_first))
 
 # ── the bootstrap poll's teardown sat below the line that returned ────────────────────────────
 _mr = (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")

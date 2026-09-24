@@ -2759,6 +2759,29 @@ try:
     _sm_core.run_command = lambda *a, **k: ("NOTINSTALLED\n", "", 0)
     check("sentinel: ...and a clear 'not installed' is still not installed",
           _sm_hosts.remote_check_tailscale(NS(id=8003)).get("installed") is False)
+    # ...and "not installed" is only a READING when the probe answered. The unread probe came back
+    # as {"installed": False} and nothing else, which the Tailscale modal printed as "Tailscale is
+    # not installed on <host>" with an Install button, about a host nobody reached.
+    _sm_core.run_command = lambda *a, **k: ("", "ssh: connect to host ... timed out", -1)
+    check("sentinel: ...and says it could not read a host that never answered",
+          _sm_hosts.remote_check_tailscale(NS(id=8004)).get("unreachable") is True,
+          "an unread probe is indistinguishable from 'not installed'")
+    _sm_core.run_command = lambda *a, **k: ("NOTINSTALLED\n", "", 0)
+    check("sentinel: ...while an answered 'not installed' is not flagged unreadable",
+          "unreachable" not in _sm_hosts.remote_check_tailscale(NS(id=8005)),
+          "the control failed — every answer is flagged, so the check above proves nothing")
+    # Installed, but the status probe never answered: not "installed but not running", which
+    # offers to re-authenticate the node. `|| echo '{}'` makes an ANSWERED failure "{}".
+    _ts_ans = iter([("/usr/bin/tailscale\nINSTALLED\n", "", 0), ("", "timed out", -1)])
+    _sm_core.run_command = lambda *a, **k: next(_ts_ans)
+    check("sentinel: an unanswered status probe is flagged, not read as 'not running'",
+          _sm_hosts.remote_check_tailscale(NS(id=8006)).get("unreachable") is True)
+    _ts_ans = iter([("/usr/bin/tailscale\nINSTALLED\n", "", 0), ("{}", "", 0)])
+    _sm_core.run_command = lambda *a, **k: next(_ts_ans)
+    _ts_r = _sm_hosts.remote_check_tailscale(NS(id=8007))
+    check("sentinel: ...while an answered '{}' is a real 'installed, not running'",
+          "unreachable" not in _ts_r and _ts_r.get("installed") is True and _ts_r.get("running") is False,
+          repr(_ts_r))
 finally:
     _sm_core.run_command = _ns_saved
 

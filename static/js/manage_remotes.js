@@ -174,7 +174,11 @@ function renderTailscaleStatus(remoteId, name, status) {
   var html = '';
 
   // Status badge
-  if (installed && running) {
+  if (status.unreachable) {
+    // The probe did not answer (the Tailscale and local transports return "" rather than raising),
+    // so "not installed" — with an Install button — would be a guess stated as a reading.
+    html += '<div class="alert alert-warning py-2 small"><i class="bi bi-exclamation-triangle"></i> ' + escapeHtml("Couldn't read Tailscale's state on this host — it did not answer. Try again once it is reachable.") + '</div>';  // nosemgrep
+  } else if (installed && running) {
     html += '<div class="alert alert-success py-2 small"><i class="bi bi-check-circle"></i> Tailscale is <strong>installed</strong> and <strong>running</strong> on ' + safe + '.</div>';
     // escapeHtml: tailscale_ip and dns_name are parsed out of `tailscale status --json` run on
     // the REMOTE host, so a compromised or hostile host picks these bytes. They land in innerHTML
@@ -267,11 +271,11 @@ function tailscaleUp(remoteId) {
               // was inactive, absent or unreadable (so no allow was issued) — and a refused or
               // unreachable finalize carries no such key at all — yet this sentence printed on all
               // of them, about a firewall nobody had touched.
-              var ufwLine = f.ufw_allowed === true
-                ? 'UFW now allows the <code>tailscale0</code> interface.'
-                : escapeHtml('UFW was not changed: it is inactive, not installed, or could not be read or updated.');
+              var ufwText = f.ufw_allowed === true
+                ? 'UFW now allows the tailscale0 interface.'
+                : 'UFW was not changed: it is inactive, not installed, or could not be read or updated.';
               if (w) w.innerHTML = '<span class="text-success"><i class="bi bi-check-circle"></i> Connected! IP: <code>' + escapeHtml(ip) + '</code>'  // nosemgrep
-                + '<br><span class="small">' + ufwLine + '</span></span>'
+                + '<br><span class="small">' + escapeHtml(ufwText) + '</span></span>'
                 + '<div class="mt-2"><button class="btn btn-success btn-sm"' + _da('migrateToTailscale', [remoteId]) + '>'
                 + '<i class="bi bi-arrow-repeat"></i> Migrate to Tailscale SSH</button></div>';
             })
