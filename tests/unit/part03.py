@@ -942,6 +942,65 @@ try:
 finally:
     SO._run = _sv_run
 
+# ── the OS-update watch: a status read that did not answer is not the update stopping ────────
+# Tailscale SSH and the panel host return ("", ..., -1) rather than raising, so an unanswered read
+# came back {done: False, log: "", running: False} — `running` from a pgrep that did not answer
+# either. The popup wiped apt's output and, three polls later, declared an update still unpacking
+# "ended without a completion marker".
+_osu_saved = _sm_core.run_privileged
+try:
+    def _osu_stub(log_ans, alive_rc):
+        return lambda s, verb, args=(), **k: (
+            log_ans if verb == "os-update-log" else ("", "", alive_rc) if verb == "apt-any-running"
+            else ("", "", 0))
+    _sm_core.run_privileged = _osu_stub(("", "ssh: connect timed out", -1), -1)
+    _osu = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: an unread log is flagged unread, not an empty running-less log",
+          _osu.get("unread") is True and _osu["done"] is False and _osu["running"] is None,
+          repr(_osu))
+    _sm_core.run_privileged = _osu_stub(("Unpacking libc6 ...\n", "", 0), -1)
+    _osu = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: an unanswered apt probe is running=None, not 'apt has stopped'",
+          _osu["running"] is None and not _osu.get("unread") and "Unpacking" in _osu["log"],
+          repr(_osu))
+    # Positive controls: the two real answers still read as themselves.
+    _sm_core.run_privileged = _osu_stub(("Unpacking libc6 ...\n", "", 0), 1)
+    _osu_a = _sm_hosts.remote_os_update_status(NS(id=9120))
+    _sm_core.run_privileged = _osu_stub(("done\n%s0\n" % _sm_hosts._OS_UPDATE_DONE, "", 0), 1)
+    _osu_b = _sm_hosts.remote_os_update_status(NS(id=9120))
+    check("os-update status: ...while pgrep's 'no match' is running=False and a sentinel is done "
+          "(positive control)",
+          _osu_a["running"] is False and _osu_b["done"] is True and _osu_b["rc"] == 0,
+          "%r %r" % (_osu_a, _osu_b))
+finally:
+    _sm_core.run_privileged = _osu_saved
+
+# ── the raw security log: two unanswered reads are not an empty log ─────────────────────────
+# Joined to "", they were shown as "(log is empty)" — no SSH or ban activity — on the card that
+# exists to show attacks, about a host that never answered.
+_sl_saved = _sm_core.run_privileged
+try:
+    def _sl_stub(answers):
+        return lambda s, verb, args=(), **k: answers.get((verb, list(args)[0]), ("", "", 0))
+    _sm_core.run_privileged = _sl_stub({("journal", "ssh"): ("", "timed out", -1),
+                                        ("log-tail", "auth"): ("", "timed out", -1)})
+    _sl_a = _sm_hosts.remote_security_log(NS(id=9121), "ssh")
+    _sm_core.run_privileged = _sl_stub({("log-tail", "fail2ban"): ("", "timed out", -1),
+                                        ("journal", "fail2ban"): ("", "timed out", -1)})
+    _sl_b = _sm_hosts.remote_security_log(NS(id=9121), "fail2ban")
+    check("security log: reads that never answered are None (unknown), not an empty log",
+          _sl_a is None and _sl_b is None, "ssh=%r fail2ban=%r" % (_sl_a, _sl_b))
+    # Positive control: a journal that ANSWERED with nothing, and no auth.log, is a real empty log.
+    _sm_core.run_privileged = _sl_stub({("journal", "ssh"): ("", "", 0),
+                                        ("log-tail", "auth"): ("", "tail: No such file", 1)})
+    _sl_c = _sm_hosts.remote_security_log(NS(id=9121), "ssh")
+    _sm_core.run_privileged = _sl_stub({("log-tail", "fail2ban"): ("Ban 203.0.113.9\n", "", 0)})
+    _sl_d = _sm_hosts.remote_security_log(NS(id=9121), "fail2ban")
+    check("security log: ...while an answered empty log is '' and a real one is its text "
+          "(positive control)", _sl_c == "" and _sl_d == "Ban 203.0.113.9", "%r %r" % (_sl_c, _sl_d))
+finally:
+    _sm_core.run_privileged = _sl_saved
+
 # ── The snapshot the login banner and the OS Updates card read ────────────────────────
 # Both used to show nothing until someone pressed "Check": the panel knew what each host had
 # waiting (the daily sweep asks) but never kept the answer anywhere a page could read it. This is

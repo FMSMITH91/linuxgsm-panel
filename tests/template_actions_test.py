@@ -2007,6 +2007,47 @@ check("thresholdSaveToast(d, v)" in _st_fn and "!d.success" in _tst_fn
       "js: ...and the toast says what the endpoint did — refused, ignored, saved with auto-block off",
       "the toast still says 'Threshold saved' whatever came back")
 
+# ── the OS Updates card: only a positive `ok` is a reading ────────────────────────────────────
+# An unreachable host answers {success:false, unreachable:true} with no `ok` key, and `d.ok===false`
+# let that through to renderUpdates: a green "System is up to date." with Install disabled.
+_cu_fn = _js_code_only(_js_function_body(_rmj, "checkUpdates"))
+check("if(d.ok!==true){" in _cu_fn and "d.ok===false" not in _cu_fn
+      and _cu_fn.find("if(d.ok!==true){") < _cu_fn.find("renderUpdates("),
+      "js: a check-updates answer without ok:true is 'unknown', never 'up to date'",
+      _cu_fn[:300])
+# ── the OS-update watch: one failed status read is not the update finishing ──────────────────
+# The route's exception answer was done:true, rc:null, log:"", and the popup wiped apt's output,
+# said "Finished with errors (exit null)" and stopped polling while dpkg was still running.
+_po_fn = _js_code_only(_js_function_body(_rmj, "_pollOsUpdate"))
+_pu_fn = _js_code_only(_js_function_body(_rmj, "_osuPollUnread"))
+check("d.error" in _pu_fn and "d.unread" in _pu_fn and "typeof d.rc !== 'number'" in _pu_fn,
+      "js: an errored, unread or sentinel-less status poll is recognised as unread",
+      _pu_fn[:200])
+check(0 <= _po_fn.find("if(_osuPollUnread(d)){") < _po_fn.find("logEl.textContent=")
+      and _po_fn.find("if(_osuPollUnread(d)){") < _po_fn.find("if(d.done){")
+      and "_osuTimer=setTimeout(_pollOsUpdate" in _po_fn[_po_fn.find("if(_osuPollUnread(d)){"):
+                                                          _po_fn.find("_osuMiss=0;")],
+      "js: ...and such a poll keeps the log, is not taken as done, and polls again",
+      _po_fn[:400])
+check("d.running === false ? (_osuStale+1)" in _po_fn,
+      "js: ...and only a definite 'apt is not running' counts towards giving up",
+      "an unanswered probe (running null) is counted as apt having stopped")
+# ── the raw log viewer: a failed read is not "(log is empty)" ─────────────────────────────────
+_lsl_fn = _js_code_only(_js_function_body(_rmj, "loadSecurityLog"))
+check(0 <= _lsl_fn.find("if(!d || d.error){") < _lsl_fn.find("'(log is empty)'"),
+      "js: the raw security log says it could not be read before it can say 'empty'",
+      _lsl_fn[:300])
+# ── removing a whitelist entry: a refusal is not "removed" ───────────────────────────────────
+_rwl_fn = _js_code_only(_js_function_body(_rmj, "removeWhitelist"))
+check(0 <= _rwl_fn.find("if(!d || !d.success){") < _rwl_fn.find("renderWhitelist(")
+      and "'whitelist' in d" in _rwl_fn,
+      "js: a refused whitelist removal is reported, not painted as an empty whitelist",
+      _rwl_fn[:300])
+# ── #security opens only a tab the page renders ───────────────────────────────────────────────
+check("nav.querySelector('[data-mtab-btn=\"' + h + '\"]')" in _js_code_only(_rmj),
+      "js: a #tab hash opens only a tab whose button is on the page",
+      "#security opens the panel host's hidden Security tab and fires its 403 reads")
+
 # ── the update card's changelog links each commit ─────────────────────────────────────────────
 # "d456826 fix: a failed install was a dead end" told you a subject and a sha you then had to go
 # and look up by hand. The sha is now a link to the commit, at the repo THIS checkout tracks (a
@@ -2592,9 +2633,35 @@ check(_fw_msg in _fw_tpl and _fw_msg in _fw_js,
       "template and refresh word the same state differently")
 # The count is an arithmetic claim. "0 rules" above "the rules cannot be read" is the same defect
 # in miniature as an update card announcing a commit count it could not list.
-check("rules-count" in _fw_win,
+_fw_unl = _js_code_only(_js_function_body(_fw_js, "_fwUnlisted") or "")
+_fw_win_code = _js_code_only(_fw_win)
+check("_fwUnlisted(" in _fw_win_code and "'rules-count'" in _fw_unl,
       "firewall: ...and the rule COUNT is cleared too, not left reading 0",
       "the page states a count for a firewall nothing read")
+# ...and the Blocked IPs card with it. Only the rules card was repainted, so a refresh that found
+# the host gone left "3 blocked" and three live Unblock buttons on screen as the current firewall.
+check("'blocks-list'" in _fw_unl and "'blocks-count'" in _fw_unl and "'\\u2014'" in _fw_unl,
+      "firewall: an unreadable refresh clears the Blocked IPs list and count as well",
+      "_fwUnlisted: %r" % _fw_unl[:300])
+# A sudo refusal arrives flagged unreachable too; the page named the network for it.
+check("data.permission_denied" in _fw_win_code and "sudo refused the firewall read" in _fw_win_code,
+      "firewall: a refresh refused by sudo says sudo, not 'unreachable'",
+      "the refresh reads only data.unreachable")
+# An INACTIVE ufw lists nothing, stored rules included: "No open ports yet." / "0 blocked" about it
+# were claims about rules nobody saw, and a block there denies nothing.
+_fw_after_badge = _js_code_only(_between(_fw_js, "data.enabled ? 'Active' : 'Inactive'",
+                                         "var groups = data.groups"))
+check("if (inactive)" in _fw_after_badge and "_fwUnlisted(" in _fw_after_badge
+      and "data.installed === true && data.enabled !== true" in _fw_win_code,
+      "firewall: a refresh of an INACTIVE ufw prints no rule or block count",
+      _fw_after_badge[:300])
+check("blocks-inactive-note" in _fw_win_code and 'id="blocks-inactive-note"' in _fw_tpl,
+      "firewall: ...and the 'a block denies nothing while inactive' note follows the refresh",
+      "the note is not toggled")
+# The × tooltip listed a group's UFW rule NUMBERS as "ports 3, 7".
+check("'rules ' + (g.nums|join(', '))" in _fw_tpl and "'ports ' + (g.nums" not in _fw_tpl,
+      "firewall: the rule-delete tooltip calls rule numbers rules, not ports",
+      "the × tooltip names ufw rule numbers as ports")
 
 # ── a delete removes the rule that was clicked, not whatever now holds its old number ─────────
 # ufw numbers are POSITIONS and renumber on every insert/delete; the hourly auto-block inserts its

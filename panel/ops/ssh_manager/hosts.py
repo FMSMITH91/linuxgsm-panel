@@ -908,8 +908,16 @@ def remote_os_update_start(server):
 
 def remote_os_update_status(server):
     """Live status of the running/last OS update: {running, done, rc, log}. `done` is set once the
-    detached job appends its sentinel; `running` reflects whether apt is still working."""
-    out, _, _ = _core.run_privileged(server, "os-update-log", [], timeout=15, merge_stderr=False)
+    detached job appends its sentinel; `running` reflects whether apt is still working.
+
+    `unread` is set when the log could not be read at all. The Tailscale and local transports
+    return ("", ..., -1) rather than raising, and that read as {done: False, log: ""} plus
+    `running: False` from a probe that did not answer either: the watch popup wiped apt's output
+    and, three polls later, declared an update that was still unpacking "ended without a
+    completion marker". `running` is None when its own probe did not answer."""
+    out, _, lrc = _core.run_privileged(server, "os-update-log", [], timeout=15, merge_stderr=False)
+    if lrc != 0:
+        return {"running": None, "done": False, "rc": None, "log": "", "unread": True}
     log = out or ""
     m = re.search(re.escape(_OS_UPDATE_DONE) + r"(-?\d+)", log)
     done = m is not None
@@ -917,9 +925,11 @@ def remote_os_update_status(server):
     if done:
         log = re.sub(r"\n?" + re.escape(_OS_UPDATE_DONE) + r"-?\d+\s*$", "", log)
         return {"running": False, "done": True, "rc": rc, "log": log}
-    # No sentinel yet — is apt still working?
+    # No sentinel yet — is apt still working? pgrep answers 0 (yes) or 1 (no); anything else is no
+    # answer, which is not "apt has stopped".
     _, _, alive_rc = _core.run_privileged(server, "apt-any-running", [], timeout=10, merge_stderr=False)
-    return {"running": alive_rc == 0, "done": False, "rc": None, "log": log}
+    running = True if alive_rc == 0 else False if alive_rc == 1 else None
+    return {"running": running, "done": False, "rc": None, "log": log}
 
 
 def remote_reboot(server):
@@ -2029,16 +2039,25 @@ def remote_set_fail2ban_ignoreip(server, ignore_ips, unban_ip=None):
 def remote_security_log(server, which, lines=200, jail=None):
     """Tail of a whitelisted security log on a REMOTE host: 'fail2ban' or 'ssh'. `which` is a fixed
     set, never a path from the request. For 'fail2ban', an optional charset-validated `jail` narrows
-    the activity to that one jail. Returns text."""
+    the activity to that one jail. Returns text, or None when NO read answered.
+
+    None, not "": the Tailscale and local transports return ("", ..., -1) rather than raising, and
+    two unanswered reads joined to "" were shown as "(log is empty)", i.e. no SSH or ban activity,
+    on the card whose job is showing attacks. A read that ANSWERED (rc 0) with nothing in it is a
+    real empty log and still comes back as ""."""
     lines = max(20, min(int(lines or 200), 1000))
     if which == "fail2ban":
         # /var/log/fail2ban.log holds the real Ban/Unban/Found activity (journalctl only has the
         # unit's start/stop noise), so read the file first and fall back to the journal.
-        out, _, _ = _core.run_privileged(server, "log-tail", ["fail2ban", "4000"], timeout=20,
-                                   merge_stderr=False)
+        out, _, frc = _core.run_privileged(server, "log-tail", ["fail2ban", "4000"], timeout=20,
+                                           merge_stderr=False)
+        answered = frc == 0
         if not out:
-            out, _, _ = _core.run_privileged(server, "journal", ["fail2ban", "4000"], timeout=20,
-                                       merge_stderr=False)
+            out, _, jrc = _core.run_privileged(server, "journal", ["fail2ban", "4000"], timeout=20,
+                                               merge_stderr=False)
+            answered = answered or jrc == 0
+        if not answered and not out:
+            return None
         rows = (out or "").splitlines()
         if jail and _F2B_JAIL_RE.match(jail):   # charset-only guard; used solely for in-Python filtering
             tag = "[%s]" % jail
@@ -2048,11 +2067,15 @@ def remote_security_log(server, which, lines=200, jail=None):
         # journalctl first, auth.log as the fallback — that was `journalctl ... || tail ...`, where
         # the `||` fired on journalctl's exit status. Systemd exits 0 with no output on a host that
         # keeps no journal, so checking the OUTPUT is what the fallback was actually for.
-        out, _, _ = _core.run_privileged(server, "journal", ["ssh", str(lines * 2)], timeout=20,
-                                   merge_stderr=False)
+        out, _, jrc = _core.run_privileged(server, "journal", ["ssh", str(lines * 2)], timeout=20,
+                                           merge_stderr=False)
+        answered = jrc == 0
         if not (out or "").strip():
-            out, _, _ = _core.run_privileged(server, "log-tail", ["auth", str(lines)], timeout=20,
-                                       merge_stderr=False)
+            out, _, arc = _core.run_privileged(server, "log-tail", ["auth", str(lines)], timeout=20,
+                                               merge_stderr=False)
+            answered = answered or arc == 0
+        if not answered and not (out or "").strip():
+            return None
         return "\n".join((out or "").splitlines()[-lines:])
     return ""
 

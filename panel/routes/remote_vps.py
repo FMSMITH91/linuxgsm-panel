@@ -503,7 +503,10 @@ def register(app):
         try:
             return jsonify(remote_os_update_status(remote))
         except Exception:
-            return jsonify({"running": False, "done": True, "rc": None,
+            # NOT done. A status read that raised (a dropped paramiko session mid-upgrade) said
+            # done:true, and the popup declared the update finished with errors and stopped
+            # watching while apt was still running on the host.
+            return jsonify({"running": None, "done": False, "rc": None, "unread": True,
                             "log": "", "error": _log_and_generic("status read failed")}), 200
 
     @app.route("/api/remote/<int:remote_id>/players")

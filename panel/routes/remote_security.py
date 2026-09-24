@@ -18,6 +18,31 @@ from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, _port_or)
 from app import (AUTH_LOG_PATH, _autoblock_hosts, _maybe_set_threshold, _run_autoblock_now,
     _security_whitelist, _set_autoblock_host)
 from panel.routes._shared import (_whitelist_mutate)
+import ipaddress as _ipaddress
+
+# Where a panel bound to a SPECIFIC address is still reached through the tailnet rather than the
+# public port: loopback (Tailscale Serve proxies to it) and the host's own Tailscale addresses.
+_TAILNET_NETS = (_ipaddress.ip_network("100.64.0.0/10"), _ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+
+
+def _panel_bind_is_public(bind):
+    """Whether a panel bound to `bind` needs its port OPEN in the firewall to be reached.
+
+    Only the wildcard counted, so every specific address, the host's public or LAN IP included,
+    had its port's allow rule deleted and was reported "kept tailnet-only": the panel restarted
+    onto an address UFW's default-deny then shut, on the route that promises to refuse anything
+    leaving the panel unreachable. Loopback and Tailscale addresses are the ones that really are
+    reached without a public rule; anything else is reached on its port and needs it open."""
+    b = (bind or "").strip()
+    if b == "localhost":
+        return False
+    try:
+        a = _ipaddress.ip_address(b)
+    except ValueError:
+        return True          # validated before this is asked; unknown keeps the port open
+    if a.is_unspecified:
+        return True
+    return not (a.is_loopback or any(a in n for n in _TAILNET_NETS if n.version == a.version))
 
 
 def register(app):
@@ -45,8 +70,13 @@ def register(app):
         # "preserve the on/off state", so one failed read followed by one Save silently disabled
         # auto-blocking on a host that had it on.
         _settings = {"autoblock": remote_id in _autoblock_hosts(),
-                     "threshold": _autoblock_threshold(),
-                     "whitelist": _security_whitelist()}
+                     "threshold": _autoblock_threshold()}
+        # The whitelist is INSTALL-WIDE, and every other read or write of it is superadmin-only
+        # (the panel-host top-ips, both whitelist routes). Sent here at MANAGE_REMOTES, a host
+        # operator scoped to one VPS learned every address exempt from bans and auto-blocks on
+        # every host, the admins' own home IPs included.
+        if current_user.is_superadmin:
+            _settings["whitelist"] = _security_whitelist()
         try:
             _ips = remote_fail2ban_top_ips(remote, 100, days=7)
         except Exception:
@@ -138,9 +168,14 @@ def register(app):
             return jsonify({"text": "", "error": "unknown log"}), 400
         jail = (request.args.get("jail") or "").strip() or None   # only meaningful for which=fail2ban
         try:
-            return jsonify({"text": remote_security_log(remote, which, 300, jail=jail)})
+            text = remote_security_log(remote, which, 300, jail=jail)
         except Exception:
             return jsonify({"text": "", "error": _log_and_generic("log read failed")}), 200
+        if text is None:
+            # No read answered (Tailscale SSH and the panel host return "" rather than raising):
+            # an unknown, which the viewer must not print as "(log is empty)".
+            return jsonify({"text": "", "error": "The host did not answer the log read."}), 200
+        return jsonify({"text": text})
 
     @app.route("/api/panel/change-port", methods=["POST"])
     @login_required
@@ -224,9 +259,10 @@ def register(app):
         save_config(cfg)
 
         # ── Bring the firewall in line with the resulting exposure ──
-        # Publicly bound (0.0.0.0/::) → the port must be open. Loopback/specific-IP bound → the
-        # public port rule isn't needed, so close it. A changed port also gets its old rule gone.
-        now_public = new_bind in wildcard
+        # Reached on its port (the wildcard, or the host's own public/LAN address) → the port must
+        # be open. Loopback/tailnet-bound → the public port rule isn't needed, so close it. A
+        # changed port also gets its old rule gone.
+        now_public = _panel_bind_is_public(new_bind)
         fw_note = ""
         if local:
             # Each of these returns (ok, msg) and all three were called for effect, with fw_note

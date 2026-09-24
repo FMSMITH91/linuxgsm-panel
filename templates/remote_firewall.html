@@ -3,6 +3,12 @@
 {% block content %}
 {% set block_groups = status.groups|selectattr('is_block')|list %}
 {% set open_groups = status.groups|rejectattr('is_block')|list %}
+{# An INACTIVE ufw prints its Status line and nothing else: its stored rules are neither listed nor
+   enforced, so status.groups is [] exactly as it is for a host nothing reached. Counted, that
+   printed "0 rules", "No firewall rules yet." and "No IPs are blocked." on a stock Ubuntu host
+   whose firewall had simply never been switched on, and a block added there denies nothing. #}
+{% set fw_inactive = status.installed and not status.enabled and not status.unreachable %}
+{% set fw_unlisted = status.unreachable or fw_inactive %}
 
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
@@ -41,10 +47,18 @@
         {# "Unreachable" and "UFW isn't installed" are different facts, and only one of them is
            something the operator can act on here. Reporting a host that is simply down as having
            no firewall is the more alarming of the two, and it is the wrong one. #}
-        {% if status.unreachable %}
+        {# A sudo refusal comes back flagged unreachable too (remote_ufw_status sets both), and
+           reading it as "can't reach this host" sent the operator to debug connectivity to a
+           machine the panel had just talked to: on the panel host, the very machine serving this
+           page. It names its own cause. #}
+        {% if status.permission_denied %}
+        <p class="text-warning small mb-0"><i class="bi bi-lock"></i> The panel reached this host, but sudo refused the firewall read, so its rules can't be shown. Check the panel's sudoers grant on this host.</p>
+        {% elif status.unreachable %}
         <p class="text-secondary small mb-0"><i class="bi bi-plug"></i> The panel can't reach this host right now, so its firewall can't be read. Rules below are unavailable until it's back.</p>
         {% elif not status.installed %}
         <p class="text-warning small mb-0"><i class="bi bi-exclamation-triangle"></i> UFW is not installed on this remote.</p>
+        {% elif fw_inactive %}
+        <p class="text-warning small mb-0"><i class="bi bi-exclamation-triangle"></i> UFW is installed but inactive: nothing on this page is enforced, and ufw does not list its stored rules until it is enabled.</p>
         {% endif %}
       </div>
     </div>
@@ -183,7 +197,7 @@
            every unreachable path, so this counted the empty list and printed it as a measurement,
            directly above a body that (correctly) says the rules can't be read. An em dash, the
            same thing static/js/remote_firewall.js already renders here on an unreachable refresh. #}
-        <span class="small text-secondary" id="rules-count">{% if status.unreachable %}&mdash;{% else %}{{ open_groups|length }} {% if open_groups|length == 1 %}<span>rule</span>{% else %}<span>rules</span>{% endif %}{% endif %}</span>
+        <span class="small text-secondary" id="rules-count">{% if fw_unlisted %}&mdash;{% else %}{{ open_groups|length }} {% if open_groups|length == 1 %}<span>rule</span>{% else %}<span>rules</span>{% endif %}{% endif %}</span>
       </div>
       <div class="card-body p-0">
         <div id="rules-list" style="max-height: 500px; overflow: auto;">
@@ -226,7 +240,7 @@
                   </button>
                   {% else %}
                   <button class="btn btn-outline-danger btn-sm py-0 px-1"
-                          title="Remove this rule ({{ 'ports ' + (g.nums|join(', ')) if g.nums|length > 1 else 'rule ' + (g.nums[0]|string) }})"
+                          title="Remove this rule ({{ 'rules ' + (g.nums|join(', ')) if g.nums|length > 1 else 'rule ' + (g.nums[0]|string) }})"
                           data-action="deleteGroup" data-args='[{{ g.nums|tojson }}, "@self", {{ g.warn|tojson }}, {{ g.protect_reason|tojson }}, {{ g.key|tojson }}]'>
                     <i class="bi bi-x"></i>
                   </button>
@@ -240,7 +254,13 @@
           {# The card above already says the host is down. Saying "no firewall rules" HERE
              contradicts it, in the more alarming direction, about the one page where being
              wrong about an open port matters most. #}
+          {% if status.permission_denied %}
+          <div class="p-3 text-center text-secondary small">Rules can't be read: sudo refused the firewall read on this host.</div>
+          {% else %}
           <div class="p-3 text-center text-secondary small">Rules can't be read while this host is unreachable.</div>
+          {% endif %}
+          {% elif fw_inactive %}
+          <div class="p-3 text-center text-secondary small">UFW is inactive, so its rules are neither listed nor enforced.</div>
           {% else %}
           <div class="p-3 text-center text-secondary small">No firewall rules yet.</div>
           {% endif %}
@@ -258,11 +278,12 @@
         <span><i class="bi bi-shield-slash"></i> Blocked IPs</span>
         {# Same reason as rules-count above: block_groups is derived from status.groups, which is
            [] when the read failed, so "0 blocked" was an answer about a host nothing reached. #}
-        <span class="small text-secondary" id="blocks-count">{% if status.unreachable %}&mdash;{% else %}{{ block_groups|length }} <span>blocked</span>{% endif %}</span>
+        <span class="small text-secondary" id="blocks-count">{% if fw_unlisted %}&mdash;{% else %}{{ block_groups|length }} <span>blocked</span>{% endif %}</span>
       </div>
       <div class="card-body">
         <p class="small text-secondary mb-2">
           Blocking an IP denies it on every port — SSH, the panel and all game servers.
+          <span id="blocks-inactive-note" class="text-warning{% if not fw_inactive %} d-none{% endif %}">While UFW is inactive a block is only stored — it denies nothing until UFW is enabled.</span>
           <span class="badge bg-info text-dark">Auto</span>
           <span>Entries marked Auto are managed by the rolling auto-block; the rest are manual.</span>
         </p>
@@ -310,7 +331,13 @@
              operator checks whether an abusive address is still denied, that is the worst possible
              direction to be wrong in. Same sentence as the Open Ports branch on purpose — a UFW
              deny IS a rule, and it is already in the catalog in both languages. #}
+          {% if status.permission_denied %}
+          <div class="p-3 text-center text-secondary small">Rules can't be read: sudo refused the firewall read on this host.</div>
+          {% else %}
           <div class="p-3 text-center text-secondary small">Rules can't be read while this host is unreachable.</div>
+          {% endif %}
+          {% elif fw_inactive %}
+          <div class="p-3 text-center text-secondary small">UFW is inactive, so its rules are neither listed nor enforced.</div>
           {% else %}
           <div class="p-3 text-center text-secondary small">No IPs are blocked.</div>
           {% endif %}

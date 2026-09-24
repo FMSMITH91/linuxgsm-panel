@@ -12,27 +12,32 @@ function refreshFirewall() {
       // empty groups list became "No open ports yet." Measured against a down host — the page
       // loaded honest and, one refresh later, reported an inactive firewall with nothing open.
       // On this page that is the most alarming possible way to be wrong.
+      // The inactive note beside "Blocking an IP denies it on every port" is true only of an
+      // inactive UFW, and only once the firewall has been read.
+      var inactive = !data.unreachable && data.installed === true && data.enabled !== true;
+      var bin = document.getElementById('blocks-inactive-note');
+      if (bin) bin.classList.toggle('d-none', !inactive);
       if (data.unreachable) {
         badge.textContent = 'Unknown';
         badge.className = 'badge bg-secondary';
-        if (listEl) {
-          // Built, not concatenated: the message goes in as TEXT, so this never becomes a new
-          // unescaped path into innerHTML (the repo gates every one of those). textContent also
-          // lets i18n.js's observer translate it, the same as the template's copy.
-          listEl.textContent = '';
-          var note = document.createElement('div');
-          note.className = 'p-3 text-center text-secondary small';
-          note.textContent = "Rules can't be read while this host is unreachable.";
-          listEl.appendChild(note);
-        }
-        // ...and no count beside it. "0 rules" is an arithmetic claim about a firewall nothing
-        // read, sitting immediately above a line that says it could not be read.
-        var rcu = document.getElementById('rules-count');
-        if (rcu) rcu.textContent = '\u2014';
+        // BOTH lists, and both counts. Only the rules card was repainted, so the Blocked IPs card
+        // went on showing the last good read, "3 blocked" with live Unblock buttons, as the
+        // current state of a firewall this refresh could not read. A sudo refusal is flagged
+        // unreachable as well, and says so rather than blaming the network.
+        _fwUnlisted(data.permission_denied
+          ? "Rules can't be read: sudo refused the firewall read on this host."
+          : "Rules can't be read while this host is unreachable.");
         return;
       }
       badge.textContent = data.enabled ? 'Active' : 'Inactive';
       badge.className = 'badge ' + (data.enabled ? 'bg-success' : 'bg-secondary');
+      if (inactive) {
+        // An inactive ufw lists no rules at all, stored ones included, so `groups` is [] here for
+        // the same reason it is for a host nothing reached: nothing was listed, and nothing is
+        // enforced. "No open ports yet." / "0 blocked" said otherwise.
+        _fwUnlisted('UFW is inactive, so its rules are neither listed nor enforced.');
+        return;
+      }
 
       var groups = data.groups || [];
       var openGroups = groups.filter(function(g) { return !g.is_block; });
@@ -109,6 +114,25 @@ function refreshFirewall() {
       if (window.toast) toast('Could not refresh the firewall rules — the host may be unreachable.',
                               'danger');
     });
+}
+
+// Both lists replaced by one sentence, and both counts by an em dash: the state where the rules
+// were not listed, so no count or empty-state line can be printed about them. Built as TEXT, never
+// concatenated into innerHTML, which also lets i18n.js's observer translate it like the template.
+function _fwUnlisted(message) {
+  ['rules-list', 'blocks-list'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = '';
+    var note = document.createElement('div');
+    note.className = 'p-3 text-center text-secondary small';
+    note.textContent = message;
+    el.appendChild(note);
+  });
+  ['rules-count', 'blocks-count'].forEach(function(id) {
+    var c = document.getElementById(id);
+    if (c) c.textContent = '\u2014';
+  });
 }
 
 function blockBadge(c) {

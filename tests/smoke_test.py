@@ -944,6 +944,80 @@ try:
     check("MANAGE_REMOTES user: non-granted remote reboot -> 403",
           mrc.post("/api/remote/%d/reboot" % remote2_id).status_code == 403)
 
+    # ── the host page offers a host operator only what their rights can do ──────────────────
+    # remote_manage needs MANAGE_REMOTES alone. It offered this operator the game table's
+    # Uninstall (a typed-name confirm, then refused) and Files & Config, the install-wide threshold
+    # Save and whitelist Add/× (the endpoints ignore or 403 them, and the page said "saved" /
+    # "removed"), and top-ips handed them the whole install's whitelist.
+    import panel.routes.remote_security as _hp_rs
+    _hp_saved = (_hp_rs.remote_fail2ban_top_ips, _hp_rs.remote_security_log)
+    _hp_lid = None
+    try:
+        _hp_rs.remote_fail2ban_top_ips = lambda *a, **k: []
+        _hp_rem = mrc.get("/remote/%d/manage" % remote_id).get_data(as_text=True)
+        _hp_adm = c.get("/remote/%d/manage" % remote_id).get_data(as_text=True)
+        _hp_files = "/server/%d/files" % gs_id
+        check("host page: a MANAGE_REMOTES-only operator is not offered Uninstall or Files & Config",
+              "smoke-cs" in _hp_rem and "uninstall-form" not in _hp_rem and _hp_files not in _hp_rem,
+              "the game row offers controls whose routes refuse this user")
+        check("host page: ...while a superadmin still is (positive control)",
+              "uninstall-form" in _hp_adm and _hp_files in _hp_adm, "the gate hides them from everyone")
+        check("host page: the install-wide threshold Save and whitelist Add are superadmin-only",
+              'data-action="saveThreshold"' not in _hp_rem and 'data-action="addWhitelist"' not in _hp_rem
+              and 'id="sec-wl-readonly"' in _hp_rem, "an operator is offered writes that are refused")
+        check("host page: ...and a superadmin keeps them (positive control)",
+              'data-action="saveThreshold"' in _hp_adm and 'data-action="addWhitelist"' in _hp_adm,
+              "the superadmin lost the threshold/whitelist controls")
+        _hp_ti = mrc.get("/api/remote/%d/security/top-ips" % remote_id).get_json(silent=True) or {}
+        _hp_ta = c.get("/api/remote/%d/security/top-ips" % remote_id).get_json(silent=True) or {}
+        check("top-ips: a host operator is not sent the install-wide whitelist",
+              "whitelist" not in _hp_ti and "autoblock" in _hp_ti, repr(_hp_ti)[:200])
+        check("top-ips: ...a superadmin is (positive control)", "whitelist" in _hp_ta, repr(_hp_ta)[:200])
+        # An unanswered log read is not an empty log.
+        _hp_rs.remote_security_log = lambda *a, **k: None
+        _hp_lg = c.get("/api/remote/%d/security/log?which=ssh" % remote_id).get_json(silent=True) or {}
+        check("security log: a read no host answered comes back as an error, not empty text",
+              _hp_lg.get("error") and _hp_lg.get("text") == "", repr(_hp_lg))
+        _hp_rs.remote_security_log = lambda *a, **k: ""
+        _hp_lg = c.get("/api/remote/%d/security/log?which=ssh" % remote_id).get_json(silent=True) or {}
+        check("security log: ...while an answered empty log is still just empty (positive control)",
+              "error" not in _hp_lg and _hp_lg.get("text") == "", repr(_hp_lg))
+        # The PANEL HOST's page, granted to the same operator (Groups offers it as a checkbox). Its
+        # Security endpoints are all superadmin-only, and its Connection card's else-branch spoke
+        # of an SSH login, a Migrate button and a pinned host key the panel host does not have.
+        with app.app_context():
+            _hp_l = RemoteServer(name="smoke-hp-local", host="127.0.0.1", port=22, username="local",
+                                 auth_method="local", auth_credential="", is_local=True)
+            db.session.add(_hp_l)
+            db.session.flush()
+            _hp_g = Group.query.filter_by(name="smoke_mr").first()   # held: a chained append
+            _hp_g.servers.append(_hp_l)                              # loses it to the GC
+            db.session.commit()
+            _hp_lid = _hp_l.id
+        _hp_loc = mrc.get("/remote/%d/manage" % _hp_lid).get_data(as_text=True)
+        check("panel host page: a non-superadmin is not shown the Security tab its endpoints refuse",
+              'id="ssh-port-input"' in _hp_loc and 'data-mtab-btn="security"' not in _hp_loc
+              and 'id="sec-bans"' not in _hp_loc, "the tab renders 403s as an all-clear")
+        check("panel host page: ...nor an SSH login, Migrate button or host key it does not have",
+              "Migrate to Tailscale SSH" not in _hp_loc and "Panel connects via" not in _hp_loc
+              and "Pinned SSH host key" not in _hp_loc, "remote-only copy on the panel host")
+        check("host page: ...while a REMOTE's page keeps all of them (positive control)",
+              'data-mtab-btn="security"' in _hp_rem and "Migrate to Tailscale SSH" in _hp_rem
+              and "Pinned SSH host key" in _hp_rem, "the gate hides them on every host")
+        _hp_loc_a = c.get("/remote/%d/manage" % _hp_lid).get_data(as_text=True)
+        check("panel host page: ...and a superadmin still gets the Security tab there (positive control)",
+              'data-mtab-btn="security"' in _hp_loc_a and 'id="sec-bans"' in _hp_loc_a,
+              "the Security tab is gone for the superadmin too")
+    finally:
+        _hp_rs.remote_fail2ban_top_ips, _hp_rs.remote_security_log = _hp_saved
+        if _hp_lid is not None:
+            with app.app_context():
+                _hp_row = db.session.get(RemoteServer, _hp_lid)
+                if _hp_row is not None:
+                    _hp_row.groups = []
+                    db.session.delete(_hp_row)
+                    db.session.commit()
+
     # ── a host you add has to be a host you can then reach ───────────────────────────────────
     # add_remote committed the row and granted it to nothing. Access is purely group-derived, so
     # for a non-superadmin creator the host was invisible on /remotes and answered 403 from its
@@ -1145,6 +1219,37 @@ try:
         check("firewall page: ...and still counts, rather than dashing everything",
               b'id="blocks-count">0 <' in _fw_ok.data and b"&mdash;" not in _fw_ok.data,
               "the real empty case no longer reports a count")
+        check("firewall page: ...and an ACTIVE firewall does not show the inactive note",
+              b'class="text-warning d-none">While UFW is inactive' in _fw_ok.data
+              and b"installed but inactive" not in _fw_ok.data, "the inactive copy shows on an active host")
+        # An INACTIVE ufw (stock Ubuntu) prints only its Status line — stored rules are neither
+        # listed nor enforced — so groups is [] and the page said "0 rules", "No firewall rules
+        # yet." and "No IPs are blocked." over a block that denies nothing.
+        def _inactive(_server):
+            return {"installed": True, "enabled": False, "rules": [], "groups": []}
+        _rvps.remote_ufw_status = _inactive
+        _fw_in = client_as(admin_id).get("/remote/%d/firewall" % remote_id)
+        check("firewall page: an INACTIVE ufw is said to be inactive and unenforced",
+              _fw_in.status_code == 200 and b"installed but inactive" in _fw_in.data
+              and b"neither listed nor enforced" in _fw_in.data,
+              "status=%d" % _fw_in.status_code)
+        check("firewall page: ...with no rule or block count, and no 'none blocked' claim",
+              b'id="rules-count">&mdash;<' in _fw_in.data and b'id="blocks-count">&mdash;<' in _fw_in.data
+              and b"No IPs are blocked." not in _fw_in.data and b"No firewall rules yet." not in _fw_in.data,
+              "an inactive firewall's empty listing is still counted")
+        check("firewall page: ...and says a block there denies nothing",
+              b'class="text-warning">While UFW is inactive' in _fw_in.data, "the block copy is unqualified")
+        # A sudo refusal comes back as unreachable + permission_denied; the page blamed the network.
+        def _sudo_refused(_server):
+            return {"installed": False, "enabled": False, "rules": [], "groups": [],
+                    "unreachable": True, "permission_denied": True}
+        _rvps.remote_ufw_status = _sudo_refused
+        _fw_pd = client_as(admin_id).get("/remote/%d/firewall" % remote_id)
+        check("firewall page: a sudo refusal names sudo, not an unreachable host",
+              _fw_pd.status_code == 200 and b"sudo refused the firewall read" in _fw_pd.data
+              and b"can't reach this host" not in _fw_pd.data
+              and b"while this host is unreachable" not in _fw_pd.data,
+              "status=%d" % _fw_pd.status_code)
     finally:
         _rvps.remote_ufw_status = _real_ufw
 
@@ -5915,6 +6020,13 @@ try:
         _r = _urc.get("/api/remote/%d/%s" % (_ur_id, _ep))
         check("unreachable host: /api/remote/<id>/%s does not 5xx" % _ep,
               _r.status_code < 500, "%s -> %d" % (_ep, _r.status_code))
+    # The OS-update watch polls this while apt runs; a read that failed answered done:true, and the
+    # popup declared the update finished with errors and stopped watching a live dpkg run.
+    _r = _urc.get("/api/remote/%d/os-update/status" % _ur_id)
+    _rj = _r.get_json(silent=True) or {}
+    check("unreachable host: an OS-update status read that failed is not 'done'",
+          _r.status_code == 200 and _rj.get("done") is False and _rj.get("unread") is True,
+          "%d %r" % (_r.status_code, _rj))
 
     # ── Auto-block reconcile: attempts-threshold selection + whitelist exemption ───────────────────
     # Drive _autoblock_reconcile against a stubbed offender list / UFW so no SSH or real firewall is
@@ -6690,6 +6802,65 @@ try:
             _am.update_config(lambda cfg: cfg.update({"port": _cp_port}))
         except Exception:
             pass
+
+    # ── change-port: a panel bound to the host's own public/LAN address keeps its port OPEN ──
+    # Only the wildcard counted as public, so binding to the host's public IP deleted the allow
+    # rule for the port the panel was about to listen on — UFW's default-deny then shut it — and
+    # the answer said "kept tailnet-only". Its own seeded is_local row: none survives to here.
+    from panel.routes import remote_security as _rs_bind
+    _bind_saved = (_rs_bind.remote_ufw_open_port, _rs_bind.remote_ufw_close_port,
+                   _am.so.host_has_ip, _am.so.restart_panel, _am.so.ensure_panel_fail2ban)
+    _bind_fw = []
+    with app.app_context():
+        _bind_lh = RemoteServer(name="smoke-bind-local", host="127.0.0.1", port=22,
+                                username="root", auth_method="key", is_local=True)
+        db.session.add(_bind_lh)
+        db.session.commit()
+        _bind_lh_id = _bind_lh.id
+        _bind_cfg0 = _am.load_config()
+    _bind_port = _bind_cfg0.get("port", 5000)
+    try:
+        _rs_bind.remote_ufw_open_port = lambda srv, port, proto=None, comment="": (
+            _bind_fw.append(("open", port)), (True, ""))[1]
+        _rs_bind.remote_ufw_close_port = lambda srv, port, proto=None: (
+            _bind_fw.append(("close", port)), (True, ""))[1]
+        _am.so.host_has_ip = lambda ip: True
+        _am.so.restart_panel = lambda *a, **k: (True, "stubbed")
+        _am.so.ensure_panel_fail2ban = lambda *a, **k: (True, "ok")
+
+        def _bind_post(addr):
+            del _bind_fw[:]
+            _r = c.post("/api/panel/change-port", json={"port": _bind_port, "bind_host": addr})
+            return _r.status_code, (_r.get_json(silent=True) or {}).get("message", "")
+        _bst, _bmsg = _bind_post("203.0.113.5")
+        check("change-port: binding to the host's own PUBLIC address opens its port, not closes it",
+              _bst == 200 and ("open", _bind_port) in _bind_fw and ("close", _bind_port) not in _bind_fw,
+              "status=%d fw=%r msg=%r" % (_bst, _bind_fw, _bmsg))
+        check("change-port: ...and does not call that tailnet-only",
+              "tailnet-only" not in _bmsg, _bmsg)
+        # Positive control: a Tailscale address really is reached without the public rule.
+        _bst, _bmsg = _bind_post("100.101.102.103")
+        check("change-port: ...while a Tailscale address still closes the public port (positive control)",
+              _bst == 200 and ("close", _bind_port) in _bind_fw and ("open", _bind_port) not in _bind_fw
+              and "kept tailnet-only" in _bmsg, "status=%d fw=%r msg=%r" % (_bst, _bind_fw, _bmsg))
+    finally:
+        (_rs_bind.remote_ufw_open_port, _rs_bind.remote_ufw_close_port,
+         _am.so.host_has_ip, _am.so.restart_panel, _am.so.ensure_panel_fail2ban) = _bind_saved
+        def _bind_restore(cfg):
+            cfg["port"] = _bind_port
+            if "bind_host" in _bind_cfg0:
+                cfg["bind_host"] = _bind_cfg0["bind_host"]
+            else:
+                cfg.pop("bind_host", None)
+        try:
+            _am.update_config(_bind_restore)
+        except Exception:
+            pass
+        with app.app_context():
+            _bind_row = db.session.get(RemoteServer, _bind_lh_id)
+            if _bind_row is not None:
+                db.session.delete(_bind_row)
+                db.session.commit()
 
     # ── Bearer API tokens: the other way into every route ─────────────────────────────────────────
     # A token authenticates AS its owner and inherits exactly that user's RBAC, and app.py exempts

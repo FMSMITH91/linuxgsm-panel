@@ -138,7 +138,11 @@ function addWhitelist(btn){
 function removeWhitelist(ip){
   fetch(secBase()+'/whitelist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip,remove:true})})
     .then(function(r){return r.json();}).then(function(d){
-      renderWhitelist(d.whitelist||[]);
+      // A refusal (403 for anyone but a superadmin) has no whitelist in it: rendering `[]` painted
+      // "Nothing whitelisted" and the toast said removed, while the address stayed exempt from
+      // every ban and auto-block on every host.
+      if(!d || !d.success){ if(window.toast) toast((d && d.message)||'Could not remove it','danger'); return; }
+      if('whitelist' in d) renderWhitelist(d.whitelist||[]);
       if(window.toast) toast((d.removed||ip)+' removed from the whitelist','info');
     }).catch(function(){ if(window.toast) toast('Could not remove it','danger'); });
 }
@@ -212,6 +216,9 @@ function loadSecurityLog(which, jail){
   var url=secBase()+'/log?which='+encodeURIComponent(which);
   if(jail) url += '&jail='+encodeURIComponent(jail);
   fetch(url).then(function(r){return r.json();}).then(function(d){  // nosemgrep
+    // A read that FAILED answers {text:"", error:...}; "(log is empty)" there told an admin an
+    // unreachable host had no SSH or ban activity, on the card that exists to show attacks.
+    if(!d || d.error){ el.textContent='Could not read the log.'; return; }
     el.textContent=d.text||'(log is empty)'; el.scrollTop=el.scrollHeight;   // textContent: raw log is never HTML
     if(el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'nearest'});
   }).catch(function(){ el.textContent='Could not read the log.'; });
@@ -251,7 +258,9 @@ function loadSecurityLog(which, jail){
   });
   function openHash(fallback){
     var h = (location.hash || '').replace('#','');
-    if (TABS.indexOf(h) >= 0) { show(h); return; }
+    // Only a tab this page actually offers: the panel host's Security tab is not rendered for a
+    // non-superadmin, and #security would otherwise open an empty tab and fire its 403 reads.
+    if (TABS.indexOf(h) >= 0 && nav.querySelector('[data-mtab-btn="' + h + '"]')) { show(h); return; }
     var tab = tabOf(h);
     if (tab) {
       show(tab);
@@ -379,9 +388,15 @@ function checkUpdates(){
   fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/check-updates').then(r=>r.json())
     .then(d=>{
       // A check that FAILED returns an empty list, exactly like a clean host — saying "up to date"
-      // there would report a state nobody actually managed to read.
-      if(d.ok===false){ el.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> '  // nosemgrep
-        + "Couldn't read the package list — apt may be busy. Try again in a minute.</span>";
+      // there would report a state nobody actually managed to read. Only a positive `ok` is a
+      // reading: a host the panel could not reach answers {success:false, unreachable:true} with
+      // no `ok` key at all, and `d.ok===false` let that through to a green "System is up to date."
+      // with Install disabled as "Nothing to install".
+      if(d.ok!==true){
+        if(d.unreachable) el.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> '  // nosemgrep
+          + "Couldn't reach the host — its update state is unknown.</span>";
+        else el.innerHTML='<span class="text-warning"><i class="bi bi-exclamation-triangle"></i> '  // nosemgrep
+          + "Couldn't read the package list — apt may be busy. Try again in a minute.</span>";
         setInstallUpdatesState('unknown'); return; }
       renderUpdates(d, '');
       if(window.osUpdatesNagCheck) window.osUpdatesNagCheck();   // the banner reflects this too
@@ -405,7 +420,13 @@ function checkUpdates(){
       renderUpdates(d, 'Last checked '+window.agoText(d.at));
     }).catch(function(){});
 })();
-var _osuTimer=null, _osuStale=0;
+var _osuTimer=null, _osuStale=0, _osuMiss=0;
+// A status poll that did not READ the host: the route's exception answer (`error`), an unread log
+// (`unread`: Tailscale SSH and the panel host return "" rather than raising), or a `done` with no
+// sentinel exit code behind it. None of them is the update finishing or stopping.
+function _osuPollUnread(d){
+  return !!(d.error || d.unread || (d.done && typeof d.rc !== 'number'));
+}
 function runUpdates(){
   confirmDialog({title:'Install updates', icon:'arrow-up-circle', confirmClass:'btn-primary', confirmLabel:'Install updates',
     bodyText:'Install all available updates on this host? You can watch it live in a popup; it runs '
@@ -415,7 +436,7 @@ function runUpdates(){
 }
 function _startOsUpdate(){
   if(_osuTimer){ clearTimeout(_osuTimer); _osuTimer=null; }
-  _osuStale=0;
+  _osuStale=0; _osuMiss=0;
   var logEl=document.getElementById('osu-log'), stEl=document.getElementById('osu-state'),
       spin=document.getElementById('osu-spin');
   if(logEl) logEl.textContent='';
@@ -437,6 +458,23 @@ function _pollOsUpdate(){
     .then(function(d){
       var logEl=document.getElementById('osu-log'), stEl=document.getElementById('osu-state'),
           spin=document.getElementById('osu-spin');
+      // One failed read ended the watch: the route's fallback says done:true, rc:null, log:"", so
+      // the popup wiped apt's output, announced "Finished with errors (exit null)", offered the
+      // reboot banner and stopped polling while dpkg was still unpacking (tailscaled restarting
+      // mid-upgrade is enough). An unread poll keeps the last log, is not counted towards the
+      // "ended without a marker" verdict, and polls again; only a long silence ends the watch.
+      if(_osuPollUnread(d)){
+        _osuMiss++;
+        if(_osuMiss>=40){ if(spin) spin.style.display='none';
+          if(stEl){ stEl.className='small mb-2 text-warning';
+            stEl.textContent='Lost contact with the host for two minutes. The update may still be running — reopen this later to check.'; }
+          return; }
+        if(stEl){ stEl.className='small mb-2 text-warning';
+          stEl.textContent='Lost contact with the host — still watching…'; }
+        _osuTimer=setTimeout(_pollOsUpdate, 3000);
+        return;
+      }
+      _osuMiss=0;
       if(logEl){ var atBottom=logEl.scrollTop+logEl.clientHeight >= logEl.scrollHeight-30;
         logEl.textContent=d.log||'';                     // textContent: apt output is never HTML
         if(atBottom) logEl.scrollTop=logEl.scrollHeight; }
@@ -455,12 +493,15 @@ function _pollOsUpdate(){
                                    else if(!IS_LOCAL) rebootNagCheck(REMOTE_ID, REMOTE_NAME); }   // kernel update -> banner
         return;
       }
-      _osuStale = d.running ? 0 : (_osuStale+1);
+      // Only a definite "apt is not running" counts towards giving up; an unanswered probe
+      // (running null) is neither.
+      _osuStale = d.running === true ? 0 : d.running === false ? (_osuStale+1) : _osuStale;
       if(_osuStale>=3){ if(spin) spin.style.display='none';
         if(stEl){ stEl.className='small mb-2 text-warning';
           stEl.innerHTML='<i class="bi bi-exclamation-triangle"></i> The update process ended without a completion marker — check the log.'; }
         return; }
-      if(stEl && d.running) stEl.innerHTML='<i class="bi bi-hourglass-split"></i> Installing… (safe to close this popup — it keeps running)';
+      if(stEl && d.running){ stEl.className='small mb-2 text-secondary';
+        stEl.innerHTML='<i class="bi bi-hourglass-split"></i> Installing… (safe to close this popup — it keeps running)'; }
       _osuTimer=setTimeout(_pollOsUpdate, 1500);
     }).catch(function(){ _osuTimer=setTimeout(_pollOsUpdate, 3000); });
 }
