@@ -104,6 +104,15 @@ _ONE_SHOT_B64 = 80000
 _CHUNK_B64 = 50000
 
 
+def _keep_mode(dest, staged):
+    """Shell fragment copying `dest`'s permission bits onto `staged`, for a write that renames
+    `staged` over `dest`. True when `dest` does not exist yet. When it exists and the chmod fails,
+    the fragment removes `staged` and fails, so the save is refused rather than landing with a
+    silently changed mode."""
+    d, s = _core._quote(dest), _core._quote(staged)
+    return f"{{ [ ! -e {d} ] || chmod --reference={d} {s} || {{ rm -f {s}; false; }}; }}"
+
+
 def _write_file_as_user(server, user, abspath, data_bytes):
     """Write bytes to a file as the game user, via base64.
 
@@ -117,6 +126,13 @@ def _write_file_as_user(server, user, abspath, data_bytes):
     Both paths write to a temp file and `mv` it into place. The previous form decoded straight over
     the destination, so a failure part-way left the real file truncated; a rename within the same
     directory is atomic, so the destination is either the old file or the whole new one.
+
+    A rename also replaces the destination's INODE, and the temp file was created under the game
+    user's umask — so without _keep_mode every save reset the file to 0644. Editing LinuxGSM's own
+    0755 launch script stripped its exec bit (start and the monitor cron then fail with "permission
+    denied", silently, long after the save said "Saved"), and a hand-placed 0600 file became
+    world-readable. The destination's mode is copied onto the temp file before the rename; a new
+    file keeps the umask default, which is what `>` gave it before.
     """
     import base64 as _b64
     b64 = _b64.b64encode(data_bytes).decode()
@@ -127,7 +143,7 @@ def _write_file_as_user(server, user, abspath, data_bytes):
     # is refused before any byte is written.
     if len(b64) <= _ONE_SHOT_B64:
         inner = (f"{mk} && printf %s {_core._quote(b64)} | base64 -d > {_core._quote(tmp)} "
-                 f"&& mv -f {_core._quote(tmp)} {_core._quote(abspath)}")
+                 f"&& {_keep_mode(abspath, tmp)} && mv -f {_core._quote(tmp)} {_core._quote(abspath)}")
         out, e, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, abspath, inner))}",
                                  timeout=60, sudo=False)
         if _OUTSIDE_HOME in (out or ""):
@@ -149,7 +165,9 @@ def _write_file_as_user(server, user, abspath, data_bytes):
             return False, e or "write failed"
         op = ">>"
         first = False
-    fin = f"base64 -d {_core._quote(tmp)} > {_core._quote(abspath)}.new && mv -f {_core._quote(abspath)}.new {_core._quote(abspath)} && rm -f {_core._quote(tmp)}"
+    fin = (f"base64 -d {_core._quote(tmp)} > {_core._quote(abspath)}.new "
+           f"&& {_keep_mode(abspath, abspath + '.new')} "
+           f"&& mv -f {_core._quote(abspath)}.new {_core._quote(abspath)} && rm -f {_core._quote(tmp)}")
     o, e, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(fin)}", timeout=60, sudo=False)
     return (rc == 0), (e or o or "")
 
