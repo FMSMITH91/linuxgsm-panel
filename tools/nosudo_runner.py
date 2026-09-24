@@ -72,11 +72,13 @@ def _install():
             return _DENIED
         return _real_so_run(cmd, timeout=timeout, sudo=sudo, text=text)
 
-    def _sm_local(cmd, timeout=30, sudo=False):
+    def _sm_local(cmd, timeout=30, sudo=False, **kw):
+        # **kw: _run_local also takes stdin_text (a secret run_privileged keeps off the command
+        # line). A wrapper that drops it turns every such call into a TypeError under this runner.
         if _is_sudo(cmd, sudo):
             BLOCKED.append(("ssh_manager._run_local", str(cmd)[:120]))
             return _DENIED
-        return _real_sm_local(cmd, timeout=timeout, sudo=sudo)
+        return _real_sm_local(cmd, timeout=timeout, sudo=sudo, **kw)
 
     system_ops._run = _so_run
     # The DEFINITION SITE, and only that. Every caller inside the package resolves _run_local

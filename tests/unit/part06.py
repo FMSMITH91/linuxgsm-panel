@@ -258,30 +258,63 @@ finally:
 # root. Read-only, but still a composed root command. Exercised against a sandboxed /home holding
 # a user with two of the wanted games, one with none of them, one with no serverfiles at all, and
 # one whose NAME is not something the panel would ever pass to a verb.
+#
+# And AS WHOM it looks. As root the probes followed the account's links, so `ln -s /root
+# ~/serverfiles` made them an existence oracle over /root; refusing every link instead broke the
+# layout operators actually use — serverfiles moved to a bigger disk and linked back — and the
+# panel host then called installed content absent: downloaded it again, ran auto-install over it,
+# dropped it from the update cron, and reported it removed when nothing was. Now each probe runs in
+# a child that has dropped to the account (own groups), following links with that account's access
+# only. This suite is not root, so the drop is a stub that RECORDS (to a file — it runs in the
+# forked child) and the accounts are a stub passwd mapping every name to this uid; "nodrop" is an
+# account whose drop does not take, "rootish" one with uid 0, "ghost" a /home dir with no account.
 try:
     _scanroot = _tempfile.mkdtemp(prefix="panel-scan-")
+    _scandisk = _tempfile.mkdtemp(prefix="panel-scan-disk-")
     for _d in ("srcds/serverfiles/cstrike", "srcds/serverfiles/hl2",
-               "gmodserver/serverfiles/tf2", "nothing", "bad;name/serverfiles/cstrike", "linker"):
+               "gmodserver/serverfiles/tf2", "nothing", "bad;name/serverfiles/cstrike", "moved",
+               "locked", "ghost/serverfiles/cstrike", "nodrop/serverfiles/cstrike",
+               "rootish/serverfiles/cstrike"):
         os.makedirs(os.path.join(_scanroot, _d), exist_ok=True)
-    # The account owns everything below its home, so it can point any of it anywhere. As root the
-    # probes FOLLOWED those links: `ln -s /root ~/serverfiles` made them an existence oracle over
-    # places the account cannot look. Here the targets are another user's real content, so a probe
-    # that follows reports what is not the account's — a whole serverfiles, and one game entry.
-    os.symlink(os.path.join(_scanroot, "srcds", "serverfiles"),
-               os.path.join(_scanroot, "linker", "serverfiles"))
-    os.symlink(os.path.join(_scanroot, "srcds", "serverfiles", "hl2"),
-               os.path.join(_scanroot, "gmodserver", "serverfiles", "hl2"))
-    for _sn, _sm in (("srcds/cssserver", 0o755), ("srcds/notexec", 0o644)):
+    os.makedirs(os.path.join(_scandisk, "css", "cstrike"))
+    os.makedirs(os.path.join(_scandisk, "shut", "sf", "cstrike"))
+    # The operator's layout: serverfiles on another disk, linked back into the home.
+    os.symlink(os.path.join(_scandisk, "css"), os.path.join(_scanroot, "moved", "serverfiles"))
+    # A link to somewhere the account cannot look: it must learn nothing it could not itself.
+    os.symlink(os.path.join(_scandisk, "shut", "sf"), os.path.join(_scanroot, "locked", "serverfiles"))
+    os.chmod(os.path.join(_scandisk, "shut"), 0)
+    for _sn, _sm in (("srcds/cssserver", 0o755), ("srcds/notexec", 0o644),
+                     ("nodrop/cssserver", 0o755)):
         with open(os.path.join(_scanroot, _sn), "w") as _fh:
             _fh.write("#!/bin/sh\n")
         os.chmod(os.path.join(_scanroot, _sn), _sm)
     os.symlink(os.path.join(_scanroot, "srcds", "cssserver"),
-               os.path.join(_scanroot, "linker", "cssserver"))
+               os.path.join(_scanroot, "moved", "cssserver"))
     _spec_s = _ilu.spec_from_loader("ph_scan", _machinery.SourceFileLoader("ph_scan", _helper_path))
     _hs = _ilu.module_from_spec(_spec_s)
     _spec_s.loader.exec_module(_hs)
     _hs.HOME_ROOT = _scanroot
     _hs.home_of = lambda u, _r=_scanroot: _r + "/" + _hs.v_username(u)
+    import pwd as _pwd_s
+    import types as _types_s
+    _s_me = _pwd_s.getpwuid(os.getuid())
+
+    def _s_getpwnam(name):
+        if name == "ghost" or name not in ("srcds", "gmodserver", "nothing", "moved", "locked",
+                                            "nodrop", "rootish"):
+            raise KeyError(name)
+        return _pwd_s.struct_passwd((name, "x", 0 if name == "rootish" else _s_me.pw_uid,
+                                     _s_me.pw_gid, "", os.path.join(_scanroot, name), "/bin/sh"))
+
+    _hs.pwd = _types_s.SimpleNamespace(getpwnam=_s_getpwnam)
+    _s_droplog = os.path.join(_scandisk, "drops")
+
+    def _s_drop(pw, own_groups=False):
+        with open(_s_droplog, "a") as _fh:
+            _fh.write("%s:%s\n" % (pw.pw_name, own_groups))
+        return pw.pw_name != "nodrop"
+
+    _hs._drop_to = _s_drop
     import io as _io_s
     _sbuf = _io_s.StringIO()
     _ssave = sys.stdout
@@ -291,27 +324,45 @@ try:
     finally:
         sys.stdout = _ssave
     _hits = sorted(ln for ln in _sbuf.getvalue().splitlines() if ln)
+    _s_drops = sorted(open(_s_droplog).read().split()) if os.path.exists(_s_droplog) else []
     eq("content scan: reports every wanted game a user actually has",
-       _hits, ["HIT|srcds|cstrike", "HIT|srcds|hl2"])
+       [h for h in _hits if h.startswith("HIT|srcds|")], ["HIT|srcds|cstrike", "HIT|srcds|hl2"])
     check("content scan: a user with serverfiles but none of the wanted games is not reported",
           not any("gmodserver" in h for h in _hits), str(_hits))
     check("content scan: a user with no serverfiles at all is not reported",
           not any("nothing" in h for h in _hits), str(_hits))
     check("content scan: a /home entry whose NAME the panel would never use is skipped",
           not any("bad" in h for h in _hits), str(_hits))
-    check("content scan: a symlinked serverfiles or game entry is not followed",
-          not any(h.startswith(("HIT|linker|", "HIT|gmodserver|")) for h in _hits), str(_hits))
-    _cp_got = (_hs.do_content_game_present(["srcds", "cstrike"], None),
-               _hs.do_content_game_present(["linker", "cstrike"], None),
-               _hs.do_content_game_present(["gmodserver", "hl2"], None))
-    check("content-game-present: a real game dir is present; one reached through a link the "
-          "account planted is not", _cp_got == (0, 1, 1), repr(_cp_got))
-    _cs_got = (_hs.do_content_script_present(["srcds", "cssserver"], None),
-               _hs.do_content_script_present(["linker", "cssserver"], None),
-               _hs.do_content_script_present(["srcds", "notexec"], None))
-    check("content-script-present: a real executable is present; a link to one, or a file with no "
-          "execute bit, is not", _cs_got == (0, 1, 1), repr(_cs_got))
+    check("content scan: serverfiles moved to another disk and linked back is found (as on a remote)",
+          "HIT|moved|cstrike" in _hits, str(_hits))
+    check("content scan: a link to where the account cannot look reports nothing",
+          os.geteuid() == 0 or not any(h.startswith("HIT|locked|") for h in _hits), str(_hits))
+    check("content scan: a /home dir with no account, a uid-0 account, or a drop that did not take "
+          "is not reported", not any(h.split("|")[1] in ("ghost", "rootish", "nodrop")
+                                     for h in _hits), str(_hits))
+    check("content scan: every user is looked at AS that user, with its own groups, and only them",
+          _s_drops == sorted("%s:True" % _u for _u in ("srcds", "gmodserver", "nothing", "moved",
+                                                        "locked", "nodrop")), repr(_s_drops))
+    if os.path.exists(_s_droplog):
+        os.remove(_s_droplog)
+    _cp_got = tuple(_hs.do_content_game_present([_u, _g], None) for _u, _g in (
+        ("srcds", "cstrike"), ("moved", "cstrike"), ("gmodserver", "hl2"), ("locked", "cstrike"),
+        ("ghost", "cstrike"), ("nodrop", "cstrike"), ("rootish", "cstrike")))
+    check("content-game-present: present, present through the account's own link, absent, absent "
+          "past a place it cannot look, absent with no account; 2 (unknown) when it cannot be asked",
+          _cp_got == (0, 0, 1, 0 if os.geteuid() == 0 else 1, 1, 2, 2), repr(_cp_got))
+    _cs_got = tuple(_hs.do_content_script_present([_u, _sc], None) for _u, _sc in (
+        ("srcds", "cssserver"), ("moved", "cssserver"), ("srcds", "notexec"), ("nodrop", "cssserver")))
+    check("content-script-present: an executable is present, directly or through the account's own "
+          "link; one with no execute bit is not; 2 when the account cannot be asked",
+          _cs_got == (0, 0, 1, 2), repr(_cs_got))
+    _s_drops = sorted(set(open(_s_droplog).read().split())) if os.path.exists(_s_droplog) else []
+    check("content-game-present / -script-present: asked as the named account, never as root",
+          _s_drops == sorted("%s:True" % _u for _u in ("srcds", "moved", "gmodserver", "locked",
+                                                        "nodrop")), repr(_s_drops))
+    os.chmod(os.path.join(_scandisk, "shut"), 0o700)
     _shutil.rmtree(_scanroot, ignore_errors=True)
+    _shutil.rmtree(_scandisk, ignore_errors=True)
 except OSError as _e:
     skip("content scan", _e)
 
@@ -929,7 +980,8 @@ import pwd as _pwd_dbo
 _dbo = _sandboxed_helper()
 _dbo_dir = _tempfile.mkdtemp(prefix="panel-dbrepair-")
 # A helper without these fails the checks below by name instead of crashing the part.
-for _dbo_fn, _dbo_dflt in (("_db_repair_account", lambda p: None), ("_db_repair_as", lambda a: None)):
+for _dbo_fn, _dbo_dflt in (("_db_repair_account", lambda p: None), ("_db_repair_as", lambda a: None),
+                           ("_db_repair_reclaim", lambda p, a: None)):
     if not hasattr(_dbo, _dbo_fn):
         setattr(_dbo, _dbo_fn, _dbo_dflt)
 try:
@@ -999,6 +1051,64 @@ try:
           len(_dbo_rep) == 1 and _dbo_rep[0][1].get("env", {}).get("HOME") == _dbo_me.pw_dir)
     check("db-repair: systemctl stop/start stay root (no drop on them)",
           all("preexec_fn" not in c[1] for c in _dbo_calls if "systemctl" in c[0][0]))
+    # Dropping before exec means db_maintenance never starts as root, so ITS reclaim of files an
+    # earlier root-run repair left root:root 0600 never ran, and the repair could not open the
+    # database it was asked to fix. The helper reclaims, as root, after the stop and before the
+    # repair: the recorder notes how many subprocess calls came before it.
+    _dbo_rec = []
+    _dbo_real_reclaim = _dbo._db_repair_reclaim
+    _dbo._db_repair_reclaim = lambda p, a: _dbo_rec.append((p, a.pw_uid, len(_dbo_calls)))
+    try:
+        _dbo_drive()
+    finally:
+        _dbo._db_repair_reclaim = _dbo_real_reclaim
+    check("db-repair: the files are handed back to the owner after the stop, before the repair",
+          _dbo_rec == [(_dbo_db, _dbo_me.pw_uid, 1)] and len(_dbo_calls) == 3,
+          "reclaims=%r calls=%r" % (_dbo_rec, [c[0] for c in _dbo_calls]))
+    # What the reclaim hands over. This suite is not root, so fstat reports the regular files as
+    # root's and fchown records: a regular, single-link panel.db and .backup go to the owner; a
+    # symlinked -shm and a hard-linked -wal must not (root would be giving away another file); and
+    # nothing moves when the directory is not the account's (a link swapped in after the lookup).
+    _dbo_rd = os.path.join(_dbo_dir, "reclaim")
+    os.makedirs(_dbo_rd)
+    for _n in ("panel.db", "panel.db.backup", "elsewhere", "other-file"):
+        open(os.path.join(_dbo_rd, _n), "wb").close()
+    os.link(os.path.join(_dbo_rd, "elsewhere"), os.path.join(_dbo_rd, "panel.db-wal"))
+    os.symlink(os.path.join(_dbo_rd, "other-file"), os.path.join(_dbo_rd, "panel.db-shm"))
+    _dbo_ino = {_n: os.lstat(os.path.join(_dbo_rd, _n)).st_ino
+                for _n in ("panel.db", "panel.db.backup", "elsewhere", "other-file")}
+    _dbo_chowned = []
+
+    def _dbo_fstat(fd):
+        _st = os.fstat(fd)
+        if not _stat.S_ISREG(_st.st_mode):
+            return _st
+        _f = list(_st[:10])
+        _f[4] = 0          # st_uid: root's, as an earlier root-run repair left it
+        return os.stat_result(_f)
+
+    _dbo_os_before = _dbo.os
+    _dbo.os = _DboProxy(os, fstat=_dbo_fstat,
+                        fchown=lambda fd, uid, gid: _dbo_chowned.append((os.fstat(fd).st_ino,
+                                                                         uid, gid)))
+    try:
+        _dbo._db_repair_reclaim(os.path.join(_dbo_rd, "panel.db"), _dbo_me)
+        _dbo_mine = sorted(_dbo_chowned)
+        del _dbo_chowned[:]
+        _dbo._db_repair_reclaim(os.path.join(_dbo_rd, "panel.db"), _pwd_dbo.struct_passwd(
+            (_dbo_me.pw_name, "x", _dbo_me.pw_uid + 4242, _dbo_me.pw_gid, "", _dbo_me.pw_dir,
+             "/bin/sh")))
+        _dbo_notmine = list(_dbo_chowned)
+    finally:
+        _dbo.os = _dbo_os_before
+    check("db-repair: a root-owned panel.db and .backup are handed back to the directory's owner",
+          _dbo_mine == sorted([(_dbo_ino["panel.db"], _dbo_me.pw_uid, _dbo_me.pw_gid),
+                               (_dbo_ino["panel.db.backup"], _dbo_me.pw_uid, _dbo_me.pw_gid)]),
+          "chowned=%r inodes=%r" % (_dbo_mine, _dbo_ino))
+    check("db-repair: a symlinked or hard-linked member is not handed over",
+          not {_i for _i, _u, _g in _dbo_mine} & {_dbo_ino["elsewhere"], _dbo_ino["other-file"]})
+    check("db-repair: nothing is handed over when the directory is not that account's",
+          _dbo_notmine == [], repr(_dbo_notmine))
     # A drop that does not take must stop the repair, not let it carry on as root.
     _dbo._drop_to = lambda pw, own_groups=False: False
     _dbo_raised = False
@@ -3050,6 +3160,17 @@ _cd_got = {_label: _cd_run(_b) for _label, _b in (
 check("codacy gate: an answer it cannot read fails the run; only an outage is a warning",
       _cd_got == {"HTTP 400": 1, "HTTP 410": 1, "HTTP 422": 1, "HTTP 308": 1, "HTML 200": 1,
                   "HTTP 503": 0, "unreachable": 0, "clean": 0}, repr(_cd_got))
+# ...but a rate limit is weather, not a verdict. The daily run pages the anonymous API from shared
+# runner IPs, and narrowing the outage branch to >= 500 turned a 429 into a red gate that sent the
+# operator to check an endpoint and filter shape that were fine. 429 and 408 say "not now", like a
+# 5xx; the refusals beside them (401/403, and 400/404 above) still fail — the control.
+_cd_rl = {_label: _cd_run(_b) for _label, _b in (
+    ("HTTP 429", _cd_err.HTTPError("u", 429, "too many requests", {}, None)),
+    ("HTTP 408", _cd_err.HTTPError("u", 408, "request timeout", {}, None)),
+    ("HTTP 401", _cd_err.HTTPError("u", 401, "unauthorized", {}, None)),
+    ("HTTP 403", _cd_err.HTTPError("u", 403, "forbidden", {}, None)))}
+check("codacy gate: a rate limit (429) or request timeout (408) warns; 401/403 still fail",
+      _cd_rl == {"HTTP 429": 0, "HTTP 408": 0, "HTTP 401": 1, "HTTP 403": 1}, repr(_cd_rl))
 
 # ── the code-scanning gate's concurrency group tells a fork PR from main ─────────────────────────
 # Keyed on head_branch alone, a fork PR opened from the fork's default branch (main) shared
@@ -3145,6 +3266,23 @@ _gl_bad = [_pp for _pp in _gl_paths
            or any(re.search(_pp, _rf) for _rf in _gl_readmes + ["README.md"])]
 check("gitleaks: no path exemption is unanchored or takes a README out of the scan",
       not _gl_bad, "exempts: %r" % _gl_bad)
+# install.sh pins NodeSource's public key fingerprint as NODESOURCE_KEY_FPR="<40 hex>", and the
+# default generic-api-key rule reads that as a credential: the blocking secret scan went red on the
+# PR range and, after merge, on every full-history run of main (the literal is in history from
+# 4bc9cba; history is not rewritten). The allowlist must carry THIS assignment — the whole match,
+# since regexTarget = "match" — and must not be a wildcard over the variable, so a rotated key is
+# looked at. gitleaks searches each allowlist regex in the match; Go and Python agree on literals.
+_gl_rx_blk = re.search(r"^\s*regexes\s*=\s*\[(.*?)^\s*\]", _gl_txt, re.M | re.S)
+_gl_rxs = re.findall(r"'''(.*?)'''", _gl_rx_blk.group(1) if _gl_rx_blk else "")
+_gl_fpr = re.findall(r'^\s*(NODESOURCE_KEY_FPR="[0-9A-F]{40}")\s*$',
+                     open(os.path.join(_root, "install.sh"), encoding="utf-8").read(), re.M)
+check("gitleaks: install.sh still pins the NodeSource fingerprint (the gate below has a subject)",
+      len(_gl_fpr) == 1, repr(_gl_fpr))
+check("gitleaks: the allowlist clears install.sh's NodeSource fingerprint assignment",
+      bool(_gl_fpr) and all(any(re.search(_rx, _m) for _rx in _gl_rxs) for _m in _gl_fpr),
+      "assignments %r, allowlist %r" % (_gl_fpr, _gl_rxs))
+check("gitleaks: the fingerprint exemption is that one value, not every NODESOURCE_KEY_FPR",
+      not any(re.search(_rx, 'NODESOURCE_KEY_FPR="' + "0" * 40 + '"') for _rx in _gl_rxs))
 
 # ── The docs state numbers that the code owns — pin them ──────────────────────────────────────
 # Every one of these was wrong at the time of writing, and none of them could be. SECURITY.md said

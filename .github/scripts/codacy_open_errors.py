@@ -7,9 +7,10 @@ gate exists and why it is scheduled rather than triggered by a push. Runnable by
     python .github/scripts/codacy_open_errors.py
 
 Exit 0 = clean (or nothing but accepted issues). Exit 1 = something unreviewed is on main.
-Exit 0 with a warning = the API could not be reached, or answered 5xx; an outage at Codacy is not a
-reason to fail the build, and the next scheduled run will catch what this one missed. Any other
-answer it cannot read (a 4xx, a redirect, a body that is not JSON) exits 1.
+Exit 0 with a warning = the API could not be reached, or answered 5xx, 429 or 408; an outage or a
+rate limit at Codacy is not a reason to fail the build, and the next scheduled run will catch what
+this one missed. Any other answer it cannot read (another 4xx, a redirect, a body that is not JSON)
+exits 1.
 """
 import json
 import os
@@ -23,6 +24,11 @@ API = ("https://app.codacy.com/api/v3/analysis/organizations/%s/repositories/%s"
        "/issues/search?limit=100" % (ORG, REPO))
 ROOT = pathlib.Path(__file__).resolve().parent.parent      # .github/
 ACCEPTED_FILE = ROOT / "codacy-accepted-errors.json"
+# 4xx statuses that mean "not NOW", not "not this request": a rate limit and a request timeout. This
+# runs daily from shared GitHub runner IPs against the anonymous API and can page up to 20 POSTs,
+# so a 429 is weather, not a verdict — failing on it sent the operator to check an endpoint and a
+# filter shape that were fine, and a gate that cries wolf gets ignored.
+TRANSIENT_HTTP = frozenset((408, 429))
 
 
 def fetch_errors():
@@ -75,17 +81,18 @@ def main():
     try:
         issues, answered = fetch_errors()
     except urllib.error.HTTPError as exc:
-        # ONLY a 5xx is an outage, and stays non-fatal. Everything else is the API answering, and
-        # the answer is "not this request": 401/403/404 (the repository went private, anonymous
+        # ONLY a 5xx, a 429 or a 408 is an outage, and stays non-fatal: each says "not now", and
+        # the next run re-asks (TRANSIENT_HTTP). Everything else is the API answering, and the
+        # answer is "not this request": 401/403/404 (the repository went private, anonymous
         # access was withdrawn, the endpoint moved), but equally 400/422 (the `levels` filter
         # changed shape), 410 (the endpoint was retired), 307/308 (it moved — urllib does not
-        # follow a redirect on a POST, it raises), 429. This used to fail only on 401/403/404 and
+        # follow a redirect on a POST, it raises). This used to fail only on 401/403/404 and
         # print a ::warning:: for the rest — and this workflow is schedule-only, so a warning
         # nobody reads let it report green daily, forever, which is the scenario codacy-alerts.yml
         # names.
-        if exc.code >= 500:
-            print("::warning::the Codacy API errored (HTTP %d) — not failing the build; the next "
-                  "scheduled run will re-check." % exc.code)
+        if exc.code >= 500 or exc.code in TRANSIENT_HTTP:
+            print("::warning::the Codacy API errored or rate-limited (HTTP %d) — not failing the "
+                  "build; the next scheduled run will re-check." % exc.code)
             return 0
         print("::error::the Codacy API refused the request (HTTP %d) for %s/%s — refusing to "
               "report it clean. Check the endpoint, the filter shape, and whether anonymous "

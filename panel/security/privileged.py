@@ -803,7 +803,8 @@ _ARGV = {
 
     # ── Ubuntu Pro ──
     "pro-status": ([], lambda a: ["pro", "status", "--format", "json"], None),
-    "pro-attach": ([_pro_token], lambda a: ["pro", "attach", a[0]], None),
+    # The token is the one argument that never reaches an argv: see SECRET_STDIN.
+    "pro-attach": ([_pro_token], lambda a: ["pro", "attach", "--attach-config", "-"], None),
     "pro-service": ([_choice("enable", "disable"), _choice(*PRO_SERVICES)],
                     lambda a: ["pro", a[0], a[1], "--assume-yes"], None),
     "pro-detach": ([], lambda a: ["pro", "detach", "--assume-yes"], None),
@@ -819,8 +820,9 @@ _ARGV = {
     "disk-free": ([_dfpath], lambda a: ["df", "-PB1", a[0]], None),
 
     # ── tailscale ──
+    # The auth key is read from stdin (`file:/dev/stdin`), never passed as a value: SECRET_STDIN.
     "tailscale-up-key": ([_authkey, _yesno, _routes, _tags],
-                         lambda a: ts_up_argv(a[1], a[2], a[3], auth_key=a[0]), None),
+                         lambda a: ts_up_argv(a[1], a[2], a[3], auth_key="file:/dev/stdin"), None),
     "tailscale-up-login": ([_yesno, _routes], lambda a: [], None),
 
     # ── host hardening ──
@@ -1059,6 +1061,14 @@ def _sshd_hardening_dropin_remote(key, value):
            "ok": shlex.quote(" ".join(sorted(SSHD_DIRECTIVES)))})
 
 
+# The remote renderings of the SECRET_STDIN verbs, naming the mktemp file "$f" that holds the secret.
+_SECRET_REMOTE = {
+    "pro-attach": lambda a: "pro attach --attach-config \"$f\"",
+    "tailscale-up-key": lambda a: (shlex.join(ts_up_argv(a[1], a[2], a[3]))
+                                   + " --auth-key \"file:$f\""),
+}
+
+
 _REMOTE_ACTIONS = {
     "sshd-backup-dropin": lambda a: "[ -f %s ] && cp -f %s %s || true"
                           % (shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN),
@@ -1257,15 +1267,56 @@ def tool_argv(verb, args):
     return _ARGV[verb][1](check_args(verb, args))
 
 
-def stdin_for(verb):
-    """Text to feed the tool on stdin, or None. `ufw delete <n>` prompts; answering it here is what
-    replaces the old `yes | ufw delete n`, and with it the pipe and the shell."""
+# Verbs with a SECRET argument: {verb: (its index, the text the TOOL reads on stdin)}.
+#
+# The Ubuntu Pro token and the Tailscale auth key were argv elements: `sudo -n panel-helper
+# pro-attach <token>` then `pro attach <token>` on the panel host, and `sudo bash -c 'pro attach
+# <token>'` / `tailscale up --auth-key <key>` on a remote. /proc/<pid>/cmdline is world-readable
+# unless /proc is mounted hidepid, so any local account — a game-server user included — could read
+# a subscription token or a reusable tailnet key for as long as the command ran (up to 240s).
+#
+# The secret is now validated like any argument, and then travels on STDIN only: to the helper,
+# which validates it again and hands it to the tool on the tool's stdin (`pro attach
+# --attach-config -`, `tailscale up --auth-key file:/dev/stdin`); and over SSH, where the remote
+# rendering copies stdin into a root-only mktemp file and names that file instead (see
+# _SECRET_REMOTE). The token doc is a double-quoted YAML string, which the token's charset keeps
+# inert and which keeps an all-digit token a string.
+SECRET_STDIN = {
+    "pro-attach": (0, lambda secret: 'token: "%s"\n' % secret),
+    "tailscale-up-key": (0, lambda secret: secret + "\n"),
+}
+
+
+def stdin_for(verb, args=None):
+    """Text to feed the TOOL on stdin, or None. `ufw delete <n>` prompts; answering it here is what
+    replaces the old `yes | ufw delete n`, and with it the pipe and the shell. For a SECRET_STDIN
+    verb it is the secret, in the form that tool reads — which is why the arguments are needed."""
+    if verb in SECRET_STDIN and args is not None:
+        index, doc = SECRET_STDIN[verb]
+        return doc(check_args(verb, args)[index])
     return _ARGV[verb][2]
 
 
+def helper_stdin(verb, args):
+    """Text for the HELPER's stdin: the bare secret for a SECRET_STDIN verb (the helper checks it
+    and formats it for the tool itself), else what stdin_for gives."""
+    if verb in SECRET_STDIN:
+        return check_args(verb, args)[SECRET_STDIN[verb][0]] + "\n"
+    return stdin_for(verb)
+
+
+def remote_stdin(verb, args):
+    """Text for the remote command's stdin, or None — only a SECRET_STDIN verb sends any."""
+    return stdin_for(verb, args) if verb in SECRET_STDIN else None
+
+
 def helper_argv(verb, args):
-    """The argv that runs `verb` locally through the root-owned helper."""
-    return ["sudo", "-n", HELPER_PATH, verb] + list(check_args(verb, args))
+    """The argv that runs `verb` locally through the root-owned helper. A SECRET_STDIN verb's
+    secret is left out: it goes on the helper's stdin (helper_stdin), never on a command line."""
+    checked = list(check_args(verb, args))
+    if verb in SECRET_STDIN:
+        del checked[SECRET_STDIN[verb][0]]
+    return ["sudo", "-n", HELPER_PATH, verb] + checked
 
 
 def remote_command(verb, args, merge_stderr=True):
@@ -1278,6 +1329,13 @@ def remote_command(verb, args, merge_stderr=True):
     if verb in _REMOTE_ACTIONS:
         # No tool to run — the helper does this one itself. A remote gets the shell form.
         return _REMOTE_ACTIONS[verb](checked)
+    if verb in SECRET_STDIN:
+        # The secret arrives on stdin (remote_stdin). It is copied into a root-only mktemp file and
+        # the tool is given that PATH, so it is in no command line on the remote either. The file
+        # rather than /dev/stdin because an SSH session's fd 0 can be a socket, which cannot be
+        # re-opened by path; `cat` reads either.
+        return ("f=$(mktemp) || exit 1; trap 'rm -f -- \"$f\"' EXIT; cat > \"$f\" && "
+                + _SECRET_REMOTE[verb](checked) + (" 2>&1" if merge_stderr else ""))
     cmd = shlex.join(tool_argv(verb, args))
     if verb in NONINTERACTIVE:
         # The helper sets this on the child's environment; over SSH there is a shell, so the
