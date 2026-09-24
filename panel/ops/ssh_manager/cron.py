@@ -323,20 +323,42 @@ def _read_cron_run_times(server, user):
     # into a grep pattern running as root. The verb reads the window; the filtering is here.
     out, _, _ = _core.run_privileged(server, "journal-cron", [], timeout=12, merge_stderr=False)
     marker = "(%s) CMD " % user
-    out = "\n".join([ln for ln in (out or "").splitlines() if marker in ln][-800:])
+    # Over-long lines are skipped before anything else looks at them. The journal is the remote's
+    # to write, and this runs on the request greenlet: the regex that used to pull the command out
+    # (`\)\s+CMD\s+\((.*)\)\s*$`) is quadratic on a line of repeated ") CMD (" fragments with
+    # no closing parenthesis, so one hostile line froze the whole panel — every user and host —
+    # until it finished. A crontab command is a few hundred bytes; nothing real is lost.
+    out = "\n".join([ln for ln in (out or "").splitlines()
+                     if marker in ln and len(ln) <= _MAX_CRON_LOG_LINE][-800:])
     times = {}
     for line in (out or "").splitlines():
-        head = line.split(None, 1)
-        if not head:
+        cmd = _cron_log_command(line, marker)
+        if cmd is None:
             continue
         try:
-            epoch = int(float(head[0]))
-        except ValueError:
+            epoch = int(float(line.split(None, 1)[0]))
+        except (ValueError, IndexError):
             continue
-        m = re.search(r"\)\s+CMD\s+\((.*)\)\s*$", line)
-        if m:
-            times[m.group(1).strip()] = epoch   # chronological log → last occurrence wins
+        times[cmd] = epoch   # chronological log → last occurrence wins
     return times
+
+
+# A cron command line is a few hundred bytes; a journal line longer than this is not one.
+_MAX_CRON_LOG_LINE = 4096
+
+
+def _cron_log_command(line, marker):
+    """The command in a cron journal line `<epoch> ... (<user>) CMD (<command>)`, or None.
+
+    Plain string search, not a regex: find the marker, expect "(", and take everything up to the
+    line's final ")". Linear in the line's length whatever the line contains."""
+    i = line.find(marker)
+    if i < 0:
+        return None
+    rest = line[i + len(marker):].strip()
+    if len(rest) < 2 or rest[0] != "(" or rest[-1] != ")":
+        return None
+    return rest[1:-1].strip()
 
 
 def upgrade_managed_cron_tracking(server, user, selfname=None):

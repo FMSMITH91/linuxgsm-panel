@@ -1056,6 +1056,46 @@ finally:
     _sm_core.run_command = _rc_o_run
 
 
+# ── the cron journal is the remote's to write, so its parser has to be linear ─────────────────
+# _read_cron_run_times pulled the command out of each journal line with
+# `\)\s+CMD\s+\((.*)\)\s*$`, which is quadratic on a line of repeated ") CMD (" fragments with no
+# closing parenthesis — 0.5 s at 42 KB, minutes at a megabyte — and it runs on the request
+# greenlet, so one hostile line froze every user and host until it finished. Driven for real, with
+# only the privileged read stubbed.
+import time as _crj_time                                                            # noqa: E402
+_crj_saved = _sm_core.run_privileged
+_crj_out = {"v": ""}
+try:
+    _sm_core.run_privileged = lambda *a, **k: (_crj_out["v"], "", 0)
+    _crj_cmd = "/home/gm/gmodserver monitor > /dev/null 2>&1"
+    _crj_long = "echo " + "x" * 5000
+    _crj_out["v"] = "\n".join([
+        "1700000000.5 host CRON[1]: (gm) CMD (%s)" % _crj_cmd,
+        "1700000100.0 host CRON[2]: (gm) CMD (%s)" % _crj_cmd,
+        "1700000150.0 host CRON[3]: (other) CMD (/home/other/x start)",
+        "1700000160.0 host CRON[4]: (gm) CMD (%s)" % _crj_long,
+    ])
+    _crj = _sm_cron._read_cron_run_times(NS(), "gm")
+    check("cron journal: a normal line is read, and the LAST run wins (positive control)",
+          _crj.get(_crj_cmd) == 1700000100 and len([k for k in _crj if "other" in k]) == 0,
+          repr({k[:40]: v for k, v in _crj.items()}))
+    check("cron journal: a line past the length ceiling is skipped before it is parsed",
+          _crj_long not in _crj, "a %d-byte journal line was parsed" % len(_crj_long))
+    _crj_out["v"] = "1700000200 host CRON[5]: (gm) CMD " + ") CMD (" * 20000 + "x"
+    _crj_t = _crj_time.monotonic()
+    _crj = _sm_cron._read_cron_run_times(NS(), "gm")
+    _crj_el = _crj_time.monotonic() - _crj_t
+    check("cron journal: a hostile 140 KB line costs nothing (the old regex took seconds)",
+          _crj_el < 2.0 and _crj == {}, "%.2fs, %r" % (_crj_el, list(_crj)[:1]))
+    # The extraction itself, on a line UNDER the ceiling: marker, "(", up to the final ")".
+    check("cron journal: the command is everything between the marker's ( and the final )",
+          _sm_cron._cron_log_command("1 h CRON[1]: (gm) CMD (a (b) c) ", "(gm) CMD ") == "a (b) c"
+          and _sm_cron._cron_log_command("1 h CRON[1]: (gm) CMD (no close", "(gm) CMD ") is None,
+          "")
+finally:
+    _sm_core.run_privileged = _crj_saved
+
+
 def _cr_drive(fn, *a, **kw):
     """Run a cron editor for real: capture its command and execute it against files."""
     seen = {}
