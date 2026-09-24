@@ -12345,8 +12345,57 @@ try:
         _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=None))
         check("socket: ...and falls back to '*' only when there is no domain to pin to",
               _sio_cors() == "*", "answered %r with no site_domain set" % (_sio_cors(),))
+        # ...but the socket itself never takes that "*" as it stands. A SITE ignores the port, so
+        # a page on another port of the panel's own address is same-site, the Lax cookie rides
+        # along, and "*" (reflected, with credentials) handed it every console the operator can
+        # see. The socket gets _socket_origin_ok instead, unless the operator wrote "*" himself.
+        from panel.routes import server_files as _sio_sf
+        check("socket: with no domain the socket's origin setting is the same-host/other-port check, not '*'",
+              _sio_sf._socket_cors_setting() is _sio_sf._socket_origin_ok,
+              "got %r" % (_sio_sf._socket_cors_setting(),))
+        _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins="*"))
+        check("socket: ...while an operator's own explicit '*' is still honoured (control)",
+              _sio_sf._socket_cors_setting() == "*", "got %r" % (_sio_sf._socket_cors_setting(),))
+        _sc_cfg(dict(_cfg_before, site_domain="panel.example.ts.net", socketio_cors_origins=None))
+        check("socket: ...and a configured domain still pins the list (control)",
+              _sio_sf._socket_cors_setting() == _sio_cors() and _sio_cors() != "*",
+              "got %r" % (_sio_sf._socket_cors_setting(),))
+        for _so_origin, _so_env, _so_want, _so_what in (
+                ("http://1.2.3.4:8123", {"HTTP_HOST": "1.2.3.4:5000"}, False,
+                 "a page on another port of the panel's own address"),
+                ("http://panel.lan:8123", {"HTTP_HOST": "panel.lan:5000"}, False,
+                 "...by hostname too"),
+                ("https://panel.lan:8443", {"HTTP_HOST": "127.0.0.1:5000",
+                                            "HTTP_X_FORWARDED_HOST": "panel.lan"}, False,
+                 "...and by the host a proxy forwarded"),
+                ("http://1.2.3.4:5000", {"HTTP_HOST": "1.2.3.4:5000"}, True, "the panel's own page"),
+                ("https://panel.lan", {"HTTP_HOST": "panel.lan:443"}, True, "an implied default port"),
+                ("https://panel.lan", {"HTTP_HOST": "127.0.0.1:5000"}, True,
+                 "a proxy that rewrote Host to loopback"),
+                ("https://panel.lan", {"HTTP_HOST": "panel.lan:5000", "HTTP_X_FORWARDED_HOST": "panel.lan"},
+                 True, "a proxy on the panel's own name that forwards the original host"),
+                ("null", {"HTTP_HOST": "1.2.3.4:5000"}, False, "an opaque origin")):
+            check("socket origin: %s is %s" % (_so_what, "accepted" if _so_want else "refused"),
+                  _sio_sf._socket_origin_ok(_so_origin, _so_env) is _so_want,
+                  "%r with %r" % (_so_origin, _so_env))
     finally:
         _sc_cfg(_cfg_before)
+    # The app's REAL engine.io server, driven over HTTP: its handshake refuses the other-port page
+    # and still answers the panel's own. Only meaningful when the app came up without a domain,
+    # which is how this suite builds it; the first check says so if that ever changes.
+    _so_eio = app.socketio.server.eio
+    check("socket origin: the running engine.io server was built with the same-host/other-port check",
+          _so_eio.cors_allowed_origins is _sio_sf._socket_origin_ok,
+          "cors_allowed_origins is %r" % (_so_eio.cors_allowed_origins,))
+    _so_c = app.test_client()
+    _so_bad = _so_c.get("/socket.io/?EIO=4&transport=polling", base_url="http://1.2.3.4:5000",
+                        headers={"Origin": "http://1.2.3.4:8123"})
+    _so_ok = _so_c.get("/socket.io/?EIO=4&transport=polling", base_url="http://1.2.3.4:5000",
+                       headers={"Origin": "http://1.2.3.4:5000"})
+    check("socket origin: the live handshake refuses a page on another port of the same address",
+          _so_bad.status_code == 400, "status %d %r" % (_so_bad.status_code, _so_bad.data[:80]))
+    check("socket origin: ...and completes for the panel's own origin (control)",
+          _so_ok.status_code == 200, "status %d %r" % (_so_ok.status_code, _so_ok.data[:80]))
 
 except Exception:
     # A crash part-way through otherwise just prints fewer checks and still reads as green-ish.
