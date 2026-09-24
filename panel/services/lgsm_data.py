@@ -51,7 +51,7 @@ _TIMEOUT = 10
 from panel import REPO_ROOT as _ROOT   # the cache belongs in the gitignored data/, at the root
 _CACHE_DIR = _ROOT / "data" / "lgsm"
 _lock = threading.Lock()
-_mem = {}          # name -> parsed value, so repeated reads do not re-open the file
+_mem = {}          # name -> (expires_at, parsed value), so repeated reads do not re-open the file
 _last_error = {}   # name -> str, for status()
 
 
@@ -138,21 +138,62 @@ def _text(name, allow_fetch=True):
     return None
 
 
+# A refetch that failed is tried again after this long, not a week later. The copy it fell back to
+# is served meanwhile.
+_RETRY_SECONDS = 3600
+
+
+def _memoised(key, load, allow_fetch):
+    """The parsed copy under `key` while it is due to be served, else `load()` -> (value, file).
+
+    It used to be served for the life of the process: serverlist() and deps() returned `_mem[...]`
+    as soon as it was filled and never looked at the file's age again, so MAX_AGE_SECONDS applied
+    only to the first read after a start or a refresh(). A panel up for two months offered the game
+    list and package lists from the day it started, and a game LinuxGSM added meanwhile never
+    reached the install menu.
+
+    A copy read from a fresh file lives until that file is due for its weekly refetch. One read
+    after a refetch failed (a stale file, or a fetch that could not be written) lives
+    _RETRY_SECONDS. A stale file read with fetching NOT allowed (status()) is not kept, so the next
+    read that may fetch still does. A re-read that comes back EMPTY keeps serving the copy it had —
+    a stale list beats no list — rather than emptying the install menu of a running panel."""
+    hit = _mem.get(key)
+    if hit is not None and time.time() < hit[0]:
+        return hit[1]
+    value, name = load()
+    if not value:
+        if hit is None:
+            return value
+        value = hit[1]
+        age = None
+    else:
+        age = _age(name)
+    if age is not None and age < MAX_AGE_SECONDS:
+        _mem[key] = (time.time() + MAX_AGE_SECONDS - age, value)
+    elif allow_fetch:
+        _mem[key] = (time.time() + _RETRY_SECONDS, value)
+    return value
+
+
+def _load_serverlist(allow_fetch):
+    text = _text(SERVERLIST, allow_fetch)
+    rows = []
+    if text:
+        try:
+            rows = [r for r in csv.DictReader(io.StringIO(text))]
+        except Exception:
+            rows = []
+    return rows, SERVERLIST
+
+
 def serverlist(allow_fetch=True):
-    """Rows of serverlist.csv as dicts, or [] when it cannot be had."""
+    """Rows of serverlist.csv as dicts, or [] when it cannot be had.
+
+    While a parsed copy is being served, every call returns the SAME list object, so a caller that
+    derives something from it (app.load_game_list) can tell a re-read (a new object) from a
+    repeat."""
     with _lock:
-        if "serverlist" in _mem:
-            return _mem["serverlist"]
-        text = _text(SERVERLIST, allow_fetch)
-        rows = []
-        if text:
-            try:
-                rows = [r for r in csv.DictReader(io.StringIO(text))]
-            except Exception:
-                rows = []
-        if rows:
-            _mem["serverlist"] = rows
-        return rows
+        return _memoised("serverlist", lambda: _load_serverlist(allow_fetch), allow_fetch)
 
 
 def deps(os_slug=None, allow_fetch=True):
@@ -166,21 +207,21 @@ def deps(os_slug=None, allow_fetch=True):
     A distro LinuxGSM does not publish simply 404s, and the caller falls back to the default.
     """
     name = deps_name(os_slug)
-    key = "deps:" + name
-    with _lock:
-        if key in _mem:
-            return _mem[key]
-        text = _text(name, allow_fetch)
+
+    def _load():
+        text, source = _text(name, allow_fetch), name
         if text is None and name != DEPS:
-            text = _text(DEPS, allow_fetch)      # this distro is not one LinuxGSM ships a list for
+            # this distro is not one LinuxGSM ships a list for
+            text, source = _text(DEPS, allow_fetch), DEPS
         out = {}
         for line in (text or "").splitlines():
             parts = [p.strip() for p in line.strip().split(",") if p.strip()]
             if parts:
                 out[parts[0]] = parts[1:]
-        if out:
-            _mem[key] = out
-        return out
+        return out, source
+
+    with _lock:
+        return _memoised("deps:" + name, _load, allow_fetch)
 
 
 def status():

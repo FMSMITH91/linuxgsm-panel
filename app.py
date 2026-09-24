@@ -901,10 +901,14 @@ def load_game_list():
     could not be had; `lgsm_data.status()` says why, and the install page surfaces it rather than
     rendering an empty menu.
     """
-    if _GAME_LIST_CACHE["games"] is not None:
+    # Keyed on the rows it was built from: lgsm_data hands back the same list object until its
+    # weekly re-read, so a new object means new data. This used to be kept for the life of the
+    # process, and a game LinuxGSM added after the panel started never reached the install menu.
+    rows = lgsm_data.serverlist()
+    if _GAME_LIST_CACHE["games"] is not None and _GAME_LIST_CACHE.get("rows") is rows:
         return _GAME_LIST_CACHE["games"]
     games = []
-    for row in lgsm_data.serverlist():
+    for row in rows:
         sn = (row.get("shortname") or "").strip()
         name = (row.get("gamename") or "").strip()
         if sn and name:
@@ -929,6 +933,7 @@ def load_game_list():
     # of the process, so a later retry (or the background warm) could never take effect.
     if games:
         _GAME_LIST_CACHE["games"] = games
+        _GAME_LIST_CACHE["rows"] = rows
     return games
 
 
@@ -939,15 +944,17 @@ def lgsm_name_to_game_type(lgsm_name):
     """Map a LinuxGSM 'gameservername' (e.g. 'gmodserver') to the panel's game_type / shortname
     (e.g. 'gmod'), from LinuxGSM's serverlist. Used when importing servers discovered on a host.
     Returns None for a game the panel doesn't know."""
-    if _LGSM_NAME_MAP["data"] is None:
+    rows = lgsm_data.serverlist()      # same object until lgsm_data re-reads it — see load_game_list
+    if _LGSM_NAME_MAP["data"] is None or _LGSM_NAME_MAP.get("rows") is not rows:
         m = {}
-        for row in lgsm_data.serverlist():
+        for row in rows:
             gsn = (row.get("gameservername") or "").strip()
             sn = (row.get("shortname") or "").strip()
             if gsn and sn:
                 m[gsn] = sn
         if m:                      # same reasoning as load_game_list: never memoise a failure
             _LGSM_NAME_MAP["data"] = m
+            _LGSM_NAME_MAP["rows"] = rows
         return m.get(lgsm_name)
     return _LGSM_NAME_MAP["data"].get(lgsm_name)
 

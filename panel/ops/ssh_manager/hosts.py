@@ -576,9 +576,6 @@ LGSM_COMMON_DEPS = (
 )
 
 
-_DEPS_CSV_CACHE = {}
-
-
 # Per-distro package lists, keyed by slug — one host may be 22.04 and another 24.04.
 #
 # Registered, and keyed by the remote id alone. It had NO expiry and was not registered, and its
@@ -632,13 +629,10 @@ def _load_deps_csv(os_slug=None):
     'steamcmd', and each game shortname. Fetched and cached rather than committed here — see
     lgsm_data — and chosen per distro rather than always Ubuntu 24.04."""
     from panel.services import lgsm_data
-    name = lgsm_data.deps_name(os_slug)
-    if _DEPS_CSV_CACHE.get(name) is not None:
-        return _DEPS_CSV_CACHE[name]
-    data = lgsm_data.deps(os_slug)
-    if data:                       # never memoise a failed fetch — a retry must be able to win
-        _DEPS_CSV_CACHE[name] = data
-    return data
+    # lgsm_data keeps the parsed list itself, and re-reads it weekly. A second copy here was kept
+    # for the life of the process, so an upstream package fix (a package renamed for a distro)
+    # never reached an install until the panel restarted.
+    return lgsm_data.deps(os_slug)
 
 
 def deps_for_game(game_type, os_slug=None):

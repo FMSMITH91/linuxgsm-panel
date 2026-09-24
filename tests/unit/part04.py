@@ -183,6 +183,61 @@ _lgd._mem.clear(); _lgd_fetches.clear()
 eq("lgsm data: a stale cache is still served when the refetch fails", len(_lgd.serverlist()), 3)
 check("lgsm data: ...and it did try to refresh first", _lgd_fetches == [_lgd.SERVERLIST], _lgd_fetches)
 
+# ── the weekly refetch has to happen in a RUNNING panel ───────────────────────────────────────
+# serverlist() and deps() returned their in-memory copy for the life of the process, and
+# app.load_game_list / lgsm_name_to_game_type / hosts._load_deps_csv each kept a second copy the
+# same way, so "refetch once a week" applied only to the first read after a start: a game LinuxGSM
+# added while the panel was up never reached the install menu. Driven on a clock moved a week on.
+import types as _lgd_types
+_lgd_real_time = _lgd.time
+_lgd_sl_path, _lgd_dp_path = _lgd._CACHE_DIR / _lgd.SERVERLIST, _lgd._CACHE_DIR / _lgd.DEPS
+_lgd_saved_files = (_lgd_sl_path.read_text(encoding="utf-8"), _lgd_dp_path.read_text(encoding="utf-8"))
+_lgd_saved_fetch = _lgd._fetch
+_LGD_NEW_SL = _SERVERLIST_FIXTURE + "newg,newgserver,A Game Added Upstream,ubuntu-24.04\n"
+_LGD_NEW_DP = _DEPS_FIXTURE.replace("all,bc,binutils,curl", "all,bc,binutils,curl,renamedpkg")
+try:
+    _lgd_sl_path.write_text(_SERVERLIST_FIXTURE, encoding="utf-8")
+    _lgd_dp_path.write_text(_DEPS_FIXTURE, encoding="utf-8")
+    _lgd._mem.clear()
+    _app._GAME_LIST_CACHE["games"] = None
+    _app._LGSM_NAME_MAP["data"] = None
+    _lgd_before = (len(_app.load_game_list()), _app.lgsm_name_to_game_type("newgserver"),
+                   _sm_hosts._load_deps_csv(None).get("all"))
+    # Upstream moves on: the next fetch returns the new files.
+    _lgd._fetch = lambda name: {_lgd.SERVERLIST: _LGD_NEW_SL, _lgd.DEPS: _LGD_NEW_DP}.get(name)
+    # Positive control: inside the week nothing is re-read, so the cache is still a cache.
+    check("lgsm data: inside the week the parsed copy is served, not re-read (control)",
+          _lgd_before == (3, None, ["bc", "binutils", "curl"])
+          and len(_app.load_game_list()) == 3
+          and _sm_hosts._load_deps_csv(None).get("all") == ["bc", "binutils", "curl"],
+          repr(_lgd_before))
+    _lgd.time = _lgd_types.SimpleNamespace(
+        time=lambda: _lgd_real_time.time() + _lgd.MAX_AGE_SECONDS + 60)
+    check("lgsm data: a week on, a game LinuxGSM added reaches the install menu",
+          len(_app.load_game_list()) == 4
+          and _app.lgsm_name_to_game_type("newgserver") == "newg",
+          "%d games" % len(_app.load_game_list()))
+    check("lgsm data: ...and a package-list fix reaches the installer",
+          _sm_hosts._load_deps_csv(None).get("all") == ["bc", "binutils", "curl", "renamedpkg"],
+          repr(_sm_hosts._load_deps_csv(None).get("all")))
+    # A re-read that gets NOTHING (file gone, network down) keeps the list it had: a stale list
+    # beats emptying the install menu of a panel that was working.
+    _lgd._fetch = lambda name: None
+    _lgd_sl_path.unlink()
+    _lgd.time = _lgd_types.SimpleNamespace(
+        time=lambda: _lgd_real_time.time() + 2 * _lgd.MAX_AGE_SECONDS + 120)
+    check("lgsm data: ...and a re-read that gets nothing keeps the list it had",
+          len(_app.load_game_list()) == 4, "%d games" % len(_app.load_game_list()))
+finally:
+    _lgd.time = _lgd_real_time
+    _lgd._fetch = _lgd_saved_fetch
+    _lgd_sl_path.write_text(_lgd_saved_files[0], encoding="utf-8")
+    _lgd_dp_path.write_text(_lgd_saved_files[1], encoding="utf-8")
+    _os_lgd.utime(_lgd_sl_path, (0, 0))   # as the stale-cache check above left it
+    _lgd._mem.clear()
+    _app._GAME_LIST_CACHE["games"] = None
+    _app._LGSM_NAME_MAP["data"] = None
+
 # ── lgsm_name_to_game_type: gameservername -> panel game_type, from LinuxGSM's serverlist ──
 _app._LGSM_NAME_MAP["data"] = None
 _app._GAME_LIST_CACHE["games"] = None
