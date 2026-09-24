@@ -647,8 +647,14 @@ def register(app, supervise):
             return jsonify({"content": content, "path": request.args.get("path", "")})
         data = _json_body()
         rel = data.get("path", "")
+        # The contents must be present and be TEXT, as api_server_config's `raw` must. This was
+        # data.get("content", ""), and write_file encodes (content or ""), so a missing key (an API
+        # script's typo) or a null/0/false/[] truncated the file to nothing and answered "Saved".
+        # An intentionally empty file is "", which is text, and still saves.
+        if not isinstance(data.get("content"), str):
+            return jsonify({"success": False, "message": "The file contents must be text."}), 400
         try:
-            ok, msg = write_file(gs.remote, gs.short_name, rel, data.get("content", ""))
+            ok, msg = write_file(gs.remote, gs.short_name, rel, data["content"])
             log_action(current_user, "edit_file", target=gs.name, detail=rel, success=ok)
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
         except Exception:

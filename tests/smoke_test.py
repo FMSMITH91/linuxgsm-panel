@@ -3106,6 +3106,30 @@ try:
         with c.session_transaction() as _dl_s:
             _dl_s.pop("_flashes", None)
 
+    # ── the file-save API must not write an empty file for a body with no text in it ─────────────
+    # `data.get("content", "")` turned a missing key — an API script's typo like "contents" — into
+    # "", and write_file does `(content or "").encode()`, so null/0/false/[] did the same: the
+    # target was truncated to 0 bytes and the answer was {"success": true, "message": "Saved"}.
+    _fs_writes = []
+    _fs_saved = _dl_mod.write_file
+    try:
+        _dl_mod.write_file = lambda srv, user, rel, content: (_fs_writes.append((rel, content)), (True, ""))[1]
+        for _fs_body in ({"path": "cfg/server.cfg", "contents": "typo"}, {"path": "cfg/server.cfg", "content": None},
+                         {"path": "cfg/server.cfg", "content": 0}, {"path": "cfg/server.cfg", "content": []}):
+            _fs_r = c.post("/api/server/%d/file" % gs_id, json=_fs_body)
+            check("file save: %r is refused, not written as an empty file" % (sorted(_fs_body.items()),),
+                  _fs_r.status_code == 400 and not _fs_writes
+                  and (_fs_r.get_json() or {}).get("success") is False,
+                  "status %d, writes %r" % (_fs_r.status_code, _fs_writes))
+            del _fs_writes[:]
+        # Positive control: an intentionally EMPTY file is still text, and is saved.
+        _fs_ok = c.post("/api/server/%d/file" % gs_id, json={"path": "cfg/empty.cfg", "content": ""})
+        check("file save: an intentionally empty file (content \"\") is still saved",
+              _fs_ok.status_code == 200 and _fs_writes == [("cfg/empty.cfg", "")],
+              "status %d, writes %r" % (_fs_ok.status_code, _fs_writes))
+    finally:
+        _dl_mod.write_file = _fs_saved
+
     mod_bad = c.post("/api/server/%d/moderate" % gs_id, json={"action": "nope"})
     check("moderate: unknown action -> 400", mod_bad.status_code == 400)
     # A user with server access but no moderate/console permission is refused (mru can reach the
