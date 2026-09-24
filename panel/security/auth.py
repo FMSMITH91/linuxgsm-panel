@@ -403,6 +403,19 @@ def _custom_command_scope_matches(cmd, game_server):
     return False
 
 
+def custom_command_ids(user):
+    """Ids of the custom commands `user` holds through their groups.
+
+    A custom command is authorised by group membership ALONE (can_run_custom_command checks no
+    permission), so for delegation it is a grant in its own right, next to permissions, hosts and
+    game servers. grantable_groups and can_administer_user compared those three and not this, so a
+    delegated admin could join a group made for a superadmin-authored command — `exec {}`,
+    `sv_password {}` — or take over a member of one, and run it. The superadmin question is the
+    caller's: a superadmin can run every command and is short-circuited before this is asked."""
+    return {c.id for g in _groups_with_grants(user, commands=True)
+            for c in (g.custom_commands or [])}
+
+
 def can_run_custom_command(user, cmd, game_server):
     """Whether `user` may run custom command `cmd` on `game_server`: the command must be enabled,
     in scope for that game, on a server the user can access, and — for non-superadmins — assigned
@@ -990,11 +1003,15 @@ def grantable_groups(requested_ids, existing=()):
     # closes the same gap from the group-editing side; this is the membership side.
     mine_remotes = set(accessible_remote_ids(current_user))
     mine_servers = {gs.id for gs in get_user_servers(current_user)}
+    # ...and the custom commands, the fourth thing membership hands over (see custom_command_ids).
+    mine_commands = custom_command_ids(current_user)
 
     def _within_my_reach(g):
         if not set(g.get_permissions()) <= mine:
             return False
         if not {r.id for r in (g.servers or [])} <= mine_remotes:
+            return False
+        if not {c.id for c in (g.custom_commands or [])} <= mine_commands:
             return False
         return {s.id for s in (g.game_servers or [])} <= mine_servers
 
@@ -1037,6 +1054,10 @@ def can_administer_user(actor, target):
     # directly below exists to stop a delegated admin granting objects they cannot reach; this is
     # the other door into the same room, and it was open.
     if not accessible_remote_ids(target) <= accessible_remote_ids(actor):
+        return False
+    # The same door opened with custom commands, which need no permission to run: a peer whose
+    # only extra reach is a superadmin-authored command is still someone to become.
+    if not custom_command_ids(target) <= custom_command_ids(actor):
         return False
     return ({g.id for g in get_user_servers(target)}
             <= {g.id for g in get_user_servers(actor)})
