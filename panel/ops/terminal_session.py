@@ -316,22 +316,28 @@ class Session:
             if self._closed:
                 return
             self._closed = True
-        # The process goes first, and only then the fd: killing the child closes the pty slave,
-        # the pump's next read returns EOF, and the pump closes the master itself. Closing the fd
-        # out from under a thread that is select()ing on it is a use-after-free for file
-        # descriptors — the number is immediately reusable, so the pump can wake up on some other
-        # session's socket and write ITS bytes into this browser.
-        for shut in (self._close_chan, self._close_proc, self._close_fd, self._close_client):
-            try:
-                shut()
-            except Exception:  # nosec B110
-                _log.debug("terminal teardown step failed for %s", self.label, exc_info=True)
+        self._teardown()
         with _sessions_lock:
             _sessions.pop(self.sid, None)
         try:
             self._on_exit(self.sid, reason)
         except Exception:  # nosec B110
             _log.debug("terminal exit callback failed for %s", self.label, exc_info=True)
+
+    def _teardown(self):
+        """Release whatever transport is attached. Every step is safe to run twice.
+
+        The process goes first, and only then the fd: killing the child closes the pty slave,
+        the pump's next read returns EOF, and the pump closes the master itself. Closing the fd
+        out from under a thread that is select()ing on it is a use-after-free for file
+        descriptors — the number is immediately reusable, so the pump can wake up on some other
+        session's socket and write ITS bytes into this browser.
+        """
+        for shut in (self._close_chan, self._close_proc, self._close_fd, self._close_client):
+            try:
+                shut()
+            except Exception:  # nosec B110
+                _log.debug("terminal teardown step failed for %s", self.label, exc_info=True)
 
     def _close_chan(self):
         if self._chan is not None:
@@ -524,6 +530,15 @@ def open_session(sid, server, is_local, user_key, on_output, on_exit, cols=80, r
         sess.close("")
         _log.warning("terminal open failed for %s", label, exc_info=True)
         raise TerminalError("Could not start a shell on %s (%s)." % (label, type(e).__name__))
+    # The session is registered BEFORE its transport opens, and a paramiko connect can take the
+    # whole ssh_timeout. A close in that window (the tab closing, term_close, a second term_open)
+    # found nothing attached and tore nothing down; the opener then attached a client and a live
+    # login shell to a session already marked closed, and close() — idempotent — never ran again.
+    # That connection stayed up until the panel restarted, outside the sweeper and the caps. So
+    # look again now that the transport exists, and release it here.
+    if sess.closed:
+        sess._teardown()
+        raise TerminalError("The terminal on %s closed while it was opening." % label)
     return sess
 
 

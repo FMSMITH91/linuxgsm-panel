@@ -5882,6 +5882,94 @@ check("terminal: a shell that fails to start leaks no descriptors",
 check("terminal: ...and leaves no session registered either",
       _tsmod7.count() == 0, "sessions left behind: %d" % _tsmod7.count())
 
+# (b2) A close that lands while the transport is still CONNECTING. The session is registered
+# before the opener runs and a paramiko connect can take the whole ssh_timeout; a close in that
+# window found nothing attached, and the opener then hung a client and a login shell on a session
+# already marked closed. close() is idempotent, so nothing ever released them. Driven through the
+# real open_session with the connect stubbed on _core, closing the socket's session mid-connect.
+_core_ts7 = _il6.import_module("panel.ops.ssh_manager._core")
+
+
+class _RaceChan7:
+    def __init__(self):
+        self.closed = False
+
+    def settimeout(self, _t):
+        pass
+
+    def recv_ready(self):
+        return False
+
+    def exit_status_ready(self):
+        return self.closed
+
+    def resize_pty(self, **_k):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+class _RaceClient7:
+    def __init__(self):
+        self.closed, self.chan = False, None
+
+    def invoke_shell(self, **_k):
+        self.chan = _RaceChan7()
+        return self.chan
+
+    def close(self):
+        self.closed = True
+
+
+class _RaceRemote7:
+    name = "race"; host = "192.0.2.9"; port = 22; username = "root"
+    auth_method = "key"; is_local = False; display_name = "race"; id = 98
+
+
+def _open_racing7(close_mid_connect):
+    made = []
+
+    def _conn(server, force_new=False, pooled=True):
+        if close_mid_connect:
+            _tsmod7.close_for_sid("race-sid", "the connection closed")
+        made.append(_RaceClient7())
+        return made[-1]
+
+    saved = _core_ts7.get_connection
+    _core_ts7.get_connection = _conn
+    raised = sess = None
+    try:
+        try:
+            sess = _tsmod7.open_session("race-sid", _RaceRemote7(), False, user_key=7,
+                                        on_output=lambda s, d: None, on_exit=lambda s, r: None)
+        except _tsmod7.TerminalError as e:
+            raised = e
+    finally:
+        _core_ts7.get_connection = saved
+    return made, raised, sess
+
+
+_rc_made7, _rc_err7, _rc_sess7 = _open_racing7(True)
+_rc_client7 = _rc_made7[0] if _rc_made7 else None
+check("terminal: a session closed while connecting releases the client it then got",
+      _rc_client7 is not None and _rc_client7.closed
+      and _rc_client7.chan is not None and _rc_client7.chan.closed,
+      "client closed=%s, shell channel closed=%s — an authenticated SSH connection with a live "
+      "login shell stays open to that host until the panel restarts, outside the idle sweeper and "
+      "the session caps" % (getattr(_rc_client7, "closed", None),
+                            getattr(getattr(_rc_client7, "chan", None), "closed", None)))
+check("terminal: ...and open_session reports it rather than handing back a dead session",
+      _rc_err7 is not None and _rc_sess7 is None and _tsmod7.count() == 0,
+      "raised=%r returned=%r registered=%d — on_term_open then records the host and emits "
+      "term_ready for a socket that is gone" % (_rc_err7, _rc_sess7, _tsmod7.count()))
+_ok_made7, _ok_err7, _ok_sess7 = _open_racing7(False)
+check("terminal: ...while an uninterrupted open keeps its client (positive control)",
+      _ok_err7 is None and _ok_sess7 is not None and _ok_made7 and not _ok_made7[0].closed,
+      "raised=%r client closed=%s" % (_ok_err7, _ok_made7 and _ok_made7[0].closed))
+if _ok_sess7 is not None:
+    _ok_sess7.close("done")
+
 # (c) One decoder per SESSION, not per chunk: a read boundary lands wherever the kernel puts it,
 # so a multi-byte character split across two reads became two replacement characters forever.
 # Driven through the REAL pump over a real pty, in two writes with a pause between them so the
