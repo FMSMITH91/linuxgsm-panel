@@ -78,7 +78,11 @@
     <span style="font-size: 3rem;">📡</span>
     <h5 class="mt-3">No Game Servers Found</h5>
     <p class="text-secondary">
-      No game servers are configured yet.
+      {# `servers` is what THIS user may see, not what the install has: a non-superadmin whose
+         group has no host or server grant yet gets [] on a panel running thirty servers, and was
+         told none were configured — so they reported it broken, or started adding a host. #}
+      {% if current_user.is_superadmin %}No game servers are configured yet.{% else %}<span>No game servers have been shared with you yet.</span>
+      <span>If you expected to see some, ask an administrator to give your group access.</span>{% endif %}
       {% if current_user.is_superadmin or has_permission('manage_remotes') %}
         <br>Start by adding a remote server, then install a game server from the Game Servers page.
         <br><a href="{{ url_for('manage_remotes') }}">Add a remote server</a>

@@ -3947,6 +3947,18 @@ try:
         db.session.add(_noinst)
         db.session.commit()
         _noinst_id = _noinst.id
+    # The dashboard's empty state speaks for what THIS user can see. For an account with no host
+    # or server grant `servers` is [], however many the install runs, and it was told "No game
+    # servers are configured yet" — a claim about the install made to someone who sees none of it.
+    _ng_dash = client_as(_noinst_id).get("/")
+    _ng_html = _ng_dash.get_data(as_text=True)
+    check("dashboard: a user with no grants is told nothing is shared with them, not that the "
+          "install has no servers",
+          _ng_dash.status_code == 200 and "No game servers have been shared with you yet." in _ng_html
+          and "No game servers are configured yet." not in _ng_html,
+          "status=%d shared-copy=%s configured-copy=%s"
+          % (_ng_dash.status_code, "shared with you" in _ng_html,
+             "are configured yet" in _ng_html))
     # A one-host panel must not ask which host. The placeholder is a required field whose only
     # valid answer is the single option under it — a click that can only be made one way. With two
     # or more the placeholder stays, because then the choice is real and a silent default would

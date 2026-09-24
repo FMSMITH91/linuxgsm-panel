@@ -148,6 +148,8 @@
   "Names": "Nombres",
   "No command list cached yet.": "Todavía no hay lista de comandos en caché.",
   "No game servers are configured yet.": "Todavía no hay servidores de juego configurados.",
+  "No game servers have been shared with you yet.": "Todavía no se ha compartido contigo ningún servidor de juego.",
+  "If you expected to see some, ask an administrator to give your group access.": "Si esperabas ver alguno, pide a un administrador que dé acceso a tu grupo.",
   "No history yet — a sample is recorded every minute. Check back shortly.": "Aún no hay historial: se registra una muestra cada minuto. Vuelve en un momento.",
   "No hosts configured yet.": "Aún no hay hosts configurados.",
   "No players connected.": "No hay jugadores conectados.",
