@@ -1985,6 +1985,28 @@ check(-1 not in _lss_i and _lss_i == sorted(_lss_i),
       "js: ...and never calls the panel port 'already closed' while UFW is off",
       "positions %r — panel_port_open === false is read before the firewall's state" % (_lss_i,))
 
+# ── saving the auto-block threshold must not switch auto-block OFF ───────────────────────────
+# saveThreshold posts the toggle's state as `enabled` ("preserve the on/off state"), but the toggle
+# is rendered unchecked and repainted only when /top-ips answers — after several SSH reads. A Save
+# pressed before that turned auto-block off for the host, and the toast said "auto-blocking IPs
+# with N+ attempts" regardless — also for a non-superadmin, whose threshold the endpoint ignores.
+_rmj = (ROOT / "static" / "js" / "remote_manage.js").read_text(encoding="utf-8")
+_st_fn = _js_code_only(_js_function_body(_rmj, "saveThreshold"))
+check(re.search(r"^var _autoblockKnown = false;", _rmj, re.M) is not None
+      and "if(!_autoblockKnown){" in _st_fn and "return; }" in _st_fn.split("if(!_autoblockKnown){")[-1][:200]
+      and _st_fn.find("if(!_autoblockKnown){") < _st_fn.find("fetch("),
+      "js: the threshold Save refuses until the host's auto-block state has been read",
+      "saveThreshold posts the toggle as `enabled` before anything has painted it")
+_lst_fn = _js_code_only(_js_function_body(_rmj, "loadSecurityTopIps"))
+check("if(tog && d && 'autoblock' in d){ tog.checked=!!d.autoblock; _autoblockKnown=true; }" in _lst_fn,
+      "js: ...and it is 'read' only when a payload that carried `autoblock` painted the toggle",
+      "_autoblockKnown is set somewhere other than the repaint that makes the toggle true")
+_tst_fn = _js_code_only(_js_function_body(_rmj, "thresholdSaveToast"))
+check("thresholdSaveToast(d, v)" in _st_fn and "!d.success" in _tst_fn
+      and "Number(d.threshold)" in _tst_fn and "t !== asked" in _tst_fn and "!d.enabled" in _tst_fn,
+      "js: ...and the toast says what the endpoint did — refused, ignored, saved with auto-block off",
+      "the toast still says 'Threshold saved' whatever came back")
+
 # ── the update card's changelog links each commit ─────────────────────────────────────────────
 # "d456826 fix: a failed install was a dead end" told you a subject and a sha you then had to go
 # and look up by hand. The sha is now a link to the commit, at the repo THIS checkout tracks (a

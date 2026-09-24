@@ -70,6 +70,7 @@
   "Enable Tailscale SSH? This re-authenticates Tailscale with SSH support enabled.": "Activer Tailscale SSH ? Cela réauthentifie Tailscale avec la prise en charge SSH activée.",
   "Enter SSH password": "Saisissez le mot de passe SSH",
   "Enter a number of attempts (1 or more)": "Saisissez un nombre de tentatives (1 ou plus)",
+  "The auto-block settings are still loading. Save again once they show.": "Les réglages du blocage automatique sont encore en cours de chargement. Enregistrez à nouveau une fois qu’ils s’affichent.",
   "Enter a port between 1 and 65535.": "Saisissez un port entre 1 et 65535.",
   "Enter an IP or CIDR first": "Saisissez d'abord une IP ou un CIDR",
   "Enter the IP address to bind to.": "Saisissez l'adresse IP sur laquelle écouter.",
