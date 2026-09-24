@@ -2951,6 +2951,24 @@ check("codacy gate: an answer it cannot read fails the run; only an outage is a 
       _cd_got == {"HTTP 400": 1, "HTTP 410": 1, "HTTP 422": 1, "HTTP 308": 1, "HTML 200": 1,
                   "HTTP 503": 0, "unreachable": 0, "clean": 0}, repr(_cd_got))
 
+# ── the code-scanning gate's concurrency group tells a fork PR from main ─────────────────────────
+# Keyed on head_branch alone, a fork PR opened from the fork's default branch (main) shared
+# `codeql-alerts-main` with the main gate, and GitHub cancels the older PENDING run in a group even
+# with cancel-in-progress: false — so an outside PR could cancel a queued main gate, leaving that
+# commit's alerts unjudged. The group has to carry the event and the head repository too; the
+# branch stays in it (the control), so main's own runs still queue behind one another.
+# Read as text with comment lines dropped (PyYAML is not a dependency of this suite).
+_cqa_txt = "\n".join(_l for _l in open(os.path.join(_root, ".github", "workflows",
+                                                     "codeql-alerts.yml"),
+                                        encoding="utf-8").read().splitlines()
+                      if not _l.lstrip().startswith("#"))
+_cqa_blk = _cqa_txt[_cqa_txt.index("\nconcurrency:"):]
+_cqa_group = " ".join(_cqa_blk[_cqa_blk.index("group:"):_cqa_blk.index("cancel-in-progress")].split())
+check("codeql-alerts: the concurrency group separates a fork PR from the main gate",
+      "github.event.workflow_run.event" in _cqa_group
+      and "github.event.workflow_run.head_repository.full_name" in _cqa_group
+      and "github.event.workflow_run.head_branch" in _cqa_group, _cqa_group)
+
 # ── gitleaks may not exempt a README from the secret scan ──────────────────────────────────────
 # The allowlist carried `paths = ['''README\\.md''']`. gitleaks path patterns are unanchored
 # searches, so that exempted all four READMEs outright, for placeholders the match regexes already
