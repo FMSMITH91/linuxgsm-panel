@@ -2003,13 +2003,56 @@ def _os_update_detached():
     os._exit(1)
 
 
+def _db_repair_account(db_path):
+    """The account the offline repair runs as: whoever owns the directory the database lives in.
+    None when that cannot be established, and the caller then does not repair at all.
+
+    It ran as root, and nothing handed the result back. Every file repair() makes is CREATED —
+    the rebuilt database is a new file renamed over panel.db, and so is a restored backup — so a
+    repair left panel.db root:root 0600 in the panel's own data directory, and the panel, started
+    again straight afterwards, could not open its own database. Run as the directory's owner,
+    everything the repair creates is the panel's, and root no longer works inside a directory the
+    panel user controls.
+
+    lstat, not stat: that directory entry is one the panel user can replace, and a symlink it put
+    there must not borrow the owner of whatever it points at — a root-owned target would hand the
+    repair back to root. A link ROOT made (an operator who moved data/ to another disk) is
+    followed, because then the directory it names is the panel's."""
+    d = os.path.dirname(db_path)
+    try:
+        st = os.lstat(d)
+        if stat.S_ISLNK(st.st_mode) and st.st_uid == 0:
+            st = os.stat(d)
+        return pwd.getpwuid(st.st_uid)
+    except (OSError, KeyError):
+        return None
+
+
+def _db_repair_as(account):
+    """subprocess.run keyword arguments that run the repair as `account` (see _db_repair_account).
+
+    Nothing for root: a panel whose data directory root owns runs as root, and its files are
+    root's. Otherwise the child drops to the account before exec, through _drop_to — which refuses
+    to report success in any state that is still root — and a drop that does not take raises in
+    the child, so subprocess.run raises here and the repair does not run as root instead."""
+    if account.pw_uid == 0:
+        return {}
+
+    def _become_owner():
+        if not _drop_to(account):
+            raise OSError("could not become %s" % account.pw_name)
+
+    return {"preexec_fn": _become_owner, "env": dict(os.environ, HOME=account.pw_dir)}
+
+
 def _db_repair_detached(db_path):
     """The offline repair itself, in the grandchild. NEVER RETURNS — every path ends in os._exit.
 
     stop -> repair -> start, as three argv calls with no shell between them. The panel used to
     compose this as a `bash -c` string and hand it to `sudo systemd-run`; the string was built from
     the panel's OWN directory, so root ran the panel user's interpreter on the panel user's script.
-    Here the interpreter is the system one and the script is the root-owned copy beside this file.
+    Here the interpreter is the system one and the script is the root-owned copy beside this file,
+    and it runs as the database's owner, not as root (_db_repair_account says why).
     """
     os.setsid()
     if os.fork() != 0:
@@ -2030,11 +2073,16 @@ def _db_repair_detached(db_path):
                       None)
         if python is None:
             os._exit(1)
+        # No account, no repair — and no stop either, so the panel is left as it was. Running it as
+        # root instead is exactly what leaves the database unopenable.
+        account = _db_repair_account(db_path)
+        if account is None:
+            os._exit(1)
         # The panel is holding the database open; it has to go down before the file can be rebuilt.
         subprocess.run([systemctl, "stop", PANEL_UNIT],  # nosec B603 - fixed argv
                        check=False, timeout=120)
         subprocess.run([python, DBM_PATH, "repair", db_path],  # nosec B603 - root-owned script
-                       check=False, timeout=900)
+                       check=False, timeout=900, **_db_repair_as(account))
     except Exception:
         # Swallowed so the finally below ALWAYS runs. This is a detached grandchild with no stderr
         # anyone reads, and the only thing that matters after a failed repair is that the panel is

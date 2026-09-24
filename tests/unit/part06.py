@@ -919,6 +919,102 @@ finally:
     _helper.PANEL_CONF = _dbr_conf
     _helper.DBM_PATH = _dbr_dbm
 
+# ── ...and it runs as the database directory's owner, not as root ──────────────────────────────
+# It ran as root and nothing handed the result back: repair() CREATES every file it leaves (the
+# rebuilt database, or a restored backup, is renamed over panel.db), so a repair made panel.db
+# root:root 0600 and the panel, started again straight afterwards, could not open its own
+# database. Driven through the real _db_repair_detached on a helper copy whose fork, setsid, _exit,
+# dup2 and subprocess.run are recorders, so nothing forks, detaches or runs.
+import pwd as _pwd_dbo
+_dbo = _sandboxed_helper()
+_dbo_dir = _tempfile.mkdtemp(prefix="panel-dbrepair-")
+try:
+    _dbo_data = os.path.join(_dbo_dir, "data")
+    os.makedirs(_dbo_data)
+    _dbo_db = os.path.join(_dbo_data, "panel.db")
+    open(_dbo_db, "wb").close()
+    _dbo_me = _pwd_dbo.getpwuid(os.getuid())
+    eq("db-repair: the repair account is the owner of the database's directory",
+       getattr(_dbo._db_repair_account(_dbo_db), "pw_uid", None), _dbo_me.pw_uid)
+    # A data/ the panel user swapped for a link to a root-owned directory: the LINK's owner decides,
+    # or the link would hand the repair back to root.
+    _dbo_link = os.path.join(_dbo_dir, "linked")
+    os.symlink("/", _dbo_link)
+    eq("db-repair: a data dir replaced by a link to a root-owned dir still runs as the link's owner",
+       getattr(_dbo._db_repair_account(os.path.join(_dbo_link, "panel.db")), "pw_uid", None),
+       _dbo_me.pw_uid)
+    check("db-repair: no directory to ask means no account (the repair does not run)",
+          _dbo._db_repair_account(os.path.join(_dbo_dir, "absent", "panel.db")) is None)
+    check("db-repair: a root-owned data directory runs as root, with nothing to drop",
+          _dbo._db_repair_as(_pwd_dbo.getpwuid(0)) == {})
+
+    class _DboExit(BaseException):
+        pass
+
+    class _DboProxy:
+        def __init__(self, real, **over):
+            self._real = real
+            self.__dict__.update(over)
+
+        def __getattr__(self, n):
+            return getattr(self._real, n)
+
+    def _dbo_exit(code):
+        raise _DboExit(code)
+
+    _dbo_calls = []
+    _dbo_drops = []
+    _dbo.os = _DboProxy(os, setsid=lambda: None, fork=lambda: 0, _exit=_dbo_exit,
+                        dup2=lambda a, b: None)
+    _dbo.subprocess = _DboProxy(_sp, run=lambda argv, **kw: (_dbo_calls.append((list(argv), kw))
+                                                             or _sp.CompletedProcess(argv, 0)))
+    _dbo.resolve = lambda n: "/usr/bin/" + n
+    _dbo.SYSTEM_PYTHON = (sys.executable,)
+    _dbo._drop_to = lambda pw, own_groups=False: _dbo_drops.append(pw.pw_uid) or True
+
+    def _dbo_drive():
+        del _dbo_calls[:]
+        del _dbo_drops[:]
+        try:
+            _dbo._db_repair_detached(_dbo_db)
+        except _DboExit:
+            pass
+        return [c for c in _dbo_calls if "repair" in c[0]]
+
+    _dbo_rep = _dbo_drive()
+    check("db-repair: stop, repair, start — the positive control",
+          [c[0][-2:] for c in _dbo_calls] == [["stop", _dbo.PANEL_UNIT], ["repair", _dbo_db],
+                                              ["start", _dbo.PANEL_UNIT]],
+          repr([c[0] for c in _dbo_calls]))
+    _dbo_pre = _dbo_rep[0][1].get("preexec_fn") if len(_dbo_rep) == 1 else None
+    if _dbo_pre is not None:
+        _dbo_pre()     # the stubbed _drop_to records; nothing here changes this process's uid
+    check("db-repair: the repair itself drops to the directory's owner before it runs",
+          _dbo_drops == [_dbo_me.pw_uid], "drops=%r calls=%r" % (_dbo_drops, _dbo_rep))
+    check("db-repair: with that account's HOME, not root's",
+          len(_dbo_rep) == 1 and _dbo_rep[0][1].get("env", {}).get("HOME") == _dbo_me.pw_dir)
+    check("db-repair: systemctl stop/start stay root (no drop on them)",
+          all("preexec_fn" not in c[1] for c in _dbo_calls if "systemctl" in c[0][0]))
+    # A drop that does not take must stop the repair, not let it carry on as root.
+    _dbo._drop_to = lambda pw, own_groups=False: False
+    _dbo_raised = False
+    try:
+        _dbo_pre()
+    except OSError:
+        _dbo_raised = True
+    except Exception:
+        pass
+    check("db-repair: a drop that does not take raises in the child instead of running as root",
+          _dbo_raised)
+    # And with no account at all, nothing is stopped and nothing is repaired.
+    _dbo._db_repair_account = lambda p: None
+    _dbo_drive()
+    check("db-repair: no account means no stop and no repair",
+          not [c for c in _dbo_calls if "stop" in c[0] or "repair" in c[0]],
+          repr([c[0] for c in _dbo_calls]))
+finally:
+    _shutil.rmtree(_dbo_dir, ignore_errors=True)
+
 def _module_toplevel_names(path):
     """Every name a module defines or imports at top level, by AST — no importing.
 
