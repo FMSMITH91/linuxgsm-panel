@@ -4118,6 +4118,14 @@ try:
           not _ga_refused("game-file-read", "alice"))
     os.environ.pop("SUDO_UID", None)
     check("helper: ...nor root invoking the helper directly", not _ga_refused("game-file-read", "alice"))
+    # The two copies of the never-a-content-group set (root never imports panel code) must agree,
+    # or a group one side refuses is granted by the other. incus-admin and libvirt joined both.
+    check("content group: privileged.py and the helper refuse the SAME root-equivalent groups",
+          set(_priv._NEVER_A_CONTENT_GROUP) == set(_helper.NEVER_A_CONTENT_GROUP)
+          and {"incus-admin", "libvirt"} <= set(_helper.NEVER_A_CONTENT_GROUP),
+          "only privileged.py: %s; only the helper: %s" % (
+              sorted(set(_priv._NEVER_A_CONTENT_GROUP) - set(_helper.NEVER_A_CONTENT_GROUP)),
+              sorted(set(_helper.NEVER_A_CONTENT_GROUP) - set(_priv._NEVER_A_CONTENT_GROUP))))
     # content-grant-read: the content account's primary group is what the GMod account joins, so
     # a root-equivalent one is refused, as privileged.py's _NEVER_A_CONTENT_GROUP already does.
     _ga_ran = []

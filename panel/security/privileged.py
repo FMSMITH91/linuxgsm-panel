@@ -487,7 +487,8 @@ def _username(s):
 # Groups a content user's primary group is never called, and that would hand out privilege if it
 # were. See _content_grant_remote.
 _NEVER_A_CONTENT_GROUP = frozenset({"root", "wheel", "sudo", "admin", "adm", "shadow", "docker",
-                                    "lxd", "disk", "staff"})
+                                    "lxd", "disk", "staff",
+                                    "incus-admin", "libvirt"})
 
 
 def _managed_user(s):

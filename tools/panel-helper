@@ -3374,7 +3374,8 @@ def _chmod_nofollow(path, add, x_if_user=False, dir_fd=None):
 
 # Mirrors panel/security/privileged.py _NEVER_A_CONTENT_GROUP; root never imports panel code.
 NEVER_A_CONTENT_GROUP = frozenset({"root", "wheel", "sudo", "admin", "adm", "shadow", "docker",
-                                   "lxd", "disk", "staff"})
+                                   "lxd", "disk", "staff",
+                                   "incus-admin", "libvirt"})
 
 
 def do_content_grant_read(args, content):
