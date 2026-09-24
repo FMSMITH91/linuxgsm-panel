@@ -6017,6 +6017,15 @@ try:
             check("global-ban: an invalid SteamID is rejected (not stored)", GlobalBan.query.count() == _cnt)
             _pg = _gc.get("/global-bans")
             check("global-ban: page lists the ban", _pg.status_code == 200 and b"STEAM_0:1:99" in _pg.data)
+            # The fan-out goes through each server's LIVE console, so a server stopped when the
+            # ban is added never gets it until Sync is pressed while it runs. The page promised
+            # "gone everywhere" and counted every installed Source server as covered.
+            _pgt = _pg.get_data(as_text=True)
+            check("global-ban: the page does not promise every server gets it, and says how a "
+                  "stopped one does",
+                  "gone everywhere" not in _pgt and "Currently propagates" not in _pgt
+                  and "stopped or unreachable" in _pgt and "Sync to all servers" in _pgt,
+                  "the page still claims a coverage the console fan-out cannot deliver")
             _del = _gc.post("/global-bans/%d/delete" % _gb.id)
             check("global-ban: delete removes it",
                   _del.status_code in (302, 303) and db.session.get(GlobalBan, _gb.id) is None)
