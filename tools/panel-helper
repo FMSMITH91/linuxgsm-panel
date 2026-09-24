@@ -772,10 +772,89 @@ def v_destroyable_user(s):
     the panel, `game-file-read`, `game-dir-tar`, `game-backup-read` and `crontab-list` all take it
     too. Putting the refusal on v_managed_user broke every one of those — the file browser,
     downloads, backups, cron and Tailscale setup — to protect four verbs. Scope it to the four."""
-    s = v_managed_user(s)
+    s = v_game_account(s)
     if _is_panel_account(s):
         raise ValueError("refusing the panel's own account")
     return s
+
+
+def v_game_account(s):
+    """A Linux user the panel may READ AS, RUN AS or CHANGE — v_managed_user, and an account the
+    panel's own sudoers grant already lets it become.
+
+    install.sh bounds "accounts the panel may become" with a Runas GROUP —
+    `<panel> ALL=(%lgsmpanel-games) NOPASSWD: ALL` — and gameuser-group refuses to put an account
+    that can already sudo inside it. But every per-account verb here checked the name with
+    v_managed_user alone, which refuses uid 0 and nothing else. So the helper handed out the reach
+    the group withholds: game-file-read / game-dir-tar drop to the NAMED account and read its
+    0600 files (`game-file-read ubuntu .ssh/id_ed25519`), lgsm-command and content-cron-write run
+    that account's executables as it, content-grant-read adds a panel-reachable account to its
+    group, and the destroy verbs `userdel -r` it.
+
+    Accepted: an account that does not exist (the verb's own lookup fails a moment later), a
+    member of GAME_GROUP, the account that invoked the helper (the single-box install where
+    LinuxGSM runs as the panel's own user), and — when that invoking account can already reach
+    root WITHOUT the helper (a privileged group, or a NOPASSWD rule for every command as root) —
+    anything, because there is no boundary left for this check to hold and refusing would only
+    break that host. Invoked as root directly, with no sudo in between, the same holds."""
+    s = v_managed_user(s)
+    try:
+        pwd.getpwnam(s)
+    except KeyError:
+        return s
+    caller = _pw_name(_int_or_none(os.environ.get("SUDO_UID")))
+    if not caller or caller == s:
+        return s
+    try:
+        if GAME_GROUP in _groups_of(s):
+            return s
+    except Exception:
+        pass                  # the group database did not answer; the caller test below decides
+    if _caller_reaches_root(caller):
+        return s
+    raise ValueError("%s is not a game account (not in %s)" % (s, GAME_GROUP))
+
+
+def _caller_reaches_root(caller):
+    """True if `caller` can already run anything as root without the helper: a privileged group,
+    or a sudoers rule granting it every command as root with NOPASSWD.
+
+    Unlike _can_already_escalate this is not a guard against a hostile policy: sudoers is root's,
+    and the panel user cannot write it. So a policy this cannot read answers True — the check it
+    feeds is then simply off on that host, which is where it was before, rather than refusing
+    every game account there."""
+    try:
+        names = _groups_of(caller)
+        if names & set(PRIVILEGED_GROUPS):
+            return True
+        pw = pwd.getpwnam(caller)
+        gids = {pw.pw_gid} | {grp.getgrnam(n).gr_gid for n in names}
+        lines, seen = [], set()
+        for path in [SUDOERS_FILE] + sorted(glob.glob(os.path.join(SUDOERS_DIR, "*"))):
+            lines.extend(_sudoers_lines(path, seen))
+        rules = _sudoers_rules_for(lines, caller, names, pw.pw_uid, gids)
+    except Exception:
+        return True
+    return any(_rule_is_nopasswd_root_all(rest) for rest in rules)
+
+
+def _rule_is_nopasswd_root_all(rest):
+    """True for the part of a sudoers rule after its user list when it reads
+    `<hosts> = [(ALL|root[:...])] NOPASSWD: ... ALL` — every command, as root, no password."""
+    m = re.fullmatch(r"\S+\s*=\s*(?:\(([^)]*)\))?\s*(.*)", rest.strip())
+    if not m:
+        return False
+    runas, cmd = m.group(1), m.group(2)
+    if runas is not None and runas.split(":")[0].strip() not in ("ALL", "root"):
+        return False
+    tags = []
+    while True:
+        t = re.match(r"([A-Z_]+)\s*:\s*", cmd)
+        if not t:
+            break
+        tags.append(t.group(1))
+        cmd = cmd[t.end():]
+    return "NOPASSWD" in tags and "ALL" in [c.strip() for c in cmd.split(",")]
 
 
 def _home_holds_a_panel(name):
@@ -1027,8 +1106,9 @@ def v_choice(*allowed):
 # a caller that could choose it could choose `root` and name the group it is already in.
 GAME_GROUP = "lgsmpanel-games"
 
-# Groups whose members can already reach root on a Debian/Ubuntu host.
-PRIVILEGED_GROUPS = ("sudo", "admin", "wheel", "root")
+# Groups whose members can already reach root on a Debian/Ubuntu host. docker, lxd and disk are
+# root without sudo: a container with / bind-mounted, a privileged LXD container, raw block access.
+PRIVILEGED_GROUPS = ("sudo", "admin", "wheel", "root", "docker", "lxd", "disk")
 
 
 def _groups_of(user):
@@ -1151,7 +1231,12 @@ def _sudoers_lines(path, seen, depth=0):
 
 
 def _sudoers_grants(lines, user, names, uid, gids):
-    """True if any user specification in `lines` can match `user`.
+    """True if any user specification in `lines` can match `user`. See _sudoers_rules_for."""
+    return bool(_sudoers_rules_for(lines, user, names, uid, gids))
+
+
+def _sudoers_rules_for(lines, user, names, uid, gids):
+    """The rules in `lines` whose user list can match `user` — each as the text AFTER that list.
 
     Resolves User_Alias definitions (recursively), comma-separated user lists, `ALL`, `#uid`,
     `%group` and `%#gid`. Anything it cannot evaluate — a netgroup, a non-Unix group, an alias
@@ -1176,7 +1261,7 @@ def _sudoers_grants(lines, user, names, uid, gids):
         m = re.match(r"((?:[^\s,]+\s*,\s*)*[^\s,]+)\s", line)
         if not m:
             raise ValueError("unparsed sudoers line: %s" % line)
-        rules.append([x.strip() for x in m.group(1).split(",")])
+        rules.append(([x.strip() for x in m.group(1).split(",")], line[m.end():]))
 
     def matches(item, depth=0):
         if depth > 16:
@@ -1198,7 +1283,7 @@ def _sudoers_grants(lines, user, names, uid, gids):
             return any(matches(x, depth + 1) for x in aliases[item])
         return False
 
-    return any(matches(item) for items in rules for item in items)
+    return [rest for items, rest in rules if any(matches(item) for item in items)]
 
 
 LGSM_ACTIONS = ("start", "stop", "restart", "monitor", "update", "validate", "backup",
@@ -1302,19 +1387,19 @@ VERBS = {
 
     # ── the GMod shared-content box ──
     "content-scan": ([Rest(v_ident)], lambda a: [], None),
-    "content-dir-create": ([v_managed_user], lambda a: [], None),
-    "content-game-present": ([v_managed_user, v_ident], lambda a: [], None),
-    "content-script-present": ([v_managed_user, v_ident], lambda a: [], None),
+    "content-dir-create": ([v_game_account], lambda a: [], None),
+    "content-game-present": ([v_game_account, v_ident], lambda a: [], None),
+    "content-script-present": ([v_game_account, v_ident], lambda a: [], None),
     # script "-" means "this game has no LinuxGSM script"; anything else is validated.
-    "content-game-remove": ([v_managed_user, v_ident, v_choice_or_ident], lambda a: [], None),
-    "content-cron-write": ([v_managed_user], lambda a: [], None),
-    "content-cron-remove": ([v_managed_user], lambda a: [], None),
+    "content-game-remove": ([v_game_account, v_ident, v_choice_or_ident], lambda a: [], None),
+    "content-cron-write": ([v_game_account], lambda a: [], None),
+    "content-cron-remove": ([v_game_account], lambda a: [], None),
     # The group is passed rather than looked up, so the local and remote forms take the same
     # arguments — the caller already knows it. It is still checked against the content user's real
     # primary group below before anything is granted.
-    "content-grant-read": ([v_managed_user, v_username, v_managed_user, Rest(v_ident)],
+    "content-grant-read": ([v_game_account, v_username, v_game_account, Rest(v_ident)],
                            lambda a: [], None),
-    "gmod-mount-read": ([v_managed_user], lambda a: [], None),
+    "gmod-mount-read": ([v_game_account], lambda a: [], None),
 
     # ── Ubuntu Pro ──
     "pro-status": ([], lambda a: ["pro", "status", "--format", "json"], None),
@@ -1325,7 +1410,7 @@ VERBS = {
 
     # ── misc host controls ──
     # renice takes a LIST of users, so the game servers can all be re-niced in one call.
-    "renice-users": ([v_nice, Rest(v_managed_user)],
+    "renice-users": ([v_nice, Rest(v_game_account)],
                      lambda a: ["renice", "-n", a[0], "-u"] + a[1:], None),
     "set-timezone": ([v_timezone], lambda a: ["timedatectl", "set-timezone", a[0]], None),
     # Both of these used to end in `| awk '…'` running as root. The verb returns the raw output and
@@ -1372,16 +1457,16 @@ VERBS = {
     "reboot-delayed": ([], lambda a: [], None),
 
     # ── cron and user accounts ──
-    "crontab-list": ([v_managed_user], lambda a: ["crontab", "-u", a[0], "-l"], None),
+    "crontab-list": ([v_game_account], lambda a: ["crontab", "-u", a[0], "-l"], None),
     "user-create": ([v_managed_user],
                     lambda a: ["useradd", "-m", "-s", "/bin/bash", a[0]], None),
-    "user-lock-password": ([v_managed_user], lambda a: ["passwd", "-l", a[0]], None),
+    "user-lock-password": ([v_game_account], lambda a: ["passwd", "-l", a[0]], None),
     "user-delete": ([v_destroyable_user], lambda a: ["userdel", "-r", a[0]], None),
     "user-delete-force": ([v_destroyable_user], lambda a: ["userdel", "-r", "-f", a[0]], None),
     "user-kill-processes": ([v_destroyable_user], lambda a: ["pkill", "-9", "-u", a[0]], None),
     # Free Steam's per-user crash-dump slots (see do_steam_dumps_sweep). Takes an account name and
     # nothing else: the ten paths it may remove are a constant in this file.
-    "steam-dumps-sweep": ([v_managed_user], lambda a: [], None),
+    "steam-dumps-sweep": ([v_game_account], lambda a: [], None),
     # rm -rf as root. The path is CONSTRUCTED from a validated user name (home_of), never passed
     # in, so the argument this verb receives is a name and the thing it deletes can only ever be a
     # direct child of /home.
@@ -1415,16 +1500,16 @@ VERBS = {
     "panel-restore": ([], lambda a: [], None),
     "panel-self-update": ([v_git_ref, v_branch_name], lambda a: [], None),
     "tailscale-install": ([], lambda a: [], None),
-    "game-backup-read": ([v_managed_user, v_backup_name], lambda a: [], None),
+    "game-backup-read": ([v_game_account, v_backup_name], lambda a: [], None),
     # The file browser's download buttons: one file, or a .tar.gz of one directory, from under a
     # game user's home. Both read AS THAT USER — see do_game_file_read.
-    "game-file-read": ([v_managed_user, v_relpath], lambda a: [], None),
-    "game-dir-tar": ([v_managed_user, v_relpath], lambda a: [], None),
+    "game-file-read": ([v_game_account, v_relpath], lambda a: [], None),
+    "game-dir-tar": ([v_game_account, v_relpath], lambda a: [], None),
     "lgsm-discover": ([], lambda a: [], None),
     # Which game users have a pending cron restart -- see do_restart_flags.
     "restart-flags": ([], lambda a: [], None),
     # One LinuxGSM action, run as the game user -- see do_lgsm_command for why this verb exists.
-    "lgsm-command": ([v_managed_user, v_ident, v_choice(*LGSM_ACTIONS), v_answers,
+    "lgsm-command": ([v_game_account, v_ident, v_choice(*LGSM_ACTIONS), v_answers,
                       v_choice("yes", "no")], lambda a: [], None),
     # Put a game account in the group the sudoers grant names -- see do_gameuser_group.
     "gameuser-group": ([v_managed_user], lambda a: [], None),
@@ -3245,6 +3330,11 @@ def _chmod_nofollow(path, add, x_if_user=False, dir_fd=None):
         os.close(fd)
 
 
+# Mirrors panel/security/privileged.py _NEVER_A_CONTENT_GROUP; root never imports panel code.
+NEVER_A_CONTENT_GROUP = frozenset({"root", "wheel", "sudo", "admin", "adm", "shadow", "docker",
+                                   "lxd", "disk", "staff"})
+
+
 def do_content_grant_read(args, content):
     """Let a GMod user read a content user's game trees.
 
@@ -3262,6 +3352,11 @@ def do_content_grant_read(args, content):
         print("panel-helper: refusing a gid-0 group", file=sys.stderr)
         return 2
     actual = grp.getgrgid(content_pw.pw_gid).gr_name
+    if actual in NEVER_A_CONTENT_GROUP:
+        # The same deny set privileged.py keeps (_NEVER_A_CONTENT_GROUP). A content account whose
+        # PRIMARY group is one of these would make the grant `usermod -aG sudo|docker|shadow ...`.
+        print("panel-helper: refusing to grant membership of that group", file=sys.stderr)
+        return 2
     if group != actual:
         # The caller named a group that is not this content user's. Adding the GMod user to an
         # arbitrary group is exactly the kind of thing this boundary exists to refuse.

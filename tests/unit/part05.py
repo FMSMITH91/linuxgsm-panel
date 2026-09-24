@@ -3881,6 +3881,123 @@ finally:
     _helper.SUDOERS_FILE, _helper.SUDOERS_DIR = _sudoers_saved
     _shutil.rmtree(_sg_root, ignore_errors=True)
 
+# ── ...and the per-account verbs only act on accounts inside that grant ──────────────────────
+# The sudoers design bounds "accounts the panel may become" with the %lgsmpanel-games Runas group,
+# and the check above keeps sudo-capable accounts out of it. But every per-account verb validated
+# its name with v_managed_user, which refuses uid 0 and nothing else — so `game-file-read ubuntu
+# .ssh/id_ed25519` dropped to the operator's account and handed its private key to the panel user,
+# lgsm-command ran that account's scripts as it, and the destroy verbs would `userdel -r` it. Driven
+# through validate(), the dispatcher's own check, with the invoking account set by SUDO_UID.
+_ga_verbs = ["content-dir-create", "content-game-present", "content-script-present",
+             "content-game-remove", "content-cron-write", "content-cron-remove",
+             "content-grant-read", "gmod-mount-read", "renice-users", "crontab-list",
+             "user-lock-password", "steam-dumps-sweep", "game-backup-read", "game-file-read",
+             "game-dir-tar", "lgsm-command", "user-delete", "user-delete-force",
+             "user-kill-processes", "user-remove-home"]
+_ga_users = {"lgsmpanel": 990, "ubuntu": 1000, "cssserver": 1001, "deployer": 1002, "alice": 1003}
+_ga_groups = {"sudo": ["ubuntu"], "lgsmpanel-games": ["cssserver"]}
+
+
+def _ga_pw(name):
+    if name not in _ga_users:
+        raise KeyError(name)
+    return NS(pw_name=name, pw_uid=_ga_users[name], pw_gid=_ga_users[name],
+              pw_dir="/nonexistent/" + name)
+
+
+def _ga_pwuid(uid):
+    for _n, _u in _ga_users.items():
+        if _u == uid:
+            return _ga_pw(_n)
+    raise KeyError(uid)
+
+
+def _ga_args(verb, who):
+    """The verb's sample arguments with every ACCOUNT slot naming `who`."""
+    _a = list(_VERB_SAMPLES[verb])
+    if verb == "renice-users":
+        return [_a[0], who]
+    if verb == "content-grant-read":
+        return [who, _a[1], who] + _a[3:]
+    return [who] + _a[1:]
+
+
+def _ga_refused(verb, who):
+    try:
+        _helper.validate(verb, _ga_args(verb, who))
+    except ValueError:
+        return True
+    return False
+
+
+_ga_saved = (_helper.pwd, _helper.grp, _helper.glob, _helper.SUDOERS_FILE, _helper.SUDOERS_DIR,
+             os.environ.get("SUDO_UID"))
+_ga_dir = _tempfile.mkdtemp(prefix="gameacct-")
+_ga_sudoers = os.path.join(_ga_dir, "sudoers")
+try:
+    _helper.pwd = NS(getpwnam=_ga_pw, getpwuid=_ga_pwuid)
+    _helper.grp = NS(getgrgid=lambda g: NS(gr_name=_ga_pwuid(g).pw_name, gr_gid=g, gr_mem=[]),
+                     getgrall=lambda: [NS(gr_name=k, gr_gid=5000 + i, gr_mem=v)
+                                       for i, (k, v) in enumerate(_ga_groups.items())],
+                     getgrnam=lambda n: NS(gr_name=n, gr_gid=_ga_users.get(n, 5000), gr_mem=[]))
+    _helper.glob = NS(glob=lambda _p: [])
+    _helper.SUDOERS_FILE, _helper.SUDOERS_DIR = _ga_sudoers, os.path.join(_ga_dir, "none")
+    # The hardened host: the narrow helper grant, the Runas-group grant, and the terminal's
+    # PASSWORD-required full grant — which a compromised panel process cannot use.
+    with open(_ga_sudoers, "w", encoding="utf-8") as _fh:
+        _fh.write("root ALL=(ALL:ALL) ALL\n%sudo ALL=(ALL:ALL) ALL\n"
+                  "lgsmpanel ALL=(root) NOPASSWD: /usr/local/lib/linuxgsm-panel/panel-helper\n"
+                  "lgsmpanel ALL=(%lgsmpanel-games) NOPASSWD: ALL\n"
+                  "lgsmpanel ALL=(ALL) ALL\n"
+                  "deployer ALL=(ALL) NOPASSWD:ALL\n")
+    os.environ["SUDO_UID"] = "990"
+    _ga_open = [v for v in _ga_verbs if not _ga_refused(v, "ubuntu")]
+    check("helper: no per-account verb acts on an account outside the game group (the operator's)",
+          not _ga_open, "accepted 'ubuntu' for: %s" % _ga_open)
+    _ga_shut = [v for v in _ga_verbs if _ga_refused(v, "cssserver")]
+    check("helper: ...while every one still takes a member of the game group (positive control)",
+          not _ga_shut, "refused 'cssserver' for: %s" % _ga_shut)
+    check("helper: ...and a name with no account yet is left to the verb's own lookup",
+          not _ga_refused("game-file-read", "nosuchuser"))
+    check("helper: ...and the invoking account itself (the single-box install) is still accepted",
+          not _ga_refused("crontab-list", "lgsmpanel") and not _ga_refused("game-file-read", "lgsmpanel"))
+    # Where the caller already reaches root without the helper there is no boundary to hold, and
+    # refusing would only break that host: a per-user install run by a sudo-group account, or one
+    # with a NOPASSWD rule for every command. No SUDO_UID at all is root invoking it directly.
+    os.environ["SUDO_UID"] = "1000"
+    check("helper: a caller in a privileged group is not held to the game group",
+          not _ga_refused("game-file-read", "alice"))
+    os.environ["SUDO_UID"] = "1002"
+    check("helper: ...nor one with a NOPASSWD rule for every command as root",
+          not _ga_refused("game-file-read", "alice"))
+    os.environ.pop("SUDO_UID", None)
+    check("helper: ...nor root invoking the helper directly", not _ga_refused("game-file-read", "alice"))
+    # content-grant-read: the content account's primary group is what the GMod account joins, so
+    # a root-equivalent one is refused, as privileged.py's _NEVER_A_CONTENT_GROUP already does.
+    _ga_ran = []
+    _ga_sub = _helper.subprocess
+    try:
+        _helper.subprocess = NS(run=lambda *a, **k: (_ga_ran.append(a[0]), NS(returncode=0))[1])
+        _helper.grp = NS(getgrgid=lambda g: NS(gr_name="docker", gr_gid=g, gr_mem=[]))
+        try:
+            _ga_rc = _helper.do_content_grant_read(["cssserver", "docker", "cssserver", "cstrike"], "")
+        except Exception as _e:        # got past the refusal and into the chmod walk
+            _ga_rc = repr(_e)
+    finally:
+        _helper.subprocess = _ga_sub
+    check("helper content-grant-read: a root-equivalent primary group is refused before usermod",
+          _ga_rc == 2 and not _ga_ran, "rc=%s ran=%s" % (_ga_rc, _ga_ran))
+finally:
+    (_helper.pwd, _helper.grp, _helper.glob, _helper.SUDOERS_FILE, _helper.SUDOERS_DIR,
+     _ga_sudo_uid) = _ga_saved
+    if _ga_sudo_uid is None:
+        os.environ.pop("SUDO_UID", None)
+    else:
+        os.environ["SUDO_UID"] = _ga_sudo_uid
+    _shutil.rmtree(_ga_dir, ignore_errors=True)
+check("helper: docker, lxd and disk count as root-equivalent for enrolment",
+      {"docker", "lxd", "disk"} <= set(_helper.PRIVILEGED_GROUPS))
+
 # install.sh must apply the same rule to the accounts it backfills.
 _inst_sh_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
 # Scoped to the two functions rather than to the whole file, and it names the CALLER's use of the
@@ -3906,6 +4023,10 @@ check("install.sh: ...and the backfill acts on its answer, enrolling only on a d
 # function exists to enforce. CodeQL flagged the two `except: pass` clauses; the empty handler was
 # the visible half of that, not a style problem.
 _grp_saved2, _pwd_saved2, _glob_saved2 = _helper.grp, _helper.pwd, _helper.glob
+_sudoers_saved2 = (_helper.SUDOERS_FILE, _helper.SUDOERS_DIR)
+_sg2_dir = _tempfile.mkdtemp(prefix="sudoers-2-")
+with open(os.path.join(_sg2_dir, "sudoers"), "w", encoding="utf-8") as _fh:
+    _fh.write("root ALL=(ALL:ALL) ALL\n%sudo ALL=(ALL:ALL) ALL\n")
 
 
 def _boom(*_a, **_k):
@@ -3913,6 +4034,10 @@ def _boom(*_a, **_k):
 
 
 try:
+    # A readable sandbox policy: the real /etc/sudoers is root-only, and an unreadable policy now
+    # counts as "can escalate" by itself, which would answer the last check below for it.
+    _helper.SUDOERS_FILE = os.path.join(_sg2_dir, "sudoers")
+    _helper.SUDOERS_DIR = os.path.join(_sg2_dir, "none")
     _helper.glob = NS(glob=lambda _p: [])
     _helper.pwd = NS(getpwnam=lambda _u: NS(pw_gid=1234, pw_uid=1234, pw_name=_u))
     _helper.grp = NS(getgrgid=lambda _g: _FakeGrp("gmodserver"), getgrall=_boom)
@@ -3931,6 +4056,8 @@ try:
           _helper._can_already_escalate("brandnew") is False)
 finally:
     _helper.grp, _helper.pwd, _helper.glob = _grp_saved2, _pwd_saved2, _glob_saved2
+    _helper.SUDOERS_FILE, _helper.SUDOERS_DIR = _sudoers_saved2
+    _shutil.rmtree(_sg2_dir, ignore_errors=True)
 
 # ── install_game_dependencies: step 3 of Install Server, and it was refused on a hardened host ──
 # It ran ONE `run_command(pipeline, sudo=True)`, which locally becomes `sudo bash -c '<pipeline>'`
