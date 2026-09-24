@@ -11374,6 +11374,126 @@ try:
                 db.session.delete(_row)
                 db.session.commit()
 
+    # ── a terminal on the PANEL'S OWN host is superadmin-only, whatever the grants say ──────────
+    # A shell there runs as the account that owns panel.db, secret_key and cred_key, so it is the
+    # panel itself. It was reachable with USE_TERMINAL plus any group granting the panel host —
+    # two ordinary, delegable grants that together added up to superadmin. The page route, the
+    # term_open event and the per-keystroke re-check all refuse it now; a REMOTE stays reachable
+    # on the same grants (the positive controls), since the panel is root there by design.
+    import panel.routes.host_terminal as _htmod
+    _lt_sessions = {}
+
+    def _lt_open(sid, server, is_local, user_key, on_output, on_exit, cols=80, rows=24):
+        _lt_sessions[sid] = _FakeTermSess()
+        _lt_sessions[sid].host = server.id
+        return _lt_sessions[sid]
+
+    with app.app_context():
+        _lt_local = RemoteServer(name="smoke-lt-local", host="127.0.0.1", port=22,
+                                 username="panel", auth_method="local", auth_credential="",
+                                 is_local=True)
+        _lt_remote = RemoteServer(name="smoke-lt-remote", host="192.0.2.77", port=22,
+                                  username="root", auth_method="key", auth_credential="",
+                                  is_local=False)
+        db.session.add_all([_lt_local, _lt_remote])
+        db.session.flush()
+        _lt_grp = Group(name="smoke-term-both", description="", is_default=False)
+        _lt_grp.set_permissions([auth.USE_TERMINAL, auth.MANAGE_REMOTES])
+        _lt_grp.servers.append(_lt_local)
+        _lt_grp.servers.append(_lt_remote)
+        db.session.add(_lt_grp)
+        db.session.flush()
+        _lt_u = User(username="smoke-term-deleg", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                     is_superadmin=False, is_active=True)
+        _lt_u.groups.append(_lt_grp)
+        db.session.add(_lt_u)
+        db.session.commit()
+        _lt_lid, _lt_rid, _lt_uid, _lt_gid = _lt_local.id, _lt_remote.id, _lt_u.id, _lt_grp.id
+    _tsmod.open_session = _lt_open
+    _tsmod.get = lambda sid: _lt_sessions.get(sid)
+    _tsmod.close_for_sid = lambda sid, reason="": _lt_sessions.pop(sid, None)
+    _lt_c = _lt_c2 = None
+    try:
+        _lt_http = client_as(_lt_uid)
+        _lt_pg = _lt_http.get("/terminal/%d" % _lt_lid, headers={"Accept": "application/json"})
+        check("terminal: a non-superadmin with use_terminal and a panel-host grant is refused the "
+              "panel host's terminal PAGE", _lt_pg.status_code == 403,
+              "status=%d — the page offers a shell as the account that owns panel.db and the keys"
+              % _lt_pg.status_code)
+        _lt_pr = _lt_http.get("/terminal/%d" % _lt_rid)
+        check("terminal: ...while the same grants still reach a REMOTE's terminal page "
+              "(positive control)", _lt_pr.status_code == 200, "status=%d" % _lt_pr.status_code)
+        import panel.ops.system_ops as _lt_so
+        _lt_gss = _lt_so.get_server_status
+        _lt_so.get_server_status = lambda force=False: None      # reads THIS machine; not the question
+        try:
+            _lt_mg = _lt_http.get("/remote/%d/manage" % _lt_lid).get_data(as_text=True)
+            _lt_mr = _lt_http.get("/remote/%d/manage" % _lt_rid).get_data(as_text=True)
+        finally:
+            _lt_so.get_server_status = _lt_gss
+        check("terminal: ...and the manage page hides the panel host's terminal card from them",
+              ("/terminal/%d" % _lt_lid) not in _lt_mg and ("/terminal/%d" % _lt_rid) in _lt_mr,
+              "local card shown=%s, remote card shown=%s"
+              % (("/terminal/%d" % _lt_lid) in _lt_mg, ("/terminal/%d" % _lt_rid) in _lt_mr))
+
+        _lt_c = app.socketio.test_client(app, flask_test_client=client_as(_lt_uid))
+        _lt_c.emit("term_open", {"remote_id": _lt_lid, "cols": 80, "rows": 24})
+        _lt_err = [e for e in _lt_c.get_received() if e.get("name") == "term_error"]
+        check("terminal: ...and term_open on the panel host opens NO shell for them",
+              not any(getattr(v, "host", None) == _lt_lid for v in _lt_sessions.values())
+              and _lt_err and _htmod.LOCAL_HOST_REFUSAL in str(_lt_err[0].get("args")),
+              "sessions=%r errors=%r" % ({k: getattr(v, "host", None)
+                                          for k, v in _lt_sessions.items()}, _lt_err))
+        _lt_c.emit("term_open", {"remote_id": _lt_rid, "cols": 80, "rows": 24})
+        check("terminal: ...while term_open on a granted REMOTE does (positive control)",
+              any(getattr(v, "host", None) == _lt_rid for v in _lt_sessions.values()),
+              "no session on the remote — the gate refuses everything")
+        _lt_c.disconnect()
+        _lt_sessions.clear()
+
+        # The per-keystroke re-check asks the same question: a superadmin with a panel-host shell
+        # open who is demoted keeps nothing, even though their groups still grant the host.
+        with app.app_context():
+            db.session.get(User, _lt_uid).is_superadmin = True
+            db.session.commit()
+        _lt_c2 = app.socketio.test_client(app, flask_test_client=client_as(_lt_uid))
+        _lt_c2.emit("term_open", {"remote_id": _lt_lid, "cols": 80, "rows": 24})
+        _lt_c2.emit("term_input", {"data": "before-demotion"})
+        _lt_w = [w for v in _lt_sessions.values() for w in v.writes]
+        check("terminal: a superadmin's panel-host shell takes keystrokes (control for the next)",
+              "before-demotion" in _lt_w, "writes=%r" % (_lt_w,))
+        with app.app_context():
+            db.session.get(User, _lt_uid).is_superadmin = False
+            db.session.commit()
+        _htmod._sid_access.clear()          # the 10 s cache, not the question under test
+        _lt_c2.emit("term_input", {"data": "after-demotion"})
+        _lt_w = [w for v in _lt_sessions.values() for w in v.writes]
+        check("terminal: ...and once they are demoted the re-check refuses the panel host, "
+              "though a group still grants it",
+              "after-demotion" not in _lt_w, "writes=%r" % (_lt_w,))
+    finally:
+        (_tsmod.open_session, _tsmod.get, _tsmod.close_for_sid) = _ts_saved
+        for _cl in (_lt_c, _lt_c2):
+            try:
+                if _cl is not None and _cl.is_connected():
+                    _cl.disconnect()
+            except Exception:
+                pass
+        with app.app_context():
+            _u = db.session.get(User, _lt_uid)
+            if _u is not None:
+                _u.groups = []
+                db.session.delete(_u)
+            _g = db.session.get(Group, _lt_gid)
+            if _g is not None:
+                _g.servers = []
+                db.session.delete(_g)
+            for _rid in (_lt_lid, _lt_rid):
+                _row = db.session.get(RemoteServer, _rid)
+                if _row is not None:
+                    db.session.delete(_row)
+            db.session.commit()
+
     # ── the two exemptions that rest on SameSite ─────────────────────────────────────────────
     # A WebSocket handshake is NOT subject to the same-origin policy: any page the operator visits
     # can open one to the panel, and the browser attaches cookies for the target origin. What

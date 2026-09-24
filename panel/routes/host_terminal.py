@@ -20,7 +20,8 @@ from flask_socketio import emit
 from panel.db.models import RemoteServer
 from panel.ops import socket_hooks as _socket_hooks
 from panel.ops import terminal_session as _ts
-from panel.security.auth import (USE_TERMINAL, get_remote, has_permission, log_action,
+from panel.ops.ssh_manager import is_local_server
+from panel.security.auth import (USE_TERMINAL, _deny, get_remote, has_permission, log_action,
     permission_required)
 
 # sid -> (remote_id or None). Only used to label audit rows and to tear down on disconnect.
@@ -53,6 +54,35 @@ def _may_use_terminal():
     return bool(current_user.is_superadmin or has_permission(current_user, USE_TERMINAL))
 
 
+def may_shell_on(user, remote):
+    """May `user` have a shell on `remote`? The per-HOST half of the question.
+
+    On the panel's OWN host the answer is superadmin only, whatever the grants say. A shell there
+    runs as the panel's service account, and that account owns data/: panel.db (every user and
+    every is_superadmin flag), secret_key (which signs every session cookie) and cred_key (which
+    decrypts every remote's stored SSH credential). So it is not a shell on one host; it is the
+    panel itself, and through it every host the panel reaches. It was grantable by accident:
+    USE_TERMINAL and a whole-host grant covering the panel host are both ordinary, delegable
+    grants, unioned across a user's groups, and neither says that together they add up to
+    superadmin. Every other panel-host management surface is already @superadmin_required.
+
+    On a remote the host grant stays the rule: the panel is root there by design, and a shell on
+    it reaches that host and nothing else the panel holds.
+    """
+    if remote is None or user is None or not getattr(user, "is_authenticated", False):
+        return False
+    if user.is_superadmin:
+        return True
+    if is_local_server(remote):
+        return False
+    from panel.security.auth import can_access_remote
+    return bool(can_access_remote(user, remote.id))
+
+
+LOCAL_HOST_REFUSAL = ("A terminal on the panel's own host is for superadmins only: it runs as "
+                      "the account that owns the panel's database and keys.")
+
+
 def register(app, socketio, supervise):
     _ts.start_idle_sweeper(supervise)
 
@@ -63,6 +93,8 @@ def register(app, socketio, supervise):
         """A shell on one host. get_remote() enforces per-host access (and 404s), which is also
         what rbac_test's <remote_id> sweep requires to see."""
         remote = get_remote(remote_id)
+        if not may_shell_on(current_user, remote):
+            return _deny(LOCAL_HOST_REFUSAL, 403)
         return render_template("terminal.html", remote=remote,
                                sudo_note=_ts.sudo_hint(remote, bool(remote.is_local)),
                                local_user=_ts.panel_account())
@@ -94,6 +126,11 @@ def register(app, socketio, supervise):
         remote = RemoteServer.query.get(remote_id)
         if remote is None:
             emit("term_error", {"message": "That host no longer exists."})
+            return
+        # ...and the panel's own host is superadmin-only, which no host grant changes. The page
+        # route refuses it as well, but this event is reachable without ever loading the page.
+        if not may_shell_on(current_user, remote):
+            emit("term_error", {"message": LOCAL_HOST_REFUSAL})
             return
         _ts.close_for_sid(sid, "")          # one shell per socket
         try:
@@ -127,8 +164,7 @@ def register(app, socketio, supervise):
         cached = _sid_access.get(sid)
         if cached is not None and (now - cached[0]) < _ACCESS_RECHECK_SECONDS:
             return cached[1]
-        from panel.security.auth import can_access_remote
-        ok = bool(current_user.is_superadmin or can_access_remote(current_user, remote_id))
+        ok = may_shell_on(current_user, RemoteServer.query.get(remote_id))
         _sid_access[sid] = (now, ok)
         if not ok:
             emit("term_error", {"message": "Your access to this host was removed, so the "

@@ -164,8 +164,10 @@
 
   <!-- Firewall -->
   {# Gated on the permission, not merely on being logged in: a shell is the most powerful grant
-     in the table, so an account without it should not see the door either. #}
-  {% if has_permission('use_terminal') %}
+     in the table, so an account without it should not see the door either. On the panel's own
+     host it is superadmin-only whatever the grants say (host_terminal.may_shell_on): a shell
+     there is the account that owns panel.db and the keys, so the door is hidden too. #}
+  {% if has_permission('use_terminal') and (current_user.is_superadmin or not (remote.is_local or remote.auth_method == 'local')) %}
   <div class="col-md-4 mb-3">
     <div class="card h-100">
       <div class="card-header" id="sec-terminal"><i class="bi bi-terminal-fill"></i> Terminal</div>
