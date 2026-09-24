@@ -376,6 +376,10 @@ _F2B_JAIL_KEYS = {
     # IPs and CIDRs only — no hostname, and no IPv6 zone id (`%eth0`), which ipaddress keeps
     # verbatim, spaces and newlines included.
     "ignoreip": re.compile(_F2B_IP + r"(?: +" + _F2B_IP + r")*"),
+    # ONE fixed value, never a grammar: a banaction names a file in action.d that fail2ban runs as
+    # root, so the only acceptable names are stock actions the panel itself chooses. It sends
+    # exactly this one, for a panel reached through a proxy (system_ops._F2B_PANEL_ALLPORTS_ACTION).
+    "banaction": re.compile(r"iptables-allports"),
 }
 _F2B_FILTER_SECTIONS = re.compile(r"Definition")
 _F2B_FILTER_KEYS = {

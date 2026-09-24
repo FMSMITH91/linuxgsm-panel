@@ -1713,8 +1713,9 @@ _F2B_PANEL_BACKEND = "auto"
 
 
 # The ban action for a panel reached THROUGH something: every port, not the web port. A plain name,
-# not `%(banaction_allports)s` — the helper admits only a bare action name in a banaction line
-# (tools/panel-helper, _fail2ban_line_ok), and iptables is present wherever ufw is.
+# not `%(banaction_allports)s` — the helper admits a banaction line only with exactly this value
+# (tools/panel-helper, _F2B_JAIL_KEYS["banaction"]), and iptables is present wherever ufw is. Change
+# one and you must change the other, or the helper refuses the jail and the panel is not protected.
 _F2B_PANEL_ALLPORTS_ACTION = "iptables-allports"
 
 
