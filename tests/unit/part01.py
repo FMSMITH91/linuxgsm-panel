@@ -768,16 +768,26 @@ eq("new-user lang: junk in the config cannot be assigned", _nul({"default_langua
 import ast as _sl_ast                                                              # noqa: E402
 from datetime import timedelta as _sl_td                                           # noqa: E402
 from app import _session_lifetimes as _slt                                         # noqa: E402
-eq("session lifetime: (control) numbers pass through", _slt({"session_lifetime_hours": 12,
-                                                            "remember_days": 7}),
-   (12 * 3600, _sl_td(days=7)))
+
+
+def _slt_safe(cfg):
+    """_session_lifetimes, with a raise reported as a value: raising IS the boot failure, and it
+    must fail the check by name rather than take the whole unit suite down with it."""
+    try:
+        return _slt(cfg)
+    except Exception as exc:
+        return "raised %s" % type(exc).__name__
+
+
+eq("session lifetime: (control) numbers pass through",
+   _slt_safe({"session_lifetime_hours": 12, "remember_days": 7}), (12 * 3600, _sl_td(days=7)))
 eq("session lifetime: a numeric STRING is a number, not a 3,600-character string",
-   _slt({"session_lifetime_hours": "8", "remember_days": "3"}), (8 * 3600, _sl_td(days=3)))
+   _slt_safe({"session_lifetime_hours": "8", "remember_days": "3"}), (8 * 3600, _sl_td(days=3)))
 eq("session lifetime: junk falls back to the defaults instead of breaking sign-in or boot",
-   _slt({"session_lifetime_hours": "eight", "remember_days": "three"}), (8 * 3600, _sl_td(days=3)))
+   _slt_safe({"session_lifetime_hours": "eight", "remember_days": "three"}), (8 * 3600, _sl_td(days=3)))
 eq("session lifetime: 0 cannot expire every session on arrival; the form's bounds apply",
-   _slt({"session_lifetime_hours": 0, "remember_days": 10 ** 9}), (3600, _sl_td(days=90)))
-eq("session lifetime: missing keys are the defaults", _slt({}), (8 * 3600, _sl_td(days=3)))
+   _slt_safe({"session_lifetime_hours": 0, "remember_days": 10 ** 9}), (3600, _sl_td(days=90)))
+eq("session lifetime: missing keys are the defaults", _slt_safe({}), (8 * 3600, _sl_td(days=3)))
 _sl_src = open(os.path.join(_root, "app.py"), encoding="utf-8").read()
 _sl_fn = next(n for n in _sl_ast.walk(_sl_ast.parse(_sl_src))
               if isinstance(n, _sl_ast.FunctionDef) and n.name == "create_app")
