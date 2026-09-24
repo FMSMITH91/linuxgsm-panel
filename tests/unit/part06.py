@@ -3213,6 +3213,73 @@ for _mod in ("ssh_manager.py", "system_ops.py", "panel/core/terminal.py"):
     check("docs: the fuzz workflow watches %s (as '%s')" % (_mod, _want),
           ("'%s'" % _want) in _fuzz_wf, "not in fuzz.yml paths:")
 
+# fuzz_console must feed render_colour — the renderer the LIVE console uses (_console_push,
+# app._clean_console_text), and the one that int()-parses player-authored SGR — and hold its output
+# to "no ESC but an SGR it wrote". It called only strip_escapes/render/render_line, none of which
+# the console reaches. Imported with a stand-in atheris (the unit job has none installed), and its
+# `terminal` swapped for a proxy on the harness module only, so the real module is never touched.
+import contextlib as _fz_ctx
+import types as _fz_types
+_fz_fake = _fz_types.ModuleType("atheris")
+
+
+class _FzFDP:
+    def __init__(self, data):
+        self._d = data
+
+    def remaining_bytes(self):
+        return len(self._d)
+
+    def ConsumeUnicodeNoSurrogates(self, _n):
+        return self._d.decode("utf-8", "replace")
+
+
+_fz_fake.FuzzedDataProvider = _FzFDP
+_fz_fake.instrument_imports = _fz_ctx.nullcontext
+_fz_had = "atheris" in sys.modules
+_fz_saved = sys.modules.get("atheris")
+sys.modules["atheris"] = _fz_fake
+try:
+    _fz_spec = _ilu.spec_from_file_location("fz_console_unit", os.path.join(_fuzz_dir, "fuzz_console.py"))
+    _fz = _ilu.module_from_spec(_fz_spec)
+    _fz_spec.loader.exec_module(_fz)
+    _fz_real_term = _fz.terminal
+
+    def _fz_try(data):
+        try:
+            _fz.TestOneInput(data)
+            return None
+        except AssertionError as _e:
+            return str(_e)
+
+    _fz_line = "\x1b[1;31mred\x1b[0m \x1b[38;5;99mx\x1b[m tail\r\nnext \x1b]0;t\x07 \x1b[2K".encode()
+    check("fuzz_console: a coloured console line passes the harness (positive control)",
+          _fz_try(_fz_line) is None, repr(_fz_try(_fz_line)))
+
+    class _FzTerm:
+        def __init__(self, leak):
+            self._leak = leak
+
+        def __getattr__(self, n):
+            return getattr(_fz_real_term, n)
+
+        def render_colour(self, text):
+            return self._leak + _fz_real_term.render_colour(text)
+
+    for _fz_leak, _fz_what in (("\x1b]0;title\x07", "an OSC"), ("\x1b[2J", "a non-SGR CSI"),
+                               ("\r", "a carriage return")):
+        _fz.terminal = _FzTerm(_fz_leak)
+        check("fuzz_console: %s leaking out of render_colour fails the harness" % _fz_what,
+              (_fz_try(b"plain") or "").startswith("render_colour()"), repr(_fz_try(b"plain")))
+    _fz.terminal = _FzTerm("\x1b[1;31m")
+    check("fuzz_console: ...and the SGR render_colour writes itself does not",
+          _fz_try(b"plain") is None, repr(_fz_try(b"plain")))
+finally:
+    if _fz_had:
+        sys.modules["atheris"] = _fz_saved
+    else:
+        sys.modules.pop("atheris", None)
+
 # ── ufw_allow_tailscale builds a VERB, and does not raise ─────────────────────────────────────
 # It read `_run("ufw-allow-iface", [iface], timeout=15)` — _run's signature is
 # (cmd, timeout=30, sudo=False, text=True), so the list went in as the positional `timeout` AND

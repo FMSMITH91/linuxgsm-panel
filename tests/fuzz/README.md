@@ -7,7 +7,8 @@ finding to fix in the parser (not to suppress in the harness).
 
 `fuzz_console.py` additionally asserts an OUTPUT property, because `terminal.py` exists to produce
 one: no input may leave an ESC or a bare CR in the rendered result, since those are exactly the
-bytes it strips before the text reaches a browser.
+bytes it strips before the text reaches a browser. The colour renderer the live console uses may
+emit an ESC only as the canonical SGR it writes itself.
 
 | Harness | Parses | Source of untrusted input |
 |---|---|---|
@@ -15,7 +16,7 @@ bytes it strips before the text reaches a browser.
 | `fuzz_firewall.py` | `_parse_ufw_rule`, `_group_ufw_rules` | `ufw status numbered` output |
 | `fuzz_config.py` | `_parse_cfg`, `_parse_upgradable`, `_parse_mods_available`, `_parse_mods_installed` | LinuxGSM config / `apt list` / mod listings |
 | `fuzz_fail2ban.py` | `_tally_f2b_lines`, `_parse_top_ips` | the fail2ban log counting pipeline — the raw log lines *and* the tallied rows |
-| `fuzz_console.py` | `strip_escapes`, `apply_carriage_returns`, `apply_backspaces`, `render` (`terminal.py`) | a game console's output — player names, chat and RCON replies, so partly attacker-*authored* |
+| `fuzz_console.py` | `strip_escapes`, `apply_carriage_returns`, `apply_backspaces`, `render`, and `render_colour` — the live console's renderer (`terminal.py`) | a game console's output — player names, chat and RCON replies, so partly attacker-*authored* |
 | `fuzz_cron.py` | `_split_cron_line`, `_unwrap_cron_command`, `_cron_role`, `_cron_line_managed`, `_cron_log_text`, `_clean_cron_error` | a remote host's crontab, and the base64 status blob the panel's cron wrapper writes |
 
 ## Run locally
