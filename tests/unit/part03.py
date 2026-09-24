@@ -1592,6 +1592,22 @@ check("tailscale: ...and a readable config still parses its routes (positive con
       and [r["mount"] for s in _tsu_ok.serve_config.get("services", []) for r in s["routes"]]
       == ["/lgsm"],
       "serve_config=%r" % (_tsu_ok.serve_config,))
+
+# A FUNNELLED mapping reads as one. Tailscale prints "(Funnel on)" with a capital F after the URL,
+# and the parser compared case-sensitively against "funnel": info.funnel_enabled was always False,
+# so /tailscale told the operator a panel on the public internet was "private - tailnet only".
+_tsu_fun = _tsu_stub(0, "# Funnel on:\n#     - https://host.example.ts.net\n\n"
+                        "https://host.example.ts.net (Funnel on)\n|-- / proxy http://127.0.0.1:5000")
+check("tailscale: a mapping Tailscale prints as '(Funnel on)' is reported as funnelled",
+      _tsu_fun.funnel_enabled is True
+      and [s["funnel"] for s in _tsu_fun.serve_config.get("services", [])] == [True],
+      "funnel_enabled=%r serve_config=%r" % (_tsu_fun.funnel_enabled, _tsu_fun.serve_config))
+_tsu_priv = _tsu_stub(0, "https://host.example.ts.net (tailnet only)\n"
+                         "|-- /funnel-stats proxy http://127.0.0.1:3000")
+check("tailscale: ...while '(tailnet only)' is private, even with 'funnel' in a route (control)",
+      _tsu_priv.funnel_enabled is False
+      and [s["funnel"] for s in _tsu_priv.serve_config.get("services", [])] == [False],
+      "funnel_enabled=%r serve_config=%r" % (_tsu_priv.funnel_enabled, _tsu_priv.serve_config))
 _tsi._cache["info"] = None
 _tsi._run_ts, _tsi._run_ts_json = _orig_run_ts, _orig_run_ts_json   # restored, as above
 

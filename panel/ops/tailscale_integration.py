@@ -241,7 +241,10 @@ def _parse_serve_status(text):
                     "routes": current_routes,
                 })
             current_url = url_match.group(1).rstrip(".")
-            current_funnel = "funnel" in (url_match.group(2) or "")
+            # Tailscale prints "(Funnel on)" or "(tailnet only)" after the URL, with a CAPITAL F.
+            # This compared case-sensitively against "funnel", so it was always False, and the page
+            # called a panel that was on the public internet "private - tailnet only".
+            current_funnel = "funnel on" in (url_match.group(2) or "").lower()
             current_routes = []
             continue
 
@@ -252,10 +255,9 @@ def _parse_serve_status(text):
                 "mount": route_match.group(1),
                 "target": route_match.group(2),
             })
-
-        # Funnel-only line
-        if "funnel" in stripped.lower() and current_url and not current_funnel:
-            current_funnel = True
+        # There used to be a "funnel anywhere in the line" fallback here. It could never see the
+        # URL line (that `continue`s above), and the "# Funnel on:" header comes before any URL, so
+        # all it could ever match was a ROUTE — a mount or backend with "funnel" in its name.
 
     if current_url and current_routes:
         result["services"].append({
