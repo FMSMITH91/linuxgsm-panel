@@ -435,11 +435,13 @@ def uninstall_gmod_content(server, content_user, games):
     removed, unverified = [], []
     for g in games:
         lgsm = GMOD_CONTENT_GAMES[g][1]
-        # g is a constant folder key and content_user is validated (no '/'/'..'/metachars), so every
-        # path is a fixed subpath of the content home — safe to rm as root, which also sidesteps any
-        # parent-dir ownership quirk. The shared lgsm/ framework dir is left for the other games.
-        # Three `rm -rf`s that used to be built from an interpolated user name and game key.
-        # The verb takes the NAMES; the helper builds the paths.
+        # The verb takes the NAMES; the helper builds the paths — three removals that used to be
+        # `rm -rf`s built from an interpolated user name and game key. Validated names are NOT what
+        # makes this safe as root: the content account owns every directory on the way and can
+        # turn any of them into a symlink, which a fixed subpath does nothing about. The helper
+        # walks each path by descriptor, O_NOFOLLOW at every step (_remove_under_home), so a link
+        # on the way is refused rather than followed. The shared lgsm/ framework dir is left for
+        # the other games.
         _core.run_privileged(server, "content-game-remove", [content_user, g, lgsm or "-"],
                        timeout=120, merge_stderr=False)
         # `is False`, not `not …`: the probe is the ONLY evidence this removal happened (the rm's
