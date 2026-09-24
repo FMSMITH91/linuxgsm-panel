@@ -348,7 +348,10 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   it either.** `PANEL_DIR` is owned by the service user and rewritten by `git pull` on every
   self-update, so a boundary that let root run files from there would have been decorative. The
   offline DB repair and the self-update run root-owned copies placed only by `install.sh`, never
-  by a verb.
+  by a verb. The CI auto-deploy (`deploy.yml`) follows the same rule on a root install. It used to
+  refresh `${PANEL_DIR}/install.sh` with `git checkout` as the service user and run that with
+  `sudo bash`. It now ships the verified commit's `install.sh` from the runner over SSH and runs
+  that copy from a directory root created.
 
   The second half of that sentence was missing, and it mattered: `install_root_tools` *copied*
   those root-owned pieces **out of the working tree**, and the integrity argument was that
