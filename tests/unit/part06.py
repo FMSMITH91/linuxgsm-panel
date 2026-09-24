@@ -3160,6 +3160,17 @@ _cd_got = {_label: _cd_run(_b) for _label, _b in (
 check("codacy gate: an answer it cannot read fails the run; only an outage is a warning",
       _cd_got == {"HTTP 400": 1, "HTTP 410": 1, "HTTP 422": 1, "HTTP 308": 1, "HTML 200": 1,
                   "HTTP 503": 0, "unreachable": 0, "clean": 0}, repr(_cd_got))
+# ...but a rate limit is weather, not a verdict. The daily run pages the anonymous API from shared
+# runner IPs, and narrowing the outage branch to >= 500 turned a 429 into a red gate that sent the
+# operator to check an endpoint and filter shape that were fine. 429 and 408 say "not now", like a
+# 5xx; the refusals beside them (401/403, and 400/404 above) still fail — the control.
+_cd_rl = {_label: _cd_run(_b) for _label, _b in (
+    ("HTTP 429", _cd_err.HTTPError("u", 429, "too many requests", {}, None)),
+    ("HTTP 408", _cd_err.HTTPError("u", 408, "request timeout", {}, None)),
+    ("HTTP 401", _cd_err.HTTPError("u", 401, "unauthorized", {}, None)),
+    ("HTTP 403", _cd_err.HTTPError("u", 403, "forbidden", {}, None)))}
+check("codacy gate: a rate limit (429) or request timeout (408) warns; 401/403 still fail",
+      _cd_rl == {"HTTP 429": 0, "HTTP 408": 0, "HTTP 401": 1, "HTTP 403": 1}, repr(_cd_rl))
 
 # ── the code-scanning gate's concurrency group tells a fork PR from main ─────────────────────────
 # Keyed on head_branch alone, a fork PR opened from the fork's default branch (main) shared
