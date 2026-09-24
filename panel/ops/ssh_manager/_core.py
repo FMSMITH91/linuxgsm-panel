@@ -906,7 +906,10 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None):
 # So the drain gives up after _DRAIN_IDLE_FLOOR seconds (or the caller's own timeout, if longer)
 # in which neither stream moved and no exit status arrived — the rc=-1 "timed out" answer the other
 # two transports already give. A long command that is still talking is not affected; the callers
-# that run long QUIET work (backups, installs, apt) already pass timeouts of 600-7200 s.
+# that run long QUIET work (backups, installs, apt) already pass timeouts of 600-7200 s, and the
+# local and Tailscale transports hold those same timeouts as WALL-CLOCK limits. A command whose
+# output goes to a file is silent by construction, which is why run_as_game_user(tee_log=True)
+# streams its log back while the action runs rather than `cat`ing it at the end.
 _MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 _DRAIN_IDLE_FLOOR = 300
 
@@ -1237,10 +1240,23 @@ def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=No
         body = "printf '%s\\n' " + " ".join(_quote(a) for a in answers) + " | " + body
     if tee_log:
         # Mirrors panel/routes/_shared.py:_action_log_path, which is what the live console tails.
-        # `> log` truncates so each run starts the tail at byte 0; the trailing `cat` hands the
-        # whole output back anyway, and `exit $rc` keeps LinuxGSM's exit code rather than cat's.
+        # `: >` truncates so each run starts the tail at byte 0, BEFORE the follower opens it, so
+        # it never replays the previous run's output.
+        #
+        # The output is streamed back WHILE the action runs, by a follower (`tail --pid`) rather
+        # than a `cat` at the end. With the `cat`, the SSH channel carried nothing for the whole
+        # action, and _drain_exec's silence bound — which exists for a remote that never answers
+        # — turned the caller's timeout into a hard wall-clock limit on paramiko hosts: a 40-minute
+        # validate was cut off at 30 and reported as failed while LinuxGSM kept running. Now the
+        # channel goes quiet only when the console the operator is watching does.
+        #
+        # The ACTION writes to the file, never to the channel: `tee` in its pipeline would kill
+        # LinuxGSM with SIGPIPE on its next line once the channel is closed (the drain giving up,
+        # or the panel restarting), mid-update. Here only the follower dies; the action finishes
+        # and the file keeps its output. `wait` keeps LinuxGSM's exit code rather than tail's.
         logf = _quote(f"/home/{user}/.panel-{action}.log")
-        body = f"{body} > {logf} 2>&1; rc=$?; cat {logf} 2>/dev/null; exit $rc"
+        body = (f": > {logf}; {{ {body}; }} >> {logf} 2>&1 & pid=$!; "
+                f"tail -n +1 -f --pid=$pid {logf} 2>/dev/null; wait $pid; exit $?")
     else:
         body = f"{body} 2>&1"
     # `export`, not a `TERM=xterm cmd` prefix: with `answers` the command is a PIPELINE, and a

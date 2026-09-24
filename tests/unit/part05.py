@@ -3653,8 +3653,69 @@ try:
     _cmd = _ragu_shell[0] if _ragu_shell else ""
     check("run_as_game_user: tee_log writes where _action_log_path says the console will tail",
           "/home/gmodserver/.panel-update.log" in _cmd, _cmd[:200])
-    check("run_as_game_user: ...and keeps LinuxGSM's exit code rather than cat's",
-          "rc=$?" in _cmd and "exit $rc" in _cmd, _cmd[:200])
+    # RUN that remote form (sudo -u stripped, /home/gmodserver moved into a temp dir) against a
+    # stand-in LinuxGSM script. The form used to be `> log; cat log`, so the SSH channel carried
+    # nothing until the action exited, and _drain_exec's silence bound cut every paramiko
+    # update/validate at the caller's 1800 s and reported it failed while LinuxGSM ran on.
+    import shlex as _tl_shlex
+    import tempfile as _tl_tmp
+    _tl_argv = _tl_shlex.split(_cmd)
+    _tl_inner = _tl_argv[-1] if _tl_argv[:1] == ["sudo"] and _tl_argv[-3:-1] == ["bash", "-c"] \
+        else ""
+    check("run_as_game_user: (control) the tee_log remote form is `sudo -u <user> bash -c <script>`",
+          bool(_tl_inner), _cmd[:200])
+    _tl_home = _tl_tmp.mkdtemp(prefix="tee-log-")
+    try:
+        with open(os.path.join(_tl_home, "gmodserver"), "w") as _tl_f:
+            # line, pause, line, then prove it ran to the end, and exit 3.
+            _tl_f.write("#!/bin/bash\necho first-line\nsleep 1.5\necho last-line\n"
+                        "touch %s/finished\nexit 3\n" % _tl_home)
+        os.chmod(os.path.join(_tl_home, "gmodserver"), 0o755)
+        with open(os.path.join(_tl_home, ".panel-update.log"), "w") as _tl_f:
+            _tl_f.write("STALE output of the previous run\n")
+        _tl_script = _tl_inner.replace("/home/gmodserver", _tl_home)
+
+        def _tl_start():
+            return _sub.Popen(["bash", "-c", _tl_script], stdout=_sub.PIPE, stderr=_sub.PIPE,
+                              stdin=_sub.DEVNULL)
+
+        _tl_p = _tl_start()
+        _tl_first = _tl_p.stdout.readline()
+        _tl_running = _tl_p.poll() is None
+        _tl_rest, _ = _tl_p.communicate(timeout=20)
+        check("run_as_game_user: tee_log streams the action's output WHILE it runs",
+              _tl_first.strip() == b"first-line" and _tl_running,
+              "first line %r arrived with the action %s" % (
+                  _tl_first, "still running" if _tl_running else "already EXITED"))
+        _tl_all = (_tl_first + _tl_rest).decode()
+        check("run_as_game_user: ...hands back the whole of this run's output, and none of the last",
+              "first-line" in _tl_all and "last-line" in _tl_all and "STALE" not in _tl_all,
+              repr(_tl_all))
+        check("run_as_game_user: ...keeps LinuxGSM's exit code rather than the follower's",
+              _tl_p.returncode == 3, "rc=%r" % _tl_p.returncode)
+        with open(os.path.join(_tl_home, ".panel-update.log")) as _tl_f:
+            _tl_log = _tl_f.read()
+        check("run_as_game_user: ...and writes it where the console tails it",
+              "first-line" in _tl_log and "last-line" in _tl_log and "STALE" not in _tl_log,
+              repr(_tl_log))
+
+        # The channel going away (the drain giving up, a panel restart) must not take LinuxGSM
+        # with it — `tee` in the action's own pipeline would SIGPIPE it on its next line.
+        os.remove(os.path.join(_tl_home, "finished"))
+        _tl_p = _tl_start()
+        _tl_p.stdout.readline()
+        _tl_p.stdout.close()                 # the channel closes mid-action
+        _tl_p.wait(timeout=20)
+        with open(os.path.join(_tl_home, ".panel-update.log")) as _tl_f:
+            _tl_log = _tl_f.read()
+        check("run_as_game_user: a closed channel does not kill the action; it runs to the end",
+              os.path.exists(os.path.join(_tl_home, "finished")) and "last-line" in _tl_log
+              and _tl_p.returncode == 3,
+              "finished=%s rc=%r log=%r" % (os.path.exists(os.path.join(_tl_home, "finished")),
+                                            _tl_p.returncode, _tl_log))
+    finally:
+        import shutil as _tl_sh
+        _tl_sh.rmtree(_tl_home, ignore_errors=True)
 finally:
     _sm_core.is_local_server, _sm_core.helper_present = _o_local, _o_hp
     _sm_core._exec_local_argv, _sm_core.run_command = _o_exec, _o_rc
