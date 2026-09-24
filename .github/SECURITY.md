@@ -379,6 +379,12 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   honoured once root's clone shows that commit on the tracked upstream branch. A checkout at a
   commit upstream does not have, or with no `.git`, gets no refresh, and the installer says so. A
   checkout that is still entirely root's (the fresh install, before the chown) is read directly.
+  So is the operator's own source tree when `sudo bash install.sh` is run from a clone or an
+  unpacked tarball other than the checkout — but only while the installer running is that tree's
+  own `install.sh` (root is already executing it), and only when the tree, every directory above
+  it and every entry down to the file are beyond the panel user's reach, with no symlink followed.
+  The recovery command follows the same sources, and as root it is never linked into the checkout:
+  when no copy can be staged it keeps a root-owned one already in place, or links nothing.
   The output is staged into `HELPER_DIR`, which is root-owned 0755, so the panel user has no window
   to swap the staged copy. And the grant asks `root_tools_present`, i.e. whether the helper root
   will execute actually exists and is root-owned. A failure to *refresh* can no longer widen a
