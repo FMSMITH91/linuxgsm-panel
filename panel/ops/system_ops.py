@@ -1,4 +1,5 @@
 """System operations for the local server — UFW, Tailscale SSH, OS updates, reboot."""
+import http.client
 import json
 import logging
 import os
@@ -25,7 +26,10 @@ _DEFAULT_BRANCH = "main"
 # A deliberately strict git-ref charset: no spaces, no leading dash (option injection) and
 # no ".." (traversal). Defence-in-depth — git is invoked without a shell (see _git) and the
 # installer re-validates PANEL_BRANCH — but we still refuse anything outside this shape.
-_BRANCH_RE = r"^[A-Za-z0-9._/-]{1,100}$"
+# First character alphanumeric, like the helper's v_branch_name and privileged._branch_name: this
+# accepted a leading "_" or "." that the verb then refused, so a branch named `_wip` was saved as
+# the tracked branch and every update after it failed the same way.
+_BRANCH_RE = r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}\Z"
 
 
 def _is_system_service():
@@ -192,13 +196,20 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
     That last branch is why this is not yet a privilege boundary: see run_privileged() in
     ssh_manager for the same caveat. It exists so a host that has the new code but has not had
     install.sh re-run as root keeps working."""
-    if _helper_present():
-        argv = _priv.helper_argv(verb, args)
-    elif hasattr(os, "geteuid") and os.geteuid() == 0:
-        argv = _priv.tool_argv(verb, args)
-    else:
-        return _run(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
-                    timeout=timeout, sudo=True)
+    # NEVER RAISES, which its callers are written on (see os_run_update, server_reboot):
+    # the argv builders validate the arguments and raise VerbError on a refusal, and that used to
+    # escape from here into callers with no handler for it — a 500, with no audit row.
+    try:
+        if _helper_present():
+            argv = _priv.helper_argv(verb, args)
+        elif hasattr(os, "geteuid") and os.geteuid() == 0:
+            argv = _priv.tool_argv(verb, args)
+        else:
+            return _run(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
+                        timeout=timeout, sudo=True)
+    except _priv.VerbError:
+        _log.warning("privileged verb %s refused its arguments", verb)
+        return "", "invalid argument", -1
     try:
         # Semgrep's dangerous-subprocess-use rules flag any subprocess call whose first argument is
         # not a literal string. That is the shape here and it is the point of the change: `argv`
@@ -348,6 +359,36 @@ def ufw_status():
 _UFW_RULE_RE = re.compile(r"^(.+?)\s{2,}(ALLOW|DENY|REJECT|LIMIT)\s+(IN|OUT|FWD)\s*(.*)$")
 
 
+def ufw_allows_iface_in(rules, iface):
+    """True when UFW's rules (ufw_status()["rules"], in the order UFW evaluates them) let all
+    inbound traffic in on `iface` — the `ufw allow in on <iface>` rule the panel's Allow button adds.
+
+    This decides whether the management page may offer "Disable (tailnet-only)", which removes
+    public port 22, so every doubt answers False. It used to be a substring match over the raw
+    `ufw status verbose` text, and any row naming the interface counted: `ALLOW OUT ... on
+    tailscale0` (which early installs added beside the IN rule, and which survives deleting it),
+    `on tailscale0 DENY IN`, or a comment. Any of those read "Allowed" and unlocked the lockdown
+    that then cut SSH off over the tailnet too.
+
+    UFW takes the first matching rule, so a DENY or REJECT IN on the interface above the allow
+    wins. A rule for one port on the interface is not "all traffic" and does not count."""
+    if not iface:
+        return False
+    whole = ("anywhere on " + iface).lower()
+    suffix = (" on " + iface).lower()
+    for r in rules or []:
+        if r.get("direction") != "IN":
+            continue
+        to = (r.get("to") or "").strip().lower()
+        if not to.endswith(suffix):
+            continue
+        if r.get("action") in ("DENY", "REJECT"):
+            return False
+        if to == whole and r.get("action") in ("ALLOW", "LIMIT"):
+            return True
+    return False
+
+
 def ufw_allow_tailscale(ts_interface=None):
     """Allow traffic on the Tailscale interface via UFW.
 
@@ -453,23 +494,22 @@ def tailscale_ssh_status():
     return {"enabled": False, "running": running, "error": "Could not read Tailscale prefs"}
 
 
+# `tailscale set` changes the one pref it is given. This toggle used to run `tailscale up --ssh
+# --accept-routes --accept-dns --reset`, and `--reset` puts every pref NOT on the command line back
+# to its default: a hand-set hostname (and with it the Serve URL the admins reach the panel on),
+# advertised subnet routes, an exit node, shields-up and advertised tags were all withdrawn, and
+# accept-routes was forced on, while the panel reported only "Tailscale SSH enabled".
 def tailscale_ssh_enable():
-    """Enable Tailscale SSH by re-authenticating with --ssh flag."""
-    out, err, rc = _run(
-        "tailscale up --ssh --accept-routes --accept-dns --reset 2>&1",
-        timeout=30
-    )
+    """Turn this node's Tailscale SSH server on, and change nothing else (see above)."""
+    out, err, rc = _run("tailscale set --ssh 2>&1", timeout=30)
     if rc == 0:
         return True, "Tailscale SSH enabled"
     return False, err or out or "Failed to enable Tailscale SSH"
 
 
 def tailscale_ssh_disable():
-    """Disable Tailscale SSH by re-authenticating without --ssh flag."""
-    out, err, rc = _run(
-        "tailscale up --accept-routes --accept-dns --reset 2>&1",
-        timeout=30
-    )
+    """Turn this node's Tailscale SSH server off, and change nothing else."""
+    out, err, rc = _run("tailscale set --ssh=false 2>&1", timeout=30)
     if rc == 0:
         return True, "Tailscale SSH disabled"
     return False, err or out or "Failed to disable Tailscale SSH"
@@ -747,13 +787,9 @@ def get_server_status(force=False):
     has_sudo = _check_sudo()
     ts_iface = detect_tailscale_interface()
 
-    # Check if tailscale interface is already allowed in UFW
-    tailscale_ufw_allowed = False
-    if ts_iface and ufw["enabled"]:
-        out, _, _ = _run_verb("ufw-status", ["verbose"], timeout=10)
-        # The grep interpolated an interface name into a root command line; matching in Python is
-        # the same answer without that.
-        tailscale_ufw_allowed = any(ts_iface.lower() in ln.lower() for ln in (out or "").splitlines())
+    # Is the Tailscale interface already let in by UFW? Read from the rules ufw_status() parsed.
+    tailscale_ufw_allowed = bool(ts_iface and ufw["enabled"]
+                                 and ufw_allows_iface_in(ufw["rules"], ts_iface))
 
     result = {
         "has_sudo": has_sudo,
@@ -855,7 +891,8 @@ def _remote_ci_state(sha):
     a commit while anything is still running or after any check failed. (The `deploy` action is
     ignored: it's the deployment, not a verification.) Reads GitHub's public check-runs API
     anonymously (the production panel has no token); any network/parse error → 'unknown', which
-    the caller treats leniently so an API hiccup never hides a real update.
+    the caller treats leniently so an API hiccup never hides a real update. GitHub's rate limit is
+    not a hiccup — it is 'pending' (see the handler below).
 
     Registration timing isn't a problem in practice: every check here is push-triggered, so they
     all register within seconds of the push — long before CI (minutes) completes — so seeing
@@ -882,7 +919,18 @@ def _remote_ci_state(sha):
             runs.extend(batch)
             if len(batch) < 100:
                 break        # short page = last page
-    except (urllib.error.URLError, ValueError, OSError):
+    except urllib.error.HTTPError as e:
+        # GitHub ANSWERED, and the answer was not the checks. 403 and 429 are its anonymous rate
+        # limit (60 requests an hour per IP), which this gate's own polling reaches during a red
+        # streak on main: every recompute re-queries the tip and each commit under it. HTTPError
+        # is a URLError, so it used to land below as 'unknown' — which the caller accepts as
+        # installable — and from then on a tip CI had marked FAILING was offered and installed.
+        # A limit that lasts the rest of the hour is not an outage; it means "not verified yet".
+        _log.debug("CI-gate: GitHub answered HTTP %s for %s", e.code, sha, exc_info=True)
+        return "pending" if e.code in (403, 429) else "unknown"
+    except (urllib.error.URLError, ValueError, OSError, http.client.HTTPException):
+        # HTTPException: a truncated body (IncompleteRead) is not an OSError, and escaped this
+        # function entirely.
         _log.debug("CI-gate: couldn't read check-runs for %s", sha, exc_info=True)
         return "unknown"     # a partial read must not be judged: 'unknown' is treated leniently
     runs = [r for r in runs if r.get("name") not in _CI_IGNORE]
@@ -1145,10 +1193,12 @@ def panel_self_update():
     try:
         st = panel_update_status(force=True)
     except Exception:
-        # A failure to compute status must not crash the endpoint or block a legitimate
-        # update — fall through as if the CI state were unknown (lenient).
-        _log.warning("self-update CI-gate: status check failed; allowing", exc_info=True)
-        st = {}
+        # REFUSE. This used to carry on with st = {}, which skipped the gate below AND left no
+        # target, so install.sh reset onto the origin tip — the one commit nobody had verified.
+        # Status could not be computed, so nothing here knows what would be installed.
+        _log.warning("self-update CI-gate: status check failed; refusing", exc_info=True)
+        return False, ("Couldn't check the update just now, so it wasn't started. "
+                       "Try again in a minute.")
     if st.get("behind", 0) > 0 and st.get("ci_state") in ("pending", "failing"):
         if st.get("ci_state") == "failing":
             return False, ("This update is blocked: the latest commit didn't pass its "
@@ -1162,9 +1212,16 @@ def panel_self_update():
     # tip when newer commits are still verifying. install.sh resets to it (validated there as an
     # ancestor of the fetched tip). Only ever a bare hex SHA from git rev-list; guard the shape
     # anyway before it's exported into a root-run script.
+    #
+    # No target means no update: nothing is behind, the remote could not be fetched, or no commit
+    # cleared the gate. Each of those used to fall back to install.sh's default, the origin/<branch>
+    # tip — which install.sh fetches AFTER this check, so it could be a commit that landed a moment
+    # ago and was never verified at all. update_available is true exactly when an install is allowed.
+    if not st.get("update_available"):
+        return False, (st.get("message") or "The panel is already up to date.")
     target_ref = (st.get("target_sha") or "").strip()
     if not re.fullmatch(r"[0-9a-fA-F]{7,40}", target_ref):
-        target_ref = ""   # fall back to install.sh's default (origin/<branch> tip)
+        return False, "Couldn't tell which commit to update to, so the update wasn't started."
     # Follow whatever branch the panel is tracking (default 'main'); the launcher passes it to
     # install.sh so a panel that has switched branches keeps updating on THAT branch.
     return _launch_installer(target_ref=target_ref, branch=_tracked_branch())
@@ -1346,7 +1403,7 @@ def panel_switch_branch(branch):
             # The branch name is deliberately NOT interpolated here. It arrives from a request,
             # and this is the only place it would reach a log; CodeQL flags that as
             # py/log-injection. It cannot actually forge an entry — it has already cleared
-            # _valid_branch, ^[A-Za-z0-9._/-]{1,100}$, which admits no newline — and an explicit
+            # _valid_branch, whose pattern admits no newline — and an explicit
             # re.sub() at the log site did not satisfy the query either. The value adds nothing
             # an operator cannot read straight from panel_branch in config.json, which is exactly
             # what this message tells them to check, so the simplest correct answer is not to
@@ -1492,9 +1549,26 @@ def host_has_ip(ip):
     to it. Used to refuse binding the panel to an address that isn't local (a typo would fail
     to bind and take the panel down). Best-effort: on any error returns True, so a flaky check
     never blocks a legitimate change — the caller still guards the risky loopback case."""
+    #
+    # _run never raises — a timeout, a missing iproute2 or an exec error comes back as ("", ..., -1),
+    # and the pipeline's rc is cut's anyway — so the `except` below was never the error path, and
+    # a failed read answered "not on this host" as `ip in set()`. A host always has loopback, so
+    # nothing read means the check did not run. The comparison is on parsed addresses: an IPv6
+    # address typed in upper case ("FD7A:115C:A1E0::1") never equalled `ip`'s lowercase output.
+    import ipaddress
     try:
         out, _, _ = _run("ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1", timeout=8)
-        return str(ip) in set(out.split())
+        have = set()
+        for tok in (out or "").split():
+            try:
+                have.add(ipaddress.ip_address(tok))
+            except ValueError:
+                continue
+        if not have:
+            return True
+        return ipaddress.ip_address(str(ip).strip()) in have
+    except ValueError:
+        return False        # not an IP at all: it cannot be one of this host's addresses
     except Exception:
         return True
 
@@ -1617,6 +1691,26 @@ def panel_repair(paths=None):
                   "to load the corrected code." % len(targets)), targets
 
 
+def _apt_periodic_on(dump):
+    """Whether `apt-config dump` output turns APT::Periodic::Unattended-Upgrade ON.
+
+    The value is an INTERVAL (days, or with apt.systemd.daily's s/m/h/d suffixes, or "always"),
+    and anything but zero runs it. This tested for the exact text "1", so a host set to "7" in a
+    later apt.conf.d file (the last file read wins) was reported "not enabled", raised a
+    diagnostics warning, and made Enable answer "Could not confirm" while the host was applying
+    security updates every week. Absent, "0", or unreadable is off."""
+    m = None
+    for line in (dump or "").splitlines():
+        m = re.match(r'^\s*APT::Periodic::Unattended-Upgrade\s+"([^"]*)";', line) or m
+    if not m:
+        return False
+    val = m.group(1).strip().lower()
+    if val == "always":
+        return True
+    num = re.fullmatch(r"(\d+)[smhd]?", val)
+    return bool(num) and int(num.group(1)) > 0
+
+
 def unattended_upgrades_status():
     """Whether automatic security updates (the unattended-upgrades package) are
     installed AND actually enabled. Read-only, no sudo. Returns
@@ -1625,9 +1719,9 @@ def unattended_upgrades_status():
         "dpkg-query -W -f='${Status}' unattended-upgrades 2>/dev/null "
         "| grep -q 'install ok installed'", timeout=10)
     installed = (prc == 0)
-    # The package being present isn't enough — APT's periodic flag must be "1".
+    # The package being present isn't enough — APT's periodic interval must be on.
     out, _, _ = _run("apt-config dump APT::Periodic::Unattended-Upgrade 2>/dev/null", timeout=10)
-    enabled = installed and ('"1"' in (out or ""))
+    enabled = installed and _apt_periodic_on(out)
     if not installed:
         detail = "The unattended-upgrades package isn't installed."
     elif enabled:

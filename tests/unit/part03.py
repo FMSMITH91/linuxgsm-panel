@@ -336,8 +336,45 @@ try:
     _so._run = lambda c, **k: ("127.0.0.1\n100.84.48.111\n45.76.63.211\n", "", 0)
     check("host_has_ip: recognises a local address", _so.host_has_ip("100.84.48.111") is True)
     check("host_has_ip: rejects an address not on the host", _so.host_has_ip("10.0.0.9") is False)
+    # Its docstring promises "on any error returns True", and _run never raises: a timeout or a
+    # missing `ip` is ("", ..., -1), and `ip in set()` refused the host's own Tailscale IP as
+    # "not an address on this host". Nothing read is not a measurement.
+    _so._run = lambda c, **k: ("", "Command timed out", -1)
+    check("host_has_ip: a read that timed out does not call the address foreign",
+          _so.host_has_ip("100.84.48.111") is True)
+    _so._run = lambda c, **k: ("127.0.0.1\n::1\nfd7a:115c:a1e0::1\n", "", 0)
+    check("host_has_ip: an IPv6 address typed in upper case is still this host's",
+          _so.host_has_ip("FD7A:115C:A1E0::1") is True)
+    check("host_has_ip: ...while one that really is absent is still refused (control)",
+          _so.host_has_ip("fd7a:115c:a1e0::2") is False and _so.host_has_ip("not-an-ip") is False)
 finally:
     _so._run = _orig_sorun2
+
+# ── The Tailscale SSH toggle changes RunSSH and nothing else ─────────────────────────────────
+# It ran `tailscale up --ssh --accept-routes --accept-dns --reset`. `--reset` puts every pref not
+# on that command line back to its default, so turning SSH on withdrew advertised subnet routes and
+# an exit node, dropped a hand-set hostname (and the Serve URL built on it) and forced accept-routes
+# on — reported as "Tailscale SSH enabled". `tailscale set --ssh[=false]` touches only RunSSH.
+import shlex as _tss_shlex   # noqa: E402
+_tss_cmds, _tss_rc = [], {"rc": 0}
+_tss_orig = _so._run
+try:
+    _so._run = lambda c, **k: (_tss_cmds.append(c), ("", "boom", _tss_rc["rc"]))[1]
+    _tss_on = _so.tailscale_ssh_enable()
+    _tss_off = _so.tailscale_ssh_disable()
+    _tss_argv = [[t for t in _tss_shlex.split(c) if t != "2>&1"] for c in _tss_cmds]
+    check("tailscale-ssh: enabling runs `tailscale set --ssh` and nothing that resets other prefs",
+          _tss_argv[:1] == [["tailscale", "set", "--ssh"]], repr(_tss_cmds))
+    check("tailscale-ssh: disabling runs `tailscale set --ssh=false` and nothing else",
+          _tss_argv[1:2] == [["tailscale", "set", "--ssh=false"]], repr(_tss_cmds))
+    check("tailscale-ssh: ...and a toggle that ran reports it (control)",
+          _tss_on == (True, "Tailscale SSH enabled") and _tss_off == (True, "Tailscale SSH disabled"),
+          repr((_tss_on, _tss_off)))
+    _tss_rc["rc"] = 1
+    check("tailscale-ssh: ...while one the CLI refused is reported as a failure (control)",
+          _so.tailscale_ssh_enable()[0] is False and _so.tailscale_ssh_disable()[0] is False)
+finally:
+    _so._run = _tss_orig
 
 # ── perf guard: the /server-management host probe (sudo ufw + tailscale + apt, ~1.2s of
 #    CPU across several subprocesses) is cached for _STATUS_TTL, so a page render and its
@@ -500,6 +537,18 @@ check("auto-updates: installed but disabled detected", _au["installed"] and not 
 _so._run = _mk_run(1, "")
 _au = _so.unattended_upgrades_status()
 check("auto-updates: not installed detected", not _au["installed"] and not _au["enabled"])
+# The value is an INTERVAL in days — any non-zero one runs it. Only the exact text "1" counted,
+# so a weekly "7" (set in a later apt.conf.d file, which wins) read "not enabled" and Enable
+# answered "Could not confirm" on a host that was applying updates.
+for _au_val, _au_want in (("7", True), ("2", True), ("always", True), ("12h", True),
+                          ("0", False), ("", False), ("off", False)):
+    _so._run = _mk_run(0, 'APT::Periodic::Unattended-Upgrade "%s";' % _au_val)
+    check("auto-updates: an interval of %r reads as %s" % (_au_val, "on" if _au_want else "off"),
+          _so.unattended_upgrades_status()["enabled"] is _au_want)
+_so._run = _mk_run(0, 'APT::Periodic::Update-Package-Lists "1";')
+check("auto-updates: a '1' on a DIFFERENT periodic key is not this one being on",
+      _so.unattended_upgrades_status()["enabled"] is False)
+_so._run = _mk_run(1, "")
 
 # ── shell-identifier validation (the core injection defense) ──
 from panel.db.models import _validate_shell_ident as _vsi
@@ -1224,6 +1273,32 @@ try:
     _so.urllib.request.urlopen = _boom
     eq("ci-gate: network error -> unknown (never raises)", _so._remote_ci_state("a"*40), "unknown")
 
+    # GitHub's anonymous rate limit (403/429) is an ANSWER, not an outage, and this gate's own
+    # polling reaches it during a red streak. HTTPError is a URLError, so it read 'unknown' — which
+    # the caller accepts as installable — and a tip CI had marked failing was offered and installed.
+    def _http_err(code):
+        def _op(req, timeout=8):
+            raise _so.urllib.error.HTTPError(req.full_url, code, "limit", {}, None)
+        return _op
+    _so.urllib.request.urlopen = _http_err(403)
+    eq("ci-gate: GitHub's 403 rate limit is 'pending', not the installable 'unknown'",
+       _so._remote_ci_state("a" * 40), "pending")
+    _so.urllib.request.urlopen = _http_err(429)
+    eq("ci-gate: ...and so is a 429", _so._remote_ci_state("a" * 40), "pending")
+    _so.urllib.request.urlopen = _http_err(502)
+    eq("ci-gate: ...while a GitHub outage (5xx) stays 'unknown' (control)",
+       _so._remote_ci_state("a" * 40), "unknown")
+
+    def _truncated(req, timeout=8):
+        raise _so.http.client.IncompleteRead(b'{"check_runs":[', 400)
+    _so.urllib.request.urlopen = _truncated
+    try:
+        _ir_state = _so._remote_ci_state("a" * 40)
+    except Exception as _ir_e:   # noqa: BLE001 - the regression IS the raise
+        _ir_state = "raised %s" % type(_ir_e).__name__
+    eq("ci-gate: a truncated response (IncompleteRead) is 'unknown', it does not escape",
+       _ir_state, "unknown")
+
     # PAGINATION. The call asked for per_page=100 and read exactly one page. That was enough for
     # the workflows that exist today, but the failure mode if it ever stopped being enough is the
     # wrong one: a check that did not fit on page 1 is simply not seen, so a commit whose only
@@ -1279,7 +1354,8 @@ try:
     # A CI-passing commit must get PAST the gate. Make install.sh look missing so it stops
     # there (proving the gate let it through) instead of actually launching an update.
     _so.os.path.isfile = lambda p: False
-    _so.panel_update_status = lambda force=False: {"behind": 1, "ci_state": "passing"}
+    _so.panel_update_status = lambda force=False: {"behind": 1, "ci_state": "passing",
+                                                   "update_available": True, "target_sha": "b" * 40}
     _ok, _m = _so.panel_self_update()
     check("self-update: a CI-passing commit is NOT blocked by the gate",
           _ok is False and "install.sh is missing" in _m)
@@ -1287,6 +1363,46 @@ finally:
     _so._is_git_checkout = _orig_isgit
     _so.panel_update_status = _orig_pus
     _so.os.path.isfile = _orig_isfile
+
+# ...and a gate that could not be EVALUATED does not open. A status computation that raised (a
+# truncated GitHub reply, a git read that would not decode) set st = {}, which skipped the gate and
+# left no target, so install.sh reset onto the origin tip — fetched after the check, verified by
+# nobody. Any status without a verified target fell back to that same tip.
+_sug_saved = (_so._is_git_checkout, _so.panel_update_status, _so._launch_installer, _so.os.path.isfile)
+_sug_launched = []
+try:
+    _so._is_git_checkout = lambda: True
+    _so.os.path.isfile = lambda p: True
+    _so._launch_installer = lambda **k: (_sug_launched.append(k), (True, "Update started"))[1]
+
+    def _sug_raise(force=False):
+        raise _so.http.client.IncompleteRead(b"", 10)
+    _so.panel_update_status = _sug_raise
+    _sug_r = _so.panel_self_update()
+    check("self-update: a status check that RAISED refuses the update instead of skipping the gate",
+          _sug_r[0] is False and not _sug_launched, repr((_sug_r, _sug_launched)))
+    _so.panel_update_status = lambda force=False: {"git": True, "behind": 2, "ci_state": "unknown",
+                                                   "update_available": True, "target_sha": ""}
+    _sug_r = _so.panel_self_update()
+    check("self-update: an update with no verified target is refused, not sent to the origin tip",
+          _sug_r[0] is False and not _sug_launched, repr((_sug_r, _sug_launched)))
+    _so.panel_update_status = lambda force=False: {"git": True, "fetched": False,
+                                                   "update_available": False,
+                                                   "message": "Couldn't reach the update source."}
+    _sug_r = _so.panel_self_update()
+    check("self-update: ...nor is one whose remote could not even be fetched",
+          _sug_r == (False, "Couldn't reach the update source.") and not _sug_launched,
+          repr((_sug_r, _sug_launched)))
+    _so.panel_update_status = lambda force=False: {"git": True, "behind": 2, "ci_state": "passing",
+                                                   "update_available": True, "target_sha": "c" * 40}
+    _sug_launched.clear()
+    _sug_r = _so.panel_self_update()
+    check("self-update: ...while a verified target is launched, pinned to that commit (control)",
+          _sug_r[0] is True and len(_sug_launched) == 1
+          and _sug_launched[0].get("target_ref") == "c" * 40, repr((_sug_r, _sug_launched)))
+finally:
+    (_so._is_git_checkout, _so.panel_update_status, _so._launch_installer,
+     _so.os.path.isfile) = _sug_saved
 
 # ── _compute_update_status targets the newest VERIFIED commit ──
 # When the tip is still verifying but an earlier commit already passed CI, the panel must
@@ -1412,6 +1528,24 @@ try:
     check("update-target: a verified commit under a pending tip is still offered",
           _rm["update_available"] is True and _rm["target_sha"] == "b" * 40,
           "available=%s target=%s" % (_rm.get("update_available"), _rm.get("target_sha")))
+
+    # The caller, over the REAL _remote_ci_state: once GitHub rate-limits the panel, nothing in
+    # range is verified, so nothing is offered. It used to read every commit as 'unknown' and
+    # offer the tip — failing CI or not.
+    _rl_saved = (_so._repo_slug, _so.urllib.request.urlopen)
+    try:
+        _so._remote_ci_state = _cus_ci
+        _so._repo_slug = lambda: "o/r"
+
+        def _rl_open(req, timeout=8):
+            raise _so.urllib.error.HTTPError(req.full_url, 403, "rate limit exceeded", {}, None)
+        _so.urllib.request.urlopen = _rl_open
+        _r_rl = _so._compute_update_status()
+        check("update-target: a rate-limited CI read offers NO update (was: the unverified tip)",
+              _r_rl["update_available"] is False and _r_rl.get("ci_state") == "pending",
+              "available=%s ci=%s" % (_r_rl.get("update_available"), _r_rl.get("ci_state")))
+    finally:
+        _so._repo_slug, _so.urllib.request.urlopen = _rl_saved
 finally:
     _so._git = _cus_git
     _so._is_git_checkout = _cus_isco
@@ -1455,11 +1589,33 @@ try:
     _tsi.get_tailscale_info = lambda *a, **k: TailscaleInfo(
         installed=True, running=True, backend_state="Running", tailscale_ips=["100.90.141.12"],
         dns_name="host.example.ts.net",
-        serve_config={"services": [{"url": "https://host.example.ts.net", "routes": [{}]}], "raw": "x"})
+        serve_config={"services": [{"url": "https://host.example.ts.net", "routes": [
+            {"mount": "/lgsm", "target": "http://127.0.0.1:5000"}]}], "raw": "x"})
     _tsi._cache["info"] = None
     _bys = _tsi.suggest_best_bind(5000)
     check("tailscale: up + DNS name + Serve configured -> binds loopback for Serve",
           _bys["bind_host"] == "127.0.0.1" and _bys["method"] == "tailscale-serve")
+    eq("tailscale: ...and the URL it recommends is the panel's own mapping, mount included",
+       _bys["url"], "https://host.example.ts.net/lgsm")
+    # ANY Serve route used to count, so a node already serving another app (Grafana on :3000) bound
+    # a fresh panel — whose bind_host is empty until the wizard's first step, and app._resolved_bind
+    # takes this answer — to 127.0.0.1 with nothing proxying to it: the first-run wizard, the only
+    # way to create the first admin, was unreachable except through an SSH tunnel.
+    _tsi.get_tailscale_info = lambda *a, **k: TailscaleInfo(
+        installed=True, running=True, backend_state="Running", tailscale_ips=["100.90.141.12"],
+        dns_name="host.example.ts.net",
+        serve_config={"services": [{"url": "https://host.example.ts.net", "routes": [
+            {"mount": "/", "target": "http://127.0.0.1:3000"}]}], "raw": "x"})
+    _tsi._cache["info"] = None
+    _bgf = _tsi.suggest_best_bind(5000)
+    check("tailscale: a Serve route to ANOTHER app does not bind the panel to loopback",
+          _bgf["bind_host"] != "127.0.0.1" and _bgf["method"] == "tailscale-direct", repr(_bgf))
+    # The direct URLs were hardcoded http:// while the panel serves self-signed TLS by default, so
+    # the page linked the operator to plain HTTP on a port that only speaks TLS.
+    eq("tailscale: the direct URL uses the scheme the panel is actually serving",
+       _tsi.suggest_best_bind(5000, scheme="https")["url"], "https://100.90.141.12:5000")
+    eq("tailscale: ...and http only when the panel serves http (control)",
+       _tsi.suggest_best_bind(5000, scheme="http")["url"], "http://100.90.141.12:5000")
 finally:
     _tsi.get_tailscale_info = _orig_gti
     _tsi._cache["info"] = None
@@ -1488,6 +1644,28 @@ def _tsu_stub(serve_rc, serve_out=""):
     return _tsi._get_tailscale_info()
 
 
+# "Accept Routes" is the RouteAll pref. It was read from status JSON's TUN field — kernel TUN vs
+# userspace networking, nothing to do with subnet routes — so a normal kernel-mode node that never
+# accepted routes read "Yes", and an operator chasing an unreachable subnet was told it was accepted.
+def _tsar_info(prefs_rc, route_all):
+    def _run(args, timeout=5):
+        if args and args[0] in ("version", "--version"):
+            return ("1.0", "", 0)
+        if args[:2] == ["debug", "prefs"]:
+            return ('{"RouteAll": %s, "RunSSH": false}' % ("true" if route_all else "false"),
+                    "", prefs_rc)
+        return ("", "", 0)
+    _tsi._run_ts = _run
+    _tsi._run_ts_json = lambda args, timeout=5: dict(_tsu_json, TUN=True)
+    _tsi._cache["info"] = None
+    return _tsi._get_tailscale_info().accept_routes
+
+
+eq("tailscale: Accept Routes is the RouteAll pref, not the TUN flag (kernel TUN, routes off)",
+   _tsar_info(0, False), False)
+eq("tailscale: ...a node that accepts routes says so (control)", _tsar_info(0, True), True)
+eq("tailscale: ...and prefs that could not be read are unknown, not 'No'", _tsar_info(1, True), None)
+
 _tsu_denied = _tsu_stub(1)
 check("tailscale: a `serve status` that was refused is flagged unreadable, not reported empty",
       _tsu_denied.serve_unreadable is True and _tsu_denied.serve_config == {},
@@ -1503,7 +1681,76 @@ check("tailscale: ...and a readable config still parses its routes (positive con
       and [r["mount"] for s in _tsu_ok.serve_config.get("services", []) for r in s["routes"]]
       == ["/lgsm"],
       "serve_config=%r" % (_tsu_ok.serve_config,))
+
+# A FUNNELLED mapping reads as one. Tailscale prints "(Funnel on)" with a capital F after the URL,
+# and the parser compared case-sensitively against "funnel": info.funnel_enabled was always False,
+# so /tailscale told the operator a panel on the public internet was "private - tailnet only".
+_tsu_fun = _tsu_stub(0, "# Funnel on:\n#     - https://host.example.ts.net\n\n"
+                        "https://host.example.ts.net (Funnel on)\n|-- / proxy http://127.0.0.1:5000")
+check("tailscale: a mapping Tailscale prints as '(Funnel on)' is reported as funnelled",
+      _tsu_fun.funnel_enabled is True
+      and [s["funnel"] for s in _tsu_fun.serve_config.get("services", [])] == [True],
+      "funnel_enabled=%r serve_config=%r" % (_tsu_fun.funnel_enabled, _tsu_fun.serve_config))
+_tsu_priv = _tsu_stub(0, "https://host.example.ts.net (tailnet only)\n"
+                         "|-- /funnel-stats proxy http://127.0.0.1:3000")
+check("tailscale: ...while '(tailnet only)' is private, even with 'funnel' in a route (control)",
+      _tsu_priv.funnel_enabled is False
+      and [s["funnel"] for s in _tsu_priv.serve_config.get("services", [])] == [False],
+      "funnel_enabled=%r serve_config=%r" % (_tsu_priv.funnel_enabled, _tsu_priv.serve_config))
 _tsi._cache["info"] = None
+
+# ── Disabling Serve runs a command the CLI has, and removes only the PANEL's mapping ─────────
+# It ran `tailscale serve --bg --remove <mount>`. No Tailscale version has --remove: the CLI exits 2
+# ("flag provided but not defined: -remove") before doing anything, so every Disable failed —
+# including taking a Funnelled panel back off the internet. The CLI's removal is
+# `serve --https=<port> --set-path=<mount> off`; without --set-path, `off` drops EVERY mount on
+# the port. And the mount has to be the panel's: Tailscale lists "/" first, so on a node where
+# another app holds "/" and the panel sits at /lgsm, "the first route" was the other app.
+eq("serve-off: the removal argv is the CLI's own grammar, path always given",
+   _tsi.serve_off_args("https://node.example.ts.net", "/"),
+   ["serve", "--https=443", "--set-path=/", "off"])
+eq("serve-off: ...on the listener the mapping is actually on",
+   _tsi.serve_off_args("https://node.example.ts.net:8443", "/lgsm"),
+   ["serve", "--https=8443", "--set-path=/lgsm", "off"])
+_tsd_info = TailscaleInfo(
+    installed=True, running=True, backend_state="Running", dns_name="node.example.ts.net",
+    serve_config={"services": [{"url": "https://node.example.ts.net", "funnel": True, "routes": [
+        {"mount": "/", "target": "http://127.0.0.1:3000"},
+        {"mount": "/lgsm", "target": "https+insecure://127.0.0.1:5000"}]}], "raw": "x"})
+_tsd_saved = (_tsi.get_tailscale_info, _tsi._run_ts, _tsi.ensure_operator)
+_tsd_ran, _tsd_rc = [], {"rc": 0}
+try:
+    _tsi.get_tailscale_info = lambda force_refresh=False: _tsd_info
+    _tsi._run_ts = lambda args, timeout=5: (_tsd_ran.append(list(args)), ("", "err", _tsd_rc["rc"]))[1]
+    _tsi.ensure_operator = lambda: (True, "panel")
+    eq("serve-off: the panel's route is found by its backend, not by its place in the list",
+       [r["mount"] for r in _tsi.panel_serve_routes(_tsd_info.serve_config, 5000)], ["/lgsm"])
+    _tsd_r = _tsi.disable_tailscale_serve("/", 5000)
+    check("serve-off: asked to remove another app's '/', it removes NOTHING",
+          _tsd_r[0] is False and _tsd_ran == [], repr((_tsd_r, _tsd_ran)))
+    _tsd_r = _tsi.disable_tailscale_serve("/lgsm", 5000)
+    check("serve-off: the panel's own mapping is removed with `serve ... off`, never --remove",
+          _tsd_r[0] is True and _tsd_ran == [["serve", "--https=443", "--set-path=/lgsm", "off"]],
+          repr((_tsd_r, _tsd_ran)))
+    _tsd_ran.clear()
+    _tsd_rc["rc"] = 2
+    _tsd_r = _tsi.disable_tailscale_serve("/lgsm", 5000)
+    check("serve-off: ...and a CLI that refused is a failure, not 'removed' (control)",
+          _tsd_r[0] is False and len(_tsd_ran) == 1, repr((_tsd_r, _tsd_ran)))
+    _tsd_ran.clear()
+    _tsd_info.serve_unreadable = True
+    _tsd_r = _tsi.disable_tailscale_serve("/lgsm", 5000)
+    check("serve-off: an unreadable Serve config removes nothing (it can't tell whose mapping)",
+          _tsd_r[0] is False and _tsd_ran == [], repr((_tsd_r, _tsd_ran)))
+    _tsd_info.serve_unreadable = False
+    _tsd_info.serve_config = {"services": [{"url": "https://node.example.ts.net", "funnel": False,
+                                            "routes": [{"mount": "/", "target": "http://127.0.0.1:3000"}]}]}
+    _tsd_r = _tsi.disable_tailscale_serve("/", 5000)
+    check("serve-off: with nothing proxying the panel, disabling is done and touches nothing",
+          _tsd_r[0] is True and _tsd_ran == [], repr((_tsd_r, _tsd_ran)))
+finally:
+    _tsi.get_tailscale_info, _tsi._run_ts, _tsi.ensure_operator = _tsd_saved
+    _tsi._cache["info"] = None
 _tsi._run_ts, _tsi._run_ts_json = _orig_run_ts, _orig_run_ts_json   # restored, as above
 
 # ── Debug report: repeated tracebacks in the log tail get collapsed ───
@@ -1871,6 +2118,42 @@ check("system_ops: ...and a DENY's source is the From column, not the To column"
       _ufw_parsed["rules"][-1]["action"] == "DENY"
       and _ufw_parsed["rules"][-1]["from"].startswith("203.0.113.9"),
       str(_ufw_parsed["rules"][-1]))
+
+# 10b. "Tailscale interface allowed" gates the button that removes public port 22, and it was a
+#      substring match over that same text: an `ALLOW OUT ... on tailscale0` row (early installs
+#      added one beside the IN rule, and it outlives deleting it) or a `DENY IN` on the interface
+#      read "Allowed". It is now read from the rules above, in UFW's first-match order.
+_UFW_HDR = _UFW_V.split("To  ")[0] + "To                         Action      From\n--                         ------      ----\n"
+
+
+def _ts_allowed_for(rows):
+    """Drive the REAL get_server_status over a `ufw status verbose` holding `rows`."""
+    with _so_stub(_run_verb=lambda v, a=(), **k: (_UFW_HDR + rows, "", 0),
+                  tailscale_ssh_status=lambda: {"enabled": False, "running": True},
+                  os_update_available=lambda refresh=False: {},
+                  server_uptime=lambda: "", _check_sudo=lambda: True,
+                  detect_tailscale_interface=lambda: "tailscale0"):
+        return SO.get_server_status(force=True)["tailscale_ufw_allowed"]
+
+
+try:
+    check("ufw-tailscale: an ALLOW OUT row on tailscale0 alone does not read as 'let in'",
+          _ts_allowed_for("Anywhere                   ALLOW OUT   Anywhere on tailscale0\n"
+                          "22/tcp                     ALLOW IN    Anywhere\n") is False)
+    check("ufw-tailscale: a DENY IN on tailscale0 is not 'allowed'",
+          _ts_allowed_for("Anywhere on tailscale0     DENY IN     Anywhere\n") is False)
+    check("ufw-tailscale: ...nor a DENY IN that UFW evaluates before the allow",
+          _ts_allowed_for("Anywhere on tailscale0     DENY IN     Anywhere\n"
+                          "Anywhere on tailscale0     ALLOW IN    Anywhere\n") is False)
+    check("ufw-tailscale: a comment naming the interface is not a rule for it",
+          _ts_allowed_for("27015                      ALLOW IN    Anywhere                   # tailscale0\n")
+          is False)
+    check("ufw-tailscale: the panel's own `allow in on tailscale0` rule reads as allowed (control)",
+          _ts_allowed_for("22/tcp                     LIMIT IN    Anywhere\n"
+                          "Anywhere on tailscale0     ALLOW IN    Anywhere\n"
+                          "Anywhere                   ALLOW OUT   Anywhere on tailscale0\n") is True)
+finally:
+    SO.invalidate_server_status()
 
 # 11. apt's history.log writes Install:/Upgrade:/Remove:/Purge:, never "Packages:" — so that list
 #     was always empty. And `tail -50` almost always starts mid-record, so the first entry used to

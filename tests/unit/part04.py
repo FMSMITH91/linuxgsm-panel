@@ -183,6 +183,61 @@ _lgd._mem.clear(); _lgd_fetches.clear()
 eq("lgsm data: a stale cache is still served when the refetch fails", len(_lgd.serverlist()), 3)
 check("lgsm data: ...and it did try to refresh first", _lgd_fetches == [_lgd.SERVERLIST], _lgd_fetches)
 
+# ── the weekly refetch has to happen in a RUNNING panel ───────────────────────────────────────
+# serverlist() and deps() returned their in-memory copy for the life of the process, and
+# app.load_game_list / lgsm_name_to_game_type / hosts._load_deps_csv each kept a second copy the
+# same way, so "refetch once a week" applied only to the first read after a start: a game LinuxGSM
+# added while the panel was up never reached the install menu. Driven on a clock moved a week on.
+import types as _lgd_types
+_lgd_real_time = _lgd.time
+_lgd_sl_path, _lgd_dp_path = _lgd._CACHE_DIR / _lgd.SERVERLIST, _lgd._CACHE_DIR / _lgd.DEPS
+_lgd_saved_files = (_lgd_sl_path.read_text(encoding="utf-8"), _lgd_dp_path.read_text(encoding="utf-8"))
+_lgd_saved_fetch = _lgd._fetch
+_LGD_NEW_SL = _SERVERLIST_FIXTURE + "newg,newgserver,A Game Added Upstream,ubuntu-24.04\n"
+_LGD_NEW_DP = _DEPS_FIXTURE.replace("all,bc,binutils,curl", "all,bc,binutils,curl,renamedpkg")
+try:
+    _lgd_sl_path.write_text(_SERVERLIST_FIXTURE, encoding="utf-8")
+    _lgd_dp_path.write_text(_DEPS_FIXTURE, encoding="utf-8")
+    _lgd._mem.clear()
+    _app._GAME_LIST_CACHE["games"] = None
+    _app._LGSM_NAME_MAP["data"] = None
+    _lgd_before = (len(_app.load_game_list()), _app.lgsm_name_to_game_type("newgserver"),
+                   _sm_hosts._load_deps_csv(None).get("all"))
+    # Upstream moves on: the next fetch returns the new files.
+    _lgd._fetch = lambda name: {_lgd.SERVERLIST: _LGD_NEW_SL, _lgd.DEPS: _LGD_NEW_DP}.get(name)
+    # Positive control: inside the week nothing is re-read, so the cache is still a cache.
+    check("lgsm data: inside the week the parsed copy is served, not re-read (control)",
+          _lgd_before == (3, None, ["bc", "binutils", "curl"])
+          and len(_app.load_game_list()) == 3
+          and _sm_hosts._load_deps_csv(None).get("all") == ["bc", "binutils", "curl"],
+          repr(_lgd_before))
+    _lgd.time = _lgd_types.SimpleNamespace(
+        time=lambda: _lgd_real_time.time() + _lgd.MAX_AGE_SECONDS + 60)
+    check("lgsm data: a week on, a game LinuxGSM added reaches the install menu",
+          len(_app.load_game_list()) == 4
+          and _app.lgsm_name_to_game_type("newgserver") == "newg",
+          "%d games" % len(_app.load_game_list()))
+    check("lgsm data: ...and a package-list fix reaches the installer",
+          _sm_hosts._load_deps_csv(None).get("all") == ["bc", "binutils", "curl", "renamedpkg"],
+          repr(_sm_hosts._load_deps_csv(None).get("all")))
+    # A re-read that gets NOTHING (file gone, network down) keeps the list it had: a stale list
+    # beats emptying the install menu of a panel that was working.
+    _lgd._fetch = lambda name: None
+    _lgd_sl_path.unlink()
+    _lgd.time = _lgd_types.SimpleNamespace(
+        time=lambda: _lgd_real_time.time() + 2 * _lgd.MAX_AGE_SECONDS + 120)
+    check("lgsm data: ...and a re-read that gets nothing keeps the list it had",
+          len(_app.load_game_list()) == 4, "%d games" % len(_app.load_game_list()))
+finally:
+    _lgd.time = _lgd_real_time
+    _lgd._fetch = _lgd_saved_fetch
+    _lgd_sl_path.write_text(_lgd_saved_files[0], encoding="utf-8")
+    _lgd_dp_path.write_text(_lgd_saved_files[1], encoding="utf-8")
+    _os_lgd.utime(_lgd_sl_path, (0, 0))   # as the stale-cache check above left it
+    _lgd._mem.clear()
+    _app._GAME_LIST_CACHE["games"] = None
+    _app._LGSM_NAME_MAP["data"] = None
+
 # ── lgsm_name_to_game_type: gameservername -> panel game_type, from LinuxGSM's serverlist ──
 _app._LGSM_NAME_MAP["data"] = None
 _app._GAME_LIST_CACHE["games"] = None
@@ -808,6 +863,46 @@ check("branch: rejects space", not _so._valid_branch("a b"))
 check("branch: rejects ; metachar", not _so._valid_branch("a;reboot"))
 check("branch: rejects command substitution", not _so._valid_branch("$(id)"))
 check("branch: rejects empty", not _so._valid_branch(""))
+# The panel's check and the root verb's must agree. _valid_branch took a leading "_" or "." that
+# panel-self-update's _branch_name refuses: switching to `_wip` saved it as the tracked branch, then
+# the launch raised VerbError out of _run_verb — a 500 with no audit row — and so did every update
+# after, until someone switched back by hand.
+from panel.security import privileged as _br_priv  # noqa: E402
+
+
+def _br_verb_ok(n):
+    try:
+        _br_priv._branch_name(n)
+        return True
+    except _br_priv.VerbError:
+        return False
+
+
+_br_names = ["main", "feature/x", "_wip", ".hidden", "a", "A_b-c.d/e", "9lives", "-x", "a..b", "x" * 100]
+_br_disagree = [n for n in _br_names if _so._valid_branch(n) != _br_verb_ok(n)]
+check("branch: the panel accepts exactly the branch names the root verb accepts",
+      not _br_disagree, repr(_br_disagree))
+check("branch: ...so a leading '_' is refused up front, not by the verb mid-switch",
+      not _so._valid_branch("_wip") and _so._valid_branch("wip_2"))
+# And _run_verb keeps its "never raises" contract when a verb refuses an argument: callers are
+# written on it and have no handler for VerbError.
+_rv_saved = (_so._helper_present, _so.subprocess.run)
+_rv_ran = []
+try:
+    _so._helper_present = lambda: True
+    _so.subprocess.run = lambda *a, **k: (_rv_ran.append(a), type(
+        "R", (), {"returncode": 0, "stdout": "ok", "stderr": ""})())[1]
+    try:
+        _rv_r = _so._run_verb("panel-self-update", ["-", "-oops"])
+    except Exception as _rv_e:  # noqa: BLE001 - the regression IS the raise
+        _rv_r = "raised %s" % type(_rv_e).__name__
+    check("run_verb: an argument the verb refuses is a failed result, not an exception",
+          _rv_r == ("", "invalid argument", -1) and not _rv_ran, repr((_rv_r, _rv_ran)))
+    check("run_verb: ...while a valid one still runs (control)",
+          _so._run_verb("panel-self-update", ["-", "main"])[2] == 0 and len(_rv_ran) == 1,
+          repr(_rv_ran))
+finally:
+    _so._helper_present, _so.subprocess.run = _rv_saved
 
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
@@ -1157,6 +1252,42 @@ finally:
     (_tgm.load_config, _tgm.update_config, _tgm._tg_reply, _tgm.decrypt_secret,
      _tgm.so.panel_commit) = _tg_saved
 
+# ...and its Discord twin, which kept the old branch: the module docstrings say the two bots behave
+# the same, and this one still told the channel "no new commit landed" whenever git could not be read.
+import panel.services.bots.discord as _dcm  # noqa: E402
+_dc_said = []
+_dc_saved = (_dcm.load_config, _dcm.update_config, _dcm._dc_reply, _dcm.decrypt_secret,
+             _dcm.so.panel_commit)
+try:
+    _dcm.update_config = lambda fn: None
+    _dcm.decrypt_secret = lambda s: s
+    _dcm._dc_reply = lambda tok, chan, text: _dc_said.append(text)
+
+    def _dc_report(from_commit, now_commit):
+        _dcm.load_config = lambda: {"notifications": {"discord": {"bot_token": "tok"}},
+                                    "discord_pending_update": {"channel_id": "42",
+                                                               "from_commit": from_commit}}
+        _dcm.so.panel_commit = lambda: now_commit
+        _dc_said.clear()
+        _dcm._report_dc_pending_update()
+        return _dc_said[0] if len(_dc_said) == 1 else repr(_dc_said)
+
+    _dc_msg = _dc_report("abc1234", "")
+    check("discord: a commit git could not read is not reported as 'no new commit landed'",
+          "couldn't read" in _dc_msg and "no new commit landed" not in _dc_msg, _dc_msg)
+    _dc_msg = _dc_report("", "def5678")
+    check("discord: ...nor when it is the BEFORE commit that was never recorded",
+          "couldn't read" in _dc_msg and "no new commit landed" not in _dc_msg, _dc_msg)
+    _dc_msg = _dc_report("abc1234", "def5678")
+    check("discord: a commit that really moved is still reported as complete (control)",
+          "Update complete" in _dc_msg and "abc1234" in _dc_msg, _dc_msg)
+    _dc_msg = _dc_report("abc1234", "abc1234")
+    check("discord: ...and one that really did not still says no new commit landed (control)",
+          "no new commit landed" in _dc_msg, _dc_msg)
+finally:
+    (_dcm.load_config, _dcm.update_config, _dcm._dc_reply, _dcm.decrypt_secret,
+     _dcm.so.panel_commit) = _dc_saved
+
 # ── Discord command bot (Gateway): parsing, SSRF-safe reply path, and the message pump ──
 from panel.services.bots.discord import _parse_dc_command  # noqa: E402
 
@@ -1213,10 +1344,13 @@ class _FakeWS:
     def __init__(self, frames):
         self._frames = list(frames)
         self.sent = []
+        self.timeout = 40.0        # what create_connection(timeout=40) leaves on the real socket
     def recv(self):
         return self._frames.pop(0) if self._frames else ""   # "" == EOF -> the loop breaks
     def send(self, s):
         self.sent.append(s)
+    def settimeout(self, t):
+        self.timeout = t
     def close(self):
         pass
 
@@ -1233,6 +1367,38 @@ check("discord: the gateway IDENTIFYs with the message-content intent",
 check("discord: a MESSAGE_CREATE is delivered to the handler with (channel, is_bot, content)",
       _dc_seen == [("999", False, "!status")])
 check("discord: the message-content intent bit (1<<15) is set", N._DISCORD_INTENTS & (1 << 15))
+
+
+# A QUIET session must outlive its own heartbeat. create_connection(timeout=40) is also the timeout of
+# every later recv(), and an idle guild sends nothing but heartbeat ACKs — the first a full
+# heartbeat_interval (~41s) after IDENTIFY. recv() raised first, the session "ended", and the bot
+# re-IDENTIFYed every ~56s: ~1500 a day against Discord's limit of 1000, which resets the token.
+# This fake behaves like websocket-client: a gap longer than the socket's timeout raises.
+class _QuietWS(_FakeWS):
+    def __init__(self, frames, gap):
+        _FakeWS.__init__(self, frames)
+        self._gap = gap
+    def recv(self):
+        if len(self._frames) == 1 and self.timeout is not None and self.timeout < self._gap:
+            raise TimeoutError("Connection timed out")      # WebSocketTimeoutException's shape
+        return _FakeWS.recv(self)
+
+
+_dcq_seen = []
+_dcq_ws = _QuietWS(['{"op":10,"d":{"heartbeat_interval":600000}}',
+                    '{"op":0,"s":1,"t":"MESSAGE_CREATE","d":{"channel_id":"7","author":{"bot":false},'
+                    '"content":"!status"}}'], gap=600 + 5)     # the first ACK: one interval later
+N.discord_gateway_run("A" * 50, lambda ch, is_bot, content, author=None: _dcq_seen.append(content),
+                      _connect=lambda: _dcq_ws)
+check("discord: a quiet session is not torn down before its first heartbeat ACK can arrive",
+      _dcq_seen == ["!status"] and (_dcq_ws.timeout or 0) > 600,
+      "recv timeout %r for a 600s heartbeat interval; delivered %r" % (_dcq_ws.timeout, _dcq_seen))
+_dcq_seen2 = []
+_dcq_ws2 = _QuietWS(['{"op":10,"d":{"heartbeat_interval":600000}}', '{"op":0}'], gap=10 ** 6)
+N.discord_gateway_run("A" * 50, lambda ch, is_bot, content, author=None: _dcq_seen2.append(content),
+                      _connect=lambda: _dcq_ws2)
+check("discord: ...while a recv that really times out still ends the session (control)",
+      _dcq_seen2 == [] and _dcq_ws2._frames == ['{"op":0}'], repr(_dcq_ws2._frames))
 
 # player_slots parses gamedig's compact JSON into (count, max, name); a name with spaces/quotes
 # round-trips and junk output is rejected. run_command is stubbed so no SSH/gamedig is needed.

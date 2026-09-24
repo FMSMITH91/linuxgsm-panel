@@ -2787,6 +2787,39 @@ for _sf, _needle in (("manage_remotes.js", "_tsUpPolls"), ("tailscale.js", "_tsU
           "js: %s's tailscale-up poll is deduped and has a deadline" % _sf,
           "no single-poll registry or no deadline")
 
+# ...and reaching that deadline has to leave the operator a way ON. tailscale.js told them to "press
+# the button again" — a button this flow had disabled and never re-enabled — and setup_tailscale.js
+# changed nothing at all, leaving "Waiting for you to authorize…" up with nothing watching. Both now
+# put a "Check again" control in the waiting line, wired to a function that re-reads the host.
+for _sf, _anchor, _fn in (("tailscale.js", "if (Date.now() > _deadline)", "tsCheckAgain"),
+                          ("setup_tailscale.js", "if (Date.now() > _tsEnd)", "tsRefresh")):
+    _src = (ROOT / "static" / "js" / _sf).read_text(encoding="utf-8")
+    _dl = _js_code_only(_js_block_after(_src, _anchor) or "")
+    check("ts-wait" in _dl and "_da('%s')" % _fn in _dl and "Check again" in _dl
+          and "press the button again" not in _dl,
+          "js: %s's poll deadline offers a working 'Check again', not a dead end" % _sf,
+          " ".join(_dl.split())[:200])
+    check(re.search(r"(?m)^function\s+%s\s*\(" % _fn, _src) is not None,
+          "js: ...and %s is a global function the dispatcher can call" % _fn, _sf)
+_tsc = (ROOT / "static" / "js" / "tailscale.js").read_text(encoding="utf-8")
+check("refreshSection('#ts-page'" in (_js_function_body(_tsc, "tsCheckAgain") or ""),
+      "js: tailscale.js's Check again re-renders the page from the host",
+      _js_function_body(_tsc, "tsCheckAgain") or "no tsCheckAgain")
+
+# The setup wizard's tsRender had branches for "running with a tailnet name" and "installed, not
+# running"; RUNNING WITHOUT A NAME (a `status --json` that timed out) fell through to "Tailscale
+# isn't installed on this host yet" and an Install button, right after the operator approved the
+# machine — and the wizard's own poll stops on `running` alone, handing it exactly that state.
+_str = _js_code_only(_js_function_body(
+    (ROOT / "static" / "js" / "setup_tailscale.js").read_text(encoding="utf-8"), "tsRender") or "")
+_str_named, _str_running = _str.find("if(s.running && s.dns_name)"), _str.find("if(s.running){")
+_str_absent = _str.find("isn\\'t installed on this host yet")
+check(-1 not in (_str_named, _str_running, _str_absent)
+      and _str_named < _str_running < _str_absent
+      and "Check again" in _str[_str_running:_str_absent],
+      "js: setup wizard: a running Tailscale with no name read is not called 'not installed'",
+      "named=%d running=%d not-installed=%d" % (_str_named, _str_running, _str_absent))
+
 # ── the bootstrap poll's teardown sat below the line that returned ────────────────────────────
 _mr = (ROOT / "static" / "js" / "manage_remotes.js").read_text(encoding="utf-8")
 check("if (!stepEl) { clearInterval(_bootstrapPoll)" in _mr,

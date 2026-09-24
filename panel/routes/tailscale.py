@@ -11,7 +11,36 @@ from panel.security.auth import (MANAGE_REMOTES, log_action, permission_required
     superadmin_required)
 from panel.core.http import (_json_body, _json_str)
 from panel.db.models import LOCAL_HOST_LABEL
-from app import (_ts_backend_scheme)
+from app import (_effective_https, _ts_backend_scheme)
+
+
+def _sees_panel_host_tailnet(user):
+    """Whether `user` is shown the PANEL HOST's tailnet identity and inventory: its name, tailnet
+    IPs and MagicDNS name, its Serve mappings and their backends, and every peer on the tailnet.
+
+    Superadmins only. This page is gated on MANAGE_REMOTES, which is granted per host — a delegated
+    admin for one rented VPS holds it — and none of this is about a host they were granted. It is
+    the panel host's, whose management (System -> Panel Server) is superadmin-only, and the peer
+    list is the operator's whole tailnet: other servers they were not granted, and personal devices
+    ("alice-iphone", "nas") with their addresses, OS and when each was last online."""
+    return bool(getattr(user, "is_superadmin", False))
+
+
+def _panel_scheme(cfg):
+    """How the panel is serving its own port right now — self-signed https by default."""
+    return "https" if _effective_https(cfg) else "http"
+
+
+def _serve_default_mount(info, cfg, port):
+    """The mount the Enable form offers. Enabling Serve at a mount another app already holds
+    REPLACES that app's mapping, and the form offered "/" without looking — the setup wizard
+    already moves the panel to /lgsm when "/" is taken, and this is the same rule."""
+    mount = cfg.get("tailscale_mount") or "/"
+    for svc in (info.serve_config or {}).get("services") or []:
+        for r in svc.get("routes") or []:
+            if r.get("mount") == mount and not ts.route_targets_port(r.get("target"), port):
+                return "/lgsm" if mount == "/" else mount
+    return mount
 
 
 def register(app):
@@ -22,8 +51,16 @@ def register(app):
         """Tailscale status and management page."""
         info = ts.get_tailscale_info(force_refresh=request.args.get("refresh") == "1")
         cfg = load_config()
-        suggestion = ts.suggest_best_bind(cfg.get("port", 5000))
-        return render_template("tailscale.html", info=info, config=cfg, suggestion=suggestion)
+        port = cfg.get("port", 5000)
+        suggestion = ts.suggest_best_bind(port, scheme=_panel_scheme(cfg))
+        # The Serve mappings that proxy THIS panel, read from the host. The Disable button removes
+        # one of these, never "the first route listed" — Tailscale lists "/" first, and when the
+        # panel sits at a sub-path "/" belongs to another app.
+        panel_routes = ts.panel_serve_routes(info.serve_config, port)
+        return render_template("tailscale.html", info=info, config=cfg, suggestion=suggestion,
+                               panel_routes=panel_routes,
+                               serve_default_mount=_serve_default_mount(info, cfg, port),
+                               ts_detail=_sees_panel_host_tailnet(current_user))
 
     @app.route("/api/tailscale")
     @login_required
@@ -31,22 +68,25 @@ def register(app):
     def api_tailscale():
         """JSON endpoint with live Tailscale info."""
         info = ts.get_tailscale_info(force_refresh=True)
-        cfg = load_config()
-        suggestion = ts.suggest_best_bind(cfg.get("port", 5000))
-        return jsonify({
+        out = {
             "installed": info.installed,
             "running": info.running,
             "backend_state": info.backend_state,
             "version": info.version,
-            "hostname": info.hostname,
-            "dns_name": info.dns_name,
-            "tailscale_ips": info.tailscale_ips,
             "magic_dns_enabled": info.magic_dns_enabled,
             "funnel_enabled": info.funnel_enabled,
-            "peer_count": len(info.peers),
-            "serve": info.serve_config,
-            "suggestion": suggestion,
-        })
+        }
+        if _sees_panel_host_tailnet(current_user):
+            out.update({
+                "hostname": info.hostname,
+                "dns_name": info.dns_name,
+                "tailscale_ips": info.tailscale_ips,
+                "peer_count": len(info.peers),
+                "serve": info.serve_config,
+                "suggestion": ts.suggest_best_bind(load_config().get("port", 5000),
+                                                   scheme=_panel_scheme(load_config())),
+            })
+        return jsonify(out)
 
     # superadmin, not MANAGE_REMOTES, on all three below. These act on the PANEL HOST, not on a
     # granted remote — get_remote never runs, so a host admin scoped to one VPS was changing the
@@ -124,7 +164,7 @@ def register(app):
             return jsonify({"success": False, "message": msg}), 500
 
         elif action == "disable":
-            success, msg = ts.disable_tailscale_serve(mount=mount)
+            success, msg = ts.disable_tailscale_serve(mount=mount, port=port)
             if success:
                 # Mirror the enable branch. Nothing else in the repo ever cleared these, so a
                 # disable left tailscale_setup_done True — which six readers treat as ground truth:

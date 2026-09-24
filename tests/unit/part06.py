@@ -3077,8 +3077,47 @@ check("install.sh: ...with SCRIPT_PATH only as a fallback, still shebang-checked
 _ts_tpl = open(os.path.join(_root, "templates", "tailscale.html"), encoding="utf-8").read()
 check("tailscale.html: disableServe does not hardcode the mount",
       "action: 'disable', mount: '/'" not in _ts_tpl)
-check("tailscale.html: the Mount Point field shows the configured mount, not a fixed /",
-      "value=\"{{ config.tailscale_mount or '/' }}\"" in _ts_tpl)
+check("tailscale.html: the Mount Point field shows the route's default mount, not a fixed /",
+      "value=\"{{ serve_default_mount }}\"" in _ts_tpl)
+# The template reads two names only the route supplies; Jinja renders a forgotten one as a silent
+# Undefined. So the route is held to passing them, by AST.
+import ast as _ts_ast                                                              # noqa: E402
+from panel.routes import tailscale as _ts_routes                                   # noqa: E402
+_ts_rt_src = open(os.path.join(_root, "panel", "routes", "tailscale.py"), encoding="utf-8").read()
+_ts_page_fn = next(n for n in _ts_ast.walk(_ts_ast.parse(_ts_rt_src))
+                   if isinstance(n, _ts_ast.FunctionDef) and n.name == "tailscale_page")
+_ts_rt_kw = {k.arg for n in _ts_ast.walk(_ts_page_fn) if isinstance(n, _ts_ast.Call)
+             and getattr(n.func, "id", "") == "render_template" for k in n.keywords}
+check("tailscale page: the route passes panel_routes and serve_default_mount to the template",
+      {"panel_routes", "serve_default_mount"} <= _ts_rt_kw, repr(sorted(_ts_rt_kw)))
+# Recommended Access built its direct URLs as http:// while the panel serves self-signed TLS by
+# default. Both routes that ask for the suggestion now say which scheme the panel is serving.
+_ts_sbb_calls = [n for n in _ts_ast.walk(_ts_ast.parse(_ts_rt_src)) if isinstance(n, _ts_ast.Call)
+                 and getattr(n.func, "attr", "") == "suggest_best_bind"]
+check("tailscale routes: every suggest_best_bind call passes the panel's scheme",
+      len(_ts_sbb_calls) == 2 and all("scheme" in {k.arg for k in c.keywords} for c in _ts_sbb_calls),
+      "%d call(s)" % len(_ts_sbb_calls))
+_ts_eh = _ts_routes._effective_https
+try:
+    _ts_routes._effective_https = lambda cfg: True
+    _ts_s1 = _ts_routes._panel_scheme({})
+    _ts_routes._effective_https = lambda cfg: False
+    _ts_s2 = _ts_routes._panel_scheme({})
+finally:
+    _ts_routes._effective_https = _ts_eh
+eq("tailscale routes: the scheme follows whether the panel terminates its own TLS", (_ts_s1, _ts_s2),
+   ("https", "http"))
+# Enabling Serve at a mount another app holds REPLACES that app's mapping. The form offered "/"
+# without looking; the setup wizard already moves the panel to /lgsm when "/" is taken.
+_ts_grafana = type("I", (), {"serve_config": {"services": [{"url": "https://h.ts.net", "routes": [
+    {"mount": "/", "target": "http://127.0.0.1:3000"}]}]}})()
+eq("tailscale page: Enable does not offer a '/' another app already holds",
+   _ts_routes._serve_default_mount(_ts_grafana, {}, 5000), "/lgsm")
+_ts_panel_root = type("I", (), {"serve_config": {"services": [{"url": "https://h.ts.net", "routes": [
+    {"mount": "/", "target": "http://127.0.0.1:5000"}]}]}})()
+eq("tailscale page: ...while a '/' that is the panel's own, or free, stays '/' (control)",
+   (_ts_routes._serve_default_mount(_ts_panel_root, {}, 5000),
+    _ts_routes._serve_default_mount(type("I", (), {"serve_config": {}})(), {}, 5000)), ("/", "/"))
 
 # The Serve card, RENDERED rather than grepped. Both defects below live in what the page says for
 # a given state, and a substring gate cannot tell a branch from the comment that explains it.
@@ -3109,7 +3148,10 @@ _ts_svc = {"url": "https://host.example.ts.net", "funnel": False,
 
 
 def _ts_card_html(info, config=None):
-    return _ts_tmpl.render(info=info, config=config or {}, current_user=_TsUser())
+    # panel_routes as the route computes it, from the host's config and the panel's port.
+    from panel.ops import tailscale_integration as _ts_ti
+    return _ts_tmpl.render(info=info, config=config or {}, current_user=_TsUser(),
+                           panel_routes=_ts_ti.panel_serve_routes(info.serve_config, 5000))
 
 
 # ...the mount the Disable button carries is the one the HOST reported, not the panel's
@@ -3130,9 +3172,25 @@ check("tailscale.html: ...and the page's own value wins over a stale stored one"
       "the stored mount is sent while the table renders a different one")
 _ts_stored_only = _ts_card_html(
     _TsInfo(serve_config={"services": [{"url": "https://h.ts.net", "funnel": False, "routes": []}]}),
-    {"tailscale_mount": "/lgsm"})
+    {"tailscale_mount": "/lgsm", "tailscale_setup_done": True})
 check("tailscale.html: ...with the stored mount still the fallback when no route came back",
       'data-mount="/lgsm"' in _ts_stored_only, _ts_stored_only[:200])
+# ...and "the host reported" means the route that proxies the PANEL. It was services[0].routes[0],
+# and Tailscale lists "/" first: where another app holds "/" and the panel sits at /lgsm, Disable
+# targeted the other app.
+_ts_shared = _ts_card_html(_TsInfo(serve_config={"services": [
+    {"url": "https://host.example.ts.net", "funnel": True, "routes": [
+        {"mount": "/", "target": "http://127.0.0.1:3000"},
+        {"mount": "/lgsm", "target": "https+insecure://127.0.0.1:5000"}]}]}))
+check("tailscale.html: Disable carries the panel's mount, not another app's '/' listed first",
+      'data-mount="/lgsm"' in _ts_shared and 'data-mount="/"' not in _ts_shared,
+      repr([ln.strip() for ln in _ts_shared.splitlines() if "data-mount" in ln]))
+_ts_other_only = _ts_card_html(_TsInfo(serve_config={"services": [
+    {"url": "https://host.example.ts.net", "funnel": False, "routes": [
+        {"mount": "/", "target": "http://127.0.0.1:3000"}]}]}))
+check("tailscale.html: ...and a node serving only another app offers no Disable at all",
+      'data-action="disableServe"' not in _ts_other_only,
+      repr([ln.strip() for ln in _ts_other_only.splitlines() if "data-mount" in ln]))
 
 # ...and an unread Serve config is not announced as "nothing is configured". serve_config is {} for
 # both "nothing is published" and "`tailscale serve status` was refused" (the panel's account is
@@ -3161,6 +3219,23 @@ check("tailscale.html: ...and an info object with no flag at all keeps the posit
 _ts_down = _ts_card_html(_TsInfo(running=False, serve_unreadable=True))
 check("tailscale.html: ...and a stopped daemon still reads as stopped, not as unreadable",
       "Tailscale is not running." in _ts_down, " ".join(_ts_down.split())[-160:])
+# The Accept Routes row: RouteAll, which is None when the prefs could not be read — and that is
+# not "No". (The row used to print the TUN flag as if it were this.)
+_ts_nd = _TsEnv().from_string(_ts_tpl[_ts_tpl.index("<!-- Node Details -->"):
+                                      _ts_tpl.index("<!-- Peer Reachability Checker -->")])
+
+
+def _ts_ar_row(v):
+    _h = _ts_nd.render(info=_TsInfo(accept_routes=v, funnel_enabled=False, tailscale_ips=[]),
+                       ts_detail=True)
+    return " ".join(_h[_h.index("Accept Routes"):].split("</tr>")[0].split())
+
+
+check("tailscale.html: unreadable prefs show Accept Routes as unknown, not 'No'",
+      "No" not in _ts_ar_row(None) and "Yes" not in _ts_ar_row(None), _ts_ar_row(None))
+check("tailscale.html: ...while a read pref says Yes / No (control)",
+      "Yes" in _ts_ar_row(True) and "No" in _ts_ar_row(False)
+      and "Yes" not in _ts_ar_row(False), "%s | %s" % (_ts_ar_row(True), _ts_ar_row(False)))
 # Both serve handlers take the clicked button; enableServe used the implicit global `event`.
 check("tailscale.html: enableServe/disableServe receive @self rather than reading global event",
       "var btn = event.target" not in _ts_tpl
@@ -4315,6 +4390,31 @@ from panel.services.bots import commands as _botcmd                             
 _bc_src = _tg_inspect.getsource(_botcmd._console_text)
 check("bots: /console reads capture_console's rc instead of printing NO_SESSION",
       "NO_SESSION" in _bc_src and "rc != 0" in _bc_src, _bc_src[:200])
+# ...and only the sentinel (rc 3 + NO_SESSION) means "not running". Every other non-zero rc was
+# answered the same way — a transport timeout (rc -1, which the local and tailscale transports
+# return without raising) or a `sudo -u` refusal told the admin the server wasn't running when the
+# panel had never reached it. Driven, not grepped.
+import contextlib as _bc_ctx                                                       # noqa: E402
+from panel.ops.ssh_manager import game as _bc_game                                 # noqa: E402
+_bc_app = type("A", (), {"app_context": lambda self: _bc_ctx.nullcontext()})()
+_bc_gs = NS(name="Rust", remote=None, short_name="rustserver", lgsm_name="rustserver")
+_bc_saved = (_botcmd._find_server, _bc_game.capture_console)
+try:
+    _botcmd._find_server = lambda arg: (_bc_gs, None)
+    _bc_game.capture_console = lambda *a, **k: ("", "SSH command timed out", -1)
+    _bc_out = _botcmd._console_text(_bc_app, "rust")
+    check("bots: /console on a host that timed out says it couldn't read, not 'isn't running'",
+          "isn't running" not in _bc_out and "couldn't read" in _bc_out, _bc_out)
+    _bc_game.capture_console = lambda *a, **k: ("NO_SESSION\n", "", 3)
+    _bc_out = _botcmd._console_text(_bc_app, "rust")
+    check("bots: ...while capture_console's own sentinel still means not running (control)",
+          "isn't running" in _bc_out, _bc_out)
+    _bc_game.capture_console = lambda *a, **k: ("[chat] Bob: NO_SESSION lol\nServer started\n", "", 0)
+    _bc_out = _botcmd._console_text(_bc_app, "rust")
+    check("bots: ...and a player SAYING the sentinel word is console output, not a stopped server",
+          "isn't running" not in _bc_out and "Server started" in _bc_out, _bc_out)
+finally:
+    _botcmd._find_server, _bc_game.capture_console = _bc_saved
 
 # ── Discord replies must not be able to ping the channel ──────────────────────────────────────
 # The content is not ours: player names (!players), the tail of the live console (which on most
@@ -4336,6 +4436,48 @@ finally:
 check("discord: every send declares allowed_mentions, so a player name cannot ping the channel",
       len(_nt_posts) == 2 and all(p.get("allowed_mentions") == {"parse": []} for p in _nt_posts),
       str(_nt_posts))
+# ...and allowed_mentions stops only pings. Discord still rendered the rest of its markdown in the
+# bot's own message, so a player named "[Panel login expired](https://evil.example/login)", or one
+# saying "# Re-authenticate at [panel](https://evil.example)" in chat, had the operator's bot post a
+# clickable masked link or a headline in the admin channel. Driven through the real dispatcher.
+from panel.services.bots import discord as _dcb                                   # noqa: E402
+_dcm_sent = []
+_dcm_link = "[Panel login expired](https://evil.example/login)"
+_dcm_chat = "# Re-authenticate at [panel](https://evil.example)\n```\n# out of the fence"
+_dcm_saved = (_nt.discord_bot_send, _botcmd._find_server, _botcmd.player_list,
+              _bc_game.capture_console)
+
+
+def _dcm_fenced(msg, needle):
+    """True when `needle` sits inside the message's ONE code block and nothing can close it early."""
+    parts = msg.split("```")
+    return len(parts) == 3 and needle in parts[1] and needle not in parts[0] + parts[2]
+
+
+try:
+    _nt.discord_bot_send = lambda tok, ch, text: _dcm_sent.append(text)
+    _botcmd._find_server = lambda arg: (NS(name="Rust", remote=None, short_name="rustserver",
+                                           lgsm_name="rustserver", game_type="rust", port=28015,
+                                           query_type=None), None)
+    _botcmd.player_list = lambda *a, **k: [{"name": _dcm_link}, {"name": "x`` `y"}]
+    _bc_game.capture_console = lambda *a, **k: (_dcm_chat + "\nServer started\n", "", 0)
+    _dcb._handle_discord_command(_bc_app, "tok", "9" * 18, "!players rust")
+    _dcb._handle_discord_command(_bc_app, "tok", "9" * 18, "!console rust")
+    _dcm_players, _dcm_console = (_dcm_sent + ["", ""])[:2]
+    check("discord: !players shows a player's name as text, not a masked link",
+          _dcm_fenced(_dcm_players, _dcm_link) and "Rust — 2 player(s):" in _dcm_players.split("```")[0],
+          _dcm_players)
+    check("discord: !console shows chat as text, and a backtick in it cannot close the block",
+          _dcm_fenced(_dcm_console, "# Re-authenticate") and "Server started" in _dcm_console.split("```")[1],
+          _dcm_console)
+    # Control: Telegram sends no parse_mode, so its text stays exactly as it was — the same builder
+    # with no fence.
+    _dcm_tg = _botcmd._players_text(_bc_app, "rust")
+    check("discord: ...while Telegram's /players is plain text as before (control)",
+          "```" not in _dcm_tg and ("• " + _dcm_link) in _dcm_tg, _dcm_tg)
+finally:
+    (_nt.discord_bot_send, _botcmd._find_server, _botcmd.player_list,
+     _bc_game.capture_console) = _dcm_saved
 
 # ── A provider that refuses every message must leave a trace ──────────────────────────────────
 # _post's HTTPError branch logged nothing and notify()'s sender calls were bare statements, so a

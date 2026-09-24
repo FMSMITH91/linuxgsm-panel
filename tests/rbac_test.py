@@ -498,6 +498,43 @@ try:
     # but only the ones your groups grant — not any remote by id (remote-level IDOR).
     cmr = client_as(uid2)
     check("MANAGE_REMOTES user can open /remotes -> 200", cmr.get("/remotes").status_code == 200)
+
+    # /tailscale is gated on MANAGE_REMOTES, which is granted PER HOST — this user holds it for one
+    # remote. The page reported on the PANEL HOST instead: its tailnet name and IPs, its Serve
+    # mappings with their backends, and every peer on the operator's tailnet (personal devices
+    # included) with address, OS and last-seen. None of that is a host this user was granted.
+    import json as _rts_json
+    import panel.ops.tailscale_integration as _rts
+    _rts_saved = _rts.get_tailscale_info
+    _rts_info = _rts.TailscaleInfo(
+        installed=True, running=True, backend_state="Running", hostname="gamepanel",
+        dns_name="gamepanel.tail1234.ts.net", tailscale_ips=["100.101.102.103"],
+        serve_config={"services": [{"url": "https://gamepanel.tail1234.ts.net", "funnel": False,
+                                    "routes": [{"mount": "/", "target": "http://127.0.0.1:3999"}]}],
+                      "raw": "x"},
+        peers=[{"id": "p1", "hostname": "alice-iphone", "dns_name": "alice-iphone.tail1234.ts.net",
+                "ips": ["100.64.7.7"], "os": "iOS", "online": True, "last_seen": "", "relay": ""}])
+    _rts_leaks = ("alice-iphone", "100.64.7.7", "100.101.102.103", "gamepanel.tail1234.ts.net",
+                  "127.0.0.1:3999")
+    try:
+        _rts.get_tailscale_info = lambda force_refresh=False: _rts_info
+        _rts_page = cmr.get("/tailscale")
+        _rts_html = _rts_page.get_data(as_text=True)
+        check("tailscale page: a scoped MANAGE_REMOTES admin can still open it (200)",
+              _rts_page.status_code == 200, "got %d" % _rts_page.status_code)
+        check("tailscale page: ...but is shown none of the PANEL HOST's tailnet inventory",
+              not [x for x in _rts_leaks if x in _rts_html],
+              repr([x for x in _rts_leaks if x in _rts_html]))
+        _rts_api = _rts_json.dumps(cmr.get("/api/tailscale").get_json() or {})
+        check("/api/tailscale: ...nor does its JSON carry it",
+              not [x for x in _rts_leaks if x in _rts_api], repr([x for x in _rts_leaks if x in _rts_api]))
+        _rts_admin = client_as(admin_id).get("/tailscale").get_data(as_text=True)
+        check("tailscale page: a superadmin still sees all of it (control)",
+              all(x in _rts_admin for x in _rts_leaks),
+              repr([x for x in _rts_leaks if x not in _rts_admin]))
+    finally:
+        _rts.get_tailscale_info = _rts_saved
+        _rts._cache["info"] = None
     if other_remote:
         check("IDOR: managing a NON-granted remote is blocked (403)",
               cmr.get("/api/remote/%d/firewall" % other_remote).status_code == 403)

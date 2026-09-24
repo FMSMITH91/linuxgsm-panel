@@ -57,7 +57,9 @@ def _find_server(arg):
     return None, "No server matches '%s'. Send /servers for the list." % arg[:40]
 
 
-def _players_text(app, arg):
+def _players_text(app, arg, fence=None):
+    """`fence`, when given, wraps the player names — the part a player chose — for a transport
+    that renders markup in them (see discord._dc_literal)."""
     with app.app_context():
         gs, err = _find_server(arg)
         if err:
@@ -77,8 +79,8 @@ def _players_text(app, arg):
         # Was `names[:40]` — a fixed slice that dropped the rest with nothing said, and still
         # overflowed the transport when forty clan-tagged names ran past 1900 characters. The
         # length cap subsumes it and reports what it left out.
-        return "%s — %d player(s):\n%s" % (gs.name, len(names),
-                                           _join_capped(["• " + n for n in names]))
+        body = _join_capped(["• " + n for n in names])
+        return "%s — %d player(s):\n%s" % (gs.name, len(names), fence(body) if fence else body)
 
 
 # A chat reply has to fit in one message on BOTH transports — Telegram truncates at 4000 chars,
@@ -112,8 +114,9 @@ def _join_capped(rows):
     return "\n".join(out)
 
 
-def _console_text(app, arg, lines=20):
-    """The tail of a server's live console.
+def _console_text(app, arg, lines=20, fence=None):
+    """The tail of a server's live console. `fence` is as for _players_text: the tail carries
+    in-game chat.
 
     The missing half of the power commands: start/stop/restart run in the background and their
     output is discarded, so when a start fails the bot can say that it failed but never why. This
@@ -133,8 +136,16 @@ def _console_text(app, arg, lines=20):
         # to STDOUT, so the `if not rows` guard below could never fire. The command that exists to
         # answer "why did the start fail?" answered NO_SESSION. Both other callers of
         # capture_console guard on rc (game.py:205 and :232).
-        if rc != 0 or "NO_SESSION" in (out or ""):
+        #
+        # ...and ONLY that sentinel says so. Any other non-zero rc is the panel failing to reach the
+        # console: the local and tailscale transports return ("", "…timed out", -1) without
+        # raising, and a `sudo -u` refusal is rc 1. Those were answered "the server isn't running",
+        # a confident fact about a server the panel never observed — to an admin asking because a
+        # start had failed.
+        if rc == 3 and "NO_SESSION" in (out or ""):
             return "%s — the server isn't running, so there's no console to read." % gs.name
+        if rc != 0:
+            return "%s — couldn't read the console (the host didn't answer)." % gs.name
         text = terminal.strip_escapes(out or "")
         rows = [r.rstrip() for r in text.splitlines() if r.strip()][-lines:]
         if not rows:
@@ -142,7 +153,7 @@ def _console_text(app, arg, lines=20):
         body = "\n".join(rows)
         if len(body) > _BOT_BODY_MAX:      # keep the END: the newest lines are the useful ones
             body = "…" + body[-_BOT_BODY_MAX:]
-        return "%s — last %d console line(s):\n%s" % (gs.name, len(rows), body)
+        return "%s — last %d console line(s):\n%s" % (gs.name, len(rows), fence(body) if fence else body)
 
 
 def _say_text(app, arg):
