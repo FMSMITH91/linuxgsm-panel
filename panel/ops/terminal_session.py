@@ -604,8 +604,23 @@ def _open_local(sess, cols, rows):
         job control in this shell") and carries on. fish refuses outright: "No TTY for interactive
         shell (tcgetpgrp failed)", and exits immediately — which is how this was finally noticed,
         on a machine whose passwd shell is fish.
+
+        Then SIGINT and SIGQUIT go back to their defaults. An ignored disposition survives fork
+        and exec, and the shell hands the dispositions it started with to every job it runs, so a
+        panel started with them ignored — from a script with `&`, where the shell ignores both for
+        a background command — gave every local terminal a `sleep`, a `tail -f` or a runaway loop
+        that ^C and ^\\ could not stop, with the foreground process group set up correctly. It
+        worked under systemd only because systemd starts the service with default dispositions.
         """
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+        # After the ioctl, and on its own: without a controlling terminal there is no Ctrl-C at
+        # all, while a failure here costs only the reset. signal.signal is allowed in this child —
+        # subprocess runs PyOS_AfterFork_Child before preexec_fn, making this its main thread.
+        try:
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+        except (OSError, ValueError):  # nosec B110
+            pass
 
     try:
         proc = subprocess.Popen(  # nosec B603  # nosemgrep - argv list, no shell=True; argv[0] is

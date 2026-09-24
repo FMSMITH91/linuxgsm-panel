@@ -6124,6 +6124,13 @@ check("terminal: register() runs the revocation sweep on a timer",
 _ctty_saved7 = _tsmod7._login_shell
 _tsmod7._login_shell = lambda: "/bin/bash"
 _ctty_out7 = []
+# ...and with SIGINT IGNORED in this process, on purpose. An ignored disposition survives fork and
+# exec and bash hands it to every job, so a panel started with it ignored (from a script, with `&`)
+# gave the local terminal jobs that ^C could not stop. This check failed exactly that way whenever
+# the suite itself was launched in the background, and passed in the foreground. The child now
+# resets it; ignoring it here makes the check cover that reset on every run instead of by launch.
+import signal as _ctty_sig7
+_ctty_sigint7 = _ctty_sig7.signal(_ctty_sig7.SIGINT, _ctty_sig7.SIG_IGN)
 
 
 class _CttyRemote7:
@@ -6169,6 +6176,29 @@ try:
     check("terminal: ...a foreground job really starts (the next check needs one)",
           bool(_ctty_started7),
           "nothing was running, so the Ctrl-C check below would pass against a dead shell")
+
+    def _ctty_is_fg7(pids):
+        """Is one of `pids` the job itself yet, holding the terminal's foreground? bash forks the
+        job, hands it the terminal (tcsetpgrp), and only then does the child reset its signal
+        handlers and exec `sleep`. A ^C before the exec lands on bash's own handler in the forked
+        child (or on bash's group, before the tcsetpgrp) and the job never sees it: the check
+        below failed on a loaded machine with nothing wrong in the code."""
+        for _p in pids:
+            try:
+                with open("/proc/%s/stat" % _p) as _fh:
+                    _raw = _fh.read()
+                _comm = _raw[_raw.index("(") + 1:_raw.rindex(")")]
+                _st = _raw[_raw.rindex(")") + 1:].split()
+            except (OSError, ValueError):
+                continue
+            # After the comm: state ppid pgrp session tty_nr tpgid.
+            if _comm == "sleep" and len(_st) > 5 and _st[2] == _st[5]:
+                return True
+        return False
+
+    _t0_7 = _time.time()
+    while _time.time() - _t0_7 < 6 and not _ctty_is_fg7(_ctty_children7()):
+        _time.sleep(0.1)
     _ctty_sess7.write("\x03")
     _t0_7 = _time.time()
     while _time.time() - _t0_7 < 6 and _ctty_children7():
@@ -6176,9 +6206,11 @@ try:
     check("terminal: ...and Ctrl-C interrupts it",
           bool(_ctty_started7) and not _ctty_children7(),
           "the job %r survived Ctrl-C — without a controlling terminal the line discipline has no "
-          "foreground process group to signal" % (_ctty_started7,))
+          "foreground process group to signal, and with SIGINT left ignored from the panel's own "
+          "launch the job ignores it" % (_ctty_started7,))
 finally:
     _tsmod7._login_shell = _ctty_saved7
+    _ctty_sig7.signal(_ctty_sig7.SIGINT, _ctty_sigint7)
     try:
         _tsmod7.close_for_sid("ctty-sid", "test over")
     except Exception:
