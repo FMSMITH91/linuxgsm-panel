@@ -739,6 +739,21 @@ def get_game_schedule(sid):
     }
 
 
+def game_prune_keep(sid):
+    """(keep, read) — how many archives a backup of server `sid` may prune down to, and whether
+    config.json was actually read to decide it.
+
+    A backup PRUNES to `keep` afterwards, and on a tight disk deletes down to it beforehand. With
+    config.json unreadable, get_game_schedule answers the global DEFAULT (2), so "Back up now" and
+    the full run deleted archives past a server's own retention (say 10) — the sweeps skip in that
+    state for exactly this reason. Returned instead is the largest retention any setting can hold,
+    MAX_FULL_KEEP, so nothing an operator could have chosen to keep is deleted until the file
+    reads again. `read` False lets the caller say so."""
+    if is_unreadable(load_config()):
+        return MAX_FULL_KEEP, False
+    return get_game_schedule(sid)["keep"], True
+
+
 def _game_schedules(cfg):
     """The game_schedules map from config, tolerant of corruption (returns {} if it isn't a dict)."""
     gs = cfg.get("game_schedules")
