@@ -103,6 +103,11 @@ def _group_ufw_rules(rules):
                 "action": p["action"] or "ALLOW", "direction": p["direction"] or "IN",
                 "is_iface": is_iface, "is_block": is_block,
                 "block_ip": from_ip if is_block else "",
+                # WHICH rule this is, independent of where it sits. `nums` are positions and ufw
+                # renumbers on every insert/delete (the hourly auto-block inserts at 1), so the
+                # page re-finds a group by this before deleting rather than trusting a number
+                # read when the table was drawn.
+                "key": _json.dumps(list(key)),
             }
             index[key] = g
             groups.append(g)

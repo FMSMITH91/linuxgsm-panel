@@ -1343,6 +1343,25 @@ eq("22 merges v4+v6", by_port["22"]["family_label"], "IPv4 + IPv6")
 eq("bare port -> BOTH", by_port["28960"]["proto_label"], "BOTH")
 eq("bare port keeps comment", by_port["28960"]["comment"], "codserver")
 eq("udp suffix -> UDP", by_port["27015"]["proto_label"], "UDP")
+# The page deletes by rule NUMBER, and numbers are positions: the hourly auto-block inserts a deny
+# at 1 and every rule below moves down. A group's `key` is what the page re-finds it by before
+# each delete, so it must survive a renumbering and tell rules apart.
+_shifted = _sm_firewall._group_ufw_rules(_rules([
+    "Anywhere  DENY IN  203.0.113.9  # panel-autoblock",
+    "22/tcp  ALLOW IN  Anywhere",
+    "22/tcp (v6)  ALLOW IN  Anywhere (v6)",
+    "5000/tcp  ALLOW IN  Anywhere",
+    "28960  ALLOW IN  Anywhere  # codserver",
+    "27015/udp  ALLOW IN  Anywhere",
+]))
+_shifted_by = {g["port_num"]: g for g in _shifted}
+check("ufw grouping: a group's key survives the renumbering an inserted deny causes",
+      all(g.get("key") and g.get("key") == _shifted_by[p].get("key")
+          and g["nums"] != _shifted_by[p]["nums"] for p, g in by_port.items()),
+      "%r vs %r" % ([g.get("key") for g in groups], [g.get("key") for g in _shifted]))
+check("ufw grouping: ...and no two groups share one (positive control)",
+      len({g.get("key") for g in _shifted}) == len(_shifted) and all(g.get("key") for g in _shifted),
+      repr([g.get("key") for g in _shifted]))
 
 # ── firewall lock-out protection ──────────────────────────────
 def protect(server, rules, enabled=True, cfg=None, is_local=False, tailscale=(False, False),

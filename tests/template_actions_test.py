@@ -2552,6 +2552,37 @@ check("rules-count" in _fw_win,
       "firewall: ...and the rule COUNT is cleared too, not left reading 0",
       "the page states a count for a firewall nothing read")
 
+# ── a delete removes the rule that was clicked, not whatever now holds its old number ─────────
+# ufw numbers are POSITIONS and renumber on every insert/delete; the hourly auto-block inserts its
+# denies at 1 and releases them. deleteGroup posted the numbers read when the table was drawn, so
+# after one such change a click deleted the neighbouring rule — another game's port, or the deny
+# on an attacker's address. It must re-read the rules and find the group again by identity before
+# EACH delete, and send that group's current number. Comments are stripped: they name the old way.
+_fw_del = re.sub(r"//[^\n]*", "", _between(_fw_js, "function deleteGroup(", "\nfunction "))
+check(bool(_fw_del),
+      "firewall delete: deleteGroup is where these checks think it is", "not found")
+_fw_next = _between(_fw_del, "(function next() {", "/firewall/delete-rule")
+check("'/api/remote/' + remoteId + '/firewall')" in _fw_next and "/firewall/delete-rule" in _fw_del,
+      "firewall delete: the rules are re-read before EVERY delete, not once",
+      "no fresh read between the recursion point and the POST: %r" % _fw_next[:160])
+check("x.key === key" in _fw_del,
+      "firewall delete: ...and the group is found again by identity, not by position",
+      "the clicked group is not re-resolved")
+check("num: Math.max.apply(null, g.nums)" in _fw_del and "ordered[" not in _fw_del,
+      "firewall delete: ...and the number sent is that group's CURRENT number",
+      "a number captured at render time is still what gets deleted")
+check("g.protected" in _fw_del,
+      "firewall delete: ...and a group that has since become protected is not deleted",
+      "the re-read does not look at protected")
+# Both renderers hand the identity over, or every click refuses with "out of date".
+_fw_tpl_btn = _between(_fw_tpl, 'data-action="deleteGroup"', ">")
+check("{{ g.key|tojson }}" in _fw_tpl_btn,
+      "firewall delete: the server-rendered × passes the group's identity",
+      _fw_tpl_btn[:200])
+_fw_js_btn = _between(_fw_js, "_da('deleteGroup'", "+ '><i")
+check("(g.key || '')]" in _fw_js_btn,
+      "firewall delete: ...and so does the × the refresh draws", _fw_js_btn[:200])
+
 # ── the backups card must not say "none" about a host it could not read ───────────────────────
 # Same family as the firewall page and the cron card: list_game_backups discarded the rc, an
 # unreachable host parsed to [], and the card stated the alarming half of the pair — "nothing is
