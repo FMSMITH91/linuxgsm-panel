@@ -113,7 +113,8 @@ from panel.services.bots.discord import (_discord_command_watch, _report_dc_pend
 from panel.services.bots.telegram import (_report_tg_pending_update, _telegram_command_watch)
 from panel.services.certs import (_ensure_self_signed_cert)
 from panel.db.prefs import (_effective_prefs, _panel_layout)
-from panel.core.middleware import PrefixMiddleware
+from panel.core.middleware import PrefixMiddleware, ProxiedBanGate
+from panel.security import banlist as _banlist
 # The pure layers, now that they live outside this module. app.py used to DEFINE these and every
 # route module imported them back out of it — app.py imports the route modules, so the arrow went
 # both ways. It points one way now: panel.core knows nothing about app.py, and app.py and the route
@@ -1502,7 +1503,7 @@ def create_app():
     register_context_processors(app)
 
     # Always apply the prefix middleware. It resolves the mount per-request from the
-    # X-Forwarded-Prefix header (sent by Tailscale Serve) or the config, and is a no-op
+    # X-Forwarded-Prefix header of a trusted proxy or from the config, and is a no-op
     # when there is no prefix. Applying it unconditionally means a sub-path mount like
     # /lgsm works immediately — including during first-run setup — without needing a
     # restart after the config is written.
@@ -1519,6 +1520,11 @@ def create_app():
     if cfg.get("trust_proxy"):
         from werkzeug.middleware.proxy_fix import ProxyFix
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+    # Outermost: a banned client arriving through Tailscale Funnel or a reverse proxy is refused
+    # here, since the host firewall never sees it (see ProxiedBanGate). It reads the raw
+    # X-Forwarded-For, before ProxyFix above rewrites anything.
+    app.wsgi_app = ProxiedBanGate(app.wsgi_app)
 
     return app
 
@@ -2655,9 +2661,17 @@ if __name__ == "__main__":
         seen = None
         while True:
             try:
-                seen, new_bans, unbans = _f2b_ban_events(
-                    seen, so.panel_fail2ban_banned_ips())
+                reading = so.panel_fail2ban_banned_ips()
+                seen, new_bans, unbans = _f2b_ban_events(seen, reading)
                 _f2b_record_events(app, new_bans, unbans)
+                # The same reading feeds the panel's own ban gate, for traffic fail2ban's firewall
+                # rule never sees (Funnel, a reverse proxy); the UFW denies and the whitelist too,
+                # but only where such traffic can arrive, as it costs a firewall read per tick.
+                _banlist.set_f2b(reading)
+                _bl_cfg = load_config()
+                _banlist.set_whitelist(_bl_cfg.get("security_whitelist") or [])
+                if _banlist.proxied_traffic_possible(_bl_cfg):
+                    _banlist.set_ufw(so.ufw_blocked_ips())
             except Exception:
                 _log.debug("fail2ban ban-watch tick failed", exc_info=True)
             time.sleep(90)

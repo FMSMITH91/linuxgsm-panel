@@ -2193,9 +2193,99 @@ try:
                                                      "SERVER_NAME": "127.0.0.1",
                                                      "SERVER_PORT": "5000"}):
             eq("loopback proxy: %s trusted for X-Forwarded-For" % _label, client_ip(), _want)
+    # A dual-stack bind ('::') reports tailscaled's IPv4 socket as ::ffff:127.0.0.1. client_ip()
+    # compared the raw string with 127.0.0.1, so it never asked who owned it: every Serve and
+    # Funnel client was keyed as the loopback address, fail2ban ignored that as loopback, and one
+    # attacker's failures throttled everyone else — the whole panel locked out by one visitor.
+    for _port, _want, _label in ((0xA1B2, "1.2.3.4", "a ROOT-owned peer seen as ::ffff:127.0.0.1 is"),
+                                 (0xC3D4, "::ffff:127.0.0.1",
+                                  "a uid-1001 peer seen as ::ffff:127.0.0.1 is NOT")):
+        with _app.test_request_context(headers={"X-Forwarded-For": "1.2.3.4"},
+                                       environ_overrides={"REMOTE_ADDR": "::ffff:127.0.0.1",
+                                                          "REMOTE_PORT": str(_port),
+                                                          "SERVER_NAME": "::ffff:127.0.0.1",
+                                                          "SERVER_PORT": "5000"}):
+            eq("loopback proxy (dual-stack bind): %s trusted for X-Forwarded-For" % _label,
+               client_ip(), _want)
+    # X-Forwarded-Prefix sets SCRIPT_NAME for the response, so it is held to the same rule: from a
+    # loopback peer only when root owns its socket (it was trusted from ANY local account), and
+    # the socket table is read only when the header is there at all.
+    from panel.core.middleware import PrefixMiddleware as _PM
+    _pm_env = lambda port, addr="127.0.0.1", hdr="/panel": dict(
+        {"REMOTE_ADDR": addr, "REMOTE_PORT": str(port), "SERVER_NAME": addr, "SERVER_PORT": "5000"},
+        **({"HTTP_X_FORWARDED_PREFIX": hdr} if hdr else {}))
+    _pm_got = (_PM._may_trust_header(_pm_env(0xA1B2), {}),
+               _PM._may_trust_header(_pm_env(0xC3D4), {}),
+               _PM._may_trust_header(_pm_env(0xA1B2, "::ffff:127.0.0.1"), {}),
+               _PM._may_trust_header(_pm_env(0xA1B2, hdr=""), {}),
+               _PM._may_trust_header(_pm_env(0xC3D4, "203.0.113.5"), {"trust_proxy": True}))
+    eq("prefix header: believed from a root-owned loopback peer (also as ::ffff:), not from another "
+       "local account, not when absent; trust_proxy still decides for a declared proxy",
+       _pm_got, (True, False, True, False, True))
 finally:
     _lp_auth._PROC_NET_TCP.clear()
     _lp_auth._PROC_NET_TCP.update(_lp_saved)
+
+# ── the panel's own ban set, for traffic the host firewall never sees (Tailscale Funnel) ──────
+import ipaddress as _bl_ip
+from panel.security import banlist as _bl
+_bl_saved = (_bl._f2b, _bl._ufw, _bl._allow, _bl._addrs, _bl._nets)
+try:
+    _bl.set_f2b(["203.0.113.77", "not-an-ip"])
+    _bl.set_ufw({"198.51.100.0/24": "panel-autoblock"})
+    _bl.set_whitelist(["203.0.113.64/28"])            # .64-.79, so .77 is in it
+    _ip = _bl_ip.ip_address
+    eq("banlist: an address from fail2ban, a network from UFW, and the whitelist's exemption",
+       (_bl.is_banned(_ip("203.0.113.77")), _bl.is_banned(_ip("198.51.100.9")),
+        _bl.is_banned(_ip("192.0.2.1"))), (False, True, False))
+    _bl.set_whitelist([])
+    check("banlist: ...and without the whitelist the fail2ban address is banned",
+          _bl.is_banned(_ip("203.0.113.77")) and _bl.active())
+    _bl.set_f2b(None)
+    _bl.set_ufw(None)
+    check("banlist: a failed read (None) keeps the last good set, it is not 'nothing banned'",
+          _bl.is_banned(_ip("203.0.113.77")) and _bl.is_banned(_ip("198.51.100.9")))
+    eq("banlist: the forwarded client is the LAST X-Forwarded-For hop, parsed like client_ip()",
+       [str(_bl.forwarded_client(v)) for v in ("203.0.113.77", "6.6.6.6, 203.0.113.77",
+                                               "203.0.113.77, 6.6.6.6", "[2001:db8::1]:443",
+                                               "203.0.113.77:8443", "::ffff:203.0.113.77")]
+       + [_bl.forwarded_client(v) for v in ("bogus", "", None)],
+       ["203.0.113.77", "203.0.113.77", "6.6.6.6", "2001:db8::1", "203.0.113.77", "203.0.113.77",
+        None, None, None])
+    _bl.set_f2b([])
+    _bl.set_ufw([])
+    check("banlist: with nothing banned the gate has nothing to do", not _bl.active())
+    # refresh(): fail2ban's list and the whitelist always, the UFW denies only where proxied
+    # traffic can arrive (it costs a firewall read), and a failed read changes nothing.
+    import panel.ops.system_ops as _bl_so
+    import panel.core.config as _bl_cfgmod
+    _bl_rd = (_bl_so.panel_fail2ban_banned_ips, _bl_so.ufw_blocked_ips, _bl_cfgmod.load_config)
+    _bl_reads = []
+    try:
+        _bl_so.panel_fail2ban_banned_ips = lambda: (_bl_reads.append("f2b"), {"203.0.113.9"})[1]
+        _bl_so.ufw_blocked_ips = lambda: (_bl_reads.append("ufw"), {"198.51.100.7": "x"})[1]
+        _bl_cfgmod.load_config = lambda: {"tailscale_use_funnel": False, "security_whitelist": []}
+        _bl.refresh()
+        _bl_off = (list(_bl_reads), _bl.is_banned(_ip("203.0.113.9")),
+                   _bl.is_banned(_ip("198.51.100.7")))
+        _bl_reads.clear()
+        _bl_cfgmod.load_config = lambda: {"tailscale_use_funnel": True,
+                                          "security_whitelist": ["203.0.113.9"]}
+        _bl.refresh()
+        _bl_on = (list(_bl_reads), _bl.is_banned(_ip("203.0.113.9")),
+                  _bl.is_banned(_ip("198.51.100.7")))
+        _bl_so.panel_fail2ban_banned_ips = lambda: None
+        _bl_so.ufw_blocked_ips = lambda: None
+        _bl.refresh()
+        _bl_kept = _bl.is_banned(_ip("198.51.100.7"))
+    finally:
+        _bl_so.panel_fail2ban_banned_ips, _bl_so.ufw_blocked_ips, _bl_cfgmod.load_config = _bl_rd
+    eq("banlist: refresh() reads fail2ban always, UFW only with Funnel or trust_proxy, applies the "
+       "whitelist, and keeps the set when both reads fail",
+       (_bl_off, _bl_on, _bl_kept),
+       ((["f2b"], True, False), (["f2b", "ufw"], False, True), True))
+finally:
+    (_bl._f2b, _bl._ufw, _bl._allow, _bl._addrs, _bl._nets) = _bl_saved
 
 # ── TOTP (2FA) ────────────────────────────────────────────────
 import time as _time

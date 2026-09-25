@@ -8,7 +8,8 @@ from flask import (flash, jsonify, redirect, render_template, request, session, 
 from flask_login import (current_user, login_required, login_user, logout_user)
 from panel.core import (i18n)
 from panel.core.clock import (utcnow)
-from panel.core.config import (decrypt_secret, encrypt_secret)
+from panel.core.config import (decrypt_secret, encrypt_secret, load_config)
+from panel.security import banlist as _banlist
 from panel.db.models import (User, db)
 from panel.security.auth import (backup_code_shaped, hash_password, needs_rehash, check_password, client_ip,
     dummy_password_check,
@@ -59,6 +60,14 @@ def register(app):
                 with _LOGIN_FAILS_LOCK:
                     _LOGIN_FAILS.setdefault(_tk, []).append(now)   # throttle counter (resets on success)
                 _authlog.warning("panel login failed from %s", _log_ip(ip))    # fail2ban tails data/auth.log
+                # This failure may be the one that has fail2ban ban `ip`. Where the client can come
+                # in through Funnel or a reverse proxy, the firewall rule never sees it, so the
+                # panel's own gate picks the ban up in seconds rather than at the next 90 s tick.
+                try:
+                    if _banlist.proxied_traffic_possible(load_config()):
+                        _banlist.refresh_soon()
+                except Exception:
+                    pass
                 # The ATTEMPTED username (user-controlled → sanitised + capped) goes in the User
                 # column via `actor`; the reason + attempt count go in detail. log_action stores the IP.
                 who = ((attempted if attempted is not None else request.form.get("username", "")) or "").strip()[:64] or "(blank)"

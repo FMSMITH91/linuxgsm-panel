@@ -26,6 +26,7 @@ from panel.ops.ssh_manager import (get_server_status, mod_restart_decision, play
 # module would never be seen — attribute access resolves at call time and is stable
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
+from panel.security import banlist as _banlist
 from panel.security.auth import (RESTART_SERVER, START_SERVER, STOP_SERVER, UPDATE_SERVER,
     VIEW_CONSOLE, get_user_permissions, log_action)
 from panel.services import (notifications)
@@ -103,6 +104,7 @@ def _whitelist_mutate(app, body):
     if remove:
         canon = _security_whitelist_remove(raw)
         threading.Thread(target=_apply_whitelist_everywhere, args=(app,), daemon=True).start()
+        _banlist.refresh_soon(0)
         log_action(current_user, "whitelist_remove", target=canon)
         return jsonify({"success": True, "removed": canon, "whitelist": _security_whitelist()})
     canon = _security_whitelist_add(raw)
@@ -111,6 +113,7 @@ def _whitelist_mutate(app, body):
     # A single address (not a CIDR range) also gets any existing ban lifted immediately.
     _unban = canon if "/" not in canon else None
     threading.Thread(target=_apply_whitelist_everywhere, args=(app, _unban), daemon=True).start()
+    _banlist.refresh_soon(0)
     for rid in _autoblock_hosts():      # release any auto-block for the now-whitelisted address
         _run_autoblock_now(app, rid)
     log_action(current_user, "whitelist_add", target=canon)

@@ -9,6 +9,7 @@ from panel.core.clock import (utcnow)
 from panel.core.config import (DB_PATH, load_config)
 from panel.db.models import (LOCAL_HOST_LABEL, RemoteServer, db)
 from panel.ops import (system_ops as so)
+from panel.security import banlist as _banlist
 from panel.ops.ssh_manager import (host_specs, tailnet_exempt_ips)
 from panel.security.auth import (log_action, superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
@@ -333,6 +334,8 @@ def register(app):
         try:
             ok, msg = (so.ufw_undeny_ip(ip) if unblock else so.ufw_deny_ip(ip))
             log_action(current_user, "ufw_unblock" if unblock else "ufw_block", target=ip, success=ok)
+            if ok:
+                _banlist.refresh_soon(0)   # the panel's own gate, for traffic UFW cannot see
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("block failed")}), 500
@@ -372,6 +375,8 @@ def register(app):
         jail, banned_ip = _json_str(d, "jail"), _json_str(d, "ip")
         try:
             ok, msg = so.fail2ban_unban(jail, banned_ip)
+            if ok:
+                _banlist.refresh_soon(0)
             log_action(current_user, "fail2ban_unban", target=banned_ip,
                        detail="%s — %s" % (jail, msg), success=ok)
             return jsonify({"success": ok, "message": msg})
