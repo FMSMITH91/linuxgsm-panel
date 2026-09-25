@@ -4612,44 +4612,26 @@ try:
           and _helper._sudoers_logical_lines("a,\\  \n b X=Y # c \\\n#9 Z=W\n")
           == ["a, b X=Y", "#9 Z=W"])
 
-    # A NOPASSWD rule granted to ALL users is one the panel's own account has too — it can already
-    # run those commands itself — so it no longer refuses every account on the host. Anything that
-    # could make this account's copy stronger than the panel's still counts.
-    _sg_all_cases = {
-        # body: (expected _can_already_escalate("deploy"), description)
-        "ALL ALL=(ALL) NOPASSWD: /usr/bin/id\n": (False, "a NOPASSWD rule for ALL users"),
-        "ALL ALL=(root) NOPASSWD:SETENV: /usr/bin/id, /usr/bin/uptime\n":
-            (False, "...with other tags and several commands"),
-        "ALL ALL=(ALL) NOPASSWD: /usr/bin/id\nDefaults:lgsmpanel requiretty\n":
-            (True, "...but not when a Defaults entry is scoped to particular users"),
-        "ALL ALL=(ALL) NOPASSWD: /usr/bin/id\nDefaults!/usr/bin/id authenticate\n":
-            (True, "...or to particular commands"),
-        "ALL ALL=(ALL) NOPASSWD: /usr/bin/id, PASSWD: /usr/bin/uptime\n":
-            (True, "...nor when a tag switches to PASSWD mid-list"),
-        "ALL h1 = NOPASSWD: /usr/bin/id : h2 = /usr/bin/uptime\n":
-            (True, "...nor with a second host spec"),
-        "ALL, alice ALL=(ALL) NOPASSWD: /usr/bin/id\n":
-            (True, "...nor a list that merely includes ALL"),
-        "deploy ALL=(ALL) NOPASSWD: /usr/bin/id\n":
-            (True, "...and a NOPASSWD rule naming the account itself still refuses it"),
-        "ALL ALL=(ALL) NOPASSWD: /usr/bin/id\ndeploy ALL=(ALL) ALL\n":
-            (True, "...as does any other rule beside the universal one"),
-        # sudo takes the last match: this strips the PANEL of the universal rule and leaves it to
-        # everyone else, so the account reaches a root the panel cannot. Any negation, anywhere,
-        # turns the exemption off.
-        "ALL ALL=(ALL) NOPASSWD: ALL\nlgsmpanel ALL=(ALL) !ALL\n":
-            (True, "...nor when a later rule negates it for someone (the panel, say)"),
-        "Cmnd_Alias SH = /bin/sh\nALL ALL=(ALL) NOPASSWD: /usr/bin/id\nlgsmpanel ALL = !SH\n":
-            (True, "...or negates a command alias"),
-    }
+    # A rule for ALL users is refused like any other, NOPASSWD or not: whether the panel could use
+    # it too depends on every later rule that matches the panel (a `!` deny, the host terminal's
+    # own password grant), which is sudo's whole last-match evaluation. The reason says what it is,
+    # and what to change, so the operator is not left hunting for a grant naming the account.
     _sg_all_bad = []
-    for _body, (_want, _desc) in _sg_all_cases.items():
+    for _body in ("ALL ALL=(ALL) NOPASSWD: /usr/bin/id\n",
+                  "ALL ALL=(ALL) NOPASSWD: ALL\nlgsmpanel ALL=(ALL) ALL\n",
+                  "ALL ALL=(ALL) NOPASSWD: ALL\nlgsmpanel ALL=(ALL) !ALL\n"):
         with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
             _fh.write(_body)
-        if _helper._can_already_escalate("deploy") is not _want:
-            _sg_all_bad.append(_desc)
-    check("enrolment: a NOPASSWD rule for ALL users no longer refuses every account, and nothing "
-          "stronger rides on that", not _sg_all_bad, "wrong for: %s" % _sg_all_bad)
+        _v = _helper._escalation_verdict("deploy")
+        if not (_v[0] == "yes" and "rule for ALL users" in _v[1] and "narrow" in _v[1]):
+            _sg_all_bad.append((_body.strip(), _v))
+    check("enrolment: a rule for ALL users still refuses, and says it is a rule for ALL users",
+          not _sg_all_bad, repr(_sg_all_bad))
+    with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+        _fh.write("ALL ALL=(ALL) NOPASSWD: /usr/bin/id\ndeploy ALL=(ALL) ALL\n")
+    _v = _helper._escalation_verdict("deploy")
+    check("enrolment: ...while a rule naming the account itself says so plainly",
+          _v == ("yes", "a sudoers rule grants it sudo"), repr(_v))
 
     # sudo also reads rules from LDAP or SSSD when nsswitch.conf says so, and this parser never
     # sees those: an account granted sudo there read as "cannot escalate" and was enrolled. It now
@@ -4698,10 +4680,18 @@ try:
             _fh.write("sudoers: files sss\n")
         _helper._sudo_lists_rules = lambda _u: False
         _helper._sss_sudo_answers = lambda: False
-        _ns_down = _helper._can_already_escalate("deploy")
+        _ns_down = _helper._escalation_verdict("deploy")
         _helper._sss_sudo_answers = lambda: True
         check("enrolment: ...and SSSD's 'not allowed' counts only while its sudo service answers",
-              _ns_down is True and _helper._can_already_escalate("deploy") is False)
+              _ns_down[0] == "unknown" and "SSSD's sudo service is not answering" in _ns_down[1]
+              and _helper._escalation_verdict("deploy") == ("no", ""), repr(_ns_down))
+        # "could not tell" is its own answer: install.sh takes a membership back on "yes" only.
+        _helper._sudo_lists_rules = lambda _u: True
+        _v_yes = _helper._escalation_verdict("deploy")
+        _helper._sudo_lists_rules = lambda _u: None
+        _v_unk = _helper._escalation_verdict("deploy")
+        check("enrolment: ...a listed rule is 'yes', an unclear sudo is 'unknown', not 'yes'",
+              _v_yes[0] == "yes" and _v_unk[0] == "unknown", repr((_v_yes, _v_unk)))
         os.remove(_ns_file)
         check("enrolment: ...nor is a host with no nsswitch.conf at all",
               _helper._sudoers_sources() == ["files"])
@@ -4754,9 +4744,25 @@ try:
         _helper.subprocess = NS(run=lambda *a, **k: (_ran.append(a), NS(returncode=0, stderr=b""))[1])
         _helper.grp = _fake_grp(lambda _g: _FakeGrp("users"),
                                 lambda: [_FakeGrp("sudo", ["carol"])])
-        _rc_bad = _helper.do_gameuser_group(["carol"], "")
+        _err_saved, _err_buf = _helper.sys.stderr, _sec_io.StringIO()
+        try:
+            _helper.sys.stderr = _err_buf
+            _rc_bad = _helper.do_gameuser_group(["carol"], "")
+            _ev_saved = _helper._escalation_verdict
+            _helper._escalation_verdict = lambda _u: ("unknown", "SSSD's sudo service is not answering")
+            _rc_unk = _helper.do_gameuser_group(["carol"], "")
+            _helper._escalation_verdict = _ev_saved
+        finally:
+            _helper.sys.stderr = _err_saved
+        _err = _err_buf.getvalue().splitlines()
         check("enrolment: do_gameuser_group REFUSES a sudo-capable account",
               _rc_bad == 1 and not _ran, "rc=%s ran=%s" % (_rc_bad, _ran))
+        check("enrolment: ...saying why, and an unverifiable one is not told it can reach root",
+              _rc_unk == 1 and not _ran and len(_err) == 2
+              and "it can already reach root (it is in sudo)" in _err[0]
+              and "could not confirm it cannot reach root (SSSD's sudo service is not answering)"
+              in _err[1] and "already reach root" not in _err[1] and all(len(_l) < 200 for _l in _err),
+              repr(_err))
         _ran.clear()
         _helper.grp = _fake_grp(lambda _g: _FakeGrp("gmodserver"), lambda: [])
         _rc_ok = _helper.do_gameuser_group(["gmodserver"], "")

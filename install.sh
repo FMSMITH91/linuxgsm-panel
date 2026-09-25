@@ -126,7 +126,11 @@ python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null \
 # test is to actually build a throwaway venv.
 _venv_works() {
     local t; t="$(mktemp -d)" || return 1
-    if python3 -m venv "${t}" >/dev/null 2>&1; then rm -rf "${t}"; return 0; fi
+    # Isolated, and from /: `-m` puts the current directory first on sys.path, and a self-update
+    # runs install.sh from the panel's own checkout, where a planted venv.py would run as root. -I
+    # keeps that directory off the path; running from / as well means nothing started here gets
+    # the checkout as its working directory.
+    if (cd / && python3 -I -m venv "${t}") >/dev/null 2>&1; then rm -rf "${t}"; return 0; fi
     rm -rf "${t}"; return 1
 }
 
@@ -525,7 +529,7 @@ install_deps() {
         warn "${VENV_STALE_WHY^} (an OS release upgrade?). Rebuilding it."
         clear="--clear"
     fi
-    ${as_owner} python3 -m venv ${clear:+"${clear}"} "${PANEL_DIR}/venv"
+    (cd / && ${as_owner} python3 -I -m venv ${clear:+"${clear}"} "${PANEL_DIR}/venv")   # see _venv_works
     ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet --upgrade pip
     ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
 }
@@ -1231,13 +1235,13 @@ root_tools_present() {
 # the one-hop NOPASSWD:ALL this function exists to prevent. The first ten are the set
 # panel/security/privileged.py already refuses as _NEVER_A_CONTENT_GROUP.
 #
-# When the root-owned helper is installed, IT answers — the same function that decides every other
-# enrolment (panel-helper's _can_already_escalate). Two deciders drifted: this one ran `sudo -l`,
-# the helper parsed the policy, and an account one would enrol the other took back. The helper's
-# answer covers what `sudo -l` did (it asks sudo itself when rules come from LDAP or SSSD) and one
-# thing it could not: a NOPASSWD rule granted to ALL users is one the panel's own account has too,
-# so it no longer refuses every account on the host. Without the helper (it is placed before this
-# runs, so only a failed placement), the old test stands, exemption and all left out.
+# When the root-owned helper is installed, IT answers — the same verdict that decides every other
+# enrolment (panel-helper's _escalation_verdict). Two deciders drifted: this one ran `sudo -l`, the
+# helper parsed the policy, and an account one would enrol the other took back. The helper's answer
+# covers what `sudo -l` did — it asks every sudo on the host when rules come from LDAP or SSSD —
+# and it says "unknown" rather than "yes" when it cannot tell, which the caller must not treat as
+# a reason to take a membership back. Without the helper (it is placed before this runs, so only a
+# failed placement), the old test stands.
 can_already_sudo() {
     _cas_user="$1"
     _cas_groups="sudo|admin|wheel|root|adm|shadow|docker|lxd|disk|staff|incus-admin|libvirt"
@@ -1254,7 +1258,7 @@ import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader("panel_helper", sys.argv[1])
 helper = importlib.util.module_from_spec(importlib.util.spec_from_loader("panel_helper", loader))
 loader.exec_module(helper)
-print("yes" if helper._can_already_escalate(sys.argv[2]) else "no")
+print(helper._escalation_verdict(sys.argv[2])[0])
 CAS_PY
 )" in
             yes) echo yes ;;
