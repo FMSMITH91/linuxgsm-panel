@@ -114,11 +114,12 @@ echo -e "╚══════════════════════�
 
 # ── Prerequisites ──
 command -v python3 >/dev/null 2>&1 || die "Python 3 is required."
-PY_MM="$(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null)"
+PY_MM="$(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
+[ -n "${PY_MM}" ] || die "python3 is installed but does not run.  sudo apt install --reinstall -y python3"
 # requirements.txt is pinned for 3.10 and newer (tests/unit ties this floor to it). An older
-# python3 only fails later, inside pip, as "No matching distribution found for flask".
+# python3 only fails later, inside pip, as "No matching distribution found for …".
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null \
-    || die "Python 3.10 or newer is required, and this python3 is ${PY_MM:-unreadable}. Ubuntu 22.04 and later ship it."
+    || die "Python 3.10 or newer is required, and this python3 is ${PY_MM}. Ubuntu 22.04 and later ship it."
 
 # `python3 -m venv --help` succeeds even when the python3-venv / ensurepip package
 # is missing (common on minimal Ubuntu/Debian VPS images), so the ONLY reliable
@@ -130,20 +131,30 @@ _venv_works() {
 }
 
 # If anything's missing, install it automatically on Debian/Ubuntu (this runs as
-# root for a root install, and via sudo otherwise). tzdata is missing only from minimal images
-# (Docker, some LXC), and without it Python's zoneinfo rejects every time zone name the panel is
-# given. Noninteractive, because tzdata otherwise stops to ask for a region (it defaults to UTC).
-TZ_DB="/usr/share/zoneinfo/UTC"
-if ! _venv_works || ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1 \
-   || [ ! -e "${TZ_DB}" ]; then
+# root for a root install, and via sudo otherwise).
+if ! _venv_works || ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
         SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
-        info "Installing prerequisites (python3-venv, python3-pip, git, curl, tzdata)…"
+        info "Installing prerequisites (python3-venv, python3-pip, git, curl)…"
         ${SUDO} apt-get update -qq || true
-        ${SUDO} env DEBIAN_FRONTEND=noninteractive \
-            apt-get install -y python3-venv python3-pip git curl tzdata \
+        ${SUDO} apt-get install -y python3-venv python3-pip git curl \
             || warn "apt-get reported an error — re-checking prerequisites anyway."
     fi
+fi
+
+# The time zone database. Only minimal images (Docker, some LXC) lack it — on 24.04 and later
+# python3 itself depends on it — and without it zoneinfo rejects every time zone name the panel
+# is given. A step of its own, and best-effort: noninteractive, because tzdata otherwise stops the
+# install to ask for a region (it defaults to UTC); --no-upgrade, so an update never upgrades
+# anything else on the way; and apt-get alone stays the only thing the prerequisites above need
+# sudo to allow.
+TZ_DB="/usr/share/zoneinfo/UTC"
+if [ ! -e "${TZ_DB}" ] && command -v apt-get >/dev/null 2>&1; then
+    SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+    info "Installing tzdata (the time zone database)…"
+    ${SUDO} apt-get update -qq || true
+    ${SUDO} env DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 \
+        apt-get install -y --no-upgrade tzdata || true
 fi
 
 # Hard-fail only on what we truly cannot proceed without.
@@ -467,16 +478,32 @@ resolve_update_target() {
 # A venv belongs to the Python that built it. An in-place release upgrade (22.04 -> 24.04) moves
 # /usr/bin/python3 to a new minor version; the venv's python3 is a symlink to it, so it starts the
 # new interpreter, which finds none of the packages (they were installed for the old one), and the
-# service dies on `import eventlet`. The version comes from pyvenv.cfg: READ, never run. On the
-# update path the venv is the panel user's, and executing it here would be the panel choosing what
-# root runs. Empty when there is no venv or no readable cfg, and then nothing counts as stale.
+# service dies on `import eventlet`. So: the version pyvenv.cfg records against the version the
+# venv's OWN python3 now resolves to (/usr/bin/python3 -> python3.12). Not against PATH's
+# python3 — a venv built from pyenv or conda is fine, whatever sudo's PATH finds. Both are READ,
+# never run: on the update path the venv is the panel user's, and executing it here would be the
+# panel choosing what root runs. No venv or no readable cfg: nothing counts as stale.
 _venv_python() {
     sed -n 's/^version\(_info\)\{0,1\}[[:space:]]*=[[:space:]]*\([0-9][0-9]*\.[0-9][0-9]*\).*/\2/p' \
         "${PANEL_DIR}/venv/pyvenv.cfg" 2>/dev/null | head -n 1 || true   # no cfg: sed's 2, under pipefail
 }
+_venv_link_python() {
+    readlink -f "${PANEL_DIR}/venv/bin/python3" 2>/dev/null \
+        | sed -n 's|.*/python\([0-9][0-9]*\.[0-9][0-9]*\)$|\1|p' || true
+}
+VENV_STALE_WHY=""
 _venv_stale() {
-    local v; v="$(_venv_python)"
-    [ -n "${v}" ] && [ -n "${PY_MM:-}" ] && [ "${v}" != "${PY_MM}" ]
+    local built runs
+    VENV_STALE_WHY=""
+    built="$(_venv_python)"
+    [ -n "${built}" ] || return 1
+    if [ ! -e "${PANEL_DIR}/venv/bin/python3" ]; then
+        VENV_STALE_WHY="the venv was built for Python ${built}, and that interpreter is gone"
+        return 0
+    fi
+    runs="$(_venv_link_python)"
+    { [ -n "${runs}" ] && [ "${built}" != "${runs}" ]; } || return 1
+    VENV_STALE_WHY="the venv was built for Python ${built}, and its python3 is now ${runs}"
 }
 
 # pip runs setup.py and wheel hooks, so "install the dependencies" is "execute code from
@@ -495,7 +522,7 @@ install_deps() {
         as_owner="sudo -u ${PANEL_USER}"
     fi
     if _venv_stale; then
-        warn "The venv was built for Python $(_venv_python), and python3 is now ${PY_MM} (an OS release upgrade?). Rebuilding it."
+        warn "${VENV_STALE_WHY^} (an OS release upgrade?). Rebuilding it."
         clear="--clear"
     fi
     ${as_owner} python3 -m venv ${clear:+"${clear}"} "${PANEL_DIR}/venv"
@@ -1422,7 +1449,13 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         die "Couldn't reach the update source (offline, or a private repo without credentials).
      Nothing was changed."
     fi
-    if [ -n "${CURRENT_SHA}" ] && [ "${CURRENT_SHA}" = "${TARGET_SHA}" ]; then
+    # A venv left behind by an OS release upgrade is the other thing a current checkout can need:
+    # the panel cannot start, and this branch used to exit before the only step that rebuilds it.
+    # Take the full path instead, for its snapshot, health check and rollback.
+    if [ -n "${CURRENT_SHA}" ] && [ "${CURRENT_SHA}" = "${TARGET_SHA}" ] && _venv_stale; then
+        info "The code is current, but ${VENV_STALE_WHY}. Rebuilding it through the full update."
+    fi
+    if [ -n "${CURRENT_SHA}" ] && [ "${CURRENT_SHA}" = "${TARGET_SHA}" ] && ! _venv_stale; then
         # Nothing to FETCH is not nothing to DO. The root-owned pieces and the sudoers grant live
         # outside the checkout, so they can be stale or missing while the code is perfectly current
         # — and this branch used to `exit 0` before reaching either of them.

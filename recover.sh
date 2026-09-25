@@ -173,14 +173,24 @@ PY="${PANEL_DIR}/venv/bin/python"
 [ -x "${PY}" ] || PY="$(command -v python3 || true)"
 [ -n "${PY}" ] || { echo "No Python found for the panel." >&2; exit 1; }
 # After an OS release upgrade the venv's python is a symlink to the NEW interpreter, which has
-# none of the panel's packages, so manage.py would die on its first import (install.sh rebuilds
-# the venv for this; see _venv_stale there). pyvenv.cfg is read, not run.
+# none of the panel's packages, so manage.py would die on its first import. Compare what pyvenv.cfg
+# records with where the venv's own python3 resolves (install.sh's _venv_stale does the same, and
+# rebuilds it even when the code is current). Both are read, not run.
 VENV_PY="$(sed -n 's/^version\(_info\)\{0,1\}[[:space:]]*=[[:space:]]*\([0-9][0-9]*\.[0-9][0-9]*\).*/\2/p' \
            "${PANEL_DIR}/venv/pyvenv.cfg" 2>/dev/null | head -n 1 || true)"   # set -e: no cfg is not fatal
-SYS_PY="$(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
-if [ -n "${VENV_PY}" ] && [ -n "${SYS_PY}" ] && [ "${VENV_PY}" != "${SYS_PY}" ]; then
-    echo "The panel's venv was built for Python ${VENV_PY}, and python3 is now ${SYS_PY} (an OS" >&2
-    echo "release upgrade?). Re-run install.sh to rebuild it, then run this again." >&2
+RUNS_PY="$(readlink -f "${PANEL_DIR}/venv/bin/python3" 2>/dev/null \
+           | sed -n 's|.*/python\([0-9][0-9]*\.[0-9][0-9]*\)$|\1|p' || true)"
+STALE_WHY=""
+if [ -z "${VENV_PY}" ]; then
+    :
+elif [ ! -e "${PANEL_DIR}/venv/bin/python3" ]; then
+    STALE_WHY="that interpreter is gone"
+elif [ -n "${RUNS_PY}" ] && [ "${VENV_PY}" != "${RUNS_PY}" ]; then
+    STALE_WHY="its python3 is now ${RUNS_PY}"
+fi
+if [ -n "${STALE_WHY}" ]; then
+    echo "The panel's venv was built for Python ${VENV_PY}, and ${STALE_WHY} (an OS release" >&2
+    echo "upgrade?). Re-run install.sh to rebuild it, then run this again." >&2
     exit 1
 fi
 
