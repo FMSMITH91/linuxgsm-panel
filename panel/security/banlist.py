@@ -16,8 +16,11 @@ set_f2b / set_ufw / set_whitelist and swapped in, and a failed read (None) keeps
 — an unreadable firewall is not "nothing is banned".
 """
 import ipaddress
+import logging
 import threading
 import time
+
+_log = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _f2b = frozenset()          # networks from fail2ban's panel jail
@@ -147,8 +150,9 @@ def is_banned(addr):
 # is never dropped, because the ban it is for may land just after the read that was already due.
 
 _sched = threading.Lock()
-_scheduled = False
-_again = None               # the delay of a request that arrived while one was pending
+# "scheduled": a refresh is pending or running; "again": the delay of a request that arrived while
+# one was, or None.
+_state = {"scheduled": False, "again": None}
 
 
 def refresh():
@@ -159,40 +163,38 @@ def refresh():
     try:
         set_whitelist(load_config().get("security_whitelist") or [])
     except Exception:
-        pass
+        _log.debug("ban gate: config unreadable; whitelist kept", exc_info=True)
     for kind, read, apply in (("f2b", so.panel_fail2ban_banned_ips, set_f2b),
                               ("ufw", so.ufw_blocked_ips, set_ufw)):
         taken = time.monotonic()
         try:
             apply(read(), taken)
         except Exception:
-            pass
+            _log.debug("ban gate: %s read failed; last good set kept", kind, exc_info=True)
 
 
 def refresh_soon(delay=3.0):
     """Schedule a refresh() `delay` seconds from now. If one is already pending, schedule ONE more
     after it rather than dropping this request."""
-    global _scheduled, _again
     with _sched:
-        if _scheduled:
-            _again = delay if _again is None else max(_again, delay)
+        if _state["scheduled"]:
+            _state["again"] = delay if _state["again"] is None else max(_state["again"], delay)
             return
-        _scheduled = True
+        _state["scheduled"] = True
 
     def _run():
-        global _scheduled, _again
         wait = delay
         try:
             while True:
                 time.sleep(wait)
                 refresh()
                 with _sched:
-                    if _again is None:
-                        _scheduled = False
+                    if _state["again"] is None:
+                        _state["scheduled"] = False
                         return
-                    wait, _again = _again, None
+                    wait, _state["again"] = _state["again"], None
         except BaseException:
             with _sched:
-                _scheduled, _again = False, None
+                _state["scheduled"], _state["again"] = False, None
             raise
     threading.Thread(target=_run, daemon=True).start()

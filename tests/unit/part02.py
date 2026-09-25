@@ -2290,11 +2290,11 @@ try:
         _bl.refresh_soon(0)
         _bl_gate.set()
         for _ in range(100):
-            if len(_bl_runs) >= 2 and not _bl._scheduled:
+            if len(_bl_runs) >= 2 and not _bl._state["scheduled"]:
                 break
             _time.sleep(0.02)
         eq("banlist: refresh_soon queues ONE more read for requests made while one runs",
-           (len(_bl_runs), _bl._scheduled), (2, False))
+           (len(_bl_runs), _bl._state["scheduled"]), (2, False))
     finally:
         _bl.refresh = _bl_rf
     # refresh(): fail2ban's list and the whitelist always, the UFW denies only where proxied
