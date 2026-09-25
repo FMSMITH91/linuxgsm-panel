@@ -172,6 +172,17 @@ fi
 PY="${PANEL_DIR}/venv/bin/python"
 [ -x "${PY}" ] || PY="$(command -v python3 || true)"
 [ -n "${PY}" ] || { echo "No Python found for the panel." >&2; exit 1; }
+# After an OS release upgrade the venv's python is a symlink to the NEW interpreter, which has
+# none of the panel's packages, so manage.py would die on its first import (install.sh rebuilds
+# the venv for this; see _venv_stale there). pyvenv.cfg is read, not run.
+VENV_PY="$(sed -n 's/^version\(_info\)\{0,1\}[[:space:]]*=[[:space:]]*\([0-9][0-9]*\.[0-9][0-9]*\).*/\2/p' \
+           "${PANEL_DIR}/venv/pyvenv.cfg" 2>/dev/null | head -n 1 || true)"   # set -e: no cfg is not fatal
+SYS_PY="$(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
+if [ -n "${VENV_PY}" ] && [ -n "${SYS_PY}" ] && [ "${VENV_PY}" != "${SYS_PY}" ]; then
+    echo "The panel's venv was built for Python ${VENV_PY}, and python3 is now ${SYS_PY} (an OS" >&2
+    echo "release upgrade?). Re-run install.sh to rebuild it, then run this again." >&2
+    exit 1
+fi
 
 # Default action: reset the (sole) superadmin's password.
 [ "$#" -gt 0 ] || set -- reset-password
