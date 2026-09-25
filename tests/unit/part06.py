@@ -1949,6 +1949,82 @@ try:
     _r = _su_run(_su_tz.replace("/usr/share/zoneinfo/UTC", _su_vpy), "", extra=_su_pre_shim).stdout
     check("install.sh: ...and a host that has one runs no apt for it", "SUDO" not in _r, repr(_r))
 
+    # gamedig is installed with npm. NodeSource's nodejs bundles npm; the distro's does not, and
+    # Ubuntu 24.04 and 26.04 ship a Node new enough to take the distro path — so every install
+    # there ended with node, no npm, and no gamedig, silently. Driven with shims: node answers v22,
+    # and npm/gamedig exist only once something installed them.
+    _eg = _su_find("ensure_gamedig() {", "\n}\n")
+    _eg_shim = ('info() { echo "INFO $*"; }\nok() { echo "OK $*"; }\nwarn() { echo "WARN $*"; }\n'
+                'id() { echo 0; }\nnode() { echo v22.3.0; }\ntee() { cat >/dev/null; }\n'
+                'chmod() { :; }\napt-cache() { :; }\n'
+                'command() { case "$2" in\n'
+                '  apt-get|jq|curl|pigz|node) return 0 ;;\n'
+                '  npm) [ -f "$SB/npm" ] ;;\n  gamedig) [ -f "$SB/gamedig" ] ;;\n'
+                '  *) return 1 ;; esac; }\n'
+                # install.sh sends these to /dev/null, so they record to a file of their own.
+                'apt-get() { echo "APT $*" >> "$SB/calls"; [ "$*" = "install -y npm" ]'
+                ' && touch "$SB/npm"; return 0; }\n'
+                'npm() { echo "NPM $*" >> "$SB/calls"; touch "$SB/gamedig"; }\n')
+
+    def _eg_run(have_npm, shim=_eg_shim):
+        _sb = _tempfile.mkdtemp(prefix="gamedig-", dir=_su_sb)
+        if have_npm:
+            open(os.path.join(_sb, "npm"), "w").close()
+        _out = _su_run(_eg + "\nensure_gamedig\n", "SB=%s\nNODESOURCE_NODE_MAJOR=22\n"
+                       % _su_shlex.quote(_sb), extra=shim).stdout
+        _calls = os.path.join(_sb, "calls")
+        return _out + (open(_calls, encoding="utf-8").read() if os.path.exists(_calls) else "")
+    _r = _eg_run(False)
+    check("install.sh: a distro Node without npm gets npm, then gamedig",
+          bool(_eg) and "APT install -y npm" in _r
+          and "NPM install -g --ignore-scripts gamedig@5" in _r and "OK gamedig ready" in _r,
+          repr(_r[-300:]))
+    _r = _eg_run(True)
+    check("install.sh: ...and a host that has npm does not reinstall it",
+          "APT install -y npm" not in _r and "OK gamedig ready" in _r, repr(_r[-300:]))
+    _r = _eg_run(False, shim=_eg_shim.replace('&& touch "$SB/npm"; return 0', '; return 1'))
+    check("install.sh: ...and when gamedig still is not there, the install says so",
+          "WARN gamedig is not installed" in _r and "OK gamedig ready" not in _r, repr(_r[-300:]))
+
+    # The add-host bootstrap has the same step for REMOTE hosts: a host that already had a distro
+    # Node 18+ skipped straight to the npm install of gamedig. Its command is read out of hosts.py
+    # (a literal there, deliberately not moved) and run with shims.
+    import ast as _nd_ast
+    _nd_src = open(os.path.join(_root, "panel", "ops", "ssh_manager", "hosts.py"),
+                   encoding="utf-8").read()
+    _nd_cmd = next((_nd_ast.literal_eval(_n.value) for _n in _nd_ast.walk(_nd_ast.parse(_nd_src))
+                    if isinstance(_n, _nd_ast.Assign) and len(_n.targets) == 1
+                    and getattr(_n.targets[0], "id", "") == "node_cmd"), "")
+
+    def _nd_run(have_npm):
+        _sb = _tempfile.mkdtemp(prefix="nodestep-", dir=_su_sb)
+        if have_npm:
+            open(os.path.join(_sb, "npm"), "w").close()
+        return _sh_sub.run(["bash", "-c", "SB=%s\nnode() { echo v22.3.0; }\n"
+                            "command() { [ \"$2\" = npm ] && [ -f \"$SB/npm\" ]; }\n"
+                            "apt-get() { echo \"APT $*\"; }\ncurl() { echo CURL; }\n%s"
+                            % (_su_shlex.quote(_sb), _nd_cmd)],
+                           capture_output=True, text=True).stdout
+    _r = _nd_run(False)
+    check("hosts: a remote with a distro Node 18+ and no npm gets npm before gamedig",
+          bool(_nd_cmd) and "APT install -y npm" in _r and "CURL" not in _r, repr(_r))
+    _r = _nd_run(True)
+    check("hosts: ...and one that has npm is left alone", "APT" not in _r, repr(_r))
+
+    # A just-created account that sudo cannot resolve yet is retried. sudo-rs (Ubuntu 26.04's
+    # /usr/bin/sudo) words it differently from classic sudo, so the retry never fired there.
+    from panel.routes import manage_servers as _ms_mod
+    check("install: 'not resolvable yet' reads both sudos' wording, and not other failures",
+          _ms_mod._account_not_resolvable_yet("sudo: unknown user gs1", "gs1")
+          and _ms_mod._account_not_resolvable_yet("sudo: user 'gs1' not found", "gs1")
+          and not _ms_mod._account_not_resolvable_yet("sudo: user 'other' not found", "gs1")
+          and not _ms_mod._account_not_resolvable_yet("Unknown game server", "gs1"))
+    _ms_src = open(os.path.join(_root, "panel", "routes", "manage_servers.py"),
+                   encoding="utf-8").read()
+    check("install: ...and the install's retry loop is what asks it",
+          "if not _account_not_resolvable_yet(out + err, short_name):" in _ms_src
+          and '"unknown user" not in' not in _ms_src)
+
     # requirements.txt must pin the WHOLE closure, not just the direct dependencies. Pinning 12
     # packages left the rest floating. install.sh skips pip when the file is unchanged, and
     # `pip install -r` never upgrades a package that already satisfies a range, so a security fix
@@ -2496,7 +2572,8 @@ try:
           and "Refusing to delete a running panel's files." in _un_txt)
     # Two success lines that were printed unconditionally beside a command ending in `|| true`.
     check("uninstall.sh: the UFW line reports what was actually removed",
-          "_ufw_gone" in _un_txt and "No UFW rule for port" in _un_txt)
+          "_ufw_before" in _un_txt and "_ufw_after" in _un_txt
+          and "No UFW rule for port" in _un_txt)
     # Searched FROM the userdel, not from the start of the file: `id "${PANEL_USER}"` also appears
     # in the guard above it ("only ever remove the dedicated panel service user"), so a plain
     # .index() finds that one and compares the wrong occurrence — the same trap a source-reading
@@ -2722,16 +2799,30 @@ try:
         # the thing under test. info() goes to the trace as well as to stdout because every
         # privileged call in here is redirected to /dev/null — the trace is the only stream where
         # the ORDER of "here is why I need sudo" against "sudo …" can be read back.
+        # A fake ufw that keeps STATE: `show added` lists the rules in a file and `delete allow`
+        # removes one, exiting 0 either way as the real one does — so a delete of a rule that was
+        # never there cannot pass for a removal.
+        _ufw_state = os.path.join(_fw_tmp, "ufw-added")
         _fw_shims = ('ok() { echo "OK $*"; }\n'
+                     'warn() { echo "WARN $*"; }\n'
                      'id() { echo "${FAKE_UID}"; }\n'
                      'info() { echo "INFO $*"; echo "INFO $*" >> "${TRACE}"; }\n'
-                     'ufw() { echo "UFW $*" >> "${TRACE}"; }\n'
-                     'sudo() { echo "SUDO $*" >> "${TRACE}"; }\n'
+                     '_fakeufw() { case "$1 $2" in\n'
+                     '  "show added") echo "Added user rules:"; cat "${UFW_STATE}" 2>/dev/null ;;\n'
+                     '  "delete allow") grep -vxF "ufw allow $3" "${UFW_STATE}" > "${UFW_STATE}.n";'
+                     ' mv -f "${UFW_STATE}.n" "${UFW_STATE}" ;;\n'
+                     '  esac; return 0; }\n'
+                     'ufw() { echo "UFW $*" >> "${TRACE}"; _fakeufw "$@"; }\n'
+                     'sudo() { echo "SUDO $*" >> "${TRACE}";'
+                     ' if [ "$1" = ufw ]; then shift; _fakeufw "$@"; fi; }\n'
                      'tailscale() { echo "TS $*" >> "${TRACE}"; }\n')
 
-        def _fw_run(env):
+        def _fw_run(env, rules=("ufw allow 5000/tcp",)):
             open(_trace, "w").close()
-            _out = _su_run(_fw_region, "TRACE=%s\n" % _su_shlex.quote(_trace) + env,
+            with open(_ufw_state, "w", encoding="utf-8") as _fh:
+                _fh.write("".join(r + "\n" for r in rules))
+            _out = _su_run(_fw_region, "TRACE=%s\nUFW_STATE=%s\n"
+                           % (_su_shlex.quote(_trace), _su_shlex.quote(_ufw_state)) + env,
                            extra=_fw_shims)
             return _out, open(_trace, encoding="utf-8").read()
 
@@ -2745,6 +2836,13 @@ try:
               repr(_r.stdout[-160:]))
         check("uninstall.sh: ...and no longer blames the operator for a port they never opened",
               "If you opened a firewall port" not in _un_txt)
+        # `ufw delete` exits 0 for a rule that does not exist, so its exit code said "removed" on
+        # every host. A host that never had the rule must not be told it was removed.
+        _rnr, _trnr = _fw_run('MODE=user\nFAKE_UID=1000\nPANEL_PORT=5000\n'
+                              'TS_DONE=0\nTS_CONF_UNREAD=0\nTS_MOUNT=/\n', rules=())
+        check("uninstall.sh: ...and a host that never had the rule is not told it was removed",
+              "Removed the panel's UFW rule" not in _rnr.stdout
+              and "No UFW rule for port 5000 was found" in _rnr.stdout, repr(_rnr.stdout[-200:]))
 
         # ── not knowing the port is not the same as there being no rule ────────────────────────
         # PANEL_PORT is blanked whenever data/config.json cannot be read or parsed, and the guard

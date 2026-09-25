@@ -183,19 +183,27 @@ if [ -z "${PANEL_PORT}" ] && command -v ufw >/dev/null 2>&1; then
     warn "  Find and remove it with:  sudo ufw status numbered"
 fi
 if [ -n "${PANEL_PORT}" ] && command -v ufw >/dev/null 2>&1; then
-    # Report what was actually deleted. Both deletes end in `|| true` — correct, since a
-    # rule that was never added must not abort the uninstall — and the success line was
-    # printed regardless, so "Removed the panel's UFW rule" appeared for a host where no rule
-    # existed, where ufw refused (this needs root), and where the port was still open.
-    _ufw_gone=0
+    # Report what was actually deleted. The deletes end in `|| true` — a rule that was never
+    # added must not abort the uninstall — and their exit code says nothing anyway: `ufw delete`
+    # exits 0 for a rule that does not exist ("Could not delete non-existent rule"), so
+    # "Removed the panel's UFW rule" printed for hosts that never had one. Count the rule in
+    # `ufw show added` before and after instead.
+    _ufw_count() {
+        ${U_SUDO} ufw show added 2>/dev/null | grep -cE "^ufw allow ${PANEL_PORT}(/tcp)?( |\$)" || true
+    }
     sudo_note
-    ${U_SUDO} ufw delete allow "${PANEL_PORT}/tcp" >/dev/null 2>&1 && _ufw_gone=1
-    ${U_SUDO} ufw delete allow "${PANEL_PORT}" >/dev/null 2>&1 && _ufw_gone=1
-    if [ "${_ufw_gone}" -eq 1 ]; then
+    _ufw_before="$(_ufw_count)"
+    ${U_SUDO} ufw delete allow "${PANEL_PORT}/tcp" >/dev/null 2>&1 || true
+    ${U_SUDO} ufw delete allow "${PANEL_PORT}" >/dev/null 2>&1 || true
+    _ufw_after="$(_ufw_count)"
+    if [ "${_ufw_before:-0}" -gt 0 ] && [ "${_ufw_after:-0}" -lt "${_ufw_before}" ]; then
         ok "Removed the panel's UFW rule for port ${PANEL_PORT} (game-server ports left intact)"
+    elif [ "${_ufw_before:-0}" -gt 0 ]; then
+        warn "The panel's UFW rule for port ${PANEL_PORT} could not be removed."
+        warn "  Remove it with: sudo ufw delete allow ${PANEL_PORT}/tcp"
     else
-        warn "No UFW rule for port ${PANEL_PORT} was removed (none present, or ufw declined)."
-        warn "  Check with: sudo ufw status"
+        warn "No UFW rule for port ${PANEL_PORT} was found to remove (none present, or ufw could"
+        warn "  not be read). Check with: sudo ufw status"
     fi
 fi
 # Not gated on MODE. `tailscale_setup_done` is written by the RUNNING PANEL — routes/tailscale.py

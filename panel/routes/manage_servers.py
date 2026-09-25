@@ -46,6 +46,13 @@ from panel.routes._shared import (_looks_installed, _notify_servers_changed, _re
 _install_alloc_lock = threading.Lock()
 
 
+
+def _account_not_resolvable_yet(text, user):
+    """True when sudo could not resolve an account created a moment ago (the install retries).
+    Classic sudo says "unknown user x"; sudo-rs, which is /usr/bin/sudo on Ubuntu 26.04, says
+    "user 'x' not found" — and the retry never fired there."""
+    return "unknown user" in text or ("user '%s' not found" % user) in text
+
 def scpsl_eula_payload():
     """The python3 -c payload that accepts the SCP:SL EULA for a game account.
 
@@ -642,7 +649,7 @@ def register(app):
                     out = err = ""; rc = -1
                     for attempt in range(10):
                         out, err, rc = _sm.run_command(remote, install_cmd, timeout=300, sudo=False)
-                        if "unknown user" not in (out + err):
+                        if not _account_not_resolvable_yet(out + err, short_name):
                             break
                         time.sleep(0.5 * (attempt + 1))
                     if "Unknown game server" in out:

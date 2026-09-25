@@ -387,7 +387,12 @@ _SUDO_REFUSED_RE = re.compile(
     r"|no tty present"
     r"|sorry, you must have a tty"
     r"|\d+ incorrect password attempts?"
-    r"|\S+ is not in the sudoers file)"
+    r"|\S+ is not in the sudoers file"
+    # sudo-rs, which is /usr/bin/sudo on Ubuntu 26.04, words every one of these differently.
+    r"|interactive authentication is required"
+    r"|a terminal is required to authenticate"
+    r"|maximum \d+ incorrect authentication attempts?"
+    r"|I'm sorry \S+\. I'm afraid I can't do that)"
     r"|ERROR:\s*You need to be root to run this script"
     r"|panel-helper:\s*\S+ failed \(PermissionError\)"
     r")")
