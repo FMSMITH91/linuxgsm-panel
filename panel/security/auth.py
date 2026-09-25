@@ -1043,7 +1043,11 @@ def client_ip():
         behind_proxy = bool(current_app.config.get("_TRUST_PROXY"))
     except Exception:
         behind_proxy = False     # outside an app context: trust nothing
-    if not behind_proxy and peer in ("127.0.0.1", "::1"):
+    # A dual-stack bind ('::') reports an IPv4 peer as ::ffff:127.0.0.1. The plain test missed it,
+    # so tailscaled's X-Forwarded-For was never believed there: every Serve and Funnel client was
+    # keyed as ::ffff:7f00:1, fail2ban ignored that as loopback, and one attacker's failures
+    # throttled every other client — the whole panel locked out by one Funnel visitor.
+    if not behind_proxy and _unmapped(peer) in ("127.0.0.1", "::1"):
         # Loopback is NOT a proxy by itself — any local account can dial it. Only a root-owned
         # peer (tailscaled) is; see _loopback_proxy_trusted.
         behind_proxy = _loopback_proxy_trusted()

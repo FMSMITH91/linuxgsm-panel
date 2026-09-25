@@ -48,17 +48,21 @@ class PrefixMiddleware:
         docstring used to claim both, which is a solved problem the next reader would not go
         looking for.
 
-        Trusted when the request actually arrived from the local proxy (Tailscale Serve runs on
-        loopback, which is the case this header exists for), or when the operator has declared a
-        reverse proxy in front with trust_proxy.
+        Trusted only when the operator has declared a reverse proxy in front with trust_proxy. It
+        was believed from loopback, on the premise that Tailscale Serve sends it there; it does not
+        (nothing in tailscaled sets it), and tailscaled forwards a Funnel client's own copy, so on
+        loopback it was the CLIENT's word. A proxy on this host that mounts the panel under a path
+        needs trust_proxy, as the documented nginx/Caddy setups already set.
         """
-        if cfg.get("trust_proxy"):
-            return True
-        return (environ.get("REMOTE_ADDR") or "") in ("127.0.0.1", "::1")
+        # Only a reverse proxy the operator declared (trust_proxy) authors this header. Tailscale
+        # Serve and Funnel never set it — and they pass a CLIENT's own copy through unchanged, so a
+        # root-owned loopback peer (tailscaled) proves nothing about who wrote it; any local account
+        # on loopback proves less.
+        return bool(cfg.get("trust_proxy"))
 
     def __call__(self, environ, start_response):
         cfg = load_config()
-        # Priority: X-Forwarded-Prefix header (Tailscale Serve), then config
+        # Priority: X-Forwarded-Prefix from a trusted proxy, then the configured mount
         prefix = (self._clean_prefix(environ.get("HTTP_X_FORWARDED_PREFIX", ""))
                   if self._may_trust_header(environ, cfg) else "")
         if not prefix:
@@ -102,3 +106,32 @@ class PrefixMiddleware:
             return start_response(status, headers, *args)
 
         return self.app(environ, _start_response)
+
+
+class ProxiedBanGate:
+    """Refuses a request whose forwarded client address is banned (panel/security/banlist.py).
+
+    For traffic the host firewall cannot see: Tailscale Funnel delivers every public client from
+    127.0.0.1, so fail2ban's and the auto-block's firewall bans never touch it. The outermost layer,
+    because Socket.IO's handshake and the static files never reach Flask's request hooks.
+
+    The header is not authenticated here, and needs no authentication: this can only REFUSE. Through
+    tailscaled the last hop is always tailscaled's own value, and any other sender can only name a
+    banned address to have its own request refused. With nothing banned it costs one truth test."""
+
+    def __init__(self, app):
+        self.app = app
+
+    def __call__(self, environ, start_response):
+        from panel.security import banlist
+        if banlist.active():
+            xff = environ.get("HTTP_X_FORWARDED_FOR")
+            if xff and banlist.is_banned(banlist.forwarded_client(xff)):
+                body = b"Forbidden\n"
+                start_response("403 Forbidden", [
+                    ("Content-Type", "text/plain; charset=utf-8"),
+                    ("Content-Length", str(len(body))),
+                    ("Cache-Control", "no-store"),
+                    ("Connection", "close")])
+                return [body]
+        return self.app(environ, start_response)

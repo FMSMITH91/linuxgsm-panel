@@ -113,7 +113,8 @@ from panel.services.bots.discord import (_discord_command_watch, _report_dc_pend
 from panel.services.bots.telegram import (_report_tg_pending_update, _telegram_command_watch)
 from panel.services.certs import (_ensure_self_signed_cert)
 from panel.db.prefs import (_effective_prefs, _panel_layout)
-from panel.core.middleware import PrefixMiddleware
+from panel.core.middleware import PrefixMiddleware, ProxiedBanGate
+from panel.security import banlist as _banlist
 # The pure layers, now that they live outside this module. app.py used to DEFINE these and every
 # route module imported them back out of it — app.py imports the route modules, so the arrow went
 # both ways. It points one way now: panel.core knows nothing about app.py, and app.py and the route
@@ -1502,7 +1503,7 @@ def create_app():
     register_context_processors(app)
 
     # Always apply the prefix middleware. It resolves the mount per-request from the
-    # X-Forwarded-Prefix header (sent by Tailscale Serve) or the config, and is a no-op
+    # X-Forwarded-Prefix header of a trusted proxy or from the config, and is a no-op
     # when there is no prefix. Applying it unconditionally means a sub-path mount like
     # /lgsm works immediately — including during first-run setup — without needing a
     # restart after the config is written.
@@ -1511,7 +1512,8 @@ def create_app():
     # Behind a reverse proxy (Caddy/nginx/Cloudflare Tunnel), trust ONE hop of
     # X-Forwarded-* so request.is_secure/scheme + client IP reflect the real client.
     # Off by default — only enable when actually behind a trusted proxy, or these
-    # headers become spoofable. (client_ip() also only trusts XFF from loopback.)
+    # headers become spoofable. (Without it, client_ip() trusts XFF only from a ROOT-owned
+    # loopback peer — tailscaled.)
     # Recorded in app.config so client_ip() can ask it without re-reading config.json on every
     # request — it has to know, because ProxyFix below rewrites remote_addr from the very header
     # client_ip is deciding whether to trust.
@@ -1519,6 +1521,11 @@ def create_app():
     if cfg.get("trust_proxy"):
         from werkzeug.middleware.proxy_fix import ProxyFix
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+    # Outermost: a banned client arriving through Tailscale Funnel (or a proxy on another machine)
+    # is refused here, since the host firewall never sees its packets (see ProxiedBanGate). It
+    # reads the raw X-Forwarded-For, before ProxyFix above rewrites anything.
+    app.wsgi_app = ProxiedBanGate(app.wsgi_app)
 
     return app
 
@@ -2655,9 +2662,18 @@ if __name__ == "__main__":
         seen = None
         while True:
             try:
-                seen, new_bans, unbans = _f2b_ban_events(
-                    seen, so.panel_fail2ban_banned_ips())
+                _taken = time.monotonic()
+                reading = so.panel_fail2ban_banned_ips()
+                seen, new_bans, unbans = _f2b_ban_events(seen, reading)
                 _f2b_record_events(app, new_bans, unbans)
+                # The same reading feeds the panel's own ban gate, for traffic the firewall rule
+                # never sees (Tailscale Funnel, which can also be switched on outside the panel, so
+                # this does not ask), with the UFW denies and the whitelist. Each reading carries
+                # when it was TAKEN, so a slower read cannot overwrite a newer refresh.
+                _banlist.set_f2b(reading, _taken)
+                _banlist.set_whitelist(load_config().get("security_whitelist") or [])
+                _taken = time.monotonic()
+                _banlist.set_ufw(so.ufw_blocked_ips(), _taken)
             except Exception:
                 _log.debug("fail2ban ban-watch tick failed", exc_info=True)
             time.sleep(90)
