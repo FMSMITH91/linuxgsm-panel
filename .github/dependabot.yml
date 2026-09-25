@@ -36,6 +36,19 @@ updates:
       ci-python-tools:
         patterns: ["*"]
 
+  # The test matrix's tools (flake8, esprima), which run on 3.10 as well: resolved as 3.10 by the
+  # marker on flake8 in checks.txt. A sibling of ci-requirements, not inside it, because a
+  # directory's scan also reads the files one level below it.
+  - package-ecosystem: "pip"
+    directory: "/.github/ci-requirements-checks"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["ci"]
+    groups:
+      ci-check-tools:
+        patterns: ["*"]
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

@@ -3594,6 +3594,108 @@ check("workflows: Dependabot resolves the Bandit tools as the job's own Python",
 check("workflows: the Bandit job's checkout does not persist the job token",
       "persist-credentials: false" in _bd_code[:_bd_code.index("actions/setup-python")])
 
+# ── every CI tool is hash-pinned, like the Bandit job's ─────────────────────────────────────────
+# pip-audit, semgrep, coverage, atheris, flake8 and esprima were installed by bare name: whatever
+# PyPI had newest ran in CI, and the coverage job holds CODACY_PROJECT_TOKEN in a later step —
+# which a step's code can reach on a runner with passwordless sudo. Every `pip install` in every
+# workflow now installs the panel's own requirements.txt or a hash-pinned file, and nothing named
+# on the command line.
+_ci_req_dirs = {".github/ci-requirements": None, ".github/ci-requirements-checks": None}
+_ci_req_files = {}
+for _d in _ci_req_dirs:
+    for _f in sorted(glob.glob(os.path.join(_root, _d, "*.txt"))):
+        _ci_req_files[os.path.relpath(_f, _root)] = open(_f, encoding="utf-8").read()
+_ci_bad = []
+for _rel, _txt in _ci_req_files.items():
+    _ents = [" ".join(_e.split()) for _e in re.sub(r"\\\n", " ", "\n".join(
+        _l for _l in _txt.splitlines() if not _l.lstrip().startswith("#"))).splitlines() if _e.strip()]
+    for _e in _ents:
+        if not re.fullmatch(r"[A-Za-z0-9._-]+==[0-9][A-Za-z0-9.]*"
+                            r"( ; python_version >= \x223\.[0-9]+\x22)?( --hash=sha256:[0-9a-f]{64})+", _e):
+            _ci_bad.append("%s: %s" % (_rel, _e[:60]))
+    if not _ents:
+        _ci_bad.append("%s: no entries" % _rel)
+check("workflows: every file of CI tool pins pins one version and a hash per entry",
+      len(_ci_req_files) >= 7 and not _ci_bad, "files=%d bad=%r" % (len(_ci_req_files), _ci_bad[:4]))
+
+# Every pip install, joined across `\` continuations and folded (>-) lines, token by token.
+_ci_installs = []
+for _wf in sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml"))):
+    _src = "\n".join(_l for _l in open(_wf, encoding="utf-8").read().splitlines()
+                     if not _l.lstrip().startswith("#"))
+    _src = re.sub(r"\\\n\s*", " ", _src)
+    for _m in re.finditer(r"pip3? install[^\n]*(?:\n\s+(?!- )(?![A-Za-z_-]+:\s)\S[^\n]*)*", _src):
+        # A `run: |` block holds several commands; each `pip install` is its own, and the words
+        # before the next one (`python -m`) belong to it, not to this one.
+        for _seg in re.split(r"\bpip3? install\b", _m.group(0))[1:]:
+            _toks = _seg.split()
+            while _toks and _toks[-1] in ("python", "python3", "-m"):
+                _toks.pop()
+            _ci_installs.append((os.path.basename(_wf), _toks))
+_ci_named, _ci_unhashed, _ci_used = [], [], set()
+for _wf, _toks in _ci_installs:
+    _i = 0
+    while _i < len(_toks):
+        _tk = _toks[_i]
+        if _tk == "-r" and _i + 1 < len(_toks):
+            _path = _toks[_i + 1]
+            _ci_used.add(_path)
+            if _path != "requirements.txt" and "--require-hashes" not in _toks:
+                _ci_unhashed.append("%s: %s" % (_wf, _path))
+            _i += 2
+            continue
+        if _tk in (":all:",) or _tk.startswith("-"):
+            _i += 1
+            continue
+        _ci_named.append("%s: %s" % (_wf, _tk))
+        _i += 1
+check("workflows: no pip install names a package; every one installs a file, hash-checked unless "
+      "it is the panel's own requirements.txt",
+      len(_ci_installs) >= 8 and not _ci_named and not _ci_unhashed,
+      "installs=%d named=%r unhashed=%r" % (len(_ci_installs), _ci_named, _ci_unhashed))
+check("workflows: ...and every pinned tool file is installed by some job, and exists",
+      set(_ci_req_files) <= _ci_used
+      and all(os.path.exists(os.path.join(_root, _u)) for _u in _ci_used),
+      "unused=%r missing=%r" % (sorted(set(_ci_req_files) - _ci_used),
+                                sorted(_u for _u in _ci_used
+                                       if not os.path.exists(os.path.join(_root, _u)))))
+
+# Dependabot resolves each directory as the Python its python_version markers name (all lines,
+# comments included — see the requirements.txt check), and must name the OLDEST Python that
+# installs from it: 3.11 for ci-requirements (Bandit, pip-audit, Semgrep), and the matrix's
+# oldest for ci-requirements-checks, which the whole test matrix installs.
+def _ci_floors(rel_dir):
+    return [re.sub(r"['\x22]", "", _m.group(1)).strip()
+            for _rel, _txt in _ci_req_files.items() if os.path.dirname(_rel) == rel_dir
+            for _l in _txt.splitlines() if ";" in _l and "python" in _l
+            for _m in [re.search(r"python_version(.*?[\x22'].*?['\x22])", _l)] if _m]
+
+
+_ci_matrix_py = sorted(re.findall(r"^\s*python:\s*\x22(3\.[0-9]+)\x22", _ci_wf, re.M),
+                       key=lambda v: int(v.split(".")[1]))
+_ci_dep = open(os.path.join(_root, ".github", "dependabot.yml"), encoding="utf-8").read()
+check("workflows: Dependabot resolves each tool directory as the oldest Python that installs it",
+      _ci_floors(".github/ci-requirements") == [">= 3.11"]
+      and bool(_ci_matrix_py) and _ci_floors(".github/ci-requirements-checks")
+      == [">= %s" % _ci_matrix_py[0]]
+      and 'directory: "/.github/ci-requirements"' in _ci_dep
+      and 'directory: "/.github/ci-requirements-checks"' in _ci_dep,
+      "floors=%r / %r matrix=%r" % (_ci_floors(".github/ci-requirements"),
+                                    _ci_floors(".github/ci-requirements-checks"), _ci_matrix_py))
+# ...and a workflow that runs only on listed paths must list the pinned files it installs, or a
+# Dependabot bump of that file is never tested (fuzz.yml filters by path).
+_ci_unwatched = []
+for _wf in sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml"))):
+    _w = open(_wf, encoding="utf-8").read()
+    _on = _w[:_w.index("\npermissions:")] if "\npermissions:" in _w else _w
+    if not re.search(r"^\s+paths:\s*$", _on, re.M):
+        continue
+    for _u in sorted(set(re.findall(r"-r (\.github/ci-requirements[^\s]*\.txt)", _w))):
+        if "'%s'" % _u not in _on:
+            _ci_unwatched.append("%s: %s" % (os.path.basename(_wf), _u))
+check("workflows: a path-filtered workflow runs when a pinned tool file it installs changes",
+      not _ci_unwatched, repr(_ci_unwatched))
+
 # ── gitleaks may not exempt a README from the secret scan ──────────────────────────────────────
 # The allowlist carried `paths = ['''README\\.md''']`. gitleaks path patterns are unanchored
 # searches, so that exempted all four READMEs outright, for placeholders the match regexes already
