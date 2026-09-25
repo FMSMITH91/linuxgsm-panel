@@ -58,14 +58,15 @@ import warnings as _w
 
 # Python 3.13+ binds one of threading's own locks into a function's DEFAULTS:
 # `_DeleteDummyThreadOnDel.__del__(self, _active_limbo_lock=_active_limbo_lock, _active=_active)`.
-# monkey_patch swaps the module's copy of that lock for a green one, but it walks module dicts,
-# lists and attributes, never a defaults tuple. So the original lock lived on there: that __del__
-# kept guarding threading._active with a different lock from everything else, and eventlet, counting
-# it, printed "1 RLock(s) were not greened ... make sure you run eventlet.monkey_patch() before
+# monkey_patch replaces BOTH — the lock with a green one, and threading._active with a new dict —
+# but it walks module dicts, lists and attributes, never a defaults tuple. So that __del__ kept the
+# originals: it removed finished dummy threads from a dict nothing reads any more (they were never
+# removed from the live one) under a lock nothing else takes, and eventlet, counting the lock,
+# printed "1 RLock(s) were not greened ... make sure you run eventlet.monkey_patch() before
 # importing any other modules" on every start under 3.14 (Ubuntu 26.04) — a fix nothing can apply,
-# because threading creates that lock at interpreter start-up. Hand the default a stand-in while
-# eventlet patches, then the green lock the module now uses. Only when the defaults are exactly the
-# shape above; any other Python is left alone.
+# because threading creates that lock at interpreter start-up. Hand the lock default a stand-in
+# while eventlet patches, then rebind both to what the module now uses. Only when the defaults are
+# exactly the shape above; any other Python is left alone.
 _dd_del = getattr(getattr(threading, "_DeleteDummyThreadOnDel", None), "__del__", None)
 _dd_defaults = getattr(_dd_del, "__defaults__", None)
 _dd_rebind = (isinstance(_dd_defaults, tuple) and len(_dd_defaults) == 2

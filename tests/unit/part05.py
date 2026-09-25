@@ -2975,10 +2975,12 @@ check("helper: knows exactly the tools its verbs need, and no more",
 # sudo_list exists for ONE read: `sudo -l -U <account>` when the policy has LDAP or SSSD sources.
 # Plain `sudo` must stay unresolvable, and the one use must stay that argv.
 _hsrc = open(_helper_path, encoding="utf-8").read()
-check("helper: sudo resolves only as sudo_list, used once, for `sudo -l -U <account>`",
-      "sudo" not in _helper.TOOLS and _hsrc.count('resolve("sudo_list")') == 1
-      and '[resolve("sudo_list"), "-l", "-U", user]' in _hsrc
-      and 'resolve("sudo")' not in _hsrc, "uses: %d" % _hsrc.count('resolve("sudo_list")'))
+check("helper: sudo resolves only as sudo_list, read in one place, for `sudo -l -U <account>`",
+      "sudo" not in _helper.TOOLS and _hsrc.count('TOOLS["sudo_list"]') == 1
+      and 'resolve("sudo_list")' not in _hsrc and 'resolve("sudo")' not in _hsrc
+      and _hsrc.count("[binary, \"-l\", \"-U\", user]") == 1
+      and _helper.TOOLS["sudo_list"] == ("/usr/bin/sudo.ws", "/usr/bin/sudo"),
+      "TOOLS reads: %d" % _hsrc.count('TOOLS["sudo_list"]'))
 # bash_installer exists so the self-update can run ONE fixed root-owned file. The general shell
 # must stay unresolvable under its own name, or any future verb could build ["bash", "-c", ...].
 check("helper: bash_installer points at a real shell, and only INSTALLER_PATH uses it",
@@ -4632,6 +4634,13 @@ try:
             (True, "...and a NOPASSWD rule naming the account itself still refuses it"),
         "ALL ALL=(ALL) NOPASSWD: /usr/bin/id\ndeploy ALL=(ALL) ALL\n":
             (True, "...as does any other rule beside the universal one"),
+        # sudo takes the last match: this strips the PANEL of the universal rule and leaves it to
+        # everyone else, so the account reaches a root the panel cannot. Any negation, anywhere,
+        # turns the exemption off.
+        "ALL ALL=(ALL) NOPASSWD: ALL\nlgsmpanel ALL=(ALL) !ALL\n":
+            (True, "...nor when a later rule negates it for someone (the panel, say)"),
+        "Cmnd_Alias SH = /bin/sh\nALL ALL=(ALL) NOPASSWD: /usr/bin/id\nlgsmpanel ALL = !SH\n":
+            (True, "...or negates a command alias"),
     }
     _sg_all_bad = []
     for _body, (_want, _desc) in _sg_all_cases.items():
@@ -4646,9 +4655,10 @@ try:
     # sees those: an account granted sudo there read as "cannot escalate" and was enrolled. It now
     # asks sudo on such a host, and anything but a clear "not allowed" refuses.
     _ns_file = os.path.join(_sg_root, "nsswitch.conf")
-    _ns_saved = (_helper.NSSWITCH_FILE, _helper._sudo_lists_rules)
+    _ns_saved = (_helper.NSSWITCH_FILE, _helper._sudo_lists_rules, _helper._sss_sudo_answers)
     try:
         _helper.NSSWITCH_FILE = _ns_file
+        _helper._sss_sudo_answers = lambda: True     # SSSD up, unless a check says otherwise
         with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
             _fh.write("alice ALL=(ALL) ALL\n")
         _ns_asked = []
@@ -4677,11 +4687,65 @@ try:
                 _ns_asked.append("refused: %r" % _body)
         check("enrolment: ...and a files-only policy (or no sudoers line) is not handed to sudo",
               not _ns_asked, repr(_ns_asked))
+        # sudo matches the database name without regard to case, so this is LDAP too.
+        with open(_ns_file, "w", encoding="utf-8") as _fh:
+            _fh.write("passwd: files\nSUDOERS: Files LDAP\n")
+        check("enrolment: ...and `SUDOERS: files ldap` in any case is read as LDAP",
+              _helper._sudoers_sources() == ["files", "ldap"], repr(_helper._sudoers_sources()))
+        # With SSSD's sudo responder down, sudo answers from the NSS cache and says "not allowed"
+        # with no warning: that answer is not trusted then.
+        with open(_ns_file, "w", encoding="utf-8") as _fh:
+            _fh.write("sudoers: files sss\n")
+        _helper._sudo_lists_rules = lambda _u: False
+        _helper._sss_sudo_answers = lambda: False
+        _ns_down = _helper._can_already_escalate("deploy")
+        _helper._sss_sudo_answers = lambda: True
+        check("enrolment: ...and SSSD's 'not allowed' counts only while its sudo service answers",
+              _ns_down is True and _helper._can_already_escalate("deploy") is False)
         os.remove(_ns_file)
         check("enrolment: ...nor is a host with no nsswitch.conf at all",
               _helper._sudoers_sources() == ["files"])
     finally:
-        _helper.NSSWITCH_FILE, _helper._sudo_lists_rules = _ns_saved
+        (_helper.NSSWITCH_FILE, _helper._sudo_lists_rules,
+         _helper._sss_sudo_answers) = _ns_saved
+
+    # EVERY sudo present is asked. On Ubuntu 26.04 /usr/bin/sudo is sudo-rs, which never reads LDAP
+    # or SSSD rules and says "not allowed"; classic sudo beside it (sudo.ws) lists the rule, and
+    # takes the account to root through it.
+    _sl_saved = (_helper._sudo_list_binaries, _helper.subprocess)
+    _sl_says = {}
+
+    def _sl_run(argv, **_k):
+        return NS(stdout=_sl_says[argv[0]].encode(), stderr=b"", returncode=0)
+    _SL_YES, _SL_NO = "User deploy may run the following commands:", "User deploy is not allowed to run sudo on h."
+    try:
+        _helper._sudo_list_binaries = lambda: ["/usr/bin/sudo.ws", "/usr/bin/sudo"]
+        _helper.subprocess = NS(run=_sl_run)
+        _sl_got = []
+        for _ws, _rs in ((_SL_YES, _SL_NO), (_SL_NO, _SL_NO), (_SL_NO, "sudo: something odd")):
+            _sl_says = {"/usr/bin/sudo.ws": _ws, "/usr/bin/sudo": _rs}
+            _sl_got.append(_helper._sudo_lists_rules("deploy"))
+        _helper._sudo_list_binaries = lambda: []
+        _sl_got.append(_helper._sudo_lists_rules("deploy"))
+        check("enrolment: every sudo is asked — one listing rules refuses, all 'not allowed' enrols, "
+              "an unclear one or none at all refuses", _sl_got == [True, False, None, None],
+              repr(_sl_got))
+    finally:
+        _helper._sudo_list_binaries, _helper.subprocess = _sl_saved
+    import socket as _sss_socket
+    _sss_saved = _helper.SSS_SUDO_PIPE
+    _sss_path = os.path.join(_sg_root, "sss-sudo")
+    _sss_srv = _sss_socket.socket(_sss_socket.AF_UNIX, _sss_socket.SOCK_STREAM)
+    try:
+        _helper.SSS_SUDO_PIPE = _sss_path
+        _sss_none = _helper._sss_sudo_answers()
+        _sss_srv.bind(_sss_path)
+        _sss_srv.listen(1)
+        check("enrolment: the SSSD probe is True for a listening socket and False for none",
+              _helper._sss_sudo_answers() is True and _sss_none is False)
+    finally:
+        _sss_srv.close()
+        _helper.SSS_SUDO_PIPE = _sss_saved
 
     # The verb must consult it, not merely define it.
     _ran = []

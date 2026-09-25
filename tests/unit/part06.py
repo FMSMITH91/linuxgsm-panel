@@ -2080,7 +2080,7 @@ try:
     check("install.sh: ...and a python3 that does not run is named, not a silent exit",
           "DIE python3 is installed but does not run." in _r and "PASSED" not in _r, repr(_r))
     # The shim stands in for python3's answer; the expression itself must give that answer.
-    _py_expr = re.search(r"python3 -c '(import sys; sys\.exit\([^']*\))'", _py_gate)
+    _py_expr = re.search(r"python3 (?:-I )?-c '(import sys; sys\.exit\([^']*\))'", _py_gate)
     check("install.sh: ...and its floor expression exits 0 on this (supported) Python",
           _py_expr is not None
           and _sh_sub.run([sys.executable, "-c", _py_expr.group(1)]).returncode == 0,
@@ -2220,6 +2220,37 @@ try:
     check("install.sh: ...it asks the root-owned copy it installed, never the checkout's",
           '"${HELPER_DIR}/panel-helper"' in _cas_fn and "tools/panel-helper" not in _cas_fn
           and "PANEL_DIR" not in _cas_fn, _cas_fn[:300])
+    # Root runs this from wherever install.sh runs — during a self-update, the panel's own
+    # checkout — and `python3 -` puts that directory first on the import path. A glob.py planted
+    # there ran as root when the helper imported glob. Isolated mode (-I) leaves cwd off the path.
+    _cas_cwd = os.path.join(_su_sb, "planted-cwd")
+    os.makedirs(_cas_cwd, exist_ok=True)
+    _cas_mark = os.path.join(_su_sb, "planted-ran")
+    with open(os.path.join(_cas_cwd, "glob.py"), "w", encoding="utf-8") as _fh:
+        _fh.write("open(%r, 'w').write('ran')\n" % _cas_mark)
+    with open(os.path.join(_cas_hd, "panel-helper"), "a", encoding="utf-8") as _fh:
+        _fh.write("import glob\n")
+
+    def _cas_planted(fn_text):
+        if os.path.exists(_cas_mark):
+            os.remove(_cas_mark)
+        _sh_sub.run(["bash", "-c", "set -uo pipefail\nHELPER_DIR=%s\nid() { echo 'x games'; }\n%s\n"
+                     "can_already_sudo plain\n" % (_su_shlex.quote(_cas_hd), fn_text)],
+                    cwd=_cas_cwd, capture_output=True, text=True)
+        return os.path.exists(_cas_mark)
+    _cas_ran_now = _cas_planted(_cas_fn)
+    _cas_ran_old = _cas_planted(_cas_fn.replace("python3 -I -", "python3 -"))
+    check("install.sh: the helper query does not import from the directory it runs in",
+          _cas_ran_now is False and _cas_ran_old is True,
+          "with -I ran=%s, without ran=%s" % (_cas_ran_now, _cas_ran_old))
+    # ...nor does any other Python root runs from install.sh or uninstall.sh.
+    _cas_bare = []
+    for _sf in ("install.sh", "uninstall.sh"):
+        for _ln, _line in enumerate(open(os.path.join(_root, _sf), encoding="utf-8"), 1):
+            if _re.search(r"\bpython3 +(-c|-)( |$)", _line.split("#", 1)[0]):
+                _cas_bare.append("%s:%d" % (_sf, _ln))
+    check("install.sh, uninstall.sh: every `python3 -c` / `python3 -` runs isolated (-I)",
+          not _cas_bare, ", ".join(_cas_bare))
     _r = _su_run(_cas_d + "\ncan_already_sudo x\n", "",
                  extra=("id() { echo 'x games docker'; }\n"))
     check("install.sh: ...and a root-equivalent GROUP is still 'yes' before the helper is asked",
