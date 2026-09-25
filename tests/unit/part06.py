@@ -1796,10 +1796,27 @@ try:
     import importlib.metadata as _rq_md
     try:
         from packaging.requirements import Requirement as _RqReq
+        from packaging.specifiers import SpecifierSet as _RqSpec
         from packaging.utils import canonicalize_name as _rq_canon
     except ImportError:
         from pip._vendor.packaging.requirements import Requirement as _RqReq
+        from pip._vendor.packaging.specifiers import SpecifierSet as _RqSpec
         from pip._vendor.packaging.utils import canonicalize_name as _rq_canon
+
+    # Every pin must also install on every Python the panel supports. Dependabot proposed bidict
+    # 0.24.1, which requires Python >= 3.11: pip refused it on the 3.10 leg alone (Ubuntu 22.04's
+    # python3), and every other leg ran green on a set that host could not install.
+    _RQ_PYTHONS = ("3.10.0", "3.11.0", "3.12.0", "3.13.0", "3.14.0")
+
+    def _rq_python_gap(name, ver, requires_python):
+        if not requires_python:
+            return None
+        missed = [v for v in _RQ_PYTHONS
+                  if not _RqSpec(requires_python).contains(v, prereleases=True)]
+        if not missed:
+            return None
+        return "%s==%s requires Python %s, so it cannot install on %s" % (
+            name, ver, requires_python, ", ".join(v[:-2] for v in missed))
 
     def _rq_closure_gaps(text):
         pins, gaps = {}, []
@@ -1817,7 +1834,8 @@ try:
                  "sys_platform": "linux", "platform_system": "Linux", "platform_machine": mach,
                  "implementation_name": "cpython", "platform_python_implementation": "CPython",
                  "os_name": "posix", "extra": ""}
-                for m in (10, 11, 12, 13, 14) for mach in ("x86_64", "aarch64")]
+                for m in (int(v.split(".")[1]) for v in _RQ_PYTHONS)
+                for mach in ("x86_64", "aarch64")]
         for name, ver in sorted(pins.items()):
             try:
                 dist = _rq_md.distribution(name)
@@ -1829,6 +1847,9 @@ try:
                 gaps.append("%s is installed at %s but pinned at %s (pip install -r "
                             "requirements.txt)" % (name, dist.version, ver))
                 continue
+            py_gap = _rq_python_gap(name, ver, dist.metadata.get("Requires-Python"))
+            if py_gap:
+                gaps.append(py_gap)
             for rd in dist.requires or []:
                 sub = _RqReq(rd)
                 if sub.marker is not None and not any(sub.marker.evaluate(e) for e in envs):
@@ -1850,6 +1871,28 @@ try:
     _rq_cut_gaps = _rq_closure_gaps(_rq_cut)[1]
     check("requirements.txt: ...and the closure check names a dropped transitive pin (control)",
           any("werkzeug" in g for g in _rq_cut_gaps), repr(_rq_cut_gaps[:3]))
+    # ...and it reads Requires-Python: the pin that started this, and a ceiling that shuts out 3.14.
+    check("requirements.txt: ...and a pin that drops a supported Python is named (control)",
+          "cannot install on 3.10" in (_rq_python_gap("bidict", "0.24.1", ">=3.11") or "")
+          and _rq_python_gap("bidict", "0.23.1", ">=3.8") is None
+          and "3.14" in (_rq_python_gap("x", "1", "<3.14") or ""),
+          repr(_rq_python_gap("bidict", "0.24.1", ">=3.11")))
+    # Dependabot must resolve as the OLDEST supported Python, or it proposes releases 22.04 cannot
+    # install (it proposed bidict 0.24, Requires-Python >= 3.11). With no Python declared it uses
+    # its newest; given python_version markers in a requirements file it uses the lowest Python
+    # that satisfies them all. Its scan (python_requirement_parser.rb, imputed_requirements) reads
+    # EVERY line holding ";" and "python", comments included, so a stray comment can move it too.
+    def _dependabot_python_floors(text):
+        return [re.sub(r"['\"]", "", _m.group(1)).strip() for _l in text.splitlines()
+                if ";" in _l and "python" in _l
+                for _m in [re.search(r"python_version(.*?[\"'].*?['\"])", _l)] if _m]
+
+    check("requirements.txt: Dependabot resolves as the oldest supported Python",
+          _dependabot_python_floors(_rq_txt) == [">= %s" % _RQ_PYTHONS[0][:-2]],
+          repr(_dependabot_python_floors(_rq_txt)))
+    check("requirements.txt: ...and the floor scan reads a comment the way Dependabot does (control)",
+          _dependabot_python_floors('x==1 ; python_version >= "3.10"\n# y; python_version<"3.9"')
+          == [">= 3.10", "<3.9"])
     _rq_sec = open(os.path.join(_root, ".github", "workflows", "security-code.yml"),
                    encoding="utf-8").read()
     check("security-code: pip-audit audits the pinned set itself, not a fresh resolution",
@@ -3228,7 +3271,9 @@ _bd_entries = [" ".join(_e.split()) for _e in re.sub(r"\\\n", " ", "\n".join(
     _l for _l in open(_bd_path, encoding="utf-8").read().splitlines()
     if not _l.lstrip().startswith("#"))).splitlines() if _e.strip()]
 _bd_bad = [_e for _e in _bd_entries
-           if not re.fullmatch(r"[A-Za-z0-9._-]+==[0-9][A-Za-z0-9.]*( --hash=sha256:[0-9a-f]{64})+", _e)]
+           if not re.fullmatch(r"[A-Za-z0-9._-]+==[0-9][A-Za-z0-9.]*"
+                               r"( ; python_version >= \x223\.[0-9]+\x22)?( --hash=sha256:[0-9a-f]{64})+",
+                               _e)]
 check("workflows: every Bandit tool is pinned to one version and a hash",
       any(_e.startswith("bandit==") for _e in _bd_entries) and not _bd_bad,
       "entries=%d bad=%r" % (len(_bd_entries), _bd_bad[:3]))
@@ -3240,6 +3285,17 @@ _bd_pip = re.findall(r"pip install[^\n]*(?:\n\s+(?!- )(?![A-Za-z_-]+:\s)\S[^\n]*
 check("workflows: the Bandit job installs only that file, hash-checked, wheels only",
       len(_bd_pip) == 1 and "--require-hashes" in _bd_pip[0] and "--only-binary :all:" in _bd_pip[0]
       and "-r .github/ci-requirements/bandit.txt" in " ".join(_bd_pip[0].split()), repr(_bd_pip))
+# Dependabot resolves bandit.txt as the Python its python_version marker names (see the
+# requirements.txt check); with none it uses its newest, 3.14, and can propose a release the job's
+# Python cannot install. The marker must name exactly the Python the job sets up.
+_bd_py = re.search(r"python-version:\s*[\x22']?([0-9.]+)", _bd_code)
+_bd_floors = [re.sub(r"['\x22]", "", _m.group(1)).strip()
+              for _l in open(_bd_path, encoding="utf-8").read().splitlines()
+              if ";" in _l and "python" in _l
+              for _m in [re.search(r"python_version(.*?[\x22'].*?['\x22])", _l)] if _m]
+check("workflows: Dependabot resolves the Bandit tools as the job's own Python",
+      _bd_py is not None and _bd_floors == [">= %s" % _bd_py.group(1)],
+      "job=%r floors=%r" % (_bd_py and _bd_py.group(1), _bd_floors))
 check("workflows: the Bandit job's checkout does not persist the job token",
       "persist-credentials: false" in _bd_code[:_bd_code.index("actions/setup-python")])
 

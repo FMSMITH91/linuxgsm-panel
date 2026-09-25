@@ -7,10 +7,12 @@
 # `--require-hashes --only-binary :all:`: a new release, or a changed file under an old version
 # number, is refused instead of run. bandit-sarif-formatter is gone - bandit has shipped a sarif
 # formatter since 1.7.8; its two libraries (sarif-om, jschema-to-python) are the `sarif` extra.
-# Dependabot proposes bumps (.github/dependabot.yml), hashes included.
+# Dependabot proposes bumps (.github/dependabot.yml), hashes included. The marker on bandit is
+# for Dependabot, which otherwise resolves as its newest Python (3.14) and can propose a release the
+# job's 3.11 cannot install; it is always true for pip. tests/unit ties it to the job's Python.
 attrs==26.1.0 \
     --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309
-bandit==1.9.4 \
+bandit==1.9.4 ; python_version >= "3.11" \
     --hash=sha256:f89ffa663767f5a0585ea075f01020207e966a9c0f2b9ef56a57c7963a3f6f8e
 jschema-to-python==1.2.3 \
     --hash=sha256:8a703ca7604d42d74b2815eecf99a33359a8dccbb80806cce386d5e2dd992b05
