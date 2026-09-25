@@ -53,13 +53,20 @@ def _begin_bootstrap(app, remote_id, opts, actor_id):
     _start_bootstrap_job(app, remote_id, opts, actor_id)
     return True, "Bootstrap started."
 
-def _bg_cache_commands(app, server_ids):
+def _bg_cache_commands(app, server_ids, autostart_ids=()):
     """Fetch + cache each server's LinuxGSM command list in the background so the
     "Supported Commands" panel is populated without the user hitting refresh. Install
     does this at step 5; import used to skip it, leaving the cache blank. Best-effort and
-    per-server (one server's SSH failure never blocks the rest) and read-only on the host
-    — it runs the instance script with no args, which just prints its command menu."""
+    per-server (one server's SSH failure never blocks the rest). Reading the list is read-only on
+    the host — it runs the instance script with no args, which just prints its command menu.
+
+    For the servers in `autostart_ids` it then turns Autostart on — LinuxGSM's `monitor` cron, the
+    same step an install takes — when the list says the game has `monitor`. That needs the list, so
+    it lives here rather than in the request. monitor restarts a server that should be running (it
+    has a start lockfile) and leaves a deliberately stopped one down, so this never starts a server
+    the operator stopped. The flag is set only once the cron line is written."""
     _app = app
+    autostart_ids = set(autostart_ids)
 
     def _run():
         with _app.app_context():
@@ -72,6 +79,13 @@ def _bg_cache_commands(app, server_ids):
                     if cmds:
                         gs.set_commands(cmds)
                         db.session.commit()
+                    if sid in autostart_ids and "monitor" in {c.get("cmd") for c in cmds or []}:
+                        ok, _msg = _sm.set_autostart(gs.remote, gs.short_name, True, gs.lgsm_name)
+                        if ok:
+                            gs.autostart = True
+                            db.session.commit()
+                        else:
+                            _log.info("autostart for imported server %s not set: %s", sid, _msg)
                 except Exception:
                     db.session.rollback()
                     _log.debug("command cache failed for server %s", sid, exc_info=True)

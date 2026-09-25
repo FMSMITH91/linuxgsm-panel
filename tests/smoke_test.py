@@ -4587,7 +4587,9 @@ try:
             _imp_core.is_local_server = lambda _s: True
             # No worker to outlive the stubs — and the call is RECORDED, because the command-list
             # read it starts runs as the game account and needs the membership granted first.
-            _imp_mod._bg_cache_commands = lambda *a, **k: _imp_calls.append(("bg-cache", []))
+            _imp_bg_args = []
+            _imp_mod._bg_cache_commands = lambda *a, **k: (
+                _imp_calls.append(("bg-cache", [])), _imp_bg_args.append((a, k)))
             _imp_mod.discover_linuxgsm_servers = lambda _s: [
                 {"user": _u, "lgsm_name": "csgoserver", "port": 27015, "backups": 0, "mods": 0,
                  "cron": 0, "autostart": False} for _u in ("importedplain", "importedsudo")]
@@ -4610,6 +4612,80 @@ try:
         check("import: ...and the one the helper refuses is reported, with its reason; the other "
               "is not", [_n.get("user") for _n in _ime_ne] == ["importedsudo"]
               and "already run sudo" in (_ime_ne[0].get("reason") or ""), str(_ime_ne)[:160])
+        # Autostart is turned on for imported servers, as an install does — but only where the
+        # panel can write the account's crontab, so not for the account the helper refused.
+        with app.app_context():
+            _imp_ids = {g.short_name: g.id for g in GameServer.query.filter(
+                GameServer.remote_id == remote_id,
+                GameServer.short_name.in_(["importedplain", "importedsudo"])).all()}
+            _imp_flags = {g.short_name: g.autostart for g in GameServer.query.filter(
+                GameServer.remote_id == remote_id,
+                GameServer.short_name.in_(["importedplain", "importedsudo"])).all()}
+        _imp_as = set((_imp_bg_args[0][1].get("autostart_ids") if _imp_bg_args else None) or ())
+        check("import: the background step is asked to turn Autostart on for the enrolled account, "
+              "not the refused one",
+              _imp_as == {_imp_ids.get("importedplain")} and None not in _imp_as,
+              "autostart_ids=%s ids=%s" % (sorted(_imp_as), _imp_ids))
+        check("import: ...and the flag stays off until the cron line is actually written",
+              _imp_flags == {"importedplain": False, "importedsudo": False}, str(_imp_flags))
+
+        # The background step itself, run synchronously (no worker outlives these stubs), against
+        # every answer it can get: monitor present, absent, a failed command-list read, a failed
+        # crontab write, and a server that was not asked for.
+        from panel.routes import _shared as _as_shared
+        import types as _as_types
+        NSx = _as_types.SimpleNamespace
+        _as_saved = (_as_shared._sm, _as_shared.threading)
+        _as_writes = []
+        _as_cmds = {"importedplain": [{"cmd": "start"}, {"cmd": "monitor"}],
+                    "importedsudo": [{"cmd": "monitor"}]}
+
+        def _as_set(_r, user, enabled, selfname=None):
+            _as_writes.append((user, enabled, selfname))
+            return (user != "failwrite", "crontab refused" if user == "failwrite" else "")
+        try:
+            _as_shared.threading = NSx(Thread=lambda target, daemon=None: NSx(start=target))
+            _as_shared._sm = NSx(list_server_commands=lambda _r, u, _n: _as_cmds.get(u, []),
+                                set_autostart=_as_set)
+            _as_shared._bg_cache_commands(app, list(_imp_ids.values()),
+                                          autostart_ids=[_imp_ids["importedplain"]])
+            with app.app_context():
+                _as_after = {g.short_name: g.autostart for g in GameServer.query.filter(
+                    GameServer.id.in_(list(_imp_ids.values()))).all()}
+            check("import: the background step writes monitor for the asked-for server and records it",
+                  _as_writes == [("importedplain", True, "csgoserver")]
+                  and _as_after == {"importedplain": True, "importedsudo": False},
+                  "writes=%s after=%s" % (_as_writes, _as_after))
+            # A game without monitor, a command list that could not be read, and a write that failed
+            # all leave Autostart off, and only the failed write was attempted.
+            _as_writes.clear()
+            with app.app_context():
+                for _sn in ("importedplain", "importedsudo"):
+                    db.session.get(GameServer, _imp_ids[_sn]).autostart = False
+                db.session.commit()
+            _as_cmds = {"importedplain": [{"cmd": "start"}], "importedsudo": []}
+            _as_shared._sm = NSx(list_server_commands=lambda _r, u, _n: _as_cmds.get(u, []),
+                                set_autostart=_as_set)
+            _as_shared._bg_cache_commands(app, list(_imp_ids.values()),
+                                          autostart_ids=list(_imp_ids.values()))
+            check("import: ...a game without monitor, or an unread command list, gets no cron line",
+                  _as_writes == [], str(_as_writes))
+            with app.app_context():
+                _as_fw = db.session.get(GameServer, _imp_ids["importedplain"])
+                _as_fw.short_name = "failwrite"
+                db.session.commit()
+            _as_cmds = {"failwrite": [{"cmd": "monitor"}]}
+            _as_shared._bg_cache_commands(app, [_imp_ids["importedplain"]],
+                                          autostart_ids=[_imp_ids["importedplain"]])
+            with app.app_context():
+                _as_fw_flag = db.session.get(GameServer, _imp_ids["importedplain"]).autostart
+                db.session.get(GameServer, _imp_ids["importedplain"]).short_name = "importedplain"
+                db.session.commit()
+            check("import: ...and a crontab write that fails leaves the flag off",
+                  _as_writes == [("failwrite", True, "csgoserver")] and _as_fw_flag is False,
+                  "writes=%s flag=%s" % (_as_writes, _as_fw_flag))
+        finally:
+            _as_shared._sm, _as_shared.threading = _as_saved
         with app.app_context():
             GameServer.query.filter(GameServer.remote_id == remote_id, GameServer.short_name.in_(
                 ["importedplain", "importedsudo"])).delete(synchronize_session=False)
