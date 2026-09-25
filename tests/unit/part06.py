@@ -4013,7 +4013,10 @@ _mw_call = _mw_src[_mw_src.index("def __call__"):]
 check("prefix header: __call__ gates the header read on _may_trust_header",
       "_may_trust_header" in _mw_call
       and _mw_call.index("_may_trust_header") < _mw_call.index("if not prefix"))
-for _ra, _cfg, _want in (("127.0.0.1", {}, True), ("::1", {}, True),
+# Loopback ALONE is no longer enough: any local account can dial it. The header is believed from a
+# loopback peer only when root owns its socket (tailscaled); tests/unit/part02.py drives that
+# against a socket table. Here there is no socket to own, so loopback reads False.
+for _ra, _cfg, _want in (("127.0.0.1", {}, False), ("::1", {}, False),
                          ("203.0.113.7", {}, False), ("10.1.2.3", {}, False),
                          ("", {}, False),
                          ("203.0.113.7", {"trust_proxy": True}, True)):
