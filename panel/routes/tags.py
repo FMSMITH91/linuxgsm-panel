@@ -397,6 +397,7 @@ def register(app):
                 flash("That authenticator code didn't match — password not changed.", "danger")
                 return redirect(_back)
 
+        # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- password_problem() checked it above
         u.set_password(hash_password(new))   # remembers the outgoing one; see password_reused
         # Whatever it was before, the password is now the account holder's own and nobody else's —
         # which is the entire condition the forced-change gate is waiting on.

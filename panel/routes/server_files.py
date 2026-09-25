@@ -172,6 +172,57 @@ _viewers_lock = threading.Lock()
 # _viewers_lock, and cleared on disconnect.
 _viewer_creds = {}
 
+# socket sid -> (socket peer, X-Forwarded-For's last hop or None), as ip_address objects: the two
+# addresses a ban can name, recorded at connect. For _drop_banned_sockets. Guarded by
+# _viewers_lock, and cleared on disconnect.
+_socket_addrs = {}
+
+
+def _handshake_addrs():
+    """The socket peer and the forwarded client of the current socket's handshake — what the
+    firewall and ProxiedBanGate each judge a client by. The ORIGINAL peer, since ProxyFix may have
+    rewritten remote_addr from the header. Request context only."""
+    from panel.security import banlist
+    env = request.environ
+    peer = ((env.get("werkzeug.proxy_fix.orig") or {}).get("REMOTE_ADDR")
+            or env.get("REMOTE_ADDR") or "")
+    xff = request.headers.get("X-Forwarded-For")
+    # forwarded_client parses a bare address as a one-hop header, unmapping ::ffff:a.b.c.d.
+    return banlist.forwarded_client(peer), (banlist.forwarded_client(xff) if xff else None)
+
+
+def _addrs_banned(addrs):
+    """Whether a ban names this socket's client. The peer is judged as the host firewall judges a
+    direct connection (the address itself); the forwarded client as ProxiedBanGate judges it (an
+    IPv6 ban covering its /64) — so a socket is refused exactly where a new request would be."""
+    from panel.security import banlist
+    peer, fwd = addrs
+    return ((peer is not None and banlist.is_banned(peer, widen=False))
+            or (fwd is not None and banlist.is_banned(fwd)))
+
+
+def _drop_banned_sockets(app, socketio):
+    """Disconnect every open socket whose client the current ban set names. Returns how many.
+
+    A ban refuses NEW connections — at the firewall, or at ProxiedBanGate for a client behind
+    Funnel — and a socket accepted before it is not a new connection: a console or a root
+    terminal opened by an address fail2ban then banned went on streaming, under Funnel for as long
+    as the browser stayed, and under a UFW deny too (ufw passes ESTABLISHED traffic before its own
+    rules). Disconnecting runs THE disconnect handler, so the terminal's hook closes its shell."""
+    from panel.security import banlist
+    if not banlist.active():
+        return 0
+    with _viewers_lock:
+        doomed = [sid for sid, addrs in _socket_addrs.items() if _addrs_banned(addrs)]
+    for sid in doomed:
+        try:
+            socketio.server.disconnect(sid, namespace="/")
+        except Exception:
+            app.logger.debug("ban sweep: could not disconnect %s", sid, exc_info=True)
+    if doomed:
+        app.logger.info("ban sweep: dropped %d socket(s) from a banned address", len(doomed))
+    return len(doomed)
+
 
 def _viewer_credential():
     """What join_console records for this socket: (current_user's login id, bearer digest).
@@ -1339,7 +1390,20 @@ def register(app, supervise):
         # every event on it.
         if getattr(current_user, "must_change_password", False):
             return False
+        # Recorded for the ban sweep. A handshake from an address already banned is refused here
+        # too: ProxiedBanGate refuses it first on every path it sees, and this costs one lookup.
+        _addrs = _handshake_addrs()
+        if _addrs_banned(_addrs):
+            return False
+        with _viewers_lock:
+            _socket_addrs[request.sid] = _addrs
         return True   # authenticated, password their own → accept the socket
+
+    from panel.security import banlist as _banlist
+
+    @_banlist.on_change
+    def _ban_sweep():
+        _drop_banned_sockets(app, socketio)
 
     @socketio.on("join_console")
     def on_join_console(data):
@@ -1404,6 +1468,7 @@ def register(app, supervise):
             for k in [k for k, v in _console_viewers.items() if not v]:
                 del _console_viewers[k]
             _viewer_creds.pop(sid, None)
+            _socket_addrs.pop(sid, None)
         _socket_hooks.run_disconnect_hooks(sid)
 
     # Console polling thread — streams new console output to WebSocket viewers.

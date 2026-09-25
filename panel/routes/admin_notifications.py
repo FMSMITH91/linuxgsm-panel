@@ -273,6 +273,7 @@ def register(app):
             # set_password, not a bare assignment: the outgoing password joins the history, so a
             # user handed a reset cannot answer the forced change by typing back the password the
             # reset just took away from them.
+            # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- a generated password, not a typed one
             user.set_password(hash_password(new_password))
             user.auth_epoch = (user.auth_epoch or 0) + 1   # revoke existing sessions
             # The API token too. It is a SECOND credential for the same account, and it did not
@@ -383,6 +384,7 @@ def register(app):
         # link is gone and a new invite has to be minted.
         return _form_credential("Invite link created — send it to them. It works once.",
                                 "manage_users", username="Invite link",
+                                # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true -- shown only to the superadmin who minted it, on the host they reached the panel by
                                 password=url_for("redeem_invite", token=token, _external=True))
 
     @app.route("/users/invite/<int:invite_id>/revoke", methods=["POST"])

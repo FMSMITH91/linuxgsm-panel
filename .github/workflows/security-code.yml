@@ -141,11 +141,18 @@ jobs:
       # weak crypto, template XSS, etc.). Informational — the findings go to the job
       # summary so a false positive never blocks an alpha build, but they're surfaced
       # on every push/PR and weekly.
+      #
+      # Every finding has been triaged: the real ones were fixed, and each false positive
+      # carries a `nosemgrep: <rule> -- <reason>` comment above it, so what this prints is
+      # new. One rule is excluded outright: var-in-script-tag flags EVERY value inside a
+      # <script>, |tojson included — 23 findings, none real. tests/template_actions_test.py
+      # enforces what it is for (|tojson, |int or a literal choice) and fails the build.
       - name: Semgrep scan
         run: |
           semgrep scan \
             --config p/security-audit --config p/python --config p/flask \
             --config p/command-injection --config p/secrets \
+            --exclude-rule generic.html-templates.security.var-in-script-tag.var-in-script-tag \
             --exclude venv --exclude .github --exclude data --exclude tests \
             --metrics=off > semgrep.txt 2>&1 || true
           {

@@ -197,7 +197,7 @@ function loadSecurityEvents(){
     if(!ev.length){ el.innerHTML='<div class="small text-secondary">No security events yet.</div>'; return; }
     var rows=ev.map(function(e){
       var t=e.time?new Date(e.time).toLocaleString():'';
-      var cls=e.action==='fail2ban_ban'?'text-danger':(e.action==='login_blocked'?'text-warning':'text-secondary');
+      var cls=e.action==='fail2ban_ban'?'text-danger':((e.action==='login_blocked'||e.action==='api_token_blocked')?'text-warning':'text-secondary');
       return '<tr><td class="small text-secondary text-nowrap">'+escapeHtml(t)+'</td>'
         +'<td class="small"><code class="'+cls+'">'+escapeHtml(e.action)+'</code></td>'
         +'<td class="small">'+escapeHtml(e.user||'')+'</td>'

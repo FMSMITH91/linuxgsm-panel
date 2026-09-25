@@ -790,6 +790,7 @@ def init_auth(app):
             # Return None rather than aborting: a blocked IP simply gets no token identity, and
             # flask-login still falls back to the session cookie — so throttling the token path
             # never locks a logged-in human out of the UI from the same address.
+            _token_auth_note_blocked(ip)
             return None
         user = User.by_api_token(header[7:].strip())
         _token_auth_record(ip, ok=user is not None)
@@ -853,6 +854,48 @@ def _token_auth_record(ip, ok):
             _TOKEN_FAILS.pop(ip, None)
         else:
             _TOKEN_FAILS.setdefault(ip, []).append(time.time())
+
+
+# The throttle alone kept a token brute force inside the panel: nothing reached data/auth.log, so
+# fail2ban never banned it, the 7-day auto-block never counted it, and the Funnel ban gate (which
+# follows fail2ban) never refused it — while a password guessed the same way met all three. So a
+# request the throttle REFUSES is written there, as the "blocked" line the panel-login jail
+# counts, exactly as /login writes one per refused attempt.
+#
+# Not each miss. A script with a stale token retries in a loop, and a firewall ban after five
+# misses would turn a config mistake into an hour-long outage for its host — the reason the
+# throttle allows 20 and not 8. A client still going after the throttle has refused it is not that.
+_TOKEN_BLOCK_AUDITED = {}   # throttle key -> when that block was last written to the audit log
+
+
+def _token_auth_note_blocked(ip):
+    """A token attempt from `ip` was refused by the throttle: one auth.log line per refusal (which
+    fail2ban counts), one audit row per block window, and a prompt ban-gate refresh when it came
+    through a proxy. Best-effort — nothing here may fail the request."""
+    import logging
+    # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure -- logs the client address only; 'api token' is the event's name
+    logging.getLogger("panel.auth").warning(
+        "panel api token blocked from %s", _ip_or_none(ip) or "unknown")
+    key, now = throttle_key(ip), time.time()
+    with _TOKEN_FAILS_LOCK:
+        for k in [k for k, t in _TOKEN_BLOCK_AUDITED.items() if now - t >= TOKEN_WINDOW]:
+            del _TOKEN_BLOCK_AUDITED[k]
+        first = key not in _TOKEN_BLOCK_AUDITED
+        if first:
+            _TOKEN_BLOCK_AUDITED[key] = now
+    if first:
+        try:
+            log_action(None, "api_token_blocked", actor="(API token)",
+                       detail="rate-limited after %d failed token attempts" % TOKEN_MAX_FAILS,
+                       success=False)
+        except Exception:
+            db.session.rollback()
+            logging.getLogger(__name__).debug("api token block: audit failed", exc_info=True)
+    # This refusal may be the one that has fail2ban ban `ip`; through a proxy (Tailscale Funnel)
+    # the firewall never sees that client, so the panel's own gate picks the ban up in seconds.
+    if request.headers.get("X-Forwarded-For"):
+        from panel.security import banlist
+        banlist.refresh_soon()
 
 
 # ─── Audit Logging ─────────────────────────────────────────────

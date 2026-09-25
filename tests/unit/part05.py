@@ -3916,6 +3916,9 @@ _NO_TARGET_OK = {
     # The USER column already names the account and the detail carries the IP — a target here
     # would just repeat the user column.
     "login", "logout", "login_failed", "login_blocked",
+    # A token attempt the throttle refused names no account (an unmatched token has no owner), and
+    # the address it came from is the row's IP column.
+    "api_token_blocked",
     # Refreshes the LinuxGSM game LIST (a cache), not a host or an object. Detail is "<n> games".
     "lgsm_data_refresh",
 }
@@ -5383,9 +5386,9 @@ import app as _cu_app                                                           
 from panel.core import config as _cu_cfg                                            # noqa: E402
 from panel.ops import system_ops as _cu_so                                          # noqa: E402
 _cu_saved = (_cu_cfg.CONFIG_FILE, _cu_so.ensure_panel_fail2ban, _cu_app.RemoteServer,
-             _cu_app.remote_set_fail2ban_ignoreip)
+             _cu_app.remote_set_fail2ban_ignoreip, _cu_so.ensure_panel_host_whitelist)
 _cu_file = _tp.Path(_cu_tmp.mkdtemp()) / "config.json"
-_cu_jail, _cu_remote = [], []
+_cu_jail, _cu_remote, _cu_hostwl = [], [], []
 
 
 class _CuQuery:
@@ -5406,6 +5409,9 @@ try:
     _cu_cfg.CONFIG_FILE = _cu_file
     _cu_so.ensure_panel_fail2ban = lambda log, port, wl: (_cu_jail.append((port, list(wl))) or
                                                          (True, "ok"))
+    # Stubbed, not left real: on a host with fail2ban (the test VPS) the real one writes
+    # /etc/fail2ban/jail.d/zz-panel-whitelist.local and reloads fail2ban.
+    _cu_so.ensure_panel_host_whitelist = lambda wl: (_cu_hostwl.append(list(wl)) or (True, "ok"))
     _cu_app.RemoteServer = NS(query=_CuQuery())
     _cu_app.remote_set_fail2ban_ignoreip = (
         lambda r, wl, unban_ip=None: _cu_remote.append(list(wl)))
@@ -5424,6 +5430,8 @@ try:
     _cu_cfg._cfg_cache["key"] = None
     check("config unreadable: the fail2ban jail is NOT rewritten from defaults",
           _cu_app._apply_whitelist_to_fail2ban()[0] is False and _cu_jail == [], repr(_cu_jail))
+    check("config unreadable: ...nor the host's whitelist drop-in emptied", _cu_hostwl == [],
+          repr(_cu_hostwl))
     _cu_cfg._cfg_cache["key"] = None
     _cu_app._apply_whitelist_to_remotes(_cu_flask.Flask("cu"))
     check("config unreadable: ...nor is any remote's whitelist emptied", _cu_remote == [],
@@ -5438,13 +5446,24 @@ try:
     _cu_app._apply_whitelist_to_fail2ban()
     check("config readable: the jail gets the configured port AND whitelist",
           _cu_jail == [(8443, ["198.51.100.7"])], repr(_cu_jail))
+    # The panel host's OTHER jails (sshd) too — remotes had the whitelist on every jail, the panel
+    # host only on the panel login, so a whitelisted admin could be banned from its SSH.
+    check("config readable: ...and so do the host's other jails (sshd), through the drop-in",
+          _cu_hostwl == [["198.51.100.7"]], repr(_cu_hostwl))
+    _cu_hostwl.clear()
+    _cu_jail.clear()
+    _cu_so.ensure_panel_host_whitelist = lambda wl: 1 / 0
+    _cu_cfg._cfg_cache["key"] = None
+    _cu_app._apply_whitelist_to_fail2ban()
+    check("config readable: a drop-in that raises does not stop the panel-login jail",
+          _cu_jail == [(8443, ["198.51.100.7"])], repr(_cu_jail))
     _cu_cfg._cfg_cache["key"] = None
     _cu_app._apply_whitelist_to_remotes(_cu_flask.Flask("cu"))
     check("config readable: ...and every remote gets the whitelist",
           _cu_remote == [["198.51.100.7"]], repr(_cu_remote))
 finally:
     (_cu_cfg.CONFIG_FILE, _cu_so.ensure_panel_fail2ban, _cu_app.RemoteServer,
-     _cu_app.remote_set_fail2ban_ignoreip) = _cu_saved
+     _cu_app.remote_set_fail2ban_ignoreip, _cu_so.ensure_panel_host_whitelist) = _cu_saved
     _cu_cfg._cfg_cache["key"] = None
 
 # The boot-time jail sync is a closure under __main__, so it is pinned by what it CALLS: the guarded

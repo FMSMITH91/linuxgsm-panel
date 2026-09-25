@@ -383,6 +383,7 @@ def telegram_get_updates(token, offset=None, timeout=25):
     url += "?" + urllib.parse.urlencode(params)   # only int-coerced params; kept out of _tg_api_url
     req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
     try:
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- _tg_api_url builds it on the fixed api.telegram.org host
         with urllib.request.urlopen(req, timeout=timeout + 10) as resp:  # nosec B310 - https, host-literal
             data = json.loads(resp.read(2_000_000).decode("utf-8", "replace"))
         return (data.get("result") or []) if data.get("ok") else None
@@ -399,6 +400,7 @@ def telegram_get_me(token):
         return None
     req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
     try:
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- _tg_api_url builds it on the fixed api.telegram.org host
         with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 - https, host-literal
             data = json.loads(resp.read(200_000).decode("utf-8", "replace"))
         name = (data.get("result") or {}).get("username") if data.get("ok") else None

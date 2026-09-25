@@ -74,6 +74,29 @@ def _fresher(kind, taken):
     return True
 
 
+# Called after every new ban set: an OPEN connection was accepted before its client was banned,
+# and nothing re-asks — a Socket.IO socket (the live console, the host terminal) stays up until it
+# closes, on Funnel and, under a UFW deny, directly too (ufw accepts ESTABLISHED traffic before
+# its own rules). server_files registers the sweep that drops those sockets. Keyed by qualified
+# name, as socket_hooks is, so a second app in one process replaces its hook instead of stacking.
+_listeners = {}
+
+
+def on_change(fn):
+    """Register fn() to run after the ban set is replaced."""
+    _listeners[getattr(fn, "__qualname__", None) or repr(fn)] = fn
+    return fn
+
+
+def _changed():
+    """Run every listener, outside _lock. One that raises does not skip the rest."""
+    for fn in list(_listeners.values()):
+        try:
+            fn()
+        except Exception:
+            _log.warning("ban gate: listener %s failed", getattr(fn, "__name__", fn), exc_info=True)
+
+
 def set_f2b(ips, taken=None):
     """fail2ban's current ban list for the panel jail. None (the read failed) changes nothing, and
     so does a reading TAKEN (time.monotonic() before the read) before one already in use: the
@@ -86,6 +109,7 @@ def set_f2b(ips, taken=None):
             return
         _f2b = _networks(ips)
         _rebuild()
+    _changed()
 
 
 def set_ufw(ips, taken=None):
@@ -98,6 +122,7 @@ def set_ufw(ips, taken=None):
             return
         _ufw = _networks(ips)
         _rebuild()
+    _changed()
 
 
 def set_whitelist(entries):
@@ -128,14 +153,21 @@ def forwarded_client(xff):
     return a.ipv4_mapped if a.version == 6 and a.ipv4_mapped else a
 
 
-def is_banned(addr):
-    """True if `addr` (an ip_address) is banned, and neither whitelisted nor a tailnet peer."""
+def is_banned(addr, widen=True):
+    """True if `addr` (an ip_address) is banned, and neither whitelisted nor a tailnet peer.
+
+    `widen=False` asks what the host FIREWALL asks — the banned address or network itself, not the
+    /64 an IPv6 ban is widened to here. For a client that connects directly: the firewall still
+    lets a neighbour in the same /64 in, so refusing it only the console would be a half lock-out."""
     groups = _by_len
     if addr is None or not groups:
         return False
     hit = False
     for (version, plen), nets in groups.items():
-        if version == addr.version and ipaddress.ip_network((addr, plen), strict=False) in nets:
+        if version != addr.version:
+            continue
+        net = ipaddress.ip_network((addr, plen), strict=False)
+        if net in nets and (widen or net in _f2b or net in _ufw):
             hit = True
             break
     if not hit:

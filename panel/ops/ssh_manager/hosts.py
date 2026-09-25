@@ -2063,23 +2063,12 @@ def remote_fail2ban_unban(server, jail, ip):
 
 def _f2b_dropin_ignoreip_body(ignore_ips):
     """A fail2ban `[DEFAULT] ignoreip` drop-in body built from validated entries only (localhost is
-    always included). Every entry is re-parsed through ipaddress, so a non-IP token can never reach
-    the file."""
-    import ipaddress
-    entries = ["127.0.0.1/8", "::1"]
-    for raw in (ignore_ips or []):
-        s = (str(raw) or "").strip()
-        try:
-            entries.append(str(ipaddress.ip_network(s, strict=False)) if "/" in s
-                           else str(ipaddress.ip_address(s)))
-        except ValueError:
-            continue
-    seen, uniq = set(), []
-    for e in entries:
-        if e not in seen:
-            seen.add(e)
-            uniq.append(e)
-    return "[DEFAULT]\nignoreip = %s\n" % " ".join(uniq)
+    always included). The panel host's own copy of the file is built by the same function
+    (system_ops.f2b_whitelist_dropin_body), so the two cannot validate differently: this one used
+    to re-parse entries through ipaddress alone, which keeps an IPv6 zone id verbatim — newline
+    and all — where the panel host's builder drops it."""
+    from panel.ops.system_ops import f2b_whitelist_dropin_body
+    return f2b_whitelist_dropin_body(ignore_ips)
 
 
 

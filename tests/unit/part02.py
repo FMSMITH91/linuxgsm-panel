@@ -2331,6 +2331,33 @@ try:
        "applies the whitelist, and keeps the set when both reads fail",
        (_bl_off, _bl_on, _bl_kept),
        ((["f2b", "ufw"], True, True), (["f2b", "ufw"], False, True), True))
+    # Listeners (server_files' open-socket sweep) run after every NEW set, from either source —
+    # and not for a failed read or a stale one, which change nothing. One that raises does not
+    # stop the rest.
+    _bl_ls0, _bl_heard = dict(_bl._listeners), []
+    try:
+        _bl._listeners.clear()
+
+        @_bl.on_change
+        def _bl_boom():
+            raise RuntimeError("listener failed")
+
+        @_bl.on_change
+        def _bl_hear():
+            _bl_heard.append(_bl.is_banned(_ip("203.0.113.40")))
+        _bl._taken.update({"f2b": 0.0, "ufw": 0.0})
+        _bl.set_f2b(["203.0.113.40"], taken=100.0)
+        _bl.set_ufw([], taken=100.0)
+        _bl.set_f2b(None)
+        _bl.set_ufw(None)
+        _bl.set_f2b([], taken=50.0)
+        _bl.on_change(_bl_hear)                  # the same hook registered again replaces it
+        _bl.set_f2b([], taken=200.0)
+    finally:
+        _bl._listeners.clear()
+        _bl._listeners.update(_bl_ls0)
+    eq("banlist: listeners hear each new set (after it is in place), not a failed or stale read, "
+       "survive one that raises, and register once", _bl_heard, [True, True, False])
 finally:
     (_bl._f2b, _bl._ufw, _bl._allow, _bl._by_len, _bl_taken0) = _bl_saved
     _bl._taken.clear()

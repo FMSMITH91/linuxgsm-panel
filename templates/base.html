@@ -50,7 +50,7 @@
 
 <script nonce="{{ csp_nonce }}">
   window.I18N = {{ i18n_catalog|tojson }};
-  window.LANG = "{{ current_lang|default('en') }}";
+  window.LANG = {{ current_lang|default('en')|tojson }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/i18n.js') }}"></script>
 
@@ -192,12 +192,14 @@
       </select>
     </div>
     <div class="text-center mt-2" style="font-size:.66rem;color:var(--text-muted,#6b7684);">
+      {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- PANEL_REPO_URL, a constant #}
       {% if panel_repo_url %}<a href="{{ panel_repo_url }}" target="_blank" rel="noopener noreferrer"
          class="text-decoration-none" style="color:inherit;"
          title="LinuxGSM Panel on GitHub">LinuxGSM Panel <i class="bi bi-github"></i></a>{% else %}LinuxGSM Panel{% endif %}
       <span id="panel-version">v{{ panel_version }}</span>{% if panel_commit %}
       {# The SHA links to the exact commit this process is running, so "what is actually deployed"
          is one click rather than a copy-paste into a URL bar. #}
+      {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- PANEL_REPO_URL, a constant, and a git commit id #}
       {% if panel_repo_url %}<a id="panel-commit" href="{{ panel_repo_url }}/commit/{{ panel_commit }}"
          target="_blank" rel="noopener noreferrer" class="text-decoration-none" style="color:inherit;"
          title="Running git commit ({{ panel_commit }}) — open it on GitHub">· {{ panel_commit }}</a>{% else %}
@@ -300,13 +302,13 @@ window.SIGNED_IN = {{ 'true' if current_user.is_authenticated else 'false' }};
 // form or fetch() call has to be edited:
 //   • every POST <form> gets a hidden csrf_token field on load, and
 //   • every mutating fetch() gets an X-CSRFToken header via a wrapper.
-window.CSRF = "{{ csrf_token() }}";
+window.CSRF = {{ csrf_token()|tojson }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/panel.js') }}"></script>
 {# After panel.js: the palette calls t() and reads window.MOUNT, both set above it. #}
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/palette.js') }}"></script>
 <script nonce="{{ csp_nonce }}">
-  window.LOCAL_HOST_ID = {{ local_remote_id if local_remote_id is not none else 'null' }};
+  window.LOCAL_HOST_ID = {{ local_remote_id|default(none)|tojson }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/nags.js') }}"></script>
 {% if show_app_chrome and current_user.is_superadmin %}
