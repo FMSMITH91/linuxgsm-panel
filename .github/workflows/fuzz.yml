@@ -26,6 +26,7 @@ on:
       - 'tests/fuzz/**'
       - '.github/workflows/fuzz.yml'
       - 'requirements.txt'
+      - '.github/ci-requirements/atheris.txt'   # a Dependabot bump of the fuzzer must run it
   schedule:
     - cron: "0 4 * * *"   # nightly 04:00 UTC — a longer soak
   workflow_dispatch:      # allow manual runs from the Actions tab
@@ -58,7 +59,8 @@ jobs:
       - name: Install dependencies + Atheris
         run: |
           python -m pip install --quiet -r requirements.txt
-          python -m pip install --quiet atheris
+          python -m pip install --quiet --require-hashes --only-binary :all: \
+            -r .github/ci-requirements/atheris.txt
 
       - name: Fuzz
         env:

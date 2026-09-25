@@ -52,7 +52,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
-      - run: python -m pip install --quiet pip-audit
+      - run: >-
+          python -m pip install --quiet --require-hashes --only-binary :all:
+          -r .github/ci-requirements/pip-audit.txt
       # FAILS the run if any declared dependency has a known vulnerability — this
       # is actionable (bump the version), so it's a hard gate.
       # --no-deps: audit exactly the pinned set, which is what a host installs. Without it,
@@ -130,7 +132,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
-      - run: python -m pip install --quiet semgrep
+      - run: >-
+          python -m pip install --quiet --require-hashes --only-binary :all:
+          -r .github/ci-requirements/semgrep.txt
       # Registry rulesets, fetched anonymously (no Semgrep account/token needed):
       # general security-audit + Python + Flask + command-injection + secrets. This
       # catches real code vulns (injection, SSRF, path traversal, unsafe redirects,
