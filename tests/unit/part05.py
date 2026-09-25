@@ -927,6 +927,10 @@ _helper_path = os.path.join(_root, "tools", "panel-helper")
 _spec = _ilu.spec_from_loader("panel_helper", _machinery.SourceFileLoader("panel_helper", _helper_path))
 _helper = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_helper)
+# The enrolment guard hands the question to `sudo -l` when THIS machine's nsswitch.conf names an
+# LDAP or SSSD source for sudoers. No check here means that: every one reads a sandbox policy, and
+# the ones about non-file sources point this at a sandbox file of their own.
+_helper.NSSWITCH_FILE = os.path.join(_root, "tests", "no-such-nsswitch.conf")
 
 # Sample arguments per verb. Every verb must appear here — a new verb with no sample is a gap in
 # the parity check below, so the test fails rather than silently skipping it.
@@ -2963,11 +2967,20 @@ check("helper: knows exactly the tools its verbs need, and no more",
                                 "fail2ban-client", "fallocate", "fuser", "groupadd", "journalctl",
                                 "mkswap",
                                 "npm", "passwd", "pgrep", "pkill", "pro", "reboot", "renice", "rm",
-                                "sh_installer", "ss", "sshd", "swapon", "sysctl",
+                                "sh_installer", "ss", "sshd", "sudo_list", "swapon", "sysctl",
                                 "systemctl", "systemd-run",
                                 "tail", "tailscale", "timedatectl", "ufw", "useradd", "userdel",
                                 "usermod"],
       sorted(_helper.TOOLS))
+# sudo_list exists for ONE read: `sudo -l -U <account>` when the policy has LDAP or SSSD sources.
+# Plain `sudo` must stay unresolvable, and the one use must stay that argv.
+_hsrc = open(_helper_path, encoding="utf-8").read()
+check("helper: sudo resolves only as sudo_list, read in one place, for `sudo -l -U <account>`",
+      "sudo" not in _helper.TOOLS and _hsrc.count('TOOLS["sudo_list"]') == 1
+      and 'resolve("sudo_list")' not in _hsrc and 'resolve("sudo")' not in _hsrc
+      and _hsrc.count("[binary, \"-l\", \"-U\", user]") == 1
+      and _helper.TOOLS["sudo_list"] == ("/usr/bin/sudo.ws", "/usr/bin/sudo"),
+      "TOOLS reads: %d" % _hsrc.count('TOOLS["sudo_list"]'))
 # bash_installer exists so the self-update can run ONE fixed root-owned file. The general shell
 # must stay unresolvable under its own name, or any future verb could build ["bash", "-c", ...].
 check("helper: bash_installer points at a real shell, and only INSTALLER_PATH uses it",
@@ -3853,6 +3866,43 @@ for _f in ("app.py", os.path.join("tools", "perf_bench.py")):
           _patch_at is not None and (_first_heavy is None or _patch_at < _first_heavy),
           "monkey_patch at line %s, first panel/flask import at line %s" % (_patch_at, _first_heavy))
 
+# ── ...and the patch leaves no lock behind on Python 3.13+ ─────────────────────────────────────
+# threading binds one of its locks into `_DeleteDummyThreadOnDel.__del__`'s DEFAULTS, where
+# monkey_patch never looks. That __del__ kept guarding threading._active with the original lock,
+# and eventlet printed "1 RLock(s) were not greened ... make sure you run eventlet.monkey_patch()
+# before importing any other modules" on every start under 3.14 (Ubuntu 26.04), a fix nothing can
+# apply. Run app.py's own start-up, up to and including the patch, in a fresh interpreter.
+import subprocess as _ev_sp
+_ev_src = open(os.path.join(_root, "app.py"), encoding="utf-8").read()
+_ev_end = "del _w, _dd_del, _dd_rebind\n"
+_ev_pro = _ev_src[:_ev_src.index(_ev_end) + len(_ev_end)] if _ev_end in _ev_src else ""
+_ev_tail = ("\n_dd = getattr(threading, '_DeleteDummyThreadOnDel', None)\n"
+            "print('HAS_DD=%s' % (_dd is not None))\n"
+            "print('SAME=%s' % (_dd is None or (_dd.__del__.__defaults__[0]"
+            " is threading._active_limbo_lock and _dd.__del__.__defaults__[1] is threading._active)))\n")
+_ev_env = {_k: _v for _k, _v in os.environ.items() if _k != "PYTEST_CURRENT_TEST"}
+
+
+def _ev_run(code):
+    return _ev_sp.run([sys.executable, "-c", code], capture_output=True, text=True,
+                      env=_ev_env, cwd=_root, timeout=120)
+
+
+_ev_r = _ev_run(_ev_pro + _ev_tail)
+check("app.py: eventlet's patch leaves no RLock un-greened, and threading's __del__ uses its lock",
+      bool(_ev_pro) and _ev_r.returncode == 0 and "were not greened" not in _ev_r.stderr
+      and "SAME=True" in _ev_r.stdout, repr((_ev_r.stdout[-200:], _ev_r.stderr[-300:])))
+if "HAS_DD=True" in _ev_r.stdout:
+    # Where the class exists the check above is only evidence if the warning CAN appear: without
+    # the rebind it must come back.
+    _ev_c = _ev_run(_ev_pro.replace("if _dd_rebind:", "if False:") + _ev_tail)
+    check("app.py: ...and without the rebind the warning is back (control, Python 3.13+)",
+          "were not greened" in _ev_c.stderr and "SAME=False" in _ev_c.stdout,
+          repr((_ev_c.stdout[-200:], _ev_c.stderr[-300:])))
+else:
+    check("app.py: ...and on this Python (no _DeleteDummyThreadOnDel) the rebind is a no-op",
+          "_dd_rebind = (" in _ev_pro and "SAME=True" in _ev_r.stdout, _ev_r.stdout[-200:])
+
 # ── every audited action names WHAT it acted on ───────────────────────────────────────────────
 # The audit log's Target column was blank for panel-host actions (panel_self_update, server_reboot,
 # the tailscale/ufw ones, ...) while the IDENTICAL action taken through remote management filled it
@@ -4444,6 +4494,7 @@ class _FakeGrp:
 
 
 _sudoers_saved = (_helper.SUDOERS_FILE, _helper.SUDOERS_DIR)
+_nsswitch_saved = _helper.NSSWITCH_FILE
 import tempfile as _sg_tmp
 _sg_root = _sg_tmp.mkdtemp(prefix="sudoers-root-")
 _sg_main = os.path.join(_sg_root, "sudoers")
@@ -4508,7 +4559,9 @@ try:
         "nested-alias": "User_Alias INNER = deploy : OUTER = INNER, bob\nOUTER ALL=(ALL) ALL\n",
         "user-list": "alice,deploy ALL=(ALL) ALL\n",
         "user-list-spaced": "alice, deploy ALL=(ALL) ALL\n",
-        "all": "ALL ALL=(ALL) NOPASSWD: /usr/bin/id\n",
+        # ALL with a PASSWORD: the host terminal can capture a game account's password, and the
+        # panel's own account may have none, so this still counts (the NOPASSWD form is below).
+        "all": "ALL ALL=(ALL) /usr/bin/id\n",
         "uid": "#1234 ALL=(ALL) ALL\n",
         "gid": "%#1234 ALL=(ALL) ALL\n",
         "netgroup": "+admins ALL=(ALL) ALL\n",
@@ -4559,6 +4612,131 @@ try:
           and _helper._sudoers_logical_lines("a,\\  \n b X=Y # c \\\n#9 Z=W\n")
           == ["a, b X=Y", "#9 Z=W"])
 
+    # A rule for ALL users is refused like any other, NOPASSWD or not: whether the panel could use
+    # it too depends on every later rule that matches the panel (a `!` deny, the host terminal's
+    # own password grant), which is sudo's whole last-match evaluation. The reason says what it is,
+    # and what to change, so the operator is not left hunting for a grant naming the account.
+    _sg_all_bad = []
+    for _body in ("ALL ALL=(ALL) NOPASSWD: /usr/bin/id\n",
+                  "ALL ALL=(ALL) NOPASSWD: ALL\nlgsmpanel ALL=(ALL) ALL\n",
+                  "ALL ALL=(ALL) NOPASSWD: ALL\nlgsmpanel ALL=(ALL) !ALL\n"):
+        with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+            _fh.write(_body)
+        _v = _helper._escalation_verdict("deploy")
+        if not (_v[0] == "yes" and "rule for ALL users" in _v[1] and "narrow" in _v[1]):
+            _sg_all_bad.append((_body.strip(), _v))
+    check("enrolment: a rule for ALL users still refuses, and says it is a rule for ALL users",
+          not _sg_all_bad, repr(_sg_all_bad))
+    with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+        _fh.write("ALL ALL=(ALL) NOPASSWD: /usr/bin/id\ndeploy ALL=(ALL) ALL\n")
+    _v = _helper._escalation_verdict("deploy")
+    check("enrolment: ...while a rule naming the account itself says so plainly",
+          _v == ("yes", "a sudoers rule grants it sudo"), repr(_v))
+
+    # sudo also reads rules from LDAP or SSSD when nsswitch.conf says so, and this parser never
+    # sees those: an account granted sudo there read as "cannot escalate" and was enrolled. It now
+    # asks sudo on such a host, and anything but a clear "not allowed" refuses.
+    _ns_file = os.path.join(_sg_root, "nsswitch.conf")
+    _ns_saved = (_helper.NSSWITCH_FILE, _helper._sudo_lists_rules, _helper._sss_sudo_answers)
+    try:
+        _helper.NSSWITCH_FILE = _ns_file
+        _helper._sss_sudo_answers = lambda: True     # SSSD up, unless a check says otherwise
+        with open(os.path.join(_sg_dir, "90-ops"), "w", encoding="utf-8") as _fh:
+            _fh.write("alice ALL=(ALL) ALL\n")
+        _ns_asked = []
+
+        def _ns_answer(ans):
+            def _f(user):
+                _ns_asked.append(user)
+                return ans
+            return _f
+        _ns_got = {}
+        for _src, _ans in (("files sss", True), ("files sss", False), ("files ldap", None)):
+            with open(_ns_file, "w", encoding="utf-8") as _fh:
+                _fh.write("passwd: files\nsudoers: %s\n" % _src)
+            _helper._sudo_lists_rules = _ns_answer(_ans)
+            _ns_got[(_src, _ans)] = _helper._can_already_escalate("deploy")
+        check("enrolment: with rules from SSSD or LDAP, sudo's own answer decides — a listed rule or "
+              "no clear answer refuses, only 'not allowed' enrols",
+              _ns_got == {("files sss", True): True, ("files sss", False): False,
+                          ("files ldap", None): True} and _ns_asked == ["deploy"] * 3, repr(_ns_got))
+        _ns_asked.clear()
+        for _body in ("passwd: files\nsudoers: files\n", "passwd: files\n"):
+            with open(_ns_file, "w", encoding="utf-8") as _fh:
+                _fh.write(_body)
+            _helper._sudo_lists_rules = _ns_answer(True)
+            if _helper._can_already_escalate("deploy") is not False:
+                _ns_asked.append("refused: %r" % _body)
+        check("enrolment: ...and a files-only policy (or no sudoers line) is not handed to sudo",
+              not _ns_asked, repr(_ns_asked))
+        # sudo matches the database name without regard to case, so this is LDAP too.
+        with open(_ns_file, "w", encoding="utf-8") as _fh:
+            _fh.write("passwd: files\nSUDOERS: Files LDAP\n")
+        check("enrolment: ...and `SUDOERS: files ldap` in any case is read as LDAP",
+              _helper._sudoers_sources() == ["files", "ldap"], repr(_helper._sudoers_sources()))
+        # With SSSD's sudo responder down, sudo answers from the NSS cache and says "not allowed"
+        # with no warning: that answer is not trusted then.
+        with open(_ns_file, "w", encoding="utf-8") as _fh:
+            _fh.write("sudoers: files sss\n")
+        _helper._sudo_lists_rules = lambda _u: False
+        _helper._sss_sudo_answers = lambda: False
+        _ns_down = _helper._escalation_verdict("deploy")
+        _helper._sss_sudo_answers = lambda: True
+        check("enrolment: ...and SSSD's 'not allowed' counts only while its sudo service answers",
+              _ns_down[0] == "unknown" and "SSSD's sudo service is not answering" in _ns_down[1]
+              and _helper._escalation_verdict("deploy") == ("no", ""), repr(_ns_down))
+        # "could not tell" is its own answer: install.sh takes a membership back on "yes" only.
+        _helper._sudo_lists_rules = lambda _u: True
+        _v_yes = _helper._escalation_verdict("deploy")
+        _helper._sudo_lists_rules = lambda _u: None
+        _v_unk = _helper._escalation_verdict("deploy")
+        check("enrolment: ...a listed rule is 'yes', an unclear sudo is 'unknown', not 'yes'",
+              _v_yes[0] == "yes" and _v_unk[0] == "unknown", repr((_v_yes, _v_unk)))
+        os.remove(_ns_file)
+        check("enrolment: ...nor is a host with no nsswitch.conf at all",
+              _helper._sudoers_sources() == ["files"])
+    finally:
+        (_helper.NSSWITCH_FILE, _helper._sudo_lists_rules,
+         _helper._sss_sudo_answers) = _ns_saved
+
+    # EVERY sudo present is asked. On Ubuntu 26.04 /usr/bin/sudo is sudo-rs, which never reads LDAP
+    # or SSSD rules and says "not allowed"; classic sudo beside it (sudo.ws) lists the rule, and
+    # takes the account to root through it.
+    _sl_saved = (_helper._sudo_list_binaries, _helper.subprocess)
+    _sl_says = {}
+
+    def _sl_run(argv, **_k):
+        return NS(stdout=_sl_says[argv[0]].encode(), stderr=b"", returncode=0)
+    _SL_YES, _SL_NO = "User deploy may run the following commands:", "User deploy is not allowed to run sudo on h."
+    try:
+        _helper._sudo_list_binaries = lambda: ["/usr/bin/sudo.ws", "/usr/bin/sudo"]
+        _helper.subprocess = NS(run=_sl_run)
+        _sl_got = []
+        for _ws, _rs in ((_SL_YES, _SL_NO), (_SL_NO, _SL_NO), (_SL_NO, "sudo: something odd")):
+            _sl_says = {"/usr/bin/sudo.ws": _ws, "/usr/bin/sudo": _rs}
+            _sl_got.append(_helper._sudo_lists_rules("deploy"))
+        _helper._sudo_list_binaries = lambda: []
+        _sl_got.append(_helper._sudo_lists_rules("deploy"))
+        check("enrolment: every sudo is asked — one listing rules refuses, all 'not allowed' enrols, "
+              "an unclear one or none at all refuses", _sl_got == [True, False, None, None],
+              repr(_sl_got))
+    finally:
+        _helper._sudo_list_binaries, _helper.subprocess = _sl_saved
+    import socket as _sss_socket
+    _sss_saved = _helper.SSS_SUDO_PIPE
+    _sss_path = os.path.join(_sg_root, "sss-sudo")
+    _sss_srv = _sss_socket.socket(_sss_socket.AF_UNIX, _sss_socket.SOCK_STREAM)
+    try:
+        _helper.SSS_SUDO_PIPE = _sss_path
+        _sss_none = _helper._sss_sudo_answers()
+        _sss_srv.bind(_sss_path)
+        _sss_srv.listen(1)
+        check("enrolment: the SSSD probe is True for a listening socket and False for none",
+              _helper._sss_sudo_answers() is True and _sss_none is False)
+    finally:
+        _sss_srv.close()
+        _helper.SSS_SUDO_PIPE = _sss_saved
+
     # The verb must consult it, not merely define it.
     _ran = []
     _sub_saved = _helper.subprocess
@@ -4566,9 +4744,25 @@ try:
         _helper.subprocess = NS(run=lambda *a, **k: (_ran.append(a), NS(returncode=0, stderr=b""))[1])
         _helper.grp = _fake_grp(lambda _g: _FakeGrp("users"),
                                 lambda: [_FakeGrp("sudo", ["carol"])])
-        _rc_bad = _helper.do_gameuser_group(["carol"], "")
+        _err_saved, _err_buf = _helper.sys.stderr, _sec_io.StringIO()
+        try:
+            _helper.sys.stderr = _err_buf
+            _rc_bad = _helper.do_gameuser_group(["carol"], "")
+            _ev_saved = _helper._escalation_verdict
+            _helper._escalation_verdict = lambda _u: ("unknown", "SSSD's sudo service is not answering")
+            _rc_unk = _helper.do_gameuser_group(["carol"], "")
+            _helper._escalation_verdict = _ev_saved
+        finally:
+            _helper.sys.stderr = _err_saved
+        _err = _err_buf.getvalue().splitlines()
         check("enrolment: do_gameuser_group REFUSES a sudo-capable account",
               _rc_bad == 1 and not _ran, "rc=%s ran=%s" % (_rc_bad, _ran))
+        check("enrolment: ...saying why, and an unverifiable one is not told it can reach root",
+              _rc_unk == 1 and not _ran and len(_err) == 2
+              and "it can already reach root (it is in sudo)" in _err[0]
+              and "could not confirm it cannot reach root (SSSD's sudo service is not answering)"
+              in _err[1] and "already reach root" not in _err[1] and all(len(_l) < 200 for _l in _err),
+              repr(_err))
         _ran.clear()
         _helper.grp = _fake_grp(lambda _g: _FakeGrp("gmodserver"), lambda: [])
         _rc_ok = _helper.do_gameuser_group(["gmodserver"], "")
@@ -4580,6 +4774,7 @@ try:
 finally:
     _helper.grp, _helper.pwd, _helper.glob = _grp_saved, _pwd_saved, _glob_saved
     _helper.SUDOERS_FILE, _helper.SUDOERS_DIR = _sudoers_saved
+    _helper.NSSWITCH_FILE = _nsswitch_saved
     _shutil.rmtree(_sg_root, ignore_errors=True)
 
 # ── ...and the per-account verbs only act on accounts inside that grant ──────────────────────

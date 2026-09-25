@@ -114,11 +114,11 @@ echo -e "╚══════════════════════�
 
 # ── Prerequisites ──
 command -v python3 >/dev/null 2>&1 || die "Python 3 is required."
-PY_MM="$(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
+PY_MM="$(python3 -I -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
 [ -n "${PY_MM}" ] || die "python3 is installed but does not run.  sudo apt install --reinstall -y python3"
 # requirements.txt is pinned for 3.10 and newer (tests/unit ties this floor to it). An older
 # python3 only fails later, inside pip, as "No matching distribution found for …".
-python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null \
+python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null \
     || die "Python 3.10 or newer is required, and this python3 is ${PY_MM}. Ubuntu 22.04 and later ship it."
 
 # `python3 -m venv --help` succeeds even when the python3-venv / ensurepip package
@@ -126,7 +126,11 @@ python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null \
 # test is to actually build a throwaway venv.
 _venv_works() {
     local t; t="$(mktemp -d)" || return 1
-    if python3 -m venv "${t}" >/dev/null 2>&1; then rm -rf "${t}"; return 0; fi
+    # Isolated, and from /: `-m` puts the current directory first on sys.path, and a self-update
+    # runs install.sh from the panel's own checkout, where a planted venv.py would run as root. -I
+    # keeps that directory off the path; running from / as well means nothing started here gets
+    # the checkout as its working directory.
+    if (cd / && python3 -I -m venv "${t}") >/dev/null 2>&1; then rm -rf "${t}"; return 0; fi
     rm -rf "${t}"; return 1
 }
 
@@ -249,7 +253,7 @@ panel_version() {
 panel_port() {
     local cfg="${PANEL_DIR}/data/config.json"
     if [ -f "${cfg}" ]; then
-        python3 -c "import json;print(int(json.load(open('${cfg}')).get('port',5000)))" 2>/dev/null || echo 5000
+        python3 -I -c "import json;print(int(json.load(open('${cfg}')).get('port',5000)))" 2>/dev/null || echo 5000
     else
         echo 5000
     fi
@@ -273,7 +277,7 @@ choose_and_record_port() {
         owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
         [ "${owner}" != "root" ] && as_owner="sudo -u ${owner}"
     fi
-    ${as_owner} python3 - "${desired}" "${PANEL_DIR}/data/config.json" <<'PYEOF'
+    ${as_owner} python3 -I - "${desired}" "${PANEL_DIR}/data/config.json" <<'PYEOF'
 import json, os, socket, sys, tempfile
 desired, cfg_path = int(sys.argv[1]), sys.argv[2]
 
@@ -349,7 +353,7 @@ _http_code() {
     if command -v curl >/dev/null 2>&1; then
         curl -k -s -o /dev/null -w '%{http_code}' --max-time 3 "${url}" 2>/dev/null || true
     else
-        python3 - "${url}" 2>/dev/null <<'PY' || true
+        python3 -I - "${url}" 2>/dev/null <<'PY' || true
 import sys, ssl, urllib.request, urllib.error
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
@@ -525,7 +529,7 @@ install_deps() {
         warn "${VENV_STALE_WHY^} (an OS release upgrade?). Rebuilding it."
         clear="--clear"
     fi
-    ${as_owner} python3 -m venv ${clear:+"${clear}"} "${PANEL_DIR}/venv"
+    (cd / && ${as_owner} python3 -I -m venv ${clear:+"${clear}"} "${PANEL_DIR}/venv")   # see _venv_works
     ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet --upgrade pip
     ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
 }
@@ -1230,11 +1234,38 @@ root_tools_present() {
 # needs a sudoers entry, so `sudo -l -U` reports the account as "not allowed" and it was enrolled:
 # the one-hop NOPASSWD:ALL this function exists to prevent. The first ten are the set
 # panel/security/privileged.py already refuses as _NEVER_A_CONTENT_GROUP.
+#
+# When the root-owned helper is installed, IT answers — the same verdict that decides every other
+# enrolment (panel-helper's _escalation_verdict). Two deciders drifted: this one ran `sudo -l`, the
+# helper parsed the policy, and an account one would enrol the other took back. The helper's answer
+# covers what `sudo -l` did — it asks every sudo on the host when rules come from LDAP or SSSD —
+# and it says "unknown" rather than "yes" when it cannot tell, which the caller must not treat as
+# a reason to take a membership back. Without the helper (it is placed before this runs, so only a
+# failed placement), the old test stands.
 can_already_sudo() {
     _cas_user="$1"
     _cas_groups="sudo|admin|wheel|root|adm|shadow|docker|lxd|disk|staff|incus-admin|libvirt"
     if id -nG "${_cas_user}" 2>/dev/null | tr " " "\n" | grep -qxE "${_cas_groups}"; then
         echo yes; return 0
+    fi
+    if [ -f "${HELPER_DIR}/panel-helper" ]; then
+        # Root runs the root-owned copy it installed — never the checkout's — and asks one question.
+        # -I (isolated): no cwd on sys.path and no PYTHON* variables. A self-update runs this from
+        # the panel's own checkout, and `python3 -` puts that directory first on the import path,
+        # so a glob.py planted there ran as root the moment the helper imported glob.
+        case "$(python3 -I - "${HELPER_DIR}/panel-helper" "${_cas_user}" 2>/dev/null <<'CAS_PY' || true
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("panel_helper", sys.argv[1])
+helper = importlib.util.module_from_spec(importlib.util.spec_from_loader("panel_helper", loader))
+loader.exec_module(helper)
+print(helper._escalation_verdict(sys.argv[2])[0])
+CAS_PY
+)" in
+            yes) echo yes ;;
+            no)  echo no ;;
+            *)   echo unknown ;;
+        esac
+        return 0
     fi
     _cas_out="$(LC_ALL=C sudo -l -U "${_cas_user}" 2>&1)" || true
     case "${_cas_out}" in
@@ -1985,7 +2016,7 @@ PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
 # Tailscale address, only if it's installed AND logged in (MagicDNS name preferred).
 TS_ADDR=""
 if command -v tailscale >/dev/null 2>&1; then
-    TS_DNS="$(tailscale status --json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin).get("Self",{}).get("DNSName","").rstrip("."))' 2>/dev/null || true)"
+    TS_DNS="$(tailscale status --json 2>/dev/null | python3 -I -c 'import sys,json;print(json.load(sys.stdin).get("Self",{}).get("DNSName","").rstrip("."))' 2>/dev/null || true)"
     TS_IP="$(tailscale ip -4 2>/dev/null | head -1)"
     TS_ADDR="${TS_DNS:-${TS_IP}}"
 fi

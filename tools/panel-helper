@@ -46,6 +46,7 @@ import os
 import pwd
 import re
 import shutil
+import socket
 import stat
 import tarfile
 import tempfile
@@ -79,6 +80,12 @@ TOOLS = {
     "usermod": ("/usr/sbin/usermod", "/sbin/usermod"),
     "debconf-set-selections": ("/usr/bin/debconf-set-selections",),
     "groupadd": ("/usr/sbin/groupadd", "/sbin/groupadd"),
+    # `sudo -l -U <account>` and nothing else: sudo's own answer when the policy has non-file
+    # sources (_sudo_lists_rules). Named for that one use, like bash_installer, so plain `sudo`
+    # stays unresolvable and no verb can build a command around it. EVERY one present is asked:
+    # on Ubuntu 26.04 /usr/bin/sudo is sudo-rs, which never reads LDAP or SSSD rules, and classic
+    # sudo — which does, and takes an account to root through them — sits beside it as sudo.ws.
+    "sudo_list": ("/usr/bin/sudo.ws", "/usr/bin/sudo"),
     "fallocate": ("/usr/bin/fallocate", "/bin/fallocate"),
     "mkswap": ("/usr/sbin/mkswap", "/sbin/mkswap"),
     "swapon": ("/usr/sbin/swapon", "/sbin/swapon"),
@@ -1154,7 +1161,8 @@ def _groups_of(user):
 
 
 def _can_already_escalate(user):
-    """True if `user` can reach root on its own — by privileged group, or by a sudoers entry.
+    """True if `user` can reach root on its own — by privileged group, or by a sudoers entry — or
+    if that could not be settled. See _escalation_verdict.
 
     THIS is what keeps the panel's second sudoers grant bounded. That line says the panel may
     BECOME any member of GAME_GROUP. If a member could itself run sudo, the grant would be
@@ -1170,17 +1178,32 @@ def _can_already_escalate(user):
     escalate". A false refusal costs one account the panel cannot drive, and says so out loud; a
     false accept costs root.
     """
+    return _escalation_verdict(user)[0] != "no"
+
+
+def _escalation_verdict(user):
+    """("yes", why) if `user` can reach root on its own, ("no", "") if it cannot, and
+    ("unknown", why) when that could not be settled. The helper refuses to enrol on both "yes" and
+    "unknown"; install.sh tells them apart, because on an update it TAKES BACK the membership of a
+    "yes" and leaves an "unknown" alone — or an SSSD restart during an update would strip every
+    game account on the host, each told it "can reach root".
+
+    Every rule that matches the account counts, one granted to ALL users included. Exempting a
+    NOPASSWD rule for ALL users (the panel's own account has it too, the argument went) was tried
+    and taken out: whether the panel really can use such a rule depends on every later rule that
+    also matches it — a `!` deny, a password rule such as the host terminal's own grant — which is
+    sudo's whole last-match evaluation, and three audits each found a policy that broke the
+    approximation. A rule for ALL users is refused, and the reason says to narrow it."""
     try:
         names = _groups_of(user)
     except Exception:
-        # The group database did not answer. This function decides whether an account may be put
-        # INSIDE the panel's sudo grant, so an unknown answer has to read as "yes, it can
-        # escalate" — the asymmetry below is the whole point: a false refusal costs one account
+        # The group database did not answer. This decides whether an account may be put INSIDE
+        # the panel's sudo grant, so an unknown answer refuses: a false refusal costs one account
         # the panel cannot drive, and says so; a false accept costs root.
-        sys.stderr.write("could not read the group database for %s; refusing to enrol it\n" % user)
-        return True
-    if names & set(NEVER_ENROL_GROUPS):
-        return True
+        return "unknown", "the group database did not answer"
+    privileged = sorted(names & set(NEVER_ENROL_GROUPS))
+    if privileged:
+        return "yes", "it is in %s" % ", ".join(privileged)
     try:
         pw = pwd.getpwnam(user)
     except KeyError:
@@ -1189,19 +1212,35 @@ def _can_already_escalate(user):
     try:
         gids |= {grp.getgrnam(n).gr_gid for n in names}
     except KeyError:
-        return True                      # a group of its own that cannot be resolved: unknown
+        return "unknown", "one of its groups cannot be resolved"
     try:
+        sources = _sudoers_sources()
+        if sources != ["files"]:
+            # LDAP, SSSD or another source the parser below cannot read. Ask sudo, which can.
+            src = " ".join(sources)
+            listed = _sudo_lists_rules(user)
+            if listed:
+                return "yes", "sudo lists rules for it (the policy comes from %s)" % src
+            if listed is None:
+                return "unknown", "sudo gave no clear answer about it (the policy comes from %s)" % src
+            if "sss" in sources and not _sss_sudo_answers():
+                return "unknown", ("the policy comes from %s, and SSSD's sudo service is not "
+                                   "answering" % src)
         lines = []
         seen = set()
         for path in [SUDOERS_FILE] + sorted(glob.glob(os.path.join(SUDOERS_DIR, "*"))):
             lines.extend(_sudoers_lines(path, seen))
-        return _sudoers_grants(lines, user, names, uid, gids)
+        matched = _sudoers_matching_rules(lines, user, names, uid, gids)
     except (OSError, ValueError) as e:
         # A file it could not read, an include it could not follow, a construct it does not
         # parse. It used to `continue` past an unreadable file, which read as "no grant in it".
-        sys.stderr.write("could not read the sudoers policy for %s (%s); refusing to enrol it\n"
-                         % (user, e))
-        return True
+        return "unknown", "the sudoers policy could not be read (%s)" % e
+    if not matched:
+        return "no", ""
+    if all(items == ["ALL"] for items, _rest in matched):
+        return "yes", ("a sudoers rule for ALL users grants it sudo; narrow that rule to named "
+                       "users or groups")
+    return "yes", "a sudoers rule grants it sudo"
 
 
 # Where _can_already_escalate reads the sudo policy from. Module-level so a test can point it at a
@@ -1288,6 +1327,12 @@ def _sudoers_grants(lines, user, names, uid, gids):
 
 def _sudoers_rules_for(lines, user, names, uid, gids):
     """The rules in `lines` whose user list can match `user` — each as the text AFTER that list.
+    See _sudoers_matching_rules, which also returns each rule's user list."""
+    return [rest for _items, rest in _sudoers_matching_rules(lines, user, names, uid, gids)]
+
+
+def _sudoers_matching_rules(lines, user, names, uid, gids):
+    """The rules in `lines` whose user list can match `user`, as (user list items, text after it).
 
     Resolves User_Alias definitions (recursively), comma-separated user lists, `ALL`, `#uid`,
     `%group` and `%#gid`. Anything it cannot evaluate — a netgroup, a non-Unix group, an alias
@@ -1334,7 +1379,73 @@ def _sudoers_rules_for(lines, user, names, uid, gids):
             return any(matches(x, depth + 1) for x in aliases[item])
         return False
 
-    return [rest for items, rest in rules if any(matches(item) for item in items)]
+    return [(items, rest) for items, rest in rules if any(matches(item) for item in items)]
+
+
+# Where the sudo policy comes from besides the files above. sudo reads `sudoers:` in nsswitch.conf,
+# and a host that serves rules from LDAP or SSSD grants sudo through a source this helper's parser
+# never sees.
+NSSWITCH_FILE = "/etc/nsswitch.conf"
+
+
+def _sudoers_sources():
+    """The sources nsswitch.conf names for sudoers — ["files"] when there is no such line, which is
+    sudo's default. Raises OSError when the file exists and cannot be read."""
+    try:
+        with open(NSSWITCH_FILE, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        return ["files"]
+    for line in text.splitlines():
+        key, sep, rest = line.split("#", 1)[0].partition(":")
+        # sudo matches the database name without regard to case: `SUDOERS: files ldap` is LDAP.
+        if sep and key.strip().lower() == "sudoers":
+            return [w.lower() for w in rest.split() if not w.startswith("[")] or ["files"]
+    return ["files"]
+
+
+def _sudo_list_binaries():
+    """Every sudo on this host that could answer `-l -U` (the sudo_list entry in TOOLS)."""
+    return [c for c in TOOLS["sudo_list"] if os.path.isfile(c) and os.access(c, os.X_OK)]
+
+
+def _sudo_lists_rules(user):
+    """sudo's own answer for a policy with non-file sources, from EVERY sudo present: True if any
+    lists rules for `user`, None if none is present or any answers unclearly (the caller refuses),
+    False only when all of them say it may not run sudo."""
+    answers = []
+    for binary in _sudo_list_binaries():
+        try:
+            r = subprocess.run([binary, "-l", "-U", user],           # nosec B603 - fixed argv
+                               shell=False, capture_output=True, timeout=30,
+                               env={"LC_ALL": "C", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"})
+            out = (r.stdout + r.stderr).decode("utf-8", "replace")
+        except Exception:
+            out = ""
+        answers.append(True if "may run the following" in out
+                       else False if "not allowed to run sudo" in out else None)
+    if not answers or None in answers:
+        return None
+    return any(answers)
+
+
+# SSSD's sudo responder. With it down, sudo answers from the NSS cache — the account still resolves
+# — and says "not allowed" with no warning, so that answer is only trusted when this socket accepts
+# a connection.
+SSS_SUDO_PIPE = "/var/lib/sss/pipes/sudo"
+
+
+def _sss_sudo_answers():
+    """True if SSSD's sudo responder accepts a connection."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(2)
+    try:
+        s.connect(SSS_SUDO_PIPE)
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
 
 
 LGSM_ACTIONS = ("start", "stop", "restart", "monitor", "update", "validate", "backup",
@@ -2848,9 +2959,14 @@ def do_gameuser_group(args, content):
     `groupadd -f` succeeds when the group already exists, and `usermod -aG` is append-only, so
     running this for an account that is already a member is a no-op."""
     user = args[0]
-    if _can_already_escalate(user):
-        sys.stderr.write("refusing to enrol %s in %s: it can already run sudo, so the panel's "
-                         "grant would become a path to root\n" % (user, GAME_GROUP))
+    verdict, why = _escalation_verdict(user)
+    if verdict == "yes":
+        sys.stderr.write("refusing to enrol %s in %s: it can already reach root (%s)\n"
+                         % (user, GAME_GROUP, why))
+        return 1
+    if verdict != "no":
+        sys.stderr.write("refusing to enrol %s in %s: could not confirm it cannot reach root (%s)\n"
+                         % (user, GAME_GROUP, why))
         return 1
     rc = subprocess.run([resolve("groupadd"), "-f", GAME_GROUP],      # nosec B603 - fixed argv
                         shell=False, capture_output=True, timeout=30).returncode
