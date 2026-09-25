@@ -98,7 +98,7 @@ echo ""
 # ── Read the panel's OWN port + Tailscale flag before we delete its config ──
 PANEL_PORT=""; TS_DONE=0; TS_MOUNT=""; TS_CONF_UNREAD=0
 if [ -f "${PANEL_DIR}/data/config.json" ]; then
-    PANEL_PORT="$(python3 -c "import json;print(int(json.load(open('${PANEL_DIR}/data/config.json')).get('port',5000)))" 2>/dev/null || echo "")"
+    PANEL_PORT="$(python3 -I -c "import json;print(int(json.load(open('${PANEL_DIR}/data/config.json')).get('port',5000)))" 2>/dev/null || echo "")"
     # The mount the panel published ITSELF at (config.py defaults "tailscale_mount" to "/"). Read
     # here, beside the port, because data/config.json is deleted a few lines below — and validated
     # with the same shape the panel validates it with (privileged.py's _ts_mount), so a value that
@@ -114,7 +114,7 @@ if [ -f "${PANEL_DIR}/data/config.json" ]; then
     # VerbError and returns "That isn't a usable mount point." without calling the CLI); empty
     # here is what mirrors that. A "/" that the config genuinely RECORDS still reads back as "/"
     # and is still removed.
-    TS_MOUNT="$(python3 -c "import json,re;m=str(json.load(open('${PANEL_DIR}/data/config.json')).get('tailscale_mount') or '/');print(m if m == '/' or re.fullmatch(r'(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,31}){1,3}', m) else '')" 2>/dev/null || echo "")"
+    TS_MOUNT="$(python3 -I -c "import json,re;m=str(json.load(open('${PANEL_DIR}/data/config.json')).get('tailscale_mount') or '/');print(m if m == '/' or re.fullmatch(r'(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,31}){1,3}', m) else '')" 2>/dev/null || echo "")"
     # The config file is HERE and we could not get a mount out of it — worth saying so below,
     # because `tailscale_setup_done` is read out of the same unreadable file by the grep after it.
     [ -n "${TS_MOUNT}" ] || TS_CONF_UNREAD=1

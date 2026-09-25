@@ -55,12 +55,35 @@ from datetime import timedelta
 #
 # catch_warnings() restores the previous filter state on exit, so nothing leaks past this block.
 import warnings as _w
+
+# Python 3.13+ binds one of threading's own locks into a function's DEFAULTS:
+# `_DeleteDummyThreadOnDel.__del__(self, _active_limbo_lock=_active_limbo_lock, _active=_active)`.
+# monkey_patch replaces BOTH — the lock with a green one, and threading._active with a new dict —
+# but it walks module dicts, lists and attributes, never a defaults tuple. So that __del__ kept the
+# originals: it removed finished dummy threads from a dict nothing reads any more (they were never
+# removed from the live one) under a lock nothing else takes, and eventlet, counting the lock,
+# printed "1 RLock(s) were not greened ... make sure you run eventlet.monkey_patch() before
+# importing any other modules" on every start under 3.14 (Ubuntu 26.04) — a fix nothing can apply,
+# because threading creates that lock at interpreter start-up. Hand the lock default a stand-in
+# while eventlet patches, then rebind both to what the module now uses. Only when the defaults are
+# exactly the shape above; any other Python is left alone.
+_dd_del = getattr(getattr(threading, "_DeleteDummyThreadOnDel", None), "__del__", None)
+_dd_defaults = getattr(_dd_del, "__defaults__", None)
+_dd_rebind = (isinstance(_dd_defaults, tuple) and len(_dd_defaults) == 2
+              and _dd_defaults[0] is getattr(threading, "_active_limbo_lock", None)
+              and _dd_defaults[1] is getattr(threading, "_active", None))
+if _dd_rebind:
+    _dd_del.__defaults__ = (threading._PyRLock(), _dd_defaults[1])
+del _dd_defaults   # it still holds the original lock, and eventlet counts every one that survives
+
 with _w.catch_warnings():
     _w.filterwarnings("ignore", message=r"\s*Eventlet is deprecated")
     import eventlet
     eventlet.monkey_patch()
 
-del _w
+if _dd_rebind:
+    _dd_del.__defaults__ = (threading._active_limbo_lock, threading._active)
+del _w, _dd_del, _dd_rebind
 
 # Panel imports live AFTER the patch, all of them. terminal/clock used to sit above it and got
 # away with it only because neither pulls in anything eventlet needs to green — a latent trap for
