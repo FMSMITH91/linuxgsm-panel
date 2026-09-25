@@ -176,10 +176,12 @@ def register(app):
                 port = int(it.get("port") or 0)
             except (TypeError, ValueError):
                 port = 0
-            # Import NEVER starts or reconfigures a discovered server — it's left exactly as it
-            # is (its own cron/backups/mods are read live by the panel once imported). Autostart
-            # is off until you enable it here, which is what sets up the panel's monitor cron, so
-            # the panel never takes over a server you didn't ask it to manage.
+            # Import never starts or stops a discovered server, and leaves its game files, backups
+            # and mods as they are (they are read live once imported). It does turn Autostart on,
+            # as an install does: the background step below writes LinuxGSM's `monitor` cron once
+            # the command list shows the game has it, and sets the flag then. monitor keeps a
+            # server in its intended state, so a running one comes back after a reboot or a crash
+            # and a stopped one stays down. It starts False here because nothing is written yet.
             db.session.add(GameServer(
                 remote_id=remote_id, name=user, short_name=user, game_type=gt,
                 game_display=game_names.get(gt, ""),
@@ -195,9 +197,13 @@ def register(app):
             not_enrolled = _enrol_imported(remote, added)
             # Populate the imported servers' command lists so "Supported Commands" is ready
             # without a manual refresh (install caches these; import didn't).
-            new_ids = [gs.id for gs in GameServer.query.filter(
-                GameServer.remote_id == remote_id,
-                GameServer.short_name.in_(added)).all()]
-            _bg_cache_commands(app, new_ids)
+            new_rows = GameServer.query.filter(
+                GameServer.remote_id == remote_id, GameServer.short_name.in_(added)).all()
+            refused = {n["user"] for n in not_enrolled}
+            # Autostart only where the panel can write the account's crontab: an account the
+            # helper refused to enrol is one the panel cannot become on a narrow-grant host.
+            _bg_cache_commands(app, [gs.id for gs in new_rows],
+                               autostart_ids=[gs.id for gs in new_rows
+                                              if gs.short_name not in refused])
         return jsonify({"success": bool(added), "added": added, "skipped": skipped,
                         "not_enrolled": not_enrolled})

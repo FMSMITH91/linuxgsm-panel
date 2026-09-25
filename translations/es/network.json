@@ -93,7 +93,7 @@
   "Existing servers on this host": "Servidores existentes en este host",
   "Family": "Familia",
   "Filter servers…": "Filtrar servidores…",
-  "Finds LinuxGSM servers already installed on this host (any user) and imports the ones missing from the panel — with their backups, mods and cron. Read-only until you import.": "Busca servidores de LinuxGSM ya instalados en este host (de cualquier usuario) e importa los que falten en el panel, con sus copias de seguridad, mods y cron. Solo lectura hasta que importes.",
+  "Finds LinuxGSM servers already installed on this host (any user) and imports the ones missing from the panel — with their backups, mods and cron. Read-only until you import. Imported servers get Autostart turned on, as a new install does: a running server comes back after a reboot, and a stopped one stays stopped.": "Busca servidores de LinuxGSM ya instalados en este host (de cualquier usuario) e importa los que falten en el panel, con sus copias de seguridad, mods y cron. Solo lectura hasta que importes. Los servidores importados quedan con el autoarranque activado, como en una instalación nueva: uno en marcha vuelve tras un reinicio y uno detenido sigue detenido.",
   "Firewall": "Cortafuegos",
   "Firewall:": "Cortafuegos:",
   "Fresh server — full setup + reboot": "Servidor nuevo: configuración completa + reinicio",
