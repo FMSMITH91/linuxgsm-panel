@@ -80,6 +80,7 @@ def _fetch(name):
     """Download one file and return its text, or None. Never raises."""
     req = urllib.request.Request(_BASE + name, headers={"User-Agent": "linuxgsm-panel"})
     try:
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- _BASE is a fixed https://raw.githubusercontent.com URL
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:  # nosec B310 - fixed https host
             if getattr(resp, "status", 200) != 200:
                 _last_error[name] = "HTTP %s" % resp.status

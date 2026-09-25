@@ -207,6 +207,7 @@
           <span class="badge bg-info text-dark text-uppercase mb-2">{{ suggestion.method }}</span>
           <p class="small mb-1">{{ suggestion.description }}</p>
           {% if suggestion.url %}
+          {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- built by tailscale_integration on a fixed http(s):// scheme #}
           <a href="{{ suggestion.url }}" target="_blank" class="small">
             <i class="bi bi-box-arrow-up-right"></i> {{ suggestion.url }}
           </a>

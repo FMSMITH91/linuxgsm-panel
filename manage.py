@@ -138,6 +138,7 @@ def cmd_reset_password(args):
         # Through set_password so the outgoing one joins the history the web UI enforces. The
         # reuse CHECK is deliberately not applied here: this is the locked-out-of-your-own-panel
         # recovery path, and a recovery tool that can refuse you is not one.
+        # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- _read_password() already enforced password_problem() on it
         u.set_password(auth.hash_password(_read_password(args)))
         u.auth_epoch = (u.auth_epoch or 0) + 1   # revoke existing sessions
             # The API token too. It is a SECOND credential for the same account, and it did not

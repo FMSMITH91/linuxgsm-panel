@@ -254,6 +254,7 @@ def _run(cmd, timeout=30, sudo=False, text=True):
         cmd = f"sudo {cmd}"
     try:
         r = subprocess.run(
+            # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true -- the panel's shell runner by design; every caller quotes what it interpolates
             cmd, shell=True, capture_output=True, text=text, timeout=timeout,
             stdin=subprocess.DEVNULL,
         )
@@ -914,6 +915,7 @@ def _remote_ci_state(sha):
                 "Accept": "application/vnd.github+json",
                 "User-Agent": "linuxgsm-panel-update-check",
             })
+            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- a fixed https://api.github.com URL
             with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310 - fixed https host
                 batch = json.loads(resp.read().decode("utf-8")).get("check_runs", [])
             runs.extend(batch)
@@ -1294,6 +1296,7 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
     try:
         with open(path, "w") as f:
             f.write(script)
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700 is owner-only
         os.chmod(path, 0o700)  # owner-only; root (sudo path) can still read it
         # argv is literals (systemd-run, --no-block, --collect, --unit, /bin/bash) plus `path`,
         # a fixed location under DATA_DIR written at 0700 just above. No shell. Not a static
@@ -1795,14 +1798,28 @@ def enable_unattended_upgrades():
 # drift apart, and _WRITE_TARGET_BY_PATH lets _write_root_file find the verb for a path it is given.
 _F2B_PANEL_FILTER = _priv.WRITE_TARGETS["fail2ban-panel-filter"][0]
 _F2B_PANEL_JAIL = _priv.WRITE_TARGETS["fail2ban-panel-jail"][0]
+_F2B_PANEL_WHITELIST = _priv.WRITE_TARGETS["fail2ban-panel-whitelist"][0]
 _WRITE_TARGET_BY_PATH = {p: name for name, (p, _m) in _priv.WRITE_TARGETS.items()}
 
 
 def _panel_f2b_filter_body():
-    """fail2ban filter matching the panel's own auth.log lines; <HOST> captures the offender."""
+    """fail2ban filter matching the panel's own auth.log lines; <HOST> captures the offender. A
+    failed or throttled password login, and a bearer-token attempt the token throttle refused
+    (auth._token_auth_note_blocked)."""
     return ("[Definition]\n"
-            "failregex = panel login (?:failed|blocked) from <HOST>$\n"
+            "failregex = panel (?:login|api token) (?:failed|blocked) from <HOST>$\n"
             "ignoreregex =\n")
+
+
+def _panel_f2b_filter_current():
+    """The panel filter file as it is on disk, or None if it cannot be read (it is world-readable,
+    so no sudo). Compared whole: a filter written before a line was added matches nothing new."""
+    try:
+        with open(_F2B_PANEL_FILTER) as f:
+            return f.read()
+    except OSError:
+        _log.debug("f2b: could not read the panel filter", exc_info=True)
+    return None
 
 
 def _f2b_ignoreip_line(ignore_ips):
@@ -1873,22 +1890,28 @@ def _panel_login_proxied():
 _TAILNET_RANGES = ("100.64.0.0/10", "fd7a:115c:a1e0::/48")
 
 
-def _panel_f2b_ignore(ignore_ips, allports):
+def _panel_f2b_ignore(ignore_ips):
     """The panel jail's ignoreip entries (before _f2b_ignoreip_line validates them): the whitelist,
-    plus — when the ban is on EVERY port — the tailnet.
+    plus the tailnet — on every jail, whichever port it bans on.
 
     An all-ports ban on a tailnet peer is a ban on its way in: under Serve the forwarded client IS
     a tailnet address, and five mistyped panel passwords from an admin's laptop REJECTed that
     100.x address on every TCP port for an hour — sshd over tailscale0 (the way back in once public
     SSH is off), game and RCON ports. The panel never firewall-blocks a tailnet IP anywhere else
     (ssh_manager's note above _TAILNET_CGNAT; the auto-block exempts them), and a public attacker
-    cannot have one. A web-port-only ban takes only the panel login from them, as it always did."""
-    return list(ignore_ips or []) + (list(_TAILNET_RANGES) if allports else [])
+    cannot have one.
+
+    A web-port-only jail exempts them too. It used not to, on the reasoning that it took only the
+    panel login away — but that is the panel, from the admin's own laptop, for an hour, and the
+    README has always promised "your Tailscale peers are never banned". A tailnet peer mistyping
+    its password is still held to the login throttle (auth_routes), which fail2ban never replaced."""
+    return list(ignore_ips or []) + list(_TAILNET_RANGES)
 
 
 def _panel_f2b_jail_body(auth_log, web_port, ignore_ips=None, allports=None):
     """Jail: 5 failures in 10 min → 1-hour ban, on the panel's web port. In jail.d/ so it sits
-    alongside (doesn't conflict with) any [sshd] jail. `ignore_ips` (validated) are never banned.
+    alongside (doesn't conflict with) any [sshd] jail. `ignore_ips` (validated) and the tailnet
+    are never banned.
 
     On the web port ONLY when clients connect to it directly. Behind nginx/Caddy or Serve the
     banned address is the forwarded client, whose traffic reaches the proxy's port: the ban
@@ -1908,7 +1931,7 @@ def _panel_f2b_jail_body(auth_log, web_port, ignore_ips=None, allports=None):
             "findtime = 10m\n"
             "bantime = 1h\n"
             "ignoreip = %s\n" % (web_port, auth_log,
-                                 _f2b_ignoreip_line(_panel_f2b_ignore(ignore_ips, allports))))
+                                 _f2b_ignoreip_line(_panel_f2b_ignore(ignore_ips))))
 
 
 def _panel_f2b_jail_value(key):
@@ -2608,16 +2631,53 @@ def ensure_panel_fail2ban(auth_log, web_port, ignore_ips=None):
     # early. Found on a host whose jail still carried a logpath from a previous install path.
     allports = _panel_login_proxied()
     want_action = _F2B_PANEL_ALLPORTS_ACTION if allports else None
-    # Built exactly as _panel_f2b_jail_body builds it — tailnet included on an all-ports jail — or
-    # a jail written without it would read as healthy and never be rewritten.
-    want_ignore = _f2b_ignoreip_line(_panel_f2b_ignore(ignore_ips, allports)).split()
+    # Built exactly as _panel_f2b_jail_body builds it — tailnet included — or a jail written
+    # without it would read as healthy and never be rewritten.
+    want_ignore = _f2b_ignoreip_line(_panel_f2b_ignore(ignore_ips)).split()
     if (st.get("enabled") and _panel_f2b_jail_port() == web_port
             and _panel_f2b_jail_value("banaction") == want_action
             and _panel_f2b_jail_value("logpath") == str(auth_log)
             and _panel_f2b_jail_value("backend") == _F2B_PANEL_BACKEND
-            and (_panel_f2b_jail_ignoreip() or []) == want_ignore):
+            and (_panel_f2b_jail_ignoreip() or []) == want_ignore
+            and _panel_f2b_filter_current() == _panel_f2b_filter_body()):
         return True, "panel-login jail already active on port %d" % web_port
     return configure_panel_fail2ban(auth_log, web_port, ignore_ips)
+
+
+def f2b_whitelist_dropin_body(ignore_ips):
+    """The `[DEFAULT] ignoreip` drop-in that makes every jail on a host (sshd included) ignore the
+    whitelist. Built by _f2b_ignoreip_line, so it gets the same validation as the panel jail's own
+    line — ssh_manager's remote copy of this file too."""
+    return "[DEFAULT]\nignoreip = %s\n" % _f2b_ignoreip_line(ignore_ips)
+
+
+def ensure_panel_host_whitelist(ignore_ips):
+    """Make EVERY fail2ban jail on the panel's own host ignore the whitelist, not only the panel
+    login's. Returns (ok, msg); no-ops when fail2ban is absent or the file already says this.
+
+    Remotes had this for a long time (ssh_manager remote_set_fail2ban_ignoreip writes the same
+    drop-in). The panel host did not: only the panel-login jail carried the whitelist, so an admin
+    whose own address was whitelisted could still be banned from SSH on the very host the panel
+    runs on — while the Security page said "never banned or blocked".
+
+    Nothing is written for an empty whitelist unless a drop-in is already there to be emptied: a
+    [DEFAULT] ignoreip in a later-read file overrides one the operator set in jail.local."""
+    if not panel_fail2ban_status().get("installed"):
+        return False, "fail2ban isn't installed on this host."
+    want = f2b_whitelist_dropin_body(ignore_ips)
+    try:
+        with open(_F2B_PANEL_WHITELIST) as f:
+            have = f.read()
+    except OSError:
+        have = None
+    if have == want:
+        return True, "fail2ban whitelist already applied to every jail"
+    if have is None and not ignore_ips:
+        return True, "no whitelist to apply"
+    if _write_root_file(_F2B_PANEL_WHITELIST, want)[2] != 0:
+        return False, "could not write the fail2ban whitelist"
+    _run_verb("f2b-reload", [], timeout=45)
+    return True, "fail2ban whitelist applied to every jail"
 
 
 def panel_diagnostics():

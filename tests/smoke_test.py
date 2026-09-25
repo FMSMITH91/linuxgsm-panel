@@ -442,6 +442,65 @@ try:
     check("funnel gate: the 90 s ban-watcher feeds the set from the reading it already takes",
           "_banlist.set_f2b(reading, _taken)" in _gb_watch
           and "_banlist.set_ufw(so.ufw_blocked_ips(), _taken)" in _gb_watch)
+
+    # ── a socket opened BEFORE its client was banned is dropped when the ban lands ─────────────
+    # A ban refuses new connections — the gate above, or the firewall — and nothing re-asked about
+    # one already open: a live console or a root terminal opened by an address fail2ban then banned
+    # kept streaming for as long as the browser stayed. Driven through the real socket stack.
+    from panel.routes import server_files as _bs_sf
+    _bs_saved = (_gb._f2b, _gb._ufw, _gb._allow, _gb._by_len, dict(_gb._taken))
+    _bs_socks = []
+
+    def _bs_open(xff):
+        _s = app.socketio.test_client(app, flask_test_client=client_as(admin_id),
+                                      headers={"X-Forwarded-For": xff})
+        _bs_socks.append(_s)
+        return _s
+    try:
+        _gb.set_f2b([])
+        _gb.set_ufw([])
+        _gb.set_whitelist(["203.0.113.99"])
+        _bs = {"banned": _bs_open("203.0.113.88"), "other": _bs_open("192.0.2.88"),
+               "tailnet": _bs_open("100.101.102.104"), "whitelisted": _bs_open("203.0.113.99")}
+        check("ban sweep: (control) every socket connects and is recorded by its address",
+              all(_s.is_connected() for _s in _bs.values()) and len(_bs_sf._socket_addrs) >= 4,
+              {k: _s.is_connected() for k, _s in _bs.items()})
+        _gb.set_f2b(["203.0.113.88", "100.101.102.104", "203.0.113.99"])
+        check("ban sweep: a fail2ban ban drops the open socket of the address it names",
+              not _bs["banned"].is_connected())
+        check("ban sweep: ...and leaves another client, a tailnet peer and a whitelisted address "
+              "connected", all(_bs[k].is_connected() for k in ("other", "tailnet", "whitelisted")),
+              {k: _s.is_connected() for k, _s in _bs.items()})
+        _gb.set_ufw({"192.0.2.0/24": ""})
+        check("ban sweep: a UFW deny of a whole network drops a socket inside it",
+              not _bs["other"].is_connected())
+        check("ban sweep: a dropped socket leaves no address behind (the disconnect handler ran)",
+              not any(a[1] is not None and str(a[1]) in ("203.0.113.88", "192.0.2.88")
+                      for a in _bs_sf._socket_addrs.values()), repr(_bs_sf._socket_addrs))
+        check("ban sweep: a banned address cannot open a new socket either",
+              not _bs_open("203.0.113.88").is_connected())
+        # A socket is refused where a new request would be. A direct client meets the host
+        # firewall, which bans the ADDRESS; a forwarded one meets the gate, which widens an IPv6
+        # ban to its /64 (the throttle's unit). Judging the peer by the /64 cost a household
+        # neighbour its console while every page still loaded.
+        import ipaddress as _bs_ip
+        _gb.set_f2b(["2001:db8:1:2::10"])
+        _bs_n = _bs_ip.ip_address("2001:db8:1:2::11")
+        _bs_v6 = [_bs_sf._addrs_banned((_bs_ip.ip_address("2001:db8:1:2::10"), None)),
+                  _bs_sf._addrs_banned((_bs_n, None)), _bs_sf._addrs_banned((None, _bs_n))]
+        check("ban sweep: an IPv6 ban drops the banned PEER but not a /64 neighbour the firewall "
+              "still admits, while a FORWARDED neighbour is judged by its /64 as the gate judges it",
+              _bs_v6 == [True, False, True], repr(_bs_v6))
+    finally:
+        for _s in _bs_socks:
+            try:
+                if _s.is_connected():
+                    _s.disconnect()
+            except Exception:
+                pass
+        (_gb._f2b, _gb._ufw, _gb._allow, _gb._by_len, _bs_t0) = _bs_saved
+        _gb._taken.clear()
+        _gb._taken.update(_bs_t0)
     # panel.js arms its auth ping and session-expired redirect only where SIGNED_IN is true. They
     # ran on signed-out pages too, and threw an invitee (or the first-run admin) off a half-filled
     # form to /login with "Your session expired" — about a session that never existed.
@@ -7788,17 +7847,61 @@ try:
     # identity, and — importantly — a browser session from that same IP must still work, because
     # the loader returns None rather than aborting the request.
     from panel.security import auth as _auth_mod
+    from panel.security import banlist as _tt_bl
+    import logging as _tt_logging
+
+    class _TTLines(_tt_logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.lines = []
+
+        def emit(self, record):
+            self.lines.append(record.getMessage())
+    # What data/auth.log receives — the file fail2ban's panel-login jail tails.
+    _tt_h = _TTLines()
+    _tt_logging.getLogger("panel.auth").addHandler(_tt_h)
+    _tt_rs, _tt_calls = _tt_bl.refresh_soon, []
+    _tt_bl.refresh_soon = lambda delay=3.0: _tt_calls.append(delay)
     _auth_mod._TOKEN_FAILS.clear()
+    _auth_mod._TOKEN_BLOCK_AUDITED.clear()
+
+    def _tt_audits():
+        from panel.db.models import AuditLog as _TTAL
+        with app.app_context():
+            return _TTAL.query.filter_by(action="api_token_blocked").count()
+    _tt_audit0 = _tt_audits()
     try:
         for _i in range(_auth_mod.TOKEN_MAX_FAILS):
             app.test_client().get("/api/servers", headers={"Authorization": "Bearer lgsm_deadbeef"})
+        _tt_tokenlines = [ln for ln in _tt_h.lines if "api token" in ln]
+        check("token throttle: misses UNDER the limit write nothing fail2ban counts (a stale-token "
+              "script retrying is not banned at the firewall)", _tt_tokenlines == [],
+              repr(_tt_tokenlines))
         _blocked = _bearer(_admin_tok)
         check("token throttle: a valid token is refused once its IP is blocked",
               _blocked.status_code != 200, "got %d" % _blocked.status_code)
+        _tt_tokenlines = [ln for ln in _tt_h.lines if "api token" in ln]
+        check("token throttle: a REFUSED attempt goes to auth.log as the line the jail counts",
+              _tt_tokenlines == ["panel api token blocked from 127.0.0.1"], repr(_tt_tokenlines))
+        check("token throttle: ...and is audited", _tt_audits() == _tt_audit0 + 1,
+              "%d -> %d" % (_tt_audit0, _tt_audits()))
+        _bearer(_admin_tok)
+        check("token throttle: every refusal is a line, but the audit row is once per window",
+              len([ln for ln in _tt_h.lines if "api token" in ln]) == 2
+              and _tt_audits() == _tt_audit0 + 1, repr(_tt_h.lines))
+        check("token throttle: no forwarded client, no ban-gate refresh", _tt_calls == [],
+              repr(_tt_calls))
+        app.test_client().get("/api/servers", headers={"Authorization": "Bearer lgsm_deadbeef",
+                                                       "X-Forwarded-For": "203.0.113.50"})
+        check("token throttle: a refusal that came through a proxy asks the ban gate to refresh",
+              len(_tt_calls) == 1, repr(_tt_calls))
         check("token throttle: ...but a SESSION from the same IP still works",
               c.get("/api/servers").status_code == 200)
     finally:
         _auth_mod._TOKEN_FAILS.clear()
+        _auth_mod._TOKEN_BLOCK_AUDITED.clear()
+        _tt_bl.refresh_soon = _tt_rs
+        _tt_logging.getLogger("panel.auth").removeHandler(_tt_h)
     check("token throttle: clearing the block restores token access",
           _bearer(_admin_tok).status_code == 200)
 

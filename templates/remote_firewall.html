@@ -353,7 +353,7 @@
 {# Server-rendered values for remote_firewall.js. Kept inline (and BEFORE it, so its top-level code can
    read them) while the rest of the page script becomes a cacheable file. #}
 <script nonce="{{ csp_nonce }}">
-var remoteId = {{ remote.id }};
+var remoteId = {{ remote.id|int }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/remote_firewall.js') }}"></script>
 {% endblock %}

@@ -290,7 +290,7 @@
    ~210KB of duplicated markup in the page. The single modal below is populated from this. It lives
    INSIDE #users-list so an ajax refresh after a save keeps it current. #}
 <script type="application/json" id="users-data" nonce="{{ csp_nonce }}">
-[{% for user in users if user.id in administrable %}{"id": {{ user.id }},
+[{% for user in users if user.id in administrable %}{"id": {{ user.id|int }},
   "username": {{ user.username|tojson }},
   "display_name": {{ (user.display_name or '')|tojson }},
   "email": {{ (user.email_display or '')|tojson }},

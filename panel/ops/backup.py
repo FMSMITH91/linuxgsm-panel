@@ -236,6 +236,7 @@ def keep_limits():
 def _ensure_dir():
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     try:
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700 is owner-only, for a directory
         os.chmod(BACKUP_DIR, 0o700)
     except OSError:
         _log.debug("could not chmod backups dir", exc_info=True)
@@ -613,6 +614,7 @@ def _legacy_restore_dispatch(stage, name, safety="", typed_passphrase=False):
     script = os.path.join(str(DATA_DIR), "restore.sh")
     with open(script, "w") as f:
         f.write("\n".join(lines) + "\n")
+    # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions -- 0o700 is owner-only
     os.chmod(script, 0o700)
     # argv names a fixed script path under DATA_DIR, written at 0700 immediately above, and
     # there is no shell here. The script's CONTENT is composed — every value interpolated into

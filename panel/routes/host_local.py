@@ -390,7 +390,8 @@ def register(app):
         """Recent security-relevant audit entries (failed/blocked logins, fail2ban bans)."""
         try:
             from panel.db.models import AuditLog
-            acts = ["login_failed", "login_blocked", "fail2ban_ban", "fail2ban_unban"]
+            acts = ["login_failed", "login_blocked", "api_token_blocked", "fail2ban_ban",
+                    "fail2ban_unban"]
             rows = (AuditLog.query.filter(AuditLog.action.in_(acts))
                     .order_by(AuditLog.id.desc()).limit(50).all())
             return jsonify({"events": [

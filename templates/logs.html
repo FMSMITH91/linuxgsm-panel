@@ -2,11 +2,13 @@
 {% block title %}Audit Logs{% endblock %}
 {% block content %}
 
-{# Header cell that links to sort by `col`, toggling direction and showing an arrow. #}
-{% macro sort_th(col, label, extra="") %}
+{# Header cell that links to sort by `col`, toggling direction and showing an arrow. `nowrap` keeps
+   the header on one line. A flag rather than raw attribute text: that text was emitted unescaped in
+   an attribute position, safe only while every call site passed a literal. #}
+{% macro sort_th(col, label, nowrap=false) %}
   {% set is_active = filters.sort == col %}
   {% set next_dir = "asc" if (is_active and filters.dir == "desc") else ("desc" if is_active else "desc") %}
-  <th {{ extra|safe }}>
+  <th{% if nowrap %} class="text-nowrap"{% endif %}>
     <a class="text-reset text-decoration-none d-inline-flex align-items-center gap-1"
        href="{{ url_for('view_logs', sort=col, dir=next_dir, q=filters.q, action=filters.action, user=filters.user, status=filters.status) }}">
       {{ label }}
@@ -68,7 +70,7 @@
       <table class="table table-sm table-hover mb-0">
         <thead>
           <tr>
-            {{ sort_th('timestamp', 'Time', 'class="text-nowrap"') }}
+            {{ sort_th('timestamp', 'Time', nowrap=true) }}
             {{ sort_th('username', 'User') }}
             {{ sort_th('action', 'Action') }}
             {{ sort_th('target', 'Target') }}

@@ -568,13 +568,13 @@
 {# Server-rendered values for server_detail.js. Kept inline (and BEFORE it, so its top-level code can
    read them) while the rest of the page script becomes a cacheable file. #}
 <script nonce="{{ csp_nonce }}">
-var serverId = {{ server.id }};
+var serverId = {{ server.id|int }};
 var _CAN_MODERATE = {{ 'true' if can_moderate else 'false' }};
 var _CAN_VIEW_CONSOLE = {{ 'true' if (current_user.is_superadmin or has_permission('view_console')) else 'false' }};
 var _CAN_KICK = {{ 'true' if can_kick else 'false' }};
 var _CAN_BAN = {{ 'true' if can_ban else 'false' }};
 var _CAN_SAY = {{ 'true' if can_say else 'false' }};
-var MOUNT = "{{ mount_prefix if mount_prefix and mount_prefix != '/' else '' }}";
+var MOUNT = {{ (mount_prefix if mount_prefix and mount_prefix != '/' else '')|tojson }};
 var SERVER_NAME = {{ server.name|tojson }};
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>

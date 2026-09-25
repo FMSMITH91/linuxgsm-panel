@@ -13,7 +13,7 @@ from sqlalchemy import (and_, desc, or_, true)
 # whatever was typed into the username box — where people paste passwords), invites, users,
 # groups, tokens and 2FA. A delegated viewer sees their own and nobody else's, whatever the target.
 _ACCOUNT_ACTIONS = frozenset({
-    "login", "login_failed", "login_blocked", "logout", "password_changed",
+    "login", "login_failed", "login_blocked", "api_token_blocked", "logout", "password_changed",
     "2fa_enabled", "2fa_disabled", "2fa_backup_code_used", "account_display_name",
     "api_token_generate", "api_token_revoke", "add_user", "edit_user", "delete_user",
     "rename_user", "revoke_session", "revoke_sessions", "invite_created", "invite_revoked",

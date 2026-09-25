@@ -2871,8 +2871,10 @@ check("f2b jail: ...and the logpath is still written",
 # only, matched nothing, and the panel still audited and notified the IP as banned.
 import panel.core.config as _f2bp_cfg                                              # noqa: E402
 _f2bp_saved = (_f2bp_cfg.load_config, _so.panel_fail2ban_status, _so._panel_f2b_jail_port,
-               _so._panel_f2b_jail_value, _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban)
+               _so._panel_f2b_jail_value, _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban,
+               _so._panel_f2b_filter_current)
 try:
+    _so._panel_f2b_filter_current = _so._panel_f2b_filter_body
     for _f2bp_c, _f2bp_want in (({"trust_proxy": True}, True), ({"tailscale_setup_done": True}, True),
                                 ({"bind_host": "127.0.0.1"}, True),
                                 ({"bind_host": "0.0.0.0"}, False), ({}, False)):
@@ -2883,12 +2885,13 @@ try:
         # An all-ports ban on a tailnet peer takes its SSH over tailscale0 and every game port:
         # under Serve the forwarded client IS a tailnet address, and five mistyped passwords from an
         # admin's laptop banned it for an hour. The panel never firewall-blocks the tailnet elsewhere.
+        # A web-port-only jail exempts it too: that ban is the panel itself, from the admin's own
+        # laptop, and the README promises tailnet peers are never banned.
         _f2bp_ign = next((ln.split("=", 1)[1].split() for ln in _f2bp_body.splitlines()
                           if ln.startswith("ignoreip")), [])
-        check("f2b jail: %r %s the tailnet (IPv4 and IPv6) from the ban"
-              % (_f2bp_c, "exempts" if _f2bp_want else "(web port only, as before) does not exempt"),
-              ({"100.64.0.0/10", "fd7a:115c:a1e0::/48"} <= set(_f2bp_ign)) is _f2bp_want
-              and {"127.0.0.1/8", "::1"} <= set(_f2bp_ign), "ignoreip %r" % (_f2bp_ign,))
+        check("f2b jail: %r exempts the tailnet (IPv4 and IPv6) from the ban" % (_f2bp_c,),
+              {"100.64.0.0/10", "fd7a:115c:a1e0::/48", "127.0.0.1/8", "::1"} <= set(_f2bp_ign),
+              "ignoreip %r" % (_f2bp_ign,))
     # ...and a jail already written for the web port alone is rewritten once the panel is proxied:
     # ensure_panel_fail2ban is the only thing that would ever rewrite it, and it returned early on
     # "port, logpath, backend and whitelist all match". The stored ignoreip is what THIS config
@@ -2897,8 +2900,7 @@ try:
     _so.panel_fail2ban_status = lambda: {"installed": True, "enabled": True}
     _so._panel_f2b_jail_port = lambda: 5000
     _so._panel_f2b_jail_value = lambda k: {"logpath": "/x/auth.log", "backend": "auto"}.get(k)
-    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line(
-        _so._panel_f2b_ignore([], _so._panel_login_proxied())).split()
+    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line(_so._panel_f2b_ignore([])).split()
     _so.configure_panel_fail2ban = lambda *a, **k: (_f2bp_calls.append(a), (True, "ok"))[1]
     _f2bp_cfg.load_config = lambda: {"trust_proxy": True}
     _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
@@ -2909,32 +2911,40 @@ try:
     _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
     check("f2b jail: ...while the same jail on a directly-reached panel is left alone (positive control)",
           not _f2bp_calls, "rewrites: %r" % (_f2bp_calls,))
-    # An all-ports jail written before the tailnet was exempted is rewritten, not read as healthy.
-    _f2bp_cfg.load_config = lambda: {"tailscale_setup_done": True}
-    _so._panel_f2b_jail_value = lambda k: {"logpath": "/x/auth.log", "backend": "auto",
-                                           "banaction": "iptables-allports"}.get(k)
-    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line([]).split()
-    _f2bp_calls.clear()
-    _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
-    check("f2b jail: an all-ports jail that bans the tailnet is rewritten, not left as healthy",
-          len(_f2bp_calls) == 1, "rewrites: %r" % (_f2bp_calls,))
-    _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line(_so._panel_f2b_ignore([], True)).split()
-    _f2bp_calls.clear()
-    _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
-    check("f2b jail: ...while one that already exempts it is left alone (positive control)",
-          not _f2bp_calls, "rewrites: %r" % (_f2bp_calls,))
+    # A jail written before the tailnet was exempted is rewritten, not read as healthy — on every
+    # port or on the web port alone (a panel reached directly, the case the exemption once skipped).
+    for _f2bp_c2, _f2bp_act in (({"tailscale_setup_done": True}, "iptables-allports"), ({}, None)):
+        _f2bp_cfg.load_config = lambda _c=_f2bp_c2: dict(_c)
+        _so._panel_f2b_jail_value = lambda k, _a=_f2bp_act: {
+            "logpath": "/x/auth.log", "backend": "auto", "banaction": _a}.get(k)
+        _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line([]).split()
+        _f2bp_calls.clear()
+        _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
+        check("f2b jail: a %s jail that bans the tailnet is rewritten, not left as healthy"
+              % ("all-ports" if _f2bp_act else "web-port"),
+              len(_f2bp_calls) == 1, "rewrites: %r" % (_f2bp_calls,))
+        _so._panel_f2b_jail_ignoreip = lambda: _so._f2b_ignoreip_line(_so._panel_f2b_ignore([])).split()
+        _f2bp_calls.clear()
+        _so.ensure_panel_fail2ban("/x/auth.log", 5000, [])
+        check("f2b jail: ...while a %s one that already exempts it is left alone (positive control)"
+              % ("all-ports" if _f2bp_act else "web-port"),
+              not _f2bp_calls, "rewrites: %r" % (_f2bp_calls,))
 finally:
     (_f2bp_cfg.load_config, _so.panel_fail2ban_status, _so._panel_f2b_jail_port,
-     _so._panel_f2b_jail_value, _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban) = _f2bp_saved
+     _so._panel_f2b_jail_value, _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban,
+     _so._panel_f2b_filter_current) = _f2bp_saved
 
 # ensure_panel_fail2ban is the ONLY thing that would ever rewrite the jail, and it returned early
 # when the port and whitelist matched — so a jail carrying a logpath from a previous install path
 # (`/home/<old-user>/…`, which fail2ban tails forever without complaining) stayed broken for good.
 _f2b_orig = (_so.panel_fail2ban_status, _so._panel_f2b_jail_port, _so._panel_f2b_jail_value,
-             _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban)
+             _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban, _so._panel_f2b_filter_current)
 try:
+    _f2b_filter = {"body": _so._panel_f2b_filter_body()}
+    _so._panel_f2b_filter_current = lambda: _f2b_filter["body"]
     _jail = {"port": 5000, "logpath": "/home/panel/data/auth.log", "backend": "auto",
-             "ignoreip": ["127.0.0.1/8", "::1"], "rewrote": []}
+             "ignoreip": ["127.0.0.1/8", "::1", "100.64.0.0/10", "fd7a:115c:a1e0::/48"],
+             "rewrote": []}
     _so.panel_fail2ban_status = lambda: {"installed": True, "enabled": True, "banned": 0}
     _so._panel_f2b_jail_port = lambda: _jail["port"]
     _so._panel_f2b_jail_value = lambda key: _jail.get(key)
@@ -2971,9 +2981,95 @@ try:
     _jail["rewrote"], _jail["port"], _jail["ignoreip"] = [], 5000, ["127.0.0.1/8"]
     _ok, _msg = _so.ensure_panel_fail2ban("/home/panel/data/auth.log", 5000, [])
     check("f2b jail: a changed WHITELIST still forces a rewrite", len(_jail["rewrote"]) == 1)
+    # A filter written before API-token lines were added matches none of them, and everything else
+    # about that jail reads as healthy — so the filter is part of "already active" too.
+    _jail["rewrote"], _jail["ignoreip"] = [], ["127.0.0.1/8", "::1", "100.64.0.0/10",
+                                               "fd7a:115c:a1e0::/48"]
+    _f2b_filter["body"] = ("[Definition]\nfailregex = panel login (?:failed|blocked) from <HOST>$\n"
+                           "ignoreregex =\n")
+    _ok, _msg = _so.ensure_panel_fail2ban("/home/panel/data/auth.log", 5000, [])
+    check("f2b jail: a filter that predates the API-token line forces a rewrite",
+          len(_jail["rewrote"]) == 1, _msg)
+    _jail["rewrote"], _f2b_filter["body"] = [], None
+    _so.ensure_panel_fail2ban("/home/panel/data/auth.log", 5000, [])
+    check("f2b jail: ...and so does a missing filter", len(_jail["rewrote"]) == 1)
 finally:
     (_so.panel_fail2ban_status, _so._panel_f2b_jail_port, _so._panel_f2b_jail_value,
-     _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban) = _f2b_orig
+     _so._panel_f2b_jail_ignoreip, _so.configure_panel_fail2ban,
+     _so._panel_f2b_filter_current) = _f2b_orig
+
+# ── the filter matches what the panel writes, and only that ───────────────────────────────────
+# fail2ban's <HOST> is its own address pattern; for a test, an IP-shaped group is enough. The
+# lines are the ones auth_routes and auth._token_auth_note_blocked write, after the "%(asctime)s "
+# prefix the handler adds (fail2ban strips the date before matching).
+_flt_re = next(ln.split("=", 1)[1].strip() for ln in _so._panel_f2b_filter_body().splitlines()
+               if ln.startswith("failregex"))
+_flt_re = __import__("re").compile(_flt_re.replace("<HOST>", r"(?P<host>[0-9a-fA-F:.]+)"))
+eq("f2b filter: password failures, throttled logins and throttled token attempts all match; "
+   "nothing else does",
+   [(_m.group("host") if _m else None) for _m in (_flt_re.search(_l) for _l in (
+       "panel login failed from 203.0.113.5", "panel login blocked from 2001:db8::7",
+       "panel api token blocked from 198.51.100.9", "panel api token failed from 198.51.100.10",
+       "panel login succeeded from 203.0.113.5", "panel api token blocked from unknown"))],
+   ["203.0.113.5", "2001:db8::7", "198.51.100.9", "198.51.100.10", None, None])
+
+# ── the whitelist on EVERY jail of the panel's own host ───────────────────────────────────────
+# Remotes got a [DEFAULT] ignoreip drop-in for the whitelist; the panel host had it on the panel
+# login's jail alone, so a whitelisted admin could be banned from SSH on the panel's own host.
+import tempfile as _hw_tmp                                                          # noqa: E402
+_hw_orig = (_so.panel_fail2ban_status, _so._write_root_file, _so._run_verb, _so._F2B_PANEL_WHITELIST)
+_hw_dir = _hw_tmp.mkdtemp()
+try:
+    _hw = {"installed": True, "writes": [], "reloads": 0, "rc": 0}
+    _so._F2B_PANEL_WHITELIST = os.path.join(_hw_dir, "zz-panel-whitelist.local")
+
+    def _hw_write(path, content):
+        _hw["writes"].append((path, content))
+        if _hw["rc"] == 0:
+            with open(path, "w") as _f:
+                _f.write(content)
+        return "", "", _hw["rc"]
+
+    def _hw_verb(verb, args, **_k):
+        _hw["reloads"] += verb == "f2b-reload"
+        return "", "", 0
+    _so.panel_fail2ban_status = lambda: {"installed": _hw["installed"]}
+    _so._write_root_file, _so._run_verb = _hw_write, _hw_verb
+
+    _ok, _ = _so.ensure_panel_host_whitelist([])
+    check("host whitelist: no drop-in is created for an empty whitelist (it would override the "
+          "operator's own [DEFAULT] ignoreip)", _ok and not _hw["writes"], repr(_hw))
+    _ok, _ = _so.ensure_panel_host_whitelist(["198.51.100.7", "10.0.0.0/8"])
+    _hw_body = open(_so._F2B_PANEL_WHITELIST).read()
+    check("host whitelist: a whitelist is written to the drop-in and fail2ban reloaded",
+          _ok and len(_hw["writes"]) == 1 and _hw["reloads"] == 1
+          and _hw["writes"][0][0] == _so._F2B_PANEL_WHITELIST
+          and _hw_body.startswith("[DEFAULT]\nignoreip = ")
+          and {"127.0.0.1/8", "::1", "198.51.100.7", "10.0.0.0/8"} <= set(_hw_body.split()),
+          repr(_hw))
+    _ok, _ = _so.ensure_panel_host_whitelist(["198.51.100.7", "10.0.0.0/8"])
+    check("host whitelist: the same whitelist again writes nothing and reloads nothing",
+          _ok and len(_hw["writes"]) == 1 and _hw["reloads"] == 1, repr(_hw))
+    _ok, _ = _so.ensure_panel_host_whitelist([])
+    check("host whitelist: emptying it rewrites an existing drop-in (localhost only)",
+          _ok and len(_hw["writes"]) == 2 and "198.51.100.7" not in open(_so._F2B_PANEL_WHITELIST).read(),
+          repr(_hw))
+    _hw["rc"], _hw["reloads"] = 1, 0
+    _ok, _ = _so.ensure_panel_host_whitelist(["203.0.113.9"])
+    check("host whitelist: a failed write is reported, and fail2ban is not reloaded for it",
+          _ok is False and _hw["reloads"] == 0, repr(_hw))
+    _hw["installed"], _hw["writes"] = False, []
+    _ok, _ = _so.ensure_panel_host_whitelist(["203.0.113.9"])
+    check("host whitelist: without fail2ban nothing is written", _ok is False and not _hw["writes"])
+    # The remote copy of the same file is built by the same function, so it validates the same way:
+    # an IPv6 zone id survives ipaddress with its newline, and used to reach the remote's file.
+    _hw_remote = _sm_hosts._f2b_dropin_ignoreip_body(["198.51.100.7", "::1%\nbantime = 1"])
+    check("host whitelist: the remote drop-in is the panel host's, and drops a zone-id entry",
+          _hw_remote == _so.f2b_whitelist_dropin_body(["198.51.100.7"])
+          and "bantime" not in _hw_remote, repr(_hw_remote))
+finally:
+    (_so.panel_fail2ban_status, _so._write_root_file, _so._run_verb,
+     _so._F2B_PANEL_WHITELIST) = _hw_orig
 # ── binding sshd to loopback is the one lockout change_ssh_port cannot undo ─────────────────────
 # Every other bad bind address fails loudly: sshd cannot bind an address the host does not have,
 # so it does not start, the listening check sees that, and the drop-in is reverted. 127.0.0.1 is a

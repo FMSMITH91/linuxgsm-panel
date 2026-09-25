@@ -659,9 +659,17 @@ def _apply_whitelist_to_fail2ban():
     if is_unreadable(_cfg):
         _log.warning("config.json could not be read; the fail2ban jail was left as it is")
         return False, "config.json could not be read; fail2ban was left as it is"
+    wl = list(_cfg.get("security_whitelist", []) or [])
+    # Every OTHER jail on this host (sshd first) as well, as remotes have long had. Its own
+    # failure must not stop the panel-login jail below, which is what this function reports on.
     try:
-        return so.ensure_panel_fail2ban(AUTH_LOG_PATH, _cfg.get("port", 5000),
-                                        list(_cfg.get("security_whitelist", []) or []))
+        _ok, _msg = so.ensure_panel_host_whitelist(wl)
+        if not _ok:
+            _log.info("fail2ban whitelist for the host's other jails: %s", _msg)
+    except Exception:
+        _log.debug("applying whitelist to the host's other jails failed", exc_info=True)
+    try:
+        return so.ensure_panel_fail2ban(AUTH_LOG_PATH, _cfg.get("port", 5000), wl)
     except Exception:
         _log.debug("applying whitelist to fail2ban failed", exc_info=True)
         return False, "could not update fail2ban"

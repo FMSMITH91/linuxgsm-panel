@@ -420,7 +420,7 @@
 {# Server-rendered values for server_files.js. Kept inline (and BEFORE it, so its top-level code can
    read them) while the rest of the page script becomes a cacheable file. #}
 <script nonce="{{ csp_nonce }}">
-var serverId = {{ server.id }};
+var serverId = {{ server.id|int }};
 var SERVER_NAME = {{ server.name|tojson }};   // the shared control bar names the server in its confirms
 </script>
 <script nonce="{{ csp_nonce }}" src="{{ asset_url('js/server_actions.js') }}"></script>
