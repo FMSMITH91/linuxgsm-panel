@@ -1736,6 +1736,15 @@ def _su_between(start, end):
     return _su_txt[i:j + len(end)]
 
 
+def _su_find(start, end):
+    # For checks written against a block a change might remove: an empty body fails them by name,
+    # where _su_between's ValueError would take the whole suite down with no tally.
+    try:
+        return _su_between(start, end)
+    except ValueError:
+        return ""
+
+
 def _su_run(body, env_lines, extra=""):
     return _sh_sub.run(["bash", "-c", "set -uo pipefail\nwarn() { echo \"WARN $*\"; }\n"
                         + extra + env_lines + body], capture_output=True, text=True)
@@ -1785,6 +1794,160 @@ try:
                  extra=_su_shim % "root").stdout
     check("install.sh: ...and the fresh path, where PANEL_DIR is still root's, is unchanged",
           "SUDO" not in _r and "python3 -m venv" in _r, repr(_r[:200]))
+
+    # An in-place OS release upgrade (22.04 -> 24.04) moves /usr/bin/python3 to a new minor version.
+    # The venv's python3 is a symlink to it, so it starts the new interpreter with none of the
+    # packages, and the service dies on `import eventlet`. The update path skipped pip whenever
+    # requirements.txt was unchanged and venv/bin/python3 existed, and an up-to-date checkout never
+    # reached pip at all, so re-running install.sh never repaired it. Stale = what pyvenv.cfg
+    # records differs from where the venv's OWN python3 resolves; both read, never run.
+    _su_vfns = (_su_find("_venv_python() {", "\n}\n") + "\n"
+                + _su_find("_venv_link_python() {", "\n}\n") + "\n"
+                + _su_find("_venv_stale() {", "\n}\n") + "\n")
+    _su_cfg = os.path.join(_su_sb, "panel", "venv", "pyvenv.cfg")
+    _su_vpy = os.path.join(_su_sb, "panel", "venv", "bin", "python3")
+    os.makedirs(os.path.join(_su_sb, "sysbin"), exist_ok=True)
+    for _v in ("3.10", "3.11", "3.12"):
+        _p = os.path.join(_su_sb, "sysbin", "python" + _v)
+        open(_p, "w").close()
+        os.chmod(_p, _su_stat.S_IRWXU)
+    os.remove(_su_vpy)
+
+    def _su_venv(cfg_text, link_to):
+        # link_to: "3.12" -> venv/bin/python3 resolves to .../python3.12; "gone" -> dangling.
+        if os.path.lexists(_su_vpy):
+            os.remove(_su_vpy)
+        os.symlink(os.path.join(_su_sb, "sysbin", "python" + ("3.9" if link_to == "gone"
+                                                               else link_to)), _su_vpy)
+        if cfg_text is None:
+            if os.path.exists(_su_cfg):
+                os.remove(_su_cfg)
+        else:
+            with open(_su_cfg, "w") as _fh:
+                _fh.write(cfg_text)
+
+    def _su_with_cfg(cfg_text, link_to, body, py_mm="3.12", extra=""):
+        _su_venv(cfg_text, link_to)
+        return _su_run(_su_vfns + body, _su_env + "PANEL_USER=%s\nPY_MM=%s\n"
+                       % (_su_shlex.quote(_su_me), py_mm), extra=extra).stdout
+
+    _su_cfg310 = "home = /usr/bin\ninclude-system-site-packages = false\nversion = 3.10.12\n"
+    _su_cfg311 = "home = /opt/pyenv/bin\ninclude-system-site-packages = false\nversion = 3.11.9\n"
+    _su_cfg312 = ("home = /usr/bin\ninclude-system-site-packages = false\nversion = 3.12.3\n"
+                  "executable = /usr/bin/python3.12\n")
+    _su_dshim = _su_shim % _su_shlex.quote(_su_me)
+    _r = _su_with_cfg(_su_cfg310, "3.12", _su_deps, extra=_su_dshim)
+    check("install.sh: a venv whose python3 now runs another Python is rebuilt clean, as its owner",
+          "SUDO -u %s python3 -m venv --clear " % _su_me in _r
+          and "WARN The venv was built for Python 3.10, and its python3 is now 3.12" in _r,
+          repr(_r[:300]))
+    _r = _su_with_cfg(_su_cfg312, "3.12", _su_deps, extra=_su_dshim)
+    check("install.sh: ...a venv built by the Python it runs is kept (a failed pip must not empty it)",
+          "-m venv " in _r and "--clear" not in _r and "WARN" not in _r, repr(_r[:300]))
+    # The audit's case: a per-user venv built from pyenv (3.11) while sudo/deploy's PATH finds
+    # /usr/bin/python3 (3.10). Comparing with PATH rebuilt a working venv on every update.
+    _r = _su_with_cfg(_su_cfg311, "3.11", _su_deps, py_mm="3.10", extra=_su_dshim)
+    check("install.sh: ...and a pyenv venv is not stale just because PATH's python3 differs",
+          "--clear" not in _r and "WARN" not in _r, repr(_r[:300]))
+    _r = _su_with_cfg(None, "3.12", _su_deps, extra=_su_dshim)
+    check("install.sh: ...with no pyvenv.cfg nothing counts as stale",
+          "-m venv " in _r and "--clear" not in _r, repr(_r[:300]))
+    _r = _su_with_cfg("version_info = 3.10.12\n", "3.12", _su_deps, extra=_su_dshim)
+    check("install.sh: ...the version_info spelling (uv's) is read too", "--clear" in _r, repr(_r[:300]))
+    _r = _su_with_cfg(_su_cfg310, "gone", _su_deps, extra=_su_dshim)
+    check("install.sh: ...and a venv whose interpreter is gone is rebuilt, saying so",
+          "--clear" in _r and "WARN The venv was built for Python 3.10, and that interpreter is gone"
+          in _r, repr(_r[:300]))
+    # install.sh runs under `set -euo pipefail`, which _su_run does not. On a FRESH install there is
+    # no venv at all: sed exits 2 (no cfg) and readlink 1 (no venv/bin), and neither may end the
+    # install from inside a command substitution.
+    _r = _sh_sub.run(["bash", "-c", "set -euo pipefail\nPANEL_DIR=%s\n%s"
+                      "a=\"$(_venv_python)\"\nb=\"$(_venv_link_python)\"\n"
+                      "if _venv_stale; then s=1; else s=0; fi\necho \"SURVIVED[$a|$b|$s]\"\n"
+                      % (_su_shlex.quote(os.path.join(_su_sb, "fresh-panel")), _su_vfns)],
+                     capture_output=True, text=True)
+    check("install.sh: ...and missing venv files are not fatal under the script's own set -e",
+          "SURVIVED[||0]" in _r.stdout, repr(_r))
+
+    _su_skip = _su_find('    info "[4/6] Installing dependencies…"\n',
+                        '        ok "Dependencies installed"\n    fi\n').replace("    info ", "    : ", 1)
+    _su_skip_env = ("REQ_BEFORE=abc\nREQ_AFTER=abc\n"
+                    "install_deps() { echo INSTALL_DEPS; }\nok() { echo \"OK $*\"; }\n")
+    _r = _su_with_cfg(_su_cfg310, "3.12", _su_skip_env + _su_skip)
+    check("install.sh: an update after an OS release upgrade reinstalls, though requirements match",
+          "INSTALL_DEPS" in _r and "skipping pip" not in _r, repr(_r))
+    _r = _su_with_cfg(_su_cfg312, "3.12", _su_skip_env + _su_skip)
+    check("install.sh: ...and an ordinary code-only update still skips pip",
+          "OK Dependencies unchanged" in _r and "INSTALL_DEPS" not in _r, repr(_r))
+    # The common case after a release upgrade: no new panel version, so the checkout is current and
+    # the "Already up to date" branch used to exit before the only step that rebuilds the venv.
+    _su_noop = _su_find('    if [ -n "${CURRENT_SHA}" ] && [ "${CURRENT_SHA}" = "${TARGET_SHA}" ]',
+                        '        exit 0\n    fi\n')
+    _su_noop_env = ("CURRENT_SHA=abc\nTARGET_SHA=abc\nFROM_VER=1\nORIGIN_TRUSTED=0\n"
+                    "info() { echo \"INFO $*\"; }\nok() { echo \"OK $*\"; }\n"
+                    "check_origin_trusted() { :; }\ninstall_root_tools() { :; }\n"
+                    "write_sudoers_grant() { :; }\nwrite_terminal_sudo_grant() { :; }\n"
+                    "install_recovery_command() { :; }\n")
+    _r = _su_with_cfg(_su_cfg310, "3.12", _su_noop_env + _su_noop + "echo FULL_UPDATE\n")
+    check("install.sh: an up-to-date checkout with a stale venv takes the full update, saying why",
+          "FULL_UPDATE" in _r and "Already up to date" not in _r
+          and "the venv was built for Python 3.10, and its python3 is now 3.12" in _r, repr(_r))
+    _r = _su_with_cfg(_su_cfg312, "3.12", _su_noop_env + _su_noop + "echo FULL_UPDATE\n")
+    check("install.sh: ...and with a current venv it is still 'Already up to date'",
+          "OK Already up to date" in _r and "FULL_UPDATE" not in _r, repr(_r))
+
+    # recover.sh runs manage.py with the same venv: say what happened instead of a traceback, and
+    # only when it is true (its remedy, re-running install.sh, now works on a current checkout).
+    _su_rec_all = open(os.path.join(_root, "recover.sh"), encoding="utf-8").read()
+    _su_rec = _su_rec_all[_su_rec_all.index('VENV_PY="$('):
+                          _su_rec_all.index('if [ -n "${STALE_WHY}" ]; then')] if (
+        'VENV_PY="$(' in _su_rec_all and 'if [ -n "${STALE_WHY}" ]; then' in _su_rec_all) else ""
+    _su_rec_end = _su_rec_all.find("\nfi\n", _su_rec_all.find('if [ -n "${STALE_WHY}" ]; then'))
+    _su_rec += _su_rec_all[_su_rec_all.find('if [ -n "${STALE_WHY}" ]; then'):_su_rec_end + 4] if (
+        _su_rec and _su_rec_end > 0) else ""
+
+    def _su_rec_run(cfg_text, link_to):
+        _su_venv(cfg_text, link_to)
+        return _sh_sub.run(["bash", "-c", "set -euo pipefail\nPANEL_DIR=%s\n%s\necho REACHED"
+                            % (_su_shlex.quote(os.path.join(_su_sb, "panel")), _su_rec)],
+                           capture_output=True, text=True)
+
+    _r = _su_rec_run(_su_cfg310, "3.12")
+    check("recover.sh: a venv from before an OS release upgrade is named, not run",
+          _r.returncode == 1 and "REACHED" not in _r.stdout
+          and "built for Python 3.10, and its python3 is now 3.12" in _r.stderr, repr(_r))
+    _r = _su_rec_run(_su_cfg310, "gone")
+    check("recover.sh: ...a vanished interpreter is called gone, not 'now 3.10'",
+          _r.returncode == 1 and "and that interpreter is gone" in _r.stderr, repr(_r))
+    _r = _su_rec_run(_su_cfg311, "3.11")
+    check("recover.sh: ...a working pyenv venv goes on to run", "REACHED" in _r.stdout, repr(_r))
+    _r = _su_rec_run(_su_cfg312, "3.12")
+    check("recover.sh: ...and so does a current one", "REACHED" in _r.stdout, repr(_r))
+    # Put the sandbox back the way the checks above found it.
+    _su_venv(None, "3.12")
+    os.remove(_su_vpy)
+    open(_su_vpy, "w").close()
+    os.chmod(_su_vpy, _su_stat.S_IRWXU)
+
+    # Prerequisites. The original apt line is unchanged: `sudo apt-get`, so a sudoers rule that
+    # allows only apt-get still covers it. tzdata is a step of its own: only when the zone database
+    # is missing (minimal images; zoneinfo then rejects every time zone name), noninteractive (it
+    # otherwise stops the install to ask for a region), and --no-upgrade.
+    _su_pre = _su_find("# If anything's missing, install it automatically", "\nfi\n")
+    _su_tz = _su_find('TZ_DB="/usr/share/zoneinfo/UTC"', "\nfi\n")
+    _su_pre_shim = ("info() { :; }\nid() { echo 1000; }\nsudo() { echo \"SUDO $*\"; }\n"
+                    "command() { [ \"$2\" = apt-get ] || [ \"$2\" = git ] || [ \"$2\" = curl ]; }\n")
+    _r = _su_run(_su_pre, "", extra=_su_pre_shim + "_venv_works() { return 1; }\n").stdout
+    check("install.sh: missing prerequisites are still one plain `sudo apt-get install`",
+          "SUDO apt-get install -y python3-venv python3-pip git curl\n" in _r and "SUDO env" not in _r
+          and "tzdata" not in _r, repr(_r))
+    _r = _su_run(_su_tz.replace("/usr/share/zoneinfo/UTC", os.path.join(_su_sb, "no-zoneinfo")),
+                 "", extra=_su_pre_shim).stdout
+    check("install.sh: a host with no zone database gets tzdata alone, noninteractive, no upgrades",
+          "SUDO env DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get install -y"
+          " --no-upgrade tzdata" in _r, repr(_r))
+    _r = _su_run(_su_tz.replace("/usr/share/zoneinfo/UTC", _su_vpy), "", extra=_su_pre_shim).stdout
+    check("install.sh: ...and a host that has one runs no apt for it", "SUDO" not in _r, repr(_r))
 
     # requirements.txt must pin the WHOLE closure, not just the direct dependencies. Pinning 12
     # packages left the rest floating. install.sh skips pip when the file is unchanged, and
@@ -1893,6 +2056,35 @@ try:
     check("requirements.txt: ...and the floor scan reads a comment the way Dependabot does (control)",
           _dependabot_python_floors('x==1 ; python_version >= "3.10"\n# y; python_version<"3.9"')
           == [">= 3.10", "<3.9"])
+    # install.sh refuses a python3 older than the oldest supported Python, by name, before pip
+    # gets to fail on it as "No matching distribution found" (Ubuntu 20.04's 3.8), and says so
+    # plainly when python3 does not run at all. Run under the script's own `set -euo pipefail`.
+    _py_gate = _su_find("PY_MM=\"$(python3", "\n_venv_works() {").rsplit("\n_venv_works", 1)[0]
+    _py_floor = re.search(r"sys\.version_info < \((\d+), (\d+)\)", _py_gate)
+    check("install.sh: its Python floor is the oldest supported Python",
+          _py_floor is not None and "%s.%s" % _py_floor.groups() == _RQ_PYTHONS[0][:-2],
+          repr(_py_floor and _py_floor.groups()))
+
+    def _py_gate_run(shim):
+        return _sh_sub.run(["bash", "-c", "set -euo pipefail\ndie() { echo \"DIE $*\"; exit 1; }\n"
+                            + shim + "\n" + _py_gate + "\necho PASSED\n"],
+                           capture_output=True, text=True).stdout
+
+    _py_ver = "python3() { case \"$*\" in *sys.exit*) return %d;; *) echo %s;; esac; }"
+    _r = _py_gate_run(_py_ver % (1, "3.8"))
+    check("install.sh: ...and a python3 below it stops the install, naming both versions",
+          "DIE Python 3.10 or newer is required, and this python3 is 3.8." in _r
+          and "PASSED" not in _r, repr(_r))
+    check("install.sh: ...while a supported one goes on", "PASSED" in _py_gate_run(_py_ver % (0, "3.12")))
+    _r = _py_gate_run("python3() { return 1; }")
+    check("install.sh: ...and a python3 that does not run is named, not a silent exit",
+          "DIE python3 is installed but does not run." in _r and "PASSED" not in _r, repr(_r))
+    # The shim stands in for python3's answer; the expression itself must give that answer.
+    _py_expr = re.search(r"python3 -c '(import sys; sys\.exit\([^']*\))'", _py_gate)
+    check("install.sh: ...and its floor expression exits 0 on this (supported) Python",
+          _py_expr is not None
+          and _sh_sub.run([sys.executable, "-c", _py_expr.group(1)]).returncode == 0,
+          repr(_py_expr and _py_expr.group(1)))
     _rq_sec = open(os.path.join(_root, ".github", "workflows", "security-code.yml"),
                    encoding="utf-8").read()
     check("security-code: pip-audit audits the pinned set itself, not a fresh resolution",
