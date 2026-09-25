@@ -1,0 +1,9 @@
+# The Semgrep job's tool.
+#
+# pip-compile turns this into semgrep.txt: every package, exact versions AND hashes, installed with
+# `--require-hashes`. Dependabot keeps it current by re-running pip-compile on the Python its
+# header names (3.11), so a bump never pins a set that cannot be installed together. Edit
+# THIS file, then regenerate (run in python:3.11-slim):
+#   pip-compile --allow-unsafe --generate-hashes --no-annotate --strip-extras \
+#     --output-file=semgrep.txt semgrep.in
+semgrep

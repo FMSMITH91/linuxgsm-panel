@@ -1,0 +1,10 @@
+# The Bandit job's tools: bandit with its built-in SARIF formatter (the `sarif` extra). That job
+# holds `security-events: write`, so nothing it installs floats. Wheels only.
+#
+# pip-compile turns this into bandit.txt: every package, exact versions AND hashes, installed with
+# `--require-hashes`. Dependabot keeps it current by re-running pip-compile on the Python its
+# header names (3.11), so a bump never pins a set that cannot be installed together. Edit
+# THIS file, then regenerate (run in python:3.11-slim):
+#   pip-compile --allow-unsafe --generate-hashes --no-annotate --strip-extras \
+#     --output-file=bandit.txt bandit.in
+bandit[sarif]

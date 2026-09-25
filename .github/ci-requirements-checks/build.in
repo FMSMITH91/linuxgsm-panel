@@ -1,0 +1,10 @@
+# What building esprima's sdist needs (see checks.in), installed first, wheels only.
+#
+# pip-compile turns this into build.txt: every package, exact versions AND hashes, installed with
+# `--require-hashes`. Dependabot keeps it current by re-running pip-compile on the Python its
+# header names (3.10), so a bump never pins a set that cannot be installed together. Edit
+# THIS file, then regenerate (run in python:3.10-slim):
+#   pip-compile --allow-unsafe --generate-hashes --no-annotate --strip-extras \
+#     --output-file=build.txt build.in
+setuptools
+wheel
