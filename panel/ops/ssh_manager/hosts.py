@@ -1230,12 +1230,17 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     # that IS the operation — a verb could pin the URL, but only by giving the helper the ability to
     # execute a downloaded script, which is exactly the capability its tool allowlist exists to
     # deny. Wrapping it would move the risk, not reduce it. Named in SECURITY.md instead.
+    # NodeSource's nodejs bundles npm; the distro's does not, and a host that already had a distro
+    # Node 18+ (Ubuntu 24.04 and 26.04 ship one) went straight to the gamedig step below, which is an
+    # npm install, so gamedig never arrived there. The last clause installs npm when it is missing.
     node_cmd = (
         'n=$(node -v 2>/dev/null | grep -oE "[0-9]+" | head -1); '
         'if [ "${n:-0}" -lt 18 ]; then '
         'curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - >/dev/null 2>&1 && '
         'DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs 2>&1 | tail -3; '
-        'else echo "Node $(node -v) already present"; fi'
+        'else echo "Node $(node -v) already present"; fi; '
+        'command -v npm >/dev/null 2>&1 || '
+        '{ DEBIAN_FRONTEND=noninteractive apt-get install -y npm 2>&1 | tail -3; }'
     )
     nd_out, _, _ = _core.run_command(server, node_cmd, timeout=300, sudo=True)
     note(nd_out or "Node.js LTS installed")

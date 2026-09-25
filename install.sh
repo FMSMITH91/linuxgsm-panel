@@ -646,6 +646,14 @@ ensure_gamedig() {
             warn "NodeSource's repository could not be set up with its pinned signing key — Node.js was not installed, and player queries stay unavailable until Node.js 18+ is."
         fi
     fi
+    # The distro's nodejs ships WITHOUT npm (NodeSource's bundles it), and gamedig is installed
+    # with npm, so every host that took the distro path above -- 24.04 and 26.04 -- ended with node
+    # and no gamedig, silently. Also reached on an update, for a host installed that way already.
+    if [ "${nmaj:-0}" -ge 18 ] 2>/dev/null && ! command -v npm >/dev/null 2>&1; then
+        info "Installing npm (gamedig is installed with it)…"
+        ${S} apt-get install -y npm >/dev/null 2>&1 \
+            || warn "npm install failed — player queries stay unavailable until npm is installed."
+    fi
     if command -v npm >/dev/null 2>&1 && ! command -v gamedig >/dev/null 2>&1; then
         info "Installing gamedig globally…"
         # The spec the panel's npm-install-global verb and the weekly cron use: v5, no install hooks.
@@ -654,6 +662,8 @@ ensure_gamedig() {
     fi
     if command -v gamedig >/dev/null 2>&1; then
         ok "gamedig ready for player queries"
+    else
+        warn "gamedig is not installed — player counts and lists stay unavailable."
     fi
     # Weekly auto-update for gamedig, alongside the host's other automatic updates, so player queries
     # don't silently break as games/gamedig evolve. Idempotent; no-op if npm isn't installed. Pinned to

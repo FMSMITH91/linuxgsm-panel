@@ -1938,7 +1938,12 @@ try:
     # machine the page was being served from, with nothing anywhere naming sudo.
     for _refusal in ("sudo: a password is required",
                      "sudo: no tty present and no askpass program available",
-                     "ERROR: You need to be root to run this script"):
+                     "ERROR: You need to be root to run this script",
+                     # sudo-rs (/usr/bin/sudo on Ubuntu 26.04): the same refusals, other words
+                     "sudo: interactive authentication is required",
+                     "sudo: I'm sorry lgsmpanel. I'm afraid I can't do that",
+                     "sudo: A terminal is required to authenticate",
+                     "sudo: maximum 3 incorrect authentication attempts"):
         _sm_core.run_privileged = lambda *a, _r=_refusal, **k: (_r, "", 1)
         _st = _sm_firewall.remote_ufw_status(NS(port=22))
         check("ufw status: %r is reported as a privilege refusal" % _refusal[:28],
