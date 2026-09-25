@@ -1512,7 +1512,8 @@ def create_app():
     # Behind a reverse proxy (Caddy/nginx/Cloudflare Tunnel), trust ONE hop of
     # X-Forwarded-* so request.is_secure/scheme + client IP reflect the real client.
     # Off by default — only enable when actually behind a trusted proxy, or these
-    # headers become spoofable. (client_ip() also only trusts XFF from loopback.)
+    # headers become spoofable. (Without it, client_ip() trusts XFF only from a ROOT-owned
+    # loopback peer — tailscaled.)
     # Recorded in app.config so client_ip() can ask it without re-reading config.json on every
     # request — it has to know, because ProxyFix below rewrites remote_addr from the very header
     # client_ip is deciding whether to trust.
@@ -1521,9 +1522,9 @@ def create_app():
         from werkzeug.middleware.proxy_fix import ProxyFix
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-    # Outermost: a banned client arriving through Tailscale Funnel or a reverse proxy is refused
-    # here, since the host firewall never sees it (see ProxiedBanGate). It reads the raw
-    # X-Forwarded-For, before ProxyFix above rewrites anything.
+    # Outermost: a banned client arriving through Tailscale Funnel (or a proxy on another machine)
+    # is refused here, since the host firewall never sees its packets (see ProxiedBanGate). It
+    # reads the raw X-Forwarded-For, before ProxyFix above rewrites anything.
     app.wsgi_app = ProxiedBanGate(app.wsgi_app)
 
     return app
@@ -2661,17 +2662,18 @@ if __name__ == "__main__":
         seen = None
         while True:
             try:
+                _taken = time.monotonic()
                 reading = so.panel_fail2ban_banned_ips()
                 seen, new_bans, unbans = _f2b_ban_events(seen, reading)
                 _f2b_record_events(app, new_bans, unbans)
-                # The same reading feeds the panel's own ban gate, for traffic fail2ban's firewall
-                # rule never sees (Funnel, a reverse proxy); the UFW denies and the whitelist too,
-                # but only where such traffic can arrive, as it costs a firewall read per tick.
-                _banlist.set_f2b(reading)
-                _bl_cfg = load_config()
-                _banlist.set_whitelist(_bl_cfg.get("security_whitelist") or [])
-                if _banlist.proxied_traffic_possible(_bl_cfg):
-                    _banlist.set_ufw(so.ufw_blocked_ips())
+                # The same reading feeds the panel's own ban gate, for traffic the firewall rule
+                # never sees (Tailscale Funnel, which can also be switched on outside the panel, so
+                # this does not ask), with the UFW denies and the whitelist. Each reading carries
+                # when it was TAKEN, so a slower read cannot overwrite a newer refresh.
+                _banlist.set_f2b(reading, _taken)
+                _banlist.set_whitelist(load_config().get("security_whitelist") or [])
+                _taken = time.monotonic()
+                _banlist.set_ufw(so.ufw_blocked_ips(), _taken)
             except Exception:
                 _log.debug("fail2ban ban-watch tick failed", exc_info=True)
             time.sleep(90)

@@ -2207,9 +2207,10 @@ try:
                                                           "SERVER_PORT": "5000"}):
             eq("loopback proxy (dual-stack bind): %s trusted for X-Forwarded-For" % _label,
                client_ip(), _want)
-    # X-Forwarded-Prefix sets SCRIPT_NAME for the response, so it is held to the same rule: from a
-    # loopback peer only when root owns its socket (it was trusted from ANY local account), and
-    # the socket table is read only when the header is there at all.
+    # X-Forwarded-Prefix sets SCRIPT_NAME for the response. It was believed from loopback (any local
+    # account) on the premise that Tailscale Serve sends it; nothing in tailscaled does, and it
+    # passes a Funnel client's own copy through — so not even a root-owned peer makes it a proxy's
+    # word. Only a declared reverse proxy (trust_proxy) does.
     from panel.core.middleware import PrefixMiddleware as _PM
     _pm_env = lambda port, addr="127.0.0.1", hdr="/panel": dict(
         {"REMOTE_ADDR": addr, "REMOTE_PORT": str(port), "SERVER_NAME": addr, "SERVER_PORT": "5000"},
@@ -2219,9 +2220,9 @@ try:
                _PM._may_trust_header(_pm_env(0xA1B2, "::ffff:127.0.0.1"), {}),
                _PM._may_trust_header(_pm_env(0xA1B2, hdr=""), {}),
                _PM._may_trust_header(_pm_env(0xC3D4, "203.0.113.5"), {"trust_proxy": True}))
-    eq("prefix header: believed from a root-owned loopback peer (also as ::ffff:), not from another "
-       "local account, not when absent; trust_proxy still decides for a declared proxy",
-       _pm_got, (True, False, True, False, True))
+    eq("prefix header: believed only under trust_proxy — not from loopback, not even from a "
+       "root-owned peer (tailscaled forwards the client's own header)",
+       _pm_got, (False, False, False, False, True))
 finally:
     _lp_auth._PROC_NET_TCP.clear()
     _lp_auth._PROC_NET_TCP.update(_lp_saved)
@@ -2229,7 +2230,7 @@ finally:
 # ── the panel's own ban set, for traffic the host firewall never sees (Tailscale Funnel) ──────
 import ipaddress as _bl_ip
 from panel.security import banlist as _bl
-_bl_saved = (_bl._f2b, _bl._ufw, _bl._allow, _bl._addrs, _bl._nets)
+_bl_saved = (_bl._f2b, _bl._ufw, _bl._allow, _bl._by_len, dict(_bl._taken))
 try:
     _bl.set_f2b(["203.0.113.77", "not-an-ip"])
     _bl.set_ufw({"198.51.100.0/24": "panel-autoblock"})
@@ -2255,6 +2256,47 @@ try:
     _bl.set_f2b([])
     _bl.set_ufw([])
     check("banlist: with nothing banned the gate has nothing to do", not _bl.active())
+    # A tailnet peer is never refused: the jail can ban one on the web port alone (a hand-made
+    # Serve), and the gate would have turned that into a lock-out from every page through Serve.
+    _bl.set_f2b(["100.101.102.103", "fd7a:115c:a1e0::5", "2001:db8:1:2::10"])
+    eq("banlist: tailnet peers are never refused, and an IPv6 ban covers its /64 (the throttle's key)",
+       [_bl.is_banned(_ip(a)) for a in ("100.101.102.103", "fd7a:115c:a1e0::5",
+                                         "2001:db8:1:2::11", "2001:db8:1:3::1")],
+       [False, False, True, False])
+    import panel.ops.system_ops as _bl_so2
+    check("banlist: its tailnet ranges are the ones the jail and the auto-block exempt",
+          [str(n) for n in _bl._TAILNET] == list(_bl_so2._TAILNET_RANGES))
+    # The watcher and a refresh can read at the same time; the slower must not overwrite the newer.
+    _bl.set_f2b(["203.0.113.1"], taken=10.0)
+    _bl.set_f2b(["203.0.113.2"], taken=5.0)
+    eq("banlist: a reading taken before the one in use is ignored",
+       (_bl.is_banned(_ip("203.0.113.1")), _bl.is_banned(_ip("203.0.113.2"))), (True, False))
+    # refresh_soon, the real one: a request that arrives while one is pending is queued, not
+    # dropped — the ban it is for may land just after the read already due.
+    import threading as _bl_th
+    import time as _time
+    _bl_runs, _bl_gate, _bl_rf = [], _bl_th.Event(), _bl.refresh
+    try:
+        def _bl_slow():
+            _bl_runs.append(1)
+            _bl_gate.wait(5)
+        _bl.refresh = _bl_slow
+        _bl.refresh_soon(0)
+        for _ in range(50):
+            if _bl_runs:
+                break
+            _time.sleep(0.02)
+        _bl.refresh_soon(0)
+        _bl.refresh_soon(0)
+        _bl_gate.set()
+        for _ in range(100):
+            if len(_bl_runs) >= 2 and not _bl._scheduled:
+                break
+            _time.sleep(0.02)
+        eq("banlist: refresh_soon queues ONE more read for requests made while one runs",
+           (len(_bl_runs), _bl._scheduled), (2, False))
+    finally:
+        _bl.refresh = _bl_rf
     # refresh(): fail2ban's list and the whitelist always, the UFW denies only where proxied
     # traffic can arrive (it costs a firewall read), and a failed read changes nothing.
     import panel.ops.system_ops as _bl_so
@@ -2280,12 +2322,14 @@ try:
         _bl_kept = _bl.is_banned(_ip("198.51.100.7"))
     finally:
         _bl_so.panel_fail2ban_banned_ips, _bl_so.ufw_blocked_ips, _bl_cfgmod.load_config = _bl_rd
-    eq("banlist: refresh() reads fail2ban always, UFW only with Funnel or trust_proxy, applies the "
-       "whitelist, and keeps the set when both reads fail",
+    eq("banlist: refresh() reads fail2ban and UFW (a Funnel can be switched on outside the panel), "
+       "applies the whitelist, and keeps the set when both reads fail",
        (_bl_off, _bl_on, _bl_kept),
-       ((["f2b"], True, False), (["f2b", "ufw"], False, True), True))
+       ((["f2b", "ufw"], True, True), (["f2b", "ufw"], False, True), True))
 finally:
-    (_bl._f2b, _bl._ufw, _bl._allow, _bl._addrs, _bl._nets) = _bl_saved
+    (_bl._f2b, _bl._ufw, _bl._allow, _bl._by_len, _bl_taken0) = _bl_saved
+    _bl._taken.clear()
+    _bl._taken.update(_bl_taken0)
 
 # ── TOTP (2FA) ────────────────────────────────────────────────
 import time as _time

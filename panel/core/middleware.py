@@ -48,23 +48,17 @@ class PrefixMiddleware:
         docstring used to claim both, which is a solved problem the next reader would not go
         looking for.
 
-        Trusted from a root-owned local proxy, or when the operator has declared a reverse proxy
-        in front with trust_proxy. (Tailscale Serve does not send this header — nothing in
-        tailscaled sets it; a reverse proxy mounting the panel under a path may.)
+        Trusted only when the operator has declared a reverse proxy in front with trust_proxy. It
+        was believed from loopback, on the premise that Tailscale Serve sends it there; it does not
+        (nothing in tailscaled sets it), and tailscaled forwards a Funnel client's own copy, so on
+        loopback it was the CLIENT's word. A proxy on this host that mounts the panel under a path
+        needs trust_proxy, as the documented nginx/Caddy setups already set.
         """
-        if cfg.get("trust_proxy"):
-            return True
-        # Loopback is not a proxy by itself: any local account can dial it, the game accounts
-        # included, and set this header for its own responses. Believed only from a peer whose
-        # socket ROOT owns — tailscaled — the rule client_ip() applies to X-Forwarded-For. A
-        # dual-stack bind ('::') reports an IPv4 peer as ::ffff:127.0.0.1, which the plain
-        # string test missed. The socket-table read runs only when the header was sent.
-        if not environ.get("HTTP_X_FORWARDED_PREFIX"):
-            return False
-        from panel.security.auth import _loopback_peer_uid, _unmapped
-        if _unmapped(environ.get("REMOTE_ADDR") or "") not in ("127.0.0.1", "::1"):
-            return False
-        return _loopback_peer_uid(environ) == 0
+        # Only a reverse proxy the operator declared (trust_proxy) authors this header. Tailscale
+        # Serve and Funnel never set it — and they pass a CLIENT's own copy through unchanged, so a
+        # root-owned loopback peer (tailscaled) proves nothing about who wrote it; any local account
+        # on loopback proves less.
+        return bool(cfg.get("trust_proxy"))
 
     def __call__(self, environ, start_response):
         cfg = load_config()

@@ -364,9 +364,9 @@ try:
     # the OUTERMOST WSGI layer, because the Socket.IO handshake and the static files never reach
     # Flask's request hooks. Driven through the real app stack.
     from panel.security import banlist as _gb
-    _gb_saved = (_gb._f2b, _gb._ufw, _gb._allow, _gb._addrs, _gb._nets)
+    _gb_saved = (_gb._f2b, _gb._ufw, _gb._allow, _gb._by_len, dict(_gb._taken))
     try:
-        _gb.set_f2b(["203.0.113.77"])
+        _gb.set_f2b(["203.0.113.77", "100.101.102.103"])
         _gb.set_ufw({"198.51.100.0/24": "panel-autoblock"})
         _gb.set_whitelist([])
         _gb_c = app.test_client()
@@ -384,9 +384,11 @@ try:
                                                 headers={"X-Forwarded-For": "203.0.113.77, 192.0.2.10"}),
                   "no-header": _gb_c.get("/login"),
                   "socket-other": _gb_c.get("/socket.io/?EIO=4&transport=polling",
-                                            headers={"X-Forwarded-For": "192.0.2.10"})}
+                                            headers={"X-Forwarded-For": "192.0.2.10"}),
+                  # A tailnet peer the jail banned (web port only) keeps its Serve access.
+                  "tailnet": _gb_c.get("/login", headers={"X-Forwarded-For": "100.101.102.103"})}
         check("funnel gate: ...while any other client, a banned address that is not the LAST hop, "
-              "and a request with no forwarded address go through",
+              "a request with no forwarded address, and a banned TAILNET peer go through",
               all(r.status_code != 403 for r in _gb_ok.values())
               and _gb_ok["socket-other"].get_data(as_text=True).startswith("0{"),
               {k: r.status_code for k, r in _gb_ok.items()})
@@ -399,24 +401,26 @@ try:
         check("funnel gate: ...a whitelisted address is never refused, and a lifted ban lets it in",
               _gb_wl != 403 and _gb_lift != 403, "whitelisted=%s lifted=%s" % (_gb_wl, _gb_lift))
     finally:
-        (_gb._f2b, _gb._ufw, _gb._allow, _gb._addrs, _gb._nets) = _gb_saved
+        (_gb._f2b, _gb._ufw, _gb._allow, _gb._by_len, _gb_t0) = _gb_saved
+        _gb._taken.clear()
+        _gb._taken.update(_gb_t0)
 
-    # The set is kept current between the ban-watcher's 90 s ticks: a failed login (which may be
-    # the one fail2ban bans for) where proxied traffic can arrive, and an admin's Block / Unban /
+    # The set is kept current between the ban-watcher's 90 s ticks: a failed login that came
+    # through a proxy (it may be the one fail2ban bans for), and an admin's Block / Unban /
     # Whitelist, each ask for one refresh. Recorded, not run — a refresh reads the firewall.
     _gb_calls = []
     _gb_rs = _gb.refresh_soon
     _gb_cfg0 = load_config()
     try:
         _gb.refresh_soon = lambda delay=3.0: _gb_calls.append(delay)
-        for _funnel in (True, False):
-            save_config(dict(_gb_cfg0, tailscale_use_funnel=_funnel, trust_proxy=False))
+        for _proxied in (True, False):
             _gb_calls.clear()
-            app.test_client().post("/login", data={"username": "nobody-here", "password": "x"})
-            check("funnel gate: a failed login %s a refresh (Funnel %s)"
-                  % ("asks for" if _funnel else "does not ask for", "on" if _funnel else "off"),
-                  bool(_gb_calls) is _funnel, repr(_gb_calls))
-        save_config(_gb_cfg0)
+            app.test_client().post("/login", data={"username": "nobody-here", "password": "x"},
+                                   headers={"X-Forwarded-For": "192.0.2.77"} if _proxied else {})
+            check("funnel gate: a failed login %s a refresh (%s)"
+                  % ("asks for" if _proxied else "does not ask for",
+                     "it came through a proxy" if _proxied else "it came straight in"),
+                  bool(_gb_calls) is _proxied, repr(_gb_calls))
         from panel.ops import system_ops as _gb_so
         _gb_deny = _gb_so.ufw_deny_ip
         try:
@@ -436,7 +440,8 @@ try:
     _gb_watch = _gb_app_src[_gb_app_src.index("def _f2b_ban_watch"):]
     _gb_watch = _gb_watch[:_gb_watch.index("time.sleep(90)")]
     check("funnel gate: the 90 s ban-watcher feeds the set from the reading it already takes",
-          "_banlist.set_f2b(reading)" in _gb_watch and "_banlist.set_ufw(" in _gb_watch)
+          "_banlist.set_f2b(reading, _taken)" in _gb_watch
+          and "_banlist.set_ufw(so.ufw_blocked_ips(), _taken)" in _gb_watch)
     # panel.js arms its auth ping and session-expired redirect only where SIGNED_IN is true. They
     # ran on signed-out pages too, and threw an invitee (or the first-run admin) off a half-filled
     # form to /login with "Your session expired" — about a session that never existed.
