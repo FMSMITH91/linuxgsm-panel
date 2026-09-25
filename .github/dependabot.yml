@@ -25,7 +25,9 @@ updates:
   # "Node.js 20 is deprecated" runner warning once new majors ship).
   # The CI tool pins (hash-locked): the Bandit job holds security-events: write, so its tools are
   # pinned, and bumped here like everything else rather than floating to whatever is newest.
-  # Resolved as the Python of the `python_version` marker on bandit in bandit.txt: the job's 3.11.
+  # Each .txt here is pip-compile's lockfile for the .in beside it, so Dependabot updates it by
+  # re-running pip-compile — resolving the whole set, on the Python the header names (3.11) — rather
+  # than bumping pins one by one past what the tool itself allows (semgrep pins click, for one).
   - package-ecosystem: "pip"
     directory: "/.github/ci-requirements"
     schedule:
@@ -36,9 +38,9 @@ updates:
       ci-python-tools:
         patterns: ["*"]
 
-  # The test matrix's tools (flake8, esprima), which run on 3.10 as well: resolved as 3.10 by the
-  # marker on flake8 in checks.txt. A sibling of ci-requirements, not inside it, because a
-  # directory's scan also reads the files one level below it.
+  # The test matrix's tools (flake8, esprima), which run on 3.10 as well: pip-compile lockfiles
+  # like the above, compiled on 3.10. A sibling of ci-requirements, not inside it, because a
+  # directory's Dependabot scan also reads the files one level below it.
   - package-ecosystem: "pip"
     directory: "/.github/ci-requirements-checks"
     schedule:

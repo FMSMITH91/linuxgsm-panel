@@ -1,0 +1,14 @@
+# The test matrix's lint and JS-parse tools: flake8, and esprima (tests/template_actions_test.py
+# parses static/js with it). The matrix runs 3.10 to 3.14, so this directory is compiled on 3.10 and
+# is its own Dependabot entry; a sibling of ci-requirements, because a directory's Dependabot scan
+# also reads the files one level below it. esprima is an sdist: it installs with
+# `--no-build-isolation` after build.txt, since build isolation would fetch setuptools unpinned.
+#
+# pip-compile turns this into checks.txt: every package, exact versions AND hashes, installed with
+# `--require-hashes`. Dependabot keeps it current by re-running pip-compile on the Python its
+# header names (3.10), so a bump never pins a set that cannot be installed together. Edit
+# THIS file, then regenerate (run in python:3.10-slim):
+#   pip-compile --allow-unsafe --generate-hashes --no-annotate --strip-extras \
+#     --output-file=checks.txt checks.in
+flake8
+esprima
