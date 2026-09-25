@@ -2145,7 +2145,10 @@ try:
     # hop. The guard was `sudo -l -U <u> | grep -q "may run the following"` — so every answer that
     # is not that one English phrase read as "no sudo rights, safe to enrol". Run the real
     # function against each reply sudo can actually give.
-    _cas = _su_between("can_already_sudo() {", "\n}\n")
+    # These drive the fallback — the `sudo -l` test install.sh uses when the root-owned helper is not
+    # installed — so HELPER_DIR names a directory with no helper in it. The delegation is below.
+    _cas_fn = _su_between("can_already_sudo() {", "\n}\n")
+    _cas = "HELPER_DIR=%s\n" % _su_shlex.quote(os.path.join(_su_sb, "no-helper-here")) + _cas_fn
     _cas_cases = [
         ("User x may run the following commands on h:", "yes",  "a sudo-capable account"),
         ("User x is not allowed to run sudo on h.",     "no",   "a plain game account"),
@@ -2191,6 +2194,37 @@ try:
                         "sudo() { echo 'User x is not allowed to run sudo on h.'; }\n"))
     check("install.sh: ...matched whole, so a lookalike group is still a plain 'no' (control)",
           (_r.stdout or "").strip().endswith("no"), repr(_r.stdout[-40:]))
+    # With the root-owned helper installed, the HELPER decides — the same _can_already_escalate every
+    # other enrolment goes through. Two deciders drifted: this function ran `sudo -l`, the helper
+    # parsed the policy, and an account one enrolled the other took back. A stand-in helper at
+    # ${HELPER_DIR}/panel-helper answers here; its real function is driven in part05.
+    _cas_hd = os.path.join(_su_sb, "helper-dir")
+    os.makedirs(_cas_hd, exist_ok=True)
+    with open(os.path.join(_cas_hd, "panel-helper"), "w", encoding="utf-8") as _fh:
+        _fh.write("import sys\n"
+                  "def _can_already_escalate(user):\n"
+                  "    if user == 'broken':\n"
+                  "        raise RuntimeError('policy unreadable')\n"
+                  "    return user == 'sudoer'\n"
+                  "if __name__ == '__main__':\n"
+                  "    sys.exit(99)\n")
+    _cas_d = "HELPER_DIR=%s\n" % _su_shlex.quote(_cas_hd) + _cas_fn
+    _cas_d_got = {}
+    for _u in ("sudoer", "plain", "broken"):
+        _r = _su_run(_cas_d + "\ncan_already_sudo %s\n" % _u, "",
+                     extra=("id() { echo 'x games'; }\n"
+                            "sudo() { echo 'SUDO WAS CALLED'; }\n"))
+        _cas_d_got[_u] = (_r.stdout or "").strip()
+    check("install.sh: with the helper installed, IT answers — yes, no, and unknown when it fails",
+          _cas_d_got == {"sudoer": "yes", "plain": "no", "broken": "unknown"}, repr(_cas_d_got))
+    check("install.sh: ...it asks the root-owned copy it installed, never the checkout's",
+          '"${HELPER_DIR}/panel-helper"' in _cas_fn and "tools/panel-helper" not in _cas_fn
+          and "PANEL_DIR" not in _cas_fn, _cas_fn[:300])
+    _r = _su_run(_cas_d + "\ncan_already_sudo x\n", "",
+                 extra=("id() { echo 'x games docker'; }\n"))
+    check("install.sh: ...and a root-equivalent GROUP is still 'yes' before the helper is asked",
+          (_r.stdout or "").strip() == "yes", repr(_r.stdout))
+
     # The caller must act on all three: only `no` may enrol.
     _sync_body = _su_body("sync_game_user_group")
     check("install.sh: ...and only a definite 'no' enrols the account",

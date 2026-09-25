@@ -1230,11 +1230,35 @@ root_tools_present() {
 # needs a sudoers entry, so `sudo -l -U` reports the account as "not allowed" and it was enrolled:
 # the one-hop NOPASSWD:ALL this function exists to prevent. The first ten are the set
 # panel/security/privileged.py already refuses as _NEVER_A_CONTENT_GROUP.
+#
+# When the root-owned helper is installed, IT answers — the same function that decides every other
+# enrolment (panel-helper's _can_already_escalate). Two deciders drifted: this one ran `sudo -l`,
+# the helper parsed the policy, and an account one would enrol the other took back. The helper's
+# answer covers what `sudo -l` did (it asks sudo itself when rules come from LDAP or SSSD) and one
+# thing it could not: a NOPASSWD rule granted to ALL users is one the panel's own account has too,
+# so it no longer refuses every account on the host. Without the helper (it is placed before this
+# runs, so only a failed placement), the old test stands, exemption and all left out.
 can_already_sudo() {
     _cas_user="$1"
     _cas_groups="sudo|admin|wheel|root|adm|shadow|docker|lxd|disk|staff|incus-admin|libvirt"
     if id -nG "${_cas_user}" 2>/dev/null | tr " " "\n" | grep -qxE "${_cas_groups}"; then
         echo yes; return 0
+    fi
+    if [ -f "${HELPER_DIR}/panel-helper" ]; then
+        # Root runs the root-owned copy it installed — never the checkout's — and asks one question.
+        case "$(python3 - "${HELPER_DIR}/panel-helper" "${_cas_user}" 2>/dev/null <<'CAS_PY' || true
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("panel_helper", sys.argv[1])
+helper = importlib.util.module_from_spec(importlib.util.spec_from_loader("panel_helper", loader))
+loader.exec_module(helper)
+print("yes" if helper._can_already_escalate(sys.argv[2]) else "no")
+CAS_PY
+)" in
+            yes) echo yes ;;
+            no)  echo no ;;
+            *)   echo unknown ;;
+        esac
+        return 0
     fi
     _cas_out="$(LC_ALL=C sudo -l -U "${_cas_user}" 2>&1)" || true
     case "${_cas_out}" in

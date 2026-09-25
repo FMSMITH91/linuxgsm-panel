@@ -79,6 +79,10 @@ TOOLS = {
     "usermod": ("/usr/sbin/usermod", "/sbin/usermod"),
     "debconf-set-selections": ("/usr/bin/debconf-set-selections",),
     "groupadd": ("/usr/sbin/groupadd", "/sbin/groupadd"),
+    # `sudo -l -U <account>` and nothing else: sudo's own answer when the policy has non-file
+    # sources (_sudo_lists_rules). Named for that one use, like bash_installer, so plain `sudo`
+    # stays unresolvable and no verb can build a command around it.
+    "sudo_list": ("/usr/bin/sudo",),
     "fallocate": ("/usr/bin/fallocate", "/bin/fallocate"),
     "mkswap": ("/usr/sbin/mkswap", "/sbin/mkswap"),
     "swapon": ("/usr/sbin/swapon", "/sbin/swapon"),
@@ -1191,11 +1195,34 @@ def _can_already_escalate(user):
     except KeyError:
         return True                      # a group of its own that cannot be resolved: unknown
     try:
+        sources = _sudoers_sources()
+        if sources != ["files"]:
+            # LDAP, SSSD or another source this parser cannot read. Ask sudo, which can; any
+            # rule there, or no clear answer, is a refusal. No exemption: the universal-rule test
+            # below reads files, and says nothing about rules it cannot see.
+            listed = _sudo_lists_rules(user)
+            if listed is not False:
+                sys.stderr.write("the sudo policy for %s comes from %s, and sudo %s; refusing "
+                                 "to enrol it\n" % (user, " ".join(sources),
+                                                     "lists rules for it" if listed
+                                                     else "gave no clear answer"))
+                return True
         lines = []
         seen = set()
         for path in [SUDOERS_FILE] + sorted(glob.glob(os.path.join(SUDOERS_DIR, "*"))):
             lines.extend(_sudoers_lines(path, seen))
-        return _sudoers_grants(lines, user, names, uid, gids)
+        matched = _sudoers_matching_rules(lines, user, names, uid, gids)
+        # A rule whose user list is exactly ALL, and which needs no password, is one the panel's
+        # own account has too: it can already run those commands directly, so enrolling this
+        # account adds nothing. Such a rule used to refuse every account on the host. A password
+        # rule still counts — the host terminal can capture a game account's password, and the
+        # panel's own account may have none to capture — and so does every rule when any Defaults
+        # entry is scoped to particular users, runas users, commands or hosts, which can make the
+        # panel's copy of a rule weaker than this account's (`Defaults:lgsmpanel requiretty`).
+        if any(_SCOPED_DEFAULTS_RE.match(line) for line in lines):
+            return bool(matched)
+        return any(not (items == ["ALL"] and _rule_needs_no_password(rest))
+                   for items, rest in matched)
     except (OSError, ValueError) as e:
         # A file it could not read, an include it could not follow, a construct it does not
         # parse. It used to `continue` past an unreadable file, which read as "no grant in it".
@@ -1288,6 +1315,12 @@ def _sudoers_grants(lines, user, names, uid, gids):
 
 def _sudoers_rules_for(lines, user, names, uid, gids):
     """The rules in `lines` whose user list can match `user` — each as the text AFTER that list.
+    See _sudoers_matching_rules, which also returns each rule's user list."""
+    return [rest for _items, rest in _sudoers_matching_rules(lines, user, names, uid, gids)]
+
+
+def _sudoers_matching_rules(lines, user, names, uid, gids):
+    """The rules in `lines` whose user list can match `user`, as (user list items, text after it).
 
     Resolves User_Alias definitions (recursively), comma-separated user lists, `ALL`, `#uid`,
     `%group` and `%#gid`. Anything it cannot evaluate — a netgroup, a non-Unix group, an alias
@@ -1334,7 +1367,72 @@ def _sudoers_rules_for(lines, user, names, uid, gids):
             return any(matches(x, depth + 1) for x in aliases[item])
         return False
 
-    return [rest for items, rest in rules if any(matches(item) for item in items)]
+    return [(items, rest) for items, rest in rules if any(matches(item) for item in items)]
+
+
+# `Defaults:user`, `Defaults!cmnd`, `Defaults>runas`, `Defaults@host`: settings that apply to some
+# users, commands or hosts and not others. See _can_already_escalate for why one rules out the
+# universal-rule exemption.
+_SCOPED_DEFAULTS_RE = re.compile(r"Defaults[:!>@]")
+
+
+def _rule_needs_no_password(rest):
+    """True for the part of a sudoers rule after its user list when EVERY command it grants is
+    NOPASSWD: one `<hosts> = [(runas)] TAGS: commands` spec whose tags include NOPASSWD and never
+    PASSWD, and no tag switch or second host spec later in the list. Anything else, or anything it
+    does not recognise, is False — the caller then counts the rule, which only refuses an account."""
+    m = re.fullmatch(r"\S+\s*=\s*(?:\([^)]*\))?\s*(.*)", rest.strip())
+    if not m:
+        return False
+    cmd, tags = m.group(1), []
+    while True:
+        t = re.match(r"([A-Z_]+)\s*:\s*", cmd)
+        if not t:
+            break
+        tags.append(t.group(1))
+        cmd = cmd[t.end():]
+    if "NOPASSWD" not in tags or "PASSWD" in tags:
+        return False
+    # `/a, PASSWD: /b` switches tag mid-list; `... : host2 = /c` starts a second host spec.
+    return not re.search(r"(?:^|,)\s*[A-Z_]+\s*:", cmd) and "=" not in cmd and ":" not in cmd
+
+
+# Where the sudo policy comes from besides the files above. sudo reads `sudoers:` in nsswitch.conf,
+# and a host that serves rules from LDAP or SSSD grants sudo through a source this helper's parser
+# never sees.
+NSSWITCH_FILE = "/etc/nsswitch.conf"
+
+
+def _sudoers_sources():
+    """The sources nsswitch.conf names for sudoers — ["files"] when there is no such line, which is
+    sudo's default. Raises OSError when the file exists and cannot be read."""
+    try:
+        with open(NSSWITCH_FILE, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        return ["files"]
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line.startswith("sudoers:"):
+            return [w for w in line[len("sudoers:"):].split() if not w.startswith("[")] or ["files"]
+    return ["files"]
+
+
+def _sudo_lists_rules(user):
+    """sudo's own answer for a policy with non-file sources: True if `sudo -l -U user` lists rules
+    for it, False if it says it may not run sudo, None for anything else (the caller refuses)."""
+    try:
+        r = subprocess.run([resolve("sudo_list"), "-l", "-U", user],  # nosec B603 - fixed argv
+                           shell=False, capture_output=True, timeout=30,
+                           env={"LC_ALL": "C", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"})
+    except Exception:
+        return None
+    out = (r.stdout + r.stderr).decode("utf-8", "replace")
+    if "may run the following" in out:
+        return True
+    if "not allowed to run sudo" in out:
+        return False
+    return None
 
 
 LGSM_ACTIONS = ("start", "stop", "restart", "monitor", "update", "validate", "backup",
