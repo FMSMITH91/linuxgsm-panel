@@ -99,10 +99,12 @@ _THRESHOLD_BOUNDS = {"disk_pct": (50, 99), "load_pct": (50, 800), "mem_pct": (50
 
 
 def get_thresholds():
-    """Configured alert thresholds, each clamped to its own range, falling back to the defaults:
-    disk % and mem % (50-99), CPU load-average per-core % (50-800, so it can be >100), and load_mins
-    — the minutes CPU/RAM must stay high before alerting. The monitor reads these for disk_low /
-    high_load."""
+    """Configured alert thresholds, each clamped to its own range, falling back to the defaults.
+
+    The ranges: disk % and mem % (50-99), CPU load-average per-core % (50-800, so it can be >100),
+    and load_mins — the minutes CPU/RAM must stay high before alerting. The monitor reads these for
+    disk_low / high_load.
+    """
     t = _cfg().get("thresholds") or {}
     out = {}
     for k, dflt in _DEFAULT_THRESHOLDS.items():
@@ -134,22 +136,16 @@ def settings_for_form():
     }
 
 
-def save_settings(*, telegram, discord, events, thresholds=None, ntfy=None):
-    """Persist settings, encrypting secrets. `telegram`/`discord` secrets that come in as None mean
-    'keep the stored value' (the form never round-trips the real secret back). There is no global
-    master switch — a channel's own enable toggle is what turns its alerts on/off."""
-    cur = _cfg()
-    cur_tg = cur.get("telegram") or {}
-    cur_dc = cur.get("discord") or {}
-    cur_nt = cur.get("ntfy") or {}
-    tg_token = cur_tg.get("token") if telegram.get("token") is None else encrypt_secret(telegram["token"])
-    dc_webhook = cur_dc.get("webhook") if discord.get("webhook") is None else encrypt_secret(discord["webhook"])
-    dc_bot_token = cur_dc.get("bot_token") if discord.get("bot_token") is None \
-        else encrypt_secret(discord["bot_token"])
-    # ntfy=None means "this caller doesn't manage ntfy" — keep whatever is stored, rather than
-    # wiping a configured channel because an older caller omitted the argument.
-    ntfy = cur_nt if ntfy is None else ntfy
-    nt_token = cur_nt.get("token") if ntfy.get("token") is None else encrypt_secret(ntfy["token"])
+def _kept_or_encrypted(submitted, stored, key):
+    """Return the secret to store: `stored[key]` when the form sent None ('keep'), else it encrypted.
+
+    `stored` is only read when the form asked to keep the value.
+    """
+    return stored.get(key) if submitted is None else encrypt_secret(submitted)
+
+
+def _submitted_thresholds(thresholds):
+    """Return the current/default thresholds with each submitted numeric field clamped into range."""
     th = get_thresholds()   # start from current/defaults; only overwrite fields that were submitted
     for k in _DEFAULT_THRESHOLDS:
         if thresholds and thresholds.get(k) not in (None, ""):
@@ -158,17 +154,54 @@ def save_settings(*, telegram, discord, events, thresholds=None, ntfy=None):
                 th[k] = min(hi, max(lo, int(thresholds[k])))
             except (TypeError, ValueError):
                 _log.debug("ignoring non-numeric threshold %r; keeping %r", k, th[k])
+    return th
+
+
+def _telegram_record(form, token):
+    """Build the stored Telegram settings from the form and the already-resolved token."""
+    return {"enabled": bool(form.get("enabled")),
+            "chat_id": (form.get("chat_id") or "").strip()[:64], "token": token or "",
+            "accept_commands": bool(form.get("accept_commands"))}
+
+
+def _discord_record(form, webhook, bot_token):
+    """Build the stored Discord settings from the form and the already-resolved secrets."""
+    return {"enabled": bool(form.get("enabled")), "webhook": webhook or "",
+            "bot_token": bot_token or "",
+            "channel_id": (form.get("channel_id") or "").strip()[:32],
+            "accept_commands": bool(form.get("accept_commands"))}
+
+
+def _ntfy_record(form, token):
+    """Build the stored ntfy settings from the form and the already-resolved access token."""
+    return {"enabled": bool(form.get("enabled")),
+            "server": (form.get("server") or "").strip()[:253] or NTFY_DEFAULT_SERVER,
+            "topic": (form.get("topic") or "").strip()[:64], "token": token or ""}
+
+
+def save_settings(*, telegram, discord, events, thresholds=None, ntfy=None):
+    """Persist settings, encrypting secrets.
+
+    `telegram`/`discord` secrets that come in as None mean 'keep the stored value' (the form never
+    round-trips the real secret back). There is no global master switch — a channel's own enable
+    toggle is what turns its alerts on/off.
+    """
+    cur = _cfg()
+    cur_tg = cur.get("telegram") or {}
+    cur_dc = cur.get("discord") or {}
+    cur_nt = cur.get("ntfy") or {}
+    tg_token = _kept_or_encrypted(telegram.get("token"), cur_tg, "token")
+    dc_webhook = _kept_or_encrypted(discord.get("webhook"), cur_dc, "webhook")
+    dc_bot_token = _kept_or_encrypted(discord.get("bot_token"), cur_dc, "bot_token")
+    # ntfy=None means "this caller doesn't manage ntfy" — keep whatever is stored, rather than
+    # wiping a configured channel because an older caller omitted the argument.
+    ntfy = cur_nt if ntfy is None else ntfy
+    nt_token = _kept_or_encrypted(ntfy.get("token"), cur_nt, "token")
+    th = _submitted_thresholds(thresholds)
     notif = {
-        "telegram": {"enabled": bool(telegram.get("enabled")),
-                     "chat_id": (telegram.get("chat_id") or "").strip()[:64], "token": tg_token or "",
-                     "accept_commands": bool(telegram.get("accept_commands"))},
-        "discord": {"enabled": bool(discord.get("enabled")), "webhook": dc_webhook or "",
-                    "bot_token": dc_bot_token or "",
-                    "channel_id": (discord.get("channel_id") or "").strip()[:32],
-                    "accept_commands": bool(discord.get("accept_commands"))},
-        "ntfy": {"enabled": bool(ntfy.get("enabled")),
-                 "server": (ntfy.get("server") or "").strip()[:253] or NTFY_DEFAULT_SERVER,
-                 "topic": (ntfy.get("topic") or "").strip()[:64], "token": nt_token or ""},
+        "telegram": _telegram_record(telegram, tg_token),
+        "discord": _discord_record(discord, dc_webhook, dc_bot_token),
+        "ntfy": _ntfy_record(ntfy, nt_token),
         "events": {k: bool(events.get(k, EVENTS[k][1])) for k in EVENTS},
         "thresholds": th,
     }
@@ -177,10 +210,12 @@ def save_settings(*, telegram, discord, events, thresholds=None, ntfy=None):
 
 
 def _drop_master_switch(notif):
-    """Pure, in-place migration of a notifications-config dict: the global 'enabled' master switch
-    was removed. If it was explicitly OFF that meant 'no notifications' — preserve that by disabling
-    both channels (so dropping the gate can't start sending), then remove the key. Returns True if
-    the old key was present (i.e. something changed)."""
+    """Pure, in-place migration of a notifications-config dict off the removed master switch.
+
+    The global 'enabled' master switch was removed. If it was explicitly OFF that meant 'no
+    notifications' — preserve that by disabling both channels (so dropping the gate can't start
+    sending), then remove the key. Returns True if the old key was present (i.e. something changed).
+    """
     if not isinstance(notif, dict) or "enabled" not in notif:
         return False
     if notif.get("enabled") is False:
@@ -192,8 +227,10 @@ def _drop_master_switch(notif):
 
 
 def migrate_master_switch():
-    """One-time on startup: strip the removed global 'enabled' master switch from the stored config
-    (preserving a muted state via the channel toggles). No-op once the key is gone."""
+    """One-time on startup: strip the removed global 'enabled' master switch from the stored config.
+
+    A muted state is preserved via the channel toggles. No-op once the key is gone.
+    """
     if "enabled" not in _cfg():
         return
     update_config(lambda cfg: _drop_master_switch(cfg.get("notifications")) if isinstance(cfg.get("notifications"), dict) else None)
@@ -209,9 +246,11 @@ _ALLOWED_PREFIXES = ("https://api.telegram.org/", "https://discord.com/api/")
 
 
 def _discord_api_url(webhook):
-    """Canonical https://discord.com/api/webhooks/<id>/<token> rebuilt from a validated webhook URL,
-    or None if it isn't one. The host is a constant literal and the id/token are charset-checked, so
-    nothing user-supplied controls where the request goes."""
+    """Canonical https://discord.com/api/webhooks/<id>/<token> rebuilt from a validated webhook URL.
+
+    None if it isn't one. The host is a constant literal and the id/token are charset-checked, so
+    nothing user-supplied controls where the request goes.
+    """
     m = _DISCORD_WEBHOOK_RE.match(webhook or "")
     return "https://discord.com/api/webhooks/%s/%s" % (m.group(1), m.group(2)) if m else None
 
@@ -226,12 +265,15 @@ _TG_METHODS = ("sendMessage", "getUpdates", "setMyCommands", "getMe")
 
 
 def _tg_api_url(token, method):
-    """A Telegram Bot API URL on the CONSTANT api.telegram.org host, with the bot token REBUILT from
-    its regex-captured id/secret groups and `method` restricted to _TG_METHODS — so no request-tainted
-    value reaches the request path. Same shape as the (un-flagged) Discord builder: token + fixed
-    method only. A query string is a separate concern appended by the one caller that needs it — it is
-    deliberately NOT a parameter here, so this function's return can't be tainted by one. None if the
-    token is malformed or the method is unknown."""
+    """A Telegram Bot API URL on the CONSTANT api.telegram.org host, or None.
+
+    The bot token is REBUILT from its regex-captured id/secret groups and `method` restricted to
+    _TG_METHODS — so no request-tainted value reaches the request path. Same shape as the
+    (un-flagged) Discord builder: token + fixed method only. A query string is a separate concern
+    appended by the one caller that needs it — it is deliberately NOT a parameter here, so this
+    function's return can't be tainted by one. None if the token is malformed or the method is
+    unknown.
+    """
     m = _TG_TOKEN_RE.match(token or "")
     if not m or method not in _TG_METHODS:
         return None
@@ -239,10 +281,12 @@ def _tg_api_url(token, method):
 
 
 def _ntfy_url(server, topic):
-    """https://<host>[:port]/<topic> for a configured ntfy server, or None if either part is
-    unusable. The topic is charset-checked and the whole result must satisfy _NTFY_URL_RE, so a
-    server value carrying a path, query, credentials or a non-https scheme yields None rather than
-    a request. A trailing slash on the server is tolerated because operators type it."""
+    """https://<host>[:port]/<topic> for a configured ntfy server, or None if either part is unusable.
+
+    The topic is charset-checked and the whole result must satisfy _NTFY_URL_RE, so a server value
+    carrying a path, query, credentials or a non-https scheme yields None rather than a request. A
+    trailing slash on the server is tolerated because operators type it.
+    """
     topic = (topic or "").strip()
     server = (server or "").strip().rstrip("/") or NTFY_DEFAULT_SERVER
     if not _NTFY_TOPIC_RE.match(topic):
@@ -252,8 +296,11 @@ def _ntfy_url(server, topic):
 
 
 def _valid_ntfy_server(server):
-    """Whether `server` can host a topic at all — used by the form so a bad server is reported
-    when it is typed, not silently as a failed send later."""
+    """Whether `server` can host a topic at all.
+
+    Used by the form so a bad server is reported when it is typed, not silently as a failed send
+    later.
+    """
     return _ntfy_url(server, "probe") is not None
 
 
@@ -262,9 +309,12 @@ _PROVIDER_LABELS = {"telegram": "telegram", "discord": "discord", "ntfy": "ntfy"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Refuse every 3xx. Returning None from redirect_request makes http_error_302 (which 301,
-    303, 307 and 308 all alias) fall through to HTTPDefaultErrorHandler, so the 3xx surfaces as
-    an HTTPError — which _post already reads as 'rejected' and LOGS."""
+    """Refuse every 3xx.
+
+    Returning None from redirect_request makes http_error_302 (which 301, 303, 307 and 308 all
+    alias) fall through to HTTPDefaultErrorHandler, so the 3xx surfaces as an HTTPError — which
+    _post already reads as 'rejected' and LOGS.
+    """
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -289,10 +339,13 @@ _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 def _post(url, data, headers, allow_configured_host=False, provider="?"):
-    """POST to a validated https URL. Returns (ok, reason): ok is True on a 2xx. `reason` is a FIXED
-    word describing the outcome — 'sent' / 'rejected' (the provider answered with an error status) /
-    'unreachable' (couldn't connect) / 'blocked' (host not allow-listed). It carries no data read
-    back from the response, so this can never become an SSRF exfiltration sink. Never raises."""
+    """POST to a validated https URL. Returns (ok, reason): ok is True on a 2xx.
+
+    `reason` is a FIXED word describing the outcome — 'sent' / 'rejected' (the provider answered
+    with an error status) / 'unreachable' (couldn't connect) / 'blocked' (host not allow-listed).
+    It carries no data read back from the response, so this can never become an SSRF exfiltration
+    sink. Never raises.
+    """
     # SSRF barrier at the sink: the URL must start with one of our known-provider prefixes, so a
     # user/admin-supplied URL can never make this request hit an internal or arbitrary host. Every
     # caller builds `url` on a CONSTANT host with the id/token rebuilt from regex-captured groups
@@ -348,8 +401,11 @@ def _post(url, data, headers, allow_configured_host=False, provider="?"):
 
 
 def send_telegram(token, chat_id, text):
-    """Send a Telegram message. Returns (ok, detail). The token is format-validated so it can't
-    rewrite the request path; chat_id + text are urlencoded into the body."""
+    """Send a Telegram message. Returns (ok, detail).
+
+    The token is format-validated so it can't rewrite the request path; chat_id + text are
+    urlencoded into the body.
+    """
     url = _tg_api_url(token, "sendMessage")
     if not url:
         return False, "the bot token is missing or malformed"
@@ -369,11 +425,13 @@ def send_telegram(token, chat_id, text):
 
 
 def telegram_get_updates(token, offset=None, timeout=25):
-    """Long-poll Telegram for incoming messages (bot command input). Returns a list of update dicts
-    (possibly empty) or None on error/timeout/conflict. SSRF-safe: the URL is built by _tg_api_url on
-    the constant api.telegram.org host with the token rebuilt from its regex-captured groups, so
-    nothing user-supplied reaches the request path — only the JSON `result` array is read back.
-    Never raises."""
+    """Long-poll Telegram for incoming messages (bot command input).
+
+    Returns a list of update dicts (possibly empty) or None on error/timeout/conflict. SSRF-safe:
+    the URL is built by _tg_api_url on the constant api.telegram.org host with the token rebuilt
+    from its regex-captured groups, so nothing user-supplied reaches the request path — only the
+    JSON `result` array is read back. Never raises.
+    """
     params = {"timeout": int(timeout)}
     if offset is not None:
         params["offset"] = int(offset)
@@ -383,7 +441,8 @@ def telegram_get_updates(token, offset=None, timeout=25):
     url += "?" + urllib.parse.urlencode(params)   # only int-coerced params; kept out of _tg_api_url
     req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
     try:
-        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- _tg_api_url builds it on the fixed api.telegram.org host
+        # _tg_api_url builds the URL on the fixed api.telegram.org host.
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         with urllib.request.urlopen(req, timeout=timeout + 10) as resp:  # nosec B310 - https, host-literal
             data = json.loads(resp.read(2_000_000).decode("utf-8", "replace"))
         return (data.get("result") or []) if data.get("ok") else None
@@ -393,14 +452,17 @@ def telegram_get_updates(token, offset=None, timeout=25):
 
 
 def telegram_get_me(token):
-    """This bot's own @username (getMe), or None when it could not be read. Same SSRF-safe URL
-    builder as the other Telegram calls. Never raises."""
+    """Return this bot's own @username (getMe), or None when it could not be read.
+
+    Same SSRF-safe URL builder as the other Telegram calls. Never raises.
+    """
     url = _tg_api_url(token, "getMe")
     if not url:
         return None
     req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
     try:
-        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- _tg_api_url builds it on the fixed api.telegram.org host
+        # _tg_api_url builds the URL on the fixed api.telegram.org host.
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310 - https, host-literal
             data = json.loads(resp.read(200_000).decode("utf-8", "replace"))
         name = (data.get("result") or {}).get("username") if data.get("ok") else None
@@ -430,9 +492,12 @@ TG_COMMANDS = [
 
 
 def telegram_set_commands(token, clear=False):
-    """Register the bot's command list with Telegram (setMyCommands) so typing '/' pops the command
-    menu — or clear it when commands are turned off. Best-effort; returns True on success. SSRF-safe:
-    the URL is built by _tg_api_url (constant host, token rebuilt from its regex groups)."""
+    """Register the bot's command list with Telegram (setMyCommands), or clear it.
+
+    Registered, typing '/' pops the command menu; `clear` empties it when commands are turned off.
+    Best-effort; returns True on success. SSRF-safe: the URL is built by _tg_api_url (constant
+    host, token rebuilt from its regex groups).
+    """
     url = _tg_api_url(token, "setMyCommands")
     if not url:
         return False
@@ -452,8 +517,11 @@ _DISCORD_NO_MENTIONS = {"parse": []}
 
 
 def send_discord(webhook, text):
-    """Send a Discord webhook message. Returns (ok, detail). The URL is rebuilt onto a constant host
-    from the validated webhook id/token, so the request can only ever go to Discord."""
+    """Send a Discord webhook message. Returns (ok, detail).
+
+    The URL is rebuilt onto a constant host from the validated webhook id/token, so the request
+    can only ever go to Discord.
+    """
     url = _discord_api_url(webhook)
     if not url:
         return False, "that isn't a valid discord.com webhook URL"
@@ -467,14 +535,14 @@ def send_discord(webhook, text):
     return False, "Discord rejected it — the webhook URL is wrong or was deleted."
 
 
-
 def send_ntfy(server, topic, token, text):
     """Publish a message to an ntfy topic. Returns (ok, detail).
 
     The body is the message; the title goes in an X-Title header because ntfy renders it as the
     notification's heading. An access token is optional — ntfy.sh topics are public by default,
     but a self-hosted instance (or a reserved topic) can require one, and it travels in an
-    Authorization header, never in the URL, so it cannot leak via a redirect or a proxy log."""
+    Authorization header, never in the URL, so it cannot leak via a redirect or a proxy log.
+    """
     url = _ntfy_url(server, topic)
     if not url:
         return False, ("that isn't a usable ntfy server + topic — the server must be https with no "
@@ -521,16 +589,21 @@ def _valid_discord_bot_token(token):
 
 
 def _discord_bot_message_url(channel_id):
-    """Canonical https://discord.com/api/v10/channels/<id>/messages, or None if the channel id isn't a
-    plain snowflake. Constant host + digits-only id, so the request path is never user-controlled."""
+    """Canonical https://discord.com/api/v10/channels/<id>/messages, or None.
+
+    None when the channel id isn't a plain snowflake. Constant host + digits-only id, so the
+    request path is never user-controlled.
+    """
     return ("https://discord.com/api/v10/channels/%s/messages" % channel_id
             if _DISCORD_CHANNEL_RE.match(channel_id or "") else None)
 
 
 def discord_bot_send(bot_token, channel_id, text):
-    """Post a message to a channel as the bot (the command bot's reply path). Returns (ok, detail). The
-    token rides only in the Authorization header; the URL is built on the constant discord.com host with
-    a charset-checked channel id, so this can't become an SSRF sink."""
+    """Post a message to a channel as the bot (the command bot's reply path). Returns (ok, detail).
+
+    The token rides only in the Authorization header; the URL is built on the constant discord.com
+    host with a charset-checked channel id, so this can't become an SSRF sink.
+    """
     url = _discord_bot_message_url((channel_id or "").strip())
     if not url:
         return False, "the channel ID is missing or malformed"
@@ -548,27 +621,101 @@ def discord_bot_send(bot_token, channel_id, text):
                    "it can see/send in that channel.")
 
 
-def discord_gateway_run(bot_token, on_message, _connect=None):
-    """Open ONE Discord Gateway session and pump MESSAGE_CREATE events to `on_message(channel_id,
-    author_is_bot, content, author)` until the socket drops; then return so the caller can reconnect after a
-    backoff. A fresh IDENTIFY each time (no RESUME) means anything sent while we were down is skipped —
-    the same 'no backlog replay' the Telegram poller gets, so the /update that restarted us is never
-    re-run. Degrades to a no-op (logged) if websocket-client isn't installed. Never raises.
+def _gateway_connector():
+    """Return the real Gateway connector, or None when websocket-client isn't installed.
 
-    `_connect` is a seam for tests to inject a fake socket; production leaves it None."""
-    if _connect is None:
+    A missing dependency is warned about once, not on every reconnect tick.
+    """
+    try:
+        import websocket  # optional dependency; command bot is off if it's absent
+    except Exception:
+        if not _ws_warned[0]:   # warn once, not every reconnect tick, if the dep is missing
+            _ws_warned[0] = True
+            _log.warning("discord command bot: the 'websocket-client' package isn't installed — "
+                         "skipping (webhook alerts are unaffected).")
+        return None
+
+    def _connect():
+        return websocket.create_connection(DISCORD_GATEWAY_URL, timeout=40, enable_multithread=True)
+    return _connect
+
+
+def _gateway_heartbeat(ws, interval, state, stop):
+    """Send the session's heartbeat every `interval` seconds until `stop` is set.
+
+    Zombied-connection guard: if the previous heartbeat wasn't ACKed (op 11) by the next tick, the
+    link is dead — close it so the session's recv() unblocks and the caller reconnects.
+    """
+    while not stop["v"]:
+        time.sleep(interval)
+        if stop["v"]:
+            break
+        if not state["acked"]:
+            try:
+                ws.close()
+            except Exception:
+                _log.debug("discord heartbeat close failed", exc_info=True)
+            break
+        state["acked"] = False
         try:
-            import websocket  # optional dependency; command bot is off if it's absent
+            ws.send(json.dumps({"op": 1, "d": state["seq"]}))
         except Exception:
-            if not _ws_warned[0]:   # warn once, not every reconnect tick, if the dep is missing
-                _ws_warned[0] = True
-                _log.warning("discord command bot: the 'websocket-client' package isn't installed — "
-                             "skipping (webhook alerts are unaffected).")
+            break
+
+
+def _gateway_message(d, on_message):
+    """Hand one MESSAGE_CREATE payload to `on_message`; a handler that raises is logged, not fatal."""
+    author = d.get("author") or {}
+    try:
+        # `author` is passed through, not just its bot flag: a command that stops a
+        # game server or updates the panel needs to be attributable to whoever sent it,
+        # and the audit log had no way to record that.
+        on_message(str(d.get("channel_id") or ""), bool(author.get("bot")),
+                   d.get("content") or "", author)
+    except Exception:
+        _log.debug("discord on_message handler failed", exc_info=True)
+
+
+def _gateway_frame(ws, data, state, on_message):
+    """Handle one decoded Gateway frame. Returns False when the session has to end."""
+    if data.get("s") is not None:
+        state["seq"] = data["s"]
+    op = data.get("op")
+    if op == 11:                       # heartbeat ACK
+        state["acked"] = True
+    elif op == 1:                      # server demands an immediate heartbeat (don't touch the
+        ws.send(json.dumps({"op": 1, "d": state["seq"]}))   # periodic ACK tracking → no races
+    elif op in (7, 9):                 # reconnect / invalid-session → drop and re-identify
+        return False
+    elif op == 0 and data.get("t") == "MESSAGE_CREATE":
+        _gateway_message(data.get("d") or {}, on_message)
+    return True
+
+
+def _gateway_close(ws):
+    """Close the session's socket if it got one; a close that fails is logged, not raised."""
+    try:
+        if ws is not None:
+            ws.close()
+    except Exception:
+        _log.debug("discord gateway close failed", exc_info=True)
+
+
+def discord_gateway_run(bot_token, on_message, _connect=None):
+    """Open ONE Discord Gateway session and pump MESSAGE_CREATE events to `on_message`.
+
+    Each event reaches `on_message(channel_id, author_is_bot, content, author)` until the socket
+    drops; then this returns so the caller can reconnect after a backoff. A fresh IDENTIFY each time
+    (no RESUME) means anything sent while we were down is skipped — the same 'no backlog replay' the
+    Telegram poller gets, so the /update that restarted us is never re-run. Degrades to a no-op
+    (logged) if websocket-client isn't installed. Never raises.
+
+    `_connect` is a seam for tests to inject a fake socket; production leaves it None.
+    """
+    if _connect is None:
+        _connect = _gateway_connector()
+        if _connect is None:
             return
-
-        def _connect():
-            return websocket.create_connection(DISCORD_GATEWAY_URL, timeout=40, enable_multithread=True)
-
     ws = None
     stop = {"v": False}
     try:
@@ -588,67 +735,40 @@ def discord_gateway_run(bot_token, on_message, _connect=None):
             "properties": {"os": "linux", "browser": "linuxgsm-panel", "device": "linuxgsm-panel"},
         }}))
         state = {"seq": None, "acked": True}
-
-        def _heartbeat():
-            # Zombied-connection guard: if the previous heartbeat wasn't ACKed (op 11) by the next tick,
-            # the link is dead — close it so recv() below unblocks and the caller reconnects.
-            while not stop["v"]:
-                time.sleep(interval)
-                if stop["v"]:
-                    break
-                if not state["acked"]:
-                    try:
-                        ws.close()
-                    except Exception:
-                        _log.debug("discord heartbeat close failed", exc_info=True)
-                    break
-                state["acked"] = False
-                try:
-                    ws.send(json.dumps({"op": 1, "d": state["seq"]}))
-                except Exception:
-                    break
-        threading.Thread(target=_heartbeat, daemon=True).start()
+        # The heartbeat runs beside the receive loop, on its own thread, until `stop` is set.
+        threading.Thread(target=lambda: _gateway_heartbeat(ws, interval, state, stop),
+                         daemon=True).start()
 
         while True:
             raw = ws.recv()
-            if not raw:
+            if not raw or not _gateway_frame(ws, json.loads(raw), state, on_message):
                 break
-            data = json.loads(raw)
-            if data.get("s") is not None:
-                state["seq"] = data["s"]
-            op = data.get("op")
-            if op == 11:                       # heartbeat ACK
-                state["acked"] = True
-            elif op == 1:                      # server demands an immediate heartbeat (don't touch the
-                ws.send(json.dumps({"op": 1, "d": state["seq"]}))   # periodic ACK tracking → no races
-            elif op in (7, 9):                 # reconnect / invalid-session → drop and re-identify
-                break
-            elif op == 0 and data.get("t") == "MESSAGE_CREATE":
-                d = data.get("d") or {}
-                author = d.get("author") or {}
-                try:
-                    # `author` is passed through, not just its bot flag: a command that stops a
-                    # game server or updates the panel needs to be attributable to whoever sent it,
-                    # and the audit log had no way to record that.
-                    on_message(str(d.get("channel_id") or ""), bool(author.get("bot")),
-                               d.get("content") or "", author)
-                except Exception:
-                    _log.debug("discord on_message handler failed", exc_info=True)
     except Exception:
         _log.debug("discord gateway session ended", exc_info=True)
     finally:
         stop["v"] = True
-        try:
-            if ws is not None:
-                ws.close()
-        except Exception:
-            _log.debug("discord gateway close failed", exc_info=True)
+        _gateway_close(ws)
 
 
 # ── public API ─────────────────────────────────────────────────
+def _channel_senders(tg, dc, nt, text):
+    """Return (name, enabled, send) for each channel; `send()` decrypts and sends only when called."""
+    return (("telegram", tg.get("enabled"),
+             lambda: send_telegram(decrypt_secret(tg.get("token") or ""),
+                                   (tg.get("chat_id") or "").strip(), text)),
+            ("discord", dc.get("enabled"),
+             lambda: send_discord(decrypt_secret(dc.get("webhook") or ""), text)),
+            ("ntfy", nt.get("enabled"),
+             lambda: send_ntfy(nt.get("server") or NTFY_DEFAULT_SERVER,
+                               nt.get("topic") or "",
+                               decrypt_secret(nt.get("token") or ""), text)))
+
+
 def notify(event_key, title, body=""):
-    """Fire an alert for `event_key` to every enabled channel, in the background. No-op when
-    notifications (or this event) are off, or no channel is configured. Never raises."""
+    """Fire an alert for `event_key` to every enabled channel, in the background.
+
+    No-op when notifications (or this event) are off, or no channel is configured. Never raises.
+    """
     try:
         cfg = _cfg()
         if not event_enabled(cfg, event_key):
@@ -662,16 +782,7 @@ def notify(event_key, title, body=""):
             # Each result is CHECKED. They were called as bare statements, so a provider that
             # refused every message left no trace at all — see _post's HTTPError branch.
             try:
-                for _name, _enabled, _send in (
-                        ("telegram", tg.get("enabled"),
-                         lambda: send_telegram(decrypt_secret(tg.get("token") or ""),
-                                               (tg.get("chat_id") or "").strip(), text)),
-                        ("discord", dc.get("enabled"),
-                         lambda: send_discord(decrypt_secret(dc.get("webhook") or ""), text)),
-                        ("ntfy", nt.get("enabled"),
-                         lambda: send_ntfy(nt.get("server") or NTFY_DEFAULT_SERVER,
-                                           nt.get("topic") or "",
-                                           decrypt_secret(nt.get("token") or ""), text))):
+                for _name, _enabled, _send in _channel_senders(tg, dc, nt, text):
                     if not _enabled:
                         continue
                     _ok, _why = _send()
@@ -684,70 +795,103 @@ def notify(event_key, title, body=""):
         _log.debug("notify failed to dispatch", exc_info=True)
 
 
+def _form_or_saved(value, saved, key, default=""):
+    """Return the value typed into the form, else `saved[key]` (read only then), else `default`."""
+    return (value or "").strip() or (saved.get(key) or default)
+
+
+def _form_or_saved_secret(value, saved, key):
+    """Return the secret typed into the form, else `saved[key]` decrypted (read only then)."""
+    return (value or "").strip() or decrypt_secret(saved.get(key) or "")
+
+
+def _test_send_telegram(cfg, token, chat_id, text):
+    """test_send for Telegram: check the token and chat id, then send."""
+    tg = cfg.get("telegram") or {}
+    tok = _form_or_saved_secret(token, tg, "token")
+    chat = _form_or_saved(chat_id, tg, "chat_id").strip()
+    if not tok:
+        return False, "Enter the bot token first."
+    if not _TG_TOKEN_RE.match(tok):
+        return False, "That bot token isn't in the expected format (like 123456789:AA…)."
+    if not chat:
+        return False, "Enter the chat ID first. Message your bot once, then use your numeric chat ID."
+    ok, detail = send_telegram(tok, chat, text)
+    return (True, "Test message sent — check Telegram.") if ok \
+        else (False, "Telegram error: %s" % (detail or "unknown"))
+
+
+def _test_send_discord(cfg, webhook, text):
+    """test_send for a Discord webhook: check the URL, then send."""
+    wh = (webhook or "").strip() or decrypt_secret((cfg.get("discord") or {}).get("webhook") or "")
+    if not wh:
+        return False, "Enter the webhook URL first."
+    if not _valid_discord_webhook(wh):
+        return False, "That doesn't look like a Discord webhook URL."
+    ok, detail = send_discord(wh, text)
+    return (True, "Test message sent — check Discord.") if ok \
+        else (False, "Discord error: %s" % (detail or "unknown"))
+
+
+def _test_send_discord_bot(cfg, token, chat_id, text):
+    """test_send for the Discord command bot: check the bot token and channel id, then send."""
+    dc = cfg.get("discord") or {}
+    tok = _form_or_saved_secret(token, dc, "bot_token")
+    chan = _form_or_saved(chat_id, dc, "channel_id").strip()
+    if not tok:
+        return False, "Enter the bot token first."
+    if not _valid_discord_bot_token(tok):
+        return False, "That bot token isn't in the expected format."
+    if not _DISCORD_CHANNEL_RE.match(chan):
+        return False, "Enter the numeric channel ID first (right-click the channel → Copy Channel ID)."
+    ok, detail = discord_bot_send(tok, chan, text)
+    return (True, "Test message sent — check the Discord channel.") if ok \
+        else (False, "Discord error: %s" % (detail or "unknown"))
+
+
+def _test_send_ntfy(cfg, token, server, topic, text):
+    """test_send for ntfy: check the topic and server, then publish."""
+    nt = cfg.get("ntfy") or {}
+    srv = _form_or_saved(server, nt, "server", NTFY_DEFAULT_SERVER)
+    top = _form_or_saved(topic, nt, "topic")
+    tok = _form_or_saved_secret(token, nt, "token")
+    if not top:
+        return False, "Enter the topic first — it is the name you subscribed to in the ntfy app."
+    if not _NTFY_TOPIC_RE.match(top):
+        return False, "A topic may use letters, digits, - and _ only (no spaces or slashes)."
+    if not _valid_ntfy_server(srv):
+        return False, ("That server isn't usable — give the base URL only, https and no path "
+                       "(for example https://ntfy.sh).")
+    ok, detail = send_ntfy(srv, top, tok, text)
+    return (True, "Test message sent — check the ntfy app.") if ok \
+        else (False, "ntfy error: %s" % (detail or "unknown"))
+
+
 def test_send(kind, token=None, chat_id=None, webhook=None, server=None, topic=None):
-    """Synchronously send a test message to one channel. Uses the values passed from the form when
-    given (so you can test BEFORE saving), else the saved config. (ok, message) — message carries the
-    provider's actual error on failure."""
+    """Synchronously send a test message to one channel. Returns (ok, message).
+
+    Uses the values passed from the form when given (so you can test BEFORE saving), else the saved
+    config. The message carries the provider's actual error on failure.
+    """
     cfg = _cfg()
     text = "🎮 LinuxGSM Panel — test alert. If you can read this, notifications are working."
     if kind == "telegram":
-        tg = cfg.get("telegram") or {}
-        tok = (token or "").strip() or decrypt_secret(tg.get("token") or "")
-        chat = ((chat_id or "").strip() or (tg.get("chat_id") or "")).strip()
-        if not tok:
-            return False, "Enter the bot token first."
-        if not _TG_TOKEN_RE.match(tok):
-            return False, "That bot token isn't in the expected format (like 123456789:AA…)."
-        if not chat:
-            return False, "Enter the chat ID first. Message your bot once, then use your numeric chat ID."
-        ok, detail = send_telegram(tok, chat, text)
-        return (True, "Test message sent — check Telegram.") if ok \
-            else (False, "Telegram error: %s" % (detail or "unknown"))
+        return _test_send_telegram(cfg, token, chat_id, text)
     if kind == "discord":
-        wh = (webhook or "").strip() or decrypt_secret((cfg.get("discord") or {}).get("webhook") or "")
-        if not wh:
-            return False, "Enter the webhook URL first."
-        if not _valid_discord_webhook(wh):
-            return False, "That doesn't look like a Discord webhook URL."
-        ok, detail = send_discord(wh, text)
-        return (True, "Test message sent — check Discord.") if ok \
-            else (False, "Discord error: %s" % (detail or "unknown"))
+        return _test_send_discord(cfg, webhook, text)
     if kind == "discord_bot":
-        dc = cfg.get("discord") or {}
-        tok = (token or "").strip() or decrypt_secret(dc.get("bot_token") or "")
-        chan = ((chat_id or "").strip() or (dc.get("channel_id") or "")).strip()
-        if not tok:
-            return False, "Enter the bot token first."
-        if not _valid_discord_bot_token(tok):
-            return False, "That bot token isn't in the expected format."
-        if not _DISCORD_CHANNEL_RE.match(chan):
-            return False, "Enter the numeric channel ID first (right-click the channel → Copy Channel ID)."
-        ok, detail = discord_bot_send(tok, chan, text)
-        return (True, "Test message sent — check the Discord channel.") if ok \
-            else (False, "Discord error: %s" % (detail or "unknown"))
+        return _test_send_discord_bot(cfg, token, chat_id, text)
     if kind == "ntfy":
-        nt = cfg.get("ntfy") or {}
-        srv = (server or "").strip() or (nt.get("server") or NTFY_DEFAULT_SERVER)
-        top = (topic or "").strip() or (nt.get("topic") or "")
-        tok = (token or "").strip() or decrypt_secret(nt.get("token") or "")
-        if not top:
-            return False, "Enter the topic first — it is the name you subscribed to in the ntfy app."
-        if not _NTFY_TOPIC_RE.match(top):
-            return False, "A topic may use letters, digits, - and _ only (no spaces or slashes)."
-        if not _valid_ntfy_server(srv):
-            return False, ("That server isn't usable — give the base URL only, https and no path "
-                           "(for example https://ntfy.sh).")
-        ok, detail = send_ntfy(srv, top, tok, text)
-        return (True, "Test message sent — check the ntfy app.") if ok \
-            else (False, "ntfy error: %s" % (detail or "unknown"))
+        return _test_send_ntfy(cfg, token, server, topic, text)
     return False, "Unknown channel."
 
 
 def alerts_muted(gs):
-    """True when one of this server's tags is marked "don't alert" (ServerTag.notify=False) — how a
-    tag like "test" or "staging" keeps a noisy box out of the alert channel without turning the
-    event off globally for the real servers. Any muting tag wins: opting a server out is the
-    conservative outcome, and being wrong the other way means paging someone at 3am.
+    """True when one of this server's tags is marked "don't alert" (ServerTag.notify=False).
+
+    That is how a tag like "test" or "staging" keeps a noisy box out of the alert channel without
+    turning the event off globally for the real servers. Any muting tag wins: opting a server out
+    is the conservative outcome, and being wrong the other way means paging someone at 3am.
 
     Fails OPEN (returns False) on any error: an alert we can't decide about should still be sent.
     Runs in poller threads, so it must never raise.
