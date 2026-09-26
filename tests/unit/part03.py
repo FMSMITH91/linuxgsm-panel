@@ -265,6 +265,13 @@ check("runtime-path: static asset counts", _so._is_runtime_path("static/js/app.j
 check("runtime-path: requirements counts", _so._is_runtime_path("requirements.txt") is True)
 check("runtime-path: requirements.in (what the lockfile is compiled from) is noise",
       _so._is_runtime_path("requirements.in") is False)
+# pip's own lockfile is read by install.sh (it is what the venv's pip is installed from), so a
+# commit that changes only it, a Dependabot bump of pip, is an update; the .in it is compiled from
+# is not, exactly like requirements.in.
+check("runtime-path: requirements-bootstrap.txt (pip's lockfile) counts",
+      _so._is_runtime_path("requirements-bootstrap.txt") is True)
+check("runtime-path: ...and requirements-bootstrap.in is noise",
+      _so._is_runtime_path("requirements-bootstrap.in") is False)
 check("runtime-path: install.sh counts", _so._is_runtime_path("install.sh") is True)
 check("runtime-path: README is noise", _so._is_runtime_path("README.md") is False)
 check("runtime-path: any .md is noise", _so._is_runtime_path("docs/SECURITY.md") is False)

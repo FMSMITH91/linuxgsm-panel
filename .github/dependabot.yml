@@ -3,6 +3,8 @@ updates:
   # Python dependencies — opens a PR when a newer (or security-patched) version is available.
   # requirements.txt is pip-compile's hashed lockfile for requirements.in beside it, so Dependabot
   # updates it by re-running pip-compile: the whole set resolved together, hashes regenerated.
+  # requirements-bootstrap.txt beside it is the same for pip itself (what install.sh upgrades the
+  # panel's venv to), from requirements-bootstrap.in: this entry reads both, and groups both.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:

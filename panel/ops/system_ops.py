@@ -955,8 +955,11 @@ _NOISE_DIRS = (".github/", "docs/", "tests/", "tools/", ".vscode/")
 # requirements.in is what requirements.txt is compiled FROM: neither the panel nor install.sh reads
 # it. A dependency reaches a host through requirements.txt, which tests/unit holds to lock every
 # name in the .in, so a commit that changes only the .in changes nothing a host installs.
+# requirements-bootstrap.in is the same for pip's own lockfile, requirements-bootstrap.txt, which
+# install.sh does read, and which therefore counts.
 _NOISE_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".dockerignore",
-                ".pre-commit-config.yaml", "codecov.yml", ".flake8", "mypy.ini", "requirements.in"}
+                ".pre-commit-config.yaml", "codecov.yml", ".flake8", "mypy.ini", "requirements.in",
+                "requirements-bootstrap.in"}
 # Files that live inside a noise directory but DO affect the running host, checked before the
 # directory rule. A denylist of directories cannot express "this one file matters".
 #

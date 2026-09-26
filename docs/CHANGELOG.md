@@ -144,6 +144,12 @@ regardless of this file — this changelog is for humans.
   on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
 
 ### Changed
+- **Deleting a host says what stays on it.** The delete makes the panel forget the host and never
+  connects to it, so gamedig (`/usr/local/lib/linuxgsm-panel/gamedig` and its two links) and the
+  weekly root cron that re-runs its install script (`/etc/cron.d/lgsm-node-tools`) stay there,
+  and the confirmation did not say so. It does now, and README has a "Removing a host" section:
+  what the panel put on a remote host and the commands that remove it, with the one case where
+  not to run them (a host that runs a panel of its own).
 - **`LICENSE` is the plain MIT text**, so GitHub and OpenSSF Scorecard detect it as MIT. The terms
   are unchanged. The notice appended to it (not affiliated with LinuxGSM; built largely with AI) is
   in the README's disclaimer, which already said most of it.
@@ -239,6 +245,11 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **The daily gamedig pass could write to a host that had just been deleted.** It read the list of
+  hosts once and then worked through it, a few minutes per host that needed gamedig installed, so
+  a host deleted while a pass was running was still on its list and got gamedig and its weekly cron
+  put back. Each host, and each game server, is now re-read from the database just before it is
+  acted on, and one that is gone is skipped.
 - **An older "daily restart when empty" line could restart the server with players on it.**
   Lines written before the fix for "Is anyone on?" (below) kept the old check, which restarted
   whenever the player query failed, because `jq` counts gamedig's error reply as 0 players. The
@@ -869,6 +880,35 @@ regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+- **pip itself is hash-locked.** The installer upgraded the panel's venv with
+  `pip install --upgrade pip`: whatever PyPI served that day, unchecked, the first thing the venv
+  ran on every install and on every update that reinstalled dependencies. pip now comes from
+  `requirements-bootstrap.txt`, a pip-compile lockfile (compiled for Python 3.10, like
+  `requirements.txt`) installed with `--require-hashes --only-binary :all:`, so a pip wheel that is
+  not byte-for-byte the locked one is refused. Dependabot keeps it current with the rest of the
+  Python dependencies, CI installs it on every Python in the test matrix and pip-audit reads it, and
+  a change to it alone now counts as a dependency change on update. Checked on fresh 22.04, 24.04
+  and 26.04 venvs (their own pip 22.0.2, 24.0 and 25.1.1): each installs it, and refuses it with
+  one hash altered. An update pinned to an older commit, which has no such file, keeps the pip the
+  venv already has instead of fetching an unpinned one; 22.04's own pip installs the panel's
+  requirements unaided. A test now reads every pip call in the project's shell scripts and fails
+  on one that is neither hash-checked nor listed with its reason (the one listed is
+  `requirements.txt`'s: an older pinned commit's copy may carry no hashes).
+- **The Codacy token is no longer readable by a workflow on any branch.** `CODACY_PROJECT_TOKEN`
+  was a repository secret, and the coverage job that used it ran the code under test. The upload
+  is now its own workflow, `codacy-coverage.yml`, which runs after CI from main's copy of the file,
+  in an environment named `codacy`, and uploads the report CI left as an artifact for the commit
+  CI tested, so pull requests keep their Codacy coverage checks. The report is treated as untrusted:
+  one declaring a DTD or an entity is refused (the reporter's XML parser resolves entities a file
+  declares, which could read its environment, token included). Scoping the token takes three
+  repository settings a workflow cannot make, listed in that file's header: the environment's
+  deployment rule (branch `main` only), the token as an environment secret, and the repository
+  secret deleted. `.github/SECURITY.md` says what the token can do; it is more than an upload key.
+- **The code-scanning gate judges main only for a run that was exactly main's.** Like the deploy
+  before it, `codeql-alerts.yml` compared the run's branch with `main` the way GitHub compares
+  strings, ignoring case and by short name, so a branch `Main` or a tag `main` pushed with its own
+  "CodeQL" workflow was judged, and reported, as main. The name is now compared exactly, in bash,
+  and any other run judges nothing. Read-only either way.
 - **A compromised panel can no longer send root back to an old commit, or choose the branch root
   installs from.** On a root install, the panel could reset its own checkout to an old commit of
   main and ask for a self-update. Root accepted it (every commit main was ever at is on its

@@ -90,9 +90,26 @@ jobs:
           # Falls back to this workflow's own ref on a manual run, where workflow_run is undefined
           # and WR_BRANCH would be empty — which built `ref=refs/heads/` and asked about nothing.
           WR_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          # The same name with no fallback, for the exact comparison below (deploy.yml's verify
+          # step takes it the same way). With the fallback, an empty head_branch read as main.
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           WR_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
+          # The job's `if` compared head_branch with 'main' the way GitHub compares strings:
+          # IGNORING CASE, and by SHORT name. So a branch `Main`, or a tag `main` or `MAIN`, pushed
+          # with a commit carrying its own workflow named "CodeQL", passed it and was judged as
+          # main. Read-only, but a gate must not report on main for a run that was not main's.
+          # Compared here exactly, in bash; the PR arm and a manual run are not about head_branch.
+          # (A tag named exactly `main` still shares main's concurrency group, which GitHub also
+          # compares ignoring case, so it can replace a PENDING main gate. `queue: max` would stop
+          # that, but actionlint 1.7.12, which CI pins, rejects the key; revisit when it doesn't.)
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] && [ "${WR_EVENT}" != "pull_request" ] \
+             && [ "${HEAD_BRANCH:-}" != "main" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::head_branch '${HEAD_BRANCH:-}' is not exactly main; nothing was judged."
+            exit 0
+          fi
           if [ "${WR_EVENT}" = "pull_request" ]; then
             # workflow_run carries no PR number, so find the PR by its head SHA. A SHA can belong
             # to more than one open PR (same branch, retargeted); judging the first is right —

@@ -61,7 +61,7 @@ Trigger it one of two ways:
 2. **Snapshots the current code *and* database** to a timestamped backup (keeps the last 3).
 3. **Checks and optimises the database** with the service stopped (the snapshot from step 2 is the fallback if anything goes wrong).
 4. **Fetches the new version** — the CI-verified commit for an in-panel update, the branch tip for a manual re-run.
-5. **Installs dependencies** — but only if `requirements.txt` actually changed, so a code-only update doesn't rebuild anything.
+5. **Installs dependencies** — but only if `requirements.txt` or `requirements-bootstrap.txt` (pip itself, which is installed hash-checked from that file before anything else) actually changed, so a code-only update doesn't rebuild anything.
 6. **Starts the service** back up.
 7. **Health-checks that the panel answers.** On success it prunes old snapshots; on failure it **auto-rolls-back the code *and* database** to the snapshot — so a broken release can't leave you with a dead panel.
 
@@ -85,6 +85,27 @@ bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
 6. **(Root install)** Removes everything the installer put outside the panel directory: the sudoers entry, the root-owned helper directory (`/usr/local/lib/linuxgsm-panel`, which holds the panel's gamedig install too), the `/usr/local/bin/gamedig` and `/usr/bin/gamedig` links into it (only when they point there), the `linuxgsm-panel-recover` command, the weekly gamedig cron, the panel's sysctl tuning, and the dedicated `lgsmpanel` user.
 
 **Your game servers are left completely alone** — their Linux users, home directories, LinuxGSM installs, `@reboot` autostart crontabs, and game-port firewall rules are never touched, so every server keeps running exactly as before once the panel is gone.
+
+### Removing a host
+
+Deleting a host on **Remote Servers** (the trash button) makes the panel forget it and its game servers. The panel does not connect to the host to do that, so nothing on the host changes: its game servers, their accounts, files and crontabs, keep running as before. The panel's daily gamedig pass works only through the hosts the panel still has, so it stops touching the host at once; a pass already under way skips it too (unless it is working on that very host at that moment, when it finishes that one step).
+
+What the panel put on a remote host, and leaves there:
+
+- **gamedig**, the player-query tool, in `/usr/local/lib/linuxgsm-panel/gamedig`, with the links `/usr/local/bin/gamedig` and `/usr/bin/gamedig` into it. Every remote the panel reached gets it.
+- **its weekly root cron**, `/etc/cron.d/lgsm-node-tools`, which re-runs gamedig's install script (it fetches nothing while the tree is in place), and its log, `/var/log/lgsm-node-tools.log`.
+- **whatever "Prepare & Secure" set up**, if you ran it: packages (Node.js, and NodeSource's apt source on a host that had no Node 18 or newer; jq and the other basics), UFW, fail2ban, the SSH hardening, swap, the timezone, the services it disabled, and automatic security updates. That is ordinary host configuration; undo it only if you want it gone.
+
+To remove the panel's gamedig and its cron, run this on the host itself, over SSH. **Not on a host where a panel is installed**: there `uninstall.sh` removes them, and the panel needs them while it runs. And if you keep that host's game servers with "restart when empty" on, keep gamedig: that schedule counts players with it.
+
+```bash
+sudo rm -f /etc/cron.d/lgsm-node-tools /var/log/lgsm-node-tools.log
+for l in /usr/local/bin/gamedig /usr/bin/gamedig; do   # only links into the panel's tree
+  case "$(readlink "$l")" in /usr/local/lib/linuxgsm-panel/gamedig/*) sudo rm -f "$l" ;; esac
+done
+sudo rm -rf /usr/local/lib/linuxgsm-panel/gamedig
+sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing else is left in it
+```
 
 ## Features
 

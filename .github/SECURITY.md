@@ -327,6 +327,17 @@ root's own source, never from the checkout the panel user can write, and the hel
 `gamedig-install` verb. A remote receives them from the panel through that verb, which is no new
 trust, since the panel already runs `sudo bash -c` there.
 
+**Deleting a host from the panel does not reach into it.** The delete forgets the host and never
+connects to it, so what the panel installed there stays: the gamedig tree, its two links and the
+weekly root cron that re-runs `install-gamedig.sh` from that tree. That job fetches nothing while
+the tree is in place and nothing updates the tree once the panel has let go of the host, so what is
+left is root-owned, hash-locked and inert rather than a live channel. The delete confirmation says
+what stays, and README's "Removing a host" lists it with the commands that remove it. The panel's
+daily pass acts only on hosts still in its database and re-reads each one just before acting, so a
+host deleted during a pass is skipped (a host it is working on at that moment finishes that step). Doing the removal on delete was not chosen:
+the delete does nothing on hosts today, it has to work for a host that is already gone or
+unreachable, and the same paths on a host that runs a panel of its own belong to that panel.
+
 **Every one of those is converted, and the grant has narrowed.** On an install where the three
 root-owned pieces are present, `/etc/sudoers.d/linuxgsm-panel` contains two lines:
 
@@ -513,5 +524,27 @@ What you can do today:
 
 Installs run as a **normal user** (the non-root path) get no sudoers entry at all and are
 not affected.
+
+## This repository's CI secret
+
+The one stored secret the workflows use is `CODACY_PROJECT_TOKEN`, which sends test coverage to
+Codacy. It is a Codacy *repository* API token: it reaches this repository on Codacy and nothing
+else, and it cannot touch the code, GitHub, or any host. It is more than an upload key, though.
+Codacy's documentation lists, for a repository token, uploading coverage and the results of
+client-side analysis tools, and on its v3 API reading the repository's issues, reanalysing commits,
+and changing which analysis tools and patterns run; on the legacy v2 API it reaches any endpoint
+for the repository. So whoever holds it can post coverage of their choosing, or switch off the
+patterns behind the Error-level Codacy gate (`codacy-alerts.yml`) so that it passes.
+
+It was a repository secret, which a workflow run on any branch or tag pushed here can read. The
+upload is now `codacy-coverage.yml`: a `workflow_run` job that runs `main`'s copy of that file, in
+an environment named `codacy`. CI's coverage job, which runs the code under test, including a pull
+request's, no longer holds the token; it hands its report over as an artifact, and the upload
+treats that report as untrusted data (it is never executed, and one declaring a DTD or an entity is
+refused, since the reporter's XML parser resolves entities a file declares). Fork pull requests
+upload nothing, as before. What scopes the token is a repository setting a workflow cannot make:
+the environment's deployment rule (the branch `main` only) and the secret moved into it. The
+header of `codacy-coverage.yml` lists those three steps. Until they are done the token is still a
+repository secret, with the reach described above.
 
 Thank you for helping keep the project and its users safe.

@@ -56,6 +56,7 @@
   "Delete failed": "El borrado falló",
   "Delete failed.": "El borrado falló.",
   "Delete remote": "Eliminar host remoto",
+  "Nothing on the host itself is changed: its game servers keep running, and the gamedig tool and weekly cron the panel installed there stay. The README’s “Removing a host” section says how to remove them.": "No se cambia nada en el propio host: sus servidores de juego siguen funcionando, y la herramienta gamedig y el cron semanal que el panel instaló allí se quedan. La sección «Removing a host» del README explica cómo quitarlos.",
   "Delete request failed.": "La solicitud de borrado falló.",
   "Delete scheduled task": "Eliminar tarea programada",
   "Detach Ubuntu Pro": "Desvincular Ubuntu Pro",

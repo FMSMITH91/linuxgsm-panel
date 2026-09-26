@@ -62,6 +62,8 @@ jobs:
       # requirements.txt lists the whole closure (a unit check keeps it closed), so nothing is
       # left out by not resolving.
       - run: pip-audit --no-deps -r requirements.txt
+      # ...and the pip install.sh puts in every panel venv (requirements-bootstrap.in).
+      - run: pip-audit --no-deps -r requirements-bootstrap.txt
 
   sast-bandit:
     name: Python security lint (Bandit)
