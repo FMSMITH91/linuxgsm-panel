@@ -28,12 +28,13 @@ before any public write-up.
 ## Supported versions
 
 The panel is a rolling release — fixes land on `main` and are picked up by re-running the
-installer, which updates in place (with a health check and automatic rollback). Security
-fixes are applied to the **latest** version only, so please update before reporting.
+installer, which updates in place (with a health check and automatic rollback). A version is
+the date of the commit it runs (`2026.9.26`), so there are no numbered releases to pick from.
+Security fixes are applied to the **latest** version only, so please update before reporting.
 
 | Version | Supported |
 | --- | --- |
-| Latest `main` / newest release | ✅ |
+| Latest `main` (the newest date) | ✅ |
 | Anything older | ❌ — please update first |
 
 ## Deploying securely
