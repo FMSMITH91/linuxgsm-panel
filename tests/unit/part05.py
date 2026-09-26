@@ -362,6 +362,7 @@ check("telegram: an '@' naming a bot this one cannot identify yet is not assumed
 # suites would make real SSH connections and still report green. It is the exact failure this repo
 # has hit more than any other, and it leaves no trace, so it gets a gate rather than a comment.
 import ast as _smg_ast                                                             # noqa: E402
+import glob as _smg_glob                                                           # noqa: E402
 _SMPKG = os.path.join(_root, "panel", "ops", "ssh_manager")
 _smg_mods = {f[:-3] for f in os.listdir(_SMPKG) if f.endswith(".py") and f != "__init__.py"}
 _smg_bad = []
@@ -392,9 +393,18 @@ _smg_pkg_stubs = []
 # "0 refused — this run never tried to escalate". On a developer machine that is pam_faillock
 # counting genuine auth failures against their account — the exact harm the wrapper exists to
 # prevent, with its own reporting saying it had not happened.
-_SMG_STUB_FILES = ["tests/unit_test.py", "tests/smoke_test.py", "tests/rbac_test.py",
-                   "tests/setup_wizard_test.py", "tools/perf_bench.py",
-                   "tools/nosudo_runner.py"]
+#
+# The unit suite is a runner plus tests/unit/part*.py, and its checks live in the PARTS. Naming only
+# tests/unit_test.py here read the runner, which stubs nothing, so every unit check was outside the
+# gate from the day the suite was split. Globbed, so a part added later is read too.
+_UNIT_SUITE_FILES = ["tests/unit_test.py"] + sorted(
+    "tests/unit/" + os.path.basename(_p)
+    for _p in _smg_glob.glob(os.path.join(_root, "tests", "unit", "part*.py")))
+check("suites: the file-list gates see the unit suite's parts, not only its runner",
+      "tests/unit/part05.py" in _UNIT_SUITE_FILES, _UNIT_SUITE_FILES)
+_SMG_STUB_FILES = _UNIT_SUITE_FILES + ["tests/smoke_test.py", "tests/rbac_test.py",
+                                       "tests/setup_wizard_test.py", "tools/perf_bench.py",
+                                       "tools/nosudo_runner.py"]
 for _f in _SMG_STUB_FILES:
     _src = open(os.path.join(_root, _f), encoding="utf-8").read()
     _tree = _smg_ast.parse(_src)
@@ -4085,8 +4095,8 @@ assert "app.py" in _SCAN_MODULES and os.path.join("panel", "ops", "ssh_manager",
 # no longer vouch for a name's aliveness.
 _SCAN_PROD_USERS = _SCAN_MODULES + ["tools/panel-helper", "tools/perf_bench.py",
                                     "tools/lhci_serve.py"]
-_SCAN_TEST_USERS = ["tests/unit_test.py", "tests/smoke_test.py", "tests/rbac_test.py",
-                    "tests/manage_test.py", "tests/template_actions_test.py"]
+_SCAN_TEST_USERS = _UNIT_SUITE_FILES + ["tests/smoke_test.py", "tests/rbac_test.py",
+                                        "tests/manage_test.py", "tests/template_actions_test.py"]
 _SCAN_USERS = _SCAN_PROD_USERS + _SCAN_TEST_USERS
 _referenced = set()
 _referenced_prod = set()

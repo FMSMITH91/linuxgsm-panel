@@ -983,7 +983,7 @@ import panel.routes.panel_backup as _pb7  # noqa: E402
 import panel.security.auth as _p7_auth  # noqa: E402
 
 _pb7_names = ("current_user", "log_action", "get_game", "GameServer", "RemoteServer", "db",
-              "_full_backup_lock", "_game_backup_status", "threading", "_button_backup_running",
+              "threading", "_button_backup_running",
               "_marked_backup", "_record_full_clock", "_record_game_clock", "run_game_backup",
               "notifications", "bk", "so", "list_game_backups", "delete_game_backup",
               "stream_game_backup", "backup_disk_info", "_cached_player_count")
@@ -1051,8 +1051,13 @@ try:
         (action, str(target), str(detail), success))
     _pb7.db = _pb7_db
     _pb7.GameServer = _P7GameServer
-    _pb7._full_backup_lock = _p7_threading.Lock()
-    _pb7._game_backup_status = {}
+    # The panel's OWN lock and status map, emptied in place, never rebound: a rebinding gives this
+    # module a private copy and strands every other reader on the old one (part05's panel_state
+    # gate). The map's contents are put back in the `finally`; the lock must be free to begin with.
+    check("panel_backup: the full-backup lock is free before the route checks start",
+          not _pb7._full_backup_lock.locked())
+    _pb7_gbs_snap = dict(_pb7._game_backup_status)
+    _pb7._game_backup_status.clear()
     _pb7.threading = _Over(_p7_threading, Thread=_P7SyncThread)
     _pb7.notifications = _Over(_pb7_saved["notifications"],
                                alerts_muted=lambda gs: gs.name == "delta",
@@ -1337,6 +1342,8 @@ finally:
     for _k in _pb7_names:
         setattr(_pb7, _k, _pb7_saved[_k])
     _p7_auth.current_user = _pb7_auth_user
+    _pb7._game_backup_status.clear()
+    _pb7._game_backup_status.update(globals().get("_pb7_gbs_snap", {}))
 
 
 # ══ panel/ops/system_ops.py ══════════════════════════════════════════════════════════════════════
