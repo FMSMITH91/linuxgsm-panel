@@ -1,7 +1,8 @@
 version: 2
 updates:
-  # Python dependencies in requirements.txt — opens a PR when a newer (or
-  # security-patched) version is available.
+  # Python dependencies — opens a PR when a newer (or security-patched) version is available.
+  # requirements.txt is pip-compile's hashed lockfile for requirements.in beside it, so Dependabot
+  # updates it by re-running pip-compile: the whole set resolved together, hashes regenerated.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
@@ -13,10 +14,10 @@ updates:
       # don't trickle in and hit the open-PR limit.
       python-dependencies:
         patterns: ["*"]
-    # Dependabot resolves as the Python named by the `python_version >= "3.10"` marker on flask in
-    # requirements.txt, and so never proposes a release that cannot install on Ubuntu 22.04 (3.10).
-    # The ignore below is a backstop for the release that prompted it: bidict 0.24 needs 3.11.
-    # Drop both when 3.10 support ends.
+    # It compiles on the Python the lockfile's header names (3.10, the oldest supported), and so
+    # never proposes a release that cannot install on Ubuntu 22.04. The ignore below is a backstop
+    # for the release that prompted it: bidict 0.24 needs 3.11. Drop it, and recompile on the new
+    # oldest Python, when 3.10 support ends.
     ignore:
       - dependency-name: "bidict"
         versions: [">=0.24"]

@@ -241,6 +241,71 @@ try:
 finally:
     _sm_core._rewrite_crontab = _orig_rw_u
     _sm_core.run_command = _orig_run_u
+
+# ...and the one upgrade the compound restart check DOES get: the PATH its gamedig call needs. cron
+# gives a crontab /usr/bin:/bin, the distro's npm puts gamedig in /usr/local/bin, and a line written
+# before set_daily_restart named its PATH kept calling a gamedig cron could not find — P empty, the
+# restart never fired — until the operator toggled the setting. This heals it in place: only that
+# call changes; schedule, address, jq filter and condition (here the older one) stay byte for byte.
+_gh_legacy = ("10 * * * * [ -f /home/gm/.restart-pending ] && { P=$(gamedig --type garrysmod "
+              "203.0.113.5:27015 2>/dev/null | jq -r '.players|length' 2>/dev/null); "
+              "if [ -z \"$P\" ] || [ \"$P\" = 0 ] || [ \"$P\" = null ]; then "
+              "/home/gm/gmodserver restart >/dev/null 2>&1; rm -f /home/gm/.restart-pending; fi; }")
+_gh_own = "*/30 * * * * P=$(gamedig --type minecraft 127.0.0.1:25565 | jq .) ; echo $P >> /home/gm/p.log"
+_gh_other = _gh_legacy.replace("/home/gm/", "/home/other/")
+_gh_crontab = "\n".join(["MAILTO=\"\"", _gh_legacy, _gh_own, _gh_other, "0 3 * * * /home/gm/backup.sh"])
+
+
+def _gh_upgrade(listing, rc=0):
+    """(returned, lines written or None) for one upgrade pass over `listing`."""
+    _cap = {}
+    _saved = (_sm_core._rewrite_crontab, _sm_core.run_command)
+    _sm_core.run_command = lambda s, c, **k: (listing, "", rc)
+    _sm_core._rewrite_crontab = lambda s, u, grep, add, extra_pre="": (
+        _cap.update(add=list(add)) or (True, "ok"))
+    try:
+        _ret = _sm_cron.upgrade_managed_cron_tracking(None, "gm", "gmodserver")
+    finally:
+        _sm_core._rewrite_crontab, _sm_core.run_command = _saved
+    return _ret, _cap.get("add")
+
+
+_gh_ret, _gh_add = _gh_upgrade(_gh_crontab)
+_gh_want = _gh_legacy.replace("P=$(gamedig ", _sm_core.gamedig_cron_call(), 1)
+check("cron upgrade: a restart check calling a bare gamedig gets gamedig's PATH, in place",
+      _gh_ret is True and _gh_add is not None and _gh_want in _gh_add
+      and _gh_legacy not in _gh_add and "PATH=/usr/local/bin:" in _gh_want, repr(_gh_add))
+check("cron upgrade: ...and nothing else moves — env lines, another account's flag, the operator's own"
+      " gamedig job, and the line order are all kept",
+      _gh_add == ["MAILTO=\"\"", _gh_want, _gh_own, _gh_other, "0 3 * * * /home/gm/backup.sh"],
+      repr(_gh_add))
+_gh_ret2, _gh_add2 = _gh_upgrade("\n".join(_gh_add or []))
+check("cron upgrade: a healed crontab is left alone (no rewrite, reports no change)",
+      _gh_ret2 is False and _gh_add2 is None, repr((_gh_ret2, _gh_add2)))
+# The heal must produce exactly what set_daily_restart writes today, or a healed line and a freshly
+# toggled one would differ and the next change to either would miss the other.
+_gh_fresh = {}
+_gh_saved_rw = _sm_core._rewrite_crontab
+_gh_saved_host = _sm_core._gamedig_host
+_sm_core._rewrite_crontab = lambda s, u, grep, add, extra_pre="": (
+    _gh_fresh.update(add=list(add)) or (True, "ok"))
+_sm_core._gamedig_host = lambda server: "203.0.113.5"
+try:
+    _sm_core.set_daily_restart(None, "gm", "gmodserver", game_type="gmod", port=27015, enabled=True)
+finally:
+    _sm_core._rewrite_crontab = _gh_saved_rw
+    _sm_core._gamedig_host = _gh_saved_host
+_gh_now = (_gh_fresh.get("add") or ["", ""])[1]
+_gh_old = _gh_now.replace(_sm_core.gamedig_cron_call(), _sm_core.GAMEDIG_CRON_BARE)
+_gh_ret3, _gh_add3 = _gh_upgrade(_gh_old)
+check("cron upgrade: healing a pre-PATH line gives exactly the line set_daily_restart writes now",
+      _gh_old != _gh_now and _gh_add3 == [_gh_now], repr((_gh_now, _gh_add3)))
+# The rewrite replaces the WHOLE crontab with what the loop kept, so it may only run on a crontab
+# that was read. A listing cut short by a dropped connection comes back with rc -1 and whatever
+# lines arrived first — installing that would delete the rest of the account's jobs.
+_gh_ret4, _gh_add4 = _gh_upgrade(_gh_legacy, rc=-1)
+check("cron upgrade: a crontab read that failed is never rewritten, whatever text came back",
+      _gh_ret4 is False and _gh_add4 is None, repr((_gh_ret4, _gh_add4)))
 import base64 as _b64cr
 
 
@@ -2389,7 +2454,11 @@ try:
     SO_cfgmod.load_config = lambda: dict(_sb_cfg)
     SO_cfgmod.update_config = lambda fn: (fn(_sb_cfg), dict(_sb_cfg))[1]
     SO._is_git_checkout = lambda: True
-    SO._git = lambda args, timeout=20, **k: ("", "", 0)      # the branch exists on the remote
+    # The branch exists on the remote: ls-remote names it, exactly (an empty answer is "no such
+    # branch" now that the name is compared, not tail-matched).
+    SO._git = lambda args, timeout=20, **k: (
+        ("0" * 40 + "\trefs/heads/some-feature-branch", "", 0) if args[:1] == ["ls-remote"]
+        else ("", "", 0))
 
     SO._launch_installer = lambda target_ref="", branch="", started_msg=None: (
         False, "install.sh is missing, so the panel can't self-update safely.")

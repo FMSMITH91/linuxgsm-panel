@@ -1017,6 +1017,7 @@ _VERB_SAMPLES = {
     "sshd-set-directive": ["ClientAliveInterval", "300"],
     "create-swapfile": [],
     "npm-install-global": ["gamedig"],
+    "nodesource-setup": [],
     "journal-cron": [],
     "tailscale-up-key": ["tskey-auth-abc123def", "yes", "10.0.0.0/24", "tag:server"],
     "tailscale-up-login": ["yes", "-"],
@@ -2800,6 +2801,7 @@ check("npm-install-global: ...and refuses `npm` itself",
 import shlex as _shlex_ns
 import shutil as _shutil_ns
 import subprocess as _sp_ns
+_shlex_q = _shlex_ns.quote
 
 
 def _ns_fn(name):
@@ -2817,6 +2819,39 @@ check("install.sh: no downloaded script is run — NodeSource's setup script is 
 check("install.sh: ensure_gamedig configures NodeSource through the pinned-key setup",
       any(_re_ntc.fullmatch(r'\s*if nodesource_setup "\$\{S\}"; then', _l)
           for _l in _ntc_fn.splitlines()))
+
+# The add-host bootstrap configures NodeSource on REMOTE hosts through the nodesource-setup verb
+# (privileged.py), which ran `curl … setup_lts.x | bash -` as root until it became one. Two copies
+# of one setup: they must trust the same key and write the same repository, or a host's Node — and
+# the key its root trusts — would depend on whether it was the panel host or a remote.
+_ns_sh_vals = dict(_re_ntc.findall(r'^(NODESOURCE_[A-Z_]+)="([^"]*)"$', _ntc_sh, _re_ntc.M))
+_ns_pairs = [("NODESOURCE_KEY_FPR", "NODESOURCE_FINGERPRINT"),
+             ("NODESOURCE_NODE_MAJOR", "NODESOURCE_NODE_MAJOR"),
+             ("NODESOURCE_KEY_URL", "NODESOURCE_KEY_URL"),
+             ("NODESOURCE_KEYRING", "NODESOURCE_KEYRING"),
+             ("NODESOURCE_SOURCES", "NODESOURCE_SOURCES"),
+             ("NODESOURCE_PREFS", "NODESOURCE_PREFS")]
+_ns_diff = [(_sh, _ns_sh_vals.get(_sh), getattr(_priv, _py, None)) for _sh, _py in _ns_pairs
+            if _ns_sh_vals.get(_sh) is None or _ns_sh_vals.get(_sh) != getattr(_priv, _py, None)]
+check("nodesource: the remote bootstrap's key, major and paths are install.sh's",
+      len(_ns_sh_vals) >= len(_ns_pairs) and not _ns_diff, repr(_ns_diff))
+# The helper REFUSES it: the verb is for remotes (the bootstrap refuses the panel host), install.sh
+# does the panel host, and implementing it here would give the root helper a network fetch and
+# writes into apt's trust store, reachable by the panel user, for no caller.
+import contextlib as _ns_ctx
+import io as _ns_io
+_ns_err = _ns_io.StringIO()
+with _ns_ctx.redirect_stderr(_ns_err):
+    _ns_hrc = _helper.main(["panel-helper", "nodesource-setup"])
+check("nodesource: the helper refuses nodesource-setup on the panel host, and says why",
+      _ns_hrc == 2 and "install.sh" in _ns_err.getvalue()
+      and _helper.ACTIONS.get("nodesource-setup") is _helper.do_nodesource_setup,
+      "rc=%r %r" % (_ns_hrc, _ns_err.getvalue()[-200:]))
+_ns_rcmd = _priv.remote_command("nodesource-setup", [])
+check("nodesource: the remote rendering fetches only the key — no setup script, nothing piped to a shell",
+      "setup_lts" not in _ns_rcmd and "deb.nodesource.com/setup" not in _ns_rcmd
+      and not _re_ntc.search(r"\|\s*(sudo\s+)?(ba)?sh\b", _ns_rcmd)
+      and _shlex_q(_priv.NODESOURCE_KEY_URL) in _ns_rcmd, _ns_rcmd[:300])
 if not _shutil_ns.which("gpg"):
     skip("install.sh: NodeSource key pinning, driven", "no gpg on this machine")
 else:
@@ -2891,6 +2926,96 @@ else:
             _ok, _kr, _src, _pref, _apt, _dbg = _ns_run(_keyf, _fpr)
             check("nodesource: %s is refused, and nothing is trusted or written" % _nm,
                   not _ok and _kr is None and _src is None and _pref is None and _apt is None, _dbg)
+
+        # ── the REMOTE rendering, driven the same way ──
+        # privileged.py's nodesource-setup, as the bootstrap sends it over SSH, run in bash with
+        # the same shims and the same throwaway keys. Its destinations are module constants read
+        # at call time, so they are pointed into a temp dir for the render and put back after.
+        _NSR_NAMES = ("NODESOURCE_FINGERPRINT", "NODESOURCE_KEYRING", "NODESOURCE_SOURCES",
+                      "NODESOURCE_PREFS")
+
+        def _nsr_run(keyfile, fpr, arch="amd64", extra=""):
+            _out = os.path.join(_ns_dir, "rout")
+            _shutil_ns.rmtree(_out, ignore_errors=True)
+            os.makedirs(os.path.join(_out, "sources.list.d"))
+            os.makedirs(os.path.join(_out, "preferences.d"))
+            # The one-line source an older NodeSource setup script wrote: it names the same repo,
+            # so a setup that succeeds removes it (and one that fails must leave it alone).
+            _old_list = os.path.join(_out, "sources.list.d", "nodesource.list")
+            with open(_old_list, "w") as _fh:
+                _fh.write("deb https://deb.nodesource.com/node_20.x nodistro main\n")
+            _saved = {_n: getattr(_priv, _n) for _n in _NSR_NAMES}
+            try:
+                _priv.NODESOURCE_FINGERPRINT = fpr
+                _priv.NODESOURCE_KEYRING = os.path.join(_out, "keyrings", "nodesource.gpg")
+                _priv.NODESOURCE_SOURCES = os.path.join(_out, "sources.list.d", "nodesource.sources")
+                _priv.NODESOURCE_PREFS = os.path.join(_out, "preferences.d", "nodejs")
+                _cmd = _priv.remote_command("nodesource-setup", [])
+            finally:
+                for _n, _v in _saved.items():
+                    setattr(_priv, _n, _v)
+            _q = _shlex_ns.quote
+            _script = "\n".join([
+                "dpkg() { echo %s; }" % arch,
+                extra,
+                'curl() { echo "$*" >> %s; cp %s "${@: -1}"; }'
+                % (_q(os.path.join(_out, "curl.log")), _q(keyfile)),
+                'apt-get() { echo "$*" >> %s; }' % _q(os.path.join(_out, "apt.log")),
+                _cmd,
+            ])
+            _p = _sp_ns.run(["bash", "-c", _script], capture_output=True, text=True, timeout=120)
+
+            def _rd(*parts):
+                try:
+                    with open(os.path.join(_out, *parts), "rb") as _f:
+                        return _f.read()
+                except OSError:
+                    return None
+            return {"rc": _p.returncode, "keyring": _rd("keyrings", "nodesource.gpg"),
+                    "src": _rd("sources.list.d", "nodesource.sources"),
+                    "pref": _rd("preferences.d", "nodejs"), "apt": _rd("apt.log"),
+                    "curl": _rd("curl.log"), "old_list": os.path.exists(_old_list),
+                    "out": _out, "stdout": _p.stdout,
+                    "dbg": _p.stdout[-300:] + _p.stderr[-300:]}
+
+        # install.sh's output for the same key, to compare against byte for byte.
+        _ok, _kr_sh, _src_sh, _pref_sh, _apt_sh, _dbg = _ns_run(_ns_keys["a"], _ns_fprs[0])
+        _r = _nsr_run(_ns_keys["a"], _ns_fprs[0])
+        _sh_out = os.path.join(_ns_dir, "out")
+        check("nodesource (remote): the pinned key is trusted, the source written, apt updated",
+              _r["rc"] == 0 and bool(_r["keyring"]) and _r["apt"] is not None
+              and b"update" in _r["apt"] and _r["src"] is not None and _r["pref"] is not None
+              and _r["curl"] is not None and _priv.NODESOURCE_KEY_URL.encode() in _r["curl"]
+              and not _r["old_list"], repr(_r)[:600])
+        check("nodesource (remote): ...writing exactly what install.sh writes on the panel host",
+              _ok and _r["keyring"] == _kr_sh and _r["pref"] == _pref_sh
+              and _src_sh is not None and _r["src"] is not None
+              and _r["src"] == _src_sh.replace(_sh_out.encode(), _r["out"].encode())
+              and b"Architectures: amd64\n" in _r["src"]
+              and ("URIs: https://deb.nodesource.com/node_%s.x\n"
+                   % _priv.NODESOURCE_NODE_MAJOR).encode() in _r["src"],
+              "remote=%r install.sh=%r" % (_r["src"], _src_sh))
+        for _nm, _keyf, _fpr in (("a key that is not the pinned one", _ns_keys["a"], _ns_fprs[1]),
+                                 ("the pinned key plus a second key", _ns_keys["ab"], _ns_fprs[0]),
+                                 ("an empty download", _ns_keys["empty"], _ns_fprs[0])):
+            _r = _nsr_run(_keyf, _fpr)
+            check("nodesource (remote): %s is refused, and nothing is trusted or written" % _nm,
+                  _r["rc"] != 0 and _r["keyring"] is None and _r["src"] is None
+                  and _r["pref"] is None and _r["apt"] is None and _r["old_list"],
+                  repr(_r)[:600])
+        _r = _nsr_run(_ns_keys["a"], _ns_fprs[0], arch="i386")
+        check("nodesource (remote): an architecture NodeSource does not build for fetches nothing",
+              _r["rc"] != 0 and _r["curl"] is None and _r["src"] is None and _r["apt"] is None,
+              repr(_r)[:400])
+        # A host with no gpg, where installing gnupg also failed: without gpg EVERY key fails the
+        # check, so the failure must name gpg rather than claim the key was not the pinned one.
+        _r = _nsr_run(_ns_keys["a"], _ns_fprs[0], extra=(
+            'command() { if [ "$1" = -v ] && [ "$2" = gpg ]; then return 1; fi; builtin command "$@"; }'))
+        check("nodesource (remote): no gpg (and none installable) is reported as that, trusting nothing",
+              _r["rc"] != 0 and "gpg is missing" in _r["stdout"]
+              and "not the pinned key" not in _r["stdout"] and _r["curl"] is None
+              and _r["keyring"] is None and _r["src"] is None
+              and _r["apt"] is not None and b"install -y gnupg" in _r["apt"], repr(_r)[:500])
     finally:
         _shutil_ns.rmtree(_ns_dir, ignore_errors=True)
 check("helper: every write destination has a content rule (a new one cannot inherit 'anything')",

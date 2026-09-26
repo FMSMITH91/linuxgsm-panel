@@ -1144,6 +1144,59 @@ def _wait_for_reboot(server, on_wait=None, down_timeout=150, up_timeout=480):
     return False
 
 
+def _node_major(text):
+    """The major version in `node -v` output ("v22.3.0" -> 22), or None when there is none."""
+    m = re.match(r"\s*v?(\d+)\.", text or "")
+    return int(m.group(1)) if m else None
+
+
+def _bootstrap_node(server):
+    """Node.js 18+ and npm on a REMOTE host being prepared, for gamedig. Returns log lines.
+
+    A Node 18+ already there is kept (Ubuntu 24.04 and 26.04 ship one). Otherwise NodeSource's
+    repository is configured by the nodesource-setup verb — its signing key pinned by fingerprint,
+    exactly as install.sh does on the panel host — and nodejs installed from it. This was one root
+    shell running `curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -`: whoever could serve
+    that URL ran code as root on the host. Now nothing downloaded is executed, and the one file
+    fetched, the key, is trusted only if it is the pinned one.
+
+    npm is installed when Node 18+ is there without it: the distro's nodejs ships without npm
+    (NodeSource's bundles it), and gamedig is an npm install, so a host with a distro Node never got
+    gamedig. install.sh has the same rule. Never when the Node step failed: `apt-get install npm`
+    on a host without a usable Node would pull the distro's nodejs, which on 22.04 is Node 12.
+
+    The two reads run as the connecting account (sudo=False), since neither needs root, and each
+    distinguishes "not there" from "could not ask". A tailscale or local transport answers a failed
+    connection with rc -1 rather than raising, and reading that as "no Node" would set NodeSource up
+    over a host's working Node — so it skips the step and says so instead."""
+    lines = []
+    out, _, rc = _core.run_command(server, "node -v 2>/dev/null", timeout=20, sudo=False)
+    if rc == -1:
+        return ["Could not read this host's Node.js version (no answer) — Node.js step skipped"]
+    major = _node_major(out) if rc == 0 else None
+    if major is not None and major >= 18:
+        lines.append("Node %s already present" % out.strip())
+    else:
+        ns_out, _, ns_rc = _core.run_privileged(server, "nodesource-setup", [], timeout=240)
+        if ns_rc != 0:
+            return [_core._last_lines(ns_out, 2) or "NodeSource's repository could not be set up",
+                    "Node.js was not installed: player queries stay unavailable on this host "
+                    "until Node.js 18+ is"]
+        lines.append(_core._last_lines(ns_out, 1) or "NodeSource repository configured")
+        in_out, _, in_rc = _core.run_privileged(server, "apt-install", ["nodejs"], timeout=600)
+        lines.append(_core._last_lines(in_out, 3) or "nodejs installed")
+        if in_rc != 0:
+            return lines + ["Node.js install failed: player queries stay unavailable on this host "
+                            "until Node.js 18+ is"]
+    npm_out, _, npm_rc = _core.run_command(server, "command -v npm", timeout=20, sudo=False)
+    if npm_rc == 1 and not (npm_out or "").strip():
+        np_out, _, _ = _core.run_privileged(server, "apt-install", ["npm"], timeout=600)
+        lines.append(_core._last_lines(np_out, 3) or "npm installed")
+    elif npm_rc != 0:
+        lines.append("Could not check for npm (no answer) — npm not installed")
+    return lines
+
+
 def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lgsm_deps=True,
                            username="", install_fail2ban=True, do_reboot=True,
                            progress=None):
@@ -1223,27 +1276,10 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     out, _, _ = _core.run_privileged(server, "apt-install", pkgs.split(), timeout=600)
     note(_core._last_lines(out, 6) or "OK")
 
-    # ── 3a. Node.js LTS via NodeSource — apt's own nodejs is too old for current gamedig
-    # (gamedig v5 needs Node >=18; e.g. Ubuntu 22.04's apt ships Node 12). Idempotent. ──
+    # ── 3a. Node.js 18+ and npm, for gamedig (v5 needs Node >=18; Ubuntu 22.04's apt ships 12) ──
     emit("Installing Node.js LTS")
-    # NOT converted to a verb, deliberately. This pipes a downloaded script into a root shell, and
-    # that IS the operation — a verb could pin the URL, but only by giving the helper the ability to
-    # execute a downloaded script, which is exactly the capability its tool allowlist exists to
-    # deny. Wrapping it would move the risk, not reduce it. Named in SECURITY.md instead.
-    # NodeSource's nodejs bundles npm; the distro's does not, and a host that already had a distro
-    # Node 18+ (Ubuntu 24.04 and 26.04 ship one) went straight to the gamedig step below, which is an
-    # npm install, so gamedig never arrived there. The last clause installs npm when it is missing.
-    node_cmd = (
-        'n=$(node -v 2>/dev/null | grep -oE "[0-9]+" | head -1); '
-        'if [ "${n:-0}" -lt 18 ]; then '
-        'curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - >/dev/null 2>&1 && '
-        'DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs 2>&1 | tail -3; '
-        'else echo "Node $(node -v) already present"; fi; '
-        'command -v npm >/dev/null 2>&1 || '
-        '{ DEBIAN_FRONTEND=noninteractive apt-get install -y npm 2>&1 | tail -3; }'
-    )
-    nd_out, _, _ = _core.run_command(server, node_cmd, timeout=300, sudo=True)
-    note(nd_out or "Node.js LTS installed")
+    for line in _bootstrap_node(server):
+        note(line)
 
     # ── 3b. gamedig (game-server query tool) via npm — idempotent (skip if already present) ──
     emit("Installing gamedig (game server query tool)")
@@ -1552,9 +1588,10 @@ def remote_install_tailscale(server):
     log.append(f"curl: {out}")
 
     # 3. Add Tailscale repo and install.
-    # NOT a verb, for the same reason as the NodeSource step: this pipes a downloaded script into a
-    # root shell, and that IS the operation. A verb could pin the URL, but only by giving the helper
-    # the ability to execute a downloaded script — the capability its tool allowlist exists to deny.
+    # NOT a verb: this pipes a downloaded script into a root shell, and that IS the operation. A verb
+    # could pin the URL, but only by giving the helper the ability to execute a downloaded script —
+    # the capability its tool allowlist exists to deny. (The NodeSource step used to be the same
+    # shape; it now fetches only a signing key, pinned by fingerprint — see _bootstrap_node.)
     cmds = [
         "curl -fsSL https://tailscale.com/install.sh | sh 2>&1",
     ]

@@ -771,7 +771,7 @@ import ast as _ast
 
 _ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
                      "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 3, "_sudo_sh": 0}   # measured at the time of writing; lower only
+_CEILING = {"sudo=True": 2, "_sudo_sh": 0}   # measured at the time of writing; lower only
 
 def _is_dispatch(call):
     """True when this escalation is NOT a call site composing a shell string.
@@ -1316,6 +1316,7 @@ check("install.sh: staging lands in the root-owned HELPER_DIR, not a panel-writa
 # user's, so the checkout reads as the panel user's, which is exactly the update-path condition.
 import subprocess as _rs_sub
 import zlib as _rs_zlib
+import atexit
 from shlex import quote as _rs_q
 
 
@@ -1324,7 +1325,69 @@ def _rs_git(*a, cwd=None, inp=None):
                        text=True).stdout.strip()
 
 
-_rs_fns = (_inst[_inst.index("_gitc() {"):_inst.index("\n}\n", _inst.index("_gitc() {")) + 3]
+def _inst_shfn(name):
+    """One shell function out of install.sh, whole: its definition line to its closing brace."""
+    _i = _inst.index("\n" + name + "() {\n") + 1
+    return _inst[_i:_inst.index("\n}\n", _i) + 3]
+
+
+def _pad_history(repo, env=None, n=4000):
+    """n empty commits on `repo`'s checked-out branch (unborn or not), under everything a
+    first-parent check below reads. Two ways of searching `rev-list --first-parent` fail a commit
+    that IS on the line, and both need a long line to show:
+      * `rev-list | grep -q` under pipefail: grep exits at the first match and rev-list dies of
+        SIGPIPE writing the rest. 4,000 ids are 164 KB, over twice a pipe's 64 KiB, so with a match
+        near the top rev-list is still blocked on a full pipe when grep exits — every time, not the
+        8/100 measured at 12 lines.
+      * a here-string, `grep <<< "$(rev-list ...)"`: bash writes one over 64 KiB to a temp file in
+        $TMPDIR, so under _NOWRITE_TMP (below) it fails having read nothing — what a full or
+        read-only /tmp does on a host. main's own line passes 64 KiB at about 1,600 commits."""
+    _head = _rs_sub.run(["git", "-C", repo, "rev-parse", "--verify", "--quiet", "HEAD"],
+                        capture_output=True, text=True, env=env).stdout.strip()
+    _ref = _rs_sub.run(["git", "-C", repo, "symbolic-ref", "HEAD"], capture_output=True,
+                       text=True, env=env).stdout.strip()
+    _parts = []
+    for _i in range(n):
+        _parts.append("commit %s\ncommitter t <t@example.invalid> %d +0000\ndata 4\npad\n"
+                      % (_ref, 1500000000 + _i))
+        if _i == 0 and _head:
+            _parts.append("from %s\n" % _head)
+        _parts.append("\n")
+    _rs_sub.run(["git", "-C", repo, "fast-import", "--quiet"], input="".join(_parts), text=True,
+                capture_output=True, env=env, check=True)
+
+
+# A TMPDIR bash ACCEPTS — it is writable, so bash does not fall back to /tmp — and cannot create a
+# file in, having no search permission: to a here-string it is a full or read-only /tmp. (A plainly
+# read-only directory would not do: bash skips a TMPDIR it cannot write and uses /tmp instead.)
+# Nothing can be created in it, so removing it at exit needs only its parent's permission.
+_NOWRITE_TMP = _tempfile.mkdtemp(prefix="tmpdir-nowrite-")
+os.chmod(_NOWRITE_TMP, 0o200)
+
+
+def _rm_nowrite_tmp():
+    try:
+        os.rmdir(_NOWRITE_TMP)
+    except OSError:
+        pass
+
+
+atexit.register(_rm_nowrite_tmp)
+
+
+def _needs_tmpfile(repo, ref, env=None):
+    """(premise) `repo`'s first-parent line from `ref` is over 128 KiB, and under _NOWRITE_TMP bash
+    cannot write a here-string of it — so the checks run under it can tell a stream from either
+    shape that fails."""
+    _r = _rs_sub.run(["bash", "-c", 'l="$(git -C "$1" rev-list --first-parent "$2")"\n'
+                      '[ "${#l}" -gt 131072 ] || { echo "only ${#l} bytes"; exit 2; }\n'
+                      'cat <<< "$l" > /dev/null 2>&1 && { echo "here-string written"; exit 3; }\n'
+                      'exit 0\n', "_", repo, ref],
+                     capture_output=True, text=True, env=dict(env or os.environ, TMPDIR=_NOWRITE_TMP))
+    return _r.returncode == 0, "rc=%s %s" % (_r.returncode, _r.stdout.strip())
+
+
+_rs_fns = (_inst_shfn("_gitc") + _inst_shfn("_on_first_parent_line")
            + _inst[_inst.index('ROOT_GIT="${HELPER_DIR}/.source.git"'):
                    _inst.index("\n}\n", _inst.index("stage_root_source() {")) + 3])
 _rs_sb = _tempfile.mkdtemp(prefix="rootsrc-")
@@ -1340,7 +1403,8 @@ try:
     _rs_git("add", "-A", cwd=_rs_up)
     _rs_git("commit", "-qm", "upstream", cwd=_rs_up)
 
-    def _rs_case(name, tamper, roots=False, src=None, panel_user=None, script=None, seed=None):
+    def _rs_case(name, tamper, roots=False, src=None, panel_user=None, script=None, seed=None,
+                 env=None):
         """Clone upstream as 'the panel's checkout', tamper with it, stage as 'root'."""
         d = os.path.join(_rs_sb, name)
         panel, helper = os.path.join(d, "panel"), os.path.join(d, "helper")
@@ -1353,7 +1417,10 @@ try:
             _rs_git("config", _k, _v, cwd=panel)
         tamper(panel)
         # Only a BARE `id -u` is root: `id -u <panel user>` must still name that user.
-        body = ("id() { [ \"$#\" -eq 1 ] && [ \"$1\" = -u ] && echo 0 || command id \"$@\"; }\n"
+        # install.sh runs under `set -euo pipefail` (its line 2); so does this, or a pipe that dies of
+        # SIGPIPE inside a check reads as the check passing.
+        body = ("set -euo pipefail\n"
+                "id() { [ \"$#\" -eq 1 ] && [ \"$1\" = -u ] && echo 0 || command id \"$@\"; }\n"
                 "sudo() { [ \"$1\" = -u ] && shift 2; \"$@\"; }\n"
                 "warn() { echo \"WARN $*\"; }\n"
                 "H_SUDO=''\nPANEL_DIR=%s\nHELPER_DIR=%s\nREPO_URL=%s\nDEFAULT_BRANCH=main\n"
@@ -1366,7 +1433,7 @@ try:
                 + "_prepare_root_source\n"
                   "if s=\"$(stage_root_source tools/panel-helper panel-helper)\"; then\n"
                   "  echo \"STAGED=$(cat \"$s\")\"\nelse\n  echo STAGED-NOTHING\nfi\n")
-        r = _rs_sub.run(["bash", "-c", body], capture_output=True, text=True)
+        r = _rs_sub.run(["bash", "-c", body], capture_output=True, text=True, env=env)
         return r.stdout + r.stderr
 
     def _rs_replace_ref(panel):
@@ -1544,6 +1611,40 @@ try:
     _rs_out = _rs_case("srclink", _rs_no_git, src=_rs_t, panel_user=_rs_other)
     check("install.sh: ...nor through a symlink that lands somewhere the panel user can write",
           "STAGED-NOTHING" in _rs_out and "DROPPED-HELPER" not in _rs_out, _rs_out[-300:])
+
+    # "On upstream's branch" is its FIRST-PARENT line. A pull request merged with a merge commit
+    # brings all its commits into the branch's ancestry — here E, whose helper change was reverted
+    # before the merge. The branch was never at E; a checkout there is not on it, and root stages
+    # nothing from it. The merge commit itself is on the line (positive control).
+    _pad_history(_rs_up)
+    _rs_git("checkout", "-q", "-b", "pr", cwd=_rs_up)
+    with open(os.path.join(_rs_up, "tools", "panel-helper"), "w") as _f:
+        _f.write("INTERMEDIATE-HELPER\n")
+    _rs_git("commit", "-qam", "E: intermediate", cwd=_rs_up)
+    _rs_e = _rs_git("rev-parse", "HEAD", cwd=_rs_up)
+    with open(os.path.join(_rs_up, "tools", "panel-helper"), "w") as _f:
+        _f.write("GOOD-HELPER\n")
+    _rs_git("commit", "-qam", "F: E reverted", cwd=_rs_up)
+    _rs_git("checkout", "-q", "main", cwd=_rs_up)
+    _rs_git("merge", "-q", "--no-ff", "-m", "M: merge the pull request", "pr", cwd=_rs_up)
+    _rs_git("branch", "-q", "-D", "pr", cwd=_rs_up)
+    _rs_fp_premise = _rs_sub.run(["git", "-C", _rs_up, "merge-base", "--is-ancestor", _rs_e,
+                                  "main"], capture_output=True).returncode == 0
+    # Both run over 4,000 first-parent commits with a TMPDIR bash cannot write (see _pad_history):
+    # the merge commit is at the top of that line, where a `grep -q` pipe or a here-string fails.
+    _rs_tmp_ok, _rs_tmp_why = _needs_tmpfile(_rs_up, "main")
+    check("install.sh: (premise) root's first-parent check runs over a line a here-string cannot "
+          "hold under the harness's TMPDIR", _rs_tmp_ok, _rs_tmp_why)
+    _rs_nowrite = dict(os.environ, TMPDIR=_NOWRITE_TMP)
+    _rs_out = _rs_case("fp-merge", lambda p: None, env=_rs_nowrite)
+    check("install.sh: root stages from a merge commit on upstream's branch (positive control)",
+          "STAGED=GOOD-HELPER" in _rs_out, _rs_out[-300:])
+    _rs_out = _rs_case("fp-side", lambda p: _rs_git("reset", "-q", "--hard", _rs_e, cwd=p),
+                       env=_rs_nowrite)
+    check("install.sh: ...but not from a commit that branch reaches only through a merge",
+          _rs_fp_premise and "STAGED-NOTHING" in _rs_out and "INTERMEDIATE" not in _rs_out
+          and "not on file://" in _rs_out, "E an ancestor=%s; %s" % (_rs_fp_premise,
+                                                                     _rs_out[-300:]))
 finally:
     _shutil.rmtree(_rs_sb, ignore_errors=True)
 for _src in ("HELPER_SRC", "DBM_SRC"):
@@ -1987,29 +2088,66 @@ try:
           "WARN gamedig is not installed" in _r and "OK gamedig ready" not in _r, repr(_r[-300:]))
 
     # The add-host bootstrap has the same step for REMOTE hosts: a host that already had a distro
-    # Node 18+ skipped straight to the npm install of gamedig. Its command is read out of hosts.py
-    # (a literal there, deliberately not moved) and run with shims.
-    import ast as _nd_ast
-    _nd_src = open(os.path.join(_root, "panel", "ops", "ssh_manager", "hosts.py"),
-                   encoding="utf-8").read()
-    _nd_cmd = next((_nd_ast.literal_eval(_n.value) for _n in _nd_ast.walk(_nd_ast.parse(_nd_src))
-                    if isinstance(_n, _nd_ast.Assign) and len(_n.targets) == 1
-                    and getattr(_n.targets[0], "id", "") == "node_cmd"), "")
+    # Node 18+ skipped straight to the npm install of gamedig. It is hosts._bootstrap_node now —
+    # two unprivileged reads and three verbs where it was one root shell piping NodeSource's setup
+    # script into bash — driven here with the transport stubbed, one host shape per case.
+    from panel.ops.ssh_manager import _core as _nd_core, hosts as _nd_hosts
 
-    def _nd_run(have_npm):
-        _sb = _tempfile.mkdtemp(prefix="nodestep-", dir=_su_sb)
-        if have_npm:
-            open(os.path.join(_sb, "npm"), "w").close()
-        return _sh_sub.run(["bash", "-c", "SB=%s\nnode() { echo v22.3.0; }\n"
-                            "command() { [ \"$2\" = npm ] && [ -f \"$SB/npm\" ]; }\n"
-                            "apt-get() { echo \"APT $*\"; }\ncurl() { echo CURL; }\n%s"
-                            % (_su_shlex.quote(_sb), _nd_cmd)],
-                           capture_output=True, text=True).stdout
-    _r = _nd_run(False)
+    def _nd_run(node=("v22.3.0\n", 0), npm=("/usr/bin/npm\n", 0), ns_rc=0, inst_rc=0):
+        """(calls, lines): every run_command / run_privileged the step made, and its log lines."""
+        _calls = []
+
+        def _rc(server, cmd, **k):
+            _calls.append(("cmd", cmd, k.get("sudo")))
+            if cmd.startswith("node -v"):
+                return ("%s" % node[0], "", node[1])
+            if cmd.startswith("command -v npm"):
+                return ("%s" % npm[0], "", npm[1])
+            return ("", "unexpected command", 1)
+
+        def _rp(server, verb, args=(), **k):
+            _calls.append(("verb", verb, list(args or [])))
+            if verb == "nodesource-setup":
+                return (("NodeSource repository configured (Node.js 24.x, key X)" if ns_rc == 0
+                         else "NodeSource's signing key is not the pinned key"), "", ns_rc)
+            return ("done", "", inst_rc)
+        _saved = (_nd_core.run_command, _nd_core.run_privileged)
+        _nd_core.run_command, _nd_core.run_privileged = _rc, _rp
+        try:
+            _lines = _nd_hosts._bootstrap_node(object())
+        finally:
+            _nd_core.run_command, _nd_core.run_privileged = _saved
+        return _calls, _lines
+
+    def _nd_verbs(calls):
+        return [(c[1], c[2]) for c in calls if c[0] == "verb"]
+    _c, _l = _nd_run(npm=("", 1))
     check("hosts: a remote with a distro Node 18+ and no npm gets npm before gamedig",
-          bool(_nd_cmd) and "APT install -y npm" in _r and "CURL" not in _r, repr(_r))
-    _r = _nd_run(True)
-    check("hosts: ...and one that has npm is left alone", "APT" not in _r, repr(_r))
+          _nd_verbs(_c) == [("apt-install", ["npm"])], repr(_c))
+    _c, _l = _nd_run()
+    check("hosts: ...and one that has npm is left alone", _nd_verbs(_c) == [], repr(_c))
+    _c, _l = _nd_run(node=("", 127))
+    check("hosts: a remote with no Node gets NodeSource (pinned-key verb), then nodejs from it",
+          _nd_verbs(_c) == [("nodesource-setup", []), ("apt-install", ["nodejs"])], repr(_c))
+    _c, _l = _nd_run(node=("v12.22.9\n", 0))
+    check("hosts: ...and so does one whose Node is too old for gamedig (22.04's distro Node 12)",
+          _nd_verbs(_c) == [("nodesource-setup", []), ("apt-install", ["nodejs"])], repr(_c))
+    _c, _l = _nd_run(node=("", 127), npm=("", 1), ns_rc=1)
+    check("hosts: a NodeSource setup that fails installs nothing — not nodejs, and not the distro npm",
+          _nd_verbs(_c) == [("nodesource-setup", [])]
+          and any("not installed" in _x for _x in _l), repr((_c, _l)))
+    _c, _l = _nd_run(node=("", -1))
+    check("hosts: a Node check that got no answer is not read as 'no Node' — nothing is installed",
+          _nd_verbs(_c) == [] and any("skipped" in _x for _x in _l), repr((_c, _l)))
+    _c, _l = _nd_run(npm=("", -1))
+    check("hosts: ...nor an npm check that got no answer as 'no npm'",
+          _nd_verbs(_c) == [], repr((_c, _l)))
+    _c, _l = _nd_run(node=("", 127), npm=("", 1))
+    _nd_cmds = [c for c in _c if c[0] == "cmd"]
+    check("hosts: the Node step's reads run unprivileged, and no command fetches or pipes a script",
+          _nd_cmds and all(c[2] is False for c in _nd_cmds)
+          and not any("curl" in c[1] or "setup_lts" in c[1] or "| bash" in c[1] for c in _nd_cmds),
+          repr(_nd_cmds))
 
     # A just-created account that sudo cannot resolve yet is retried. sudo-rs (Ubuntu 26.04's
     # /usr/bin/sudo) words it differently from classic sudo, so the retry never fired there.
@@ -2059,15 +2197,27 @@ try:
 
     def _rq_closure_gaps(text):
         pins, gaps = {}, []
-        for ln in text.splitlines():
+        # requirements.txt is pip-compile's lockfile: each entry runs over `\` continuation lines,
+        # one `--hash=` per line. Drop the comment lines, join each entry back onto one line, then
+        # take the hashes off before the rest is read as a requirement.
+        body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+        for ln in re.sub(r"\\\n", " ", body).splitlines():
             ln = ln.split("#", 1)[0].strip()
             if not ln:
+                continue
+            toks = ln.split()
+            hashes = [t for t in toks if t.startswith("--hash=")]
+            ln = " ".join(t for t in toks if not t.startswith("--hash="))
+            if not ln:
+                gaps.append("%d hash(es) belong to no requirement" % len(hashes))
                 continue
             req = _RqReq(ln)
             spec = [s for s in req.specifier if s.operator == "=="]
             if len(spec) != 1 or len(req.specifier) != 1:
                 gaps.append("%s is not pinned with ==" % ln)
                 continue
+            if not hashes:
+                gaps.append("%s carries no --hash, so pip cannot verify what it downloads" % ln)
             pins[_rq_canon(req.name)] = spec[0].version
         envs = [{"python_version": "3.%d" % m, "python_full_version": "3.%d.0" % m,
                  "sys_platform": "linux", "platform_system": "Linux", "platform_machine": mach,
@@ -2105,11 +2255,20 @@ try:
     check("requirements.txt: pins every package the panel's dependencies pull in",
           len(_rq_pins) > 12 and not _rq_gaps, "; ".join(_rq_gaps[:6]))
     # The gate catches a gap (so the pass above is not an empty list for want of looking): drop
-    # one transitive pin and it must be named.
-    _rq_cut = "\n".join(ln for ln in _rq_txt.splitlines() if not ln.startswith("werkzeug=="))
+    # one transitive pin, its hash lines with it, and it must be named.
+    _rq_cut = re.sub(r"(?ms)^werkzeug==.*?(?<!\\)\n", "", _rq_txt)
     _rq_cut_gaps = _rq_closure_gaps(_rq_cut)[1]
     check("requirements.txt: ...and the closure check names a dropped transitive pin (control)",
-          any("werkzeug" in g for g in _rq_cut_gaps), repr(_rq_cut_gaps[:3]))
+          "werkzeug" not in _rq_cut.lower() and "--hash=" in _rq_cut
+          and any("werkzeug" in g for g in _rq_cut_gaps), repr(_rq_cut_gaps[:3]))
+    # ...and every entry carries a hash: take one entry's off, and it must be named.
+    _rq_bare = re.sub(r"(?m)^(werkzeug==\S+) \\\n(?:[ \t]+--hash=\S+ \\\n)*[ \t]+--hash=\S+\n",
+                      r"\1\n", _rq_txt)
+    _rq_bare_gaps = _rq_closure_gaps(_rq_bare)[1]
+    check("requirements.txt: ...and an entry with no hash is named (control)",
+          re.search(r"(?m)^werkzeug==\S+$", _rq_bare) is not None
+          and any("werkzeug" in g and "no --hash" in g for g in _rq_bare_gaps),
+          repr(_rq_bare_gaps[:3]))
     # ...and it reads Requires-Python: the pin that started this, and a ceiling that shuts out 3.14.
     check("requirements.txt: ...and a pin that drops a supported Python is named (control)",
           "cannot install on 3.10" in (_rq_python_gap("bidict", "0.24.1", ">=3.11") or "")
@@ -2117,21 +2276,49 @@ try:
           and "3.14" in (_rq_python_gap("x", "1", "<3.14") or ""),
           repr(_rq_python_gap("bidict", "0.24.1", ">=3.11")))
     # Dependabot must resolve as the OLDEST supported Python, or it proposes releases 22.04 cannot
-    # install (it proposed bidict 0.24, Requires-Python >= 3.11). With no Python declared it uses
-    # its newest; given python_version markers in a requirements file it uses the lowest Python
-    # that satisfies them all. Its scan (python_requirement_parser.rb, imputed_requirements) reads
-    # EVERY line holding ";" and "python", comments included, so a stray comment can move it too.
-    def _dependabot_python_floors(text):
-        return [re.sub(r"['\"]", "", _m.group(1)).strip() for _l in text.splitlines()
-                if ";" in _l and "python" in _l
-                for _m in [re.search(r"python_version(.*?[\"'].*?['\"])", _l)] if _m]
+    # install (it proposed bidict 0.24, Requires-Python >= 3.11). requirements.txt is pip-compile's
+    # lockfile for requirements.in, and Dependabot re-runs pip-compile on the Python the header
+    # names (python_requirement_parser.rb, pip_compile_python_requirement), ahead of anything it
+    # could impute from markers. Compiled on 3.14, the set picks bidict 0.24.1 and SQLAlchemy 2.1.
+    def _rq_header_python(text):
+        _m = re.search(r"^# This file is autogenerated by pip-compile with [pP]ython (\d+\.\d+)$",
+                       text, re.M)
+        return _m and _m.group(1)
 
     check("requirements.txt: Dependabot resolves as the oldest supported Python",
-          _dependabot_python_floors(_rq_txt) == [">= %s" % _RQ_PYTHONS[0][:-2]],
-          repr(_dependabot_python_floors(_rq_txt)))
-    check("requirements.txt: ...and the floor scan reads a comment the way Dependabot does (control)",
-          _dependabot_python_floors('x==1 ; python_version >= "3.10"\n# y; python_version<"3.9"')
-          == [">= 3.10", "<3.9"])
+          _rq_header_python(_rq_txt) == _RQ_PYTHONS[0][:-2], repr(_rq_header_python(_rq_txt)))
+    check("requirements.txt: ...and the header read gives the compiling Python, or None (control)",
+          _rq_header_python(_rq_txt.replace("with Python 3.10\n", "with Python 3.14\n")) == "3.14"
+          and _rq_header_python("flask==3.1.3\n") is None)
+    # requirements.in is what a person edits and what Dependabot compiles from. Every name in it
+    # must be locked in requirements.txt (a dependency added to the .in and never compiled is not
+    # installed anywhere), and none may carry a marker: a 3.10 compile DROPS a requirement whose
+    # marker is false on 3.10 (pip-compile 7.6.1 left out `tomli ; python_version >= "3.13"`
+    # entirely), so a package needed only on a newer Python would silently go missing there.
+    def _rq_in_gaps(in_text, pins):
+        gaps = []
+        for _l in in_text.splitlines():
+            _l = _l.split("#", 1)[0].strip()
+            if not _l:
+                continue
+            if ";" in _l:
+                gaps.append("%s carries a marker" % _l)
+                continue
+            _n = _rq_canon(_RqReq(_l).name)
+            if _n not in pins:
+                gaps.append("%s is not locked in requirements.txt" % _n)
+        return gaps
+
+    _rq_in = open(os.path.join(_root, "requirements.in"), encoding="utf-8").read()
+    _rq_in_names = [_l for _l in _rq_in.splitlines()
+                    if _l.strip() and not _l.lstrip().startswith("#")]
+    check("requirements.in: every dependency in it is locked in requirements.txt, with no marker",
+          len(_rq_in_names) >= 12 and not _rq_in_gaps(_rq_in, _rq_pins),
+          "names=%d gaps=%r" % (len(_rq_in_names), _rq_in_gaps(_rq_in, _rq_pins)))
+    check("requirements.in: ...and an uncompiled name or a marker is named (control)",
+          _rq_in_gaps("flask\nnot-a-locked-pkg\ntomli ; python_version >= \"3.13\"\n", _rq_pins)
+          == ["not-a-locked-pkg is not locked in requirements.txt",
+              "tomli ; python_version >= \"3.13\" carries a marker"])
     # install.sh refuses a python3 older than the oldest supported Python, by name, before pip
     # gets to fail on it as "No matching distribution found" (Ubuntu 20.04's 3.8), and says so
     # plainly when python3 does not run at all. Run under the script's own `set -euo pipefail`.
@@ -3694,8 +3881,9 @@ check("workflows: the Bandit job's checkout does not persist the job token",
 # pip-audit, semgrep, coverage, atheris, flake8 and esprima were installed by bare name: whatever
 # PyPI had newest ran in CI, and the coverage job holds CODACY_PROJECT_TOKEN in a later step —
 # which a step's code can reach on a runner with passwordless sudo. Every `pip install` in every
-# workflow now installs the panel's own requirements.txt or a hash-pinned file, and nothing named
-# on the command line.
+# workflow and Dockerfile now installs a hash-pinned file with --require-hashes, and nothing named
+# on the command line. That includes the panel's own requirements.txt, a hashed pip-compile
+# lockfile since the flag is the only thing OpenSSF Scorecard reads: it never opens the file.
 _ci_req_dirs = {".github/ci-requirements": None, ".github/ci-requirements-checks": None}
 _ci_req_files = {}
 for _d in _ci_req_dirs:
@@ -3714,21 +3902,43 @@ for _rel, _txt in _ci_req_files.items():
 check("workflows: every file of CI tool pins pins one version and a hash per entry",
       len(_ci_req_files) >= 7 and not _ci_bad, "files=%d bad=%r" % (len(_ci_req_files), _ci_bad[:4]))
 
-# Every pip install, joined across `\` continuations and folded (>-) lines, token by token.
-_ci_installs = []
-for _wf in sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml"))):
-    _src = "\n".join(_l for _l in open(_wf, encoding="utf-8").read().splitlines()
-                     if not _l.lstrip().startswith("#"))
-    _src = re.sub(r"\\\n\s*", " ", _src)
-    for _m in re.finditer(r"pip3? install[^\n]*(?:\n\s+(?!- )(?![A-Za-z_-]+:\s)\S[^\n]*)*", _src):
+# Every pip install, joined across `\` continuations and folded (>-) lines, token by token — in
+# the workflows, and in the RUN lines of every Dockerfile (the fuzz image installs requirements.txt
+# too, and OpenSSF Scorecard reads `*Dockerfile*` as well as the workflows).
+def _ci_pip_installs(src, label, copies=None):
+    found = []
+    src = "\n".join(_l for _l in src.splitlines() if not _l.lstrip().startswith("#"))
+    src = re.sub(r"\\\n\s*", " ", src)
+    for _m in re.finditer(r"pip3? install[^\n]*(?:\n\s+(?!- )(?![A-Za-z_-]+:\s)\S[^\n]*)*", src):
         # A `run: |` block holds several commands; each `pip install` is its own, and the words
         # before the next one (`python -m`) belong to it, not to this one.
         for _seg in re.split(r"\bpip3? install\b", _m.group(0))[1:]:
-            _toks = _seg.split()
+            _toks = [_t.strip("\x22'") for _t in _seg.split()]
             while _toks and _toks[-1] in ("python", "python3", "-m"):
                 _toks.pop()
-            _ci_installs.append((os.path.basename(_wf), _toks))
-_ci_named, _ci_unhashed, _ci_used = [], [], set()
+            # A Dockerfile installs the copy it made: map `$SRC/requirements.txt` back to the
+            # repo file its COPY line took it from.
+            found.append((label, [(copies or {}).get(_t, _t) for _t in _toks]))
+    return found
+
+
+_ci_installs = []
+for _wf in sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml"))):
+    _ci_installs += _ci_pip_installs(open(_wf, encoding="utf-8").read(), os.path.basename(_wf))
+_ci_dockerfiles = []
+for _dp, _dns, _fns in os.walk(_root):
+    # .claude holds other worktrees' checkouts, each with its own copy of the fuzz Dockerfile.
+    _dns[:] = [_d for _d in _dns if _d not in (".git", ".claude", ".venv", "venv", "node_modules",
+                                               "data", "__pycache__")]
+    _ci_dockerfiles += [os.path.join(_dp, _f) for _f in _fns if "Dockerfile" in _f]
+for _df in sorted(_ci_dockerfiles):
+    _dsrc = open(_df, encoding="utf-8").read()
+    _dcopies = {_dst: _srcp for _srcp, _dst in
+                re.findall(r"^COPY\s+(\S+)\s+(\S+)\s*$", _dsrc, re.M)}
+    _druns = "\n".join(_l for _l in re.sub(r"\\\n\s*", " ", _dsrc).splitlines()
+                       if re.match(r"\s*RUN\s", _l))
+    _ci_installs += _ci_pip_installs(_druns, os.path.relpath(_df, _root), _dcopies)
+_ci_named, _ci_unhashed, _ci_srcbuild, _ci_used = [], [], [], set()
 for _wf, _toks in _ci_installs:
     _i = 0
     while _i < len(_toks):
@@ -3736,8 +3946,12 @@ for _wf, _toks in _ci_installs:
         if _tk == "-r" and _i + 1 < len(_toks):
             _path = _toks[_i + 1]
             _ci_used.add(_path)
-            if _path != "requirements.txt" and "--require-hashes" not in _toks:
+            if "--require-hashes" not in _toks:
                 _ci_unhashed.append("%s: %s" % (_wf, _path))
+            # The panel's own set is all wheels: a source build would fetch its build tools
+            # unpinned and unhashed, inside pip's isolated build environment.
+            if _path == "requirements.txt" and "--only-binary :all:" not in " ".join(_toks):
+                _ci_srcbuild.append("%s: %s" % (_wf, _path))
             _i += 2
             continue
         if _tk in (":all:",) or _tk.startswith("-"):
@@ -3745,10 +3959,57 @@ for _wf, _toks in _ci_installs:
             continue
         _ci_named.append("%s: %s" % (_wf, _tk))
         _i += 1
-check("workflows: no pip install names a package; every one installs a file, hash-checked unless "
-      "it is the panel's own requirements.txt",
-      len(_ci_installs) >= 8 and not _ci_named and not _ci_unhashed,
-      "installs=%d named=%r unhashed=%r" % (len(_ci_installs), _ci_named, _ci_unhashed))
+_ci_req_installs = sorted(_wf for _wf, _toks in _ci_installs if "requirements.txt" in _toks)
+check("workflows: no pip install names a package; every one installs a file, hash-checked, and the "
+      "panel's own requirements.txt wheels only",
+      len(_ci_installs) >= 10 and not _ci_named and not _ci_unhashed and not _ci_srcbuild
+      and ".clusterfuzzlite/Dockerfile" in _ci_req_installs and len(_ci_req_installs) >= 5,
+      "installs=%d named=%r unhashed=%r source-build=%r requirements.txt=%r"
+      % (len(_ci_installs), _ci_named, _ci_unhashed, _ci_srcbuild, _ci_req_installs))
+# The scan above reads workflows as TEXT, so it passes a file GitHub cannot load. A one-line
+# `run: pip install --only-binary :all: -r ...` is exactly that: in a plain YAML scalar ": " is a
+# mapping indicator, so the whole workflow fails to parse ("mapping values are not allowed here")
+# and none of its jobs run. It passed this suite once. Every plain scalar in .github's YAML must
+# hold no ": " and not end in ":"; a block (`|`, `>`) or a quoted string may.
+def _yaml_plain_colons(text):
+    bad, block = [], None
+    for _no, _ln in enumerate(text.splitlines(), 1):
+        _st = _ln.lstrip()
+        _ind = len(_ln) - len(_st)
+        if block is not None:
+            if not _st or _ind > block:
+                continue            # inside a block scalar: shell text, anything goes
+            block = None
+        if not _st or _st.startswith("#"):
+            continue
+        _m = re.match(r"(-\s+)?[A-Za-z0-9_.-]+:\s+(\S.*)$", _st)
+        if not _m:
+            continue
+        _v = re.split(r"\s#", _m.group(2), maxsplit=1)[0].strip()
+        if re.fullmatch(r"[|>][-+0-9]*", _v):
+            block = _ind + len(_m.group(1) or "")     # the key's own column
+            continue
+        if _v[:1] in "'\x22[{&*!":
+            continue
+        if ": " in _v or _v.endswith(":"):
+            bad.append("%d: %s" % (_no, _st[:80]))
+    return bad
+
+
+_yp_bad = []
+_yp_files = sorted(glob.glob(os.path.join(_root, ".github", "**", "*.y*ml"), recursive=True))
+for _yf in _yp_files:
+    _yp_bad += ["%s:%s" % (os.path.relpath(_yf, _root), _b)
+                for _b in _yaml_plain_colons(open(_yf, encoding="utf-8").read())]
+check("workflows: no plain YAML scalar holds ': ', which would stop the file loading at all",
+      len(_yp_files) >= 15 and not _yp_bad, "files=%d bad=%r" % (len(_yp_files), _yp_bad[:4]))
+check("workflows: ...and the scan flags a one-line `run:` with `:all: ` but not a block or a quote "
+      "(control)",
+      _yaml_plain_colons("      - run: pip install --only-binary :all: -r r.txt\n") == [
+          "1: - run: pip install --only-binary :all: -r r.txt"]
+      and _yaml_plain_colons("      - run: |\n          pip install --only-binary :all: -r r.txt\n"
+                             "        with:\n          script: |\n            text: `ban: ${ip}`,\n"
+                             "        name: \x22a: b\x22\n") == [])
 check("workflows: ...and every pinned tool file is installed by some job, and exists",
       set(_ci_req_files) <= _ci_used
       and all(os.path.exists(os.path.join(_root, _u)) for _u in _ci_used),
@@ -3857,6 +4118,12 @@ def _docsrc(leaf):
 _sec = _docsrc("SECURITY.md")
 _readme = open(os.path.join(_root, "README.md"), encoding="utf-8").read()
 
+# The census table quotes the sudo=True ceiling the escalation ratchet above enforces. It said 3
+# for a release after the NodeSource step became a verb and the real number was 2.
+check("docs: SECURITY.md's census table states the ratchet's sudo=True count",
+      "| `run_command(..., sudo=True)` | %d |" % _CEILING["sudo=True"] in _sec,
+      "ratchet %d; SECURITY.md says %s" % (_CEILING["sudo=True"], (re.search(
+          r"\| `run_command\(\.\.\., sudo=True\)` \| (\d+) \|", _sec) or ["?", "?"])[1]))
 check("docs: SECURITY.md states the real verb count",
       "%d verbs" % len(_privmod.verbs()) in _sec,
       "table has %d; SECURITY.md says %s"
@@ -5918,9 +6185,102 @@ check("deploy: ...reads the system install through sudo",
 # contains owns outright. Run the job's real `run:` block with ssh capturing what it sends, then run
 # THAT on a shimmed "host" (sudo/systemctl/git): record what root would execute, and what the file
 # held at the moment it ran.
-_dp_run = _deploy_raw[_deploy_raw.index("        run: |\n") + len("        run: |\n"):]
-_dp_run = "\n".join(_ln[10:] if _ln.startswith(" " * 10) else _ln
-                    for _ln in _dp_run.splitlines()) + "\n"
+import base64 as _base64_dp  # noqa: E402
+_dp_co_at = _deploy_wf.index("uses: actions/checkout@")
+_dp_co = _deploy_wf[_dp_co_at:_deploy_wf.index("- name:", _dp_co_at)]
+check("deploy: the checkout fetches main's FULL history by its full name (the step's proof reads it)",
+      _deploy_wf.count("uses: actions/checkout@") == 1 and "ref: refs/heads/main\n" in _dp_co
+      and "fetch-depth: 0\n" in _dp_co and "sparse-checkout" not in _dp_co
+      and "persist-credentials: false\n" in _dp_co, _dp_co)
+
+
+def _dp_step_run(name):
+    """The `run: |` block of the step whose name starts with `name`, dedented — up to the first
+    line that is not part of the block scalar (the next step, or the end of the file)."""
+    _i = _deploy_raw.index("      - name: " + name)
+    _i = _deploy_raw.index("        run: |\n", _i) + len("        run: |\n")
+    _out = []
+    for _ln in _deploy_raw[_i:].splitlines():
+        if _ln.strip() and not _ln.startswith(" " * 10):
+            break
+        _out.append(_ln[10:])
+    return "\n".join(_out) + "\n"
+
+
+_dp_verify_run = _dp_step_run("Verify the commit is on main")
+_dp_run = _dp_step_run("Deploy via safe self-update")
+# The proof runs BEFORE the tailnet is joined, so a run it refuses never holds a tailnet identity:
+# checkout, verify, join, deploy — in that order — and the deploy step itself reads nothing out of
+# git on the runner (every git read it needs was done, and checked, before the join).
+
+
+def _dp_code(_t):
+    return "\n".join(_l for _l in _t.splitlines() if not _l.lstrip().startswith("#"))
+
+
+_dp_order = [_deploy_wf.find(_k) for _k in (
+    "uses: actions/checkout@", "- name: Verify the commit is on main",
+    "uses: tailscale/github-action@", "- name: Deploy via safe self-update")]
+check("deploy: main's history is fetched and the commit verified BEFORE the tailnet is joined",
+      -1 not in _dp_order and _dp_order == sorted(_dp_order)
+      and all(_k in _dp_code(_dp_verify_run) for _k in ("rev-list --first-parent", "show-ref",
+                                                         "cat-file blob"))
+      and not any(_k in _dp_code(_dp_run) for _k in ("rev-list", "show-ref", "cat-file",
+                                                      "merge-base")),
+      "step order %r; the deploy step (after the join) must only use what verify handed over"
+      % (_dp_order,))
+# ...and the Tailscale login is an ENVIRONMENT's, not the repository's: a repository secret is
+# readable by a workflow run on any branch or tag, and this login puts an SSH session on the host.
+_dp_job = _deploy_wf[_deploy_wf.index("\n  deploy:\n"):_deploy_wf.index("\n    steps:\n")]
+check("deploy: the deploy job runs in the `production` environment (its secrets are main-only)",
+      re.search(r"^    environment: production$", _dp_job, re.M) is not None, _dp_job[-400:])
+# ...and logs in with OIDC workload identity: id-token: write for THIS job only (never the whole
+# workflow), the Tailscale step given an audience, and no OAuth client secret anywhere to steal.
+_dp_top = _deploy_wf[:_deploy_wf.index("\njobs:\n")]
+_dp_join = _deploy_wf[_deploy_wf.index("- name: Join the tailnet"):]
+_dp_join = _dp_join[:_dp_join.index("\n      - name: ", 1)]
+check("deploy: the Tailscale login is OIDC (job-level id-token: write, an audience, no secret)",
+      re.search(r"^    permissions:\n      contents: read\n      id-token: write$", _dp_job, re.M)
+      is not None
+      and "id-token" not in _dp_top
+      and re.search(r"^          audience: \$\{\{ secrets\.TS_AUDIENCE \}\}$", _dp_join, re.M) is not None
+      and "oauth-secret" not in _deploy_wf and "TS_OAUTH_SECRET" not in _deploy_wf,
+      _dp_join)
+# ...and no step runs past a refused verify. A step-level `if:` (always(), failure()) on the join or
+# the deploy, or `continue-on-error:` on verify, joins the tailnet with the environment's secrets
+# for a run the proof refused — and the step order checked above still reads as correct.
+_dp_steps_txt = _deploy_wf[_deploy_wf.index("\n    steps:\n", _deploy_wf.index("\n  deploy:\n")):]
+_dp_gates = re.findall(r"^(?: {8}| {6}- )(?:if|continue-on-error):.*$", _dp_steps_txt, re.M)
+check("deploy: no step runs past a refused verify (no step-level if: or continue-on-error:)",
+      not _dp_gates, repr(_dp_gates))
+# The two steps are joined by the WORKFLOW: the deploy step's env names the verify step's id and
+# output key, and both steps take HEAD_SHA from the event. Read that join out of the YAML — the
+# harness below would otherwise wire the steps together itself, and a drifted name would never show.
+
+
+def _dp_step_text(name):
+    _i = _deploy_wf.index("- name: " + name)
+    _j = _deploy_wf.find("\n      - name: ", _i + 1)
+    return _deploy_wf[_i:_j if _j != -1 else len(_deploy_wf)]
+
+
+_dp_vstep = _dp_step_text("Verify the commit is on main")
+_dp_dstep = _dp_step_text("Deploy via safe self-update")
+_dp_vid = re.search(r"^\s+id: (\S+)$", _dp_vstep, re.M)
+_dp_ienv = re.search(r"^\s+INSTALLER: \$\{\{ steps\.([\w-]+)\.outputs\.([\w-]+) \}\}$", _dp_dstep, re.M)
+_dp_out_key = _dp_ienv.group(2) if _dp_ienv else ""
+check("deploy: the deploy step takes its installer from the VERIFY step's output, by that step's id",
+      _dp_vid is not None and _dp_ienv is not None and _dp_ienv.group(1) == _dp_vid.group(1),
+      "verify id=%r INSTALLER env=%r" % (_dp_vid and _dp_vid.group(1), _dp_ienv and _dp_ienv.group(0)))
+_dp_hs = [re.findall(r"^\s+HEAD_SHA: (.*)$", _t, re.M) for _t in (_dp_vstep, _dp_dstep)]
+check("deploy: ...and both steps take HEAD_SHA from the workflow_run (the commit verified is the one pinned)",
+      _dp_hs == [["${{ github.event.workflow_run.head_sha }}"]] * 2, repr(_dp_hs))
+# ...and the verify step takes the branch NAME from the same event: the job's `if` compared it with
+# 'main' IGNORING CASE, so the step compares it again, exactly. The harness below hands it over the
+# way this line says; a step reading some other expression would not be what the harness tests.
+_dp_hb = re.findall(r"^\s+HEAD_BRANCH: (.*)$", _dp_vstep, re.M)
+check("deploy: the verify step takes HEAD_BRANCH from the workflow_run, to compare it exactly",
+      _dp_hb == ["${{ github.event.workflow_run.head_branch }}"], repr(_dp_hb))
 _dp_sb = _tempfile.mkdtemp(prefix="deploy-")
 try:
     _dp_pd = os.path.join(_dp_sb, "lgsmpanel", "linuxgsm-panel")
@@ -5946,17 +6306,107 @@ try:
           '    *) echo "ROOT-EXEC $*" >> "$LOG" ;;\n'
           '  esac\n'
           '}\n')
-    # The runner: its checkout holds the verified commit's install.sh; ssh just records the stream.
+    # The runner, laid out the way actions/checkout leaves it with `ref: refs/heads/main` and
+    # fetch-depth 0: main's whole history, refs/remotes/origin/main at its tip, every tag, and the
+    # working tree at that tip. The verified commit (_dp_sha) is BELOW the tip — a later push whose
+    # CI has not finished — so the step has to read install.sh out of the commit, not the tree.
+    #
+    # Beside main, the two commits the job's `if` cannot tell from it. head_branch is a SHORT name,
+    # so a pushed TAG named `main` carrying its own workflow called "CI" arrives as event 'push',
+    # head_branch 'main', this repository: _dp_tagged is that commit, reached only by tags named
+    # `main` and `origin/main` (the second is what a bare `origin/main` resolves to — ahead of the
+    # remote-tracking branch). _dp_other is on another branch only. ssh just records the stream.
     _dp_runner = os.path.join(_dp_sb, "runner")
-    os.makedirs(_dp_runner)
-    with open(os.path.join(_dp_runner, "install.sh"), "w") as _dp_f:
-        _dp_f.write(_dp_shipped)
-    _dp_stream = os.path.join(_dp_sb, "stream")
-    _dp_sha = ("0123456789abcdef" * 3)[:40]
-    _dp_rr = _sh_sub.run(["bash", "-c", 'ssh() { cat > %s; }\n' % _shlex_q(_dp_stream) + _dp_run],
+    _dp_genv = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                    GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+                    GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+
+    def _dp_git(*a):
+        return _sh_sub.run(["git", "-C", _dp_runner, *a], capture_output=True, text=True,
+                           env=_dp_genv).stdout.strip()
+
+    def _dp_commit(body, msg):
+        with open(os.path.join(_dp_runner, "install.sh"), "w") as _dp_f:
+            _dp_f.write(body)
+        _dp_git("add", "install.sh")
+        _dp_git("commit", "-q", "-m", msg)
+        return _dp_git("rev-parse", "HEAD")
+
+    _sh_sub.run(["git", "init", "-q", "-b", "main", _dp_runner], capture_output=True, env=_dp_genv)
+    _pad_history(_dp_runner, _dp_genv)
+    _dp_older = _dp_commit("#!/bin/bash\necho OLDER-INSTALLER\n", "an older commit of main")
+    _dp_sha = _dp_commit(_dp_shipped, "the commit whose CI passed")
+    _dp_git("checkout", "-q", "--detach")
+    _dp_tagged = _dp_commit("#!/bin/bash\necho TAG-ONLY-INSTALLER\n", "reached by tags only")
+    _dp_git("checkout", "-q", "--detach", _dp_sha)
+    _dp_other = _dp_commit("#!/bin/bash\necho OTHER-BRANCH-INSTALLER\n", "another branch")
+    _dp_git("checkout", "-q", "main")
+    # A pull request merged with a merge commit (--no-ff): E, an intermediate commit whose change
+    # was reverted (F) before the merge, and G, its final state. E, F and G are ancestors of main
+    # only through the merge's SECOND parent — main was never at any of them — while the merge
+    # commit M is on main's own (first-parent) line.
+    _dp_before = _dp_commit("#!/bin/bash\necho BEFORE-MERGE-INSTALLER\n", "main before the merge")
+    _dp_git("checkout", "-q", "-b", "side")
+    _dp_side = [_dp_commit("#!/bin/bash\necho INTERMEDIATE-INSTALLER\n", "E: intermediate"),
+                _dp_commit("#!/bin/bash\necho BEFORE-MERGE-INSTALLER\n", "F: E reverted"),
+                _dp_commit("#!/bin/bash\necho MERGED-INSTALLER\n", "G: the PR's final state")]
+    _dp_git("checkout", "-q", "main")
+    _dp_git("merge", "-q", "--no-ff", "-m", "M: merge the pull request", "side")
+    _dp_merge = _dp_git("rev-parse", "HEAD")
+    _dp_git("branch", "-q", "-D", "side")
+    # Two commits of main that have nothing to ship: install.sh deleted, then present but empty.
+    _dp_git("rm", "-q", "install.sh")
+    _dp_git("commit", "-q", "-m", "main without an installer")
+    _dp_noinst = _dp_git("rev-parse", "HEAD")
+    _dp_empty = _dp_commit("", "main with an empty installer")
+    _dp_tip = _dp_commit("#!/bin/bash\necho TIP-INSTALLER\n", "main's tip, CI still running")
+    _dp_git("update-ref", "refs/remotes/origin/main", _dp_tip)
+    _dp_git("update-ref", "refs/remotes/origin/other", _dp_other)
+    _dp_git("update-ref", "refs/tags/main", _dp_tagged)
+    _dp_git("update-ref", "refs/tags/origin/main", _dp_tagged)
+
+    def _dp_deploy(sha, stream, branch="main"):
+        """Run the job's two run blocks as the runner would: verify, and — only if it passed — the
+        deploy step, with the installer path verify wrote to $GITHUB_OUTPUT. ssh records the
+        stream. Returns one result: the first failing step's rc, both steps' output.
+
+        Verify runs with a TMPDIR bash cannot write, over main's 4,000-commit line (see
+        _pad_history): the proof must stream that line, not store it in a here-string."""
+        _rt = _tempfile.mkdtemp(dir=_dp_sb, prefix="runner-temp-")
+        _gho = os.path.join(_rt, "github_output")
+        open(_gho, "w").close()
+        _v = _sh_sub.run(["bash", "-c", _dp_verify_run], capture_output=True, text=True,
+                         cwd=_dp_runner, env=dict(_dp_genv, HEAD_SHA=sha, HEAD_BRANCH=branch,
+                                                  RUNNER_TEMP=_rt, GITHUB_OUTPUT=_gho,
+                                                  TMPDIR=_NOWRITE_TMP))
+        if _v.returncode != 0:
+            return _v
+        _handed = [_l[len(_dp_out_key) + 1:] for _l in open(_gho).read().splitlines()
+                   if _dp_out_key and _l.startswith(_dp_out_key + "=")]
+        _d = _sh_sub.run(["bash", "-c", 'ssh() { cat > %s; }\n' % _shlex_q(stream) + _dp_run],
                          capture_output=True, text=True, cwd=_dp_runner,
-                         env=dict(os.environ, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu",
-                                  HEAD_SHA=_dp_sha))
+                         env=dict(_dp_genv, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu",
+                                  HEAD_SHA=sha, INSTALLER=_handed[-1] if _handed else ""))
+        return _sh_sub.CompletedProcess(_d.args, _d.returncode, _v.stdout + _d.stdout,
+                                        _v.stderr + _d.stderr)
+
+    def _dp_payload(stream):
+        """(installer bytes, pinned ref) the runner sent, or (None, None) if it sent nothing."""
+        if not os.path.exists(stream):
+            return None, None
+        _b64 = _pin = None
+        for _ln in open(stream).read().splitlines():
+            if _ln.startswith("INSTALLER_B64="):
+                _b64 = _ln[len("INSTALLER_B64="):]
+            elif _ln.startswith("PANEL_UPDATE_REF="):
+                _pin = _ln[len("PANEL_UPDATE_REF="):]
+        return (_base64_dp.b64decode(_b64).decode() if _b64 else None), _pin
+
+    _dp_tmp_ok, _dp_tmp_why = _needs_tmpfile(_dp_runner, "refs/remotes/origin/main", _dp_genv)
+    check("deploy: (premise) the runner's main is a line a here-string cannot hold under the "
+          "harness's TMPDIR", _dp_tmp_ok, _dp_tmp_why)
+    _dp_stream = os.path.join(_dp_sb, "stream")
+    _dp_rr = _dp_deploy(_dp_sha, _dp_stream)
     _dp_sent = open(_dp_stream).read() if os.path.exists(_dp_stream) else ""
     _dp_r = _sh_sub.run(["bash", "-c", _dp_shims + _dp_sent], capture_output=True, text=True,
                         cwd=_dp_sb, env=dict(os.environ, HOME=_dp_sb))
@@ -5982,13 +6432,112 @@ try:
     check("deploy: ...and pins the code to the commit whose installer it shipped",
           "ROOT-ENV PANEL_UPDATE_REF=%s" % _dp_sha in _dp_got.splitlines(), _dp_got[-400:])
     # The id is spliced into the remote script, so anything but a commit id stops the job there.
-    _dp_bad = os.path.join(_dp_sb, "stream-bad")
-    _dp_rb = _sh_sub.run(["bash", "-c", 'ssh() { cat > %s; }\n' % _shlex_q(_dp_bad) + _dp_run],
-                         capture_output=True, text=True, cwd=_dp_runner,
-                         env=dict(os.environ, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu",
-                                  HEAD_SHA=_dp_sha[:39] + "\ntouch /tmp/x"))
+    _dp_git("update-ref", "refs/tags/p;echo${IFS}INJECTED", _dp_sha)
+    _dp_shape = {}
+    for _dp_i, _dp_v in enumerate((_dp_sha[:39] + "\ntouch /tmp/x", _dp_sha[:39], "HEAD",
+                                   "p;echo${IFS}INJECTED")):
+        _dp_bad = os.path.join(_dp_sb, "stream-bad-%d" % _dp_i)
+        _dp_rb = _dp_deploy(_dp_v, _dp_bad)
+        _dp_shape[_dp_v] = (_dp_rb.returncode != 0 and not os.path.exists(_dp_bad)
+                            and "is not a commit id" in _dp_rb.stdout)
     check("deploy: ...and refuses a head_sha that is not a commit id, sending nothing",
-          _dp_rb.returncode != 0 and not os.path.exists(_dp_bad), _dp_rb.stderr[-200:])
+          all(_dp_shape.values()), repr(_dp_shape))
+    # The job's `if` compares head_branch with 'main' IGNORING CASE (GitHub's expressions do), so a
+    # branch `Main` or a tag `MAIN` passes it. The step compares the name exactly. The commit here
+    # IS on main — the verified one — so nothing but that comparison can refuse these runs.
+    _dp_case = {}
+    for _dp_i, _dp_b in enumerate(("Main", "MAIN", "mAIN", "")):
+        _dp_out = os.path.join(_dp_sb, "stream-branch-%d" % _dp_i)
+        _dp_x = _dp_deploy(_dp_sha, _dp_out, branch=_dp_b)
+        _dp_case[_dp_b] = (_dp_x.returncode != 0 and not os.path.exists(_dp_out)
+                           and "::error::head_branch '%s' is not exactly main" % _dp_b
+                           in _dp_x.stdout)
+    check("deploy: a head_branch that is main only ignoring case (Main, MAIN) is refused, nothing "
+          "sent", all(_dp_case.values()), repr(_dp_case))
+
+    # WHICH commit, not just whether one. The job's `if` admits a pushed TAG named `main`, so the
+    # step must prove head_sha is on main's history — and read that history by its FULL name:
+    # this runner holds a tag `origin/main`, and a bare `origin/main` is that tag (the fixture
+    # asserts as much, so these checks cannot pass on a runner where nothing is shadowed).
+    _dp_shadowed = _dp_git("rev-parse", "origin/main") == _dp_tagged
+    _dp_refusals = {}
+    for _dp_what, _dp_bad_sha in (("tag", _dp_tagged), ("other", _dp_other),
+                                  ("absent", ("0123456789abcdef" * 3)[:40])):
+        _dp_out = os.path.join(_dp_sb, "stream-" + _dp_what)
+        _dp_x = _dp_deploy(_dp_bad_sha, _dp_out)
+        _dp_refusals[_dp_what] = (
+            _dp_x.returncode != 0 and not os.path.exists(_dp_out)
+            and "is not on this repository's main" in _dp_x.stdout,
+            "rc=%s sent=%s out=%r err=%r" % (_dp_x.returncode, os.path.exists(_dp_out),
+                                             _dp_x.stdout[-200:], _dp_x.stderr[-200:]))
+    check("deploy: a head_sha only tags named main / origin/main reach is refused, nothing sent",
+          _dp_shadowed and _dp_refusals["tag"][0],
+          "fixture shadowed=%s; %s" % (_dp_shadowed, _dp_refusals["tag"][1]))
+    check("deploy: ...and so is one that only another branch holds",
+          _dp_refusals["other"][0], _dp_refusals["other"][1])
+    check("deploy: ...and one the checkout does not have at all",
+          _dp_refusals["absent"][0], _dp_refusals["absent"][1])
+    # The positive half, with the tag still there: main's TIP is deployed (a bare `origin/main`
+    # would have been the tag, and the tip is not its ancestor), and so is an OLDER commit of main
+    # (a CI run that finished late, or was re-run) — each with its own installer and its own pin.
+    _dp_deploy(_dp_tip, os.path.join(_dp_sb, "stream-tip"))
+    _dp_tip_inst, _dp_tip_pin = _dp_payload(os.path.join(_dp_sb, "stream-tip"))
+    check("deploy: main's TIP ships although a tag named origin/main points elsewhere "
+          "(the step reads refs/remotes/origin/main)",
+          _dp_shadowed and _dp_tip_inst == "#!/bin/bash\necho TIP-INSTALLER\n"
+          and _dp_tip_pin == _dp_tip, "installer=%r pin=%r" % (_dp_tip_inst, _dp_tip_pin))
+    _dp_deploy(_dp_older, os.path.join(_dp_sb, "stream-older"))
+    _dp_old_inst, _dp_old_pin = _dp_payload(os.path.join(_dp_sb, "stream-older"))
+    check("deploy: ...and so does an older commit of main, with that commit's own installer",
+          _dp_old_inst == "#!/bin/bash\necho OLDER-INSTALLER\n" and _dp_old_pin == _dp_older,
+          "installer=%r pin=%r" % (_dp_old_inst, _dp_old_pin))
+    # FIRST-PARENT, not ancestry. A tag `main` on E — an intermediate commit of a merged pull
+    # request, reverted before the merge — passes the job's `if`, and E IS an ancestor of main. It
+    # was never main's tip, so it must not ship; nor F or G. The merge commit itself does.
+    _dp_fp_premise = all(_sh_sub.run(["git", "-C", _dp_runner, "merge-base", "--is-ancestor", _c,
+                                      "refs/remotes/origin/main"], env=_dp_genv).returncode == 0
+                         for _c in _dp_side)
+    _dp_fp = {}
+    for _dp_i, _dp_c in enumerate(_dp_side):
+        _dp_out = os.path.join(_dp_sb, "stream-side-%d" % _dp_i)
+        _dp_x = _dp_deploy(_dp_c, _dp_out)
+        _dp_fp[_dp_c[:7]] = (_dp_x.returncode != 0 and not os.path.exists(_dp_out)
+                             and "is not on this repository's main" in _dp_x.stdout)
+    check("deploy: a commit main reaches only through a merge (a PR's intermediate commit) is "
+          "refused, nothing sent",
+          _dp_fp_premise and all(_dp_fp.values()),
+          "ancestors of main=%s; refused=%r" % (_dp_fp_premise, _dp_fp))
+    _dp_deploy(_dp_merge, os.path.join(_dp_sb, "stream-merge"))
+    _dp_m_inst, _dp_m_pin = _dp_payload(os.path.join(_dp_sb, "stream-merge"))
+    check("deploy: ...while the merge commit ships, with its own installer (positive control)",
+          _dp_m_inst == "#!/bin/bash\necho MERGED-INSTALLER\n" and _dp_m_pin == _dp_merge,
+          "installer=%r pin=%r" % (_dp_m_inst, _dp_m_pin))
+    # A commit of main with nothing to ship is refused in words, not by a bare git fatal — and an
+    # EMPTY installer too: sent, it runs as nothing on the host and the job goes green.
+    _dp_none = {}
+    for _dp_what, _dp_c in (("no install.sh", _dp_noinst), ("empty install.sh", _dp_empty)):
+        _dp_out = os.path.join(_dp_sb, "stream-" + _dp_what.replace(" ", "-"))
+        _dp_x = _dp_deploy(_dp_c, _dp_out)
+        _dp_none[_dp_what] = (
+            _dp_x.returncode != 0 and not os.path.exists(_dp_out)
+            and "::error::%s has no install.sh to ship" % _dp_c in _dp_x.stdout,
+            "rc=%s sent=%s out=%r err=%r" % (_dp_x.returncode, os.path.exists(_dp_out),
+                                             _dp_x.stdout[-200:], _dp_x.stderr[-200:]))
+    check("deploy: a commit of main with no install.sh is refused with an ::error::, nothing sent",
+          _dp_none["no install.sh"][0], _dp_none["no install.sh"][1])
+    check("deploy: ...and so is one whose install.sh is empty",
+          _dp_none["empty install.sh"][0], _dp_none["empty install.sh"][1])
+    # The deploy step's own guard. A handoff that arrives empty must stop the job: sent, an empty
+    # INSTALLER_B64 is written out and run as nothing on the host, and the job goes green.
+    _dp_out = os.path.join(_dp_sb, "stream-nohandoff")
+    _dp_x = _sh_sub.run(["bash", "-c", 'ssh() { cat > %s; }\n' % _shlex_q(_dp_out) + _dp_run],
+                        capture_output=True, text=True, cwd=_dp_runner,
+                        env=dict(_dp_genv, DEPLOY_HOST="host.invalid", DEPLOY_USER="ubuntu",
+                                 HEAD_SHA=_dp_sha, INSTALLER=""))
+    check("deploy: the deploy step refuses an empty handoff from verify, sending nothing",
+          _dp_x.returncode != 0 and not os.path.exists(_dp_out)
+          and "handed over no installer" in _dp_x.stdout,
+          "rc=%s sent=%s out=%r" % (_dp_x.returncode, os.path.exists(_dp_out), _dp_x.stdout[-200:]))
     # The PER-USER branch too. It took install.sh from origin/main and ran it unpinned, so the
     # deploy of a verified commit installed whatever main's tip was by then — a later push whose CI
     # had not finished, or had failed. Same stream, a host whose unit reports nothing and whose
@@ -6017,6 +6566,21 @@ try:
           and "origin/main" not in _dp_ugot,
           "rc=%s out=%r err=%r log=%r" % (_dp_ur.returncode, _dp_ur.stdout[-200:],
                                          _dp_ur.stderr[-200:], _dp_ugot[-300:]))
+    # A full ref name is still only a name to git's lookup. With refs/remotes/origin/main missing,
+    # `refs/remotes/origin/main` resolves as refs/tags/refs/remotes/origin/main — here, a tag on
+    # the tag-only commit, whose own first-parent line contains it. The step must say the ref is
+    # missing, and send nothing. (Last in this block: it removes the runner's tracking ref.)
+    _dp_git("update-ref", "-d", "refs/remotes/origin/main")
+    _dp_git("update-ref", "refs/tags/refs/remotes/origin/main", _dp_tagged)
+    _dp_fell = _dp_git("rev-parse", "refs/remotes/origin/main") == _dp_tagged
+    _dp_out = os.path.join(_dp_sb, "stream-noref")
+    _dp_x = _dp_deploy(_dp_tagged, _dp_out)
+    check("deploy: with no refs/remotes/origin/main, the step says so, and a tag of that name does "
+          "not stand in for it",
+          _dp_fell and _dp_x.returncode != 0 and not os.path.exists(_dp_out)
+          and "The checkout has no refs/remotes/origin/main" in _dp_x.stdout,
+          "fixture fell through to the tag=%s; rc=%s sent=%s out=%r" % (
+              _dp_fell, _dp_x.returncode, os.path.exists(_dp_out), _dp_x.stdout[-200:]))
 finally:
     _shutil.rmtree(_dp_sb, ignore_errors=True)
 
@@ -6024,9 +6588,9 @@ finally:
 # leaves it where it is. Deploy runs do not finish in push order — a re-run of an old commit's CI
 # deploys it last — and resetting to the pin would take the host backwards. Run the real
 # resolve_update_target against a real clone.
-_ru_fn = (_inst[_inst.index("_gitc() {"):_inst.index("\n}\n", _inst.index("_gitc() {")) + 3]
-          + _inst[_inst.index("resolve_update_target() {"):
-                  _inst.index("\n}\n", _inst.index("resolve_update_target() {")) + 3])
+_ru_fn = 'warn() { echo "WARN $*" >&2; }\n' + "".join(_inst_shfn(_n) for _n in (
+    "_gitc", "_ref_exists", "_fetch_branch", "_on_first_parent_line", "_choose_update_target",
+    "resolve_update_target"))
 _ru_sb = _tempfile.mkdtemp(prefix="updref-")
 try:
     _ru_up, _ru_co = os.path.join(_ru_sb, "up"), os.path.join(_ru_sb, "co")
@@ -6068,6 +6632,789 @@ try:
           _ru_target(_ru_local, _ru_a) == _ru_a, _ru_target(_ru_local, _ru_a))
 finally:
     _shutil.rmtree(_ru_sb, ignore_errors=True)
+
+# ── a TAG named like the branch must not stand in for it ─────────────────────────────────────
+# git resolves a bare `origin/main` as refs/tags/origin/main BEFORE refs/remotes/origin/main
+# (gitrevisions), and a fetch SOURCE `main` as the remote's tag `main` before its branch. The
+# installer's clone (--no-single-branch) and its fetches bring tags along, so one tag pushed under
+# the name `origin/main` reset every installation's checkout, at its next update, to a commit that
+# was never on main — and the panel's update card, branch list and verified target all read the
+# same tag. Both sides are driven for real here: install.sh's own fetch_code and
+# resolve_update_target, and the panel's own git calls, against a real upstream and clone.
+#
+# The fixture. Upstream main is A-B-C, and dev is A-D1-D2. X is a commit on NO branch, and the
+# tags `main`, `origin/main`, `dev` and `origin/dev` all point at it. Each clone already holds
+# those tags (a clone fetches them), last fetched main at B and dev at D1 — so the update has a
+# newer tip to fetch, and a fetch that grabbed the TAG instead would leave the branch behind —
+# and is checked out at A.
+_tsh_sb = _tempfile.mkdtemp(prefix="tagshadow-")
+_tsh_env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+                GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+try:
+    _tsh_up = os.path.join(_tsh_sb, "up")
+
+    def _tsh_git(*a):
+        return _sh_sub.run(["git", *a], capture_output=True, text=True, env=_tsh_env).stdout.strip()
+
+    def _tsh_commit(files, msg):
+        for _tsh_p, _tsh_body in files.items():
+            with open(os.path.join(_tsh_up, _tsh_p), "w") as _tsh_f:
+                _tsh_f.write(_tsh_body)
+            _tsh_git("-C", _tsh_up, "add", _tsh_p)
+        _tsh_git("-C", _tsh_up, "commit", "-q", "-m", msg)
+        return _tsh_git("-C", _tsh_up, "rev-parse", "HEAD")
+
+    _tsh_git("init", "-q", "-b", "main", _tsh_up)
+    _tsh_a = _tsh_commit({"VERSION": "1.0.0\n", "app.py": "a = 1\n"}, "A base")
+    _tsh_b = _tsh_commit({"VERSION": "1.1.0\n", "app.py": "a = 2\n"}, "B on main")
+    _tsh_c = _tsh_commit({"VERSION": "1.2.0\n", "app.py": "a = 3\n"}, "C main tip")
+    _tsh_git("-C", _tsh_up, "checkout", "-q", "--detach", _tsh_b)
+    _tsh_x = _tsh_commit({"VERSION": "6.6.6\n", "app.py": "x = 1\n"}, "X on no branch")
+    _tsh_git("-C", _tsh_up, "checkout", "-q", "-b", "dev", _tsh_a)
+    _tsh_d1 = _tsh_commit({"VERSION": "2.0.1\n", "app.py": "d = 1\n"}, "D1 on dev")
+    _tsh_d2 = _tsh_commit({"VERSION": "2.0.2\n", "app.py": "d = 2\n"}, "D2 dev tip")
+    _tsh_git("-C", _tsh_up, "branch", "-q", "feature/dev3", _tsh_a)
+    _tsh_git("-C", _tsh_up, "branch", "-q", "nest/refs/heads/dev3", _tsh_a)
+    _tsh_git("-C", _tsh_up, "checkout", "-q", "main")
+    for _tsh_t in ("main", "origin/main", "dev", "origin/dev"):
+        _tsh_git("-C", _tsh_up, "update-ref", "refs/tags/" + _tsh_t, _tsh_x)
+
+    def _tsh_clone(name):
+        co = os.path.join(_tsh_sb, name)
+        _tsh_git("clone", "-q", _tsh_up, co)
+        _tsh_git("-C", co, "update-ref", "refs/remotes/origin/main", _tsh_b)
+        _tsh_git("-C", co, "update-ref", "refs/remotes/origin/dev", _tsh_d1)
+        _tsh_git("-C", co, "reset", "-q", "--hard", _tsh_a)
+        return co
+
+    def _tsh_shadowed(co):
+        """The fixture really is ambiguous in this clone: a bare `origin/main` names X."""
+        return _tsh_git("-C", co, "rev-parse", "origin/main") == _tsh_x
+
+    def _tsh_has(co, ref):
+        return _sh_sub.run(["git", "-C", co, "rev-parse", "--verify", "--quiet", ref],
+                           capture_output=True, text=True, env=_tsh_env).returncode == 0
+
+    # install.sh: resolve_update_target (read-only: which commit an update would move TO).
+    def _tsh_resolve(co, pin):
+        r = _sh_sub.run(["bash", "-c", "set -euo pipefail\nSRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n"
+                         "%sresolve_update_target\necho \"TARGET=${TARGET_SHA}\""
+                         % (_shlex_q(co), _ru_fn)],
+                        capture_output=True, text=True, env=dict(_tsh_env, PANEL_UPDATE_REF=pin))
+        return (r.stdout.strip().rpartition("TARGET=")[2]
+                or "rc=%s %s" % (r.returncode, r.stderr[-200:]))
+
+    _tsh_co = _tsh_clone("ru-tip")
+    _tsh_pre = _tsh_shadowed(_tsh_co)
+    _tsh_got = _tsh_resolve(_tsh_co, "")
+    check("install.sh: the update target is main's fetched tip, not a tag named origin/main",
+          _tsh_pre and _tsh_got == _tsh_c,
+          "fixture shadowed=%s; target %s, want C %s (X %s, B %s)" % (
+              _tsh_pre, _tsh_got, _tsh_c, _tsh_x, _tsh_b))
+    check("install.sh: ...its fetch moved the BRANCH, not a tag named main",
+          _tsh_git("-C", _tsh_co, "rev-parse", "refs/remotes/origin/main") == _tsh_c,
+          "refs/remotes/origin/main is %s, want C %s" % (
+              _tsh_git("-C", _tsh_co, "rev-parse", "refs/remotes/origin/main"), _tsh_c))
+    _tsh_co = _tsh_clone("ru-pin")
+    _tsh_got = _tsh_resolve(_tsh_co, _tsh_b)
+    check("install.sh: ...a pin on main is still the target, tags or not (positive control)",
+          _tsh_got == _tsh_b, "target %s, want B %s" % (_tsh_got, _tsh_b))
+    _tsh_co = _tsh_clone("ru-pinx")
+    _tsh_pre = _tsh_shadowed(_tsh_co)
+    _tsh_got = _tsh_resolve(_tsh_co, _tsh_x)
+    # Not verified, so not the target — and not replaced by main's tip (C) either: the checkout,
+    # at A on main, stays where it is.
+    check("install.sh: ...but a pin only the tag origin/main reaches is not: the checkout stays put",
+          _tsh_pre and _tsh_got == _tsh_a,
+          "fixture shadowed=%s; target %s, want HEAD A %s (X %s, tip C %s)" % (
+              _tsh_pre, _tsh_got, _tsh_a, _tsh_x, _tsh_c))
+    _tsh_co = _tsh_clone("ru-back")
+    _tsh_git("-C", _tsh_co, "reset", "-q", "--hard", _tsh_c)
+    _tsh_pre = _tsh_shadowed(_tsh_co)
+    _tsh_got = _tsh_resolve(_tsh_co, _tsh_b)
+    check("install.sh: ...and 'never backwards' reads the branch too, not the tag",
+          _tsh_pre and _tsh_got == _tsh_c, "fixture shadowed=%s; target %s, want C %s (B %s)" % (
+              _tsh_pre, _tsh_got, _tsh_c, _tsh_b))
+
+    # install.sh: fetch_code — the step that actually RESETS the checkout.
+    _tsh_fc = _inst[_inst.index("fetch_code() {"):
+                    _inst.index("\n}\n", _inst.index("fetch_code() {")) + 3]
+
+    def _tsh_fetch_code(co, pin):
+        r = _sh_sub.run(["bash", "-c", "set -euo pipefail\ndie() { echo \"DIE $*\" >&2; exit 1; }\n"
+                         "SRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n%s%sfetch_code\n"
+                         % (_shlex_q(co), _ru_fn, _tsh_fc)],
+                        capture_output=True, text=True, env=dict(_tsh_env, PANEL_UPDATE_REF=pin))
+        return (_tsh_git("-C", co, "rev-parse", "HEAD"),
+                "rc=%s err=%r" % (r.returncode, r.stderr[-200:]))
+
+    _tsh_co = _tsh_clone("fc-tip")
+    _tsh_pre = _tsh_shadowed(_tsh_co)
+    _tsh_head, _tsh_why = _tsh_fetch_code(_tsh_co, "")
+    check("install.sh: fetch_code resets to main's tip, not to a tag named origin/main",
+          _tsh_pre and _tsh_head == _tsh_c, "fixture shadowed=%s; HEAD %s, want C %s (X %s) %s" % (
+              _tsh_pre, _tsh_head, _tsh_c, _tsh_x, _tsh_why))
+    _tsh_co = _tsh_clone("fc-pin")
+    _tsh_head, _tsh_why = _tsh_fetch_code(_tsh_co, _tsh_b)
+    check("install.sh: ...fetch_code resets to a pin on main (positive control)",
+          _tsh_head == _tsh_b, "HEAD %s, want B %s %s" % (_tsh_head, _tsh_b, _tsh_why))
+    _tsh_co = _tsh_clone("fc-pinx")
+    _tsh_pre = _tsh_shadowed(_tsh_co)
+    _tsh_head, _tsh_why = _tsh_fetch_code(_tsh_co, _tsh_x)
+    check("install.sh: ...but never to a pin only the tag origin/main reaches (nor to the tip)",
+          _tsh_pre and _tsh_head == _tsh_a,
+          "fixture shadowed=%s; HEAD %s, want A %s (X %s, tip C %s) %s" % (
+              _tsh_pre, _tsh_head, _tsh_a, _tsh_x, _tsh_c, _tsh_why))
+
+    # ...and fetch_code keeps the "never backwards" decision resolve_update_target makes. It worked
+    # out a target of its own, without that rule: a checkout already at C handed an older verified
+    # pin B stayed put when the update was a no-op, but was reset BACK to B whenever the run took
+    # the full update path anyway (a stale venv sends a current checkout there).
+    _tsh_co = _tsh_clone("fc-back")
+    _tsh_git("-C", _tsh_co, "reset", "-q", "--hard", _tsh_c)
+    _tsh_head, _tsh_why = _tsh_fetch_code(_tsh_co, _tsh_b)
+    check("install.sh: fetch_code never moves a checkout backwards to an older pin either",
+          _tsh_head == _tsh_c, "HEAD %s, want C %s (pin B %s) %s" % (
+              _tsh_head, _tsh_c, _tsh_b, _tsh_why))
+
+    # A full name is still only a NAME to git's lookup: with refs/remotes/origin/main missing, git
+    # goes on to refs/tags/refs/remotes/origin/main. The fetch is made a no-op here (so nothing puts
+    # the ref back), the ref deleted and a tag of that name aimed at X: the update must stop, and
+    # say why, not take the tag's word for the branch.
+    _tsh_nofetch = ("eval \"$(declare -f _gitc | sed '1s/^_gitc/_gitc_real/')\"\n"
+                    "_gitc() { case \"$1\" in fetch) return 0 ;; esac; _gitc_real \"$@\"; }\n")
+
+    def _tsh_noref(name):
+        co = _tsh_clone(name)
+        _tsh_git("-C", co, "update-ref", "-d", "refs/remotes/origin/main")
+        _tsh_git("-C", co, "update-ref", "refs/tags/refs/remotes/origin/main", _tsh_x)
+        return co, _tsh_git("-C", co, "rev-parse", "refs/remotes/origin/main") == _tsh_x
+
+    _tsh_co, _tsh_pre = _tsh_noref("noref-ru")
+    _tsh_r = _sh_sub.run(
+        ["bash", "-c", "set -euo pipefail\nSRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n%s%s"
+         "if resolve_update_target; then echo \"TARGET=${TARGET_SHA}\"; "
+         "else echo \"REFUSED ${RESOLVE_ERR}\"; fi\n" % (_shlex_q(_tsh_co), _ru_fn, _tsh_nofetch)],
+        capture_output=True, text=True, env=dict(_tsh_env, PANEL_UPDATE_REF=""))
+    check("install.sh: with no refs/remotes/origin/main the update stops and says so, and a tag "
+          "of that name does not answer for it",
+          _tsh_pre and "REFUSED The fetch left no refs/remotes/origin/main" in _tsh_r.stdout
+          and _tsh_x not in _tsh_r.stdout,
+          "fixture fell through to the tag=%s; out=%r err=%r" % (
+              _tsh_pre, _tsh_r.stdout[-200:], _tsh_r.stderr[-200:]))
+    _tsh_co, _tsh_pre = _tsh_noref("noref-fc")
+    _tsh_r = _sh_sub.run(
+        ["bash", "-c", "set -euo pipefail\ndie() { echo \"DIE $*\" >&2; exit 1; }\n"
+         "SRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n%s%s%sfetch_code\n"
+         % (_shlex_q(_tsh_co), _ru_fn, _tsh_fc, _tsh_nofetch)],
+        capture_output=True, text=True, env=dict(_tsh_env, PANEL_UPDATE_REF=""))
+    check("install.sh: ...and fetch_code resets nothing",
+          _tsh_pre and _tsh_r.returncode != 0
+          and "DIE The fetch left no refs/remotes/origin/main" in _tsh_r.stderr
+          and _tsh_git("-C", _tsh_co, "rev-parse", "HEAD") == _tsh_a,
+          "fixture fell through to the tag=%s; rc=%s HEAD %s (A %s, X %s) err=%r" % (
+              _tsh_pre, _tsh_r.returncode, _tsh_git("-C", _tsh_co, "rev-parse", "HEAD"), _tsh_a,
+              _tsh_x, _tsh_r.stderr[-200:]))
+
+    # A single-branch clone of main that tracks ANOTHER branch. Its configured refspec covers main
+    # only, so a fetch naming just the SOURCE landed in FETCH_HEAD and refs/remotes/origin/dev never
+    # appeared: the target came out as the unresolved name. The fetch names its destination now —
+    # and fetches no tag with it (one pushed onto dev after the clone shows whether it would).
+    _tsh_sbc = os.path.join(_tsh_sb, "single-dev")
+    _tsh_git("clone", "-q", "--single-branch", "--branch", "main", "file://" + _tsh_up, _tsh_sbc)
+    _tsh_git("-C", _tsh_up, "update-ref", "refs/tags/late-on-dev", _tsh_d2)
+    _tsh_pre = not _tsh_has(_tsh_sbc, "refs/remotes/origin/dev")
+    _tsh_r = _sh_sub.run(
+        ["bash", "-c", "set -euo pipefail\nSRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=dev\n%s"
+         "resolve_update_target\necho \"TARGET=${TARGET_SHA}\"\n" % (_shlex_q(_tsh_sbc), _ru_fn)],
+        capture_output=True, text=True, env=dict(_tsh_env, PANEL_UPDATE_REF=""))
+    _tsh_got = _tsh_r.stdout.strip().rpartition("TARGET=")[2]
+    check("install.sh: a single-branch clone tracking another branch updates to THAT branch's tip",
+          _tsh_pre and _tsh_got == _tsh_d2,
+          "no tracking ref before=%s; target %r, want D2 %s; err=%r" % (
+              _tsh_pre, _tsh_got, _tsh_d2, _tsh_r.stderr[-200:]))
+    check("install.sh: ...and that fetch brought no tag along",
+          _tsh_got == _tsh_d2 and not _tsh_has(_tsh_sbc, "refs/tags/late-on-dev"),
+          "late-on-dev fetched=%s" % _tsh_has(_tsh_sbc, "refs/tags/late-on-dev"))
+    _tsh_git("-C", _tsh_up, "update-ref", "-d", "refs/tags/late-on-dev")
+
+    _tsh_co = _tsh_clone("fc-last")
+    _tsh_r = _sh_sub.run(
+        ["bash", "-c", "set -euo pipefail\ndie() { echo \"DIE $*\" >&2; exit 1; }\n"
+         "SRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n%s%s"
+         "eval \"$(declare -f _gitc | sed '1s/^_gitc/_gitc_real/')\"\n"
+         "_gitc() { case \" $* \" in *' --prune '*) return 1 ;; esac; _gitc_real \"$@\"; }\n"
+         "fetch_code\n" % (_shlex_q(_tsh_co), _ru_fn, _tsh_fc)],
+        capture_output=True, text=True, env=dict(_tsh_env, PANEL_UPDATE_REF=""))
+    check("install.sh: ...and fetch_code's LAST-resort fetch moves the branch, not a tag named main",
+          _tsh_git("-C", _tsh_co, "rev-parse", "HEAD") == _tsh_c,
+          "HEAD %s want C %s rc=%s err=%r" % (_tsh_git("-C", _tsh_co, "rev-parse", "HEAD"), _tsh_c,
+                                             _tsh_r.returncode, _tsh_r.stderr[-200:]))
+
+    # The panel: its own git calls, run for real against a clone (PANEL_DIR pointed at it; only the
+    # tracked branch, the CI lookup, the config store and the launcher are stubbed). Tags pushed
+    # AFTER the clone, one on main's tip and one on a commit on no branch, show whether the branch
+    # list's refresh, or the update check's fetch, goes and fetches tags the panel never reads. (The
+    # update check's fetch names a DESTINATION, and git follows tags into what such a fetch brings
+    # unless told --no-tags: late-on-main, on the tip it fetches, is the one it would take.)
+    from panel.core import config as _tsh_cfgmod
+    _tsh_so = _tsh_clone("panel")
+    _tsh_shallow = os.path.join(_tsh_sb, "panel-shallow")
+    _tsh_git("clone", "-q", "--depth", "1", "--no-single-branch", "--branch", "main",
+             "file://" + _tsh_up, _tsh_shallow)
+    _tsh_git("-C", _tsh_up, "update-ref", "refs/tags/late-on-main", _tsh_c)
+    _tsh_git("-C", _tsh_up, "checkout", "-q", "--detach", _tsh_a)
+    _tsh_y = _tsh_commit({"app.py": "y = 1\n"}, "Y on no branch")
+    _tsh_git("-C", _tsh_up, "checkout", "-q", "main")
+    _tsh_git("-C", _tsh_up, "update-ref", "refs/tags/late-off-branch", _tsh_y)
+    _tsh_pre = _tsh_shadowed(_tsh_so)
+    _tsh_saved = (SO.PANEL_DIR, SO._tracked_branch, SO._remote_ci_state, SO._launch_installer,
+                  _tsh_cfgmod.load_config, _tsh_cfgmod.update_config)
+    _tsh_env_saved = {_k: os.environ.get(_k) for _k in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM")}
+    _tsh_branch = {"v": "main"}
+    try:
+        os.environ["GIT_CONFIG_GLOBAL"], os.environ["GIT_CONFIG_NOSYSTEM"] = os.devnull, "1"
+        SO.PANEL_DIR = _tsh_so
+        SO._tracked_branch = lambda: _tsh_branch["v"]
+        SO._remote_ci_state = lambda sha: "passing"
+
+        def _tsh_status():
+            try:
+                return SO._compute_update_status()
+            except Exception as _tsh_e:
+                return {"raised": repr(_tsh_e)}
+
+        _tsh_st = _tsh_status()
+        _tsh_subjects = [c.split(" ", 1)[-1] for c in _tsh_st.get("changes") or []]
+        check("update status: a tag named origin/main does not stand in for the branch",
+              _tsh_pre and _tsh_st.get("update_available") is True
+              and _tsh_st.get("target_sha") == _tsh_c and _tsh_st.get("remote_version") == "1.2.0"
+              and _tsh_subjects == ["C main tip", "B on main"],
+              "fixture shadowed=%s; C=%s X=%s got %r" % (
+                  _tsh_pre, _tsh_c[:7], _tsh_x[:7],
+                  {k: _tsh_st.get(k) for k in ("update_available", "target_sha", "remote_version",
+                                               "changes", "raised", "message")}))
+        check("update status: ...its fetch moved the BRANCH, not a tag named main",
+              _tsh_git("-C", _tsh_so, "rev-parse", "refs/remotes/origin/main") == _tsh_c,
+              "refs/remotes/origin/main is %s, want C %s" % (
+                  _tsh_git("-C", _tsh_so, "rev-parse", "refs/remotes/origin/main"), _tsh_c))
+        check("update status: ...and its fetch brought no tag along, not even one on the tip it fetched",
+              not _tsh_has(_tsh_so, "refs/tags/late-on-main"), "late-on-main fetched")
+        # A tracked NON-default branch takes its own path through the same function: the tip,
+        # its VERSION and its changelog are all read off the ref.
+        _tsh_branch["v"] = "dev"
+        _tsh_sd = _tsh_status()
+        _tsh_dsubj = [c.split(" ", 1)[-1] for c in _tsh_sd.get("changes") or []]
+        check("update status: ...on a non-default branch too (tip, VERSION and changelog)",
+              _tsh_sd.get("target_sha") == _tsh_d2 and _tsh_sd.get("remote_version") == "2.0.2"
+              and _tsh_dsubj == ["D2 dev tip", "D1 on dev"],
+              "D2=%s X=%s got %r" % (_tsh_d2[:7], _tsh_x[:7], {k: _tsh_sd.get(k) for k in (
+                  "target_sha", "remote_version", "changes", "raised", "message")}))
+
+        # The branch switcher. `%(refname:short)` is the shortest UNAMBIGUOUS name, so with a tag
+        # `origin/main` present, main came back as `remotes/origin/main` and dropped off the list.
+        try:
+            _tsh_bl, _ = SO.list_panel_branches()
+        except Exception as _tsh_e:
+            _tsh_bl = ["raised " + repr(_tsh_e)]
+        check("branch list: main is listed although a tag named origin/main exists",
+              _tsh_shadowed(_tsh_so) and {"main", "dev", "feature/dev3"} <= set(_tsh_bl)
+              and "HEAD" not in _tsh_bl, repr(_tsh_bl))
+        check("branch list: ...and refreshing it fetched no tag, not even one on no branch",
+              not _tsh_has(_tsh_so, "refs/tags/late-off-branch")
+              and not _tsh_has(_tsh_so, "refs/tags/late-on-main"),
+              "late-off-branch=%s late-on-main=%s" % (
+                  _tsh_has(_tsh_so, "refs/tags/late-off-branch"),
+                  _tsh_has(_tsh_so, "refs/tags/late-on-main")))
+        _tsh_was_shallow = _tsh_git("-C", _tsh_shallow, "rev-parse", "--is-shallow-repository")
+        SO.PANEL_DIR = _tsh_shallow
+        SO._fetch_all_branches()
+        SO.PANEL_DIR = _tsh_so
+        check("branch list: ...nor did the FIRST refresh of a shallow clone (the --unshallow fetch)",
+              _tsh_was_shallow == "true"
+              and _tsh_git("-C", _tsh_shallow, "rev-parse", "--is-shallow-repository") == "false"
+              and not _tsh_has(_tsh_shallow, "refs/tags/late-off-branch")
+              and not _tsh_has(_tsh_shallow, "refs/tags/late-on-main"),
+              "was_shallow=%s late-off-branch=%s late-on-main=%s" % (
+                  _tsh_was_shallow, _tsh_has(_tsh_shallow, "refs/tags/late-off-branch"),
+                  _tsh_has(_tsh_shallow, "refs/tags/late-on-main")))
+
+        # Switching: the branch must exist by its EXACT name. ls-remote tail-matches its pattern,
+        # so `dev3` was "confirmed" by `feature/dev3` and the panel then tracked a branch that does
+        # not exist. `dev` (which exists — beside a TAG named dev) is the control.
+        _tsh_cfg, _tsh_launched = {}, []
+        _tsh_cfgmod.load_config = lambda: dict(_tsh_cfg)
+        _tsh_cfgmod.update_config = lambda fn: (fn(_tsh_cfg), dict(_tsh_cfg))[1]
+        SO._launch_installer = lambda target_ref="", branch="", started_msg=None: (
+            _tsh_launched.append(branch), (True, "started"))[1]
+        _tsh_no = SO.panel_switch_branch("dev3")
+        _tsh_yes = SO.panel_switch_branch("dev")
+        check("switch-branch: a branch is confirmed by its exact name, not one ending in it",
+              _tsh_no[0] is False and "doesn't exist" in _tsh_no[1]
+              and _tsh_yes[0] is True and _tsh_launched == ["dev"]
+              and _tsh_cfg.get("panel_branch") == "dev",
+              "dev3=%r dev=%r launched=%r cfg=%r" % (_tsh_no, _tsh_yes, _tsh_launched, _tsh_cfg))
+
+        # A single-branch clone of main tracking ANOTHER branch: a fetch that named only a source
+        # never created refs/remotes/origin/dev, and the card called that "up to date".
+        _tsh_sbp = os.path.join(_tsh_sb, "panel-single")
+        _tsh_git("clone", "-q", "--single-branch", "--branch", "main", "file://" + _tsh_up,
+                 _tsh_sbp)
+        _tsh_pre = not _tsh_has(_tsh_sbp, "refs/remotes/origin/dev")
+        SO.PANEL_DIR, _tsh_branch["v"] = _tsh_sbp, "dev"
+        _tsh_ss = _tsh_status()
+        check("update status: a single-branch clone tracking another branch sees that branch's tip",
+              _tsh_pre and _tsh_ss.get("update_available") is True
+              and _tsh_ss.get("target_sha") == _tsh_d2,
+              "no tracking ref before=%s; D2=%s got %r" % (_tsh_pre, _tsh_d2[:7], {
+                  k: _tsh_ss.get(k) for k in ("update_available", "target_sha", "fetched",
+                                              "message", "raised")}))
+        # ...and a remote-tracking ref that is MISSING is neither "up to date" nor answered by a
+        # tag named refs/remotes/origin/main, which is where git's lookup goes without it. The
+        # fetch is made a no-op so nothing re-creates the ref.
+        _tsh_nr = _tsh_clone("panel-noref")
+        _tsh_git("-C", _tsh_nr, "update-ref", "-d", "refs/remotes/origin/main")
+        _tsh_git("-C", _tsh_nr, "update-ref", "refs/tags/refs/remotes/origin/main", _tsh_x)
+        _tsh_pre = _tsh_git("-C", _tsh_nr, "rev-parse", "refs/remotes/origin/main") == _tsh_x
+        _tsh_real_git = SO._git
+        SO._git = lambda args, timeout=45: (
+            ("", "", 0) if args[:1] == ["fetch"] else _tsh_real_git(args, timeout=timeout))
+        SO.PANEL_DIR, _tsh_branch["v"] = _tsh_nr, "main"
+        try:
+            _tsh_ns = _tsh_status()
+        finally:
+            SO._git = _tsh_real_git
+        check("update status: with no refs/remotes/origin/main it says so, and a tag of that name "
+              "does not stand in for it",
+              _tsh_pre and _tsh_ns.get("fetched") is False and _tsh_ns.get("update_available") is False
+              and "no branch 'main'" in (_tsh_ns.get("message") or "")
+              and _tsh_ns.get("target_sha") != _tsh_x,
+              "fixture fell through to the tag=%s; X=%s got %r" % (_tsh_pre, _tsh_x[:7], {
+                  k: _tsh_ns.get(k) for k in ("fetched", "update_available", "target_sha",
+                                              "message", "raised")}))
+    finally:
+        (SO.PANEL_DIR, SO._tracked_branch, SO._remote_ci_state, SO._launch_installer,
+         _tsh_cfgmod.load_config, _tsh_cfgmod.update_config) = _tsh_saved
+        for _k, _v in _tsh_env_saved.items():
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
+finally:
+    _shutil.rmtree(_tsh_sb, ignore_errors=True)
+
+# ── FIRST-PARENT: a commit the branch reaches only through a merge was never the branch ────────
+# "An ancestor of main" admits more than main ever was. A pull request merged with a merge commit
+# (--no-ff) brings every one of its commits into main's ancestry, including an intermediate one
+# whose change was reverted before the merge: never main's tip, never what main's CI ran. The
+# update check's walk offered such a commit as the verified target while the merge was still being
+# checked (its CI state is its pull-request run's, or none — and "unknown" is accepted), and
+# install.sh's pin checks accepted it. Main's own line is its FIRST-PARENT history.
+#
+# The fixture: main is A, then M (a --no-ff merge of a pull request E-F-G, where F reverts E), then
+# T. Main's first-parent line is T, M, A; E, F and G are ancestors of M through its second parent
+# only. Each clone is checked out at A unless the case says otherwise.
+_fp_sb = _tempfile.mkdtemp(prefix="firstparent-")
+try:
+    _fp_up = os.path.join(_fp_sb, "up")
+
+    def _fp_git(*a):
+        return _sh_sub.run(["git", *a], capture_output=True, text=True, env=_tsh_env).stdout.strip()
+
+    def _fp_commit(files, msg):
+        for _fp_p, _fp_body in files.items():
+            with open(os.path.join(_fp_up, _fp_p), "w") as _fp_fh:
+                _fp_fh.write(_fp_body)
+            _fp_git("-C", _fp_up, "add", _fp_p)
+        _fp_git("-C", _fp_up, "commit", "-q", "-m", msg)
+        return _fp_git("-C", _fp_up, "rev-parse", "HEAD")
+
+    _fp_git("init", "-q", "-b", "main", _fp_up)
+    _pad_history(_fp_up, _tsh_env)
+    _fp_a = _fp_commit({"VERSION": "1.0.0\n", "app.py": "a = 1\n"}, "A base")
+    _fp_git("-C", _fp_up, "checkout", "-q", "-b", "pr")
+    _fp_side = (_fp_commit({"VERSION": "6.6.6\n", "app.py": "intermediate = 1\n"}, "E intermediate"),
+                _fp_commit({"VERSION": "1.0.0\n", "app.py": "a = 1\n"}, "F revert E"),
+                _fp_commit({"app.py": "a = 2\n"}, "G the PR's final state"))
+    _fp_e = _fp_side[0]
+    _fp_git("-C", _fp_up, "checkout", "-q", "main")
+    _fp_git("-C", _fp_up, "merge", "-q", "--no-ff", "-m", "M merge the pull request", "pr")
+    _fp_m = _fp_git("-C", _fp_up, "rev-parse", "HEAD")
+    _fp_git("-C", _fp_up, "branch", "-q", "-D", "pr")
+    _fp_t = _fp_commit({"VERSION": "1.2.0\n", "app.py": "a = 3\n"}, "T main tip")
+    # The premise: E IS an ancestor of main (so an ancestry check would take it), and is NOT on
+    # main's first-parent line.
+    _fp_premise = (_sh_sub.run(["git", "-C", _fp_up, "merge-base", "--is-ancestor", _fp_e, "main"],
+                               capture_output=True, env=_tsh_env).returncode == 0
+                   and _fp_e not in _fp_git("-C", _fp_up, "rev-list", "--first-parent", "main"))
+
+    def _fp_clone(name, head):
+        co = os.path.join(_fp_sb, name)
+        _fp_git("clone", "-q", "file://" + _fp_up, co)
+        _fp_git("-C", co, "reset", "-q", "--hard", head)
+        return co
+
+    # Everything below runs install.sh's functions over main's 4,000-commit line with a TMPDIR bash
+    # cannot write (see _pad_history), so each positive control also shows the line is STREAMED.
+    _fp_tmp_ok, _fp_tmp_why = _needs_tmpfile(_fp_up, "main", _tsh_env)
+    check("install.sh: (premise) the update checks run over a line a here-string cannot hold under "
+          "the harness's TMPDIR", _fp_tmp_ok, _fp_tmp_why)
+    _fp_env = dict(_tsh_env, TMPDIR=_NOWRITE_TMP)
+
+    def _fp_resolve_run(co, pin):
+        return _sh_sub.run(["bash", "-c", "set -euo pipefail\nSRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n"
+                            "%sif resolve_update_target; then echo \"TARGET=${TARGET_SHA}\"; "
+                            "else echo \"REFUSED ${RESOLVE_ERR}\"; fi\n" % (_shlex_q(co), _ru_fn)],
+                           capture_output=True, text=True, env=dict(_fp_env, PANEL_UPDATE_REF=pin))
+
+    def _fp_resolve(co, pin):
+        r = _fp_resolve_run(co, pin)
+        return (r.stdout.strip().rpartition("TARGET=")[2]
+                or "rc=%s %s %s" % (r.returncode, r.stdout[-200:], r.stderr[-200:]))
+
+    def _fp_fetch_code(co, pin):
+        r = _sh_sub.run(["bash", "-c", "set -euo pipefail\ndie() { echo \"DIE $*\" >&2; exit 1; }\n"
+                         "SRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n%s%sfetch_code\n"
+                         % (_shlex_q(co), _ru_fn, _tsh_fc)],
+                        capture_output=True, text=True, env=dict(_fp_env, PANEL_UPDATE_REF=pin))
+        return (_fp_git("-C", co, "rev-parse", "HEAD"),
+                "rc=%s out=%r err=%r" % (r.returncode, r.stdout[-600:], r.stderr[-800:]))
+
+    # The function itself, under install.sh's own shell options: the TIP is the first line out,
+    # where a `grep -q` pipe loses rev-list to SIGPIPE, and the whole line is where a here-string
+    # needs its temp file. Absent ids, an empty one and a ref that does not exist are not on it.
+    _fp_fpl_co = _fp_clone("fpl", _fp_t)
+    _fp_fpl_oldest = _fp_git("-C", _fp_fpl_co, "rev-list", "--max-parents=0", "main")
+
+    def _fp_fpl(sha, ref="refs/remotes/origin/main"):
+        return _sh_sub.run(["bash", "-c", "set -euo pipefail\nPANEL_DIR=%s\n%s"
+                            "_on_first_parent_line _gitc %s %s\n"
+                            % (_shlex_q(_fp_fpl_co), _ru_fn, _shlex_q(sha), _shlex_q(ref))],
+                           capture_output=True, text=True, env=_fp_env).returncode
+
+    _fp_fpl_got = {"tip": _fp_fpl(_fp_t), "merge": _fp_fpl(_fp_m), "oldest": _fp_fpl(_fp_fpl_oldest),
+                   "E": _fp_fpl(_fp_e), "absent": _fp_fpl("0123456789abcdef" * 2 + "01234567"),
+                   "empty": _fp_fpl(""), "no-ref": _fp_fpl(_fp_t, "refs/remotes/origin/nope")}
+    check("install.sh: _on_first_parent_line finds the tip, the merge and the oldest commit of a "
+          "4,000-commit line with no writable TMPDIR, and nothing off it",
+          _fp_fpl_got == {"tip": 0, "merge": 0, "oldest": 0, "E": 1, "absent": 1, "empty": 1,
+                          "no-ref": 1}, repr(_fp_fpl_got))
+
+    # awk compares two values that both LOOK numeric AS NUMBERS, in mawk (Ubuntu's awk) and gawk
+    # alike: a commit id of digits and one 'e' is a number to it, and every "0e<digits>" is 0. So
+    # `$0 == want` called two different ids equal. The line comes from a stub git here, since no
+    # real commit id of that shape is at hand; the comparison is the whole question.
+    _fp_num_on, _fp_num_off = "0e" + "1" * 38, "0e" + "2" * 38
+
+    def _fp_fpl_num(sha):
+        return _sh_sub.run(["bash", "-c", "set -euo pipefail\n%s"
+                            "_stubgit() { printf '%%s\\n' %s %s %s; }\n"
+                            "_on_first_parent_line _stubgit %s refs/remotes/origin/main\n"
+                            % (_inst_shfn("_on_first_parent_line"), "a" * 40, _fp_num_on, "b" * 40,
+                               _shlex_q(sha))],
+                           capture_output=True, text=True).returncode
+
+    _fp_num_got = {"same": _fp_fpl_num(_fp_num_on), "numerically-equal": _fp_fpl_num(_fp_num_off)}
+    check("install.sh: _on_first_parent_line compares ids as STRINGS: an id awk reads as the same "
+          "number as one on the line (0e1... vs 0e2...) is not on it",
+          _fp_num_got == {"same": 0, "numerically-equal": 1}, repr(_fp_num_got))
+    _fp_awk_re = _re.compile(r"""awk -v want="[^"]*" '([^']*)'""")
+    _fp_awk_inst = _fp_awk_re.findall(_inst_shfn("_on_first_parent_line"))
+    _fp_awk_dep = _fp_awk_re.findall(_deploy_raw)
+    check("deploy: the verify step's first-parent test is install.sh's awk program, byte for byte "
+          "(string comparison included)",
+          len(_fp_awk_inst) == 1 and _fp_awk_dep == _fp_awk_inst,
+          "install.sh %r, deploy.yml %r" % (_fp_awk_inst, _fp_awk_dep))
+
+    # A pin on E is not verified — and not replaced by main's TIP either, which nothing verified (T's
+    # CI is still running): the checkout, at A on main, stays where it is.
+    _fp_got = _fp_resolve(_fp_clone("ru-e", _fp_a), _fp_e)
+    check("install.sh: a pin main reaches only through a merge (a PR's intermediate commit) is not "
+          "the target, and neither is the tip",
+          _fp_premise and _fp_got == _fp_a, "premise=%s; target %s, want HEAD A %s (E %s, tip T %s)"
+          % (_fp_premise, _fp_got, _fp_a, _fp_e, _fp_t))
+    _fp_got = _fp_resolve(_fp_clone("ru-m", _fp_a), _fp_m)
+    check("install.sh: ...while a pin on the merge commit is (positive control)",
+          _fp_got == _fp_m, "target %s, want M %s" % (_fp_got, _fp_m))
+    _fp_got = _fp_resolve(_fp_clone("ru-m-abbrev", _fp_a), _fp_m[:12])
+    check("install.sh: ...and so is an ABBREVIATED pin of it, resolved to the full id first",
+          _fp_got == _fp_m, "target %s, want M %s (pin %s)" % (_fp_got, _fp_m, _fp_m[:12]))
+    _fp_head, _fp_why = _fp_fetch_code(_fp_clone("fc-e", _fp_a), _fp_e)
+    check("install.sh: fetch_code never resets to that intermediate commit either, nor to the tip",
+          _fp_premise and _fp_head == _fp_a and "Keeping %s" % _fp_a in _fp_why,
+          "HEAD %s, want A %s (E %s, tip T %s) %s" % (_fp_head, _fp_a, _fp_e, _fp_t, _fp_why))
+    _fp_head, _fp_why = _fp_fetch_code(_fp_clone("fc-m", _fp_a), _fp_m)
+    check("install.sh: ...and resets to the merge commit when that is the pin (positive control)",
+          _fp_head == _fp_m, "HEAD %s, want M %s %s" % (_fp_head, _fp_m, _fp_why))
+    # "Never backwards" asks whether HEAD is an ANCESTOR of main, where the pin needs the
+    # first-parent line: HEAD is what the host already runs, not something being verified. A HEAD
+    # on E (put there by hand, or by an older installer) contains the pin A and is an ancestor of
+    # main, so it stays rather than be reset backwards to A...
+    _fp_got = _fp_resolve(_fp_clone("ru-stay-e", _fp_e), _fp_a)
+    check("install.sh: 'never backwards' keeps a HEAD that contains the pin and is main's ancestor, "
+          "even one main reaches only through a merge",
+          _fp_premise and _fp_got == _fp_e, "target %s, want HEAD E %s (pin A %s)" % (
+              _fp_got, _fp_e, _fp_a))
+    # ...and does not keep it there for good: a pin NEWER than that HEAD is not its ancestor, so
+    # the update moves it forward.
+    _fp_got = _fp_resolve(_fp_clone("ru-fwd-e", _fp_e), _fp_m)
+    check("install.sh: ...while a newer verified pin still moves that HEAD forward",
+          _fp_got == _fp_m, "target %s, want the pin M %s (HEAD E %s)" % (_fp_got, _fp_m, _fp_e))
+    _fp_got = _fp_resolve(_fp_clone("ru-stay-m", _fp_m), _fp_a)
+    check("install.sh: ...while a HEAD on the merge commit stays where it is (positive control)",
+          _fp_got == _fp_m, "target %s, want HEAD M %s (pin A %s)" % (_fp_got, _fp_m, _fp_a))
+
+    # A pin that was GIVEN and cannot be verified is not "no pin". It used to fall back to the
+    # branch's tip — T here, which nothing verified — so the deploy of a commit that passed CI, or
+    # the panel's update to one, installed whatever the tip was by then. Now the update does not
+    # move. A checkout on main (A) stays where it is, and says why: that warning is what the
+    # deploy's log and the panel's update log show above "Already up to date".
+    _fp_absent = "0123456789abcdef" * 2 + "01234567"
+    _fp_hold = {}
+    for _fp_what, _fp_pin in (("side of a merge", _fp_e), ("not in this clone", _fp_absent),
+                              ("read as an option", "--all")):
+        _fp_r = _fp_resolve_run(_fp_clone("ru-hold-%d" % len(_fp_hold), _fp_a), _fp_pin)
+        _fp_hold[_fp_what] = (
+            "TARGET=%s" % _fp_a in _fp_r.stdout
+            and "WARN The commit this update is pinned to, %s, is not on main's first-parent line"
+            % _fp_pin in _fp_r.stderr
+            and "does not fall back to main's tip" in _fp_r.stderr,
+            "rc=%s out=%r err=%r" % (_fp_r.returncode, _fp_r.stdout[-200:], _fp_r.stderr[-300:]))
+    check("install.sh: an update pinned to a commit it cannot verify keeps a checkout on main where "
+          "it is, and says why — it does not take the unverified tip",
+          all(_v[0] for _v in _fp_hold.values()), repr(_fp_hold))
+    # ...and a checkout NOT on main (a local commit) has nothing safe to stay at: the update stops,
+    # naming the pin, and changes nothing — resolve_update_target refuses, fetch_code resets nothing.
+    def _fp_local(name):
+        co = _fp_clone(name, _fp_a)
+        _fp_git("-C", co, "commit", "-q", "--allow-empty", "-m", "a local commit")
+        return co, _fp_git("-C", co, "rev-parse", "HEAD")
+
+    _fp_lco, _fp_lsha = _fp_local("ru-stop")
+    _fp_r = _fp_resolve_run(_fp_lco, _fp_e)
+    check("install.sh: ...while a checkout off main stops the update, naming the pin, instead of "
+          "taking the tip",
+          "REFUSED The commit this update is pinned to, %s," % _fp_e in _fp_r.stdout
+          and "checkout (%s) is not on main to stay at" % _fp_lsha in _fp_r.stdout
+          and "does not\n     fall back to main's tip" in _fp_r.stdout and "TARGET=" not in _fp_r.stdout,
+          "rc=%s out=%r err=%r" % (_fp_r.returncode, _fp_r.stdout[-300:], _fp_r.stderr[-200:]))
+    _fp_lco, _fp_lsha = _fp_local("fc-stop")
+    _fp_head, _fp_why = _fp_fetch_code(_fp_lco, _fp_e)
+    check("install.sh: ...and fetch_code dies with that reason, the checkout untouched",
+          _fp_head == _fp_lsha and "DIE The commit this update is pinned to, %s," % _fp_e in _fp_why
+          and "Nothing was reset." in _fp_why, "HEAD %s, want %s; %s" % (_fp_head, _fp_lsha, _fp_why))
+    # ...and the update's own caller turns it into the error the operator reads, having changed
+    # nothing: the real resolve_update_target, through the block that calls it.
+    _fp_ci_i = _inst.index('    CURRENT_SHA=""; TARGET_SHA=""; RESOLVE_ERR=""\n    if ! resolve_update_target; then\n')
+    _fp_ci_blk = _inst[_fp_ci_i:_inst.index("\n    fi\n", _fp_ci_i) + len("\n    fi\n")]
+    _fp_lco, _fp_lsha = _fp_local("caller-stop")
+    _fp_r = _sh_sub.run(["bash", "-c", "set -euo pipefail\ndie() { echo \"DIE $*\"; exit 1; }\n"
+                         "SRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n%s%secho CONTINUED\n"
+                         % (_shlex_q(_fp_lco), _ru_fn, _fp_ci_blk)],
+                        capture_output=True, text=True, env=dict(_fp_env, PANEL_UPDATE_REF=_fp_e))
+    check("install.sh: ...and the update stops with that error, not 'couldn't reach the source'",
+          "DIE The commit this update is pinned to, %s," % _fp_e in _fp_r.stdout
+          and "Nothing was changed." in _fp_r.stdout and "Couldn't reach" not in _fp_r.stdout
+          and "CONTINUED" not in _fp_r.stdout
+          and _fp_git("-C", _fp_lco, "rev-parse", "HEAD") == _fp_lsha,
+          "rc=%s out=%r" % (_fp_r.returncode, _fp_r.stdout[-400:]))
+    # ...and a fetch that FAILS stops it, in the real resolve_update_target through the same caller:
+    # an origin that is gone. Carrying on would take the last-fetched (stale) tracking ref for the
+    # branch. (The check below this block stubs resolve_update_target, so it cannot see this.)
+    _fp_off = _fp_clone("caller-offline", _fp_a)
+    _fp_git("-C", _fp_off, "remote", "set-url", "origin", "file://" + os.path.join(_fp_sb, "gone"))
+    _fp_r = _sh_sub.run(["bash", "-c", "set -euo pipefail\ndie() { echo \"DIE $*\"; exit 1; }\n"
+                         "SRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n%s%secho CONTINUED\n"
+                         % (_shlex_q(_fp_off), _ru_fn, _fp_ci_blk)],
+                        capture_output=True, text=True, env=dict(_fp_env, PANEL_UPDATE_REF=""))
+    check("install.sh: ...and an update whose fetch FAILS stops, saying it couldn't reach the source",
+          "DIE Couldn't reach the update source" in _fp_r.stdout and "CONTINUED" not in _fp_r.stdout,
+          "rc=%s out=%r" % (_fp_r.returncode, _fp_r.stdout[-400:]))
+
+    # A FOXTROT push. The host was deployed to S1, main's tip at the time. Then main was merged into
+    # another branch (X, whose FIRST parent is that branch's O1) and main fast-forwarded to X: S1 is
+    # now reachable from main only through X's second parent, off main's first-parent line. A late
+    # deploy of B2 — older, and still on the line — arrives. S1 contains B2 and is main's ancestor:
+    # the host stays at S1. The first-parent rule for HEAD reset it BACKWARDS to B2.
+    _fx_up = os.path.join(_fp_sb, "fox-up")
+    _fp_git("init", "-q", "-b", "main", _fx_up)
+    _pad_history(_fx_up, _tsh_env)
+
+    def _fx_commit(msg):
+        _fp_git("-C", _fx_up, "commit", "-q", "--allow-empty", "-m", msg)
+        return _fp_git("-C", _fx_up, "rev-parse", "HEAD")
+
+    _fx_b1, _fx_b2 = _fx_commit("B1"), _fx_commit("B2")
+    _fx_s1 = _fx_commit("S1: main's tip when the host was deployed")
+    _fp_git("-C", _fx_up, "checkout", "-q", "-b", "other", _fx_b2)
+    _fx_o1 = _fx_commit("O1 on another branch")
+    _fp_git("-C", _fx_up, "merge", "-q", "--no-ff", "-m", "X: merge main into other", "main")
+    _fx_x = _fp_git("-C", _fx_up, "rev-parse", "HEAD")
+    _fp_git("-C", _fx_up, "checkout", "-q", "main")
+    _fp_git("-C", _fx_up, "merge", "-q", "--ff-only", "other")
+    _fx_line = _fp_git("-C", _fx_up, "rev-list", "--first-parent", "main").split()
+    _fx_premise = (_fp_git("-C", _fx_up, "rev-parse", "main") == _fx_x
+                   and _fx_s1 not in _fx_line and _fx_b2 in _fx_line and _fx_o1 in _fx_line
+                   and _sh_sub.run(["git", "-C", _fx_up, "merge-base", "--is-ancestor", _fx_s1, "main"],
+                                   env=_tsh_env).returncode == 0)
+
+    def _fx_clone(name, head):
+        co = os.path.join(_fp_sb, name)
+        _fp_git("clone", "-q", "file://" + _fx_up, co)
+        _fp_git("-C", co, "reset", "-q", "--hard", head)
+        return co
+
+    _fp_got = _fp_resolve(_fx_clone("fx-ru", _fx_s1), _fx_b2)
+    check("install.sh: after a foxtrot push, a host on main's old tip is not moved back to an older "
+          "pin",
+          _fx_premise and _fp_got == _fx_s1,
+          "premise=%s; target %s, want HEAD S1 %s (pin B2 %s, X %s)" % (
+              _fx_premise, _fp_got, _fx_s1, _fx_b2, _fx_x))
+    _fp_head, _fp_why = _fp_fetch_code(_fx_clone("fx-fc", _fx_s1), _fx_b2)
+    check("install.sh: ...nor by fetch_code",
+          _fx_premise and _fp_head == _fx_s1, "HEAD %s, want S1 %s (pin B2 %s) %s" % (
+              _fp_head, _fx_s1, _fx_b2, _fp_why))
+    _fp_got = _fp_resolve(_fx_clone("fx-fwd", _fx_s1), _fx_x)
+    check("install.sh: ...while a pin on the new tip moves it forward (positive control)",
+          _fp_got == _fx_x, "target %s, want X %s (HEAD S1 %s)" % (_fp_got, _fx_x, _fx_s1))
+    # ...and a pin it cannot verify HOLDS that host rather than stopping the update: in the hold
+    # rule, as in the stay rule, HEAD is "on the branch" by ANCESTRY. The case it exists for: a
+    # re-run deploy of S1 itself, once the foxtrot has taken S1 off the line.
+    _fp_r = _fp_resolve_run(_fx_clone("fx-hold", _fx_s1), _fx_s1)
+    check("install.sh: ...and a pin the foxtrot took off the line holds that host where it is, "
+          "rather than stopping the update",
+          _fx_premise and "TARGET=%s" % _fx_s1 in _fp_r.stdout
+          and "does not fall back to main's tip" in _fp_r.stderr,
+          "rc=%s out=%r err=%r" % (_fp_r.returncode, _fp_r.stdout[-200:], _fp_r.stderr[-300:]))
+
+    # The panel's update check, for real against a clone at A. The tip and the merge are still being
+    # verified; the pull request's commits carry their PR runs' state, or none ("unknown", which the
+    # walk accepts so an API outage cannot hide an update).
+    _fp_so = _fp_clone("panel", _fp_a)
+    _fp_saved = (SO.PANEL_DIR, SO._tracked_branch, SO._remote_ci_state)
+    _fp_env_saved = {_k: os.environ.get(_k) for _k in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM")}
+    try:
+        os.environ["GIT_CONFIG_GLOBAL"], os.environ["GIT_CONFIG_NOSYSTEM"] = os.devnull, "1"
+        SO.PANEL_DIR = _fp_so
+        SO._tracked_branch = lambda: "main"
+        _fp_ci = {_fp_t: "pending", _fp_m: "pending", _fp_side[1]: "pending", _fp_side[2]: "pending"}
+        SO._remote_ci_state = lambda sha: _fp_ci.get(sha, "unknown")
+
+        def _fp_status():
+            try:
+                _st = SO._compute_update_status()
+            except Exception as _fp_ex:
+                _st = {"raised": repr(_fp_ex)}
+            return _st, {k: _st.get(k) for k in ("update_available", "target_sha", "behind_tip",
+                                                 "newer_unverified", "fetched", "raised")}
+
+        _fp_st, _fp_show = _fp_status()
+        check("update status: a commit main reaches only through a merge is never offered, and "
+              "main's own line is what is counted",
+              _fp_premise and _fp_st.get("update_available") is False
+              and _fp_st.get("target_sha") not in _fp_side and _fp_st.get("behind_tip") == 2,
+              "premise=%s; E=%s T=%s M=%s got %r" % (_fp_premise, _fp_e[:7], _fp_t[:7], _fp_m[:7],
+                                                     _fp_show))
+        _fp_ci[_fp_m] = "passing"
+        _fp_st, _fp_show = _fp_status()
+        check("update status: ...while the merge commit, once verified, is (positive control)",
+              _fp_st.get("update_available") is True and _fp_st.get("target_sha") == _fp_m
+              and _fp_st.get("behind_tip") == 2 and _fp_st.get("newer_unverified") == 1,
+              "M=%s got %r" % (_fp_m[:7], _fp_show))
+    finally:
+        (SO.PANEL_DIR, SO._tracked_branch, SO._remote_ci_state) = _fp_saved
+        for _k, _v in _fp_env_saved.items():
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
+finally:
+    _shutil.rmtree(_fp_sb, ignore_errors=True)
+
+# ── a tracked branch that was FORCE-pushed upstream still updates ─────────────────────────────
+# Both fetches name their destination, so the '+' is what lets a rebased branch move its
+# remote-tracking ref: without it git refuses the non-fast-forward, the fetch fails, and the
+# update stops on "Couldn't reach the update source" while the card says the same. (The old
+# destination-less fetch rode the clone's configured `+refs/heads/*` refspec.)
+_fo_sb = _tempfile.mkdtemp(prefix="forcepush-")
+try:
+    _fo_up = os.path.join(_fo_sb, "up")
+
+    def _fo_git(*a):
+        return _sh_sub.run(["git", *a], capture_output=True, text=True, env=_tsh_env).stdout.strip()
+
+    _fo_git("init", "-q", "-b", "main", _fo_up)
+    with open(os.path.join(_fo_up, "f"), "w") as _fo_f:
+        _fo_f.write("a\n")
+    _fo_git("-C", _fo_up, "add", "f")
+    _fo_git("-C", _fo_up, "commit", "-q", "-m", "A")
+    _fo_git("-C", _fo_up, "checkout", "-q", "-b", "dev")
+    _fo_git("-C", _fo_up, "commit", "-q", "--allow-empty", "-m", "D1")
+    _fo_d1 = _fo_git("-C", _fo_up, "rev-parse", "HEAD")
+    _fo_git("-C", _fo_up, "checkout", "-q", "main")
+    _fo_co, _fo_so = os.path.join(_fo_sb, "co"), os.path.join(_fo_sb, "so")
+    _fo_git("clone", "-q", "file://" + _fo_up, _fo_co)
+    _fo_git("clone", "-q", "file://" + _fo_up, _fo_so)
+    _fo_git("-C", _fo_up, "branch", "-q", "-f", "dev", "main")
+    _fo_git("-C", _fo_up, "checkout", "-q", "dev")
+    _fo_git("-C", _fo_up, "commit", "-q", "--allow-empty", "-m", "D1' (dev rebased)")
+    _fo_new = _fo_git("-C", _fo_up, "rev-parse", "HEAD")
+    _fo_git("-C", _fo_up, "checkout", "-q", "main")
+    # The premise: both clones hold dev at D1, and the new tip does not descend from it.
+    _fo_nonff = (_sh_sub.run(["git", "-C", _fo_up, "merge-base", "--is-ancestor", _fo_d1, _fo_new],
+                             env=_tsh_env).returncode == 1
+                 and _fo_git("-C", _fo_co, "rev-parse", "refs/remotes/origin/dev") == _fo_d1
+                 and _fo_git("-C", _fo_so, "rev-parse", "refs/remotes/origin/dev") == _fo_d1)
+    _fo_r = _sh_sub.run(["bash", "-c", "set -euo pipefail\nSRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=dev\n%s"
+                         "resolve_update_target\necho \"TARGET=${TARGET_SHA}\"\n"
+                         % (_shlex_q(_fo_co), _ru_fn)],
+                        capture_output=True, text=True, env=dict(_tsh_env, PANEL_UPDATE_REF=""))
+    check("install.sh: a tracked branch that was force-pushed updates to its new tip",
+          _fo_nonff and _fo_r.stdout.strip().rpartition("TARGET=")[2] == _fo_new,
+          "non-ff=%s rc=%s out=%r err=%r" % (_fo_nonff, _fo_r.returncode, _fo_r.stdout[-120:],
+                                             _fo_r.stderr[-200:]))
+    _fo_saved = (SO.PANEL_DIR, SO._tracked_branch, SO._remote_ci_state)
+    _fo_env_saved = {_k: os.environ.get(_k) for _k in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM")}
+    try:
+        os.environ["GIT_CONFIG_GLOBAL"], os.environ["GIT_CONFIG_NOSYSTEM"] = os.devnull, "1"
+        SO.PANEL_DIR, SO._tracked_branch = _fo_so, (lambda: "dev")
+        SO._remote_ci_state = lambda sha: "passing"
+        try:
+            _fo_st = SO._compute_update_status()
+        except Exception as _fo_e:
+            _fo_st = {"raised": repr(_fo_e)}
+        check("update status: ...and the card sees that new tip, not 'couldn't reach the source'",
+              _fo_nonff and _fo_st.get("fetched") is not False and _fo_st.get("target_sha") == _fo_new,
+              repr({k: _fo_st.get(k) for k in ("fetched", "target_sha", "message", "raised")}))
+    finally:
+        (SO.PANEL_DIR, SO._tracked_branch, SO._remote_ci_state) = _fo_saved
+        for _k, _v in _fo_env_saved.items():
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
+finally:
+    _shutil.rmtree(_fo_sb, ignore_errors=True)
+
+# ── ...and the update's CALLER prints the reason resolve_update_target gives ─────────────────────
+_rc_i = _inst.index('    CURRENT_SHA=""; TARGET_SHA=""; RESOLVE_ERR=""\n    if ! resolve_update_target; then\n')
+_rc_blk = _inst[_rc_i:_inst.index("\n    fi\n", _rc_i) + len("\n    fi\n")]
+
+
+def _rc_run(err):
+    return _sh_sub.run(["bash", "-c", "set -euo pipefail\ndie() { echo \"DIE $*\"; exit 1; }\n"
+                        "resolve_update_target() { RESOLVE_ERR=%s; return 1; }\n%secho CONTINUED\n"
+                        % (_shlex_q(err), _rc_blk)], capture_output=True, text=True).stdout
+
+
+_rc_a = _rc_run("The fetch left no refs/remotes/origin/main to compare this checkout against.")
+_rc_b = _rc_run("")
+check("install.sh: an update with no remote-tracking ref stops with THAT reason, not 'couldn't reach'",
+      "DIE The fetch left no refs/remotes/origin/main" in _rc_a and "Couldn't reach" not in _rc_a
+      and "CONTINUED" not in _rc_a, _rc_a[-300:])
+check("install.sh: ...while a fetch that failed still says it couldn't reach the source",
+      "DIE Couldn't reach the update source" in _rc_b and "CONTINUED" not in _rc_b, _rc_b[-300:])
 
 # ── the admin's 2FA reset must be VISIBLE, not just present ──────────────────────────────────
 # The switch lives in the Edit User modal and used to sit in a `display:none` block that JS
@@ -7581,3 +8928,32 @@ check("update card: the count and the changelog are built from the same list",
       "behind counts %r while changes lists %r — whichever is filtered differently is the one the "
       "operator cannot reconcile"
       % (_uc_behind7 and _uc_behind7.group(1), _uc_changes7 and _uc_changes7.group(1)))
+
+# ── a HOLD does not report "Already up to date" ─────────────────────────────────────────────────
+# When the pinned commit cannot be verified, install.sh keeps the checkout where it is (a hold) and
+# takes the no-op branch. That branch ended "Already up to date", exit 0 — so a deploy log or the
+# panel's update log read as a successful update to a commit that was never installed. The block
+# is run as written in install.sh, both ways.
+import subprocess as _hold_sub                                                    # noqa: E402
+_hold_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+# Anchored on the comment above the block, so a mutation of the condition itself fails the checks
+# below instead of crashing the suite before they run.
+_hold_i = _hold_src.find('        # A hold is NOT "up to date"')
+_hold_j = _hold_src.find("\n        fi\n", _hold_i) if _hold_i >= 0 else -1
+_hold_block = _hold_src[_hold_i:_hold_j + len("\n        fi\n")] if _hold_j >= 0 else "false\n"
+
+
+def _hold_run(why):
+    _prog = ('warn() { echo "WARN $*"; }; ok() { echo "OK $*"; }\n'
+             'UPD_WHY=%s; TARGET_SHA=0123456789abcdef0123456789abcdef01234567\n'
+             'PANEL_UPDATE_REF=feedfacefeedfacefeedfacefeedfacefeedface; DEFAULT_BRANCH=main\n'
+             'FROM_VER=1.2.3\n' % why) + _hold_block
+    return _hold_sub.run(["bash", "-c", _prog], capture_output=True, text=True).stdout
+
+
+_hold_out, _hold_pin = _hold_run("hold"), _hold_run("pin")
+check("install.sh: a hold ends with 'Not updated' naming the pin, never 'Already up to date'",
+      _hold_out.startswith("WARN Not updated: held at 0123456789")
+      and "feedfacefeedface" in _hold_out and "Already up to date" not in _hold_out, _hold_out)
+check("install.sh: ...while a checkout that really is current still says 'Already up to date'",
+      _hold_pin.startswith("OK Already up to date (version 1.2.3)"), _hold_pin)

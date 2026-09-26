@@ -81,8 +81,9 @@ Converted so far: **`ufw`, `fail2ban-client`, `systemctl`, `apt`/`dpkg`, the log
 Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban activity report, the
 detached OS update, Tailscale's join, the panel's own restore/self-update, the VPS hardening
 steps, running a LinuxGSM action as the game user, enrolling a game account in the group the
-grant names, installing a game's dependencies, reading the pending-restart flags and freeing
-Steam's per-account crash-dump slots** — 101 verbs. (`tests/unit_test.py` asserts
+grant names, installing a game's dependencies, reading the pending-restart flags, freeing
+Steam's per-account crash-dump slots and configuring NodeSource's repository on a remote with its
+signing key pinned** — 102 verbs. (`tests/unit_test.py` asserts
 this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
@@ -98,9 +99,9 @@ of going unnoticed. Current state:
 
 | route | sites remaining |
 |---|---|
-| `run_command(..., sudo=True)` | 3 |
+| `run_command(..., sudo=True)` | 2 |
 | `_sudo_sh(...)` | **0 — the route is gone** |
-| **root total** | **3** (from 131) |
+| **root total** | **2** (from 131) |
 
 `_sudo_sh()` built `sudo bash -c '<pipeline>'` itself and passed `sudo=False`, which is why a
 search for `sudo=True` never saw it and why its 18 call sites went uncounted for half this work.
@@ -185,15 +186,14 @@ sequence of verbs now — `dpkg-add-arch`, `apt-add-repo` (universe **and** mult
 `apt-update`, `steamcmd-install`, then `apt-install-minimal` in chunks with a per-package retry —
 and it reports the batch's real result, which the caller now surfaces.
 
-**Two of the three `sudo=True` sites that remain cannot be narrowed by a verb at all** — they are the
-downloaded-script installers named below. The other two were described here as the LinuxGSM
-discovery scan and the per-server metrics probe, "both reads, both with their interpolated values
-validated upstream". The count of four is right; two of the three claims about it were not. The
-metrics probe no longer escalates at all (`_core` notes it reads world-readable state). The actual
-fourth site is `hosts.install_game_dependencies`, which is not a read: it is an `apt-get install`
-as root whose package list is interpolated from `data/lgsm/<distro>.csv`, a file inside the
-panel-owned data directory that is parsed with no charset validation on the read path. That one is
-worth narrowing before either installer.
+**Two `sudo=True` sites remain.** One is the Tailscale installer on a remote host, named below:
+it runs Tailscale's downloaded install script as root, and no verb can narrow that. The other is
+the remote form of the LinuxGSM discovery scan — a fixed script whose only inputs are file names on
+that host; on the panel's own host the same scan is the `lgsm-discover` verb. The bootstrap's
+Node.js step was a third until it became the `nodesource-setup` verb (below). Earlier revisions of
+this paragraph counted four and misdescribed two of them: the per-server metrics probe no longer
+escalates at all, and the dependency installer they named as the fourth is the verb sequence
+described above.
 
 (Those counts exclude six calls that ARE the verb layer's own transport — the `run_command` /
 `_run_local` / `_run` at the end of `run_privileged`, `write_root_file`, `write_content_cron` and
@@ -284,17 +284,30 @@ types rather than in the command names:
   answers (`--force-confdef`, `--force-confold`) are fixed in the helper rather than passed
   in, so an unattended upgrade can never be talked into clobbering a config file you edited.
 
-Those two installer steps are also now **unreachable on the panel's own host**: the routes that
-run them (VPS bootstrap, Tailscale install, Tailscale join) refuse the local host outright. The
+The two remote installer steps below are also **unreachable on the panel's own host**: the routes
+that run them (VPS bootstrap, Tailscale install, Tailscale join) refuse the local host outright. The
 remotes page had always hidden them for it; the routes had not, so a direct POST could aim a full
 VPS preparation — including a reboot — at the machine the panel runs on.
 
-**Two operations cannot be narrowed, and are named rather than left unremarked.** The VPS
-bootstrap installs Node.js by piping NodeSource's setup script into a root shell, and installs
-Tailscale the same way. That IS the operation in both cases: a verb could pin the URL, but only by
-giving the helper the ability to execute a downloaded script — exactly the capability its tool
-allowlist exists to deny. Wrapping either would move the risk, not reduce it. If that trade is not
-one you want, those two bootstrap steps are the thing to change, not the helper.
+**One operation cannot be narrowed, and is named rather than left unremarked.** Installing
+Tailscale on a remote host pipes Tailscale's install script into a root shell. That IS the
+operation: a verb could pin the URL, but only by giving the helper the ability to execute a
+downloaded script — exactly the capability its tool allowlist exists to deny. Wrapping it would
+move the risk, not reduce it. If that trade is not one you want, that step is the thing to change,
+not the helper.
+
+**The VPS bootstrap's Node.js step was the second such operation, and this section was wrong to
+call it impossible to narrow.** It piped NodeSource's setup script (`setup_lts.x`) into a root
+shell, so whoever could serve that one URL ran code as root on every remote being prepared.
+`install.sh` had already shown the way on the panel host: what the script does is small and
+fixed, so it can be done directly, and the one thing it fetches — NodeSource's signing key — can
+be checked. The bootstrap now does the same through the `nodesource-setup` verb: it downloads only
+the key, trusts it only if the file holds exactly **one** primary key and that key has the pinned
+fingerprint (the one `install.sh` pins; a unit test holds the two copies equal), writes the deb822
+source and the apt pin itself, and executes nothing it downloaded. apt then verifies every package
+against that key. A remote that already has Node.js 18+ keeps it and never touches NodeSource. The
+helper refuses this verb: it exists for remote hosts, and `install.sh` configures NodeSource on the
+panel's own.
 
 **Every one of those is converted, and the grant has narrowed.** On an install where the three
 root-owned pieces are present, `/etc/sudoers.d/linuxgsm-panel` contains two lines:
@@ -356,6 +369,25 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   `sudo bash`. It now ships the verified commit's `install.sh` from the runner over SSH and runs
   that copy from a directory root created.
 
+  *Which* commit is proved on the runner, not assumed from the trigger. The job's `if` checks the
+  branch by its short name, and GitHub compares strings ignoring case, so any ref whose short name
+  matches main case-insensitively passes it: a pushed tag `main`, a branch `Main`, a tag `MAIN`.
+  So before it joins the tailnet, the job requires the run's branch name to be exactly `main`,
+  fetches main's history from `refs/heads/main`, confirms `refs/remotes/origin/main` exists under
+  exactly that name, and requires the commit to be on its first-parent line. That line holds the
+  commits main's tip has been at and each commit of a multi-commit push or rebase merge, but not an
+  intermediate commit of a pull request merged with a merge commit, which is an ancestor of main
+  and was never its tip. One exception: a push that fast-forwards main onto a branch that had main
+  merged into it (a "foxtrot" merge) moves the commits main was at before onto that merge's second
+  parent, and a re-run deploy of one of them is then refused. Only then does it read `install.sh`
+  out of that commit, and it refuses a commit with none or an empty one. On the host, `install.sh`
+  checks the pin again against its own fetch; a pin it cannot verify is never replaced by main's
+  unverified tip — the host stays where it is, or the update stops with an error. The job logs in
+  to Tailscale with OIDC workload identity, not a stored secret: Tailscale's credential accepts
+  only a GitHub-signed token whose subject is this repository's `production` environment, and that
+  environment admits only the branch `main`. The OAuth client secret it replaced was a repository
+  secret, readable by a workflow run on any branch or tag.
+
   The second half of that sentence was missing, and it mattered: `install_root_tools` *copied*
   those root-owned pieces **out of the working tree**, and the integrity argument was that
   `fetch_code` ran `git reset --hard` first. That is not a guarantee. `git update-index
@@ -379,7 +411,8 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   `stage_root_source` reads from **root's own clone** of the repository
   (`/usr/local/lib/linuxgsm-panel/.source.git`). Root's git fetches it with no user or system
   git config and no inherited `GIT_*` environment. The panel's `HEAD` is only a request: it is
-  honoured once root's clone shows that commit on the tracked upstream branch. A checkout at a
+  honoured once root's clone shows that commit on the tracked upstream branch's first-parent line
+  (a commit reachable only through a merge's second parent does not count). A checkout at a
   commit upstream does not have, or with no `.git`, gets no refresh, and the installer says so. A
   checkout that is still entirely root's (the fresh install, before the chown) is read directly.
   So is the operator's own source tree when `sudo bash install.sh` is run from a clone or an

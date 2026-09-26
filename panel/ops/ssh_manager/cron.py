@@ -373,19 +373,35 @@ def _cron_log_command(line, marker):
 
 
 def upgrade_managed_cron_tracking(server, user, selfname=None):
-    """One-time, IN-PLACE upgrade: re-wrap existing panel-managed cron lines through the inline
-    recorder so their runs start reporting success/error — without changing schedules, on/off
-    state, or behaviour (each existing line is transformed, not re-derived from state, so it
-    can't accidentally toggle anything). Only the simple managed commands are wrapped; the
-    compound restart-when-empty check is left alone. No-op once everything is wrapped. Returns
-    True if it changed anything. Best-effort."""
+    """One-time, IN-PLACE upgrade of the panel's own cron lines, without changing schedules, on/off
+    state, or what a line decides (each existing line is transformed, not re-derived from state, so
+    it can't accidentally toggle anything). Two upgrades:
+
+      * the simple managed commands are re-wrapped through the inline recorder, so their runs
+        start reporting success/error;
+      * the compound restart-when-empty check, if it still calls a bare `gamedig`, is given the
+        PATH it looks gamedig up on (_core.CRON_TOOL_PATH). cron's own PATH is /usr/bin:/bin,
+        and on a host whose npm came from the distro gamedig is in /usr/local/bin, so that line
+        never counted a player and never restarted. Only that one call is rewritten; the rest of
+        the line — schedule, address, jq filter, condition — is kept byte for byte, including an
+        older condition this does not otherwise touch.
+
+    No-op once everything is upgraded. Runs on every Scheduled Tasks read, and daily from app.py
+    for every game server, so a line written before either upgrade heals without the operator
+    toggling anything. Returns True if it changed anything. Best-effort."""
     selfname = selfname or user
     base = f"/home/{user}/{selfname}"
     flag = f"/home/{user}/.restart-pending"
     simple_cores = {f"{base} {c}" for c in ("start", "monitor", "mods-update", "update", "update-lgsm")}
     simple_cores.add(f"touch {flag}")
     suffix = " > /dev/null 2>&1"
-    out, _, _ = _core.run_privileged(server, "crontab-list", [user], timeout=10, merge_stderr=False)
+    out, _, rc = _core.run_privileged(server, "crontab-list", [user], timeout=10, merge_stderr=False)
+    # Only a crontab that was READ is rewritten. The rewrite below replaces the whole crontab with
+    # what this loop kept, so a listing cut short by a dropped connection — whatever lines arrived
+    # before it failed — would be installed as the account's entire crontab.
+    if rc != 0:
+        return False
+    bare, pathed = _core.GAMEDIG_CRON_BARE, _core.gamedig_cron_call()
     new_lines, changed = [], False
     for raw in (out or "").splitlines():
         s = raw.strip()
@@ -397,6 +413,9 @@ def upgrade_managed_cron_tracking(server, user, selfname=None):
         core = cmd[:-len(suffix)].strip() if cmd.endswith(suffix) else cmd
         if jid is None and core in simple_cores:   # unwrapped simple managed line → wrap it
             new_lines.append(f"{sched} {_record_managed_cmd(user, core)}")
+            changed = True
+        elif flag in cmd and bare in cmd:           # the restart check, calling a bare gamedig
+            new_lines.append(raw.replace(bare, pathed, 1))
             changed = True
         else:
             new_lines.append(raw)

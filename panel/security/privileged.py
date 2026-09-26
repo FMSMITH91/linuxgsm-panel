@@ -162,6 +162,18 @@ FSTAB = "/etc/fstab"
 NPM_GLOBAL_PACKAGES = ("gamedig",)
 NPM_GLOBAL_SPECS = {"gamedig": "gamedig@5"}
 
+# NodeSource's apt repository, for a REMOTE host that needs Node.js — see nodesource-setup. The
+# same values as install.sh's NODESOURCE_* for the panel host, and a unit gate holds the two
+# together: one pinned key, one major, one set of paths, whichever way a host got its Node.
+# The fingerprint is NodeSource's PUBLISHED repository key (not a secret); it is named without
+# "KEY" because secret scanners read `..._KEY = "<40 hex>"` as a credential.
+NODESOURCE_FINGERPRINT = "6F71F525282841EEDAF851B42F59B5F99B1BE0B4"
+NODESOURCE_NODE_MAJOR = "24"
+NODESOURCE_KEY_URL = "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
+NODESOURCE_KEYRING = "/usr/share/keyrings/nodesource.gpg"
+NODESOURCE_SOURCES = "/etc/apt/sources.list.d/nodesource.sources"
+NODESOURCE_PREFS = "/etc/apt/preferences.d/nodejs"
+
 
 # The GMod shared-content box — see tools/panel-helper. Every path is BUILT from a validated user
 # name and identifier; three of the verbs below end in `rm -rf` as root.
@@ -831,6 +843,11 @@ _ARGV = {
     "npm-install-global": ([_choice(*NPM_GLOBAL_PACKAGES)],
                            lambda a: ["npm", "install", "-g", "--ignore-scripts",
                                       NPM_GLOBAL_SPECS[a[0]]], None),
+    # Configure NodeSource's apt repository with its signing key pinned by fingerprint. Zero
+    # arguments: the URL, fingerprint, major and paths are the constants above. REMOTE hosts only
+    # (the add-host bootstrap, which refuses the panel's own host); the helper refuses it, and the
+    # panel host's NodeSource is install.sh's. See _nodesource_setup_remote.
+    "nodesource-setup": ([], lambda a: [], None),
 
     # ── sshd port changes ──
     "sshd-backup-dropin": ([], lambda a: [], None),
@@ -1061,6 +1078,70 @@ def _sshd_hardening_dropin_remote(key, value):
            "ok": shlex.quote(" ".join(sorted(SSHD_DIRECTIVES)))})
 
 
+def _nodesource_setup_remote(a):
+    """The remote form of nodesource-setup: install.sh's nodesource_setup, as one root shell.
+
+    The add-host bootstrap ran `curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -` as
+    root: whoever could serve that one URL — a compromised web host, or anything able to alter the
+    fetch — ran code as root on every remote being prepared, with nothing checked. What that script
+    does is small and fixed, so it is done here instead, and the one thing fetched — the signing
+    key — is trusted only if the file holds exactly ONE primary key and it has the pinned
+    fingerprint ("includes" would not do: the real key plus a second one would have apt trust
+    both). Packages are then verified by apt against that key, not against whatever a URL served.
+    Nothing downloaded is ever executed.
+
+    Step for step what install.sh does on the panel host, reading the same values (a unit gate
+    compares them): amd64/arm64 only, gnupg installed if gpg is missing, the key checked in a
+    throwaway GNUPGHOME, dearmored into the keyring, an older setup script's one-line
+    nodesource.list removed (it would name the same repo a second time), a deb822 source restricted
+    to this architecture, an apt pin so NodeSource's nodejs wins over the distro's, and `apt-get
+    update`. It fails having trusted nothing if the key is wrong, and says which step failed.
+    Every path and value is a module constant read at call time, never an argument."""
+    q = shlex.quote
+    src_dir = os.path.dirname(NODESOURCE_SOURCES)
+    # install.sh's two printf formats, byte for byte; the values go in as arguments.
+    source = ("'Types: deb\\nURIs: https://deb.nodesource.com/node_%s.x\\nSuites: nodistro\\n"
+              "Components: main\\nArchitectures: %s\\nSigned-By: %s\\n'")
+    pin = "'Package: nodejs\\nPin: origin deb.nodesource.com\\nPin-Priority: 600\\n'"
+    count_pub = "awk -F: '$1==\"pub\"{n++} END{print n+0}'"
+    first_fpr = "awk -F: '$1==\"fpr\"{print $10; exit}'"
+    return "; ".join([
+        'a=$(dpkg --print-architecture 2>/dev/null)',
+        'case "$a" in amd64|arm64) ;; *) echo "NodeSource builds Node.js for amd64 and arm64 only,'
+        + ' not \\"$a\\""; exit 1 ;; esac',
+        "command -v gpg >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get install -y gnupg"
+        + " >/dev/null 2>&1",
+        # Said separately: without gpg every key would fail the check below, and "not the pinned
+        # key" would then be the wrong reason to give.
+        'command -v gpg >/dev/null 2>&1 || { echo "gpg is missing and could not be installed, so'
+        + ' NodeSource\'s signing key cannot be checked - nothing was trusted"; exit 1; }',
+        'k=$(mktemp) || exit 1',
+        'g=$(mktemp -d) || exit 1',
+        "trap 'rm -rf -- \"$k\" \"$k.gpg\" \"$g\"' EXIT",
+        'curl -fsSL --connect-timeout 15 --max-time 60 %s -o "$k" || { echo "Could not download'
+        ' NodeSource\'s signing key"; exit 1; }' % q(NODESOURCE_KEY_URL),
+        'l=$(GNUPGHOME="$g" gpg --batch --with-colons --show-keys "$k" 2>/dev/null)',
+        '{ [ "$(printf \'%s\\n\' "$l" | ' + count_pub + ')" = 1 ] && '
+        '[ "$(printf \'%s\\n\' "$l" | ' + first_fpr + ')" = ' + q(NODESOURCE_FINGERPRINT) + ' ]; }'
+        ' || { echo "NodeSource\'s signing key is not the pinned key ' + NODESOURCE_FINGERPRINT
+        + ' - nothing was trusted"; exit 1; }',
+        'GNUPGHOME="$g" gpg --batch --yes --dearmor -o "$k.gpg" "$k" 2>/dev/null && '
+        'install -d -m 0755 ' + q(os.path.dirname(NODESOURCE_KEYRING)) + ' && '
+        'install -m 0644 "$k.gpg" ' + q(NODESOURCE_KEYRING)
+        + ' || { echo "Could not install NodeSource\'s signing key"; exit 1; }',
+        'rm -f ' + q(os.path.join(src_dir, "nodesource.list")),
+        "printf %s %s \"$a\" %s > %s" % (source, q(NODESOURCE_NODE_MAJOR), q(NODESOURCE_KEYRING),
+                                          q(NODESOURCE_SOURCES))
+        + ' || { echo "Could not write the NodeSource source"; exit 1; }',
+        "printf %s > %s" % (pin, q(NODESOURCE_PREFS))
+        + ' || { echo "Could not write the NodeSource apt pin"; exit 1; }',
+        'apt-get update -qq >/dev/null 2>&1 || { echo "apt could not read NodeSource\'s'
+        + ' repository"; exit 1; }',
+        'echo "NodeSource repository configured (Node.js %s.x, key %s)"'
+        % (NODESOURCE_NODE_MAJOR, NODESOURCE_FINGERPRINT),
+    ])
+
+
 # The remote renderings of the SECRET_STDIN verbs, naming the mktemp file "$f" that holds the secret.
 _SECRET_REMOTE = {
     "pro-attach": lambda a: "pro attach --attach-config \"$f\"",
@@ -1231,6 +1312,7 @@ _REMOTE_ACTIONS = {
                        % shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"),
     "content-grant-read": _content_grant_remote,
     "restart-flags": lambda a: "ls -1d /home/*/.restart-pending 2>/dev/null || true",
+    "nodesource-setup": _nodesource_setup_remote,
 }
 
 

@@ -69,10 +69,11 @@ jobs:
 
       - name: Install dependencies
         # esprima: tests/template_actions_test.py parses static/js — without it that gate skips.
-        # The tools are hash-pinned (.github/ci-requirements-checks): esprima is an sdist, so its
-        # build tools go in first and it builds against those, not against a fetched setuptools.
+        # Everything is hash-pinned: requirements.txt is the panel's own lockfile (requirements.in),
+        # and the tools' are in .github/ci-requirements-checks. esprima is an sdist, so its build
+        # tools go in first and it builds against those, not against a fetched setuptools.
         run: |
-          python -m pip install --quiet -r requirements.txt
+          python -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
           python -m pip install --quiet --require-hashes --only-binary :all: \
             -r .github/ci-requirements-checks/build.txt
           python -m pip install --quiet --require-hashes --no-build-isolation \
@@ -139,7 +140,7 @@ jobs:
         # coverage is hash-pinned: this job holds CODACY_PROJECT_TOKEN in a later step, and a step's
         # code can reach later steps on a runner with passwordless sudo.
         run: |
-          python -m pip install --quiet -r requirements.txt
+          python -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
           python -m pip install --quiet --require-hashes --only-binary :all: \
             -r .github/ci-requirements/coverage.txt
 

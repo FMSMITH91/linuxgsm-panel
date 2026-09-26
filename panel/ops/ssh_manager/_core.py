@@ -1968,6 +1968,35 @@ def _gamedig_host(server):
     return ip
 
 
+# The PATH the hourly restart-when-empty check looks gamedig up on. A crontab with no PATH= line of
+# its own runs with cron's compiled-in default, /usr/bin:/bin (read out of /usr/sbin/cron on the
+# test host, Ubuntu 24.04's cron 3.0pl1-184ubuntu2). Where npm puts a global gamedig depends on
+# which npm it was: NodeSource's has prefix /usr, so /usr/bin/gamedig, which cron finds; Debian and
+# Ubuntu's own npm is configured prefix=/usr/local (debian/npmrc, installed as
+# /usr/share/nodejs/npm/npmrc), so /usr/local/bin/gamedig, which cron does NOT. Every host whose
+# Node came from Ubuntu — install.sh's distro path on 24.04 and 26.04, and a remote that already
+# had Ubuntu's Node 18+ when it was prepared — therefore ran `gamedig: not found` every hour, P
+# stayed empty, and `[ "$P" = 0 ]` never held: the daily restart waited for an empty server
+# forever. The player readers never saw it: they run gamedig through `sudo -u <user>`, and
+# Ubuntu's sudoers sets a secure_path listing /usr/local/bin (classic sudo and sudo-rs both apply
+# it). On the test host (NodeSource Node, /usr/bin/gamedig) the line counted 0 under cron's env.
+#
+# Set INSIDE the command substitution, so it reaches gamedig, jq and gamedig's `env node` and
+# nothing else: the restart itself still runs with the environment cron gave it. /usr/local/bin
+# first, the order sudo's secure_path uses, so this check and the player readers pick the same
+# gamedig on a host that somehow has both.
+CRON_TOOL_PATH = "/usr/local/bin:/usr/bin:/bin"
+# What set_daily_restart wrote before, and what it writes now. cron.upgrade_managed_cron_tracking
+# heals an existing line from the one to the other in place (an existing crontab line is otherwise
+# only rewritten when the operator toggles the setting).
+GAMEDIG_CRON_BARE = "P=$(gamedig "
+
+
+def gamedig_cron_call():
+    """The start of the hourly check's player query: `P=$(PATH=...; gamedig `."""
+    return "P=$(PATH=%s; gamedig " % CRON_TOOL_PATH
+
+
 def set_daily_restart(server, user, selfname=None, game_type=None, port=None, enabled=True,
                       hour=5, minute=0):
     """Enable/disable a daily restart that only fires when the server is EMPTY.
@@ -2004,7 +2033,8 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     # fail, and restarting at the daily time is the behaviour the operator asked for.
     if gdtype and port:
         jqf = 'if (.players|type=="array") then (.players|length) else empty end'
-        getp = (f"P=$(gamedig --type {gdtype} {_gamedig_host(server)}:{port} 2>/dev/null "
+        # gamedig by the PATH above, not cron's: see CRON_TOOL_PATH.
+        getp = (f"{gamedig_cron_call()}--type {gdtype} {_gamedig_host(server)}:{port} 2>/dev/null "
                 f"| jq -r {_quote(jqf)} 2>/dev/null); ")
         cond = '[ "$P" = 0 ]'
     else:

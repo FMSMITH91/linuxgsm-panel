@@ -7,14 +7,27 @@ name: Deploy
 # bad release can't leave the panel down.
 #
 # ── One-time setup to enable ──────────────────────────────────────────────────
-#  1. Tailscale OAuth client (admin console -> Settings -> OAuth clients), scope
-#     "auth_keys", tag: tag:ci. Save as repo SECRETS:
-#        TS_OAUTH_CLIENT_ID, TS_OAUTH_SECRET
+#  1. A Tailscale OpenID Connect credential — workload identity, NO stored secret (admin
+#     console -> Settings -> Trust credentials -> Credential -> OpenID Connect):
+#        Issuer:  GitHub Actions
+#        Subject: repo:FMSMITH91/linuxgsm-panel:environment:production
+#        Scope:   Auth Keys (write), tag: tag:ci
+#     Tailscale then accepts only a token GitHub signed for a job of THIS repository running in
+#     the `production` environment, which only the branch main may use (step 3). Save the
+#     credential's two values — neither is secret — in that ENVIRONMENT, not the repository:
+#        TS_OAUTH_CLIENT_ID, TS_AUDIENCE
+#     This used to be an OAuth client whose secret sat in a repository secret, readable by a
+#     workflow run on ANY branch or tag pushed here — and it puts an SSH session on the deploy
+#     host as a sudo-capable account. There is no longer a secret to read.
 #  2. Tailnet ACL: allow tag:ci to SSH the host as the deploy user, e.g.
 #        "ssh": [{ "action": "accept", "src": ["tag:ci"],
 #                  "dst": ["tag:server"], "users": ["ubuntu"] }]
 #     (the host must have `tailscale up --ssh`).
-#  3. Repo VARIABLES (Settings -> Secrets and variables -> Actions -> Variables):
+#  3. The `production` environment (Settings -> Environments -> New environment), created
+#     BEFORE the secrets go into it: Deployment branches and tags -> "Selected branches and
+#     tags" -> one BRANCH rule, `main`, and no tag rule. It holds the two values from step 1.
+#     Repo VARIABLES (Settings -> Secrets and variables -> Actions -> Variables) stay at
+#     repository level — the job's `if` reads DEPLOY_ENABLED before any environment applies:
 #        DEPLOY_ENABLED = true
 #        DEPLOY_HOST    = <the host's MagicDNS name or tailnet IP>
 #        DEPLOY_USER    = ubuntu           # optional, defaults to ubuntu
@@ -43,59 +56,155 @@ jobs:
     # that fork's default branch, and an outside contributor's PR triggered an unattended
     # production deploy on the live host (service restart, health check, possible rollback).
     #
-    # Not a code-injection vector — the deploy runs the BASE repo's main (the per-user branch
-    # takes install.sh from origin/main, the system branch ships it from a checkout of this run's
-    # head_sha, which the clause below makes a push to main), never the PR's code — but nobody
-    # asked for the deploy. codeql-alerts.yml already distinguishes the two event kinds for its
-    # own reasons; this is the mirror image of that clause.
+    # Not a code-injection vector — the deploy ships an installer only from a commit it has proved
+    # is on the BASE repo's main (see the verify step), never the PR's code — but nobody asked for
+    # the deploy. codeql-alerts.yml already distinguishes the two event kinds for its own reasons;
+    # this is the mirror image of that clause.
+    #
+    # This `if` decides WHETHER to deploy. It cannot prove WHAT: head_branch is a SHORT name, and
+    # GitHub compares strings IGNORING CASE, so any ref whose short name matches main
+    # case-insensitively passes it — a TAG `main`, a branch `Main`, a tag `MAIN`. One of those
+    # pushed with a commit that carries its own workflow named "CI" (on: push) completes as event
+    # 'push', head_branch 'main' (or 'Main'), head_repository this repository — every clause below
+    # true, and head_sha a commit that was never on main. The repository's ruleset protects
+    # refs/heads/main; none of those is that ref. So the verify step requires head_branch to be
+    # exactly `main` and proves head_sha is on main itself, before anything is taken from it or the
+    # tailnet is joined.
     if: >-
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
       vars.DEPLOY_ENABLED == 'true'
+    # The Tailscale login is bound to this environment twice. Its deployment-branch rule admits only
+    # the branch main (header, step 3), so no workflow run on another branch or a tag can use it;
+    # and the Tailscale credential (header, step 1) accepts only a GitHub OIDC token whose subject
+    # names this environment, so there is no secret for any other run to read in the first place.
+    # A workflow_run job runs with GITHUB_REF set to the default branch, so this job qualifies.
+    environment: production
+    # id-token: write lets the Tailscale step ask GitHub for a signed OIDC token (sub
+    # repo:FMSMITH91/linuxgsm-panel:environment:production), which Tailscale's credential
+    # (header, step 1) exchanges for a one-off auth key. Granted to this job only.
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # The installer root runs on a system install comes from the commit CI just verified, carried
+      # to the host inside the SSH session — not from the host's own checkout (the system-install
+      # branch below says why that one cannot be trusted).
+      #
+      # This step fetches MAIN'S HISTORY, not that commit. It used to check out head_sha directly,
+      # which fetches any commit id GitHub will serve: a tag's, another branch's, even a fork's
+      # (forks share one object store). The job's `if` cannot rule those out (see above). What
+      # makes head_sha safe to ship is being ON MAIN, and only history fetched from
+      # refs/heads/main can show that — the verify step checks it there, then reads install.sh out
+      # of that commit. Nothing is executed on the runner. Full history, not sparse: a sparse
+      # checkout implies a blob-less partial clone, and reading the installer out of an older
+      # commit would then need another fetch.
+      - name: Fetch main's history (to prove the verified commit is on it)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: false
+
+      # BEFORE the tailnet is joined: a run this step refuses never holds a tailnet identity at
+      # all, instead of joining and then declining to use it. It hands the deploy step exactly one
+      # thing, the path of the installer it read out of the proven commit.
+      - name: Verify the commit is on main, and take its installer
+        id: verify
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          # The job's `if` compared head_branch with 'main' IGNORING CASE (GitHub's expressions
+          # do), so a branch `Main` or a tag `MAIN` passed it. Compared here exactly, in bash.
+          if [ "${HEAD_BRANCH:-}" != "main" ]; then
+              echo "::error::head_branch '${HEAD_BRANCH:-}' is not exactly main; nothing was deployed."
+              exit 1
+          fi
+          # The commit whose installer is shipped is the commit the code is pinned to. Carried as
+          # a variable, so it has to be exactly a commit id — checked before git ever sees it. A
+          # full 40-hex id is also never read as a ref name, whatever tags exist.
+          case "${HEAD_SHA:-}" in
+              ""|*[!0-9a-f]*) echo "::error::head_sha '${HEAD_SHA:-}' is not a commit id."; exit 1 ;;
+          esac
+          [ "${#HEAD_SHA}" -eq 40 ] || { echo "::error::head_sha '${HEAD_SHA}' is not a commit id."; exit 1; }
+          # PROVE head_sha is on this repository's main before anything is taken from it. The
+          # job's `if` cannot (a tag named `main` passes it, and the name check above says only
+          # which ref the run CLAIMS to be for).
+          #
+          # MAIN is spelled out in full: the checkout also fetched every tag, and git resolves a
+          # bare `origin/main` as refs/tags/origin/main ahead of the remote-tracking branch, so a
+          # pushed tag of that name would answer this check. And it must EXIST by that name before
+          # it is read — a missing refs/remotes/origin/main falls through git's lookup to
+          # refs/tags/refs/remotes/origin/main, and show-ref --verify is the one read that does not.
+          MAIN=refs/remotes/origin/main
+          git show-ref --verify --quiet "${MAIN}" \
+              || { echo "::error::The checkout has no ${MAIN} to check head_sha against; nothing was deployed."; exit 1; }
+          # ON main means on its FIRST-PARENT line, not merely an ancestor. A pull request merged
+          # with a merge commit brings every one of its commits into main's ancestry, including an
+          # intermediate one whose change was reverted before the merge; a tag `main` on that
+          # commit passes the `if` and would pass an ancestry check, and ship an installer main
+          # never had. The line holds the commits main's tip has been at — an older one whose CI
+          # finished late or was re-run passes (main is append-only: the ruleset blocks force-push
+          # and deletion) — plus each commit of a multi-commit push or a rebase merge. One reachable
+          # only from a tag, another branch, a fork or the side of a merge does not pass. Nor, since
+          # the rule is first-parent, do the commits main was at before a "foxtrot" push: one that
+          # fast-forwards main onto a branch that had main merged into it (7e38da7 did this once)
+          # moves them to that merge's second parent, and a re-run deploy of one is refused here.
+          #
+          # Streamed through awk, which reads to the end whatever it finds. `rev-list | grep -q`
+          # lets grep exit at the first match, rev-list then dies of SIGPIPE writing the rest, and
+          # pipefail fails the check exactly when it holds. A here-string (`grep <<< "$(rev-list)"`)
+          # needs a temp file once main's line passes 64 KiB, about 1,600 commits, and fails with
+          # nothing read when it cannot write one. `($0 "")` compares as STRINGS: awk compares two
+          # values that both look numeric as numbers, and an id of digits and one 'e' does.
+          if ! git rev-list --first-parent "${MAIN}" \
+               | awk -v want="${HEAD_SHA}" '($0 "") == want { found = 1 } END { exit !found }'; then
+              echo "::error::head_sha ${HEAD_SHA} is not on this repository's main; nothing was deployed."
+              exit 1
+          fi
+          # The installer is read out of THAT commit as committed bytes — not the working tree,
+          # which is main's tip and may be a later push whose CI has not finished. A commit with no
+          # install.sh, or an empty one, is refused here: an empty file would be sent, run as
+          # nothing on the host, and the job would go green having deployed nothing.
+          INSTALLER="${RUNNER_TEMP:?}/verified-install.sh"
+          if ! git cat-file blob "${HEAD_SHA}:install.sh" > "${INSTALLER}" 2>/dev/null \
+             || [ ! -s "${INSTALLER}" ]; then
+              echo "::error::${HEAD_SHA} has no install.sh to ship; nothing was deployed."
+              exit 1
+          fi
+          echo "installer=${INSTALLER}" >> "${GITHUB_OUTPUT:?}"
+          echo "Verified ${HEAD_SHA} on main (tip $(git rev-parse --short "${MAIN}"))."
+
       - name: Join the tailnet
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
         with:
+          # OIDC workload identity: no secret. The client id and audience are not secret either;
+          # what admits this job is GitHub's signed token naming the production environment.
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          audience: ${{ secrets.TS_AUDIENCE }}
           tags: tag:ci
-
-      # The installer root runs on a system install comes from HERE: the commit CI just verified,
-      # checked out on the runner, carried to the host inside the SSH session. Not from the host's
-      # own checkout. The system-install branch below says why that one cannot be trusted.
-      # Not a pull request's code. The job's `if` admits only a completed CI run of a PUSH to
-      # this repository's main (event == 'push', head_branch == 'main', and head_repository is
-      # this repository), so head_sha is a commit already on main; a fork's pull request is
-      # event 'pull_request' and never reaches here. It is checked out, not executed, on the
-      # runner — the host runs it, which is the point: the host must NOT run its own copy.
-      - name: Check out the verified commit's installer  # nosemgrep: yaml.github-actions.security.workflow-run-target-code-checkout.workflow-run-target-code-checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          persist-credentials: false
-          sparse-checkout: /install.sh
-          sparse-checkout-cone-mode: false
 
       - name: Deploy via safe self-update (snapshot + health-check + rollback)
         env:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          INSTALLER: ${{ steps.verify.outputs.installer }}
         run: |
           set -euo pipefail
           : "${DEPLOY_HOST:?Set repo variable DEPLOY_HOST to the tailnet host}"
           U="${DEPLOY_USER:-ubuntu}"
-          [ -s install.sh ] || { echo "::error::The checkout has no install.sh to ship."; exit 1; }
-          # The commit whose installer is shipped is the commit the code is pinned to. Carried as
-          # a variable, so it has to be exactly a commit id.
-          case "${HEAD_SHA:-}" in
-              ""|*[!0-9a-f]*) echo "::error::head_sha '${HEAD_SHA:-}' is not a commit id."; exit 1 ;;
-          esac
-          [ "${#HEAD_SHA}" -eq 40 ] || { echo "::error::head_sha '${HEAD_SHA}' is not a commit id."; exit 1; }
+          # Only what the verify step proved: HEAD_SHA is the id it checked, and INSTALLER the file
+          # it read out of that commit.
+          [ -s "${INSTALLER:-}" ] || { echo "::error::The verify step handed over no installer; nothing was deployed."; exit 1; }
+          trap 'rm -f -- "${INSTALLER}"' EXIT
+          echo "Deploying ${HEAD_SHA}, verified on main."
           # Tailscale SSH handles auth (no key needed); install.sh does the safe update.
           # PANEL_NO_UPGRADE=1: the auto-deploy is a panel-only update — it must never
           # apt-upgrade or reboot the deploy host (that would drop this SSH session and fail
@@ -109,18 +218,23 @@ jobs:
           #
           # ...and pin the code to that same commit (PANEL_UPDATE_REF), on the system branch below,
           # which is the one that ships an installer. Left to itself install.sh resets to
-          # origin/main's tip, so when a second push landed before this run, this commit's
+          # main's tip, so when a second push landed before this run, this commit's
           # installer installed the NEXT commit's code — and that commit's own deploy then found the
           # host already current and took the no-op branch, so its update steps never ran on the
           # host. It also installed a tip whose CI had not finished. install.sh honours the pin
-          # only on origin/main, and never moves a checkout backwards to it, so a run that finishes
-          # late (a re-run of an old commit's CI) leaves a newer host where it is.
+          # only when it is on the first-parent line of the branch it fetched
+          # (refs/remotes/origin/main, spelled out in full there too), and never moves a checkout
+          # backwards to it, so a run that finishes late (a re-run of an old commit's CI) leaves a
+          # newer host where it is. A pin it cannot verify on its own fetch (a foxtrot push landed
+          # in between) is not replaced by the tip either: the host stays where it is, with a
+          # warning in this log, or — when its checkout is not on main — the update stops with an
+          # error and this job fails.
           #
-          # INSTALLER_B64 is that file from the runner's checkout, prepended to the remote script as
-          # a variable, and PANEL_UPDATE_REF beside it. base64 output and a commit id need no
-          # quoting, and stdin stays a single stream: under `bash -s` stdin IS the remote script.
+          # INSTALLER_B64 is that commit's install.sh, read out by the verify step, prepended to the remote
+          # script as a variable, and PANEL_UPDATE_REF beside it. base64 output and a commit id need
+          # no quoting, and stdin stays a single stream: under `bash -s` stdin IS the remote script.
           {
-              printf 'INSTALLER_B64=%s\n' "$(base64 -w0 install.sh)"
+              printf 'INSTALLER_B64=%s\n' "$(base64 -w0 "${INSTALLER}")"
               printf 'PANEL_UPDATE_REF=%s\n' "${HEAD_SHA}"
               cat <<'REMOTE'
           set -eu

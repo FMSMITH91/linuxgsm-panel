@@ -1599,6 +1599,9 @@ VERBS = {
     "npm-install-global": ([v_choice(*NPM_GLOBAL_PACKAGES)],
                            lambda a: ["npm", "install", "-g", "--ignore-scripts",
                                       NPM_GLOBAL_SPECS[a[0]]], None),
+    # Refused here -- see do_nodesource_setup. Listed so the panel's table and this one stay
+    # identical, which is what the anti-drift gate checks.
+    "nodesource-setup": ([], lambda a: [], None),
 
     # ── sshd port changes ──
     # Every step of the panel's port change, so the sequence that protects the operator — snapshot,
@@ -2034,6 +2037,21 @@ def do_sshd_set_directive(args, content):
               "another sshd_config.d file sets it first" % (key, effective), file=sys.stderr)
         return 4
     return 0
+
+
+def do_nodesource_setup(args, content):
+    """Refused, always. nodesource-setup configures NodeSource's apt repository with its signing
+    key pinned, and it exists for REMOTE hosts: the add-host bootstrap sends its shell rendering
+    over SSH, and that bootstrap refuses the panel's own host. On this host NodeSource is
+    install.sh's job (its nodesource_setup, the same pinned key), which runs as root anyway.
+
+    So the helper gains nothing by implementing it, and would gain a lot of surface: a network
+    fetch, gpg, and writes into apt's trust configuration, reachable by the panel user under the
+    narrow grant. The verb is in VERBS only because the panel's table and this one must list the
+    same verbs."""
+    print("panel-helper: nodesource-setup is for remote hosts; on this host install.sh configures "
+          "NodeSource", file=sys.stderr)
+    return 2
 
 
 def do_create_swapfile(args, content):
@@ -3874,9 +3892,10 @@ ACTIONS = {
     "gameuser-group": do_gameuser_group,
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
+    "nodesource-setup": do_nodesource_setup,
 }
 
-# The only two ACTIONS verbs that CONSUME their payload. The other 26 take the parameter and
+# The only two ACTIONS verbs that CONSUME their payload. The others take the parameter and
 # ignore it, and `sys.stdin.read()` for those is a blocking read to EOF of a descriptor nobody
 # intends to write to -- so the verb hung for its caller's whole timeout whenever the panel's own
 # stdin was an open pipe or tty rather than /dev/null. Under systemd it is /dev/null and this
