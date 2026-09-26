@@ -865,7 +865,7 @@ def _version_file():
             raw = f.read().strip()
     except (OSError, UnicodeDecodeError):
         return "unknown"
-    if raw.isascii() and raw.isdigit():
+    if raw.isascii() and raw.isdecimal():
         return _version_from_epoch(raw) or "unknown"
     if not raw or raw.startswith("$Format:"):
         return "unknown"
