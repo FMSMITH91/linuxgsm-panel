@@ -709,8 +709,8 @@ def list_server_commands(server, user, selfname=None):
     """Run the LinuxGSM instance script with no arguments to read its command list,
     which varies per game. Returns a list of {"cmd", "short", "desc"} dicts."""
     selfname = selfname or user
-    out, err, rc = _core.shell_as_game_user(server, user, f"cd /home/{user} && ./{selfname}",
-                                            timeout=30, selfname=selfname)
+    out, err, _ = _core.shell_as_game_user(server, user, f"cd /home/{user} && ./{selfname}",
+                                           timeout=30, selfname=selfname)
     text = terminal.strip_escapes((out or "") + "\n" + (err or ""))
     cmds, seen = [], set()
     for line in text.splitlines():

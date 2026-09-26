@@ -542,14 +542,9 @@ def _restore_fernet(tar, names):
 _RESTORE_DDL_KINDS = ("TABLE", "INDEX")
 
 
-def _ddl_kind(sql):
-    """The kind of object a sqlite_master `sql` makes, read the way SQLite's parser reads it —
-    past whitespace, comments and TEMP/UNIQUE — or None when it is not a CREATE at all. Read from
-    the SQL, which is what SQLite RUNS to rebuild its schema when it opens the file, rather than
-    from the `type` column beside it: an older SQLite than the one this was measured on (3.53,
-    which refuses a mismatch as a malformed schema) is not something to rely on."""
-    words, i, s = [], 0, sql or ""
-    while i < len(s) and len(words) < 4:
+def _sql_skip(s, i):
+    """The index of the first character of `s` from `i` on that is not whitespace or a comment."""
+    while i < len(s):
         if s[i].isspace():
             i += 1
         elif s.startswith("--", i):
@@ -559,11 +554,31 @@ def _ddl_kind(sql):
             j = s.find("*/", i + 2)
             i = len(s) if j < 0 else j + 2
         else:
-            m = re.match(r"[A-Za-z_]+", s[i:])
-            if not m:
-                break
-            words.append(m.group(0).upper())
-            i += m.end()
+            break
+    return i
+
+
+def _sql_words(s, limit):
+    """Up to `limit` leading words of the SQL `s`, upper-cased, past whitespace and comments."""
+    words, i = [], 0
+    while len(words) < limit:
+        i = _sql_skip(s, i)
+        m = re.match(r"[A-Za-z_]+", s[i:])
+        if not m:
+            break           # the end of `s`, or something that is not a word
+        words.append(m.group(0).upper())
+        i += m.end()
+    return words
+
+
+def _ddl_kind(sql):
+    """The kind of object a sqlite_master `sql` makes (TABLE, INDEX, TRIGGER...), or None."""
+    # Read the way SQLite's parser reads it — past whitespace, comments and TEMP/UNIQUE — and None
+    # when it is not a CREATE at all. Read from the SQL, which is what SQLite RUNS to rebuild its
+    # schema when it opens the file, rather than from the `type` column beside it: an older SQLite
+    # than the one this was measured on (3.53, which refuses a mismatch as a malformed schema) is
+    # not something to rely on.
+    words = _sql_words(sql or "", 4)
     if not words or words[0] != "CREATE":
         return None
     rest = [w for w in words[1:] if w not in ("TEMP", "TEMPORARY", "UNIQUE")]
@@ -574,20 +589,15 @@ def _q_ident(name):
     return '"%s"' % str(name).replace('"', '""')
 
 
-class _RestoreShapeRefused(Exception):
-    """The archive's database is not shaped like one the panel wrote; the message says how."""
+# What _restore_shape can say about a database it will not vouch for. Fixed wording chosen here,
+# never text taken from the archive or from an exception: it reaches the browser, and a message
+# built from an exception is how internals leak (CodeQL py/stack-trace-exposure).
+_SHAPE_DAMAGED = "is damaged — SQLite's own integrity check does not pass"
+_SHAPE_OBJECTS = {"TRIGGER": "a trigger", "VIEW": "a view", "VIRTUAL": "a virtual table"}
 
 
-def _restore_shape(con):
-    """{(table, col): declared column name} for every validated column the database HAS, resolved
-    the way SQLite resolves them. Raises _RestoreShapeRefused for a database whose shape could
-    change or hide a value from the row check.
-
-    Resolved, never matched: SQLite identifiers are case-INSENSITIVE and sqlite_master keeps the
-    spelling a table was created with, so an archive declaring "GAME_SERVER" or "SHORT_NAME" used
-    to be skipped by an exact lookup of 'game_server' — while the ORM's `FROM game_server` read it
-    anyway and served the payload (found in review of the first fix). PRAGMA table_xinfo resolves a
-    table name exactly as a query does, and the column is picked out by its lower-cased name."""
+def _schema_refusal(con):
+    """Why the schema of the database on `con` could change or hide a value, or None."""
     ok = [r[0] for r in con.execute("PRAGMA integrity_check").fetchall()]
     if ok != ["ok"]:
         # An index is a SECOND copy of the values it covers, and SQLite answers a query from it
@@ -597,90 +607,154 @@ def _restore_shape(con):
         # check one value and the panel another. integrity_check compares every index with its
         # table (quick_check does not, and passed that file); the row reads below also say
         # NOT INDEXED, which only matters if this is ever removed.
-        raise _RestoreShapeRefused("is damaged — SQLite's own integrity check does not pass")
+        return _SHAPE_DAMAGED
     for (sql,) in con.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL"):
         kind = _ddl_kind(sql)
         if kind not in _RESTORE_DDL_KINDS:
-            raise _RestoreShapeRefused("defines a %s, which no version of the panel creates"
-                                       % (kind or "schema object").lower())
+            return ("defines %s, which no version of the panel creates"
+                    % _SHAPE_OBJECTS.get(kind, "a schema object"))
+    return None
+
+
+def _table_columns(con, table):
+    """{lower-cased column: (declared name, hidden)} of `table` as SQLite resolves it, or {}."""
+    # PRAGMA table_xinfo resolves a table name exactly as a query does, whatever case the archive
+    # declared it in; {} is "no such table".
+    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query -- table is this module's constant
+    info = con.execute("PRAGMA table_xinfo(%s)" % _q_ident(table)).fetchall()
+    cols = {}
+    for _cid, name, _type, _nn, _dflt, _pk, hidden in info:
+        cols.setdefault(str(name).lower(), (name, hidden))
+    return cols
+
+
+def _column_refusal(table, col, cols):
+    """Why `table`.`col` cannot be vouched for, given `table`'s _table_columns; or None."""
+    if col not in cols:
+        # Every one of these columns has been in the schema since the first commit (16cff95) and
+        # none is in models._migrate's ALTER TABLE map, so no backup any version of the panel
+        # wrote lacks one. A table without it is not the panel's — and every query the restored
+        # panel made against it would fail.
+        return ("has a %s table with no %s column, which every version of the panel has created"
+                % (table, col))
+    if cols[col][1]:
+        # A GENERATED column is recomputed from other columns whenever they change — and the
+        # panel updates a game server's status on every poll.
+        return ("computes %s.%s from other columns, which no version of the panel does"
+                % (table, col))
+    return None
+
+
+def _restore_shape(con):
+    """({(table, col): declared column name}, None) for a database's columns, or (None, why)."""
+    # The map holds every validated column the database HAS, resolved the way SQLite resolves
+    # them; `why` is a fixed sentence, for a database whose shape could change or hide a value
+    # from the row check (see _schema_refusal and _column_refusal).
+    #
+    # Resolved, never matched: SQLite identifiers are case-INSENSITIVE and sqlite_master keeps the
+    # spelling a table was created with, so an archive declaring "GAME_SERVER" or "SHORT_NAME" used
+    # to be skipped by an exact lookup of 'game_server' — while the ORM's `FROM game_server` read it
+    # anyway and served the payload (found in review of the first fix). _table_columns resolves the
+    # table as a query does, and the column is picked out by its lower-cased name.
+    problem = _schema_refusal(con)
+    if problem:
+        return None, problem
     found = {}
     for table in {t for t, _c in _RESTORE_IDENT_COLUMNS + _RESTORE_PORT_COLUMNS}:
-        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query -- table is this module's constant
-        info = con.execute("PRAGMA table_xinfo(%s)" % _q_ident(table)).fetchall()
-        if not info:
+        cols = _table_columns(con, table)
+        if not cols:
             continue          # no such table: the restored panel creates it, empty
-        cols = {}
-        for _cid, name, _type, _nn, _dflt, _pk, hidden in info:
-            cols.setdefault(str(name).lower(), (name, hidden))
         for t, col in _RESTORE_IDENT_COLUMNS + _RESTORE_PORT_COLUMNS:
             if t != table:
                 continue
-            if col not in cols:
-                # Every one of these columns has been in the schema since the first commit
-                # (16cff95) and none is in models._migrate's ALTER TABLE map, so no backup any
-                # version of the panel wrote lacks one. A table without it is not the panel's —
-                # and every query the restored panel made against it would fail.
-                raise _RestoreShapeRefused("has a %s table with no %s column, which every version "
-                                           "of the panel has created" % (table, col))
-            name, hidden = cols[col]
-            if hidden:
-                # A GENERATED column is recomputed from other columns whenever they change — and
-                # the panel updates a game server's status on every poll.
-                raise _RestoreShapeRefused("computes %s.%s from other columns, which no version of "
-                                           "the panel does" % (table, col))
-            found[(t, col)] = name
-    return found
+            problem = _column_refusal(table, col, cols)
+            if problem:
+                return None, problem
+            found[(t, col)] = cols[col][0]
+    return found, None
+
+
+# What _stored_plaintext answers for an encrypted value the restored panel will not be able to read.
+_UNREADABLE = object()
+
+
+def _stored_plaintext(val, fernet):
+    """`val` as the restored panel will read it: decrypted with `fernet`, or _UNREADABLE."""
+    from panel.core.config import _ENC_PREFIX, is_encrypted
+    if not (isinstance(val, str) and is_encrypted(val)):
+        return val
+    if not fernet:
+        return _UNREADABLE
+    try:
+        return fernet.decrypt(val[len(_ENC_PREFIX):].encode()).decode()
+    except Exception:
+        return _UNREADABLE
+
+
+def _ident_refused(table, rid, col, val):
+    """True when the models would refuse to store `val` (plaintext) in `col` of `table` #`rid`."""
+    from panel.db.models import _validate_shell_ident
+    if val is not None and not isinstance(val, str):
+        return True       # a BLOB or a number where a name belongs
+    try:
+        _validate_shell_ident(col, val)
+    except ValueError:
+        _log.warning("restore refused: %s #%s %s is not a shell identifier: %r",
+                     table, rid, col, (val or "")[:80])
+        return True
+    return False
+
+
+def _bad_ident_rows(con, found, fernet):
+    """[(table, row id, column)] for each command-bearing name on `con` the models would refuse."""
+    bad = []
+    for table, col in _RESTORE_IDENT_COLUMNS:
+        if (table, col) not in found:
+            continue          # the table does not exist (see _restore_shape)
+        # By the name SQLite resolved it to, from the TABLE itself (NOT INDEXED): the rows
+        # every query of the restored panel will be answered from.
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query -- table/column are this module's constants
+        for rid, val in con.execute("SELECT id, %s FROM %s NOT INDEXED"  # nosec B608
+                                    % (_q_ident(found[(table, col)]), _q_ident(table))):
+            val = _stored_plaintext(val, fernet)
+            if val is _UNREADABLE:
+                continue      # unreadable after the restore as well — see _restore_fernet
+            if _ident_refused(table, rid, col, val):
+                bad.append((table, rid, col))
+    return bad
+
+
+def _bad_port_rows(con, found):
+    """[(table, row id, column)] for each port on `con` stored as anything but a number or NULL."""
+    bad = []
+    for table, col in _RESTORE_PORT_COLUMNS:
+        if (table, col) not in found:
+            continue
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query -- table/column are this module's constants
+        for rid, kind in con.execute("SELECT id, typeof(%s) FROM %s NOT INDEXED"  # nosec B608
+                                     % (_q_ident(found[(table, col)]), _q_ident(table))):
+            if kind not in ("integer", "null"):
+                _log.warning("restore refused: %s #%s %s is stored as %s, not a number",
+                             table, rid, col, kind)
+                bad.append((table, rid, col))
+    return bad
 
 
 def _restore_bad_rows(db_path, fernet):
-    """[(table, row id, column)] for every row of the database at `db_path` that the models would
-    refuse to store in a command-bearing column. Raises _RestoreShapeRefused for a database whose
-    shape the check cannot vouch for (see _restore_shape), and sqlite3.Error for a file SQLite
-    cannot read."""
-    from panel.core.config import _ENC_PREFIX, is_encrypted
-    from panel.db.models import _validate_shell_ident
-    bad = []
+    """(rows the models would refuse, None) for the database at `db_path`, or ([], why)."""
+    # The rows are [(table, row id, column)], every one the models would refuse to store in a
+    # command-bearing column; `why` is _restore_shape's, for a database whose shape the check
+    # cannot vouch for. Raises sqlite3.Error for a file SQLite cannot read.
+    #
     # Read-only: nothing in the archive's database runs or changes while it is being checked.
     con = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(db_path), uri=True)
     try:
-        found = _restore_shape(con)
-        for table, col in _RESTORE_IDENT_COLUMNS:
-            if (table, col) not in found:
-                continue          # the table does not exist (see _restore_shape)
-            # By the name SQLite resolved it to, from the TABLE itself (NOT INDEXED): the rows
-            # every query of the restored panel will be answered from.
-            # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query -- table/column are this module's constants
-            for rid, val in con.execute("SELECT id, %s FROM %s NOT INDEXED"  # nosec B608
-                                        % (_q_ident(found[(table, col)]), _q_ident(table))):
-                if isinstance(val, str) and is_encrypted(val):
-                    try:
-                        val = fernet.decrypt(val[len(_ENC_PREFIX):].encode()).decode() if fernet else None
-                    except Exception:
-                        val = None
-                    if val is None:
-                        continue  # unreadable after the restore as well — see _restore_fernet
-                if val is not None and not isinstance(val, str):
-                    bad.append((table, rid, col))     # a BLOB or a number where a name belongs
-                    continue
-                try:
-                    _validate_shell_ident(col, val)
-                except ValueError:
-                    _log.warning("restore refused: %s #%s %s is not a shell identifier: %r",
-                                 table, rid, col, (val or "")[:80])
-                    bad.append((table, rid, col))
-        for table, col in _RESTORE_PORT_COLUMNS:
-            if (table, col) not in found:
-                continue
-            # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query -- table/column are this module's constants
-            for rid, kind in con.execute("SELECT id, typeof(%s) FROM %s NOT INDEXED"  # nosec B608
-                                         % (_q_ident(found[(table, col)]), _q_ident(table))):
-                if kind not in ("integer", "null"):
-                    _log.warning("restore refused: %s #%s %s is stored as %s, not a number",
-                                 table, rid, col, kind)
-                    bad.append((table, rid, col))
+        found, shape_problem = _restore_shape(con)
+        if shape_problem:
+            return [], shape_problem
+        return _bad_ident_rows(con, found, fernet) + _bad_port_rows(con, found), None
     finally:
         con.close()
-    return bad
 
 
 def _restore_db_refusal(src):
@@ -701,11 +775,7 @@ def _restore_db_refusal(src):
             db_copy = os.path.join(tmpd, "panel.db")
             with tar.extractfile(member) as fsrc, open(db_copy, "wb") as fdst:
                 shutil.copyfileobj(fsrc, fdst)
-        bad = _restore_bad_rows(db_copy, fernet)
-    except _RestoreShapeRefused as e:
-        _log.warning("restore refused: the backup's panel.db %s", e)
-        return ("This backup was not restored: its database %s. Nothing on this panel was changed."
-                % e)
+        bad, shape_problem = _restore_bad_rows(db_copy, fernet)
     except sqlite3.Error as e:
         _log.warning("restore refused: the backup's panel.db could not be read (%s)", e)
         return ("The database in this backup could not be read, so it was not restored. Nothing "
@@ -716,6 +786,10 @@ def _restore_db_refusal(src):
                 "Nothing on this panel was changed.")
     finally:
         shutil.rmtree(tmpd, ignore_errors=True)
+    if shape_problem:
+        _log.warning("restore refused: the backup's panel.db %s", shape_problem)
+        return ("This backup was not restored: its database %s. Nothing on this panel was changed."
+                % shape_problem)
     if not bad:
         return ""
     where = ", ".join("%s #%s (%s)" % (_RESTORE_ROW_LABEL.get(t, t), rid, col)

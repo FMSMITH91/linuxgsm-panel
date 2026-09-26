@@ -245,6 +245,7 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+
 - **On Python 3.13 and later (Ubuntu 26.04), a closed terminal could keep its slot until the panel
   restarted.** If the terminal's output reader was still busy a second after the close, for
   instance still handing output to the browser, the close stopped partway. The session stayed on
@@ -891,6 +892,7 @@ regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+
 - **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported by
   kta1kri). Twenty-five places built `sudo -u <account> bash -c '…'` from a server's account
   (`short_name`) and LinuxGSM script name with neither quoting nor a check — the dashboard's own

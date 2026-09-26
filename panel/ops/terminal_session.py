@@ -433,13 +433,11 @@ class Session:
 
 
 def _retires(pump):
-    """Set the session's _pump_done when `pump` returns, however it returns.
-
-    On the pump function itself rather than on the thread that runs it, so every thread started
-    with target=_pump_fd or _pump_channel signals — including ones built outside the openers. A
-    pump that never signalled would make every teardown sit out the whole _PUMP_JOIN even though
-    the pump had long since retired.
-    """
+    """Set the session's _pump_done when `pump` returns, however it returns."""
+    # On the pump function itself rather than on the thread that runs it, so every thread started
+    # with target=_pump_fd or _pump_channel signals — including ones built outside the openers. A
+    # pump that never signalled would make every teardown sit out the whole _PUMP_JOIN even though
+    # the pump had long since retired.
     @functools.wraps(pump)
     def run(sess):
         try:

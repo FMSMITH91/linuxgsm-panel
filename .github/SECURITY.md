@@ -218,12 +218,12 @@ remote.
 
 The rule now:
 
-* **Only `ssh_manager._core.game_user_cmd` (a shell body) and `game_user_exec_cmd` (one program)
+- **Only `ssh_manager._core.game_user_cmd` (a shell body) and `game_user_exec_cmd` (one program)
   spell `sudo -u` with a value in it**, and callers usually reach them through `shell_as_game_user`,
   which also runs the command. Both refuse — raise `UnsafeGameAccount` before any text is built — a
   name `_core.game_idents_ok` rejects: the model's shell-identifier charset, 1–64 characters, never
   `root`. Refusing, not only quoting: a quoted name is still a name sudo resolves, and `#0` is uid 0.
-* **A body that names the LinuxGSM script passes `selfname=`** to the builder — or to
+- **A body that names the LinuxGSM script passes `selfname=`** to the builder — or to
   `read_as_game_user`, which forwards it — or its function checks the script name first. The builder
   can check only the names it is given, and the body is built before it is called. "Names the
   script" includes a path BUILT from it: `GameServer.console_log` is
@@ -231,13 +231,13 @@ The rule now:
   poller's reads pass `selfname=gs.lgsm_name` (the first version of this fix missed them: a loaded
   `game_type` ran from the poller every two seconds while a console was open). The crontab writers
   check it too: a cron line runs through `/bin/sh`.
-* **A port in a command is a number.** `_core.cron_port` is `int(port)` or a refusal, and the hourly
+- **A port in a command is a number.** `_core.cron_port` is `int(port)` or a refusal, and the hourly
   restart-when-empty line is built through it: `GameServer.port` is an INTEGER column, but SQLite
   keeps TEXT in it for a row written that way, and that text was interpolated raw into the line.
-* **A refusal is the caller's own "could not run"**: `GAME_ACCOUNT_REFUSED`, `("", "invalid account
+- **A refusal is the caller's own "could not run"**: `GAME_ACCOUNT_REFUSED`, `("", "invalid account
   or script name", 1)`, for the `(out, err, rc)` callers, and None / unknown for the readers — never
   an empty, healthy-looking answer.
-* Unit gates over `panel/**/*.py` (tests/unit/part07.py) fail the build on a `sudo -u` built outside
+- Unit gates over `panel/**/*.py` (tests/unit/part07.py) fail the build on a `sudo -u` built outside
   those two, on one built with an unquoted value, on a builder that stops checking, and on a script
   name dropped on the way in — including one that arrives through a GameServer attribute
   (`game_type`, `lgsm_name`, `console_log`, `server_script`) and a local assigned from it, not only a

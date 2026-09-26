@@ -9185,7 +9185,7 @@ _shutil.rmtree(_sud_dir6, ignore_errors=True)
 # the username to start with a letter, so `user@host` never began with a dash) — which a row
 # LOADED from the database never passed through (GHSA-hh39-76g3-wxcx review, F4). Now the
 # destination is _core.ssh_destination's, which REFUSES a host or login that is not a plain name,
-# and it sits after `--`. Driven here with hostile hosts; tests/unit/part07.py drives the login and
+# and it sits after `--`. Driven here with hostile hosts; tests/unit/part08.py drives the login and
 # the other three ssh argvs.
 _tsm6 = _il6.import_module("panel.ops.terminal_session")
 

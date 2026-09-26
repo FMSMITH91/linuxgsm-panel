@@ -329,6 +329,58 @@ def _decode_output(b):
 _READER_GRACE = 5
 
 
+def _pump_capped(stream, buf, cap, flags):
+    """Read `stream` to EOF into `buf`, keeping its first `cap` bytes and discarding the rest."""
+    rd = getattr(stream, "read1", None) or stream.read
+    try:
+        while True:
+            chunk = rd(65536)
+            if not chunk:
+                return
+            room = cap - len(buf)
+            if room > 0:
+                buf.extend(chunk[:room])
+            if len(chunk) > max(room, 0):
+                flags["truncated"] = True
+    except (OSError, ValueError):
+        return          # the pipe was closed under us (a kill); what was read is kept
+
+
+def _feed_stdin(p, stdin_bytes):
+    """Write `stdin_bytes` (when there are any) to `p`'s stdin, then close it so `p` sees EOF."""
+    try:
+        if stdin_bytes:
+            p.stdin.write(stdin_bytes)
+    except (OSError, ValueError):
+        pass            # the command exited without reading it all; its rc says what happened
+    finally:
+        try:
+            p.stdin.close()
+        except (OSError, ValueError):
+            # Already closed by the exit or a kill — there is nothing left to close.
+            pass
+
+
+def _signalling(target, done):
+    """`target`, wrapped to set the Event `done` when it returns, however it returns."""
+    def run(*args):
+        try:
+            target(*args)
+        finally:
+            done.set()
+    return run
+
+
+def _reader_jobs(p, bufs, cap, flags, stdin_bytes):
+    """(target, args) per _collect_capped thread: a capped pump per pipe, and the stdin feed."""
+    # `bufs` pairs with (p.stdout, p.stderr); a stream that is None (no pipe) gets no pump.
+    jobs = [(_pump_capped, (stream, buf, cap, flags))
+            for stream, buf in zip((p.stdout, p.stderr), bufs) if stream is not None]
+    if p.stdin is not None:
+        jobs.append((_feed_stdin, (p, stdin_bytes)))
+    return jobs
+
+
 def _collect_capped(p, timeout, kill, threads, stdin_bytes=None, cap=None):
     """communicate(), with a ceiling on what is KEPT. -> (out, err, rc, truncated) as bytes, or
     None when the command outlived `timeout` (it has been killed by then).
@@ -358,47 +410,7 @@ def _collect_capped(p, timeout, kill, threads, stdin_bytes=None, cap=None):
     cap = _MAX_OUTPUT_BYTES if cap is None else cap
     out, err = bytearray(), bytearray()
     flags = {"truncated": False}
-
-    def _pump(stream, buf):
-        rd = getattr(stream, "read1", None) or stream.read
-        try:
-            while True:
-                chunk = rd(65536)
-                if not chunk:
-                    return
-                room = cap - len(buf)
-                if room > 0:
-                    buf.extend(chunk[:room])
-                if len(chunk) > max(room, 0):
-                    flags["truncated"] = True
-        except (OSError, ValueError):
-            return          # the pipe was closed under us (a kill); what was read is kept
-
-    def _feed():
-        try:
-            if stdin_bytes:
-                p.stdin.write(stdin_bytes)
-        except (OSError, ValueError):
-            pass            # the command exited without reading it all; its rc says what happened
-        finally:
-            try:
-                p.stdin.close()
-            except (OSError, ValueError):
-                # Already closed by the exit or a kill — there is nothing left to close.
-                pass
-
-    def _signalling(target, done):
-        def run(*args):
-            try:
-                target(*args)
-            finally:
-                done.set()
-        return run
-
-    jobs = [(_pump, (stream, buf)) for stream, buf in ((p.stdout, out), (p.stderr, err))
-            if stream is not None]
-    if p.stdin is not None:
-        jobs.append((_feed, ()))
+    jobs = _reader_jobs(p, (out, err), cap, flags, stdin_bytes)
     finished = [threads.Event() for _ in jobs]
     workers = [threads.Thread(target=_signalling(target, done), args=args, daemon=True)
                for (target, args), done in zip(jobs, finished)]
