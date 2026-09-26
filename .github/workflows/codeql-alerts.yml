@@ -102,9 +102,11 @@ jobs:
             echo "::notice::head_branch '${HEAD_BRANCH:-}' is not exactly main; nothing was judged."
             exit 0
           fi
-          echo "ref=refs/heads/${WR_BRANCH}" >> "$GITHUB_OUTPUT"
-          echo "label=\`${WR_BRANCH}\`" >> "$GITHUB_OUTPUT"
-          echo "skip=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "ref=refs/heads/${WR_BRANCH}"
+            echo "label=\`${WR_BRANCH}\`"
+            echo "skip=false"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Fail if that ref has open code-scanning alerts
         if: steps.ref.outputs.skip != 'true'
