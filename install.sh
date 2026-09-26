@@ -252,11 +252,20 @@ svc() { if [ "${RUN_AS_ROOT}" -eq 1 ]; then systemctl "$@"; else systemctl --use
 svc_active() { svc is-active linuxgsm-panel.service 2>/dev/null || true; }
 
 # The panel's version is the date of the commit it runs, in UTC, as YYYY.M.D with no leading zeros
-# (2026.9.26), followed by the short commit: every commit of a day shares the date. The same rule as
-# panel_version() in panel/ops/system_ops.py. git is asked through _gitc, as the checkout's owner.
+# (2026.9.26), followed by the short commit, as the footer shows it ("2026.9.26 · a1b2c3d"): every
+# commit of a day shares the date. The same rule as panel_version() in panel/ops/system_ops.py.
+#
+# The zeros are taken off by printf rather than date's %-m and %-d, which are GNU extensions, and
+# the digits are read base-10 (10#) so "08" and "09" are not taken for bad octal. Anything that is
+# not 1-12 ASCII digits is refused, as the panel refuses it.
 _epoch_version() {
+    local ymd
     case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
-    date -u -d "@$1" +%Y.%-m.%-d 2>/dev/null
+    [ "${#1}" -le 12 ] || return 1
+    ymd="$(date -u -d "@$1" +%Y.%m.%d 2>/dev/null)" || return 1
+    [[ "${ymd}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
+    printf '%d.%d.%d\n' "$((10#${BASH_REMATCH[1]}))" "$((10#${BASH_REMATCH[2]}))" \
+        "$((10#${BASH_REMATCH[3]}))"
 }
 
 # Without a .git (a GitHub "Download ZIP" or `git archive` copy) the date comes from VERSION, where
@@ -266,7 +275,7 @@ _version_file() {
     local raw
     raw="$(tr -d '[:space:]' 2>/dev/null < "${PANEL_DIR}/VERSION")" || raw=""
     case "${raw}" in
-        ''|'$Format:'*) echo "unknown" ;;
+        ''|\$Format:*) echo "unknown" ;;
         *[!0-9]*) echo "${raw}" ;;
         *) _epoch_version "${raw}" || echo "unknown" ;;
     esac
@@ -275,11 +284,11 @@ _version_file() {
 panel_version() {
     local ts="" sha="" ver=""
     if [ -d "${PANEL_DIR}/.git" ]; then
-        ts="$(_gitc log -1 --no-show-signature --format=%ct HEAD 2>/dev/null)" || ts=""
+        ts="$(_gitc log -1 --no-show-signature --format=%ct HEAD -- 2>/dev/null)" || ts=""
         sha="$(_gitc rev-parse --short HEAD 2>/dev/null)" || sha=""
         case "${sha}" in *[!0-9a-f]*) sha="" ;; esac
         if ver="$(_epoch_version "${ts}")"; then
-            echo "${ver}${sha:+ (${sha})}"
+            echo "${ver}${sha:+ · ${sha}}"
             return 0
         fi
     fi
