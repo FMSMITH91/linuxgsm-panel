@@ -112,10 +112,11 @@ def _stub_terminal():
     """
     from panel.ops import terminal_session as term
     fake_shell = os.path.join(ROOT, "jscov-shell")
-    with open(fake_shell, "w", encoding="utf-8") as fh:
+    # Created owner-only and executable in one step: no window in which it is anyone else's.
+    fd = os.open(fake_shell, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write("#!/bin/sh\necho 'js-coverage terminal'\n"
                  "while IFS= read -r l; do printf '%s\\n' \"$l\"; done\n")
-    os.chmod(fake_shell, 0o700)   # nosec B103 - a throwaway script this process wrote
     term._login_shell = lambda: fake_shell
     return fake_shell
 
@@ -125,7 +126,7 @@ class _Deny:
 
     def __init__(self, allowed):
         """Refuse everything except starting `allowed` (the terminal's echo loop)."""
-        import subprocess
+        import subprocess  # nosec B404 - held only to refuse it (and start the echo loop)
         self._sp, self._allowed = subprocess, allowed
 
     def __getattr__(self, name):
