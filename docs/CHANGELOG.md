@@ -925,7 +925,8 @@ regardless of this file — this changelog is for humans.
   be contained by it (the other branch's commit the merge was made on), and the update moved the
   host to it, dropping the commit it was on; now it holds, and says why. The panel's update card,
   which could offer that commit while the merge was still in CI, no longer offers a commit that
-  does not contain the running one, so it never shows an update that would only hold. And a
+  does not contain the running one, so it never shows an update that would only hold, and does
+  not ask GitHub's anonymous API about such a commit either (60 requests an hour). And a
   pinned commit the installer cannot verify is no longer replaced by main's tip, which nothing had
   verified: a checkout on main stays where it is, with a warning, and any other stops the update
   with an error that names the pin, having changed nothing. A hold ends with "Not updated: held at
@@ -968,7 +969,11 @@ regardless of this file — this changelog is for humans.
   does not match. It builds into a staging directory, runs the result once, and only then switches
   over, so a failed download leaves the working gamedig in place, and it links both
   `/usr/local/bin/gamedig` and `/usr/bin/gamedig` to it, since existing restart-when-empty cron
-  lines look in `/usr/bin`. The first run removes npm's old global gamedig once the new one runs.
+  lines look in `/usr/bin`. The first run removes npm's old global gamedig once the new one runs
+  and both links point at it, so `gamedig` answers throughout the switch. `npm ci` gets ten
+  minutes, and on an update it runs after the health check has passed, so a registry that stalls
+  cannot hold the verdict or the rollback. A commit that changes only these files is an update
+  to what the host runs, not "docs, tests or tooling", on the update card.
   Everything lives in `/usr/local/lib/linuxgsm-panel/gamedig` on every host. `install.sh` places
   the three files there root-owned from root's own source (never the panel-owned checkout), after
   the helper and after the new code is fetched; it used to install gamedig before fetching. Remote

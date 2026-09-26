@@ -1158,6 +1158,21 @@ try:
                          "panel was left running.\n=== installer exit 0 ===\n")
         with app.app_context():
             _ul_rep_held = _ul_gdr()["report"]
+        # ...an up-to-date run (exit 0 on install.sh's "Already up to date"), and a stop and a hold
+        # whose text looks secret: the outcome line is log text, redacted like the tail under it.
+        _ul_reps = {}
+        for _ul_k, _ul_body in (
+                ("current", "\033[0;32m✓\033[0m Already up to date (version 9.9.9) — no snapshot "
+                            "taken, panel left running.\n=== installer exit 0 ===\n"),
+                ("failed", "\033[0;31m[ERROR]\033[0m Couldn't fetch as ops@example.com with "
+                           "token=s3cr3tvalue123.\n=== installer exit 1 ===\n"),
+                ("held", "\033[1;33m[!]\033[0m Not updated: held at 0123456789, because "
+                         "ops@example.com set token=s3cr3tvalue123. The panel was left running.\n"
+                         "=== installer exit 0 ===\n")):
+            with open(_ul_path, "w", encoding="utf-8") as _ul_fh:
+                _ul_fh.write("=== panel self-update ===\n" + _ul_body)
+            with app.app_context():
+                _ul_reps[_ul_k] = _ul_gdr()["report"]
     finally:
         _ul_so._update_log_path = _ul_saved
         import shutil as _ul_sh
@@ -1173,6 +1188,18 @@ try:
           "with its reason, not 'unknown (in progress…)'",
           "- **Outcome**: FAILED — the installer stopped (exit 1): Couldn't reach the update source" in _ul_rep,
           _ul_rep[_ul_rep.find("### Last update"):][:300])
+    check("debug report: ...an up-to-date run as nothing to install, not 'unknown (in progress…)'",
+          "- **Outcome**: nothing to install — Already up to date (version 9.9.9)"
+          in _ul_reps.get("current", ""),
+          _ul_reps.get("current", "")[_ul_reps.get("current", "").find("### Last update"):][:300])
+    check("debug report: ...and the reason in a stop's or a hold's outcome is redacted like the log",
+          all("s3cr3tvalue123" not in _ul_reps.get(_k, "s3cr3tvalue123")
+              and "ops@example.com" not in _ul_reps.get(_k, "ops@example.com") for _k in ("failed", "held"))
+          and "- **Outcome**: FAILED — the installer stopped (exit 1): Couldn't fetch as [email] with "
+              "token=[redacted]" in _ul_reps.get("failed", "")
+          and "- **Outcome**: NOT UPDATED — Not updated: held at 0123456789, because [email] set "
+              "token=[redacted]" in _ul_reps.get("held", ""),
+          repr({_k: _v[_v.find("- **Outcome**"):][:160] for _k, _v in _ul_reps.items()}))
     check("debug report: ...and a hold as NOT UPDATED, with install.sh's reason",
           "- **Outcome**: NOT UPDATED — Not updated: held at 0123456789, because the pinned commit "
           "could not be verified on main." in _ul_rep_held,

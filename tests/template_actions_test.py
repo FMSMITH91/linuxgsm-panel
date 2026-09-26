@@ -3103,6 +3103,21 @@ check("var early = done ? null : panelUpdateEndedEarly(l, beforeBoot);" in _wpr_
       "js: ...and the watcher stops on it, prints the reason as text (never markup), and gives the "
       "buttons back",
       "the update-log poll does not finish the watch on an early end: %r" % _wpr_early[:200])
+# ...and what it RETURNS for each ending, not merely that the outcome is named: a branch that
+# returns null leaves a held (or up-to-date) update spinning for three minutes into "Still
+# working", the symptom panelUpdateEndedEarly exists to end. The hold's text is the installer's
+# own reason (its `detail`); the up-to-date one is the card's own sentence. Matched on the return.
+_pee_held = re.search(r"if\(l\.outcome === 'held'\)\s*return\s*\{([^{}]*)\}", _pee)
+_pee_cur = re.search(r"if\(l\.outcome === 'current'\)\s*\{\s*return\s*\{([^{}]*)\}", _pee)
+check(_pee_held is not None and re.search(r"\bdetail:\s*reason\b", _pee_held.group(1)) is not None
+      and _pee_cur is not None
+      and "text:'Already up to date — nothing was installed.'" in _pee_cur.group(1),
+      "js: a hold is reported with the installer's reason, and an up-to-date run as current — "
+      "neither returns null and leaves the card spinning",
+      "held -> %r; current -> %r" % (_pee_held and _pee_held.group(0), _pee_cur and _pee_cur.group(0)))
+check("if(sb) sb.disabled=false;" in _wpr_early,
+      "js: ...and an early end gives the branch Switch button back, not only Update now",
+      "the early-end block re-enables only pu-update-btn: %r" % _wpr_early[-220:])
 
 # ── saving the auto-block threshold must not switch auto-block OFF ───────────────────────────
 # saveThreshold posts the toggle's state as `enabled` ("preserve the on/off state"), but the toggle

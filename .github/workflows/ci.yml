@@ -223,3 +223,39 @@ jobs:
           echo "${SHA256}  /tmp/codacy-coverage-reporter" | sha256sum -c -
           chmod +x /tmp/codacy-coverage-reporter
           /tmp/codacy-coverage-reporter report -r coverage.xml
+
+  gamedig-lockfile:
+    # tools/gamedig/package-lock.json is the tree install-gamedig.sh installs on every host, and it
+    # moves only through Dependabot pull requests. This proves each change still installs from the
+    # lockfile and RUNS on the Node each supported release gives it: 24.04's own 18.19, 26.04's own
+    # 22, and NodeSource's 24 (install.sh's NODESOURCE_NODE_MAJOR) on 22.04. install-gamedig.sh never
+    # switches to a tree that does not run, so a bump that broke one would leave existing hosts on
+    # their old tree, and a fresh install on that release with no gamedig at all. The probe is the
+    # script's own: loopback port 1 answers {"error":...}; a stack trace or nothing is a broken tree.
+    name: gamedig lockfile (node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["18.19", "22", "24"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: npm ci from the lockfile, then run gamedig once
+        run: |
+          set -euo pipefail
+          d="$(mktemp -d)"
+          cp tools/gamedig/package.json tools/gamedig/package-lock.json "${d}/"
+          (cd "${d}" && timeout 600 npm ci --ignore-scripts --omit=dev --no-audit --no-fund)
+          out="$(cd / && timeout 60 "${d}/node_modules/.bin/gamedig" --type minecraft 127.0.0.1:1 \
+                   --givenPortOnly --maxRetries 1 --socketTimeout 1000 --attemptTimeout 3000 2>&1)" || true
+          printf '%s\n' "${out}"
+          case "${out}" in
+              '{"error":'*) echo "gamedig from the lockfile runs on Node $(node -v)" ;;
+              *) echo "::error::gamedig from the lockfile does not run on Node $(node -v)"; exit 1 ;;
+          esac

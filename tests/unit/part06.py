@@ -1865,6 +1865,16 @@ try:
     _fl_out = _fl_case("fl-fresh-branch", "evil", roots=True, after="_record_own_source_floor\n")
     check("root floor: ...but not a commit that is not on main",
           "STAGED=BRANCH-HELPER" in _fl_out and _fl_floor(_fl_out) == "NONE", _fl_out[-300:])
+    # ...even one root's own clone already HOLDS — an operator's earlier run on that branch fetched
+    # it there, and it descends from the floor. The case above passes on the commit being absent
+    # from root's clone alone; here only the first-parent test keeps it from becoming the floor.
+    _fl_out = _fl_case("fl-fresh-branch-known", "evil", roots=True,
+                       after='${H_SUDO:-} test -d "${ROOT_GIT}" || _rootgit init --quiet --bare\n'
+                             '_rootgit fetch --quiet --no-tags "${REPO_URL}" '
+                             '"+refs/heads/evil:refs/root-src/earlier" >/dev/null 2>&1 '
+                             '&& echo ROOT-HOLDS-EVIL\n_record_own_source_floor\n')
+    check("root floor: ...not even one root's own clone already holds from an earlier branch run",
+          "ROOT-HOLDS-EVIL" in _fl_out and _fl_floor(_fl_out) == "NONE", _fl_out[-300:])
     # ...nor one main holds only through a merge's second parent: root's clone has it, and it
     # descends from the floor, so only the first-parent test stops it becoming the floor.
     _fl_e_premise = _rs_sub.run(["git", "-C", _fl_up, "merge-base", "--is-ancestor", _fl["E"],
@@ -1877,6 +1887,15 @@ try:
                        after="_record_own_source_floor\n")
     check("root floor: ...nor one below the floor already recorded",
           _fl_floor(_fl_out) == _fl["T"], _fl_out[-300:])
+    # ...and it records nothing from a checkout that is not entirely root's: root runs git in that
+    # checkout only because nobody else can write any of it (_checkout_is_roots — the REAL one here,
+    # on a fixture the test user owns). root_source_commit, reached by the staging above on this
+    # path, raises the floor to M itself, so the file is removed first: only
+    # _record_own_source_floor could write it back.
+    _fl_out = _fl_case("fl-fresh-notroots", "M", roots=False,
+                       after='rm -f "${ROOT_SRC_FLOOR_FILE}"\n_record_own_source_floor\n')
+    check("root floor: ...nor from a checkout that is not all root's (root runs no git in it)",
+          "STAGED=MID-HELPER" in _fl_out and _fl_floor(_fl_out) == "NONE", _fl_out[-300:])
 finally:
     _shutil.rmtree(_rs_sb, ignore_errors=True)
 # ...and install_root_tools records it: the function above is only half the rule.
@@ -2457,7 +2476,7 @@ try:
     # already-up-to-date re-run, and a fresh install.
     import re as _re_ig
     _ig_upd = _su_find('if [ "${IS_UPDATE}" -eq 1 ]; then', '\n    BACKUP_ROOT=')
-    _ig_full = _su_find("\n    fetch_code\n    _CODE_FETCHED=1", '[6/6] Verifying the panel came back up')
+    _ig_full = _su_find("\n    fetch_code\n    _CODE_FETCHED=1", 'ok "Update complete: ')
     _ig_fresh = _su_find("\nfetch_code\n", 'info "[3/4] Registering the service')
 
     def _ig_after(text, *names):
@@ -2473,13 +2492,25 @@ try:
           "root-owned pieces",
           _ig_after(_ig_upd, "install_root_tools", "install_gamedig", "exit 0")
           and _ig_after(_ig_full, "install_root_tools", "svc start linuxgsm-panel.service",
-                        "install_gamedig")
+                        "if health_check; then", "install_gamedig")
           and _ig_after(_ig_fresh, "ensure_nodejs", "install_root_tools", "install_gamedig"),
           "up-to-date=%r full=%r fresh=%r" % (
               _ig_after(_ig_upd, "install_root_tools", "install_gamedig", "exit 0"),
               _ig_after(_ig_full, "install_root_tools", "svc start linuxgsm-panel.service",
-                        "install_gamedig"),
+                        "if health_check; then", "install_gamedig"),
               _ig_after(_ig_fresh, "ensure_nodejs", "install_root_tools", "install_gamedig")))
+
+    # ...and on the full update path, only once the health check has PASSED. Between the restart
+    # and the health check, an `npm ci` held the verdict and the rollback of a broken release for
+    # as long as the registry took.
+    _ig_window = _su_find("\n    svc start linuxgsm-panel.service || true   # it was stopped",
+                          "\n    if health_check; then\n")
+    check("install.sh: the update path installs gamedig after the health check passes, never "
+          "between the restart and it",
+          bool(_ig_window) and not _re_ig.search(r"^\s*install_gamedig(?:\s|$)", _ig_window, _re_ig.M)
+          and _ig_after(_ig_full, "if health_check; then", 'ok "Health check passed',
+                        "install_gamedig"),
+          "window found=%r" % bool(_ig_window))
 
     # The add-host bootstrap has the same step for REMOTE hosts: a host that already had a distro
     # Node 18+ skipped straight to the npm install of gamedig. It is hosts._bootstrap_node now —
@@ -3429,6 +3460,13 @@ try:
           and '${U_SUDO} rm -f "${_gd_link}"' in _gl_blk
           and _gl_script_links == _gl_un_links == ["/usr/local/bin/gamedig", "/usr/bin/gamedig"],
           repr((_gl_at, _gl_script_links, _gl_un_links)))
+    # ...and the links alone are enough to REACH that branch: its `elif` is the whole gate, and a
+    # host whose helper directory, cron and recovery link are already gone would otherwise keep two
+    # links into a directory that no longer exists. Read off the condition itself, up to its `then`.
+    _gl_cond = (_un_txt[_gl_elif:_un_txt.find("; then\n", _gl_elif)] if _gl_elif >= 0 else "")
+    check("uninstall.sh: ...and either gamedig link alone is enough to enter that branch",
+          all(re.search(r"\|\|\s*_gamedig_link_ours %s(?:\s|$)" % re.escape(_l), _gl_cond)
+              for _l in ("/usr/local/bin/gamedig", "/usr/bin/gamedig")), repr(_gl_cond))
 
     # ── the firewall rule the INSTALLER opened has to come off on the path it opened it ───────
     # The ufw removal lived inside `if [ "${MODE}" = "system" ]`, so a per-user uninstall never
@@ -8125,7 +8163,8 @@ try:
         SO.PANEL_DIR = _fp_so
         SO._tracked_branch = lambda: "main"
         _fp_ci = {_fp_t: "pending", _fp_m: "pending", _fp_side[1]: "pending", _fp_side[2]: "pending"}
-        SO._remote_ci_state = lambda sha: _fp_ci.get(sha, "unknown")
+        _fp_asked = []
+        SO._remote_ci_state = lambda sha: (_fp_asked.append(sha), _fp_ci.get(sha, "unknown"))[1]
 
         def _fp_status():
             try:
@@ -8154,7 +8193,14 @@ try:
         # offered; once X passes, X is.
         SO.PANEL_DIR = _fx_clone("fx-panel", _fx_s1)
         _fp_ci = {_fx_x: "pending", _fx_o1: "passing"}
+        del _fp_asked[:]
         _fp_st, _fp_show = _fp_status()
+        # ...and GitHub is not even asked about O1: each ask is one anonymous request of the 60 an
+        # hour, and the whole other branch is on this walk while the merge is in CI.
+        check("update status: after a foxtrot push, a commit that does not contain the running one "
+              "costs no CI lookup",
+              _fx_side_premise and _fx_o1 not in _fp_asked and _fx_x in _fp_asked,
+              "asked=%r" % [_a[:7] for _a in _fp_asked])
         check("update status: after a foxtrot push, a verified commit that does not contain the "
               "running one (it would move the panel sideways) is not offered",
               _fx_side_premise and _fp_st.get("update_available") is False
@@ -9815,3 +9861,43 @@ check("install.sh: a hold ends with 'Not updated' naming the pin, never 'Already
       and "feedfacefeedface" in _hold_out and "Already up to date" not in _hold_out, _hold_out)
 check("install.sh: ...while a checkout that really is current still says 'Already up to date'",
       _hold_pin.startswith("OK Already up to date (version 1.2.3)"), _hold_pin)
+
+
+# ── the helper's exit line when the installer never gave a status of its own ─────────────────────
+# _run_installer_to's two exception branches: its 30-minute timeout, and an installer it could not
+# start (resolve() found no bash). The update card and the debug report find the line by its
+# leading number (_INSTALLER_EXIT_RE), so both must still START with one, or the run reads as
+# "running" for good. Driven through the helper's own function and the panel's own parser.
+import subprocess as _rit_sp                                                        # noqa: E402
+import types as _rit_types                                                          # noqa: E402
+
+
+def _rit_outcome(run=None, resolve=None):
+    _saved = (_helper.subprocess, _helper.resolve)
+    _helper.subprocess = _rit_types.SimpleNamespace(
+        run=run, TimeoutExpired=_rit_sp.TimeoutExpired, STDOUT=_rit_sp.STDOUT)
+    _helper.resolve = resolve or (lambda prog: "/bin/bash")
+    try:
+        _line = "=== installer exit %s ===" % _helper._run_installer_to(None, "/", {})
+    except Exception as _e:               # reported by the check, never ends the part
+        return {"raised": repr(_e)}
+    finally:
+        _helper.subprocess, _helper.resolve = _saved
+    return dict(SO._update_log_outcome(["=== panel self-update ===", _line]), line=_line)
+
+
+def _rit_timeout(*a, **k):
+    raise _rit_sp.TimeoutExpired(["bash"], 1800)
+
+
+def _rit_nobash(prog):
+    raise FileNotFoundError(prog)
+
+
+_rit_to = _rit_outcome(run=_rit_timeout)
+_rit_nr = _rit_outcome(run=_rit_timeout, resolve=_rit_nobash)
+check("self-update card: an installer the helper stopped at its timeout, or could not start, still "
+      "ends the log on a status the card reads as failed (124, 127)",
+      _rit_to.get("outcome") == "failed" and _rit_to.get("exit_code") == 124
+      and _rit_nr.get("outcome") == "failed" and _rit_nr.get("exit_code") == 127,
+      repr((_rit_to, _rit_nr)))

@@ -24,6 +24,10 @@
 # halfway through would leave the host with no gamedig at all. The new tree is built in a staging
 # directory and run once. Only then does `current` switch to it, and only then are the links
 # touched. Until that point the tree in use and whatever the links point at are left alone.
+# `npm ci` gets ten minutes: npm has no overall deadline. Against a registry that accepts
+# connections and never answers it was still running after half an hour (a 5-minute fetch
+# timeout per request, then retries), holding this script's lock through fd 9 even once the
+# script itself was gone, and TERM alone did not stop it.
 #
 # IDEMPOTENT. When `current` is already this lockfile's tree and it runs, nothing is fetched. The
 # weekly cron that calls this is a repair job, not an updater: only a new lockfile changes the tree.
@@ -82,9 +86,10 @@ else
     # --ignore-scripts: no package's install hook runs, as root or at all. --omit=dev: the tree
     # gamedig runs with and nothing else. The cache is inside the staging directory and is deleted
     # with it, so a run under sudo never leaves root-owned files in somebody else's home.
-    (cd -- "${STAGE}" && npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
-        --no-update-notifier --cache "${STAGE}/.npm-cache") \
-        || fail "npm ci failed. The gamedig already in place, if any, was left as it was."
+    # timeout: see NEVER IN PLACE above. -k: npm is sent KILL if TERM has not ended it in 30s.
+    (cd -- "${STAGE}" && timeout -k 30 600 npm ci --ignore-scripts --omit=dev --no-audit \
+        --no-fund --no-update-notifier --cache "${STAGE}/.npm-cache") \
+        || fail "npm ci failed, or did not finish in 10 minutes. The gamedig already in place, if any, was left as it was."
     rm -rf -- "${STAGE}/.npm-cache"
     works "${STAGE}/${BIN}" \
         || fail "the new gamedig does not run. The gamedig already in place, if any, was left as it was."
@@ -93,17 +98,6 @@ else
     trap - EXIT
     { ln -sfn -- "${HASH}" "${HERE}/.current.new" && mv -Tf -- "${HERE}/.current.new" "${HERE}/current"; } \
         || fail "cannot switch ${HERE}/current to the new tree"
-fi
-
-# npm's own global gamedig, from before this script existed: its package and the command npm
-# linked for it. Removed only now that there is a working tree to point the command at instead.
-if command -v npm >/dev/null 2>&1; then
-    NPM_ROOT="$(npm root -g 2>/dev/null)" || NPM_ROOT=""
-    if [ -n "${NPM_ROOT}" ] && [ -d "${NPM_ROOT}/gamedig" ]; then
-        say "removing npm's global gamedig (${NPM_ROOT}/gamedig)"
-        npm uninstall -g --ignore-scripts --no-audit --no-fund gamedig >/dev/null 2>&1 \
-            || say "npm could not remove its global gamedig; the links below replace its command anyway"
-    fi
 fi
 
 # The two commands. A link is replaced when it is missing, dangling, the panel's, or npm's; a
@@ -136,6 +130,21 @@ for d in "${LINK_DIRS[@]}"; do
     { ln -sfn -- "${TARGET}" "${tmp}" && mv -Tf -- "${tmp}" "${link}"; } \
         || { rm -f -- "${tmp}"; say "could not link ${link}"; rc=1; }
 done
+
+# npm's own global gamedig, from before this script existed. Removed only now that both links
+# above point at the new tree, and only when every one of them does (rc 0): a link left alone
+# may still be npm's, and would dangle. The package directory is deleted rather than
+# `npm uninstall -g`, which also deletes the command at npm's bin path — /usr/bin/gamedig with
+# NodeSource's npm, /usr/local/bin/gamedig with the distro's — whatever it points at. Run before
+# the links were made, that left `gamedig` resolving nowhere until they were.
+if [ "${rc}" -eq 0 ] && command -v npm >/dev/null 2>&1; then
+    NPM_ROOT="$(npm root -g 2>/dev/null)" || NPM_ROOT=""
+    if [ -n "${NPM_ROOT}" ] && [ -d "${NPM_ROOT}/gamedig" ] && [ ! -L "${NPM_ROOT}/gamedig" ]; then
+        say "removing npm's global gamedig (${NPM_ROOT}/gamedig)"
+        rm -rf -- "${NPM_ROOT}/gamedig" \
+            || say "could not remove ${NPM_ROOT}/gamedig; the links above already replace its command"
+    fi
+fi
 
 # Trees for older lockfiles, and staging directories a killed run left behind.
 for p in "${HERE}"/* "${HERE}"/.stage.*; do

@@ -967,7 +967,14 @@ _NOISE_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".dockerignore"
 # moved on while the installed helper did not: it then answers an unknown verb with rc 2 and no
 # fallback, and the feature behind that verb fails silently. That is precisely the drift the
 # helper's own docstring warns about, and the signal for it was suppressed.
-_RUNTIME_EXCEPTIONS = {"tools/panel-helper"}
+#
+# tools/gamedig is the same kind of piece: install.sh installs its three files root-owned on
+# every host and runs the script, and every game account runs the tree it installs. A commit
+# that changed only them (every Dependabot bump of the lockfile) was listed as "docs, tests or
+# tooling" on the update card. privileged.GAMEDIG_FILES names them; a unit test holds the two
+# together.
+_RUNTIME_EXCEPTIONS = {"tools/panel-helper", "tools/gamedig/package.json",
+                       "tools/gamedig/package-lock.json", "tools/gamedig/install-gamedig.sh"}
 
 
 def _is_runtime_path(path):
@@ -1144,10 +1151,16 @@ def _compute_update_status():
         _, _, arc = _git(["merge-base", "--is-ancestor", "HEAD", sha])
         return arc == 0
 
+    # Asked BEFORE the check-runs call, which is one anonymous GitHub request (60 an hour per IP)
+    # per commit: after a foxtrot push the walk is the other branch's whole line, and asking
+    # about each of them on every recheck while the merge was in CI spent the hour's limit, which
+    # then read as "pending" for the merge itself once it had passed.
     target_sha, target_state, newer_unverified = None, tip_state, 0
     for idx, sha in enumerate(commits):
+        if not _contains_head(sha):
+            continue
         st = tip_state if idx == 0 else _remote_ci_state(sha)
-        if st in ("passing", "unknown") and _contains_head(sha):
+        if st in ("passing", "unknown"):
             target_sha, target_state, newer_unverified = sha, st, idx
             break   # newest verified commit — anything above it is still unverified
 

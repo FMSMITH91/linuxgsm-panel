@@ -2229,13 +2229,17 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # non-root (systemd --user) installs, where writing to /usr/local/bin needs sudo. This used to be
     # root-only, so `--user` installs never got `linuxgsm-panel-recover` (command not found).
     install_recovery_command
-    # After the service is back, not while it is stopped: a new lockfile means an `npm ci`, and
-    # gamedig is not something the panel needs in order to start.
-    install_gamedig
 
     info "[6/6] Verifying the panel came back up…"
     if health_check; then
         ok "Health check passed (HTTP ${HEALTH_CODE}) — now running version ${TO_VER}"
+        # gamedig once the new version is known to be up: not while the panel is stopped, and not
+        # between the restart and the health check either. A new lockfile means an `npm ci`, and
+        # in front of the health check it held the verdict — and the rollback of a broken release —
+        # for as long as the registry took, while the helper and the Deploy job give the whole
+        # installer 30 minutes. gamedig is not something the panel needs in order to start, and a
+        # rolled-back update leaves the tree the host already had alone.
+        install_gamedig
         # Prune old snapshots, keep the most recent few.
         if [ -d "${BACKUP_ROOT}" ]; then
             ls -1dt "${BACKUP_ROOT}"/*/ 2>/dev/null | tail -n +"$((KEEP_BACKUPS+1))" | xargs -r rm -rf

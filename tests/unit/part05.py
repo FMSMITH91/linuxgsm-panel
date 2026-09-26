@@ -2885,6 +2885,29 @@ check("gamedig lockfile: package.json is private and has no scripts or dev depen
       _gdl_pkg.get("private") is True and "scripts" not in _gdl_pkg
       and not _gdl_pkg.get("devDependencies"), repr(sorted(_gdl_pkg)))
 
+# ── CI installs the lockfile and runs gamedig on every Node the hosts run ──────────────────────
+# The lockfile moves only through Dependabot pull requests, and install-gamedig.sh never switches
+# to a tree that does not run: a bump that needs a newer Node than 24.04's 18.19 would pass every
+# other check and leave a fresh 24.04 install with no gamedig. install.sh's NodeSource major is
+# read from install.sh, so bumping it without the job fails here.
+with open(os.path.join(_UNIT_ROOT, ".github", "workflows", "ci.yml"), encoding="utf-8") as _fh:
+    _gdci = _fh.read()
+_gdci_job = _gdci[_gdci.find("\n  gamedig-lockfile:\n"):] if "\n  gamedig-lockfile:\n" in _gdci else ""
+_gdci_ns = _re_ntc.search(r'^NODESOURCE_NODE_MAJOR="([0-9]+)"$',
+                          open(os.path.join(_UNIT_ROOT, "install.sh"), encoding="utf-8").read(),
+                          _re_ntc.M)
+_gdci_nodes = _re_ntc.search(r'node: \[([^\]]*)\]', _gdci_job)
+_gdci_nodes = [_x.strip().strip('"') for _x in _gdci_nodes.group(1).split(",")] if _gdci_nodes else []
+check("CI: the gamedig lockfile is installed with npm ci and run on Node 18.19, 22 and "
+      "install.sh's NodeSource major",
+      bool(_gdci_job) and bool(_gdci_ns)
+      and {"18.19", "22", _gdci_ns.group(1)} <= set(_gdci_nodes)
+      and "npm ci --ignore-scripts --omit=dev" in _gdci_job
+      and "tools/gamedig/package-lock.json" in _gdci_job
+      and "--type minecraft 127.0.0.1:1" in _gdci_job,
+      "job found=%s nodes=%r nodesource=%r" % (bool(_gdci_job), _gdci_nodes,
+                                               _gdci_ns and _gdci_ns.group(1)))
+
 # ── root never `npm install`s: the only npm install in any shell script is install-gamedig's ci ──
 # Scorecard's rule (Pinned-Dependencies, shell_download_validate.go) and this project's agree: any
 # `npm install`/`i`/`install-test`/`update` is the registry deciding what runs, and `npm ci` against
@@ -3026,6 +3049,8 @@ case "$1" in
     if [ "${GDS_CI:-ok}" = broken ]; then
       printf '#!/bin/sh\necho "Error [ERR_MODULE_NOT_FOUND]: got" >&2\nexit 1\n' \
         > node_modules/gamedig/bin/gamedig.js
+    elif [ "${GDS_CI:-ok}" = silent ]; then
+      printf '#!/bin/sh\nexit 0\n' > node_modules/gamedig/bin/gamedig.js
     else
       printf '#!/bin/sh\necho "{\\"error\\":\\"Failed all 1 attempts\\"}"\n' \
         > node_modules/gamedig/bin/gamedig.js
@@ -3144,6 +3169,8 @@ else:
         check("install-gamedig.sh: npm ci runs ONCE, in a fresh staging directory — never the live tree",
               len(_ci) == 1 and (" @ %s/.stage." % os.path.join(_gds, "gamedig")) in _ci[0]
               and not _ci[0].endswith(" @ " + os.path.join(_gds, "gamedig", _h1)), repr(_c))
+        check("install-gamedig.sh: npm ci has a wall-clock bound (npm has no overall deadline)",
+              "timeout -k 30 600 npm ci " in _GDS_SCRIPT, "no `timeout -k 30 600 npm ci` in the script")
         check("install-gamedig.sh: ...with --ignore-scripts and --omit=dev, and its cache inside the stage",
               len(_ci) == 1 and all(_x in _ci[0].split() for _x in ("--ignore-scripts", "--omit=dev"))
               and ("--cache %s/.stage." % os.path.join(_gds, "gamedig")) in _ci[0], repr(_ci))
@@ -3154,9 +3181,14 @@ else:
               repr(_gds_mode(os.path.join(_gds, "gamedig", _h1))))
         check("install-gamedig.sh: BOTH /usr/local/bin/gamedig and /usr/bin/gamedig -> current",
               _st[1] == _gdt and _st[2] == _gdt, repr(_st[1:3]))
-        _un = [_i for _i, _x in enumerate(_c) if _x.startswith("NPM uninstall -g")]
-        check("install-gamedig.sh: npm's own global gamedig is removed, AFTER the new tree was built",
-              len(_un) == 1 and _c.index(_ci[0]) < _un[0]
+        # Removed by deleting its directory, never `npm uninstall -g`: that also deletes the command
+        # at npm's bin path, whatever it points at, and `gamedig` stopped resolving until the links
+        # were made. And only after they were (the root -g lookup comes after the ci).
+        _rg = [_i for _i, _x in enumerate(_c) if _x.startswith("NPM root -g")]
+        check("install-gamedig.sh: npm's own global gamedig is removed AFTER the new tree was built, "
+              "without `npm uninstall`",
+              len(_rg) == 1 and _c.index(_ci[0]) < _rg[0]
+              and not any(_x.startswith("NPM uninstall") for _x in _c)
               and not os.path.exists(os.path.join(_gds, "npm-global", "gamedig")), repr(_c))
         # The weekly cron's normal case: nothing changed, nothing fetched.
         _r, _c2 = _gds_run(_gds)
@@ -3170,6 +3202,15 @@ else:
         check("install-gamedig.sh: a deleted tree is rebuilt on the next run",
               _r.returncode == 0 and sum(_x.startswith("NPM ci ") for _x in _c3) == 2
               and _gds_state(_gds) == _st, "rc=%d %r" % (_r.returncode, _gds_state(_gds)))
+        # ...and so is one that is still THERE but broken (a file gone from node_modules): the new
+        # tree has to replace the old directory, not be moved onto it.
+        _gds_bin = os.path.join(_gds, "gamedig", _h1, "node_modules", "gamedig", "bin", "gamedig.js")
+        _gds_rm(_gds_bin)
+        _r, _c4 = _gds_run(_gds)
+        check("install-gamedig.sh: a tree that is there but broken is rebuilt in its place",
+              _r.returncode == 0 and sum(_x.startswith("NPM ci ") for _x in _c4) == 3
+              and _gds_state(_gds) == _st and os.path.exists(_gds_bin),
+              "rc=%d %r %r" % (_r.returncode, _gds_state(_gds), _r.stdout[-200:]))
         # A new lockfile (what a Dependabot bump is): a new tree, switched to; the old one goes.
         with open(os.path.join(_gds, "gamedig", "package-lock.json"), "a", encoding="utf-8") as _fh:
             _fh.write("\n")
@@ -3190,6 +3231,10 @@ else:
               "rc=%d %r %r" % (_r.returncode, _gds_state(_gds), _r.stdout[-200:]))
         _r, _ = _gds_run(_gds, GDS_CI="broken")
         check("install-gamedig.sh: a new tree that does not RUN is never switched to",
+              _r.returncode != 0 and _gds_state(_gds) == _st2 and "does not run" in _r.stdout,
+              "rc=%d %r %r" % (_r.returncode, _gds_state(_gds), _r.stdout[-200:]))
+        _r, _ = _gds_run(_gds, GDS_CI="silent")
+        check("install-gamedig.sh: ...nor one that exits 0 without gamedig's own answer (no output)",
               _r.returncode != 0 and _gds_state(_gds) == _st2 and "does not run" in _r.stdout,
               "rc=%d %r %r" % (_r.returncode, _gds_state(_gds), _r.stdout[-200:]))
         # Somebody else's gamedig: a real file, or a link to a gamedig that is not npm's or ours.
@@ -3221,6 +3266,23 @@ else:
         _shutil.rmtree(_gds, ignore_errors=True)
     check("install-gamedig.sh, driven: the whole sequence ran to its end", _gds_err is None,
           "stopped at: %r" % (_gds_err,))
+    # The links are swapped BEFORE npm's package goes, and it goes only when every link is the
+    # panel's: one left alone (a file here) may still be npm's command, and would dangle.
+    _gds = _gds_new()
+    try:
+        with open(os.path.join(_gds, "usr-local-bin", "gamedig"), "w", encoding="utf-8") as _fh:
+            _fh.write("somebody else's\n")
+        _r, _c = _gds_run(_gds)
+        check("install-gamedig.sh: npm's global gamedig stays while any link is not the panel's",
+              _r.returncode == 1 and os.path.isdir(os.path.join(_gds, "npm-global", "gamedig"))
+              and _gds_state(_gds)[2] == os.path.join(_gds, "gamedig", "current", "node_modules",
+                                                      ".bin", "gamedig"),
+              "rc=%d state=%r calls=%r" % (_r.returncode, _gds_state(_gds), _c))
+    except Exception as _e:
+        check("install-gamedig.sh: npm's global gamedig stays while any link is not the panel's",
+              False, repr(_e))
+    finally:
+        _shutil.rmtree(_gds, ignore_errors=True)
     # npm's global gamedig is the one working gamedig a host has until the new tree runs.
     _gds = _gds_new()
     try:

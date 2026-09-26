@@ -280,6 +280,15 @@ check("runtime-path: tools/panel-helper COUNTS (it is the root-owned sudo bounda
 check("runtime-path: the rest of tools/ is still noise",
       _so._is_runtime_path("tools/run-tests.sh") is False
       and _so._is_runtime_path("tools/perf_bench.py") is False)
+# ...and tools/gamedig's three files, which install.sh installs root-owned on every host and every
+# game account runs: a Dependabot bump of the lockfile is not "docs, tests or tooling".
+from panel.security import privileged as _priv_p3
+check("runtime-path: every file of tools/gamedig that install.sh places COUNTS",
+      [_n for _n, _ in _priv_p3.GAMEDIG_FILES]
+      == ["package.json", "package-lock.json", "install-gamedig.sh"]
+      and all(_so._is_runtime_path("tools/gamedig/" + _n) is True
+              for _n, _ in _priv_p3.GAMEDIG_FILES),
+      repr([(_n, _so._is_runtime_path("tools/gamedig/" + _n)) for _n, _ in _priv_p3.GAMEDIG_FILES]))
 check("runtime-path: the exception list names a file that exists",
       all((_os_p3 := __import__("os")).path.exists(f) for f in _so._RUNTIME_EXCEPTIONS))
 check("runtime-path: LICENSE is noise", _so._is_runtime_path("LICENSE") is False)
