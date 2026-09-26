@@ -371,6 +371,8 @@ def main(argv=None):
             measure_and_report(d, args.out, args.summary)
     except Abort as e:
         fail(str(e), e.code)
+    except LoginFailed as e:
+        fail("%s — the session was lost mid-walk and could not be recovered" % e)
     return 0
 
 

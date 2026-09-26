@@ -39,9 +39,10 @@ ACCEPT_PAGES = [
 
 # Controls never pressed: they end the session this walk is signed in with.
 SKIP = ["Sign out", "_acctSignOutAll"]
-# ...and never confirmed: each makes the panel act as though it, or its own host, were about to go
-# down or restart (a reboot of the panel host, a restore, a self-update, a new address), after
-# which the pages the walk has left redirect or wait instead of rendering.
+# ...and never confirmed: each asks the panel to reboot the host it runs on, restore over its own
+# database, update, re-bind or repair itself. Faked or not, the panel then behaves as though that
+# were under way (a restore really does replace the throwaway database the walk is signed in to),
+# which is not a state the pages after it should be measured in.
 SKIP_CONFIRMING = SKIP + ["rebootNagNow", "restoreBackup", "doPanelUpdate", "switchPanelBranch",
                           "changePanelBinding", "repairPanel"]
 

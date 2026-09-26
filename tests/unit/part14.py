@@ -304,7 +304,7 @@ class _JcDriver:
         return self._hits
 
 
-def _jc_main(session_enter, chrome="/usr/bin/chrome-stand-in"):
+def _jc_main(session_enter, chrome="/usr/bin/chrome-stand-in", walk=None):
     """Run run.main() with Session and the walk stood in for; (exit status, output, out dir)."""
     _out_dir = _tf14.mkdtemp(prefix="jscov-main-")
 
@@ -319,7 +319,7 @@ def _jc_main(session_enter, chrome="/usr/bin/chrome-stand-in"):
             return False
 
     _saved = (_jc_run.Session, _jc_run.walk, _jc_run.find_chrome, _sig14.getsignal(_sig14.SIGTERM))
-    _jc_run.Session, _jc_run.walk = _Session, (lambda _d, only=None: None)
+    _jc_run.Session, _jc_run.walk = _Session, (walk or (lambda _d, only=None: None))
     _jc_run.find_chrome = lambda _explicit: chrome
     _buf = _io14.StringIO()
     try:
@@ -341,6 +341,10 @@ def _jc_raise(msg, code=2):
     return _enter
 
 
+def _jc_lost(_d, only=None):
+    raise _jc_run.LoginFailed("signing in did not land: still at '/login'")
+
+
 _jc_good = {"static/js/a.js": {1: 2, 2: 0}, "static/js/b.js": {4: 0}}
 _jc_cases = {
     "no browser": _jc_main(lambda: _JcDriver(_jc_good), chrome=None),
@@ -353,19 +357,22 @@ _jc_cases = {
     "measured": _jc_main(lambda: _JcDriver(_jc_good)),
     "a flow broke": _jc_main(lambda: _JcDriver(_jc_good, flow_errors=[
         ("/users", "users", "CDPError: no reply")])),
+    "session lost": _jc_main(lambda: _JcDriver(_jc_good), walk=_jc_lost),
 }
 try:
     _jc_want = {"no browser": (2, "no Chrome/Chromium found"),
                 "panel did not boot": (2, "the panel did not boot"),
                 "sign-in did not land": (2, "signing in did not land"),
                 "nothing ran": (3, "the coverage is empty"),
-                "a page not reached": (2, "did not reach 1 page(s) it names")}
+                "a page not reached": (2, "did not reach 1 page(s) it names"),
+                "session lost": (2, "the session was lost mid-walk")}
     _jc_wrong = {_k: _jc_cases[_k][:2] for _k, (_rc, _msg) in _jc_want.items()
                  if not (_jc_cases[_k][0] == _rc and _msg in _jc_cases[_k][1]
                          and re.search(r"^(ERROR: |::error::).*" + re.escape(_msg),
                                        _jc_cases[_k][1], re.M))}
     check("js coverage: run.py exits non-zero, saying why, when there is no browser, the panel does "
-          "not boot, the sign-in does not land, nothing ran, or a page it names was not reached",
+          "not boot, the sign-in does not land, the session is lost mid-walk, nothing ran, or a "
+          "page it names was not reached",
           not _jc_wrong, repr(_jc_wrong))
     _jc_ok = _jc_cases["measured"]
     _jc_lcov = open(os.path.join(_jc_ok[2], "lcov.info")).read()
@@ -476,6 +483,24 @@ check("js coverage: a page pausing to leave is resumed only after its counts are
       and _jc_drv.hits() == {"static/js/a.js": {1: 3, 2: 3}, "static/js/b.js": {1: 0}}
       and _jc_drv.loaded == {"static/js/a.js"} and _jc_drv.held == 1,
       repr((_jc_before, _jc_cdp.sent, _jc_drv.hits(), _jc_drv.loaded)))
+
+# goto() signs in again when a page lands on /login — once. An account that can no longer sign
+# in with the password (two-factor turned on at the end of the walk) must not recurse forever.
+_jc_logins = []
+_jc_saved = (_jc_drv.path, _jc_drv.login, _jc_drv._wait_load)
+_jc_drv.path = lambda: "/login"
+_jc_drv.login = lambda: _jc_logins.append(1)
+_jc_drv._wait_load = lambda _before, timeout=30: True     # the stand-in never loads a page
+try:
+    with _ctx14.redirect_stdout(_io14.StringIO()):
+        _jc_drv.goto("/users")
+    _jc_goto_err = None
+except RecursionError as _e:
+    _jc_goto_err = _e
+finally:
+    _jc_drv.path, _jc_drv.login, _jc_drv._wait_load = _jc_saved
+check("js coverage: a page that lands on /login signs in again once, not forever",
+      _jc_goto_err is None and _jc_logins == [1], repr((_jc_goto_err, len(_jc_logins))))
 
 # reached(): a page that answers an error or lands somewhere else is recorded — by exercise()
 # itself, not only when reached() is called directly — except in the pass that confirms deletions,

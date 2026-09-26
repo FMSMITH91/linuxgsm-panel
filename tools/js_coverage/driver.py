@@ -215,8 +215,8 @@ class Driver:
             self.cdp.pump(0.1)
         return self.loads != loads_before
 
-    def goto(self, path, settle=True):
-        """Navigate to `path` on the panel, signing in again if the session was lost."""
+    def goto(self, path, settle=True, sign_in=True):
+        """Navigate to `path` on the panel, signing in again (once) if the session was lost."""
         self.snapshot()
         before = self.loads
         self.cdp.call("Page.navigate", {"url": self.base + path})
@@ -224,10 +224,10 @@ class Driver:
             log("  ! %s: no load event in 30s" % path)
         if settle:
             self.settle(quiet=0.5, limit=8.0)
-        if self.path().startswith("/login") and not path.startswith("/login"):
+        if sign_in and self.path().startswith("/login") and not path.startswith("/login"):
             log("  ! %s: signed out, signing in again" % path)
             self.login()
-            return self.goto(path, settle)
+            return self.goto(path, settle, sign_in=False)
         return True
 
     def js(self, expression, timeout=30):
