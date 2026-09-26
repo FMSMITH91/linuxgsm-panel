@@ -6214,9 +6214,14 @@ check("suites: no result printer raises on a non-string detail",
       "a FAILING check in these prints a TypeError instead of its name: %s" % ", ".join(_rep_fragile))
 
 _det_bad = []
-for _f in _REPORTER_SUITES + ["tests/unit/part01.py", "tests/unit/part02.py",
-                              "tests/unit/part03.py", "tests/unit/part04.py",
-                              "tests/unit/part05.py", "tests/unit/part06.py"]:
+# Every part on disk, globbed: a hand-kept list named parts 01-06 and stayed that way while parts
+# 07-13 were added, so a tuple detail in any of them went unread by the gate that exists for it.
+_det_parts = sorted("tests/unit/" + os.path.basename(_p)
+                    for _p in glob.glob(os.path.join(_root, "tests", "unit", "part*.py")))
+# The glob found this very file: a wrong path would find nothing and read as a clean pass.
+check("suites: the tuple-detail gate's glob finds the part files (this one included)",
+      "tests/unit/part06.py" in _det_parts, _det_parts)
+for _f in _REPORTER_SUITES + _det_parts:
     _tree = _rep_ast.parse(open(os.path.join(_root, _f), encoding="utf-8").read())
     for _n in _rep_ast.walk(_tree):
         if not (isinstance(_n, _rep_ast.Call) and getattr(_n.func, "id", "") == "check"):

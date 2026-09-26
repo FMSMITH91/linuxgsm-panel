@@ -303,10 +303,28 @@ def create_backup(kind="manual", encrypt=True, passphrase=None):
                        "this host, and writing the archive would leave it unencrypted. Check "
                        "data/cred_key, or clear the backup passphrase to take plain backups "
                        "deliberately.")
-    name = "panel-backup-%s-%s.tar.gz" % (time.strftime("%Y%m%d-%H%M%S"), kind)
-    if passphrase:
-        name += ENC_SUFFIX
-    dest = BACKUP_DIR / name
+    # The name is CLAIMED (O_EXCL), not just computed. It is the time to the second, and it used to
+    # be opened for writing without asking whether it was taken: a second backup of the same kind
+    # in that second overwrote the first archive, and when the second then failed, the cleanup
+    # below os.remove()d the name — deleting a backup already reported to its caller as taken. A
+    # taken name moves on to the next second; the name only has to be unique, and still sorts.
+    _now, dest = time.time(), None
+    for _bump in range(10):
+        name = "panel-backup-%s-%s.tar.gz%s" % (
+            time.strftime("%Y%m%d-%H%M%S", time.localtime(_now + _bump)), kind,
+            ENC_SUFFIX if passphrase else "")
+        try:
+            os.close(os.open(str(BACKUP_DIR / name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        except FileExistsError:
+            continue
+        except OSError:
+            _log.exception("backup creation failed")
+            return False, "Backup failed — see panel logs."
+        dest = BACKUP_DIR / name
+        break
+    if dest is None:
+        _log.error("backup creation failed: no free archive name")
+        return False, "Backup failed — see panel logs."
     tmp = tempfile.mkdtemp(prefix="lgsm-bk-")
     try:
         _snapshot_db(os.path.join(tmp, "panel.db"))

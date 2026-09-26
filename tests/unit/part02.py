@@ -3221,11 +3221,17 @@ check("stats endpoint: ...and an install in progress is never overwritten",
       '_readable and gs.installed and gs.status not in ("installing", "configuring")' in _stats_src)
 
 # The predicate that decides online/offline must stay the one _live_run_state promises it matches.
+#
+# Stubbed on _core, the DEFINITION site — app reaches it as `_sm.server_live_metrics`, which the
+# package's __getattr__ forwards there. This used to set and then "restore" the name on the
+# PACKAGE, and the restore left a real attribute behind that shadows __getattr__ for the rest of
+# the run: every later stub on _core.server_live_metrics was invisible to app, and a part10 check
+# went on to run the real read — an actual `ssh` to its fixture host — while still passing.
 import app as _app_mod
-_lrs_orig = _app_mod._sm.server_live_metrics
+_lrs_orig = _sm_core.server_live_metrics
 try:
     _lrs = {"m": {}}
-    _app_mod._sm.server_live_metrics = lambda r, s=None, p=None, force=False: _lrs["m"]
+    _sm_core.server_live_metrics = lambda r, s=None, p=None, force=False: _lrs["m"]
     _gsx, _rx = NS(short_name="gmodserver", port=27015), NS()
 
     _lrs["m"] = {"ram_total": 0, "port_open": False, "game_procs": 0}      # the failed sample
@@ -3239,7 +3245,10 @@ try:
     _lrs["m"] = {"ram_total": 8 * 10 ** 9, "port_open": False, "game_procs": 4}
     check("_live_run_state: live processes are True", _app_mod._live_run_state(_gsx, _rx) is True)
 finally:
-    _app_mod._sm.server_live_metrics = _lrs_orig
+    _sm_core.server_live_metrics = _lrs_orig
+check("ssh_manager: no test left server_live_metrics bound on the package (it shadows __getattr__)",
+      "server_live_metrics" not in vars(_app_mod._sm),
+      "a real attribute on panel.ops.ssh_manager hides every later _core stub from app")
 
 
 # ── a crashed server must not report itself online (panel bug #22) ───────────────────────────────

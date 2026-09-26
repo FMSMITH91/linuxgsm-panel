@@ -505,13 +505,20 @@ def _evict_unauthorized_viewers(app, socketio, server_id):
                 _console_viewers[server_id].pop(sid, None)
                 if not _console_viewers[server_id]:
                     del _console_viewers[server_id]
+        # Out of the ROOM first, and on its own: leaving it is what stops the stream, the notice is a
+        # courtesy. They were one try block with the notice first, so a notice that raised skipped
+        # the leave and the revoked socket went on receiving what other viewers' polls pushed. The
+        # notice still arrives after the leave — `to=sid` addresses the socket, not the room.
+        try:
+            socketio.server.leave_room(sid, f"console_{server_id}", namespace="/")
+        except Exception:
+            app.logger.debug("console: could not evict %s", sid, exc_info=True)
         try:
             socketio.emit("console_output",
                           {"server_id": server_id,
                            "data": "[access to this console was revoked]"}, to=sid)
-            socketio.server.leave_room(sid, f"console_{server_id}", namespace="/")
         except Exception:
-            app.logger.debug("console: could not evict %s", sid, exc_info=True)
+            app.logger.debug("console: could not tell %s it was evicted", sid, exc_info=True)
         dropped += 1
     return dropped
 
