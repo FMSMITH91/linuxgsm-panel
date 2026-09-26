@@ -80,8 +80,9 @@ REPO_URL="https://github.com/FMSMITH91/linuxgsm-panel.git"
 # Restricted to a safe git-ref charset so it can't inject options/paths into git commands.
 #
 # That choice moves the panel's CODE. It does not, by itself, choose where root takes its OWN pieces
-# from (the helper, db_maintenance, this installer): when the panel started the run, root takes
-# those only from TRUSTED_BRANCH, whatever PANEL_BRANCH says. See root_source_commit.
+# from (the helper, db_maintenance, this installer, the recovery command, gamedig's lockfile and
+# install script): when the panel started the run, root takes those only from TRUSTED_BRANCH,
+# whatever PANEL_BRANCH says. See root_source_commit.
 TRUSTED_BRANCH="main"
 DEFAULT_BRANCH="${TRUSTED_BRANCH}"
 if [ -n "${PANEL_BRANCH:-}" ] && printf '%s' "${PANEL_BRANCH}" | grep -Eq '^[A-Za-z0-9._/-]{1,100}$' \

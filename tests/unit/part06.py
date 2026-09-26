@@ -8107,8 +8107,10 @@ try:
           and "OLD run" not in " ".join(_uc.get("lines", [])),
           "wrapper %r rc=%s; %r" % (_uc_wrapper, _uc_w.returncode, _uc_show(_uc)))
     # The last line of the caller's no-op branch is update_noop_line's, right before its exit 0.
+    # Anchored on install_gamedig, the root-owned piece the branch refreshes just before it (gamedig's
+    # own checks hold that it is there): its output must come BEFORE the line the card reads last.
     check("install.sh: the update's no-op branch ends on update_noop_line, then exit 0",
-          "        install_recovery_command\n        # A hold is NOT \"up to date\": the pinned commit "
+          "        install_gamedig\n        # A hold is NOT \"up to date\": the pinned commit "
           "was not installed (see update_noop_line).\n        update_noop_line\n        exit 0\n    fi\n"
           in _inst, "update_noop_line is not what the no-op branch ends on")
 

@@ -881,8 +881,8 @@ regardless of this file — this changelog is for humans.
   Separately, the branch the panel tracks (`PANEL_BRANCH`) decided which branch root verified
   against, so any pushed branch could supply the helper. When the panel starts an update, root now
   takes its pieces from main only. On another branch the code still switches, and the helper,
-  `db_maintenance.py`, the installer and the recovery command are left as they were, with a
-  message in the update log. An operator testing a branch as root (`cd / && sudo
+  `db_maintenance.py`, the installer, the recovery command and gamedig's lockfile and install
+  script are left as they were, with a message in the update log. An operator testing a branch as root (`cd / && sudo
   PANEL_BRANCH=<branch> bash /usr/local/lib/linuxgsm-panel/install.sh`, or from a root shell) still
   gets that branch's pieces. The helper marks the
   panel's runs in a way the panel cannot remove, and `.github/SECURITY.md` explains how. Installs

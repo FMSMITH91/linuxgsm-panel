@@ -2542,8 +2542,9 @@ def _self_update_env(ref, branch):
     """The environment the root-owned installer runs with for a panel-self-update.
 
     PANEL_SELF_UPDATE is what tells the installer the PANEL chose this run, and so chose
-    PANEL_BRANCH: root then verifies its own pieces (this helper, db_maintenance, the installer)
-    against main only, and withholds them on any other branch. An operator running install.sh as
+    PANEL_BRANCH: root then verifies its own pieces (this helper, db_maintenance, the installer,
+    gamedig's lockfile and install script) against main only, and withholds them on any other
+    branch. An operator running install.sh as
     root chooses the branch themselves, and root follows it. Set AFTER copying os.environ, so no
     value the panel hands sudo can remove it — this verb is the panel's only way to run the
     installer as root, so there is no route on which the panel looks like the operator."""
