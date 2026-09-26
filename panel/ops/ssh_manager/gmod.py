@@ -1,5 +1,9 @@
-"""SSH connection manager for remote LinuxGSM servers.
-Also supports local execution for running on the panel's own machine."""
+"""Garry's Mod mountable game content.
+
+Part of the SSH connection manager for remote LinuxGSM servers, which also supports local
+execution for running on the panel's own machine (see the package docstring for how names
+resolve across its submodules).
+"""
 import re
 from panel.ops.ssh_manager import (_core)  # noqa: E402,F401  (module objects: the
 # reference resolves at CALL time, which is what keeps a stub on the definition site
@@ -88,14 +92,20 @@ def content_box_users(found):
     only CS:S is therefore still listed — there is nothing on the host that distinguishes it from
     that real server, and listing an install you can decline beats hiding one you wanted.
     """
+    by_user = _lgsm_names_by_user(found)
+    return {u for u, names in by_user.items()
+            if names <= CONTENT_LGSM_NAMES and (len(names) > 1 or u == _CONTENT_USER)}
+
+
+def _lgsm_names_by_user(found):
+    """Group a discovery scan's LinuxGSM instance names by the Linux user that holds them."""
     by_user = {}
     for f in (found or []):
         user = (f.get("user") or "").strip()
         name = (f.get("lgsm_name") or "").strip()
         if user and name:
             by_user.setdefault(user, set()).add(name)
-    return {u for u, names in by_user.items()
-            if names <= CONTENT_LGSM_NAMES and (len(names) > 1 or u == _CONTENT_USER)}
+    return by_user
 
 
 def _valid_content_games(games):
@@ -117,7 +127,8 @@ def _user_primary_group(server, user):
     host the only other thing standing in front of that is the denylist in privileged.py.
 
     "" instead, so the caller can tell a real group from a failed read; the grant refuses rather
-    than guessing which group to join."""
+    than guessing which group to join.
+    """
     grp, _, rc = _core.run_command(server, f"id -gn {_core._quote(user)} 2>/dev/null", timeout=10)
     if rc != 0:
         _core._log.warning("could not read the primary group of %s", user)
@@ -126,10 +137,13 @@ def _user_primary_group(server, user):
 
 
 def detect_content_user(server, games=("cstrike",)):
-    """Find a host user whose serverfiles already hold the wanted game content (e.g. an existing
-    srcds / LinuxGSM cssserver). Returns {"user", "group", "present": {game: path}} for the user with
-    the MOST wanted games present, else None — so a GMod install can reuse content already on the host
-    instead of re-downloading gigabytes. One sudo scan; only constant game keys reach the shell."""
+    """Find a host user whose serverfiles already hold the wanted game content.
+
+    E.g. an existing srcds / LinuxGSM cssserver. Returns {"user", "group", "present": {game: path}}
+    for the user with the MOST wanted games present, else None — so a GMod install can reuse
+    content already on the host instead of re-downloading gigabytes. One sudo scan; only constant
+    game keys reach the shell.
+    """
     wanted = _valid_content_games(games) or list(GMOD_CONTENT_GAMES)
     try:
         # Was a shell loop over /home building its inner list by interpolating the game keys. The
@@ -138,11 +152,7 @@ def detect_content_user(server, games=("cstrike",)):
     except Exception:
         _core._log.debug("detect_content_user scan failed", exc_info=True)
         return None
-    by_user = {}
-    for line in (out or "").splitlines():
-        parts = line.strip().split("|")
-        if len(parts) == 3 and parts[0] == "HIT" and _CU_NAME_RE.match(parts[1]) and parts[2] in GMOD_CONTENT_GAMES:
-            by_user.setdefault(parts[1], set()).add(parts[2])
+    by_user = _parse_content_scan(out)
     if not by_user:
         return None
     user = max(by_user, key=lambda u: len(by_user[u]))
@@ -150,10 +160,23 @@ def detect_content_user(server, games=("cstrike",)):
             "present": {g: f"/home/{user}/serverfiles/{g}" for g in sorted(by_user[user])}}
 
 
+def _parse_content_scan(out):
+    """Map user -> set of content games from the `content-scan` verb's HIT|user|game lines."""
+    by_user = {}
+    for line in (out or "").splitlines():
+        parts = line.strip().split("|")
+        if len(parts) == 3 and parts[0] == "HIT" and _CU_NAME_RE.match(parts[1]) and parts[2] in GMOD_CONTENT_GAMES:
+            by_user.setdefault(parts[1], set()).add(parts[2])
+    return by_user
+
+
 def ensure_content_user(server):
-    """Return an existing content user (reuse), else create a locked, non-login content user with an
-    empty serverfiles dir to install content into. Returns {"user", "group", "present"} or None on
-    failure. Never downloads here — just guarantees a home."""
+    """Return an existing content user (reuse), else create one.
+
+    The created user is a locked, non-login content user with an empty serverfiles dir to install
+    content into. Returns {"user", "group", "present"} or None on failure. Never downloads here —
+    just guarantees a home.
+    """
     found = detect_content_user(server, tuple(GMOD_CONTENT_GAMES))
     if found:
         return found
@@ -176,8 +199,11 @@ _DF_PATH_RE = re.compile(r"^/[\w./-]*\Z")   # absolute path, no shell metacharac
 
 
 def path_disk_free(server, path="/home"):
-    """Free + total bytes of the filesystem holding `path` (where game content is stored). Returns
-    (free_bytes, total_bytes) or (None, None). Best-effort; falls back to /home for a bad path."""
+    """Free + total bytes of the filesystem holding `path` (where game content is stored).
+
+    Returns (free_bytes, total_bytes) or (None, None). Best-effort; falls back to /home for a bad
+    path.
+    """
     p = path if _DF_PATH_RE.match(path or "") else "/home"
     # Was `df -PB1 <path> | awk 'NR==2{print $2, $4}'`. Same two fields, read in Python.
     out, _, _ = _core.run_privileged(server, "disk-free", [p], timeout=10, merge_stderr=False)
@@ -192,8 +218,9 @@ def path_disk_free(server, path="/home"):
 
 
 def content_present(server, content_user, game):
-    """Whether <content_user>/serverfiles/<game> exists on the host: True, False, or None when the
-    probe could not be RUN.
+    """Whether <content_user>/serverfiles/<game> exists on the host.
+
+    True, False, or None when the probe could not be RUN.
 
     The None is the point, the same way it is in gmod_current_mounts below. This used to be
     `return rc == 0`, which turned a call that never happened into the positive assertion "this
@@ -217,7 +244,8 @@ def content_present(server, content_user, game):
     banner says so), which is exactly what a host whose panel has been updated past its root-owned
     helper answers with. An rc of 2 is still not a reading of the disk — the probe never ran — so
     classifying on the two statuses that ARE answers, rather than on "anything but 0", is what
-    keeps that host out of the "not installed" bucket it used to land in."""
+    keeps that host out of the "not installed" bucket it used to land in.
+    """
     if not (_CU_NAME_RE.match(content_user or "") and game in GMOD_CONTENT_GAMES):
         return False
     _out, _err, rc = _core.run_privileged(server, "content-game-present", [content_user, game],
@@ -234,10 +262,13 @@ def content_present(server, content_user, game):
 
 
 def _content_update_cron_body(content_user, lgsm_names):
-    """Pure: the /etc/cron.d text that weekly-updates each content game as the content user. Mirrors a
-    standard LinuxGSM content box — `update-lgsm` (refresh scripts) Sunday 1AM then `update` (refresh
-    content) Sunday 2AM, staggered so they don't all run at once. content_user is validated upstream;
-    lgsm_names are constant script names, so the output is safe to write verbatim."""
+    """Pure: the /etc/cron.d text that weekly-updates each content game as the content user.
+
+    Mirrors a standard LinuxGSM content box — `update-lgsm` (refresh scripts) Sunday 1AM then
+    `update` (refresh content) Sunday 2AM, staggered so they don't all run at once. content_user is
+    validated upstream; lgsm_names are constant script names, so the output is safe to write
+    verbatim.
+    """
     lines = ["# LinuxGSM Panel - weekly GMod content updates for %s (managed by the panel)." % content_user,
              "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]
     for i, lgsm in enumerate(lgsm_names):
@@ -249,12 +280,60 @@ def _content_update_cron_body(content_user, lgsm_names):
     return "\n".join(lines) + "\n"
 
 
+def _install_content_game(server, content_user, g, on_progress):
+    """Install one content game unless the probe says otherwise; returns its outcome bucket.
+
+    The bucket is one of "installed", "already", "unchecked", "failed" or "manual" — and only the
+    first is a claim that content is on the host because THIS run put it there.
+    """
+    _have = content_present(server, content_user, g)
+    if _have is True:
+        return "already"
+    if _have is None:
+        # Skip unless the probe CONFIRMED the content is absent. An unknown here used to read
+        # as "absent" and start an up-to-7200s SteamCMD download over content that is probably
+        # already on disk; skipping costs the operator a retry, downloading costs hours. It is
+        # a skip, NOT a game we found — hence its own bucket in the message.
+        return "unchecked"
+    lgsm = GMOD_CONTENT_GAMES[g][1]
+    if lgsm is None:
+        return "manual"   # mount-only (owned game): no LinuxGSM server — mounts only if present
+    if on_progress:
+        on_progress("Installing %s content via LinuxGSM" % GMOD_CONTENT_GAMES[g][0])
+    # Fetch linuxgsm.sh once (shared), create the game's script, then auto-install its content.
+    inner = (f"cd /home/{content_user} && "
+             f"{{ [ -x linuxgsm.sh ] || {{ wget -q -O linuxgsm.sh https://linuxgsm.sh && chmod +x linuxgsm.sh; }}; }} && "
+             f"bash linuxgsm.sh {lgsm} && ./{lgsm} auto-install")
+    _core.shell_as_game_user(server, content_user, inner, timeout=7200)
+    _now = content_present(server, content_user, g)
+    if _now is True:
+        return "installed"   # only a CONFIRMED read credits an install; the route prints this
+    if _now is False:
+        return "failed"      # the download ran and the content is genuinely not there
+    return "unchecked"       # it may well be there; we cannot say, so we do not say
+
+
+def _content_install_message(buckets, cron, content_user):
+    """The install outcome as one message: which of the five things happened to each game."""
+    _parts = [_lbl + ": " + ", ".join(_gs) for _lbl, _gs in
+              (("installed", buckets["installed"]), ("already present", buckets["already"]),
+               ("could not check", buckets["unchecked"]), ("install failed", buckets["failed"]),
+               ("no LinuxGSM installer", buckets["manual"])) if _gs]
+    if cron is not True:
+        _core._log.warning("gmod content install: %s's weekly update cron was not written (%s) — "
+                           "its content will not be kept current until this runs again",
+                           content_user, "host unreadable" if cron is None else "the write failed")
+        _parts.append("weekly update cron not written")
+    return "; ".join(_parts) or "nothing to install"
+
+
 def install_gmod_content(server, content_user, games, on_progress=None):
-    """Install each game's content under the content user via LinuxGSM — the same way a normal
-    LinuxGSM content box does: fetch the game's script, then `auto-install` (non-interactive; runs
-    SteamCMD + validate). Multiple games share ~/serverfiles, each in its own game dir. Skips games
-    already present, then (re)writes the weekly update cron so content stays current. Long-running.
-    Returns (ok, installed_list, msg).
+    """Install each game's content under the content user via LinuxGSM.
+
+    The same way a normal LinuxGSM content box does: fetch the game's script, then `auto-install`
+    (non-interactive; runs SteamCMD + validate). Multiple games share ~/serverfiles, each in its own
+    game dir. Skips games already present, then (re)writes the weekly update cron so content stays
+    current. Long-running. Returns (ok, installed_list, msg).
 
     `msg` says which of the five things happened to each game, because there is no single sentence
     that is true of all of them. It used to be `"installed: …" if installed else "already present"`,
@@ -262,7 +341,8 @@ def install_gmod_content(server, content_user, games, on_progress=None):
     every probe unreadable nothing is installed, nothing is SKIPPED-because-present either, and the
     function still answered "already present" — a positive claim about the host's disk built out of
     reads that never happened. A skipped mount-only game and a download that ran and produced
-    nothing both landed on it too."""
+    nothing both landed on it too.
+    """
     games = _valid_content_games(games)
     # _CU_NAME_RE is a username grammar, and "root" satisfies it: the commands below run AS this
     # account, so it is held to the builder's own check too — before any probe reaches the host.
@@ -270,37 +350,9 @@ def install_gmod_content(server, content_user, games, on_progress=None):
         return False, [], "invalid content user"
     # Each game ends in exactly one of these, and only the first is a claim that content is on the
     # host because THIS run put it there.
-    installed, already, unchecked, failed, manual = [], [], [], [], []
+    buckets = {"installed": [], "already": [], "unchecked": [], "failed": [], "manual": []}
     for g in games:
-        _have = content_present(server, content_user, g)
-        if _have is True:
-            already.append(g)
-            continue
-        if _have is None:
-            # Skip unless the probe CONFIRMED the content is absent. An unknown here used to read
-            # as "absent" and start an up-to-7200s SteamCMD download over content that is probably
-            # already on disk; skipping costs the operator a retry, downloading costs hours. It is
-            # a skip, NOT a game we found — hence its own bucket in the message.
-            unchecked.append(g)
-            continue
-        lgsm = GMOD_CONTENT_GAMES[g][1]
-        if lgsm is None:
-            manual.append(g)   # mount-only (owned game): no LinuxGSM server — mounts only if present
-            continue
-        if on_progress:
-            on_progress("Installing %s content via LinuxGSM" % GMOD_CONTENT_GAMES[g][0])
-        # Fetch linuxgsm.sh once (shared), create the game's script, then auto-install its content.
-        inner = (f"cd /home/{content_user} && "
-                 f"{{ [ -x linuxgsm.sh ] || {{ wget -q -O linuxgsm.sh https://linuxgsm.sh && chmod +x linuxgsm.sh; }}; }} && "
-                 f"bash linuxgsm.sh {lgsm} && ./{lgsm} auto-install")
-        _core.shell_as_game_user(server, content_user, inner, timeout=7200)
-        _now = content_present(server, content_user, g)
-        if _now is True:
-            installed.append(g)   # only a CONFIRMED read credits an install; the route prints this
-        elif _now is False:
-            failed.append(g)      # the download ran and the content is genuinely not there
-        else:
-            unchecked.append(g)   # it may well be there; we cannot say, so we do not say
+        buckets[_install_content_game(server, content_user, g, on_progress)].append(g)
     # An unwritten update cron is part of the outcome, not a detail for the log: the content this
     # call just downloaded is exactly what that cron keeps current, and it is written HERE, at the
     # end of the install — so "could not, left it alone" means a content box with no update job at
@@ -311,28 +363,21 @@ def install_gmod_content(server, content_user, games, on_progress=None):
         _cron = ensure_content_update_cron(server, content_user)
     except Exception:
         _core._log.debug("content update cron setup failed", exc_info=True)
-    _parts = [_lbl + ": " + ", ".join(_gs) for _lbl, _gs in
-              (("installed", installed), ("already present", already),
-               ("could not check", unchecked), ("install failed", failed),
-               ("no LinuxGSM installer", manual)) if _gs]
-    if _cron is not True:
-        _core._log.warning("gmod content install: %s's weekly update cron was not written (%s) — "
-                           "its content will not be kept current until this runs again",
-                           content_user, "host unreadable" if _cron is None else "the write failed")
-        _parts.append("weekly update cron not written")
-    return True, installed, ("; ".join(_parts) or "nothing to install")
+    return True, buckets["installed"], _content_install_message(buckets, _cron, content_user)
 
 
 def _installed_content_lgsm_names(server, content_user):
-    """LinuxGSM game names of the content games currently installed under the content user (its
-    serverfiles has that game's dir AND the game's script exists) — or None when any probe in the
-    sweep could not be read. Used to build the update cron.
+    """The LinuxGSM names of the content games installed under the content user, or None.
+
+    Installed means its serverfiles has that game's dir AND the game's script exists; None when
+    any probe in the sweep could not be read. Used to build the update cron.
 
     None, not a short list. The only caller rewrites the cron to match exactly what comes back, so a
     game this could not see is a game whose weekly update job gets dropped; and when the host stops
     answering mid-sweep EVERY game goes unseen, which used to come back as [] — "nothing is
     installed" — and deleted the cron outright. A partial answer is worse than no answer here, so
-    the first unreadable probe ends the sweep."""
+    the first unreadable probe ends the sweep.
+    """
     names = []
     for g, (_lbl, lgsm) in GMOD_CONTENT_GAMES.items():
         if not lgsm:
@@ -362,12 +407,41 @@ def _installed_content_lgsm_names(server, content_user):
 _NO_CRONTAB_RE = re.compile(r"no crontab for", re.I)
 
 
+def _read_content_crontab(server, content_user):
+    """Read the content user's own crontab, returning (text, was_read) — two attempts.
+
+    `crontab -l` exits non-zero both when the user HAS no crontab and when the read failed, and
+    only the message tells them apart — the same test cron.py's read_cron_jobs makes. The rc was
+    discarded here, so a host that did not answer read as "this user automates nothing", and the
+    panel went on to manage a cron next to one it could not see.
+    """
+    ct, ct_err, ct_rc, ct_read = "", "", -1, False
+    for _ in range(2):          # one timeout is a poor reason to leave an install un-updated
+        ct, ct_err, ct_rc = _core.run_privileged(server, "crontab-list", [content_user], timeout=10,
+                                                 merge_stderr=False)
+        ct_read = ct_rc == 0 or bool(_NO_CRONTAB_RE.search("%s\n%s" % (ct_err or "", ct or "")))
+        if ct_read:
+            break
+    return ct, ct_read
+
+
+def _crontab_updates_content(ct):
+    """True when a crontab already carries an active LinuxGSM `update` / `update-lgsm` job."""
+    for line in (ct or "").splitlines():
+        s = line.strip()
+        if s and not s.startswith("#") and re.search(r"\bupdate(-lgsm)?\b", s):
+            return True
+    return False
+
+
 def ensure_content_update_cron(server, content_user):
-    """Write a weekly cron (as the content user) that keeps every installed content game current —
-    Source games DO get content updates, and a stale copy eventually stops matching clients. Mirrors a
-    standard LinuxGSM content box: `update-lgsm` (refresh scripts) Sunday 1AM, then `update` (refresh
-    content via SteamCMD) Sunday 2AM, staggered so they don't all run at once. Idempotent — rewrites
-    the whole file to match whatever is currently installed. Removes the file when nothing's left.
+    """Write a weekly cron (as the content user) that keeps every installed content game current.
+
+    Source games DO get content updates, and a stale copy eventually stops matching clients.
+    Mirrors a standard LinuxGSM content box: `update-lgsm` (refresh scripts) Sunday 1AM, then
+    `update` (refresh content via SteamCMD) Sunday 2AM, staggered so they don't all run at once.
+    Idempotent — rewrites the whole file to match whatever is currently installed. Removes the file
+    when nothing's left.
 
     Three answers, like every other read in this module: True when the host's cron now matches what
     is installed (written, removed, or already the admin's own job), False when there is nothing to
@@ -381,31 +455,19 @@ def ensure_content_update_cron(server, content_user):
     read would otherwise mean a content box that never gets an update cron at all, with nothing but
     a log line to say so; both callers discard this return value, so they must put the fact in the
     message they hand back instead. The read below also gets a second attempt before it gives up,
-    because one timeout is a poor reason to leave a fresh install un-updated forever."""
+    because one timeout is a poor reason to leave a fresh install un-updated forever.
+    """
     if not _CU_NAME_RE.match(content_user or ""):
         return False
     # If the content user already automates updates in its OWN crontab (e.g. a hand-rolled content box
     # like an existing srcds), leave it alone — never add duplicate update jobs on top of the admin's.
-    #
-    # `crontab -l` exits non-zero both when the user HAS no crontab and when the read failed, and
-    # only the message tells them apart — the same test cron.py's read_cron_jobs makes. The rc was
-    # discarded here, so a host that did not answer read as "this user automates nothing", and the
-    # panel went on to manage a cron next to one it could not see.
-    ct, ct_err, ct_rc, ct_read = "", "", -1, False
-    for _ in range(2):          # one timeout is a poor reason to leave an install un-updated
-        ct, ct_err, ct_rc = _core.run_privileged(server, "crontab-list", [content_user], timeout=10,
-                                                 merge_stderr=False)
-        ct_read = ct_rc == 0 or bool(_NO_CRONTAB_RE.search("%s\n%s" % (ct_err or "", ct or "")))
-        if ct_read:
-            break
+    ct, ct_read = _read_content_crontab(server, content_user)
     if not ct_read:
         _core._log.warning("content update cron: could not read %s's crontab — leaving the cron "
                            "as it is", content_user)
         return None
-    for line in (ct or "").splitlines():
-        s = line.strip()
-        if s and not s.startswith("#") and re.search(r"\bupdate(-lgsm)?\b", s):
-            return True   # the user already updates its content; don't manage a second cron
+    if _crontab_updates_content(ct):
+        return True   # the user already updates its content; don't manage a second cron
     names = _installed_content_lgsm_names(server, content_user)
     if names is None:
         # An unreadable sweep is not an empty host. Removing the cron on one is how every content
@@ -422,14 +484,36 @@ def ensure_content_update_cron(server, content_user):
     return rc == 0
 
 
+def _remove_content_game(server, content_user, g):
+    """Remove one game's content and LinuxGSM install; True only when its absence is CONFIRMED."""
+    lgsm = GMOD_CONTENT_GAMES[g][1]
+    # The verb takes the NAMES; the helper builds the paths — three removals that used to be
+    # `rm -rf`s built from an interpolated user name and game key. Validated names are NOT what
+    # makes this safe as root: the content account owns every directory on the way and can
+    # turn any of them into a symlink, which a fixed subpath does nothing about. The helper
+    # walks each path by descriptor, O_NOFOLLOW at every step (_remove_under_home), so a link
+    # on the way is refused rather than followed. The shared lgsm/ framework dir is left for
+    # the other games.
+    _core.run_privileged(server, "content-game-remove", [content_user, g, lgsm or "-"],
+                         timeout=120, merge_stderr=False)
+    # `is False`, not `not …`: the probe is the ONLY evidence this removal happened (the rm's
+    # own rc says nothing about the other two paths), and an unknown used to be falsy — so a
+    # host that stopped answering during the 120s rm put the game in `removed` and the operator
+    # was told, verbatim, that gigabytes still on disk had been freed. Only a confirmed absence
+    # counts; anything else is reported as unverified so the next run tries again.
+    return content_present(server, content_user, g) is False
+
+
 def uninstall_gmod_content(server, content_user, games):
-    """Remove each game's content from the host content user — the content dir plus its LinuxGSM
-    install (script + config) — then refresh the weekly update cron so it no longer lists the removed
-    games. HOST-WIDE: this frees disk for every GMod server on the host, so any server still mounting
-    it just loses that content (GMod skips a missing mount). Returns (ok, removed_list, msg), where
-    removed_list holds only the games whose absence was CONFIRMED afterwards — the caller prints it
-    as what was freed, so a game the host would not answer about belongs in the message, not in
-    that list."""
+    """Remove each game's content from the host content user, then refresh the update cron.
+
+    Removes the content dir plus its LinuxGSM install (script + config), then refreshes the weekly
+    update cron so it no longer lists the removed games. HOST-WIDE: this frees disk for every GMod
+    server on the host, so any server still mounting it just loses that content (GMod skips a
+    missing mount). Returns (ok, removed_list, msg), where removed_list holds only the games whose
+    absence was CONFIRMED afterwards — the caller prints it as what was freed, so a game the host
+    would not answer about belongs in the message, not in that list.
+    """
     games = _valid_content_games(games)
     # _CU_NAME_RE is a username grammar, and "root" satisfies it: the commands below run AS this
     # account, so it is held to the builder's own check too — before any probe reaches the host.
@@ -437,22 +521,7 @@ def uninstall_gmod_content(server, content_user, games):
         return False, [], "invalid content user"
     removed, unverified = [], []
     for g in games:
-        lgsm = GMOD_CONTENT_GAMES[g][1]
-        # The verb takes the NAMES; the helper builds the paths — three removals that used to be
-        # `rm -rf`s built from an interpolated user name and game key. Validated names are NOT what
-        # makes this safe as root: the content account owns every directory on the way and can
-        # turn any of them into a symlink, which a fixed subpath does nothing about. The helper
-        # walks each path by descriptor, O_NOFOLLOW at every step (_remove_under_home), so a link
-        # on the way is refused rather than followed. The shared lgsm/ framework dir is left for
-        # the other games.
-        _core.run_privileged(server, "content-game-remove", [content_user, g, lgsm or "-"],
-                       timeout=120, merge_stderr=False)
-        # `is False`, not `not …`: the probe is the ONLY evidence this removal happened (the rm's
-        # own rc says nothing about the other two paths), and an unknown used to be falsy — so a
-        # host that stopped answering during the 120s rm put the game in `removed` and the operator
-        # was told, verbatim, that gigabytes still on disk had been freed. Only a confirmed absence
-        # counts; anything else is reported as unverified so the next run tries again.
-        if content_present(server, content_user, g) is False:
+        if _remove_content_game(server, content_user, g):
             removed.append(g)
         else:
             unverified.append(g)
@@ -461,26 +530,34 @@ def uninstall_gmod_content(server, content_user, games):
         _cron = ensure_content_update_cron(server, content_user)   # rescan -> drop removed games
     except Exception:
         _core._log.debug("content update cron refresh after uninstall failed", exc_info=True)
+    return True, removed, _content_uninstall_message(removed, unverified, _cron, content_user)
+
+
+def _content_uninstall_message(removed, unverified, cron, content_user):
+    """The uninstall outcome as one message, naming what could not be confirmed or refreshed."""
     if unverified:
         _core._log.warning("gmod content uninstall: could not confirm %s was removed for %s",
                            ", ".join(unverified), content_user)
     _msg = ("removed: " + ", ".join(removed) if removed else "nothing to remove")
     if unverified:
         _msg += "; unverified: " + ", ".join(unverified)
-    if _cron is not True:
+    if cron is not True:
         # Same reason as in install_gmod_content: the return is dropped by both callers, so the
         # only place this can be said is the message. Here it means the weekly cron still lists
         # games that are gone — harmless to run, but it is not the state the refresh promised.
         _core._log.warning("gmod content uninstall: %s's weekly update cron was not refreshed (%s)",
-                           content_user, "host unreadable" if _cron is None else "the write failed")
+                           content_user, "host unreadable" if cron is None else "the write failed")
         _msg += "; update cron not refreshed"
-    return True, removed, _msg
+    return _msg
 
 
 def _gmod_mount_files(content_user, games):
-    """Build the (mount.cfg, mountdepots.txt) text GMod reads to mount each game's content from the
-    content user's serverfiles. Pure — content_user is a validated Linux username and every game is a
-    constant key, so the output is safe to write verbatim. hl2 depot is always enabled (base content)."""
+    """Build the (mount.cfg, mountdepots.txt) text GMod reads to mount each game's content.
+
+    Mounted from the content user's serverfiles. Pure — content_user is a validated Linux username
+    and every game is a constant key, so the output is safe to write verbatim. hl2 depot is always
+    enabled (base content).
+    """
     mountcfg = '"mountcfg"\n{\n' + "".join(
         '\t"%s"\t"/home/%s/serverfiles/%s"\n' % (g, content_user, g) for g in games) + "}\n"
     depots = ('"gamedepotsystem"\n{\n\t"hl2"\t\t"1"\n'
@@ -498,7 +575,8 @@ def _mount_needs_restart(server, gmod_user):
     only then did GMod log `Adding mount.cfg path: /home/gmodcontent/serverfiles/cstrike`.
 
     A read that FAILS answers True. A spurious "restart to apply" costs a restart nobody needed; a
-    missing one tells the user their content is mounted when it silently is not there."""
+    missing one tells the user their content is mounted when it silently is not there.
+    """
     inner = _core._tmux_live_socket_sh(_GMOD_SELFNAME) + "echo __LIVE__"
     try:
         out, _err, rc = _core.shell_as_game_user(server, gmod_user, inner, timeout=15)
@@ -510,33 +588,43 @@ def _mount_needs_restart(server, gmod_user):
     return True
 
 
-def gmod_mount_setup(server, gmod_user, content_user, games):
-    """Write a GMod server's mount config to mount exactly `games` from the content user, granting the
-    GMod user read access first. An EMPTY `games` writes an empty mount.cfg (unmounts everything).
-    Idempotent. Returns (ok, msg). Group membership takes effect when the GMod server (re)starts."""
-    import base64
-    games = _valid_content_games(games)
-    # Both accounts go into commands run AS them — see install_gmod_content for why the builder's
-    # own check is applied on top of _CU_NAME_RE.
+def _mount_users_error(gmod_user, content_user, games):
+    """Why these accounts cannot be used for a mount, or None when both are acceptable.
+
+    Both accounts go into commands run AS them — see install_gmod_content for why the builder's
+    own check is applied on top of _CU_NAME_RE.
+    """
     if not (_CU_NAME_RE.match(gmod_user or "") and _core.game_idents_ok(gmod_user)):
-        return False, "invalid gmod user"
+        return "invalid gmod user"
     if games and not (_CU_NAME_RE.match(content_user or "") and _core.game_idents_ok(content_user)):
-        return False, "invalid content user"
-    if games:
-        group = _user_primary_group(server, content_user)
-        if not group:
-            # No group, no grant. This used to receive the content user's NAME as a fallback when
-            # the lookup failed, and hand that to `usermod -aG` — joining whatever group happened
-            # to share the name. Refusing costs a mount that cannot read the shared content, which
-            # the caller reports; guessing costs a group membership nobody asked for.
-            return False, ("Couldn't read %s's group, so the content mount was not granted. "
-                           "Check the account exists on this host." % content_user)
-        # Read access: add the GMod user to the content group, and make the content group-traversable
-        # (home) + group-readable (each game tree). Best-effort per command.
-        _core.run_privileged(server, "content-grant-read",
-                       [content_user, group, gmod_user] + list(games), timeout=180,
-                       merge_stderr=False)
-    # Write mount.cfg + mountdepots.txt AS the GMod user (base64 so no quoting/interpolation risk).
+        return "invalid content user"
+    return None
+
+
+def _grant_content_read(server, gmod_user, content_user, games):
+    """Give the GMod user read access to the content; an error message, or None once granted."""
+    group = _user_primary_group(server, content_user)
+    if not group:
+        # No group, no grant. This used to receive the content user's NAME as a fallback when
+        # the lookup failed, and hand that to `usermod -aG` — joining whatever group happened
+        # to share the name. Refusing costs a mount that cannot read the shared content, which
+        # the caller reports; guessing costs a group membership nobody asked for.
+        return ("Couldn't read %s's group, so the content mount was not granted. "
+                "Check the account exists on this host." % content_user)
+    # Read access: add the GMod user to the content group, and make the content group-traversable
+    # (home) + group-readable (each game tree). Best-effort per command.
+    _core.run_privileged(server, "content-grant-read",
+                         [content_user, group, gmod_user] + list(games), timeout=180,
+                         merge_stderr=False)
+    return None
+
+
+def _write_mount_files(server, gmod_user, content_user, games):
+    """Write mount.cfg + mountdepots.txt AS the GMod user; an error message, or None on success.
+
+    base64 so there is no quoting/interpolation risk.
+    """
+    import base64
     mountcfg, depots = _gmod_mount_files(content_user or "", games)
     cfgdir = f"/home/{gmod_user}/serverfiles/garrysmod/cfg"
     b64c = base64.b64encode(mountcfg.encode()).decode()
@@ -545,7 +633,28 @@ def gmod_mount_setup(server, gmod_user, content_user, games):
              f"echo {b64d} | base64 -d > {cfgdir}/mountdepots.txt && echo __OK__")
     out, err, rc = _core.shell_as_game_user(server, gmod_user, inner, timeout=30)
     if rc != 0 or "__OK__" not in (out or ""):
-        return False, (err or out or "mount write failed")[:200]
+        return (err or out or "mount write failed")[:200]
+    return None
+
+
+def gmod_mount_setup(server, gmod_user, content_user, games):
+    """Write a GMod server's mount config to mount exactly `games` from the content user.
+
+    Grants the GMod user read access first. An EMPTY `games` writes an empty mount.cfg (unmounts
+    everything). Idempotent. Returns (ok, msg). Group membership takes effect when the GMod server
+    (re)starts.
+    """
+    games = _valid_content_games(games)
+    bad = _mount_users_error(gmod_user, content_user, games)
+    if bad:
+        return False, bad
+    if games:
+        bad = _grant_content_read(server, gmod_user, content_user, games)
+        if bad:
+            return False, bad
+    bad = _write_mount_files(server, gmod_user, content_user, games)
+    if bad:
+        return False, bad
     _msg = ("Unmounted all content" if not games else
             "Mounted: " + ", ".join(GMOD_CONTENT_GAMES[g][0] for g in games))
     if _mount_needs_restart(server, gmod_user):
@@ -557,9 +666,11 @@ _MOUNT_LINE_RE = re.compile(r'"([a-z0-9_]+)"\s+"/')
 
 
 def gmod_current_mounts(server, gmod_user):
-    """Which content games a GMod server currently mounts, parsed from its garrysmod/cfg/mount.cfg.
-    Returns a list of known game keys (order as written), [] when the file is absent or mounts
-    nothing, or None when the mount state could not be READ. Read-only.
+    """Which content games a GMod server currently mounts, parsed from its mount.cfg.
+
+    Read from garrysmod/cfg/mount.cfg. Returns a list of known game keys (order as written), []
+    when the file is absent or mounts nothing, or None when the mount state could not be READ.
+    Read-only.
 
     The None is the whole point. This used to return [] for a failed read too, and the uninstall
     path computes `remaining = [g for g in gmod_current_mounts(...) if g not in games]` and writes
@@ -569,7 +680,8 @@ def gmod_current_mounts(server, gmod_user):
     empty mountcfg and lost cstrike.
 
     The helper exits 0 whether or not a mount.cfg exists, so a non-zero rc here means the call
-    itself did not complete — which is exactly the distinction "[] vs None" needs."""
+    itself did not complete — which is exactly the distinction "[] vs None" needs.
+    """
     if not _CU_NAME_RE.match(gmod_user or ""):
         return []
     out, _, rc = _core.run_privileged(server, "gmod-mount-read", [gmod_user], timeout=10,
