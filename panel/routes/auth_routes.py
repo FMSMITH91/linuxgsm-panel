@@ -2,6 +2,7 @@
 
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
+import collections
 import re
 from contextlib import (suppress)
 from flask import (flash, jsonify, redirect, render_template, request, session, url_for)
@@ -23,6 +24,16 @@ from app import (LOGIN_MAX_FAILS, LOGIN_WINDOW, _LOGIN_BLOCK_LOGGED, _LOGIN_FAIL
 
 
 def register(app):
+    _register_sign_in(app)
+    _register_account(app)
+    _register_language(app)
+    _register_2fa_and_profile(app)
+    _register_sign_out_everywhere(app)
+    _register_session_list(app)
+
+
+def _register_sign_in(app):
+    """Sign in and sign out."""
     @app.route("/login", methods=["GET", "POST"])
     def login():
         if current_user.is_authenticated:
@@ -32,196 +43,18 @@ def register(app):
             ip = client_ip() or "unknown"
             # The throttle's bucket, not the address: an IPv6 client is counted by its /64, which
             # is what one site or phone holds. `ip` itself still goes to the logs and fail2ban.
-            _tk = throttle_key(ip)
-            now = time.time()
-            # Brute-force throttle: drop stale failures, block if too many remain.
-            with _LOGIN_FAILS_LOCK:
-                _prune_login_fails(now)   # keep the map bounded to recently-active IPs
-                fails = [t for t in _LOGIN_FAILS.get(_tk, []) if now - t < LOGIN_WINDOW]
-                if fails:
-                    _LOGIN_FAILS[_tk] = fails
-                else:
-                    _LOGIN_FAILS.pop(_tk, None)
-                blocked = len(fails) >= LOGIN_MAX_FAILS
-            if blocked:
-                with _LOGIN_FAILS_LOCK:
-                    _first_block = (now - _LOGIN_BLOCK_LOGGED.get(_tk, 0)) >= LOGIN_WINDOW
-                    if _first_block:
-                        _LOGIN_BLOCK_LOGGED[_tk] = now
-                if _first_block:   # one audit entry per block window, not per hammering request
-                    _who = (request.form.get("username", "") or "").strip()[:64] or "(blank)"
-                    log_action(None, "login_blocked", actor=_who,
-                               detail="rate-limited after %d failed attempts" % LOGIN_MAX_FAILS, success=False)
-                _authlog.warning("panel login blocked from %s", _log_ip(ip))   # fail2ban: counts as a hit
-                flash("Too many failed attempts. Please wait a few minutes and try again.", "danger")
-                return render_template("login.html")
-
-            def _fail(msg, attempted=None, reason="login failed", **kw):
-                with _LOGIN_FAILS_LOCK:
-                    _LOGIN_FAILS.setdefault(_tk, []).append(now)   # throttle counter (resets on success)
-                _authlog.warning("panel login failed from %s", _log_ip(ip))    # fail2ban tails data/auth.log
-                # This failure may be the one that has fail2ban ban `ip`. When it came through a
-                # proxy (Tailscale Funnel, say) the firewall rule never sees that client, so the
-                # panel's own gate picks the ban up in seconds rather than at the next 90 s tick.
-                if request.headers.get("X-Forwarded-For"):
-                    _banlist.refresh_soon()
-                # The ATTEMPTED username (user-controlled → sanitised + capped) goes in the User
-                # column via `actor`; the reason + attempt count go in detail. log_action stores the IP.
-                who = ((attempted if attempted is not None else request.form.get("username", "")) or "").strip()[:64] or "(blank)"
-                # Attempt number = failed logins from THIS IP within the window, counted from the
-                # audit log — so it keeps climbing per IP (across different usernames) and, unlike the
-                # in-memory throttle counter, isn't reset by a successful login or a panel restart.
-                try:
-                    from panel.db.models import AuditLog
-                    from datetime import timedelta
-                    _since = utcnow() - timedelta(seconds=LOGIN_WINDOW)
-                    _cnt = 1 + AuditLog.query.filter(AuditLog.action == "login_failed",
-                                                     AuditLog.ip_address == ip,
-                                                     AuditLog.timestamp >= _since).count()
-                except Exception:
-                    _cnt = len(_LOGIN_FAILS.get(_tk, []))
-                log_action(None, "login_failed", actor=who,
-                           detail="%s · attempt %d in %dm" % (reason, _cnt, LOGIN_WINDOW // 60), success=False)
-                _maybe_alert_admin_bruteforce(who, ip, now)   # alert if a super admin is being targeted
-                flash(msg, "danger")
-                return render_template("login.html", **kw)
-
-            def _succeed(user, remember):
-                with _LOGIN_FAILS_LOCK:
-                    _LOGIN_FAILS.pop(_tk, None)   # clear on success
-                # Drop everything the pre-login session carried before establishing the
-                # authenticated one. Session fixation: an attacker who can get a victim to browse
-                # with a cookie value of the attacker's choosing otherwise ends up holding a
-                # cookie that is now authenticated as the victim. SESSION_PROTECTION="strong" and
-                # the per-login server-side sid already make that hard; starting from an empty
-                # session makes the whole class impossible rather than merely difficult.
-                # The chosen UI language is deliberately carried across — it is set before login
-                # on the login page itself, and losing it on sign-in is a visible bug.
-                _lang = session.get("lang")
-                session.clear()
-                if _lang:
-                    session["lang"] = _lang
-                session.permanent = True   # so PERMANENT_SESSION_LIFETIME applies
-                _register_session(user, remember)   # server-side row (sets user._sid) BEFORE
-                login_user(user, remember=remember)   # login_user, so get_id embeds the sid
-                # The client this session belongs to, for "strong" protection (auth.py
-                # _session_binding_ok) — flask-login's own strong mode never fires on a permanent
-                # session, and this one is permanent.
-                session["_bind"] = session_fingerprint()
-                user.last_login = utcnow()
-                db.session.commit()
-                log_action(user, "login", detail=f"User logged in from {ip}")
-                if user.is_superadmin:
-                    notifications.notify("admin_login", "Super admin signed in",
-                                         "%s signed in from %s" % (user.username, ip))
-                # Open-redirect-safe: same-site relative paths only. Reject absolute URLs,
-                # protocol-relative "//host", an embedded scheme, and backslash tricks like
-                # "/\\host" (some browsers normalise the backslash to "/", making it "//host").
-                # Same shape as CodeQL #375: checking a value and passing the SAME object through
-                # leaves it tainted to a tracker, so the accepted path is REBUILT here out of what
-                # the pattern matched. A same-site path is "/" plus segments of an explicit safe
-                # charset — which excludes the backslash, the second leading slash and the scheme
-                # colon that the four rejected cases rely on.
-                # The path group must not nest quantifiers. It was `(?:[seg]+/?)*`: the optional
-                # slash let a run of segment characters split into segments in 2^n ways, so
-                # "/"+"a"*30+"!" backtracked for ~50s — on the one eventlet hub, freezing every
-                # page, console and poller for anyone holding any valid login. `(?:[seg]+/)*[seg]*`
-                # accepts exactly the same strings (no leading "/", no "//") and each "/" fixes
-                # the split, so it runs in linear time.
-                _raw = request.args.get("next", "/")
-                _m = re.fullmatch(
-                    r"/(?P<path>(?:[A-Za-z0-9._~\-]+/)*[A-Za-z0-9._~\-]*)"
-                    r"(?:\?(?P<q>[A-Za-z0-9._~\-=&%]*))?",
-                    _raw or "")
-                _segs = [s for s in (_m.group("path").split("/") if _m else []) if s]
-                next_page = "/" + "/".join(_segs)
-                if _m and _m.group("q"):
-                    # Rebuilt too, from the same matched-and-restricted charset.
-                    next_page += "?" + _m.group("q")
-                # nosemgrep: python.flask.security.audit.open-redirect.flask-open-redirect
-                # The guard is the four lines directly above: the value must start with a single
-                # "/" and may contain no backslash and no scheme, which leaves same-site relative
-                # paths and nothing else. Semgrep does not model an inline check as a sanitiser —
-                # it only sees request data reaching redirect(). Covered by the "?next= must stay
-                # on this site" checks in tests/smoke_test.py, which drive the real endpoint with
-                # an absolute URL, "//host", an embedded scheme and the backslash trick.
-                return redirect(next_page)
+            attempt = _LoginAttempt(ip, throttle_key(ip), time.time())
+            refused = _login_throttled(attempt)
+            if refused is not None:
+                return refused
 
             # ── Step 2: the 2FA code for a login that passed the password step ──
             pending_id = session.get("_2fa_pending")
             if pending_id and request.form.get("totp_code"):
-                if now - session.get("_2fa_at", 0) > 300:   # prompt expires after 5 min
-                    session.pop("_2fa_pending", None)
-                    flash("The two-factor prompt expired — please log in again.", "danger")
-                    return render_template("login.html")
-                u = db.session.get(User, pending_id)
-                entered = request.form.get("totp_code", "")
-                if u and u.is_active and u.totp_enabled:
-                    _step = verify_totp_step(u.totp_secret_plain, entered)
-                    if _step is not None:
-                        # Single-use: a TOTP code is valid for ~90s (its step plus one either side
-                        # for skew), so accepting it on "is it valid" alone lets a code that was
-                        # observed once be replayed for the rest of that window. Refuse any step
-                        # already spent — committed BEFORE the session is granted so a crash
-                        # between the two can't leave the step unspent.
-                        if _step <= (u.last_totp_step or 0):
-                            return _fail("That code has already been used — wait for your "
-                                         "authenticator to show the next one.",
-                                         attempted=u.username, reason="replayed 2FA code",
-                                         two_factor=True)
-                        u.last_totp_step = _step
-                        db.session.commit()
-                        return _succeed(u, bool(session.get("_2fa_remember")))
-                    # Fall back to a one-time backup code (for a lost authenticator) — only for
-                    # an entry shaped like one: trying them costs a bcrypt per stored code, and a
-                    # mistyped six-digit TOTP can never match.
-                    if backup_code_shaped(entered) and u.use_backup_code(entered):
-                        db.session.commit()
-                        log_action(u, "2fa_backup_code_used", target=u.username,
-                                   detail=f"{u.backup_codes_remaining} codes left")
-                        return _succeed(u, bool(session.get("_2fa_remember")))
-                return _fail("Invalid authentication code or backup code.",
-                             attempted=(u.username if u else None), reason="wrong 2FA code", two_factor=True)
+                return _login_second_factor(attempt, pending_id)
 
             # ── Step 1: username + password ──
-            username = request.form.get("username", "").strip()
-            password = request.form.get("password", "")
-            remember = request.form.get("remember") == "on"
-
-            user = User.query.filter_by(username=username).first()
-            if user and user.is_active and check_password(password, user.password_hash):
-                # Re-encode a legacy hash now that we have the plaintext in hand and know it is
-                # right. NOT set_password(): the password did not change, so this must not push a
-                # hash into the reuse history or touch auth_epoch — nobody should be signed out,
-                # or told they cannot reuse their own password, because of a format upgrade.
-                if needs_rehash(user.password_hash):
-                    user.password_hash = hash_password(password)
-                    db.session.commit()
-                # `totp_enabled` alone, NOT "enabled and the secret decrypts". totp_secret_plain
-                # returns "" whenever decryption fails (a cred_key that was not carried across a
-                # hand-rolled migration, a truncated key file), and the old condition then fell
-                # straight through to _succeed — granting a full session on the password alone for
-                # an account that has 2FA switched on, silently. A second factor that turns itself
-                # off when a file is unreadable is not a second factor. Backup codes are bcrypt
-                # hashes in their own column and do not depend on cred_key, so the prompt below is
-                # still answerable and nobody is locked out.
-                if user.totp_enabled:
-                    session["_2fa_pending"] = user.id
-                    session["_2fa_at"] = now
-                    session["_2fa_remember"] = remember
-                    return render_template("login.html", two_factor=True)
-                return _succeed(user, remember)
-            # For a missing/inactive user we skipped the (slow) bcrypt compare above;
-            # run a dummy one now so response time doesn't reveal whether the account
-            # exists (username-enumeration by timing).
-            if not (user and user.is_active):
-                dummy_password_check(password)
-            # Reason for the audit log only — the flash message below stays generic so a real
-            # attacker still can't tell existing usernames from wrong passwords (no enumeration).
-            _reason = ("no such user" if not user
-                       else "account disabled" if not user.is_active
-                       else "wrong password")
-            return _fail("Invalid username or password.", reason=_reason)
+            return _login_password(attempt)
 
         return render_template("login.html")
 
@@ -280,6 +113,8 @@ def register(app):
         return redirect("/login")
 
 
+def _register_account(app):
+    """The account page, forced password change and the API token."""
     @app.route("/account")
     @login_required
     def account():
@@ -416,6 +251,9 @@ def register(app):
         flash("API token revoked.", "success")
         return redirect(url_for("account"))
 
+
+def _register_language(app):
+    """UI language: the switcher and its string catalogs."""
     @app.route("/set-language/<lang>", methods=["GET", "POST"])
     def set_language(lang):
         """Switch the UI language.
@@ -459,6 +297,9 @@ def register(app):
         resp.headers["Cache-Control"] = "public, max-age=300"   # catalogs change only on deploy
         return resp
 
+
+def _register_2fa_and_profile(app):
+    """Enrolling a second factor, and the display name."""
     @app.route("/account/2fa/enable", methods=["GET", "POST"])
     @login_required
     def account_2fa_enable():
@@ -542,6 +383,9 @@ def register(app):
         flash("Display name updated." if name else "Display name cleared.", "success")
         return redirect(url_for("account"))
 
+
+def _register_sign_out_everywhere(app):
+    """Signing out every other device."""
     @app.route("/account/sessions/revoke", methods=["POST"])
     @login_required
     def account_revoke_sessions():
@@ -567,13 +411,13 @@ def register(app):
             others = others.filter(UserSession.id != keep.id)
         n = others.delete(synchronize_session=False)
         user.auth_epoch = (user.auth_epoch or 0) + 1
-            # The API token too. It is a SECOND credential for the same account, and it did not
-            # answer to any of the controls that exist to take an account back: it carries no
-            # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted
-            # every UserSession row and left it working. app.py's note that "cookie theft is also
-            # recoverable via sign out everywhere" was not true while one existed. Minting one
-            # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
-            # could leave themselves a key that survived the victim's whole recovery.
+        # The API token too. It is a SECOND credential for the same account, and it did not
+        # answer to any of the controls that exist to take an account back: it carries no
+        # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted
+        # every UserSession row and left it working. app.py's note that "cookie theft is also
+        # recoverable via sign out everywhere" was not true while one existed. Minting one
+        # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
+        # could leave themselves a key that survived the victim's whole recovery.
         user.revoke_api_token()
         db.session.commit()
         if keep is None:
@@ -596,6 +440,9 @@ def register(app):
             flash("No other sessions were signed in.", "info")
         return redirect(url_for("account"))
 
+
+def _register_session_list(app):
+    """The session probe, and listing and revoking single sessions."""
     @app.route("/api/auth/ping")
     @login_required
     def api_auth_ping():
@@ -663,3 +510,225 @@ def register(app):
         if is_current:
             logout_user()
         return jsonify({"success": True, "current": is_current})
+
+
+# One POST to /login: the client address, its throttle bucket (an IPv6 client is counted by its
+# /64) and the moment it arrived. The login steps below all read the same three.
+_LoginAttempt = collections.namedtuple("_LoginAttempt", "ip tk now")
+
+
+def _login_throttled(attempt):
+    """The brute-force throttle's refusal page, or None when this client may try.
+
+    Drops stale failures, then blocks if too many remain.
+    """
+    ip, _tk, now = attempt
+    with _LOGIN_FAILS_LOCK:
+        _prune_login_fails(now)   # keep the map bounded to recently-active IPs
+        fails = [t for t in _LOGIN_FAILS.get(_tk, []) if now - t < LOGIN_WINDOW]
+        if fails:
+            _LOGIN_FAILS[_tk] = fails
+        else:
+            _LOGIN_FAILS.pop(_tk, None)
+        blocked = len(fails) >= LOGIN_MAX_FAILS
+    if not blocked:
+        return None
+    with _LOGIN_FAILS_LOCK:
+        _first_block = (now - _LOGIN_BLOCK_LOGGED.get(_tk, 0)) >= LOGIN_WINDOW
+        if _first_block:
+            _LOGIN_BLOCK_LOGGED[_tk] = now
+    if _first_block:   # one audit entry per block window, not per hammering request
+        _who = (request.form.get("username", "") or "").strip()[:64] or "(blank)"
+        log_action(None, "login_blocked", actor=_who,
+                   detail="rate-limited after %d failed attempts" % LOGIN_MAX_FAILS, success=False)
+    _authlog.warning("panel login blocked from %s", _log_ip(ip))   # fail2ban: counts as a hit
+    flash("Too many failed attempts. Please wait a few minutes and try again.", "danger")
+    return render_template("login.html")
+
+
+def _login_fail(attempt, msg, attempted=None, reason="login failed", **kw):
+    """Count, log and audit one failed sign-in, and show the login page again with `msg`."""
+    ip, _tk, now = attempt
+    with _LOGIN_FAILS_LOCK:
+        _LOGIN_FAILS.setdefault(_tk, []).append(now)   # throttle counter (resets on success)
+    _authlog.warning("panel login failed from %s", _log_ip(ip))    # fail2ban tails data/auth.log
+    # This failure may be the one that has fail2ban ban `ip`. When it came through a
+    # proxy (Tailscale Funnel, say) the firewall rule never sees that client, so the
+    # panel's own gate picks the ban up in seconds rather than at the next 90 s tick.
+    if request.headers.get("X-Forwarded-For"):
+        _banlist.refresh_soon()
+    # The ATTEMPTED username (user-controlled → sanitised + capped) goes in the User
+    # column via `actor`; the reason + attempt count go in detail. log_action stores the IP.
+    who = ((attempted if attempted is not None else request.form.get("username", "")) or "").strip()[:64] or "(blank)"
+    # Attempt number = failed logins from THIS IP within the window, counted from the
+    # audit log — so it keeps climbing per IP (across different usernames) and, unlike the
+    # in-memory throttle counter, isn't reset by a successful login or a panel restart.
+    try:
+        from panel.db.models import AuditLog
+        from datetime import timedelta
+        _since = utcnow() - timedelta(seconds=LOGIN_WINDOW)
+        _cnt = 1 + AuditLog.query.filter(AuditLog.action == "login_failed",
+                                         AuditLog.ip_address == ip,
+                                         AuditLog.timestamp >= _since).count()
+    except Exception:
+        _cnt = len(_LOGIN_FAILS.get(_tk, []))
+    log_action(None, "login_failed", actor=who,
+               detail="%s · attempt %d in %dm" % (reason, _cnt, LOGIN_WINDOW // 60), success=False)
+    _maybe_alert_admin_bruteforce(who, ip, now)   # alert if a super admin is being targeted
+    flash(msg, "danger")
+    return render_template("login.html", **kw)
+
+
+def _login_succeed(attempt, user, remember):
+    """Establish the authenticated session for `user` and redirect to a same-site ?next= path."""
+    ip, _tk = attempt.ip, attempt.tk
+    with _LOGIN_FAILS_LOCK:
+        _LOGIN_FAILS.pop(_tk, None)   # clear on success
+    # Drop everything the pre-login session carried before establishing the
+    # authenticated one. Session fixation: an attacker who can get a victim to browse
+    # with a cookie value of the attacker's choosing otherwise ends up holding a
+    # cookie that is now authenticated as the victim. SESSION_PROTECTION="strong" and
+    # the per-login server-side sid already make that hard; starting from an empty
+    # session makes the whole class impossible rather than merely difficult.
+    # The chosen UI language is deliberately carried across — it is set before login
+    # on the login page itself, and losing it on sign-in is a visible bug.
+    _lang = session.get("lang")
+    session.clear()
+    if _lang:
+        session["lang"] = _lang
+    session.permanent = True   # so PERMANENT_SESSION_LIFETIME applies
+    _register_session(user, remember)   # server-side row (sets user._sid) BEFORE
+    login_user(user, remember=remember)   # login_user, so get_id embeds the sid
+    # The client this session belongs to, for "strong" protection (auth.py
+    # _session_binding_ok) — flask-login's own strong mode never fires on a permanent
+    # session, and this one is permanent.
+    session["_bind"] = session_fingerprint()
+    user.last_login = utcnow()
+    db.session.commit()
+    log_action(user, "login", detail=f"User logged in from {ip}")
+    if user.is_superadmin:
+        notifications.notify("admin_login", "Super admin signed in",
+                             "%s signed in from %s" % (user.username, ip))
+    # Open-redirect-safe: same-site relative paths only. Reject absolute URLs,
+    # protocol-relative "//host", an embedded scheme, and backslash tricks like
+    # "/\\host" (some browsers normalise the backslash to "/", making it "//host").
+    # Same shape as CodeQL #375: checking a value and passing the SAME object through
+    # leaves it tainted to a tracker, so the accepted path is REBUILT here out of what
+    # the pattern matched. A same-site path is "/" plus segments of an explicit safe
+    # charset — which excludes the backslash, the second leading slash and the scheme
+    # colon that the four rejected cases rely on.
+    # The path group must not nest quantifiers. It was `(?:[seg]+/?)*`: the optional
+    # slash let a run of segment characters split into segments in 2^n ways, so
+    # "/"+"a"*30+"!" backtracked for ~50s — on the one eventlet hub, freezing every
+    # page, console and poller for anyone holding any valid login. `(?:[seg]+/)*[seg]*`
+    # accepts exactly the same strings (no leading "/", no "//") and each "/" fixes
+    # the split, so it runs in linear time.
+    _raw = request.args.get("next", "/")
+    _m = re.fullmatch(
+        r"/(?P<path>(?:[A-Za-z0-9._~\-]+/)*[A-Za-z0-9._~\-]*)"
+        r"(?:\?(?P<q>[A-Za-z0-9._~\-=&%]*))?",
+        _raw or "")
+    _segs = [s for s in (_m.group("path").split("/") if _m else []) if s]
+    next_page = "/" + "/".join(_segs)
+    if _m and _m.group("q"):
+        # Rebuilt too, from the same matched-and-restricted charset.
+        next_page += "?" + _m.group("q")
+    # nosemgrep: python.flask.security.audit.open-redirect.flask-open-redirect
+    # The guard is the four lines directly above: the value must start with a single
+    # "/" and may contain no backslash and no scheme, which leaves same-site relative
+    # paths and nothing else. Semgrep does not model an inline check as a sanitiser —
+    # it only sees request data reaching redirect(). Covered by the "?next= must stay
+    # on this site" checks in tests/smoke_test.py, which drive the real endpoint with
+    # an absolute URL, "//host", an embedded scheme and the backslash trick.
+    return redirect(next_page)
+
+
+def _login_second_factor(attempt, pending_id):
+    """Step 2: the 2FA code (or a backup code) for a login that passed the password step."""
+    if attempt.now - session.get("_2fa_at", 0) > 300:   # prompt expires after 5 min
+        session.pop("_2fa_pending", None)
+        flash("The two-factor prompt expired — please log in again.", "danger")
+        return render_template("login.html")
+    u = db.session.get(User, pending_id)
+    entered = request.form.get("totp_code", "")
+    if u and u.is_active and u.totp_enabled:
+        by_code = _login_totp_code(attempt, u, entered)
+        if by_code is not None:
+            return by_code
+        # Fall back to a one-time backup code (for a lost authenticator) — only for
+        # an entry shaped like one: trying them costs a bcrypt per stored code, and a
+        # mistyped six-digit TOTP can never match.
+        if backup_code_shaped(entered) and u.use_backup_code(entered):
+            db.session.commit()
+            log_action(u, "2fa_backup_code_used", target=u.username,
+                       detail=f"{u.backup_codes_remaining} codes left")
+            return _login_succeed(attempt, u, bool(session.get("_2fa_remember")))
+    return _login_fail(attempt, "Invalid authentication code or backup code.",
+                       attempted=(u.username if u else None), reason="wrong 2FA code", two_factor=True)
+
+
+def _login_totp_code(attempt, u, entered):
+    """Sign `u` in on a valid, unspent authenticator code; None when `entered` is not a valid one."""
+    _step = verify_totp_step(u.totp_secret_plain, entered)
+    if _step is None:
+        return None
+    # Single-use: a TOTP code is valid for ~90s (its step plus one either side
+    # for skew), so accepting it on "is it valid" alone lets a code that was
+    # observed once be replayed for the rest of that window. Refuse any step
+    # already spent — committed BEFORE the session is granted so a crash
+    # between the two can't leave the step unspent.
+    if _step <= (u.last_totp_step or 0):
+        return _login_fail(attempt, "That code has already been used — wait for your "
+                                    "authenticator to show the next one.",
+                           attempted=u.username, reason="replayed 2FA code",
+                           two_factor=True)
+    u.last_totp_step = _step
+    db.session.commit()
+    return _login_succeed(attempt, u, bool(session.get("_2fa_remember")))
+
+
+def _login_password(attempt):
+    """Step 1: username and password."""
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    remember = request.form.get("remember") == "on"
+
+    user = User.query.filter_by(username=username).first()
+    if user and user.is_active and check_password(password, user.password_hash):
+        return _login_password_ok(attempt, user, password, remember)
+    # For a missing/inactive user we skipped the (slow) bcrypt compare above;
+    # run a dummy one now so response time doesn't reveal whether the account
+    # exists (username-enumeration by timing).
+    if not (user and user.is_active):
+        dummy_password_check(password)
+    # Reason for the audit log only — the flash message below stays generic so a real
+    # attacker still can't tell existing usernames from wrong passwords (no enumeration).
+    _reason = ("no such user" if not user
+               else "account disabled" if not user.is_active
+               else "wrong password")
+    return _login_fail(attempt, "Invalid username or password.", reason=_reason)
+
+
+def _login_password_ok(attempt, user, password, remember):
+    """The password was right: prompt for the second factor, or sign in when there is none."""
+    # Re-encode a legacy hash now that we have the plaintext in hand and know it is
+    # right. NOT set_password(): the password did not change, so this must not push a
+    # hash into the reuse history or touch auth_epoch — nobody should be signed out,
+    # or told they cannot reuse their own password, because of a format upgrade.
+    if needs_rehash(user.password_hash):
+        user.password_hash = hash_password(password)
+        db.session.commit()
+    # `totp_enabled` alone, NOT "enabled and the secret decrypts". totp_secret_plain
+    # returns "" whenever decryption fails (a cred_key that was not carried across a
+    # hand-rolled migration, a truncated key file), and the old condition then fell
+    # straight through to _succeed — granting a full session on the password alone for
+    # an account that has 2FA switched on, silently. A second factor that turns itself
+    # off when a file is unreadable is not a second factor. Backup codes are bcrypt
+    # hashes in their own column and do not depend on cred_key, so the prompt below is
+    # still answerable and nobody is locked out.
+    if user.totp_enabled:
+        session["_2fa_pending"] = user.id
+        session["_2fa_at"] = attempt.now
+        session["_2fa_remember"] = remember
+        return render_template("login.html", two_factor=True)
+    return _login_succeed(attempt, user, remember)
