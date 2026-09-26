@@ -7,9 +7,13 @@ the panel does not already pin), and the CI job's wiring. The upload side — th
 codacy-coverage.yml — is exercised with the Python report's, in part06.
 """
 import ast
+import contextlib as _ctx14
 import importlib.util as _ilu14
+import io as _io14
+import signal as _sig14
 import subprocess as _sp14
 import tempfile as _tf14
+import time as _time14
 
 from unit.part01 import check, os, re, sys  # noqa: F401,E402
 from unit.part05 import _root  # noqa: E402
@@ -98,9 +102,9 @@ check("js coverage: missed runs are consecutive executable lines with no hits, l
 # loaded. Both patterns, against every file actually there.
 _run_src = open(os.path.join(_JC_DIR, "run.py"), encoding="utf-8").read()
 _drv_src = open(os.path.join(_JC_DIR, "driver.py"), encoding="utf-8").read()
-_cc_src7 = open(os.path.join(_root, ".github", "workflows", "codacy-coverage.yml"),
+_cc_src14 = open(os.path.join(_root, ".github", "workflows", "codacy-coverage.yml"),
                 encoding="utf-8").read()
-_jc_up_re = re.search(r'path_re = re\.compile\(r"([^"]+)"\)', _cc_src7)
+_jc_up_re = re.search(r'path_re = re\.compile\(r"([^"]+)"\)', _cc_src14)
 _jc_url_re = re.search(r'JS_URL_PATH = re\.compile\(r"([^"]+)"\)', _drv_src)
 _jc_js = sorted(f for f in os.listdir(os.path.join(_root, "static", "js")) if f.endswith(".js"))
 _jc_bad = [f for f in _jc_js
@@ -158,8 +162,8 @@ try:
           and sorted(os.listdir(_jc_tmp)) == ["tools"],
           "rc=%s out=%r err=%r" % (_jc_p.returncode, _jc_p.stdout[-200:], _jc_p.stderr[-300:]))
 finally:
-    import shutil as _sh7
-    _sh7.rmtree(_jc_tmp, ignore_errors=True)
+    import shutil as _sh14
+    _sh14.rmtree(_jc_tmp, ignore_errors=True)
 
 # run.py's copy leaves out the checkout's data/ (the real one, at the root only — lgsm/data is
 # code), VCS and virtualenvs, and marks the copy as the throwaway it is.
@@ -185,19 +189,19 @@ try:
                       "static/js/panel.js"],
           repr(_jc_got))
 finally:
-    import shutil as _sh7b
-    _sh7b.rmtree(_jc_src_tree, ignore_errors=True)
-    _sh7b.rmtree(os.path.dirname(_jc_dst_tree), ignore_errors=True)
+    import shutil as _sh14b
+    _sh14b.rmtree(_jc_src_tree, ignore_errors=True)
+    _sh14b.rmtree(os.path.dirname(_jc_dst_tree), ignore_errors=True)
 
 # ── the CI job ─────────────────────────────────────────────────────────────────────────────────
 # It runs the harness and FAILS when there is nothing to report — no `|| true`, no
 # continue-on-error — pins every action to a commit, reads the repository and nothing else,
 # installs only the panel's hash-locked requirements, and hands its report on as the artifact
 # codacy-coverage.yml downloads (the names are tied in part06).
-_ci7 = open(os.path.join(_root, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
-_ci7_code = "\n".join(_l for _l in _ci7.splitlines() if not _l.lstrip().startswith("#"))
-_jcj_at = _ci7_code.find("\n  js-coverage:\n")
-_jcj = _ci7_code[_jcj_at:] if _jcj_at >= 0 else ""
+_ci14 = open(os.path.join(_root, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
+_ci14_code = "\n".join(_l for _l in _ci14.splitlines() if not _l.lstrip().startswith("#"))
+_jcj_at = _ci14_code.find("\n  js-coverage:\n")
+_jcj = _ci14_code[_jcj_at:] if _jcj_at >= 0 else ""
 _jcj_end = re.search(r"\n  [a-z][a-z0-9_-]*:\n", _jcj[1:])
 _jcj = _jcj[:_jcj_end.start() + 1] if _jcj_end else _jcj
 _jcj_uses = re.findall(r"uses: (\S+)", _jcj)
@@ -215,11 +219,211 @@ check("js coverage (CI): ...installs only requirements.txt, hash-checked, and ru
       and "|| true" not in _jcj and "continue-on-error" not in _jcj and "set -euo pipefail" in _jcj
       and "if-no-files-found: error" in _jcj,
       repr(_jcj_pip))
-# run.py's own exits: a panel that did not boot, a sign-in that did not land, and a report with no
-# line hit are all non-zero — read from the source, since running it needs a browser.
-check("js coverage: run.py fails, rather than reporting, when the panel does not boot, the sign-in "
-      "does not land, or no line ran",
-      'fail("the panel did not boot' in _run_src and "except LoginFailed" in _run_src
-      and re.search(r"if th == 0:\n\s+fail\(", _run_src) is not None
-      and re.search(r"def fail\(msg, code=2\):\n[^\n]*\n\s+sys\.exit\(code\)", _run_src) is not None,
-      "")
+# ── run.py's exits: no measurement is never a report ─────────────────────────────────────────
+# Run, not read: the old check matched run.py's source for `fail("the panel did not boot` and
+# `if th == 0:`, which a refactor removes without changing what happens — and a regression that
+# kept the text would have passed it. Each exit below goes through main() itself, with the browser
+# session replaced by a stand-in, and reads the exit status and what it printed.
+
+
+class _JcDriver:
+    """What main() and measure_and_report() read of a Driver, with the numbers given."""
+
+    def __init__(self, hits, unreached=()):
+        self._hits = hits
+        self.loaded = set(hits)
+        self.errors, self.held, self.unreached = [], 0, list(unreached)
+        self.snapshots = 0
+
+    def snapshot(self):
+        self.snapshots += 1
+
+    def hits(self):
+        return self._hits
+
+
+def _jc_main(session_enter, chrome="/usr/bin/chrome-stand-in"):
+    """Run run.main() with Session and the walk stood in for; (exit status, output, out dir)."""
+    _out_dir = _tf14.mkdtemp(prefix="jscov-main-")
+
+    class _Session:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def __enter__(self):
+            return session_enter()
+
+        def __exit__(self, *_e):
+            return False
+
+    _saved = (_jc_run.Session, _jc_run.walk, _jc_run.find_chrome, _sig14.getsignal(_sig14.SIGTERM))
+    _jc_run.Session, _jc_run.walk = _Session, (lambda _d, only=None: None)
+    _jc_run.find_chrome = lambda _explicit: chrome
+    _buf = _io14.StringIO()
+    try:
+        with _ctx14.redirect_stdout(_buf):
+            try:
+                _rc = _jc_run.main(["--out", os.path.join(_out_dir, "lcov.info"),
+                                    "--summary", os.path.join(_out_dir, "summary.txt")])
+            except SystemExit as _e:
+                _rc = _e.code
+    finally:
+        _jc_run.Session, _jc_run.walk, _jc_run.find_chrome = _saved[:3]
+        _sig14.signal(_sig14.SIGTERM, _saved[3])
+    return _rc, _buf.getvalue(), _out_dir
+
+
+def _jc_raise(msg, code=2):
+    def _enter():
+        raise _jc_run.Abort(msg, code)
+    return _enter
+
+
+_jc_good = {"static/js/a.js": {1: 2, 2: 0}, "static/js/b.js": {4: 0}}
+_jc_cases = {
+    "no browser": _jc_main(lambda: _JcDriver(_jc_good), chrome=None),
+    "panel did not boot": _jc_main(_jc_raise("the panel did not boot (no /healthz on x)")),
+    "sign-in did not land": _jc_main(_jc_raise("signing in did not land — every page would be "
+                                               "measured as the login form")),
+    "nothing ran": _jc_main(lambda: _JcDriver({"static/js/a.js": {1: 0}, "static/js/b.js": {}})),
+    "a page not reached": _jc_main(lambda: _JcDriver(_jc_good, [("/servers/manage",
+                                                                 "redirected to /")])),
+    "measured": _jc_main(lambda: _JcDriver(_jc_good)),
+}
+try:
+    _jc_want = {"no browser": (2, "no Chrome/Chromium found"),
+                "panel did not boot": (2, "the panel did not boot"),
+                "sign-in did not land": (2, "signing in did not land"),
+                "nothing ran": (3, "the coverage is empty"),
+                "a page not reached": (2, "did not reach 1 page(s) it names")}
+    _jc_wrong = {_k: _jc_cases[_k][:2] for _k, (_rc, _msg) in _jc_want.items()
+                 if not (_jc_cases[_k][0] == _rc and _msg in _jc_cases[_k][1]
+                         and re.search(r"^(ERROR: |::error::).*" + re.escape(_msg),
+                                       _jc_cases[_k][1], re.M))}
+    check("js coverage: run.py exits non-zero, saying why, when there is no browser, the panel does "
+          "not boot, the sign-in does not land, nothing ran, or a page it names was not reached",
+          not _jc_wrong, repr(_jc_wrong))
+    _jc_ok = _jc_cases["measured"]
+    _jc_lcov = open(os.path.join(_jc_ok[2], "lcov.info")).read()
+    check("js coverage: ...and a run that measured something exits 0 with both reports written "
+          "(positive control)",
+          _jc_ok[0] == 0 and "SF:static/js/a.js\nDA:1,2\nDA:2,0\nLF:2\nLH:1\n" in _jc_lcov
+          and "SF:static/js/b.js\nDA:4,0\nLF:1\nLH:0\n" in _jc_lcov
+          and "TOTAL" in open(os.path.join(_jc_ok[2], "summary.txt")).read(),
+          repr((_jc_ok[0], _jc_ok[1][-300:], _jc_lcov[:200])))
+    # The empty and the unreached runs must not leave a report that reads as a measurement.
+    check("js coverage: ...and the unreached run names the page and why",
+          "/servers/manage (redirected to /)" in _jc_cases["a page not reached"][1],
+          _jc_cases["a page not reached"][1][-300:])
+finally:
+    for _c in _jc_cases.values():
+        _sh14b.rmtree(_c[2], ignore_errors=True)
+
+# A panel process that exits instead of serving is "did not boot" at once, with its log shown —
+# not a 90-second wait and then a walk of connection errors. start_panel against a tree whose
+# runner dies on start.
+_jc_dead = _tf14.mkdtemp(prefix="jscov-dead-")
+try:
+    os.makedirs(os.path.join(_jc_dead, "tree", "tools"))
+    with open(os.path.join(_jc_dead, "tree", "tools", "nosudo_runner.py"), "w") as _fh:
+        _fh.write("print('refusing: stand-in panel'); raise SystemExit(2)\n")
+    _jc_t0 = _time14.monotonic()
+    _jc_buf = _io14.StringIO()
+    try:
+        with _ctx14.redirect_stdout(_jc_buf):
+            _jc_run.start_panel(os.path.join(_jc_dead, "tree"), _jc_dead, "u", "p" * 20)
+        _jc_abort = None
+    except _jc_run.Abort as _e:
+        _jc_abort = _e
+    check("js coverage: start_panel says the panel did not boot as soon as it exits, and shows its "
+          "log",
+          _jc_abort is not None and "the panel did not boot" in str(_jc_abort)
+          and _jc_abort.code == 2 and "refusing: stand-in panel" in _jc_buf.getvalue()
+          and _time14.monotonic() - _jc_t0 < 30,
+          repr((_jc_abort, _jc_buf.getvalue()[-200:])))
+finally:
+    _sh14b.rmtree(_jc_dead, ignore_errors=True)
+
+# ── the driver: a leaving page's counts are kept, and a page the walk names must be reached ───
+# V8 drops a document's scripts, and their counts, when the document goes; the driver pauses the
+# page on its own `navigate` event, takes the counts, and resumes only from the take's reply. With
+# a stand-in protocol client: what start() asks of the browser, the order of take and resume, and
+# which scripts' counts are kept.
+
+
+class _JcCDP:
+    """Records calls and sends; hands back the replies the driver asks for."""
+
+    def __init__(self):
+        self.calls, self.sent, self.pending, self.events = [], [], [], []
+        self.on_event = None
+
+    def call(self, method, params=None, timeout=30):
+        self.calls.append((method, params or {}))
+        if method == "Runtime.compileScript":
+            return {"scriptId": "9"}
+        if method == "Debugger.getPossibleBreakpoints":
+            return {"locations": [{"lineNumber": 0, "columnNumber": 0},
+                                  {"lineNumber": 1, "columnNumber": 2}]}
+        return {}
+
+    def send(self, method, params=None, on_reply=None):
+        self.sent.append(method)
+        if on_reply is not None:
+            self.pending.append(on_reply)
+
+    def pump(self, _seconds):
+        pass
+
+
+_jc_cdp = _JcCDP()
+_jc_drv = _jc_run.Driver(_jc_cdp, "http://127.0.0.1:1", "u", "p" * 20,
+                         {"static/js/a.js": "f();\n  g();\n", "static/js/b.js": "h();\n"})
+_jc_drv.start()
+_jc_calls = dict(_jc_cdp.calls)
+check("js coverage: the driver starts block coverage with call counts, breaks on `navigate`, and "
+      "does not skip its own pauses",
+      _jc_calls.get("Profiler.startPreciseCoverage") == {"callCount": True, "detailed": True}
+      and _jc_calls.get("DOMDebugger.setEventListenerBreakpoint") == {"eventName": "navigate"}
+      and _jc_calls.get("Debugger.setSkipAllPauses", {}).get("skip") is not True
+      and "navigation.addEventListener('navigate'" in _jc_drv._helpers,
+      repr(_jc_cdp.calls))
+_jc_cdp.on_event({"method": "Debugger.paused", "params": {"reason": "EventListener"}})
+_jc_before = (list(_jc_cdp.sent), len(_jc_cdp.pending))
+if _jc_cdp.pending:
+    _jc_cdp.pending.pop()({"id": 1, "result": {"result": [
+        {"url": "http://127.0.0.1:1/static/js/a.js?v=1f2e",
+         "functions": [{"ranges": [{"startOffset": 0, "endOffset": 12, "count": 3}]}]},
+        {"url": "http://127.0.0.1:1/static/vendor/x/b.js",
+         "functions": [{"ranges": [{"startOffset": 0, "endOffset": 5, "count": 1}]}]},
+        {"url": "http://elsewhere.example/static/js/b.js",
+         "functions": [{"ranges": [{"startOffset": 0, "endOffset": 5, "count": 1}]}]}]}})
+check("js coverage: a page pausing to leave is resumed only after its counts are taken, and they "
+      "are kept for its own static/js scripts alone",
+      _jc_before == (["Profiler.takePreciseCoverage"], 1)
+      and _jc_cdp.sent == ["Profiler.takePreciseCoverage", "Debugger.resume"]
+      and _jc_drv.hits() == {"static/js/a.js": {1: 3, 2: 3}, "static/js/b.js": {1: 0, 2: 0}}
+      and _jc_drv.loaded == {"static/js/a.js"} and _jc_drv.held == 1,
+      repr((_jc_before, _jc_cdp.sent, _jc_drv.hits(), _jc_drv.loaded)))
+
+# reached(): a page that answers an error or lands somewhere else is recorded — by exercise()
+# itself, not only when reached() is called directly — except in the pass that confirms deletions,
+# where a page an earlier OK removed is expected to be gone.
+_jc_nav = {"status": 200, "path": "/users"}
+_jc_drv.goto = lambda _p, settle=True: None
+_jc_drv.path = lambda: _jc_nav["path"]
+_jc_drv.doc_status = 200
+_jc_seen = []
+for _status, _landed, _accept in ((200, "/users", False), (404, "/users", False),
+                                  (200, "/", False), (200, "/", True)):
+    _jc_drv.unreached = []
+    _jc_drv.doc_status, _jc_nav["path"] = _status, _landed
+    _jc_drv.confirming = {"/users": {"BUTTON|x"}}
+    _jc_drv.js = lambda _e, timeout=30: {"dialogs": 0, "path": _jc_nav["path"], "sig": None}
+    with _ctx14.redirect_stdout(_io14.StringIO()):
+        _jc_drv.exercise("/users", accept=_accept)
+    _jc_seen.append(list(_jc_drv.unreached))
+check("js coverage: a page the walk names that answers an HTTP error or redirects is recorded as "
+      "not reached, by the walk's own exercise() — but not in the confirming pass",
+      _jc_seen == [[], [("/users", "HTTP 404")], [("/users", "redirected to /")], []],
+      repr(_jc_seen))

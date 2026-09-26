@@ -9,6 +9,13 @@
 // here calls a panel function directly.
 (function () {
   if (window.__jscov) return;
+  // run.py pauses the page on this listener (an event-listener breakpoint on `navigate`) to take
+  // the leaving document's coverage before the navigation starts — see driver.py. The listener
+  // itself does nothing; it is what the breakpoint stops on. A same-document change fires it too,
+  // and the take there is merely early: nothing is lost by it, and nothing is counted twice.
+  if (window.navigation && window.navigation.addEventListener) {
+    window.navigation.addEventListener('navigate', function () {});
+  }
   var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
 
   function setValue(el, value) {

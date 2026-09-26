@@ -15,23 +15,28 @@ import websocket
 
 
 class CDPError(RuntimeError):
-    pass
+    """A protocol call the browser refused, or did not answer in time."""
 
 
 class CDP:
+    """One DevTools WebSocket: calls in order, events kept, dialogs answered as they open."""
+
     def __init__(self, ws_url, timeout=30):
+        """Connect to the target at `ws_url`; `timeout` is the socket's, for the handshake."""
         # suppress_origin: Chrome refuses a DevTools WebSocket whose Origin it does not allow
         # (--remote-allow-origins), and a client that sends none is not a web page.
         self.ws = websocket.create_connection(ws_url, timeout=timeout, suppress_origin=True,
                                               enable_multithread=False)
         self._id = 0
         self._ignore = set()
+        self._callbacks = {}      # id -> called with the reply, from whichever read receives it
         self.events = []
         self.dialog_accept = False
         self.dialogs = []
         self.on_event = None      # called with every event as it is read
 
     def close(self):
+        """Close the socket, quietly: the browser may have dropped it already."""
         try:
             self.ws.close()
         except Exception:   # nosec B110 - closing a socket the browser may already have dropped
@@ -52,6 +57,8 @@ class CDP:
         except websocket.WebSocketTimeoutException:
             raise TimeoutError from None
         msg = json.loads(raw)
+        if msg.get("id") in self._callbacks:
+            self._callbacks.pop(msg["id"])(msg)
         if "method" in msg and self.on_event is not None:
             self.on_event(msg)
         if msg.get("method") == "Page.javascriptDialogOpening":
@@ -59,11 +66,26 @@ class CDP:
             # the caller asked for, and every later page would silently be this one.
             kind = msg["params"].get("type", "")
             self.dialogs.append((kind, msg["params"].get("message", "")))
-            self._ignore.add(self._send("Page.handleJavaScriptDialog", {
-                "accept": kind == "beforeunload" or bool(self.dialog_accept)}))
+            self.send("Page.handleJavaScriptDialog", {
+                "accept": kind == "beforeunload" or bool(self.dialog_accept)})
         return msg
 
+    def send(self, method, params=None, on_reply=None):
+        """Send `method` without waiting; `on_reply`, if given, is called with the reply.
+
+        For work that has to happen from inside an event handler, where waiting for a reply would
+        re-enter the read loop that is running the handler.
+        """
+        mid = self._send(method, params)
+        self._ignore.add(mid)
+        if on_reply is not None:
+            self._callbacks[mid] = on_reply
+
     def call(self, method, params=None, timeout=30):
+        """Send `method` and return its result, keeping the events read on the way.
+
+        Raises CDPError when the browser answers with an error or not within `timeout` seconds.
+        """
         mid = self._send(method, params)
         deadline = time.monotonic() + timeout
         while True:
@@ -81,30 +103,13 @@ class CDP:
             self.events.append(msg)
 
     def pump(self, seconds):
-        """Read events for `seconds`, answering dialogs; returns nothing, keeps them in .events."""
+        """Read events for `seconds`, answering dialogs, and keep them in .events."""
         deadline = time.monotonic() + seconds
         while True:
             try:
                 msg = self._read(deadline)
             except TimeoutError:
                 return
-            if "id" not in msg:
-                self.events.append(msg)
-
-    def wait_for(self, method, timeout, since=0):
-        """The first event named `method` at index >= `since` in .events, reading until it arrives.
-        Returns None on timeout — the caller decides whether that is fatal."""
-        deadline = time.monotonic() + timeout
-        seen = since
-        while True:
-            for k in range(seen, len(self.events)):
-                if self.events[k].get("method") == method:
-                    return self.events[k]
-            seen = len(self.events)
-            try:
-                msg = self._read(deadline)
-            except TimeoutError:
-                return None
             if "id" not in msg:
                 self.events.append(msg)
 

@@ -36,7 +36,7 @@ def _utf16_len(text):
 
 
 def line_starts(source):
-    """The UTF-16 offset at which each line of `source` begins; index 0 is line 0 (V8's first)."""
+    """Return the UTF-16 offset at which each line of `source` begins (index 0: V8's line 0)."""
     starts, pos, last = [0], 0, 0
     for m in _JS_EOL.finditer(source):
         pos += _utf16_len(source[last:m.end()])
@@ -46,27 +46,25 @@ def line_starts(source):
 
 
 def offsets_of(locations, starts):
-    """[(line0, col0)] -> [offset] for the same list, in UTF-16 units."""
+    """Map [(line0, col0)] to [offset] for the same list, in UTF-16 units."""
     return [starts[ln] + col for ln, col in locations]
 
 
-def counts_at(functions, offsets):
-    """The execution count at each offset, from one take's function list for one script.
+def _ranges(functions):
+    """Every range of one take, outer-first: start ascending, and the longer first at a tie."""
+    return sorted(((r["startOffset"], r["endOffset"], r["count"])
+                   for f in functions for r in f.get("ranges", ())),
+                  key=lambda r: (r[0], -r[1]))
 
-    One sweep: ranges sorted outer-first (start ascending, end descending) are pushed on a stack as
-    the sweep passes their start and popped once it passes their end, so the top of the stack is
-    the innermost open range. O((ranges + offsets) log) rather than a scan per offset."""
-    ranges = sorted(((r["startOffset"], r["endOffset"], r["count"])
-                     for f in functions for r in f.get("ranges", ())),
-                    key=lambda r: (r[0], -r[1]))
-    order = sorted(range(len(offsets)), key=offsets.__getitem__)
+
+def _sweep(ranges, offsets, order):
+    """Assign each offset (visited in `order`, ascending) the count of its innermost range."""
     out = [0] * len(offsets)
     stack, i = [], 0
     for k in order:
         off = offsets[k]
         while i < len(ranges) and ranges[i][0] <= off:
-            start = ranges[i][0]
-            while stack and stack[-1][1] <= start:
+            while stack and stack[-1][1] <= ranges[i][0]:
                 stack.pop()
             stack.append(ranges[i])
             i += 1
@@ -76,32 +74,70 @@ def counts_at(functions, offsets):
     return out
 
 
+def counts_at(functions, offsets):
+    """Return the execution count at each offset, from one take's function list for one script.
+
+    One sweep: ranges sorted outer-first (start ascending, end descending) are pushed on a stack as
+    the sweep passes their start and popped once it passes their end, so the top of the stack is
+    the innermost open range. O((ranges + offsets) log) rather than a scan per offset.
+    """
+    return _sweep(_ranges(functions), offsets, sorted(range(len(offsets)), key=offsets.__getitem__))
+
+
+class FileCounts:
+    """One file's running totals: a count per V8 location, summed take by take as takes arrive.
+
+    Kept per location rather than per take, so a run of a thousand navigations holds one list of
+    integers per file instead of every function list V8 returned.
+    """
+
+    def __init__(self, locations, source):
+        """Count at `locations` (0-based (line, column) pairs, V8's) in `source`."""
+        starts = line_starts(source)
+        self.locations = [(ln, col) for ln, col in locations if 0 <= ln < len(starts)]
+        self.offsets = offsets_of(self.locations, starts)
+        self.order = sorted(range(len(self.offsets)), key=self.offsets.__getitem__)
+        self.totals = [0] * len(self.offsets)
+        self.takes = 0
+
+    def add(self, functions):
+        """Add one take's function list for this file."""
+        self.takes += 1
+        ranges = _ranges(functions)
+        if not any(r[2] for r in ranges):
+            return      # nothing ran since the last take: nothing to add
+        for k, c in enumerate(_sweep(ranges, self.offsets, self.order)):
+            self.totals[k] += c
+
+    def hits(self):
+        """Return {line1: hits} for every line holding a location: the most any of them ran."""
+        hits = {}
+        for (ln, _col), c in zip(self.locations, self.totals):
+            hits[ln + 1] = max(hits.get(ln + 1, 0), c)
+        return hits
+
+
 def line_hits(locations, source, takes):
-    """{line1: hits} for every line that holds a location, summed over `takes`.
+    """Return {line1: hits} for every line that holds a location, summed over `takes`.
 
     `locations` are 0-based (lineNumber, columnNumber) pairs as the protocol reports them; the
     result is keyed by 1-based line, as LCOV is. A line's hits are the most any location on it
-    ran — the line ran that many times at least."""
-    starts = line_starts(source)
-    locations = [(ln, col) for ln, col in locations if 0 <= ln < len(starts)]
-    offsets = offsets_of(locations, starts)
-    totals = [0] * len(offsets)
+    ran — the line ran that many times at least.
+    """
+    fc = FileCounts(locations, source)
     for functions in takes:
-        for k, c in enumerate(counts_at(functions, offsets)):
-            totals[k] += c
-    hits = {}
-    for (ln, _col), c in zip(locations, totals):
-        hits[ln + 1] = max(hits.get(ln + 1, 0), c)
-    return hits
+        fc.add(functions)
+    return fc.hits()
 
 
 def to_lcov(files):
-    """LCOV text for {repo-relative path: {line1: hits}}, files in sorted order.
+    """Return LCOV text for {repo-relative path: {line1: hits}}, files in sorted order.
 
     Line records only (DA, LF, LH): they are what Codacy reads, and what this harness measures
     faithfully. No FN records — V8 reports a function it never compiled only as part of the range
     of the function around it, so a function count here would undercount the functions a file has
-    by exactly the ones that never ran."""
+    by exactly the ones that never ran.
+    """
     out = []
     for path in sorted(files):
         hits = files[path]
@@ -116,9 +152,11 @@ def to_lcov(files):
 
 
 def missed_spans(hits, limit=None):
-    """Runs of consecutive executable lines with no hits, largest first: [(first, last, lines)].
+    """Return runs of consecutive executable lines with no hits, largest first.
 
-    What the summary lists under each file, as the answer to "what would raise this number"."""
+    [(first, last, lines)]: what the summary lists under each file, as the answer to "what would
+    raise this number".
+    """
     spans, run = [], []
     for line in sorted(hits):
         if hits[line] == 0:

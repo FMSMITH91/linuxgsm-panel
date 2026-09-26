@@ -21,7 +21,7 @@ from flows import FLOWS
 PAGES = [
     "/", "/server/1", "/server/2", "/server/3", "/server/4",
     "/server/1/files", "/server/2/files", "/server/7/files",
-    "/servers/manage", "/servers/install", "/remotes",
+    "/servers/install", "/remotes",
     "/remote/1/manage", "/remote/2/manage", "/remote/3/manage",
     "/remote/2/firewall", "/remote/1/firewall",
     "/users", "/groups", "/logs", "/account", "/settings", "/notifications", "/tailscale",
@@ -32,7 +32,7 @@ PAGES = [
 ACCEPT_PAGES = [
     "/server/1/files", "/server/1", "/server/4", "/remote/2/firewall", "/remote/2/manage",
     "/remote/1/manage", "/server-management", "/settings", "/commands", "/global-bans",
-    "/groups", "/users", "/servers/manage", "/", "/remotes",
+    "/groups", "/users", "/", "/remotes",
 ]
 
 # Controls never pressed: they end the session this walk is signed in with.
