@@ -2389,7 +2389,11 @@ try:
     SO_cfgmod.load_config = lambda: dict(_sb_cfg)
     SO_cfgmod.update_config = lambda fn: (fn(_sb_cfg), dict(_sb_cfg))[1]
     SO._is_git_checkout = lambda: True
-    SO._git = lambda args, timeout=20, **k: ("", "", 0)      # the branch exists on the remote
+    # The branch exists on the remote: ls-remote names it, exactly (an empty answer is "no such
+    # branch" now that the name is compared, not tail-matched).
+    SO._git = lambda args, timeout=20, **k: (
+        ("0" * 40 + "\trefs/heads/some-feature-branch", "", 0) if args[:1] == ["ls-remote"]
+        else ("", "", 0))
 
     SO._launch_installer = lambda target_ref="", branch="", started_msg=None: (
         False, "install.sh is missing, so the panel can't self-update safely.")

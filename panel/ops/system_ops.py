@@ -23,6 +23,9 @@ PANEL_DIR = str(_REPO_ROOT)
 # The branch the panel tracks out of the box. Switching to any other branch is opt-in
 # (panel_switch_branch) and stored in config as "panel_branch".
 _DEFAULT_BRANCH = "main"
+# Where a fetched branch lives, always used IN FULL: a bare `origin/<branch>` is resolved by git as
+# refs/tags/origin/<branch> first, so a tag of that name would stand in for the branch.
+_REMOTE_TRACKING = "refs/remotes/origin/"
 # A deliberately strict git-ref charset: no spaces, no leading dash (option injection) and
 # no ".." (traversal). Defence-in-depth — git is invoked without a shell (see _git) and the
 # installer re-validates PANEL_BRANCH — but we still refuse anything outside this shape.
@@ -1034,8 +1037,22 @@ def _compute_update_status():
                 "message": "The panel isn't a git checkout, so it can't self-update."}
     cur_sha, _, _ = _git(["rev-parse", "--short", "HEAD"])
     branch = _tracked_branch()
-    ref = "origin/" + branch
-    _, ferr, frc = _git(["fetch", "--quiet", "origin", branch], timeout=45)
+    # Both names IN FULL. git resolves a bare `origin/main` as refs/tags/origin/main before
+    # refs/remotes/origin/main (gitrevisions), so a tag pushed under that name answered every
+    # question below — how far behind, which commit to offer, its VERSION and changelog — about a
+    # commit that was never on the branch, and the verified target handed to install.sh came from
+    # it. A fetch SOURCE is looked up the same way on the remote: `fetch origin main` takes a TAG
+    # named `main` over the branch and then never moves the remote-tracking ref, so the card sat on
+    # a stale tip. install.sh names both in full too.
+    #
+    # And the DESTINATION is spelled out. Without one, git moves refs/remotes/origin/<branch> only
+    # when the remote's configured refspec covers it, and a single-branch clone of main that tracks
+    # another branch has no such refspec: the fetch landed in FETCH_HEAD alone, the tracking ref
+    # never appeared, and the card read that as "up to date". --no-tags because a fetch with a
+    # destination would otherwise follow tags into the history it brings, and nothing here reads one.
+    ref = _REMOTE_TRACKING + branch
+    _, ferr, frc = _git(["fetch", "--quiet", "--no-tags", "origin",
+                         "+refs/heads/%s:%s" % (branch, ref)], timeout=45)
     if frc != 0:
         # Couldn't reach the remote (private repo without creds, or offline). Do NOT
         # report an update from a stale remote-tracking ref — that would show a phantom
@@ -1043,7 +1060,25 @@ def _compute_update_status():
         return {"git": True, "fetched": False, "update_available": False,
                 "current_version": cur_ver, "current_sha": cur_sha.strip(), "branch": branch,
                 "message": "Couldn't reach the update source — it may be private or offline."}
-    behind, _, _ = _git(["rev-list", "--count", "HEAD.." + ref])
+    # The ref must exist BY THAT NAME before anything below reads it. A full name is still only a
+    # name to git's lookup: with refs/remotes/origin/<branch> missing, git goes on to try
+    # refs/tags/refs/remotes/origin/<branch>, so a tag of that name would answer for the branch —
+    # and with neither, every read below fails and "0 behind" reads as up to date. Neither is.
+    _, _, xrc = _git(["show-ref", "--verify", "--quiet", ref])
+    if xrc != 0:
+        return {"git": True, "fetched": False, "update_available": False,
+                "current_version": cur_ver, "current_sha": cur_sha.strip(), "branch": branch,
+                "message": "The update source has no branch '%s' to compare against." % branch}
+    # FIRST-PARENT, here and in the walk below: the chain of first parents from the tip — each
+    # commit of a push or rebase merge, and each merge commit — not everything the tip reaches, and
+    # never what a merge brought in through its second parent. A pull request merged with a merge
+    # commit brings all of its commits into the branch's ancestry, including an intermediate one
+    # whose change was reverted before the merge. That commit was never the branch's tip, the CI
+    # state the walk asks about is its pull-request run (or none: "unknown" is accepted), and a walk
+    # over plain ancestry offered it as the verified target while the merge was still being
+    # checked. install.sh honours a pin only on the first-parent line too, so the two agree on what
+    # can be installed.
+    behind, _, _ = _git(["rev-list", "--first-parent", "--count", "HEAD.." + ref])
     behind_n = int(behind.strip()) if behind.strip().isdecimal() else 0
     rem_sha, _, _ = _git(["rev-parse", "--short", ref])
 
@@ -1087,7 +1122,7 @@ def _compute_update_status():
     # commits we're behind by, newest first, and update to the first one that's passed CI.
     # 'unknown' (API unreachable) counts as acceptable so a transient API error never hides a
     # legitimate update. Capped so a long-offline panel can't fire dozens of API calls.
-    revs, _, _ = _git(["rev-list", "-n", "25", "HEAD.." + ref])
+    revs, _, _ = _git(["rev-list", "--first-parent", "-n", "25", "HEAD.." + ref])
     commits = [c for c in (revs or "").split() if c]
     tip_state = _remote_ci_state(commits[0]) if commits else "unknown"
 
@@ -1340,9 +1375,15 @@ def _fetch_all_branches():
     _git(["remote", "set-branches", "origin", "*"], timeout=15)   # track every branch, not just main
     # Unshallow if the clone was shallow (errors + no-ops on a complete repo); then a normal fetch
     # covers the already-complete case.
-    _, _, rc = _git(["fetch", "--prune", "--tags", "--unshallow", "origin"], timeout=120)
+    #
+    # --no-tags, where this used to say --tags. The panel reads no tag anywhere, and --tags fetched
+    # EVERY tag the repository has, even one pointing at a commit on no branch at all — which is
+    # what a tag named `origin/main` would be made of, and git resolves a bare `origin/main` to that
+    # tag ahead of the remote-tracking branch. Every read here is spelled out in full now, so such a
+    # tag decides nothing, but there is no reason to go and fetch it.
+    _, _, rc = _git(["fetch", "--prune", "--no-tags", "--unshallow", "origin"], timeout=120)
     if rc != 0:
-        _git(["fetch", "--prune", "--tags", "origin"], timeout=90)
+        _git(["fetch", "--prune", "--no-tags", "origin"], timeout=90)
 
 
 def list_panel_branches():
@@ -1352,15 +1393,18 @@ def list_panel_branches():
     if not _is_git_checkout():
         return [branch], branch
     _fetch_all_branches()   # widen a single-branch/shallow clone so ALL branches show up + refresh
-    out, _, rc = _git(["for-each-ref", "--format=%(refname:short)", "--sort=-committerdate",
+    # The FULL refname, stripped here. `%(refname:short)` is the shortest UNAMBIGUOUS name, so the
+    # moment a tag `origin/main` existed, main came back as `remotes/origin/main`, failed the prefix
+    # test and vanished from the switcher.
+    out, _, rc = _git(["for-each-ref", "--format=%(refname)", "--sort=-committerdate",
                        "refs/remotes/origin"], timeout=20)
     branches = []
     if rc == 0:
         for line in (out or "").splitlines():
             name = line.strip()
-            if not name.startswith("origin/"):
+            if not name.startswith(_REMOTE_TRACKING):
                 continue
-            name = name[len("origin/"):]
+            name = name[len(_REMOTE_TRACKING):]
             if name and name != "HEAD" and _valid_branch(name) and name not in branches:
                 branches.append(name)
     if branch not in branches:
@@ -1376,9 +1420,12 @@ def panel_switch_branch(branch):
         return False, "Invalid branch name."
     if not _is_git_checkout():
         return False, "The panel isn't a git checkout, so it can't switch branches."
-    # Confirm the branch exists on the remote before committing the config to it.
-    _, _, rc = _git(["ls-remote", "--exit-code", "--heads", "origin", branch], timeout=20)
-    if rc != 0:
+    # Confirm the branch exists on the remote before committing the config to it. By EXACT name:
+    # ls-remote matches a pattern against the TAIL of each ref, so `dev` was confirmed by a branch
+    # `feature/dev` alone, and the panel then tracked a branch that does not exist.
+    out, _, rc = _git(["ls-remote", "--heads", "origin", "refs/heads/" + branch], timeout=20)
+    if rc != 0 or ("refs/heads/" + branch) not in [
+            ln.split("\t", 1)[-1].strip() for ln in (out or "").splitlines()]:
         return False, "Branch '%s' doesn't exist on the remote." % branch
     try:
         from panel.core import config as _cfg

@@ -817,6 +817,52 @@ regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+- **A tag named like a branch can no longer stand in for it, and a commit main only reached
+  through a merge no longer counts as main.** git reads a bare `origin/main` as a tag called
+  `origin/main` before the branch, and the installer's clone, its fetches and the panel's branch
+  list all bring tags along. So once a tag pushed under that name had been fetched, the next update
+  reset the checkout to a commit that was never on main, and the panel's update card, branch list
+  and verified target all read the same tag. The installer and the panel now name the branch in
+  full, both when they read it (`refs/remotes/origin/main`, and only after confirming that ref
+  exists — a missing one falls through git's lookup to a tag named `refs/remotes/origin/main`) and
+  when they fetch it (`+refs/heads/main:refs/remotes/origin/main`, where a bare `main` fetched a tag
+  of that name instead). Naming the destination also fixes a single-branch clone tracking another
+  branch, whose remote-tracking ref was never created, so the update card said "up to date". The
+  branch list no longer fetches every tag, and the switcher confirms a branch by its exact name,
+  where `dev` used to be "found" by a branch called `feature/dev`.
+
+  "On main" now means main's own first-parent line, not "an ancestor of main". A pull request
+  merged with a merge commit brings all its commits into main's ancestry, including an intermediate
+  one whose change was reverted before the merge. The update card offered such a commit as the
+  verified target while the merge was still being checked, the installer accepted it as a pin, and
+  root staged the helper from a checkout sitting on one. All three, and the auto-deploy, now accept
+  only a commit on main's first-parent line, never the side of a merge. That line holds the
+  commits main's tip has been at and each commit of a multi-commit push or rebase merge, with one
+  exception: a push that fast-forwards main onto a branch that had main merged into it (a
+  "foxtrot" merge) moves the commits main was at before onto that merge's second parent, and they
+  are no longer accepted as a pin or deployed by a re-run. The installer and the deploy read that
+  line as a stream, so neither a long history (a here-string of it needs a temp file past 64 KiB,
+  which fails on a full or read-only /tmp) nor an early match (`grep -q` in a pipe kills
+  `git rev-list` with SIGPIPE) can make a commit on the line read as off it.
+
+  The installer's "never move backwards" rule, which keeps a newer checkout where it is when handed
+  an older verified commit, asks only whether that checkout is an ANCESTOR of main: it is what
+  the host already runs, not something being verified, and a host left off the first-parent line by
+  a foxtrot push must not be reset backwards. The full update path (taken when the venv is stale) also
+  honours that rule now; it had been resetting a current checkout back to the older commit. And a
+  pinned commit the installer cannot verify is no longer replaced by main's tip, which nothing had
+  verified: a checkout on main stays where it is, with a warning, and any other stops the update
+  with an error that names the pin, having changed nothing.
+
+  The CI auto-deploy had the same gap one step earlier: its trigger compares the branch's short
+  name, and GitHub compares it ignoring case, so any ref whose short name matches main
+  case-insensitively passes — a pushed tag `main`, a branch `Main`, a tag `MAIN`. It now requires
+  the name to be exactly `main`, fetches main's history, proves the commit is on main's
+  first-parent line before taking its installer, and refuses a commit with no installer or an
+  empty one with a stated error. All of that happens before the job joins the tailnet. The job
+  also runs in a `production` environment, so its Tailscale credentials can be held there and
+  restricted to the branch main, instead of being repository secrets any branch or tag could read
+  (the header of `deploy.yml` has the one-time setup).
 - **A ban now closes what the banned address already had open.** A ban refuses new connections, at
   the firewall or, behind Tailscale Funnel, at the panel's own gate. A live console or a host
   terminal opened before the ban was not a new connection, so it kept streaming for as long as the

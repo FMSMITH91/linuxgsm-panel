@@ -356,6 +356,23 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   `sudo bash`. It now ships the verified commit's `install.sh` from the runner over SSH and runs
   that copy from a directory root created.
 
+  *Which* commit is proved on the runner, not assumed from the trigger. The job's `if` checks the
+  branch by its short name, and GitHub compares strings ignoring case, so any ref whose short name
+  matches main case-insensitively passes it: a pushed tag `main`, a branch `Main`, a tag `MAIN`.
+  So before it joins the tailnet, the job requires the run's branch name to be exactly `main`,
+  fetches main's history from `refs/heads/main`, confirms `refs/remotes/origin/main` exists under
+  exactly that name, and requires the commit to be on its first-parent line. That line holds the
+  commits main's tip has been at and each commit of a multi-commit push or rebase merge, but not an
+  intermediate commit of a pull request merged with a merge commit, which is an ancestor of main
+  and was never its tip. One exception: a push that fast-forwards main onto a branch that had main
+  merged into it (a "foxtrot" merge) moves the commits main was at before onto that merge's second
+  parent, and a re-run deploy of one of them is then refused. Only then does it read `install.sh`
+  out of that commit, and it refuses a commit with none or an empty one. On the host, `install.sh`
+  checks the pin again against its own fetch; a pin it cannot verify is never replaced by main's
+  unverified tip — the host stays where it is, or the update stops with an error. The Tailscale
+  credentials that let the job SSH in belong in the job's `production` environment, restricted to
+  the branch `main`. A repository secret would be readable by a workflow run on any branch or tag.
+
   The second half of that sentence was missing, and it mattered: `install_root_tools` *copied*
   those root-owned pieces **out of the working tree**, and the integrity argument was that
   `fetch_code` ran `git reset --hard` first. That is not a guarantee. `git update-index
@@ -379,7 +396,8 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   `stage_root_source` reads from **root's own clone** of the repository
   (`/usr/local/lib/linuxgsm-panel/.source.git`). Root's git fetches it with no user or system
   git config and no inherited `GIT_*` environment. The panel's `HEAD` is only a request: it is
-  honoured once root's clone shows that commit on the tracked upstream branch. A checkout at a
+  honoured once root's clone shows that commit on the tracked upstream branch's first-parent line
+  (a commit reachable only through a merge's second parent does not count). A checkout at a
   commit upstream does not have, or with no `.git`, gets no refresh, and the installer says so. A
   checkout that is still entirely root's (the fresh install, before the chown) is read directly.
   So is the operator's own source tree when `sudo bash install.sh` is run from a clone or an

@@ -413,6 +413,153 @@ _gitc() {
     fi
 }
 
+# The branch's remote-tracking ref is always named IN FULL (refs/remotes/origin/<branch>), both
+# fetched into and read. git resolves a bare `origin/main` as refs/origin/main,
+# refs/tags/origin/main, refs/heads/origin/main and only THEN refs/remotes/origin/main
+# (gitrevisions), and the clone and fetch_code's fetches bring tags along. So a tag pushed to the
+# repository under the name `origin/main` shadowed the branch: an update reset the checkout to a
+# commit that was never on main, and the checks that were meant to stop it read the tag too.
+#
+# A full name is still only a NAME to that lookup, though. When refs/remotes/origin/<branch> does
+# not exist (a branch pruned upstream, or a clone that never fetched it), git carries on to
+# refs/tags/refs/remotes/origin/<branch>, and a tag of that name answers for the branch. So the
+# ref is confirmed to exist, by exactly that name, before anything reads it. $1 is the git to ask.
+_ref_exists() {
+    "$1" show-ref --verify --quiet "$2"
+}
+
+# Fetch the tracked branch INTO its remote-tracking ref, both sides named in full.
+#   * The source is refs/heads/<branch>. A bare `main` is looked up on the remote like any other
+#     name, and a TAG named `main` wins over the branch — and then the remote-tracking ref is
+#     never moved at all.
+#   * The destination is spelled out rather than left to the remote's configured refspec. Without
+#     one, git updates refs/remotes/origin/<branch> only when that refspec covers it: in a
+#     single-branch clone of main that tracks another branch it does not, the fetch landed in
+#     FETCH_HEAD alone, and the tracking ref stayed missing (or stale) for every read after it.
+#   * --no-tags: with a destination git would follow tags into the fetched history. Nothing here
+#     reads a tag.
+_fetch_branch() {
+    _gitc fetch --quiet --no-tags origin \
+        "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+}
+
+# Is commit $2 (a FULL id) on the FIRST-PARENT line of ref $3 — the branch's own history, not
+# merely something it reaches? $1 is the git to ask.
+#
+# "An ancestor of the branch" was the test, and it admits more than it should. A pull request
+# merged with a merge commit brings every one of its commits into the branch's ancestry, including
+# an intermediate commit whose change was reverted before the merge: never the branch's tip, never
+# what the branch's CI ran, and still an ancestor. The first-parent line never holds what a merge
+# brought in through its second parent, so that is what a verified pin, or a commit root stages
+# from, has to be on.
+#
+# What the line does hold: the commits the branch's tip has been at, each commit of a push of
+# several, and each commit of a rebase merge. With one exception, which runs the other way: a push
+# that FAST-FORWARDS the branch onto a commit of another branch that had the branch merged into it
+# (a "foxtrot" merge — this repository's 7e38da7 did it once) puts the commits the branch was at
+# before on that merge's second parent, and they leave the line. A pin on one of them can no longer
+# be verified, and the update does not move to it (see _choose_update_target for what it does);
+# root stages nothing from a checkout sitting on one until an update moves it forward.
+#
+# Streamed through awk, which reads to the end whatever it finds. Two shapes that look the same
+# are not:
+#   * `rev-list | grep -q` — grep exits at the first match, rev-list then dies of SIGPIPE writing
+#     the rest, and under pipefail the test fails exactly when the commit IS there. On a history
+#     of a few hundred commits it happens nearly every time.
+#   * `grep -q <<< "$(rev-list …)"` — bash writes a here-string over 64 KiB to a temp file in
+#     $TMPDIR (or /tmp). main's line passes that size at about 1,600 commits, and on a host whose
+#     /tmp is full or read-only the check then fails having read nothing: the verified pin was
+#     dropped and root refused to stage, silently.
+# $2 is a full commit id (hex), so awk's escape processing of -v values changes nothing in it.
+_on_first_parent_line() {
+    [ -n "$2" ] || return 1
+    "$1" rev-list --first-parent "$3" 2>/dev/null \
+        | awk -v want="$2" '$0 == want { found = 1 } END { exit !found }'
+}
+
+# Which commit an update moves this checkout TO, once the branch has been fetched into
+# refs/remotes/origin/<branch>. resolve_update_target asks it whether there is anything to do, and
+# fetch_code asks it again to do it: ONE decision. It used to be two copies, and fetch_code's had
+# lost the "never backwards" rule, so a current checkout sent down the full update path (a stale
+# venv does that) with an older pin was reset back to the pin after all.
+#
+# Sets UPD_TARGET (a full commit id), UPD_WHY and UPD_PIN (the pin as a full id, when it is used):
+#   tip   no pin was given: the branch's tip;
+#   pin   PANEL_UPDATE_REF — the newest CI-verified commit, which can be below the tip while newer
+#         commits are still being checked — honoured ONLY on the branch's first-parent line, so a
+#         bogus value can never check out arbitrary or untracked code;
+#   stay  HEAD, which is on the branch and already contains that pin ("never backwards", below);
+#   hold  HEAD, because a pin WAS given and cannot be verified here, and HEAD is on the branch.
+# Returns 1, with UPD_TARGET empty and UPD_ERR saying why, when the remote-tracking ref does not
+# exist, and when a pin that cannot be verified leaves no commit of the branch to stay at.
+_choose_update_target() {
+    local _tracking="refs/remotes/origin/${DEFAULT_BRANCH}" _head=""
+    UPD_TARGET=""; UPD_WHY=""; UPD_PIN=""; UPD_ERR=""
+    if ! _ref_exists _gitc "${_tracking}" \
+       || ! UPD_TARGET="$(_gitc rev-parse --verify --quiet "${_tracking}^{commit}" 2>/dev/null)"; then
+        UPD_TARGET=""
+        UPD_ERR="The fetch left no ${_tracking} to update to."
+        return 1
+    fi
+    UPD_WHY="tip"
+    [ -n "${PANEL_UPDATE_REF:-}" ] || return 0
+    _head="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" || _head=""
+    # The pin is resolved to a full commit id ONCE, and that id is what is checked and what is
+    # reset to — a name git has to look up (an abbreviated id is tried as a ref name first) is never
+    # checked as one commit and used as another. A value starting with '-' never reaches git.
+    case "${PANEL_UPDATE_REF}" in
+        -*) ;;
+        *) UPD_PIN="$(_gitc rev-parse --verify --quiet "${PANEL_UPDATE_REF}^{commit}" 2>/dev/null)" \
+               || UPD_PIN="" ;;
+    esac
+    if [ -z "${UPD_PIN}" ] || ! _on_first_parent_line _gitc "${UPD_PIN}" "${_tracking}"; then
+        # A pin that was given and cannot be verified is not "no pin". It used to be treated as
+        # one, and the update went to the branch's TIP — the one commit nothing had verified. The
+        # deploy of a commit whose CI passed, or the panel's update to one, then installed whatever
+        # the tip was by that time: a later push whose CI was still running, or had failed.
+        #
+        # So the update does not move. A checkout on the branch stays where it is; one that is not
+        # (a local commit, or none) stops here, changes nothing, and says why. "On the branch" is
+        # ancestry, as in "never backwards" below — HEAD is what the host already runs, not
+        # something being verified. A pin fails here when this clone does not have it (a shallow
+        # clone's history ends above it), when it is on another branch or the side of a merge, or
+        # when a foxtrot push has just taken it off the line (see _on_first_parent_line).
+        UPD_PIN=""
+        if [ -n "${_head}" ] && _gitc merge-base --is-ancestor "${_head}" "${_tracking}" 2>/dev/null; then
+            UPD_TARGET="${_head}"; UPD_WHY="hold"
+            return 0
+        fi
+        UPD_TARGET=""; UPD_WHY=""
+        UPD_ERR="The commit this update is pinned to, ${PANEL_UPDATE_REF},
+     is not on ${DEFAULT_BRANCH}'s first-parent line here, so it is not verified; and this
+     checkout (${_head:-no commit}) is not on ${DEFAULT_BRANCH} to stay at. The update does not
+     fall back to ${DEFAULT_BRANCH}'s tip, which nothing verified."
+        return 1
+    fi
+    UPD_TARGET="${UPD_PIN}"; UPD_WHY="pin"
+    # Never backwards. A pin this checkout already contains is not an update when the checkout is
+    # itself on the branch: stay put rather than reset backwards. The deploy pins each run to the
+    # commit whose CI passed, and those runs do not finish in push order (a re-run of an old
+    # commit's CI deploys it last). A HEAD that is NOT on the branch (a local commit) is still
+    # reset, as it always was.
+    #
+    # "On the branch" is plain ANCESTRY for HEAD, where the pin needs the first-parent line. HEAD is
+    # not being verified here — it is what the host already runs — and the only question is
+    # whether the pin would move it backwards. The first-parent test answered that wrongly after a
+    # foxtrot push (see _on_first_parent_line): a host deployed to main's tip S1, then main
+    # fast-forwarded onto a branch that had main merged in, leaves S1 reachable only through that
+    # merge's second parent, and a late deploy of an older commit still on the line reset the host
+    # BACKWARDS to it. Nor does ancestry keep a HEAD off the line for good (one put on a merged pull
+    # request's intermediate commit by hand, say): the next pin newer than HEAD is not its
+    # ancestor, so that update moves it forward.
+    if [ -n "${_head}" ] \
+       && _gitc merge-base --is-ancestor "${UPD_PIN}" "${_head}" 2>/dev/null \
+       && _gitc merge-base --is-ancestor "${_head}" "${_tracking}" 2>/dev/null; then
+        UPD_TARGET="${_head}"; UPD_WHY="stay"
+    fi
+    return 0
+}
+
 # Copy the current checkout into PANEL_DIR (skips venv/data so we never clobber
 # secrets), or clone/pull from git when there's no local checkout.
 fetch_code() {
@@ -429,18 +576,20 @@ fetch_code() {
         _gitc remote set-branches origin '*' 2>/dev/null || true
         _gitc fetch --quiet --prune --unshallow origin 2>/dev/null \
             || _gitc fetch --quiet --prune origin 2>/dev/null \
-            || _gitc fetch --quiet origin "${DEFAULT_BRANCH}"
-        # Default target is the fetched branch tip. The panel's CI-gated self-update may instead
-        # pin PANEL_UPDATE_REF to the newest CI-VERIFIED commit (which can be below the tip when
-        # newer commits are still being checked). Honour it ONLY when it's an ancestor of the tip
-        # we just fetched, so a bogus value can never check out arbitrary or untracked code.
-        local _target="origin/${DEFAULT_BRANCH}"
-        if [ -n "${PANEL_UPDATE_REF:-}" ] \
-           && _gitc merge-base --is-ancestor "${PANEL_UPDATE_REF}" "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
-            _target="${PANEL_UPDATE_REF}"
-            echo "  Updating to verified commit ${PANEL_UPDATE_REF}"
-        fi
-        _gitc reset --hard --quiet "${_target}"
+            || _fetch_branch
+        # Where to is _choose_update_target's call — the same decision resolve_update_target made
+        # before the snapshot: the branch tip, a CI-verified pin on the branch's first-parent line,
+        # or HEAD itself when it is already past that pin, or when a pin was given that cannot be
+        # verified. The branch is read by its full name, and only once it is known to exist (see
+        # _ref_exists). When there is no safe target it stops, and says why.
+        _choose_update_target || die "${UPD_ERR}
+     Nothing was reset."
+        case "${UPD_WHY}" in
+            pin) echo "  Updating to verified commit ${UPD_TARGET}" ;;
+            stay) echo "  Keeping ${UPD_TARGET}: it is on ${DEFAULT_BRANCH} and already contains the verified commit ${UPD_PIN}" ;;
+            hold) echo "  Keeping ${UPD_TARGET}: the pinned commit ${PANEL_UPDATE_REF} is not on ${DEFAULT_BRANCH}'s first-parent line here, and the update does not fall back to the unverified tip" ;;
+        esac
+        _gitc reset --hard --quiet "${UPD_TARGET}"
     elif [ -z "${SRC}" ]; then
         command -v git >/dev/null 2>&1 || die "git is required to fetch the panel.  apt install -y git"
         # --no-single-branch keeps the clone shallow (fast) but fetches EVERY branch tip, so the
@@ -451,31 +600,31 @@ fetch_code() {
 
 # Read-only counterpart to fetch_code: fetch and work out which commit we'd update TO,
 # WITHOUT touching the working tree — so the update path can skip the snapshot + restart
-# entirely when already current. Sets CURRENT_SHA / TARGET_REF / TARGET_SHA. Returns 1 only
-# if the fetch itself fails (offline / private repo), so the caller can stop cleanly.
+# entirely when already current. Sets CURRENT_SHA / TARGET_SHA. Returns 1 when the
+# fetch fails (offline / private repo), or when there is no safe target — no remote-tracking ref
+# to read, or a pin that cannot be verified and no commit of the branch to stay at (RESOLVE_ERR
+# then says which) — so the caller can stop cleanly.
 resolve_update_target() {
-    CURRENT_SHA=""; TARGET_REF=""; TARGET_SHA=""
+    CURRENT_SHA=""; TARGET_SHA=""; RESOLVE_ERR=""
     if [ -n "${SRC}" ] && [ "${SRC}" != "${PANEL_DIR}" ]; then
         return 0   # local-source update: no git comparison, always applies
     fi
     [ -d "${PANEL_DIR}/.git" ] || return 0   # not a git checkout: let fetch_code decide
-    _gitc fetch --quiet origin "${DEFAULT_BRANCH}" || return 1
+    _fetch_branch || return 1
     CURRENT_SHA="$(_gitc rev-parse HEAD 2>/dev/null)"
-    TARGET_REF="origin/${DEFAULT_BRANCH}"
-    if [ -n "${PANEL_UPDATE_REF:-}" ] \
-       && _gitc merge-base --is-ancestor "${PANEL_UPDATE_REF}" "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
-        TARGET_REF="${PANEL_UPDATE_REF}"
-        # A pinned commit this checkout already contains is not an update when the checkout is
-        # itself a newer commit of the branch: stay put rather than reset backwards. The deploy
-        # pins each run to the commit whose CI passed, and those runs do not finish in push order
-        # (a re-run of an old commit's CI deploys it last). A HEAD that is NOT on the branch (a
-        # local commit) is still reset, as it always was.
-        if _gitc merge-base --is-ancestor "${PANEL_UPDATE_REF}" HEAD 2>/dev/null \
-           && _gitc merge-base --is-ancestor HEAD "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
-            TARGET_REF="HEAD"
-        fi
+    # The same decision fetch_code acts on (see _choose_update_target). One it cannot make is NOT
+    # "nothing to update": the caller stops, and says why.
+    if ! _choose_update_target; then
+        RESOLVE_ERR="${UPD_ERR}"
+        return 1
     fi
-    TARGET_SHA="$(_gitc rev-parse "${TARGET_REF}" 2>/dev/null)"
+    # Staying put because the pin could not be verified reads as "Already up to date" to the caller.
+    # Say why first: this is what the deploy's log and the panel's update log show.
+    if [ "${UPD_WHY}" = hold ]; then
+        warn "The commit this update is pinned to, ${PANEL_UPDATE_REF}, is not on ${DEFAULT_BRANCH}'s first-parent line here, so it is not verified."
+        warn "This checkout stays at ${UPD_TARGET}: the update does not fall back to ${DEFAULT_BRANCH}'s tip, which nothing verified."
+    fi
+    TARGET_SHA="${UPD_TARGET}"
     return 0
 }
 
@@ -752,10 +901,10 @@ SYSCTLEOF
 #
 # Is this checkout's `origin` the repository THIS installer knows?
 #
-# The update path runs `git reset --hard origin/<branch>` and then, as root, installs files out of
-# the result — including tools/panel-helper over the path the sudoers rule names. `origin` is
-# recorded in the panel-owned .git/config and `_gitc` runs git AS THE CHECKOUT OWNER, so a
-# compromised panel could point it at a repository of its own and have root install its code as
+# The update path runs `git reset --hard refs/remotes/origin/<branch>` and then, as root, installs
+# files out of the result — including tools/panel-helper over the path the sudoers rule names.
+# `origin` is recorded in the panel-owned .git/config and `_gitc` runs git AS THE CHECKOUT OWNER, so
+# a compromised panel could point it at a repository of its own and have root install its code as
 # the privilege boundary. It cannot change THIS file: install.sh runs from a root-owned copy
 # outside the checkout, so REPO_URL here is the thing to compare against.
 #
@@ -923,7 +1072,8 @@ _operator_file() {
 }
 
 # Which commit root may stage from: the checkout's HEAD, once root's own clone shows that commit is
-# on REPO_URL's ${DEFAULT_BRANCH}. Sets ROOT_SRC_COMMIT; returns 1, having said why, otherwise.
+# on REPO_URL's ${DEFAULT_BRANCH} — on its first-parent line, not merely reachable through a merge.
+# Sets ROOT_SRC_COMMIT; returns 1, having said why, otherwise.
 # Asked once per run, however many files are staged.
 root_source_commit() {
     if [ "${ROOT_SRC_TRIED}" -eq 1 ]; then
@@ -960,7 +1110,11 @@ root_source_commit() {
         warn "nothing from this checkout. The panel still works; re-run to retry."
         return 1
     fi
-    if ! _rootgit merge-base --is-ancestor "${want}" refs/root-src/tip >/dev/null 2>&1; then
+    # On the branch's FIRST-PARENT line, not merely an ancestor of its tip: a merged pull request's
+    # intermediate commit is an ancestor too, though the branch was never at it (see
+    # _on_first_parent_line). refs/root-src/tip was written by the fetch just above, into root's own
+    # tagless clone, so there is no other ref of that name for it to fall through to.
+    if ! _on_first_parent_line _rootgit "${want}" refs/root-src/tip; then
         warn "This checkout is at ${want}, which is not on ${REPO_URL}'s ${DEFAULT_BRANCH}."
         warn "Root stages nothing from it."
         return 1
@@ -1032,13 +1186,13 @@ install_recovery_command() {
     local link="/usr/local/bin/linuxgsm-panel-recover" stage="" target=""
     # The origin gate belongs HERE, not at the call sites, because this is the one root-owned file
     # an untrusted origin could still place. On the update path fetch_code has already done
-    # `git reset --hard origin/<branch>`, so HEAD — which stage_root_source reads from — is the
-    # untrusted commit by the time check_origin_trusted runs. install_root_tools self-gates and
-    # write_sudoers_grant is gated at both its call sites, so the helper, db_maintenance, the
-    # installer and the grant were all correctly withheld; this was not, and it installs root:root
-    # 0755 and points `sudo linuxgsm-panel-recover` at the result. That is precisely the attack the
-    # comment above describes, with the added sting that the operator has just been TOLD
-    # "Root-owned components … will NOT be refreshed from it".
+    # `git reset --hard refs/remotes/origin/<branch>`, so HEAD — which stage_root_source reads
+    # from — is the untrusted commit by the time check_origin_trusted runs. install_root_tools
+    # self-gates and write_sudoers_grant is gated at both its call sites, so the helper,
+    # db_maintenance, the installer and the grant were all correctly withheld; this was not, and it
+    # installs root:root 0755 and points `sudo linuxgsm-panel-recover` at the result. That is
+    # precisely the attack the comment above describes, with the added sting that the operator has
+    # just been TOLD "Root-owned components … will NOT be refreshed from it".
     #
     # Leaving the existing command untouched is the deliberate trade, the same one
     # install_root_tools makes: a host keeps whatever recovery command it already had rather than
@@ -1485,9 +1639,11 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # Decide whether there's anything to do BEFORE snapshotting or touching the service — a
     # no-op update shouldn't burn a snapshot (disk + gzip CPU) or blink the panel. This only
     # fetches; the working tree stays untouched until fetch_code below.
-    CURRENT_SHA=""; TARGET_REF=""; TARGET_SHA=""
+    CURRENT_SHA=""; TARGET_SHA=""; RESOLVE_ERR=""
     if ! resolve_update_target; then
-        die "Couldn't reach the update source (offline, or a private repo without credentials).
+        [ -n "${RESOLVE_ERR}" ] \
+            || RESOLVE_ERR="Couldn't reach the update source (offline, or a private repo without credentials)."
+        die "${RESOLVE_ERR}
      Nothing was changed."
     fi
     # A venv left behind by an OS release upgrade is the other thing a current checkout can need:

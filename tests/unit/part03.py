@@ -1539,9 +1539,9 @@ try:
                 return ("", "", 0)
             if args[:3] == ["rev-parse", "--short", "HEAD"]:
                 return ("headabc", "", 0)
-            if args[:2] == ["rev-list", "--count"]:
+            if args[0] == "rev-list" and "--count" in args:
                 return (str(behind), "", 0)
-            if args[:3] == ["rev-parse", "--short", "origin/main"]:
+            if args[:3] == ["rev-parse", "--short", "refs/remotes/origin/main"]:
                 return (commits[0][:7] if commits else "", "", 0)
             if args[0] == "rev-list" and "-n" in args:
                 return ("\n".join(commits), "", 0)
