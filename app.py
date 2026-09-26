@@ -532,10 +532,14 @@ def _node_tools_cron_pass(app):
         is brought onto the pinned tree, and a panel update that brings a new lockfile reaches the
         remotes within a day. It fetches nothing on a host that already has that tree;
       * every game server's own crontab gets cron.upgrade_managed_cron_tracking, the in-place
-        upgrade the Scheduled Tasks page already runs on every read. It is what gives an existing
-        restart-when-empty line the PATH its gamedig call needs (_core.CRON_TOOL_PATH): that line
-        is otherwise rewritten only when the operator toggles the setting, so on a host whose
-        gamedig is in /usr/local/bin it would have gone on never restarting for as long as nobody
+        upgrade the Scheduled Tasks page already runs on every read, given the server's game type
+        and port. It is what turns an existing restart-when-empty line into the one
+        set_daily_restart writes today: a line from before #331 restarts whenever the player
+        query fails — and the oldest send it to 127.0.0.1, which a Source server never answers,
+        so they restarted it every day with players on it — and one from before #362 looks
+        gamedig up on cron's PATH, which on a host whose gamedig is in /usr/local/bin never
+        counted a player. That line is otherwise rewritten only when the
+        operator toggles the setting, so it would have gone on doing either for as long as nobody
         opened the page. State-preserving by design, and a no-op for a crontab with nothing to
         upgrade, which after the first pass is all of them.
 
@@ -550,7 +554,8 @@ def _node_tools_cron_pass(app):
             if gs.remote is None:
                 continue
             try:
-                _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name)
+                _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
+                                                  game_type=gs.game_type, port=gs.port)
             except Exception:
                 _log.debug("cron upgrade failed for %s", gs.name, exc_info=True)
 

@@ -13,7 +13,7 @@ from panel.ops.ssh_manager import (GMOD_CONTENT_GAMES, GMOD_CONTENT_SIZES, UPLOA
     lgsm_get_values, lgsm_read_config, lgsm_write_config, mods_action, mods_available,
     mods_installed, path_disk_free, read_file, run_cron_job_now, send_console_command,
     stat_path, stat_upload_targets, stream_path, uninstall_gmod_content, update_cron_job,
-    upgrade_managed_cron_tracking, upload_file, write_file)
+    upload_file, write_file)
 # Reached through the MODULE, not bound by name: these are the seams the test suite
 # monkeypatches. `from x import f` copies the function object, so a stub on the source
 # module would never be seen — attribute access resolves at call time and is stable
@@ -874,8 +874,11 @@ def register(app, supervise):
             try:
                 # One-time, in-place upgrade so pre-existing managed jobs start reporting
                 # success/error (idempotent + state-preserving; never blocks the listing).
+                # Given the server's game type and port so a restart-when-empty line is healed
+                # to what set_daily_restart writes for THIS server. Through the module (the seam).
                 try:
-                    upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name)
+                    _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
+                                                      game_type=gs.game_type, port=gs.port)
                 except Exception:
                     app.logger.debug("cron tracking upgrade skipped", exc_info=True)
                 jobs = _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)

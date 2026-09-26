@@ -372,22 +372,104 @@ def _cron_log_command(line, marker):
     return rest[1:-1].strip()
 
 
-def upgrade_managed_cron_tracking(server, user, selfname=None):
-    """One-time, IN-PLACE upgrade of the panel's own cron lines, without changing schedules, on/off
-    state, or what a line decides (each existing line is transformed, not re-derived from state, so
-    it can't accidentally toggle anything). Two upgrades:
+# Every hourly restart-when-empty check set_daily_restart has ever written, so the in-place upgrade
+# below can recognise one by its EXACT shape — and only by that. An operator's own job that merely
+# mentions the flag, and a panel line an operator has since edited by hand, match none of these and
+# are left as they are. Read out of the function's history (`git log -S` / `git show` over
+# ssh_manager.py, then panel/ops/ssh_manager/_core.py), oldest first:
+#
+#   16cff95 until #331   the query went to 127.0.0.1 (4557e9a moved it to the host's own IP), jq
+#                        counted `.players|length`, and the condition restarted on an empty, 0 or
+#                        null P. gamedig prints {"error":...} when a query fails and jq counts that
+#                        as 0, so every failed query restarts the server; and a Source server does
+#                        not answer on 127.0.0.1 at all, so a line still on 127.0.0.1 restarts it
+#                        every day whoever is playing on it. A game with no gamedig type or port
+#                        got `P=; ` and the same condition.
+#   ... after #362       #362's in-place heal gave the lines above `PATH=...; ` and changed nothing
+#                        else, so the old query, filter and condition are still there.
+#   2a3e69b (#331)       the guarded filter (`... else empty end`) and a counted `[ "$P" = 0 ]`;
+#                        no query became `if true`.
+#   0816ced (#362)       the same with PATH=/usr/local/bin:/usr/bin:/bin: today's line.
+#
+# The PATH is the literal #362 wrote, not _core.CRON_TOOL_PATH: this table is history. A unit gate
+# requires that what set_daily_restart writes today is in it, so changing that line without adding
+# its shape here fails the suite instead of leaving the new line unrecognised.
+_RC_JQ_OLD = "'.players|length'"
+_RC_JQ_GUARD = "'if (.players|type==\"array\") then (.players|length) else empty end'"
+_RC_COND_OLD = 'if [ -z "$P" ] || [ "$P" = 0 ] || [ "$P" = null ]; then '
+_RC_COND_COUNTED = 'if [ "$P" = 0 ]; then '
+_RC_PATH_362 = "PATH=/usr/local/bin:/usr/bin:/bin; "
+
+
+def _restart_check_res(user, selfname):
+    """The compiled shapes above for this account's own flag and this server's own script. The
+    query's type, address and port are captured; everything else must match byte for byte."""
+    flag = re.escape(f"/home/{user}/.restart-pending")
+
+    def query(path, jq):
+        return (re.escape("P=$(" + path + "gamedig --type ")
+                + r"(?P<type>[A-Za-z0-9_.-]{1,64}) (?P<host>\d{1,3}(?:\.\d{1,3}){3}):(?P<port>\d{1,5})"
+                + re.escape(" 2>/dev/null | jq -r " + jq + " 2>/dev/null); "))
+    shapes = (
+        query("", _RC_JQ_OLD) + re.escape(_RC_COND_OLD),             # 16cff95 until #331
+        re.escape("P=; " + _RC_COND_OLD),                             # ... with no query
+        query(_RC_PATH_362, _RC_JQ_OLD) + re.escape(_RC_COND_OLD),    # ... after #362's PATH heal
+        query("", _RC_JQ_GUARD) + re.escape(_RC_COND_COUNTED),        # 2a3e69b (#331)
+        query(_RC_PATH_362, _RC_JQ_GUARD) + re.escape(_RC_COND_COUNTED),   # 0816ced (#362)
+        re.escape("if true; then "),                                  # #331 onward, no query
+    )
+    head = re.escape("[ -f ") + flag + re.escape(" ] && { ")
+    tail = (re.escape(f"/home/{user}/{selfname} restart >/dev/null 2>&1; rm -f ") + flag
+            + re.escape("; fi; }"))
+    return [re.compile(head + "(?:" + s + ")" + tail + r"\Z") for s in shapes]
+
+
+def _restart_check_now(server, user, selfname, found, game_type, port, host_of):
+    """What set_daily_restart would write today in place of the recognised line `found` (a match
+    from _restart_check_res): its command, not its schedule.
+
+    The gamedig type and port are the SERVER's (game_type, port), exactly what set_daily_restart is
+    given; a caller that does not know the server passes neither and the line's own are kept. The
+    address is the host's, via _gamedig_host (`host_of` memoises it across the loop) — except that
+    _gamedig_host answers 127.0.0.1 when it could not look, and a line that already names the
+    host's real address keeps it rather than being moved to one a Source server never answers on
+    by a lookup that failed."""
+    got = found.groupdict()
+    if game_type is None and port is None:
+        gdtype, qport = got.get("type") or "", got.get("port") or ""
+    else:
+        gdtype, qport = _core.GAMEDIG_TYPE.get(game_type or "", ""), port
+    host = None
+    if gdtype and qport:
+        host = host_of()
+        if host == "127.0.0.1" and got.get("host") and got["host"] != "127.0.0.1":
+            host = got["host"]
+    return _core.daily_restart_check_cmd(user, selfname, gdtype, host, qport)
+
+
+def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, port=None):
+    """IN-PLACE upgrade of the panel's own cron lines, without changing schedules or on/off state
+    (each existing line is transformed where it stands, so nothing is added or removed and no
+    setting can flip). Three upgrades:
 
       * the simple managed commands are re-wrapped through the inline recorder, so their runs
         start reporting success/error;
-      * the compound restart-when-empty check, if it still calls a bare `gamedig`, is given the
-        PATH it looks gamedig up on (_core.CRON_TOOL_PATH). cron's own PATH is /usr/bin:/bin,
-        and on a host whose npm came from the distro gamedig is in /usr/local/bin, so that line
-        never counted a player and never restarted. Only that one call is rewritten; the rest of
-        the line — schedule, address, jq filter, condition — is kept byte for byte, including an
-        older condition this does not otherwise touch.
+      * a restart-when-empty check in any shape set_daily_restart has ever written (the table
+        above _restart_check_res) is rewritten to exactly what set_daily_restart writes
+        for this server today (_core.daily_restart_check_cmd): the host's own address, the server's
+        port and gamedig type (`game_type`/`port`; the line's own when the caller passes neither),
+        the guarded jq filter, the counted-zero condition and gamedig's PATH. Lines written before
+        #331 restart whenever the player query fails, and the oldest of them send it to 127.0.0.1,
+        which a Source server does not answer — so those restarted the server every day with
+        players on it. The line keeps its own schedule; the daily time lives on the flag line,
+        which this does not move;
+      * a restart check this does NOT recognise (an operator has edited it) that still calls a
+        bare `gamedig` only has that one call given the PATH (_core.CRON_TOOL_PATH): cron's own
+        PATH is /usr/bin:/bin, and a distro npm puts gamedig in /usr/local/bin. The rest of such a
+        line is the operator's and is kept byte for byte.
 
     No-op once everything is upgraded. Runs on every Scheduled Tasks read, and daily from app.py
-    for every game server, so a line written before either upgrade heals without the operator
+    for every game server, so a line written before any of these heals without the operator
     toggling anything. Returns True if it changed anything. Best-effort."""
     selfname = selfname or user
     base = f"/home/{user}/{selfname}"
@@ -402,6 +484,13 @@ def upgrade_managed_cron_tracking(server, user, selfname=None):
     if rc != 0:
         return False
     bare, pathed = _core.GAMEDIG_CRON_BARE, _core.gamedig_cron_call()
+    checks = _restart_check_res(user, selfname)
+    _host = []
+
+    def host_of():                 # one address lookup per pass, and only if a line needs one
+        if not _host:
+            _host.append(_core._gamedig_host(server))
+        return _host[0]
     new_lines, changed = [], False
     for raw in (out or "").splitlines():
         s = raw.strip()
@@ -411,10 +500,18 @@ def upgrade_managed_cron_tracking(server, user, selfname=None):
             continue
         _disp, jid = _unwrap_cron_command(cmd)
         core = cmd[:-len(suffix)].strip() if cmd.endswith(suffix) else cmd
+        found = next((m for m in (r.match(cmd) for r in checks) if m), None)
         if jid is None and core in simple_cores:   # unwrapped simple managed line → wrap it
             new_lines.append(f"{sched} {_record_managed_cmd(user, core)}")
             changed = True
-        elif flag in cmd and bare in cmd:           # the restart check, calling a bare gamedig
+        elif found:                                 # the panel's own restart check, in any shape
+            want = _restart_check_now(server, user, selfname, found, game_type, port, host_of)
+            if want != cmd:
+                new_lines.append(f"{sched} {want}")
+                changed = True
+            else:
+                new_lines.append(raw)
+        elif flag in cmd and bare in cmd:           # an edited restart check, calling a bare gamedig
             new_lines.append(raw.replace(bare, pathed, 1))
             changed = True
         else:

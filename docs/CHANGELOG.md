@@ -239,6 +239,22 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **An older "daily restart when empty" line could restart the server with players on it.**
+  Lines written before the fix for "Is anyone on?" (below) kept the old check, which restarted
+  whenever the player query failed, because `jq` counts gamedig's error reply as 0 players. The
+  oldest of those lines also send the query to 127.0.0.1, which a Source server does not answer,
+  so for them every query fails and the server restarts every day, players or not. On the test
+  host, gmodserver's line got `{"error":"Failed all 2 attempts"}` from 127.0.0.1 and would have
+  restarted at the first :10 past the daily time, while the same query to the host's own address
+  answered normally. The earlier heal only added the PATH to such a line. The in-place upgrade
+  (run whenever a server's Scheduled Tasks are opened, and daily for every game server) now
+  recognises every shape the panel has ever written for this line and rewrites it to exactly what
+  turning the setting on writes today: the host's own address, the server's port and query type,
+  a restart only on a counted 0, and gamedig's PATH. The line keeps its own schedule, and the
+  daily restart time, which is on the separate flag line, does not move. A line the panel did not
+  write is left alone; one an operator has edited is not rewritten either, and only gets the PATH
+  as before. A crontab whose listing failed is still never rewritten. A game that once had no
+  player query, and has one now, gets the player check.
 - **"Daily restart when empty" never restarted on a host whose Node.js came from Ubuntu.** The
   hourly check runs from the game account's crontab, and cron gives a crontab the PATH
   `/usr/bin:/bin`. Ubuntu's own npm installs gamedig into `/usr/local/bin`, where cron does not
