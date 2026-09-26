@@ -56,6 +56,7 @@
   "Delete failed": "La suppression a échoué",
   "Delete failed.": "La suppression a échoué.",
   "Delete remote": "Supprimer l'hôte distant",
+  "Nothing on the host itself is changed: its game servers keep running, and the gamedig tool and weekly cron the panel installed there stay. The README’s “Removing a host” section says how to remove them.": "Rien n'est modifié sur l'hôte lui-même : ses serveurs de jeu continuent de tourner, et l'outil gamedig et la tâche cron hebdomadaire que le panneau y a installés restent en place. La section « Removing a host » du README explique comment les retirer.",
   "Delete request failed.": "La demande de suppression a échoué.",
   "Delete scheduled task": "Supprimer la tâche planifiée",
   "Detach Ubuntu Pro": "Détacher Ubuntu Pro",

@@ -49,21 +49,16 @@ concurrency:
 
 jobs:
   open-alerts:
-    # WHY THIS ALSO RUNS FOR PULL REQUESTS
-    #   It used to gate main only, and the failure mode of that is the one thing a gate must not
-    #   do: report a problem no earlier than the moment it is too late. A PR went green, merged,
-    #   and THIS turned main red seconds later — every time, for a class of problem the PR had no
-    #   way to show, because the question asked here ("are there open alerts?") is about repo
-    #   state and a PR's alerts are not yet main's.
-    #
-    #   The real case: a file was renamed. GitHub keys an alert dismissal partly on path, so the
-    #   rename closed a two-month-old dismissed false positive as "fixed" and opened an identical,
-    #   UNDISMISSED alert at the new path. Byte-identical code, no new finding, main red.
-    #
-    #   CodeQL analysing a pull_request uploads its results under refs/pull/<n>/merge, and the
-    #   alerts API takes a ?ref=. So the same question can be asked of the MERGE COMMIT before it
-    #   is a merge commit, which is exactly the thing a PR check should be. A PR that would turn
-    #   main red now turns itself red instead.
+    # MAIN ONLY — the pull-request half lives in codeql.yml (`pr-alerts`).
+    #   This job once also judged pull requests, at refs/pull/<n>/merge, so a PR that would turn main
+    #   red turned itself red instead. It could not: a workflow_run job's check is not posted on the
+    #   PR's head commit, so it was absent from every PR (codeql.yml's pr-alerts, posted on the PR
+    #   itself, replaced it). What it DID do is worse. GitHub files a workflow_run job's result on
+    #   the default branch's newest commit, so a PR with open alerts marked MAIN's tip failing —
+    #   and the panel's update gate (panel/ops/system_ops.py, _remote_ci_state) reads every check
+    #   on that commit, so every install stopped being offered main's newest version until the
+    #   next merge. f21a2f2 carries two such failures, from #177's runs. So the PR arm is gone:
+    #   PRs are judged on the PR, and this judges main.
     name: Open code-scanning alerts
     #
     #   The workflow_dispatch arm is separate because on a manual run `github.event.workflow_run`
@@ -73,45 +68,45 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       (github.event.workflow_run.head_branch == 'main' ||
-        github.event.workflow_run.event == 'pull_request'))
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
       security-events: read
-      pull-requests: read
     steps:
       - name: Resolve which ref to judge
         id: ref
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WR_EVENT: ${{ github.event.workflow_run.event }}
           # Falls back to this workflow's own ref on a manual run, where workflow_run is undefined
           # and WR_BRANCH would be empty — which built `ref=refs/heads/` and asked about nothing.
           WR_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          # The same name with no fallback, for the exact comparison below (deploy.yml's verify
+          # step takes it the same way). With the fallback, an empty head_branch read as main.
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           WR_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          if [ "${WR_EVENT}" = "pull_request" ]; then
-            # workflow_run carries no PR number, so find the PR by its head SHA. A SHA can belong
-            # to more than one open PR (same branch, retargeted); judging the first is right —
-            # they share the head, so they share the alerts.
-            num="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${WR_SHA}/pulls" \
-                     --jq '[.[] | select(.state == "open") | .number] | first // empty')"
-            if [ -z "${num}" ]; then
-              # The PR closed between CodeQL finishing and this starting. Nothing to gate.
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              echo "No open PR for ${WR_SHA}; nothing to judge."
-              exit 0
-            fi
-            echo "ref=refs/pull/${num}/merge" >> "$GITHUB_OUTPUT"
-            echo "label=PR #${num}" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=refs/heads/${WR_BRANCH}" >> "$GITHUB_OUTPUT"
-            echo "label=\`${WR_BRANCH}\`" >> "$GITHUB_OUTPUT"
+          # The job's `if` compared head_branch with 'main' the way GitHub compares strings:
+          # IGNORING CASE, and by SHORT name. So a branch `Main`, or a tag `main` or `MAIN`, pushed
+          # with a commit carrying its own workflow named "CodeQL", passed it and was judged as
+          # main. Read-only, but a gate must not report on main for a run that was not main's.
+          # Compared here exactly, in bash; a manual run is not about head_branch.
+          # (A tag named exactly `main` still shares main's concurrency group, which GitHub also
+          # compares ignoring case, so it can replace a PENDING main gate. `queue: max` would stop
+          # that, but actionlint 1.7.12, which CI pins, rejects the key; revisit when it doesn't.)
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] && [ "${HEAD_BRANCH:-}" != "main" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::head_branch '${HEAD_BRANCH:-}' is not exactly main; nothing was judged."
+            exit 0
           fi
-          echo "skip=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "ref=refs/heads/${WR_BRANCH}"
+            echo "label=\`${WR_BRANCH}\`"
+            echo "skip=false"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Fail if that ref has open code-scanning alerts
         if: steps.ref.outputs.skip != 'true'

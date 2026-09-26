@@ -883,7 +883,12 @@ def _repo_slug():
 _CI_BAD = {"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"}
 # Checks that don't gate the update-offer: `deploy` is the deployment action itself (gating on
 # it would be circular, and it only exists when auto-deploy is enabled), not a verification.
-_CI_IGNORE = {"deploy"}
+# "Upload coverage to Codacy" (codacy-coverage.yml) sends a report somewhere; it verifies nothing.
+# Both are workflow_run jobs, and GitHub files a workflow_run job's check run under main's NEWEST
+# commit even when the run is for a pull request, so without this a PR whose coverage upload
+# failed (no artifact, a Codacy outage, an expired token) marked main's tip failing, and no panel
+# was offered it until the next merge. tests/unit ties this name to the workflow's job name.
+_CI_IGNORE = {"deploy", "Upload coverage to Codacy"}
 
 
 def _remote_ci_state(sha):
@@ -955,8 +960,11 @@ _NOISE_DIRS = (".github/", "docs/", "tests/", "tools/", ".vscode/")
 # requirements.in is what requirements.txt is compiled FROM: neither the panel nor install.sh reads
 # it. A dependency reaches a host through requirements.txt, which tests/unit holds to lock every
 # name in the .in, so a commit that changes only the .in changes nothing a host installs.
+# requirements-bootstrap.in is the same for pip's own lockfile, requirements-bootstrap.txt, which
+# install.sh does read, and which therefore counts.
 _NOISE_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".dockerignore",
-                ".pre-commit-config.yaml", "codecov.yml", ".flake8", "mypy.ini", "requirements.in"}
+                ".pre-commit-config.yaml", "codecov.yml", ".flake8", "mypy.ini", "requirements.in",
+                "requirements-bootstrap.in"}
 # Files that live inside a noise directory but DO affect the running host, checked before the
 # directory rule. A denylist of directories cannot express "this one file matters".
 #

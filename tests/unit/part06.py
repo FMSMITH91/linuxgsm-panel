@@ -2187,6 +2187,72 @@ try:
     check("install.sh: ...and the fresh path, where PANEL_DIR is still root's, is unchanged",
           "SUDO" not in _r and "python3 -I -m venv" in _r, repr(_r[:200]))
 
+    # pip itself comes from its hash-locked lockfile, requirements-bootstrap.txt. It was
+    # `pip install --upgrade pip`: whatever PyPI served, unhashed, the first thing the venv ran.
+    # With the file: installed hash-checked and wheels-only, as the owner, BEFORE requirements.txt
+    # (so the requirements go in through the pinned pip). Without it — an update pinned to an older
+    # commit, or a rollback to one — the venv's own pip is kept: nothing unpinned in its place.
+    _su_pd = os.path.join(_su_sb, "panel")
+    _su_boot = os.path.join(_su_pd, "requirements-bootstrap.txt")
+    _su_pip = "SUDO -u %s %s/venv/bin/pip install --quiet " % (_su_me, _su_pd)
+    _su_info = "info() { echo \"INFO $*\"; }\n"
+    with open(_su_boot, "w") as _fh:
+        _fh.write("pip==26.2.1 --hash=sha256:%s\n" % ("0" * 64))
+    try:
+        _r = _su_run(_su_deps, _su_env + "PANEL_USER=%s\n" % _su_shlex.quote(_su_me),
+                     extra=_su_info + _su_shim % _su_shlex.quote(_su_me)).stdout
+    finally:
+        os.remove(_su_boot)
+    _su_lines = _r.splitlines()
+    _su_bline = _su_pip + "--require-hashes --only-binary :all: -r %s" % _su_boot
+    _su_rline = _su_pip + "-r %s/requirements.txt" % _su_pd
+    check("install.sh: pip comes from requirements-bootstrap.txt, hash-checked and wheels-only, "
+          "as the owner, before requirements.txt",
+          _su_bline in _su_lines and _su_rline in _su_lines
+          and _su_lines.index(_su_bline) < _su_lines.index(_su_rline)
+          and "--upgrade" not in _r, repr(_r[:600]))
+    _r = _su_run(_su_deps, _su_env + "PANEL_USER=%s\n" % _su_shlex.quote(_su_me),
+                 extra=_su_info + _su_shim % _su_shlex.quote(_su_me)).stdout
+    check("install.sh: ...and a version without that file keeps the venv's pip, upgrading nothing "
+          "unpinned, and still installs requirements.txt",
+          _su_rline in _r.splitlines() and "--upgrade" not in _r
+          and not any("requirements-bootstrap" in _l for _l in _r.splitlines()
+                      if not _l.startswith("INFO "))
+          and "keeping the venv's own pip" in _r, repr(_r[:600]))
+
+    # Whether an update reinstalls: requirements.txt AND pip's lockfile, so a bump of pip alone
+    # reaches the hosts. Run under the script's own `set -euo pipefail` (a failed pipe in the
+    # assignment would end the update), against real files.
+    _su_dd = _su_find("_deps_digest() {", "\n}\n")
+
+    def _su_digest(files):
+        _d = _tempfile.mkdtemp(dir=_su_sb, prefix="digest-")
+        for _n, _c in files.items():
+            with open(os.path.join(_d, _n), "w") as _fh:
+                _fh.write(_c)
+        return _sh_sub.run(["bash", "-c", "set -euo pipefail\nPANEL_DIR=%s\n%s\n"
+                            "d=\"$(_deps_digest)\"\necho \"DIGEST[${d}]\"\n"
+                            % (_su_shlex.quote(_d), _su_dd)],
+                           capture_output=True, text=True).stdout
+
+    _su_d_req = _su_digest({"requirements.txt": "flask==1\n"})
+    _su_d_both = _su_digest({"requirements.txt": "flask==1\n",
+                             "requirements-bootstrap.txt": "pip==1\n"})
+    _su_d_bump = _su_digest({"requirements.txt": "flask==1\n",
+                             "requirements-bootstrap.txt": "pip==2\n"})
+    _su_d_none = _su_digest({"requirements-bootstrap.txt": "pip==2\n"})
+    check("install.sh: a bump of pip's lockfile alone changes what decides whether an update "
+          "reinstalls; no requirements.txt reads as nothing (so it installs), and none of it is "
+          "fatal under set -e",
+          all(_x.startswith("DIGEST[") for _x in (_su_d_req, _su_d_both, _su_d_bump, _su_d_none))
+          and len({_su_d_req, _su_d_both, _su_d_bump}) == 3
+          and _su_d_req != "DIGEST[]\n" and _su_d_none == "DIGEST[]\n",
+          repr((_su_d_req, _su_d_both, _su_d_bump, _su_d_none)))
+    _su_upd = _su_find('    info "[3/6] Fetching the new version…"\n', "\n    ok \"Code updated")
+    check("install.sh: ...and the update reads both sides of the fetch through it",
+          _su_upd.count('"$(_deps_digest)"') == 2 and "REQ_BEFORE=\"$(_deps_digest)\"" in _su_upd
+          and "REQ_AFTER=\"$(_deps_digest)\"" in _su_upd, repr(_su_upd[:300]))
+
     # An in-place OS release upgrade (22.04 -> 24.04) moves /usr/bin/python3 to a new minor version.
     # The venv's python3 is a symlink to it, so it starts the new interpreter with none of the
     # packages, and the service dies on `import eventlet`. The update path skipped pip whenever
@@ -2820,6 +2886,122 @@ try:
     check("security-code: pip-audit audits the pinned set itself, not a fresh resolution",
           re.search(r"^\s*- run: pip-audit --no-deps -r requirements\.txt\s*$", _rq_sec, re.M)
           is not None, "pip-audit resolves its own environment again")
+
+    # ── pip itself: requirements-bootstrap.txt, hash-locked and Dependabot-maintained ──────────
+    # install.sh ran `pip install --upgrade pip`. Its replacement is held to the same scheme as
+    # requirements.txt: a pip-compile lockfile beside its .in, compiled on the oldest supported
+    # Python (Dependabot re-runs pip-compile on the Python the header names), every entry pinned to
+    # one version and hashed, pip among them; installed and audited in CI, reviewed when it changes.
+    _bs_txt = open(os.path.join(_root, "requirements-bootstrap.txt"), encoding="utf-8").read()
+    _bs_ents = [" ".join(_e.split()) for _e in re.sub(r"\\\n", " ", "\n".join(
+        _l for _l in _bs_txt.splitlines() if not _l.lstrip().startswith("#"))).splitlines()
+        if _e.strip()]
+
+    def _bs_bad(ents):
+        return [_e for _e in ents if not re.fullmatch(
+            r"[A-Za-z0-9._-]+==[0-9][A-Za-z0-9.]*( --hash=sha256:[0-9a-f]{64})+", _e)]
+
+    check("requirements-bootstrap.txt: pins pip to one version and hashes, and every entry so",
+          any(_e.startswith("pip==") for _e in _bs_ents) and not _bs_bad(_bs_ents),
+          "entries=%r bad=%r" % (_bs_ents[:3], _bs_bad(_bs_ents)[:3]))
+    check("requirements-bootstrap.txt: ...and an unhashed or ranged entry is named (control)",
+          _bs_bad(["pip==26.2.1", "pip>=26 --hash=sha256:" + "0" * 64,
+                   "pip==26.2.1 --hash=sha256:" + "0" * 64])
+          == ["pip==26.2.1", "pip>=26 --hash=sha256:" + "0" * 64])
+    check("requirements-bootstrap.txt: a pip-compile lockfile beside its .in, compiled on the "
+          "oldest supported Python, from a directory Dependabot's pip entry reads",
+          _rq_header_python(_bs_txt) == _RQ_PYTHONS[0][:-2]
+          and "--output-file=requirements-bootstrap.txt" in _bs_txt
+          and os.path.exists(os.path.join(_root, "requirements-bootstrap.in"))
+          and re.search(r'- package-ecosystem: "pip"\n    directory: "/"\n',
+                        open(os.path.join(_root, ".github", "dependabot.yml"),
+                             encoding="utf-8").read()) is not None,
+          repr(_rq_header_python(_bs_txt)))
+    _bs_ci = open(os.path.join(_root, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
+    _bs_ci_checks = _bs_ci[_bs_ci.index("\n  checks:\n"):_bs_ci.index("\n  coverage:\n")]
+    _bs_ci_boot = re.search(r"python -m pip install --quiet --require-hashes --only-binary :all: "
+                            r"-r requirements-bootstrap\.txt\n", _bs_ci_checks)
+    _bs_ci_req = re.search(r"python -m pip install [^\n]*-r requirements\.txt\n", _bs_ci_checks)
+    _bs_dr = open(os.path.join(_root, ".github", "workflows", "dependency-review.yml"),
+                  encoding="utf-8").read()
+    check("requirements-bootstrap.txt: the test matrix installs it as install.sh does, before "
+          "requirements.txt; pip-audit reads it; Dependency Review runs when it changes",
+          _bs_ci_boot is not None and _bs_ci_req is not None
+          and _bs_ci_boot.start() < _bs_ci_req.start()
+          and re.search(r"^\s*- run: pip-audit --no-deps -r requirements-bootstrap\.txt\s*$",
+                        _rq_sec, re.M) is not None
+          and "      - 'requirements-bootstrap.txt'\n" in _bs_dr[:_bs_dr.index("\npermissions:")],
+          "ci=%r audit=%r" % (_bs_ci_boot and _bs_ci_boot.group(0), "requirements-bootstrap"
+                              in _rq_sec))
+
+    # Every pip the project's shell runs is hash-checked, or allowed here with the reason. The
+    # upgrade that ran unpinned on every host sat in install.sh in plain sight, and no gate read
+    # install.sh's pip lines: the workflow scan below matches `pip install`, and install.sh spells
+    # it `"${PANEL_DIR}/venv/bin/pip" install`. Read every shell script (by extension or shebang),
+    # comment lines dropped and `\` continuations joined; `python3-pip` (an apt package) is not pip.
+    _PIP_UNHASHED_OK = {
+        ("install.sh", '"${PANEL_DIR}/requirements.txt"'):
+            "an update can land an older pinned commit whose requirements.txt has no hashes, and "
+            "--require-hashes would fail that install; pip checks hashes by itself whenever the "
+            "file carries them, which every current one does",
+    }
+
+    def _pip_calls(src):
+        src = "\n".join(_l for _l in src.splitlines() if not _l.lstrip().startswith("#"))
+        src = re.sub(r"\\\n\s*", " ", src)
+        return [" ".join(_m.group(0).split()) for _m in
+                re.finditer(r"(?<![\w-])pip3?[\x22']?[ \t]+(?:install|download|wheel)\b[^\n;&|]*", src)]
+
+    def _pip_verdicts(label, src):
+        bad, ok = [], []
+        for _c in _pip_calls(src):
+            _toks = _c.split()
+            _files = [_toks[_i + 1] for _i, _t in enumerate(_toks[:-1]) if _t == "-r"]
+            _named = [_t for _i, _t in enumerate(_toks[2:], 2)
+                      if not _t.startswith("-") and _t != ":all:" and _toks[_i - 1] != "-r"]
+            if _named:
+                bad.append("%s: names %s: %s" % (label, " ".join(_named), _c))
+            elif "--require-hashes" in _toks or (
+                    _files and all((label, _f) in _PIP_UNHASHED_OK for _f in _files)):
+                ok.append(_c)
+            else:
+                bad.append("%s: not hash-checked: %s" % (label, _c))
+        return bad, ok
+
+    _pip_bad, _pip_seen = [], {}
+    for _dp, _dns, _fns in os.walk(_root):
+        _dns[:] = [_d for _d in _dns if _d not in (".git", ".claude", ".venv", "venv",
+                                                   "node_modules", "data", "__pycache__")]
+        for _fn in _fns:
+            _fp = os.path.join(_dp, _fn)
+            try:
+                with open(_fp, encoding="utf-8") as _fh:
+                    _src = _fh.read()
+            except (UnicodeDecodeError, OSError):
+                continue
+            if not (_fn.endswith(".sh") or re.match(r"#!\S*(?:/|env )(?:ba)?sh\b", _src)):
+                continue
+            _rel = os.path.relpath(_fp, _root)
+            _b, _o = _pip_verdicts(_rel, _src)
+            _pip_bad += _b
+            _pip_seen[_rel] = len(_b) + len(_o)
+    check("shell: every pip call is hash-checked or allowed with a reason, and names no package",
+          _pip_seen.get("install.sh", 0) >= 2 and not _pip_bad,
+          "install.sh calls=%r bad=%r" % (_pip_seen.get("install.sh"), _pip_bad[:4]))
+    check("shell: ...and the old unpinned upgrade, a named package, or an unlisted unhashed file "
+          "is named (control)",
+          len(_pip_verdicts("install.sh", '    "${V}/bin/pip" install --quiet --upgrade pip\n'
+                                          "    pip3 install flask\n"
+                                          "    python -m pip install -r other.txt\n"
+                                          "    apt-get install -y python3-pip git\n")[0]) == 3
+          and _pip_verdicts("install.sh", '  "${P}/pip" install --quiet \\\n'
+                                          '      -r "${PANEL_DIR}/requirements.txt"\n'
+                                          "  pip install --require-hashes --only-binary :all: "
+                                          "-r x.txt\n") == ([], [
+                                              'pip" install --quiet -r '
+                                              '"${PANEL_DIR}/requirements.txt"',
+                                              "pip install --require-hashes --only-binary :all: "
+                                              "-r x.txt"]))
 
     # origin: the URL the root-owned installs are taken from, compared against this file's own
     # REPO_URL — which the panel cannot edit, because install.sh runs from outside the checkout.
@@ -4337,6 +4519,93 @@ check("codeql-alerts: the concurrency group separates a fork PR from the main ga
       and "github.event.workflow_run.head_repository.full_name" in _cqa_group
       and "github.event.workflow_run.head_branch" in _cqa_group, _cqa_group)
 
+
+# ── the code-scanning gate judges main only for a run that was exactly main's ─────────────────────
+# Its `if` compared head_branch with 'main' like deploy.yml's used to: GitHub compares strings
+# IGNORING CASE, and head_branch is a SHORT name, so a branch `Main` or a tag `main`/`MAIN` pushed
+# with its own workflow named "CodeQL" was judged as main. The step now compares the name exactly,
+# in bash, as deploy.yml's verify step does. Its run block is taken out of the workflow and run here,
+# with `gh` shimmed, for each kind of run; the step's env must hand it the raw head_branch.
+def _wf_run_block(text, step_name):
+    """The `run: |` body of the step named `step_name`, dedented, from a workflow read as text."""
+    _lines = text.splitlines()
+    _i = next(_n for _n, _l in enumerate(_lines) if _l.strip() == "- name: " + step_name)
+    _j = next(_n for _n in range(_i + 1, len(_lines)) if _lines[_n].strip() == "run: |")
+    _ind = len(_lines[_j]) - len(_lines[_j].lstrip())
+    _body = []
+    for _l in _lines[_j + 1:]:
+        if _l.strip() and len(_l) - len(_l.lstrip()) <= _ind:
+            break
+        _body.append(_l)
+    _cut = min(len(_l) - len(_l.lstrip()) for _l in _body if _l.strip())
+    return "\n".join(_l[_cut:] for _l in _body) + "\n"
+
+
+def _wf_step_env(text, step_name):
+    _i = text.index("- name: " + step_name)
+    _j = text.index("run: |", _i)
+    return dict(re.findall(r"^\s+([A-Z][A-Z0-9_]*): (\S.*)$", text[_i:_j], re.M))
+
+
+_cqa_raw = open(os.path.join(_root, ".github", "workflows", "codeql-alerts.yml"),
+                encoding="utf-8").read()
+_cqa_run = _wf_run_block(_cqa_raw, "Resolve which ref to judge")
+_cqa_env = _wf_step_env(_cqa_raw, "Resolve which ref to judge")
+check("codeql-alerts: the ref step takes HEAD_BRANCH from the workflow_run with no fallback, to "
+      "compare it exactly",
+      _cqa_env.get("HEAD_BRANCH") == "${{ github.event.workflow_run.head_branch }}"
+      and "${HEAD_BRANCH" in _cqa_run, repr(_cqa_env))
+# ...and it judges MAIN only. Its pull-request arm filed each PR's result on main's newest commit
+# (a workflow_run job's check lands there, never on the PR), so a PR with open alerts marked main's
+# tip failing, and the panel's update gate stopped offering main's newest version. PRs are judged by
+# codeql.yml's pr-alerts, on the PR itself.
+_cqa_job_if = re.search(r"^    if: >-\n((?:      .*\n)+)", _cqa_raw, re.M)
+_cqa_if = " ".join(_cqa_job_if.group(1).split()) if _cqa_job_if else ""
+_cq_raw = open(os.path.join(_root, ".github", "workflows", "codeql.yml"), encoding="utf-8").read()
+check("codeql-alerts: the gate judges pushes to main (and manual runs) only, never a pull request's "
+      "run, whose result GitHub files on main's tip; codeql.yml judges PRs on the PR",
+      "github.event.workflow_run.event == 'push'" in _cqa_if
+      and "head_branch == 'main'" in _cqa_if and "pull_request" not in _cqa_if
+      and "pull_request" not in _cqa_run
+      and re.search(r"^  pr-alerts:\n    name: Open code-scanning alerts \(PR\)\n"
+                    r"    if: github\.event_name == 'pull_request'$", _cq_raw, re.M) is not None,
+      _cqa_if)
+_cqa_sb = _tempfile.mkdtemp(prefix="cqa-")
+try:
+    os.makedirs(os.path.join(_cqa_sb, "bin"))
+    with open(os.path.join(_cqa_sb, "bin", "gh"), "w") as _fh:
+        _fh.write("#!/bin/sh\necho 42\n")      # the open PR whose head the run was for
+    os.chmod(os.path.join(_cqa_sb, "bin", "gh"), 0o755)
+
+    def _cqa_case(event_name, wr_event, head_branch, ref_name="main"):
+        _out = os.path.join(_cqa_sb, "out-%s-%s-%s" % (event_name, wr_event, head_branch or "none"))
+        open(_out, "w").close()
+        _p = _sh_sub.run(["bash", "-c", _cqa_run], capture_output=True, text=True, env=dict(
+            os.environ, PATH=os.path.join(_cqa_sb, "bin") + os.pathsep + os.environ["PATH"],
+            GITHUB_EVENT_NAME=event_name, WR_EVENT=wr_event, HEAD_BRANCH=head_branch,
+            # the step's own WR_BRANCH expression: head_branch || github.ref_name
+            WR_BRANCH=head_branch or ref_name, WR_SHA="a" * 40, GITHUB_OUTPUT=_out,
+            GITHUB_REPOSITORY="o/r"))
+        _o = dict(_l.split("=", 1) for _l in open(_out).read().splitlines() if "=" in _l)
+        return _p.returncode, _o.get("skip"), _o.get("ref"), _p.stdout
+
+    _cqa_main = _cqa_case("workflow_run", "push", "main")
+    check("codeql-alerts: a push to main is judged as main (positive control)",
+          _cqa_main[:3] == (0, "false", "refs/heads/main"), repr(_cqa_main))
+    _cqa_near = {_b: _cqa_case("workflow_run", _e, _b)
+                 for _e, _b in (("push", "Main"), ("push", "MAIN"), ("push", ""),
+                                ("workflow_dispatch", "mAIN"))}
+    check("codeql-alerts: a run whose head_branch is main only ignoring case (Main, MAIN), or "
+          "empty, judges nothing",
+          all(_v[0] == 0 and _v[1] == "true" and _v[2] is None
+              and "is not exactly main; nothing was judged" in _v[3] for _v in _cqa_near.values()),
+          repr(_cqa_near))
+    _cqa_man = _cqa_case("workflow_dispatch", "", "", ref_name="feature")
+    check("codeql-alerts: ...while a manual run is judged at the ref it was started on",
+          _cqa_man[:3] == (0, "false", "refs/heads/feature"), repr(_cqa_man))
+finally:
+    _shutil.rmtree(_cqa_sb, ignore_errors=True)
+
 # ── no workflow runs a remote script it did not pin, and a secret lives in one step's env ───────
 # ci.yml's coverage upload was `bash <(curl -Ls https://coverage.codacy.com/get.sh)`: unversioned,
 # unchecksummed, run on every push to main — with CODACY_PROJECT_TOKEN in the JOB env, so the
@@ -4357,12 +4626,251 @@ _ci_wf = open(os.path.join(_root, ".github", "workflows", "ci.yml"), encoding="u
 _cov_job = _ci_wf[_ci_wf.index("\n  coverage:\n"):]
 _cov_env = _cov_job[_cov_job.index("\n    env:\n"):]
 _cov_env = _cov_env[:_cov_env.index("\n    steps:")]
-check("workflows: the Codacy token is not in the coverage job's env, only its upload step's",
-      "CODACY_PROJECT_TOKEN: ${{ secrets" not in _cov_env
-      and "CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}" in _cov_job
-      and "sha256sum -c" in _cov_job
-      and "persist-credentials: false" in _cov_job[:_cov_job.index("actions/setup-python")],
+check("workflows: the coverage job holds no Codacy token, and hands its report on as an artifact",
+      "secrets.CODACY_PROJECT_TOKEN" not in _ci_wf and "CODACY_PROJECT_TOKEN:" not in _cov_env
+      and "persist-credentials: false" in _cov_job[:_cov_job.index("actions/setup-python")]
+      and re.search(r"uses: actions/upload-artifact@[0-9a-f]{40} # v\S+\n\s+with:\n\s+name: coverage\n"
+                    r"\s+path: \|\n\s+coverage\.xml\n", _cov_job) is not None,
       _cov_env[-200:])
+
+# ── CODACY_PROJECT_TOKEN is read only by main's copy of codacy-coverage.yml ─────────────────────
+# As a repository secret it was readable by a workflow on ANY branch pushed here, and the coverage
+# job that uploaded with it ran the code under test. The upload is now a workflow_run job, which
+# runs main's copy of its file with GITHUB_REF=main, in an environment the owner restricts to main
+# (the file's header has the settings) — so an environment is possible at all without refusing
+# every pull request's upload. The report it uploads came from the tested code, so it is data:
+# never executed, a DTD or entity declaration refused (the reporter's parser resolves entities a
+# report declares), a fork's run never uploaded, and a push counted only when exactly main's.
+_cc_raw = open(os.path.join(_root, ".github", "workflows", "codacy-coverage.yml"),
+               encoding="utf-8").read()
+_cc_code = "\n".join(_l for _l in _cc_raw.splitlines() if not _l.lstrip().startswith("#"))
+_cc_job = _cc_code[_cc_code.index("\n  upload:\n"):]
+# From `if:` to `runs-on:`, which every job has: a key between them going missing must fail the
+# checks below by name, not end the suite with a ValueError.
+_cc_if = " ".join(_cc_job[_cc_job.find("    if: >-"):_cc_job.find("\n    runs-on:")].split())
+_cc_env = _wf_step_env(_cc_raw, "Send coverage to Codacy")
+check("codacy-coverage: runs on CI's completion, in the `codacy` environment (no deployment "
+      "record), for this repository's push and pull-request runs only",
+      re.search(r"\non:\n  workflow_run:\n    workflows: \[ \x22CI\x22 \]\n    types: \[ completed \]\n",
+                _cc_code) is not None
+      and "\n    environment:\n      name: codacy\n      deployment: false\n" in _cc_job
+      and "github.event.workflow_run.head_repository.full_name == github.repository" in _cc_if
+      and "github.event.workflow_run.event == 'push' || "
+          "github.event.workflow_run.event == 'pull_request'" in _cc_if, _cc_if)
+check("codacy-coverage: the token is in the upload step's env and nowhere else; the job can read "
+      "actions and nothing more, and checks out nothing",
+      _cc_code.count("secrets.CODACY_PROJECT_TOKEN") == 1
+      and _cc_env.get("CODACY_PROJECT_TOKEN") == "${{ secrets.CODACY_PROJECT_TOKEN }}"
+      and re.search(r"\n    permissions:\n      actions: read(?:[ \t]+#[^\n]*)?\n    steps:", _cc_job)
+      is not None
+      and "actions/checkout" not in _cc_code
+      and _cc_env.get("HEAD_SHA") == "${{ github.event.workflow_run.head_sha }}"
+      and _cc_env.get("HEAD_BRANCH") == "${{ github.event.workflow_run.head_branch }}"
+      and "run-id: ${{ github.event.workflow_run.id }}" in _cc_job
+      and "sha256sum -c" in _cc_job, repr(_cc_env))
+# The step's bash is run below with its env handed in by this test, so the wiring into it is
+# proved only here: WR_EVENT decides whether the exact-main check runs at all (any other value and
+# a push from `Main` uploads), REPORT_DIR must be where the download put the artifact, and the
+# artifact must be the one CI's coverage job uploads, from the run that finished. None of this can
+# be exercised before merge: a workflow_run job runs main's copy of its file.
+_cc_dl = _cc_raw[_cc_raw.find("- name: Download the coverage report CI made"):
+                 _cc_raw.find("- name: Send coverage to Codacy")]
+_cc_dl_with = dict(re.findall(r"^\s+([a-z][a-z-]*): (\S.*)$", _cc_dl[_cc_dl.find("with:"):], re.M))
+_cc_up_name = re.search(r"uses: actions/upload-artifact@\S+[^\n]*\n\s+with:\n\s+name: (\S+)\n", _cov_job)
+check("codacy-coverage: the step reads the workflow_run's own event, and the report from where the "
+      "download put CI's coverage artifact, from that run",
+      _cc_env.get("WR_EVENT") == "${{ github.event.workflow_run.event }}"
+      and "uses: actions/download-artifact@" in _cc_dl
+      and _cc_up_name is not None and _cc_dl_with.get("name") == _cc_up_name.group(1)
+      and _cc_dl_with.get("run-id") == "${{ github.event.workflow_run.id }}"
+      and _cc_dl_with.get("github-token") == "${{ github.token }}"
+      and bool(_cc_env.get("REPORT_DIR")) and _cc_dl_with.get("path") == _cc_env.get("REPORT_DIR"),
+      repr((_cc_env.get("WR_EVENT"), _cc_env.get("REPORT_DIR"), _cc_dl_with)))
+# CI cancels a run when a newer push lands (cancel-in-progress), which is routine on a pull request,
+# and a cancelled coverage job left no artifact: without these the upload failed on the download.
+check("codacy-coverage: a cancelled or skipped CI run starts no upload",
+      "github.event.workflow_run.conclusion != 'cancelled'" in _cc_if
+      and "github.event.workflow_run.conclusion != 'skipped'" in _cc_if, _cc_if)
+_cc_run = _wf_run_block(_cc_raw, "Send coverage to Codacy")
+_cc_sb = _tempfile.mkdtemp(prefix="codacy-")
+try:
+    _cc_bin = os.path.join(_cc_sb, "bin")
+    os.makedirs(_cc_bin)
+    # curl writes a stand-in reporter where the step asked for the real one; it logs its argv and
+    # keeps the report it was given. sha256sum is waved through here (the pin is checked above).
+    with open(os.path.join(_cc_bin, "curl"), "w") as _fh:
+        _fh.write("#!/bin/sh\nwhile [ $# -gt 0 ]; do case \x22$1\x22 in -o) o=\x22$2\x22; shift 2;; "
+                  "*) shift;; esac; done\nprintf '%s\\n' '#!/bin/sh' "
+                  "'echo \x22REPORTER $*\x22 >> \x22$CC_LOG\x22' 'cp \x22$3\x22 \x22$CC_LOG.xml\x22' "
+                  "> \x22$o\x22\n")
+    with open(os.path.join(_cc_bin, "sha256sum"), "w") as _fh:
+        _fh.write("#!/bin/sh\ncat >/dev/null\n")
+    for _f in ("curl", "sha256sum"):
+        os.chmod(os.path.join(_cc_bin, _f), 0o755)
+    _cc_sha = "c" * 40
+    _cc_good = ('<?xml version="1.0" ?>\n<coverage version="7.6" line-rate="0.5">\n'
+                '<sources><source>/home/runner/work/x/x</source></sources>\n<packages><package '
+                'name="."><classes><class name="app.py" filename="panel/app.py"><lines>'
+                '<line number="1" hits="1"/><line number="2" hits="0"/></lines></class>'
+                '</classes></package></packages>\n</coverage>\n')
+    _cc_dtd = ('<?xml version="1.0"?>\n<!DOCTYPE coverage [<!ENTITY x SYSTEM '
+               '"file:///etc/hostname">]>\n<coverage line-rate="1"><sources><source>&x;</source>'
+               '</sources></coverage>\n')
+    _cc_n = [0]
+
+    def _cc_case(report, event="push", branch="main", sha=_cc_sha, token="t0ken", link=False):
+        _cc_n[0] += 1
+        _d = os.path.join(_cc_sb, "case%d" % _cc_n[0])
+        _art, _rt = os.path.join(_d, "art"), os.path.join(_d, "rt")
+        os.makedirs(_art)
+        os.makedirs(_rt)
+        if report is not None:
+            # link: the artifact's coverage.xml is a symlink to a good report kept elsewhere.
+            _dst = os.path.join(_d if link else _art, "coverage.xml")
+            with open(_dst, "wb") as _fh:
+                _fh.write(report if isinstance(report, bytes) else report.encode())
+            if link:
+                os.symlink(_dst, os.path.join(_art, "coverage.xml"))
+        _log = os.path.join(_d, "log")
+        _p = _sh_sub.run(["bash", "-c", _cc_run], capture_output=True, text=True, env=dict(
+            os.environ, PATH=_cc_bin + os.pathsep + os.environ["PATH"], CC_LOG=_log,
+            CODACY_PROJECT_TOKEN=token, HEAD_SHA=sha, HEAD_BRANCH=branch, WR_EVENT=event,
+            REPORT_DIR=_art, RUNNER_TEMP=_rt, VERSION="0", SHA256="0" * 64))
+        _called = open(_log).read() if os.path.exists(_log) else ""
+        _sent = open(_log + ".xml").read() if os.path.exists(_log + ".xml") else ""
+        return _p.returncode, _called, _sent, _p.stdout + _p.stderr, _rt
+
+    _c = _cc_case(_cc_good)
+    check("codacy-coverage: a push to main uploads a re-written report for exactly that commit "
+          "(positive control)",
+          _c[0] == 0 and _c[1] == "REPORTER report -r %s/coverage-clean.xml --commit-uuid %s\n"
+          % (_c[4], _cc_sha)
+          and 'filename="panel/app.py"' in _c[2] and 'hits="1"' in _c[2] and "<coverage" in _c[2],
+          repr(_c[:4]))
+    _c = _cc_case(_cc_good, event="pull_request", branch="Main")
+    check("codacy-coverage: ...a pull request uploads whatever its branch is called",
+          _c[0] == 0 and _c[1].startswith("REPORTER report -r "), repr(_c[:4]))
+    _cc_skips = {"push Main": _cc_case(_cc_good, branch="Main"),
+                 "push MAIN": _cc_case(_cc_good, branch="MAIN"),
+                 "no token": _cc_case(_cc_good, token="")}
+    check("codacy-coverage: a push whose branch is main only ignoring case, or a run with no token, "
+          "uploads nothing and passes",
+          all(_v[0] == 0 and not _v[1] for _v in _cc_skips.values())
+          and "is not exactly main; nothing was uploaded" in _cc_skips["push Main"][3]
+          and "No CODACY_PROJECT_TOKEN" in _cc_skips["no token"][3],
+          repr({_k: _v[:4] for _k, _v in _cc_skips.items()}))
+    _cc_refused = {
+        "DTD": _cc_case(_cc_dtd),
+        "DTD, UTF-16": _cc_case(_cc_dtd.replace('"1.0"?', '"1.0" encoding="UTF-16"?')
+                                .encode("utf-16")),
+        "not Cobertura": _cc_case('<?xml version="1.0"?>\n<report line-rate="1"/>\n'),
+        "no report": _cc_case(None),
+        "sha HEAD": _cc_case(_cc_good, sha="HEAD"),
+        "sha + line": _cc_case(_cc_good, sha=_cc_sha + "\nx"),
+    }
+    check("codacy-coverage: a report declaring a DTD (in any encoding), not a coverage report, or "
+          "missing, and a head_sha that is not one commit id, all stop before the reporter runs",
+          all(_v[0] != 0 and not _v[1] for _v in _cc_refused.values())
+          and "declares a DTD or an entity" in _cc_refused["DTD"][3]
+          and "declares a DTD or an entity" in _cc_refused["DTD, UTF-16"][3]
+          and "not a Cobertura report" in _cc_refused["not Cobertura"][3]
+          and "is not a commit id" in _cc_refused["sha + line"][3],
+          repr({_k: _v[:4] for _k, _v in _cc_refused.items()}))
+    # ...and cases nothing but the step's own guards stop. The DTD cases above name an EXTERNAL
+    # entity, which ElementTree refuses by itself ("undefined entity"), so they pass whether the
+    # refusal stops the run or only prints. These parse cleanly without it: a DOCTYPE naming an
+    # external DTD, and an internal entity. So does a report reached through a symlink, and a
+    # <coverage> root with no line-rate (Clover's root is <coverage> too).
+    _cc_decl = '<?xml version="1.0" ?>\n'
+    _cc_only = {
+        "external DTD": _cc_case(_cc_good.replace(
+            _cc_decl, _cc_decl + '<!DOCTYPE coverage SYSTEM "http://127.0.0.1:9/c.dtd">\n')),
+        "internal entity": _cc_case(_cc_good.replace(
+            _cc_decl, _cc_decl + '<!DOCTYPE coverage [<!ENTITY r "0.5">]>\n').replace(
+            'line-rate="0.5"', 'line-rate="&r;"')),
+        "symlink": _cc_case(_cc_good, link=True),
+        "no line-rate": _cc_case(_cc_good.replace(' line-rate="0.5"', '')),
+    }
+    check("codacy-coverage: a DTD that parses cleanly, a report reached through a symlink, or a "
+          "<coverage> that is not Cobertura is refused by the step itself",
+          _cc_decl in _cc_good and 'line-rate="0.5"' in _cc_good
+          and all(_v[0] != 0 and not _v[1] for _v in _cc_only.values())
+          and "declares a DTD or an entity" in _cc_only["external DTD"][3]
+          and "declares a DTD or an entity" in _cc_only["internal entity"][3]
+          and "holds no coverage.xml" in _cc_only["symlink"][3]
+          and "not a Cobertura report" in _cc_only["no line-rate"][3],
+          repr({_k: _v[:4] for _k, _v in _cc_only.items()}))
+finally:
+    _shutil.rmtree(_cc_sb, ignore_errors=True)
+
+# ── deleting a host says what stays on it, and the README's removal commands do what they say ────
+# The delete forgets a host and never connects to it, so the gamedig tree, its links and the weekly
+# root cron stay on that host; the confirmation did not say so. It does now, and README's
+# "Removing a host" lists them with commands to remove them. Those paths must be the ones the code
+# installs to, and the commands are run here against a fixture root: they take the panel's tree,
+# cron, log and links, and leave a gamedig link that points anywhere else, and a directory that
+# still holds something (a panel host's helper) — the sudo rm -rf a README hands out is tested.
+_rh_js = open(os.path.join(_root, "static", "js", "manage_remotes.js"), encoding="utf-8").read()
+# find(), not index(): a renamed function or heading must fail the checks below by name.
+_rh_fn = _rh_js[_rh_js.find("function removeRemote(btn){"):] if "function removeRemote(btn){" in _rh_js else ""
+_rh_fn = _rh_fn[:_rh_fn.find("\n}\n")]
+_rh_note = ("Nothing on the host itself is changed: its game servers keep running, and the gamedig "
+            "tool and weekly cron the panel installed there stay. The README’s “Removing a "
+            "host” section says how to remove them.")
+_rh_readme = open(os.path.join(_root, "README.md"), encoding="utf-8").read()
+_rh_sec = (_rh_readme[_rh_readme.find("\n### Removing a host\n"):]
+           if "\n### Removing a host\n" in _rh_readme else "")
+_rh_sec = _rh_sec[:_rh_sec.find("\n## ", 1)] if "\n## " in _rh_sec[1:] else _rh_sec
+_rh_cron = _privmod.WRITE_TARGETS["node-tools-cron"][0]
+check("delete host: the confirmation says what stays on the host, in its own translatable sentence",
+      "'" + _rh_note + "'" in _rh_fn and "The README" in _rh_note
+      and all(_rh_note in json.load(open(os.path.join(_root, "translations", _lg, "actions.json"),
+                                         encoding="utf-8")) for _lg in ("es", "fr")), _rh_fn[:400])
+check("delete host: README's 'Removing a host' names the paths the code installs to",
+      "`%s`" % _privmod.GAMEDIG_DIR in _rh_sec and "`%s`" % _rh_cron in _rh_sec
+      and "`/usr/local/bin/gamedig`" in _rh_sec and "`/usr/bin/gamedig`" in _rh_sec
+      and "/var/log/lgsm-node-tools.log" in _sm_hosts._NODE_TOOLS_CRON
+      and "`/var/log/lgsm-node-tools.log`" in _rh_sec, _rh_sec[:300])
+_rh_cmd = re.search(r"```bash\n(.*?)```", _rh_sec, re.S)
+_rh_sb = _tempfile.mkdtemp(prefix="rmhost-")
+try:
+    def _rh_run(extra_in_lib=False):
+        _r = os.path.join(_rh_sb, "root%d" % int(extra_in_lib))
+        _tree = _r + _privmod.GAMEDIG_DIR
+        os.makedirs(os.path.join(_tree, "node_modules", ".bin"))
+        open(os.path.join(_tree, "node_modules", ".bin", "gamedig"), "w").close()
+        for _d in ("/etc/cron.d", "/var/log", "/usr/local/bin", "/usr/bin", "/opt/own"):
+            os.makedirs(_r + _d, exist_ok=True)
+        for _f in (_rh_cron, "/var/log/lgsm-node-tools.log", "/opt/own/gamedig"):
+            open(_r + _f, "w").close()
+        os.symlink(_tree + "/node_modules/.bin/gamedig", _r + "/usr/local/bin/gamedig")
+        os.symlink(_r + "/opt/own/gamedig", _r + "/usr/bin/gamedig")     # the operator's own
+        if extra_in_lib:
+            open(_r + os.path.dirname(_privmod.GAMEDIG_DIR) + "/panel.conf", "w").close()
+        _cmd = _rh_cmd.group(1) if _rh_cmd else "exit 97\n"
+        for _pre in ("/usr/local/", "/usr/bin/", "/etc/", "/var/log/"):
+            _cmd = re.sub(r"(?<![\w./-])" + re.escape(_pre), _r + _pre, _cmd)
+        _p = _sh_sub.run(["bash", "-c", "set -uo pipefail\nsudo() { \x22$@\x22; }\n" + _cmd],
+                         capture_output=True, text=True)
+        return _r, _p
+
+    _r, _p = _rh_run()
+    check("delete host: README's removal commands take the panel's gamedig tree, cron, log and "
+          "link, and leave a gamedig that is not the panel's",
+          _rh_cmd is not None and _p.returncode == 0
+          and not os.path.lexists(_r + _privmod.GAMEDIG_DIR) and not os.path.lexists(_r + _rh_cron)
+          and not os.path.lexists(_r + "/var/log/lgsm-node-tools.log")
+          and not os.path.lexists(_r + "/usr/local/bin/gamedig")
+          and os.path.islink(_r + "/usr/bin/gamedig") and os.path.exists(_r + "/opt/own/gamedig")
+          and not os.path.lexists(_r + os.path.dirname(_privmod.GAMEDIG_DIR)),
+          "rc=%s err=%r" % (_p.returncode, _p.stderr[-300:]))
+    _r, _p = _rh_run(extra_in_lib=True)
+    check("delete host: ...and keep the directory above the tree when anything else is in it",
+          _p.returncode == 0 and not os.path.lexists(_r + _privmod.GAMEDIG_DIR)
+          and os.path.exists(_r + os.path.dirname(_privmod.GAMEDIG_DIR) + "/panel.conf"),
+          "rc=%s err=%r" % (_p.returncode, _p.stderr[-300:]))
+finally:
+    _shutil.rmtree(_rh_sb, ignore_errors=True)
 
 # ── the Bandit job holds security-events: write, so its tools are hash-pinned and no token persists ──
 # It ran `pip install bandit bandit-sarif-formatter` — whatever PyPI had newest — in a job whose

@@ -1,0 +1,20 @@
+# pip itself: what install.sh upgrades the panel's venv to before it installs requirements.txt.
+# EDIT THIS FILE, then regenerate requirements-bootstrap.txt from it (run in python:3.10-slim):
+#   pip-compile --allow-unsafe --generate-hashes --no-annotate --strip-extras \
+#     --output-file=requirements-bootstrap.txt requirements-bootstrap.in
+#
+# install.sh ran `pip install --upgrade pip`: whatever PyPI served that day, unhashed, as the first
+# thing the venv executed, on every install and every update that reinstalled dependencies. It now
+# installs this lockfile with `--require-hashes --only-binary :all:`, so a pip wheel that is not
+# byte-for-byte the one locked here is refused. pip is what pip-compile calls an "unsafe" package,
+# so the lockfile needs --allow-unsafe to list it at all.
+#
+# Dependabot keeps it current from the root pip entry in .github/dependabot.yml, like
+# requirements.txt: it re-runs pip-compile on the Python the header names (3.10, the oldest the
+# panel supports, Ubuntu 22.04's), so it never pins a pip that 22.04 cannot run. CI installs it on
+# every Python in the test matrix, and pip-audit reads it, so a bump is proved before it merges.
+#
+# setuptools and wheel are deliberately absent. pip needs neither to install a wheel, and CI
+# installs requirements.txt wheels-only on every supported Python; a source build, where one
+# happened, would take its own from pip's isolated build environment whatever this file pinned.
+pip

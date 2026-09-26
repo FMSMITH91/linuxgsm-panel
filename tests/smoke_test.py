@@ -7294,6 +7294,92 @@ try:
     finally:
         _sm_cron.upgrade_managed_cron_tracking, _ntp_app.ensure_node_tools_cron = _sv_ntp
 
+    # ...and a host (or game server) deleted WHILE a pass is running is not written to again.
+    # Deleting a host touches nothing on it by design, and the pass reads only database rows, but
+    # it read each list once, at the start, and one host's gamedig install can take ten minutes:
+    # a host deleted in that window was still in the list, and got its gamedig and cron put back.
+    # The delete here happens as a request's would: another thread, its own app context and so its
+    # own session, committed. Of each pair, the first reached deletes the other, so the order the
+    # rows come back in does not matter; the survivor is the positive control.
+    import threading as _ntd_thr
+    with app.app_context():
+        _ntd_rows = [RemoteServer(name="ntd-%s" % _n, host="198.51.100.%d" % _i, port=22,
+                                  username="root", auth_method="key", auth_credential="")
+                     for _i, _n in ((31, "games"), (32, "a"), (33, "b"))]
+        db.session.add_all(_ntd_rows)
+        db.session.flush()
+        _ntd_gs = [GameServer(remote_id=_ntd_rows[0].id, name="ntd-%s" % _n, short_name=_n,
+                              game_type="csgo", port=_p, installed=True, status="offline")
+                   for _n, _p in (("ntdserverone", 27131), ("ntdservertwo", 27132))]
+        db.session.add_all(_ntd_gs)
+        db.session.commit()
+        _ntd_hids = [_r.id for _r in _ntd_rows]
+        _ntd_gids = {_g.short_name: _g.id for _g in _ntd_gs}
+
+    def _ntd_delete_elsewhere(model, row_id):
+        def _run():
+            with app.app_context():
+                db.session.delete(db.session.get(model, row_id))
+                db.session.commit()
+        _t = _ntd_thr.Thread(target=_run)
+        _t.start()
+        _t.join(30)
+
+    _ntd_hosts, _ntd_up, _ntd_gone = [], [], {}
+
+    def _ntd_ensure(r):
+        _ntd_hosts.append(r.id)
+        if r.id in _ntd_hids[1:] and "host" not in _ntd_gone:
+            _ntd_gone["host"] = _ntd_hids[2] if r.id == _ntd_hids[1] else _ntd_hids[1]
+            _ntd_delete_elsewhere(RemoteServer, _ntd_gone["host"])
+        return True
+
+    def _ntd_upgrade(remote, user, selfname=None, game_type=None, port=None):
+        _ntd_up.append(str(user))
+        if user in _ntd_gids and "game" not in _ntd_gone:
+            _ntd_gone["game"] = [_n for _n in _ntd_gids if _n != user][0]
+            _ntd_delete_elsewhere(GameServer, _ntd_gids[_ntd_gone["game"]])
+        return False
+
+    _sv_ntd = (_sm_cron.upgrade_managed_cron_tracking, _ntp_app.ensure_node_tools_cron)
+    try:
+        _sm_cron.upgrade_managed_cron_tracking = _ntd_upgrade
+        _ntp_app.ensure_node_tools_cron = _ntd_ensure
+        _ntd_err = None
+        try:
+            _ntp_app._node_tools_cron_pass(app)
+        except Exception as _e:
+            _ntd_err = _e
+        with app.app_context():
+            _ntd_really = (db.session.get(RemoteServer, _ntd_gone.get("host", -1)) is None
+                           and db.session.get(GameServer, _ntd_gids.get(
+                               _ntd_gone.get("game"), -1)) is None)
+        _ntd_kept_h = [_h for _h in _ntd_hids[1:] if _h != _ntd_gone.get("host")]
+        _ntd_kept_g = [_n for _n in _ntd_gids if _n != _ntd_gone.get("game")]
+        check("daily cron pass: a host deleted while the pass runs is not acted on again, and one "
+              "that was not is (control)",
+              _ntd_err is None and _ntd_really and len(_ntd_kept_h) == 1
+              and "host" in _ntd_gone and _ntd_gone.get("host") not in _ntd_hosts
+              and _ntd_kept_h[0] in _ntd_hosts,
+              "raised %r; gone %r; ensured %r" % (_ntd_err, _ntd_gone, _ntd_hosts[-4:]))
+        check("daily cron pass: ...and the same for a game server deleted mid-pass",
+              _ntd_err is None and _ntd_really and len(_ntd_kept_g) == 1
+              and "game" in _ntd_gone and _ntd_gone.get("game") not in _ntd_up
+              and _ntd_kept_g[0] in _ntd_up,
+              "gone %r; upgraded %r" % (_ntd_gone, _ntd_up[-4:]))
+    finally:
+        _sm_cron.upgrade_managed_cron_tracking, _ntp_app.ensure_node_tools_cron = _sv_ntd
+        with app.app_context():
+            for _gid in _ntd_gids.values():
+                _g = db.session.get(GameServer, _gid)
+                if _g is not None:
+                    db.session.delete(_g)
+            for _hid in _ntd_hids:
+                _h = db.session.get(RemoteServer, _hid)
+                if _h is not None:
+                    db.session.delete(_h)
+            db.session.commit()
+
     # ...and the other caller, the Scheduled Tasks read, gives it the same two things. Without them
     # the upgrade keeps the line's own port and type, which is not what set_daily_restart would
     # write for this server once either has changed. The switches' columns are put back afterwards:

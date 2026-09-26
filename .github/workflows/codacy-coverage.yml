@@ -1,0 +1,164 @@
+name: Codacy coverage
+
+# Sends the coverage report CI's `coverage` job made to Codacy: what Codacy's "Diff Coverage" and
+# "Coverage Variation" checks on a pull request are computed from, and its coverage goal on main.
+#
+# WHY THIS IS NOT A STEP OF THE COVERAGE JOB ANY MORE
+#   The upload needs CODACY_PROJECT_TOKEN, and as a repository secret that was readable by a
+#   workflow run on ANY branch or tag pushed here: a pushed workflow that prints it has it. A
+#   deployment environment can admit only main, but not for a job that has to run on pull requests:
+#   GitHub checks a pull_request run's environment rules against refs/pull/<n>/merge, so an
+#   environment admitting only main refuses every PR's upload, and one admitting refs/pull/*/merge
+#   hands the token to any branch that opens a PR. A workflow_run job is different. It runs MAIN'S
+#   copy of this file with GITHUB_REF set to main, whatever branch the run it follows was for, so
+#   it can hold the token in an environment that admits main alone and still upload a PR's report.
+#   The coverage job holds no secret now; it leaves coverage.xml as an artifact, and this uploads
+#   it for the commit that run tested (a PR's head commit, as the pull_request upload did).
+#
+#   That report is DATA from whatever code the run tested, and it reaches the job holding the
+#   token, so it is treated as untrusted: never executed, and re-written before the reporter sees
+#   it. The reporter's XML parser (14.1.3) stops the external DTD but not external entities
+#   declared inside the file, so a report with a <!DOCTYPE> could have it read a file, its own
+#   environment and the token in it included, into a request. A report declaring any DTD or entity
+#   is refused, and what is uploaded is a fresh serialisation of the elements, with no DTD at all.
+#   Runs of this repository only: a fork's pull request never had the token (GitHub gives fork
+#   PRs no secrets), and its report does not get to meet it here either.
+#
+# ── One-time setup, so the token is scoped (repository owner) ─────────────────────────────────
+#  1. Settings -> Environments -> New environment, named `codacy`. Under "Deployment branches and
+#     tags" choose "Selected branches and tags" and add ONE rule: branch, `main`. No tag rule.
+#  2. In that environment, "Environment secrets" -> Add environment secret:
+#        CODACY_PROJECT_TOKEN = a repository API token (Codacy -> this repository -> Settings ->
+#                               API tokens -> Create API token; give it an expiry).
+#     The current token has been readable by every branch, so create a new one for this rather
+#     than moving the old value, and revoke the old one in Codacy once an upload has gone through.
+#  3. Settings -> Secrets and variables -> Actions -> Repository secrets: delete
+#     CODACY_PROJECT_TOKEN. Until this step the job keeps working off the repository secret (a job
+#     in an environment still sees repository secrets), so there is no gap in the uploads; after
+#     it, only this job, running main's copy of this file, can read the token.
+#  Nothing is scoped until the rule in step 1 exists: an environment with no rules (which is what
+#  GitHub creates when a job first names one) admits every branch.
+# ──────────────────────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_run:
+    workflows: [ "CI" ]
+    types: [ completed ]
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    # The panel's update check ignores this job's check run BY THIS NAME (system_ops._CI_IGNORE;
+    # tests/unit ties the two): GitHub files it under main's newest commit, for a pull request's
+    # run too, and an upload that failed says nothing about that commit.
+    name: Upload coverage to Codacy
+    # A CI run of THIS repository, for a push or a pull request, that was not cancelled or skipped
+    # (a failed test does not stop the coverage job: it measures, the matrix decides). A push counts
+    # only when its branch is exactly main, which the step checks: this `if` compares ignoring case.
+    if: >-
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      (github.event.workflow_run.event == 'push' ||
+       github.event.workflow_run.event == 'pull_request') &&
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      github.event.workflow_run.conclusion != 'skipped'
+    # Where CODACY_PROJECT_TOKEN lives once the setup above is done: an environment whose only
+    # deployment rule is the branch main. A workflow_run job runs with GITHUB_REF set to the default
+    # branch, so this job qualifies and a workflow on any other branch or tag does not.
+    # deployment: false — the environment is here for its secret and its branch rule, which still
+    # apply; without it every upload would add a "deployment" to the repository's history.
+    environment:
+      name: codacy
+      deployment: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read   # to download an artifact of the CI run this follows; nothing else
+    steps:
+      # No checkout: nothing from the repository is needed, and nothing of the tested code is run.
+      - name: Download the coverage report CI made
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage
+          path: ${{ runner.temp }}/coverage-artifact
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      # A pinned release binary, checked against its sha256 — the way actionlint and gitleaks are
+      # fetched. Bump deliberately: VERSION and SHA256 together; the digest is the one GitHub
+      # records for the release asset (codacy/codacy-coverage-reporter,
+      # codacy-coverage-reporter-linux).
+      - name: Send coverage to Codacy
+        env:
+          CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WR_EVENT: ${{ github.event.workflow_run.event }}
+          REPORT_DIR: ${{ runner.temp }}/coverage-artifact
+          VERSION: '14.1.3'
+          SHA256: '15c5f052207d27b8501ab5d5910c68c206ea70b0157ee1725132780530580875'
+        run: |
+          set -euo pipefail
+          # Self-disabling, as the step in ci.yml was: a run with no token (none configured, or one
+          # GitHub withholds Actions secrets from) uploads nothing and passes.
+          if [ -z "${CODACY_PROJECT_TOKEN:-}" ]; then
+            echo "::notice::No CODACY_PROJECT_TOKEN for this run; nothing was uploaded."
+            exit 0
+          fi
+          # The job's `if` compared the event only. A push is main's when its branch is EXACTLY main
+          # (GitHub's expressions compare ignoring case, and head_branch is a short name that a tag
+          # shares), so it is compared here, the way deploy.yml's verify step does.
+          if [ "${WR_EVENT}" = "push" ] && [ "${HEAD_BRANCH:-}" != "main" ]; then
+            echo "::notice::head_branch '${HEAD_BRANCH:-}' is not exactly main; nothing was uploaded."
+            exit 0
+          fi
+          # The commit the report is attached to: exactly a commit id, before any command sees it.
+          # A bash match, not grep: grep -x passes a value whose FIRST line is a commit id.
+          if ! [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::head_sha is not a commit id; nothing was uploaded."
+            exit 1
+          fi
+          report="${REPORT_DIR}/coverage.xml"
+          if [ ! -f "${report}" ] || [ -L "${report}" ]; then
+            echo "::error::the CI run's coverage artifact holds no coverage.xml; nothing was uploaded."
+            exit 1
+          fi
+          # Refuse any DTD or entity declaration, in whatever encoding the file claims (expat reads
+          # the BOM, a byte grep would not), then write the elements back out with none.
+          clean="${RUNNER_TEMP}/coverage-clean.xml"
+          python3 - "${report}" "${clean}" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          from xml.parsers import expat
+
+          src, dst = sys.argv[1], sys.argv[2]
+          with open(src, "rb") as fh:
+              data = fh.read()
+
+
+          def refuse(*_args):
+              print("::error::coverage.xml declares a DTD or an entity; nothing was uploaded.")
+              sys.exit(1)
+
+
+          parser = expat.ParserCreate()
+          parser.StartDoctypeDeclHandler = refuse
+          parser.EntityDeclHandler = refuse
+          parser.Parse(data, True)
+          root = ET.fromstring(data)
+          if root.tag != "coverage" or root.get("line-rate") is None:
+              print("::error::coverage.xml is not a Cobertura report; nothing was uploaded.")
+              sys.exit(1)
+          ET.ElementTree(root).write(dst, encoding="utf-8", xml_declaration=True)
+          PY
+          reporter="${RUNNER_TEMP}/codacy-coverage-reporter"
+          curl -sSfL -o "${reporter}" \
+            "https://github.com/codacy/codacy-coverage-reporter/releases/download/${VERSION}/codacy-coverage-reporter-linux"
+          echo "${SHA256}  ${reporter}" | sha256sum -c -
+          chmod +x "${reporter}"
+          # From an empty directory: the reporter walks the one it runs in and looks for a git
+          # repository there, and there is neither here. The report's file names are already
+          # relative to the repository root (coverage.py writes them so), and the commit is named.
+          cd "$(mktemp -d)"
+          "${reporter}" report -r "${clean}" --commit-uuid "${HEAD_SHA}"

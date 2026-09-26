@@ -749,8 +749,36 @@ install_deps() {
         clear="--clear"
     fi
     (cd / && ${as_owner} python3 -I -m venv ${clear:+"${clear}"} "${PANEL_DIR}/venv")   # see _venv_works
-    ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet --upgrade pip
+    # pip itself, from its hash-locked lockfile (requirements-bootstrap.in says why). This was
+    # `pip install --upgrade pip`: whatever PyPI served, unhashed. `--require-hashes` is safe to
+    # pass here, unlike on requirements.txt below, because every commit that has this file has it
+    # hashed. A commit WITHOUT it — an update pinned to an older commit, or the rollback putting
+    # one back — keeps the pip the venv already has, which installs requirements.txt as well
+    # (22.04's own 22.0.2 does), rather than falling back to an unpinned upgrade.
+    if [ -f "${PANEL_DIR}/requirements-bootstrap.txt" ]; then
+        ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet --require-hashes --only-binary :all: \
+            -r "${PANEL_DIR}/requirements-bootstrap.txt"
+    else
+        info "  (this version has no requirements-bootstrap.txt: keeping the venv's own pip)"
+    fi
+    # No --require-hashes: pip turns hash checking on by itself whenever a requirement carries a
+    # hash, and an older pinned commit's requirements.txt may carry none (requirements.in).
     ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
+}
+
+# What decides whether an update reinstalls dependencies: requirements.txt, and pip's own lockfile
+# beside it when there is one, so a Dependabot bump of pip alone reaches the hosts too. Empty when
+# requirements.txt is missing (the caller then installs). Never fails: it runs under `set -e`,
+# where a failed pipe in an assignment would end the update.
+_deps_digest() {
+    local f out=""
+    [ -f "${PANEL_DIR}/requirements.txt" ] || return 0
+    for f in requirements.txt requirements-bootstrap.txt; do
+        if [ -f "${PANEL_DIR}/${f}" ]; then
+            out="${out}$(sha256sum "${PANEL_DIR}/${f}" 2>/dev/null | awk '{print $1}' || true) "
+        fi
+    done
+    printf '%s\n' "${out}"
 }
 
 # Node.js + npm + jq, for gamedig and the panel's game-server player queries (player count/list,
@@ -2186,17 +2214,18 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     fi
 
     info "[3/6] Fetching the new version…"
-    REQ_BEFORE="$(sha256sum "${PANEL_DIR}/requirements.txt" 2>/dev/null | awk '{print $1}')"
+    REQ_BEFORE="$(_deps_digest)"
     fetch_code
     _CODE_FETCHED=1   # from here an abort has to put the old code back, not just restart the service
     TO_VER="$(panel_version)"
-    REQ_AFTER="$(sha256sum "${PANEL_DIR}/requirements.txt" 2>/dev/null | awk '{print $1}')"
+    REQ_AFTER="$(_deps_digest)"
     ok "Code updated (${FROM_VER} → ${TO_VER})"
 
     # Most updates are code-only. Reinstalling deps means pip resolves + may rebuild wheels,
-    # which pegs the CPU on a small VPS for no reason. Skip it when requirements.txt is byte-for-byte
-    # unchanged AND the venv already exists AND it was built for this python3. After an OS release
-    # upgrade it was not, and skipping left a panel that cannot start (see _venv_stale).
+    # which pegs the CPU on a small VPS for no reason. Skip it when requirements.txt and pip's own
+    # lockfile are byte-for-byte unchanged (_deps_digest) AND the venv already exists AND it was
+    # built for this python3. After an OS release upgrade it was not, and skipping left a panel
+    # that cannot start (see _venv_stale).
     info "[4/6] Installing dependencies…"
     if [ -x "${PANEL_DIR}/venv/bin/python3" ] && ! _venv_stale \
        && [ -n "${REQ_BEFORE}" ] && [ "${REQ_BEFORE}" = "${REQ_AFTER}" ]; then

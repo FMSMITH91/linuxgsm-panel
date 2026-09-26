@@ -22,8 +22,10 @@ on:
     # Confirmed on a live action-bump PR: 17 checks, no Dependency Review among them.
     # ...and gamedig's lockfile, the tree every host installs (install-gamedig.sh): a Dependabot
     # bump there is a new set of packages root fetches and every game account runs.
+    # ...and pip's own lockfile, which install.sh puts in every panel venv before anything else.
     paths:
       - 'requirements.txt'
+      - 'requirements-bootstrap.txt'
       - 'tools/gamedig/package.json'
       - 'tools/gamedig/package-lock.json'
       - '.github/workflows/**'

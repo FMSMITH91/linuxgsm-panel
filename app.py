@@ -523,6 +523,18 @@ def _metrics_history_watch(app):
         time.sleep(_METRIC_SAMPLE_SECONDS)
 
 
+def _still_in_db(row):
+    """Re-read `row` from the database. False when it has been deleted since it was loaded (by
+    another session: a request deleting a host commits on its own), or cannot be read at all.
+    Refreshing also drops any relationship loaded earlier, so `gs.remote` is read afresh too."""
+    try:
+        db.session.refresh(row)
+        return True
+    except Exception:
+        db.session.rollback()
+        return False
+
+
 def _node_tools_cron_pass(app):
     """One pass of _node_tools_cron_watch. Two jobs, both about player queries working from cron:
 
@@ -543,15 +555,23 @@ def _node_tools_cron_pass(app):
         opened the page. State-preserving by design, and a no-op for a crontab with nothing to
         upgrade, which after the first pass is all of them.
 
+    It acts only on hosts in the database: deleting a host from the panel stops this at once, and
+    leaves on that host what was installed there (README, "Removing a host"). Both lists are read
+    once, at the start, and one host's gamedig install can take minutes, so a host deleted while a
+    pass is under way was still in the list and got written to again. Each row is re-read from the
+    database just before it is acted on, and one that is gone is skipped.
+
     Idempotent + best-effort: one host or server failing never stops the rest."""
     with app.app_context():
         for r in RemoteServer.query.all():   # includes the local/panel host
+            if not _still_in_db(r):
+                continue
             try:
                 ensure_node_tools_cron(r)
             except Exception:
                 _log.debug("node-tools cron ensure failed for %s", r.name, exc_info=True)
         for gs in GameServer.query.all():
-            if gs.remote is None:
+            if not _still_in_db(gs) or gs.remote is None:
                 continue
             try:
                 _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,

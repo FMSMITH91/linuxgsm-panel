@@ -597,7 +597,15 @@ function removeRemote(btn){
   var name = btn.getAttribute('data-remote-name') || '';
   confirmDialog({
     title: 'Delete remote', icon: 'trash', confirmLabel: 'Delete', confirmClass: 'btn-danger',
-    body: 'Delete <strong>' + escapeHtml(name) + '</strong>? This removes it and all of its game servers from the panel.',
+    // What stays on the host is said here, before the click: the delete forgets the host and never
+    // connects to it, so the gamedig tree and weekly root cron the panel installed there remain.
+    // Its own line, one literal, so the whole sentence is one catalog entry. A block <span>, not a
+    // <p>: confirmDialog puts the body inside a <p> already, and a <p> in a <p> is closed early by
+    // the parser, leaving a stray empty paragraph behind the text.
+    body: 'Delete <strong>' + escapeHtml(name) + '</strong>? This removes it and all of its game servers from the panel.'
+      + '<span class="d-block small text-muted mt-2">'
+      + 'Nothing on the host itself is changed: its game servers keep running, and the gamedig tool and weekly cron the panel installed there stay. The README’s “Removing a host” section says how to remove them.'
+      + '</span>',
     requirePassword: true,
     requireLabel: 'Enter your account password to confirm:',
     onConfirm: function(pw, api){
