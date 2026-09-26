@@ -109,6 +109,19 @@ def check(name, cond, detail=""):
     results.append((bool(cond), name, detail))
 
 
+def join_for(thread, seconds):
+    """thread.join(seconds) that RETURNS when the time runs out, on every Python.
+
+    Under eventlet on Python 3.13+ a green join that times out raises eventlet.timeout.Timeout, a
+    BaseException, instead of returning: a worker that hung ended the whole suite at the join
+    instead of failing the check after it by name. is_alive() and a short sleep behave the same
+    patched or not, so this waits the same way everywhere."""
+    import time as _jf_time
+    deadline = _jf_time.monotonic() + seconds
+    while thread.is_alive() and _jf_time.monotonic() < deadline:
+        _jf_time.sleep(0.02)
+
+
 # Every url_for('endpoint') referenced in a template must resolve to a real route — otherwise the
 # page 500s the moment it renders. Catches a nav link / redirect pointing at a renamed or removed
 # endpoint (the template-side companion to the data-action button-wiring test).
@@ -7323,7 +7336,7 @@ try:
                 db.session.commit()
         _t = _ntd_thr.Thread(target=_run)
         _t.start()
-        _t.join(30)
+        join_for(_t, 30)
 
     _ntd_hosts, _ntd_up, _ntd_gone = [], [], {}
 
@@ -8988,10 +9001,10 @@ try:
         _lat_b2.wait(10)
         _lat_second = _ao.get(gs_id)
         _lat_go1.set()
-        _lat_t1.join(10)                                   # the FIRST run finishes
+        join_for(_lat_t1, 10)                              # the FIRST run finishes
         _lat_still = _ao.get(gs_id)
         _lat_go2.set()
-        _lat_t2.join(10)
+        join_for(_lat_t2, 10)
         check("console tail: a run that ends does not deregister a later run of the SAME action",
               _lat_second is not None and _lat_still is _lat_second,
               "after the first validate ended, %r was registered (the second run's entry was %r)"
@@ -9010,10 +9023,10 @@ try:
         _lat_t2.start()
         _lat_b2.wait(10)
         _lat_go2.set()
-        _lat_t2.join(10)                                   # the LATER run finishes first
+        join_for(_lat_t2, 10)                              # the LATER run finishes first
         _lat_back = _ao.get(gs_id)
         _lat_go1.set()
-        _lat_t1.join(10)
+        join_for(_lat_t1, 10)
         check("console tail: when the later run ends first, the earlier one still running is tailed again",
               _lat_first is not None and _lat_back is _lat_first,
               "after the second validate ended, %r was registered (the first run's entry was %r)"

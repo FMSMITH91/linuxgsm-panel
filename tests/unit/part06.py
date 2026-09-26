@@ -9878,6 +9878,176 @@ except OSError:
     pass                      # the pump owns it in a real session; here there is no pump
 _wt_proc.kill()
 
+# ── a pump that outlives the teardown wait must not leak its session ───────────────────────────
+# _close_fd waited for the pump with t.join(timeout=_PUMP_JOIN). Under eventlet on Python 3.13+
+# (Ubuntu 26.04) a green join that runs out of time RAISES eventlet.timeout.Timeout instead of
+# returning, and that class is a BaseException: it went through _teardown's `except Exception` and
+# out of close() before the session left _sessions and before the page was told. The closed
+# session then counted against the caps (3 per user, 12 in all) until the panel restarted, and the
+# idle sweeper passed over it because it was already closed.
+#
+# Driven through the REAL pump, wedged where a real one can wedge — inside the output callback,
+# which is the socket emit — so it is still running when the teardown's wait runs out. On 3.10 to
+# 3.12 the old join returned quietly and this passes either way; the 3.14 leg is where it failed.
+_lk_gate, _lk_in_emit, _lk_exits = _th6.Event(), _th6.Event(), []
+_LK_WEDGE = 10.0               # how long the wedged pump stays in the callback if nobody frees it
+
+
+def _lk_output(sid, data):
+    _lk_in_emit.set()
+    _lk_gate.wait(_LK_WEDGE)
+
+
+def _lk_session(sid, user, on_output=lambda s, d: None, exits=None):
+    s = _tsmod.Session(sid, sid, on_output,
+                       (lambda s_, r: exits.append(r)) if exits is not None else (lambda s_, r: None))
+    s.user_key = user
+    _tsmod._register(s, user)
+    return s
+
+
+_lk_saved_join = _tsmod._PUMP_JOIN
+_tsmod._PUMP_JOIN = 0.3
+_lk_base = _tsmod.count()
+_lk_r, _lk_w = os.pipe()
+_lk_sess = _lk_session("leak-sid", "leak-user", _lk_output, _lk_exits)
+# The rest of this user's allowance, so the per-user cap is exactly full while the leak is live.
+_lk_fill = [_lk_session("leak-fill-%d" % _i, "leak-user")
+            for _i in range(_tsmod._MAX_SESSIONS_PER_USER - 1)]
+_lk_sess._fd = _lk_r
+_lk_sess._pump = _th6.Thread(target=_tsmod._pump_fd, args=(_lk_sess,), daemon=True)
+_lk_sess._pump.start()
+os.write(_lk_w, b"output the browser is slow to take\n")
+_lk_in_emit.wait(5)
+_lk_raised, _lk_t0 = None, _time.monotonic()
+try:
+    _lk_sess.close("closed by the test")
+except BaseException as _e:            # eventlet's Timeout: reported below, never ends the part
+    _lk_raised = "%s.%s" % (type(_e).__module__, type(_e).__name__)
+_lk_took = _time.monotonic() - _lk_t0
+_lk_wedged = _lk_in_emit.is_set() and _lk_sess._pump.is_alive()
+_lk_left = _tsmod.get("leak-sid")
+try:
+    _lk_new = _lk_session("leak-new", "leak-user")
+    _lk_cap = "registered"
+except _tsmod.TerminalError as _e:
+    _lk_new, _lk_cap = None, "refused: %s" % _e
+check("terminal: the pump was still wedged in the output callback when close() returned "
+      "(the checks below are not vacuous)",
+      _lk_wedged, "in_emit=%s alive=%s" % (_lk_in_emit.is_set(), _lk_sess._pump.is_alive()))
+check("terminal: close() returns when the pump outlives the teardown wait, instead of raising",
+      _lk_raised is None,
+      "close() raised %s — under eventlet on 3.13+ a green join that times out raises a "
+      "BaseException, which _teardown's `except Exception` does not catch" % _lk_raised)
+check("terminal: ...and removes the session from the map and tells the page",
+      _lk_left is None and _lk_exits == ["closed by the test"],
+      "still registered: %r, exit callbacks: %r — a closed session left in _sessions counts "
+      "against the caps until the panel restarts" % (_lk_left is not None, _lk_exits))
+check("terminal: ...so the user's slot frees: a new terminal registers at the per-user cap",
+      _lk_cap == "registered", _lk_cap)
+check("terminal: ...giving up on the pump after the wait, not after the whole wedge, and taking "
+      "its fd back",
+      _lk_took < _LK_WEDGE and _lk_sess._fd is None,
+      "close() took %.2fs with _PUMP_JOIN=%.1f and the pump wedged for %.0fs; fd now %r"
+      % (_lk_took, _tsmod._PUMP_JOIN, _LK_WEDGE, _lk_sess._fd))
+
+# The same, on EVERY Python: a pump whose timed join raises the way eventlet's green one does on
+# 3.13+. close() must not depend on that join returning, so CI's 3.10 and 3.12 legs catch a
+# teardown that goes back to joining it — not only the 3.14 leg.
+
+
+class _LkGreenJoinTimeout(BaseException):
+    """What eventlet's green Thread.join(timeout) raises on Python 3.13+ when time runs out."""
+
+
+class _LkJoinRaises:
+    def is_alive(self):
+        return True
+
+    def join(self, timeout=None):
+        raise _LkGreenJoinTimeout(timeout)
+
+
+_lk2_exits = []
+_lk2_r, _lk2_w = os.pipe()
+_lk2 = _lk_session("leak2-sid", "leak2-user", exits=_lk2_exits)
+_lk2._fd = _lk2_r
+_lk2._pump = _LkJoinRaises()
+try:
+    _lk2.close("closed by the test")
+    _lk2_raised = None
+except BaseException as _e:            # reported below, never ends the part
+    _lk2_raised = type(_e).__name__
+check("terminal: close() does not depend on a timed join of the pump returning (any Python)",
+      _lk2_raised is None and _tsmod.get("leak2-sid") is None
+      and _lk2_exits == ["closed by the test"] and _lk2._fd is None,
+      "raised=%s registered=%s exits=%r fd=%r" % (_lk2_raised, _tsmod.get("leak2-sid") is not None,
+                                                   _lk2_exits, _lk2._fd))
+
+# Cleanup. Free the wedged pump and let it retire; whatever the checks above found, nothing from
+# here may stay registered for the terminal checks that follow, which count the map.
+_lk_gate.set()
+_lk_t0 = _time.monotonic()
+while _lk_sess._pump.is_alive() and _time.monotonic() - _lk_t0 < 5:
+    _time.sleep(0.05)
+for _s in _lk_fill + [_lk_new]:
+    if _s is not None:
+        _s.close("done")
+with _tsmod._sessions_lock:
+    for _sid, _s in (("leak-sid", _lk_sess), ("leak2-sid", _lk2)):
+        if _tsmod._sessions.get(_sid) is _s:
+            del _tsmod._sessions[_sid]
+for _fd, _owner in ((_lk_w, None), (_lk2_w, None), (_lk_r, _lk_sess), (_lk2_r, _lk2)):
+    if _owner is None or _owner._fd == _fd:
+        try:
+            os.close(_fd)
+        except OSError:
+            pass
+_tsmod._PUMP_JOIN = _lk_saved_join
+
+# ...and a pump that DOES retire ends the wait as soon as it returns, which is what the join gave:
+# both pumps set the Event on the way out, or every ordinary close would sit out all of _PUMP_JOIN
+# and then find the fd already gone. Timed against the real _PUMP_JOIN, for each pump.
+_lk3_r, _lk3_w = os.pipe()
+_lk3 = _lk_session("leak3-sid", "leak3-user")
+_lk3._fd = _lk3_r
+_lk3._pump = _th6.Thread(target=_tsmod._pump_fd, args=(_lk3,), daemon=True)
+_lk3._pump.start()
+_lk_t0 = _time.monotonic()
+_lk3.close("done")
+_lk3_took = _time.monotonic() - _lk_t0
+check("terminal: a pty pump that retires ends the teardown wait at once, and closes its own fd",
+      _lk3_took < _tsmod._PUMP_JOIN and _lk3._fd is None,
+      "close() took %.2fs with _PUMP_JOIN=%.1f; fd now %r" % (_lk3_took, _tsmod._PUMP_JOIN, _lk3._fd))
+os.close(_lk3_w)
+if _lk3._fd == _lk3_r:                 # the pump never got to it: the check above has said so
+    os.close(_lk3_r)
+
+
+class _LkChan:
+    def recv_ready(self):
+        return False
+
+    def exit_status_ready(self):
+        return False
+
+    def close(self):
+        pass
+
+
+_lk4 = _lk_session("leak4-sid", "leak4-user")
+_lk4._chan = _LkChan()
+_lk4._pump = _th6.Thread(target=_tsmod._pump_channel, args=(_lk4,), daemon=True)
+_lk4._pump.start()
+_lk_t0 = _time.monotonic()
+_lk4.close("done")
+_lk4_took = _time.monotonic() - _lk_t0
+check("terminal: ...and so does an ssh channel pump",
+      _lk4_took < _tsmod._PUMP_JOIN,
+      "close() took %.2fs with _PUMP_JOIN=%.1f" % (_lk4_took, _tsmod._PUMP_JOIN))
+check("terminal: the leak checks left the session map as they found it",
+      _tsmod.count() == _lk_base, "count %d, was %d" % (_tsmod.count(), _lk_base))
+
 # ── seven defects an adversarial review of this session's own terminal turned up ──────────────
 _ht_js7 = open(os.path.join(_root, "static", "js", "host_terminal.js"), encoding="utf-8").read()
 _ts_src7 = _modsrc("panel/ops/terminal_session.py")

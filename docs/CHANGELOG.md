@@ -245,6 +245,17 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **On Python 3.13 and later (Ubuntu 26.04), a closed terminal could keep its slot until the panel
+  restarted.** If the terminal's output reader was still busy a second after the close, for
+  instance still handing output to the browser, the close stopped partway. The session stayed on
+  the panel's list of open terminals, the page was never told it had ended, and it went on counting
+  against the limit of 3 terminals per user and 12 in all. The 15-minute idle close skipped it,
+  because it was already marked closed. The cause was a timed wait on a thread, which under
+  eventlet on Python 3.13+ raises an error that nothing caught instead of returning. The Tailscale
+  transport waited the same way for a command's output. When a command exited while something it
+  had started still held that output open for more than five seconds, the error could end the page
+  request or background loop that ran the command. Both now wait in a way that returns on every
+  Python version. Python 3.10 to 3.12 (Ubuntu 22.04 and 24.04) were not affected.
 - **The daily gamedig pass could write to a host that had just been deleted.** It read the list of
   hosts once and then worked through it, a few minutes per host that needed gamedig installed, so
   a host deleted while a pass was running was still on its list and got gamedig and its weekly cron

@@ -323,7 +323,12 @@ def _decode_output(b):
     return b.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _collect_capped(p, timeout, kill, thread_cls, stdin_bytes=None, cap=None):
+# How long a reader may still be draining after the command it reads has exited (or been killed):
+# a grandchild holding the pipe open gets this, not the caller's whole timeout over again.
+_READER_GRACE = 5
+
+
+def _collect_capped(p, timeout, kill, threads, stdin_bytes=None, cap=None):
     """communicate(), with a ceiling on what is KEPT. -> (out, err, rc, truncated) as bytes, or
     None when the command outlived `timeout` (it has been killed by then).
 
@@ -336,9 +341,19 @@ def _collect_capped(p, timeout, kill, thread_cls, stdin_bytes=None, cap=None):
     `cap` bytes are kept, and the rest is read and DISCARDED rather than left unread, so a command
     still writing is not blocked into outliving its timeout.
 
-    `thread_cls` is the caller's to choose: a native thread inside tpool, where a green one has no
-    hub to run on; the patched (green) one in a request greenlet, where a native one would block
-    the hub on every read."""
+    `threads` is the caller's to choose, as a threading MODULE: the unpatched one inside tpool,
+    where a green thread has no hub to run on; the patched (green) one in a request greenlet,
+    where a native thread would block the hub on every read. Its Thread runs the readers and its
+    Event says when each has finished — one module for both. Measured under eventlet: a green
+    Event set from a native thread wakes nobody, whether the waiter is a greenlet or another
+    native thread (the wait runs its full timeout), and a native Event waited on in a greenlet
+    stops the whole hub while it waits, the green readers that would set it included.
+
+    Waited on those Events, never with Thread.join(timeout=...): under eventlet on Python 3.13+
+    (Ubuntu 26.04) a green join that runs out of time RAISES eventlet.timeout.Timeout, a
+    BaseException, instead of returning. A grandchild still holding a pipe past _READER_GRACE
+    sent that straight through _run_via_ssh_cli's `except Exception`, and every one above it,
+    out of the request or background loop that asked."""
     cap = _MAX_OUTPUT_BYTES if cap is None else cap
     out, err = bytearray(), bytearray()
     flags = {"truncated": False}
@@ -371,32 +386,41 @@ def _collect_capped(p, timeout, kill, thread_cls, stdin_bytes=None, cap=None):
                 # Already closed by the exit or a kill — there is nothing left to close.
                 pass
 
-    workers = []
-    for stream, buf in ((p.stdout, out), (p.stderr, err)):
-        if stream is not None:
-            workers.append(thread_cls(target=_pump, args=(stream, buf), daemon=True))
+    def _signalling(target, done):
+        def run(*args):
+            try:
+                target(*args)
+            finally:
+                done.set()
+        return run
+
+    jobs = [(_pump, (stream, buf)) for stream, buf in ((p.stdout, out), (p.stderr, err))
+            if stream is not None]
     if p.stdin is not None:
-        workers.append(thread_cls(target=_feed, daemon=True))
+        jobs.append((_feed, ()))
+    finished = [threads.Event() for _ in jobs]
+    workers = [threads.Thread(target=_signalling(target, done), args=args, daemon=True)
+               for (target, args), done in zip(jobs, finished)]
     for w in workers:
         w.start()
     try:
         rc = p.wait(timeout=timeout)
     except (_real_subprocess.TimeoutExpired, subprocess.TimeoutExpired):
         kill()
-        for w in workers:
-            w.join(timeout=5)
+        for done in finished:
+            done.wait(_READER_GRACE)
         return None
     # The direct child has exited. Its output normally reaches EOF with it; a grandchild still
-    # holding the pipe open gets five seconds, not the caller's whole timeout over again.
-    for w in workers:
-        w.join(timeout=5)
+    # holding the pipe open gets _READER_GRACE, not the caller's whole timeout over again.
+    for done in finished:
+        done.wait(_READER_GRACE)
     return bytes(out), bytes(err), rc, flags["truncated"]
 
 
 def _finish(p, timeout, stdin_text=None):
     """Collect a started process: (stdout, stderr, rc), killing the whole group on timeout."""
     res = _collect_capped(p, timeout, kill=lambda: _kill_process_tree(p),
-                          thread_cls=_real_threading.Thread,
+                          threads=_real_threading,
                           stdin_bytes=(stdin_text.encode("utf-8")
                                        if stdin_text is not None else None))
     if res is None:
@@ -898,7 +922,7 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
         p = subprocess.Popen(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; ssh_cmd is built here from validated parts
                              stdin=(subprocess.PIPE if stdin_text is not None
                                     else subprocess.DEVNULL))
-        res = _collect_capped(p, timeout, kill=p.kill, thread_cls=threading.Thread,
+        res = _collect_capped(p, timeout, kill=p.kill, threads=threading,
                               stdin_bytes=(stdin_text.encode("utf-8")
                                            if stdin_text is not None else None))
         if res is None:

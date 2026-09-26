@@ -991,6 +991,94 @@ try:
     _sshr = _sm_core._run_via_ssh_cli(_ssh_srv, "echo hi", timeout=0.5, sudo=False)
     check("transport (ssh cli): ...and a command that outlives its timeout is still cut off",
           _sshr == ("", "SSH command timed out", -1), repr(_sshr))
+
+    # ── a grandchild still holding the pipes must not take the caller down with it ──────────────
+    # _collect_capped waited for its readers with Thread.join(timeout=5), and this transport's
+    # readers are GREEN threads. Under eventlet on Python 3.13+ (Ubuntu 26.04) a green join that
+    # runs out of time RAISES eventlet.timeout.Timeout instead of returning, and that class is a
+    # BaseException: it went through _run_via_ssh_cli's `except Exception` and out of whatever
+    # asked — a request, or one of the background loops.
+    # All it takes is a command that exits while something it started still holds stdout. The
+    # grace is shortened so this runs in about a second; the grandchild outlives it either way.
+    import time as _rg_time                                                      # noqa: E402
+
+    def _rg_call(timeout):
+        _t0 = _rg_time.monotonic()
+        try:
+            _r = _sm_core._run_via_ssh_cli(_ssh_srv, "echo hi", timeout=timeout, sudo=False)
+        except BaseException as _e:          # eventlet's Timeout: reported below, never ends the part
+            _r = "raised %s.%s" % (type(_e).__module__, type(_e).__name__)
+        return _r, _rg_time.monotonic() - _t0
+
+    _rg_saved = _sm_core._READER_GRACE
+    _sm_core._READER_GRACE = 0.5
+    try:
+        _ssh_script["v"] = "printf 'kept\\n'; (sleep 3 &)"
+        _rg_done, _rg_took = _rg_call(10)
+        check("transport (ssh cli): a command whose grandchild still holds the pipes returns its "
+              "output instead of raising",
+              _rg_done == ("kept", "", 0),
+              "got %r after %.2fs — under eventlet on 3.13+ a green join that times out raises "
+              "a BaseException that no `except Exception` above this transport catches"
+              % (_rg_done, _rg_took))
+        check("transport (ssh cli): ...after the reader grace, not after the grandchild exits",
+              _rg_took < 3, "took %.2fs; the grandchild lived 3s" % _rg_took)
+        # The timeout path waits for the readers the same way, after killing only the direct
+        # child: the grandchild keeps the pipes open through the kill.
+        _ssh_script["v"] = "(sleep 3 &); sleep 5"
+        _rg_cut, _rg_took = _rg_call(0.5)
+        check("transport (ssh cli): ...and so does one cut off at its timeout",
+              _rg_cut == ("", "SSH command timed out", -1),
+              "got %r after %.2fs" % (_rg_cut, _rg_took))
+        _rg_t0 = _rg_time.monotonic()
+        _rg_local = _sm_core._run_local("printf 'kept\\n'; (sleep 3 &)", timeout=10, sudo=False)
+        _rg_took = _rg_time.monotonic() - _rg_t0
+        check("transport (local): a grandchild holding the pipes gets the same reader grace",
+              _rg_local == ("kept", "", 0) and _rg_took < 3,
+              "got %r after %.2fs; the grandchild lived 3s" % (_rg_local, _rg_took))
+        # ...and a reader that finishes INSIDE the grace ends the wait when it does. Each reader
+        # signals on an Event from the same threading module as the thread it runs on, and the two
+        # transports use different ones: green threads here, native threads inside eventlet's
+        # pool for the local one. Mixed, the wait never ends early — measured: a green Event set
+        # from a native thread wakes nothing, and a native Event waited on in a greenlet stops the
+        # whole hub, readers included. Either way every such command would sit out the grace.
+        # A grandchild that lets go after 1s, against a 3s grace:
+        _sm_core._READER_GRACE = 3
+        _ssh_script["v"] = "printf 'kept\\n'; (sleep 1 &)"
+        # A heartbeat alongside, because this transport's wait must also YIELD: its readers are
+        # green because it runs in a request greenlet, and native readers with a native Event
+        # return the right answer at the right time while stopping every other greenlet — every
+        # console and page — for as long as the wait lasts.
+        import threading as _rg_thr                                              # noqa: E402
+        _rg_ticks, _rg_stop = [], []
+
+        def _rg_beat():
+            while not _rg_stop:
+                _rg_ticks.append(_rg_time.monotonic())
+                _rg_time.sleep(0.02)
+
+        _rg_thr.Thread(target=_rg_beat, daemon=True).start()
+        _rg_t0 = _rg_time.monotonic()
+        _rg_done, _rg_took = _rg_call(10)
+        _rg_stop.append(True)
+        _rg_late = [_t for _t in _rg_ticks if _rg_t0 + _rg_took / 2 <= _t <= _rg_t0 + _rg_took]
+        check("transport (ssh cli): a reader that finishes inside the grace ends the wait then",
+              _rg_done == ("kept", "", 0) and _rg_took < _sm_core._READER_GRACE,
+              "got %r after %.2fs with a %ss grace; the grandchild let go after 1s"
+              % (_rg_done, _rg_took, _sm_core._READER_GRACE))
+        check("transport (ssh cli): ...and the rest of the panel keeps running while it waits",
+              bool(_rg_late),
+              "no heartbeat in the second half of a %.2fs call (%d in all) — the wait for the "
+              "readers held the whole event loop" % (_rg_took, len(_rg_ticks)))
+        _rg_t0 = _rg_time.monotonic()
+        _rg_local = _sm_core._run_local("printf 'kept\\n'; (sleep 1 &)", timeout=10, sudo=False)
+        _rg_took = _rg_time.monotonic() - _rg_t0
+        check("transport (local): ...and on the local transport's native threads too",
+              _rg_local == ("kept", "", 0) and _rg_took < _sm_core._READER_GRACE,
+              "got %r after %.2fs with a %ss grace; the grandchild let go after 1s"
+              % (_rg_local, _rg_took, _sm_core._READER_GRACE))
+    finally:
+        _sm_core._READER_GRACE = _rg_saved
 finally:
     _sm_core.subprocess.Popen = _real_popen_ssh
     _sm_core._resolve_ts_host = _real_ts_host
