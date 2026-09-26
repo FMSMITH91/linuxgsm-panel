@@ -880,6 +880,22 @@ regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+- **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported by
+  kta1kri). Twenty-five places built `sudo -u <account> bash -c '…'` from a server's account
+  (`short_name`) and LinuxGSM script name with neither quoting nor a check — the dashboard's own
+  polls among them, with nobody watching. The model checks those names only when they are
+  **assigned**, never when a row is read back, so a database from before that check, a hand edit
+  of `panel.db`, or a restored backup could hold `short_name="x; curl …|sh; #"`, and the next poll
+  ran it as the panel's account on its own host, or as the SSH login on a remote. Every such
+  command is now built in one place, which refuses a name that is not one plain account word
+  (`root` and sudo's `#0`-style uids included) before anything is sent, and quotes what it accepts.
+  A refused name reads everywhere as "could not run", never as an empty result; the commands sent
+  for every real name are byte-for-byte what they were. The script name that the monitor, update,
+  restart-when-empty and restart-check cron lines carry is checked too. A panel backup is now
+  refused, naming the row, when its database holds such a name or a port stored as text — checked
+  before the safety copy or anything else is touched — and a row that is already in the database
+  is named in the log once, instead of every action on it failing with no reason given. Unit gates
+  fail the build on any `sudo -u` built outside that one place.
 - **pip itself is hash-locked.** The installer upgraded the panel's venv with
   `pip install --upgrade pip`: whatever PyPI served that day, unchecked, the first thing the venv
   ran on every install and on every update that reinstalled dependencies. pip now comes from

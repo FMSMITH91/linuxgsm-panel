@@ -628,6 +628,16 @@ def register(app):
                     if not short_name:
                         _fail("Preparing user account", "internal error: missing instance name")
                         return
+                    # The same test every command builder applies, BEFORE step 1 creates an
+                    # account. A retry takes both names from the stored row, which @validates
+                    # never re-checks on a load (a restored backup, a hand-edited panel.db); the
+                    # builders below would each refuse, but only after the account step had run
+                    # through the privileged verbs with a name nothing else accepts.
+                    if not _sm.game_idents_ok(short_name, lgsm_name):
+                        _fail("Preparing user account",
+                              "the instance or script name is not a plain account name",
+                              retryable=False)
+                        return
 
                     # 1. User account. prepare_install_account decides, and it deletes nothing it
                     #    did not create: the old inline version ran userdel -r and an rm -rf of the
@@ -643,9 +653,10 @@ def register(app):
 
                     # 2. Download & set up LinuxGSM (canonical script name).
                     _p(2, "Downloading LinuxGSM")
-                    install_cmd = (f"sudo -u {short_name} bash -c 'cd /home/{short_name} && "
-                                   f"wget -q -O linuxgsm.sh https://linuxgsm.sh && chmod +x linuxgsm.sh && "
-                                   f"bash linuxgsm.sh {lgsm_name}' 2>&1")
+                    install_cmd = _sm.game_user_cmd(
+                        short_name, f"cd /home/{short_name} && "
+                                    f"wget -q -O linuxgsm.sh https://linuxgsm.sh && chmod +x linuxgsm.sh && "
+                                    f"bash linuxgsm.sh {lgsm_name}", selfname=lgsm_name) + " 2>&1"
                     out = err = ""; rc = -1
                     for attempt in range(10):
                         out, err, rc = _sm.run_command(remote, install_cmd, timeout=300, sudo=False)
@@ -683,7 +694,8 @@ def register(app):
                     #    (exactly how a bad cod2 download failed silently). So DON'T trust the exit
                     #    code: after each attempt verify the files actually landed (_looks_installed),
                     #    and on failure wipe LinuxGSM's cached download and retry from scratch.
-                    auto = f"sudo -u {short_name} bash -c 'cd /home/{short_name} && ./{lgsm_name} auto-install' 2>&1"
+                    auto = _sm.game_user_cmd(short_name, f"cd /home/{short_name} && ./{lgsm_name} auto-install",
+                                             selfname=lgsm_name) + " 2>&1"
                     # Free any Steam crash-dump slot left behind by a deleted game account. Steam
                     # has ten, one per account, and a full table stops SteamCMD dead on a host
                     # whose servers were all working — see do_steam_dumps_sweep. Best-effort: a
@@ -807,9 +819,10 @@ def register(app):
                         # Not really installed: wipe LinuxGSM's cached (likely corrupt) archive so the
                         # next attempt re-downloads fresh instead of reusing the bad file.
                         try:
-                            _sm.run_command(remote, f"sudo -u {short_name} bash -c "
-                                        f"'rm -rf /home/{short_name}/lgsm/tmp/* 2>/dev/null; echo cleared'",
-                                        timeout=30, sudo=False)
+                            _sm.shell_as_game_user(
+                                remote, short_name,
+                                f"rm -rf /home/{short_name}/lgsm/tmp/* 2>/dev/null; echo cleared",
+                                timeout=30)
                         except Exception:
                             _log.debug("_run: ignored non-fatal error", exc_info=True)
                     if not installed_ok:
@@ -872,7 +885,9 @@ def register(app):
                         _log.debug("_run: ignored non-fatal error", exc_info=True)
                     if gs.game_type in ("mc", "mcbe", "pmc", "spigot", "paper"):
                         try:
-                            _sm.run_command(remote, f"sudo -u {short_name} bash -c \"echo 'eula=true' > /home/{short_name}/serverfiles/eula.txt 2>/dev/null; true\"", timeout=15, sudo=False)
+                            _sm.run_command(remote, _sm.game_user_cmd(
+                                short_name, f"echo 'eula=true' > /home/{short_name}/serverfiles/eula.txt 2>/dev/null; true"),
+                                timeout=15, sudo=False)
                         except Exception:
                             _log.debug("_run: ignored non-fatal error", exc_info=True)
                     # SCP: Secret Laboratory has the same problem Minecraft has, in a form that is
@@ -895,8 +910,7 @@ def register(app):
                         _eula_py = scpsl_eula_payload()
                         try:
                             _sm.run_command(remote,
-                                            "sudo -u %s python3 -c %s"
-                                            % (shlex.quote(short_name), shlex.quote(_eula_py)),
+                                            _sm.game_user_exec_cmd(short_name, ["python3", "-c", _eula_py]),
                                             timeout=20, sudo=False)
                         except Exception:
                             _log.debug("_run: ignored non-fatal error", exc_info=True)
@@ -1007,10 +1021,7 @@ def register(app):
                     if gs.game_type in ("scpsl", "scpslsm") and gs.port:
                         _sl_sh = scpsl_seed_config_payload(gs.port)
                         try:
-                            _sm.run_command(remote,
-                                            "sudo -u %s bash -c %s"
-                                            % (shlex.quote(short_name), shlex.quote(_sl_sh)),
-                                            timeout=20, sudo=False)
+                            _sm.shell_as_game_user(remote, short_name, _sl_sh, timeout=20)
                         except Exception:
                             _log.debug("_run: ignored non-fatal error", exc_info=True)
 

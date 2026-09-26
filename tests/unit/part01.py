@@ -507,7 +507,7 @@ check("paths: no stray data/ or translations/ dir was created inside panel/",
 from panel.db.models import _SHELL_IDENT_RE as _V_SHELL, TAG_NAME_RE as _V_TAG
 from panel.core import validation as _V
 from panel.core.clock import valid_timezone as _v_tz
-from panel.ops.ssh_manager import files as _v_files, gmod as _v_gmod, cron as _v_cron
+from panel.ops.ssh_manager import gmod as _v_gmod, cron as _v_cron
 from panel.ops import backup as _v_backup, tailscale_integration as _v_ts
 from panel.services import lgsm_data as _v_lgsm
 
@@ -520,7 +520,7 @@ _VALIDATORS = [
     ("validation.HOST_RE", _V.HOST_RE, "10.0.0.1"),
     ("validation.SAFE_LABEL_RE", _V.SAFE_LABEL_RE, "My Host"),
     ("validation._HEX_COLOR_RE", _V._HEX_COLOR_RE, "#aabbcc"),
-    ("files._SAFE_UNIX_USER_RE", _v_files._SAFE_UNIX_USER_RE, "gmodserver"),
+    ("_core._SAFE_GAME_IDENT", _sm_core._SAFE_GAME_IDENT, "gmodserver"),
     ("gmod._CU_NAME_RE", _v_gmod._CU_NAME_RE, "gmodcontent"),
     ("cron._GAME_BACKUP_NAME", _v_cron._GAME_BACKUP_NAME, "srv-2026.tar.gz"),
     ("backup._NAME_RE", _v_backup._NAME_RE, "panel-backup-20260918-120000-manual.tar.gz"),

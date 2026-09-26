@@ -666,11 +666,16 @@ def _looks_installed(app, remote, short_name, lgsm_name):
     """Best-effort check of whether a game server is actually installed on the remote — used
     to reconcile an install whose live progress was lost (e.g. the panel restarted mid-install).
     Returns True (installed), False (clearly not), or None (couldn't tell)."""
+    # Both names, before either read: the second read names only the account, so a bad SCRIPT name
+    # would otherwise still send it. And a refusal is "couldn't tell", never "not installed" —
+    # False is acted on (the reconcile ticker marks the row failed; the install retry wipes
+    # lgsm/tmp and re-downloads).
+    if not _sm.game_idents_ok(short_name, lgsm_name):
+        return None
     try:
-        out, err, _ = _sm.run_command(
-            remote,
-            f"sudo -u {short_name} bash -c 'cd /home/{short_name} && ./{lgsm_name} details 2>&1'",
-            timeout=30, sudo=False)
+        out, err, _ = _sm.shell_as_game_user(
+            remote, short_name, f"cd /home/{short_name} && ./{lgsm_name} details 2>&1",
+            timeout=30, selfname=lgsm_name)
         low = terminal.strip_escapes((out or "") + "\n" + (err or "")).lower()
         if re.search(r"not installed|please run .*install|serverfiles.*(missing|not found)|no such file", low):
             return False
@@ -689,11 +694,10 @@ def _looks_installed(app, remote, short_name, lgsm_name):
         #
         # With the marker: no marker means the command did not complete -> None ("couldn't tell").
         # Marker present and no number means serverfiles really is absent -> False.
-        out2, _, _ = _sm.run_command(
-            remote,
-            f"sudo -u {short_name} bash -c 'du -sm /home/{short_name}/serverfiles 2>/dev/null "
-            f"| cut -f1; echo __DU_DONE__'",
-            timeout=20, sudo=False)
+        out2, _, _ = _sm.shell_as_game_user(
+            remote, short_name,
+            f"du -sm /home/{short_name}/serverfiles 2>/dev/null | cut -f1; echo __DU_DONE__",
+            timeout=20)
         if "__DU_DONE__" not in (out2 or ""):
             return None
         _mb = (out2 or "").replace("__DU_DONE__", "").strip()
@@ -817,8 +821,7 @@ def _drain_action_output(app, remote, server_id):
         # import run_command` copies the function object at import time, so a stub placed on the
         # definition site would be assigned cleanly and intercept nothing here. See the note at
         # the top of panel/ops/ssh_manager/__init__.py — that is the failure this repo hits most.
-        out, _, _ = _sm.run_command(remote, f"sudo -u {user} bash -c {_sm._quote(sh)}",
-                                    timeout=15, sudo=False)
+        out, _, _ = _sm.shell_as_game_user(remote, user, sh, timeout=15)
     except Exception:
         _log.debug("action-output tail for server %s failed; retrying next tick", server_id,
                    exc_info=True)

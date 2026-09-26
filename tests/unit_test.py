@@ -83,7 +83,7 @@ for _attr, _fns in _WATCHED.items():
     for _fn in _fns:
         setattr(_cfg_live, _fn, _watch(_attr, getattr(_cfg_live, _fn)))
 
-from unit import part01, part02, part03, part04, part05, part06  # noqa: F401,E402
+from unit import part01, part02, part03, part04, part05, part06, part07  # noqa: F401,E402
 from unit.part01 import check, results  # noqa: E402
 
 check("suites: no unit check reads or writes the machine's own config.json or keys",

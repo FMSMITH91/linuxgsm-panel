@@ -470,6 +470,11 @@ def restore_backup(name, passphrase=None, skip_safety_backup=False):
             _log.exception("backup archive unreadable")
             return False, "Could not read the backup archive."
 
+        # The ROWS, before anything about the live install is touched — see _restore_db_refusal.
+        refusal = _restore_db_refusal(src)
+        if refusal:
+            return False, refusal
+
         # The ORIGINAL name, not src: for an encrypted archive src is now a temp file, and the
         # user-facing message must still say which backup they restored.
         return _restore_validated(src, os.path.basename(str(name)),
@@ -478,6 +483,133 @@ def restore_backup(name, passphrase=None, skip_safety_backup=False):
     finally:
         if _dec_tmp:
             shutil.rmtree(_dec_tmp, ignore_errors=True)
+
+
+# ── What a restored database may carry ────────────────────────────────────────────────────────
+# GHSA-hh39-76g3-wxcx. These are the columns the panel builds commands from: every @validates'd
+# shell identifier (models._validate_shell_ident) — a game server's Linux account and LinuxGSM
+# script, a host's SSH login and LinuxGSM account. @validates runs on ASSIGNMENT; a row read back
+# out of panel.db is never checked, and a restore replaces every row at once. So the archive's
+# database is held to the model's own rule here, BEFORE the safety copy, the staging and the swap,
+# and a refused restore leaves the live install exactly as it was. The command builders refuse a
+# bad account name as well (ssh_manager._core.game_user_cmd); this is what stops one arriving.
+# A unit gate keeps this tuple equal to the columns models.py validates with that function.
+_RESTORE_IDENT_COLUMNS = (("game_server", "short_name"), ("game_server", "game_type"),
+                          ("remote_server", "username"), ("remote_server", "linuxgsm_user"))
+# Ports are held to their TYPE only. Each is written into a command somewhere (a cron line's
+# host:port, a firewall rule), and SQLite does not enforce INTEGER on a hand-written row, so text
+# stored there is text in a command. The RANGE check _validate_port also makes is not repeated
+# here: a row from before that validator existed may hold a 0, and refusing a whole install over
+# it would protect nothing.
+_RESTORE_PORT_COLUMNS = (("game_server", "port"), ("game_server", "query_port"),
+                         ("remote_server", "port"))
+_RESTORE_ROW_LABEL = {"game_server": "game server", "remote_server": "host"}
+
+
+def _restore_fernet(tar, names):
+    """A Fernet for the key the restored panel will decrypt its columns with: the archive's own
+    cred_key, or the live one when the archive has none (the restore then keeps it). None if
+    neither can be read — an encrypted value is then unreadable after the restore too, and an
+    unreadable column reads as "" (models.UnreadableSecret), which no command can be built from."""
+    from cryptography.fernet import Fernet
+    try:
+        if "cred_key" in names:
+            raw = tar.extractfile("cred_key").read()
+        elif CRED_KEY_FILE.exists():
+            raw = CRED_KEY_FILE.read_bytes()
+        else:
+            return None
+        return Fernet(raw.strip())
+    except Exception:
+        return None
+
+
+def _restore_bad_rows(db_path, fernet):
+    """[(table, row id, column)] for every row of the database at `db_path` that the models would
+    refuse to store in a command-bearing column. Raises sqlite3.Error for a file SQLite cannot
+    read."""
+    from panel.core.config import _ENC_PREFIX, is_encrypted
+    from panel.db.models import _validate_shell_ident
+    bad = []
+    con = sqlite3.connect(db_path)
+    try:
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+        def _cols(table):
+            return {r[1] for r in con.execute('PRAGMA table_info("%s")' % table)}
+        for table, col in _RESTORE_IDENT_COLUMNS:
+            if table not in tables or col not in _cols(table):
+                continue          # an older schema: the column the check is about does not exist
+            # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query -- table/column are this module's constants
+            for rid, val in con.execute('SELECT id, "%s" FROM "%s"' % (col, table)):  # nosec B608
+                if isinstance(val, str) and is_encrypted(val):
+                    try:
+                        val = fernet.decrypt(val[len(_ENC_PREFIX):].encode()).decode() if fernet else None
+                    except Exception:
+                        val = None
+                    if val is None:
+                        continue  # unreadable after the restore as well — see _restore_fernet
+                if val is not None and not isinstance(val, str):
+                    bad.append((table, rid, col))     # a BLOB or a number where a name belongs
+                    continue
+                try:
+                    _validate_shell_ident(col, val)
+                except ValueError:
+                    _log.warning("restore refused: %s #%s %s is not a shell identifier: %r",
+                                 table, rid, col, (val or "")[:80])
+                    bad.append((table, rid, col))
+        for table, col in _RESTORE_PORT_COLUMNS:
+            if table not in tables or col not in _cols(table):
+                continue
+            # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query -- table/column are this module's constants
+            for rid, kind in con.execute('SELECT id, typeof("%s") FROM "%s"' % (col, table)):  # nosec B608
+                if kind not in ("integer", "null"):
+                    _log.warning("restore refused: %s #%s %s is stored as %s, not a number",
+                                 table, rid, col, kind)
+                    bad.append((table, rid, col))
+    finally:
+        con.close()
+    return bad
+
+
+def _restore_db_refusal(src):
+    """Why the database inside archive `src` must not be restored, or "" when it may be.
+
+    Read from a private temp copy, never in place: nothing about the live install is touched until
+    this has answered, and a refusal leaves no trace but the log line naming the rows."""
+    tmpd = tempfile.mkdtemp(prefix="lgsm-bk-chk-")
+    try:
+        with tarfile.open(src, "r:gz") as tar:
+            names = tar.getnames()
+            if "panel.db" not in names:
+                return ""        # nothing replaces panel.db, so the live rows stay as they are
+            member = tar.getmember("panel.db")
+            if not member.isfile():
+                return "Backup archive looks invalid."
+            fernet = _restore_fernet(tar, names)
+            db_copy = os.path.join(tmpd, "panel.db")
+            with tar.extractfile(member) as fsrc, open(db_copy, "wb") as fdst:
+                shutil.copyfileobj(fsrc, fdst)
+        bad = _restore_bad_rows(db_copy, fernet)
+    except sqlite3.Error as e:
+        _log.warning("restore refused: the backup's panel.db could not be read (%s)", e)
+        return ("The database in this backup could not be read, so it was not restored. Nothing "
+                "on this panel was changed.")
+    except Exception:
+        _log.exception("restore refused: the backup's panel.db could not be checked")
+        return ("The database in this backup could not be checked, so it was not restored. "
+                "Nothing on this panel was changed.")
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+    if not bad:
+        return ""
+    where = ", ".join("%s #%s (%s)" % (_RESTORE_ROW_LABEL.get(t, t), rid, col)
+                      for t, rid, col in bad[:5])
+    more = " and %d more" % (len(bad) - 5) if len(bad) > 5 else ""
+    return ("This backup was not restored: its database holds a value the panel will not put in a "
+            "command — %s%s. Every command for that row would be built from it. Nothing on this "
+            "panel was changed; restore a different backup, or correct that row in the archive's "
+            "panel.db first." % (where, more))
 
 
 def _safety_copy_passphrase(operator_passphrase=None):

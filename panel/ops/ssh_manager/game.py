@@ -87,8 +87,7 @@ def capture_console(server, user, selfname=None, lines=180):
     to cross 80 columns."""
     selfname = selfname or user
     inner = _core._tmux_live_socket_sh(selfname) + f'tmux -L "$SOCK" capture-pane -p -J -t {selfname} -S -{int(lines)}'
-    cmd = f"sudo -u {user} bash -c {_core._quote(inner)}"
-    return _core.run_command(server, cmd, timeout=15, sudo=False)
+    return _core.shell_as_game_user(server, user, inner, timeout=15, selfname=selfname)
 
 
 # '#<userid> "<name>"' — the start of a Source/GoldSrc status row. Used to READ a row and, by
@@ -336,6 +335,8 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
     gamedig type, no port, or the query failed) so the caller can fall back to the console. Never
     raises. Names carry score/time where the game reports them; no kick/ban ids (those come from the
     console on demand)."""
+    if not _core.game_idents_ok(user):
+        return None      # refused, which is "could not query" — never an empty server
     gdtype = cron._gamedig_type(game_type, query_type)
     if not gdtype or not port:
         return None
@@ -347,7 +348,7 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
            'time:(.raw.time // .time // null)}]')
     cmd = f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null | jq -c {_core._quote(jqf)} 2>/dev/null"
     try:
-        out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(cmd)}", timeout=25, sudo=False)
+        out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
     except Exception:
         return None
     line = next((ln.strip() for ln in (out or "").splitlines() if ln.strip().startswith("[")), "")
@@ -554,7 +555,7 @@ def ensure_persistent_bans(server, user, selfname):
             'printf "\\n// panel: load persistent bans on every (re)start\\n'
             'exec banned_user.cfg\\nexec banned_ip.cfg\\n" >> "$F"'
         )
-        _, _, rc = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(inner)}", timeout=15, sudo=False)
+        _, _, rc = _core.shell_as_game_user(server, user, inner, timeout=15, selfname=selfname)
         return rc == 0
     except Exception:
         return False
@@ -618,6 +619,10 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     can't query still back up on schedule (matching the daily-restart behaviour) —
     which is exactly why `query_type` has to be threaded in (see below)."""
     selfname = selfname or user
+    # Refused before the player query, the headroom prune and the listing, which would otherwise
+    # each reach the host first: the backup itself is refused by shell_as_game_user anyway.
+    if not _core.game_idents_ok(user, selfname):
+        return False, _core.GAME_ACCOUNT_REFUSED[1], False
     keep = max(1, int(keep))
     if not force:
         # query_type, like every other player/version read in this file (_gamedig_player_list,
@@ -669,8 +674,7 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     # GMod install). It doesn't strictly need a y/N answer, but we feed a few harmless "y"s as a
     # safety net for any version that does prompt. The stream is bounded, so it can't hang.
     inner = precheck + f"cd /home/{user} && printf 'y\\ny\\ny\\n' | ./{selfname} backup"
-    out, err, rc = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(inner)}",
-                               timeout=3600, sudo=False)
+    out, err, rc = _core.shell_as_game_user(server, user, inner, timeout=3600, selfname=selfname)
     ok = rc == 0
     # LinuxGSM can exit 0 while REFUSING to back up because a (possibly stale) lock exists —
     # "Lockfile found: Backup is currently running". No archive is created, so this is NOT a
@@ -705,11 +709,8 @@ def list_server_commands(server, user, selfname=None):
     """Run the LinuxGSM instance script with no arguments to read its command list,
     which varies per game. Returns a list of {"cmd", "short", "desc"} dicts."""
     selfname = selfname or user
-    out, err, rc = _core.run_command(
-        server,
-        f"sudo -u {user} bash -c {_core._quote(f'cd /home/{user} && ./{selfname}')}",
-        timeout=30, sudo=False,
-    )
+    out, err, rc = _core.shell_as_game_user(server, user, f"cd /home/{user} && ./{selfname}",
+                                            timeout=30, selfname=selfname)
     text = terminal.strip_escapes((out or "") + "\n" + (err or ""))
     cmds, seen = [], set()
     for line in text.splitlines():
@@ -903,8 +904,7 @@ def _steam_build(server, user, selfname=None):
         "serverfiles/version_history.json | head -1; fi"
     )
     try:
-        out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(sh)}",
-                                      timeout=20, sudo=False)
+        out, _, _ = _core.shell_as_game_user(server, user, sh, timeout=20, selfname=selfname)
     except Exception:
         return {}
     got = {}
@@ -923,6 +923,8 @@ def _queried_version(server, user, game_type=None, port=None, query_type=None):
     Several protocols spell it differently and some report it as a number, so take the first of
     the known fields that has a value and stringify it — rather than trusting one path and showing
     nothing for every game that uses another."""
+    if not _core.game_idents_ok(user):
+        return ""
     gdtype = cron._gamedig_type(game_type, query_type)
     if not gdtype or not port:
         return ""
@@ -932,8 +934,7 @@ def _queried_version(server, user, game_type=None, port=None, query_type=None):
     cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
            f"| jq -r {_core._quote(jqf)} 2>/dev/null")
     try:
-        out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(cmd)}",
-                                      timeout=25, sudo=False)
+        out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
     except Exception:
         return ""
     # A version is a short token; anything longer is gamedig noise that got past the redirect.

@@ -206,6 +206,42 @@ Separately there are ~46 `sudo -u <gameuser>` sites. Those run as the game user 
 root, so they are a smaller problem — but they still depend on the same unrestricted grant,
 and they are not yet counted in the conversion.
 
+**Those game-account commands have ONE builder, and it refuses rather than trusts
+(GHSA-hh39-76g3-wxcx, reported by kta1kri).** A server's account (`short_name`) and LinuxGSM script
+name went into `sudo -u <account> bash -c '<body>'` from twenty-five builders — the account ahead of
+`bash -c`, where the shell that runs sudo parses it, and both again inside the body — unquoted and
+unchecked, several of them on the dashboard's unattended polls. The model's `@validates` hook is not
+a guard for this: it runs on ASSIGNMENT, and a row read back out of `panel.db` — written before the
+validator existed, edited by hand, or restored from a backup — reaches every builder unchecked.
+`short_name="x; curl …|sh; #"` ran as the panel's account on its own host and as the SSH login on a
+remote.
+
+The rule now:
+
+* **Only `ssh_manager._core.game_user_cmd` (a shell body) and `game_user_exec_cmd` (one program)
+  spell `sudo -u` with a value in it**, and callers usually reach them through `shell_as_game_user`,
+  which also runs the command. Both refuse — raise `UnsafeGameAccount` before any text is built — a
+  name `_core.game_idents_ok` rejects: the model's shell-identifier charset, 1–64 characters, never
+  `root`. Refusing, not only quoting: a quoted name is still a name sudo resolves, and `#0` is uid 0.
+* **A body that names the LinuxGSM script passes `selfname=`** to the builder, or its function checks
+  the script name first. The builder can check only the names it is given, and the body is built
+  before it is called. The crontab writers check it too: a cron line runs through `/bin/sh`.
+* **A refusal is the caller's own "could not run"**: `GAME_ACCOUNT_REFUSED`, `("", "invalid account
+  or script name", 1)`, for the `(out, err, rc)` callers, and None / unknown for the readers — never
+  an empty, healthy-looking answer.
+* Unit gates over `panel/**/*.py` (tests/unit/part07.py) fail the build on a `sudo -u` built outside
+  those two, on one built with an unquoted value, on a builder that stops checking, and on a script
+  name dropped on the way in; each has a control that proves it can fail.
+
+At the data layer, **a panel backup restore re-checks the archive's database** — every column
+`models.py` guards with `_validate_shell_ident` (a unit check keeps the two lists equal), decrypting
+the encrypted ones with the archive's own key, and that every port is stored as a number — before the
+pre-restore safety copy, the staging or the swap, and refuses the restore naming the row. A row that
+is LOADED with such a name is logged once, naming it. It is deliberately not raised on: that would
+fail every query touching the row — the dashboard, and the Remove button that is the way out — so one
+bad row would take the panel down; and it is not rewritten, which would silently change the account
+the panel acts as.
+
 Two of those verb families are worth describing, because the narrowing is in the argument
 types rather than in the command names:
 

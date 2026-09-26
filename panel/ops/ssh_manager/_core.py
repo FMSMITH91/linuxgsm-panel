@@ -1169,8 +1169,81 @@ def discover_linuxgsm_servers(server):
     return found
 
 
-# Same charset files._SAFE_UNIX_USER_RE enforces, and for the same reason it gives.
+# The charset models._validate_shell_ident enforces on assignment, applied again here to rows that
+# were LOADED — which that hook never sees. See game_user_cmd below.
 _SAFE_GAME_IDENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
+
+
+# ── The ONE builder of a command that runs AS a game account ──────────────────────────────────
+# GHSA-hh39-76g3-wxcx. GameServer.short_name is the Linux account a server runs as, and lgsm_name
+# ('<game_type>server') its LinuxGSM script. Both went into `sudo -u <account> bash -c '<body>'`:
+# the account AHEAD of `bash -c`, where the shell that runs sudo parses it, and both again inside
+# the body (`cd /home/<account> && ./<script>`). The model's @validates hook pins their charset on
+# ASSIGNMENT only. A row LOADED from the database is never checked, and three things put an
+# unchecked row there: a database written before the validator existed, a panel backup restored
+# over the live one, and a hand edit of data/panel.db. Twenty-five builders — seven in game.py,
+# eleven in cron.py, seven in two route modules — interpolated the account raw, and the panel's
+# own player polling reaches several of them with nobody watching — so short_name="x; curl …|sh; #" ran as the
+# panel's account on its own host, and as the SSH login (the identity the panel escalates with) on
+# a remote.
+#
+# So no builder spells `sudo -u` itself any more. It asks this, and this REFUSES a name that is not
+# one plain account word before any text is built from it. Refusing and not only quoting, because a
+# quoted name is still a name sudo resolves: "#0" is uid 0 to sudo, and "root" is root — which
+# LinuxGSM itself refuses to run as, so no real server has it. A unit gate fails the build on any
+# `sudo -u <interpolated>` in panel/ outside these two builders.
+class UnsafeGameAccount(ValueError):
+    """An account or LinuxGSM script name that must not be put into a command."""
+
+
+# What a refused command answers: the (out, err, rc) run_as_game_user, read_as_game_user and
+# send_console_command have always returned for it. rc 1 with nothing on stdout is how every caller
+# already spells "could not run" — never an empty result, which is how a failed read has been
+# mistaken for a healthy one before.
+GAME_ACCOUNT_REFUSED = ("", "invalid account or script name", 1)
+
+
+def game_idents_ok(*names):
+    """True when every name is a plain account/script word a command may carry."""
+    return all(isinstance(n, str) and _SAFE_GAME_IDENT.match(n) and n != "root" for n in names)
+
+
+def _require_game_idents(user, selfname=None):
+    if not game_idents_ok(user, *(() if selfname is None else (selfname,))):
+        raise UnsafeGameAccount(GAME_ACCOUNT_REFUSED[1])
+
+
+def game_user_cmd(user, inner, selfname=None):
+    """`sudo -u <user> bash -c <inner>`: the account validated, both halves shell-quoted.
+
+    `selfname` is the LinuxGSM script name. A caller whose `inner` names the script MUST pass it:
+    the body is built before this is called, so this is where the name is checked. For a safe name
+    the text is byte-for-byte what the builders used to spell by hand — shlex leaves a plain word
+    unquoted. Raises UnsafeGameAccount; a caller that returns (out, err, rc) wants
+    shell_as_game_user, which turns the raise into GAME_ACCOUNT_REFUSED."""
+    _require_game_idents(user, selfname)
+    return f"sudo -u {_quote(user)} bash -c {_quote(inner)}"
+
+
+def game_user_exec_cmd(user, argv, selfname=None):
+    """`sudo -u <user> <argv…>` — one program and its arguments, no shell body — held to the same
+    check, every word quoted. Raises UnsafeGameAccount."""
+    _require_game_idents(user, selfname)
+    return " ".join([f"sudo -u {_quote(user)}"] + [_quote(str(a)) for a in argv])
+
+
+def shell_as_game_user(server, user, sh, timeout=30, selfname=None):
+    """Run shell `sh` AS the game account; (out, err, rc).
+
+    An unsafe account or script name sends nothing and answers GAME_ACCOUNT_REFUSED. `sh` is
+    panel-built text; pass `selfname` whenever it names the LinuxGSM script (see game_user_cmd)."""
+    try:
+        cmd = game_user_cmd(user, sh, selfname=selfname)
+    except UnsafeGameAccount:
+        _log.warning("refusing to run as an unsafe account/script name")
+        return GAME_ACCOUNT_REFUSED
+    # The command self-escalates via `sudo -u`, so it must not be wrapped in root sudo too.
+    return run_command(server, cmd, timeout=timeout, sudo=False)
 
 
 def create_game_user(server, user, timeout=30):
@@ -1245,11 +1318,7 @@ def read_as_game_user(server, user, sh, timeout=30):
     root operation. `sh` is panel-built text, never user input; `user` is validated here for the
     reason run_as_game_user gives at length.
     """
-    if not _SAFE_GAME_IDENT.match(user or ""):
-        _log.warning("refusing to read as an unsafe account name")
-        return "", "invalid account name", 1
-    return run_command(server, "sudo -u %s bash -c %s" % (_quote(user), _quote(sh)),
-                       timeout=timeout, sudo=False)
+    return shell_as_game_user(server, user, sh, timeout=timeout)
 
 
 def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=None,
@@ -1281,9 +1350,9 @@ def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=No
     # from a tampered backup, reaches this code unchecked. `user` is interpolated ahead of `sudo`,
     # so it breaks out as the PANEL user, and `selfname` lands inside the bash -c script body.
     # Demonstrated: user="x; id > /tmp/pwned; #" produced `sudo -u x; id > /tmp/pwned; # bash -c`.
-    if not (_SAFE_GAME_IDENT.match(user or "") and _SAFE_GAME_IDENT.match(selfname or "")):
+    if not game_idents_ok(user, selfname):
         _log.warning("refusing to run as an unsafe account/script name")
-        return "", "invalid account or script name", 1
+        return GAME_ACCOUNT_REFUSED
     answers = [str(a) for a in (answers or [])]
     arg_answers = ",".join(answers) if answers else "-"
     verb_args = [user, selfname, action, arg_answers, "yes" if tee_log else "no"]
@@ -1340,9 +1409,7 @@ def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=No
     # `export`, not a `TERM=xterm cmd` prefix: with `answers` the command is a PIPELINE, and a
     # prefix would set TERM for printf and leave LinuxGSM emitting `tput: unknown terminal`.
     inner = f"cd /home/{_quote(user)} && export TERM=xterm && {body}"
-    cmd = f"sudo -u {_quote(user)} bash -c {_quote(inner)}"
-    # The command self-escalates via `sudo -u`, so don't double-wrap with sudo.
-    return run_command(server, cmd, timeout=timeout, sudo=False)
+    return shell_as_game_user(server, user, inner, timeout=timeout, selfname=selfname)
 
 
 GAME_PRIORITY_NICE = -1   # slight CPU priority edge for game processes (root-only to set negative)
@@ -1428,12 +1495,11 @@ def send_console_command(server, user, command, timeout=20, selfname=None):
     # has-session in _tmux_live_socket_sh. `command` was already quoted; these two were not, and
     # this was the one `sudo -u <account>` builder in this file with no check at all. Returns the
     # tuple every caller unpacks, never a raise (game.py reads out[2] as the rc).
-    if not (_SAFE_GAME_IDENT.match(user or "") and _SAFE_GAME_IDENT.match(selfname or "")):
+    if not game_idents_ok(user, selfname):
         _log.warning("refusing to send to an unsafe account/script name")
-        return "", "invalid account or script name", 1
+        return GAME_ACCOUNT_REFUSED
     inner = _tmux_live_socket_sh(selfname) + f'tmux -L "$SOCK" send-keys -t {selfname} {_quote(command)} Enter'
-    cmd = f"sudo -u {_quote(user)} bash -c {_quote(inner)}"
-    return run_command(server, cmd, timeout=timeout, sudo=False)
+    return shell_as_game_user(server, user, inner, timeout=timeout, selfname=selfname)
 
 
 def remote_public_ip(server):
@@ -1830,10 +1896,9 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     # function unchecked. It matters more here than there: `user` went in UNQUOTED, and the
     # pipeline below runs as ROOT, so `crontab -u <user>` was a root command-injection point one
     # bad row away. Five cron routes reach this.
-    if not _SAFE_GAME_IDENT.match(user or ""):
+    if not game_idents_ok(user):
         _log.warning("refusing to rewrite a crontab for an unsafe account name")
         return False, "invalid account name"
-    _u = _quote(user)
     # No `-u`, and no root. `crontab -l` and `crontab <file>` run AS the account operate on that
     # account's own crontab, which is exactly what all five callers want — so this ran as ROOT for
     # no reason at all.
@@ -1855,8 +1920,7 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     #
     # It stays a shell pipeline because `crontab -l | filter > tmp; crontab tmp` is genuinely a
     # pipeline, but every value interpolated into it is validated and quoted.
-    cmd = f"sudo -u {_u} bash -c {_quote(pipeline)}"
-    out, err, rc = run_command(server, cmd, timeout=20, sudo=False)
+    out, err, rc = shell_as_game_user(server, user, pipeline, timeout=20)
     return rc == 0, (err or out or "")
 
 
@@ -1871,6 +1935,10 @@ def set_autostart(server, user, enabled, selfname=None):
     we no longer use it and strip any legacy one. Enabling ensures the monitor line exists;
     disabling removes it."""
     selfname = selfname or user
+    # The script name goes into the crontab LINE, which cron runs through /bin/sh as the account:
+    # _rewrite_crontab checks the account, and only the caller knows what the line names.
+    if not game_idents_ok(user, selfname):
+        return False, GAME_ACCOUNT_REFUSED[1]
     base = f"/home/{user}/{selfname}"
     monitor_line = f"*/5 * * * * {cron._record_managed_cmd(user, f'{base} monitor')}"
     add = [monitor_line] if enabled else []
@@ -1890,6 +1958,8 @@ def install_game_cron(server, user, selfname=None, supported=None):
       update-lgsm  weekly Sun 05:30
     """
     selfname = selfname or user
+    if not game_idents_ok(user, selfname):      # the lines below name the script; see set_autostart
+        return False, GAME_ACCOUNT_REFUSED[1]
     supported = supported or set()
     base = f"/home/{user}/{selfname}"
 
@@ -2014,6 +2084,8 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     with no time shown anywhere in the UI to notice it by."""
     hour, minute = int(hour) % 24, int(minute) % 60
     selfname = selfname or user
+    if not game_idents_ok(user, selfname):      # the lines below name the script; see set_autostart
+        return False, GAME_ACCOUNT_REFUSED[1]
     flag = f"/home/{user}/.restart-pending"
     gdtype = GAMEDIG_TYPE.get(game_type or "", "")
     # Crontab-only (no separate script file — file writes inside a `sudo bash -c`

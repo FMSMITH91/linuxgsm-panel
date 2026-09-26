@@ -14203,6 +14203,143 @@ try:
     check("socket origin: ...and completes for the panel's own origin (control)",
           _so_ok.status_code == 200, "status %d %r" % (_so_ok.status_code, _so_ok.data[:80]))
 
+    # ── GHSA-hh39-76g3-wxcx: a LOADED row with an injected account name drives no command ─────────
+    # The advisory end to end, through the real app. A game_server row whose short_name carries a
+    # shell payload is written RAW — a tampered restore, a database from before the validator, a
+    # hand edit: @validates sees none of them — and then everything that builds a command for a
+    # server runs against it: the pages and polls a browser drives, the synchronous toggles, the
+    # unattended monitor / player / metrics passes, and Retry install. A CONTROL row with a plain,
+    # distinctive name goes through the same sweep, so "no command carried the payload" cannot
+    # pass on a sweep that never reached a command builder at all.
+    import threading as _gh_thr
+    import time as _gh_time
+    from sqlalchemy import text as _gh_sql
+    from panel.core.panel_state import _install_jobs as _gh_jobs, _install_lock as _gh_jlock
+    _gh_mon = sys.modules["panel.services.monitoring"]
+    _gh_appmod = sys.modules["app"]
+    _GH_MARK = "ghsapwn"
+    _gh_ids = {}
+    with app.app_context():
+        for _gh_k, _gh_name, _gh_port in (("bad", "x; touch /tmp/%s; #" % _GH_MARK, 27881),
+                                          ("ctl", "ghsactl", 27882)):
+            _gh_row = GameServer(remote_id=remote_id, name="ghsa-" + _gh_k, short_name="ghsaseed" + _gh_k,
+                                 game_type="csgo", port=_gh_port, installed=True, status="online")
+            db.session.add(_gh_row)
+            db.session.commit()
+            _gh_ids[_gh_k] = _gh_row.id
+            # Past @validates, exactly as a restored or hand-edited database would be.
+            db.session.execute(_gh_sql("UPDATE game_server SET short_name = :n WHERE id = :i"),
+                               {"n": _gh_name, "i": _gh_row.id})
+            db.session.commit()
+    _gh_sent, _gh_sent_lock = [], _gh_thr.Lock()
+
+    def _gh_note(text):
+        with _gh_sent_lock:
+            _gh_sent.append(str(text))
+
+    def _gh_noconn(*a, **k):
+        raise ConnectionError("no SSH host in this suite")
+
+    def _gh_quiesce(before, what):
+        """Wait out every thread this block started, so none of them lands in a LATER stub."""
+        for _ in range(600):
+            _new = [t for t in _gh_thr.enumerate() if t not in before and t.is_alive()]
+            if not _new:
+                return
+            _gh_time.sleep(0.05)
+        check("GHSA-hh39 smoke: no thread started by %s outlives it" % what, False,
+              "%d still running after 30s" % len(_new))
+
+    _gh_saved = {n: getattr(_sm_core, n) for n in ("run_command", "_exec_local_argv", "get_connection",
+                                                   "_gamedig_host")}
+    _gh_saved_notify = _gh_appmod.notifications.notify
+    _gh_threads0 = set(_gh_thr.enumerate())
+    _gh_status = {}
+    try:
+        # run_privileged is left REAL: on this (remote) host it renders its verb through the real
+        # argument table and hands the text to run_command, exactly as it would go over SSH.
+        _sm_core.run_command = lambda s, c, **k: (_gh_note(c), ("", "", 0))[1]
+        _sm_core._exec_local_argv = lambda argv, **k: (_gh_note(" ".join(map(str, argv))), ("", "", 0))[1]
+        _sm_core.get_connection = _gh_noconn
+        _sm_core._gamedig_host = lambda s: "127.0.0.1"
+        _gh_appmod.notifications.notify = lambda *a, **k: None
+        _gh_c = client_as(admin_id)
+        for _gh_k, _gh_id in sorted(_gh_ids.items()):
+            for _gh_path in ("/", "/api/servers", "/api/server/%d", "/api/server/%d/stats",
+                             "/api/server/%d/version", "/api/server/%d/players",
+                             "/api/server/%d/playerlist", "/api/server/%d/config",
+                             "/api/server/%d/game-config", "/api/server/%d/alerts",
+                             "/api/server/%d/mods", "/api/server/%d/browse",
+                             "/api/server/%d/file?path=a.cfg", "/api/server/%d/cron",
+                             "/api/server/%d/log-timestamps", "/server/%d", "/server/%d/files"):
+                _gh_url = _gh_path % _gh_id if "%d" in _gh_path else _gh_path
+                _gh_r = _gh_c.get(_gh_url)
+                _gh_status[(_gh_k, _gh_url)] = (_gh_r.status_code, _gh_r.get_data(as_text=True)[:400])
+            for _gh_path, _gh_body in (("/api/server/%d/autostart", {"enabled": True}),
+                                       ("/api/server/%d/daily-restart", {"enabled": True}),
+                                       ("/api/server/%d/cron", {"schedule": "@daily", "command": "/bin/true"}),
+                                       ("/api/server/%d/cron/run", {"raw": "@daily /bin/true"}),
+                                       ("/api/server/%d/action", {"action": "start"})):
+                _gh_r = _gh_c.post(_gh_path % _gh_id, json=_gh_body)
+                _gh_status[(_gh_k, _gh_path % _gh_id)] = (_gh_r.status_code,
+                                                          _gh_r.get_data(as_text=True)[:400])
+        with app.app_context():
+            _gh_mon._monitor_pass()
+        _gh_mon._refresh_player_counts(app)
+        _gh_mon._record_metric_samples(app)
+        # Retry install takes both names from the stored row — the path a restored backup feeds.
+        with app.app_context():
+            db.session.execute(_gh_sql("UPDATE game_server SET status='failed', installed=0, "
+                                       "install_retryable=1, install_error='' WHERE id IN (:a, :b)"),
+                               {"a": _gh_ids["bad"], "b": _gh_ids["ctl"]})
+            db.session.commit()
+        for _gh_k in ("bad", "ctl"):
+            _gh_r = _gh_c.post("/servers/%d/retry-install" % _gh_ids[_gh_k])
+            _gh_status[(_gh_k, "retry-install")] = (_gh_r.status_code, _gh_r.get_data(as_text=True)[:400])
+        _gh_quiesce(_gh_threads0, "the sweep")
+    finally:
+        for _gh_n, _gh_v in _gh_saved.items():
+            setattr(_sm_core, _gh_n, _gh_v)
+        _gh_appmod.notifications.notify = _gh_saved_notify
+    with _gh_sent_lock:
+        _gh_texts = list(_gh_sent)
+    _gh_leaked = [t for t in _gh_texts if _GH_MARK in t]
+    check("GHSA-hh39 smoke: no command built for the injected row carries its payload — not from a "
+          "page, a poll, a toggle, the monitor passes or Retry install",
+          not _gh_leaked, "%d leaked, e.g. %r" % (len(_gh_leaked), _gh_leaked[:1]))
+    _gh_ctl_cmds = [t for t in _gh_texts if "ghsactl" in t]
+    check("GHSA-hh39 smoke: ...and the same sweep DID build commands for the control row (it reached "
+          "the builders)", len(_gh_ctl_cmds) >= 5 and any(t.startswith("sudo -u ghsactl ") for t in _gh_ctl_cmds),
+          "%d control command(s): %r" % (len(_gh_ctl_cmds), [t[:60] for t in _gh_ctl_cmds[:3]]))
+    with app.app_context():
+        _gh_bad_row = db.session.execute(_gh_sql(
+            "SELECT status, install_error, install_retryable FROM game_server WHERE id = :i"),
+            {"i": _gh_ids["bad"]}).fetchone()
+    check("GHSA-hh39 smoke: Retry install on the injected row fails at step 1 and says why, with no "
+          "retry offered", _gh_bad_row is not None and _gh_bad_row[0] == "failed"
+          and "not a plain account name" in (_gh_bad_row[1] or "") and not _gh_bad_row[2],
+          repr(_gh_bad_row))
+    # A refusal may come back as the route's own failure status (the autostart toggle has always
+    # answered a failed crontab write with 500 and its reason); what must not happen is a CRASH:
+    # the generic handler's "Internal server error", or Flask's own HTML error page.
+    _gh_crashed = {k[1]: v for k, v in _gh_status.items() if k[0] == "bad" and v[0] >= 500
+                   and ("Internal server error" in v[1] or v[1].lstrip().startswith("<"))}
+    check("GHSA-hh39 smoke: nothing in the sweep crashed a request for the injected row",
+          len(_gh_status) >= 40 and not _gh_crashed, repr(_gh_crashed)[:300])
+    _gh_auto = _gh_status.get(("bad", "/api/server/%d/autostart" % _gh_ids["bad"]), (0, ""))
+    check("GHSA-hh39 smoke: ...and a refused toggle says why, rather than failing silently",
+          "invalid account or script name" in _gh_auto[1], repr(_gh_auto)[:200])
+    with _gh_jlock:
+        for _gh_id in _gh_ids.values():
+            _gh_jobs.pop(_gh_id, None)
+    with app.app_context():
+        # Raw, like the insert, and the samples the metrics pass wrote go with them: the ORM's
+        # after_delete prune does not see a raw DELETE.
+        for _gh_tbl, _gh_col in (("metric_sample", "server_id"), ("game_server", "id")):
+            db.session.execute(_gh_sql("DELETE FROM %s WHERE %s IN (:a, :b)" % (_gh_tbl, _gh_col)),
+                               {"a": _gh_ids["bad"], "b": _gh_ids["ctl"]})
+        db.session.commit()
+
 except Exception:
     # A crash part-way through otherwise just prints fewer checks and still reads as green-ish.
     # That has hidden three separate mistakes while writing these; a crash is a FAILURE.
