@@ -153,8 +153,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
   them. A copy downloaded as a ZIP from GitHub has no git history, so its `VERSION` file carries the
   commit's time, filled in by git when the archive is made. The Release workflow, which only ran
   when `VERSION` changed and never cut a release, is removed. The update that brings this change
-  in is run by the installer the host already has, which reads `VERSION` as text, so that one
-  update's log names the new version `$Format:%ct$`; the panel itself shows the date.
+  in is offered and run by the code the host already has, which reads `VERSION` as text, so for
+  that one update the card offers `v$Format:%ct$` and the installer's log names it the same way;
+  once it has landed, the panel and the installer show the date.
 - **Deleting a host says what stays on it.** The delete makes the panel forget the host and never
   connects to it, so gamedig (`/usr/local/lib/linuxgsm-panel/gamedig` and its two links) and the
   weekly root cron that re-runs its install script (`/etc/cron.d/lgsm-node-tools`) stay there,
