@@ -43,9 +43,11 @@ app = create_app()
 
 
 def _read_password(args):
-    """A policy-passing password: from --password (validated once), else prompted and RE-PROMPTED
-    until it matches its confirmation and meets the strength policy (so a weak entry doesn't abort
-    the whole command)."""
+    """Return a policy-passing password.
+
+    From --password (validated once), else prompted and RE-PROMPTED until it matches its
+    confirmation and meets the strength policy (so a weak entry doesn't abort the whole command).
+    """
     pw = getattr(args, "password", None)
     if pw:
         err = password_problem(pw)
@@ -91,31 +93,49 @@ def cmd_list_users(args):
 
 
 def _pick_user_interactive(prompt="Which user?"):
-    """Show a numbered menu of every user and return the chosen username (accepts the number or a
-    typed username). Loops until a valid choice is made."""
+    """Show a numbered menu of every user and return the chosen username.
+
+    Accepts the number or a typed username. Loops until a valid choice is made.
+    """
     users = User.query.order_by(User.username).all()
     if not users:
         sys.exit("No users exist yet. Create one:  manage.py create-admin <name>")
-    print(prompt)
-    for i, u in enumerate(users, 1):
-        flags = (["superadmin"] if u.is_superadmin else []) + ([] if u.is_active else ["inactive"])
-        tag = ("  [" + ", ".join(flags) + "]") if flags else ""
-        print("  %2d) %s%s" % (i, u.username, tag))
+    _print_user_menu(prompt, users)
     while True:
         try:
             sel = input("Enter a number (or username): ").strip()
         except (EOFError, KeyboardInterrupt):
             sys.exit("\nCancelled.")
-        if sel.isdecimal() and 1 <= int(sel) <= len(users):
-            return users[int(sel) - 1].username
-        if any(u.username == sel for u in users):
-            return sel
+        chosen = _menu_choice(sel, users)
+        if chosen is not None:
+            return chosen
         print("  Not a valid choice — try again.")
 
 
+def _print_user_menu(prompt, users):
+    """Print `prompt`, then one numbered line per user, tagged superadmin / inactive where so."""
+    print(prompt)
+    for i, u in enumerate(users, 1):
+        flags = (["superadmin"] if u.is_superadmin else []) + ([] if u.is_active else ["inactive"])
+        tag = ("  [" + ", ".join(flags) + "]") if flags else ""
+        print("  %2d) %s%s" % (i, u.username, tag))
+
+
+def _menu_choice(sel, users):
+    """Return the username `sel` picks from the menu — by its number or its name — else None."""
+    if sel.isdecimal() and 1 <= int(sel) <= len(users):
+        return users[int(sel) - 1].username
+    if any(u.username == sel for u in users):
+        return sel
+    return None
+
+
 def _resolve_username(username, default_sole_admin=True):
-    """The user to act on. Given a name → use it. Omitted + a terminal → numbered menu. Omitted +
-    non-interactive (a script) → the sole superadmin when default_sole_admin, else refuse to guess."""
+    """Return the user to act on.
+
+    Given a name → use it. Omitted + a terminal → numbered menu. Omitted + non-interactive (a
+    script) → the sole superadmin when default_sole_admin, else refuse to guess.
+    """
     if username:
         return username
     if sys.stdin.isatty():
@@ -141,13 +161,13 @@ def cmd_reset_password(args):
         # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- _read_password() already enforced password_problem() on it
         u.set_password(auth.hash_password(_read_password(args)))
         u.auth_epoch = (u.auth_epoch or 0) + 1   # revoke existing sessions
-            # The API token too. It is a SECOND credential for the same account, and it did not
-            # answer to any of the controls that exist to take an account back: it carries no
-            # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted
-            # every UserSession row and left it working. app.py's note that "cookie theft is also
-            # recoverable via sign out everywhere" was not true while one existed. Minting one
-            # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
-            # could leave themselves a key that survived the victim's whole recovery.
+        # The API token too. It is a SECOND credential for the same account, and it did not
+        # answer to any of the controls that exist to take an account back: it carries no
+        # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted
+        # every UserSession row and left it working. app.py's note that "cookie theft is also
+        # recoverable via sign out everywhere" was not true while one existed. Minting one
+        # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
+        # could leave themselves a key that survived the victim's whole recovery.
         u.revoke_api_token()
         db.session.commit()
         print("Password reset for '%s' (existing sessions revoked)." % username)
@@ -230,7 +250,7 @@ def main():
     ]:
         pp = sub.add_parser(name, help=lbl.capitalize())
         pp.add_argument("username")
-        pp.set_defaults(func=(lambda a, f=field, v=val, l=lbl: _set_flag(a.username, f, v, l)))
+        pp.set_defaults(func=(lambda a, f=field, v=val, lb=lbl: _set_flag(a.username, f, v, lb)))
 
     args = p.parse_args()
     args.func(args)
