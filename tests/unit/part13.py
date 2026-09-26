@@ -3,7 +3,8 @@
 Behaviour coverage for five modules the other parts reach only in passing: the admin notifier
 (panel/services/notifications.py), the interactive terminal (panel/ops/terminal_session.py), the
 monitor loop (panel/services/monitoring.py), the SSH/local transport core
-(panel/ops/ssh_manager/_core.py) and the helpers app.py defines.
+(panel/ops/ssh_manager/_core.py) and app.py: its helpers, what create_app does at boot, and the
+loops its supervisor runs.
 
 Every check asserts what the code DID — what it returned, what it would have sent, what it wrote,
 what it refused — never merely that it ran. The recurring subject is the one this codebase keeps
@@ -15,8 +16,10 @@ House rules this part keeps (see part01 and tests/unit_test.py):
   * the monitor's database is an in-memory SQLite bound to a throwaway Flask app, never data/;
   * the panel-state maps the monitor prunes are snapshotted and restored, so nothing this part
     does leaks into a later check;
-  * the `sudo -u <account>` command builders in game.py / cron.py / _core.py are NOT asserted
-    here — another change is rewriting them — so _core's coverage stops at the transport.
+  * no `sudo -u <account>` command string is asserted here: those builders are held by parts
+    07-09 (GHSA-hh39-76g3-wxcx), so _core's coverage here is the transport and what it carries;
+  * create_app runs (section F) only with its database, data dir and auth log pointed into a temp
+    dir, and with threads recorded rather than started.
 """
 import fcntl
 import json as _json10
@@ -4198,6 +4201,38 @@ finally:
     _ca13_teardown(_ca13_apps, _ca13_saved_state)
 check("app boot: the checkout's own data/panel.db was not created",
       _CA13_LIVE_DB_EXISTED or not os.path.exists(_CA13_LIVE_DB), _CA13_LIVE_DB)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# G. panel/ops/ssh_manager/_core.py — the LinuxGSM maintenance cron, per supported command
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+def _core_cron13(supported):
+    """install_game_cron for `supported`, with the crontab rewrite recorded; (result, rewrites)."""
+    seen = []
+    saved = _sm_core._rewrite_crontab
+    _sm_core._rewrite_crontab = lambda server, user, grep_args, add_lines, **k: (
+        seen.append((user, grep_args, list(add_lines))), (True, ""))[1]
+    try:
+        return _sm_core.install_game_cron(NS(is_local=False), "gm4", "gmodserver", supported), seen
+    finally:
+        _sm_core._rewrite_crontab = saved
+
+
+_cron_all13, _cron_all_seen13 = _core_cron13({"monitor", "mods-update", "update", "update-lgsm"})
+_cron_lines13 = _cron_all_seen13[0][2] if _cron_all_seen13 else []
+check("core cron: each supported command gets its own schedule, recorder-wrapped, in one rewrite",
+      all((_cron_all13 == (True, ""), len(_cron_all_seen13) == 1,
+           [ln.split(" /home/")[0].split(" ", 5)[:5] for ln in _cron_lines13] ==
+           [["*/5", "*", "*", "*", "*"], ["0", "5", "*", "*", "*"], ["15", "5", "*", "*", "*"],
+            ["30", "5", "*", "*", "0"]],
+           [c for c in ("monitor", "mods-update", "update", "update-lgsm")
+            if not any("/home/gm4/gmodserver %s" % c in ln for ln in _cron_lines13)] == [],
+           all("/home/gm4/.lgsm-cron/" in ln for ln in _cron_lines13))),
+      repr(_cron_lines13))
+_cron_none13, _cron_none_seen13 = _core_cron13(set())
+check("core cron: a game supporting none of them rewrites nothing, and says so",
+      all((_cron_none13 == (True, "no maintenance commands to schedule"), _cron_none_seen13 == [])),
+      repr((_cron_none13, _cron_none_seen13)))
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
