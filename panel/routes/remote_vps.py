@@ -28,7 +28,47 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachab
 from app import (_local_remote_id, _log, _os_update_note)
 
 
+def _may_sync_ports():
+    """Whether the caller may sync a server's ports: superadmin, MANAGE_REMOTES or INSTALL_SERVER."""
+    return (current_user.is_superadmin or has_permission(current_user, MANAGE_REMOTES)
+            or has_permission(current_user, INSTALL_SERVER))
+
+
+def _sync_ports_detail(opened, missed):
+    """Audit detail for a port sync: what opened, and what FAILED when anything did."""
+    ok = not missed
+    return (("opened %s" % (opened or "none")) if ok
+            else "opened %s; FAILED %s" % (opened or "none", missed))
+
+
+def _sync_ports_message(opened, missed):
+    """Word a port sync's result for the user: all opened, some opened, or none opened."""
+    if not missed:
+        return "Ports %s opened." % (", ".join(map(str, opened)) or "—")
+    if opened:
+        return ("Opened %s, but %s could not be opened — check the host's firewall."
+                % (", ".join(map(str, opened)), ", ".join(map(str, missed))))
+    return ("No ports could be opened (%s) — the host's firewall did not accept the "
+            "rules." % ", ".join(map(str, missed)))
+
+
 def register(app):
+    """Register a host's firewall, SSH, port, stats, OS-update and reboot routes on `app`."""
+    _register_firewall_view(app)
+    _register_firewall_rules(app)
+    _register_ssh_settings(app)
+    _register_panel_port(app)
+    _register_game_ports(app)
+    _register_host_stats(app)
+    _register_os_update_checks(app)
+    _register_os_update_jobs(app)
+    _register_host_players(app)
+    _register_reboot(app)
+    _register_host_pages(app)
+
+
+def _register_firewall_view(app):
+    """Firewall: the page, its rule list, and re-trusting a changed host key."""
     @app.route("/remote/<int:remote_id>/firewall")
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -85,6 +125,9 @@ def register(app):
         return jsonify({"success": True,
                         "message": "Host key cleared — it will be re-pinned on the next connection."})
 
+
+def _register_firewall_rules(app):
+    """Firewall: open, allow-from, limit, close and delete rules."""
     @app.route("/api/remote/<int:remote_id>/firewall/open", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -106,7 +149,8 @@ def register(app):
         """Open a port only from one address or network (`allow: false` removes the rule).
 
         The gap this fills: every other allow here opens a port to the internet, so a port that
-        only you or only your LAN should reach had no way to say so."""
+        only you or only your LAN should reach had no way to say so.
+        """
         remote = get_remote(remote_id)
         data = _json_body()
         source = _json_str(data, "source")
@@ -128,7 +172,8 @@ def register(app):
         """Rate-limit a port, or lift the limit (`limit: false`).
 
         UFW has done this since forever and the panel has used it on every bootstrap to harden
-        SSH — it just had no way to ask for it on a port you choose."""
+        SSH — it just had no way to ask for it on a port you choose.
+        """
         remote = get_remote(remote_id)
         data = _json_body()
         port = data.get("port", "")
@@ -171,6 +216,9 @@ def register(app):
         log_action(current_user, "remote_ufw_delete_rule", target=f"{remote.name}:#{num}", success=success)
         return jsonify({"success": success, "message": msg})
 
+
+def _register_ssh_settings(app):
+    """SSH: status, public exposure through UFW (allow / limit / off), and port."""
     @app.route("/api/remote/<int:remote_id>/ssh-status")
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -201,8 +249,11 @@ def register(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_ssh_port(remote_id):
-        """Move this host's sshd to a new port (lockout-safe: the old port stays open as a fallback,
-        and UFW + fail2ban are updated with it). Works for a remote and the panel host itself."""
+        """Move this host's sshd to a new port, lockout-safe.
+
+        The old port stays open as a fallback, and UFW + fail2ban are updated with it. Works for a
+        remote and the panel host itself.
+        """
         if not (current_user.is_superadmin or can_access_remote(current_user, remote_id)):
             return jsonify({"success": False, "message": "You don't have access to that host."}), 403
         remote = get_remote(remote_id)
@@ -229,13 +280,18 @@ def register(app):
                    detail=f"{old} -> {new_port}", success=ok)
         return jsonify({"success": ok, "message": msg})
 
+
+def _register_panel_port(app):
+    """Close the panel's public web port so the UI is reachable only over the tailnet."""
     @app.route("/api/remote/<int:remote_id>/close-panel-port", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_close_panel_port(remote_id):
-        """Close the panel's public web port on the panel host so the UI is reachable only
-        over the tailnet. Refuses unless Tailscale Serve is configured — otherwise this
-        would remove your only way into the panel."""
+        """Close the panel's public web port on the panel host so the UI is reachable only over the tailnet.
+
+        Refuses unless Tailscale Serve is configured — otherwise this would remove your only way
+        into the panel.
+        """
         remote = get_remote(remote_id)
         if not remote.is_local:
             return jsonify({"success": False, "message": "Only applies to the panel host."}), 400
@@ -297,6 +353,9 @@ def register(app):
             f"Public port {port} closed — the panel is now reachable only over your tailnet."
             if ok else f"Couldn't remove every rule for port {port}; check the firewall page.")})
 
+
+def _register_game_ports(app):
+    """Game ports: open one, or sync a server's ports into the firewall."""
     @app.route("/api/remote/<int:remote_id>/game-port/<int:port>/open", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -314,7 +373,8 @@ def register(app):
         name has always claimed. The row was looked up only to pick the UFW comment, falling back
         to "Game" when it did not exist — so a port nothing serves was opened just as readily. The
         safe sibling, api_server_sync_ports, derives its ports from detect_game_ports() rather than
-        trusting the caller; this now refuses rather than guessing."""
+        trusting the caller; this now refuses rather than guessing.
+        """
         remote = get_remote(remote_id)
         gs = GameServer.query.filter_by(remote_id=remote_id, port=port).first()
         if gs is None:
@@ -330,12 +390,13 @@ def register(app):
     @login_required
     @server_access_required
     def api_server_sync_ports(server_id):
-        """Detect ALL of a game server's ports from LinuxGSM and open every one in the
-        firewall (game/query/rcon/etc.). Also re-syncs the stored port. Fixes servers
-        that were installed before multi-port support, or whose ports changed."""
+        """Detect ALL of a game server's ports from LinuxGSM and open every one in the firewall.
+
+        That covers game/query/rcon/etc. Also re-syncs the stored port. Fixes servers
+        that were installed before multi-port support, or whose ports changed.
+        """
         gs = get_game(server_id)
-        if not (current_user.is_superadmin or has_permission(current_user, MANAGE_REMOTES)
-                or has_permission(current_user, INSTALL_SERVER)):
+        if not _may_sync_ports():
             return jsonify({"success": False, "message": "Permission denied"}), 403
         try:
             info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name)
@@ -354,29 +415,26 @@ def register(app):
             missed = [p for p in to_open if p not in set(opened)]
             ok = not missed
             log_action(current_user, "sync_ports", target=gs.name, success=ok,
-                       detail=("opened %s" % (opened or "none")) if ok
-                       else "opened %s; FAILED %s" % (opened or "none", missed))
-            if ok:
-                msg = "Ports %s opened." % (", ".join(map(str, opened)) or "—")
-            elif opened:
-                msg = ("Opened %s, but %s could not be opened — check the host's firewall."
-                       % (", ".join(map(str, opened)), ", ".join(map(str, missed))))
-            else:
-                msg = ("No ports could be opened (%s) — the host's firewall did not accept the "
-                       "rules." % ", ".join(map(str, missed)))
+                       detail=_sync_ports_detail(opened, missed))
+            msg = _sync_ports_message(opened, missed)
             return jsonify({"success": ok, "message": msg,
                             "ports": info.get("ports", []), "open_ports": opened,
                             "requested_ports": to_open, "failed_ports": missed, "game_port": gp})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
+
+def _register_host_stats(app):
+    """Host stats: live usage and uptime."""
     @app.route("/api/remote/<int:remote_id>/live-stats")
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_live_stats(remote_id):
-        """Real-time CPU, RAM, disk, uptime from the remote VPS. Also persisted to the
-        remote so the card can render the last-known values instantly on the next load
-        instead of showing a spinner."""
+        """Real-time CPU, RAM, disk, uptime from the remote VPS.
+
+        Also persisted to the remote so the card can render the last-known values instantly on the
+        next load instead of showing a spinner.
+        """
         remote = get_remote(remote_id)
         try:
             stats = remote_uptime(remote)
@@ -408,12 +466,18 @@ def register(app):
         except ConnectionError:
             return _unreachable("remote uptime")
 
+
+def _register_os_update_checks(app):
+    """OS updates: check, summarise, read the cache, run."""
     @app.route("/api/remote/<int:remote_id>/check-updates")
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_check_updates(remote_id):
-        """Force a fresh check on one host. The panel host runs it locally rather than over SSH to
-        itself, which is what the daily sweep does too."""
+        """Force a fresh check on one host.
+
+        The panel host runs it locally rather than over SSH to itself, which is what the daily sweep
+        does too.
+        """
         remote = get_remote(remote_id)
         try:
             result = (so.os_update_available(refresh=True) if remote.is_local
@@ -437,7 +501,8 @@ def register(app):
 
         This is what the login banner and the OS Updates card render. Page loads must not trigger
         `apt update` (a network fetch per host, 60s timeout each), so they read the daily sweep's
-        answer instead; the Check button is there for anyone who wants it re-asked now."""
+        answer instead; the Check button is there for anyone who wants it re-asked now.
+        """
         # .copy() rather than iterating the live dict: the daily sweep writes to it from its own
         # thread, and a resize mid-iteration would 500 the page this banner sits on.
         snapshot = _os_update_seen.copy()
@@ -471,8 +536,10 @@ def register(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_updates_cached(remote_id):
-        """One host's last-known package list, for filling the OS Updates card on page load without
-        making the page wait on apt. {known:false} when nothing has checked this host yet."""
+        """One host's last-known package list, as {known:false} when nothing has checked it yet.
+
+        It fills the OS Updates card on page load without making the page wait on apt.
+        """
         remote = get_remote(remote_id)
         seen = _os_update_seen.get(remote.id)
         if not seen:
@@ -489,6 +556,9 @@ def register(app):
         log_action(current_user, "remote_os_update", target=remote.name, success=success)
         return jsonify({"success": success, "message": msg})
 
+
+def _register_os_update_jobs(app):
+    """OS updates: start a background upgrade and poll it."""
     @app.route("/api/remote/<int:remote_id>/os-update/start", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -518,12 +588,17 @@ def register(app):
             return jsonify({"running": None, "done": False, "rc": None, "unread": True,
                             "log": "", "error": _log_and_generic("status read failed")}), 200
 
+
+def _register_host_players(app):
+    """Players online across a host's servers."""
     @app.route("/api/remote/<int:remote_id>/players")
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_players(remote_id):
-        """Players connected across ALL installed game servers on this host, so a reboot can warn
-        before disconnecting everyone. Returns {total, busy:[{name, players}], unknown:[{name}]}.
+        """Players connected across ALL installed game servers on this host.
+
+        A reboot uses it to warn before disconnecting everyone. Returns
+        {total, busy:[{name, players}], unknown:[{name}]}.
 
         `unknown` is the whole point of the third field: player_count returns None both for "the
         query failed" and "this game cannot be queried", and a None folded into the busy check is
@@ -534,7 +609,8 @@ def register(app):
 
         query_type is passed. Without it a server whose game has no built-in gamedig type and an
         operator-set override — the only way those games are queryable at all — was unreadable
-        here while the Players panel read it fine."""
+        here while the Players panel read it fine.
+        """
         remote = get_remote(remote_id)
         busy, unknown = [], []
         total = 0
@@ -552,12 +628,18 @@ def register(app):
                                                                         gs.query_type))})
         return jsonify({"total": total, "busy": busy, "unknown": unknown})
 
+
+def _register_reboot(app):
+    """Reboot: whether one is needed, schedule it, cancel it."""
     @app.route("/api/remote/<int:remote_id>/reboot-required")
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_reboot_required(remote_id):
-        """Does this host need a reboot to finish applying updates, and is an auto-reboot-when-empty
-        already scheduled for it? {required, packages[], pending_empty}."""
+        """Whether this host needs a reboot, and whether one is already scheduled for it.
+
+        Does this host need a reboot to finish applying updates, and is an auto-reboot-when-empty
+        already scheduled for it? {required, packages[], pending_empty}.
+        """
         remote = get_remote(remote_id)
         try:
             info = dict(remote_reboot_required(remote))
@@ -571,8 +653,11 @@ def register(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_reboot(remote_id):
-        """Reboot a host now, or (when_empty=true) schedule it to reboot once every game server on it
-        is empty. An explicit 'now' supersedes any pending when-empty request."""
+        """Reboot a host now, or schedule it for when every game server on it is empty.
+
+        The schedule is when_empty=true: it reboots once every game server on the host is empty.
+        An explicit 'now' supersedes any pending when-empty request.
+        """
         remote = get_remote(remote_id)
         when_empty = bool((_json_body() or {}).get("when_empty"))
         if when_empty:
@@ -619,12 +704,17 @@ def register(app):
         return jsonify({"success": True, "pending": False,
                         "message": "Auto-reboot canceled." if had else "Nothing was scheduled."})
 
+
+def _register_host_pages(app):
+    """Register the host management page and its hardware specs."""
     @app.route("/remote/<int:remote_id>/manage")
     @login_required
     @permission_required(MANAGE_REMOTES)
     def remote_manage(remote_id):
-        """Rich management page for a remote server — live per-core resources plus
-        OS updates, reboot and firewall — the same experience as the Panel Server."""
+        """Rich management page for a remote server, the same experience as the Panel Server.
+
+        Live per-core resources plus OS updates, reboot and firewall.
+        """
         remote = get_remote(remote_id)
         games = GameServer.query.filter_by(remote_id=remote_id).all()
         # config=, because remote_manage.html reads config.port / config.bind_host /
@@ -663,7 +753,8 @@ def register(app):
         page for INSTALL_SERVER / MANAGE_SERVERS. Gated on MANAGE_REMOTES alone, this answered
         those users 403, the filter read that as "OS unknown" and left every game selectable —
         the ones this host cannot run included — so they learned it only from the install
-        refusal. They get os_slug and nothing else: the hardware card stays MANAGE_REMOTES."""
+        refusal. They get os_slug and nothing else: the hardware card stays MANAGE_REMOTES.
+        """
         remote = get_remote(remote_id)
         if not has_permission(current_user, MANAGE_REMOTES):
             try:
