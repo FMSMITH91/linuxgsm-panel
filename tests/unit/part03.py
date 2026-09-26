@@ -1642,15 +1642,17 @@ try:
                 return ("\n".join(commits), "", 0)
             if args[0] == "log" and "--format=%ct" in args:
                 # Each commit's committer time: the version is that commit's UTC date.
-                return (_CUS_CT.get(str(args[-1]), ""), "", 0)
+                return (_CUS_CT.get(str(args[args.index("--format=%ct") + 1]), ""), "", 0)
             if args[0] == "log":
                 return ("c1 a change", "", 0)
             return ("", "", 0)
         return _g
 
     _C = ["a" * 40, "b" * 40, "c" * 40]   # tip=a, mid=b, old=c
-    # 2026-09-20, 2026-09-10 and 2026-09-01, each at 12:00 UTC.
-    _CUS_CT = {"a" * 40: "1789905600", "b" * 40: "1789041600", "c" * 40: "1788264000"}
+    # 2026-09-20, 2026-09-10 and 2026-09-01, each at 12:00 UTC. The branch refs name their tips:
+    # main's is a (the 20th); dev's, a commit made at 23:59:30 UTC on the 26th.
+    _CUS_CT = {"a" * 40: "1789905600", "b" * 40: "1789041600", "c" * 40: "1788264000",
+               "refs/remotes/origin/main": "1789905600", "refs/remotes/origin/dev": "1790467170"}
 
     # tip pending, middle passed → offer the middle (skip the pending tip).
     _so._git = _mk_git(3, _C)
@@ -1728,6 +1730,20 @@ try:
           _r.get("behind_tip") == 3, _r.get("behind_tip"))
     check("update-target: ...and it still names the tip, for the card's changelog",
           bool(_r.get("target_sha")), "no target_sha")
+    check("update-target: ...whose version is the TIP's date, the commit it names",
+          _r.get("remote_version") == "2026.9.20", repr(_r.get("remote_version")))
+
+    # A tracked branch other than the default is offered unverified, and its version is the date
+    # of THAT branch's tip, read off its own remote-tracking ref.
+    _cus_tb = _so._tracked_branch
+    try:
+        _so._tracked_branch = lambda: "dev"
+        _r_dev = _so._compute_update_status()
+    finally:
+        _so._tracked_branch = _cus_tb
+    check("update-target: on a non-default branch the version is that branch tip's date",
+          _r_dev.get("ci_state") == "unverified" and _r_dev.get("remote_version") == "2026.9.26",
+          repr({k: _r_dev.get(k) for k in ("ci_state", "remote_version", "branch")}))
 
     # A tip that FAILED CI is the same: the installer refuses it, so the card must not offer it.
     _so._remote_ci_state = lambda sha: "failing"
