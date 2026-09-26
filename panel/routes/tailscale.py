@@ -69,6 +69,12 @@ def _disable_would_strand_panel(cfg):
 
 
 def register(app):
+    _register_tailscale_setup(app)
+    _register_tailscale_serve(app)
+
+
+def _register_tailscale_setup(app):
+    """The panel host's Tailscale page, status, install and sign-in."""
     @app.route("/tailscale")
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -158,6 +164,9 @@ def register(app):
             return jsonify({"success": True, "connected": True})
         return jsonify({"success": True, "connected": False, "auth_url": res})
 
+
+def _register_tailscale_serve(app):
+    """Tailscale Serve for the panel, and the peer check."""
     @app.route("/api/tailscale/serve", methods=["POST"])
     @login_required
     @superadmin_required
