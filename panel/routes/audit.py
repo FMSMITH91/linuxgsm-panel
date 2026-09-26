@@ -35,7 +35,8 @@ def audit_scope(user):
     sign-in address, and the attempted username of every failed login. A delegated viewer now
     sees their OWN rows, plus rows whose target is a game server they can access or a host they
     were granted — never an account row of anyone else's, and never the panel host's own
-    administration (LOCAL_HOST_LABEL: backups, self-update, binding)."""
+    administration (LOCAL_HOST_LABEL: backups, self-update, binding).
+    """
     if user.is_superadmin:
         return None
     server_names = {gs.name for gs in get_user_servers(user) if gs.name}

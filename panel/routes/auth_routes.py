@@ -358,7 +358,8 @@ def register(app):
             own token. Each attempt costs a bcrypt compare, which is its own floor on the rate. A
             real limit belongs on all three at once, beside the login and bearer-token throttles
             in panel/security/auth.py; what was missing here was the record of the attempt, and
-            that is what this is."""
+            that is what this is.
+            """
             log_action(u, "api_token_generate", target=u.username, detail=why, success=False)
             return redirect(url_for("account"))
 
@@ -403,9 +404,12 @@ def register(app):
     @app.route("/account/api-token/revoke", methods=["POST"])
     @login_required
     def account_api_token_revoke():
-        """Deliberately ungated, unlike the mint above. Revoking takes a credential AWAY, so the
-        worst a stolen session can do here is inconvenience the owner — and a gate would be a
-        reason not to press this in the one situation it exists for."""
+        """Revoke the signed-in user's own API token.
+
+        Deliberately ungated, unlike the mint above. Revoking takes a credential AWAY, so the worst
+        a stolen session can do here is inconvenience the owner — and a gate would be a reason not
+        to press this in the one situation it exists for.
+        """
         current_user.revoke_api_token()
         db.session.commit()
         log_action(current_user, "api_token_revoke", target=current_user.username)
@@ -414,16 +418,19 @@ def register(app):
 
     @app.route("/set-language/<lang>", methods=["GET", "POST"])
     def set_language(lang):
-        """Switch the UI language. Saved to the session, and to the user's profile when logged in
-        (so it follows them across devices). Usable pre-login too. The switcher calls this with
-        ?ajax=1 and then reloads the current page itself, so we never redirect to a user-supplied
-        URL (no open-redirect surface); a plain GET just lands on the dashboard.
+        """Switch the UI language.
+
+        Saved to the session, and to the user's profile when logged in (so it follows them across
+        devices). Usable pre-login too. The switcher calls this with ?ajax=1 and then reloads the
+        current page itself, so we never redirect to a user-supplied URL (no open-redirect surface);
+        a plain GET just lands on the dashboard.
 
         The PROFILE write needs POST. csrf.protect() is a no-op on safe methods, so while this was
         GET-only any cross-site page could permanently change a logged-in admin's stored UI
         language with <img src="https://panel/set-language/zh">. The session half stays on GET —
         it is per-session and transient, and the switcher on the login page has no token to send —
-        but nothing cross-site gets to write the user row."""
+        but nothing cross-site gets to write the user row.
+        """
         lang = i18n.normalize_lang(lang)
         session["lang"] = lang
         saved = True
@@ -442,9 +449,12 @@ def register(app):
 
     @app.route("/api/i18n/<lang>")
     def api_i18n_catalog(lang):
-        """The {english: translated} catalog for a language, so the switcher can re-translate the page
-        live without a reload. Public (the switcher is on the login page too) and non-sensitive — it's
-        only UI strings, the same map already embedded in every rendered page for the current language."""
+        """The {english: translated} catalog for a language.
+
+        It lets the switcher re-translate the page live without a reload. Public (the switcher is on
+        the login page too) and non-sensitive — it's only UI strings, the same map already embedded
+        in every rendered page for the current language.
+        """
         resp = jsonify(i18n.catalog(i18n.normalize_lang(lang)))
         resp.headers["Cache-Control"] = "public, max-age=300"   # catalogs change only on deploy
         return resp
@@ -589,18 +599,23 @@ def register(app):
     @app.route("/api/auth/ping")
     @login_required
     def api_auth_ping():
-        """Cheapest possible "am I still signed in?" — no DB work beyond the loader that already
-        ran. Pages ask on wake-up (tab refocused, restored from the back/forward cache), because a
-        page restored from that cache is a photograph of a signed-in panel and cannot know on its
-        own that the cookie died while it was away. When it has, @login_required answers 401 and
-        the client's global handler moves the tab to the login screen."""
+        """Cheapest possible "am I still signed in?" — no DB work beyond the loader that already ran.
+
+        Pages ask on wake-up (tab refocused, restored from the back/forward cache), because a page
+        restored from that cache is a photograph of a signed-in panel and cannot know on its own
+        that the cookie died while it was away. When it has, @login_required answers 401 and the
+        client's global handler moves the tab to the login screen.
+        """
         return jsonify({"success": True, "user": current_user.username})
 
     @app.route("/api/account/sessions")
     @login_required
     def api_account_sessions():
-        """This user's active login sessions (devices), newest-active first, with the current one
-        flagged. Scoped to current_user — a user only ever sees or manages their own sessions."""
+        """List the user's active login sessions (devices), newest-active first.
+
+        The current one is flagged. Scoped to current_user — a user only ever sees or manages their
+        own sessions.
+        """
         from panel.db.models import UserSession, prune_expired_sessions
         # Sweep first. A row outlives its cookie by nothing — but it used to outlive it by up to
         # 45 days, which is how a session that expired last week still sat on this page labelled
@@ -631,8 +646,11 @@ def register(app):
     @app.route("/api/account/sessions/<int:sess_id>/revoke", methods=["POST"])
     @login_required
     def api_account_session_revoke(sess_id):
-        """Revoke ONE login session by deleting its registry row (scoped to current_user, so you can
-        never revoke another account's session). If it's the current device, log out too."""
+        """Revoke ONE login session by deleting its registry row.
+
+        Scoped to current_user, so you can never revoke another account's session. If it's the
+        current device, log out too.
+        """
         from panel.db.models import UserSession
         row = UserSession.query.filter_by(id=sess_id, user_id=current_user.id).first()
         if not row:

@@ -125,6 +125,7 @@ def register(app):
     @permission_required(MANAGE_REMOTES)
     def api_remote_tailscale_bootstrap(remote_id):
         """Authenticate and configure Tailscale on the remote VPS.
+
         Requires a Tailscale pre-auth key.
         """
         remote = get_remote(remote_id)

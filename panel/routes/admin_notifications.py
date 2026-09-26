@@ -365,7 +365,8 @@ def register(app):
         alternative it replaces is an admin inventing a username and relaying a generated password
         over chat — a working credential sitting in a third place from the moment it exists. This
         carries no credential: the person opens it once, picks their own name and password, and the
-        link dies."""
+        link dies.
+        """
         hours = _int_or(request.form.get("hours"), Invite.INVITE_TTL_HOURS)
         hours = max(1, min(int(hours), 24 * 30))        # an hour to a month
         want_super = request.form.get("is_superadmin") == "on"
@@ -395,7 +396,8 @@ def register(app):
 
         Without this, a link sent to the wrong address could only be waited out — and the TTL goes
         up to 30 days. Redeemed invites are left alone: the account already exists, so there is
-        nothing to take back and the row is the only record of where it came from."""
+        nothing to take back and the row is the only record of where it came from.
+        """
         inv = db.session.get(Invite, invite_id)
         if inv is None:
             return _form_err("That invite no longer exists.", "manage_users", code=404)
@@ -430,7 +432,8 @@ def register(app):
         """Create your own account from a one-time link. NO login required — that is the point.
 
         The invite decides what the account gets (groups, superadmin); the person decides only
-        their username and password. Anything else would be a privilege they awarded themselves."""
+        their username and password. Anything else would be a privilege they awarded themselves.
+        """
         inv = Invite.by_token(token)
         # An invite is a delegation, and it must not outlive the authority behind it: an admin who
         # is offboarded — demoted, deactivated, deleted — would otherwise leave live invites behind

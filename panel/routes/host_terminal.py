@@ -98,7 +98,8 @@ def _terminal_still_permitted(uid, cred, remote_id):
     token's hash). Asked of what term_open recorded, because the sweep has no request.
 
     RAISES when it cannot look. load_user answers a locked database with None, and closing a live
-    shell — and whatever is running in it — on a transient lock is not the same as revoking it."""
+    shell — and whatever is running in it — on a transient lock is not the same as revoking it.
+    """
     from panel.db.models import User, db
     from panel.routes.server_files import _credential_still_valid
     user = db.session.get(User, uid) if uid is not None else None
@@ -115,7 +116,8 @@ def revoked_terminal_sids(only_sid=None):
     """[(sid, user or None)] for every open shell whose owner may no longer have it.
 
     A positive "no" only: a socket whose owner could not be checked is left alone this time and
-    asked again on the next sweep. Must run inside an app context. Never raises."""
+    asked again on the next sweep. Must run inside an app context. Never raises.
+    """
     from panel.db.models import User, db
     with _sid_lock:
         owners = {s: (o, _sid_host.get(s)) for s, o in _sid_owner.items()
@@ -138,7 +140,8 @@ def _close_and_audit(app, sid, reason, user=None):
     """Tear a socket's shell down and write the closing audit row.
 
     `user` is whom to record. None means the request's own user, when there is a request and it
-    is authenticated; the revocation sweep has no request and names the owner itself."""
+    is authenticated; the revocation sweep has no request and names the owner itself.
+    """
     # TEAR DOWN FIRST, and never on the strength of the audit bookkeeping. _sid_host[sid] is
     # written AFTER open_session returns, while the session itself is registered (and counting
     # against the per-user limit) BEFORE the transport is opened — and paramiko's connect can
@@ -171,7 +174,8 @@ def sweep_revoked_terminals(app, socketio, only_sid=None):
     runs for it: an admin revoking a user's sessions, deactivating them or taking use_terminal
     away left the output of that shell — usually root, on a remote — streaming to the revoked
     browser until the idle sweeper reaped it fifteen minutes later. So this runs on a timer as
-    well as from the event handlers. Module level so a test can drive it directly."""
+    well as from the event handlers. Module level so a test can drive it directly.
+    """
     closed = 0
     for sid, user in revoked_terminal_sids(only_sid):
         try:
@@ -190,8 +194,11 @@ def register(app, socketio, supervise):
     @login_required
     @permission_required(USE_TERMINAL)
     def host_terminal(remote_id):
-        """A shell on one host. get_remote() enforces per-host access (and 404s), which is also
-        what rbac_test's <remote_id> sweep requires to see."""
+        """A shell on one host.
+
+        get_remote() enforces per-host access (and 404s), which is also what rbac_test's <remote_id>
+        sweep requires to see.
+        """
         remote = get_remote(remote_id)
         if not may_shell_on(current_user, remote):
             return _deny(LOCAL_HOST_REFUSAL, 403)
@@ -279,7 +286,8 @@ def register(app, socketio, supervise):
 
         Refusing the event is not enough: the shell stays up and its output keeps streaming to
         this socket. Ask whether the access is really gone — a locked database also makes
-        current_user anonymous — and close the shell if it is."""
+        current_user anonymous — and close the shell if it is.
+        """
         sweep_revoked_terminals(app, socketio, only_sid=sid)
 
     @socketio.on("term_input")

@@ -17,9 +17,11 @@ def register(app):
     @login_required
     @permission_required(MANAGE_REMOTES)
     def api_remote_bootstrap(remote_id):
-        """Kick off a fresh-VPS bootstrap in the background: updates, essential
-        packages, UFW, SSH hardening, swap, fail2ban, LinuxGSM user, then reboot.
-        Returns immediately; poll /bootstrap-status for live progress."""
+        """Kick off a fresh-VPS bootstrap in the background.
+
+        It runs updates, essential packages, UFW, SSH hardening, swap, fail2ban, LinuxGSM user, then
+        reboot. Returns immediately; poll /bootstrap-status for live progress.
+        """
         remote = get_remote(remote_id)
         refused = _refuse_on_panel_host(remote, "VPS bootstrap")
         if refused:

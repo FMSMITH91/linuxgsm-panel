@@ -16,16 +16,20 @@ from app import (_cached_player_max, _cached_player_name, is_setup_complete)
 def register(app):
     @app.route("/robots.txt")
     def robots_txt():
-        """Tell well-behaved crawlers not to index the panel. Advisory only (the
-        X-Robots-Tag header is the enforceable part), but keeps the management UI
-        out of search results."""
+        """Tell well-behaved crawlers not to index the panel.
+
+        Advisory only (the X-Robots-Tag header is the enforceable part), but keeps the management UI
+        out of search results.
+        """
         return Response("User-agent: *\nDisallow: /\n", mimetype="text/plain")
 
     @app.route("/healthz")
     def healthz():
-        """Unauthenticated liveness probe for monitors / an external watchdog. Confirms
-        the process is serving AND the database is reachable; returns no sensitive data.
-        A hung/deadlocked worker or a wedged DB makes this fail, so a watchdog can act."""
+        """Unauthenticated liveness probe for monitors / an external watchdog.
+
+        Confirms the process is serving AND the database is reachable; returns no sensitive data. A
+        hung/deadlocked worker or a wedged DB makes this fail, so a watchdog can act.
+        """
         try:
             db.session.execute(text("SELECT 1"))
             return jsonify({"status": "ok"}), 200

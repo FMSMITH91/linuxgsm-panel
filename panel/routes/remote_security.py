@@ -32,7 +32,8 @@ def _panel_bind_is_public(bind):
     had its port's allow rule deleted and was reported "kept tailnet-only": the panel restarted
     onto an address UFW's default-deny then shut, on the route that promises to refuse anything
     leaving the panel unreachable. Loopback and Tailscale addresses are the ones that really are
-    reached without a public rule; anything else is reached on its port and needs it open."""
+    reached without a public rule; anything else is reached on its port and needs it open.
+    """
     b = (bind or "").strip()
     if b == "localhost":
         return False
@@ -116,7 +117,8 @@ def register(app):
         Turning it on or off is PER HOST, which is what MANAGE_REMOTES is for. The THRESHOLD is
         install-wide — the panel-host sibling that writes it is @superadmin_required — so a host
         admin scoped to one VPS could move it for every host, to 3 (mass-blocking) or to a huge
-        value (disabling it everywhere). Confirmed by driving both routes as such a user."""
+        value (disabling it everywhere). Confirmed by driving both routes as such a user.
+        """
         remote = get_remote(remote_id)
         enabled = bool(_json_body().get("enabled"))
         if current_user.is_superadmin:
@@ -137,7 +139,8 @@ def register(app):
         access check — and the panel-host sibling that writes the same list is
         @superadmin_required. At MANAGE_REMOTES a host admin scoped to one VPS could make any
         address permanently exempt from fail2ban bans and UFW auto-blocks everywhere, and lift any
-        ban it already had, including on the panel host they have no rights to."""
+        ban it already had, including on the panel host they have no rights to.
+        """
         get_remote(remote_id)
         return _whitelist_mutate(app, _json_body())
 
@@ -181,13 +184,15 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_change_port():
-        """Change where the panel's web server listens: its bind address and/or port. Saves the
-        new binding, brings the firewall in line (a publicly-bound panel needs its port open; a
-        loopback/tailnet-bound one doesn't, and a changed port's old rule is removed), then
+        """Change where the panel's web server listens: its bind address and/or port.
+
+        Saves the new binding, brings the firewall in line (a publicly-bound panel needs its port
+        open; a loopback/tailnet-bound one doesn't, and a changed port's old rule is removed), then
         restarts the panel so it rebinds (on restart it re-points Tailscale Serve at the current
-        port). Refuses anything that would leave the panel unreachable: a port outside 1024-65535
-        / already in use / used by a local game server, a bind address that isn't a valid IP or
-        isn't on this host, or a loopback-only bind without Tailscale Serve to proxy to it."""
+        port). Refuses anything that would leave the panel unreachable: a port outside 1024-65535 /
+        already in use / used by a local game server, a bind address that isn't a valid IP or isn't
+        on this host, or a loopback-only bind without Tailscale Serve to proxy to it.
+        """
         import ipaddress
         data = _json_body()
         cfg = load_config()

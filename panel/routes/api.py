@@ -38,9 +38,12 @@ def register(app):
     @app.route("/api/dashboard/metrics")
     @login_required
     def api_dashboard_metrics():
-        """Live resource metrics for the dashboard / manage pages: per-server game CPU%/RAM/uptime,
-        and per-host whole-VPS CPU%/RAM%/disk%/uptime. Each server is one cached SSH sample, taken in
-        parallel; polled on a slower cadence than the status feed so it stays cheap."""
+        """Live resource metrics for the dashboard / manage pages.
+
+        Per-server game CPU%/RAM/uptime, and per-host whole-VPS CPU%/RAM%/disk%/uptime. Each server
+        is one cached SSH sample, taken in parallel; polled on a slower cadence than the status feed
+        so it stays cheap.
+        """
         servers = get_user_servers(current_user)
         # One pass over the rows already in hand: the hosts are joinedloaded, so naming them and
         # answering "is this host local?" below costs no further queries.
@@ -106,8 +109,11 @@ def register(app):
     @login_required
     @server_access_required
     def api_server_history(server_id):
-        """Down-sampled CPU/RAM/player time series for the history charts (range=24h|7d), plus the
-        host's CPU/RAM/disk over the same window. Capped to ~240 points so the chart stays light."""
+        """Down-sampled CPU/RAM/player time series for the history charts (range=24h|7d).
+
+        The host's CPU/RAM/disk over the same window comes with it. Capped to ~240 points so the
+        chart stays light.
+        """
         gs = get_game(server_id)
         rng = "7d" if request.args.get("range") == "7d" else "24h"
         since = utcnow() - timedelta(hours=(168 if rng == "7d" else 24))
@@ -144,8 +150,11 @@ def register(app):
     @login_required
     @permission_required(INSTALL_SERVER, MANAGE_SERVERS)
     def api_free_port():
-        """Suggest a non-colliding port for installing <game> on <remote_id> near <desired>, so the
-        install form can show a free port up front (the install resolves one anyway). Read-only."""
+        """Suggest a non-colliding port for installing <game> on <remote_id> near <desired>.
+
+        The install form can then show a free port up front (the install resolves one anyway).
+        Read-only.
+        """
         try:
             remote_id = int(request.args.get("remote_id") or 0)
             desired = int(request.args.get("desired") or 0)
@@ -384,8 +393,11 @@ def register(app):
     @login_required
     @server_access_required
     def api_server_stats(server_id):
-        """Fast live metrics for polling: VPS CPU/RAM/disk/uptime + the game's RAM
-        and a port-based online check + the public connect address."""
+        """Fast live metrics for polling.
+
+        VPS CPU/RAM/disk/uptime + the game's RAM and a port-based online check + the public connect
+        address.
+        """
         gs = get_game(server_id)
         remote = gs.remote
         try:
@@ -471,7 +483,8 @@ def register(app):
         second tab or a reload is free.
 
         A host that can't be reached is an expected condition here too (see api_server_stats), so
-        it answers 200 with an empty label rather than a 500 on a page that is otherwise fine."""
+        it answers 200 with an empty label rather than a 500 on a page that is otherwise fine.
+        """
         gs = get_game(server_id)
         try:
             info = _sm.game_version(gs.remote, gs.short_name, game_type=gs.game_type,
@@ -594,7 +607,8 @@ def register(app):
 
         The same permission that owns installs, because _install_jobs is SHARED: popping the job
         clears the progress (or failure) card for every session watching that install, not just
-        the caller's. @server_access_required alone let anyone who could see the server do it."""
+        the caller's. @server_access_required alone let anyone who could see the server do it.
+        """
         if not (current_user.is_superadmin
                 or has_permission(current_user, INSTALL_SERVER)
                 or has_permission(current_user, MANAGE_SERVERS)):

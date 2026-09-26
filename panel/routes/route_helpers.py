@@ -23,7 +23,8 @@ def wizard_credential(auth_method, raw):
     A key path is expanded. The form offers "~/.ssh/id_rsa" (the panel account's own key), and
     paramiko opens key_filename exactly as given, with no expanduser, so the literal tilde named a
     file that never exists: every key-auth attempt with the default failed, reported as "check the
-    host, port, credentials", and the wizard refused to add the host."""
+    host, port, credentials", and the wizard refused to add the host.
+    """
     cred = (raw or "").strip()
     if auth_method == "key" and cred.startswith("~"):
         cred = os.path.expanduser(cred)
@@ -34,8 +35,10 @@ def register(app):
     @app.before_request
     def check_setup():
         """Redirect to setup if not complete (except for setup pages and static).
-        Until setup is finished there are no users, so every other page — including
-        the login page and the dashboard root — funnels into the setup wizard."""
+
+        Until setup is finished there are no users, so every other page — including the login page
+        and the dashboard root — funnels into the setup wizard.
+        """
         # The wizard's own AJAX lives under /api/setup/* — it must NOT be redirected to
         # /setup or the JS gets an HTML redirect instead of JSON ("Could not check
         # Tailscale status"). Those endpoints self-guard with _setup_open() (403 once

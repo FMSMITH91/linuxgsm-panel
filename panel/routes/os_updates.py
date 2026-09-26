@@ -26,7 +26,8 @@ def _os_update_seeds(remote, seeding, first_read):
     answer THAT sweep (rebooting, apt locked) got no entry, read (0, 0) on the next day's sweep,
     and had the list it already had before the restart — already announced — announced again. Any
     host's first reading in this process seeds, unless the host was added after the process
-    started: its first batch is news to everyone."""
+    started: its first batch is news to everyone.
+    """
     if seeding:
         return True
     if not first_read:
@@ -40,7 +41,8 @@ def register(app, supervise):
         """Check every reachable host once a day and alert when updates appear. Never raises.
 
         Pushes its own app context: the update-check ticker runs in a bare thread and doesn't have
-        one, and this is the only DB-touching thing on it."""
+        one, and this is the only DB-touching thing on it.
+        """
         try:
             now = time.time()
             if not force and now - _os_update_state["last_run"] < _OS_UPDATE_EVERY:

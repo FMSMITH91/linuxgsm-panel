@@ -31,9 +31,12 @@ _PROBE_MARKER = "LGSM_SCAN_OK"
 
 
 def _host_answered(remote):
-    """True when the host answered a trivial command, so an empty scan really does mean 'nothing
-    here'. False when the panel could not reach it — paramiko raises, while the tailscale and
-    local transports return ("", "…timed out", -1) without raising."""
+    """True when the host answered a trivial command.
+
+    Only then does an empty scan really mean 'nothing here'. False when the panel could not reach it
+    — paramiko raises, while the tailscale and local transports return ("", "…timed out", -1)
+    without raising.
+    """
     try:
         out, _err, rc = run_command(remote, "echo %s" % _PROBE_MARKER, timeout=15, sudo=False)
     except Exception:
@@ -42,14 +45,17 @@ def _host_answered(remote):
 
 
 def _enrol_imported(remote, users):
-    """Put each imported account inside the panel's grant — the step create_game_user takes for an
-    account the panel makes — and return the ones the helper would not take, with its reason.
+    """Put each imported account inside the panel's grant; return the ones refused.
+
+    This is the step create_game_user takes for an account the panel makes. The ones the helper
+    would not take come back with its reason.
 
     Without it, on a narrow-grant install the helper refuses every per-account verb for an imported
     server (start, stop, update, downloads, the command-list read) until the next root install.sh
     run, and nothing says why. The helper still refuses an account that can already reach root;
     that refusal is REPORTED to the importer rather than left for each later action to trip over.
-    Runs BEFORE the background command-list read, which needs the membership it grants."""
+    Runs BEFORE the background command-list read, which needs the membership it grants.
+    """
     out = []
     for user in users:
         reason = enrol_game_user(remote, user)
@@ -63,8 +69,11 @@ def register(app):
     @login_required
     @permission_required(MANAGE_SERVERS)
     def api_remote_discover(remote_id):
-        """Scan a host for LinuxGSM servers already installed under any user account and return
-        the ones NOT yet in the panel, mapped to a known game. Read-only — imports nothing."""
+        """Find the LinuxGSM servers installed on a host that are NOT yet in the panel.
+
+        It scans under any user account and returns each one mapped to a known game. Read-only —
+        imports nothing.
+        """
         if not (current_user.is_superadmin or can_access_remote(current_user, remote_id)):
             return jsonify({"error": "You don't have access to that host."}), 403
         remote = get_remote(remote_id)
@@ -122,9 +131,12 @@ def register(app):
     @login_required
     @permission_required(MANAGE_SERVERS)
     def api_remote_import(remote_id):
-        """Create panel records for selected discovered servers. Each user/game_type is validated
-        with the SAME strict rules as a fresh install (so an imported short_name can never carry
-        shell metacharacters), and duplicates/unknowns are skipped."""
+        """Create panel records for selected discovered servers.
+
+        Each user/game_type is validated with the SAME strict rules as a fresh install (so an
+        imported short_name can never carry shell metacharacters), and duplicates/unknowns are
+        skipped.
+        """
         if not (current_user.is_superadmin or can_access_remote(current_user, remote_id)):
             return jsonify({"error": "You don't have access to that host."}), 403
         remote = get_remote(remote_id)

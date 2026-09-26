@@ -31,9 +31,12 @@ def register(app):
     @login_required
     @superadmin_required
     def server_management():
-        """Panel host management. The panel host is just the local remote, so it uses
-        the SAME template (and endpoints) as a remote server — only the panel-specific
-        extras (self-update, its own Tailscale SSH controls) differ, keyed on is_local."""
+        """Panel host management.
+
+        The panel host is just the local remote, so it uses the SAME template (and endpoints) as a
+        remote server — only the panel-specific extras (self-update, its own Tailscale SSH controls)
+        differ, keyed on is_local.
+        """
         local = RemoteServer.query.filter_by(is_local=True).first()
         if local is None:
             # Fresh install that never added the panel host as a manageable server —
@@ -121,7 +124,7 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_update_status():
-        """Is the LinuxGSM Panel itself behind its GitHub repo? (git-based check)"""
+        """Whether the LinuxGSM Panel itself is behind its GitHub repo (a git-based check)."""
         force = request.args.get("force") in ("1", "true", "yes")
         try:
             data = dict(so.panel_update_status(force=force))
@@ -149,7 +152,8 @@ def register(app):
 
         boot_id says WHICH process answered. The card finishes on a finished log only while that
         is still the process that started the update: then the installer ended without ever
-        restarting the panel (it stopped early, or held), and nothing else will tell it so."""
+        restarting the panel (it stopped early, or held), and nothing else will tell it so.
+        """
         try:
             data = dict(so.panel_update_log())
             data["boot_id"] = _BOOT_ID
@@ -184,8 +188,10 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_diagnostics():
-        """Fast local self-check of the panel's own health (integrity, DB, keys,
-        disk, cert, service). No SSH/network."""
+        """Fast local self-check of the panel's own health.
+
+        It covers integrity, DB, keys, disk, cert and service. No SSH/network.
+        """
         try:
             return jsonify(so.panel_diagnostics())
         except Exception:
@@ -208,8 +214,11 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_repair():
-        """Restore tampered panel files from git. Body: {"paths": [...]} to restore
-        specific reported files, or {} / omitted to restore all of them."""
+        """Restore tampered panel files from git.
+
+        Body: {"paths": [...]} to restore specific reported files, or {} / omitted to restore all of
+        them.
+        """
         data = _json_body()
         paths = data.get("paths")
         if paths is not None and not isinstance(paths, list):
@@ -261,10 +270,13 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_db_health():
-        """On-demand database integrity check — read-only PRAGMA integrity_check, which is
-        deeper than the fast quick_check the panel runs at startup. Reports healthy/flagged;
-        an actual repair is never done to the live file, it runs safely offline during an
-        update (or a restart), so this endpoint has no destructive side effects."""
+        """On-demand, read-only database integrity check.
+
+        It runs PRAGMA integrity_check, which is deeper than the fast quick_check the panel runs at
+        startup. Reports healthy/flagged; an actual repair is never done to the live file, it runs
+        safely offline during an update (or a restart), so this endpoint has no destructive side
+        effects.
+        """
         try:
             import db_maintenance
             ok, detail = db_maintenance.integrity_check(str(DB_PATH))
@@ -276,8 +288,11 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_repair_db():
-        """Repair a flagged database on-demand: a detached job stops the panel, rebuilds/restores the
-        DB offline (original copied aside first), and restarts. For when the health check fails."""
+        """Repair a flagged database on-demand.
+
+        A detached job stops the panel, rebuilds/restores the DB offline (original copied aside
+        first), and restarts. For when the health check fails.
+        """
         try:
             ok, msg = so.panel_repair_database()
             log_action(current_user, "panel_repair_db", target="database", detail=msg, success=ok)
@@ -350,8 +365,11 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_security_autoblock():
-        """Turn the rolling auto-block (attempts >= threshold over 7 days) on/off for the panel host,
-        and optionally update the shared threshold."""
+        """Turn the panel host's rolling auto-block on/off, optionally updating the threshold.
+
+        The auto-block acts on attempts >= threshold over 7 days, and the threshold is the shared
+        one.
+        """
         enabled = bool(_json_body().get("enabled"))
         rid = _local_remote_id()
         if rid is None:
@@ -367,9 +385,11 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_security_whitelist():
-        """Add or remove a global security-whitelist entry (IP or CIDR). Whitelisted addresses are
-        never fail2ban-banned (jail ignoreip) or UFW auto-blocked, and adding one lifts any ban/block
-        it already has."""
+        """Add or remove a global security-whitelist entry (IP or CIDR).
+
+        Whitelisted addresses are never fail2ban-banned (jail ignoreip) or UFW auto-blocked, and
+        adding one lifts any ban/block it already has.
+        """
         return _whitelist_mutate(app, _json_body())
 
     @app.route("/api/panel/security/unban", methods=["POST"])

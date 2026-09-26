@@ -43,8 +43,9 @@ def _forget_deleted_remote_state(remote_id, game_server_ids):
 
 
 def _forget_deleted_remote_config(remote_id, game_server_ids):
-    """Drop everything a deleted host left in config.json — its auto-block opt-in, and a backup
-    schedule for each game server that went with it.
+    """Drop everything a deleted host left in config.json.
+
+    That is its auto-block opt-in, and a backup schedule for each game server that went with it.
 
     These are the PERSISTED half of the same problem panel_state solves for in-memory maps: a
     deleted row's id is handed straight to the next INSERT, and unlike a cache these survive a
@@ -125,7 +126,8 @@ def _delegated_add_refusal(is_local, auth_method):
 
     The panel's own host is superadmin-only on every other path that creates or manages it
     (host_local.server_management); from here a delegated admin got a row outside all of their
-    groups and a message promising they could install on it."""
+    groups and a message promising they could install on it.
+    """
     if current_user.is_superadmin:
         return None
     if is_local:
@@ -153,7 +155,8 @@ def _delegated_retarget_refusal(remote, new_host, new_port, new_user, new_auth, 
     password. A new key PATH is the same move without touching the address — it picks which of
     the panel's own keys signs in — so it needs the same. Everything else on the form — the name,
     sudo, rotating the password in place — is unaffected. The panel's own row never leaves the
-    local transport whatever its host says (is_local_server), so it is not a retarget."""
+    local transport whatever its host says (is_local_server), so it is not a retarget.
+    """
     if current_user.is_superadmin or remote.is_local:
         return None
     moved = (new_host, new_port, new_user, new_auth) != (remote.host, remote.port,

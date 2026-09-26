@@ -49,8 +49,10 @@ _install_alloc_lock = threading.Lock()
 
 def _account_not_resolvable_yet(text, user):
     """True when sudo could not resolve an account created a moment ago (the install retries).
-    Classic sudo says "unknown user x"; sudo-rs, which is /usr/bin/sudo on Ubuntu 26.04, says
-    "user 'x' not found" — and the retry never fired there."""
+
+    Classic sudo says "unknown user x"; sudo-rs, which is /usr/bin/sudo on Ubuntu 26.04, says "user
+    'x' not found" — and the retry never fired there.
+    """
     return "unknown user" in text or ("user '%s' not found" % user) in text
 
 def scpsl_eula_payload():
@@ -217,6 +219,7 @@ def host_account_state(remote, name):
 
 def prepare_install_account(remote, remote_id, short_name, fresh):
     """Step 1 of the install job: make sure the game account is one the panel may install into.
+
     -> (ok, reason, retryable). Nothing is deleted unless this process created the account.
 
     `fresh` is a first install, which the route only lets through for a name with NO account on
@@ -530,8 +533,10 @@ def register(app):
     def _run_install_job(gs_id, remote_id, short_name, game_type, lgsm_name, final_port, content_games=None,
                          fresh=False):
         """Full game-server install as a tracked background job with step progress.
+
         Steps (8, or 9 for GMod-with-content): user → LinuxGSM → deps → game files → config →
-        port/firewall → autostart → [GMod content] → start. Progress → _install_jobs[gs_id]."""
+        port/firewall → autostart → [GMod content] → start. Progress → _install_jobs[gs_id].
+        """
         content_games = content_games or []
         _app = app
 
