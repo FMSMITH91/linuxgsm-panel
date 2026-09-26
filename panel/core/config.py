@@ -79,7 +79,8 @@ class ConfigUnreadable(Exception):
     here is read-modify-write, and a read of an unusable file returns bare DEFAULT_CONFIG; saving
     that replaced the operator's config with the defaults plus one key — the encrypted backup
     passphrase, the login whitelist, the notification tokens, the bind and the port all gone, on
-    the next background tick after one trailing comma in a hand edit."""
+    the next background tick after one trailing comma in a hand edit.
+    """
 
 
 class UnreadableConfig(dict):
@@ -90,7 +91,8 @@ class UnreadableConfig(dict):
     caller that must not act on defaults (the backup passphrase, the health check) can ask
     is_unreadable() instead of reading "not configured" out of a file it could not read. Carried
     on the value rather than re-checked on disk, because the read that failed may have been a
-    transient OSError that a second look would not see."""
+    transient OSError that a second look would not see.
+    """
 
 
 def is_unreadable(cfg):
@@ -102,7 +104,8 @@ def config_unreadable():
     """True when config.json EXISTS on disk now but does not parse into an object.
 
     Not "load_config would return defaults": a host with no config.json yet is a normal state and
-    defaults really are the answer there."""
+    defaults really are the answer there.
+    """
     try:
         with open(CONFIG_FILE) as f:
             return not isinstance(json.load(f), dict)
@@ -176,9 +179,11 @@ def save_config(config):
 
 
 def update_config(mutator):
-    """Atomically read-modify-write config under the write lock, so concurrent writers (HTTP
-    handlers + background worker threads) can't lose each other's changes. `mutator(cfg)` mutates
-    the dict in place. Returns the saved config."""
+    """Atomically read-modify-write config under the write lock.
+
+    The lock means concurrent writers (HTTP handlers + background worker threads) can't lose each
+    other's changes. `mutator(cfg)` mutates the dict in place. Returns the saved config.
+    """
     with _write_lock:
         cfg = load_config()
         if is_unreadable(cfg):
@@ -199,11 +204,14 @@ def _chmod600(path):
 
 
 def _create_key_once(path, gen_bytes):
-    """Create `path` (mode 0600) containing gen_bytes() EXACTLY once, even if several threads
-    or processes race to create it on a fresh install. O_EXCL makes the create atomic: only one
-    caller wins; everyone else gets FileExistsError and falls through to read the winner's key.
-    This prevents two callers each generating a different key and clobbering the other — which,
-    for cred_key, would silently make already-encrypted secrets undecryptable."""
+    """Create `path` (mode 0600) containing gen_bytes() EXACTLY once.
+
+    That holds even if several threads or processes race to create it on a fresh install. O_EXCL
+    makes the create atomic: only one caller wins; everyone else gets FileExistsError and falls
+    through to read the winner's key. This prevents two callers each generating a different key
+    and clobbering the other — which, for cred_key, would silently make already-encrypted secrets
+    undecryptable.
+    """
     try:
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
@@ -240,10 +248,12 @@ def _cred_fernet():
 
 
 def encrypt_secret(plaintext):
-    """Encrypt a secret (SSH password / key path) for storage in panel.db so a leaked
-    DB file doesn't hand over every remote's credentials. Empty stays empty. The key
-    lives in data/cred_key (chmod 600), separate from the Flask secret_key so rotating
-    the session key never orphans stored creds."""
+    """Encrypt a secret (SSH password / key path) for storage in panel.db.
+
+    Encrypted so a leaked DB file doesn't hand over every remote's credentials. Empty stays empty.
+    The key lives in data/cred_key (chmod 600), separate from the Flask secret_key so rotating the
+    session key never orphans stored creds.
+    """
     if not plaintext:
         return ""
     if is_encrypted(plaintext):
@@ -252,8 +262,11 @@ def encrypt_secret(plaintext):
 
 
 def decrypt_secret(value):
-    """Decrypt a stored secret. Legacy plaintext values (no prefix) are returned as-is
-    so existing installs keep working until migrated."""
+    """Decrypt a stored secret.
+
+    Legacy plaintext values (no prefix) are returned as-is so existing installs keep working until
+    migrated.
+    """
     if not value:
         return ""
     if is_encrypted(value):
@@ -273,7 +286,8 @@ def _is_fernet_token(blob):
     original key. Structure is knowable without the key; decryptability is not.
 
     Fernet layout: 0x80 | 8-byte timestamp | 16-byte IV | AES-CBC ciphertext (16-byte blocks) |
-    32-byte HMAC, base64url-encoded. 57 = 1 + 8 + 16 + 32, i.e. everything but the ciphertext."""
+    32-byte HMAC, base64url-encoded. 57 = 1 + 8 + 16 + 32, i.e. everything but the ciphertext.
+    """
     try:
         raw = base64.urlsafe_b64decode(blob.encode("ascii"))
     except Exception:
@@ -288,17 +302,20 @@ def is_encrypted(value):
     ciphertext and stored verbatim — in plaintext, by the one function whose job is to prevent
     that — and then decrypted to "" forever, so the credential was both exposed and broken.
     Requiring the remainder to be shaped like a Fernet token closes that, and makes decrypt_secret
-    hand such a value back unchanged (it is legacy plaintext) instead of losing it."""
+    hand such a value back unchanged (it is legacy plaintext) instead of losing it.
+    """
     return (bool(value) and value.startswith(_ENC_PREFIX)
             and _is_fernet_token(value[len(_ENC_PREFIX):]))
 
 
 def harden_data_permissions():
-    """Tighten filesystem permissions on the data dir and every file in it that holds sensitive
-    data. Idempotent — call it on every startup so existing installs are locked down too. The
+    """Tighten filesystem permissions on the data dir and every file in it that holds secrets.
+
+    Idempotent — call it on every startup so existing installs are locked down too. The
     0700 on data/ is the real guard (another local user can't enter it at all); the per-file 0600s
     are defence in depth for the case a file is ever copied out of the dir. Best-effort: a chmod
-    failure (e.g. odd filesystem) is logged, never fatal."""
+    failure (e.g. odd filesystem) is logged, never fatal.
+    """
     targets = [(DATA_DIR, 0o700), (DB_PATH, 0o600), (CONFIG_FILE, 0o600),
                (SECRET_FILE, 0o600), (CRED_KEY_FILE, 0o600),
                # SQLite's WAL/SHM side files carry the same rows as the DB.
