@@ -50,6 +50,9 @@ permissions:
 
 jobs:
   upload:
+    # The panel's update check ignores this job's check run BY THIS NAME (system_ops._CI_IGNORE;
+    # tests/unit ties the two): GitHub files it under main's newest commit, for a pull request's
+    # run too, and an upload that failed says nothing about that commit.
     name: Upload coverage to Codacy
     # A CI run of THIS repository, for a push or a pull request, that was not cancelled or skipped
     # (a failed test does not stop the coverage job: it measures, the matrix decides). A push counts

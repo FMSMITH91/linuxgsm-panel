@@ -883,7 +883,12 @@ def _repo_slug():
 _CI_BAD = {"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"}
 # Checks that don't gate the update-offer: `deploy` is the deployment action itself (gating on
 # it would be circular, and it only exists when auto-deploy is enabled), not a verification.
-_CI_IGNORE = {"deploy"}
+# "Upload coverage to Codacy" (codacy-coverage.yml) sends a report somewhere; it verifies nothing.
+# Both are workflow_run jobs, and GitHub files a workflow_run job's check run under main's NEWEST
+# commit even when the run is for a pull request, so without this a PR whose coverage upload
+# failed (no artifact, a Codacy outage, an expired token) marked main's tip failing, and no panel
+# was offered it until the next merge. tests/unit ties this name to the workflow's job name.
+_CI_IGNORE = {"deploy", "Upload coverage to Codacy"}
 
 
 def _remote_ci_state(sha):

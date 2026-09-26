@@ -1448,6 +1448,29 @@ try:
                        '{"name":"deploy","status":"in_progress","conclusion":null}]}')
     _so.urllib.request.urlopen = _fake_open(_deploy_pending)
     eq("ci-gate: pending 'deploy' is ignored -> passing", _so._remote_ci_state("a"*40), "passing")
+    # The Codacy upload is a workflow_run job too, and its check run lands on main's newest commit
+    # for a pull request's run as well: one PR's failed upload must not hold main's tip back.
+    _cc_runs = ('{"check_runs":[{"name":"checks","status":"completed","conclusion":"success"},'
+                '{"name":"Upload coverage to Codacy","status":"completed","conclusion":"failure"},'
+                '{"name":"Upload coverage to Codacy","status":"in_progress","conclusion":null}]}')
+    _so.urllib.request.urlopen = _fake_open(_cc_runs)
+    eq("ci-gate: a failed or running Codacy coverage upload is ignored -> passing",
+       _so._remote_ci_state("a"*40), "passing")
+    _so.urllib.request.urlopen = _fake_open(_cc_runs.replace('"name":"checks","status":"completed",'
+                                                             '"conclusion":"success"',
+                                                             '"name":"checks","status":"completed",'
+                                                             '"conclusion":"failure"'))
+    eq("ci-gate: ...while a real check failing beside it still fails (control)",
+       _so._remote_ci_state("a"*40), "failing")
+    # By NAME, so the name must be the job's: a renamed job would gate again, silently.
+    _cc_wf = "\n".join(_l for _l in open(os.path.join(_root, ".github", "workflows",
+                                                     "codacy-coverage.yml"), encoding="utf-8")
+                       .read().splitlines() if not _l.lstrip().startswith("#"))
+    import re as _cc_re
+    _cc_jobname = _cc_re.search(r"\n  upload:\n    name: (.+)\n", _cc_wf)
+    check("ci-gate: the name it ignores is codacy-coverage.yml's upload job's",
+          _cc_jobname is not None and _cc_jobname.group(1).strip() in _so._CI_IGNORE,
+          repr((_cc_jobname and _cc_jobname.group(1), sorted(_so._CI_IGNORE))))
     _so.urllib.request.urlopen = _fake_open('{"check_runs":[]}')
     eq("ci-gate: no checks yet -> pending", _so._remote_ci_state("a"*40), "pending")
 

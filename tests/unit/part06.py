@@ -4555,6 +4555,21 @@ check("codeql-alerts: the ref step takes HEAD_BRANCH from the workflow_run with 
       "compare it exactly",
       _cqa_env.get("HEAD_BRANCH") == "${{ github.event.workflow_run.head_branch }}"
       and "${HEAD_BRANCH" in _cqa_run, repr(_cqa_env))
+# ...and it judges MAIN only. Its pull-request arm filed each PR's result on main's newest commit
+# (a workflow_run job's check lands there, never on the PR), so a PR with open alerts marked main's
+# tip failing, and the panel's update gate stopped offering main's newest version. PRs are judged by
+# codeql.yml's pr-alerts, on the PR itself.
+_cqa_job_if = re.search(r"^    if: >-\n((?:      .*\n)+)", _cqa_raw, re.M)
+_cqa_if = " ".join(_cqa_job_if.group(1).split()) if _cqa_job_if else ""
+_cq_raw = open(os.path.join(_root, ".github", "workflows", "codeql.yml"), encoding="utf-8").read()
+check("codeql-alerts: the gate judges pushes to main (and manual runs) only, never a pull request's "
+      "run, whose result GitHub files on main's tip; codeql.yml judges PRs on the PR",
+      "github.event.workflow_run.event == 'push'" in _cqa_if
+      and "head_branch == 'main'" in _cqa_if and "pull_request" not in _cqa_if
+      and "pull_request" not in _cqa_run
+      and re.search(r"^  pr-alerts:\n    name: Open code-scanning alerts \(PR\)\n"
+                    r"    if: github\.event_name == 'pull_request'$", _cq_raw, re.M) is not None,
+      _cqa_if)
 _cqa_sb = _tempfile.mkdtemp(prefix="cqa-")
 try:
     os.makedirs(os.path.join(_cqa_sb, "bin"))
@@ -4585,12 +4600,9 @@ try:
           all(_v[0] == 0 and _v[1] == "true" and _v[2] is None
               and "is not exactly main; nothing was judged" in _v[3] for _v in _cqa_near.values()),
           repr(_cqa_near))
-    _cqa_pr = _cqa_case("workflow_run", "pull_request", "Main")
     _cqa_man = _cqa_case("workflow_dispatch", "", "", ref_name="feature")
-    check("codeql-alerts: ...while a pull request (any branch name) is judged at its merge ref, and "
-          "a manual run at the ref it was started on",
-          _cqa_pr[:3] == (0, "false", "refs/pull/42/merge")
-          and _cqa_man[:3] == (0, "false", "refs/heads/feature"), repr((_cqa_pr, _cqa_man)))
+    check("codeql-alerts: ...while a manual run is judged at the ref it was started on",
+          _cqa_man[:3] == (0, "false", "refs/heads/feature"), repr(_cqa_man))
 finally:
     _shutil.rmtree(_cqa_sb, ignore_errors=True)
 
@@ -4656,6 +4668,29 @@ check("codacy-coverage: the token is in the upload step's env and nowhere else; 
       and _cc_env.get("HEAD_BRANCH") == "${{ github.event.workflow_run.head_branch }}"
       and "run-id: ${{ github.event.workflow_run.id }}" in _cc_job
       and "sha256sum -c" in _cc_job, repr(_cc_env))
+# The step's bash is run below with its env handed in by this test, so the wiring into it is
+# proved only here: WR_EVENT decides whether the exact-main check runs at all (any other value and
+# a push from `Main` uploads), REPORT_DIR must be where the download put the artifact, and the
+# artifact must be the one CI's coverage job uploads, from the run that finished. None of this can
+# be exercised before merge: a workflow_run job runs main's copy of its file.
+_cc_dl = _cc_raw[_cc_raw.find("- name: Download the coverage report CI made"):
+                 _cc_raw.find("- name: Send coverage to Codacy")]
+_cc_dl_with = dict(re.findall(r"^\s+([a-z][a-z-]*): (\S.*)$", _cc_dl[_cc_dl.find("with:"):], re.M))
+_cc_up_name = re.search(r"uses: actions/upload-artifact@\S+[^\n]*\n\s+with:\n\s+name: (\S+)\n", _cov_job)
+check("codacy-coverage: the step reads the workflow_run's own event, and the report from where the "
+      "download put CI's coverage artifact, from that run",
+      _cc_env.get("WR_EVENT") == "${{ github.event.workflow_run.event }}"
+      and "uses: actions/download-artifact@" in _cc_dl
+      and _cc_up_name is not None and _cc_dl_with.get("name") == _cc_up_name.group(1)
+      and _cc_dl_with.get("run-id") == "${{ github.event.workflow_run.id }}"
+      and _cc_dl_with.get("github-token") == "${{ github.token }}"
+      and bool(_cc_env.get("REPORT_DIR")) and _cc_dl_with.get("path") == _cc_env.get("REPORT_DIR"),
+      repr((_cc_env.get("WR_EVENT"), _cc_env.get("REPORT_DIR"), _cc_dl_with)))
+# CI cancels a run when a newer push lands (cancel-in-progress), which is routine on a pull request,
+# and a cancelled coverage job left no artifact: without these the upload failed on the download.
+check("codacy-coverage: a cancelled or skipped CI run starts no upload",
+      "github.event.workflow_run.conclusion != 'cancelled'" in _cc_if
+      and "github.event.workflow_run.conclusion != 'skipped'" in _cc_if, _cc_if)
 _cc_run = _wf_run_block(_cc_raw, "Send coverage to Codacy")
 _cc_sb = _tempfile.mkdtemp(prefix="codacy-")
 try:
@@ -4683,15 +4718,19 @@ try:
                '</sources></coverage>\n')
     _cc_n = [0]
 
-    def _cc_case(report, event="push", branch="main", sha=_cc_sha, token="t0ken"):
+    def _cc_case(report, event="push", branch="main", sha=_cc_sha, token="t0ken", link=False):
         _cc_n[0] += 1
         _d = os.path.join(_cc_sb, "case%d" % _cc_n[0])
         _art, _rt = os.path.join(_d, "art"), os.path.join(_d, "rt")
         os.makedirs(_art)
         os.makedirs(_rt)
         if report is not None:
-            with open(os.path.join(_art, "coverage.xml"), "wb") as _fh:
+            # link: the artifact's coverage.xml is a symlink to a good report kept elsewhere.
+            _dst = os.path.join(_d if link else _art, "coverage.xml")
+            with open(_dst, "wb") as _fh:
                 _fh.write(report if isinstance(report, bytes) else report.encode())
+            if link:
+                os.symlink(_dst, os.path.join(_art, "coverage.xml"))
         _log = os.path.join(_d, "log")
         _p = _sh_sub.run(["bash", "-c", _cc_run], capture_output=True, text=True, env=dict(
             os.environ, PATH=_cc_bin + os.pathsep + os.environ["PATH"], CC_LOG=_log,
@@ -4737,6 +4776,30 @@ try:
           and "not a Cobertura report" in _cc_refused["not Cobertura"][3]
           and "is not a commit id" in _cc_refused["sha + line"][3],
           repr({_k: _v[:4] for _k, _v in _cc_refused.items()}))
+    # ...and cases nothing but the step's own guards stop. The DTD cases above name an EXTERNAL
+    # entity, which ElementTree refuses by itself ("undefined entity"), so they pass whether the
+    # refusal stops the run or only prints. These parse cleanly without it: a DOCTYPE naming an
+    # external DTD, and an internal entity. So does a report reached through a symlink, and a
+    # <coverage> root with no line-rate (Clover's root is <coverage> too).
+    _cc_decl = '<?xml version="1.0" ?>\n'
+    _cc_only = {
+        "external DTD": _cc_case(_cc_good.replace(
+            _cc_decl, _cc_decl + '<!DOCTYPE coverage SYSTEM "http://127.0.0.1:9/c.dtd">\n')),
+        "internal entity": _cc_case(_cc_good.replace(
+            _cc_decl, _cc_decl + '<!DOCTYPE coverage [<!ENTITY r "0.5">]>\n').replace(
+            'line-rate="0.5"', 'line-rate="&r;"')),
+        "symlink": _cc_case(_cc_good, link=True),
+        "no line-rate": _cc_case(_cc_good.replace(' line-rate="0.5"', '')),
+    }
+    check("codacy-coverage: a DTD that parses cleanly, a report reached through a symlink, or a "
+          "<coverage> that is not Cobertura is refused by the step itself",
+          _cc_decl in _cc_good and 'line-rate="0.5"' in _cc_good
+          and all(_v[0] != 0 and not _v[1] for _v in _cc_only.values())
+          and "declares a DTD or an entity" in _cc_only["external DTD"][3]
+          and "declares a DTD or an entity" in _cc_only["internal entity"][3]
+          and "holds no coverage.xml" in _cc_only["symlink"][3]
+          and "not a Cobertura report" in _cc_only["no line-rate"][3],
+          repr({_k: _v[:4] for _k, _v in _cc_only.items()}))
 finally:
     _shutil.rmtree(_cc_sb, ignore_errors=True)
 

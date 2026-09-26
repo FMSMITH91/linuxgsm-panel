@@ -904,6 +904,9 @@ regardless of this file — this changelog is for humans.
   repository settings a workflow cannot make, listed in that file's header: the environment's
   deployment rule (branch `main` only), the token as an environment secret, and the repository
   secret deleted. `.github/SECURITY.md` says what the token can do; it is more than an upload key.
+  The upload's check lands on main's newest commit even for a pull request's run (GitHub files
+  every `workflow_run` job there), so the panel's update check ignores it, as it ignores the
+  deploy: one pull request's failed upload no longer stops panels being offered main.
 - **The code-scanning gate judges main only for a run that was exactly main's.** Like the deploy
   before it, `codeql-alerts.yml` compared the run's branch with `main` the way GitHub compares
   strings, ignoring case and by short name, so a branch `Main` or a tag `main` pushed with its own
