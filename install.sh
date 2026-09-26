@@ -443,9 +443,33 @@ _ref_exists() {
 #     FETCH_HEAD alone, and the tracking ref stayed missing (or stale) for every read after it.
 #   * --no-tags: with a destination git would follow tags into the fetched history. Nothing here
 #     reads a tag.
+# Any arguments are extra fetch options (_fetch_branch_history passes --unshallow).
 _fetch_branch() {
-    _gitc fetch --quiet --no-tags origin \
+    _gitc fetch --quiet --no-tags "$@" origin \
         "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+}
+
+# _fetch_branch, bringing the branch's WHOLE history down when this clone is shallow (the installer
+# clones --depth 1). resolve_update_target decides on what this fetches, and fetch_code, which
+# unshallows first, then decides again; on a shallow clone the two saw different histories and
+# could disagree:
+#   * an older verified pin was not in the clone at all, so it read as "not verified" and the
+#     update held, warning that the pin was not on the branch, when it was;
+#   * a pin the fetch did bring in (a foxtrot push brings main's older line along with it) could
+#     not be seen to be HEAD's ancestor past the shallow boundary, so "never backwards" did not
+#     fire: resolve_update_target chose the pin, and fetch_code, unshallowed a moment later, kept
+#     HEAD. A snapshot and a restart that ended where they started.
+# Unshallowing adds history to the object store and changes nothing else: not the working tree,
+# not HEAD, no ref but the tracking ref, no config. So resolve_update_target stays read-only in the
+# sense it exists for: nothing it does needs a snapshot or a restart. It happens once (a complete
+# clone skips it) and for this branch only. If the deepening fetch fails the plain one is tried,
+# and the decision is made on the history there is, as before.
+_fetch_branch_history() {
+    if [ "$(_gitc rev-parse --is-shallow-repository 2>/dev/null)" = true ] \
+       && _fetch_branch --unshallow 2>/dev/null; then
+        return 0
+    fi
+    _fetch_branch
 }
 
 # Is commit $2 (a FULL id) on the FIRST-PARENT line of ref $3 — the branch's own history, not
@@ -497,12 +521,15 @@ _on_first_parent_line() {
 #         commits are still being checked — honoured ONLY on the branch's first-parent line, so a
 #         bogus value can never check out arbitrary or untracked code;
 #   stay  HEAD, which is on the branch and already contains that pin ("never backwards", below);
-#   hold  HEAD, because a pin WAS given and cannot be verified here, and HEAD is on the branch.
+#   hold  HEAD, which is on the branch, because a pin WAS given and moving to it is not safe:
+#         UPD_HOLD says why — "unverified" (the pin is not on the first-parent line here) or
+#         "sideways" (it is, but HEAD is neither its ancestor nor its descendant) — and
+#         UPD_HOLD_WHY says it in words, for the update's last line (update_noop_line).
 # Returns 1, with UPD_TARGET empty and UPD_ERR saying why, when the remote-tracking ref does not
 # exist, and when a pin that cannot be verified leaves no commit of the branch to stay at.
 _choose_update_target() {
     local _tracking="refs/remotes/origin/${DEFAULT_BRANCH}" _head=""
-    UPD_TARGET=""; UPD_WHY=""; UPD_PIN=""; UPD_ERR=""
+    UPD_TARGET=""; UPD_WHY=""; UPD_PIN=""; UPD_ERR=""; UPD_HOLD=""; UPD_HOLD_WHY=""
     if ! _ref_exists _gitc "${_tracking}" \
        || ! UPD_TARGET="$(_gitc rev-parse --verify --quiet "${_tracking}^{commit}" 2>/dev/null)"; then
         UPD_TARGET=""
@@ -534,7 +561,8 @@ _choose_update_target() {
         # when a foxtrot push has just taken it off the line (see _on_first_parent_line).
         UPD_PIN=""
         if [ -n "${_head}" ] && _gitc merge-base --is-ancestor "${_head}" "${_tracking}" 2>/dev/null; then
-            UPD_TARGET="${_head}"; UPD_WHY="hold"
+            UPD_TARGET="${_head}"; UPD_WHY="hold"; UPD_HOLD="unverified"
+            UPD_HOLD_WHY="the pinned commit ${PANEL_UPDATE_REF} could not be verified on ${DEFAULT_BRANCH}"
             return 0
         fi
         UPD_TARGET=""; UPD_WHY=""
@@ -545,25 +573,35 @@ _choose_update_target() {
         return 1
     fi
     UPD_TARGET="${UPD_PIN}"; UPD_WHY="pin"
-    # Never backwards. A pin this checkout already contains is not an update when the checkout is
-    # itself on the branch: stay put rather than reset backwards. The deploy pins each run to the
-    # commit whose CI passed, and those runs do not finish in push order (a re-run of an old
-    # commit's CI deploys it last). A HEAD that is NOT on the branch (a local commit) is still
-    # reset, as it always was.
+    # Never backwards, and never sideways: a checkout that is itself on the branch moves ONLY
+    # forward, to a pin it is an ancestor of. A HEAD that is NOT on the branch (a local commit, or
+    # no commit) is still reset to the pin, as it always was.
+    #   * Backwards. A pin this checkout already contains is not an update: stay put. The deploy
+    #     pins each run to the commit whose CI passed, and those runs do not finish in push order
+    #     (a re-run of an old commit's CI deploys it last).
+    #   * Sideways. After a foxtrot push (see _on_first_parent_line) a pin can be on the branch's
+    #     line and neither contain HEAD nor be contained by it: host at S1, main fast-forwarded to
+    #     X, a merge of S1 into another branch's O1, and the pin O1 — one the panel's update check
+    #     can offer while X is still in CI. Resetting to it dropped S1 and everything under it that
+    #     O1 does not have. The host holds instead, and says so; the next pin that contains it (X,
+    #     or anything after) moves it forward.
     #
     # "On the branch" is plain ANCESTRY for HEAD, where the pin needs the first-parent line. HEAD is
     # not being verified here — it is what the host already runs — and the only question is
-    # whether the pin would move it backwards. The first-parent test answered that wrongly after a
-    # foxtrot push (see _on_first_parent_line): a host deployed to main's tip S1, then main
-    # fast-forwarded onto a branch that had main merged in, leaves S1 reachable only through that
-    # merge's second parent, and a late deploy of an older commit still on the line reset the host
-    # BACKWARDS to it. Nor does ancestry keep a HEAD off the line for good (one put on a merged pull
-    # request's intermediate commit by hand, say): the next pin newer than HEAD is not its
-    # ancestor, so that update moves it forward.
-    if [ -n "${_head}" ] \
-       && _gitc merge-base --is-ancestor "${UPD_PIN}" "${_head}" 2>/dev/null \
-       && _gitc merge-base --is-ancestor "${_head}" "${_tracking}" 2>/dev/null; then
-        UPD_TARGET="${_head}"; UPD_WHY="stay"
+    # whether the pin would move it backwards or sideways. The first-parent test answered that
+    # wrongly after a foxtrot push: a host deployed to main's tip S1, then main fast-forwarded onto
+    # a branch that had main merged in, leaves S1 reachable only through that merge's second
+    # parent, and a late deploy of an older commit still on the line reset the host BACKWARDS to
+    # it. Nor does ancestry keep a HEAD off the line for good (one put on a merged pull request's
+    # intermediate commit by hand, say): the next pin newer than HEAD descends from it, so that
+    # update moves it forward.
+    if [ -n "${_head}" ] && _gitc merge-base --is-ancestor "${_head}" "${_tracking}" 2>/dev/null; then
+        if _gitc merge-base --is-ancestor "${UPD_PIN}" "${_head}" 2>/dev/null; then
+            UPD_TARGET="${_head}"; UPD_WHY="stay"
+        elif ! _gitc merge-base --is-ancestor "${_head}" "${UPD_PIN}" 2>/dev/null; then
+            UPD_TARGET="${_head}"; UPD_WHY="hold"; UPD_HOLD="sideways"
+            UPD_HOLD_WHY="the pinned commit ${UPD_PIN} is on ${DEFAULT_BRANCH} but does not contain this checkout, so moving to it would drop commits the checkout has"
+        fi
     fi
     return 0
 }
@@ -586,16 +624,22 @@ fetch_code() {
             || _gitc fetch --quiet --prune origin 2>/dev/null \
             || _fetch_branch
         # Where to is _choose_update_target's call — the same decision resolve_update_target made
-        # before the snapshot: the branch tip, a CI-verified pin on the branch's first-parent line,
-        # or HEAD itself when it is already past that pin, or when a pin was given that cannot be
-        # verified. The branch is read by its full name, and only once it is known to exist (see
-        # _ref_exists). When there is no safe target it stops, and says why.
+        # before the snapshot, on the same (whole) history: the branch tip, a CI-verified pin on
+        # the branch's first-parent line, or HEAD itself when it is already past that pin, or when
+        # moving to the pin given is not safe. The branch is read by its full name, and only once
+        # it is known to exist (see _ref_exists). When there is no safe target it stops, and says
+        # why.
         _choose_update_target || die "${UPD_ERR}
      Nothing was reset."
         case "${UPD_WHY}" in
             pin) echo "  Updating to verified commit ${UPD_TARGET}" ;;
             stay) echo "  Keeping ${UPD_TARGET}: it is on ${DEFAULT_BRANCH} and already contains the verified commit ${UPD_PIN}" ;;
-            hold) echo "  Keeping ${UPD_TARGET}: the pinned commit ${PANEL_UPDATE_REF} is not on ${DEFAULT_BRANCH}'s first-parent line here, and the update does not fall back to the unverified tip" ;;
+            hold)
+                if [ "${UPD_HOLD}" = sideways ]; then
+                    echo "  Keeping ${UPD_TARGET}: ${UPD_HOLD_WHY}"
+                else
+                    echo "  Keeping ${UPD_TARGET}: the pinned commit ${PANEL_UPDATE_REF} is not on ${DEFAULT_BRANCH}'s first-parent line here, and the update does not fall back to the unverified tip"
+                fi ;;
         esac
         _gitc reset --hard --quiet "${UPD_TARGET}"
     elif [ -z "${SRC}" ]; then
@@ -611,14 +655,15 @@ fetch_code() {
 # entirely when already current. Sets CURRENT_SHA / TARGET_SHA. Returns 1 when the
 # fetch fails (offline / private repo), or when there is no safe target — no remote-tracking ref
 # to read, or a pin that cannot be verified and no commit of the branch to stay at (RESOLVE_ERR
-# then says which) — so the caller can stop cleanly.
+# then says which) — so the caller can stop cleanly. The fetch unshallows a shallow clone, so this
+# decides on the history fetch_code will decide on (see _fetch_branch_history).
 resolve_update_target() {
     CURRENT_SHA=""; TARGET_SHA=""; RESOLVE_ERR=""
     if [ -n "${SRC}" ] && [ "${SRC}" != "${PANEL_DIR}" ]; then
         return 0   # local-source update: no git comparison, always applies
     fi
     [ -d "${PANEL_DIR}/.git" ] || return 0   # not a git checkout: let fetch_code decide
-    _fetch_branch || return 1
+    _fetch_branch_history || return 1
     CURRENT_SHA="$(_gitc rev-parse HEAD 2>/dev/null)"
     # The same decision fetch_code acts on (see _choose_update_target). One it cannot make is NOT
     # "nothing to update": the caller stops, and says why.
@@ -626,14 +671,30 @@ resolve_update_target() {
         RESOLVE_ERR="${UPD_ERR}"
         return 1
     fi
-    # Staying put because the pin could not be verified reads as "Already up to date" to the caller.
-    # Say why first: this is what the deploy's log and the panel's update log show.
-    if [ "${UPD_WHY}" = hold ]; then
+    # Staying put because moving to the pin is not safe would read as "Already up to date" to the
+    # caller. Say why first: this is what the deploy's log and the panel's update log show, and the
+    # caller ends on update_noop_line's "Not updated: held at ...".
+    if [ "${UPD_WHY}" = hold ] && [ "${UPD_HOLD}" = sideways ]; then
+        warn "The commit this update is pinned to, ${UPD_PIN}, is on ${DEFAULT_BRANCH}'s first-parent line, but it neither contains this checkout (${UPD_TARGET}) nor is contained by it: ${DEFAULT_BRANCH} was fast-forwarded onto a merge since this checkout was installed."
+        warn "This checkout stays at ${UPD_TARGET}: moving to the pin would drop commits it has. An update to a commit that contains it moves it forward."
+    elif [ "${UPD_WHY}" = hold ]; then
         warn "The commit this update is pinned to, ${PANEL_UPDATE_REF}, is not on ${DEFAULT_BRANCH}'s first-parent line here, so it is not verified."
         warn "This checkout stays at ${UPD_TARGET}: the update does not fall back to ${DEFAULT_BRANCH}'s tip, which nothing verified."
     fi
     TARGET_SHA="${UPD_TARGET}"
     return 0
+}
+
+# The last line of an update that installed nothing (the caller's no-op branch). A hold is NOT "up
+# to date": the pinned commit was not installed, and saying so, with why, is what the deploy's log
+# and the panel's update card are read by. The card reads it from data/self-update.log by its
+# "Not updated: " start (panel_update_log in panel/ops/system_ops.py), so keep that wording.
+update_noop_line() {
+    if [ "${UPD_WHY:-}" = hold ]; then
+        warn "Not updated: held at ${TARGET_SHA:0:10}, because ${UPD_HOLD_WHY:-the pinned commit ${PANEL_UPDATE_REF:-} could not be verified on ${DEFAULT_BRANCH}}. The panel was left running."
+    else
+        ok "Already up to date (version ${FROM_VER}) — no snapshot taken, panel left running."
+    fi
 }
 
 # A venv belongs to the Python that built it. An in-place release upgrade (22.04 -> 24.04) moves
@@ -1948,13 +2009,8 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         # gamedig is the same kind of piece: root-owned, outside the checkout, and a no-op when
         # its lockfile's tree is already in place.
         install_gamedig
-        # A hold is NOT "up to date": the pinned commit was not installed. Saying so on the last
-        # line is what a deploy log or the panel's update log is read by.
-        if [ "${UPD_WHY:-}" = hold ]; then
-            warn "Not updated: held at ${TARGET_SHA:0:10}, because the pinned commit ${PANEL_UPDATE_REF} could not be verified on ${DEFAULT_BRANCH}. The panel was left running."
-        else
-            ok "Already up to date (version ${FROM_VER}) — no snapshot taken, panel left running."
-        fi
+        # A hold is NOT "up to date": the pinned commit was not installed (see update_noop_line).
+        update_noop_line
         exit 0
     fi
 

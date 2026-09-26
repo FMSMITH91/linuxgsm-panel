@@ -401,13 +401,15 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   root's source floor (below) — e26a644, the first installer that staged from root's own clone —
   since re-running an old CI run deploys that commit, and its installer runs as root. Only then
   does it read `install.sh` out of that commit, and it refuses a commit with none or an empty one,
-  or one whose installer does not enforce that floor. On the host, `install.sh`
-  checks the pin again against its own fetch; a pin it cannot verify is never replaced by main's
-  unverified tip — the host stays where it is, or the update stops with an error. The job logs in
-  to Tailscale with OIDC workload identity, not a stored secret: Tailscale's credential accepts
-  only a GitHub-signed token whose subject is this repository's `production` environment, and that
-  environment admits only the branch `main`. The OAuth client secret it replaced was a repository
-  secret, readable by a workflow run on any branch or tag.
+  or one whose installer does not enforce that floor. On the host, `install.sh` checks the pin again
+  against its own fetch (a shallow checkout is unshallowed first, so the check sees the history the
+  reset will); a pin it cannot verify is never replaced by main's unverified tip — the host stays
+  where it is, or the update stops with an error. A checkout on main moves only forward, to a pin
+  that contains it: an older pin, or one a foxtrot push left beside it, leaves it where it is. The
+  job logs in to Tailscale with OIDC workload identity, not a stored secret: Tailscale's credential
+  accepts only a GitHub-signed token whose subject is this repository's `production` environment,
+  and that environment admits only the branch `main`. The OAuth client secret it replaced was a
+  repository secret, readable by a workflow run on any branch or tag.
 
   The second half of that sentence was missing, and it mattered: `install_root_tools` *copied*
   those root-owned pieces **out of the working tree**, and the integrity argument was that

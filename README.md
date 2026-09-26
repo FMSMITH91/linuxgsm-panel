@@ -57,7 +57,7 @@ Trigger it one of two ways:
 
 **What the updater does** — the same safe path either way:
 
-1. **Checks if there's anything to do.** If you're already on the target version it stops here — no snapshot, panel left running.
+1. **Checks if there's anything to do.** If you're already on the target version it stops here — no snapshot, panel left running. A commit the panel already contains leaves it where it is. It also stops here, saying "Not updated: held at …" and why, when the commit it was given cannot be verified, or would move the panel sideways rather than forward. An in-panel update that stops at this step (that, or an unreachable update source) is reported on the update card with the installer's reason.
 2. **Snapshots the current code *and* database** to a timestamped backup (keeps the last 3).
 3. **Checks and optimises the database** with the service stopped (the snapshot from step 2 is the fallback if anything goes wrong).
 4. **Fetches the new version** — the CI-verified commit for an in-panel update, the branch tip for a manual re-run.

@@ -1133,6 +1133,50 @@ try:
     ul = c.get("/api/panel/update-log")
     check("GET /api/panel/update-log -> 200 (superadmin)",
           ul.status_code == 200 and "lines" in (ul.get_json() or {}), "got %d" % ul.status_code)
+    # ...and it says how a finished run ENDED, and which process answered. An update that stops
+    # before the panel restarts never flips boot_id, so the card reads this to stop spinning — only
+    # while the boot_id here is still the one it started with. A throwaway log, never data/'s.
+    import panel.ops.system_ops as _ul_so
+    from panel.routes import host_local as _ul_hl
+    _ul_dir = _lgsm_tempfile.mkdtemp(prefix="smoke-updlog-")
+    _ul_path = os.path.join(_ul_dir, "self-update.log")
+    with open(_ul_path, "w", encoding="utf-8") as _ul_fh:
+        _ul_fh.write("=== panel self-update ===\n\033[0;31m[ERROR]\033[0m Couldn't reach the update "
+                     "source (offline, or a private repo without credentials).\n     Nothing was "
+                     "changed.\n=== installer exit 1 ===\n")
+    _ul_saved = _ul_so._update_log_path
+    try:
+        _ul_so._update_log_path = lambda: _ul_path
+        _ulj = c.get("/api/panel/update-log").get_json() or {}
+        from panel.ops.system_ops import generate_debug_report as _ul_gdr
+        with app.app_context():
+            _ul_rep = _ul_gdr()["report"]
+        # ...and a hold (exit 0, install.sh's "Not updated" line), which is not "unknown" either.
+        with open(_ul_path, "w", encoding="utf-8") as _ul_fh:
+            _ul_fh.write("=== panel self-update ===\n\033[1;33m[!]\033[0m Not updated: held at "
+                         "0123456789, because the pinned commit could not be verified on main. The "
+                         "panel was left running.\n=== installer exit 0 ===\n")
+        with app.app_context():
+            _ul_rep_held = _ul_gdr()["report"]
+    finally:
+        _ul_so._update_log_path = _ul_saved
+        import shutil as _ul_sh
+        _ul_sh.rmtree(_ul_dir, ignore_errors=True)
+    check("GET /api/panel/update-log: a run that stopped early reads as failed, with its reason and "
+          "the answering process's boot_id",
+          _ulj.get("finished") is True and _ulj.get("outcome") == "failed" and _ulj.get("exit_code") == 1
+          and _ulj.get("reason") == ("Couldn't reach the update source (offline, or a private repo "
+                                     "without credentials). Nothing was changed.")
+          and _ulj.get("boot_id") == _ul_hl._BOOT_ID,
+          repr({k: _ulj.get(k) for k in ("finished", "outcome", "exit_code", "reason", "boot_id")}))
+    check("debug report: a self-update that stopped before the panel restarted is reported as FAILED "
+          "with its reason, not 'unknown (in progress…)'",
+          "- **Outcome**: FAILED — the installer stopped (exit 1): Couldn't reach the update source" in _ul_rep,
+          _ul_rep[_ul_rep.find("### Last update"):][:300])
+    check("debug report: ...and a hold as NOT UPDATED, with install.sh's reason",
+          "- **Outcome**: NOT UPDATED — Not updated: held at 0123456789, because the pinned commit "
+          "could not be verified on main." in _ul_rep_held,
+          _ul_rep_held[_ul_rep_held.find("### Last update"):][:300])
 
     # change-port validation: out-of-range ports are refused BEFORE any save/restart, so
     # these are side-effect-free. (A valid port would restart the panel — not exercised here.)

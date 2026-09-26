@@ -1361,11 +1361,26 @@ def _pad_history(repo, env=None, n=4000):
 # file in, having no search permission: to a here-string it is a full or read-only /tmp. (A plainly
 # read-only directory would not do: bash skips a TMPDIR it cannot write and uses /tmp instead.)
 # Nothing can be created in it, so removing it at exit needs only its parent's permission.
-_NOWRITE_TMP = _tempfile.mkdtemp(prefix="tmpdir-nowrite-")
-os.chmod(_NOWRITE_TMP, 0o200)
+#
+# ROOT ignores the mode: it writes into a 0200 directory like any other, so under uid 0 that TMPDIR
+# takes a here-string after all, and the checks run under it could no longer tell a here-string from
+# a stream (the three premise checks said so, and failed). Root gets /proc instead: faccessat() lets
+# root "write" it (procfs is mounted read-write, and root overrides its mode), so bash accepts it,
+# and procfs has no way to create a file, for root or anyone — bash reports "cannot create temp file
+# for here-document". Measured on bash 5.1.16, 5.2.21 and 5.3.9 (Ubuntu 22.04, 24.04, 26.04) as
+# uid 0. An unprivileged uid is refused W_OK on /proc and falls back to /tmp, which is why this is
+# root's only. Whether it holds on the machine at hand is the premise below, which says which
+# TMPDIR it tried.
+if os.geteuid() == 0:
+    _NOWRITE_TMP, _NOWRITE_TMP_OURS = "/proc", False
+else:
+    _NOWRITE_TMP, _NOWRITE_TMP_OURS = _tempfile.mkdtemp(prefix="tmpdir-nowrite-"), True
+    os.chmod(_NOWRITE_TMP, 0o200)
 
 
 def _rm_nowrite_tmp():
+    if not _NOWRITE_TMP_OURS:
+        return
     try:
         os.rmdir(_NOWRITE_TMP)
     except OSError:
@@ -1384,7 +1399,8 @@ def _needs_tmpfile(repo, ref, env=None):
                       'cat <<< "$l" > /dev/null 2>&1 && { echo "here-string written"; exit 3; }\n'
                       'exit 0\n', "_", repo, ref],
                      capture_output=True, text=True, env=dict(env or os.environ, TMPDIR=_NOWRITE_TMP))
-    return _r.returncode == 0, "rc=%s %s" % (_r.returncode, _r.stdout.strip())
+    return _r.returncode == 0, "rc=%s %s (euid %d, TMPDIR=%s)" % (
+        _r.returncode, _r.stdout.strip(), os.geteuid(), _NOWRITE_TMP)
 
 
 _rs_fns = (_inst_shfn("_gitc") + _inst_shfn("_on_first_parent_line")
@@ -2244,7 +2260,9 @@ try:
                     "info() { echo \"INFO $*\"; }\nok() { echo \"OK $*\"; }\n"
                     "check_origin_trusted() { :; }\ninstall_root_tools() { :; }\n"
                     "write_sudoers_grant() { :; }\nwrite_terminal_sudo_grant() { :; }\n"
-                    "install_recovery_command() { :; }\n")
+                    "install_recovery_command() { :; }\n"
+                    # the branch's last line is install.sh's own function, run as written
+                    + _su_find("update_noop_line() {", "\n}\n") + "\n")
     _r = _su_with_cfg(_su_cfg310, "3.12", _su_noop_env + _su_noop + "echo FULL_UPDATE\n")
     check("install.sh: an up-to-date checkout with a stale venv takes the full update, saying why",
           "FULL_UPDATE" in _r and "Already up to date" not in _r
@@ -2252,6 +2270,14 @@ try:
     _r = _su_with_cfg(_su_cfg312, "3.12", _su_noop_env + _su_noop + "echo FULL_UPDATE\n")
     check("install.sh: ...and with a current venv it is still 'Already up to date'",
           "OK Already up to date" in _r and "FULL_UPDATE" not in _r, repr(_r))
+    # ...and a HOLD, which takes this same branch (HEAD is the target), ends it with 'Not updated'
+    # and the reason _choose_update_target gave: the branch's own last line, run as written.
+    _r = _su_with_cfg(_su_cfg312, "3.12", _su_noop_env + "UPD_WHY=hold\nUPD_HOLD_WHY='the pin was "
+                      "sideways'\nDEFAULT_BRANCH=main\n" + _su_noop + "echo FULL_UPDATE\n")
+    check("install.sh: ...while a HOLD through that branch ends 'Not updated: held at', with the reason",
+          _r.rstrip().endswith("WARN Not updated: held at abc, because the pin was sideways. The panel "
+                               "was left running.") and "Already up to date" not in _r
+          and "FULL_UPDATE" not in _r, repr(_r))
 
     # recover.sh runs manage.py with the same venv: say what happened instead of a traceback, and
     # only when it is true (its remedy, re-running install.sh, now works on a current checkout).
@@ -7113,9 +7139,10 @@ finally:
 # leaves it where it is. Deploy runs do not finish in push order — a re-run of an old commit's CI
 # deploys it last — and resetting to the pin would take the host backwards. Run the real
 # resolve_update_target against a real clone.
-_ru_fn = 'warn() { echo "WARN $*" >&2; }\n' + "".join(_inst_shfn(_n) for _n in (
-    "_gitc", "_ref_exists", "_fetch_branch", "_on_first_parent_line", "_choose_update_target",
-    "resolve_update_target"))
+_ru_names = ("_gitc", "_ref_exists", "_fetch_branch", "_fetch_branch_history",
+             "_on_first_parent_line", "_choose_update_target", "resolve_update_target",
+             "update_noop_line")
+_ru_fn = 'warn() { echo "WARN $*" >&2; }\n' + "".join(_inst_shfn(_n) for _n in _ru_names)
 _ru_sb = _tempfile.mkdtemp(prefix="updref-")
 try:
     _ru_up, _ru_co = os.path.join(_ru_sb, "up"), os.path.join(_ru_sb, "co")
@@ -7813,6 +7840,278 @@ try:
           and "does not fall back to main's tip" in _fp_r.stderr,
           "rc=%s out=%r err=%r" % (_fp_r.returncode, _fp_r.stdout[-200:], _fp_r.stderr[-300:]))
 
+    # SIDEWAYS. The same foxtrot, and a pin that IS on main's line but is neither S1's ancestor nor
+    # its descendant: O1, the other branch's commit that X merged S1 into. The panel's update check
+    # can offer it (its walk lists X and O1 while X is still in CI). "Never backwards" let it
+    # through — O1 does not contain S1 — and the reset dropped S1. Now the host moves only to a pin
+    # it is an ancestor of; otherwise it holds, and says why. X (above) still moves it forward.
+    def _fx_anc(a, b):
+        return _sh_sub.run(["git", "-C", _fx_up, "merge-base", "--is-ancestor", a, b],
+                           env=_tsh_env).returncode
+
+    _fx_side_premise = _fx_o1 in _fx_line and _fx_anc(_fx_o1, _fx_s1) == 1 and _fx_anc(_fx_s1, _fx_o1) == 1
+    _fx_side_warn = ("WARN The commit this update is pinned to, %s, is on main's first-parent line, "
+                     "but it neither contains this checkout (%s) nor is contained by it" % (_fx_o1, _fx_s1))
+    _fp_r = _fp_resolve_run(_fx_clone("fx-side", _fx_s1), _fx_o1)
+    check("install.sh: after a foxtrot push, a verified pin that neither contains the host's HEAD nor "
+          "is contained by it (sideways) holds the host where it is, and says why",
+          _fx_side_premise and "TARGET=%s" % _fx_s1 in _fp_r.stdout and _fx_side_warn in _fp_r.stderr,
+          "premise=%s; rc=%s out=%r err=%r" % (_fx_side_premise, _fp_r.returncode, _fp_r.stdout[-200:],
+                                               _fp_r.stderr[-400:]))
+    _fp_head, _fp_why = _fp_fetch_code(_fx_clone("fx-side-fc", _fx_s1), _fx_o1)
+    check("install.sh: ...nor does fetch_code move it sideways",
+          _fx_side_premise and _fp_head == _fx_s1
+          and "Keeping %s: the pinned commit %s is on main but does not contain this checkout" % (
+              _fx_s1, _fx_o1) in _fp_why,
+          "HEAD %s, want S1 %s (pin O1 %s) %s" % (_fp_head, _fx_s1, _fx_o1, _fp_why))
+    # ...and the update's last line says it was NOT updated, and why — the line the deploy's log and
+    # the panel's update card are read by (update_noop_line; the card test is further down).
+    _fp_r = _sh_sub.run(["bash", "-c", "set -euo pipefail\nSRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n"
+                         "%sresolve_update_target\nupdate_noop_line\n"
+                         % (_shlex_q(_fx_clone("fx-side-last", _fx_s1)), _ru_fn)],
+                        capture_output=True, text=True, env=dict(_fp_env, PANEL_UPDATE_REF=_fx_o1))
+    check("install.sh: ...and its last line is 'Not updated: held at <HEAD>', naming the pin and why",
+          _fp_r.returncode == 0 and _fp_r.stderr.rstrip().endswith(
+              "WARN Not updated: held at %s, because the pinned commit %s is on main but does not "
+              "contain this checkout, so moving to it would drop commits the checkout has. The panel "
+              "was left running." % (_fx_s1[:10], _fx_o1)),
+          "rc=%s err=%r" % (_fp_r.returncode, _fp_r.stderr[-400:]))
+    # ...while a checkout OFF main (a local commit on S1) is still reset to that pin, as it always
+    # was: the move-only-forward rule is for a HEAD on the branch.
+    _fx_loc = _fx_clone("fx-side-local", _fx_s1)
+    _fp_git("-C", _fx_loc, "commit", "-q", "--allow-empty", "-m", "a local commit")
+    _fp_got = _fp_resolve(_fx_loc, _fx_o1)
+    check("install.sh: ...while a local commit off main is still reset to the pin (positive control)",
+          _fp_got == _fx_o1, "target %s, want O1 %s" % (_fp_got, _fx_o1))
+
+    # SHALLOW. The installer clones --depth 1, and fetch_code unshallows before it decides, so
+    # resolve_update_target decided on less history than fetch_code then acted on. On main at
+    # R-B2-S1, a host cloned at S1 does not have B2: a deploy pinned to B2 (a late re-run) read as
+    # "not verified" and held, with a warning that B2 was not on main. And once main is foxtrotted,
+    # the fetch DOES bring B2 in, but S1's parents are past the shallow boundary, so B2 could not be
+    # seen to be S1's ancestor: resolve_update_target chose B2 (or, with the sideways rule, held),
+    # while fetch_code, unshallowed, kept S1 — a snapshot and a restart that ended where they began.
+    # Each clone below is made exactly as the installer makes one, while main is at S1.
+    _sw_up = os.path.join(_fp_sb, "shallow-up")
+    _fp_git("init", "-q", "-b", "main", _sw_up)
+
+    def _sw_commit(msg):
+        _fp_git("-C", _sw_up, "commit", "-q", "--allow-empty", "-m", msg)
+        return _fp_git("-C", _sw_up, "rev-parse", "HEAD")
+
+    _sw_r, _sw_b2, _sw_s1 = _sw_commit("R"), _sw_commit("B2"), _sw_commit("S1")
+
+    def _sw_clone(name):
+        co = os.path.join(_fp_sb, name)
+        _fp_git("clone", "-q", "--depth", "1", "--no-single-branch", "--branch", "main",
+                "file://" + _sw_up, co)
+        return co
+
+    def _sw_has(co, sha):
+        return _sh_sub.run(["git", "-C", co, "cat-file", "-e", sha + "^{commit}"],
+                           capture_output=True, env=_tsh_env).returncode == 0
+
+    def _sw_resolve(co, pin):
+        return _sh_sub.run(["bash", "-c", "set -euo pipefail\nSRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n"
+                            "%sif resolve_update_target; then echo \"TARGET=${TARGET_SHA} WHY=${UPD_WHY}\"; "
+                            "else echo \"REFUSED ${RESOLVE_ERR}\"; fi\n" % (_shlex_q(co), _ru_fn)],
+                           capture_output=True, text=True, env=dict(_tsh_env, PANEL_UPDATE_REF=pin))
+
+    _sw_a = _sw_clone("sw-late")
+    _sw_fox_ru, _sw_fox_fc, _sw_fox_plain = (_sw_clone("sw-fox-ru"), _sw_clone("sw-fox-fc"),
+                                             _sw_clone("sw-fox-plain"))
+    _sw_a_pre = (_fp_git("-C", _sw_a, "rev-parse", "--is-shallow-repository") == "true"
+                 and not _sw_has(_sw_a, _sw_b2))
+    _sw_a_cfg = _fp_git("-C", _sw_a, "config", "--get-all", "remote.origin.fetch")
+    _fp_r = _sw_resolve(_sw_a, _sw_b2)
+    check("install.sh: on a SHALLOW clone, an older verified pin it does not have yet is not "
+          "'unverified': it is fetched before the decision, so the host stays, with no false warning",
+          _sw_a_pre and "TARGET=%s WHY=stay" % _sw_s1 in _fp_r.stdout and "WARN" not in _fp_r.stderr,
+          "shallow and without B2=%s; out=%r err=%r" % (_sw_a_pre, _fp_r.stdout[-200:],
+                                                       _fp_r.stderr[-300:]))
+    _sw_after = {"shallow": _fp_git("-C", _sw_a, "rev-parse", "--is-shallow-repository"),
+                 "HEAD": _fp_git("-C", _sw_a, "rev-parse", "HEAD") == _sw_s1,
+                 "tree clean": _fp_git("-C", _sw_a, "status", "--porcelain") == "",
+                 "config": _fp_git("-C", _sw_a, "config", "--get-all", "remote.origin.fetch") == _sw_a_cfg}
+    check("install.sh: ...resolve_update_target unshallows the clone and changes nothing else: HEAD, "
+          "the working tree and the remote's config are as they were",
+          _sw_after == {"shallow": "false", "HEAD": True, "tree clean": True, "config": True},
+          repr(_sw_after))
+    # Now the foxtrot (as in the fixture above): O1 on another branch from B2, X merges main (S1)
+    # into it, and main fast-forwards to X. B2 is on X's first-parent line.
+    _fp_git("-C", _sw_up, "checkout", "-q", "-b", "other", _sw_b2)
+    _sw_o1 = _sw_commit("O1")
+    _fp_git("-C", _sw_up, "merge", "-q", "--no-ff", "-m", "X", "main")
+    _fp_git("-C", _sw_up, "checkout", "-q", "main")
+    _fp_git("-C", _sw_up, "merge", "-q", "--ff-only", "other")
+    # The premise, on a third clone: a plain fetch brings B2 in, and past the shallow boundary S1
+    # does not reach it — while upstream, B2 IS S1's ancestor.
+    _fp_git("-C", _sw_fox_plain, "fetch", "-q", "--no-tags", "origin",
+            "+refs/heads/main:refs/remotes/origin/main")
+    _sw_fox_premise = (_sw_has(_sw_fox_plain, _sw_b2)
+                       and _sh_sub.run(["git", "-C", _sw_fox_plain, "merge-base", "--is-ancestor",
+                                        _sw_b2, _sw_s1], env=_tsh_env).returncode == 1
+                       and _sh_sub.run(["git", "-C", _sw_up, "merge-base", "--is-ancestor",
+                                        _sw_b2, _sw_s1], env=_tsh_env).returncode == 0)
+    _fp_r = _sw_resolve(_sw_fox_ru, _sw_b2)
+    _fp_head, _fp_why = _fp_fetch_code(_sw_fox_fc, _sw_b2)
+    check("install.sh: on a shallow clone after a foxtrot push, resolve_update_target and fetch_code "
+          "make the SAME decision — both keep S1, which contains the pin — so nothing is snapshotted "
+          "and restarted for nothing",
+          _sw_fox_premise and "TARGET=%s WHY=stay" % _sw_s1 in _fp_r.stdout and _fp_head == _sw_s1
+          and "Keeping %s: it is on main and already contains the verified commit %s" % (_sw_s1, _sw_b2)
+          in _fp_why,
+          "premise=%s; resolve out=%r err=%r; fetch_code HEAD %s %s" % (
+              _sw_fox_premise, _fp_r.stdout[-200:], _fp_r.stderr[-300:], _fp_head, _fp_why))
+
+    # ── How an update that never restarted the panel ENDED, as the update card reads it ─────────
+    # The card watched only the panel's boot id, and an update that stops BEFORE the panel stops
+    # (the source unreachable, a pin it cannot verify) or holds never restarts it: the [ERROR] was
+    # in data/self-update.log, and after three minutes the card said "Still working — reload the
+    # page to check." The chain, run for real end to end: install.sh's own output (its die, warn and
+    # ok, resolve_update_target, the caller's block, update_noop_line), run AS the installer by the
+    # helper's own detached self-update, which ends the log with the exit status; then the panel's
+    # own panel_update_log reads that log back.
+    _uc_i = _inst.index("RED='\\033")
+    _uc_out = _inst[_uc_i:_inst.index("\n", _inst.index("die()   {", _uc_i)) + 1]
+    _uc_fns = "".join(_inst_shfn(_n) for _n in _ru_names)
+
+    def _uc_panel(name):
+        pd = os.path.join(_fp_sb, name)
+        os.makedirs(os.path.join(pd, "data"))
+        return pd
+
+    def _uc_read(pd):
+        _saved = SO.PANEL_DIR
+        try:
+            SO.PANEL_DIR = pd
+            return SO.panel_update_log()
+        finally:
+            SO.PANEL_DIR = _saved
+
+    def _uc_helper_run(name, body, ref):
+        pd = _uc_panel(name)
+        inst = os.path.join(pd, "root-owned-install.sh")
+        with open(inst, "w", encoding="utf-8") as _uc_fh:
+            _uc_fh.write("#!/bin/bash\nset -euo pipefail\nSRC=''\nFROM_VER=9.9.9\nDEFAULT_BRANCH=main\n"
+                         + _uc_out + _uc_fns + body)
+        probe = ("import importlib.util as u, importlib.machinery as m\n"
+                 "s = u.spec_from_loader('ph', m.SourceFileLoader('ph', %r))\n"
+                 "mod = u.module_from_spec(s); s.loader.exec_module(mod)\n"
+                 "mod.INSTALLER_PATH = %r\n"
+                 "mod._self_update_detached(%r, %r, %r, '-')\n"
+                 % (_helper_path, inst, pd, os.path.join(pd, "data"), ref))
+        _sh_sub.run([sys.executable, "-c", probe], capture_output=True, text=True, env=_tsh_env,
+                    timeout=60)
+        # The run is detached, so wait for it: the exit line is the last thing written.
+        _deadline = _time.time() + 60
+        while _time.time() < _deadline:
+            try:
+                with open(os.path.join(pd, "data", "self-update.log"), encoding="utf-8") as _uc_fh:
+                    if "=== installer exit" in _uc_fh.read():
+                        break
+            except OSError:
+                pass
+            _time.sleep(0.1)
+        return _uc_read(pd)
+
+    def _uc_show(u):
+        return {k: u.get(k) for k in ("finished", "exit_code", "outcome", "reason")}, u.get("lines", [])[-4:]
+
+    _uc_off = _fp_clone("uc-offline", _fp_a)
+    _fp_git("-C", _uc_off, "remote", "set-url", "origin", "file://" + os.path.join(_fp_sb, "gone"))
+    _uc = _uc_helper_run("uc-failed", "PANEL_DIR=%s\n%supdate_noop_line\n" % (_shlex_q(_uc_off), _fp_ci_blk), "-")
+    check("self-update card: an update that STOPS before the panel restarts is read as failed, with "
+          "install.sh's own [ERROR] as the reason (helper route)",
+          _uc.get("finished") is True and _uc.get("exit_code") == 1 and _uc.get("outcome") == "failed"
+          and _uc.get("reason") == ("Couldn't reach the update source (offline, or a private repo "
+                                    "without credentials). Nothing was changed.")
+          and _uc.get("lines", [""])[0] == "=== panel self-update ==="
+          and _uc.get("lines", [""])[-1] == "=== installer exit 1 ===",
+          repr(_uc_show(_uc)))
+    _uc = _uc_helper_run("uc-held", "PANEL_DIR=%s\n%supdate_noop_line\nexit 0\n" % (
+        _shlex_q(_fp_clone("uc-held-co", _fp_a)), _fp_ci_blk), _fp_e)
+    check("self-update card: an update that HOLDS is read as held — exit 0, and the reason is "
+          "install.sh's 'Not updated' line naming the pin",
+          _uc.get("exit_code") == 0 and _uc.get("outcome") == "held"
+          and _uc.get("reason") == ("Not updated: held at %s, because the pinned commit %s could not "
+                                    "be verified on main. The panel was left running." % (_fp_a[:10], _fp_e)),
+          repr(_uc_show(_uc)))
+    _uc = _uc_helper_run("uc-current", "PANEL_DIR=%s\n%supdate_noop_line\nexit 0\n" % (
+        _shlex_q(_fp_clone("uc-cur-co", _fp_t)), _fp_ci_blk), _fp_t)
+    check("self-update card: ...an update with nothing to install is read as current (positive control)",
+          _uc.get("exit_code") == 0 and _uc.get("outcome") == "current"
+          and (_uc.get("reason") or "").startswith("Already up to date (version 9.9.9)"),
+          repr(_uc_show(_uc)))
+    _uc = _uc_helper_run("uc-killed", "kill -TERM $$\n", "-")
+    check("self-update card: ...and an installer ended by a signal reads as failed with the shell's "
+          "status for it (143), not as still running",
+          _uc.get("exit_code") == 143 and _uc.get("outcome") == "failed",
+          repr(_uc_show(_uc)))
+    # The per-user path has no helper: _launch_installer writes a wrapper script and hands it to
+    # systemd-run. Run the wrapper it wrote, for real, over the same early stop.
+    _uc_pd = _uc_panel("uc-wrapper")
+    with open(os.path.join(_uc_pd, "install.sh"), "w", encoding="utf-8") as _uc_fh:
+        _uc_fh.write("#!/bin/bash\nset -euo pipefail\nSRC=''\nFROM_VER=9.9.9\nDEFAULT_BRANCH=main\n"
+                     + _uc_out + _uc_fns + "PANEL_DIR=%s\n%s" % (_shlex_q(_uc_off), _fp_ci_blk))
+    # The previous run's log, ending in ITS exit line: the card must never read it as this run's.
+    with open(os.path.join(_uc_pd, "data", "self-update.log"), "w", encoding="utf-8") as _uc_fh:
+        _uc_fh.write("=== panel self-update ===\n\033[0;31m[ERROR]\033[0m an OLD run's failure\n"
+                     "=== installer exit 1 ===\n")
+    _uc_launch = {}
+    _uc_saved = (SO.PANEL_DIR, SO._is_system_service, SO._helper_present, SO.subprocess.run,
+                 SO._run_verb)
+
+    def _uc_fake_run(argv, *a, **k):
+        _uc_launch.setdefault("argv", argv)
+        _uc_launch.setdefault("old log gone", not os.path.exists(
+            os.path.join(_uc_pd, "data", "self-update.log")))
+        return type("R", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    def _uc_fake_verb(verb, args, **k):
+        _uc_launch.setdefault("verb", verb)
+        _uc_launch.setdefault("helper: old log gone", not os.path.exists(
+            os.path.join(_uc_pd, "data", "self-update.log")))
+        return "UPDATE_STARTED", "", 0
+
+    try:
+        SO.PANEL_DIR = _uc_pd
+        SO._is_system_service = lambda: False
+        SO._helper_present = lambda: False
+        SO.subprocess.run = _uc_fake_run
+        _uc_ok = SO._launch_installer(target_ref="", branch="")
+        # ...and the helper route, with a stale log planted again.
+        with open(os.path.join(_uc_pd, "data", "self-update.log"), "w", encoding="utf-8") as _uc_fh:
+            _uc_fh.write("=== installer exit 1 ===\n")
+        SO._is_system_service = lambda: True
+        SO._helper_present = lambda: True
+        SO._run_verb = _uc_fake_verb
+        _uc_ok_h = SO._launch_installer(target_ref="", branch="")
+    finally:
+        (SO.PANEL_DIR, SO._is_system_service, SO._helper_present, SO.subprocess.run,
+         SO._run_verb) = _uc_saved
+    check("self-update card: both launchers remove the PREVIOUS run's log before starting this one, so "
+          "its exit line is never read as this run's",
+          _uc_ok[0] is True and _uc_ok_h[0] is True and _uc_launch.get("old log gone") is True
+          and _uc_launch.get("helper: old log gone") is True and _uc_launch.get("verb") == "panel-self-update",
+          repr((_uc_ok, _uc_ok_h, _uc_launch)))
+    _uc_wrapper = (_uc_launch.get("argv") or [""])[-1]
+    _uc_w = _sh_sub.run(["bash", _uc_wrapper], capture_output=True, text=True, env=_tsh_env, timeout=120)
+    _uc = _uc_read(_uc_pd)
+    check("self-update card: ...and the wrapper the per-user path runs ends the log with the exit "
+          "status, read as the same failure, with the same reason",
+          _uc_wrapper.endswith("self-update.sh") and _uc.get("exit_code") == 1
+          and _uc.get("outcome") == "failed"
+          and _uc.get("reason") == ("Couldn't reach the update source (offline, or a private repo "
+                                    "without credentials). Nothing was changed.")
+          and "OLD run" not in " ".join(_uc.get("lines", [])),
+          "wrapper %r rc=%s; %r" % (_uc_wrapper, _uc_w.returncode, _uc_show(_uc)))
+    # The last line of the caller's no-op branch is update_noop_line's, right before its exit 0.
+    check("install.sh: the update's no-op branch ends on update_noop_line, then exit 0",
+          "        install_recovery_command\n        # A hold is NOT \"up to date\": the pinned commit "
+          "was not installed (see update_noop_line).\n        update_noop_line\n        exit 0\n    fi\n"
+          in _inst, "update_noop_line is not what the no-op branch ends on")
+
     # The panel's update check, for real against a clone at A. The tip and the merge are still being
     # verified; the pull request's commits carry their PR runs' state, or none ("unknown", which the
     # walk accepts so an API outage cannot hide an update).
@@ -7847,6 +8146,35 @@ try:
               _fp_st.get("update_available") is True and _fp_st.get("target_sha") == _fp_m
               and _fp_st.get("behind_tip") == 2 and _fp_st.get("newer_unverified") == 1,
               "M=%s got %r" % (_fp_m[:7], _fp_show))
+        # After the FOXTROT (the fixture above): a panel on S1, main at X. The first-parent walk from
+        # S1 lists X and O1, and O1 does not contain S1 — install.sh holds rather than move there, so
+        # offering it was an "Update available" that could never install. With X in CI, nothing is
+        # offered; once X passes, X is.
+        SO.PANEL_DIR = _fx_clone("fx-panel", _fx_s1)
+        _fp_ci = {_fx_x: "pending", _fx_o1: "passing"}
+        _fp_st, _fp_show = _fp_status()
+        check("update status: after a foxtrot push, a verified commit that does not contain the "
+              "running one (it would move the panel sideways) is not offered",
+              _fx_side_premise and _fp_st.get("update_available") is False
+              and _fp_st.get("target_sha") != _fx_o1,
+              "premise=%s; X=%s O1=%s got %r" % (_fx_side_premise, _fx_x[:7], _fx_o1[:7], _fp_show))
+        _fp_ci[_fx_x] = "passing"
+        _fp_st, _fp_show = _fp_status()
+        check("update status: ...while the merge that does contain it is, once verified (positive "
+              "control)",
+              _fp_st.get("update_available") is True and _fp_st.get("target_sha") == _fx_x,
+              "X=%s got %r" % (_fx_x[:7], _fp_show))
+        # ...and a panel on a LOCAL commit is offered O1 as before: install.sh resets such a
+        # checkout to the pin, so for it O1 is an update that installs.
+        _fx_ploc = _fx_clone("fx-panel-local", _fx_s1)
+        _fp_git("-C", _fx_ploc, "commit", "-q", "--allow-empty", "-m", "a local commit")
+        SO.PANEL_DIR = _fx_ploc
+        _fp_ci[_fx_x] = "pending"
+        _fp_st, _fp_show = _fp_status()
+        check("update status: ...and a panel on a local commit off main is still offered it "
+              "(positive control)",
+              _fp_st.get("update_available") is True and _fp_st.get("target_sha") == _fx_o1,
+              "O1=%s got %r" % (_fx_o1[:7], _fp_show))
     finally:
         (SO.PANEL_DIR, SO._tracked_branch, SO._remote_ci_state) = _fp_saved
         for _k, _v in _fp_env_saved.items():
@@ -9457,15 +9785,18 @@ check("update card: the count and the changelog are built from the same list",
 # ── a HOLD does not report "Already up to date" ─────────────────────────────────────────────────
 # When the pinned commit cannot be verified, install.sh keeps the checkout where it is (a hold) and
 # takes the no-op branch. That branch ended "Already up to date", exit 0 — so a deploy log or the
-# panel's update log read as a successful update to a commit that was never installed. The block
-# is run as written in install.sh, both ways.
+# panel's update log read as a successful update to a commit that was never installed. That last
+# line is update_noop_line (the branch's own call to it is checked with the update-card chain),
+# run here as written in install.sh, both ways, with only UPD_WHY set: the reason
+# _choose_update_target gives (UPD_HOLD_WHY) is checked there too, end to end.
 import subprocess as _hold_sub                                                    # noqa: E402
 _hold_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
-# Anchored on the comment above the block, so a mutation of the condition itself fails the checks
-# below instead of crashing the suite before they run.
-_hold_i = _hold_src.find('        # A hold is NOT "up to date"')
-_hold_j = _hold_src.find("\n        fi\n", _hold_i) if _hold_i >= 0 else -1
-_hold_block = _hold_src[_hold_i:_hold_j + len("\n        fi\n")] if _hold_j >= 0 else "false\n"
+# Anchored on the definition, so a mutation of the condition itself fails the checks below
+# instead of crashing the suite before they run.
+_hold_i = _hold_src.find("\nupdate_noop_line() {\n")
+_hold_j = _hold_src.find("\n}\n", _hold_i) if _hold_i >= 0 else -1
+_hold_block = (_hold_src[_hold_i:_hold_j + len("\n}\n")] + "update_noop_line\n"
+               if _hold_j >= 0 else "false\n")
 
 
 def _hold_run(why):

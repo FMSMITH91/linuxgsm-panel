@@ -244,9 +244,11 @@ jobs:
           # host already current and took the no-op branch, so its update steps never ran on the
           # host. It also installed a tip whose CI had not finished. install.sh honours the pin
           # only when it is on the first-parent line of the branch it fetched
-          # (refs/remotes/origin/main, spelled out in full there too), and never moves a checkout
-          # backwards to it, so a run that finishes late (a re-run of an old commit's CI) leaves a
-          # newer host where it is. A pin it cannot verify on its own fetch (a foxtrot push landed
+          # (refs/remotes/origin/main, spelled out in full there too), and moves a checkout on main
+          # only forward to it — never backwards, and never sideways onto a pin that does not
+          # contain it (a foxtrot push can leave one on the line) — so a run that finishes late (a
+          # re-run of an old commit's CI) leaves a newer host where it is, and says why in this log
+          # when it holds. A pin it cannot verify on its own fetch (a foxtrot push landed
           # in between) is not replaced by the tip either: the host stays where it is, with a
           # warning in this log, or — when its checkout is not on main — the update stops with an
           # error and this job fails.

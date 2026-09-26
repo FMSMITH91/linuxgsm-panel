@@ -2587,14 +2587,34 @@ def _self_update_detached(panel_dir, data_dir, ref, branch):
         with _open_log_in_dir(data_dir, SELF_UPDATE_LOG) as log:
             log.write("=== panel self-update ===\n")
             log.flush()
-            subprocess.run([resolve("bash_installer"), INSTALLER_PATH],  # nosec B603 - fixed path
-                           cwd=panel_dir, env=env, stdout=log, stderr=subprocess.STDOUT,
-                           check=False, timeout=1800)
+            log.write("=== installer exit %s ===\n" % _run_installer_to(log, panel_dir, env))
     except Exception:
         # Nobody reads this process's stderr; the installer's own log is the record. Falling
         # through to os._exit is all that is left.
         pass
     os._exit(0)
+
+
+def _run_installer_to(log, panel_dir, env):
+    """Run the root-owned installer with its output in `log`; return how it ended, as the text the
+    exit line carries: its exit status, a number first.
+
+    The panel's update card reads that line (panel_update_log in panel/ops/system_ops.py). An
+    update that stops BEFORE the panel restarts — the source unreachable, a pinned commit that
+    cannot be verified, a hold — never flips the panel's boot id, so without it the card could not
+    tell a finished run from a slow one: the [ERROR] was in the log, and after three minutes the
+    card said "Still working — reload the page to check." The wrapper script _launch_installer
+    writes for the path without the helper ends on the same line."""
+    try:
+        rc = subprocess.run([resolve("bash_installer"), INSTALLER_PATH],  # nosec B603 - fixed path
+                            cwd=panel_dir, env=env, stdout=log, stderr=subprocess.STDOUT,
+                            check=False, timeout=1800).returncode
+    except subprocess.TimeoutExpired:
+        return "124 (the installer was stopped after 30 minutes)"
+    except Exception as exc:
+        return "127 (the installer could not be run: %s)" % type(exc).__name__
+    # A negative status is the signal that ended it, which the shell reports as 128 + N.
+    return str(rc if rc >= 0 else 128 - rc)
 
 
 def do_panel_self_update(args, content):

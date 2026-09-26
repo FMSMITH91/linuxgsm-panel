@@ -255,7 +255,10 @@
           <div id="pu-changes-note" class="text-secondary mt-1"
                style="font-size:.78rem;display:none;"></div>
         </div>
-        <div class="mt-2 d-flex gap-2 align-items-center">
+        {# flex-wrap: an update's outcome can be two sentences (the installer's own reason), and
+           squeezed beside the buttons on a phone it became a 90px column. #pu-msg takes its own
+           line when there is not room for it (panel.css). #}
+        <div class="mt-2 d-flex flex-wrap gap-2 align-items-center">
           <button class="btn btn-sm btn-outline-secondary" data-action="checkPanelUpdate" data-args='[true]'><i class="bi bi-arrow-repeat"></i> Check now</button>
           <button class="btn btn-sm btn-success" id="pu-update-btn" data-action="doPanelUpdate" style="display:none;"><i class="bi bi-download"></i> Update now</button>
           <span id="pu-msg" class="small"></span>

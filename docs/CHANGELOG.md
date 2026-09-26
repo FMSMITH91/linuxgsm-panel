@@ -255,6 +255,26 @@ regardless of this file — this changelog is for humans.
   write is left alone; one an operator has edited is not rewritten either, and only gets the PATH
   as before. A crontab whose listing failed is still never rewritten. A game that once had no
   player query, and has one now, gets the player check.
+- **The panel's update card now says when an update stopped, or held, instead of spinning.** It
+  finished only when the panel restarted, and an update that ends before the panel is stopped never
+  restarts it: the update source unreachable, a pinned commit the installer cannot verify, a hold.
+  The `[ERROR]` was in the log, and after three minutes the card said "Still working — reload the
+  page to check." Both launchers (the root-owned helper, and the wrapper a per-user install runs)
+  now end the log with the installer's exit status, and the card reads it: a stop shows in red with
+  the installer's own reason, a hold shows its "Not updated: held at …" line, and the buttons come
+  back. It trusts that only while the panel answering is still the one that started the update, so
+  a run that did restart the panel is judged as before. Each launch removes the previous run's log
+  first, so its ending is never read as the new one's. The debug report's "Last update" names these
+  outcomes too, where it said "unknown (in progress…)". The helper side reaches a host when its
+  installer next re-stages the helper, which every update does.
+- **On a shallow checkout the update decided on less history than it then acted on.** The installer
+  clones `--depth 1`; the step that picks where to update to fetched only the new tip, and the step
+  that resets fetched the whole history first. So an older verified pin (a late deploy) was missing
+  and read as "not verified", holding the host with a false warning, and after a foxtrot push a pin
+  the host already contained could not be seen to be its ancestor, so the first step chose a
+  snapshot and restart that the second then undid by keeping the checkout where it was. The first
+  step now unshallows the tracked branch before deciding. That adds history and nothing else — no
+  change to the working tree, `HEAD`, other refs or the config — once per checkout.
 - **"Daily restart when empty" never restarted on a host whose Node.js came from Ubuntu.** The
   hourly check runs from the game account's crontab, and cron gives a crontab the PATH
   `/usr/bin:/bin`. Ubuntu's own npm installs gamedig into `/usr/local/bin`, where cron does not
@@ -899,10 +919,17 @@ regardless of this file — this changelog is for humans.
   an older verified commit, asks only whether that checkout is an ANCESTOR of main: it is what
   the host already runs, not something being verified, and a host left off the first-parent line by
   a foxtrot push must not be reset backwards. The full update path (taken when the venv is stale) also
-  honours that rule now; it had been resetting a current checkout back to the older commit. And a
+  honours that rule now; it had been resetting a current checkout back to the older commit. It is
+  now "never backwards, and never sideways": a checkout on main moves only to a pin that contains
+  it. After a foxtrot push a verified pin can be on main's line and neither contain the checkout nor
+  be contained by it (the other branch's commit the merge was made on), and the update moved the
+  host to it, dropping the commit it was on; now it holds, and says why. The panel's update card,
+  which could offer that commit while the merge was still in CI, no longer offers a commit that
+  does not contain the running one, so it never shows an update that would only hold. And a
   pinned commit the installer cannot verify is no longer replaced by main's tip, which nothing had
   verified: a checkout on main stays where it is, with a warning, and any other stops the update
-  with an error that names the pin, having changed nothing.
+  with an error that names the pin, having changed nothing. A hold ends with "Not updated: held at
+  …, because …", never "Already up to date".
 
   The CI auto-deploy had the same gap one step earlier: its trigger compares the branch's short
   name, and GitHub compares it ignoring case, so any ref whose short name matches main
