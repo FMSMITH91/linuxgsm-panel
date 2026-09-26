@@ -860,9 +860,10 @@ regardless of this file — this changelog is for humans.
   the name to be exactly `main`, fetches main's history, proves the commit is on main's
   first-parent line before taking its installer, and refuses a commit with no installer or an
   empty one with a stated error. All of that happens before the job joins the tailnet. The job
-  also runs in a `production` environment, so its Tailscale credentials can be held there and
-  restricted to the branch main, instead of being repository secrets any branch or tag could read
-  (the header of `deploy.yml` has the one-time setup).
+  also logs in to Tailscale with OIDC workload identity instead of an OAuth client secret: no
+  secret is stored, and Tailscale accepts only a token GitHub signed for this repository's
+  `production` environment, which only the branch main may use. The old secret was a repository
+  secret any branch or tag could read (the header of `deploy.yml` has the one-time setup).
 - **A ban now closes what the banned address already had open.** A ban refuses new connections, at
   the firewall or, behind Tailscale Funnel, at the panel's own gate. A live console or a host
   terminal opened before the ban was not a new connection, so it kept streaming for as long as the

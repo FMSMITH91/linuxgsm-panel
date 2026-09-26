@@ -369,9 +369,11 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   parent, and a re-run deploy of one of them is then refused. Only then does it read `install.sh`
   out of that commit, and it refuses a commit with none or an empty one. On the host, `install.sh`
   checks the pin again against its own fetch; a pin it cannot verify is never replaced by main's
-  unverified tip — the host stays where it is, or the update stops with an error. The Tailscale
-  credentials that let the job SSH in belong in the job's `production` environment, restricted to
-  the branch `main`. A repository secret would be readable by a workflow run on any branch or tag.
+  unverified tip — the host stays where it is, or the update stops with an error. The job logs in
+  to Tailscale with OIDC workload identity, not a stored secret: Tailscale's credential accepts
+  only a GitHub-signed token whose subject is this repository's `production` environment, and that
+  environment admits only the branch `main`. The OAuth client secret it replaced was a repository
+  secret, readable by a workflow run on any branch or tag.
 
   The second half of that sentence was missing, and it mattered: `install_root_tools` *copied*
   those root-owned pieces **out of the working tree**, and the integrity argument was that

@@ -471,10 +471,13 @@ _fetch_branch() {
 #     /tmp is full or read-only the check then fails having read nothing: the verified pin was
 #     dropped and root refused to stage, silently.
 # $2 is a full commit id (hex), so awk's escape processing of -v values changes nothing in it.
+# `($0 "")` makes the comparison a STRING one. awk compares two values that both look numeric as
+# numbers (mawk, Ubuntu's awk, and gawk alike), and a hex id made of digits and one 'e' does:
+# every "0e<digits>" is 0, so `$0 == want` called two different ids equal.
 _on_first_parent_line() {
     [ -n "$2" ] || return 1
     "$1" rev-list --first-parent "$3" 2>/dev/null \
-        | awk -v want="$2" '$0 == want { found = 1 } END { exit !found }'
+        | awk -v want="$2" '($0 "") == want { found = 1 } END { exit !found }'
 }
 
 # Which commit an update moves this checkout TO, once the branch has been fetched into
@@ -1683,7 +1686,13 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         # and got "Already up to date", exit 0, and `command not found` on the very next line they
         # were told to type. It self-gates on ORIGIN_TRUSTED, which check_origin_trusted set above.
         install_recovery_command
-        ok "Already up to date (version ${FROM_VER}) — no snapshot taken, panel left running."
+        # A hold is NOT "up to date": the pinned commit was not installed. Saying so on the last
+        # line is what a deploy log or the panel's update log is read by.
+        if [ "${UPD_WHY:-}" = hold ]; then
+            warn "Not updated: held at ${TARGET_SHA:0:10}, because the pinned commit ${PANEL_UPDATE_REF} could not be verified on ${DEFAULT_BRANCH}. The panel was left running."
+        else
+            ok "Already up to date (version ${FROM_VER}) — no snapshot taken, panel left running."
+        fi
         exit 0
     fi
 

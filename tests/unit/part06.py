@@ -6063,11 +6063,30 @@ check("deploy: main's history is fetched and the commit verified BEFORE the tail
                                                       "merge-base")),
       "step order %r; the deploy step (after the join) must only use what verify handed over"
       % (_dp_order,))
-# ...and the Tailscale secrets are an ENVIRONMENT's, not the repository's: a repository secret is
-# readable by a workflow run on any branch or tag, and these two put an SSH session on the host.
+# ...and the Tailscale login is an ENVIRONMENT's, not the repository's: a repository secret is
+# readable by a workflow run on any branch or tag, and this login puts an SSH session on the host.
 _dp_job = _deploy_wf[_deploy_wf.index("\n  deploy:\n"):_deploy_wf.index("\n    steps:\n")]
 check("deploy: the deploy job runs in the `production` environment (its secrets are main-only)",
       re.search(r"^    environment: production$", _dp_job, re.M) is not None, _dp_job[-400:])
+# ...and logs in with OIDC workload identity: id-token: write for THIS job only (never the whole
+# workflow), the Tailscale step given an audience, and no OAuth client secret anywhere to steal.
+_dp_top = _deploy_wf[:_deploy_wf.index("\njobs:\n")]
+_dp_join = _deploy_wf[_deploy_wf.index("- name: Join the tailnet"):]
+_dp_join = _dp_join[:_dp_join.index("\n      - name: ", 1)]
+check("deploy: the Tailscale login is OIDC (job-level id-token: write, an audience, no secret)",
+      re.search(r"^    permissions:\n      contents: read\n      id-token: write$", _dp_job, re.M)
+      is not None
+      and "id-token" not in _dp_top
+      and re.search(r"^          audience: \$\{\{ secrets\.TS_AUDIENCE \}\}$", _dp_join, re.M) is not None
+      and "oauth-secret" not in _deploy_wf and "TS_OAUTH_SECRET" not in _deploy_wf,
+      _dp_join)
+# ...and no step runs past a refused verify. A step-level `if:` (always(), failure()) on the join or
+# the deploy, or `continue-on-error:` on verify, joins the tailnet with the environment's secrets
+# for a run the proof refused — and the step order checked above still reads as correct.
+_dp_steps_txt = _deploy_wf[_deploy_wf.index("\n    steps:\n", _deploy_wf.index("\n  deploy:\n")):]
+_dp_gates = re.findall(r"^(?: {8}| {6}- )(?:if|continue-on-error):.*$", _dp_steps_txt, re.M)
+check("deploy: no step runs past a refused verify (no step-level if: or continue-on-error:)",
+      not _dp_gates, repr(_dp_gates))
 # The two steps are joined by the WORKFLOW: the deploy step's env names the verify step's id and
 # output key, and both steps take HEAD_SHA from the event. Read that join out of the YAML — the
 # harness below would otherwise wire the steps together itself, and a drifted name would never show.
@@ -6916,6 +6935,32 @@ try:
           _fp_fpl_got == {"tip": 0, "merge": 0, "oldest": 0, "E": 1, "absent": 1, "empty": 1,
                           "no-ref": 1}, repr(_fp_fpl_got))
 
+    # awk compares two values that both LOOK numeric AS NUMBERS, in mawk (Ubuntu's awk) and gawk
+    # alike: a commit id of digits and one 'e' is a number to it, and every "0e<digits>" is 0. So
+    # `$0 == want` called two different ids equal. The line comes from a stub git here, since no
+    # real commit id of that shape is at hand; the comparison is the whole question.
+    _fp_num_on, _fp_num_off = "0e" + "1" * 38, "0e" + "2" * 38
+
+    def _fp_fpl_num(sha):
+        return _sh_sub.run(["bash", "-c", "set -euo pipefail\n%s"
+                            "_stubgit() { printf '%%s\\n' %s %s %s; }\n"
+                            "_on_first_parent_line _stubgit %s refs/remotes/origin/main\n"
+                            % (_inst_shfn("_on_first_parent_line"), "a" * 40, _fp_num_on, "b" * 40,
+                               _shlex_q(sha))],
+                           capture_output=True, text=True).returncode
+
+    _fp_num_got = {"same": _fp_fpl_num(_fp_num_on), "numerically-equal": _fp_fpl_num(_fp_num_off)}
+    check("install.sh: _on_first_parent_line compares ids as STRINGS: an id awk reads as the same "
+          "number as one on the line (0e1... vs 0e2...) is not on it",
+          _fp_num_got == {"same": 0, "numerically-equal": 1}, repr(_fp_num_got))
+    _fp_awk_re = _re.compile(r"""awk -v want="[^"]*" '([^']*)'""")
+    _fp_awk_inst = _fp_awk_re.findall(_inst_shfn("_on_first_parent_line"))
+    _fp_awk_dep = _fp_awk_re.findall(_deploy_raw)
+    check("deploy: the verify step's first-parent test is install.sh's awk program, byte for byte "
+          "(string comparison included)",
+          len(_fp_awk_inst) == 1 and _fp_awk_dep == _fp_awk_inst,
+          "install.sh %r, deploy.yml %r" % (_fp_awk_inst, _fp_awk_dep))
+
     # A pin on E is not verified — and not replaced by main's TIP either, which nothing verified (T's
     # CI is still running): the checkout, at A on main, stays where it is.
     _fp_got = _fp_resolve(_fp_clone("ru-e", _fp_a), _fp_e)
@@ -7008,6 +7053,18 @@ try:
           and "CONTINUED" not in _fp_r.stdout
           and _fp_git("-C", _fp_lco, "rev-parse", "HEAD") == _fp_lsha,
           "rc=%s out=%r" % (_fp_r.returncode, _fp_r.stdout[-400:]))
+    # ...and a fetch that FAILS stops it, in the real resolve_update_target through the same caller:
+    # an origin that is gone. Carrying on would take the last-fetched (stale) tracking ref for the
+    # branch. (The check below this block stubs resolve_update_target, so it cannot see this.)
+    _fp_off = _fp_clone("caller-offline", _fp_a)
+    _fp_git("-C", _fp_off, "remote", "set-url", "origin", "file://" + os.path.join(_fp_sb, "gone"))
+    _fp_r = _sh_sub.run(["bash", "-c", "set -euo pipefail\ndie() { echo \"DIE $*\"; exit 1; }\n"
+                         "SRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n%s%secho CONTINUED\n"
+                         % (_shlex_q(_fp_off), _ru_fn, _fp_ci_blk)],
+                        capture_output=True, text=True, env=dict(_fp_env, PANEL_UPDATE_REF=""))
+    check("install.sh: ...and an update whose fetch FAILS stops, saying it couldn't reach the source",
+          "DIE Couldn't reach the update source" in _fp_r.stdout and "CONTINUED" not in _fp_r.stdout,
+          "rc=%s out=%r" % (_fp_r.returncode, _fp_r.stdout[-400:]))
 
     # A FOXTROT push. The host was deployed to S1, main's tip at the time. Then main was merged into
     # another branch (X, whose FIRST parent is that branch's O1) and main fast-forwarded to X: S1 is
@@ -7055,6 +7112,15 @@ try:
     _fp_got = _fp_resolve(_fx_clone("fx-fwd", _fx_s1), _fx_x)
     check("install.sh: ...while a pin on the new tip moves it forward (positive control)",
           _fp_got == _fx_x, "target %s, want X %s (HEAD S1 %s)" % (_fp_got, _fx_x, _fx_s1))
+    # ...and a pin it cannot verify HOLDS that host rather than stopping the update: in the hold
+    # rule, as in the stay rule, HEAD is "on the branch" by ANCESTRY. The case it exists for: a
+    # re-run deploy of S1 itself, once the foxtrot has taken S1 off the line.
+    _fp_r = _fp_resolve_run(_fx_clone("fx-hold", _fx_s1), _fx_s1)
+    check("install.sh: ...and a pin the foxtrot took off the line holds that host where it is, "
+          "rather than stopping the update",
+          _fx_premise and "TARGET=%s" % _fx_s1 in _fp_r.stdout
+          and "does not fall back to main's tip" in _fp_r.stderr,
+          "rc=%s out=%r err=%r" % (_fp_r.returncode, _fp_r.stdout[-200:], _fp_r.stderr[-300:]))
 
     # The panel's update check, for real against a clone at A. The tip and the merge are still being
     # verified; the pull request's commits carry their PR runs' state, or none ("unknown", which the
@@ -8696,3 +8762,32 @@ check("update card: the count and the changelog are built from the same list",
       "behind counts %r while changes lists %r — whichever is filtered differently is the one the "
       "operator cannot reconcile"
       % (_uc_behind7 and _uc_behind7.group(1), _uc_changes7 and _uc_changes7.group(1)))
+
+# ── a HOLD does not report "Already up to date" ─────────────────────────────────────────────────
+# When the pinned commit cannot be verified, install.sh keeps the checkout where it is (a hold) and
+# takes the no-op branch. That branch ended "Already up to date", exit 0 — so a deploy log or the
+# panel's update log read as a successful update to a commit that was never installed. The block
+# is run as written in install.sh, both ways.
+import subprocess as _hold_sub                                                    # noqa: E402
+_hold_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
+# Anchored on the comment above the block, so a mutation of the condition itself fails the checks
+# below instead of crashing the suite before they run.
+_hold_i = _hold_src.find('        # A hold is NOT "up to date"')
+_hold_j = _hold_src.find("\n        fi\n", _hold_i) if _hold_i >= 0 else -1
+_hold_block = _hold_src[_hold_i:_hold_j + len("\n        fi\n")] if _hold_j >= 0 else "false\n"
+
+
+def _hold_run(why):
+    _prog = ('warn() { echo "WARN $*"; }; ok() { echo "OK $*"; }\n'
+             'UPD_WHY=%s; TARGET_SHA=0123456789abcdef0123456789abcdef01234567\n'
+             'PANEL_UPDATE_REF=feedfacefeedfacefeedfacefeedfacefeedface; DEFAULT_BRANCH=main\n'
+             'FROM_VER=1.2.3\n' % why) + _hold_block
+    return _hold_sub.run(["bash", "-c", _prog], capture_output=True, text=True).stdout
+
+
+_hold_out, _hold_pin = _hold_run("hold"), _hold_run("pin")
+check("install.sh: a hold ends with 'Not updated' naming the pin, never 'Already up to date'",
+      _hold_out.startswith("WARN Not updated: held at 0123456789")
+      and "feedfacefeedface" in _hold_out and "Already up to date" not in _hold_out, _hold_out)
+check("install.sh: ...while a checkout that really is current still says 'Already up to date'",
+      _hold_pin.startswith("OK Already up to date (version 1.2.3)"), _hold_pin)

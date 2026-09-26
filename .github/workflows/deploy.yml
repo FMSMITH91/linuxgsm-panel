@@ -7,21 +7,25 @@ name: Deploy
 # bad release can't leave the panel down.
 #
 # ── One-time setup to enable ──────────────────────────────────────────────────
-#  1. Tailscale OAuth client (admin console -> Settings -> OAuth clients), scope
-#     "auth_keys", tag: tag:ci. Save as SECRETS of the `production` ENVIRONMENT (step 3),
-#     not as repository secrets:
-#        TS_OAUTH_CLIENT_ID, TS_OAUTH_SECRET
-#     A repository secret is readable by a workflow run on ANY branch or tag pushed here, and
-#     these two put an SSH session on the deploy host as a sudo-capable account. An
-#     environment's secrets reach only the jobs its deployment-branch rule admits. Delete any
-#     repository-level copies once the environment holds them.
+#  1. A Tailscale OpenID Connect credential — workload identity, NO stored secret (admin
+#     console -> Settings -> Trust credentials -> Credential -> OpenID Connect):
+#        Issuer:  GitHub Actions
+#        Subject: repo:FMSMITH91/linuxgsm-panel:environment:production
+#        Scope:   Auth Keys (write), tag: tag:ci
+#     Tailscale then accepts only a token GitHub signed for a job of THIS repository running in
+#     the `production` environment, which only the branch main may use (step 3). Save the
+#     credential's two values — neither is secret — in that ENVIRONMENT, not the repository:
+#        TS_OAUTH_CLIENT_ID, TS_AUDIENCE
+#     This used to be an OAuth client whose secret sat in a repository secret, readable by a
+#     workflow run on ANY branch or tag pushed here — and it puts an SSH session on the deploy
+#     host as a sudo-capable account. There is no longer a secret to read.
 #  2. Tailnet ACL: allow tag:ci to SSH the host as the deploy user, e.g.
 #        "ssh": [{ "action": "accept", "src": ["tag:ci"],
 #                  "dst": ["tag:server"], "users": ["ubuntu"] }]
 #     (the host must have `tailscale up --ssh`).
 #  3. The `production` environment (Settings -> Environments -> New environment), created
 #     BEFORE the secrets go into it: Deployment branches and tags -> "Selected branches and
-#     tags" -> one BRANCH rule, `main`, and no tag rule. It holds the two secrets from step 1.
+#     tags" -> one BRANCH rule, `main`, and no tag rule. It holds the two values from step 1.
 #     Repo VARIABLES (Settings -> Secrets and variables -> Actions -> Variables) stay at
 #     repository level — the job's `if` reads DEPLOY_ENABLED before any environment applies:
 #        DEPLOY_ENABLED = true
@@ -72,16 +76,18 @@ jobs:
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
       vars.DEPLOY_ENABLED == 'true'
-    # The Tailscale secrets belong to this environment, whose deployment-branch rule admits only
-    # the branch main (header, steps 1 and 3), so no workflow run on another branch or a tag can
-    # read them — which a repository secret does not prevent, whatever this file checks. A
-    # workflow_run job runs with GITHUB_REF set to the default branch, so this job qualifies.
-    #
-    # Safe to land before the environment is configured: if `production` does not exist yet,
-    # GitHub creates it on the first run with no protection rules, and repository-level secrets of
-    # the same names still resolve, exactly as they do today. The protection starts when the
-    # environment has the branch rule and holds the secrets.
+    # The Tailscale login is bound to this environment twice. Its deployment-branch rule admits only
+    # the branch main (header, step 3), so no workflow run on another branch or a tag can use it;
+    # and the Tailscale credential (header, step 1) accepts only a GitHub OIDC token whose subject
+    # names this environment, so there is no secret for any other run to read in the first place.
+    # A workflow_run job runs with GITHUB_REF set to the default branch, so this job qualifies.
     environment: production
+    # id-token: write lets the Tailscale step ask GitHub for a signed OIDC token (sub
+    # repo:FMSMITH91/linuxgsm-panel:environment:production), which Tailscale's credential
+    # (header, step 1) exchanges for a one-off auth key. Granted to this job only.
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -155,9 +161,10 @@ jobs:
           # lets grep exit at the first match, rev-list then dies of SIGPIPE writing the rest, and
           # pipefail fails the check exactly when it holds. A here-string (`grep <<< "$(rev-list)"`)
           # needs a temp file once main's line passes 64 KiB, about 1,600 commits, and fails with
-          # nothing read when it cannot write one.
+          # nothing read when it cannot write one. `($0 "")` compares as STRINGS: awk compares two
+          # values that both look numeric as numbers, and an id of digits and one 'e' does.
           if ! git rev-list --first-parent "${MAIN}" \
-               | awk -v want="${HEAD_SHA}" '$0 == want { found = 1 } END { exit !found }'; then
+               | awk -v want="${HEAD_SHA}" '($0 "") == want { found = 1 } END { exit !found }'; then
               echo "::error::head_sha ${HEAD_SHA} is not on this repository's main; nothing was deployed."
               exit 1
           fi
@@ -177,8 +184,10 @@ jobs:
       - name: Join the tailnet
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
         with:
+          # OIDC workload identity: no secret. The client id and audience are not secret either;
+          # what admits this job is GitHub's signed token naming the production environment.
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          audience: ${{ secrets.TS_AUDIENCE }}
           tags: tag:ci
 
       - name: Deploy via safe self-update (snapshot + health-check + rollback)
