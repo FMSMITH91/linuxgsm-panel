@@ -427,7 +427,8 @@ for _status, _landed, _accept in ((200, "/users", False), (404, "/users", False)
     _jc_drv.unreached = []
     _jc_drv.doc_status, _jc_nav["path"] = _status, _landed
     _jc_drv.confirming = {"/users": {"BUTTON|x"}}
-    _jc_drv.js = lambda _e, timeout=30: {"dialogs": 0, "path": _jc_nav["path"], "sig": None}
+    _jc_drv.js = lambda _e, timeout=30: (list(_jc_nav.get("scripts", [])) if "document.scripts" in _e
+                                         else {"dialogs": 0, "path": _jc_nav["path"], "sig": None})
     with _ctx14.redirect_stdout(_io14.StringIO()):
         _jc_drv.exercise("/users", accept=_accept)
     _jc_seen.append(list(_jc_drv.unreached))
@@ -435,3 +436,22 @@ check("js coverage: a page the walk names that answers an HTTP error or redirect
       "not reached, by the walk's own exercise() — but not in the confirming pass",
       _jc_seen == [[], [("/users", "HTTP 404")], [("/users", "redirected to /")], []],
       repr(_jc_seen))
+
+# ...and so is one that renders but loads a panel script under a URL the counting would not match:
+# walked in full and measured as nothing. A script under the panel's mount IS counted.
+_jc_seen = []
+for _scripts in (["http://127.0.0.1:1/static/js/users.js?v=3", "http://127.0.0.1:1/lgsm/static/js/panel.js"],
+                 ["http://127.0.0.1:1/a/b/static/js/users.js"],
+                 ["http://127.0.0.1:2/static/js/users.js"]):
+    _jc_drv.unreached, _jc_drv.doc_status, _jc_nav["path"] = [], 200, "/users"
+    _jc_nav["scripts"] = _scripts
+    with _ctx14.redirect_stdout(_io14.StringIO()):
+        _jc_drv.exercise("/users")
+    _jc_seen.append([_w for _p, _w in _jc_drv.unreached])
+check("js coverage: a page whose panel scripts would not be counted is recorded as not reached; one "
+      "under the panel's mount is counted",
+      _jc_seen[0] == [] and len(_jc_seen[1]) == 1 and "would not be counted" in _jc_seen[1][0]
+      and "/a/b/static/js/users.js" in _jc_seen[1][0] and len(_jc_seen[2]) == 1
+      and _jc_drv.repo_path("http://127.0.0.1:1/lgsm/static/js/panel.js") == "static/js/panel.js",
+      repr(_jc_seen))
+_jc_nav["scripts"] = []

@@ -27,7 +27,6 @@ Reaching: every page the walk names must render as itself. One that redirects el
 an HTTP error is recorded in `unreached`, and run.py fails the run over it: a renamed route would
 otherwise shrink the measurement without a word, and read as the code having lost coverage.
 """
-import http.cookiejar
 import json
 import os
 import re
@@ -39,7 +38,8 @@ import v8_lcov
 from cdp import CDPError
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-JS_URL_PATH = re.compile(r"^/static/js/([A-Za-z0-9_-]+\.js)$")
+# Under the panel's mount, when it has one (Tailscale Serve at /lgsm puts every asset there).
+JS_URL_PATH = re.compile(r"^(?:/[A-Za-z0-9_.-]+)?/static/js/([A-Za-z0-9_-]+\.js)$")
 STALE = 8.0
 MAX_AWAY = 20
 
@@ -71,6 +71,7 @@ class Driver:
         self.held = 0             # navigations held to take the leaving document's counts
         self.errors = []          # uncaught exceptions the pages threw: (url, line, text)
         self.unreached = []       # (page, why): pages of the walk that did not render as themselves
+        self.flow_errors = []     # (page, flow, error): flows that broke (walk.py goes on)
         self.loads = 0
         self.doc_status = 0       # HTTP status of the last document the page loaded
         self.chrome_done = False
@@ -117,7 +118,7 @@ class Driver:
             self._hold_navigation()
 
     def _hold_navigation(self):
-        """The page is about to leave: keep its counts while it is paused, then let it go on."""
+        """Keep a leaving page's counts while it is paused, then let it go on."""
         def taken(reply):
             self._keep(reply.get("result", {}))
             self.cdp.send("Debugger.resume")
@@ -279,11 +280,26 @@ class Driver:
             why = "HTTP %d" % self.doc_status
         elif self.path() != want:
             why = "redirected to %s" % self.path()
+        if not why:
+            why = self._uncounted_scripts()
         if why:
             log("  ! %s: %s; nothing to exercise" % (path, why))
             if record:
                 self.unreached.append((path, why))
         return not why
+
+    def _uncounted_scripts(self):
+        """Name any panel script this page loads that the coverage would not be counted for.
+
+        A page whose scripts arrive under a URL repo_path() does not know (a new mount, a new
+        asset scheme) would be walked in full and measured as nothing, with every other check
+        still passing: the walk once went on for twenty pages that way after the setup wizard
+        moved the panel under /lgsm.
+        """
+        srcs = self.js("Array.from(document.scripts).map(s => s.src)"
+                       ".filter(u => u.indexOf('/static/js/') >= 0)") or []
+        lost = [u for u in srcs if not self.repo_path(u)]
+        return ("its scripts would not be counted: %s" % ", ".join(lost[:3])) if lost else ""
 
     # ── exercising a page ──────────────────────────────────────────────────────────────────────
     def dialogs(self, accept=False):
@@ -393,20 +409,23 @@ class Driver:
         return True
 
     def second_session(self):
-        """Sign in once more from outside the browser, so the account has two sessions."""
-        opener = urllib.request.build_opener(
-            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-        with opener.open(self.base + "/login", timeout=10) as r:  # nosec B310 - loopback only
+        """Sign in once more from outside the browser, so the account has two sessions.
+
+        The cookie is carried by hand: the panel marks it Secure, which a browser honours on
+        loopback over plain HTTP and Python's cookie jar does not.
+        """
+        with urllib.request.urlopen(self.base + "/login", timeout=10) as r:  # nosec B310 - loopback
             page = r.read().decode("utf-8", "replace")
+            cookies = [c.split(";", 1)[0] for c in r.headers.get_all("Set-Cookie") or []]
         m = re.search(r'window\.CSRF = "([^"]+)"', page)
-        if not m:
-            log("  ! second session: no CSRF token on /login")
+        if not m or not cookies:
+            log("  ! second session: no CSRF token or session cookie on /login")
             return False
         body = urllib.parse.urlencode({"username": self.user, "password": self.password,
                                        "csrf_token": m.group(1)}).encode()
-        req = urllib.request.Request(self.base + "/login", data=body,
-                                     headers={"User-Agent": "js-coverage second session"})
-        with opener.open(req, timeout=10) as r:  # nosec B310 - loopback only
+        req = urllib.request.Request(self.base + "/login", data=body, headers={
+            "Cookie": "; ".join(cookies), "User-Agent": "js-coverage second session"})
+        with urllib.request.urlopen(req, timeout=10) as r:  # nosec B310 - loopback only
             return r.status == 200
 
     def world(self, **state):

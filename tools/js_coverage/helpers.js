@@ -229,14 +229,20 @@
     return null;
   }
 
-  // The viewport centre of the `i`th match of `sel`, scrolled into view first, for input the
-  // page cannot be sent from inside it (a real pointer drag, a file dragged in from disk).
+  // The centre of the part of the `i`th match of `sel` that is on screen, scrolled into view
+  // first, for input the page cannot be sent from inside it (a real pointer drag, a file dragged
+  // in from disk). The visible part, not the element: a card taller than the window has its own
+  // centre below the bottom edge, where a drop lands on nothing.
   function centre(sel, i) {
     var el = q(sel, i);
     if (!el) return null;
-    el.scrollIntoView({block: 'center', inline: 'center'});
+    // 'instant': the panel's stylesheet asks for smooth scrolling, and the rect read straight
+    // after a smooth scroll is where the element was before it.
+    el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
     var r = el.getBoundingClientRect();
-    return r.width && r.height ? [r.left + r.width / 2, r.top + r.height / 2] : null;
+    var left = Math.max(r.left, 0), right = Math.min(r.right, window.innerWidth);
+    var top = Math.max(r.top, 0), bottom = Math.min(r.bottom, window.innerHeight);
+    return right > left && bottom > top ? [(left + right) / 2, (top + bottom) / 2] : null;
   }
 
   window.__jscov = {

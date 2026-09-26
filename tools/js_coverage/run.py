@@ -291,8 +291,8 @@ def _pct(hit, lines):
     return 100.0 * hit / lines if lines else 0.0
 
 
-def summary_text(files, loaded, errors, held=0):
-    """The per-file table (lines, hit, cover, largest missed runs), a TOTAL, and page errors."""
+def summary_text(files, loaded, errors, held=0, flow_errors=()):
+    """Return the per-file table, a TOTAL, and what broke, with the lines hit in all."""
     rows, tf, th = [], 0, 0
     for path in sorted(files):
         hits = files[path]
@@ -306,6 +306,10 @@ def summary_text(files, loaded, errors, held=0):
     lines += rows
     lines.append("%-34s %5d %5d %6.1f%%" % ("TOTAL", tf, th, _pct(th, tf)))
     lines.append("(%d navigations held to keep the leaving page's counts)" % held)
+    if flow_errors:
+        lines += ["", "Flows that broke, so their part of the code went unexercised (%d):"
+                  % len(flow_errors)]
+        lines += ["  %s  %s  %s" % f for f in flow_errors]
     if errors:
         lines += ["", "Uncaught exceptions the pages threw (%d):" % len(set(errors))]
         for u, ln, t in sorted(set(errors))[:40]:
@@ -326,7 +330,10 @@ def write_reports(files, text, out, summary_path):
 def measure_and_report(d, out, summary_path):
     """Write the reports; raise Abort when nothing ran or a page the walk names was not reached."""
     files = measure(d)
-    text, hit = summary_text(files, d.loaded, d.errors, d.held)
+    text, hit = summary_text(files, d.loaded, d.errors, d.held, d.flow_errors)
+    for page, flow, why in d.flow_errors:
+        log("%s: flow %s broke: %s" % (page, flow, why) if not IN_CI
+            else "::warning::js coverage: on %s, flow %s broke: %s" % (page, flow, why))
     write_reports(files, text, out, summary_path)
     log(text)
     if hit == 0:
@@ -338,7 +345,7 @@ def measure_and_report(d, out, summary_path):
 
 
 def parse_args(argv):
-    """The command line: where the reports go, which browser, and what to keep or walk."""
+    """Parse the command line: where the reports go, which browser, what to keep or walk."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     ap.add_argument("--out", default="lcov.info")
     ap.add_argument("--summary", default="")

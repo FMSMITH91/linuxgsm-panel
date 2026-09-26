@@ -12,7 +12,10 @@ would fire — never a panel function called directly, so what is measured is wh
 reach. A flow that no longer finds its element does nothing and says nothing; the coverage it
 produced drops, which is where a renamed element shows up.
 """
+import json
 import os
+
+import pyotp
 
 # ── shared ─────────────────────────────────────────────────────────────────────────────────────
 # Answer the dialog the last step opened: OK (typing the password or the name it asks for) or
@@ -22,7 +25,7 @@ CANCEL = "J.settleDialogs(false, PW); await J.sleep(200);"
 
 
 def js(body):
-    """A flow that is one in-page script."""
+    """Make a flow of one in-page script."""
     def flow(d):
         d.run(body)
     flow.__doc__ = "In-page: " + " ".join(body.split())[:60]
@@ -204,7 +207,8 @@ return 1;
 SERVER_ACTIONS = r"""
 // Stop and Restart ask first when players are on: "when empty" queues it and shows the banner.
 for (const act of ['restart', 'stop']) {
-  const b = document.querySelector('[data-action="serverAction"][data-args^="[\"' + act + '\""]');
+  const b = Array.from(document.querySelectorAll('[data-action="serverAction"]'))
+    .find(x => JSON.parse(x.getAttribute('data-args') || '[]')[0] === act);
   if (!b) continue;
   b.click(); await J.sleep(1200);
   const later = Array.from(document.querySelectorAll('body > div button')).find(x => /empty/i.test(x.textContent));
@@ -386,7 +390,7 @@ J.click('[data-action="enableAutoUpdates"]'); await J.sleep(1200);
 for (const a of ['runDiagnostics', 'checkDbHealth', 'optimizeDb', 'genDebugReport']) {
   J.click('[data-action="' + a + '"]'); await J.sleep(1500); J.settleDialogs(true, PW); await J.sleep(600);
 }
-J.click('[data-action="repairPanel"]'); await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(1500);
+J.click('[data-action="repairPanel"]'); await J.sleep(300); J.settleDialogs(false, PW);
 J.click('[data-action="repairDb"]'); await J.sleep(300); J.settleDialogs(false, PW);
 J.click('[data-action="checkPanelUpdate"]'); await J.sleep(1500);
 return 1;
@@ -407,17 +411,22 @@ J.click('[data-action="clearBackupPassphrase"]'); await J.sleep(300); J.settleDi
 J.click('#bk-tbody [data-action="restoreBackup"]'); await J.sleep(400); J.settleDialogs(false, PW); await J.sleep(300);
 J.settleDialogs(false, PW);
 J.click('#bk-tbody [data-action="deleteBackup"]'); await J.sleep(300); J.settleDialogs(false, PW);
+J.click('#bk-tbody [data-action="deleteBackup"]'); await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(1200);
 // Game-file backups: a full run (it asks who is online), one server's, schedules, a delete.
 J.click('#fb-auto-enabled'); await J.sleep(400); J.click('#fb-auto-enabled'); await J.sleep(400);
 J.type('#fb-interval', 'weekly'); J.type('#fb-keep', '5'); await J.sleep(400);
-J.click('[data-action="runFullBackup"]'); await J.sleep(1500);
-const later = Array.from(document.querySelectorAll('body > div button')).find(x => /cancel/i.test(x.textContent));
-if (later) later.click(); else J.settleDialogs(false, PW);
-await J.sleep(300);
+// A full run asks who is online first: cancel it, then "when they leave", then "now".
+for (const pick of ['#fbd-cancel', '#fbd-wait', '#fbd-now']) {
+  J.click('[data-action="runFullBackup"]'); await J.sleep(1500);
+  if (!J.click(pick)) J.settleDialogs(pick !== '#fbd-cancel', PW);
+  await J.sleep(1200);
+}
 J.click('[data-action="backupOneGame"]'); await J.sleep(1200); J.settleDialogs(false, PW);
+J.click('[data-action="backupOneGame"]'); await J.sleep(1200); J.settleDialogs(true, PW); await J.sleep(1500);
 J.type('#gsi-1', 'weekly'); await J.sleep(600);
 J.type('#gsk-1', '4'); await J.sleep(600);
 J.click('[data-action="deleteGameBackup"]'); await J.sleep(300); J.settleDialogs(false, PW);
+J.click('[data-action="deleteGameBackup"]'); await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(1200);
 // Existing LinuxGSM installs on the host: scan, tick, import.
 J.click('[data-action="scanExisting"]'); await J.sleep(2500);
 const all = document.querySelector('[data-action="discToggleAll"]');
@@ -478,7 +487,7 @@ return 1;
 
 
 def logs_pages(d):
-    """The audit log: a filter, a sort both ways, and a second page."""
+    """Filter the audit log, sort it both ways, and open its second page."""
     d.run(LOGS)
     for q in ("?sort=action&dir=asc", "?sort=user&dir=desc&status=ok", "?page=2"):
         d.goto("/logs" + q)
@@ -507,6 +516,196 @@ def terminal(d):
     d.wait(0.8)
 
 
+# ── a host's firewall ──────────────────────────────────────────────────────────────────────────
+FIREWALL = r"""
+J.click('[data-action="refreshFirewall"]'); await J.sleep(1200);
+// Open a port: none typed, a bad one, then a good one by Enter in the box.
+J.click('[data-action="openPort"]'); await J.sleep(200);
+J.type('#new-port', '99999'); J.click('[data-action="openPort"]'); await J.sleep(900);
+J.type('#new-port', '27020'); J.type('#new-proto', 'udp'); J.type('#new-comment', 'jscov');
+J.q('#new-port').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+await J.sleep(1200);
+// Restrict one: to a source, and by rate — each on, then off.
+J.type('#src-cidr', '198.51.100.0/24'); J.type('#src-port', '27015');
+J.click('[data-action="allowFromSource"]'); await J.sleep(900);
+J.click('[data-action="removeAllowFromSource"]'); await J.sleep(900);
+J.type('#limit-port', '22');
+J.click('[data-action="limitPort"]'); await J.sleep(900);
+J.click('[data-action="unlimitPort"]'); await J.sleep(900);
+// Block an address by Enter, then unblock one; sync a server's ports; remove a rule (OK).
+J.type('#block-ip', '198.51.100.99');
+J.q('#block-ip').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+await J.sleep(1200);
+J.click('[data-action="unblockIp"]'); await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(900);
+J.click('[data-action="syncPorts"]'); await J.sleep(1200);
+J.click('[data-action="deleteGroup"]', 1); await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(1200);
+return 1;
+"""
+
+# ── remote hosts, and Tailscale on them ────────────────────────────────────────────────────────
+REMOTE_TS = r"""
+// The Tailscale check for a host, and whatever its answer offers.
+J.click('[data-ts-check]'); await J.waitFor('#ts-ssh, [data-install-ts], [data-action="migrateToTailscale"]', 5000);
+await J.sleep(400);
+J.click('[data-action="_showTsKeyAdv"]'); await J.sleep(200);
+if (J.q('#ts-routes')) J.type('#ts-routes', '10.0.0.0/24');
+J.click('[data-action="bootstrapTailscale"]'); await J.sleep(1000);     // no key: refused
+if (J.q('#ts-auth-key')) J.type('#ts-auth-key', 'tskey-auth-jscov');
+J.click('[data-action="bootstrapTailscale"]'); await J.sleep(1500);
+J.click('[data-action="tailscaleUp"]'); await J.sleep(2000);
+J.click('[data-install-ts]'); await J.sleep(2000);
+J.click('[data-action="migrateToTailscale"]'); await J.sleep(300); J.settleDialogs(false, PW);
+J.settleDialogs(false, PW); await J.sleep(300);
+return 1;
+"""
+
+REMOTES = r"""
+// Credentials: each way of signing in, in the add form and in an edit form.
+for (const how of ['password', 'tailscale', 'key', 'local']) {
+  J.type('#manage-remotes-auth_method', how); await J.sleep(100);
+  J.type('#manage-remotes-auth_method-2', how); await J.sleep(100);
+}
+// Bootstrap a host: open it, run it (the host cannot be reached), read its log.
+J.click('[data-ts-bootstrap]'); await J.sleep(800);
+J.click('[data-action="runBootstrap"]'); await J.sleep(3000);
+J.click('[data-action="toggleBsLog"]'); await J.sleep(200);
+J.click('[data-action="dismissBootstrap"]'); await J.sleep(300);
+J.settleDialogs(false, PW);
+// Remove a host: Cancel.
+J.click('.remove-remote-btn'); await J.sleep(300); J.settleDialogs(false, PW);
+return 1;
+"""
+
+
+def remotes_tailscale(d):
+    """Check Tailscale on a host that runs it, one waiting to be linked, and one without it."""
+    for state in ("running", "stopped", "absent"):
+        d.world(tailscale=state)
+        d.goto("/remotes")
+        d.run(REMOTE_TS)
+    d.world(tailscale="running")
+
+
+TAILSCALE_PAGE = r"""
+if (J.q('#peer-host')) {
+  J.type('#peer-host', '100.101.102.104');
+  J.q('#peer-host').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+  await J.sleep(1200);
+  J.type('#peer-host', '192.0.2.250'); J.click('[data-action="checkPeer"]'); await J.sleep(1500);
+}
+J.click('#ts-install-btn'); await J.sleep(2500);
+J.click('#ts-connect-btn'); await J.sleep(2500);
+J.click('[data-action="tsCheckAgain"]'); await J.sleep(800);
+if (J.q('#tailscale-mount')) { J.type('#tailscale-mount', '/lgsm'); }
+J.click('[data-action="enableServe"]'); await J.sleep(1500);
+J.click('[data-action="disableServe"]'); await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(1500);
+return 1;
+"""
+
+
+def tailscale_states(d):
+    """Open the Tailscale page with it running, waiting to be linked, and not installed."""
+    for state in ("running", "stopped", "absent"):
+        d.world(tailscale=state)
+        d.goto("/tailscale?refresh=1")
+        d.run(TAILSCALE_PAGE)
+    d.world(tailscale="running")
+    d.goto("/tailscale?refresh=1")
+
+
+# ── installing a server ───────────────────────────────────────────────────────────────────────
+INSTALL = r"""
+// Each host (the game list and the free port follow it), then games, then install one.
+const hosts = J.q('#remote-select');
+if (hosts) for (const o of Array.from(hosts.options)) { J.type('#remote-select', o.value); await J.sleep(500); }
+const games = J.q('#game-type-select');
+if (games) {
+  for (const g of ['gmod', 'mc', 'cs2', 'rust']) { J.type('#game-type-select', g); await J.sleep(400); }
+  J.type('#server-name-input', 'Jscov Install'); J.type('#port-input', '27025');
+  const f = J.q('#install-form');
+  if (f) { f.requestSubmit(); await J.sleep(3000); }
+}
+return 1;
+"""
+
+
+# ── before and after the walk: the setup wizard, two-factor sign-in ──────────────────────────
+SETUP_TAILSCALE = r"""
+await J.waitFor('#ts-box > *', 5000); await J.sleep(500);
+for (const id of ['#ts-install', '#ts-up', '#ts-serve']) { if (J.click(id)) await J.sleep(2500); }
+J.click('[data-action="tsRefresh"]'); await J.sleep(1000);
+return 1;
+"""
+
+SETUP_REMOTE = r"""
+for (const how of ['password', 'tailscale', 'key']) { J.type('#auth-method', how); await J.sleep(100); }
+J.type('#setup-remote-name', 'Wizard VPS'); J.type('#setup-remote-host', '192.0.2.30');
+const add = J.q('button[name="action"][value="add"]');
+if (add) { add.click(); await J.sleep(2500); }    // the host cannot be reached: said so, same step
+return 1;
+"""
+
+
+def setup_wizard(d):
+    """Finish the setup wizard, which the seed leaves at its last two pages, as its owner would.
+
+    Every other page redirects to it until it is done, so a wizard that did not finish is recorded
+    as not reached — the whole walk would otherwise measure the wizard, page after page.
+    """
+    # Running last but one: finishing with Tailscale running and named sets up Serve and moves
+    # the panel under /lgsm, which is a different walk (and one the reports would have to follow).
+    for state in ("absent", "running", "stopped"):
+        d.world(tailscale=state)
+        d.goto("/setup")
+        if not d.js("!!document.getElementById('ts-box')"):
+            d.unreached.append(("/setup", "the wizard's Tailscale step did not render"))
+            return
+        d.run(SETUP_TAILSCALE)
+    d.run("J.click('#ts-continue'); await J.sleep(1500); return 1;")
+    d.goto("/setup")
+    d.run(SETUP_REMOTE)
+    d.goto("/setup")
+    d.run("const b = J.q('button[name=\"action\"][value=\"skip\"]'); if (b) b.click();"
+          "await J.sleep(1500); return 1;")
+    d.world(tailscale="running")
+    if not d.reached("/"):
+        d.unreached.append(("/setup", "the wizard did not finish"))
+
+
+OTP_NAG = """
+J.click('[data-action="dismissOtpNagForever"]'); await J.sleep(300);""" + CANCEL + """
+J.click('[data-action="dismissOtpNagForever"]'); await J.sleep(300);""" + OK + """
+return 1;
+"""
+
+
+def otp_nag(d):
+    """Bring back the two-factor reminder "Not now" hid, then turn it off for good."""
+    d.run("try { sessionStorage.removeItem('otpNagHidden'); } catch (e) {} return 1;")
+    d.goto("/account")
+    d.run(OTP_NAG)
+
+
+def two_factor(d):
+    """Turn on two-factor sign-in with a code from the key shown, which ends on the backup codes.
+
+    Last in the walk: the account needs a code to sign in from then on, and the harness signs in
+    with the password alone.
+    """
+    if not d.reached("/account/2fa/enable"):
+        return
+    key = (d.js("(document.querySelector('code.text-info') || {}).textContent || ''") or "").strip()
+    if not key:
+        d.unreached.append(("/account/2fa/enable", "no key shown to enrol with"))
+        return
+    d.run("J.type('input[name=\"password\"]', PW); J.type('input[name=\"totp_code\"]', %s);"
+          "J.q('input[name=\"totp_code\"]').form.requestSubmit(); await J.sleep(2000); return 1;"
+          % json.dumps(pyotp.TOTP(key).now()))
+    d.settle(quiet=0.5, limit=6.0)
+    d.run("J.click('[data-action=\"copyCodes\"]'); await J.sleep(300);"
+          "J.click('[data-action=\"downloadCodes\"]'); await J.sleep(500); return 1;")
+
+
 # ── the page lists ─────────────────────────────────────────────────────────────────────────────
 FLOWS = {
     "/": [("palette", js(PALETTE)), ("filters", js(DASH_FILTERS)), ("bulk", js(DASH_BULK)),
@@ -522,11 +721,16 @@ FLOWS = {
                            ("backups", js(BACKUPS))],
     "/remote/2/manage": [("tabs", js(HOST_TABS)), ("security", js(HOST_SECURITY)),
                          ("controls", js(HOST_CONTROLS))],
+    "/remote/2/firewall": [("firewall", js(FIREWALL))],
+    "/remote/3/firewall": [("firewall", js(FIREWALL))],
+    "/remotes": [("remotes", js(REMOTES)), ("tailscale", remotes_tailscale)],
+    "/tailscale": [("states", tailscale_states)],
+    "/servers/install": [("install", js(INSTALL))],
     "/users": [("users", js(USERS))],
     "/groups": [("groups", js(GROUPS))],
     "/settings": [("settings", js(SETTINGS))],
     "/logs": [("logs", logs_pages)],
-    "/account": [("sessions", account_second_session)],
+    "/account": [("sessions", account_second_session), ("otp-nag", otp_nag)],
     "/terminal/1": [("terminal", terminal)],
     "/terminal/2": [("terminal", terminal)],
 }

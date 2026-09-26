@@ -20,6 +20,21 @@ _T0 = time.time()
 _lock = threading.Lock()
 _tick = [0]
 
+# The parts of the world a walk can change as it goes (driver.world() writes this file, serve.py
+# says where it is): a page that renders differently for a host without Tailscale, or one waiting
+# to be linked, is only reached by making the host that way.
+WORLD_FILE = ""
+_WORLD_DEFAULTS = {"tailscale": "running"}     # running | stopped | absent
+
+
+def world(key):
+    """Return the current value of `key` in the walk's world."""
+    try:
+        with open(WORLD_FILE, encoding="utf-8") as fh:
+            return json.load(fh).get(key, _WORLD_DEFAULTS[key])
+    except (OSError, ValueError):
+        return _WORLD_DEFAULTS[key]
+
 
 def _b64(text):
     return base64.b64encode(text.encode()).decode()
@@ -307,6 +322,24 @@ _TS_STATUS = json.dumps({
                       "TailscaleIPs": ["100.101.102.105"], "OS": "macOS", "Online": False,
                       "LastSeen": "2026-09-20T08:00:00Z", "Relay": ""}}})
 
+_TS_NEEDS_LOGIN = json.dumps({"BackendState": "NeedsLogin", "AuthURL":
+                               "https://login.tailscale.com/a/jscov", "Self": None,
+                               "Peer": None, "TailscaleIPs": None})
+_TS_AUTH = "\nTo authenticate, visit:\n\n\thttps://login.tailscale.com/a/jscov\n\n"
+
+
+def _ts(when_running, when_stopped=None, when_absent=""):
+    """Answer by the host's Tailscale: running, installed but not linked, or absent."""
+    def answer(_command):
+        state = world("tailscale")
+        if state == "absent":
+            return when_absent
+        if state == "stopped" and when_stopped is not None:
+            return when_stopped
+        return when_running
+    return answer
+
+
 _CRONTAB = ("# m h dom mon dow command\n"
             "@reboot /home/%(u)s/%(u)s start > /dev/null 2>&1\n"
             "*/5 * * * * /home/%(u)s/%(u)s monitor > /dev/null 2>&1\n"
@@ -376,10 +409,14 @@ _TABLE = [
     (r"apt list --upgradable|apt-check", _APT_UPGRADABLE),
     (r"apt-config dump APT::Periodic::Unattended-Upgrade", 'APT::Periodic::Unattended-Upgrade "1";'),
     (r"pro status --format json|pro-status", _PRO_STATUS),
-    (r"tailscale (--)?version", "1.84.0\n  tailscale commit: 0123456789ab\n"),
-    (r"tailscale status --json", _TS_STATUS),
-    (r"tailscale serve status", "https://panel-host.tail1234.ts.net (tailnet only)\n"
-                                "|-- / proxy http://127.0.0.1:5000\n"),
+    (r"which tailscale 2>/dev/null && echo 'INSTALLED'",
+     _ts("/usr/bin/tailscale\nINSTALLED", when_absent="NOTINSTALLED")),
+    (r"which tailscale && tailscale version", _ts("/usr/bin/tailscale\n1.84.0")),
+    (r"tailscale (--)?version", _ts("1.84.0\n  tailscale commit: 0123456789ab\n")),
+    (r"tailscale status --json", _ts(_TS_STATUS, _TS_NEEDS_LOGIN, "{}")),
+    (r"tailscale up\b", _ts("", _TS_AUTH)),
+    (r"tailscale serve status", _ts("https://panel-host.tail1234.ts.net (tailnet only)\n"
+                                    "|-- / proxy http://127.0.0.1:5000\n", "No serve config\n")),
     (r"tailscale debug prefs", json.dumps({"RouteAll": False})),
     (r"ip link show tailscale\d", "NOTFOUND"),
     (r"uptime -p", "up 3 days, 14 hours, 8 minutes"),
