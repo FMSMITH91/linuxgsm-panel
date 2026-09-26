@@ -35,6 +35,15 @@ from panel.routes._shared import (_looks_installed, _maybe_resolve_public_ip,
 
 
 def register(app):
+    _register_metrics(app)
+    _register_palette(app)
+    _register_server_status(app)
+    _register_server_stats(app)
+    _register_installs(app)
+
+
+def _register_metrics(app):
+    """Live dashboard metrics, and one server's metric history."""
     @app.route("/api/dashboard/metrics")
     @login_required
     def api_dashboard_metrics():
@@ -71,38 +80,7 @@ def register(app):
                  for rid, r in remote_by_id.items()}
         out_servers = {}
         if work:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
-                for sid, m, rid, mp in itertools.chain.from_iterable(ex.map(_query_host_metrics, work)):
-                    if not m:
-                        continue
-                    out_servers[str(sid)] = {
-                        "cpu": round(m.get("game_cpu_percent") or 0, 1),
-                        "ram_mb": int(m.get("game_ram_mb") or 0),
-                        "uptime": int(m.get("game_uptime_secs") or 0),
-                        "up": bool(m.get("game_procs")),   # a live game process, not just a listening port
-                        "map": mp or "",
-                    }
-                    if rid is not None and not hosts.get(str(rid), {}).get("metrics"):
-                        rt, dt = m.get("ram_total") or 0, m.get("disk_total") or 0
-                        _rem = remote_by_id.get(rid)
-                        hosts.setdefault(str(rid), {
-                            "name": getattr(_rem, "display_name", "") or "",
-                            "local": bool(getattr(_rem, "is_local", False)),
-                            "reachable": True,
-                            "probed": True,
-                        }).update({
-                            "cpu": round(m.get("cpu_percent") or 0, 1),
-                            "ram_pct": round(100.0 * (m.get("ram_used") or 0) / rt, 1) if rt else 0,
-                            "disk_pct": round(100.0 * (m.get("disk_used") or 0) / dt, 1) if dt else 0,
-                            "uptime": int(m.get("uptime_secs") or 0),
-                            "cores": int(m.get("cores") or 1),
-                            # A sample came back, so this host answered — whatever the monitor's
-                            # column last said. Reporting `reachable: False` beside live CPU
-                            # figures would put the page's own two halves at odds.
-                            "reachable": True,
-                            "probed": True,
-                            "metrics": True,
-                        })
+            out_servers = _sample_metrics(work, remote_by_id, hosts)
         return jsonify({"servers": out_servers, "hosts": hosts})
 
     @app.route("/api/server/<int:server_id>/history")
@@ -146,6 +124,9 @@ def register(app):
                     for r in hrows[::hstep]]
         return jsonify({"server": server, "host": host, "range": rng})
 
+
+def _register_palette(app):
+    """A free port for a new server, and the command palette's server list."""
     @app.route("/api/free-port")
     @login_required
     @permission_required(INSTALL_SERVER, MANAGE_SERVERS)
@@ -210,6 +191,9 @@ def register(app):
             "actions": _allowed if gs.installed else [],
         } for gs in get_user_servers(current_user)])
 
+
+def _register_server_status(app):
+    """The polled server list and one server's status."""
     @app.route("/api/servers")
     @login_required
     def api_servers():
@@ -220,48 +204,7 @@ def register(app):
                                            _effective_prefs(current_user))
         # Refresh live status efficiently: one listening-port scan per remote,
         # then match each game server's port (instead of an SSH call per server).
-        by_remote = {}
-        for gs in servers:
-            if gs.remote_id:
-                by_remote.setdefault(gs.remote_id, []).append(gs)
-        # Scan the hosts CONCURRENTLY, then apply what came back. Each scan is one SSH round trip
-        # and they do not depend on each other, so doing them in sequence made this endpoint cost
-        # hosts x latency: measured against an 80ms link, 404ms at 5 hosts and 1.61s at 20 — re-paid
-        # every 8 seconds by the dashboard's status poll, on top of /api/dashboard/metrics doing its
-        # own (already parallel) pass. Same shape as _query_host_metrics.
-        #
-        # `remote` is resolved HERE, not in the worker: get_user_servers joinedloads it, and reading
-        # a lazy relationship from a pool thread would emit a query on a session this greenthread
-        # owns. Only the scan runs in the pool for the same reason — the status writes below stay
-        # on this greenthread.
-        work = [(gslist[0].remote, gslist) for gslist in by_remote.values() if gslist[0].remote]
-
-        def _scan(item):
-            remote, gslist = item
-            try:
-                # Hand the scanner's answer back UNCHANGED. This was
-                # `(_remote_listening_ports(remote) or set())`, under a comment reasoning that a
-                # failed read "is the same as nothing listening here, and it is the MONITOR that
-                # must not alert on it" — but this endpoint does not merely display a status, it
-                # COMMITS one, and the guard twelve lines below (`if ports is None: continue —
-                # this host's scan failed; leave its statuses alone`) was written for precisely
-                # this case and could only ever fire on the `except` path, because the `or set()`
-                # had already turned None into an empty set.
-                #
-                # So an `ss` that never answered wrote "offline" into gs.status for every game
-                # server on that host — which is the damage _remote_listening_ports' own docstring
-                # exists to describe, arriving by a different route: the bots and the dashboard
-                # repeat the stored status, and it is what the one-shot "notify when empty" reads.
-                return gslist, remote, _remote_listening_ports(remote)
-            except Exception:
-                _log.debug("api_servers: port scan failed", exc_info=True)
-                return gslist, remote, None
-
-        scanned = []
-        if work:
-            with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
-                scanned = list(ex.map(_scan, work))
+        scanned = _scan_listening_ports(servers)
 
         # Status writes are collected and applied as TWO statements, not one UPDATE per server.
         # Per-object assignment made this endpoint's query count scale with the number of game
@@ -271,50 +214,8 @@ def register(app):
         # while that endpoint wrote "offline" for every server on a failed sample, the scan below
         # agreed with it and had nothing to write, so the N+1 never fired. The budget was being met
         # by a bug, not by the loop being cheap.
-        flip = {"online": [], "offline": []}
-        flipped = {}
-        for gslist, remote, ports in scanned:
-            if ports is None:
-                continue                      # this host's scan failed; leave its statuses alone
-            for gs in gslist:
-                # NEVER overwrite an in-progress install's status. This poller only reflects
-                # running/stopped, and a not-yet-running install would otherwise get flipped
-                # "installing" -> "offline" (it isn't listening on its port yet) — which made the
-                # progress row vanish and show "Not installed" the moment you navigated back.
-                if not gs.installed or gs.status in ("installing", "configuring"):
-                    continue
-                st = "online" if gs.port in ports else "offline"
-                if gs.status != st:
-                    # Deliberately NOT `gs.status = st`. Assigning marks the object dirty, and the
-                    # commit then flushes one UPDATE per server no matter what bulk statement runs
-                    # beside it — which is the N+1 this endpoint is gated against. The response
-                    # below reads the new value out of `flipped` instead.
-                    flip[st].append(gs.id)
-                    flipped[gs.id] = st
-            # Resolve+cache the remote's public IP for the connect address in the background
-            # (non-blocking) — the connect address falls back to remote.host until it's cached,
-            # so a slow/unreachable remote never stalls this polled endpoint.
-            if not remote.public_ip:
-                _maybe_resolve_public_ip(app, remote.id)
-        data = []
-        for gs in servers:
-            r = gs.remote
-            host = (r.public_ip if r else "") or (r.host if (r and not r.is_local) else "")
-            data.append({
-                "id": gs.id,
-                "name": gs.name,
-                "short_name": gs.short_name,
-                "game_type": gs.game_type,
-                "port": gs.port,
-                "status": flipped.get(gs.id, gs.status),
-                "installed": gs.installed,
-                "remote_name": r.name if r else "",
-                "connect": f"{host}:{gs.port}" if host else "",
-                "connect_url": gs.connect_uri(host),
-                "players": _cached_player_count(gs.id),
-                "max_players": _cached_player_max(gs.id),
-                "game_name": _cached_player_name(gs.id),
-            })
+        flip, flipped = _status_flips(app, scanned)
+        data = [_server_row(gs, flipped) for gs in servers]
         # The status writes land HERE, after the response is built. Two statements, not one per
         # server — and, more importantly, AFTER every attribute the loop above reads.
         #
@@ -326,14 +227,7 @@ def register(app):
         # It was invisible until the stats endpoint stopped persisting a status it could not read:
         # while that wrote "offline" for every server on a failed sample, the scan above agreed and
         # nothing was ever dirty, so the commit never fired. The perf budget was being met by a bug.
-        if flip["online"] or flip["offline"]:
-            for _st, _ids in flip.items():
-                if _ids:
-                    # synchronize_session=False: nothing in the session needs reconciling — the
-                    # response has already been built, from `flipped`.
-                    GameServer.query.filter(GameServer.id.in_(_ids)).update(
-                        {GameServer.status: _st}, synchronize_session=False)
-            db.session.commit()
+        _apply_status_flips(flip)
 
         return jsonify(data)
 
@@ -389,6 +283,9 @@ def register(app):
             "remote": gs.remote.name if gs.remote else "",
         })
 
+
+def _register_server_stats(app):
+    """One server's live stats and installed version."""
     @app.route("/api/server/<int:server_id>/stats")
     @login_required
     @server_access_required
@@ -434,18 +331,7 @@ def register(app):
         # the right test for refusing a redundant start/stop. A crashed server reads offline here
         # and still has processes there, so the Stop that clears its tmux session is not refused.
         _readable = bool(m and m.get("ram_total"))
-        status = "online" if m.get("port_open") else "offline"
-        changed = False
-        # Never overwrite an in-progress install, exactly as /api/servers refuses to: this endpoint
-        # is polled by the very page that shows the install progress, and "installing" -> "online"
-        # (steamcmd is a process; with the old predicate it was also 'online') ends the progress
-        # row mid-download.
-        if _readable and gs.installed and gs.status not in ("installing", "configuring") \
-                and gs.status != status:
-            gs.status = status
-            changed = True
-        elif not _readable:
-            status = gs.status or "unknown"     # report what we last knew, do not persist a guess
+        status, changed = _persisted_stats_status(gs, m, _readable)
         # Resolve + cache the remote's public IP (for the connect address) in the background —
         # non-blocking, so this polled endpoint never stalls on a slow/unreachable remote.
         if not remote.public_ip:
@@ -502,6 +388,9 @@ def register(app):
             info = {"reported": "", "build": "", "appid": "", "updated": None, "label": ""}
         return jsonify({"supports_update": gs.supports_update, **info})
 
+
+def _register_installs(app):
+    """Install progress: every running install, one install, and dismissing it."""
     @app.route("/api/installs")
     @login_required
     def api_installs():
@@ -524,17 +413,7 @@ def register(app):
             for sid, j in list(_install_jobs.items()):
                 if sid not in mine or j.get("status") != "running":
                     continue
-                total = j.get("total") or 8
-                step = j.get("step") or 0
-                out.append({
-                    "id": sid,
-                    "name": j.get("name") or mine[sid].name,
-                    "step": step,
-                    "total": total,
-                    "percent": max(0, min(100, int(step * 100 / total))) if total else 0,
-                    "step_name": j.get("step_name") or "",
-                    "elapsed": int(time.time() - (j.get("started") or time.time())),
-                })
+                out.append(_install_row(sid, j, mine[sid]))
         out.sort(key=lambda r: r["id"])
         return jsonify({"installs": out})
 
@@ -554,30 +433,7 @@ def register(app):
             # Covers both "installing" (steps 1-4) and "configuring" (steps 5-8, installed=True): a
             # restart in either phase strands a status the poller skips forever, so both reconcile.
             if gs and gs.status in ("installing", "configuring"):
-                verdict = _looks_installed(app, gs.remote, gs.short_name, gs.lgsm_name)
-                if verdict is True:
-                    gs.installed = True
-                    gs.status = "offline"   # live metrics will flip it to online if it's running
-                    db.session.commit()
-                    _notify_servers_changed(app)
-                    return jsonify({"status": "done", "step": 8, "total": 8, "percent": 100,
-                                    "step_name": "Complete",
-                                    "message": "Install finished — verified after the panel restarted.",
-                                    "log": [], "elapsed": 0})
-                if verdict is False:
-                    gs.status = "failed"
-                    db.session.commit()
-                    _notify_servers_changed(app)
-                    return jsonify({"status": "failed", "step": 0, "total": 8, "percent": 0,
-                                    "step_name": "Interrupted",
-                                    "message": "The panel restarted before this install finished, so it "
-                                               "didn't complete. Uninstall it, then install again.",
-                                    "log": [], "elapsed": 0})
-                # Couldn't reach the host to check — report an interrupted-but-unknown state.
-                return jsonify({"status": "interrupted", "step": 0, "total": 8, "percent": 0,
-                                "step_name": "Unknown", "log": [], "elapsed": 0,
-                                "message": "Install progress was lost (the panel may have restarted) and "
-                                           "the server couldn't be reached to confirm. Try refreshing."})
+                return _reconcile_lost_install(app, gs)
             return jsonify({"status": "none"})
         with _install_lock:
             j = _install_jobs.get(server_id)
@@ -618,3 +474,222 @@ def register(app):
             if j and j["status"] in ("done", "failed"):
                 _install_jobs.pop(server_id, None)
         return jsonify({"success": True})
+
+
+def _sample_metrics(work, remote_by_id, hosts):
+    """Take the host samples in parallel; returns each server's figures and fills `hosts` in place."""
+    out_servers = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
+        for sid, m, rid, mp in itertools.chain.from_iterable(ex.map(_query_host_metrics, work)):
+            if not m:
+                continue
+            out_servers[str(sid)] = _server_metrics(m, mp)
+            if rid is not None and not hosts.get(str(rid), {}).get("metrics"):
+                _rem = remote_by_id.get(rid)
+                hosts.setdefault(str(rid), {
+                    "name": getattr(_rem, "display_name", "") or "",
+                    "local": bool(getattr(_rem, "is_local", False)),
+                    "reachable": True,
+                    "probed": True,
+                }).update(_host_figures(m))
+    return out_servers
+
+
+def _server_metrics(m, mp):
+    """One game server's live figures out of its host's sample."""
+    return {
+        "cpu": round(m.get("game_cpu_percent") or 0, 1),
+        "ram_mb": int(m.get("game_ram_mb") or 0),
+        "uptime": int(m.get("game_uptime_secs") or 0),
+        "up": bool(m.get("game_procs")),   # a live game process, not just a listening port
+        "map": mp or "",
+    }
+
+
+def _host_figures(m):
+    """A host's whole-machine figures out of its first sample, marked as answered."""
+    rt, dt = m.get("ram_total") or 0, m.get("disk_total") or 0
+    return {
+        "cpu": round(m.get("cpu_percent") or 0, 1),
+        "ram_pct": round(100.0 * (m.get("ram_used") or 0) / rt, 1) if rt else 0,
+        "disk_pct": round(100.0 * (m.get("disk_used") or 0) / dt, 1) if dt else 0,
+        "uptime": int(m.get("uptime_secs") or 0),
+        "cores": int(m.get("cores") or 1),
+        # A sample came back, so this host answered — whatever the monitor's
+        # column last said. Reporting `reachable: False` beside live CPU
+        # figures would put the page's own two halves at odds.
+        "reachable": True,
+        "probed": True,
+        "metrics": True,
+    }
+
+
+def _scan_listening_ports(servers):
+    """One listening-port scan per host the servers are on, run concurrently: [(servers, remote, ports)]."""
+    by_remote = {}
+    for gs in servers:
+        if gs.remote_id:
+            by_remote.setdefault(gs.remote_id, []).append(gs)
+    # Scan the hosts CONCURRENTLY, then apply what came back. Each scan is one SSH round trip
+    # and they do not depend on each other, so doing them in sequence made this endpoint cost
+    # hosts x latency: measured against an 80ms link, 404ms at 5 hosts and 1.61s at 20 — re-paid
+    # every 8 seconds by the dashboard's status poll, on top of /api/dashboard/metrics doing its
+    # own (already parallel) pass. Same shape as _query_host_metrics.
+    #
+    # `remote` is resolved HERE, not in the worker: get_user_servers joinedloads it, and reading
+    # a lazy relationship from a pool thread would emit a query on a session this greenthread
+    # owns. Only the scan runs in the pool for the same reason — the status writes below stay
+    # on this greenthread.
+    work = [(gslist[0].remote, gslist) for gslist in by_remote.values() if gslist[0].remote]
+
+    scanned = []
+    if work:
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
+            scanned = list(ex.map(_scan_host_ports, work))
+    return scanned
+
+
+def _scan_host_ports(item):
+    """(servers, remote, its listening ports) for one host; ports is None when the scan failed."""
+    remote, gslist = item
+    try:
+        # Hand the scanner's answer back UNCHANGED. This was
+        # `(_remote_listening_ports(remote) or set())`, under a comment reasoning that a
+        # failed read "is the same as nothing listening here, and it is the MONITOR that
+        # must not alert on it" — but this endpoint does not merely display a status, it
+        # COMMITS one, and the guard twelve lines below (`if ports is None: continue —
+        # this host's scan failed; leave its statuses alone`) was written for precisely
+        # this case and could only ever fire on the `except` path, because the `or set()`
+        # had already turned None into an empty set.
+        #
+        # So an `ss` that never answered wrote "offline" into gs.status for every game
+        # server on that host — which is the damage _remote_listening_ports' own docstring
+        # exists to describe, arriving by a different route: the bots and the dashboard
+        # repeat the stored status, and it is what the one-shot "notify when empty" reads.
+        return gslist, remote, _remote_listening_ports(remote)
+    except Exception:
+        _log.debug("api_servers: port scan failed", exc_info=True)
+        return gslist, remote, None
+
+
+def _status_flips(app, scanned):
+    """The status each scanned server changes to, as ({status: [ids]}, {id: status}); nothing is written."""
+    flip = {"online": [], "offline": []}
+    flipped = {}
+    for gslist, remote, ports in scanned:
+        if ports is None:
+            continue                      # this host's scan failed; leave its statuses alone
+        for gs in gslist:
+            # NEVER overwrite an in-progress install's status. This poller only reflects
+            # running/stopped, and a not-yet-running install would otherwise get flipped
+            # "installing" -> "offline" (it isn't listening on its port yet) — which made the
+            # progress row vanish and show "Not installed" the moment you navigated back.
+            if not gs.installed or gs.status in ("installing", "configuring"):
+                continue
+            st = "online" if gs.port in ports else "offline"
+            if gs.status != st:
+                # Deliberately NOT `gs.status = st`. Assigning marks the object dirty, and the
+                # commit then flushes one UPDATE per server no matter what bulk statement runs
+                # beside it — which is the N+1 this endpoint is gated against. The response
+                # below reads the new value out of `flipped` instead.
+                flip[st].append(gs.id)
+                flipped[gs.id] = st
+        # Resolve+cache the remote's public IP for the connect address in the background
+        # (non-blocking) — the connect address falls back to remote.host until it's cached,
+        # so a slow/unreachable remote never stalls this polled endpoint.
+        if not remote.public_ip:
+            _maybe_resolve_public_ip(app, remote.id)
+    return flip, flipped
+
+
+def _server_row(gs, flipped):
+    """One server as /api/servers lists it, with the status the scan just found."""
+    r = gs.remote
+    host = (r.public_ip if r else "") or (r.host if (r and not r.is_local) else "")
+    return {
+        "id": gs.id,
+        "name": gs.name,
+        "short_name": gs.short_name,
+        "game_type": gs.game_type,
+        "port": gs.port,
+        "status": flipped.get(gs.id, gs.status),
+        "installed": gs.installed,
+        "remote_name": r.name if r else "",
+        "connect": f"{host}:{gs.port}" if host else "",
+        "connect_url": gs.connect_uri(host),
+        "players": _cached_player_count(gs.id),
+        "max_players": _cached_player_max(gs.id),
+        "game_name": _cached_player_name(gs.id),
+    }
+
+
+def _apply_status_flips(flip):
+    """Write the flipped statuses as one UPDATE per status, then commit."""
+    if flip["online"] or flip["offline"]:
+        for _st, _ids in flip.items():
+            if _ids:
+                # synchronize_session=False: nothing in the session needs reconciling — the
+                # response has already been built, from `flipped`.
+                GameServer.query.filter(GameServer.id.in_(_ids)).update(
+                    {GameServer.status: _st}, synchronize_session=False)
+        db.session.commit()
+
+
+def _persisted_stats_status(gs, m, _readable):
+    """The status /stats reports, set on gs when a readable sample changed it; returns (status, changed)."""
+    status = "online" if m.get("port_open") else "offline"
+    # Never overwrite an in-progress install, exactly as /api/servers refuses to: this endpoint
+    # is polled by the very page that shows the install progress, and "installing" -> "online"
+    # (steamcmd is a process; with the old predicate it was also 'online') ends the progress
+    # row mid-download.
+    if _readable and gs.installed and gs.status not in ("installing", "configuring") \
+            and gs.status != status:
+        gs.status = status
+        return status, True
+    if not _readable:
+        status = gs.status or "unknown"     # report what we last knew, do not persist a guess
+    return status, False
+
+
+def _install_row(sid, j, gs):
+    """One running install as the corner progress widget lists it."""
+    total = j.get("total") or 8
+    step = j.get("step") or 0
+    return {
+        "id": sid,
+        "name": j.get("name") or gs.name,
+        "step": step,
+        "total": total,
+        "percent": max(0, min(100, int(step * 100 / total))) if total else 0,
+        "step_name": j.get("step_name") or "",
+        "elapsed": int(time.time() - (j.get("started") or time.time())),
+    }
+
+
+def _reconcile_lost_install(app, gs):
+    """Settle an install whose live progress was lost, by asking the host whether it finished."""
+    verdict = _looks_installed(app, gs.remote, gs.short_name, gs.lgsm_name)
+    if verdict is True:
+        gs.installed = True
+        gs.status = "offline"   # live metrics will flip it to online if it's running
+        db.session.commit()
+        _notify_servers_changed(app)
+        return jsonify({"status": "done", "step": 8, "total": 8, "percent": 100,
+                        "step_name": "Complete",
+                        "message": "Install finished — verified after the panel restarted.",
+                        "log": [], "elapsed": 0})
+    if verdict is False:
+        gs.status = "failed"
+        db.session.commit()
+        _notify_servers_changed(app)
+        return jsonify({"status": "failed", "step": 0, "total": 8, "percent": 0,
+                        "step_name": "Interrupted",
+                        "message": "The panel restarted before this install finished, so it "
+                                   "didn't complete. Uninstall it, then install again.",
+                        "log": [], "elapsed": 0})
+    # Couldn't reach the host to check — report an interrupted-but-unknown state.
+    return jsonify({"status": "interrupted", "step": 0, "total": 8, "percent": 0,
+                    "step_name": "Unknown", "log": [], "elapsed": 0,
+                    "message": "Install progress was lost (the panel may have restarted) and "
+                               "the server couldn't be reached to confirm. Try refreshing."})
