@@ -144,6 +144,9 @@ regardless of this file — this changelog is for humans.
   on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
 
 ### Changed
+- **`LICENSE` is the plain MIT text**, so GitHub and OpenSSF Scorecard detect it as MIT. The terms
+  are unchanged. The notice appended to it (not affiliated with LinuxGSM; built largely with AI) is
+  in the README's disclaimer, which already said most of it.
 - **Imported game servers get Autostart turned on, as a fresh install already does.** Autostart is
   LinuxGSM's `monitor` cron, which brings back a server that should be running and leaves a
   deliberately stopped one down. An import left it off, so an imported server did not come back
@@ -864,6 +867,12 @@ regardless of this file — this changelog is for humans.
   secret is stored, and Tailscale accepts only a token GitHub signed for this repository's
   `production` environment, which only the branch main may use. The old secret was a repository
   secret any branch or tag could read (the header of `deploy.yml` has the one-time setup).
+- **The panel's Python dependencies are installed by hash.** `requirements.txt` is now pip-compile's
+  lockfile for a new `requirements.in`: the same 33 versions as before, each with the hashes of its
+  published files. pip refuses any download that is not byte-for-byte what was locked. The installer
+  gets this with no change, because pip checks hashes whenever the file has them. CI and the fuzz
+  image also install wheels only. Packages already installed on a host are kept as they are; the
+  check applies to whatever pip installs from now on.
 - **A ban now closes what the banned address already had open.** A ban refuses new connections, at
   the firewall or, behind Tailscale Funnel, at the panel's own gate. A live console or a host
   terminal opened before the ban was not a new connection, so it kept streaming for as long as the

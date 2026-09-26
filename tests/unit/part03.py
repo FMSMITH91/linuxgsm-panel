@@ -263,6 +263,8 @@ check("runtime-path: app.py counts", _so._is_runtime_path("app.py") is True)
 check("runtime-path: a template counts", _so._is_runtime_path("templates/base.html") is True)
 check("runtime-path: static asset counts", _so._is_runtime_path("static/js/app.js") is True)
 check("runtime-path: requirements counts", _so._is_runtime_path("requirements.txt") is True)
+check("runtime-path: requirements.in (what the lockfile is compiled from) is noise",
+      _so._is_runtime_path("requirements.in") is False)
 check("runtime-path: install.sh counts", _so._is_runtime_path("install.sh") is True)
 check("runtime-path: README is noise", _so._is_runtime_path("README.md") is False)
 check("runtime-path: any .md is noise", _so._is_runtime_path("docs/SECURITY.md") is False)

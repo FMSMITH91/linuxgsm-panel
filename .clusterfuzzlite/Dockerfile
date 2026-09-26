@@ -12,9 +12,10 @@ FROM gcr.io/oss-fuzz-base/base-builder-python@sha256:6b2b3a7e4a2da50de47f94925cf
 # The panel's runtime dependencies. They have to be present at BUILD time, not just at run time:
 # PyInstaller bundles what it can import while compiling each fuzzer, so a missing dependency here
 # becomes a fuzzer that dies on startup instead of a build that fails loudly.
-# Copied on its own first so this layer caches across source-only changes.
+# Copied on its own first so this layer caches across source-only changes. It is a hashed lockfile
+# (see requirements.in): every file pip fetches must match a hash in it, and all of them are wheels.
 COPY requirements.txt $SRC/requirements.txt
-RUN pip3 install --no-cache-dir -r "$SRC/requirements.txt"
+RUN pip3 install --no-cache-dir --require-hashes --only-binary :all: -r "$SRC/requirements.txt"
 
 COPY . $SRC/linuxgsm-panel
 WORKDIR $SRC/linuxgsm-panel

@@ -1,0 +1,40 @@
+# Runtime dependencies: the packages the panel imports directly. EDIT THIS FILE, then regenerate
+# requirements.txt from it (run in python:3.10-slim):
+#   pip-compile --allow-unsafe --generate-hashes --no-annotate --strip-extras \
+#     --output-file=requirements.txt requirements.in
+#
+# requirements.txt is pip-compile's lockfile: the WHOLE resolved set, every package these pull in,
+# each pinned to an exact version AND to the hashes of its published files. Pinning only the direct
+# dependencies left the rest to float. install.sh skips pip when requirements.txt is unchanged, and
+# `pip install -r` never upgrades a package that already satisfies a range. So a security fix in a
+# transitive package (Werkzeug, python-engineio, Jinja2, ...) never reached an installed host.
+# Dependabot proposed no bump for a package it could not see, and pip-audit checked a freshly
+# resolved set that no host ran. With every package locked, a bump to any of them changes
+# requirements.txt: install.sh re-runs pip, Dependabot has something to propose (grouped pip
+# updates, reviewed), and pip-audit reads the set that is deployed. tests/unit checks that the lock
+# stays closed: each package's own requirements, for CPython 3.10-3.14 on Linux, are pinned too.
+#
+# The hashes: CI, the fuzz image and Lighthouse install with `--require-hashes --only-binary :all:`,
+# so a file that is not byte-for-byte what was locked is refused. install.sh passes no flag and gets
+# the same check anyway, because pip turns hash checking on whenever a requirement carries a hash.
+# It must NOT pass the flag: an update can land an older pinned commit whose requirements.txt has
+# no hashes, and with the flag that install fails.
+#
+# Compiled on 3.10, the oldest Python the panel supports (Ubuntu 22.04's python3): Dependabot
+# re-runs pip-compile on the Python the lockfile's header names. Resolved on 3.14 it picks bidict
+# 0.24 and SQLAlchemy 2.1, which need 3.11 and cannot install on 22.04. One lock serves 3.10-3.14
+# because the resolved set is the same on each, and every pin ships wheels for each. No environment
+# markers here: a 3.10 compile drops a requirement whose marker is false on 3.10, so a package
+# needed only on a newer Python must be listed bare (tests/unit refuses a marker in this file).
+flask
+flask-socketio
+flask-login
+flask-sqlalchemy
+flask-wtf
+pyotp
+qrcode
+paramiko
+bcrypt
+eventlet
+cryptography
+websocket-client

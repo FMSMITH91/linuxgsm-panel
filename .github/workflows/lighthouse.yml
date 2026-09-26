@@ -63,7 +63,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: python -m pip install --quiet -r requirements.txt
+        # A block, not a plain scalar: `:all: ` is a YAML mapping indicator on a `run:` line.
+        run: |
+          python -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
 
       - name: Start a throwaway panel (HTTP) and wait for it
         run: |

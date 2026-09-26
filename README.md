@@ -10,7 +10,7 @@ A self-hosted web panel for managing **[LinuxGSM](https://linuxgsm.com)** game s
 
 > ## ⚠️ Disclaimer — please read first
 >
-> - **Not an official LinuxGSM product** — an independent third-party panel, not affiliated with or endorsed by LinuxGSM. Trademarks belong to their owners.
+> - **Not an official LinuxGSM product** — an independent third-party panel, not affiliated with, endorsed by, or connected to LinuxGSM or its authors. "LinuxGSM" and any related marks belong to their respective owners.
 > - **Created and modified almost entirely by AI.** Read the code and test it before trusting it with real servers or credentials.
 > - **Provided "as is", no warranty — use at your own risk.** See [Security](#security).
 
