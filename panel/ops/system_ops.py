@@ -841,11 +841,14 @@ def version_for_commit(commit="HEAD"):
 
     Read as the committer time in seconds (%ct), so neither the host's timezone nor the offset the
     commit was made in moves it. Every commit of a day shares the date, which is why the panel
-    shows it beside the short commit. "" when git cannot say.
+    shows it beside the short commit. "" when git cannot say. The trailing `--` makes git take the
+    name as a revision only: without it, a name that is not one but is a file in the checkout
+    answered with the last commit that touched that file.
     """
     if not commit or commit.startswith("-"):
         return ""
-    out, _, rc = _git(["log", "-1", "--no-show-signature", "--format=%ct", commit], timeout=10)
+    out, _, rc = _git(["log", "-1", "--no-show-signature", "--format=%ct", commit, "--"],
+                      timeout=10)
     return _version_from_epoch(out) if rc == 0 else ""
 
 
