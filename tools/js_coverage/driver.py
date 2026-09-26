@@ -275,6 +275,12 @@ class Driver:
         """
         self.goto(path)
         want = path.split("#")[0].split("?")[0]
+        if self.path() != want:
+            # Once more: the page this walk just left can still be finishing what its last
+            # control started (a confirmed form posts after its dialog closes), and that
+            # navigation lands after ours.
+            self.wait(1.0)
+            self.goto(path)
         why = ""
         if self.doc_status >= 400:
             why = "HTTP %d" % self.doc_status
@@ -350,6 +356,9 @@ class Driver:
                 break
             opts["done"].append(prev)
             self.settle(quiet=0.15, limit=2.5)
+        # The last step answered a dialog; what its OK starts (a form posting, a reload) has to
+        # land here, not on the next page.
+        self.settle(quiet=0.5, limit=4.0)
         return len(opts["done"])
 
     def run(self, script, timeout=90):

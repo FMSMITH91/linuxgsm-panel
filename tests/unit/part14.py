@@ -237,10 +237,11 @@ check("js coverage (CI): ...installs only requirements.txt, hash-checked, and ru
 class _JcDriver:
     """What main() and measure_and_report() read of a Driver, with the numbers given."""
 
-    def __init__(self, hits, unreached=()):
+    def __init__(self, hits, unreached=(), flow_errors=()):
         self._hits = hits
         self.loaded = set(hits)
         self.errors, self.held, self.unreached = [], 0, list(unreached)
+        self.flow_errors = list(flow_errors)
         self.snapshots = 0
 
     def snapshot(self):
@@ -297,6 +298,8 @@ _jc_cases = {
     "a page not reached": _jc_main(lambda: _JcDriver(_jc_good, [("/servers/manage",
                                                                  "redirected to /")])),
     "measured": _jc_main(lambda: _JcDriver(_jc_good)),
+    "a flow broke": _jc_main(lambda: _JcDriver(_jc_good, flow_errors=[
+        ("/users", "users", "CDPError: no reply")])),
 }
 try:
     _jc_want = {"no browser": (2, "no Chrome/Chromium found"),
@@ -319,10 +322,17 @@ try:
           and "SF:static/js/b.js\nDA:4,0\nLF:1\nLH:0\n" in _jc_lcov
           and "TOTAL" in open(os.path.join(_jc_ok[2], "summary.txt")).read(),
           repr((_jc_ok[0], _jc_ok[1][-300:], _jc_lcov[:200])))
-    # The empty and the unreached runs must not leave a report that reads as a measurement.
     check("js coverage: ...and the unreached run names the page and why",
           "/servers/manage (redirected to /)" in _jc_cases["a page not reached"][1],
           _jc_cases["a page not reached"][1][-300:])
+    # A flow is the harness's own code: one that broke costs the coverage it would have made,
+    # which the report says, and does not fail a measurement of everything else.
+    _jc_fb = _jc_cases["a flow broke"]
+    check("js coverage: ...while a flow that broke is reported, in the summary too, and the run still "
+          "exits 0",
+          _jc_fb[0] == 0 and "flow users broke: CDPError: no reply" in _jc_fb[1]
+          and "Flows that broke" in open(os.path.join(_jc_fb[2], "summary.txt")).read(),
+          repr((_jc_fb[0], _jc_fb[1][-300:])))
 finally:
     for _c in _jc_cases.values():
         _sh14b.rmtree(_c[2], ignore_errors=True)
