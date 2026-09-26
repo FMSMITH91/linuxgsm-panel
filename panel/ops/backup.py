@@ -17,7 +17,7 @@ import os
 import re
 import shutil
 import sqlite3
-import subprocess
+import subprocess  # nosec B404 - one call below: a systemd-run argv list, no shell
 import pathlib as _pathlib
 import tarfile
 import tempfile
@@ -861,7 +861,7 @@ def _legacy_restore_dispatch(stage, name, safety="", typed_passphrase=False):
     # it goes through _sh() (shlex.quote), which is where the scrutiny belongs and is not what
     # this rule inspects.
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-    subprocess.Popen(_service_restart_launcher(script),
+    subprocess.Popen(_service_restart_launcher(script),  # nosec B603 - fixed systemd-run argv, no shell
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy())
     return True, _restore_started_msg(name, safety, typed_passphrase)
 
