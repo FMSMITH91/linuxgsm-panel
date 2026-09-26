@@ -12,8 +12,9 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # priority drop-in, the panel files + its data (DB / config / encryption keys), and — for a
 # root install — the sudoers entry, the root-owned helper directory
 # (/usr/local/lib/linuxgsm-panel: panel-helper, db_maintenance.py, panel.conf, install.sh,
-# recover.sh and .source.git, root's own clone of the repository),
-# the weekly npm/gamedig cron, the panel's sysctl tuning, and the dedicated 'lgsmpanel' user.
+# recover.sh, .source.git, root's own clone of the repository, and gamedig/, the player-query
+# tool's installed tree), the `gamedig` links into that tree in /usr/local/bin and /usr/bin, the
+# weekly gamedig cron, the panel's sysctl tuning, and the dedicated 'lgsmpanel' user.
 #
 # That list is the point: install.sh writes in five places OUTSIDE the panel directory, and
 # an uninstaller that only removes the obvious one leaves a root cron running weekly and a
@@ -249,11 +250,12 @@ fi
 
 # ── Root-owned pieces a PER-USER install creates too ───────────────────────────────────────────
 # These were inside the `system` branch below, and three of them are written on BOTH paths:
-# install.sh calls ensure_gamedig() and install_root_tools() unconditionally, before its
-# root/user split, and both use `sudo` when they are not already root. So a per-user uninstall
-# removed the panel and left behind a weekly ROOT cron running `npm install -g` every Sunday
-# forever, the root-owned helper tree, a panel.conf pointing at a deleted directory and a
-# dangling recovery symlink — then printed "LinuxGSM Panel has been uninstalled."
+# install.sh calls ensure_nodejs(), install_root_tools() and install_gamedig() unconditionally,
+# before its root/user split, and all use `sudo` when they are not already root. So a per-user
+# uninstall removed the panel and left behind a weekly ROOT cron running `npm install -g` every
+# Sunday forever (the cron that re-runs install-gamedig.sh now), the root-owned helper tree, a
+# panel.conf pointing at a deleted directory and a dangling recovery symlink — then printed
+# "LinuxGSM Panel has been uninstalled."
 #
 # That is exactly the leftover this file's own header calls "the point" of removing more than
 # PANEL_DIR, and per-user is the ordinary way to install.  (${U_SUDO} is computed above, where the
@@ -329,12 +331,25 @@ if [ -n "${OTHER_INSTALL}" ] \
         && [ "$(_phys_path "${SHARED_OWNER}")" != "${MY_DIR_PHYS}" ]; }; then
     SHARED_MINE=0
 fi
+# Is the `gamedig` command at $1 the panel's? install-gamedig.sh links /usr/local/bin/gamedig and
+# /usr/bin/gamedig into the tree it installs under /usr/local/lib/linuxgsm-panel/gamedig, which the
+# `rm -rf` below takes with the rest of that directory, so the links would be left dangling. Only a
+# link whose text points into that directory is the panel's: a gamedig the operator installed any
+# other way (npm's own global link, a file) is theirs, and stays.
+_gamedig_link_ours() {
+    [ -L "$1" ] || return 1
+    case "$(readlink -- "$1" 2>/dev/null)" in
+        /usr/local/lib/linuxgsm-panel/gamedig/*) return 0 ;;
+    esac
+    return 1
+}
 if [ "${SHARED_MINE}" -eq 0 ]; then
     warn "Leaving the host-wide pieces alone — they belong to another install still on this host:"
     warn "    ${OTHER_INSTALL:-${SHARED_OWNER}}"
-    warn "  (the helper, the recovery command and the weekly node-tools cron are shared)"
+    warn "  (the helper, gamedig, the recovery command and the weekly node-tools cron are shared)"
 elif [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] \
-   || [ -L /usr/local/bin/linuxgsm-panel-recover ]; then
+   || [ -L /usr/local/bin/linuxgsm-panel-recover ] \
+   || _gamedig_link_ours /usr/local/bin/gamedig || _gamedig_link_ours /usr/bin/gamedig; then
     sudo_note
     # The root-owned pieces install_root_tools() places OUTSIDE the panel directory: the helper,
     # the offline DB-repair copy, panel.conf (which records the install's paths) and the
@@ -369,16 +384,25 @@ elif [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] 
             || ${U_SUDO} systemctl restart fail2ban >/dev/null 2>&1 || true
         ok "Removed the panel's fail2ban jail, filter and whitelist (other jails left intact)"
     fi
-    # A weekly ROOT cron that keeps gamedig (pinned v5) current for player queries. With the panel gone
-    # it has nothing to serve, and it would otherwise keep running `npm install -g` as root every
-    # Sunday forever.
+    # The weekly ROOT cron that re-runs install-gamedig.sh (it ran `npm install -g` once). With the
+    # panel gone it has nothing to serve, and its script went with the directory above.
     if [ -f /etc/cron.d/lgsm-node-tools ]; then
         if ${U_SUDO} rm -f /etc/cron.d/lgsm-node-tools; then
-            ok "Removed the weekly npm/gamedig update cron"
+            ok "Removed the weekly gamedig cron"
         else
             warn "Could not remove /etc/cron.d/lgsm-node-tools — remove it by hand."
         fi
     fi
+    # ...and the `gamedig` commands pointing into it, only where they are the panel's links.
+    for _gd_link in /usr/local/bin/gamedig /usr/bin/gamedig; do
+        if _gamedig_link_ours "${_gd_link}"; then
+            if ${U_SUDO} rm -f "${_gd_link}"; then
+                ok "Removed the ${_gd_link} link into the panel's gamedig"
+            else
+                warn "Could not remove ${_gd_link} — remove it by hand."
+            fi
+        fi
+    done
     if [ -L /usr/local/bin/linuxgsm-panel-recover ] || [ -f /usr/local/bin/linuxgsm-panel-recover ]; then
         if ${U_SUDO} rm -f /usr/local/bin/linuxgsm-panel-recover; then
             ok "Removed the linuxgsm-panel-recover command"

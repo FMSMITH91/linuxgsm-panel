@@ -844,7 +844,7 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     tool the empty-only daily restart uses). Returns an int, or None when the game
     isn't queryable (no gamedig type / no port) or the query fails — callers treat
     None as 'unknown' and don't block on it. gamedig is a bare command on PATH exactly
-    as the restart cron invokes it (installed globally via npm at setup)."""
+    as the restart cron invokes it (install-gamedig.sh links it in /usr/local/bin and /usr/bin)."""
     gdtype = _gamedig_type(game_type, query_type)
     if not gdtype or not port:
         return None

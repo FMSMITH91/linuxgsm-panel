@@ -526,9 +526,11 @@ def _metrics_history_watch(app):
 def _node_tools_cron_pass(app):
     """One pass of _node_tools_cron_watch. Two jobs, both about player queries working from cron:
 
-      * every host gets the weekly npm+gamedig auto-update cron — so hosts that predate it (or a
-        remote added without the 'Prepare & Secure' bootstrap) keep their player-query tools
-        current without a manual re-bootstrap;
+      * every host gets the weekly cron that re-runs install-gamedig.sh, and every REMOTE first
+        gets gamedig itself, from the lockfile this checkout holds (hosts.ensure_node_tools_cron):
+        so a host that predates it, or a remote added without the 'Prepare & Secure' bootstrap,
+        is brought onto the pinned tree, and a panel update that brings a new lockfile reaches the
+        remotes within a day. It fetches nothing on a host that already has that tree;
       * every game server's own crontab gets cron.upgrade_managed_cron_tracking, the in-place
         upgrade the Scheduled Tasks page already runs on every read. It is what gives an existing
         restart-when-empty line the PATH its gamedig call needs (_core.CRON_TOOL_PATH): that line
@@ -2723,8 +2725,8 @@ if __name__ == "__main__":
     # Record CPU/RAM/player samples into history (for the trend charts on the server page).
     threading.Thread(target=lambda: _metrics_history_watch(app), daemon=True).start()
 
-    # Keep gamedig, the player-query tool (pinned v5, no install scripts), current on every host
-    # (weekly cron; this ensures the cron exists on hosts that predate it). npm is left to the OS.
+    # Keep gamedig, the player-query tool, installed from its pinned lockfile on every host: the
+    # weekly repair cron everywhere, and the lockfile's tree itself on remotes. See the pass above.
     threading.Thread(target=lambda: _node_tools_cron_watch(app), daemon=True).start()
 
     # Proactive monitor: server-down / host-unreachable / disk-low admin notifications.

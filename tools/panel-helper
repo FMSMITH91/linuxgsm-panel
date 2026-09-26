@@ -89,7 +89,6 @@ TOOLS = {
     "fallocate": ("/usr/bin/fallocate", "/bin/fallocate"),
     "mkswap": ("/usr/sbin/mkswap", "/sbin/mkswap"),
     "swapon": ("/usr/sbin/swapon", "/sbin/swapon"),
-    "npm": ("/usr/bin/npm", "/usr/local/bin/npm"),
     "tailscale": ("/usr/bin/tailscale", "/usr/sbin/tailscale"),
     "ss": ("/usr/bin/ss", "/usr/sbin/ss", "/sbin/ss", "/bin/ss"),
     "sysctl": ("/usr/sbin/sysctl", "/sbin/sysctl"),
@@ -272,13 +271,6 @@ SWAPFILE = "/swapfile"
 SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
 FSTAB = "/etc/fstab"
 
-
-# npm packages the panel installs globally, and the spec each one installs as. Pinned to the major
-# the panel's query types are written for, and installed with --ignore-scripts, so root never runs
-# a package's install hook. "npm" itself is gone: `npm install -g npm` as root fetched the newest npm
-# and made root run it, and nothing in the panel asked for it.
-NPM_GLOBAL_PACKAGES = ("gamedig",)
-NPM_GLOBAL_SPECS = {"gamedig": "gamedig@5"}
 
 F2B_EVENT_RE = re.compile(r"\[[A-Za-z0-9._-]+\] (?:Ban|Found) [0-9a-fA-F:.]+")
 
@@ -491,12 +483,14 @@ WRITE_CONTENT = {
 
 # The one body the helper writes itself. Byte-identical to what the panel sends remote hosts
 # (panel/ops/ssh_manager/hosts.py:_NODE_TOOLS_CRON) and to install.sh's copy — a unit gate holds the
-# three together. gamedig only, pinned to v5, --ignore-scripts: see the note on _NODE_TOOLS_CRON.
+# three together. It re-runs install-gamedig.sh, which installs gamedig from the hash-locked
+# lockfile beside it and fetches nothing when that tree is already in place: a repair job, not an
+# updater. See the note on _NODE_TOOLS_CRON.
 NODE_TOOLS_CRON_BODY = (
-    "# LinuxGSM Panel - keep gamedig current for player queries (managed by the panel).\n"
+    "# LinuxGSM Panel - keep gamedig installed from its pinned lockfile (managed by the panel).\n"
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
-    "30 4 * * 0 root command -v npm >/dev/null 2>&1 && "
-    "npm install -g --ignore-scripts gamedig@5 >/var/log/lgsm-node-tools.log 2>&1\n"
+    "30 4 * * 0 root [ -x /usr/local/lib/linuxgsm-panel/gamedig/install-gamedig.sh ] && "
+    "/usr/local/lib/linuxgsm-panel/gamedig/install-gamedig.sh >/var/log/lgsm-node-tools.log 2>&1\n"
 )
 
 
@@ -1596,9 +1590,8 @@ VERBS = {
     # something the panel actually hardens it to.
     "sshd-set-directive": ([v_sshd_key, v_ident_free], lambda a: [], None),
     "create-swapfile": ([], lambda a: [], None),
-    "npm-install-global": ([v_choice(*NPM_GLOBAL_PACKAGES)],
-                           lambda a: ["npm", "install", "-g", "--ignore-scripts",
-                                      NPM_GLOBAL_SPECS[a[0]]], None),
+    # Refused here -- see do_gamedig_install. Listed so the two tables stay identical.
+    "gamedig-install": ([], lambda a: [], None),
     # Refused here -- see do_nodesource_setup. Listed so the panel's table and this one stay
     # identical, which is what the anti-drift gate checks.
     "nodesource-setup": ([], lambda a: [], None),
@@ -2051,6 +2044,22 @@ def do_nodesource_setup(args, content):
     same verbs."""
     print("panel-helper: nodesource-setup is for remote hosts; on this host install.sh configures "
           "NodeSource", file=sys.stderr)
+    return 2
+
+
+def do_gamedig_install(args, content):
+    """Refused, always. gamedig-install writes the panel's tools/gamedig files into
+    /usr/local/lib/linuxgsm-panel/gamedig and runs install-gamedig.sh from there, as root. It exists
+    for REMOTE hosts, where the panel already has `sudo bash -c`; the add-host bootstrap and the
+    daily pass send its shell rendering over SSH.
+
+    On this host those files come from install.sh, which stages them from root's own source like
+    this helper, never from the checkout the panel user owns. Doing it here would take the lockfile
+    and the script from that checkout and run them as root, which is the exact hole this helper
+    closes. The weekly cron re-runs the root-owned copy install.sh placed. The verb is in VERBS only
+    because the panel's table and this one must list the same verbs."""
+    print("panel-helper: gamedig-install is for remote hosts; on this host install.sh installs "
+          "gamedig from its root-owned copy", file=sys.stderr)
     return 2
 
 
@@ -3893,6 +3902,7 @@ ACTIONS = {
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
     "nodesource-setup": do_nodesource_setup,
+    "gamedig-install": do_gamedig_install,
 }
 
 # The only two ACTIONS verbs that CONSUME their payload. The others take the parameter and

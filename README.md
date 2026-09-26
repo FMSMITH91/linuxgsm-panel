@@ -80,7 +80,7 @@ bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
 3. **Stops, disables, and removes** the systemd service and its priority drop-in.
 4. **(Root install)** Removes the panel's **own** UFW port rule and resets its Tailscale Serve binding — never a game-server port.
 5. **Deletes the panel files and its `data/`** — accounts, config, and encryption keys.
-6. **(Root install)** Removes everything the installer put outside the panel directory: the sudoers entry, the root-owned helper directory (`/usr/local/lib/linuxgsm-panel`), the `linuxgsm-panel-recover` command, the weekly npm/gamedig cron, the panel's sysctl tuning, and the dedicated `lgsmpanel` user.
+6. **(Root install)** Removes everything the installer put outside the panel directory: the sudoers entry, the root-owned helper directory (`/usr/local/lib/linuxgsm-panel`, which holds the panel's gamedig install too), the `/usr/local/bin/gamedig` and `/usr/bin/gamedig` links into it (only when they point there), the `linuxgsm-panel-recover` command, the weekly gamedig cron, the panel's sysctl tuning, and the dedicated `lgsmpanel` user.
 
 **Your game servers are left completely alone** — their Linux users, home directories, LinuxGSM installs, `@reboot` autostart crontabs, and game-port firewall rules are never touched, so every server keeps running exactly as before once the panel is gone.
 
@@ -88,7 +88,7 @@ bash ~/linuxgsm-panel/uninstall.sh                 # per-user install
 
 **Game servers**
 - One-click install of any LinuxGSM game (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 130+ more), including LinuxGSM itself and the ports it needs.
-- Real-time WebSocket console, command sending, per-game CPU/RAM/uptime tiles, and live current/max player counts (gamedig, with console + LinuxGSM-query fallbacks).
+- Real-time WebSocket console, command sending, per-game CPU/RAM/uptime tiles, and live current/max player counts (gamedig, with console + LinuxGSM-query fallbacks). gamedig is installed on each host from a hash-locked lockfile in `tools/gamedig`, updated through reviewed Dependabot pull requests.
 - Player-aware control — start/stop/restart/update/validate and more; restart, stop, backups, mod changes, and host reboots can wait until a server is empty.
 - Mods & addons (SourceMod, MetaMod, Oxide, ULX…), FastDL generation, per-server cron with autostart and daily-restart-when-empty, and a config/file browser with upload, download (a folder comes down as a `.tar.gz`) and in-browser editing.
 - **Garry's Mod content mounting** — install Counter-Strike: Source and other Source-engine games' content (via LinuxGSM) so GMod maps and props render instead of showing missing-texture errors. One shared copy per host, mounted read-only into each GMod server, with per-server enable/disable, one-click uninstall, a free-disk readout, and a weekly content auto-update cron.

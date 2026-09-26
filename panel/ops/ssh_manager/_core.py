@@ -1980,6 +1980,9 @@ def _gamedig_host(server):
 # forever. The player readers never saw it: they run gamedig through `sudo -u <user>`, and
 # Ubuntu's sudoers sets a secure_path listing /usr/local/bin (classic sudo and sudo-rs both apply
 # it). On the test host (NodeSource Node, /usr/bin/gamedig) the line counted 0 under cron's env.
+# (gamedig is no longer an npm global: install-gamedig.sh links /usr/local/bin/gamedig AND
+# /usr/bin/gamedig to its pinned tree, so lines that predate this PATH find it too. This stays, so
+# the check does not depend on that link.)
 #
 # Set INSIDE the command substitution, so it reaches gamedig, jq and gamedig's `env node` and
 # nothing else: the restart itself still runs with the environment cron gave it. /usr/local/bin

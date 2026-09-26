@@ -898,6 +898,28 @@ regardless of this file — this changelog is for humans.
   22.04 went on to install the distro's npm, and with it Node 12, which gamedig cannot run on. The
   panel host's helper refuses the verb: `install.sh` sets up NodeSource there. `SECURITY.md` had
   said this step could not be narrowed; it now describes what replaced it.
+- **gamedig is installed from a hash-locked lockfile, and root no longer fetches it every week.**
+  It was `npm install -g --ignore-scripts gamedig@5`, at install and from a weekly root cron on
+  every host: whatever gamedig 5.x and whatever versions of its ~50 floating dependencies the
+  registry served that Sunday, unreviewed, then run by every game account. `tools/gamedig` now holds
+  a `package.json` pinning gamedig 5.3.3 and a `package-lock.json` naming all 61 packages, each with
+  a sha512, and `install-gamedig.sh` installs that tree with `npm ci`, which rejects any tarball that
+  does not match. It builds into a staging directory, runs the result once, and only then switches
+  over, so a failed download leaves the working gamedig in place, and it links both
+  `/usr/local/bin/gamedig` and `/usr/bin/gamedig` to it, since existing restart-when-empty cron
+  lines look in `/usr/bin`. The first run removes npm's old global gamedig once the new one runs.
+  Everything lives in `/usr/local/lib/linuxgsm-panel/gamedig` on every host. `install.sh` places
+  the three files there root-owned from root's own source (never the panel-owned checkout), after
+  the helper and after the new code is fetched; it used to install gamedig before fetching. Remote
+  hosts get them through a new `gamedig-install` verb, which replaces `npm-install-global`, from
+  the add-host bootstrap and the daily pass, which on a remote writes the files before the cron
+  that runs them. The helper refuses that verb on the panel host. The weekly cron, still
+  `/etc/cron.d/lgsm-node-tools`, now re-runs the script and fetches nothing while the tree is in
+  place. Updates arrive as Dependabot pull requests (weekly, a seven-day cooldown, gamedig majors
+  ignored), and the Dependency Review check now runs on them. Tests hold every lockfile entry to a
+  sha512 and a registry.npmjs.org source, and allow no `npm install` in any shell script. This also
+  clears Scorecard's last Pinned-Dependencies finding for npm, which counts only `npm ci` as pinned.
+  `uninstall.sh` removes the two links, but only where they point into the panel's directory.
 - **A ban now closes what the banned address already had open.** A ban refuses new connections, at
   the firewall or, behind Tailscale Funnel, at the panel's own gate. A live console or a host
   terminal opened before the ban was not a new connection, so it kept streaming for as long as the
@@ -981,8 +1003,9 @@ regardless of this file — this changelog is for humans.
   yes, while the panel and the bootstrap reported the host hardened. It now writes
   `00-panel-hardening.conf`, which sorts first, on the panel host and on remotes, and only where
   sshd reads that directory.
-- **The weekly root cron no longer upgrades npm**; it installs a pinned `gamedig` with install
-  scripts disabled. On the panel host, NodeSource's repository is set up with its signing key
+- **The weekly root cron no longer upgrades npm**, and no longer installs from the registry at all:
+  it re-runs `install-gamedig.sh`, which installs gamedig from its hash-locked lockfile (see the
+  gamedig entry above). On the panel host, NodeSource's repository is set up with its signing key
   pinned, instead of by running NodeSource's setup script as root (remote hosts: see above).
 - **Auto-block cannot cut off your tailnet, or take over your own rules.** When the Tailscale probe
   failed, tailnet addresses lost their exemption and could be denied at UFW position 1, above the

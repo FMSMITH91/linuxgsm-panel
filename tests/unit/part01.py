@@ -1412,24 +1412,28 @@ try:
 finally:
     _cr_shutil.rmtree(_cr_sb, ignore_errors=True)
 
-# node-tools auto-update: a weekly ROOT cron keeps gamedig (the player-query tool) current.
-check("node-tools: the cron updates gamedig weekly and logs it",
-      "npm install -g --ignore-scripts gamedig@5" in _sm_hosts._NODE_TOOLS_CRON
+# node-tools: a weekly ROOT cron re-runs install-gamedig.sh, which keeps gamedig (the player-query
+# tool) installed from its pinned lockfile.
+check("node-tools: the cron re-runs install-gamedig.sh weekly and logs it",
+      "/usr/local/lib/linuxgsm-panel/gamedig/install-gamedig.sh " in _sm_hosts._NODE_TOOLS_CRON
       and _sm_hosts._NODE_TOOLS_CRON.lstrip().startswith("#")
       and "/var/log/lgsm-node-tools.log" in _sm_hosts._NODE_TOOLS_CRON
       and _privmod.WRITE_TARGETS["node-tools-cron"][0] == "/etc/cron.d/lgsm-node-tools")
-_ntc = {}
+_ntc = []
 _orig_ntc_rc = _sm_core.run_command
 try:
     # This used to assert the command started with "sudo bash -c". It now goes through the
     # write-file verb, so what matters is the DESTINATION NAME and the content — the path is the
     # table's, not the call site's, and on a remote host the base64 form is still what is sent.
-    _sm_core.run_command = lambda s, c, **k: (_ntc.__setitem__("cmd", c), ("", "", 0))[1]
+    # On a REMOTE the daily pass first sends gamedig-install (the files the cron runs, and gamedig
+    # from them), so the cron write is the LAST command, not the only one.
+    _sm_core.run_command = lambda s, c, **k: (_ntc.append(c), ("", "", 0))[1]
     _ntc_ok = _sm_hosts.ensure_node_tools_cron(object())
+    _ntc_last = _ntc[-1] if _ntc else ""
     check("node-tools: ensure writes the cron.d file as root, at the table's path",
-          _ntc_ok is True and "/etc/cron.d/lgsm-node-tools" in _ntc["cmd"], _ntc.get("cmd", "")[:80])
+          _ntc_ok is True and "/etc/cron.d/lgsm-node-tools" in _ntc_last, _ntc_last[:80])
     check("node-tools: the cron body is base64-piped + chmod 644 (no quoting/`%` hazards)",
-          "base64 -d" in _ntc["cmd"] and "chmod 644" in _ntc["cmd"])
+          "base64 -d" in _ntc_last and "chmod 644" in _ntc_last)
     check("node-tools: the cron path has ONE definition — the write target",
           not hasattr(sm, "_NODE_TOOLS_CRON_PATH"),
           "ssh_manager still keeps a second copy of the path")

@@ -20,8 +20,12 @@ on:
     # bump is the PR that most needs this review and it matched neither path, so the workflow did
     # not trigger at all — and with no required status checks, a missing check reads as a pass.
     # Confirmed on a live action-bump PR: 17 checks, no Dependency Review among them.
+    # ...and gamedig's lockfile, the tree every host installs (install-gamedig.sh): a Dependabot
+    # bump there is a new set of packages root fetches and every game account runs.
     paths:
       - 'requirements.txt'
+      - 'tools/gamedig/package.json'
+      - 'tools/gamedig/package-lock.json'
       - '.github/workflows/**'
       - '.github/actions/**'
 

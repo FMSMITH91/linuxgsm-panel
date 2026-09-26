@@ -43,11 +43,14 @@ STATUS
 
     SECURITY.md carries the full account, including what deliberately is not narrowed.
 """
+import base64
 import ipaddress
 import os
 import pwd
 import re
 import shlex
+
+from panel import REPO_ROOT
 
 # Root-owned, outside the panel's git checkout. The checkout belongs to the panel user and is
 # rewritten by `git pull` on every self-update, so a helper living there would be panel-writable
@@ -157,10 +160,16 @@ SSHD_HARDENING_HEADER = (
 SWAPFILE = "/swapfile"
 SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
 FSTAB = "/etc/fstab"
-# The spec each is installed as: pinned to the major the query types are written for, and always
-# with --ignore-scripts (see npm-install-global). Mirrors tools/panel-helper.
-NPM_GLOBAL_PACKAGES = ("gamedig",)
-NPM_GLOBAL_SPECS = {"gamedig": "gamedig@5"}
+# gamedig, the player-query tool: installed from the hash-locked lockfile committed in
+# tools/gamedig, by tools/gamedig/install-gamedig.sh (see its header). The SAME directory on every
+# host, because the weekly cron that re-runs the script names it and that cron is one body
+# everywhere (a unit gate holds it, install.sh's GAMEDIG_DIR and this equal). A remote gets the three
+# files from the gamedig-install verb; the panel host gets them from install.sh, root-owned and
+# staged from root's own source, never from this checkout.
+GAMEDIG_DIR = "/usr/local/lib/linuxgsm-panel/gamedig"
+GAMEDIG_FILES = (("package.json", 0o644), ("package-lock.json", 0o644),
+                 ("install-gamedig.sh", 0o755))
+GAMEDIG_SRC = os.path.join(str(REPO_ROOT), "tools", "gamedig")
 
 # NodeSource's apt repository, for a REMOTE host that needs Node.js — see nodesource-setup. The
 # same values as install.sh's NODESOURCE_* for the panel host, and a unit gate holds the two
@@ -840,9 +849,13 @@ _ARGV = {
     # ── host hardening ──
     "sshd-set-directive": ([_sshd_key, _directive_value], lambda a: [], None),
     "create-swapfile": ([], lambda a: [], None),
-    "npm-install-global": ([_choice(*NPM_GLOBAL_PACKAGES)],
-                           lambda a: ["npm", "install", "-g", "--ignore-scripts",
-                                      NPM_GLOBAL_SPECS[a[0]]], None),
+    # gamedig from the committed lockfile: the three files of tools/gamedig written to GAMEDIG_DIR,
+    # then install-gamedig.sh run there. Zero arguments: the content is this checkout's, read at
+    # call time, never a caller's. REMOTE hosts only (the add-host bootstrap and the daily pass);
+    # the helper refuses it, because on the panel host root must not install what the panel-owned
+    # checkout holds — install.sh places those files there from root's own source. See
+    # _gamedig_install_remote.
+    "gamedig-install": ([], lambda a: [], None),
     # Configure NodeSource's apt repository with its signing key pinned by fingerprint. Zero
     # arguments: the URL, fingerprint, major and paths are the constants above. REMOTE hosts only
     # (the add-host bootstrap, which refuses the panel's own host); the helper refuses it, and the
@@ -1142,6 +1155,42 @@ def _nodesource_setup_remote(a):
     ])
 
 
+def _gamedig_install_remote(a):
+    """The remote form of gamedig-install: write tools/gamedig's three files into GAMEDIG_DIR, then
+    run install-gamedig.sh there, as one root shell.
+
+    It replaces `npm install -g --ignore-scripts gamedig@5`, which installed whatever 5.x release
+    and whatever versions of gamedig's ~50 floating dependencies the registry served that day. The
+    lockfile pins every package to a version and a sha512 that `npm ci` checks, and the script
+    builds the new tree beside the old one and switches to it only once it runs (see its header).
+
+    The files come from the panel's own checkout, read when the command is built. On a remote that
+    is no new trust: the panel already runs `sudo bash -c` there. Each is base64 on the wire, so no
+    byte of it is shell syntax, and each lands through a temporary file and a rename, so the weekly
+    cron never runs a half-written script. A file missing from the checkout sends a command that
+    says so and fails, rather than raising out of the bootstrap. Every path is a module constant."""
+    q = shlex.quote
+    files = []
+    for name, mode in GAMEDIG_FILES:
+        try:
+            with open(os.path.join(GAMEDIG_SRC, name), "rb") as fh:
+                data = fh.read()
+        except OSError:
+            return ('echo %s; exit 1'
+                    % q("The panel's checkout has no tools/gamedig/%s, so gamedig was not installed"
+                        % name))
+        files.append((name, mode, base64.b64encode(data).decode("ascii")))
+    parts = ["umask 022", "d=%s" % q(GAMEDIG_DIR),
+             'mkdir -p "$d" && chmod 755 "$d" || { echo "Could not create $d"; exit 1; }']
+    for name, mode, b64 in files:
+        parts.append(
+            't=$(mktemp "$d/.push.XXXXXX") && printf %%s %s | base64 -d > "$t" && chmod %o "$t" '
+            '&& mv -f "$t" "$d/%s" || { rm -f "$t"; echo "Could not write $d/%s"; exit 1; }'
+            % (q(b64), mode, name, name))
+    parts.append('"$d/install-gamedig.sh" 2>&1')
+    return "; ".join(parts)
+
+
 # The remote renderings of the SECRET_STDIN verbs, naming the mktemp file "$f" that holds the secret.
 _SECRET_REMOTE = {
     "pro-attach": lambda a: "pro attach --attach-config \"$f\"",
@@ -1313,6 +1362,7 @@ _REMOTE_ACTIONS = {
     "content-grant-read": _content_grant_remote,
     "restart-flags": lambda a: "ls -1d /home/*/.restart-pending 2>/dev/null || true",
     "nodesource-setup": _nodesource_setup_remote,
+    "gamedig-install": _gamedig_install_remote,
 }
 
 

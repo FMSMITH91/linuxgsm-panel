@@ -686,10 +686,11 @@ install_deps() {
     ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
 }
 
-# Node.js LTS + jq + gamedig, for the panel's game-server player queries (player count/list, the
-# empty-only restart, and the moderation Players panel). Installed on the panel HOST so game
-# servers running here can be queried; remote hosts get it from the add-remote bootstrap. apt's
-# own nodejs is too old for current gamedig (needs Node >=18), so we pin LTS via NodeSource.
+# Node.js + npm + jq, for gamedig and the panel's game-server player queries (player count/list,
+# the empty-only restart, and the moderation Players panel). Installed on the panel HOST so game
+# servers running here can be queried; remote hosts get it from the add-remote bootstrap. 22.04's
+# own nodejs is too old for gamedig (needs Node >=18), so that one takes NodeSource's. gamedig
+# itself is install_gamedig's, from the pinned lockfile, after install_root_tools.
 # Fully idempotent + best-effort — a failure here must never break the install; player queries
 # simply stay unavailable until it's sorted.
 
@@ -750,7 +751,7 @@ nodesource_setup() {
     return "${rc}"
 }
 
-ensure_gamedig() {
+ensure_nodejs() {
     command -v apt-get >/dev/null 2>&1 || return 0
     # Every command below is guarded so it returns 0 — the script runs under `set -euo pipefail`,
     # so an unguarded failure here (e.g. a missing `node`) would abort the whole install.
@@ -806,26 +807,17 @@ ensure_gamedig() {
         ${S} apt-get install -y npm >/dev/null 2>&1 \
             || warn "npm install failed — player queries stay unavailable until npm is installed."
     fi
-    if command -v npm >/dev/null 2>&1 && ! command -v gamedig >/dev/null 2>&1; then
-        info "Installing gamedig globally…"
-        # The spec the panel's npm-install-global verb and the weekly cron use: v5, no install hooks.
-        ${S} npm install -g --ignore-scripts gamedig@5 >/dev/null 2>&1 \
-            || warn "gamedig install failed — player queries unavailable."
-    fi
-    if command -v gamedig >/dev/null 2>&1; then
-        ok "gamedig ready for player queries"
-    else
-        warn "gamedig is not installed — player counts and lists stay unavailable."
-    fi
-    # Weekly auto-update for gamedig, alongside the host's other automatic updates, so player queries
-    # don't silently break as games/gamedig evolve. Idempotent; no-op if npm isn't installed. Pinned to
-    # v5 with --ignore-scripts, and npm itself is not updated: this runs as root, unattended, every
-    # week. Byte-identical to the helper's NODE_TOOLS_CRON_BODY and hosts.py's (a unit gate).
+    # The weekly cron that re-runs install-gamedig.sh (install_gamedig places it). It fetches
+    # nothing while the lockfile's tree is in place and working: a repair job, not an updater, so
+    # root no longer installs whatever the registry serves on a Sunday. Written here, on every run
+    # and whatever the origin, because what it replaces is the old `npm install -g gamedig@5` line;
+    # `[ -x … ]` makes it a no-op until the script is there. Byte-identical to the helper's
+    # NODE_TOOLS_CRON_BODY and hosts.py's (a unit gate).
     local cf="/etc/cron.d/lgsm-node-tools"
     if printf '%s\n' \
-        '# LinuxGSM Panel - keep gamedig current for player queries (managed by the panel).' \
+        '# LinuxGSM Panel - keep gamedig installed from its pinned lockfile (managed by the panel).' \
         'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
-        '30 4 * * 0 root command -v npm >/dev/null 2>&1 && npm install -g --ignore-scripts gamedig@5 >/var/log/lgsm-node-tools.log 2>&1' \
+        '30 4 * * 0 root [ -x /usr/local/lib/linuxgsm-panel/gamedig/install-gamedig.sh ] && /usr/local/lib/linuxgsm-panel/gamedig/install-gamedig.sh >/var/log/lgsm-node-tools.log 2>&1' \
         | ${S} tee "${cf}" >/dev/null 2>&1; then
         ${S} chmod 644 "${cf}" 2>/dev/null || true
     fi
@@ -1345,6 +1337,71 @@ install_root_tools() {
     fi
 }
 
+# ── gamedig, from the pinned lockfile ──────────────────────────────────────────────────────────
+# gamedig was `npm install -g --ignore-scripts gamedig@5`, here and from a weekly root cron: whatever
+# 5.x release and whatever versions of its ~50 floating dependencies the registry served, fetched
+# by root and run hourly as every game account. It is installed from tools/gamedig/package-lock.json
+# now, by tools/gamedig/install-gamedig.sh (its header has the layout): `npm ci`, which checks every
+# package against the lockfile's sha512, into a staging directory, switched to only once it runs.
+#
+# Root runs that script, so its three files are root-owned pieces like the helper, and come from
+# the same place: stage_root_source, i.e. root's own source, never the checkout the panel user can
+# write. Hence AFTER install_root_tools (the update path's first gamedig step ran before fetch_code
+# and would have read the OLD checkout's lockfile), and hence the same origin gate. All three or
+# none: a new lockfile beside an old package.json is a tree npm ci refuses. Best-effort: a failure
+# leaves player queries on whatever gamedig the host already had, which the script never touches
+# until a new tree runs.
+GAMEDIG_DIR="${HELPER_DIR}/gamedig"
+GAMEDIG_FILES=(package.json package-lock.json install-gamedig.sh)
+install_gamedig() {
+    if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then
+        warn "Leaving gamedig as it is — its lockfile would have come from an untrusted origin."
+        return 0
+    fi
+    H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
+    local f mode out line bad=""
+    if ! ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" "${GAMEDIG_DIR}" 2>/dev/null; then
+        warn "Could not create ${GAMEDIG_DIR} (needs root) — gamedig was not installed."
+        return 0
+    fi
+    _prepare_root_source
+    for f in "${GAMEDIG_FILES[@]}"; do
+        stage_root_source "tools/gamedig/${f}" "gamedig-${f}" >/dev/null || { bad="${f}"; break; }
+    done
+    # Installed under a temporary name first, and renamed into place only once all three are there.
+    if [ -z "${bad}" ]; then
+        for f in "${GAMEDIG_FILES[@]}"; do
+            mode=0644; [ "${f}" = install-gamedig.sh ] && mode=0755
+            ${H_SUDO} install -o root -g root -m "${mode}" "${HELPER_DIR}/.stage-gamedig-${f}" \
+                "${GAMEDIG_DIR}/.new-${f}" 2>/dev/null || { bad="${f}"; break; }
+        done
+    fi
+    if [ -z "${bad}" ]; then
+        for f in "${GAMEDIG_FILES[@]}"; do
+            ${H_SUDO} mv -f "${GAMEDIG_DIR}/.new-${f}" "${GAMEDIG_DIR}/${f}" 2>/dev/null \
+                || { bad="${f}"; break; }
+        done
+    fi
+    for f in "${GAMEDIG_FILES[@]}"; do
+        ${H_SUDO} rm -f "${HELPER_DIR}/.stage-gamedig-${f}" "${GAMEDIG_DIR}/.new-${f}" 2>/dev/null || true
+    done
+    if [ -n "${bad}" ]; then
+        warn "Could not place tools/gamedig/${bad} root-owned in ${GAMEDIG_DIR} — gamedig was NOT"
+        warn "refreshed, and keeps whatever this host already had."
+        return 0
+    fi
+    info "Installing gamedig from its pinned lockfile…"
+    if out="$(${H_SUDO} "${GAMEDIG_DIR}/install-gamedig.sh" 2>&1)"; then
+        line="${out##*$'\n'}"
+        ok "${line#install-gamedig: }"
+    else
+        printf '%s\n' "${out}" | tail -n 4 | while IFS= read -r line; do warn "  ${line}"; done
+        warn "gamedig could not be installed from its lockfile — player counts and lists use the"
+        warn "gamedig this host already had, if any. The weekly check retries; so does re-running this."
+    fi
+    return 0
+}
+
 # ── The sudoers grant ──────────────────────────────────────────────────────────────────────
 # NARROW when every root-owned piece is in place, because only then does the panel have a way to
 # do its privileged work without a general shell: the helper for the verb table, the root-owned
@@ -1634,9 +1691,10 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     FROM_VER="$(panel_version)"
     info "Existing install detected at ${PANEL_DIR} (version ${FROM_VER}). Updating…"
 
-    # Ensure Node LTS + gamedig on the host regardless of whether there's an update to apply, so a
-    # plain `install.sh` run also fixes a missing/old install (idempotent + best-effort).
-    ensure_gamedig
+    # Ensure Node.js + npm on the host regardless of whether there's an update to apply, so a
+    # plain `install.sh` run also fixes a missing/old install (idempotent + best-effort). gamedig
+    # itself waits for install_gamedig, below: this runs before fetch_code, on the OLD checkout.
+    ensure_nodejs
     ensure_fail2ban   # backfill fail2ban on existing installs so the panel-login jail can come up
 
     # Decide whether there's anything to do BEFORE snapshotting or touching the service — a
@@ -1686,6 +1744,9 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         # and got "Already up to date", exit 0, and `command not found` on the very next line they
         # were told to type. It self-gates on ORIGIN_TRUSTED, which check_origin_trusted set above.
         install_recovery_command
+        # gamedig is the same kind of piece: root-owned, outside the checkout, and a no-op when
+        # its lockfile's tree is already in place.
+        install_gamedig
         # A hold is NOT "up to date": the pinned commit was not installed. Saying so on the last
         # line is what a deploy log or the panel's update log is read by.
         if [ "${UPD_WHY:-}" = hold ]; then
@@ -1910,6 +1971,9 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # non-root (systemd --user) installs, where writing to /usr/local/bin needs sudo. This used to be
     # root-only, so `--user` installs never got `linuxgsm-panel-recover` (command not found).
     install_recovery_command
+    # After the service is back, not while it is stopped: a new lockfile means an `npm ci`, and
+    # gamedig is not something the panel needs in order to start.
+    install_gamedig
 
     info "[6/6] Verifying the panel came back up…"
     if health_check; then
@@ -2063,7 +2127,7 @@ fetch_code
 info "[2/4] Creating virtual environment & installing dependencies…"
 install_deps
 ok "Dependencies installed"
-ensure_gamedig   # Node LTS + gamedig for querying game servers that run on this panel host
+ensure_nodejs    # Node.js + npm, for gamedig (install_gamedig, after install_root_tools below)
 ensure_fail2ban  # brute-force protection for the panel login (jail is configured by the panel itself)
 
 # Ensure the panel's listen port is free BEFORE the first boot: if 5000 (or a previously
@@ -2088,6 +2152,7 @@ else
 fi
 
 install_root_tools
+install_gamedig   # player queries for game servers on this host; root-owned, like the helper
 
 info "[3/4] Registering the service…"
 if [ "${RUN_AS_ROOT}" -eq 1 ]; then

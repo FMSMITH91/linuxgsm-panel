@@ -82,8 +82,8 @@ Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban activit
 detached OS update, Tailscale's join, the panel's own restore/self-update, the VPS hardening
 steps, running a LinuxGSM action as the game user, enrolling a game account in the group the
 grant names, installing a game's dependencies, reading the pending-restart flags, freeing
-Steam's per-account crash-dump slots and configuring NodeSource's repository on a remote with its
-signing key pinned** — 102 verbs. (`tests/unit_test.py` asserts
+Steam's per-account crash-dump slots, configuring NodeSource's repository on a remote with its
+signing key pinned and installing gamedig on a remote from its hash-locked lockfile** — 102 verbs. (`tests/unit_test.py` asserts
 this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
@@ -308,6 +308,24 @@ source and the apt pin itself, and executes nothing it downloaded. apt then veri
 against that key. A remote that already has Node.js 18+ keeps it and never touches NodeSource. The
 helper refuses this verb: it exists for remote hosts, and `install.sh` configures NodeSource on the
 panel's own.
+
+**gamedig, the player-query tool, is installed from a hash-locked lockfile, not from whatever the
+registry serves.** It was `npm install -g --ignore-scripts gamedig@5`, run once at install and
+again by a weekly root cron on every host: root fetched whatever 5.x release and whatever versions
+of its ~50 floating dependencies were current that Sunday, with nobody reviewing them, and every
+game account then ran that code, hourly from cron and on every player poll. `--ignore-scripts`
+stopped install hooks, not code in the package itself. Now `tools/gamedig/package-lock.json` names
+every package with a sha512, and `tools/gamedig/install-gamedig.sh` installs it with `npm ci`, which
+refuses a tarball that does not match. The lockfile changes only through Dependabot pull requests,
+reviewed like any other change and held back seven days after a release, and CI checks that every
+entry has a sha512 and a registry.npmjs.org source. The script builds the new tree beside the old
+one, runs it, and only then switches `/usr/local/bin/gamedig` and `/usr/bin/gamedig` to it, so a
+failed install leaves the working gamedig in place. The weekly cron now re-runs that script and
+fetches nothing while the tree is in place. It is a repair job, not an updater. On the panel host
+the lockfile and script are root-owned pieces like the helper: `install.sh` stages them from
+root's own source, never from the checkout the panel user can write, and the helper refuses the
+`gamedig-install` verb. A remote receives them from the panel through that verb, which is no new
+trust, since the panel already runs `sudo bash -c` there.
 
 **Every one of those is converted, and the grant has narrowed.** On an install where the three
 root-owned pieces are present, `/etc/sudoers.d/linuxgsm-panel` contains two lines:

@@ -2053,8 +2053,9 @@ try:
     # gamedig is installed with npm. NodeSource's nodejs bundles npm; the distro's does not, and
     # Ubuntu 24.04 and 26.04 ship a Node new enough to take the distro path — so every install
     # there ended with node, no npm, and no gamedig, silently. Driven with shims: node answers v22,
-    # and npm/gamedig exist only once something installed them.
-    _eg = _su_find("ensure_gamedig() {", "\n}\n")
+    # and npm/gamedig exist only once something installed them. ensure_nodejs stops at npm now:
+    # gamedig is install_gamedig's (driven below), from the pinned lockfile, never `npm install`.
+    _eg = _su_find("ensure_nodejs() {", "\n}\n")
     _eg_shim = ('info() { echo "INFO $*"; }\nok() { echo "OK $*"; }\nwarn() { echo "WARN $*"; }\n'
                 'id() { echo 0; }\nnode() { echo v22.3.0; }\ntee() { cat >/dev/null; }\n'
                 'chmod() { :; }\napt-cache() { :; }\n'
@@ -2071,21 +2072,132 @@ try:
         _sb = _tempfile.mkdtemp(prefix="gamedig-", dir=_su_sb)
         if have_npm:
             open(os.path.join(_sb, "npm"), "w").close()
-        _out = _su_run(_eg + "\nensure_gamedig\n", "SB=%s\nNODESOURCE_NODE_MAJOR=22\n"
+        _out = _su_run(_eg + "\nensure_nodejs\n", "SB=%s\nNODESOURCE_NODE_MAJOR=22\n"
                        % _su_shlex.quote(_sb), extra=shim).stdout
         _calls = os.path.join(_sb, "calls")
         return _out + (open(_calls, encoding="utf-8").read() if os.path.exists(_calls) else "")
     _r = _eg_run(False)
-    check("install.sh: a distro Node without npm gets npm, then gamedig",
-          bool(_eg) and "APT install -y npm" in _r
-          and "NPM install -g --ignore-scripts gamedig@5" in _r and "OK gamedig ready" in _r,
-          repr(_r[-300:]))
+    check("install.sh: a distro Node without npm gets npm, and npm installs nothing here",
+          bool(_eg) and "APT install -y npm" in _r and "NPM " not in _r, repr(_r[-300:]))
     _r = _eg_run(True)
     check("install.sh: ...and a host that has npm does not reinstall it",
-          "APT install -y npm" not in _r and "OK gamedig ready" in _r, repr(_r[-300:]))
-    _r = _eg_run(False, shim=_eg_shim.replace('&& touch "$SB/npm"; return 0', '; return 1'))
-    check("install.sh: ...and when gamedig still is not there, the install says so",
-          "WARN gamedig is not installed" in _r and "OK gamedig ready" not in _r, repr(_r[-300:]))
+          "APT install -y npm" not in _r and "NPM " not in _r, repr(_r[-300:]))
+
+    # ── install_gamedig: the three files root-owned from root's own source, then the script ──────
+    # Root runs install-gamedig.sh, so it is a boundary file like the helper: it must come from
+    # stage_root_source (root's own clone, or a checkout nobody else can write), never from the
+    # panel-owned checkout — and not at all from an untrusted origin. All three or none: a new
+    # lockfile beside an old package.json is a tree npm ci refuses, and a new script beside an old
+    # lockfile installs the old tree. Driven with stage_root_source and `install` as shims, the
+    # "root source" and the checkout holding DIFFERENT bytes so a read from the wrong one shows.
+    _ig = _su_find('GAMEDIG_DIR="${HELPER_DIR}/gamedig"', "\n}\n")
+    _ig_shim = ('info() { echo "INFO $*"; }\nok() { echo "OK $*"; }\nid() { echo 0; }\n'
+                '_prepare_root_source() { :; }\n'
+                'stage_root_source() { [ -f "$SB/rootsrc/$1" ] || return 1;'
+                ' cp "$SB/rootsrc/$1" "${HELPER_DIR}/.stage-$2" && echo "${HELPER_DIR}/.stage-$2"; }\n'
+                'install() { local d=0 m="" a=(); while [ $# -gt 0 ]; do case "$1" in -d) d=1 ;;'
+                ' -o|-g) shift ;; -m) shift; m="$1" ;; *) a+=("$1") ;; esac; shift; done;'
+                ' if [ "$d" = 1 ]; then mkdir -p "${a[@]}"; return; fi;'
+                ' [ "${a[1]##*/}" = ".new-${IG_FAIL:-}" ] && return 1;'
+                ' cp "${a[0]}" "${a[1]}" && chmod "$m" "${a[1]}"; }\n')
+
+    def _ig_run(trusted=True, drop=None, script_rc=0, preplaced=False, fail_install=""):
+        """(output, {name: (bytes, mode)} placed, leftover stage/temp files) for one install_gamedig.
+        fail_install: the file whose root-owned `install` fails (the step after staging)."""
+        _sb = _tempfile.mkdtemp(prefix="install-gamedig-sh-", dir=_su_sb)
+        for _where, _tag in (("rootsrc", b"ROOTSRC"), (os.path.join("panel"), b"CHECKOUT")):
+            _d = os.path.join(_sb, _where, "tools", "gamedig")
+            os.makedirs(_d)
+            for _n in ("package.json", "package-lock.json"):
+                with open(os.path.join(_d, _n), "wb") as _fh:
+                    _fh.write(_tag + b" " + _n.encode() + b"\n")
+            with open(os.path.join(_d, "install-gamedig.sh"), "wb") as _fh:
+                _fh.write(b"#!/bin/sh\n# " + _tag + b"\necho \"install-gamedig: RAN $0 with $(cat "
+                          b"\"$(dirname \"$0\")/package-lock.json\")\"\nexit %d\n" % script_rc)
+        if drop:
+            os.unlink(os.path.join(_sb, "rootsrc", "tools", "gamedig", drop))
+        _lib = os.path.join(_sb, "lib")
+        if preplaced:
+            os.makedirs(os.path.join(_lib, "gamedig"))
+            for _n in ("package.json", "package-lock.json", "install-gamedig.sh"):
+                with open(os.path.join(_lib, "gamedig", _n), "wb") as _fh:
+                    _fh.write(b"OLD\n")
+        _env = ("SB=%s\nHELPER_DIR=%s\nPANEL_DIR=%s\nORIGIN_TRUSTED=%d\nIG_FAIL=%s\n"
+                % (_su_shlex.quote(_sb), _su_shlex.quote(_lib),
+                   _su_shlex.quote(os.path.join(_sb, "panel")), 1 if trusted else 0,
+                   _su_shlex.quote(fail_install) if fail_install else "''"))
+        _out = _su_run(_ig + '\ninstall_gamedig\necho "RC=$?"\n', _env, extra=_ig_shim).stdout
+        _placed = {}
+        for _n in ("package.json", "package-lock.json", "install-gamedig.sh"):
+            _p = os.path.join(_lib, "gamedig", _n)
+            if os.path.exists(_p):
+                with open(_p, "rb") as _fh:
+                    _placed[_n] = (_fh.read(), os.stat(_p).st_mode & 0o777)
+        _left = [_x for _x in (os.listdir(_lib) if os.path.isdir(_lib) else [])
+                 if _x.startswith(".stage-")]
+        _left += [_x for _x in (os.listdir(os.path.join(_lib, "gamedig"))
+                                if os.path.isdir(os.path.join(_lib, "gamedig")) else [])
+                  if _x.startswith(".new-")]
+        return _out, _placed, _left
+    _o, _p, _l = _ig_run()
+    check("install.sh: install_gamedig places all three from root's source, 0644/0644/0755",
+          bool(_ig) and sorted(_p) == ["install-gamedig.sh", "package-lock.json", "package.json"]
+          and all(b"ROOTSRC" in _b and b"CHECKOUT" not in _b for _b, _ in _p.values())
+          and _p["package.json"][1] == 0o644 and _p["package-lock.json"][1] == 0o644
+          and _p["install-gamedig.sh"][1] == 0o755 and not _l,
+          "out=%r placed=%r left=%r" % (_o[-200:], {k: v[1] for k, v in _p.items()}, _l))
+    check("install.sh: ...then runs the PLACED script, beside the placed lockfile, and reports it",
+          "/lib/gamedig/install-gamedig.sh with ROOTSRC package-lock.json" in _o
+          and "OK RAN " in _o and "RC=0" in _o, repr(_o[-300:]))
+    _o, _p, _l = _ig_run(trusted=False, preplaced=True)
+    check("install.sh: an untrusted origin places nothing, runs nothing, and says so",
+          set(_b for _b, _ in _p.values()) == {b"OLD\n"} and "RAN" not in _o
+          and "untrusted origin" in _o and "RC=0" in _o, repr(_o[-300:]))
+    _o, _p, _l = _ig_run(drop="package-lock.json", preplaced=True)
+    check("install.sh: one file that cannot be staged places NONE of them, runs nothing, names it",
+          set(_b for _b, _ in _p.values()) == {b"OLD\n"} and "RAN" not in _o
+          and "tools/gamedig/package-lock.json" in _o and not _l and "RC=0" in _o,
+          "out=%r left=%r" % (_o[-300:], _l))
+    # ...and the same when it is the root-owned install of the SECOND file that fails, after the
+    # first was already written: nothing lands under its real name until all three are there.
+    _o, _p, _l = _ig_run(fail_install="package-lock.json", preplaced=True)
+    check("install.sh: ...or whose root-owned install fails part-way: none land, nothing left over",
+          set(_b for _b, _ in _p.values()) == {b"OLD\n"} and "RAN" not in _o
+          and "tools/gamedig/package-lock.json" in _o and not _l and "RC=0" in _o,
+          "out=%r placed=%r left=%r" % (_o[-300:], {k: v[0][:9] for k, v in _p.items()}, _l))
+    _o, _p, _l = _ig_run(script_rc=1)
+    check("install.sh: a failed gamedig install warns and does not fail the install",
+          "WARN gamedig could not be installed" in _o and "RC=0" in _o, repr(_o[-300:]))
+
+    # WHERE it runs. Root runs the staged copy, so it has to follow install_root_tools (and so
+    # fetch_code): the update path's gamedig step used to run first thing, on the OLD checkout.
+    # Every path that places root-owned pieces places this one too — the full update, the
+    # already-up-to-date re-run, and a fresh install.
+    import re as _re_ig
+    _ig_upd = _su_find('if [ "${IS_UPDATE}" -eq 1 ]; then', '\n    BACKUP_ROOT=')
+    _ig_full = _su_find("\n    fetch_code\n    _CODE_FETCHED=1", '[6/6] Verifying the panel came back up')
+    _ig_fresh = _su_find("\nfetch_code\n", 'info "[3/4] Registering the service')
+
+    def _ig_after(text, *names):
+        """True when each name is called, as a line of its own, after the one before it."""
+        _pos = -1
+        for _nm in names:
+            _m = _re_ig.search(r"^\s*%s(?:\s|$)" % _re_ig.escape(_nm), text[_pos + 1:], _re_ig.M)
+            if not _m:
+                return False
+            _pos += 1 + _m.start()
+        return True
+    check("install.sh: install_gamedig runs after install_root_tools on every path that places "
+          "root-owned pieces",
+          _ig_after(_ig_upd, "install_root_tools", "install_gamedig", "exit 0")
+          and _ig_after(_ig_full, "install_root_tools", "svc start linuxgsm-panel.service",
+                        "install_gamedig")
+          and _ig_after(_ig_fresh, "ensure_nodejs", "install_root_tools", "install_gamedig"),
+          "up-to-date=%r full=%r fresh=%r" % (
+              _ig_after(_ig_upd, "install_root_tools", "install_gamedig", "exit 0"),
+              _ig_after(_ig_full, "install_root_tools", "svc start linuxgsm-panel.service",
+                        "install_gamedig"),
+              _ig_after(_ig_fresh, "ensure_nodejs", "install_root_tools", "install_gamedig")))
 
     # The add-host bootstrap has the same step for REMOTE hosts: a host that already had a distro
     # Node 18+ skipped straight to the npm install of gamedig. It is hosts._bootstrap_node now —
@@ -2148,6 +2260,48 @@ try:
           _nd_cmds and all(c[2] is False for c in _nd_cmds)
           and not any("curl" in c[1] or "setup_lts" in c[1] or "| bash" in c[1] for c in _nd_cmds),
           repr(_nd_cmds))
+
+    # The daily pass (app._node_tools_cron_pass -> ensure_node_tools_cron), per host. A REMOTE gets
+    # gamedig-install — the lockfile, the script, and gamedig from them — and THEN the cron that
+    # re-runs the script: written first, a cron would name a script that is not there yet. The
+    # panel's own host gets the cron alone: its files are install.sh's, root-owned, and the helper
+    # refuses the verb. And whatever gamedig-install does, the cron is still written: it is what
+    # replaces the old weekly `npm install -g` line.
+    def _ntc_ev(server, gd=("install-gamedig: gamedig 5.3.3 ready", "", 0)):
+        _ev = []
+
+        def _rp(s, verb, args=(), **k):
+            _ev.append(verb)
+            if isinstance(gd, Exception):
+                raise gd
+            return gd
+
+        def _wr(s, target, content, **k):
+            _ev.append("write:" + target)
+            return ("", "", 0)
+        _saved = (_nd_core.run_privileged, _nd_core.write_root_file)
+        _nd_core.run_privileged, _nd_core.write_root_file = _rp, _wr
+        try:
+            _ok = _nd_hosts.ensure_node_tools_cron(server)
+        except Exception as _e:    # it must never raise; reported by the checks, not a crash
+            _ok = "raised %r" % _e
+        finally:
+            _nd_core.run_privileged, _nd_core.write_root_file = _saved
+        return _ev, _ok
+    _ev, _ok = _ntc_ev(NS(id=7301, host="203.0.113.30", auth_method="key", name="r1"))
+    check("hosts: the daily pass gives a remote gamedig-install, THEN the cron that re-runs it",
+          _ev == ["gamedig-install", "write:node-tools-cron"] and _ok is True, repr((_ev, _ok)))
+    _ev, _ok = _ntc_ev(NS(id=7302, host="203.0.113.31", auth_method="key", name="r2"),
+                       gd=("install-gamedig: npm ci failed", "", 1))
+    _ev2, _ok2 = _ntc_ev(NS(id=7303, host="203.0.113.32", auth_method="key", name="r3"),
+                         gd=RuntimeError("ssh dropped"))
+    check("hosts: ...and still writes the cron when the install failed, or raised",
+          _ev == ["gamedig-install", "write:node-tools-cron"] and _ok is True
+          and _ev2 == ["gamedig-install", "write:node-tools-cron"] and _ok2 is True,
+          repr((_ev, _ok, _ev2, _ok2)))
+    _ev, _ok = _ntc_ev(NS(id=7304, host="127.0.0.1", is_local=True, name="local"))
+    check("hosts: ...while the panel's own host gets the cron alone, never gamedig-install",
+          _ev == ["write:node-tools-cron"] and _ok is True, repr((_ev, _ok)))
 
     # A just-created account that sudo cannot resolve yet is retried. sudo-rs (Ubuntu 26.04's
     # /usr/bin/sudo) words it differently from classic sudo, so the retry never fired there.
@@ -2943,6 +3097,56 @@ try:
         _shutil.rmtree(_shared_tmp, ignore_errors=True)
     check("uninstall.sh: ...and says so when another install owns them",
           "belong to another install" in _un_txt)
+
+    # ── gamedig's two links go with the tree they point into — and only those ──────────────────
+    # install-gamedig.sh links /usr/local/bin/gamedig and /usr/bin/gamedig into the tree under
+    # /usr/local/lib/linuxgsm-panel/gamedig, which the helper-directory `rm -rf` takes; left, they
+    # would dangle. But /usr/bin/gamedig is also where NodeSource's npm puts a global gamedig, and
+    # an operator may have their own: only a link whose TEXT points into the panel's directory is
+    # the panel's. Driven on fixture links (readlink reads the text, so a target need not exist).
+    _gl_fn = _su_between2("_gamedig_link_ours() {", "\n}\n")
+    _gl_tmp = _tempfile.mkdtemp(prefix="gamedig-links-")
+    try:
+        _gl_cases = {
+            "ours": ("link", "/usr/local/lib/linuxgsm-panel/gamedig/current/node_modules/.bin/gamedig"),
+            "npm": ("link", "../lib/node_modules/gamedig/bin/gamedig.js"),
+            "lookalike": ("link", "/usr/local/lib/linuxgsm-panel/gamedig-old/current/gamedig"),
+            "sibling": ("link", "/usr/local/lib/linuxgsm-panel/panel-helper"),
+            "file": ("file", ""),
+        }
+        for _k, (_kind, _t) in _gl_cases.items():
+            _p = os.path.join(_gl_tmp, _k)
+            if _kind == "link":
+                os.symlink(_t, _p)
+            else:
+                open(_p, "w").close()
+        _gl_probe = _gl_fn + "".join(
+            '\n_gamedig_link_ours %s && echo "%s=OURS" || echo "%s=NOT"'
+            % (_su_shlex.quote(os.path.join(_gl_tmp, _k)), _k, _k) for _k in _gl_cases)
+        _r = _su_run(_gl_probe, "")
+        check("uninstall.sh: only a link INTO the panel's gamedig directory counts as the panel's",
+              all(("%s=%s" % (_k, "OURS" if _k == "ours" else "NOT")) in _r.stdout
+                  for _k in _gl_cases), repr(_r.stdout))
+    finally:
+        _shutil.rmtree(_gl_tmp, ignore_errors=True)
+    _gl_loop = "for _gd_link in /usr/local/bin/gamedig /usr/bin/gamedig; do"
+    _gl_at = _un_txt.find(_gl_loop)
+    # The branch that runs only when the host-shared pieces are this install's (SHARED_MINE).
+    _gl_elif = _un_txt.find("\nelif [ -d /usr/local/lib/linuxgsm-panel ]")
+    # ...and they are the links the script makes: its LINK_DIRS, each + /gamedig.
+    _gl_script = open(os.path.join(_root, "tools", "gamedig", "install-gamedig.sh"),
+                      encoding="utf-8").read()
+    _gl_dirs = re.search(r"^LINK_DIRS=\(([^)]*)\)$", _gl_script, re.M)
+    _gl_script_links = [_d + "/gamedig" for _d in (_gl_dirs.group(1).split() if _gl_dirs else [])]
+    _gl_un_links = _gl_loop.split(" in ")[1].split(";")[0].split()
+    _gl_blk = _un_txt[_gl_at:_un_txt.find("\n    done\n", _gl_at)] if _gl_at >= 0 else ""
+    check("uninstall.sh: removes both links, each only when _gamedig_link_ours, and only on the "
+          "branch that owns the shared pieces",
+          0 < _gl_elif < _gl_at < _un_txt.find("\nfi\n", _gl_elif)
+          and 'if _gamedig_link_ours "${_gd_link}"; then' in _gl_blk
+          and '${U_SUDO} rm -f "${_gd_link}"' in _gl_blk
+          and _gl_script_links == _gl_un_links == ["/usr/local/bin/gamedig", "/usr/bin/gamedig"],
+          repr((_gl_at, _gl_script_links, _gl_un_links)))
 
     # ── the firewall rule the INSTALLER opened has to come off on the path it opened it ───────
     # The ufw removal lived inside `if [ "${MODE}" = "system" ]`, so a per-user uninstall never
@@ -4043,6 +4247,25 @@ check("workflows: every tool pin file is a pip-compile lockfile beside its .in, 
       bool(_ci_matrix_py) and not _ci_lock_bad
       and 'directory: "/.github/ci-requirements"' in _ci_dep
       and 'directory: "/.github/ci-requirements-checks"' in _ci_dep, repr(_ci_lock_bad))
+# gamedig's lockfile moves ONLY through Dependabot now (the hosts stopped fetching from the
+# registry), so the entry is what keeps it current: npm, the directory the lockfile is in, a
+# cooldown (a release pulled in its first days never reaches a PR), and gamedig majors ignored (the
+# query types are written for 5). Dependency Review must see the change, or a bump that adds a
+# vulnerable package slides past it: it is path-filtered.
+_ci_dep_blocks = re.split(r"\n(?=  - package-ecosystem: )", _ci_dep)
+_ci_npm = [_b for _b in _ci_dep_blocks if '- package-ecosystem: "npm"' in _b]
+_ci_dr = open(os.path.join(_root, ".github", "workflows", "dependency-review.yml"),
+              encoding="utf-8").read()
+_ci_dr_on = _ci_dr[:_ci_dr.index("\npermissions:")] if "\npermissions:" in _ci_dr else ""
+check("dependabot: tools/gamedig's lockfile has an npm entry with a cooldown, gamedig majors ignored",
+      len(_ci_npm) == 1 and 'directory: "/tools/gamedig"' in _ci_npm[0]
+      and re.search(r"\n    cooldown:\n      default-days: [1-9]", _ci_npm[0]) is not None
+      and re.search(r'- dependency-name: "gamedig"\n\s+update-types: \["version-update:semver-major"\]',
+                    _ci_npm[0]) is not None,
+      repr(_ci_npm))
+check("dependency review: runs on a change to gamedig's package.json or lockfile",
+      "      - 'tools/gamedig/package-lock.json'\n" in _ci_dr_on
+      and "      - 'tools/gamedig/package.json'\n" in _ci_dr_on, _ci_dr_on[-400:])
 # ...and a workflow that runs only on listed paths must list the pinned files it installs, or a
 # Dependabot bump of that file is never tested (fuzz.yml filters by path).
 _ci_unwatched = []
@@ -4832,7 +5055,7 @@ _inst_paths = {_p.rstrip("/") for _p in _inst_paths if _p.count("/") > 2}
 _unremoved = sorted(_p for _p in _inst_paths if not _is_removed(_p))
 # The scan above proves a path is rm'd SOMEWHERE in the file. It has no model of the `if
 # [ "${MODE}" = "system" ]` guard, so for a long time it passed while three of those removals were
-# unreachable on a per-user install — install.sh calls ensure_gamedig() and install_root_tools()
+# unreachable on a per-user install — install.sh calls ensure_nodejs() and install_root_tools()
 # unconditionally, before its own root/user split, and both use sudo when not root. So the paths
 # that a user-mode install CREATES must be rm'd outside that branch.
 # rindex, not index: uninstall.sh tests MODE earlier too (to print the service user in the
