@@ -17,10 +17,11 @@ import os
 import re
 import shutil
 import sqlite3
-import subprocess
+import subprocess  # nosec B404 - one call below: a systemd-run argv list, no shell
 import pathlib as _pathlib
 import tarfile
 import tempfile
+import urllib.parse
 
 # Imported for the restore's privileged step only. system_ops does not import
 # backup, so this direction is safe.
@@ -463,12 +464,24 @@ def restore_backup(name, passphrase=None, skip_safety_backup=False):
         # Validate the archive up front (members only, no path escapes) before we touch anything.
         try:
             with tarfile.open(src, "r:gz") as tar:
-                names = tar.getnames()
-            if not names or any(n not in _MEMBERS for n in names):
+                members = tar.getmembers()
+            names = [m.name for m in members]
+            # Every member a REGULAR file, too. The extraction below copies only regular members,
+            # so a `cred_key` that is a directory or a link was skipped and the LIVE key stayed —
+            # while the row check, reading that same member, got no key and skipped every
+            # encrypted value as unreadable after the restore. The live key reads them. No archive
+            # create_backup writes holds anything else: it copies each member with copy2 first.
+            if (not names or any(n not in _MEMBERS for n in names)
+                    or not all(m.isfile() for m in members)):
                 return False, "Backup archive looks invalid."
         except Exception:
             _log.exception("backup archive unreadable")
             return False, "Could not read the backup archive."
+
+        # The ROWS, before anything about the live install is touched — see _restore_db_refusal.
+        refusal = _restore_db_refusal(src)
+        if refusal:
+            return False, refusal
 
         # The ORIGINAL name, not src: for an encrypted archive src is now a temp file, and the
         # user-facing message must still say which backup they restored.
@@ -478,6 +491,314 @@ def restore_backup(name, passphrase=None, skip_safety_backup=False):
     finally:
         if _dec_tmp:
             shutil.rmtree(_dec_tmp, ignore_errors=True)
+
+
+# ── What a restored database may carry ────────────────────────────────────────────────────────
+# GHSA-hh39-76g3-wxcx. These are the columns the panel builds commands from: every @validates'd
+# shell identifier (models._validate_shell_ident) — a game server's Linux account and LinuxGSM
+# script, a host's SSH login and LinuxGSM account. @validates runs on ASSIGNMENT; a row read back
+# out of panel.db is never checked, and a restore replaces every row at once. So the archive's
+# database is held to the model's own rule here, BEFORE the safety copy, the staging and the swap,
+# and a refused restore leaves the live install exactly as it was. The command builders refuse a
+# bad account name as well (ssh_manager._core.game_user_cmd); this is what stops one arriving.
+# A unit gate keeps this tuple equal to the columns models.py validates with that function.
+_RESTORE_IDENT_COLUMNS = (("game_server", "short_name"), ("game_server", "game_type"),
+                          ("remote_server", "username"), ("remote_server", "linuxgsm_user"))
+# Ports are held to their TYPE only. Each is written into a command somewhere (a cron line's
+# host:port, a firewall rule), and SQLite does not enforce INTEGER on a hand-written row, so text
+# stored there is text in a command. The RANGE check _validate_port also makes is not repeated
+# here: a row from before that validator existed may hold a 0, and refusing a whole install over
+# it would protect nothing.
+_RESTORE_PORT_COLUMNS = (("game_server", "port"), ("game_server", "query_port"),
+                         ("remote_server", "port"))
+_RESTORE_ROW_LABEL = {"game_server": "game server", "remote_server": "host"}
+
+
+def _restore_fernet(tar, names):
+    """A Fernet for the key the restored panel will decrypt its columns with: the archive's own
+    cred_key, or the live one when the archive has none (the restore then keeps it). None if
+    neither can be read — an encrypted value is then unreadable after the restore too, and an
+    unreadable column reads as "" (models.UnreadableSecret), which no command can be built from."""
+    from cryptography.fernet import Fernet
+    try:
+        if "cred_key" in names:
+            raw = tar.extractfile("cred_key").read()
+        elif CRED_KEY_FILE.exists():
+            raw = CRED_KEY_FILE.read_bytes()
+        else:
+            return None
+        return Fernet(raw.strip())
+    except Exception:
+        return None
+
+
+# The kinds of schema object a panel database is made of: every table comes from models.py through
+# create_all() and the ALTER TABLEs in models._migrate, and every index from the models' own Index
+# metadata. No version of the panel has created a trigger, a view or a virtual table (grep for
+# CREATE TRIGGER / CREATE VIEW over the tree: nothing), so an archive carrying one did not come
+# from a panel — and each can CHANGE a value after the row check below has read it. A trigger on
+# game_server rewrites short_name the first time the panel updates that row's status; a view
+# named game_server computes it from anything. Refused outright rather than inspected.
+_RESTORE_DDL_KINDS = ("TABLE", "INDEX")
+
+
+def _sql_skip(s, i):
+    """The index of the first character of `s` from `i` on that is not whitespace or a comment."""
+    while i < len(s):
+        if s[i].isspace():
+            i += 1
+        elif s.startswith("--", i):
+            j = s.find("\n", i)
+            i = len(s) if j < 0 else j + 1
+        elif s.startswith("/*", i):
+            j = s.find("*/", i + 2)
+            i = len(s) if j < 0 else j + 2
+        else:
+            break
+    return i
+
+
+def _sql_words(s, limit):
+    """Up to `limit` leading words of the SQL `s`, upper-cased, past whitespace and comments."""
+    words, i = [], 0
+    while len(words) < limit:
+        i = _sql_skip(s, i)
+        m = re.match(r"[A-Za-z_]+", s[i:])
+        if not m:
+            break           # the end of `s`, or something that is not a word
+        words.append(m.group(0).upper())
+        i += m.end()
+    return words
+
+
+def _ddl_kind(sql):
+    """The kind of object a sqlite_master `sql` makes (TABLE, INDEX, TRIGGER...), or None."""
+    # Read the way SQLite's parser reads it — past whitespace, comments and TEMP/UNIQUE — and None
+    # when it is not a CREATE at all. Read from the SQL, which is what SQLite RUNS to rebuild its
+    # schema when it opens the file, rather than from the `type` column beside it: an older SQLite
+    # than the one this was measured on (3.53, which refuses a mismatch as a malformed schema) is
+    # not something to rely on.
+    words = _sql_words(sql or "", 4)
+    if not words or words[0] != "CREATE":
+        return None
+    rest = [w for w in words[1:] if w not in ("TEMP", "TEMPORARY", "UNIQUE")]
+    return rest[0] if rest else None
+
+
+def _q_ident(name):
+    return '"%s"' % str(name).replace('"', '""')
+
+
+# What _restore_shape can say about a database it will not vouch for. Fixed wording chosen here,
+# never text taken from the archive or from an exception: it reaches the browser, and a message
+# built from an exception is how internals leak (CodeQL py/stack-trace-exposure).
+_SHAPE_DAMAGED = "is damaged — SQLite's own integrity check does not pass"
+_SHAPE_OBJECTS = {"TRIGGER": "a trigger", "VIEW": "a view", "VIRTUAL": "a virtual table"}
+
+
+def _schema_refusal(con):
+    """Why the schema of the database on `con` could change or hide a value, or None."""
+    ok = [r[0] for r in con.execute("PRAGMA integrity_check").fetchall()]
+    if ok != ["ok"]:
+        # An index is a SECOND copy of the values it covers, and SQLite answers a query from it
+        # whenever it covers every column asked for — measured: with an index whose entries
+        # disagree with its table, `SELECT id, short_name FROM game_server` came back from the
+        # index while a query for more columns reads the table. So a crafted archive could show a
+        # check one value and the panel another. integrity_check compares every index with its
+        # table (quick_check does not, and passed that file); the row reads below also say
+        # NOT INDEXED, which only matters if this is ever removed.
+        return _SHAPE_DAMAGED
+    for (sql,) in con.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL"):
+        kind = _ddl_kind(sql)
+        if kind not in _RESTORE_DDL_KINDS:
+            return ("defines %s, which no version of the panel creates"
+                    % _SHAPE_OBJECTS.get(kind, "a schema object"))
+    return None
+
+
+def _table_columns(con, table):
+    """{lower-cased column: (declared name, hidden)} of `table` as SQLite resolves it, or {}."""
+    # PRAGMA table_xinfo resolves a table name exactly as a query does, whatever case the archive
+    # declared it in; {} is "no such table".
+    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query -- table is this module's constant
+    info = con.execute("PRAGMA table_xinfo(%s)" % _q_ident(table)).fetchall()
+    cols = {}
+    for _cid, name, _type, _nn, _dflt, _pk, hidden in info:
+        cols.setdefault(str(name).lower(), (name, hidden))
+    return cols
+
+
+def _column_refusal(table, col, cols):
+    """Why `table`.`col` cannot be vouched for, given `table`'s _table_columns; or None."""
+    if col not in cols:
+        # Every one of these columns has been in the schema since the first commit (16cff95) and
+        # none is in models._migrate's ALTER TABLE map, so no backup any version of the panel
+        # wrote lacks one. A table without it is not the panel's — and every query the restored
+        # panel made against it would fail.
+        return ("has a %s table with no %s column, which every version of the panel has created"
+                % (table, col))
+    if cols[col][1]:
+        # A GENERATED column is recomputed from other columns whenever they change — and the
+        # panel updates a game server's status on every poll.
+        return ("computes %s.%s from other columns, which no version of the panel does"
+                % (table, col))
+    return None
+
+
+def _restore_shape(con):
+    """({(table, col): declared column name}, None) for a database's columns, or (None, why)."""
+    # The map holds every validated column the database HAS, resolved the way SQLite resolves
+    # them; `why` is a fixed sentence, for a database whose shape could change or hide a value
+    # from the row check (see _schema_refusal and _column_refusal).
+    #
+    # Resolved, never matched: SQLite identifiers are case-INSENSITIVE and sqlite_master keeps the
+    # spelling a table was created with, so an archive declaring "GAME_SERVER" or "SHORT_NAME" used
+    # to be skipped by an exact lookup of 'game_server' — while the ORM's `FROM game_server` read it
+    # anyway and served the payload (found in review of the first fix). _table_columns resolves the
+    # table as a query does, and the column is picked out by its lower-cased name.
+    problem = _schema_refusal(con)
+    if problem:
+        return None, problem
+    found = {}
+    for table in {t for t, _c in _RESTORE_IDENT_COLUMNS + _RESTORE_PORT_COLUMNS}:
+        cols = _table_columns(con, table)
+        if not cols:
+            continue          # no such table: the restored panel creates it, empty
+        for t, col in _RESTORE_IDENT_COLUMNS + _RESTORE_PORT_COLUMNS:
+            if t != table:
+                continue
+            problem = _column_refusal(table, col, cols)
+            if problem:
+                return None, problem
+            found[(t, col)] = cols[col][0]
+    return found, None
+
+
+# What _stored_plaintext answers for an encrypted value the restored panel will not be able to read.
+_UNREADABLE = object()
+
+
+def _stored_plaintext(val, fernet):
+    """`val` as the restored panel will read it: decrypted with `fernet`, or _UNREADABLE."""
+    from panel.core.config import _ENC_PREFIX, is_encrypted
+    if not (isinstance(val, str) and is_encrypted(val)):
+        return val
+    if not fernet:
+        return _UNREADABLE
+    try:
+        return fernet.decrypt(val[len(_ENC_PREFIX):].encode()).decode()
+    except Exception:
+        return _UNREADABLE
+
+
+def _ident_refused(table, rid, col, val):
+    """True when the models would refuse to store `val` (plaintext) in `col` of `table` #`rid`."""
+    from panel.db.models import _validate_shell_ident
+    if val is not None and not isinstance(val, str):
+        return True       # a BLOB or a number where a name belongs
+    try:
+        _validate_shell_ident(col, val)
+    except ValueError:
+        _log.warning("restore refused: %s #%s %s is not a shell identifier: %r",
+                     table, rid, col, (val or "")[:80])
+        return True
+    return False
+
+
+def _bad_ident_rows(con, found, fernet):
+    """[(table, row id, column)] for each command-bearing name on `con` the models would refuse."""
+    bad = []
+    for table, col in _RESTORE_IDENT_COLUMNS:
+        if (table, col) not in found:
+            continue          # the table does not exist (see _restore_shape)
+        # By the name SQLite resolved it to, from the TABLE itself (NOT INDEXED): the rows
+        # every query of the restored panel will be answered from.
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query -- table/column are this module's constants
+        for rid, val in con.execute("SELECT id, %s FROM %s NOT INDEXED"  # nosec B608
+                                    % (_q_ident(found[(table, col)]), _q_ident(table))):
+            val = _stored_plaintext(val, fernet)
+            if val is _UNREADABLE:
+                continue      # unreadable after the restore as well — see _restore_fernet
+            if _ident_refused(table, rid, col, val):
+                bad.append((table, rid, col))
+    return bad
+
+
+def _bad_port_rows(con, found):
+    """[(table, row id, column)] for each port on `con` stored as anything but a number or NULL."""
+    bad = []
+    for table, col in _RESTORE_PORT_COLUMNS:
+        if (table, col) not in found:
+            continue
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query -- table/column are this module's constants
+        for rid, kind in con.execute("SELECT id, typeof(%s) FROM %s NOT INDEXED"  # nosec B608
+                                     % (_q_ident(found[(table, col)]), _q_ident(table))):
+            if kind not in ("integer", "null"):
+                _log.warning("restore refused: %s #%s %s is stored as %s, not a number",
+                             table, rid, col, kind)
+                bad.append((table, rid, col))
+    return bad
+
+
+def _restore_bad_rows(db_path, fernet):
+    """(rows the models would refuse, None) for the database at `db_path`, or ([], why)."""
+    # The rows are [(table, row id, column)], every one the models would refuse to store in a
+    # command-bearing column; `why` is _restore_shape's, for a database whose shape the check
+    # cannot vouch for. Raises sqlite3.Error for a file SQLite cannot read.
+    #
+    # Read-only: nothing in the archive's database runs or changes while it is being checked.
+    con = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(db_path), uri=True)
+    try:
+        found, shape_problem = _restore_shape(con)
+        if shape_problem:
+            return [], shape_problem
+        return _bad_ident_rows(con, found, fernet) + _bad_port_rows(con, found), None
+    finally:
+        con.close()
+
+
+def _restore_db_refusal(src):
+    """Why the database inside archive `src` must not be restored, or "" when it may be.
+
+    Read from a private temp copy, never in place: nothing about the live install is touched until
+    this has answered, and a refusal leaves no trace but the log line naming the rows."""
+    tmpd = tempfile.mkdtemp(prefix="lgsm-bk-chk-")
+    try:
+        with tarfile.open(src, "r:gz") as tar:
+            names = tar.getnames()
+            if "panel.db" not in names:
+                return ""        # nothing replaces panel.db, so the live rows stay as they are
+            member = tar.getmember("panel.db")
+            if not member.isfile():
+                return "Backup archive looks invalid."
+            fernet = _restore_fernet(tar, names)
+            db_copy = os.path.join(tmpd, "panel.db")
+            with tar.extractfile(member) as fsrc, open(db_copy, "wb") as fdst:
+                shutil.copyfileobj(fsrc, fdst)
+        bad, shape_problem = _restore_bad_rows(db_copy, fernet)
+    except sqlite3.Error as e:
+        _log.warning("restore refused: the backup's panel.db could not be read (%s)", e)
+        return ("The database in this backup could not be read, so it was not restored. Nothing "
+                "on this panel was changed.")
+    except Exception:
+        _log.exception("restore refused: the backup's panel.db could not be checked")
+        return ("The database in this backup could not be checked, so it was not restored. "
+                "Nothing on this panel was changed.")
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+    if shape_problem:
+        _log.warning("restore refused: the backup's panel.db %s", shape_problem)
+        return ("This backup was not restored: its database %s. Nothing on this panel was changed."
+                % shape_problem)
+    if not bad:
+        return ""
+    where = ", ".join("%s #%s (%s)" % (_RESTORE_ROW_LABEL.get(t, t), rid, col)
+                      for t, rid, col in bad[:5])
+    more = " and %d more" % (len(bad) - 5) if len(bad) > 5 else ""
+    return ("This backup was not restored: its database holds a value the panel will not put in a "
+            "command — %s%s. Every command for that row would be built from it. Nothing on this "
+            "panel was changed; restore a different backup, or correct that row in the archive's "
+            "panel.db first." % (where, more))
 
 
 def _safety_copy_passphrase(operator_passphrase=None):
@@ -621,7 +942,7 @@ def _legacy_restore_dispatch(stage, name, safety="", typed_passphrase=False):
     # it goes through _sh() (shlex.quote), which is where the scrutiny belongs and is not what
     # this rule inspects.
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-    subprocess.Popen(_service_restart_launcher(script),
+    subprocess.Popen(_service_restart_launcher(script),  # nosec B603 - fixed systemd-run argv, no shell
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=os.environ.copy())
     return True, _restore_started_msg(name, safety, typed_passphrase)
 

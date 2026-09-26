@@ -136,8 +136,7 @@ def _install_cron_runner(server, user):
     inner = ('mkdir -p {d} && chmod 700 {d} && '
              'printf %s {b} | base64 -d > {d}/run && chmod 700 {d}/run'
              ).format(d=_core._quote(d), b=_core._quote(b64))
-    _out, _err, rc = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(inner)}",
-                                       timeout=15, sudo=False)
+    _out, _err, rc = _core.shell_as_game_user(server, user, inner, timeout=15)
     return rc
 
 
@@ -298,7 +297,7 @@ def _read_cron_status(server, user):
              '[ "$rc" != "0" ] && err="$(tail -n 40 "$id.log" 2>/dev/null | tail -c 3000 '
              '| base64 | tr -d "\\n")"; '
              'printf "%s\\t%s\\t%s\\t%s\\t%s\\n" "$id" "$rc" "$st" "$en" "$err"; done')
-    out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(inner)}", timeout=12, sudo=False)
+    out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=12)
     status = {}
     for line in (out or "").split("\n"):
         parts = line.split("\t")
@@ -472,6 +471,18 @@ def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, p
     for every game server, so a line written before any of these heals without the operator
     toggling anything. Returns True if it changed anything. Best-effort."""
     selfname = selfname or user
+    # Unattended, daily, for every server: the lines it writes name the script, and cron runs them
+    # through /bin/sh as the account. _rewrite_crontab checks the account; this checks the script.
+    if not _core.game_idents_ok(user, selfname):
+        return False
+    # ...and the port the restart check is rewritten with: text stored in GameServer.port would be
+    # text in the hourly line (see _core.set_daily_restart). Checked before the crontab is read, so
+    # a refused pass costs nothing and changes nothing.
+    try:
+        _core.cron_port(port)       # validated, not converted: None vs "" still means what it did
+    except ValueError:
+        _core._log.warning("cron upgrade: refusing a port that is not a number for %s", user)
+        return False
     base = f"/home/{user}/{selfname}"
     flag = f"/home/{user}/.restart-pending"
     simple_cores = {f"{base} {c}" for c in ("start", "monitor", "mods-update", "update", "update-lgsm")}
@@ -623,8 +634,7 @@ def run_cron_job_now(server, user, raw, selfname=None):
     # setsid detaches the run so a long command records its result later instead of blocking;
     # `sudo -u` confines it to the game user's own privileges (same as a scheduled run).
     inner = f"mkdir -p {d}; echo {b64} | base64 -d | setsid bash >/dev/null 2>&1 &"
-    out, err, rc = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(inner)}",
-                                     timeout=15, sudo=False)
+    out, err, rc = _core.shell_as_game_user(server, user, inner, timeout=15)
     # The job itself is DETACHED, so this rc says nothing about how the job ends — that lands in
     # the .status file and shows up under Last run. What it DOES say is whether the launch
     # happened at all. Discarding it meant an unreachable host, a refused sudo or a missing
@@ -709,7 +719,7 @@ def list_game_backups(server, user):
            'done; '
            'find /home/%s -maxdepth 4 -name "*backup.lock" -mmin -60 -printf "LOCK\\t%%T@\\n" '
            '2>/dev/null | head -1; printf "%%s\\n" ' + _BACKUP_LIST_DONE) % (bdir, user)
-    out, _, rc = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(cmd)}", timeout=20, sudo=False)
+    out, _, rc = _core.shell_as_game_user(server, user, cmd, timeout=20)
     # A host that did not answer prints nothing, and so does a server with no backups yet.
     # rc is what tells them apart, and it was discarded. The SENTINEL is the other half, the
     # same shape _looks_installed uses: `cmd` ends in a pipeline through `head`, which exits 0
@@ -759,15 +769,14 @@ def prune_game_backups(server, user, keep=3):
     moves backups; plain find does not descend a symlinked starting point, printed nothing and
     exited 0, so every prune deleted nothing and reported success. Links INSIDE the dir are still
     not followed (-type f skips them)."""
-    if not files._SAFE_UNIX_USER_RE.match(str(user or "")):
+    if not _core.game_idents_ok(user):
         return False
     bdir = "/home/%s/lgsm/backup" % user
     keep = max(1, int(keep))
     cmd = ("find -H %s -maxdepth 1 -type f -name '*.tar.*' ! -name '.*' -printf '%%T@ %%p\\0' "
            "2>/dev/null | sort -z -rn | tail -z -n +%d | cut -z -d' ' -f2- | xargs -0 -r rm -f --"
            % (_core._quote(bdir), keep + 1))
-    _o, err, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(cmd)}",
-                                    timeout=30, sudo=False)
+    _o, err, rc = _core.shell_as_game_user(server, user, cmd, timeout=30)
     if rc != 0:
         _core._log.warning("backup prune for %s failed (rc=%s): %s", user, rc, (err or "")[:200])
     return rc == 0
@@ -806,10 +815,11 @@ _GAME_BACKUP_NAME = re.compile(r"^[A-Za-z0-9._-]+\.tar\.[A-Za-z0-9.]+\Z")
 def delete_game_backup(server, user, name):
     """Delete one game backup by file name from ~/lgsm/backup/, as the game user. Returns True on
     success. `name` is shape-validated here; the caller validates it against the actual listing."""
-    if not _GAME_BACKUP_NAME.match(name or ""):
+    if not _GAME_BACKUP_NAME.match(name or "") or not _core.game_idents_ok(user):
         return False
     path = "/home/%s/lgsm/backup/%s" % (user, name)
-    _, _, rc = _core.run_command(server, f"sudo -u {user} rm -f -- {_core._quote(path)}", timeout=30, sudo=False)
+    _, _, rc = _core.run_command(server, _core.game_user_exec_cmd(user, ["rm", "-f", "--", path]),
+                                 timeout=30, sudo=False)
     return rc == 0
 
 
@@ -823,7 +833,12 @@ def _as_user_argv(user, *args):
 
     Only reached where `helper_present()` is False, which is also where the grant is still
     NOPASSWD:ALL — so this permits nothing the host does not already permit.
+
+    An argv, so there is no shell to break out of — but sudo still RESOLVES the name, and "#0" is
+    uid 0 to it. Held to game_user_cmd's check; raises UnsafeGameAccount, and every caller checks
+    the account itself first.
     """
+    _core._require_game_idents(user)
     return ["sudo", "-u", user] + list(args)
 
 
@@ -832,7 +847,7 @@ def stream_game_backup(server, user, name, chunk=262144):
     local, paramiko and Tailscale-CLI remotes. `name` MUST already be validated by the caller
     (checked against the real backup list); we also re-check its shape here. Uses the (green,
     eventlet-patched) subprocess/paramiko IO so a multi-GB download doesn't block the event hub."""
-    if not _GAME_BACKUP_NAME.match(name or ""):
+    if not _GAME_BACKUP_NAME.match(name or "") or not _core.game_idents_ok(user):
         return
     path = "/home/%s/lgsm/backup/%s" % (user, name)
 
@@ -845,10 +860,16 @@ def stream_game_backup(server, user, name, chunk=262144):
             argv = (_priv.helper_argv("game-backup-read", [user, name])
                     if _core.helper_present() else _as_user_argv(user, "cat", path))
         else:
-            host = _core._resolve_ts_host(server)
-            argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
-                    "-p", str(server.port or 22), f"{server.username}@{host}",
-                    f"sudo -u {user} cat {_core._quote(path)}"]
+            # The login and host are stored data handed to ssh as an argument — see
+            # _core.ssh_destination. A refusal ends the download empty, like every other here.
+            try:
+                argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
+                        "-p", _core._ssh_port_arg(server), _core.SSH_DEST_SEP,
+                        _core.ssh_destination(server.username, _core._resolve_ts_host(server)),
+                        _core.game_user_exec_cmd(user, ["cat", path])]
+            except (TypeError, ValueError):
+                _core._log.warning("backup download: refusing the host's stored ssh login or address")
+                return
         p = subprocess.Popen(argv, stdout=subprocess.PIPE)  # nosec B603  # nosemgrep - argv list, no shell; the remote path is _quote()d above
         try:
             while True:
@@ -866,7 +887,7 @@ def stream_game_backup(server, user, name, chunk=262144):
 
     # paramiko remote
     client = _core.get_connection(server)
-    _in, out, _err = client.exec_command(f"sudo -u {user} cat {_core._quote(path)}")
+    _in, out, _err = client.exec_command(_core.game_user_exec_cmd(user, ["cat", path]))
     while True:
         b = out.read(chunk)
         if not b:
@@ -942,6 +963,8 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     isn't queryable (no gamedig type / no port) or the query fails — callers treat
     None as 'unknown' and don't block on it. gamedig is a bare command on PATH exactly
     as the restart cron invokes it (install-gamedig.sh links it in /usr/local/bin and /usr/bin)."""
+    if not _core.game_idents_ok(user):
+        return None      # refused: unknown, which no caller reads as "nobody is on"
     gdtype = _gamedig_type(game_type, query_type)
     if not gdtype or not port:
         return None
@@ -959,7 +982,7 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
            f"| jq -c {_core._quote(jqf)} 2>/dev/null")
     try:
-        out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(cmd)}", timeout=25, sudo=False)
+        out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
     except Exception:
         return None
     line = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
@@ -981,6 +1004,8 @@ def player_slots(server, user, game_type=None, port=None, query_type=None):
     browser, or None). (None, None, None) when the game isn't gamedig-queryable or the query fails,
     so the caller can fall back to the console / LinuxGSM config. Never raises."""
     import json
+    if not _core.game_idents_ok(user):
+        return None, None, None
     gdtype = _gamedig_type(game_type, query_type)
     if not gdtype or not port:
         return None, None, None
@@ -992,7 +1017,7 @@ def player_slots(server, user, game_type=None, port=None, query_type=None):
     cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
            f"| jq -c {_core._quote(jqf)} 2>/dev/null")
     try:
-        out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(cmd)}", timeout=25, sudo=False)
+        out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
     except Exception:
         return None, None, None
     line = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
@@ -1019,6 +1044,8 @@ def game_map(server, user, game_type=None, port=None, query_type=None):
     """The map/level a gamedig-queryable server is currently running, or "" if unknown/unqueryable.
     A separate, cached (~30s — maps change rarely) gamedig read, kept OUT of the player-count path so
     it can't perturb the counts. Never raises."""
+    if not _core.game_idents_ok(user):
+        return ""
     gdtype = _gamedig_type(game_type, query_type)
     if not gdtype or not port:
         return ""
@@ -1031,7 +1058,7 @@ def game_map(server, user, game_type=None, port=None, query_type=None):
            f"| jq -r '.map // \"\"' 2>/dev/null")
     val = ""
     try:
-        out, _, _ = _core.run_command(server, f"sudo -u {user} bash -c {_core._quote(cmd)}", timeout=25, sudo=False)
+        out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
         s = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
         # game-supplied text -> collapse whitespace and drop angle brackets (it's rendered as HTML)
         val = "" if s in ("", "null") else " ".join(s.split()).replace("<", "").replace(">", "")[:40]
@@ -1075,7 +1102,7 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
     cmd = ("gamedig --type %s %s:%d 2>/dev/null | jq -c %s 2>/dev/null"
            % (qtype, _core._gamedig_host(server), int(qport), _core._quote(jqf)))
     try:
-        out, _, _ = _core.run_command(server, "sudo -u %s bash -c %s" % (user, _core._quote(cmd)), timeout=25, sudo=False)
+        out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
     except Exception:
         return None
     line = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fast unit tests for the pure-logic helpers — no network, no SSH, no live DB.
 
-This file is the RUNNER. The checks live in tests/unit/part01..part06, imported here in order;
+This file is the RUNNER. The checks live in tests/unit/part01..part09, imported here in order;
 each part is ordinary module-level code that records results as it is imported, exactly as it did
 when this was one 6,966-line file. No check and no ordering changed: the parts were cut at
 top-level statement boundaries, and the chunks were proved to reconstruct the original
@@ -21,6 +21,7 @@ exists to catch, so it is not allowed to be the shape of the suite itself.
 """
 import functools
 import glob
+import importlib
 import os
 import sys
 
@@ -83,7 +84,11 @@ for _attr, _fns in _WATCHED.items():
     for _fn in _fns:
         setattr(_cfg_live, _fn, _watch(_attr, getattr(_cfg_live, _fn)))
 
-from unit import part01, part02, part03, part04, part05, part06  # noqa: F401,E402
+# The parts, in order: each runs its checks as it is imported. Named, never globbed, so that the
+# gate below can tell a part left off this list from one that ran.
+_PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09")
+for _part in _PARTS:
+    importlib.import_module("unit." + _part)
 from unit.part01 import check, results  # noqa: E402
 
 check("suites: no unit check reads or writes the machine's own config.json or keys",

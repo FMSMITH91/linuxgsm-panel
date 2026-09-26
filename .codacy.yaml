@@ -2,15 +2,16 @@
 # Codacy analysis configuration.
 # https://docs.codacy.com/repositories-configure/codacy-configuration-file/
 #
-# Skip generated / non-source paths so the grade reflects the actual application code
-# (the Python modules, templates, and shell scripts). Everything else is analysed.
-exclude_paths:
-  - "venv/**"
-  - ".venv/**"
-  - "data/**"
-  - "node_modules/**"
-  - "**/__pycache__/**"
-  - "lgsm/data/**"          # bundled reference CSVs, not code
-  - "docs/screenshots/**"   # images
-  - "tests/**"              # test fixtures legitimately hold fake secrets and disable CSRF
-                            # (the test client has no browser token) — not shipped app code
+# Codacy scans the WHOLE repository: the application, the tests, the tools and the bundled data.
+# There is deliberately no exclusion list here. The tests are where the security properties are
+# pinned (the command builders, the restore check, the sudo boundary), and code that is not
+# scanned is code whose findings nobody sees; a finding in a test that is a fixture on purpose
+# (a fake secret, CSRF off for the test client) gets a reasoned in-source suppression at the line
+# instead, as the application code does.
+#
+# Two things about this file that are easy to miss:
+#   * Codacy still skips third-party code on its own defaults — vendor/, node_modules/, dist/,
+#     builds and minified *.min.* assets (https://docs.codacy.com/repositories-configure/ignoring-files/).
+#   * While this file exists, the "Ignored files" set in Codacy's UI do NOT apply. An exclusion
+#     has to be added here, with its reason, or it does not exist.
+exclude_paths: []

@@ -264,7 +264,9 @@ def install_gmod_content(server, content_user, games, on_progress=None):
     reads that never happened. A skipped mount-only game and a download that ran and produced
     nothing both landed on it too."""
     games = _valid_content_games(games)
-    if not _CU_NAME_RE.match(content_user or ""):
+    # _CU_NAME_RE is a username grammar, and "root" satisfies it: the commands below run AS this
+    # account, so it is held to the builder's own check too — before any probe reaches the host.
+    if not (_CU_NAME_RE.match(content_user or "") and _core.game_idents_ok(content_user)):
         return False, [], "invalid content user"
     # Each game ends in exactly one of these, and only the first is a claim that content is on the
     # host because THIS run put it there.
@@ -291,8 +293,7 @@ def install_gmod_content(server, content_user, games, on_progress=None):
         inner = (f"cd /home/{content_user} && "
                  f"{{ [ -x linuxgsm.sh ] || {{ wget -q -O linuxgsm.sh https://linuxgsm.sh && chmod +x linuxgsm.sh; }}; }} && "
                  f"bash linuxgsm.sh {lgsm} && ./{lgsm} auto-install")
-        _core.run_command(server, f"sudo -u {_core._quote(content_user)} bash -c {_core._quote(inner)}",
-                    timeout=7200, sudo=False)
+        _core.shell_as_game_user(server, content_user, inner, timeout=7200)
         _now = content_present(server, content_user, g)
         if _now is True:
             installed.append(g)   # only a CONFIRMED read credits an install; the route prints this
@@ -430,7 +431,9 @@ def uninstall_gmod_content(server, content_user, games):
     as what was freed, so a game the host would not answer about belongs in the message, not in
     that list."""
     games = _valid_content_games(games)
-    if not _CU_NAME_RE.match(content_user or ""):
+    # _CU_NAME_RE is a username grammar, and "root" satisfies it: the commands below run AS this
+    # account, so it is held to the builder's own check too — before any probe reaches the host.
+    if not (_CU_NAME_RE.match(content_user or "") and _core.game_idents_ok(content_user)):
         return False, [], "invalid content user"
     removed, unverified = [], []
     for g in games:
@@ -498,9 +501,7 @@ def _mount_needs_restart(server, gmod_user):
     missing one tells the user their content is mounted when it silently is not there."""
     inner = _core._tmux_live_socket_sh(_GMOD_SELFNAME) + "echo __LIVE__"
     try:
-        out, _err, rc = _core.run_command(
-            server, "sudo -u %s bash -c %s" % (_core._quote(gmod_user), _core._quote(inner)),
-            timeout=15, sudo=False)
+        out, _err, rc = _core.shell_as_game_user(server, gmod_user, inner, timeout=15)
     except Exception:
         _core._log.debug("mount restart check failed", exc_info=True)
         return True
@@ -515,9 +516,11 @@ def gmod_mount_setup(server, gmod_user, content_user, games):
     Idempotent. Returns (ok, msg). Group membership takes effect when the GMod server (re)starts."""
     import base64
     games = _valid_content_games(games)
-    if not _CU_NAME_RE.match(gmod_user or ""):
+    # Both accounts go into commands run AS them — see install_gmod_content for why the builder's
+    # own check is applied on top of _CU_NAME_RE.
+    if not (_CU_NAME_RE.match(gmod_user or "") and _core.game_idents_ok(gmod_user)):
         return False, "invalid gmod user"
-    if games and not _CU_NAME_RE.match(content_user or ""):
+    if games and not (_CU_NAME_RE.match(content_user or "") and _core.game_idents_ok(content_user)):
         return False, "invalid content user"
     if games:
         group = _user_primary_group(server, content_user)
@@ -540,8 +543,7 @@ def gmod_mount_setup(server, gmod_user, content_user, games):
     b64d = base64.b64encode(depots.encode()).decode()
     inner = (f"mkdir -p {cfgdir} && echo {b64c} | base64 -d > {cfgdir}/mount.cfg && "
              f"echo {b64d} | base64 -d > {cfgdir}/mountdepots.txt && echo __OK__")
-    out, err, rc = _core.run_command(server, f"sudo -u {_core._quote(gmod_user)} bash -c {_core._quote(inner)}",
-                               timeout=30, sudo=False)
+    out, err, rc = _core.shell_as_game_user(server, gmod_user, inner, timeout=30)
     if rc != 0 or "__OK__" not in (out or ""):
         return False, (err or out or "mount write failed")[:200]
     _msg = ("Unmounted all content" if not games else

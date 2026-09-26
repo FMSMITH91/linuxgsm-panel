@@ -1534,6 +1534,61 @@ def _register_sample_pruning():
 _register_sample_pruning()
 
 
+# ── A row LOADED with a name @validates would have refused ─────────────────────────────────────
+# GHSA-hh39-76g3-wxcx. _validate_shell_ident runs when a value is ASSIGNED, never when a row is
+# read back — so a database written before it existed, a hand edit of data/panel.db, or a restore
+# (backup.py now refuses one; an older panel did not) can hand the ORM a name it would never have
+# stored. The command builders are what refuse such a name (ssh_manager._core.game_user_cmd). This
+# only SAYS so, once per row, naming it: without it the operator saw every action on that server
+# fail with "invalid account or script name" and nothing saying which row, or why.
+#
+# It deliberately does not RAISE on load, and does not rewrite the value. Raising would fail every
+# query that touches the row — the dashboard, the server list, and the Remove button that is the
+# operator's way out — so one bad row would take the panel down with it. Rewriting would silently
+# change the account the panel acts as, and "" is the value an `rm -rf /home/{short_name}` guard
+# exists for. Refusing at the builder costs only the bad row's own commands.
+_SHELL_IDENT_ON_LOAD = {"GameServer": ("short_name", "game_type"),
+                        "RemoteServer": ("username", "linuxgsm_user")}
+# Ports too, held to their TYPE — what backup.py's restore check holds them to, and for the same
+# reason: SQLite stores whatever a row was written with in an INTEGER column, and SQLAlchemy hands
+# TEXT back as a str. A port goes into commands (the hourly restart line, the ssh `-p`), and the
+# builders now refuse one that is not a number (_core.cron_port, _core._ssh_port_arg). The RANGE
+# _validate_port also checks is not repeated: a row from before it may hold a 0.
+_PORT_ON_LOAD = {"GameServer": ("port", "query_port"), "RemoteServer": ("port",)}
+_flagged_on_load = set()
+
+
+def _load_value_ok(key, val, ports):
+    if key in ports:
+        return val is None or (isinstance(val, int) and not isinstance(val, bool))
+    return not val or (isinstance(val, str) and bool(_SHELL_IDENT_RE.match(val)))
+
+
+def _flag_unsafe_idents_on_load(target, _context=None):
+    name = type(target).__name__
+    ports = _PORT_ON_LOAD.get(name, ())
+    for key in _SHELL_IDENT_ON_LOAD.get(name, ()) + ports:
+        val = target.__dict__.get(key)       # never getattr: that could load a deferred column
+        if _load_value_ok(key, val, ports):
+            continue
+        mark = (name, target.__dict__.get("id"), key, str(val)[:80])
+        if mark in _flagged_on_load or len(_flagged_on_load) >= 1000:
+            continue
+        _flagged_on_load.add(mark)
+        _log.warning("%s #%s has a %s that is not a plain %s (%r); the panel will not put it "
+                     "into any command until the row is corrected",
+                     mark[0], mark[1], key, "number" if key in ports else "name", mark[3])
+
+
+def _register_load_flagging():
+    from sqlalchemy import event
+    event.listen(GameServer, "load", _flag_unsafe_idents_on_load)
+    event.listen(RemoteServer, "load", _flag_unsafe_idents_on_load)
+
+
+_register_load_flagging()
+
+
 def init_db(app):
     _ensure_db_healthy()   # self-heal on-disk corruption before the ORM opens the file
     db.init_app(app)

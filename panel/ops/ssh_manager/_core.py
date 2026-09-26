@@ -13,6 +13,7 @@ import threading
 import time
 import paramiko
 from panel.core.config import decrypt_secret
+from panel.core.validation import HOST_RE as _HOST_RE
 from panel.security import privileged as _priv
 # ── Per-remote caches, and forgetting a host that no longer exists ────────────────────────────
 # Several modules in this package memoise an answer PER HOST, keyed by RemoteServer.id. SQLite
@@ -323,7 +324,64 @@ def _decode_output(b):
     return b.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _collect_capped(p, timeout, kill, thread_cls, stdin_bytes=None, cap=None):
+# How long a reader may still be draining after the command it reads has exited (or been killed):
+# a grandchild holding the pipe open gets this, not the caller's whole timeout over again.
+_READER_GRACE = 5
+
+
+def _pump_capped(stream, buf, cap, flags):
+    """Read `stream` to EOF into `buf`, keeping its first `cap` bytes and discarding the rest."""
+    rd = getattr(stream, "read1", None) or stream.read
+    try:
+        while True:
+            chunk = rd(65536)
+            if not chunk:
+                return
+            room = cap - len(buf)
+            if room > 0:
+                buf.extend(chunk[:room])
+            if len(chunk) > max(room, 0):
+                flags["truncated"] = True
+    except (OSError, ValueError):
+        return          # the pipe was closed under us (a kill); what was read is kept
+
+
+def _feed_stdin(p, stdin_bytes):
+    """Write `stdin_bytes` (when there are any) to `p`'s stdin, then close it so `p` sees EOF."""
+    try:
+        if stdin_bytes:
+            p.stdin.write(stdin_bytes)
+    except (OSError, ValueError):
+        pass            # the command exited without reading it all; its rc says what happened
+    finally:
+        try:
+            p.stdin.close()
+        except (OSError, ValueError):
+            # Already closed by the exit or a kill — there is nothing left to close.
+            pass
+
+
+def _signalling(target, done):
+    """`target`, wrapped to set the Event `done` when it returns, however it returns."""
+    def run(*args):
+        try:
+            target(*args)
+        finally:
+            done.set()
+    return run
+
+
+def _reader_jobs(p, bufs, cap, flags, stdin_bytes):
+    """(target, args) per _collect_capped thread: a capped pump per pipe, and the stdin feed."""
+    # `bufs` pairs with (p.stdout, p.stderr); a stream that is None (no pipe) gets no pump.
+    jobs = [(_pump_capped, (stream, buf, cap, flags))
+            for stream, buf in zip((p.stdout, p.stderr), bufs) if stream is not None]
+    if p.stdin is not None:
+        jobs.append((_feed_stdin, (p, stdin_bytes)))
+    return jobs
+
+
+def _collect_capped(p, timeout, kill, threads, stdin_bytes=None, cap=None):
     """communicate(), with a ceiling on what is KEPT. -> (out, err, rc, truncated) as bytes, or
     None when the command outlived `timeout` (it has been killed by then).
 
@@ -336,67 +394,46 @@ def _collect_capped(p, timeout, kill, thread_cls, stdin_bytes=None, cap=None):
     `cap` bytes are kept, and the rest is read and DISCARDED rather than left unread, so a command
     still writing is not blocked into outliving its timeout.
 
-    `thread_cls` is the caller's to choose: a native thread inside tpool, where a green one has no
-    hub to run on; the patched (green) one in a request greenlet, where a native one would block
-    the hub on every read."""
+    `threads` is the caller's to choose, as a threading MODULE: the unpatched one inside tpool,
+    where a green thread has no hub to run on; the patched (green) one in a request greenlet,
+    where a native thread would block the hub on every read. Its Thread runs the readers and its
+    Event says when each has finished — one module for both. Measured under eventlet: a green
+    Event set from a native thread wakes nobody, whether the waiter is a greenlet or another
+    native thread (the wait runs its full timeout), and a native Event waited on in a greenlet
+    stops the whole hub while it waits, the green readers that would set it included.
+
+    Waited on those Events, never with Thread.join(timeout=...): under eventlet on Python 3.13+
+    (Ubuntu 26.04) a green join that runs out of time RAISES eventlet.timeout.Timeout, a
+    BaseException, instead of returning. A grandchild still holding a pipe past _READER_GRACE
+    sent that straight through _run_via_ssh_cli's `except Exception`, and every one above it,
+    out of the request or background loop that asked."""
     cap = _MAX_OUTPUT_BYTES if cap is None else cap
     out, err = bytearray(), bytearray()
     flags = {"truncated": False}
-
-    def _pump(stream, buf):
-        rd = getattr(stream, "read1", None) or stream.read
-        try:
-            while True:
-                chunk = rd(65536)
-                if not chunk:
-                    return
-                room = cap - len(buf)
-                if room > 0:
-                    buf.extend(chunk[:room])
-                if len(chunk) > max(room, 0):
-                    flags["truncated"] = True
-        except (OSError, ValueError):
-            return          # the pipe was closed under us (a kill); what was read is kept
-
-    def _feed():
-        try:
-            if stdin_bytes:
-                p.stdin.write(stdin_bytes)
-        except (OSError, ValueError):
-            pass            # the command exited without reading it all; its rc says what happened
-        finally:
-            try:
-                p.stdin.close()
-            except (OSError, ValueError):
-                # Already closed by the exit or a kill — there is nothing left to close.
-                pass
-
-    workers = []
-    for stream, buf in ((p.stdout, out), (p.stderr, err)):
-        if stream is not None:
-            workers.append(thread_cls(target=_pump, args=(stream, buf), daemon=True))
-    if p.stdin is not None:
-        workers.append(thread_cls(target=_feed, daemon=True))
+    jobs = _reader_jobs(p, (out, err), cap, flags, stdin_bytes)
+    finished = [threads.Event() for _ in jobs]
+    workers = [threads.Thread(target=_signalling(target, done), args=args, daemon=True)
+               for (target, args), done in zip(jobs, finished)]
     for w in workers:
         w.start()
     try:
         rc = p.wait(timeout=timeout)
     except (_real_subprocess.TimeoutExpired, subprocess.TimeoutExpired):
         kill()
-        for w in workers:
-            w.join(timeout=5)
+        for done in finished:
+            done.wait(_READER_GRACE)
         return None
     # The direct child has exited. Its output normally reaches EOF with it; a grandchild still
-    # holding the pipe open gets five seconds, not the caller's whole timeout over again.
-    for w in workers:
-        w.join(timeout=5)
+    # holding the pipe open gets _READER_GRACE, not the caller's whole timeout over again.
+    for done in finished:
+        done.wait(_READER_GRACE)
     return bytes(out), bytes(err), rc, flags["truncated"]
 
 
 def _finish(p, timeout, stdin_text=None):
     """Collect a started process: (stdout, stderr, rc), killing the whole group on timeout."""
     res = _collect_capped(p, timeout, kill=lambda: _kill_process_tree(p),
-                          thread_cls=_real_threading.Thread,
+                          threads=_real_threading,
                           stdin_bytes=(stdin_text.encode("utf-8")
                                        if stdin_text is not None else None))
     if res is None:
@@ -856,6 +893,46 @@ def _ssh_mux_opts():
             "-o", "ServerAliveCountMax=3"]
 
 
+# ── The destination of every system-ssh argv ──────────────────────────────────────────────────
+# GHSA-hh39-76g3-wxcx, the same bug class one layer down. RemoteServer.username and .host are
+# stored data, and four places hand them to the system ssh client as `<username>@<host>`: the
+# Tailscale transport below, the backup download (cron.stream_game_backup), the file download
+# (files.stream_path) and the web terminal (terminal_session._ssh_argv). ssh reads ANY argument
+# that begins with `-` as an option, so a username of `-oProxyCommand=<cmd>` ran <cmd> on the
+# panel's host as the panel's account, before a connection was even attempted. The model's
+# @validates forbids that on ASSIGNMENT; a row LOADED from the database — one written before the
+# validator, a hand edit, a restored backup — is never checked.
+#
+# So each of those argvs gets its destination from here, and this REFUSES rather than quotes:
+# there is no quoting inside an argv, only "is this an option or not". The login is held to the
+# model's own shell-identifier rule (no leading dash, no '@', ≤ 64 chars) and the host to the
+# route's hostname/IP rule (validation.HOST_RE, no leading dash). The `--` in SSH_DEST_SEP goes in
+# front of it as well: ssh stops reading options there, which also keeps the REMOTE COMMAND after
+# the destination from being read as one — without it, `ssh user@host -oProxyCommand=x` still runs
+# x (measured on OpenSSH 10.5 with `ssh -G`).
+class UnsafeSshDestination(ValueError):
+    """A stored SSH login or host that must not be handed to the ssh client."""
+
+
+SSH_DEST_SEP = "--"
+SSH_DEST_REFUSED = ("", "invalid ssh login or host", -1)
+
+
+def ssh_destination(user, host):
+    """`user@host` for a system-ssh argv, or raise UnsafeSshDestination. Put SSH_DEST_SEP in the
+    argv immediately before it."""
+    if not (isinstance(user, str) and _SAFE_GAME_IDENT.match(user)):
+        raise UnsafeSshDestination("invalid ssh login")
+    if not (isinstance(host, str) and _HOST_RE.match(host)):
+        raise UnsafeSshDestination("invalid ssh host")
+    return f"{user}@{host}"
+
+
+def _ssh_port_arg(server):
+    """The `-p` value: an int, never stored text. Raises ValueError."""
+    return str(int(getattr(server, "port", None) or 22))
+
+
 def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
     """Run a command over the system `ssh` binary — used for Tailscale SSH remotes,
     where auth happens at the tailscaled level (paramiko can't do it, but the ssh CLI,
@@ -865,15 +942,22 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
     # ROOT, not the remote's optional linuxgsm_user — see run_command for what that demotion did.
     remote_cmd = f"sudo bash -c {_quote(command)}" if use_sudo else command
     host = _resolve_ts_host(server)
-    ssh_cmd = [
-        "ssh", "-T",
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=%d" % _ssh_connect_timeout(),
-    ] + _ssh_mux_opts() + [
-        "-p", str(server.port or 22),
-        f"{server.username}@{host}", remote_cmd,
-    ]
+    try:
+        ssh_cmd = [
+            "ssh", "-T",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=%d" % _ssh_connect_timeout(),
+        ] + _ssh_mux_opts() + [
+            "-p", _ssh_port_arg(server),
+            SSH_DEST_SEP, ssh_destination(server.username, host), remote_cmd,
+        ]
+    except (TypeError, ValueError):
+        # This transport answers a failure as a tuple and never raises (a timeout is
+        # ("", "SSH command timed out", -1)): every caller reads the rc, and several run unattended.
+        _log.warning("refusing an ssh command: the host's stored login, address or port is not "
+                     "one ssh can be given safely")
+        return SSH_DEST_REFUSED
     try:
         # errors="replace" like the other two transports — a game server's bytes are not
         # necessarily valid UTF-8, and a strict decode would blank the whole result (see _run_local).
@@ -898,7 +982,7 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
         p = subprocess.Popen(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; ssh_cmd is built here from validated parts
                              stdin=(subprocess.PIPE if stdin_text is not None
                                     else subprocess.DEVNULL))
-        res = _collect_capped(p, timeout, kill=p.kill, thread_cls=threading.Thread,
+        res = _collect_capped(p, timeout, kill=p.kill, threads=threading,
                               stdin_bytes=(stdin_text.encode("utf-8")
                                            if stdin_text is not None else None))
         if res is None:
@@ -1169,8 +1253,81 @@ def discover_linuxgsm_servers(server):
     return found
 
 
-# Same charset files._SAFE_UNIX_USER_RE enforces, and for the same reason it gives.
+# The charset models._validate_shell_ident enforces on assignment, applied again here to rows that
+# were LOADED — which that hook never sees. See game_user_cmd below.
 _SAFE_GAME_IDENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
+
+
+# ── The ONE builder of a command that runs AS a game account ──────────────────────────────────
+# GHSA-hh39-76g3-wxcx. GameServer.short_name is the Linux account a server runs as, and lgsm_name
+# ('<game_type>server') its LinuxGSM script. Both went into `sudo -u <account> bash -c '<body>'`:
+# the account AHEAD of `bash -c`, where the shell that runs sudo parses it, and both again inside
+# the body (`cd /home/<account> && ./<script>`). The model's @validates hook pins their charset on
+# ASSIGNMENT only. A row LOADED from the database is never checked, and three things put an
+# unchecked row there: a database written before the validator existed, a panel backup restored
+# over the live one, and a hand edit of data/panel.db. Twenty-five builders — seven in game.py,
+# eleven in cron.py, seven in two route modules — interpolated the account raw, and the panel's
+# own player polling reaches several of them with nobody watching — so short_name="x; curl …|sh; #" ran as the
+# panel's account on its own host, and as the SSH login (the identity the panel escalates with) on
+# a remote.
+#
+# So no builder spells `sudo -u` itself any more. It asks this, and this REFUSES a name that is not
+# one plain account word before any text is built from it. Refusing and not only quoting, because a
+# quoted name is still a name sudo resolves: "#0" is uid 0 to sudo, and "root" is root — which
+# LinuxGSM itself refuses to run as, so no real server has it. A unit gate fails the build on any
+# `sudo -u <interpolated>` in panel/ outside these two builders.
+class UnsafeGameAccount(ValueError):
+    """An account or LinuxGSM script name that must not be put into a command."""
+
+
+# What a refused command answers: the (out, err, rc) run_as_game_user, read_as_game_user and
+# send_console_command have always returned for it. rc 1 with nothing on stdout is how every caller
+# already spells "could not run" — never an empty result, which is how a failed read has been
+# mistaken for a healthy one before.
+GAME_ACCOUNT_REFUSED = ("", "invalid account or script name", 1)
+
+
+def game_idents_ok(*names):
+    """True when every name is a plain account/script word a command may carry."""
+    return all(isinstance(n, str) and _SAFE_GAME_IDENT.match(n) and n != "root" for n in names)
+
+
+def _require_game_idents(user, selfname=None):
+    if not game_idents_ok(user, *(() if selfname is None else (selfname,))):
+        raise UnsafeGameAccount(GAME_ACCOUNT_REFUSED[1])
+
+
+def game_user_cmd(user, inner, selfname=None):
+    """`sudo -u <user> bash -c <inner>`: the account validated, both halves shell-quoted.
+
+    `selfname` is the LinuxGSM script name. A caller whose `inner` names the script MUST pass it:
+    the body is built before this is called, so this is where the name is checked. For a safe name
+    the text is byte-for-byte what the builders used to spell by hand — shlex leaves a plain word
+    unquoted. Raises UnsafeGameAccount; a caller that returns (out, err, rc) wants
+    shell_as_game_user, which turns the raise into GAME_ACCOUNT_REFUSED."""
+    _require_game_idents(user, selfname)
+    return f"sudo -u {_quote(user)} bash -c {_quote(inner)}"
+
+
+def game_user_exec_cmd(user, argv, selfname=None):
+    """`sudo -u <user> <argv…>` — one program and its arguments, no shell body — held to the same
+    check, every word quoted. Raises UnsafeGameAccount."""
+    _require_game_idents(user, selfname)
+    return " ".join([f"sudo -u {_quote(user)}"] + [_quote(str(a)) for a in argv])
+
+
+def shell_as_game_user(server, user, sh, timeout=30, selfname=None):
+    """Run shell `sh` AS the game account; (out, err, rc).
+
+    An unsafe account or script name sends nothing and answers GAME_ACCOUNT_REFUSED. `sh` is
+    panel-built text; pass `selfname` whenever it names the LinuxGSM script (see game_user_cmd)."""
+    try:
+        cmd = game_user_cmd(user, sh, selfname=selfname)
+    except UnsafeGameAccount:
+        _log.warning("refusing to run as an unsafe account/script name")
+        return GAME_ACCOUNT_REFUSED
+    # The command self-escalates via `sudo -u`, so it must not be wrapped in root sudo too.
+    return run_command(server, cmd, timeout=timeout, sudo=False)
 
 
 def create_game_user(server, user, timeout=30):
@@ -1230,8 +1387,15 @@ def enrol_game_user(server, user):
     return None
 
 
-def read_as_game_user(server, user, sh, timeout=30):
+def read_as_game_user(server, user, sh, timeout=30, selfname=None):
     """Run a READ-ONLY shell snippet as a game account, and return (out, err, rc).
+
+    `selfname` is the LinuxGSM script name, and a caller whose `sh` names it MUST pass it — the
+    console reads do, because GameServer.console_log is `…/log/console/<lgsm_name>-console.log`
+    and lgsm_name is `<game_type>server`, both loaded from the database. Without it the account
+    was checked and the script name went into the body unchecked (GHSA-hh39-76g3-wxcx, found in
+    review of the first fix): game_type="mc; <cmd>; #" ran <cmd> from the console poller every two
+    seconds for as long as anyone had that console open.
 
     For the reads that genuinely need that account's permissions rather than root: a game user's
     home is 0750, so the panel user cannot traverse it, and the console log lives three levels
@@ -1245,11 +1409,7 @@ def read_as_game_user(server, user, sh, timeout=30):
     root operation. `sh` is panel-built text, never user input; `user` is validated here for the
     reason run_as_game_user gives at length.
     """
-    if not _SAFE_GAME_IDENT.match(user or ""):
-        _log.warning("refusing to read as an unsafe account name")
-        return "", "invalid account name", 1
-    return run_command(server, "sudo -u %s bash -c %s" % (_quote(user), _quote(sh)),
-                       timeout=timeout, sudo=False)
+    return shell_as_game_user(server, user, sh, timeout=timeout, selfname=selfname)
 
 
 def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=None,
@@ -1281,9 +1441,9 @@ def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=No
     # from a tampered backup, reaches this code unchecked. `user` is interpolated ahead of `sudo`,
     # so it breaks out as the PANEL user, and `selfname` lands inside the bash -c script body.
     # Demonstrated: user="x; id > /tmp/pwned; #" produced `sudo -u x; id > /tmp/pwned; # bash -c`.
-    if not (_SAFE_GAME_IDENT.match(user or "") and _SAFE_GAME_IDENT.match(selfname or "")):
+    if not game_idents_ok(user, selfname):
         _log.warning("refusing to run as an unsafe account/script name")
-        return "", "invalid account or script name", 1
+        return GAME_ACCOUNT_REFUSED
     answers = [str(a) for a in (answers or [])]
     arg_answers = ",".join(answers) if answers else "-"
     verb_args = [user, selfname, action, arg_answers, "yes" if tee_log else "no"]
@@ -1340,9 +1500,7 @@ def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=No
     # `export`, not a `TERM=xterm cmd` prefix: with `answers` the command is a PIPELINE, and a
     # prefix would set TERM for printf and leave LinuxGSM emitting `tput: unknown terminal`.
     inner = f"cd /home/{_quote(user)} && export TERM=xterm && {body}"
-    cmd = f"sudo -u {_quote(user)} bash -c {_quote(inner)}"
-    # The command self-escalates via `sudo -u`, so don't double-wrap with sudo.
-    return run_command(server, cmd, timeout=timeout, sudo=False)
+    return shell_as_game_user(server, user, inner, timeout=timeout, selfname=selfname)
 
 
 GAME_PRIORITY_NICE = -1   # slight CPU priority edge for game processes (root-only to set negative)
@@ -1428,12 +1586,11 @@ def send_console_command(server, user, command, timeout=20, selfname=None):
     # has-session in _tmux_live_socket_sh. `command` was already quoted; these two were not, and
     # this was the one `sudo -u <account>` builder in this file with no check at all. Returns the
     # tuple every caller unpacks, never a raise (game.py reads out[2] as the rc).
-    if not (_SAFE_GAME_IDENT.match(user or "") and _SAFE_GAME_IDENT.match(selfname or "")):
+    if not game_idents_ok(user, selfname):
         _log.warning("refusing to send to an unsafe account/script name")
-        return "", "invalid account or script name", 1
+        return GAME_ACCOUNT_REFUSED
     inner = _tmux_live_socket_sh(selfname) + f'tmux -L "$SOCK" send-keys -t {selfname} {_quote(command)} Enter'
-    cmd = f"sudo -u {_quote(user)} bash -c {_quote(inner)}"
-    return run_command(server, cmd, timeout=timeout, sudo=False)
+    return shell_as_game_user(server, user, inner, timeout=timeout, selfname=selfname)
 
 
 def remote_public_ip(server):
@@ -1830,10 +1987,9 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     # function unchecked. It matters more here than there: `user` went in UNQUOTED, and the
     # pipeline below runs as ROOT, so `crontab -u <user>` was a root command-injection point one
     # bad row away. Five cron routes reach this.
-    if not _SAFE_GAME_IDENT.match(user or ""):
+    if not game_idents_ok(user):
         _log.warning("refusing to rewrite a crontab for an unsafe account name")
         return False, "invalid account name"
-    _u = _quote(user)
     # No `-u`, and no root. `crontab -l` and `crontab <file>` run AS the account operate on that
     # account's own crontab, which is exactly what all five callers want — so this ran as ROOT for
     # no reason at all.
@@ -1855,8 +2011,7 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     #
     # It stays a shell pipeline because `crontab -l | filter > tmp; crontab tmp` is genuinely a
     # pipeline, but every value interpolated into it is validated and quoted.
-    cmd = f"sudo -u {_u} bash -c {_quote(pipeline)}"
-    out, err, rc = run_command(server, cmd, timeout=20, sudo=False)
+    out, err, rc = shell_as_game_user(server, user, pipeline, timeout=20)
     return rc == 0, (err or out or "")
 
 
@@ -1871,6 +2026,10 @@ def set_autostart(server, user, enabled, selfname=None):
     we no longer use it and strip any legacy one. Enabling ensures the monitor line exists;
     disabling removes it."""
     selfname = selfname or user
+    # The script name goes into the crontab LINE, which cron runs through /bin/sh as the account:
+    # _rewrite_crontab checks the account, and only the caller knows what the line names.
+    if not game_idents_ok(user, selfname):
+        return False, GAME_ACCOUNT_REFUSED[1]
     base = f"/home/{user}/{selfname}"
     monitor_line = f"*/5 * * * * {cron._record_managed_cmd(user, f'{base} monitor')}"
     add = [monitor_line] if enabled else []
@@ -1890,6 +2049,8 @@ def install_game_cron(server, user, selfname=None, supported=None):
       update-lgsm  weekly Sun 05:30
     """
     selfname = selfname or user
+    if not game_idents_ok(user, selfname):      # the lines below name the script; see set_autostart
+        return False, GAME_ACCOUNT_REFUSED[1]
     supported = supported or set()
     base = f"/home/{user}/{selfname}"
 
@@ -2014,6 +2175,16 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     with no time shown anywhere in the UI to notice it by."""
     hour, minute = int(hour) % 24, int(minute) % 60
     selfname = selfname or user
+    if not game_idents_ok(user, selfname):      # the lines below name the script; see set_autostart
+        return False, GAME_ACCOUNT_REFUSED[1]
+    # The port goes into the hourly cron line too (daily_restart_check_cmd), which /bin/sh runs as
+    # the account. GameServer.port is an INTEGER column, but SQLite stores whatever a row was
+    # written with, and a LOADED row is never checked — so text there was text in the crontab.
+    try:
+        port = cron_port(port)
+    except ValueError:
+        _log.warning("daily restart: refusing a port that is not a number: %r", str(port)[:40])
+        return False, "invalid port"
     flag = f"/home/{user}/.restart-pending"
     gdtype = GAMEDIG_TYPE.get(game_type or "", "")
     # Crontab-only (no separate script file — file writes inside a `sudo bash -c`
@@ -2029,6 +2200,21 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     if enabled:
         return _rewrite_crontab(server, user, grep_args, [touch_line, check_line])
     return _rewrite_crontab(server, user, grep_args, [], extra_pre=f"rm -f {flag}; ")
+
+
+def cron_port(port):
+    """`port` as the number a cron or shell line may carry: None when unset, else int(port) — the
+    cast every gamedig reader in cron.py already makes. Raises ValueError for anything int()
+    refuses ("25565; <cmd>; true"), and for a bool or a fractional float, which int() would quietly
+    turn into some other number."""
+    if port is None or port == "":
+        return None
+    if isinstance(port, bool) or (isinstance(port, float) and not port.is_integer()):
+        raise ValueError("not a port number")
+    try:
+        return int(port)
+    except (TypeError, ValueError):
+        raise ValueError("not a port number") from None
 
 
 def daily_restart_check_cmd(user, selfname, gdtype, host, port):
@@ -2055,6 +2241,9 @@ def daily_restart_check_cmd(user, selfname, gdtype, host, port):
     # at cron-writing time that the game has no gamedig type or no port, there is no reading to
     # fail, and restarting at the daily time is the behaviour the operator asked for.
     if gdtype and port:
+        # An int, or ValueError — never stored text in a line /bin/sh runs (set_daily_restart and
+        # cron.upgrade_managed_cron_tracking refuse such a port before they get here).
+        port = cron_port(port)
         jqf = 'if (.players|type=="array") then (.players|length) else empty end'
         # gamedig by the PATH above, not cron's: see CRON_TOOL_PATH.
         getp = (f"{gamedig_cron_call()}--type {gdtype} {host}:{port} 2>/dev/null "

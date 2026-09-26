@@ -46,11 +46,13 @@ def _parse_cfg(text):
     return out
 
 
-# Same charset models._validate_shell_ident enforces. Repeated here because that validator is a
-# SQLAlchemy @validates hook: it fires on ASSIGNMENT, and never on rows loaded from the database.
-# A row written before the validator existed, or restored from a tampered backup, reaches this
-# code unchecked — and `user` is interpolated into `sudo -u {user}` and into /home/{user}.
-_SAFE_UNIX_USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
+# The account check is _core.game_idents_ok — the same one the command builder applies — and not
+# a copy of its pattern here. models._validate_shell_ident is a SQLAlchemy @validates hook: it
+# fires on ASSIGNMENT, and never on rows loaded from the database, so a row written before the
+# validator existed, or restored from a tampered backup, reaches this code unchecked — and `user`
+# is interpolated into `sudo -u {user}` and into /home/{user}. This module kept its own copy of
+# the pattern until the builders moved behind one check (GHSA-hh39-76g3-wxcx); two copies of a
+# security rule is how one of them stops being the rule.
 
 
 def _safe_abspath(user, relpath):
@@ -58,8 +60,10 @@ def _safe_abspath(user, relpath):
     traversal outside it. Returns the absolute path or None.
 
     Also rejects an unsafe `user`: every file operation funnels through here, so this is the one
-    place that can refuse a malformed identifier before it reaches a shell command."""
-    if not _SAFE_UNIX_USER_RE.match(str(user or "")):
+    place that can refuse a malformed identifier before it reaches a shell command. The SAME test
+    the command builder applies (_core.game_idents_ok), so a name this lets through is never one
+    the builder then raises on in the middle of a download."""
+    if not _core.game_idents_ok(user):
         return None
     home = f"/home/{user}"
     rel = str(relpath) if relpath else ""   # tolerate non-str input without crashing
@@ -144,8 +148,7 @@ def _write_file_as_user(server, user, abspath, data_bytes):
     if len(b64) <= _ONE_SHOT_B64:
         inner = (f"{mk} && printf %s {_core._quote(b64)} | base64 -d > {_core._quote(tmp)} "
                  f"&& {_keep_mode(abspath, tmp)} && mv -f {_core._quote(tmp)} {_core._quote(abspath)}")
-        out, e, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, abspath, inner))}",
-                                 timeout=60, sudo=False)
+        out, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, inner), timeout=60)
         if _OUTSIDE_HOME in (out or ""):
             return False, "Invalid path"
         return (rc == 0), (e or out or "")
@@ -158,7 +161,7 @@ def _write_file_as_user(server, user, abspath, data_bytes):
         if first:
             inner = f"{mk} && {inner}"
             inner = _guarded(user, abspath, inner)
-        out, e, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(inner)}", timeout=60, sudo=False)
+        out, e, rc = _core.shell_as_game_user(server, user, inner, timeout=60)
         if first and _OUTSIDE_HOME in (out or ""):
             return False, "Invalid path"
         if rc != 0:
@@ -168,7 +171,7 @@ def _write_file_as_user(server, user, abspath, data_bytes):
     fin = (f"base64 -d {_core._quote(tmp)} > {_core._quote(abspath)}.new "
            f"&& {_keep_mode(abspath, abspath + '.new')} "
            f"&& mv -f {_core._quote(abspath)}.new {_core._quote(abspath)} && rm -f {_core._quote(tmp)}")
-    o, e, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(fin)}", timeout=60, sudo=False)
+    o, e, rc = _core.shell_as_game_user(server, user, fin, timeout=60)
     return (rc == 0), (e or o or "")
 
 
@@ -179,10 +182,10 @@ def _write_file_as_user(server, user, abspath, data_bytes):
 # user="x; id > /tmp/pwned; #": the injection lands in the OUTER shell, before sudo, as the panel
 # user. Not reachable from a request today — every caller passes gs.short_name / gs.lgsm_name,
 # which models._validate_shell_ident pins on assignment — which is exactly the residual threat the
-# note above _SAFE_UNIX_USER_RE describes, left open on seven of this module's fifteen builders.
+# note above _safe_abspath describes, left open on seven of this module's fifteen builders.
 def _idents_ok(*names):
     """True when every name is a safe Unix ident (so it can be interpolated into a command)."""
-    return all(_SAFE_UNIX_USER_RE.match(n or "") for n in names)
+    return _core.game_idents_ok(*names)
 
 
 def _lgsm_cfg_dir(user, selfname):
@@ -221,7 +224,7 @@ def lgsm_read_config(server, user, selfname):
 
     inner = (_frame(d + "/_default.cfg", "DEFAULT") + _frame(d + "/common.cfg", "COMMON")
              + _frame(inst, "INSTANCE"))
-    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(inner)}", timeout=20, sudo=False)
+    out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=20, selfname=selfname)
     body = out or ""
     sect = {}
     for tag in ("DEFAULT", "COMMON", "INSTANCE"):
@@ -305,10 +308,7 @@ def lgsm_game_config(server, user, selfname):
     # the end, so "details said nothing" and "details never answered" stay tellable apart.
     inner = (f"cd /home/{_core._quote(user)} && {{ ./{_core._quote(selfname)} details 2>&1; "
              f"printf %s {_core._quote(_DETAILS_DONE)}; }}")
-    o, _, _ = _core.run_command(
-        server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(inner)}",
-        timeout=45, sudo=False,
-    )
+    o, _, _ = _core.shell_as_game_user(server, user, inner, timeout=45, selfname=selfname)
     text = terminal.strip_escapes(o or "")
     if _DETAILS_DONE not in text:
         _core._log.warning("lgsm_game_config: no DONE marker for %s — reporting a failed read", selfname)
@@ -363,7 +363,7 @@ def lgsm_get_values(server, user, selfname, keys):
              f"cat {_core._quote(d + '/common.cfg')} 2>/dev/null; echo; "
              f"cat {_core._quote(d + '/' + selfname + '.cfg')} 2>/dev/null; echo; "
              f"printf %s {_core._quote(_READ_END)}")
-    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(inner)}", timeout=20, sudo=False)
+    out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=20, selfname=selfname)
     body = out or ""
     if _READ_END not in body:
         return None
@@ -395,8 +395,7 @@ def lgsm_write_config(server, user, selfname, updates):
         f"printf %s {_core._quote(_READ_BEGIN)}; base64 {_core._quote(inst)} | tr -d '\n'; "
         f"printf %s {_core._quote(_READ_END)}; fi"
     )
-    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_probe)}",
-                                  timeout=15, sudo=False)
+    out, _, _ = _core.shell_as_game_user(server, user, _probe, timeout=15, selfname=selfname)
     body = out or ""
     if body.strip() == "__NOFILE__":
         lines = []                      # no instance cfg yet — the updates become the file
@@ -610,8 +609,7 @@ def browse_dir(server, user, relpath="", selfname=None):
     if ap is None:
         return None
     inner = f"find {_core._quote(ap)} -maxdepth 1 -mindepth 1 -printf '%y\\t%s\\t%f\\n' 2>/dev/null"
-    out, _, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, ap, inner))}",
-                            timeout=20, sudo=False)
+    out, _, rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
     if _OUTSIDE_HOME in (out or ""):
         return None
     # A read that FAILED prints nothing, and so does a genuinely empty directory — rc is the only
@@ -684,8 +682,7 @@ def read_file(server, user, relpath, max_bytes=1048576):
         f"printf %s {_core._quote(_READ_BEGIN)}; base64 {_core._quote(ap)} | tr -d '\\n'; "
         f"printf %s {_core._quote(_READ_END)}; else echo __BINARY__; fi"
     )
-    out, _err, _rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, ap, inner))}",
-                            timeout=20, sudo=False)
+    out, _err, _rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
     if _OUTSIDE_HOME in (out or ""):
         return None, "Invalid path"
     stripped = (out or "").strip()
@@ -752,8 +749,7 @@ def stat_upload_targets(server, user, reldir, names):
         return None
     inner = (f"find {_core._quote(apdir)} -maxdepth 1 -mindepth 1 "
              f"-printf '%y\\t%s\\t%T@\\t%f\\n' 2>/dev/null")
-    out, err, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, apdir, inner))}",
-                            timeout=20, sudo=False)
+    out, err, rc = _core.shell_as_game_user(server, user, _guarded(user, apdir, inner), timeout=20)
     if _OUTSIDE_HOME in (out or ""):
         return None
     # A listing that did not RUN is not a listing with nothing in it. rc was discarded here, so an
@@ -809,8 +805,7 @@ def upload_file(server, user, reldir, filename, data_bytes, overwrite=True):
         return False, "Invalid path"
     if not overwrite:
         chk = f"test -e {_core._quote(target)} && echo __YES__ || true"
-        out, _, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, target, chk))}",
-                                timeout=15, sudo=False)
+        out, _, rc = _core.shell_as_game_user(server, user, _guarded(user, target, chk), timeout=15)
         if _OUTSIDE_HOME in (out or ""):
             return False, "Invalid path"
         # The probe prints NOTHING when the file is absent, so silence is its ordinary success —
@@ -837,8 +832,7 @@ def delete_path(server, user, relpath, selfname=None):
     inner = f"rm -rf -- {_core._quote(ap)} && echo __OK__"
     # The most destructive of the six, so it gets the same host-side resolution check: a symlink
     # under the home dir must not turn `rm -rf` loose on whatever it points at.
-    out, e, rc = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, ap, inner))}",
-                             timeout=30, sudo=False)
+    out, e, rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=30)
     if _OUTSIDE_HOME in (out or ""):
         return False, "Refusing to delete this path"
     if rc == 0 and "__OK__" in (out or ""):
@@ -870,8 +864,7 @@ def stat_path(server, user, relpath):
     inner = (f"if [ -d {_core._quote(ap)} ]; then echo d 0; "
              f"elif [ -f {_core._quote(ap)} ]; then echo f $(stat -Lc %s {_core._quote(ap)} 2>/dev/null); "
              f"else echo __NOFILE__; fi")
-    out, _, _ = _core.run_command(server, f"sudo -u {_core._quote(user)} bash -c {_core._quote(_guarded(user, ap, inner))}",
-                            timeout=20, sudo=False)
+    out, _, _ = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
     if _OUTSIDE_HOME in (out or ""):
         return None
     parts = (out or "").strip().split()
@@ -909,7 +902,7 @@ def _remote_read_command(user, as_tar):
             f'case "$p" in {hq}|{hq}/*) : ;; *) echo {_OUTSIDE_HOME}; exit 9 ;; esac; ')
     body += ('tar czf - -C "$(dirname "$p")" -- "$(basename "$p")"' if as_tar
              else 'cat -- "$p"')
-    return f"sudo -u {_core._quote(user)} bash -c {_core._quote(body)}"
+    return _core.game_user_cmd(user, body)
 
 
 def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
@@ -973,9 +966,16 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
                 else:
                     argv = cron._as_user_argv(user, "cat", "--", ap)
             else:
-                host = _core._resolve_ts_host(server)
-                argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
-                        "-p", str(server.port or 22), f"{server.username}@{host}", shell]
+                # The login and host are stored data handed to ssh as an argument — see
+                # _core.ssh_destination. A refusal ends the download empty, as a refused path does.
+                try:
+                    argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
+                            "-p", _core._ssh_port_arg(server), _core.SSH_DEST_SEP,
+                            _core.ssh_destination(server.username, _core._resolve_ts_host(server)),
+                            shell]
+                except (TypeError, ValueError):
+                    _core._log.warning("download: refusing the host's stored ssh login or address")
+                    return
             # stdin is a pipe only for the SSH form, which expects the path there. The local forms
             # take it in argv (helper) or already resolved (the pre-helper fallback), and get
             # DEVNULL -- never the panel's own stdin, which a helper verb would read to EOF.

@@ -32,6 +32,7 @@ can say that up front instead of letting the operator discover it as a mystery.
 import codecs
 import collections
 import fcntl
+import functools
 import logging
 import os
 import pty
@@ -76,7 +77,8 @@ _MAX_PENDING_INPUT = 256 * 1024
 _KILL_GRACE = 0.25
 
 # How long a teardown waits for the pump thread to notice EOF and close its own fd. The child is
-# already dead by then, so this is one select() timeout plus slack.
+# already dead by then, so this is one select() timeout plus slack. Waited on the session's
+# _pump_done Event, never with Thread.join(timeout) — see _close_fd.
 _PUMP_JOIN = 1.0
 
 _MAX_SESSIONS_TOTAL = 12
@@ -223,6 +225,7 @@ class Session:
         self._fd = None            # pty master fd
         self._proc = None          # subprocess.Popen
         self._pump = None          # the thread reading this session's transport
+        self._pump_done = threading.Event()    # set by the pump as it returns — see _retires
         # ONE decoder for the whole session, not one per chunk. A read boundary falls wherever the
         # kernel or the ssh channel put it, so a multi-byte character — a box-drawing glyph in a
         # TUI, an accented name in a log line, an emoji in a MOTD — is routinely split across two
@@ -317,7 +320,7 @@ class Session:
                 return
             self._closed = True
         self._teardown()
-        # Only THIS session's entry. Teardown yields (the kill grace, the pump join), and a newer
+        # Only THIS session's entry. Teardown yields (the kill grace, the pump wait), and a newer
         # session can register under the same socket meanwhile — a term_open after the idle
         # sweeper started closing this one. Popping by sid removed that live shell from the map,
         # where input, the disconnect hook, the sweeper and the per-user cap all look for it.
@@ -396,7 +399,16 @@ class Session:
         """
         t = self._pump
         if t is not None and t is not threading.current_thread():
-            t.join(timeout=_PUMP_JOIN)
+            # An Event the pump sets as it returns, NOT t.join(timeout=...). Under eventlet on
+            # Python 3.13+ (Ubuntu 26.04) a green join that runs out of time RAISES
+            # eventlet.timeout.Timeout instead of returning, and that class is a BaseException:
+            # it went straight through _teardown's `except Exception` and out of close(), which
+            # then never removed this session from _sessions or told the page it had ended. A
+            # closed session left there counts against the terminal caps for the life of the
+            # process, and the idle sweeper cannot remove it: close() returns at once for a
+            # session already marked closed. Event.wait returns False on a timeout on every
+            # Python, patched or not.
+            self._pump_done.wait(_PUMP_JOIN)
         fd, self._fd = self._fd, None
         if fd is not None:
             # The pump did not get there — a leaked pty master is worse than a small race, and at
@@ -406,7 +418,7 @@ class Session:
             try:
                 os.close(fd)
             except OSError:
-                # EBADF: the pump reached it between the join timing out and this line. That is
+                # EBADF: the pump reached it between the wait timing out and this line. That is
                 # the outcome this branch wanted anyway — the descriptor is closed either way and
                 # there is nothing left to do about it.
                 pass
@@ -420,6 +432,22 @@ class Session:
         return self._closed
 
 
+def _retires(pump):
+    """Set the session's _pump_done when `pump` returns, however it returns."""
+    # On the pump function itself rather than on the thread that runs it, so every thread started
+    # with target=_pump_fd or _pump_channel signals — including ones built outside the openers. A
+    # pump that never signalled would make every teardown sit out the whole _PUMP_JOIN even though
+    # the pump had long since retired.
+    @functools.wraps(pump)
+    def run(sess):
+        try:
+            pump(sess)
+        finally:
+            sess._pump_done.set()
+    return run
+
+
+@_retires
 def _pump_channel(sess):
     """paramiko: the recv_ready + short sleep shape _core._drain_exec uses, for the same reason."""
     chan = sess._chan
@@ -439,6 +467,7 @@ def _pump_channel(sess):
     sess.close("the shell exited")
 
 
+@_retires
 def _pump_fd(sess):
     """Local/tailscale: select yields under eventlet; os.read on a pty fd would not.
 
@@ -472,7 +501,7 @@ def _pump_fd(sess):
     finally:
         # Claim it before closing — and close it ONLY if the claim succeeded. os.close used to sit
         # outside this branch, which undid the very race the claim exists for: when _close_fd's
-        # join times out it takes the fd and closes it, the kernel hands that NUMBER to the next
+        # wait times out it takes the fd and closes it, the kernel hands that NUMBER to the next
         # open() anywhere in the process, and this line then closed a descriptor belonging to
         # something else. The except below cannot catch that — closing a recycled number succeeds.
         if sess._fd == fd:
@@ -663,14 +692,17 @@ def _open_paramiko(sess, server, cols, rows):
 def _ssh_argv(server):
     """The ssh command line for a tailscale remote. Pure, so the property below can be tested.
 
-    ssh has no `--` to end its options, so an argv element that BEGINS with `-` is read as one —
-    and `server.host` is stored data. HOST_RE permits a leading dash (`-o` and `--` both match
-    it), so the thing that makes this safe is not the host pattern: it is that the destination is
-    always `user@host`, and LINUX_USER_RE forces the username to start with a letter or
-    underscore. The element therefore never begins with `-` whatever the host says.
+    ssh reads an argv element that BEGINS with `-` as an option, and `server.username` and
+    `server.host` are stored data. This used to rest on the ROUTE rules alone — LINUX_USER_RE
+    forcing the username to start with a letter, so `user@host` could never begin with a dash —
+    but a row LOADED from the database never passed through a route (GHSA-hh39-76g3-wxcx): a
+    username of `-oProxyCommand=<cmd>` ran <cmd> on the panel's host the moment a superadmin opened
+    this terminal. So the destination comes from _core.ssh_destination, which refuses a login or
+    host that is not a plain name (raises UnsafeSshDestination, a ValueError, which open() reports
+    as "could not start a shell"), and sits after `--`, where ssh has stopped reading options.
 
     That is a property worth pinning rather than asserting in a comment, so tests/unit drives this
-    function with hostile hosts and checks every element.
+    function with hostile logins and hosts.
     """
     # The SAME resolver the non-interactive tailscale transport uses. A second copy of MagicDNS
     # handling would be one more place to get a hostname subtly wrong.
@@ -680,8 +712,8 @@ def _ssh_argv(server):
     return ["ssh", "-tt",
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "ConnectTimeout=20",
-            "-p", str(int(getattr(server, "port", 22) or 22)),
-            "%s@%s" % (user, host)]
+            "-p", _core._ssh_port_arg(server),
+            _core.SSH_DEST_SEP, _core.ssh_destination(user, host)]
 
 
 def _open_tailscale(sess, server, cols, rows):
@@ -690,13 +722,16 @@ def _open_tailscale(sess, server, cols, rows):
     `-tt` forces a pty even though our stdin is not one from ssh's point of view, which is what
     makes an interactive shell possible at all here.
     """
+    # The argv FIRST: _ssh_argv refuses a stored login or host it will not hand to ssh, and a
+    # refusal raised after openpty() would leak both descriptors of the pair, once per attempt.
+    argv = _ssh_argv(server)
     master, slave = pty.openpty()
     env = dict(os.environ)
     env["TERM"] = "xterm-256color"
-    argv = _ssh_argv(server)
     try:
         proc = subprocess.Popen(  # nosec B603  # nosemgrep - see _ssh_argv: a list, no shell, and
-            # the one element carrying stored data cannot be read by ssh as an option.
+            # the elements carrying stored data are checked and come after `--`, so ssh cannot read
+            # them as options.
             argv, stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env=env)
     except Exception:
         os.close(master)      # argv[0] is "ssh": a host without openssh-client leaks a pair each try

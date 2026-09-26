@@ -8,7 +8,7 @@ import logging
 import ipaddress
 import re
 import socket
-import subprocess
+import subprocess  # nosec B404 - argv lists only (tailscale, ping), never a shell
 import threading
 import time
 from dataclasses import dataclass, field
@@ -61,7 +61,7 @@ def _run_ts(args, timeout=5):
         # tool_argv, which validate every input and rebuild the mount from a literal alphabet
         # (CodeQL #375 closed on that change). Not a static string by design.
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-        r = subprocess.run(
+        r = subprocess.run(  # nosec B603 - literal program, validated args (see above), no shell
             ["tailscale"] + args,
             capture_output=True, text=True, timeout=timeout,
         )
@@ -340,7 +340,7 @@ def check_peer_reachability(host) -> dict:
         return {"reachable": False, "latency_ms": 0}
     host = str(host).strip()
     try:
-        r = subprocess.run(
+        r = subprocess.run(  # nosec B603 B607 - argv list, no shell; host passed valid_peer_host
             ["ping", "-c", "1", "-W", "3", host],
             capture_output=True, text=True, timeout=5,
         )
@@ -674,7 +674,7 @@ def suggest_best_bind(port=5000, scheme="http"):
         ts_ip = get_tailscale_ip(4)
         return {
             "method": "tailscale-direct",
-            "bind_host": ts_ip or "0.0.0.0",
+            "bind_host": ts_ip or "0.0.0.0",  # nosec B104 - a suggestion shown to the operator, not a bind
             "port": port,
             "url": f"{scheme}://{ts_ip}:{port}" if ts_ip else f"{scheme}://<tailscale-ip>:{port}",
             "description": f"Bind to Tailscale IP {ts_ip} and access directly",
@@ -684,7 +684,7 @@ def suggest_best_bind(port=5000, scheme="http"):
         # open the panel to all interfaces.
         return {
             "method": "direct",
-            "bind_host": "0.0.0.0",
+            "bind_host": "0.0.0.0",  # nosec B104 - a suggestion shown to the operator, not a bind
             "port": port,
             "url": f"{scheme}://<your-server-ip>:{port}",
             "description": ("Tailscale is installed but not linked yet. Link this machine above "
@@ -693,7 +693,7 @@ def suggest_best_bind(port=5000, scheme="http"):
     else:
         return {
             "method": "direct",
-            "bind_host": "0.0.0.0",
+            "bind_host": "0.0.0.0",  # nosec B104 - a suggestion shown to the operator, not a bind
             "port": port,
             "url": f"{scheme}://<your-server-ip>:{port}",
             "description": "No Tailscale detected. Bind to all interfaces.",

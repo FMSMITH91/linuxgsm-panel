@@ -245,6 +245,18 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+
+- **On Python 3.13 and later (Ubuntu 26.04), a closed terminal could keep its slot until the panel
+  restarted.** If the terminal's output reader was still busy a second after the close, for
+  instance still handing output to the browser, the close stopped partway. The session stayed on
+  the panel's list of open terminals, the page was never told it had ended, and it went on counting
+  against the limit of 3 terminals per user and 12 in all. The 15-minute idle close skipped it,
+  because it was already marked closed. The cause was a timed wait on a thread, which under
+  eventlet on Python 3.13+ raises an error that nothing caught instead of returning. The Tailscale
+  transport waited the same way for a command's output. When a command exited while something it
+  had started still held that output open for more than five seconds, the error could end the page
+  request or background loop that ran the command. Both now wait in a way that returns on every
+  Python version. Python 3.10 to 3.12 (Ubuntu 22.04 and 24.04) were not affected.
 - **The daily gamedig pass could write to a host that had just been deleted.** It read the list of
   hosts once and then worked through it, a few minutes per host that needed gamedig installed, so
   a host deleted while a pass was running was still on its list and got gamedig and its weekly cron
@@ -880,6 +892,50 @@ regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+
+- **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported by
+  kta1kri). Twenty-five places built `sudo -u <account> bash -c '…'` from a server's account
+  (`short_name`) and LinuxGSM script name with neither quoting nor a check — the dashboard's own
+  polls among them, with nobody watching. The model checks those names only when they are
+  **assigned**, never when a row is read back, so a database from before that check, a hand edit
+  of `panel.db`, or a restored backup could hold `short_name="x; curl …|sh; #"`, and the next poll
+  ran it as the panel's account on its own host, or as the SSH login on a remote. Every such
+  command is now built in one place, which refuses a name that is not one plain account word
+  (`root` and sudo's `#0`-style uids included) before anything is sent, and quotes what it accepts.
+  A refused name reads everywhere as "could not run", never as an empty result; the commands sent
+  for every real name are byte-for-byte what they were. The script name that the monitor, update,
+  restart-when-empty and restart-check cron lines carry is checked too. A panel backup is now
+  refused, naming the row, when its database holds such a name or a port stored as text — checked
+  before the safety copy or anything else is touched — and a row that is already in the database
+  is named in the log once, instead of every action on it failing with no reason given. Unit gates
+  fail the build on any `sudo -u` built outside that one place.
+
+  A review of that fix found four more ways in, all closed here:
+  - **The console read the script name unchecked.** The live console's log path is built from the
+    server's game type, and the console reads checked only the account, so a game type of
+    `mc; <cmd>; #` ran `<cmd>` every two seconds while anyone had that console open, and when its
+    history was loaded. Those reads now check the script name too, and the unit gate that looks for
+    a script name dropped on the way into a command now follows it through the server's own
+    attributes and the variables built from them, not only through a variable called `selfname`.
+  - **The backup check could be sidestepped by spelling.** SQLite does not care about the case of
+    table and column names, and the check looked them up exactly: a backup whose database spelled
+    the table `GAME_SERVER` or the column `SHORT_NAME` was not checked at all, and the panel then read
+    it as usual. The check now reads the database as SQLite serves it. It also refuses a backup whose
+    database could change a value after the check, or hide one from it: a trigger, a view, a column
+    computed from other columns, an index that disagrees with its table (SQLite's own integrity check
+    must pass), or a server or host table missing one of the checked columns. No version of the
+    panel has written any of these, so no genuine backup is refused for them.
+  - **A port stored as text reached the hourly restart line.** The restart-when-empty cron line was
+    the one place that put a server's port into a command without converting it to a number first;
+    it now refuses one that is not a number, as does the daily pass that rewrites old lines. A port
+    stored as text is also named in the log when the row is read.
+  - **A host's SSH login could become an ssh option.** For a host connected over Tailscale, the
+    panel runs the system `ssh` client with `<login>@<host>` — for every command, the web terminal
+    and file and backup downloads — and a stored login of `-oProxyCommand=<cmd>` ran `<cmd>` on the
+    panel's host.
+    The login and address are now checked before either is handed to ssh, and they come after `--`,
+    where ssh stops reading options. The add/edit host form no longer accepts an address that begins
+    with a dash.
 - **pip itself is hash-locked.** The installer upgraded the panel's venv with
   `pip install --upgrade pip`: whatever PyPI served that day, unchecked, the first thing the venv
   ran on every install and on every update that reinstalled dependencies. pip now comes from
