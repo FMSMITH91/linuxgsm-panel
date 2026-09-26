@@ -8158,11 +8158,17 @@ try:
             except Exception as _tsh_e:
                 return {"raised": repr(_tsh_e)}
 
+        def _tsh_cal(sha):
+            """The version a commit should read as: its committer time as a UTC date, YYYY.M.D."""
+            _tsh_ct = _tsh_git("-C", _tsh_up, "log", "-1", "--format=%ct", sha)
+            return "%d.%d.%d" % _time.gmtime(int(_tsh_ct))[:3] if _tsh_ct.isdigit() else "?!"
+
         _tsh_st = _tsh_status()
         _tsh_subjects = [c.split(" ", 1)[-1] for c in _tsh_st.get("changes") or []]
         check("update status: a tag named origin/main does not stand in for the branch",
               _tsh_pre and _tsh_st.get("update_available") is True
-              and _tsh_st.get("target_sha") == _tsh_c and _tsh_st.get("remote_version") == "1.2.0"
+              and _tsh_st.get("target_sha") == _tsh_c
+              and _tsh_st.get("remote_version") == _tsh_cal(_tsh_c)
               and _tsh_subjects == ["C main tip", "B on main"],
               "fixture shadowed=%s; C=%s X=%s got %r" % (
                   _tsh_pre, _tsh_c[:7], _tsh_x[:7],
@@ -8175,12 +8181,12 @@ try:
         check("update status: ...and its fetch brought no tag along, not even one on the tip it fetched",
               not _tsh_has(_tsh_so, "refs/tags/late-on-main"), "late-on-main fetched")
         # A tracked NON-default branch takes its own path through the same function: the tip,
-        # its VERSION and its changelog are all read off the ref.
+        # its version and its changelog are all read off the ref.
         _tsh_branch["v"] = "dev"
         _tsh_sd = _tsh_status()
         _tsh_dsubj = [c.split(" ", 1)[-1] for c in _tsh_sd.get("changes") or []]
-        check("update status: ...on a non-default branch too (tip, VERSION and changelog)",
-              _tsh_sd.get("target_sha") == _tsh_d2 and _tsh_sd.get("remote_version") == "2.0.2"
+        check("update status: ...on a non-default branch too (tip, version and changelog)",
+              _tsh_sd.get("target_sha") == _tsh_d2 and _tsh_sd.get("remote_version") == _tsh_cal(_tsh_d2)
               and _tsh_dsubj == ["D2 dev tip", "D1 on dev"],
               "D2=%s X=%s got %r" % (_tsh_d2[:7], _tsh_x[:7], {k: _tsh_sd.get(k) for k in (
                   "target_sha", "remote_version", "changes", "raised", "message")}))
