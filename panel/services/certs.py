@@ -24,8 +24,10 @@ _CERT_ALERTED = {"at": 0}   # last time we alerted about the TLS cert (weekly de
 
 def _maybe_alert_cert_expiring():
     """Alert when the panel's own TLS certificate is within 14 days of expiry, at most once a week.
+
     No-op if the cert file isn't present (e.g. Tailscale Serve / a reverse proxy terminates TLS).
-    Best-effort — never raises."""
+    Best-effort — never raises.
+    """
     try:
         from cryptography import x509
         cert_path = DATA_DIR / "ssl" / "cert.pem"
@@ -47,9 +49,12 @@ def _maybe_alert_cert_expiring():
 
 
 def _ensure_self_signed_cert(cert_path, key_path, hostname):
-    """Create a long-lived (10-year) self-signed cert/key if one isn't already present
-    or has (nearly) expired. Used when use_https is on and there's no reverse proxy.
-    Returns (cert_path, key_path). Uses cryptography (already a dependency)."""
+    """Create a long-lived (10-year) self-signed cert/key unless a valid one is already present.
+
+    A new pair is made when either file is missing or the cert has (nearly) expired. Used when
+    use_https is on and there's no reverse proxy. Returns (cert_path, key_path). Uses cryptography
+    (already a dependency).
+    """
     import datetime as _dt
     from cryptography import x509
     from cryptography.x509.oid import NameOID
