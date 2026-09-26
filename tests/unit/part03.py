@@ -1640,14 +1640,17 @@ try:
                 return (commits[0][:7] if commits else "", "", 0)
             if args[0] == "rev-list" and "-n" in args:
                 return ("\n".join(commits), "", 0)
-            if args[0] == "show" and str(args[-1]).endswith(":VERSION"):
-                return ("9.9.9", "", 0)
+            if args[0] == "log" and "--format=%ct" in args:
+                # Each commit's committer time: the version is that commit's UTC date.
+                return (_CUS_CT.get(str(args[-1]), ""), "", 0)
             if args[0] == "log":
                 return ("c1 a change", "", 0)
             return ("", "", 0)
         return _g
 
     _C = ["a" * 40, "b" * 40, "c" * 40]   # tip=a, mid=b, old=c
+    # 2026-09-20, 2026-09-10 and 2026-09-01, each at 12:00 UTC.
+    _CUS_CT = {"a" * 40: "1789905600", "b" * 40: "1789041600", "c" * 40: "1788264000"}
 
     # tip pending, middle passed → offer the middle (skip the pending tip).
     _so._git = _mk_git(3, _C)
@@ -1656,6 +1659,8 @@ try:
     _r = _so._compute_update_status()
     check("update-target: offers the verified commit when the tip is pending",
           _r["update_available"] and _r["target_sha"] == "b" * 40)
+    check("update-target: ...and its version is THAT commit's date, not the tip's",
+          _r.get("remote_version") == "2026.9.10", repr(_r.get("remote_version")))
     eq("update-target: newer unverified counted", _r.get("newer_unverified"), 1)
     eq("update-target: behind is measured to the target, not the tip", _r["behind"], 2)
 
