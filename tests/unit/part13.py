@@ -3781,6 +3781,15 @@ def _ca13_probe_big():
                    headers={"Vary": "Origin"})
 
 
+def _ca13_probe_stream():
+    """A 200 JSON response whose body raises when read: the gzip step cannot read it."""
+    def _body():
+        """Yield nothing, raising as soon as the body is read."""
+        raise RuntimeError("the body broke")
+        yield b""  # pragma: no cover - makes this a generator
+    return _Resp13(_body(), mimetype="application/json")
+
+
 def _ca13_add_probes(app):
     """Routes for the response hooks and error handler; added before the app's first request."""
     app.add_url_rule("/_p13/big", "p13_big", _ca13_probe_big)
@@ -3790,6 +3799,7 @@ def _ca13_add_probes(app):
     app.add_url_rule("/api/_p13/boom", "p13_api_boom", _raiser10(RuntimeError("api view bug")))
     app.add_url_rule("/api/_p13/unauth", "p13_unauth", lambda: _abort13(401))
     app.add_url_rule("/api/_p13/gone", "p13_gone", lambda: _abort13(404))
+    app.add_url_rule("/_p13/stream", "p13_stream", _ca13_probe_stream)
 
 
 def _ca13_wsgi_chain(app):
@@ -3858,7 +3868,8 @@ def _ca13_check_migrations(app, logs):
           "big prune reclaims the space", all((kinds == ["aged", "recent"],
                                                _CA13_OPTIMIZED == [True])),
           repr((kinds, _CA13_OPTIMIZED)))
-    check("create_app: an audit IP past its own retention is reduced to a prefix, a recent one kept",
+    check("create_app: an audit IP past its own retention is reduced to a prefix, a recent one "
+          "kept",
           all(("/" in (aged.get("aged") or ""), aged.get("recent") == "203.0.113.78",
                "reduced the IP on 1 audit entries to a network prefix" in logs)),
           repr((aged, [m for m in logs.split("\n") if "reduced the IP" in m])))
@@ -3878,8 +3889,10 @@ def _ca13_check_proxy(app, client):
 def _ca13_check_compression(app, client):
     """gzip for big text answers the client accepts, the Vary merge, and the cache headers."""
     gz = {"Accept-Encoding": "gzip"}
-    css = sorted(p for p in os.listdir(os.path.join(app.static_folder, "css")) if p.endswith(".css"))[0]
-    raw = open(os.path.join(app.static_folder, "css", css), "rb").read()
+    css_dir = os.path.join(app.static_folder, "css")
+    css = sorted(p for p in os.listdir(css_dir) if p.endswith(".css"))[0]
+    with open(os.path.join(css_dir, css), "rb") as fh:
+        raw = fh.read()
     st = client.get("/static/css/" + css, headers=gz)
     check("app responses: a static asset is gzipped, decodes to the file, and is cached a week",
           all((st.headers.get("Content-Encoding") == "gzip", _gzip13.decompress(st.data) == raw,
@@ -3898,6 +3911,14 @@ def _ca13_check_compression(app, client):
           all(("Content-Encoding" not in plain.headers, "Content-Encoding" not in small.headers,
                _json10.loads(plain.data)["rows"][0] == "x" * 40, small.get_json() == {"ok": True})),
           repr((dict(plain.headers), dict(small.headers))))
+    cap, off = _cap10(app.logger.name)
+    try:
+        broken = client.get("/_p13/stream", headers=gz)
+    finally:
+        off()
+    check("app responses: a body the gzip step cannot read goes out uncompressed, and it is logged",
+          all((broken.status_code == 200, "Content-Encoding" not in broken.headers,
+               "response gzip skipped" in _ca13_logs(cap))), repr((broken.status_code, cap.msgs)))
     hsts = client.get("/_p13/small", headers={"X-Forwarded-Proto": "https"})
     check("app responses: HSTS is sent over proxied HTTPS, and not over plain HTTP",
           all(("max-age=31536000" in (hsts.headers.get("Strict-Transport-Security") or ""),
@@ -3921,7 +3942,8 @@ def _ca13_check_errors(app, client):
           all((page.status_code == 500, page.get_json(silent=True) is None)), page.status_code)
     check("app errors: an API view that raises, and an API 404, answer JSON with success False",
           all((api.status_code == 500, (api.get_json(silent=True) or {}).get("success") is False,
-               gone.status_code == 404, (gone.get_json(silent=True) or {}).get("success") is False)),
+               gone.status_code == 404,
+               (gone.get_json(silent=True) or {}).get("success") is False)),
           repr((api.status_code, api.data[:80], gone.status_code, gone.data[:80])))
     check("app errors: a 401 keeps its own response (the page's session-expired handling reads it)",
           all((unauth.status_code == 401, unauth.get_json(silent=True) is None)),
@@ -4017,7 +4039,8 @@ def _tk13_check_reconcile(loops, app):
     logs = _ca13_logs(cap)
     check("app install reconcile: every stranded or failed row is asked about (with its script "
           "name) — never a live install, never a running server",
-          all((sorted(asked) == [(s, "gmodserver") for s in ("tkB", "tkC", "tkD", "tkE", "tkF", "tkH")],
+          all((sorted(asked) == [(s, "gmodserver")
+                                 for s in ("tkB", "tkC", "tkD", "tkE", "tkF", "tkH")],
                slept == [20, 600])), repr((asked, slept)))
     eq("app install reconcile: installed -> offline, clearly not -> failed, can't tell -> left",
        _tk13_states(app),
@@ -4063,6 +4086,24 @@ def _tk13_check_priority(loops, app):
           "and a host whose renice fails does not stop the next",
           all((calls == [("pk-one", ["pka", "pkb"]), ("pk-two", ["pkq"])], slept == [60, 120])),
           repr((calls, slept)))
+
+
+def _tk13_check_tick_failures(loops, app):
+    """A tick that cannot even read the database is logged, and the loop keeps its interval."""
+    cap, off = _cap10(app.logger.name)
+    _ca13_set(_app10mod, "GameServer", NS())       # every query in the tick raises
+    try:
+        _r1, rec_slept = _tk13_run(loops["install-reconcile"][1], 2)
+        _r2, pk_slept = _tk13_run(loops["priority-keeper"][1], 2)
+    finally:
+        off()
+        _app10mod.GameServer = _CA13_SAVED.pop((_app10mod, "GameServer"))
+    logs = _ca13_logs(cap)
+    check("app loops: a reconcile or priority tick that cannot read the database is logged, and "
+          "the loop sleeps its interval and goes on",
+          all((rec_slept == [20, 600], pk_slept == [60, 120],
+               "install-reconcile tick failed" in logs, "priority keeper tick failed" in logs)),
+          repr((rec_slept, pk_slept, cap.msgs)))
 
 
 def _ca13_check_failing_boot():
@@ -4189,6 +4230,7 @@ try:
     _tk13_check_backup_loops(_ca13_loops, _ca13_app)
     _tk13_check_reconcile(_ca13_loops, _ca13_app)
     _tk13_check_priority(_ca13_loops, _ca13_app)
+    _tk13_check_tick_failures(_ca13_loops, _ca13_app)
     _ca13_apps.append(_ca13_check_failing_boot())
     check("app boot: nothing in this section reached a real SSH or local transport",
           _trip10 == [], repr(_trip10))
