@@ -23,6 +23,15 @@ from app import (_has_remember_cookie, _new_user_language, _register_session)
 
 
 def register(app):
+    _register_panel_settings(app)
+    _register_notifications(app)
+    _register_user_edits(app)
+    _register_invites(app)
+    _register_user_delete(app)
+
+
+def _register_panel_settings(app):
+    """The panel settings page and its save."""
     @app.route("/settings")
     @login_required
     @superadmin_required
@@ -76,6 +85,9 @@ def register(app):
         flash("Settings saved.", "success")
         return redirect(url_for("panel_settings"))
 
+
+def _register_notifications(app):
+    """Admin notification channels: the page, saving them and a test send."""
     @app.route("/notifications")
     @login_required
     @superadmin_required
@@ -134,6 +146,9 @@ def register(app):
         )
         return jsonify({"success": ok, "message": msg})
 
+
+def _register_user_edits(app):
+    """Adding and editing user accounts."""
     @app.route("/users/add", methods=["POST"])
     @login_required
     @permission_required(MANAGE_USERS)
@@ -197,48 +212,20 @@ def register(app):
         # A user with only MANAGE_USERS must not be able to touch a superadmin account, nor
         # grant/revoke superadmin — either would be a privilege escalation (e.g. resetting a
         # superadmin's password and logging in as them, or promoting themselves).
-        if not current_user.is_superadmin:
-            if user.is_superadmin:
-                return _form_err("Only a superadmin can modify a superadmin account.", "manage_users")
-            if want_superadmin != user.is_superadmin:
-                return _form_err("Only a superadmin can change superadmin status.", "manage_users")
-            # ...and not an account that holds permissions this admin does not. The superadmin
-            # flag was the ONLY actor-vs-target test, so MANAGE_USERS alone reached every other
-            # account — and the branches below reset the password (handing the plaintext back)
-            # and clear 2FA. See can_administer_user.
-            if not can_administer_user(current_user, user):
-                return _form_err("That account holds permissions you don't have — "
-                                 "only a superadmin can edit it.", "manage_users")
+        _refused = _edit_user_refusal(user, want_superadmin)
+        if _refused:
+            return _form_err(_refused, "manage_users")
 
         # Renaming. Admins could change everything about an account EXCEPT the name it signs in
         # with, so a typo at creation (or a person changing theirs) meant deleting the account and
         # making a new one — losing its groups, its 2FA and its audit history. The field is
         # optional: a form that omits it leaves the name alone.
-        _new_username = (request.form.get("username") or "").strip()
         _old_username = user.username
-        if _new_username and _new_username != _old_username:
-            _uerr = username_problem(_new_username)
-            if _uerr:
-                return _form_err(_uerr, "manage_users")
-            if User.query.filter(User.username == _new_username, User.id != user.id).first():
-                return _form_err("Username already exists.", "manage_users")
-            user.username = _new_username
+        _rename_err = _apply_rename(user)
+        if _rename_err:
+            return _form_err(_rename_err, "manage_users")
 
-        _pending_audit = []      # (action, target, detail) — written after the commit below
-        user.display_name = (request.form.get("display_name") or user.display_name or "").strip()
-        _new_email = request.form.get("email", "").strip()
-        user.email = encrypt_secret(_new_email) if _new_email else None
-        _was_active = bool(user.is_active)
-        user.is_active = request.form.get("is_active") == "on"
-        if _was_active and not user.is_active:
-            # load_user() refuses an inactive account, so the sessions are already dead the moment
-            # this commits. Clear the registry rows and bump the epoch anyway: an offboarded
-            # account should not go on listing "active sessions" on its account page, and the
-            # epoch is what invalidates a legacy cookie that carries no sid to delete.
-            from panel.db.models import UserSession
-            UserSession.query.filter_by(user_id=user.id).delete(synchronize_session=False)
-            user.auth_epoch = (user.auth_epoch or 0) + 1
-            user.revoke_api_token()
+        _apply_profile_fields(user)
         user.is_superadmin = want_superadmin
 
         # THE LOCKOUT GUARD RUNS HERE, before anything below can commit. It used to sit at the very
@@ -260,66 +247,8 @@ def register(app):
             db.session.rollback()
             return _form_err("That change would leave no active superadmin — aborted.", "manage_users")
 
-        # Reset the password on request. Generated, never typed by the admin — same reasoning as
-        # add_user. Resetting is an explicit tick, not a blank field that means "keep": an edit that
-        # only renames someone must not quietly invalidate their login.
-        new_password = None
-        # Set only on a SELF-reset, to which cookie keeps this login alive — see the note in the
-        # branch below. None means "not a self-reset"; False is a real answer, so the check after
-        # the commit is `is not None`.
-        _self_remember = None
-        if request.form.get("reset_password") == "on":
-            new_password = generate_password()
-            # set_password, not a bare assignment: the outgoing password joins the history, so a
-            # user handed a reset cannot answer the forced change by typing back the password the
-            # reset just took away from them.
-            # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- a generated password, not a typed one
-            user.set_password(hash_password(new_password))
-            user.auth_epoch = (user.auth_epoch or 0) + 1   # revoke existing sessions
-            # The API token too. It is a SECOND credential for the same account, and it did not
-            # answer to any of the controls that exist to take an account back: it carries no
-            # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted
-            # every UserSession row and left it working. app.py's note that "cookie theft is also
-            # recoverable via sign out everywhere" was not true while one existed. Minting one
-            # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
-            # could leave themselves a key that survived the victim's whole recovery.
-            user.revoke_api_token()
-            # Only when the password now belongs to two people. An admin resetting their OWN
-            # password knows it because they chose to see it, and has nobody to take it back from;
-            # forcing them through a change screen would protect nothing.
-            if user.id != current_user.id:
-                user.must_change_password = True
-            else:
-                # ...and a self-reset must not sign the admin out before they can READ the password
-                # it just generated. The epoch bump above kills every cookie for this account
-                # including the one that made this request — load_user compares the cookie's epoch
-                # and returns None the moment they differ — and panel.js runs
-                # refreshSection('#users-list') BEFORE it opens the credential modal, so the next
-                # request lands milliseconds later, is answered 401 + X-Auth-Required, and
-                # sessionExpired() replaces the tab with /login. Only the bcrypt hash is stored, so
-                # the password was gone; on a single-superadmin install (the common one) the
-                # account was then reachable only through manage.py reset-password on the host.
-                # Carry THIS device across the bump the way account_change_password already does
-                # (panel/routes/tags.py:396-403): note which cookie keeps this login alive now, and
-                # re-register + re-login after the commit below.
-                from panel.db.models import UserSession
-                _sid = getattr(current_user, "_sid", None)
-                _cur_sess = (UserSession.query.filter_by(sid=_sid, user_id=user.id).first()
-                             if _sid else None)
-                _self_remember = (bool(_cur_sess.remember) if _cur_sess is not None
-                                  else _has_remember_cookie())
-            # DEFERRED, not written here. log_action commits, and a commit in the middle of a
-            # handler makes every later guard unable to undo what came before it — see the lockout
-            # note above, and the group-id parse below, which could 500 after this branch had
-            # already committed a password reset that nobody ever saw.
-            _pending_audit.append(("reset_user_password", user.username, ""))
-
-        # Admin reset of a user's 2FA (for when they lose their authenticator).
-        if request.form.get("reset_2fa") == "on" and user.totp_enabled:
-            user.totp_enabled = False
-            user.totp_secret = None
-            user.backup_codes = ""
-            _pending_audit.append(("2fa_reset", user.username, ""))   # deferred — see above
+        _pending_audit = []      # (action, target, detail) — written after the commit below
+        new_password, _self_remember = _apply_resets(user, _pending_audit)
 
         # Update groups. Through grantable_groups, not straight from the form: a delegated
         # MANAGE_USERS admin could otherwise edit their OWN account and tick a privileged group,
@@ -339,14 +268,7 @@ def register(app):
             # epoch the database never took.
             _register_session(user, _self_remember)
             login_user(user, remember=_self_remember)
-        for _act, _tgt, _detail in _pending_audit:
-            log_action(current_user, _act, target=_tgt, detail=_detail)
-        if _new_username and _new_username != _old_username:
-            # Its own entry, and keyed on the OLD name: every earlier row for this account is filed
-            # under that, so this is the only line that connects the two.
-            log_action(current_user, "rename_user", target=_old_username,
-                       detail="renamed to '%s'" % user.username)
-        log_action(current_user, "edit_user", target=user.username)
+        _audit_user_edit(user, _old_username, _pending_audit)
         if new_password:
             notifications.notify("account_change", "Password reset",
                                  "%s reset the password for '%s'."
@@ -355,6 +277,9 @@ def register(app):
                                     username=user.username, password=new_password)
         return _form_ok(f"User '{user.username}' updated.", "manage_users")
 
+
+def _register_invites(app):
+    """Invite links: minting, revoking and redeeming them."""
     @app.route("/users/invite", methods=["POST"])
     @login_required
     @superadmin_required
@@ -385,7 +310,9 @@ def register(app):
         # link is gone and a new invite has to be minted.
         return _form_credential("Invite link created — send it to them. It works once.",
                                 "manage_users", username="Invite link",
-                                # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true -- shown only to the superadmin who minted it, on the host they reached the panel by
+                                # Shown only to the superadmin who minted it, on the host they
+                                # reached the panel by.
+                                # nosemgrep: python.flask.security.audit.flask-url-for-external-true.flask-url-for-external-true
                                 password=url_for("redeem_invite", token=token, _external=True))
 
     @app.route("/users/invite/<int:invite_id>/revoke", methods=["POST"])
@@ -434,13 +361,8 @@ def register(app):
         The invite decides what the account gets (groups, superadmin); the person decides only
         their username and password. Anything else would be a privilege they awarded themselves.
         """
-        inv = Invite.by_token(token)
-        # An invite is a delegation, and it must not outlive the authority behind it: an admin who
-        # is offboarded — demoted, deactivated, deleted — would otherwise leave live invites behind
-        # for up to 30 days, still handing out whatever they promised, superadmin included.
-        # Checked on GET as well as POST, so a dead invite never even shows the form.
-        _creator = db.session.get(User, inv.created_by_id) if (inv and inv.created_by_id) else None
-        if inv is None or not inv.is_usable or not inv.authority_intact(_creator):
+        inv, _creator = _live_invite(token)
+        if inv is None:
             # One message for missing, used and expired alike: a link that says "already used"
             # confirms it was real, which is information a stranger holding a guessed token has
             # not earned. There is nothing the person can do differently either way.
@@ -448,23 +370,10 @@ def register(app):
         if request.method == "GET":
             return render_template("invite.html", invalid=False, token=token, invite=inv)
 
-        username = (request.form.get("username") or "").strip()
-        password = request.form.get("password") or ""
-        confirm = request.form.get("confirm_password") or ""
-        uerr = username_problem(username)
-        if uerr:
+        username, password, _ferr = _invite_form()
+        if _ferr:
             return render_template("invite.html", invalid=False, token=token, invite=inv,
-                                   error=uerr), 400
-        if User.query.filter_by(username=username).first():
-            return render_template("invite.html", invalid=False, token=token, invite=inv,
-                                   error="That username is taken."), 400
-        if password != confirm:
-            return render_template("invite.html", invalid=False, token=token, invite=inv,
-                                   error="The two passwords do not match."), 400
-        perr = password_problem(password)
-        if perr:
-            return render_template("invite.html", invalid=False, token=token, invite=inv,
-                                   error=perr), 400
+                                   error=_ferr), 400
 
         # Claim the invite FIRST, conditionally on it still being unused, so two submissions of the
         # same link cannot both make an account. The UPDATE ... WHERE used_at IS NULL is what makes
@@ -516,27 +425,11 @@ def register(app):
         # every server on a host the minter had just lost. /users (grantable_groups) and /groups
         # (grantable_object_ids) both refuse that same grant to that same person; the invite was
         # the one door left open. Both helpers take an explicit user, so ask it about the creator.
-        wanted = set(inv.groups_wanted)
-        if wanted:
-            _groups = Group.query.filter(Group.id.in_(wanted)).all()
-            if _creator is not None and not _creator.is_superadmin:
-                _mine = set(get_user_permissions(_creator))
-                _mine_remotes = set(accessible_remote_ids(_creator))
-                _mine_servers = {gs.id for gs in get_user_servers(_creator)}
-                _mine_commands = custom_command_ids(_creator)   # the fourth axis, as grantable_groups
-
-                def _beyond_creator(g):
-                    if not set(g.get_permissions()) <= _mine:
-                        return True
-                    if not {r.id for r in (g.servers or [])} <= _mine_remotes:
-                        return True
-                    if not {c.id for c in (g.custom_commands or [])} <= _mine_commands:
-                        return True
-                    return not {s.id for s in (g.game_servers or [])} <= _mine_servers
-
-                if any(_beyond_creator(g) for g in _groups):
-                    db.session.rollback()
-                    return render_template("invite.html", invalid=True), 404
+        _groups = _invited_groups(inv)
+        if _groups is not None:
+            if _beyond_creator_reach(_creator, _groups):
+                db.session.rollback()
+                return render_template("invite.html", invalid=True), 404
             user.groups = _groups
         db.session.add(user)
         db.session.flush()
@@ -550,6 +443,9 @@ def register(app):
         flash("Account created — sign in with your new username and password.", "success")
         return redirect(url_for("login"))
 
+
+def _register_user_delete(app):
+    """Deleting a user account."""
     @app.route("/users/<int:user_id>/delete", methods=["POST"])
     @login_required
     @permission_required(MANAGE_USERS)
@@ -571,3 +467,188 @@ def register(app):
         db.session.commit()
         log_action(current_user, "delete_user", target=username)
         return _form_ok(f"User '{username}' deleted.", "manage_users")
+
+
+def _edit_user_refusal(user, want_superadmin):
+    """Why the signed-in admin may not make this edit to `user`, or None when they may."""
+    if not current_user.is_superadmin:
+        if user.is_superadmin:
+            return "Only a superadmin can modify a superadmin account."
+        if want_superadmin != user.is_superadmin:
+            return "Only a superadmin can change superadmin status."
+        # ...and not an account that holds permissions this admin does not. The superadmin
+        # flag was the ONLY actor-vs-target test, so MANAGE_USERS alone reached every other
+        # account — and the branches below reset the password (handing the plaintext back)
+        # and clear 2FA. See can_administer_user.
+        if not can_administer_user(current_user, user):
+            return ("That account holds permissions you don't have — "
+                    "only a superadmin can edit it.")
+    return None
+
+
+def _apply_rename(user):
+    """Rename `user` when the edit form asks to; returns the refusal, or None."""
+    _new_username = (request.form.get("username") or "").strip()
+    if _new_username and _new_username != user.username:
+        _uerr = username_problem(_new_username)
+        if _uerr:
+            return _uerr
+        if User.query.filter(User.username == _new_username, User.id != user.id).first():
+            return "Username already exists."
+        user.username = _new_username
+    return None
+
+
+def _apply_profile_fields(user):
+    """Set the display name, e-mail and active flag from the edit form; deactivating signs the account out."""
+    user.display_name = (request.form.get("display_name") or user.display_name or "").strip()
+    _new_email = request.form.get("email", "").strip()
+    user.email = encrypt_secret(_new_email) if _new_email else None
+    _was_active = bool(user.is_active)
+    user.is_active = request.form.get("is_active") == "on"
+    if _was_active and not user.is_active:
+        # load_user() refuses an inactive account, so the sessions are already dead the moment
+        # this commits. Clear the registry rows and bump the epoch anyway: an offboarded
+        # account should not go on listing "active sessions" on its account page, and the
+        # epoch is what invalidates a legacy cookie that carries no sid to delete.
+        from panel.db.models import UserSession
+        UserSession.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        user.auth_epoch = (user.auth_epoch or 0) + 1
+        user.revoke_api_token()
+
+
+def _apply_resets(user, _pending_audit):
+    """The edit form's password and 2FA resets; returns (the new password or None, _self_remember)."""
+    # Reset the password on request. Generated, never typed by the admin — same reasoning as
+    # add_user. Resetting is an explicit tick, not a blank field that means "keep": an edit that
+    # only renames someone must not quietly invalidate their login.
+    new_password = None
+    # Set only on a SELF-reset, to which cookie keeps this login alive — see the note in the
+    # branch below. None means "not a self-reset"; False is a real answer, so the check after
+    # the commit is `is not None`.
+    _self_remember = None
+    if request.form.get("reset_password") == "on":
+        new_password = generate_password()
+        # set_password, not a bare assignment: the outgoing password joins the history, so a
+        # user handed a reset cannot answer the forced change by typing back the password the
+        # reset just took away from them.
+        # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- a generated password, not a typed one
+        user.set_password(hash_password(new_password))
+        user.auth_epoch = (user.auth_epoch or 0) + 1   # revoke existing sessions
+        # The API token too. It is a SECOND credential for the same account, and it did not
+        # answer to any of the controls that exist to take an account back: it carries no
+        # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted
+        # every UserSession row and left it working. app.py's note that "cookie theft is also
+        # recoverable via sign out everywhere" was not true while one existed. Minting one
+        # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
+        # could leave themselves a key that survived the victim's whole recovery.
+        user.revoke_api_token()
+        # Only when the password now belongs to two people. An admin resetting their OWN
+        # password knows it because they chose to see it, and has nobody to take it back from;
+        # forcing them through a change screen would protect nothing.
+        if user.id != current_user.id:
+            user.must_change_password = True
+        else:
+            # ...and a self-reset must not sign the admin out before they can READ the password
+            # it just generated. The epoch bump above kills every cookie for this account
+            # including the one that made this request — load_user compares the cookie's epoch
+            # and returns None the moment they differ — and panel.js runs
+            # refreshSection('#users-list') BEFORE it opens the credential modal, so the next
+            # request lands milliseconds later, is answered 401 + X-Auth-Required, and
+            # sessionExpired() replaces the tab with /login. Only the bcrypt hash is stored, so
+            # the password was gone; on a single-superadmin install (the common one) the
+            # account was then reachable only through manage.py reset-password on the host.
+            # Carry THIS device across the bump the way account_change_password already does
+            # (panel/routes/tags.py:396-403): note which cookie keeps this login alive now, and
+            # re-register + re-login after the commit below.
+            from panel.db.models import UserSession
+            _sid = getattr(current_user, "_sid", None)
+            _cur_sess = (UserSession.query.filter_by(sid=_sid, user_id=user.id).first()
+                         if _sid else None)
+            _self_remember = (bool(_cur_sess.remember) if _cur_sess is not None
+                              else _has_remember_cookie())
+        # DEFERRED, not written here. log_action commits, and a commit in the middle of a
+        # handler makes every later guard unable to undo what came before it — see the lockout
+        # note above, and the group-id parse below, which could 500 after this branch had
+        # already committed a password reset that nobody ever saw.
+        _pending_audit.append(("reset_user_password", user.username, ""))
+
+    # Admin reset of a user's 2FA (for when they lose their authenticator).
+    if request.form.get("reset_2fa") == "on" and user.totp_enabled:
+        user.totp_enabled = False
+        user.totp_secret = None
+        user.backup_codes = ""
+        _pending_audit.append(("2fa_reset", user.username, ""))   # deferred — see above
+    return new_password, _self_remember
+
+
+def _audit_user_edit(user, _old_username, _pending_audit):
+    """Write the edit's audit rows once it has committed: the deferred resets, a rename, the edit."""
+    for _act, _tgt, _detail in _pending_audit:
+        log_action(current_user, _act, target=_tgt, detail=_detail)
+    if user.username != _old_username:
+        # Its own entry, and keyed on the OLD name: every earlier row for this account is filed
+        # under that, so this is the only line that connects the two.
+        log_action(current_user, "rename_user", target=_old_username,
+                   detail="renamed to '%s'" % user.username)
+    log_action(current_user, "edit_user", target=user.username)
+
+
+def _live_invite(token):
+    """(invite, its creator) for a usable invite whose creator's authority stands, else (None, None)."""
+    inv = Invite.by_token(token)
+    # An invite is a delegation, and it must not outlive the authority behind it: an admin who
+    # is offboarded — demoted, deactivated, deleted — would otherwise leave live invites behind
+    # for up to 30 days, still handing out whatever they promised, superadmin included.
+    # Checked on GET as well as POST, so a dead invite never even shows the form.
+    _creator = db.session.get(User, inv.created_by_id) if (inv and inv.created_by_id) else None
+    if inv is None or not inv.is_usable or not inv.authority_intact(_creator):
+        return None, None
+    return inv, _creator
+
+
+def _invite_form():
+    """The redeem form's username and password, and why they are refused (falsy when they are not)."""
+    username = (request.form.get("username") or "").strip()
+    password = request.form.get("password") or ""
+    confirm = request.form.get("confirm_password") or ""
+    uerr = username_problem(username)
+    if uerr:
+        return username, password, uerr
+    if User.query.filter_by(username=username).first():
+        return username, password, "That username is taken."
+    if password != confirm:
+        return username, password, "The two passwords do not match."
+    return username, password, password_problem(password)
+
+
+def _invited_groups(inv):
+    """The groups an invite promises, or None when it promises none."""
+    wanted = set(inv.groups_wanted)
+    if not wanted:
+        return None
+    return Group.query.filter(Group.id.in_(wanted)).all()
+
+
+def _beyond_creator_reach(_creator, _groups):
+    """Whether any of an invite's groups grants more than its (non-superadmin) creator still may."""
+    if _creator is None or _creator.is_superadmin:
+        return False
+    _mine = set(get_user_permissions(_creator))
+    _mine_remotes = set(accessible_remote_ids(_creator))
+    _mine_servers = {gs.id for gs in get_user_servers(_creator)}
+    _mine_commands = custom_command_ids(_creator)   # the fourth axis, as grantable_groups
+    reach = (_mine, _mine_remotes, _mine_commands, _mine_servers)
+    return any(_beyond_creator(g, reach) for g in _groups)
+
+
+def _beyond_creator(g, reach):
+    """Whether group `g` holds a permission, host, command or server outside `reach`."""
+    _mine, _mine_remotes, _mine_commands, _mine_servers = reach
+    if not set(g.get_permissions()) <= _mine:
+        return True
+    if not {r.id for r in (g.servers or [])} <= _mine_remotes:
+        return True
+    if not {c.id for c in (g.custom_commands or [])} <= _mine_commands:
+        return True
+    return not {s.id for s in (g.game_servers or [])} <= _mine_servers
