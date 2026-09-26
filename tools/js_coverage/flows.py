@@ -437,9 +437,14 @@ return 1;
 
 # ── users, groups, settings, account, logs ────────────────────────────────────────────────────
 USERS = r"""
-// Edit each user in the shared modal; reset one's password, which shows it once to copy.
-for (let i = 0; i < 3; i++) {
-  J.click('[data-action="openEditUser"]', i); await J.sleep(500);
+// Edit each OTHER user in the shared modal (never the signed-in account: resetting its password
+// would sign the rest of the walk out); reset one's password, which is shown once to copy.
+const nameOf = b => { const s = b.closest('tr') && b.closest('tr').querySelector('strong');
+                      return s ? s.textContent.trim() : ''; };
+const others = Array.from(document.querySelectorAll('[data-action="openEditUser"]'))
+  .filter(b => nameOf(b) !== ME);
+for (let i = 0; i < others.length; i++) {
+  others[i].click(); await J.sleep(500);
   J.type('#eu-display', 'Edited ' + i);
   const reset = J.q('#eu-reset-password'); if (reset && i === 0) { reset.checked = true; }
   const f = J.q('#edit-user-form');
@@ -686,6 +691,11 @@ def otp_nag(d):
     d.run(OTP_NAG)
 
 
+def users(d):
+    """Edit, add and invite users: every account but the one the walk is signed in with."""
+    d.run("const ME = %s;\n%s" % (json.dumps(d.user), USERS))
+
+
 def two_factor(d):
     """Turn on two-factor sign-in with a code from the key shown, which ends on the backup codes.
 
@@ -702,6 +712,8 @@ def two_factor(d):
           "J.q('input[name=\"totp_code\"]').form.requestSubmit(); await J.sleep(2000); return 1;"
           % json.dumps(pyotp.TOTP(key).now()))
     d.settle(quiet=0.5, limit=6.0)
+    if not d.js("typeof CODES !== 'undefined' && CODES.length > 0"):
+        raise RuntimeError("enrolling did not reach the backup codes page (at %s)" % d.path())
     d.run("J.click('[data-action=\"copyCodes\"]'); await J.sleep(300);"
           "J.click('[data-action=\"downloadCodes\"]'); await J.sleep(500); return 1;")
 
@@ -726,7 +738,7 @@ FLOWS = {
     "/remotes": [("remotes", js(REMOTES)), ("tailscale", remotes_tailscale)],
     "/tailscale": [("states", tailscale_states)],
     "/servers/install": [("install", js(INSTALL))],
-    "/users": [("users", js(USERS))],
+    "/users": [("users", users)],
     "/groups": [("groups", js(GROUPS))],
     "/settings": [("settings", js(SETTINGS))],
     "/logs": [("logs", logs_pages)],

@@ -168,8 +168,8 @@
 
   // Answer whatever the last step opened: the panel's confirm dialog — OK only when `accept`, and
   // with what it asks to be typed (the account's password, or the name its label quotes), else
-  // Cancel — and any Bootstrap modal left open. Pressing a still-disabled OK is not something a
-  // person can do, so a dialog whose text did not satisfy it is cancelled.
+  // Cancel — the command palette, and any Bootstrap modal left open. Pressing a still-disabled
+  // OK is not something a person can do, so a dialog whose text did not satisfy it is cancelled.
   function settleDialogs(accept, password) {
     var n = 0;
     document.querySelectorAll('[data-cd="ok"]').forEach(function (ok) {
@@ -190,6 +190,13 @@
       else if (cancel) cancel.click();
       n++;
     });
+    // The command palette covers the page while it is open, so anything aimed at the page after
+    // it lands on the palette instead: a file dropped on the file browser went nowhere.
+    var palette = document.getElementById('cmdk');
+    if (palette && !palette.hidden) {
+      key(document, 'Escape');
+      n++;
+    }
     if (window.bootstrap && bootstrap.Modal) {
       document.querySelectorAll('.modal.show').forEach(function (m) {
         var inst = bootstrap.Modal.getInstance(m);
@@ -229,10 +236,13 @@
     return null;
   }
 
-  // The centre of the part of the `i`th match of `sel` that is on screen, scrolled into view
-  // first, for input the page cannot be sent from inside it (a real pointer drag, a file dragged
-  // in from disk). The visible part, not the element: a card taller than the window has its own
-  // centre below the bottom edge, where a drop lands on nothing.
+  // A point on the `i`th match of `sel` that input sent there would actually reach, scrolled into
+  // view first, for input the page cannot be sent from inside it (a real pointer drag, a file
+  // dragged in from disk). On screen, and not under anything else: a card taller than the window
+  // has its centre below the bottom edge, and a fixed widget (a toast, the install progress
+  // corner) can sit over the middle of what is left — a drop there lands on the widget.
+  var SPOTS = [[0.5, 0.5], [0.5, 0.3], [0.5, 0.7], [0.3, 0.5], [0.7, 0.5],
+               [0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8]];
   function centre(sel, i) {
     var el = q(sel, i);
     if (!el) return null;
@@ -242,7 +252,13 @@
     var r = el.getBoundingClientRect();
     var left = Math.max(r.left, 0), right = Math.min(r.right, window.innerWidth);
     var top = Math.max(r.top, 0), bottom = Math.min(r.bottom, window.innerHeight);
-    return right > left && bottom > top ? [(left + right) / 2, (top + bottom) / 2] : null;
+    if (right <= left || bottom <= top) return null;
+    for (var k = 0; k < SPOTS.length; k++) {
+      var x = left + (right - left) * SPOTS[k][0], y = top + (bottom - top) * SPOTS[k][1];
+      var hit = document.elementFromPoint(x, y);
+      if (hit && (hit === el || el.contains(hit))) return [x, y];
+    }
+    return null;
   }
 
   window.__jscov = {
