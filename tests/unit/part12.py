@@ -123,7 +123,10 @@ _p9.config.update(
     MAX_CONTENT_LENGTH=_p9_app._MAX_UPLOAD_BYTES + 2 * 1024 * 1024,
 )
 # Routes and workers log their expected failures with tracebacks; keep the run readable. Restored
-# at the end with everything else.
+# at the end with everything else — BOTH of them: _p9.logger is logging.getLogger("app"), the same
+# object as the real app's logger, and it used to stay disabled for the rest of the process, so a
+# later part's create_app logged its boot steps into a logger that dropped them.
+_p9_saved_applog_disabled = _p9.logger.disabled
 _p9.logger.disabled = True
 _p9_saved_log_disabled = _p9_app._log.disabled
 _p9_app._log.disabled = True
@@ -2592,6 +2595,7 @@ finally:
     _p9_banlist._listeners.clear()
     _p9_banlist._listeners.update(_p9_saved_listeners)
     _p9_app._log.disabled = _p9_saved_log_disabled
+    _p9.logger.disabled = _p9_saved_applog_disabled
     try:
         with _p9.app_context():
             db.session.remove()

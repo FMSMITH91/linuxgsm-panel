@@ -3581,6 +3581,626 @@ finally:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
+# F. app.py — create_app's one-time boot steps and response hooks, and the loops register_routes
+#    hands to its supervisor
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# create_app runs here for REAL, twice, against a throwaway data dir. config.json, secret_key and
+# cred_key are already the runner's (tests/unit_test.py); DB_PATH, DATA_DIR and the auth log are
+# pointed into a temp dir below — both where app.py holds them and where panel.core.config does,
+# because _ensure_db_healthy and harden_data_permissions read config's. No thread starts:
+# app.threading's Thread only records its target, so each loop the supervisor would run can be
+# taken out and run for a single pass. The checkout's own data/panel.db must not appear.
+import gzip as _gzip13  # noqa: E402
+import logging as _logging13  # noqa: E402
+import inspect as _inspect13  # noqa: E402
+import sqlite3 as _sqlite13  # noqa: E402
+from datetime import timedelta as _td13  # noqa: E402
+from pathlib import Path as _Path13  # noqa: E402
+
+from flask import Response as _Resp13, abort as _abort13, request as _req13  # noqa: E402
+
+from panel.db import models as _models13  # noqa: E402
+from panel.ops import socket_hooks as _hooks13  # noqa: E402
+from panel.routes import _shared as _shared13  # noqa: E402
+from panel.security import banlist as _banlist13  # noqa: E402
+
+_CA13_LIVE_DB = str(_cfgmod10.DB_PATH)
+_CA13_LIVE_DB_EXISTED = os.path.exists(_CA13_LIVE_DB)
+_CA13_DIR = _Path13(_tmp10.mkdtemp(prefix="lgsm-unit-p13-app-")) / "data"
+_CA13_DIR.mkdir()
+_CA13_DB = _CA13_DIR / "panel.db"
+_CA13_CFG_SNAP = (_cfgmod10.CONFIG_FILE.read_bytes() if _cfgmod10.CONFIG_FILE.exists() else None)
+# (owner, attribute) -> the value before this section touched it; put back in the finally.
+_CA13_SAVED = {}
+_CA13_SHARED = ("_looks_installed", "_notify_servers_changed", "_run_due_game_backups",
+                "_run_due_restarts", "_run_pending_backups")
+# What the loops' collaborators do in the pass under test: each entry is set by that check.
+_TK13 = {"looks": {}, "calls": [], "fail_from": {}}
+
+
+def _ca13_set(owner, name, value):
+    """Replace owner.name for this section, remembering the original the first time."""
+    _CA13_SAVED.setdefault((owner, name), getattr(owner, name))
+    setattr(owner, name, value)
+
+
+def _ca13_restore():
+    """Put back every attribute _ca13_set replaced."""
+    for (owner, name), value in _CA13_SAVED.items():
+        setattr(owner, name, value)
+    _CA13_SAVED.clear()
+
+
+def _tk13_rec(label, *args):
+    """Record a collaborator call, and raise from the call the check scripted `label` to fail on."""
+    _TK13["calls"].append((label,) + args)
+    if sum(1 for c in _TK13["calls"] if c[0] == label) >= _TK13["fail_from"].get(label, 1 << 30):
+        raise RuntimeError("%s failed" % label)
+
+
+def _tk13_looks(app, remote, short, lgsm):
+    """Stand-in for _shared._looks_installed: the verdict the check scripted for `short`."""
+    _TK13["calls"].append(("looks", short, lgsm))
+    verdict = _TK13["looks"].get(short)
+    if isinstance(verdict, Exception):
+        raise verdict
+    return verdict
+
+
+_TK13_STUBS = {
+    "_looks_installed": _tk13_looks,
+    "_notify_servers_changed": lambda app: _tk13_rec("notify", app),
+    "_run_due_game_backups": lambda app: _tk13_rec("due-backups", app),
+    "_run_due_restarts": lambda app: _tk13_rec("due-restarts", app),
+    "_run_pending_backups": lambda app: _tk13_rec("pending-backups", app),
+}
+
+
+class _TkRecThread13:
+    """A Thread for create_app that records its target and never starts it."""
+
+    started = []
+
+    def __init__(self, target=None, daemon=None, args=(), kwargs=None, name=None):
+        self.target, self.daemon = target, daemon
+
+    def start(self):
+        """Remember the target instead of running it."""
+        _TkRecThread13.started.append(self.target)
+
+    def join(self, timeout=None):
+        """Nothing was started, so there is nothing to wait for."""
+        return None
+
+
+class _TkInlineThread13(_TkRecThread13):
+    """A Thread whose start() runs the target inline; the target ending on _Stop10 is its exit."""
+
+    def start(self):
+        """Run the target now, as the supervised worker would, until it stops."""
+        _TK13["calls"].append(("thread", self.daemon))
+        try:
+            self.target()
+        except _Stop10:
+            _TK13["calls"].append(("thread-exited",))
+
+
+def _tk13_threading(thread_cls):
+    """The real threading module, with Thread replaced by `thread_cls`."""
+    return NS(Thread=thread_cls, Lock=threading.Lock, RLock=threading.RLock,
+              local=threading.local, Event=threading.Event,
+              current_thread=threading.current_thread)
+
+
+def _tk13_loops(runners):
+    """Map each recorded supervisor runner to {name: (runner, loop)} via its closure."""
+    out = {}
+    for runner in runners:
+        nonlocals = _inspect13.getclosurevars(runner).nonlocals
+        if "name" in nonlocals and "target" in nonlocals:
+            out[nonlocals["name"]] = (runner, nonlocals["target"])
+    return out
+
+
+def _ca13_config(**over):
+    """Write config.json for the next boot: setup done, plus `over`."""
+    cfg = dict(_cfgmod10.DEFAULT_CONFIG, setup_complete=True)
+    cfg.update(over)
+    _cfgmod10.CONFIG_FILE.write_text(_json10.dumps(cfg))
+
+
+def _ca13_seed_rows(now):
+    """Rows for the boot's one-time steps: legacy plaintext, a stale grant, aged audit rows."""
+    db = _models13.db
+    db.session.add(_models13.SetupState(step="complete", complete=True))
+    for name, method, cred in (("pw-host", "password", "hunter2"),
+                               ("key-host", "key", _CA13_KEY_CT),
+                               ("ts-host", "tailscale", "tskey-left-alone")):
+        db.session.add(_models13.RemoteServer(name=name, host="192.0.2.30", username="root",
+                                              auth_method=method, auth_credential=cred))
+    db.session.add(_models13.User(username="legacy", password_hash="x", email="ops@example.com"))
+    db.session.add(_models13.Group(name="legacy-grant",
+                                   permissions='["view_servers", "super_admin"]'))
+    old = now - _td13(days=60)
+    db.session.add_all([_models13.AuditLog(action="old", ip_address="203.0.113.1", timestamp=old)
+                        for _ in range(120)])
+    db.session.add(_models13.AuditLog(action="aged", ip_address="203.0.113.77",
+                                      timestamp=now - _td13(days=10)))
+    db.session.add(_models13.AuditLog(action="recent", ip_address="203.0.113.78",
+                                      timestamp=now - _td13(hours=1)))
+    db.session.commit()
+
+
+def _ca13_seed():
+    """Create the throwaway panel.db with the models' schema and the rows boot will migrate."""
+    seed = _Flask10("unit_part13_seed")
+    seed.config.update(SQLALCHEMY_DATABASE_URI="sqlite:///%s" % _CA13_DB,
+                       SQLALCHEMY_TRACK_MODIFICATIONS=False)
+    _models13.db.init_app(seed)
+    with seed.app_context():
+        _models13.db.create_all()
+        _ca13_seed_rows(_utcnow10())
+        _models13.db.session.remove()
+        _models13.db.engine.dispose()
+    # One host name written back as PLAINTEXT, past the column type, as a pre-encryption install
+    # left it — the at-rest migration's job.
+    con = _sqlite13.connect(str(_CA13_DB))
+    try:
+        con.execute("UPDATE remote_server SET host='10.9.8.7' WHERE name='pw-host'")
+        con.commit()
+    finally:
+        con.close()
+
+
+def _ca13_raw(sql, *args):
+    """Rows from the throwaway panel.db, read past the ORM (so ciphertext stays ciphertext)."""
+    con = _sqlite13.connect(str(_CA13_DB))
+    try:
+        return con.execute(sql, args).fetchall()
+    finally:
+        con.close()
+
+
+def _ca13_boot():
+    """Run create_app with threads recorded, not started; return (app, supervisor runners)."""
+    _TkRecThread13.started = []
+    _ca13_set(_app10mod, "threading", _tk13_threading(_TkRecThread13))
+    try:
+        app = _app10mod.create_app()
+    finally:
+        _app10mod.threading = _CA13_SAVED.pop((_app10mod, "threading"))
+    return app, list(_TkRecThread13.started)
+
+
+def _ca13_probe_big():
+    """A 200 JSON body well past the gzip floor, which already varies on Origin."""
+    return _Resp13(_json10.dumps({"rows": ["x" * 40] * 60}), mimetype="application/json",
+                   headers={"Vary": "Origin"})
+
+
+def _ca13_add_probes(app):
+    """Routes for the response hooks and error handler; added before the app's first request."""
+    app.add_url_rule("/_p13/big", "p13_big", _ca13_probe_big)
+    app.add_url_rule("/_p13/small", "p13_small", lambda: {"ok": True})
+    app.add_url_rule("/_p13/ip", "p13_ip", lambda: _req13.remote_addr or "")
+    app.add_url_rule("/_p13/boom", "p13_boom", _raiser10(RuntimeError("page view bug")))
+    app.add_url_rule("/api/_p13/boom", "p13_api_boom", _raiser10(RuntimeError("api view bug")))
+    app.add_url_rule("/api/_p13/unauth", "p13_unauth", lambda: _abort13(401))
+    app.add_url_rule("/api/_p13/gone", "p13_gone", lambda: _abort13(404))
+
+
+def _ca13_wsgi_chain(app):
+    """The middleware classes around the Flask app, outermost first."""
+    chain, w = [], app.wsgi_app
+    while w is not None and len(chain) < 8:
+        chain.append(w)
+        w = getattr(w, "app", None)
+    return chain
+
+
+def _ca13_logs(cap):
+    """The messages a _cap10 handler collected, as one string."""
+    return "\n".join(cap.msgs)
+
+
+def _tk13_run(loop, sleeps_until_stop):
+    """Run one supervised loop until its sleep has been called `sleeps_until_stop` times."""
+    slept = []
+    _ca13_set(_app10mod, "time", _Clock10(time.time(), sleep=_sleeper10(sleeps_until_stop, slept)))
+    try:
+        result = _try10(loop)
+    finally:
+        _app10mod.time = _CA13_SAVED.pop((_app10mod, "time"))
+    return result, slept
+
+
+def _ca13_check_sessions_and_secrets(app):
+    """The session-default nudge, and the legacy plaintext credential and e-mail encryption."""
+    cfg = _cfgmod10.load_config()
+    check("create_app: the old 12h / 14d session defaults are moved to 8h / 3d, and saved",
+          all((cfg.get("session_lifetime_hours") == 8, cfg.get("remember_days") == 3,
+               app.config["PERMANENT_SESSION_LIFETIME"] == 8 * 3600)),
+          repr((cfg.get("session_lifetime_hours"), cfg.get("remember_days"))))
+    creds = dict(_ca13_raw("SELECT name, auth_credential FROM remote_server"))
+    pw, key, tsk = creds.get("pw-host", ""), creds.get("key-host", ""), creds.get("ts-host", "")
+    check("create_app: a legacy plaintext SSH password is encrypted at boot, and decrypts back",
+          all((_cfgmod10.is_encrypted(pw), _cfgmod10.decrypt_secret(pw) == "hunter2")), pw[:12])
+    check("create_app: an already-encrypted key path is left as it was, and a Tailscale host's "
+          "credential (not a secret the panel holds) is not touched",
+          all((key == _CA13_KEY_CT, tsk == "tskey-left-alone")), repr((key[:12], tsk)))
+    email = (_ca13_raw("SELECT email FROM user WHERE username='legacy'") or [("",)])[0][0] or ""
+    check("create_app: a legacy plaintext e-mail address is encrypted at boot, and decrypts back",
+          all((_cfgmod10.is_encrypted(email),
+               _cfgmod10.decrypt_secret(email) == "ops@example.com")), email[:12])
+
+
+def _ca13_check_migrations(app, logs):
+    """The at-rest column encryption, the stale super_admin grant, retention and IP ageing."""
+    host = (_ca13_raw("SELECT host FROM remote_server WHERE name='pw-host'") or [("",)])[0][0]
+    with app.app_context():
+        orm_host = _models13.RemoteServer.query.filter_by(name="pw-host").first().host
+        perms = _models13.Group.query.filter_by(name="legacy-grant").first().get_permissions()
+    check("create_app: a host name left in plaintext is encrypted at rest, and still reads back",
+          all((_cfgmod10.is_encrypted(host), orm_host == "10.9.8.7",
+               "encrypted at-rest columns on 1 row(s)" in logs)),
+          repr((host[:12], orm_host, [m for m in logs.split("\n") if "at-rest" in m])))
+    check("create_app: a stored super_admin group grant is stripped, the rest of it kept",
+          all((sorted(perms) == ["view_servers"],
+               "removed the legacy super_admin permission from 1 group(s)" in logs)),
+          repr(perms))
+    kinds = sorted(r[0] for r in _ca13_raw("SELECT DISTINCT action FROM audit_log WHERE action IN "
+                                           "('old', 'aged', 'recent')"))
+    aged = dict(_ca13_raw("SELECT action, ip_address FROM audit_log"))
+    check("create_app: audit rows past the retention window are deleted, newer ones kept, and a "
+          "big prune reclaims the space", all((kinds == ["aged", "recent"],
+                                               _CA13_OPTIMIZED == [True])),
+          repr((kinds, _CA13_OPTIMIZED)))
+    check("create_app: an audit IP past its own retention is reduced to a prefix, a recent one kept",
+          all(("/" in (aged.get("aged") or ""), aged.get("recent") == "203.0.113.78",
+               "reduced the IP on 1 audit entries to a network prefix" in logs)),
+          repr((aged, [m for m in logs.split("\n") if "reduced the IP" in m])))
+
+
+def _ca13_check_proxy(app, client):
+    """trust_proxy puts ProxyFix in front, inside the ban gate, and the client IP is the hop's."""
+    names = [type(w).__name__ for w in _ca13_wsgi_chain(app)]
+    fix = [w for w in _ca13_wsgi_chain(app) if type(w).__name__ == "ProxyFix"]
+    got = client.get("/_p13/ip", environ_base={"REMOTE_ADDR": "127.0.0.1"},
+                     headers={"X-Forwarded-For": "198.51.100.7"}).get_data(as_text=True)
+    check("create_app: trust_proxy wraps the app in ProxyFix (one hop), inside the ban gate",
+          all((app.config.get("_TRUST_PROXY") is True, names[:2] == ["ProxiedBanGate", "ProxyFix"],
+               bool(fix) and fix[0].x_for == 1, got == "198.51.100.7")), repr((names, got)))
+
+
+def _ca13_check_compression(app, client):
+    """gzip for big text answers the client accepts, the Vary merge, and the cache headers."""
+    gz = {"Accept-Encoding": "gzip"}
+    css = sorted(p for p in os.listdir(os.path.join(app.static_folder, "css")) if p.endswith(".css"))[0]
+    raw = open(os.path.join(app.static_folder, "css", css), "rb").read()
+    st = client.get("/static/css/" + css, headers=gz)
+    check("app responses: a static asset is gzipped, decodes to the file, and is cached a week",
+          all((st.headers.get("Content-Encoding") == "gzip", _gzip13.decompress(st.data) == raw,
+               st.headers.get("Cache-Control") == "public, max-age=604800",
+               "Accept-Encoding" in (st.headers.get("Vary") or ""))), repr(dict(st.headers)))
+    big = client.get("/_p13/big", headers=gz)
+    check("app responses: a big page is gzipped, its own Vary kept with Accept-Encoding added, "
+          "and it must be revalidated", all((
+              big.headers.get("Content-Encoding") == "gzip",
+              _json10.loads(_gzip13.decompress(big.data))["rows"][0] == "x" * 40,
+              [v.strip() for v in big.headers.get("Vary", "").split(",")][:2]
+              == ["Origin", "Accept-Encoding"],
+              big.headers.get("Cache-Control") == "no-cache, private")), repr(dict(big.headers)))
+    plain, small = client.get("/_p13/big"), client.get("/_p13/small", headers=gz)
+    check("app responses: no gzip without Accept-Encoding, nor below the size floor",
+          all(("Content-Encoding" not in plain.headers, "Content-Encoding" not in small.headers,
+               _json10.loads(plain.data)["rows"][0] == "x" * 40, small.get_json() == {"ok": True})),
+          repr((dict(plain.headers), dict(small.headers))))
+    hsts = client.get("/_p13/small", headers={"X-Forwarded-Proto": "https"})
+    check("app responses: HSTS is sent over proxied HTTPS, and not over plain HTTP",
+          all(("max-age=31536000" in (hsts.headers.get("Strict-Transport-Security") or ""),
+               "Strict-Transport-Security" not in small.headers)), repr(dict(hsts.headers)))
+
+
+def _ca13_check_errors(app, client):
+    """The error handler: HTML stays HTML, the API gets JSON, and a 401 keeps its own shape."""
+    xhr = {"X-Requested-With": "XMLHttpRequest"}
+    quiet = (app.logger, _logging13.getLogger("panel.app"))   # both 500s log a traceback by design
+    for lg in quiet:
+        lg.disabled = True
+    try:
+        page, api = client.get("/_p13/boom"), client.get("/api/_p13/boom")
+    finally:
+        for lg in quiet:
+            lg.disabled = False
+    gone = client.get("/api/_p13/gone")
+    unauth = client.get("/api/_p13/unauth", headers=xhr)
+    check("app errors: a page view that raises is an ordinary 500 page, not JSON",
+          all((page.status_code == 500, page.get_json(silent=True) is None)), page.status_code)
+    check("app errors: an API view that raises, and an API 404, answer JSON with success False",
+          all((api.status_code == 500, (api.get_json(silent=True) or {}).get("success") is False,
+               gone.status_code == 404, (gone.get_json(silent=True) or {}).get("success") is False)),
+          repr((api.status_code, api.data[:80], gone.status_code, gone.data[:80])))
+    check("app errors: a 401 keeps its own response (the page's session-expired handling reads it)",
+          all((unauth.status_code == 401, unauth.get_json(silent=True) is None)),
+          repr((unauth.status_code, unauth.data[:80])))
+
+
+def _tk13_check_supervisor(loops, app):
+    """A supervised worker that exits is logged and respawned after five seconds, as a daemon."""
+    runner = loops["due-actions"][0]
+    _TK13["calls"][:] = []
+    _ca13_set(_app10mod, "threading", _tk13_threading(_TkInlineThread13))
+    cap, off = _cap10(app.logger.name)
+    try:
+        res, slept = _tk13_run(runner, 2)
+    finally:
+        off()
+        _app10mod.threading = _CA13_SAVED.pop((_app10mod, "threading"))
+    check("app supervisor: a worker that exits is logged by name and respawned after 5s, as a "
+          "daemon thread", all((res == ("RAISED", repr(_Stop10())), slept == [45, 90, 5],
+                                _TK13["calls"] == [("thread", True), ("due-restarts", app),
+                                                   ("thread-exited",)],
+                                "due-actions thread exited — respawning in 5s" in _ca13_logs(cap))),
+          repr((slept, _TK13["calls"], cap.msgs)))
+
+
+def _tk13_check_backup_loops(loops, app):
+    """The backup and due-action loops: first sleep, a pass, a failing pass contained, interval."""
+    _TK13["calls"][:] = []
+    _TK13["fail_from"] = {"daily": 2}
+    _ca13_set(_app10mod, "bk", NS(daily_backup_tick=lambda: _tk13_rec("daily")))
+    try:
+        _run1, slept1 = _tk13_run(loops["backup-ticker"][1], 3)
+    finally:
+        _app10mod.bk = _CA13_SAVED.pop((_app10mod, "bk"))
+    check("app backup loop: waits 2 min first, then the daily tick, the per-server schedules and "
+          "the queue, hourly — and a failing tick skips the rest of that pass only",
+          all((slept1 == [120, 3600, 3600],
+               _TK13["calls"] == [("daily",), ("due-backups", app), ("pending-backups", app),
+                                  ("daily",)])), repr((slept1, _TK13["calls"])))
+    _TK13["calls"][:] = []
+    _TK13["fail_from"] = {"due-restarts": 2}
+    _run2, slept2 = _tk13_run(loops["due-actions"][1], 3)
+    check("app due-actions loop: waits 45s first, then applies queued restarts every 90s, past a "
+          "failing pass", all((slept2 == [45, 90, 90],
+                               _TK13["calls"] == [("due-restarts", app)] * 2)),
+          repr((slept2, _TK13["calls"])))
+    _TK13["fail_from"] = {}
+
+
+def _tk13_seed_reconcile(app):
+    """Game servers in every state the reconcile loop meets; returns {short_name: row id}."""
+    rows = (("tkA", "installing", False), ("tkB", "configuring", False), ("tkC", "failed", False),
+            ("tkD", "installing", False), ("tkE", "failed", False), ("tkF", "installing", False),
+            ("tkG", "online", True), ("tkH", "installing", False))
+    db, ids = _models13.db, {}
+    with app.app_context():
+        host = _models13.RemoteServer(name="rc-host", host="192.0.2.40", username="root",
+                                      auth_method="tailscale")
+        db.session.add(host)
+        db.session.commit()
+        for i, (short, status, installed) in enumerate(rows):
+            gs = _models13.GameServer(remote_id=host.id, name=short, short_name=short,
+                                      game_type="gmod", port=27100 + i, status=status,
+                                      installed=installed)
+            db.session.add(gs)
+            db.session.commit()
+            ids[short] = gs.id
+    return ids
+
+
+def _tk13_states(app):
+    """{short_name: (installed, status)} for every game server row."""
+    with app.app_context():
+        return {g.short_name: (g.installed, g.status) for g in _models13.GameServer.query.all()}
+
+
+def _tk13_check_reconcile(loops, app):
+    """Stranded installs are judged by what the host says; only a real change is announced."""
+    ids = _tk13_seed_reconcile(app)
+    _pstate10._install_jobs[ids["tkA"]] = {"status": "running"}
+    _pstate10._install_jobs[ids["tkH"]] = {"status": "failed"}
+    _TK13["looks"] = {"tkB": True, "tkC": False, "tkD": False, "tkE": None,
+                      "tkF": RuntimeError("ssh dropped"), "tkH": None}
+    _TK13["calls"][:] = []
+    cap, off = _cap10(app.logger.name)
+    try:
+        _res, slept = _tk13_run(loops["install-reconcile"][1], 2)
+    finally:
+        off()
+        for short in ("tkA", "tkH"):
+            _pstate10._install_jobs.pop(ids[short], None)
+    asked = [c[1:] for c in _TK13["calls"] if c[0] == "looks"]
+    logs = _ca13_logs(cap)
+    check("app install reconcile: every stranded or failed row is asked about (with its script "
+          "name) — never a live install, never a running server",
+          all((sorted(asked) == [(s, "gmodserver") for s in ("tkB", "tkC", "tkD", "tkE", "tkF", "tkH")],
+               slept == [20, 600])), repr((asked, slept)))
+    eq("app install reconcile: installed -> offline, clearly not -> failed, can't tell -> left",
+       _tk13_states(app),
+       {"tkA": (False, "installing"), "tkB": (True, "offline"), "tkC": (False, "failed"),
+        "tkD": (False, "failed"), "tkE": (False, "failed"), "tkF": (False, "installing"),
+        "tkG": (True, "online"), "tkH": (False, "installing")})
+    check("app install reconcile: only a row that CHANGED is announced and logged",
+          all(([c for c in _TK13["calls"] if c[0] == "notify"] == [("notify", app)] * 2,
+               "'tkB' -> installed" in logs, "'tkD' -> failed" in logs, "'tkC'" not in logs)),
+          repr((_TK13["calls"], cap.msgs)))
+
+
+def _tk13_check_priority(loops, app):
+    """One batched renice per host for its installed servers, past a host that fails."""
+    db, calls = _models13.db, []
+    with app.app_context():
+        _models13.GameServer.query.delete()
+        one = _models13.RemoteServer(name="pk-one", host="192.0.2.41", username="root",
+                                     auth_method="tailscale")
+        two = _models13.RemoteServer(name="pk-two", host="192.0.2.42", username="root",
+                                     auth_method="tailscale")
+        db.session.add_all([one, two])
+        db.session.commit()
+        for i, (host, short, installed) in enumerate(((one, "pkb", True), (one, "pka", True),
+                                                      (one, "pkz", False), (two, "pkq", True))):
+            db.session.add(_models13.GameServer(remote_id=host.id, name=short, short_name=short,
+                                                game_type="gmod", port=27200 + i,
+                                                installed=installed, status="online"))
+        db.session.commit()
+
+    def _bulk(remote, users):
+        """Record the batch, and fail for the first host."""
+        calls.append((remote.name, list(users)))
+        if remote.name == "pk-one":
+            raise RuntimeError("renice refused")
+
+    _ca13_set(_app10mod, "set_game_priority_bulk", _bulk)
+    try:
+        _res, slept = _tk13_run(loops["priority-keeper"][1], 2)
+    finally:
+        _app10mod.set_game_priority_bulk = _CA13_SAVED.pop((_app10mod, "set_game_priority_bulk"))
+    check("app priority keeper: one sorted batch per host of its INSTALLED servers, every 2 min, "
+          "and a host whose renice fails does not stop the next",
+          all((calls == [("pk-one", ["pka", "pkb"]), ("pk-two", ["pkq"])], slept == [60, 120])),
+          repr((calls, slept)))
+
+
+def _ca13_check_failing_boot():
+    """Every one-time boot step failing: the panel still boots, and each failure is logged."""
+    _ca13_config(session_lifetime_hours=10, audit_log_retention_days="a month")
+    before = _ca13_raw("SELECT COUNT(*) FROM audit_log")
+    for owner, name, exc in ((_n10, "migrate_master_switch", "config locked"),
+                             (_app10mod, "strip_legacy_superadmin_grants", "database locked"),
+                             (_app10mod, "is_encrypted", "cred_key unreadable"),
+                             (_models13, "encrypt_at_rest_columns", "disk full"),
+                             (_models13, "anonymise_audit_ips", "disk full")):
+        _ca13_set(owner, name, _raiser10(RuntimeError(exc)))
+    cap_a, off_a = _cap10("app")
+    cap_p, off_p = _cap10("panel.app")
+    try:
+        app, _runners = _ca13_boot()
+    finally:
+        off_a()
+        off_p()
+        _ca13_restore_some(("migrate_master_switch", "strip_legacy_superadmin_grants",
+                            "is_encrypted", "encrypt_at_rest_columns", "anonymise_audit_ips"))
+    logs = _ca13_logs(cap_a) + "\n" + _ca13_logs(cap_p)
+    names = [type(w).__name__ for w in _ca13_wsgi_chain(app)]
+    check("create_app: with every one-time step failing, the panel still boots, routes and all",
+          all(("login" in app.view_functions, "ProxyFix" not in names,
+               _cfgmod10.load_config().get("session_lifetime_hours") == 10)), repr(names))
+    check("create_app: each failed boot step is logged, not swallowed",
+          all((m in logs for m in ("notifications master-switch migration skipped",
+                                   "legacy super_admin cleanup skipped",
+                                   "at-rest column encryption migration failed",
+                                   "audit IP anonymisation failed"))), logs[-400:])
+    check("create_app: an unparseable audit retention deletes nothing",
+          _ca13_raw("SELECT COUNT(*) FROM audit_log") == before, repr(before))
+    return app
+
+
+def _ca13_restore_some(names):
+    """Put back the replaced attributes with these names, leaving the rest in place."""
+    for key in [k for k in _CA13_SAVED if k[1] in names]:
+        setattr(key[0], key[1], _CA13_SAVED.pop(key))
+
+
+_CA13_KEY_CT = _cfgmod10.encrypt_secret("/root/.ssh/k")
+_CA13_OPTIMIZED = []
+_ca13_real_optimize = _models13.optimize_database
+
+
+def _ca13_optimize():
+    """Record that boot asked for a reclaim, then run the real one on the throwaway file."""
+    res = _ca13_real_optimize()
+    _CA13_OPTIMIZED.append(bool(res and res[0]))
+    return res
+
+
+def _ca13_first_boot():
+    """Seed the throwaway install, boot it, and return (app, runners, boot logs)."""
+    _ca13_seed()
+    _ca13_config(session_lifetime_hours=12, remember_days=14, trust_proxy=True,
+                 audit_log_retention_days=30, audit_ip_retention_days=7)
+    cap_a, off_a = _cap10("app")
+    cap_p, off_p = _cap10("panel.app")
+    try:
+        app, runners = _ca13_boot()
+    finally:
+        off_a()
+        off_p()
+    return app, runners, _ca13_logs(cap_a) + "\n" + _ca13_logs(cap_p)
+
+
+def _ca13_teardown(apps, saved):
+    """Close every boot's database and put back the process-wide state boot registered."""
+    for app in apps:
+        with app.app_context():
+            _models13.db.session.remove()
+            _models13.db.engine.dispose()
+    _banlist13._listeners.clear()
+    _banlist13._listeners.update(saved["listeners"])
+    _hooks13._hooks.clear()
+    _hooks13._hooks.update(saved["hooks"])
+    handlers, level, propagate = saved["authlog"]
+    for h in [h for h in _app10mod._authlog.handlers if h not in handlers]:
+        _app10mod._authlog.removeHandler(h)
+        h.close()
+    _app10mod._authlog.setLevel(level)
+    _app10mod._authlog.propagate = propagate
+    if _CA13_CFG_SNAP is None:
+        _cfgmod10.CONFIG_FILE.unlink(missing_ok=True)
+    else:
+        _cfgmod10.CONFIG_FILE.write_bytes(_CA13_CFG_SNAP)
+    _shutil10.rmtree(str(_CA13_DIR.parent), ignore_errors=True)
+
+
+_ca13_saved_state = {"listeners": dict(_banlist13._listeners), "hooks": dict(_hooks13._hooks),
+                     "authlog": (list(_app10mod._authlog.handlers), _app10mod._authlog.level,
+                                 _app10mod._authlog.propagate)}
+_ca13_apps = []
+_ca13_trip = _arm10()
+try:
+    for _n13 in _CA13_SHARED:
+        _ca13_set(_shared13, _n13, _TK13_STUBS[_n13])
+    for _owner13, _name13, _val13 in ((_cfgmod10, "DATA_DIR", _CA13_DIR),
+                                      (_cfgmod10, "DB_PATH", _CA13_DB),
+                                      (_app10mod, "DB_PATH", _CA13_DB),
+                                      (_app10mod, "AUTH_LOG_PATH", str(_CA13_DIR / "auth.log")),
+                                      (_models13, "optimize_database", _ca13_optimize)):
+        _ca13_set(_owner13, _name13, _val13)
+    _ca13_app, _ca13_runners, _ca13_bootlog = _ca13_first_boot()
+    _ca13_apps.append(_ca13_app)
+    check("create_app: the database it opened is the throwaway one, never the checkout's",
+          _ca13_app.config["SQLALCHEMY_DATABASE_URI"] == "sqlite:///%s" % _CA13_DB,
+          _ca13_app.config["SQLALCHEMY_DATABASE_URI"])
+    _ca13_add_probes(_ca13_app)
+    _ca13_client = _ca13_app.test_client()
+    _ca13_check_sessions_and_secrets(_ca13_app)
+    _ca13_check_migrations(_ca13_app, _ca13_bootlog)
+    _ca13_check_proxy(_ca13_app, _ca13_client)
+    _ca13_check_compression(_ca13_app, _ca13_client)
+    _ca13_check_errors(_ca13_app, _ca13_client)
+    _ca13_loops = _tk13_loops(_ca13_runners)
+    check("create_app: register_routes hands its loops to the supervisor, and starts none itself",
+          {"backup-ticker", "due-actions", "install-reconcile", "priority-keeper"}
+          <= set(_ca13_loops), sorted(_ca13_loops))
+    _tk13_check_supervisor(_ca13_loops, _ca13_app)
+    _tk13_check_backup_loops(_ca13_loops, _ca13_app)
+    _tk13_check_reconcile(_ca13_loops, _ca13_app)
+    _tk13_check_priority(_ca13_loops, _ca13_app)
+    _ca13_apps.append(_ca13_check_failing_boot())
+    check("app boot: nothing in this section reached a real SSH or local transport",
+          _trip10 == [], repr(_trip10))
+except Exception as _e13:  # noqa: BLE001 - a harness failure must fail by name, not end the suite
+    check("app boot: the create_app harness ran to the end", False,
+          "raised %s: %s" % (type(_e13).__name__, _e13))
+finally:
+    _disarm10(_ca13_trip)
+    _ca13_restore()
+    _ca13_teardown(_ca13_apps, _ca13_saved_state)
+check("app boot: the checkout's own data/panel.db was not created",
+      _CA13_LIVE_DB_EXISTED or not os.path.exists(_CA13_LIVE_DB), _CA13_LIVE_DB)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
 # Suite hygiene, checked last: nothing the unit parts did is left bound on the ssh_manager PACKAGE
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # The package resolves names through __getattr__ so that ONE stub, on the defining submodule,
