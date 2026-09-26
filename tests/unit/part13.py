@@ -50,14 +50,21 @@ class _LogCap10(logging.Handler):
     def __init__(self):
         logging.Handler.__init__(self)
         self.msgs = []
+        self.warned = []        # the messages logged at WARNING or above
 
     def emit(self, rec):
         # A record whose arguments do not fit its format is kept as its raw parts, so the check
         # reading it FAILS by name instead of the formatting error ending the whole part.
         try:
-            self.msgs.append(rec.getMessage())
+            msg = rec.getMessage()
         except Exception:
-            self.msgs.append("<unformattable %r %% %r>" % (rec.msg, rec.args))
+            msg = "<unformattable %r %% %r>" % (rec.msg, rec.args)
+        self.msgs.append(msg)
+        # Kept apart because the level is the point for some of these: the panel configures no
+        # logging, so only WARNING and above reaches the journal (logging.lastResort). A failure
+        # "logged" at DEBUG or INFO is a failure nobody will ever see.
+        if rec.levelno >= logging.WARNING:
+            self.warned.append(msg)
 
 
 def _cap10(name):
@@ -250,7 +257,7 @@ try:
         _cap_off10()
     check("notify _post: a provider's HTTP error is 'rejected' and LOGGED with its status",
           _rej10 == (False, "rejected")
-          and any("rejected by discord: HTTP 401" in m for m in _cap_h10.msgs),
+          and any("rejected by discord: HTTP 401" in m for m in _cap_h10.warned),
           repr((_rej10, _cap_h10.msgs)))
     check("notify _post: a connection failure is 'unreachable', logged by type and not by URL",
           _unr10 == (False, "unreachable")
@@ -360,10 +367,14 @@ try:
     _me10 = _n10.telegram_get_me(_TG10)
     _n10.urllib.request.urlopen = _urlopen10(b'{"ok": true, "result": {}}')
     _me_none10 = _n10.telegram_get_me(_TG10)
+    # A refusal is not an answer, whatever else came back with it.
+    _n10.urllib.request.urlopen = _urlopen10(b'{"ok": false, "result": {"username": "stale"}}')
+    _me_refused10 = _n10.telegram_get_me(_TG10)
     _n10.urllib.request.urlopen = _urlopen10(b"not json")
     _me_bad10 = _n10.telegram_get_me(_TG10)
     check("notify telegram getMe: the bot's name, or None when it could not be read",
           _me10 == "panelbot" and _me_none10 is None and _me_bad10 is None
+          and _me_refused10 is None
           and _n10.telegram_get_me("") is None,
           repr((_me10, _me_none10, _me_bad10)))
     _n10.urllib.request.urlopen = _n10_urlopen_saved
@@ -433,8 +444,8 @@ try:
           repr([s[:3] for s in _sent10]))
     check("notify(): the text carries the title and the body",
           _sent10 and "Server offline" in _sent10[0][3] and "gmod went down" in _sent10[0][3], "")
-    check("notify(): a channel that refused the message is LOGGED, not swallowed",
-          any("notification to discord failed (server_down)" in m for m in _cap_h10.msgs),
+    check("notify(): a channel that refused the message is LOGGED (at WARNING), not swallowed",
+          any("notification to discord failed (server_down)" in m for m in _cap_h10.warned),
           repr(_cap_h10.msgs))
     check("notify(): a disabled event sends nothing (server_up is off here)",
           len(_sent10) == 2, "%d sends" % len(_sent10))
@@ -589,6 +600,9 @@ try:
     _FAST10 = {"op": 10, "d": {"heartbeat_interval": 40}}         # 40 ms, so the test is quick
     _gw_seen10 = []
     _gw10 = _GwWS10([_SLOW10,
+                     {"op": 0, "s": 4, "t": "MESSAGE_CREATE",
+                      "d": {"channel_id": "77", "content": "beep",
+                            "author": {"id": "8", "bot": True}}},
                      {"op": 0, "s": 5, "t": "MESSAGE_CREATE",
                       "d": {"channel_id": 123456, "content": "!status",
                             "author": {"id": "9", "username": "op", "bot": False}}},
@@ -603,7 +617,8 @@ try:
           repr(_gw10.sent)[:300])
     check("notify gateway: a MESSAGE_CREATE reaches the handler with its channel, bot flag, text "
           "and author",
-          _gw_seen10 == [("123456", False, "!status", {"id": "9", "username": "op", "bot": False})],
+          _gw_seen10 == [("77", True, "beep", {"id": "8", "bot": True}),
+                         ("123456", False, "!status", {"id": "9", "username": "op", "bot": False})],
           repr(_gw_seen10))
     check("notify gateway: a heartbeat the server asks for is sent at once, with the last sequence",
           _gw_beats10 == [{"op": 1, "d": 5}], repr(_gw_beats10))
@@ -899,9 +914,10 @@ try:
     _rs10._chan = _RChan10()
     _rs10.resize("200", "50")
     _rs10.resize(99999, 1)
+    _rs10.resize(1, 99999)
     _rs10.resize("wide", 10)
     check("terminal resize: sizes are clamped to 20-500 x 5-200 and junk is ignored",
-          _rs10._chan.calls == [(200, 50), (500, 5)], repr(_rs10._chan.calls))
+          _rs10._chan.calls == [(200, 50), (500, 5), (20, 200)], repr(_rs10._chan.calls))
     _rs10._chan = _RChan10(fail=True)
     _rs10.resize(80, 24)
     check("terminal resize: a transport that refuses the resize does not end the session",
@@ -1312,8 +1328,8 @@ try:
         _still_open10 = False
     os.close(_psl4_10)
     check("terminal teardown: with no pump to retire it, the caller closes the pty master and "
-          "says so", not _still_open10 and _wd10._fd is None
-          and any("pump did not retire" in m for m in _cap_t10.msgs), repr(_cap_t10.msgs))
+          "says so (at WARNING)", not _still_open10 and _wd10._fd is None
+          and any("pump did not retire" in m for m in _cap_t10.warned), repr(_cap_t10.msgs))
     check("terminal teardown: a descriptor already gone (EBADF) is not an error",
           _wdr10 is None and _wd2_10._fd is None, repr(_wdr10))
 
@@ -1609,6 +1625,13 @@ try:
           and _hm10[0][1]["port_open"] is True and _hm10[0][3] == ""
           and _hm10[1][1]["game_procs"] == 0 and _hm10[1][1]["port_open"] is False,
           repr(_hm10)[:300])
+    _hmaps10 = []
+    _mon10.game_map = lambda r, sn, gt, port, qt: (_hmaps10.append(sn) or "cs_office")
+    _hm2_10 = _mon10._query_host_metrics((_R10, [(1, "run", 27015, "css", None),
+                                                 (2, "idle", 27016, "css", None)]))
+    check("monitor host metrics: the map is asked for only for the RUNNING game",
+          _hmaps10 == ["run"] and [x[3] for x in _hm2_10] == ["cs_office", ""],
+          repr((_hmaps10, [x[3] for x in _hm2_10])))
     _mon_restore10("game_map", "server_live_metrics", "host_live_metrics")
 
     # ── _server_slots: which reading wins, and what an unreadable server reports ───────────────
@@ -1693,7 +1716,8 @@ try:
         "198.51.100.9": 50,        # over, but whitelisted            -> never
         "100.64.0.7": 50,          # over, but on the tailnet         -> never
         "192.0.2.60": 9,           # over, block will FAIL            -> reported
-        "192.0.2.70": 1}           # auto-blocked, now under          -> release (fails)
+        "192.0.2.70": 1,           # auto-blocked, now under          -> release (fails)
+        "192.0.2.80": 40}          # over, but MANUALLY blocked       -> left exactly as it is
     _mon10.remote_ufw_blocked_ips = lambda r: {"192.0.2.70": _mon10._AUTOBLOCK_TAG,
                                                 "192.0.2.80": ""}    # a MANUAL block: untouched
     _mon10.tailnet_exempt_ips = lambda r, ips: {"100.64.0.7"}
@@ -1711,10 +1735,11 @@ try:
           repr(_ab_calls10))
     check("monitor autoblock (remote): the tally counts what APPLIED, and a manual block is kept",
           _abr10 == (1, 0) and ("undeny", "192.0.2.80") not in _ab_calls10
-          and ("undeny", "192.0.2.70") in _ab_calls10, repr(_abr10))
-    check("monitor autoblock (remote): changes that did not apply are logged, by IP",
+          and not any(c[:2] == ("deny", "192.0.2.80") for c in _ab_calls10)
+          and ("undeny", "192.0.2.70") in _ab_calls10, repr((_abr10, _ab_calls10)))
+    check("monitor autoblock (remote): changes that did not apply are logged (at WARNING), by IP",
           any("did not apply" in m and "block 192.0.2.60" in m and "release 192.0.2.70" in m
-              for m in _cap_m10.msgs), repr(_cap_m10.msgs))
+              for m in _cap_m10.warned), repr(_cap_m10.msgs))
     _ab_calls10[:] = []
     _mon10.remote_fail2ban_attempt_counts = lambda r, days: None
     _abn10 = _mon10._autoblock_reconcile(NS(is_local=False, name="edge"))
@@ -2174,7 +2199,7 @@ try:
           repr(_pop_kw10))
     _sm_core._tpool = None
     check("core local exec: without eventlet the function simply runs inline",
-          _sm_core._in_tpool(lambda: 42) == 42, "")
+          _try10(_sm_core._in_tpool, lambda: 42) == 42, "")
     _core_restore10("_tpool")
 
     # ── the privileged fallbacks ───────────────────────────────────────────────────────────────
@@ -2361,11 +2386,24 @@ try:
     open(_cm_file10, "w").close()
     _sm_core._SSH_CM_DIR = os.path.join(_cm_file10, "sub")
     _mux10 = _sm_core._ssh_mux_opts()
+    # One that exists but others can write: a socket planted in it would get every command.
+    _cm_loose10 = os.path.join(_cm_tmp10, "loose")
+    os.mkdir(_cm_loose10)
+    os.chmod(_cm_loose10, 0o777)
+    _sm_core._SSH_CM_DIR = _cm_loose10
+    _cap_cm10, _cap_cmoff10 = _cap10("panel.ssh")
+    try:
+        _mux_loose10 = _sm_core._ssh_mux_opts()
+    finally:
+        _cap_cmoff10()
     _core_restore10("_SSH_CM_DIR")
     _cm_missing10 = _sm_core._cm_dir_is_ours(os.path.join(_cm_tmp10, "never-made"))
     _shutil10.rmtree(_cm_tmp10, ignore_errors=True)
     check("core ssh mux: a socket dir that cannot be created, or does not exist, disables it",
           _mux10 == [] and _cm_missing10 is False, repr((_mux10, _cm_missing10)))
+    check("core ssh mux: a socket dir others can write disables it, and says so",
+          _mux_loose10 == [] and any("multiplexing disabled" in m for m in _cap_cm10.warned),
+          repr((_mux_loose10, _cap_cm10.msgs)))
 
     # ── the tailscale transport: timeouts and failures are rc -1, never a raise ────────────────
     _sm_core._ssh_mux_opts = lambda: []
@@ -2470,9 +2508,14 @@ try:
     # ── run_command's paramiko path ────────────────────────────────────────────────────────────
     class _ExecStdin10:
         def __init__(self, fail_shutdown=True):
-            self.wrote, self.flushed = [], 0
-            self.channel = NS(shutdown_write=_raiser10(OSError("half-closed")) if fail_shutdown
-                              else (lambda: None))
+            self.wrote, self.flushed, self.shutdowns = [], 0, 0
+            self.fail_shutdown = fail_shutdown
+            self.channel = NS(shutdown_write=self._shutdown)
+
+        def _shutdown(self):
+            self.shutdowns += 1
+            if self.fail_shutdown:
+                raise OSError("half-closed")
 
         def write(self, s):
             self.wrote.append(s)
@@ -2509,7 +2552,8 @@ try:
           _exec_seen10[0] == ("sudo bash -c " + _shlex10.quote("id -u"), 12)
           and _exec_seen10[1] == ("id -u", 30), repr(_exec_seen10))
     check("core run_command: stdin gets the secret, then EOF — even if the half-close fails",
-          _xc10.stdin.wrote == ["pw\n"] and _xc10.stdin.flushed == 1, repr(_xc10.stdin.wrote))
+          _xc10.stdin.wrote == ["pw\n"] and _xc10.stdin.flushed == 1
+          and _xc10.stdin.shutdowns == 1, repr((_xc10.stdin.wrote, _xc10.stdin.shutdowns)))
     check("core run_command: the drain is bounded by silence (>= 300s), decoded and stripped",
           _drain_args10 == [("CHAN", 300)] and _rc_out10 == ("out", "err", 0)
           and any("truncated" in m for m in _cap_s10.msgs), repr((_drain_args10, _rc_out10)))
@@ -2599,12 +2643,13 @@ try:
     finally:
         _so10.live_metrics = _core_live10
     check("core remote metrics: the panel host falls back to the command when its own reader fails",
-          _rlm10["read_ok"] is True and _rlm10["cpu_overall"] == 50.0 and _rlm10["cpu_cores"] == [50.0]
-          and _rlm10["ram_total"] == 8000000 * 1024 and _rlm10["ram_percent"] == 25.0
-          and _rlm10["disk_percent"] == 25.0,
+          _rlm10.get("read_ok") is True and _rlm10.get("cpu_overall") == 50.0
+          and _rlm10.get("cpu_cores") == [50.0]
+          and _rlm10.get("ram_total") == 8000000 * 1024 and _rlm10.get("ram_percent") == 25.0
+          and _rlm10.get("disk_percent") == 25.0,
           repr(_rlm10))
     check("core remote metrics: an unparseable meminfo line is skipped, not fatal",
-          _rlm10["swap_total"] == 0 and _rlm10["swap_percent"] == 0, repr(_rlm10))
+          _rlm10.get("swap_total") == 0 and _rlm10.get("swap_percent") == 0, repr(_rlm10))
     _core_restore10("run_command")
 
     # ── get_connection: auth methods, host-key pinning, pooling ────────────────────────────────
@@ -2846,10 +2891,12 @@ try:
         _sm_core._close_key = _raiser10(RuntimeError("pool bug"))
         _row10.port = 2222
         _upd_r10 = _try10(_db10.session.commit)
+        _db10.session.rollback()         # a no-op after a commit; after a failed one, it is not
         _core_restore10("_close_key")
         _sm_core.forget_remote_caches = _raiser10(RuntimeError("cache bug"))
         _db10.session.delete(_row10)
         _del_r10 = _try10(_db10.session.commit)
+        _db10.session.rollback()
         _core_restore10("forget_remote_caches")
         _gone10 = _RS10.query.filter_by(name="pin-row").first() is None
         _db10.session.remove()
@@ -3009,15 +3056,19 @@ try:
           repr(_acfg10.get("autoblock_hosts")))
     _wl_ok10 = _app10mod._security_whitelist_add(" 203.0.113.7 ")
     _wl_zone10 = _app10mod._security_whitelist_add("fe80::1%eth0\n[sshd]")
+    _wl_zone_only10 = _app10mod._security_whitelist_add("fe80::1%eth0")
     _wl_net10 = _app10mod._security_whitelist_add("198.51.100.0/24")
     check("app whitelist: an address is stored canonical; a zone id (a line break in a jail file) "
           "is refused", _wl_ok10 == "203.0.113.7" and _wl_zone10 is None
+          and _wl_zone_only10 is None
           and _acfg10["security_whitelist"] == ["198.51.100.0/24", "203.0.113.7"],
           repr(_acfg10.get("security_whitelist")))
     _wl_rm10 = _app10mod._security_whitelist_remove("203.0.113.7")
     _wl_rm_raw10 = _app10mod._security_whitelist_remove("  not-an-ip  ")
+    _app10mod._security_whitelist_add("2001:db8::1")
+    _wl_rm_v6_10 = _app10mod._security_whitelist_remove("2001:DB8:0::1")   # typed differently
     check("app whitelist: removal takes the canonical form, or the raw text for a stale entry",
-          _wl_rm10 == "203.0.113.7" and _wl_rm_raw10 == "not-an-ip"
+          _wl_rm10 == "203.0.113.7" and _wl_rm_raw10 == "not-an-ip" and _wl_rm_v6_10 == "2001:db8::1"
           and _app10mod._security_whitelist() == ["198.51.100.0/24"],
           repr(_acfg10.get("security_whitelist")))
 
@@ -3253,10 +3304,11 @@ try:
         check("app autoblock now: the named host is reconciled in the background (and a failure "
               "there is contained); an unknown id does nothing", _abn10 == ["west"], repr(_abn10))
 
-        _abw_hosts10 = [set(), {_E10["ea"], 424242, _E10["we"]}]
+        _abw_hosts10 = [set(), {_E10["ea"], 424242, _E10["we"], _E10["lo"]}]
         _app10mod._autoblock_hosts = lambda: _abw_hosts10.pop(0) if _abw_hosts10 else set()
-        _app10mod._autoblock_reconcile = lambda r: ((2, 1) if r.name == "east"
-                                                    else (_ for _ in ()).throw(RuntimeError("x")))
+        _app10mod._autoblock_reconcile = lambda r: (
+            (2, 1) if r.name == "east" else (0, 0) if r.name == "panel"      # nothing to change
+            else (_ for _ in ()).throw(RuntimeError("x")))
         _abw_slept10 = []
         _app10mod.time = _Clock10(time.time(), sleep=_sleeper10(3, _abw_slept10))
         _abw10 = _try10(_app10mod._autoblock_watch, _dbapp10)
@@ -3471,6 +3523,13 @@ try:
         check("app run state: a metrics read that raises is None (unknown), never False — and it "
               "was THIS read that raised", _lrs10 is None and _lrs_hits10 == ["css1"],
               repr((_lrs10, _lrs_hits10)))
+        # The other failed read: an SSH blip answers the all-zero default sample, not a raise.
+        _sm_core.server_live_metrics = lambda *a, **k: {"ram_total": 0, "port_open": False,
+                                                        "game_procs": 0}
+        _lrs_zero10 = _app10mod._live_run_state(_css1db10, _ea10)
+        _sm_core.server_live_metrics = _app_slm10
+        check("app run state: an all-zero sample (a read that failed quietly) is None, not stopped",
+              _lrs_zero10 is None, repr(_lrs_zero10))
 
         # Template filters, the language picker and the static asset URL.
         _app10mod.register_template_filters(_dbapp10)
@@ -3811,6 +3870,26 @@ def _ca13_wsgi_chain(app):
     return chain
 
 
+def _ca13_body(resp, gz=False):
+    """A test-client response's JSON (gunzipped first when `gz`), or None — never a raise.
+
+    A check reading a body the code under test got wrong must fail by name, not end section F.
+    """
+    try:
+        data = _gzip13.decompress(resp.data) if gz else resp.data
+        return _json10.loads(data)
+    except (OSError, EOFError, ValueError):
+        return None
+
+
+def _ca13_gunzip(data):
+    """`data` gunzipped, or None when it is not gzip."""
+    try:
+        return _gzip13.decompress(data)
+    except (OSError, EOFError):
+        return None
+
+
 def _ca13_logs(cap):
     """The messages a _cap10 handler collected, as one string."""
     return "\n".join(cap.msgs)
@@ -3895,21 +3974,22 @@ def _ca13_check_compression(app, client):
         raw = fh.read()
     st = client.get("/static/css/" + css, headers=gz)
     check("app responses: a static asset is gzipped, decodes to the file, and is cached a week",
-          all((st.headers.get("Content-Encoding") == "gzip", _gzip13.decompress(st.data) == raw,
+          all((st.headers.get("Content-Encoding") == "gzip", _ca13_gunzip(st.data) == raw,
                st.headers.get("Cache-Control") == "public, max-age=604800",
                "Accept-Encoding" in (st.headers.get("Vary") or ""))), repr(dict(st.headers)))
     big = client.get("/_p13/big", headers=gz)
     check("app responses: a big page is gzipped, its own Vary kept with Accept-Encoding added, "
           "and it must be revalidated", all((
               big.headers.get("Content-Encoding") == "gzip",
-              _json10.loads(_gzip13.decompress(big.data))["rows"][0] == "x" * 40,
+              (_ca13_body(big, gz=True) or {}).get("rows", [""])[0] == "x" * 40,
               [v.strip() for v in big.headers.get("Vary", "").split(",")][:2]
               == ["Origin", "Accept-Encoding"],
               big.headers.get("Cache-Control") == "no-cache, private")), repr(dict(big.headers)))
     plain, small = client.get("/_p13/big"), client.get("/_p13/small", headers=gz)
     check("app responses: no gzip without Accept-Encoding, nor below the size floor",
           all(("Content-Encoding" not in plain.headers, "Content-Encoding" not in small.headers,
-               _json10.loads(plain.data)["rows"][0] == "x" * 40, small.get_json() == {"ok": True})),
+               (_ca13_body(plain) or {}).get("rows", [""])[0] == "x" * 40,
+               _ca13_body(small) == {"ok": True})),
           repr((dict(plain.headers), dict(small.headers))))
     cap, off = _cap10(app.logger.name)
     try:
@@ -4137,6 +4217,15 @@ def _ca13_check_failing_boot():
                                    "audit IP anonymisation failed"))), logs[-400:])
     check("create_app: an unparseable audit retention deletes nothing",
           _ca13_raw("SELECT COUNT(*) FROM audit_log") == before, repr(before))
+    _ca13_add_probes(app)
+    client = app.test_client()
+    hsts = client.get("/_p13/small", headers={"X-Forwarded-Proto": "https"})
+    plain = client.get("/_p13/small")
+    check("app responses: with no proxy trusted, X-Forwarded-Proto: https alone still earns HSTS "
+          "(Tailscale Serve sets it), and plain HTTP does not",
+          all(("max-age=31536000" in (hsts.headers.get("Strict-Transport-Security") or ""),
+               "Strict-Transport-Security" not in plain.headers)),
+          repr((dict(hsts.headers), dict(plain.headers))))
     return app
 
 
