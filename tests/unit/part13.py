@@ -2768,13 +2768,18 @@ try:
     _c2_10 = _gc10(_srv10(id=902, host="box", port=22, auth_method="tailscale",
                           auth_credential="", host_key="ssh-ed25519 OLD"),
                    {"key": ("ssh-ed25519", "NEW")})
+    # ...and one with no key stored at all: first contact over the tailnet captures a key, which
+    # must not be pinned — WireGuard, not the SSH host key, is the trust anchor there.
+    _c2b_10 = _gc10(_srv10(id=912, host="box2.example.ts.net", port=22, auth_method="tailscale",
+                           auth_credential="", host_key=""), {"key": ("ssh-ed25519", "FIRST")})
     _tsi10.get_tailscale_info = _core_tsinfo10
     check("core connect: a tailscale host resolves a bare name via MagicDNS and uses the agent",
           isinstance(_c2_10, _FakeSSH10) and _c2_10.host == "box.tailabc.ts.net"
           and _c2_10.kw.get("allow_agent") is True and _c2_10.kw.get("look_for_keys") is True,
           repr(getattr(_c2_10, "kw", _c2_10)))
     check("core connect: over tailscale a changed host key is accepted, and never re-pinned",
-          _persisted10 == [], repr(_persisted10))
+          isinstance(_c2_10, _FakeSSH10) and isinstance(_c2b_10, _FakeSSH10)
+          and _persisted10 == [], repr((_c2_10, _c2b_10, _persisted10)))
 
     _c3_10 = _gc10(_srv10(id=903, host="192.0.2.33", auth_method="key", auth_credential=""), pooled=False)
     check("core connect: a key host with no stored path uses ~/.ssh/id_rsa",
