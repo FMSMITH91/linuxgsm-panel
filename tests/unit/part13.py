@@ -3027,11 +3027,20 @@ try:
           _rb_fail10 == "0.0.0.0" and _rb_cached10 == "0.0.0.0"
           and _app10mod._resolved_bind({"bind_host": "127.0.0.1", "port": 59999}) == "127.0.0.1",
           repr((_rb_fail10, _rb_cached10)))
-    _app10mod.open = _raiser10(OSError("VERSION missing"))
-    _ver10 = _app10mod._read_version()
-    _app_restore10("open")
-    check("app version: an unreadable VERSION file reads as 0.0.0, never an exception",
-          _ver10 == "0.0.0", repr(_ver10))
+    # The version is worked out in ONE place, system_ops.panel_version (the commit's date); app.py
+    # only asks it, once, at import. So: it is that answer, and a failure there is "unknown".
+    _so_pv10 = _app10mod.so.panel_version
+    try:
+        _app10mod.so.panel_version = lambda: "2026.9.26"
+        _ver10_ok = _app10mod._read_version()
+        _app10mod.so.panel_version = _raiser10(OSError("git missing"))
+        _ver10 = _app10mod._read_version()
+    finally:
+        _app10mod.so.panel_version = _so_pv10
+    check("app version: it is system_ops.panel_version's answer, not a second reading of VERSION",
+          _ver10_ok == "2026.9.26", repr(_ver10_ok))
+    check("app version: a version that cannot be worked out reads as 'unknown', never an exception",
+          _ver10 == "unknown", repr(_ver10))
 
     _now10 = time.time()
     _jobs10 = {"old": {"updated": _now10 - 8000}, "fresh": {"started": _now10 - 10},
