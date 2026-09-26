@@ -892,8 +892,12 @@ try:
     _bk7.subprocess = _Over(_p7_sp, Popen=lambda argv, **k: _popen.append(list(argv)))
     _bk7._service_restart_launcher = lambda script: ["LAUNCH", script]
     try:
-        _lg_name = _p7_archive("panel-backup-20240104-000000-manual.tar.gz",
-                               {"panel.db": b"db", "config.json": b"{}"})
+        # A REAL database: restore re-reads the archive's panel.db before anything is staged
+        # (GHSA-hh39-76g3-wxcx), so bytes that are not SQLite are refused before this path runs.
+        _lg_db = _p7_db(str(_b7 / "lg-src.db"), (("t", 2),))
+        with open(_lg_db, "rb") as _lg_f:
+            _lg_name = _p7_archive("panel-backup-20240104-000000-manual.tar.gz",
+                                   {"panel.db": _lg_f.read(), "config.json": b"{}"})
         _lg_res = _p7_call(_bk7.restore_backup, _lg_name, skip_safety_backup=True)
     finally:
         _bk7._helper_present = _bk7_saved["_helper_present"]

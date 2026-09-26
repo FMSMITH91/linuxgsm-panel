@@ -197,6 +197,15 @@ def _p9_trip(where, result=("", "refused by part12's tripwire", -1), exc=None):
     return _tripped
 
 
+def _p9_shell_as(server, user, sh, timeout=30, selfname=None):
+    """Run shell_as_game_user's own steps, with run_command looked up on the package."""
+    try:
+        cmd = _p9_core.game_user_cmd(user, sh, selfname=selfname)
+    except _p9_core.UnsafeGameAccount:
+        return _p9_core.GAME_ACCOUNT_REFUSED
+    return _p9_sm.run_command(server, cmd, timeout=timeout, sudo=False)
+
+
 def _p9_client(uid):
     c = _p9.test_client()
     with c.session_transaction() as s:
@@ -309,6 +318,12 @@ try:
     _p9_patch(_p9_so, "_run", _p9_trip("system_ops._run"))
     _p9_patch(_p9_so, "_run_verb", _p9_trip("system_ops._run_verb"))
     _p9_patch(_p9_so, "_git", _p9_trip("system_ops._git"))
+    # shell_as_game_user, sending through the PACKAGE's run_command: the checks below stub that
+    # name on the package, and the routes' game-account shell reads went through it until
+    # GHSA-hh39-76g3-wxcx moved them onto shell_as_game_user, whose own run_command is _core's.
+    # Left real, those reads went past every stub to the tripwire and still passed, on the
+    # "couldn't tell" the tripwire's refusal reads as. The command is the real builder's.
+    _p9_patch(_p9_sm, "shell_as_game_user", _p9_shell_as)
     # Rendering reads Tailscale state for the nav; that is a host command.
     _p9_patch(_p9_ts, "get_tailscale_info", lambda force_refresh=False: NS(dns_name=None))
     # Notifications are recorded, never sent.
@@ -1924,10 +1939,18 @@ try:
           _r.status_code == 403 and _p9_json(_r).get("lines") == [])
     _sf_tail = []
     _p9_patch(_p9_sm, "read_as_game_user",
-              lambda remote, user, sh, timeout=30: (_sf_tail.append(sh), ("B\nE", "", 0))[1])
+              lambda remote, user, sh, timeout=30, selfname=None:
+              (_sf_tail.append((sh, selfname)), ("B\nE", "", 0))[1])
     _d = _p9_json(_A.get("/api/console/%d?lines=lots" % P9_GS))
     check("console: a non-numeric ?lines= falls back to the default window, not a 500",
-          _d.get("readable") is True and _sf_tail and "tail -250 " in _sf_tail[-1], repr(_sf_tail))
+          _d.get("readable") is True and _sf_tail and "tail -250 " in _sf_tail[-1][0], repr(_sf_tail))
+    # The read names the console log, <lgsm_name>-console.log, so the script name is passed to be
+    # checked (GHSA-hh39-76g3-wxcx): the builder refuses an unsafe one before anything is sent.
+    with _p9.app_context():
+        _sf_lgsm = db.session.get(GameServer, P9_GS).lgsm_name
+    check("console: the read passes the server's LinuxGSM script name along to be checked",
+          _sf_tail and _sf_tail[-1][1] == _sf_lgsm and _sf_lgsm in _sf_tail[-1][0],
+          repr((_sf_tail[-1:], _sf_lgsm)))
 
     _sf_lt = [(False, "")]
     _p9_patch(_p9_sf, "lgsm_write_config", lambda *a, **k: _sf_lt[0])
@@ -2195,7 +2218,8 @@ try:
     _p9_patch(_p9_sm, "create_game_user",
               lambda remote, user, timeout=30: (_ms_log.append("useradd"), _ms_boom("useradd"),
                                                 ("", "", 0))[2])
-    _p9_patch(_p9_sm, "read_as_game_user", lambda remote, user, sh, timeout=30: ("EXISTS", "", 0))
+    _p9_patch(_p9_sm, "read_as_game_user",
+              lambda remote, user, sh, timeout=30, selfname=None: ("EXISTS", "", 0))
     _p9_patch(_p9_sm, "list_server_commands", lambda r, s, l: (_ms_boom("cmds"), _ms_next("cmds"))[1])
     _p9_patch(_p9_sm, "_invalidate_port_scan", lambda rid: None)
     _p9_patch(_p9_sm, "host_os_slug", _raise_conn)
@@ -2576,10 +2600,10 @@ finally:
     except OSError:
         pass
 
-check("p09: no route under test reached a real transport (every host call was stubbed)",
+check("part12: no route under test reached a real transport (every host call was stubbed)",
       not _P9_TRIPPED, repr(_P9_TRIPPED[:6]))
-check("p09: nothing in this part created the checkout's own data/panel.db",
+check("part12: nothing in this part created the checkout's own data/panel.db",
       _P9_LIVE_DB_EXISTED or not os.path.exists(_P9_LIVE_DB), _P9_LIVE_DB)
-check("p09: every deferred worker was run (none left to leak into a later check)",
+check("part12: every deferred worker was run (none left to leak into a later check)",
       not _p9_queue,
       "%d left: %s" % (len(_p9_queue), [getattr(f, "__qualname__", f) for f, _a, _k in _p9_queue]))

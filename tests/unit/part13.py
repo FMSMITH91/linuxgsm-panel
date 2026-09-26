@@ -1191,9 +1191,12 @@ try:
     _ts10._open_tailscale(_tss10, _tsrv10, 100, 40)
     _tss10._pump.join(timeout=5)
     _targv10, _tkw10 = _pop_calls10[0] if _pop_calls10 else (None, {})
-    check("terminal tailscale: ssh -tt to user@host on the host's port, in its own session",
+    # The destination follows `--`: a stored login or host is never read as an ssh option
+    # (GHSA-hh39-76g3-wxcx, F4).
+    check("terminal tailscale: ssh -tt to user@host (after --) on the host's port, in its own "
+          "session",
           _targv10 == ["ssh", "-tt", "-o", "StrictHostKeyChecking=accept-new",
-                       "-o", "ConnectTimeout=20", "-p", "2222", "admin@box.tail.ts.net"]
+                       "-o", "ConnectTimeout=20", "-p", "2222", "--", "admin@box.tail.ts.net"]
           and _tkw10.get("start_new_session") is True
           and (_tkw10.get("env") or {}).get("TERM") == "xterm-256color",
           repr(_targv10))
@@ -1397,10 +1400,19 @@ _db10.init_app(_dbapp10)
 
 
 def _reset_db10():
-    """A fresh, empty schema. Call inside _dbapp10's app context."""
+    """A fresh, empty schema, and no row-keyed state. Call inside _dbapp10's app context.
+
+    A fresh database hands out ids 1, 2, 3 again, and the panel-state maps keyed by row id still
+    hold what earlier parts wrote for THEIR rows 1, 2, 3 (part12's stops leave _expected_offline
+    entries): the monitor then read gmod1 as a stop the panel had issued and alerted nothing. The
+    maps are emptied here, as the pruner would for rows that no longer exist; _restore_pstate10
+    puts back what they held.
+    """
     _db10.session.rollback()
     _db10.drop_all()
     _db10.create_all()
+    for _m, _snap in _pstate_snap10:
+        _m.clear()
 
 
 def _mk_remote10(name, **kw):
@@ -2371,11 +2383,11 @@ try:
     _cli_err10 = _sm_core._run_via_ssh_cli(_TSREM10, "true")
     _core_restore10("subprocess", "_collect_capped", "_ssh_mux_opts", "_resolve_ts_host",
                     "_ssh_connect_timeout")
-    check("core ssh cli: the argv is ssh -T, batch mode, the configured timeout, and root via "
-          "`sudo bash -c` when asked",
+    check("core ssh cli: the argv is ssh -T, batch mode, the configured timeout, the destination "
+          "after --, and root via `sudo bash -c` when asked",
           _cli_pop10 and _cli_pop10[0][0] == [
               "ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
-              "-o", "ConnectTimeout=7", "-p", "22", "admin@box.ts.net",
+              "-o", "ConnectTimeout=7", "-p", "22", "--", "admin@box.ts.net",
               "sudo bash -c " + _shlex10.quote("cat /etc/hostname")],
           repr(_cli_pop10[:1]))
     check("core ssh cli: a secret goes down stdin (a pipe), never on the command line",
