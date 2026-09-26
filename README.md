@@ -65,6 +65,8 @@ Trigger it one of two ways:
 6. **Starts the service** back up.
 7. **Health-checks that the panel answers.** On success it prunes old snapshots; on failure it **auto-rolls-back the code *and* database** to the snapshot — so a broken release can't leave you with a dead panel.
 
+On a root / system install, the updater also refreshes the root-owned pieces in `/usr/local/lib/linuxgsm-panel` (the privileged helper, the offline database tool, gamedig's lockfile and install script, and the installer itself). It takes them from `main` only when the panel starts the update, and never from a commit of `main` older than the last one it installed them from. If you switch the panel to another branch, its code moves but those pieces stay as they were. To take them from a branch on purpose, run `cd / && sudo PANEL_BRANCH=<branch> bash /usr/local/lib/linuxgsm-panel/install.sh` yourself over SSH (not in the panel's own terminal, which counts as the panel). [SECURITY.md](.github/SECURITY.md) explains why.
+
 ## Uninstall
 
 ```bash

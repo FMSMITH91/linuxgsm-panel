@@ -833,6 +833,24 @@ regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+- **A compromised panel can no longer send root back to an old commit, or choose the branch root
+  installs from.** On a root install, the panel could reset its own checkout to an old commit of
+  main and ask for a self-update. Root accepted it (every commit main was ever at is on its
+  first-parent line) and installed that commit's installer root-owned. One from before e26a644
+  read the helper out of the panel-owned `.git`, so a planted replace ref became the helper on the
+  next update. Root now keeps a source floor in `/usr/local/lib/linuxgsm-panel/.source-floor`: the
+  newest commit of main it has staged from, never lowered, with e26a644 when there is no file yet.
+  It refuses any commit below the floor, and any commit whose installer does not enforce the floor
+  itself. The auto-deploy refuses the same commits, so re-running an old CI run cannot ship one.
+  Separately, the branch the panel tracks (`PANEL_BRANCH`) decided which branch root verified
+  against, so any pushed branch could supply the helper. When the panel starts an update, root now
+  takes its pieces from main only. On another branch the code still switches, and the helper,
+  `db_maintenance.py`, the installer and the recovery command are left as they were, with a
+  message in the update log. An operator testing a branch as root (`cd / && sudo
+  PANEL_BRANCH=<branch> bash /usr/local/lib/linuxgsm-panel/install.sh`, or from a root shell) still
+  gets that branch's pieces. The helper marks the
+  panel's runs in a way the panel cannot remove, and `.github/SECURITY.md` explains how. Installs
+  run as a normal user are unchanged.
 - **A tag named like a branch can no longer stand in for it, and a commit main only reached
   through a merge no longer counts as main.** git reads a bare `origin/main` as a tag called
   `origin/main` before the branch, and the installer's clone, its fetches and the panel's branch

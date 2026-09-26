@@ -78,7 +78,12 @@ REPO_URL="https://github.com/FMSMITH91/linuxgsm-panel.git"
 # Branch to track. The panel can switch branches from the UI by exporting PANEL_BRANCH
 # before invoking this script; unset (the normal path) keeps the default "main" unchanged.
 # Restricted to a safe git-ref charset so it can't inject options/paths into git commands.
-DEFAULT_BRANCH="main"
+#
+# That choice moves the panel's CODE. It does not, by itself, choose where root takes its OWN pieces
+# from (the helper, db_maintenance, this installer): when the panel started the run, root takes
+# those only from TRUSTED_BRANCH, whatever PANEL_BRANCH says. See root_source_commit.
+TRUSTED_BRANCH="main"
+DEFAULT_BRANCH="${TRUSTED_BRANCH}"
 if [ -n "${PANEL_BRANCH:-}" ] && printf '%s' "${PANEL_BRANCH}" | grep -Eq '^[A-Za-z0-9._/-]{1,100}$' \
    && [ "${PANEL_BRANCH#-}" = "${PANEL_BRANCH}" ] && [ "${PANEL_BRANCH##*..*}" = "${PANEL_BRANCH}" ]; then
     DEFAULT_BRANCH="${PANEL_BRANCH}"
@@ -963,9 +968,10 @@ check_origin_trusted() {
 #     helper stale on every such update; or else
 #   * ROOT'S OWN CLONE of REPO_URL (ROOT_GIT, below), fetched by root's git with no user or system
 #     config. The panel's HEAD is only a request there: it is honoured only when root's clone has
-#     that commit on ${DEFAULT_BRANCH}. Nothing else from the panel's .git is read. A checkout at a
-#     commit upstream does not have, or with no .git at all, gets NO refresh, and the installer
-#     says so.
+#     that commit on the branch root verifies against, no older than root's source floor, with an
+#     installer that enforces that floor (root_source_commit says which branch, and why each rule
+#     is there). Nothing else from the panel's .git is read. A checkout at a commit upstream does
+#     not have, or with no .git at all, gets NO refresh, and the installer says so.
 #
 # Run as the account that owns the checkout (a per-user install), none of this applies: that
 # account can already rewrite the install.sh it is running.
@@ -977,6 +983,22 @@ HELPER_DIR="/usr/local/lib/linuxgsm-panel"
 ROOT_GIT="${HELPER_DIR}/.source.git"
 ROOT_SRC_COMMIT=""
 ROOT_SRC_TRIED=0
+# Root's SOURCE FLOOR: the newest commit of ${TRUSTED_BRANCH} root has staged its own pieces from.
+# Root-owned 0644, in the root-owned HELPER_DIR, so the panel user can neither write nor replace
+# it. root_source_commit refuses any commit the floor is not an ancestor of, and raises the floor to
+# each commit of ${TRUSTED_BRANCH} it accepts, never lowering it. Absent (a fresh install, or a host
+# that has not staged from root's clone since this was added), it is ROOT_SRC_FLOOR_SEED: e26a644,
+# the first installer that staged from root's own clone instead of the panel-owned .git.
+#
+# THE NEXT LINE IS LOAD-BEARING TEXT, NOT JUST AN ASSIGNMENT. Root stages only from a commit whose
+# install.sh contains it, exactly, as a whole line, and deploy.yml ships only such an installer: an
+# installer from before the floor existed, once root-owned, would accept any older commit again.
+# Every installer since carries this line, so changing it makes every installed copy refuse every
+# newer commit. Never edit or move it; tests/unit part06 holds it in place.
+ROOT_SRC_FLOOR_FILE="${HELPER_DIR}/.source-floor"
+ROOT_SRC_FLOOR_SEED="e26a64417c7992a6d0a0de39e33437a1949efe7f"
+# shellcheck disable=SC2016  # ROOT_SRC_FLOOR_FILE's line as TEXT: ${HELPER_DIR} must not expand
+_ROOT_SRC_FLOOR_LINE='ROOT_SRC_FLOOR_FILE="${HELPER_DIR}/.source-floor"'
 
 # Root's git, on root's clone, with no config it did not write: no user or system gitconfig (a
 # `url.<x>.insteadOf` there would repoint REPO_URL, a credential helper would run as root), and no
@@ -1066,17 +1088,120 @@ _operator_file() {
     printf '%s\n' "${p}"
 }
 
+# Did the PANEL start this run, rather than someone running this installer as root by hand?
+#
+# It matters for one decision: which branch root verifies its own pieces against (see
+# root_source_commit). PANEL_BRANCH reaches this script both ways, and only an operator's choice of
+# it may decide what root installs as the privilege boundary.
+#
+# The two signs below are ones the panel user cannot remove, so it cannot pass for an operator:
+#   * PANEL_SELF_UPDATE, which the helper's panel-self-update verb sets in the environment it builds
+#     for this installer. It sets it AFTER copying its own environment, so no value the panel hands
+#     sudo can take it away, and under the narrow grant that verb is the panel's only way to run
+#     this installer as root. (Under the wide one the panel is root already; nothing here helps.)
+#   * SUDO_UID naming the panel's own account. sudo sets it, and under the narrow grant the panel
+#     cannot override it. It covers a helper from before PANEL_SELF_UPDATE existed running a newer
+#     installer: an install_root_tools run that replaced the installer but failed on the helper.
+# An operator's `sudo bash install.sh`, a root login and the CI deploy carry neither. The host
+# terminal's password-gated sudo (PANEL_TERMINAL_SUDO) carries the second, because that shell runs
+# AS the panel user, so a run started there counts as the panel's: a terminal the panel renders is
+# one it can type into. Run it over SSH instead.
+_panel_started_run() {
+    [ -z "${PANEL_SELF_UPDATE:-}" ] || return 0
+    local pu=""
+    [ -n "${SUDO_UID:-}" ] && [ -n "${PANEL_USER:-}" ] || return 1
+    pu="$(id -u "${PANEL_USER}" 2>/dev/null)" || return 1
+    [ -n "${pu}" ] && [ "${SUDO_UID}" = "${pu}" ]
+}
+
+# Root's source floor, as a full commit id: the file's, or the seed when there is no file. A file
+# that is there but is not one regular file holding one full id is NOT read as "no floor": falling
+# back to the seed would lower it. Fails, having said so (on stderr: callers capture stdout),
+# instead. The file's integrity is HELPER_DIR's: root-owned 0755, so only root creates or replaces
+# anything in it — the same ground root's clone beside it stands on.
+_source_floor() {
+    local f="${ROOT_SRC_FLOOR_FILE}" v=""
+    if [ ! -e "${f}" ] && [ ! -L "${f}" ]; then
+        printf '%s\n' "${ROOT_SRC_FLOOR_SEED}"
+        return 0
+    fi
+    if [ -f "${f}" ] && [ ! -L "${f}" ]; then
+        v="$(head -c 100 -- "${f}" 2>/dev/null | tr -d '[:space:]')" || v=""
+    fi
+    case "${v}" in
+        *[!0-9a-f]*|"") v="" ;;
+    esac
+    if [ "${#v}" -ne 40 ]; then
+        warn "Root's source floor ${f} is not a single commit id, so root stages nothing until it is" >&2
+        warn "fixed. Delete it to fall back to the built-in floor; the next update records it again." >&2
+        return 1
+    fi
+    printf '%s\n' "${v}"
+}
+
+# Raise the floor to $1. Never lowers it: $1 must contain the current floor. Written beside the old
+# one and renamed over it, so a reader never sees half a file.
+_raise_source_floor() {
+    local new="$1" cur="" tmp="${ROOT_SRC_FLOOR_FILE}.new"
+    cur="$(_source_floor)" || return 1
+    if [ "${cur}" = "${new}" ] && [ -f "${ROOT_SRC_FLOOR_FILE}" ]; then
+        return 0
+    fi
+    _rootgit merge-base --is-ancestor "${cur}" "${new}" >/dev/null 2>&1 || return 1
+    rm -f -- "${tmp}" 2>/dev/null || true
+    if ( umask 022 && printf '%s\n' "${new}" > "${tmp}" ) 2>/dev/null \
+       && chmod 0644 -- "${tmp}" 2>/dev/null && mv -f -- "${tmp}" "${ROOT_SRC_FLOOR_FILE}" 2>/dev/null; then
+        return 0
+    fi
+    rm -f -- "${tmp}" 2>/dev/null || true
+    return 1
+}
+
+# Does this commit's own install.sh enforce the floor? Read through, not `grep -q`: grep would exit
+# at the first match and cat-file die of SIGPIPE writing the rest, failing the pipe exactly when it
+# matches (this file runs on for about 90 KB past that line).
+_enforces_source_floor() {
+    local n=""
+    n="$(_rootgit cat-file blob "$1:install.sh" 2>/dev/null \
+         | grep -cxF -- "${_ROOT_SRC_FLOOR_LINE}" 2>/dev/null || true)"
+    [ "${n:-0}" -ge 1 ] 2>/dev/null
+}
+
 # Which commit root may stage from: the checkout's HEAD, once root's own clone shows that commit is
-# on REPO_URL's ${DEFAULT_BRANCH} — on its first-parent line, not merely reachable through a merge.
+# on the branch root verifies against — on its first-parent line, not merely reachable through a
+# merge — no older than root's source floor, with an installer that enforces that floor.
 # Sets ROOT_SRC_COMMIT; returns 1, having said why, otherwise.
 # Asked once per run, however many files are staged.
+#
+# WHICH BRANCH. The panel names the branch it tracks (PANEL_BRANCH), and this verified the panel's
+# HEAD against whatever that was — so a compromised panel plus any branch pushed to REPO_URL decided
+# the root-owned helper. When the panel started this run (_panel_started_run), root verifies against
+# ${TRUSTED_BRANCH} and nothing else; on any other branch it withholds its pieces, as it does for an
+# untrusted origin, and says how to take them from that branch on purpose. When an operator runs
+# this as root, PANEL_BRANCH is theirs to choose, and root follows it.
+#
+# THE FLOOR. Every commit ever on ${TRUSTED_BRANCH}'s first-parent line passes the check above, and
+# the panel moves its own HEAD. So it could reset its checkout to an old commit and ask for a
+# self-update, and root installed that commit's installer root-owned — one from before e26a644
+# read the helper out of the panel-owned .git, where a planted replace ref then became the helper
+# root installs. Root now refuses any commit its floor is not an ancestor of, and raises the floor
+# to each commit of ${TRUSTED_BRANCH} it accepts. An operator's branch is the one exception: its
+# TIP is accepted though it forked below the floor (the branch the operator chose, as they chose
+# it), and staging from it leaves the floor where it is, so ${TRUSTED_BRANCH} is not locked out
+# afterwards. No other commit of that branch is: below the tip, its first-parent line is
+# ${TRUSTED_BRANCH}'s old history, and the panel moves its HEAD while this runs.
+#
+# THE FLOOR'S OWN FLOOR. An installer from before the floor existed ignores it, so staging one
+# root-owned would let the NEXT run accept anything again — including e26a644's own ancestors. The
+# seed alone does not stop that on a host with no floor file yet. So the commit's install.sh must
+# carry _ROOT_SRC_FLOOR_LINE, which every installer that enforces the floor does.
 root_source_commit() {
     if [ "${ROOT_SRC_TRIED}" -eq 1 ]; then
         [ -n "${ROOT_SRC_COMMIT}" ]
         return
     fi
     ROOT_SRC_TRIED=1
-    local want=""
+    local want="" branch="${DEFAULT_BRANCH}" floor="" tip=""
     [ -d "${PANEL_DIR}/.git" ] \
         && want="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null || true)"
     # The panel's git produced this, so it is a request, not a fact: a commit id, or nothing.
@@ -1090,6 +1215,19 @@ root_source_commit() {
             warn "This checkout has no commit root can verify, so root stages nothing from it."
             return 1 ;;
     esac
+    if _panel_started_run; then
+        if [ "${DEFAULT_BRANCH}" != "${TRUSTED_BRANCH}" ]; then
+            warn "The panel started this update on its branch '${DEFAULT_BRANCH}'. When the panel asks,"
+            warn "root takes its own pieces only from ${REPO_URL}'s ${TRUSTED_BRANCH}, so it stages"
+            warn "nothing from this checkout; the code still updates. To take them from"
+            warn "'${DEFAULT_BRANCH}' on purpose, run the root-owned installer yourself (not in the"
+            warn "panel's own terminal, which counts as the panel):"
+            warn "    cd / && sudo PANEL_BRANCH=${DEFAULT_BRANCH} bash ${HELPER_DIR}/install.sh"
+            return 1
+        fi
+        branch="${TRUSTED_BRANCH}"
+    fi
+    floor="$(_source_floor)" || return 1
     if ! ${H_SUDO:-} test -d "${ROOT_GIT}"; then
         _rootgit init --quiet --bare >/dev/null 2>&1 || {
             warn "Could not create root's copy of the repository at ${ROOT_GIT}."
@@ -1099,9 +1237,15 @@ root_source_commit() {
     # once the panel had tracked `fix` and then switched to `fix/x` (or the reverse), git refused
     # to create the new ref beside the old one and every later run warned "Could not fetch" and
     # left the helper stale. The ref only has to hold the tip this run compares against.
-    if ! _rootgit fetch --quiet --no-tags "${REPO_URL}" \
-            "+refs/heads/${DEFAULT_BRANCH}:refs/root-src/tip" >/dev/null 2>&1; then
-        warn "Could not fetch ${REPO_URL} (${DEFAULT_BRANCH}) into root's own copy, so root stages"
+    #
+    # On an operator's branch, ${TRUSTED_BRANCH} is fetched beside it, into a second fixed ref: the
+    # floor is a commit of ${TRUSTED_BRANCH}, and a clone holding only a branch forked below it
+    # would not know the floor at all.
+    local -a refspecs=("+refs/heads/${branch}:refs/root-src/tip")
+    [ "${branch}" = "${TRUSTED_BRANCH}" ] \
+        || refspecs+=("+refs/heads/${TRUSTED_BRANCH}:refs/root-src/trusted")
+    if ! _rootgit fetch --quiet --no-tags "${REPO_URL}" "${refspecs[@]}" >/dev/null 2>&1; then
+        warn "Could not fetch ${REPO_URL} (${branch}) into root's own copy, so root stages"
         warn "nothing from this checkout. The panel still works; re-run to retry."
         return 1
     fi
@@ -1110,11 +1254,63 @@ root_source_commit() {
     # _on_first_parent_line). refs/root-src/tip was written by the fetch just above, into root's own
     # tagless clone, so there is no other ref of that name for it to fall through to.
     if ! _on_first_parent_line _rootgit "${want}" refs/root-src/tip; then
-        warn "This checkout is at ${want}, which is not on ${REPO_URL}'s ${DEFAULT_BRANCH}."
+        warn "This checkout is at ${want}, which is not on ${REPO_URL}'s ${branch}."
         warn "Root stages nothing from it."
         return 1
     fi
+    if ! _rootgit merge-base --is-ancestor "${floor}" "${want}" >/dev/null 2>&1; then
+        tip="$(_rootgit rev-parse --verify --quiet 'refs/root-src/tip^{commit}' 2>/dev/null || true)"
+        if ! _rootgit cat-file -e "${floor}^{commit}" 2>/dev/null \
+           && { [ "${branch}" = "${TRUSTED_BRANCH}" ] || [ "${want}" != "${tip}" ]; }; then
+            warn "Root's source floor ${floor} is not in ${REPO_URL}'s history, so root"
+            warn "stages nothing. If this installer now points at another repository, delete"
+            warn "${ROOT_SRC_FLOOR_FILE} to start its floor again."
+            return 1
+        fi
+        if [ "${branch}" = "${TRUSTED_BRANCH}" ] || [ "${want}" != "${tip}" ]; then
+            warn "This checkout is at ${want}, older than root's source floor ${floor}."
+            warn "Root never goes back below it, so it stages nothing from this checkout. (The floor"
+            warn "is the newest commit of ${TRUSTED_BRANCH} root has staged from: ${ROOT_SRC_FLOOR_FILE}.)"
+            return 1
+        fi
+    fi
+    if ! _enforces_source_floor "${want}"; then
+        warn "This checkout is at ${want}, whose installer predates root's source floor: installed"
+        warn "root-owned, it would accept older commits again. Root stages nothing from it."
+        return 1
+    fi
     ROOT_SRC_COMMIT="${want}"
+    # Raised only by a commit of the trusted branch. An operator's branch forks from it and may
+    # never be merged as itself (a squash merge makes a new commit), so a floor on the branch would
+    # leave every later commit of the trusted branch below it, and root refusing them all.
+    if [ "${branch}" = "${TRUSTED_BRANCH}" ] && ! _raise_source_floor "${want}"; then
+        warn "Could not record ${want} as root's source floor in ${ROOT_SRC_FLOOR_FILE}; it stays"
+        warn "where it was. Root still stages from this commit."
+    fi
+}
+
+# A fresh install stages from root's own checkout, without root_source_commit, so it would leave
+# the floor at the seed until the first update through root's clone — and a compromised panel could
+# ask root to go back to any commit between the two. Raise it here to the commit that checkout is
+# at, when root's own clone shows that commit on ${TRUSTED_BRANCH}'s first-parent line. A branch or
+# a local commit leaves the floor alone, as does no network. Root runs git in that checkout only
+# because every file in it, .git included, is root's (_checkout_is_roots). An operator's own tree
+# is not read this way — nothing checks who can write its .git — so a root update from one leaves
+# the floor to the next update through root's clone.
+_record_own_source_floor() {
+    [ "$(id -u)" -eq 0 ] && _checkout_is_roots && [ -d "${PANEL_DIR}/.git" ] || return 0
+    local have=""
+    have="$(git -C "${PANEL_DIR}" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null || true)"
+    case "${have}" in ""|*[!0-9a-f]*) return 0 ;; esac
+    _source_floor >/dev/null 2>&1 || return 0
+    if ! ${H_SUDO:-} test -d "${ROOT_GIT}"; then
+        _rootgit init --quiet --bare >/dev/null 2>&1 || return 0
+    fi
+    _rootgit fetch --quiet --no-tags "${REPO_URL}" \
+        "+refs/heads/${TRUSTED_BRANCH}:refs/root-src/tip" >/dev/null 2>&1 || return 0
+    _on_first_parent_line _rootgit "${have}" refs/root-src/tip || return 0
+    _raise_source_floor "${have}" || true
+    return 0
 }
 
 # Answer root_source_commit in THIS shell, before any `x="$(stage_root_source …)"`. Those run in a
@@ -1335,6 +1531,11 @@ install_root_tools() {
     else
         warn "Could not read db_maintenance.py from the repository — it was NOT refreshed."
     fi
+    # A fresh install staged the helper from root's own checkout; record where that is on the trusted
+    # branch, so the panel cannot ask root to go back below it (the update path records it inside
+    # root_source_commit).
+    [ "${HELPER_OK}" -eq 1 ] && _record_own_source_floor
+    return 0
 }
 
 # ── gamedig, from the pinned lockfile ──────────────────────────────────────────────────────────

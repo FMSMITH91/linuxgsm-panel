@@ -12,9 +12,9 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # priority drop-in, the panel files + its data (DB / config / encryption keys), and — for a
 # root install — the sudoers entry, the root-owned helper directory
 # (/usr/local/lib/linuxgsm-panel: panel-helper, db_maintenance.py, panel.conf, install.sh,
-# recover.sh, .source.git, root's own clone of the repository, and gamedig/, the player-query
-# tool's installed tree), the `gamedig` links into that tree in /usr/local/bin and /usr/bin, the
-# weekly gamedig cron, the panel's sysctl tuning, and the dedicated 'lgsmpanel' user.
+# recover.sh, .source.git, root's own clone of the repository, .source-floor, and gamedig/,
+# the player-query tool's installed tree), the `gamedig` links into that tree in /usr/local/bin
+# and /usr/bin, the weekly gamedig cron, the panel's sysctl tuning, and the dedicated 'lgsmpanel' user.
 #
 # That list is the point: install.sh writes in five places OUTSIDE the panel directory, and
 # an uninstaller that only removes the obvious one leaves a root cron running weekly and a

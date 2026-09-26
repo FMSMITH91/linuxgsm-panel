@@ -2538,6 +2538,25 @@ def _open_log_in_dir(dir_path, name):
     return os.fdopen(fd, "w", encoding="utf-8")
 
 
+def _self_update_env(ref, branch):
+    """The environment the root-owned installer runs with for a panel-self-update.
+
+    PANEL_SELF_UPDATE is what tells the installer the PANEL chose this run, and so chose
+    PANEL_BRANCH: root then verifies its own pieces (this helper, db_maintenance, the installer)
+    against main only, and withholds them on any other branch. An operator running install.sh as
+    root chooses the branch themselves, and root follows it. Set AFTER copying os.environ, so no
+    value the panel hands sudo can remove it — this verb is the panel's only way to run the
+    installer as root, so there is no route on which the panel looks like the operator."""
+    env = dict(os.environ)
+    env["PANEL_UPDATE_REF"] = "" if ref == "-" else ref
+    env["PANEL_BRANCH"] = "" if branch == "-" else branch
+    # A panel update must never apply host OS packages or reboot the box — that would take every
+    # game server down mid-update. OS updates stay a separate, explicit action.
+    env["PANEL_NO_UPGRADE"] = "1"
+    env["PANEL_SELF_UPDATE"] = "1"
+    return env
+
+
 def _self_update_detached(panel_dir, data_dir, ref, branch):
     """The self-update, in the grandchild. NEVER RETURNS — every path ends in os._exit.
 
@@ -2563,12 +2582,7 @@ def _self_update_detached(panel_dir, data_dir, ref, branch):
     except OSError:
         # Best-effort detach; the installer writes its own log either way.
         pass
-    env = dict(os.environ)
-    env["PANEL_UPDATE_REF"] = "" if ref == "-" else ref
-    env["PANEL_BRANCH"] = "" if branch == "-" else branch
-    # A panel update must never apply host OS packages or reboot the box — that would take every
-    # game server down mid-update. OS updates stay a separate, explicit action.
-    env["PANEL_NO_UPGRADE"] = "1"
+    env = _self_update_env(ref, branch)
     try:
         with _open_log_in_dir(data_dir, SELF_UPDATE_LOG) as log:
             log.write("=== panel self-update ===\n")

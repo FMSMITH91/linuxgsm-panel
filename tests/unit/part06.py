@@ -1390,6 +1390,18 @@ def _needs_tmpfile(repo, ref, env=None):
 _rs_fns = (_inst_shfn("_gitc") + _inst_shfn("_on_first_parent_line")
            + _inst[_inst.index('ROOT_GIT="${HELPER_DIR}/.source.git"'):
                    _inst.index("\n}\n", _inst.index("stage_root_source() {")) + 3])
+# Root's source floor has a load-bearing LINE: root stages only from a commit whose install.sh
+# carries it, exactly, and deploy.yml ships only such an installer. Every installed copy looks for
+# it in every newer commit, so it must never change — held here: the variable naming it quotes it,
+# and it is in the file once, as a whole line, assigning the floor file every check reads.
+_RS_FLOOR_M = re.search(r"^_ROOT_SRC_FLOOR_LINE='([^'\n]*)'$", _inst, re.M)
+_RS_FLOOR_LINE = _RS_FLOOR_M.group(1) if _RS_FLOOR_M else "(no _ROOT_SRC_FLOOR_LINE in install.sh)"
+check("install.sh: root's source floor line is exactly the one every enforcing installer carries",
+      _RS_FLOOR_LINE == 'ROOT_SRC_FLOOR_FILE="${HELPER_DIR}/.source-floor"'
+      and _inst.splitlines().count(_RS_FLOOR_LINE) == 1, _RS_FLOOR_LINE)
+check("install.sh: ...and the built-in floor is e26a644, in full",
+      re.search(r'^ROOT_SRC_FLOOR_SEED="e26a64417c7992a6d0a0de39e33437a1949efe7f"$', _inst, re.M)
+      is not None)
 _rs_sb = _tempfile.mkdtemp(prefix="rootsrc-")
 try:
     _rs_up = os.path.join(_rs_sb, "upstream")
@@ -1400,22 +1412,41 @@ try:
         _rs_git("config", _k, _v, cwd=_rs_up)
     with open(os.path.join(_rs_up, "tools", "panel-helper"), "w") as _f:
         _f.write("GOOD-HELPER\n")
+    # An installer that enforces root's source floor: root stages only from a commit whose
+    # install.sh carries that line (see the floor checks further down).
+    with open(os.path.join(_rs_up, "install.sh"), "w") as _f:
+        _f.write("#!/bin/bash\n%s\n" % _RS_FLOOR_LINE)
     _rs_git("add", "-A", cwd=_rs_up)
     _rs_git("commit", "-qm", "upstream", cwd=_rs_up)
+    _rs_first = _rs_git("rev-parse", "HEAD", cwd=_rs_up)
 
     def _rs_case(name, tamper, roots=False, src=None, panel_user=None, script=None, seed=None,
-                 env=None):
-        """Clone upstream as 'the panel's checkout', tamper with it, stage as 'root'."""
+                 env=None, up=None, branch="main", floor=None, floor_seed=None, run_env=None,
+                 pre="", after=""):
+        """Clone upstream as 'the panel's checkout', tamper with it, stage as 'root'.
+
+        up: the upstream (default _rs_up); branch: DEFAULT_BRANCH, i.e. PANEL_BRANCH; floor: the
+        contents of root's source floor file before the run (None: no file); floor_seed: the
+        built-in floor (default: up's first commit — the real one, e26a644, is in no fixture);
+        run_env: variables for the run (PANEL_SELF_UPDATE, SUDO_UID), over an environment with
+        neither; pre / after: shell run before the fixture's functions are defined / after the
+        staging. The floor file's contents after the run are printed as FLOOR=."""
+        up = up or _rs_up
         d = os.path.join(_rs_sb, name)
         panel, helper = os.path.join(d, "panel"), os.path.join(d, "helper")
         os.makedirs(helper)
         if seed:
             seed(os.path.join(helper, ".source.git"))
-        _rs_git("clone", "-q", "--no-hardlinks", _rs_up, panel)
+        if floor is not None:
+            with open(os.path.join(helper, ".source-floor"), "w") as _ff:
+                _ff.write(floor)
+        _rs_git("clone", "-q", "--no-hardlinks", up, panel)
         for _k, _v in (("user.email", "t@example.invalid"), ("user.name", "t"),
                        ("commit.gpgsign", "false")):
             _rs_git("config", _k, _v, cwd=panel)
         tamper(panel)
+        if floor_seed is None:
+            floor_seed = _rs_git("rev-list", "--max-parents=0", "HEAD", cwd=up).splitlines()[0]
         # Only a BARE `id -u` is root: `id -u <panel user>` must still name that user.
         # install.sh runs under `set -euo pipefail` (its line 2); so does this, or a pipe that dies of
         # SIGPIPE inside a check reads as the check passing.
@@ -1423,17 +1454,25 @@ try:
                 "id() { [ \"$#\" -eq 1 ] && [ \"$1\" = -u ] && echo 0 || command id \"$@\"; }\n"
                 "sudo() { [ \"$1\" = -u ] && shift 2; \"$@\"; }\n"
                 "warn() { echo \"WARN $*\"; }\n"
-                "H_SUDO=''\nPANEL_DIR=%s\nHELPER_DIR=%s\nREPO_URL=%s\nDEFAULT_BRANCH=main\n"
-                % (_rs_q(panel), _rs_q(helper), _rs_q("file://" + _rs_up))
+                "H_SUDO=''\nPANEL_DIR=%s\nHELPER_DIR=%s\nREPO_URL=%s\nTRUSTED_BRANCH=main\n"
+                "DEFAULT_BRANCH=%s\n"
+                % (_rs_q(panel), _rs_q(helper), _rs_q("file://" + up), _rs_q(branch))
                 + ("SRC=%s\nPANEL_USER=%s\nSCRIPT_PATH=%s\n"
                    % (_rs_q(src), _rs_q(panel_user),
                       _rs_q(script or os.path.join(src, "install.sh"))) if src else "")
+                + pre
                 + _rs_fns
+                + "ROOT_SRC_FLOOR_SEED=%s\n" % _rs_q(floor_seed)
                 + ("_checkout_is_roots() { return 0; }\n" if roots else "")
                 + "_prepare_root_source\n"
                   "if s=\"$(stage_root_source tools/panel-helper panel-helper)\"; then\n"
-                  "  echo \"STAGED=$(cat \"$s\")\"\nelse\n  echo STAGED-NOTHING\nfi\n")
-        r = _rs_sub.run(["bash", "-c", body], capture_output=True, text=True, env=env)
+                  "  echo \"STAGED=$(cat \"$s\")\"\nelse\n  echo STAGED-NOTHING\nfi\n"
+                + after
+                + "echo \"FLOOR=$(cat \"${ROOT_SRC_FLOOR_FILE}\" 2>/dev/null || echo NONE)\"\n")
+        _env = {k: v for k, v in (env or os.environ).items()
+                if k not in ("PANEL_SELF_UPDATE", "SUDO_UID", "SUDO_USER")}
+        _env.update(run_env or {})
+        r = _rs_sub.run(["bash", "-c", body], capture_output=True, text=True, env=_env)
         return r.stdout + r.stderr
 
     def _rs_replace_ref(panel):
@@ -1645,8 +1684,225 @@ try:
           _rs_fp_premise and "STAGED-NOTHING" in _rs_out and "INTERMEDIATE" not in _rs_out
           and "not on file://" in _rs_out, "E an ancestor=%s; %s" % (_rs_fp_premise,
                                                                      _rs_out[-300:]))
+
+    # ── Root's source floor, and who chooses the branch ────────────────────────────────────────
+    # Every commit main was ever at is on its first-parent line, and the panel moves its own HEAD.
+    # So a compromised panel reset its checkout to an OLD commit of main and called
+    # panel-self-update: root accepted it, and installed that commit's installer root-owned. One from
+    # before e26a644 read the helper out of the panel-owned .git, where a planted replace ref then
+    # became the helper root installs. And PANEL_BRANCH, which the panel passes through the same
+    # verb, chose the branch root verified against — so any pushed branch chose the helper.
+    #
+    # A main of its own, oldest first:
+    #   R  below the seed, but carrying the floor's line (artificially), so only the seed refuses it
+    #   S  the seed (e26a644's role): no line, like e26a644 itself
+    #   C  after the seed, before the floor existed: no line
+    #   F  the first commit whose installer enforces the floor
+    #   M, T  later commits of main; T is the tip. Between them a pull request is merged with a
+    #         merge commit, and E, its intermediate commit, is in main's ancestry but not its line
+    # and three branches: `evil` on T, `old` forked from F, and `below` (see there).
+    _fl_up = os.path.join(_rs_sb, "floor-upstream")
+    os.makedirs(os.path.join(_fl_up, "tools"))
+    _rs_git("init", "-q", "-b", "main", _fl_up)
+    for _k, _v in (("user.email", "t@example.invalid"), ("user.name", "t"),
+                   ("commit.gpgsign", "false")):
+        _rs_git("config", _k, _v, cwd=_fl_up)
+
+    # The line near the TOP of a long installer (the real one is well over 128 KiB): a check that
+    # reads it with `grep -q` in a pipe stops at the match, the writer dies of SIGPIPE on the rest,
+    # and under pipefail the line reads as missing exactly when it is there.
+    def _fl_commit(helper_text, enforces, msg):
+        with open(os.path.join(_fl_up, "tools", "panel-helper"), "w") as _ff:
+            _ff.write(helper_text + "\n")
+        with open(os.path.join(_fl_up, "install.sh"), "w") as _ff:
+            _ff.write("#!/bin/bash\n" + ("%s\n" % _RS_FLOOR_LINE if enforces else "")
+                      + "# padding\n" * 20000)
+        _rs_git("add", "-A", cwd=_fl_up)
+        _rs_git("commit", "-qm", msg, cwd=_fl_up)
+        return _rs_git("rev-parse", "HEAD", cwd=_fl_up)
+
+    _fl = {}
+    _fl["R"] = _fl_commit("R-HELPER", True, "R: below the seed")
+    _fl["S"] = _fl_commit("S-HELPER", False, "S: the seed")
+    _fl["C"] = _fl_commit("PRE-FLOOR-HELPER", False, "C: before the floor existed")
+    _fl["F"] = _fl_commit("F-HELPER", True, "F: the floor exists")
+    _fl["M"] = _fl_commit("MID-HELPER", True, "M")
+    # A pull request merged with a merge commit: E is in main's ancestry, never on its line.
+    _rs_git("checkout", "-q", "-b", "pr", cwd=_fl_up)
+    _fl["E"] = _fl_commit("SIDE-HELPER", True, "E: a pull request's intermediate commit")
+    _fl_commit("MID-HELPER", True, "E reverted")
+    _rs_git("checkout", "-q", "main", cwd=_fl_up)
+    _rs_git("merge", "-q", "--no-ff", "-m", "merge the pull request", "pr", cwd=_fl_up)
+    _rs_git("branch", "-q", "-D", "pr", cwd=_fl_up)
+    _fl["T"] = _fl_commit("TIP-HELPER", True, "T: the tip")
+    _rs_git("checkout", "-q", "-b", "evil", cwd=_fl_up)
+    _fl["evil"] = _fl_commit("BRANCH-HELPER", True, "a branch the panel names")
+    _rs_git("checkout", "-q", "-b", "old", _fl["F"], cwd=_fl_up)
+    _fl["old"] = _fl_commit("OLD-BRANCH-HELPER", True, "an operator's branch, forked below T")
+    _rs_git("checkout", "-q", "main", cwd=_fl_up)
+
+    def _fl_case(name, at, **kw):
+        return _rs_case(name, lambda p: _rs_git("reset", "-q", "--hard", _fl[at], cwd=p),
+                        up=_fl_up, floor_seed=_fl["S"], **kw)
+
+    def _fl_floor(out):
+        return (re.findall(r"^FLOOR=(.*)$", out, re.M) or ["?"])[-1]
+
+    _fl_out = _fl_case("fl-tip", "T")
+    check("root floor: the tip of main is staged from (positive control)",
+          "STAGED=TIP-HELPER" in _fl_out, _fl_out[-300:])
+    check("root floor: ...and the floor is raised to it",
+          _fl_floor(_fl_out) == _fl["T"], _fl_out[-300:])
+    # The review's rollback: HEAD reset to a commit of main from before the seed.
+    _fl_out = _fl_case("fl-rollback", "R")
+    check("root floor: a checkout reset below the seed (no floor file yet) is refused, and says so",
+          "STAGED-NOTHING" in _fl_out and "R-HELPER" not in _fl_out
+          and "older than root's source floor %s" % _fl["S"] in _fl_out and _fl_floor(_fl_out) == "NONE",
+          _fl_out[-300:])
+    # After the seed, but from before the floor existed: its installer ignores the floor, so staged
+    # root-owned it would take the host back below the seed on the next run. No floor file, so the
+    # seed alone would let it through; the installer's own line refuses it.
+    _fl_out = _fl_case("fl-prefloor", "C")
+    check("root floor: a commit whose installer predates the floor is refused (the seed passes it)",
+          "STAGED-NOTHING" in _fl_out and "PRE-FLOOR-HELPER" not in _fl_out
+          and "predates root's source floor" in _fl_out, _fl_out[-300:])
+    # The floor file, recorded by an earlier run at T: M carries the line and is on main, so only
+    # the floor refuses it.
+    _fl_out = _fl_case("fl-below", "M", floor=_fl["T"] + "\n")
+    check("root floor: a commit of main below the recorded floor is refused, and says so",
+          "STAGED-NOTHING" in _fl_out and "MID-HELPER" not in _fl_out
+          and "older than root's source floor %s" % _fl["T"] in _fl_out, _fl_out[-300:])
+    check("root floor: ...and the floor stays where it was",
+          _fl_floor(_fl_out) == _fl["T"], _fl_out[-300:])
+    _fl_out = _fl_case("fl-forward", "T", floor=_fl["M"] + "\n")
+    check("root floor: a newer commit is staged, and the floor moves up to it",
+          "STAGED=TIP-HELPER" in _fl_out and _fl_floor(_fl_out) == _fl["T"], _fl_out[-300:])
+    # The writer itself never lowers it: root_source_commit refuses a lower commit before asking,
+    # so this is the only way to see the rule the writer holds on its own.
+    _fl_out = _fl_case("fl-lower", "T", floor=_fl["T"] + "\n",
+                       after='_raise_source_floor %s && echo RAISED || echo NOT-RAISED\n' % _fl["M"])
+    check("root floor: raising it to an older commit leaves it where it was",
+          "NOT-RAISED" in _fl_out and _fl_floor(_fl_out) == _fl["T"], _fl_out[-300:])
+    # A floor file that is not one commit id is not "no floor": the seed would lower it.
+    _fl_out = _fl_case("fl-garbage", "T", floor="not a commit\n")
+    check("root floor: an unreadable floor file stops root staging, and says what to do",
+          "STAGED-NOTHING" in _fl_out and "not a single commit id" in _fl_out
+          and _fl_floor(_fl_out) == "not a commit", _fl_out[-300:])
+    # A floor from another repository's history (the installer now points elsewhere) is named as
+    # that, not as "older than": nothing here is older than a commit this history does not have.
+    _fl_out = _fl_case("fl-foreign", "T", floor="0123456789abcdef" * 2 + "01234567\n")
+    check("root floor: a floor this repository does not have stops root staging, and says why",
+          "STAGED-NOTHING" in _fl_out and "is not in file://" in _fl_out
+          and "older than" not in _fl_out, _fl_out[-300:])
+
+    # WHO CHOSE THE BRANCH. The helper's panel-self-update verb marks its runs PANEL_SELF_UPDATE=1;
+    # then root verifies against main whatever PANEL_BRANCH says, and withholds its pieces on any
+    # other branch.
+    _fl_out = _fl_case("fl-panel-branch", "evil", branch="evil",
+                       run_env={"PANEL_SELF_UPDATE": "1"})
+    check("root branch: a self-update the panel started on another branch stages nothing, and says "
+          "how to take it on purpose",
+          "STAGED-NOTHING" in _fl_out and "BRANCH-HELPER" not in _fl_out
+          and "The panel started this update on its branch 'evil'" in _fl_out
+          and "cd / && sudo PANEL_BRANCH=evil bash %s/install.sh"
+          % os.path.join(_rs_sb, "fl-panel-branch", "helper") in _fl_out, _fl_out[-400:])
+    _fl_out = _fl_case("fl-panel-main", "T", run_env={"PANEL_SELF_UPDATE": "1"})
+    check("root branch: ...while one it started on main is staged from (positive control)",
+          "STAGED=TIP-HELPER" in _fl_out, _fl_out[-300:])
+    # A helper from before PANEL_SELF_UPDATE, running a newer installer: sudo's SUDO_UID names the
+    # panel's own account, and the panel cannot change it.
+    _fl_out = _fl_case("fl-panel-sudo", "evil", branch="evil",
+                       pre="PANEL_USER=%s\n" % _rs_q(_rs_me),
+                       run_env={"SUDO_UID": str(os.getuid())})
+    check("root branch: ...and so does one sudo says the panel's own account started",
+          "STAGED-NOTHING" in _fl_out and "BRANCH-HELPER" not in _fl_out
+          and "The panel started this update" in _fl_out, _fl_out[-400:])
+    _fl_out = _fl_case("fl-operator-sudo", "evil", branch="evil",
+                       pre="PANEL_USER=%s\n" % _rs_q(_rs_other),
+                       run_env={"SUDO_UID": str(os.getuid())})
+    check("root branch: an operator's own sudo (another account) still chooses the branch",
+          "STAGED=BRANCH-HELPER" in _fl_out, _fl_out[-400:])
+    # The operator testing a branch as root (`sudo PANEL_BRANCH=x bash <installer>`, a root login):
+    # root follows it — and does not raise the floor to it, or main would be below it for good.
+    _fl_out = _fl_case("fl-operator-branch", "evil", branch="evil", floor=_fl["T"] + "\n")
+    check("root branch: an operator's run on a branch stages from that branch",
+          "STAGED=BRANCH-HELPER" in _fl_out, _fl_out[-300:])
+    check("root branch: ...and leaves the floor on main",
+          _fl_floor(_fl_out) == _fl["T"], _fl_out[-300:])
+    # ...including a branch forked BELOW the floor: its tip is what the operator chose.
+    _fl_out = _fl_case("fl-operator-old", "old", branch="old", floor=_fl["T"] + "\n")
+    check("root branch: an operator's branch forked below the floor is staged from at its tip",
+          "STAGED=OLD-BRANCH-HELPER" in _fl_out and _fl_floor(_fl_out) == _fl["T"],
+          _fl_out[-300:])
+    # ...but not any other commit of it: below the tip, its first-parent line is main's history,
+    # and the panel moves its HEAD while the operator's run is going.
+    _fl_out = _fl_case("fl-operator-below", "F", branch="old", floor=_fl["T"] + "\n")
+    check("root branch: ...but not a commit below that tip (main's old history, reached via the "
+          "branch)", "STAGED-NOTHING" in _fl_out and "older than root's source floor %s" % _fl["T"] in _fl_out,
+          _fl_out[-300:])
+
+    # A fresh install stages from root's own checkout, without root_source_commit; it records the
+    # floor itself, at the checkout's commit, when root's clone shows that on main.
+    _fl_out = _fl_case("fl-fresh", "M", roots=True, after="_record_own_source_floor\n")
+    check("root floor: a fresh install records its checkout's commit of main as the floor",
+          "STAGED=MID-HELPER" in _fl_out and _fl_floor(_fl_out) == _fl["M"], _fl_out[-300:])
+    _fl_out = _fl_case("fl-fresh-branch", "evil", roots=True, after="_record_own_source_floor\n")
+    check("root floor: ...but not a commit that is not on main",
+          "STAGED=BRANCH-HELPER" in _fl_out and _fl_floor(_fl_out) == "NONE", _fl_out[-300:])
+    # ...nor one main holds only through a merge's second parent: root's clone has it, and it
+    # descends from the floor, so only the first-parent test stops it becoming the floor.
+    _fl_e_premise = _rs_sub.run(["git", "-C", _fl_up, "merge-base", "--is-ancestor", _fl["E"],
+                                 "main"], capture_output=True).returncode == 0
+    _fl_out = _fl_case("fl-fresh-side", "E", roots=True, after="_record_own_source_floor\n")
+    check("root floor: ...nor a commit main reaches only through a merge",
+          _fl_e_premise and "STAGED=SIDE-HELPER" in _fl_out and _fl_floor(_fl_out) == "NONE",
+          "E an ancestor of main=%s; %s" % (_fl_e_premise, _fl_out[-300:]))
+    _fl_out = _fl_case("fl-fresh-lower", "M", roots=True, floor=_fl["T"] + "\n",
+                       after="_record_own_source_floor\n")
+    check("root floor: ...nor one below the floor already recorded",
+          _fl_floor(_fl_out) == _fl["T"], _fl_out[-300:])
 finally:
     _shutil.rmtree(_rs_sb, ignore_errors=True)
+# ...and install_root_tools records it: the function above is only half the rule.
+_irt_i = _inst.find("install_root_tools() {")
+_irt = _inst[_irt_i:_inst.find("\n}\n", _irt_i)] if _irt_i != -1 else ""
+check("install.sh: install_root_tools records the floor for a fresh install, once the helper landed",
+      '\n    [ "${HELPER_OK}" -eq 1 ] && _record_own_source_floor\n' in _irt, _irt[-400:])
+
+# The helper's panel-self-update is what marks a run as the panel's. The marker is set on the
+# environment the helper BUILDS, after copying its own, so nothing the panel hands sudo removes it —
+# and install.sh must read the same name.
+_su_env = _helper._self_update_env("-", "evil")
+_su_env_blank = None
+_su_saved = os.environ.get("PANEL_SELF_UPDATE")
+try:
+    os.environ["PANEL_SELF_UPDATE"] = ""
+    _su_env_blank = _helper._self_update_env("-", "-")
+finally:
+    if _su_saved is None:
+        os.environ.pop("PANEL_SELF_UPDATE", None)
+    else:
+        os.environ["PANEL_SELF_UPDATE"] = _su_saved
+check("helper self-update: the installer's environment marks the run as the panel's",
+      _su_env.get("PANEL_SELF_UPDATE") == "1" and _su_env.get("PANEL_BRANCH") == "evil",
+      repr({k: v for k, v in _su_env.items() if k.startswith("PANEL_")}))
+check("helper self-update: ...even when the environment it inherited says otherwise",
+      (_su_env_blank or {}).get("PANEL_SELF_UPDATE") == "1")
+_su_probe = _rs_sub.run(
+    ["bash", "-c", "set -euo pipefail\nPANEL_USER=''\n" + _inst_shfn("_panel_started_run")
+     + "_panel_started_run && echo PANEL-STARTED || echo OPERATOR\n"],
+    capture_output=True, text=True,
+    env={k: v for k, v in _su_env.items() if k not in ("SUDO_UID", "SUDO_USER")})
+check("helper self-update: ...and install.sh reads that environment as a run the panel started",
+      "PANEL-STARTED" in _su_probe.stdout, _su_probe.stdout + _su_probe.stderr)
+import ast as _su_ast
+_su_fn2 = next(n for n in _su_ast.walk(_su_ast.parse(open(_helper_path, encoding="utf-8").read()))
+               if isinstance(n, _su_ast.FunctionDef) and n.name == "_self_update_detached")
+check("helper self-update: the detached run takes its environment from _self_update_env",
+      any(isinstance(n, _su_ast.Call) and isinstance(n.func, _su_ast.Name)
+          and n.func.id == "_self_update_env" for n in _su_ast.walk(_su_fn2))
+      and not any(isinstance(n, _su_ast.Subscript) and isinstance(n.value, _su_ast.Name)
+                  and n.value.id == "env" for n in _su_ast.walk(_su_fn2)))
 for _src in ("HELPER_SRC", "DBM_SRC"):
     check("install.sh: no longer installs root-owned files straight from %s" % _src,
           _src not in _inst)
@@ -6511,7 +6767,12 @@ try:
     with open(os.path.join(_dp_pd, "install.sh"), "w") as _dp_f:
         _dp_f.write("#!/bin/bash\necho PANEL-OWNED-INSTALLER\n")
     _dp_log = os.path.join(_dp_sb, "log")
-    _dp_shipped = "#!/bin/bash\necho SHIPPED-INSTALLER\n"
+    # Every installer the job may ship carries root's source floor line (install.sh's
+    # _ROOT_SRC_FLOOR_LINE): the verify step refuses one without it.
+    def _dp_inst(name):
+        return "#!/bin/bash\necho %s\n%s\n" % (name, _RS_FLOOR_LINE)
+
+    _dp_shipped = _dp_inst("SHIPPED-INSTALLER")
     _dp_shims = (
         'LOG=%s\n' % _shlex_q(_dp_log)
         + 'systemctl() { echo %s; }\n' % _shlex_q(_dp_pd)
@@ -6557,22 +6818,29 @@ try:
 
     _sh_sub.run(["git", "init", "-q", "-b", "main", _dp_runner], capture_output=True, env=_dp_genv)
     _pad_history(_dp_runner, _dp_genv)
-    _dp_older = _dp_commit("#!/bin/bash\necho OLDER-INSTALLER\n", "an older commit of main")
+    # Root's source floor, in this history: _dp_floorc plays e26a644. Below it, a commit of main
+    # whose installer even carries the floor's line, so only the ancestry check can refuse it; above
+    # it, one whose installer predates the floor (no line), so only the line check can.
+    _dp_prefloor = _dp_commit(_dp_inst("PRE-FLOOR-INSTALLER"), "main below the floor")
+    _dp_floorc = _dp_commit(_dp_inst("FLOOR-INSTALLER"), "the floor")
+    _dp_noline = _dp_commit("#!/bin/bash\necho NO-LINE-INSTALLER\n",
+                            "after the floor, before installers enforced it")
+    _dp_older = _dp_commit(_dp_inst("OLDER-INSTALLER"), "an older commit of main")
     _dp_sha = _dp_commit(_dp_shipped, "the commit whose CI passed")
     _dp_git("checkout", "-q", "--detach")
-    _dp_tagged = _dp_commit("#!/bin/bash\necho TAG-ONLY-INSTALLER\n", "reached by tags only")
+    _dp_tagged = _dp_commit(_dp_inst("TAG-ONLY-INSTALLER"), "reached by tags only")
     _dp_git("checkout", "-q", "--detach", _dp_sha)
-    _dp_other = _dp_commit("#!/bin/bash\necho OTHER-BRANCH-INSTALLER\n", "another branch")
+    _dp_other = _dp_commit(_dp_inst("OTHER-BRANCH-INSTALLER"), "another branch")
     _dp_git("checkout", "-q", "main")
     # A pull request merged with a merge commit (--no-ff): E, an intermediate commit whose change
     # was reverted (F) before the merge, and G, its final state. E, F and G are ancestors of main
     # only through the merge's SECOND parent — main was never at any of them — while the merge
     # commit M is on main's own (first-parent) line.
-    _dp_before = _dp_commit("#!/bin/bash\necho BEFORE-MERGE-INSTALLER\n", "main before the merge")
+    _dp_before = _dp_commit(_dp_inst("BEFORE-MERGE-INSTALLER"), "main before the merge")
     _dp_git("checkout", "-q", "-b", "side")
-    _dp_side = [_dp_commit("#!/bin/bash\necho INTERMEDIATE-INSTALLER\n", "E: intermediate"),
-                _dp_commit("#!/bin/bash\necho BEFORE-MERGE-INSTALLER\n", "F: E reverted"),
-                _dp_commit("#!/bin/bash\necho MERGED-INSTALLER\n", "G: the PR's final state")]
+    _dp_side = [_dp_commit(_dp_inst("INTERMEDIATE-INSTALLER"), "E: intermediate"),
+                _dp_commit(_dp_inst("BEFORE-MERGE-INSTALLER"), "F: E reverted"),
+                _dp_commit(_dp_inst("MERGED-INSTALLER"), "G: the PR's final state")]
     _dp_git("checkout", "-q", "main")
     _dp_git("merge", "-q", "--no-ff", "-m", "M: merge the pull request", "side")
     _dp_merge = _dp_git("rev-parse", "HEAD")
@@ -6582,11 +6850,15 @@ try:
     _dp_git("commit", "-q", "-m", "main without an installer")
     _dp_noinst = _dp_git("rev-parse", "HEAD")
     _dp_empty = _dp_commit("", "main with an empty installer")
-    _dp_tip = _dp_commit("#!/bin/bash\necho TIP-INSTALLER\n", "main's tip, CI still running")
+    _dp_tip = _dp_commit(_dp_inst("TIP-INSTALLER"), "main's tip, CI still running")
     _dp_git("update-ref", "refs/remotes/origin/main", _dp_tip)
     _dp_git("update-ref", "refs/remotes/origin/other", _dp_other)
     _dp_git("update-ref", "refs/tags/main", _dp_tagged)
     _dp_git("update-ref", "refs/tags/origin/main", _dp_tagged)
+
+    _dp_floor_m = re.findall(r"^FLOOR=([0-9a-f]{40})$", _dp_verify_run, re.M)
+    _dp_verify_fx = (_dp_verify_run.replace("FLOOR=%s\n" % _dp_floor_m[0], "FLOOR=%s\n" % _dp_floorc)
+                     if len(_dp_floor_m) == 1 else "echo '::error::no FLOOR= line'; exit 99\n")
 
     def _dp_deploy(sha, stream, branch="main"):
         """Run the job's two run blocks as the runner would: verify, and — only if it passed — the
@@ -6598,7 +6870,7 @@ try:
         _rt = _tempfile.mkdtemp(dir=_dp_sb, prefix="runner-temp-")
         _gho = os.path.join(_rt, "github_output")
         open(_gho, "w").close()
-        _v = _sh_sub.run(["bash", "-c", _dp_verify_run], capture_output=True, text=True,
+        _v = _sh_sub.run(["bash", "-c", _dp_verify_fx], capture_output=True, text=True,
                          cwd=_dp_runner, env=dict(_dp_genv, HEAD_SHA=sha, HEAD_BRANCH=branch,
                                                   RUNNER_TEMP=_rt, GITHUB_OUTPUT=_gho,
                                                   TMPDIR=_NOWRITE_TMP))
@@ -6707,12 +6979,12 @@ try:
     _dp_tip_inst, _dp_tip_pin = _dp_payload(os.path.join(_dp_sb, "stream-tip"))
     check("deploy: main's TIP ships although a tag named origin/main points elsewhere "
           "(the step reads refs/remotes/origin/main)",
-          _dp_shadowed and _dp_tip_inst == "#!/bin/bash\necho TIP-INSTALLER\n"
+          _dp_shadowed and _dp_tip_inst == _dp_inst("TIP-INSTALLER")
           and _dp_tip_pin == _dp_tip, "installer=%r pin=%r" % (_dp_tip_inst, _dp_tip_pin))
     _dp_deploy(_dp_older, os.path.join(_dp_sb, "stream-older"))
     _dp_old_inst, _dp_old_pin = _dp_payload(os.path.join(_dp_sb, "stream-older"))
     check("deploy: ...and so does an older commit of main, with that commit's own installer",
-          _dp_old_inst == "#!/bin/bash\necho OLDER-INSTALLER\n" and _dp_old_pin == _dp_older,
+          _dp_old_inst == _dp_inst("OLDER-INSTALLER") and _dp_old_pin == _dp_older,
           "installer=%r pin=%r" % (_dp_old_inst, _dp_old_pin))
     # FIRST-PARENT, not ancestry. A tag `main` on E — an intermediate commit of a merged pull
     # request, reverted before the merge — passes the job's `if`, and E IS an ancestor of main. It
@@ -6733,7 +7005,7 @@ try:
     _dp_deploy(_dp_merge, os.path.join(_dp_sb, "stream-merge"))
     _dp_m_inst, _dp_m_pin = _dp_payload(os.path.join(_dp_sb, "stream-merge"))
     check("deploy: ...while the merge commit ships, with its own installer (positive control)",
-          _dp_m_inst == "#!/bin/bash\necho MERGED-INSTALLER\n" and _dp_m_pin == _dp_merge,
+          _dp_m_inst == _dp_inst("MERGED-INSTALLER") and _dp_m_pin == _dp_merge,
           "installer=%r pin=%r" % (_dp_m_inst, _dp_m_pin))
     # A commit of main with nothing to ship is refused in words, not by a bare git fatal — and an
     # EMPTY installer too: sent, it runs as nothing on the host and the job goes green.
@@ -6750,6 +7022,36 @@ try:
           _dp_none["no install.sh"][0], _dp_none["no install.sh"][1])
     check("deploy: ...and so is one whose install.sh is empty",
           _dp_none["empty install.sh"][0], _dp_none["empty install.sh"][1])
+    # ROOT'S SOURCE FLOOR. A re-run of an old CI run deploys that commit, and its installer runs as
+    # root on a system install. The step holds the same floor install.sh does (e26a644), and ships
+    # only an installer that enforces it — one after e26a644 but from before the floor existed
+    # would, root-owned, let the panel take root back below it.
+    _dp_seed_inst = re.findall(r'^ROOT_SRC_FLOOR_SEED="([0-9a-f]{40})"$', _inst, re.M)
+    check("deploy: the verify step's floor is install.sh's (e26a644), and it checks install.sh's "
+          "floor line",
+          len(_dp_floor_m) == 1 and _dp_floor_m == _dp_seed_inst
+          and "grep -qxF '%s' \"${INSTALLER}\"" % _RS_FLOOR_LINE in _dp_code(_dp_verify_run),
+          "deploy FLOOR=%r, install.sh seed=%r" % (_dp_floor_m, _dp_seed_inst))
+    _dp_fl = {}
+    for _dp_what, _dp_c, _dp_msg in (
+            ("below", _dp_prefloor, "::error::head_sha %s predates %s" % (_dp_prefloor, _dp_floorc)),
+            ("no line", _dp_noline, "::error::%s's install.sh predates root's source floor"
+             % _dp_noline)):
+        _dp_out = os.path.join(_dp_sb, "stream-floor-" + _dp_what.replace(" ", "-"))
+        _dp_x = _dp_deploy(_dp_c, _dp_out)
+        _dp_fl[_dp_what] = (_dp_x.returncode != 0 and not os.path.exists(_dp_out)
+                            and _dp_msg in _dp_x.stdout,
+                            "rc=%s sent=%s out=%r" % (_dp_x.returncode, os.path.exists(_dp_out),
+                                                      _dp_x.stdout[-300:]))
+    check("deploy: a commit of main below root's source floor is refused, nothing sent",
+          _dp_fl["below"][0], _dp_fl["below"][1])
+    check("deploy: ...and so is one above it whose installer does not enforce the floor",
+          _dp_fl["no line"][0], _dp_fl["no line"][1])
+    _dp_deploy(_dp_floorc, os.path.join(_dp_sb, "stream-floor-at"))
+    _dp_f_inst, _dp_f_pin = _dp_payload(os.path.join(_dp_sb, "stream-floor-at"))
+    check("deploy: ...while the floor commit itself ships (positive control)",
+          _dp_f_inst == _dp_inst("FLOOR-INSTALLER") and _dp_f_pin == _dp_floorc,
+          "installer=%r pin=%r" % (_dp_f_inst, _dp_f_pin))
     # The deploy step's own guard. A handoff that arrives empty must stop the job: sent, an empty
     # INSTALLER_B64 is written out and run as nothing on the host, and the job goes green.
     _dp_out = os.path.join(_dp_sb, "stream-nohandoff")
