@@ -834,3 +834,9 @@
    removed, so a frozen bar does not read as a live one. */
 .ip-stale{ opacity:.55; }
 .ip-stale .ip-bar{ transition:none; filter:grayscale(1); }
+
+/* The panel update card's status line. An update's outcome can be two sentences — the installer's
+   own reason for stopping — and squeezed beside the buttons on a phone it became a column 90px
+   wide. With room for 14rem it sits beside them; without, it takes its own line. Only while it
+   says something: empty, it must not push a blank row under the buttons. */
+#pu-msg:not(:empty){ flex:1 1 14rem; min-width:0; }

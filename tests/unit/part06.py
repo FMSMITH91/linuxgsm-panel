@@ -1361,11 +1361,26 @@ def _pad_history(repo, env=None, n=4000):
 # file in, having no search permission: to a here-string it is a full or read-only /tmp. (A plainly
 # read-only directory would not do: bash skips a TMPDIR it cannot write and uses /tmp instead.)
 # Nothing can be created in it, so removing it at exit needs only its parent's permission.
-_NOWRITE_TMP = _tempfile.mkdtemp(prefix="tmpdir-nowrite-")
-os.chmod(_NOWRITE_TMP, 0o200)
+#
+# ROOT ignores the mode: it writes into a 0200 directory like any other, so under uid 0 that TMPDIR
+# takes a here-string after all, and the checks run under it could no longer tell a here-string from
+# a stream (the three premise checks said so, and failed). Root gets /proc instead: faccessat() lets
+# root "write" it (procfs is mounted read-write, and root overrides its mode), so bash accepts it,
+# and procfs has no way to create a file, for root or anyone — bash reports "cannot create temp file
+# for here-document". Measured on bash 5.1.16, 5.2.21 and 5.3.9 (Ubuntu 22.04, 24.04, 26.04) as
+# uid 0. An unprivileged uid is refused W_OK on /proc and falls back to /tmp, which is why this is
+# root's only. Whether it holds on the machine at hand is the premise below, which says which
+# TMPDIR it tried.
+if os.geteuid() == 0:
+    _NOWRITE_TMP, _NOWRITE_TMP_OURS = "/proc", False
+else:
+    _NOWRITE_TMP, _NOWRITE_TMP_OURS = _tempfile.mkdtemp(prefix="tmpdir-nowrite-"), True
+    os.chmod(_NOWRITE_TMP, 0o200)
 
 
 def _rm_nowrite_tmp():
+    if not _NOWRITE_TMP_OURS:
+        return
     try:
         os.rmdir(_NOWRITE_TMP)
     except OSError:
@@ -1384,12 +1399,25 @@ def _needs_tmpfile(repo, ref, env=None):
                       'cat <<< "$l" > /dev/null 2>&1 && { echo "here-string written"; exit 3; }\n'
                       'exit 0\n', "_", repo, ref],
                      capture_output=True, text=True, env=dict(env or os.environ, TMPDIR=_NOWRITE_TMP))
-    return _r.returncode == 0, "rc=%s %s" % (_r.returncode, _r.stdout.strip())
+    return _r.returncode == 0, "rc=%s %s (euid %d, TMPDIR=%s)" % (
+        _r.returncode, _r.stdout.strip(), os.geteuid(), _NOWRITE_TMP)
 
 
 _rs_fns = (_inst_shfn("_gitc") + _inst_shfn("_on_first_parent_line")
            + _inst[_inst.index('ROOT_GIT="${HELPER_DIR}/.source.git"'):
                    _inst.index("\n}\n", _inst.index("stage_root_source() {")) + 3])
+# Root's source floor has a load-bearing LINE: root stages only from a commit whose install.sh
+# carries it, exactly, and deploy.yml ships only such an installer. Every installed copy looks for
+# it in every newer commit, so it must never change — held here: the variable naming it quotes it,
+# and it is in the file once, as a whole line, assigning the floor file every check reads.
+_RS_FLOOR_M = re.search(r"^_ROOT_SRC_FLOOR_LINE='([^'\n]*)'$", _inst, re.M)
+_RS_FLOOR_LINE = _RS_FLOOR_M.group(1) if _RS_FLOOR_M else "(no _ROOT_SRC_FLOOR_LINE in install.sh)"
+check("install.sh: root's source floor line is exactly the one every enforcing installer carries",
+      _RS_FLOOR_LINE == 'ROOT_SRC_FLOOR_FILE="${HELPER_DIR}/.source-floor"'
+      and _inst.splitlines().count(_RS_FLOOR_LINE) == 1, _RS_FLOOR_LINE)
+check("install.sh: ...and the built-in floor is e26a644, in full",
+      re.search(r'^ROOT_SRC_FLOOR_SEED="e26a64417c7992a6d0a0de39e33437a1949efe7f"$', _inst, re.M)
+      is not None)
 _rs_sb = _tempfile.mkdtemp(prefix="rootsrc-")
 try:
     _rs_up = os.path.join(_rs_sb, "upstream")
@@ -1400,22 +1428,41 @@ try:
         _rs_git("config", _k, _v, cwd=_rs_up)
     with open(os.path.join(_rs_up, "tools", "panel-helper"), "w") as _f:
         _f.write("GOOD-HELPER\n")
+    # An installer that enforces root's source floor: root stages only from a commit whose
+    # install.sh carries that line (see the floor checks further down).
+    with open(os.path.join(_rs_up, "install.sh"), "w") as _f:
+        _f.write("#!/bin/bash\n%s\n" % _RS_FLOOR_LINE)
     _rs_git("add", "-A", cwd=_rs_up)
     _rs_git("commit", "-qm", "upstream", cwd=_rs_up)
+    _rs_first = _rs_git("rev-parse", "HEAD", cwd=_rs_up)
 
     def _rs_case(name, tamper, roots=False, src=None, panel_user=None, script=None, seed=None,
-                 env=None):
-        """Clone upstream as 'the panel's checkout', tamper with it, stage as 'root'."""
+                 env=None, up=None, branch="main", floor=None, floor_seed=None, run_env=None,
+                 pre="", after=""):
+        """Clone upstream as 'the panel's checkout', tamper with it, stage as 'root'.
+
+        up: the upstream (default _rs_up); branch: DEFAULT_BRANCH, i.e. PANEL_BRANCH; floor: the
+        contents of root's source floor file before the run (None: no file); floor_seed: the
+        built-in floor (default: up's first commit — the real one, e26a644, is in no fixture);
+        run_env: variables for the run (PANEL_SELF_UPDATE, SUDO_UID), over an environment with
+        neither; pre / after: shell run before the fixture's functions are defined / after the
+        staging. The floor file's contents after the run are printed as FLOOR=."""
+        up = up or _rs_up
         d = os.path.join(_rs_sb, name)
         panel, helper = os.path.join(d, "panel"), os.path.join(d, "helper")
         os.makedirs(helper)
         if seed:
             seed(os.path.join(helper, ".source.git"))
-        _rs_git("clone", "-q", "--no-hardlinks", _rs_up, panel)
+        if floor is not None:
+            with open(os.path.join(helper, ".source-floor"), "w") as _ff:
+                _ff.write(floor)
+        _rs_git("clone", "-q", "--no-hardlinks", up, panel)
         for _k, _v in (("user.email", "t@example.invalid"), ("user.name", "t"),
                        ("commit.gpgsign", "false")):
             _rs_git("config", _k, _v, cwd=panel)
         tamper(panel)
+        if floor_seed is None:
+            floor_seed = _rs_git("rev-list", "--max-parents=0", "HEAD", cwd=up).splitlines()[0]
         # Only a BARE `id -u` is root: `id -u <panel user>` must still name that user.
         # install.sh runs under `set -euo pipefail` (its line 2); so does this, or a pipe that dies of
         # SIGPIPE inside a check reads as the check passing.
@@ -1423,17 +1470,25 @@ try:
                 "id() { [ \"$#\" -eq 1 ] && [ \"$1\" = -u ] && echo 0 || command id \"$@\"; }\n"
                 "sudo() { [ \"$1\" = -u ] && shift 2; \"$@\"; }\n"
                 "warn() { echo \"WARN $*\"; }\n"
-                "H_SUDO=''\nPANEL_DIR=%s\nHELPER_DIR=%s\nREPO_URL=%s\nDEFAULT_BRANCH=main\n"
-                % (_rs_q(panel), _rs_q(helper), _rs_q("file://" + _rs_up))
+                "H_SUDO=''\nPANEL_DIR=%s\nHELPER_DIR=%s\nREPO_URL=%s\nTRUSTED_BRANCH=main\n"
+                "DEFAULT_BRANCH=%s\n"
+                % (_rs_q(panel), _rs_q(helper), _rs_q("file://" + up), _rs_q(branch))
                 + ("SRC=%s\nPANEL_USER=%s\nSCRIPT_PATH=%s\n"
                    % (_rs_q(src), _rs_q(panel_user),
                       _rs_q(script or os.path.join(src, "install.sh"))) if src else "")
+                + pre
                 + _rs_fns
+                + "ROOT_SRC_FLOOR_SEED=%s\n" % _rs_q(floor_seed)
                 + ("_checkout_is_roots() { return 0; }\n" if roots else "")
                 + "_prepare_root_source\n"
                   "if s=\"$(stage_root_source tools/panel-helper panel-helper)\"; then\n"
-                  "  echo \"STAGED=$(cat \"$s\")\"\nelse\n  echo STAGED-NOTHING\nfi\n")
-        r = _rs_sub.run(["bash", "-c", body], capture_output=True, text=True, env=env)
+                  "  echo \"STAGED=$(cat \"$s\")\"\nelse\n  echo STAGED-NOTHING\nfi\n"
+                + after
+                + "echo \"FLOOR=$(cat \"${ROOT_SRC_FLOOR_FILE}\" 2>/dev/null || echo NONE)\"\n")
+        _env = {k: v for k, v in (env or os.environ).items()
+                if k not in ("PANEL_SELF_UPDATE", "SUDO_UID", "SUDO_USER")}
+        _env.update(run_env or {})
+        r = _rs_sub.run(["bash", "-c", body], capture_output=True, text=True, env=_env)
         return r.stdout + r.stderr
 
     def _rs_replace_ref(panel):
@@ -1645,8 +1700,244 @@ try:
           _rs_fp_premise and "STAGED-NOTHING" in _rs_out and "INTERMEDIATE" not in _rs_out
           and "not on file://" in _rs_out, "E an ancestor=%s; %s" % (_rs_fp_premise,
                                                                      _rs_out[-300:]))
+
+    # ── Root's source floor, and who chooses the branch ────────────────────────────────────────
+    # Every commit main was ever at is on its first-parent line, and the panel moves its own HEAD.
+    # So a compromised panel reset its checkout to an OLD commit of main and called
+    # panel-self-update: root accepted it, and installed that commit's installer root-owned. One from
+    # before e26a644 read the helper out of the panel-owned .git, where a planted replace ref then
+    # became the helper root installs. And PANEL_BRANCH, which the panel passes through the same
+    # verb, chose the branch root verified against — so any pushed branch chose the helper.
+    #
+    # A main of its own, oldest first:
+    #   R  below the seed, but carrying the floor's line (artificially), so only the seed refuses it
+    #   S  the seed (e26a644's role): no line, like e26a644 itself
+    #   C  after the seed, before the floor existed: no line
+    #   F  the first commit whose installer enforces the floor
+    #   M, T  later commits of main; T is the tip. Between them a pull request is merged with a
+    #         merge commit, and E, its intermediate commit, is in main's ancestry but not its line
+    # and three branches: `evil` on T, `old` forked from F, and `below` (see there).
+    _fl_up = os.path.join(_rs_sb, "floor-upstream")
+    os.makedirs(os.path.join(_fl_up, "tools"))
+    _rs_git("init", "-q", "-b", "main", _fl_up)
+    for _k, _v in (("user.email", "t@example.invalid"), ("user.name", "t"),
+                   ("commit.gpgsign", "false")):
+        _rs_git("config", _k, _v, cwd=_fl_up)
+
+    # The line near the TOP of a long installer (the real one is well over 128 KiB): a check that
+    # reads it with `grep -q` in a pipe stops at the match, the writer dies of SIGPIPE on the rest,
+    # and under pipefail the line reads as missing exactly when it is there.
+    def _fl_commit(helper_text, enforces, msg):
+        with open(os.path.join(_fl_up, "tools", "panel-helper"), "w") as _ff:
+            _ff.write(helper_text + "\n")
+        with open(os.path.join(_fl_up, "install.sh"), "w") as _ff:
+            _ff.write("#!/bin/bash\n" + ("%s\n" % _RS_FLOOR_LINE if enforces else "")
+                      + "# padding\n" * 20000)
+        _rs_git("add", "-A", cwd=_fl_up)
+        _rs_git("commit", "-qm", msg, cwd=_fl_up)
+        return _rs_git("rev-parse", "HEAD", cwd=_fl_up)
+
+    _fl = {}
+    _fl["R"] = _fl_commit("R-HELPER", True, "R: below the seed")
+    _fl["S"] = _fl_commit("S-HELPER", False, "S: the seed")
+    _fl["C"] = _fl_commit("PRE-FLOOR-HELPER", False, "C: before the floor existed")
+    _fl["F"] = _fl_commit("F-HELPER", True, "F: the floor exists")
+    _fl["M"] = _fl_commit("MID-HELPER", True, "M")
+    # A pull request merged with a merge commit: E is in main's ancestry, never on its line.
+    _rs_git("checkout", "-q", "-b", "pr", cwd=_fl_up)
+    _fl["E"] = _fl_commit("SIDE-HELPER", True, "E: a pull request's intermediate commit")
+    _fl_commit("MID-HELPER", True, "E reverted")
+    _rs_git("checkout", "-q", "main", cwd=_fl_up)
+    _rs_git("merge", "-q", "--no-ff", "-m", "merge the pull request", "pr", cwd=_fl_up)
+    _rs_git("branch", "-q", "-D", "pr", cwd=_fl_up)
+    _fl["T"] = _fl_commit("TIP-HELPER", True, "T: the tip")
+    _rs_git("checkout", "-q", "-b", "evil", cwd=_fl_up)
+    _fl["evil"] = _fl_commit("BRANCH-HELPER", True, "a branch the panel names")
+    _rs_git("checkout", "-q", "-b", "old", _fl["F"], cwd=_fl_up)
+    _fl["old"] = _fl_commit("OLD-BRANCH-HELPER", True, "an operator's branch, forked below T")
+    _rs_git("checkout", "-q", "main", cwd=_fl_up)
+
+    def _fl_case(name, at, **kw):
+        return _rs_case(name, lambda p: _rs_git("reset", "-q", "--hard", _fl[at], cwd=p),
+                        up=_fl_up, floor_seed=_fl["S"], **kw)
+
+    def _fl_floor(out):
+        return (re.findall(r"^FLOOR=(.*)$", out, re.M) or ["?"])[-1]
+
+    _fl_out = _fl_case("fl-tip", "T")
+    check("root floor: the tip of main is staged from (positive control)",
+          "STAGED=TIP-HELPER" in _fl_out, _fl_out[-300:])
+    check("root floor: ...and the floor is raised to it",
+          _fl_floor(_fl_out) == _fl["T"], _fl_out[-300:])
+    # The review's rollback: HEAD reset to a commit of main from before the seed.
+    _fl_out = _fl_case("fl-rollback", "R")
+    check("root floor: a checkout reset below the seed (no floor file yet) is refused, and says so",
+          "STAGED-NOTHING" in _fl_out and "R-HELPER" not in _fl_out
+          and "older than root's source floor %s" % _fl["S"] in _fl_out and _fl_floor(_fl_out) == "NONE",
+          _fl_out[-300:])
+    # After the seed, but from before the floor existed: its installer ignores the floor, so staged
+    # root-owned it would take the host back below the seed on the next run. No floor file, so the
+    # seed alone would let it through; the installer's own line refuses it.
+    _fl_out = _fl_case("fl-prefloor", "C")
+    check("root floor: a commit whose installer predates the floor is refused (the seed passes it)",
+          "STAGED-NOTHING" in _fl_out and "PRE-FLOOR-HELPER" not in _fl_out
+          and "predates root's source floor" in _fl_out, _fl_out[-300:])
+    # The floor file, recorded by an earlier run at T: M carries the line and is on main, so only
+    # the floor refuses it.
+    _fl_out = _fl_case("fl-below", "M", floor=_fl["T"] + "\n")
+    check("root floor: a commit of main below the recorded floor is refused, and says so",
+          "STAGED-NOTHING" in _fl_out and "MID-HELPER" not in _fl_out
+          and "older than root's source floor %s" % _fl["T"] in _fl_out, _fl_out[-300:])
+    check("root floor: ...and the floor stays where it was",
+          _fl_floor(_fl_out) == _fl["T"], _fl_out[-300:])
+    _fl_out = _fl_case("fl-forward", "T", floor=_fl["M"] + "\n")
+    check("root floor: a newer commit is staged, and the floor moves up to it",
+          "STAGED=TIP-HELPER" in _fl_out and _fl_floor(_fl_out) == _fl["T"], _fl_out[-300:])
+    # The writer itself never lowers it: root_source_commit refuses a lower commit before asking,
+    # so this is the only way to see the rule the writer holds on its own.
+    _fl_out = _fl_case("fl-lower", "T", floor=_fl["T"] + "\n",
+                       after='_raise_source_floor %s && echo RAISED || echo NOT-RAISED\n' % _fl["M"])
+    check("root floor: raising it to an older commit leaves it where it was",
+          "NOT-RAISED" in _fl_out and _fl_floor(_fl_out) == _fl["T"], _fl_out[-300:])
+    # A floor file that is not one commit id is not "no floor": the seed would lower it.
+    _fl_out = _fl_case("fl-garbage", "T", floor="not a commit\n")
+    check("root floor: an unreadable floor file stops root staging, and says what to do",
+          "STAGED-NOTHING" in _fl_out and "not a single commit id" in _fl_out
+          and _fl_floor(_fl_out) == "not a commit", _fl_out[-300:])
+    # A floor from another repository's history (the installer now points elsewhere) is named as
+    # that, not as "older than": nothing here is older than a commit this history does not have.
+    _fl_out = _fl_case("fl-foreign", "T", floor="0123456789abcdef" * 2 + "01234567\n")
+    check("root floor: a floor this repository does not have stops root staging, and says why",
+          "STAGED-NOTHING" in _fl_out and "is not in file://" in _fl_out
+          and "older than" not in _fl_out, _fl_out[-300:])
+
+    # WHO CHOSE THE BRANCH. The helper's panel-self-update verb marks its runs PANEL_SELF_UPDATE=1;
+    # then root verifies against main whatever PANEL_BRANCH says, and withholds its pieces on any
+    # other branch.
+    _fl_out = _fl_case("fl-panel-branch", "evil", branch="evil",
+                       run_env={"PANEL_SELF_UPDATE": "1"})
+    check("root branch: a self-update the panel started on another branch stages nothing, and says "
+          "how to take it on purpose",
+          "STAGED-NOTHING" in _fl_out and "BRANCH-HELPER" not in _fl_out
+          and "The panel started this update on its branch 'evil'" in _fl_out
+          and "cd / && sudo PANEL_BRANCH=evil bash %s/install.sh"
+          % os.path.join(_rs_sb, "fl-panel-branch", "helper") in _fl_out, _fl_out[-400:])
+    _fl_out = _fl_case("fl-panel-main", "T", run_env={"PANEL_SELF_UPDATE": "1"})
+    check("root branch: ...while one it started on main is staged from (positive control)",
+          "STAGED=TIP-HELPER" in _fl_out, _fl_out[-300:])
+    # A helper from before PANEL_SELF_UPDATE, running a newer installer: sudo's SUDO_UID names the
+    # panel's own account, and the panel cannot change it.
+    _fl_out = _fl_case("fl-panel-sudo", "evil", branch="evil",
+                       pre="PANEL_USER=%s\n" % _rs_q(_rs_me),
+                       run_env={"SUDO_UID": str(os.getuid())})
+    check("root branch: ...and so does one sudo says the panel's own account started",
+          "STAGED-NOTHING" in _fl_out and "BRANCH-HELPER" not in _fl_out
+          and "The panel started this update" in _fl_out, _fl_out[-400:])
+    _fl_out = _fl_case("fl-operator-sudo", "evil", branch="evil",
+                       pre="PANEL_USER=%s\n" % _rs_q(_rs_other),
+                       run_env={"SUDO_UID": str(os.getuid())})
+    check("root branch: an operator's own sudo (another account) still chooses the branch",
+          "STAGED=BRANCH-HELPER" in _fl_out, _fl_out[-400:])
+    # The operator testing a branch as root (`sudo PANEL_BRANCH=x bash <installer>`, a root login):
+    # root follows it — and does not raise the floor to it, or main would be below it for good.
+    _fl_out = _fl_case("fl-operator-branch", "evil", branch="evil", floor=_fl["T"] + "\n")
+    check("root branch: an operator's run on a branch stages from that branch",
+          "STAGED=BRANCH-HELPER" in _fl_out, _fl_out[-300:])
+    check("root branch: ...and leaves the floor on main",
+          _fl_floor(_fl_out) == _fl["T"], _fl_out[-300:])
+    # ...including a branch forked BELOW the floor: its tip is what the operator chose.
+    _fl_out = _fl_case("fl-operator-old", "old", branch="old", floor=_fl["T"] + "\n")
+    check("root branch: an operator's branch forked below the floor is staged from at its tip",
+          "STAGED=OLD-BRANCH-HELPER" in _fl_out and _fl_floor(_fl_out) == _fl["T"],
+          _fl_out[-300:])
+    # ...but not any other commit of it: below the tip, its first-parent line is main's history,
+    # and the panel moves its HEAD while the operator's run is going.
+    _fl_out = _fl_case("fl-operator-below", "F", branch="old", floor=_fl["T"] + "\n")
+    check("root branch: ...but not a commit below that tip (main's old history, reached via the "
+          "branch)", "STAGED-NOTHING" in _fl_out and "older than root's source floor %s" % _fl["T"] in _fl_out,
+          _fl_out[-300:])
+
+    # A fresh install stages from root's own checkout, without root_source_commit; it records the
+    # floor itself, at the checkout's commit, when root's clone shows that on main.
+    _fl_out = _fl_case("fl-fresh", "M", roots=True, after="_record_own_source_floor\n")
+    check("root floor: a fresh install records its checkout's commit of main as the floor",
+          "STAGED=MID-HELPER" in _fl_out and _fl_floor(_fl_out) == _fl["M"], _fl_out[-300:])
+    _fl_out = _fl_case("fl-fresh-branch", "evil", roots=True, after="_record_own_source_floor\n")
+    check("root floor: ...but not a commit that is not on main",
+          "STAGED=BRANCH-HELPER" in _fl_out and _fl_floor(_fl_out) == "NONE", _fl_out[-300:])
+    # ...even one root's own clone already HOLDS — an operator's earlier run on that branch fetched
+    # it there, and it descends from the floor. The case above passes on the commit being absent
+    # from root's clone alone; here only the first-parent test keeps it from becoming the floor.
+    _fl_out = _fl_case("fl-fresh-branch-known", "evil", roots=True,
+                       after='${H_SUDO:-} test -d "${ROOT_GIT}" || _rootgit init --quiet --bare\n'
+                             '_rootgit fetch --quiet --no-tags "${REPO_URL}" '
+                             '"+refs/heads/evil:refs/root-src/earlier" >/dev/null 2>&1 '
+                             '&& echo ROOT-HOLDS-EVIL\n_record_own_source_floor\n')
+    check("root floor: ...not even one root's own clone already holds from an earlier branch run",
+          "ROOT-HOLDS-EVIL" in _fl_out and _fl_floor(_fl_out) == "NONE", _fl_out[-300:])
+    # ...nor one main holds only through a merge's second parent: root's clone has it, and it
+    # descends from the floor, so only the first-parent test stops it becoming the floor.
+    _fl_e_premise = _rs_sub.run(["git", "-C", _fl_up, "merge-base", "--is-ancestor", _fl["E"],
+                                 "main"], capture_output=True).returncode == 0
+    _fl_out = _fl_case("fl-fresh-side", "E", roots=True, after="_record_own_source_floor\n")
+    check("root floor: ...nor a commit main reaches only through a merge",
+          _fl_e_premise and "STAGED=SIDE-HELPER" in _fl_out and _fl_floor(_fl_out) == "NONE",
+          "E an ancestor of main=%s; %s" % (_fl_e_premise, _fl_out[-300:]))
+    _fl_out = _fl_case("fl-fresh-lower", "M", roots=True, floor=_fl["T"] + "\n",
+                       after="_record_own_source_floor\n")
+    check("root floor: ...nor one below the floor already recorded",
+          _fl_floor(_fl_out) == _fl["T"], _fl_out[-300:])
+    # ...and it records nothing from a checkout that is not entirely root's: root runs git in that
+    # checkout only because nobody else can write any of it (_checkout_is_roots — the REAL one here,
+    # on a fixture the test user owns). root_source_commit, reached by the staging above on this
+    # path, raises the floor to M itself, so the file is removed first: only
+    # _record_own_source_floor could write it back.
+    _fl_out = _fl_case("fl-fresh-notroots", "M", roots=False,
+                       after='rm -f "${ROOT_SRC_FLOOR_FILE}"\n_record_own_source_floor\n')
+    check("root floor: ...nor from a checkout that is not all root's (root runs no git in it)",
+          "STAGED=MID-HELPER" in _fl_out and _fl_floor(_fl_out) == "NONE", _fl_out[-300:])
 finally:
     _shutil.rmtree(_rs_sb, ignore_errors=True)
+# ...and install_root_tools records it: the function above is only half the rule.
+_irt_i = _inst.find("install_root_tools() {")
+_irt = _inst[_irt_i:_inst.find("\n}\n", _irt_i)] if _irt_i != -1 else ""
+check("install.sh: install_root_tools records the floor for a fresh install, once the helper landed",
+      '\n    [ "${HELPER_OK}" -eq 1 ] && _record_own_source_floor\n' in _irt, _irt[-400:])
+
+# The helper's panel-self-update is what marks a run as the panel's. The marker is set on the
+# environment the helper BUILDS, after copying its own, so nothing the panel hands sudo removes it —
+# and install.sh must read the same name.
+_su_env = _helper._self_update_env("-", "evil")
+_su_env_blank = None
+_su_saved = os.environ.get("PANEL_SELF_UPDATE")
+try:
+    os.environ["PANEL_SELF_UPDATE"] = ""
+    _su_env_blank = _helper._self_update_env("-", "-")
+finally:
+    if _su_saved is None:
+        os.environ.pop("PANEL_SELF_UPDATE", None)
+    else:
+        os.environ["PANEL_SELF_UPDATE"] = _su_saved
+check("helper self-update: the installer's environment marks the run as the panel's",
+      _su_env.get("PANEL_SELF_UPDATE") == "1" and _su_env.get("PANEL_BRANCH") == "evil",
+      repr({k: v for k, v in _su_env.items() if k.startswith("PANEL_")}))
+check("helper self-update: ...even when the environment it inherited says otherwise",
+      (_su_env_blank or {}).get("PANEL_SELF_UPDATE") == "1")
+_su_probe = _rs_sub.run(
+    ["bash", "-c", "set -euo pipefail\nPANEL_USER=''\n" + _inst_shfn("_panel_started_run")
+     + "_panel_started_run && echo PANEL-STARTED || echo OPERATOR\n"],
+    capture_output=True, text=True,
+    env={k: v for k, v in _su_env.items() if k not in ("SUDO_UID", "SUDO_USER")})
+check("helper self-update: ...and install.sh reads that environment as a run the panel started",
+      "PANEL-STARTED" in _su_probe.stdout, _su_probe.stdout + _su_probe.stderr)
+import ast as _su_ast
+_su_fn2 = next(n for n in _su_ast.walk(_su_ast.parse(open(_helper_path, encoding="utf-8").read()))
+               if isinstance(n, _su_ast.FunctionDef) and n.name == "_self_update_detached")
+check("helper self-update: the detached run takes its environment from _self_update_env",
+      any(isinstance(n, _su_ast.Call) and isinstance(n.func, _su_ast.Name)
+          and n.func.id == "_self_update_env" for n in _su_ast.walk(_su_fn2))
+      and not any(isinstance(n, _su_ast.Subscript) and isinstance(n.value, _su_ast.Name)
+                  and n.value.id == "env" for n in _su_ast.walk(_su_fn2)))
 for _src in ("HELPER_SRC", "DBM_SRC"):
     check("install.sh: no longer installs root-owned files straight from %s" % _src,
           _src not in _inst)
@@ -1988,7 +2279,9 @@ try:
                     "info() { echo \"INFO $*\"; }\nok() { echo \"OK $*\"; }\n"
                     "check_origin_trusted() { :; }\ninstall_root_tools() { :; }\n"
                     "write_sudoers_grant() { :; }\nwrite_terminal_sudo_grant() { :; }\n"
-                    "install_recovery_command() { :; }\n")
+                    "install_recovery_command() { :; }\n"
+                    # the branch's last line is install.sh's own function, run as written
+                    + _su_find("update_noop_line() {", "\n}\n") + "\n")
     _r = _su_with_cfg(_su_cfg310, "3.12", _su_noop_env + _su_noop + "echo FULL_UPDATE\n")
     check("install.sh: an up-to-date checkout with a stale venv takes the full update, saying why",
           "FULL_UPDATE" in _r and "Already up to date" not in _r
@@ -1996,6 +2289,14 @@ try:
     _r = _su_with_cfg(_su_cfg312, "3.12", _su_noop_env + _su_noop + "echo FULL_UPDATE\n")
     check("install.sh: ...and with a current venv it is still 'Already up to date'",
           "OK Already up to date" in _r and "FULL_UPDATE" not in _r, repr(_r))
+    # ...and a HOLD, which takes this same branch (HEAD is the target), ends it with 'Not updated'
+    # and the reason _choose_update_target gave: the branch's own last line, run as written.
+    _r = _su_with_cfg(_su_cfg312, "3.12", _su_noop_env + "UPD_WHY=hold\nUPD_HOLD_WHY='the pin was "
+                      "sideways'\nDEFAULT_BRANCH=main\n" + _su_noop + "echo FULL_UPDATE\n")
+    check("install.sh: ...while a HOLD through that branch ends 'Not updated: held at', with the reason",
+          _r.rstrip().endswith("WARN Not updated: held at abc, because the pin was sideways. The panel "
+                               "was left running.") and "Already up to date" not in _r
+          and "FULL_UPDATE" not in _r, repr(_r))
 
     # recover.sh runs manage.py with the same venv: say what happened instead of a traceback, and
     # only when it is true (its remedy, re-running install.sh, now works on a current checkout).
@@ -2053,8 +2354,9 @@ try:
     # gamedig is installed with npm. NodeSource's nodejs bundles npm; the distro's does not, and
     # Ubuntu 24.04 and 26.04 ship a Node new enough to take the distro path — so every install
     # there ended with node, no npm, and no gamedig, silently. Driven with shims: node answers v22,
-    # and npm/gamedig exist only once something installed them.
-    _eg = _su_find("ensure_gamedig() {", "\n}\n")
+    # and npm/gamedig exist only once something installed them. ensure_nodejs stops at npm now:
+    # gamedig is install_gamedig's (driven below), from the pinned lockfile, never `npm install`.
+    _eg = _su_find("ensure_nodejs() {", "\n}\n")
     _eg_shim = ('info() { echo "INFO $*"; }\nok() { echo "OK $*"; }\nwarn() { echo "WARN $*"; }\n'
                 'id() { echo 0; }\nnode() { echo v22.3.0; }\ntee() { cat >/dev/null; }\n'
                 'chmod() { :; }\napt-cache() { :; }\n'
@@ -2071,21 +2373,144 @@ try:
         _sb = _tempfile.mkdtemp(prefix="gamedig-", dir=_su_sb)
         if have_npm:
             open(os.path.join(_sb, "npm"), "w").close()
-        _out = _su_run(_eg + "\nensure_gamedig\n", "SB=%s\nNODESOURCE_NODE_MAJOR=22\n"
+        _out = _su_run(_eg + "\nensure_nodejs\n", "SB=%s\nNODESOURCE_NODE_MAJOR=22\n"
                        % _su_shlex.quote(_sb), extra=shim).stdout
         _calls = os.path.join(_sb, "calls")
         return _out + (open(_calls, encoding="utf-8").read() if os.path.exists(_calls) else "")
     _r = _eg_run(False)
-    check("install.sh: a distro Node without npm gets npm, then gamedig",
-          bool(_eg) and "APT install -y npm" in _r
-          and "NPM install -g --ignore-scripts gamedig@5" in _r and "OK gamedig ready" in _r,
-          repr(_r[-300:]))
+    check("install.sh: a distro Node without npm gets npm, and npm installs nothing here",
+          bool(_eg) and "APT install -y npm" in _r and "NPM " not in _r, repr(_r[-300:]))
     _r = _eg_run(True)
     check("install.sh: ...and a host that has npm does not reinstall it",
-          "APT install -y npm" not in _r and "OK gamedig ready" in _r, repr(_r[-300:]))
-    _r = _eg_run(False, shim=_eg_shim.replace('&& touch "$SB/npm"; return 0', '; return 1'))
-    check("install.sh: ...and when gamedig still is not there, the install says so",
-          "WARN gamedig is not installed" in _r and "OK gamedig ready" not in _r, repr(_r[-300:]))
+          "APT install -y npm" not in _r and "NPM " not in _r, repr(_r[-300:]))
+
+    # ── install_gamedig: the three files root-owned from root's own source, then the script ──────
+    # Root runs install-gamedig.sh, so it is a boundary file like the helper: it must come from
+    # stage_root_source (root's own clone, or a checkout nobody else can write), never from the
+    # panel-owned checkout — and not at all from an untrusted origin. All three or none: a new
+    # lockfile beside an old package.json is a tree npm ci refuses, and a new script beside an old
+    # lockfile installs the old tree. Driven with stage_root_source and `install` as shims, the
+    # "root source" and the checkout holding DIFFERENT bytes so a read from the wrong one shows.
+    _ig = _su_find('GAMEDIG_DIR="${HELPER_DIR}/gamedig"', "\n}\n")
+    _ig_shim = ('info() { echo "INFO $*"; }\nok() { echo "OK $*"; }\nid() { echo 0; }\n'
+                '_prepare_root_source() { :; }\n'
+                'stage_root_source() { [ -f "$SB/rootsrc/$1" ] || return 1;'
+                ' cp "$SB/rootsrc/$1" "${HELPER_DIR}/.stage-$2" && echo "${HELPER_DIR}/.stage-$2"; }\n'
+                'install() { local d=0 m="" a=(); while [ $# -gt 0 ]; do case "$1" in -d) d=1 ;;'
+                ' -o|-g) shift ;; -m) shift; m="$1" ;; *) a+=("$1") ;; esac; shift; done;'
+                ' if [ "$d" = 1 ]; then mkdir -p "${a[@]}"; return; fi;'
+                ' [ "${a[1]##*/}" = ".new-${IG_FAIL:-}" ] && return 1;'
+                ' cp "${a[0]}" "${a[1]}" && chmod "$m" "${a[1]}"; }\n')
+
+    def _ig_run(trusted=True, drop=None, script_rc=0, preplaced=False, fail_install=""):
+        """(output, {name: (bytes, mode)} placed, leftover stage/temp files) for one install_gamedig.
+        fail_install: the file whose root-owned `install` fails (the step after staging)."""
+        _sb = _tempfile.mkdtemp(prefix="install-gamedig-sh-", dir=_su_sb)
+        for _where, _tag in (("rootsrc", b"ROOTSRC"), (os.path.join("panel"), b"CHECKOUT")):
+            _d = os.path.join(_sb, _where, "tools", "gamedig")
+            os.makedirs(_d)
+            for _n in ("package.json", "package-lock.json"):
+                with open(os.path.join(_d, _n), "wb") as _fh:
+                    _fh.write(_tag + b" " + _n.encode() + b"\n")
+            with open(os.path.join(_d, "install-gamedig.sh"), "wb") as _fh:
+                _fh.write(b"#!/bin/sh\n# " + _tag + b"\necho \"install-gamedig: RAN $0 with $(cat "
+                          b"\"$(dirname \"$0\")/package-lock.json\")\"\nexit %d\n" % script_rc)
+        if drop:
+            os.unlink(os.path.join(_sb, "rootsrc", "tools", "gamedig", drop))
+        _lib = os.path.join(_sb, "lib")
+        if preplaced:
+            os.makedirs(os.path.join(_lib, "gamedig"))
+            for _n in ("package.json", "package-lock.json", "install-gamedig.sh"):
+                with open(os.path.join(_lib, "gamedig", _n), "wb") as _fh:
+                    _fh.write(b"OLD\n")
+        _env = ("SB=%s\nHELPER_DIR=%s\nPANEL_DIR=%s\nORIGIN_TRUSTED=%d\nIG_FAIL=%s\n"
+                % (_su_shlex.quote(_sb), _su_shlex.quote(_lib),
+                   _su_shlex.quote(os.path.join(_sb, "panel")), 1 if trusted else 0,
+                   _su_shlex.quote(fail_install) if fail_install else "''"))
+        _out = _su_run(_ig + '\ninstall_gamedig\necho "RC=$?"\n', _env, extra=_ig_shim).stdout
+        _placed = {}
+        for _n in ("package.json", "package-lock.json", "install-gamedig.sh"):
+            _p = os.path.join(_lib, "gamedig", _n)
+            if os.path.exists(_p):
+                with open(_p, "rb") as _fh:
+                    _placed[_n] = (_fh.read(), os.stat(_p).st_mode & 0o777)
+        _left = [_x for _x in (os.listdir(_lib) if os.path.isdir(_lib) else [])
+                 if _x.startswith(".stage-")]
+        _left += [_x for _x in (os.listdir(os.path.join(_lib, "gamedig"))
+                                if os.path.isdir(os.path.join(_lib, "gamedig")) else [])
+                  if _x.startswith(".new-")]
+        return _out, _placed, _left
+    _o, _p, _l = _ig_run()
+    check("install.sh: install_gamedig places all three from root's source, 0644/0644/0755",
+          bool(_ig) and sorted(_p) == ["install-gamedig.sh", "package-lock.json", "package.json"]
+          and all(b"ROOTSRC" in _b and b"CHECKOUT" not in _b for _b, _ in _p.values())
+          and _p["package.json"][1] == 0o644 and _p["package-lock.json"][1] == 0o644
+          and _p["install-gamedig.sh"][1] == 0o755 and not _l,
+          "out=%r placed=%r left=%r" % (_o[-200:], {k: v[1] for k, v in _p.items()}, _l))
+    check("install.sh: ...then runs the PLACED script, beside the placed lockfile, and reports it",
+          "/lib/gamedig/install-gamedig.sh with ROOTSRC package-lock.json" in _o
+          and "OK RAN " in _o and "RC=0" in _o, repr(_o[-300:]))
+    _o, _p, _l = _ig_run(trusted=False, preplaced=True)
+    check("install.sh: an untrusted origin places nothing, runs nothing, and says so",
+          set(_b for _b, _ in _p.values()) == {b"OLD\n"} and "RAN" not in _o
+          and "untrusted origin" in _o and "RC=0" in _o, repr(_o[-300:]))
+    _o, _p, _l = _ig_run(drop="package-lock.json", preplaced=True)
+    check("install.sh: one file that cannot be staged places NONE of them, runs nothing, names it",
+          set(_b for _b, _ in _p.values()) == {b"OLD\n"} and "RAN" not in _o
+          and "tools/gamedig/package-lock.json" in _o and not _l and "RC=0" in _o,
+          "out=%r left=%r" % (_o[-300:], _l))
+    # ...and the same when it is the root-owned install of the SECOND file that fails, after the
+    # first was already written: nothing lands under its real name until all three are there.
+    _o, _p, _l = _ig_run(fail_install="package-lock.json", preplaced=True)
+    check("install.sh: ...or whose root-owned install fails part-way: none land, nothing left over",
+          set(_b for _b, _ in _p.values()) == {b"OLD\n"} and "RAN" not in _o
+          and "tools/gamedig/package-lock.json" in _o and not _l and "RC=0" in _o,
+          "out=%r placed=%r left=%r" % (_o[-300:], {k: v[0][:9] for k, v in _p.items()}, _l))
+    _o, _p, _l = _ig_run(script_rc=1)
+    check("install.sh: a failed gamedig install warns and does not fail the install",
+          "WARN gamedig could not be installed" in _o and "RC=0" in _o, repr(_o[-300:]))
+
+    # WHERE it runs. Root runs the staged copy, so it has to follow install_root_tools (and so
+    # fetch_code): the update path's gamedig step used to run first thing, on the OLD checkout.
+    # Every path that places root-owned pieces places this one too — the full update, the
+    # already-up-to-date re-run, and a fresh install.
+    import re as _re_ig
+    _ig_upd = _su_find('if [ "${IS_UPDATE}" -eq 1 ]; then', '\n    BACKUP_ROOT=')
+    _ig_full = _su_find("\n    fetch_code\n    _CODE_FETCHED=1", 'ok "Update complete: ')
+    _ig_fresh = _su_find("\nfetch_code\n", 'info "[3/4] Registering the service')
+
+    def _ig_after(text, *names):
+        """True when each name is called, as a line of its own, after the one before it."""
+        _pos = -1
+        for _nm in names:
+            _m = _re_ig.search(r"^\s*%s(?:\s|$)" % _re_ig.escape(_nm), text[_pos + 1:], _re_ig.M)
+            if not _m:
+                return False
+            _pos += 1 + _m.start()
+        return True
+    check("install.sh: install_gamedig runs after install_root_tools on every path that places "
+          "root-owned pieces",
+          _ig_after(_ig_upd, "install_root_tools", "install_gamedig", "exit 0")
+          and _ig_after(_ig_full, "install_root_tools", "svc start linuxgsm-panel.service",
+                        "if health_check; then", "install_gamedig")
+          and _ig_after(_ig_fresh, "ensure_nodejs", "install_root_tools", "install_gamedig"),
+          "up-to-date=%r full=%r fresh=%r" % (
+              _ig_after(_ig_upd, "install_root_tools", "install_gamedig", "exit 0"),
+              _ig_after(_ig_full, "install_root_tools", "svc start linuxgsm-panel.service",
+                        "if health_check; then", "install_gamedig"),
+              _ig_after(_ig_fresh, "ensure_nodejs", "install_root_tools", "install_gamedig")))
+
+    # ...and on the full update path, only once the health check has PASSED. Between the restart
+    # and the health check, an `npm ci` held the verdict and the rollback of a broken release for
+    # as long as the registry took.
+    _ig_window = _su_find("\n    svc start linuxgsm-panel.service || true   # it was stopped",
+                          "\n    if health_check; then\n")
+    check("install.sh: the update path installs gamedig after the health check passes, never "
+          "between the restart and it",
+          bool(_ig_window) and not _re_ig.search(r"^\s*install_gamedig(?:\s|$)", _ig_window, _re_ig.M)
+          and _ig_after(_ig_full, "if health_check; then", 'ok "Health check passed',
+                        "install_gamedig"),
+          "window found=%r" % bool(_ig_window))
 
     # The add-host bootstrap has the same step for REMOTE hosts: a host that already had a distro
     # Node 18+ skipped straight to the npm install of gamedig. It is hosts._bootstrap_node now —
@@ -2148,6 +2573,48 @@ try:
           _nd_cmds and all(c[2] is False for c in _nd_cmds)
           and not any("curl" in c[1] or "setup_lts" in c[1] or "| bash" in c[1] for c in _nd_cmds),
           repr(_nd_cmds))
+
+    # The daily pass (app._node_tools_cron_pass -> ensure_node_tools_cron), per host. A REMOTE gets
+    # gamedig-install — the lockfile, the script, and gamedig from them — and THEN the cron that
+    # re-runs the script: written first, a cron would name a script that is not there yet. The
+    # panel's own host gets the cron alone: its files are install.sh's, root-owned, and the helper
+    # refuses the verb. And whatever gamedig-install does, the cron is still written: it is what
+    # replaces the old weekly `npm install -g` line.
+    def _ntc_ev(server, gd=("install-gamedig: gamedig 5.3.3 ready", "", 0)):
+        _ev = []
+
+        def _rp(s, verb, args=(), **k):
+            _ev.append(verb)
+            if isinstance(gd, Exception):
+                raise gd
+            return gd
+
+        def _wr(s, target, content, **k):
+            _ev.append("write:" + target)
+            return ("", "", 0)
+        _saved = (_nd_core.run_privileged, _nd_core.write_root_file)
+        _nd_core.run_privileged, _nd_core.write_root_file = _rp, _wr
+        try:
+            _ok = _nd_hosts.ensure_node_tools_cron(server)
+        except Exception as _e:    # it must never raise; reported by the checks, not a crash
+            _ok = "raised %r" % _e
+        finally:
+            _nd_core.run_privileged, _nd_core.write_root_file = _saved
+        return _ev, _ok
+    _ev, _ok = _ntc_ev(NS(id=7301, host="203.0.113.30", auth_method="key", name="r1"))
+    check("hosts: the daily pass gives a remote gamedig-install, THEN the cron that re-runs it",
+          _ev == ["gamedig-install", "write:node-tools-cron"] and _ok is True, repr((_ev, _ok)))
+    _ev, _ok = _ntc_ev(NS(id=7302, host="203.0.113.31", auth_method="key", name="r2"),
+                       gd=("install-gamedig: npm ci failed", "", 1))
+    _ev2, _ok2 = _ntc_ev(NS(id=7303, host="203.0.113.32", auth_method="key", name="r3"),
+                         gd=RuntimeError("ssh dropped"))
+    check("hosts: ...and still writes the cron when the install failed, or raised",
+          _ev == ["gamedig-install", "write:node-tools-cron"] and _ok is True
+          and _ev2 == ["gamedig-install", "write:node-tools-cron"] and _ok2 is True,
+          repr((_ev, _ok, _ev2, _ok2)))
+    _ev, _ok = _ntc_ev(NS(id=7304, host="127.0.0.1", is_local=True, name="local"))
+    check("hosts: ...while the panel's own host gets the cron alone, never gamedig-install",
+          _ev == ["write:node-tools-cron"] and _ok is True, repr((_ev, _ok)))
 
     # A just-created account that sudo cannot resolve yet is retried. sudo-rs (Ubuntu 26.04's
     # /usr/bin/sudo) words it differently from classic sudo, so the retry never fired there.
@@ -2943,6 +3410,63 @@ try:
         _shutil.rmtree(_shared_tmp, ignore_errors=True)
     check("uninstall.sh: ...and says so when another install owns them",
           "belong to another install" in _un_txt)
+
+    # ── gamedig's two links go with the tree they point into — and only those ──────────────────
+    # install-gamedig.sh links /usr/local/bin/gamedig and /usr/bin/gamedig into the tree under
+    # /usr/local/lib/linuxgsm-panel/gamedig, which the helper-directory `rm -rf` takes; left, they
+    # would dangle. But /usr/bin/gamedig is also where NodeSource's npm puts a global gamedig, and
+    # an operator may have their own: only a link whose TEXT points into the panel's directory is
+    # the panel's. Driven on fixture links (readlink reads the text, so a target need not exist).
+    _gl_fn = _su_between2("_gamedig_link_ours() {", "\n}\n")
+    _gl_tmp = _tempfile.mkdtemp(prefix="gamedig-links-")
+    try:
+        _gl_cases = {
+            "ours": ("link", "/usr/local/lib/linuxgsm-panel/gamedig/current/node_modules/.bin/gamedig"),
+            "npm": ("link", "../lib/node_modules/gamedig/bin/gamedig.js"),
+            "lookalike": ("link", "/usr/local/lib/linuxgsm-panel/gamedig-old/current/gamedig"),
+            "sibling": ("link", "/usr/local/lib/linuxgsm-panel/panel-helper"),
+            "file": ("file", ""),
+        }
+        for _k, (_kind, _t) in _gl_cases.items():
+            _p = os.path.join(_gl_tmp, _k)
+            if _kind == "link":
+                os.symlink(_t, _p)
+            else:
+                open(_p, "w").close()
+        _gl_probe = _gl_fn + "".join(
+            '\n_gamedig_link_ours %s && echo "%s=OURS" || echo "%s=NOT"'
+            % (_su_shlex.quote(os.path.join(_gl_tmp, _k)), _k, _k) for _k in _gl_cases)
+        _r = _su_run(_gl_probe, "")
+        check("uninstall.sh: only a link INTO the panel's gamedig directory counts as the panel's",
+              all(("%s=%s" % (_k, "OURS" if _k == "ours" else "NOT")) in _r.stdout
+                  for _k in _gl_cases), repr(_r.stdout))
+    finally:
+        _shutil.rmtree(_gl_tmp, ignore_errors=True)
+    _gl_loop = "for _gd_link in /usr/local/bin/gamedig /usr/bin/gamedig; do"
+    _gl_at = _un_txt.find(_gl_loop)
+    # The branch that runs only when the host-shared pieces are this install's (SHARED_MINE).
+    _gl_elif = _un_txt.find("\nelif [ -d /usr/local/lib/linuxgsm-panel ]")
+    # ...and they are the links the script makes: its LINK_DIRS, each + /gamedig.
+    _gl_script = open(os.path.join(_root, "tools", "gamedig", "install-gamedig.sh"),
+                      encoding="utf-8").read()
+    _gl_dirs = re.search(r"^LINK_DIRS=\(([^)]*)\)$", _gl_script, re.M)
+    _gl_script_links = [_d + "/gamedig" for _d in (_gl_dirs.group(1).split() if _gl_dirs else [])]
+    _gl_un_links = _gl_loop.split(" in ")[1].split(";")[0].split()
+    _gl_blk = _un_txt[_gl_at:_un_txt.find("\n    done\n", _gl_at)] if _gl_at >= 0 else ""
+    check("uninstall.sh: removes both links, each only when _gamedig_link_ours, and only on the "
+          "branch that owns the shared pieces",
+          0 < _gl_elif < _gl_at < _un_txt.find("\nfi\n", _gl_elif)
+          and 'if _gamedig_link_ours "${_gd_link}"; then' in _gl_blk
+          and '${U_SUDO} rm -f "${_gd_link}"' in _gl_blk
+          and _gl_script_links == _gl_un_links == ["/usr/local/bin/gamedig", "/usr/bin/gamedig"],
+          repr((_gl_at, _gl_script_links, _gl_un_links)))
+    # ...and the links alone are enough to REACH that branch: its `elif` is the whole gate, and a
+    # host whose helper directory, cron and recovery link are already gone would otherwise keep two
+    # links into a directory that no longer exists. Read off the condition itself, up to its `then`.
+    _gl_cond = (_un_txt[_gl_elif:_un_txt.find("; then\n", _gl_elif)] if _gl_elif >= 0 else "")
+    check("uninstall.sh: ...and either gamedig link alone is enough to enter that branch",
+          all(re.search(r"\|\|\s*_gamedig_link_ours %s(?:\s|$)" % re.escape(_l), _gl_cond)
+              for _l in ("/usr/local/bin/gamedig", "/usr/bin/gamedig")), repr(_gl_cond))
 
     # ── the firewall rule the INSTALLER opened has to come off on the path it opened it ───────
     # The ufw removal lived inside `if [ "${MODE}" = "system" ]`, so a per-user uninstall never
@@ -4043,6 +4567,25 @@ check("workflows: every tool pin file is a pip-compile lockfile beside its .in, 
       bool(_ci_matrix_py) and not _ci_lock_bad
       and 'directory: "/.github/ci-requirements"' in _ci_dep
       and 'directory: "/.github/ci-requirements-checks"' in _ci_dep, repr(_ci_lock_bad))
+# gamedig's lockfile moves ONLY through Dependabot now (the hosts stopped fetching from the
+# registry), so the entry is what keeps it current: npm, the directory the lockfile is in, a
+# cooldown (a release pulled in its first days never reaches a PR), and gamedig majors ignored (the
+# query types are written for 5). Dependency Review must see the change, or a bump that adds a
+# vulnerable package slides past it: it is path-filtered.
+_ci_dep_blocks = re.split(r"\n(?=  - package-ecosystem: )", _ci_dep)
+_ci_npm = [_b for _b in _ci_dep_blocks if '- package-ecosystem: "npm"' in _b]
+_ci_dr = open(os.path.join(_root, ".github", "workflows", "dependency-review.yml"),
+              encoding="utf-8").read()
+_ci_dr_on = _ci_dr[:_ci_dr.index("\npermissions:")] if "\npermissions:" in _ci_dr else ""
+check("dependabot: tools/gamedig's lockfile has an npm entry with a cooldown, gamedig majors ignored",
+      len(_ci_npm) == 1 and 'directory: "/tools/gamedig"' in _ci_npm[0]
+      and re.search(r"\n    cooldown:\n      default-days: [1-9]", _ci_npm[0]) is not None
+      and re.search(r'- dependency-name: "gamedig"\n\s+update-types: \["version-update:semver-major"\]',
+                    _ci_npm[0]) is not None,
+      repr(_ci_npm))
+check("dependency review: runs on a change to gamedig's package.json or lockfile",
+      "      - 'tools/gamedig/package-lock.json'\n" in _ci_dr_on
+      and "      - 'tools/gamedig/package.json'\n" in _ci_dr_on, _ci_dr_on[-400:])
 # ...and a workflow that runs only on listed paths must list the pinned files it installs, or a
 # Dependabot bump of that file is never tested (fuzz.yml filters by path).
 _ci_unwatched = []
@@ -4832,7 +5375,7 @@ _inst_paths = {_p.rstrip("/") for _p in _inst_paths if _p.count("/") > 2}
 _unremoved = sorted(_p for _p in _inst_paths if not _is_removed(_p))
 # The scan above proves a path is rm'd SOMEWHERE in the file. It has no model of the `if
 # [ "${MODE}" = "system" ]` guard, so for a long time it passed while three of those removals were
-# unreachable on a per-user install — install.sh calls ensure_gamedig() and install_root_tools()
+# unreachable on a per-user install — install.sh calls ensure_nodejs() and install_root_tools()
 # unconditionally, before its own root/user split, and both use sudo when not root. So the paths
 # that a user-mode install CREATES must be rm'd outside that branch.
 # rindex, not index: uninstall.sh tests MODE earlier too (to print the service user in the
@@ -6288,7 +6831,12 @@ try:
     with open(os.path.join(_dp_pd, "install.sh"), "w") as _dp_f:
         _dp_f.write("#!/bin/bash\necho PANEL-OWNED-INSTALLER\n")
     _dp_log = os.path.join(_dp_sb, "log")
-    _dp_shipped = "#!/bin/bash\necho SHIPPED-INSTALLER\n"
+    # Every installer the job may ship carries root's source floor line (install.sh's
+    # _ROOT_SRC_FLOOR_LINE): the verify step refuses one without it.
+    def _dp_inst(name):
+        return "#!/bin/bash\necho %s\n%s\n" % (name, _RS_FLOOR_LINE)
+
+    _dp_shipped = _dp_inst("SHIPPED-INSTALLER")
     _dp_shims = (
         'LOG=%s\n' % _shlex_q(_dp_log)
         + 'systemctl() { echo %s; }\n' % _shlex_q(_dp_pd)
@@ -6334,22 +6882,29 @@ try:
 
     _sh_sub.run(["git", "init", "-q", "-b", "main", _dp_runner], capture_output=True, env=_dp_genv)
     _pad_history(_dp_runner, _dp_genv)
-    _dp_older = _dp_commit("#!/bin/bash\necho OLDER-INSTALLER\n", "an older commit of main")
+    # Root's source floor, in this history: _dp_floorc plays e26a644. Below it, a commit of main
+    # whose installer even carries the floor's line, so only the ancestry check can refuse it; above
+    # it, one whose installer predates the floor (no line), so only the line check can.
+    _dp_prefloor = _dp_commit(_dp_inst("PRE-FLOOR-INSTALLER"), "main below the floor")
+    _dp_floorc = _dp_commit(_dp_inst("FLOOR-INSTALLER"), "the floor")
+    _dp_noline = _dp_commit("#!/bin/bash\necho NO-LINE-INSTALLER\n",
+                            "after the floor, before installers enforced it")
+    _dp_older = _dp_commit(_dp_inst("OLDER-INSTALLER"), "an older commit of main")
     _dp_sha = _dp_commit(_dp_shipped, "the commit whose CI passed")
     _dp_git("checkout", "-q", "--detach")
-    _dp_tagged = _dp_commit("#!/bin/bash\necho TAG-ONLY-INSTALLER\n", "reached by tags only")
+    _dp_tagged = _dp_commit(_dp_inst("TAG-ONLY-INSTALLER"), "reached by tags only")
     _dp_git("checkout", "-q", "--detach", _dp_sha)
-    _dp_other = _dp_commit("#!/bin/bash\necho OTHER-BRANCH-INSTALLER\n", "another branch")
+    _dp_other = _dp_commit(_dp_inst("OTHER-BRANCH-INSTALLER"), "another branch")
     _dp_git("checkout", "-q", "main")
     # A pull request merged with a merge commit (--no-ff): E, an intermediate commit whose change
     # was reverted (F) before the merge, and G, its final state. E, F and G are ancestors of main
     # only through the merge's SECOND parent — main was never at any of them — while the merge
     # commit M is on main's own (first-parent) line.
-    _dp_before = _dp_commit("#!/bin/bash\necho BEFORE-MERGE-INSTALLER\n", "main before the merge")
+    _dp_before = _dp_commit(_dp_inst("BEFORE-MERGE-INSTALLER"), "main before the merge")
     _dp_git("checkout", "-q", "-b", "side")
-    _dp_side = [_dp_commit("#!/bin/bash\necho INTERMEDIATE-INSTALLER\n", "E: intermediate"),
-                _dp_commit("#!/bin/bash\necho BEFORE-MERGE-INSTALLER\n", "F: E reverted"),
-                _dp_commit("#!/bin/bash\necho MERGED-INSTALLER\n", "G: the PR's final state")]
+    _dp_side = [_dp_commit(_dp_inst("INTERMEDIATE-INSTALLER"), "E: intermediate"),
+                _dp_commit(_dp_inst("BEFORE-MERGE-INSTALLER"), "F: E reverted"),
+                _dp_commit(_dp_inst("MERGED-INSTALLER"), "G: the PR's final state")]
     _dp_git("checkout", "-q", "main")
     _dp_git("merge", "-q", "--no-ff", "-m", "M: merge the pull request", "side")
     _dp_merge = _dp_git("rev-parse", "HEAD")
@@ -6359,11 +6914,15 @@ try:
     _dp_git("commit", "-q", "-m", "main without an installer")
     _dp_noinst = _dp_git("rev-parse", "HEAD")
     _dp_empty = _dp_commit("", "main with an empty installer")
-    _dp_tip = _dp_commit("#!/bin/bash\necho TIP-INSTALLER\n", "main's tip, CI still running")
+    _dp_tip = _dp_commit(_dp_inst("TIP-INSTALLER"), "main's tip, CI still running")
     _dp_git("update-ref", "refs/remotes/origin/main", _dp_tip)
     _dp_git("update-ref", "refs/remotes/origin/other", _dp_other)
     _dp_git("update-ref", "refs/tags/main", _dp_tagged)
     _dp_git("update-ref", "refs/tags/origin/main", _dp_tagged)
+
+    _dp_floor_m = re.findall(r"^FLOOR=([0-9a-f]{40})$", _dp_verify_run, re.M)
+    _dp_verify_fx = (_dp_verify_run.replace("FLOOR=%s\n" % _dp_floor_m[0], "FLOOR=%s\n" % _dp_floorc)
+                     if len(_dp_floor_m) == 1 else "echo '::error::no FLOOR= line'; exit 99\n")
 
     def _dp_deploy(sha, stream, branch="main"):
         """Run the job's two run blocks as the runner would: verify, and — only if it passed — the
@@ -6375,7 +6934,7 @@ try:
         _rt = _tempfile.mkdtemp(dir=_dp_sb, prefix="runner-temp-")
         _gho = os.path.join(_rt, "github_output")
         open(_gho, "w").close()
-        _v = _sh_sub.run(["bash", "-c", _dp_verify_run], capture_output=True, text=True,
+        _v = _sh_sub.run(["bash", "-c", _dp_verify_fx], capture_output=True, text=True,
                          cwd=_dp_runner, env=dict(_dp_genv, HEAD_SHA=sha, HEAD_BRANCH=branch,
                                                   RUNNER_TEMP=_rt, GITHUB_OUTPUT=_gho,
                                                   TMPDIR=_NOWRITE_TMP))
@@ -6484,12 +7043,12 @@ try:
     _dp_tip_inst, _dp_tip_pin = _dp_payload(os.path.join(_dp_sb, "stream-tip"))
     check("deploy: main's TIP ships although a tag named origin/main points elsewhere "
           "(the step reads refs/remotes/origin/main)",
-          _dp_shadowed and _dp_tip_inst == "#!/bin/bash\necho TIP-INSTALLER\n"
+          _dp_shadowed and _dp_tip_inst == _dp_inst("TIP-INSTALLER")
           and _dp_tip_pin == _dp_tip, "installer=%r pin=%r" % (_dp_tip_inst, _dp_tip_pin))
     _dp_deploy(_dp_older, os.path.join(_dp_sb, "stream-older"))
     _dp_old_inst, _dp_old_pin = _dp_payload(os.path.join(_dp_sb, "stream-older"))
     check("deploy: ...and so does an older commit of main, with that commit's own installer",
-          _dp_old_inst == "#!/bin/bash\necho OLDER-INSTALLER\n" and _dp_old_pin == _dp_older,
+          _dp_old_inst == _dp_inst("OLDER-INSTALLER") and _dp_old_pin == _dp_older,
           "installer=%r pin=%r" % (_dp_old_inst, _dp_old_pin))
     # FIRST-PARENT, not ancestry. A tag `main` on E — an intermediate commit of a merged pull
     # request, reverted before the merge — passes the job's `if`, and E IS an ancestor of main. It
@@ -6510,7 +7069,7 @@ try:
     _dp_deploy(_dp_merge, os.path.join(_dp_sb, "stream-merge"))
     _dp_m_inst, _dp_m_pin = _dp_payload(os.path.join(_dp_sb, "stream-merge"))
     check("deploy: ...while the merge commit ships, with its own installer (positive control)",
-          _dp_m_inst == "#!/bin/bash\necho MERGED-INSTALLER\n" and _dp_m_pin == _dp_merge,
+          _dp_m_inst == _dp_inst("MERGED-INSTALLER") and _dp_m_pin == _dp_merge,
           "installer=%r pin=%r" % (_dp_m_inst, _dp_m_pin))
     # A commit of main with nothing to ship is refused in words, not by a bare git fatal — and an
     # EMPTY installer too: sent, it runs as nothing on the host and the job goes green.
@@ -6527,6 +7086,36 @@ try:
           _dp_none["no install.sh"][0], _dp_none["no install.sh"][1])
     check("deploy: ...and so is one whose install.sh is empty",
           _dp_none["empty install.sh"][0], _dp_none["empty install.sh"][1])
+    # ROOT'S SOURCE FLOOR. A re-run of an old CI run deploys that commit, and its installer runs as
+    # root on a system install. The step holds the same floor install.sh does (e26a644), and ships
+    # only an installer that enforces it — one after e26a644 but from before the floor existed
+    # would, root-owned, let the panel take root back below it.
+    _dp_seed_inst = re.findall(r'^ROOT_SRC_FLOOR_SEED="([0-9a-f]{40})"$', _inst, re.M)
+    check("deploy: the verify step's floor is install.sh's (e26a644), and it checks install.sh's "
+          "floor line",
+          len(_dp_floor_m) == 1 and _dp_floor_m == _dp_seed_inst
+          and "grep -qxF '%s' \"${INSTALLER}\"" % _RS_FLOOR_LINE in _dp_code(_dp_verify_run),
+          "deploy FLOOR=%r, install.sh seed=%r" % (_dp_floor_m, _dp_seed_inst))
+    _dp_fl = {}
+    for _dp_what, _dp_c, _dp_msg in (
+            ("below", _dp_prefloor, "::error::head_sha %s predates %s" % (_dp_prefloor, _dp_floorc)),
+            ("no line", _dp_noline, "::error::%s's install.sh predates root's source floor"
+             % _dp_noline)):
+        _dp_out = os.path.join(_dp_sb, "stream-floor-" + _dp_what.replace(" ", "-"))
+        _dp_x = _dp_deploy(_dp_c, _dp_out)
+        _dp_fl[_dp_what] = (_dp_x.returncode != 0 and not os.path.exists(_dp_out)
+                            and _dp_msg in _dp_x.stdout,
+                            "rc=%s sent=%s out=%r" % (_dp_x.returncode, os.path.exists(_dp_out),
+                                                      _dp_x.stdout[-300:]))
+    check("deploy: a commit of main below root's source floor is refused, nothing sent",
+          _dp_fl["below"][0], _dp_fl["below"][1])
+    check("deploy: ...and so is one above it whose installer does not enforce the floor",
+          _dp_fl["no line"][0], _dp_fl["no line"][1])
+    _dp_deploy(_dp_floorc, os.path.join(_dp_sb, "stream-floor-at"))
+    _dp_f_inst, _dp_f_pin = _dp_payload(os.path.join(_dp_sb, "stream-floor-at"))
+    check("deploy: ...while the floor commit itself ships (positive control)",
+          _dp_f_inst == _dp_inst("FLOOR-INSTALLER") and _dp_f_pin == _dp_floorc,
+          "installer=%r pin=%r" % (_dp_f_inst, _dp_f_pin))
     # The deploy step's own guard. A handoff that arrives empty must stop the job: sent, an empty
     # INSTALLER_B64 is written out and run as nothing on the host, and the job goes green.
     _dp_out = os.path.join(_dp_sb, "stream-nohandoff")
@@ -6588,9 +7177,10 @@ finally:
 # leaves it where it is. Deploy runs do not finish in push order — a re-run of an old commit's CI
 # deploys it last — and resetting to the pin would take the host backwards. Run the real
 # resolve_update_target against a real clone.
-_ru_fn = 'warn() { echo "WARN $*" >&2; }\n' + "".join(_inst_shfn(_n) for _n in (
-    "_gitc", "_ref_exists", "_fetch_branch", "_on_first_parent_line", "_choose_update_target",
-    "resolve_update_target"))
+_ru_names = ("_gitc", "_ref_exists", "_fetch_branch", "_fetch_branch_history",
+             "_on_first_parent_line", "_choose_update_target", "resolve_update_target",
+             "update_noop_line")
+_ru_fn = 'warn() { echo "WARN $*" >&2; }\n' + "".join(_inst_shfn(_n) for _n in _ru_names)
 _ru_sb = _tempfile.mkdtemp(prefix="updref-")
 try:
     _ru_up, _ru_co = os.path.join(_ru_sb, "up"), os.path.join(_ru_sb, "co")
@@ -7288,6 +7878,280 @@ try:
           and "does not fall back to main's tip" in _fp_r.stderr,
           "rc=%s out=%r err=%r" % (_fp_r.returncode, _fp_r.stdout[-200:], _fp_r.stderr[-300:]))
 
+    # SIDEWAYS. The same foxtrot, and a pin that IS on main's line but is neither S1's ancestor nor
+    # its descendant: O1, the other branch's commit that X merged S1 into. The panel's update check
+    # can offer it (its walk lists X and O1 while X is still in CI). "Never backwards" let it
+    # through — O1 does not contain S1 — and the reset dropped S1. Now the host moves only to a pin
+    # it is an ancestor of; otherwise it holds, and says why. X (above) still moves it forward.
+    def _fx_anc(a, b):
+        return _sh_sub.run(["git", "-C", _fx_up, "merge-base", "--is-ancestor", a, b],
+                           env=_tsh_env).returncode
+
+    _fx_side_premise = _fx_o1 in _fx_line and _fx_anc(_fx_o1, _fx_s1) == 1 and _fx_anc(_fx_s1, _fx_o1) == 1
+    _fx_side_warn = ("WARN The commit this update is pinned to, %s, is on main's first-parent line, "
+                     "but it neither contains this checkout (%s) nor is contained by it" % (_fx_o1, _fx_s1))
+    _fp_r = _fp_resolve_run(_fx_clone("fx-side", _fx_s1), _fx_o1)
+    check("install.sh: after a foxtrot push, a verified pin that neither contains the host's HEAD nor "
+          "is contained by it (sideways) holds the host where it is, and says why",
+          _fx_side_premise and "TARGET=%s" % _fx_s1 in _fp_r.stdout and _fx_side_warn in _fp_r.stderr,
+          "premise=%s; rc=%s out=%r err=%r" % (_fx_side_premise, _fp_r.returncode, _fp_r.stdout[-200:],
+                                               _fp_r.stderr[-400:]))
+    _fp_head, _fp_why = _fp_fetch_code(_fx_clone("fx-side-fc", _fx_s1), _fx_o1)
+    check("install.sh: ...nor does fetch_code move it sideways",
+          _fx_side_premise and _fp_head == _fx_s1
+          and "Keeping %s: the pinned commit %s is on main but does not contain this checkout" % (
+              _fx_s1, _fx_o1) in _fp_why,
+          "HEAD %s, want S1 %s (pin O1 %s) %s" % (_fp_head, _fx_s1, _fx_o1, _fp_why))
+    # ...and the update's last line says it was NOT updated, and why — the line the deploy's log and
+    # the panel's update card are read by (update_noop_line; the card test is further down).
+    _fp_r = _sh_sub.run(["bash", "-c", "set -euo pipefail\nSRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n"
+                         "%sresolve_update_target\nupdate_noop_line\n"
+                         % (_shlex_q(_fx_clone("fx-side-last", _fx_s1)), _ru_fn)],
+                        capture_output=True, text=True, env=dict(_fp_env, PANEL_UPDATE_REF=_fx_o1))
+    check("install.sh: ...and its last line is 'Not updated: held at <HEAD>', naming the pin and why",
+          _fp_r.returncode == 0 and _fp_r.stderr.rstrip().endswith(
+              "WARN Not updated: held at %s, because the pinned commit %s is on main but does not "
+              "contain this checkout, so moving to it would drop commits the checkout has. The panel "
+              "was left running." % (_fx_s1[:10], _fx_o1)),
+          "rc=%s err=%r" % (_fp_r.returncode, _fp_r.stderr[-400:]))
+    # ...while a checkout OFF main (a local commit on S1) is still reset to that pin, as it always
+    # was: the move-only-forward rule is for a HEAD on the branch.
+    _fx_loc = _fx_clone("fx-side-local", _fx_s1)
+    _fp_git("-C", _fx_loc, "commit", "-q", "--allow-empty", "-m", "a local commit")
+    _fp_got = _fp_resolve(_fx_loc, _fx_o1)
+    check("install.sh: ...while a local commit off main is still reset to the pin (positive control)",
+          _fp_got == _fx_o1, "target %s, want O1 %s" % (_fp_got, _fx_o1))
+
+    # SHALLOW. The installer clones --depth 1, and fetch_code unshallows before it decides, so
+    # resolve_update_target decided on less history than fetch_code then acted on. On main at
+    # R-B2-S1, a host cloned at S1 does not have B2: a deploy pinned to B2 (a late re-run) read as
+    # "not verified" and held, with a warning that B2 was not on main. And once main is foxtrotted,
+    # the fetch DOES bring B2 in, but S1's parents are past the shallow boundary, so B2 could not be
+    # seen to be S1's ancestor: resolve_update_target chose B2 (or, with the sideways rule, held),
+    # while fetch_code, unshallowed, kept S1 — a snapshot and a restart that ended where they began.
+    # Each clone below is made exactly as the installer makes one, while main is at S1.
+    _sw_up = os.path.join(_fp_sb, "shallow-up")
+    _fp_git("init", "-q", "-b", "main", _sw_up)
+
+    def _sw_commit(msg):
+        _fp_git("-C", _sw_up, "commit", "-q", "--allow-empty", "-m", msg)
+        return _fp_git("-C", _sw_up, "rev-parse", "HEAD")
+
+    _sw_r, _sw_b2, _sw_s1 = _sw_commit("R"), _sw_commit("B2"), _sw_commit("S1")
+
+    def _sw_clone(name):
+        co = os.path.join(_fp_sb, name)
+        _fp_git("clone", "-q", "--depth", "1", "--no-single-branch", "--branch", "main",
+                "file://" + _sw_up, co)
+        return co
+
+    def _sw_has(co, sha):
+        return _sh_sub.run(["git", "-C", co, "cat-file", "-e", sha + "^{commit}"],
+                           capture_output=True, env=_tsh_env).returncode == 0
+
+    def _sw_resolve(co, pin):
+        return _sh_sub.run(["bash", "-c", "set -euo pipefail\nSRC=''\nPANEL_DIR=%s\nDEFAULT_BRANCH=main\n"
+                            "%sif resolve_update_target; then echo \"TARGET=${TARGET_SHA} WHY=${UPD_WHY}\"; "
+                            "else echo \"REFUSED ${RESOLVE_ERR}\"; fi\n" % (_shlex_q(co), _ru_fn)],
+                           capture_output=True, text=True, env=dict(_tsh_env, PANEL_UPDATE_REF=pin))
+
+    _sw_a = _sw_clone("sw-late")
+    _sw_fox_ru, _sw_fox_fc, _sw_fox_plain = (_sw_clone("sw-fox-ru"), _sw_clone("sw-fox-fc"),
+                                             _sw_clone("sw-fox-plain"))
+    _sw_a_pre = (_fp_git("-C", _sw_a, "rev-parse", "--is-shallow-repository") == "true"
+                 and not _sw_has(_sw_a, _sw_b2))
+    _sw_a_cfg = _fp_git("-C", _sw_a, "config", "--get-all", "remote.origin.fetch")
+    _fp_r = _sw_resolve(_sw_a, _sw_b2)
+    check("install.sh: on a SHALLOW clone, an older verified pin it does not have yet is not "
+          "'unverified': it is fetched before the decision, so the host stays, with no false warning",
+          _sw_a_pre and "TARGET=%s WHY=stay" % _sw_s1 in _fp_r.stdout and "WARN" not in _fp_r.stderr,
+          "shallow and without B2=%s; out=%r err=%r" % (_sw_a_pre, _fp_r.stdout[-200:],
+                                                       _fp_r.stderr[-300:]))
+    _sw_after = {"shallow": _fp_git("-C", _sw_a, "rev-parse", "--is-shallow-repository"),
+                 "HEAD": _fp_git("-C", _sw_a, "rev-parse", "HEAD") == _sw_s1,
+                 "tree clean": _fp_git("-C", _sw_a, "status", "--porcelain") == "",
+                 "config": _fp_git("-C", _sw_a, "config", "--get-all", "remote.origin.fetch") == _sw_a_cfg}
+    check("install.sh: ...resolve_update_target unshallows the clone and changes nothing else: HEAD, "
+          "the working tree and the remote's config are as they were",
+          _sw_after == {"shallow": "false", "HEAD": True, "tree clean": True, "config": True},
+          repr(_sw_after))
+    # Now the foxtrot (as in the fixture above): O1 on another branch from B2, X merges main (S1)
+    # into it, and main fast-forwards to X. B2 is on X's first-parent line.
+    _fp_git("-C", _sw_up, "checkout", "-q", "-b", "other", _sw_b2)
+    _sw_o1 = _sw_commit("O1")
+    _fp_git("-C", _sw_up, "merge", "-q", "--no-ff", "-m", "X", "main")
+    _fp_git("-C", _sw_up, "checkout", "-q", "main")
+    _fp_git("-C", _sw_up, "merge", "-q", "--ff-only", "other")
+    # The premise, on a third clone: a plain fetch brings B2 in, and past the shallow boundary S1
+    # does not reach it — while upstream, B2 IS S1's ancestor.
+    _fp_git("-C", _sw_fox_plain, "fetch", "-q", "--no-tags", "origin",
+            "+refs/heads/main:refs/remotes/origin/main")
+    _sw_fox_premise = (_sw_has(_sw_fox_plain, _sw_b2)
+                       and _sh_sub.run(["git", "-C", _sw_fox_plain, "merge-base", "--is-ancestor",
+                                        _sw_b2, _sw_s1], env=_tsh_env).returncode == 1
+                       and _sh_sub.run(["git", "-C", _sw_up, "merge-base", "--is-ancestor",
+                                        _sw_b2, _sw_s1], env=_tsh_env).returncode == 0)
+    _fp_r = _sw_resolve(_sw_fox_ru, _sw_b2)
+    _fp_head, _fp_why = _fp_fetch_code(_sw_fox_fc, _sw_b2)
+    check("install.sh: on a shallow clone after a foxtrot push, resolve_update_target and fetch_code "
+          "make the SAME decision — both keep S1, which contains the pin — so nothing is snapshotted "
+          "and restarted for nothing",
+          _sw_fox_premise and "TARGET=%s WHY=stay" % _sw_s1 in _fp_r.stdout and _fp_head == _sw_s1
+          and "Keeping %s: it is on main and already contains the verified commit %s" % (_sw_s1, _sw_b2)
+          in _fp_why,
+          "premise=%s; resolve out=%r err=%r; fetch_code HEAD %s %s" % (
+              _sw_fox_premise, _fp_r.stdout[-200:], _fp_r.stderr[-300:], _fp_head, _fp_why))
+
+    # ── How an update that never restarted the panel ENDED, as the update card reads it ─────────
+    # The card watched only the panel's boot id, and an update that stops BEFORE the panel stops
+    # (the source unreachable, a pin it cannot verify) or holds never restarts it: the [ERROR] was
+    # in data/self-update.log, and after three minutes the card said "Still working — reload the
+    # page to check." The chain, run for real end to end: install.sh's own output (its die, warn and
+    # ok, resolve_update_target, the caller's block, update_noop_line), run AS the installer by the
+    # helper's own detached self-update, which ends the log with the exit status; then the panel's
+    # own panel_update_log reads that log back.
+    _uc_i = _inst.index("RED='\\033")
+    _uc_out = _inst[_uc_i:_inst.index("\n", _inst.index("die()   {", _uc_i)) + 1]
+    _uc_fns = "".join(_inst_shfn(_n) for _n in _ru_names)
+
+    def _uc_panel(name):
+        pd = os.path.join(_fp_sb, name)
+        os.makedirs(os.path.join(pd, "data"))
+        return pd
+
+    def _uc_read(pd):
+        _saved = SO.PANEL_DIR
+        try:
+            SO.PANEL_DIR = pd
+            return SO.panel_update_log()
+        finally:
+            SO.PANEL_DIR = _saved
+
+    def _uc_helper_run(name, body, ref):
+        pd = _uc_panel(name)
+        inst = os.path.join(pd, "root-owned-install.sh")
+        with open(inst, "w", encoding="utf-8") as _uc_fh:
+            _uc_fh.write("#!/bin/bash\nset -euo pipefail\nSRC=''\nFROM_VER=9.9.9\nDEFAULT_BRANCH=main\n"
+                         + _uc_out + _uc_fns + body)
+        probe = ("import importlib.util as u, importlib.machinery as m\n"
+                 "s = u.spec_from_loader('ph', m.SourceFileLoader('ph', %r))\n"
+                 "mod = u.module_from_spec(s); s.loader.exec_module(mod)\n"
+                 "mod.INSTALLER_PATH = %r\n"
+                 "mod._self_update_detached(%r, %r, %r, '-')\n"
+                 % (_helper_path, inst, pd, os.path.join(pd, "data"), ref))
+        _sh_sub.run([sys.executable, "-c", probe], capture_output=True, text=True, env=_tsh_env,
+                    timeout=60)
+        # The run is detached, so wait for it: the exit line is the last thing written.
+        _deadline = _time.time() + 60
+        while _time.time() < _deadline:
+            try:
+                with open(os.path.join(pd, "data", "self-update.log"), encoding="utf-8") as _uc_fh:
+                    if "=== installer exit" in _uc_fh.read():
+                        break
+            except OSError:
+                pass
+            _time.sleep(0.1)
+        return _uc_read(pd)
+
+    def _uc_show(u):
+        return {k: u.get(k) for k in ("finished", "exit_code", "outcome", "reason")}, u.get("lines", [])[-4:]
+
+    _uc_off = _fp_clone("uc-offline", _fp_a)
+    _fp_git("-C", _uc_off, "remote", "set-url", "origin", "file://" + os.path.join(_fp_sb, "gone"))
+    _uc = _uc_helper_run("uc-failed", "PANEL_DIR=%s\n%supdate_noop_line\n" % (_shlex_q(_uc_off), _fp_ci_blk), "-")
+    check("self-update card: an update that STOPS before the panel restarts is read as failed, with "
+          "install.sh's own [ERROR] as the reason (helper route)",
+          _uc.get("finished") is True and _uc.get("exit_code") == 1 and _uc.get("outcome") == "failed"
+          and _uc.get("reason") == ("Couldn't reach the update source (offline, or a private repo "
+                                    "without credentials). Nothing was changed.")
+          and _uc.get("lines", [""])[0] == "=== panel self-update ==="
+          and _uc.get("lines", [""])[-1] == "=== installer exit 1 ===",
+          repr(_uc_show(_uc)))
+    _uc = _uc_helper_run("uc-held", "PANEL_DIR=%s\n%supdate_noop_line\nexit 0\n" % (
+        _shlex_q(_fp_clone("uc-held-co", _fp_a)), _fp_ci_blk), _fp_e)
+    check("self-update card: an update that HOLDS is read as held — exit 0, and the reason is "
+          "install.sh's 'Not updated' line naming the pin",
+          _uc.get("exit_code") == 0 and _uc.get("outcome") == "held"
+          and _uc.get("reason") == ("Not updated: held at %s, because the pinned commit %s could not "
+                                    "be verified on main. The panel was left running." % (_fp_a[:10], _fp_e)),
+          repr(_uc_show(_uc)))
+    _uc = _uc_helper_run("uc-current", "PANEL_DIR=%s\n%supdate_noop_line\nexit 0\n" % (
+        _shlex_q(_fp_clone("uc-cur-co", _fp_t)), _fp_ci_blk), _fp_t)
+    check("self-update card: ...an update with nothing to install is read as current (positive control)",
+          _uc.get("exit_code") == 0 and _uc.get("outcome") == "current"
+          and (_uc.get("reason") or "").startswith("Already up to date (version 9.9.9)"),
+          repr(_uc_show(_uc)))
+    _uc = _uc_helper_run("uc-killed", "kill -TERM $$\n", "-")
+    check("self-update card: ...and an installer ended by a signal reads as failed with the shell's "
+          "status for it (143), not as still running",
+          _uc.get("exit_code") == 143 and _uc.get("outcome") == "failed",
+          repr(_uc_show(_uc)))
+    # The per-user path has no helper: _launch_installer writes a wrapper script and hands it to
+    # systemd-run. Run the wrapper it wrote, for real, over the same early stop.
+    _uc_pd = _uc_panel("uc-wrapper")
+    with open(os.path.join(_uc_pd, "install.sh"), "w", encoding="utf-8") as _uc_fh:
+        _uc_fh.write("#!/bin/bash\nset -euo pipefail\nSRC=''\nFROM_VER=9.9.9\nDEFAULT_BRANCH=main\n"
+                     + _uc_out + _uc_fns + "PANEL_DIR=%s\n%s" % (_shlex_q(_uc_off), _fp_ci_blk))
+    # The previous run's log, ending in ITS exit line: the card must never read it as this run's.
+    with open(os.path.join(_uc_pd, "data", "self-update.log"), "w", encoding="utf-8") as _uc_fh:
+        _uc_fh.write("=== panel self-update ===\n\033[0;31m[ERROR]\033[0m an OLD run's failure\n"
+                     "=== installer exit 1 ===\n")
+    _uc_launch = {}
+    _uc_saved = (SO.PANEL_DIR, SO._is_system_service, SO._helper_present, SO.subprocess.run,
+                 SO._run_verb)
+
+    def _uc_fake_run(argv, *a, **k):
+        _uc_launch.setdefault("argv", argv)
+        _uc_launch.setdefault("old log gone", not os.path.exists(
+            os.path.join(_uc_pd, "data", "self-update.log")))
+        return type("R", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    def _uc_fake_verb(verb, args, **k):
+        _uc_launch.setdefault("verb", verb)
+        _uc_launch.setdefault("helper: old log gone", not os.path.exists(
+            os.path.join(_uc_pd, "data", "self-update.log")))
+        return "UPDATE_STARTED", "", 0
+
+    try:
+        SO.PANEL_DIR = _uc_pd
+        SO._is_system_service = lambda: False
+        SO._helper_present = lambda: False
+        SO.subprocess.run = _uc_fake_run
+        _uc_ok = SO._launch_installer(target_ref="", branch="")
+        # ...and the helper route, with a stale log planted again.
+        with open(os.path.join(_uc_pd, "data", "self-update.log"), "w", encoding="utf-8") as _uc_fh:
+            _uc_fh.write("=== installer exit 1 ===\n")
+        SO._is_system_service = lambda: True
+        SO._helper_present = lambda: True
+        SO._run_verb = _uc_fake_verb
+        _uc_ok_h = SO._launch_installer(target_ref="", branch="")
+    finally:
+        (SO.PANEL_DIR, SO._is_system_service, SO._helper_present, SO.subprocess.run,
+         SO._run_verb) = _uc_saved
+    check("self-update card: both launchers remove the PREVIOUS run's log before starting this one, so "
+          "its exit line is never read as this run's",
+          _uc_ok[0] is True and _uc_ok_h[0] is True and _uc_launch.get("old log gone") is True
+          and _uc_launch.get("helper: old log gone") is True and _uc_launch.get("verb") == "panel-self-update",
+          repr((_uc_ok, _uc_ok_h, _uc_launch)))
+    _uc_wrapper = (_uc_launch.get("argv") or [""])[-1]
+    _uc_w = _sh_sub.run(["bash", _uc_wrapper], capture_output=True, text=True, env=_tsh_env, timeout=120)
+    _uc = _uc_read(_uc_pd)
+    check("self-update card: ...and the wrapper the per-user path runs ends the log with the exit "
+          "status, read as the same failure, with the same reason",
+          _uc_wrapper.endswith("self-update.sh") and _uc.get("exit_code") == 1
+          and _uc.get("outcome") == "failed"
+          and _uc.get("reason") == ("Couldn't reach the update source (offline, or a private repo "
+                                    "without credentials). Nothing was changed.")
+          and "OLD run" not in " ".join(_uc.get("lines", [])),
+          "wrapper %r rc=%s; %r" % (_uc_wrapper, _uc_w.returncode, _uc_show(_uc)))
+    # The last line of the caller's no-op branch is update_noop_line's, right before its exit 0.
+    # Anchored on install_gamedig, the root-owned piece the branch refreshes just before it (gamedig's
+    # own checks hold that it is there): its output must come BEFORE the line the card reads last.
+    check("install.sh: the update's no-op branch ends on update_noop_line, then exit 0",
+          "        install_gamedig\n        # A hold is NOT \"up to date\": the pinned commit "
+          "was not installed (see update_noop_line).\n        update_noop_line\n        exit 0\n    fi\n"
+          in _inst, "update_noop_line is not what the no-op branch ends on")
+
     # The panel's update check, for real against a clone at A. The tip and the merge are still being
     # verified; the pull request's commits carry their PR runs' state, or none ("unknown", which the
     # walk accepts so an API outage cannot hide an update).
@@ -7299,7 +8163,8 @@ try:
         SO.PANEL_DIR = _fp_so
         SO._tracked_branch = lambda: "main"
         _fp_ci = {_fp_t: "pending", _fp_m: "pending", _fp_side[1]: "pending", _fp_side[2]: "pending"}
-        SO._remote_ci_state = lambda sha: _fp_ci.get(sha, "unknown")
+        _fp_asked = []
+        SO._remote_ci_state = lambda sha: (_fp_asked.append(sha), _fp_ci.get(sha, "unknown"))[1]
 
         def _fp_status():
             try:
@@ -7322,6 +8187,42 @@ try:
               _fp_st.get("update_available") is True and _fp_st.get("target_sha") == _fp_m
               and _fp_st.get("behind_tip") == 2 and _fp_st.get("newer_unverified") == 1,
               "M=%s got %r" % (_fp_m[:7], _fp_show))
+        # After the FOXTROT (the fixture above): a panel on S1, main at X. The first-parent walk from
+        # S1 lists X and O1, and O1 does not contain S1 — install.sh holds rather than move there, so
+        # offering it was an "Update available" that could never install. With X in CI, nothing is
+        # offered; once X passes, X is.
+        SO.PANEL_DIR = _fx_clone("fx-panel", _fx_s1)
+        _fp_ci = {_fx_x: "pending", _fx_o1: "passing"}
+        del _fp_asked[:]
+        _fp_st, _fp_show = _fp_status()
+        # ...and GitHub is not even asked about O1: each ask is one anonymous request of the 60 an
+        # hour, and the whole other branch is on this walk while the merge is in CI.
+        check("update status: after a foxtrot push, a commit that does not contain the running one "
+              "costs no CI lookup",
+              _fx_side_premise and _fx_o1 not in _fp_asked and _fx_x in _fp_asked,
+              "asked=%r" % [_a[:7] for _a in _fp_asked])
+        check("update status: after a foxtrot push, a verified commit that does not contain the "
+              "running one (it would move the panel sideways) is not offered",
+              _fx_side_premise and _fp_st.get("update_available") is False
+              and _fp_st.get("target_sha") != _fx_o1,
+              "premise=%s; X=%s O1=%s got %r" % (_fx_side_premise, _fx_x[:7], _fx_o1[:7], _fp_show))
+        _fp_ci[_fx_x] = "passing"
+        _fp_st, _fp_show = _fp_status()
+        check("update status: ...while the merge that does contain it is, once verified (positive "
+              "control)",
+              _fp_st.get("update_available") is True and _fp_st.get("target_sha") == _fx_x,
+              "X=%s got %r" % (_fx_x[:7], _fp_show))
+        # ...and a panel on a LOCAL commit is offered O1 as before: install.sh resets such a
+        # checkout to the pin, so for it O1 is an update that installs.
+        _fx_ploc = _fx_clone("fx-panel-local", _fx_s1)
+        _fp_git("-C", _fx_ploc, "commit", "-q", "--allow-empty", "-m", "a local commit")
+        SO.PANEL_DIR = _fx_ploc
+        _fp_ci[_fx_x] = "pending"
+        _fp_st, _fp_show = _fp_status()
+        check("update status: ...and a panel on a local commit off main is still offered it "
+              "(positive control)",
+              _fp_st.get("update_available") is True and _fp_st.get("target_sha") == _fx_o1,
+              "O1=%s got %r" % (_fx_o1[:7], _fp_show))
     finally:
         (SO.PANEL_DIR, SO._tracked_branch, SO._remote_ci_state) = _fp_saved
         for _k, _v in _fp_env_saved.items():
@@ -8932,15 +9833,18 @@ check("update card: the count and the changelog are built from the same list",
 # ── a HOLD does not report "Already up to date" ─────────────────────────────────────────────────
 # When the pinned commit cannot be verified, install.sh keeps the checkout where it is (a hold) and
 # takes the no-op branch. That branch ended "Already up to date", exit 0 — so a deploy log or the
-# panel's update log read as a successful update to a commit that was never installed. The block
-# is run as written in install.sh, both ways.
+# panel's update log read as a successful update to a commit that was never installed. That last
+# line is update_noop_line (the branch's own call to it is checked with the update-card chain),
+# run here as written in install.sh, both ways, with only UPD_WHY set: the reason
+# _choose_update_target gives (UPD_HOLD_WHY) is checked there too, end to end.
 import subprocess as _hold_sub                                                    # noqa: E402
 _hold_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
-# Anchored on the comment above the block, so a mutation of the condition itself fails the checks
-# below instead of crashing the suite before they run.
-_hold_i = _hold_src.find('        # A hold is NOT "up to date"')
-_hold_j = _hold_src.find("\n        fi\n", _hold_i) if _hold_i >= 0 else -1
-_hold_block = _hold_src[_hold_i:_hold_j + len("\n        fi\n")] if _hold_j >= 0 else "false\n"
+# Anchored on the definition, so a mutation of the condition itself fails the checks below
+# instead of crashing the suite before they run.
+_hold_i = _hold_src.find("\nupdate_noop_line() {\n")
+_hold_j = _hold_src.find("\n}\n", _hold_i) if _hold_i >= 0 else -1
+_hold_block = (_hold_src[_hold_i:_hold_j + len("\n}\n")] + "update_noop_line\n"
+               if _hold_j >= 0 else "false\n")
 
 
 def _hold_run(why):
@@ -8957,3 +9861,43 @@ check("install.sh: a hold ends with 'Not updated' naming the pin, never 'Already
       and "feedfacefeedface" in _hold_out and "Already up to date" not in _hold_out, _hold_out)
 check("install.sh: ...while a checkout that really is current still says 'Already up to date'",
       _hold_pin.startswith("OK Already up to date (version 1.2.3)"), _hold_pin)
+
+
+# ── the helper's exit line when the installer never gave a status of its own ─────────────────────
+# _run_installer_to's two exception branches: its 30-minute timeout, and an installer it could not
+# start (resolve() found no bash). The update card and the debug report find the line by its
+# leading number (_INSTALLER_EXIT_RE), so both must still START with one, or the run reads as
+# "running" for good. Driven through the helper's own function and the panel's own parser.
+import subprocess as _rit_sp                                                        # noqa: E402
+import types as _rit_types                                                          # noqa: E402
+
+
+def _rit_outcome(run=None, resolve=None):
+    _saved = (_helper.subprocess, _helper.resolve)
+    _helper.subprocess = _rit_types.SimpleNamespace(
+        run=run, TimeoutExpired=_rit_sp.TimeoutExpired, STDOUT=_rit_sp.STDOUT)
+    _helper.resolve = resolve or (lambda prog: "/bin/bash")
+    try:
+        _line = "=== installer exit %s ===" % _helper._run_installer_to(None, "/", {})
+    except Exception as _e:               # reported by the check, never ends the part
+        return {"raised": repr(_e)}
+    finally:
+        _helper.subprocess, _helper.resolve = _saved
+    return dict(SO._update_log_outcome(["=== panel self-update ===", _line]), line=_line)
+
+
+def _rit_timeout(*a, **k):
+    raise _rit_sp.TimeoutExpired(["bash"], 1800)
+
+
+def _rit_nobash(prog):
+    raise FileNotFoundError(prog)
+
+
+_rit_to = _rit_outcome(run=_rit_timeout)
+_rit_nr = _rit_outcome(run=_rit_timeout, resolve=_rit_nobash)
+check("self-update card: an installer the helper stopped at its timeout, or could not start, still "
+      "ends the log on a status the card reads as failed (124, 127)",
+      _rit_to.get("outcome") == "failed" and _rit_to.get("exit_code") == 124
+      and _rit_nr.get("outcome") == "failed" and _rit_nr.get("exit_code") == 127,
+      repr((_rit_to, _rit_nr)))

@@ -78,7 +78,13 @@ REPO_URL="https://github.com/FMSMITH91/linuxgsm-panel.git"
 # Branch to track. The panel can switch branches from the UI by exporting PANEL_BRANCH
 # before invoking this script; unset (the normal path) keeps the default "main" unchanged.
 # Restricted to a safe git-ref charset so it can't inject options/paths into git commands.
-DEFAULT_BRANCH="main"
+#
+# That choice moves the panel's CODE. It does not, by itself, choose where root takes its OWN pieces
+# from (the helper, db_maintenance, this installer, the recovery command, gamedig's lockfile and
+# install script): when the panel started the run, root takes those only from TRUSTED_BRANCH,
+# whatever PANEL_BRANCH says. See root_source_commit.
+TRUSTED_BRANCH="main"
+DEFAULT_BRANCH="${TRUSTED_BRANCH}"
 if [ -n "${PANEL_BRANCH:-}" ] && printf '%s' "${PANEL_BRANCH}" | grep -Eq '^[A-Za-z0-9._/-]{1,100}$' \
    && [ "${PANEL_BRANCH#-}" = "${PANEL_BRANCH}" ] && [ "${PANEL_BRANCH##*..*}" = "${PANEL_BRANCH}" ]; then
     DEFAULT_BRANCH="${PANEL_BRANCH}"
@@ -438,9 +444,33 @@ _ref_exists() {
 #     FETCH_HEAD alone, and the tracking ref stayed missing (or stale) for every read after it.
 #   * --no-tags: with a destination git would follow tags into the fetched history. Nothing here
 #     reads a tag.
+# Any arguments are extra fetch options (_fetch_branch_history passes --unshallow).
 _fetch_branch() {
-    _gitc fetch --quiet --no-tags origin \
+    _gitc fetch --quiet --no-tags "$@" origin \
         "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+}
+
+# _fetch_branch, bringing the branch's WHOLE history down when this clone is shallow (the installer
+# clones --depth 1). resolve_update_target decides on what this fetches, and fetch_code, which
+# unshallows first, then decides again; on a shallow clone the two saw different histories and
+# could disagree:
+#   * an older verified pin was not in the clone at all, so it read as "not verified" and the
+#     update held, warning that the pin was not on the branch, when it was;
+#   * a pin the fetch did bring in (a foxtrot push brings main's older line along with it) could
+#     not be seen to be HEAD's ancestor past the shallow boundary, so "never backwards" did not
+#     fire: resolve_update_target chose the pin, and fetch_code, unshallowed a moment later, kept
+#     HEAD. A snapshot and a restart that ended where they started.
+# Unshallowing adds history to the object store and changes nothing else: not the working tree,
+# not HEAD, no ref but the tracking ref, no config. So resolve_update_target stays read-only in the
+# sense it exists for: nothing it does needs a snapshot or a restart. It happens once (a complete
+# clone skips it) and for this branch only. If the deepening fetch fails the plain one is tried,
+# and the decision is made on the history there is, as before.
+_fetch_branch_history() {
+    if [ "$(_gitc rev-parse --is-shallow-repository 2>/dev/null)" = true ] \
+       && _fetch_branch --unshallow 2>/dev/null; then
+        return 0
+    fi
+    _fetch_branch
 }
 
 # Is commit $2 (a FULL id) on the FIRST-PARENT line of ref $3 — the branch's own history, not
@@ -492,12 +522,15 @@ _on_first_parent_line() {
 #         commits are still being checked — honoured ONLY on the branch's first-parent line, so a
 #         bogus value can never check out arbitrary or untracked code;
 #   stay  HEAD, which is on the branch and already contains that pin ("never backwards", below);
-#   hold  HEAD, because a pin WAS given and cannot be verified here, and HEAD is on the branch.
+#   hold  HEAD, which is on the branch, because a pin WAS given and moving to it is not safe:
+#         UPD_HOLD says why — "unverified" (the pin is not on the first-parent line here) or
+#         "sideways" (it is, but HEAD is neither its ancestor nor its descendant) — and
+#         UPD_HOLD_WHY says it in words, for the update's last line (update_noop_line).
 # Returns 1, with UPD_TARGET empty and UPD_ERR saying why, when the remote-tracking ref does not
 # exist, and when a pin that cannot be verified leaves no commit of the branch to stay at.
 _choose_update_target() {
     local _tracking="refs/remotes/origin/${DEFAULT_BRANCH}" _head=""
-    UPD_TARGET=""; UPD_WHY=""; UPD_PIN=""; UPD_ERR=""
+    UPD_TARGET=""; UPD_WHY=""; UPD_PIN=""; UPD_ERR=""; UPD_HOLD=""; UPD_HOLD_WHY=""
     if ! _ref_exists _gitc "${_tracking}" \
        || ! UPD_TARGET="$(_gitc rev-parse --verify --quiet "${_tracking}^{commit}" 2>/dev/null)"; then
         UPD_TARGET=""
@@ -529,7 +562,8 @@ _choose_update_target() {
         # when a foxtrot push has just taken it off the line (see _on_first_parent_line).
         UPD_PIN=""
         if [ -n "${_head}" ] && _gitc merge-base --is-ancestor "${_head}" "${_tracking}" 2>/dev/null; then
-            UPD_TARGET="${_head}"; UPD_WHY="hold"
+            UPD_TARGET="${_head}"; UPD_WHY="hold"; UPD_HOLD="unverified"
+            UPD_HOLD_WHY="the pinned commit ${PANEL_UPDATE_REF} could not be verified on ${DEFAULT_BRANCH}"
             return 0
         fi
         UPD_TARGET=""; UPD_WHY=""
@@ -540,25 +574,35 @@ _choose_update_target() {
         return 1
     fi
     UPD_TARGET="${UPD_PIN}"; UPD_WHY="pin"
-    # Never backwards. A pin this checkout already contains is not an update when the checkout is
-    # itself on the branch: stay put rather than reset backwards. The deploy pins each run to the
-    # commit whose CI passed, and those runs do not finish in push order (a re-run of an old
-    # commit's CI deploys it last). A HEAD that is NOT on the branch (a local commit) is still
-    # reset, as it always was.
+    # Never backwards, and never sideways: a checkout that is itself on the branch moves ONLY
+    # forward, to a pin it is an ancestor of. A HEAD that is NOT on the branch (a local commit, or
+    # no commit) is still reset to the pin, as it always was.
+    #   * Backwards. A pin this checkout already contains is not an update: stay put. The deploy
+    #     pins each run to the commit whose CI passed, and those runs do not finish in push order
+    #     (a re-run of an old commit's CI deploys it last).
+    #   * Sideways. After a foxtrot push (see _on_first_parent_line) a pin can be on the branch's
+    #     line and neither contain HEAD nor be contained by it: host at S1, main fast-forwarded to
+    #     X, a merge of S1 into another branch's O1, and the pin O1 — one the panel's update check
+    #     can offer while X is still in CI. Resetting to it dropped S1 and everything under it that
+    #     O1 does not have. The host holds instead, and says so; the next pin that contains it (X,
+    #     or anything after) moves it forward.
     #
     # "On the branch" is plain ANCESTRY for HEAD, where the pin needs the first-parent line. HEAD is
     # not being verified here — it is what the host already runs — and the only question is
-    # whether the pin would move it backwards. The first-parent test answered that wrongly after a
-    # foxtrot push (see _on_first_parent_line): a host deployed to main's tip S1, then main
-    # fast-forwarded onto a branch that had main merged in, leaves S1 reachable only through that
-    # merge's second parent, and a late deploy of an older commit still on the line reset the host
-    # BACKWARDS to it. Nor does ancestry keep a HEAD off the line for good (one put on a merged pull
-    # request's intermediate commit by hand, say): the next pin newer than HEAD is not its
-    # ancestor, so that update moves it forward.
-    if [ -n "${_head}" ] \
-       && _gitc merge-base --is-ancestor "${UPD_PIN}" "${_head}" 2>/dev/null \
-       && _gitc merge-base --is-ancestor "${_head}" "${_tracking}" 2>/dev/null; then
-        UPD_TARGET="${_head}"; UPD_WHY="stay"
+    # whether the pin would move it backwards or sideways. The first-parent test answered that
+    # wrongly after a foxtrot push: a host deployed to main's tip S1, then main fast-forwarded onto
+    # a branch that had main merged in, leaves S1 reachable only through that merge's second
+    # parent, and a late deploy of an older commit still on the line reset the host BACKWARDS to
+    # it. Nor does ancestry keep a HEAD off the line for good (one put on a merged pull request's
+    # intermediate commit by hand, say): the next pin newer than HEAD descends from it, so that
+    # update moves it forward.
+    if [ -n "${_head}" ] && _gitc merge-base --is-ancestor "${_head}" "${_tracking}" 2>/dev/null; then
+        if _gitc merge-base --is-ancestor "${UPD_PIN}" "${_head}" 2>/dev/null; then
+            UPD_TARGET="${_head}"; UPD_WHY="stay"
+        elif ! _gitc merge-base --is-ancestor "${_head}" "${UPD_PIN}" 2>/dev/null; then
+            UPD_TARGET="${_head}"; UPD_WHY="hold"; UPD_HOLD="sideways"
+            UPD_HOLD_WHY="the pinned commit ${UPD_PIN} is on ${DEFAULT_BRANCH} but does not contain this checkout, so moving to it would drop commits the checkout has"
+        fi
     fi
     return 0
 }
@@ -581,16 +625,22 @@ fetch_code() {
             || _gitc fetch --quiet --prune origin 2>/dev/null \
             || _fetch_branch
         # Where to is _choose_update_target's call — the same decision resolve_update_target made
-        # before the snapshot: the branch tip, a CI-verified pin on the branch's first-parent line,
-        # or HEAD itself when it is already past that pin, or when a pin was given that cannot be
-        # verified. The branch is read by its full name, and only once it is known to exist (see
-        # _ref_exists). When there is no safe target it stops, and says why.
+        # before the snapshot, on the same (whole) history: the branch tip, a CI-verified pin on
+        # the branch's first-parent line, or HEAD itself when it is already past that pin, or when
+        # moving to the pin given is not safe. The branch is read by its full name, and only once
+        # it is known to exist (see _ref_exists). When there is no safe target it stops, and says
+        # why.
         _choose_update_target || die "${UPD_ERR}
      Nothing was reset."
         case "${UPD_WHY}" in
             pin) echo "  Updating to verified commit ${UPD_TARGET}" ;;
             stay) echo "  Keeping ${UPD_TARGET}: it is on ${DEFAULT_BRANCH} and already contains the verified commit ${UPD_PIN}" ;;
-            hold) echo "  Keeping ${UPD_TARGET}: the pinned commit ${PANEL_UPDATE_REF} is not on ${DEFAULT_BRANCH}'s first-parent line here, and the update does not fall back to the unverified tip" ;;
+            hold)
+                if [ "${UPD_HOLD}" = sideways ]; then
+                    echo "  Keeping ${UPD_TARGET}: ${UPD_HOLD_WHY}"
+                else
+                    echo "  Keeping ${UPD_TARGET}: the pinned commit ${PANEL_UPDATE_REF} is not on ${DEFAULT_BRANCH}'s first-parent line here, and the update does not fall back to the unverified tip"
+                fi ;;
         esac
         _gitc reset --hard --quiet "${UPD_TARGET}"
     elif [ -z "${SRC}" ]; then
@@ -606,14 +656,15 @@ fetch_code() {
 # entirely when already current. Sets CURRENT_SHA / TARGET_SHA. Returns 1 when the
 # fetch fails (offline / private repo), or when there is no safe target — no remote-tracking ref
 # to read, or a pin that cannot be verified and no commit of the branch to stay at (RESOLVE_ERR
-# then says which) — so the caller can stop cleanly.
+# then says which) — so the caller can stop cleanly. The fetch unshallows a shallow clone, so this
+# decides on the history fetch_code will decide on (see _fetch_branch_history).
 resolve_update_target() {
     CURRENT_SHA=""; TARGET_SHA=""; RESOLVE_ERR=""
     if [ -n "${SRC}" ] && [ "${SRC}" != "${PANEL_DIR}" ]; then
         return 0   # local-source update: no git comparison, always applies
     fi
     [ -d "${PANEL_DIR}/.git" ] || return 0   # not a git checkout: let fetch_code decide
-    _fetch_branch || return 1
+    _fetch_branch_history || return 1
     CURRENT_SHA="$(_gitc rev-parse HEAD 2>/dev/null)"
     # The same decision fetch_code acts on (see _choose_update_target). One it cannot make is NOT
     # "nothing to update": the caller stops, and says why.
@@ -621,14 +672,30 @@ resolve_update_target() {
         RESOLVE_ERR="${UPD_ERR}"
         return 1
     fi
-    # Staying put because the pin could not be verified reads as "Already up to date" to the caller.
-    # Say why first: this is what the deploy's log and the panel's update log show.
-    if [ "${UPD_WHY}" = hold ]; then
+    # Staying put because moving to the pin is not safe would read as "Already up to date" to the
+    # caller. Say why first: this is what the deploy's log and the panel's update log show, and the
+    # caller ends on update_noop_line's "Not updated: held at ...".
+    if [ "${UPD_WHY}" = hold ] && [ "${UPD_HOLD}" = sideways ]; then
+        warn "The commit this update is pinned to, ${UPD_PIN}, is on ${DEFAULT_BRANCH}'s first-parent line, but it neither contains this checkout (${UPD_TARGET}) nor is contained by it: ${DEFAULT_BRANCH} was fast-forwarded onto a merge since this checkout was installed."
+        warn "This checkout stays at ${UPD_TARGET}: moving to the pin would drop commits it has. An update to a commit that contains it moves it forward."
+    elif [ "${UPD_WHY}" = hold ]; then
         warn "The commit this update is pinned to, ${PANEL_UPDATE_REF}, is not on ${DEFAULT_BRANCH}'s first-parent line here, so it is not verified."
         warn "This checkout stays at ${UPD_TARGET}: the update does not fall back to ${DEFAULT_BRANCH}'s tip, which nothing verified."
     fi
     TARGET_SHA="${UPD_TARGET}"
     return 0
+}
+
+# The last line of an update that installed nothing (the caller's no-op branch). A hold is NOT "up
+# to date": the pinned commit was not installed, and saying so, with why, is what the deploy's log
+# and the panel's update card are read by. The card reads it from data/self-update.log by its
+# "Not updated: " start (panel_update_log in panel/ops/system_ops.py), so keep that wording.
+update_noop_line() {
+    if [ "${UPD_WHY:-}" = hold ]; then
+        warn "Not updated: held at ${TARGET_SHA:0:10}, because ${UPD_HOLD_WHY:-the pinned commit ${PANEL_UPDATE_REF:-} could not be verified on ${DEFAULT_BRANCH}}. The panel was left running."
+    else
+        ok "Already up to date (version ${FROM_VER}) — no snapshot taken, panel left running."
+    fi
 }
 
 # A venv belongs to the Python that built it. An in-place release upgrade (22.04 -> 24.04) moves
@@ -686,10 +753,11 @@ install_deps() {
     ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet -r "${PANEL_DIR}/requirements.txt"
 }
 
-# Node.js LTS + jq + gamedig, for the panel's game-server player queries (player count/list, the
-# empty-only restart, and the moderation Players panel). Installed on the panel HOST so game
-# servers running here can be queried; remote hosts get it from the add-remote bootstrap. apt's
-# own nodejs is too old for current gamedig (needs Node >=18), so we pin LTS via NodeSource.
+# Node.js + npm + jq, for gamedig and the panel's game-server player queries (player count/list,
+# the empty-only restart, and the moderation Players panel). Installed on the panel HOST so game
+# servers running here can be queried; remote hosts get it from the add-remote bootstrap. 22.04's
+# own nodejs is too old for gamedig (needs Node >=18), so that one takes NodeSource's. gamedig
+# itself is install_gamedig's, from the pinned lockfile, after install_root_tools.
 # Fully idempotent + best-effort — a failure here must never break the install; player queries
 # simply stay unavailable until it's sorted.
 
@@ -750,7 +818,7 @@ nodesource_setup() {
     return "${rc}"
 }
 
-ensure_gamedig() {
+ensure_nodejs() {
     command -v apt-get >/dev/null 2>&1 || return 0
     # Every command below is guarded so it returns 0 — the script runs under `set -euo pipefail`,
     # so an unguarded failure here (e.g. a missing `node`) would abort the whole install.
@@ -806,26 +874,17 @@ ensure_gamedig() {
         ${S} apt-get install -y npm >/dev/null 2>&1 \
             || warn "npm install failed — player queries stay unavailable until npm is installed."
     fi
-    if command -v npm >/dev/null 2>&1 && ! command -v gamedig >/dev/null 2>&1; then
-        info "Installing gamedig globally…"
-        # The spec the panel's npm-install-global verb and the weekly cron use: v5, no install hooks.
-        ${S} npm install -g --ignore-scripts gamedig@5 >/dev/null 2>&1 \
-            || warn "gamedig install failed — player queries unavailable."
-    fi
-    if command -v gamedig >/dev/null 2>&1; then
-        ok "gamedig ready for player queries"
-    else
-        warn "gamedig is not installed — player counts and lists stay unavailable."
-    fi
-    # Weekly auto-update for gamedig, alongside the host's other automatic updates, so player queries
-    # don't silently break as games/gamedig evolve. Idempotent; no-op if npm isn't installed. Pinned to
-    # v5 with --ignore-scripts, and npm itself is not updated: this runs as root, unattended, every
-    # week. Byte-identical to the helper's NODE_TOOLS_CRON_BODY and hosts.py's (a unit gate).
+    # The weekly cron that re-runs install-gamedig.sh (install_gamedig places it). It fetches
+    # nothing while the lockfile's tree is in place and working: a repair job, not an updater, so
+    # root no longer installs whatever the registry serves on a Sunday. Written here, on every run
+    # and whatever the origin, because what it replaces is the old `npm install -g gamedig@5` line;
+    # `[ -x … ]` makes it a no-op until the script is there. Byte-identical to the helper's
+    # NODE_TOOLS_CRON_BODY and hosts.py's (a unit gate).
     local cf="/etc/cron.d/lgsm-node-tools"
     if printf '%s\n' \
-        '# LinuxGSM Panel - keep gamedig current for player queries (managed by the panel).' \
+        '# LinuxGSM Panel - keep gamedig installed from its pinned lockfile (managed by the panel).' \
         'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
-        '30 4 * * 0 root command -v npm >/dev/null 2>&1 && npm install -g --ignore-scripts gamedig@5 >/var/log/lgsm-node-tools.log 2>&1' \
+        '30 4 * * 0 root [ -x /usr/local/lib/linuxgsm-panel/gamedig/install-gamedig.sh ] && /usr/local/lib/linuxgsm-panel/gamedig/install-gamedig.sh >/var/log/lgsm-node-tools.log 2>&1' \
         | ${S} tee "${cf}" >/dev/null 2>&1; then
         ${S} chmod 644 "${cf}" 2>/dev/null || true
     fi
@@ -971,9 +1030,10 @@ check_origin_trusted() {
 #     helper stale on every such update; or else
 #   * ROOT'S OWN CLONE of REPO_URL (ROOT_GIT, below), fetched by root's git with no user or system
 #     config. The panel's HEAD is only a request there: it is honoured only when root's clone has
-#     that commit on ${DEFAULT_BRANCH}. Nothing else from the panel's .git is read. A checkout at a
-#     commit upstream does not have, or with no .git at all, gets NO refresh, and the installer
-#     says so.
+#     that commit on the branch root verifies against, no older than root's source floor, with an
+#     installer that enforces that floor (root_source_commit says which branch, and why each rule
+#     is there). Nothing else from the panel's .git is read. A checkout at a commit upstream does
+#     not have, or with no .git at all, gets NO refresh, and the installer says so.
 #
 # Run as the account that owns the checkout (a per-user install), none of this applies: that
 # account can already rewrite the install.sh it is running.
@@ -985,6 +1045,22 @@ HELPER_DIR="/usr/local/lib/linuxgsm-panel"
 ROOT_GIT="${HELPER_DIR}/.source.git"
 ROOT_SRC_COMMIT=""
 ROOT_SRC_TRIED=0
+# Root's SOURCE FLOOR: the newest commit of ${TRUSTED_BRANCH} root has staged its own pieces from.
+# Root-owned 0644, in the root-owned HELPER_DIR, so the panel user can neither write nor replace
+# it. root_source_commit refuses any commit the floor is not an ancestor of, and raises the floor to
+# each commit of ${TRUSTED_BRANCH} it accepts, never lowering it. Absent (a fresh install, or a host
+# that has not staged from root's clone since this was added), it is ROOT_SRC_FLOOR_SEED: e26a644,
+# the first installer that staged from root's own clone instead of the panel-owned .git.
+#
+# THE NEXT LINE IS LOAD-BEARING TEXT, NOT JUST AN ASSIGNMENT. Root stages only from a commit whose
+# install.sh contains it, exactly, as a whole line, and deploy.yml ships only such an installer: an
+# installer from before the floor existed, once root-owned, would accept any older commit again.
+# Every installer since carries this line, so changing it makes every installed copy refuse every
+# newer commit. Never edit or move it; tests/unit part06 holds it in place.
+ROOT_SRC_FLOOR_FILE="${HELPER_DIR}/.source-floor"
+ROOT_SRC_FLOOR_SEED="e26a64417c7992a6d0a0de39e33437a1949efe7f"
+# shellcheck disable=SC2016  # ROOT_SRC_FLOOR_FILE's line as TEXT: ${HELPER_DIR} must not expand
+_ROOT_SRC_FLOOR_LINE='ROOT_SRC_FLOOR_FILE="${HELPER_DIR}/.source-floor"'
 
 # Root's git, on root's clone, with no config it did not write: no user or system gitconfig (a
 # `url.<x>.insteadOf` there would repoint REPO_URL, a credential helper would run as root), and no
@@ -1074,17 +1150,120 @@ _operator_file() {
     printf '%s\n' "${p}"
 }
 
+# Did the PANEL start this run, rather than someone running this installer as root by hand?
+#
+# It matters for one decision: which branch root verifies its own pieces against (see
+# root_source_commit). PANEL_BRANCH reaches this script both ways, and only an operator's choice of
+# it may decide what root installs as the privilege boundary.
+#
+# The two signs below are ones the panel user cannot remove, so it cannot pass for an operator:
+#   * PANEL_SELF_UPDATE, which the helper's panel-self-update verb sets in the environment it builds
+#     for this installer. It sets it AFTER copying its own environment, so no value the panel hands
+#     sudo can take it away, and under the narrow grant that verb is the panel's only way to run
+#     this installer as root. (Under the wide one the panel is root already; nothing here helps.)
+#   * SUDO_UID naming the panel's own account. sudo sets it, and under the narrow grant the panel
+#     cannot override it. It covers a helper from before PANEL_SELF_UPDATE existed running a newer
+#     installer: an install_root_tools run that replaced the installer but failed on the helper.
+# An operator's `sudo bash install.sh`, a root login and the CI deploy carry neither. The host
+# terminal's password-gated sudo (PANEL_TERMINAL_SUDO) carries the second, because that shell runs
+# AS the panel user, so a run started there counts as the panel's: a terminal the panel renders is
+# one it can type into. Run it over SSH instead.
+_panel_started_run() {
+    [ -z "${PANEL_SELF_UPDATE:-}" ] || return 0
+    local pu=""
+    [ -n "${SUDO_UID:-}" ] && [ -n "${PANEL_USER:-}" ] || return 1
+    pu="$(id -u "${PANEL_USER}" 2>/dev/null)" || return 1
+    [ -n "${pu}" ] && [ "${SUDO_UID}" = "${pu}" ]
+}
+
+# Root's source floor, as a full commit id: the file's, or the seed when there is no file. A file
+# that is there but is not one regular file holding one full id is NOT read as "no floor": falling
+# back to the seed would lower it. Fails, having said so (on stderr: callers capture stdout),
+# instead. The file's integrity is HELPER_DIR's: root-owned 0755, so only root creates or replaces
+# anything in it — the same ground root's clone beside it stands on.
+_source_floor() {
+    local f="${ROOT_SRC_FLOOR_FILE}" v=""
+    if [ ! -e "${f}" ] && [ ! -L "${f}" ]; then
+        printf '%s\n' "${ROOT_SRC_FLOOR_SEED}"
+        return 0
+    fi
+    if [ -f "${f}" ] && [ ! -L "${f}" ]; then
+        v="$(head -c 100 -- "${f}" 2>/dev/null | tr -d '[:space:]')" || v=""
+    fi
+    case "${v}" in
+        *[!0-9a-f]*|"") v="" ;;
+    esac
+    if [ "${#v}" -ne 40 ]; then
+        warn "Root's source floor ${f} is not a single commit id, so root stages nothing until it is" >&2
+        warn "fixed. Delete it to fall back to the built-in floor; the next update records it again." >&2
+        return 1
+    fi
+    printf '%s\n' "${v}"
+}
+
+# Raise the floor to $1. Never lowers it: $1 must contain the current floor. Written beside the old
+# one and renamed over it, so a reader never sees half a file.
+_raise_source_floor() {
+    local new="$1" cur="" tmp="${ROOT_SRC_FLOOR_FILE}.new"
+    cur="$(_source_floor)" || return 1
+    if [ "${cur}" = "${new}" ] && [ -f "${ROOT_SRC_FLOOR_FILE}" ]; then
+        return 0
+    fi
+    _rootgit merge-base --is-ancestor "${cur}" "${new}" >/dev/null 2>&1 || return 1
+    rm -f -- "${tmp}" 2>/dev/null || true
+    if ( umask 022 && printf '%s\n' "${new}" > "${tmp}" ) 2>/dev/null \
+       && chmod 0644 -- "${tmp}" 2>/dev/null && mv -f -- "${tmp}" "${ROOT_SRC_FLOOR_FILE}" 2>/dev/null; then
+        return 0
+    fi
+    rm -f -- "${tmp}" 2>/dev/null || true
+    return 1
+}
+
+# Does this commit's own install.sh enforce the floor? Read through, not `grep -q`: grep would exit
+# at the first match and cat-file die of SIGPIPE writing the rest, failing the pipe exactly when it
+# matches (this file runs on for about 90 KB past that line).
+_enforces_source_floor() {
+    local n=""
+    n="$(_rootgit cat-file blob "$1:install.sh" 2>/dev/null \
+         | grep -cxF -- "${_ROOT_SRC_FLOOR_LINE}" 2>/dev/null || true)"
+    [ "${n:-0}" -ge 1 ] 2>/dev/null
+}
+
 # Which commit root may stage from: the checkout's HEAD, once root's own clone shows that commit is
-# on REPO_URL's ${DEFAULT_BRANCH} — on its first-parent line, not merely reachable through a merge.
+# on the branch root verifies against — on its first-parent line, not merely reachable through a
+# merge — no older than root's source floor, with an installer that enforces that floor.
 # Sets ROOT_SRC_COMMIT; returns 1, having said why, otherwise.
 # Asked once per run, however many files are staged.
+#
+# WHICH BRANCH. The panel names the branch it tracks (PANEL_BRANCH), and this verified the panel's
+# HEAD against whatever that was — so a compromised panel plus any branch pushed to REPO_URL decided
+# the root-owned helper. When the panel started this run (_panel_started_run), root verifies against
+# ${TRUSTED_BRANCH} and nothing else; on any other branch it withholds its pieces, as it does for an
+# untrusted origin, and says how to take them from that branch on purpose. When an operator runs
+# this as root, PANEL_BRANCH is theirs to choose, and root follows it.
+#
+# THE FLOOR. Every commit ever on ${TRUSTED_BRANCH}'s first-parent line passes the check above, and
+# the panel moves its own HEAD. So it could reset its checkout to an old commit and ask for a
+# self-update, and root installed that commit's installer root-owned — one from before e26a644
+# read the helper out of the panel-owned .git, where a planted replace ref then became the helper
+# root installs. Root now refuses any commit its floor is not an ancestor of, and raises the floor
+# to each commit of ${TRUSTED_BRANCH} it accepts. An operator's branch is the one exception: its
+# TIP is accepted though it forked below the floor (the branch the operator chose, as they chose
+# it), and staging from it leaves the floor where it is, so ${TRUSTED_BRANCH} is not locked out
+# afterwards. No other commit of that branch is: below the tip, its first-parent line is
+# ${TRUSTED_BRANCH}'s old history, and the panel moves its HEAD while this runs.
+#
+# THE FLOOR'S OWN FLOOR. An installer from before the floor existed ignores it, so staging one
+# root-owned would let the NEXT run accept anything again — including e26a644's own ancestors. The
+# seed alone does not stop that on a host with no floor file yet. So the commit's install.sh must
+# carry _ROOT_SRC_FLOOR_LINE, which every installer that enforces the floor does.
 root_source_commit() {
     if [ "${ROOT_SRC_TRIED}" -eq 1 ]; then
         [ -n "${ROOT_SRC_COMMIT}" ]
         return
     fi
     ROOT_SRC_TRIED=1
-    local want=""
+    local want="" branch="${DEFAULT_BRANCH}" floor="" tip=""
     [ -d "${PANEL_DIR}/.git" ] \
         && want="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null || true)"
     # The panel's git produced this, so it is a request, not a fact: a commit id, or nothing.
@@ -1098,6 +1277,19 @@ root_source_commit() {
             warn "This checkout has no commit root can verify, so root stages nothing from it."
             return 1 ;;
     esac
+    if _panel_started_run; then
+        if [ "${DEFAULT_BRANCH}" != "${TRUSTED_BRANCH}" ]; then
+            warn "The panel started this update on its branch '${DEFAULT_BRANCH}'. When the panel asks,"
+            warn "root takes its own pieces only from ${REPO_URL}'s ${TRUSTED_BRANCH}, so it stages"
+            warn "nothing from this checkout; the code still updates. To take them from"
+            warn "'${DEFAULT_BRANCH}' on purpose, run the root-owned installer yourself (not in the"
+            warn "panel's own terminal, which counts as the panel):"
+            warn "    cd / && sudo PANEL_BRANCH=${DEFAULT_BRANCH} bash ${HELPER_DIR}/install.sh"
+            return 1
+        fi
+        branch="${TRUSTED_BRANCH}"
+    fi
+    floor="$(_source_floor)" || return 1
     if ! ${H_SUDO:-} test -d "${ROOT_GIT}"; then
         _rootgit init --quiet --bare >/dev/null 2>&1 || {
             warn "Could not create root's copy of the repository at ${ROOT_GIT}."
@@ -1107,9 +1299,15 @@ root_source_commit() {
     # once the panel had tracked `fix` and then switched to `fix/x` (or the reverse), git refused
     # to create the new ref beside the old one and every later run warned "Could not fetch" and
     # left the helper stale. The ref only has to hold the tip this run compares against.
-    if ! _rootgit fetch --quiet --no-tags "${REPO_URL}" \
-            "+refs/heads/${DEFAULT_BRANCH}:refs/root-src/tip" >/dev/null 2>&1; then
-        warn "Could not fetch ${REPO_URL} (${DEFAULT_BRANCH}) into root's own copy, so root stages"
+    #
+    # On an operator's branch, ${TRUSTED_BRANCH} is fetched beside it, into a second fixed ref: the
+    # floor is a commit of ${TRUSTED_BRANCH}, and a clone holding only a branch forked below it
+    # would not know the floor at all.
+    local -a refspecs=("+refs/heads/${branch}:refs/root-src/tip")
+    [ "${branch}" = "${TRUSTED_BRANCH}" ] \
+        || refspecs+=("+refs/heads/${TRUSTED_BRANCH}:refs/root-src/trusted")
+    if ! _rootgit fetch --quiet --no-tags "${REPO_URL}" "${refspecs[@]}" >/dev/null 2>&1; then
+        warn "Could not fetch ${REPO_URL} (${branch}) into root's own copy, so root stages"
         warn "nothing from this checkout. The panel still works; re-run to retry."
         return 1
     fi
@@ -1118,11 +1316,63 @@ root_source_commit() {
     # _on_first_parent_line). refs/root-src/tip was written by the fetch just above, into root's own
     # tagless clone, so there is no other ref of that name for it to fall through to.
     if ! _on_first_parent_line _rootgit "${want}" refs/root-src/tip; then
-        warn "This checkout is at ${want}, which is not on ${REPO_URL}'s ${DEFAULT_BRANCH}."
+        warn "This checkout is at ${want}, which is not on ${REPO_URL}'s ${branch}."
         warn "Root stages nothing from it."
         return 1
     fi
+    if ! _rootgit merge-base --is-ancestor "${floor}" "${want}" >/dev/null 2>&1; then
+        tip="$(_rootgit rev-parse --verify --quiet 'refs/root-src/tip^{commit}' 2>/dev/null || true)"
+        if ! _rootgit cat-file -e "${floor}^{commit}" 2>/dev/null \
+           && { [ "${branch}" = "${TRUSTED_BRANCH}" ] || [ "${want}" != "${tip}" ]; }; then
+            warn "Root's source floor ${floor} is not in ${REPO_URL}'s history, so root"
+            warn "stages nothing. If this installer now points at another repository, delete"
+            warn "${ROOT_SRC_FLOOR_FILE} to start its floor again."
+            return 1
+        fi
+        if [ "${branch}" = "${TRUSTED_BRANCH}" ] || [ "${want}" != "${tip}" ]; then
+            warn "This checkout is at ${want}, older than root's source floor ${floor}."
+            warn "Root never goes back below it, so it stages nothing from this checkout. (The floor"
+            warn "is the newest commit of ${TRUSTED_BRANCH} root has staged from: ${ROOT_SRC_FLOOR_FILE}.)"
+            return 1
+        fi
+    fi
+    if ! _enforces_source_floor "${want}"; then
+        warn "This checkout is at ${want}, whose installer predates root's source floor: installed"
+        warn "root-owned, it would accept older commits again. Root stages nothing from it."
+        return 1
+    fi
     ROOT_SRC_COMMIT="${want}"
+    # Raised only by a commit of the trusted branch. An operator's branch forks from it and may
+    # never be merged as itself (a squash merge makes a new commit), so a floor on the branch would
+    # leave every later commit of the trusted branch below it, and root refusing them all.
+    if [ "${branch}" = "${TRUSTED_BRANCH}" ] && ! _raise_source_floor "${want}"; then
+        warn "Could not record ${want} as root's source floor in ${ROOT_SRC_FLOOR_FILE}; it stays"
+        warn "where it was. Root still stages from this commit."
+    fi
+}
+
+# A fresh install stages from root's own checkout, without root_source_commit, so it would leave
+# the floor at the seed until the first update through root's clone — and a compromised panel could
+# ask root to go back to any commit between the two. Raise it here to the commit that checkout is
+# at, when root's own clone shows that commit on ${TRUSTED_BRANCH}'s first-parent line. A branch or
+# a local commit leaves the floor alone, as does no network. Root runs git in that checkout only
+# because every file in it, .git included, is root's (_checkout_is_roots). An operator's own tree
+# is not read this way — nothing checks who can write its .git — so a root update from one leaves
+# the floor to the next update through root's clone.
+_record_own_source_floor() {
+    [ "$(id -u)" -eq 0 ] && _checkout_is_roots && [ -d "${PANEL_DIR}/.git" ] || return 0
+    local have=""
+    have="$(git -C "${PANEL_DIR}" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null || true)"
+    case "${have}" in ""|*[!0-9a-f]*) return 0 ;; esac
+    _source_floor >/dev/null 2>&1 || return 0
+    if ! ${H_SUDO:-} test -d "${ROOT_GIT}"; then
+        _rootgit init --quiet --bare >/dev/null 2>&1 || return 0
+    fi
+    _rootgit fetch --quiet --no-tags "${REPO_URL}" \
+        "+refs/heads/${TRUSTED_BRANCH}:refs/root-src/tip" >/dev/null 2>&1 || return 0
+    _on_first_parent_line _rootgit "${have}" refs/root-src/tip || return 0
+    _raise_source_floor "${have}" || true
+    return 0
 }
 
 # Answer root_source_commit in THIS shell, before any `x="$(stage_root_source …)"`. Those run in a
@@ -1343,6 +1593,76 @@ install_root_tools() {
     else
         warn "Could not read db_maintenance.py from the repository — it was NOT refreshed."
     fi
+    # A fresh install staged the helper from root's own checkout; record where that is on the trusted
+    # branch, so the panel cannot ask root to go back below it (the update path records it inside
+    # root_source_commit).
+    [ "${HELPER_OK}" -eq 1 ] && _record_own_source_floor
+    return 0
+}
+
+# ── gamedig, from the pinned lockfile ──────────────────────────────────────────────────────────
+# gamedig was `npm install -g --ignore-scripts gamedig@5`, here and from a weekly root cron: whatever
+# 5.x release and whatever versions of its ~50 floating dependencies the registry served, fetched
+# by root and run hourly as every game account. It is installed from tools/gamedig/package-lock.json
+# now, by tools/gamedig/install-gamedig.sh (its header has the layout): `npm ci`, which checks every
+# package against the lockfile's sha512, into a staging directory, switched to only once it runs.
+#
+# Root runs that script, so its three files are root-owned pieces like the helper, and come from
+# the same place: stage_root_source, i.e. root's own source, never the checkout the panel user can
+# write. Hence AFTER install_root_tools (the update path's first gamedig step ran before fetch_code
+# and would have read the OLD checkout's lockfile), and hence the same origin gate. All three or
+# none: a new lockfile beside an old package.json is a tree npm ci refuses. Best-effort: a failure
+# leaves player queries on whatever gamedig the host already had, which the script never touches
+# until a new tree runs.
+GAMEDIG_DIR="${HELPER_DIR}/gamedig"
+GAMEDIG_FILES=(package.json package-lock.json install-gamedig.sh)
+install_gamedig() {
+    if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then
+        warn "Leaving gamedig as it is — its lockfile would have come from an untrusted origin."
+        return 0
+    fi
+    H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
+    local f mode out line bad=""
+    if ! ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" "${GAMEDIG_DIR}" 2>/dev/null; then
+        warn "Could not create ${GAMEDIG_DIR} (needs root) — gamedig was not installed."
+        return 0
+    fi
+    _prepare_root_source
+    for f in "${GAMEDIG_FILES[@]}"; do
+        stage_root_source "tools/gamedig/${f}" "gamedig-${f}" >/dev/null || { bad="${f}"; break; }
+    done
+    # Installed under a temporary name first, and renamed into place only once all three are there.
+    if [ -z "${bad}" ]; then
+        for f in "${GAMEDIG_FILES[@]}"; do
+            mode=0644; [ "${f}" = install-gamedig.sh ] && mode=0755
+            ${H_SUDO} install -o root -g root -m "${mode}" "${HELPER_DIR}/.stage-gamedig-${f}" \
+                "${GAMEDIG_DIR}/.new-${f}" 2>/dev/null || { bad="${f}"; break; }
+        done
+    fi
+    if [ -z "${bad}" ]; then
+        for f in "${GAMEDIG_FILES[@]}"; do
+            ${H_SUDO} mv -f "${GAMEDIG_DIR}/.new-${f}" "${GAMEDIG_DIR}/${f}" 2>/dev/null \
+                || { bad="${f}"; break; }
+        done
+    fi
+    for f in "${GAMEDIG_FILES[@]}"; do
+        ${H_SUDO} rm -f "${HELPER_DIR}/.stage-gamedig-${f}" "${GAMEDIG_DIR}/.new-${f}" 2>/dev/null || true
+    done
+    if [ -n "${bad}" ]; then
+        warn "Could not place tools/gamedig/${bad} root-owned in ${GAMEDIG_DIR} — gamedig was NOT"
+        warn "refreshed, and keeps whatever this host already had."
+        return 0
+    fi
+    info "Installing gamedig from its pinned lockfile…"
+    if out="$(${H_SUDO} "${GAMEDIG_DIR}/install-gamedig.sh" 2>&1)"; then
+        line="${out##*$'\n'}"
+        ok "${line#install-gamedig: }"
+    else
+        printf '%s\n' "${out}" | tail -n 4 | while IFS= read -r line; do warn "  ${line}"; done
+        warn "gamedig could not be installed from its lockfile — player counts and lists use the"
+        warn "gamedig this host already had, if any. The weekly check retries; so does re-running this."
+    fi
+    return 0
 }
 
 # ── The sudoers grant ──────────────────────────────────────────────────────────────────────
@@ -1634,9 +1954,10 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     FROM_VER="$(panel_version)"
     info "Existing install detected at ${PANEL_DIR} (version ${FROM_VER}). Updating…"
 
-    # Ensure Node LTS + gamedig on the host regardless of whether there's an update to apply, so a
-    # plain `install.sh` run also fixes a missing/old install (idempotent + best-effort).
-    ensure_gamedig
+    # Ensure Node.js + npm on the host regardless of whether there's an update to apply, so a
+    # plain `install.sh` run also fixes a missing/old install (idempotent + best-effort). gamedig
+    # itself waits for install_gamedig, below: this runs before fetch_code, on the OLD checkout.
+    ensure_nodejs
     ensure_fail2ban   # backfill fail2ban on existing installs so the panel-login jail can come up
 
     # Decide whether there's anything to do BEFORE snapshotting or touching the service — a
@@ -1686,13 +2007,11 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         # and got "Already up to date", exit 0, and `command not found` on the very next line they
         # were told to type. It self-gates on ORIGIN_TRUSTED, which check_origin_trusted set above.
         install_recovery_command
-        # A hold is NOT "up to date": the pinned commit was not installed. Saying so on the last
-        # line is what a deploy log or the panel's update log is read by.
-        if [ "${UPD_WHY:-}" = hold ]; then
-            warn "Not updated: held at ${TARGET_SHA:0:10}, because the pinned commit ${PANEL_UPDATE_REF} could not be verified on ${DEFAULT_BRANCH}. The panel was left running."
-        else
-            ok "Already up to date (version ${FROM_VER}) — no snapshot taken, panel left running."
-        fi
+        # gamedig is the same kind of piece: root-owned, outside the checkout, and a no-op when
+        # its lockfile's tree is already in place.
+        install_gamedig
+        # A hold is NOT "up to date": the pinned commit was not installed (see update_noop_line).
+        update_noop_line
         exit 0
     fi
 
@@ -1914,6 +2233,13 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     info "[6/6] Verifying the panel came back up…"
     if health_check; then
         ok "Health check passed (HTTP ${HEALTH_CODE}) — now running version ${TO_VER}"
+        # gamedig once the new version is known to be up: not while the panel is stopped, and not
+        # between the restart and the health check either. A new lockfile means an `npm ci`, and
+        # in front of the health check it held the verdict — and the rollback of a broken release —
+        # for as long as the registry took, while the helper and the Deploy job give the whole
+        # installer 30 minutes. gamedig is not something the panel needs in order to start, and a
+        # rolled-back update leaves the tree the host already had alone.
+        install_gamedig
         # Prune old snapshots, keep the most recent few.
         if [ -d "${BACKUP_ROOT}" ]; then
             ls -1dt "${BACKUP_ROOT}"/*/ 2>/dev/null | tail -n +"$((KEEP_BACKUPS+1))" | xargs -r rm -rf
@@ -2063,7 +2389,7 @@ fetch_code
 info "[2/4] Creating virtual environment & installing dependencies…"
 install_deps
 ok "Dependencies installed"
-ensure_gamedig   # Node LTS + gamedig for querying game servers that run on this panel host
+ensure_nodejs    # Node.js + npm, for gamedig (install_gamedig, after install_root_tools below)
 ensure_fail2ban  # brute-force protection for the panel login (jail is configured by the panel itself)
 
 # Ensure the panel's listen port is free BEFORE the first boot: if 5000 (or a previously
@@ -2088,6 +2414,7 @@ else
 fi
 
 install_root_tools
+install_gamedig   # player queries for game servers on this host; root-owned, like the helper
 
 info "[3/4] Registering the service…"
 if [ "${RUN_AS_ROOT}" -eq 1 ]; then

@@ -15,40 +15,74 @@ from panel.ops.ssh_manager import (_core, firewall)  # noqa: E402,F401  (module 
 
 
 
-# ── Keep the node player-query tool (gamedig) current ───────────────────────────
-# gamedig is installed once (bootstrap / install.sh) and never updates itself, so player queries can
-# silently break as games and gamedig evolve. This weekly ROOT cron refreshes it alongside the host's
-# other automatic updates (unattended-upgrades). Written to /etc/cron.d as root, idempotent; the
-# `command -v npm` guard makes it a harmless no-op on a host that never got node.
+# ── gamedig, the player-query tool: installed from its pinned lockfile, and kept that way ──────────
+# gamedig is installed from tools/gamedig's package-lock.json by install-gamedig.sh, into
+# _priv.GAMEDIG_DIR on every host (the script's header has the layout). This weekly ROOT cron re-runs
+# that script. It fetches nothing while the tree the lockfile names is in place and working, so it
+# is a repair job: it puts back a deleted tree or a link something else overwrote. A new gamedig
+# arrives only as a new lockfile, from a reviewed Dependabot pull request.
 #
-# It ran `npm install -g npm gamedig`: the LATEST npm, gamedig and whole dependency tree, with their
-# install scripts, as root, every week, with nobody watching — a standing path from any later
-# compromise of those packages to root on every host. Now: gamedig only, held to the major the
-# panel's query types are written for (v5), with --ignore-scripts so no package code runs as root
-# at install. npm itself is left to the OS: updating it here made root run a freshly fetched npm.
+# It used to be `npm install -g --ignore-scripts gamedig@5`, and before that `npm install -g npm
+# gamedig`: root fetching, every Sunday with nobody watching, whatever gamedig 5.x and whatever
+# versions of its ~50 floating dependencies the registry served, then every game account running
+# them hourly. A compromise of any of those packages at any later point reached every host by the
+# next Sunday. `[ -x … ]` keeps it a no-op on a host whose script has not been placed yet.
 # Byte-identical to tools/panel-helper's NODE_TOOLS_CRON_BODY and install.sh's copy (a unit gate).
 _NODE_TOOLS_CRON = (
-    "# LinuxGSM Panel - keep gamedig current for player queries (managed by the panel).\n"
+    "# LinuxGSM Panel - keep gamedig installed from its pinned lockfile (managed by the panel).\n"
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
-    "30 4 * * 0 root command -v npm >/dev/null 2>&1 && "
-    "npm install -g --ignore-scripts gamedig@5 >/var/log/lgsm-node-tools.log 2>&1\n"
+    "30 4 * * 0 root [ -x /usr/local/lib/linuxgsm-panel/gamedig/install-gamedig.sh ] && "
+    "/usr/local/lib/linuxgsm-panel/gamedig/install-gamedig.sh >/var/log/lgsm-node-tools.log 2>&1\n"
 )
 
 
-def ensure_node_tools_cron(server):
-    """Idempotently install the weekly root cron that keeps gamedig (pinned v5, no install scripts)
-    current on `server`, so the panel's player queries don't rot; npm itself is left to the OS.
-    Best-effort; never raises. Returns True if the write succeeded.
-    Root-owned: locally the helper does the write itself, and remotely it is `sudo bash -c` with
-    base64 so no quoting or `%` can mangle it. This used to claim it landed root-owned "regardless
-    of any per-remote linuxgsm_user", which was the opposite of what happened — that field turned
-    every sudo=True command into `sudo -u <that user>`, this one included. See _core.run_command."""
+def install_gamedig(server, timeout=600):
+    """Install gamedig on a REMOTE host from the panel's pinned lockfile: the gamedig-install verb
+    writes tools/gamedig's three files into _priv.GAMEDIG_DIR and runs install-gamedig.sh there.
+    Returns (output, rc). Never raises: a failure is (message, -1).
+
+    The panel's own host is not done here: the helper refuses the verb, and install.sh places the
+    files there from root's own source (see tools/panel-helper's do_gamedig_install). Nothing is
+    fetched when the host already has the lockfile's tree, so running this daily costs one short
+    run of gamedig."""
+    if _core.is_local_server(server):
+        return "gamedig on the panel's own host is installed by install.sh", 0
+    try:
+        out, _err, rc = _core.run_privileged(server, "gamedig-install", [], timeout=timeout)
+        return out or "", rc
+    except Exception as e:
+        _core._log.debug("install_gamedig failed", exc_info=True)
+        return "gamedig install could not be run: %s" % type(e).__name__, -1
+
+
+def _write_node_tools_cron(server):
+    """Write the weekly cron (_NODE_TOOLS_CRON). True if the write succeeded; never raises.
+    Root-owned: locally the helper does the write itself (and ignores the content sent, writing its
+    own identical body), and remotely it is `sudo bash -c` with base64 so no quoting or `%` can
+    mangle it. This used to claim it landed root-owned "regardless of any per-remote
+    linuxgsm_user", which was the opposite of what happened — that field turned every sudo=True
+    command into `sudo -u <that user>`, this one included. See _core.run_command."""
     try:
         _out, _err, rc = _core.write_root_file(server, "node-tools-cron", _NODE_TOOLS_CRON, timeout=20)
         return rc == 0
     except Exception:
         _core._log.debug("ensure_node_tools_cron failed", exc_info=True)
         return False
+
+
+def ensure_node_tools_cron(server):
+    """The daily pass's gamedig step for one host (app._node_tools_cron_pass): on a REMOTE, first
+    the files the weekly cron runs, and gamedig from them (install_gamedig), THEN the cron. In that
+    order so a cron is never left naming a script that is not there. The panel's own host gets only
+    the cron: its files are install.sh's. Best-effort; never raises. Returns True if the cron write
+    succeeded — the one thing every host gets. A remote whose install failed is logged, and its
+    gamedig, if it had one, is untouched: the script only switches to a tree that runs."""
+    if not _core.is_local_server(server):
+        out, rc = install_gamedig(server)
+        if rc != 0:
+            _core._log.info("gamedig install on %s did not complete (rc=%s): %s",
+                            getattr(server, "name", "?"), rc, _core._last_lines(out, 1))
+    return _write_node_tools_cron(server)
 
 
 # `pro status` spawns Ubuntu's heavy advantage-tools client (slow + CPU-hungry, especially on a
@@ -1281,14 +1315,19 @@ def remote_bootstrap_vps(server, set_timezone="UTC", enable_ufw=True, install_lg
     for line in _bootstrap_node(server):
         note(line)
 
-    # ── 3b. gamedig (game-server query tool) via npm — idempotent (skip if already present) ──
+    # ── 3b. gamedig (game-server query tool), from the panel's pinned lockfile ──
+    # It was `npm install -g --ignore-scripts gamedig@5`: whatever the registry served that day.
+    # install_gamedig pushes tools/gamedig's lockfile and installer and runs it; `npm ci` checks
+    # every package against the lockfile's sha512. Then the weekly cron that re-runs it, AFTER the
+    # files it names are there.
     emit("Installing gamedig (game server query tool)")
-    # `command -v gamedig || npm install -g gamedig` was a shell builtin guarding an install.
-    # npm install -g is idempotent, so the guard only saved time — and it cost a root shell.
-    gd_out, _, _ = _core.run_privileged(server, "npm-install-global", ["gamedig"], timeout=300)
-    note(_core._last_lines(gd_out, 3) or "gamedig installed")
-    ensure_node_tools_cron(server)   # weekly gamedig (pinned v5, no install scripts), beside apt's
-    note("weekly npm/gamedig auto-update scheduled")
+    gd_out, gd_rc = install_gamedig(server)
+    note(_core._last_lines(gd_out, 3) or ("gamedig installed" if gd_rc == 0
+                                          else "gamedig could not be installed"))
+    if _write_node_tools_cron(server):
+        note("weekly gamedig check scheduled (re-installs it from the pinned lockfile if it breaks)")
+    else:
+        note("the weekly gamedig check could not be scheduled")
 
     # ── 3c. Enable + configure unattended-upgrades (auto security updates) ──
     emit("Enabling automatic security updates (unattended-upgrades)")

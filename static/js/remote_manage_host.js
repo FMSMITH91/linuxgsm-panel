@@ -391,12 +391,52 @@ function panelRestartOutcome(before, after, targetBranch, lines){
   if (!after.current_sha || !before.current_sha) return 'unknown';
   return after.current_sha !== before.current_sha ? 'moved' : 'unchanged';
 }
+// An updater that ENDED without restarting the panel. boot_id only flips on a restart, and an update
+// that stops before [1/6] — the source unreachable, a pinned commit it cannot verify — or holds
+// never restarts: the card used to spin for three minutes and say "Still working". The log's exit
+// line says it ended (see _update_log_outcome), and the log's boot_id says the process answering is
+// still the one that started it, so the panel never restarted. Returns null until both are true.
+// `text` is the card's own sentence (translated like any other); `detail` is the installer's own
+// words, read from its log, in a node of its own after it.
+function panelUpdateEndedEarly(l, beforeBoot){
+  if(!l || !l.finished || !beforeBoot || l.boot_id !== beforeBoot) return null;
+  var reason = l.reason || '';
+  if(l.outcome === 'failed'){
+    return {cls:'text-danger', icon:'x-circle', text:'The update stopped before the panel restarted.',
+            detail: reason || 'See the log above for why.'};
+  }
+  if(l.outcome === 'held') return {cls:'text-warning', icon:'pause-circle', text:'', detail: reason};
+  if(l.outcome === 'current'){
+    return {cls:'text-success', icon:'check-circle', text:'Already up to date — nothing was installed.', detail:''};
+  }
+  return {cls:'text-warning', icon:'question-circle',
+          text:'The updater finished without restarting the panel — see the log above.', detail:''};
+}
 function watchPanelRestart(beforeBoot, msg, doneLabel, before, targetBranch){
   var tries=0, restarted=false, done=false;
   var iv=setInterval(function(){
     tries++;
     fetch(MOUNT+'/api/panel/update-log').then(function(r){ return r.ok?r.json():null; })
-      .then(function(l){ if(l && l.lines && l.lines.length) renderPuLog(l.lines); }).catch(function(){});
+      .then(function(l){
+        if(l && l.lines && l.lines.length) renderPuLog(l.lines);
+        var early = done ? null : panelUpdateEndedEarly(l, beforeBoot);
+        if(early){
+          done=true; clearInterval(iv);
+          // Nodes, not markup: the detail is the installer's own text, read out of its log.
+          var sp=document.createElement('span'), ic=document.createElement('i');
+          sp.className=early.cls; ic.className='bi bi-'+early.icon;
+          sp.appendChild(ic);
+          [early.text, early.detail].forEach(function(t){
+            if(!t) return;
+            var part=document.createElement('span'); part.textContent=t;
+            sp.appendChild(document.createTextNode(' ')); sp.appendChild(part);
+          });
+          msg.textContent=''; msg.appendChild(sp);
+          var ub=document.getElementById('pu-update-btn'), sb=document.getElementById('pu-branch-switch');
+          if(ub) ub.disabled=false;
+          if(sb) sb.disabled=false;
+        }
+      }).catch(function(){});
     fetch(MOUNT+'/api/panel/update-status').then(function(r){ return r.ok?r.json():null; }).then(function(s){
       if(!s){ if(!restarted){ restarted=true; msg.innerHTML='<span class="text-warning"><i class="bi bi-arrow-repeat"></i> Restarting the panel…</span>'; } return; }
       if(s.boot_id && beforeBoot && s.boot_id!==beforeBoot && !done){

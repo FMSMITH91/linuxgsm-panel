@@ -82,8 +82,8 @@ Ubuntu Pro, the host controls, the GMod shared-content box, the fail2ban activit
 detached OS update, Tailscale's join, the panel's own restore/self-update, the VPS hardening
 steps, running a LinuxGSM action as the game user, enrolling a game account in the group the
 grant names, installing a game's dependencies, reading the pending-restart flags, freeing
-Steam's per-account crash-dump slots and configuring NodeSource's repository on a remote with its
-signing key pinned** — 102 verbs. (`tests/unit_test.py` asserts
+Steam's per-account crash-dump slots, configuring NodeSource's repository on a remote with its
+signing key pinned and installing gamedig on a remote from its hash-locked lockfile** — 102 verbs. (`tests/unit_test.py` asserts
 this number against `privileged.verbs()`, so it cannot drift from the table again.)
 
 **A correction to the numbers previously reported here.** Earlier revisions of this section
@@ -309,6 +309,24 @@ against that key. A remote that already has Node.js 18+ keeps it and never touch
 helper refuses this verb: it exists for remote hosts, and `install.sh` configures NodeSource on the
 panel's own.
 
+**gamedig, the player-query tool, is installed from a hash-locked lockfile, not from whatever the
+registry serves.** It was `npm install -g --ignore-scripts gamedig@5`, run once at install and
+again by a weekly root cron on every host: root fetched whatever 5.x release and whatever versions
+of its ~50 floating dependencies were current that Sunday, with nobody reviewing them, and every
+game account then ran that code, hourly from cron and on every player poll. `--ignore-scripts`
+stopped install hooks, not code in the package itself. Now `tools/gamedig/package-lock.json` names
+every package with a sha512, and `tools/gamedig/install-gamedig.sh` installs it with `npm ci`, which
+refuses a tarball that does not match. The lockfile changes only through Dependabot pull requests,
+reviewed like any other change and held back seven days after a release, and CI checks that every
+entry has a sha512 and a registry.npmjs.org source. The script builds the new tree beside the old
+one, runs it, and only then switches `/usr/local/bin/gamedig` and `/usr/bin/gamedig` to it, so a
+failed install leaves the working gamedig in place. The weekly cron now re-runs that script and
+fetches nothing while the tree is in place. It is a repair job, not an updater. On the panel host
+the lockfile and script are root-owned pieces like the helper: `install.sh` stages them from
+root's own source, never from the checkout the panel user can write, and the helper refuses the
+`gamedig-install` verb. A remote receives them from the panel through that verb, which is no new
+trust, since the panel already runs `sudo bash -c` there.
+
 **Every one of those is converted, and the grant has narrowed.** On an install where the three
 root-owned pieces are present, `/etc/sudoers.d/linuxgsm-panel` contains two lines:
 
@@ -379,14 +397,19 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   intermediate commit of a pull request merged with a merge commit, which is an ancestor of main
   and was never its tip. One exception: a push that fast-forwards main onto a branch that had main
   merged into it (a "foxtrot" merge) moves the commits main was at before onto that merge's second
-  parent, and a re-run deploy of one of them is then refused. Only then does it read `install.sh`
-  out of that commit, and it refuses a commit with none or an empty one. On the host, `install.sh`
-  checks the pin again against its own fetch; a pin it cannot verify is never replaced by main's
-  unverified tip — the host stays where it is, or the update stops with an error. The job logs in
-  to Tailscale with OIDC workload identity, not a stored secret: Tailscale's credential accepts
-  only a GitHub-signed token whose subject is this repository's `production` environment, and that
-  environment admits only the branch `main`. The OAuth client secret it replaced was a repository
-  secret, readable by a workflow run on any branch or tag.
+  parent, and a re-run deploy of one of them is then refused. It also refuses a commit older than
+  root's source floor (below) — e26a644, the first installer that staged from root's own clone —
+  since re-running an old CI run deploys that commit, and its installer runs as root. Only then
+  does it read `install.sh` out of that commit, and it refuses a commit with none or an empty one,
+  or one whose installer does not enforce that floor. On the host, `install.sh` checks the pin again
+  against its own fetch (a shallow checkout is unshallowed first, so the check sees the history the
+  reset will); a pin it cannot verify is never replaced by main's unverified tip — the host stays
+  where it is, or the update stops with an error. A checkout on main moves only forward, to a pin
+  that contains it: an older pin, or one a foxtrot push left beside it, leaves it where it is. The
+  job logs in to Tailscale with OIDC workload identity, not a stored secret: Tailscale's credential
+  accepts only a GitHub-signed token whose subject is this repository's `production` environment,
+  and that environment admits only the branch `main`. The OAuth client secret it replaced was a
+  repository secret, readable by a workflow run on any branch or tag.
 
   The second half of that sentence was missing, and it mattered: `install_root_tools` *copied*
   those root-owned pieces **out of the working tree**, and the integrity argument was that
@@ -425,6 +448,45 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   to swap the staged copy. And the grant asks `root_tools_present`, i.e. whether the helper root
   will execute actually exists and is root-owned. A failure to *refresh* can no longer widen a
   grant that is already narrow.
+
+  Two things still let a compromised panel choose that commit, and both are closed.
+
+  *An old commit.* Every commit main was ever at is on its first-parent line, and the panel moves
+  its own `HEAD`. It could reset its checkout to an old commit and call `panel-self-update`, and
+  root installed that commit's installer root-owned. One from before e26a644 read the helper out
+  of the panel-owned `.git`, so a planted replace ref then became the helper root installs. Root
+  now keeps a **source floor**, `/usr/local/lib/linuxgsm-panel/.source-floor` (root-owned, 0644,
+  in the root-owned directory): the newest commit of main it has staged its pieces from. It
+  refuses any commit the floor is not an ancestor of, raises the floor to each commit of main it
+  stages from, and never lowers it. A fresh install records the commit its own checkout is at,
+  when root's clone shows that commit on main. With no floor file yet, the floor is e26a644. That
+  alone would still admit a commit between e26a644 and the floor's arrival, whose installer
+  ignores the floor and, once root-owned, would accept anything again. So root also stages only
+  from a commit whose `install.sh` carries the floor's own line (`ROOT_SRC_FLOOR_FILE=…`, which
+  that file says never to change), and the deploy ships only such an installer. A floor file that
+  is not one commit id stops root staging until it is removed. Removing it (as root) resets the
+  floor to e26a644 and is the way to put root's pieces back to an older version on purpose.
+
+  *Another branch.* The panel names the branch it tracks (`PANEL_BRANCH`), and root verified the
+  panel's `HEAD` against that branch, so a compromised panel plus any branch pushed to the
+  repository chose the helper. Root now asks who started the run. When it was the panel, root
+  verifies against main only, and on any other branch it withholds its pieces and says so, as it
+  does for an untrusted origin. The code still switches branch; the helper, `db_maintenance.py`,
+  the installer, the recovery command and gamedig's lockfile and install script stay as they
+  were. When an operator runs
+  `cd / && sudo PANEL_BRANCH=<branch> bash /usr/local/lib/linuxgsm-panel/install.sh` (the
+  refusal prints that line), or runs an installer in a root shell, root follows the
+  branch they chose. It stages from that branch's tip (also when the branch forked below the floor),
+  and it leaves the floor on main. The panel cannot pass for the operator. Its only way to run the
+  installer as root is the helper's `panel-self-update` verb, and the helper sets
+  `PANEL_SELF_UPDATE=1` in the environment it builds for the installer, after copying its own,
+  so nothing the panel hands sudo removes it. A run whose `SUDO_UID` is the panel's own account
+  also counts as the panel's. sudo sets that value and the narrow grant does not let the panel
+  change it, and it covers an older helper running a newer installer. One consequence: the host
+  terminal's password-gated sudo runs as the panel account, so an installer started there counts
+  as the panel's, and takes root's pieces from main only. Run it over SSH to test a branch.
+  Installs run as a normal user are unchanged: their updates run as that account, which already
+  owns everything they would stage from, so there is no boundary for either rule to hold.
 
 * **The installed helper has to stay in step with the panel's code.** It lives outside the
   checkout, so the panel cannot refresh it — only `install.sh` can, as root. The verb table grows

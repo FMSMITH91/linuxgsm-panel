@@ -52,6 +52,27 @@ updates:
       ci-check-tools:
         patterns: ["*"]
 
+  # gamedig, the player-query tool every host runs. tools/gamedig/package-lock.json is the whole
+  # tree, with a sha512 per package that `npm ci` checks (install-gamedig.sh), and it moves ONLY
+  # through these pull requests — the hosts no longer fetch whatever the registry serves. Version
+  # updates bump gamedig itself; its dependencies move through security updates.
+  #   cooldown: a release has to have been out a week before it is proposed, so one pulled in its
+  #     first days (the usual shape of a hijacked package) never reaches a PR. Security updates are
+  #     not delayed by it.
+  #   ignore semver-major: the panel's query types (GAMEDIG_TYPE, the jq filters on its JSON) are
+  #     written for gamedig 5. A 6 is a deliberate port, not a weekly bump.
+  - package-ecosystem: "npm"
+    directory: "/tools/gamedig"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: "gamedig"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

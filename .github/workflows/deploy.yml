@@ -168,6 +168,17 @@ jobs:
               echo "::error::head_sha ${HEAD_SHA} is not on this repository's main; nothing was deployed."
               exit 1
           fi
+          # ...and NO OLDER than root's source floor. Every commit main was ever at passes the check
+          # above, and a re-run of an old CI run deploys its commit: the installer shipped below runs
+          # as root on a system install, pinned to that commit, and can leave that commit's installer
+          # in place root-owned. One from before e26a644 read the helper out of the panel-owned .git,
+          # so a compromised panel could then plant the helper root installs. install.sh keeps the
+          # same floor on the host (ROOT_SRC_FLOOR_SEED; a unit test holds the two equal).
+          FLOOR=e26a64417c7992a6d0a0de39e33437a1949efe7f
+          if ! git merge-base --is-ancestor "${FLOOR}" "${HEAD_SHA}" 2>/dev/null; then
+              echo "::error::head_sha ${HEAD_SHA} predates ${FLOOR}, root's source floor; its installer is not shipped and nothing was deployed."
+              exit 1
+          fi
           # The installer is read out of THAT commit as committed bytes — not the working tree,
           # which is main's tip and may be a later push whose CI has not finished. A commit with no
           # install.sh, or an empty one, is refused here: an empty file would be sent, run as
@@ -176,6 +187,16 @@ jobs:
           if ! git cat-file blob "${HEAD_SHA}:install.sh" > "${INSTALLER}" 2>/dev/null \
              || [ ! -s "${INSTALLER}" ]; then
               echo "::error::${HEAD_SHA} has no install.sh to ship; nothing was deployed."
+              exit 1
+          fi
+          # ...and one that ENFORCES that floor. A commit after e26a644 but before the floor existed
+          # passes the ancestry check, and its installer ignores the floor: run as root and placed
+          # root-owned, it would let the panel roll root back below e26a644 on the next
+          # self-update. Every installer that enforces the floor carries this exact line (install.sh
+          # says never to change it, and a unit test holds this copy to it).
+          # shellcheck disable=SC2016  # matched literally: ${HELPER_DIR} is text in that line
+          if ! grep -qxF 'ROOT_SRC_FLOOR_FILE="${HELPER_DIR}/.source-floor"' "${INSTALLER}"; then
+              echo "::error::${HEAD_SHA}'s install.sh predates root's source floor, so it is not shipped; nothing was deployed."
               exit 1
           fi
           echo "installer=${INSTALLER}" >> "${GITHUB_OUTPUT:?}"
@@ -223,9 +244,11 @@ jobs:
           # host already current and took the no-op branch, so its update steps never ran on the
           # host. It also installed a tip whose CI had not finished. install.sh honours the pin
           # only when it is on the first-parent line of the branch it fetched
-          # (refs/remotes/origin/main, spelled out in full there too), and never moves a checkout
-          # backwards to it, so a run that finishes late (a re-run of an old commit's CI) leaves a
-          # newer host where it is. A pin it cannot verify on its own fetch (a foxtrot push landed
+          # (refs/remotes/origin/main, spelled out in full there too), and moves a checkout on main
+          # only forward to it — never backwards, and never sideways onto a pin that does not
+          # contain it (a foxtrot push can leave one on the line) — so a run that finishes late (a
+          # re-run of an old commit's CI) leaves a newer host where it is, and says why in this log
+          # when it holds. A pin it cannot verify on its own fetch (a foxtrot push landed
           # in between) is not replaced by the tip either: the host stays where it is, with a
           # warning in this log, or — when its checkout is not on main — the update stops with an
           # error and this job fails.

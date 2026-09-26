@@ -145,11 +145,17 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_update_log():
-        """Live progress of an in-flight self-update (the [1/5]…[5/5] steps + result)."""
+        """Live progress of an in-flight self-update (the [1/6]…[6/6] steps + result).
+
+        boot_id says WHICH process answered. The card finishes on a finished log only while that
+        is still the process that started the update: then the installer ended without ever
+        restarting the panel (it stopped early, or held), and nothing else will tell it so."""
         try:
-            return jsonify(so.panel_update_log())
+            data = dict(so.panel_update_log())
+            data["boot_id"] = _BOOT_ID
+            return jsonify(data)
         except Exception:
-            return jsonify({"exists": False, "lines": [],
+            return jsonify({"exists": False, "lines": [], "boot_id": _BOOT_ID,
                             "error": _log_and_generic("panel update-log failed")})
 
     @app.route("/api/panel/branches")

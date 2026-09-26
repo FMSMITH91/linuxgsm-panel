@@ -967,7 +967,14 @@ _NOISE_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".dockerignore"
 # moved on while the installed helper did not: it then answers an unknown verb with rc 2 and no
 # fallback, and the feature behind that verb fails silently. That is precisely the drift the
 # helper's own docstring warns about, and the signal for it was suppressed.
-_RUNTIME_EXCEPTIONS = {"tools/panel-helper"}
+#
+# tools/gamedig is the same kind of piece: install.sh installs its three files root-owned on
+# every host and runs the script, and every game account runs the tree it installs. A commit
+# that changed only them (every Dependabot bump of the lockfile) was listed as "docs, tests or
+# tooling" on the update card. privileged.GAMEDIG_FILES names them; a unit test holds the two
+# together.
+_RUNTIME_EXCEPTIONS = {"tools/panel-helper", "tools/gamedig/package.json",
+                       "tools/gamedig/package-lock.json", "tools/gamedig/install-gamedig.sh"}
 
 
 def _is_runtime_path(path):
@@ -1128,9 +1135,30 @@ def _compute_update_status():
     revs, _, _ = _git(["rev-list", "--first-parent", "-n", "25", "HEAD.." + ref])
     commits = [c for c in (revs or "").split() if c]
     tip_state = _remote_ci_state(commits[0]) if commits else "unknown"
+    # Only a commit that CONTAINS this checkout is an update to it, while the checkout is on the
+    # branch — install.sh moves such a checkout only forward, and holds rather than move it
+    # sideways (see _choose_update_target). After a foxtrot push (main fast-forwarded onto a branch
+    # that had main merged in) the first-parent walk from HEAD lists the other branch's commits
+    # too, and one of them could be offered while the merge itself was still in CI: the card said
+    # "Update available", and the installer held. update_available is true exactly when the update
+    # would install, so those are passed over. A checkout NOT on the branch (a local commit) is
+    # reset to whatever it is given, as install.sh does, so nothing is filtered for it.
+    _, _, on_branch_rc = _git(["merge-base", "--is-ancestor", "HEAD", ref])
 
+    def _contains_head(sha):
+        if on_branch_rc != 0:
+            return True
+        _, _, arc = _git(["merge-base", "--is-ancestor", "HEAD", sha])
+        return arc == 0
+
+    # Asked BEFORE the check-runs call, which is one anonymous GitHub request (60 an hour per IP)
+    # per commit: after a foxtrot push the walk is the other branch's whole line, and asking
+    # about each of them on every recheck while the merge was in CI spent the hour's limit, which
+    # then read as "pending" for the merge itself once it had passed.
     target_sha, target_state, newer_unverified = None, tip_state, 0
     for idx, sha in enumerate(commits):
+        if not _contains_head(sha):
+            continue
         st = tip_state if idx == 0 else _remote_ci_state(sha)
         if st in ("passing", "unknown"):
             target_sha, target_state, newer_unverified = sha, st, idx
@@ -1287,7 +1315,19 @@ def _launch_installer(target_ref="", branch="", started_msg=None):
     # symlink/file and get root code execution.
     _upd_dir = os.path.join(PANEL_DIR, "data")
     os.makedirs(_upd_dir, exist_ok=True)
-    _log_path = os.path.join(_upd_dir, "self-update.log")
+    _log_path = _update_log_path()
+    # The update card finishes on the first "=== installer exit N ===" it reads while the panel has
+    # not restarted (see _update_log_outcome). The PREVIOUS run's log ends in one, and it is still
+    # there between this call returning and the launcher replacing it — the helper's detached run
+    # and systemd-run's unit both start a moment later — so a card polling in that gap read the
+    # last run's ending as this one's. Remove it first: until the new log exists, the card reads
+    # "not started yet". Unlinking a name in the panel's own data dir never touches another file.
+    try:
+        os.unlink(_log_path)
+    except FileNotFoundError:
+        pass   # first update on this install, or already cleared
+    except OSError:
+        _log.warning("self-update: couldn't remove the previous run's log", exc_info=True)
     script = (
         "#!/bin/bash\n"
         f"LOG={shlex.quote(_log_path)}\n"
@@ -1664,19 +1704,78 @@ def _kernel_has_ip(addr):
         return False
 
 
+def _update_log_path():
+    return os.path.join(PANEL_DIR, "data", "self-update.log")
+
+
+# The line both launchers append when install.sh returns: the helper's detached run
+# (_run_installer_to in tools/panel-helper) and the wrapper script _launch_installer writes.
+_INSTALLER_EXIT_RE = re.compile(r"^=== installer exit (\d+)\b")
+
+
+def _update_log_outcome(lines):
+    """How a self-update run ended, read from its log lines (ANSI already stripped).
+
+    An update that stops BEFORE the panel restarts never flips the panel's boot id, which is all
+    the update card used to watch: the source unreachable, a pinned commit that cannot be verified,
+    a hold. The [ERROR] line was in the log, and after three minutes the card said "Still working —
+    reload the page to check." So the card also reads THIS, and finishes on it when the process
+    answering is still the one that started the update (see watchPanelRestart).
+
+    Returns {"finished", "exit_code", "outcome", "reason"}. outcome is:
+      running  no exit line yet;
+      failed   a non-zero exit — reason is the last [ERROR] message, continuation lines joined;
+      held     exit 0 on install.sh's "Not updated: ..." line (update_noop_line) — the reason;
+      current  exit 0 on "Already up to date" — nothing to install;
+      done     exit 0 otherwise: the run went through the restart, which the boot id reports.
+    """
+    exit_code = None
+    for ln in reversed(lines):
+        m = _INSTALLER_EXIT_RE.match(ln)
+        if m:
+            exit_code = int(m.group(1))
+            break
+    if exit_code is None:
+        return {"finished": False, "exit_code": None, "outcome": "running", "reason": ""}
+    res = {"finished": True, "exit_code": exit_code, "outcome": "done", "reason": ""}
+    if exit_code != 0:
+        res["outcome"] = "failed"
+        # die() prints "[ERROR] <message>" and indents every further line of the message.
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].startswith("[ERROR]"):
+                parts = [lines[i][len("[ERROR]"):].strip()]
+                for cont in lines[i + 1:]:
+                    if not cont[:1].isspace():
+                        break
+                    parts.append(cont.strip())
+                res["reason"] = " ".join(p for p in parts if p)
+                break
+        return res
+    for ln in reversed(lines):
+        if ln.startswith("[!] Not updated:"):
+            res["outcome"], res["reason"] = "held", ln[len("[!] "):].strip()
+            return res
+        if ln.startswith("✓ Already up to date"):
+            res["outcome"], res["reason"] = "current", ln[len("✓ "):].strip()
+            return res
+    return res
+
+
 def panel_update_log(max_bytes=20000):
     """Tail of the self-update log (ANSI stripped) so the UI can show live progress while
     the panel updates and restarts. The detached updater keeps writing to this file across
-    the restart, so the new process can read the final steps too."""
-    path = os.path.join(PANEL_DIR, "data", "self-update.log")
+    the restart, so the new process can read the final steps too. Also says how the run ended,
+    once it has (see _update_log_outcome)."""
+    path = _update_log_path()
     try:
         with open(path, "r", errors="replace") as f:
             data = f.read()[-max_bytes:]
     except OSError:
-        return {"exists": False, "lines": []}
+        return {"exists": False, "lines": [], "finished": False, "exit_code": None,
+                "outcome": "running", "reason": ""}
     data = terminal.strip_escapes(data)   # strip ANSI/OSC/two-byte escapes, not just colour
     lines = [ln.rstrip() for ln in data.splitlines() if ln.strip()]
-    return {"exists": True, "lines": lines}
+    return dict({"exists": True, "lines": lines}, **_update_log_outcome(lines))
 
 
 # ─── Panel self-diagnostics + file integrity/repair ────────────
@@ -3114,6 +3213,17 @@ def generate_debug_report():
             u_outcome = "FAILED — update failed its health check and was rolled back to the previous version"
         elif "Update complete" in u_text or "Health check passed" in u_text:
             u_outcome = "succeeded"
+        elif upd.get("outcome") == "failed":
+            # Stopped with an error and no health-check rollback: before the panel was stopped
+            # (the source unreachable, a pin that cannot be verified), or inside the stopped
+            # window, whose handler puts the old code back. Either used to read "unknown (in
+            # progress…)" for good. The reason is log text, so it is redacted like the log tail.
+            u_outcome = _redact("FAILED — the installer stopped (exit %s): %s" % (
+                upd.get("exit_code"), upd.get("reason") or "see the log below"))
+        elif upd.get("outcome") == "held":
+            u_outcome = _redact("NOT UPDATED — %s" % upd.get("reason"))
+        elif upd.get("outcome") == "current":
+            u_outcome = _redact("nothing to install — %s" % upd.get("reason"))
         else:
             u_outcome = "unknown (in progress, or the log doesn't show a final outcome)"
         update_section = ("\n### Last update\n- **Outcome**: %s\n```\n%s\n```\n"

@@ -3066,6 +3066,59 @@ check("watchPanelRestart(beforeBoot, msg, 'Update complete', before, '')" in _rh
       "js: the update and branch-switch flows pass their pre-restart status to the watcher",
       "a caller does not pass `before` (and the target branch), so every outcome reads 'unknown'")
 
+# ── ...and an update that ENDS without restarting the panel is reported, not left spinning ──────
+# boot_id flips only on a restart, and an update that stops before [1/6] (the source unreachable, a
+# pinned commit it cannot verify) or holds never restarts: the [ERROR] was in the log, and after
+# three minutes the card said "Still working — reload the page to check." The update-log route now
+# says how the run ended (outcome, reason — unit-tested end to end from install.sh's own output)
+# and which process answered (boot_id). The watcher finishes on it only while that is still the
+# process that started the update: after a restart, the outcome logic above owns the verdict.
+_pee = _js_code_only(_js_function_body(_rh, "panelUpdateEndedEarly"))
+check(len(_pee) > 150
+      and "if(!l || !l.finished || !beforeBoot || l.boot_id !== beforeBoot) return null;" in _pee
+      and "l.outcome === 'failed'" in _pee and "detail: reason ||" in _pee
+      and "l.outcome === 'held'" in _pee and "l.outcome === 'current'" in _pee,
+      "js: an update is reported as ended only when its log says it finished AND the process that "
+      "answered is the one that started it — failed and held say why",
+      "panelUpdateEndedEarly is missing, or no longer requires both: %r" % _pee[:200])
+_wpr_log = _wpr[_wpr.find("fetch(MOUNT+'/api/panel/update-log')"):
+                _wpr.find("fetch(MOUNT+'/api/panel/update-status')")]
+_wpr_early = _js_block_after(_wpr_log, "if(early){") or ""
+# The reason is up to two sentences of the installer's own text. Beside the buttons on a 375px phone
+# the status line was squeezed into a column 90px wide and 313px tall (measured in a browser); the
+# row now wraps and the line takes a basis, so it drops under the buttons instead — only while it
+# says something, so an empty one adds no blank row (measured: row height = button height).
+_rm_tpl = (ROOT / "templates" / "remote_manage.html").read_text(encoding="utf-8")
+_rm_css = (ROOT / "static" / "css" / "panel.css").read_text(encoding="utf-8")
+_pu_row = re.search(r'<div class="([^"]*)">\s*<button[^>]*data-action="checkPanelUpdate"', _rm_tpl)
+check(_pu_row is not None and "flex-wrap" in _pu_row.group(1).split()
+      and re.search(r"#pu-msg:not\(:empty\)\{\s*flex:1 1 14rem;\s*min-width:0;\s*\}", _rm_css) is not None,
+      "update card: the status line wraps under the buttons on a narrow screen, and only when it has "
+      "something to say",
+      "row classes %r; panel.css rule present=%s" % (_pu_row and _pu_row.group(1),
+                                                     "#pu-msg:not(:empty)" in _rm_css))
+check("var early = done ? null : panelUpdateEndedEarly(l, beforeBoot);" in _wpr_log
+      and "done=true; clearInterval(iv);" in _wpr_early and "part.textContent=t;" in _wpr_early
+      and "ub.disabled=false" in _wpr_early and not _SINK.search(_wpr_early),
+      "js: ...and the watcher stops on it, prints the reason as text (never markup), and gives the "
+      "buttons back",
+      "the update-log poll does not finish the watch on an early end: %r" % _wpr_early[:200])
+# ...and what it RETURNS for each ending, not merely that the outcome is named: a branch that
+# returns null leaves a held (or up-to-date) update spinning for three minutes into "Still
+# working", the symptom panelUpdateEndedEarly exists to end. The hold's text is the installer's
+# own reason (its `detail`); the up-to-date one is the card's own sentence. Matched on the return.
+_pee_held = re.search(r"if\(l\.outcome === 'held'\)\s*return\s*\{([^{}]*)\}", _pee)
+_pee_cur = re.search(r"if\(l\.outcome === 'current'\)\s*\{\s*return\s*\{([^{}]*)\}", _pee)
+check(_pee_held is not None and re.search(r"\bdetail:\s*reason\b", _pee_held.group(1)) is not None
+      and _pee_cur is not None
+      and "text:'Already up to date — nothing was installed.'" in _pee_cur.group(1),
+      "js: a hold is reported with the installer's reason, and an up-to-date run as current — "
+      "neither returns null and leaves the card spinning",
+      "held -> %r; current -> %r" % (_pee_held and _pee_held.group(0), _pee_cur and _pee_cur.group(0)))
+check("if(sb) sb.disabled=false;" in _wpr_early,
+      "js: ...and an early end gives the branch Switch button back, not only Update now",
+      "the early-end block re-enables only pu-update-btn: %r" % _wpr_early[-220:])
+
 # ── saving the auto-block threshold must not switch auto-block OFF ───────────────────────────
 # saveThreshold posts the toggle's state as `enabled` ("preserve the on/off state"), but the toggle
 # is rendered unchecked and repainted only when /top-ips answers — after several SSH reads. A Save

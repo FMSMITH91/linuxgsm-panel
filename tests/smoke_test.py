@@ -1133,6 +1133,77 @@ try:
     ul = c.get("/api/panel/update-log")
     check("GET /api/panel/update-log -> 200 (superadmin)",
           ul.status_code == 200 and "lines" in (ul.get_json() or {}), "got %d" % ul.status_code)
+    # ...and it says how a finished run ENDED, and which process answered. An update that stops
+    # before the panel restarts never flips boot_id, so the card reads this to stop spinning — only
+    # while the boot_id here is still the one it started with. A throwaway log, never data/'s.
+    import panel.ops.system_ops as _ul_so
+    from panel.routes import host_local as _ul_hl
+    _ul_dir = _lgsm_tempfile.mkdtemp(prefix="smoke-updlog-")
+    _ul_path = os.path.join(_ul_dir, "self-update.log")
+    with open(_ul_path, "w", encoding="utf-8") as _ul_fh:
+        _ul_fh.write("=== panel self-update ===\n\033[0;31m[ERROR]\033[0m Couldn't reach the update "
+                     "source (offline, or a private repo without credentials).\n     Nothing was "
+                     "changed.\n=== installer exit 1 ===\n")
+    _ul_saved = _ul_so._update_log_path
+    try:
+        _ul_so._update_log_path = lambda: _ul_path
+        _ulj = c.get("/api/panel/update-log").get_json() or {}
+        from panel.ops.system_ops import generate_debug_report as _ul_gdr
+        with app.app_context():
+            _ul_rep = _ul_gdr()["report"]
+        # ...and a hold (exit 0, install.sh's "Not updated" line), which is not "unknown" either.
+        with open(_ul_path, "w", encoding="utf-8") as _ul_fh:
+            _ul_fh.write("=== panel self-update ===\n\033[1;33m[!]\033[0m Not updated: held at "
+                         "0123456789, because the pinned commit could not be verified on main. The "
+                         "panel was left running.\n=== installer exit 0 ===\n")
+        with app.app_context():
+            _ul_rep_held = _ul_gdr()["report"]
+        # ...an up-to-date run (exit 0 on install.sh's "Already up to date"), and a stop and a hold
+        # whose text looks secret: the outcome line is log text, redacted like the tail under it.
+        _ul_reps = {}
+        for _ul_k, _ul_body in (
+                ("current", "\033[0;32m✓\033[0m Already up to date (version 9.9.9) — no snapshot "
+                            "taken, panel left running.\n=== installer exit 0 ===\n"),
+                ("failed", "\033[0;31m[ERROR]\033[0m Couldn't fetch as ops@example.com with "
+                           "token=s3cr3tvalue123.\n=== installer exit 1 ===\n"),
+                ("held", "\033[1;33m[!]\033[0m Not updated: held at 0123456789, because "
+                         "ops@example.com set token=s3cr3tvalue123. The panel was left running.\n"
+                         "=== installer exit 0 ===\n")):
+            with open(_ul_path, "w", encoding="utf-8") as _ul_fh:
+                _ul_fh.write("=== panel self-update ===\n" + _ul_body)
+            with app.app_context():
+                _ul_reps[_ul_k] = _ul_gdr()["report"]
+    finally:
+        _ul_so._update_log_path = _ul_saved
+        import shutil as _ul_sh
+        _ul_sh.rmtree(_ul_dir, ignore_errors=True)
+    check("GET /api/panel/update-log: a run that stopped early reads as failed, with its reason and "
+          "the answering process's boot_id",
+          _ulj.get("finished") is True and _ulj.get("outcome") == "failed" and _ulj.get("exit_code") == 1
+          and _ulj.get("reason") == ("Couldn't reach the update source (offline, or a private repo "
+                                     "without credentials). Nothing was changed.")
+          and _ulj.get("boot_id") == _ul_hl._BOOT_ID,
+          repr({k: _ulj.get(k) for k in ("finished", "outcome", "exit_code", "reason", "boot_id")}))
+    check("debug report: a self-update that stopped before the panel restarted is reported as FAILED "
+          "with its reason, not 'unknown (in progress…)'",
+          "- **Outcome**: FAILED — the installer stopped (exit 1): Couldn't reach the update source" in _ul_rep,
+          _ul_rep[_ul_rep.find("### Last update"):][:300])
+    check("debug report: ...an up-to-date run as nothing to install, not 'unknown (in progress…)'",
+          "- **Outcome**: nothing to install — Already up to date (version 9.9.9)"
+          in _ul_reps.get("current", ""),
+          _ul_reps.get("current", "")[_ul_reps.get("current", "").find("### Last update"):][:300])
+    check("debug report: ...and the reason in a stop's or a hold's outcome is redacted like the log",
+          all("s3cr3tvalue123" not in _ul_reps.get(_k, "s3cr3tvalue123")
+              and "ops@example.com" not in _ul_reps.get(_k, "ops@example.com") for _k in ("failed", "held"))
+          and "- **Outcome**: FAILED — the installer stopped (exit 1): Couldn't fetch as [email] with "
+              "token=[redacted]" in _ul_reps.get("failed", "")
+          and "- **Outcome**: NOT UPDATED — Not updated: held at 0123456789, because [email] set "
+              "token=[redacted]" in _ul_reps.get("held", ""),
+          repr({_k: _v[_v.find("- **Outcome**"):][:160] for _k, _v in _ul_reps.items()}))
+    check("debug report: ...and a hold as NOT UPDATED, with install.sh's reason",
+          "- **Outcome**: NOT UPDATED — Not updated: held at 0123456789, because the pinned commit "
+          "could not be verified on main." in _ul_rep_held,
+          _ul_rep_held[_ul_rep_held.find("### Last update"):][:300])
 
     # change-port validation: out-of-range ports are refused BEFORE any save/restart, so
     # these are side-effect-free. (A valid port would restart the panel — not exercised here.)
@@ -7180,19 +7251,24 @@ try:
         _sm_cron.list_cron_jobs = _sv_lcj
 
     # ── The daily cron pass reaches every game server, not only the ones someone opens ───────────
-    # upgrade_managed_cron_tracking is what gives an existing restart-when-empty line the PATH its
-    # gamedig call needs (cron's is /usr/bin:/bin; the distro's npm puts gamedig in /usr/local/bin).
-    # It ran only when someone opened a server's Scheduled Tasks, and set_daily_restart only when
-    # the operator toggled the setting — so a line written before the fix kept never restarting on
-    # every server nobody opened. app._node_tools_cron_pass runs it for each game server at start
-    # and daily. Driven with both workers stubbed; the first server raises, and the rest must still
+    # upgrade_managed_cron_tracking is what turns an existing restart-when-empty line into the one
+    # set_daily_restart writes today: the PATH its gamedig call needs (cron's is /usr/bin:/bin; the
+    # distro's npm puts gamedig in /usr/local/bin), and — for a line from before #331 — a restart
+    # only on a COUNTED 0 and the host's address, where the old line restarted on any failed query
+    # and the oldest queried 127.0.0.1, which a Source server never answers: those restarted it
+    # every day with players on it. It ran only when someone opened a server's
+    # Scheduled Tasks, and set_daily_restart only when the operator toggled the setting — so an old
+    # line kept doing that on every server nobody opened. app._node_tools_cron_pass runs it for each
+    # game server at start and daily, with that server's game type and port (what set_daily_restart
+    # is given). Driven with both workers stubbed; the first server raises, and the rest must still
     # be reached, as must every host's weekly gamedig cron.
     _ntp_app = sys.modules["app"]
     _ntp_up, _ntp_hosts = [], []
     _sv_ntp = (_sm_cron.upgrade_managed_cron_tracking, _ntp_app.ensure_node_tools_cron)
 
-    def _ntp_upgrade(remote, user, selfname=None):
-        _ntp_up.append((str(getattr(remote, "id", None)), str(user), str(selfname)))
+    def _ntp_upgrade(remote, user, selfname=None, game_type=None, port=None):
+        _ntp_up.append((str(getattr(remote, "id", None)), str(user), str(selfname), str(game_type),
+                        str(port)))
         if len(_ntp_up) == 1:
             raise RuntimeError("this host did not answer")
         return False
@@ -7205,17 +7281,44 @@ try:
         except Exception as _e:          # reported by the check below, not left to end the suite
             _ntp_err = _e
         with app.app_context():
-            _ntp_want = sorted((str(_g.remote_id), str(_g.short_name), str(_g.lgsm_name))
+            _ntp_want = sorted((str(_g.remote_id), str(_g.short_name), str(_g.lgsm_name),
+                                str(_g.game_type), str(_g.port))
                                for _g in GameServer.query.all() if _g.remote is not None)
             _ntp_all_hosts = sorted(_r.id for _r in RemoteServer.query.all())
-        check("daily cron pass: every game server's crontab gets the in-place upgrade, even after "
-              "one fails", _ntp_err is None and len(_ntp_want) >= 2 and sorted(_ntp_up) == _ntp_want,
+        check("daily cron pass: every game server's crontab gets the in-place upgrade, with its own "
+              "game type and port, even after one fails", _ntp_err is None and len(_ntp_want) >= 2 and sorted(_ntp_up) == _ntp_want,
               "raised %r; upgraded %r, servers %r" % (_ntp_err, sorted(_ntp_up)[:4], _ntp_want[:4]))
         check("daily cron pass: ...and every host still gets the weekly gamedig cron",
               bool(_ntp_all_hosts) and sorted(_ntp_hosts) == _ntp_all_hosts,
               "ensured %r, hosts %r" % (sorted(_ntp_hosts), _ntp_all_hosts))
     finally:
         _sm_cron.upgrade_managed_cron_tracking, _ntp_app.ensure_node_tools_cron = _sv_ntp
+
+    # ...and the other caller, the Scheduled Tasks read, gives it the same two things. Without them
+    # the upgrade keeps the line's own port and type, which is not what set_daily_restart would
+    # write for this server once either has changed. The switches' columns are put back afterwards:
+    # an empty listing reads as "both lines gone" to the reconcile, which is not under test here.
+    _rt_up = []
+    _sv_rt = (_sm_cron.upgrade_managed_cron_tracking, _sm_cron.list_cron_jobs)
+    with app.app_context():
+        _g = db.session.get(GameServer, gs_id)
+        _rt_cols = (_g.autostart, _g.daily_restart)
+        _rt_want = [(_g.short_name, _g.lgsm_name, _g.game_type, _g.port)]
+    try:
+        _sm_cron.upgrade_managed_cron_tracking = (
+            lambda remote, user, selfname=None, game_type=None, port=None:
+            _rt_up.append((user, selfname, game_type, port)) and False)
+        _sm_cron.list_cron_jobs = lambda *a, **k: []
+        _rt_resp = c.get("/api/server/%d/cron" % gs_id)
+    finally:
+        _sm_cron.upgrade_managed_cron_tracking, _sm_cron.list_cron_jobs = _sv_rt
+        with app.app_context():
+            _g = db.session.get(GameServer, gs_id)
+            _g.autostart, _g.daily_restart = _rt_cols
+            db.session.commit()
+    check("cron page: opening Scheduled Tasks upgrades that server's crontab with its game type and "
+          "port", _rt_resp.status_code == 200 and _rt_up == _rt_want and _rt_want[0][3] is not None,
+          "status %s; upgraded %r, want %r" % (_rt_resp.status_code, _rt_up, _rt_want))
 
     # ── The pending banner must know about the DAILY-RESTART cron too ─────────────────────────────
     # Two mechanisms queue a restart-when-empty: the panel's column, and the cron set_daily_restart

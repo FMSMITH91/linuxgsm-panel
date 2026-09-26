@@ -239,6 +239,42 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **An older "daily restart when empty" line could restart the server with players on it.**
+  Lines written before the fix for "Is anyone on?" (below) kept the old check, which restarted
+  whenever the player query failed, because `jq` counts gamedig's error reply as 0 players. The
+  oldest of those lines also send the query to 127.0.0.1, which a Source server does not answer,
+  so for them every query fails and the server restarts every day, players or not. On the test
+  host, gmodserver's line got `{"error":"Failed all 2 attempts"}` from 127.0.0.1 and would have
+  restarted at the first :10 past the daily time, while the same query to the host's own address
+  answered normally. The earlier heal only added the PATH to such a line. The in-place upgrade
+  (run whenever a server's Scheduled Tasks are opened, and daily for every game server) now
+  recognises every shape the panel has ever written for this line and rewrites it to exactly what
+  turning the setting on writes today: the host's own address, the server's port and query type,
+  a restart only on a counted 0, and gamedig's PATH. The line keeps its own schedule, and the
+  daily restart time, which is on the separate flag line, does not move. A line the panel did not
+  write is left alone; one an operator has edited is not rewritten either, and only gets the PATH
+  as before. A crontab whose listing failed is still never rewritten. A game that once had no
+  player query, and has one now, gets the player check.
+- **The panel's update card now says when an update stopped, or held, instead of spinning.** It
+  finished only when the panel restarted, and an update that ends before the panel is stopped never
+  restarts it: the update source unreachable, a pinned commit the installer cannot verify, a hold.
+  The `[ERROR]` was in the log, and after three minutes the card said "Still working — reload the
+  page to check." Both launchers (the root-owned helper, and the wrapper a per-user install runs)
+  now end the log with the installer's exit status, and the card reads it: a stop shows in red with
+  the installer's own reason, a hold shows its "Not updated: held at …" line, and the buttons come
+  back. It trusts that only while the panel answering is still the one that started the update, so
+  a run that did restart the panel is judged as before. Each launch removes the previous run's log
+  first, so its ending is never read as the new one's. The debug report's "Last update" names these
+  outcomes too, where it said "unknown (in progress…)". The helper side reaches a host when its
+  installer next re-stages the helper, which every update does.
+- **On a shallow checkout the update decided on less history than it then acted on.** The installer
+  clones `--depth 1`; the step that picks where to update to fetched only the new tip, and the step
+  that resets fetched the whole history first. So an older verified pin (a late deploy) was missing
+  and read as "not verified", holding the host with a false warning, and after a foxtrot push a pin
+  the host already contained could not be seen to be its ancestor, so the first step chose a
+  snapshot and restart that the second then undid by keeping the checkout where it was. The first
+  step now unshallows the tracked branch before deciding. That adds history and nothing else — no
+  change to the working tree, `HEAD`, other refs or the config — once per checkout.
 - **"Daily restart when empty" never restarted on a host whose Node.js came from Ubuntu.** The
   hourly check runs from the game account's crontab, and cron gives a crontab the PATH
   `/usr/bin:/bin`. Ubuntu's own npm installs gamedig into `/usr/local/bin`, where cron does not
@@ -833,6 +869,24 @@ regardless of this file — this changelog is for humans.
   the microsecond — they now come from `clock.utcnow()`.
 
 ### Security
+- **A compromised panel can no longer send root back to an old commit, or choose the branch root
+  installs from.** On a root install, the panel could reset its own checkout to an old commit of
+  main and ask for a self-update. Root accepted it (every commit main was ever at is on its
+  first-parent line) and installed that commit's installer root-owned. One from before e26a644
+  read the helper out of the panel-owned `.git`, so a planted replace ref became the helper on the
+  next update. Root now keeps a source floor in `/usr/local/lib/linuxgsm-panel/.source-floor`: the
+  newest commit of main it has staged from, never lowered, with e26a644 when there is no file yet.
+  It refuses any commit below the floor, and any commit whose installer does not enforce the floor
+  itself. The auto-deploy refuses the same commits, so re-running an old CI run cannot ship one.
+  Separately, the branch the panel tracks (`PANEL_BRANCH`) decided which branch root verified
+  against, so any pushed branch could supply the helper. When the panel starts an update, root now
+  takes its pieces from main only. On another branch the code still switches, and the helper,
+  `db_maintenance.py`, the installer, the recovery command and gamedig's lockfile and install
+  script are left as they were, with a message in the update log. An operator testing a branch as root (`cd / && sudo
+  PANEL_BRANCH=<branch> bash /usr/local/lib/linuxgsm-panel/install.sh`, or from a root shell) still
+  gets that branch's pieces. The helper marks the
+  panel's runs in a way the panel cannot remove, and `.github/SECURITY.md` explains how. Installs
+  run as a normal user are unchanged.
 - **A tag named like a branch can no longer stand in for it, and a commit main only reached
   through a merge no longer counts as main.** git reads a bare `origin/main` as a tag called
   `origin/main` before the branch, and the installer's clone, its fetches and the panel's branch
@@ -865,10 +919,18 @@ regardless of this file — this changelog is for humans.
   an older verified commit, asks only whether that checkout is an ANCESTOR of main: it is what
   the host already runs, not something being verified, and a host left off the first-parent line by
   a foxtrot push must not be reset backwards. The full update path (taken when the venv is stale) also
-  honours that rule now; it had been resetting a current checkout back to the older commit. And a
+  honours that rule now; it had been resetting a current checkout back to the older commit. It is
+  now "never backwards, and never sideways": a checkout on main moves only to a pin that contains
+  it. After a foxtrot push a verified pin can be on main's line and neither contain the checkout nor
+  be contained by it (the other branch's commit the merge was made on), and the update moved the
+  host to it, dropping the commit it was on; now it holds, and says why. The panel's update card,
+  which could offer that commit while the merge was still in CI, no longer offers a commit that
+  does not contain the running one, so it never shows an update that would only hold, and does
+  not ask GitHub's anonymous API about such a commit either (60 requests an hour). And a
   pinned commit the installer cannot verify is no longer replaced by main's tip, which nothing had
   verified: a checkout on main stays where it is, with a warning, and any other stops the update
-  with an error that names the pin, having changed nothing.
+  with an error that names the pin, having changed nothing. A hold ends with "Not updated: held at
+  …, because …", never "Already up to date".
 
   The CI auto-deploy had the same gap one step earlier: its trigger compares the branch's short
   name, and GitHub compares it ignoring case, so any ref whose short name matches main
@@ -898,6 +960,32 @@ regardless of this file — this changelog is for humans.
   22.04 went on to install the distro's npm, and with it Node 12, which gamedig cannot run on. The
   panel host's helper refuses the verb: `install.sh` sets up NodeSource there. `SECURITY.md` had
   said this step could not be narrowed; it now describes what replaced it.
+- **gamedig is installed from a hash-locked lockfile, and root no longer fetches it every week.**
+  It was `npm install -g --ignore-scripts gamedig@5`, at install and from a weekly root cron on
+  every host: whatever gamedig 5.x and whatever versions of its ~50 floating dependencies the
+  registry served that Sunday, unreviewed, then run by every game account. `tools/gamedig` now holds
+  a `package.json` pinning gamedig 5.3.3 and a `package-lock.json` naming all 61 packages, each with
+  a sha512, and `install-gamedig.sh` installs that tree with `npm ci`, which rejects any tarball that
+  does not match. It builds into a staging directory, runs the result once, and only then switches
+  over, so a failed download leaves the working gamedig in place, and it links both
+  `/usr/local/bin/gamedig` and `/usr/bin/gamedig` to it, since existing restart-when-empty cron
+  lines look in `/usr/bin`. The first run removes npm's old global gamedig once the new one runs
+  and both links point at it, so `gamedig` answers throughout the switch. `npm ci` gets ten
+  minutes, and on an update it runs after the health check has passed, so a registry that stalls
+  cannot hold the verdict or the rollback. A commit that changes only these files is an update
+  to what the host runs, not "docs, tests or tooling", on the update card.
+  Everything lives in `/usr/local/lib/linuxgsm-panel/gamedig` on every host. `install.sh` places
+  the three files there root-owned from root's own source (never the panel-owned checkout), after
+  the helper and after the new code is fetched; it used to install gamedig before fetching. Remote
+  hosts get them through a new `gamedig-install` verb, which replaces `npm-install-global`, from
+  the add-host bootstrap and the daily pass, which on a remote writes the files before the cron
+  that runs them. The helper refuses that verb on the panel host. The weekly cron, still
+  `/etc/cron.d/lgsm-node-tools`, now re-runs the script and fetches nothing while the tree is in
+  place. Updates arrive as Dependabot pull requests (weekly, a seven-day cooldown, gamedig majors
+  ignored), and the Dependency Review check now runs on them. Tests hold every lockfile entry to a
+  sha512 and a registry.npmjs.org source, and allow no `npm install` in any shell script. This also
+  clears Scorecard's last Pinned-Dependencies finding for npm, which counts only `npm ci` as pinned.
+  `uninstall.sh` removes the two links, but only where they point into the panel's directory.
 - **A ban now closes what the banned address already had open.** A ban refuses new connections, at
   the firewall or, behind Tailscale Funnel, at the panel's own gate. A live console or a host
   terminal opened before the ban was not a new connection, so it kept streaming for as long as the
@@ -981,8 +1069,9 @@ regardless of this file — this changelog is for humans.
   yes, while the panel and the bootstrap reported the host hardened. It now writes
   `00-panel-hardening.conf`, which sorts first, on the panel host and on remotes, and only where
   sshd reads that directory.
-- **The weekly root cron no longer upgrades npm**; it installs a pinned `gamedig` with install
-  scripts disabled. On the panel host, NodeSource's repository is set up with its signing key
+- **The weekly root cron no longer upgrades npm**, and no longer installs from the registry at all:
+  it re-runs `install-gamedig.sh`, which installs gamedig from its hash-locked lockfile (see the
+  gamedig entry above). On the panel host, NodeSource's repository is set up with its signing key
   pinned, instead of by running NodeSource's setup script as root (remote hosts: see above).
 - **Auto-block cannot cut off your tailnet, or take over your own rules.** When the Tailscale probe
   failed, tailnet addresses lost their exemption and could be denied at UFW position 1, above the

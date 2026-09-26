@@ -1980,6 +1980,9 @@ def _gamedig_host(server):
 # forever. The player readers never saw it: they run gamedig through `sudo -u <user>`, and
 # Ubuntu's sudoers sets a secure_path listing /usr/local/bin (classic sudo and sudo-rs both apply
 # it). On the test host (NodeSource Node, /usr/bin/gamedig) the line counted 0 under cron's env.
+# (gamedig is no longer an npm global: install-gamedig.sh links /usr/local/bin/gamedig AND
+# /usr/bin/gamedig to its pinned tree, so lines that predate this PATH find it too. This stays, so
+# the check does not depend on that link.)
 #
 # Set INSIDE the command substitution, so it reaches gamedig, jq and gamedig's `env node` and
 # nothing else: the restart itself still runs with the environment cron gave it. /usr/local/bin
@@ -1987,8 +1990,9 @@ def _gamedig_host(server):
 # gamedig on a host that somehow has both.
 CRON_TOOL_PATH = "/usr/local/bin:/usr/bin:/bin"
 # What set_daily_restart wrote before, and what it writes now. cron.upgrade_managed_cron_tracking
-# heals an existing line from the one to the other in place (an existing crontab line is otherwise
-# only rewritten when the operator toggles the setting).
+# rewrites a line in any of set_daily_restart's own historical shapes whole, to
+# daily_restart_check_cmd; a restart line it does not recognise (one an operator has edited) only
+# has this one call swapped for the other, in place.
 GAMEDIG_CRON_BARE = "P=$(gamedig "
 
 
@@ -2012,11 +2016,30 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     selfname = selfname or user
     flag = f"/home/{user}/.restart-pending"
     gdtype = GAMEDIG_TYPE.get(game_type or "", "")
-
     # Crontab-only (no separate script file — file writes inside a `sudo bash -c`
     # pipeline misbehave under eventlet's green subprocess; crontab-only works).
     #   daily <hour>:<minute>: set the "pending" flag
     #   hourly :10           : if flag set and server empty (gamedig), restart + clear flag
+    check_cmd = daily_restart_check_cmd(user, selfname, gdtype,
+                                        _gamedig_host(server) if (gdtype and port) else None, port)
+    touch_line = f"{minute} {hour} * * * {cron._record_managed_cmd(user, f'touch {flag}')}"
+    check_line = f"10 * * * * {check_cmd}"
+    # Both lines contain the flag path — strip by that to remove/rebuild idempotently.
+    grep_args = f"-vF {_quote(flag)}"
+    if enabled:
+        return _rewrite_crontab(server, user, grep_args, [touch_line, check_line])
+    return _rewrite_crontab(server, user, grep_args, [], extra_pre=f"rm -f {flag}; ")
+
+
+def daily_restart_check_cmd(user, selfname, gdtype, host, port):
+    """The hourly restart-when-empty check's COMMAND (no schedule), exactly as set_daily_restart
+    writes it for a server whose gamedig type is `gdtype`, queried at `host`:`port`. `host` is read
+    only when there is a query to make (gdtype and port both set).
+
+    The one place that line is spelled. set_daily_restart writes it, and
+    cron.upgrade_managed_cron_tracking rewrites every older shape of it to this — so a line healed in
+    place and one written by toggling the setting cannot drift apart."""
+    flag = f"/home/{user}/.restart-pending"
     # The player test is "did we COUNT zero", not "did we fail to count". gamedig writes its
     # failure to stdout as a JSON object ({"error":"Failed all 1 attempts"}), so `.players` is null
     # and jq reports the length of null as 0 — and the old condition,
@@ -2034,20 +2057,13 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     if gdtype and port:
         jqf = 'if (.players|type=="array") then (.players|length) else empty end'
         # gamedig by the PATH above, not cron's: see CRON_TOOL_PATH.
-        getp = (f"{gamedig_cron_call()}--type {gdtype} {_gamedig_host(server)}:{port} 2>/dev/null "
+        getp = (f"{gamedig_cron_call()}--type {gdtype} {host}:{port} 2>/dev/null "
                 f"| jq -r {_quote(jqf)} 2>/dev/null); ")
         cond = '[ "$P" = 0 ]'
     else:
         getp, cond = "", "true"
-    check_cmd = (
+    return (
         f"[ -f {flag} ] && {{ {getp}"
         f"if {cond}; then "
         f"/home/{user}/{selfname} restart >/dev/null 2>&1; rm -f {flag}; fi; }}"
     )
-    touch_line = f"{minute} {hour} * * * {cron._record_managed_cmd(user, f'touch {flag}')}"
-    check_line = f"10 * * * * {check_cmd}"
-    # Both lines contain the flag path — strip by that to remove/rebuild idempotently.
-    grep_args = f"-vF {_quote(flag)}"
-    if enabled:
-        return _rewrite_crontab(server, user, grep_args, [touch_line, check_line])
-    return _rewrite_crontab(server, user, grep_args, [], extra_pre=f"rm -f {flag}; ")

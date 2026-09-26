@@ -242,70 +242,248 @@ finally:
     _sm_core._rewrite_crontab = _orig_rw_u
     _sm_core.run_command = _orig_run_u
 
-# ...and the one upgrade the compound restart check DOES get: the PATH its gamedig call needs. cron
-# gives a crontab /usr/bin:/bin, the distro's npm puts gamedig in /usr/local/bin, and a line written
-# before set_daily_restart named its PATH kept calling a gamedig cron could not find — P empty, the
-# restart never fired — until the operator toggled the setting. This heals it in place: only that
-# call changes; schedule, address, jq filter and condition (here the older one) stay byte for byte.
-_gh_legacy = ("10 * * * * [ -f /home/gm/.restart-pending ] && { P=$(gamedig --type garrysmod "
-              "203.0.113.5:27015 2>/dev/null | jq -r '.players|length' 2>/dev/null); "
-              "if [ -z \"$P\" ] || [ \"$P\" = 0 ] || [ \"$P\" = null ]; then "
-              "/home/gm/gmodserver restart >/dev/null 2>&1; rm -f /home/gm/.restart-pending; fi; }")
-_gh_own = "*/30 * * * * P=$(gamedig --type minecraft 127.0.0.1:25565 | jq .) ; echo $P >> /home/gm/p.log"
-_gh_other = _gh_legacy.replace("/home/gm/", "/home/other/")
-_gh_crontab = "\n".join(["MAILTO=\"\"", _gh_legacy, _gh_own, _gh_other, "0 3 * * * /home/gm/backup.sh"])
+# ...and the panel's own restart-when-empty check is rewritten WHOLE, to exactly what
+# set_daily_restart writes for that server today, whatever older shape it is in. Lines written
+# before #331 count through the unguarded `.players|length` filter and restart on an empty/0/null
+# answer: gamedig prints {"error":"Failed all 1 attempts"} when a query fails, jq counts that as 0,
+# and every failed query restarted the server. The oldest also query 127.0.0.1, which a Source
+# server does not answer, so those restarted it every day with players on it. #362's heal only
+# added the PATH to such a line and left all of that in place.
+#
+# The fixtures are the REAL historical strings: each is what that commit's set_daily_restart
+# (extracted with `git show <sha>:ssh_manager.py` / `…:panel/ops/ssh_manager/_core.py`) wrote for
+# gm/gmodserver, gmod, port 27015 with the host at 203.0.113.5 — or what #362's heal made of it.
+_GH_OLD_COND = 'if [ -z "$P" ] || [ "$P" = 0 ] || [ "$P" = null ]; then '
+_GH_TAIL = "/home/gm/gmodserver restart >/dev/null 2>&1; rm -f /home/gm/.restart-pending; fi; }"
+_GH_HEAD = "10 * * * * [ -f /home/gm/.restart-pending ] && { "
+_GH_HIST = [
+    ("16cff95..4557e9a (127.0.0.1, `.players|length`, restart on empty/0/null)",
+     _GH_HEAD + "P=$(gamedig --type garrysmod 127.0.0.1:27015 2>/dev/null | jq -r '.players|length'"
+     " 2>/dev/null); " + _GH_OLD_COND + _GH_TAIL),
+    ("4557e9a..2a3e69b (the host's IP, same filter and condition)",
+     _GH_HEAD + "P=$(gamedig --type garrysmod 203.0.113.5:27015 2>/dev/null | jq -r '.players|length'"
+     " 2>/dev/null); " + _GH_OLD_COND + _GH_TAIL),
+    ("16cff95..2a3e69b, a game written with no query (`P=; `)",
+     _GH_HEAD + "P=; " + _GH_OLD_COND + _GH_TAIL),
+    ("a 127.0.0.1 line after #362's PATH heal",
+     _GH_HEAD + "P=$(PATH=/usr/local/bin:/usr/bin:/bin; gamedig --type garrysmod 127.0.0.1:27015"
+     " 2>/dev/null | jq -r '.players|length' 2>/dev/null); " + _GH_OLD_COND + _GH_TAIL),
+    ("a host-IP line after #362's PATH heal",
+     _GH_HEAD + "P=$(PATH=/usr/local/bin:/usr/bin:/bin; gamedig --type garrysmod 203.0.113.5:27015"
+     " 2>/dev/null | jq -r '.players|length' 2>/dev/null); " + _GH_OLD_COND + _GH_TAIL),
+    ("2a3e69b / #331 (guarded filter, counted 0, no PATH)",
+     _GH_HEAD + "P=$(gamedig --type garrysmod 203.0.113.5:27015 2>/dev/null | jq -r 'if "
+     "(.players|type==\"array\") then (.players|length) else empty end' 2>/dev/null); "
+     "if [ \"$P\" = 0 ]; then " + _GH_TAIL),
+]
+_GH_NOQUERY_NOW = _GH_HEAD + "if true; then " + _GH_TAIL          # #331 onward, a game with no query
 
 
-def _gh_upgrade(listing, rc=0):
-    """(returned, lines written or None) for one upgrade pass over `listing`."""
-    _cap = {}
-    _saved = (_sm_core._rewrite_crontab, _sm_core.run_command)
+def _gh_upgrade(listing, rc=0, host="203.0.113.5", user="gm", selfname="gmodserver", **kw):
+    """(returned, lines written or None, address lookups made) for one upgrade pass over
+    `listing`, with the host's address lookup answering `host`."""
+    _cap, _looks = {}, []
+    _saved = (_sm_core._rewrite_crontab, _sm_core.run_command, _sm_core._gamedig_host)
     _sm_core.run_command = lambda s, c, **k: (listing, "", rc)
     _sm_core._rewrite_crontab = lambda s, u, grep, add, extra_pre="": (
         _cap.update(add=list(add)) or (True, "ok"))
+    _sm_core._gamedig_host = lambda server: _looks.append(server) or host
     try:
-        _ret = _sm_cron.upgrade_managed_cron_tracking(None, "gm", "gmodserver")
+        _ret = _sm_cron.upgrade_managed_cron_tracking(None, user, selfname, **kw)
     finally:
-        _sm_core._rewrite_crontab, _sm_core.run_command = _saved
-    return _ret, _cap.get("add")
+        _sm_core._rewrite_crontab, _sm_core.run_command, _sm_core._gamedig_host = _saved
+    return _ret, _cap.get("add"), len(_looks)
 
 
-_gh_ret, _gh_add = _gh_upgrade(_gh_crontab)
-_gh_want = _gh_legacy.replace("P=$(gamedig ", _sm_core.gamedig_cron_call(), 1)
-check("cron upgrade: a restart check calling a bare gamedig gets gamedig's PATH, in place",
-      _gh_ret is True and _gh_add is not None and _gh_want in _gh_add
-      and _gh_legacy not in _gh_add and "PATH=/usr/local/bin:" in _gh_want, repr(_gh_add))
-check("cron upgrade: ...and nothing else moves — env lines, another account's flag, the operator's own"
-      " gamedig job, and the line order are all kept",
-      _gh_add == ["MAILTO=\"\"", _gh_want, _gh_own, _gh_other, "0 3 * * * /home/gm/backup.sh"],
+def _gh_written(game_type="gmod", port=27015, host="203.0.113.5", user="gm", selfname="gmodserver"):
+    """[flag line, check line], exactly as set_daily_restart writes them today."""
+    _cap = {}
+    _saved = (_sm_core._rewrite_crontab, _sm_core._gamedig_host)
+    _sm_core._rewrite_crontab = lambda s, u, grep, add, extra_pre="": (
+        _cap.update(add=list(add)) or (True, "ok"))
+    _sm_core._gamedig_host = lambda server: host
+    try:
+        _sm_core.set_daily_restart(None, user, selfname, game_type=game_type, port=port, enabled=True)
+    finally:
+        _sm_core._rewrite_crontab, _sm_core._gamedig_host = _saved
+    return _cap.get("add") or ["", ""]
+
+
+_gh_now = _gh_written()[1]
+check("cron upgrade: the fixture set_daily_restart line is today's form (PATH, guarded jq, counted 0)",
+      _gh_now.startswith("10 * * * * ") and _sm_core.gamedig_cron_call() in _gh_now
+      and "203.0.113.5:27015" in _gh_now and "else empty end" in _gh_now
+      and 'if [ "$P" = 0 ]; then' in _gh_now, _gh_now)
+for _gh_label, _gh_line in _GH_HIST:
+    _gh_r, _gh_a, _ = _gh_upgrade(_gh_line, game_type="gmod", port=27015)
+    check("cron upgrade: %s heals to exactly the line set_daily_restart writes today" % _gh_label,
+          _gh_r is True and _gh_a == [_gh_now], repr(_gh_a))
+    _gh_r2, _gh_a2, _ = _gh_upgrade("\n".join(_gh_a or []), game_type="gmod", port=27015)
+    check("cron upgrade: ...and %s, once healed, is left alone on the next pass" % _gh_label,
+          _gh_r2 is False and _gh_a2 is None, repr((_gh_r2, _gh_a2)))
+
+# Today's own lines must be RECOGNISED as the panel's (the table in cron.py is history; a change to
+# daily_restart_check_cmd that is not added to it would leave every line it writes unhealable) —
+# and, being current, left exactly where they are: set_daily_restart's output is a fixed point.
+_gh_nq = _gh_written(game_type="noquerygame")
+_gh_res = _sm_cron._restart_check_res("gm", "gmodserver")
+check("cron upgrade: what set_daily_restart writes today, with and without a query, is a shape the "
+      "upgrade recognises",
+      all(any(r.match(ln.split(None, 5)[5]) for r in _gh_res) for ln in (_gh_now, _gh_nq[1])),
+      repr((_gh_now[:90], _gh_nq[1][:90])))
+_gh_ret, _gh_add, _gh_n = _gh_upgrade("\n".join(_gh_written() + ["0 3 * * * /home/gm/backup.sh"]),
+                                      game_type="gmod", port=27015)
+check("cron upgrade: a crontab set_daily_restart just wrote is not rewritten",
+      _gh_ret is False and _gh_add is None, repr((_gh_ret, _gh_add)))
+_gh_ret, _gh_add, _ = _gh_upgrade(_gh_nq[1], game_type="noquerygame", port=27015)
+check("cron upgrade: ...nor is today's no-query line for a game with no gamedig type",
+      _gh_ret is False and _gh_add is None, repr((_gh_ret, _gh_add)))
+_gh_ret, _gh_add, _ = _gh_upgrade(_GH_HIST[2][1], game_type="noquerygame", port=27015)
+check("cron upgrade: an old no-query line (`P=; ` + the old condition) heals to today's `if true`",
+      _gh_ret is True and _gh_add == [_gh_nq[1]] and _gh_nq[1] == _GH_NOQUERY_NOW, repr(_gh_add))
+_gh_ret, _gh_add, _ = _gh_upgrade(_GH_NOQUERY_NOW, game_type="gmod", port=27015)
+check("cron upgrade: a no-query line for a game that HAS a gamedig type now gets the player check",
+      _gh_ret is True and _gh_add == [_gh_now], repr(_gh_add))
+
+# The server's own game type and port, as set_daily_restart is given them — not the line's.
+_gh_ret, _gh_add, _ = _gh_upgrade(_GH_HIST[1][1], game_type="gmod", port=27016)
+check("cron upgrade: the query goes to the server's port as the panel has it, as set_daily_restart's does",
+      _gh_ret is True and _gh_add == [_gh_written(port=27016)[1]], repr(_gh_add))
+# A caller that does not know the server keeps the line's own type and port.
+_gh_mc = _GH_HIST[1][1].replace("garrysmod 203.0.113.5:27015", "minecraft 203.0.113.5:25565")
+_gh_ret, _gh_add, _ = _gh_upgrade(_gh_mc)
+check("cron upgrade: with no game type or port from the caller, the line's own are kept",
+      _gh_ret is True and _gh_add == [_gh_written(game_type="mc", port=25565)[1]], repr(_gh_add))
+
+# The address. A line from before 4557e9a queries 127.0.0.1 and must move to the host's own IP,
+# but _gamedig_host ANSWERS 127.0.0.1 when it could not look — and a line that already names the
+# real IP must not be moved off it by a lookup that failed.
+_gh_ret, _gh_add, _ = _gh_upgrade(_GH_HIST[1][1], host="127.0.0.1", game_type="gmod", port=27015)
+check("cron upgrade: a failed address lookup does not move a line off the host's real IP",
+      _gh_ret is True and _gh_add == [_gh_now], repr(_gh_add))
+_gh_ret, _gh_add, _ = _gh_upgrade(_GH_HIST[0][1], host="127.0.0.1", game_type="gmod", port=27015)
+_gh_lo = _gh_written(host="127.0.0.1")[1]
+check("cron upgrade: ...a 127.0.0.1 line whose lookup failed still gets the guarded query and counted 0",
+      _gh_ret is True and _gh_add == [_gh_lo], repr(_gh_add))
+_gh_ret, _gh_add, _ = _gh_upgrade(_gh_lo, host="203.0.113.5", game_type="gmod", port=27015)
+check("cron upgrade: ...and moves to the host's IP on the first pass whose lookup answers",
+      _gh_ret is True and _gh_add == [_gh_now], repr(_gh_add))
+# The same for a #331 line written while the lookup had failed: #362's PATH-only heal would have
+# left it on 127.0.0.1, where a Source server never answers and the server never restarts.
+_gh_ret, _gh_add, _ = _gh_upgrade(_GH_HIST[5][1].replace("203.0.113.5", "127.0.0.1"),
+                                  game_type="gmod", port=27015)
+check("cron upgrade: a #331 line written on 127.0.0.1 is moved to the host's IP, not only given a PATH",
+      _gh_ret is True and _gh_add == [_gh_now], repr(_gh_add))
+_gh_ret, _gh_add, _gh_n = _gh_upgrade("0 3 * * * /home/gm/backup.sh\n*/5 * * * * /home/gm/x.sh")
+check("cron upgrade: a crontab with no restart check makes no address lookup",
+      _gh_ret is False and _gh_n == 0, repr((_gh_ret, _gh_n)))
+
+# The operator's schedule. The daily time lives on the flag line; the check line's own schedule may
+# have been changed in the Scheduled Tasks editor. Neither moves.
+_gh_flag = "30 3 * * * " + _sm_cron._record_managed_cmd("gm", "touch /home/gm/.restart-pending")
+_gh_ret, _gh_add, _ = _gh_upgrade("\n".join([_gh_flag, _GH_HIST[0][1].replace("10 * * * * ", "*/20 * * * * ", 1)]),
+                                  game_type="gmod", port=27015)
+check("cron upgrade: the operator's daily time (the flag line) and the check's own schedule are kept",
+      _gh_ret is True and _gh_add == [_gh_flag, _gh_now.replace("10 * * * * ", "*/20 * * * * ", 1)],
       repr(_gh_add))
-_gh_ret2, _gh_add2 = _gh_upgrade("\n".join(_gh_add or []))
-check("cron upgrade: a healed crontab is left alone (no rewrite, reports no change)",
-      _gh_ret2 is False and _gh_add2 is None, repr((_gh_ret2, _gh_add2)))
-# The heal must produce exactly what set_daily_restart writes today, or a healed line and a freshly
-# toggled one would differ and the next change to either would miss the other.
-_gh_fresh = {}
-_gh_saved_rw = _sm_core._rewrite_crontab
-_gh_saved_host = _sm_core._gamedig_host
-_sm_core._rewrite_crontab = lambda s, u, grep, add, extra_pre="": (
-    _gh_fresh.update(add=list(add)) or (True, "ok"))
-_sm_core._gamedig_host = lambda server: "203.0.113.5"
-try:
-    _sm_core.set_daily_restart(None, "gm", "gmodserver", game_type="gmod", port=27015, enabled=True)
-finally:
-    _sm_core._rewrite_crontab = _gh_saved_rw
-    _sm_core._gamedig_host = _gh_saved_host
-_gh_now = (_gh_fresh.get("add") or ["", ""])[1]
-_gh_old = _gh_now.replace(_sm_core.gamedig_cron_call(), _sm_core.GAMEDIG_CRON_BARE)
-_gh_ret3, _gh_add3 = _gh_upgrade(_gh_old)
-check("cron upgrade: healing a pre-PATH line gives exactly the line set_daily_restart writes now",
-      _gh_old != _gh_now and _gh_add3 == [_gh_now], repr((_gh_now, _gh_add3)))
+
+# Only the panel's own line. Another account's flag, another instance's script in this account, an
+# operator's own gamedig job, env and comment lines stay byte for byte and in order. A restart
+# check the operator has EDITED (here: the restart's output kept in a log) matches no shape, so it
+# is not rewritten whole — it only has a bare gamedig given the PATH, as #362 did.
+_gh_edited = _GH_HIST[1][1].replace("restart >/dev/null 2>&1;", "restart >> /home/gm/r.log 2>&1;")
+_gh_edited_want = _gh_edited.replace("P=$(gamedig ", _sm_core.gamedig_cron_call(), 1)
+_gh_own = "*/30 * * * * P=$(gamedig --type minecraft 127.0.0.1:25565 | jq .) ; echo $P >> /home/gm/p.log"
+_gh_other = _GH_HIST[0][1].replace("/home/gm/", "/home/other/")
+# (Today's shape, so #362's PATH-only heal has nothing to add to it either.)
+_gh_inst2 = _gh_written(host="127.0.0.1", selfname="gmodserver-2")[1]
+_gh_keep = ["MAILTO=\"\"", "# a comment", _gh_own, _gh_other, _gh_inst2, "0 3 * * * /home/gm/backup.sh"]
+_gh_ret, _gh_add, _ = _gh_upgrade("\n".join(_gh_keep[:3] + [_GH_HIST[0][1], _gh_edited] + _gh_keep[3:]),
+                                  game_type="gmod", port=27015)
+check("cron upgrade: only the panel's own check is rewritten — another account's, another instance's, "
+      "an operator's own gamedig job, env and comment lines are untouched and in order",
+      _gh_add == _gh_keep[:3] + [_gh_now, _gh_edited_want] + _gh_keep[3:], repr(_gh_add))
+check("cron upgrade: ...and a check the operator edited only has its bare gamedig given the PATH",
+      _gh_add is not None and _gh_edited_want in _gh_add and _gh_edited not in _gh_add
+      and _GH_OLD_COND in _gh_edited_want, repr(_gh_add))
+
+# The real thing: the test host's gmodserver crontab, as `crontab -l -u gmodserver` printed it
+# (read-only). Its check is the 16cff95 shape — 127.0.0.1, so it restarted at the first :10 after
+# 05:00 every day whether or not anyone was playing. The upgrade changes that one line, into what
+# set_daily_restart writes for that server, and nothing else.
+_GH_VPS = [
+    '0 5 * * * mkdir -p /home/gmodserver/.lgsm-cron && touch /home/gmodserver/.restart-pending > /home/gmodserver/.lgsm-cron/0433e035997a.log 2>&1; R=$?; T=$(date +\\%s); echo "$R $T $T" > /home/gmodserver/.lgsm-cron/0433e035997a.status',
+    '10 * * * * [ -f /home/gmodserver/.restart-pending ] && { P=$(gamedig --type garrysmod 127.0.0.1:27015 2>/dev/null | jq -r \'.players|length\' 2>/dev/null); if [ -z "$P" ] || [ "$P" = 0 ] || [ "$P" = null ]; then /home/gmodserver/gmodserver restart >/dev/null 2>&1; rm -f /home/gmodserver/.restart-pending; fi; }',
+    '0 5 * * * mkdir -p /home/gmodserver/.lgsm-cron && /home/gmodserver/gmodserver mods-update > /home/gmodserver/.lgsm-cron/f5d2086bf53a.log 2>&1; R=$?; T=$(date +\\%s); echo "$R $T $T" > /home/gmodserver/.lgsm-cron/f5d2086bf53a.status',
+    '15 5 * * * mkdir -p /home/gmodserver/.lgsm-cron && /home/gmodserver/gmodserver update > /home/gmodserver/.lgsm-cron/8ca5440bda95.log 2>&1; R=$?; T=$(date +\\%s); echo "$R $T $T" > /home/gmodserver/.lgsm-cron/8ca5440bda95.status',
+    '30 5 * * 0 mkdir -p /home/gmodserver/.lgsm-cron && /home/gmodserver/gmodserver update-lgsm > /home/gmodserver/.lgsm-cron/045f868a5c97.log 2>&1; R=$?; T=$(date +\\%s); echo "$R $T $T" > /home/gmodserver/.lgsm-cron/045f868a5c97.status',
+    '*/5 * * * * mkdir -p /home/gmodserver/.lgsm-cron && /home/gmodserver/gmodserver monitor > /home/gmodserver/.lgsm-cron/ea0da41f8433.log 2>&1; R=$?; T=$(date +\\%s); echo "$R $T $T" > /home/gmodserver/.lgsm-cron/ea0da41f8433.status',
+]
+_gh_ret, _gh_add, _ = _gh_upgrade("\n".join(_GH_VPS), host="203.0.113.7", user="gmodserver",
+                                  selfname="gmodserver", game_type="gmod", port=27015)
+_gh_vps_now = _gh_written(host="203.0.113.7", user="gmodserver", selfname="gmodserver")[1]
+check("cron upgrade: the test host's real gmodserver crontab — only its restart check changes, into "
+      "today's line for that server",
+      _gh_ret is True and _gh_add == [_GH_VPS[0], _gh_vps_now] + _GH_VPS[2:]
+      and "127.0.0.1" in _GH_VPS[1] and _GH_OLD_COND in _GH_VPS[1], repr(_gh_add))
+
 # The rewrite replaces the WHOLE crontab with what the loop kept, so it may only run on a crontab
 # that was read. A listing cut short by a dropped connection comes back with rc -1 and whatever
 # lines arrived first — installing that would delete the rest of the account's jobs.
-_gh_ret4, _gh_add4 = _gh_upgrade(_gh_legacy, rc=-1)
-check("cron upgrade: a crontab read that failed is never rewritten, whatever text came back",
-      _gh_ret4 is False and _gh_add4 is None, repr((_gh_ret4, _gh_add4)))
+for _gh_rc in (-1, 1):
+    _gh_ret4, _gh_add4, _ = _gh_upgrade(_GH_HIST[0][1], rc=_gh_rc, game_type="gmod", port=27015)
+    check("cron upgrade: a crontab read that failed (rc %d) is never rewritten, whatever text came back"
+          % _gh_rc, _gh_ret4 is False and _gh_add4 is None, repr((_gh_ret4, _gh_add4)))
+
+# Driven: what the two lines DO when the query fails, the way a Source server's does on 127.0.0.1.
+# The flag, the server script and gamedig are fakes in a temp dir; each command runs under cron's
+# own environment. The old line restarts (the control); the healed one does not — and still does
+# on a counted 0, so it is not simply a line that never restarts.
+import shutil as _gh_shutil
+import subprocess as _gh_sp
+import tempfile as _gh_tmp
+from unit.part01 import skip as _gh_skip
+if not _gh_shutil.which("jq"):
+    _gh_skip("cron upgrade: the healed line does not restart on a failed query, driven", "no jq on this machine")
+else:
+    _gh_dir = _gh_tmp.mkdtemp(prefix="heal-restart-")
+    try:
+        _gh_bin, _gh_home = os.path.join(_gh_dir, "bin"), os.path.join(_gh_dir, "home", "gm")
+        os.makedirs(_gh_bin)
+        os.makedirs(_gh_home)
+        with open(os.path.join(_gh_home, "gmodserver"), "w") as _fh:
+            _fh.write("#!/bin/sh\necho restarted >> %s/restarts\n" % _gh_dir)
+        os.chmod(os.path.join(_gh_home, "gmodserver"), 0o755)
+
+        def _gh_drive(line, reply):
+            """Did `line`'s command restart the server, with gamedig printing `reply`?"""
+            with open(os.path.join(_gh_bin, "gamedig"), "w") as _fh:
+                _fh.write("#!/bin/sh\necho '%s'\n" % reply)
+            os.chmod(os.path.join(_gh_bin, "gamedig"), 0o755)
+            open(os.path.join(_gh_home, ".restart-pending"), "w").close()
+            if os.path.exists(os.path.join(_gh_dir, "restarts")):
+                os.remove(os.path.join(_gh_dir, "restarts"))
+            _cmd = (line.split(None, 5)[5].replace("/home/gm/", _gh_home + "/")
+                    .replace("PATH=%s; " % _sm_core.CRON_TOOL_PATH, "PATH=%s:/usr/bin:/bin; " % _gh_bin))
+            _gh_sp.run(["env", "-i", "HOME=" + _gh_home, "SHELL=/bin/sh",
+                        "PATH=%s:/usr/bin:/bin" % _gh_bin, "sh", "-c", _cmd],
+                       capture_output=True, text=True, timeout=60)
+            return os.path.exists(os.path.join(_gh_dir, "restarts"))
+        _gh_fail = '{"error":"Failed all 1 attempts"}'
+        _gh_healed = (_gh_upgrade(_GH_HIST[0][1], game_type="gmod", port=27015)[1] or [""])[0]
+        _gh_old_fail = _gh_drive(_GH_HIST[0][1], _gh_fail)
+        _gh_new_fail = _gh_drive(_gh_healed, _gh_fail) if _gh_healed else None
+        _gh_new_zero = _gh_drive(_gh_healed, '{"players":[]}') if _gh_healed else None
+        _gh_new_two = _gh_drive(_gh_healed, '{"players":[{"name":"a"},{"name":"b"}]}') if _gh_healed else None
+        check("cron upgrade: the old line restarts the server when the query fails (the control)",
+              _gh_old_fail is True, repr(_gh_old_fail))
+        check("cron upgrade: the healed line does not restart on a failed query, nor with players on, "
+              "and does on a counted 0",
+              (_gh_new_fail, _gh_new_two, _gh_new_zero) == (False, False, True),
+              repr((_gh_new_fail, _gh_new_two, _gh_new_zero)))
+    finally:
+        _gh_shutil.rmtree(_gh_dir, ignore_errors=True)
+
 import base64 as _b64cr
 
 

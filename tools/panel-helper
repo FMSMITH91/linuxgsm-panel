@@ -89,7 +89,6 @@ TOOLS = {
     "fallocate": ("/usr/bin/fallocate", "/bin/fallocate"),
     "mkswap": ("/usr/sbin/mkswap", "/sbin/mkswap"),
     "swapon": ("/usr/sbin/swapon", "/sbin/swapon"),
-    "npm": ("/usr/bin/npm", "/usr/local/bin/npm"),
     "tailscale": ("/usr/bin/tailscale", "/usr/sbin/tailscale"),
     "ss": ("/usr/bin/ss", "/usr/sbin/ss", "/sbin/ss", "/bin/ss"),
     "sysctl": ("/usr/sbin/sysctl", "/sbin/sysctl"),
@@ -272,13 +271,6 @@ SWAPFILE = "/swapfile"
 SWAP_FSTAB_LINE = "/swapfile none swap sw 0 0"
 FSTAB = "/etc/fstab"
 
-
-# npm packages the panel installs globally, and the spec each one installs as. Pinned to the major
-# the panel's query types are written for, and installed with --ignore-scripts, so root never runs
-# a package's install hook. "npm" itself is gone: `npm install -g npm` as root fetched the newest npm
-# and made root run it, and nothing in the panel asked for it.
-NPM_GLOBAL_PACKAGES = ("gamedig",)
-NPM_GLOBAL_SPECS = {"gamedig": "gamedig@5"}
 
 F2B_EVENT_RE = re.compile(r"\[[A-Za-z0-9._-]+\] (?:Ban|Found) [0-9a-fA-F:.]+")
 
@@ -491,12 +483,14 @@ WRITE_CONTENT = {
 
 # The one body the helper writes itself. Byte-identical to what the panel sends remote hosts
 # (panel/ops/ssh_manager/hosts.py:_NODE_TOOLS_CRON) and to install.sh's copy — a unit gate holds the
-# three together. gamedig only, pinned to v5, --ignore-scripts: see the note on _NODE_TOOLS_CRON.
+# three together. It re-runs install-gamedig.sh, which installs gamedig from the hash-locked
+# lockfile beside it and fetches nothing when that tree is already in place: a repair job, not an
+# updater. See the note on _NODE_TOOLS_CRON.
 NODE_TOOLS_CRON_BODY = (
-    "# LinuxGSM Panel - keep gamedig current for player queries (managed by the panel).\n"
+    "# LinuxGSM Panel - keep gamedig installed from its pinned lockfile (managed by the panel).\n"
     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
-    "30 4 * * 0 root command -v npm >/dev/null 2>&1 && "
-    "npm install -g --ignore-scripts gamedig@5 >/var/log/lgsm-node-tools.log 2>&1\n"
+    "30 4 * * 0 root [ -x /usr/local/lib/linuxgsm-panel/gamedig/install-gamedig.sh ] && "
+    "/usr/local/lib/linuxgsm-panel/gamedig/install-gamedig.sh >/var/log/lgsm-node-tools.log 2>&1\n"
 )
 
 
@@ -1596,9 +1590,8 @@ VERBS = {
     # something the panel actually hardens it to.
     "sshd-set-directive": ([v_sshd_key, v_ident_free], lambda a: [], None),
     "create-swapfile": ([], lambda a: [], None),
-    "npm-install-global": ([v_choice(*NPM_GLOBAL_PACKAGES)],
-                           lambda a: ["npm", "install", "-g", "--ignore-scripts",
-                                      NPM_GLOBAL_SPECS[a[0]]], None),
+    # Refused here -- see do_gamedig_install. Listed so the two tables stay identical.
+    "gamedig-install": ([], lambda a: [], None),
     # Refused here -- see do_nodesource_setup. Listed so the panel's table and this one stay
     # identical, which is what the anti-drift gate checks.
     "nodesource-setup": ([], lambda a: [], None),
@@ -2051,6 +2044,22 @@ def do_nodesource_setup(args, content):
     same verbs."""
     print("panel-helper: nodesource-setup is for remote hosts; on this host install.sh configures "
           "NodeSource", file=sys.stderr)
+    return 2
+
+
+def do_gamedig_install(args, content):
+    """Refused, always. gamedig-install writes the panel's tools/gamedig files into
+    /usr/local/lib/linuxgsm-panel/gamedig and runs install-gamedig.sh from there, as root. It exists
+    for REMOTE hosts, where the panel already has `sudo bash -c`; the add-host bootstrap and the
+    daily pass send its shell rendering over SSH.
+
+    On this host those files come from install.sh, which stages them from root's own source like
+    this helper, never from the checkout the panel user owns. Doing it here would take the lockfile
+    and the script from that checkout and run them as root, which is the exact hole this helper
+    closes. The weekly cron re-runs the root-owned copy install.sh placed. The verb is in VERBS only
+    because the panel's table and this one must list the same verbs."""
+    print("panel-helper: gamedig-install is for remote hosts; on this host install.sh installs "
+          "gamedig from its root-owned copy", file=sys.stderr)
     return 2
 
 
@@ -2529,6 +2538,26 @@ def _open_log_in_dir(dir_path, name):
     return os.fdopen(fd, "w", encoding="utf-8")
 
 
+def _self_update_env(ref, branch):
+    """The environment the root-owned installer runs with for a panel-self-update.
+
+    PANEL_SELF_UPDATE is what tells the installer the PANEL chose this run, and so chose
+    PANEL_BRANCH: root then verifies its own pieces (this helper, db_maintenance, the installer,
+    gamedig's lockfile and install script) against main only, and withholds them on any other
+    branch. An operator running install.sh as
+    root chooses the branch themselves, and root follows it. Set AFTER copying os.environ, so no
+    value the panel hands sudo can remove it — this verb is the panel's only way to run the
+    installer as root, so there is no route on which the panel looks like the operator."""
+    env = dict(os.environ)
+    env["PANEL_UPDATE_REF"] = "" if ref == "-" else ref
+    env["PANEL_BRANCH"] = "" if branch == "-" else branch
+    # A panel update must never apply host OS packages or reboot the box — that would take every
+    # game server down mid-update. OS updates stay a separate, explicit action.
+    env["PANEL_NO_UPGRADE"] = "1"
+    env["PANEL_SELF_UPDATE"] = "1"
+    return env
+
+
 def _self_update_detached(panel_dir, data_dir, ref, branch):
     """The self-update, in the grandchild. NEVER RETURNS — every path ends in os._exit.
 
@@ -2554,24 +2583,39 @@ def _self_update_detached(panel_dir, data_dir, ref, branch):
     except OSError:
         # Best-effort detach; the installer writes its own log either way.
         pass
-    env = dict(os.environ)
-    env["PANEL_UPDATE_REF"] = "" if ref == "-" else ref
-    env["PANEL_BRANCH"] = "" if branch == "-" else branch
-    # A panel update must never apply host OS packages or reboot the box — that would take every
-    # game server down mid-update. OS updates stay a separate, explicit action.
-    env["PANEL_NO_UPGRADE"] = "1"
+    env = _self_update_env(ref, branch)
     try:
         with _open_log_in_dir(data_dir, SELF_UPDATE_LOG) as log:
             log.write("=== panel self-update ===\n")
             log.flush()
-            subprocess.run([resolve("bash_installer"), INSTALLER_PATH],  # nosec B603 - fixed path
-                           cwd=panel_dir, env=env, stdout=log, stderr=subprocess.STDOUT,
-                           check=False, timeout=1800)
+            log.write("=== installer exit %s ===\n" % _run_installer_to(log, panel_dir, env))
     except Exception:
         # Nobody reads this process's stderr; the installer's own log is the record. Falling
         # through to os._exit is all that is left.
         pass
     os._exit(0)
+
+
+def _run_installer_to(log, panel_dir, env):
+    """Run the root-owned installer with its output in `log`; return how it ended, as the text the
+    exit line carries: its exit status, a number first.
+
+    The panel's update card reads that line (panel_update_log in panel/ops/system_ops.py). An
+    update that stops BEFORE the panel restarts — the source unreachable, a pinned commit that
+    cannot be verified, a hold — never flips the panel's boot id, so without it the card could not
+    tell a finished run from a slow one: the [ERROR] was in the log, and after three minutes the
+    card said "Still working — reload the page to check." The wrapper script _launch_installer
+    writes for the path without the helper ends on the same line."""
+    try:
+        rc = subprocess.run([resolve("bash_installer"), INSTALLER_PATH],  # nosec B603 - fixed path
+                            cwd=panel_dir, env=env, stdout=log, stderr=subprocess.STDOUT,
+                            check=False, timeout=1800).returncode
+    except subprocess.TimeoutExpired:
+        return "124 (the installer was stopped after 30 minutes)"
+    except Exception as exc:
+        return "127 (the installer could not be run: %s)" % type(exc).__name__
+    # A negative status is the signal that ended it, which the shell reports as 128 + N.
+    return str(rc if rc >= 0 else 128 - rc)
 
 
 def do_panel_self_update(args, content):
@@ -3893,6 +3937,7 @@ ACTIONS = {
     "sshd-set-directive": do_sshd_set_directive,
     "create-swapfile": do_create_swapfile,
     "nodesource-setup": do_nodesource_setup,
+    "gamedig-install": do_gamedig_install,
 }
 
 # The only two ACTIONS verbs that CONSUME their payload. The others take the parameter and

@@ -280,6 +280,15 @@ check("runtime-path: tools/panel-helper COUNTS (it is the root-owned sudo bounda
 check("runtime-path: the rest of tools/ is still noise",
       _so._is_runtime_path("tools/run-tests.sh") is False
       and _so._is_runtime_path("tools/perf_bench.py") is False)
+# ...and tools/gamedig's three files, which install.sh installs root-owned on every host and every
+# game account runs: a Dependabot bump of the lockfile is not "docs, tests or tooling".
+from panel.security import privileged as _priv_p3
+check("runtime-path: every file of tools/gamedig that install.sh places COUNTS",
+      [_n for _n, _ in _priv_p3.GAMEDIG_FILES]
+      == ["package.json", "package-lock.json", "install-gamedig.sh"]
+      and all(_so._is_runtime_path("tools/gamedig/" + _n) is True
+              for _n, _ in _priv_p3.GAMEDIG_FILES),
+      repr([(_n, _so._is_runtime_path("tools/gamedig/" + _n)) for _n, _ in _priv_p3.GAMEDIG_FILES]))
 check("runtime-path: the exception list names a file that exists",
       all((_os_p3 := __import__("os")).path.exists(f) for f in _so._RUNTIME_EXCEPTIONS))
 check("runtime-path: LICENSE is noise", _so._is_runtime_path("LICENSE") is False)
@@ -3543,14 +3552,27 @@ try:
         return _bs_run(("NO\n", "", 0))(server, cmd, **k)
     _bs_priv.clear()
     _sm_core.run_command = _bs_nonode
+    # Root-file writes join the same log, so the order of gamedig and the cron that re-runs it
+    # can be read off one list.
+    _sm_core.write_root_file = lambda s, target, content, **k: (
+        _bs_priv.append("write:" + target), ("", "", 0))[1]
     _, _, _log3 = _sm_hosts.remote_bootstrap_vps(
         NS(id=9103, host="203.0.113.12", auth_method="key"), set_timezone="", enable_ufw=False,
         install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=False)
+    _sm_core.write_root_file = lambda *a, **k: ("", "", 0)
     _bs_ns = _bs_priv.index("nodesource-setup") if "nodesource-setup" in _bs_priv else -1
     check("bootstrap: a host with no Node configures NodeSource through the verb, then installs "
           "nodejs, then gamedig",
           _bs_ns >= 0 and _bs_priv[_bs_ns + 1:_bs_ns + 2] == ["apt-install"]
-          and "npm-install-global" in _bs_priv[_bs_ns:], repr(_bs_priv))
+          and "gamedig-install" in _bs_priv[_bs_ns:], repr(_bs_priv))
+    # gamedig from the pinned lockfile (the files, then the script), and only THEN the weekly cron
+    # that names the script: a cron written first would point at nothing on a new host.
+    _bs_gi = _bs_priv.index("gamedig-install") if "gamedig-install" in _bs_priv else -1
+    _bs_cw = (_bs_priv.index("write:node-tools-cron")
+              if "write:node-tools-cron" in _bs_priv else -1)
+    check("bootstrap: gamedig is installed through gamedig-install, before the cron that re-runs it",
+          0 <= _bs_gi < _bs_cw and _bs_priv.count("gamedig-install") == 1
+          and "npm-install-global" not in _bs_priv, repr(_bs_priv))
     check("bootstrap: ...and sends no command that fetches NodeSource's setup script",
           not any("setup_lts" in _c or "deb.nodesource.com/setup" in _c for _c, _ in _bs_cmds),
           repr([_c for _c, _ in _bs_cmds if "nodesource" in _c.lower()]))

@@ -1,0 +1,10 @@
+{
+  "name": "linuxgsm-panel-gamedig",
+  "version": "1.0.0",
+  "private": true,
+  "description": "gamedig, the panel's player-query tool, installed from this lockfile by install-gamedig.sh.",
+  "license": "MIT",
+  "dependencies": {
+    "gamedig": "5.3.3"
+  }
+}

@@ -1016,7 +1016,7 @@ _VERB_SAMPLES = {
     "f2b-log-lines": ["2026-09-02"],
     "sshd-set-directive": ["ClientAliveInterval", "300"],
     "create-swapfile": [],
-    "npm-install-global": ["gamedig"],
+    "gamedig-install": [],
     "nodesource-setup": [],
     "journal-cron": [],
     "tailscale-up-key": ["tskey-auth-abc123def", "yes", "10.0.0.0/24", "tag:server"],
@@ -1061,7 +1061,11 @@ for _v, _a in _VERB_SAMPLES.items():
         _hv = _helper.VERBS[_v][1](_helper.validate(_v, _priv.helper_argv(_v, _a)[4:]))
     except ValueError as _e:
         _hv = "refused: %s" % _e
-    _pv = _priv.tool_argv(_v, _a)
+    # ...and so is a panel table that refuses its own sample (its arity changed under it).
+    try:
+        _pv = _priv.tool_argv(_v, _a)
+    except ValueError as _e:
+        _pv = "panel refused its own sample: %s" % _e
     if _hv != _pv:
         _drift.append("%s: helper=%r panel=%r" % (_v, _hv, _pv))
 check("privileged: helper and panel build an identical argv for every verb",
@@ -2754,20 +2758,23 @@ check("helper: a hostile cron body is replaced by the helper's own, not written"
       "rc=%s wrote=%r" % (_rc_cron, (_written_cron or "")[:60]))
 check("helper: the cron body is the helper's own, not the caller's",
       _helper.WRITE_CONTENT["node-tools-cron"] is None
-      and "npm install -g --ignore-scripts gamedig@5" in _helper.NODE_TOOLS_CRON_BODY)
+      and "/install-gamedig.sh " in _helper.NODE_TOOLS_CRON_BODY)
 
-# ── the weekly root npm cron: one body in three places, and what that body may run ─────────────
-# It ran `npm install -g npm gamedig` as root every Sunday, unattended: the newest npm, gamedig and
-# their whole dependency tree, install hooks included — so a compromise of any of them at any later
-# point became root on every host by the next Sunday. The body lives in three places that must say
-# the same thing (install.sh writes it at install, the helper on the panel host, hosts.py on
-# remotes — and app.py rewrites it on every host daily): a copy left behind would put the old line
-# back. So the three are compared, and the ONE body is held to: gamedig only, pinned to a major,
-# --ignore-scripts, and no `npm install -g npm` (root running a freshly fetched npm).
+# ── the weekly root gamedig cron: one body in three places, and what that body may run ─────────
+# It ran `npm install -g npm gamedig` as root every Sunday, unattended, and then `npm install -g
+# --ignore-scripts gamedig@5`: whatever gamedig 5.x and whatever versions of its ~50 floating
+# dependencies the registry served, fetched by root — so a compromise of any of them at any later
+# point reached every host by the next Sunday. It re-runs install-gamedig.sh now, which installs
+# the committed lockfile's tree and fetches nothing while that tree is in place. The body lives in
+# three places that must say the same thing (install.sh writes it at install, the helper on the
+# panel host, hosts.py on remotes — and app.py rewrites it on every host daily): a copy left behind
+# would put the old line back. So the three are compared, and the ONE body is held to: the script
+# at the one directory every host uses, guarded so it is a no-op until the script is there, and no
+# npm on the line at all.
 import re as _re_ntc
 from panel.ops.ssh_manager import hosts as _ntc_hosts
 _ntc_sh = open(os.path.join(_UNIT_ROOT, "install.sh"), encoding="utf-8").read()
-_ntc_fn = _ntc_sh[_ntc_sh.index("\nensure_gamedig() {"):]
+_ntc_fn = _ntc_sh[_ntc_sh.index("\nensure_nodejs() {"):]
 _ntc_fn = _ntc_fn[:_ntc_fn.index("\n}\n")]
 _ntc_blk = _ntc_fn[_ntc_fn.index('local cf="/etc/cron.d/lgsm-node-tools"'):]
 _ntc_blk = _ntc_blk[:_ntc_blk.index("| ${S} tee")]
@@ -2777,23 +2784,529 @@ check("node-tools cron: install.sh, the helper and hosts.py write the SAME body"
       "install.sh=%r helper=%r hosts=%r" % (_ntc_install[-90:], _helper.NODE_TOOLS_CRON_BODY[-90:],
                                             _ntc_hosts._NODE_TOOLS_CRON[-90:]))
 _ntc_cmd = [_l for _l in _helper.NODE_TOOLS_CRON_BODY.splitlines() if _l.startswith("30 4 * * 0 root ")]
-check("node-tools cron: root installs gamedig pinned to a major, with no install hooks, and never npm",
-      len(_ntc_cmd) == 1 and "npm install -g --ignore-scripts gamedig@5 " in _ntc_cmd[0]
-      and not _re_ntc.search(r"install -g[^>]*\bnpm\b", _ntc_cmd[0]),
+_ntc_script = _priv.GAMEDIG_DIR + "/install-gamedig.sh"
+check("node-tools cron: root re-runs install-gamedig.sh from GAMEDIG_DIR, guarded, and never npm",
+      len(_ntc_cmd) == 1
+      and _ntc_cmd[0] == ("30 4 * * 0 root [ -x %s ] && %s >/var/log/lgsm-node-tools.log 2>&1"
+                          % (_ntc_script, _ntc_script))
+      and "npm" not in _helper.NODE_TOOLS_CRON_BODY,
       repr(_ntc_cmd))
-# The verb the remote bootstrap installs gamedig through, and install.sh's own first install, say
-# the same: a v6 from the bootstrap would fight the cron's v5 every week.
-check("npm-install-global: installs the pinned spec with --ignore-scripts, in both tables",
-      _helper.VERBS["npm-install-global"][1](_helper.validate("npm-install-global", ["gamedig"]))
-      == _priv.tool_argv("npm-install-global", ["gamedig"])
-      == ["npm", "install", "-g", "--ignore-scripts", "gamedig@5"]
-      and "npm install -g --ignore-scripts gamedig@5 " in _ntc_fn,
-      repr(_priv.tool_argv("npm-install-global", ["gamedig"])))
-check("npm-install-global: ...and refuses `npm` itself",
-      _ufw_raises_verb(lambda: _priv.check_args("npm-install-global", ["npm"])))
+# One directory, four spellings: install.sh places the files there on the panel host, the remote
+# rendering writes them there, the cron runs the script from there, and uninstall.sh removes only
+# links pointing there. A copy that drifted would leave a host whose cron runs nothing.
+_ntc_hd = _re_ntc.search(r'^HELPER_DIR="([^"]+)"$', _ntc_sh, _re_ntc.M)
+_ntc_un = open(os.path.join(_UNIT_ROOT, "uninstall.sh"), encoding="utf-8").read()
+check("gamedig: install.sh, privileged.py, the cron and uninstall.sh name ONE directory",
+      _ntc_hd is not None and '\nGAMEDIG_DIR="${HELPER_DIR}/gamedig"\n' in _ntc_sh
+      and _ntc_hd.group(1) + "/gamedig" == _priv.GAMEDIG_DIR
+      and "        %s/*) return 0 ;;" % _priv.GAMEDIG_DIR in _ntc_un,
+      "HELPER_DIR=%r privileged=%r" % (_ntc_hd and _ntc_hd.group(1), _priv.GAMEDIG_DIR))
+# ensure_nodejs is Node and npm now. The npm install -g that was here ran before fetch_code on the
+# update path; gamedig is install_gamedig's, from the lockfile, after install_root_tools.
+_ntc_fn_code = "\n".join(_l for _l in _ntc_fn.splitlines() if not _l.lstrip().startswith("#"))
+check("install.sh: ensure_nodejs installs no gamedig itself",
+      bool(_ntc_fn_code)
+      and not _re_ntc.search(r"(?<![^\s;&|(){}])npm\s+(install|i|ci|update)\b", _ntc_fn_code)
+      and "gamedig@" not in _ntc_fn_code, _ntc_fn_code[-200:])
+
+# ── the verb a remote gets gamedig through ─────────────────────────────────────────────────────
+# gamedig-install replaced npm-install-global (`npm install -g --ignore-scripts gamedig@5`). Zero
+# arguments: what it installs is the checkout's tools/gamedig, never a caller's. The helper REFUSES
+# it — on the panel host the lockfile and the script would come from the panel-owned checkout and
+# run as root, the hole the helper exists to close; install.sh places them from root's own source.
+check("gamedig-install: takes no argument at all",
+      _ufw_raises_verb(lambda: _priv.check_args("gamedig-install", ["gamedig"]))
+      and _priv.check_args("gamedig-install", []) == [])
+check("gamedig-install: npm-install-global is gone from both tables",
+      "npm-install-global" not in _priv.verbs() and "npm-install-global" not in _helper.VERBS
+      and not hasattr(_priv, "NPM_GLOBAL_SPECS") and not hasattr(_helper, "NPM_GLOBAL_SPECS")
+      and "npm" not in _helper.TOOLS)
+import contextlib as _gdi_ctx
+import io as _gdi_io
+_gdi_err = _gdi_io.StringIO()
+with _gdi_ctx.redirect_stderr(_gdi_err):
+    _gdi_hrc = _helper.main(["panel-helper", "gamedig-install"])
+check("gamedig-install: the helper refuses it on the panel host, and says why",
+      _gdi_hrc == 2 and "install.sh" in _gdi_err.getvalue()
+      and _helper.ACTIONS.get("gamedig-install") is _helper.do_gamedig_install,
+      "rc=%r %r" % (_gdi_hrc, _gdi_err.getvalue()[-200:]))
+
+# ── gamedig's lockfile: the whole tree every host installs, so what it must hold ───────────────
+# `npm ci` verifies each tarball against the lockfile's `integrity`, and fetches it from `resolved`.
+# An entry with no sha512 is a package installed unchecked, and one resolved anywhere but the npm
+# registry (a git URL, a tarball on some host) is a source nobody reviewed. Scorecard counts
+# `npm ci` as pinned without ever opening the lockfile, so this is the check that it IS. Dependabot
+# rewrites this file, and CI runs on its pull requests: a bump that breaks either rule fails here.
+import base64 as _gdl_b64
+import glob as _gdl_glob
+from shlex import quote as _gd_q
+_GDL_DIR =os.path.join(_UNIT_ROOT, "tools", "gamedig")
+try:
+    with open(os.path.join(_GDL_DIR, "package.json"), encoding="utf-8") as _fh:
+        _gdl_pkg = json.load(_fh)
+    with open(os.path.join(_GDL_DIR, "package-lock.json"), encoding="utf-8") as _fh:
+        _gdl_lock = json.load(_fh)
+except (OSError, ValueError):
+    _gdl_pkg, _gdl_lock = {}, {}
+_gdl_pk = _gdl_lock.get("packages") or {}
+
+
+def _gdl_sha512(v):
+    """True when `v` is an SRI sha512: the prefix and exactly 64 bytes of base64."""
+    if not isinstance(v, str) or not v.startswith("sha512-"):
+        return False
+    try:
+        return len(_gdl_b64.b64decode(v[len("sha512-"):], validate=True)) == 64
+    except ValueError:
+        return False
+
+
+_gdl_bad = sorted(_k for _k, _v in _gdl_pk.items() if _k != "" and (
+    not _k.startswith("node_modules/") or not _gdl_sha512(_v.get("integrity"))
+    or not str(_v.get("resolved", "")).startswith("https://registry.npmjs.org/")))
+check("gamedig lockfile: every package has a sha512 integrity and a registry.npmjs.org tarball",
+      _gdl_lock.get("lockfileVersion") == 3 and len(_gdl_pk) > 1 and not _gdl_bad,
+      "lockfileVersion=%r entries=%d bad=%r" % (_gdl_lock.get("lockfileVersion"), len(_gdl_pk),
+                                                _gdl_bad[:5]))
+check("gamedig lockfile: ...and the check rejects an entry without one (control)",
+      not _gdl_sha512("sha1-" + "A" * 28) and not _gdl_sha512("sha512-abc")
+      and not _gdl_sha512(None)
+      and _gdl_sha512((_gdl_pk.get("node_modules/gamedig") or {}).get("integrity")))
+_gdl_want = (_gdl_pkg.get("dependencies") or {}).get("gamedig", "")
+check("gamedig lockfile: package.json pins gamedig 5 to one exact version, and the lock installs it",
+      set(_gdl_pkg.get("dependencies") or {}) == {"gamedig"}
+      and _re_ntc.fullmatch(r"5\.\d+\.\d+", _gdl_want) is not None
+      and (_gdl_pk.get("") or {}).get("dependencies") == {"gamedig": _gdl_want}
+      and (_gdl_pk.get("node_modules/gamedig") or {}).get("version") == _gdl_want,
+      "package.json=%r lock root=%r lock gamedig=%r"
+      % (_gdl_want, (_gdl_pk.get("") or {}).get("dependencies"),
+         (_gdl_pk.get("node_modules/gamedig") or {}).get("version")))
+check("gamedig lockfile: package.json is private and has no scripts or dev dependencies",
+      _gdl_pkg.get("private") is True and "scripts" not in _gdl_pkg
+      and not _gdl_pkg.get("devDependencies"), repr(sorted(_gdl_pkg)))
+
+# ── CI installs the lockfile and runs gamedig on every Node the hosts run ──────────────────────
+# The lockfile moves only through Dependabot pull requests, and install-gamedig.sh never switches
+# to a tree that does not run: a bump that needs a newer Node than 24.04's 18.19 would pass every
+# other check and leave a fresh 24.04 install with no gamedig. install.sh's NodeSource major is
+# read from install.sh, so bumping it without the job fails here.
+with open(os.path.join(_UNIT_ROOT, ".github", "workflows", "ci.yml"), encoding="utf-8") as _fh:
+    _gdci = _fh.read()
+_gdci_job = _gdci[_gdci.find("\n  gamedig-lockfile:\n"):] if "\n  gamedig-lockfile:\n" in _gdci else ""
+_gdci_ns = _re_ntc.search(r'^NODESOURCE_NODE_MAJOR="([0-9]+)"$',
+                          open(os.path.join(_UNIT_ROOT, "install.sh"), encoding="utf-8").read(),
+                          _re_ntc.M)
+_gdci_nodes = _re_ntc.search(r'node: \[([^\]]*)\]', _gdci_job)
+_gdci_nodes = [_x.strip().strip('"') for _x in _gdci_nodes.group(1).split(",")] if _gdci_nodes else []
+check("CI: the gamedig lockfile is installed with npm ci and run on Node 18.19, 22 and "
+      "install.sh's NodeSource major",
+      bool(_gdci_job) and bool(_gdci_ns)
+      and {"18.19", "22", _gdci_ns.group(1)} <= set(_gdci_nodes)
+      and "npm ci --ignore-scripts --omit=dev" in _gdci_job
+      and "tools/gamedig/package-lock.json" in _gdci_job
+      and "--type minecraft 127.0.0.1:1" in _gdci_job,
+      "job found=%s nodes=%r nodesource=%r" % (bool(_gdci_job), _gdci_nodes,
+                                               _gdci_ns and _gdci_ns.group(1)))
+
+# ── root never `npm install`s: the only npm install in any shell script is install-gamedig's ci ──
+# Scorecard's rule (Pinned-Dependencies, shell_download_validate.go) and this project's agree: any
+# `npm install`/`i`/`install-test`/`update` is the registry deciding what runs, and `npm ci` against
+# a committed lockfile is the only pinned form. Scanned: every shell script, the helper, and the
+# remote renderings root runs over SSH. `npm` counts where a command can start (line start, after
+# whitespace or ; & | ( ) { }), not inside a message: `warn "npm install failed"` runs nothing.
+_GD_NPM_RE = _re_ntc.compile(
+    r"(?<![^\s;&|(){}])npm\s+(?:-\S+\s+)*(install|i|install-test|it|update|up|ci)\b")
+_gd_npm_seen = []
+_gd_npm_files = sorted(_f for _f in _gdl_glob.glob(os.path.join(_UNIT_ROOT, "**", "*.sh"),
+                                                    recursive=True)
+                       if "/.venv/" not in _f and "/node_modules/" not in _f)
+_gd_npm_files.append(os.path.join(_UNIT_ROOT, "tools", "panel-helper"))
+for _f in _gd_npm_files:
+    with open(_f, encoding="utf-8") as _fh:
+        for _n, _l in enumerate(_fh, 1):
+            if _l.lstrip().startswith("#"):
+                continue
+            for _m in _GD_NPM_RE.finditer(_l):
+                _gd_npm_seen.append((os.path.relpath(_f, _UNIT_ROOT), _m.group(1)))
+def _gd_render(verb, args):
+    """remote_command, or "" when the verb refuses these arguments — an arity drift is reported by
+    name by the checks that own it, and must not end this part with a traceback."""
+    try:
+        return _priv.remote_command(verb, args)
+    except ValueError:
+        return ""
+
+
+_gd_npm_remote = [_v for _v in sorted(_priv._REMOTE_ACTIONS)
+                  if _GD_NPM_RE.search(_gd_render(_v, _VERB_SAMPLES.get(_v, [])))]
+check("npm: no shell script installs from the registry — the one npm install is install-gamedig's ci",
+      _gd_npm_seen == [("tools/gamedig/install-gamedig.sh", "ci")] and not _gd_npm_remote,
+      "scripts=%r remote renderings=%r" % (_gd_npm_seen, _gd_npm_remote))
+
+# ── gamedig-install, as a remote receives it ───────────────────────────────────────────────────
+# One root shell: tools/gamedig's three files into GAMEDIG_DIR, each through a temp file and a
+# rename, then the script. Read from the checkout when the command is built, never from a caller.
+_gdr_cmd = _gd_render("gamedig-install", [])
+_gdr_want, _gdr_missing = [], []
+for _name, _mode in _priv.GAMEDIG_FILES:
+    try:
+        with open(os.path.join(_GDL_DIR, _name), "rb") as _fh:
+            _gdr_want.append((_name, _gdl_b64.b64encode(_fh.read()).decode()))
+    except OSError:
+        _gdr_missing.append(_name)
+_gdr_pos = [_gdr_cmd.find('mv -f "$t" "$d/%s"' % _n) for _n, _ in _priv.GAMEDIG_FILES]
+_gdr_run = _gdr_cmd.find('"$d/install-gamedig.sh" 2>&1')
+check("gamedig-install (remote): the checkout's three files, byte for byte, written before the "
+      "script runs",
+      os.path.realpath(_priv.GAMEDIG_SRC) == os.path.realpath(_GDL_DIR) and not _gdr_missing
+      and all(("printf %%s %s | base64 -d" % _gd_q(_b)) in _gdr_cmd for _, _b in _gdr_want)
+      and all(_p >= 0 for _p in _gdr_pos) and _gdr_run > max(_gdr_pos)
+      and [_n for _n, _ in _priv.GAMEDIG_FILES] == ["package.json", "package-lock.json",
+                                                   "install-gamedig.sh"],
+      "missing=%r positions=%r run=%r" % (_gdr_missing, _gdr_pos, _gdr_run))
+# It travels as ONE argument: `sudo bash -c '<this>'`. Linux caps a single argument at
+# MAX_ARG_STRLEN, 131072 bytes, and a lockfile that outgrew it would fail on every remote with
+# "Argument list too long" — a Dependabot bump is what would grow it.
+check("gamedig-install (remote): fits in one execve argument (MAX_ARG_STRLEN, 131072 bytes)",
+      0 < len(_gdr_cmd.encode()) < 131072, "%d bytes" % len(_gdr_cmd.encode()))
+
+_gdr_tmp = _tempfile.mkdtemp(prefix="gamedig-remote-")
+_gdr_saved_src = _priv.GAMEDIG_SRC
+try:
+    # Driven in bash with GAMEDIG_SRC pointed at a fixture whose script only reports what it found,
+    # and the destination moved into the temp dir. The real script is driven on its own below.
+    _gdr_src = os.path.join(_gdr_tmp, "src")
+    os.makedirs(_gdr_src)
+    _gdr_bytes = {"package.json": b'{"x": "\xc3\xa9 %s $(id) `id`"}\n',
+                  "package-lock.json": bytes(range(256)),
+                  "install-gamedig.sh": b"#!/bin/sh\necho \"RAN $0: $(ls -A \"$(dirname \"$0\")\" "
+                                        b"| tr '\\n' ' ')\"\nexit 3\n"}
+    for _n, _b in _gdr_bytes.items():
+        with open(os.path.join(_gdr_src, _n), "wb") as _fh:
+            _fh.write(_b)
+    _priv.GAMEDIG_SRC = _gdr_src
+    _gdr_dest = os.path.join(_gdr_tmp, "lib", "gamedig")
+    _gdr_fx = _gd_render("gamedig-install", [])
+    _gdr_anchor = "d=%s" % _gd_q(_priv.GAMEDIG_DIR)
+    _gdr_fx_n = _gdr_fx.count(_gdr_anchor)
+    _gdr_fx = _gdr_fx.replace(_gdr_anchor, "d=%s" % _gd_q(_gdr_dest))
+    _r = _sp.run(["bash", "-c", _gdr_fx], capture_output=True, text=True, timeout=60)
+    _gdr_got = {}
+    for _n in _gdr_bytes:
+        try:
+            with open(os.path.join(_gdr_dest, _n), "rb") as _fh:
+                _gdr_got[_n] = (_fh.read(), os.stat(os.path.join(_gdr_dest, _n)).st_mode & 0o777)
+        except OSError:
+            _gdr_got[_n] = None
+    check("gamedig-install (remote), driven: every byte lands, 0644/0644/0755, and the script runs",
+          _gdr_fx_n == 1
+          and _gdr_got == {"package.json": (_gdr_bytes["package.json"], 0o644),
+                           "package-lock.json": (_gdr_bytes["package-lock.json"], 0o644),
+                           "install-gamedig.sh": (_gdr_bytes["install-gamedig.sh"], 0o755)}
+          and ("RAN %s/install-gamedig.sh" % _gdr_dest) in _r.stdout,
+          "anchor=%d rc=%d out=%r got=%r" % (_gdr_fx_n, _r.returncode, _r.stdout[-200:],
+                                            {k: (v and v[1]) for k, v in _gdr_got.items()}))
+    check("gamedig-install (remote), driven: the script's exit status is the verb's, and no temp "
+          "file is left",
+          _r.returncode == 3 and os.path.isdir(_gdr_dest)
+          and not [_x for _x in os.listdir(_gdr_dest) if _x.startswith(".push.")],
+          "rc=%d %r" % (_r.returncode,
+                        os.listdir(_gdr_dest) if os.path.isdir(_gdr_dest) else "no directory"))
+    # A checkout missing one of the files sends a command that fails and says so — it must not
+    # raise out of the bootstrap, and it must not run a script beside a lockfile it did not write.
+    os.unlink(os.path.join(_gdr_src, "package-lock.json"))
+    try:
+        _gdr_fx2 = _priv.remote_command("gamedig-install", [])
+        _r2 = _sp.run(["bash", "-c", _gdr_fx2.replace(_gdr_anchor, "d=%s" % _gd_q(_gdr_dest))],
+                      capture_output=True, text=True, timeout=60)
+        _gdr_why = "rc=%d %r" % (_r2.returncode, _r2.stdout[-200:])
+    except Exception as _e:        # reported by name below, not left to end the part
+        _r2, _gdr_why = None, "remote_command raised %r" % _e
+    check("gamedig-install (remote): a file missing from the checkout fails, runs nothing, and says so",
+          _r2 is not None and _r2.returncode == 1 and "package-lock.json" in _r2.stdout
+          and "RAN" not in _r2.stdout, _gdr_why)
+finally:
+    _priv.GAMEDIG_SRC = _gdr_saved_src
+    _shutil.rmtree(_gdr_tmp, ignore_errors=True)
+
+# ── install-gamedig.sh itself, driven ──────────────────────────────────────────────────────────
+# The script runs as root on every host, weekly and from install.sh. What it promises is in its
+# header: `npm ci` never in the live tree (ci deletes node_modules before downloading, so an outage
+# mid-install would leave no gamedig), the new tree switched in only once it RUNS, both links, no
+# fetch while the lockfile's tree is in place, and npm's old global gamedig removed only once
+# there is a working one to replace it. Driven with npm and id as stubs on PATH and the two link
+# directories moved into a sandbox; flock, sha256sum, mktemp and timeout are the real ones.
+_GDS_SCRIPT = open(os.path.join(_GDL_DIR, "install-gamedig.sh"), encoding="utf-8").read()
+_GDS_LINKS = "LINK_DIRS=(/usr/local/bin /usr/bin)"
+_GDS_NPM = r'''#!/bin/bash
+echo "NPM $* @ $PWD" >> "$GDS/calls"
+case "$1" in
+  ci)
+    [ "${GDS_CI:-ok}" = fail ] && { echo "npm ERR! network ETIMEDOUT"; exit 1; }
+    { [ -f package.json ] && [ -f package-lock.json ]; } || exit 9
+    mkdir -p node_modules/.bin node_modules/gamedig/bin
+    printf '{\n  "name": "gamedig",\n  "version": "5.9.9"\n}\n' > node_modules/gamedig/package.json
+    if [ "${GDS_CI:-ok}" = broken ]; then
+      printf '#!/bin/sh\necho "Error [ERR_MODULE_NOT_FOUND]: got" >&2\nexit 1\n' \
+        > node_modules/gamedig/bin/gamedig.js
+    elif [ "${GDS_CI:-ok}" = silent ]; then
+      printf '#!/bin/sh\nexit 0\n' > node_modules/gamedig/bin/gamedig.js
+    else
+      printf '#!/bin/sh\necho "{\\"error\\":\\"Failed all 1 attempts\\"}"\n' \
+        > node_modules/gamedig/bin/gamedig.js
+    fi
+    chmod 755 node_modules/gamedig/bin/gamedig.js
+    ln -s ../gamedig/bin/gamedig.js node_modules/.bin/gamedig ;;
+  root) echo "$GDS/npm-global" ;;
+  uninstall)
+    rm -rf "$GDS/npm-global/gamedig"
+    [ "$(readlink "$GDS/usr-bin/gamedig")" = ../lib/node_modules/gamedig/bin/gamedig.js ] \
+      && rm -f "$GDS/usr-bin/gamedig" ;;
+esac
+exit 0
+'''
+
+
+def _gds_new(npm_global=True):
+    """A sandbox: <root>/gamedig holding the real package.json, lock and script (link dirs moved
+    in), stub npm and id, and — when npm_global — npm's own global gamedig with its /usr/bin link."""
+    root = _tempfile.mkdtemp(prefix="install-gamedig-")
+    gd = os.path.join(root, "gamedig")
+    for _d in (gd, os.path.join(root, "usr-local-bin"), os.path.join(root, "usr-bin"),
+               os.path.join(root, "stub")):
+        os.makedirs(_d)
+    for _n in ("package.json", "package-lock.json"):
+        _shutil.copy(os.path.join(_GDL_DIR, _n), os.path.join(gd, _n))
+    with open(os.path.join(gd, "install-gamedig.sh"), "w", encoding="utf-8") as fh:
+        fh.write(_GDS_SCRIPT.replace(_GDS_LINKS, "LINK_DIRS=(%s %s)" % (
+            _gd_q(os.path.join(root, "usr-local-bin")), _gd_q(os.path.join(root, "usr-bin")))))
+    os.chmod(os.path.join(gd, "install-gamedig.sh"), 0o755)
+    with open(os.path.join(root, "stub", "npm"), "w", encoding="utf-8") as fh:
+        fh.write(_GDS_NPM)
+    with open(os.path.join(root, "stub", "id"), "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/sh\necho \"${GDS_UID:-0}\"\n")
+    for _n in ("npm", "id"):
+        os.chmod(os.path.join(root, "stub", _n), 0o755)
+    if npm_global:
+        os.makedirs(os.path.join(root, "npm-global", "gamedig"))
+        os.symlink("../lib/node_modules/gamedig/bin/gamedig.js", os.path.join(root, "usr-bin", "gamedig"))
+    return root
+
+
+def _gds_run(root, **env):
+    e = {"PATH": os.path.join(root, "stub") + ":/usr/bin:/bin", "GDS": root}
+    e.update(env)
+    r = _sp.run([os.path.join(root, "gamedig", "install-gamedig.sh")], capture_output=True,
+                text=True, env=e, timeout=120)
+    try:
+        with open(os.path.join(root, "calls"), encoding="utf-8") as fh:
+            calls = fh.read().splitlines()
+    except OSError:
+        calls = []
+    return r, calls
+
+
+def _gds_hash(root):
+    import hashlib as _gds_hl
+    with open(os.path.join(root, "gamedig", "package-lock.json"), "rb") as fh:
+        return _gds_hl.sha256(fh.read()).hexdigest()
+
+
+def _gds_mode(p):
+    """The permission bits of `p`, or None when it is not there (a mutation can remove it)."""
+    try:
+        return os.stat(p).st_mode & 0o777
+    except OSError:
+        return None
+
+
+def _gds_rm(p):
+    """Remove a file or link that may not exist — the driven sequence must report, not crash."""
+    try:
+        os.unlink(p)
+    except FileNotFoundError:
+        pass
+
+
+def _gds_read(p):
+    try:
+        with open(p, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _gds_state(root):
+    """(current's target, the two links' targets, the hash dirs, any staging dirs left)."""
+    gd = os.path.join(root, "gamedig")
+
+    def _rl(p):
+        return os.readlink(p) if os.path.islink(p) else ("FILE" if os.path.exists(p) else None)
+    ents = sorted(os.listdir(gd))
+    return (_rl(os.path.join(gd, "current")),
+            _rl(os.path.join(root, "usr-local-bin", "gamedig")), _rl(os.path.join(root, "usr-bin", "gamedig")),
+            [_x for _x in ents if _re_ntc.fullmatch(r"[0-9a-f]{64}", _x)],
+            [_x for _x in ents if _x.startswith(".stage.")])
+
+
+if _GDS_SCRIPT.count(_GDS_LINKS) != 1:
+    check("install-gamedig.sh: its link directories are /usr/local/bin and /usr/bin", False,
+          "LINK_DIRS line not found exactly once — the driven checks below could not run")
+elif not _shutil.which("flock") or not _shutil.which("timeout"):
+    skip("install-gamedig.sh, driven", "no flock/timeout on this machine")
+else:
+    check("install-gamedig.sh: its link directories are /usr/local/bin and /usr/bin", True)
+    _gds = _gds_new()
+    try:
+        _gdt = os.path.join(_gds, "gamedig", "current", "node_modules", ".bin", "gamedig")
+        _r, _c = _gds_run(_gds)
+        _h1 = _gds_hash(_gds)
+        _st = _gds_state(_gds)
+        _ci = [_x for _x in _c if _x.startswith("NPM ci ")]
+        check("install-gamedig.sh: a first run installs, and exits 0",
+              _r.returncode == 0 and "gamedig 5.9.9 ready: %s" % _gdt in _r.stdout,
+              "rc=%d %r" % (_r.returncode, (_r.stdout + _r.stderr)[-300:]))
+        check("install-gamedig.sh: npm ci runs ONCE, in a fresh staging directory — never the live tree",
+              len(_ci) == 1 and (" @ %s/.stage." % os.path.join(_gds, "gamedig")) in _ci[0]
+              and not _ci[0].endswith(" @ " + os.path.join(_gds, "gamedig", _h1)), repr(_c))
+        check("install-gamedig.sh: npm ci has a wall-clock bound (npm has no overall deadline)",
+              "timeout -k 30 600 npm ci " in _GDS_SCRIPT, "no `timeout -k 30 600 npm ci` in the script")
+        check("install-gamedig.sh: ...with --ignore-scripts and --omit=dev, and its cache inside the stage",
+              len(_ci) == 1 and all(_x in _ci[0].split() for _x in ("--ignore-scripts", "--omit=dev"))
+              and ("--cache %s/.stage." % os.path.join(_gds, "gamedig")) in _ci[0], repr(_ci))
+        check("install-gamedig.sh: current -> the lockfile's sha256, no staging directory left",
+              _st[0] == _h1 and _st[3] == [_h1] and _st[4] == [], repr(_st))
+        check("install-gamedig.sh: the tree is 0755, so every game account can run it",
+              _gds_mode(os.path.join(_gds, "gamedig", _h1)) == 0o755,
+              repr(_gds_mode(os.path.join(_gds, "gamedig", _h1))))
+        check("install-gamedig.sh: BOTH /usr/local/bin/gamedig and /usr/bin/gamedig -> current",
+              _st[1] == _gdt and _st[2] == _gdt, repr(_st[1:3]))
+        # Removed by deleting its directory, never `npm uninstall -g`: that also deletes the command
+        # at npm's bin path, whatever it points at, and `gamedig` stopped resolving until the links
+        # were made. And only after they were (the root -g lookup comes after the ci).
+        _rg = [_i for _i, _x in enumerate(_c) if _x.startswith("NPM root -g")]
+        check("install-gamedig.sh: npm's own global gamedig is removed AFTER the new tree was built, "
+              "without `npm uninstall`",
+              len(_rg) == 1 and _c.index(_ci[0]) < _rg[0]
+              and not any(_x.startswith("NPM uninstall") for _x in _c)
+              and not os.path.exists(os.path.join(_gds, "npm-global", "gamedig")), repr(_c))
+        # The weekly cron's normal case: nothing changed, nothing fetched.
+        _r, _c2 = _gds_run(_gds)
+        check("install-gamedig.sh: unchanged lockfile, working tree: nothing is fetched",
+              _r.returncode == 0 and [_x.split(" @ ")[0] for _x in _c2[len(_c):]] == ["NPM root -g"]
+              and "nothing to fetch" in _r.stdout and _gds_state(_gds) == _st,
+              "rc=%d new calls=%r" % (_r.returncode, _c2[len(_c):]))
+        # ...and what makes it a REPAIR job: a tree that is gone is put back.
+        _shutil.rmtree(os.path.join(_gds, "gamedig", _h1), ignore_errors=True)
+        _r, _c3 = _gds_run(_gds)
+        check("install-gamedig.sh: a deleted tree is rebuilt on the next run",
+              _r.returncode == 0 and sum(_x.startswith("NPM ci ") for _x in _c3) == 2
+              and _gds_state(_gds) == _st, "rc=%d %r" % (_r.returncode, _gds_state(_gds)))
+        # ...and so is one that is still THERE but broken (a file gone from node_modules): the new
+        # tree has to replace the old directory, not be moved onto it.
+        _gds_bin = os.path.join(_gds, "gamedig", _h1, "node_modules", "gamedig", "bin", "gamedig.js")
+        _gds_rm(_gds_bin)
+        _r, _c4 = _gds_run(_gds)
+        check("install-gamedig.sh: a tree that is there but broken is rebuilt in its place",
+              _r.returncode == 0 and sum(_x.startswith("NPM ci ") for _x in _c4) == 3
+              and _gds_state(_gds) == _st and os.path.exists(_gds_bin),
+              "rc=%d %r %r" % (_r.returncode, _gds_state(_gds), _r.stdout[-200:]))
+        # A new lockfile (what a Dependabot bump is): a new tree, switched to; the old one goes.
+        with open(os.path.join(_gds, "gamedig", "package-lock.json"), "a", encoding="utf-8") as _fh:
+            _fh.write("\n")
+        _h2 = _gds_hash(_gds)
+        _r, _ = _gds_run(_gds)
+        _st2 = _gds_state(_gds)
+        check("install-gamedig.sh: a new lockfile gets a new tree, and the old tree is removed",
+              _r.returncode == 0 and _h2 != _h1 and _st2 == (_h2, _gdt, _gdt, [_h2], []),
+              "rc=%d %r" % (_r.returncode, _st2))
+        # The failures. Each leaves the tree in use, current and both links exactly as they were.
+        with open(os.path.join(_gds, "gamedig", "package-lock.json"), "a", encoding="utf-8") as _fh:
+            _fh.write("\n")
+        _r, _ = _gds_run(_gds, GDS_CI="fail")
+        check("install-gamedig.sh: npm ci failing (a registry outage) leaves the working tree in use",
+              _r.returncode != 0 and _gds_state(_gds) == _st2
+              and "left as it was" in _r.stdout
+              and os.path.exists(os.path.join(_gds, "gamedig", _h2, "node_modules", ".bin", "gamedig")),
+              "rc=%d %r %r" % (_r.returncode, _gds_state(_gds), _r.stdout[-200:]))
+        _r, _ = _gds_run(_gds, GDS_CI="broken")
+        check("install-gamedig.sh: a new tree that does not RUN is never switched to",
+              _r.returncode != 0 and _gds_state(_gds) == _st2 and "does not run" in _r.stdout,
+              "rc=%d %r %r" % (_r.returncode, _gds_state(_gds), _r.stdout[-200:]))
+        _r, _ = _gds_run(_gds, GDS_CI="silent")
+        check("install-gamedig.sh: ...nor one that exits 0 without gamedig's own answer (no output)",
+              _r.returncode != 0 and _gds_state(_gds) == _st2 and "does not run" in _r.stdout,
+              "rc=%d %r %r" % (_r.returncode, _gds_state(_gds), _r.stdout[-200:]))
+        # Somebody else's gamedig: a real file, or a link to a gamedig that is not npm's or ours.
+        _foreign = os.path.join(_gds, "operator-gamedig")
+        with open(_foreign, "w", encoding="utf-8") as _fh:
+            _fh.write("#!/bin/sh\n")
+        _gds_rm(os.path.join(_gds, "usr-local-bin", "gamedig"))
+        with open(os.path.join(_gds, "usr-local-bin", "gamedig"), "w", encoding="utf-8") as _fh:
+            _fh.write("mine\n")
+        _gds_rm(os.path.join(_gds, "usr-bin", "gamedig"))
+        os.symlink(_foreign, os.path.join(_gds, "usr-bin", "gamedig"))
+        _r, _ = _gds_run(_gds)
+        _st3 = _gds_state(_gds)
+        check("install-gamedig.sh: an operator's own gamedig (a file, or a link elsewhere) is left, "
+              "and the run says so",
+              _r.returncode == 1 and _st3[1] == "FILE" and _st3[2] == _foreign
+              and _r.stdout.count("left ") == 2
+              and _gds_read(os.path.join(_gds, "usr-local-bin", "gamedig")) == "mine\n",
+              "rc=%d %r %r" % (_r.returncode, _st3, _r.stdout[-300:]))
+        # ...while a link whose target is gone is nobody's, and is replaced.
+        _gds_rm(_foreign)
+        _r, _ = _gds_run(_gds)
+        check("install-gamedig.sh: ...but a dangling link is replaced",
+              _gds_state(_gds)[2] == _gdt, repr(_gds_state(_gds)))
+        _gds_err = None
+    except Exception as _e:          # a sequence cut short fails by name, never ends the suite
+        _gds_err = _e
+    finally:
+        _shutil.rmtree(_gds, ignore_errors=True)
+    check("install-gamedig.sh, driven: the whole sequence ran to its end", _gds_err is None,
+          "stopped at: %r" % (_gds_err,))
+    # The links are swapped BEFORE npm's package goes, and it goes only when every link is the
+    # panel's: one left alone (a file here) may still be npm's command, and would dangle.
+    _gds = _gds_new()
+    try:
+        with open(os.path.join(_gds, "usr-local-bin", "gamedig"), "w", encoding="utf-8") as _fh:
+            _fh.write("somebody else's\n")
+        _r, _c = _gds_run(_gds)
+        check("install-gamedig.sh: npm's global gamedig stays while any link is not the panel's",
+              _r.returncode == 1 and os.path.isdir(os.path.join(_gds, "npm-global", "gamedig"))
+              and _gds_state(_gds)[2] == os.path.join(_gds, "gamedig", "current", "node_modules",
+                                                      ".bin", "gamedig"),
+              "rc=%d state=%r calls=%r" % (_r.returncode, _gds_state(_gds), _c))
+    except Exception as _e:
+        check("install-gamedig.sh: npm's global gamedig stays while any link is not the panel's",
+              False, repr(_e))
+    finally:
+        _shutil.rmtree(_gds, ignore_errors=True)
+    # npm's global gamedig is the one working gamedig a host has until the new tree runs.
+    _gds = _gds_new()
+    try:
+        _r, _c = _gds_run(_gds, GDS_CI="fail")
+        check("install-gamedig.sh: a failed first install leaves npm's global gamedig and its link",
+              _r.returncode != 0 and not any(_x.startswith("NPM uninstall") for _x in _c)
+              and os.path.isdir(os.path.join(_gds, "npm-global", "gamedig"))
+              and _gds_state(_gds)[2] == "../lib/node_modules/gamedig/bin/gamedig.js"
+              and _gds_state(_gds)[0] is None,
+              "rc=%d calls=%r state=%r" % (_r.returncode, _c, _gds_state(_gds)))
+        _r, _c2 = _gds_run(_gds, GDS_UID="1000")
+        check("install-gamedig.sh: refuses to run as anyone but root, before touching anything",
+              _r.returncode == 1 and "as root" in _r.stdout and _c2 == _c,
+              "%r new calls=%r" % (_r.stdout[-200:], _c2[len(_c):]))
+        _gds_err = None
+    except Exception as _e:
+        _gds_err = _e
+    finally:
+        _shutil.rmtree(_gds, ignore_errors=True)
+    check("install-gamedig.sh, driven: the failed-first-install sequence ran to its end",
+          _gds_err is None, "stopped at: %r" % (_gds_err,))
 
 # ── NodeSource: its repository, with the signing key pinned — never its setup script run as root ──
-# ensure_gamedig downloaded https://deb.nodesource.com/setup_lts.x and ran it as root with nothing
+# ensure_gamedig (now ensure_nodejs) downloaded https://deb.nodesource.com/setup_lts.x and ran it as root with nothing
 # checked, so whoever could serve that URL ran code as root on every host installing Node.
 # nodesource_setup fetches only the signing key, and trusts it only if the file holds exactly ONE
 # primary key with the pinned fingerprint. Driven in bash with curl, dpkg and apt-get as shell
@@ -2816,7 +3329,7 @@ _ns_code = "\n".join(_ns_code_lines)
 check("install.sh: no downloaded script is run — NodeSource's setup script is gone",
       "setup_lts.x" not in _ns_code and not _re_ntc.search(r'bash "\$\{?ns\}?"', _ns_code)
       and not _re_ntc.search(r"\bcurl\b[^\n]*\|\s*(sudo\s+)?(ba)?sh\b", _ns_code))
-check("install.sh: ensure_gamedig configures NodeSource through the pinned-key setup",
+check("install.sh: ensure_nodejs configures NodeSource through the pinned-key setup",
       any(_re_ntc.fullmatch(r'\s*if nodesource_setup "\$\{S\}"; then', _l)
           for _l in _ntc_fn.splitlines()))
 
@@ -3091,7 +3604,7 @@ check("helper: knows exactly the tools its verbs need, and no more",
                                 "curl", "debconf-set-selections", "df", "dpkg",
                                 "fail2ban-client", "fallocate", "fuser", "groupadd", "journalctl",
                                 "mkswap",
-                                "npm", "passwd", "pgrep", "pkill", "pro", "reboot", "renice", "rm",
+                                "passwd", "pgrep", "pkill", "pro", "reboot", "renice", "rm",
                                 "sh_installer", "ss", "sshd", "sudo_list", "swapon", "sysctl",
                                 "systemctl", "systemd-run",
                                 "tail", "tailscale", "timedatectl", "ufw", "useradd", "userdel",
@@ -3236,7 +3749,7 @@ _BAD_VECTORS = [
     ("sshd-set-directive", ["ClientAliveInterval", "0"]),
     ("sshd-set-directive", ["PasswordAuthentication", "maybe"]),
     ("sshd-set-directive", ["ClientAliveInterval", "300; id"]),
-    ("npm-install-global", ["evil-package"]),
+    ("gamedig-install", ["gamedig"]),
     # tailscale: routes are PARSED as networks and tags must be `tag:name`, so a shell
     # metacharacter in either is refused rather than quoted.
     ("tailscale-up-key", ["tskey-abc123def45", "yes", "1.2.3.0/24; reboot", "-"]),
