@@ -65,50 +65,13 @@ def register(app, supervise):
                 # `apt update` is a network fetch with a 60s timeout, on top of a reachability
                 # probe; serially that is minutes of a shared ticker thread. Probe concurrently and
                 # decide serially — as _monitor_pass does — so the alert logic stays single-threaded.
-                checks = {}
-                with concurrent.futures.ThreadPoolExecutor(
-                        max_workers=min(_MONITOR_HOST_WORKERS, len(remotes))) as ex:
-                    for r, got in zip(remotes, ex.map(_os_updates_for, remotes)):
-                        checks[r.id] = got
+                checks = _check_hosts_for_updates(remotes)
                 for remote in remotes:
                     got = checks.get(remote.id)
                     if got is None:
                         continue          # couldn't tell — say nothing rather than guess
-                    # The banner and the OS Updates card read this: the sweep is the only thing that
-                    # asks every host, and its answer is what they show until someone forces a check.
-                    _os_update_note(remote, got)
-                    pkgs = got.get("packages") or []
-                    count = len(pkgs)
-                    sec = sum(1 for p in pkgs if _is_security_pkg(p))
-                    names = [p.get("name", "?") for p in
-                             ([p for p in pkgs if _is_security_pkg(p)] or pkgs)][:5]
-                    first_read = remote.id not in _os_update_state["hosts"]
-                    had_count, had_sec = _os_update_state["hosts"].get(remote.id) or (0, 0)
-                    _os_update_state["hosts"][remote.id] = (count, sec)
-                    # Security updates get their own arm: they routinely land on a host that already
-                    # has ordinary updates pending, and keying on the total alone would swallow them.
-                    # `seeding` first: the counts above are now recorded, the banner and the card
-                    # have their answer, and only a transition THIS process witnessed alerts.
-                    if (_os_update_seeds(remote, seeding, first_read)
-                            or not ((count and not had_count) or (sec and not had_sec))):
-                        continue
-                    what = ("%d security update%s of %d waiting"
-                            % (sec, "" if sec == 1 else "s", count)) if sec else \
-                           ("%d update%s waiting" % (count, "" if count == 1 else "s"))
-                    notifications.notify(
-                        "os_updates",
-                        "Security updates on %s" % remote.display_name if sec
-                        else "Updates available on %s" % remote.display_name,
-                        "%s on %s: %s%s"
-                        % (what, remote.display_name, ", ".join(names),
-                           ", …" if count > len(names) else ""))
-                # Forget hosts that no longer exist: SQLite hands a deleted remote's row id to the
-                # next one added, and inheriting its count would swallow the new host's first batch.
-                ids = {r.id for r in remotes}
-                for gone in [i for i in _os_update_state["hosts"] if i not in ids]:
-                    del _os_update_state["hosts"][gone]
-                for gone in [i for i in _os_update_seen.copy() if i not in ids]:
-                    _os_update_seen.pop(gone, None)   # same reason: a freed row id gets reused
+                    _record_and_announce(remote, got, seeding)
+                _forget_gone_hosts(remotes)
         except Exception:
             _log.debug("os-update sweep failed", exc_info=True)
 
@@ -126,20 +89,10 @@ def register(app, supervise):
             try:
                 st = so.panel_update_status(force=True)
                 if st.get("update_available"):
-                    tgt = (st.get("target_sha") or st.get("remote_sha") or "")
+                    tgt = _update_target(st)
                     if tgt and tgt != last_logged_sha:
                         last_logged_sha = tgt
-                        app.logger.info(
-                            "panel update available: version %s (%s), %s commit(s) behind",
-                            st.get("remote_version", "?"), tgt[:7], st.get("behind", "?"))
-                        # Mirror the panel's update widget: name the target commit AND list the
-                        # changes (commit subjects) so you can see what's in the update.
-                        changes = [c[:100] for c in (st.get("changes") or [])][:10]
-                        change_lines = ("\n" + "\n".join("• " + c for c in changes)) if changes else ""
-                        notifications.notify(
-                            "update_available", "Panel update available",
-                            "%s (%s) — %s commit(s) behind:%s\nRe-run the installer, or send /update in Telegram."
-                            % (st.get("remote_version", "?"), tgt[:7], st.get("behind", "?"), change_lines))
+                        _announce_panel_update(app, st, tgt)
                 else:
                     last_logged_sha = None   # up to date — let a future update log again
             except Exception:
@@ -161,3 +114,91 @@ def register(app, supervise):
     # still naming functions that had gone.
     supervise("update-check", update_check_ticker)
     app._maybe_alert_os_updates = _maybe_alert_os_updates
+
+
+def _check_hosts_for_updates(remotes):
+    """{remote id: its update check} for every host, the checks run concurrently."""
+    checks = {}
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(_MONITOR_HOST_WORKERS, len(remotes))) as ex:
+        for r, got in zip(remotes, ex.map(_os_updates_for, remotes)):
+            checks[r.id] = got
+    return checks
+
+
+def _record_and_announce(remote, got, seeding):
+    """Record one host's update check, and announce what this process saw newly appear."""
+    # The banner and the OS Updates card read this: the sweep is the only thing that
+    # asks every host, and its answer is what they show until someone forces a check.
+    _os_update_note(remote, got)
+    count, sec, names = _update_summary(got.get("packages") or [])
+    first_read = remote.id not in _os_update_state["hosts"]
+    had_count, had_sec = _os_update_state["hosts"].get(remote.id) or (0, 0)
+    _os_update_state["hosts"][remote.id] = (count, sec)
+    # Security updates get their own arm: they routinely land on a host that already
+    # has ordinary updates pending, and keying on the total alone would swallow them.
+    # `seeding` first: the counts above are now recorded, the banner and the card
+    # have their answer, and only a transition THIS process witnessed alerts.
+    if (_os_update_seeds(remote, seeding, first_read)
+            or not _newly_waiting(count, sec, had_count, had_sec)):
+        return
+    _announce_os_updates(remote, names, count, sec)
+
+
+def _update_summary(pkgs):
+    """(package count, security-update count, up to five names to quote — security ones first)."""
+    count = len(pkgs)
+    sec = sum(1 for p in pkgs if _is_security_pkg(p))
+    names = [p.get("name", "?") for p in
+             ([p for p in pkgs if _is_security_pkg(p)] or pkgs)][:5]
+    return count, sec, names
+
+
+def _newly_waiting(count, sec, had_count, had_sec):
+    """Whether updates appeared on a host that had none, or security ones where there were none."""
+    return bool((count and not had_count) or (sec and not had_sec))
+
+
+def _announce_os_updates(remote, names, count, sec):
+    """Notify that `remote` has `count` updates waiting, `sec` of them security; `names` quoted."""
+    what = ("%d security update%s of %d waiting"
+            % (sec, "" if sec == 1 else "s", count)) if sec else \
+           ("%d update%s waiting" % (count, "" if count == 1 else "s"))
+    notifications.notify(
+        "os_updates",
+        "Security updates on %s" % remote.display_name if sec
+        else "Updates available on %s" % remote.display_name,
+        "%s on %s: %s%s"
+        % (what, remote.display_name, ", ".join(names),
+           ", …" if count > len(names) else ""))
+
+
+def _forget_gone_hosts(remotes):
+    """Drop the alert state of hosts that no longer exist."""
+    # Forget hosts that no longer exist: SQLite hands a deleted remote's row id to the
+    # next one added, and inheriting its count would swallow the new host's first batch.
+    ids = {r.id for r in remotes}
+    for gone in [i for i in _os_update_state["hosts"] if i not in ids]:
+        del _os_update_state["hosts"][gone]
+    for gone in [i for i in _os_update_seen.copy() if i not in ids]:
+        _os_update_seen.pop(gone, None)   # same reason: a freed row id gets reused
+
+
+def _update_target(st):
+    """The commit a panel-update status says to move to ("" when it names none)."""
+    return st.get("target_sha") or st.get("remote_sha") or ""
+
+
+def _announce_panel_update(app, st, tgt):
+    """Log and notify a newly verified panel update to commit `tgt`, listing its changes."""
+    app.logger.info(
+        "panel update available: version %s (%s), %s commit(s) behind",
+        st.get("remote_version", "?"), tgt[:7], st.get("behind", "?"))
+    # Mirror the panel's update widget: name the target commit AND list the
+    # changes (commit subjects) so you can see what's in the update.
+    changes = [c[:100] for c in (st.get("changes") or [])][:10]
+    change_lines = ("\n" + "\n".join("• " + c for c in changes)) if changes else ""
+    notifications.notify(
+        "update_available", "Panel update available",
+        "%s (%s) — %s commit(s) behind:%s\nRe-run the installer, or send /update in Telegram."
+        % (st.get("remote_version", "?"), tgt[:7], st.get("behind", "?"), change_lines))

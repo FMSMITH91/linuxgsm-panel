@@ -15,6 +15,13 @@ from app import (_refuse_on_panel_host)
 
 
 def register(app):
+    _register_status_and_link_join(app)
+    _register_finalize_and_install(app)
+    _register_key_join_and_migrate(app)
+
+
+def _register_status_and_link_join(app):
+    """Tailscale on a remote: its status, and the login-link join."""
     @app.route("/api/remote/<int:remote_id>/tailscale-check")
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -65,6 +72,9 @@ def register(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
+
+def _register_finalize_and_install(app):
+    """Tailscale on a remote: post-join UFW finalize, and installing it."""
     @app.route("/api/remote/<int:remote_id>/tailscale-finalize", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -101,7 +111,6 @@ def register(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
-
     @app.route("/api/remote/<int:remote_id>/tailscale-install", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -120,6 +129,9 @@ def register(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed"), "log": ""}), 500
 
+
+def _register_key_join_and_migrate(app):
+    """Tailscale on a remote: pre-auth-key join, and moving the host record to Tailscale SSH."""
     @app.route("/api/remote/<int:remote_id>/tailscale-bootstrap", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
