@@ -96,33 +96,7 @@ def register(app):
                                      "reachable, then scan again." % remote.name}), 200
         existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
         games = {g["shortname"]: g["name"] for g in load_game_list()}
-        # A GMod content box installs each mountable game through LinuxGSM, so every one of them
-        # looks exactly like an installed server to the scan. They are not servers — see
-        # content_box_users — and the panel cannot even represent them, since a host's servers are
-        # keyed on the Linux user. Report them separately so the card can say what it left out
-        # rather than silently showing one account seven times.
-        content_users = content_box_users(found)
-        content = {}
-        out = []
-        for f in found:
-            user = f.get("user") or ""
-            if user in existing:
-                continue   # already in the panel
-            gt = lgsm_name_to_game_type(f.get("lgsm_name") or "")
-            # Classify BEFORE the supported-game filter. Whether an install is mountable content
-            # has nothing to do with whether the panel can run that game, and testing it second
-            # meant a content game the panel doesn't list vanished as "unsupported" instead of
-            # being reported — so the note undercounted exactly the boxes it exists to explain.
-            if user in content_users:
-                content.setdefault(user, []).append(
-                    games.get(gt) or f.get("lgsm_name") or gt or "?")
-                continue
-            if not gt or gt not in games:
-                continue   # a game the panel doesn't support — don't offer a broken import
-            out.append({"user": user, "game_type": gt, "game_name": games.get(gt, gt),
-                        "port": f.get("port") or 0,
-                        "backups": f.get("backups", 0), "mods": f.get("mods", 0),
-                        "cron": f.get("cron", 0), "autostart": bool(f.get("autostart"))})
+        out, content = _discovered_listing(found, existing, games)
         return jsonify({"servers": out,
                         "content": [{"user": u, "games": sorted(g)}
                                     for u, g in sorted(content.items())]})
@@ -156,66 +130,146 @@ def register(app):
         except Exception:
             return jsonify({"success": False,
                             "message": _log_and_generic("server discovery failed")}), 200
-        _content = content_box_users(_found)
-        discovered = {}
-        for _f in _found:
-            _u = _f.get("user") or ""
-            if _u in _content:
-                continue      # a GMod content box is not a server — api_remote_discover skips it
-            _gt = lgsm_name_to_game_type(_f.get("lgsm_name") or "")
-            if _gt:
-                discovered.setdefault(_u, set()).add(_gt)
-        existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
-        game_names = {g["shortname"]: g["name"] for g in load_game_list()}
-        valid_games = set(game_names)
-        # A host's servers are keyed on the Linux user (short_name), so two games under ONE account
-        # cannot both become servers. The loop below would take the first and drop the rest as
-        # duplicates — picking a game essentially at random and reporting partial success as
-        # success. That is what a GMod content box looked like when it reached this endpoint.
-        # Refuse the whole account instead: an arbitrary winner is not a better answer than none.
-        items = [it for it in items[:100] if isinstance(it, dict)]
-        per_user = collections.Counter((str(it.get("user") or "")).strip() for it in items)
-        added, skipped = [], []
-        for it in items:
-            user = (str(it.get("user") or "")).strip()
-            gt = _json_str(it, "game_type").lower()
-            if (not INSTANCE_NAME_RE.match(user) or gt not in valid_games
-                    or gt not in discovered.get(user, ())
-                    or user in existing or per_user.get(user, 0) > 1):
-                skipped.append(user or "?")
-                continue
-            try:
-                port = int(it.get("port") or 0)
-            except (TypeError, ValueError):
-                port = 0
-            # Import never starts or stops a discovered server, and leaves its game files, backups
-            # and mods as they are (they are read live once imported). It does turn Autostart on,
-            # as an install does: the background step below writes LinuxGSM's `monitor` cron once
-            # the command list shows the game has it, and sets the flag then. monitor keeps a
-            # server in its intended state, so a running one comes back after a reboot or a crash
-            # and a stopped one stays down. It starts False here because nothing is written yet.
-            db.session.add(GameServer(
-                remote_id=remote_id, name=user, short_name=user, game_type=gt,
-                game_display=game_names.get(gt, ""),
-                port=(port if 1 <= port <= 65535 else 27015), installed=True, status="offline",
-                autostart=False))
-            existing.add(user)
-            added.append(user)
+        discovered = _scanned_game_types(_found)
+        added, skipped = _add_imported_rows(remote_id, items, discovered)
         not_enrolled = []
         if added:
-            db.session.commit()
-            log_action(current_user, "import_servers", target=remote.name,
-                       detail="added=%s" % ",".join(added))
-            not_enrolled = _enrol_imported(remote, added)
-            # Populate the imported servers' command lists so "Supported Commands" is ready
-            # without a manual refresh (install caches these; import didn't).
-            new_rows = GameServer.query.filter(
-                GameServer.remote_id == remote_id, GameServer.short_name.in_(added)).all()
-            refused = {n["user"] for n in not_enrolled}
-            # Autostart only where the panel can write the account's crontab: an account the
-            # helper refused to enrol is one the panel cannot become on a narrow-grant host.
-            _bg_cache_commands(app, [gs.id for gs in new_rows],
-                               autostart_ids=[gs.id for gs in new_rows
-                                              if gs.short_name not in refused])
+            not_enrolled = _finish_import(app, remote, remote_id, added)
         return jsonify({"success": bool(added), "added": added, "skipped": skipped,
                         "not_enrolled": not_enrolled})
+
+
+def _discovered_listing(found, existing, games):
+    """(importable servers, {content-box account: [game names]}) from a scan, minus `existing`."""
+    # A GMod content box installs each mountable game through LinuxGSM, so every one of them
+    # looks exactly like an installed server to the scan. They are not servers — see
+    # content_box_users — and the panel cannot even represent them, since a host's servers are
+    # keyed on the Linux user. Report them separately so the card can say what it left out
+    # rather than silently showing one account seven times.
+    content_users = content_box_users(found)
+    content = {}
+    out = []
+    for f in found:
+        user = f.get("user") or ""
+        if user in existing:
+            continue   # already in the panel
+        gt = lgsm_name_to_game_type(f.get("lgsm_name") or "")
+        # Classify BEFORE the supported-game filter. Whether an install is mountable content
+        # has nothing to do with whether the panel can run that game, and testing it second
+        # meant a content game the panel doesn't list vanished as "unsupported" instead of
+        # being reported — so the note undercounted exactly the boxes it exists to explain.
+        if user in content_users:
+            content.setdefault(user, []).append(_content_game_label(f, gt, games))
+            continue
+        if not gt or gt not in games:
+            continue   # a game the panel doesn't support — don't offer a broken import
+        out.append(_importable_entry(f, user, gt, games))
+    return out, content
+
+
+def _content_game_label(f, gt, games):
+    """How the discover card names one content-box game."""
+    return games.get(gt) or f.get("lgsm_name") or gt or "?"
+
+
+def _importable_entry(f, user, gt, games):
+    """One importable server as the discover card lists it."""
+    return {"user": user, "game_type": gt, "game_name": games.get(gt, gt),
+            "port": f.get("port") or 0,
+            "backups": f.get("backups", 0), "mods": f.get("mods", 0),
+            "cron": f.get("cron", 0), "autostart": bool(f.get("autostart"))}
+
+
+def _scanned_game_types(found):
+    """{account: {game types}} a scan found; content boxes are left out, as discover leaves them."""
+    _content = content_box_users(found)
+    discovered = {}
+    for _f in found:
+        _u = _f.get("user") or ""
+        if _u in _content:
+            continue      # a GMod content box is not a server — api_remote_discover skips it
+        _gt = lgsm_name_to_game_type(_f.get("lgsm_name") or "")
+        if _gt:
+            discovered.setdefault(_u, set()).add(_gt)
+    return discovered
+
+
+def _add_imported_rows(remote_id, items, discovered):
+    """Add a GameServer row per selected server the scan confirmed; returns (added, skipped)."""
+    existing = {gs.short_name for gs in GameServer.query.filter_by(remote_id=remote_id).all()}
+    game_names = {g["shortname"]: g["name"] for g in load_game_list()}
+    valid_games = set(game_names)
+    # A host's servers are keyed on the Linux user (short_name), so two games under ONE account
+    # cannot both become servers. The loop below would take the first and drop the rest as
+    # duplicates — picking a game essentially at random and reporting partial success as
+    # success. That is what a GMod content box looked like when it reached this endpoint.
+    # Refuse the whole account instead: an arbitrary winner is not a better answer than none.
+    items, per_user = _selected_items(items)
+    rules = (valid_games, discovered, existing, per_user)
+    added, skipped = [], []
+    for it in items:
+        user = (str(it.get("user") or "")).strip()
+        gt = _json_str(it, "game_type").lower()
+        if _import_refused(user, gt, rules):
+            skipped.append(user or "?")
+            continue
+        # Import never starts or stops a discovered server, and leaves its game files, backups
+        # and mods as they are (they are read live once imported). It does turn Autostart on,
+        # as an install does: the background step below writes LinuxGSM's `monitor` cron once
+        # the command list shows the game has it, and sets the flag then. monitor keeps a
+        # server in its intended state, so a running one comes back after a reboot or a crash
+        # and a stopped one stays down. It starts False here because nothing is written yet.
+        db.session.add(GameServer(
+            remote_id=remote_id, name=user, short_name=user, game_type=gt,
+            game_display=game_names.get(gt, ""),
+            port=_import_port(it), installed=True, status="offline",
+            autostart=False))
+        existing.add(user)
+        added.append(user)
+    return added, skipped
+
+
+def _selected_items(items):
+    """The selection as dicts (at most 100), and how many times each account is named in it."""
+    items = [it for it in items[:100] if isinstance(it, dict)]
+    per_user = collections.Counter((str(it.get("user") or "")).strip() for it in items)
+    return items, per_user
+
+
+def _import_refused(user, gt, rules):
+    """Whether one selected server must be skipped; `rules` is _add_imported_rows' tuple."""
+    valid_games, discovered, existing, per_user = rules
+    return bool(not INSTANCE_NAME_RE.match(user) or gt not in valid_games
+                or gt not in discovered.get(user, ())
+                or user in existing or per_user.get(user, 0) > 1)
+
+
+def _import_port(it):
+    """The port a selected server named, or 27015 when it named none in range."""
+    try:
+        port = int(it.get("port") or 0)
+    except (TypeError, ValueError):
+        port = 0
+    return port if 1 <= port <= 65535 else 27015
+
+
+def _finish_import(app, remote, remote_id, added):
+    """Commit and audit the imported rows, enrol their accounts, and fetch their command lists.
+
+    Returns the accounts the helper would not enrol, each with its reason.
+    """
+    db.session.commit()
+    log_action(current_user, "import_servers", target=remote.name,
+               detail="added=%s" % ",".join(added))
+    not_enrolled = _enrol_imported(remote, added)
+    # Populate the imported servers' command lists so "Supported Commands" is ready
+    # without a manual refresh (install caches these; import didn't).
+    new_rows = GameServer.query.filter(
+        GameServer.remote_id == remote_id, GameServer.short_name.in_(added)).all()
+    refused = {n["user"] for n in not_enrolled}
+    # Autostart only where the panel can write the account's crontab: an account the
+    # helper refused to enrol is one the panel cannot become on a narrow-grant host.
+    _bg_cache_commands(app, [gs.id for gs in new_rows],
+                       autostart_ids=[gs.id for gs in new_rows
+                                      if gs.short_name not in refused])
+    return not_enrolled
