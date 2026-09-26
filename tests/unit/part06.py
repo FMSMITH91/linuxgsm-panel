@@ -6877,8 +6877,22 @@ eq("setup: (control) an absolute key path is kept as typed",
    _wc_rh.wizard_credential("key", "/srv/keys/id_ed25519"), "/srv/keys/id_ed25519")
 eq("setup: a PASSWORD that starts with ~ is not treated as a path",
    _wc_rh.wizard_credential("password", "~hunter2"), "~hunter2")
-_wc_fn = next(n for n in _wc_ast.walk(_wc_ast.parse(open(_wc_rh.__file__, encoding="utf-8").read()))
+_wc_tree = _wc_ast.parse(open(_wc_rh.__file__, encoding="utf-8").read())
+_wc_fn = next(n for n in _wc_ast.walk(_wc_tree)
               if isinstance(n, _wc_ast.FunctionDef) and n.name == "setup_wizard")
+# The wizard's steps are module functions the view calls (setup_wizard -> _setup_post ->
+# _setup_welcome, ...), so "the wizard" is the view plus every module function it reaches.
+_wc_defs = {n.name: n for n in _wc_tree.body if isinstance(n, _wc_ast.FunctionDef)}
+_wc_seen, _wc_todo = [], [_wc_fn]
+while _wc_todo:
+    _wc_f = _wc_todo.pop()
+    if any(_wc_f is _s for _s in _wc_seen):
+        continue
+    _wc_seen.append(_wc_f)
+    _wc_todo += [_wc_defs[c.func.id] for c in _wc_ast.walk(_wc_f)
+                 if isinstance(c, _wc_ast.Call) and isinstance(c.func, _wc_ast.Name)
+                 and c.func.id in _wc_defs]
+_wc_fn = _wc_ast.Module(body=_wc_seen, type_ignores=[])
 check("setup: setup_wizard builds the credential it tests and stores with wizard_credential()",
       any(isinstance(n, _wc_ast.Call) and getattr(n.func, "id", None) == "wizard_credential"
           for n in _wc_ast.walk(_wc_fn)),

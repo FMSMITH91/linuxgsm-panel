@@ -32,6 +32,12 @@ def wizard_credential(auth_method, raw):
 
 
 def register(app):
+    _register_setup_wizard(app)
+    _register_setup_tailscale(app)
+
+
+def _register_setup_wizard(app):
+    """The setup gate every request passes, and the wizard itself."""
     @app.before_request
     def check_setup():
         """Redirect to setup if not complete (except for setup pages and static).
@@ -94,218 +100,12 @@ def register(app):
             flash("Sign in as the administrator to finish setup.", "info")
             return redirect(url_for("login", next="/setup"))
 
-        state = SetupState.query.first()
-        if not state:
-            state = SetupState(step="welcome", data="{}")
-            db.session.add(state)
-            db.session.commit()
-
+        state = _setup_state()
         data = json.loads(state.data or "{}")
         cfg = load_config()
 
         if request.method == "POST":
-            step = request.form.get("step", "welcome")
-
-            if step == "welcome":
-                # Step 1: Site settings
-                # The port is VALIDATED here, not merely parsed. This value is written straight to
-                # config.json and read back by the entry point as the address to bind — so an
-                # out-of-range one (a typo of 0, or 99999) produced a panel that would not start on
-                # its next boot, recoverable only with linuxgsm-panel-recover or by hand-editing
-                # the file. The comment that used to sit here said api_panel_change_port validated
-                # it; that is a different route, and the wizard never calls it. Same bounds as that
-                # route, so the panel's port means one thing wherever it is set.
-                _wiz_port = _port_or(request.form.get("port"), None, lo=MIN_UNPRIVILEGED_PORT)
-                if _wiz_port is None:
-                    flash("Pick a port between %d and %d." % (MIN_UNPRIVILEGED_PORT, MAX_PORT),
-                          "danger")
-                    return redirect("/setup")
-                cfg["site_title"] = request.form.get("site_title", "LinuxGSM Panel")
-                cfg["site_domain"] = request.form.get("site_domain", "")
-                cfg["port"] = _wiz_port
-                # The bind address is VALIDATED here for the same reason the port above it is,
-                # and the comment that used to sit here made the same mistake the port's once
-                # did: it said "api_panel_change_port validates whatever they choose". That is a
-                # different route and the wizard never calls it, so this wrote whatever was
-                # posted — and an address the host cannot bind produces a panel that does not come
-                # back up, recoverable only with linuxgsm-panel-recover or by hand-editing
-                # config.json. can_bind_address asks the kernel whether that address is really
-                # on this host: a well-formed IP that is not (10.0.0.51 on 10.0.0.50) passed the
-                # parse and failed with EADDRNOTAVAIL on the next start.
-                #
-                # nosec B104 - not a hardcoded bind: 0.0.0.0 is the DEFAULT offered when the
-                # operator leaves the field blank, and it is what a panel reached over a tailnet
-                # or a LAN has to listen on. The value is the operator's to set.
-                _wiz_bind = (request.form.get("bind_host") or "0.0.0.0").strip()  # nosec B104
-                _bind_err = bind_host_error(_wiz_bind, can_bind_address)
-                if _bind_err:
-                    flash(_bind_err, "danger")
-                    return redirect("/setup")
-                cfg["bind_host"] = _wiz_bind
-                save_config(cfg)
-                data["site_configured"] = True
-                state.step = "admin_user"
-                state.data = json.dumps(data)
-                db.session.commit()
-                return redirect("/setup")
-
-            elif step == "admin_user":
-                # Defence in depth: the setup wizard only ever creates the FIRST admin.
-                # If a superadmin already exists, refuse (belt-and-suspenders behind the
-                # is_setup_complete lock above).
-                if User.query.filter_by(is_superadmin=True).first():
-                    return redirect(url_for("login"))
-                # Step 2: Create admin user
-                username = request.form.get("username", "").strip()
-                password = request.form.get("password", "")
-                confirm = request.form.get("confirm_password", "")
-                email = request.form.get("email", "").strip()
-
-                if not username or len(username) < 3:
-                    flash("Username must be at least 3 characters.", "danger")
-                elif password_problem(password):
-                    flash(password_problem(password), "danger")
-                elif password != confirm:
-                    flash("Passwords do not match.", "danger")
-                else:
-                    existing = User.query.filter_by(username=username).first()
-                    if existing:
-                        flash("Username already exists.", "danger")
-                    else:
-                        admin = User(
-                            username=username,
-                            password_hash=hash_password(password),
-                            email=encrypt_secret(email) if email else None,
-                            display_name=username,
-                            is_superadmin=True,
-                            is_active=True,
-                            # Carry the language chosen during setup into the admin account, so
-                            # they land in it after logging in (falls back to en).
-                            language=_current_lang(),
-                        )
-                        db.session.add(admin)
-                        # Add to Everyone group
-                        everyone = Group.query.filter_by(name="Everyone").first()
-                        if everyone:
-                            admin.groups.append(everyone)
-                        db.session.commit()
-                        data["admin_created"] = True
-                        issue_setup_owner_token(data)   # the rest of the wizard is this browser's
-                        state.step = "tailscale"
-                        state.data = json.dumps(data)
-                        db.session.commit()
-                        return redirect("/setup")
-
-            elif step == "tailscale":
-                # The interactive install/connect/serve runs via /api/setup/tailscale/*;
-                # this POST (Continue or Skip) just advances the wizard.
-                state.step = "remote_server"
-                state.data = json.dumps(data)
-                db.session.commit()
-                return redirect("/setup")
-
-            elif step == "remote_server":
-                action = request.form.get("action", "skip")
-                if action == "add":
-                    name = request.form.get("name", "").strip()
-                    host = request.form.get("host", "").strip()
-                    ssh_user = request.form.get("ssh_user", "root").strip()
-                    ssh_port = _port_or(request.form.get("ssh_port"), None)
-                    auth_method = request.form.get("auth_method", "key")
-                    credential = wizard_credential(auth_method, request.form.get("credential", ""))
-                    sudo_enabled = request.form.get("sudo_enabled") == "on"
-                    lgsm_user = request.form.get("lgsm_user", "").strip()
-
-                    if not name or not host:
-                        flash("Name and host are required.", "danger")
-                    elif ssh_port is None:
-                        flash("SSH port must be between %d and %d." % (MIN_PORT, MAX_PORT), "danger")
-                    else:
-                        success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential)
-                        if not success:
-                            flash(f"Connection test failed: {msg}", "danger")
-                        else:
-                            remote = RemoteServer(
-                                name=name, host=host, port=ssh_port,
-                                username=ssh_user, auth_method=auth_method,
-                                auth_credential=encrypt_secret(credential),
-                                sudo_enabled=sudo_enabled,
-                                linuxgsm_user=lgsm_user,
-                                is_online=True,
-                                last_seen=utcnow(),
-                            )
-                            db.session.add(remote)
-                            db.session.commit()
-                            flash(f"Remote '{name}' added successfully!", "success")
-                            data["remote_added"] = True
-                            state.data = json.dumps(data)
-
-                if action == "skip" or request.form.get("done") == "1":
-                    # Setup is not over until it has produced an ADMIN.
-                    #
-                    # This handler dispatches on the `step` field FROM THE FORM, so nothing makes
-                    # a caller walk the wizard in order — and the wizard is unauthenticated until
-                    # it completes, which is the whole point of a first-run flow. So on a freshly
-                    # installed panel anyone who could reach the port could POST
-                    # step=remote_server&action=skip and close setup with zero accounts.
-                    # Reproduced: SetupState.complete True, config setup_complete True,
-                    # superadmins 0, and every page then redirecting to a login nobody can pass.
-                    # Getting back in needs `manage.py create-admin` from a shell.
-                    #
-                    # The same request also ran the Tailscale auto-setup below, so an
-                    # unauthenticated POST reconfigured the host's serve settings.
-                    #
-                    # Counting ANY superadmin row rather than only active ones, deliberately: a
-                    # deactivated sole admin is a job for manage.py, and reopening the wizard for
-                    # an install that already has an owner would hand the next caller an account.
-                    # The panel refuses to leave zero superadmins through the UI, so zero here
-                    # means setup genuinely never finished.
-                    if User.query.filter_by(is_superadmin=True).first() is None:
-                        flash("Create the administrator account before finishing setup.", "danger")
-                        state.step = "admin_user"
-                        state.data = json.dumps(data)
-                        db.session.commit()
-                        return redirect("/setup")
-                    state.step = "complete"
-                    state.complete = True
-                    state.data = json.dumps(data)
-                    cfg["setup_complete"] = True
-                    save_config(cfg)  # Save FIRST, before Tailscale attempt
-                    # Auto-configure Tailscale Serve if available
-                    if cfg.get("tailscale_auto_setup", True):
-                        try:
-                            ts_info = ts.get_tailscale_info()
-                            if ts_info.running and ts_info.dns_name:
-                                mount = "/lgsm"
-                                serve_info = ts_info.serve_config
-                                root_taken = False
-                                if serve_info and serve_info.get("services"):
-                                    for svc in serve_info["services"]:
-                                        for route in svc.get("routes", []):
-                                            if route.get("mount") == "/":
-                                                root_taken = True
-                                                break
-                                if not root_taken:
-                                    mount = cfg.get("tailscale_mount", "/")
-                                ts.setup_tailscale_serve(
-                                    port=cfg.get("port", 5000),
-                                    mount=mount,
-                                    funnel=cfg.get("tailscale_use_funnel", False),
-                                    backend_scheme=_ts_backend_scheme(cfg),
-                                )
-                                cfg["tailscale_mount"] = mount
-                                cfg["tailscale_setup_done"] = True
-                                save_config(cfg)
-                        except Exception:
-                            _log.debug("setup_wizard: ignored non-fatal error", exc_info=True)
-                    db.session.commit()
-                    flash("Setup complete! You can now log in.", "success")
-                    return redirect("/setup")
-
-                state.data = json.dumps(data)
-                db.session.commit()
-
-            return redirect("/setup")
+            return _setup_post(state, data, cfg)
 
         # GET request - render the current step
         step_templates = {
@@ -323,6 +123,8 @@ def register(app):
                                setup_mode=True)
 
 
+def _register_setup_tailscale(app):
+    """The wizard's Tailscale step: status, install, sign-in and Serve."""
     @app.route("/api/setup/tailscale/status")
     def api_setup_ts_status():
         if not _setup_open() or not _setup_owner_ok():
@@ -374,3 +176,251 @@ def register(app):
         save_config(cfg)
         return jsonify({"success": True, "message": msg,
                         "url": (f"https://{info.dns_name}" if info.dns_name else None)})
+
+
+def _setup_state():
+    """The wizard's SetupState row, created at the welcome step when there is none yet."""
+    state = SetupState.query.first()
+    if not state:
+        state = SetupState(step="welcome", data="{}")
+        db.session.add(state)
+        db.session.commit()
+    return state
+
+
+def _setup_post(state, data, cfg):
+    """One wizard step's form, dispatched on the `step` it names."""
+    step = request.form.get("step", "welcome")
+
+    if step == "welcome":
+        return _setup_welcome(state, data, cfg)
+
+    elif step == "admin_user":
+        return _setup_admin_user(state, data)
+
+    elif step == "tailscale":
+        # The interactive install/connect/serve runs via /api/setup/tailscale/*;
+        # this POST (Continue or Skip) just advances the wizard.
+        state.step = "remote_server"
+        state.data = json.dumps(data)
+        db.session.commit()
+        return redirect("/setup")
+
+    elif step == "remote_server":
+        return _setup_remote_server(state, data, cfg)
+
+    return redirect("/setup")
+
+
+def _setup_welcome(state, data, cfg):
+    """Step 1: the site title, domain, port and bind address."""
+    # Step 1: Site settings
+    # The port is VALIDATED here, not merely parsed. This value is written straight to
+    # config.json and read back by the entry point as the address to bind — so an
+    # out-of-range one (a typo of 0, or 99999) produced a panel that would not start on
+    # its next boot, recoverable only with linuxgsm-panel-recover or by hand-editing
+    # the file. The comment that used to sit here said api_panel_change_port validated
+    # it; that is a different route, and the wizard never calls it. Same bounds as that
+    # route, so the panel's port means one thing wherever it is set.
+    _wiz_port = _port_or(request.form.get("port"), None, lo=MIN_UNPRIVILEGED_PORT)
+    if _wiz_port is None:
+        flash("Pick a port between %d and %d." % (MIN_UNPRIVILEGED_PORT, MAX_PORT),
+              "danger")
+        return redirect("/setup")
+    cfg["site_title"] = request.form.get("site_title", "LinuxGSM Panel")
+    cfg["site_domain"] = request.form.get("site_domain", "")
+    cfg["port"] = _wiz_port
+    # The bind address is VALIDATED here for the same reason the port above it is,
+    # and the comment that used to sit here made the same mistake the port's once
+    # did: it said "api_panel_change_port validates whatever they choose". That is a
+    # different route and the wizard never calls it, so this wrote whatever was
+    # posted — and an address the host cannot bind produces a panel that does not come
+    # back up, recoverable only with linuxgsm-panel-recover or by hand-editing
+    # config.json. can_bind_address asks the kernel whether that address is really
+    # on this host: a well-formed IP that is not (10.0.0.51 on 10.0.0.50) passed the
+    # parse and failed with EADDRNOTAVAIL on the next start.
+    #
+    # nosec B104 - not a hardcoded bind: 0.0.0.0 is the DEFAULT offered when the
+    # operator leaves the field blank, and it is what a panel reached over a tailnet
+    # or a LAN has to listen on. The value is the operator's to set.
+    _wiz_bind = (request.form.get("bind_host") or "0.0.0.0").strip()  # nosec B104
+    _bind_err = bind_host_error(_wiz_bind, can_bind_address)
+    if _bind_err:
+        flash(_bind_err, "danger")
+        return redirect("/setup")
+    cfg["bind_host"] = _wiz_bind
+    save_config(cfg)
+    data["site_configured"] = True
+    state.step = "admin_user"
+    state.data = json.dumps(data)
+    db.session.commit()
+    return redirect("/setup")
+
+
+def _setup_admin_user(state, data):
+    """Step 2: create the first administrator."""
+    # Defence in depth: the setup wizard only ever creates the FIRST admin.
+    # If a superadmin already exists, refuse (belt-and-suspenders behind the
+    # is_setup_complete lock above).
+    if User.query.filter_by(is_superadmin=True).first():
+        return redirect(url_for("login"))
+    # Step 2: Create admin user
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    confirm = request.form.get("confirm_password", "")
+    email = request.form.get("email", "").strip()
+
+    if not username or len(username) < 3:
+        flash("Username must be at least 3 characters.", "danger")
+    elif password_problem(password):
+        flash(password_problem(password), "danger")
+    elif password != confirm:
+        flash("Passwords do not match.", "danger")
+    else:
+        existing = User.query.filter_by(username=username).first()
+        if existing:
+            flash("Username already exists.", "danger")
+        else:
+            admin = User(
+                username=username,
+                password_hash=hash_password(password),
+                email=encrypt_secret(email) if email else None,
+                display_name=username,
+                is_superadmin=True,
+                is_active=True,
+                # Carry the language chosen during setup into the admin account, so
+                # they land in it after logging in (falls back to en).
+                language=_current_lang(),
+            )
+            db.session.add(admin)
+            # Add to Everyone group
+            everyone = Group.query.filter_by(name="Everyone").first()
+            if everyone:
+                admin.groups.append(everyone)
+            db.session.commit()
+            data["admin_created"] = True
+            issue_setup_owner_token(data)   # the rest of the wizard is this browser's
+            state.step = "tailscale"
+            state.data = json.dumps(data)
+            db.session.commit()
+            return redirect("/setup")
+    return redirect("/setup")
+
+
+def _setup_remote_server(state, data, cfg):
+    """Step 4: optionally add a first remote host, then (on skip or done) finish setup."""
+    action = request.form.get("action", "skip")
+    if action == "add":
+        _setup_add_remote(state, data)
+
+    if action == "skip" or request.form.get("done") == "1":
+        return _finish_setup(state, data, cfg)
+
+    state.data = json.dumps(data)
+    db.session.commit()
+    return redirect("/setup")
+
+
+def _setup_add_remote(state, data):
+    """Test and add the remote host the wizard's form names; the outcome is flashed."""
+    name = request.form.get("name", "").strip()
+    host = request.form.get("host", "").strip()
+    ssh_user = request.form.get("ssh_user", "root").strip()
+    ssh_port = _port_or(request.form.get("ssh_port"), None)
+    auth_method = request.form.get("auth_method", "key")
+    credential = wizard_credential(auth_method, request.form.get("credential", ""))
+    sudo_enabled = request.form.get("sudo_enabled") == "on"
+    lgsm_user = request.form.get("lgsm_user", "").strip()
+
+    if not name or not host:
+        flash("Name and host are required.", "danger")
+    elif ssh_port is None:
+        flash("SSH port must be between %d and %d." % (MIN_PORT, MAX_PORT), "danger")
+    else:
+        success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential)
+        if not success:
+            flash(f"Connection test failed: {msg}", "danger")
+        else:
+            remote = RemoteServer(
+                name=name, host=host, port=ssh_port,
+                username=ssh_user, auth_method=auth_method,
+                auth_credential=encrypt_secret(credential),
+                sudo_enabled=sudo_enabled,
+                linuxgsm_user=lgsm_user,
+                is_online=True,
+                last_seen=utcnow(),
+            )
+            db.session.add(remote)
+            db.session.commit()
+            flash(f"Remote '{name}' added successfully!", "success")
+            data["remote_added"] = True
+            state.data = json.dumps(data)
+
+
+def _finish_setup(state, data, cfg):
+    """Close the wizard, once it has produced an admin, and set up Tailscale Serve if it can."""
+    # Setup is not over until it has produced an ADMIN.
+    #
+    # This handler dispatches on the `step` field FROM THE FORM, so nothing makes
+    # a caller walk the wizard in order — and the wizard is unauthenticated until
+    # it completes, which is the whole point of a first-run flow. So on a freshly
+    # installed panel anyone who could reach the port could POST
+    # step=remote_server&action=skip and close setup with zero accounts.
+    # Reproduced: SetupState.complete True, config setup_complete True,
+    # superadmins 0, and every page then redirecting to a login nobody can pass.
+    # Getting back in needs `manage.py create-admin` from a shell.
+    #
+    # The same request also ran the Tailscale auto-setup below, so an
+    # unauthenticated POST reconfigured the host's serve settings.
+    #
+    # Counting ANY superadmin row rather than only active ones, deliberately: a
+    # deactivated sole admin is a job for manage.py, and reopening the wizard for
+    # an install that already has an owner would hand the next caller an account.
+    # The panel refuses to leave zero superadmins through the UI, so zero here
+    # means setup genuinely never finished.
+    if User.query.filter_by(is_superadmin=True).first() is None:
+        flash("Create the administrator account before finishing setup.", "danger")
+        state.step = "admin_user"
+        state.data = json.dumps(data)
+        db.session.commit()
+        return redirect("/setup")
+    state.step = "complete"
+    state.complete = True
+    state.data = json.dumps(data)
+    cfg["setup_complete"] = True
+    save_config(cfg)  # Save FIRST, before Tailscale attempt
+    # Auto-configure Tailscale Serve if available
+    if cfg.get("tailscale_auto_setup", True):
+        try:
+            _auto_tailscale_serve(cfg)
+        except Exception:
+            _log.debug("setup_wizard: ignored non-fatal error", exc_info=True)
+    db.session.commit()
+    flash("Setup complete! You can now log in.", "success")
+    return redirect("/setup")
+
+
+def _auto_tailscale_serve(cfg):
+    """Point Tailscale Serve at the panel when this host is on a tailnet; the caller treats a failure as non-fatal."""
+    ts_info = ts.get_tailscale_info()
+    if ts_info.running and ts_info.dns_name:
+        mount = "/lgsm"
+        serve_info = ts_info.serve_config
+        root_taken = False
+        if serve_info and serve_info.get("services"):
+            for svc in serve_info["services"]:
+                for route in svc.get("routes", []):
+                    if route.get("mount") == "/":
+                        root_taken = True
+                        break
+        if not root_taken:
+            mount = cfg.get("tailscale_mount", "/")
+        ts.setup_tailscale_serve(
+            port=cfg.get("port", 5000),
+            mount=mount,
+            funnel=cfg.get("tailscale_use_funnel", False),
+            backend_scheme=_ts_backend_scheme(cfg),
+        )
+        cfg["tailscale_mount"] = mount
+        cfg["tailscale_setup_done"] = True
+        save_config(cfg)
