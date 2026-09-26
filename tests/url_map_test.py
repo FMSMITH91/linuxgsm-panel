@@ -77,6 +77,7 @@ def _guard_chain(view):
 
 
 def snapshot(app):
+    """Map every rule to its endpoint, its methods and the guard chain around its view."""
     out = {}
     for rule in app.url_map.iter_rules():
         methods = sorted((rule.methods or set()) - {"HEAD", "OPTIONS"})
@@ -89,25 +90,17 @@ def snapshot(app):
     return out
 
 
-def main():
-    app = create_app()
-    with app.app_context():
-        current = snapshot(app)
+def _update_baseline(current):
+    """Rewrite the committed baseline from the live map; the diff is the reviewable record."""
+    with open(BASELINE, "w", encoding="utf-8") as fh:
+        json.dump(current, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    print("url_map_baseline.json rewritten: %d rules. READ THE DIFF." % len(current))
+    return 0
 
-    if "--update" in sys.argv:
-        with open(BASELINE, "w", encoding="utf-8") as fh:
-            json.dump(current, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        print("url_map_baseline.json rewritten: %d rules. READ THE DIFF." % len(current))
-        return 0
 
-    if not os.path.exists(BASELINE):
-        print("FAIL  no baseline — run with --update once to create it")
-        return 1
-
-    with open(BASELINE, encoding="utf-8") as fh:
-        base = json.load(fh)
-
+def _baseline_drift(base, current):
+    """Every rule added, removed, or changed in endpoint, methods or guards since the baseline."""
     problems = []
     for path in sorted(set(base) | set(current)):
         was, now = base.get(path), current.get(path)
@@ -120,13 +113,20 @@ def main():
                 if was[field] != now[field]:
                     problems.append("CHANGED  %s  %s\n             was: %s\n             now: %s"
                                     % (path, field, was[field], now[field]))
+    return problems
 
-    # app.py's module docstring opens with a hand-written route list. It is the first thing anyone
-    # reads about this file, and it had drifted: it advertised POST /servers/install (a GET-only
-    # page), POST /servers/uninstall (deleted — it is POST /servers/<id>/delete) and a
-    # "WebSocket /console/<id>" route that has never existed, the console being socket.io events on
-    # the default namespace. Checked against the live map rather than the baseline file so it
-    # cannot go stale in the same commit that regenerates the baseline.
+
+def _docstring_drift(current):
+    """Every route app.py's docstring advertises that the live map does not serve that way.
+
+    app.py's module docstring opens with a hand-written route list. It is the first thing anyone
+    reads about this file, and it had drifted: it advertised POST /servers/install (a GET-only
+    page), POST /servers/uninstall (deleted — it is POST /servers/<id>/delete) and a
+    "WebSocket /console/<id>" route that has never existed, the console being socket.io events on
+    the default namespace. Checked against the live map rather than the baseline file so it
+    cannot go stale in the same commit that regenerates the baseline.
+    """
+    problems = []
     _doc = (pathlib.Path(__file__).resolve().parent.parent / "app.py").read_text(
         encoding="utf-8").split('"""')[1]
     _live = {re.sub(r"<[^>]+>", "<>", r): meta for r, meta in current.items()}
@@ -146,7 +146,11 @@ def main():
         elif _verb not in _live[_key]["methods"]:
             problems.append("DOCSTRING  app.py advertises %s %s, which accepts %s"
                             % (_verb, _rule, ",".join(_live[_key]["methods"])))
+    return problems
 
+
+def _report(current, problems):
+    """Print the verdict and return the exit status: 0 clean, 1 on any drift."""
     print("url map: %d rules checked against the baseline" % len(current))
     if problems:
         print("\nFAIL  the routing surface drifted from tests/url_map_baseline.json\n")
@@ -158,6 +162,25 @@ def main():
         return 1
     print("PASS  every rule, endpoint, method set and guard chain matches")
     return 0
+
+
+def main():
+    """Compare the live routing surface with the baseline (or rewrite it with --update)."""
+    app = create_app()
+    with app.app_context():
+        current = snapshot(app)
+
+    if "--update" in sys.argv:
+        return _update_baseline(current)
+
+    if not os.path.exists(BASELINE):
+        print("FAIL  no baseline — run with --update once to create it")
+        return 1
+
+    with open(BASELINE, encoding="utf-8") as fh:
+        base = json.load(fh)
+
+    return _report(current, _baseline_drift(base, current) + _docstring_drift(current))
 
 
 if __name__ == "__main__":
