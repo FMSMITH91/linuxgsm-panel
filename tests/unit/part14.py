@@ -85,6 +85,14 @@ check("js coverage: ...so a location after a non-BMP character lands on the righ
       _v8.line_hits([(1, 0)], _v8_u, [[_fn((0, 60, 1), (14, 18, 0))]]) == {2: 0}
       and _v8.line_hits([(1, 0)], _v8_u, [[_fn((0, 60, 1), (13, 14, 0))]]) == {2: 1})
 
+# V8 also reports a location at the very end of a script, which in a file that ends with a newline
+# is a line past the last one. It is not a line of the file and must not be reported as one: LCOV
+# naming line 714 of a 713-line file is a line of "code" nobody can find.
+check("js coverage: the script's end, on the line after a file's final newline, is not a line",
+      _v8.line_hits([(0, 0), (1, 0), (2, 0)], "f();\ng();\n", [[_fn((0, 11, 1))]]) == {1: 1, 2: 1}
+      and _v8.line_hits([(0, 0), (1, 3)], "f();\ng();", [[_fn((0, 9, 1))]]) == {1: 1, 2: 1},
+      repr(_v8.line_hits([(0, 0), (1, 0), (2, 0)], "f();\ng();\n", [[_fn((0, 11, 1))]])))
+
 # ── the LCOV written, and the summary's "largest missed runs" ─────────────────────────────────
 check("js coverage: LCOV holds line records only, one file per record, files in order",
       _v8.to_lcov({"static/js/b.js": {3: 0, 1: 2}, "static/js/a.js": {7: 1}}) ==
@@ -402,7 +410,7 @@ check("js coverage: a page pausing to leave is resumed only after its counts are
       "are kept for its own static/js scripts alone",
       _jc_before == (["Profiler.takePreciseCoverage"], 1)
       and _jc_cdp.sent == ["Profiler.takePreciseCoverage", "Debugger.resume"]
-      and _jc_drv.hits() == {"static/js/a.js": {1: 3, 2: 3}, "static/js/b.js": {1: 0, 2: 0}}
+      and _jc_drv.hits() == {"static/js/a.js": {1: 3, 2: 3}, "static/js/b.js": {1: 0}}
       and _jc_drv.loaded == {"static/js/a.js"} and _jc_drv.held == 1,
       repr((_jc_before, _jc_cdp.sent, _jc_drv.hits(), _jc_drv.loaded)))
 

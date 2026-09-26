@@ -199,9 +199,50 @@
     return n;
   }
 
+  // ── for the page flows (flows.py) ─────────────────────────────────────────────────────────
+  function q(sel, i) { return document.querySelectorAll(sel)[i || 0] || null; }
+
+  // Click the `i`th match of `sel`; say whether there was one.
+  function click(sel, i) {
+    var el = q(sel, i);
+    if (el) el.click();
+    return !!el;
+  }
+
+  // Type `text` into the `i`th match of `sel` as a person would: focus, value, input, change.
+  function type(sel, text, i) {
+    var el = q(sel, i);
+    if (!el) return false;
+    if (el.focus) el.focus();
+    setValue(el, text);
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+    return true;
+  }
+
+  async function waitFor(sel, ms) {
+    var end = Date.now() + (ms || 3000);
+    while (Date.now() < end) {
+      if (q(sel)) return q(sel);
+      await sleep(100);
+    }
+    return null;
+  }
+
+  // The viewport centre of the `i`th match of `sel`, scrolled into view first, for input the
+  // page cannot be sent from inside it (a real pointer drag, a file dragged in from disk).
+  function centre(sel, i) {
+    var el = q(sel, i);
+    if (!el) return null;
+    el.scrollIntoView({block: 'center', inline: 'center'});
+    var r = el.getBoundingClientRect();
+    return r.width && r.height ? [r.left + r.width / 2, r.top + r.height / 2] : null;
+  }
+
   window.__jscov = {
     sleep: sleep, setValue: setValue, key: key, typeInto: typeInto, fillForm: fillForm,
     settleDialogs: settleDialogs, controls: controls, csig: csig,
+    q: q, click: click, type: type, waitFor: waitFor, centre: centre,
 
     // One step of the walk, in one round trip: answer what the previous step opened, then — if
     // the page is still `path` — fire the first control not in `done` (and, when `only` is given,

@@ -94,7 +94,12 @@ class FileCounts:
     def __init__(self, locations, source):
         """Count at `locations` (0-based (line, column) pairs, V8's) in `source`."""
         starts = line_starts(source)
-        self.locations = [(ln, col) for ln, col in locations if 0 <= ln < len(starts)]
+        # A file that ends with a line terminator has one more line start than it has lines, and
+        # V8 puts the script's own end there: a location on a line that is not in the file, which
+        # a report must not list (it would read as a line of code nobody can find).
+        ends_with_eol = bool(source) and source[-1] in "\r\n\u2028\u2029"
+        lines = len(starts) - 1 if ends_with_eol else len(starts)
+        self.locations = [(ln, col) for ln, col in locations if 0 <= ln < lines]
         self.offsets = offsets_of(self.locations, starts)
         self.order = sorted(range(len(self.offsets)), key=self.offsets.__getitem__)
         self.totals = [0] * len(self.offsets)
