@@ -10137,7 +10137,7 @@ try:
         _rs_target = [os.path.join(_rs_dir, "console.log")]
         _rs_saved = _sm_core.read_as_game_user
 
-        def _rs_read(_server, _user, sh, timeout=30):
+        def _rs_read(_server, _user, sh, timeout=30, selfname=None):
             r = _rs_sp.run(["bash", "-c", sh.replace(_rs_path, _rs_target[0])],
                            capture_output=True, text=True, timeout=10)
             return r.stdout.strip(), r.stderr.strip(), r.returncode   # .strip(): the transport
@@ -10489,7 +10489,7 @@ try:
         def rotate(self, text=""):             # mv consolelog <dated>; touch consolelog
             self.ino, self.data = self.ino + 1, text
 
-        def read(self, _server, _user, sh, timeout=30):
+        def read(self, _server, _user, sh, timeout=30, selfname=None):
             if sh.startswith("stat -c '%i %s'"):
                 return ("%d %d" % (self.ino, len(self.data)) if self.exists else "MISSING"), "", 0
             m = _ct_re.match(r"printf B; \{ tail -c \+(\d+) \S+ 2>/dev/null \| head -c (\d+); \}; "
@@ -10513,7 +10513,7 @@ try:
 
     _ct_log, _ct_sio = _CtLog(), _CtSio()
     _ct_gs = _ct_types.SimpleNamespace(console_log="/home/mcserver/log/console/mc-console.log",
-                                       remote=object(), short_name="mcserver")
+                                       remote=object(), short_name="mcserver", lgsm_name="mcserver")
     # On _core, the defining module: the package resolves names through __getattr__, and a stub
     # set on the package itself would shadow that (the unit suite's stub-seam gate says so).
     _ct_saved = (_sm_core.read_as_game_user, _ct_sf._host_timezone_cached)
@@ -14233,16 +14233,24 @@ try:
     _GH_MARK = "ghsapwn"
     _gh_ids = {}
     with app.app_context():
-        for _gh_k, _gh_name, _gh_port in (("bad", "x; touch /tmp/%s; #" % _GH_MARK, 27881),
-                                          ("ctl", "ghsactl", 27882)):
+        # The review of the first fix added two more rows: the SCRIPT name injected through
+        # game_type (F1 — the console reads built their path from it unchecked) and the PORT
+        # stored as text (F3 — the hourly restart line interpolated it raw).
+        # The port row is a gmod server: a game with a gamedig type is one whose restart line
+        # carries the port at all (csgo has none, so the line would never show it).
+        for _gh_k, _gh_col, _gh_val, _gh_port, _gh_gt in (
+                ("bad", "short_name", "x; touch /tmp/%s; #" % _GH_MARK, 27881, "csgo"),
+                ("ctl", "short_name", "ghsactl", 27882, "csgo"),
+                ("type", "game_type", "cs; touch /tmp/%s; #" % _GH_MARK, 27883, "csgo"),
+                ("port", "port", "27884; touch /tmp/%s; true" % _GH_MARK, 27884, "gmod")):
             _gh_row = GameServer(remote_id=remote_id, name="ghsa-" + _gh_k, short_name="ghsaseed" + _gh_k,
-                                 game_type="csgo", port=_gh_port, installed=True, status="online")
+                                 game_type=_gh_gt, port=_gh_port, installed=True, status="online")
             db.session.add(_gh_row)
             db.session.commit()
             _gh_ids[_gh_k] = _gh_row.id
             # Past @validates, exactly as a restored or hand-edited database would be.
-            db.session.execute(_gh_sql("UPDATE game_server SET short_name = :n WHERE id = :i"),
-                               {"n": _gh_name, "i": _gh_row.id})
+            db.session.execute(_gh_sql("UPDATE game_server SET %s = :n WHERE id = :i" % _gh_col),
+                               {"n": _gh_val, "i": _gh_row.id})
             db.session.commit()
     _gh_sent, _gh_sent_lock = [], _gh_thr.Lock()
 
@@ -14284,7 +14292,8 @@ try:
                              "/api/server/%d/game-config", "/api/server/%d/alerts",
                              "/api/server/%d/mods", "/api/server/%d/browse",
                              "/api/server/%d/file?path=a.cfg", "/api/server/%d/cron",
-                             "/api/server/%d/log-timestamps", "/server/%d", "/server/%d/files"):
+                             "/api/server/%d/log-timestamps", "/server/%d", "/server/%d/files",
+                             "/api/console/%d"):
                 _gh_url = _gh_path % _gh_id if "%d" in _gh_path else _gh_path
                 _gh_r = _gh_c.get(_gh_url)
                 _gh_status[(_gh_k, _gh_url)] = (_gh_r.status_code, _gh_r.get_data(as_text=True)[:400])
@@ -14300,13 +14309,29 @@ try:
             _gh_mon._monitor_pass()
         _gh_mon._refresh_player_counts(app)
         _gh_mon._record_metric_samples(app)
+        # The console POLLER's tick (review F1): it runs every two seconds for any console someone
+        # has open, reading a path built from the row's game_type. First sight is a stat read.
+        import types as _gh_types
+        import panel.routes.server_files as _gh_sf
+        from panel.core.panel_state import _console_offsets as _gh_coffs
+        _gh_tick_sent = {}
+        for _gh_k in ("type", "ctl"):
+            _gh_coffs.pop(_gh_ids[_gh_k], None)
+            with _gh_sent_lock:
+                _gh_before = len(_gh_sent)
+            with app.app_context():
+                _gh_sf._console_tick(app, _gh_types.SimpleNamespace(emit=lambda *a, **k: None),
+                                     db.session.get(GameServer, _gh_ids[_gh_k]), _gh_ids[_gh_k])
+            with _gh_sent_lock:
+                _gh_tick_sent[_gh_k] = _gh_sent[_gh_before:]
+            _gh_coffs.pop(_gh_ids[_gh_k], None)
         # Retry install takes both names from the stored row — the path a restored backup feeds.
         with app.app_context():
             db.session.execute(_gh_sql("UPDATE game_server SET status='failed', installed=0, "
-                                       "install_retryable=1, install_error='' WHERE id IN (:a, :b)"),
-                               {"a": _gh_ids["bad"], "b": _gh_ids["ctl"]})
+                                       "install_retryable=1, install_error='' WHERE id IN (:a, :b, :c)"),
+                               {"a": _gh_ids["bad"], "b": _gh_ids["ctl"], "c": _gh_ids["type"]})
             db.session.commit()
-        for _gh_k in ("bad", "ctl"):
+        for _gh_k in ("bad", "ctl", "type"):
             _gh_r = _gh_c.post("/servers/%d/retry-install" % _gh_ids[_gh_k])
             _gh_status[(_gh_k, "retry-install")] = (_gh_r.status_code, _gh_r.get_data(as_text=True)[:400])
         _gh_quiesce(_gh_threads0, "the sweep")
@@ -14320,6 +14345,20 @@ try:
     check("GHSA-hh39 smoke: no command built for the injected row carries its payload — not from a "
           "page, a poll, a toggle, the monitor passes or Retry install",
           not _gh_leaked, "%d leaked, e.g. %r" % (len(_gh_leaked), _gh_leaked[:1]))
+    check("GHSA-hh39 smoke F1: the console poller's tick on a row whose game_type is a payload sends "
+          "nothing, while the control row's tick sends its stat read",
+          not _gh_tick_sent.get("type") and any("stat -c" in t and "ghsactl" in t
+                                                  for t in _gh_tick_sent.get("ctl") or ()),
+          "type=%r ctl=%r" % ([t[:80] for t in _gh_tick_sent.get("type") or ()][:1],
+                              [t[:80] for t in _gh_tick_sent.get("ctl") or ()][:1]))
+    _gh_type_cmds = [t for t in _gh_texts if "ghsaseedtype" in t]
+    check("GHSA-hh39 smoke F1: ...and the game_type row still ran what does not name its script (the "
+          "refusal is per name, not per row)",
+          any(t.startswith("sudo -u ghsaseedtype ") for t in _gh_type_cmds),
+          "%d command(s) for it: %r" % (len(_gh_type_cmds), [t[:60] for t in _gh_type_cmds[:3]]))
+    _gh_dr = _gh_status.get(("port", "/api/server/%d/daily-restart" % _gh_ids["port"]), (0, ""))
+    check("GHSA-hh39 smoke F3: the daily-restart toggle on a row whose port is text is refused, and "
+          "says why", "invalid port" in _gh_dr[1], repr(_gh_dr)[:200])
     _gh_ctl_cmds = [t for t in _gh_texts if "ghsactl" in t]
     check("GHSA-hh39 smoke: ...and the same sweep DID build commands for the control row (it reached "
           "the builders)", len(_gh_ctl_cmds) >= 5 and any(t.startswith("sudo -u ghsactl ") for t in _gh_ctl_cmds),
@@ -14335,10 +14374,10 @@ try:
     # A refusal may come back as the route's own failure status (the autostart toggle has always
     # answered a failed crontab write with 500 and its reason); what must not happen is a CRASH:
     # the generic handler's "Internal server error", or Flask's own HTML error page.
-    _gh_crashed = {k[1]: v for k, v in _gh_status.items() if k[0] == "bad" and v[0] >= 500
+    _gh_crashed = {k[1]: v for k, v in _gh_status.items() if k[0] in ("bad", "type", "port") and v[0] >= 500
                    and ("Internal server error" in v[1] or v[1].lstrip().startswith("<"))}
-    check("GHSA-hh39 smoke: nothing in the sweep crashed a request for the injected row",
-          len(_gh_status) >= 40 and not _gh_crashed, repr(_gh_crashed)[:300])
+    check("GHSA-hh39 smoke: nothing in the sweep crashed a request for the injected rows",
+          len(_gh_status) >= 80 and not _gh_crashed, repr(_gh_crashed)[:300])
     _gh_auto = _gh_status.get(("bad", "/api/server/%d/autostart" % _gh_ids["bad"]), (0, ""))
     check("GHSA-hh39 smoke: ...and a refused toggle says why, rather than failing silently",
           "invalid account or script name" in _gh_auto[1], repr(_gh_auto)[:200])
@@ -14349,8 +14388,9 @@ try:
         # Raw, like the insert, and the samples the metrics pass wrote go with them: the ORM's
         # after_delete prune does not see a raw DELETE.
         for _gh_tbl, _gh_col in (("metric_sample", "server_id"), ("game_server", "id")):
-            db.session.execute(_gh_sql("DELETE FROM %s WHERE %s IN (:a, :b)" % (_gh_tbl, _gh_col)),
-                               {"a": _gh_ids["bad"], "b": _gh_ids["ctl"]})
+            db.session.execute(_gh_sql("DELETE FROM %s WHERE %s IN (:a, :b, :c, :d)" % (_gh_tbl, _gh_col)),
+                               {"a": _gh_ids["bad"], "b": _gh_ids["ctl"], "c": _gh_ids["type"],
+                                "d": _gh_ids["port"]})
         db.session.commit()
 
 except Exception:

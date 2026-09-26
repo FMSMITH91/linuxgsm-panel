@@ -9180,11 +9180,13 @@ check("install.sh: PANEL_TERMINAL_SUDO=0 removes the grant again",
 _shutil.rmtree(_sud_dir6, ignore_errors=True)
 
 # ── the terminal's ssh argv cannot be turned into ssh OPTIONS ─────────────────────────────────
-# ssh has no `--` to end its options, so an argv element that begins with `-` is read as one, and
-# `server.host` is stored data an admin types. HOST_RE does NOT stop this on its own — `-o` and
-# `--` both match it. What makes it safe is that the destination is always `user@host` and
-# LINUX_USER_RE forces the username to start with a letter or underscore, so the element can never
-# begin with a dash. That is a property, not a comment, so it is driven here with hostile hosts.
+# An argv element that begins with `-` is read by ssh as an option, and `server.host` and
+# `server.username` are stored data. This used to rest on the ROUTE rules (LINUX_USER_RE forcing
+# the username to start with a letter, so `user@host` never began with a dash) — which a row
+# LOADED from the database never passed through (GHSA-hh39-76g3-wxcx review, F4). Now the
+# destination is _core.ssh_destination's, which REFUSES a host or login that is not a plain name,
+# and it sits after `--`. Driven here with hostile hosts; tests/unit/part07.py drives the login and
+# the other three ssh argvs.
 _tsm6 = _il6.import_module("panel.ops.terminal_session")
 
 
@@ -9203,21 +9205,25 @@ _core6 = _il6.import_module("panel.ops.ssh_manager._core")
 _real_resolve6 = _core6._resolve_ts_host
 _core6._resolve_ts_host = lambda srv: srv.host
 try:
-    _hostile6 = ["-oProxyCommand=id", "--", "-o", "-F/tmp/evil", "-E", "1.2.3.4", "box.ts.net"]
+    _hostile6 = ["-oProxyCommand=id", "--", "-o", "-F/tmp/evil", "-E", "a b", "h;id", "h\n"]
     _bad6 = []
     for _h6 in _hostile6:
+        try:
+            _bad6.append((_h6, _tsm6._ssh_argv(_HostileRemote6(_h6))))
+        except _core6.UnsafeSshDestination:
+            pass
+        except Exception as _e6:            # refused, but not by the check this is about
+            _bad6.append((_h6, repr(_e6)))
+    check("terminal: a hostile remote host is refused — never handed to ssh", not _bad6,
+          "built an argv (or failed some other way) for: %r" % (_bad6,))
+    _good6 = []
+    for _h6 in ("1.2.3.4", "box.ts.net", "fd7a:115c:a1e0::1"):
         _argv6 = _tsm6._ssh_argv(_HostileRemote6(_h6))
-        # Everything after the fixed option block is data. None of it may look like an option.
-        _tail6 = _argv6[len(_argv6) - 1:]
-        if any(_e.startswith("-") for _e in _tail6):
-            _bad6.append((_h6, _argv6))
-        if not _argv6[-1].startswith("root@"):
-            _bad6.append((_h6, _argv6))
-    check("terminal: a hostile remote host cannot become an ssh option", not _bad6,
-          "ssh would parse the destination as an option for: %r" % (_bad6,))
-    check("terminal: ...and the check above actually built something",
-          _tsm6._ssh_argv(_HostileRemote6("box.ts.net"))[0] == "ssh",
-          "argv[0] is not ssh — this gate is asking about the wrong thing")
+        # Everything after `--` is data to ssh, and the destination is the last element.
+        if _argv6[0] != "ssh" or _argv6[-2:] != ["--", "root@" + _h6]:
+            _good6.append(_argv6)
+    check("terminal: ...while a plain host still gets its argv, the destination after `--`",
+          not _good6, "argv(s): %r" % (_good6,))
     # The port is stringified through int(), so a non-numeric port cannot add an argument either.
     _p6 = _HostileRemote6("box.ts.net")
     _p6.port = "22; rm -rf /"

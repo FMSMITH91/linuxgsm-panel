@@ -1549,21 +1549,35 @@ _register_sample_pruning()
 # exists for. Refusing at the builder costs only the bad row's own commands.
 _SHELL_IDENT_ON_LOAD = {"GameServer": ("short_name", "game_type"),
                         "RemoteServer": ("username", "linuxgsm_user")}
+# Ports too, held to their TYPE — what backup.py's restore check holds them to, and for the same
+# reason: SQLite stores whatever a row was written with in an INTEGER column, and SQLAlchemy hands
+# TEXT back as a str. A port goes into commands (the hourly restart line, the ssh `-p`), and the
+# builders now refuse one that is not a number (_core.cron_port, _core._ssh_port_arg). The RANGE
+# _validate_port also checks is not repeated: a row from before it may hold a 0.
+_PORT_ON_LOAD = {"GameServer": ("port", "query_port"), "RemoteServer": ("port",)}
 _flagged_on_load = set()
 
 
+def _load_value_ok(key, val, ports):
+    if key in ports:
+        return val is None or (isinstance(val, int) and not isinstance(val, bool))
+    return not val or (isinstance(val, str) and bool(_SHELL_IDENT_RE.match(val)))
+
+
 def _flag_unsafe_idents_on_load(target, _context=None):
-    for key in _SHELL_IDENT_ON_LOAD.get(type(target).__name__, ()):
+    name = type(target).__name__
+    ports = _PORT_ON_LOAD.get(name, ())
+    for key in _SHELL_IDENT_ON_LOAD.get(name, ()) + ports:
         val = target.__dict__.get(key)       # never getattr: that could load a deferred column
-        if not val or (isinstance(val, str) and _SHELL_IDENT_RE.match(val)):
+        if _load_value_ok(key, val, ports):
             continue
-        mark = (type(target).__name__, target.__dict__.get("id"), key, str(val)[:80])
+        mark = (name, target.__dict__.get("id"), key, str(val)[:80])
         if mark in _flagged_on_load or len(_flagged_on_load) >= 1000:
             continue
         _flagged_on_load.add(mark)
-        _log.warning("%s #%s has a %s that is not a plain name (%r); the panel refuses every "
-                     "command it would build from it until the row is corrected",
-                     mark[0], mark[1], key, mark[3])
+        _log.warning("%s #%s has a %s that is not a plain %s (%r); the panel will not put it "
+                     "into any command until the row is corrected",
+                     mark[0], mark[1], key, "number" if key in ports else "name", mark[3])
 
 
 def _register_load_flagging():

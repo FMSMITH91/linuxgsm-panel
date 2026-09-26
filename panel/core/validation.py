@@ -32,7 +32,12 @@ INSTANCE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,30}\Z")   # valid Linux usern
 LINUX_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}\Z")     # for linuxgsm_user / ssh user
 # Hostname / IPv4 / IPv6 / Tailscale MagicDNS — no HTML or shell metacharacters, so a
 # stored host can't inject markup where it's shown (e.g. the dashboard connect address).
-HOST_RE = re.compile(r"^[A-Za-z0-9._:\[\]-]{1,255}\Z")
+# Never a leading dash: the host is an ARGUMENT to the system ssh client (the Tailscale transport,
+# the terminal, the download streams), and ssh reads an argument that begins with `-` as an
+# option — `-oProxyCommand=…` runs a command. No hostname, IPv4 or IPv6 address starts with one.
+# ssh_manager._core.ssh_destination holds every stored host to this again before it is used,
+# because a row LOADED from the database never passed through the route that checks it here.
+HOST_RE = re.compile(r"^[A-Za-z0-9._:\[\]][A-Za-z0-9._:\[\]-]{0,254}\Z")
 # Free-text display labels (e.g. a remote's name): allow spaces/punctuation but reject the
 # characters that would let a stored label break out of HTML or a JS string when it's shown
 # in the UI's client-side rendering. Defense-in-depth alongside output encoding.

@@ -694,14 +694,17 @@ def _open_paramiko(sess, server, cols, rows):
 def _ssh_argv(server):
     """The ssh command line for a tailscale remote. Pure, so the property below can be tested.
 
-    ssh has no `--` to end its options, so an argv element that BEGINS with `-` is read as one —
-    and `server.host` is stored data. HOST_RE permits a leading dash (`-o` and `--` both match
-    it), so the thing that makes this safe is not the host pattern: it is that the destination is
-    always `user@host`, and LINUX_USER_RE forces the username to start with a letter or
-    underscore. The element therefore never begins with `-` whatever the host says.
+    ssh reads an argv element that BEGINS with `-` as an option, and `server.username` and
+    `server.host` are stored data. This used to rest on the ROUTE rules alone — LINUX_USER_RE
+    forcing the username to start with a letter, so `user@host` could never begin with a dash —
+    but a row LOADED from the database never passed through a route (GHSA-hh39-76g3-wxcx): a
+    username of `-oProxyCommand=<cmd>` ran <cmd> on the panel's host the moment a superadmin opened
+    this terminal. So the destination comes from _core.ssh_destination, which refuses a login or
+    host that is not a plain name (raises UnsafeSshDestination, a ValueError, which open() reports
+    as "could not start a shell"), and sits after `--`, where ssh has stopped reading options.
 
     That is a property worth pinning rather than asserting in a comment, so tests/unit drives this
-    function with hostile hosts and checks every element.
+    function with hostile logins and hosts.
     """
     # The SAME resolver the non-interactive tailscale transport uses. A second copy of MagicDNS
     # handling would be one more place to get a hostname subtly wrong.
@@ -711,8 +714,8 @@ def _ssh_argv(server):
     return ["ssh", "-tt",
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "ConnectTimeout=20",
-            "-p", str(int(getattr(server, "port", 22) or 22)),
-            "%s@%s" % (user, host)]
+            "-p", _core._ssh_port_arg(server),
+            _core.SSH_DEST_SEP, _core.ssh_destination(user, host)]
 
 
 def _open_tailscale(sess, server, cols, rows):
@@ -721,13 +724,16 @@ def _open_tailscale(sess, server, cols, rows):
     `-tt` forces a pty even though our stdin is not one from ssh's point of view, which is what
     makes an interactive shell possible at all here.
     """
+    # The argv FIRST: _ssh_argv refuses a stored login or host it will not hand to ssh, and a
+    # refusal raised after openpty() would leak both descriptors of the pair, once per attempt.
+    argv = _ssh_argv(server)
     master, slave = pty.openpty()
     env = dict(os.environ)
     env["TERM"] = "xterm-256color"
-    argv = _ssh_argv(server)
     try:
         proc = subprocess.Popen(  # nosec B603  # nosemgrep - see _ssh_argv: a list, no shell, and
-            # the one element carrying stored data cannot be read by ssh as an option.
+            # the elements carrying stored data are checked and come after `--`, so ssh cannot read
+            # them as options.
             argv, stdin=slave, stdout=slave, stderr=slave, start_new_session=True, env=env)
     except Exception:
         os.close(master)      # argv[0] is "ssh": a host without openssh-client leaks a pair each try

@@ -475,6 +475,14 @@ def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, p
     # through /bin/sh as the account. _rewrite_crontab checks the account; this checks the script.
     if not _core.game_idents_ok(user, selfname):
         return False
+    # ...and the port the restart check is rewritten with: text stored in GameServer.port would be
+    # text in the hourly line (see _core.set_daily_restart). Checked before the crontab is read, so
+    # a refused pass costs nothing and changes nothing.
+    try:
+        _core.cron_port(port)       # validated, not converted: None vs "" still means what it did
+    except ValueError:
+        _core._log.warning("cron upgrade: refusing a port that is not a number for %s", user)
+        return False
     base = f"/home/{user}/{selfname}"
     flag = f"/home/{user}/.restart-pending"
     simple_cores = {f"{base} {c}" for c in ("start", "monitor", "mods-update", "update", "update-lgsm")}
@@ -852,10 +860,16 @@ def stream_game_backup(server, user, name, chunk=262144):
             argv = (_priv.helper_argv("game-backup-read", [user, name])
                     if _core.helper_present() else _as_user_argv(user, "cat", path))
         else:
-            host = _core._resolve_ts_host(server)
-            argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
-                    "-p", str(server.port or 22), f"{server.username}@{host}",
-                    _core.game_user_exec_cmd(user, ["cat", path])]
+            # The login and host are stored data handed to ssh as an argument — see
+            # _core.ssh_destination. A refusal ends the download empty, like every other here.
+            try:
+                argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
+                        "-p", _core._ssh_port_arg(server), _core.SSH_DEST_SEP,
+                        _core.ssh_destination(server.username, _core._resolve_ts_host(server)),
+                        _core.game_user_exec_cmd(user, ["cat", path])]
+            except (TypeError, ValueError):
+                _core._log.warning("backup download: refusing the host's stored ssh login or address")
+                return
         p = subprocess.Popen(argv, stdout=subprocess.PIPE)  # nosec B603  # nosemgrep - argv list, no shell; the remote path is _quote()d above
         try:
             while True:

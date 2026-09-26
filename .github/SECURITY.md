@@ -223,21 +223,48 @@ The rule now:
   which also runs the command. Both refuse — raise `UnsafeGameAccount` before any text is built — a
   name `_core.game_idents_ok` rejects: the model's shell-identifier charset, 1–64 characters, never
   `root`. Refusing, not only quoting: a quoted name is still a name sudo resolves, and `#0` is uid 0.
-* **A body that names the LinuxGSM script passes `selfname=`** to the builder, or its function checks
-  the script name first. The builder can check only the names it is given, and the body is built
-  before it is called. The crontab writers check it too: a cron line runs through `/bin/sh`.
+* **A body that names the LinuxGSM script passes `selfname=`** to the builder — or to
+  `read_as_game_user`, which forwards it — or its function checks the script name first. The builder
+  can check only the names it is given, and the body is built before it is called. "Names the
+  script" includes a path BUILT from it: `GameServer.console_log` is
+  `…/log/console/<lgsm_name>-console.log` and `lgsm_name` is `<game_type>server`, so the console
+  poller's reads pass `selfname=gs.lgsm_name` (the first version of this fix missed them: a loaded
+  `game_type` ran from the poller every two seconds while a console was open). The crontab writers
+  check it too: a cron line runs through `/bin/sh`.
+* **A port in a command is a number.** `_core.cron_port` is `int(port)` or a refusal, and the hourly
+  restart-when-empty line is built through it: `GameServer.port` is an INTEGER column, but SQLite
+  keeps TEXT in it for a row written that way, and that text was interpolated raw into the line.
 * **A refusal is the caller's own "could not run"**: `GAME_ACCOUNT_REFUSED`, `("", "invalid account
   or script name", 1)`, for the `(out, err, rc)` callers, and None / unknown for the readers — never
   an empty, healthy-looking answer.
 * Unit gates over `panel/**/*.py` (tests/unit/part07.py) fail the build on a `sudo -u` built outside
   those two, on one built with an unquoted value, on a builder that stops checking, and on a script
-  name dropped on the way in; each has a control that proves it can fail.
+  name dropped on the way in — including one that arrives through a GameServer attribute
+  (`game_type`, `lgsm_name`, `console_log`, `server_script`) and a local assigned from it, not only a
+  variable named `selfname`; each has a control that proves it can fail.
+
+**The same rule for the system `ssh` client.** Four argvs hand a Tailscale host's stored login and
+address to `ssh` — the transport every command goes through, the backup and file downloads, and the
+web terminal — and ssh reads any argument that begins with `-` as an option: a login of
+`-oProxyCommand=<cmd>` ran `<cmd>` on the panel's host. Each takes its destination from `_core.ssh_destination`, which refuses a login that is
+not a shell identifier and a host that fails `validation.HOST_RE` (which no longer admits a leading
+dash), and puts it after `--`, where ssh stops reading options — for the remote command after it
+too. The `-p` value is an int. A refusal spawns nothing, and a unit gate fails the build on an ssh
+command line whose destination does not come from there.
 
 At the data layer, **a panel backup restore re-checks the archive's database** — every column
 `models.py` guards with `_validate_shell_ident` (a unit check keeps the two lists equal), decrypting
 the encrypted ones with the archive's own key, and that every port is stored as a number — before the
-pre-restore safety copy, the staging or the swap, and refuses the restore naming the row. A row that
-is LOADED with such a name is logged once, naming it. It is deliberately not raised on: that would
+pre-restore safety copy, the staging or the swap, and refuses the restore naming the row. It reads the
+database the way SQLite will serve it to the panel: tables and columns are RESOLVED, case-insensitively
+as SQLite does (an archive spelling them `GAME_SERVER` / `SHORT_NAME` skipped the first version of the
+check while the ORM read it anyway), and rows come from the table itself. And it refuses a database
+whose shape could change or hide a value after the check has read it: one that fails SQLite's
+`integrity_check` (an index that disagrees with its table answers covering reads with other values),
+any trigger, view or virtual table (no version of the panel creates one), a validated column that is
+GENERATED from others, and a validated table missing one of those columns (every one has existed since
+the first commit, so no genuine backup lacks it). A row that is LOADED with such a name, or with a
+port that is not a number, is logged once, naming it. It is deliberately not raised on: that would
 fail every query touching the row — the dashboard, and the Remove button that is the way out — so one
 bad row would take the panel down; and it is not rewritten, which would silently change the account
 the panel acts as.

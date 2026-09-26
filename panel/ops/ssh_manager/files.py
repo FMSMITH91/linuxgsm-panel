@@ -966,9 +966,16 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
                 else:
                     argv = cron._as_user_argv(user, "cat", "--", ap)
             else:
-                host = _core._resolve_ts_host(server)
-                argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
-                        "-p", str(server.port or 22), f"{server.username}@{host}", shell]
+                # The login and host are stored data handed to ssh as an argument — see
+                # _core.ssh_destination. A refusal ends the download empty, as a refused path does.
+                try:
+                    argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
+                            "-p", _core._ssh_port_arg(server), _core.SSH_DEST_SEP,
+                            _core.ssh_destination(server.username, _core._resolve_ts_host(server)),
+                            shell]
+                except (TypeError, ValueError):
+                    _core._log.warning("download: refusing the host's stored ssh login or address")
+                    return
             # stdin is a pipe only for the SSH form, which expects the path there. The local forms
             # take it in argv (helper) or already resolved (the pre-helper fallback), and get
             # DEVNULL -- never the panel's own stdin, which a helper verb would read to EOF.

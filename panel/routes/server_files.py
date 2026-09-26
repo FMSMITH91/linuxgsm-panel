@@ -385,9 +385,12 @@ def _console_tick(app, socketio, gs, server_id):
     # LinuxGSM's `mv` and its `touch` there is briefly no file, and calling that "empty" would
     # record a bogus rotation. An unparseable reply (a failed read on a non-raising transport
     # comes back as "") is not a measurement either — try again next tick.
+    # selfname=: the path names the LinuxGSM script (console_log is built from lgsm_name, which is
+    # the loaded game_type), so the builder has to check it — see _core.read_as_game_user.
     st_out, _, _ = _sm.read_as_game_user(
         remote, gs.short_name,
-        f"stat -c '%i %s' {log_path} 2>/dev/null || echo MISSING", timeout=5)
+        f"stat -c '%i %s' {log_path} 2>/dev/null || echo MISSING", timeout=5,
+        selfname=gs.lgsm_name)
     parts = (st_out or "").split()
     if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
         return
@@ -416,7 +419,7 @@ def _console_tick(app, socketio, gs, server_id):
     out, _, rc = _sm.read_as_game_user(
         remote, gs.short_name,
         f"printf B; {{ tail -c +{pos + 1} {log_path} 2>/dev/null | head -c {diff}; }}; printf E",
-        timeout=5,
+        timeout=5, selfname=gs.lgsm_name,
     )
     # The frame is the POSITIVE TOKEN that this read ran at all. tailscale and local do not
     # raise: a 64KB read that exceeds the 5s timeout returns ("", "SSH command timed out", -1)
@@ -1260,7 +1263,7 @@ def register(app, supervise):
                 # not exist (LinuxGSM's start is `mv` then `touch`) came back framed, rc 0, empty —
                 # "readable, and nothing in it" — and Load older wiped the console on that.
                 f"printf B; tail -{want} {log_path} 2>/dev/null; r=$?; printf E; exit $r",
-                timeout=15)
+                timeout=15, selfname=gs.lgsm_name)
             framed = rc == 0 and (out or "").startswith("B") and (out or "").endswith("E")
             readable = framed
             body = out[1:-1] if framed else ""

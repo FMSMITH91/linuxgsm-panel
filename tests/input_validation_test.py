@@ -445,8 +445,39 @@ try:
                follow_redirects=False)
         check("/remotes/add accepts auth_method=key (positive control)",
               remotes_count() == before + 1, "rows %d -> %d" % (before, remotes_count()))
+        # A host that begins with a dash is an ssh OPTION to the system ssh client the Tailscale
+        # transport, the downloads and the terminal run (GHSA-hh39-76g3-wxcx review, F4). HOST_RE
+        # already refused `=`, `/` and spaces, so these are the dash-only shapes it ACCEPTED:
+        # `--`, and a bare flag like `-A` (agent forwarding). The connection test is stubbed to
+        # pass, as above, so the host rule is the only thing that can refuse them.
+        for _dash_i, _dash in enumerate(("--", "-A", "-v4")):
+            before = remotes_count()
+            r = c.post("/remotes/add", data={"name": "iv-dash-%d" % _dash_i, "host": _dash,
+                                             "ssh_user": "root", "ssh_port": "22",
+                                             "auth_method": "tailscale", "credential": "",
+                                             "setup_type": "existing"}, follow_redirects=False)
+            check("/remotes/add host=%r writes no host row" % _dash[:18],
+                  r.status_code < 500 and remotes_count() == before,
+                  "status %d, rows %d -> %d" % (r.status_code, before, remotes_count()))
     finally:
         _rr.ssh_test_connection = _saved_test
+    for _dash in ("-A", "--"):
+        _was = stored_remote_fields()
+        r = c.post("/remotes/%d/edit" % remote_id,
+                   data={"name": "iv-host", "host": _dash, "ssh_user": "root", "ssh_port": "2222",
+                         "auth_method": "key"}, follow_redirects=False)
+        check("/remotes/edit host=%r leaves the stored host alone" % _dash[:18],
+              r.status_code < 500 and stored_remote_fields()[1] == _was[1],
+              "status %d, host %r -> %r" % (r.status_code, _was[1], stored_remote_fields()[1]))
+    # Positive control: the same edit with a plain host DOES change it (then it is put back).
+    _was = stored_remote_fields()
+    for _h in ("192.0.2.14", _was[1]):
+        c.post("/remotes/%d/edit" % remote_id,
+               data={"name": "iv-host", "host": _h, "ssh_user": "root", "ssh_port": "2222",
+                     "auth_method": "key"}, follow_redirects=False)
+        if _h == "192.0.2.14":
+            check("/remotes/edit accepts a plain host (positive control)",
+                  stored_remote_fields()[1] == "192.0.2.14", "host is %r" % (stored_remote_fields()[1],))
 
     # ── /remotes/<id>/edit — a BLANK field is not an edit ────────────────────────────────────
     # `.get(key, default)` only falls back when the key is ABSENT, and this form posts all three

@@ -13,6 +13,7 @@ import threading
 import time
 import paramiko
 from panel.core.config import decrypt_secret
+from panel.core.validation import HOST_RE as _HOST_RE
 from panel.security import privileged as _priv
 # ── Per-remote caches, and forgetting a host that no longer exists ────────────────────────────
 # Several modules in this package memoise an answer PER HOST, keyed by RemoteServer.id. SQLite
@@ -880,6 +881,46 @@ def _ssh_mux_opts():
             "-o", "ServerAliveCountMax=3"]
 
 
+# ── The destination of every system-ssh argv ──────────────────────────────────────────────────
+# GHSA-hh39-76g3-wxcx, the same bug class one layer down. RemoteServer.username and .host are
+# stored data, and four places hand them to the system ssh client as `<username>@<host>`: the
+# Tailscale transport below, the backup download (cron.stream_game_backup), the file download
+# (files.stream_path) and the web terminal (terminal_session._ssh_argv). ssh reads ANY argument
+# that begins with `-` as an option, so a username of `-oProxyCommand=<cmd>` ran <cmd> on the
+# panel's host as the panel's account, before a connection was even attempted. The model's
+# @validates forbids that on ASSIGNMENT; a row LOADED from the database — one written before the
+# validator, a hand edit, a restored backup — is never checked.
+#
+# So each of those argvs gets its destination from here, and this REFUSES rather than quotes:
+# there is no quoting inside an argv, only "is this an option or not". The login is held to the
+# model's own shell-identifier rule (no leading dash, no '@', ≤ 64 chars) and the host to the
+# route's hostname/IP rule (validation.HOST_RE, no leading dash). The `--` in SSH_DEST_SEP goes in
+# front of it as well: ssh stops reading options there, which also keeps the REMOTE COMMAND after
+# the destination from being read as one — without it, `ssh user@host -oProxyCommand=x` still runs
+# x (measured on OpenSSH 10.5 with `ssh -G`).
+class UnsafeSshDestination(ValueError):
+    """A stored SSH login or host that must not be handed to the ssh client."""
+
+
+SSH_DEST_SEP = "--"
+SSH_DEST_REFUSED = ("", "invalid ssh login or host", -1)
+
+
+def ssh_destination(user, host):
+    """`user@host` for a system-ssh argv, or raise UnsafeSshDestination. Put SSH_DEST_SEP in the
+    argv immediately before it."""
+    if not (isinstance(user, str) and _SAFE_GAME_IDENT.match(user)):
+        raise UnsafeSshDestination("invalid ssh login")
+    if not (isinstance(host, str) and _HOST_RE.match(host)):
+        raise UnsafeSshDestination("invalid ssh host")
+    return f"{user}@{host}"
+
+
+def _ssh_port_arg(server):
+    """The `-p` value: an int, never stored text. Raises ValueError."""
+    return str(int(getattr(server, "port", None) or 22))
+
+
 def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
     """Run a command over the system `ssh` binary — used for Tailscale SSH remotes,
     where auth happens at the tailscaled level (paramiko can't do it, but the ssh CLI,
@@ -889,15 +930,22 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
     # ROOT, not the remote's optional linuxgsm_user — see run_command for what that demotion did.
     remote_cmd = f"sudo bash -c {_quote(command)}" if use_sudo else command
     host = _resolve_ts_host(server)
-    ssh_cmd = [
-        "ssh", "-T",
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=%d" % _ssh_connect_timeout(),
-    ] + _ssh_mux_opts() + [
-        "-p", str(server.port or 22),
-        f"{server.username}@{host}", remote_cmd,
-    ]
+    try:
+        ssh_cmd = [
+            "ssh", "-T",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=%d" % _ssh_connect_timeout(),
+        ] + _ssh_mux_opts() + [
+            "-p", _ssh_port_arg(server),
+            SSH_DEST_SEP, ssh_destination(server.username, host), remote_cmd,
+        ]
+    except (TypeError, ValueError):
+        # This transport answers a failure as a tuple and never raises (a timeout is
+        # ("", "SSH command timed out", -1)): every caller reads the rc, and several run unattended.
+        _log.warning("refusing an ssh command: the host's stored login, address or port is not "
+                     "one ssh can be given safely")
+        return SSH_DEST_REFUSED
     try:
         # errors="replace" like the other two transports — a game server's bytes are not
         # necessarily valid UTF-8, and a strict decode would blank the whole result (see _run_local).
@@ -1327,8 +1375,15 @@ def enrol_game_user(server, user):
     return None
 
 
-def read_as_game_user(server, user, sh, timeout=30):
+def read_as_game_user(server, user, sh, timeout=30, selfname=None):
     """Run a READ-ONLY shell snippet as a game account, and return (out, err, rc).
+
+    `selfname` is the LinuxGSM script name, and a caller whose `sh` names it MUST pass it — the
+    console reads do, because GameServer.console_log is `…/log/console/<lgsm_name>-console.log`
+    and lgsm_name is `<game_type>server`, both loaded from the database. Without it the account
+    was checked and the script name went into the body unchecked (GHSA-hh39-76g3-wxcx, found in
+    review of the first fix): game_type="mc; <cmd>; #" ran <cmd> from the console poller every two
+    seconds for as long as anyone had that console open.
 
     For the reads that genuinely need that account's permissions rather than root: a game user's
     home is 0750, so the panel user cannot traverse it, and the console log lives three levels
@@ -1342,7 +1397,7 @@ def read_as_game_user(server, user, sh, timeout=30):
     root operation. `sh` is panel-built text, never user input; `user` is validated here for the
     reason run_as_game_user gives at length.
     """
-    return shell_as_game_user(server, user, sh, timeout=timeout)
+    return shell_as_game_user(server, user, sh, timeout=timeout, selfname=selfname)
 
 
 def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=None,
@@ -2110,6 +2165,14 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     selfname = selfname or user
     if not game_idents_ok(user, selfname):      # the lines below name the script; see set_autostart
         return False, GAME_ACCOUNT_REFUSED[1]
+    # The port goes into the hourly cron line too (daily_restart_check_cmd), which /bin/sh runs as
+    # the account. GameServer.port is an INTEGER column, but SQLite stores whatever a row was
+    # written with, and a LOADED row is never checked — so text there was text in the crontab.
+    try:
+        port = cron_port(port)
+    except ValueError:
+        _log.warning("daily restart: refusing a port that is not a number: %r", str(port)[:40])
+        return False, "invalid port"
     flag = f"/home/{user}/.restart-pending"
     gdtype = GAMEDIG_TYPE.get(game_type or "", "")
     # Crontab-only (no separate script file — file writes inside a `sudo bash -c`
@@ -2125,6 +2188,21 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     if enabled:
         return _rewrite_crontab(server, user, grep_args, [touch_line, check_line])
     return _rewrite_crontab(server, user, grep_args, [], extra_pre=f"rm -f {flag}; ")
+
+
+def cron_port(port):
+    """`port` as the number a cron or shell line may carry: None when unset, else int(port) — the
+    cast every gamedig reader in cron.py already makes. Raises ValueError for anything int()
+    refuses ("25565; <cmd>; true"), and for a bool or a fractional float, which int() would quietly
+    turn into some other number."""
+    if port is None or port == "":
+        return None
+    if isinstance(port, bool) or (isinstance(port, float) and not port.is_integer()):
+        raise ValueError("not a port number")
+    try:
+        return int(port)
+    except (TypeError, ValueError):
+        raise ValueError("not a port number") from None
 
 
 def daily_restart_check_cmd(user, selfname, gdtype, host, port):
@@ -2151,6 +2229,9 @@ def daily_restart_check_cmd(user, selfname, gdtype, host, port):
     # at cron-writing time that the game has no gamedig type or no port, there is no reading to
     # fail, and restarting at the daily time is the behaviour the operator asked for.
     if gdtype and port:
+        # An int, or ValueError — never stored text in a line /bin/sh runs (set_daily_restart and
+        # cron.upgrade_managed_cron_tracking refuse such a port before they get here).
+        port = cron_port(port)
         jqf = 'if (.players|type=="array") then (.players|length) else empty end'
         # gamedig by the PATH above, not cron's: see CRON_TOOL_PATH.
         getp = (f"{gamedig_cron_call()}--type {gdtype} {host}:{port} 2>/dev/null "

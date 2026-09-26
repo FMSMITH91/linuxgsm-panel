@@ -907,6 +907,33 @@ regardless of this file — this changelog is for humans.
   before the safety copy or anything else is touched — and a row that is already in the database
   is named in the log once, instead of every action on it failing with no reason given. Unit gates
   fail the build on any `sudo -u` built outside that one place.
+
+  A review of that fix found four more ways in, all closed here:
+  - **The console read the script name unchecked.** The live console's log path is built from the
+    server's game type, and the console reads checked only the account, so a game type of
+    `mc; <cmd>; #` ran `<cmd>` every two seconds while anyone had that console open, and when its
+    history was loaded. Those reads now check the script name too, and the unit gate that looks for
+    a script name dropped on the way into a command now follows it through the server's own
+    attributes and the variables built from them, not only through a variable called `selfname`.
+  - **The backup check could be sidestepped by spelling.** SQLite does not care about the case of
+    table and column names, and the check looked them up exactly: a backup whose database spelled
+    the table `GAME_SERVER` or the column `SHORT_NAME` was not checked at all, and the panel then read
+    it as usual. The check now reads the database as SQLite serves it. It also refuses a backup whose
+    database could change a value after the check, or hide one from it: a trigger, a view, a column
+    computed from other columns, an index that disagrees with its table (SQLite's own integrity check
+    must pass), or a server or host table missing one of the checked columns. No version of the
+    panel has written any of these, so no genuine backup is refused for them.
+  - **A port stored as text reached the hourly restart line.** The restart-when-empty cron line was
+    the one place that put a server's port into a command without converting it to a number first;
+    it now refuses one that is not a number, as does the daily pass that rewrites old lines. A port
+    stored as text is also named in the log when the row is read.
+  - **A host's SSH login could become an ssh option.** For a host connected over Tailscale, the
+    panel runs the system `ssh` client with `<login>@<host>` — for every command, the web terminal
+    and file and backup downloads — and a stored login of `-oProxyCommand=<cmd>` ran `<cmd>` on the
+    panel's host.
+    The login and address are now checked before either is handed to ssh, and they come after `--`,
+    where ssh stops reading options. The add/edit host form no longer accepts an address that begins
+    with a dash.
 - **pip itself is hash-locked.** The installer upgraded the panel's venv with
   `pip install --upgrade pip`: whatever PyPI served that day, unchecked, the first thing the venv
   ran on every install and on every update that reinstalled dependencies. pip now comes from

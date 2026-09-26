@@ -44,6 +44,15 @@ _GH_BUILDER_FILE = os.path.join("panel", "ops", "ssh_manager", "_core.py")
 _GH_VALIDATORS = {"_require_game_idents", "game_idents_ok", "_idents_ok"}
 _GH_HELPER_CALLS = {"game_user_cmd", "game_user_exec_cmd", "shell_as_game_user"}
 _GH_SELF_NAMES = {"selfname", "lgsm_name"}
+# ...and where a script name comes from WITHOUT one of those names: a GameServer's own attributes.
+# console_log is `/home/<account>/log/console/<lgsm_name>-console.log`, lgsm_name is
+# `<game_type>server`, and all of it is loaded from the database. The first version of this gate
+# keyed on the two local NAMES only, so `log_path = gs.console_log` handed to read_as_game_user
+# with no selfname= was invisible to it — the console poller ran game_type unchecked (review F1).
+_GH_SELF_ATTRS = {"lgsm_name", "game_type", "console_log", "server_script"}
+# Every helper that runs panel-built TEXT as a game account, and so must be told the script name
+# when the text carries one. read_as_game_user was missing from the first version.
+_GH_TEXT_RUNNERS = {"shell_as_game_user", "read_as_game_user", "game_user_cmd", "game_user_exec_cmd"}
 
 
 def _gh_callee(call):
@@ -134,21 +143,72 @@ def _gh_enclosing(funcs, line):
     return best
 
 
+def _gh_names_script(node, tainted):
+    """Does expression `node` carry a script name: a tainted local, or a GameServer attribute?"""
+    return any((isinstance(x, _gh_ast.Name) and x.id in tainted)
+               or (isinstance(x, _gh_ast.Attribute) and x.attr in _GH_SELF_ATTRS)
+               for x in _gh_ast.walk(node))
+
+
+# Calls whose RESULT is still the text they were handed. Any other call makes a new value:
+# `vals = lgsm_get_values(server, user, selfname, …)` is config values, not the script name.
+_GH_TEXT_CALLS = {"str", "strip", "lstrip", "rstrip", "lower", "upper", "replace", "format", "join",
+                  "_quote", "quote"}
+
+
+def _gh_carries(node, tainted):
+    """Does the VALUE of expression `node` carry the script name as text?"""
+    if isinstance(node, _gh_ast.Name):
+        return node.id in tainted
+    if isinstance(node, _gh_ast.Attribute):
+        return node.attr in _GH_SELF_ATTRS or _gh_carries(node.value, tainted)
+    if isinstance(node, _gh_ast.Call):
+        if _gh_carries(node.func, tainted):            # a method of a value that carries it
+            return True
+        return _gh_callee(node) in _GH_TEXT_CALLS and any(
+            _gh_carries(a, tainted) for a in list(node.args) + [k.value for k in node.keywords])
+    return any(_gh_carries(c, tainted) for c in _gh_ast.iter_child_nodes(node))
+
+
+def _gh_tainted(func):
+    """The local names in `func` that carry the script name: selfname / lgsm_name, and every name
+    assigned from an expression whose value does (`log_path = gs.console_log`), to a fixed point."""
+    tainted, grew = set(_GH_SELF_NAMES), True
+    while grew:
+        grew = False
+        for n in _gh_ast.walk(func):
+            if isinstance(n, _gh_ast.Assign):
+                targets, value = n.targets, n.value
+            elif isinstance(n, (_gh_ast.AnnAssign, _gh_ast.AugAssign, _gh_ast.NamedExpr)):
+                targets, value = [n.target], n.value
+            else:
+                continue
+            if value is None or not _gh_carries(value, tainted):
+                continue
+            for t in targets:
+                for x in _gh_ast.walk(t):
+                    if isinstance(x, _gh_ast.Name) and x.id not in tainted:
+                        tainted.add(x.id)
+                        grew = True
+    return tainted
+
+
 def _gh_validates_before(func, line, names=None):
-    """True when `func` calls a validator at or before `line` — with one of `names` among its
-    arguments, when given."""
+    """True when `func` calls a validator at or before `line` — with one of `names` (or a
+    GameServer script attribute) among its arguments, when given."""
     for n in _gh_ast.walk(func):
         if isinstance(n, _gh_ast.Call) and _gh_callee(n) in _GH_VALIDATORS and n.lineno <= line:
             if names is None:
                 return True
-            if any(isinstance(a, _gh_ast.Name) and a.id in names for a in n.args):
+            if any(_gh_names_script(a, names) for a in n.args):
                 return True
     return False
 
 
-def _gh_interpolates_self(func):
-    """Does `func` put the LinuxGSM script name into TEXT — an f-string, a % format, a +, or the
-    tmux socket snippet?"""
+def _gh_interpolates_self(func, tainted=None):
+    """Does `func` put the LinuxGSM script name into TEXT — an f-string, a % format, a +, a
+    .format(), or the tmux socket snippet?"""
+    tainted = _gh_tainted(func) if tainted is None else tainted
     for n in _gh_ast.walk(func):
         holders = []
         if isinstance(n, _gh_ast.FormattedValue):
@@ -157,8 +217,11 @@ def _gh_interpolates_self(func):
             holders += [n.left, n.right]
         elif isinstance(n, _gh_ast.Call) and _gh_callee(n) == "_tmux_live_socket_sh":
             holders += list(n.args)
+        elif (isinstance(n, _gh_ast.Call) and isinstance(n.func, _gh_ast.Attribute)
+              and n.func.attr == "format" and isinstance(n.func.value, _gh_ast.Constant)):
+            holders += list(n.args) + [k.value for k in n.keywords]
         for h in holders:
-            if any(isinstance(x, _gh_ast.Name) and x.id in _GH_SELF_NAMES for x in _gh_ast.walk(h)):
+            if _gh_names_script(h, tainted):
                 return True
     return False
 
@@ -186,17 +249,18 @@ def _gh_scan(src, rel):
             problems.append("G2 %s: the builder does not check the account before building" % where)
     helper_calls = 0
     for n in _gh_ast.walk(tree):
-        if not (isinstance(n, _gh_ast.Call) and _gh_callee(n) in (_GH_HELPER_CALLS | {"_rewrite_crontab"})):
+        if not (isinstance(n, _gh_ast.Call) and _gh_callee(n) in (_GH_TEXT_RUNNERS | {"_rewrite_crontab"})):
             continue
         fn = _gh_enclosing(funcs, n.lineno)
         if fn is None or fn.name in _GH_BUILDERS or fn.name == "shell_as_game_user":
             continue
         if _gh_callee(n) in _GH_HELPER_CALLS:
             helper_calls += 1
-        if not _gh_interpolates_self(fn):
+        tainted = _gh_tainted(fn)
+        if not _gh_interpolates_self(fn, tainted):
             continue
-        passes_self = _gh_callee(n) in _GH_HELPER_CALLS and any(k.arg == "selfname" for k in n.keywords)
-        if not (passes_self or _gh_validates_before(fn, n.lineno, _GH_SELF_NAMES)):
+        passes_self = _gh_callee(n) in _GH_TEXT_RUNNERS and any(k.arg == "selfname" for k in n.keywords)
+        if not (passes_self or _gh_validates_before(fn, n.lineno, tainted)):
             problems.append("G3 %s:%d %s(): its body names the LinuxGSM script, and %s() is neither "
                             "given selfname= nor preceded by a check of it"
                             % (rel, n.lineno, fn.name, _gh_callee(n)))
@@ -260,6 +324,19 @@ _gh_ctl = {
     "G3 crontab line names an unchecked script": _gh_plant(
         'def f(server, user, selfname):\n'
         '    return _rewrite_crontab(server, user, "", [f"* * * * * /home/{user}/{selfname}"])\n'),
+    # The review's F1, as it was written in server_files._console_tick: no local is NAMED selfname
+    # or lgsm_name, the script name arrives through a GameServer attribute and a local.
+    "G3 console path from a GameServer attribute, via a local, to read_as_game_user": _gh_plant(
+        'def f(gs):\n'
+        '    log_path = gs.console_log\n'
+        '    return _sm.read_as_game_user(gs.remote, gs.short_name, f"tail -5 {log_path}")\n'),
+    "G3 game_type straight into the text": _gh_plant(
+        'def f(gs):\n'
+        '    return _core.shell_as_game_user(gs.remote, gs.short_name, "./%sserver x" % gs.game_type)\n'),
+    "G3 through a string method and .format()": _gh_plant(
+        'def f(server, user, gs):\n'
+        '    name = (gs.lgsm_name or "").strip()\n'
+        '    return _core.shell_as_game_user(server, user, "./{} details".format(name))\n'),
 }
 check("GHSA-hh39 gate CONTROL: every planted bad shape is caught, by the gate it belongs to",
       all(any(p.startswith(k.split()[0] + " ") for p in v) for k, v in _gh_ctl.items()),
@@ -281,9 +358,78 @@ _gh_good = {
     "a comment or docstring mentioning it": _gh_plant(
         'def f(user):\n    """`sudo -u {user} bash -c` used to be spelled here."""\n'
         '    # f"sudo -u {user}"\n    return 1\n'),
+    "the console path WITH the script name passed": _gh_plant(
+        'def f(gs):\n'
+        '    log_path = gs.console_log\n'
+        '    return _sm.read_as_game_user(gs.remote, gs.short_name, f"tail -5 {log_path}",\n'
+        '                                 selfname=gs.lgsm_name)\n'),
+    "a game_type attribute checked first": _gh_plant(
+        'def f(gs):\n'
+        '    if not _core.game_idents_ok(gs.short_name, gs.lgsm_name):\n        return None\n'
+        '    return _core.shell_as_game_user(gs.remote, gs.short_name, f"./{gs.lgsm_name} x")\n'),
+    # A call's RESULT is not the name it was handed: this is player_count_via_lgsm_query's shape,
+    # and a taint that flowed through every call argument called it a script name.
+    "config values READ with the script name are not the script name": _gh_plant(
+        'def f(server, user, selfname):\n'
+        '    vals = files.lgsm_get_values(server, user, selfname, ["port"])\n'
+        '    q = vals.get("port").strip()\n'
+        '    return _core.shell_as_game_user(server, user, "gamedig %s" % q)\n'),
 }
 check("GHSA-hh39 gate CONTROL: ...and the correct shapes pass (the gate is not a blanket no)",
       not any(_gh_good.values()), {k: v for k, v in _gh_good.items() if v})
+
+# ── G4: every system-ssh argv takes its destination from ssh_destination, after `--` ─────────
+# Review F4: four argvs handed `<username>@<host>` from a LOADED row to ssh, which reads a leading
+# dash as an option. Every list literal that begins with "ssh" must put SSH_DEST_SEP immediately
+# before an ssh_destination(...) call — so a fifth ssh argv cannot be added the old way.
+def _gh_ssh_argv_problems(src, rel):
+    out, tree = [], _gh_ast.parse(src)
+    parent = {c: p for p in _gh_ast.walk(tree) for c in _gh_ast.iter_child_nodes(p)}
+    for n in _gh_ast.walk(tree):
+        if not (isinstance(n, _gh_ast.List) and n.elts and isinstance(n.elts[0], _gh_ast.Constant)
+                and n.elts[0].value == "ssh"):
+            continue
+        # The WHOLE argv: `["ssh", …] + _ssh_mux_opts() + ["-p", …, dest]` is one command line.
+        top = n
+        while isinstance(parent.get(top), _gh_ast.BinOp) and isinstance(parent[top].op, _gh_ast.Add):
+            top = parent[top]
+        elts = [e for part in _gh_ast.walk(top) if isinstance(part, _gh_ast.List) for e in part.elts]
+        if not any(isinstance(e, _gh_ast.Constant) and isinstance(e.value, str) and e.value.startswith("-")
+                   for e in elts):
+            continue    # ["ssh"] naming the service, ["ssh", n] naming its journal: not a command line
+        ok = False
+        for a, b in zip(elts, elts[1:]):
+            sep = (isinstance(a, (_gh_ast.Name, _gh_ast.Attribute))
+                   and (getattr(a, "id", None) or getattr(a, "attr", None)) == "SSH_DEST_SEP")
+            if sep and isinstance(b, _gh_ast.Call) and _gh_callee(b) == "ssh_destination":
+                ok = True
+        if not ok:
+            out.append("G4 %s:%d: an ssh argv whose destination is not SSH_DEST_SEP, "
+                       "ssh_destination(...)" % (rel, n.lineno))
+    return out
+
+
+_gh_ssh_found, _gh_ssh_bad = 0, []
+for _gh_dp, _gh_dns, _gh_fns in os.walk(os.path.join(_gh_root, "panel")):
+    _gh_dns[:] = [d for d in _gh_dns if d != "__pycache__"]
+    for _gh_fn in sorted(_gh_fns):
+        if _gh_fn.endswith(".py"):
+            _gh_path = os.path.join(_gh_dp, _gh_fn)
+            with open(_gh_path, encoding="utf-8") as _gh_f:
+                _gh_src = _gh_f.read()
+            _gh_ssh_bad += _gh_ssh_argv_problems(_gh_src, os.path.relpath(_gh_path, _gh_root))
+            # Counted by the SAME definition, with the destination rule made unsatisfiable.
+            _gh_ssh_found += len(_gh_ssh_argv_problems(_gh_src.replace("ssh_destination(", "ssh_dest_off("),
+                                                       "x"))
+check("GHSA-hh39 gate G4: every system-ssh argv takes its destination from ssh_destination, after `--`",
+      not _gh_ssh_bad, "; ".join(_gh_ssh_bad[:4]))
+check("GHSA-hh39 gate G4: ...and it found the four ssh argvs there are (the Tailscale transport, two "
+      "downloads, the terminal)", _gh_ssh_found == 4, "%d found" % _gh_ssh_found)
+check("GHSA-hh39 gate G4 CONTROL: the old spelling fails it, and the new one passes",
+      _gh_ssh_argv_problems('a = ["ssh", "-p", "22", f"{s.username}@{h}", cmd]\n', "x.py")
+      and _gh_ssh_argv_problems('a = ["ssh", "-p", "22", _core.ssh_destination(u, h), cmd]\n', "x.py")
+      and not _gh_ssh_argv_problems('a = ["ssh", "-p", "22", _core.SSH_DEST_SEP, '
+                                    '_core.ssh_destination(u, h), cmd]\n', "x.py"))
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 # 2. BEHAVIOUR — every converted function, through a transport that records instead of sending
@@ -384,6 +530,11 @@ _GH_TABLE = [
      _is_tuple_refusal, True, "./gmodserver x"),
     ("_core.read_as_game_user", lambda u, s: _sm_core.read_as_game_user(_GH_SRV, u, "tail -5 /tmp/f"),
      _is_tuple_refusal, False, "tail -5"),
+    # ...and with a body that names the script, as the console reads' does (review F1).
+    ("_core.read_as_game_user (selfname=)",
+     lambda u, s: _sm_core.read_as_game_user(
+         _GH_SRV, u, "tail -5 /home/%s/log/console/%s-console.log" % (u, s), selfname=s),
+     _is_tuple_refusal, True, "-console.log"),
     ("_core.run_as_game_user", lambda u, s: _sm_core.run_as_game_user(_GH_SRV, u, "details", selfname=s),
      _is_tuple_refusal, True, "details"),
     ("_core.send_console_command", lambda u, s: _sm_core.send_console_command(_GH_SRV, u, "status", selfname=s),
@@ -595,6 +746,148 @@ try:
           "every unsafe one is refused", not _gh_argv_bad, ", ".join(_gh_argv_bad))
     check("GHSA-hh39 cron._as_user_argv: ...and a plain one is the same argv as before",
           _sm_cron._as_user_argv("gm2", "cat", "/x") == ["sudo", "-u", "gm2", "cat", "/x"])
+
+    # ── review F3: a port that is not a number never reaches the hourly restart line ──────────
+    # GameServer.port is INTEGER, but SQLite keeps TEXT in it for a row written that way, and
+    # SQLAlchemy hands it back as a str. set_daily_restart interpolated it raw into a cron line
+    # /bin/sh runs as the account — the one gamedig caller in the tree without int(port).
+    _GH_TEXT_PORT = "27015; touch /tmp/ghsa-f3; true"
+    _gh_rc_line = "10 * * * * " + _sm_core.daily_restart_check_cmd(
+        "gm2", "gmodserver", _sm_core.GAMEDIG_TYPE["gmod"], "127.0.0.1", 27999) + "\n"
+    _gh_saved_crontab = _GH_CRONTAB
+    _GH_CRONTAB = _gh_rc_line               # a restart check the upgrade recognises and rewrites
+
+    def _gh_f3(call):
+        _gh_sent.clear()
+        try:
+            return call(), None, _gh_command_texts(_gh_sent)
+        except Exception as _e:              # a crash is not a refusal
+            return None, _e, _gh_command_texts(_gh_sent)
+    try:
+        _gh_r, _gh_e, _gh_t = _gh_f3(lambda: _sm_core.set_daily_restart(
+            _GH_SRV, "gm2", "gmodserver", "gmod", _GH_TEXT_PORT))
+        check("GHSA-hh39 F3 set_daily_restart: a port stored as text is refused, and nothing is sent",
+              _gh_e is None and _gh_r == (False, "invalid port") and not _gh_t,
+              "raised=%r returned=%r sent=%r" % (_gh_e, _gh_r, [t[:80] for t in _gh_t[:2]]))
+        _gh_ok3 = []
+        for _gh_p in (27015, "27015", 27015.0):     # the number, however SQLite handed it back
+            _gh_r, _gh_e, _gh_t = _gh_f3(lambda: _sm_core.set_daily_restart(
+                _GH_SRV, "gm2", "gmodserver", "gmod", _gh_p))
+            _gh_ok3.append(_gh_e is None and _gh_r[0] is True
+                           and any("127.0.0.1:27015 2>/dev/null" in t for t in _gh_t))
+        check("GHSA-hh39 F3 set_daily_restart: ...while a numeric port still writes the line, as a number",
+              all(_gh_ok3), repr(_gh_ok3))
+        _gh_r, _gh_e, _gh_t = _gh_f3(lambda: _sm_cron.upgrade_managed_cron_tracking(
+            _GH_SRV, "gm2", "gmodserver", "gmod", _GH_TEXT_PORT))
+        check("GHSA-hh39 F3 upgrade_managed_cron_tracking (daily, unattended): a text port is refused "
+              "before the crontab is even read", _gh_e is None and _gh_r is False and not _gh_t,
+              "raised=%r returned=%r sent=%r" % (_gh_e, _gh_r, [t[:80] for t in _gh_t[:2]]))
+        _gh_r, _gh_e, _gh_t = _gh_f3(lambda: _sm_cron.upgrade_managed_cron_tracking(
+            _GH_SRV, "gm2", "gmodserver", "gmod", 27015))
+        check("GHSA-hh39 F3 upgrade_managed_cron_tracking: ...while a numeric one heals the line to it",
+              _gh_e is None and _gh_r is True and any("127.0.0.1:27015 2>/dev/null" in t for t in _gh_t),
+              "raised=%r returned=%r sent=%r" % (_gh_e, _gh_r, [t[:80] for t in _gh_t[-2:]]))
+        _gh_bad3 = []
+        for _gh_p in (_GH_TEXT_PORT, "0x10", 27015.5, True, [27015]):
+            try:
+                _gh_line = _sm_core.daily_restart_check_cmd("gm2", "gmodserver", "garrysmod", "1.2.3.4", _gh_p)
+                _gh_bad3.append("%r built %r" % (_gh_p, _gh_line[-60:]))
+            except ValueError:
+                pass
+        check("GHSA-hh39 F3 daily_restart_check_cmd: the line's own builder refuses what int() refuses "
+              "(and a fractional or boolean port int() would quietly change)", not _gh_bad3,
+              "; ".join(_gh_bad3))
+        check("GHSA-hh39 F3 daily_restart_check_cmd: ...and writes the number it was given",
+              "1.2.3.4:27015 2>" in _sm_core.daily_restart_check_cmd(
+                  "gm2", "gmodserver", "garrysmod", "1.2.3.4", " 27015"))
+    finally:
+        _GH_CRONTAB = _gh_saved_crontab
+
+    # ── review F4: a stored SSH login or host never becomes an ssh OPTION ─────────────────────
+    # Four argvs hand `<username>@<host>` to the system ssh client, and ssh reads an argument that
+    # begins with `-` as an option: username "-oProxyCommand=<cmd>" ran <cmd> on the panel's host.
+    # Each is driven with a hostile login and a hostile host, through the recorded Popen, and must
+    # refuse without spawning anything; a plain one must still spawn ssh with the destination
+    # after `--`.
+    from panel.ops import terminal_session as _gh_term     # noqa: E402
+
+    def _gh_ts(**kw):
+        d = dict(id=9105, is_local=False, auth_method="tailscale", host="box.ts.net", port=22,
+                 username="admin", sudo_enabled=False, name="h", linuxgsm_user="")
+        d.update(kw)
+        return NS(**d)
+
+    _GH_SSH_BAD = [("username", "-oProxyCommand=touch /tmp/ghsa-f4"), ("username", "-l"),
+                   ("username", "root@evil"), ("username", "a b"), ("username", "admin\n"),
+                   ("host", "-oProxyCommand=touch /tmp/ghsa-f4"), ("host", "--"), ("host", "h;id"),
+                   ("host", "a b"), ("host", ""), ("port", "22 -oProxyCommand=x")]
+    _GH_SSH_SITES = [
+        ("_core._run_via_ssh_cli (the Tailscale transport)",
+         lambda srv: _sm_core._run_via_ssh_cli(srv, "echo hi", timeout=5, sudo=False),
+         lambda r: r == ("", "invalid ssh login or host", -1)),
+        ("cron.stream_game_backup (Tailscale)",
+         lambda srv: list(_sm_cron.stream_game_backup(srv, "gm2", "gmodserver-2026.tar.gz")),
+         lambda r: r == []),
+        ("files.stream_path (Tailscale)",
+         lambda srv: list(_sm_files.stream_path(srv, "gm2", "a.cfg")),
+         lambda r: r == []),
+        # Raises: terminal open() turns it into "Could not start a shell on …".
+        ("terminal_session._open_tailscale (the web terminal)",
+         lambda srv: _gh_term._open_tailscale(NS(), srv, 80, 24), None),
+    ]
+    _gh_saved_ts = _sm_core._resolve_ts_host
+    _sm_core._resolve_ts_host = lambda srv: srv.host    # the stored host, unresolved
+    try:
+        for _gh_label, _gh_call, _gh_refused in _GH_SSH_SITES:
+            _gh_bad4 = []
+            for _gh_field, _gh_val in _GH_SSH_BAD:
+                _gh_sent.clear()
+                try:
+                    _gh_r, _gh_e = _gh_call(_gh_ts(**{_gh_field: _gh_val})), None
+                except Exception as _e:
+                    _gh_r, _gh_e = None, _e
+                _gh_popen = [rec for rec in _gh_sent if rec[0] == "popen"]
+                if _gh_refused is None:
+                    _gh_fine = isinstance(_gh_e, ValueError)    # UnsafeSshDestination is one
+                else:
+                    _gh_fine = _gh_e is None and _gh_refused(_gh_r)
+                if _gh_popen or not _gh_fine:
+                    _gh_bad4.append("%s=%r -> %s" % (
+                        _gh_field, _gh_val, ("SPAWNED %r" % (_gh_popen[0][1],)) if _gh_popen else
+                        ("raised %r" % (_gh_e,)) if _gh_e else ("returned %r" % (_gh_r,))))
+            check("GHSA-hh39 F4 %s: a hostile stored login, host or port is refused and nothing is "
+                  "spawned" % _gh_label, not _gh_bad4, "; ".join(_gh_bad4[:4]))
+            if _gh_refused is None:
+                continue        # the terminal's plain case is part06's (it would open a real pty)
+            _gh_sent.clear()
+            try:
+                _gh_call(_gh_ts())
+            except Exception:
+                pass
+            _gh_popen = [rec[1] for rec in _gh_sent if rec[0] == "popen"]
+            _gh_argv = _gh_popen[0] if _gh_popen else []
+            _gh_i = _gh_argv.index("--") if "--" in _gh_argv else -1
+            check("GHSA-hh39 F4 %s: ...while a plain one still spawns ssh, the destination after `--`"
+                  % _gh_label, _gh_argv[:1] == ["ssh"] and _gh_i > 0
+                  and _gh_argv[_gh_i + 1:_gh_i + 2] == ["admin@box.ts.net"]
+                  and not any(a.startswith("-") for a in _gh_argv[_gh_i + 1:]),
+                  "argv=%r" % (_gh_argv,))
+        check("GHSA-hh39 F4 terminal_session._ssh_argv: a plain login gets its argv, the destination "
+              "after `--`", _gh_term._ssh_argv(_gh_ts())[-2:] == ["--", "admin@box.ts.net"],
+              repr(_gh_term._ssh_argv(_gh_ts())))
+        # The terminal opened its pty BEFORE building the argv, so a refused argv would have leaked
+        # both descriptors of the pair on every attempt. Counted, not assumed.
+        _gh_fds = lambda: len(os.listdir("/proc/self/fd"))     # noqa: E731
+        _gh_fd0 = _gh_fds()
+        for _ in range(5):
+            try:
+                _gh_term._open_tailscale(NS(), _gh_ts(username="-oProxyCommand=x"), 80, 24)
+            except Exception:       # refused (ValueError) — or, if it was not, whatever came next
+                pass
+        check("GHSA-hh39 F4 terminal_session._open_tailscale: a refused login leaks no descriptor",
+              _gh_fds() == _gh_fd0, "%d open before, %d after five refusals" % (_gh_fd0, _gh_fds()))
+    finally:
+        _sm_core._resolve_ts_host = _gh_saved_ts
 finally:
     for _gh_mod, _gh_attr, _gh_val in _GH_SAVED:
         setattr(_gh_mod, _gh_attr, _gh_val)
@@ -737,6 +1030,133 @@ try:
     _gh_ok, _gh_msg = _gh_restore(open(os.path.join(_gh_dir, "old.db"), "rb").read())
     check("GHSA-hh39 restore: a database from before these tables existed is not refused for it",
           _gh_ok is True, "%r %r" % (_gh_ok, _gh_msg))
+
+    # ── review F2: the check must read the database the way SQLite will serve it ────────────────
+    # SQLite resolves table and column names case-INSENSITIVELY and sqlite_master keeps whatever
+    # spelling a table was created with. The first version looked 'game_server' / 'short_name' up
+    # by exact name, so an archive spelling them "GAME_SERVER" / "SHORT_NAME" skipped the check
+    # entirely — and the ORM's `FROM game_server` read that table anyway. Every other way a
+    # value the panel later reads could differ from the one checked is refused as well.
+    def _gh_db(game_rows=(), remote_rows=_GH_OK_REMOTE, sql=(), writable=()):
+        path = os.path.join(_gh_tmp.mkdtemp(dir=_gh_dir), "panel.db")
+        _gh_make_db(path, game_rows=game_rows, remote_rows=remote_rows)
+        con = _gh_sqlite.connect(path)
+        for stmt in sql:
+            con.execute(stmt)
+        con.commit()
+        if writable:
+            con.execute("PRAGMA writable_schema=ON")
+            for stmt in writable:
+                con.execute(stmt)
+            con.commit()
+        con.close()
+        with open(path, "rb") as f:
+            return f.read()
+
+    # SQLite refuses to rename a table or column to another case of its own name (to SQLite that
+    # IS its own name), so the fixtures go through a temporary one.
+    def _gh_retable(old, new):
+        return ['ALTER TABLE "%s" RENAME TO ghsa_tmp' % old, 'ALTER TABLE ghsa_tmp RENAME TO "%s"' % new]
+
+    def _gh_recol(table, old, new):
+        return ['ALTER TABLE "%s" RENAME COLUMN "%s" TO ghsa_tmp' % (table, old),
+                'ALTER TABLE "%s" RENAME COLUMN ghsa_tmp TO "%s"' % (table, new)]
+
+    _GH_PAYLOAD = "x; touch /tmp/ghsa-f2; #"
+    _gh_f2 = [
+        ("an UPPER-CASE table", "game server #11 (short_name)",
+         _gh_db([(11, _GH_PAYLOAD, "csgo", 27015)], sql=_gh_retable("game_server", "GAME_SERVER"))),
+        ("an UPPER-CASE column", "game server #12 (short_name)",
+         _gh_db([(12, _GH_PAYLOAD, "csgo", 27015)],
+                sql=_gh_recol("game_server", "short_name", "SHORT_NAME"))),
+        ("a Mixed-Case table AND column", "game server #13 (game_type)",
+         _gh_db([(13, "gmodserver", "gmod$(id)", 27015)],
+                sql=_gh_retable("game_server", "Game_Server")
+                + _gh_recol("Game_Server", "game_type", "Game_Type"))),
+        ("an upper-case HOST table, its login encrypted with the archive's key", "host #3 (username)",
+         _gh_db([], remote_rows=[(3, _gh_enc("-oProxyCommand=sh"))],
+                sql=_gh_retable("remote_server", "REMOTE_SERVER")
+                + _gh_recol("REMOTE_SERVER", "username", "UserName"))),
+        ("an upper-case PORT column holding text", "game server #14 (port)",
+         _gh_db([(14, "gmodserver", "gmod", "27015; id")],
+                sql=_gh_recol("game_server", "port", "PORT"))),
+    ]
+    for _gh_what, _gh_named, _gh_bytes in _gh_f2:
+        _gh_ok, _gh_msg = _gh_restore(_gh_bytes)
+        check("GHSA-hh39 restore F2: %s is resolved as SQLite resolves it, and its bad row refused"
+              % _gh_what, _gh_ok is False and _gh_named in _gh_msg and _gh_calls == [],
+              "%r %r calls=%r" % (_gh_ok, _gh_msg, _gh_calls))
+    # Shapes that let a value CHANGE after the check read it, or hide one from it. Every row in
+    # these archives is clean: what is refused is the shape.
+    _GH_CLEAN = [(15, "gmodserver", "gmod", 27015)]
+    _gh_f2_shape = [
+        ("a trigger that rewrites a game server's account after the panel inserts one", "trigger",
+         _gh_db(_GH_CLEAN, sql=["CREATE TRIGGER ghsa_t AFTER INSERT ON game_server BEGIN "
+                                "UPDATE game_server SET short_name = '%s' WHERE id = NEW.id; END"
+                                % _GH_PAYLOAD])),
+        ("a trigger on ANOTHER table that rewrites one when the panel logs anything", "trigger",
+         _gh_db(_GH_CLEAN, sql=["CREATE TRIGGER ghsa_t2 AFTER INSERT ON audit_log BEGIN "
+                                "UPDATE game_server SET game_type = 'gmod$(id)'; END"])),
+        ("a VIEW standing in for the game_server table", "view",
+         _gh_db(_GH_CLEAN, sql=["ALTER TABLE game_server RENAME TO gs_real",
+                                "CREATE VIEW game_server AS SELECT * FROM gs_real"])),
+        ("an account COMPUTED from a column the panel updates on every poll", "computes",
+         _gh_db([], sql=["DROP TABLE game_server",
+                         "CREATE TABLE game_server (id INTEGER PRIMARY KEY, remote_id INTEGER, "
+                         "status VARCHAR(32), game_type VARCHAR(64), port INTEGER, query_port INTEGER, "
+                         "short_name TEXT GENERATED ALWAYS AS (CASE status WHEN 'online' THEN '%s' "
+                         "ELSE 'gmodserver' END) VIRTUAL)" % _GH_PAYLOAD,
+                         "INSERT INTO game_server (id, remote_id, status, game_type, port) "
+                         "VALUES (15, 1, 'offline', 'gmod', 27015)"])),
+        ("a game_server table with no game_type column", "no game_type column",
+         _gh_db(_GH_CLEAN, sql=["ALTER TABLE game_server DROP COLUMN game_type"])),
+        # An index whose entries disagree with its table: the TABLE holds a clean account and the
+        # index the payload, so a covering read (`SELECT short_name … WHERE remote_id = ?`) gets
+        # the payload while a check reading the table sees 'gmodserver'. Only SQLite's own
+        # integrity check notices.
+        ("an index whose entries disagree with its table", "integrity check",
+         _gh_db(_GH_CLEAN, sql=["UPDATE game_server SET name = '%s'" % _GH_PAYLOAD,
+                                "CREATE INDEX ix_ghsa ON game_server (remote_id, name)"],
+                writable=["UPDATE sqlite_master SET sql = 'CREATE INDEX ix_ghsa ON game_server "
+                          "(remote_id, short_name)' WHERE name = 'ix_ghsa'"])),
+        # ...and the other way round, the shape that beat a check reading through the index: the
+        # table holds the payload and the index a clean name.
+        ("an index hiding the table's payload from a covering read", "integrity check",
+         _gh_db([(15, _GH_PAYLOAD, "gmod", 27015)],
+                sql=["UPDATE game_server SET name = 'gmodserver'",
+                     "CREATE INDEX ix_ghsa ON game_server (remote_id, name)"],
+                writable=["UPDATE sqlite_master SET sql = 'CREATE INDEX ix_ghsa ON game_server "
+                          "(remote_id, short_name)' WHERE name = 'ix_ghsa'"])),
+    ]
+    for _gh_what, _gh_says, _gh_bytes in _gh_f2_shape:
+        _gh_ok, _gh_msg = _gh_restore(_gh_bytes)
+        check("GHSA-hh39 restore F2: %s is refused, and says why" % _gh_what,
+              _gh_ok is False and _gh_says in _gh_msg and "Nothing on this panel was changed" in _gh_msg
+              and _gh_calls == [] and _gh_bk.DB_PATH.read_bytes() == _gh_live_bytes,
+              "%r %r calls=%r" % (_gh_ok, _gh_msg, _gh_calls))
+    # The fixture proves what the integrity check is for: through the panel's own SQLite, the
+    # covering read and the table disagree about the account.
+    _gh_probe = os.path.join(_gh_tmp.mkdtemp(dir=_gh_dir), "probe.db")
+    with open(_gh_probe, "wb") as _gh_pf:
+        _gh_pf.write(_gh_f2_shape[5][2])
+    _gh_pc = _gh_sqlite.connect(_gh_probe)
+    try:
+        _gh_cover = _gh_pc.execute("SELECT short_name FROM game_server WHERE remote_id = 1").fetchall()
+        _gh_table = _gh_pc.execute("SELECT short_name FROM game_server NOT INDEXED").fetchall()
+    finally:
+        _gh_pc.close()
+    check("GHSA-hh39 restore F2: (fixture) that index really does answer with a different account",
+          _gh_cover == [(_GH_PAYLOAD,)] and _gh_table == [("gmodserver",)],
+          "covering=%r table=%r" % (_gh_cover, _gh_table))
+    # The controls: a clean archive of the panel's own shape still restores, and the case check
+    # is not a spelling check — a clean table in another case is read, not refused.
+    _gh_ok, _gh_msg = _gh_restore(_gh_db(_GH_CLEAN, sql=_gh_retable("game_server", "GAME_SERVER")))
+    check("GHSA-hh39 restore F2: (control) a CLEAN upper-case table is read and passes",
+          _gh_ok is True, "%r %r" % (_gh_ok, _gh_msg))
+    _gh_ok, _gh_msg = _gh_restore(_gh_db(_GH_CLEAN))
+    check("GHSA-hh39 restore F2: (control) a clean archive with the panel's own schema still restores",
+          _gh_ok is True and _gh_calls == [("safety", "prerestore"), ("verb", "panel-restore")],
+          "%r %r %r" % (_gh_ok, _gh_msg, _gh_calls))
     # The tuple backup.py checks must be every column models.py guards with _validate_shell_ident,
     # or a column added there later is checked on assignment and never on restore.
     _gh_msrc = _gh_ast.parse(open(os.path.join(_gh_root, "panel", "db", "models.py"), encoding="utf-8").read())
@@ -763,7 +1183,11 @@ finally:
 # ── load: a row @validates never saw is FLAGGED, not fatal, and not rewritten ────────────────────
 _gh_logdb = os.path.join(_gh_dir, "load.db")
 _gh_make_db(_gh_logdb, game_rows=[(1, "x; id > /tmp/pwned; #", "gmod", 27015),
-                                  (2, "gmodserver", "gmod", 27016)])
+                                  (2, "gmodserver", "gmod", 27016),
+                                  # review F3: a port stored as TEXT, and one stored as a numeric
+                                  # string (which SQLite's INTEGER affinity turns into a number).
+                                  (3, "gmodserver3", "gmod", "27017; touch /tmp/ghsa-f3; true"),
+                                  (4, "gmodserver4", "gmod", "27018")])
 _gh_warned = []
 
 
@@ -797,6 +1221,24 @@ check("GHSA-hh39 load: ...unchanged (never silently rewritten to some other acco
 check("GHSA-hh39 load: ...and flagged ONCE, naming the row and the column — the clean row is not",
       len(_gh_warned) == 1 and "GameServer #1" in _gh_warned[0] and "short_name" in _gh_warned[0],
       repr(_gh_warned))
+# Ports are flagged by TYPE (review F3): text where a number belongs, never a numeric value.
+_gh_warned.clear()
+_gh_models._log.addHandler(_gh_handler)
+_gh_port_loaded = None
+try:
+    with _GhSession(_gh_eng) as _gh_sess:
+        _gh_port_loaded = (_gh_sess.get(_gh_models.GameServer, 3).port,
+                           _gh_sess.get(_gh_models.GameServer, 4).port)
+except Exception as _e:
+    _gh_port_loaded = _e
+finally:
+    _gh_models._log.removeHandler(_gh_handler)
+    _gh_eng.dispose()
+check("GHSA-hh39 load F3: a port stored as text loads unchanged and is flagged once, by row and "
+      "column; a numeric one is not",
+      _gh_port_loaded == ("27017; touch /tmp/ghsa-f3; true", 27018) and len(_gh_warned) == 1
+      and "GameServer #3" in _gh_warned[0] and " port " in _gh_warned[0]
+      and "not a plain number" in _gh_warned[0], "%r %r" % (_gh_port_loaded, _gh_warned))
 # ...and the enforcement is the builder: the loaded row's names drive no command.
 _gh_sent.clear()
 _gh_saved_rc = _sm_core.run_command
