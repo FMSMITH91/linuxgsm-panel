@@ -4673,8 +4673,8 @@ check("codacy-coverage: the token is in the upload step's env and nowhere else; 
 # a push from `Main` uploads), REPORT_DIR must be where the download put the artifact, and the
 # artifact must be the one CI's coverage job uploads, from the run that finished. None of this can
 # be exercised before merge: a workflow_run job runs main's copy of its file.
-_cc_dl = _cc_raw[_cc_raw.find("- name: Download the coverage report CI made"):
-                 _cc_raw.find("- name: Send coverage to Codacy")]
+_cc_dl_at = _cc_raw.find("- name: Download the coverage report CI made")
+_cc_dl = _cc_raw[_cc_dl_at:_cc_raw.find("\n      - name: ", _cc_dl_at)] if _cc_dl_at >= 0 else ""
 _cc_dl_with = dict(re.findall(r"^\s+([a-z][a-z-]*): (\S.*)$", _cc_dl[_cc_dl.find("with:"):], re.M))
 _cc_up_name = re.search(r"uses: actions/upload-artifact@\S+[^\n]*\n\s+with:\n\s+name: (\S+)\n", _cov_job)
 check("codacy-coverage: the step reads the workflow_run's own event, and the report from where the "
@@ -4696,17 +4696,26 @@ _cc_sb = _tempfile.mkdtemp(prefix="codacy-")
 try:
     _cc_bin = os.path.join(_cc_sb, "bin")
     os.makedirs(_cc_bin)
-    # curl writes a stand-in reporter where the step asked for the real one; it logs its argv and
-    # keeps the report it was given. sha256sum is waved through here (the pin is checked above).
+    # curl writes a stand-in reporter where the step asked for the real one. It logs its argv,
+    # keeps each report it is given (the file after -r, as $CC_LOG.<its name>), and fails the
+    # upload of the language named in $CC_FAIL_LANG. sha256sum is waved through here (the pin is
+    # checked above).
+    _cc_fake = os.path.join(_cc_sb, "fake-reporter")
+    with open(_cc_fake, "w") as _fh:
+        _fh.write("#!/bin/sh\necho \x22REPORTER $*\x22 >> \x22$CC_LOG\x22\nprev=; lang=\n"
+                  "for a in \x22$@\x22; do\n"
+                  "  [ \x22$prev\x22 = -r ] && cp \x22$a\x22 \x22$CC_LOG.$(basename \x22$a\x22)\x22\n"
+                  "  [ \x22$prev\x22 = -l ] && lang=\x22$a\x22\n  prev=\x22$a\x22\ndone\n"
+                  "[ -n \x22$CC_FAIL_LANG\x22 ] && [ \x22$lang\x22 = \x22$CC_FAIL_LANG\x22 ] && exit 3\n"
+                  "exit 0\n")
     with open(os.path.join(_cc_bin, "curl"), "w") as _fh:
         _fh.write("#!/bin/sh\nwhile [ $# -gt 0 ]; do case \x22$1\x22 in -o) o=\x22$2\x22; shift 2;; "
-                  "*) shift;; esac; done\nprintf '%s\\n' '#!/bin/sh' "
-                  "'echo \x22REPORTER $*\x22 >> \x22$CC_LOG\x22' 'cp \x22$3\x22 \x22$CC_LOG.xml\x22' "
-                  "> \x22$o\x22\n")
+                  "*) shift;; esac; done\ncp \x22$CC_REPORTER\x22 \x22$o\x22\n")
     with open(os.path.join(_cc_bin, "sha256sum"), "w") as _fh:
         _fh.write("#!/bin/sh\ncat >/dev/null\n")
     for _f in ("curl", "sha256sum"):
         os.chmod(os.path.join(_cc_bin, _f), 0o755)
+    os.chmod(_cc_fake, 0o755)
     _cc_sha = "c" * 40
     _cc_good = ('<?xml version="1.0" ?>\n<coverage version="7.6" line-rate="0.5">\n'
                 '<sources><source>/home/runner/work/x/x</source></sources>\n<packages><package '
@@ -4718,12 +4727,23 @@ try:
                '</sources></coverage>\n')
     _cc_n = [0]
 
-    def _cc_case(report, event="push", branch="main", sha=_cc_sha, token="t0ken", link=False):
+    def _cc_case(report, event="push", branch="main", sha=_cc_sha, token="t0ken", link=False,
+                 lcov=None, lcov_link=False, fail_lang=""):
+        """Run the send step against a Python report and, when `lcov` is given, a JavaScript one.
+        Returns (rc, reporter calls, Python report sent, output, RUNNER_TEMP, LCOV report sent)."""
         _cc_n[0] += 1
         _d = os.path.join(_cc_sb, "case%d" % _cc_n[0])
         _art, _rt = os.path.join(_d, "art"), os.path.join(_d, "rt")
+        _jsart = os.path.join(_d, "jsart")
         os.makedirs(_art)
         os.makedirs(_rt)
+        if lcov is not None:
+            os.makedirs(_jsart)
+            _jdst = os.path.join(_d if lcov_link else _jsart, "lcov.info")
+            with open(_jdst, "wb") as _fh:
+                _fh.write(lcov if isinstance(lcov, bytes) else lcov.encode())
+            if lcov_link:
+                os.symlink(_jdst, os.path.join(_jsart, "lcov.info"))
         if report is not None:
             # link: the artifact's coverage.xml is a symlink to a good report kept elsewhere.
             _dst = os.path.join(_d if link else _art, "coverage.xml")
@@ -4735,21 +4755,28 @@ try:
         _p = _sh_sub.run(["bash", "-c", _cc_run], capture_output=True, text=True, env=dict(
             os.environ, PATH=_cc_bin + os.pathsep + os.environ["PATH"], CC_LOG=_log,
             CODACY_PROJECT_TOKEN=token, HEAD_SHA=sha, HEAD_BRANCH=branch, WR_EVENT=event,
-            REPORT_DIR=_art, RUNNER_TEMP=_rt, VERSION="0", SHA256="0" * 64))
-        _called = open(_log).read() if os.path.exists(_log) else ""
-        _sent = open(_log + ".xml").read() if os.path.exists(_log + ".xml") else ""
-        return _p.returncode, _called, _sent, _p.stdout + _p.stderr, _rt
+            REPORT_DIR=_art, JS_REPORT_DIR=_jsart, RUNNER_TEMP=_rt, VERSION="0", SHA256="0" * 64,
+            CC_REPORTER=_cc_fake, CC_FAIL_LANG=fail_lang))
 
+        def _read(path):
+            return open(path).read() if os.path.exists(path) else ""
+        return (_p.returncode, _read(_log), _read(_log + ".coverage-clean.xml"),
+                _p.stdout + _p.stderr, _rt, _read(_log + ".lcov-clean.info"))
+
+    # With no JavaScript artifact (a CI run whose js-coverage job failed): the Python report goes
+    # up as a partial report, `final` completes the commit, and the step says the JS is missing.
     _c = _cc_case(_cc_good)
-    check("codacy-coverage: a push to main uploads a re-written report for exactly that commit "
-          "(positive control)",
-          _c[0] == 0 and _c[1] == "REPORTER report -r %s/coverage-clean.xml --commit-uuid %s\n"
-          % (_c[4], _cc_sha)
-          and 'filename="panel/app.py"' in _c[2] and 'hits="1"' in _c[2] and "<coverage" in _c[2],
+    check("codacy-coverage: a push to main uploads a re-written report for exactly that commit, "
+          "partial then final (positive control)",
+          _c[0] == 0 and _c[1] == ("REPORTER report --partial -l Python -r %s/coverage-clean.xml "
+                                   "--commit-uuid %s\nREPORTER final --commit-uuid %s\n"
+                                   % (_c[4], _cc_sha, _cc_sha))
+          and 'filename="panel/app.py"' in _c[2] and 'hits="1"' in _c[2] and "<coverage" in _c[2]
+          and "::warning::the CI run left no lcov.info" in _c[3] and not _c[5],
           repr(_c[:4]))
     _c = _cc_case(_cc_good, event="pull_request", branch="Main")
     check("codacy-coverage: ...a pull request uploads whatever its branch is called",
-          _c[0] == 0 and _c[1].startswith("REPORTER report -r "), repr(_c[:4]))
+          _c[0] == 0 and _c[1].startswith("REPORTER report --partial -l Python -r "), repr(_c[:4]))
     _cc_skips = {"push Main": _cc_case(_cc_good, branch="Main"),
                  "push MAIN": _cc_case(_cc_good, branch="MAIN"),
                  "no token": _cc_case(_cc_good, token="")}
@@ -4800,6 +4827,91 @@ try:
           and "holds no coverage.xml" in _cc_only["symlink"][3]
           and "not a Cobertura report" in _cc_only["no line-rate"][3],
           repr({_k: _v[:4] for _k, _v in _cc_only.items()}))
+
+    # ── the JavaScript report: the js-coverage job's lcov.info ──────────────────────────────────
+    # Sent beside the Python report with the reporter's partial/final flow. It is DATA from the
+    # tested code, reaching the job that holds the token, so it gets the XML's treatment: every
+    # line one of LCOV's records, every file static/js/<name>.js, and what is sent is rebuilt from
+    # the parsed numbers — which also keeps it from being XML, which the reporter would otherwise
+    # hand to its XML parsers before its LCOV one.
+    _cc_lcov = ("TN:\nSF:static/js/panel.js\nFN:3,init\nFNDA:1,init\nFNF:1\nFNH:1\n"
+                "DA:3,1\nDA:4,0\nDA:9,12,abcd==\nLF:3\nLH:2\nend_of_record\n"
+                "TN:\nSF:static/js/dashboard.js\nBRDA:5,0,0,1\nBRDA:5,0,1,-\nBRF:2\nBRH:1\n"
+                "DA:5,2\nLF:1\nLH:1\nend_of_record\n")
+    _c = _cc_case(_cc_good, lcov=_cc_lcov)
+    check("codacy-coverage: with an lcov.info as well, both go up as partial reports — the "
+          "JavaScript through the LCOV parser — and then one final (positive control)",
+          _c[0] == 0 and _c[1] == (
+              "REPORTER report --partial -l Python -r {rt}/coverage-clean.xml --commit-uuid {s}\n"
+              "REPORTER report --partial -l Javascript --force-coverage-parser lcov -r "
+              "{rt}/lcov-clean.info --commit-uuid {s}\nREPORTER final --commit-uuid {s}\n"
+          ).format(rt=_c[4], s=_cc_sha)
+          and "no lcov.info" not in _c[3] and 'filename="panel/app.py"' in _c[2],
+          repr(_c[:4]))
+    check("codacy-coverage: ...and the LCOV sent is rebuilt from its numbers (SF, DA, LF, LH), "
+          "nothing else it carried",
+          _c[5] == ("SF:static/js/dashboard.js\nDA:5,2\nLF:1\nLH:1\nend_of_record\n"
+                    "SF:static/js/panel.js\nDA:3,1\nDA:4,0\nDA:9,12\nLF:3\nLH:2\nend_of_record\n"),
+          repr(_c[5]))
+
+    def _cc_lc(*bodies):
+        """One record per body, each about a different static/js file."""
+        return "".join("TN:\nSF:static/js/f%d.js\n%s\nend_of_record\n" % (_i, _b)
+                       for _i, _b in enumerate(bodies))
+
+    _cc_js_bad = {
+        "path traversal": (_cc_lcov.replace("static/js/panel.js", "static/js/../../app.py"),
+                           "is not static/js/<name>.js"),
+        "absolute path": (_cc_lcov.replace("static/js/panel.js", "/etc/passwd"),
+                          "is not static/js/<name>.js"),
+        "subdirectory": (_cc_lcov.replace("static/js/panel.js", "static/js/sub/panel.js"),
+                         "is not static/js/<name>.js"),
+        "vendor file": (_cc_lcov.replace("static/js/panel.js", "static/vendor/x/panel.js"),
+                        "is not static/js/<name>.js"),
+        "not a .js file": (_cc_lcov.replace("static/js/panel.js", "static/js/panel.py"),
+                           "is not static/js/<name>.js"),
+        "an XML document": ('<?xml version="1.0"?>\n<!DOCTYPE c [<!ENTITY x SYSTEM '
+                            '"file:///etc/hostname">]>\n<coverage line-rate="1">&x;</coverage>\n',
+                            "is not an LCOV record"),
+        "an unknown record": (_cc_lc("DA:1,1\nXX:1"), "is not an LCOV record"),
+        "a malformed DA": (_cc_lc("DA:one,1"), "malformed DA"),
+        "a malformed FN": (_cc_lc("FN:x,init\nDA:1,1"), "malformed FN"),
+        "line 0": (_cc_lc("DA:0,1"), "or a line 0"),
+        "a line twice": (_cc_lc("DA:1,1\nDA:1,2"), "twice, or a line 0"),
+        "a file twice": (_cc_lcov + _cc_lcov, "names static/js/panel.js twice"),
+        "a record outside a file": ("DA:1,1\n" + _cc_lc("DA:2,1"), "outside any file"),
+        "a record inside another": ("SF:static/js/a.js\n" + _cc_lc("DA:1,1"), "inside another"),
+        "no end": ("SF:static/js/a.js\nDA:1,1\n", "ends inside a record"),
+        "a stray end": ("end_of_record\n" + _cc_lc("DA:1,1"), "never began"),
+        "no file": ("TN:\n", "holds no line of any file"),
+        "files with no lines": (_cc_lc("LF:0\nLH:0"), "holds no line of any file"),
+        "a carriage return": (_cc_lc("DA:1,1\r"), "control character"),
+        "a NUL": (_cc_lc("DA:1,1") + "\x00", "control character"),
+        "non-ASCII": (_cc_lc("DA:1,1").replace("TN:", "TN:café", 1).encode("utf-8"),
+                      "is not plain ASCII text"),
+        "over 16 MB": (_cc_lc("DA:1,1") + "TN:\n" * (4 * 1024 * 1024 + 1),
+                       "is larger than 16 MB"),
+    }
+    _cc_js_refused = {_k: _cc_case(_cc_good, lcov=_v[0]) for _k, _v in _cc_js_bad.items()}
+    _cc_js_refused["a symlink"] = _cc_case(_cc_good, lcov=_cc_lcov, lcov_link=True)
+    _cc_js_missed = sorted(
+        _k for _k, _v in _cc_js_refused.items()
+        if not (_v[0] != 0 and not _v[1] and not _v[5]
+                and (_cc_js_bad[_k][1] if _k in _cc_js_bad else "no regular lcov.info") in _v[3]))
+    check("codacy-coverage: an lcov.info with a path outside static/js/<name>.js, a record LCOV "
+          "does not have, a malformed or repeated one, control characters, non-ASCII, XML, no "
+          "lines at all, over 16 MB, or reached through a symlink stops BOTH uploads, and says why",
+          len(_cc_js_refused) == len(_cc_js_bad) + 1 and not _cc_js_missed,
+          repr({_k: _cc_js_refused[_k][:4] for _k in _cc_js_missed[:4]}))
+    _c = _cc_case(_cc_good, lcov=_cc_lcov, fail_lang="Javascript")
+    check("codacy-coverage: a JavaScript upload the reporter fails still sends final (or the Python "
+          "report that went up is never processed), and fails the job",
+          _c[0] != 0 and _c[1].count("REPORTER ") == 3
+          and _c[1].endswith("REPORTER final --commit-uuid %s\n" % _cc_sha)
+          and "the JavaScript report was not accepted" in _c[3], repr(_c[:4]))
+    _c = _cc_case(_cc_good, lcov=_cc_lcov, fail_lang="Python")
+    check("codacy-coverage: ...while a Python upload the reporter fails stops the step there",
+          _c[0] != 0 and _c[1].count("REPORTER ") == 1, repr(_c[:4]))
 finally:
     _shutil.rmtree(_cc_sb, ignore_errors=True)
 
@@ -4834,6 +4946,32 @@ _pz_shadow = [_n for _n in (".landscape.yml", ".landscape.yaml", "landscape.yml"
               if os.path.exists(os.path.join(_root, _n))]
 check("prospector: no other profile at the root shadows .prospector.yaml", not _pz_shadow,
       repr(_pz_shadow))
+# The JavaScript artifact the step reads is the one CI's js-coverage job uploads, from the run
+# that finished, into the directory the step reads; and its absence is not the Python report's
+# failure: only that download may fail without stopping the job.
+_cc_jsdl_at = _cc_raw.find("- name: Download the JavaScript coverage report CI made")
+_cc_jsdl = (_cc_raw[_cc_jsdl_at:_cc_raw.find("\n      - name: ", _cc_jsdl_at)]
+            if _cc_jsdl_at >= 0 else "")
+_cc_jsdl_with = dict(re.findall(r"^\s+([a-z][a-z-]*): (\S.*)$", _cc_jsdl[_cc_jsdl.find("with:"):],
+                                re.M))
+_js_job_at = _ci_wf.find("\n  js-coverage:\n")
+_js_job = _ci_wf[_js_job_at:] if _js_job_at >= 0 else ""
+_js_job = _js_job[:re.search(r"\n  [a-z][a-z0-9_-]*:\n", _js_job[1:]).start() + 1] if re.search(
+    r"\n  [a-z][a-z0-9_-]*:\n", _js_job[1:]) else _js_job
+_js_up = re.search(r"uses: actions/upload-artifact@[0-9a-f]{40} # v\S+\n\s+with:\n\s+name: (\S+)\n"
+                   r"\s+path: \|\n((?:\s+\S+\n)+)", _js_job)
+_cc_dl_uses = re.findall(r"uses: (actions/download-artifact@[0-9a-f]{40})", _cc_raw)
+check("codacy-coverage: the JavaScript report is CI's js-coverage artifact, from the run that "
+      "finished, downloaded where the step reads it; only that download may fail",
+      _js_up is not None and _cc_jsdl_with.get("name") == _js_up.group(1) == "js-coverage"
+      and "lcov.info" in _js_up.group(2).split()
+      and _cc_jsdl_with.get("run-id") == "${{ github.event.workflow_run.id }}"
+      and _cc_jsdl_with.get("github-token") == "${{ github.token }}"
+      and bool(_cc_env.get("JS_REPORT_DIR")) and _cc_jsdl_with.get("path") == _cc_env["JS_REPORT_DIR"]
+      and "\n        continue-on-error: true\n" in _cc_jsdl
+      and _cc_code.count("continue-on-error") == 1
+      and len(_cc_dl_uses) == 2 and len(set(_cc_dl_uses)) == 1,
+      repr((_cc_jsdl_with, _js_up and _js_up.groups(), _cc_dl_uses)))
 
 # ── deleting a host says what stays on it, and the README's removal commands do what they say ────
 # The delete forgets a host and never connects to it, so the gamedig tree, its links and the weekly

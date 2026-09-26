@@ -1,7 +1,13 @@
 name: Codacy coverage
 
-# Sends the coverage report CI's `coverage` job made to Codacy: what Codacy's "Diff Coverage" and
-# "Coverage Variation" checks on a pull request are computed from, and its coverage goal on main.
+# Sends the coverage reports CI made to Codacy: what Codacy's "Diff Coverage" and "Coverage
+# Variation" checks on a pull request are computed from, and its coverage goal on main. Two reports,
+# one per language, sent with the reporter's partial/final flow — each `report --partial`, then one
+# `final` that tells Codacy the commit's coverage is complete:
+#   coverage.xml   Cobertura, from the `coverage` job: the Python the suites run.
+#   lcov.info      LCOV, from the `js-coverage` job: the panel's own static/js, run in a browser.
+# A run whose js-coverage job failed has no lcov.info; the Python report still goes up, with a
+# warning here beside the red check that job already shows.
 #
 # WHY THIS IS NOT A STEP OF THE COVERAGE JOB ANY MORE
 #   The upload needs CODACY_PROJECT_TOKEN, and as a repository secret that was readable by a
@@ -21,6 +27,11 @@ name: Codacy coverage
 #   declared inside the file, so a report with a <!DOCTYPE> could have it read a file, its own
 #   environment and the token in it included, into a request. A report declaring any DTD or entity
 #   is refused, and what is uploaded is a fresh serialisation of the elements, with no DTD at all.
+#   lcov.info gets the same treatment: plain ASCII text, every line one of LCOV's own records,
+#   every file a static/js/<name>.js path (no directory, no `..`), and what is uploaded is rebuilt
+#   from the parsed numbers alone. That also keeps it from being XML: the reporter tries each XML
+#   parser on a report before its LCOV one, so an "lcov.info" carrying a DTD would meet the same
+#   entity problem. Either report failing its check stops the upload of both.
 #   Runs of this repository only: a fork's pull request never had the token (GitHub gives fork
 #   PRs no secrets), and its report does not get to meet it here either.
 #
@@ -85,6 +96,18 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
 
+      # continue-on-error: a CI run whose js-coverage job failed left no such artifact, and that
+      # job's own red check already says so. The step below then sends the Python report alone and
+      # warns; it does not pretend the JavaScript was measured.
+      - name: Download the JavaScript coverage report CI made
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: js-coverage
+          path: ${{ runner.temp }}/js-coverage-artifact
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
       # A pinned release binary, checked against its sha256 — the way actionlint and gitleaks are
       # fetched. Bump deliberately: VERSION and SHA256 together; the digest is the one GitHub
       # records for the release asset (codacy/codacy-coverage-reporter,
@@ -96,6 +119,7 @@ jobs:
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           WR_EVENT: ${{ github.event.workflow_run.event }}
           REPORT_DIR: ${{ runner.temp }}/coverage-artifact
+          JS_REPORT_DIR: ${{ runner.temp }}/js-coverage-artifact
           VERSION: '14.1.3'
           SHA256: '15c5f052207d27b8501ab5d5910c68c206ea70b0157ee1725132780530580875'
         run: |
@@ -152,13 +176,127 @@ jobs:
               sys.exit(1)
           ET.ElementTree(root).write(dst, encoding="utf-8", xml_declaration=True)
           PY
+          # lcov.info, when the js-coverage job made one: refused unless every line is an LCOV
+          # record about a static/js/<name>.js file, then rebuilt from the parsed numbers (SF, DA,
+          # LF, LH), so nothing the report carried besides those numbers reaches the reporter.
+          js_report="${JS_REPORT_DIR:-}/lcov.info"
+          js_clean=""
+          if [ -z "${JS_REPORT_DIR:-}" ] || { [ ! -e "${js_report}" ] && [ ! -L "${js_report}" ]; }; then
+            echo "::warning::the CI run left no lcov.info (its js-coverage job did not finish); only the Python report is uploaded."
+          elif [ ! -f "${js_report}" ] || [ -L "${js_report}" ]; then
+            echo "::error::the CI run's js-coverage artifact holds no regular lcov.info; nothing was uploaded."
+            exit 1
+          else
+            js_clean="${RUNNER_TEMP}/lcov-clean.info"
+            python3 - "${js_report}" "${js_clean}" <<'PY'
+          import re
+          import sys
+
+          src, dst = sys.argv[1], sys.argv[2]
+
+
+          def refuse(why):
+              print("::error::lcov.info %s; nothing was uploaded." % why)
+              sys.exit(1)
+
+
+          with open(src, "rb") as fh:
+              data = fh.read(16 * 1024 * 1024 + 1)
+          if len(data) > 16 * 1024 * 1024:
+              refuse("is larger than 16 MB")
+          try:
+              text = data.decode("ascii")
+          except UnicodeDecodeError:
+              refuse("is not plain ASCII text")
+          if re.search(r"[^\n\x20-\x7e]", text):
+              refuse("holds a control character")
+          path_re = re.compile(r"static/js/[A-Za-z0-9_-]+\.js")
+          num = r"[0-9]{1,9}"
+          name = r",[\x20-\x2b\x2d-\x7e]{1,200}"
+          fields = {
+              "TN": re.compile(r"[A-Za-z0-9_ .-]{0,64}"),
+              "FN": re.compile(num + r"(," + num + r")?" + name),
+              "FNDA": re.compile(num + name),
+              "FNF": re.compile(num), "FNH": re.compile(num),
+              "BRDA": re.compile(num + "," + num + "," + num + r",(" + num + r"|-)"),
+              "BRF": re.compile(num), "BRH": re.compile(num),
+              "DA": re.compile(r"(" + num + r"),(" + num + r")(,[A-Za-z0-9+/=_-]{1,64})?"),
+              "LF": re.compile(num), "LH": re.compile(num),
+          }
+          files, cur = {}, None
+          for no, line in enumerate(text.split("\n"), 1):
+              if not line:
+                  continue
+              if line == "end_of_record":
+                  if cur is None:
+                      refuse("ends a record it never began (line %d)" % no)
+                  cur = None
+                  continue
+              tag, sep, val = line.partition(":")
+              if not sep or (tag != "SF" and tag not in fields):
+                  refuse("holds a line that is not an LCOV record (line %d)" % no)
+              if tag == "SF":
+                  if cur is not None:
+                      refuse("begins a record inside another (line %d)" % no)
+                  if not path_re.fullmatch(val):
+                      refuse("names a file that is not static/js/<name>.js (line %d)" % no)
+                  if val in files:
+                      refuse("names %s twice" % val)
+                  cur = files[val] = {}
+                  continue
+              m = fields[tag].fullmatch(val)
+              if not m:
+                  refuse("holds a malformed %s record (line %d)" % (tag, no))
+              if tag == "TN":
+                  continue
+              if cur is None:
+                  refuse("holds a %s record outside any file (line %d)" % (tag, no))
+              if tag == "DA":
+                  ln, hits = int(m.group(1)), int(m.group(2))
+                  if ln == 0 or ln in cur:
+                      refuse("holds line %d of a file twice, or a line 0 (line %d)" % (ln, no))
+                  cur[ln] = hits
+          if cur is not None:
+              refuse("ends inside a record")
+          if not any(files.values()):
+              refuse("holds no line of any file")
+          out = []
+          for path in sorted(files):
+              hits = files[path]
+              out.append("SF:%s" % path)
+              out.extend("DA:%d,%d" % (ln, hits[ln]) for ln in sorted(hits))
+              out.append("LF:%d" % len(hits))
+              out.append("LH:%d" % sum(1 for h in hits.values() if h))
+              out.append("end_of_record")
+          with open(dst, "w", encoding="ascii") as fh:
+              fh.write("\n".join(out) + "\n")
+          PY
+          fi
           reporter="${RUNNER_TEMP}/codacy-coverage-reporter"
           curl -sSfL -o "${reporter}" \
             "https://github.com/codacy/codacy-coverage-reporter/releases/download/${VERSION}/codacy-coverage-reporter-linux"
           echo "${SHA256}  ${reporter}" | sha256sum -c -
           chmod +x "${reporter}"
           # From an empty directory: the reporter walks the one it runs in and looks for a git
-          # repository there, and there is neither here. The report's file names are already
-          # relative to the repository root (coverage.py writes them so), and the commit is named.
+          # repository there, and there is neither here. Both reports' file names are already
+          # relative to the repository root (coverage.py writes them so, and so does run.py), and
+          # the commit is named.
+          #
+          # Partial, then final: one `report --partial` per language, then `final` to say the
+          # commit's coverage is complete. The language is named rather than guessed from the file
+          # extensions (the reporter would take only the first it found), in Codacy's own spelling,
+          # and the LCOV parser is named so no XML parser is tried on that file first. A JavaScript
+          # upload that fails is reported, and `final` still runs: without it Codacy never
+          # processes the Python report that did go up.
           cd "$(mktemp -d)"
-          "${reporter}" report -r "${clean}" --commit-uuid "${HEAD_SHA}"
+          "${reporter}" report --partial -l Python -r "${clean}" --commit-uuid "${HEAD_SHA}"
+          js_rc=0
+          if [ -n "${js_clean}" ]; then
+            "${reporter}" report --partial -l Javascript --force-coverage-parser lcov \
+              -r "${js_clean}" --commit-uuid "${HEAD_SHA}" || js_rc=$?
+          fi
+          "${reporter}" final --commit-uuid "${HEAD_SHA}"
+          if [ "${js_rc}" -ne 0 ]; then
+            echo "::error::the JavaScript report was not accepted (reporter exit ${js_rc}); the Python report was."
+            exit 1
+          fi
