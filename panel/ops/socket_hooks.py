@@ -28,15 +28,19 @@ def add_disconnect_hook(fn):
 
     Keyed by qualified name, not by identity: register() builds a fresh closure every call, so a
     second app in the same process (which the test suite does routinely) would otherwise stack up
-    hooks holding references to a torn-down app."""
+    hooks holding references to a torn-down app.
+    """
     key = getattr(fn, "__qualname__", None) or repr(fn)
     _hooks[key] = fn
     return fn
 
 
 def run_disconnect_hooks(sid):
-    """Run every hook. One that raises must not skip the ones after it — a leaked terminal process
-    is not a reason to leak a console viewer too."""
+    """Run every registered disconnect hook for `sid`.
+
+    One that raises must not skip the ones after it — a leaked terminal process is not a reason to
+    leak a console viewer too.
+    """
     for fn in list(_hooks.values()):
         try:
             fn(sid)
