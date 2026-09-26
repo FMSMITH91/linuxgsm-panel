@@ -27,6 +27,19 @@ _BOOT_ID = "%.6f" % time.time()
 
 
 def register(app):
+    _register_server_management(app)
+    _register_host_tailscale(app)
+    _register_panel_update(app)
+    _register_panel_repair(app)
+    _register_panel_db_upkeep(app)
+    _register_panel_db_repair(app)
+    _register_panel_ban_lists(app)
+    _register_panel_blocking(app)
+    _register_panel_security_misc(app)
+
+
+def _register_server_management(app):
+    """The panel host's management page and its specs and live figures."""
     @app.route("/server-management")
     @login_required
     @superadmin_required
@@ -84,6 +97,9 @@ def register(app):
         """Realtime per-core + overall CPU and RAM/swap for the live bar graphs."""
         return jsonify(so.live_metrics())
 
+
+def _register_host_tailscale(app):
+    """Letting tailnet traffic through the firewall, and Tailscale SSH on and off."""
     @app.route("/api/server-management/ufw-allow-tailscale", methods=["POST"])
     @login_required
     @superadmin_required
@@ -120,6 +136,9 @@ def register(app):
             return jsonify({"success": True, "message": msg})
         return jsonify({"success": False, "message": msg}), 500
 
+
+def _register_panel_update(app):
+    """Panel self-update: its status, running it, its log, and the branch it tracks."""
     @app.route("/api/panel/update-status")
     @login_required
     @superadmin_required
@@ -184,6 +203,9 @@ def register(app):
         log_action(current_user, "panel_switch_branch", target=branch, detail=msg, success=success)
         return jsonify({"success": success, "message": msg})
 
+
+def _register_panel_repair(app):
+    """Panel diagnostics, the file integrity check and the repair."""
     @app.route("/api/panel/diagnostics")
     @login_required
     @superadmin_required
@@ -236,6 +258,9 @@ def register(app):
             return jsonify({"success": False,
                             "message": _log_and_generic("panel repair failed")}), 500
 
+
+def _register_panel_db_upkeep(app):
+    """The panel database's size, and optimising it."""
     @app.route("/api/panel/db-stats")
     @login_required
     @superadmin_required
@@ -266,6 +291,9 @@ def register(app):
             return jsonify({"success": False,
                             "message": _log_and_generic("db optimize failed")}), 500
 
+
+def _register_panel_db_repair(app):
+    """The panel database's health check and its repair."""
     @app.route("/api/panel/db-health")
     @login_required
     @superadmin_required
@@ -301,7 +329,8 @@ def register(app):
             return jsonify({"success": False, "message": _log_and_generic("db repair failed")}), 500
 
 
-
+def _register_panel_ban_lists(app):
+    """The panel host's fail2ban bans and top offending addresses."""
     @app.route("/api/panel/security/bans")
     @login_required
     @superadmin_required
@@ -337,6 +366,9 @@ def register(app):
             return jsonify(dict(_settings, ips=[], unreadable=True)), 200
         return jsonify(dict(_settings, ips=_ips))
 
+
+def _register_panel_blocking(app):
+    """Blocking an address on the panel host, and its auto-block switch."""
     @app.route("/api/panel/security/block", methods=["POST"])
     @login_required
     @superadmin_required
@@ -381,6 +413,9 @@ def register(app):
             _run_autoblock_now(app, rid)
         return jsonify({"success": True, "enabled": enabled, "threshold": _autoblock_threshold()})
 
+
+def _register_panel_security_misc(app):
+    """The whitelist, unbanning, and the panel host's security events and log."""
     @app.route("/api/panel/security/whitelist", methods=["POST"])
     @login_required
     @superadmin_required
