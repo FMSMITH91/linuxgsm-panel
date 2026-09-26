@@ -464,8 +464,15 @@ def restore_backup(name, passphrase=None, skip_safety_backup=False):
         # Validate the archive up front (members only, no path escapes) before we touch anything.
         try:
             with tarfile.open(src, "r:gz") as tar:
-                names = tar.getnames()
-            if not names or any(n not in _MEMBERS for n in names):
+                members = tar.getmembers()
+            names = [m.name for m in members]
+            # Every member a REGULAR file, too. The extraction below copies only regular members,
+            # so a `cred_key` that is a directory or a link was skipped and the LIVE key stayed —
+            # while the row check, reading that same member, got no key and skipped every
+            # encrypted value as unreadable after the restore. The live key reads them. No archive
+            # create_backup writes holds anything else: it copies each member with copy2 first.
+            if (not names or any(n not in _MEMBERS for n in names)
+                    or not all(m.isfile() for m in members)):
                 return False, "Backup archive looks invalid."
         except Exception:
             _log.exception("backup archive unreadable")

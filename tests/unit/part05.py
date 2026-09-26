@@ -5702,7 +5702,10 @@ try:
     check("console read: ...and the snippet is quoted as ONE argument",
           "tail -5" in _cmd and _cmd.count("sudo -u") == 1, _cmd[:120])
     _rag_sent.clear()
-    _o, _e, _r = _sm_core.read_as_game_user(NS(), "bad name; id", "tail -1 /x")
+    try:
+        _o, _e, _r = _sm_core.read_as_game_user(NS(), "bad name; id", "tail -1 /x")
+    except Exception as _rag_exc:      # a raise is not a refusal: fail THIS check, by name
+        _o, _e, _r = None, repr(_rag_exc), None
     check("console read: an unsafe account name is refused before anything is sent",
           _r == 1 and not _rag_sent, "rc=%s sent=%s" % (_r, _rag_sent))
 finally:

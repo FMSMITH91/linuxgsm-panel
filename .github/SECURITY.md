@@ -254,7 +254,9 @@ command line whose destination does not come from there.
 
 At the data layer, **a panel backup restore re-checks the archive's database** — every column
 `models.py` guards with `_validate_shell_ident` (a unit check keeps the two lists equal), decrypting
-the encrypted ones with the archive's own key, and that every port is stored as a number — before the
+the encrypted ones with the archive's own key, and that every port is stored as a number (and that
+every member is a regular file: the swap skips anything else, so a `cred_key` that was a directory or
+a link kept the live key while the check had none, and skipped every encrypted value) — before the
 pre-restore safety copy, the staging or the swap, and refuses the restore naming the row. It reads the
 database the way SQLite will serve it to the panel: tables and columns are RESOLVED, case-insensitively
 as SQLite does (an archive spelling them `GAME_SERVER` / `SHORT_NAME` skipped the first version of the

@@ -1030,6 +1030,10 @@ try:
         check("transport (ssh cli): ...and so does one cut off at its timeout",
               _rg_cut == ("", "SSH command timed out", -1),
               "got %r after %.2fs" % (_rg_cut, _rg_took))
+        check("transport (ssh cli): ...its readers getting the grace after the kill, not the "
+              "grandchild's lifetime", _rg_took < 3,
+              "took %.2fs with a 0.5s timeout and a %ss grace; the grandchild lived 3s"
+              % (_rg_took, _sm_core._READER_GRACE))
         _rg_t0 = _rg_time.monotonic()
         _rg_local = _sm_core._run_local("printf 'kept\\n'; (sleep 3 &)", timeout=10, sudo=False)
         _rg_took = _rg_time.monotonic() - _rg_t0

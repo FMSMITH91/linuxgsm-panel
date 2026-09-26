@@ -711,7 +711,9 @@ try:
 
     # ── the builders themselves ─────────────────────────────────────────────────────────────────
     _gh_raised = []
-    for _gh_name in _GH_BAD:
+    # ...plus what a LOADED row can hold that a form never sends: SQLite hands a BLOB back as
+    # bytes and an INTEGER as an int. Refused like any other bad name — not a TypeError.
+    for _gh_name in _GH_BAD + [b"gm2", 7]:
         for _gh_kw in ({"user": _gh_name}, {"user": "gm2", "selfname": _gh_name}):
             if "selfname" in _gh_kw and not _gh_name:
                 continue
@@ -735,6 +737,16 @@ try:
           and _sm_core.game_user_exec_cmd("gm2", ["rm", "-f", "--", "/home/gm2/lgsm/backup/a.tar.gz"])
           == "sudo -u gm2 rm -f -- /home/gm2/lgsm/backup/a.tar.gz",
           repr((_sm_core.game_user_cmd("gm2", "x y"), _sm_core.game_user_exec_cmd("gm2", ["a b"]))))
+    # Every argument WORD quoted, not only the account: the plain-name text above has no word that
+    # needs it, so dropping the per-word quote passed the unit AND smoke suites. SCP:SL's EULA step
+    # hands this a whole python program as one argument.
+    _gh_words = ["printf", "%s\n", "a b", "$(id)", "x'y"]
+    try:
+        _gh_split = _gh_shlex.split(_sm_core.game_user_exec_cmd("gm2", _gh_words))
+    except ValueError as _e:
+        _gh_split = repr(_e)
+    check("GHSA-hh39 builders: game_user_exec_cmd quotes every argument word, so each arrives whole",
+          _gh_split == ["sudo", "-u", "gm2"] + _gh_words, repr(_gh_split))
     _gh_argv_bad = []
     for _gh_name in _GH_BAD:
         try:
@@ -800,6 +812,9 @@ try:
         check("GHSA-hh39 F3 daily_restart_check_cmd: ...and writes the number it was given",
               "1.2.3.4:27015 2>" in _sm_core.daily_restart_check_cmd(
                   "gm2", "gmodserver", "garrysmod", "1.2.3.4", " 27015"))
+        _gh_unset = [_gh_f3(lambda: _sm_core.cron_port(_v))[:2] for _v in (None, "")]
+        check("GHSA-hh39 F3 cron_port: an unset port (None or \"\") is None — not refused as text",
+              _gh_unset == [(None, None), (None, None)], repr(_gh_unset))
     finally:
         _GH_CRONTAB = _gh_saved_crontab
 
@@ -993,6 +1008,10 @@ try:
          {"game_rows": [], "remote_rows": [(3, _gh_enc("-oProxyCommand=sh"))]}, "host #3 (username)"),
         ("a port stored as text", {"game_rows": [(9, "gmodserver", "gmod", "27015; id")],
                                    "remote_rows": _GH_OK_REMOTE}, "game server #9 (port)"),
+        ("an account stored as a BLOB", {"game_rows": [(10, b"gmodserver", "gmod", 27015)],
+                                         "remote_rows": _GH_OK_REMOTE}, "game server #10 (short_name)"),
+        ("two bad rows, the SECOND named too", {"game_rows": [(21, "a;b", "gmod", 27015), (22, "c;d", "gmod", 27016)],
+                                                "remote_rows": _GH_OK_REMOTE}, "game server #22 (short_name)"),
     ]
     for _gh_what, _gh_rows, _gh_named in _gh_cases:
         _gh_ok, _gh_msg = _gh_restore(_gh_rows)
@@ -1021,6 +1040,32 @@ try:
                                   cred_key=None)
     check("GHSA-hh39 restore: an archive with no cred_key is checked with the key the panel keeps",
           _gh_ok is False and "host #1 (username)" in _gh_msg, "%r %r" % (_gh_ok, _gh_msg))
+    # ...and one whose cred_key is NOT a regular file. The extraction copies only regular members,
+    # so the swap keeps the LIVE key — while the check, reading the same member, got no key at all
+    # and skipped every encrypted value as "unreadable after the restore too". The live key reads
+    # it: measured, the restored panel's ORM served this login unchanged.
+    for _gh_kind, _gh_type in (("a directory", _gh_tar.DIRTYPE), ("a symlink", _gh_tar.SYMTYPE)):
+        _gh_nm = _gh_archive({"game_rows": [(1, "gmodserver", "gmod", 27015)],
+                              "remote_rows": [(1, _gh_enc("-oProxyCommand=sh", _gh_live_key))]},
+                             cred_key=None)
+        _gh_ap = os.path.join(str(_gh_bk.BACKUP_DIR), _gh_nm)
+        with _gh_tar.open(_gh_ap, "r:gz") as _gh_in:
+            _gh_keep = [(_m, _gh_in.extractfile(_m).read()) for _m in _gh_in.getmembers()]
+        with _gh_tar.open(_gh_ap, "w:gz") as _gh_out:
+            for _m, _d in _gh_keep:
+                _gh_out.addfile(_m, _gh_io.BytesIO(_d))
+            _gh_ti = _gh_tar.TarInfo("cred_key")
+            _gh_ti.type = _gh_type
+            _gh_ti.linkname = "nowhere" if _gh_type == _gh_tar.SYMTYPE else ""
+            _gh_out.addfile(_gh_ti)
+        _gh_calls.clear()
+        _gh_shutil.rmtree(_gh_stage, ignore_errors=True)
+        _gh_ok, _gh_msg = _gh_bk.restore_backup(_gh_nm)
+        check("GHSA-hh39 restore: a cred_key member that is %s is refused before anything is "
+              "touched (the swap would keep the live key the check never decrypted with)" % _gh_kind,
+              _gh_ok is False and _gh_calls == [] and not os.path.exists(_gh_stage)
+              and _gh_bk.DB_PATH.read_bytes() == _gh_live_bytes,
+              "%r %r calls=%r" % (_gh_ok, _gh_msg, _gh_calls))
     _gh_calls.clear()
     _gh_shutil.rmtree(_gh_stage, ignore_errors=True)
     _gh_con = _gh_sqlite.connect(os.path.join(_gh_dir, "old.db"))
@@ -1127,6 +1172,14 @@ try:
                      "CREATE INDEX ix_ghsa ON game_server (remote_id, name)"],
                 writable=["UPDATE sqlite_master SET sql = 'CREATE INDEX ix_ghsa ON game_server "
                           "(remote_id, short_name)' WHERE name = 'ix_ghsa'"])),
+        ("the same account computed and STORED (recomputed on every UPDATE as well)", "computes",
+         _gh_db([], sql=["DROP TABLE game_server",
+                         "CREATE TABLE game_server (id INTEGER PRIMARY KEY, remote_id INTEGER, "
+                         "status VARCHAR(32), game_type VARCHAR(64), port INTEGER, query_port INTEGER, "
+                         "short_name TEXT GENERATED ALWAYS AS (CASE status WHEN 'online' THEN '%s' "
+                         "ELSE 'gmodserver' END) STORED)" % _GH_PAYLOAD,
+                         "INSERT INTO game_server (id, remote_id, status, game_type, port) "
+                         "VALUES (15, 1, 'offline', 'gmod', 27015)"])),
     ]
     for _gh_what, _gh_says, _gh_bytes in _gh_f2_shape:
         _gh_ok, _gh_msg = _gh_restore(_gh_bytes)
@@ -1248,9 +1301,48 @@ try:
                                        selfname=_gh_loaded[1] if _gh_loaded else "x")
     _gh_cc = _sm_game.capture_console(_GH_SRV, _gh_loaded[0] if _gh_loaded else "x;id",
                                       _gh_loaded[1] if _gh_loaded else "x")
+except Exception as _e:        # a raise is not a refusal: fail the check below, by name
+    _gh_rc = _gh_cc = repr(_e)
 finally:
     _sm_core.run_command = _gh_saved_rc
 check("GHSA-hh39 load: ...and the LOADED row's names drive no command at all",
       not _gh_sent and _is_tuple_refusal(_gh_rc) and _is_tuple_refusal(_gh_cc),
       "%r %r %r" % (_gh_sent[:1], _gh_rc, _gh_cc))
+# ...and EVERY watched column, on BOTH models. The checks above load GameServer.short_name and
+# .port only, so dropping the RemoteServer listener, or any other column from the two lists, passed.
+_gh_all_db = os.path.join(_gh_dir, "load_all.db")
+_gh_make_db(_gh_all_db)
+_gh_ac = _gh_sqlite.connect(_gh_all_db)
+_gh_ac.execute("INSERT INTO remote_server (id, name, host, port, username, linuxgsm_user) VALUES "
+               "(5, 'h', 'h', 22, '-oProxyCommand=x', ''), (6, 'h', 'h', 22, 'admin', 'a b'), "
+               "(7, 'h', 'h', '22; id', 'admin', '')")
+_gh_ac.execute("INSERT INTO game_server (id, remote_id, name, short_name, game_type, port, query_port) "
+               "VALUES (5, 5, 'g', 'gm5', 'gmod$(id)', 27015, NULL), "
+               "(6, 5, 'g', 'gm6', 'gmod', 27016, '27017; id')")
+_gh_ac.commit()
+_gh_ac.close()
+_gh_warned.clear()
+_gh_models._flagged_on_load.clear()
+_gh_models._log.addHandler(_gh_handler)
+_gh_eng2 = _gh_engine("sqlite:///" + _gh_all_db)
+_gh_all_exc = None
+try:
+    with _GhSession(_gh_eng2) as _gh_sess:
+        for _gh_cls, _gh_id in ((_gh_models.RemoteServer, 5), (_gh_models.RemoteServer, 6),
+                                (_gh_models.RemoteServer, 7), (_gh_models.GameServer, 5),
+                                (_gh_models.GameServer, 6)):
+            _gh_sess.get(_gh_cls, _gh_id)
+except Exception as _e:
+    _gh_all_exc = _e
+finally:
+    _gh_models._log.removeHandler(_gh_handler)
+    _gh_eng2.dispose()
+_gh_want = [("RemoteServer #5", " username "), ("RemoteServer #6", " linuxgsm_user "),
+            ("RemoteServer #7", " port "), ("GameServer #5", " game_type "),
+            ("GameServer #6", " query_port ")]
+_gh_missing = [w for w in _gh_want if not any(w[0] in m and w[1] in m for m in _gh_warned)]
+check("GHSA-hh39 load: every watched column is flagged on BOTH models — a host's login, LinuxGSM "
+      "account and ssh port, a game server's script and query port",
+      _gh_all_exc is None and not _gh_missing and len(_gh_warned) == len(_gh_want),
+      "raised=%r missing=%r warned=%r" % (_gh_all_exc, _gh_missing, _gh_warned))
 _gh_shutil.rmtree(_gh_dir, ignore_errors=True)
