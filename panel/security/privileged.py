@@ -1108,13 +1108,13 @@ def _nodesource_setup_remote(a):
     return "; ".join([
         'a=$(dpkg --print-architecture 2>/dev/null)',
         'case "$a" in amd64|arm64) ;; *) echo "NodeSource builds Node.js for amd64 and arm64 only,'
-        ' not \\"$a\\""; exit 1 ;; esac',
+        + ' not \\"$a\\""; exit 1 ;; esac',
         "command -v gpg >/dev/null 2>&1 || DEBIAN_FRONTEND=noninteractive apt-get install -y gnupg"
-        " >/dev/null 2>&1",
+        + " >/dev/null 2>&1",
         # Said separately: without gpg every key would fail the check below, and "not the pinned
         # key" would then be the wrong reason to give.
         'command -v gpg >/dev/null 2>&1 || { echo "gpg is missing and could not be installed, so'
-        ' NodeSource\'s signing key cannot be checked - nothing was trusted"; exit 1; }',
+        + ' NodeSource\'s signing key cannot be checked - nothing was trusted"; exit 1; }',
         'k=$(mktemp) || exit 1',
         'g=$(mktemp -d) || exit 1',
         "trap 'rm -rf -- \"$k\" \"$k.gpg\" \"$g\"' EXIT",
@@ -1136,7 +1136,7 @@ def _nodesource_setup_remote(a):
         "printf %s > %s" % (pin, q(NODESOURCE_PREFS))
         + ' || { echo "Could not write the NodeSource apt pin"; exit 1; }',
         'apt-get update -qq >/dev/null 2>&1 || { echo "apt could not read NodeSource\'s'
-        ' repository"; exit 1; }',
+        + ' repository"; exit 1; }',
         'echo "NodeSource repository configured (Node.js %s.x, key %s)"'
         % (NODESOURCE_NODE_MAJOR, NODESOURCE_FINGERPRINT),
     ])
