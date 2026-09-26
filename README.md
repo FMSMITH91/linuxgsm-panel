@@ -254,6 +254,8 @@ bash tools/run-tests.sh    # compile, flake8, unit + smoke tests, shellcheck
 
 CI runs the same suite on every push and PR, plus CodeQL, Bandit, Semgrep, a dependency audit, and coverage-guided fuzzing (`tests/fuzz/`).
 
+The panel's own JavaScript (`static/js/`) is measured separately, in a real browser: `tools/js_coverage/run.py` boots a seeded panel in a throwaway copy of the tree, with every host command answered by a fake host, walks its pages and controls in headless Chrome, and writes V8's coverage as LCOV (`python tools/js_coverage/run.py --summary js-coverage.txt` with Chrome or Chromium installed; it never touches `data/`). CI sends that to Codacy beside the Python report.
+
 ### Layout
 
 The application lives in `panel/`, layered so that each package's **module-level** imports

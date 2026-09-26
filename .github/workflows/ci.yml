@@ -215,9 +215,9 @@ jobs:
     # and Chrome is part of the runner image. So there is no new lockfile to pin or keep current.
     #
     # It FAILS rather than uploading nothing when the panel does not boot, the sign-in does not
-    # land, Chrome cannot be driven, or no line of static/js ran: an empty report would read as
-    # "0% covered", which is a measurement of nothing. Like the job above it holds no secret —
-    # codacy-coverage.yml uploads its artifact.
+    # land, Chrome cannot be driven, a page the walk names does not render as itself, or no line
+    # of static/js ran: an empty report would read as "0% covered", which is a measurement of
+    # nothing. Like the job above it holds no secret — codacy-coverage.yml uploads its artifact.
     name: js coverage
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -247,15 +247,22 @@ jobs:
             echo "::error::no Chrome on this runner image; the JavaScript was not measured."
             exit 1
           fi
+          # The summary goes on the run page whether or not the run passed — a failed one names
+          # the page it could not reach or the flow that broke — and the step then exits with
+          # run.py's own status, so a failure stops the upload below.
+          rc=0
           python tools/js_coverage/run.py --chrome "${chrome}" \
-            --out lcov.info --summary js-coverage.txt
-          {
-            echo '### JavaScript coverage (static/js)'
-            echo ''
-            echo '```'
-            cat js-coverage.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+            --out lcov.info --summary js-coverage.txt || rc=$?
+          if [ -f js-coverage.txt ]; then
+            {
+              echo '### JavaScript coverage (static/js)'
+              echo ''
+              echo '```'
+              cat js-coverage.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "${rc}"
 
       - name: Upload the report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

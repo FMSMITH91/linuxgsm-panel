@@ -227,6 +227,59 @@ check("js coverage (CI): ...installs only requirements.txt, hash-checked, and ru
       and "|| true" not in _jcj and "continue-on-error" not in _jcj and "set -euo pipefail" in _jcj
       and "if-no-files-found: error" in _jcj,
       repr(_jcj_pip))
+
+# ...and the Measure step itself, RUN, with run.py stood in for by a `python` on PATH that exits as
+# told: the step must leave with run.py's status (and so stop the upload after it), put the summary
+# on the run page either way, and fail — saying so — on a runner with no Chrome. PATH holds nothing
+# but the stand-ins, so a runner that does have Chrome cannot make the last case pass by accident.
+_jcm = re.search(r"- name: Measure\n\s+run: \|\n((?:\s{10}.*\n|\s*\n)+)", _ci14)
+_jcm_code = "\n".join(_l[10:] for _l in _jcm.group(1).splitlines()) if _jcm else ""
+_jcm_sb = _tf14.mkdtemp(prefix="jscov-ci-")
+try:
+    _jcm_bin = os.path.join(_jcm_sb, "bin")
+    os.makedirs(_jcm_bin)
+    for _n, _body in (("python", "#!/bin/sh\necho \"$*\" > args\n"
+                                 "[ -n \"$JC_SUMMARY\" ] && echo \"$JC_SUMMARY\" > js-coverage.txt\n"
+                                 "exit \"$JC_RC\"\n"),
+                      ("google-chrome", "#!/bin/sh\nexit 0\n")):
+        with open(os.path.join(_jcm_bin, _n), "w") as _fh:
+            _fh.write(_body)
+        os.chmod(os.path.join(_jcm_bin, _n), 0o755)
+    os.symlink("/bin/cat", os.path.join(_jcm_bin, "cat"))
+
+    def _jcm_run(rc, summary="TOTAL 5216 4159 79.7%", chrome=True):
+        _wd = _tf14.mkdtemp(dir=_jcm_sb)
+        _path = _jcm_bin if chrome else os.path.join(_jcm_sb, "nochrome")
+        if not chrome:
+            os.makedirs(_path, exist_ok=True)
+            for _n in ("python", "cat"):
+                if not os.path.exists(os.path.join(_path, _n)):
+                    os.symlink(os.path.join(_jcm_bin, _n), os.path.join(_path, _n))
+        _summ = os.path.join(_wd, "step-summary")
+        _p = _sp14.run(["/bin/bash", "-c", _jcm_code], cwd=_wd, capture_output=True, text=True,
+                       timeout=30, env={"PATH": _path, "JC_RC": str(rc), "JC_SUMMARY": summary,
+                                        "GITHUB_STEP_SUMMARY": _summ})
+        _read = (lambda _f: open(_f).read() if os.path.exists(_f) else "")
+        return _p.returncode, _read(_summ), _read(os.path.join(_wd, "args")), _p.stdout + _p.stderr
+
+    _jcm_cases = {"measured": _jcm_run(0), "empty": _jcm_run(3), "not reached": _jcm_run(2),
+                  "no summary": _jcm_run(2, summary=""), "no chrome": _jcm_run(0, chrome=False)}
+    check("js coverage (CI): the Measure step exits with run.py's own status, and shows the summary "
+          "whether or not the run passed",
+          _jcm_code != "" and _jcm_cases["measured"][0] == 0 and _jcm_cases["empty"][0] == 3
+          and _jcm_cases["not reached"][0] == 2 and _jcm_cases["no summary"][0] == 2
+          and all("TOTAL 5216" in _jcm_cases[_k][1] for _k in ("measured", "empty", "not reached"))
+          and _jcm_cases["no summary"][1] == ""
+          and "--out lcov.info --summary js-coverage.txt" in _jcm_cases["measured"][2]
+          and "--chrome " + os.path.join(_jcm_bin, "google-chrome") in _jcm_cases["measured"][2],
+          repr({_k: _v[:3] for _k, _v in _jcm_cases.items()}))
+    check("js coverage (CI): ...and on a runner with no Chrome it fails, saying so, without running",
+          _jcm_cases["no chrome"][0] != 0 and "no Chrome on this runner" in _jcm_cases["no chrome"][3]
+          and _jcm_cases["no chrome"][2] == "",
+          repr(_jcm_cases["no chrome"]))
+finally:
+    _sh14b.rmtree(_jcm_sb, ignore_errors=True)
+
 # ── run.py's exits: no measurement is never a report ─────────────────────────────────────────
 # Run, not read: the old check matched run.py's source for `fail("the panel did not boot` and
 # `if th == 0:`, which a refactor removes without changing what happens — and a regression that
@@ -465,3 +518,25 @@ check("js coverage: a page whose panel scripts would not be counted is recorded 
       and _jc_drv.repo_path("http://127.0.0.1:1/lgsm/static/js/panel.js") == "static/js/panel.js",
       repr(_jc_seen))
 _jc_nav["scripts"] = []
+
+# walk._run_flow: a flow that raises is recorded against its page and the walk goes on; one that
+# does not leaves nothing behind. (Without the catch, the first broken flow ended the whole run.)
+_jc_walk = sys.modules.get("walk")
+
+
+def _jc_flow_boom(_d):
+    raise RuntimeError("element gone")
+
+
+_jc_fd = _JcDriver(_jc_good)
+try:
+    with _ctx14.redirect_stdout(_io14.StringIO()):
+        _jc_walk._run_flow(_jc_fd, "/users", "fine", lambda _d: None)
+        _jc_walk._run_flow(_jc_fd, "/users", "boom", _jc_flow_boom)
+    _jc_fd_raised = None
+except Exception as _e:  # noqa: BLE001 - the check below is about exactly this
+    _jc_fd_raised = _e
+check("js coverage: a flow that breaks is recorded against its page, and the walk goes on",
+      _jc_walk is not None and _jc_fd_raised is None
+      and _jc_fd.flow_errors == [("/users", "boom", "RuntimeError: element gone")],
+      repr((_jc_fd_raised, _jc_fd.flow_errors)))
