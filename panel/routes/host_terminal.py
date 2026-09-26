@@ -187,9 +187,8 @@ def sweep_revoked_terminals(app, socketio, only_sid=None):
     return closed
 
 
-def register(app, socketio, supervise):
-    _ts.start_idle_sweeper(supervise)
-
+def _register_terminal_page(app):
+    """The terminal page for one host."""
     @app.route("/terminal/<int:remote_id>")
     @login_required
     @permission_required(USE_TERMINAL)
@@ -206,6 +205,9 @@ def register(app, socketio, supervise):
                                sudo_note=_ts.sudo_hint(remote, bool(remote.is_local)),
                                local_user=_ts.panel_account())
 
+
+def _register_terminal_open(socketio):
+    """The term_open event, which starts a shell for this socket."""
     # ── socket events ─────────────────────────────────────────────────────────────────────────
     def _send(sid, data):
         socketio.emit("term_output", {"data": data}, room=sid)
@@ -216,28 +218,9 @@ def register(app, socketio, supervise):
     @socketio.on("term_open")
     def on_term_open(data):
         sid = request.sid
-        if not _may_use_terminal():
-            emit("term_error", {"message": "You don't have permission to open a terminal."})
-            return
-        try:
-            remote_id = int((data or {}).get("remote_id"))
-        except (TypeError, ValueError):
-            emit("term_error", {"message": "No host was named."})
-            return
-        # Per-host access, exactly as the page route checks it — a socket event is not covered by
-        # the route's decorators and must ask again.
-        from panel.security.auth import can_access_remote
-        if not (current_user.is_superadmin or can_access_remote(current_user, remote_id)):
-            emit("term_error", {"message": "You don't have access to that host."})
-            return
-        remote = RemoteServer.query.get(remote_id)
-        if remote is None:
-            emit("term_error", {"message": "That host no longer exists."})
-            return
-        # ...and the panel's own host is superadmin-only, which no host grant changes. The page
-        # route refuses it as well, but this event is reachable without ever loading the page.
-        if not may_shell_on(current_user, remote):
-            emit("term_error", {"message": LOCAL_HOST_REFUSAL})
+        remote_id, remote, why = _terminal_target(data)
+        if why is not None:
+            emit("term_error", {"message": why})
             return
         _ts.close_for_sid(sid, "")          # one shell per socket
         try:
@@ -258,44 +241,75 @@ def register(app, socketio, supervise):
         log_action(current_user, "terminal_open", target=remote.name)
         emit("term_ready", {"host": remote.display_name})
 
-    def _still_allowed(sid):
-        """Does this socket's user STILL have access to the host its shell is on?
 
-        Cached for _ACCESS_RECHECK_SECONDS: the answer changes when an admin edits a group, not
-        between keystrokes, and a group lookup per character would be absurd. Revocation therefore
-        takes effect within ten seconds rather than at the next reconnect.
-        """
-        with _sid_lock:
-            remote_id = _sid_host.get(sid)
-        if remote_id is None:
-            return True                       # no open session of ours on this socket
-        now = time.monotonic()
-        cached = _sid_access.get(sid)
-        if cached is not None and (now - cached[0]) < _ACCESS_RECHECK_SECONDS:
-            return cached[1]
-        ok = may_shell_on(current_user, RemoteServer.query.get(remote_id))
-        _sid_access[sid] = (now, ok)
-        if not ok:
-            emit("term_error", {"message": "Your access to this host was removed, so the "
-                                           "terminal has been closed."})
-            _close_and_audit(app, sid, "access to the host was revoked")
-        return ok
+def _terminal_target(data):
+    """(remote_id, remote, None) for the host a term_open names and the caller may open a shell on.
 
-    def _refused(sid):
-        """An event from a socket whose user may no longer use the terminal at all.
+    Otherwise (None, None, the refusal to send back).
+    """
+    if not _may_use_terminal():
+        return None, None, "You don't have permission to open a terminal."
+    try:
+        remote_id = int((data or {}).get("remote_id"))
+    except (TypeError, ValueError):
+        return None, None, "No host was named."
+    # Per-host access, exactly as the page route checks it — a socket event is not covered by
+    # the route's decorators and must ask again.
+    from panel.security.auth import can_access_remote
+    if not (current_user.is_superadmin or can_access_remote(current_user, remote_id)):
+        return None, None, "You don't have access to that host."
+    remote = RemoteServer.query.get(remote_id)
+    if remote is None:
+        return None, None, "That host no longer exists."
+    # ...and the panel's own host is superadmin-only, which no host grant changes. The page
+    # route refuses it as well, but this event is reachable without ever loading the page.
+    if not may_shell_on(current_user, remote):
+        return None, None, LOCAL_HOST_REFUSAL
+    return remote_id, remote, None
 
-        Refusing the event is not enough: the shell stays up and its output keeps streaming to
-        this socket. Ask whether the access is really gone — a locked database also makes
-        current_user anonymous — and close the shell if it is.
-        """
-        sweep_revoked_terminals(app, socketio, only_sid=sid)
 
+def _still_allowed(app, sid):
+    """Does this socket's user STILL have access to the host its shell is on?
+
+    Cached for _ACCESS_RECHECK_SECONDS: the answer changes when an admin edits a group, not
+    between keystrokes, and a group lookup per character would be absurd. Revocation therefore
+    takes effect within ten seconds rather than at the next reconnect.
+    """
+    with _sid_lock:
+        remote_id = _sid_host.get(sid)
+    if remote_id is None:
+        return True                       # no open session of ours on this socket
+    now = time.monotonic()
+    cached = _sid_access.get(sid)
+    if cached is not None and (now - cached[0]) < _ACCESS_RECHECK_SECONDS:
+        return cached[1]
+    ok = may_shell_on(current_user, RemoteServer.query.get(remote_id))
+    _sid_access[sid] = (now, ok)
+    if not ok:
+        emit("term_error", {"message": "Your access to this host was removed, so the "
+                                       "terminal has been closed."})
+        _close_and_audit(app, sid, "access to the host was revoked")
+    return ok
+
+
+def _refused(app, socketio, sid):
+    """An event from a socket whose user may no longer use the terminal at all.
+
+    Refusing the event is not enough: the shell stays up and its output keeps streaming to
+    this socket. Ask whether the access is really gone — a locked database also makes
+    current_user anonymous — and close the shell if it is.
+    """
+    sweep_revoked_terminals(app, socketio, only_sid=sid)
+
+
+def _register_terminal_io(app, socketio):
+    """Keystrokes, resizes and closes for a socket's open shell."""
     @socketio.on("term_input")
     def on_term_input(data):
         if not _may_use_terminal():
-            _refused(request.sid)
+            _refused(app, socketio, request.sid)
             return
-        if not _still_allowed(request.sid):
+        if not _still_allowed(app, request.sid):
             return
         sess = _ts.get(request.sid)
         if sess is not None:
@@ -304,9 +318,9 @@ def register(app, socketio, supervise):
     @socketio.on("term_resize")
     def on_term_resize(data):
         if not _may_use_terminal():
-            _refused(request.sid)
+            _refused(app, socketio, request.sid)
             return
-        if not _still_allowed(request.sid):
+        if not _still_allowed(app, request.sid):
             return
         sess = _ts.get(request.sid)
         if sess is not None:
@@ -315,6 +329,13 @@ def register(app, socketio, supervise):
     @socketio.on("term_close")
     def on_term_close(_data=None):
         _close_and_audit(app, request.sid, "closed")
+
+
+def register(app, socketio, supervise):
+    _ts.start_idle_sweeper(supervise)
+    _register_terminal_page(app)
+    _register_terminal_open(socketio)
+    _register_terminal_io(app, socketio)
 
     # A browser that closed without term_close must still take the shell with it — but NOT via a
     # second @socketio.on("disconnect"). flask-socketio keeps one handler per event per namespace
