@@ -23,16 +23,19 @@ from datetime import datetime, timezone
 
 
 def utcnow():
-    """The current UTC time as a **naive** datetime — what `datetime.utcnow()` returned.
+    """The current UTC time as a **naive** datetime.
 
-    Use for every value that is stored in, or compared against, a `db.DateTime` column."""
+    It is what `datetime.utcnow()` returned. Use for every value that is stored in, or compared
+    against, a `db.DateTime` column.
+    """
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def aware_utcnow():
     """The current UTC time as a **timezone-aware** datetime.
 
-    Use only where a library asks for one. Never store it: it would land in a naive column."""
+    Use only where a library asks for one. Never store it: it would land in a naive column.
+    """
     return datetime.now(timezone.utc)
 
 
@@ -49,8 +52,10 @@ _HHMM_RE = _re.compile(r"^([01]?[0-9]|2[0-3]):([0-5][0-9])\Z")
 
 
 def parse_hhmm(value, default=(5, 0)):
-    """"HH:MM" -> (hour, minute), or `default` for anything that is not one. Never raises: this
-    parses a value that reached us from a form."""
+    """Parse "HH:MM" into (hour, minute), or return `default` for anything that is not one.
+
+    Never raises: this parses a value that reached us from a form.
+    """
     m = _HHMM_RE.match((value or "").strip())
     return (int(m.group(1)), int(m.group(2))) if m else default
 
@@ -67,7 +72,8 @@ def valid_timezone(name):
     rather than assumed, because a comment claiming otherwise would be a security control that
     only appears to exist. What it genuinely buys: obviously-invalid input never reaches a
     filesystem-backed lookup on a browser-reachable path, and the value that can be stored and
-    rendered is held to a known charset and length."""
+    rendered is held to a known charset and length.
+    """
     name = (name or "").strip()
     if not name or len(name) > 64 or not _re.match(r"^[A-Za-z0-9+_/-]+\Z", name) or ".." in name:
         return ""
@@ -90,7 +96,8 @@ def convert_wall_time(hour, minute, from_tz, to_tz, on=None):
     apart for part of the year, so a schedule converted today is an hour out after the next
     changeover — 05:00 America/Chicago is 11:00 UTC in January and 10:00 UTC in July. Nothing
     short of a DST-aware scheduler on the host fixes that, so the conversion is anchored to a
-    reference date (now, by default) and the UI says which host time it actually wrote."""
+    reference date (now, by default) and the UI says which host time it actually wrote.
+    """
     from_tz, to_tz = valid_timezone(from_tz), valid_timezone(to_tz)
     if not from_tz or not to_tz or from_tz == to_tz:
         return hour, minute
@@ -105,8 +112,9 @@ def convert_wall_time(hour, minute, from_tz, to_tz, on=None):
 
 
 def host_stamp_to_epoch(stamp, host_tz):
-    """LinuxGSM's "YYYY-MM-DD HH:MM:SS" (written in the HOST's local time) as a UTC epoch float,
-    or None if it cannot be read.
+    """Convert LinuxGSM's "YYYY-MM-DD HH:MM:SS" stamp to a UTC epoch float, or None.
+
+    The stamp is written in the HOST's local time; None means it cannot be read.
 
     Epoch, not a string: it is the one representation with no timezone ambiguity left in it, and
     it is what the browser already renders console times from. An unknown host timezone returns
@@ -114,7 +122,8 @@ def host_stamp_to_epoch(stamp, host_tz):
     date, which is the rule the rest of this feature follows.
 
     An ambiguous local time (the hour that repeats when clocks go back) resolves to the FIRST of
-    the two, which is what `fold=0` means and is the conventional reading."""
+    the two, which is what `fold=0` means and is the conventional reading.
+    """
     host_tz = valid_timezone(host_tz)
     if not stamp or not host_tz:
         return None
