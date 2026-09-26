@@ -1,5 +1,5 @@
 """Part 3 of the unit suite. Imported for its side effects."""
-from unit.part01 import (NS, SO, _root, _sm_core, _sm_cron, _sm_files, _sm_firewall, _sm_hosts, _sm_portscan, check, config, eq, os, sys)  # noqa: F401,E402
+from unit.part01 import (NS, SO, _root, _sm_core, _sm_cron, _sm_files, _sm_firewall, _sm_hosts, _sm_portscan, check, config, eq, os, skip, sys)  # noqa: F401,E402
 from unit.part02 import (_User, _codes, _u)  # noqa: F401,E402
 check("backup: a different code still works", _u.use_backup_code(_codes[1]))
 check("backup: no codes set is handled", not _User().use_backup_code("whatever"))
@@ -670,6 +670,54 @@ check("daily_restart(mapped): jq prints nothing unless gamedig really answered",
 check("daily_restart(mapped): restarts on a counted 0, not on an empty/failed read",
       '[ "$P" = 0 ]' in _dr_line
       and '-z "$P"' not in _dr_line and '"$P" = null' not in _dr_line, _dr_line[:200])
+# cron runs a crontab that sets no PATH with its compiled-in /usr/bin:/bin, and Debian/Ubuntu's own
+# npm installs a global gamedig into /usr/local/bin — so on every host whose Node came from the
+# distro, the hourly check ran `gamedig: not found`, P stayed empty, `[ "$P" = 0 ]` never held and
+# the daily restart never happened. The query now sets its own PATH inside the substitution.
+check("daily_restart(mapped): gamedig is looked up on a PATH holding /usr/local/bin, then /usr/bin",
+      _sm_core.gamedig_cron_call() + "--type garrysmod " in _dr_line
+      and _sm_core.gamedig_cron_call() == "P=$(PATH=%s; gamedig " % _sm_core.CRON_TOOL_PATH
+      and _sm_core.CRON_TOOL_PATH.split(":")[:2] == ["/usr/local/bin", "/usr/bin"], _dr_line[:200])
+# ...driven: the P= part of the real line, run under exactly cron's environment (env -i, PATH
+# /usr/bin:/bin) with a fake gamedig in a directory standing in for /usr/local/bin — reachable
+# through the line's own PATH and not through cron's. The bare call is run too, as the control that
+# shows this environment really does hide it.
+import re as _dr_re
+import shutil as _dr_shutil
+import subprocess as _dr_sp
+import tempfile as _dr_tmp
+if not _dr_shutil.which("jq"):
+    skip("daily_restart: the hourly check finds gamedig under cron's own PATH, driven",
+         "no jq on this machine")
+else:
+    _dr_bin = _dr_tmp.mkdtemp(prefix="cron-toolpath-")
+    try:
+        with open(os.path.join(_dr_bin, "gamedig"), "w") as _fh:
+            _fh.write("#!/bin/sh\necho '{\"players\":[{\"name\":\"a\"},{\"name\":\"b\"}]}'\n")
+        os.chmod(os.path.join(_dr_bin, "gamedig"), 0o755)
+        _dr_saved_path = _sm_core.CRON_TOOL_PATH
+        _sm_core.CRON_TOOL_PATH = _dr_bin + ":/usr/bin:/bin"
+        try:
+            _sm_core.set_daily_restart(None, "gmodserver", game_type="gmod", port=27015, enabled=True)
+            _dr_drv = _cron["add"][1]
+            _dr_pathed = _sm_core.gamedig_cron_call()
+        finally:
+            _sm_core.CRON_TOOL_PATH = _dr_saved_path
+        _dr_getp = _dr_re.search(r"(P=\$\(.*?\); )if ", _dr_drv)
+
+        def _dr_under_cron(getp):
+            return _dr_sp.run(["env", "-i", "HOME=" + _dr_bin, "SHELL=/bin/sh", "PATH=/usr/bin:/bin",
+                               "sh", "-c", getp + 'echo "P=[$P]"'],
+                              capture_output=True, text=True, timeout=60).stdout.strip()
+        _dr_got = _dr_under_cron(_dr_getp.group(1)) if _dr_getp else None
+        check("daily_restart: under cron's own PATH the hourly check still counts the players",
+              _dr_got == "P=[2]", "got %r from %r" % (_dr_got, _dr_drv[:220]))
+        _dr_ctl = (_dr_under_cron(_dr_getp.group(1).replace(_dr_pathed, _sm_core.GAMEDIG_CRON_BARE))
+                   if _dr_getp and _dr_pathed in _dr_getp.group(1) else None)
+        check("daily_restart: ...where the bare call it used to make reads nothing (the control)",
+              _dr_ctl == "P=[]", "got %r" % (_dr_ctl,))
+    finally:
+        _dr_shutil.rmtree(_dr_bin, ignore_errors=True)
 _sm_core.set_daily_restart(None, "noqueryserver", game_type="noquerygame", port=28960, enabled=True)
 # The no-query case stays unconditional, and that is a different thing from a failed read: the
 # panel knows at cron-writing time that this game has no gamedig type, so there is no reading to
@@ -3480,6 +3528,32 @@ try:
     check("bootstrap: an unread reboot-required check is not reported as 'no reboot needed'",
           "No reboot needed" not in _log2 and "Could not check whether a reboot is needed" in _log2,
           "a host that never answered was told it was up to date: %s" % _log2[-300:])
+
+    # ── ...and a host with no Node gets it through the pinned-key verb, not NodeSource's script ──
+    # The bootstrap's Node step was one root shell: `curl … setup_lts.x | bash -`. It is
+    # hosts._bootstrap_node now (driven case by case in part06); this is the CALLER, the full
+    # bootstrap, on a host whose `node -v` finds nothing: it must reach nodesource-setup and then
+    # install nodejs, and nothing it sends may fetch NodeSource's setup script.
+    _bs_cmds = []
+
+    def _bs_nonode(server, cmd, **k):
+        _bs_cmds.append((cmd, k.get("sudo")))
+        if cmd.startswith("node -v"):
+            return ("", "", 127)
+        return _bs_run(("NO\n", "", 0))(server, cmd, **k)
+    _bs_priv.clear()
+    _sm_core.run_command = _bs_nonode
+    _, _, _log3 = _sm_hosts.remote_bootstrap_vps(
+        NS(id=9103, host="203.0.113.12", auth_method="key"), set_timezone="", enable_ufw=False,
+        install_lgsm_deps=False, username="", install_fail2ban=False, do_reboot=False)
+    _bs_ns = _bs_priv.index("nodesource-setup") if "nodesource-setup" in _bs_priv else -1
+    check("bootstrap: a host with no Node configures NodeSource through the verb, then installs "
+          "nodejs, then gamedig",
+          _bs_ns >= 0 and _bs_priv[_bs_ns + 1:_bs_ns + 2] == ["apt-install"]
+          and "npm-install-global" in _bs_priv[_bs_ns:], repr(_bs_priv))
+    check("bootstrap: ...and sends no command that fetches NodeSource's setup script",
+          not any("setup_lts" in _c or "deb.nodesource.com/setup" in _c for _c, _ in _bs_cmds),
+          repr([_c for _c, _ in _bs_cmds if "nodesource" in _c.lower()]))
 
     # ── ...and the SSH hardening is read back from sshd, not assumed from the write ──
     # sshd keeps the FIRST value it reads and Ubuntu Includes sshd_config.d before sshd_config's

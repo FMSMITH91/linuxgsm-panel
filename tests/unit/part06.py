@@ -771,7 +771,7 @@ import ast as _ast
 
 _ESCALATION_FILES = ["app.py", "auth.py", "ssh_manager.py", "system_ops.py", "notifications.py",
                      "backup.py", "db_maintenance.py", "tailscale_integration.py", "manage.py"]
-_CEILING = {"sudo=True": 3, "_sudo_sh": 0}   # measured at the time of writing; lower only
+_CEILING = {"sudo=True": 2, "_sudo_sh": 0}   # measured at the time of writing; lower only
 
 def _is_dispatch(call):
     """True when this escalation is NOT a call site composing a shell string.
@@ -2088,29 +2088,66 @@ try:
           "WARN gamedig is not installed" in _r and "OK gamedig ready" not in _r, repr(_r[-300:]))
 
     # The add-host bootstrap has the same step for REMOTE hosts: a host that already had a distro
-    # Node 18+ skipped straight to the npm install of gamedig. Its command is read out of hosts.py
-    # (a literal there, deliberately not moved) and run with shims.
-    import ast as _nd_ast
-    _nd_src = open(os.path.join(_root, "panel", "ops", "ssh_manager", "hosts.py"),
-                   encoding="utf-8").read()
-    _nd_cmd = next((_nd_ast.literal_eval(_n.value) for _n in _nd_ast.walk(_nd_ast.parse(_nd_src))
-                    if isinstance(_n, _nd_ast.Assign) and len(_n.targets) == 1
-                    and getattr(_n.targets[0], "id", "") == "node_cmd"), "")
+    # Node 18+ skipped straight to the npm install of gamedig. It is hosts._bootstrap_node now —
+    # two unprivileged reads and three verbs where it was one root shell piping NodeSource's setup
+    # script into bash — driven here with the transport stubbed, one host shape per case.
+    from panel.ops.ssh_manager import _core as _nd_core, hosts as _nd_hosts
 
-    def _nd_run(have_npm):
-        _sb = _tempfile.mkdtemp(prefix="nodestep-", dir=_su_sb)
-        if have_npm:
-            open(os.path.join(_sb, "npm"), "w").close()
-        return _sh_sub.run(["bash", "-c", "SB=%s\nnode() { echo v22.3.0; }\n"
-                            "command() { [ \"$2\" = npm ] && [ -f \"$SB/npm\" ]; }\n"
-                            "apt-get() { echo \"APT $*\"; }\ncurl() { echo CURL; }\n%s"
-                            % (_su_shlex.quote(_sb), _nd_cmd)],
-                           capture_output=True, text=True).stdout
-    _r = _nd_run(False)
+    def _nd_run(node=("v22.3.0\n", 0), npm=("/usr/bin/npm\n", 0), ns_rc=0, inst_rc=0):
+        """(calls, lines): every run_command / run_privileged the step made, and its log lines."""
+        _calls = []
+
+        def _rc(server, cmd, **k):
+            _calls.append(("cmd", cmd, k.get("sudo")))
+            if cmd.startswith("node -v"):
+                return ("%s" % node[0], "", node[1])
+            if cmd.startswith("command -v npm"):
+                return ("%s" % npm[0], "", npm[1])
+            return ("", "unexpected command", 1)
+
+        def _rp(server, verb, args=(), **k):
+            _calls.append(("verb", verb, list(args or [])))
+            if verb == "nodesource-setup":
+                return (("NodeSource repository configured (Node.js 24.x, key X)" if ns_rc == 0
+                         else "NodeSource's signing key is not the pinned key"), "", ns_rc)
+            return ("done", "", inst_rc)
+        _saved = (_nd_core.run_command, _nd_core.run_privileged)
+        _nd_core.run_command, _nd_core.run_privileged = _rc, _rp
+        try:
+            _lines = _nd_hosts._bootstrap_node(object())
+        finally:
+            _nd_core.run_command, _nd_core.run_privileged = _saved
+        return _calls, _lines
+
+    def _nd_verbs(calls):
+        return [(c[1], c[2]) for c in calls if c[0] == "verb"]
+    _c, _l = _nd_run(npm=("", 1))
     check("hosts: a remote with a distro Node 18+ and no npm gets npm before gamedig",
-          bool(_nd_cmd) and "APT install -y npm" in _r and "CURL" not in _r, repr(_r))
-    _r = _nd_run(True)
-    check("hosts: ...and one that has npm is left alone", "APT" not in _r, repr(_r))
+          _nd_verbs(_c) == [("apt-install", ["npm"])], repr(_c))
+    _c, _l = _nd_run()
+    check("hosts: ...and one that has npm is left alone", _nd_verbs(_c) == [], repr(_c))
+    _c, _l = _nd_run(node=("", 127))
+    check("hosts: a remote with no Node gets NodeSource (pinned-key verb), then nodejs from it",
+          _nd_verbs(_c) == [("nodesource-setup", []), ("apt-install", ["nodejs"])], repr(_c))
+    _c, _l = _nd_run(node=("v12.22.9\n", 0))
+    check("hosts: ...and so does one whose Node is too old for gamedig (22.04's distro Node 12)",
+          _nd_verbs(_c) == [("nodesource-setup", []), ("apt-install", ["nodejs"])], repr(_c))
+    _c, _l = _nd_run(node=("", 127), npm=("", 1), ns_rc=1)
+    check("hosts: a NodeSource setup that fails installs nothing — not nodejs, and not the distro npm",
+          _nd_verbs(_c) == [("nodesource-setup", [])]
+          and any("not installed" in _x for _x in _l), repr((_c, _l)))
+    _c, _l = _nd_run(node=("", -1))
+    check("hosts: a Node check that got no answer is not read as 'no Node' — nothing is installed",
+          _nd_verbs(_c) == [] and any("skipped" in _x for _x in _l), repr((_c, _l)))
+    _c, _l = _nd_run(npm=("", -1))
+    check("hosts: ...nor an npm check that got no answer as 'no npm'",
+          _nd_verbs(_c) == [], repr((_c, _l)))
+    _c, _l = _nd_run(node=("", 127), npm=("", 1))
+    _nd_cmds = [c for c in _c if c[0] == "cmd"]
+    check("hosts: the Node step's reads run unprivileged, and no command fetches or pipes a script",
+          _nd_cmds and all(c[2] is False for c in _nd_cmds)
+          and not any("curl" in c[1] or "setup_lts" in c[1] or "| bash" in c[1] for c in _nd_cmds),
+          repr(_nd_cmds))
 
     # A just-created account that sudo cannot resolve yet is retried. sudo-rs (Ubuntu 26.04's
     # /usr/bin/sudo) words it differently from classic sudo, so the retry never fired there.
@@ -4081,6 +4118,12 @@ def _docsrc(leaf):
 _sec = _docsrc("SECURITY.md")
 _readme = open(os.path.join(_root, "README.md"), encoding="utf-8").read()
 
+# The census table quotes the sudo=True ceiling the escalation ratchet above enforces. It said 3
+# for a release after the NodeSource step became a verb and the real number was 2.
+check("docs: SECURITY.md's census table states the ratchet's sudo=True count",
+      "| `run_command(..., sudo=True)` | %d |" % _CEILING["sudo=True"] in _sec,
+      "ratchet %d; SECURITY.md says %s" % (_CEILING["sudo=True"], (re.search(
+          r"\| `run_command\(\.\.\., sudo=True\)` \| (\d+) \|", _sec) or ["?", "?"])[1]))
 check("docs: SECURITY.md states the real verb count",
       "%d verbs" % len(_privmod.verbs()) in _sec,
       "table has %d; SECURITY.md says %s"

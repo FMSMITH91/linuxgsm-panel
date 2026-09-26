@@ -523,18 +523,41 @@ def _metrics_history_watch(app):
         time.sleep(_METRIC_SAMPLE_SECONDS)
 
 
+def _node_tools_cron_pass(app):
+    """One pass of _node_tools_cron_watch. Two jobs, both about player queries working from cron:
+
+      * every host gets the weekly npm+gamedig auto-update cron — so hosts that predate it (or a
+        remote added without the 'Prepare & Secure' bootstrap) keep their player-query tools
+        current without a manual re-bootstrap;
+      * every game server's own crontab gets cron.upgrade_managed_cron_tracking, the in-place
+        upgrade the Scheduled Tasks page already runs on every read. It is what gives an existing
+        restart-when-empty line the PATH its gamedig call needs (_core.CRON_TOOL_PATH): that line
+        is otherwise rewritten only when the operator toggles the setting, so on a host whose
+        gamedig is in /usr/local/bin it would have gone on never restarting for as long as nobody
+        opened the page. State-preserving by design, and a no-op for a crontab with nothing to
+        upgrade, which after the first pass is all of them.
+
+    Idempotent + best-effort: one host or server failing never stops the rest."""
+    with app.app_context():
+        for r in RemoteServer.query.all():   # includes the local/panel host
+            try:
+                ensure_node_tools_cron(r)
+            except Exception:
+                _log.debug("node-tools cron ensure failed for %s", r.name, exc_info=True)
+        for gs in GameServer.query.all():
+            if gs.remote is None:
+                continue
+            try:
+                _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name)
+            except Exception:
+                _log.debug("cron upgrade failed for %s", gs.name, exc_info=True)
+
+
 def _node_tools_cron_watch(app):
-    """Once at startup and daily after, make sure every host has the weekly npm+gamedig auto-update
-    cron — so hosts that predate it (or a remote added without the 'Prepare & Secure' bootstrap) still
-    keep their player-query tools current, without a manual re-bootstrap. Idempotent + best-effort."""
+    """Once at startup and daily after: _node_tools_cron_pass."""
     while True:
         try:
-            with app.app_context():
-                for r in RemoteServer.query.all():   # includes the local/panel host
-                    try:
-                        ensure_node_tools_cron(r)
-                    except Exception:
-                        _log.debug("node-tools cron ensure failed for %s", r.name, exc_info=True)
+            _node_tools_cron_pass(app)
         except Exception:
             _log.debug("node-tools cron watch pass failed", exc_info=True)
         time.sleep(86400)   # daily

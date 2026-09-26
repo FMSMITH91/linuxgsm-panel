@@ -7179,6 +7179,44 @@ try:
     finally:
         _sm_cron.list_cron_jobs = _sv_lcj
 
+    # ── The daily cron pass reaches every game server, not only the ones someone opens ───────────
+    # upgrade_managed_cron_tracking is what gives an existing restart-when-empty line the PATH its
+    # gamedig call needs (cron's is /usr/bin:/bin; the distro's npm puts gamedig in /usr/local/bin).
+    # It ran only when someone opened a server's Scheduled Tasks, and set_daily_restart only when
+    # the operator toggled the setting — so a line written before the fix kept never restarting on
+    # every server nobody opened. app._node_tools_cron_pass runs it for each game server at start
+    # and daily. Driven with both workers stubbed; the first server raises, and the rest must still
+    # be reached, as must every host's weekly gamedig cron.
+    _ntp_app = sys.modules["app"]
+    _ntp_up, _ntp_hosts = [], []
+    _sv_ntp = (_sm_cron.upgrade_managed_cron_tracking, _ntp_app.ensure_node_tools_cron)
+
+    def _ntp_upgrade(remote, user, selfname=None):
+        _ntp_up.append((str(getattr(remote, "id", None)), str(user), str(selfname)))
+        if len(_ntp_up) == 1:
+            raise RuntimeError("this host did not answer")
+        return False
+    try:
+        _sm_cron.upgrade_managed_cron_tracking = _ntp_upgrade
+        _ntp_app.ensure_node_tools_cron = lambda r: _ntp_hosts.append(r.id) or True
+        _ntp_err = None
+        try:
+            _ntp_app._node_tools_cron_pass(app)
+        except Exception as _e:          # reported by the check below, not left to end the suite
+            _ntp_err = _e
+        with app.app_context():
+            _ntp_want = sorted((str(_g.remote_id), str(_g.short_name), str(_g.lgsm_name))
+                               for _g in GameServer.query.all() if _g.remote is not None)
+            _ntp_all_hosts = sorted(_r.id for _r in RemoteServer.query.all())
+        check("daily cron pass: every game server's crontab gets the in-place upgrade, even after "
+              "one fails", _ntp_err is None and len(_ntp_want) >= 2 and sorted(_ntp_up) == _ntp_want,
+              "raised %r; upgraded %r, servers %r" % (_ntp_err, sorted(_ntp_up)[:4], _ntp_want[:4]))
+        check("daily cron pass: ...and every host still gets the weekly gamedig cron",
+              bool(_ntp_all_hosts) and sorted(_ntp_hosts) == _ntp_all_hosts,
+              "ensured %r, hosts %r" % (sorted(_ntp_hosts), _ntp_all_hosts))
+    finally:
+        _sm_cron.upgrade_managed_cron_tracking, _ntp_app.ensure_node_tools_cron = _sv_ntp
+
     # ── The pending banner must know about the DAILY-RESTART cron too ─────────────────────────────
     # Two mechanisms queue a restart-when-empty: the panel's column, and the cron set_daily_restart
     # writes, which touches ~/.restart-pending on the box and restarts from there. The panel wrote

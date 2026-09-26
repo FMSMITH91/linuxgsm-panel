@@ -239,6 +239,19 @@ regardless of this file — this changelog is for humans.
   non-ASCII — through a real shell and requires each to come back verbatim as a single argument.
 
 ### Fixed
+- **"Daily restart when empty" never restarted on a host whose Node.js came from Ubuntu.** The
+  hourly check runs from the game account's crontab, and cron gives a crontab the PATH
+  `/usr/bin:/bin`. Ubuntu's own npm installs gamedig into `/usr/local/bin`, where cron does not
+  look, so the check never found gamedig, never counted a player, and waited for an empty server
+  that never came. That covers 24.04 and 26.04 panel hosts whose Node.js the installer took from
+  Ubuntu, and remotes that already had Ubuntu's Node 18+. Hosts with NodeSource's Node were not
+  affected: its npm puts gamedig in `/usr/bin`, and on the test host (Node from NodeSource) the
+  check counted 0 under cron's own environment. The check now sets its own PATH
+  (`/usr/local/bin:/usr/bin:/bin`) for the player query only. Existing lines are fixed without
+  touching the setting: the in-place upgrade that runs whenever a server's Scheduled Tasks are
+  opened now also runs once a day for every game server, and adds the PATH to that call without
+  changing anything else on the line. That upgrade also no longer rewrites a crontab whose listing
+  failed, because it replaces the whole crontab with the lines it read.
 - **Player counts and lists never worked on a fresh Ubuntu 24.04 or 26.04 install.** Both ship a
   Node new enough to skip NodeSource, and the distro's `nodejs` has no `npm`, which the gamedig step
   needs — so gamedig was never installed. The installer and the add-host bootstrap now install `npm`
@@ -873,6 +886,18 @@ regardless of this file — this changelog is for humans.
   gets this with no change, because pip checks hashes whenever the file has them. CI and the fuzz
   image also install wheels only. Packages already installed on a host are kept as they are; the
   check applies to whatever pip installs from now on.
+- **Preparing a remote host no longer runs NodeSource's setup script as root.** The add-host
+  bootstrap piped `https://deb.nodesource.com/setup_lts.x` into a root shell, so anyone able to
+  serve that one URL could run code as root on every host being prepared. It now does what
+  `install.sh` already does on the panel host, through a new `nodesource-setup` verb. Only the
+  signing key is downloaded, and it is trusted only if the file holds exactly one key with the
+  pinned fingerprint. The apt source and pin are then written directly, and nothing downloaded is
+  executed. The key, Node.js major (24) and paths are `install.sh`'s, and a test keeps the two
+  copies equal. A remote that already has Node.js 18+ keeps it, as before. npm is now installed
+  only when a Node.js 18+ is present, as `install.sh` does. Before, a failed NodeSource setup on
+  22.04 went on to install the distro's npm, and with it Node 12, which gamedig cannot run on. The
+  panel host's helper refuses the verb: `install.sh` sets up NodeSource there. `SECURITY.md` had
+  said this step could not be narrowed; it now describes what replaced it.
 - **A ban now closes what the banned address already had open.** A ban refuses new connections, at
   the firewall or, behind Tailscale Funnel, at the panel's own gate. A live console or a host
   terminal opened before the ban was not a new connection, so it kept streaming for as long as the
@@ -957,8 +982,8 @@ regardless of this file — this changelog is for humans.
   `00-panel-hardening.conf`, which sorts first, on the panel host and on remotes, and only where
   sshd reads that directory.
 - **The weekly root cron no longer upgrades npm**; it installs a pinned `gamedig` with install
-  scripts disabled. NodeSource's repository is set up with its signing key pinned, instead of by
-  running NodeSource's setup script as root.
+  scripts disabled. On the panel host, NodeSource's repository is set up with its signing key
+  pinned, instead of by running NodeSource's setup script as root (remote hosts: see above).
 - **Auto-block cannot cut off your tailnet, or take over your own rules.** When the Tailscale probe
   failed, tailnet addresses lost their exemption and could be denied at UFW position 1, above the
   `tailscale0` allow; an address that cannot be confirmed is now exempted. Auto-block replaced, and
