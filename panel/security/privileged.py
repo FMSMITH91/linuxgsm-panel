@@ -730,6 +730,7 @@ class Rest:
     """A validator that consumes every remaining argument — see tools/panel-helper."""
 
     def __init__(self, check, minimum=1, maximum=64):
+        """Validate each remaining argument with `check`; allow `minimum`..`maximum` of them."""
         self.check, self.minimum, self.maximum = check, minimum, maximum
 
 
@@ -1239,12 +1240,13 @@ _SECRET_REMOTE = {
 
 
 _REMOTE_ACTIONS = {
-    "sshd-backup-dropin": lambda a: "[ -f %s ] && cp -f %s %s || true"
-                          % (shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN),
-                             shlex.quote(SSHD_DROPIN_BAK)),
-    "sshd-restore-dropin": lambda a: "if [ -f %s ]; then mv -f %s %s; else rm -f %s; fi"
-                           % (shlex.quote(SSHD_DROPIN_BAK), shlex.quote(SSHD_DROPIN_BAK),
-                              shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN)),
+    "sshd-backup-dropin": lambda a: (
+        "[ -f %s ] && cp -f %s %s || true"
+        % (shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN_BAK))),
+    "sshd-restore-dropin": lambda a: (
+        "if [ -f %s ]; then mv -f %s %s; else rm -f %s; fi"
+        % (shlex.quote(SSHD_DROPIN_BAK), shlex.quote(SSHD_DROPIN_BAK),
+           shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN))),
     "sshd-discard-backup": lambda a: "rm -f %s" % shlex.quote(SSHD_DROPIN_BAK),
     # Steam's ten crash-dump slots, as shell. The helper does this in Python on the panel's own
     # host; a REMOTE host has no helper to call, and without an entry here the verb rendered to an
@@ -1280,12 +1282,14 @@ _REMOTE_ACTIONS = {
         "DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd:i386 steamcmd "
         "|| DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd"
     ),
-    "sshd-socket-backup": lambda a: "[ -f %s ] && cp -f %s %s || true"
-                          % (shlex.quote(SSHD_SOCKET_DROPIN), shlex.quote(SSHD_SOCKET_DROPIN),
-                             shlex.quote(SSHD_SOCKET_DROPIN_BAK)),
-    "sshd-socket-restore": lambda a: "if [ -f %s ]; then mv -f %s %s; else rm -f %s; fi"
-                           % (shlex.quote(SSHD_SOCKET_DROPIN_BAK), shlex.quote(SSHD_SOCKET_DROPIN_BAK),
-                              shlex.quote(SSHD_SOCKET_DROPIN), shlex.quote(SSHD_SOCKET_DROPIN)),
+    "sshd-socket-backup": lambda a: (
+        "[ -f %s ] && cp -f %s %s || true"
+        % (shlex.quote(SSHD_SOCKET_DROPIN), shlex.quote(SSHD_SOCKET_DROPIN),
+           shlex.quote(SSHD_SOCKET_DROPIN_BAK))),
+    "sshd-socket-restore": lambda a: (
+        "if [ -f %s ]; then mv -f %s %s; else rm -f %s; fi"
+        % (shlex.quote(SSHD_SOCKET_DROPIN_BAK), shlex.quote(SSHD_SOCKET_DROPIN_BAK),
+           shlex.quote(SSHD_SOCKET_DROPIN), shlex.quote(SSHD_SOCKET_DROPIN))),
     "sshd-socket-discard": lambda a: "rm -f %s" % shlex.quote(SSHD_SOCKET_DROPIN_BAK),
     "f2b-set-sshd-ports": lambda a: (
         "if [ -f %s ]; then "
@@ -1359,8 +1363,9 @@ _REMOTE_ACTIONS = {
         'done' % (HOME_ROOT, HOME_ROOT, CONTENT_SUBDIR, " ".join(a))),
     # 700, not the 750 the shell form used: the group bits are added by content-grant-read when
     # access is actually granted, so both transports share nothing until then.
-    "content-dir-create": lambda a: "install -d -o %s -g %s -m 700 %s"
-                          % (a[0], a[0], shlex.quote(content_path(a[0], CONTENT_SUBDIR))),
+    "content-dir-create": lambda a: (
+        "install -d -o %s -g %s -m 700 %s"
+        % (a[0], a[0], shlex.quote(content_path(a[0], CONTENT_SUBDIR)))),
     # Exit status ONLY, because that is the whole of the helper's answer: do_content_game_present
     # and do_content_script_present in tools/panel-helper return 0 or 1 and print nothing.
     #
@@ -1372,17 +1377,17 @@ _REMOTE_ACTIONS = {
     # exist. The `or "Y" in out` half was the correct one; the rc clause, added later under a
     # comment reading "The verb's own rc says the same thing", was true of the helper and false
     # here. One rendering, one answer, and the comment is now true of both.
-    "content-game-present": lambda a: "test -d %s/."
-                            % shlex.quote(content_path(a[0], CONTENT_SUBDIR, a[1])),
-    "content-script-present": lambda a: "test -x %s"
-                              % shlex.quote(content_path(a[0], a[1])),
+    "content-game-present": lambda a: (
+        "test -d %s/." % shlex.quote(content_path(a[0], CONTENT_SUBDIR, a[1]))),
+    "content-script-present": lambda a: (
+        "test -x %s" % shlex.quote(content_path(a[0], a[1]))),
     "content-game-remove": lambda a: " ; ".join(
         "rm -rf %s" % shlex.quote(p) for p in
         ([content_path(a[0], CONTENT_SUBDIR, a[1])] if a[2] == "-" else
          [content_path(a[0], CONTENT_SUBDIR, a[1]), content_path(a[0], a[2]),
           content_path(a[0], "lgsm", "config-lgsm", a[2])])),
-    "content-cron-remove": lambda a: "rm -f %s"
-                           % shlex.quote("%s-%s" % (CONTENT_CRON_PREFIX, _username(a[0]))),
+    "content-cron-remove": lambda a: (
+        "rm -f %s" % shlex.quote("%s-%s" % (CONTENT_CRON_PREFIX, _username(a[0])))),
     # A remote has no helper, so it keeps the zcat|awk|grep read — but only the READ half; the
     # tallying awk is gone from both transports.
     # `|| [ $? -eq 1 ]`: grep exits 1 for NO MATCHES and >=2 for a real error, and both callers read
@@ -1396,8 +1401,9 @@ _REMOTE_ACTIONS = {
         "zcat -f %s 2>/dev/null | awk -v c=%s '$1 >= c' | "
         "{ grep -E '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+' || [ $? -eq 1 ]; }"
         % (F2B_LOG_GLOB, shlex.quote(a[0]))),
-    "gmod-mount-read": lambda a: "cat %s 2>/dev/null || true"
-                       % shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"),
+    "gmod-mount-read": lambda a: (
+        "cat %s 2>/dev/null || true"
+        % shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg")),
     "content-grant-read": _content_grant_remote,
     "restart-flags": lambda a: "ls -1d /home/*/.restart-pending 2>/dev/null || true",
     "nodesource-setup": _nodesource_setup_remote,
@@ -1414,23 +1420,30 @@ def check_args(verb, args):
         raise VerbError("unknown verb")
     validators = spec[0]
     args = list(args)
-    rest = validators[-1] if validators and isinstance(validators[-1], Rest) else None
-    fixed = validators[:-1] if rest else validators
-    if rest is None:
-        if len(args) != len(fixed):
-            raise VerbError("%s takes %d argument(s), got %d" % (verb, len(fixed), len(args)))
-        checks = list(fixed)
-    else:
-        low, high = len(fixed) + rest.minimum, len(fixed) + rest.maximum
-        if not low <= len(args) <= high:
-            raise VerbError("%s takes %d..%d argument(s), got %d" % (verb, low, high, len(args)))
-        checks = list(fixed) + [rest.check] * (len(args) - len(fixed))
+    checks = _arg_checks(verb, validators, len(args))
     out = [check(v) for v, check in zip(args, checks)]
     # The one verb where an argument constrains another: a directive may only be set to a value
     # from its own allowed set, so the PAIR is checked, not just each half.
     if verb == "sshd-set-directive" and out[1] not in SSHD_DIRECTIVES[out[0]]:
         raise VerbError("%s may not be set to that value" % out[0])
     return out
+
+
+def _arg_checks(verb, validators, count):
+    """One validator per argument for `count` arguments to `verb`; VerbError on a wrong count.
+
+    A trailing Rest validator consumes every remaining argument, between its minimum and maximum.
+    """
+    rest = validators[-1] if validators and isinstance(validators[-1], Rest) else None
+    fixed = validators[:-1] if rest else validators
+    if rest is None:
+        if count != len(fixed):
+            raise VerbError("%s takes %d argument(s), got %d" % (verb, len(fixed), count))
+        return list(fixed)
+    low, high = len(fixed) + rest.minimum, len(fixed) + rest.maximum
+    if not low <= count <= high:
+        raise VerbError("%s takes %d..%d argument(s), got %d" % (verb, low, high, count))
+    return list(fixed) + [rest.check] * (count - len(fixed))
 
 
 def tool_argv(verb, args):
@@ -1542,7 +1555,6 @@ def remote_write_command(name, content):
     WRITE_TARGETS rather than from a call site, and base64 keeps every byte of the content inert on
     the way through the shell.
     """
-    import base64
     path, mode = write_target(name)
     b64 = base64.b64encode(content.encode()).decode()
     return ("echo %s | base64 -d > %s && chmod %o %s"
@@ -1555,7 +1567,6 @@ def remote_content_cron_command(user, content):
     Same shape as remote_write_command, but the destination is per-user so it cannot live in
     WRITE_TARGETS — the path is still built here from a validated name, not passed in.
     """
-    import base64
     path = "%s-%s" % (CONTENT_CRON_PREFIX, _username(user))
     b64 = base64.b64encode(content.encode()).decode()
     return ("echo %s | base64 -d > %s && chmod 644 %s"

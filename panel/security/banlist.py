@@ -169,17 +169,25 @@ def is_banned(addr, widen=True):
     groups = _by_len
     if addr is None or not groups:
         return False
-    hit = False
+    if not _in_banned_network(addr, groups, widen):
+        return False
+    return not _never_refused(addr)
+
+
+def _in_banned_network(addr, groups, widen):
+    """Whether `addr` lies in a banned network of `groups` (a _by_len snapshot); see is_banned."""
     for (version, plen), nets in groups.items():
         if version != addr.version:
             continue
         net = ipaddress.ip_network((addr, plen), strict=False)
         if net in nets and (widen or net in _f2b or net in _ufw):
-            hit = True
-            break
-    if not hit:
-        return False
-    return not any(addr in n for n in _TAILNET + _allow if n.version == addr.version)
+            return True
+    return False
+
+
+def _never_refused(addr):
+    """Whether `addr` is a tailnet peer or on the security whitelist, which this gate never refuses."""
+    return any(addr in n for n in _TAILNET + _allow if n.version == addr.version)
 
 
 # ── refreshing ──────────────────────────────────────────────────────────────────────────────────
