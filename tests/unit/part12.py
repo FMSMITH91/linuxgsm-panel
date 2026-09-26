@@ -85,8 +85,10 @@ _p9_supervised = []
 
 
 class _P9NoThread(_P9Thread):
-    """For register_routes' supervisor: the ticker threads are never started — only remembered, so a
-    check can take one loop body out of its supervisor and run a single pass of it."""
+    """A Thread for register_routes' supervisor that remembers its target and never starts it.
+
+    A check can then take one loop body out of its supervisor and run a single pass of it.
+    """
 
     def start(self):
         _p9_supervised.append(self._t)
@@ -177,7 +179,7 @@ def _p9_restore_all():
         if _v is _P9_ABSENT:
             try:
                 delattr(_o, _n)
-            except AttributeError:
+            except AttributeError:  # nosec B110 - already gone is what restoring means here
                 pass
         else:
             setattr(_o, _n, _v)
@@ -2074,7 +2076,7 @@ try:
             try:
                 if getattr(_cell.cell_contents, "__name__", "") == "console_poller":
                     _cp_poller = _cell.cell_contents
-            except ValueError:
+            except ValueError:  # nosec B110 - an empty cell is not the poller
                 pass
     check("console poller: register_routes handed it to the supervisor (so a pass can be driven)",
           _cp_poller is not None, repr([getattr(s, "__qualname__", s) for s in _p9_supervised]))
@@ -2164,6 +2166,7 @@ try:
             raise ConnectionError("%s failed on the host" % step)
 
     def _ms_run_command(remote, cmd, timeout=30, sudo=None, stdin_text=None):
+        """Answer the install job's shell commands from the scripted plan, logging each step."""
         if cmd.startswith("id ") and "echo EXISTS" in cmd:
             st = _ms["acct"].get(_p9_shlex.split(cmd)[1], "NOTEXISTS")
             return ("", "timed out", -1) if st is None else (st, "", 0)
@@ -2173,6 +2176,10 @@ try:
         if "auto-install" in cmd:
             _ms_log.append("auto:%d" % timeout)
             return _ms_next("auto")
+        return _ms_side_step(cmd)
+
+    def _ms_side_step(cmd):
+        """Log (and maybe fail) the best-effort step `cmd` is, or log it as unrecognised."""
         for tok, step in (("lgsm/tmp", "wipe"), ("eula.txt", "mc-eula"), ("python3 -c", "scpsl-eula"),
                           ("config_localadmin", "scpsl-seed")):
             if tok in cmd:
@@ -2597,7 +2604,7 @@ finally:
                 _P9_CFG_PATH.unlink()
         else:
             _P9_CFG_PATH.write_bytes(_P9_CFG_SNAPSHOT)
-    except OSError:
+    except OSError:  # nosec B110 - best-effort cleanup of the runner's throwaway config
         pass
 
 check("part12: no route under test reached a real transport (every host call was stubbed)",

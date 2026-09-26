@@ -35,9 +35,12 @@ for _n in _p7_quiet:
 
 
 class _Over:
-    """Stand-in for a MODULE object: the named attributes are replaced, every other attribute is
-    the real module's. Assigned onto the module under test (`_dbm7.os = _Over(os, replace=...)`),
-    so only that module sees the override — the process-wide `os` is never touched."""
+    """Stand-in for a MODULE object, with the named attributes replaced.
+
+    Every other attribute is the real module's. Assigned onto the module under test
+    (`_dbm7.os = _Over(os, replace=...)`), so only that module sees the override — the
+    process-wide `os` is never touched.
+    """
 
     def __init__(self, real, **over):
         self._real = real
@@ -526,8 +529,10 @@ def _p7_bk_update(mut):
 
 
 def _p7_enc_file(path, plain, passphrase, n=2 ** 12, kdf="scrypt", r=8, p=1):
-    """An encrypted-archive file in the panel's format, at the CHEAPEST cost it accepts (n=2**12),
-    so a check here costs milliseconds rather than scrypt's default tenth of a second."""
+    """Write an encrypted-archive file in the panel's format, at the cheapest cost it accepts.
+
+    n=2**12, so a check here costs milliseconds rather than scrypt's default tenth of a second.
+    """
     import base64 as _b64
     import json as _json
     from cryptography.fernet import Fernet
@@ -995,8 +1000,11 @@ _pb7_thread = {"fail": False}
 
 
 class _P7SyncThread:
-    """threading.Thread that runs its target inside start() — the worker has finished when the
-    route returns. `fail` makes start() raise, the way a thread-limited host does."""
+    """A threading.Thread that runs its target inside start().
+
+    The worker has finished when the route returns. `fail` makes start() raise, the way a
+    thread-limited host does.
+    """
 
     def __init__(self, target=None, daemon=None, **_k):
         self._target = target
@@ -1376,14 +1384,14 @@ _s7 = _p7_tf.mkdtemp(prefix="p7-so-")
 
 
 def _p7_defined(mod, name, *roots):
-    """`mod.name` as the module DEFINES it, found by walking closures from `roots` (default: the
-    current `mod.name`). None if it cannot be found.
+    """Return `mod.name` as the module DEFINES it, or None if it cannot be found.
 
-    Why a walk: by this point in the suite system_ops._run is NOT the function. part03's
+    Found by walking closures from `roots` (default: the current `mod.name`). Why a walk: by this point in the suite system_ops._run is NOT the function. part03's
     auto-updates block assigns `_so._run = _mk_run(1, "")` and never puts it back, part05 then runs
     tools/nosudo_runner.py's _install() over that (also never undone), and under
     tools/smoke-local.sh the runner's own wrapper sits at the bottom. part02 kept a reference to
-    whatever _run was before any of that (`_orig_so_run`), which is why it is passed as a root."""
+    whatever _run was before any of that (`_orig_so_run`), which is why it is passed as a root.
+    """
     todo, seen = list(roots) or [getattr(mod, name)], set()
     while todo:
         f = todo.pop()
@@ -1393,12 +1401,19 @@ def _p7_defined(mod, name, *roots):
         code = getattr(f, "__code__", None)
         if code is not None and code.co_filename == mod.__file__ and f.__name__ == name:
             return f
-        for cell in (getattr(f, "__closure__", None) or ()):
-            try:
-                todo.append(cell.cell_contents)
-            except ValueError:
-                continue
+        todo.extend(_p7_cells(f))
     return None
+
+
+def _p7_cells(f):
+    """Return what `f`'s closure cells hold, skipping any cell that is still empty."""
+    out = []
+    for cell in (getattr(f, "__closure__", None) or ()):
+        try:
+            out.append(cell.cell_contents)
+        except ValueError:  # nosec B112 - an empty cell holds nothing to walk
+            continue
+    return out
 
 
 def _p7_run_by(table, default=("", "", 1), log=None):
@@ -1440,8 +1455,11 @@ def _p7_sp_run(log, result=None, exc=None):
 
 
 def _p7_open_with(files, missing_raises=OSError):
-    """An `open` for system_ops: the listed paths answer their text (or raise, if the value is an
-    exception); every other path goes to the real open."""
+    """Build an `open` for system_ops that answers the listed paths from `files`.
+
+    A listed path answers its text (or raises, if the value is an exception); every other path
+    goes to the real open.
+    """
     def _o(path, *a, **k):
         if path in files:
             v = files[path]

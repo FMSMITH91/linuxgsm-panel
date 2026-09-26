@@ -1,5 +1,6 @@
-"""Part 11 of the unit suite: host management, Tailscale and the remote-VPS routes. Imported for its
-side effects.
+"""Part 11 of the unit suite: host management, Tailscale and the remote-VPS routes.
+
+Imported for its side effects.
 
 Coverage-driven, but every check asserts what the code DID — the verb it sent, the value it
 returned, the thing it refused — never only that it ran. The failure paths get the attention: a
@@ -490,10 +491,13 @@ finally:
 # ssh_manager.hosts — remote hosts, over a recorded fake transport
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 class _Wire:
-    """The transport, as hosts.py sees it: every privileged verb, shell command and root write is
-    RECORDED, and answered from a table. An answer may be a tuple, a callable (given the args or the
-    command), an exception (raised — the paramiko shape), or a list consumed in order (the last one
-    repeats). Unlisted verbs answer ("", "", 0); unlisted commands answer `cmd_default`."""
+    """The transport as hosts.py sees it, recording every call and answering from a table.
+
+    Every privileged verb, shell command and root write is RECORDED. An answer may be a tuple, a
+    callable (given the args or the command), an exception (raised — the paramiko shape), or a
+    list consumed in order (the last one repeats). Unlisted verbs answer ("", "", 0); unlisted
+    commands answer `cmd_default`.
+    """
 
     def __init__(self, verbs=None, cmds=None, cmd_default=("", "", 0), writes=None):
         self.verbs = dict(verbs or {})

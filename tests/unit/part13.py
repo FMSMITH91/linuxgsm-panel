@@ -67,8 +67,11 @@ def _cap10(name):
 
 
 def _try10(fn, *a, **k):
-    """Call fn; on an exception return ("RAISED", repr) so a check can report it by name instead
-    of the exception taking the rest of this part (and the tally) with it."""
+    """Call fn, and on an exception return ("RAISED", repr) instead of raising.
+
+    A check can then report it by name instead of the exception taking the rest of this part (and
+    the tally) with it.
+    """
     try:
         return fn(*a, **k)
     except Exception as e:           # reported by the check that reads it
@@ -392,8 +395,10 @@ try:
 
     # ── notify(): dispatch only to the channels that are on, and CHECK each result ─────────────
     class _SyncThreads10:
-        """threading stand-in whose Thread runs its target on start(), so the send is observable
-        before notify() returns."""
+        """A threading stand-in whose Thread runs its target on start().
+
+        The send is then observable before notify() returns.
+        """
         class Thread:
             def __init__(self, target=None, daemon=None, **k):
                 self._t = target
@@ -541,8 +546,11 @@ try:
     # REAL threads from here: the heartbeat must run beside the receive loop, not inside it.
     _n10.threading = _n10_saved["threading"]
     class _GwWS10:
-        """A Gateway socket: recv() hands out `frames`, then waits for close() (or `idle`
-        seconds) and answers "" — the shape of a socket the far end, or the heartbeat, closed."""
+        """A Gateway socket that hands out `frames`, then reads as closed.
+
+        recv() waits for close() (or `idle` seconds) after the frames and answers "" — the shape of
+        a socket the far end, or the heartbeat, closed.
+        """
 
         def __init__(self, frames, idle=5.0, fail_heartbeat=False, fail_close=False):
             self.frames, self.idle = [_json10.dumps(f) for f in frames], idle
@@ -2019,10 +2027,12 @@ def _core_restore10(*names):
 
 
 def _unshim10(fn):
-    """The real _core._run_local under any number of tools/nosudo_runner wrappers (each refuses a
-    sudo command before the real body runs) — or `fn` itself when nothing wraps it, as when CI runs
-    the suite bare. The runner can be installed more than once: part05 loads it again as
-    `nsr_probe`, and that copy wraps the first copy's wrapper."""
+    """Return the real _core._run_local under any number of tools/nosudo_runner wrappers.
+
+    Each wrapper refuses a sudo command before the real body runs; `fn` itself comes back when
+    nothing wraps it, as when CI runs the suite bare. The runner can be installed more than once:
+    part05 loads it again as `nsr_probe`, and that copy wraps the first copy's wrapper.
+    """
     for _ in range(8):
         if getattr(fn, "__name__", "") == "_run_local" and fn.__module__ == _sm_core.__name__:
             return fn
