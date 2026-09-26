@@ -116,19 +116,7 @@ def register(app):
         group.description = (request.form.get("description") or group.description or "").strip()
         group.set_permissions(_grantable_perms(request.form.getlist("permissions"),
                                                group.get_permissions()))
-        # Filtered like the permission list above it, and for the same reason. These two lines
-        # took any id the form supplied, so a delegated MANAGE_GROUPS admin scoped to one host
-        # could grant their own group every host and server in the install — permissions unchanged,
-        # so the escalation test still passed, while can_access_remote/can_access_server started
-        # returning True for everything.
-        _keep_r = grantable_object_ids({int(i) for i in request.form.getlist("servers") if i.isdecimal()},
-                                       {r.id for r in (group.servers or [])},
-                                       accessible_remote_ids(current_user))
-        _keep_g = grantable_object_ids({int(i) for i in request.form.getlist("game_servers") if i.isdecimal()},
-                                       {g.id for g in (group.game_servers or [])},
-                                       {g.id for g in get_user_servers(current_user)})
-        group.servers = _selected_remotes(_keep_r)
-        group.game_servers = _selected_game_servers(_keep_g)
+        _apply_group_reach(group)
 
         db.session.commit()
         log_action(current_user, "edit_group", target=group.name)
@@ -189,3 +177,20 @@ def register(app):
         notifications.notify("account_change", "Permission group deleted",
                              "%s deleted the group '%s'." % (current_user.username, _gname))
         return _form_ok(f"Group '{_gname}' deleted.", "manage_groups")
+
+
+def _apply_group_reach(group):
+    """Set the hosts and servers `group` grants from the form, keeping only what the editor may grant."""
+    # Filtered like the permission list edit_group sets, and for the same reason. These two lines
+    # took any id the form supplied, so a delegated MANAGE_GROUPS admin scoped to one host
+    # could grant their own group every host and server in the install — permissions unchanged,
+    # so the escalation test still passed, while can_access_remote/can_access_server started
+    # returning True for everything.
+    _keep_r = grantable_object_ids({int(i) for i in request.form.getlist("servers") if i.isdecimal()},
+                                   {r.id for r in (group.servers or [])},
+                                   accessible_remote_ids(current_user))
+    _keep_g = grantable_object_ids({int(i) for i in request.form.getlist("game_servers") if i.isdecimal()},
+                                   {g.id for g in (group.game_servers or [])},
+                                   {g.id for g in get_user_servers(current_user)})
+    group.servers = _selected_remotes(_keep_r)
+    group.game_servers = _selected_game_servers(_keep_g)
