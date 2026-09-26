@@ -168,8 +168,9 @@
 
   // Answer whatever the last step opened: the panel's confirm dialog — OK only when `accept`, and
   // with what it asks to be typed (the account's password, or the name its label quotes), else
-  // Cancel — the command palette, and any Bootstrap modal left open. Pressing a still-disabled
-  // OK is not something a person can do, so a dialog whose text did not satisfy it is cancelled.
+  // Cancel — the panel's own overlay dialogs, the command palette, and any Bootstrap modal left
+  // open. Pressing a still-disabled OK is not something a person can do, so a dialog whose text
+  // did not satisfy it is cancelled.
   function settleDialogs(accept, password) {
     var n = 0;
     document.querySelectorAll('[data-cd="ok"]').forEach(function (ok) {
@@ -188,6 +189,22 @@
       }
       if (accept && !ok.disabled) ok.click();
       else if (cancel) cancel.click();
+      n++;
+    });
+    // The panel's other dialogs are overlays of their own — who is online before a restart, a
+    // ban's scope, a command's output, a full backup's players — and one left open covers the
+    // page, so a drop meant for the page lands on it. Each closes on a click on its backdrop;
+    // accepting presses its first button that is not a way out.
+    Array.prototype.slice.call(document.querySelectorAll('body > div')).forEach(function (ov) {
+      if (ov.style.position !== 'fixed' || ov.style.inset !== '0px'
+          || ov.querySelector('[data-cd]')) return;
+      var go = accept && Array.prototype.filter.call(ov.querySelectorAll('button'), function (b) {
+        var what = [b.id, b.getAttribute('data-scope'), b.hasAttribute('data-close') ? 'close' : '',
+                    b.textContent].join(' ');
+        return !/cancel|close/i.test(what);
+      })[0];
+      if (go) go.click();
+      else ov.dispatchEvent(new MouseEvent('click', {bubbles: true}));
       n++;
     });
     // The command palette covers the page while it is open, so anything aimed at the page after
