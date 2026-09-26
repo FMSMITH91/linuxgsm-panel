@@ -4803,6 +4803,38 @@ try:
 finally:
     _shutil.rmtree(_cc_sb, ignore_errors=True)
 
+# ── .prospector.yaml switches off pydocstyle's D213, and nothing else ────────────────────────────
+# Codacy's Prospector reported every multi-line docstring as D213 ("summary should start at the
+# second line"), the mirror image of D212, which this codebase follows. The profile disables D213
+# by name on top of Prospector's default profile — what Codacy ran with no profile at all — and its
+# two `run:` lines are Codacy's default tool choice, so that Codacy's "Configuration file" toggle
+# changes nothing if flipped (the file's header has the evidence). The shape is pinned exactly: a
+# second code in `disable`, a changed strictness or a dropped `inherits` would switch off rules
+# Codacy enables, silently, on every file. Read as text: PyYAML is not a dependency of this suite.
+_pz_path = os.path.join(_root, ".prospector.yaml")
+_pz_body = ([_l.rstrip() for _l in open(_pz_path, encoding="utf-8").read().splitlines()
+             if _l.strip() and not _l.lstrip().startswith("#")] if os.path.isfile(_pz_path) else None)
+check("prospector: .prospector.yaml inherits Prospector's defaults, keeps Codacy's default tools "
+      "and disables D213 and nothing else",
+      _pz_body == ["inherits:", "  - default", "pylint:", "  run: false",
+                   "pydocstyle:", "  run: true", "  disable:", "    - D213"], repr(_pz_body))
+# Prospector loads the FIRST profile it finds at the root, and four .landscape names come before
+# .prospector.yaml (prospector/profiles/__init__.py, AUTO_LOADED_PROFILES): any of them, or a
+# .prospector/ or prospector/ directory holding one, would replace this file without a word.
+_pz_shadow = [_n for _n in (".landscape.yml", ".landscape.yaml", "landscape.yml", "landscape.yaml",
+                            ".prospector.yml", "prospector.yaml", "prospector.yml",
+                            os.path.join("prospector", ".prospector.yaml"),
+                            os.path.join("prospector", ".prospector.yml"),
+                            os.path.join("prospector", "prospector.yaml"),
+                            os.path.join("prospector", "prospector.yml"),
+                            os.path.join(".prospector", ".prospector.yaml"),
+                            os.path.join(".prospector", ".prospector.yml"),
+                            os.path.join(".prospector", "prospector.yaml"),
+                            os.path.join(".prospector", "prospector.yml"))
+              if os.path.exists(os.path.join(_root, _n))]
+check("prospector: no other profile at the root shadows .prospector.yaml", not _pz_shadow,
+      repr(_pz_shadow))
+
 # ── deleting a host says what stays on it, and the README's removal commands do what they say ────
 # The delete forgets a host and never connects to it, so the gamedig tree, its links and the weekly
 # root cron stay on that host; the confirmation did not say so. It does now, and README's

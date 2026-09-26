@@ -1,0 +1,44 @@
+# Prospector profile — read by Codacy's Prospector, and by `prospector` run from the repository root.
+#
+# WHAT IT CHANGES: exactly one pydocstyle code, D213, and nothing else.
+#   pydocstyle ships two rules that contradict each other: D212 "multi-line docstring summary should
+#   start at the first line" and D213 "...should start at the second line". Every multi-line
+#   docstring satisfies one and breaks the other. This codebase puts the summary on the FIRST line
+#   (D212's style) throughout, so Codacy reported every one of them as D213 — 564 issues on main,
+#   all the same non-finding. D213 goes; D212 stays on and now holds the style the code already has.
+#   PEP 257 itself says the summary may go on the first line (D212's style).
+#
+#   There is no "convention" key to select instead: Prospector runs pydocstyle's checker with every
+#   code and filters by a `disable` list (prospector/tools/pydocstyle), and pydocstyle's own pep257
+#   convention would also switch off D214-D215, D404-D411, D413 and D415-D418, several of which
+#   Codacy reports today (D415 alone had 278). So: disable D213 by name.
+#
+# WHAT STAYS ON (pydocstyle 6.3, the version Prospector 1.19.1 installs): D104-D107, D200-D202,
+#   D204-D212, D214, D215, D300-D302, D402-D419. The rest were already off before this file:
+#   Prospector's default profile (inherited below, exactly what Codacy ran with no profile) disables
+#   D100-D103 and D400-D401, and Codacy's own wrapper (codacy/codacy-prospector) drops D203, the other
+#   half of the D203/D211 pair. Replaying Codacy's wrapper over this tree with and without this file
+#   removed the D213 results (770) and changed nothing else: with Codacy's default Prospector tools,
+#   with pylint, vulture, bandit and pyroma switched on as well, and with the toggle below on.
+#
+# CODACY'S "CONFIGURATION FILE" TOGGLE (Code patterns -> Prospector) is NOT needed, and can stay off.
+#   Codacy's wrapper runs prospector from the repository root without --profile, so prospector loads
+#   this file by itself either way. What the toggle changes is which Prospector tools run: off, Codacy
+#   passes its enabled tools as --with-tool/--without-tool (and `run:` below is ignored); on, it passes
+#   none and this file decides. The two `run:` lines make that decision the one Codacy's defaults make
+#   — dodgy, mccabe, profile-validator, pycodestyle, pydocstyle and pyflakes, no pylint — so turning
+#   the toggle on does not quietly drop pydocstyle (Prospector's default profile does not run it) or
+#   add Prospector's own pylint (Codacy runs Pylint as its own tool). If the Codacy UI ever enables
+#   another Prospector tool, it applies while the toggle is off; with it on, add it here.
+#
+# tests/unit (part06) holds this file to that shape: a change to it has to change the gate too.
+inherits:
+  - default
+
+pylint:
+  run: false
+
+pydocstyle:
+  run: true
+  disable:
+    - D213

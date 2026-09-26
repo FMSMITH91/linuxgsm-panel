@@ -300,6 +300,12 @@ check("runtime-path: the exception list names a file that exists",
       all((_os_p3 := __import__("os")).path.exists(f) for f in _so._RUNTIME_EXCEPTIONS))
 check("runtime-path: LICENSE is noise", _so._is_runtime_path("LICENSE") is False)
 check("runtime-path: dotfiles are noise", _so._is_runtime_path(".gitignore") is False)
+# Codacy's configuration is read by Codacy alone; a commit that changes only it (the Prospector
+# profile, the analysis config) changes nothing a host runs, and is not offered as an update.
+check("runtime-path: Codacy's .codacy.yaml and .prospector.yaml are noise",
+      _so._is_runtime_path(".codacy.yaml") is False
+      and _so._is_runtime_path(".prospector.yaml") is False,
+      repr((_so._is_runtime_path(".codacy.yaml"), _so._is_runtime_path(".prospector.yaml"))))
 _orig_utr_git = _so._git
 try:
     _so._git = lambda args, timeout=45: ("README.md\ndocs/x.md\n.github/workflows/ci.yml\n", "", 0)
