@@ -9,7 +9,7 @@
       --text-heading: #f3f4f6;
       --accent: #10b981;
       --accent-hover: #34d399;
-      --accent-glow: rgba(16, 185, 129, .15);
+      --accent-glow: rgb(16 185 129 / 15%);
       --danger: #ef4444;
       --warning: #f59e0b;
       --radius: 10px;
@@ -18,11 +18,20 @@
       --font-size-sm: 0.8125rem;
       --font-size-xs: 0.7rem;
     }
-    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
     /* Reserve a minimum width for icon glyphs so they can't shift layout while the
        icon webfont loads (bootstrap-icons uses font-display:block). min-width is a
        floor — it never shrinks or clips wider icons. Pairs with the font preload. */
-    .bi::before { min-width: 1em; text-align: center; }
+    .bi::before {
+      min-width: 1em;
+      text-align: center;
+    }
+
     body {
       background: var(--bg);
       color: var(--text);
@@ -35,7 +44,11 @@
                                -> scrolls into empty space. dvh matches the visible viewport. */
     }
     ::-webkit-scrollbar { width: 5px; }
-    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
 
     /* ── SIDEBAR ── */
     .sidebar {
@@ -52,11 +65,13 @@
       -webkit-overflow-scrolling: touch;   /* smooth momentum scroll on iOS when the nav overflows */
       transition: transform .25s cubic-bezier(.4,0,.2,1);
     }
+
     .sidebar-brand {
       padding: 0 1.25rem 1rem;
       text-decoration: none;
       display: flex; align-items: center; gap: .75rem;
     }
+
     .sidebar-brand-icon {
       width: 38px; height: 38px;
       background: var(--accent);
@@ -64,16 +79,37 @@
       display: flex; align-items: center; justify-content: center;
       font-size: 1.15rem; flex-shrink: 0;
     }
-    .sidebar-brand-text { font-weight: 700; font-size: 1.1rem; color: var(--text-heading); line-height: 1.25; }
-    .sidebar-brand-text small { display: block; font-size: .6rem; color: var(--text-muted); font-weight: 500; letter-spacing: .05em; text-transform: uppercase; }
+
+    .sidebar-brand-text {
+      font-weight: 700;
+      font-size: 1.1rem;
+      color: var(--text-heading);
+      line-height: 1.25;
+    }
+
+    .sidebar-brand-text small {
+      display: block;
+      font-size: .6rem;
+      color: var(--text-muted);
+      font-weight: 500;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+
     .sidebar-section {
       padding: .9rem 1.25rem .3rem;
       font-size: .6rem; font-weight: 700;
       text-transform: uppercase; letter-spacing: .1em;
       color: var(--text-muted);
     }
-    .sidebar-nav { list-style: none; margin: 0; padding: 0 .65rem; }
+
+    .sidebar-nav {
+      list-style: none;
+      margin: 0;
+      padding: 0 .65rem;
+    }
     .sidebar-nav li { margin-bottom: 1px; }
+
     .sidebar-nav a {
       display: flex; align-items: center; gap: .7rem;
       padding: .55rem .75rem;
@@ -82,19 +118,38 @@
       font-size: .88rem; font-weight: 500;
       transition: all .15s;
     }
-    .sidebar-nav a:hover { color: var(--text); background: var(--bg-elevated); }
+
+    .sidebar-nav a:hover {
+      color: var(--text);
+      background: var(--bg-elevated);
+    }
+
     .sidebar-nav a.active {
       color: var(--text-heading);
       background: var(--accent-glow);
       box-shadow: inset 2px 0 0 var(--accent);
     }
-    .sidebar-nav a i { font-size: 1.05rem; width: 20px; text-align: center; flex-shrink: 0; }
+
+    .sidebar-nav a i {
+      font-size: 1.05rem;
+      width: 20px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
     .sidebar-footer {
       margin-top: auto;
       padding: .75rem 1rem;
       border-top: 1px solid var(--border);
     }
-    .sidebar-user { display: flex; align-items: center; gap: .65rem; margin-bottom: .65rem; }
+
+    .sidebar-user {
+      display: flex;
+      align-items: center;
+      gap: .65rem;
+      margin-bottom: .65rem;
+    }
+
     .sidebar-user-avatar {
       width: 34px; height: 34px; border-radius: 50%;
       background: var(--bg-elevated);
@@ -102,8 +157,18 @@
       display: flex; align-items: center; justify-content: center;
       font-size: .9rem; color: var(--text-muted); flex-shrink: 0;
     }
-    .sidebar-user-info strong { display: block; font-size: .85rem; color: var(--text-heading); line-height: 1.3; }
-    .sidebar-user-info span { font-size: .68rem; color: var(--text-muted); }
+
+    .sidebar-user-info strong {
+      display: block;
+      font-size: .85rem;
+      color: var(--text-heading);
+      line-height: 1.3;
+    }
+
+    .sidebar-user-info span {
+      font-size: .68rem;
+      color: var(--text-muted);
+    }
 
     /* ── TOP BAR (mobile) ── */
     .topbar {
@@ -116,6 +181,7 @@
       align-items: center; gap: .5rem;
       padding: 0 .75rem;
     }
+
     .hamburger {
       background: none; border: none; color: var(--text);
       font-size: 1.4rem; padding: .3rem;
@@ -125,13 +191,15 @@
       border-radius: var(--radius-sm);
     }
     .hamburger:active { background: var(--bg-elevated); }
+
     .topbar-title {
       font-weight: 700; font-size: 1rem;
       color: var(--text-heading); text-decoration: none;
     }
+
     .sidebar-backdrop {
       display: none; position: fixed; inset: 0;
-      background: rgba(0,0,0,.6);
+      background: rgb(0 0 0 / 60%);
       z-index: 99;
     }
     .sidebar-backdrop.show { display: block; }
@@ -144,13 +212,18 @@
       min-height: 100dvh;   /* dynamic viewport height: excludes the mobile browser bar so short
                                pages (e.g. login) fit exactly instead of forcing a small scroll */
     }
+
     /* No sidebar when logged out (e.g. the login page) — don't reserve its width,
        or the centered content sits 250px to the right (looks off-centre). */
     .main-content-full { margin-left: 0; }
+
     /* On wide / ultra-wide monitors, cap the content width and centre it within the area beside
        the sidebar so cards, tables and text don't stretch uncomfortably edge-to-edge. It's a
        no-op below this width, so normal laptops and mobile are unaffected. */
-    .content-wrap { max-width: 1600px; margin-inline: auto; }
+    .content-wrap {
+      max-width: 1600px;
+      margin-inline: auto;
+    }
 
     /* Landing on #sec-2fa from the palette must not park the card under the fixed mobile
        topbar (54px) — the browser scrolls the anchor to y=0, which is behind it. scroll-margin
@@ -164,6 +237,7 @@
       border-radius: var(--radius);
       margin-bottom: 1rem;
     }
+
     .card-header {
       background: var(--bg-elevated);
       border-bottom: 1px solid var(--border);
@@ -175,6 +249,7 @@
     }
     .card-header i { color: var(--text-muted); }
     .card-body { padding: 1.25rem; }
+
     .card-footer {
       background: var(--bg-elevated);
       border-top: 1px solid var(--border);
@@ -191,10 +266,21 @@
       display: inline-flex; align-items: center; gap: .4rem;
       white-space: nowrap;
     }
-    .btn-sm { font-size: .8rem; padding: .4rem .75rem; }
-    .btn-primary { background: var(--accent); border-color: var(--accent); color: #0a0f1a; }
+
+    .btn-sm {
+      font-size: .8rem;
+      padding: .4rem .75rem;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #0a0f1a;
+    }
+
     /* Bootstrap's .text-secondary (#6c757d) is only 3.8:1 on the dark bg — lift it to AA. */
     .text-secondary { color: #9ca3af !important; }
+
     /* Bootstrap's semantic text/outline colors are too dark for AA on the dark theme;
        lift them to lighter shades that clear 4.5:1, and give filled bright buttons dark
        text (white was ~3.5:1). */
@@ -203,25 +289,70 @@
     .text-warning { color: #fbbf24 !important; }
     .text-info    { color: #67e8f9 !important; }
     .text-primary { color: #93c5fd !important; }
-    .btn-outline-success { color: #34d399; border-color: #34d399; }
-    .btn-outline-danger  { color: #f87171; border-color: #f87171; }
-    .btn-outline-warning { color: #fbbf24; border-color: #fbbf24; }
-    .btn-outline-primary { color: #93c5fd; border-color: #93c5fd; }
-    .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); box-shadow: 0 0 0 3px var(--accent-glow); }
+
+    .btn-outline-success {
+      color: #34d399;
+      border-color: #34d399;
+    }
+
+    .btn-outline-danger {
+      color: #f87171;
+      border-color: #f87171;
+    }
+
+    .btn-outline-warning {
+      color: #fbbf24;
+      border-color: #fbbf24;
+    }
+
+    .btn-outline-primary {
+      color: #93c5fd;
+      border-color: #93c5fd;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      border-color: var(--accent-hover);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
     .btn-outline-secondary {
       border-color: var(--border); color: var(--text); background: transparent;
     }
-    .btn-outline-secondary:hover { background: var(--bg-elevated); border-color: var(--text-muted); color: var(--text-heading); }
+
+    .btn-outline-secondary:hover {
+      background: var(--bg-elevated);
+      border-color: var(--text-muted);
+      color: var(--text-heading);
+    }
+
     /* One declaration each, dark text included — .btn-danger and .btn-warning used to be declared
        twice: once in the contrast block above for `color`, then again here for `background`. The
        warning pair disagreed (#0a0f1a vs a later #000), so the value the contrast fix chose was the
        one that lost. Same near-black either way, which is exactly why nobody noticed. */
-    .btn-danger { background: var(--danger); border-color: var(--danger); color: #0a0f1a; }
-    .btn-danger:hover { background: #dc2626; border-color: #dc2626; }
-    .btn-warning { background: var(--warning); border-color: var(--warning); color: #0a0f1a; }
+    .btn-danger {
+      background: var(--danger);
+      border-color: var(--danger);
+      color: #0a0f1a;
+    }
+
+    .btn-danger:hover {
+      background: #dc2626;
+      border-color: #dc2626;
+    }
+
+    .btn-warning {
+      background: var(--warning);
+      border-color: var(--warning);
+      color: #0a0f1a;
+    }
 
     /* ── TABLES ── */
-    .table { color: var(--text); margin-bottom: 0; }
+    .table {
+      color: var(--text);
+      margin-bottom: 0;
+    }
+
     .table thead th {
       background: var(--bg-elevated);
       border-color: var(--border);
@@ -231,6 +362,7 @@
       padding: .65rem .9rem;
       white-space: nowrap;
     }
+
     .table td {
       border-color: var(--border);
       padding: .65rem .9rem;
@@ -241,7 +373,13 @@
     .table-responsive { margin-bottom: 0; }
 
     /* ── FORMS ── */
-    .form-label { font-size: .82rem; font-weight: 600; color: var(--text-muted); margin-bottom: .3rem; }
+    .form-label {
+      font-size: .82rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: .3rem;
+    }
+
     .form-control, .form-select {
       background: var(--bg); border: 1px solid var(--border);
       color: var(--text); font-size: .9rem;
@@ -249,23 +387,62 @@
       border-radius: var(--radius-sm);
       transition: all .15s;
     }
+
     .form-control:focus, .form-select:focus {
       background: var(--bg); border-color: var(--accent);
       color: var(--text-heading);
       box-shadow: 0 0 0 3px var(--accent-glow);
     }
-    .form-control-sm { font-size: .85rem; padding: .4rem .65rem; }
-    .form-check-input:checked { background-color: var(--accent); border-color: var(--accent); }
-    .form-text { color: var(--text-muted); font-size: .73rem; }
-    .form-control::placeholder { color: var(--text-muted); opacity: .6; }
+
+    .form-control-sm {
+      font-size: .85rem;
+      padding: .4rem .65rem;
+    }
+
+    .form-check-input:checked {
+      background-color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .form-text {
+      color: var(--text-muted);
+      font-size: .73rem;
+    }
+
+    .form-control::placeholder {
+      color: var(--text-muted);
+      opacity: .6;
+    }
+
     /* Number inputs: hide the browser spinner arrows — they render light/misaligned on the dark theme. */
-    input[type=number] { -moz-appearance: textfield; appearance: textfield; }
-    input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] {
+      -moz-appearance: textfield;
+      appearance: textfield;
+    }
+
+    input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
     /* Make a field and its attached button ONE seamless unit — square the inner corners and overlap the
        1px seam. Our custom .form-control/.btn radius could otherwise leave a notched/double-border look. */
-    .input-group > :not(:last-child, .dropdown-toggle) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-    .input-group > :not(:first-child) { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
-    .input-group .form-control:focus { position: relative; z-index: 2; }
+    .input-group > :not(:last-child, .dropdown-toggle) {
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+    }
+
+    .input-group > :not(:first-child) {
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+      margin-left: -1px;
+    }
+
+    .input-group .form-control:focus {
+      position: relative;
+      z-index: 2;
+    }
+
     /* Attached buttons get a subtly RAISED background so they read as a button — an outline button's
        transparent bg would otherwise show the card colour, splitting the pill into a dark field + a
        card-coloured "gap" (the "weird" two-tone look). */
@@ -273,17 +450,46 @@
     .input-group > .btn:hover { filter: brightness(1.28); }
 
     /* ── BADGES ── */
-    .badge { font-weight: 600; font-size: .7rem; padding: .3em .65em; border-radius: 4px; letter-spacing: .02em; }
+    .badge {
+      font-weight: 600;
+      font-size: .7rem;
+      padding: .3em .65em;
+      border-radius: 4px;
+      letter-spacing: .02em;
+    }
+
     /* Dark text on the bright badge colors — white was only ~2.5:1 (fails AA); dark is 5–8:1. */
-    .badge.bg-success { background: var(--accent) !important; color: #0a0f1a !important; }
-    .badge.bg-danger { background: var(--danger) !important; color: #0a0f1a !important; }
-    .badge.bg-warning { background: var(--warning) !important; color: #0a0f1a !important; }
+    .badge.bg-success {
+      background: var(--accent) !important;
+      color: #0a0f1a !important;
+    }
+
+    .badge.bg-danger {
+      background: var(--danger) !important;
+      color: #0a0f1a !important;
+    }
+
+    .badge.bg-warning {
+      background: var(--warning) !important;
+      color: #0a0f1a !important;
+    }
+
     /* Tag chips. Default (uncoloured) is a muted outline so a wall of tags never out-shouts the
        status badges next to it; a custom colour gets dark text for the same AA contrast reason. */
     .tag-chip { background: transparent; border: 1px solid var(--border); color: var(--text-muted, #9aa4b2);
                 font-weight: 500; margin-right: .25rem; }
-    .tag-chip[style*="background-color"] { color: #0a0f1a; border-color: transparent; }
-    .btn.tag-filter.active { background: var(--accent); border-color: var(--accent); color: #0a0f1a; }
+
+    .tag-chip[style*="background-color"] {
+      color: #0a0f1a;
+      border-color: transparent;
+    }
+
+    .btn.tag-filter.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #0a0f1a;
+    }
+
     /* The tag-chip row is rendered even for a server with no tags, so server_tags.js has a
        container to repaint after a save — :not(:empty) keeps the empty one from adding a gap. */
     .srv-tags:not(:empty) { margin-top: .25rem; }
@@ -298,27 +504,56 @@
     .panel-tools, .host-move, .srv-move { display: none; }
     body.layout-edit .panel-tools { display: inline-flex; }
     body.layout-edit .host-move, body.layout-edit .srv-move { display: inline-flex; }
+
     /* In flow, not overlaid: an absolutely-positioned strip is what collided with the content. The
        card grows by a row of small buttons, which is acceptable inside an explicit editing mode. */
-    body.layout-edit .panel-tools { position: static; margin-bottom: .35rem; align-self: flex-end; }
-    .panel-tools .btn { --bs-btn-padding-y: .05rem; --bs-btn-padding-x: .3rem; font-size: .7rem; }
-    body.layout-edit .panel-movable { outline: 1px dashed var(--border); outline-offset: 2px; }
+    body.layout-edit .panel-tools {
+      position: static;
+      margin-bottom: .35rem;
+      align-self: flex-end;
+    }
+
+    .panel-tools .btn {
+      --bs-btn-padding-y: .05rem;
+      --bs-btn-padding-x: .3rem;
+      font-size: .7rem;
+    }
+
+    body.layout-edit .panel-movable {
+      outline: 1px dashed var(--border);
+      outline-offset: 2px;
+    }
 
     /* ── DRAG TO REORDER ── touch-action:none on the HANDLE only, so a touch drag reorders instead of
        scrolling the page, while the rest of the panel still scrolls normally. */
-    .sort-handle { cursor: grab; touch-action: none; }
+    .sort-handle {
+      cursor: grab;
+      touch-action: none;
+    }
     .sort-handle:active { cursor: grabbing; }
-    body.sort-active { user-select: none; cursor: grabbing; }
-    .sort-dragging { opacity: .6; outline: 2px dashed var(--accent); outline-offset: 2px; }
+
+    body.sort-active {
+      user-select: none;
+      cursor: grabbing;
+    }
+
+    .sort-dragging {
+      opacity: .6;
+      outline: 2px dashed var(--accent);
+      outline-offset: 2px;
+    }
+
     /* The row variant needs the outline on the cells: a <tr> cannot paint one reliably. */
     tr.sort-dragging > td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
     /* ── TABS ── (underline style that fits the dark theme, not Bootstrap's pale card tab) */
+
     /* A tab strip marked `flex-nowrap overflow-auto` is asking to scroll sideways when it runs
        out of room. It didn't: flex-nowrap stops the STRIP wrapping, but the items still shrink
        (flex-shrink defaults to 1), so the labels wrapped inside their own pills instead — at
        375px "Files & Config" became three lines and made the whole row three times taller than
        its neighbours. Stop the items shrinking and it scrolls as intended. */
+
     /* Checkboxes rendered 32x16. Even WCAG 2.2 AA's relaxed 24x24 target minimum is above that,
        and a 16px-tall box is genuinely fiddly with a thumb. Only the checkboxes are touched:
        buttons here measure 31px, which already clears that bar, and growing every control to the
@@ -337,7 +572,11 @@
       }
       .form-select-sm, .form-control-sm { min-height: 24px; }
 
-      .form-check-input { width: 1.5rem; height: 1.5rem; margin-top: .1rem; }
+      .form-check-input {
+        width: 1.5rem;
+        height: 1.5rem;
+        margin-top: .1rem;
+      }
       .form-check { padding-left: 2rem; }
       .form-check .form-check-input { margin-left: -2rem; }
     }
@@ -345,7 +584,11 @@
     .nav.flex-nowrap.overflow-auto > .nav-item { flex: 0 0 auto; }
     .nav.flex-nowrap.overflow-auto .nav-link { white-space: nowrap; }
 
-    .nav-tabs { border-bottom: 1px solid var(--border); gap: .15rem; }
+    .nav-tabs {
+      border-bottom: 1px solid var(--border);
+      gap: .15rem;
+    }
+
     .nav-tabs .nav-link {
       color: var(--text-muted);
       background: transparent;
@@ -356,7 +599,14 @@
       display: inline-flex; align-items: center; gap: .4rem;
       transition: color .15s, border-color .15s;
     }
-    .nav-tabs .nav-link:hover { color: var(--text-heading); background: transparent; border-bottom-color: var(--border); isolation: isolate; }
+
+    .nav-tabs .nav-link:hover {
+      color: var(--text-heading);
+      background: transparent;
+      border-bottom-color: var(--border);
+      isolation: isolate;
+    }
+
     .nav-tabs .nav-link.active,
     .nav-tabs .nav-item.show .nav-link {
       color: var(--accent-hover);
@@ -366,11 +616,28 @@
     .nav-tabs .nav-link i { opacity: .9; }
 
     /* ── MODALS ── */
-    .modal-content { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); }
-    .modal-header { border-bottom: 1px solid var(--border); padding: 1rem 1.25rem; }
-    .modal-header .modal-title { font-size: 1rem; font-weight: 600; color: var(--text-heading); }
+    .modal-content {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+
+    .modal-header {
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 1.25rem;
+    }
+
+    .modal-header .modal-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-heading);
+    }
     .modal-body { padding: 1.25rem; }
-    .modal-footer { border-top: 1px solid var(--border); padding: .75rem 1.25rem; }
+
+    .modal-footer {
+      border-top: 1px solid var(--border);
+      padding: .75rem 1.25rem;
+    }
 
     /* ── CONSOLE ── */
     .console-output {
@@ -381,6 +648,7 @@
       font-size: .78rem; padding: 1rem;
       width: 100%; box-sizing: border-box;
       max-height: 520px; min-height: 340px; overflow-y: auto;
+
       /* NOTE: keep this "normal" — the console is built from <div class="console-line">
          children, and pre-wrap here would render the template's own newlines/indentation
          between those divs as blank lines. Per-line wrapping lives on .console-line. */
@@ -395,6 +663,7 @@
   outline: none;
   box-shadow: inset 0 0 0 1px var(--accent);
 }
+
     /* padding-left + a negative text-indent: the timestamp gutter sits in the padding, and a
        WRAPPED line hangs to the same column instead of starting under the clock. */
     .console-line { white-space: pre-wrap; word-break: break-all;
@@ -408,9 +677,11 @@
     .console-ts {
       display: inline-block; width: 4.6rem; margin-right: .3rem;
       color: #5d6b82; font-variant-numeric: tabular-nums; text-indent: 0;
+
       /* .console-line is pre-wrap and that inherits: without this the stamp wraps INSIDE its own
          fixed-width box and pushes the line onto a second row. */
       white-space: nowrap; overflow: hidden;
+
       /* LOAD-BEARING, and not obvious. An inline-block whose `overflow` is not `visible` takes its
          baseline from its BOTTOM MARGIN EDGE rather than from its last line box, so it sits lower
          than the text beside it and the line box grows by a descender to contain it. Measured:
@@ -420,6 +691,7 @@
       vertical-align: top;
       -webkit-user-select: none; user-select: none;   /* copying the log should not copy the gutter */
     }
+
     /* A line with NO stamp needs the gutter reserved anyway, or its text starts where the clock
        would have. The comment above claimed the indent on .console-line was enough; measured
        against this stylesheet, stamped text began at x=103.39 and unstamped at x=25.00 — 78.39px
@@ -432,9 +704,14 @@
       vertical-align: top;   /* same reason .console-ts sets it — see its own note */
     }
     .console-output.ts-hidden .console-ts { display: none; }
+
     /* ...and with the gutter switched off, neither the stamp nor its placeholder takes space. */
     .console-output.ts-hidden .console-line::before { content: none; }
-    .console-output.ts-hidden .console-line { padding-left: 0; text-indent: 0; }
+
+    .console-output.ts-hidden .console-line {
+      padding-left: 0;
+      text-indent: 0;
+    }
 
     /* ── ANSI COLOUR IN THE CONSOLE ──
        LinuxGSM colours its own output ([  OK  ] green, [ FAIL ] red, [ INFO ] blue) and that is
@@ -460,7 +737,7 @@
     .ansi-94 { color: #93c5fd; }
     .ansi-95 { color: #e9b8ff; }
     .ansi-96 { color: #86e8f0; }
-    .ansi-97 { color: #ffffff; }
+    .ansi-97 { color: #fff; }
     .ansi-40 { background: #1c2333; }
     .ansi-41 { background: #7f1d1d; }
     .ansi-42 { background: #14532d; }
@@ -469,6 +746,7 @@
     .ansi-45 { background: #581c87; }
     .ansi-46 { background: #155e75; }
     .ansi-47 { background: #3f4a5e; }
+
     /* Bright backgrounds (100-107). terminal.py's _SGR_ALLOWED keeps these and server_detail.js
        emits `ansi-<code>` for every code it is given, so without a rule here the span was styled
        by nothing at all and a bright background rendered as plain text. Measured against this
@@ -487,6 +765,7 @@
     .ansi-3 { font-style: italic; }
     .ansi-4 { text-decoration: underline; }
     .ansi-9 { text-decoration: line-through; }
+
     /* Reverse video (7), which was allowed through the whole pipeline and then styled by nothing —
        measured identical to plain text. `currentColor` paints the background with whatever colour
        the run is already in, and -webkit-text-fill-color (not `color`, which currentColor reads)
@@ -494,16 +773,36 @@
        sets a background: a true reverse would swap the two, and CSS cannot read one to write the
        other. Uncoloured text — which is what LinuxGSM and most servers actually use 7 for — is
        exact. */
-    .ansi-7 { background: currentColor; -webkit-text-fill-color: #080d17; }
+    .ansi-7 {
+      background: currentColor;
+      -webkit-text-fill-color: #080d17;
+    }
 
     /* ── LIVE STAT TILES ── */
     .stat-tile {
       background: #0d1420; border: 1px solid var(--border);
       border-radius: var(--radius-sm); padding: .6rem .8rem; height: 100%;
     }
-    .stat-label { font-size: .66rem; text-transform: uppercase; letter-spacing: .04em; color: #8b98a5; }
-    .stat-val { font-size: 1.3rem; font-weight: 700; color: var(--text-heading); line-height: 1.25; }
-    .stat-sub { font-size: .68rem; color: #6e7b8a; }
+
+    .stat-label {
+      font-size: .66rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      color: #8b98a5;
+    }
+
+    .stat-val {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: var(--text-heading);
+      line-height: 1.25;
+    }
+
+    .stat-sub {
+      font-size: .68rem;
+      color: #6e7b8a;
+    }
+
     .connect-pill {
       display: inline-flex; align-items: center; gap: .4rem;
       background: #0d1420; border: 1px solid var(--border);
@@ -511,27 +810,109 @@
     }
 
     /* ── PER-CORE CPU BARS + Live-Resources bars ── */
-    .cpu-cores-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 9px 22px; }
-    .core-row { display: flex; align-items: center; gap: 10px; }
-    .core-label { font-size: .68rem; color: #7d8896; width: 40px; flex-shrink: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .cpu-cores-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 9px 22px;
+    }
+
+    .core-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .core-label {
+      font-size: .68rem;
+      color: #7d8896;
+      width: 40px;
+      flex-shrink: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
     /* Rounded, inset "pill" track shared by the per-core bars AND the overall/mem/swap/disk bars
        (the latter are Bootstrap .progress inside .live-res, restyled here to match). */
-    .core-track, .live-res .progress { position: relative; background: rgba(0,0,0,.34); border: 0; border-radius: 999px; overflow: hidden; box-shadow: inset 0 1px 2px rgba(0,0,0,.55); }
-    .core-track { flex: 1; height: 9px; }
+    .core-track, .live-res .progress {
+      position: relative;
+      background: rgb(0 0 0 / 34%);
+      border: 0;
+      border-radius: 999px;
+      overflow: hidden;
+      box-shadow: inset 0 1px 2px rgb(0 0 0 / 55%);
+    }
+
+    .core-track {
+      flex: 1;
+      height: 9px;
+    }
+
     /* MUST be display:block — an inline <span> ignores width/height, so the fill would never render.
        The sheen gradient layers OVER the JS-set background-color to add depth without touching the JS. */
-    .core-fill, .live-res .progress-bar { display: block; height: 100%; width: 0; border-radius: 999px; background-image: linear-gradient(180deg, rgba(255,255,255,.33), rgba(255,255,255,.04) 55%, rgba(0,0,0,.10)); transition: width .5s ease, background-color .5s ease; }
-    .core-val { font-size: .68rem; color: #d7dee6; width: 42px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+    .core-fill, .live-res .progress-bar {
+      display: block;
+      height: 100%;
+      width: 0;
+      border-radius: 999px;
+      background-image: linear-gradient(180deg, rgb(255 255 255 / 33%), rgb(255 255 255 / 4%) 55%, rgb(0 0 0 / 10%));
+      transition: width .5s ease, background-color .5s ease;
+    }
+
+    .core-val {
+      font-size: .68rem;
+      color: #d7dee6;
+      width: 42px;
+      text-align: right;
+      flex-shrink: 0;
+      font-variant-numeric: tabular-nums;
+    }
+
     /* Memory / Swap / Disk tiles + the pulsing "realtime" dot in the card header. */
-    .res-tile { background: rgba(255,255,255,.025); border: 1px solid var(--border); border-radius: 11px; padding: .8rem .95rem; height: 100%; }
-    .rt-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent, #3fb950); box-shadow: 0 0 0 0 rgba(63,185,80,.6); animation: rtpulse 1.9s infinite; margin-right: 5px; vertical-align: baseline; }
-    @keyframes rtpulse { 0% { box-shadow: 0 0 0 0 rgba(63,185,80,.5); } 70% { box-shadow: 0 0 0 6px rgba(63,185,80,0); } 100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); } }
+    .res-tile {
+      background: rgb(255 255 255 / 2.5%);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      padding: .8rem .95rem;
+      height: 100%;
+    }
+
+    .rt-dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent, #3fb950);
+      box-shadow: 0 0 0 0 rgb(63 185 80 / 60%);
+      animation: rtpulse 1.9s infinite;
+      margin-right: 5px;
+      vertical-align: baseline;
+    }
+
+    @keyframes rtpulse { 0% { box-shadow: 0 0 0 0 rgb(63 185 80 / 50%); } 70% { box-shadow: 0 0 0 6px rgb(63 185 80 / 0%); } 100% { box-shadow: 0 0 0 0 rgb(63 185 80 / 0%); } }
 
     /* ── STATUS DOTS ── */
-    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; box-shadow: 0 0 6px currentColor; }
-    .status-online { background: var(--accent); color: var(--accent); }
-    .status-offline { background: var(--danger); color: var(--danger); }
-    .status-unknown { background: var(--warning); color: var(--warning); }
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 5px;
+      box-shadow: 0 0 6px currentColor;
+    }
+
+    .status-online {
+      background: var(--accent);
+      color: var(--accent);
+    }
+
+    .status-offline {
+      background: var(--danger);
+      color: var(--danger);
+    }
+
+    .status-unknown {
+      background: var(--warning);
+      color: var(--warning);
+    }
 
     /* ── FLASH ── */
     .flash-container {
@@ -539,23 +920,34 @@
       z-index: 9999; width: 340px;
       max-width: calc(100vw - 1.5rem);
     }
+
     .alert {
       border: 1px solid var(--border); border-radius: var(--radius-sm);
       font-size: .85rem;
+
       /* Longhands, NOT the `padding` shorthand: this file loads after bootstrap.min.css and
          `.alert` has the same specificity as `.alert-dismissible`, so a shorthand here silently
          reset that rule's `padding-right: 3rem` — the gap it reserves for the absolutely-positioned
          close button — and long text ran underneath the button in every dismissible alert. */
       padding-top: .7rem; padding-right: 1rem; padding-bottom: .7rem; padding-left: 1rem;
-      box-shadow: 0 4px 20px rgba(0,0,0,.5);
+      box-shadow: 0 4px 20px rgb(0 0 0 / 50%);
       margin-bottom: .5rem;
     }
     .alert-dismissible { padding-right: 3rem; }
 
     /* ── TYPOGRAPHY ── */
-    a { color: var(--accent); text-decoration: none; }
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
     a:hover { color: var(--accent-hover); }
-    hr { border-color: var(--border); opacity: 1; margin: 1rem 0; }
+
+    hr {
+      border-color: var(--border);
+      opacity: 1;
+      margin: 1rem 0;
+    }
+
     .page-title {
       font-size: 1.35rem; font-weight: 700;
       color: var(--text-heading);
@@ -563,9 +955,28 @@
       margin-bottom: 1.25rem;
     }
     .page-title i { color: var(--text-muted); }
-    code { font-size: .85rem; color: var(--text); background: var(--bg-elevated); padding: .1rem .3rem; border-radius: 3px; }
-    pre { font-size: .8rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .85rem; }
-    .setup-card { max-width: 480px; margin: 4rem auto; }
+
+    code {
+      font-size: .85rem;
+      color: var(--text);
+      background: var(--bg-elevated);
+      padding: .1rem .3rem;
+      border-radius: 3px;
+    }
+
+    pre {
+      font-size: .8rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: .85rem;
+    }
+
+    .setup-card {
+      max-width: 480px;
+      margin: 4rem auto;
+    }
+
     /* Language picker for the unauthenticated setup wizard — there's no sidebar yet to hold the
        usual one. Fixed top-LEFT so it clears the top-right flash/toast messages. */
     .setup-lang {
@@ -577,8 +988,18 @@
     .setup-lang i { color: var(--text-muted); }
 
     /* ── PAGINATION ── */
-    .pagination .page-link { background: var(--bg-card); border-color: var(--border); color: var(--text); padding: .4rem .8rem; font-size: .85rem; }
-    .pagination .page-item.active .page-link { background: var(--accent); border-color: var(--accent); }
+    .pagination .page-link {
+      background: var(--bg-card);
+      border-color: var(--border);
+      color: var(--text);
+      padding: .4rem .8rem;
+      font-size: .85rem;
+    }
+
+    .pagination .page-item.active .page-link {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
 
     /* NOTE: a "STAT CARDS" block used to sit here — .stat-card, .stat-value, .empty-state* and a
        SECOND .stat-label. No template or script has used any of them for a long time, but the
@@ -590,26 +1011,58 @@
     @media (max-width: 991.98px) {
       .main-content { padding: 1.5rem; }
     }
+
     @media (max-width: 767.98px) {
-      .sidebar { transform: translateX(-100%); width: 280px; }
-      .sidebar.open { transform: translateX(0); box-shadow: 8px 0 40px rgba(0,0,0,.7); }
+      .sidebar {
+        transform: translateX(-100%);
+        width: 280px;
+      }
+
+      .sidebar.open {
+        transform: translateX(0);
+        box-shadow: 8px 0 40px rgb(0 0 0 / 70%);
+      }
       .topbar { display: flex; }
+
       .main-content {
         margin-left: 0; margin-top: 54px;
         padding: 1rem;
+
         /* 54px is reserved for the mobile topbar — subtract it from the height, or main-content
            (min-height:100dvh) + the margin makes the page 54px taller than the screen and it scrolls. */
         min-height: calc(100vh - 54px);
         min-height: calc(100dvh - 54px);
       }
+
       /* Logged-out pages (login/setup) have NO topbar — no margin to reserve, full height. */
-      .main-content-full { margin-top: 0; min-height: 100vh; min-height: 100dvh; }
-      .page-title { font-size: 1.15rem; margin-bottom: 1rem; }
-      .card-header { padding: .7rem 1rem; font-size: .85rem; }
+      .main-content-full {
+        margin-top: 0;
+        min-height: 100vh;
+        min-height: 100dvh;
+      }
+
+      .page-title {
+        font-size: 1.15rem;
+        margin-bottom: 1rem;
+      }
+
+      .card-header {
+        padding: .7rem 1rem;
+        font-size: .85rem;
+      }
       .card-body { padding: 1rem; }
       .card-footer { padding: .7rem 1rem; }
-      .table thead th { font-size: .65rem; padding: .45rem .5rem; }
-      .table td { font-size: .8rem; padding: .45rem .5rem; }
+
+      .table thead th {
+        font-size: .65rem;
+        padding: .45rem .5rem;
+      }
+
+      .table td {
+        font-size: .8rem;
+        padding: .45rem .5rem;
+      }
+
       /* Start/Stop/Restart/Console are the point of this table, and they live in the last column.
          Measured at 375px the table is 578px wide inside a 341px viewport, putting that column's
          right edge at x=595 — reachable only by horizontally scrolling a table that gives no hint
@@ -641,6 +1094,7 @@
         white-space: normal !important;
         width: 190px;
         min-width: 190px;
+
         /* A sticky cell is lifted out of the row's paint order, so it needs an opaque background
            of its OWN and cannot inherit the row's. Take BOOTSTRAP'S table variables rather than a
            fixed colour: --bs-table-bg is what every other cell paints, and --bs-table-accent-bg is
@@ -650,6 +1104,7 @@
            column stayed put. Reported as "the gray doesn't go all the way across" on mobile, which
            is the only width the column is sticky at. */
         background-color: var(--bs-table-bg);
+
         /* The same fallback chain Bootstrap's own cell rule uses. 5.3 moved the row-state overlay
            to --bs-table-bg-state and left --bs-table-accent-bg declared on .table as a constant
            `transparent` — so reading only that last fallback made this layer a permanent no-op
@@ -657,23 +1112,27 @@
            lightened. Which is the exact symptom the note above says this rule exists to fix. */
         box-shadow: inset 0 0 0 9999px var(--bs-table-bg-state,
                                          var(--bs-table-bg-type, var(--bs-table-accent-bg))),
-                    -10px 0 10px -10px rgba(0, 0, 0, .7);
+                    -10px 0 10px -10px rgb(0 0 0 / 70%);
       }
       .table-responsive .table td.col-actions .btn { margin: 1px; }
+
       /* The second column is which server the row IS, and the table's auto layout gives it
          whatever is left — 62px, measured, which wraps "CS2 Public" to two lines. Unpinning the
          Actions column frees 80px but the algorithm does not hand it here on its own, so the
          identity column gets a floor. 120px fits the name and its short_name underneath. */
       .table-responsive .table thead th:nth-child(2),
       .table-responsive .table tbody td:nth-child(2) { min-width: 120px; }
+
       /* The header has its own colour by design, and no accent state to track. */
       .table-responsive .table thead th.col-actions { background-color: var(--bg-elevated); }
+
       /* The host tile is the only one carrying TWO values, and it did not fit. Measured at 375px:
          "52.6% · 14.6%" needs 181px at the tile's 23px font while a half-width tile gives 132px,
          so it broke after the separator and left a dangling "·" on the first line. A 3-digit
          worst case ("100.0% · 100.0%") needs 207px. Shrinking the number to fit would mean ~14.6px
          against every other tile's 23px, so it takes the whole row instead — which is where it
          already sits in the default tile order anyway. */
+
       /* The four COUNT tiles share one row on a phone; the host tile keeps the full width it
          needs for "100.0% · 100.0%" (see the note above).
 
@@ -690,20 +1149,49 @@
          flow rather than overlaid, because an absolutely-positioned strip is what collided with
          the tile's value — and they stay 39x33, which is the part that would otherwise make this
          a bad trade on the device it is for. */
-      #dash-tiles { --bs-gutter-x: .4rem; --bs-gutter-y: .4rem; }
-      #dash-tiles > .col { flex: 0 0 25%; max-width: 25%; }
-      #dash-tiles > .col[data-panel="host"] { flex: 0 0 100%; max-width: 100%; }
+      #dash-tiles {
+        --bs-gutter-x: .4rem;
+        --bs-gutter-y: .4rem;
+      }
+
+      #dash-tiles > .col {
+        flex: 0 0 25%;
+        max-width: 25%;
+      }
+
+      #dash-tiles > .col[data-panel="host"] {
+        flex: 0 0 100%;
+        max-width: 100%;
+      }
       #dash-tiles .card { padding: .4rem !important; }
       #dash-tiles .h3 { font-size: 1rem; }
       #dash-tiles .card .small { font-size: .6rem; }
       .row { --bs-gutter-x: .75rem; }
-      .btn { font-size: .8rem; padding: .45rem .8rem; }
-      .btn-sm { font-size: .75rem; padding: .35rem .6rem; }
+
+      .btn {
+        font-size: .8rem;
+        padding: .45rem .8rem;
+      }
+
+      .btn-sm {
+        font-size: .75rem;
+        padding: .35rem .6rem;
+      }
       .setup-card { margin: 2rem auto; }
-      .flash-container { top: 60px; right: .5rem; width: 280px; }
+
+      .flash-container {
+        top: 60px;
+        right: .5rem;
+        width: 280px;
+      }
       .modal-body { padding: 1rem; }
-      .form-control, .form-select { font-size: .85rem; padding: .5rem .7rem; }
+
+      .form-control, .form-select {
+        font-size: .85rem;
+        padding: .5rem .7rem;
+      }
     }
+
     @media (min-width: 768px) {
       .sidebar { transform: none !important; }
       .topbar { display: none; }
@@ -724,6 +1212,7 @@
     @media (min-width: 768px) {
       #host-summary {
         font-size: .95rem;
+
         /* Keep the LINE BOX the size a .h3 would occupy (28px x 1.2 = 33.6px), or the smaller
            number leaves this card 15px shorter than the four beside it — swapping a too-tall card
            for a too-short one. 2.1rem is that 33.6px. */
@@ -732,6 +1221,7 @@
     }
 
     /* ── COMMAND PALETTE (Ctrl/⌘+K) ── */
+
     /* Fixed overlay, and `hidden` until opened: it must never occupy layout, or every page pays
        a Cumulative Layout Shift for a box nobody has opened yet (Lighthouse gates CLS <= 0.1). */
     .cmdk-trigger {
@@ -744,44 +1234,61 @@
       color: var(--text-muted); font-size: .82rem; text-align: left;
       cursor: pointer; transition: all .15s;
     }
-    .cmdk-trigger:hover { color: var(--text); border-color: var(--accent); }
+
+    .cmdk-trigger:hover {
+      color: var(--text);
+      border-color: var(--accent);
+    }
+
     .cmdk-trigger kbd {
       margin-left: auto; font-size: .62rem; padding: .1rem .3rem;
       background: var(--bg-elevated); border: 1px solid var(--border);
       border-radius: 4px; color: var(--text-muted); font-family: inherit;
     }
+
     .cmdk-backdrop {
       position: fixed; inset: 0; z-index: 1080;
-      background: rgba(0, 0, 0, .62);
+      background: rgb(0 0 0 / 62%);
       display: flex; justify-content: center;
       padding: 12vh 1rem 1rem;
     }
+
     .cmdk {
       width: 100%; max-width: 560px;
       max-height: 70vh;
       background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      box-shadow: 0 18px 50px rgba(0, 0, 0, .55);
+      box-shadow: 0 18px 50px rgb(0 0 0 / 55%);
       display: flex; flex-direction: column; overflow: hidden;
     }
+
     .cmdk-search {
       display: flex; align-items: center; gap: .6rem;
       padding: .8rem 1rem;
       border-bottom: 1px solid var(--border);
       color: var(--text-muted);
     }
+
     .cmdk-search input {
       flex: 1; min-width: 0;
       background: none; border: none; outline: none;
       color: var(--text-heading); font-size: .95rem; font-family: inherit;
     }
-    .cmdk-list { list-style: none; margin: 0; padding: .35rem; overflow-y: auto; }
+
+    .cmdk-list {
+      list-style: none;
+      margin: 0;
+      padding: .35rem;
+      overflow-y: auto;
+    }
+
     .cmdk-group {
       padding: .5rem .65rem .25rem;
       font-size: .6rem; font-weight: 700; letter-spacing: .1em;
       text-transform: uppercase; color: var(--text-muted);
     }
+
     .cmdk-item {
       display: flex; align-items: center; gap: .7rem;
       padding: .5rem .65rem;
@@ -789,54 +1296,125 @@
       color: var(--text); font-size: .88rem;
       cursor: pointer;
     }
+
     /* aria-selected drives the highlight, so the pointer and the arrow keys cannot disagree
        about which row Enter will open. */
-    .cmdk-item[aria-selected="true"] { background: var(--accent-glow); color: var(--text-heading); }
-    .cmdk-item i { width: 20px; text-align: center; flex-shrink: 0; color: var(--text-muted); }
+    .cmdk-item[aria-selected="true"] {
+      background: var(--accent-glow);
+      color: var(--text-heading);
+    }
+
+    .cmdk-item i {
+      width: 20px;
+      text-align: center;
+      flex-shrink: 0;
+      color: var(--text-muted);
+    }
     .cmdk-item[aria-selected="true"] i { color: var(--accent); }
-    .cmdk-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .cmdk-meta { font-size: .7rem; color: var(--text-muted); flex-shrink: 0; }
-    .cmdk-empty { padding: 1.25rem 1rem; text-align: center; color: var(--text-muted); font-size: .85rem; }
+
+    .cmdk-label {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .cmdk-meta {
+      font-size: .7rem;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .cmdk-empty {
+      padding: 1.25rem 1rem;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: .85rem;
+    }
+
     .cmdk-foot {
       display: flex; gap: 1rem; flex-wrap: wrap;
       padding: .5rem .9rem;
       border-top: 1px solid var(--border);
       font-size: .68rem; color: var(--text-muted);
     }
+
     .cmdk-foot kbd {
       font-size: .62rem; padding: .05rem .28rem; margin-right: .2rem;
       background: var(--bg-elevated); border: 1px solid var(--border);
       border-radius: 4px; color: var(--text-muted); font-family: inherit;
     }
+
     @media (max-width: 767px) {
       .cmdk-backdrop { padding: 0; }
-      .cmdk { max-width: none; max-height: 100%; height: 100%; border: none; border-radius: 0; }
+
+      .cmdk {
+        max-width: none;
+        max-height: 100%;
+        height: 100%;
+        border: none;
+        border-radius: 0;
+      }
       .cmdk-foot { display: none; }   /* no physical keyboard to hint at */
     }
 
 /* ── Install progress, inline ─────────────────────────────────────────────────────────────────
    Shown where the server is — a row under it on the dashboard, a panel on Install a Server —
    rather than a dismissible card in the corner, which was lost for good once closed. */
-.install-progress-row > td{ border-top:0; padding-top:0; }
+.install-progress-row > td{
+  border-top:0;
+  padding-top:0;
+}
+
 .install-progress-inline{
-  border:1px solid rgba(255,255,255,.12); border-left:3px solid var(--bs-info, #4dabf7);
+  border:1px solid rgb(255 255 255 / 12%); border-left:3px solid var(--bs-info, #4dabf7);
   border-radius:.4rem; padding:.5rem .6rem;
 }
-.install-progress-inline .ip-name{ font-weight:600; font-size:.85rem; overflow-wrap:anywhere; }
-.ip-step{ font-size:.8rem; opacity:.9; overflow-wrap:anywhere; }
+
+.install-progress-inline .ip-name{
+  font-weight:600;
+  font-size:.85rem;
+  overflow-wrap:anywhere;
+}
+
+.ip-step{
+  font-size:.8rem;
+  opacity:.9;
+  overflow-wrap:anywhere;
+}
+
 .ip-track{
-  height:.35rem; border-radius:.2rem; background:rgba(255,255,255,.12);
+  height:.35rem; border-radius:.2rem; background:rgb(255 255 255 / 12%);
   overflow:hidden; margin:.3rem 0 .2rem;
 }
-.ip-bar{ height:100%; width:0; background:var(--bs-info, #4dabf7); transition:width .4s ease; }
-.ip-meta{ font-size:.75rem; opacity:.6; }
+
+.ip-bar{
+  height:100%;
+  width:0;
+  background:var(--bs-info, #4dabf7);
+  transition:width .4s ease;
+}
+
+.ip-meta{
+  font-size:.75rem;
+  opacity:.6;
+}
+
 /* The panel has stopped getting readings for this row. Dimmed and with the bar's motion
    removed, so a frozen bar does not read as a live one. */
 .ip-stale{ opacity:.55; }
-.ip-stale .ip-bar{ transition:none; filter:grayscale(1); }
+
+.ip-stale .ip-bar{
+  transition:none;
+  filter:grayscale(1);
+}
 
 /* The panel update card's status line. An update's outcome can be two sentences — the installer's
    own reason for stopping — and squeezed beside the buttons on a phone it became a column 90px
    wide. With room for 14rem it sits beside them; without, it takes its own line. Only while it
    says something: empty, it must not push a blank row under the buttons. */
-#pu-msg:not(:empty){ flex:1 1 14rem; min-width:0; }
+#pu-msg:not(:empty){
+  flex:1 1 14rem;
+  min-width:0;
+}
