@@ -8,7 +8,7 @@ from panel.services import (notifications)
 from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin,
     _panel_ver_label, _command_arg, _connect_text, _console_text, _find_server,
     _hosts_text, _reply_header, _players_text, _say_text,
-    _servers_text, _status_text, action_ack, working_ack)
+    _servers_text, _status_text, action_ack, update_outcome_text, working_ack)
 import logging
 import time
 
@@ -41,21 +41,26 @@ def _dc_literal(body):
     `[Panel login expired](https://evil.example/login)`, or one saying `# Re-authenticate at ...` in
     chat, had the operator's bot post a clickable masked link or a headline in the admin channel.
     Nothing in a code block is rendered or linked; U+02CB stands in for each backtick so the block
-    cannot be ended from inside it."""
+    cannot be ended from inside it.
+    """
     return "```\n%s\n```" % (body or "").replace("`", "\u02cb")
 
 
 def _dc_ack(bot_token, channel_id, text):
-    """The immediate "working on it" line — see telegram._tg_ack for the reasoning; this is its
-    twin, and the two bots deliberately behave the same way. No _reply_header(), because the ack
-    lands right under the command that caused it."""
+    """The immediate "working on it" line — the twin of telegram._tg_ack.
+
+    See telegram._tg_ack for the reasoning; the two bots deliberately behave the same way. No
+    _reply_header(), because the ack lands right under the command that caused it.
+    """
     notifications.discord_bot_send(bot_token, channel_id, text)
 
 
 def _parse_dc_command(text):
-    """Normalise a Discord command word: '!Restart foo' or '/status' -> 'restart'/'status'. Accepts a
-    '!' or '/' prefix — Discord reserves '/' for its own slash-command picker, so '!' is the one that
-    types cleanly. '' if it isn't a command."""
+    """Normalise a Discord command word: '!Restart foo' or '/status' -> 'restart'/'status'.
+
+    Accepts a '!' or '/' prefix — Discord reserves '/' for its own slash-command picker, so '!' is
+    the one that types cleanly. '' if it isn't a command.
+    """
     text = (text or "").strip()
     if not text or text[0] not in "!/":
         return ""
@@ -65,9 +70,11 @@ def _parse_dc_command(text):
 
 def _discord_command_watch(app):
     """Keep a Discord Gateway session open and honour commands from the authorised channel only.
+
     Mirrors _telegram_command_watch: reconnect-with-backoff, each command routed to the same
     channel-agnostic text builders the Telegram bot uses. A dropped socket just reconnects (a fresh
-    IDENTIFY skips any backlog, so the /update that restarted us is never replayed)."""
+    IDENTIFY skips any backlog, so the /update that restarted us is never replayed).
+    """
     while True:
         try:
             cfg = notifications._cfg()
@@ -126,8 +133,10 @@ def _dc_help_text():
 
 
 def _dc_dispatch(app, bot_token, channel_id, text, sender=None):
-    """Ack on the socket thread, run the command on the worker — Telegram's twin, see _tg_dispatch
-    for why the ack cannot be queued along with the work."""
+    """Ack on the socket thread, run the command on the worker — Telegram's twin.
+
+    See _tg_dispatch for why the ack cannot be queued along with the work.
+    """
     ack = working_ack(_parse_dc_command(text))
     if ack:
         _dc_ack(bot_token, channel_id, ack)
@@ -173,24 +182,23 @@ def _dc_server_action(app, bot_token, channel_id, action, arg, sender=None):
 
 
 def _handle_discord_command(app, bot_token, channel_id, text, sender=None):
+    """Run one command from the authorised channel and answer it there."""
     cmd = _parse_dc_command(text)
     arg = _command_arg(text)
-    if cmd == "help":
-        _dc_reply(bot_token, channel_id, _dc_help_text())
-    elif cmd == "status":
-        _dc_reply(bot_token, channel_id, _status_text(app))
-    elif cmd == "servers":
-        _dc_reply(bot_token, channel_id, _servers_text(app))
-    elif cmd == "hosts":
-        _dc_reply(bot_token, channel_id, _hosts_text(app))
-    elif cmd == "players":
-        _dc_reply(bot_token, channel_id, _players_text(app, arg, fence=_dc_literal))
-    elif cmd == "console":
-        _dc_reply(bot_token, channel_id, _console_text(app, arg, fence=_dc_literal))
-    elif cmd == "say":
-        _dc_reply(bot_token, channel_id, _say_text(app, arg))
-    elif cmd == "connect":
-        _dc_reply(bot_token, channel_id, _connect_text(app, arg))
+    # The commands that only answer: one reply each, built by a shared text helper. Built per call
+    # and resolved by name when it runs, so each helper is still looked up as a module attribute.
+    replies = {
+        "help": _dc_help_text,
+        "status": lambda: _status_text(app),
+        "servers": lambda: _servers_text(app),
+        "hosts": lambda: _hosts_text(app),
+        "players": lambda: _players_text(app, arg, fence=_dc_literal),
+        "console": lambda: _console_text(app, arg, fence=_dc_literal),
+        "say": lambda: _say_text(app, arg),
+        "connect": lambda: _connect_text(app, arg),
+    }
+    if cmd in replies:
+        _dc_reply(bot_token, channel_id, replies[cmd]())
     elif cmd in ("restart", "start", "stop", "backup"):
         _dc_server_action(app, bot_token, channel_id, cmd, arg, sender)
     elif cmd in ("update", "upgrade"):
@@ -229,8 +237,11 @@ def _set_dc_pending_update(channel_id, from_commit):
 
 
 def _report_dc_pending_update():
-    """After a restart, if a Discord-triggered update was pending, tell the channel how it went — by
-    comparing the git commit before/after."""
+    """After a restart, tell the channel how a Discord-triggered update went, if one was pending.
+
+    It compares the git commit before/after; commands.update_outcome_text words the answer for
+    both bots.
+    """
     cfg = load_config()
     pend = cfg.get("discord_pending_update")
     if not pend:
@@ -243,17 +254,8 @@ def _report_dc_pending_update():
         return
     now = so.panel_commit()
     frm = pend.get("from_commit") or ""
-    # The same split as telegram.py's twin (see the note there): an EMPTY commit means git could
+    # The same split as telegram.py's twin, now one shared wording: an EMPTY commit means git could
     # not be read — panel_commit() returns "" when `git rev-parse` fails or times out, in the busy
     # seconds after a restart — and that is not "no new commit landed". Reporting it as one, with
     # "already current, or it rolled back" as the causes, sent the admin to !update a second time.
-    if not (now and frm):
-        _dc_reply(bot_token, channel, "ℹ️ I'm back online, but I couldn't read the panel's git "
-                                      "commit, so I can't tell you whether the update landed — "
-                                      "check Settings → Panel, or data/self-update.log.")
-    elif now != frm:
-        _dc_reply(bot_token, channel, "✅ Update complete — now on %s (was %s). Back online."
-                  % (_panel_ver_label(), frm))
-    else:
-        _dc_reply(bot_token, channel, "ℹ️ Update finished — no new commit landed (already current, or "
-                                      "it rolled back). Still on %s." % _panel_ver_label())
+    _dc_reply(bot_token, channel, update_outcome_text(now, frm))
