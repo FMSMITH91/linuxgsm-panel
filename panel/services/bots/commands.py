@@ -377,8 +377,8 @@ def _servers_text(app):
 
 
 def _panel_ver_label():
-    """Human-friendly version for messages: '<VERSION> (<short-commit>)'. The VERSION file rarely
-    changes between commits, so the commit is what tells you an update actually landed."""
+    """Human-friendly version for messages: '<date version> (<short-commit>)'. Every commit made
+    on the same day shares the date, so the commit is what tells you an update actually landed."""
     ver = so.panel_version()
     commit = so.panel_commit()
     return "%s (%s)" % (ver, commit) if commit else ver

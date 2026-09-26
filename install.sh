@@ -251,8 +251,39 @@ svc() { if [ "${RUN_AS_ROOT}" -eq 1 ]; then systemctl "$@"; else systemctl --use
 
 svc_active() { svc is-active linuxgsm-panel.service 2>/dev/null || true; }
 
+# The panel's version is the date of the commit it runs, in UTC, as YYYY.M.D with no leading zeros
+# (2026.9.26), followed by the short commit: every commit of a day shares the date. The same rule as
+# panel_version() in panel/ops/system_ops.py. git is asked through _gitc, as the checkout's owner.
+_epoch_version() {
+    case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
+    date -u -d "@$1" +%Y.%-m.%-d 2>/dev/null
+}
+
+# Without a .git (a GitHub "Download ZIP" or `git archive` copy) the date comes from VERSION, where
+# export-subst left the commit's epoch. The bare placeholder reads as unknown; anything else is a
+# hand-kept version from before dates (an older snapshot), shown as it is.
+_version_file() {
+    local raw
+    raw="$(tr -d '[:space:]' 2>/dev/null < "${PANEL_DIR}/VERSION")" || raw=""
+    case "${raw}" in
+        ''|'$Format:'*) echo "unknown" ;;
+        *[!0-9]*) echo "${raw}" ;;
+        *) _epoch_version "${raw}" || echo "unknown" ;;
+    esac
+}
+
 panel_version() {
-    [ -f "${PANEL_DIR}/VERSION" ] && cat "${PANEL_DIR}/VERSION" 2>/dev/null || echo "unknown"
+    local ts="" sha="" ver=""
+    if [ -d "${PANEL_DIR}/.git" ]; then
+        ts="$(_gitc log -1 --no-show-signature --format=%ct HEAD 2>/dev/null)" || ts=""
+        sha="$(_gitc rev-parse --short HEAD 2>/dev/null)" || sha=""
+        case "${sha}" in *[!0-9a-f]*) sha="" ;; esac
+        if ver="$(_epoch_version "${ts}")"; then
+            echo "${ver}${sha:+ (${sha})}"
+            return 0
+        fi
+    fi
+    _version_file
 }
 
 # Port the panel serves on (from data/config.json), default 5000.

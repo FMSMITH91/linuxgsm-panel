@@ -196,7 +196,7 @@
       {% if panel_repo_url %}<a href="{{ panel_repo_url }}" target="_blank" rel="noopener noreferrer"
          class="text-decoration-none" style="color:inherit;"
          title="LinuxGSM Panel on GitHub">LinuxGSM Panel <i class="bi bi-github"></i></a>{% else %}LinuxGSM Panel{% endif %}
-      <span id="panel-version">v{{ panel_version }}</span>{% if panel_commit %}
+      <span id="panel-version">{{ panel_version }}</span>{% if panel_commit %}
       {# The SHA links to the exact commit this process is running, so "what is actually deployed"
          is one click rather than a copy-paste into a URL bar. #}
       {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- PANEL_REPO_URL, a constant, and a git commit id #}

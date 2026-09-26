@@ -17,7 +17,7 @@ expect an initial response within a few days.
 
 When you can, please include:
 
-- the version you're running (see the `VERSION` file, or the panel's footer),
+- the version and commit you're running (both are in the panel's footer, e.g. `2026.9.26 · a1b2c3d`),
 - a description of the issue and its impact,
 - steps to reproduce (or a proof of concept), and
 - any suggested fix.

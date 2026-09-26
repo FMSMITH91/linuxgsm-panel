@@ -820,12 +820,65 @@ _update_cache = {"ts": 0.0, "data": None}
 _UPDATE_TTL = 300  # re-check GitHub at most every 5 min for the sidebar badge
 
 
-def panel_version():
+def _version_from_epoch(text):
+    """The calendar version for a Unix time given as text: its UTC date as YYYY.M.D.
+
+    No leading zeros (2026.9.26), and UTC whatever the host's timezone. "" for anything that is
+    not a plain run of ASCII digits, or that the platform cannot convert.
+    """
+    text = (text or "").strip()
+    if not re.fullmatch(r"[0-9]{1,12}", text):
+        return ""
     try:
-        with open(os.path.join(PANEL_DIR, "VERSION")) as f:
-            return f.read().strip() or "0.0.0"
-    except Exception:
-        return "0.0.0"
+        t = time.gmtime(int(text))
+    except (OverflowError, OSError, ValueError):
+        return ""
+    return "%d.%d.%d" % (t.tm_year, t.tm_mon, t.tm_mday)
+
+
+def version_for_commit(commit="HEAD"):
+    """The panel's version for one commit: the date it was committed, in UTC, as YYYY.M.D.
+
+    Read as the committer time in seconds (%ct), so neither the host's timezone nor the offset the
+    commit was made in moves it. Every commit of a day shares the date, which is why the panel
+    shows it beside the short commit. "" when git cannot say.
+    """
+    if not commit or commit.startswith("-"):
+        return ""
+    out, _, rc = _git(["log", "-1", "--no-show-signature", "--format=%ct", commit], timeout=10)
+    return _version_from_epoch(out) if rc == 0 else ""
+
+
+def _version_file():
+    """The version from the VERSION file, for a copy of the panel that is not a git checkout.
+
+    The repository's VERSION holds git's export-subst placeholder, which `git archive` (so also a
+    GitHub "Download ZIP") replaces with the commit's epoch. An epoch reads as its date; the
+    placeholder itself, or an empty or unreadable file, as "unknown"; anything else is a version
+    kept by hand before dates (a snapshot or rollback of an older install) and is shown as it is.
+    """
+    try:
+        with open(os.path.join(PANEL_DIR, "VERSION"), encoding="utf-8") as f:
+            raw = f.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return "unknown"
+    if raw.isascii() and raw.isdigit():
+        return _version_from_epoch(raw) or "unknown"
+    if not raw or raw.startswith("$Format:"):
+        return "unknown"
+    return raw
+
+
+def panel_version():
+    """The running panel's version: the checked-out commit's date (see version_for_commit).
+
+    Without a .git, or when git cannot answer, it is read from the VERSION file instead.
+    """
+    if _is_git_checkout():
+        ver = version_for_commit("HEAD")
+        if ver:
+            return ver
+    return _version_file()
 
 
 def panel_commit():
@@ -1059,7 +1112,7 @@ def _compute_update_status():
     branch = _tracked_branch()
     # Both names IN FULL. git resolves a bare `origin/main` as refs/tags/origin/main before
     # refs/remotes/origin/main (gitrevisions), so a tag pushed under that name answered every
-    # question below — how far behind, which commit to offer, its VERSION and changelog — about a
+    # question below — how far behind, which commit to offer, its version and changelog — about a
     # commit that was never on the branch, and the verified target handed to install.sh came from
     # it. A fetch SOURCE is looked up the same way on the remote: `fetch origin main` takes a TAG
     # named `main` over the branch and then never moves the remote-tracking ref, so the card sat on
@@ -1120,7 +1173,7 @@ def _compute_update_status():
         # docs_only is still REPORTED (the card can note it), but it no longer suppresses the
         # badge: the question this card answers is "am I running the latest?", and the answer to
         # that does not depend on what the newer commits happen to touch.
-        tgt_ver, _, tv_rc = _git(["show", "%s:VERSION" % ref])
+        tgt_ver = version_for_commit(ref)
         rem_full, _, _ = _git(["rev-parse", ref])
         runtime_log = _runtime_changelog("HEAD.." + ref)
         # Same fallback as the verified branch below, and docs_only reported here too — the card's
@@ -1131,7 +1184,7 @@ def _compute_update_status():
         return {**base, "update_available": True, "ci_state": "unverified",
                 "docs_only": not runtime_log,
                 "behind": len(rc_log) or behind_n, "behind_tip": behind_n,
-                "remote_version": ((tgt_ver.strip() if tv_rc == 0 else "") or "?"),
+                "remote_version": tgt_ver or "?",
                 "target_sha": rem_full.strip(),
                 "changes": rc_log[:10]}
 
@@ -1194,11 +1247,11 @@ def _compute_update_status():
         # ci_state and behind_tip are still reported for the API and the tests; only the card's
         # wording is deliberately silent.
         full_tip = commits[0] if commits else ""
-        tip_ver, _, tv_rc = _git(["show", "%s:VERSION" % ref])
+        tip_ver = version_for_commit(ref)
         return {**base, "update_available": False, "ci_state": tip_state,
                 "behind": behind_n, "behind_tip": behind_n,
                 "target_sha": full_tip,
-                "remote_version": ((tip_ver.strip() if tv_rc == 0 else "") or "?"),
+                "remote_version": tip_ver or "?",
                 "changes": _runtime_changelog("HEAD.." + ref)[:10]}
 
     # We have a verified target (possibly older than the tip if newer commits are still verifying).
@@ -1208,7 +1261,7 @@ def _compute_update_status():
     # up and re-trigger the badge once it passes CI.)
     # docs_only is reported, not used to suppress — see the branch case above.
     _docs_only = not _update_touches_runtime(target_sha)
-    tgt_ver, _, tv_rc = _git(["show", f"{target_sha}:VERSION"])
+    tgt_ver = version_for_commit(target_sha)
     rc_log = _runtime_changelog(f"HEAD..{target_sha}")   # runtime commits only (drops docs/CI)
     # What is COUNTED and what is LISTED must be the same set. `len(rc_log) or behind_target` used
     # the filtered count when it had one and the raw count when it did not — so an update made
@@ -1228,7 +1281,7 @@ def _compute_update_status():
         "behind": len(shown_log) or behind_target,   # always the number of commits listed below
         "behind_tip": behind_n,
         "newer_unverified": newer_unverified,
-        "remote_version": ((tgt_ver.strip() if tv_rc == 0 else "") or "?"),
+        "remote_version": tgt_ver or "?",
         "remote_sha": target_sha[:7],
         "target_sha": target_sha,
         "changes": shown_log[:10],

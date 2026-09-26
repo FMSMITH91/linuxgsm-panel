@@ -256,11 +256,11 @@ function appendSubject(li, text, repo){
 function renderUpdate(d){
   var st=document.getElementById('pu-status'); if(!st) return;
   var btn=document.getElementById('pu-update-btn'); var changes=document.getElementById('pu-changes');
-  var cur=document.getElementById('pu-current'); if(cur) cur.textContent='v'+(d.current_version||'?');
+  var cur=document.getElementById('pu-current'); if(cur) cur.textContent=(d.current_version||'?')+(d.current_sha?' · '+d.current_sha:'');
   if(d.git===false){ st.innerHTML='<i class="bi bi-info-circle"></i> '+escapeHtml(d.message||'Self-update unavailable (not a git checkout).'); btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
   if(d.fetched===false){ st.innerHTML='<span class="text-secondary"><i class="bi bi-cloud-slash"></i> '+escapeHtml(d.message||'Couldn\'t reach the update source.')+'</span>'; btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
   if(d.update_available){
-    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>v'+escapeHtml(d.remote_version||'?')+'</strong> ('+escapeHtml(String(d.behind))+' commit'+(d.behind===1?'':'s')+' behind).</span>';  // nosemgrep
+    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>'+escapeHtml((d.remote_version||'?')+(d.remote_sha?' · '+d.remote_sha:''))+'</strong> ('+escapeHtml(String(d.behind))+' commit'+(d.behind===1?'':'s')+' behind).</span>';  // nosemgrep
     // A verified target BELOW the tip carries a note saying so ("2 newer commits still being
     // verified"). It used to be dropped, which made the offer look like the newest thing there is.
     // Appended as a NODE rather than concatenated into the line above: adding an identifier to
