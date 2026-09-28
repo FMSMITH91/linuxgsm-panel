@@ -7027,6 +7027,77 @@ try:
 finally:
     _botcmd._find_server, _bc_game.capture_console = _bc_saved
 
+# ── the bots' server lookup: an exact name wins, else ONE partial match, else a reason ─────────
+# _find_server's two filters are helpers now (_exact_matches, _partial_matches), and the other
+# checks that reach it (smoke's "smoke-cs" / "csgoserver") use names that match exactly AND
+# partially at once, so either filter could be emptied and they would still pass. Each case below
+# separates them: "rust" is an exact name that is also a partial match for two servers, "two" is
+# a partial match only.
+_fs_rows = [NS(name="Rust", short_name="rustserver"), NS(name="Rust Two", short_name="rust2server"),
+            NS(name="Dup", short_name="dup1server"), NS(name="Dup", short_name="dup2server"),
+            NS(name="CS", short_name="csgoserver")]
+_fs_saved = _botcmd.GameServer
+try:
+    _botcmd.GameServer = NS(query=NS(filter_by=lambda **k: NS(all=lambda: list(_fs_rows))))
+    _fs = {a: _botcmd._find_server(a) for a in ("rust", "RUSTSERVER", "two", "ru", "dup", "", "zzz")}
+finally:
+    _botcmd.GameServer = _fs_saved
+check("bots: an exact server name wins over the partial matches it is also part of",
+      _fs["rust"] == (_fs_rows[0], None) and _fs["RUSTSERVER"] == (_fs_rows[0], None),
+      repr({k: _fs[k] for k in ("rust", "RUSTSERVER")}))
+check("bots: a unique PARTIAL name match resolves the server",
+      _fs["two"] == (_fs_rows[1], None), repr(_fs["two"]))
+check("bots: an ambiguous match names the candidates instead of picking one",
+      _fs["ru"][0] is None and "Rust, Rust Two" in (_fs["ru"][1] or "")
+      and _fs["dup"][0] is None and "dup1server, dup2server" in (_fs["dup"][1] or ""),
+      repr((_fs["ru"], _fs["dup"])))
+check("bots: no argument and no match each answer with a reason, never a server",
+      _fs[""][0] is None and "Which server" in (_fs[""][1] or "")
+      and _fs["zzz"][0] is None and "No server matches 'zzz'" in (_fs["zzz"][1] or ""),
+      repr((_fs[""], _fs["zzz"])))
+
+# ── both routers send each answer-only command to the helper that answers THAT command ─────────
+# The routers answer /status /servers /hosts /players /console /say /connect from a per-call
+# table of lambdas (it was an if/elif chain). The pairing of command to helper lives only in that
+# table, and the smoke ack-parity gate stubs all seven helpers to one string, so a table sending
+# /say to _connect_text would still pass it. Each helper here answers with its own name and the
+# arguments it was given.
+from panel.services.bots import discord as _rt_dc                                  # noqa: E402
+_rt_helpers = ("_status_text", "_servers_text", "_hosts_text", "_players_text", "_console_text",
+               "_say_text", "_connect_text")
+_rt_cases = (("status", "", "_status_text", ()), ("servers", "", "_servers_text", ()),
+             ("hosts", "", "_hosts_text", ()), ("players", " srv", "_players_text", ("srv",)),
+             ("console", " srv", "_console_text", ("srv",)),
+             ("say", " srv hi there", "_say_text", ("srv hi there",)),
+             ("connect", " srv", "_connect_text", ("srv",)))
+_rt_got = {}
+for _rt_bot, _rt_mod, _rt_pfx, _rt_reply, _rt_run in (
+        ("telegram", _tgm, "/", "_tg_reply",
+         lambda t: _tgm._handle_telegram_command(None, "1:tok", "1", t)),
+        ("discord", _rt_dc, "!", "_dc_reply",
+         lambda t: _rt_dc._handle_discord_command(None, "tok", "1", t))):
+    _rt_saved = {h: getattr(_rt_mod, h) for h in _rt_helpers + (_rt_reply,)}
+    _rt_sent = []
+    try:
+        for _h in _rt_helpers:
+            setattr(_rt_mod, _h, (lambda name: lambda app, *a, **k: (name, a, sorted(k)))(_h))
+        setattr(_rt_mod, _rt_reply, lambda tok, chan, text: _rt_sent.append(text))
+        for _cmd, _tail, _helper_name, _args in _rt_cases:
+            del _rt_sent[:]
+            _rt_run(_rt_pfx + _cmd + _tail)
+            _rt_got[(_rt_bot, _cmd)] = list(_rt_sent)
+    finally:
+        for _h, _fn in _rt_saved.items():
+            setattr(_rt_mod, _h, _fn)
+for _rt_bot in ("telegram", "discord"):
+    _rt_want = {_cmd: [(_helper_name, _args,
+                        ["fence"] if _rt_bot == "discord" and _cmd in ("players", "console") else [])]
+                for _cmd, _tail, _helper_name, _args in _rt_cases}
+    _rt_have = {_cmd: _rt_got.get((_rt_bot, _cmd)) for _cmd in _rt_want}
+    check("bots: the %s router answers each reply-only command with ITS helper, once" % _rt_bot,
+          _rt_have == _rt_want,
+          repr({c: (_rt_have[c], _rt_want[c]) for c in _rt_want if _rt_have[c] != _rt_want[c]}))
+
 # ── Discord replies must not be able to ping the channel ──────────────────────────────────────
 # The content is not ours: player names (!players), the tail of the live console (which on most
 # engines carries in-game chat), package names from a remote host's apt output. Discord parses
