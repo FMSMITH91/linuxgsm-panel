@@ -83,16 +83,17 @@ function _osVersionBelow(gv, hv) {
 }
 
 // An option's text without its trailing "(…)" note ("Game (ubuntu-20.04)" is "Game"), exactly as
-// /\s*\(.*\)\s*$/ removed it: the note opens at the first "(" of the last line that ends in ")",
-// and takes the blanks before it along. Found with string searches instead, because that regex
-// tries every blank and every "(" as a start and reads the rest of the line from each one.
+// /\s*\(.*\)\s*$/ removed it: the note opens at the first "(" on the last line, which has to end
+// in ")", and takes the blanks before it along. Found with string searches instead, because that
+// regex tries every blank and every "(" as a start and reads the rest of the line from each one.
+// (Its `.` matches no line terminator, so the note cannot start on an earlier line.)
 function _withoutParenNote(text) {
   var body = text.trimEnd();
-  var lines = body.split(/[\n\r\u2028\u2029]/);
-  var last = lines[lines.length - 1];
-  var open = last.slice(0, -1).indexOf('(');
+  var lineStart = 1 + Math.max(body.lastIndexOf('\n'), body.lastIndexOf('\r'),
+                               body.lastIndexOf('\u2028'), body.lastIndexOf('\u2029'));
+  var open = body.indexOf('(', lineStart);
   if (body.slice(-1) !== ')' || open < 0) return text;
-  return text.slice(0, body.length - last.length + open).trimEnd();
+  return text.slice(0, open).trimEnd();
 }
 
 function filterGamesForHost() {
