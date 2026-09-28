@@ -1964,12 +1964,13 @@ check("tools: ...a body that is only a docstring has no statement, and a builtin
 
 # i18n_scan: JS literals, escapes and comments; element attributes; the report's gap lines.
 _i18n4 = _tl_load("tools/i18n_scan.py", "i18n_scan_p4")
-_i18n4_js = _i18n4._js_strings(r'''a = "Em—dash" + 'It\'s\tok' // "not this one"
+_BS4 = chr(92)   # a backslash, spelled out so nothing on the way decodes the escape early
+_i18n4_js = _i18n4._js_strings('a = "Em' + _BS4 + 'u2014dash" + ' + r''''It\'s\tok' // "not this one"
 /* "nor
 this" */ `Two
 lines` "Last one"''')
 check("tools: i18n_scan decodes a JS \\u escape to the character the browser shows",
-      _i18n4_js[:1] == [("Em—dash", 1)], repr(_i18n4_js[:1]))
+      _i18n4_js[:1] == [("Em" + chr(0x2014) + "dash", 1)], repr(_i18n4_js[:1]))
 check("tools: ...and \\' and \\t escapes, inside a single-quoted literal",
       _i18n4_js[1:2] == [("It's\tok", 1)], repr(_i18n4_js[1:2]))
 check("tools: ...skips // and /* */ comments and keeps counting lines through them",
@@ -1979,7 +1980,7 @@ check("tools: ...an unterminated literal or comment ends at the end of the file,
       and _i18n4._js_strings("/* open") == [] and _i18n4._js_strings("x /") == [])
 _i18n4_w = _i18n4._Walker()
 _i18n4_w.feed(_i18n4._resolve_jinja(
-    '<input placeholder="Type a name" title="{{ server.name }}">'
+    '<input placeholder="Type a name" title="Rename {{ server.name }}">'
     '<span data-no-i18n title="Not this one">x</span><a aria-label="Go &amp; see">y</a>'))
 _i18n4_w.close()
 check("tools: i18n_scan collects translatable attributes, decoded, and skips a per-request one",
