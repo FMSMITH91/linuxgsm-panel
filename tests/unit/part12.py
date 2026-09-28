@@ -647,6 +647,20 @@ try:
     check("scheduled backups: a completed archive moves its server's clock",
           _bk_clock == [P9_GM] and _p9_sh._game_backup_status[P9_GM].get("ok") is True,
           repr((_bk_clock, _p9_sh._game_backup_status.get(P9_GM))))
+    # ...and a schedule that is ON but not due yet is left alone: no archive, no clock moved. Every
+    # fixture above is due (game_backup_due is stubbed True), so the due gate itself was never
+    # asked — deleting it from _back_up_if_due passed every suite, and every server with a schedule
+    # would have been archived (players stopped and all) on every hourly tick.
+    _bk_runs.clear()
+    _bk_clock.clear()
+    _p9_patch(_p9_bk, "game_backup_due", lambda sid: sid != P9_GM)
+    _p9_patch(_p9_sh, "run_game_backup", _bk_runner_factory((True, "ok", False)))
+    _p9_sh._run_due_game_backups(_p9)
+    check("scheduled backups: a server whose schedule is on but not due yet is not archived",
+          [r[0] for r in _bk_runs] == ["tf2server"] and _bk_clock == [P9_OTHER],
+          repr((_bk_runs, _bk_clock)))
+    _p9_patch(_p9_bk, "game_backup_due", lambda sid: True)
+    _p9_patch(_p9_sh, "run_game_backup", _bk_players_on)   # the queued sweep below expects it
     _p9_set(P9_OTHER, query_type=None)
 
     # Queued ('wait until empty') sweep: busy stays queued, a raise is reported.
@@ -2597,6 +2611,36 @@ try:
           repr(_d))
     for _n in (_ms_a, _ms_f, _ms_g):
         _p9_delete_server(_n)
+
+    # ── layout and password-change helpers (routes/tags.py) ─────────────────────────────────────
+    # Neither was driven by any suite: storing an order for a host the caller cannot see, and
+    # dropping "remember me" across a password change, both passed unit and smoke alike.
+    from panel.routes import tags as _p9_tags             # noqa: E402
+    from panel.db.models import UserSession as _P9US      # noqa: E402
+    check("layout: a server order for a host the caller cannot see is dropped, not stored",
+          _p9_tags._clean_server_order({"1": [11, 12], "2": [21], "x": [11], "3": "junk"},
+                                       {1}, {11, 21}) == {"1": [11]},
+          repr(_p9_tags._clean_server_order({"1": [11, 12], "2": [21], "x": [11], "3": "junk"},
+                                            {1}, {11, 21})))
+    # A password change signs the device in again; whether that login is remembered comes from
+    # THIS device's session row, and only when there is no row from its remember cookie.
+    _p9_patch(_p9_tags, "_has_remember_cookie", lambda: True)
+    _rem = []
+    with _p9.app_context():
+        db.session.add_all([_P9US(user_id=P9_VIEWER, sid="p9-rem-on", remember=True),
+                            _P9US(user_id=P9_VIEWER, sid="p9-rem-off", remember=False)])
+        db.session.commit()
+        _rem_u = db.session.get(User, P9_VIEWER)
+        for _rem_sid in ("p9-rem-on", "p9-rem-off", "p9-rem-none", None):
+            _p9_patch(_p9_tags, "current_user", NS(_sid=_rem_sid))
+            _rem.append(_p9_tags._remember_this_device(_rem_u))
+        _P9US.query.filter(_P9US.sid.in_(["p9-rem-on", "p9-rem-off"])).delete(
+            synchronize_session=False)
+        db.session.commit()
+    _p9_patch(_p9_tags, "current_user", _P9_PATCHED[(_p9_tags, "current_user")])
+    _p9_patch(_p9_tags, "_has_remember_cookie", _P9_PATCHED[(_p9_tags, "_has_remember_cookie")])
+    check("password change: 'remember me' is read from this device's session row, else its cookie",
+          _rem == [True, False, True, True], repr(_rem))
 
     # ── END OF SECTIONS ──
 finally:
