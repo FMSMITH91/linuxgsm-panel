@@ -695,7 +695,7 @@ def _remove_serve_mappings(routes, mount):
 # CGNAT block 100.64.0.0/10 (its IPv6 is fd7a:115c:a1e0::/48): system_ops._TAILNET_RANGES, the one
 # copy the firewall and fail2ban code read, rather than a second one here.
 _TS_DNS_RE = re.compile(r"\.ts\.net\Z", re.IGNORECASE)
-_TS_V4_NET, _TS_V6_NET = (ipaddress.ip_network(n) for n in _so._TAILNET_RANGES)
+_TS_NETS = tuple(ipaddress.ip_network(n) for n in _so._TAILNET_RANGES)
 
 
 def is_tailscale_ip(host):
@@ -717,7 +717,7 @@ def is_tailscale_ip(host):
         addr = ipaddress.ip_address(host)
     except ValueError:
         return False
-    return addr in _TS_V4_NET or addr in _TS_V6_NET
+    return any(addr in n for n in _TS_NETS)   # a v4 network holds no v6 address, and back
 
 
 def suggest_best_bind(port=5000, scheme="http"):
