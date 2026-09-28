@@ -2132,7 +2132,13 @@ _MUT_NO_PERM_OK = {
     "set_language",
     # Unauthenticated by design: login, the setup wizard, an invite redemption. The two setup
     # Tailscale endpoints carry their own gate — _setup_open() — because no login exists yet.
-    "login", "login_2fa", "redeem_invite", "force_password_change",
+    #
+    # setup_wizard was never exempt here, and passed only because its admin step's
+    # `filter_by(is_superadmin=True)` put a gate token in its source by accident. Its real gates are
+    # the SetupState lock and _setup_owner_ok(), which no token here names; moving the admin step
+    # into a helper (route_helpers.py) turned that coincidence red. Named, rather than kept passing
+    # on a word that was never a permission check.
+    "login", "login_2fa", "redeem_invite", "force_password_change", "setup_wizard",
     "api_setup_ts_install", "api_setup_ts_serve", "api_setup_ts_up",
 }
 _mut_unguarded, _mut_seen = [], []
