@@ -1727,6 +1727,14 @@ try:
     _r = _A.get(_sf_url + "/cron")
     check("cron GET: a listing that raises is a 500, and nothing is synced from it",
           _r.status_code == 500 and _sf_sync == [])
+    # ...and one that could not be READ (list_cron_jobs answers None, which the non-raising
+    # transports do) says so instead of "No scheduled tasks yet.", and syncs nothing from it —
+    # Autostart would be switched off from a crontab the panel never saw. Undriven until now.
+    _p9_patch(_p9_sm, "list_cron_jobs", lambda remote, user, lgsm: None)
+    _d = _p9_json(_A.get(_sf_url + "/cron"))
+    check("cron GET: an unreadable crontab is reported as unknown, not as empty, and syncs nothing",
+          "not the same as there being none" in (_d.get("error") or "") and "jobs" not in _d
+          and _sf_sync == [], repr((_d, _sf_sync)))
     _sf_jobs = [{"raw": "0 5 * * * monitor", "schedule": "0 5 * * *"}]
     _p9_patch(_p9_sm, "list_cron_jobs", lambda remote, user, lgsm: list(_sf_jobs))
     _sf_cron = [(True, "")]
