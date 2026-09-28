@@ -2440,7 +2440,7 @@ import subprocess as _iw_sub     # noqa: E402
 import tempfile as _iw_tmp       # noqa: E402
 
 _iw_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
-_iw_upd = _iw_src[_iw_src.index('if [ "${IS_UPDATE}" -eq 1 ]; then'):
+_iw_upd = _iw_src[_iw_src.index('if [[ "${IS_UPDATE}" -eq 1 ]]; then'):
                   _iw_src.index("    # ── Health check FAILED")]
 
 # (1) Ordering: quiesce, THEN tar the database. The gates that MEASURE that ordering EXECUTE
