@@ -2341,6 +2341,24 @@ try:
     check("install refused: no free port near the request says so instead of guessing one",
           _r.status_code == 400 and "No free port near 27500" in _p9_json(_r).get("message", ""))
 
+    # A typed name in capitals is folded to lowercase, not refused. It becomes a Linux account, and
+    # INSTANCE_NAME_RE only admits lowercase, so the fold has to happen before the name is judged.
+    # Nothing held it: the fold moved when install_game_server was split, and deleting it left every
+    # suite green while "P9Upper" became a refusal.
+    _ms_free[:] = [(27186, False)]
+    _ms_reset(lgsm=[("", "fail", 1)])
+    _r = _A.post("/servers/add", data=dict(remote_id=str(P9_HOST), game_type="csgo", port="27186",
+                                           server_name="P9Upper"), headers=_XHR)
+    _p9_drain()
+    with _p9.app_context():
+        _ms_up = GameServer.query.filter_by(remote_id=P9_HOST, short_name="p9upper").first()
+        _ms_up = (_ms_up.id, _ms_up.name) if _ms_up is not None else None
+    check("install: a typed name in capitals is folded to lowercase, not refused",
+          _p9_json(_r).get("success") is True and _ms_up is not None and _ms_up[1] == "p9upper",
+          repr((_r.status_code, _p9_json(_r), _ms_up)))
+    if _ms_up is not None:
+        _p9_delete_server(_ms_up[0])
+
     # A blank name whose default is taken in the TABLE and then on the HOST skips past both.
     _ms_free[:] = [(28015, False)]
     _ms_taken = [_p9_new_server(P9_HOST, "rustserver", "rust", 28100),
@@ -2618,10 +2636,20 @@ try:
           and _p9_flashes(_A) == ["Server 'p9empty' uninstalled."], repr(_p9_row(_ms_x)))
     _ms_y = _p9_new_server(P9_HOST, "p9fw", "csgo", 27185)
     _ms_fw[0] = (2, "")
+    # This one's cleanup works, and it has a FINISHED install job: the row id is handed to the next
+    # server created, so a job left behind makes /install-status answer for that new server with
+    # this one's outcome. The check above cannot see it — its schedule cleanup raises first.
+    _p9_patch(_p9_bk, "remove_game_schedule", lambda sid: None)
+    with _p9_state._install_lock:
+        _p9_state._install_jobs[_ms_y] = {"status": "done", "updated": _p9_real_time.time()}
     _d = _p9_json(_A.post("/servers/%d/delete" % _ms_y, headers=_XHR))
     check("uninstall (JSON): the firewall rules it removed are counted in the message",
           _d == {"success": True, "message": "Server 'p9fw' uninstalled. 2 firewall rule(s) removed."},
           repr(_d))
+    with _p9_state._install_lock:
+        _ms_y_job = _p9_state._install_jobs.pop(_ms_y, None)
+    check("uninstall: the removed server's install job goes with its row (the id is reused)",
+          _d.get("success") is True and _ms_y_job is None, repr(_ms_y_job))
     for _n in (_ms_a, _ms_f, _ms_g):
         _p9_delete_server(_n)
 

@@ -224,8 +224,11 @@ WRITE_TARGETS = {
 
 
 class VerbError(ValueError):
-    """An argument did not pass validation. Never contains the rejected value: this text can reach
-    the panel UI, and echoing attacker-controlled input back into a page is a reflection."""
+    """An argument did not pass validation.
+
+    Never contains the rejected value: this text can reach the panel UI, and echoing
+    attacker-controlled input back into a page is a reflection.
+    """
 
 
 # ── Validators ────────────────────────────────────────────────────────────────────────────────
@@ -256,7 +259,8 @@ def _portspec_bare(s):
     ufw has two syntaxes and they do not mix: `allow 27015/udp` (simple) and
     `allow from X to any port 27015 proto udp` (extended). Handing the extended form a
     "27015/udp" would emit `port 27015/udp proto udp`, which ufw rejects — so the verb that
-    builds it only accepts a bare port, and a caller cannot express the broken command."""
+    builds it only accepts a bare port, and a caller cannot express the broken command.
+    """
     spec = _portspec(s)
     if "/" in spec:
         raise VerbError("port must not carry a protocol here; pass it as the proto argument")
@@ -334,7 +338,8 @@ def ts_serve_argv(verb, grammar, mount, scheme, port):
     than as a path. CodeQL alert py/command-line-injection #375 named that flow, source to sink,
     and it was right — the older dismissal of the same alert described the argv form (no shell,
     so no shell interpolation) which was true and beside the point.
-    Re-validating is idempotent: each validator returns its input unchanged when it passes."""
+    Re-validating is idempotent: each validator returns its input unchanged when it passes.
+    """
     verb = _choice("serve", "funnel")(verb)
     grammar = _choice("modern", "legacy")(grammar)
     mount = _ts_mount(mount)
@@ -385,8 +390,11 @@ def _logdate(s):
 
 
 def _backup_name(s):
-    """A LinuxGSM backup archive file name. No slashes, no traversal: this becomes one path segment
-    under the game user's own backup directory and nothing else."""
+    """A LinuxGSM backup archive file name.
+
+    No slashes, no traversal: this becomes one path segment under the game user's own backup
+    directory and nothing else.
+    """
     s = str(s)
     if "/" in s or ".." in s or not re.fullmatch(r"[A-Za-z0-9._-]{1,200}\.tar\.[A-Za-z0-9.]{1,20}", s):
         raise VerbError("not a backup file name")
@@ -426,8 +434,11 @@ def _relpath(s):
 
 
 def _git_ref(s):
-    """A git commit SHA, or "-" for none. Hex only: this value is exported into the environment of
-    a root-run installer, so anything that could carry a flag, a path or a shell fragment is out."""
+    """A git commit SHA, or "-" for none.
+
+    Hex only: this value is exported into the environment of a root-run installer, so anything that
+    could carry a flag, a path or a shell fragment is out.
+    """
     s = str(s)
     if s == "-":
         return s
@@ -437,8 +448,10 @@ def _git_ref(s):
 
 
 def _branch_name(s):
-    """A git branch name, or "-" for none. No leading dash (it would read as a flag), no "..",
-    and a conservative character set."""
+    """A git branch name, or "-" for none.
+
+    No leading dash (it would read as a flag), no "..", and a conservative character set.
+    """
     s = str(s)
     if s == "-":
         return s
@@ -448,17 +461,23 @@ def _branch_name(s):
 
 
 def _restart_delay(s):
-    """Seconds to wait before restarting the panel's own service. Bounded: the delay exists only so
-    the triggering HTTP response can flush to the browser before the server goes down, so anything
-    past a couple of minutes is a caller bug rather than a longer wait."""
+    """Seconds to wait before restarting the panel's own service.
+
+    Bounded: the delay exists only so the triggering HTTP response can flush to the browser before
+    the server goes down, so anything past a couple of minutes is a caller bug rather than a longer
+    wait.
+    """
     if not re.fullmatch(r"[1-9][0-9]{0,2}", str(s)) or int(s) > 300:
         raise VerbError("not a restart delay in 1..300")
     return str(s)
 
 
 def _port(s):
-    """A single TCP port number, 1..65535. Distinct from _portspec, which also accepts ranges and
-    a /proto suffix — this one is for "the port the panel listens on", where a range is meaningless."""
+    """A single TCP port number, 1..65535.
+
+    Distinct from _portspec, which also accepts ranges and a /proto suffix — this one is for "the
+    port the panel listens on", where a range is meaningless.
+    """
     if not re.fullmatch(r"[1-9][0-9]{0,4}", str(s)) or not (1 <= int(s) <= 65535):
         raise VerbError("not a port")
     return str(s)
@@ -470,9 +489,10 @@ _MOUNT_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345678
 
 
 def _ts_mount(s):
-    """A Tailscale Serve mount point: "/" or "/name" with a couple of safe segments. Not a general
-    path — no traversal, no scheme, no host, nothing that could turn the proxy target into
-    something other than a path on this node.
+    """A Tailscale Serve mount point: "/" or "/name" with a couple of safe segments.
+
+    Not a general path — no traversal, no scheme, no host, nothing that could turn the proxy target
+    into something other than a path on this node.
 
     The value is REBUILT from _MOUNT_ALPHABET instead of being returned as-is, and that is not
     ceremony. Two reasons, in order of how much they matter:
@@ -487,7 +507,8 @@ def _ts_mount(s):
          a barrier, for the same reason. Every character of the result now comes from a module-level
          literal, so the returned string carries no data from the request.
 
-    Behaviour is unchanged: the accepted set is exactly what the regex accepted before."""
+    Behaviour is unchanged: the accepted set is exactly what the regex accepted before.
+    """
     s = str(s)
     if s == "/":
         return "/"
@@ -554,7 +575,8 @@ def _destroyable_user(s):
     given there: _managed_user gates 20 verbs, only four of which destroy anything, and the panel
     legitimately passes its OWN account to several of the others — `tailscale-set-operator` is
     built to take it, and on a single-box install the game-file reads and `crontab-list` take it
-    too."""
+    too.
+    """
     s = _managed_user(s)
     if _is_panel_account(s):
         raise VerbError("refusing the panel's own account")
@@ -568,19 +590,22 @@ _PANEL_DIR = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__fil
 
 
 def _is_panel_account(name):
-    """True if `name` is the account the panel runs as, or one whose home CONTAINS the panel
-    install. The mirror of the helper's _is_panel_account — see that docstring for the full
-    account; the short version is that `useradd --system` gives the panel's own user a uid below
-    1000 but NOT 0, so the uid-0 test above let it through, and installing a game server named
-    after it ran `userdel -r` and `rm -rf -- /home/<panel user>` as root over the panel's own
-    database, both encryption keys, its config and every one of its backups.
+    """True if `name` is the panel's own account, or one whose home CONTAINS the panel install.
+
+    The panel's own account is the one the panel runs as. This is the mirror of the helper's
+    _is_panel_account — see that docstring for the full account; the short version is that `useradd
+    --system` gives the panel's own user a uid below 1000 but NOT 0, so the uid-0 test above let it
+    through, and installing a game server named after it ran `userdel -r` and `rm -rf --
+    /home/<panel user>` as root over the panel's own database, both encryption keys, its config and
+    every one of its backups.
 
     This copy is not redundant with the helper's. The helper is the check that runs on THIS host;
     this one is the only check there is on two paths the helper never sees — a remote host, which
     has no helper installed, and a local host still on the pre-helper wide sudo grant.
 
     Uses the panel process's own uid rather than SUDO_UID: unlike the helper, this code IS the
-    panel, so it can simply ask who it is."""
+    panel, so it can simply ask who it is.
+    """
     if _pw_name(os.getuid()) == name:
         return True
     home = os.path.realpath(HOME_ROOT + "/" + name)
@@ -595,7 +620,8 @@ def _pw_name(uid):
     A named lookup rather than a try/except around each call site: an empty `except: pass` is
     py/empty-except, and more to the point a caller that swallowed the error in place read as if
     the comparison had happened and failed. "" is a name no account can have, so it compares
-    false against every candidate."""
+    false against every candidate.
+    """
     try:
         return pwd.getpwuid(uid).pw_name
     except (KeyError, OSError, ValueError, OverflowError):
@@ -673,16 +699,22 @@ def _timezone(s):
 
 
 def _pro_token(s):
-    """An Ubuntu Pro subscription token. Charset-checked only — its VALUE is a secret, so it is
-    never echoed back in an error, and callers redact it from any output they log."""
+    """An Ubuntu Pro subscription token.
+
+    Charset-checked only — its VALUE is a secret, so it is never echoed back in an error, and
+    callers redact it from any output they log.
+    """
     if not re.fullmatch(r"[A-Za-z0-9]{16,64}", s):
         raise VerbError("not a subscription token")
     return s
 
 
 def _dfpath(s):
-    """A filesystem path to ask df about. Absolute, no traversal, no metacharacters — and it is
-    only ever used as df's argument, which reads nothing but the mount table."""
+    """A filesystem path to ask df about.
+
+    Absolute, no traversal, no metacharacters — and it is only ever used as df's argument, which
+    reads nothing but the mount table.
+    """
     if not re.fullmatch(r"/[A-Za-z0-9._/-]{0,120}", s) or ".." in s:
         raise VerbError("not a path df may be asked about")
     return s
@@ -698,6 +730,7 @@ class Rest:
     """A validator that consumes every remaining argument — see tools/panel-helper."""
 
     def __init__(self, check, minimum=1, maximum=64):
+        """Validate each remaining argument with `check`; allow `minimum`..`maximum` of them."""
         self.check, self.minimum, self.maximum = check, minimum, maximum
 
 
@@ -739,7 +772,8 @@ def _answers(s):
 
     LinuxGSM prompts and the panel has to answer unattended -- a mod id then a "Y", or the eight
     yes/no questions fastdl asks and loops forever on at EOF. This replaces a here-string the panel
-    built by f-string; see tools/panel-helper's v_answers for the full account."""
+    built by f-string; see tools/panel-helper's v_answers for the full account.
+    """
     s = str(s)
     if s == "-":
         return s
@@ -1009,7 +1043,8 @@ def _content_grant_remote(a):
     file there. The helper refuses that locally by comparing the named group against the content
     user's REAL primary group; a remote host has no helper and no passwd file this process can
     read, so the name is what there is to check. root and the standard escalation groups are the
-    ones with no legitimate answer here: a content account's primary group is its own name."""
+    ones with no legitimate answer here: a content account's primary group is its own name.
+    """
     content_user, group, gmod_user, games = a[0], a[1], a[2], a[3:]
     if group in _NEVER_A_CONTENT_GROUP:
         raise VerbError("refusing to grant membership of that group")
@@ -1061,8 +1096,9 @@ _STEAM_DUMP_SLOTS_SH = " ".join(shlex.quote(p) for p in STEAM_DUMP_SLOTS)
 
 
 def _sshd_hardening_dropin_remote(key, value):
-    """The remote half of do_sshd_set_directive's drop-in write, as shell. Appended to the
-    sshd_config edit in sshd-set-directive's remote rendering.
+    """The remote half of do_sshd_set_directive's drop-in write, as shell.
+
+    Appended to the sshd_config edit in sshd-set-directive's remote rendering.
 
     Editing sshd_config alone is a no-op on a stock Ubuntu cloud image: its sshd_config Includes
     sshd_config.d as the FIRST directive, sshd keeps the first value it obtains, and
@@ -1072,7 +1108,8 @@ def _sshd_hardening_dropin_remote(key, value):
     SSH open. Same rules as the helper: only where sshd_config Includes sshd_config.d, a
     read-modify-write that keeps only SSHD_DIRECTIVES keys (the last value per key, as the helper's
     dict does), sorted in byte order, the helper's header, mode 0600, replaced atomically. key and
-    value are the closed SSHD_DIRECTIVES pair check_args enforced."""
+    value are the closed SSHD_DIRECTIVES pair check_args enforced.
+    """
     d = os.path.dirname(SSHD_HARDENING_DROPIN)
     return (
         "; if grep -qiE '^[[:space:]]*Include[[:space:]]+[^[:space:]]*sshd_config[.]d' %(cfg)s; "
@@ -1109,7 +1146,8 @@ def _nodesource_setup_remote(a):
     nodesource.list removed (it would name the same repo a second time), a deb822 source restricted
     to this architecture, an apt pin so NodeSource's nodejs wins over the distro's, and `apt-get
     update`. It fails having trusted nothing if the key is wrong, and says which step failed.
-    Every path and value is a module constant read at call time, never an argument."""
+    Every path and value is a module constant read at call time, never an argument.
+    """
     q = shlex.quote
     src_dir = os.path.dirname(NODESOURCE_SOURCES)
     # install.sh's two printf formats, byte for byte; the values go in as arguments.
@@ -1156,8 +1194,9 @@ def _nodesource_setup_remote(a):
 
 
 def _gamedig_install_remote(a):
-    """The remote form of gamedig-install: write tools/gamedig's three files into GAMEDIG_DIR, then
-    run install-gamedig.sh there, as one root shell.
+    """The remote form of gamedig-install, as one root shell.
+
+    It writes tools/gamedig's three files into GAMEDIG_DIR, then runs install-gamedig.sh there.
 
     It replaces `npm install -g --ignore-scripts gamedig@5`, which installed whatever 5.x release
     and whatever versions of gamedig's ~50 floating dependencies the registry served that day. The
@@ -1168,7 +1207,8 @@ def _gamedig_install_remote(a):
     is no new trust: the panel already runs `sudo bash -c` there. Each is base64 on the wire, so no
     byte of it is shell syntax, and each lands through a temporary file and a rename, so the weekly
     cron never runs a half-written script. A file missing from the checkout sends a command that
-    says so and fails, rather than raising out of the bootstrap. Every path is a module constant."""
+    says so and fails, rather than raising out of the bootstrap. Every path is a module constant.
+    """
     q = shlex.quote
     files = []
     for name, mode in GAMEDIG_FILES:
@@ -1200,12 +1240,13 @@ _SECRET_REMOTE = {
 
 
 _REMOTE_ACTIONS = {
-    "sshd-backup-dropin": lambda a: "[ -f %s ] && cp -f %s %s || true"
-                          % (shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN),
-                             shlex.quote(SSHD_DROPIN_BAK)),
-    "sshd-restore-dropin": lambda a: "if [ -f %s ]; then mv -f %s %s; else rm -f %s; fi"
-                           % (shlex.quote(SSHD_DROPIN_BAK), shlex.quote(SSHD_DROPIN_BAK),
-                              shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN)),
+    "sshd-backup-dropin": lambda a: (
+        "[ -f %s ] && cp -f %s %s || true"
+        % (shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN_BAK))),
+    "sshd-restore-dropin": lambda a: (
+        "if [ -f %s ]; then mv -f %s %s; else rm -f %s; fi"
+        % (shlex.quote(SSHD_DROPIN_BAK), shlex.quote(SSHD_DROPIN_BAK),
+           shlex.quote(SSHD_DROPIN), shlex.quote(SSHD_DROPIN))),
     "sshd-discard-backup": lambda a: "rm -f %s" % shlex.quote(SSHD_DROPIN_BAK),
     # Steam's ten crash-dump slots, as shell. The helper does this in Python on the panel's own
     # host; a REMOTE host has no helper to call, and without an entry here the verb rendered to an
@@ -1241,12 +1282,14 @@ _REMOTE_ACTIONS = {
         "DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd:i386 steamcmd "
         "|| DEBIAN_FRONTEND=noninteractive apt-get install -y steamcmd"
     ),
-    "sshd-socket-backup": lambda a: "[ -f %s ] && cp -f %s %s || true"
-                          % (shlex.quote(SSHD_SOCKET_DROPIN), shlex.quote(SSHD_SOCKET_DROPIN),
-                             shlex.quote(SSHD_SOCKET_DROPIN_BAK)),
-    "sshd-socket-restore": lambda a: "if [ -f %s ]; then mv -f %s %s; else rm -f %s; fi"
-                           % (shlex.quote(SSHD_SOCKET_DROPIN_BAK), shlex.quote(SSHD_SOCKET_DROPIN_BAK),
-                              shlex.quote(SSHD_SOCKET_DROPIN), shlex.quote(SSHD_SOCKET_DROPIN)),
+    "sshd-socket-backup": lambda a: (
+        "[ -f %s ] && cp -f %s %s || true"
+        % (shlex.quote(SSHD_SOCKET_DROPIN), shlex.quote(SSHD_SOCKET_DROPIN),
+           shlex.quote(SSHD_SOCKET_DROPIN_BAK))),
+    "sshd-socket-restore": lambda a: (
+        "if [ -f %s ]; then mv -f %s %s; else rm -f %s; fi"
+        % (shlex.quote(SSHD_SOCKET_DROPIN_BAK), shlex.quote(SSHD_SOCKET_DROPIN_BAK),
+           shlex.quote(SSHD_SOCKET_DROPIN), shlex.quote(SSHD_SOCKET_DROPIN))),
     "sshd-socket-discard": lambda a: "rm -f %s" % shlex.quote(SSHD_SOCKET_DROPIN_BAK),
     "f2b-set-sshd-ports": lambda a: (
         "if [ -f %s ]; then "
@@ -1320,8 +1363,9 @@ _REMOTE_ACTIONS = {
         'done' % (HOME_ROOT, HOME_ROOT, CONTENT_SUBDIR, " ".join(a))),
     # 700, not the 750 the shell form used: the group bits are added by content-grant-read when
     # access is actually granted, so both transports share nothing until then.
-    "content-dir-create": lambda a: "install -d -o %s -g %s -m 700 %s"
-                          % (a[0], a[0], shlex.quote(content_path(a[0], CONTENT_SUBDIR))),
+    "content-dir-create": lambda a: (
+        "install -d -o %s -g %s -m 700 %s"
+        % (a[0], a[0], shlex.quote(content_path(a[0], CONTENT_SUBDIR)))),
     # Exit status ONLY, because that is the whole of the helper's answer: do_content_game_present
     # and do_content_script_present in tools/panel-helper return 0 or 1 and print nothing.
     #
@@ -1333,17 +1377,17 @@ _REMOTE_ACTIONS = {
     # exist. The `or "Y" in out` half was the correct one; the rc clause, added later under a
     # comment reading "The verb's own rc says the same thing", was true of the helper and false
     # here. One rendering, one answer, and the comment is now true of both.
-    "content-game-present": lambda a: "test -d %s/."
-                            % shlex.quote(content_path(a[0], CONTENT_SUBDIR, a[1])),
-    "content-script-present": lambda a: "test -x %s"
-                              % shlex.quote(content_path(a[0], a[1])),
+    "content-game-present": lambda a: (
+        "test -d %s/." % shlex.quote(content_path(a[0], CONTENT_SUBDIR, a[1]))),
+    "content-script-present": lambda a: (
+        "test -x %s" % shlex.quote(content_path(a[0], a[1]))),
     "content-game-remove": lambda a: " ; ".join(
         "rm -rf %s" % shlex.quote(p) for p in
         ([content_path(a[0], CONTENT_SUBDIR, a[1])] if a[2] == "-" else
          [content_path(a[0], CONTENT_SUBDIR, a[1]), content_path(a[0], a[2]),
           content_path(a[0], "lgsm", "config-lgsm", a[2])])),
-    "content-cron-remove": lambda a: "rm -f %s"
-                           % shlex.quote("%s-%s" % (CONTENT_CRON_PREFIX, _username(a[0]))),
+    "content-cron-remove": lambda a: (
+        "rm -f %s" % shlex.quote("%s-%s" % (CONTENT_CRON_PREFIX, _username(a[0])))),
     # A remote has no helper, so it keeps the zcat|awk|grep read — but only the READ half; the
     # tallying awk is gone from both transports.
     # `|| [ $? -eq 1 ]`: grep exits 1 for NO MATCHES and >=2 for a real error, and both callers read
@@ -1357,8 +1401,9 @@ _REMOTE_ACTIONS = {
         "zcat -f %s 2>/dev/null | awk -v c=%s '$1 >= c' | "
         "{ grep -E '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+' || [ $? -eq 1 ]; }"
         % (F2B_LOG_GLOB, shlex.quote(a[0]))),
-    "gmod-mount-read": lambda a: "cat %s 2>/dev/null || true"
-                       % shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg"),
+    "gmod-mount-read": lambda a: (
+        "cat %s 2>/dev/null || true"
+        % shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg")),
     "content-grant-read": _content_grant_remote,
     "restart-flags": lambda a: "ls -1d /home/*/.restart-pending 2>/dev/null || true",
     "nodesource-setup": _nodesource_setup_remote,
@@ -1375,23 +1420,30 @@ def check_args(verb, args):
         raise VerbError("unknown verb")
     validators = spec[0]
     args = list(args)
-    rest = validators[-1] if validators and isinstance(validators[-1], Rest) else None
-    fixed = validators[:-1] if rest else validators
-    if rest is None:
-        if len(args) != len(fixed):
-            raise VerbError("%s takes %d argument(s), got %d" % (verb, len(fixed), len(args)))
-        checks = list(fixed)
-    else:
-        low, high = len(fixed) + rest.minimum, len(fixed) + rest.maximum
-        if not low <= len(args) <= high:
-            raise VerbError("%s takes %d..%d argument(s), got %d" % (verb, low, high, len(args)))
-        checks = list(fixed) + [rest.check] * (len(args) - len(fixed))
+    checks = _arg_checks(verb, validators, len(args))
     out = [check(v) for v, check in zip(args, checks)]
     # The one verb where an argument constrains another: a directive may only be set to a value
     # from its own allowed set, so the PAIR is checked, not just each half.
     if verb == "sshd-set-directive" and out[1] not in SSHD_DIRECTIVES[out[0]]:
         raise VerbError("%s may not be set to that value" % out[0])
     return out
+
+
+def _arg_checks(verb, validators, count):
+    """One validator per argument for `count` arguments to `verb`; VerbError on a wrong count.
+
+    A trailing Rest validator consumes every remaining argument, between its minimum and maximum.
+    """
+    rest = validators[-1] if validators and isinstance(validators[-1], Rest) else None
+    fixed = validators[:-1] if rest else validators
+    if rest is None:
+        if count != len(fixed):
+            raise VerbError("%s takes %d argument(s), got %d" % (verb, len(fixed), count))
+        return list(fixed)
+    low, high = len(fixed) + rest.minimum, len(fixed) + rest.maximum
+    if not low <= count <= high:
+        raise VerbError("%s takes %d..%d argument(s), got %d" % (verb, low, high, count))
+    return list(fixed) + [rest.check] * (count - len(fixed))
 
 
 def tool_argv(verb, args):
@@ -1420,9 +1472,12 @@ SECRET_STDIN = {
 
 
 def stdin_for(verb, args=None):
-    """Text to feed the TOOL on stdin, or None. `ufw delete <n>` prompts; answering it here is what
-    replaces the old `yes | ufw delete n`, and with it the pipe and the shell. For a SECRET_STDIN
-    verb it is the secret, in the form that tool reads — which is why the arguments are needed."""
+    """Text to feed the TOOL on stdin, or None.
+
+    `ufw delete <n>` prompts; answering it here is what replaces the old `yes | ufw delete n`, and
+    with it the pipe and the shell. For a SECRET_STDIN verb it is the secret, in the form that tool
+    reads — which is why the arguments are needed.
+    """
     if verb in SECRET_STDIN and args is not None:
         index, doc = SECRET_STDIN[verb]
         return doc(check_args(verb, args)[index])
@@ -1430,8 +1485,11 @@ def stdin_for(verb, args=None):
 
 
 def helper_stdin(verb, args):
-    """Text for the HELPER's stdin: the bare secret for a SECRET_STDIN verb (the helper checks it
-    and formats it for the tool itself), else what stdin_for gives."""
+    """Text for the HELPER's stdin.
+
+    The bare secret for a SECRET_STDIN verb (the helper checks it and formats it for the tool
+    itself), else what stdin_for gives.
+    """
     if verb in SECRET_STDIN:
         return check_args(verb, args)[SECRET_STDIN[verb][0]] + "\n"
     return stdin_for(verb)
@@ -1443,8 +1501,11 @@ def remote_stdin(verb, args):
 
 
 def helper_argv(verb, args):
-    """The argv that runs `verb` locally through the root-owned helper. A SECRET_STDIN verb's
-    secret is left out: it goes on the helper's stdin (helper_stdin), never on a command line."""
+    """The argv that runs `verb` locally through the root-owned helper.
+
+    A SECRET_STDIN verb's secret is left out: it goes on the helper's stdin (helper_stdin), never on
+    a command line.
+    """
     checked = list(check_args(verb, args))
     if verb in SECRET_STDIN:
         del checked[SECRET_STDIN[verb][0]]
@@ -1456,7 +1517,8 @@ def remote_command(verb, args, merge_stderr=True):
 
     Shell-quoted from the same validated argv, so the remote string is a rendering of the verb
     rather than a separately-maintained command. `2>&1` is kept because the existing callers read
-    tool errors out of stdout; dropping it would silently change which stream messages land in."""
+    tool errors out of stdout; dropping it would silently change which stream messages land in.
+    """
     checked = check_args(verb, args)
     if verb in _REMOTE_ACTIONS:
         # No tool to run — the helper does this one itself. A remote gets the shell form.
@@ -1491,8 +1553,8 @@ def remote_write_command(name, content):
 
     A remote has no helper, so this is still `base64 -d > path` — but the path comes from
     WRITE_TARGETS rather than from a call site, and base64 keeps every byte of the content inert on
-    the way through the shell."""
-    import base64
+    the way through the shell.
+    """
     path, mode = write_target(name)
     b64 = base64.b64encode(content.encode()).decode()
     return ("echo %s | base64 -d > %s && chmod %o %s"
@@ -1503,8 +1565,8 @@ def remote_content_cron_command(user, content):
     """The shell command that writes one content user's update cron on a REMOTE host.
 
     Same shape as remote_write_command, but the destination is per-user so it cannot live in
-    WRITE_TARGETS — the path is still built here from a validated name, not passed in."""
-    import base64
+    WRITE_TARGETS — the path is still built here from a validated name, not passed in.
+    """
     path = "%s-%s" % (CONTENT_CRON_PREFIX, _username(user))
     b64 = base64.b64encode(content.encode()).decode()
     return ("echo %s | base64 -d > %s && chmod 644 %s"
@@ -1517,7 +1579,10 @@ def verbs():
 
 
 def verb_validators(verb):
-    """The validator list for `verb`. For the anti-drift test, which compares this table's
-    STRICTNESS against the helper's — the argv comparison cannot, because the verbs the helper
-    implements itself build [] on both sides whatever their arguments were."""
+    """The validator list for `verb`.
+
+    For the anti-drift test, which compares this table's STRICTNESS against the helper's — the argv
+    comparison cannot, because the verbs the helper implements itself build [] on both sides
+    whatever their arguments were.
+    """
     return list(_ARGV[verb][0])

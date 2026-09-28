@@ -38,8 +38,10 @@ _by_len = {}
 
 
 def _networks(values):
-    """ip_network for every value that is an address or a CIDR; anything else is skipped. An
-    IPv4-mapped IPv6 address counts as the IPv4 address it carries."""
+    """ip_network for every value that is an address or a CIDR; anything else is skipped.
+
+    An IPv4-mapped IPv6 address counts as the IPv4 address it carries.
+    """
     out = set()
     for v in values or ():
         try:
@@ -98,9 +100,12 @@ def _changed():
 
 
 def set_f2b(ips, taken=None):
-    """fail2ban's current ban list for the panel jail. None (the read failed) changes nothing, and
-    so does a reading TAKEN (time.monotonic() before the read) before one already in use: the
-    ban-watcher and a refresh can read concurrently, and the slower one must not win."""
+    """fail2ban's current ban list for the panel jail.
+
+    None (the read failed) changes nothing, and so does a reading TAKEN (time.monotonic() before the
+    read) before one already in use: the ban-watcher and a refresh can read concurrently, and the
+    slower one must not win.
+    """
     global _f2b
     if ips is None:
         return
@@ -140,7 +145,8 @@ def forwarded_client(xff):
     """The client address a proxy put LAST in X-Forwarded-For, or None if it is not an address.
 
     The last hop is the one the nearest proxy wrote: tailscaled sets the header outright
-    (discarding anything the client sent), and a reverse proxy appends to it."""
+    (discarding anything the client sent), and a reverse proxy appends to it.
+    """
     hop = (xff or "").split(",")[-1].strip()
     if hop.startswith("["):
         hop = hop[1:].split("]", 1)[0]
@@ -158,21 +164,30 @@ def is_banned(addr, widen=True):
 
     `widen=False` asks what the host FIREWALL asks — the banned address or network itself, not the
     /64 an IPv6 ban is widened to here. For a client that connects directly: the firewall still
-    lets a neighbour in the same /64 in, so refusing it only the console would be a half lock-out."""
+    lets a neighbour in the same /64 in, so refusing it only the console would be a half lock-out.
+    """
     groups = _by_len
     if addr is None or not groups:
         return False
-    hit = False
+    if not _in_banned_network(addr, groups, widen):
+        return False
+    return not _never_refused(addr)
+
+
+def _in_banned_network(addr, groups, widen):
+    """Whether `addr` lies in a banned network of `groups` (a _by_len snapshot); see is_banned."""
     for (version, plen), nets in groups.items():
         if version != addr.version:
             continue
         net = ipaddress.ip_network((addr, plen), strict=False)
         if net in nets and (widen or net in _f2b or net in _ufw):
-            hit = True
-            break
-    if not hit:
-        return False
-    return not any(addr in n for n in _TAILNET + _allow if n.version == addr.version)
+            return True
+    return False
+
+
+def _never_refused(addr):
+    """Whether `addr` is a tailnet peer or on the security whitelist, which this gate never refuses."""
+    return any(addr in n for n in _TAILNET + _allow if n.version == addr.version)
 
 
 # ── refreshing ──────────────────────────────────────────────────────────────────────────────────
@@ -188,8 +203,10 @@ _state = {"scheduled": False, "again": None}
 
 
 def refresh():
-    """Read fail2ban's jail, the UFW denies and the whitelist now. Best-effort: a failed read keeps
-    what was there."""
+    """Read fail2ban's jail, the UFW denies and the whitelist now.
+
+    Best-effort: a failed read keeps what was there.
+    """
     from panel.core.config import load_config
     from panel.ops import system_ops as so
     try:
@@ -206,8 +223,10 @@ def refresh():
 
 
 def refresh_soon(delay=3.0):
-    """Schedule a refresh() `delay` seconds from now. If one is already pending, schedule ONE more
-    after it rather than dropping this request."""
+    """Schedule a refresh() `delay` seconds from now.
+
+    If one is already pending, schedule ONE more after it rather than dropping this request.
+    """
     with _sched:
         if _state["scheduled"]:
             _state["again"] = delay if _state["again"] is None else max(_state["again"], delay)

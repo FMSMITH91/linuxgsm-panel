@@ -707,6 +707,16 @@ try:
     # Pages must actually RENDER for a non-superadmin (regression: a template calling a
     # context-processor helper with the wrong arity 500'd only for limited users).
     check("dashboard (/) renders for limited user -> 200", c.get("/").status_code == 200)
+    # ...and offers Uninstall only to someone the route above would let use it. Rendering it for
+    # everyone left every suite green when index was split (the flag is _install_controls' now):
+    # the button 403s, so nothing was ever removed, but it is still an offer the POST refuses.
+    # The superadmin's page is the positive control: the same row, with the form.
+    _un_action = 'action="/servers/%d/delete"' % accessible_id
+    check("dashboard: no Uninstall form for a viewer without UNINSTALL_SERVER",
+          _un_action not in c.get("/").get_data(as_text=True))
+    check("dashboard: ...while the superadmin's page has it for the same server",
+          _un_action in client_as(admin_id).get("/").get_data(as_text=True),
+          "the form is not rendered for anyone, so the check above proves nothing")
 
     # Remote management is scoped PER HOST: MANAGE_REMOTES lets you manage remotes,
     # but only the ones your groups grant — not any remote by id (remote-level IDOR).
@@ -845,6 +855,24 @@ try:
           "ended up with: %s" % sorted(_now))
     check("escalation: ...and keeps the group they legitimately had",
           auth.MANAGE_USERS in _now, "ended up with: %s" % sorted(_now))
+
+    # A superadmin account is refused BY NAME, before anything else is weighed. The refusal alone
+    # proves nothing about this guard: the superadmin-flag and reach checks behind it refuse the
+    # same edit in other words, so deleting it left every suite green when edit_user was split
+    # (it is _edit_user_refusal's first test now). The message is what only this guard produces.
+    with app.app_context():
+        _sa_row = db.session.get(User, admin_id)
+        _sa_before = (_sa_row.display_name, _sa_row.password_hash, _sa_row.is_superadmin)
+    _r_sa = cmu.post("/users/%d/edit" % admin_id,
+                     data={"display_name": "taken", "is_active": "on", "is_superadmin": "on"},
+                     headers={"X-Requested-With": "XMLHttpRequest"})
+    with app.app_context():
+        _sa_row = db.session.get(User, admin_id)
+        _sa_after = (_sa_row.display_name, _sa_row.password_hash, _sa_row.is_superadmin)
+    check("escalation: MANAGE_USERS editing a superadmin is refused as exactly that, and nothing changes",
+          (_r_sa.get_json(silent=True) or {}).get("message")
+          == "Only a superadmin can modify a superadmin account." and _sa_after == _sa_before,
+          repr((_r_sa.status_code, _r_sa.get_json(silent=True), _sa_after == _sa_before)))
 
     # ── ...and cannot join a group whose PERMISSIONS they hold but whose HOSTS they do not ──────
     # grantable_groups tested `set(g.get_permissions()) <= mine` and nothing else, while
@@ -2132,7 +2160,13 @@ _MUT_NO_PERM_OK = {
     "set_language",
     # Unauthenticated by design: login, the setup wizard, an invite redemption. The two setup
     # Tailscale endpoints carry their own gate — _setup_open() — because no login exists yet.
-    "login", "login_2fa", "redeem_invite", "force_password_change",
+    #
+    # setup_wizard was never exempt here, and passed only because its admin step's
+    # `filter_by(is_superadmin=True)` put a gate token in its source by accident. Its real gates are
+    # the SetupState lock and _setup_owner_ok(), which no token here names; moving the admin step
+    # into a helper (route_helpers.py) turned that coincidence red. Named, rather than kept passing
+    # on a word that was never a permission check.
+    "login", "login_2fa", "redeem_invite", "force_password_change", "setup_wizard",
     "api_setup_ts_install", "api_setup_ts_serve", "api_setup_ts_up",
 }
 _mut_unguarded, _mut_seen = [], []

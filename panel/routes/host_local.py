@@ -27,13 +27,29 @@ _BOOT_ID = "%.6f" % time.time()
 
 
 def register(app):
+    _register_server_management(app)
+    _register_host_tailscale(app)
+    _register_panel_update(app)
+    _register_panel_repair(app)
+    _register_panel_db_upkeep(app)
+    _register_panel_db_repair(app)
+    _register_panel_ban_lists(app)
+    _register_panel_blocking(app)
+    _register_panel_security_misc(app)
+
+
+def _register_server_management(app):
+    """The panel host's management page and its specs and live figures."""
     @app.route("/server-management")
     @login_required
     @superadmin_required
     def server_management():
-        """Panel host management. The panel host is just the local remote, so it uses
-        the SAME template (and endpoints) as a remote server — only the panel-specific
-        extras (self-update, its own Tailscale SSH controls) differ, keyed on is_local."""
+        """Panel host management.
+
+        The panel host is just the local remote, so it uses the SAME template (and endpoints) as a
+        remote server — only the panel-specific extras (self-update, its own Tailscale SSH controls)
+        differ, keyed on is_local.
+        """
         local = RemoteServer.query.filter_by(is_local=True).first()
         if local is None:
             # Fresh install that never added the panel host as a manageable server —
@@ -81,6 +97,9 @@ def register(app):
         """Realtime per-core + overall CPU and RAM/swap for the live bar graphs."""
         return jsonify(so.live_metrics())
 
+
+def _register_host_tailscale(app):
+    """Letting tailnet traffic through the firewall, and Tailscale SSH on and off."""
     @app.route("/api/server-management/ufw-allow-tailscale", methods=["POST"])
     @login_required
     @superadmin_required
@@ -117,11 +136,14 @@ def register(app):
             return jsonify({"success": True, "message": msg})
         return jsonify({"success": False, "message": msg}), 500
 
+
+def _register_panel_update(app):
+    """Panel self-update: its status, running it, its log, and the branch it tracks."""
     @app.route("/api/panel/update-status")
     @login_required
     @superadmin_required
     def api_panel_update_status():
-        """Is the LinuxGSM Panel itself behind its GitHub repo? (git-based check)"""
+        """Whether the LinuxGSM Panel itself is behind its GitHub repo (a git-based check)."""
         force = request.args.get("force") in ("1", "true", "yes")
         try:
             data = dict(so.panel_update_status(force=force))
@@ -152,7 +174,8 @@ def register(app):
 
         boot_id says WHICH process answered. The card finishes on a finished log only while that
         is still the process that started the update: then the installer ended without ever
-        restarting the panel (it stopped early, or held), and nothing else will tell it so."""
+        restarting the panel (it stopped early, or held), and nothing else will tell it so.
+        """
         try:
             data = dict(so.panel_update_log())
             data["boot_id"] = _BOOT_ID
@@ -183,12 +206,17 @@ def register(app):
         log_action(current_user, "panel_switch_branch", target=branch, detail=msg, success=success)
         return jsonify({"success": success, "message": msg})
 
+
+def _register_panel_repair(app):
+    """Panel diagnostics, the file integrity check and the repair."""
     @app.route("/api/panel/diagnostics")
     @login_required
     @superadmin_required
     def api_panel_diagnostics():
-        """Fast local self-check of the panel's own health (integrity, DB, keys,
-        disk, cert, service). No SSH/network."""
+        """Fast local self-check of the panel's own health.
+
+        It covers integrity, DB, keys, disk, cert and service. No SSH/network.
+        """
         try:
             return jsonify(so.panel_diagnostics())
         except Exception:
@@ -211,8 +239,11 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_repair():
-        """Restore tampered panel files from git. Body: {"paths": [...]} to restore
-        specific reported files, or {} / omitted to restore all of them."""
+        """Restore tampered panel files from git.
+
+        Body: {"paths": [...]} to restore specific reported files, or {} / omitted to restore all of
+        them.
+        """
         data = _json_body()
         paths = data.get("paths")
         if paths is not None and not isinstance(paths, list):
@@ -230,6 +261,9 @@ def register(app):
             return jsonify({"success": False,
                             "message": _log_and_generic("panel repair failed")}), 500
 
+
+def _register_panel_db_upkeep(app):
+    """The panel database's size, and optimising it."""
     @app.route("/api/panel/db-stats")
     @login_required
     @superadmin_required
@@ -260,14 +294,20 @@ def register(app):
             return jsonify({"success": False,
                             "message": _log_and_generic("db optimize failed")}), 500
 
+
+def _register_panel_db_repair(app):
+    """The panel database's health check and its repair."""
     @app.route("/api/panel/db-health")
     @login_required
     @superadmin_required
     def api_panel_db_health():
-        """On-demand database integrity check — read-only PRAGMA integrity_check, which is
-        deeper than the fast quick_check the panel runs at startup. Reports healthy/flagged;
-        an actual repair is never done to the live file, it runs safely offline during an
-        update (or a restart), so this endpoint has no destructive side effects."""
+        """On-demand, read-only database integrity check.
+
+        It runs PRAGMA integrity_check, which is deeper than the fast quick_check the panel runs at
+        startup. Reports healthy/flagged; an actual repair is never done to the live file, it runs
+        safely offline during an update (or a restart), so this endpoint has no destructive side
+        effects.
+        """
         try:
             import db_maintenance
             ok, detail = db_maintenance.integrity_check(str(DB_PATH))
@@ -279,8 +319,11 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_repair_db():
-        """Repair a flagged database on-demand: a detached job stops the panel, rebuilds/restores the
-        DB offline (original copied aside first), and restarts. For when the health check fails."""
+        """Repair a flagged database on-demand.
+
+        A detached job stops the panel, rebuilds/restores the DB offline (original copied aside
+        first), and restarts. For when the health check fails.
+        """
         try:
             ok, msg = so.panel_repair_database()
             log_action(current_user, "panel_repair_db", target="database", detail=msg, success=ok)
@@ -289,7 +332,8 @@ def register(app):
             return jsonify({"success": False, "message": _log_and_generic("db repair failed")}), 500
 
 
-
+def _register_panel_ban_lists(app):
+    """The panel host's fail2ban bans and top offending addresses."""
     @app.route("/api/panel/security/bans")
     @login_required
     @superadmin_required
@@ -325,6 +369,9 @@ def register(app):
             return jsonify(dict(_settings, ips=[], unreadable=True)), 200
         return jsonify(dict(_settings, ips=_ips))
 
+
+def _register_panel_blocking(app):
+    """Blocking an address on the panel host, and its auto-block switch."""
     @app.route("/api/panel/security/block", methods=["POST"])
     @login_required
     @superadmin_required
@@ -353,8 +400,11 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_security_autoblock():
-        """Turn the rolling auto-block (attempts >= threshold over 7 days) on/off for the panel host,
-        and optionally update the shared threshold."""
+        """Turn the panel host's rolling auto-block on/off, optionally updating the threshold.
+
+        The auto-block acts on attempts >= threshold over 7 days, and the threshold is the shared
+        one.
+        """
         enabled = bool(_json_body().get("enabled"))
         rid = _local_remote_id()
         if rid is None:
@@ -366,13 +416,18 @@ def register(app):
             _run_autoblock_now(app, rid)
         return jsonify({"success": True, "enabled": enabled, "threshold": _autoblock_threshold()})
 
+
+def _register_panel_security_misc(app):
+    """The whitelist, unbanning, and the panel host's security events and log."""
     @app.route("/api/panel/security/whitelist", methods=["POST"])
     @login_required
     @superadmin_required
     def api_panel_security_whitelist():
-        """Add or remove a global security-whitelist entry (IP or CIDR). Whitelisted addresses are
-        never fail2ban-banned (jail ignoreip) or UFW auto-blocked, and adding one lifts any ban/block
-        it already has."""
+        """Add or remove a global security-whitelist entry (IP or CIDR).
+
+        Whitelisted addresses are never fail2ban-banned (jail ignoreip) or UFW auto-blocked, and
+        adding one lifts any ban/block it already has.
+        """
         return _whitelist_mutate(app, _json_body())
 
     @app.route("/api/panel/security/unban", methods=["POST"])

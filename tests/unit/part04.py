@@ -908,6 +908,49 @@ check("custom arg: rejects spaces", not _arg_ok("mp toujane"))
 check("custom arg: rejects newline", not _arg_ok("a\nb"))
 check("custom arg: rejects empty", not _arg_ok(""))
 
+# ── can_administer_user: EVERY axis of reach, each on its own ──────────────────────────────────
+# A delegated admin may administer a peer only if the peer holds nothing beyond the admin: its
+# permissions, the hosts it reaches, its custom commands and its game servers. rbac_test drives
+# the route with a peer granted another host, but that host HAS game servers, so the servers axis
+# refuses the peer as well and the hosts axis was never the deciding test: disabling it (moved to
+# _reach_within_actors when can_administer_user was split) left every suite green. A peer reaching
+# a host with no game servers on it is refused by that axis alone. Driven here with the four axis
+# readers stubbed, one axis wider at a time, so each one is the only thing that can refuse.
+from panel.security import auth as _cau_auth  # noqa: E402
+
+_cau_names = ("get_user_permissions", "accessible_remote_ids", "custom_command_ids",
+              "get_user_servers")
+_cau_saved = {n: getattr(_cau_auth, n) for n in _cau_names}
+_cau_reach = {}
+
+
+def _cau_axis(axis):
+    return lambda user: _cau_reach[user.id][axis]
+
+
+_cau_actor, _cau_peer = _NS(id=801, is_superadmin=False), _NS(id=802, is_superadmin=False)
+_cau_base = {"get_user_permissions": {"manage_users"}, "accessible_remote_ids": {1},
+             "custom_command_ids": {5}, "get_user_servers": [_NS(id=11)]}
+_cau_wider = {"get_user_permissions": {"manage_users", "manage_remotes"},
+              "accessible_remote_ids": {1, 2}, "custom_command_ids": {5, 6},
+              "get_user_servers": [_NS(id=11), _NS(id=12)]}
+_cau_seen = {}
+try:
+    for _n in _cau_names:
+        setattr(_cau_auth, _n, _cau_axis(_n))
+    for _axis in (None,) + _cau_names:
+        _cau_reach[801] = dict(_cau_base)
+        _cau_reach[802] = dict(_cau_base, **({_axis: _cau_wider[_axis]} if _axis else {}))
+        _cau_seen[_axis] = _cau_auth.can_administer_user(_cau_actor, _cau_peer)
+finally:
+    for _n, _f in _cau_saved.items():
+        setattr(_cau_auth, _n, _f)
+check("administer user: a peer holding exactly what the admin holds may be administered",
+      _cau_seen.get(None) is True, repr(_cau_seen))
+for _axis in _cau_names:
+    check("administer user: a peer wider on %s alone is refused" % _axis,
+          _cau_seen.get(_axis) is False, repr(_cau_seen))
+
 # ── panel branch-switch: git-ref name validation (fed to git + the root installer) ──
 # _so is the `import system_ops as _so` from the integrity-tests section above.
 check("branch: main valid", _so._valid_branch("main"))

@@ -43,8 +43,9 @@ def _forget_deleted_remote_state(remote_id, game_server_ids):
 
 
 def _forget_deleted_remote_config(remote_id, game_server_ids):
-    """Drop everything a deleted host left in config.json — its auto-block opt-in, and a backup
-    schedule for each game server that went with it.
+    """Drop everything a deleted host left in config.json.
+
+    That is its auto-block opt-in, and a backup schedule for each game server that went with it.
 
     These are the PERSISTED half of the same problem panel_state solves for in-memory maps: a
     deleted row's id is handed straight to the next INSERT, and unlike a cache these survive a
@@ -87,18 +88,30 @@ def _forget_deleted_from_ui_prefs(remote_id, game_server_ids):
     try:
         for u in User.query.all():
             prefs = u.get_ui_prefs() or {}
-            hosts = [h for h in (prefs.get("host_order") or []) if h != remote_id]
-            servers = {k: [s for s in v if s not in gone]
-                       for k, v in (prefs.get("server_order") or {}).items()
-                       if str(k) != str(remote_id)}
-            if hosts != (prefs.get("host_order") or []):
+            hosts = _host_order_without(prefs, remote_id)
+            servers = _server_order_without(prefs, remote_id, gone)
+            if hosts is not None:
                 u.set_ui_pref("host_order", hosts)
-            if servers != (prefs.get("server_order") or {}):
+            if servers is not None:
                 u.set_ui_pref("server_order", servers)
         db.session.commit()
     except Exception:
         db.session.rollback()
         _log.debug("could not clear ui_prefs for deleted remote %s", remote_id, exc_info=True)
+
+
+def _host_order_without(prefs, remote_id):
+    """A saved host_order with the deleted host dropped, or None when it did not hold it."""
+    hosts = [h for h in (prefs.get("host_order") or []) if h != remote_id]
+    return hosts if hosts != (prefs.get("host_order") or []) else None
+
+
+def _server_order_without(prefs, remote_id, gone):
+    """A saved server_order without the deleted host and its servers, or None when it held neither."""
+    servers = {k: [s for s in v if s not in gone]
+               for k, v in (prefs.get("server_order") or {}).items()
+               if str(k) != str(remote_id)}
+    return servers if servers != (prefs.get("server_order") or {}) else None
 
 
 # The ways of signing in to a host that prove the REQUESTER controls it. Only a password does:
@@ -125,7 +138,8 @@ def _delegated_add_refusal(is_local, auth_method):
 
     The panel's own host is superadmin-only on every other path that creates or manages it
     (host_local.server_management); from here a delegated admin got a row outside all of their
-    groups and a message promising they could install on it."""
+    groups and a message promising they could install on it.
+    """
     if current_user.is_superadmin:
         return None
     if is_local:
@@ -153,7 +167,8 @@ def _delegated_retarget_refusal(remote, new_host, new_port, new_user, new_auth, 
     password. A new key PATH is the same move without touching the address — it picks which of
     the panel's own keys signs in — so it needs the same. Everything else on the form — the name,
     sudo, rotating the password in place — is unaffected. The panel's own row never leaves the
-    local transport whatever its host says (is_local_server), so it is not a retarget."""
+    local transport whatever its host says (is_local_server), so it is not a retarget.
+    """
     if current_user.is_superadmin or remote.is_local:
         return None
     moved = (new_host, new_port, new_user, new_auth) != (remote.host, remote.port,
@@ -169,6 +184,13 @@ def _delegated_retarget_refusal(remote, new_host, new_port, new_user, new_auth, 
 
 
 def register(app):
+    _register_remote_list(app)
+    _register_remote_edit(app)
+    _register_remote_delete_and_test(app)
+
+
+def _register_remote_list(app):
+    """The hosts page, and adding a host."""
     @app.route("/remotes")
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -197,47 +219,16 @@ def register(app):
         lgsm_user = request.form.get("lgsm_user", "").strip()
         is_local = request.form.get("is_local") == "1"
 
-        if not name or not SAFE_LABEL_RE.match(name):
-            return _form_err("Name is required and cannot contain < > \" ' ` or backslashes.", "manage_remotes")
-        if ssh_port is None:
-            return _form_err("SSH port must be a number between %d and %d." % (MIN_PORT, MAX_PORT),
-                             "manage_remotes")
-
-        # SECURITY: these reach `sudo -u <user>` / SSH command construction — validate
-        # to a safe Linux-username charset so they can't inject shell commands.
-        if lgsm_user and not LINUX_USER_RE.match(lgsm_user):
-            return _form_err("LinuxGSM user must be a valid Linux username (lowercase letters, numbers, - or _).",
-                             "manage_remotes")
-        if ssh_user and not LINUX_USER_RE.match(ssh_user):
-            return _form_err("SSH user must be a valid Linux username.", "manage_remotes")
-        if not is_local and (not host or not HOST_RE.match(host)):
-            return _form_err("Host must be a valid hostname or IP address.", "manage_remotes")
-        # The same allowlist edit_remote uses, and for the same reason: `auth_method` picks the
-        # TRANSPORT, and "local" means "this record is the panel host" to is_local_server(). The
-        # is_local branch below sets that itself, from a deliberate checkbox; reaching it through
-        # the credential dropdown instead would store a host that is remote by every other field
-        # and local by the only one that decides where commands run. Only checked off the
-        # non-local path — the branch below hardcodes auth_method="local" on purpose.
-        if not is_local and auth_method not in EDITABLE_AUTH_METHODS:
-            return _form_err("Unknown authentication method.", "manage_remotes")
+        _bad = (_add_remote_field_error(name, ssh_port, lgsm_user, ssh_user)
+                or _add_remote_target_error(is_local, host, auth_method))
+        if _bad:
+            return _form_err(_bad, "manage_remotes")
         _refused = _delegated_add_refusal(is_local, auth_method)
         if _refused:
             return _form_err(_refused, "manage_remotes", code=403)
 
         if is_local:
-            remote = RemoteServer(
-                name=name, host="127.0.0.1", port=22,
-                username="local", auth_method="local",
-                auth_credential="", sudo_enabled=True,
-                linuxgsm_user=lgsm_user,
-                is_local=True, is_online=True,
-                last_seen=utcnow(),
-            )
-            db.session.add(remote)
-            db.session.commit()
-            log_action(current_user, "add_local_remote", target=name)
-            return _form_ok(f"Local server '{name}' added! You can now install game servers on this machine.",
-                            "manage_remotes")
+            return _add_local_remote(name, lgsm_user)
 
         # (host presence + charset already validated above for non-local remotes)
         success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential)
@@ -271,49 +262,16 @@ def register(app):
         # this widens nothing that was not already theirs to widen — the same "a new grant must
         # not exceed its creator's reach" rule add_group applies through grantable_object_ids.
         # The route's own decorator guarantees a non-superadmin has at least one such group.
-        if not current_user.is_superadmin:
-            for _g in (current_user.groups or []):
-                if _g.has_permission(MANAGE_REMOTES) and remote not in (_g.servers or []):
-                    _g.servers.append(remote)
-            db.session.commit()
+        _grant_to_creator_groups(remote)
         # Belt and braces: if nothing granted it after all, say so rather than sending them to a
         # page that 403s and promising a card they cannot see.
         reachable = can_access_remote(current_user, remote.id)
 
-        # Setup type. "fresh" runs the full Prepare & Secure bootstrap (updates, UFW, SSH hardening,
-        # fail2ban, deps, then reboot) for a brand-new VPS. "existing" leaves the host untouched and
-        # jumps straight to scanning it for LinuxGSM servers already installed. (The old auto_bootstrap
-        # checkbox is honoured as a fallback so older/cached forms still work.)
-        setup_type = request.form.get("setup_type", "").strip().lower()
-        if setup_type not in ("fresh", "existing"):
-            setup_type = "fresh" if request.form.get("auto_bootstrap", "on") == "on" else "existing"
-        if setup_type == "existing":
-            if not reachable:
-                return _form_ok(f"Remote '{name}' added, but your groups don't grant access to it "
-                                "— an administrator has to grant it before you can manage or scan "
-                                "it.", "manage_remotes")
-            flash(f"Remote '{name}' added — scanning it for existing LinuxGSM servers…", "success")
-            return redirect(url_for("remote_manage", remote_id=remote.id) + "?scan=1")
+        return _after_add_remote(app, remote, name, lgsm_user, reachable)
 
-        opts = {
-            "set_timezone": request.form.get("timezone", "UTC") or "UTC",
-            "enable_ufw": True, "install_lgsm_deps": True,
-            "username": lgsm_user, "install_fail2ban": True, "do_reboot": True,
-        }
-        started, _ = _begin_bootstrap(app, remote.id, opts, current_user.id)
-        # "watch the progress on its card" is a statement about a card. Only say it to someone who
-        # will be shown one — /remotes filters to accessible_remote_ids, and the bootstrap-status
-        # endpoint behind the card answers 403 to anyone else.
-        if started and reachable:
-            _m = f"Remote '{name}' added. Preparing & securing it now — watch the progress on its card."
-        elif started:
-            _m = (f"Remote '{name}' added and is being prepared & secured now, but your groups "
-                  "don't grant access to it — an administrator has to grant it before you can "
-                  "see or manage the host.")
-        else:
-            _m = f"Remote '{name}' added."
-        return _form_ok(_m, "manage_remotes")
 
+def _register_remote_edit(app):
+    """Editing a host's name, address and sign-in."""
     @app.route("/remotes/<int:remote_id>/edit", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -325,15 +283,15 @@ def register(app):
         # not). So clearing the box and saving used to store "" over the real name, host or SSH
         # user, and the guards below are all `if new_x and …`, which an empty string skips. A
         # remote with host "" is unreachable and its game servers unmanageable.
-        new_user = (request.form.get("ssh_user") or "").strip() or remote.username
+        new_user = _edited("ssh_user", remote.username)
         # SECURITY: validate the username field (it reaches `sudo -u <user>` / SSH commands).
         if not LINUX_USER_RE.match(new_user):
             return _form_err("SSH user must be a valid Linux username.", "manage_remotes")
-        new_name = (request.form.get("name") or "").strip() or remote.name
+        new_name = _edited("name", remote.name)
         if not SAFE_LABEL_RE.match(new_name):
             return _form_err("Name cannot contain < > \" ' ` or backslashes.", "manage_remotes")
         remote.name = new_name
-        new_host = (request.form.get("host") or "").strip() or remote.host
+        new_host = _edited("host", remote.host)
         if not remote.is_local and not HOST_RE.match(new_host):
             return _form_err("Host must be a valid hostname or IP address.", "manage_remotes")
         new_port = _port_or(request.form.get("ssh_port"), None)
@@ -344,7 +302,7 @@ def register(app):
         # the panel signs in on its own credentials. See _delegated_retarget_refusal.
         _refused = _delegated_retarget_refusal(
             remote, new_host, new_port, new_user,
-            (request.form.get("auth_method") or "").strip() or remote.auth_method,
+            _edited("auth_method", remote.auth_method),
             request.form.get("credential", "").strip())
         if _refused:
             return _form_err(_refused, "manage_remotes", code=403)
@@ -355,36 +313,17 @@ def register(app):
         remote.host = new_host
         remote.port = new_port
         remote.username = new_user
-        # SECURITY: the one field on this form that was taken raw, while the four above it were
-        # each validated. `auth_method` is not a label — it SELECTS THE TRANSPORT, and
-        # `_core.is_local_server()` returns True for `auth_method == "local"` (panel/ops/
-        # ssh_manager/_core.py:423-424, `or getattr(server, "auth_method", None) == "local"`).
-        # So posting auth_method=local for an ordinary remote moved every command the panel runs
-        # "on that host" — console input, file writes, privileged verbs, firewall changes — onto
-        # the PANEL HOST instead, the machine holding the database, the credential key and the
-        # panel's own sudoers grant. The form never offers it: the select at
-        # templates/manage_remotes.html:210-212 lists exactly key/password/tailscale, so any other
-        # value arrived from a forged request. An unknown value was no better — it falls through
-        # `enforce_pin = auth_method not in ("tailscale", "local")` (_core.py:569) into the key
-        # path with a method nothing recognises.
-        new_auth = (request.form.get("auth_method") or "").strip() or remote.auth_method
-        if remote.is_local:
-            # The panel's own row is created by host_local.py with auth_method="local" and is not
-            # repointable from this form; keep whatever it has.
-            new_auth = remote.auth_method
-        elif new_auth not in EDITABLE_AUTH_METHODS:
-            return _form_err("Unknown authentication method.", "manage_remotes")
-        remote.auth_method = new_auth
-        # Credential: the edit form leaves it blank to keep the current one; a new
-        # value is (re)encrypted before storage.
-        new_cred = request.form.get("credential", "").strip()
-        if new_cred:
-            remote.auth_credential = encrypt_secret(new_cred)
+        _bad_auth = _apply_edited_auth(remote)
+        if _bad_auth:
+            return _form_err(_bad_auth, "manage_remotes")
         remote.sudo_enabled = request.form.get("sudo_enabled") == "on"
         db.session.commit()
         log_action(current_user, "edit_remote", target=remote.name)
         return _form_ok(f"Remote '{remote.name}' updated.", "manage_remotes")
 
+
+def _register_remote_delete_and_test(app):
+    """Deleting a host, and testing its connection."""
     @app.route("/remotes/<int:remote_id>/delete", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -470,3 +409,132 @@ def register(app):
         if success:
             return _form_ok(f"Connection to {remote.name} successful!", "manage_remotes")
         return _form_err(f"Connection failed: {msg}", "manage_remotes")
+
+
+def _add_remote_field_error(name, ssh_port, lgsm_user, ssh_user):
+    """Why the add form's name, SSH port or account names are refused, or None."""
+    if not name or not SAFE_LABEL_RE.match(name):
+        return "Name is required and cannot contain < > \" ' ` or backslashes."
+    if ssh_port is None:
+        return "SSH port must be a number between %d and %d." % (MIN_PORT, MAX_PORT)
+
+    # SECURITY: these reach `sudo -u <user>` / SSH command construction — validate
+    # to a safe Linux-username charset so they can't inject shell commands.
+    if lgsm_user and not LINUX_USER_RE.match(lgsm_user):
+        return "LinuxGSM user must be a valid Linux username (lowercase letters, numbers, - or _)."
+    if ssh_user and not LINUX_USER_RE.match(ssh_user):
+        return "SSH user must be a valid Linux username."
+    return None
+
+
+def _add_remote_target_error(is_local, host, auth_method):
+    """Why the add form's host or sign-in method is refused, or None; the local branch sets its own."""
+    if not is_local and (not host or not HOST_RE.match(host)):
+        return "Host must be a valid hostname or IP address."
+    # The same allowlist edit_remote uses, and for the same reason: `auth_method` picks the
+    # TRANSPORT, and "local" means "this record is the panel host" to is_local_server(). The
+    # is_local branch below sets that itself, from a deliberate checkbox; reaching it through
+    # the credential dropdown instead would store a host that is remote by every other field
+    # and local by the only one that decides where commands run. Only checked off the
+    # non-local path — the branch below hardcodes auth_method="local" on purpose.
+    if not is_local and auth_method not in EDITABLE_AUTH_METHODS:
+        return "Unknown authentication method."
+    return None
+
+
+def _add_local_remote(name, lgsm_user):
+    """Add the panel's own machine as a host; nothing to connect to or test."""
+    remote = RemoteServer(
+        name=name, host="127.0.0.1", port=22,
+        username="local", auth_method="local",
+        auth_credential="", sudo_enabled=True,
+        linuxgsm_user=lgsm_user,
+        is_local=True, is_online=True,
+        last_seen=utcnow(),
+    )
+    db.session.add(remote)
+    db.session.commit()
+    log_action(current_user, "add_local_remote", target=name)
+    return _form_ok(f"Local server '{name}' added! You can now install game servers on this machine.",
+                    "manage_remotes")
+
+
+def _grant_to_creator_groups(remote):
+    """Grant a non-superadmin's new host to their groups that carry MANAGE_REMOTES."""
+    if not current_user.is_superadmin:
+        for _g in (current_user.groups or []):
+            if _g.has_permission(MANAGE_REMOTES) and remote not in (_g.servers or []):
+                _g.servers.append(remote)
+        db.session.commit()
+
+
+def _after_add_remote(app, remote, name, lgsm_user, reachable):
+    """Scan the new host or start preparing it, as the form asked, and say what happened."""
+    # Setup type. "fresh" runs the full Prepare & Secure bootstrap (updates, UFW, SSH hardening,
+    # fail2ban, deps, then reboot) for a brand-new VPS. "existing" leaves the host untouched and
+    # jumps straight to scanning it for LinuxGSM servers already installed. (The old auto_bootstrap
+    # checkbox is honoured as a fallback so older/cached forms still work.)
+    setup_type = request.form.get("setup_type", "").strip().lower()
+    if setup_type not in ("fresh", "existing"):
+        setup_type = "fresh" if request.form.get("auto_bootstrap", "on") == "on" else "existing"
+    if setup_type == "existing":
+        if not reachable:
+            return _form_ok(f"Remote '{name}' added, but your groups don't grant access to it "
+                            "— an administrator has to grant it before you can manage or scan "
+                            "it.", "manage_remotes")
+        flash(f"Remote '{name}' added — scanning it for existing LinuxGSM servers…", "success")
+        return redirect(url_for("remote_manage", remote_id=remote.id) + "?scan=1")
+
+    opts = {
+        "set_timezone": request.form.get("timezone", "UTC") or "UTC",
+        "enable_ufw": True, "install_lgsm_deps": True,
+        "username": lgsm_user, "install_fail2ban": True, "do_reboot": True,
+    }
+    started, _ = _begin_bootstrap(app, remote.id, opts, current_user.id)
+    # "watch the progress on its card" is a statement about a card. Only say it to someone who
+    # will be shown one — /remotes filters to accessible_remote_ids, and the bootstrap-status
+    # endpoint behind the card answers 403 to anyone else.
+    if started and reachable:
+        _m = f"Remote '{name}' added. Preparing & securing it now — watch the progress on its card."
+    elif started:
+        _m = (f"Remote '{name}' added and is being prepared & secured now, but your groups "
+              "don't grant access to it — an administrator has to grant it before you can "
+              "see or manage the host.")
+    else:
+        _m = f"Remote '{name}' added."
+    return _form_ok(_m, "manage_remotes")
+
+
+def _edited(field, current):
+    """The edit form's `field`, stripped, or `current` when the box was left blank."""
+    return (request.form.get(field) or "").strip() or current
+
+
+def _apply_edited_auth(remote):
+    """Set the edited host's sign-in method and credential; returns the refusal, or None."""
+    # SECURITY: the one field on this form that was taken raw, while the four above it were
+    # each validated. `auth_method` is not a label — it SELECTS THE TRANSPORT, and
+    # `_core.is_local_server()` returns True for `auth_method == "local"` (panel/ops/
+    # ssh_manager/_core.py:423-424, `or getattr(server, "auth_method", None) == "local"`).
+    # So posting auth_method=local for an ordinary remote moved every command the panel runs
+    # "on that host" — console input, file writes, privileged verbs, firewall changes — onto
+    # the PANEL HOST instead, the machine holding the database, the credential key and the
+    # panel's own sudoers grant. The form never offers it: the select at
+    # templates/manage_remotes.html:210-212 lists exactly key/password/tailscale, so any other
+    # value arrived from a forged request. An unknown value was no better — it falls through
+    # `enforce_pin = auth_method not in ("tailscale", "local")` (_core.py:569) into the key
+    # path with a method nothing recognises.
+    new_auth = _edited("auth_method", remote.auth_method)
+    if remote.is_local:
+        # The panel's own row is created by host_local.py with auth_method="local" and is not
+        # repointable from this form; keep whatever it has.
+        new_auth = remote.auth_method
+    elif new_auth not in EDITABLE_AUTH_METHODS:
+        return "Unknown authentication method."
+    remote.auth_method = new_auth
+    # Credential: the edit form leaves it blank to keep the current one; a new
+    # value is (re)encrypted before storage.
+    new_cred = request.form.get("credential", "").strip()
+    if new_cred:
+        remote.auth_credential = encrypt_secret(new_cred)
+    return None

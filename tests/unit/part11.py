@@ -2331,6 +2331,33 @@ finally:
     _p8_priv.helper_argv = _fl_priv_saved["helper_argv"]
 
 
+# ── the panel-update notice names the VERIFIED target, not the branch tip ───────────────────────
+# panel_update_status reports target_sha (the newest commit whose checks passed: what an update
+# would install) beside remote_sha (the tip). The ticker announces, and de-duplicates on, the
+# target, falling back to the tip only when there is none. Keying it on the tip (in _update_target
+# since update_check_ticker was split) left every suite green, and announced a commit an update
+# would not install.
+import logging as _ou11_logging  # noqa: E402
+from panel.routes import os_updates as _ou11  # noqa: E402
+from panel.services import notifications as _ou11_n  # noqa: E402
+_ou11_sent = []
+_ou11_saved = _ou11_n.notify
+try:
+    _ou11_n.notify = lambda kind, title, body, *a, **k: _ou11_sent.append((kind, body))
+    _ou11_st = {"update_available": True, "target_sha": "aaaaaaa1111", "remote_sha": "bbbbbbb2222",
+                "remote_version": "9.9", "behind": 3, "changes": ["fix: a thing"]}
+    _ou11_tgt = _ou11._update_target(_ou11_st)
+    _ou11._announce_panel_update(NS(logger=_ou11_logging.getLogger("ou11")), _ou11_st, _ou11_tgt)
+finally:
+    _ou11_n.notify = _ou11_saved
+check("panel update: the notice names the verified target, not the branch tip",
+      _ou11_tgt == "aaaaaaa1111" and len(_ou11_sent) == 1 and "aaaaaaa" in _ou11_sent[0][1]
+      and "bbbbbbb" not in _ou11_sent[0][1], repr((_ou11_tgt, _ou11_sent)))
+check("panel update: ...and falls back to the tip only when no target was worked out",
+      _ou11._update_target({"remote_sha": "bbbbbbb2222"}) == "bbbbbbb2222"
+      and _ou11._update_target({}) == "",
+      repr((_ou11._update_target({"remote_sha": "bbbbbbb2222"}), _ou11._update_target({}))))
+
 # ── the tripwire, checked last ──────────────────────────────────────────────────────────────────
 for _n, _fn in _p8_real.items():
     setattr(_sm_core, _n, _fn)

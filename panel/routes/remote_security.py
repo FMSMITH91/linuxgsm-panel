@@ -32,7 +32,8 @@ def _panel_bind_is_public(bind):
     had its port's allow rule deleted and was reported "kept tailnet-only": the panel restarted
     onto an address UFW's default-deny then shut, on the route that promises to refuse anything
     leaving the panel unreachable. Loopback and Tailscale addresses are the ones that really are
-    reached without a public rule; anything else is reached on its port and needs it open."""
+    reached without a public rule; anything else is reached on its port and needs it open.
+    """
     b = (bind or "").strip()
     if b == "localhost":
         return False
@@ -46,6 +47,14 @@ def _panel_bind_is_public(bind):
 
 
 def register(app):
+    _register_ban_lists(app)
+    _register_blocking(app)
+    _register_whitelist_and_log(app)
+    _register_panel_binding(app)
+
+
+def _register_ban_lists(app):
+    """A host's fail2ban bans and its top offending addresses."""
     @app.route("/api/remote/<int:remote_id>/security/bans")
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -85,6 +94,9 @@ def register(app):
             return jsonify(dict(_settings, ips=[], unreadable=True)), 200
         return jsonify(dict(_settings, ips=_ips))
 
+
+def _register_blocking(app):
+    """Blocking an address on a host, and its auto-block switch."""
     @app.route("/api/remote/<int:remote_id>/security/block", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -116,7 +128,8 @@ def register(app):
         Turning it on or off is PER HOST, which is what MANAGE_REMOTES is for. The THRESHOLD is
         install-wide — the panel-host sibling that writes it is @superadmin_required — so a host
         admin scoped to one VPS could move it for every host, to 3 (mass-blocking) or to a huge
-        value (disabling it everywhere). Confirmed by driving both routes as such a user."""
+        value (disabling it everywhere). Confirmed by driving both routes as such a user.
+        """
         remote = get_remote(remote_id)
         enabled = bool(_json_body().get("enabled"))
         if current_user.is_superadmin:
@@ -127,6 +140,9 @@ def register(app):
             _run_autoblock_now(app, remote_id)
         return jsonify({"success": True, "enabled": enabled, "threshold": _autoblock_threshold()})
 
+
+def _register_whitelist_and_log(app):
+    """The security whitelist, unbanning, and a host's raw security log."""
     @app.route("/api/remote/<int:remote_id>/security/whitelist", methods=["POST"])
     @login_required
     @superadmin_required
@@ -137,7 +153,8 @@ def register(app):
         access check — and the panel-host sibling that writes the same list is
         @superadmin_required. At MANAGE_REMOTES a host admin scoped to one VPS could make any
         address permanently exempt from fail2ban bans and UFW auto-blocks everywhere, and lift any
-        ban it already had, including on the panel host they have no rights to."""
+        ban it already had, including on the panel host they have no rights to.
+        """
         get_remote(remote_id)
         return _whitelist_mutate(app, _json_body())
 
@@ -177,18 +194,22 @@ def register(app):
             return jsonify({"text": "", "error": "The host did not answer the log read."}), 200
         return jsonify({"text": text})
 
+
+def _register_panel_binding(app):
+    """Moving the panel's own bind address and port."""
     @app.route("/api/panel/change-port", methods=["POST"])
     @login_required
     @superadmin_required
     def api_panel_change_port():
-        """Change where the panel's web server listens: its bind address and/or port. Saves the
-        new binding, brings the firewall in line (a publicly-bound panel needs its port open; a
-        loopback/tailnet-bound one doesn't, and a changed port's old rule is removed), then
+        """Change where the panel's web server listens: its bind address and/or port.
+
+        Saves the new binding, brings the firewall in line (a publicly-bound panel needs its port
+        open; a loopback/tailnet-bound one doesn't, and a changed port's old rule is removed), then
         restarts the panel so it rebinds (on restart it re-points Tailscale Serve at the current
-        port). Refuses anything that would leave the panel unreachable: a port outside 1024-65535
-        / already in use / used by a local game server, a bind address that isn't a valid IP or
-        isn't on this host, or a loopback-only bind without Tailscale Serve to proxy to it."""
-        import ipaddress
+        port). Refuses anything that would leave the panel unreachable: a port outside 1024-65535 /
+        already in use / used by a local game server, a bind address that isn't a valid IP or isn't
+        on this host, or a loopback-only bind without Tailscale Serve to proxy to it.
+        """
         data = _json_body()
         cfg = load_config()
         cur_port = int(cfg.get("port", 5000))
@@ -199,57 +220,10 @@ def register(app):
         new_bind = str(data.get("bind_host") or cur_bind).strip()
 
         local = RemoteServer.query.filter_by(is_local=True).first()
-        # nosec B104 - the set of wildcard addresses to RECOGNISE, so the code below
-        # can tell "listening everywhere" from loopback. Detecting a value is not
-        # binding to it.
-        wildcard = {"0.0.0.0", "::"}  # nosec B104
-        loopback = {"127.0.0.1", "::1", "localhost"}
-
-        # ── Validate the port ──
-        # The bound now lives in _port_or (shared with the setup wizard, which writes the SAME
-        # config key and used to write it unchecked). Kept as an explicit branch so the refusal
-        # still carries its own message.
-        if new_port is None:
-            return jsonify({"success": False,
-                            "message": "Pick a port between %d and %d."
-                                       % (MIN_UNPRIVILEGED_PORT, MAX_PORT)}), 400
-        if new_port != cur_port:
-            clash = GameServer.query.filter_by(remote_id=local.id, port=new_port).first() if local else None
-            if clash:
-                return jsonify({"success": False,
-                                "message": f"Port {new_port} is used by game server "
-                                           f"'{clash.name}'. Pick another."}), 400
-            if so.port_in_use(new_port):
-                return jsonify({"success": False,
-                                "message": f"Port {new_port} is already in use on this host."}), 400
-
-        # ── Validate the bind address ──
-        served = bool(cfg.get("tailscale_setup_done"))
-        if new_bind not in wildcard:
-            try:
-                ipaddress.ip_address(new_bind)
-            except ValueError:
-                return jsonify({"success": False,
-                                "message": "Bind address must be an IP — e.g. 0.0.0.0 (all "
-                                           "interfaces), 127.0.0.1 (localhost), or this host's "
-                                           "Tailscale IP."}), 400
-            if new_bind not in loopback:
-                # A specific IP: with Tailscale Serve (which proxies to localhost) this would
-                # break Serve and lock you out; without Serve it must at least be a real local IP.
-                if served:
-                    return jsonify({"success": False,
-                                    "message": "Tailscale Serve reaches the panel on localhost, so "
-                                               "bind to 0.0.0.0 (all) or 127.0.0.1 (localhost). A "
-                                               "specific IP would break Serve and lock you out."}), 400
-                if not so.host_has_ip(new_bind):
-                    return jsonify({"success": False,
-                                    "message": f"{new_bind} isn't an address on this host — the "
-                                               "panel couldn't bind to it."}), 400
-        if new_bind in loopback and not served:
-            return jsonify({"success": False,
-                            "message": "Binding to localhost only would lock you out unless "
-                                       "Tailscale Serve is set up to reach the panel. Set up "
-                                       "Serve first."}), 400
+        refusal = (_port_refusal(local, cur_port, new_port)
+                   or _bind_refusal(bool(cfg.get("tailscale_setup_done")), new_bind))
+        if refusal:
+            return jsonify({"success": False, "message": refusal}), 400
         if new_port == cur_port and new_bind == cur_bind:
             return jsonify({"success": False, "message": "That's already the panel's binding."}), 400
 
@@ -258,32 +232,7 @@ def register(app):
         cfg["bind_host"] = new_bind
         save_config(cfg)
 
-        # ── Bring the firewall in line with the resulting exposure ──
-        # Reached on its port (the wildcard, or the host's own public/LAN address) → the port must
-        # be open. Loopback/tailnet-bound → the public port rule isn't needed, so close it. A
-        # changed port also gets its old rule gone.
-        now_public = _panel_bind_is_public(new_bind)
-        fw_note = ""
-        if local:
-            # Each of these returns (ok, msg) and all three were called for effect, with fw_note
-            # assigned on the next line regardless — so the panel could restart onto a port the
-            # firewall does not allow having just said "Firewall: opened 5055.", on the one route
-            # whose docstring is "Refuses anything that would leave the panel unreachable".
-            try:
-                if now_public:
-                    _fw_ok, _fw_msg = remote_ufw_open_port(local, new_port, "tcp", "LinuxGSM Panel")
-                    fw_note = (f" Firewall: opened {new_port}." if _fw_ok
-                               else f" FIREWALL NOT UPDATED — port {new_port} may be blocked ({_fw_msg}).")
-                else:
-                    _fw_ok, _fw_msg = remote_ufw_close_port(local, new_port, "tcp")
-                    fw_note = (f" Firewall: {new_port} kept tailnet-only." if _fw_ok
-                               else f" Firewall rule for {new_port} could not be removed ({_fw_msg}).")
-                if new_port != cur_port:
-                    _old_ok, _old_msg = remote_ufw_close_port(local, cur_port, "tcp")
-                    fw_note += (f" Removed the old rule for {cur_port}." if _old_ok
-                                else f" The old rule for {cur_port} is still there ({_old_msg}).")
-            except Exception:
-                app.logger.warning("change-port: firewall update failed", exc_info=True)
+        fw_note = _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port)
 
         # Keep the fail2ban panel-login jail pointed at the new port so brute-force protection
         # follows the move. Idempotent + best-effort; a no-op if the jail isn't set up.
@@ -308,3 +257,87 @@ def register(app):
                         "new_bind": new_bind, "port_changed": new_port != cur_port,
                         "served_over_tailscale": bool(cfg.get("tailscale_setup_done")),
                         "message": f"Panel binding to {new_bind}:{new_port}. Restarting…{fw_note}"})
+
+
+def _port_refusal(local, cur_port, new_port):
+    """Why the panel must not listen on `new_port`, or None when it may."""
+    # ── Validate the port ──
+    # The bound now lives in _port_or (shared with the setup wizard, which writes the SAME
+    # config key and used to write it unchecked). Kept as an explicit branch so the refusal
+    # still carries its own message.
+    if new_port is None:
+        return "Pick a port between %d and %d." % (MIN_UNPRIVILEGED_PORT, MAX_PORT)
+    if new_port != cur_port:
+        clash = GameServer.query.filter_by(remote_id=local.id, port=new_port).first() if local else None
+        if clash:
+            return (f"Port {new_port} is used by game server "
+                    f"'{clash.name}'. Pick another.")
+        if so.port_in_use(new_port):
+            return f"Port {new_port} is already in use on this host."
+    return None
+
+
+def _bind_refusal(served, new_bind):
+    """Why the panel must not bind to `new_bind`, or None when it may.
+
+    `served` is whether Tailscale Serve is set up to proxy to the panel on localhost.
+    """
+    # nosec B104 - the set of wildcard addresses to RECOGNISE, so the code below
+    # can tell "listening everywhere" from loopback. Detecting a value is not
+    # binding to it.
+    wildcard = {"0.0.0.0", "::"}  # nosec B104
+    loopback = {"127.0.0.1", "::1", "localhost"}
+    # ── Validate the bind address ──
+    if new_bind not in wildcard:
+        try:
+            _ipaddress.ip_address(new_bind)
+        except ValueError:
+            return ("Bind address must be an IP — e.g. 0.0.0.0 (all "
+                    "interfaces), 127.0.0.1 (localhost), or this host's "
+                    "Tailscale IP.")
+        if new_bind not in loopback:
+            # A specific IP: with Tailscale Serve (which proxies to localhost) this would
+            # break Serve and lock you out; without Serve it must at least be a real local IP.
+            if served:
+                return ("Tailscale Serve reaches the panel on localhost, so "
+                        "bind to 0.0.0.0 (all) or 127.0.0.1 (localhost). A "
+                        "specific IP would break Serve and lock you out.")
+            if not so.host_has_ip(new_bind):
+                return (f"{new_bind} isn't an address on this host — the "
+                        "panel couldn't bind to it.")
+    if new_bind in loopback and not served:
+        return ("Binding to localhost only would lock you out unless "
+                "Tailscale Serve is set up to reach the panel. Set up "
+                "Serve first.")
+    return None
+
+
+def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
+    """Open or close the panel's port for the new binding's exposure; returns the reply's note."""
+    # ── Bring the firewall in line with the resulting exposure ──
+    # Reached on its port (the wildcard, or the host's own public/LAN address) → the port must
+    # be open. Loopback/tailnet-bound → the public port rule isn't needed, so close it. A
+    # changed port also gets its old rule gone.
+    now_public = _panel_bind_is_public(new_bind)
+    fw_note = ""
+    if local:
+        # Each of these returns (ok, msg) and all three were called for effect, with fw_note
+        # assigned on the next line regardless — so the panel could restart onto a port the
+        # firewall does not allow having just said "Firewall: opened 5055.", on the one route
+        # whose docstring is "Refuses anything that would leave the panel unreachable".
+        try:
+            if now_public:
+                _fw_ok, _fw_msg = remote_ufw_open_port(local, new_port, "tcp", "LinuxGSM Panel")
+                fw_note = (f" Firewall: opened {new_port}." if _fw_ok
+                           else f" FIREWALL NOT UPDATED — port {new_port} may be blocked ({_fw_msg}).")
+            else:
+                _fw_ok, _fw_msg = remote_ufw_close_port(local, new_port, "tcp")
+                fw_note = (f" Firewall: {new_port} kept tailnet-only." if _fw_ok
+                           else f" Firewall rule for {new_port} could not be removed ({_fw_msg}).")
+            if new_port != cur_port:
+                _old_ok, _old_msg = remote_ufw_close_port(local, cur_port, "tcp")
+                fw_note += (f" Removed the old rule for {cur_port}." if _old_ok
+                            else f" The old rule for {cur_port} is still there ({_old_msg}).")
+        except Exception:
+            app.logger.warning("change-port: firewall update failed", exc_info=True)
+    return fw_note

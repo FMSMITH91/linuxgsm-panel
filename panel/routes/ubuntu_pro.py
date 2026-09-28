@@ -11,6 +11,13 @@ from app import (_pro_status_cached)
 
 
 def register(app):
+    _register_pro_status(app)
+    _register_pro_changes(app)
+    _register_live_metrics(app)
+
+
+def _register_pro_status(app):
+    """Ubuntu Pro: the cached attach/service status of a host."""
     @app.route("/api/remote/<int:remote_id>/pro-status")
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -21,6 +28,9 @@ def register(app):
         except ConnectionError:
             return _unreachable("remote pro-status")
 
+
+def _register_pro_changes(app):
+    """Ubuntu Pro: attach, service toggles and detach."""
     @app.route("/api/remote/<int:remote_id>/pro-attach", methods=["POST"])
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -73,6 +83,9 @@ def register(app):
         log_action(current_user, "pro_detach", target=remote.name, success=ok)
         return jsonify({"success": ok, "message": msg})
 
+
+def _register_live_metrics(app):
+    """Realtime CPU and RAM for a host's live bars."""
     @app.route("/api/remote/<int:remote_id>/live")
     @login_required
     @permission_required(MANAGE_REMOTES)
