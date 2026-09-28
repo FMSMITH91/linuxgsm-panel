@@ -1129,23 +1129,32 @@ try:
 finally:
     _shutil.rmtree(_dbo_dir, ignore_errors=True)
 
+def _assign_names(node):
+    """The plain names an assignment binds, `A = ...` and `A, B = ...` alike."""
+    names = []
+    for _t2 in node.targets:
+        _elts = _t2.elts if isinstance(_t2, (_ast_scan.Tuple, _ast_scan.List)) else [_t2]
+        names.extend(_e.id for _e in _elts if isinstance(_e, _ast_scan.Name))
+    return names
+
+
+# Which statements bind a name at top level, and how to read it off each.
+_NAME_READERS = (
+    ((_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef, _ast_scan.ClassDef), lambda n: [n.name]),
+    (_ast_scan.Assign, _assign_names),
+    (_ast_scan.ImportFrom, lambda n: [_a.asname or _a.name for _a in n.names]),
+    (_ast_scan.Import, lambda n: [(_a.asname or _a.name).split(".")[0] for _a in n.names]),
+)
+
+
 def _stmt_names(node):
     """The names one simple top-level statement binds: a def or class, an assignment, an import.
 
     Anything else binds nothing here; a try or an if is walked by _body_names instead.
     """
-    if isinstance(node, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef, _ast_scan.ClassDef)):
-        return [node.name]
-    if isinstance(node, _ast_scan.Assign):
-        names = []
-        for _t2 in node.targets:
-            _elts = _t2.elts if isinstance(_t2, (_ast_scan.Tuple, _ast_scan.List)) else [_t2]
-            names.extend(_e.id for _e in _elts if isinstance(_e, _ast_scan.Name))
-        return names
-    if isinstance(node, _ast_scan.ImportFrom):
-        return [_a.asname or _a.name for _a in node.names]
-    if isinstance(node, _ast_scan.Import):
-        return [(_a.asname or _a.name).split(".")[0] for _a in node.names]
+    for _types, _read in _NAME_READERS:
+        if isinstance(node, _types):
+            return _read(node)
     return []
 
 
