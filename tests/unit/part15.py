@@ -10,6 +10,8 @@ instants. A stub cannot tell a committer date from an author date, or UTC from l
 local timezone is moved far east and far west of UTC while the checks run, and a control check
 proves each move took effect: a timezone that silently did not apply would pass the very bug these
 checks are for.
+
+As the last part, it also ends the run with a look for threads left running that can reach a host.
 """
 import os
 import shutil
@@ -266,3 +268,63 @@ finally:
             os.environ[_cv_k] = _cv_val
     _time15.tzset()
     shutil.rmtree(_CV_SB, ignore_errors=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# The last part's last checks: nothing left running that can reach a host
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# register_routes() (which create_app() calls) starts the supervised tickers — install-reconcile,
+# the priority keeper, backups, the due-action sweep — and they never exit. Run with the real
+# threading module, they would outlive the check that started them, and every pass for the rest of
+# the process would read whatever a LATER check had stubbed, and reach the DB and SSH from the
+# middle of it. A system_ops worker is the same hazard with a privileged verb at its end. So the
+# suite records those threads instead of starting them (part12, part13, part03), and this is what
+# holds it to that. Here, not in an earlier part, because a thread has to be looked for after every
+# part that could have started one has run.
+import threading as _thr15  # noqa: E402
+
+
+def _live_threads15(match, grace=5.0):
+    """Name the live threads whose target `match(module, qualname)` accepts, after up to `grace`s.
+
+    The grace is for a worker finishing just as the run ends. A ticker never finishes, and the
+    reboot worker this was written for slept for five minutes.
+    """
+    end = _time15.monotonic() + grace
+    while True:
+        found = []
+        for th in _thr15.enumerate():
+            fn = getattr(th, "_target", None)
+            mod, qual = getattr(fn, "__module__", None) or "", getattr(fn, "__qualname__", "")
+            if fn is not None and match(mod, qual):
+                found.append("%s -> %s.%s" % (th.name, mod, qual))
+        if not found or _time15.monotonic() >= end:
+            return found
+        _time15.sleep(0.1)
+
+
+def _reaches_host15(mod, _qual):
+    """Tell whether a thread's target is app.py's background code or a panel.ops worker."""
+    return mod == "app" or mod.startswith("panel.ops.")
+
+
+_THR15_HOLD = _thr15.Event()
+
+
+def _thr15_probe():
+    """Block until released: the live thread the positive control below must find."""
+    _THR15_HOLD.wait(10)
+
+
+# Positive control: the lookup sees a live thread's target in this process (under eventlet, whose
+# green threads are what threading.Thread starts here), so an empty answer below means none ran.
+_thr15_t = _thr15.Thread(target=_thr15_probe, daemon=True)
+_thr15_t.start()
+_thr15_seen = _live_threads15(lambda mod, qual: qual == "_thr15_probe", grace=0)
+_THR15_HOLD.set()
+_thr15_t.join(5)
+check("threads: the end-of-run lookup finds a live thread by its target (a probe started here)",
+      len(_thr15_seen) == 1, repr(_thr15_seen))
+_thr15_left = _live_threads15(_reaches_host15)
+check("threads: no app.py ticker or panel.ops worker is still running when the unit run ends",
+      not _thr15_left, "still running: %s" % _thr15_left)

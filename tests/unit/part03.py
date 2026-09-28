@@ -2663,9 +2663,17 @@ def _so_stub(**kw):
 #    passwordless sudo: to undo the hardening install.sh had just applied. Every other privileged
 #    path in the module already branches on the helper.
 _so_calls = []
+# The workers these calls start are RECORDED here, not run: the checks below read only what each
+# call returns, and a worker that was started outlived the stubs. server_reboot(99999) left one
+# asleep for the clamped 300s, set to call the REAL _run_verb("reboot") — the stubs long since put
+# back — in any unit run that lasted that long; a slow CI runner, or a loaded machine, is one.
+_so_workers = []
+_so_threads = NS(Thread=lambda target=None, daemon=None: NS(
+    start=lambda: _so_workers.append(target.__name__)))
 SO._SUDO_PROBE.update(at=0.0, ok=None)
 SO._HELPER_STATE["present"] = True
-with _so_stub(_run=lambda c, **k: (_so_calls.append(c), ("NOPASS", "", 0))[1],
+with _so_stub(threading=_so_threads,
+              _run=lambda c, **k: (_so_calls.append(c), ("NOPASS", "", 0))[1],
               _run_verb=lambda v, a=(), **k: (_so_calls.append(v), ("", "", 0))[1]):
     check("system_ops: the OS update works under the NARROW sudoers grant (helper, not sudo -n true)",
           SO.os_run_update()[0] is True, str(SO.os_run_update()))
@@ -2680,6 +2688,8 @@ with _so_stub(_run=lambda c, **k: (_so_calls.append(c), ("NOPASS", "", 0))[1],
     check("system_ops: ...and an absurd one is clamped rather than slept on",
           SO.server_reboot(99999) == (True, "Server will reboot in 300 seconds."),
           str(SO.server_reboot(99999)))
+check("system_ops: the update and reboot workers those calls start were recorded, none left running",
+      sorted(set(_so_workers)) == ["_bg_update", "_do_reboot"], repr(_so_workers))
 # ...and with no helper and no sudo it still refuses, which is the whole point of the gate.
 SO._HELPER_STATE["present"] = False
 SO._SUDO_PROBE.update(at=0.0, ok=None)
