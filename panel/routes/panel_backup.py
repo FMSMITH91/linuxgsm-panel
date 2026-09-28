@@ -23,115 +23,221 @@ from panel.routes._shared import (_button_backup_running, _marked_backup, _recor
     _record_game_clock)
 
 
-def register(app):
-    def _run_full_backup(force=False, defer=False):
-        """Run LinuxGSM's backup for every installed game server (space-heavy), pruning each to
-        the configured keep-count. Records a one-line outcome. Background; only one at a time.
+class _FullBackupTally:
+    """What a full backup run did, server by server, and the one-line summary it records."""
 
-        force=True   → back up even servers with players (disconnects them).
-        defer=True   → back up empty servers now; QUEUE busy ones (backup_pending) so the hourly
-                       ticker backs them up automatically once they empty.
-        Neither      → back up empty servers, skip busy ones (no queue).
+    def __init__(self):
+        """Start a run with nothing backed up, failed, skipped, queued or in flight."""
+        self.ok_n = self.fail_n = self.skip_n = 0
+        self.failures = []      # every failure, for the recorded summary
+        self.alertable = []     # the subset whose servers aren't muted by a tag, for the alert
+        self.queued = []
+        self.in_flight = []     # already being archived by the maintenance menu's Backup button
+        self.keep_unread = False   # config.json unreadable: pruned to the maximum, not the setting
 
-        _trigger_full_backup hands the lock over ALREADY HELD; the finally below releases it. It
-        used to acquire here and return silently when it lost, which is the losing half of the
-        race described there."""
+    def failed(self, gs, text):
+        """Count a failure; it is alertable unless the server's tags mute its alerts."""
+        self.fail_n += 1
+        self.failures.append(text)
+        if not notifications.alerts_muted(gs):
+            self.alertable.append(self.failures[-1])
+
+    def summary(self):
+        """Return the one-line outcome recorded as the full backup's "Last run"."""
+        summary = "%d server(s) backed up%s%s" % (
+            self.ok_n,
+            (", %d failed" % self.fail_n) if self.fail_n else "",
+            (", %d skipped (players online)" % self.skip_n) if self.skip_n else "")
+        if self.failures:
+            summary += " — " + "; ".join(self.failures)
+        if self.queued:
+            summary += " — will back up once empty: " + ", ".join(self.queued)
+        if self.in_flight:
+            summary += " — already being backed up from the server page: " + ", ".join(self.in_flight)
+        if self.keep_unread:
+            summary += (" — config.json could not be read, so old backups were kept up to "
+                        "the maximum (%d) rather than pruned to each server's setting"
+                        % bk.MAX_FULL_KEEP)
+        return summary
+
+
+def _full_backup_server(gs, force, defer, tally):
+    """Back up one server as part of a full run, recording the outcome in `tally`."""
+    # game_prune_keep, not get_game_schedule: with config.json unreadable the
+    # latter answers the default keep, and the prune deleted past the server's
+    # own retention.
+    _keep, _keep_read = bk.game_prune_keep(gs.id)
+    tally.keep_unread = tally.keep_unread or not _keep_read
+    # Marked RUNNING while it runs, like the two tickers: _run_due_restarts
+    # (its own thread) reads that flag to keep its hands off a server a
+    # backup has just stopped to archive, and this run set nothing.
+    ok, reason, was_skipped = _marked_backup(
+        gs.id, gs.remote, gs.short_name, gs.lgsm_name, _keep,
+        game_type=gs.game_type, port=gs.port, force=force,
+        query_type=gs.query_type, runner=run_game_backup)
+    # ...and the outcome replaces the mark, which would otherwise hold the
+    # restart sweep off this server for good.
+    _game_backup_status[gs.id] = {
+        "running": False, "ok": (None if was_skipped else ok),
+        "busy": was_skipped,
+        "msg": (reason or ("Backed up" if ok else "failed")), "ts": time.time()}
+    if was_skipped:
+        tally.skip_n += 1
+        if defer:
+            gs.backup_pending = True   # ticker backs it up once it empties
+            db.session.commit()
+            tally.queued.append(gs.name)
+        return
+    if gs.backup_pending:          # this run satisfied any prior queue
+        gs.backup_pending = False
+        db.session.commit()
+    if ok:
+        tally.ok_n += 1
+    else:
+        tally.failed(gs, "%s: %s" % (gs.name, reason or "failed"))
+
+
+def _run_full_backup(app, force=False, defer=False):
+    """Run LinuxGSM's backup for every installed game server (space-heavy), pruning each.
+
+    Each is pruned to the configured keep-count. Records a one-line outcome. Background; only
+    one at a time.
+
+    force=True   → back up even servers with players (disconnects them).
+    defer=True   → back up empty servers now; QUEUE busy ones (backup_pending) so the hourly
+                   ticker backs them up automatically once they empty.
+    Neither      → back up empty servers, skip busy ones (no queue).
+
+    _trigger_full_backup hands the lock over ALREADY HELD; the finally below releases it. It
+    used to acquire here and return silently when it lost, which is the losing half of the
+    race described there.
+    """
+    try:
+        # The keep is resolved PER SERVER inside the loop below, not once out here. A server
+        # can carry its own retention override — the schedule route writes it,
+        # get_game_schedule resolves "its override where set, else the global default", the
+        # API and the disk projection in the UI both show it — and pruning is an unconditional
+        # `rm` of everything past `keep`. Reading the global value once meant a full backup
+        # deleted archives the operator had explicitly said to retain, on every server that
+        # had raised its own number. Only the scheduled ticker was getting this right.
+        tally = _FullBackupTally()
+        # Keep the whole run inside ONE app context: run_command touches the remote's ORM
+        # attributes, which would raise DetachedInstanceError once the session is gone.
+        with app.app_context():
+            servers = [gs for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
+            for gs in servers:
+                if _button_backup_running(gs.id):
+                    # That run holds no lock this one can see: run_game_backup would take its
+                    # backup.lock for an orphan once it is 5 minutes old and start a second
+                    # archive of the same files. It is being backed up; say so, move on.
+                    tally.in_flight.append(gs.name)
+                    continue
+                try:
+                    _full_backup_server(gs, force, defer, tally)
+                except Exception as e:
+                    tally.failed(gs, "%s: backup error (%s)" % (gs.name, type(e).__name__))
+                    app.logger.warning("full backup of %s failed", gs.name, exc_info=True)
+        summary = tally.summary()
+        # The recorded summary keeps EVERY failure (it is the operator's record); the alert
+        # carries only the servers whose tags haven't muted them, and is skipped entirely when
+        # every failure came from a muted server.
+        if tally.alertable:
+            notifications.notify("backup_failed", "Backup failed",
+                                 "%d server backup(s) failed: %s"
+                                 % (len(tally.alertable), "; ".join(tally.alertable)))
+        _record_full_clock(app, summary[:500])
+    except Exception:
+        app.logger.warning("full backup run failed", exc_info=True)
+        notifications.notify("backup_failed", "Backup run failed",
+                             "The panel backup run errored before completing.")
+    finally:
+        _full_backup_lock.release()
+
+
+def _fetch_backup_listings(app, servers):
+    """Each server's LinuxGSM backup list and each host's disk, fetched in PARALLEL.
+
+    Returns (gb_by_sid, disk_by_remote). A listing is None when the host could not be read.
+
+    One SSH per server (LinuxGSM backup list) + one per host (disk) — fetched in PARALLEL so
+    the page doesn't load in N sequential round trips; the aggregation touches no SSH.
+
+    The worker takes the remote and short_name it needs as ARGUMENTS rather than re-reading
+    them from the database. It used to open its own app_context and re-fetch the
+    GameServer by id — one query, plus a second when it touched g.remote — which is the
+    whole N+1. Both objects are fully loaded by the caller (joinedload), so the worker only
+    reads attributes already in memory: no session is touched from the thread, which is the
+    reason the re-fetch was there in the first place.
+    """
+    def _bk_list(item):
+        sid, remote, short = item
         try:
-            # The keep is resolved PER SERVER inside the loop below, not once out here. A server
-            # can carry its own retention override — the schedule route writes it,
-            # get_game_schedule resolves "its override where set, else the global default", the
-            # API and the disk projection in the UI both show it — and pruning is an unconditional
-            # `rm` of everything past `keep`. Reading the global value once meant a full backup
-            # deleted archives the operator had explicitly said to retain, on every server that
-            # had raised its own number. Only the scheduled ticker was getting this right.
-            ok_n = fail_n = skip_n = 0
-            failures = []      # every failure, for the recorded summary
-            alertable = []     # the subset whose servers aren't muted by a tag, for the alert
-            queued = []
-            in_flight = []     # already being archived by the maintenance menu's Backup button
-            keep_unread = False   # config.json unreadable: pruned to the maximum, not the setting
-            # Keep the whole run inside ONE app context: run_command touches the remote's ORM
-            # attributes, which would raise DetachedInstanceError once the session is gone.
-            with app.app_context():
-                servers = [gs for gs in GameServer.query.filter_by(installed=True).all() if gs.remote_id]
-                for gs in servers:
-                    if _button_backup_running(gs.id):
-                        # That run holds no lock this one can see: run_game_backup would take its
-                        # backup.lock for an orphan once it is 5 minutes old and start a second
-                        # archive of the same files. It is being backed up; say so, move on.
-                        in_flight.append(gs.name)
-                        continue
-                    try:
-                        # game_prune_keep, not get_game_schedule: with config.json unreadable the
-                        # latter answers the default keep, and the prune deleted past the server's
-                        # own retention.
-                        _keep, _keep_read = bk.game_prune_keep(gs.id)
-                        keep_unread = keep_unread or not _keep_read
-                        # Marked RUNNING while it runs, like the two tickers: _run_due_restarts
-                        # (its own thread) reads that flag to keep its hands off a server a
-                        # backup has just stopped to archive, and this run set nothing.
-                        ok, reason, was_skipped = _marked_backup(
-                            gs.id, gs.remote, gs.short_name, gs.lgsm_name, _keep,
-                            game_type=gs.game_type, port=gs.port, force=force,
-                            query_type=gs.query_type, runner=run_game_backup)
-                        # ...and the outcome replaces the mark, which would otherwise hold the
-                        # restart sweep off this server for good.
-                        _game_backup_status[gs.id] = {
-                            "running": False, "ok": (None if was_skipped else ok),
-                            "busy": was_skipped,
-                            "msg": (reason or ("Backed up" if ok else "failed")), "ts": time.time()}
-                        if was_skipped:
-                            skip_n += 1
-                            if defer:
-                                gs.backup_pending = True   # ticker backs it up once it empties
-                                db.session.commit()
-                                queued.append(gs.name)
-                        else:
-                            if gs.backup_pending:          # this run satisfied any prior queue
-                                gs.backup_pending = False
-                                db.session.commit()
-                            if ok:
-                                ok_n += 1
-                            else:
-                                fail_n += 1
-                                failures.append("%s: %s" % (gs.name, reason or "failed"))
-                                if not notifications.alerts_muted(gs):
-                                    alertable.append(failures[-1])
-                    except Exception as e:
-                        fail_n += 1
-                        failures.append("%s: backup error (%s)" % (gs.name, type(e).__name__))
-                        if not notifications.alerts_muted(gs):
-                            alertable.append(failures[-1])
-                        app.logger.warning("full backup of %s failed", gs.name, exc_info=True)
-            summary = "%d server(s) backed up%s%s" % (
-                ok_n,
-                (", %d failed" % fail_n) if fail_n else "",
-                (", %d skipped (players online)" % skip_n) if skip_n else "")
-            if failures:
-                summary += " — " + "; ".join(failures)
-            if queued:
-                summary += " — will back up once empty: " + ", ".join(queued)
-            if in_flight:
-                summary += " — already being backed up from the server page: " + ", ".join(in_flight)
-            if keep_unread:
-                summary += (" — config.json could not be read, so old backups were kept up to "
-                            "the maximum (%d) rather than pruned to each server's setting"
-                            % bk.MAX_FULL_KEEP)
-            # The recorded summary keeps EVERY failure (it is the operator's record); the alert
-            # carries only the servers whose tags haven't muted them, and is skipped entirely when
-            # every failure came from a muted server.
-            if alertable:
-                notifications.notify("backup_failed", "Backup failed",
-                                     "%d server backup(s) failed: %s"
-                                     % (len(alertable), "; ".join(alertable)))
-            _record_full_clock(app, summary[:500])
+            return sid, list_game_backups(remote, short)
         except Exception:
-            app.logger.warning("full backup run failed", exc_info=True)
-            notifications.notify("backup_failed", "Backup run failed",
-                                 "The panel backup run errored before completing.")
-        finally:
-            _full_backup_lock.release()
+            return sid, None        # could not read — NOT "this server has none"
 
+    def _bk_disk(item):
+        rid, short = item
+        with app.app_context():
+            r = db.session.get(RemoteServer, rid)
+            try:
+                return rid, (backup_disk_info(r, short) if r else {"free": 0, "total": 0})
+            except Exception:
+                return rid, {"free": 0, "total": 0}
+
+    disk_by_remote = {}   # remote_id -> {free,total}; computed once per host
+    gb_by_sid, remote_short = {}, {}
+    for g in servers:
+        remote_short.setdefault(g.remote_id, g.short_name)
+    if servers:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(servers))) as ex:
+            for sid, gb in ex.map(_bk_list, [(g.id, g.remote, g.short_name) for g in servers]):
+                gb_by_sid[sid] = gb
+    if remote_short:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(remote_short))) as ex:
+            for rid, di in ex.map(_bk_disk, list(remote_short.items())):
+                disk_by_remote[rid] = di
+    return gb_by_sid, disk_by_remote
+
+
+def _game_backup_row(gs, gb, hdisk):
+    """One server's row on the all-servers Backups page, and the bytes its finished backups hold.
+
+    `gb` is its listing (None when the host could not be read) and `hdisk` its host's disk.
+    Returns (row, done_bytes); the row's est_backup is its largest finished backup.
+    """
+    gb_unreadable = gb is None
+    gb = gb or []
+    # A backup being written right now is partial — don't count it toward totals or the
+    # next-size estimate (it would read as a too-small worst case).
+    done = [b for b in gb if not b.get("in_progress")]
+    done_bytes = sum(b.get("size", 0) for b in done)
+    _est_one = max((b.get("size", 0) for b in done), default=0)  # largest = worst case
+    rem = gs.remote
+    host_label = "This host" if getattr(rem, "is_local", False) else (rem.name or rem.host or "remote")
+    return {"id": gs.id, "name": gs.name, "backups": gb,
+            "backups_unreadable": gb_unreadable,
+            "status": _game_backup_status.get(gs.id),
+            "schedule": bk.get_game_schedule(gs.id),
+            "host": host_label,
+            "est_backup": _est_one,  # largest existing backup = worst-case next size
+            "disk": {"free": hdisk["free"], "total": hdisk["total"]}}, done_bytes
+
+
+def register(app):
+    """Register the game-server and panel backup routes, and the panel host's OS maintenance."""
+    _register_full_backup(app)
+    _register_game_backup(app)
+    _register_game_backup_files(app)
+    _register_game_backup_settings(app)
+    _register_backup_overview(app)
+    _register_panel_backups(app)
+    _register_panel_diagnostics(app)
+    _register_panel_host_os(app)
+
+
+def _register_full_backup(app):
+    """Full backup of every installed server: the players precheck and the start."""
     def _trigger_full_backup(force=False, defer=False):
         # Acquire HERE, atomically, and hand the held lock to the worker — the shape
         # api_panel_backup_game below and both runners in _shared.py already use. A `locked()`
@@ -144,7 +250,7 @@ def register(app):
         if not _full_backup_lock.acquire(blocking=False):
             return False
         try:
-            threading.Thread(target=lambda: _run_full_backup(force=force, defer=defer),
+            threading.Thread(target=lambda: _run_full_backup(app, force=force, defer=defer),
                              daemon=True).start()
         except Exception:
             # The hand-off never happened, so nothing will release it — a leaked lock wedges every
@@ -160,8 +266,11 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_backup_full_precheck():
-        """Report which installed servers have players connected right now, so the UI can ask
-        whether to disconnect them, wait until they're empty, or cancel before a full backup."""
+        """Report which installed servers have players connected right now.
+
+        The UI uses it to ask whether to disconnect them, wait until they're empty, or cancel
+        before a full backup.
+        """
         # Use the last poll's cached counts (instant) rather than an SSH gamedig call per server: this
         # is only a UI courtesy prompt, and the backup itself re-checks each server live and skips any
         # that are busy — so a slightly stale hint here can't disconnect anyone by mistake.
@@ -181,8 +290,10 @@ def register(app):
     @superadmin_required
     def api_panel_backup_full():
         """Kick off a full (game-file) backup of all installed servers in the background.
+
         mode: 'now' → back up even busy servers (disconnects players); 'wait' → back up empty
-        servers now and queue busy ones to back up once they empty; '' → skip busy servers."""
+        servers now and queue busy ones to back up once they empty; '' → skip busy servers.
+        """
         mode = _json_str(_json_body(), "mode")
         force = (mode == "now")
         defer = (mode == "wait")
@@ -206,12 +317,18 @@ def register(app):
             msg = "Full backup started — this can take a while for large servers."
         return jsonify({"success": True, "running": True, "message": msg})
 
+
+def _register_game_backup(app):
+    """Back up one game server on demand, in the background."""
     @app.route("/api/panel/backup/game/<int:server_id>", methods=["POST"])
     @login_required
     @superadmin_required
     def api_panel_backup_game(server_id):
-        """Run LinuxGSM's backup for a single server on demand (background). Serialised with the
-        full backup via the same lock so game backups never overlap and thrash the disk."""
+        """Run LinuxGSM's backup for a single server on demand (background).
+
+        Serialised with the full backup via the same lock so game backups never overlap and thrash
+        the disk.
+        """
         gs = get_game(server_id)
         if not gs.installed or not gs.remote_id:
             return jsonify({"success": False, "message": "Server is not installed."}), 400
@@ -292,6 +409,9 @@ def register(app):
         threading.Thread(target=_worker, daemon=True).start()
 
 
+
+def _register_game_backup_files(app):
+    """One game server's backup archives: delete and download."""
     def _find_game_backup(gs, name):
         """(match, unreadable) for the archive called `name` on this server's host.
 
@@ -301,7 +421,8 @@ def register(app):
         version iterates it (`for b in list_game_backups(...)`), so both buttons in the Backups
         card raised TypeError on an unreachable host and answered a 500 whose body blamed the
         panel. Coercing it back to [] would restore the older, calmer lie — "Backup not found."
-        about a directory nobody reached. Same three states the /info route below keeps."""
+        about a directory nobody reached. Same three states the /info route below keeps.
+        """
         try:
             listing = list_game_backups(gs.remote, gs.short_name) if gs.remote_id else []
         except Exception:
@@ -344,8 +465,11 @@ def register(app):
     @login_required
     @superadmin_required
     def panel_backup_game_download(server_id):
-        """Stream a game-server backup archive to the browser (files live in the game user's home,
-        so they're read via sudo/SSH rather than served from disk)."""
+        """Stream a game-server backup archive to the browser.
+
+        The files live in the game user's home, so they're read via sudo/SSH rather than served
+        from disk.
+        """
         gs = get_game(server_id)
         match, unreadable = _find_game_backup(gs, request.args.get("name") or "")
         if unreadable:
@@ -371,13 +495,19 @@ def register(app):
         resp.headers["Content-Disposition"] = _attachment_header(match["name"])
         return resp
 
+
+def _register_game_backup_settings(app):
+    """One game server's backup schedule and its backup picture."""
     @app.route("/api/panel/backup/game/<int:server_id>/schedule", methods=["POST"])
     @login_required
     @superadmin_required
     def api_panel_backup_game_schedule(server_id):
-        """Set one server's backup schedule. `interval` and `keep` are each a number to override,
-        or "default" (or "") to inherit the global schedule. A field LEFT OUT of the body is left
-        as it is, so a client changing one of the two cannot clear the other by accident."""
+        """Set one server's backup schedule.
+
+        `interval` and `keep` are each a number to override, or "default" (or "") to inherit the
+        global schedule. A field LEFT OUT of the body is left as it is, so a client changing one of
+        the two cannot clear the other by accident.
+        """
         gs = get_game(server_id)
         data = _json_body()
 
@@ -408,10 +538,13 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_backup_game_info(server_id):
-        """One server's backup picture for its Files & Config tab: its schedule (plus the global
-        default it may inherit), its existing LinuxGSM backups, host disk headroom, and the live
-        status of any in-flight backup. Single-server on purpose — opening the tab must not scan
-        every host the way the all-servers /api/panel/backups does."""
+        """One server's backup picture for its Files & Config tab.
+
+        That is its schedule (plus the global default it may inherit), its existing LinuxGSM
+        backups, host disk headroom, and the live status of any in-flight backup. Single-server on
+        purpose — opening the tab must not scan every host the way the all-servers
+        /api/panel/backups does.
+        """
         gs = get_game(server_id)
         try:
             backups = list_game_backups(gs.remote, gs.short_name) if gs.remote_id else []
@@ -440,78 +573,35 @@ def register(app):
             "status": _game_backup_status.get(gs.id),
         })
 
+
+def _register_backup_overview(app):
+    """Register the all-servers Backups page's data."""
     @app.route("/api/panel/backups")
     @login_required
     @superadmin_required
     def api_panel_backups():
-        """List panel backups + retention settings, plus full (game-file) backup settings/status
-        and each installed game server's LinuxGSM backups."""
+        """List panel backups + retention settings, and every game server's backups.
+
+        That is: the panel's own backups and retention settings, plus full (game-file) backup
+        settings/status and each installed game server's LinuxGSM backups.
+        """
         try:
             games = []
             backup_bytes = 0   # total size of all existing game backups
             est_cycle = 0      # estimated size of ONE full backup run (all servers), from newest each
-            disk_by_remote = {}   # remote_id -> {free,total}; computed once per host
-            # joinedload the remote: the worker below needs it, and letting each worker lazy-load
+            # joinedload the remote: the listing worker needs it, and letting each worker lazy-load
             # its own cost one SELECT per server on top of the one it already did to re-fetch the
             # server. At 300 servers that was 644 queries for this endpoint; it is now host-bounded.
             servers = [g for g in GameServer.query.options(joinedload(GameServer.remote))
                        .filter_by(installed=True).all() if g.remote_id]
-            # One SSH per server (LinuxGSM backup list) + one per host (disk) — fetched in PARALLEL so
-            # the page doesn't load in N sequential round trips; the aggregation below touches no SSH.
-            #
-            # The worker takes the remote and short_name it needs as ARGUMENTS rather than re-reading
-            # them from the database. It used to open its own app_context and re-fetch the
-            # GameServer by id — one query, plus a second when it touched g.remote — which is the
-            # whole N+1. Both objects are fully loaded above (joinedload), so the worker only reads
-            # attributes already in memory: no session is touched from the thread, which is the
-            # reason the re-fetch was there in the first place.
-            def _bk_list(item):
-                sid, remote, short = item
-                try:
-                    return sid, list_game_backups(remote, short)
-                except Exception:
-                    return sid, None        # could not read — NOT "this server has none"
-
-            def _bk_disk(item):
-                rid, short = item
-                with app.app_context():
-                    r = db.session.get(RemoteServer, rid)
-                    try:
-                        return rid, (backup_disk_info(r, short) if r else {"free": 0, "total": 0})
-                    except Exception:
-                        return rid, {"free": 0, "total": 0}
-
-            gb_by_sid, remote_short = {}, {}
-            for g in servers:
-                remote_short.setdefault(g.remote_id, g.short_name)
-            if servers:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(servers))) as ex:
-                    for sid, gb in ex.map(_bk_list, [(g.id, g.remote, g.short_name) for g in servers]):
-                        gb_by_sid[sid] = gb
-            if remote_short:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(remote_short))) as ex:
-                    for rid, di in ex.map(_bk_disk, list(remote_short.items())):
-                        disk_by_remote[rid] = di
+            # One SSH per server + one per host, in parallel — see _fetch_backup_listings.
+            gb_by_sid, disk_by_remote = _fetch_backup_listings(app, servers)
             for gs in servers:
-                gb = gb_by_sid.get(gs.id)
-                gb_unreadable = gb is None
-                gb = gb or []
-                # A backup being written right now is partial — don't count it toward totals or the
-                # next-size estimate (it would read as a too-small worst case).
-                done = [b for b in gb if not b.get("in_progress")]
-                backup_bytes += sum(b.get("size", 0) for b in done)
-                _est_one = max((b.get("size", 0) for b in done), default=0)  # largest = worst case
-                est_cycle += _est_one
                 hdisk = disk_by_remote.get(gs.remote_id, {"free": 0, "total": 0})
-                rem = gs.remote
-                host_label = "This host" if getattr(rem, "is_local", False) else (rem.name or rem.host or "remote")
-                games.append({"id": gs.id, "name": gs.name, "backups": gb,
-                              "backups_unreadable": gb_unreadable,
-                              "status": _game_backup_status.get(gs.id),
-                              "schedule": bk.get_game_schedule(gs.id),
-                              "host": host_label,
-                              "est_backup": _est_one,  # largest existing backup = worst-case next size
-                              "disk": {"free": hdisk["free"], "total": hdisk["total"]}})
+                row, done_bytes = _game_backup_row(gs, gb_by_sid.get(gs.id), hdisk)
+                backup_bytes += done_bytes
+                est_cycle += row["est_backup"]
+                games.append(row)
             # Top-line disk uses the first host (kept for the summary); per-server disk is authoritative.
             first = next(iter(disk_by_remote.values()), {"free": 0, "total": 0})
             return jsonify({"backups": bk.list_backups(), "settings": bk.get_settings(),
@@ -526,6 +616,9 @@ def register(app):
         except Exception:
             return jsonify({"error": _log_and_generic("list backups failed")}), 200
 
+
+def _register_panel_backups(app):
+    """Register the panel's own backups: create, delete, restore, download and settings."""
     @app.route("/api/panel/backup", methods=["POST"])
     @login_required
     @superadmin_required
@@ -554,8 +647,11 @@ def register(app):
     @login_required
     @superadmin_required
     def api_panel_backup_restore():
-        """Restore a backup (destructive — takes a pre-restore safety backup, then swaps the
-        data into place and restarts the panel)."""
+        """Restore a panel backup (destructive).
+
+        It takes a pre-restore safety backup, then swaps the data into place and restarts the
+        panel.
+        """
         _b = _json_body()
         name = _json_str(_b, "name")
         # Optional: only an encrypted archive needs it, and only when it was written under a
@@ -605,12 +701,17 @@ def register(app):
         log_action(current_user, "panel_backup_settings", target=LOCAL_HOST_LABEL, detail=str(s))
         return jsonify({"success": True, "settings": s, "full": full})
 
+
+def _register_panel_diagnostics(app):
+    """Register the diagnostic bundle, and the panel host's automatic security updates."""
     @app.route("/api/panel/debug-report")
     @login_required
     @superadmin_required
     def api_panel_debug_report():
-        """A shareable diagnostic bundle (whitelisted fields + redacted log) the operator
-        can attach to a GitHub issue. No secrets by construction."""
+        """A shareable diagnostic bundle the operator can attach to a GitHub issue.
+
+        Whitelisted fields + redacted log. No secrets by construction.
+        """
         try:
             return jsonify(so.generate_debug_report())
         except Exception:
@@ -639,6 +740,9 @@ def register(app):
             return jsonify({"success": False,
                             "message": _log_and_generic("enable auto-updates failed")}), 500
 
+
+def _register_panel_host_os(app):
+    """Register the panel host's OS updates and reboot."""
     @app.route("/api/server-management/os-update-check")
     @login_required
     @superadmin_required

@@ -1251,6 +1251,25 @@ try:
     _pb7.GameServer = _P7GameServer
     eq("panel_backup/list: a failure answers a generic error body, not a 500 page",
        (_bl.status_code, _bl.get_json()), (200, {"error": "Internal server error"}))
+    # One server's row on that page, driven directly. A backup still being WRITTEN is partial, so
+    # it counts toward neither the bytes on disk nor the next-size estimate (the largest finished
+    # archive is the worst case) — counted, a 90 MB half-written tar reads as the size to plan for.
+    # Nothing drove this: counting in-progress archives passed every suite.
+    _gbr_bk = _pb7.bk
+    _pb7.bk = _Over(_pb7_saved["bk"], get_game_schedule=lambda sid: {"interval_days": 1, "keep": 3})
+    _gbr_row, _gbr_bytes = _pb7._game_backup_row(
+        _p7_gs(21, "rowtest"), [{"size": 5}, {"size": 90, "in_progress": True}, {"size": 7}],
+        {"free": 100, "total": 200})
+    check("panel_backup/list row: an archive still being written counts toward neither total nor estimate",
+          _gbr_bytes == 12 and _gbr_row["est_backup"] == 7 and _gbr_row["backups_unreadable"] is False
+          and len(_gbr_row["backups"]) == 3 and _gbr_row["host"] == "host"
+          and _gbr_row["disk"] == {"free": 100, "total": 200}
+          and _gbr_row["schedule"] == {"interval_days": 1, "keep": 3}, repr((_gbr_bytes, _gbr_row)))
+    _gbr_row, _gbr_bytes = _pb7._game_backup_row(_p7_gs(22, "unread"), None, {"free": 0, "total": 0})
+    check("panel_backup/list row: a listing that could not be read is flagged, not an empty list",
+          _gbr_row["backups_unreadable"] is True and _gbr_row["backups"] == [] and _gbr_bytes == 0
+          and _gbr_row["est_backup"] == 0, repr((_gbr_bytes, _gbr_row)))
+    _pb7.bk = _gbr_bk
     del _pb7_log[:]
     _pb7.bk = _Over(_pb7_saved["bk"], create_backup=lambda kind: (True, "panel-backup-x.tar.gz"))
     _bc1 = _pb7_c.post("/api/panel/backup").get_json()
