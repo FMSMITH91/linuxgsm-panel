@@ -5,9 +5,14 @@ README disclaimer. Versioning is loosely [semantic](https://semver.org). Note: t
 "update available" check compares git commits, so you always get the newest CI-verified commit
 regardless of this file — this changelog is for humans.
 
+<!-- Every release repeats the same Added / Changed / Fixed / Security headings, as Keep a
+     Changelog lays them out, so MD024 is asked only to keep two SIBLING headings apart. -->
+<!-- markdownlint-configure-file { "MD024": { "siblings_only": true } } -->
+
 ## [Unreleased]
 
 ### Added
+
 - **A terminal in the browser, for the panel's own host and for every remote.** xterm.js over the
   socket the console already uses. It needs a new "use terminal" permission (`use_terminal`) and
   access to the host; on the panel's own host it is superadmin-only whatever the grants say, because
@@ -144,6 +149,7 @@ regardless of this file — this changelog is for humans.
   on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
 
 ### Changed
+
 - **Deleting a host says what stays on it.** The delete makes the panel forget the host and never
   connects to it, so gamedig (`/usr/local/lib/linuxgsm-panel/gamedig` and its two links) and the
   weekly root cron that re-runs its install script (`/etc/cron.d/lgsm-node-tools`) stay there,
@@ -1398,6 +1404,7 @@ Two months of work that had accumulated on `main` unreleased. The headline items
 visibility, Ubuntu 26.04 support, a mobile pass, and a run of security fixes.
 
 ### Added
+
 - **OS updates, surfaced in the panel** — a login banner listing hosts with packages waiting, and a
   per-host card filled from the daily sweep's answer rather than by running `apt` on page load.
   Security updates are called out separately from ordinary ones.
@@ -1412,6 +1419,7 @@ visibility, Ubuntu 26.04 support, a mobile pass, and a run of security fixes.
   without offering a way to do it, plus its missing History tab.
 
 ### Changed
+
 - **The mobile layout reclaims most of the first screen.** Measured at 375x812, page content used to
   begin below the fold; the two-factor reminder alone took 30% of the viewport. It is now a single
   strip, the server table's action buttons stay pinned in view instead of sitting off-screen behind
@@ -1427,6 +1435,7 @@ visibility, Ubuntu 26.04 support, a mobile pass, and a run of security fixes.
 - The **users page renders one edit modal** rather than one per user.
 
 ### Fixed
+
 - **The OS-update alert never actually ran.** It was the one database-touching background task
   without a Flask app context, so every tick raised and was swallowed at debug level.
 - **A failed `apt` check no longer reads as "System is up to date."** apt produces no output when it
@@ -1439,6 +1448,7 @@ visibility, Ubuntu 26.04 support, a mobile pass, and a run of security fixes.
 - Console output rendering: Minecraft commands no longer display as `ssasay  hi` or `>=>`.
 
 ### Security
+
 - **Cross-site scripting from a compromised remote host.** A host's own output — its Tailscale login
   URL and IP — was rendered into the panel admin's browser unescaped in several places.
 - **Symlink escape in the file browser.** The path check was lexical and could not see symlinks,
@@ -1465,6 +1475,7 @@ visibility, Ubuntu 26.04 support, a mobile pass, and a run of security fixes.
 ## [0.9.0-alpha] — 2026-07-13
 
 ### Added
+
 - **Per-device session management** — the account page now lists every device/browser signed in to
   your account (device, IP, last-active) and lets you revoke them **individually**, not just all at
   once. Logging out now signs out only the current device; "Sign out everywhere" still clears them all.
@@ -1485,6 +1496,7 @@ visibility, Ubuntu 26.04 support, a mobile pass, and a run of security fixes.
 - **"Jail" column** on the login-security top-offenders table.
 
 ### Changed
+
 - **Every scheduled task is now editable and deletable**, including the LinuxGSM/panel-installed ones.
 - **Mods merged into a single Install/Remove list**; installing a mod no longer auto-restarts the
   server — you're prompted to restart when ready.
@@ -1497,6 +1509,7 @@ visibility, Ubuntu 26.04 support, a mobile pass, and a run of security fixes.
 - **Account page** — two-column layout on desktop; the API-access (personal token) card was removed.
 
 ### Fixed
+
 - **PaperMC / Velocity / Waterfall** now report player count + max (queried via gamedig on the real port).
 - **Minecraft/Paper console** no longer shows terminal control-code noise (JLine ANSI + prompt lines).
 - **Sidebar active-state** is correct under a URL mount prefix (e.g. `/lgsm` via Tailscale Serve).
@@ -1511,6 +1524,7 @@ First tracked release. The `VERSION` file had drifted from the git tags (last ta
 so this re-baselines it and starts the changelog. Notable changes since then:
 
 ### Added
+
 - **Telegram command bot** — drive the panel from Telegram: `/update`, `/status`, `/servers`,
   `/hosts`, `/players <name>`, and `/start` / `/stop` / `/restart <name>`, with a `/` autocomplete
   menu. Opt-in and locked to the configured chat.
@@ -1527,6 +1541,7 @@ so this re-baselines it and starts the changelog. Notable changes since then:
 - REST **API tokens** (Bearer auth).
 
 ### Changed
+
 - **Auto-block** now firewalls IPs by failed-attempt count over a rolling 7-day window (not a fixed
   top-20), and pushes the whitelist into remote hosts' fail2ban too.
 - **Installs and bootstraps no longer reboot a host that has running game servers** — they reboot
@@ -1536,6 +1551,7 @@ so this re-baselines it and starts the changelog. Notable changes since then:
 - README rewritten and shortened.
 
 ### Fixed
+
 - A failed gamedig query now reads as **unknown**, not a bogus `0` players.
 - Server controls are disabled while a server is installing or uninstalling.
 - Cleared the CodeQL full-SSRF finding on the Discord webhook sink (constant host + validated
