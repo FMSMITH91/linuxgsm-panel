@@ -2924,6 +2924,14 @@ try:
                 _d = db.session.get(User, _nou_id)
                 if _d:
                     db.session.delete(_d); db.session.commit()
+        # A GMod install with content has NINE steps, and the row reads the job's own total. A
+        # fixed 8 (in _install_row since api_installs was split) left every suite green, because
+        # the probe above is an 8-step job — and it draws a 9-step install's bar past its end.
+        with _il:
+            _ij[gs_id]["total"] = 9
+        _row9 = ((c.get("/api/installs").get_json() or {}).get("installs") or [{}])[0]
+        check("installs: ...the total and the percentage are the job's own (a 9-step install)",
+              _row9.get("total") == 9 and _row9.get("percent") == 33, _row9)
         # A finished job is not an install in progress — the widget settles those through the
         # per-server endpoint, and leaving them here would pin a card open forever.
         with _il:
@@ -2933,6 +2941,41 @@ try:
     finally:
         with _il:
             _ij.pop(gs_id, None)
+
+    # ── install-status: a row whose job was lost is settled by asking the host ──────────────────
+    # A row left "installing" with no job behind it (the worker died with a panel restart) is put
+    # to the host: files there -> installed, offline; clearly not -> failed; no answer -> nothing
+    # written. None of the three had a test: marking a verified install NOT installed (in
+    # _reconcile_lost_install since api_server_install_status was split) left every suite green.
+    import panel.routes.api as _rl_api
+    _rl_saved = _rl_api._looks_installed
+    with app.app_context():
+        _rl_row = db.session.get(GameServer, gs_id)
+        _rl_before = (_rl_row.status, _rl_row.installed)
+    _rl_seen = {}
+    try:
+        for _rl_verdict in (True, False, None):
+            with app.app_context():
+                _rl_row = db.session.get(GameServer, gs_id)
+                _rl_row.status, _rl_row.installed = "installing", False
+                db.session.commit()
+            _rl_api._looks_installed = lambda *a, _v=_rl_verdict, **k: _v
+            _rl_js = c.get("/api/server/%d/install-status" % gs_id).get_json() or {}
+            with app.app_context():
+                _rl_row = db.session.get(GameServer, gs_id)
+                _rl_seen[_rl_verdict] = (_rl_js.get("status"), _rl_row.status, _rl_row.installed)
+    finally:
+        _rl_api._looks_installed = _rl_saved
+        with app.app_context():
+            _rl_row = db.session.get(GameServer, gs_id)
+            _rl_row.status, _rl_row.installed = _rl_before
+            db.session.commit()
+    check("install-status: a lost job whose files ARE on the host is settled installed, offline",
+          _rl_seen.get(True) == ("done", "offline", True), repr(_rl_seen))
+    check("install-status: ...one the host says is NOT there is failed, and says so",
+          _rl_seen.get(False) == ("failed", "failed", False), repr(_rl_seen))
+    check("install-status: ...and one the host would not answer for is left as it was",
+          _rl_seen.get(None) == ("interrupted", "installing", False), repr(_rl_seen))
 
 
     # ── Cookie-reuse defense: a session/remember cookie captured before logout must
