@@ -471,12 +471,28 @@ def _lgsm_maintenance_running(remote, gs):
         return False
 
 
+_DIGIT_RUN_RE = re.compile(r"\d+")
+
+
+def _first_percent(text):
+    r"""Return the number in front of the first '%' that has digits before it, or None.
+
+    What `re.search(r"(\d+)%", text)` found. That search restarted `\d+` at every digit of a
+    run with no '%' after it and walked the rest of the run each time: quadratic in the run. Each
+    run is read once here, and the first one a '%' follows is the one the search stopped at.
+    """
+    text = text or ""
+    for run in _DIGIT_RUN_RE.finditer(text):
+        if text.startswith("%", run.end()):
+            return int(run.group())
+    return None
+
+
 def _host_disk_pct(remote):
     """Root-filesystem usage percent for a host (int), or None. Cheap df, best-effort."""
     try:
         out, _, _ = run_command(remote, "df -P / | awk 'NR==2{print $5}'", timeout=10)
-        m = re.search(r"(\d+)%", out or "")
-        return int(m.group(1)) if m else None
+        return _first_percent(out)
     except Exception:
         return None
 

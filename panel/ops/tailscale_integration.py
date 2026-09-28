@@ -262,6 +262,30 @@ def _detect_magic_dns(info):
             _log.debug("name doesn't resolve → MagicDNS simply stays disabled", exc_info=True)
 
 
+_SERVE_URL_RE = re.compile(r"https?://\S+")
+
+
+def _serve_url_line(line):
+    r"""Return (url, parenthesised note or None) for a `serve status` URL line, else None.
+
+    `line` is already stripped. It answers what `^(https?://\S+)\s*(\(.*\))?$` answered. That
+    pattern, when the note failed, gave the URL back one character at a time and retried the note
+    at every '(' inside it, each retry reading to the end of the line: quadratic in a URL full of
+    '('. The note is "(" … ")" after the URL's blanks; failing that, the pattern ended the URL at
+    its last '(' (keeping a character of URL) when the line ends in ')', so that is kept too.
+    """
+    m = _SERVE_URL_RE.match(line)
+    if not m:
+        return None
+    note = line[m.end():].lstrip()
+    if not note:
+        return m.group(), None
+    if note.startswith("(") and note.endswith(")"):
+        return m.group(), note
+    cut = line.rfind("(", line.index("://") + 4, m.end()) if line.endswith(")") else -1
+    return (line[:cut], line[cut:]) if cut > 0 else None
+
+
 def _parse_serve_status(text):
     """Parse `tailscale serve status` output into a structured dict."""
     result = {"services": [], "raw": text}
@@ -275,14 +299,14 @@ def _parse_serve_status(text):
             continue
 
         # Match URL line
-        url_match = re.match(r'^(https?://\S+)\s*(\(.*\))?$', stripped)
-        if url_match:
+        url_line = _serve_url_line(stripped)
+        if url_line:
             _append_service(result["services"], current_url, current_funnel, current_routes)
-            current_url = url_match.group(1).rstrip(".")
+            current_url = url_line[0].rstrip(".")
             # Tailscale prints "(Funnel on)" or "(tailnet only)" after the URL, with a CAPITAL F.
             # This compared case-sensitively against "funnel", so it was always False, and the page
             # called a panel that was on the public internet "private - tailnet only".
-            current_funnel = "funnel on" in (url_match.group(2) or "").lower()
+            current_funnel = "funnel on" in (url_line[1] or "").lower()
             current_routes = []
             continue
 
@@ -369,7 +393,9 @@ def check_peer_reachability(host) -> dict:
         return {"reachable": False, "latency_ms": 0}
     host = str(host).strip()
     try:
-        r = subprocess.run(  # nosec B603 B607 - argv list, no shell; host passed valid_peer_host
+        # An argv list, no shell, and `host` passed valid_peer_host: its first character is a
+        # letter, a digit or '[', so ping never reads it as an option.
+        r = subprocess.run(  # nosec B603 B607  # NOSONAR - argv list; host passed valid_peer_host
             ["ping", "-c", "1", "-W", "3", host],
             capture_output=True, text=True, timeout=5,
         )
@@ -666,10 +692,10 @@ def _remove_serve_mappings(routes, mount):
 
 
 # A tailnet's MagicDNS name is <host>.<tailnet>.ts.net, and Tailscale's own IPv4 range is the
-# CGNAT block 100.64.0.0/10 (its IPv6 is fd7a:115c:a1e0::/48).
+# CGNAT block 100.64.0.0/10 (its IPv6 is fd7a:115c:a1e0::/48): system_ops._TAILNET_RANGES, the one
+# copy the firewall and fail2ban code read, rather than a second one here.
 _TS_DNS_RE = re.compile(r"\.ts\.net\Z", re.IGNORECASE)
-_TS_V4_NET = ipaddress.ip_network("100.64.0.0/10")
-_TS_V6_NET = ipaddress.ip_network("fd7a:115c:a1e0::/48")
+_TS_V4_NET, _TS_V6_NET = (ipaddress.ip_network(n) for n in _so._TAILNET_RANGES)
 
 
 def is_tailscale_ip(host):

@@ -31,7 +31,10 @@ _COMMON_CFG_KEYS = [
     ("serverpassword", "Server password"), ("rconpassword", "RCON password"),
     ("adminpassword", "Admin password"), ("steamuser", "Steam user"),
 ]
-_CFG_LINE_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+# The value is `(?:\S.*)?` rather than `.*`: after `\s*`, a `.*` that may also start on a blank
+# let the two split a run of blanks every possible way before failing, which is quadratic in the
+# run. Starting on a non-blank leaves one way, and the groups are the ones `\s*(.*)$` gave.
+_CFG_LINE_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*((?:\S.*)?)$")
 
 
 def _parse_cfg(text):
@@ -248,6 +251,26 @@ def _curated_cfg_settings(merged, defaults, instance, common):
     return settings
 
 
+def _cfg_section_title(line):
+    r"""Return the title of a `#### Section ####` header of _default.cfg, or None for any other line.
+
+    It answers what `^#{3,}\s+(.+?)\s+#{3,}\s*$` answered on the stripped line. That pattern
+    tried its closing `\s+#{3,}` at every character of the title, and a title holding a long run of
+    blanks made each try walk the run again: quadratic. Here the leading and trailing runs of '#'
+    are cut off and what lies between is read once. It has to open and close on a blank; the title
+    is it with the blanks trimmed, and when it is ONLY blanks (three or more), the old pattern's
+    answer was the one blank next to its last, which is kept rather than quietly changed.
+    """
+    s = line.strip()
+    body = s.lstrip("#")
+    lead = len(s) - len(body)
+    body = body.rstrip("#")
+    trail = len(s) - lead - len(body)
+    if lead < 3 or trail < 3 or len(body) < 3 or not (body[0].isspace() and body[-1].isspace()):
+        return None
+    return body.strip() or body[-2]
+
+
 def _grouped_cfg_settings(default_text, merged, defaults, instance, common):
     """EVERY setting, grouped by _default.cfg's "#### Section ####" headers.
 
@@ -256,9 +279,9 @@ def _grouped_cfg_settings(default_text, merged, defaults, instance, common):
     groups = []
     cur = None
     for line in default_text.splitlines():
-        h = re.match(r"^#{3,}\s+(.+?)\s+#{3,}\s*$", line.strip())
-        if h:
-            cur = {"section": h.group(1), "settings": []}
+        title = _cfg_section_title(line)
+        if title is not None:
+            cur = {"section": title, "settings": []}
             groups.append(cur)
             continue
         if line.strip().startswith("#"):
@@ -500,7 +523,10 @@ def _apply_cfg_updates(lines, updates):
 #   mods-install (available): a description line, then a " * <id>" line under it.
 #   mods-remove  (installed):  one line per mod, "<id> - <name> - <desc>".
 _MOD_AVAIL_RE = re.compile(r"^\s*\*\s+(\S+)\s*$")               # available: " * <id>"
-_MOD_INST_RE = re.compile(r"^([A-Za-z0-9._-]+)\s+-\s+(.+)$")    # installed: "<id> - <name> - …"
+# installed: "<id> - <name> - …". The rest starts on a non-blank (`\S.*`, not `.+`) so the blanks
+# after the dash cannot be split between two quantifiers; its only caller strips the line first,
+# so the rest never ends in a blank and this answers what `.+` did.
+_MOD_INST_RE = re.compile(r"^([A-Za-z0-9._-]+)\s+-\s+(\S.*)$")
 _MOD_ID_OK = re.compile(r"^[A-Za-z0-9._-]+\Z")                   # safe id charset (guards here-string)
 
 

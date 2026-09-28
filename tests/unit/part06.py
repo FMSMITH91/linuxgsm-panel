@@ -7556,7 +7556,8 @@ import glob as _anc_glob                                                        
 # Line parsers: `$` is correct because the pattern is matched against one line and the trailing
 # whitespace/newline is either absorbed by the pattern or captured on purpose.
 _ANCHOR_LINE_PARSERS = {
-    "_CRON_VERDICT_RE", "_CFG_LINE_RE", "_MOD_AVAIL_RE", "_MOD_INST_RE", "_HOSTNAME_RE",
+    "_CRON_VERDICT_RE", "_CFG_LINE_RE", "_MOD_AVAIL_RE", "_MOD_INST_RE", "_UFW_NUMBERED_RE",
+    "_IDT3_ROW_NOADDR_RE",
     "_UFW_RULE_RE", "_CONSOLE_PROMPT_RE", "_ASCII_INT_RE", "header",
     # One crontab line, already .strip()ed by its only caller, and its own `\s*$` absorbs
     # whatever is left — so $ and \Z behave identically here.
@@ -7645,14 +7646,9 @@ check("regex anchors: every $-anchored pattern is classified as a validator or a
 # name, and a mod id.
 _INLINE_DOLLAR_OK = {
     r"\)\s+CMD\s+\((.*)\)\s*$",                                  # a syslog cron line
-    r"^#{3,}\s+(.+?)\s+#{3,}\s*$",                                 # a config section header
     r"^(.*)/(tcp|udp)$",                                            # a ufw port column
-    r"^\s*\[\s*(\d+)\]\s*(.*)$",                                   # a `ufw status numbered` row
-    r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{6,})\s+(.+)$",      # an idTech3 player row
-    r"^\s*([a-z][a-z0-9-]*)\s+([a-z]{1,4})\s+\|\s+(.+?)\s*$",        # a LinuxGSM table row
     r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?/?\s*$",                # a `git remote -v` line
     r"\s*port\s*=\s*(\d+)\s*$",                                     # an sshd_config line
-    r"^(https?://\S+)\s*(\(.*\))?$",                                # a `tailscale up` output line
 }
 _inline_bad = []
 for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)

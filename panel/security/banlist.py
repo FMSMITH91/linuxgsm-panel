@@ -31,7 +31,9 @@ _allow = ()                 # the security whitelist, never refused here
 # hold equal. A tailnet peer is never refused here: the panel never firewall-blocks one anywhere
 # else, and the jail can ban one on the web port alone (a hand-made Serve), which this gate would
 # otherwise have turned into a lock-out from every page served through tailscaled.
-_TAILNET = tuple(ipaddress.ip_network(n) for n in ("100.64.0.0/10", "fd7a:115c:a1e0::/48"))
+# Written out rather than imported: this module loads none of the panel's own at import time
+# (system_ops only inside refresh()), and the ranges are Tailscale's, not a host or a setting.
+_TAILNET = tuple(ipaddress.ip_network(n) for n in ("100.64.0.0/10", "fd7a:115c:a1e0::/48"))  # NOSONAR - Tailscale's fixed ranges
 # What is_banned reads, rebuilt whole and swapped in: every banned network grouped by (IP version,
 # prefix length), so a lookup costs one set test per length present rather than one per network.
 _by_len = {}

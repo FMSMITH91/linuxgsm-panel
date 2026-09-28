@@ -952,7 +952,23 @@ def backup_disk_info(server, user):
 
 # Game-backup file names are "<selfname>-YYYY-MM-DD-HHMMSS.tar.<ext>" — a strict shape we
 # require before ever touching a path (callers ALSO check the name is in the real backup list).
-_GAME_BACKUP_NAME = re.compile(r"^[A-Za-z0-9._-]+\.tar\.[A-Za-z0-9.]+\Z")
+_GAME_BACKUP_CHARS = re.compile(r"[A-Za-z0-9._-]+\Z")
+_GAME_BACKUP_EXT = re.compile(r"[A-Za-z0-9.]+\Z")
+
+
+def _game_backup_name_ok(name):
+    r"""Tell whether `name` has a game backup's shape: `<stem>.tar.<ext>`, from a fixed charset.
+
+    It answers what `^[A-Za-z0-9._-]+\.tar\.[A-Za-z0-9.]+\Z` answered. That pattern retried its
+    tail at every ".tar." in the name, so one made of ".tar." repeats took quadratic time. Only the
+    LAST ".tar." with a character on each side needs trying: every earlier one leaves a longer
+    extension that contains this one's, so if this extension is refused, all of theirs are too.
+    """
+    name = name or ""
+    if not _GAME_BACKUP_CHARS.match(name):
+        return False
+    i = name.rfind(".tar.", 1, len(name) - 1)
+    return i > 0 and bool(_GAME_BACKUP_EXT.match(name, i + 5))
 
 
 def delete_game_backup(server, user, name):
@@ -961,7 +977,7 @@ def delete_game_backup(server, user, name):
     Returns True on success. `name` is shape-validated here; the caller validates it against the
     actual listing.
     """
-    if not _GAME_BACKUP_NAME.match(name or "") or not _core.game_idents_ok(user):
+    if not _game_backup_name_ok(name) or not _core.game_idents_ok(user):
         return False
     path = "/home/%s/lgsm/backup/%s" % (user, name)
     _, _, rc = _core.run_command(server, _core.game_user_exec_cmd(user, ["rm", "-f", "--", path]),
@@ -996,7 +1012,7 @@ def stream_game_backup(server, user, name, chunk=262144):
     (green, eventlet-patched) subprocess/paramiko IO so a multi-GB download doesn't block the
     event hub.
     """
-    if not _GAME_BACKUP_NAME.match(name or "") or not _core.game_idents_ok(user):
+    if not _game_backup_name_ok(name) or not _core.game_idents_ok(user):
         return
     path = "/home/%s/lgsm/backup/%s" % (user, name)
 

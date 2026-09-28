@@ -2373,7 +2373,7 @@ check("game backup: delete rejects a path-traversal name",
 check("game backup: stream yields nothing for an unsafe name",
       list(_sm_cron.stream_game_backup(None, "u", "../../etc/passwd")) == [])
 check("game backup: name shape accepts a real archive",
-      bool(_sm_cron._GAME_BACKUP_NAME.match("gmodserver-2026-07-06-141117.tar.zst")))
+      _sm_cron._game_backup_name_ok("gmodserver-2026-07-06-141117.tar.zst") is True)
 
 # ── discover_linuxgsm_servers: parse the one-shot host scan output ──
 _orig_disc_rc = _sm_core.run_command

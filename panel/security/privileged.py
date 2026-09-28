@@ -179,6 +179,9 @@ GAMEDIG_SRC = os.path.join(str(REPO_ROOT), "tools", "gamedig")
 NODESOURCE_FINGERPRINT = "6F71F525282841EEDAF851B42F59B5F99B1BE0B4"
 NODESOURCE_NODE_MAJOR = "24"
 NODESOURCE_KEY_URL = "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
+# The remote fetch of it says --proto "=https": curl -L follows redirects, and without that one
+# could move the fetch to plain http. Quoted, because the command can reach a login shell that
+# is zsh, where a word starting with = is a command lookup.
 NODESOURCE_KEYRING = "/usr/share/keyrings/nodesource.gpg"
 NODESOURCE_SOURCES = "/etc/apt/sources.list.d/nodesource.sources"
 NODESOURCE_PREFS = "/etc/apt/preferences.d/nodejs"
@@ -1090,7 +1093,9 @@ LOCAL_ONLY_VERBS = frozenset({
 # Steam's crash-dump slots. The helper holds the same list as STEAM_DUMP_SLOTS and a unit test
 # holds the two equal: a slot in one and not the other is a slot that fills up on exactly one
 # kind of host. Written out rather than globbed, so the two lists can be compared literally.
-STEAM_DUMP_SLOTS = ("/tmp/dumps",) + tuple("/tmp/dumps%02d" % i  # nosec B108 - Steam's own paths
+# The panel never creates or writes in these: it only removes one, after refusing a symlink and
+# checking its owner, with a removal that follows no link inside it.
+STEAM_DUMP_SLOTS = ("/tmp/dumps",) + tuple("/tmp/dumps%02d" % i  # nosec B108  # NOSONAR - Steam's names, only removed
                                             for i in range(1, 10))
 _STEAM_DUMP_SLOTS_SH = " ".join(shlex.quote(p) for p in STEAM_DUMP_SLOTS)
 
@@ -1169,7 +1174,7 @@ def _nodesource_setup_remote(a):
         'k=$(mktemp) || exit 1',
         'g=$(mktemp -d) || exit 1',
         "trap 'rm -rf -- \"$k\" \"$k.gpg\" \"$g\"' EXIT",
-        'curl -fsSL --connect-timeout 15 --max-time 60 %s -o "$k" || { echo "Could not download'
+        'curl --proto "=https" -fsSL --connect-timeout 15 --max-time 60 %s -o "$k" || { echo "Could not download'
         ' NodeSource\'s signing key"; exit 1; }' % q(NODESOURCE_KEY_URL),
         'l=$(GNUPGHOME="$g" gpg --batch --with-colons --show-keys "$k" 2>/dev/null)',
         '{ [ "$(printf \'%s\\n\' "$l" | ' + count_pub + ')" = 1 ] && '

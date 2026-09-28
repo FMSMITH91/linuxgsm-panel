@@ -169,14 +169,50 @@ def _idtech3_table_start(lines):
     return start
 
 
+# An idTech3 `status` row: "num score ping guid name … lastmsg address …". The name may hold
+# spaces, so it is whatever lies between the guid and the first "<lastmsg> <a.b.c.d:port>" after
+# it. That was one pattern, `\s+(.+?)\s+\d+\s+<address>`, and the lazy name re-walked every run
+# of blanks in the row at each character it grew by: quadratic in a row's blanks. The row is now
+# read in the same order the pattern read it — each run of blanks is tried ONCE, as the gap in
+# front of the lastmsg column — so the answers are the pattern's, in linear time.
+_IDT3_ROW_HEAD_RE = re.compile(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+(\S+)(\s+)")
+_IDT3_ADDR_RE = re.compile(r"\d+\s+\d{1,3}(?:\.\d{1,3}){3}:\d+")
+_BLANKS_RE = re.compile(r"\s+")
+# The fallback for rows with no address column: num score ping guid name(rest). The name starts on
+# a non-blank (`\S.*`, not `.+`): a `.+` after `\s+` could split the blanks between them every way.
+# Only the case where the row ENDS in blanks after the guid answers differently — there `.+` took
+# one blank as the name — and the caller strips a name and skips an empty one, as it does a miss.
+_IDT3_ROW_NOADDR_RE = re.compile(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{6,})\s+(\S.*)$")
+
+
+def _idtech3_row_with_address(ln):
+    """Return (num, score, ping, guid, name) for a row that has the address column, else None."""
+    head = _IDT3_ROW_HEAD_RE.match(ln)
+    if not head or head.end() >= len(ln):
+        return None
+    name_at = head.end()
+    for gap in _BLANKS_RE.finditer(ln, name_at + 1):
+        if _IDT3_ADDR_RE.match(ln, gap.end()):
+            return head.groups()[:4] + (ln[name_at:gap.start()],)
+    # The pattern's last resort: it gave the name a blank of the gap before it. So a row with NO
+    # name (the guid, three or more blanks, then lastmsg and address) matched with a one-blank name,
+    # which the caller skips. Returning None instead would hand that row to the fallback below,
+    # and it would come back as a player named after its own lastmsg and address.
+    if len(head.group(5)) >= 3 and _IDT3_ADDR_RE.match(ln, name_at):
+        return head.groups()[:4] + (ln[name_at - 2],)
+    return None
+
+
 def _match_idtech3_row(ln):
-    """Match one idTech3 status row, with or without the trailing address column (else None)."""
-    # Preferred: name is everything between the guid and the trailing 'lastmsg address' columns.
-    m = re.match(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s+\d+\s+\d{1,3}(?:\.\d{1,3}){3}:\d+", ln)
-    if not m:
-        # Fallback for formats without an address column: num score ping guid name(rest).
-        m = re.match(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{6,})\s+(.+)$", ln)
-    return m
+    """Match one idTech3 status row, with or without the trailing address column (else None).
+
+    The answer is (num, score, ping, guid, name).
+    """
+    row = _idtech3_row_with_address(ln)
+    if row is None:
+        m = _IDT3_ROW_NOADDR_RE.match(ln)
+        row = m.groups() if m else None
+    return row
 
 
 def _parse_idtech3_status(text):
@@ -189,18 +225,18 @@ def _parse_idtech3_status(text):
     start = _idtech3_table_start(lines)
     players, seen = [], set()
     for ln in lines[start:]:
-        m = _match_idtech3_row(ln)
-        if not m:
+        row = _match_idtech3_row(ln)
+        if not row:
             continue
-        num = _int_or_none(m.group(1))
+        num = _int_or_none(row[0])
         if num is None or num in seen:
             continue
-        name = _strip_q3_colors(m.group(5)).strip()
+        name = _strip_q3_colors(row[4]).strip()
         if not name:
             continue
         seen.add(num)
-        players.append({"name": name[:64], "num": num, "guid": m.group(4), "steamid": "",
-                        "score": _int_or_none(m.group(2)), "time": None})
+        players.append({"name": name[:64], "num": num, "guid": row[3], "steamid": "",
+                        "score": _int_or_none(row[1]), "time": None})
     return players
 
 
@@ -337,7 +373,33 @@ def console_player_list(server, user, game_type, selfname=None):
     return _parse_player_reply(eng, out)
 
 
-_HOSTNAME_RE = re.compile(r"^\s*(?:hostname|sv_hostname)\s*:?\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE)
+# The `hostname:` line of a valve/idTech3 `status` reply. The keyword must be the first thing on
+# its line; `[^\S\n]*`, not `\s*`, in front of it, since a `\s*` there crossed newlines and
+# re-walked every blank line below each line start: quadratic in a run of empty lines.
+_HOSTNAME_KEY_RE = re.compile(r"^[^\S\n]*(?:hostname|sv_hostname)", re.MULTILINE | re.IGNORECASE)
+
+
+def _status_hostname(out):
+    r"""Return the server name a console `status` reply advertises, as its line holds it, or None.
+
+    It answers what `^\s*(?:hostname|sv_hostname)\s*:?\s*(.+?)\s*$` (MULTILINE, IGNORECASE)
+    captured, wherever console_status can tell the difference. That pattern's `(.+?)\s*$` retried
+    the whole tail of the line at each character of the name: quadratic in a name holding a long run
+    of blanks. What it captured is the first non-blank after the keyword (and after a colon, if
+    one comes first), to the end of that line, and blanks before the name may span lines. After a
+    colon with nothing but blanks to the end of the reply it captured a blank, which console_status
+    reads as no name, or the colon itself when those blanks were all newlines.
+    """
+    m = _HOSTNAME_KEY_RE.search(out)
+    if not m:
+        return None
+    value = out[m.end():].lstrip()
+    if value.startswith(":"):
+        after = value[1:].lstrip()
+        if not after:
+            return None if value[1:].strip("\n") else ":"
+        value = after
+    return value.split("\n", 1)[0].rstrip()
 
 
 def console_status(server, user, game_type, selfname=None):
@@ -368,9 +430,9 @@ def console_status(server, user, game_type, selfname=None):
     players = _parse_player_reply(eng, out)
     name = None
     if eng in ("valve", "idtech3"):
-        m = _HOSTNAME_RE.search(out)
-        if m:
-            name = " ".join(_strip_q3_colors(m.group(1)).split())[:120] or None
+        advertised = _status_hostname(out)
+        if advertised:
+            name = " ".join(_strip_q3_colors(advertised).split())[:120] or None
     return players, name
 
 
@@ -870,6 +932,32 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     return False, _backup_failure_reason(out, err), False
 
 
+# One row of the command table the instance script prints with no arguments:
+# "start         st   | Start the server.". The description is read after the pattern, not by
+# it: `\|\s+(.+?)\s*$` retried its trailing `\s*$` at every character of the description, which
+# is quadratic in a description holding a long run of blanks.
+_CMD_ROW_HEAD_RE = re.compile(r"\s*([a-z][a-z0-9-]*)\s+([a-z]{1,4})\s+\|(?=\s)")
+
+
+def _command_table_row(line):
+    r"""Return (cmd, short, desc) for one command-table row, or None.
+
+    It answers what `^\s*([a-z][a-z0-9-]*)\s+([a-z]{1,4})\s+\|\s+(.+?)\s*$` answered on one
+    line: the description is the text after the bar with its blanks trimmed. When there is only
+    blank after the bar, that pattern needed two blanks and captured the last one, so it still does.
+    """
+    m = _CMD_ROW_HEAD_RE.match(line)
+    if not m:
+        return None
+    rest = line[m.end():]
+    desc = rest.strip()
+    if not desc:
+        if len(rest) < 2:
+            return None
+        desc = rest[-1]
+    return m.group(1), m.group(2), desc
+
+
 def list_server_commands(server, user, selfname=None):
     """Run the LinuxGSM instance script with no arguments to read its command list.
 
@@ -881,10 +969,9 @@ def list_server_commands(server, user, selfname=None):
     text = terminal.strip_escapes((out or "") + "\n" + (err or ""))
     cmds, seen = [], set()
     for line in text.splitlines():
-        # "start         st   | Start the server."
-        m = re.match(r"^\s*([a-z][a-z0-9-]*)\s+([a-z]{1,4})\s+\|\s+(.+?)\s*$", line)
-        if m:
-            cmd, short, desc = m.group(1), m.group(2), m.group(3)
+        row = _command_table_row(line)
+        if row:
+            cmd, short, desc = row
             if cmd not in seen:
                 seen.add(cmd)
                 cmds.append({"cmd": cmd, "short": short, "desc": desc})
@@ -899,6 +986,31 @@ def list_server_commands(server, user, selfname=None):
 _NONESSENTIAL_PORT_DESCS = ("client", "sourcetv", "source tv", "rcon", "telnet")
 
 
+# One row of `details`' DESCRIPTION / PORT / PROTOCOL table: "Game  27015  udp". The description
+# may hold spaces, so it runs to the first gap followed by a 2-5 digit port and a protocol. That was
+# `([A-Za-z][A-Za-z0-9/+ .-]*?)\s+(\d{2,5})\s+(tcp|udp|both|raw)\b`, whose lazy description re-walked
+# every later run of blanks at each character it grew by: quadratic in a row's blanks.
+_PORT_ROW_DESC_RE = re.compile(r"[A-Za-z][A-Za-z0-9/+ .-]*", re.I)
+_PORT_ROW_TAIL_RE = re.compile(r"\s+(\d{2,5})\s+(tcp|udp|both|raw)\b", re.I)
+
+
+def _port_table_row(s):
+    """Return (desc, port, protocol) as the old row pattern captured them, or None.
+
+    Each gap inside the longest description the charset allows is tried once, in order, which is
+    exactly the order the lazy description tried them in; within a gap every position answered the
+    same, so its first is the one it took.
+    """
+    head = _PORT_ROW_DESC_RE.match(s)
+    if not head:
+        return None
+    for gap in _BLANKS_RE.finditer(s, 1, head.end() + 1):
+        tail = _PORT_ROW_TAIL_RE.match(s, gap.start())
+        if tail:
+            return s[:gap.start()], tail.group(1), tail.group(2)
+    return None
+
+
 def _parse_details_port_table(text):
     """The DESCRIPTION/PORT/PROTOCOL table from `details`: (ports, the first "Game" port or None)."""
     ports, game_port, in_table = [], None, False
@@ -909,11 +1021,11 @@ def _parse_details_port_table(text):
             continue
         if not in_table:
             continue
-        m = re.match(r"([A-Za-z][A-Za-z0-9/+ .-]*?)\s+(\d{2,5})\s+(tcp|udp|both|raw)\b", s, re.I)
-        if not m:
+        row = _port_table_row(s)
+        if not row:
             in_table = False  # blank/other line → table ended
             continue
-        desc, port, proto = m.group(1).strip(), int(m.group(2)), m.group(3).lower()
+        desc, port, proto = row[0].strip(), int(row[1]), row[2].lower()
         ports.append({"desc": desc, "port": port, "protocol": proto})
         if game_port is None and desc.lower().startswith("game"):
             game_port = port
