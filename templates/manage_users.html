@@ -185,8 +185,8 @@
                      maxlength="120" placeholder="Who is it for?">
             </div>
           </div>
-          <div class="mb-2">
-            <label class="form-label mb-1">Groups</label>
+          <div class="mb-2" role="group" aria-labelledby="inv-groups-label">
+            <span class="form-label mb-1 d-inline-block" id="inv-groups-label">Groups</span>
             {% for g in groups %}
             <div class="form-check">
               <input type="checkbox" name="groups" value="{{ g.id }}" class="form-check-input"
@@ -242,8 +242,8 @@
             <input id="manage-users-email" type="email" name="email" class="form-control">
           </div>
           <hr class="border-secondary">
-          <div class="mb-2">
-            <label class="form-label mb-1">Groups</label>
+          <div class="mb-2" role="group" aria-labelledby="new-groups-label">
+            <span class="form-label mb-1 d-inline-block" id="new-groups-label">Groups</span>
             <div class="form-text mt-0 mb-2">
               Groups grant permissions and access to specific servers. A user gets the
               combined abilities of every group they're in.
@@ -263,8 +263,8 @@
              Invite controls above. #}
           {% if current_user.is_superadmin %}
           <hr class="border-secondary">
-          <div>
-            <label class="form-label mb-1">Account type</label>
+          <div role="group" aria-labelledby="new-acct-type-label">
+            <span class="form-label mb-1 d-inline-block" id="new-acct-type-label">Account type</span>
             <div class="form-check form-switch">
               <input type="checkbox" name="is_superadmin" class="form-check-input" role="switch" id="new-superadmin">
               <label class="form-check-label" for="new-superadmin">Super Administrator</label>
@@ -336,8 +336,8 @@
               this user out everywhere. They'll set their own the next time they sign in.</div>
           </div>
           <hr class="border-secondary">
-          <div class="mb-2">
-            <label class="form-label mb-1">Groups</label>
+          <div class="mb-2" role="group" aria-labelledby="eu-groups-label">
+            <span class="form-label mb-1 d-inline-block" id="eu-groups-label">Groups</span>
             <div class="form-text mt-0 mb-2">
               Groups grant permissions and access to specific servers. A user gets the
               combined abilities of every group they're in.
@@ -355,8 +355,8 @@
              reason — see the comment there. #}
           {% if current_user.is_superadmin %}
           <hr class="border-secondary">
-          <div class="mb-3">
-            <label class="form-label mb-1">Account type</label>
+          <div class="mb-3" role="group" aria-labelledby="eu-acct-type-label">
+            <span class="form-label mb-1 d-inline-block" id="eu-acct-type-label">Account type</span>
             <div class="form-check form-switch">
               <input type="checkbox" name="is_superadmin" class="form-check-input" role="switch" id="eu-superadmin">
               <label class="form-check-label" for="eu-superadmin">Super Administrator</label>
@@ -367,8 +367,8 @@
           </div>
           {% endif %}
           <hr class="border-secondary">
-          <div>
-            <label class="form-label mb-1">Status</label>
+          <div role="group" aria-labelledby="eu-status-label">
+            <span class="form-label mb-1 d-inline-block" id="eu-status-label">Status</span>
             <div class="form-check form-switch">
               <input type="checkbox" name="is_active" class="form-check-input" role="switch" id="eu-active">
               <label class="form-check-label" for="eu-active">Active</label>
@@ -381,9 +381,9 @@
              admin who opened the dialog looking for "reset this person's 2FA" saw nothing at all
              and had no way to tell the feature from an absent one. It is shown disabled instead,
              saying why — the switch is still inert for an account with no second factor. #}
-          <div id="eu-2fa-block">
+          <div id="eu-2fa-block" role="group" aria-labelledby="eu-2fa-label">
             <hr class="border-secondary">
-            <label class="form-label mb-1"><i class="bi bi-shield-lock"></i> Two-Factor Auth</label>
+            <span class="form-label mb-1 d-inline-block" id="eu-2fa-label"><i class="bi bi-shield-lock"></i> Two-Factor Auth</span>
             <div class="form-check form-switch">
               <input type="checkbox" name="reset_2fa" class="form-check-input" role="switch" id="eu-reset2fa">
               <label class="form-check-label" for="eu-reset2fa">Reset (disable) this user's 2FA</label>

@@ -1259,8 +1259,11 @@ def create_app():
     app.config.setdefault("WTF_CSRF_TIME_LIMIT", None)  # token valid for the session
     # Protect per-request (below) instead of automatically, so we can skip CSRF for API-token
     # (Bearer) requests — those carry no session cookie, so CSRF (a cookie-riding attack) can't
-    # apply, and an invalid token is still rejected by @login_required.
-    app.config["WTF_CSRF_CHECK_DEFAULT"] = False
+    # apply, and an invalid token is still rejected by @login_required. (Sonar's S4502 reads the
+    # line below as CSRF switched off. It is the automatic hook that goes; the before_request right
+    # after it calls csrf.protect() on every request but a cookie-less Bearer one, and the smoke
+    # suite posts tokenless forms to prove it.)
+    app.config["WTF_CSRF_CHECK_DEFAULT"] = False  # NOSONAR - replaced by the explicit csrf.protect() hook below
     csrf = CSRFProtect(app)
 
     @app.before_request

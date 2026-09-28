@@ -231,7 +231,10 @@
       padding: .65rem .9rem;
       white-space: nowrap;
     }
-    .table td {
+    /* th[scope="row"] beside td: the label cells of the key/value tables are row headers now, and
+       a th the td rule misses falls back to Bootstrap's bare cell (.25rem padding in .table-sm,
+       the inherited text size, top-aligned). This keeps them looking like the td they replaced. */
+    .table td, .table th[scope="row"] {
       border-color: var(--border);
       padding: .65rem .9rem;
       vertical-align: middle;
@@ -609,7 +612,7 @@
       .card-body { padding: 1rem; }
       .card-footer { padding: .7rem 1rem; }
       .table thead th { font-size: .65rem; padding: .45rem .5rem; }
-      .table td { font-size: .8rem; padding: .45rem .5rem; }
+      .table td, .table th[scope="row"] { font-size: .8rem; padding: .45rem .5rem; }
       /* Start/Stop/Restart/Console are the point of this table, and they live in the last column.
          Measured at 375px the table is 578px wide inside a 341px viewport, putting that column's
          right edge at x=595 — reachable only by horizontally scrolling a table that gives no hint

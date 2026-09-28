@@ -19,6 +19,7 @@ from unit.part01 import (NS, SO, _sm_core, _sm_files, _sm_firewall, _sm_hosts, c
 import json as _p8_json  # noqa: E402
 import subprocess as _p8_subprocess  # noqa: E402
 import time as _p8_time  # noqa: E402
+import shlex as _p8_shlex  # noqa: E402
 
 from panel.ops import tailscale_integration as _tsi  # noqa: E402
 from panel.security import privileged as _p8_priv  # noqa: E402
@@ -1282,6 +1283,16 @@ try:
           _it[:2] == (True, "Tailscale installed successfully") and ("apt-install", ["curl"]) in _w.verbs_called()
           and any(c[0] == "cmd" and "install.sh" in c[1] and c[2] is True for c in _w.calls)
           and "Installed: /usr/bin/tailscale" in _it[2], repr(_it))
+    # The script is piped straight into a root shell with nothing to check it against, and -L
+    # follows redirects, so curl must refuse any hop that is not HTTPS. Measured: with
+    # --proto '=https' an https->http redirect ends in "Protocol "http" is disabled (in redirect)",
+    # rc 1; without it curl follows it and hands over whatever the plain-http host served.
+    _ts_curl = [c[1] for c in _w.calls if c[0] == "cmd" and "install.sh" in c[1]]
+    _ts_argv = _p8_shlex.split(_ts_curl[0].split("|", 1)[0]) if _ts_curl else []
+    check("remote tailscale install: the installer is fetched over HTTPS only, redirects included",
+          _ts_argv[:1] == ["curl"] and "--proto" in _ts_argv
+          and _ts_argv[_ts_argv.index("--proto") + 1:][:1] == ["=https"]
+          and "https://tailscale.com/install.sh" in _ts_argv, repr(_ts_curl))
     _w = _wire(cmds=[("install.sh", ("curl: (22) 404", "", 22))])
     _it = _H.remote_install_tailscale(_p8_srv())
     check("remote tailscale install: a failed script stops there",

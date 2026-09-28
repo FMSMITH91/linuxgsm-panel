@@ -1408,6 +1408,173 @@ _secret_keys = {"secret_key", "cred_key", "secret", "credentials", "auth_credent
 check("debug whitelist excludes every secret key",
       not (set(_so._DEBUG_CONFIG_KEYS) & _secret_keys))
 
+# ── parsers that were quadratic: the same answers, in linear time ────────────────────────────
+# SonarCloud's S8786 flagged these patterns as super-linear, and measured on this machine each one
+# was: doubling a run of blanks (or of token characters) quadrupled the time. A remote host's
+# output, a log tail, `ufw status` and LinuxGSM's install output all reach them, and a panel
+# worker stuck in a regex is a worker every page waits on. Each rewrite is checked two ways:
+# against the ORIGINAL pattern, copied here, over thousands of generated inputs built from the
+# characters that pattern cares about (it must answer exactly what the old one answered); and on
+# one input the old pattern took 8.5-18s on here (measured by reverting each), which the new code
+# must finish inside a second.
+import random as _sl_random                                                        # noqa: E402
+import re as _sl_re                                                                # noqa: E402
+import time as _sl_time                                                            # noqa: E402
+
+_sl_rng = _sl_random.Random(8786)
+
+
+def _sl_gen(alphabet, n, max_parts=14):
+    return ["".join(_sl_rng.choice(alphabet) for _ in range(_sl_rng.randint(0, max_parts)))
+            for _ in range(n)]
+
+
+def _sl_first_diff(bad, new, old):
+    """What a differential check prints: the first input the two disagree on, and both answers."""
+    return "differs on %r: new %r, old %r" % (bad[0], new(bad[0]), old(bad[0])) if bad else ""
+
+
+def _sl_took(fn, arg):
+    _t0 = _sl_time.monotonic()
+    fn(arg)
+    return _sl_time.monotonic() - _t0
+
+
+# 1. _redact's email pass — one re.sub over a whole log tail.
+_SL_OLD_EMAIL = _sl_re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+_sl_email_in = _sl_gen(["a", "b1", "é", "_", ".", "+", "-", "@", " ", "!", "x.y", "@ex.com"], 4000)
+_sl_email_in += ["a@b.c+d@e.f", "+d@e.f", "a@b.c.d@e.f", "@a.b", "a@b.", "a@.b", "a@b..c", "ab@cd",
+                 "x a.b+c-d@ex-ample.co.uk y", "reach me at admin@example.com now"]
+_sl_bad = [s for s in _sl_email_in
+           if _so._redact_emails(s) != _SL_OLD_EMAIL.sub("[email]", s)]
+_sl_hits = sum(1 for s in _sl_email_in if _SL_OLD_EMAIL.search(s))
+check("regex rewrite: _redact_emails answers what the old email re.sub answered, on %d inputs "
+      "(%d holding an address)" % (len(_sl_email_in), _sl_hits), not _sl_bad and _sl_hits >= 500,
+      _sl_first_diff(_sl_bad, _so._redact_emails, lambda s: _SL_OLD_EMAIL.sub("[email]", s)))
+_sl_dt = _sl_took(_so._redact, "a" * 80000)
+check("regex rewrite: ...and an 80,000-character token with no @ is scrubbed in linear time",
+      _sl_dt < 1.0, "%.2fs (the old pattern: ~18s)" % _sl_dt)
+
+# 2. ufw_status's rule rows — `ufw status verbose` from the host.
+_SL_OLD_UFW = _sl_re.compile(r"^(.+?)\s{2,}(ALLOW|DENY|REJECT|LIMIT)\s+(IN|OUT|FWD)\s*(.*)$")
+
+
+def _sl_old_ufw(line):
+    m = _SL_OLD_UFW.match(line)
+    return m and {"to": m.group(1).strip(), "action": m.group(2),
+                  "direction": m.group(3), "from": m.group(4).strip()}
+
+
+def _sl_ufw_rows(n):
+    """Rows shaped like `ufw status verbose` ones, with the gaps and the vocabulary scrambled."""
+    def part():
+        return "".join(_sl_rng.choice(["x", "22/tcp", "Anywhere", "on", "tailscale0", "(v6)", " ",
+                                       "  ", "\t", "ALLOW", "IN", "#", "\r"])
+                       for _ in range(_sl_rng.randint(0, 4)))
+
+    def ws():
+        return _sl_rng.choice(["", " ", "  ", "   ", "\t ", " \t\t", "     "])
+    return [part() + ws() + _sl_rng.choice(["ALLOW", "DENY", "REJECT", "LIMIT", "ALLOWX", "allow"])
+            + ws() + _sl_rng.choice(["IN", "OUT", "FWD", "INX", "", "in"]) + ws() + part()
+            for _ in range(n)]
+
+
+_sl_ufw_in = _sl_ufw_rows(6000) + _sl_gen(["ALLOW", "DENY", "IN", "OUT", " ", "  ", "\t", "x"], 2000)
+_sl_ufw_in += ["22/tcp                     ALLOW IN    Anywhere",
+               "Anywhere on tailscale0     ALLOW IN    Anywhere",
+               "  ALLOW IN x", "   ALLOW IN x", "x  ALLOWIN y", "x  ALLOW  IN", "x ALLOW IN y"]
+_sl_bad = [s for s in _sl_ufw_in + [s.strip() for s in _sl_ufw_in]
+           if (_so._ufw_rule_split(s) or None) != (_sl_old_ufw(s) or None)]
+_sl_hits = sum(1 for s in _sl_ufw_in if _SL_OLD_UFW.match(s))
+check("regex rewrite: _ufw_rule_split answers what _UFW_RULE_RE answered, on %d rows "
+      "(%d of them rules)" % (2 * len(_sl_ufw_in), _sl_hits), not _sl_bad and _sl_hits >= 1000,
+      _sl_first_diff(_sl_bad, _so._ufw_rule_split, _sl_old_ufw))
+# Through ufw_status itself, the caller: a helper nobody calls would pass a check on the helper.
+_sl_orig_rv = _so._run_verb
+try:
+    _so._run_verb = lambda verb, args=None, **k: (
+        "Status: active\n\nTo  Action  From\n--  ------  ----\n"
+        "22/tcp                     ALLOW IN    Anywhere\nx" + " " * 80000 + "y\n", "", 0)
+    _sl_t0 = _sl_time.monotonic()
+    _sl_st = _so.ufw_status()
+    _sl_dt = _sl_time.monotonic() - _sl_t0
+finally:
+    _so._run_verb = _sl_orig_rv
+check("regex rewrite: ...and ufw_status reads a row holding 80,000 blanks in linear time",
+      _sl_dt < 1.0 and [r["to"] for r in _sl_st["rules"]] == ["22/tcp"],
+      "%.2fs (the old pattern: ~17s), rules %r" % (_sl_dt, _sl_st["rules"]))
+
+# 3. _repo_slug — origin's URL, through the real function with git stubbed.
+_SL_OLD_SLUG = r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?/?\s*$"
+_sl_slug_in = ["github.com/" + s for s in _sl_gen(["a", "/", ".git", ".", " ", "\t", "-", "b"], 3000)]
+_sl_slug_in += ["https://github.com/FMSMITH91/linuxgsm-panel.git\n", "git@github.com:o/r.git",
+                "https://github.com/o/r/", "https://github.com/o/r.git/", "github.com/o/r x",
+                "github.com/o/.git", "github.com/o/r.gi", " github.com:o/r \n"]
+_sl_orig_git = _so._git
+_sl_url = [""]
+try:
+    _so._git = lambda args, timeout=45: (_sl_url[0], "", 0)
+    _sl_bad = []
+    for _s in _sl_slug_in:
+        _sl_url[0] = _s
+        _om = _sl_re.search(_SL_OLD_SLUG, _s.strip())
+        if _so._repo_slug() != (_om.group(1) if _om else None):
+            _sl_bad.append(_s)
+    _sl_hits = sum(1 for s in _sl_slug_in if _sl_re.search(_SL_OLD_SLUG, s.strip()))
+    check("regex rewrite: _repo_slug answers what its old `\\s*$` pattern answered, on %d URLs "
+          "(%d of them a repo)" % (len(_sl_slug_in), _sl_hits), not _sl_bad and _sl_hits >= 300,
+          "differs on %r" % _sl_bad[:3])
+    _sl_url[0] = "github.com/a/b" + " " * 80000 + "x"
+    _sl_dt = _sl_took(lambda _a: _so._repo_slug(), None)
+    check("regex rewrite: ...and a URL with 80,000 blanks inside is read in linear time",
+          _sl_dt < 1.0, "%.2fs (the old pattern: ~9s)" % _sl_dt)
+finally:
+    _so._git = _sl_orig_git
+
+# 4. _dedupe_log_tracebacks' syslog-prefix pattern — every journal line of a debug report.
+_SL_OLD_PFX = _sl_re.compile(r"^[A-Z][a-z]{2}\s+\d+\s+[\d:]+\s+\S+\s+[^:]+:\s?")
+_sl_pfx_in = ["Jan 12 10:00:00 " + s
+              for s in _sl_gen(["host", " ", "  ", "\t", ":", "x", "[1]", "python3", "app", "\r"], 4000)]
+_sl_pfx_in += ["Sep 28 10:00:00 box python3[123]: Traceback", "Sep 28 10:00:00 box  :x",
+               "Sep 28 10:00:00 box x:", "Sep 28 10:00:00 box :", "Sep  1 1:2 h p: y"]
+_sl_bad = [s for s in _sl_pfx_in
+           if _so._JOURNAL_PREFIX_RE.sub("", s) != _SL_OLD_PFX.sub("", s)]
+_sl_hits = sum(1 for s in _sl_pfx_in if _SL_OLD_PFX.match(s))
+check("regex rewrite: the journal-prefix pattern strips what the old one stripped, on %d lines "
+      "(%d with a prefix)" % (len(_sl_pfx_in), _sl_hits), not _sl_bad and _sl_hits >= 300,
+      "differs on %r" % _sl_bad[:3])
+_sl_dt = _sl_took(_so._dedupe_log_tracebacks, "Jan 12 10:00:00 host" + " " * 200000 + "x")
+check("regex rewrite: ...and a journal line of 200,000 blanks with no colon is read in linear time",
+      _sl_dt < 1.0, "%.2fs (the old pattern: ~9s)" % _sl_dt)
+
+# 5. parse_missing_deps — LinuxGSM's install output, as the remote host printed it.
+
+
+def _sl_old_deps(output):
+    text = _sm_hosts.terminal.strip_escapes(output or "")
+    deps = []
+    for m in _sl_re.finditer(r"[Mm]issing dependencies:\s*(.+?)(?:\s+Run:|[\r\n]|$)", text):
+        for pkg in m.group(1).split():
+            if _sl_re.match(r"^[a-z0-9][a-z0-9+._:-]*\Z", pkg) and pkg not in deps:
+                deps.append(pkg)
+    return deps
+
+
+_sl_deps_in = _sl_gen(["Missing dependencies:", "missing dependencies:", " ", "  ", "\t", "\n",
+                       "\r", "Run:", " Run:", "a", "b-1", "gcc:i386", "X", ":", "$(id)"], 5000)
+_sl_deps_in += ["Missing dependencies: a Run: fix; Missing dependencies: b",
+                "Missing dependencies: a Missing dependencies: b\n", "Missing dependencies: Run: x",
+                "Missing dependencies:\n\n  pkg1 pkg2\nnext", "Missing dependencies:   \n",
+                "Missing dependencies: pkg \nRun: x", "Missing dependencies: pkg\tRun:"]
+_sl_bad = [s for s in _sl_deps_in if _sm_hosts.parse_missing_deps(s) != _sl_old_deps(s)]
+_sl_hits = sum(1 for s in _sl_deps_in if _sl_old_deps(s))
+check("regex rewrite: parse_missing_deps finds what the old lazy pattern found, on %d outputs "
+      "(%d naming packages)" % (len(_sl_deps_in), _sl_hits), not _sl_bad and _sl_hits >= 500,
+      _sl_first_diff(_sl_bad, _sm_hosts.parse_missing_deps, _sl_old_deps))
+_sl_dt = _sl_took(_sm_hosts.parse_missing_deps, "Missing dependencies: a" + " " * 200000 + "b")
+check("regex rewrite: ...and a dependency line of 200,000 blanks is read in linear time",
+      _sl_dt < 1.0, "%.2fs (the old pattern: ~17s)" % _sl_dt)
+
 # ── panel self-update CI gate: don't offer an update until its CI has passed ──
 # _repo_slug must parse both HTTPS and SSH remote URLs (so the check works on forks).
 _orig_rslug_git = _so._git

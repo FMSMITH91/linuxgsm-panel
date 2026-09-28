@@ -28,8 +28,8 @@ function _sizeFor(el) {
   // clientWidth INCLUDES the box's padding, so sizing to it puts two columns of terminal under
   // the padding and back out over the edge. Take the padding off first.
   var cs = window.getComputedStyle(el);
-  var padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
-  var padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+  var padX = (Number.parseFloat(cs.paddingLeft) || 0) + (Number.parseFloat(cs.paddingRight) || 0);
+  var padY = (Number.parseFloat(cs.paddingTop) || 0) + (Number.parseFloat(cs.paddingBottom) || 0);
   var cell = _cellSize();
   var w = Math.max(cell.w * 20, el.clientWidth - padX);
   var h = Math.max(cell.h * 5, el.clientHeight - padY);

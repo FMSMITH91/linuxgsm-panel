@@ -37,7 +37,7 @@
     {% if servers and servers|length > 6 %}
     <div class="input-group input-group-sm" style="width:220px; max-width:100%;">
       <span class="input-group-text"><i class="bi bi-search"></i></span>
-      <input type="text" id="srv-search" class="form-control" placeholder="Filter servers…"
+      <input type="text" id="srv-search" class="form-control" placeholder="Filter servers…" aria-label="Filter servers…"
              autocomplete="off" data-action="filterServers" data-on="input">
     </div>
     {% endif %}

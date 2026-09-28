@@ -194,9 +194,9 @@
             </div>
           </div>
           <div class="col-md-4">
-            <label class="form-label fw-bold">Server Access</label>
+            <span class="form-label fw-bold d-inline-block" id="srv-access-{{ group.id }}">Server Access</span>
             <div class="form-text mt-0 mb-2">A checked host covers all of its game servers.</div>
-            <div style="max-height: 160px; overflow-y: auto;">
+            <div style="max-height: 160px; overflow-y: auto;" role="group" aria-labelledby="srv-access-{{ group.id }}">
               {% for r in all_remotes %}
               <div class="form-check">
                 <input type="checkbox" name="servers" value="{{ r.id }}"
@@ -255,9 +255,9 @@
               </div>
             </div>
             <div class="col-md-4">
-              <label class="form-label fw-bold">Permissions</label>
+              <span class="form-label fw-bold d-inline-block" id="new-perms-label">Permissions</span>
               {{ role_presets() }}
-              <div style="max-height: 350px; overflow-y: auto;">
+              <div style="max-height: 350px; overflow-y: auto;" role="group" aria-labelledby="new-perms-label">
                 {% for perm_key, perm_desc in all_perms.items() %}
                 {# Same rule as the edit form above: add_group filters through _grantable_perms
                    too, so a box for a permission this admin does not hold would create the group
@@ -272,9 +272,9 @@
               </div>
             </div>
             <div class="col-md-4">
-              <label class="form-label fw-bold">Server Access</label>
+              <span class="form-label fw-bold d-inline-block" id="new-srv-access-label">Server Access</span>
               <div class="form-text mt-0 mb-2">A checked host covers all its game servers.</div>
-              <div style="max-height: 160px; overflow-y: auto;">
+              <div style="max-height: 160px; overflow-y: auto;" role="group" aria-labelledby="new-srv-access-label">
                 {% for r in all_remotes %}
                 <div class="form-check">
                   <input type="checkbox" name="servers" value="{{ r.id }}"

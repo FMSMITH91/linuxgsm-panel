@@ -119,17 +119,17 @@
         <table class="table table-borderless table-sm mb-0">
           {% if ts_detail %}
           <tr>
-            <td class="text-secondary ps-3" style="width:120px;">Hostname</td>
+            <th scope="row" class="text-secondary ps-3 fw-normal" style="width:120px;">Hostname</th>
             <td><code>{{ info.hostname }}</code></td>
           </tr>
           {% endif %}
           <tr>
-            <td class="text-secondary ps-3">Version</td>
+            <th scope="row" class="text-secondary ps-3 fw-normal">Version</th>
             <td>{{ info.version or '—' }}</td>
           </tr>
           {% if ts_detail %}
           <tr>
-            <td class="text-secondary ps-3">DNS Name</td>
+            <th scope="row" class="text-secondary ps-3 fw-normal">DNS Name</th>
             <td>
               {% if info.dns_name %}
                 <code>{{ info.dns_name }}</code>
@@ -140,7 +140,7 @@
             </td>
           </tr>
           <tr>
-            <td class="text-secondary ps-3">IP Addresses</td>
+            <th scope="row" class="text-secondary ps-3 fw-normal">IP Addresses</th>
             <td>
               {% for ip in info.tailscale_ips %}
                 <code>{{ ip }}</code>{% if not loop.last %}<br>{% endif %}
@@ -151,12 +151,12 @@
           </tr>
           {% endif %}
           <tr>
-            <td class="text-secondary ps-3">Accept Routes</td>
+            <th scope="row" class="text-secondary ps-3 fw-normal">Accept Routes</th>
             {# None: the prefs could not be read — not the same as "No". #}
             <td>{% if info.accept_routes is none %}<span class="text-secondary">—</span>{% elif info.accept_routes %}Yes{% else %}No{% endif %}</td>
           </tr>
           <tr>
-            <td class="text-secondary ps-3">Funnel</td>
+            <th scope="row" class="text-secondary ps-3 fw-normal">Funnel</th>
             <td>
               {% if info.funnel_enabled %}
                 <span class="badge bg-warning text-dark">Enabled</span>
@@ -179,7 +179,7 @@
           Check if a remote host is reachable on the tailnet before adding it as a remote server.
         </p>
         <div class="input-group mb-2">
-          <input type="text" id="peer-host" class="form-control" placeholder="100.x.x.x or hostname"
+          <input type="text" id="peer-host" class="form-control" placeholder="100.x.x.x or hostname" aria-label="100.x.x.x or hostname"
                  value="{{ config.get('site_domain', '') }}">
           <button class="btn btn-primary" data-action="checkPeer">
             <i class="bi bi-search"></i> Ping
