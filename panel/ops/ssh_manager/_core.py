@@ -572,7 +572,7 @@ def _f2b_reload(server, timeout=30):
                        ("service-restart", ["fail2ban"])):
         out, err, rc = run_privileged(server, verb, args, timeout=timeout)
         if rc == 0:
-            return out, err, rc
+            break
     return out, err, rc
 
 

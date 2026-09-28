@@ -53,7 +53,7 @@ def register(app, supervise):
             # every update already pending — the identical list, re-announced ~30 s after boot.
             # Any restart did it: a click on "Update now", a reboot, a config change. Same
             # reasoning as app.py's refusal to re-arm on a failed check.
-            seeding = _os_update_state["last_run"] == 0.0
+            seeding = not _os_update_state["last_run"]   # 0.0 until the first pass arms it
             with app.app_context():
                 remotes = RemoteServer.query.all()
                 # Armed only once the host list is actually in hand: a failure before this point

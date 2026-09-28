@@ -21,8 +21,9 @@ from panel.routes._shared import (_whitelist_mutate)
 import ipaddress as _ipaddress
 
 # Where a panel bound to a SPECIFIC address is still reached through the tailnet rather than the
-# public port: loopback (Tailscale Serve proxies to it) and the host's own Tailscale addresses.
-_TAILNET_NETS = (_ipaddress.ip_network("100.64.0.0/10"), _ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+# public port: loopback (Tailscale Serve proxies to it) and the host's own Tailscale addresses,
+# from system_ops._TAILNET_RANGES rather than a copy of Tailscale's ranges here.
+_TAILNET_NETS = tuple(_ipaddress.ip_network(n) for n in so._TAILNET_RANGES)
 
 
 def _panel_bind_is_public(bind):

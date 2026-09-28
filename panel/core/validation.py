@@ -227,7 +227,9 @@ def generate_password(length=GENERATED_PASSWORD_LEN):
     pools = (_GEN_LOWER, _GEN_UPPER, _GEN_DIGIT, _GEN_SYMBOL)
     chars = [_secrets.choice(p) for p in pools]
     chars += [_secrets.choice(_GEN_ALL) for _ in range(length - len(pools))]
-    _secrets.SystemRandom().shuffle(chars)   # or the class of each position would be predictable
+    # Shuffled, or the class of each position would be predictable. SystemRandom draws from
+    # os.urandom, not the Mersenne Twister, so the order is as unguessable as the characters.
+    _secrets.SystemRandom().shuffle(chars)  # NOSONAR - SystemRandom is os.urandom's CSPRNG
     return "".join(chars)
 
 

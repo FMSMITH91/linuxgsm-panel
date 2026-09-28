@@ -1627,6 +1627,261 @@ _sl_dt = _sl_took(_sm_hosts.parse_missing_deps, "Missing dependencies: a" + " " 
 check("regex rewrite: ...and a dependency line of 200,000 blanks is read in linear time",
       _sl_dt < 1.0, "%.2fs (the old pattern: ~17s)" % _sl_dt)
 
+# 6-16. The rest of SonarCloud's S8786 list: twelve more patterns, the same two checks each. Where
+# the old pattern's slow case is a line its callers can hand it, the timing goes through the
+# caller; where only a stray newline makes it slow (every caller splits on lines first), through
+# the module-level pattern, which is what a future caller would reach. The old times in the
+# messages were measured by putting each old pattern back under its new name.
+from unit.part01 import _sm_game                                                   # noqa: E402
+from panel.services import monitoring as _sl_mon                                   # noqa: E402
+from panel.ops import tailscale_integration as _sl_tsi                             # noqa: E402
+
+
+def _sl_groups(m):
+    return m.groups() if m else None
+
+
+def _sl_diff_check(label, inputs, new, old, min_hits, hit=None):
+    """One differential check: `new` must answer what `old` answered on every input."""
+    _bad = [s for s in inputs if new(s) != old(s)]
+    _hits = sum(1 for s in inputs if (hit or old)(s))
+    check("regex rewrite: %s, on %d inputs (%d of them a hit)" % (label, len(inputs), _hits),
+          not _bad and _hits >= min_hits, _sl_first_diff(_bad, new, old) or "hits=%d" % _hits)
+
+
+def _sl_shaped(n, *slots):
+    """Build `n` inputs slot by slot, one random pick from each slot.
+
+    They are shaped like the real lines, with the gaps and the vocabulary scrambled so the near
+    misses are there too. A slot is a list (pick one) or (alphabet, most) for a random run.
+    """
+    return ["".join(_sl_rng.choice(slot) if isinstance(slot, list) else
+                    "".join(_sl_rng.choice(slot[0]) for _ in range(_sl_rng.randint(0, slot[1])))
+                    for slot in slots)
+            for _ in range(n)]
+
+
+_SL_WS = ["", " ", "  ", "\t", " \t", "   ", "\xa0"]
+
+
+def _sl_fast_check(label, fn, arg, old_took):
+    _dt = _sl_took(fn, arg)
+    check("regex rewrite: ...and %s in linear time" % label, _dt < 1.0,
+          "%.2fs (the old pattern: ~%s)" % (_dt, old_took))
+
+
+# 6. cron's game-backup name gate, in front of every path the backup download and delete build.
+_SL_OLD_BAK = _sl_re.compile(r"^[A-Za-z0-9._-]+\.tar\.[A-Za-z0-9.]+\Z")
+_sl_bak_in = _sl_gen(["a", "Z9", ".", "tar", ".tar.", "_", "-", "gz", "zst"], 5000)
+_sl_bak_in += _sl_gen(["a", "Z9", ".", "tar", ".tar.", "_", "-", "gz", "zst", "\n", "!", "é", "/"], 2000)
+_sl_bak_in += ["gmodserver-2026-07-06-141117.tar.zst", "a.tar.b.tar.", "a.tar.tar.", ".tar.gz",
+               "a.tar.", "a.tar.g_z", "a.tar._.tar.gz", "a.tar.gz\n", "a.tar.gz/", "..tar.."]
+_sl_diff_check("_game_backup_name_ok answers what _GAME_BACKUP_NAME answered", _sl_bak_in,
+               _sm_cron._game_backup_name_ok, lambda s: bool(_SL_OLD_BAK.match(s)), 300)
+_sl_fast_check("delete_game_backup refuses a 216,000-character name made of .tar. repeats",
+               lambda n: _sm_cron.delete_game_backup(None, "u", n), "a.tar." * 36000 + "_", "19s")
+
+# 7. files' `key="value"` line, which the pattern matches exactly as before.
+_SL_OLD_CFG = _sl_re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+_sl_cfg_in = _sl_gen(["a", "_", "k1", "=", " ", "  ", "\t", "\n", "\r", "x", '"v"', "\xa0", "#"], 3000)
+_sl_cfg_in += _sl_shaped(4000, _SL_WS, ["a", "_k", "k1", "1a", "", "a b"], _SL_WS, ["=", "", "=="],
+                         (["a", " ", "  ", "\t", "\n", "\r", '"v"', "\xa0", "#", "="], 6))
+_sl_diff_check("_CFG_LINE_RE captures what the old `\\s*(.*)$` captured", _sl_cfg_in,
+               lambda s: _sl_groups(_sm_files._CFG_LINE_RE.match(s)),
+               lambda s: _sl_groups(_SL_OLD_CFG.match(s)), 800)
+_sl_fast_check("_CFG_LINE_RE fails 80,000 blanks and a stray newline",
+               _sm_files._CFG_LINE_RE.match, "a=" + " " * 80000 + "\nx\ny", "14s")
+
+# 8. files' `#### Section ####` header, as _grouped_cfg_settings hands it a raw line.
+_SL_OLD_HDR = _sl_re.compile(r"^#{3,}\s+(.+?)\s+#{3,}\s*$")
+_sl_hdr_in = _sl_gen(["#", "##", "###", " ", "  ", "\t", "a", "b c", "\xa0", "\x1f", "=", "\r"], 3000)
+_sl_hdr_in += _sl_shaped(5000, _SL_WS, ["##", "###", "####", "#####"], _SL_WS,
+                         (["a", "b c", " ", "  ", "#", "###", "\t", "\xa0"], 4), _SL_WS,
+                         ["##", "###", "####", "#####x", ""], _SL_WS)
+_sl_hdr_in += ["#### Server Settings ####", "### ###", "###   ###", "###    ###", "### a ### b ###",
+               "  ####  x  ####  ", "###\tx\t###", "######", "### x ##"]
+_sl_diff_check("_cfg_section_title reads what the header pattern read", _sl_hdr_in,
+               _sm_files._cfg_section_title,
+               lambda s: (lambda m: m.group(1) if m else None)(_SL_OLD_HDR.match(s.strip())), 500)
+_sl_fast_check("_grouped_cfg_settings reads a header holding 70,000 blanks",
+               lambda t: _sm_files._grouped_cfg_settings(t, {}, {}, {}, {}),
+               "### x" + " " * 70000 + "y\nkey=1\n", "11s")
+
+# 9. files' mods-remove rows, through _parse_mods_installed (which strips each line first).
+_SL_OLD_MOD = _sl_re.compile(r"^([A-Za-z0-9._-]+)\s+-\s+(.+)$")
+
+
+def _sl_old_mods(out):
+    mods = []
+    for raw in (out or "").splitlines():
+        m = _SL_OLD_MOD.match(_sm_files._strip_ansi(raw).strip())
+        if m and m.group(1) != "LinuxGSM":
+            name = m.group(2).split(" - ")[0].strip()
+            mods.append({"id": m.group(1), "name": name or m.group(1), "desc": m.group(2)})
+    return mods
+
+
+_sl_mod_in = _sl_gen(["a", "sourcemod", "-", " - ", " ", "  ", "\t", "\n", "x y", "LinuxGSM", "\x1b[1m",
+                      "\r", "_"], 6000, 20)
+_sl_diff_check("_parse_mods_installed lists what it listed with `\\s+(.+)$`", _sl_mod_in,
+               _sm_files._parse_mods_installed, _sl_old_mods, 500)
+_sl_fast_check("_MOD_INST_RE fails 80,000 blanks and a stray newline",
+               _sm_files._MOD_INST_RE.match, "a - " + " " * 80000 + "\nx\ny", "10s")
+
+# 10. firewall's `ufw status numbered` row, which the pattern matches exactly as before.
+_SL_OLD_UFWN = _sl_re.compile(r"^\s*\[\s*(\d+)\]\s*(.*)$")
+_sl_ufwn_in = _sl_gen(["[", "]", "1", "[ 1]", " ", "  ", "\t", "\n", "\r", "x", "22/tcp"], 6000)
+_sl_diff_check("_UFW_NUMBERED_RE captures what the old `\\s*(.*)$` captured", _sl_ufwn_in,
+               lambda s: _sl_groups(_sm_firewall._UFW_NUMBERED_RE.match(s)),
+               lambda s: _sl_groups(_SL_OLD_UFWN.match(s)), 300)
+_sl_fast_check("_UFW_NUMBERED_RE fails 80,000 blanks and a stray newline",
+               _sm_firewall._UFW_NUMBERED_RE.match, "[1]" + " " * 80000 + "\nx\ny", "10s")
+
+# 11. idTech3 `status` rows, with and without the address column, through _parse_idtech3_status.
+_SL_OLD_IDT3 = (
+    _sl_re.compile(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s+\d+\s+\d{1,3}(?:\.\d{1,3}){3}:\d+"),
+    _sl_re.compile(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{6,})\s+(.+)$"))
+
+
+def _sl_old_idt3(text):
+    lines = (text or "").splitlines()
+    players, seen = [], set()
+    for ln in lines[_sm_game._idtech3_table_start(lines):]:
+        m = _SL_OLD_IDT3[0].match(ln) or _SL_OLD_IDT3[1].match(ln)
+        num = _sm_game._int_or_none(m.group(1)) if m else None
+        if num is None or num in seen:
+            continue
+        name = _sm_game._strip_q3_colors(m.group(5)).strip()
+        if name:
+            seen.add(num)
+            players.append({"name": name[:64], "num": num, "guid": m.group(4), "steamid": "",
+                            "score": _sm_game._int_or_none(m.group(2)), "time": None})
+    return players
+
+
+def _sl_idt3_rows(n):
+    def pick(*opts):
+        return _sl_rng.choice(opts)
+    rows = []
+    for _ in range(n):
+        seps = [pick(" ", "  ", "   ", "\t", "    ") for _ in range(4)]
+        name = "".join(pick("a", " ", "  ", "^1", "5", "1.2.3.4:5", "\t", "Bob") for _ in range(_sl_rng.randint(0, 5)))
+        rows.append(pick("0", "12", " 3", "-1") + seps[0] + pick("0", "-5", "7") + seps[1]
+                    + pick("50", "999") + seps[2] + pick("abcdef12", "g", "0123456789abcdef", "xyz")
+                    + seps[3] + name + pick("", " 0 1.2.3.4:27960", "  33 10.0.0.1:1 x", " 1 1.2.3:4",
+                                            "   ", " 5", "   7 1.2.3.4:5"))
+    return rows
+
+
+_sl_idt3_in = _sl_idt3_rows(5000) + _sl_gen(["0", " ", "  ", "1.2.3.4:5", "abcdef", "a", "\t", "7"], 2000, 12)
+_sl_idt3_in += ["\n".join(_sl_rng.choice(_sl_idt3_in) for _ in range(4)) for _ in range(1500)]
+_sl_diff_check("_parse_idtech3_status reads the players the two old row patterns read",
+               _sl_idt3_in, _sm_game._parse_idtech3_status, _sl_old_idt3, 1500)
+# A row with no name, just its gap, the lastmsg and the address. The old address pattern matched
+# it with a one-blank name, so it was skipped; it must not fall through to the no-address pattern,
+# which would read "5 1.2.3.4:27960" as a player called that.
+check("regex rewrite: ...and a nameless address row is still skipped, not read as a player",
+      _sm_game._parse_idtech3_status("0 0 0 abcdef12   5 1.2.3.4:27960") == []
+      and _sl_old_idt3("0 0 0 abcdef12   5 1.2.3.4:27960") == [],
+      repr(_sm_game._parse_idtech3_status("0 0 0 abcdef12   5 1.2.3.4:27960")))
+_sl_fast_check("_parse_idtech3_status reads a row holding 60,000 blanks",
+               _sm_game._parse_idtech3_status, "0 0 0 g x" + " " * 60000 + "y", "11s")
+_sl_fast_check("_IDT3_ROW_NOADDR_RE fails 80,000 blanks and a stray newline",
+               _sm_game._IDT3_ROW_NOADDR_RE.match, "0 0 0 abcdef " + " " * 80000 + "\nx\ny", "10s")
+
+# 12. The `hostname:` line of a console `status`, through console_status with the capture stubbed.
+_SL_OLD_HOST = _sl_re.compile(r"^\s*(?:hostname|sv_hostname)\s*:?\s*(.+?)\s*$", _sl_re.M | _sl_re.I)
+_sl_host_out = [""]
+_sl_orig_sac = _sm_game._send_and_capture
+try:
+    _sm_game._send_and_capture = lambda *a, **k: (_sl_host_out[0], 0)
+
+    def _sl_new_host(out):
+        _sl_host_out[0] = out
+        return _sm_game.console_status(None, "u", "cod")[1]
+
+    def _sl_old_host(out):
+        m = _SL_OLD_HOST.search(out)
+        return (" ".join(_sm_game._strip_q3_colors(m.group(1)).split())[:120] or None) if m else None
+
+    _sl_host_in = _sl_gen(["hostname", "sv_hostname", "HOSTNAME", "ſv_hoſtname", ":", " ",
+                           "  ", "\n", "\t", "x", "^1", "a b", "\r", "#"], 8000, 10)
+    _sl_host_in += ["hostname: My Server\n", "hostname:\n\n", "hostname: \n", "hostname:",
+                    "  sv_hostname  Box ^1One  \nmap: x", "hostname\n\nnext line", "hostnames: x"]
+    _sl_diff_check("console_status names the server what the old hostname pattern named it",
+                   _sl_host_in, _sl_new_host, _sl_old_host, 1500)
+    _sl_fast_check("console_status reads a hostname holding 80,000 blanks",
+                   _sl_new_host, "hostname x" + " " * 80000 + "y", "9s")
+    _sl_fast_check("console_status reads a reply of 40,000 empty lines",
+                   _sl_new_host, "x" + "\n" * 40000 + "z", "8s")
+finally:
+    _sm_game._send_and_capture = _sl_orig_sac
+
+# 13. The instance script's command table, through list_server_commands with the shell stubbed.
+_SL_OLD_CMD = _sl_re.compile(r"^\s*([a-z][a-z0-9-]*)\s+([a-z]{1,4})\s+\|\s+(.+?)\s*$")
+_sl_cmd_in = _sl_gen(["start", " ", "  ", "st", "|", "\t", "x", "a-1", "Start", "\xa0", "abcde", "Run it."], 2000, 10)
+_sl_cmd_in += _sl_shaped(6000, _SL_WS, ["start", "fast-dl", "Start", "1x", "a"], _SL_WS,
+                         ["st", "sp", "abcd", "abcde", "S", ""], _SL_WS, ["|", "|", "||", ""], _SL_WS,
+                         (["Start the server.", " ", "  ", "\t", "|", "x", "\xa0"], 4))
+_sl_cmd_in += ["start         st   | Start the server.", "stop sp |  ", "stop sp | ", "x y |\tz"]
+_sl_diff_check("_command_table_row reads what the command-table pattern read", _sl_cmd_in,
+               _sm_game._command_table_row, lambda s: _sl_groups(_SL_OLD_CMD.match(s)), 400)
+_sl_orig_sagu = _sm_core.shell_as_game_user
+try:
+    _sm_core.shell_as_game_user = lambda *a, **k: ("start st | x" + " " * 80000 + "y\n", "", 0)
+    _sl_t0 = _sl_time.monotonic()
+    _sl_cmds = _sm_game.list_server_commands(None, "u")
+    _sl_dt = _sl_time.monotonic() - _sl_t0
+finally:
+    _sm_core.shell_as_game_user = _sl_orig_sagu
+check("regex rewrite: ...and list_server_commands reads a description holding 80,000 blanks in linear time",
+      _sl_dt < 1.0 and [c["cmd"] for c in _sl_cmds] == ["start"],
+      "%.2fs (the old pattern: ~9s), %r" % (_sl_dt, [c["cmd"] for c in _sl_cmds]))
+
+# 14. `details`' port table rows, as _parse_details_port_table hands them over (stripped).
+_SL_OLD_PORT = _sl_re.compile(r"([A-Za-z][A-Za-z0-9/+ .-]*?)\s+(\d{2,5})\s+(tcp|udp|both|raw)\b", _sl_re.I)
+_sl_port_in = [s.strip() for s in _sl_gen(["Game", "Query", " ", "  ", "\t", "27015", "1", "123456", "udp", "TCP",
+                                           "both", "rawx", "ſ", "K", "/", "_", "x", "."], 2000, 10)]
+_sl_port_in += [s.strip() for s in _sl_shaped(
+    6000, (["Game", "Source TV", " ", "ſ", "K", "/", "_", "1", "22", "\t", "x"], 4), _SL_WS,
+    ["27015", "22", "1", "123456", "7777"], _SL_WS, ["udp", "TCP", "both", "raw", "rawx", "ud"],
+    ["", " x", "_", "/", "\t27016 tcp"])]
+_sl_port_in += ["Game  27015  udp", "Source TV 27020 tcp", "Game\t27015\tudp", "A 1 22 tcp"]
+_sl_diff_check("_port_table_row reads what the port-table pattern read", _sl_port_in,
+               _sm_game._port_table_row, lambda s: _sl_groups(_SL_OLD_PORT.match(s)), 300)
+_sl_fast_check("_parse_details_port_table reads a row holding 50,000 blanks",
+               _sm_game._parse_details_port_table,
+               "DESCRIPTION  PORT  PROTOCOL\nGame  27015  udp\na" + " " * 50000 + "x\n", "8s")
+
+# 15. The df percent the monitor reads per host, through _host_disk_pct with run_command stubbed.
+_sl_pct_in = _sl_gen(["1", "23", "%", " ", "a", "٣", "\n", "42%"], 6000)
+_sl_diff_check("_first_percent reads the number `(\\d+)%` found", _sl_pct_in, _sl_mon._first_percent,
+               lambda s: (lambda m: int(m.group(1)) if m else None)(_sl_re.search(r"(\d+)%", s)), 1000)
+_sl_orig_mrc = _sl_mon.run_command
+try:
+    _sl_mon.run_command = lambda remote, cmd, **k: ("1" * 80000 + "\n", "", 0)
+    _sl_t0 = _sl_time.monotonic()
+    _sl_pct = _sl_mon._host_disk_pct(None)
+    _sl_dt = _sl_time.monotonic() - _sl_t0
+    _sl_mon.run_command = lambda remote, cmd, **k: ("42%\n", "", 0)
+    _sl_pct42 = _sl_mon._host_disk_pct(None)
+finally:
+    _sl_mon.run_command = _sl_orig_mrc
+check("regex rewrite: ...and _host_disk_pct reads 80,000 digits with no % in linear time",
+      _sl_dt < 1.0 and _sl_pct is None and _sl_pct42 == 42,
+      "%.2fs (the old pattern: ~11s), got %r and %r" % (_sl_dt, _sl_pct, _sl_pct42))
+
+# 16. `tailscale serve status` URL lines, as _parse_serve_status hands them over (stripped).
+_SL_OLD_URL = _sl_re.compile(r'^(https?://\S+)\s*(\(.*\))?$')
+_sl_url_in = [("https://" + s).strip() for s in _sl_gen(["a", "(", ")", " ", "  ", ".", "x(y)", "(Funnel on)",
+                                                         "\t", "ts.net"], 6000, 10)]
+_sl_url_in += [("http" + s).strip() for s in _sl_gen(["s", "://", "a", "(", ")", " "], 2000, 8)]
+_sl_url_in += ["https://box.tail1.ts.net (Funnel on)", "https://a/x(y) extra)", "https://a (b", "https://a"]
+_sl_diff_check("_serve_url_line reads what the serve-status URL pattern read", _sl_url_in,
+               _sl_tsi._serve_url_line, lambda s: _sl_groups(_SL_OLD_URL.match(s)), 2000)
+_sl_fast_check("_parse_serve_status reads a URL line holding 50,000 '()' pairs",
+               _sl_tsi._parse_serve_status, "https://a" + "()" * 50000 + " x\n", "11s")
+
 # ── panel self-update CI gate: don't offer an update until its CI has passed ──
 # _repo_slug must parse both HTTPS and SSH remote URLs (so the check works on forks).
 _orig_rslug_git = _so._git
@@ -2373,7 +2628,7 @@ check("game backup: delete rejects a path-traversal name",
 check("game backup: stream yields nothing for an unsafe name",
       list(_sm_cron.stream_game_backup(None, "u", "../../etc/passwd")) == [])
 check("game backup: name shape accepts a real archive",
-      bool(_sm_cron._GAME_BACKUP_NAME.match("gmodserver-2026-07-06-141117.tar.zst")))
+      _sm_cron._game_backup_name_ok("gmodserver-2026-07-06-141117.tar.zst") is True)
 
 # ── discover_linuxgsm_servers: parse the one-shot host scan output ──
 _orig_disc_rc = _sm_core.run_command

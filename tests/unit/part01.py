@@ -535,7 +535,6 @@ _VALIDATORS = [
     ("validation._HEX_COLOR_RE", _V._HEX_COLOR_RE, "#aabbcc"),
     ("_core._SAFE_GAME_IDENT", _sm_core._SAFE_GAME_IDENT, "gmodserver"),
     ("gmod._CU_NAME_RE", _v_gmod._CU_NAME_RE, "gmodcontent"),
-    ("cron._GAME_BACKUP_NAME", _v_cron._GAME_BACKUP_NAME, "srv-2026.tar.gz"),
     ("backup._NAME_RE", _v_backup._NAME_RE, "panel-backup-20260918-120000-manual.tar.gz"),
     ("lgsm_data._OS_SLUG_RE", _v_lgsm._OS_SLUG_RE, "ubuntu-24.04"),
     ("tailscale._PEER_HOST_RE", _v_ts._PEER_HOST_RE, "box.tail1234.ts.net"),
@@ -552,6 +551,12 @@ check("validation._valid_hex_color returns nothing with a newline in it",
       _V._valid_hex_color("#aabbcc\n") == "#aabbcc" and "\n" not in _V._valid_hex_color("#aabbcc\n"))
 check("clock.valid_timezone returns nothing with a newline in it",
       _v_tz("Europe/London\n") == "Europe/London")
+# The game-backup name check became a function (a pattern that retried its tail at every ".tar."
+# took quadratic time); it is held to the same two answers the patterns above are.
+check("cron._game_backup_name_ok ACCEPTS its good value (the gate can still say yes)",
+      _v_cron._game_backup_name_ok("srv-2026.tar.gz") is True)
+check("cron._game_backup_name_ok REJECTS a trailing newline",
+      _v_cron._game_backup_name_ok("srv-2026.tar.gz\n") is False)
 # ...and the model validator must REFUSE, not merely fail to match.
 from panel.db.models import _validate_shell_ident as _v_ident
 _vi_raised = False

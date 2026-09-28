@@ -463,6 +463,13 @@ _SUDO_REFUSED_RE = re.compile(
     r")")
 
 
+# One row of `ufw status numbered`: "[ N] <to>  <action>  <from>". The detail starts on a
+# non-blank, `(?:\S.*)?` rather than `.*`: a `.*` straight after `\s*` could split the blanks
+# between the two every way before failing, which is quadratic. The groups are the ones
+# `\s*(.*)$` gave.
+_UFW_NUMBERED_RE = re.compile(r"^\s*\[\s*(\d+)\]\s*((?:\S.*)?)$")
+
+
 def remote_ufw_status(server):
     """Get UFW status and rules from the remote server."""
     # sudo=None keeps this host's own setting, as it always did — this is the one ufw read that
@@ -507,7 +514,7 @@ def remote_ufw_status(server):
     # `ufw status numbered` prints each rule as "[ N] <to>  <action>  <from>".
     # Collapse runs of spaces so the detail reads cleanly.
     for line in out.split("\n"):
-        m = re.match(r"^\s*\[\s*(\d+)\]\s*(.*)$", line)
+        m = _UFW_NUMBERED_RE.match(line)
         if m:
             detail = re.sub(r"\s{2,}", "  ", m.group(2).strip())
             rules.append({"num": m.group(1), "detail": detail})
