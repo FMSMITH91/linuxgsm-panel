@@ -1052,7 +1052,7 @@ _orig_run7 = _sm_core.run_command
 try:
     _sm_core.run_command = lambda s, c, **k: (
         "F\tgmodserver-2026.tar.gz\t1048576\t1720000000\nF\told.tar.gz\t500\t1719000000" + _BK_END, "", 0)
-    _gbl = _sm_cron.list_game_backups(None, "gm")
+    _gbl = _sm_cron.list_game_backups(None, "gm") or []
     check("game backups: parsed newest-first with sizes",
           len(_gbl) == 2 and _gbl[0]["name"] == "gmodserver-2026.tar.gz" and _gbl[0]["size"] == 1048576)
     check("game backups: no lock -> nothing marked in-progress",
@@ -1062,15 +1062,15 @@ try:
     _sm_core.run_command = lambda s, c, **k: (
         "F\tgmodserver-new.tar.zst\t2000\t1720000100\nF\tgmodserver-old.tar.zst\t1048576\t1720000000\n"
         "LOCK\t1720000050.5" + _BK_END, "", 0)
-    _gbl2 = _sm_cron.list_game_backups(None, "gm")
+    _gbl2 = _sm_cron.list_game_backups(None, "gm") or []
     check("game backups: active lock flags the new archive in-progress only",
-          _gbl2[0]["name"] == "gmodserver-new.tar.zst" and _gbl2[0].get("in_progress") is True
+          len(_gbl2) == 2 and _gbl2[0]["name"] == "gmodserver-new.tar.zst" and _gbl2[0].get("in_progress") is True
           and not _gbl2[1].get("in_progress"))
     # Early in a backup (lock present, new archive not created yet): the existing backup predates the
     # lock, so it must NOT be flagged/hidden — this is the "existing backup disappears" regression.
     _sm_core.run_command = lambda s, c, **k: (
         "F\tgmodserver-old.tar.zst\t1048576\t1720000000\nLOCK\t1720000050.5" + _BK_END, "", 0)
-    _gbl3 = _sm_cron.list_game_backups(None, "gm")
+    _gbl3 = _sm_cron.list_game_backups(None, "gm") or []
     check("game backups: a pre-existing backup isn't hidden while a new one is starting",
           len(_gbl3) == 1 and not _gbl3[0].get("in_progress"))
 finally:
