@@ -374,9 +374,21 @@ def console_player_list(server, user, game_type, selfname=None):
 
 
 # The `hostname:` line of a valve/idTech3 `status` reply. The keyword must be the first thing on
-# its line; `[^\S\n]*`, not `\s*`, in front of it, since a `\s*` there crossed newlines and
-# re-walked every blank line below each line start: quadratic in a run of empty lines.
-_HOSTNAME_KEY_RE = re.compile(r"^[^\S\n]*(?:hostname|sv_hostname)", re.MULTILINE | re.IGNORECASE)
+# its line, blanks aside, and it is looked for line by line: the old pattern's `^\s*` in front of it
+# crossed newlines and re-walked every blank line below each line start, quadratic in a run of
+# empty lines.
+_HOSTNAME_KEY_RE = re.compile(r"(?:hostname|sv_hostname)", re.IGNORECASE)
+
+
+def _hostname_key_end(out):
+    """Return where the keyword ends on the first line that starts with it, or -1 for none."""
+    at = 0
+    for line in out.split("\n"):
+        m = _HOSTNAME_KEY_RE.match(line, len(line) - len(line.lstrip()))
+        if m:
+            return at + m.end()
+        at += len(line) + 1
+    return -1
 
 
 def _status_hostname(out):
@@ -390,10 +402,10 @@ def _status_hostname(out):
     colon with nothing but blanks to the end of the reply it captured a blank, which console_status
     reads as no name, or the colon itself when those blanks were all newlines.
     """
-    m = _HOSTNAME_KEY_RE.search(out)
-    if not m:
+    end = _hostname_key_end(out)
+    if end < 0:
         return None
-    value = out[m.end():].lstrip()
+    value = out[end:].lstrip()
     if value.startswith(":"):
         after = value[1:].lstrip()
         if not after:
