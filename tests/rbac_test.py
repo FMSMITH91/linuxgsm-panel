@@ -846,6 +846,24 @@ try:
     check("escalation: ...and keeps the group they legitimately had",
           auth.MANAGE_USERS in _now, "ended up with: %s" % sorted(_now))
 
+    # A superadmin account is refused BY NAME, before anything else is weighed. The refusal alone
+    # proves nothing about this guard: the superadmin-flag and reach checks behind it refuse the
+    # same edit in other words, so deleting it left every suite green when edit_user was split
+    # (it is _edit_user_refusal's first test now). The message is what only this guard produces.
+    with app.app_context():
+        _sa_row = db.session.get(User, admin_id)
+        _sa_before = (_sa_row.display_name, _sa_row.password_hash, _sa_row.is_superadmin)
+    _r_sa = cmu.post("/users/%d/edit" % admin_id,
+                     data={"display_name": "taken", "is_active": "on", "is_superadmin": "on"},
+                     headers={"X-Requested-With": "XMLHttpRequest"})
+    with app.app_context():
+        _sa_row = db.session.get(User, admin_id)
+        _sa_after = (_sa_row.display_name, _sa_row.password_hash, _sa_row.is_superadmin)
+    check("escalation: MANAGE_USERS editing a superadmin is refused as exactly that, and nothing changes",
+          (_r_sa.get_json(silent=True) or {}).get("message")
+          == "Only a superadmin can modify a superadmin account." and _sa_after == _sa_before,
+          repr((_r_sa.status_code, _r_sa.get_json(silent=True), _sa_after == _sa_before)))
+
     # ── ...and cannot join a group whose PERMISSIONS they hold but whose HOSTS they do not ──────
     # grantable_groups tested `set(g.get_permissions()) <= mine` and nothing else, while
     # can_access_server unions Group.servers (whole-host grants) and Group.game_servers. So a
