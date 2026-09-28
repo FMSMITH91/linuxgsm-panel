@@ -546,6 +546,27 @@ try:
     check("nav active: Settings on /settings",
           _active_navs(c.get("/settings").get_data(as_text=True)) == ["Settings"])
 
+    # ── The footer's version: the commit's date, beside the commit it is the date of ──────────────
+    # Every commit of a day shares the date, so the footer only answers "what is deployed" with the
+    # commit next to it. Rendered with known values: this suite's copy of the panel may have no
+    # .git, and then its own version reads "unknown" with no commit at all.
+    import app as _fv_app
+    _fv_saved = (_fv_app.PANEL_VERSION, _fv_app.PANEL_COMMIT)
+    try:
+        _fv_app.PANEL_VERSION, _fv_app.PANEL_COMMIT = "2026.9.26", "a1b2c3d"
+        _fv_html = c.get("/").get_data(as_text=True)
+    finally:
+        _fv_app.PANEL_VERSION, _fv_app.PANEL_COMMIT = _fv_saved
+    _fv_m = _nre.search(r'<span id="panel-version">([^<]*)</span>\s*<(a|span) id="panel-commit"'
+                        r'([^>]*)>([^<]*)<', _fv_html)
+    check("footer: the version is the date, as it is, followed by the running commit",
+          _fv_m is not None and _fv_m.group(1) == "2026.9.26"
+          and _fv_m.group(4).strip() == "· a1b2c3d",
+          repr(_fv_m.groups() if _fv_m else _fv_html[_fv_html.find("panel-version") - 20:][:300]))
+    check("footer: ...and the commit links to that commit on GitHub",
+          _fv_m is not None and _fv_m.group(2) == "a" and "/commit/a1b2c3d\"" in _fv_m.group(3),
+          repr(_fv_m.group(3) if _fv_m else None))
+
     # ── Audit-log filters/sort must be injection-safe: a junk sort column, bad
     #    direction/status, and hostile filter values are allowlisted/parameterized,
     #    so the page still renders 200 rather than 500. ──
@@ -1577,7 +1598,17 @@ try:
         check("host page: ...while a REMOTE's page keeps all of them (positive control)",
               'data-mtab-btn="security"' in _hp_rem and "Migrate to Tailscale SSH" in _hp_rem
               and "Pinned SSH host key" in _hp_rem, "the gate hides them on every host")
-        _hp_loc_a = c.get("/remote/%d/manage" % _hp_lid).get_data(as_text=True)
+        # Known version and commit (see the footer's check) for the Updates card's header.
+        import app as _hp_app
+        _hp_vsaved = (_hp_app.PANEL_VERSION, _hp_app.PANEL_COMMIT)
+        try:
+            _hp_app.PANEL_VERSION, _hp_app.PANEL_COMMIT = "2026.9.26", "a1b2c3d"
+            _hp_loc_a = c.get("/remote/%d/manage" % _hp_lid).get_data(as_text=True)
+        finally:
+            _hp_app.PANEL_VERSION, _hp_app.PANEL_COMMIT = _hp_vsaved
+        check("panel host page: the Updates card names the running version beside its commit",
+              '<strong id="pu-current">2026.9.26 · a1b2c3d</strong>' in _hp_loc_a,
+              _hp_loc_a[_hp_loc_a.find('id="pu-current"') - 10:][:120])
         check("panel host page: ...and a superadmin still gets the Security tab there (positive control)",
               'data-mtab-btn="security"' in _hp_loc_a and 'id="sec-bans"' in _hp_loc_a,
               "the Security tab is gone for the superadmin too")

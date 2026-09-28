@@ -1129,33 +1129,64 @@ try:
 finally:
     _shutil.rmtree(_dbo_dir, ignore_errors=True)
 
+def _assign_names(node):
+    """The plain names an assignment binds, `A = ...` and `A, B = ...` alike."""
+    names = []
+    for _t2 in node.targets:
+        _elts = _t2.elts if isinstance(_t2, (_ast_scan.Tuple, _ast_scan.List)) else [_t2]
+        names.extend(_e.id for _e in _elts if isinstance(_e, _ast_scan.Name))
+    return names
+
+
+# Which statements bind a name at top level, and how to read it off each.
+_NAME_READERS = (
+    ((_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef, _ast_scan.ClassDef), lambda n: [n.name]),
+    (_ast_scan.Assign, _assign_names),
+    (_ast_scan.ImportFrom, lambda n: [_a.asname or _a.name for _a in n.names]),
+    (_ast_scan.Import, lambda n: [(_a.asname or _a.name).split(".")[0] for _a in n.names]),
+)
+
+
+def _stmt_names(node):
+    """The names one simple top-level statement binds: a def or class, an assignment, an import.
+
+    Anything else binds nothing here; a try or an if is walked by _body_names instead.
+    """
+    for _types, _read in _NAME_READERS:
+        if isinstance(node, _types):
+            return _read(node)
+    return []
+
+
+# A module attribute bound inside a top-level try or if is as real as one bound outside it:
+# app.py's PANEL_COMMIT is set in a try/except, and a stub of it read as a stub of nothing.
+_BLOCK_STMTS = (_ast_scan.Try, _ast_scan.If) + ((_ast_scan.TryStar,) if hasattr(_ast_scan, "TryStar")
+                                                else ())
+
+
+def _body_names(body, out):
+    """Add to `out` every name the statements in `body` bind, descending into try and if blocks."""
+    for _n in body:
+        if isinstance(_n, _BLOCK_STMTS):
+            for _blk in [_n.body, _n.orelse, getattr(_n, "finalbody", [])] + [
+                    _h.body for _h in getattr(_n, "handlers", [])]:
+                _body_names(_blk, out)
+        else:
+            out.update(_stmt_names(_n))
+
+
 def _module_toplevel_names(path):
     """Every name a module defines or imports at top level, by AST — no importing.
 
     Importing a panel module to ask `dir()` would boot eventlet, threads and a Flask app; this only
-    needs to know what names EXIST, which the syntax tells us."""
+    needs to know what names EXIST, which the syntax tells us.
+    """
     out = set()
     try:
         _t = _ast_scan.parse(open(path, encoding="utf-8").read())
     except (SyntaxError, OSError):
         return out
-    for _n in _t.body:
-        if isinstance(_n, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef, _ast_scan.ClassDef)):
-            out.add(_n.name)
-        elif isinstance(_n, _ast_scan.Assign):
-            for _t2 in _n.targets:
-                if isinstance(_t2, _ast_scan.Name):
-                    out.add(_t2.id)
-                elif isinstance(_t2, (_ast_scan.Tuple, _ast_scan.List)):
-                    for _e in _t2.elts:
-                        if isinstance(_e, _ast_scan.Name):
-                            out.add(_e.id)
-        elif isinstance(_n, _ast_scan.ImportFrom):
-            for _a in _n.names:
-                out.add(_a.asname or _a.name)
-        elif isinstance(_n, _ast_scan.Import):
-            for _a in _n.names:
-                out.add((_a.asname or _a.name).split(".")[0])
+    _body_names(_t.body, out)
     return out
 
 
@@ -1214,6 +1245,22 @@ for _f in sorted(glob.glob(os.path.join(_root, "tests", "*.py"))
                              % (os.path.basename(_f), _n.lineno, _n.value.id, _n.attr, _mod))
 check("every stub is installed on a module that actually defines the name",
       not _stub_bad, "; ".join(sorted(set(_stub_bad))[:4]))
+# The reader the gate stands on, against a module with a name in each place one can be bound.
+_tn_dir = _tempfile.mkdtemp(prefix="toplevel-names-")
+try:
+    with open(os.path.join(_tn_dir, "m.py"), "w", encoding="utf-8") as _tn_fh:
+        _tn_fh.write("import os.path as P\nA, B = 1, 2\n"
+                     "try:\n    C = 1\nexcept Exception:\n    D = 1\nelse:\n    E = 1\n"
+                     "finally:\n    F = 1\n"
+                     "if P:\n    G = 1\nelse:\n    H = 1\n"
+                     "def fn():\n    INNER = 1\n")
+    _tn_names = _module_toplevel_names(os.path.join(_tn_dir, "m.py"))
+finally:
+    _shutil.rmtree(_tn_dir, ignore_errors=True)
+check("stub gate: a name bound in a top-level try or if is a module name (app.py's PANEL_COMMIT)",
+      _tn_names >= set("PABCDEFGH") and "fn" in _tn_names, repr(sorted(_tn_names)))
+check("stub gate: ...and a name bound inside a function is not", "INNER" not in _tn_names,
+      repr(sorted(_tn_names)))
 
 # ── The installer must not build a SECOND panel beside an existing one ────────────────────────
 # IS_UPDATE asks "is there an app.py and a unit file where I am about to install?" — but where that
@@ -8158,11 +8205,17 @@ try:
             except Exception as _tsh_e:
                 return {"raised": repr(_tsh_e)}
 
+        def _tsh_cal(sha):
+            """The version a commit should read as: its committer time as a UTC date, YYYY.M.D."""
+            _tsh_ct = _tsh_git("-C", _tsh_up, "log", "-1", "--format=%ct", sha)
+            return "%d.%d.%d" % _time.gmtime(int(_tsh_ct))[:3] if _tsh_ct.isdigit() else "?!"
+
         _tsh_st = _tsh_status()
         _tsh_subjects = [c.split(" ", 1)[-1] for c in _tsh_st.get("changes") or []]
         check("update status: a tag named origin/main does not stand in for the branch",
               _tsh_pre and _tsh_st.get("update_available") is True
-              and _tsh_st.get("target_sha") == _tsh_c and _tsh_st.get("remote_version") == "1.2.0"
+              and _tsh_st.get("target_sha") == _tsh_c
+              and _tsh_st.get("remote_version") == _tsh_cal(_tsh_c)
               and _tsh_subjects == ["C main tip", "B on main"],
               "fixture shadowed=%s; C=%s X=%s got %r" % (
                   _tsh_pre, _tsh_c[:7], _tsh_x[:7],
@@ -8175,12 +8228,12 @@ try:
         check("update status: ...and its fetch brought no tag along, not even one on the tip it fetched",
               not _tsh_has(_tsh_so, "refs/tags/late-on-main"), "late-on-main fetched")
         # A tracked NON-default branch takes its own path through the same function: the tip,
-        # its VERSION and its changelog are all read off the ref.
+        # its version and its changelog are all read off the ref.
         _tsh_branch["v"] = "dev"
         _tsh_sd = _tsh_status()
         _tsh_dsubj = [c.split(" ", 1)[-1] for c in _tsh_sd.get("changes") or []]
-        check("update status: ...on a non-default branch too (tip, VERSION and changelog)",
-              _tsh_sd.get("target_sha") == _tsh_d2 and _tsh_sd.get("remote_version") == "2.0.2"
+        check("update status: ...on a non-default branch too (tip, version and changelog)",
+              _tsh_sd.get("target_sha") == _tsh_d2 and _tsh_sd.get("remote_version") == _tsh_cal(_tsh_d2)
               and _tsh_dsubj == ["D2 dev tip", "D1 on dev"],
               "D2=%s X=%s got %r" % (_tsh_d2[:7], _tsh_x[:7], {k: _tsh_sd.get(k) for k in (
                   "target_sha", "remote_version", "changes", "raised", "message")}))

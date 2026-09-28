@@ -865,13 +865,18 @@ try:
 
     # Reads whose failure must still answer with the shape the page renders from.
     _p9_patch(_p9_so, "panel_update_status", _hl_boom("panel_update_status"))
-    _p9_patch(_p9_so, "panel_version", lambda: "9.9.9")
+    _p9_patch(_p9_so, "panel_version", lambda: "2026.9.26")
+    _p9_patch(_p9_so, "panel_commit", lambda: "a1b2c3d+")
     _r = _A.get("/api/panel/update-status")
     _d = _p9_json(_r)
     check("panel update-status: a failed check says 'no update', keeps the version and boot id",
           _d.get("git") is False and _d.get("update_available") is False
-          and _d.get("current_version") == "9.9.9" and _d.get("boot_id") == _p9_hl._BOOT_ID
+          and _d.get("current_version") == "2026.9.26" and _d.get("boot_id") == _p9_hl._BOOT_ID
           and _d.get("message") == "Internal server error", repr(_d))
+    # The card writes "<version> · <current_sha>" over the header the page rendered with both; an
+    # answer without the commit left a bare date there, which names a whole day of commits.
+    check("panel update-status: ...and the commit beside the version, as the check reports it "
+          "(no local-changes '+')", _d.get("current_sha") == "a1b2c3d", repr(_d))
     _p9_patch(_p9_so, "panel_update_log", _hl_boom("panel_update_log"))
     _d = _p9_json(_A.get("/api/panel/update-log"))
     check("panel update-log: a failed read is 'no log', not an exception page",

@@ -276,8 +276,8 @@ def _telegram_do_update(app, token, chat_id):
     if not ok:
         _tg_reply(token, chat_id, "⚠️ Update not started: %s" % msg)
         return
-    # Store the COMMIT (not the VERSION string, which rarely changes) so the post-restart check can
-    # tell whether the update actually landed.
+    # Store the COMMIT (not the version, a date every commit of that day shares) so the post-restart
+    # check can tell whether the update actually landed.
     _set_tg_pending_update(chat_id, so.panel_commit())
     target = (st.get("target_sha") or "")[:7] or "the newest verified commit"
     _tg_reply(token, chat_id, "🔄 Update started: %s → %s. I'll message you here once I'm back."
@@ -292,8 +292,10 @@ def _set_tg_pending_update(chat_id, from_commit):
 
 
 def _report_tg_pending_update():
-    """After a restart, if a Telegram-triggered update was pending, tell the chat how it went — by
-    comparing the git commit before/after (the VERSION string usually doesn't move between commits)."""
+    """After a restart, tell the chat how a Telegram-triggered update went, if one was pending.
+
+    It compares the git commit before and after: the version is a date, which a day's commits share.
+    """
     cfg = load_config()
     pend = cfg.get("telegram_pending_update")
     if not pend:

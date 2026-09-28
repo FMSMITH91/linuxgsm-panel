@@ -1,9 +1,10 @@
 # Changelog
 
-All notable, user-facing changes to the LinuxGSM Panel. The project is pre-1.0 and alpha — see the
-README disclaimer. Versioning is loosely [semantic](https://semver.org). Note: the panel's in-app
-"update available" check compares git commits, so you always get the newest CI-verified commit
-regardless of this file — this changelog is for humans.
+All notable, user-facing changes to the LinuxGSM Panel. The project is alpha — see the README
+disclaimer. A version is the date of the commit, in UTC, written YYYY.M.D (`2026.9.26`) and shown
+with the short commit; the numbered sections below (0.8.0 to 0.10.0) are from before that. The
+panel's in-app "update available" check compares git commits, so you always get the newest
+CI-verified commit regardless of this file — this changelog is for humans.
 
 ## [Unreleased]
 
@@ -144,6 +145,17 @@ regardless of this file — this changelog is for humans.
   on stdin, because a download over SSH gets parsed twice and that is where quoting bugs hide.
 
 ### Changed
+- **The version is now the date of the commit the panel runs.** It reads `2026.9.26`: the
+  commit's date in UTC, with no leading zeros, and always beside the short commit (the footer, the
+  update card, the Telegram and Discord messages and the installer's "Code updated" line), because
+  every commit made on the same day shares the date. It comes from git, so nothing has to be bumped
+  by hand any more, and the hand-kept 0.x numbers stop at 0.10.0-alpha; the sections below keep
+  them. A copy downloaded as a ZIP from GitHub has no git history, so its `VERSION` file carries the
+  commit's time, filled in by git when the archive is made. The Release workflow, which only ran
+  when `VERSION` changed and never cut a release, is removed. The update that brings this change
+  in is offered and run by the code the host already has, which reads `VERSION` as text, so for
+  that one update the card offers `v$Format:%ct$` and the installer's log names it the same way;
+  once it has landed, the panel and the installer show the date.
 - **Deleting a host says what stays on it.** The delete makes the panel forget the host and never
   connects to it, so gamedig (`/usr/local/lib/linuxgsm-panel/gamedig` and its two links) and the
   weekly root cron that re-runs its install script (`/etc/cron.d/lgsm-node-tools`) stay there,

@@ -3213,6 +3213,26 @@ check(_upd.count("else if(d.message)") == 0,
 check("You\\'re up to date" in _upd and "Update available:" in _upd,
       "js: ...just the two it is asked for")
 
+# ── a version is a date, and it is always named beside its commit ───────────────────────────────
+# Every commit made on one day shares the date (panel_version in system_ops), so the card's header,
+# its offer and the sidebar pill each carry the short commit too. A date takes no "v" in front.
+_upd_cur = [ln for ln in _upd.splitlines() if "getElementById('pu-current')" in ln]
+check(len(_upd_cur) == 1 and "d.current_version" in _upd_cur[0] and "d.current_sha" in _upd_cur[0]
+      and "'v'+" not in _upd_cur[0],
+      "js: the update card's header is the running version beside its commit, with no 'v'",
+      repr(_upd_cur))
+_upd_offer = [ln for ln in _upd.splitlines() if "Update available:" in ln]
+check(len(_upd_offer) == 1 and "d.remote_version" in _upd_offer[0] and "d.remote_sha" in _upd_offer[0]
+      and "<strong>v'" not in _upd_offer[0],
+      "js: ...and its offer is the target's version beside the target's commit",
+      repr(_upd_offer))
+_badge_js = (ROOT / "static" / "js" / "update_badge.js").read_text(encoding="utf-8")
+_badge_title = [ln for ln in _badge_js.splitlines() if "'title=\"Version '" in ln]
+check(len(_badge_title) == 1 and "d.remote_version" in _badge_title[0]
+      and "d.remote_sha" in _badge_title[0],
+      "js: the sidebar's update pill names the offered version with its commit",
+      repr(_badge_title))
+
 # The "(#282)" at the end of a squash-merged subject is the part worth reading before taking an
 # update — the PR says what changed and why. Same rule as the sha: the only interpolated piece is
 # constrained (digits), the repo URL is the one the caller already vetted, and a missing repo URL

@@ -245,12 +245,14 @@ def _setup_auth_log():
 
 
 def _read_version():
-    """Panel version from the VERSION file next to this module (bumped per release)."""
+    """The panel's version: the running commit's date, as system_ops.panel_version works it out.
+
+    Asked once, at import, so a failure reads as "unknown" rather than stopping the app loading.
+    """
     try:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")) as f:
-            return f.read().strip() or "0.0.0"
+        return so.panel_version()
     except Exception:
-        return "0.0.0"
+        return "unknown"
 
 
 PANEL_VERSION = _read_version()

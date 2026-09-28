@@ -87,7 +87,7 @@ for _attr, _fns in _WATCHED.items():
 # The parts, in order: each runs its checks as it is imported. Named, never globbed, so that the
 # gate below can tell a part left off this list from one that ran.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
-          "part10", "part11", "part12", "part13", "part14")
+          "part10", "part11", "part12", "part13", "part14", "part15")
 for _part in _PARTS:
     importlib.import_module("unit." + _part)
 from unit.part01 import check, results  # noqa: E402
