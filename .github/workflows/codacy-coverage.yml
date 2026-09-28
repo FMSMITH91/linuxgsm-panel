@@ -273,7 +273,7 @@ jobs:
           PY
           fi
           reporter="${RUNNER_TEMP}/codacy-coverage-reporter"
-          curl -sSfL -o "${reporter}" \
+          curl --proto '=https' -sSfL -o "${reporter}" \
             "https://github.com/codacy/codacy-coverage-reporter/releases/download/${VERSION}/codacy-coverage-reporter-linux"
           echo "${SHA256}  ${reporter}" | sha256sum -c -
           chmod +x "${reporter}"
