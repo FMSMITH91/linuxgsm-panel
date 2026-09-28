@@ -2511,6 +2511,13 @@ try:
        [_bl.is_banned(_ip(a)) for a in ("100.101.102.103", "fd7a:115c:a1e0::5",
                                          "2001:db8:1:2::11", "2001:db8:1:3::1")],
        [False, False, True, False])
+    # widen=False is what the host FIREWALL asks (server_files asks it of a directly connected
+    # console peer): the banned address itself, not the /64 this gate widens an IPv6 ban to.
+    # Nothing checked it: ignoring `widen` (in _in_banned_network since is_banned was split) left
+    # every suite green, and refused the console to a neighbour the firewall still lets in.
+    eq("banlist: widen=False refuses the banned address itself, not its /64 neighbour",
+       [_bl.is_banned(_ip(a), widen=False) for a in ("2001:db8:1:2::10", "2001:db8:1:2::11")],
+       [True, False])
     import panel.ops.system_ops as _bl_so2
     check("banlist: its tailnet ranges are the ones the jail and the auto-block exempt",
           [str(n) for n in _bl._TAILNET] == list(_bl_so2._TAILNET_RANGES))
