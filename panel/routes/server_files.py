@@ -594,6 +594,430 @@ def _evict_viewer(app, socketio, server_id, sid):
         app.logger.debug("console: could not tell %s it was evicted", sid, exc_info=True)
 
 
+def _alerts_read(app, gs):
+    """The alerts card's GET answer: the providers and this server's values, or why there are none."""
+    # A read that FAILED must not render as a form, and this is not a cosmetic point.
+    # The card paints `vals` straight into the inputs, and Save posts every input back
+    # through lgsm_write_config — so a blank form is not "nothing configured", it is a
+    # loaded gun: one failed read followed by one Save replaced the operator's real
+    # Discord/Telegram webhooks and tokens with empty strings and reported success.
+    # lgsm_get_values now answers None for "could not read"; the front end already has an
+    # error path (server_files.js loadAlerts: `if(d.error)`) that shows the message and
+    # never builds the inputs, so there is nothing to save back.
+    try:
+        vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, _ALERT_KEYS)
+    except Exception:
+        vals = None
+        app.logger.debug("alerts read failed", exc_info=True)
+    if vals is None:
+        return jsonify({"error": "Could not read this server's LinuxGSM config, so the "
+                                 "current alert settings are unknown. Nothing has been "
+                                 "changed — try again when the host answers."}), 200
+    return jsonify({"providers": ALERT_PROVIDERS, "values": vals})
+
+
+def _alert_updates(data):
+    """The known alert keys out of a posted `values` map, with every toggle coerced to on/off."""
+    # isinstance, not `or {}`: a non-empty non-dict (a number, a list) passes the `or` and
+    # then .items() raises AttributeError — a 500 for a bad request body.
+    data = data if isinstance(data, dict) else {}
+    updates = {}
+    for k, v in data.items():
+        if k not in _ALERT_KEY_SET:
+            continue
+        if k.endswith("alert"):
+            v = "on" if str(v).lower() in ("on", "true", "1", "yes") else "off"
+        updates[k] = v
+    return updates
+
+
+def _mods_listing(app, gs):
+    """The mods card's GET answer: what LinuxGSM offers, what is installed, and whether it can."""
+    available, installed, supported = [], [], True
+    try:
+        available, av_ok = mods_available(gs.remote, gs.short_name, gs.lgsm_name)
+        installed, in_ok = mods_installed(gs.remote, gs.short_name, gs.lgsm_name)
+        supported = av_ok and in_ok   # this game has a LinuxGSM mods installer
+    except Exception:
+        app.logger.debug("mods list failed", exc_info=True)  # unreachable host — return empties
+    return jsonify({"available": available, "installed": installed, "supported": supported})
+
+
+def _mod_request(data):
+    """(which, mod id) of a mods POST; `which` is "install", "remove" or "" for anything else."""
+    which = "install" if data.get("action") == "install" else ("remove" if data.get("action") == "remove" else "")
+    mod_id = _json_str(data, "mod")   # coerces, so a numeric/other type cannot crash .strip()
+    return which, mod_id
+
+
+def _last_output_line(clean):
+    """The last non-blank line of a command's output, stripped; "" when there is none."""
+    for line in reversed(clean.splitlines()):
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _run_mods_action(gs, which, mod_id):
+    """Install or remove a mod, audit it, and say whether a restart is pending: the route's answer."""
+    out, err, rc = mods_action(gs.remote, gs.short_name, gs.lgsm_name, which, mod_id)
+    clean = terminal.strip_escapes(((out or "") + "\n" + (err or ""))).strip()
+    log_action(current_user, f"mods_{which}", target=gs.name, success=(rc == 0), detail=clean[-400:])
+    ok = rc == 0
+    tail = _last_output_line(clean)
+    msg = (f"Mod {which} finished." if ok
+           else f"Mod {which} reported an error: {tail[:200] or 'check the console'}")
+    restart_pending = False
+    if ok:
+        # A mod change only loads on restart — we never restart automatically; just tell the
+        # admin a restart is needed so the UI can offer "Restart now".
+        state, rmsg = _apply_mod_restart(gs, gs.remote)
+        restart_pending = (state == "needed")   # drives the "Restart now" button in the UI
+        if rmsg:
+            msg = msg + " " + rmsg
+    return jsonify({"success": ok, "message": msg, "restart_pending": restart_pending})
+
+
+def _cron_listing(app, gs):
+    """The scheduled-tasks card's GET answer: the game user's cron jobs, or why they're unknown."""
+    # One-time, in-place upgrade so pre-existing managed jobs start reporting
+    # success/error (idempotent + state-preserving; never blocks the listing).
+    # Given the server's game type and port so a restart-when-empty line is healed
+    # to what set_daily_restart writes for THIS server. Through the module (the seam).
+    try:
+        _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
+                                          game_type=gs.game_type, port=gs.port)
+    except Exception:
+        app.logger.debug("cron tracking upgrade skipped", exc_info=True)
+    jobs = _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)
+    # The same distinction the file browser two cards up already makes, for the
+    # same reason: a read that FAILED and an account with no jobs both used to
+    # arrive here as [], and the page said "No scheduled tasks yet." about a
+    # crontab it had never reached. _sync_toggles_from_cron refuses None as
+    # well — this is the caller that made an unreadable crontab destructive
+    # rather than merely misleading.
+    if jobs is None:
+        return jsonify({"error": "Couldn't read the scheduled tasks — %s didn't "
+                                 "answer. This is not the same as there being none."
+                                 % (gs.remote.display_name if gs.remote
+                                    else "the host")})
+    _sync_toggles_from_cron(gs, jobs)
+    return jsonify({"jobs": jobs})
+
+
+def _apply_gmod_selection(remote, gmod_user, games):
+    """Ensure a content user, fetch any missing games, and mount exactly those on disk: the job's state.
+
+    An empty selection unmounts everything.
+    """
+    if not games:
+        ok, msg = gmod_mount_setup(remote, gmod_user, "", [])
+        return {"status": "done" if ok else "error", "msg": msg, "ts": time.time()}
+    cu = ensure_content_user(remote)
+    if not cu:
+        return {"status": "error", "msg": "No content storage could be prepared on the host.",
+                "ts": time.time()}
+    return _install_and_mount(remote, gmod_user, cu, games)
+
+
+def _split_on_disk(cu, installed, games):
+    """(mountable, missing): which of the selected games are on the host now, and which are not."""
+    # Already on the host before this ran (ensure_content_user's scan), plus
+    # whatever this run put there. Anything else is not on disk, so mounting it
+    # would be the claim this card exists to make true.
+    _on_disk = set(cu.get("present") or {}) | set(installed or [])
+    _mountable = [g for g in games if g in _on_disk]
+    _missing = [g for g in games if g not in _on_disk]
+    return _mountable, _missing
+
+
+def _install_and_mount(remote, gmod_user, cu, games):
+    """Fetch the games not yet on the host into content user `cu`, then mount what is: the state."""
+    # KEEP the result. `installed` is the games install_gmod_content verified
+    # are on disk afterwards (it re-runs content_present after SteamCMD), and
+    # throwing it away meant the mount was written for every game the operator
+    # ticked whether or not its content existed: a 13GB CS:S install that ran
+    # out of disk still produced mount.cfg pointing at a directory that is not
+    # there, a stored result of "Mounted: Counter-Strike: Source — restart the
+    # server to apply", and purple ERROR textures on every map for an operator
+    # who had been told the content was mounted. The uninstall worker below
+    # already reports what it actually removed rather than what was asked.
+    _ok_i, installed, _imsg = install_gmod_content(remote, cu["user"], games)
+    _mountable, _missing = _split_on_disk(cu, installed, games)
+    ok, msg = gmod_mount_setup(remote, gmod_user, cu["user"], _mountable)
+    if _missing:
+        _labels = ", ".join(GMOD_CONTENT_GAMES[g][0] for g in _missing)
+        return {
+            "status": "error",
+            "msg": ("Not installed, so not mounted: %s. Check free disk on "
+                    "the host, then try again. %s" % (_labels, msg or "")).strip(),
+            "ts": time.time()}
+    return {"status": "done" if ok else "error", "msg": msg, "ts": time.time()}
+
+
+def _uninstall_gmod_selection(remote, gmod_user, games):
+    """Remove content from the host, then drop it from THIS server's mounts: the job's state."""
+    cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
+    # No content user at all: nothing was asked of the host, so there is nothing
+    # this could have failed to confirm — `asked` stays empty rather than turning
+    # every game into an unconfirmed removal.
+    _asked, removed = [], []
+    if cu:
+        _asked = list(games)
+        _, removed, _m = uninstall_gmod_content(remote, cu["user"], games)
+    # Drop the removed games from THIS server's mount.cfg (other servers just skip the
+    # now-missing mount). Best-effort — but NOT when the current mounts could not be
+    # read: `remaining` would be [], and writing that back unmounts everything the
+    # server had, including games nobody asked to remove.
+    _cur = gmod_current_mounts(remote, gmod_user)
+    if _cur is None:
+        _log.warning("gmod content uninstall: mounts unreadable for %s — leaving "
+                     "mount.cfg alone", gmod_user)
+    else:
+        gmod_mount_setup(remote, gmod_user, (cu or {}).get("user", ""),
+                         [g for g in _cur if g not in games])
+    _st, _msg = _gmod_removal_result(_asked, removed)
+    return {"status": _st, "msg": _msg, "ts": time.time()}
+
+
+def _bg_gmod_content_apply(app, server_id, remote_id, gmod_user, games):
+    """Apply a GMod content selection in the background (a download can take many minutes).
+
+    Ensure a content user, fetch any missing games, then rewrite the server's mount.cfg to exactly
+    the selection. An empty selection unmounts everything. Result is stashed for the status poll.
+    """
+    _app = app
+    _gmod_content_apply_state[server_id] = {"status": "running", "msg": "", "ts": time.time()}
+
+    _result = [None]   # the terminal state, published only once the host is released
+
+    def _run():
+        with _app.app_context():
+            try:
+                remote = db.session.get(RemoteServer, remote_id)
+                if not remote:
+                    return
+                _result[0] = _apply_gmod_selection(remote, gmod_user, games)
+            except Exception:
+                _log.warning("gmod content apply failed for %s", gmod_user, exc_info=True)
+                _result[0] = {
+                    "status": "error", "msg": "Content setup failed — check the server logs.",
+                    "ts": time.time()}
+            finally:
+                _publish_gmod_job(server_id, remote_id, _result[0])
+
+    _start_gmod_content_worker(remote_id, _run)
+
+
+def _bg_gmod_content_uninstall(app, server_id, remote_id, gmod_user, games):
+    """Uninstall content from the host (host-wide) in the background.
+
+    Then drop the removed games from THIS server's mounts. Result is stashed for the status poll.
+    """
+    _app = app
+    _gmod_content_apply_state[server_id] = {"status": "running", "msg": "", "ts": time.time()}
+
+    _result = [None]
+
+    def _run():
+        with _app.app_context():
+            try:
+                remote = db.session.get(RemoteServer, remote_id)
+                if not remote:
+                    return
+                _result[0] = _uninstall_gmod_selection(remote, gmod_user, games)
+            except Exception:
+                _log.warning("gmod content uninstall failed for %s", gmod_user, exc_info=True)
+                _result[0] = {
+                    "status": "error", "msg": "Uninstall failed — check the server logs.",
+                    "ts": time.time()}
+            finally:
+                _publish_gmod_job(server_id, remote_id, _result[0])
+
+    _start_gmod_content_worker(remote_id, _run)
+
+
+def _start_gmod_content_worker(remote_id, run):
+    """Start a content worker.
+
+    The host the route claimed is released by the worker's own finally — or here, if the thread
+    never starts, so a failed start cannot wedge the host.
+    """
+    try:
+        threading.Thread(target=run, daemon=True).start()
+    except Exception:
+        _release_gmod_content_host(remote_id)
+        raise
+
+
+def _gmod_content_status(remote, gs, server_id):
+    """The GMod content card's GET answer: games, mounts, disk and the job, or an error."""
+    try:
+        # `or []` collapsed the THIRD answer into the second. gmod_current_mounts
+        # returns a list, [] for "mounts nothing", and None for "the mount state could
+        # not be read" — its docstring calls that distinction the whole point. Collapsed,
+        # a failed read painted every checkbox unticked, i.e. "this server mounts
+        # nothing"; applying that card writes exactly the visible selection, so an empty
+        # one unmounts everything. The uninstall worker (_uninstall_gmod_selection) already
+        # guards the same call for the same reason.
+        _mounts = gmod_current_mounts(remote, gs.short_name)
+        mounted = _mounts or []
+        cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
+        present = set((cu or {}).get("present", {}))
+        games = [{"key": k, "label": GMOD_CONTENT_GAMES[k][0], "size": GMOD_CONTENT_SIZES.get(k, ""),
+                  "present": (k in present), "mounted": (k in mounted),
+                  "downloadable": GMOD_CONTENT_GAMES[k][1] is not None} for k in GMOD_CONTENT_GAMES]
+        # The job, INCLUDING a terminal one the card has not shown yet — see
+        # _gmod_job_state for what filtering to "running" cost.
+        st = _gmod_job_state(server_id)
+        # Free disk on the filesystem where content is stored — so nobody starts a 13GB
+        # install without room. Uses the content user's serverfiles if one exists, else /home.
+        content_path = ("/home/%s/serverfiles" % cu["user"]) if cu else "/home"
+        disk_free, disk_total = path_disk_free(remote, content_path)
+        return jsonify({"games": games, "mounted": mounted,
+                        # False = the host did not answer. The card must not offer an
+                        # Apply built on ticks it could not read.
+                        "mounts_readable": _mounts is not None,
+                        "disk_free": disk_free, "disk_total": disk_total,
+                        "job": st})
+    except Exception:
+        return jsonify({"error": _log_and_generic("gmod content status failed"), "games": []}), 200
+
+
+def _gmod_selection(body):
+    """(action, games) of a GMod content POST, keeping only games the panel knows."""
+    action = body.get("action") or "mount"
+    sel = [g for g in (body.get("games") or []) if g in GMOD_CONTENT_GAMES]
+    return action, sel
+
+
+def _gmod_busy():
+    """The 409 for a host that already has a content job running."""
+    return jsonify({"success": False, "message": (
+        "A Garry's Mod content job is already running on this host. Content is shared by every "
+        "GMod server here, so wait for that one to finish, then try again.")}), 409
+
+
+def _gmod_uninstall_request(app, gs, remote, sel):
+    """Start removing `sel` from the host, unless a content job already holds it."""
+    if not _claim_gmod_content_host(remote.id):
+        return _gmod_busy()
+    _bg_gmod_content_uninstall(app, gs.id, remote.id, gs.short_name, sel)
+    log_action(current_user, "gmod_content_uninstall", target=gs.name, detail=",".join(sel))
+    return jsonify({"success": True, "games": sel,
+                    "message": "Removing content from the host — this frees disk for every GMod "
+                               "server here. Restart affected servers afterwards."})
+
+
+def _gmod_apply_request(app, gs, remote, sel):
+    """Start mounting exactly `sel`, unless the current mounts are unreadable or the host is busy."""
+    # Refuse the write when the CURRENT mounts cannot be read, whatever the page sent.
+    # gmod_mount_setup rewrites mount.cfg to exactly this selection, so applying a card that
+    # was built from an unreadable state silently unmounts whatever the server really had.
+    # Guarding here and not only in the UI: this is the request that does the damage.
+    if gmod_current_mounts(remote, gs.short_name) is None:
+        return jsonify({"success": False, "message": (
+            "Couldn't read this server's current mounts, so the panel won't rewrite them — "
+            "applying now could unmount content the server already has. Check the host is "
+            "reachable and reload this card.")}), 409
+    if not _claim_gmod_content_host(remote.id):
+        return _gmod_busy()
+    _bg_gmod_content_apply(app, gs.id, remote.id, gs.short_name, sel)
+    log_action(current_user, "gmod_content", target=gs.name, detail=(",".join(sel) or "(none)"))
+    return jsonify({"success": True, "games": sel,
+                    "message": "Applying mount changes — a download can take a while for large games. "
+                               "Restart the server afterwards to load the changes."})
+
+
+def _store_upload(gs, reldir, f, data, overwrite):
+    """Write an uploaded file onto the host and audit it: the upload route's answer."""
+    ok, msg = upload_file(gs.remote, gs.short_name, reldir, f.filename, data,
+                          overwrite=overwrite)
+    if not ok and msg == UPLOAD_EXISTS:
+        return jsonify({"success": False, "conflict": True, "name": f.filename,
+                        "message": "A file with that name already exists."}), 409
+    log_action(current_user, "upload_file", target=gs.name,
+               detail="%s/%s%s" % (reldir, f.filename, " (overwrote)" if overwrite else ""),
+               success=ok)
+    return jsonify({"success": ok, "message": msg or ("Uploaded" if ok else "Failed"), "name": f.filename})
+
+
+def _console_lines_wanted():
+    """How many lines of the log /api/console returns: ?lines=, clamped."""
+    # How much of the log to return. This was a hard `tail -100`, which is where "the console
+    # clears out a lot of the old console" came from: 100 lines is a minute or two of chat and
+    # connects on a busy server, and the poll returns a SLIDING WINDOW, so anything older had
+    # already fallen off before the browser ever saw it. The browser keeps its own scrollback
+    # now (it appends what is new instead of re-rendering), so this window only has to be big
+    # enough that a gap between two polls is still covered — and the FIRST load has some
+    # history to show. Clamped because it is a caller-supplied number that sizes a read.
+    try:
+        want = int(request.args.get("lines") or _CONSOLE_LINES)
+    except (TypeError, ValueError):
+        want = _CONSOLE_LINES
+    return max(50, min(want, _CONSOLE_LINES_MAX))
+
+
+def _read_console_window(remote, gs, want, host_tz):
+    """The last `want` lines of the console log: (readable, rows)."""
+    # Whether the log was actually READ, kept separate from what it held. The route knew this
+    # and threw it away: a host that did not answer, a `tail -2000` that timed out on a slow
+    # link, a log that does not exist and a genuinely empty log all left here as 200 with the
+    # same `lines: []`, and nothing in the payload told them apart. The browser's "Load older"
+    # believed it, emptied its own scrollback — the only copy, since the poller emits a sliding
+    # window and keeps nothing — and toasted "Loaded 0 lines from the log" about a log it never
+    # opened. Same answer api_server_upload_check gives with `checked`, for the same reason.
+    readable = False
+    try:
+        log_path = gs.console_log
+        # AS THE GAME USER, not as root: the log sits inside a 0750 home. See
+        # _core.read_as_game_user for why this was a root read and what that cost.
+        # FRAMED, like the poller's reads, and for the same reason: run_command strips the
+        # output, so the window's LAST line lost its trailing whitespace and its FIRST line its
+        # indentation. The browser de-duplicates this window against lines the poller pushed,
+        # by exact string — and the pushed copies were not stripped. Minecraft's "There are 0
+        # of a max of 20 players online: " ends in a space, so after every `list` the page
+        # found no overlap and appended the whole window again beneath the reply: the
+        # "console stops responding until I press Load older" report.
+        out, _, rc = _sm.read_as_game_user(
+            remote, gs.short_name,
+            # tail's OWN status is the answer, not printf's: without `exit $r` a log that does
+            # not exist (LinuxGSM's start is `mv` then `touch`) came back framed, rc 0, empty —
+            # "readable, and nothing in it" — and Load older wiped the console on that.
+            f"printf B; tail -{want} {log_path} 2>/dev/null; r=$?; printf E; exit $r",
+            timeout=15, selfname=gs.lgsm_name)
+        framed = rc == 0 and (out or "").startswith("B") and (out or "").endswith("E")
+        readable = framed
+        body = out[1:-1] if framed else ""
+        if body.endswith("\n"):
+            body = body[:-1]     # the file's own final newline, not an empty last line
+        lines = _console_rows(_clean_console_text(body).split("\n"), host_tz) if framed else []
+    except Exception:
+        lines = []
+    return readable, lines
+
+
+def _console_to_poll(app, socketio, server_id):
+    """The GameServer the poller should read this tick, or None: gone, hostless or unwatched."""
+    gs = db.session.get(GameServer, server_id)
+    if not gs or not gs.remote:
+        return None
+    # RE-ASK who may watch this, every tick. The join handler's check is a
+    # one-time question, and the answer can change while the socket stays
+    # open: a group removed, a permission dropped, the account
+    # deactivated. Evicting from the ROOM is what actually stops the
+    # stream; dropping the viewer entry alone would only stop the polling.
+    _evicted = _evict_unauthorized_viewers(app, socketio, server_id)
+    if _evicted:
+        app.logger.info(
+            "console: dropped %d viewer(s) of server %s whose access no "
+            "longer permits it", _evicted, server_id)
+    with _viewers_lock:
+        if not _console_viewers.get(server_id):
+            return None      # nobody left who may see it — do not read
+    return gs
+
+
 def register(app, supervise):
     """Register the file/config routes and the console socket. RETURNS the SocketIO instance.
 
@@ -606,6 +1030,28 @@ def register(app, supervise):
     returned because register_routes still needs it — the console-poller ticker pushes through
     it, and app.socketio is what the entry point calls .run() on.
     """
+    _register_files_page(app)
+    _register_config_editor(app)
+    _register_alerts(app)
+    _register_mods(app)
+    _register_file_editor(app)
+    _register_file_removal(app)
+    _register_download(app)
+    _register_lgsm_data(app)
+    _register_cron_jobs(app)
+    _register_cron_actions(app)
+    _register_gmod_content(app)
+    _register_uploads(app)
+    _register_console_routes(app)
+    _register_send_command(app)
+    socketio = _create_console_socket(app)
+    _register_console_viewers(socketio)
+    _start_console_poller(app, socketio, supervise)
+    return socketio
+
+
+def _register_files_page(app):
+    """The Files & Config page itself."""
     @app.route("/server/<int:server_id>/files")
     @login_required
     @server_access_required
@@ -645,6 +1091,9 @@ def register(app, supervise):
                                # meaning — and the panel's own bootstrap sets new hosts to UTC.
                                host_timezone=_host_timezone_cached(gs.remote, app))
 
+
+def _register_config_editor(app):
+    """The instance's LinuxGSM config, and the game's own server config file."""
     @app.route("/api/server/<int:server_id>/config", methods=["GET", "POST"])
     @login_required
     @server_access_required
@@ -687,47 +1136,25 @@ def register(app, supervise):
         except Exception:
             return jsonify({"error": _log_and_generic("game config read failed")}), 200
 
+
+def _register_alerts(app):
+    """The server's LinuxGSM alert settings."""
     @app.route("/api/server/<int:server_id>/alerts", methods=["GET", "POST"])
     @login_required
     @server_access_required
     def api_server_alerts(server_id):
-        """Read/write the server's LinuxGSM alert settings (Discord/Telegram/email/…). Writes
-        straight into the LinuxGSM config so the game server itself sends the notifications.
+        """Read/write the server's LinuxGSM alert settings (Discord/Telegram/email/…).
+
+        Writes straight into the LinuxGSM config so the game server itself sends the
+        notifications.
         """
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         if request.method == "GET":
-            # A read that FAILED must not render as a form, and this is not a cosmetic point.
-            # The card paints `vals` straight into the inputs, and Save posts every input back
-            # through lgsm_write_config — so a blank form is not "nothing configured", it is a
-            # loaded gun: one failed read followed by one Save replaced the operator's real
-            # Discord/Telegram webhooks and tokens with empty strings and reported success.
-            # lgsm_get_values now answers None for "could not read"; the front end already has an
-            # error path (server_files.js loadAlerts: `if(d.error)`) that shows the message and
-            # never builds the inputs, so there is nothing to save back.
-            try:
-                vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, _ALERT_KEYS)
-            except Exception:
-                vals = None
-                app.logger.debug("alerts read failed", exc_info=True)
-            if vals is None:
-                return jsonify({"error": "Could not read this server's LinuxGSM config, so the "
-                                         "current alert settings are unknown. Nothing has been "
-                                         "changed — try again when the host answers."}), 200
-            return jsonify({"providers": ALERT_PROVIDERS, "values": vals})
+            return _alerts_read(app, gs)
         # POST: only the known alert keys; toggles coerced to on/off.
-        # isinstance, not `or {}`: a non-empty non-dict (a number, a list) passes the `or` and
-        # then .items() raises AttributeError — a 500 for a bad request body.
-        data = _json_body().get("values")
-        data = data if isinstance(data, dict) else {}
-        updates = {}
-        for k, v in data.items():
-            if k not in _ALERT_KEY_SET:
-                continue
-            if k.endswith("alert"):
-                v = "on" if str(v).lower() in ("on", "true", "1", "yes") else "off"
-            updates[k] = v
+        updates = _alert_updates(_json_body().get("values"))
         try:
             ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, updates)
             log_action(current_user, "server_alerts_save", target=gs.name, success=ok)
@@ -735,58 +1162,37 @@ def register(app, supervise):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("alerts save failed")}), 200
 
+
+def _register_mods(app):
+    """Listing, installing and removing LinuxGSM mods."""
     @app.route("/api/server/<int:server_id>/mods", methods=["GET", "POST"])
     @login_required
     @server_access_required
     def api_server_mods(server_id):
-        """List / install / remove LinuxGSM mods (SourceMod, MetaMod, Oxide, …). Listing
-        drives LinuxGSM's mods menus; install/remove feed the chosen mod id. Install/remove
+        """List / install / remove LinuxGSM mods (SourceMod, MetaMod, Oxide, …).
+
+        Listing drives LinuxGSM's mods menus; install/remove feed the chosen mod id. Install/remove
         modify the install, so they need UPDATE_SERVER.
         """
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
         if request.method == "GET":
-            available, installed, supported = [], [], True
-            try:
-                available, av_ok = mods_available(gs.remote, gs.short_name, gs.lgsm_name)
-                installed, in_ok = mods_installed(gs.remote, gs.short_name, gs.lgsm_name)
-                supported = av_ok and in_ok   # this game has a LinuxGSM mods installer
-            except Exception:
-                app.logger.debug("mods list failed", exc_info=True)  # unreachable host — return empties
-            return jsonify({"available": available, "installed": installed, "supported": supported})
+            return _mods_listing(app, gs)
         # POST: install or remove a mod by its LinuxGSM id (e.g. "sourcemod").
         if not (current_user.is_superadmin or has_permission(current_user, UPDATE_SERVER)):
             return jsonify({"success": False, "message": "Permission denied"}), 403
-        data = _json_body()
-        which = "install" if data.get("action") == "install" else ("remove" if data.get("action") == "remove" else "")
-        mod_id = _json_str(data, "mod")   # coerces, so a numeric/other type cannot crash .strip()
+        which, mod_id = _mod_request(_json_body())
         if not which or not re.match(r"^[A-Za-z0-9._-]+\Z", mod_id):
             return jsonify({"success": False, "message": "Pick a valid mod to " + (which or "act on") + "."}), 400
         try:
-            out, err, rc = mods_action(gs.remote, gs.short_name, gs.lgsm_name, which, mod_id)
-            clean = terminal.strip_escapes(((out or "") + "\n" + (err or ""))).strip()
-            log_action(current_user, f"mods_{which}", target=gs.name, success=(rc == 0), detail=clean[-400:])
-            ok = rc == 0
-            tail = ""
-            for line in reversed(clean.splitlines()):
-                if line.strip():
-                    tail = line.strip()
-                    break
-            msg = (f"Mod {which} finished." if ok
-                   else f"Mod {which} reported an error: {tail[:200] or 'check the console'}")
-            restart_pending = False
-            if ok:
-                # A mod change only loads on restart — we never restart automatically; just tell the
-                # admin a restart is needed so the UI can offer "Restart now".
-                state, rmsg = _apply_mod_restart(gs, gs.remote)
-                restart_pending = (state == "needed")   # drives the "Restart now" button in the UI
-                if rmsg:
-                    msg = msg + " " + rmsg
-            return jsonify({"success": ok, "message": msg, "restart_pending": restart_pending})
+            return _run_mods_action(gs, which, mod_id)
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("mods action failed")}), 200
 
+
+def _register_file_editor(app):
+    """The file browser's listing, and reading and writing one file."""
     @app.route("/api/server/<int:server_id>/browse")
     @login_required
     @server_access_required
@@ -829,6 +1235,9 @@ def register(app, supervise):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
+
+def _register_file_removal(app):
+    """Deleting a file or directory from the file browser."""
     @app.route("/api/server/<int:server_id>/delete-path", methods=["POST"])
     @login_required
     @server_access_required
@@ -845,6 +1254,8 @@ def register(app, supervise):
             return jsonify({"success": False, "message": _log_and_generic("delete_path failed")}), 500
 
 
+def _register_download(app):
+    """Downloading a file, or a directory as a .tar.gz, from the file browser."""
     @app.route("/server/<int:server_id>/download")
     @login_required
     @server_access_required
@@ -865,6 +1276,7 @@ def register(app, supervise):
             flash("You don't have permission to manage server files.", "danger")
             return redirect(url_for("server_detail", server_id=server_id))
         rel = request.args.get("path", "")
+
         # Every failure below ends in a flash and a redirect rather than an abort(), because this
         # is a LINK the browser follows: an error page would replace the file browser with a bare
         # 404, whereas a redirect back to the page says what went wrong and leaves the admin where
@@ -912,6 +1324,9 @@ def register(app, supervise):
         resp.headers["Content-Disposition"] = _attachment_header(name)
         return resp
 
+
+def _register_lgsm_data(app):
+    """Re-fetching LinuxGSM's serverlist and dependency data."""
     @app.route("/api/lgsm-data/refresh", methods=["POST"])
     @login_required
     @superadmin_required
@@ -946,6 +1361,9 @@ def register(app, supervise):
                        % ((" (%s)" % why) if why else ""))
         return jsonify({"success": bool(ok and games), "games": games, "message": message})
 
+
+def _register_cron_jobs(app):
+    """Listing, adding and editing the game user's scheduled tasks."""
     @app.route("/api/server/<int:server_id>/cron", methods=["GET", "POST"])
     @login_required
     @server_access_required
@@ -955,29 +1373,7 @@ def register(app, supervise):
             return jsonify({"error": "Permission denied"}), 403
         if request.method == "GET":
             try:
-                # One-time, in-place upgrade so pre-existing managed jobs start reporting
-                # success/error (idempotent + state-preserving; never blocks the listing).
-                # Given the server's game type and port so a restart-when-empty line is healed
-                # to what set_daily_restart writes for THIS server. Through the module (the seam).
-                try:
-                    _sm.upgrade_managed_cron_tracking(gs.remote, gs.short_name, gs.lgsm_name,
-                                                      game_type=gs.game_type, port=gs.port)
-                except Exception:
-                    app.logger.debug("cron tracking upgrade skipped", exc_info=True)
-                jobs = _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name)
-                # The same distinction the file browser two cards up already makes, for the
-                # same reason: a read that FAILED and an account with no jobs both used to
-                # arrive here as [], and the page said "No scheduled tasks yet." about a
-                # crontab it had never reached. _sync_toggles_from_cron refuses None as
-                # well — this is the caller that made an unreadable crontab destructive
-                # rather than merely misleading.
-                if jobs is None:
-                    return jsonify({"error": "Couldn't read the scheduled tasks — %s didn't "
-                                             "answer. This is not the same as there being none."
-                                             % (gs.remote.display_name if gs.remote
-                                                else "the host")})
-                _sync_toggles_from_cron(gs, jobs)
-                return jsonify({"jobs": jobs})
+                return _cron_listing(app, gs)
             except Exception:
                 return jsonify({"error": _log_and_generic("list_cron_jobs failed")}), 500
         data = _json_body()
@@ -1009,6 +1405,9 @@ def register(app, supervise):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("update_cron_job failed")}), 500
 
+
+def _register_cron_actions(app):
+    """Deleting a scheduled task, and running one now."""
     @app.route("/api/server/<int:server_id>/cron/delete", methods=["POST"])
     @login_required
     @server_access_required
@@ -1044,125 +1443,8 @@ def register(app, supervise):
             return jsonify({"success": False, "message": _log_and_generic("cron run failed")}), 200
 
 
-    def _bg_gmod_content_apply(server_id, remote_id, gmod_user, games):
-        """Apply a GMod content selection in the background (a download can take many minutes): ensure
-        a content user, fetch any missing games, then rewrite the server's mount.cfg to exactly the
-        selection. An empty selection unmounts everything. Result is stashed for the status poll.
-        """
-        _app = app
-        _gmod_content_apply_state[server_id] = {"status": "running", "msg": "", "ts": time.time()}
-
-        _result = [None]   # the terminal state, published only once the host is released
-
-        def _run():
-            with _app.app_context():
-                try:
-                    remote = db.session.get(RemoteServer, remote_id)
-                    if not remote:
-                        return
-                    if games:
-                        cu = ensure_content_user(remote)
-                        if not cu:
-                            _result[0] = {
-                                "status": "error", "msg": "No content storage could be prepared on the host.",
-                                "ts": time.time()}
-                            return
-                        # KEEP the result. `installed` is the games install_gmod_content verified
-                        # are on disk afterwards (it re-runs content_present after SteamCMD), and
-                        # throwing it away meant the mount was written for every game the operator
-                        # ticked whether or not its content existed: a 13GB CS:S install that ran
-                        # out of disk still produced mount.cfg pointing at a directory that is not
-                        # there, a stored result of "Mounted: Counter-Strike: Source — restart the
-                        # server to apply", and purple ERROR textures on every map for an operator
-                        # who had been told the content was mounted. The uninstall worker below
-                        # already reports what it actually removed rather than what was asked.
-                        _ok_i, installed, _imsg = install_gmod_content(remote, cu["user"], games)
-                        # Already on the host before this ran (ensure_content_user's scan), plus
-                        # whatever this run put there. Anything else is not on disk, so mounting it
-                        # would be the claim this card exists to make true.
-                        _on_disk = set(cu.get("present") or {}) | set(installed or [])
-                        _mountable = [g for g in games if g in _on_disk]
-                        _missing = [g for g in games if g not in _on_disk]
-                        ok, msg = gmod_mount_setup(remote, gmod_user, cu["user"], _mountable)
-                        if _missing:
-                            _labels = ", ".join(GMOD_CONTENT_GAMES[g][0] for g in _missing)
-                            _result[0] = {
-                                "status": "error",
-                                "msg": ("Not installed, so not mounted: %s. Check free disk on "
-                                        "the host, then try again. %s" % (_labels, msg or "")).strip(),
-                                "ts": time.time()}
-                            return
-                    else:
-                        ok, msg = gmod_mount_setup(remote, gmod_user, "", [])
-                    _result[0] = {
-                        "status": "done" if ok else "error", "msg": msg, "ts": time.time()}
-                except Exception:
-                    _log.warning("gmod content apply failed for %s", gmod_user, exc_info=True)
-                    _result[0] = {
-                        "status": "error", "msg": "Content setup failed — check the server logs.",
-                        "ts": time.time()}
-                finally:
-                    _publish_gmod_job(server_id, remote_id, _result[0])
-
-        _start_gmod_content_worker(remote_id, _run)
-
-    def _bg_gmod_content_uninstall(server_id, remote_id, gmod_user, games):
-        """Uninstall content from the host (host-wide) in the background, then drop the removed games
-        from THIS server's mounts. Result is stashed for the status poll.
-        """
-        _app = app
-        _gmod_content_apply_state[server_id] = {"status": "running", "msg": "", "ts": time.time()}
-
-        _result = [None]
-
-        def _run():
-            with _app.app_context():
-                try:
-                    remote = db.session.get(RemoteServer, remote_id)
-                    if not remote:
-                        return
-                    cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
-                    # No content user at all: nothing was asked of the host, so there is nothing
-                    # this could have failed to confirm — `asked` stays empty rather than turning
-                    # every game into an unconfirmed removal.
-                    _asked, removed = [], []
-                    if cu:
-                        _asked = list(games)
-                        _, removed, _m = uninstall_gmod_content(remote, cu["user"], games)
-                    # Drop the removed games from THIS server's mount.cfg (other servers just skip the
-                    # now-missing mount). Best-effort — but NOT when the current mounts could not be
-                    # read: `remaining` would be [], and writing that back unmounts everything the
-                    # server had, including games nobody asked to remove.
-                    _cur = gmod_current_mounts(remote, gmod_user)
-                    if _cur is None:
-                        _log.warning("gmod content uninstall: mounts unreadable for %s — leaving "
-                                     "mount.cfg alone", gmod_user)
-                    else:
-                        gmod_mount_setup(remote, gmod_user, (cu or {}).get("user", ""),
-                                         [g for g in _cur if g not in games])
-                    _st, _msg = _gmod_removal_result(_asked, removed)
-                    _result[0] = {
-                        "status": _st, "msg": _msg, "ts": time.time()}
-                except Exception:
-                    _log.warning("gmod content uninstall failed for %s", gmod_user, exc_info=True)
-                    _result[0] = {
-                        "status": "error", "msg": "Uninstall failed — check the server logs.",
-                        "ts": time.time()}
-                finally:
-                    _publish_gmod_job(server_id, remote_id, _result[0])
-
-        _start_gmod_content_worker(remote_id, _run)
-
-    def _start_gmod_content_worker(remote_id, run):
-        """Start a content worker; the host the route claimed is released by the worker's own
-        finally — or here, if the thread never starts, so a failed start cannot wedge the host.
-        """
-        try:
-            threading.Thread(target=run, daemon=True).start()
-        except Exception:
-            _release_gmod_content_host(remote_id)
-            raise
-
+def _register_gmod_content(app):
+    """Garry's Mod content mounting: its status card, and applying or uninstalling content."""
     @app.route("/api/server/<int:server_id>/gmod-content", methods=["GET", "POST"])
     @login_required
     @server_access_required
@@ -1177,68 +1459,16 @@ def register(app, supervise):
             return jsonify({"error": "Content mounting is available for Garry's Mod only."}), 400
         remote = gs.remote
         if request.method == "GET":
-            try:
-                # `or []` collapsed the THIRD answer into the second. gmod_current_mounts
-                # returns a list, [] for "mounts nothing", and None for "the mount state could
-                # not be read" — its docstring calls that distinction the whole point. Collapsed,
-                # a failed read painted every checkbox unticked, i.e. "this server mounts
-                # nothing"; applying that card writes exactly the visible selection, so an empty
-                # one unmounts everything. The uninstall worker 33 lines above already guards the
-                # same call for the same reason.
-                _mounts = gmod_current_mounts(remote, gs.short_name)
-                mounted = _mounts or []
-                cu = detect_content_user(remote, tuple(GMOD_CONTENT_GAMES))
-                present = set((cu or {}).get("present", {}))
-                games = [{"key": k, "label": GMOD_CONTENT_GAMES[k][0], "size": GMOD_CONTENT_SIZES.get(k, ""),
-                          "present": (k in present), "mounted": (k in mounted),
-                          "downloadable": GMOD_CONTENT_GAMES[k][1] is not None} for k in GMOD_CONTENT_GAMES]
-                # The job, INCLUDING a terminal one the card has not shown yet — see
-                # _gmod_job_state for what filtering to "running" cost.
-                st = _gmod_job_state(server_id)
-                # Free disk on the filesystem where content is stored — so nobody starts a 13GB
-                # install without room. Uses the content user's serverfiles if one exists, else /home.
-                content_path = ("/home/%s/serverfiles" % cu["user"]) if cu else "/home"
-                disk_free, disk_total = path_disk_free(remote, content_path)
-                return jsonify({"games": games, "mounted": mounted,
-                                # False = the host did not answer. The card must not offer an
-                                # Apply built on ticks it could not read.
-                                "mounts_readable": _mounts is not None,
-                                "disk_free": disk_free, "disk_total": disk_total,
-                                "job": st})
-            except Exception:
-                return jsonify({"error": _log_and_generic("gmod content status failed"), "games": []}), 200
+            return _gmod_content_status(remote, gs, server_id)
         # POST: apply a selection (mutating). The MANAGE_SERVERS gate is at the top of the route.
-        body = _json_body()
-        action = body.get("action") or "mount"
-        sel = [g for g in (body.get("games") or []) if g in GMOD_CONTENT_GAMES]
-        _busy = jsonify({"success": False, "message": (
-            "A Garry's Mod content job is already running on this host. Content is shared by every "
-            "GMod server here, so wait for that one to finish, then try again.")}), 409
+        action, sel = _gmod_selection(_json_body())
         if action == "uninstall":
-            if not _claim_gmod_content_host(remote.id):
-                return _busy
-            _bg_gmod_content_uninstall(gs.id, remote.id, gs.short_name, sel)
-            log_action(current_user, "gmod_content_uninstall", target=gs.name, detail=",".join(sel))
-            return jsonify({"success": True, "games": sel,
-                            "message": "Removing content from the host — this frees disk for every GMod "
-                                       "server here. Restart affected servers afterwards."})
-        # Refuse the write when the CURRENT mounts cannot be read, whatever the page sent.
-        # gmod_mount_setup rewrites mount.cfg to exactly this selection, so applying a card that
-        # was built from an unreadable state silently unmounts whatever the server really had.
-        # Guarding here and not only in the UI: this is the request that does the damage.
-        if gmod_current_mounts(remote, gs.short_name) is None:
-            return jsonify({"success": False, "message": (
-                "Couldn't read this server's current mounts, so the panel won't rewrite them — "
-                "applying now could unmount content the server already has. Check the host is "
-                "reachable and reload this card.")}), 409
-        if not _claim_gmod_content_host(remote.id):
-            return _busy
-        _bg_gmod_content_apply(gs.id, remote.id, gs.short_name, sel)
-        log_action(current_user, "gmod_content", target=gs.name, detail=(",".join(sel) or "(none)"))
-        return jsonify({"success": True, "games": sel,
-                        "message": "Applying mount changes — a download can take a while for large games. "
-                                   "Restart the server afterwards to load the changes."})
+            return _gmod_uninstall_request(app, gs, remote, sel)
+        return _gmod_apply_request(app, gs, remote, sel)
 
+
+def _register_uploads(app):
+    """Uploading a file through the file browser, and the overwrite check before it."""
     @app.route("/api/server/<int:server_id>/upload", methods=["POST"])
     @login_required
     @server_access_required
@@ -1259,15 +1489,7 @@ def register(app, supervise):
         # conflict rather than silently replacing someone's config.
         overwrite = request.form.get("overwrite") == "1"
         try:
-            ok, msg = upload_file(gs.remote, gs.short_name, reldir, f.filename, data,
-                                  overwrite=overwrite)
-            if not ok and msg == UPLOAD_EXISTS:
-                return jsonify({"success": False, "conflict": True, "name": f.filename,
-                                "message": "A file with that name already exists."}), 409
-            log_action(current_user, "upload_file", target=gs.name,
-                       detail="%s/%s%s" % (reldir, f.filename, " (overwrote)" if overwrite else ""),
-                       success=ok)
-            return jsonify({"success": ok, "message": msg or ("Uploaded" if ok else "Failed"), "name": f.filename})
+            return _store_upload(gs, reldir, f, data, overwrite)
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
@@ -1301,6 +1523,9 @@ def register(app, supervise):
             _log.debug("upload-check: could not list the target directory", exc_info=True)
             return jsonify({"existing": [], "checked": False})
 
+
+def _register_console_routes(app):
+    """The console's HTTP window onto the log, and LinuxGSM's own log timestamps."""
     @app.route("/api/console/<int:server_id>")
     @login_required
     @server_access_required
@@ -1309,53 +1534,9 @@ def register(app, supervise):
         if not current_user.is_superadmin and not has_permission(current_user, VIEW_CONSOLE):
             return jsonify({"error": "Permission denied", "lines": []}), 403
         remote = gs.remote
-        # How much of the log to return. This was a hard `tail -100`, which is where "the console
-        # clears out a lot of the old console" came from: 100 lines is a minute or two of chat and
-        # connects on a busy server, and the poll returns a SLIDING WINDOW, so anything older had
-        # already fallen off before the browser ever saw it. The browser keeps its own scrollback
-        # now (it appends what is new instead of re-rendering), so this window only has to be big
-        # enough that a gap between two polls is still covered — and the FIRST load has some
-        # history to show. Clamped because it is a caller-supplied number that sizes a read.
-        try:
-            want = int(request.args.get("lines") or _CONSOLE_LINES)
-        except (TypeError, ValueError):
-            want = _CONSOLE_LINES
-        want = max(50, min(want, _CONSOLE_LINES_MAX))
+        want = _console_lines_wanted()
         host_tz = _host_timezone_cached(remote, app)
-        # Whether the log was actually READ, kept separate from what it held. The route knew this
-        # and threw it away: a host that did not answer, a `tail -2000` that timed out on a slow
-        # link, a log that does not exist and a genuinely empty log all left here as 200 with the
-        # same `lines: []`, and nothing in the payload told them apart. The browser's "Load older"
-        # believed it, emptied its own scrollback — the only copy, since the poller emits a sliding
-        # window and keeps nothing — and toasted "Loaded 0 lines from the log" about a log it never
-        # opened. Same answer api_server_upload_check gives with `checked`, for the same reason.
-        readable = False
-        try:
-            log_path = gs.console_log
-            # AS THE GAME USER, not as root: the log sits inside a 0750 home. See
-            # _core.read_as_game_user for why this was a root read and what that cost.
-            # FRAMED, like the poller's reads, and for the same reason: run_command strips the
-            # output, so the window's LAST line lost its trailing whitespace and its FIRST line its
-            # indentation. The browser de-duplicates this window against lines the poller pushed,
-            # by exact string — and the pushed copies were not stripped. Minecraft's "There are 0
-            # of a max of 20 players online: " ends in a space, so after every `list` the page
-            # found no overlap and appended the whole window again beneath the reply: the
-            # "console stops responding until I press Load older" report.
-            out, err, rc = _sm.read_as_game_user(
-                remote, gs.short_name,
-                # tail's OWN status is the answer, not printf's: without `exit $r` a log that does
-                # not exist (LinuxGSM's start is `mv` then `touch`) came back framed, rc 0, empty —
-                # "readable, and nothing in it" — and Load older wiped the console on that.
-                f"printf B; tail -{want} {log_path} 2>/dev/null; r=$?; printf E; exit $r",
-                timeout=15, selfname=gs.lgsm_name)
-            framed = rc == 0 and (out or "").startswith("B") and (out or "").endswith("E")
-            readable = framed
-            body = out[1:-1] if framed else ""
-            if body.endswith("\n"):
-                body = body[:-1]     # the file's own final newline, not an empty last line
-            lines = _console_rows(_clean_console_text(body).split("\n"), host_tz) if framed else []
-        except Exception:
-            lines = []
+        readable, lines = _read_console_window(remote, gs, want, host_tz)
         # What the PANEL pushed into this console (a long action's markers and output) — its own
         # field, not spliced into `lines`. Two reasons: the browser de-duplicates `lines` by
         # matching the overlap between successive windows, and a block that is stable at the end
@@ -1424,6 +1605,9 @@ def register(app, supervise):
         except Exception:
             return jsonify({"error": _log_and_generic("request failed")}), 500
 
+
+def _register_send_command(app):
+    """Sending a console command from the live console."""
     @app.route("/api/command/<int:server_id>", methods=["POST"])
     @login_required
     @server_access_required
@@ -1440,7 +1624,7 @@ def register(app, supervise):
             return jsonify({"error": "Permission denied"}), 403
 
         try:
-            out, err, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10, selfname=gs.lgsm_name)
+            _, _, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10, selfname=gs.lgsm_name)
             log_action(current_user, "send_command", target=gs.name, detail=cmd_text, success=(rc == 0))
             if rc != 0:
                 return jsonify({"error": "Console (tmux) not accessible. Is the server running?"}), 502
@@ -1454,6 +1638,8 @@ def register(app, supervise):
             return jsonify({"error": _log_and_generic("request failed")}), 500
 
 
+def _create_console_socket(app):
+    """Construct the app's one SocketIO instance, with its connect handler and the ban sweep."""
     # A per-request check (app._socket_origin_allowed): same origin including the port, or
     # site_domain, or the operator's explicit list. See _socketio_cors.
     socketio = SocketIO(app, cors_allowed_origins=_socketio_cors(), async_mode="eventlet")
@@ -1496,6 +1682,11 @@ def register(app, supervise):
     def _ban_sweep():
         _drop_banned_sockets(app, socketio)
 
+    return socketio
+
+
+def _register_console_viewers(socketio):
+    """Joining and leaving a console's room, and the app's one disconnect handler."""
     @socketio.on("join_console")
     def on_join_console(data):
         # int(), because the ROOM NAME is built from this value and the console poller emits to
@@ -1562,6 +1753,9 @@ def register(app, supervise):
             _socket_addrs.pop(sid, None)
         _socket_hooks.run_disconnect_hooks(sid)
 
+
+def _start_console_poller(app, socketio, supervise):
+    """Hand the console poller to the supervisor."""
     # Console polling thread — streams new console output to WebSocket viewers.
     def console_poller():
         while True:
@@ -1574,22 +1768,9 @@ def register(app, supervise):
                 if active_ids:
                     with app.app_context():
                         for server_id in active_ids:
-                            gs = db.session.get(GameServer, server_id)
-                            if not gs or not gs.remote:
+                            gs = _console_to_poll(app, socketio, server_id)
+                            if gs is None:
                                 continue
-                            # RE-ASK who may watch this, every tick. The join handler's check is a
-                            # one-time question, and the answer can change while the socket stays
-                            # open: a group removed, a permission dropped, the account
-                            # deactivated. Evicting from the ROOM is what actually stops the
-                            # stream; dropping the viewer entry alone would only stop the polling.
-                            _evicted = _evict_unauthorized_viewers(app, socketio, server_id)
-                            if _evicted:
-                                app.logger.info(
-                                    "console: dropped %d viewer(s) of server %s whose access no "
-                                    "longer permits it", _evicted, server_id)
-                            with _viewers_lock:
-                                if not _console_viewers.get(server_id):
-                                    continue      # nobody left who may see it — do not read
                             try:
                                 # A long panel action (update/validate/backup/…) writes its output
                                 # to its own file on the host, NOT to the game's console log — so
@@ -1607,11 +1788,4 @@ def register(app, supervise):
                 app.logger.debug("console poller iteration failed", exc_info=True)
             time.sleep(2)
 
-
     supervise("console-poller", console_poller)
-
-
-
-
-
-    return socketio
