@@ -43,7 +43,7 @@ run_suite() {
     out="$("$PY" "$path" 2>&1)"; rc=$?
     set -e
     printf '%s\n' "$out"
-    if [ "$rc" -ne 0 ]; then
+    if [[ "$rc" -ne 0 ]]; then
         echo "  !! ${path} exited ${rc}" >&2
         return "$rc"
     fi
@@ -83,7 +83,7 @@ if "$PY" -m flake8 --version >/dev/null 2>&1; then
     # the cheapest possible check for that, so it runs here rather than only in a cloud tool.
     "$PY" -m flake8 --select=E9,F63,F7,F82,F401,F811,F841 --show-source --statistics \
         --extend-exclude=venv,.venv . tools/panel-helper
-elif [ "${REQUIRE_TOOLS:-0}" = "1" ]; then
+elif [[ "${REQUIRE_TOOLS:-0}" = "1" ]]; then
     echo "  !! flake8 is required here (REQUIRE_TOOLS=1) and could not be run" >&2
     exit 1
 else
@@ -96,7 +96,7 @@ if command -v shellcheck >/dev/null 2>&1; then
     # been missing from it. `git ls-files` so a new script is covered the day it is committed.
     # shellcheck disable=SC2046  # word-splitting is what we want here; no shell script has a space
     shellcheck -S warning $(git ls-files '*.sh')
-elif [ "${REQUIRE_TOOLS:-0}" = "1" ]; then
+elif [[ "${REQUIRE_TOOLS:-0}" = "1" ]]; then
     echo "  !! shellcheck is required here (REQUIRE_TOOLS=1) and is not on PATH" >&2
     exit 1
 else

@@ -44,7 +44,7 @@ echo -e "╚══════════════════════�
 echo ""
 
 # ── Work out which kind of install this is ──
-if [ "$(id -u)" -eq 0 ]; then
+if [[ "$(id -u)" -eq 0 ]]; then
     MODE="system"
     PANEL_USER="${SERVICE_USER}"
     # `|| true`, because getent exits 2 when the account does not exist and `set -euo pipefail`
@@ -57,7 +57,7 @@ if [ "$(id -u)" -eq 0 ]; then
     UNIT_FILE="${SYSTEM_UNIT}"
     svc() { systemctl "$@"; }
 else
-    if [ -f "${SYSTEM_UNIT}" ] || id "${SERVICE_USER}" >/dev/null 2>&1; then
+    if [[ -f "${SYSTEM_UNIT}" ]] || id "${SERVICE_USER}" >/dev/null 2>&1; then
         die "This looks like a root/system install (service user '${SERVICE_USER}'). Re-run with sudo:
      sudo bash $0"
     fi
@@ -68,14 +68,14 @@ else
     svc() { systemctl --user "$@"; }
 fi
 
-if [ ! -e "${UNIT_FILE}" ] && [ ! -d "${PANEL_DIR}" ]; then
+if [[ ! -e "${UNIT_FILE}" ]] && [[ ! -d "${PANEL_DIR}" ]]; then
     die "No LinuxGSM Panel install found (${MODE} mode). Nothing to remove."
 fi
 
 info "Found a ${MODE} install:"
 echo "    Service : ${UNIT_FILE}"
 echo "    Files   : ${PANEL_DIR}"
-if [ "${MODE}" = "system" ]; then echo "    User    : ${PANEL_USER} (dedicated panel user)"; fi
+if [[ "${MODE}" = "system" ]]; then echo "    User    : ${PANEL_USER} (dedicated panel user)"; fi
 echo ""
 warn "This removes the panel, its service, and its data (accounts / config / keys)."
 warn "Your GAME SERVERS are NOT touched — their users, files, and autostart stay put."
@@ -84,21 +84,21 @@ echo ""
 # ── Confirm (this is destructive) ──
 ASSUME_YES=0
 case "${1:-}" in --yes|-y) ASSUME_YES=1 ;; esac
-if [ "${ASSUME_YES}" -ne 1 ]; then
-    if [ -t 0 ]; then
+if [[ "${ASSUME_YES}" -ne 1 ]]; then
+    if [[ -t 0 ]]; then
         printf "Type 'yes' to uninstall the panel: "
         ans=""; read -r ans || true
-        [ "${ans}" = "yes" ] || { echo "Aborted — nothing was changed."; exit 0; }
+        [[ "${ans}" = "yes" ]] || { echo "Aborted — nothing was changed."; exit 0; }
     else
         die "Refusing to uninstall without confirmation. Re-run with --yes:
-     $([ "${MODE}" = "system" ] && echo 'sudo ')bash $0 --yes"
+     $([[ "${MODE}" = "system" ]] && echo 'sudo ')bash $0 --yes"
     fi
 fi
 echo ""
 
 # ── Read the panel's OWN port + Tailscale flag before we delete its config ──
 PANEL_PORT=""; TS_DONE=0; TS_MOUNT=""; TS_CONF_UNREAD=0
-if [ -f "${PANEL_DIR}/data/config.json" ]; then
+if [[ -f "${PANEL_DIR}/data/config.json" ]]; then
     PANEL_PORT="$(python3 -I -c "import json;print(int(json.load(open('${PANEL_DIR}/data/config.json')).get('port',5000)))" 2>/dev/null || echo "")"
     # The mount the panel published ITSELF at (config.py defaults "tailscale_mount" to "/"). Read
     # here, beside the port, because data/config.json is deleted a few lines below — and validated
@@ -118,7 +118,7 @@ if [ -f "${PANEL_DIR}/data/config.json" ]; then
     TS_MOUNT="$(python3 -I -c "import json,re;m=str(json.load(open('${PANEL_DIR}/data/config.json')).get('tailscale_mount') or '/');print(m if m == '/' or re.fullmatch(r'(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,31}){1,3}', m) else '')" 2>/dev/null || echo "")"
     # The config file is HERE and we could not get a mount out of it — worth saying so below,
     # because `tailscale_setup_done` is read out of the same unreadable file by the grep after it.
-    [ -n "${TS_MOUNT}" ] || TS_CONF_UNREAD=1
+    [[ -n "${TS_MOUNT}" ]] || TS_CONF_UNREAD=1
     if grep -q '"tailscale_setup_done": true' "${PANEL_DIR}/data/config.json" 2>/dev/null; then TS_DONE=1; fi
 fi
 
@@ -129,10 +129,10 @@ svc disable --now linuxgsm-panel.service >/dev/null 2>&1 || true
 # which is right — a missing unit must not abort an uninstall — but it also meant a stop that
 # never happened read the same as one that did, and the next step removes the files the running
 # process is using.
-if [ "$(svc is-active linuxgsm-panel.service 2>/dev/null || true)" = "active" ]; then
+if [[ "$(svc is-active linuxgsm-panel.service 2>/dev/null || true)" = "active" ]]; then
     warn "The panel service is STILL RUNNING after the stop request."
     warn "  Stop it yourself and re-run, or its files will be removed from under it:"
-    if [ "${MODE}" = "system" ]; then
+    if [[ "${MODE}" = "system" ]]; then
         warn "    sudo systemctl stop linuxgsm-panel.service"
     else
         warn "    systemctl --user stop linuxgsm-panel.service"
@@ -144,14 +144,14 @@ rm -f "${UNIT_FILE}"
 # directory behind means a later reinstall silently inherits the old Nice/CPUWeight.
 rm -rf "${UNIT_FILE}.d"
 svc daemon-reload >/dev/null 2>&1 || true
-if [ "${MODE}" = "system" ]; then systemctl reset-failed linuxgsm-panel.service >/dev/null 2>&1 || true; fi
+if [[ "${MODE}" = "system" ]]; then systemctl reset-failed linuxgsm-panel.service >/dev/null 2>&1 || true; fi
 ok "Service stopped and removed"
 
 # The sudo the cleanups need when this is a per-user uninstall. Computed here rather than beside
 # the root-owned removals further down, because the firewall rule below is the FIRST root-owned
 # thing the installer created for a per-user install, and it has to come off the same way.
 U_SUDO=""
-[ "$(id -u)" -ne 0 ] && U_SUDO="sudo"
+[[ "$(id -u)" -ne 0 ]] && U_SUDO="sudo"
 # ...and the one line that explains it, said ONCE and said BEFORE the first command that needs it.
 # It used to sit further down, beside the /usr/local removals, which stopped being the first sudo
 # on this path the moment the firewall rule below was taken out of the system-only branch: a
@@ -159,8 +159,8 @@ U_SUDO=""
 # than a line, because there are now two places that have to be able to be the first one.
 _SUDO_NOTE_SHOWN=0
 sudo_note() {
-    [ -n "${U_SUDO}" ] || return 0
-    [ "${_SUDO_NOTE_SHOWN}" -eq 0 ] || return 0
+    [[ -n "${U_SUDO}" ]] || return 0
+    [[ "${_SUDO_NOTE_SHOWN}" -eq 0 ]] || return 0
     _SUDO_NOTE_SHOWN=1
     info "Some pieces live outside your home directory and need sudo to remove…"
 }
@@ -179,11 +179,11 @@ sudo_note() {
 # block in SILENCE — the installer's rule left open on a host with no panel behind it, and nothing
 # said so. The Tailscale teardown below already hedges out loud about the same unreadable file;
 # the firewall deserves the same. Not knowing the port is not the same as there being no rule.
-if [ -z "${PANEL_PORT}" ] && command -v ufw >/dev/null 2>&1; then
+if [[ -z "${PANEL_PORT}" ]] && command -v ufw >/dev/null 2>&1; then
     warn "Could not read the panel's port from its config, so its UFW rule was left in place."
     warn "  Find and remove it with:  sudo ufw status numbered"
 fi
-if [ -n "${PANEL_PORT}" ] && command -v ufw >/dev/null 2>&1; then
+if [[ -n "${PANEL_PORT}" ]] && command -v ufw >/dev/null 2>&1; then
     # Report what was actually deleted. The deletes end in `|| true` — a rule that was never
     # added must not abort the uninstall — and their exit code says nothing anyway: `ufw delete`
     # exits 0 for a rule that does not exist ("Could not delete non-existent rule"), so
@@ -197,9 +197,9 @@ if [ -n "${PANEL_PORT}" ] && command -v ufw >/dev/null 2>&1; then
     ${U_SUDO} ufw delete allow "${PANEL_PORT}/tcp" >/dev/null 2>&1 || true
     ${U_SUDO} ufw delete allow "${PANEL_PORT}" >/dev/null 2>&1 || true
     _ufw_after="$(_ufw_count)"
-    if [ "${_ufw_before:-0}" -gt 0 ] && [ "${_ufw_after:-0}" -lt "${_ufw_before}" ]; then
+    if [[ "${_ufw_before:-0}" -gt 0 ]] && [[ "${_ufw_after:-0}" -lt "${_ufw_before}" ]]; then
         ok "Removed the panel's UFW rule for port ${PANEL_PORT} (game-server ports left intact)"
-    elif [ "${_ufw_before:-0}" -gt 0 ]; then
+    elif [[ "${_ufw_before:-0}" -gt 0 ]]; then
         warn "The panel's UFW rule for port ${PANEL_PORT} could not be removed."
         warn "  Remove it with: sudo ufw delete allow ${PANEL_PORT}/tcp"
     else
@@ -215,7 +215,7 @@ fi
 # going to clean it up. The CLI call needs no root either: setup made the panel user the Tailscale
 # operator (ensure_operator()), which is the same reason the panel's own teardown calls it plain.
 if command -v tailscale >/dev/null 2>&1 \
-   && { [ "${TS_DONE}" -eq 1 ] || [ "${TS_CONF_UNREAD}" -eq 1 ]; }; then
+   && { [[ "${TS_DONE}" -eq 1 ]] || [[ "${TS_CONF_UNREAD}" -eq 1 ]]; }; then
     # `tailscale serve reset` is the CLI's "clear the whole config" verb: it wipes EVERY serve and
     # funnel mapping on this node, not the panel's. A host publishing anything else behind Serve —
     # a /grafana mount, a funnel for a stats page — lost it here, with nothing listed first and
@@ -223,7 +223,7 @@ if command -v tailscale >/dev/null 2>&1 \
     # "it was pointing at the panel", a statement about the host's serve config that this script
     # never read. Remove the ONE mount the panel recorded, exactly as the panel's own teardown
     # does (tailscale_integration.py remove_serve(): serve --bg --remove <mount>).
-    if [ -z "${TS_MOUNT}" ]; then
+    if [[ -z "${TS_MOUNT}" ]]; then
         # Nothing usable was recorded, so there is no mount this script can honestly claim as the
         # panel's — and every mount it could guess at is one that may belong to something else on
         # this node. Say so and remove nothing, which is what the panel's own teardown does with
@@ -242,7 +242,7 @@ if command -v tailscale >/dev/null 2>&1 \
 fi
 
 # ── Remove the panel files (with a guard against a catastrophic path) ──
-if [ -n "${PANEL_DIR}" ] && [ "${PANEL_DIR}" != "/" ] && [ -d "${PANEL_DIR}" ]; then
+if [[ -n "${PANEL_DIR}" ]] && [[ "${PANEL_DIR}" != "/" ]] && [[ -d "${PANEL_DIR}" ]]; then
     info "Removing the panel files at ${PANEL_DIR}…"
     rm -rf "${PANEL_DIR}"
     ok "Removed ${PANEL_DIR}"
@@ -278,7 +278,7 @@ fi
 # tests/unit/part05.py now reads all three and requires they name one file.
 SHARED_CONF="${SHARED_CONF:-/usr/local/lib/linuxgsm-panel/panel.conf}"
 SHARED_OWNER=""
-if [ -r "${SHARED_CONF}" ]; then
+if [[ -r "${SHARED_CONF}" ]]; then
     SHARED_OWNER="$(sed -n 's/^panel_dir=//p' "${SHARED_CONF}" | head -1)"
 fi
 # panel.conf cannot answer that question on its own, and reading it as if it could left the exact
@@ -319,16 +319,16 @@ _phys_path() { printf '%s/%s' "$(_phys "$(dirname "${1}")")" "$(basename "${1}")
 MY_DIR_PHYS="$(_phys_path "${PANEL_DIR}")"
 OTHER_INSTALL=""
 for _h in "${HOMES}"/*; do
-    [ -d "${_h}" ] || continue
-    [ "$(_phys_path "${_h}/linuxgsm-panel")" = "${MY_DIR_PHYS}" ] && continue
-    [ -f "${_h}/.config/systemd/user/linuxgsm-panel.service" ] || continue
+    [[ -d "${_h}" ]] || continue
+    [[ "$(_phys_path "${_h}/linuxgsm-panel")" = "${MY_DIR_PHYS}" ]] && continue
+    [[ -f "${_h}/.config/systemd/user/linuxgsm-panel.service" ]] || continue
     OTHER_INSTALL="${_h}/linuxgsm-panel"
     break
 done
 SHARED_MINE=1
-if [ -n "${OTHER_INSTALL}" ] \
-   || { [ -n "${SHARED_OWNER}" ] \
-        && [ "$(_phys_path "${SHARED_OWNER}")" != "${MY_DIR_PHYS}" ]; }; then
+if [[ -n "${OTHER_INSTALL}" ]] \
+   || { [[ -n "${SHARED_OWNER}" ]] \
+        && [[ "$(_phys_path "${SHARED_OWNER}")" != "${MY_DIR_PHYS}" ]]; }; then
     SHARED_MINE=0
 fi
 # Is the `gamedig` command at $1 the panel's? install-gamedig.sh links /usr/local/bin/gamedig and
@@ -337,24 +337,24 @@ fi
 # link whose text points into that directory is the panel's: a gamedig the operator installed any
 # other way (npm's own global link, a file) is theirs, and stays.
 _gamedig_link_ours() {
-    [ -L "$1" ] || return 1
+    [[ -L "$1" ]] || return 1
     case "$(readlink -- "$1" 2>/dev/null)" in
         /usr/local/lib/linuxgsm-panel/gamedig/*) return 0 ;;
     esac
     return 1
 }
-if [ "${SHARED_MINE}" -eq 0 ]; then
+if [[ "${SHARED_MINE}" -eq 0 ]]; then
     warn "Leaving the host-wide pieces alone — they belong to another install still on this host:"
     warn "    ${OTHER_INSTALL:-${SHARED_OWNER}}"
     warn "  (the helper, gamedig, the recovery command and the weekly node-tools cron are shared)"
-elif [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] \
-   || [ -L /usr/local/bin/linuxgsm-panel-recover ] \
+elif [[ -d /usr/local/lib/linuxgsm-panel ]] || [[ -f /etc/cron.d/lgsm-node-tools ]] \
+   || [[ -L /usr/local/bin/linuxgsm-panel-recover ]] \
    || _gamedig_link_ours /usr/local/bin/gamedig || _gamedig_link_ours /usr/bin/gamedig; then
     sudo_note
     # The root-owned pieces install_root_tools() places OUTSIDE the panel directory: the helper,
     # the offline DB-repair copy, panel.conf (which records the install's paths) and the
     # root-owned installer.
-    if [ -d /usr/local/lib/linuxgsm-panel ]; then
+    if [[ -d /usr/local/lib/linuxgsm-panel ]]; then
         if ${U_SUDO} rm -rf /usr/local/lib/linuxgsm-panel; then
             ok "Removed the root-owned helper, DB-repair tool, panel.conf and installer copy"
         else
@@ -373,11 +373,11 @@ elif [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] 
     for _f2b_f in /etc/fail2ban/jail.d/linuxgsm-panel.conf \
                   /etc/fail2ban/filter.d/linuxgsm-panel.conf \
                   /etc/fail2ban/jail.d/zz-panel-whitelist.local; do
-        if [ -f "${_f2b_f}" ]; then
+        if [[ -f "${_f2b_f}" ]]; then
             ${U_SUDO} rm -f "${_f2b_f}" && _f2b_removed=1
         fi
     done
-    if [ "${_f2b_removed}" -eq 1 ]; then
+    if [[ "${_f2b_removed}" -eq 1 ]]; then
         # Reload so the running fail2ban stops watching a log that is about to vanish. Best
         # effort: a host where fail2ban is not running is not an error here.
         ${U_SUDO} fail2ban-client reload >/dev/null 2>&1 \
@@ -386,7 +386,7 @@ elif [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] 
     fi
     # The weekly ROOT cron that re-runs install-gamedig.sh (it ran `npm install -g` once). With the
     # panel gone it has nothing to serve, and its script went with the directory above.
-    if [ -f /etc/cron.d/lgsm-node-tools ]; then
+    if [[ -f /etc/cron.d/lgsm-node-tools ]]; then
         if ${U_SUDO} rm -f /etc/cron.d/lgsm-node-tools; then
             ok "Removed the weekly gamedig cron"
         else
@@ -403,7 +403,7 @@ elif [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] 
             fi
         fi
     done
-    if [ -L /usr/local/bin/linuxgsm-panel-recover ] || [ -f /usr/local/bin/linuxgsm-panel-recover ]; then
+    if [[ -L /usr/local/bin/linuxgsm-panel-recover ]] || [[ -f /usr/local/bin/linuxgsm-panel-recover ]]; then
         if ${U_SUDO} rm -f /usr/local/bin/linuxgsm-panel-recover; then
             ok "Removed the linuxgsm-panel-recover command"
         else
@@ -412,7 +412,7 @@ elif [ -d /usr/local/lib/linuxgsm-panel ] || [ -f /etc/cron.d/lgsm-node-tools ] 
     fi
 fi
 
-if [ "${MODE}" = "system" ]; then
+if [[ "${MODE}" = "system" ]]; then
     # Both of them: the narrow grant, and the opt-in password-required one the host terminal uses
     # (PANEL_TERMINAL_SUDO=1). Leaving the second behind would leave a general sudo rule naming an
     # account that no longer exists — and that name is reusable.
@@ -421,13 +421,13 @@ if [ "${MODE}" = "system" ]; then
 
     # Host-wide kernel tuning the installer applied for the panel's sake (vm.swappiness). Re-apply
     # the remaining sysctl config so the host goes back to its own values now, not at next boot.
-    if [ -f /etc/sysctl.d/99-linuxgsm-panel.conf ]; then
+    if [[ -f /etc/sysctl.d/99-linuxgsm-panel.conf ]]; then
         rm -f /etc/sysctl.d/99-linuxgsm-panel.conf
         sysctl --system >/dev/null 2>&1 || true
         ok "Removed the panel's sysctl tuning (swappiness back to this host's own setting)"
     fi
     # SAFETY: only ever remove the dedicated panel service user — NEVER a game-server user.
-    if [ "${PANEL_USER}" = "${SERVICE_USER}" ] && id "${PANEL_USER}" >/dev/null 2>&1; then
+    if [[ "${PANEL_USER}" = "${SERVICE_USER}" ]] && id "${PANEL_USER}" >/dev/null 2>&1; then
         loginctl disable-linger "${PANEL_USER}" >/dev/null 2>&1 || true
         # Read the home BEFORE the account goes — once userdel succeeds there is nothing left to
         # ask. It matters because `rm -rf "${PANEL_DIR}"` above only clears <home>/linuxgsm-panel,
@@ -454,7 +454,7 @@ if [ "${MODE}" = "system" ]; then
         # explicitly when the account went without it, and only claim the user was removed when
         # the home is gone too.
         if ! id "${PANEL_USER}" >/dev/null 2>&1 \
-           && [ -n "${_home_rm}" ] && [ -d "${_home_rm}" ]; then
+           && [[ -n "${_home_rm}" ]] && [[ -d "${_home_rm}" ]]; then
             rm -rf "${_home_rm}" || true
         fi
         # Ask whether the account is actually gone. Both attempts end in `|| true`, so the success
@@ -465,7 +465,7 @@ if [ "${MODE}" = "system" ]; then
             warn "Could not remove the panel user '${PANEL_USER}' — it still exists."
             warn "  It may still own credentials (including the SSH key used for remote hosts)."
             warn "  Remove it yourself once nothing needs it:  sudo userdel -r ${PANEL_USER}"
-        elif [ -n "${_panel_home}" ] && [ -d "${_panel_home}" ]; then
+        elif [[ -n "${_panel_home}" ]] && [[ -d "${_panel_home}" ]]; then
             warn "Removed the panel user '${PANEL_USER}', but its home is still on disk:"
             warn "    ${_panel_home}"
             warn "  It holds the SSH key used for remote hosts — remove it once nothing needs it:"

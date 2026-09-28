@@ -2415,10 +2415,10 @@ try:
     # only when it is true (its remedy, re-running install.sh, now works on a current checkout).
     _su_rec_all = open(os.path.join(_root, "recover.sh"), encoding="utf-8").read()
     _su_rec = _su_rec_all[_su_rec_all.index('VENV_PY="$('):
-                          _su_rec_all.index('if [ -n "${STALE_WHY}" ]; then')] if (
-        'VENV_PY="$(' in _su_rec_all and 'if [ -n "${STALE_WHY}" ]; then' in _su_rec_all) else ""
-    _su_rec_end = _su_rec_all.find("\nfi\n", _su_rec_all.find('if [ -n "${STALE_WHY}" ]; then'))
-    _su_rec += _su_rec_all[_su_rec_all.find('if [ -n "${STALE_WHY}" ]; then'):_su_rec_end + 4] if (
+                          _su_rec_all.index('if [[ -n "${STALE_WHY}" ]]; then')] if (
+        'VENV_PY="$(' in _su_rec_all and 'if [[ -n "${STALE_WHY}" ]]; then' in _su_rec_all) else ""
+    _su_rec_end = _su_rec_all.find("\nfi\n", _su_rec_all.find('if [[ -n "${STALE_WHY}" ]]; then'))
+    _su_rec += _su_rec_all[_su_rec_all.find('if [[ -n "${STALE_WHY}" ]]; then'):_su_rec_end + 4] if (
         _su_rec and _su_rec_end > 0) else ""
 
     def _su_rec_run(cfg_text, link_to):
@@ -3674,7 +3674,7 @@ try:
     _gl_loop = "for _gd_link in /usr/local/bin/gamedig /usr/bin/gamedig; do"
     _gl_at = _un_txt.find(_gl_loop)
     # The branch that runs only when the host-shared pieces are this install's (SHARED_MINE).
-    _gl_elif = _un_txt.find("\nelif [ -d /usr/local/lib/linuxgsm-panel ]")
+    _gl_elif = _un_txt.find("\nelif [[ -d /usr/local/lib/linuxgsm-panel ]]")
     # ...and they are the links the script makes: its LINK_DIRS, each + /gamedig.
     _gl_script = open(os.path.join(_root, "tools", "gamedig", "install-gamedig.sh"),
                       encoding="utf-8").read()
@@ -3966,7 +3966,7 @@ try:
     # leaves the home; `userdel -r` itself exits 12 when it cannot remove the home, having already
     # deleted the account. Both cases asked only whether the ACCOUNT was gone, so the key survived
     # an uninstall that reported itself complete.
-    _ud_block = _su_between2('    if [ "${PANEL_USER}" = "${SERVICE_USER}" ]', "        fi\n    fi\n")
+    _ud_block = _su_between2('    if [[ "${PANEL_USER}" = "${SERVICE_USER}" ]]', "        fi\n    fi\n")
     _ud_tmp = _tempfile.mkdtemp(prefix="uninst-user-")
     try:
         _ud_homes = os.path.join(_ud_tmp, "home")
@@ -6106,7 +6106,7 @@ _unremoved = sorted(_p for _p in _inst_paths if not _is_removed(_p))
 # rindex, not index: uninstall.sh tests MODE earlier too (to print the service user in the
 # summary), and splitting on the first occurrence puts the whole cleanup block on the wrong side
 # — which is how this check first reported a fix that was already in place.
-_uninst_cut = _uninst.rindex('if [ "${MODE}" = "system" ]; then')
+_uninst_cut = _uninst.rindex('if [[ "${MODE}" = "system" ]]; then')
 _uninst_sys = _uninst[_uninst_cut:]
 _uninst_common = _uninst[:_uninst_cut]
 _user_created = ["/usr/local/lib/linuxgsm-panel", "/etc/cron.d/lgsm-node-tools",
