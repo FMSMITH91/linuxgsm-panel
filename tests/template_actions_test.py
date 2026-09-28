@@ -1453,6 +1453,42 @@ check("a.trim() === b.trim()" in _js_code_only(_js_function_body(_sd_js, "_sameL
       "console stitch: the overlap match ignores surrounding whitespace",
       "an exact compare turns one trailing space into 'no overlap' and a whole re-appended window")
 
+# ── 0d-ter. three promises that moved into helpers when their functions were split ───────────
+# Lizard's complexity findings split confirmDialog, pollStats and the Ubuntu Pro card's render into
+# helpers. Each carried one rule its comments state and nothing here enforced — mutation runs
+# showed a helper could drop it with every suite green:
+#   * a confirm dialog's bodyText is TEXT: _cdFillBody writes it with textContent, never as markup,
+#     which is what makes it the safe option for a caller holding untrusted text;
+#   * a stat tile the user has hidden is simply absent, so _setStatText checks the element before
+#     writing to it - unguarded, the first hidden tile threw and stopped the rest of the handler;
+#   * the attached Ubuntu Pro card puts payload fields into markup only through e().
+_pj_js = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+_cdfb = _js_code_only(_js_function_body(_pj_js, "_cdFillBody") or "")
+check(len(_cdfb) > 100 and "opts.bodyNode" in _cdfb,
+      "helpers: confirmDialog's _cdFillBody was found to check",
+      "extractor got %r - the check below would prove nothing" % _cdfb[:60])
+check("_cb.textContent = opts.bodyText" in _cdfb and not _SINK.search(_cdfb),
+      "confirmDialog: bodyText is written as text, never through an HTML sink",
+      "_cdFillBody no longer assigns bodyText by textContent, or reaches innerHTML")
+_sst = _js_code_only(_js_function_body(_sd_js, "_setStatText") or "")
+check(re.search(r"if\s*\(\s*el\s*\)\s*el\.textContent\s*=\s*value", _sst) is not None,
+      "server page: a stat tile is written only when it exists (the Controls panel can be hidden)",
+      "_setStatText writes to an element it did not check: %r" % _sst[:120])
+check(re.search(r"getElementById\('stat-[\w-]+'\)\s*\.textContent", _js_code_only(_sd_js)) is None,
+      "server page: ...and no tile is written around it, straight off getElementById",
+      "a stat tile is dereferenced unguarded again")
+_ra = _js_code_only(_js_function_body(_pj_js, "renderAttached") or "")
+_ra_bare = re.sub(r"\be\s*\((?:[^()]|\([^()]*\))*\)", "", _ra)
+_ra_bare = re.sub(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"", "", _ra_bare)
+_ra_raw = sorted(set(re.findall(r"\+\s*([ds]\.[\w.]+)(?!\s*\?)", _ra_bare)
+                     + re.findall(r"([ds]\.[\w.]+)\s*\+", _ra_bare)))
+check(len(_ra) > 200 and "d.services" in _ra,
+      "ubuntu pro card: renderAttached was found to check",
+      "extractor got %r - the check below would prove nothing" % _ra[:60])
+check(not _ra_raw,
+      "ubuntu pro card: the attached card interpolates payload fields only through e()",
+      "raw payload values in the markup: %s" % _ra_raw)
+
 # ── 0e. no template renders the same id= twice ────────────────────────────────────────────────
 # getElementById returns the FIRST match, so a duplicate id does not fail loudly — it silently
 # points every handler at the wrong element. remote_manage.html carried id="diag-repair-btn" on
