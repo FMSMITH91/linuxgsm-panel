@@ -148,7 +148,7 @@ def build_app():
     scans all of it (.codacy.yaml excludes nothing), so it says so at the line.
     """
     a = appmod.create_app()
-    a.config["WTF_CSRF_ENABLED"] = False   # nosemgrep - benchmark harness, never served
+    a.config["WTF_CSRF_ENABLED"] = False   # nosemgrep  # NOSONAR - benchmark harness, never served
     a.config["SESSION_PROTECTION"] = None
     a.config["SESSION_COOKIE_SECURE"] = False
     a.config["REMEMBER_COOKIE_SECURE"] = False
@@ -550,7 +550,10 @@ def main():
         _print_group_scaling(group_runs)
 
     if args.json:
-        with open(args.json, "w") as f:
+        # Sonar's S8707 (path traversal) is a false positive: --json is the path the person
+        # running this chose, written as that person, across no privilege boundary. Nothing
+        # automated runs this tool.
+        with open(args.json, "w") as f:  # NOSONAR - the operator's own --json output path
             json.dump({"by_servers": runs, "by_groups": group_runs} if group_runs else runs,
                       f, indent=2)
         print("\nwrote %s" % args.json)

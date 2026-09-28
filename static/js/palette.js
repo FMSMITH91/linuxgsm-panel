@@ -230,8 +230,12 @@ var PALETTE_HOST_SECTIONS = [
       // word appears nowhere on screen.
       }, sec.label + ' ' + sec.kw + (host ? ' ' + host : ''), 'sections', order);
     }
+    // The href without its query and its trailing slashes, trimmed with a loop: /\/+$/ restarts
+    // at every slash of a run that is not at the end, and reads the rest of the run from each one.
     function pathOf(href) {
-      return (href || '').split('?')[0].replace(/\/+$/, '');
+      var p = (href || '').split('?')[0], end = p.length;
+      while (end > 0 && p.charAt(end - 1) === '/') end--;
+      return p.slice(0, end);
     }
     var reachable = {};
     available.forEach(function (p) { reachable[pathOf(p.href)] = true; });

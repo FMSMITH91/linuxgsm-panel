@@ -20,7 +20,7 @@ window.toggleTagFilter = function(tagId, btn){
 function rowHasEveryTag(tr){
   if (!_tagFilter.length) return true;
   var have = Array.prototype.map.call(tr.querySelectorAll('.tag-chip'),
-                                      function(c){ return parseInt(c.getAttribute('data-tag-id'), 10); });
+                                      function(c){ return Number.parseInt(c.getAttribute('data-tag-id'), 10); });
   // AND, not OR: picking "production" + "modded" should narrow to servers that are both, which is
   // what makes the filter useful as a bulk-action selector.
   return _tagFilter.every(function(id){ return have.indexOf(id) !== -1; });
@@ -254,14 +254,14 @@ function _dashSyncRow(row, s) {
 window.sortDashCol = function(key, th){
   var table = th.closest('table'); if (!table) return;
   var tb = table.querySelector('tbody'); if (!tb) return;
-  var dir = (table.dataset.sortKey === key) ? -(parseInt(table.dataset.sortDir || '1', 10)) : 1;
+  var dir = (table.dataset.sortKey === key) ? -(Number.parseInt(table.dataset.sortDir || '1', 10)) : 1;
   table.dataset.sortKey = key; table.dataset.sortDir = String(dir);
   // Sort the SERVER rows only, then re-attach each progress row under its own server. Sorting
   // every `tr` sent the progress rows (which carry no data-name/status/players) to one end, away
   // from the server they describe.
   Array.prototype.slice.call(tb.querySelectorAll('tr[data-server-id]')).sort(function(a, b){
     if (key === 'players') {
-      return ((parseInt(a.getAttribute('data-players'), 10)) - (parseInt(b.getAttribute('data-players'), 10))) * dir;
+      return ((Number.parseInt(a.getAttribute('data-players'), 10)) - (Number.parseInt(b.getAttribute('data-players'), 10))) * dir;
     }
     return (a.getAttribute('data-' + key) || '').localeCompare(b.getAttribute('data-' + key) || '', undefined, {sensitivity: 'base', numeric: true}) * dir;
   }).forEach(function(r){
@@ -281,7 +281,7 @@ pollWhenVisible(refreshStatus, 8000);
 // CPU/RAM/uptime in the Resources column). Heavier than the status feed (an SSH sample per server),
 // so it polls on a slower cadence.
 function _fmtUptimeShort(s){
-  s = Math.max(0, s|0);
+  s = Math.max(0, Math.trunc(s) || 0);   // `|| 0`: as `s|0` did, a NaN reads as 0 seconds
   var d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
   return d ? (d+'d '+h+'h') : (h ? (h+'h '+m+'m') : (m+'m'));
 }
@@ -488,13 +488,13 @@ window.showPanel = function(region, key, btn){
 function collectLayout(){
   var host_order = [], server_order = {};
   hostCards().forEach(function(card){
-    var rid = parseInt(card.getAttribute('data-remote-id'), 10);
-    if (isNaN(rid)) return;
+    var rid = Number.parseInt(card.getAttribute('data-remote-id'), 10);
+    if (Number.isNaN(rid)) return;
     host_order.push(rid);
     server_order[rid] = Array.prototype.slice
       .call(card.querySelectorAll('tbody tr[data-server-id]'))
-      .map(function(tr){ return parseInt(tr.getAttribute('data-server-id'), 10); })
-      .filter(function(n){ return !isNaN(n); });
+      .map(function(tr){ return Number.parseInt(tr.getAttribute('data-server-id'), 10); })
+      .filter(function(n){ return !Number.isNaN(n); });
   });
   var p = collectPanels();
   return {host_order: host_order, server_order: server_order,
@@ -589,10 +589,10 @@ function copyAddr(addr) {
 // current (-1 when the count is unknown), so the warning can say who is online from the DOM.
 function _actionRow(id) {
   var row = document.querySelector('tr[data-server-id="' + id + '"]');
-  var n = row ? parseInt(row.getAttribute('data-players'), 10) : NaN;
+  var n = row ? Number.parseInt(row.getAttribute('data-players'), 10) : Number.NaN;
   return {
     name: (row && row.getAttribute('data-name')) || ('server #' + id),
-    players: (isFinite(n) && n >= 0) ? n : null      // null = not known, so do not claim either way
+    players: (Number.isFinite(n) && n >= 0) ? n : null      // null = not known, so do not claim either way
   };
 }
 function _playerNote(n) {
@@ -730,8 +730,8 @@ function bulkAction(action) {
 function _bulkPlayersNote(action, checks) {
   var known = checks.map(function (c) {
     var row = c.closest('tr');
-    var n = row ? parseInt(row.getAttribute('data-players'), 10) : NaN;
-    return (isFinite(n) && n >= 0) ? n : null;
+    var n = row ? Number.parseInt(row.getAttribute('data-players'), 10) : Number.NaN;
+    return (Number.isFinite(n) && n >= 0) ? n : null;
   }).filter(function (n) { return n !== null; });
   var online = known.reduce(function (a, n) { return a + n; }, 0);
   return (action === 'update' || !known.length || !online) ? ''

@@ -103,7 +103,7 @@ function onBindSelect(){
 }
 function changePanelBinding(){
   var pinp=document.getElementById('panel-port-input'); if(!pinp) return;
-  var p=parseInt(pinp.value,10);
+  var p=Number.parseInt(pinp.value,10);
   if(!(p>=1024 && p<=65535)){ if(window.toast) toast('Pick a port between 1024 and 65535.','warning'); return; }
   var sel=document.getElementById('panel-bind-select');
   var bind = sel ? sel.value : '0.0.0.0';
@@ -144,7 +144,7 @@ function _changePanelBinding(p, bind){
 }
 function changeSshPort(){
   var inp=document.getElementById('ssh-port-input'); if(!inp) return;
-  var p=parseInt(inp.value,10);
+  var p=Number.parseInt(inp.value,10);
   if(!(p>=1 && p<=65535)){ if(window.toast) toast('Enter a port between 1 and 65535.','warning'); return; }
   var bindEl=document.getElementById('ssh-bind-input');
   var bind=bindEl ? (bindEl.value||'').trim() : '';
@@ -285,7 +285,10 @@ function renderUpdate(d){
                ? d.repo_url : '';
     (d.changes||[]).forEach(function(c){
       var li=document.createElement('li');
-      var m = /^([0-9a-f]{7,40})[ \t]+([\s\S]+)$/.exec(String(c));
+      // The subject starts at the first character after the sha that is not a blank, or, on a line
+      // of nothing but blanks after it, is the last blank - what `[ \t]+([\s\S]+)$` captured, with
+      // no second run-of-anything for the blanks to be handed back and forth to.
+      var m = /^([0-9a-f]{7,40})[ \t]+([^ \t][\s\S]*|[ \t])$/.exec(String(c));
       if (repo && m) {
         var a = document.createElement('a');
         a.href = repo + '/commit/' + m[1];
@@ -340,9 +343,9 @@ function renderPuLog(lines){
   var html=(lines||[]).map(function(ln){
     var cls='text-secondary';
     if(/^\[\d+\/\d+\]/.test(ln)) cls='text-info fw-semibold';
-    else if(/^✓|health check passed|update complete|rollback succeeded|is responding|now running version/i.test(ln)) cls='text-success';
+    else if(/(?:^✓)|health check passed|update complete|rollback succeeded|is responding|now running version/i.test(ln)) cls='text-success';
     else if(/\[error\]|health check failed|rolling back|could not/i.test(ln)) cls='text-danger';
-    else if(/^\[!\]|warn/i.test(ln)) cls='text-warning';
+    else if(/(?:^\[!\])|warn/i.test(ln)) cls='text-warning';
     return '<div class="'+cls+'">'+(window.escapeHtml?escapeHtml(ln):ln)+'</div>';
   }).join('');
   body.innerHTML = html || '<span class="text-secondary">Starting…</span>';  // nosemgrep

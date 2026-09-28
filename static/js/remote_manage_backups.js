@@ -207,7 +207,7 @@ function onFbAutoToggle(){
 function fbSummary(){
   var el=document.getElementById('fb-summary'); if(!el) return;
   var on=document.getElementById('fb-auto-enabled').checked;
-  var keep=parseInt(document.getElementById('fb-keep').value,10)||1;
+  var keep=Number.parseInt(document.getElementById('fb-keep').value,10)||1;
   var dk=window._bkDisk||{free:0,est_cycle:0};
   var cycle=dk.est_cycle||0;        // size of one full backup run (all servers)
   var free=dk.free||0;
@@ -222,7 +222,7 @@ function fbSummary(){
     el.innerHTML=parts.join('<br>'); return;  // nosemgrep
   }
 
-  var days=parseInt(document.getElementById('fb-interval').value,10)||7;
+  var days=Number.parseInt(document.getElementById('fb-interval').value,10)||7;
   var every=(days===1?'every day':(days===7?'once a week':(days===14?'once every 2 weeks':'once a month')));
   var s='<i class="bi bi-info-circle"></i> By default, each server is backed up <strong>'+every+'</strong>. '
     +'The <strong>'+keep+'</strong> newest '+(keep===1?'backup is':'backups are')+' kept per server; older ones are deleted automatically. '
@@ -258,13 +258,13 @@ function saveBackupSettings(){
   // which the server reads as "don't change this field". That is the right outcome (the value on
   // disk is left alone) and the box is refilled from the response, so a cleared field visibly
   // snaps back to what is actually stored instead of appearing to have saved a blank.
-  var keep=parseInt(document.getElementById('bk-keep').value,10);
-  if(isNaN(keep)) keep=null;
+  var keep=Number.parseInt(document.getElementById('bk-keep').value,10);
+  if(Number.isNaN(keep)) keep=null;
   // Automatic game backups off → send interval 0 (disabled); on → the chosen interval.
   var autoOn=document.getElementById('fb-auto-enabled').checked;
-  var fi=autoOn ? (parseInt(document.getElementById('fb-interval').value,10)||7) : 0;
-  var fk=parseInt(document.getElementById('fb-keep').value,10);
-  if(isNaN(fk)) fk=null;
+  var fi=autoOn ? (Number.parseInt(document.getElementById('fb-interval').value,10)||7) : 0;
+  var fk=Number.parseInt(document.getElementById('fb-keep').value,10);
+  if(Number.isNaN(fk)) fk=null;
   fbSummary();
   fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({enabled:enabled,keep_days:keep,full_interval_days:fi,full_keep:fk})})
@@ -681,7 +681,7 @@ function importExisting(btn){
   var picks=[], msg=document.getElementById('disc-msg');
   document.querySelectorAll('.disc-chk:checked').forEach(function(c){
     picks.push({user:c.getAttribute('data-user'), game_type:c.getAttribute('data-game'),
-                port:parseInt(c.getAttribute('data-port'),10)||0,
+                port:Number.parseInt(c.getAttribute('data-port'),10)||0,
                 autostart:c.getAttribute('data-autostart')==='1'});
   });
   if(!picks.length){ if(msg) msg.innerHTML='<span class="text-warning">Select at least one.</span>'; return; }

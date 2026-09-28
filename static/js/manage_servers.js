@@ -70,7 +70,7 @@ function _osOlder(gameOs, hostOs) {
 // '24.04' as [24, 4], or null when any part is not a number.
 function _osVersionParts(v) {
   var parts = v.split('.').map(Number);
-  return parts.some(isNaN) ? null : parts;
+  return parts.some(Number.isNaN) ? null : parts;
 }
 
 // Is version gv below version hv? A missing part counts as 0, so 24 and 24.0 are equal.
@@ -80,6 +80,20 @@ function _osVersionBelow(gv, hv) {
     if (a !== b) return a < b;
   }
   return false;
+}
+
+// An option's text without its trailing "(…)" note ("Game (ubuntu-20.04)" is "Game"), exactly as
+// /\s*\(.*\)\s*$/ removed it: the note opens at the first "(" on the last line, which has to end
+// in ")", and takes the blanks before it along. Found with string searches instead, because that
+// regex tries every blank and every "(" as a start and reads the rest of the line from each one.
+// (Its `.` matches no line terminator, so the note cannot start on an earlier line.)
+function _withoutParenNote(text) {
+  var body = text.trimEnd();
+  var lineStart = 1 + Math.max(body.lastIndexOf('\n'), body.lastIndexOf('\r'),
+                               body.lastIndexOf('\u2028'), body.lastIndexOf('\u2029'));
+  var open = body.indexOf('(', lineStart);
+  if (body.slice(-1) !== ')' || open < 0) return text;
+  return text.slice(0, open).trimEnd();
 }
 
 function filterGamesForHost() {
@@ -96,7 +110,7 @@ function filterGamesForHost() {
       if (bad) {
         hidden++;
         if (opt.textContent.indexOf('needs ') === -1) {
-          opt.textContent = opt.textContent.replace(/\s*\(.*\)\s*$/, '')
+          opt.textContent = _withoutParenNote(opt.textContent)
             + ' (needs ' + gameOs.replace('-', ' ') + ')';
         }
         // Do not leave a disabled game SELECTED — the form would post it.
@@ -395,7 +409,7 @@ if (_hasServerList) {
 // Live per-server resources (CPU/RAM/uptime) in the Resources column — a slower, heavier poll (an
 // SSH sample per server) than the status reconcile above.
 function _fmtUptimeShort(s){
-  s = Math.max(0, s|0);
+  s = Math.max(0, Math.trunc(s) || 0);   // `|| 0`: as `s|0` did, a NaN reads as 0 seconds
   var d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
   return d ? (d+'d '+h+'h') : (h ? (h+'h '+m+'m') : (m+'m'));
 }

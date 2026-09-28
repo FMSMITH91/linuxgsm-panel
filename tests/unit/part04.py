@@ -2163,6 +2163,45 @@ check("tools: ...main() fails a run carrying one unreviewed issue, and counts it
 with open(_cg4_sum, encoding="utf-8") as _cg4_fh:
     check("tools: ...and appends the same summary to the job summary",
           _cg4_fh.read() == _cg4_out.getvalue())
+
+
+# A 200 whose JSON is not the object the gate reads has to fail the run with a message. A JSON
+# list met `page.get("data")` and escaped as an AttributeError, and so did a `data` of strings
+# (at `i.get`) and a list-shaped `pagination`. The run failed, but its log was a stack trace. A
+# bad LATER page counts as well: the issues were not all read, so page one alone is not "clean".
+# The well-formed empty answer is the control that passes.
+def _cg4_drive(*bodies):
+    """main()'s exit code (or the exception it raised) and stdout, answering with `bodies`."""
+    pages = iter(bodies)
+    out, saved = _tl_io.StringIO(), _cg4.urllib.request.urlopen
+    step_summary = os.environ.pop("GITHUB_STEP_SUMMARY", None)
+    _cg4.urllib.request.urlopen = lambda req, timeout=None: _Cg4Resp(next(pages).encode())
+    try:
+        with _tl_ctx.redirect_stdout(out), _tl_ctx.redirect_stderr(_tl_io.StringIO()):
+            rc = _cg4.main()
+    except Exception as exc:  # noqa: BLE001 - the traceback IS the bug
+        rc = type(exc).__name__
+    finally:
+        _cg4.urllib.request.urlopen = saved
+        if step_summary is not None:
+            os.environ["GITHUB_STEP_SUMMARY"] = step_summary
+    return rc, out.getvalue()
+
+
+_cg4_shapes = {_label: _cg4_drive(*_bodies) for _label, _bodies in (
+    ("a list", ("[]",)),
+    ("a list of issues", (_json_tg.dumps(_cg4_issues),)),
+    ("data of strings", ('{"data": ["x"]}',)),
+    ("pagination a list", ('{"data": [], "pagination": ["c"]}',)),
+    ("a list on page two", ('{"data": [], "pagination": {"cursor": "p2"}}', "[]")),
+    ("clean", ('{"data": [], "pagination": {}}',)))}
+check("tools: ...a 200 whose JSON is not the object it reads fails the run, with a message",
+      {_k: _v[0] for _k, _v in _cg4_shapes.items()}
+      == {"a list": 1, "a list of issues": 1, "data of strings": 1, "pagination a list": 1,
+          "a list on page two": 1, "clean": 0}
+      and all("::error::" in _v[1] and "refusing to report it clean" in _v[1]
+              for _k, _v in _cg4_shapes.items() if _k != "clean"),
+      repr({_k: (_v[0], _v[1][:90]) for _k, _v in _cg4_shapes.items()}))
 _sh.rmtree(_cg4_dir, ignore_errors=True)
 
 # perf_bench: importing it boots the panel against data/, so its report steps are compiled out
