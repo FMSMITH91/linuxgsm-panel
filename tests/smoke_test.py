@@ -570,6 +570,17 @@ try:
           "DTLHEAD" in _dtl_html, "the probe row did not render — the check below proves nothing")
     check("audit log: a long detail's tail (where the outcome is) is rendered, not cut at 100 chars",
           _dtl_tail in _dtl_html, "the FAIL reason stored at the end of the detail is not on /logs")
+    # ...and the search leaves out what does not match it. Ignoring `q` (in _filtered_audit_query
+    # since view_logs was split) left every suite green: every search here only looked for the row
+    # it expected, and a newer, unrelated row is on page one either way.
+    with app.app_context():
+        db.session.add(_dtl_AL(username="admin", action="server_start", target="dtl-other",
+                               detail="DTLOTHER_UNRELATED", success=True))
+        db.session.commit()
+    _dtl_q = c.get("/logs?q=DTLHEAD").get_data(as_text=True)
+    check("audit log: a search shows only the rows that match it",
+          "DTLHEAD" in _dtl_q and "DTLOTHER_UNRELATED" not in _dtl_q,
+          "an unrelated row is on the page a search for DTLHEAD returned")
 
     # The Files & Config page (config editor + file browser + cron manager) must render.
     check("GET /server/<id>/files renders (200)",
@@ -1246,6 +1257,42 @@ try:
     cp3 = c.post("/api/panel/change-port", json={"port": 5000, "bind_host": "not-an-ip"})
     check("change-port refuses a non-IP bind address",
           cp3.status_code == 400 and not (cp3.get_json() or {}).get("success"))
+    # ...and a port a game server on the panel's own host already holds, by the server's name.
+    # Deleting that clash check (in _port_refusal since api_panel_change_port was split) left
+    # every suite green — only the range and bind refusals above were driven — and the panel then
+    # saves and restarts onto the game's port. port_in_use is stubbed so the clash is the only thing
+    # that can refuse, and restart_panel so a regression cannot restart anything.
+    import panel.routes.remote_security as _cp_rs
+    with app.app_context():
+        _cp_local = RemoteServer.query.filter_by(is_local=True).first()
+        _cp_made = _cp_local is None
+        if _cp_made:
+            _cp_local = RemoteServer(name="smoke-cp-local", host="127.0.0.1", port=22,
+                                     username="panel", auth_method="local", auth_credential="",
+                                     is_local=True)
+            db.session.add(_cp_local)
+            db.session.flush()
+        _cp_gs = GameServer(remote_id=_cp_local.id, name="cp-clash", short_name="cpclash",
+                            game_type="csgo", port=5099, installed=True, status="offline")
+        db.session.add(_cp_gs)
+        db.session.commit()
+        _cp_ids = (_cp_local.id, _cp_gs.id)
+    _cp_saved = (_cp_rs.so.port_in_use, _cp_rs.so.restart_panel)
+    try:
+        _cp_rs.so.port_in_use = lambda _p: False
+        _cp_rs.so.restart_panel = lambda: (False, "stubbed by smoke_test")
+        cp4 = c.post("/api/panel/change-port", json={"port": 5099})
+    finally:
+        _cp_rs.so.port_in_use, _cp_rs.so.restart_panel = _cp_saved
+        with app.app_context():
+            db.session.delete(db.session.get(GameServer, _cp_ids[1]))
+            if _cp_made:
+                db.session.delete(db.session.get(RemoteServer, _cp_ids[0]))
+            db.session.commit()
+    check("change-port refuses a port a game server on the panel's host already uses",
+          cp4.status_code == 400
+          and "is used by game server 'cp-clash'" in ((cp4.get_json() or {}).get("message") or ""),
+          str(cp4.get_json())[:160])
 
     # ── Backups: list + settings + name validation (no real backup/restart triggered) ──
     bl = c.get("/api/panel/backups")
@@ -5013,6 +5060,11 @@ try:
     # module — it follows the handler, not the name (same rule as remote_security below).
     from panel.routes import discover as _disc_mod
     _orig_disc = _disc_mod.discover_linuxgsm_servers
+    # ...and an account the panel ALREADY has a row for on this host, which is not offered again.
+    # Dropping that skip (in _discovered_listing since api_remote_discover was split) left every
+    # suite green, and relisted an imported server as new; importing it is refused, not deduped.
+    with app.app_context():
+        _dsc_have = [g.short_name for g in GameServer.query.filter_by(remote_id=remote_id).all()]
     try:
         def _fake_disc(_server):
             rows = [{"user": "contentbox", "lgsm_name": n, "port": 27015, "backups": 0,
@@ -5020,6 +5072,8 @@ try:
                     for n in ("cssserver", "tf2server", "dodsserver", "l4d2server")]
             rows.append({"user": "realgmod", "lgsm_name": "gmodserver", "port": 27015,
                          "backups": 1, "mods": 0, "cron": 2, "autostart": True})
+            rows += [{"user": _u, "lgsm_name": "gmodserver", "port": 27016, "backups": 0,
+                      "mods": 0, "cron": 1, "autostart": False} for _u in _dsc_have[:1]]
             return rows
         _disc_mod.discover_linuxgsm_servers = _fake_disc
         _d2 = (c.get("/api/remote/%d/discover" % remote_id).get_json() or {})
@@ -5028,6 +5082,9 @@ try:
               "contentbox" not in _users, "users=%s" % _users)
         check("discover: ...while a real server on the same host still is",
               _users == ["realgmod"], "users=%s" % _users)
+        check("discover: an account the panel already has a row for is not offered again",
+              bool(_dsc_have) and _dsc_have[0] not in _users,
+              "have=%s users=%s" % (_dsc_have[:1], _users))
         _content = _d2.get("content") or []
         check("discover: ...and the content it skipped is reported, not silently dropped",
               len(_content) == 1 and _content[0]["user"] == "contentbox"
@@ -12627,6 +12684,14 @@ try:
                 db.session.add(_iv_dead)
                 db.session.flush()
                 _iv_made.append(_iv_dead.id)
+            # One that EXPIRED without being used or revoked: finished, shown once for context,
+            # and not live. Counting it live (in _invite_listing since manage_users was split) left
+            # every suite green — the dead rows above are all used — and listed it twice.
+            _iv_exp, _ = _IvR.mint(_iv_admin3, hours=1, note="smoke-expired-invite")
+            _iv_exp.expires_at = _iv_now() - _iv_td(minutes=5)
+            db.session.add(_iv_exp)
+            db.session.flush()
+            _iv_made.append(_iv_exp.id)
             db.session.commit()
             _iv_live_row = db.session.get(_IvR, _iv_live_id)
             _iv_live_usable = _iv_live_row.is_usable
@@ -12645,6 +12710,10 @@ try:
         check("invite list: finished invites are still listed for context",
               "smoke-dead-29" in _iv_page,
               "the page now shows nothing but live invites")
+        check("invite list: an expired invite is listed once, as finished, with no Revoke",
+              _iv_page.count(">smoke-expired-invite<") == 1
+              and ("/users/invite/%d/revoke" % _iv_made[-1]) not in _iv_page,
+              "listed %d time(s)" % _iv_page.count(">smoke-expired-invite<"))
     finally:
         with app.app_context():
             if _iv_made:
