@@ -242,6 +242,21 @@ try:
               "VERSION %r read as %r, want %r" % (_cv_body, _cv_got, _cv_want))
     check("install.sh: ...and a GitHub ZIP's VERSION reads as its commit's date",
           _cv_sh(_cv_out) == ("2026.9.26", 0), repr(_cv_sh(_cv_out)))
+
+    # ── the bots' /status and /update replies: the date, with the commit beside it ──────────────
+    from panel.services.bots import commands as _cv_bots
+    _cv_saved_fns = (SO.panel_version, SO.panel_commit)
+    try:
+        SO.panel_version, SO.panel_commit = (lambda: "2026.9.26"), (lambda: "a1b2c3d")
+        _cv_label = _cv_bots._panel_ver_label()
+        SO.panel_commit = lambda: ""
+        _cv_label_bare = _cv_bots._panel_ver_label()
+    finally:
+        SO.panel_version, SO.panel_commit = _cv_saved_fns
+    check("bots: a reply names the panel's version beside its commit, since a day's commits share "
+          "the date", _cv_label == "2026.9.26 (a1b2c3d)", repr(_cv_label))
+    check("bots: ...and the date alone when there is no commit to name",
+          _cv_label_bare == "2026.9.26", repr(_cv_label_bare))
 finally:
     SO.PANEL_DIR = _CV_PANEL_DIR
     for _cv_k, _cv_val in _CV_ENV_SAVED.items():
