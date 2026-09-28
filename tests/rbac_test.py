@@ -707,6 +707,16 @@ try:
     # Pages must actually RENDER for a non-superadmin (regression: a template calling a
     # context-processor helper with the wrong arity 500'd only for limited users).
     check("dashboard (/) renders for limited user -> 200", c.get("/").status_code == 200)
+    # ...and offers Uninstall only to someone the route above would let use it. Rendering it for
+    # everyone left every suite green when index was split (the flag is _install_controls' now):
+    # the button 403s, so nothing was ever removed, but it is still an offer the POST refuses.
+    # The superadmin's page is the positive control: the same row, with the form.
+    _un_action = 'action="/servers/%d/delete"' % accessible_id
+    check("dashboard: no Uninstall form for a viewer without UNINSTALL_SERVER",
+          _un_action not in c.get("/").get_data(as_text=True))
+    check("dashboard: ...while the superadmin's page has it for the same server",
+          _un_action in client_as(admin_id).get("/").get_data(as_text=True),
+          "the form is not rendered for anyone, so the check above proves nothing")
 
     # Remote management is scoped PER HOST: MANAGE_REMOTES lets you manage remotes,
     # but only the ones your groups grant — not any remote by id (remote-level IDOR).
