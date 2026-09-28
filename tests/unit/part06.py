@@ -2496,6 +2496,24 @@ try:
     _r = _eg_run(True)
     check("install.sh: ...and a host that has npm does not reinstall it",
           "APT install -y npm" not in _r and "NPM " not in _r, repr(_r[-300:]))
+    # The version tests are [[ -lt ]] / [[ -ge ]], which read their operands as ARITHMETIC: a
+    # leading zero is octal there ("08" an error, "020" is 16), where `[` read decimal. The digits
+    # come from `node -v` and `apt-cache policy`, so ensure_nodejs reads each one base 10 first.
+    # Driven with the two outputs a bare [[ ]] would get wrong.
+    _eg_ns = 'nodesource_setup() { echo "NODESOURCE_SETUP"; return 1; }\n'
+    _r = _eg_run(True, _eg_shim.replace("node() { echo v22.3.0; }", "node() { echo v08.17.0; }")
+                 + _eg_ns)
+    check("install.sh: ensure_nodejs reads `node -v` v08 as Node 8 (too old, so it installs one), "
+          "not as an octal error",
+          "v22.3.0" in _eg_shim and "INFO Installing Node.js 22 from NodeSource" in _r
+          and "NODESOURCE_SETUP" in _r, repr(_r[-300:]))
+    _r = _eg_run(True, _eg_shim.replace("node() { echo v22.3.0; }", "node() { echo v12.22.9; }")
+                 .replace("apt-cache() { :; }",
+                          "apt-cache() { printf '  Installed: (none)\\n  Candidate: 020.1.0\\n'; }")
+                 + _eg_ns)
+    check("install.sh: ...and reads the distro's candidate 020 as Node 20 (new enough), not octal 16",
+          "apt-cache() { :; }" in _eg_shim and "INFO Installing Node.js 20 from the distro" in _r
+          and "APT install -y nodejs" in _r, repr(_r[-300:]))
 
     # ── install_gamedig: the three files root-owned from root's own source, then the script ──────
     # Root runs install-gamedig.sh, so it is a boundary file like the helper: it must come from
