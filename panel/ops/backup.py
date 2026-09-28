@@ -117,34 +117,15 @@ def _decrypt_archive(src_path, dest_path, passphrase):
             body = f.read()
     except OSError:
         return False, "Could not read the backup archive."
-    if not body.startswith(_ENC_MAGIC):
-        return False, "That file is not an encrypted panel backup."
-    rest = body[len(_ENC_MAGIC):]
-    nl = rest.find(b"\n")
-    if nl < 0:
-        return False, "The encrypted backup's header is damaged."
-    try:
-        head = json.loads(rest[:nl].decode("utf-8"))
-        salt = base64.b64decode(head["salt"])
-        n, r, p = int(head["n"]), int(head["r"]), int(head["p"])
-    except Exception:
-        return False, "The encrypted backup's header is damaged."
-    # The header is part of the FILE, so these are only as trustworthy as the archive. Nothing can
-    # upload one today — every archive here was written by this panel — but they decide what the
-    # derivation costs, and it runs as ONE blocking call on the eventlet hub, so every request
-    # waits for it. scrypt needs about 128·n·r bytes and time in proportion to n·r·p: the defaults
-    # (2**15, 8, 1) are 32 MiB and roughly a tenth of a second. The old ceiling (2**20, 32, 16) was
-    # 4 GiB and some 2000 times as long — a panel frozen for minutes by one file. This panel has
-    # only ever written the defaults, so the bound is one step above them: 64 MiB, ~4x the time.
-    if not (2 ** 12 <= n <= 2 ** 16) or not (1 <= r <= 8) or not (1 <= p <= 2) or len(salt) > 64:
-        return False, "The encrypted backup's header asks for parameters this panel will not use."
-    if head.get("kdf") != "scrypt":
-        return False, "This backup uses an encryption scheme this panel does not know."
+    refusal, params, token = _parse_enc_header(body)
+    if params is None:
+        return False, refusal
     if not passphrase:
         return False, "This backup is encrypted — a passphrase is required."
+    salt, n, r, p = params
     try:
         key = _derive_key(passphrase, salt, n=n, r=r, p=p)
-        plain = Fernet(key).decrypt(rest[nl + 1:])
+        plain = Fernet(key).decrypt(token)
     except InvalidToken:
         # Fernet authenticates, so a wrong key and a modified archive raise the same thing and
         # genuinely cannot be told apart without the key. Say both rather than guess.
@@ -159,6 +140,39 @@ def _decrypt_archive(src_path, dest_path, passphrase):
     except OSError:
         return False, "Could not write the decrypted archive."
     return True, ""
+
+
+def _parse_enc_header(body):
+    """Split an encrypted archive's bytes into its KDF parameters and its Fernet token.
+
+    Returns (refusal, params, token). `params` is (salt, n, r, p) and `token` the encrypted
+    payload; when this panel will not decrypt the file, both are None and `refusal` says why.
+    """
+    if not body.startswith(_ENC_MAGIC):
+        return "That file is not an encrypted panel backup.", None, None
+    rest = body[len(_ENC_MAGIC):]
+    nl = rest.find(b"\n")
+    if nl < 0:
+        return "The encrypted backup's header is damaged.", None, None
+    try:
+        head = json.loads(rest[:nl].decode("utf-8"))
+        salt = base64.b64decode(head["salt"])
+        n, r, p = int(head["n"]), int(head["r"]), int(head["p"])
+    except Exception:
+        return "The encrypted backup's header is damaged.", None, None
+    # The header is part of the FILE, so these are only as trustworthy as the archive. Nothing can
+    # upload one today — every archive here was written by this panel — but they decide what the
+    # derivation costs, and it runs as ONE blocking call on the eventlet hub, so every request
+    # waits for it. scrypt needs about 128·n·r bytes and time in proportion to n·r·p: the defaults
+    # (2**15, 8, 1) are 32 MiB and roughly a tenth of a second. The old ceiling (2**20, 32, 16) was
+    # 4 GiB and some 2000 times as long — a panel frozen for minutes by one file. This panel has
+    # only ever written the defaults, so the bound is one step above them: 64 MiB, ~4x the time.
+    if not (2 ** 12 <= n <= 2 ** 16) or not (1 <= r <= 8) or not (1 <= p <= 2) or len(salt) > 64:
+        return ("The encrypted backup's header asks for parameters this panel will not use.",
+                None, None)
+    if head.get("kdf") != "scrypt":
+        return "This backup uses an encryption scheme this panel does not know.", None, None
+    return "", (salt, n, r, p), rest[nl + 1:]
 
 
 class PassphraseUnreadable(Exception):
@@ -317,10 +331,7 @@ def create_backup(kind="manual", encrypt=True, passphrase=None):
     kind = re.sub(r"[^a-z]", "", (kind or "manual").lower()) or "manual"
     _ensure_dir()
     try:
-        if not encrypt:
-            passphrase = ""  # nosec B105 - empty means "not encrypted", not a stored secret
-        elif passphrase is None:
-            passphrase = get_passphrase()
+        passphrase = _backup_passphrase(encrypt, passphrase)
     except PassphraseUnreadable as exc:
         # Refuse. The alternative is a plaintext archive of panel.db, config.json, secret_key and
         # cred_key that looks like a successful encrypted backup.
@@ -329,48 +340,12 @@ def create_backup(kind="manual", encrypt=True, passphrase=None):
                        "this host, and writing the archive would leave it unencrypted. Check "
                        "data/cred_key, or clear the backup passphrase to take plain backups "
                        "deliberately.")
-    # The name is CLAIMED (O_EXCL), not just computed. It is the time to the second, and it used to
-    # be opened for writing without asking whether it was taken: a second backup of the same kind
-    # in that second overwrote the first archive, and when the second then failed, the cleanup
-    # below os.remove()d the name — deleting a backup already reported to its caller as taken. A
-    # taken name moves on to the next second; the name only has to be unique, and still sorts.
-    _now, dest = time.time(), None
-    for _bump in range(10):
-        name = "panel-backup-%s-%s.tar.gz%s" % (
-            time.strftime("%Y%m%d-%H%M%S", time.localtime(_now + _bump)), kind,
-            ENC_SUFFIX if passphrase else "")
-        try:
-            os.close(os.open(str(BACKUP_DIR / name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
-        except FileExistsError:
-            continue
-        except OSError:
-            _log.exception("backup creation failed")
-            return False, "Backup failed — see panel logs."
-        dest = BACKUP_DIR / name
-        break
+    name, dest = _claim_archive_name(kind, passphrase)
     if dest is None:
-        _log.error("backup creation failed: no free archive name")
         return False, "Backup failed — see panel logs."
     tmp = tempfile.mkdtemp(prefix="lgsm-bk-")
     try:
-        _snapshot_db(os.path.join(tmp, "panel.db"))
-        for src, member in ((CONFIG_FILE, "config.json"), (SECRET_FILE, "secret_key"),
-                            (CRED_KEY_FILE, "cred_key")):
-            if os.path.exists(src):
-                shutil.copy2(src, os.path.join(tmp, member))
-        # Built inside the temp dir when encrypting, so a plaintext archive never exists in
-        # data/backups even briefly — a crash mid-encrypt must not leave an unencrypted skeleton
-        # key sitting in the directory the user thinks is encrypted.
-        staged = os.path.join(tmp, "archive.tar.gz") if passphrase else str(dest)
-        with tarfile.open(staged, "w:gz") as tar:
-            for member in _MEMBERS:
-                fp = os.path.join(tmp, member)
-                if os.path.exists(fp):
-                    tar.add(fp, arcname=member)
-        if passphrase:
-            _encrypt_archive(staged, str(dest), passphrase)
-        else:
-            os.chmod(dest, 0o600)
+        _write_archive(tmp, dest, passphrase)
         return True, name
     except Exception:
         _log.exception("backup creation failed")
@@ -381,6 +356,70 @@ def create_backup(kind="manual", encrypt=True, passphrase=None):
         return False, "Backup failed — see panel logs."
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _backup_passphrase(encrypt, passphrase):
+    """The passphrase create_backup() writes under ("" = in the clear).
+
+    "" when `encrypt` is False, the configured one when `passphrase` is None, else `passphrase`.
+    Raises PassphraseUnreadable when the configured one is needed and cannot be decrypted.
+    """
+    if not encrypt:
+        passphrase = ""  # nosec B105 - empty means "not encrypted", not a stored secret
+    elif passphrase is None:
+        passphrase = get_passphrase()
+    return passphrase
+
+
+def _claim_archive_name(kind, passphrase):
+    """Create an empty archive file under a free name; return (name, dest), dest None on failure.
+
+    The name is CLAIMED (O_EXCL), not just computed. It is the time to the second, and it used to
+    be opened for writing without asking whether it was taken: a second backup of the same kind
+    in that second overwrote the first archive, and when the second then failed, create_backup's
+    cleanup os.remove()d the name — deleting a backup already reported to its caller as taken. A
+    taken name moves on to the next second; the name only has to be unique, and still sorts.
+    """
+    _now = time.time()
+    for _bump in range(10):
+        name = "panel-backup-%s-%s.tar.gz%s" % (
+            time.strftime("%Y%m%d-%H%M%S", time.localtime(_now + _bump)), kind,
+            ENC_SUFFIX if passphrase else "")
+        try:
+            os.close(os.open(str(BACKUP_DIR / name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        except FileExistsError:
+            continue
+        except OSError:
+            _log.exception("backup creation failed")
+            return name, None
+        return name, BACKUP_DIR / name
+    _log.error("backup creation failed: no free archive name")
+    return None, None
+
+
+def _write_archive(tmp, dest, passphrase):
+    """Stage the members in the temp dir `tmp` and write the archive to the claimed `dest`.
+
+    Encrypted under `passphrase` when it is set. Raises on any failure; create_backup cleans up.
+    """
+    _snapshot_db(os.path.join(tmp, "panel.db"))
+    for src, member in ((CONFIG_FILE, "config.json"), (SECRET_FILE, "secret_key"),
+                        (CRED_KEY_FILE, "cred_key")):
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(tmp, member))
+    # Built inside the temp dir when encrypting, so a plaintext archive never exists in
+    # data/backups even briefly — a crash mid-encrypt must not leave an unencrypted skeleton
+    # key sitting in the directory the user thinks is encrypted.
+    staged = os.path.join(tmp, "archive.tar.gz") if passphrase else str(dest)
+    with tarfile.open(staged, "w:gz") as tar:
+        for member in _MEMBERS:
+            fp = os.path.join(tmp, member)
+            if os.path.exists(fp):
+                tar.add(fp, arcname=member)
+    if passphrase:
+        _encrypt_archive(staged, str(dest), passphrase)
+    else:
+        os.chmod(dest, 0o600)
 
 
 def list_backups():
@@ -490,47 +529,15 @@ def restore_backup(name, passphrase=None, skip_safety_backup=False):
     # checked, so a wrong passphrase or a tampered file costs nothing.
     _dec_tmp = None
     if is_encrypted_backup(src.name):
-        _dec_tmp = tempfile.mkdtemp(prefix="lgsm-bk-dec-")
-        plain = os.path.join(_dec_tmp, "archive.tar.gz")
-        try:
-            # An operator-supplied passphrase wins; only fall back to the stored one. If THAT is
-            # unreadable, say so plainly — the alternative is an "incorrect passphrase" error that
-            # sends someone hunting for a typo when the real problem is cred_key.
-            _pp = passphrase if passphrase else get_passphrase()
-        except PassphraseUnreadable:
-            shutil.rmtree(_dec_tmp, ignore_errors=True)
-            # A LITERAL, not the exception. Its text is a fixed string of ours, so interpolating it
-            # leaked nothing — but it is still an exception object flowing into an HTTP response
-            # (CodeQL py/stack-trace-exposure flagged exactly that), and the shape is the problem:
-            # the next person to raise this with a path, a filename or a decryption detail in the
-            # message would ship it to the browser without noticing. The log keeps the detail.
-            _log.warning("restore refused: the stored backup passphrase could not be decrypted")
-            return False, ("Cannot decrypt this backup: a passphrase is configured but could not "
-                           "be decrypted on this host. Enter the passphrase explicitly, or "
-                           "restore data/cred_key first.")
-        ok, msg = _decrypt_archive(str(src), plain, _pp)
-        if not ok:
-            shutil.rmtree(_dec_tmp, ignore_errors=True)
-            return False, msg
-        src = _pathlib.Path(plain)
+        _dec_tmp, src, refusal = _decrypt_for_restore(src, passphrase)
+        if _dec_tmp is None:
+            return False, refusal
 
     try:
         # Validate the archive up front (members only, no path escapes) before we touch anything.
-        try:
-            with tarfile.open(src, "r:gz") as tar:
-                members = tar.getmembers()
-            names = [m.name for m in members]
-            # Every member a REGULAR file, too. The extraction below copies only regular members,
-            # so a `cred_key` that is a directory or a link was skipped and the LIVE key stayed —
-            # while the row check, reading that same member, got no key and skipped every
-            # encrypted value as unreadable after the restore. The live key reads them. No archive
-            # create_backup writes holds anything else: it copies each member with copy2 first.
-            if (not names or any(n not in _MEMBERS for n in names)
-                    or not all(m.isfile() for m in members)):
-                return False, "Backup archive looks invalid."
-        except Exception:
-            _log.exception("backup archive unreadable")
-            return False, "Could not read the backup archive."
+        refusal = _archive_members_refusal(src)
+        if refusal:
+            return False, refusal
 
         # The ROWS, before anything about the live install is touched — see _restore_db_refusal.
         refusal = _restore_db_refusal(src)
@@ -545,6 +552,63 @@ def restore_backup(name, passphrase=None, skip_safety_backup=False):
     finally:
         if _dec_tmp:
             shutil.rmtree(_dec_tmp, ignore_errors=True)
+
+
+def _decrypt_for_restore(src, passphrase):
+    """Decrypt the encrypted archive `src` into a fresh temp dir; return (dec_tmp, plain, refusal).
+
+    On success `dec_tmp` is the temp dir the caller removes and `plain` the decrypted archive in
+    it. On failure the temp dir is already gone, `dec_tmp` is None, `plain` is `src` unchanged,
+    and `refusal` is the message for the operator.
+    """
+    _dec_tmp = tempfile.mkdtemp(prefix="lgsm-bk-dec-")
+    plain = os.path.join(_dec_tmp, "archive.tar.gz")
+    try:
+        # An operator-supplied passphrase wins; only fall back to the stored one. If THAT is
+        # unreadable, say so plainly — the alternative is an "incorrect passphrase" error that
+        # sends someone hunting for a typo when the real problem is cred_key.
+        _pp = passphrase if passphrase else get_passphrase()
+    except PassphraseUnreadable:
+        shutil.rmtree(_dec_tmp, ignore_errors=True)
+        # A LITERAL, not the exception. Its text is a fixed string of ours, so interpolating it
+        # leaked nothing — but it is still an exception object flowing into an HTTP response
+        # (CodeQL py/stack-trace-exposure flagged exactly that), and the shape is the problem:
+        # the next person to raise this with a path, a filename or a decryption detail in the
+        # message would ship it to the browser without noticing. The log keeps the detail.
+        _log.warning("restore refused: the stored backup passphrase could not be decrypted")
+        return None, src, ("Cannot decrypt this backup: a passphrase is configured but could not "
+                           "be decrypted on this host. Enter the passphrase explicitly, or "
+                           "restore data/cred_key first.")
+    ok, msg = _decrypt_archive(str(src), plain, _pp)
+    if not ok:
+        shutil.rmtree(_dec_tmp, ignore_errors=True)
+        return None, src, msg
+    return _dec_tmp, _pathlib.Path(plain), ""
+
+
+def _archive_members_refusal(src):
+    """Why the tar.gz at `src` is not a panel backup restore may unpack, or "" when it is.
+
+    Members only, no path escapes: every name one of _MEMBERS, and none of them anything but a
+    regular file.
+    """
+    try:
+        with tarfile.open(src, "r:gz") as tar:
+            members = tar.getmembers()
+        names = [m.name for m in members]
+        # Every member a REGULAR file, too. The extraction in _restore_validated copies only
+        # regular members, so a `cred_key` that is a directory or a link was skipped and the LIVE
+        # key stayed — while the row check, reading that same member, got no key and skipped
+        # every encrypted value as unreadable after the restore. The live key reads them. No
+        # archive create_backup writes holds anything else: it copies each member with copy2
+        # first.
+        if (not names or any(n not in _MEMBERS for n in names)
+                or not all(m.isfile() for m in members)):
+            return "Backup archive looks invalid."
+    except Exception:
+        _log.exception("backup archive unreadable")
+        return "Could not read the backup archive."
+    return ""
 
 
 # ── What a restored database may carry ────────────────────────────────────────────────────────
@@ -897,14 +961,7 @@ def _restore_validated(src, name, skip_safety_backup=False, operator_passphrase=
     # passphrase opens the safety copy.
     safety, _spp_typed = "", False
     if not skip_safety_backup:
-        try:
-            _spp, _spp_typed = _safety_copy_passphrase(operator_passphrase)
-            ok, safety = create_backup("prerestore", passphrase=_spp)
-        except PassphraseUnreadable:
-            _log.warning("pre-restore safety copy refused: the stored backup passphrase could not "
-                         "be decrypted")
-            ok, safety = False, ("a backup passphrase is configured but could not be decrypted on "
-                                 "this host, so the copy could not be encrypted")
+        ok, safety, _spp_typed = _take_safety_copy(operator_passphrase)
         if not ok:
             return False, ("The pre-restore safety copy could not be written (%s). Restoring "
                            "would overwrite panel.db, config.json, secret_key and cred_key with "
@@ -915,17 +972,8 @@ def _restore_validated(src, name, skip_safety_backup=False, operator_passphrase=
     # no path argument — root copying "whatever is in the directory you name" over the panel's keys
     # would let a caller stage a directory it cannot read and have root hand its contents back — so
     # both sides agree on this one location instead.
-    stage = os.path.join(str(DATA_DIR), ".restore-stage")
-    shutil.rmtree(stage, ignore_errors=True)
-    os.makedirs(stage, mode=0o700, exist_ok=True)
-    try:
-        with tarfile.open(src, "r:gz") as tar:
-            for m in tar.getmembers():
-                if m.name in _MEMBERS and m.isfile():
-                    tar.extract(m, stage)   # names already whitelisted above
-    except Exception:
-        _log.exception("backup extract failed")
-        shutil.rmtree(stage, ignore_errors=True)
+    stage = _stage_archive(src)
+    if stage is None:
         return False, "Could not extract the backup."
 
     # STOP the panel first (releases the SQLite file), swap the files, clear the WAL/SHM
@@ -939,17 +987,59 @@ def _restore_validated(src, name, skip_safety_backup=False, operator_passphrase=
     # `sudo systemd-run`: root executing a file the panel user had just created, out of a directory
     # the panel user owns. Narrowing the sudoers grant would not have touched that. The helper now
     # performs the sequence itself, in root-owned code, reading only the fixed staging path.
+    return _dispatch_restore(stage, name, safety, _spp_typed)
+
+
+def _take_safety_copy(operator_passphrase):
+    """Write the pre-restore safety copy; return (ok, safety, typed).
+
+    `safety` is the copy's archive name, or when `ok` is False why it could not be written;
+    `typed` is _safety_copy_passphrase's answer to whose passphrase it is encrypted with.
+    """
+    try:
+        _spp, _spp_typed = _safety_copy_passphrase(operator_passphrase)
+        ok, safety = create_backup("prerestore", passphrase=_spp)
+    except PassphraseUnreadable:
+        _log.warning("pre-restore safety copy refused: the stored backup passphrase could not "
+                     "be decrypted")
+        return False, ("a backup passphrase is configured but could not be decrypted on "
+                       "this host, so the copy could not be encrypted"), False
+    return ok, safety, _spp_typed
+
+
+def _stage_archive(src):
+    """Extract `src`'s members into the fixed staging directory; return its path, or None.
+
+    None when the extraction failed, and the staging directory is removed again.
+    """
+    stage = os.path.join(str(DATA_DIR), ".restore-stage")
+    shutil.rmtree(stage, ignore_errors=True)
+    os.makedirs(stage, mode=0o700, exist_ok=True)
+    try:
+        with tarfile.open(src, "r:gz") as tar:
+            for m in tar.getmembers():
+                if m.name in _MEMBERS and m.isfile():
+                    tar.extract(m, stage)   # names already whitelisted: _archive_members_refusal
+    except Exception:
+        _log.exception("backup extract failed")
+        shutil.rmtree(stage, ignore_errors=True)
+        return None
+    return stage
+
+
+def _dispatch_restore(stage, name, safety, typed):
+    """Start the detached swap of the staged files; return _restore_validated's (ok, message)."""
     try:
         if _helper_present():
             out, err, rc = _run_verb("panel-restore", [], timeout=20)
             if rc == 0:
-                return True, _restore_started_msg(name, safety, _spp_typed)
+                return True, _restore_started_msg(name, safety, typed)
             _log.error("restore verb failed: rc=%s %s", rc, (err or out or "")[:200])
             shutil.rmtree(stage, ignore_errors=True)
             return False, "Could not start the restore."
         # Pre-helper fallback, unchanged in shape: a host that has not re-run install.sh as root
         # still needs to be able to restore.
-        return _legacy_restore_dispatch(stage, name, safety, _spp_typed)
+        return _legacy_restore_dispatch(stage, name, safety, typed)
     except Exception:
         _log.exception("restore dispatch failed")
         # Nothing will run the cleanup, so don't leave the keys staged either.
