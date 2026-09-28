@@ -3496,6 +3496,11 @@ _nsr_av, _nsr_p = _nsr_argv("bash")
 check("nodesource (remote): the key fetch refuses anything but https, redirects included",
       _nsr_https_only(_nsr_av, _nsr_p),
       "argv=%r out=%r" % (_nsr_av, (_nsr_p.stdout + _nsr_p.stderr)[-200:]))
+# Quoted in the text itself, so no shell sees a bare =https. This one needs no zsh, so it runs on
+# CI's runners too, which do not ship it; the drive below is the proof on a machine that has it.
+check("nodesource (remote): ...with the =https quoted, for a login shell that is zsh",
+      bool(_re_ntc.search(r"""\scurl\s+--proto\s+(?:"=https"|'=https')\s""", " " + _ns_rcmd)),
+      _ns_rcmd[:200])
 if not _shutil_ns.which("zsh"):
     skip("nodesource (remote): ...and the flag survives a zsh login shell", "no zsh on this machine")
 else:

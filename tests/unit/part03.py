@@ -1630,7 +1630,8 @@ check("regex rewrite: ...and a dependency line of 200,000 blanks is read in line
 # 6-16. The rest of SonarCloud's S8786 list: twelve more patterns, the same two checks each. Where
 # the old pattern's slow case is a line its callers can hand it, the timing goes through the
 # caller; where only a stray newline makes it slow (every caller splits on lines first), through
-# the module-level pattern, which is what a future caller would reach.
+# the module-level pattern, which is what a future caller would reach. The old times in the
+# messages were measured by putting each old pattern back under its new name.
 from unit.part01 import _sm_game                                                   # noqa: E402
 from panel.services import monitoring as _sl_mon                                   # noqa: E402
 from panel.ops import tailscale_integration as _sl_tsi                             # noqa: E402
@@ -1678,7 +1679,7 @@ _sl_bak_in += ["gmodserver-2026-07-06-141117.tar.zst", "a.tar.b.tar.", "a.tar.ta
 _sl_diff_check("_game_backup_name_ok answers what _GAME_BACKUP_NAME answered", _sl_bak_in,
                _sm_cron._game_backup_name_ok, lambda s: bool(_SL_OLD_BAK.match(s)), 300)
 _sl_fast_check("delete_game_backup refuses a 216,000-character name made of .tar. repeats",
-               lambda n: _sm_cron.delete_game_backup(None, "u", n), "a.tar." * 36000 + "_", "8s")
+               lambda n: _sm_cron.delete_game_backup(None, "u", n), "a.tar." * 36000 + "_", "19s")
 
 # 7. files' `key="value"` line, which the pattern matches exactly as before.
 _SL_OLD_CFG = _sl_re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
@@ -1689,7 +1690,7 @@ _sl_diff_check("_CFG_LINE_RE captures what the old `\\s*(.*)$` captured", _sl_cf
                lambda s: _sl_groups(_sm_files._CFG_LINE_RE.match(s)),
                lambda s: _sl_groups(_SL_OLD_CFG.match(s)), 800)
 _sl_fast_check("_CFG_LINE_RE fails 80,000 blanks and a stray newline",
-               _sm_files._CFG_LINE_RE.match, "a=" + " " * 80000 + "\nx\ny", "10s")
+               _sm_files._CFG_LINE_RE.match, "a=" + " " * 80000 + "\nx\ny", "14s")
 
 # 8. files' `#### Section ####` header, as _grouped_cfg_settings hands it a raw line.
 _SL_OLD_HDR = _sl_re.compile(r"^#{3,}\s+(.+?)\s+#{3,}\s*$")
@@ -1879,7 +1880,7 @@ _sl_url_in += ["https://box.tail1.ts.net (Funnel on)", "https://a/x(y) extra)", 
 _sl_diff_check("_serve_url_line reads what the serve-status URL pattern read", _sl_url_in,
                _sl_tsi._serve_url_line, lambda s: _sl_groups(_SL_OLD_URL.match(s)), 2000)
 _sl_fast_check("_parse_serve_status reads a URL line holding 50,000 '()' pairs",
-               _sl_tsi._parse_serve_status, "https://a" + "()" * 50000 + " x\n", "10s")
+               _sl_tsi._parse_serve_status, "https://a" + "()" * 50000 + " x\n", "11s")
 
 # ── panel self-update CI gate: don't offer an update until its CI has passed ──
 # _repo_slug must parse both HTTPS and SSH remote URLs (so the check works on forks).
