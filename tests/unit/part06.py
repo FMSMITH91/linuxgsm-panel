@@ -2415,10 +2415,10 @@ try:
     # only when it is true (its remedy, re-running install.sh, now works on a current checkout).
     _su_rec_all = open(os.path.join(_root, "recover.sh"), encoding="utf-8").read()
     _su_rec = _su_rec_all[_su_rec_all.index('VENV_PY="$('):
-                          _su_rec_all.index('if [ -n "${STALE_WHY}" ]; then')] if (
-        'VENV_PY="$(' in _su_rec_all and 'if [ -n "${STALE_WHY}" ]; then' in _su_rec_all) else ""
-    _su_rec_end = _su_rec_all.find("\nfi\n", _su_rec_all.find('if [ -n "${STALE_WHY}" ]; then'))
-    _su_rec += _su_rec_all[_su_rec_all.find('if [ -n "${STALE_WHY}" ]; then'):_su_rec_end + 4] if (
+                          _su_rec_all.index('if [[ -n "${STALE_WHY}" ]]; then')] if (
+        'VENV_PY="$(' in _su_rec_all and 'if [[ -n "${STALE_WHY}" ]]; then' in _su_rec_all) else ""
+    _su_rec_end = _su_rec_all.find("\nfi\n", _su_rec_all.find('if [[ -n "${STALE_WHY}" ]]; then'))
+    _su_rec += _su_rec_all[_su_rec_all.find('if [[ -n "${STALE_WHY}" ]]; then'):_su_rec_end + 4] if (
         _su_rec and _su_rec_end > 0) else ""
 
     def _su_rec_run(cfg_text, link_to):
@@ -3692,7 +3692,7 @@ try:
     _gl_loop = "for _gd_link in /usr/local/bin/gamedig /usr/bin/gamedig; do"
     _gl_at = _un_txt.find(_gl_loop)
     # The branch that runs only when the host-shared pieces are this install's (SHARED_MINE).
-    _gl_elif = _un_txt.find("\nelif [ -d /usr/local/lib/linuxgsm-panel ]")
+    _gl_elif = _un_txt.find("\nelif [[ -d /usr/local/lib/linuxgsm-panel ]]")
     # ...and they are the links the script makes: its LINK_DIRS, each + /gamedig.
     _gl_script = open(os.path.join(_root, "tools", "gamedig", "install-gamedig.sh"),
                       encoding="utf-8").read()
@@ -3984,7 +3984,7 @@ try:
     # leaves the home; `userdel -r` itself exits 12 when it cannot remove the home, having already
     # deleted the account. Both cases asked only whether the ACCOUNT was gone, so the key survived
     # an uninstall that reported itself complete.
-    _ud_block = _su_between2('    if [ "${PANEL_USER}" = "${SERVICE_USER}" ]', "        fi\n    fi\n")
+    _ud_block = _su_between2('    if [[ "${PANEL_USER}" = "${SERVICE_USER}" ]]', "        fi\n    fi\n")
     _ud_tmp = _tempfile.mkdtemp(prefix="uninst-user-")
     try:
         _ud_homes = os.path.join(_ud_tmp, "home")
@@ -5233,6 +5233,201 @@ check("workflows: no pip install names a package; every one installs a file, has
       and ".clusterfuzzlite/Dockerfile" in _ci_req_installs and len(_ci_req_installs) >= 5,
       "installs=%d named=%r unhashed=%r source-build=%r requirements.txt=%r"
       % (len(_ci_installs), _ci_named, _ci_unhashed, _ci_srcbuild, _ci_req_installs))
+
+# ── wheels only, everywhere; the one source build is esprima, spelled so pip means it ──────────
+# The check above holds the PANEL's requirements.txt to wheels. ci.yml's install of the lint tools
+# (checks.txt) had no such flag, so any package pinned there could build from an sdist, running its
+# setup code on the runner (Sonar githubactions:S8541). It is now `--only-binary :all:
+# --no-binary=esprima`: esprima ships no wheel, and it is the only exemption. pip applies the two
+# flags in the order written, so the exemption has to come AFTER `--only-binary :all:` (the other
+# way round leaves esprima wheel-only and the install fails; measured with pip 26.2's own parser),
+# and in the one-token `=` form, since the scan above reads a bare `--no-binary esprima` as a named
+# package.
+_wb_bad, _wb_exempt = [], []
+for _wf, _toks in _ci_installs:
+    _wb_ob = [_i for _i, _t in enumerate(_toks)
+              if _t == "--only-binary=:all:"
+              or (_t == "--only-binary" and _i + 1 < len(_toks) and _toks[_i + 1] == ":all:")]
+    if not _wb_ob:
+        _wb_bad.append("%s: not wheels-only: %s" % (_wf, " ".join(_toks)))
+        continue
+    _wb_files = [_toks[_i + 1] for _i, _t in enumerate(_toks[:-1]) if _t == "-r"]
+    for _i, _t in enumerate(_toks):
+        if not _t.startswith("--no-binary"):
+            continue
+        if (_t != "--no-binary=esprima" or _i < _wb_ob[-1]
+                or _wb_files != [".github/ci-requirements-checks/checks.txt"]):
+            _wb_bad.append("%s: source build allowed by %r: %s" % (_wf, _t, " ".join(_toks)))
+        else:
+            _wb_exempt.append(_wf)
+check("workflows: every pip install is wheels only, and the one source build (esprima, in ci.yml) "
+      "is named after --only-binary :all:",
+      len(_ci_installs) >= 10 and not _wb_bad and _wb_exempt == ["ci.yml"],
+      "bad=%r exempt=%r" % (_wb_bad, _wb_exempt))
+
+# ── every https download in a workflow refuses to be redirected to http ───────────────────────
+# `curl -L` follows a redirect to any protocol. The three release downloads (gitleaks, actionlint,
+# the Codacy reporter) are pinned by sha256, so a downgraded body fails the checksum before it
+# runs; `--proto '=https'` refuses the plain-http hop outright instead (Sonar githubactions:S6506).
+_cpx_calls, _cpx_bad = [], []
+for _wf in sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml"))):
+    with open(_wf, encoding="utf-8") as _cpx_fh:
+        _cpx_src = "\n".join(_l for _l in _cpx_fh.read().splitlines()
+                             if not _l.lstrip().startswith("#"))
+    _cpx_src = re.sub(r"\\\n\s*", " ", _cpx_src)
+    for _m in re.finditer(r"(?<![\w-])curl\s[^\n;&|]*", _cpx_src):
+        if "https://" not in _m.group(0):
+            continue                  # the loopback health probes are plain http on purpose
+        _cpx_calls.append(os.path.basename(_wf))
+        _tk = [_t.strip("\x22'") for _t in _m.group(0).split()]
+        if not any(_tk[_i] == "--proto" and _tk[_i + 1] == "=https" for _i in range(len(_tk) - 1)):
+            _cpx_bad.append("%s: %s" % (os.path.basename(_wf), " ".join(_m.group(0).split())))
+check("workflows: every curl that fetches over https refuses a redirect to http (--proto '=https')",
+      {"actionlint.yml", "codacy-coverage.yml", "security.yml"} <= set(_cpx_calls) and not _cpx_bad,
+      "calls=%r bad=%r" % (_cpx_calls, _cpx_bad))
+
+# ── the batch fuzz job's summary says storage is configured, never what it is ─────────────────
+# CFL_STORAGE_REPO is the https URL with a write token IN it (the workflow's header, step 3), and
+# the step summary printed it verbatim for anyone who can read the run. The step is run here as
+# GitHub runs it, with a sentinel in the secret's place.
+_cfs_raw = open(os.path.join(_root, ".github", "workflows", "cflite_batch.yml"),
+                encoding="utf-8").read()
+_cfs_run = _wf_run_block(_cfs_raw, "Say whether this job is actually doing anything")
+_cfs_tmp = _tempfile.mkdtemp(prefix="cflite-summary-")
+try:
+    _cfs_out = {}
+    for _cfs_val in ("https://x-access-token:SENTINEL-corpus-token-0451@github.com/o/c.git", ""):
+        _cfs_sum = os.path.join(_cfs_tmp, "summary-%d" % len(_cfs_out))
+        _r = _sp.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", _cfs_run],
+                     env=dict(os.environ, GITHUB_STEP_SUMMARY=_cfs_sum, CFL_STORAGE_REPO=_cfs_val),
+                     capture_output=True, text=True, timeout=60)
+        _cfs_txt = open(_cfs_sum, encoding="utf-8").read() if os.path.exists(_cfs_sum) else ""
+        _cfs_out[bool(_cfs_val)] = (_r.returncode, _cfs_txt, _r.stdout + _r.stderr)
+    check("cflite_batch: with corpus storage set, the step summary says it is configured and never "
+          "prints the URL, which holds the token",
+          _cfs_out[True][0] == 0 and _cfs_out[True][1] == "Corpus storage: configured.\n"
+          and "SENTINEL-corpus-token" not in _cfs_out[True][1] + _cfs_out[True][2],
+          repr(_cfs_out[True]))
+    check("cflite_batch: ...and unset, it still says the job is DISABLED (control: the block ran)",
+          _cfs_out[False][0] == 0 and _cfs_out[False][1].startswith("DISABLED: "),
+          repr(_cfs_out[False]))
+finally:
+    _shutil.rmtree(_cfs_tmp, ignore_errors=True)
+
+# ── the fuzz image's build context: no keys, no databases, no worktree checkouts ──────────────
+# .clusterfuzzlite/Dockerfile does `COPY . $SRC/linuxgsm-panel` with the repository root as its
+# context, and Docker reads neither .gitignore nor .git/info/exclude, so a local fuzz build put the
+# working tree's data/ (secret_key, cred_key, panel.db), the .venv, .git and every worktree under
+# .claude/ into an image layer (Sonar docker:S6470). /.dockerignore is evaluated here the way
+# Docker's own matcher (moby/patternmatcher) does: a leading "/" is dropped, "**/" is any depth
+# (zero included), "*" and "?" stop at "/", and a path is left out when it or any parent matches.
+def _dki_rx(pat):
+    _o, _i = "^", 0
+    while _i < len(pat):
+        if pat.startswith("**", _i):
+            _i += 3 if pat.startswith("**/", _i) else 2
+            _o += "(.*/)?" if _i < len(pat) else ".*"
+            continue
+        _o += {"*": "[^/]*", "?": "[^/]"}.get(pat[_i], re.escape(pat[_i]))
+        _i += 1
+    return re.compile(_o + "$")
+
+
+_dki_path = os.path.join(_root, ".dockerignore")
+_dki_pats = []
+if os.path.exists(_dki_path):
+    for _l in open(_dki_path, encoding="utf-8").read().splitlines():
+        _l = _l.strip()
+        if _l and not _l.startswith("#"):
+            _dki_neg = _l.startswith("!")
+            _l = os.path.normpath(_l.lstrip("!").strip())
+            _dki_pats.append((_dki_neg, _dki_rx(_l[1:] if len(_l) > 1 and _l[0] == "/" else _l)))
+
+
+def _dki_out(path):
+    _parts = path.split("/")
+    _out = False
+    for _neg, _rx in _dki_pats:
+        if any(_rx.match("/".join(_parts[:_k])) for _k in range(1, len(_parts) + 1)):
+            _out = not _neg
+    return _out
+
+
+_dki_secret = ["data/secret_key", "data/cred_key", "data/panel.db", "data/panel.db-wal",
+               "data/config.json", ".git/config", ".venv/bin/python", "venv/bin/python",
+               "panel/__pycache__/app.cpython-314.pyc", ".claude/settings.local.json",
+               ".claude/worktrees/wt1/data/cred_key", ".claude/worktrees/wt1/app.py",
+               "tests/deep/secret_key", "tests/deep/cred_key", "x/panel.db", "x/y.sqlite3",
+               "x/y.db-shm", "x/z.secret", "node_modules/a/b.js"]
+check(".dockerignore: the fuzz image's context leaves out keys, databases, venvs, .git and every "
+      "worktree checkout, at any depth",
+      bool(_dki_pats) and [_p for _p in _dki_secret if not _dki_out(_p)] == [],
+      "copied=%r" % [_p for _p in _dki_secret if not _dki_out(_p)])
+# ...and keeps what the build reads: the requirements, build.sh, every harness and seed, and all of
+# the source the harnesses import. Walked, not listed, so a new source file is covered too.
+_dki_need = []
+for _dp, _dns, _fns in os.walk(_root):
+    _dns[:] = [_d for _d in _dns if _d not in (".git", ".claude", ".venv", "venv", "node_modules",
+                                               "data", "__pycache__")]
+    _rel = os.path.relpath(_dp, _root).replace(os.sep, "/")
+    for _fn in _fns:
+        _rp = _fn if _rel == "." else _rel + "/" + _fn
+        if (_rp.startswith(("tests/fuzz/corpus/", ".clusterfuzzlite/"))
+                or re.search(r"\.(py|sh|txt|json|ya?ml|in|cfg|toml|html|js|css|md)$", _fn)):
+            _dki_need.append(_rp)
+check(".dockerignore: ...and keeps every file the fuzz build reads (requirements, build.sh, the "
+      "harnesses, their seeds, the source)",
+      len(_dki_need) > 200 and "requirements.txt" in _dki_need
+      and ".clusterfuzzlite/build.sh" in _dki_need
+      and any(_p.startswith("tests/fuzz/corpus/") for _p in _dki_need)
+      and [_p for _p in _dki_need if _dki_out(_p)] == [],
+      "need=%d dropped=%r" % (len(_dki_need), [_p for _p in _dki_need if _dki_out(_p)][:6]))
+
+# ── the helper fetches Tailscale's installer over https only, every hop ───────────────────────
+# do_tailscale_install downloads install.sh and root runs it. Nothing checks the body, so TLS on
+# each redirect hop is all that stands between the network and a root shell script: `-L` alone
+# follows a redirect to plain http. Called here with curl stubbed to fail, so nothing is installed.
+import io as _tsp_io                                                               # noqa: E402
+import types as _tsp_types                                                         # noqa: E402
+_tsp_runs = []
+_tsp_saved = (_helper.subprocess, _helper.resolve, _helper.os, sys.stderr)
+_tsp_tmp = _tempfile.mkdtemp(prefix="tsinstall-")
+
+
+class _TspOs:
+    """The real os, with the helper's fixed /run path moved into a temp dir."""
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+    @staticmethod
+    def _p(path):
+        return os.path.join(_tsp_tmp, "i.sh") if path == "/run/panel-tailscale-install.sh" else path
+
+    def open(self, path, *a):
+        return os.open(self._p(path), *a)
+
+    def unlink(self, path):
+        return os.unlink(self._p(path))
+
+
+try:
+    _helper.subprocess = _tsp_types.SimpleNamespace(
+        run=lambda argv, **kw: (_tsp_runs.append(list(argv)), _sp.CompletedProcess(argv, 6))[1],
+        PIPE=_sp.PIPE, STDOUT=_sp.STDOUT, TimeoutExpired=_sp.TimeoutExpired)
+    _helper.resolve = lambda n: "/usr/bin/" + n
+    _helper.os = _TspOs()
+    sys.stderr = _tsp_io.StringIO()
+    _tsp_rc = _helper.do_tailscale_install([], "")
+finally:
+    _helper.subprocess, _helper.resolve, _helper.os, sys.stderr = _tsp_saved
+    _shutil.rmtree(_tsp_tmp, ignore_errors=True)
+check("helper: the Tailscale installer is fetched https-only, redirects included "
+      "(curl --proto =https)",
+      _tsp_rc == 1 and _tsp_runs == [["/usr/bin/curl", "--proto", "=https", "-fsSL",
+                                      "https://tailscale.com/install.sh"]],
+      repr((_tsp_rc, _tsp_runs)))
+
 # The scan above reads workflows as TEXT, so it passes a file GitHub cannot load. A one-line
 # `run: pip install --only-binary :all: -r ...` is exactly that: in a plain YAML scalar ": " is a
 # mapping indicator, so the whole workflow fails to parse ("mapping values are not allowed here")
@@ -6124,7 +6319,7 @@ _unremoved = sorted(_p for _p in _inst_paths if not _is_removed(_p))
 # rindex, not index: uninstall.sh tests MODE earlier too (to print the service user in the
 # summary), and splitting on the first occurrence puts the whole cleanup block on the wrong side
 # — which is how this check first reported a fix that was already in place.
-_uninst_cut = _uninst.rindex('if [ "${MODE}" = "system" ]; then')
+_uninst_cut = _uninst.rindex('if [[ "${MODE}" = "system" ]]; then')
 _uninst_sys = _uninst[_uninst_cut:]
 _uninst_common = _uninst[:_uninst_cut]
 _user_created = ["/usr/local/lib/linuxgsm-panel", "/etc/cron.d/lgsm-node-tools",

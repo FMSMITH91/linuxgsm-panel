@@ -66,7 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           TARBALL="actionlint_${VERSION}_linux_amd64.tar.gz"
-          curl -sSfL -o "/tmp/${TARBALL}" \
+          curl --proto '=https' -sSfL -o "/tmp/${TARBALL}" \
             "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/${TARBALL}"
           echo "${SHA256}  /tmp/${TARBALL}" | sha256sum -c -
           tar -xz -C /tmp -f "/tmp/${TARBALL}" actionlint

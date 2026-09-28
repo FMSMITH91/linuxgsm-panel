@@ -37,7 +37,7 @@ read_unit() {  # $1=unit file, $2=key — print the value of `key=...`
     # this function verbatim against a chmod 000 file: exit 2, before the next line.
     # Every caller already treats an empty answer as "nothing recorded", which is the right
     # reading: could-not-read is not a value, and guessing one here picks an install.
-    [ -f "$1" ] && [ -r "$1" ] || return 0
+    [[ -f "$1" ]] && [[ -r "$1" ]] || return 0
     awk -F= -v k="$2=" 'index($0,k)==1 {print substr($0, length(k) + 1); exit}' "$1" || return 0
 }
 
@@ -45,12 +45,12 @@ read_unit() {  # $1=unit file, $2=key — print the value of `key=...`
 # PANEL_DIR may be set by the caller to name the install outright — which is what the ambiguity
 # refusal below tells the operator to do.
 PANEL_DIR="${PANEL_DIR:-}"; SVC_USER=""
-if [ -n "${PANEL_DIR}" ]; then
+if [[ -n "${PANEL_DIR}" ]]; then
     :                                   # named explicitly; nothing to discover
-elif [ -f "${SYSTEM_UNIT}" ]; then
+elif [[ -f "${SYSTEM_UNIT}" ]]; then
     PANEL_DIR="$(read_unit "${SYSTEM_UNIT}" WorkingDirectory)"
     SVC_USER="$(read_unit "${SYSTEM_UNIT}" User)"
-elif [ -f "${USER_UNIT}" ]; then
+elif [[ -f "${USER_UNIT}" ]]; then
     PANEL_DIR="$(read_unit "${USER_UNIT}" WorkingDirectory)"
     SVC_USER="$(id -un)"
 fi
@@ -72,32 +72,32 @@ fi
 # Ownership cannot tell the two apart: a genuine per-user install and a planted one are both owned
 # by the user whose home they sit in. So this does not guess. One candidate is unambiguous; more
 # than one is a question only the operator can answer, and it gets asked.
-if [ -z "${PANEL_DIR}" ]; then
+if [[ -z "${PANEL_DIR}" ]]; then
     CANDIDATES=""
     for uu in "${HOMES}"/*/.config/systemd/user/linuxgsm-panel.service; do
-        [ -f "${uu}" ] || continue
+        [[ -f "${uu}" ]] || continue
         d="$(read_unit "${uu}" WorkingDirectory)"
-        [ -n "${d}" ] && [ -f "${d}/manage.py" ] || continue
+        [[ -n "${d}" ]] && [[ -f "${d}/manage.py" ]] || continue
         CANDIDATES="${CANDIDATES}$(basename "$(dirname "$(dirname "$(dirname "$(dirname "${uu}")")")")")|${d}
 "
     done
     N_CAND="$(printf '%s' "${CANDIDATES}" | grep -c . || true)"
-    if [ "${N_CAND}" -gt 1 ]; then
+    if [[ "${N_CAND}" -gt 1 ]]; then
         echo "More than one per-user panel install is present on this host:" >&2
         printf '%s' "${CANDIDATES}" | while IFS='|' read -r u d; do
-            [ -n "${u}" ] && echo "    ${d}   (user ${u})" >&2
+            [[ -n "${u}" ]] && echo "    ${d}   (user ${u})" >&2
         done
         echo "" >&2
         echo "Refusing to guess which one you mean. Name it:" >&2
         echo "    sudo PANEL_DIR=/path/to/panel ${0##*/} $*" >&2
         exit 1
     fi
-    if [ "${N_CAND}" -eq 1 ]; then
+    if [[ "${N_CAND}" -eq 1 ]]; then
         SVC_USER="$(printf '%s' "${CANDIDATES}" | head -1 | cut -d'|' -f1)"
         PANEL_DIR="$(printf '%s' "${CANDIDATES}" | head -1 | cut -d'|' -f2)"
     fi
 fi
-if [ -z "${PANEL_DIR}" ] || [ ! -f "${PANEL_DIR}/manage.py" ]; then
+if [[ -z "${PANEL_DIR}" ]] || [[ ! -f "${PANEL_DIR}/manage.py" ]]; then
     # Nothing named the install, so ask the INSTALLER first, then try the two conventional
     # locations, then this script's own directory.
     #
@@ -139,14 +139,14 @@ if [ -z "${PANEL_DIR}" ] || [ ! -f "${PANEL_DIR}/manage.py" ]; then
     conf_dir="$(read_unit "${PANEL_CONF}" panel_dir)"
     self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
     selfdir="$(cd "$(dirname "${self}")" 2>/dev/null && pwd)" || selfdir=""
-    if [ -n "${conf_dir}" ] && [ -f "${conf_dir}/manage.py" ]; then
+    if [[ -n "${conf_dir}" ]] && [[ -f "${conf_dir}/manage.py" ]]; then
         # Same reason as the loop below: SVC_USER, where it is set at all, came from the install
         # being discarded here, and the `stat` further down derives it from the directory chosen.
-        [ "${conf_dir}" = "${PANEL_DIR}" ] || SVC_USER=""
+        [[ "${conf_dir}" = "${PANEL_DIR}" ]] || SVC_USER=""
         PANEL_DIR="${conf_dir}"
     else
         for d in "/home/lgsmpanel/linuxgsm-panel" "${HOME}/linuxgsm-panel" "${selfdir}"; do
-            if [ -n "${d}" ] && [ -f "${d}/manage.py" ]; then
+            if [[ -n "${d}" ]] && [[ -f "${d}/manage.py" ]]; then
                 # The account came from the install this block is DISCARDING — a unit file's User=,
                 # or the owner of a directory that turned out to have no manage.py. Clearing it lets
                 # the `stat -c '%U' "${PANEL_DIR}"` below derive the account from the directory
@@ -156,22 +156,22 @@ if [ -z "${PANEL_DIR}" ] || [ ! -f "${PANEL_DIR}/manage.py" ]; then
                 # ${PANEL_DIR}/venv/bin/python from the NEW directory, run under `sudo -u` as the OLD
                 # directory's user — and the line that announces the pairing
                 # ("Using <dir> (service user <user>)") printed a combination nothing had established.
-                [ "${d}" != "${PANEL_DIR}" ] && SVC_USER=""
+                [[ "${d}" != "${PANEL_DIR}" ]] && SVC_USER=""
                 PANEL_DIR="${d}"
                 break
             fi
         done
     fi
 fi
-if [ -z "${PANEL_DIR}" ] || [ ! -f "${PANEL_DIR}/manage.py" ]; then
+if [[ -z "${PANEL_DIR}" ]] || [[ ! -f "${PANEL_DIR}/manage.py" ]]; then
     echo "Couldn't find a LinuxGSM Panel install on this host — run this ON the panel server." >&2
     exit 1
 fi
-[ -n "${SVC_USER}" ] || SVC_USER="$(stat -c '%U' "${PANEL_DIR}")"
+[[ -n "${SVC_USER}" ]] || SVC_USER="$(stat -c '%U' "${PANEL_DIR}")"
 
 PY="${PANEL_DIR}/venv/bin/python"
-[ -x "${PY}" ] || PY="$(command -v python3 || true)"
-[ -n "${PY}" ] || { echo "No Python found for the panel." >&2; exit 1; }
+[[ -x "${PY}" ]] || PY="$(command -v python3 || true)"
+[[ -n "${PY}" ]] || { echo "No Python found for the panel." >&2; exit 1; }
 # After an OS release upgrade the venv's python is a symlink to the NEW interpreter, which has
 # none of the panel's packages, so manage.py would die on its first import. Compare what pyvenv.cfg
 # records with where the venv's own python3 resolves (install.sh's _venv_stale does the same, and
@@ -181,21 +181,21 @@ VENV_PY="$(sed -n 's/^version\(_info\)\{0,1\}[[:space:]]*=[[:space:]]*\([0-9][0-
 RUNS_PY="$(readlink -f "${PANEL_DIR}/venv/bin/python3" 2>/dev/null \
            | sed -n 's|.*/python\([0-9][0-9]*\.[0-9][0-9]*\)$|\1|p' || true)"
 STALE_WHY=""
-if [ -z "${VENV_PY}" ]; then
+if [[ -z "${VENV_PY}" ]]; then
     :
-elif [ ! -e "${PANEL_DIR}/venv/bin/python3" ]; then
+elif [[ ! -e "${PANEL_DIR}/venv/bin/python3" ]]; then
     STALE_WHY="that interpreter is gone"
-elif [ -n "${RUNS_PY}" ] && [ "${VENV_PY}" != "${RUNS_PY}" ]; then
+elif [[ -n "${RUNS_PY}" ]] && [[ "${VENV_PY}" != "${RUNS_PY}" ]]; then
     STALE_WHY="its python3 is now ${RUNS_PY}"
 fi
-if [ -n "${STALE_WHY}" ]; then
+if [[ -n "${STALE_WHY}" ]]; then
     echo "The panel's venv was built for Python ${VENV_PY}, and ${STALE_WHY} (an OS release" >&2
     echo "upgrade?). Re-run install.sh to rebuild it, then run this again." >&2
     exit 1
 fi
 
 # Default action: reset the (sole) superadmin's password.
-[ "$#" -gt 0 ] || set -- reset-password
+[[ "$#" -gt 0 ]] || set -- reset-password
 
 # Say WHICH install is about to be driven, every time. This is the general defence behind the
 # ambiguity refusal above: whatever route found the install, the operator sees the path and the
@@ -204,9 +204,9 @@ echo "Using ${PANEL_DIR} (service user ${SVC_USER})" >&2
 
 # Run AS THE PANEL'S USER so the SQLite database and its WAL files keep the correct
 # ownership (running as root could leave root-owned journal files the service can't write).
-if [ "$(id -un)" = "${SVC_USER}" ]; then
+if [[ "$(id -un)" = "${SVC_USER}" ]]; then
     exec "${PY}" "${PANEL_DIR}/manage.py" "$@"
-elif [ "$(id -u)" -eq 0 ]; then
+elif [[ "$(id -u)" -eq 0 ]]; then
     exec sudo -u "${SVC_USER}" "${PY}" "${PANEL_DIR}/manage.py" "$@"
 else
     echo "Re-run with sudo so it can read the panel's owner-only database:" >&2

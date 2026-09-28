@@ -45,8 +45,8 @@ BIN="node_modules/.bin/gamedig"
 say() { printf 'install-gamedig: %s\n' "$*"; }
 fail() { say "$*"; exit 1; }
 
-[ "$(id -u)" -eq 0 ] || fail "run this as root"
-{ [ -f "${PKG}" ] && [ -f "${LOCK}" ]; } \
+[[ "$(id -u)" -eq 0 ]] || fail "run this as root"
+{ [[ -f "${PKG}" ]] && [[ -f "${LOCK}" ]]; } \
     || fail "package.json and package-lock.json must be beside this script, in ${HERE}"
 
 # One run at a time. install.sh, the weekly cron and the panel's daily pass for a remote can meet.
@@ -72,7 +72,7 @@ works() {
     return 1
 }
 
-if [ "$(readlink -- "${HERE}/current" 2>/dev/null)" = "${HASH}" ] && works "${TREE}/${BIN}"; then
+if [[ "$(readlink -- "${HERE}/current" 2>/dev/null)" = "${HASH}" ]] && works "${TREE}/${BIN}"; then
     say "gamedig is current (lockfile ${HASH:0:12}), nothing to fetch"
 else
     command -v npm >/dev/null 2>&1 \
@@ -106,20 +106,20 @@ fi
 TARGET="${HERE}/current/${BIN}"
 rc=0
 for d in "${LINK_DIRS[@]}"; do
-    [ -d "${d}" ] || continue
+    [[ -d "${d}" ]] || continue
     link="${d}/gamedig"
-    if [ -e "${link}" ] || [ -L "${link}" ]; then
-        if [ ! -L "${link}" ]; then
+    if [[ -e "${link}" ]] || [[ -L "${link}" ]]; then
+        if [[ ! -L "${link}" ]]; then
             say "left ${link} alone: it is a file, not the panel's link or npm's"
             rc=1
             continue
         fi
         cur="$(readlink -- "${link}")"
-        [ "${cur}" = "${TARGET}" ] && continue
+        [[ "${cur}" = "${TARGET}" ]] && continue
         case "${cur}" in
             "${HERE}"/*|*node_modules/gamedig/*) ;;
             *)
-                if [ -e "${link}" ]; then
+                if [[ -e "${link}" ]]; then
                     say "left ${link} alone: it points at ${cur}, which is not the panel's gamedig or npm's"
                     rc=1
                     continue
@@ -137,9 +137,9 @@ done
 # `npm uninstall -g`, which also deletes the command at npm's bin path — /usr/bin/gamedig with
 # NodeSource's npm, /usr/local/bin/gamedig with the distro's — whatever it points at. Run before
 # the links were made, that left `gamedig` resolving nowhere until they were.
-if [ "${rc}" -eq 0 ] && command -v npm >/dev/null 2>&1; then
+if [[ "${rc}" -eq 0 ]] && command -v npm >/dev/null 2>&1; then
     NPM_ROOT="$(npm root -g 2>/dev/null)" || NPM_ROOT=""
-    if [ -n "${NPM_ROOT}" ] && [ -d "${NPM_ROOT}/gamedig" ] && [ ! -L "${NPM_ROOT}/gamedig" ]; then
+    if [[ -n "${NPM_ROOT}" ]] && [[ -d "${NPM_ROOT}/gamedig" ]] && [[ ! -L "${NPM_ROOT}/gamedig" ]]; then
         say "removing npm's global gamedig (${NPM_ROOT}/gamedig)"
         rm -rf -- "${NPM_ROOT}/gamedig" \
             || say "could not remove ${NPM_ROOT}/gamedig; the links above already replace its command"
@@ -148,9 +148,9 @@ fi
 
 # Trees for older lockfiles, and staging directories a killed run left behind.
 for p in "${HERE}"/* "${HERE}"/.stage.*; do
-    { [ -d "${p}" ] && [ ! -L "${p}" ]; } || continue
+    { [[ -d "${p}" ]] && [[ ! -L "${p}" ]]; } || continue
     n="${p##*/}"
-    [ "${n}" != "${HASH}" ] || continue
+    [[ "${n}" != "${HASH}" ]] || continue
     if [[ "${n}" =~ ^[0-9a-f]{64}$ ]] || [[ "${n}" == .stage.* ]]; then
         rm -rf -- "${p}"
     fi
@@ -158,5 +158,5 @@ done
 
 VER="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' \
         "${TREE}/node_modules/gamedig/package.json" 2>/dev/null | head -n 1)"
-[ "${rc}" -ne 0 ] || say "gamedig ${VER:-(version unknown)} ready: ${TARGET}"
+[[ "${rc}" -ne 0 ]] || say "gamedig ${VER:-(version unknown)} ready: ${TARGET}"
 exit "${rc}"

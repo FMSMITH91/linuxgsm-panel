@@ -72,6 +72,10 @@ jobs:
         # Everything is hash-pinned: requirements.txt is the panel's own lockfile (requirements.in),
         # and the tools' are in .github/ci-requirements-checks. esprima is an sdist, so its build
         # tools go in first and it builds against those, not against a fetched setuptools.
+        # Wheels only for everything else: esprima is the ONE package allowed to build from source.
+        # pip applies the two flags in order, so `--no-binary=esprima` comes after
+        # `--only-binary :all:` (the other way round makes esprima wheel-only, and the install
+        # fails). Drop the exemption if esprima ever ships a wheel.
         # requirements-bootstrap.txt first: the pip install.sh puts in every panel venv, installed
         # the way install.sh installs it, so a Dependabot bump of it is proved on each Python here,
         # and the requirements below go in through the same pip the hosts use.
@@ -80,8 +84,8 @@ jobs:
           python -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
           python -m pip install --quiet --require-hashes --only-binary :all: \
             -r .github/ci-requirements-checks/build.txt
-          python -m pip install --quiet --require-hashes --no-build-isolation \
-            -r .github/ci-requirements-checks/checks.txt
+          python -m pip install --quiet --require-hashes --only-binary :all: --no-binary=esprima \
+            --no-build-isolation -r .github/ci-requirements-checks/checks.txt
 
       - name: Run all checks (compile, lint, unit, smoke, shellcheck)
         # Same script developers run locally via ./tools/run-tests.sh, so green here == green there.

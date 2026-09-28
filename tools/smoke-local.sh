@@ -18,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 SUITE="${1:-tests/smoke_test.py}"
 PY="$(cd "$(dirname "${PYTHON:-./.venv/bin/python}")" && pwd)/$(basename "${PYTHON:-./.venv/bin/python}")"
-[ -x "$PY" ] || { echo "no interpreter at $PY (set PYTHON=)" >&2; exit 1; }
+[[ -x "$PY" ]] || { echo "no interpreter at $PY (set PYTHON=)" >&2; exit 1; }
 
 WORK="$(mktemp -d -t lgsm-smoke-XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
