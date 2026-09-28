@@ -1195,72 +1195,88 @@ def anonymise_audit_ips(days):
     return len(rows)
 
 
+# The light migrations: (table, column) -> the ALTER TABLE that adds that column to a database
+# created by an older version. A new model column needs its entry here in the same commit — a fresh
+# DB (create_all) always has it, so only an UPGRADED install would throw "no such column" without
+# one. A smoke check parses this map out of the source, so keep each entry's `("t", "c"): "ALTER..."`
+# shape.
+_LIGHT_MIGRATIONS = {
+    ("game_server", "commands"): "ALTER TABLE game_server ADD COLUMN commands TEXT DEFAULT '[]'",
+    ("game_server", "daily_restart_at"):
+        "ALTER TABLE game_server ADD COLUMN daily_restart_at VARCHAR(5) DEFAULT '05:00'",
+    ("game_server", "query_type"): "ALTER TABLE game_server ADD COLUMN query_type VARCHAR(40)",
+    ("game_server", "daily_restart"): "ALTER TABLE game_server ADD COLUMN daily_restart BOOLEAN DEFAULT 0",
+    ("game_server", "notify_when_empty"): "ALTER TABLE game_server ADD COLUMN notify_when_empty BOOLEAN DEFAULT 0",
+    ("game_server", "peak_players"): "ALTER TABLE game_server ADD COLUMN peak_players INTEGER DEFAULT 0",
+    ("game_server", "restart_pending"): "ALTER TABLE game_server ADD COLUMN restart_pending BOOLEAN DEFAULT 0",
+    ("game_server", "backup_pending"): "ALTER TABLE game_server ADD COLUMN backup_pending BOOLEAN DEFAULT 0",
+    ("game_server", "stop_pending"): "ALTER TABLE game_server ADD COLUMN stop_pending BOOLEAN DEFAULT 0",
+    # Empty on upgrade: a failure that already happened has no reason recorded anywhere to
+    # backfill from, and DEFAULT 1 for retryable is the safe guess — it offers the button
+    # rather than withholding it from a row whose cause nobody can name any more.
+    ("game_server", "install_error"):
+        "ALTER TABLE game_server ADD COLUMN install_error TEXT DEFAULT ''",
+    ("game_server", "install_retryable"):
+        "ALTER TABLE game_server ADD COLUMN install_retryable BOOLEAN DEFAULT 1",
+    ("game_server", "content_games"):
+        "ALTER TABLE game_server ADD COLUMN content_games TEXT DEFAULT ''",
+    ("invite", "revoked_at"): "ALTER TABLE invite ADD COLUMN revoked_at DATETIME",
+    ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
+    ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",
+    ("remote_server", "pro_cache"): "ALTER TABLE remote_server ADD COLUMN pro_cache TEXT DEFAULT ''",
+    ("remote_server", "host_key"): "ALTER TABLE remote_server ADD COLUMN host_key TEXT DEFAULT ''",
+    ("remote_server", "timezone"):
+        "ALTER TABLE remote_server ADD COLUMN timezone VARCHAR(64) DEFAULT ''",
+    ("user", "totp_secret"): "ALTER TABLE user ADD COLUMN totp_secret TEXT",
+    ("user", "totp_enabled"): "ALTER TABLE user ADD COLUMN totp_enabled BOOLEAN DEFAULT 0",
+    ("user", "auth_epoch"): "ALTER TABLE user ADD COLUMN auth_epoch INTEGER DEFAULT 0",
+    ("user", "backup_codes"): "ALTER TABLE user ADD COLUMN backup_codes TEXT DEFAULT ''",
+    ("user", "language"): "ALTER TABLE user ADD COLUMN language VARCHAR(5) DEFAULT 'en'",
+    ("user", "otp_nag_dismissed"): "ALTER TABLE user ADD COLUMN otp_nag_dismissed BOOLEAN DEFAULT 0",
+    ("user", "api_token"): "ALTER TABLE user ADD COLUMN api_token VARCHAR(64)",
+    ("user", "ui_prefs"): "ALTER TABLE user ADD COLUMN ui_prefs TEXT DEFAULT '{}'",
+    ("user", "last_totp_step"): "ALTER TABLE user ADD COLUMN last_totp_step INTEGER DEFAULT 0",
+    # DEFAULT 0: every account that already exists chose its own password, or has been using
+    # whatever it was given for long enough that a forced change on upgrade would be a surprise
+    # rather than a protection. The flag only ever starts true for a password set from now on.
+    ("user", "must_change_password"):
+        "ALTER TABLE user ADD COLUMN must_change_password BOOLEAN DEFAULT 0 NOT NULL",
+    # Empty on upgrade: the panel never stored past passwords, so there is no history to
+    # backfill. It starts filling on the next change each account makes.
+    ("user", "password_history"): "ALTER TABLE user ADD COLUMN password_history TEXT DEFAULT ''",
+    # DEFAULT 1, unlike the model's default of False, and only here: this DDL runs once, on
+    # an install that already has session rows, and its DEFAULT exists solely to backfill
+    # them. Guessing "remembered" for those is the kind guess — the expiry sweep then gives
+    # them the LONGER window, so nobody is signed out by the upgrade itself; a plain session
+    # that is really dead lingers in the list a few days and then goes. Guessing the other way
+    # signs out every remember-me login the first time they idle for an afternoon. New rows
+    # never see this default: every insert goes through the ORM, which always supplies the
+    # real value.
+    ("user_session", "remember"):
+        "ALTER TABLE user_session ADD COLUMN remember BOOLEAN DEFAULT 1 NOT NULL",
+}
+
+
 def _run_light_migrations():
     """Add columns that may be missing on databases created by older versions.
 
     SQLAlchemy's create_all() never ALTERs existing tables, so do it by hand.
     """
-    from sqlalchemy import inspect, text
+    from sqlalchemy import inspect
     insp = inspect(db.engine)
     existing = {t: {c["name"] for c in insp.get_columns(t)} for t in insp.get_table_names()}
-    wanted = {
-        ("game_server", "commands"): "ALTER TABLE game_server ADD COLUMN commands TEXT DEFAULT '[]'",
-        ("game_server", "daily_restart_at"):
-            "ALTER TABLE game_server ADD COLUMN daily_restart_at VARCHAR(5) DEFAULT '05:00'",
-        ("game_server", "query_type"): "ALTER TABLE game_server ADD COLUMN query_type VARCHAR(40)",
-        ("game_server", "daily_restart"): "ALTER TABLE game_server ADD COLUMN daily_restart BOOLEAN DEFAULT 0",
-        ("game_server", "notify_when_empty"): "ALTER TABLE game_server ADD COLUMN notify_when_empty BOOLEAN DEFAULT 0",
-        ("game_server", "peak_players"): "ALTER TABLE game_server ADD COLUMN peak_players INTEGER DEFAULT 0",
-        ("game_server", "restart_pending"): "ALTER TABLE game_server ADD COLUMN restart_pending BOOLEAN DEFAULT 0",
-        ("game_server", "backup_pending"): "ALTER TABLE game_server ADD COLUMN backup_pending BOOLEAN DEFAULT 0",
-        ("game_server", "stop_pending"): "ALTER TABLE game_server ADD COLUMN stop_pending BOOLEAN DEFAULT 0",
-        # Empty on upgrade: a failure that already happened has no reason recorded anywhere to
-        # backfill from, and DEFAULT 1 for retryable is the safe guess — it offers the button
-        # rather than withholding it from a row whose cause nobody can name any more.
-        ("game_server", "install_error"):
-            "ALTER TABLE game_server ADD COLUMN install_error TEXT DEFAULT ''",
-        ("game_server", "install_retryable"):
-            "ALTER TABLE game_server ADD COLUMN install_retryable BOOLEAN DEFAULT 1",
-        ("game_server", "content_games"):
-            "ALTER TABLE game_server ADD COLUMN content_games TEXT DEFAULT ''",
-        ("invite", "revoked_at"): "ALTER TABLE invite ADD COLUMN revoked_at DATETIME",
-        ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
-        ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",
-        ("remote_server", "pro_cache"): "ALTER TABLE remote_server ADD COLUMN pro_cache TEXT DEFAULT ''",
-        ("remote_server", "host_key"): "ALTER TABLE remote_server ADD COLUMN host_key TEXT DEFAULT ''",
-        ("remote_server", "timezone"):
-            "ALTER TABLE remote_server ADD COLUMN timezone VARCHAR(64) DEFAULT ''",
-        ("user", "totp_secret"): "ALTER TABLE user ADD COLUMN totp_secret TEXT",
-        ("user", "totp_enabled"): "ALTER TABLE user ADD COLUMN totp_enabled BOOLEAN DEFAULT 0",
-        ("user", "auth_epoch"): "ALTER TABLE user ADD COLUMN auth_epoch INTEGER DEFAULT 0",
-        ("user", "backup_codes"): "ALTER TABLE user ADD COLUMN backup_codes TEXT DEFAULT ''",
-        ("user", "language"): "ALTER TABLE user ADD COLUMN language VARCHAR(5) DEFAULT 'en'",
-        ("user", "otp_nag_dismissed"): "ALTER TABLE user ADD COLUMN otp_nag_dismissed BOOLEAN DEFAULT 0",
-        ("user", "api_token"): "ALTER TABLE user ADD COLUMN api_token VARCHAR(64)",
-        ("user", "ui_prefs"): "ALTER TABLE user ADD COLUMN ui_prefs TEXT DEFAULT '{}'",
-        ("user", "last_totp_step"): "ALTER TABLE user ADD COLUMN last_totp_step INTEGER DEFAULT 0",
-        # DEFAULT 0: every account that already exists chose its own password, or has been using
-        # whatever it was given for long enough that a forced change on upgrade would be a surprise
-        # rather than a protection. The flag only ever starts true for a password set from now on.
-        ("user", "must_change_password"):
-            "ALTER TABLE user ADD COLUMN must_change_password BOOLEAN DEFAULT 0 NOT NULL",
-        # Empty on upgrade: the panel never stored past passwords, so there is no history to
-        # backfill. It starts filling on the next change each account makes.
-        ("user", "password_history"): "ALTER TABLE user ADD COLUMN password_history TEXT DEFAULT ''",
-        # DEFAULT 1, unlike the model's default of False, and only here: this DDL runs once, on
-        # an install that already has session rows, and its DEFAULT exists solely to backfill
-        # them. Guessing "remembered" for those is the kind guess — the expiry sweep then gives
-        # them the LONGER window, so nobody is signed out by the upgrade itself; a plain session
-        # that is really dead lingers in the list a few days and then goes. Guessing the other way
-        # signs out every remember-me login the first time they idle for an afternoon. New rows
-        # never see this default: every insert goes through the ORM, which always supplies the
-        # real value.
-        ("user_session", "remember"):
-            "ALTER TABLE user_session ADD COLUMN remember BOOLEAN DEFAULT 1 NOT NULL",
-    }
-    for (table, col), ddl in wanted.items():
+    for (table, col), ddl in _LIGHT_MIGRATIONS.items():
         if table in existing and col not in existing[table]:
             db.session.execute(text(ddl))
+    _create_declared_indexes(existing)
+    db.session.commit()
+
+
+def _create_declared_indexes(existing):
+    """Create the models' declared indexes on tables that already existed, idempotently.
+
+    `existing` is _run_light_migrations()'s {table: {column, ...}} census of the database.
+    """
     # Indexes the audit-log filters/sort rely on. create_all() adds these on a fresh DB but
     # never to an already-existing table — so (re)create the model's own declared indexes
     # here, idempotently, to keep the /logs page fast as the table grows. Driving this off the
@@ -1280,7 +1296,6 @@ def _run_light_migrations():
         if _model.__tablename__ in existing:
             for ix in _model.__table__.indexes:
                 ix.create(db.engine, checkfirst=True)
-    db.session.commit()
 
 
 def database_stats():
@@ -1451,63 +1466,80 @@ def _ensure_db_healthy(path=None):
     destroyed — so the panel comes back on the last good data instead of failing to
     boot. Best-effort: it never raises, so it can't itself block startup.
     """
-    import os
-    import shutil
-    import sqlite3
-    import time as _t
     from panel.core.config import DB_PATH
     path = path or str(DB_PATH)
     backup = path + ".backup"
     try:
         if _db_quick_check(path):
-            # Healthy — refresh the rolling backup via the online backup API.
-            if os.path.exists(path) and os.path.getsize(path) > 0:
-                tmp = backup + ".tmp"
-                src = dst = None
-                ok_copy = False
-                try:
-                    src = sqlite3.connect(path, timeout=10)
-                    dst = sqlite3.connect(tmp)
-                    with dst:
-                        src.backup(dst)
-                    ok_copy = True
-                except sqlite3.DatabaseError:
-                    ok_copy = False   # source unreadable mid-copy — keep the existing backup
-                finally:
-                    for _c in (dst, src):
-                        if _c is not None:
-                            try:
-                                _c.close()
-                            except sqlite3.Error:
-                                _log.debug("connection already broken — nothing to close", exc_info=True)
-                # Swap the temp copy in only after the handles are closed (Windows won't
-                # rename an open file) and only if the copy actually completed.
-                if ok_copy:
-                    os.replace(tmp, backup)
-                else:
-                    _silent_remove(tmp)
+            _refresh_rolling_backup(path, backup)
             return
-        # Corrupt — always move the bad file aside (preserved for forensics/recovery,
-        # never deleted), then either restore the last good backup or let the app
-        # build a fresh DB. Either way the panel starts instead of crash-looping.
-        aside = "%s.corrupt-%d" % (path, int(_t.time()))
-        try:
-            os.replace(path, aside)
-        except OSError:
-            _log.debug("couldn't move it (perms) — fall through; a fresh DB gets created", exc_info=True)
-        # Drop the corrupt DB's stale WAL/SHM so they aren't replayed over a new file.
-        for ext in ("-wal", "-shm"):
-            _silent_remove(path + ext)
-        if os.path.exists(backup) and _db_quick_check(backup):
-            _log.error("database at %s is corrupt — restored last good backup "
-                       "(corrupt copy saved to %s)", path, aside)
-            shutil.copy2(backup, path)
-        else:
-            _log.error("database at %s is corrupt and no healthy backup exists — moved "
-                       "it aside (%s) so the panel can start fresh; use the recovery "
-                       "tool if you need to salvage its data", path, aside)
+        _set_corrupt_db_aside(path, backup)
     except Exception:
         _log.exception("database self-heal check failed (continuing startup)")
+
+
+def _refresh_rolling_backup(path, backup):
+    """Refresh the rolling backup of the HEALTHY database at `path` via the online backup API.
+
+    A missing or empty `path` has nothing to back up. The copy goes to `<backup>.tmp` first, so a
+    copy that fails part-way keeps the existing backup.
+    """
+    import os
+    import sqlite3
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        tmp = backup + ".tmp"
+        src = dst = None
+        ok_copy = False
+        try:
+            src = sqlite3.connect(path, timeout=10)
+            dst = sqlite3.connect(tmp)
+            with dst:
+                src.backup(dst)
+            ok_copy = True
+        except sqlite3.DatabaseError:
+            ok_copy = False   # source unreadable mid-copy — keep the existing backup
+        finally:
+            for _c in (dst, src):
+                if _c is not None:
+                    try:
+                        _c.close()
+                    except sqlite3.Error:
+                        _log.debug("connection already broken — nothing to close", exc_info=True)
+        # Swap the temp copy in only after the handles are closed (Windows won't
+        # rename an open file) and only if the copy actually completed.
+        if ok_copy:
+            os.replace(tmp, backup)
+        else:
+            _silent_remove(tmp)
+
+
+def _set_corrupt_db_aside(path, backup):
+    """Move the CORRUPT database at `path` aside, then restore `backup` over it if that is healthy.
+
+    Raises what os/shutil raise beyond the aside move itself; _ensure_db_healthy catches it.
+    """
+    import os
+    import shutil
+    import time as _t
+    # Corrupt — always move the bad file aside (preserved for forensics/recovery,
+    # never deleted), then either restore the last good backup or let the app
+    # build a fresh DB. Either way the panel starts instead of crash-looping.
+    aside = "%s.corrupt-%d" % (path, int(_t.time()))
+    try:
+        os.replace(path, aside)
+    except OSError:
+        _log.debug("couldn't move it (perms) — fall through; a fresh DB gets created", exc_info=True)
+    # Drop the corrupt DB's stale WAL/SHM so they aren't replayed over a new file.
+    for ext in ("-wal", "-shm"):
+        _silent_remove(path + ext)
+    if os.path.exists(backup) and _db_quick_check(backup):
+        _log.error("database at %s is corrupt — restored last good backup "
+                   "(corrupt copy saved to %s)", path, aside)
+        shutil.copy2(backup, path)
+    else:
+        _log.error("database at %s is corrupt and no healthy backup exists — moved "
+                   "it aside (%s) so the panel can start fresh; use the recovery "
+                   "tool if you need to salvage its data", path, aside)
 
 
 # ── A deleted row must not leave its history behind ───────────────────────────────────────────
@@ -1521,6 +1553,7 @@ def _ensure_db_healthy(path=None):
 # The DELETE goes through the flush's own connection, so it is part of the same transaction — a
 # rolled-back delete does not lose the samples.
 def _register_sample_pruning():
+    """Delete a deleted game server's or host's history samples with it."""
     from sqlalchemy import event
 
     def _prune(model, column):
@@ -1533,6 +1566,11 @@ def _register_sample_pruning():
 
     event.listen(GameServer, "after_delete", _prune(MetricSample, MetricSample.server_id))
     event.listen(RemoteServer, "after_delete", _prune(HostSample, HostSample.remote_id))
+
+
+def _register_invite_revocation():
+    """Revoke the invites a deleted user minted, and those that delegate a deleted group."""
+    from sqlalchemy import event
 
     # An invite must die with the account that minted it. authority_intact() resolves the creator
     # with db.session.get(User, created_by_id) and fails closed when it is gone — but user.id is a
@@ -1588,6 +1626,11 @@ def _register_sample_pruning():
         except Exception:
             _log.debug("revoking a deleted group's invites failed", exc_info=True)
 
+
+def _register_audit_detach():
+    """Null AuditLog.user_id on a deleted user's rows; the rows themselves stay."""
+    from sqlalchemy import event
+
     # AuditLog.user_id is a FK with no cascade, this app never sets PRAGMA foreign_keys, and the
     # rowid is recycled — so after a delete the column pointed at whoever took the freed id.
     # Verified: alice's rows read back as bob's. No render path joins on it today (they all use
@@ -1604,6 +1647,11 @@ def _register_sample_pruning():
         except Exception:
             _log.debug("detaching a deleted user's audit rows failed", exc_info=True)
 
+
+def _register_host_sample_pruning():
+    """Clear the samples of a deleted host's game servers, which a bulk delete removed."""
+    from sqlalchemy import event
+
     # A host's game servers go with it, and remotes.py deletes them in BULK — which bypasses the
     # ORM, so the per-server listener above never fires for them. Clear their samples by
     # subquery on the host id instead of relying on that cascade.
@@ -1618,6 +1666,9 @@ def _register_sample_pruning():
 
 
 _register_sample_pruning()
+_register_invite_revocation()
+_register_audit_detach()
+_register_host_sample_pruning()
 
 
 # ── A row LOADED with a name @validates would have refused ─────────────────────────────────────
