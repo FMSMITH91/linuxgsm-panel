@@ -23,6 +23,7 @@ _log = logging.getLogger(__name__)
 @dataclass
 class TailscaleInfo:
     """All discovered Tailstate information for this node."""
+
     installed: bool = False
     running: bool = False
     backend_state: str = ""  # Tailscale BackendState: Running, NeedsLogin, Stopped, NoState…
@@ -90,9 +91,12 @@ def _current_os_user():
 
 
 def ensure_operator():
-    """Make the panel's own user the Tailscale 'operator' so `tailscale serve` config AND
-    `tailscale serve status` work as the panel user without root — Tailscale's recommended
-    fix for 'Access denied: serve config denied'. Idempotent, best-effort (needs sudo once)."""
+    """Make the panel's own user the Tailscale 'operator'.
+
+    Then `tailscale serve` config AND `tailscale serve status` work as the panel user without
+    root — Tailscale's recommended fix for 'Access denied: serve config denied'. Idempotent,
+    best-effort (needs sudo once).
+    """
     user = _current_os_user()
     if not user or user == "root":
         return True, "root"
@@ -105,19 +109,20 @@ def ensure_operator():
 
 
 def allow_tailscale_ufw():
-    """Best-effort: allow the Tailscale interface through UFW on the panel host, so the node
-    stays reachable over the tailnet. A common lockout is UFW active but tailscale0 not
-    allowed — then Serve/SSH over the tailnet silently can't reach the node. Idempotent."""
+    """Best-effort: allow the Tailscale interface through UFW on the panel host.
+
+    So the node stays reachable over the tailnet. A common lockout is UFW active but tailscale0
+    not allowed — then Serve/SSH over the tailnet silently can't reach the node. Idempotent.
+    """
     try:
-        from panel.ops import system_ops
-        return system_ops.ufw_allow_tailscale()
+        return _so.ufw_allow_tailscale()
     except Exception as e:
         return False, str(e)
 
 
 def _run_ts_json(args, timeout=5):
     """Run tailscale with --json flag and parse output."""
-    out, err, rc = _run_ts(args + ["--json"], timeout=timeout)
+    out, _, rc = _run_ts(args + ["--json"], timeout=timeout)
     if rc != 0 or not out:
         return None
     try:
@@ -156,58 +161,79 @@ def _get_tailscale_info() -> TailscaleInfo:
     # Get status
     status = _run_ts_json(["status"])
     if status:
-        info.backend_state = status.get("BackendState") or ""
-        info.running = info.backend_state == "Running"
-        # NOTE: `.get(key, default)` only uses the default when the key is ABSENT. When
-        # Tailscale is installed but not yet authenticated (BackendState "NeedsLogin",
-        # after `tailscale up` prints a login URL the user hasn't clicked), the JSON has
-        # "Peer": null / "TailscaleIPs": null / "Self": null — .get returns None, and
-        # None.items()/iteration then 500s the page. Coerce nulls with `or <default>`.
-        info.tailscale_ips = status.get("TailscaleIPs") or []
-        self_data = status.get("Self") or {}
-        if self_data:
-            info.hostname = self_data.get("HostName", "")
-            dns = self_data.get("DNSName", "")
-            info.dns_name = dns.rstrip(".") if dns else ""
-        info.accept_routes = _read_route_all()
-        info.magic_dns_enabled = bool(info.dns_name)
-
-        # Collect peers. Trust Tailscale's own `Online` field — it is authoritative.
-        # (Do NOT downgrade based on LastSeen: for an online peer the last handshake
-        # can legitimately be many minutes old on a long-lived connection, so a
-        # "last seen > 2 min" heuristic wrongly marks live peers offline.)
-        peer_data = status.get("Peer") or {}
-        for peer_id, peer in peer_data.items():
-            ts_online = bool(peer.get("Online", False))
-            last_seen_str = peer.get("LastSeen", "")
-
-            info.peers.append({
-                "id": peer_id,
-                "hostname": peer.get("HostName", ""),
-                "dns_name": peer.get("DNSName", "").rstrip(".") if peer.get("DNSName") else "",
-                "ips": peer.get("TailscaleIPs", []),
-                "os": peer.get("OS", ""),
-                "online": ts_online,
-                "last_seen": last_seen_str,
-                "relay": peer.get("Relay", ""),
-            })
+        _read_status_json(info, status)
     else:
-        # Fallback: simpler check
-        out, _, rc = _run_ts(["status"])
-        info.running = rc == 0 and "stopped" not in out.lower()
-        info.backend_state = "Running" if info.running else "Stopped"
+        _read_status_text(info)
 
-        # Parse hostname from status
-        if info.running:
-            for line in out.split("\n"):
-                if "100." in line and "@" in line:
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        name = parts[1].split(".")[0] if "." in parts[1] else parts[1]
-                        info.hostname = name
-                    break
+    _read_serve_status(info)
+    _detect_magic_dns(info)
+    return info
 
-    # Get Serve status
+
+def _read_status_json(info, status):
+    """Fill `info` from `tailscale status --json` (a non-empty dict)."""
+    info.backend_state = status.get("BackendState") or ""
+    info.running = info.backend_state == "Running"
+    # NOTE: `.get(key, default)` only uses the default when the key is ABSENT. When
+    # Tailscale is installed but not yet authenticated (BackendState "NeedsLogin",
+    # after `tailscale up` prints a login URL the user hasn't clicked), the JSON has
+    # "Peer": null / "TailscaleIPs": null / "Self": null — .get returns None, and
+    # None.items()/iteration then 500s the page. Coerce nulls with `or <default>`.
+    info.tailscale_ips = status.get("TailscaleIPs") or []
+    self_data = status.get("Self") or {}
+    if self_data:
+        info.hostname = self_data.get("HostName", "")
+        dns = self_data.get("DNSName", "")
+        info.dns_name = dns.rstrip(".") if dns else ""
+    info.accept_routes = _read_route_all()
+    info.magic_dns_enabled = bool(info.dns_name)
+
+    # Collect peers. Trust Tailscale's own `Online` field — it is authoritative.
+    # (Do NOT downgrade based on LastSeen: for an online peer the last handshake
+    # can legitimately be many minutes old on a long-lived connection, so a
+    # "last seen > 2 min" heuristic wrongly marks live peers offline.)
+    peer_data = status.get("Peer") or {}
+    for peer_id, peer in peer_data.items():
+        info.peers.append(_peer_entry(peer_id, peer))
+
+
+def _peer_entry(peer_id, peer):
+    """One peer of `tailscale status --json`'s "Peer" map, as the dict the page lists."""
+    ts_online = bool(peer.get("Online", False))
+    last_seen_str = peer.get("LastSeen", "")
+
+    return {
+        "id": peer_id,
+        "hostname": peer.get("HostName", ""),
+        "dns_name": peer.get("DNSName", "").rstrip(".") if peer.get("DNSName") else "",
+        "ips": peer.get("TailscaleIPs", []),
+        "os": peer.get("OS", ""),
+        "online": ts_online,
+        "last_seen": last_seen_str,
+        "relay": peer.get("Relay", ""),
+    }
+
+
+def _read_status_text(info):
+    """Fill `info` from plain `tailscale status`, when the JSON form gave nothing."""
+    # Fallback: simpler check
+    out, _, rc = _run_ts(["status"])
+    info.running = rc == 0 and "stopped" not in out.lower()
+    info.backend_state = "Running" if info.running else "Stopped"
+
+    # Parse hostname from status
+    if info.running:
+        for line in out.split("\n"):
+            if "100." in line and "@" in line:
+                parts = line.split()
+                if len(parts) >= 2:
+                    name = parts[1].split(".")[0] if "." in parts[1] else parts[1]
+                    info.hostname = name
+                break
+
+
+def _read_serve_status(info):
+    """Fill `info`'s Serve fields from `tailscale serve status`."""
     serve_out, _, serve_rc = _run_ts(["serve", "status"])
     # rc 0 with no output is a READING — `tailscale serve status` prints "No serve config" and
     # exits 0 when nothing is published — so only a non-zero rc means the panel did not learn
@@ -221,6 +247,9 @@ def _get_tailscale_info() -> TailscaleInfo:
             srv.get("funnel", False) for srv in info.serve_config.get("services", [info.serve_config])
         )
 
+
+def _detect_magic_dns(info):
+    """Set info.magic_dns_enabled when the status did not, but the node's name resolves."""
     # Detect MagicDNS from resolveconf or tailscale
     if not info.magic_dns_enabled:
         try:
@@ -231,8 +260,6 @@ def _get_tailscale_info() -> TailscaleInfo:
                 info.magic_dns_enabled = True
         except OSError:
             _log.debug("name doesn't resolve → MagicDNS simply stays disabled", exc_info=True)
-
-    return info
 
 
 def _parse_serve_status(text):
@@ -250,12 +277,7 @@ def _parse_serve_status(text):
         # Match URL line
         url_match = re.match(r'^(https?://\S+)\s*(\(.*\))?$', stripped)
         if url_match:
-            if current_url and current_routes:
-                result["services"].append({
-                    "url": current_url,
-                    "funnel": current_funnel,
-                    "routes": current_routes,
-                })
+            _append_service(result["services"], current_url, current_funnel, current_routes)
             current_url = url_match.group(1).rstrip(".")
             # Tailscale prints "(Funnel on)" or "(tailnet only)" after the URL, with a CAPITAL F.
             # This compared case-sensitively against "funnel", so it was always False, and the page
@@ -275,14 +297,19 @@ def _parse_serve_status(text):
         # URL line (that `continue`s above), and the "# Funnel on:" header comes before any URL, so
         # all it could ever match was a ROUTE — a mount or backend with "funnel" in its name.
 
-    if current_url and current_routes:
-        result["services"].append({
-            "url": current_url,
-            "funnel": current_funnel,
-            "routes": current_routes,
-        })
+    _append_service(result["services"], current_url, current_funnel, current_routes)
 
     return result
+
+
+def _append_service(services, url, funnel, routes):
+    """Append one parsed Serve service to `services` — only when it has a URL and routes."""
+    if url and routes:
+        services.append({
+            "url": url,
+            "funnel": funnel,
+            "routes": routes,
+        })
 
 
 def get_tailscale_info(force_refresh=False) -> TailscaleInfo:
@@ -327,8 +354,10 @@ _PEER_HOST_RE = re.compile(r"^[A-Za-z0-9\[][A-Za-z0-9._:\[\]-]{0,254}\Z")
 
 
 def valid_peer_host(host):
-    """True if `host` is something the panel may ping. Checked at the route (for a clear 400) and
-    again here, so a future caller cannot skip it."""
+    """True if `host` is something the panel may ping.
+
+    Checked at the route (for a clear 400) and again here, so a future caller cannot skip it.
+    """
     return bool(_PEER_HOST_RE.match(str(host or "").strip()))
 
 
@@ -358,24 +387,21 @@ def _ts_serve_args(verb, grammar, mount, scheme, port):
     """The `tailscale serve|funnel` arguments, WITHOUT the leading binary name.
 
     Deliberately delegates to privileged.ts_serve_argv and drops argv[0], so the unprivileged path
-    and the root path cannot drift: one definition of what the command is, used by both."""
+    and the root path cannot drift: one definition of what the command is, used by both.
+    """
     return _priv.ts_serve_argv(verb, grammar, mount, scheme, str(port))[1:]
 
 
 def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="http"):
-    """Configure Tailscale Serve to proxy this panel.
+    """Configure Tailscale Serve to proxy this panel; return (success, message).
 
-    Args:
-        port: Local port the panel runs on (default 5000)
-        mount: URL mount point (default '/')
-        funnel: Whether to enable Funnel (public internet access)
-        backend_scheme: how to reach the panel on loopback — "http" (default) or
-            "https+insecure" when the panel is terminating its own self-signed TLS.
-            Tailscale re-terminates TLS with the real ts.net cert either way; this just
-            has to match how the panel is actually listening or the proxy 502s.
+    `port` is the local port the panel runs on (default 5000), `mount` the URL mount point
+    (default '/'), and `funnel` whether to enable Funnel (public internet access).
 
-    Returns:
-        (success, message)
+    `backend_scheme` is how to reach the panel on loopback — "http" (default) or "https+insecure"
+    when the panel is terminating its own self-signed TLS. Tailscale re-terminates TLS with the
+    real ts.net cert either way; this just has to match how the panel is actually listening or the
+    proxy 502s.
     """
     verb = "funnel" if funnel else "serve"
     mount = mount or "/"
@@ -403,11 +429,21 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
     ensure_operator()
     allow_tailscale_ufw()
 
+    ok, err = _apply_serve(verb, mount, backend_scheme, port)
+    if ok:
+        with _cache_lock:
+            _cache["info"] = None
+        return True, "Tailscale Serve enabled" + (" (with Funnel)" if funnel else "")
+    return False, f"Failed to configure Tailscale Serve: {err or 'Unknown error'}"
+
+
+def _apply_serve(verb, mount, backend_scheme, port):
+    """Run the Serve/Funnel command in the first form that works; return (ok, last error text)."""
     # Two things vary by Tailscale version/setup: (1) the CLI grammar changed — newer
     # (~1.58+) takes the target as the only positional with a --set-path mount, older took
     # the mount as a positional ("... 443 / URL"); (2) privilege — usually the operator set
-    # above is enough, but fall back to sudo if not. Try each combination and use the first
-    # that succeeds, so it works across Tailscale versions and permission setups.
+    # in setup_tailscale_serve is enough, but fall back to sudo if not. Try each combination and
+    # use the first that succeeds, so it works across Tailscale versions and permission setups.
     err = ""
     for grammar in ("modern", "legacy"):
         # Unprivileged first: ensure_operator() above normally makes this work as the panel user,
@@ -422,11 +458,9 @@ def setup_tailscale_serve(port=5000, mount="/", funnel=False, backend_scheme="ht
                 "tailscale-serve", [verb, grammar, mount, backend_scheme, str(port)],
                 timeout=10, merge_stderr=False)
         if rc == 0:
-            with _cache_lock:
-                _cache["info"] = None
-            return True, "Tailscale Serve enabled" + (" (with Funnel)" if funnel else "")
+            return True, ""
         err = e or out or err
-    return False, f"Failed to configure Tailscale Serve: {err or 'Unknown error'}"
+    return False, err
 
 
 @dataclass
@@ -435,7 +469,9 @@ class _SimpleResult:
 
     _run_verb returns (out, err, rc); the callers below were written against a
     CompletedProcess. Rather than rewrite every read, adapt the shape — the point of the
-    change is WHICH path runs the command, not how its result is spelled."""
+    change is WHICH path runs the command, not how its result is spelled.
+    """
+
     stdout: str
     stderr: str
     returncode: int
@@ -448,7 +484,8 @@ def install_tailscale_local():
     so this one line was on its own enough to keep the grant wide open. The verb has no pipe and no
     shell string: curl writes the installer to a root-owned 0600 file under /run and sh runs that
     file. Still remote code as root — that is what installing Tailscale is — but the URL is fixed
-    on the far side and the caller supplies nothing."""
+    on the far side and the caller supplies nothing.
+    """
     try:
         out, err, rc = _so._run_verb("tailscale-install", [], timeout=180, merge_stderr=False)
         with _cache_lock:
@@ -462,9 +499,9 @@ def install_tailscale_local():
 
 
 def tailscale_up_local(enable_ssh=True):
-    """Run `tailscale up` on THIS host detached and return the browser login URL to
-    paste in (mirrors the remote flow). Returns (True, url) | (True, 'ALREADY_CONNECTED')
-    | (False, message).
+    """Run `tailscale up` on THIS host detached and return the browser login URL to paste in.
+
+    Mirrors the remote flow. Returns (True, url) | (True, 'ALREADY_CONNECTED') | (False, message).
 
     This used to build its own `sudo bash -c` script — a backgrounded `tailscale up`, a redirect,
     a poll loop and a grep, all needing a shell. The REMOTE flow was converted to the
@@ -481,7 +518,8 @@ def tailscale_up_local(enable_ssh=True):
     Every path below now goes through the verb table: the helper when it is installed, the tool
     directly when already root, and the verb's own rendered shell form otherwise — and that
     rendering uses the /run path too, so the /tmp hazard is gone even on a host that has not had
-    install.sh re-run as root."""
+    install.sh re-run as root.
+    """
     out, err, rc = _so._run_verb("tailscale-up-login",
                                  ["yes" if enable_ssh else "no", "-"],
                                  timeout=40, merge_stderr=False)
@@ -508,9 +546,12 @@ _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
 
 
 def route_targets_port(target, port):
-    """True when a Serve route's backend, as `tailscale serve status` prints it
-    ("http://127.0.0.1:5000", "https+insecure://localhost:5000", ...), is loopback on `port` —
-    i.e. the route proxies an app listening on THIS machine at that port, whatever the scheme."""
+    """True when a Serve route's backend is loopback on `port`, whatever the scheme.
+
+    The backend as `tailscale serve status` prints it ("http://127.0.0.1:5000",
+    "https+insecure://localhost:5000", ...) — i.e. true when the route proxies an app listening on
+    THIS machine at that port.
+    """
     t = (target or "").strip()
     if "://" in t:
         t = t.split("://", 1)[1]
@@ -524,12 +565,14 @@ def route_targets_port(target, port):
 
 
 def panel_serve_routes(serve_config, port):
-    """The Serve mappings on this node that proxy the PANEL (loopback on its `port`), as
-    [{"url", "mount", "target", "funnel"}], in the order the host printed them.
+    """The Serve mappings on this node that proxy the PANEL (loopback on its `port`).
+
+    As [{"url", "mount", "target", "funnel"}], in the order the host printed them.
 
     A node can serve other apps beside the panel — the setup wizard picks /lgsm precisely because
     something else already holds "/" — so "the first route listed" is not the panel's. Tailscale
-    prints routes shortest mount first, so it was the OTHER app's "/" whenever one existed."""
+    prints routes shortest mount first, so it was the OTHER app's "/" whenever one existed.
+    """
     out = []
     for svc in (serve_config or {}).get("services") or []:
         for r in svc.get("routes") or []:
@@ -556,7 +599,8 @@ def serve_off_args(url, mount):
     `tailscale serve --https=443 --set-path=<mount> off` is the CLI's own removal grammar. The path
     is always given, "/" included: with no --set-path, `off` removes EVERY mount on that port — the
     other apps' mappings with the panel's. Removing the last mount on a port also clears that
-    port's Funnel flag. Returns None for a URL whose listener cannot be read."""
+    port's Funnel flag. Returns None for a URL whose listener cannot be read.
+    """
     flag = _serve_port_flag(url)
     if not flag:
         return None
@@ -564,8 +608,10 @@ def serve_off_args(url, mount):
 
 
 def disable_tailscale_serve(mount, port):
-    """Stop publishing the panel over Tailscale Serve/Funnel: remove the mapping at `mount` — and
-    only if that mapping proxies the panel (loopback on `port`). Returns (ok, message).
+    """Stop publishing the panel over Tailscale Serve/Funnel; return (ok, message).
+
+    Remove the mapping at `mount` — and only if that mapping proxies the panel (loopback on
+    `port`).
 
     This ran `tailscale serve --bg --remove <mount>`. No Tailscale version has a --remove flag, so
     the CLI exited 2 ("flag provided but not defined: -remove") before doing anything, and every
@@ -575,7 +621,8 @@ def disable_tailscale_serve(mount, port):
     a value beginning with "-" would be read by `tailscale` as an OPTION). The host's Serve config
     is then read fresh, and a mapping is removed only when it is the panel's: another app's mapping
     at that mount is never touched. When nothing proxies the panel at all there is nothing to take
-    down, and that is reported as done, so the caller stops re-applying Serve at boot."""
+    down, and that is reported as done, so the caller stops re-applying Serve at boot.
+    """
     try:
         mount = _priv._ts_mount(mount or "/")
     except _priv.VerbError:
@@ -595,16 +642,27 @@ def disable_tailscale_serve(mount, port):
     # The panel user has to be the Tailscale operator to change Serve config — the same step the
     # enable path takes first.
     ensure_operator()
-    for r in at_mount:
+    ok, msg = _remove_serve_mappings(at_mount, mount)
+    if not ok:
+        return False, msg
+    with _cache_lock:
+        _cache["info"] = None
+    return True, "Tailscale Serve mapping removed"
+
+
+def _remove_serve_mappings(routes, mount):
+    """Remove each of the panel's `routes` at `mount`; return (ok, why) — why only on failure.
+
+    Stops at the first route that cannot be removed, as the caller reports that one.
+    """
+    for r in routes:
         args = serve_off_args(r["url"], mount)
         if args is None:
             return False, "Couldn't tell which listener %s is on, so nothing was removed." % r["url"]
         out, err, rc = _run_ts(args, timeout=10)
         if rc != 0:
             return False, f"Failed to remove: {err or out}"
-    with _cache_lock:
-        _cache["info"] = None
-    return True, "Tailscale Serve mapping removed"
+    return True, ""
 
 
 # A tailnet's MagicDNS name is <host>.<tailnet>.ts.net, and Tailscale's own IPv4 range is the
@@ -622,7 +680,8 @@ def is_tailscale_ip(host):
     `host.startswith("100.")` is a string prefix, not a range, so 100.telemetry.example.com did
     too — and 100.0.0.1 is a public address outside the CGNAT block. Nothing branches on this
     today (it feeds a display flag on check-peer), which is precisely when a wrong answer is
-    cheapest to fix and most likely to become load-bearing later."""
+    cheapest to fix and most likely to become load-bearing later.
+    """
     host = (host or "").strip()
     if not host:
         return False
@@ -661,40 +720,50 @@ def suggest_best_bind(port=5000, scheme="http"):
         # proxying to it, and the first-run wizard — the only way to create the first admin — was
         # reachable only through an SSH tunnel. app._resolved_bind uses this as the real bind
         # address whenever bind_host is unset, which it is until the wizard's first step.
-        url = ours[0]["url"].rstrip("/") + ("" if ours[0]["mount"] == "/" else ours[0]["mount"])
-        return {
-            "method": "tailscale-serve",
-            "bind_host": "127.0.0.1",
-            "port": port,
-            "url": url,
-            "description": f"Bind to localhost and expose via Tailscale Serve at {url}",
-        }
+        return _serve_suggestion(port, ours[0])
     elif info.running and info.tailscale_ips:
         # Tailscale running but no MagicDNS
-        ts_ip = get_tailscale_ip(4)
-        return {
-            "method": "tailscale-direct",
-            "bind_host": ts_ip or "0.0.0.0",  # nosec B104 - a suggestion shown to the operator, not a bind
-            "port": port,
-            "url": f"{scheme}://{ts_ip}:{port}" if ts_ip else f"{scheme}://<tailscale-ip>:{port}",
-            "description": f"Bind to Tailscale IP {ts_ip} and access directly",
-        }
+        return _tailnet_ip_suggestion(port, scheme)
     elif info.installed and info.backend_state == "NeedsLogin":
         # Installed but never authorized — the recommendation is to finish linking, not to
         # open the panel to all interfaces.
-        return {
-            "method": "direct",
-            "bind_host": "0.0.0.0",  # nosec B104 - a suggestion shown to the operator, not a bind
-            "port": port,
-            "url": f"{scheme}://<your-server-ip>:{port}",
-            "description": ("Tailscale is installed but not linked yet. Link this machine above "
-                            "to reach the panel privately over your tailnet."),
-        }
+        return _direct_suggestion(
+            port, scheme, ("Tailscale is installed but not linked yet. Link this machine above "
+                           "to reach the panel privately over your tailnet."))
     else:
-        return {
-            "method": "direct",
-            "bind_host": "0.0.0.0",  # nosec B104 - a suggestion shown to the operator, not a bind
-            "port": port,
-            "url": f"{scheme}://<your-server-ip>:{port}",
-            "description": "No Tailscale detected. Bind to all interfaces.",
-        }
+        return _direct_suggestion(port, scheme, "No Tailscale detected. Bind to all interfaces.")
+
+
+def _serve_suggestion(port, route):
+    """suggest_best_bind's answer when the Serve `route` proxies the panel."""
+    url = route["url"].rstrip("/") + ("" if route["mount"] == "/" else route["mount"])
+    return {
+        "method": "tailscale-serve",
+        "bind_host": "127.0.0.1",
+        "port": port,
+        "url": url,
+        "description": f"Bind to localhost and expose via Tailscale Serve at {url}",
+    }
+
+
+def _tailnet_ip_suggestion(port, scheme):
+    """suggest_best_bind's answer when Tailscale runs with no Serve route to the panel."""
+    ts_ip = get_tailscale_ip(4)
+    return {
+        "method": "tailscale-direct",
+        "bind_host": ts_ip or "0.0.0.0",  # nosec B104 - a suggestion shown to the operator, not a bind
+        "port": port,
+        "url": f"{scheme}://{ts_ip}:{port}" if ts_ip else f"{scheme}://<tailscale-ip>:{port}",
+        "description": f"Bind to Tailscale IP {ts_ip} and access directly",
+    }
+
+
+def _direct_suggestion(port, scheme, description):
+    """suggest_best_bind's answer when the panel is reached directly: all interfaces."""
+    return {
+        "method": "direct",
+        "bind_host": "0.0.0.0",  # nosec B104 - a suggestion shown to the operator, not a bind
+        "port": port,
+        "url": f"{scheme}://<your-server-ip>:{port}",
+        "description": description,
+    }

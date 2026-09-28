@@ -245,6 +245,14 @@ try:
     check("tailscale info: a stopped daemon reads as Stopped, not Running",
           _ts_st.installed and not _ts_st.running and _ts_st.backend_state == "Stopped",
           repr(_ts_st))
+    # rc 0 is not enough on its own: a CLI that exits 0 while SAYING it is stopped is stopped.
+    # The check above cannot see that rule — its rc of 1 already answers "not running".
+    _tsi._run_ts = _ts_cli([(["version"], ("1.40.0", "", 0)),
+                            (["status"], ("Tailscale is stopped.", "", 0))])
+    _ts_st0 = _tsi._get_tailscale_info()
+    check("tailscale info: ...and so does one whose status exits 0 but says it is stopped",
+          _ts_st0.installed and not _ts_st0.running and _ts_st0.backend_state == "Stopped",
+          repr(_ts_st0))
     # `--version` alone (an old CLI without the `version` subcommand) still counts as installed.
     _tsi._run_ts = _ts_cli([(["--version"], ("1.20.0", "", 0))])
     check("tailscale info: an old CLI that only answers --version is still installed",

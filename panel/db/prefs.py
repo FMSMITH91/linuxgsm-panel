@@ -17,9 +17,11 @@ _PANEL_KEY_RE = re.compile(r"^[a-z0-9_-]{1,32}\Z")
 
 
 def _clean_panel_map(raw):
-    """A {region: [panel key]} map from a request body, charset- and size-capped. Anything that is
-    not a plain lowercase key is dropped rather than rejected: the layout is cosmetic, and a hostile
-    or stale body should still leave the user with a sane one."""
+    """Return a {region: [panel key]} map from a request body, charset- and size-capped.
+
+    Anything that is not a plain lowercase key is dropped rather than rejected: the layout is
+    cosmetic, and a hostile or stale body should still leave the user with a sane one.
+    """
     out = {}
     if not isinstance(raw, dict):
         return out
@@ -35,13 +37,16 @@ def _clean_panel_map(raw):
 
 
 def _apply_user_order(items, order, key=lambda o: o.id):
-    """`items` in a user's saved order: saved ids first in their saved order, then everything else
-    in the order it arrived. Ids that no longer exist and items missing from the order are both
-    NORMAL (a host was deleted; a server was just added), so neither is an error. An empty or junk
-    order returns `items` untouched — that is what makes "no saved layout" mean "ship default".
+    """Return `items` in a user's saved order.
+
+    Saved ids come first in their saved order, then everything else in the order it arrived. Ids
+    that no longer exist and items missing from the order are both NORMAL (a host was deleted; a
+    server was just added), so neither is an error. An empty or junk order returns `items`
+    untouched — that is what makes "no saved layout" mean "ship default".
 
     The sort is stable, so items the user never ordered keep their relative default order instead of
-    being shuffled. Pure and module-level so it is unit-testable with no app context."""
+    being shuffled. Pure and module-level so it is unit-testable with no app context.
+    """
     pos = {}
     for ident in (order or []):
         try:
@@ -55,14 +60,18 @@ def _apply_user_order(items, order, key=lambda o: o.id):
         return list(items)
     return sorted(items, key=lambda o: pos.get(key(o), len(pos)))
 
+
 def _effective_prefs(user, cfg=None):
-    """The layout a page should render for `user`: their own saved keys over the install default a
-    superadmin published, over the code default (no keys at all).
+    """Return the layout a page should render for `user`.
+
+    That is their own saved keys over the install default a superadmin published, over the code
+    default (no keys at all).
 
     Per-KEY, not whole-object: someone who has only ever reordered their stat tiles still gets the
     house host order, instead of the admin default being all-or-nothing. Falling back this way also
     makes "reset" mean "back to the house layout" rather than "back to bare defaults", which is what
-    an admin publishing one would expect."""
+    an admin publishing one would expect.
+    """
     try:
         default = (cfg if cfg is not None else load_config()).get("default_ui_prefs") or {}
     except Exception:
@@ -76,16 +85,13 @@ def _effective_prefs(user, cfg=None):
         _log.debug("reading user ui_prefs failed; using the install default", exc_info=True)
     return prefs
 
-def _panel_layout(prefs, region, default_keys):
-    """(visible, hidden) panel keys for one reorderable region, in this user's saved order.
 
-    Only keys the CALLER declares are ever returned. That is the safety property: a saved key can
-    never conjure a panel the page did not offer (several are permission-gated), and a panel retired
-    in a later version stops appearing the moment it leaves default_keys. Saved-but-unknown keys are
-    dropped; known-but-unsaved keys are appended in their default order, so a panel added by a future
-    version shows up for existing users instead of silently vanishing.
+def _saved_region_lists(prefs, region):
+    """Return the (saved order, saved hidden) values `prefs` holds for `region`.
 
-    Pure, so the ordering rules are unit-testable with no app context."""
+    Either is None when prefs, or its "panels"/"hidden" entry, is not a dict. The values are NOT
+    shape-checked here: the caller treats anything but a list as "nothing saved".
+    """
     saved = hidden_saved = None
     if isinstance(prefs, dict):
         panels, hidden = prefs.get("panels"), prefs.get("hidden")
@@ -93,23 +99,52 @@ def _panel_layout(prefs, region, default_keys):
             saved = panels.get(region)
         if isinstance(hidden, dict):
             hidden_saved = hidden.get(region)
-    known = [k for k in (default_keys or [])]
-    hidden = [k for k in known if isinstance(hidden_saved, list) and k in hidden_saved]
+    return saved, hidden_saved
+
+
+def _known_keys_in_saved_order(saved, known):
+    """Return `known` reordered by `saved`: saved known keys first, deduped, then the rest.
+
+    A saved key that is not in `known` is dropped, and a known key the user never saved is appended
+    in its default order.
+    """
     order = []
     if isinstance(saved, list):
         for key in saved:
             if key in known and key not in order:
                 order.append(key)
     order += [k for k in known if k not in order]
+    return order
+
+
+def _panel_layout(prefs, region, default_keys):
+    """Return (visible, hidden) panel keys for one reorderable region, in this user's saved order.
+
+    Only keys the CALLER declares are ever returned. That is the safety property: a saved key can
+    never conjure a panel the page did not offer (several are permission-gated), and a panel retired
+    in a later version stops appearing the moment it leaves default_keys. Saved-but-unknown keys are
+    dropped; known-but-unsaved keys are appended in their default order, so a panel added by a future
+    version shows up for existing users instead of silently vanishing.
+
+    Pure, so the ordering rules are unit-testable with no app context.
+    """
+    saved, hidden_saved = _saved_region_lists(prefs, region)
+    known = [k for k in (default_keys or [])]
+    hidden = [k for k in known if isinstance(hidden_saved, list) and k in hidden_saved]
+    order = _known_keys_in_saved_order(saved, known)
     return [k for k in order if k not in hidden], hidden
 
+
 def _apply_user_server_order(servers, prefs):
-    """`servers` with each host's rows in that user's saved order. The dashboard slices this one
-    list per host (`servers|selectattr('remote_id', ...)`), so ordering it per host in a single pass
-    is enough — no need to know the host order here, since the slice preserves whatever we produce.
+    """Return `servers` with each host's rows in that user's saved order.
+
+    The dashboard slices this one list per host (`servers|selectattr('remote_id', ...)`), so
+    ordering it per host in a single pass is enough — no need to know the host order here, since
+    the slice preserves whatever we produce.
 
     Hosts with no saved order keep their default order because _apply_user_order is stable and only
-    the ids it knows about move. Pure, so it is unit-testable without an app context."""
+    the ids it knows about move. Pure, so it is unit-testable without an app context.
+    """
     per_host = prefs.get("server_order") if isinstance(prefs, dict) else None
     if not isinstance(per_host, dict) or not per_host:
         return list(servers)

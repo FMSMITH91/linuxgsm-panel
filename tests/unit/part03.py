@@ -1316,7 +1316,15 @@ try:
     check("corrupt: DB is auto-restored to a healthy state", _db_quick_check(_dbp) is True)
     check("corrupt: the corrupt file is preserved aside (not destroyed)",
           any(fn.startswith("t.db.corrupt-") for fn in os.listdir(_dbdir)))
-    _r = _sqlite.connect(_dbp).execute("SELECT COUNT(*) FROM x").fetchone()[0]
+    # A restore that did not happen leaves a FRESH file with no table x: that must be this named
+    # failure, not an OperationalError that aborts the whole suite before any result is printed.
+    _rc = _sqlite.connect(_dbp)
+    try:
+        _r = _rc.execute("SELECT COUNT(*) FROM x").fetchone()[0]
+    except _sqlite.Error as _e:
+        _r = "unreadable: %s" % _e
+    finally:
+        _rc.close()
     eq("corrupt: restored data is intact", _r, 200)
 
     # No good backup + corrupt live DB -> move the corrupt file aside so the app can
@@ -1330,6 +1338,40 @@ try:
                                             for fn in os.listdir(_dbdir)))
 finally:
     _shutil.rmtree(_dbdir, ignore_errors=True)
+
+# ── Every delete listener models.py registers is still wired ──────────────────────────────────
+# The listeners are registered by four registrars called one after another at import
+# (_register_sample_pruning, _register_invite_revocation, _register_audit_detach,
+# _register_host_sample_pruning). The last one's listener is shadowed in every path a suite drives
+# — the ORM cascade deletes a host's games first and THEIR listener prunes the samples, and
+# delete_remote clears them itself — so dropping its registrar call passed every suite. Asserted
+# as wiring, by name, looking through SQLAlchemy's wrapper to the function it holds.
+from panel.db import models as _dl_models   # noqa: E402
+
+
+def _dl_listener_names(model, event_name="after_delete"):
+    names = set()
+    for _fn in getattr(model.__mapper__.dispatch, event_name):
+        _cands = [_fn]
+        for _cell in (getattr(_fn, "__closure__", None) or ()):
+            try:
+                _cands.append(_cell.cell_contents)
+            except ValueError:
+                continue    # an empty cell
+        for _cand in _cands:
+            if callable(_cand) and getattr(_cand, "__module__", "") == "panel.db.models":
+                names.add(getattr(_cand, "__name__", ""))
+    return names
+
+
+for _dl_model, _dl_want in (
+        (_dl_models.User, {"_revoke_invites_of_deleted_user", "_detach_audit_rows_of_deleted_user"}),
+        (_dl_models.Group, {"_revoke_invites_of_deleted_group"}),
+        (_dl_models.RemoteServer, {"_handler", "_prune_host_game_samples"}),
+        (_dl_models.GameServer, {"_handler"})):
+    _dl_got = _dl_listener_names(_dl_model)
+    check("models: %s after_delete carries %s" % (_dl_model.__name__, ", ".join(sorted(_dl_want))),
+          _dl_want <= _dl_got, "registered: %s" % sorted(_dl_got))
 
 # ── config._create_key_once: atomic create-exactly-once (race-safe key files) ──
 # Guards against two concurrent first-time saves each generating a different cred_key and
@@ -2026,6 +2068,10 @@ try:
        _tsi.suggest_best_bind(5000, scheme="https")["url"], "https://100.90.141.12:5000")
     eq("tailscale: ...and http only when the panel serves http (control)",
        _tsi.suggest_best_bind(5000, scheme="http")["url"], "http://100.90.141.12:5000")
+    # The URL above names the tailnet IP whatever bind_host says, so it cannot catch a suggestion
+    # that tells the panel to bind to every interface instead of that one address.
+    eq("tailscale: the tailnet-direct answer binds to the node's own Tailscale IP",
+       _tsi.suggest_best_bind(5000)["bind_host"], "100.90.141.12")
 finally:
     _tsi.get_tailscale_info = _orig_gti
     _tsi._cache["info"] = None
