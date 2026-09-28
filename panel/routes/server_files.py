@@ -84,6 +84,7 @@ def _claim_gmod_content_host(remote_id):
 
 
 def _release_gmod_content_host(remote_id):
+    """Let the next GMod content job run on this host."""
     with _gmod_content_busy_lock:
         _gmod_content_busy_hosts.discard(remote_id)
 
@@ -94,7 +95,8 @@ def _publish_gmod_job(server_id, remote_id, state):
     In that order so a poller that sees the job finish can start the next one at once — the other
     way round left a moment where the card said "done" and the next apply was refused as busy.
     `state` None means the worker left without recording one (its host was deleted mid-job), which
-    used to leave the card spinning on "running" for ever."""
+    used to leave the card spinning on "running" for ever.
+    """
     _release_gmod_content_host(remote_id)
     _gmod_content_apply_state[server_id] = state or {
         "status": "error", "msg": "The host is no longer registered with the panel.",
@@ -102,8 +104,9 @@ def _publish_gmod_job(server_id, remote_id, state):
 
 
 def _gmod_job_state(server_id):
-    """What the GMod content status poll should report: a running job, or a TERMINAL result the
-    card has not had time to show yet.
+    """What the GMod content status poll should report.
+
+    A running job, or a TERMINAL result the card has not had time to show yet.
 
     The poll used to answer `st if st.get("status") == "running" else None`, which discarded every
     outcome the two workers take care to record — "No content storage could be prepared on the
@@ -115,7 +118,8 @@ def _gmod_job_state(server_id):
     into ERROR textures. A content install can run for up to two hours, and every one of its
     failure modes behaved this way.
 
-    Module level so a test can drive the expiry without sleeping through it."""
+    Module level so a test can drive the expiry without sleeping through it.
+    """
     st = _gmod_content_apply_state.get(server_id)
     if not st:
         return None
@@ -128,8 +132,9 @@ def _gmod_job_state(server_id):
 
 
 def _gmod_removal_result(asked, removed):
-    """The (status, msg) the uninstall worker stashes: what the host CONFIRMED is gone, and what it
-    would not answer about.
+    """The (status, msg) the uninstall worker stashes.
+
+    What the host CONFIRMED is gone, and what it would not answer about.
 
     uninstall_gmod_content re-probes every game after the rm and deliberately keeps out of
     `removed` any game whose probe did not answer — that list is evidence, and the gap between it
@@ -138,7 +143,8 @@ def _gmod_removal_result(asked, removed):
     "Removed from host: (none)", which reads as "there was nothing to remove" — the one thing it
     does not mean. The disk may still be full and the content may or may not still be there. The
     three-state probe added in ssh_manager/gmod.py stops at that module's boundary unless this says
-    what it found, and a job that could not confirm its own work is not "done"."""
+    what it found, and a job that could not confirm its own work is not "done".
+    """
     _done = [g for g in asked if g in (removed or [])]
     _unconfirmed = [g for g in asked if g not in _done]
     if not _unconfirmed:
@@ -179,9 +185,11 @@ _socket_addrs = {}
 
 
 def _handshake_addrs():
-    """The socket peer and the forwarded client of the current socket's handshake — what the
-    firewall and ProxiedBanGate each judge a client by. The ORIGINAL peer, since ProxyFix may have
-    rewritten remote_addr from the header. Request context only."""
+    """The socket peer and the forwarded client of the current socket's handshake.
+
+    What the firewall and ProxiedBanGate each judge a client by. The ORIGINAL peer, since ProxyFix
+    may have rewritten remote_addr from the header. Request context only.
+    """
     from panel.security import banlist
     env = request.environ
     peer = ((env.get("werkzeug.proxy_fix.orig") or {}).get("REMOTE_ADDR")
@@ -192,9 +200,12 @@ def _handshake_addrs():
 
 
 def _addrs_banned(addrs):
-    """Whether a ban names this socket's client. The peer is judged as the host firewall judges a
-    direct connection (the address itself); the forwarded client as ProxiedBanGate judges it (an
-    IPv6 ban covering its /64) — so a socket is refused exactly where a new request would be."""
+    """Whether a ban names this socket's client.
+
+    The peer is judged as the host firewall judges a direct connection (the address itself); the
+    forwarded client as ProxiedBanGate judges it (an IPv6 ban covering its /64) — so a socket is
+    refused exactly where a new request would be.
+    """
     from panel.security import banlist
     peer, fwd = addrs
     return ((peer is not None and banlist.is_banned(peer, widen=False))
@@ -208,7 +219,8 @@ def _drop_banned_sockets(app, socketio):
     Funnel — and a socket accepted before it is not a new connection: a console or a root
     terminal opened by an address fail2ban then banned went on streaming, under Funnel for as long
     as the browser stayed, and under a UFW deny too (ufw passes ESTABLISHED traffic before its own
-    rules). Disconnecting runs THE disconnect handler, so the terminal's hook closes its shell."""
+    rules). Disconnecting runs THE disconnect handler, so the terminal's hook closes its shell.
+    """
     from panel.security import banlist
     if not banlist.active():
         return 0
@@ -231,7 +243,8 @@ def _viewer_credential():
     running it back through _login_id_still_accepted later asks what a page load asks. The
     digest is recorded only when this socket authenticated with a bearer token that is the
     current user's: revoking a token changes neither the epoch nor any session row, so the token
-    itself has to be compared. Request context only."""
+    itself has to be compared. Request context only.
+    """
     import hashlib
     digest = None
     hdr = request.headers.get("Authorization", "")
@@ -258,43 +271,62 @@ def _login_id_still_accepted(login_id):
     So this writes and deletes nothing, and RAISES when it cannot look (after a rollback, so the
     next viewer's query is not refused by a session left mid-failure). The per-request client
     binding (_session_binding_ok) is not asked: there is no request. Keep it in step with
-    auth.load_user: smoke_test drives both over the same login ids."""
-    from panel.core.clock import utcnow
-    from panel.db.models import User, UserSession
+    auth.load_user: smoke_test drives both over the same login ids.
+    """
     s = str(login_id)
     try:
         if ":" not in s:      # legacy cookie from before epochs: load_user accepts the plain id
-            user = db.session.get(User, int(s)) if s.isdecimal() else None
-            return user if user is not None and user.is_active else None
-        parts = s.split(":")
-        uid, epoch = parts[0], parts[1]
-        sid = parts[2] if len(parts) > 2 and parts[2] else None
-        if not uid.isdecimal():
-            return None
-        user = db.session.get(User, int(uid))
-        if user is None or str(user.auth_epoch or 0) != epoch or not user.is_active:
-            return None
-        if sid:
-            sess = UserSession.query.filter_by(sid=sid, user_id=user.id).first()
-            if sess is None or sess.is_expired(utcnow()):
-                return None
-        return user
+            return _legacy_login_user(s)
+        return _epoch_login_user(s)
     except Exception:
         db.session.rollback()
         raise
 
 
+def _legacy_login_user(s):
+    """The active User a pre-epoch login id (the bare user id) names, or None."""
+    from panel.db.models import User
+    user = db.session.get(User, int(s)) if s.isdecimal() else None
+    return user if user is not None and user.is_active else None
+
+
+def _epoch_login_user(s):
+    """The User an "<uid>:<epoch>[:<sid>]" login id still names, or None."""
+    from panel.db.models import User
+    parts = s.split(":")
+    uid, epoch = parts[0], parts[1]
+    sid = parts[2] if len(parts) > 2 and parts[2] else None
+    if not uid.isdecimal():
+        return None
+    user = db.session.get(User, int(uid))
+    if user is None or str(user.auth_epoch or 0) != epoch or not user.is_active:
+        return None
+    if sid and not _session_row_live(sid, user):
+        return None
+    return user
+
+
+def _session_row_live(sid, user):
+    """Whether `user`'s per-device UserSession row `sid` still exists and has not idled out."""
+    from panel.core.clock import utcnow
+    from panel.db.models import UserSession
+    sess = UserSession.query.filter_by(sid=sid, user_id=user.id).first()
+    return not (sess is None or sess.is_expired(utcnow()))
+
+
 def _credential_still_valid(uid, cred):
-    """Is the credential a viewer joined with still one the panel would accept? cred is what
-    _viewer_credential recorded, or None for a viewer registered without one (nothing to check).
-    A revoked device, a bumped auth_epoch, an idle-expired session and a deactivated account all
+    """Is the credential a viewer joined with still one the panel would accept?
+
+    cred is what _viewer_credential recorded, or None for a viewer registered without one (nothing
+    to check). A revoked device, a bumped auth_epoch, an idle-expired session and a deactivated account all
     fail here as they fail a page load.
 
     It asks _login_id_still_accepted, NOT the app's user_loader: load_user refreshed last_seen
     from this poller (so an open console socket kept its login from ever idling out) and answered
     a database error with None (so a transient lock evicted a legitimate viewer as "revoked").
     _login_id_still_accepted writes nothing and RAISES when it cannot look, and
-    _evict_unauthorized_viewers keeps a viewer it could not check."""
+    _evict_unauthorized_viewers keeps a viewer it could not check.
+    """
     if cred is None:
         return True
     login_id, digest = cred
@@ -335,7 +367,8 @@ def _console_whole_lines(server_id, raw):
 
     Extracted rather than inlined so it can be driven directly by a test. It was inline first, and
     the test reimplemented the arithmetic instead of calling it — which passed happily with the
-    carry deleted from the code it was supposed to be guarding."""
+    carry deleted from the code it was supposed to be guarding.
+    """
     if not (raw and raw.startswith("B") and raw.endswith("E")):
         return None
     raw = raw[1:-1]
@@ -378,36 +411,18 @@ def _console_tick(app, socketio, gs, server_id):
     * GROWN: read from where we were, at most _CONSOLE_READ_CAP bytes, and advance by what was
       READ — never to the file's size, which discarded everything past the cap.
 
-    A read that did not run leaves the offset alone so the next tick re-reads the same range."""
+    A read that did not run leaves the offset alone so the next tick re-reads the same range.
+    """
     log_path = gs.console_log
     remote = gs.remote
-    # Inode and size in one round trip. MISSING is its own answer, not a size of 0: between
-    # LinuxGSM's `mv` and its `touch` there is briefly no file, and calling that "empty" would
-    # record a bogus rotation. An unparseable reply (a failed read on a non-raising transport
-    # comes back as "") is not a measurement either — try again next tick.
-    # selfname=: the path names the LinuxGSM script (console_log is built from lgsm_name, which is
-    # the loaded game_type), so the builder has to check it — see _core.read_as_game_user.
-    st_out, _, _ = _sm.read_as_game_user(
-        remote, gs.short_name,
-        f"stat -c '%i %s' {log_path} 2>/dev/null || echo MISSING", timeout=5,
-        selfname=gs.lgsm_name)
-    parts = (st_out or "").split()
-    if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
+    stat = _console_log_stat(remote, gs, log_path)
+    if stat is None:
         return
-    ino, size = int(parts[0]), int(parts[1])
-    state = _console_offsets.get(server_id)
-    if state is None:
-        _console_offsets[server_id] = {"ino": ino, "pos": size}
+    ino, size = stat
+    start = _console_read_start(server_id, ino, size)
+    if start is None:
         return
-    pos = state["pos"]
-    if ino != state["ino"] or size < pos:
-        # Rotated (LinuxGSM's start mv's the log to a dated name) or truncated. Persist the reset
-        # BEFORE reading, so a read that fails below retries from 0 of the NEW file next tick
-        # rather than detecting the same rotation again. Drop the half-line held from the OLD
-        # file — gluing it onto the new one's first line is a line that never existed.
-        pos = 0
-        state["ino"], state["pos"] = ino, 0
-        _console_partial.pop(server_id, None)
+    state, pos = start
     if size <= pos:
         return
     diff = min(size - pos, _CONSOLE_READ_CAP)
@@ -429,6 +444,53 @@ def _console_tick(app, socketio, gs, server_id):
     out = _console_whole_lines(server_id, out) if rc == 0 else None
     if out is None:
         return
+    _emit_console_lines(socketio, remote, server_id, out)
+    # Advance by what was ACTUALLY READ. `head -c diff` emits exactly diff bytes (diff is clamped
+    # to what the file holds), and this line is reached only past the frame check above.
+    state["pos"] = pos + diff
+
+
+def _console_log_stat(remote, gs, log_path):
+    """The console log's (inode, size) in one round trip, or None when the reply is not one."""
+    # Inode and size in one round trip. MISSING is its own answer, not a size of 0: between
+    # LinuxGSM's `mv` and its `touch` there is briefly no file, and calling that "empty" would
+    # record a bogus rotation. An unparseable reply (a failed read on a non-raising transport
+    # comes back as "") is not a measurement either — try again next tick.
+    # selfname=: the path names the LinuxGSM script (console_log is built from lgsm_name, which is
+    # the loaded game_type), so the builder has to check it — see _core.read_as_game_user.
+    st_out, _, _ = _sm.read_as_game_user(
+        remote, gs.short_name,
+        f"stat -c '%i %s' {log_path} 2>/dev/null || echo MISSING", timeout=5,
+        selfname=gs.lgsm_name)
+    parts = (st_out or "").split()
+    if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
+        return None
+    return int(parts[0]), int(parts[1])
+
+
+def _console_read_start(server_id, ino, size):
+    """Where this tick reads the log from: (offset state, position), or None on first sight.
+
+    First sight records the end and reads nothing; a rotation or truncation resets to byte 0.
+    """
+    state = _console_offsets.get(server_id)
+    if state is None:
+        _console_offsets[server_id] = {"ino": ino, "pos": size}
+        return None
+    pos = state["pos"]
+    if ino != state["ino"] or size < pos:
+        # Rotated (LinuxGSM's start mv's the log to a dated name) or truncated. Persist the reset
+        # BEFORE reading, so a read that fails below retries from 0 of the NEW file next tick
+        # rather than detecting the same rotation again. Drop the half-line held from the OLD
+        # file — gluing it onto the new one's first line is a line that never existed.
+        pos = 0
+        state["ino"], state["pos"] = ino, 0
+        _console_partial.pop(server_id, None)
+    return state, pos
+
+
+def _emit_console_lines(socketio, remote, server_id, out):
+    """Push a chunk of whole console lines to the server's room, once cleaned (nothing if empty)."""
     if out:
         out = _clean_console_text(out)
     if out:
@@ -439,9 +501,6 @@ def _console_tick(app, socketio, gs, server_id):
         socketio.emit("console_output",
                       {"server_id": server_id, "data": out, "rows": rows, "ts": time.time()},
                       room=f"console_{server_id}")
-    # Advance by what was ACTUALLY READ. `head -c diff` emits exactly diff bytes (diff is clamped
-    # to what the file holds), and this line is reached only past the frame check above.
-    state["pos"] = pos + diff
 
 
 def _forget_unwatched_consoles(watched_ids):
@@ -450,7 +509,8 @@ def _forget_unwatched_consoles(watched_ids):
     The offsets used to outlive the last viewer. Close a console, let the server write for an
     hour, open it again, and the poller resumed from where it had stopped — replaying the hour at
     64KB a tick, as if it were live, ahead of anything actually happening now. The page had
-    already primed itself from /api/console, so every one of those lines was also a duplicate."""
+    already primed itself from /api/console, so every one of those lines was also a duplicate.
+    """
     watched = set(watched_ids)
     for sid in [k for k in list(_console_offsets) if k not in watched]:
         _console_offsets.pop(sid, None)
@@ -477,8 +537,8 @@ def _evict_unauthorized_viewers(app, socketio, server_id):
 
     Must run inside an app context (the poller's). Never raises — a console that cannot
     answer the question keeps its viewers rather than dropping everyone on a transient error,
-    and says so in the log."""
-    from panel.db.models import User
+    and says so in the log.
+    """
     with _viewers_lock:
         watchers = dict(_console_viewers.get(server_id) or {})
         creds = {sid: _viewer_creds.get(sid) for sid in watchers}
@@ -487,40 +547,51 @@ def _evict_unauthorized_viewers(app, socketio, server_id):
     dropped = 0
     for sid, uid in watchers.items():
         try:
-            user = db.session.get(User, uid) if uid is not None else None
-            allowed = bool(
-                user is not None
-                and getattr(user, "is_active", False)
-                and not getattr(user, "must_change_password", False)
-                and can_access_server(user, server_id)
-                and (user.is_superadmin or has_permission(user, VIEW_CONSOLE))
-                and _credential_still_valid(uid, creds.get(sid)))
+            allowed = _viewer_still_allowed(uid, server_id, creds.get(sid))
         except Exception:
             app.logger.debug("console: could not re-check viewer %s", sid, exc_info=True)
             continue          # unknown is not "revoked" — leave them be and try next tick
         if allowed:
             continue
-        with _viewers_lock:
-            if server_id in _console_viewers:
-                _console_viewers[server_id].pop(sid, None)
-                if not _console_viewers[server_id]:
-                    del _console_viewers[server_id]
-        # Out of the ROOM first, and on its own: leaving it is what stops the stream, the notice is a
-        # courtesy. They were one try block with the notice first, so a notice that raised skipped
-        # the leave and the revoked socket went on receiving what other viewers' polls pushed. The
-        # notice still arrives after the leave — `to=sid` addresses the socket, not the room.
-        try:
-            socketio.server.leave_room(sid, f"console_{server_id}", namespace="/")
-        except Exception:
-            app.logger.debug("console: could not evict %s", sid, exc_info=True)
-        try:
-            socketio.emit("console_output",
-                          {"server_id": server_id,
-                           "data": "[access to this console was revoked]"}, to=sid)
-        except Exception:
-            app.logger.debug("console: could not tell %s it was evicted", sid, exc_info=True)
+        _evict_viewer(app, socketio, server_id, sid)
         dropped += 1
     return dropped
+
+
+def _viewer_still_allowed(uid, server_id, cred):
+    """Whether viewer `uid` may still watch this console: the join handler's questions, and `cred`."""
+    from panel.db.models import User
+    user = db.session.get(User, uid) if uid is not None else None
+    return bool(
+        user is not None
+        and getattr(user, "is_active", False)
+        and not getattr(user, "must_change_password", False)
+        and can_access_server(user, server_id)
+        and (user.is_superadmin or has_permission(user, VIEW_CONSOLE))
+        and _credential_still_valid(uid, cred))
+
+
+def _evict_viewer(app, socketio, server_id, sid):
+    """Take one socket off this console: out of the viewer map and the room, then tell it why."""
+    with _viewers_lock:
+        if server_id in _console_viewers:
+            _console_viewers[server_id].pop(sid, None)
+            if not _console_viewers[server_id]:
+                del _console_viewers[server_id]
+    # Out of the ROOM first, and on its own: leaving it is what stops the stream, the notice is a
+    # courtesy. They were one try block with the notice first, so a notice that raised skipped
+    # the leave and the revoked socket went on receiving what other viewers' polls pushed. The
+    # notice still arrives after the leave — `to=sid` addresses the socket, not the room.
+    try:
+        socketio.server.leave_room(sid, f"console_{server_id}", namespace="/")
+    except Exception:
+        app.logger.debug("console: could not evict %s", sid, exc_info=True)
+    try:
+        socketio.emit("console_output",
+                      {"server_id": server_id,
+                       "data": "[access to this console was revoked]"}, to=sid)
+    except Exception:
+        app.logger.debug("console: could not tell %s it was evicted", sid, exc_info=True)
 
 
 def register(app, supervise):
@@ -621,7 +692,8 @@ def register(app, supervise):
     @server_access_required
     def api_server_alerts(server_id):
         """Read/write the server's LinuxGSM alert settings (Discord/Telegram/email/…). Writes
-        straight into the LinuxGSM config so the game server itself sends the notifications."""
+        straight into the LinuxGSM config so the game server itself sends the notifications.
+        """
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
@@ -669,7 +741,8 @@ def register(app, supervise):
     def api_server_mods(server_id):
         """List / install / remove LinuxGSM mods (SourceMod, MetaMod, Oxide, …). Listing
         drives LinuxGSM's mods menus; install/remove feed the chosen mod id. Install/remove
-        modify the install, so they need UPDATE_SERVER."""
+        modify the install, so they need UPDATE_SERVER.
+        """
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
@@ -974,7 +1047,8 @@ def register(app, supervise):
     def _bg_gmod_content_apply(server_id, remote_id, gmod_user, games):
         """Apply a GMod content selection in the background (a download can take many minutes): ensure
         a content user, fetch any missing games, then rewrite the server's mount.cfg to exactly the
-        selection. An empty selection unmounts everything. Result is stashed for the status poll."""
+        selection. An empty selection unmounts everything. Result is stashed for the status poll.
+        """
         _app = app
         _gmod_content_apply_state[server_id] = {"status": "running", "msg": "", "ts": time.time()}
 
@@ -1034,7 +1108,8 @@ def register(app, supervise):
 
     def _bg_gmod_content_uninstall(server_id, remote_id, gmod_user, games):
         """Uninstall content from the host (host-wide) in the background, then drop the removed games
-        from THIS server's mounts. Result is stashed for the status poll."""
+        from THIS server's mounts. Result is stashed for the status poll.
+        """
         _app = app
         _gmod_content_apply_state[server_id] = {"status": "running", "msg": "", "ts": time.time()}
 
@@ -1080,7 +1155,8 @@ def register(app, supervise):
 
     def _start_gmod_content_worker(remote_id, run):
         """Start a content worker; the host the route claimed is released by the worker's own
-        finally — or here, if the thread never starts, so a failed start cannot wedge the host."""
+        finally — or here, if the thread never starts, so a failed start cannot wedge the host.
+        """
         try:
             threading.Thread(target=run, daemon=True).start()
         except Exception:
@@ -1203,7 +1279,8 @@ def register(app, supervise):
 
         Lets the browser show old-vs-new and ask before overwriting, without uploading the bytes
         twice. Advisory only — the upload route re-checks, so a file that appears in between is
-        still refused rather than clobbered."""
+        still refused rather than clobbered.
+        """
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
@@ -1314,7 +1391,8 @@ def register(app, supervise):
 
         It edits the instance's LinuxGSM config, so it needs the same permission as the rest of
         the config editor, and it only takes effect on the server's next START — `pipe-pane` is
-        wired up in command_start.sh. Both facts are reported rather than assumed away."""
+        wired up in command_start.sh. Both facts are reported rather than assumed away.
+        """
         gs = get_game(server_id)
         if not _can_manage_files():
             return jsonify({"error": "Permission denied"}), 403
