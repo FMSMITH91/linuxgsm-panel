@@ -28,10 +28,13 @@ from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachab
 from app import (_local_remote_id, _log, _os_update_note)
 
 
-def _may_sync_ports():
-    """Whether the caller may sync a server's ports: superadmin, MANAGE_REMOTES or INSTALL_SERVER."""
-    return (current_user.is_superadmin or has_permission(current_user, MANAGE_REMOTES)
-            or has_permission(current_user, INSTALL_SERVER))
+def _resync_game_port(gs, info):
+    """Store the game port LinuxGSM reports when it differs from the stored one; return that port."""
+    gp = info.get("game_port")
+    if gp and gp != gs.port:
+        gs.port = gp
+        db.session.commit()
+    return gp
 
 
 def _sync_ports_detail(opened, missed):
@@ -396,14 +399,12 @@ def _register_game_ports(app):
         that were installed before multi-port support, or whose ports changed.
         """
         gs = get_game(server_id)
-        if not _may_sync_ports():
+        if not (current_user.is_superadmin or has_permission(current_user, MANAGE_REMOTES)
+                or has_permission(current_user, INSTALL_SERVER)):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         try:
             info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name)
-            gp = info.get("game_port")
-            if gp and gp != gs.port:
-                gs.port = gp
-                db.session.commit()
+            gp = _resync_game_port(gs, info)
             to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
             # Report what the firewall ACTUALLY took, not what was asked for. The return value
             # used to be discarded on the reasoning that "the firewall page reports a partially
