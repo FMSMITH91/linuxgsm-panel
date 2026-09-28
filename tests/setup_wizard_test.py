@@ -130,7 +130,7 @@ def mark_setup_complete():
 
 # The first admin's password throughout: it passes the strength policy, so every refusal below is
 # the lock or the step order refusing, never the password rules.
-_ADMIN_PASSWORD = "Sufficient1!pass"  # nosec B105 - a fixture for this suite's throwaway DB
+_ADMIN_PASSWORD = "Sufficient1!pass"  # nosec B105 - a fixture for this suite's throwaway DB  # noqa: password
 
 
 try:
