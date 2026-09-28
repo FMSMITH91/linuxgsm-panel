@@ -9,8 +9,8 @@ gate exists and why it is scheduled rather than triggered by a push. Runnable by
 Exit 0 = clean (or nothing but accepted issues). Exit 1 = something unreviewed is on main.
 Exit 0 with a warning = the API could not be reached, or answered 5xx, 429 or 408; an outage or a
 rate limit at Codacy is not a reason to fail the build, and the next scheduled run will catch what
-this one missed. Any other answer it cannot read (another 4xx, a redirect, a body that is not JSON)
-exits 1.
+this one missed. Any other answer it cannot read (another 4xx, a redirect, a body that is not JSON,
+JSON that is not the object it expects) exits 1.
 """
 import json
 import os
@@ -31,6 +31,25 @@ ACCEPTED_FILE = ROOT / "codacy-accepted-errors.json"
 TRANSIENT_HTTP = frozenset((408, 429))
 
 
+def _read_page(page):
+    """One decoded page as (its issues, or None when it has no list; the next cursor).
+
+    Raises ValueError, saying what is wrong, for JSON that is not {"data": [...], "pagination":
+    {...}}. A JSON list, a `data` that is not a list of objects or a `pagination` that is not an
+    object used to escape as an AttributeError traceback from the first `.get` that met it: the
+    run did fail, but its log said nothing about why.
+    """
+    if not isinstance(page, dict):
+        raise ValueError("a JSON %s where an object was expected" % type(page).__name__)
+    data, pagination = page.get("data"), page.get("pagination") or {}
+    if data is not None and not (isinstance(data, list)
+                                 and all(isinstance(i, dict) for i in data)):
+        raise ValueError("a `data` that is not a list of issues")
+    if not isinstance(pagination, dict):
+        raise ValueError("a `pagination` that is not an object")
+    return data, pagination.get("cursor")
+
+
 def fetch_errors():
     """Every Error-level issue Codacy currently reports for the default branch.
 
@@ -42,7 +61,8 @@ def fetch_errors():
     second on the strength of the first is the failure this gate exists to prevent. Its sibling
     codeql-alerts.yml states the rule outright: "'No analysis' is never treated as 'no alerts'."
     A repo that has not been analysed, an endpoint that moved, a filter shape that changed, or
-    anonymous access being withdrawn all yield a 200 with nothing useful in it.
+    anonymous access being withdrawn all yield a 200 with nothing useful in it. A page that is
+    JSON but not the object read here raises ValueError from _read_page, as a non-JSON one does.
     """
     out, cursor, answered = [], None, False
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -54,11 +74,10 @@ def fetch_errors():
         req = urllib.request.Request(
             url, data=json.dumps({"levels": ["Error"]}).encode(), headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=30) as resp:   # nosec B310 - constant https host
-            page = json.loads(resp.read().decode("utf-8", "replace"))
-        if isinstance(page, dict) and isinstance(page.get("data"), list):
+            data, cursor = _read_page(json.loads(resp.read().decode("utf-8", "replace")))
+        if data is not None:
             answered = True          # a real, well-formed result set — even an empty one
-        out.extend(page.get("data") or [])
-        cursor = (page.get("pagination") or {}).get("cursor")
+        out.extend(data or [])
         if not cursor:
             break
     return out, answered
@@ -107,8 +126,12 @@ def _fetch_or_exit_code():
         # A 200 whose body is not JSON (an HTML error or login page, a changed content type) is
         # the API answering in a shape this gate cannot read — the same claim as `not answered`
         # below, and fatal for the same reason. It used to share the "could not reach" branch.
-        print("::error::the Codacy API answered with something that is not JSON (%s) for %s/%s — "
-              "refusing to report it clean." % (type(exc).__name__, ORG, REPO))
+        # So is JSON that is not the object _read_page reads, on ANY page: a bad later page means
+        # the issues were not all read, and a partial read is not "clean".
+        what = ("something that is not JSON (%s)" % type(exc).__name__
+                if isinstance(exc, json.JSONDecodeError) else exc)
+        print("::error::the Codacy API answered with %s for %s/%s — refusing to report it clean."
+              % (what, ORG, REPO))
         return None, 1
     except (urllib.error.URLError, OSError) as exc:
         # No answer at all — DNS, a refused connection, a timeout. An outage, not a verdict.
