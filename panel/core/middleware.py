@@ -9,8 +9,16 @@ from panel.core.config import load_config
 
 class PrefixMiddleware:
     """WSGI middleware that handles sub-path mounts (Tailscale Serve, reverse proxy).
-    Fixes both incoming PATH_INFO and outgoing Location redirect headers."""
+
+    Fixes both incoming PATH_INFO and outgoing Location redirect headers.
+    """
+
     def __init__(self, app, prefix=""):
+        """Wrap the WSGI `app`.
+
+        `prefix` is the fallback mount: used when neither a trusted X-Forwarded-Prefix nor the
+        configured tailscale_mount names one.
+        """
         self.app = app
         self.prefix = prefix.rstrip("/")
 
@@ -26,7 +34,8 @@ class PrefixMiddleware:
         maintainer as a solved problem.
 
         A mount is a path: one leading slash, then path characters. Anything else is refused
-        outright rather than sanitised, because there is no "nearly a mount point"."""
+        outright rather than sanitised, because there is no "nearly a mount point".
+        """
         raw = (raw or "").strip()
         if not raw or not raw.startswith("/") or raw.startswith("//"):
             return ""
@@ -61,6 +70,7 @@ class PrefixMiddleware:
         return bool(cfg.get("trust_proxy"))
 
     def __call__(self, environ, start_response):
+        """Serve the request under the resolved mount, and prefix its outgoing redirects."""
         cfg = load_config()
         # Priority: X-Forwarded-Prefix from a trusted proxy, then the configured mount
         prefix = (self._clean_prefix(environ.get("HTTP_X_FORWARDED_PREFIX", ""))
@@ -117,12 +127,15 @@ class ProxiedBanGate:
 
     The header is not authenticated here, and needs no authentication: this can only REFUSE. Through
     tailscaled the last hop is always tailscaled's own value, and any other sender can only name a
-    banned address to have its own request refused. With nothing banned it costs one truth test."""
+    banned address to have its own request refused. With nothing banned it costs one truth test.
+    """
 
     def __init__(self, app):
+        """Wrap the WSGI `app`."""
         self.app = app
 
     def __call__(self, environ, start_response):
+        """Answer 403 when the forwarded client address is banned; pass anything else through."""
         from panel.security import banlist
         if banlist.active():
             xff = environ.get("HTTP_X_FORWARDED_FOR")

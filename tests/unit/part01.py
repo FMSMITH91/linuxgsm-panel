@@ -155,6 +155,19 @@ check("weak: no lower", password_problem("TEST1234!@") is not None)
 check("weak: no digit", password_problem("TestTest!@") is not None)
 check("weak: no symbol", password_problem("TestTest12") is not None)
 check("strong password accepted", password_problem("Test1234!@") is None)
+# ...and the refusal names the class that is MISSING, checked in a fixed order. The four class
+# checks are one table in validation.py (_PW_CLASSES): a swapped row there still refuses, so the
+# checks above stay green, while telling the user to add the class they already have.
+eq("weak: no upper is told to add an uppercase letter",
+   password_problem("test1234!@"), "Password must include an uppercase letter.")
+eq("weak: no lower is told to add a lowercase letter",
+   password_problem("TEST1234!@"), "Password must include a lowercase letter.")
+eq("weak: no digit is told to add a number",
+   password_problem("TestTest!@"), "Password must include a number.")
+eq("weak: no symbol is told to add a symbol",
+   password_problem("TestTest12"), "Password must include a symbol (e.g. !@#$%).")
+eq("weak: missing several classes, the lowercase one is named first",
+   password_problem("12345678!@"), "Password must include a lowercase letter.")
 
 # ── generate_password: the panel issues these, so they must pass its own rules every time ──────
 # Admin-created accounts and admin password resets get a generated password. If one of them could
@@ -640,6 +653,21 @@ eq("console: a genuine strikethrough is still rendered",
    _clean_console_text("\x1b[9mstruck"), "\x1b[9mstruck\x1b[0m")
 eq("console: a genuine colour is still rendered",
    _clean_console_text("\x1b[33mwarn"), "\x1b[33mwarn\x1b[0m")
+# 39 / 49 reset ONE colour plane — the foreground / the background, bright range included — and
+# leave the rest of the style alone. Before these, no check pinned what they clear: a reset that
+# cleared nothing, or only the normal range, left the whole suite green.
+eq("console: 39 clears the foreground only, keeping bold and the background",
+   _term.render_line_colour("\x1b[1;31;44mA\x1b[39mB"), "\x1b[1;31;44mA\x1b[1;44mB\x1b[0m")
+eq("console: ...a BRIGHT foreground (90-97) included",
+   _term.render_line_colour("\x1b[1;91;44mA\x1b[39mB"), "\x1b[1;91;44mA\x1b[1;44mB\x1b[0m")
+eq("console: 49 clears the background only, keeping bold and the foreground",
+   _term.render_line_colour("\x1b[1;31;44mA\x1b[49mB"), "\x1b[1;31;44mA\x1b[1;31mB\x1b[0m")
+eq("console: ...a BRIGHT background (100-107) included",
+   _term.render_line_colour("\x1b[1;31;101mA\x1b[49mB"), "\x1b[1;31;101mA\x1b[1;31mB\x1b[0m")
+# A code already active is not added again: a spool that re-asserts its colour on every line must
+# render as one run, not as a style that grows by a copy of itself each time.
+eq("console: a colour re-asserted while active is not stacked, the text stays one run",
+   _term.render_line_colour("\x1b[1;33mA\x1b[1;33mB"), "\x1b[1;33mAB\x1b[0m")
 
 # A carriage return OVERWRITES from column 0 — it does not start a new line. Rendering it as a
 # newline (the old behaviour) split JLine's prompt-erase into stray blank lines.

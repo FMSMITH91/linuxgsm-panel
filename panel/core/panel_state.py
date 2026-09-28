@@ -72,9 +72,11 @@ _remote_keyed_state = []
 
 def register_server_state(mapping, lock=None):
     """Mark `mapping` as keyed by GameServer.id so the pruner clears deleted ids from it.
+
     Returns `mapping`, so a declaration can wrap itself: `_x = register_server_state({})`.
 
-    Pass `lock` when the map has one — the pruner will hold it while it prunes."""
+    Pass `lock` when the map has one — the pruner will hold it while it prunes.
+    """
     _server_keyed_state.append((mapping, lock))
     return mapping
 
@@ -86,8 +88,11 @@ def register_remote_state(mapping, lock=None):
 
 
 def server_keyed_state():
-    """Every registered GameServer.id-keyed map. A tuple: the registry is appended to at import
-    time and only read afterwards, and handing out the live list invites a caller to mutate it."""
+    """Every registered GameServer.id-keyed map.
+
+    A tuple: the registry is appended to at import time and only read afterwards, and handing out
+    the live list invites a caller to mutate it.
+    """
     return tuple(m for m, _lock in _server_keyed_state)
 
 
@@ -97,10 +102,13 @@ def remote_keyed_state():
 
 
 def keyed_state_with_locks():
-    """(server entries, remote entries), each entry a (mapping, lock) pair — what the pruner
-    walks. Separate from the two accessors above because every OTHER reader wants the maps and
-    only the pruner needs to know which of them is serialised."""
+    """(server entries, remote entries), each entry a (mapping, lock) pair — what the pruner walks.
+
+    Separate from the two accessors above because every OTHER reader wants the maps and only the
+    pruner needs to know which of them is serialised.
+    """
     return tuple(_server_keyed_state), tuple(_remote_keyed_state)
+
 
 _rwe_lock = threading.Lock()
 

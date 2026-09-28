@@ -1,13 +1,13 @@
-"""Rendering terminal output as a terminal would.
+r"""Rendering terminal output as a terminal would.
 
 Game-server consoles, LinuxGSM and JLine all write control sequences into their logs, and the panel
 shows that text to people. Every module that displays or parses such output needs the same treatment,
 so it lives here once rather than as a regex per call site.
 
 It exists because it had drifted: four incompatible ANSI patterns across 16 sites (one SGR-only, so
-`\\x1b[K` survived and rendered as a literal "[K"; one CSI-only, so `\\x1b>` survived and rendered as
+`\x1b[K` survived and rendered as a literal "[K"; one CSI-only, so `\x1b>` survived and rendered as
 ">"), and two carriage-return renderers implementing OPPOSITE rules — each documenting the other as
-wrong. The overwrite semantics below are the correct ones: a `\\r` returns the cursor to column 0, it
+wrong. The overwrite semantics below are the correct ones: a `\r` returns the cursor to column 0, it
 does not start a new line and it does not erase what it does not overwrite.
 
 No imports beyond `re`, so anything in the codebase can use it.
@@ -37,9 +37,12 @@ def _strip_c0(text):
 
 
 def strip_escapes(text):
-    """`text` with OSC, CSI and two-byte escape sequences removed, and every control character that
-    carries no rendering meaning dropped. `\r` and `\b` are KEPT — they do carry meaning; see
-    apply_carriage_returns / apply_backspaces — as are `\n` and `\t`."""
+    r"""Strip escape sequences and meaningless control characters from `text`.
+
+    OSC, CSI and two-byte escape sequences are removed, and every control character that carries
+    no rendering meaning is dropped. `\r` and `\b` are KEPT — they do carry meaning; see
+    apply_carriage_returns / apply_backspaces — as are `\n` and `\t`.
+    """
     if not text:
         return text
     text = ESC2_RE.sub("", CSI_RE.sub("", OSC_RE.sub("", text)))
@@ -55,11 +58,14 @@ def strip_escapes(text):
 
 
 def apply_carriage_returns(line):
-    """One line with `\\r` applied: the cursor returns to column 0 and what follows OVERWRITES from
-    there, leaving any tail it does not cover.
+    r"""Apply every `\r` in one line, as a terminal renders it.
 
-    NOT `line.split("\\r")[-1]`. That looks equivalent and is not: a line merely ENDING in `\\r` —
-    every line of a CRLF log — yields "" and the content is silently lost."""
+    The cursor returns to column 0 and what follows OVERWRITES from there, leaving any tail it does
+    not cover.
+
+    NOT `line.split("\r")[-1]`. That looks equivalent and is not: a line merely ENDING in `\r` —
+    every line of a CRLF log — yields "" and the content is silently lost.
+    """
     if not line or "\r" not in line:
         return line
     buf = ""
@@ -69,9 +75,11 @@ def apply_carriage_returns(line):
 
 
 def apply_backspaces(line):
-    """One line with BS (0x08) applied, as a terminal renders it. JLine echoes a typed command by
-    rewriting it in place as it applies syntax colour, so without this every erased attempt remains:
-    "say hi" arrives as "ssasay  hi"."""
+    """Apply every BS (0x08) in one line, as a terminal renders it.
+
+    JLine echoes a typed command by rewriting it in place as it applies syntax colour, so without
+    this every erased attempt remains: "say hi" arrives as "ssasay  hi".
+    """
     if not line or "\b" not in line:
         return line
     out = []
@@ -85,14 +93,18 @@ def apply_backspaces(line):
 
 
 def render_line(line):
-    """One line as it would appear on screen: escapes stripped, `\\r` overwrites and backspaces
-    applied."""
+    r"""Render one line as it would appear on screen.
+
+    Escapes stripped, `\r` overwrites and backspaces applied.
+    """
     return apply_backspaces(apply_carriage_returns(strip_escapes(line)))
 
 
 def render(text):
-    """Multi-line text as it would appear on screen. `\\r\\n` is a line break; a bare `\\r` is an
-    overwrite within its line."""
+    r"""Render multi-line text as it would appear on screen.
+
+    `\r\n` is a line break; a bare `\r` is an overwrite within its line.
+    """
     if not text:
         return text
     return "\n".join(render_line(ln) for ln in text.replace("\r\n", "\n").split("\n"))
@@ -137,22 +149,27 @@ _TOKEN_RE = re.compile(
 )
 
 
+# What 39 (default foreground) and 49 (default background) each clear: the normal and the bright
+# range of that plane.
+_SGR_CLEARS = {
+    39: frozenset(range(30, 38)) | frozenset(range(90, 98)),
+    49: frozenset(range(40, 48)) | frozenset(range(100, 108)),
+}
+
+# The EXTENDED colour introducers — foreground, background and underline colour.
+_SGR_EXTENDED = (38, 48, 58)
+
+
 def _sgr_apply(style, codes):
-    """The style after an SGR. `style` is a tuple of active codes, oldest first.
+    """Return the style after an SGR. `style` is a tuple of active codes, oldest first.
 
     A reset (0, or an empty parameter list — `ESC[m` means `ESC[0m`) clears everything; 39/49
     clear just the foreground/background. Anything else is appended, and a repeat of the same code
     is not added twice, so a spool that re-asserts its colour on every line does not grow an
-    unbounded style."""
+    unbounded style.
+    """
     out = list(style)
-    nums = []
-    for part in (codes or "0").split(";"):
-        part = part.strip()
-        # `ESC[;32m` — an empty field is 0. A field too long to be any real code is -1, which no
-        # rule below acts on: int() of more than 4300 digits RAISES (CPython's int_max_str_digits),
-        # and the console poller renders every chunk through here — one such sequence in a log
-        # made each tick raise before it advanced, so that console re-read the same chunk forever.
-        nums.append((int(part) if len(part) <= 4 else -1) if part.isdecimal() else 0)
+    nums = _sgr_params(codes)
     i = 0
     while i < len(nums):
         n = nums[i]
@@ -163,30 +180,65 @@ def _sgr_apply(style, codes):
         # exactly this, so `48;2;1;9;3` became dim + bold + STRIKETHROUGH + italic and struck a
         # line through an Essentials warning and the URL under it. The panel does not render
         # extended colour, so the whole instruction is consumed and dropped.
-        if n in (38, 48, 58):
-            nxt = nums[i + 1] if i + 1 < len(nums) else None
-            i += 3 if nxt == 5 else 5 if nxt == 2 else 1   # malformed: drop just the introducer
+        if n in _SGR_EXTENDED:
+            i += _sgr_extended_width(nums, i)
             continue
-        if n == 0:
-            out = []
-        elif n not in _SGR_ALLOWED:
-            pass
-        elif n == 39:
-            out = [c for c in out if not (30 <= c <= 37 or 90 <= c <= 97)]
-        elif n == 49:
-            out = [c for c in out if not (40 <= c <= 47 or 100 <= c <= 107)]
-        elif n not in out:
-            out.append(n)
+        out = _sgr_code(out, n)
         i += 1
     return tuple(out)
 
 
-def render_line_colour(line):
-    """One line as it would appear on screen, with colour kept as canonical `ESC[<codes>m`.
+def _sgr_params(codes):
+    """Parse an SGR's parameter string (`1;31` of `ESC[1;31m`) into its list of integer codes.
 
-    Same rendering rules as render_line — escapes removed, `\\r` overwrites, backspaces applied —
+    An absent or empty string is a reset, `[0]`.
+    """
+    nums = []
+    for part in (codes or "0").split(";"):
+        part = part.strip()
+        # `ESC[;32m` — an empty field is 0. A field too long to be any real code is -1, which no
+        # rule below acts on: int() of more than 4300 digits RAISES (CPython's int_max_str_digits),
+        # and the console poller renders every chunk through here — one such sequence in a log
+        # made each tick raise before it advanced, so that console re-read the same chunk forever.
+        nums.append((int(part) if len(part) <= 4 else -1) if part.isdecimal() else 0)
+    return nums
+
+
+def _sgr_extended_width(nums, i):
+    """Count the parameters the extended-colour instruction starting at `nums[i]` occupies.
+
+    `38;5;n` is three, `38;2;r;g;b` is five. Anything else after the introducer is malformed, and
+    only the introducer itself is dropped.
+    """
+    nxt = nums[i + 1] if i + 1 < len(nums) else None
+    return 3 if nxt == 5 else 5 if nxt == 2 else 1   # malformed: drop just the introducer
+
+
+def _sgr_code(out, n):
+    """Apply one SGR code `n` to `out`, the list of active codes, and return the resulting list.
+
+    0 clears everything, a code outside _SGR_ALLOWED changes nothing, 39/49 clear their colour
+    plane, and any other code is appended unless it is already active.
+    """
+    if n == 0:
+        return []
+    if n not in _SGR_ALLOWED:
+        return out
+    clears = _SGR_CLEARS.get(n)
+    if clears is not None:
+        return [c for c in out if c not in clears]
+    if n not in out:
+        out.append(n)
+    return out
+
+
+def render_line_colour(line):
+    r"""Render one line as it would appear on screen, with colour kept as canonical `ESC[<codes>m`.
+
+    Same rendering rules as render_line — escapes removed, `\r` overwrites, backspaces applied —
     except that SGR is carried through instead of dropped. Returns a plain string; the only
-    control bytes that can survive are the SGR sequences this function writes itself."""
+    control bytes that can survive are the SGR sequences this function writes itself.
+    """
     if not line:
         return line
     # (char, style) pairs, so the overwrite rules below count COLUMNS and not escape bytes.
@@ -212,8 +264,11 @@ def render_line_colour(line):
 
 
 def _put(cells, col, ch, style):
-    """Write one character at the cursor and return the new column. `\\r` returns to column 0
-    WITHOUT erasing (see apply_carriage_returns); `\\b` steps back over the previous cell."""
+    r"""Write one character at the cursor and return the new column.
+
+    `\r` returns to column 0 WITHOUT erasing (see apply_carriage_returns); `\b` steps back over the
+    previous cell.
+    """
     if ch == "\r":
         return 0
     if ch == "\b":
@@ -226,10 +281,11 @@ def _put(cells, col, ch, style):
 
 
 def _coalesce(cells):
-    """(char, style) pairs back into a string, emitting an SGR only where the style CHANGES.
+    """Join (char, style) pairs back into a string, emitting an SGR only where the style CHANGES.
 
     Each sequence is ABSOLUTE — the full active set, not a delta — so a run never depends on what
-    the reader happens to have open and cannot leak its colour into the next one."""
+    the reader happens to have open and cannot leak its colour into the next one.
+    """
     out, cur = [], ()
     for ch, style in cells:
         if style != cur:
@@ -266,7 +322,8 @@ def split_log_timestamp(line):
 
     The stamp is REMOVED from the text, because the panel shows it in the gutter — leaving it
     inline would print the same time twice on every line. Only the exact shape LinuxGSM writes is
-    matched: a game that happens to print something bracket-shaped of its own keeps it."""
+    matched: a game that happens to print something bracket-shaped of its own keeps it.
+    """
     if not line:
         return None, line
     m = LOG_TS_RE.match(line)

@@ -227,18 +227,55 @@ try:
     # ── 6. The interactive menu accepts a number or a name ────────────────────────────────────
     _real_input = manage.input if hasattr(manage, "input") else None
     import builtins
+    import contextlib
+    import io
     _saved_input = builtins.input
+    seed(username="cli_gone", active=False)
+    seed(username="cli_gone_admin", admin=True, active=False)
+
+    def _menu(*answers):
+        """Return (chosen, printed) for the menu run on these scripted answers.
+
+        Past the last answer, input() raises EOFError and the menu takes its own "Cancelled." exit,
+        so a menu that wrongly re-prompts comes back None and fails its check by name. A stub that
+        repeats one answer forever turned exactly that bug into a hang the memory cap killed.
+        """
+        _left = iter(answers)
+
+        def _answer(*_a):
+            try:
+                return next(_left)
+            except StopIteration:
+                raise EOFError from None
+        builtins.input = _answer
+        _out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(_out):
+                chosen = manage._pick_user_interactive()
+        except SystemExit:
+            chosen = None
+        return chosen, _out.getvalue()
+
     try:
         with manage.app.app_context():
             names = [u.username for u in User.query.order_by(User.username).all()]
-            builtins.input = lambda *a: "2"
-            check("menu: a number selects the matching row", manage._pick_user_interactive() == names[1])
-            builtins.input = lambda *a: names[0]
-            check("menu: a typed username is accepted", manage._pick_user_interactive() == names[0])
-            _tries = iter(["nope", "1"])
-            builtins.input = lambda *a: next(_tries)
+            check("menu: a number selects the matching row", _menu("2")[0] == names[1])
+            check("menu: a typed username is accepted", _menu(names[0])[0] == names[0])
             check("menu: a bad choice re-prompts rather than exiting",
-                  manage._pick_user_interactive() == names[0])
+                  _menu("nope", "1")[0] == names[0])
+            _shown = _menu("1")[1].splitlines()
+            _row = {n: "  %2d) %s" % (i, n) for i, n in enumerate(names, 1)}
+            check("menu: the prompt, then one numbered line per user in name order",
+                  _shown[:1] == ["Which user?"] and len(_shown) == 1 + len(names)
+                  and all(line.startswith(_row[n]) for line, n in zip(_shown[1:], names)),
+                  repr(_shown[:4]))
+            check("menu: a superadmin is tagged, a plain user is not",
+                  _row["cli_new"] + "  [superadmin]" in _shown and _row["cli_user"] in _shown,
+                  repr(_shown))
+            check("menu: an inactive user is tagged, and an inactive superadmin carries both",
+                  _row["cli_gone"] + "  [inactive]" in _shown
+                  and _row["cli_gone_admin"] + "  [superadmin, inactive]" in _shown,
+                  repr(_shown))
     finally:
         builtins.input = _saved_input
 
