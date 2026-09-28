@@ -47,10 +47,16 @@ def _sync_ports_detail(opened, missed):
 def _sync_ports_message(opened, missed):
     """Word a port sync's result for the user: all opened, some opened, or none opened."""
     if not missed:
+        # A helper, not a route: the text goes out inside jsonify(), and the ports are ints.
+        # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
         return "Ports %s opened." % (", ".join(map(str, opened)) or "—")
     if opened:
+        # A helper, not a route: the text goes out inside jsonify(), and the ports are ints.
+        # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
         return ("Opened %s, but %s could not be opened — check the host's firewall."
                 % (", ".join(map(str, opened)), ", ".join(map(str, missed))))
+    # A helper, not a route: the text goes out inside jsonify(), and the ports are ints.
+    # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
     return ("No ports could be opened (%s) — the host's firewall did not accept the "
             "rules." % ", ".join(map(str, missed)))
 

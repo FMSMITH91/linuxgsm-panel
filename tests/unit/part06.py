@@ -5578,6 +5578,18 @@ check("gitleaks: the allowlist clears install.sh's NodeSource fingerprint assign
       "assignments %r, allowlist %r" % (_gl_fpr, _gl_rxs))
 check("gitleaks: the fingerprint exemption is that one value, not every NODESOURCE_KEY_FPR",
       not any(re.search(_rx, 'NODESOURCE_KEY_FPR="' + "0" * 40 + '"') for _rx in _gl_rxs))
+# The JS coverage walk typed a sequential stand-in Ubuntu Pro token that generic-api-key reads as a
+# credential. The tree types a non-secret value now; the allowlist clears the old literal, which is
+# still in the PR's range (13e3441), and nothing wider: a different token in that field, or the same
+# value in another field, must still be found.
+_gl_flows = open(os.path.join(_root, "tools", "js_coverage", "flows.py"), encoding="utf-8").read()
+_gl_upro = "J.type('#upro-token', 'C1234567890abcdef')"
+check("gitleaks: the coverage walk no longer types the old stand-in token (the exemption is history-only)",
+      "C1234567890abcdef" not in _gl_flows and "#upro-token" in _gl_flows)
+check("gitleaks: the allowlist clears the old stand-in token in the Ubuntu Pro field, and only there",
+      any(re.search(_rx, _gl_upro) for _rx in _gl_rxs)
+      and not any(re.search(_rx, "J.type('#upro-token', 'C9876543210fedcba')") for _rx in _gl_rxs)
+      and not any(re.search(_rx, "J.type('#api-token', 'C1234567890abcdef')") for _rx in _gl_rxs))
 
 # ── The docs state numbers that the code owns — pin them ──────────────────────────────────────
 # Every one of these was wrong at the time of writing, and none of them could be. SECURITY.md said
@@ -6386,7 +6398,7 @@ check("console: ...and no rule exists for a code the server strips",
 # background with the run's own colour, and the glyphs need the console's background put back —
 # through -webkit-text-fill-color, because `color` is what currentColor reads.
 check("console: reverse video actually inverts rather than doing nothing",
-      "background: currentColor" in _css_raw and "-webkit-text-fill-color" in _css_raw,
+      "background: currentcolor" in _css_raw.lower() and "-webkit-text-fill-color" in _css_raw,
       ".ansi-7 does not swap anything")
 
 

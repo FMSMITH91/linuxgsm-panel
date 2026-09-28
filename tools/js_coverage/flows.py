@@ -377,7 +377,7 @@ if (sel) {
 J.click('[data-action="closePanelPort"]'); await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(1000);
 J.click('[data-action="tsSshDisable"]'); await J.sleep(300); J.settleDialogs(true, PW); await J.sleep(800);
 // Ubuntu Pro: a token that is not one, then the services.
-J.type('#upro-token', 'C1234567890abcdef'); J.click('[data-action="_uproAttach"]'); await J.sleep(1200);
+J.type('#upro-token', 'not-a-real-pro-token'); J.click('[data-action="_uproAttach"]'); await J.sleep(1200);
 J.click('[data-action="_uproService"]'); await J.sleep(1200);
 return 1;
 """

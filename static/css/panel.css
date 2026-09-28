@@ -419,13 +419,13 @@
     }
 
     /* Number inputs: hide the browser spinner arrows — they render light/misaligned on the dark theme. */
-    input[type=number] {
-      -moz-appearance: textfield;
+    input[type="number"] {
       appearance: textfield;
     }
 
-    input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button {
-      -webkit-appearance: none;
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button {
+      appearance: none;
       margin: 0;
     }
 
@@ -520,6 +520,7 @@
     .panel-tools .btn {
       --bs-btn-padding-y: .05rem;
       --bs-btn-padding-x: .3rem;
+
       font-size: .7rem;
     }
 
@@ -771,14 +772,14 @@
     .ansi-9 { text-decoration: line-through; }
 
     /* Reverse video (7), which was allowed through the whole pipeline and then styled by nothing —
-       measured identical to plain text. `currentColor` paints the background with whatever colour
-       the run is already in, and -webkit-text-fill-color (not `color`, which currentColor reads)
+       measured identical to plain text. `currentcolor` paints the background with whatever colour
+       the run is already in, and -webkit-text-fill-color (not `color`, which currentcolor reads)
        puts the console's own background back into the glyphs. An APPROXIMATION where the run also
        sets a background: a true reverse would swap the two, and CSS cannot read one to write the
        other. Uncoloured text — which is what LinuxGSM and most servers actually use 7 for — is
        exact. */
     .ansi-7 {
-      background: currentColor;
+      background: currentcolor;
       -webkit-text-fill-color: #080d17;
     }
 
@@ -900,7 +901,7 @@
       height: 8px;
       border-radius: 50%;
       margin-right: 5px;
-      box-shadow: 0 0 6px currentColor;
+      box-shadow: 0 0 6px currentcolor;
     }
 
     .status-online {
