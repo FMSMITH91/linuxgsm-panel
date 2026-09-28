@@ -1429,6 +1429,11 @@ def _sl_gen(alphabet, n, max_parts=14):
             for _ in range(n)]
 
 
+def _sl_first_diff(bad, new, old):
+    """What a differential check prints: the first input the two disagree on, and both answers."""
+    return "differs on %r: new %r, old %r" % (bad[0], new(bad[0]), old(bad[0])) if bad else ""
+
+
 def _sl_took(fn, arg):
     _t0 = _sl_time.monotonic()
     fn(arg)
@@ -1445,9 +1450,7 @@ _sl_bad = [s for s in _sl_email_in
 _sl_hits = sum(1 for s in _sl_email_in if _SL_OLD_EMAIL.search(s))
 check("regex rewrite: _redact_emails answers what the old email re.sub answered, on %d inputs "
       "(%d holding an address)" % (len(_sl_email_in), _sl_hits), not _sl_bad and _sl_hits >= 500,
-      "differs on %r: new %r, old %r" % ((_sl_bad[0], _so._redact_emails(_sl_bad[0]),
-                                           _SL_OLD_EMAIL.sub("[email]", _sl_bad[0]))
-                                          if _sl_bad else ("", "", "")))
+      _sl_first_diff(_sl_bad, _so._redact_emails, lambda s: _SL_OLD_EMAIL.sub("[email]", s)))
 _sl_dt = _sl_took(_so._redact, "a" * 80000)
 check("regex rewrite: ...and an 80,000-character token with no @ is scrubbed in linear time",
       _sl_dt < 1.0, "%.2fs (the old pattern: ~18s)" % _sl_dt)
@@ -1485,8 +1488,7 @@ _sl_bad = [s for s in _sl_ufw_in + [s.strip() for s in _sl_ufw_in]
 _sl_hits = sum(1 for s in _sl_ufw_in if _SL_OLD_UFW.match(s))
 check("regex rewrite: _ufw_rule_split answers what _UFW_RULE_RE answered, on %d rows "
       "(%d of them rules)" % (2 * len(_sl_ufw_in), _sl_hits), not _sl_bad and _sl_hits >= 1000,
-      "differs on %r: new %r, old %r" % ((_sl_bad[0], _so._ufw_rule_split(_sl_bad[0]),
-                                           _sl_old_ufw(_sl_bad[0])) if _sl_bad else ("", "", "")))
+      _sl_first_diff(_sl_bad, _so._ufw_rule_split, _sl_old_ufw))
 # Through ufw_status itself, the caller: a helper nobody calls would pass a check on the helper.
 _sl_orig_rv = _so._run_verb
 try:
@@ -1531,8 +1533,8 @@ finally:
 
 # 4. _dedupe_log_tracebacks' syslog-prefix pattern — every journal line of a debug report.
 _SL_OLD_PFX = _sl_re.compile(r"^[A-Z][a-z]{2}\s+\d+\s+[\d:]+\s+\S+\s+[^:]+:\s?")
-_sl_pfx_in = ["Jan 12 10:00:00 " + s for s in _sl_gen(["host", " ", "  ", "\t", ":", "x", "[1]",
-                                                         "python3", "app", "\r"], 4000)]
+_sl_pfx_in = ["Jan 12 10:00:00 " + s
+              for s in _sl_gen(["host", " ", "  ", "\t", ":", "x", "[1]", "python3", "app", "\r"], 4000)]
 _sl_pfx_in += ["Sep 28 10:00:00 box python3[123]: Traceback", "Sep 28 10:00:00 box  :x",
                "Sep 28 10:00:00 box x:", "Sep 28 10:00:00 box :", "Sep  1 1:2 h p: y"]
 _sl_bad = [s for s in _sl_pfx_in
@@ -1568,8 +1570,7 @@ _sl_bad = [s for s in _sl_deps_in if _sm_hosts.parse_missing_deps(s) != _sl_old_
 _sl_hits = sum(1 for s in _sl_deps_in if _sl_old_deps(s))
 check("regex rewrite: parse_missing_deps finds what the old lazy pattern found, on %d outputs "
       "(%d naming packages)" % (len(_sl_deps_in), _sl_hits), not _sl_bad and _sl_hits >= 500,
-      "differs on %r: new %r, old %r" % ((_sl_bad[0], _sm_hosts.parse_missing_deps(_sl_bad[0]),
-                                           _sl_old_deps(_sl_bad[0])) if _sl_bad else ("", "", "")))
+      _sl_first_diff(_sl_bad, _sm_hosts.parse_missing_deps, _sl_old_deps))
 _sl_dt = _sl_took(_sm_hosts.parse_missing_deps, "Missing dependencies: a" + " " * 200000 + "b")
 check("regex rewrite: ...and a dependency line of 200,000 blanks is read in linear time",
       _sl_dt < 1.0, "%.2fs (the old pattern: ~17s)" % _sl_dt)

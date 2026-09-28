@@ -3120,14 +3120,14 @@ _EMAIL_DOMAIN_RE = re.compile(r"@[\w-]+\.[\w.-]+")
 
 
 def _redact_emails(text):
-    r"""`text` with every email address replaced by [email]: exactly what
-    re.sub(r"[\w.+-]+@[\w-]+\.[\w.-]+", "[email]", text) returns, in one pass.
+    r"""`text` with every email address replaced by [email], in one pass.
 
-    That sub tried a match at every character of a run with no "@" after it, and read the run to
-    its end from each one: a 20,000-character token — a base64 blob in the log tail — took 1.2s,
-    and one twice as long four times that. A match can only begin where the search resumes or at
-    the start of a run, since every character of a run reaches the same "@", so taking each run
-    whole and looking at what follows it finds the same addresses at the same places."""
+    Exactly what re.sub(r"[\w.+-]+@[\w-]+\.[\w.-]+", "[email]", text) returns. That sub tried
+    a match at every character of a run with no "@" after it, and read the run to its end from
+    each one: a 20,000-character token — a base64 blob in the log tail — took 1.2s, and one twice
+    as long four times that. A match can only begin where the search resumes or at the start of a
+    run, since every character of a run reaches the same "@", so taking each run whole and
+    looking at what follows it finds the same addresses at the same places."""
     out, done, pos = [], 0, 0
     while True:
         run = _EMAIL_LOCAL_RE.search(text, pos)

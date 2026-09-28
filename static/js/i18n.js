@@ -34,9 +34,10 @@ window.t = function(s){ return i18nLookup(s) || s; };
     if (!key) return;
     var v = i18nLookup(key);
     // keep leading/trailing whitespace (inline layout, e.g. the gap after an icon). Measured with
-    // trim, not /\s*$/: that unanchored search started at every blank of every run in the text and
-    // read the run to its end each time. trim strips exactly what \s matches (both are the spec's
-    // WhiteSpace + LineTerminator), so the two slices are the same strings.
+    // trim, not /\s*$/: as written, that unanchored search may start at every blank of a run and
+    // read the run to its end from each (whether it does is up to the engine's optimiser; trim's
+    // cost does not depend on one). trim strips exactly what \s matches — both are the spec's
+    // WhiteSpace + LineTerminator — so the two slices are the same strings.
     var out = (v !== undefined)
       ? en.slice(0, en.length - en.trimStart().length) + v + en.slice(en.trimEnd().length)
       : en;
