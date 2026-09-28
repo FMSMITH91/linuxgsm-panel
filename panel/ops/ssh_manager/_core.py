@@ -1,5 +1,9 @@
-"""SSH connection manager for remote LinuxGSM servers.
-Also supports local execution for running on the panel's own machine."""
+"""Connection pool, exec primitives, server control, live metrics and discovery.
+
+Part of the SSH connection manager for remote LinuxGSM servers, which also supports local
+execution for running on the panel's own machine (see the package docstring for how names
+resolve across its submodules).
+"""
 import logging
 import os
 import re
@@ -50,7 +54,9 @@ _remote_caches = []
 
 def register_remote_cache(mapping):
     """Mark `mapping` as keyed by RemoteServer.id so a deleted host is forgotten from it.
-    Returns `mapping`, so a declaration can wrap itself: `_x = _core.register_remote_cache({})`."""
+
+    Returns `mapping`, so a declaration can wrap itself: `_x = _core.register_remote_cache({})`.
+    """
     _remote_caches.append(mapping)
     return mapping
 
@@ -62,7 +68,8 @@ def forget_remote_caches(remote_id):
     (remote id, port) or (remote id, user) — `m.pop(remote_id)` could never reach those, so
     registering such a cache would have looked like protection while doing nothing, which is
     worse than not registering it. A tuple containing the id is dropped; the worst a coincidence
-    costs (a port that happens to equal a deleted host's id) is one re-read."""
+    costs (a port that happens to equal a deleted host's id) is one re-read.
+    """
     for m in _remote_caches:
         m.pop(remote_id, None)
         for key in [k for k in list(m) if isinstance(k, tuple) and remote_id in k]:
@@ -81,19 +88,23 @@ _log = logging.getLogger("panel.ssh")
 
 
 class HostKeyMismatch(ConnectionError):
-    """The server presented a different SSH host key than the one we pinned (possible
-    MITM, or the box was reinstalled). Raised instead of silently trusting the new key."""
+    """The server presented a different SSH host key than the one we pinned.
+
+    Possibly MITM, or the box was reinstalled. Raised instead of silently trusting the new key.
+    """
 
 
 class _PinPolicy(paramiko.MissingHostKeyPolicy):
-    """Trust-on-first-use SSH host-key pinning, replacing paramiko's AutoAddPolicy (which
-    blindly trusts any key and is a MITM risk). We never pre-load keys into the client, so
-    paramiko always hands the presented key here and we decide:
+    """Trust-on-first-use SSH host-key pinning, replacing paramiko's AutoAddPolicy.
+
+    AutoAddPolicy blindly trusts any key and is a MITM risk. We never pre-load keys into the
+    client, so paramiko always hands the presented key here and we decide:
       • no key pinned yet → capture it (the caller persists it) and accept — first use
       • matches the pin   → accept
       • differs from pin  → reject, unless reject_on_change is False (e.g. a pre-save probe
         with nothing to compare, or a Tailscale connection already authenticated by
-        WireGuard, where the tailnet — not the SSH host key — is the trust anchor)."""
+        WireGuard, where the tailnet — not the SSH host key — is the trust anchor).
+    """
 
     def __init__(self, expected="", reject_on_change=True):
         self.expected = (expected or "").strip()
@@ -152,8 +163,11 @@ _remote_conn_keys = {}
 
 
 def _conn_key(username, host, port):
-    """The pool key for a remote. One definition, because the bug below was that two call sites
-    could disagree about which connection they were naming."""
+    """The pool key for a remote.
+
+    One definition, because the bug below was that two call sites could disagree about which
+    connection they were naming.
+    """
     return "%s@%s:%s" % (username, host, port)
 
 
@@ -163,7 +177,8 @@ def _close_key(key):
     close_connection() can only address the key its argument CURRENTLY spells, so it cannot reach
     a client whose row has since been repointed at a different host, port or user — that entry
     stays in the pool, with its socket and keepalive, for the life of the process. Addressing the
-    pool by key is what makes the old entry reachable at all."""
+    pool by key is what makes the old entry reachable at all.
+    """
     if key is None:
         return False
     with _conn_lock:
@@ -195,7 +210,8 @@ def _register_remote_invalidation():
     and new keys are closed: the old one is the orphan, the new one is the case where only the
     credential moved and the key did not.
 
-    Never raises: a pool that failed to prune must not turn into a failed commit."""
+    Never raises: a pool that failed to prune must not turn into a failed commit.
+    """
     from sqlalchemy import event, inspect as _sa_inspect
     from panel.db.models import RemoteServer
 
@@ -218,8 +234,10 @@ _register_remote_invalidation()
 
 
 def _register_remote_cache_invalidation():
-    """Forget a host's cached answers when its row is DELETED. Never raises — a cache that failed
-    to prune must not turn into a failed commit."""
+    """Forget a host's cached answers when its row is DELETED.
+
+    Never raises — a cache that failed to prune must not turn into a failed commit.
+    """
     from sqlalchemy import event
     from panel.db.models import RemoteServer
 
@@ -264,12 +282,14 @@ def _already_escalated(cmd):
     quoted argument, a grep pattern, a config line being written — skipped the wrap and ran
     UNPRIVILEGED, which for a caller that asked for root is a silent failure rather than an error.
     A caller that builds its own escalation passes sudo=False and never arrives here, so only the
-    leading form is a real "already escalated"."""
+    leading form is a real "already escalated".
+    """
     return cmd.strip().startswith("sudo ")
 
 
 def _run_local(cmd, timeout=30, sudo=False, stdin_text=None):
     """Run a command locally on the panel's own machine.
+
     If the command already uses privilege escalation, don't double-wrap. `stdin_text`, when given,
     is the command's stdin (a secret that must not be in the command — see run_privileged).
 
@@ -278,7 +298,8 @@ def _run_local(cmd, timeout=30, sudo=False, stdin_text=None):
     reaped before it finishes its work, so e.g. a crontab write silently no-ops
     while returncode is still 0. We therefore run the *original* (unpatched)
     subprocess inside eventlet's native thread pool (tpool), which both avoids
-    that bug and keeps the event hub from blocking on long commands."""
+    that bug and keeps the event hub from blocking on long commands.
+    """
     if not sudo:
         full_cmd = cmd
     elif _already_escalated(cmd):
@@ -319,8 +340,10 @@ _POPEN_KW = dict(stdout=_real_subprocess.PIPE, stderr=_real_subprocess.PIPE,
 
 
 def _decode_output(b):
-    """Bytes from a pipe -> the text Popen(text=True) would have produced from them: UTF-8 with
-    errors="replace", and universal newlines (CRLF and a bare CR both become LF)."""
+    """Bytes from a pipe -> the text Popen(text=True) would have produced from them.
+
+    UTF-8 with errors="replace", and universal newlines (CRLF and a bare CR both become LF).
+    """
     return b.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
@@ -382,8 +405,10 @@ def _reader_jobs(p, bufs, cap, flags, stdin_bytes):
 
 
 def _collect_capped(p, timeout, kill, threads, stdin_bytes=None, cap=None):
-    """communicate(), with a ceiling on what is KEPT. -> (out, err, rc, truncated) as bytes, or
-    None when the command outlived `timeout` (it has been killed by then).
+    """communicate(), with a ceiling on what is KEPT.
+
+    -> (out, err, rc, truncated) as bytes, or None when the command outlived `timeout` (it has been
+    killed by then).
 
     communicate() buffers everything a command writes until it exits, and the two subprocess
     transports used it: a remote reached over Tailscale that answers a five-second metrics probe
@@ -406,7 +431,8 @@ def _collect_capped(p, timeout, kill, threads, stdin_bytes=None, cap=None):
     (Ubuntu 26.04) a green join that runs out of time RAISES eventlet.timeout.Timeout, a
     BaseException, instead of returning. A grandchild still holding a pipe past _READER_GRACE
     sent that straight through _run_via_ssh_cli's `except Exception`, and every one above it,
-    out of the request or background loop that asked."""
+    out of the request or background loop that asked.
+    """
     cap = _MAX_OUTPUT_BYTES if cap is None else cap
     out, err = bytearray(), bytearray()
     flags = {"truncated": False}
@@ -458,7 +484,8 @@ def _exec_local_shell(shell_cmd, timeout=30, stdin_text=None):
     The literal ["/bin/bash", "-c", ...] is written out here rather than passed in: an argv that
     arrives as a variable reads to CodeQL as an arbitrary command line, and this is the path where
     a composed string genuinely does reach a shell. Keeping the list literal at the call keeps the
-    two local paths distinguishable — this one interprets a command, _exec_local_argv() does not."""
+    two local paths distinguishable — this one interprets a command, _exec_local_argv() does not.
+    """
     def _do():
         p = None
         try:
@@ -482,7 +509,8 @@ def _exec_local_argv(argv, timeout=30, stdin_text=None):
     """Run an ARGUMENT VECTOR on the panel's own machine — no shell involved at any point.
 
     Only privileged.py builds the vectors that reach here, from its fixed verb table, so every
-    element is either a literal or a value that passed a validator."""
+    element is either a literal or a value that passed a validator.
+    """
     def _do():
         p = None
         try:
@@ -510,7 +538,8 @@ def _wait_for_dpkg_lock(server, timeout=180):
 
     Was `while fuser /var/lib/dpkg/lock-frontend; do sleep 1; done` — a loop running as root, whose
     only exit was the outer command timeout. The Python version has an explicit deadline, so a host
-    whose lock never clears stops waiting instead of holding the connection open to the last second."""
+    whose lock never clears stops waiting instead of holding the connection open to the last second.
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         _, _, rc = run_privileged(server, "dpkg-lock-held", [], timeout=10, merge_stderr=False)
@@ -521,9 +550,12 @@ def _wait_for_dpkg_lock(server, timeout=180):
 
 
 def _restart_sshd(server, timeout=20):
-    """Restart the SSH daemon. Debian/Ubuntu call the unit `ssh`, others `sshd`, and the panel has
-    always tried both — that was `systemctl restart ssh || systemctl restart sshd`, one shell
-    string. Two verbs and an `if` say the same thing without one."""
+    """Restart the SSH daemon.
+
+    Debian/Ubuntu call the unit `ssh`, others `sshd`, and the panel has always tried both — that was
+    `systemctl restart ssh || systemctl restart sshd`, one shell string. Two verbs and an `if` say
+    the same thing without one.
+    """
     out, err, rc = run_privileged(server, "service-restart", ["ssh"], timeout=timeout)
     if rc != 0:
         out, err, rc = run_privileged(server, "service-restart", ["sshd"], timeout=timeout)
@@ -531,8 +563,11 @@ def _restart_sshd(server, timeout=20):
 
 
 def _f2b_reload(server, timeout=30):
-    """Make fail2ban pick up a changed config: ask it to reload, then fall back to the unit's own
-    reload and finally a restart. Was a `a || b || c` chain in one root shell."""
+    """Make fail2ban pick up a changed config.
+
+    Ask it to reload, then fall back to the unit's own reload and finally a restart. Was a
+    `a || b || c` chain in one root shell.
+    """
     for verb, args in (("f2b-reload", []), ("service-reload", ["fail2ban"]),
                        ("service-restart", ["fail2ban"])):
         out, err, rc = run_privileged(server, verb, args, timeout=timeout)
@@ -547,7 +582,8 @@ def is_local_server(server):
     Total on purpose: getattr for both attributes, so a partial record (or None) answers "not
     local" instead of raising. This is consulted before every command now, including from
     run_privileged, and an AttributeError here would surface as a failed firewall action rather
-    than as the malformed record it actually is."""
+    than as the malformed record it actually is.
+    """
     return bool(getattr(server, "is_local", False)
                 or getattr(server, "auth_method", None) == "local")
 
@@ -559,7 +595,8 @@ def helper_present(recheck=False):
     """Whether the root-owned privileged helper is installed on THIS machine.
 
     Cached: this is consulted on every privileged call and the answer only changes when the
-    operator re-runs install.sh."""
+    operator re-runs install.sh.
+    """
     if recheck or _HELPER_STATE["present"] is None:
         try:
             _HELPER_STATE["present"] = (os.path.isfile(_priv.HELPER_PATH)
@@ -575,7 +612,8 @@ def write_root_file(server, target, content, timeout=15):
     The name is the only argument. Locally the helper does the write itself, reading the content
     from its stdin — so the content never becomes part of a command at all, which is what the old
     `echo '<base64>' | base64 -d > <path>` did to it. Remotely there is no helper, so the base64
-    form remains, but the path is looked up rather than interpolated from a call site."""
+    form remains, but the path is looked up rather than interpolated from a call site.
+    """
     if not is_local_server(server):
         return run_command(server, _priv.remote_write_command(target, content),
                            timeout=timeout, sudo=True)
@@ -587,8 +625,11 @@ def write_root_file(server, target, content, timeout=15):
 
 
 def write_content_cron(server, content_user, body, timeout=15):
-    """Write one content user's weekly update cron. Per-user destination, so it cannot be a
-    WRITE_TARGETS name — the path is still built from the validated user name, never passed in."""
+    """Write one content user's weekly update cron.
+
+    Per-user destination, so it cannot be a WRITE_TARGETS name — the path is still built from the
+    validated user name, never passed in.
+    """
     if not is_local_server(server):
         return run_command(server, _priv.remote_content_cron_command(content_user, body),
                            timeout=timeout, sudo=True)
@@ -616,7 +657,8 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
     itself) it writes a grant permitting exactly one command, the helper, and the boundary is real.
     Where they did not, the host keeps NOPASSWD:ALL, because it still falls back to the line below
     and narrowing under that would break every privileged action rather than secure anything. The
-    installer prints which one it wrote; SECURITY.md carries the full account."""
+    installer prints which one it wrote; SECURITY.md carries the full account.
+    """
     # A verb with a SECRET argument (privileged.SECRET_STDIN) sends it on stdin on every path
     # below, and no command line carries it. Passed only when there is one, so a transport stubbed
     # without the keyword still sees exactly the call it always did.
@@ -649,9 +691,12 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
 
 
 def _ssh_connect_timeout():
-    """Connection timeout in seconds, from config's `ssh_timeout`. It is documented in the README
-    and has always been declared in DEFAULT_CONFIG, but nothing read it: the paramiko path hardcoded
-    15 and the ssh-CLI path 12, so the documented knob did nothing and the two disagreed."""
+    """Connection timeout in seconds, from config's `ssh_timeout`.
+
+    It is documented in the README and has always been declared in DEFAULT_CONFIG, but nothing read
+    it: the paramiko path hardcoded 15 and the ssh-CLI path 12, so the documented knob did nothing
+    and the two disagreed.
+    """
     try:
         from panel.core.config import load_config
         return max(1, min(int(load_config().get("ssh_timeout", 10)), 120))
@@ -661,38 +706,28 @@ def _ssh_connect_timeout():
 
 def get_connection(server, force_new=False, pooled=True):
     """Get or create a cached SSH connection to a remote server.
+
     For local servers, returns None (no SSH needed).
 
     `pooled=False` builds the client exactly the same way — same auth methods, same host-key
     pinning, same timeouts — and then does NOT put it in the pool. The caller owns it and must
     close it.
 
-    That exists for the interactive terminal, and the reason is the line at the bottom of this
-    function: `_connections[key] = client` runs even under force_new, so a caller that took a
-    "fresh" client and later closed it would be closing the one every other panel operation had
-    started using. A long-lived shell channel needs its own client for the same reason — an
-    `invoke_shell` sitting on the pooled transport ties every command on that host to the lifetime
-    of somebody's browser tab. Duplicating the connect logic here instead would mean a second
-    implementation of host-key pinning, which is the last thing that should have two copies."""
+    That exists for the interactive terminal, and the reason is the pooling step at the bottom of
+    this function: `_connections[key] = client` (in _pool_client) runs even under force_new, so a
+    caller that took a "fresh" client and later closed it would be closing the one every other panel
+    operation had started using. A long-lived shell channel needs its own client for the same reason
+    — an `invoke_shell` sitting on the pooled transport ties every command on that host to the
+    lifetime of somebody's browser tab. Duplicating the connect logic here instead would mean a
+    second implementation of host-key pinning, which is the last thing that should have two copies.
+    """
     if is_local_server(server):
         return None
 
     key = _conn_key(server.username, server.host, server.port)
-    with _conn_lock:
-        if not force_new and key in _connections:
-            conn = _connections[key]
-            try:
-                transport = conn.get_transport()
-                if transport and transport.is_active():
-                    transport.send_ignore()
-                    return conn
-            except Exception:  # nosec B110
-                _log.debug("probing a possibly-dead cached client → reconnect below", exc_info=True)
-            try:
-                conn.close()
-            except Exception:  # nosec B110
-                _log.debug("already closed / unusable; nothing to clean up", exc_info=True)
-            del _connections[key]
+    cached = _live_pooled_client(key, force_new)
+    if cached is not None:
+        return cached
 
     client = paramiko.SSHClient()
     # Pin the server's SSH host key (TOFU). Tailscale connections are already
@@ -715,47 +750,52 @@ def get_connection(server, force_new=False, pooled=True):
     policy = _PinPolicy(expected=(server.host_key or ""), reject_on_change=enforce_pin)
     client.set_missing_host_key_policy(policy)
 
+    _connect_client(client, server)
+
+    # First successful contact with a direct-SSH host → pin the key we just saw.
+    if policy.captured and enforce_pin:
+        _persist_host_key(server, policy.captured)
+
+    _keep_warm(client)
+
+    if not pooled:
+        return client      # caller owns it — see the docstring
+    return _pool_client(server, key, client, force_new)
+
+
+def _live_pooled_client(key, force_new):
+    """The pool's client for `key` when it is still alive, else None — a dead one is dropped.
+
+    Always None under force_new, which leaves the pooled entry for _pool_client to replace.
+    """
+    with _conn_lock:
+        if not force_new and key in _connections:
+            conn = _connections[key]
+            try:
+                transport = conn.get_transport()
+                if transport and transport.is_active():
+                    transport.send_ignore()
+                    return conn
+            except Exception:  # nosec B110
+                _log.debug("probing a possibly-dead cached client → reconnect below", exc_info=True)
+            try:
+                conn.close()
+            except Exception:  # nosec B110
+                _log.debug("already closed / unusable; nothing to clean up", exc_info=True)
+            del _connections[key]
+    return None
+
+
+def _connect_client(client, server):
+    """Connect `client` with the server's own auth method; a failure raises ConnectionError.
+
+    HostKeyMismatch is the exception: it surfaces as itself, so its clear "host key changed"
+    message reaches the operator unwrapped.
+    """
     timeout = _ssh_connect_timeout()
     cred = decrypt_secret(server.auth_credential)  # stored encrypted at rest
     try:
-        if server.auth_method == "password" and cred:
-            client.connect(
-                server.host,
-                port=server.port or 22,
-                username=server.username,
-                password=cred,
-                timeout=timeout,
-                allow_agent=False,
-                look_for_keys=False,
-            )
-        elif server.auth_method == "tailscale":
-            # Tailscale SSH — use the hostname as-is (Tailscale resolves it),
-            # connect via the SSH agent (the Tailscale SSH agent handles auth)
-            resolved_host = server.host
-            # If the host is a plain name, try resolving via MagicDNS
-            if "." not in server.host and not server.host.startswith("100."):
-                from panel.ops import tailscale_integration as ts
-                ts_info = ts.get_tailscale_info()
-                if ts_info.dns_name:
-                    domain = ts_info.dns_name.split(".", 1)[1] if "." in ts_info.dns_name else "ts.net"
-                    resolved_host = f"{server.host}.{domain}"
-            client.connect(
-                resolved_host,
-                port=server.port or 22,
-                username=server.username,
-                timeout=timeout,
-                allow_agent=True,
-                look_for_keys=True,
-            )
-        else:
-            key_path = cred or os.path.expanduser("~/.ssh/id_rsa")
-            client.connect(
-                server.host,
-                port=server.port or 22,
-                username=server.username,
-                key_filename=key_path,
-                timeout=timeout,
-            )
+        _connect_by_auth_method(client, server, cred, timeout)
     except HostKeyMismatch:
         raise   # surface the clear "host key changed" message unwrapped
     except paramiko.AuthenticationException:
@@ -767,13 +807,61 @@ def get_connection(server, force_new=False, pooled=True):
     except Exception as e:
         raise ConnectionError(f"SSH connection failed: {e}")
 
-    # First successful contact with a direct-SSH host → pin the key we just saw.
-    if policy.captured and enforce_pin:
-        _persist_host_key(server, policy.captured)
 
-    # Keep the pooled connection warm: a periodic keepalive stops the server/NAT silently
-    # dropping it while idle, so the next command reuses this connection instead of paying a
-    # fresh handshake. Also lets paramiko notice a dead peer promptly.
+def _connect_by_auth_method(client, server, cred, timeout):
+    """client.connect() for a password, Tailscale or key login — whichever the server row uses."""
+    if server.auth_method == "password" and cred:
+        client.connect(
+            server.host,
+            port=server.port or 22,
+            username=server.username,
+            password=cred,
+            timeout=timeout,
+            allow_agent=False,
+            look_for_keys=False,
+        )
+    elif server.auth_method == "tailscale":
+        # Tailscale SSH — use the hostname as-is (Tailscale resolves it),
+        # connect via the SSH agent (the Tailscale SSH agent handles auth)
+        client.connect(
+            _tailscale_connect_host(server),
+            port=server.port or 22,
+            username=server.username,
+            timeout=timeout,
+            allow_agent=True,
+            look_for_keys=True,
+        )
+    else:
+        key_path = cred or os.path.expanduser("~/.ssh/id_rsa")
+        client.connect(
+            server.host,
+            port=server.port or 22,
+            username=server.username,
+            key_filename=key_path,
+            timeout=timeout,
+        )
+
+
+def _tailscale_connect_host(server):
+    """The host paramiko dials for a Tailscale remote: its name, qualified via MagicDNS if plain."""
+    resolved_host = server.host
+    # If the host is a plain name, try resolving via MagicDNS
+    if "." not in server.host and not server.host.startswith("100."):
+        from panel.ops import tailscale_integration as ts
+        ts_info = ts.get_tailscale_info()
+        if ts_info.dns_name:
+            domain = ts_info.dns_name.split(".", 1)[1] if "." in ts_info.dns_name else "ts.net"
+            resolved_host = f"{server.host}.{domain}"
+    return resolved_host
+
+
+def _keep_warm(client):
+    """Turn on paramiko's keepalive for `client` (best-effort).
+
+    Keep the pooled connection warm: a periodic keepalive stops the server/NAT silently dropping
+    it while idle, so the next command reuses this connection instead of paying a fresh handshake.
+    Also lets paramiko notice a dead peer promptly.
+    """
     try:
         _tr = client.get_transport()
         if _tr:
@@ -781,9 +869,9 @@ def get_connection(server, force_new=False, pooled=True):
     except Exception:  # nosec B110
         _log.debug("set_keepalive failed (non-fatal)", exc_info=True)
 
-    if not pooled:
-        return client      # caller owns it — see the docstring
 
+def _pool_client(server, key, client, force_new):
+    """Put a freshly connected `client` in the pool under `key` and return the pool's client."""
     with _conn_lock:
         existing = _connections.get(key)
         if existing is not None and not force_new:
@@ -805,8 +893,10 @@ def get_connection(server, force_new=False, pooled=True):
 
 
 def _persist_host_key(server, keystr):
-    """Store the pinned host key on the server row (best-effort; if there's no DB session
-    in scope it simply pins on the next connection instead)."""
+    """Store the pinned host key on the server row.
+
+    Best-effort; if there's no DB session in scope it simply pins on the next connection instead.
+    """
     try:
         from panel.db.models import db
         server.host_key = keystr
@@ -850,8 +940,9 @@ _SSH_CM_DIR = os.path.join(tempfile.gettempdir(),
 
 
 def _cm_dir_is_ours(path):
-    """Is the control-socket directory one only this account can reach? A real directory (not a
-    symlink), owned by this uid, with no group or other permission bits.
+    """Is the control-socket directory one only this account can reach?
+
+    A real directory (not a symlink), owned by this uid, with no group or other permission bits.
 
     makedirs(exist_ok=True) accepts whatever is already at the path, and the path is a fixed name
     in world-writable /tmp: any local account (a game-server user) can create it first — after a
@@ -859,7 +950,8 @@ def _cm_dir_is_ours(path):
     makes one, and the client does not check who is listening, so a socket planted there would be
     handed every command the panel sends that host (as root on most remotes) and could answer with
     whatever output it liked. Without the check ssh simply connects without multiplexing: slower,
-    never wrong."""
+    never wrong.
+    """
     try:
         st = os.lstat(path)
     except OSError:
@@ -873,13 +965,15 @@ def _cm_dir_is_ours(path):
 
 
 def _ssh_mux_opts():
-    """SSH options that reuse one persistent connection per host. ControlMaster=auto falls back to a
-    fresh connection automatically if the master died, so it's safe. Returns [] if the socket dir
-    can't be created (then ssh just connects normally).
+    """SSH options that reuse one persistent connection per host.
+
+    ControlMaster=auto falls back to a fresh connection automatically if the master died, so it's
+    safe. Returns [] if the socket dir can't be created (then ssh just connects normally).
 
     ControlPersist=10m keeps the master warm well past the poll cadence AND across page
     navigations / short idle gaps, so you rarely pay for a fresh handshake. ServerAlive* pings keep
-    that idle master from being dropped by a NAT/firewall and reap it promptly if the peer dies."""
+    that idle master from being dropped by a NAT/firewall and reap it promptly if the peer dies.
+    """
     try:
         os.makedirs(_SSH_CM_DIR, mode=0o700, exist_ok=True)
     except OSError:
@@ -919,8 +1013,10 @@ SSH_DEST_REFUSED = ("", "invalid ssh login or host", -1)
 
 
 def ssh_destination(user, host):
-    """`user@host` for a system-ssh argv, or raise UnsafeSshDestination. Put SSH_DEST_SEP in the
-    argv immediately before it."""
+    """`user@host` for a system-ssh argv, or raise UnsafeSshDestination.
+
+    Put SSH_DEST_SEP in the argv immediately before it.
+    """
     if not (isinstance(user, str) and _SAFE_GAME_IDENT.match(user)):
         raise UnsafeSshDestination("invalid ssh login")
     if not (isinstance(host, str) and _HOST_RE.match(host)):
@@ -934,10 +1030,12 @@ def _ssh_port_arg(server):
 
 
 def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
-    """Run a command over the system `ssh` binary — used for Tailscale SSH remotes,
-    where auth happens at the tailscaled level (paramiko can't do it, but the ssh CLI,
+    """Run a command over the system `ssh` binary — used for Tailscale SSH remotes.
+
+    That is where auth happens at the tailscaled level (paramiko can't do it, but the ssh CLI,
     running from this tailnet node, can — exactly like PuTTY does). Uses connection
-    multiplexing so back-to-back commands don't each pay a fresh SSH handshake."""
+    multiplexing so back-to-back commands don't each pay a fresh SSH handshake.
+    """
     use_sudo = sudo if sudo is not None else server.sudo_enabled
     # ROOT, not the remote's optional linuxgsm_user — see run_command for what that demotion did.
     remote_cmd = f"sudo bash -c {_quote(command)}" if use_sudo else command
@@ -1044,54 +1142,63 @@ def _drain_exec(chan, max_bytes=_MAX_OUTPUT_BYTES, idle_limit=None):
 
     `idle_limit` (seconds): give up when neither stream has moved and no exit status has arrived
     for that long — close the channel and answer rc -1. None waits as long as the remote keeps the
-    channel open, which is what the loop did before it had a bound."""
+    channel open, which is what the loop did before it had a bound.
+    """
     out, err = bytearray(), bytearray()
-    truncated = False
+    state = {"truncated": False}
     chan.settimeout(0.0)          # non-blocking; we poll and yield rather than block on one stream
     last_moved = time.monotonic()
     while True:
-        moved = False
+        state["moved"] = False
         try:
-            while chan.recv_ready():
-                b = chan.recv(65536)
-                if not b:
-                    break
-                moved = True
-                if len(out) < max_bytes:
-                    out += b[:max_bytes - len(out)]
-                else:
-                    truncated = True
-            while chan.recv_stderr_ready():
-                b = chan.recv_stderr(65536)
-                if not b:
-                    break
-                moved = True
-                if len(err) < max_bytes:
-                    err += b[:max_bytes - len(err)]
-                else:
-                    truncated = True
+            _drain_ready(chan.recv_ready, chan.recv, out, max_bytes, state)
+            _drain_ready(chan.recv_stderr_ready, chan.recv_stderr, err, max_bytes, state)
         except (socket.timeout, OSError):
             pass                  # raced recv_ready(); the loop re-checks
-        if moved:
+        if state["moved"]:
             last_moved = time.monotonic()
             continue
         if chan.exit_status_ready() and not chan.recv_ready() and not chan.recv_stderr_ready():
             break
         if idle_limit is not None and time.monotonic() - last_moved > idle_limit:
-            try:
-                chan.close()
-            except Exception:
-                _log.debug("could not close a silent exec channel", exc_info=True)
-            _log.warning("remote command sent nothing and no exit status for %ds; gave up",
-                         int(idle_limit))
-            msg = b"command timed out: no output and no exit status for %ds" % int(idle_limit)
-            return bytes(out), (bytes(err) + b"\n" + msg).lstrip(), -1, truncated
+            return _drain_gave_up(chan, out, err, idle_limit, state["truncated"])
         time.sleep(0.01)          # eventlet-patched, so this yields rather than burning the worker
-    return bytes(out), bytes(err), chan.recv_exit_status(), truncated
+    return bytes(out), bytes(err), chan.recv_exit_status(), state["truncated"]
+
+
+def _drain_ready(ready, recv, buf, max_bytes, state):
+    """Read one stream of an exec channel into `buf` for as long as `ready()` says it has data.
+
+    Sets state["moved"] on any bytes and state["truncated"] once `buf` is full (the rest is read
+    and discarded), each as it happens — so a recv that raises part-way, which the caller catches,
+    still leaves what this pass had already seen.
+    """
+    while ready():
+        b = recv(65536)
+        if not b:
+            break
+        state["moved"] = True
+        if len(buf) < max_bytes:
+            buf += b[:max_bytes - len(buf)]
+        else:
+            state["truncated"] = True
+
+
+def _drain_gave_up(chan, out, err, idle_limit, truncated):
+    """Close a channel that went silent for `idle_limit` seconds; the rc -1 "timed out" answer."""
+    try:
+        chan.close()
+    except Exception:
+        _log.debug("could not close a silent exec channel", exc_info=True)
+    _log.warning("remote command sent nothing and no exit status for %ds; gave up",
+                 int(idle_limit))
+    msg = b"command timed out: no output and no exit status for %ds" % int(idle_limit)
+    return bytes(out), (bytes(err) + b"\n" + msg).lstrip(), -1, truncated
 
 
 def run_command(server, command, timeout=30, sudo=None, stdin_text=None):
     """Run a command on the remote server via SSH, or locally if it's the local machine.
+
     Returns (stdout, stderr, exit_code). `stdin_text`, when given, is written to the command's
     stdin and then closed — how run_privileged sends a secret that must not be in `command`.
     """
@@ -1123,7 +1230,11 @@ def run_command(server, command, timeout=30, sudo=None, stdin_text=None):
     # so use the system ssh client for those remotes.
     if server.auth_method == "tailscale":
         return _run_via_ssh_cli(server, command, timeout=timeout, sudo=sudo, **_stdin_kw)
+    return _run_via_paramiko(server, command, timeout, sudo, stdin_text)
 
+
+def _run_via_paramiko(server, command, timeout, sudo, stdin_text):
+    """run_command's transport for a direct-SSH remote: one exec on the pooled paramiko client."""
     client = get_connection(server)
     use_sudo = sudo if sudo is not None else server.sudo_enabled
 
@@ -1139,7 +1250,7 @@ def run_command(server, command, timeout=30, sudo=None, stdin_text=None):
     try:
         # nosec B601 - full_cmd is assembled HERE from _quote()d components; there is no
         # interpolation of caller text into it that has not been through _quote first.
-        stdin, stdout, stderr = client.exec_command(full_cmd, timeout=timeout)  # nosec B601  # nosemgrep
+        stdin, stdout, _stderr = client.exec_command(full_cmd, timeout=timeout)  # nosec B601  # nosemgrep
         # EOF on the remote's fd 0, immediately. `stdin` was bound and thrown away: nothing was
         # ever written to it and it was never closed, so the remote process's stdin was an open SSH
         # channel that receives nothing and never ends. Any command that READS stdin — a LinuxGSM
@@ -1185,13 +1296,15 @@ def _quote(s):
 
 
 def discover_linuxgsm_servers(server):
-    """Find LinuxGSM instances ALREADY installed on `server`, across every user account (each
-    LinuxGSM server usually lives under its own Ubuntu user). One sudo round trip: for each
+    """Find LinuxGSM instances ALREADY installed on `server`, across every user account.
+
+    Each LinuxGSM server usually lives under its own Ubuntu user. One sudo round trip: for each
     /home/<user> that has an lgsm/config-lgsm/<gameservername>/ dir and a matching executable
     ./<gameservername> script, report (user, lgsm_name, port). The port is read from the LinuxGSM
     config as a hint — the panel re-reads the authoritative port(s) after import. The caller maps
     <gameservername> to the panel's game_type and skips servers already added. Sudo is required
-    because game-user home dirs aren't world-readable. Best-effort — returns [] on any failure."""
+    because game-user home dirs aren't world-readable. Best-effort — returns [] on any failure.
+    """
     # A single POSIX-sh script so the whole scan is one SSH command. For each instance it also
     # counts what already exists — LinuxGSM backups (~/lgsm/backup), installed mods
     # (~/lgsm/mods/installed-mods.txt), the user's cron lines, and whether an @reboot autostart
@@ -1227,30 +1340,40 @@ def discover_linuxgsm_servers(server):
         return []
     if rc != 0:
         return []
-
-    def _n(x):
-        x = (x or "").strip()
-        return int(x) if x.isdecimal() else 0
-
     found = []
     for line in (out or "").splitlines():
-        if not line.startswith("FOUND|"):
-            continue
-        parts = line.split("|")
-        if len(parts) >= 8:
-            user, lgsm_name = parts[1].strip(), parts[2].strip()
-            port = _n(parts[3])
-            if user and lgsm_name:
-                found.append({
-                    "user": user,
-                    "lgsm_name": lgsm_name,
-                    "port": port or None,
-                    "backups": _n(parts[4]),
-                    "mods": _n(parts[5]),
-                    "cron": _n(parts[6]),
-                    "autostart": _n(parts[7]) > 0,
-                })
+        entry = _discovered_instance(line)
+        if entry is not None:
+            found.append(entry)
     return found
+
+
+def _discovered_count(x):
+    """A FOUND| field as a non-negative int; 0 for anything that is not plain digits."""
+    x = (x or "").strip()
+    return int(x) if x.isdecimal() else 0
+
+
+def _discovered_instance(line):
+    """One `FOUND|user|game|port|backups|mods|cron|autostart` line as a dict, else None."""
+    if not line.startswith("FOUND|"):
+        return None
+    parts = line.split("|")
+    if len(parts) < 8:
+        return None
+    user, lgsm_name = parts[1].strip(), parts[2].strip()
+    port = _discovered_count(parts[3])
+    if not (user and lgsm_name):
+        return None
+    return {
+        "user": user,
+        "lgsm_name": lgsm_name,
+        "port": port or None,
+        "backups": _discovered_count(parts[4]),
+        "mods": _discovered_count(parts[5]),
+        "cron": _discovered_count(parts[6]),
+        "autostart": _discovered_count(parts[7]) > 0,
+    }
 
 
 # The charset models._validate_shell_ident enforces on assignment, applied again here to rows that
@@ -1304,14 +1427,17 @@ def game_user_cmd(user, inner, selfname=None):
     the body is built before this is called, so this is where the name is checked. For a safe name
     the text is byte-for-byte what the builders used to spell by hand — shlex leaves a plain word
     unquoted. Raises UnsafeGameAccount; a caller that returns (out, err, rc) wants
-    shell_as_game_user, which turns the raise into GAME_ACCOUNT_REFUSED."""
+    shell_as_game_user, which turns the raise into GAME_ACCOUNT_REFUSED.
+    """
     _require_game_idents(user, selfname)
     return f"sudo -u {_quote(user)} bash -c {_quote(inner)}"
 
 
 def game_user_exec_cmd(user, argv, selfname=None):
-    """`sudo -u <user> <argv…>` — one program and its arguments, no shell body — held to the same
-    check, every word quoted. Raises UnsafeGameAccount."""
+    """`sudo -u <user> <argv…>` — one program and its arguments, no shell body.
+
+    Held to the same check, every word quoted. Raises UnsafeGameAccount.
+    """
     _require_game_idents(user, selfname)
     return " ".join([f"sudo -u {_quote(user)}"] + [_quote(str(a)) for a in argv])
 
@@ -1320,7 +1446,8 @@ def shell_as_game_user(server, user, sh, timeout=30, selfname=None):
     """Run shell `sh` AS the game account; (out, err, rc).
 
     An unsafe account or script name sends nothing and answers GAME_ACCOUNT_REFUSED. `sh` is
-    panel-built text; pass `selfname` whenever it names the LinuxGSM script (see game_user_cmd)."""
+    panel-built text; pass `selfname` whenever it names the LinuxGSM script (see game_user_cmd).
+    """
     try:
         cmd = game_user_cmd(user, sh, selfname=selfname)
     except UnsafeGameAccount:
@@ -1342,7 +1469,8 @@ def create_game_user(server, user, timeout=30):
 
     The group step is local-only and best-effort: a remote host's sudoers is the operator's to
     arrange and the group means nothing there, and an older helper without the verb must not turn
-    a working server install into a failed one. Returns user-create's own (out, err, rc)."""
+    a working server install into a failed one. Returns user-create's own (out, err, rc).
+    """
     out, err, rc = run_privileged(server, "user-create", [user], timeout=timeout)
     if rc == 0:
         enrol_game_user(server, user)
@@ -1350,9 +1478,11 @@ def create_game_user(server, user, timeout=30):
 
 
 def enrol_game_user(server, user):
-    """Put an EXISTING account in the group the panel's narrow sudoers grant names, on the panel's
-    own host. Returns None when that is done or not needed, else the reason it was not — the
-    helper's own words when it refused (an account that can already reach root is never enrolled).
+    """Put an EXISTING account in the group the panel's narrow sudoers grant names.
+
+    On the panel's own host. Returns None when that is done or not needed, else the reason it was
+    not — the helper's own words when it refused (an account that can already reach root is never
+    enrolled).
 
     Two callers, because an account reaches the panel two ways: create_game_user makes one, and
     discovery IMPORTS one somebody else made. The import used to add a GameServer row and nothing
@@ -1364,7 +1494,8 @@ def enrol_game_user(server, user):
     Not needed: a remote host (the group means nothing there), and the panel's OWN account — the
     helper already accepts the account that invoked it, and would refuse to enrol it anyway, since
     the panel user holds sudo rules of its own. Never raises: the caller's own work has succeeded
-    by the time this runs, and an older helper without the verb must not turn that into a failure."""
+    by the time this runs, and an older helper without the verb must not turn that into a failure.
+    """
     if not is_local_server(server):
         return None
     try:
@@ -1433,7 +1564,8 @@ def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=No
     covered by it, so on a hardened install every server control silently failed while the
     dashboard's port-scan path still showed servers online. See tools/panel-helper:do_lgsm_command.
     Remote hosts keep the shell form: their sudoers is the operator's business, and nothing about
-    it changed."""
+    it changed.
+    """
     selfname = selfname or user
     # Validated HERE, at the one choke point every mods_* call goes through. files.py explains at
     # length why the model's @validates hook is not enough: it fires on ASSIGNMENT and never on a
@@ -1456,21 +1588,35 @@ def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=No
         return "", str(exc), 1
 
     if is_local_server(server) and helper_present():
-        try:
-            argv = _priv.helper_argv("lgsm-command", verb_args)
-        except Exception as exc:
-            # Unreachable while check_args above agrees with it — they read the same table. It is
-            # here because this function's contract is a TUPLE and never a raise: every caller
-            # unpacks (out, err, rc), and several run inside a background thread whose only
-            # report to the user is that rc. A raise here reached them as silence.
-            _log.warning("refusing LinuxGSM action: %s", exc)
-            return "", str(exc), 1
-        out, err, rc = _exec_local_argv(argv, timeout=timeout)
-        # The shell form used `2>&1` and every caller reads LinuxGSM's errors out of stdout, so
-        # merge here too — switching transport must not move a message from one stream to the other.
-        return ("\n".join(x for x in (out, err) if x)).strip(), "", rc
+        return _lgsm_command_via_helper(verb_args, timeout)
 
     # Remote, or a host whose install.sh run predates the helper: the pre-helper shell form.
+    body = _lgsm_shell_body(user, selfname, action, answers, tee_log)
+    # `export`, not a `TERM=xterm cmd` prefix: with `answers` the command is a PIPELINE, and a
+    # prefix would set TERM for printf and leave LinuxGSM emitting `tput: unknown terminal`.
+    inner = f"cd /home/{_quote(user)} && export TERM=xterm && {body}"
+    return shell_as_game_user(server, user, inner, timeout=timeout, selfname=selfname)
+
+
+def _lgsm_command_via_helper(verb_args, timeout):
+    """run_as_game_user on the panel's own host with the helper: the `lgsm-command` verb."""
+    try:
+        argv = _priv.helper_argv("lgsm-command", verb_args)
+    except Exception as exc:
+        # Unreachable while check_args above agrees with it — they read the same table. It is
+        # here because this function's contract is a TUPLE and never a raise: every caller
+        # unpacks (out, err, rc), and several run inside a background thread whose only
+        # report to the user is that rc. A raise here reached them as silence.
+        _log.warning("refusing LinuxGSM action: %s", exc)
+        return "", str(exc), 1
+    out, err, rc = _exec_local_argv(argv, timeout=timeout)
+    # The shell form used `2>&1` and every caller reads LinuxGSM's errors out of stdout, so
+    # merge here too — switching transport must not move a message from one stream to the other.
+    return ("\n".join(x for x in (out, err) if x)).strip(), "", rc
+
+
+def _lgsm_shell_body(user, selfname, action, answers, tee_log):
+    """run_as_game_user's pre-helper shell body: the action, its answers, its log and `2>&1`."""
     body = f"./{_quote(selfname)} {_quote(action)}"
     if answers:
         # `printf` rather than a here-string: the answers are arguments to it, so none of them is
@@ -1497,21 +1643,20 @@ def run_as_game_user(server, user, action, timeout=30, selfname=None, answers=No
                 f"tail -n +1 -f --pid=$pid {logf} 2>/dev/null; wait $pid; exit $?")
     else:
         body = f"{body} 2>&1"
-    # `export`, not a `TERM=xterm cmd` prefix: with `answers` the command is a PIPELINE, and a
-    # prefix would set TERM for printf and leave LinuxGSM emitting `tput: unknown terminal`.
-    inner = f"cd /home/{_quote(user)} && export TERM=xterm && {body}"
-    return shell_as_game_user(server, user, inner, timeout=timeout, selfname=selfname)
+    return body
 
 
 GAME_PRIORITY_NICE = -1   # slight CPU priority edge for game processes (root-only to set negative)
 
 
 def set_game_priority(server, user, nice=GAME_PRIORITY_NICE):
-    """Give a game user's processes a small CPU-priority edge by renicing them. A NEGATIVE nice is
-    root-only, so this runs via sudo (as root, NOT the game user). Best-effort — a failure just
-    leaves the game at its default nice. Called right after a panel start/restart so the freshly
-    spawned game process gets the boost; the periodic keeper (set_game_priority_bulk) then holds it
-    there even for servers the LinuxGSM monitor cron restarts as the game user."""
+    """Give a game user's processes a small CPU-priority edge by renicing them.
+
+    A NEGATIVE nice is root-only, so this runs via sudo (as root, NOT the game user). Best-effort —
+    a failure just leaves the game at its default nice. Called right after a panel start/restart so
+    the freshly spawned game process gets the boost; the periodic keeper (set_game_priority_bulk)
+    then holds it there even for servers the LinuxGSM monitor cron restarts as the game user.
+    """
     try:
         run_privileged(server, "renice-users", [str(int(nice)), user], timeout=15,
                        merge_stderr=False)
@@ -1526,11 +1671,13 @@ _HELPER_REFUSED_ARGS = 2
 
 def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
     """Renice ALL processes of several game users in ONE root command (negative nice needs root).
+
     The panel boosts a game on its own start/restart, but the LinuxGSM monitor cron restarts a
     crashed server AS the game user — which can't lower its own nice — so it drops back to 0. The
     periodic keeper calls this to re-apply the edge to every game, however it (re)started. A user
     with no running processes is a harmless no-op. `users` are validated instance names (no
-    injection risk). Best-effort."""
+    injection risk). Best-effort.
+    """
     users = [u for u in users if u]
     if not users:
         return
@@ -1555,11 +1702,14 @@ def set_game_priority_bulk(server, users, nice=GAME_PRIORITY_NICE):
 
 
 def _tmux_live_socket_sh(selfname):
-    """Shell that sets $SOCK to the tmux socket holding a LIVE `<selfname>` session. LinuxGSM makes a
-    fresh `<selfname>-<random>` socket on every (re)start and the dead ones linger, so picking the
-    first match blindly can land on a STALE socket — then send-keys/capture-pane silently no-op,
-    which breaks console reads AND kick/ban/say for any server that has ever restarted. Iterate the
-    matches and take the one with a live session; emit NO_SESSION + exit 3 when none is live."""
+    """Shell that sets $SOCK to the tmux socket holding a LIVE `<selfname>` session.
+
+    LinuxGSM makes a fresh `<selfname>-<random>` socket on every (re)start and the dead ones linger,
+    so picking the first match blindly can land on a STALE socket — then send-keys/capture-pane
+    silently no-op, which breaks console reads AND kick/ban/say for any server that has ever
+    restarted. Iterate the matches and take the one with a live session; emit NO_SESSION + exit 3
+    when none is live.
+    """
     return (
         'D=/tmp/tmux-$(id -u); SOCK=""; '
         f'for s in $(ls -1 "$D" 2>/dev/null | grep "^{selfname}-"); do '
@@ -1575,7 +1725,8 @@ def send_console_command(server, user, command, timeout=20, selfname=None):
     private socket `<selfname>-<random>` in the user's tmux dir. We drive that
     with `tmux send-keys`, which works for EVERY game — including ones (e.g. cod)
     that don't expose LinuxGSM's own `send` subcommand. Returns rc 3 with
-    NO_SESSION when the server isn't running (no tmux session to send to)."""
+    NO_SESSION when the server isn't running (no tmux session to send to).
+    """
     selfname = selfname or user
     # The same guard run_as_game_user applies, for the same reason it gives at length: the model's
     # @validates hook fires on ASSIGNMENT and never on a row loaded from the database, so a row
@@ -1599,7 +1750,7 @@ def remote_public_ip(server):
                 "curl -fsS --max-time 5 https://ifconfig.me",
                 "dig +short myip.opendns.com @resolver1.opendns.com"):
         try:
-            out, _, rc = run_command(server, cmd, timeout=8)
+            out, _, _ = run_command(server, cmd, timeout=8)
             ip = (out or "").strip().split("\n")[0].strip()
             if re.match(r"^\d{1,3}(\.\d{1,3}){3}\Z", ip):
                 return ip
@@ -1659,13 +1810,31 @@ def host_live_metrics(server, force=False):
     version, keyed on the host alone, so which games a particular viewer can see does not change
     whether the sample is reusable.
 
-    No sudo, exactly as server_live_metrics established: every part reads world-readable state."""
+    No sudo, exactly as server_live_metrics established: every part reads world-readable state.
+    """
     now = time.time()
     ck = getattr(server, "id", None)
     if not force:
         hit = _host_metrics_cache.get(ck)
         if hit and hit[0] > now:
             return hit[1]
+    out, _, _ = run_command(server, _host_sample_cmd(), timeout=20, sudo=False)
+
+    host, acc = _parse_host_sample(out)
+    cpu_lines = acc["cpu"]
+    total_delta = 0
+    if len(cpu_lines) >= 2 and len(cpu_lines[0]) >= 7 and len(cpu_lines[1]) >= 7:
+        total_delta = _cpu_sample(cpu_lines[0], cpu_lines[1], host)
+    _ram_disk_percent(host)
+
+    result = {"host": host, "users": _host_users(acc, host, total_delta), "ports": acc["ports"]}
+    if out:   # cache a real read only — an empty result is an SSH blip, not a host at 0%
+        _host_metrics_cache[ck] = (now + _LIVE_METRICS_TTL, result)
+    return result
+
+
+def _host_sample_cmd():
+    """host_live_metrics' one command: two CPU samples 0.25s apart, then every other figure."""
     parts = [
         "grep '^cpu ' /proc/stat",
         _JIFFIES_BY_USER % "GJA",
@@ -1683,50 +1852,107 @@ def host_live_metrics(server, force=False):
          "if($2>m[$1]) m[$1]=$2} END{for(u in m) print \"GUP\", u, m[u]}'"),
         "ss -H -ltnu 2>/dev/null | awk '{n=split($5,a,\":\"); print \"PORT\", a[n]}' | sort -u",
     ]
-    out, _, _ = run_command(server, " ; ".join(parts), timeout=20, sudo=False)
+    return " ; ".join(parts)
 
-    host = {"cpu_percent": 0.0, "ram_used": 0, "ram_total": 0, "ram_percent": 0.0,
-            "disk_used": 0, "disk_total": 0, "disk_percent": 0.0, "load": [0, 0, 0],
-            "cores": 1, "uptime_secs": 0}
-    gja, gjb, ram, procs, up, ports = {}, {}, {}, {}, {}, set()
-    cpu_lines = []
+
+# ── Parsing the two samplers' output, one tagged line at a time ─────────────────────────────────
+# Each handler takes (fields, figures, acc): `figures` is the dict being returned (the host's, or
+# the one game's), `acc` holds what is combined only after every line is read. A line whose tag has
+# no handler, or whose handler's shape check fails, is skipped — as the if/elif chains these
+# replace skipped it.
+
+def _put_mem(f, m, _acc=None):
+    if len(f) >= 3:
+        m["ram_total"], m["ram_used"] = int(f[1]), int(f[2])
+
+
+def _put_load(f, m, _acc=None):
+    if len(f) >= 4:
+        m["load"] = [float(f[1]), float(f[2]), float(f[3])]
+
+
+def _put_disk(f, m, _acc=None):
+    if len(f) >= 3:
+        m["disk_total"], m["disk_used"] = int(f[1]), int(f[2])
+
+
+def _hs_cpu(f, _host, acc):
+    if len(f) >= 8:
+        acc["cpu"].append([int(x) for x in f[1:8] if x.lstrip("-").isdecimal()])
+
+
+def _hs_jiffies(f, _host, acc):
+    if len(f) >= 3 and f[2].lstrip("-").isdecimal():
+        acc[f[0]][f[1]] = int(f[2])          # f[0] is GJA or GJB
+
+
+def _hs_host_int(f, host, _acc):
+    if len(f) > 1 and f[1].isdecimal():
+        host[{"CORES": "cores", "UPTIME": "uptime_secs"}[f[0]]] = int(f[1])
+
+
+def _hs_gameram(f, _host, acc):
+    if len(f) >= 4 and f[2].isdecimal() and f[3].isdecimal():
+        acc["ram"][f[1]], acc["procs"][f[1]] = int(f[2]), int(f[3])
+
+
+def _hs_gup(f, _host, acc):
+    if len(f) >= 3 and f[2].isdecimal():
+        acc["up"][f[1]] = int(f[2])
+
+
+def _hs_port(f, _host, acc):
+    if len(f) >= 2 and f[1].isdecimal():
+        acc["ports"].add(int(f[1]))
+
+
+_HOST_SAMPLE_LINES = {
+    "cpu": _hs_cpu, "GJA": _hs_jiffies, "GJB": _hs_jiffies, "MEM": _put_mem, "LOAD": _put_load,
+    "DISK": _put_disk, "CORES": _hs_host_int, "UPTIME": _hs_host_int, "GAMERAM": _hs_gameram,
+    "GUP": _hs_gup, "PORT": _hs_port,
+}
+
+
+def _parse_tagged(out, table, figures, acc):
+    """Hand every non-blank line of `out` to its tag's handler in `table`."""
     for line in (out or "").splitlines():
         f = line.split()
         if not f:
             continue
-        tag = f[0]
-        if tag == "cpu" and len(f) >= 8:
-            cpu_lines.append([int(x) for x in f[1:8] if x.lstrip("-").isdecimal()])
-        elif tag in ("GJA", "GJB") and len(f) >= 3 and f[2].lstrip("-").isdecimal():
-            (gja if tag == "GJA" else gjb)[f[1]] = int(f[2])
-        elif tag == "MEM" and len(f) >= 3:
-            host["ram_total"], host["ram_used"] = int(f[1]), int(f[2])
-        elif tag == "LOAD" and len(f) >= 4:
-            host["load"] = [float(f[1]), float(f[2]), float(f[3])]
-        elif tag == "DISK" and len(f) >= 3:
-            host["disk_total"], host["disk_used"] = int(f[1]), int(f[2])
-        elif tag == "CORES" and len(f) > 1 and f[1].isdecimal():
-            host["cores"] = int(f[1])
-        elif tag == "UPTIME" and len(f) > 1 and f[1].isdecimal():
-            host["uptime_secs"] = int(f[1])
-        elif tag == "GAMERAM" and len(f) >= 4 and f[2].isdecimal() and f[3].isdecimal():
-            ram[f[1]], procs[f[1]] = int(f[2]), int(f[3])
-        elif tag == "GUP" and len(f) >= 3 and f[2].isdecimal():
-            up[f[1]] = int(f[2])
-        elif tag == "PORT" and len(f) >= 2 and f[1].isdecimal():
-            ports.add(int(f[1]))
+        handler = table.get(f[0])
+        if handler is not None:
+            handler(f, figures, acc)
 
-    total_delta = 0
-    if len(cpu_lines) >= 2 and len(cpu_lines[0]) >= 7 and len(cpu_lines[1]) >= 7:
-        a, b = cpu_lines[0], cpu_lines[1]
-        idle, total_delta = b[3] - a[3], sum(b) - sum(a)
-        if total_delta > 0:
-            host["cpu_percent"] = round((1 - idle / total_delta) * 100, 1)
-    if host["ram_total"]:
-        host["ram_percent"] = round(host["ram_used"] / host["ram_total"] * 100, 1)
-    if host["disk_total"]:
-        host["disk_percent"] = round(host["disk_used"] / host["disk_total"] * 100, 1)
 
+def _parse_host_sample(out):
+    """(host figures, per-user tables) from host_live_metrics' output."""
+    host = {"cpu_percent": 0.0, "ram_used": 0, "ram_total": 0, "ram_percent": 0.0,
+            "disk_used": 0, "disk_total": 0, "disk_percent": 0.0, "load": [0, 0, 0],
+            "cores": 1, "uptime_secs": 0}
+    acc = {"GJA": {}, "GJB": {}, "ram": {}, "procs": {}, "up": {}, "ports": set(), "cpu": []}
+    _parse_tagged(out, _HOST_SAMPLE_LINES, host, acc)
+    return host, acc
+
+
+def _cpu_sample(a, b, m):
+    """Set m["cpu_percent"] from two /proc/stat `cpu` samples; returns the jiffies between them."""
+    idle, total_delta = b[3] - a[3], sum(b) - sum(a)
+    if total_delta > 0:
+        m["cpu_percent"] = round((1 - idle / total_delta) * 100, 1)
+    return total_delta
+
+
+def _ram_disk_percent(m):
+    """Fill m's ram_percent and disk_percent from the byte counts, where there is a total."""
+    if m["ram_total"]:
+        m["ram_percent"] = round(m["ram_used"] / m["ram_total"] * 100, 1)
+    if m["disk_total"]:
+        m["disk_percent"] = round(m["disk_used"] / m["disk_total"] * 100, 1)
+
+
+def _host_users(acc, host, total_delta):
+    """{username: that user's game figures} for every user any per-user sampler reported."""
+    gja, gjb, ram, procs, up = acc["GJA"], acc["GJB"], acc["ram"], acc["procs"], acc["up"]
     users = {}
     for name in set(gja) | set(gjb) | set(ram) | set(up):
         ram_mb = int(ram.get(name, 0) / 1024)
@@ -1737,10 +1963,7 @@ def host_live_metrics(server, force=False):
                        "game_procs": procs.get(name, 0), "game_uptime_secs": up.get(name, 0),
                        "game_ram_percent": (round(ram_mb * 1024 * 1024 / host["ram_total"] * 100, 1)
                                             if host["ram_total"] else 0.0)}
-    result = {"host": host, "users": users, "ports": ports}
-    if out:   # cache a real read only — an empty result is an SSH blip, not a host at 0%
-        _host_metrics_cache[ck] = (now + _LIVE_METRICS_TTL, result)
-    return result
+    return users
 
 
 def metrics_for_game(sample, short_name, game_port):
@@ -1754,14 +1977,15 @@ def metrics_for_game(sample, short_name, game_port):
 
 
 def server_live_metrics(server, short_name=None, game_port=None, force=False):
-    """One-round-trip live metrics for polling. Reports both whole-VPS figures
-    (CPU%% via /proc/stat delta, RAM, disk, load, uptime) AND — when a game user
-    is given — that GAME's own CPU%%, RAM, process count and uptime, plus a
-    port-listening online check. Per-game CPU is sampled by diffing the game
-    processes' utime+stime jiffies across the same 0.25s window as the VPS CPU
-    sample, expressed as a share of total machine capacity (same basis as
-    cpu_percent). Kept to a single SSH command for speed, and cached for a couple
-    of seconds so two open tabs/viewers of one server don't each run the sample."""
+    """One-round-trip live metrics for polling.
+
+    Reports both whole-VPS figures (CPU%% via /proc/stat delta, RAM, disk, load, uptime) AND — when
+    a game user is given — that GAME's own CPU%%, RAM, process count and uptime, plus a
+    port-listening online check. Per-game CPU is sampled by diffing the game processes' utime+stime
+    jiffies across the same 0.25s window as the VPS CPU sample, expressed as a share of total
+    machine capacity (same basis as cpu_percent). Kept to a single SSH command for speed, and cached
+    for a couple of seconds so two open tabs/viewers of one server don't each run the sample.
+    """
     _now = time.time()
     _ck = (getattr(server, "id", None), short_name, game_port)
     if not force:
@@ -1784,25 +2008,41 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
         except (TypeError, ValueError):
             _log.warning("live metrics: refusing to interpolate game port %r", game_port)
             game_port = None
-    # Robust per-process jiffie sum (utime+stime). /proc/pid/stat's comm field can
-    # contain spaces/parens, so split on the LAST ')' before reading numeric fields.
-    def _gjiffies(tag):
-        # b[12]+b[13], NOT b[13]+b[14]. awk's split(s, b, " ") drops the leading blank, so after the
-        # comm field b[1] is STATE — which puts utime at 12 and stime at 13. The old indices summed
-        # stime + CUTIME instead: cutime only counts reaped children, and a game server spends
-        # almost everything in user time, so this reported ~0% CPU per game no matter how hard a
-        # server was working. Verified against a process burning a known second of CPU: b[12]=99,
-        # b[13]=0, b[14]=0.
-        return (f"for p in $(ps -u {short_name} -o pid= 2>/dev/null); do "
-                f"awk '{{n=split($0,a,\")\"); split(a[n],b,\" \"); print {_STAT_JIFFIES_EXPR}}}' "
-                f"/proc/$p/stat 2>/dev/null; done | awk '{{s+=$1}} END{{print \"{tag}\",s+0}}'")
+    # No sudo: every part of this reads world-readable state — /proc/stat, /proc/loadavg,
+    # /proc/uptime, free, df, nproc, `ps -u <user>` and a listening-socket count. It was asking for
+    # root it never needed, and on the panel's own host that was a local sudo call on every poll.
+    out, _, _ = run_command(server, _game_sample_cmd(short_name, game_port), timeout=15, sudo=False)
+    m = _parse_game_sample(out)
+    if out:   # cache a real read only (an empty result == SSH blip; don't pin stale zeros)
+        _live_metrics_cache[_ck] = (_now + _LIVE_METRICS_TTL, m)
+    return m
 
+
+def _game_jiffies_cmd(short_name, tag):
+    """Shell printing `<tag> <sum>`: the jiffies (utime+stime) every process of `short_name` used.
+
+    Robust per-process jiffie sum (utime+stime). /proc/pid/stat's comm field can contain
+    spaces/parens, so split on the LAST ')' before reading numeric fields.
+    """
+    # b[12]+b[13], NOT b[13]+b[14]. awk's split(s, b, " ") drops the leading blank, so after the
+    # comm field b[1] is STATE — which puts utime at 12 and stime at 13. The old indices summed
+    # stime + CUTIME instead: cutime only counts reaped children, and a game server spends
+    # almost everything in user time, so this reported ~0% CPU per game no matter how hard a
+    # server was working. Verified against a process burning a known second of CPU: b[12]=99,
+    # b[13]=0, b[14]=0.
+    return (f"for p in $(ps -u {short_name} -o pid= 2>/dev/null); do "
+            f"awk '{{n=split($0,a,\")\"); split(a[n],b,\" \"); print {_STAT_JIFFIES_EXPR}}}' "
+            f"/proc/$p/stat 2>/dev/null; done | awk '{{s+=$1}} END{{print \"{tag}\",s+0}}'")
+
+
+def _game_sample_cmd(short_name, game_port):
+    """server_live_metrics' one command; `short_name` and `game_port` are already validated."""
     parts = ["grep '^cpu ' /proc/stat"]
     if short_name:
-        parts.append(_gjiffies("GJA"))
+        parts.append(_game_jiffies_cmd(short_name, "GJA"))
     parts += ["sleep 0.25", "grep '^cpu ' /proc/stat"]
     if short_name:
-        parts.append(_gjiffies("GJB"))
+        parts.append(_game_jiffies_cmd(short_name, "GJB"))
     parts += [
         "free -b | awk '/Mem:/{print \"MEM\",$2,$3}'",
         "awk '{print \"LOAD\",$1,$2,$3}' /proc/loadavg",
@@ -1815,49 +2055,58 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
         parts.append(f"echo GUP $(ps -u {short_name} -o etimes= --no-headers 2>/dev/null | sort -rn | head -1)")
     if game_port:
         parts.append(f"echo PORT $(ss -H -ltnu 'sport = :{game_port}' 2>/dev/null | wc -l)")
-    # No sudo: every part of this reads world-readable state — /proc/stat, /proc/loadavg,
-    # /proc/uptime, free, df, nproc, `ps -u <user>` and a listening-socket count. It was asking for
-    # root it never needed, and on the panel's own host that was a local sudo call on every poll.
-    out, _, _ = run_command(server, " ; ".join(parts), timeout=15, sudo=False)
+    return " ; ".join(parts)
 
+
+def _gs_cpu(f, _m, acc):
+    if len(f) >= 8:
+        acc["cpu"].append([int(x) for x in f[1:8]])
+
+
+def _gs_jiffies(f, _m, acc):
+    if len(f) >= 2:
+        acc[f[0]] = int(f[1]) if f[1].lstrip("-").isdecimal() else 0     # f[0] is GJA or GJB
+
+
+def _gs_cores(f, m, _acc):
+    m["cores"] = int(f[1]) if len(f) > 1 and f[1].isdecimal() else 1
+
+
+def _gs_uptime(f, m, _acc):
+    m["uptime_secs"] = int(f[1]) if len(f) > 1 and f[1].isdecimal() else 0
+
+
+def _gs_gameram(f, m, _acc):
+    if len(f) >= 3:
+        m["game_ram_mb"] = int(int(f[1]) / 1024)
+        m["game_procs"] = int(f[2])
+
+
+def _gs_gup(f, m, _acc):
+    m["game_uptime_secs"] = int(f[1]) if len(f) > 1 and f[1].isdecimal() else 0
+
+
+def _gs_port(f, m, _acc):
+    m["port_open"] = len(f) > 1 and f[1].isdecimal() and int(f[1]) > 0
+
+
+_GAME_SAMPLE_LINES = {
+    "cpu": _gs_cpu, "GJA": _gs_jiffies, "GJB": _gs_jiffies, "MEM": _put_mem, "LOAD": _put_load,
+    "DISK": _put_disk, "CORES": _gs_cores, "UPTIME": _gs_uptime, "GAMERAM": _gs_gameram,
+    "GUP": _gs_gup, "PORT": _gs_port,
+}
+
+
+def _parse_game_sample(out):
+    """server_live_metrics' figures from its command's output."""
     m = {"cpu_percent": 0.0, "ram_used": 0, "ram_total": 0, "ram_percent": 0.0,
          "disk_used": 0, "disk_total": 0, "disk_percent": 0.0, "load": [0, 0, 0],
          "cores": 1, "uptime_secs": 0, "game_ram_mb": 0, "game_procs": 0,
          "game_cpu_percent": 0.0, "game_uptime_secs": 0, "port_open": False}
-    cpu_lines = []
-    gja = gjb = None
-    for line in (out or "").splitlines():
-        f = line.split()
-        if not f:
-            continue
-        if f[0] == "cpu" and len(f) >= 8:
-            cpu_lines.append([int(x) for x in f[1:8]])
-        elif f[0] == "GJA" and len(f) >= 2:
-            gja = int(f[1]) if f[1].lstrip("-").isdecimal() else 0
-        elif f[0] == "GJB" and len(f) >= 2:
-            gjb = int(f[1]) if f[1].lstrip("-").isdecimal() else 0
-        elif f[0] == "MEM" and len(f) >= 3:
-            m["ram_total"], m["ram_used"] = int(f[1]), int(f[2])
-        elif f[0] == "LOAD" and len(f) >= 4:
-            m["load"] = [float(f[1]), float(f[2]), float(f[3])]
-        elif f[0] == "DISK" and len(f) >= 3:
-            m["disk_total"], m["disk_used"] = int(f[1]), int(f[2])
-        elif f[0] == "CORES":
-            m["cores"] = int(f[1]) if len(f) > 1 and f[1].isdecimal() else 1
-        elif f[0] == "UPTIME":
-            m["uptime_secs"] = int(f[1]) if len(f) > 1 and f[1].isdecimal() else 0
-        elif f[0] == "GAMERAM" and len(f) >= 3:
-            m["game_ram_mb"] = int(int(f[1]) / 1024); m["game_procs"] = int(f[2])
-        elif f[0] == "GUP":
-            m["game_uptime_secs"] = int(f[1]) if len(f) > 1 and f[1].isdecimal() else 0
-        elif f[0] == "PORT":
-            m["port_open"] = len(f) > 1 and f[1].isdecimal() and int(f[1]) > 0
-    total_delta = 0
-    if len(cpu_lines) >= 2:
-        a, b = cpu_lines[0], cpu_lines[1]
-        idle = (b[3] - a[3]); total_delta = sum(b) - sum(a)
-        if total_delta > 0:
-            m["cpu_percent"] = round((1 - idle / total_delta) * 100, 1)
+    acc = {"cpu": [], "GJA": None, "GJB": None}
+    _parse_tagged(out, _GAME_SAMPLE_LINES, m, acc)
+    cpu_lines, gja, gjb = acc["cpu"], acc["GJA"], acc["GJB"]
+    total_delta = _cpu_sample(cpu_lines[0], cpu_lines[1], m) if len(cpu_lines) >= 2 else 0
     if gja is not None and gjb is not None and total_delta > 0:
         m["game_cpu_percent"] = round(max(0, gjb - gja) / total_delta * 100, 1)
     if m["ram_total"]:
@@ -1865,16 +2114,16 @@ def server_live_metrics(server, short_name=None, game_port=None, force=False):
         m["game_ram_percent"] = round(m["game_ram_mb"] * 1024 * 1024 / m["ram_total"] * 100, 1)
     if m["disk_total"]:
         m["disk_percent"] = round(m["disk_used"] / m["disk_total"] * 100, 1)
-    if out:   # cache a real read only (an empty result == SSH blip; don't pin stale zeros)
-        _live_metrics_cache[_ck] = (_now + _LIVE_METRICS_TTL, m)
     return m
 
 
 def remote_live_metrics(server):
-    """Per-core + overall CPU%% and RAM/swap for a server, in the SAME shape as
-    system_ops.live_metrics() — so the remote management page can reuse the Panel
-    Server's live bar graphs. One SSH round trip (two /proc/stat samples 0.25s
-    apart + /proc/meminfo). For the local machine, delegates to system_ops."""
+    """Per-core + overall CPU%% and RAM/swap for a server.
+
+    In the SAME shape as system_ops.live_metrics() — so the remote management page can reuse the
+    Panel Server's live bar graphs. One SSH round trip (two /proc/stat samples 0.25s apart +
+    /proc/meminfo). For the local machine, delegates to system_ops.
+    """
     if is_local_server(server):
         try:
             from panel.ops import system_ops
@@ -1885,37 +2134,10 @@ def remote_live_metrics(server):
            "echo ===MEM; grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo; "
            "echo ===DISK; df -PB1 /")
     out, _, _lm_rc = run_command(server, cmd, timeout=12)
-    section = None
-    A, B, mem = {}, {}, {}
-    disk_total = disk_used = 0
-    for line in (out or "").splitlines():
-        if line.startswith("==="):
-            section = line[3:]
-            continue
-        parts = line.split()
-        if not parts:
-            continue
-        if section in ("A", "B") and parts[0].startswith("cpu") and len(parts) >= 8:
-            (A if section == "A" else B)[parts[0]] = [int(x) for x in parts[1:8]]
-        elif section == "MEM" and len(parts) >= 2:
-            try:
-                mem[parts[0].rstrip(":")] = int(parts[1]) * 1024  # kB → bytes
-            except ValueError:
-                _log.debug("remote_live_metrics: ignored non-fatal error", exc_info=True)
-        elif section == "DISK" and len(parts) >= 4 and parts[1].isdecimal():
-            # df -PB1 data row: Filesystem 1B-blocks Used Available Use% Mounted (skip the header)
-            disk_total, disk_used = int(parts[1]), int(parts[2])
-
-    def _pct(n):
-        if n not in A or n not in B:
-            return 0.0
-        idle = B[n][3] - A[n][3]
-        total = sum(B[n]) - sum(A[n])
-        return round((1 - idle / total) * 100, 1) if total > 0 else 0.0
-
-    core_names = sorted((n for n in A if n != "cpu" and n.startswith("cpu")),
-                        key=lambda x: int(x[3:]) if x[3:].isdecimal() else 0)
-    cores = [_pct(n) for n in core_names]
+    acc = _parse_live_sections(out)
+    A, B, mem = acc["A"], acc["B"], acc["MEM"]
+    disk_total, disk_used = acc["disk"]
+    cores = [_cpu_pct(A, B, n) for n in _cpu_core_names(A)]
     ram_total = mem.get("MemTotal", 0)
     ram_used = ram_total - mem.get("MemAvailable", 0)
     swap_total = mem.get("SwapTotal", 0)
@@ -1931,16 +2153,69 @@ def remote_live_metrics(server):
     read_ok = bool(_lm_rc == 0 and "cpu" in A and "cpu" in B and ram_total)
     return {
         "read_ok": read_ok,
-        "cpu_overall": _pct("cpu"),
+        "cpu_overall": _cpu_pct(A, B, "cpu"),
         "cpu_cores": cores,
         "core_count": len(cores),
         "ram_used": ram_used, "ram_total": ram_total,
-        "ram_percent": round(ram_used / ram_total * 100, 1) if ram_total else 0,
+        "ram_percent": _share(ram_used, ram_total),
         "swap_used": swap_used, "swap_total": swap_total,
-        "swap_percent": round(swap_used / swap_total * 100, 1) if swap_total else 0,
+        "swap_percent": _share(swap_used, swap_total),
         "disk_used": disk_used, "disk_total": disk_total,
-        "disk_percent": round(disk_used / disk_total * 100, 1) if disk_total else 0,
+        "disk_percent": _share(disk_used, disk_total),
     }
+
+
+def _share(used, total):
+    """`used` as a percentage of `total`, to one place — 0 (an int, as it always was) for no total."""
+    return round(used / total * 100, 1) if total else 0
+
+
+def _parse_live_sections(out):
+    """remote_live_metrics' output by section: {"A"/"B": {cpuN: jiffies}, "MEM": {...}, "disk"}."""
+    section = None
+    acc = {"A": {}, "B": {}, "MEM": {}, "disk": (0, 0)}
+    for line in (out or "").splitlines():
+        if line.startswith("==="):
+            section = line[3:]
+            continue
+        parts = line.split()
+        if parts:
+            _live_section_line(section, parts, acc)
+    return acc
+
+
+def _live_section_line(section, parts, acc):
+    """Fold one non-blank line of `section` into `acc`; a line of no known shape is skipped."""
+    if section in ("A", "B") and parts[0].startswith("cpu") and len(parts) >= 8:
+        acc[section][parts[0]] = [int(x) for x in parts[1:8]]
+    elif section == "MEM" and len(parts) >= 2:
+        _live_mem_line(parts, acc["MEM"])
+    elif section == "DISK" and len(parts) >= 4 and parts[1].isdecimal():
+        # df -PB1 data row: Filesystem 1B-blocks Used Available Use% Mounted (skip the header)
+        acc["disk"] = (int(parts[1]), int(parts[2]))
+
+
+def _live_mem_line(parts, mem):
+    """One /proc/meminfo line into `mem`, in bytes; a value that is not a number is skipped."""
+    try:
+        mem[parts[0].rstrip(":")] = int(parts[1]) * 1024  # kB → bytes
+    except ValueError:
+        _log.debug("remote_live_metrics: ignored non-fatal error", exc_info=True)
+
+
+def _cpu_pct(A, B, n):
+    """CPU% of /proc/stat line `n` between the A and B samples; 0.0 when either lacks it."""
+    if n not in A or n not in B:
+        return 0.0
+    idle = B[n][3] - A[n][3]
+    total = sum(B[n]) - sum(A[n])
+    return round((1 - idle / total) * 100, 1) if total > 0 else 0.0
+
+
+def _cpu_core_names(A):
+    """The per-core `cpuN` names in sample A, in core order."""
+    return sorted((n for n in A if n != "cpu" and n.startswith("cpu")),
+                  key=lambda x: int(x[3:]) if x[3:].isdecimal() else 0)
 
 
 # Drops the one line whose content — leading and trailing whitespace ignored — equals
@@ -1953,9 +2228,10 @@ _CRON_DROP_AWK = (
 
 
 def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line=None):
-    """Reliably rewrite `user`'s crontab: keep every existing line except those
-    matched by `grep_args` (arguments passed to grep, already quoted, e.g.
-    "-vF <pat>"; empty keeps all), then append `add_lines`.
+    """Reliably rewrite `user`'s crontab.
+
+    Keep every existing line except those matched by `grep_args` (arguments passed to grep, already
+    quoted, e.g. "-vF <pat>"; empty keeps all), then append `add_lines`.
 
     Installs via `crontab -u user FILE` (a tempfile) instead of piping the new
     content to `crontab -u user -`. The stdin-pipe form is unreliable under
@@ -1973,14 +2249,15 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
     delete_cron_job reported success and removed nothing, and update_cron_job appended its rewrite
     beside the original, so the job ran on two schedules. Compared through awk's ENVIRON rather
     than `-v`, because `-v` processes backslash escapes in the value and a cron command may
-    contain one."""
+    contain one.
+    """
     env_pre = ""
     if drop_line is not None:
         env_pre = "CRON_DROP=%s; export CRON_DROP; " % _quote(str(drop_line).strip())
         filt = _CRON_DROP_AWK
     else:
         filt = f"grep {grep_args} " if grep_args else "cat "
-    appends = "".join(f'printf \'%s\\n\' {_quote(l)} >> "$T"; ' for l in (add_lines or []))
+    appends = "".join(f'printf \'%s\\n\' {_quote(ln)} >> "$T"; ' for ln in (add_lines or []))
     # Validated and quoted HERE, for the reason run_as_game_user spells out above: the model's
     # @validates hook fires on ASSIGNMENT and never on a row loaded from the database, so a row
     # written before that validator existed — or restored from a tampered backup — reaches this
@@ -2016,15 +2293,17 @@ def _rewrite_crontab(server, user, grep_args, add_lines, extra_pre="", drop_line
 
 
 def set_autostart(server, user, enabled, selfname=None):
-    """Enable/disable autostart via LinuxGSM's `monitor` cron (every 5 min), NOT a
-    `@reboot ... start` line.
+    """Enable/disable autostart via LinuxGSM's `monitor` cron (every 5 min).
+
+    NOT a `@reboot ... start` line.
 
     `monitor` keeps a server in its INTENDED state: `start` writes a persistent lockfile and
     `stop` removes it, so monitor brings back one that should be running — including after a
     reboot, since the lockfile survives — and leaves a deliberately-stopped server (no lockfile)
     down. A `@reboot start` would instead force-start even a server the operator had stopped, so
     we no longer use it and strip any legacy one. Enabling ensures the monitor line exists;
-    disabling removes it."""
+    disabling removes it.
+    """
     selfname = selfname or user
     # The script name goes into the crontab LINE, which cron runs through /bin/sh as the account:
     # _rewrite_crontab checks the account, and only the caller knows what the line names.
@@ -2040,9 +2319,11 @@ def set_autostart(server, user, enabled, selfname=None):
 
 
 def install_game_cron(server, user, selfname=None, supported=None):
-    """Set up LinuxGSM maintenance cron for a game instance — only for the commands
-    that game supports. Also strips any legacy '@reboot ... start' line — autostart is now the
-    monitor cron below (see set_autostart), which respects the server's intended state. Idempotent.
+    """Set up LinuxGSM maintenance cron for a game instance.
+
+    Only for the commands that game supports. Also strips any legacy '@reboot ... start' line —
+    autostart is now the monitor cron below (see set_autostart), which respects the server's
+    intended state. Idempotent.
       monitor      every 5 min   (autostart + restart if crashed)
       mods-update  daily 05:00   (before update)
       update       daily 05:15
@@ -2102,12 +2383,15 @@ _GAMEDIG_HOST_TTL = 3600
 
 
 def _gamedig_host(server):
-    """The address to point gamedig at for a game on `server` (a remote). A Source-engine server
-    replies to an A2S query FROM the host's real IP, so a query sent to 127.0.0.1 comes back from a
-    different source address and gamedig discards it ('Failed all attempts') even though the server
-    is up and answering fine on its real IP. So query the host's primary (default-route) IP — a
-    0.0.0.0-bound server answers there. Cached per remote for an hour; falls back to 127.0.0.1 when
-    the IP can't be resolved (so any host where loopback does answer keeps working). Never raises."""
+    """The address to point gamedig at for a game on `server` (a remote).
+
+    A Source-engine server replies to an A2S query FROM the host's real IP, so a query sent to
+    127.0.0.1 comes back from a different source address and gamedig discards it ('Failed all
+    attempts') even though the server is up and answering fine on its real IP. So query the host's
+    primary (default-route) IP — a 0.0.0.0-bound server answers there. Cached per remote for an
+    hour; falls back to 127.0.0.1 when the IP can't be resolved (so any host where loopback does
+    answer keeps working). Never raises.
+    """
     rid = getattr(server, "id", None)
     now = time.time()
     hit = _gamedig_host_cache.get(rid)
@@ -2165,6 +2449,7 @@ def gamedig_cron_call():
 def set_daily_restart(server, user, selfname=None, game_type=None, port=None, enabled=True,
                       hour=5, minute=0):
     """Enable/disable a daily restart that only fires when the server is EMPTY.
+
     A daily cron sets a 'restart-pending' flag; an hourly cron checks the player
     count (via gamedig) and restarts + clears the flag once it hits 0. So if players
     are on at the daily time, it waits and rechecks each hour until they leave.
@@ -2172,7 +2457,8 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
     `hour`/`minute` are in the HOST's local time, because that is the clock cron reads — the
     caller converts from whatever the operator entered. They used to be a hardcoded 05:00, which
     on a VPS bootstrapped to UTC (the panel's own default) meant 23:00 for someone in US Central,
-    with no time shown anywhere in the UI to notice it by."""
+    with no time shown anywhere in the UI to notice it by.
+    """
     hour, minute = int(hour) % 24, int(minute) % 60
     selfname = selfname or user
     if not game_idents_ok(user, selfname):      # the lines below name the script; see set_autostart
@@ -2203,10 +2489,12 @@ def set_daily_restart(server, user, selfname=None, game_type=None, port=None, en
 
 
 def cron_port(port):
-    """`port` as the number a cron or shell line may carry: None when unset, else int(port) — the
-    cast every gamedig reader in cron.py already makes. Raises ValueError for anything int()
-    refuses ("25565; <cmd>; true"), and for a bool or a fractional float, which int() would quietly
-    turn into some other number."""
+    """`port` as the number a cron or shell line may carry.
+
+    None when unset, else int(port) — the cast every gamedig reader in cron.py already makes. Raises
+    ValueError for anything int() refuses ("25565; <cmd>; true"), and for a bool or a fractional
+    float, which int() would quietly turn into some other number.
+    """
     if port is None or port == "":
         return None
     if isinstance(port, bool) or (isinstance(port, float) and not port.is_integer()):
@@ -2218,13 +2506,15 @@ def cron_port(port):
 
 
 def daily_restart_check_cmd(user, selfname, gdtype, host, port):
-    """The hourly restart-when-empty check's COMMAND (no schedule), exactly as set_daily_restart
-    writes it for a server whose gamedig type is `gdtype`, queried at `host`:`port`. `host` is read
-    only when there is a query to make (gdtype and port both set).
+    """The hourly restart-when-empty check's COMMAND (no schedule).
+
+    Exactly as set_daily_restart writes it for a server whose gamedig type is `gdtype`, queried at
+    `host`:`port`. `host` is read only when there is a query to make (gdtype and port both set).
 
     The one place that line is spelled. set_daily_restart writes it, and
     cron.upgrade_managed_cron_tracking rewrites every older shape of it to this — so a line healed in
-    place and one written by toggling the setting cannot drift apart."""
+    place and one written by toggling the setting cannot drift apart.
+    """
     flag = f"/home/{user}/.restart-pending"
     # The player test is "did we COUNT zero", not "did we fail to count". gamedig writes its
     # failure to stdout as a JSON object ({"error":"Failed all 1 attempts"}), so `.players` is null

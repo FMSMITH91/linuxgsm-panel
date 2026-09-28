@@ -1,5 +1,10 @@
-"""SSH connection manager for remote LinuxGSM servers.
-Also supports local execution for running on the panel's own machine."""
+"""The per-server cron manager and its run-history recorder.
+
+Part of the SSH connection manager for remote LinuxGSM servers, which also supports local
+execution for running on the panel's own machine (see the package docstring for how names
+resolve across its submodules).
+"""
+import collections
 import re
 import subprocess  # nosec B404 - every call site below passes an argv LIST, never a shell string
 from panel.core import terminal
@@ -29,9 +34,11 @@ _CRON_SCHED_RE = re.compile(
 
 
 def _cron_managed_patterns(user, selfname):
-    """No cron line is locked any more — every entry is editable/deletable (see the block comment
-    above). Kept as an (empty) hook so update/delete keep a harmless guard and a future 'lock this'
-    need has a single place to wire it."""
+    """No cron line is locked any more — every entry is editable/deletable.
+
+    See the block comment above. Kept as an (empty) hook so update/delete keep a harmless guard and
+    a future 'lock this' need has a single place to wire it.
+    """
     return []
 
 
@@ -40,9 +47,12 @@ def _cron_line_managed(line, user, selfname):
 
 
 def _cron_role(command, user, selfname):
-    """A non-blocking LABEL for a panel-installed line so the admin knows what it is (they can still
-    edit or delete it): 'autostart' for the LinuxGSM `monitor` cron, 'daily-restart' for the
-    `.restart-pending` flag line, else ''. Unlike the old `managed`, this never locks the row."""
+    """A non-blocking LABEL for a panel-installed line so the admin knows what it is.
+
+    They can still edit or delete it: 'autostart' for the LinuxGSM `monitor` cron, 'daily-restart'
+    for the `.restart-pending` flag line, else ''. Unlike the old `managed`, this never locks the
+    row.
+    """
     selfname = selfname or user
     cmd = (command or "").strip()
     if cmd == f"/home/{user}/{selfname} monitor":
@@ -53,8 +63,10 @@ def _cron_role(command, user, selfname):
 
 
 def _split_cron_line(line):
-    """Split a crontab entry into (schedule, command). Returns (None, None) for a
-    line that isn't a valid schedule+command entry."""
+    """Split a crontab entry into (schedule, command).
+
+    Returns (None, None) for a line that isn't a valid schedule+command entry.
+    """
     line = line.strip()
     if line.startswith("@"):
         parts = line.split(None, 1)
@@ -66,10 +78,12 @@ def _split_cron_line(line):
 
 
 def _validate_cron(schedule, command):
-    """Return (ok, message, line). Rejects anything that would break the crontab's
-    one-entry-per-line structure. The command itself is free-form — it runs as the
-    unprivileged game user via cron, exactly like the file editor writes arbitrary
-    content — so only the schedule's charset and newlines are constrained."""
+    """Return (ok, message, line).
+
+    Rejects anything that would break the crontab's one-entry-per-line structure. The command
+    itself is free-form — it runs as the unprivileged game user via cron, exactly like the file
+    editor writes arbitrary content — so only the schedule's charset and newlines are constrained.
+    """
     schedule = (schedule or "").strip()
     command = (command or "").strip()
     if not schedule or not command:
@@ -115,10 +129,11 @@ def _cron_job_id(command):
 
 
 def _install_cron_runner(server, user):
-    """Install the per-user cron wrapper script (idempotent). Runs AS THE GAME USER (like the
-    file manager) — never as root — so it can only ever touch that user's own home. Writing
-    the runner as root could be redirected through a symlink a compromised game process
-    planted in ~/.lgsm-cron; dropping to the user removes that escalation.
+    """Install the per-user cron wrapper script (idempotent).
+
+    Runs AS THE GAME USER (like the file manager) — never as root — so it can only ever touch that
+    user's own home. Writing the runner as root could be redirected through a symlink a compromised
+    game process planted in ~/.lgsm-cron; dropping to the user removes that escalation.
 
     Returns the rc. It used to be discarded, and that rc is the only thing that says whether the
     script the crontab line is about to point at actually exists: if ~/.lgsm-cron is already a
@@ -126,7 +141,8 @@ def _install_cron_runner(server, user):
     transports answer a timeout with ("", "…", -1) rather than raising. Either way the crontab
     was then rewritten to call a script that is not there, the panel said "Added", and the job
     never ran — indistinguishable in the card from one that simply has not fired yet, because
-    Last run reads the .status file the missing runner never writes."""
+    Last run reads the .status file the missing runner never writes.
+    """
     import base64
     b64 = base64.b64encode(_CRON_RUNNER_SCRIPT.encode()).decode()
     # Absolute path (not ~) — `sudo -u` doesn't reliably set $HOME, and the game user's home
@@ -157,14 +173,16 @@ _SIMPLE_CMD_RE = re.compile(r"^[\w./ @:+=,-]+\Z")
 
 
 def _wrap_cron_command(server, user, command):
-    """Return the crontab command that records `command`'s runs. Toggle-backed and plain commands are
-    kept VISIBLE (inline recorder) so the Autostart / daily-restart detection still works after a
-    reschedule; anything with `%`, quotes, or shell operators uses the base64 runner (robust, no
-    escaping needed).
+    """Return the crontab command that records `command`'s runs.
+
+    Toggle-backed and plain commands are kept VISIBLE (inline recorder) so the Autostart /
+    daily-restart detection still works after a reschedule; anything with `%`, quotes, or shell
+    operators uses the base64 runner (robust, no escaping needed).
 
     Returns None when the base64 runner could not be installed on the host — the caller must
     refuse rather than schedule a line pointing at a script that is not there. The two visible
-    forms need nothing installed, so they can never fail here."""
+    forms need nothing installed, so they can never fail here.
+    """
     cmd = (command or "").strip()
     # ORDER MATTERS, and it was the other way round. The panel's OWN daily-restart line is
     # `touch /home/<u>/.restart-pending` — a plain command, which set_daily_restart writes WRAPPED
@@ -200,9 +218,11 @@ _CRON_REC_RE = re.compile(
 
 
 def _record_managed_cmd(user, core):
-    """Wrap a FIXED panel command so cron records its exit code + time + output, keeping the
-    command itself readable in the crontab line. Pairs with _unwrap_cron_command /
-    _read_cron_status. Panel-generated commands only (no user `%`)."""
+    """Wrap a FIXED panel command so cron records its exit code + time + output.
+
+    Keeps the command itself readable in the crontab line. Pairs with _unwrap_cron_command /
+    _read_cron_status. Panel-generated commands only (no user `%`).
+    """
     d = "/home/%s/.lgsm-cron" % user
     jid = _cron_job_id(core)
     # \% because cron treats % specially; mkdir keeps the status dir self-healing.
@@ -211,9 +231,11 @@ def _record_managed_cmd(user, core):
 
 
 def _unwrap_cron_command(command):
-    """(original_command, job_id) if `command` is a panel-wrapped cron command (either the
-    base64 recorder for user jobs or the inline recorder for managed jobs), else
-    (command, None) so plain/legacy entries display and behave unchanged."""
+    """(original_command, job_id) if `command` is a panel-wrapped cron command, else (command, None).
+
+    Wrapped means either the base64 recorder for user jobs or the inline recorder for managed jobs;
+    (command, None) so plain/legacy entries display and behave unchanged.
+    """
     import base64
     c = (command or "").strip()
     m = _CRON_WRAP_RE.match(c)
@@ -241,11 +263,14 @@ _CRON_WHY_RE = re.compile(r"fail|error|cannot|can't|denied|refus|timed? ?out|no 
 
 
 def _cron_log_text(b64):
-    """Decode the base64 log tail the reader ships. Base64 is what keeps the tab-delimited wire
-    format intact: a game log is arbitrary bytes, and LinuxGSM's `\\r` repaints alone would end a
-    record early — the text=True transports fold `\\r` into `\\n`, and str.splitlines() splits on it
-    — taking the failure reason with them. Lenient at both steps: whatever the game server printed
-    is not necessarily valid UTF-8, and a log we cannot decode must not cost us the other jobs."""
+    r"""Decode the base64 log tail the reader ships.
+
+    Base64 is what keeps the tab-delimited wire format intact: a game log is arbitrary bytes, and
+    LinuxGSM's `\r` repaints alone would end a record early — the text=True transports fold `\r`
+    into `\n`, and str.splitlines() splits on it — taking the failure reason with them. Lenient at
+    both steps: whatever the game server printed is not necessarily valid UTF-8, and a log we
+    cannot decode must not cost us the other jobs.
+    """
     import base64 as _b64
     import binascii
     try:
@@ -254,38 +279,61 @@ def _cron_log_text(b64):
         return ""
 
 
-def _clean_cron_error(raw, limit=240):
-    """One-line summary of WHY a job failed, from its decoded log tail. Strips ANSI, honours `\\r`
-    redraws (only a line's final repaint is what a terminal shows), drops bare " ... FAIL" verdict
-    lines, then keeps the last few DISTINCT lines that say something — the fatal one comes last, and
-    LinuxGSM's fetch retry prints the SAME reason once per mirror, which would otherwise spend the
-    whole budget on one sentence. Fills from the newest line back in whole lines, never mid-word."""
+def _cron_log_lines(raw):
+    r"""The log tail's rendered lines: ANSI stripped, `\r` redraws honoured, bare verdicts dropped."""
     lines = []
     for chunk in (raw or "").split("\n"):
         seg = " ".join(terminal.render_line(chunk).split())
         if seg and not _CRON_VERDICT_RE.match(seg):
             lines.append(seg)
-    why = [ln for ln in lines if _CRON_WHY_RE.search(ln)] or lines
-    keep = []                                    # last 3 DISTINCT lines, chronological
-    for ln in reversed(why):
+    return lines
+
+
+def _last_distinct(lines, n=3):
+    """The last `n` DISTINCT lines, in chronological order."""
+    keep = []
+    for ln in reversed(lines):
         if ln not in keep:
             keep.insert(0, ln)
-        if len(keep) == 3:
+        if len(keep) == n:
             break
+    return keep
+
+
+def _join_newest_first(keep, limit):
+    """Join whole lines from the newest back while they fit in `limit`, never mid-word."""
     out = ""
     for ln in reversed(keep):                    # newest first, so it always makes the cut
         nxt = ln if not out else ln + " " + out
         if len(nxt) > limit:
             break
         out = nxt
+    return out
+
+
+def _clean_cron_error(raw, limit=240):
+    r"""One-line summary of WHY a job failed, from its decoded log tail.
+
+    Strips ANSI, honours `\r` redraws (only a line's final repaint is what a terminal shows), drops
+    bare " ... FAIL" verdict lines, then keeps the last few DISTINCT lines that say something — the
+    fatal one comes last, and LinuxGSM's fetch retry prints the SAME reason once per mirror, which
+    would otherwise spend the whole budget on one sentence. Fills from the newest line back in
+    whole lines, never mid-word.
+    """
+    lines = _cron_log_lines(raw)
+    why = [ln for ln in lines if _CRON_WHY_RE.search(ln)] or lines
+    keep = _last_distinct(why, 3)                # last 3 DISTINCT lines, chronological
+    out = _join_newest_first(keep, limit)
     return out or (keep[-1][:limit] if keep else "")
 
 
 def _read_cron_status(server, user):
-    """{job_id: {last_run(epoch), ok(bool), error(str), rc(int)}} from the recorder's status
-    files for `user`. Runs AS THE GAME USER so reading a job's log can't be redirected through
+    """{job_id: {last_run(epoch), ok(bool), error(str), rc(int)}} from the recorder's status files.
+
+    Read for `user`. Runs AS THE GAME USER so reading a job's log can't be redirected through
     a symlink to a root-only file (info leak) — it only ever reads that user's own files. One
-    shell round-trip; best-effort (empty on any error)."""
+    shell round-trip; best-effort (empty on any error).
+    """
     d = "/home/%s/.lgsm-cron" % user
     # The log tail is base64'd so NOTHING in it can break the tab-delimited protocol — a game log
     # carries \r repaints, stray control bytes and invalid UTF-8, any of which would otherwise end
@@ -314,10 +362,12 @@ def _read_cron_status(server, user):
 
 
 def _read_cron_run_times(server, user):
-    """{command_string: last_run_epoch} from cron's OWN execution log (journald), so that
-    panel-managed and legacy entries — which the recorder doesn't wrap — still show WHEN they
-    last ran. Cron logs the command it ran but not its exit status, so this is time-only.
-    Best-effort (empty if cron logging is off/unavailable)."""
+    """{command_string: last_run_epoch} from cron's OWN execution log (journald).
+
+    So that panel-managed and legacy entries — which the recorder doesn't wrap — still show WHEN
+    they last ran. Cron logs the command it ran but not its exit status, so this is time-only.
+    Best-effort (empty if cron logging is off/unavailable).
+    """
     # Was `journalctl _COMM=cron … | grep -F '(<user>) CMD ' | tail -n 800` — the user name went
     # into a grep pattern running as root. The verb reads the window; the filtering is here.
     out, _, _ = _core.run_privileged(server, "journal-cron", [], timeout=12, merge_stderr=False)
@@ -329,7 +379,11 @@ def _read_cron_run_times(server, user):
         _core._log.warning("cron journal read for %s reached the output cap; last-run times from "
                            "it would be stale, so none are reported", user)
         return {}
-    marker = "(%s) CMD " % user
+    return _cron_run_times_from(out, "(%s) CMD " % user)
+
+
+def _cron_run_times_from(out, marker):
+    """{command: last_run_epoch} from the journal text `out`, for the lines carrying `marker`."""
     # Over-long lines are skipped before anything else looks at them. The journal is the remote's
     # to write, and this runs on the request greenlet: the regex that used to pull the command out
     # (`\)\s+CMD\s+\((.*)\)\s*$`) is quadratic on a line of repeated ") CMD (" fragments with
@@ -361,7 +415,8 @@ def _cron_log_command(line, marker):
     """The command in a cron journal line `<epoch> ... (<user>) CMD (<command>)`, or None.
 
     Plain string search, not a regex: find the marker, expect "(", and take everything up to the
-    line's final ")". Linear in the line's length whatever the line contains."""
+    line's final ")". Linear in the line's length whatever the line contains.
+    """
     i = line.find(marker)
     if i < 0:
         return None
@@ -401,8 +456,10 @@ _RC_PATH_362 = "PATH=/usr/local/bin:/usr/bin:/bin; "
 
 
 def _restart_check_res(user, selfname):
-    """The compiled shapes above for this account's own flag and this server's own script. The
-    query's type, address and port are captured; everything else must match byte for byte."""
+    """The compiled shapes above for this account's own flag and this server's own script.
+
+    The query's type, address and port are captured; everything else must match byte for byte.
+    """
     flag = re.escape(f"/home/{user}/.restart-pending")
 
     def query(path, jq):
@@ -424,32 +481,43 @@ def _restart_check_res(user, selfname):
 
 
 def _restart_check_now(server, user, selfname, found, game_type, port, host_of):
-    """What set_daily_restart would write today in place of the recognised line `found` (a match
-    from _restart_check_res): its command, not its schedule.
+    """What set_daily_restart would write today in place of the recognised line `found`.
+
+    `found` is a match from _restart_check_res; this is its command, not its schedule.
 
     The gamedig type and port are the SERVER's (game_type, port), exactly what set_daily_restart is
     given; a caller that does not know the server passes neither and the line's own are kept. The
     address is the host's, via _gamedig_host (`host_of` memoises it across the loop) — except that
     _gamedig_host answers 127.0.0.1 when it could not look, and a line that already names the
     host's real address keeps it rather than being moved to one a Source server never answers on
-    by a lookup that failed."""
+    by a lookup that failed.
+    """
     got = found.groupdict()
-    if game_type is None and port is None:
-        gdtype, qport = got.get("type") or "", got.get("port") or ""
-    else:
-        gdtype, qport = _core.GAMEDIG_TYPE.get(game_type or "", ""), port
-    host = None
-    if gdtype and qport:
-        host = host_of()
-        if host == "127.0.0.1" and got.get("host") and got["host"] != "127.0.0.1":
-            host = got["host"]
+    gdtype, qport = _restart_check_target(got, game_type, port)
+    host = _restart_check_host(got, host_of) if (gdtype and qport) else None
     return _core.daily_restart_check_cmd(user, selfname, gdtype, host, qport)
 
 
+def _restart_check_target(got, game_type, port):
+    """(gamedig type, port) for the rewritten check: the server's, or the line's own when unknown."""
+    if game_type is None and port is None:
+        return got.get("type") or "", got.get("port") or ""
+    return _core.GAMEDIG_TYPE.get(game_type or "", ""), port
+
+
+def _restart_check_host(got, host_of):
+    """The host's address — unless the lookup failed (127.0.0.1) and the line names a real one."""
+    host = host_of()
+    if host == "127.0.0.1" and got.get("host") and got["host"] != "127.0.0.1":
+        host = got["host"]
+    return host
+
+
 def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, port=None):
-    """IN-PLACE upgrade of the panel's own cron lines, without changing schedules or on/off state
-    (each existing line is transformed where it stands, so nothing is added or removed and no
-    setting can flip). Three upgrades:
+    """IN-PLACE upgrade of the panel's own cron lines, without changing schedules or on/off state.
+
+    Each existing line is transformed where it stands, so nothing is added or removed and no
+    setting can flip. Three upgrades:
 
       * the simple managed commands are re-wrapped through the inline recorder, so their runs
         start reporting success/error;
@@ -469,7 +537,8 @@ def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, p
 
     No-op once everything is upgraded. Runs on every Scheduled Tasks read, and daily from app.py
     for every game server, so a line written before any of these heals without the operator
-    toggling anything. Returns True if it changed anything. Best-effort."""
+    toggling anything. Returns True if it changed anything. Best-effort.
+    """
     selfname = selfname or user
     # Unattended, daily, for every server: the lines it writes name the script, and cron runs them
     # through /bin/sh as the account. _rewrite_crontab checks the account; this checks the script.
@@ -483,50 +552,14 @@ def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, p
     except ValueError:
         _core._log.warning("cron upgrade: refusing a port that is not a number for %s", user)
         return False
-    base = f"/home/{user}/{selfname}"
-    flag = f"/home/{user}/.restart-pending"
-    simple_cores = {f"{base} {c}" for c in ("start", "monitor", "mods-update", "update", "update-lgsm")}
-    simple_cores.add(f"touch {flag}")
-    suffix = " > /dev/null 2>&1"
     out, _, rc = _core.run_privileged(server, "crontab-list", [user], timeout=10, merge_stderr=False)
     # Only a crontab that was READ is rewritten. The rewrite below replaces the whole crontab with
-    # what this loop kept, so a listing cut short by a dropped connection — whatever lines arrived
-    # before it failed — would be installed as the account's entire crontab.
+    # what _upgrade_cron_lines kept, so a listing cut short by a dropped connection — whatever
+    # lines arrived before it failed — would be installed as the account's entire crontab.
     if rc != 0:
         return False
-    bare, pathed = _core.GAMEDIG_CRON_BARE, _core.gamedig_cron_call()
-    checks = _restart_check_res(user, selfname)
-    _host = []
-
-    def host_of():                 # one address lookup per pass, and only if a line needs one
-        if not _host:
-            _host.append(_core._gamedig_host(server))
-        return _host[0]
-    new_lines, changed = [], False
-    for raw in (out or "").splitlines():
-        s = raw.strip()
-        sched, cmd = (None, None) if (not s or s.startswith("#")) else _split_cron_line(s)
-        if sched is None:
-            new_lines.append(raw)
-            continue
-        _disp, jid = _unwrap_cron_command(cmd)
-        core = cmd[:-len(suffix)].strip() if cmd.endswith(suffix) else cmd
-        found = next((m for m in (r.match(cmd) for r in checks) if m), None)
-        if jid is None and core in simple_cores:   # unwrapped simple managed line → wrap it
-            new_lines.append(f"{sched} {_record_managed_cmd(user, core)}")
-            changed = True
-        elif found:                                 # the panel's own restart check, in any shape
-            want = _restart_check_now(server, user, selfname, found, game_type, port, host_of)
-            if want != cmd:
-                new_lines.append(f"{sched} {want}")
-                changed = True
-            else:
-                new_lines.append(raw)
-        elif flag in cmd and bare in cmd:           # an edited restart check, calling a bare gamedig
-            new_lines.append(raw.replace(bare, pathed, 1))
-            changed = True
-        else:
-            new_lines.append(raw)
+    upgrade = _cron_upgrade_pass(server, user, selfname, game_type, port)
+    new_lines, changed = _upgrade_cron_lines(out, upgrade)
     if not changed:
         return False
     # Replace the whole crontab: drop everything (grep -vE '^' matches every line), re-add ours.
@@ -534,10 +567,85 @@ def upgrade_managed_cron_tracking(server, user, selfname=None, game_type=None, p
     return ok
 
 
+# One upgrade pass's fixed inputs: the account, its simple managed commands, its restart flag, the
+# bare and PATH-carrying gamedig calls, the recognised restart-check shapes, and `restart_now`
+# (a recognised check's match -> what set_daily_restart would write for it today).
+_CronUpgrade = collections.namedtuple(
+    "_CronUpgrade", "user simple_cores flag bare pathed checks restart_now")
+
+
+def _cron_upgrade_pass(server, user, selfname, game_type, port):
+    """The _CronUpgrade for one pass over `user`'s crontab."""
+    base = f"/home/{user}/{selfname}"
+    flag = f"/home/{user}/.restart-pending"
+    simple_cores = {f"{base} {c}" for c in ("start", "monitor", "mods-update", "update", "update-lgsm")}
+    simple_cores.add(f"touch {flag}")
+    _host = []
+
+    def host_of():                 # one address lookup per pass, and only if a line needs one
+        if not _host:
+            _host.append(_core._gamedig_host(server))
+        return _host[0]
+
+    def restart_now(found):
+        return _restart_check_now(server, user, selfname, found, game_type, port, host_of)
+    return _CronUpgrade(user=user, simple_cores=simple_cores, flag=flag,
+                        bare=_core.GAMEDIG_CRON_BARE, pathed=_core.gamedig_cron_call(),
+                        checks=_restart_check_res(user, selfname), restart_now=restart_now)
+
+
+def _upgrade_cron_lines(out, upgrade):
+    """(new_lines, changed): every line of the crontab listing `out`, upgraded where it stands."""
+    new_lines, changed = [], False
+    for raw in (out or "").splitlines():
+        up = _upgraded_cron_line(raw, upgrade)
+        new_lines.append(raw if up is None else up)
+        changed = changed or up is not None
+    return new_lines, changed
+
+
+def _cron_entry(raw):
+    """(schedule, command) for a crontab line, or (None, None) for a blank line or a comment."""
+    s = raw.strip()
+    return (None, None) if (not s or s.startswith("#")) else _split_cron_line(s)
+
+
+def _upgraded_cron_line(raw, upgrade):
+    """The upgraded form of crontab line `raw`, or None when it stays exactly as it is."""
+    sched, cmd = _cron_entry(raw)
+    if sched is None:
+        return None
+    _disp, jid = _unwrap_cron_command(cmd)
+    core = _strip_devnull(cmd)
+    found = _first_match(upgrade.checks, cmd)
+    if jid is None and core in upgrade.simple_cores:   # unwrapped simple managed line → wrap it
+        return f"{sched} {_record_managed_cmd(upgrade.user, core)}"
+    if found:                                   # the panel's own restart check, in any shape
+        want = upgrade.restart_now(found)
+        return f"{sched} {want}" if want != cmd else None
+    if upgrade.flag in cmd and upgrade.bare in cmd:   # an edited restart check, calling a bare gamedig
+        return raw.replace(upgrade.bare, upgrade.pathed, 1)
+    return None
+
+
+def _strip_devnull(cmd):
+    """`cmd` without the old `> /dev/null 2>&1` suffix, when it has one."""
+    suffix = " > /dev/null 2>&1"
+    return cmd[:-len(suffix)].strip() if cmd.endswith(suffix) else cmd
+
+
+def _first_match(patterns, text):
+    """The first of `patterns` that matches `text`, as its match object; None when none does."""
+    return next((m for m in (r.match(text) for r in patterns) if m), None)
+
+
 def _match_run_time(run_times, cmd):
-    """Last-run epoch for `cmd` from the cron-log map. Exact match first; then substring, so a
-    wrapped job's CORE command (e.g. `<base> monitor`) still matches its logged line whether it
-    was the old `… > /dev/null 2>&1` form or the new recorder form. Newest match wins."""
+    """Last-run epoch for `cmd` from the cron-log map.
+
+    Exact match first; then substring, so a wrapped job's CORE command (e.g. `<base> monitor`)
+    still matches its logged line whether it was the old `… > /dev/null 2>&1` form or the new
+    recorder form. Newest match wins.
+    """
     if not cmd:
         return None
     if cmd in run_times:
@@ -579,7 +687,8 @@ def list_cron_jobs(server, user, selfname=None):
     turned both columns OFF. Merely OPENING Files & Config for a server whose host was briefly
     unreachable silently disabled its autostart — verified in a rendered panel: seeded with
     autostart=1, one page load, column 0, crontab on the host untouched. Nothing turns it back on,
-    because the reconcile only ever mirrors what it read."""
+    because the reconcile only ever mirrors what it read.
+    """
     selfname = selfname or user
     out, err, rc = _core.run_privileged(server, "crontab-list", [user], timeout=10, merge_stderr=False)
     if rc != 0 and not _NO_CRONTAB_RE.search("%s\n%s" % (err or "", out or "")):
@@ -588,38 +697,51 @@ def list_cron_jobs(server, user, selfname=None):
     run_times = _read_cron_run_times(server, user)
     jobs = []
     for raw in (out or "").splitlines():
-        s = raw.strip()
-        if not s or s.startswith("#"):
-            continue
-        sched, cmd = _split_cron_line(s)
-        if sched is None:
-            continue
-        display_cmd, jid = _unwrap_cron_command(cmd)
-        # Status is keyed by the wrapped id, or — so an on-demand "Run now" updates the row even
-        # for an unwrapped job — the hash of the (display) command.
-        st = status.get(jid or _cron_job_id(display_cmd))
-        if st:                       # wrapped job that has RUN → full status from the recorder
-            last_run, ok, error = st.get("last_run"), st.get("ok"), st.get("error", "")
-        else:
-            # No recorder status yet (unwrapped job, or a freshly-wrapped one that hasn't run in
-            # the new form). Show the last-run TIME from cron's own log so it never regresses to
-            # "—"; the core command matches both the old redirect form and the wrapped form.
-            last_run, ok, error = _match_run_time(run_times, display_cmd or cmd), None, ""
-        jobs.append({
-            "raw": raw, "schedule": sched, "command": display_cmd,
-            "managed": _cron_line_managed(s, user, selfname),   # always False now — every line is editable
-            "role": _cron_role(display_cmd, user, selfname),    # informational label only (autostart/daily-restart)
-            "last_run": last_run, "ok": ok, "error": error,
-        })
+        job = _cron_job_row(raw, user, selfname, status, run_times)
+        if job is not None:
+            jobs.append(job)
     return jobs
 
 
+def _cron_job_row(raw, user, selfname, status, run_times):
+    """One crontab line as a list_cron_jobs row, or None for a blank line, a comment or a non-entry."""
+    s = raw.strip()
+    if not s or s.startswith("#"):
+        return None
+    sched, cmd = _split_cron_line(s)
+    if sched is None:
+        return None
+    display_cmd, jid = _unwrap_cron_command(cmd)
+    last_run, ok, error = _cron_job_history(status, run_times, jid, display_cmd, cmd)
+    return {
+        "raw": raw, "schedule": sched, "command": display_cmd,
+        "managed": _cron_line_managed(s, user, selfname),   # always False now — every line is editable
+        "role": _cron_role(display_cmd, user, selfname),    # informational label only (autostart/daily-restart)
+        "last_run": last_run, "ok": ok, "error": error,
+    }
+
+
+def _cron_job_history(status, run_times, jid, display_cmd, cmd):
+    """(last_run, ok, error) for one job: the recorder's full status, else cron's own log time."""
+    # Status is keyed by the wrapped id, or — so an on-demand "Run now" updates the row even
+    # for an unwrapped job — the hash of the (display) command.
+    st = status.get(jid or _cron_job_id(display_cmd))
+    if st:                       # wrapped job that has RUN → full status from the recorder
+        return st.get("last_run"), st.get("ok"), st.get("error", "")
+    # No recorder status yet (unwrapped job, or a freshly-wrapped one that hasn't run in
+    # the new form). Show the last-run TIME from cron's own log so it never regresses to
+    # "—"; the core command matches both the old redirect form and the wrapped form.
+    return _match_run_time(run_times, display_cmd or cmd), None, ""
+
+
 def run_cron_job_now(server, user, raw, selfname=None):
-    """Run a cron job's command NOW, DETACHED, as the game user — recording its exit code +
-    output to the same status/log files a scheduled run uses, so the Last-run column updates
-    (even for a slow job like `update`, which the detach keeps from hanging the request). The
-    command is taken from the crontab line `raw` and un-wrapped to its core first. Best-effort;
-    returns (ok, message)."""
+    """Run a cron job's command NOW, DETACHED, as the game user.
+
+    Records its exit code + output to the same status/log files a scheduled run uses, so the
+    Last-run column updates (even for a slow job like `update`, which the detach keeps from hanging
+    the request). The command is taken from the crontab line `raw` and un-wrapped to its core
+    first. Best-effort; returns (ok, message).
+    """
     import base64
     _sched, cmd = _split_cron_line((raw or "").strip())
     core, jid = _unwrap_cron_command(cmd if cmd is not None else (raw or "").strip())
@@ -647,8 +769,10 @@ def run_cron_job_now(server, user, raw, selfname=None):
 
 
 def add_cron_job(server, user, schedule, command, selfname=None):
-    """Append a new cron entry to the game user's crontab (keeps all existing lines). The
-    command is wrapped through the recorder so its runs are tracked."""
+    """Append a new cron entry to the game user's crontab (keeps all existing lines).
+
+    The command is wrapped through the recorder so its runs are tracked.
+    """
     ok, msg, _line = _validate_cron(schedule, command)
     if not ok:
         return False, msg
@@ -663,8 +787,10 @@ def add_cron_job(server, user, schedule, command, selfname=None):
 
 
 def update_cron_job(server, user, old_raw, schedule, command, selfname=None):
-    """Replace an existing user cron entry (matched exactly by `old_raw`) with a new
-    schedule+command. Refuses to touch a panel-managed line."""
+    """Replace an existing user cron entry (matched exactly by `old_raw`) with a new schedule+command.
+
+    Refuses to touch a panel-managed line.
+    """
     selfname = selfname or user
     old_raw = old_raw or ""
     if _cron_line_managed(old_raw, user, selfname):
@@ -685,8 +811,10 @@ def update_cron_job(server, user, old_raw, schedule, command, selfname=None):
 
 
 def delete_cron_job(server, user, old_raw, selfname=None):
-    """Remove a user cron entry (matched exactly by `old_raw`). Refuses to remove a
-    panel-managed line."""
+    """Remove a user cron entry (matched exactly by `old_raw`).
+
+    Refuses to remove a panel-managed line.
+    """
     selfname = selfname or user
     old_raw = old_raw or ""
     if _cron_line_managed(old_raw, user, selfname):
@@ -699,15 +827,17 @@ _BACKUP_LIST_DONE = "__LGSMP_BK_DONE__"
 
 
 def list_game_backups(server, user):
-    """A game server's LinuxGSM backups (~/lgsm/backup/*.tar.*): [{name, size, created}],
-    newest first. Read as the game user; best-effort (empty on error). LinuxGSM compresses with
-    zstd when available (.tar.zst), else gzip (.tar.gz) — match all archive types like LinuxGSM's
-    own tooling does, not just .tar.gz.
+    """A game server's LinuxGSM backups (~/lgsm/backup/*.tar.*): [{name, size, created}], newest first.
+
+    Read as the game user; best-effort (empty on error). LinuxGSM compresses with zstd when
+    available (.tar.zst), else gzip (.tar.gz) — match all archive types like LinuxGSM's own tooling
+    does, not just .tar.gz.
 
     Returns None if the host could not be READ, which is not the same as a server with no backups.
     Both used to come back as [], and the Backups card said "No backups yet." about a directory it
     had never reached. Every caller has to choose: the two that size a new backup treat unknown as
-    "no estimate" (they already did), and the one that DELETES to make room must not act on it."""
+    "no estimate" (they already did), and the one that DELETES to make room must not act on it.
+    """
     bdir = "/home/%s/lgsm/backup" % user
     # Also report the backup.lock's start time (LinuxGSM holds it only while a backup runs, and
     # writes the archive under its final name while it's still growing). We report the lock's mtime
@@ -726,21 +856,7 @@ def list_game_backups(server, user):
     # whatever happened before it, so rc alone cannot see a run that was cut short.
     if rc != 0 or _BACKUP_LIST_DONE not in (out or ""):
         return None
-    res = []
-    lock_mtime = None
-    for line in (out or "").splitlines():
-        parts = line.split("\t")
-        if parts[0] == "LOCK":
-            try:
-                lock_mtime = int(float(parts[1]))
-            except (ValueError, IndexError):
-                lock_mtime = 0   # lock exists but its mtime is unreadable — see below
-            continue
-        if len(parts) >= 4 and parts[0] == "F":
-            try:
-                res.append({"name": parts[1], "size": int(parts[2]), "created": int(parts[3])})
-            except ValueError:
-                continue
+    res, lock_mtime = _parse_backup_listing(out)
     res.sort(key=lambda b: b["created"], reverse=True)
     # Only the archive being written NOW is in-progress: a backup is running (lock present) AND the
     # newest file was created at/after the backup started (2s slack for clock granularity). A backup
@@ -752,8 +868,32 @@ def list_game_backups(server, user):
     return res
 
 
+def _parse_backup_listing(out):
+    """([{name, size, created}], lock_mtime) from the listing's F and LOCK lines, unsorted.
+
+    lock_mtime is None with no running backup, 0 when the lock's time is unreadable.
+    """
+    res = []
+    lock_mtime = None
+    for line in (out or "").splitlines():
+        parts = line.split("\t")
+        if parts[0] == "LOCK":
+            try:
+                lock_mtime = int(float(parts[1]))
+            except (ValueError, IndexError):
+                lock_mtime = 0   # lock exists but its mtime is unreadable — see list_game_backups
+            continue
+        if len(parts) >= 4 and parts[0] == "F":
+            try:
+                res.append({"name": parts[1], "size": int(parts[2]), "created": int(parts[3])})
+            except ValueError:
+                continue
+    return res, lock_mtime
+
+
 def prune_game_backups(server, user, keep=3):
     """Keep only the newest `keep` LinuxGSM backups for a game server; delete the rest.
+
     Matches every archive type LinuxGSM produces (.tar.zst / .tar.gz / …), not just .tar.gz —
     otherwise large zstd backups would never be pruned and could fill the disk.
 
@@ -768,7 +908,8 @@ def prune_game_backups(server, user, keep=3):
     list_game_backups) do. The path is fixed, so a symlink to a bigger disk is how an operator
     moves backups; plain find does not descend a symlinked starting point, printed nothing and
     exited 0, so every prune deleted nothing and reported success. Links INSIDE the dir are still
-    not followed (-type f skips them)."""
+    not followed (-type f skips them).
+    """
     if not _core.game_idents_ok(user):
         return False
     bdir = "/home/%s/lgsm/backup" % user
@@ -793,8 +934,10 @@ def _fmt_size(nbytes):
 
 
 def backup_disk_info(server, user):
-    """Free/total bytes of the filesystem that holds this game user's LinuxGSM backups
-    (~/lgsm/backup lives under the home dir). Best-effort — returns zeros on error."""
+    """Free/total bytes of the filesystem that holds this game user's LinuxGSM backups.
+
+    (~/lgsm/backup lives under the home dir.) Best-effort — returns zeros on error.
+    """
     out, _, _ = _core.run_command(server, "df -PB1 %s" % _core._quote("/home/%s" % user), timeout=15, sudo=False)
     lines = [ln for ln in (out or "").splitlines() if ln.strip()]
     if len(lines) >= 2:
@@ -813,8 +956,11 @@ _GAME_BACKUP_NAME = re.compile(r"^[A-Za-z0-9._-]+\.tar\.[A-Za-z0-9.]+\Z")
 
 
 def delete_game_backup(server, user, name):
-    """Delete one game backup by file name from ~/lgsm/backup/, as the game user. Returns True on
-    success. `name` is shape-validated here; the caller validates it against the actual listing."""
+    """Delete one game backup by file name from ~/lgsm/backup/, as the game user.
+
+    Returns True on success. `name` is shape-validated here; the caller validates it against the
+    actual listing.
+    """
     if not _GAME_BACKUP_NAME.match(name or "") or not _core.game_idents_ok(user):
         return False
     path = "/home/%s/lgsm/backup/%s" % (user, name)
@@ -843,46 +989,21 @@ def _as_user_argv(user, *args):
 
 
 def stream_game_backup(server, user, name, chunk=262144):
-    """Yield the bytes of ~/lgsm/backup/<name> as the game user, for a browser download. Works for
-    local, paramiko and Tailscale-CLI remotes. `name` MUST already be validated by the caller
-    (checked against the real backup list); we also re-check its shape here. Uses the (green,
-    eventlet-patched) subprocess/paramiko IO so a multi-GB download doesn't block the event hub."""
+    """Yield the bytes of ~/lgsm/backup/<name> as the game user, for a browser download.
+
+    Works for local, paramiko and Tailscale-CLI remotes. `name` MUST already be validated by the
+    caller (checked against the real backup list); we also re-check its shape here. Uses the
+    (green, eventlet-patched) subprocess/paramiko IO so a multi-GB download doesn't block the
+    event hub.
+    """
     if not _GAME_BACKUP_NAME.match(name or "") or not _core.game_idents_ok(user):
         return
     path = "/home/%s/lgsm/backup/%s" % (user, name)
 
     if _core.is_local_server(server) or getattr(server, "auth_method", "") == "tailscale":
-        if _core.is_local_server(server):
-            # Was `sudo -u <user> cat <path>`. The verb keeps the property that mattered — the read
-            # happens AS THE GAME USER, so a symlink planted at that path reaches only what that
-            # user could already read. The helper drops supplementary groups, gid then uid before
-            # opening; reading as root would have turned this into "hand me any file on the box".
-            argv = (_priv.helper_argv("game-backup-read", [user, name])
-                    if _core.helper_present() else _as_user_argv(user, "cat", path))
-        else:
-            # The login and host are stored data handed to ssh as an argument — see
-            # _core.ssh_destination. A refusal ends the download empty, like every other here.
-            try:
-                argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
-                        "-p", _core._ssh_port_arg(server), _core.SSH_DEST_SEP,
-                        _core.ssh_destination(server.username, _core._resolve_ts_host(server)),
-                        _core.game_user_exec_cmd(user, ["cat", path])]
-            except (TypeError, ValueError):
-                _core._log.warning("backup download: refusing the host's stored ssh login or address")
-                return
-        p = subprocess.Popen(argv, stdout=subprocess.PIPE)  # nosec B603  # nosemgrep - argv list, no shell; the remote path is _quote()d above
-        try:
-            while True:
-                b = p.stdout.read(chunk)
-                if not b:
-                    break
-                yield b
-        finally:
-            try:
-                p.stdout.close()
-            except Exception:  # nosec B110 - the pipe is already closed when the child exited
-                pass           # first; closing it twice is the normal path, not a failure.
-            p.wait()
+        argv = _backup_read_argv(server, user, name, path)
+        if argv is not None:
+            yield from _stream_backup_argv(argv, chunk)
         return
 
     # paramiko remote
@@ -895,11 +1016,52 @@ def stream_game_backup(server, user, name, chunk=262144):
         yield b
 
 
+def _backup_read_argv(server, user, name, path):
+    """The argv that reads a backup on the panel's host or a Tailscale-CLI remote, or None if refused."""
+    if _core.is_local_server(server):
+        # Was `sudo -u <user> cat <path>`. The verb keeps the property that mattered — the read
+        # happens AS THE GAME USER, so a symlink planted at that path reaches only what that
+        # user could already read. The helper drops supplementary groups, gid then uid before
+        # opening; reading as root would have turned this into "hand me any file on the box".
+        return (_priv.helper_argv("game-backup-read", [user, name])
+                if _core.helper_present() else _as_user_argv(user, "cat", path))
+    # The login and host are stored data handed to ssh as an argument — see
+    # _core.ssh_destination. A refusal ends the download empty, like every other here.
+    try:
+        return ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
+                "-p", _core._ssh_port_arg(server), _core.SSH_DEST_SEP,
+                _core.ssh_destination(server.username, _core._resolve_ts_host(server)),
+                _core.game_user_exec_cmd(user, ["cat", path])]
+    except (TypeError, ValueError):
+        _core._log.warning("backup download: refusing the host's stored ssh login or address")
+        return None
+
+
+def _stream_backup_argv(argv, chunk):
+    """Yield the stdout of `argv` in `chunk`-sized blocks, then reap the child."""
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE)  # nosec B603  # nosemgrep - argv list, no shell; the remote path is _quote()d above
+    try:
+        while True:
+            b = p.stdout.read(chunk)
+            if not b:
+                break
+            yield b
+    finally:
+        try:
+            p.stdout.close()
+        except Exception:  # nosec B110 - the pipe is already closed when the child exited
+            pass           # first; closing it twice is the normal path, not a failure.
+        p.wait()
+
+
 def _ensure_backup_headroom(server, user, keep):
-    """Make room for a new backup on a tight disk by deleting the OLDEST backups first (keeping the
-    newest keep-1), so a nearly-full host can still take a fresh backup instead of LinuxGSM aborting
-    on "not enough disk space". Normally backups prune AFTER the run (peak = keep+1); this only
-    kicks in when free disk is below ~1.15× the expected new-backup size. Returns a short note."""
+    """Make room for a new backup on a tight disk by deleting the OLDEST backups first.
+
+    Keeps the newest keep-1, so a nearly-full host can still take a fresh backup instead of
+    LinuxGSM aborting on "not enough disk space". Normally backups prune AFTER the run (peak =
+    keep+1); this only kicks in when free disk is below ~1.15× the expected new-backup size.
+    Returns a short note.
+    """
     try:
         backups = list_game_backups(server, user)   # newest first, or None if unreadable
         if backups is None:
@@ -910,36 +1072,10 @@ def _ensure_backup_headroom(server, user, keep):
             return ""
         if not backups:
             return ""   # first backup — nothing to prune; let LinuxGSM/disk decide
-        # Estimate the next backup from the LARGEST existing one (worst case), ignoring 0-byte
-        # failed archives — the newest can be tiny or empty and badly underestimate the need.
-        est = max((b.get("size", 0) for b in backups), default=0)
-        _disk = backup_disk_info(server, user)
-        free, total = _disk.get("free", 0), _disk.get("total", 0)
-        # `total` is the sentinel, exactly as run_game_backup's pre-flight check uses it: a failed
-        # `df` reads as 0/0, and free=0 is always below any threshold — so a transport hiccup sent
-        # this straight into the delete loop and removed backups to make room it never measured.
-        # Measured on the test host: with df working, nothing was deleted; with the df read timed
-        # out, two of four backups were deleted and the run reported "freed space first".
-        #
-        # The sibling 100 lines away already says the rule out loud — "Only enforce when we
-        # actually read the disk (total > 0); a failed df reads as 0/0" — but it guards the path
-        # that BLOCKS a backup. This is the path that DELETES them, which is the worse of the two
-        # to get wrong, and it is the one that was missing the check.
-        if not est or not total or free >= int(est * 1.15):
+        short = _backup_shortfall(server, user, backups)
+        if short is None:
             return ""   # plenty of room, or we could not measure — keep full safety
-        # 0-byte archives are failed backups (junk) — delete them first and never protect one.
-        # Protect the newest keep-1 VALID backups; delete the oldest valid ones beyond that.
-        valid = [b for b in backups if b.get("size", 0) > 0]        # newest first
-        junk = [b for b in backups if b.get("size", 0) == 0]
-        keep_newest = max(1, int(keep) - 1)
-        candidates = junk + list(reversed(valid[keep_newest:]))     # junk first, then oldest valid
-        deleted = 0
-        for b in candidates:
-            if delete_game_backup(server, user, b["name"]):
-                free += b.get("size", 0)
-                deleted += 1
-            if free >= int(est * 1.15):
-                break
+        deleted = _prune_for_headroom(server, user, backups, keep, *short)
         if deleted:
             _core._log.info("freed disk before backing up %s: removed %d old backup(s)", user, deleted)
             return "freed space first (removed %d old backup%s)" % (deleted, "" if deleted == 1 else "s")
@@ -948,21 +1084,107 @@ def _ensure_backup_headroom(server, user, keep):
     return ""
 
 
+def _backup_shortfall(server, user, backups):
+    """(free, need) when the disk is MEASURABLY too tight for another backup, else None."""
+    # Estimate the next backup from the LARGEST existing one (worst case), ignoring 0-byte
+    # failed archives — the newest can be tiny or empty and badly underestimate the need.
+    est = max((b.get("size", 0) for b in backups), default=0)
+    _disk = backup_disk_info(server, user)
+    free, total = _disk.get("free", 0), _disk.get("total", 0)
+    # `total` is the sentinel, exactly as run_game_backup's pre-flight check uses it: a failed
+    # `df` reads as 0/0, and free=0 is always below any threshold — so a transport hiccup sent
+    # this straight into the delete loop and removed backups to make room it never measured.
+    # Measured on the test host: with df working, nothing was deleted; with the df read timed
+    # out, two of four backups were deleted and the run reported "freed space first".
+    #
+    # The sibling 100 lines away already says the rule out loud — "Only enforce when we
+    # actually read the disk (total > 0); a failed df reads as 0/0" — but it guards the path
+    # that BLOCKS a backup. This is the path that DELETES them, which is the worse of the two
+    # to get wrong, and it is the one that was missing the check.
+    if not est or not total or free >= int(est * 1.15):
+        return None
+    return free, int(est * 1.15)
+
+
+def _prune_for_headroom(server, user, backups, keep, free, need):
+    """Delete junk, then the oldest valid backups beyond the newest keep-1, until `need` is free.
+
+    Returns how many were deleted.
+    """
+    # 0-byte archives are failed backups (junk) — delete them first and never protect one.
+    # Protect the newest keep-1 VALID backups; delete the oldest valid ones beyond that.
+    valid = [b for b in backups if b.get("size", 0) > 0]        # newest first
+    junk = [b for b in backups if b.get("size", 0) == 0]
+    keep_newest = max(1, int(keep) - 1)
+    candidates = junk + list(reversed(valid[keep_newest:]))     # junk first, then oldest valid
+    deleted = 0
+    for b in candidates:
+        if delete_game_backup(server, user, b["name"]):
+            free += b.get("size", 0)
+            deleted += 1
+        if free >= need:
+            break
+    return deleted
+
+
 def _gamedig_type(game_type, query_type=None):
-    """The gamedig `--type` to use for a server: an explicit per-server override when set (the
-    panel's GAMEDIG_TYPE map is only a default and can be wrong/missing, e.g. cod), else the map.
-    The override is sanitised to a safe charset here too, so it can never break out of the query
-    command regardless of upstream validation. Returns '' when the game isn't queryable."""
+    """The gamedig `--type` to use for a server: an explicit per-server override, else the map.
+
+    The override wins when set (the panel's GAMEDIG_TYPE map is only a default and can be
+    wrong/missing, e.g. cod). The override is sanitised to a safe charset here too, so it can never
+    break out of the query command regardless of upstream validation. Returns '' when the game
+    isn't queryable.
+    """
     qt = re.sub(r"[^a-z0-9_-]", "", (query_type or "").strip().lower())[:40]
     return qt or _core.GAMEDIG_TYPE.get(game_type or "", "")
 
 
+def _last_line(out):
+    """The last line of `out`, stripped — or "" when there is no output at all."""
+    return (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
+
+
+def _json_int(v):
+    """`v` when it is already an int (a decoded JSON number), else None.
+
+    Not named _int_or_none: game.py has one that PARSES, and the package resolves a name to the
+    first submodule defining it — cron before game — so a second one here would silently replace
+    it for every `ssh_manager._int_or_none` reader.
+    """
+    return v if isinstance(v, int) else None
+
+
+def _gamedig_reply(server, user, cmd):
+    """The JSON object a `gamedig | jq -c` run as the game user printed — only when its `ok` is true.
+
+    None for a transport that raised, no output, output that is not JSON, and gamedig's own
+    failure object, whose `ok` is false: unknown in every case, which no caller reads as zero.
+    """
+    import json as _json
+    try:
+        out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
+    except Exception:
+        return None
+    line = _last_line(out)
+    if not line:
+        return None
+    try:
+        d = _json.loads(line)
+    except (ValueError, TypeError):
+        return None
+    if not (isinstance(d, dict) and d.get("ok")):
+        return None      # gamedig could not read the server — unknown, NOT zero
+    return d
+
+
 def player_count(server, user, game_type=None, port=None, query_type=None):
-    """Best-effort CURRENT player count for a running instance, via gamedig (the same
-    tool the empty-only daily restart uses). Returns an int, or None when the game
-    isn't queryable (no gamedig type / no port) or the query fails — callers treat
+    """Best-effort CURRENT player count for a running instance, via gamedig.
+
+    Gamedig is the same tool the empty-only daily restart uses. Returns an int, or None when the
+    game isn't queryable (no gamedig type / no port) or the query fails — callers treat
     None as 'unknown' and don't block on it. gamedig is a bare command on PATH exactly
-    as the restart cron invokes it (install-gamedig.sh links it in /usr/local/bin and /usr/bin)."""
+    as the restart cron invokes it (install-gamedig.sh links it in /usr/local/bin and /usr/bin).
+    """
     if not _core.game_idents_ok(user):
         return None      # refused: unknown, which no caller reads as "nobody is on"
     gdtype = _gamedig_type(game_type, query_type)
@@ -981,29 +1203,18 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     jqf = '{c:(.players|length), ok:(.players|type=="array")}'
     cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
            f"| jq -c {_core._quote(jqf)} 2>/dev/null")
-    try:
-        out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
-    except Exception:
-        return None
-    line = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
-    if not line:
-        return None
-    try:
-        import json as _json
-        d = _json.loads(line)
-    except (ValueError, TypeError):
-        return None
-    if not (isinstance(d, dict) and d.get("ok")):
-        return None      # gamedig could not read the server — unknown, NOT zero
-    return d.get("c") if isinstance(d.get("c"), int) else None
+    d = _gamedig_reply(server, user, cmd)
+    return None if d is None else _json_int(d.get("c"))
 
 
 def player_slots(server, user, game_type=None, port=None, query_type=None):
-    """(current, max, name) from a SINGLE gamedig query: player count, the capacity the game reports
-    (or None), and the server's own advertised in-game name/hostname (what players see in the server
-    browser, or None). (None, None, None) when the game isn't gamedig-queryable or the query fails,
-    so the caller can fall back to the console / LinuxGSM config. Never raises."""
-    import json
+    """(current, max, name) from a SINGLE gamedig query.
+
+    Player count, the capacity the game reports (or None), and the server's own advertised in-game
+    name/hostname (what players see in the server browser, or None). (None, None, None) when the
+    game isn't gamedig-queryable or the query fails, so the caller can fall back to the console /
+    LinuxGSM config. Never raises.
+    """
     if not _core.game_idents_ok(user):
         return None, None, None
     gdtype = _gamedig_type(game_type, query_type)
@@ -1016,21 +1227,11 @@ def player_slots(server, user, game_type=None, port=None, query_type=None):
     jqf = '{c:(.players|length), m:.maxplayers, n:(.name // ""), ok:(.players|type=="array")}'
     cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
            f"| jq -c {_core._quote(jqf)} 2>/dev/null")
-    try:
-        out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
-    except Exception:
-        return None, None, None
-    line = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
-    if not line:
-        return None, None, None
-    try:
-        d = json.loads(line)
-    except (ValueError, TypeError):
-        return None, None, None
-    if not (isinstance(d, dict) and d.get("ok")):
+    d = _gamedig_reply(server, user, cmd)
+    if d is None:
         return None, None, None   # gamedig couldn't read the server (error / no A2S response) -> unknown
-    cur = d.get("c") if isinstance(d.get("c"), int) else None
-    mx = d.get("m") if isinstance(d.get("m"), int) else None
+    cur = _json_int(d.get("c"))
+    mx = _json_int(d.get("m"))
     nm = d.get("n")
     nm = (" ".join(str(nm).split())[:120] or None) if nm else None
     return cur, mx, nm
@@ -1042,8 +1243,10 @@ _GAME_MAP_TTL = 30
 
 def game_map(server, user, game_type=None, port=None, query_type=None):
     """The map/level a gamedig-queryable server is currently running, or "" if unknown/unqueryable.
+
     A separate, cached (~30s — maps change rarely) gamedig read, kept OUT of the player-count path so
-    it can't perturb the counts. Never raises."""
+    it can't perturb the counts. Never raises.
+    """
     if not _core.game_idents_ok(user):
         return ""
     gdtype = _gamedig_type(game_type, query_type)
@@ -1059,7 +1262,7 @@ def game_map(server, user, game_type=None, port=None, query_type=None):
     val = ""
     try:
         out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
-        s = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
+        s = _last_line(out)
         # game-supplied text -> collapse whitespace and drop angle brackets (it's rendered as HTML)
         val = "" if s in ("", "null") else " ".join(s.split()).replace("<", "").replace(">", "")[:40]
     except Exception:
@@ -1067,29 +1270,30 @@ def game_map(server, user, game_type=None, port=None, query_type=None):
     _game_map_cache[key] = (now + _GAME_MAP_TTL, val)
     return val
 
+
 def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
-    """Player count using the game's OWN LinuxGSM query settings — this covers games the panel's
-    26-entry gamedig map doesn't. Reads querymode/querytype/queryport from the merged LinuxGSM
-    config and, when LinuxGSM queries the game with gamedig (querymode 2), runs gamedig with
-    LinuxGSM's own type. `fallback_port` (the port the panel already knows) is used when the query
-    port isn't in the LinuxGSM .cfg — e.g. Minecraft keeps it in server.properties. Returns int, or
-    None when LinuxGSM has no usable network query for the game (querymode 1 = process-check only,
-    e.g. Factorio; querymode 3 = the legacy gsquery, not parsed here yet) or the query fails. None =>
-    'unknown', which the reboot poller treats as 'don't reboot'. querytype is charset-sanitised and
-    the port is an int, so nothing user/config-supplied reaches the shell unchecked."""
+    """Player count using the game's OWN LinuxGSM query settings.
+
+    This covers games the panel's 26-entry gamedig map doesn't. Reads querymode/querytype/queryport
+    from the merged LinuxGSM config and, when LinuxGSM queries the game with gamedig (querymode 2),
+    runs gamedig with LinuxGSM's own type. `fallback_port` (the port the panel already knows) is
+    used when the query port isn't in the LinuxGSM .cfg — e.g. Minecraft keeps it in
+    server.properties. Returns int, or None when LinuxGSM has no usable network query for the game
+    (querymode 1 = process-check only, e.g. Factorio; querymode 3 = the legacy gsquery, not parsed
+    here yet) or the query fails. None => 'unknown', which the reboot poller treats as 'don't
+    reboot'. querytype is charset-sanitised and the port is an int, so nothing user/config-supplied
+    reaches the shell unchecked.
+    """
     try:
         vals = files.lgsm_get_values(server, user, selfname, ["querymode", "querytype", "queryport", "port"])
     except Exception:
         return None
     if vals is None:
         return None      # the config could not be read — unknown, and unknown is not "0 players"
-    if (vals.get("querymode") or "").strip() != "2":   # only the gamedig querymode is handled here
+    target = _lgsm_gamedig_target(vals, fallback_port)
+    if target is None:
         return None
-    qtype = re.sub(r"[^A-Za-z0-9_-]", "", (vals.get("querytype") or "").strip())[:40]
-    qport = ((vals.get("queryport") or "").strip() or (vals.get("port") or "").strip()
-             or str(fallback_port or "").strip())
-    if not qtype or not qport.isdecimal():
-        return None
+    qtype, qport = target
     # The `ok` key, for the third time in this file. gamedig writes its FAILURE to stdout as a JSON
     # object -- {"error":"Failed all 1 attempts"} -- so `.players` is null, and jq reports the
     # length of null as 0. A bare `.players|length` therefore turns every dropped query into a
@@ -1101,18 +1305,22 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
     jqf = '{c:(.players|length), ok:(.players|type=="array")}'
     cmd = ("gamedig --type %s %s:%d 2>/dev/null | jq -c %s 2>/dev/null"
            % (qtype, _core._gamedig_host(server), int(qport), _core._quote(jqf)))
-    try:
-        out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
-    except Exception:
+    d = _gamedig_reply(server, user, cmd)
+    return None if d is None else _json_int(d.get("c"))
+
+
+def _lgsm_gamedig_target(vals, fallback_port):
+    """(querytype, queryport) when LinuxGSM queries this game with gamedig, else None."""
+    if (vals.get("querymode") or "").strip() != "2":   # only the gamedig querymode is handled here
         return None
-    line = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
-    if not line:
+    qtype = re.sub(r"[^A-Za-z0-9_-]", "", (vals.get("querytype") or "").strip())[:40]
+    qport = _lgsm_query_port(vals, fallback_port)
+    if not qtype or not qport.isdecimal():
         return None
-    try:
-        import json as _json
-        d = _json.loads(line)
-    except (ValueError, TypeError):
-        return None
-    if not (isinstance(d, dict) and d.get("ok")):
-        return None      # gamedig could not read the server — unknown, NOT zero
-    return d.get("c") if isinstance(d.get("c"), int) else None
+    return qtype, qport
+
+
+def _lgsm_query_port(vals, fallback_port):
+    """The query port: LinuxGSM's queryport, else its port, else the one the panel already knows."""
+    return ((vals.get("queryport") or "").strip() or (vals.get("port") or "").strip()
+            or str(fallback_port or "").strip())

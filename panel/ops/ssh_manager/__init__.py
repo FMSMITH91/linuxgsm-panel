@@ -47,7 +47,8 @@ def __getattr__(name):
     PEP 562: Python calls this only when normal attribute lookup fails, so anything assigned
     directly onto this package shadows it. That is why a stub belongs on the defining submodule
     and not here — a stub set here would be seen by attribute-access callers and missed by this
-    package's own internals, which is half a stub and no error."""
+    package's own internals, which is half a stub and no error.
+    """
     for m in _MODULES:
         try:
             return getattr(m, name)

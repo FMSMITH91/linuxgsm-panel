@@ -367,8 +367,14 @@ check("parser(valve): a second status reply still supersedes the first",
       [p["name"] for p in _sm_game._parse_valve_status(_HDR + _SPOOF)]
       == ["STEAM_0:1:11111111", "Victim"],
       str([p["name"] for p in _sm_game._parse_valve_status(_HDR + _SPOOF)]))
+# The idTech3 twin, which had none: the older table's players (and their slot numbers, which is
+# what kick/ban send) must not survive into the newer reply's list.
+check("parser(idtech3): a second status reply still supersedes the first",
+      [(p["num"], p["name"]) for p in _sm_game._parse_idtech3_status(_COD_HDR + _COD)]
+      == [(0, "Alice"), (1, "Bob Smith")],
+      str(_sm_game._parse_idtech3_status(_COD_HDR + _COD)))
 
-_MC = "[12:34:56] [Server thread/INFO]: There are 2 of a max of 20 players online: Alice, Bob_1"
+_MC ="[12:34:56] [Server thread/INFO]: There are 2 of a max of 20 players online: Alice, Bob_1"
 
 
 def _mc_names(text):
@@ -513,8 +519,47 @@ try:
     check("game-map: strips angle brackets from game-supplied text",
           "<" not in _sm_cron.game_map(object(), "u", "css", 27015) and ">" not in _sm_cron.game_map(object(), "u", "css", 27015))
     check("game-map: no gamedig type/port -> '' (no query)", _sm_cron.game_map(object(), "u", "css", None) == "")
+    _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("a banner line\nde_nuke\n", "", 0)
+    check("game-map: the map is the LAST line of output, where jq prints it",
+          _sm_cron.game_map(object(), "u", "css", 27015) == "de_nuke")
+    # The gamedig player reader had only stubbed callers. The JSON list is found on whatever line
+    # it lands on, unnamed entries are dropped, and a reply with no list in it is "could not query"
+    # (None) — never the confirmed-empty server an empty list is.
+    _sm_core.run_command = lambda *a, **k: ('a banner line\n[{"name":" Alice ","score":3,"time":61.5},'
+                                            '{"name":""},"x"]\n', "", 0)
+    check("gamedig players: the list is read off its own line, unnamed entries dropped",
+          _sm_game._gamedig_player_list(object(), "u", "css", 27015)
+          == [{"name": "Alice", "steamid": "", "num": None, "score": 3, "time": 61.5}],
+          str(_sm_game._gamedig_player_list(object(), "u", "css", 27015)))
+    _sm_core.run_command = lambda *a, **k: ("[]\n", "", 0)
+    check("gamedig players: an empty list is a confirmed-empty server ([]), not unknown",
+          _sm_game._gamedig_player_list(object(), "u", "css", 27015) == [])
+    _sm_core.run_command = lambda *a, **k: ("", "", 0)
+    check("gamedig players: no reply at all is unknown (None), not an empty server",
+          _sm_game._gamedig_player_list(object(), "u", "css", 27015) is None)
 finally:
     _sm_core.run_command = _orig_rc5; _sm_cron._game_map_cache.clear()
+
+# detect_game_ports reads LinuxGSM `details`' port table; its callers are all stubbed. The GAME
+# port is the "Game" row even when another row comes first, only Game + Query are opened, and the
+# table ends at the first line that is not a row (a later "Other 5000 tcp" is not a port of it).
+_DGP_DETAILS = ("DESCRIPTION  PORT   PROTOCOL  LISTEN\n"
+                "Query        27016  udp       1\n"
+                "Game         27017  udp       1\n"
+                "SourceTV     27020  udp       1\n"
+                "RCON         27015  tcp       1\n"
+                "\n"
+                "Other        5000   tcp\n")
+_orig_rag_dgp = _sm_core.run_as_game_user
+try:
+    _sm_core.run_as_game_user = lambda *a, **k: (_DGP_DETAILS, "", 0)
+    _dgp = _sm_game.detect_game_ports(object(), "u", "csgoserver")
+    check("detect_game_ports: the game port is the Game row, not the first row of the table",
+          _dgp["game_port"] == 27017 and _dgp["open_ports"] == [27016, 27017], str(_dgp))
+    check("detect_game_ports: ...and the table ends at its first non-row line",
+          [p["port"] for p in _dgp["ports"]] == [27016, 27017, 27020, 27015], str(_dgp["ports"]))
+finally:
+    _sm_core.run_as_game_user = _orig_rag_dgp
 
 # player_list: gamedig is PRIMARY (no console spam). The console is a backup used ONLY when the
 # caller explicitly passes allow_console=True (a user action) — the automatic path (default) never
@@ -571,6 +616,17 @@ try:
           _mc_ok is False and "cmd" not in _msent and "space" in _mc_why, "%s %r" % (_mc_why, _msent))
     check("moderation: a non-console game (rust) refuses moderation",
           _sm_game.moderate(None, "u", "rust", "ban", target="x")[0] is False)
+    # steamid/num reach moderate() as keywords (**ident), so a misspelled one would be silently
+    # dropped — a ban with no identifier — unless it still raises the TypeError a parameter typo did.
+    _msent.clear()
+    try:
+        _sm_game.moderate(None, "u", "gmod", "ban", steam_id="STEAM_0:1:5")
+        _mod_typo = "accepted"
+    except Exception as _e:      # any type is caught: the TYPE is what is being checked
+        _mod_typo = "%s: %s" % (type(_e).__name__, _e)
+    check("moderation: a misspelled identifier keyword is a TypeError, not a ban without one",
+          _mod_typo.startswith("TypeError") and "steam_id" in _mod_typo and "cmd" not in _msent,
+          "%s %r" % (_mod_typo, _msent))
     # on-demand id resolution: a gamedig-sourced list carries no ids, so kick/ban looks the player
     # up on the console by name and uses the slot / SteamID it finds there.
     _sm_game.console_player_list = lambda *a, **k: [{"name": "Ace", "num": 4, "steamid": "STEAM_0:1:9"}]
@@ -1411,6 +1467,12 @@ try:
     _sm_core.run_command = lambda *a, **k: ('{"c":0,"m":null,"n":"","ok":true}', "", 0)
     check("player_slots: null max + empty name -> (0, None, None)",
           _sm_cron.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (0, None, None))
+    # A count or max that is not a JSON integer is unknown too — never a string or float that a
+    # caller would compare with a number.
+    _sm_core.run_command = lambda *a, **k: ('{"c":"7","m":24.5,"n":"S","ok":true}', "", 0)
+    check("player_slots: a non-integer count/max is None, not passed through",
+          _sm_cron.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (None, None, "S"),
+          repr(_sm_cron.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo")))
     # A gamedig FAILURE ({"error":...} -> ok=false) is 'unknown', NOT 0 players, so the caller can
     # fall back to the console instead of showing a bogus 0.
     _sm_core.run_command = lambda *a, **k: ('{"c":0,"m":null,"n":"","ok":false}', "", 0)

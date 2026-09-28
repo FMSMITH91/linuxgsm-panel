@@ -1,5 +1,9 @@
-"""SSH connection manager for remote LinuxGSM servers.
-Also supports local execution for running on the panel's own machine."""
+"""LinuxGSM config read/write, the file browser and downloads.
+
+Part of the SSH connection manager for remote LinuxGSM servers, which also supports local
+execution for running on the panel's own machine (see the package docstring for how names
+resolve across its submodules).
+"""
 import re
 import subprocess  # nosec B404 - every call site below passes an argv LIST, never a shell string
 from panel.core import terminal
@@ -56,13 +60,15 @@ def _parse_cfg(text):
 
 
 def _safe_abspath(user, relpath):
-    """Resolve a user-supplied relative path under /home/<user>, rejecting any
-    traversal outside it. Returns the absolute path or None.
+    """Resolve a user-supplied relative path under /home/<user>, rejecting any traversal outside it.
+
+    Returns the absolute path or None.
 
     Also rejects an unsafe `user`: every file operation funnels through here, so this is the one
     place that can refuse a malformed identifier before it reaches a shell command. The SAME test
     the command builder applies (_core.game_idents_ok), so a name this lets through is never one
-    the builder then raises on in the middle of a download."""
+    the builder then raises on in the middle of a download.
+    """
     if not _core.game_idents_ok(user):
         return None
     home = f"/home/{user}"
@@ -109,10 +115,12 @@ _CHUNK_B64 = 50000
 
 
 def _keep_mode(dest, staged):
-    """Shell fragment copying `dest`'s permission bits onto `staged`, for a write that renames
-    `staged` over `dest`. True when `dest` does not exist yet. When it exists and the chmod fails,
-    the fragment removes `staged` and fails, so the save is refused rather than landing with a
-    silently changed mode."""
+    """Shell fragment copying `dest`'s permission bits onto `staged`.
+
+    For a write that renames `staged` over `dest`. True when `dest` does not exist yet. When it
+    exists and the chmod fails, the fragment removes `staged` and fails, so the save is refused
+    rather than landing with a silently changed mode.
+    """
     d, s = _core._quote(dest), _core._quote(staged)
     return f"{{ [ ! -e {d} ] || chmod --reference={d} {s} || {{ rm -f {s}; false; }}; }}"
 
@@ -146,13 +154,22 @@ def _write_file_as_user(server, user, abspath, data_bytes):
     # The guard rides whichever command goes first, so a target that resolves outside the home dir
     # is refused before any byte is written.
     if len(b64) <= _ONE_SHOT_B64:
-        inner = (f"{mk} && printf %s {_core._quote(b64)} | base64 -d > {_core._quote(tmp)} "
-                 f"&& {_keep_mode(abspath, tmp)} && mv -f {_core._quote(tmp)} {_core._quote(abspath)}")
-        out, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, inner), timeout=60)
-        if _OUTSIDE_HOME in (out or ""):
-            return False, "Invalid path"
-        return (rc == 0), (e or out or "")
+        return _write_one_shot(server, user, abspath, b64, tmp, mk)
+    return _write_chunked(server, user, abspath, b64, tmp, mk)
 
+
+def _write_one_shot(server, user, abspath, b64, tmp, mk):
+    """Write a small base64 payload in ONE guarded command: decode to `tmp`, keep mode, rename."""
+    inner = (f"{mk} && printf %s {_core._quote(b64)} | base64 -d > {_core._quote(tmp)} "
+             f"&& {_keep_mode(abspath, tmp)} && mv -f {_core._quote(tmp)} {_core._quote(abspath)}")
+    out, e, rc = _core.shell_as_game_user(server, user, _guarded(user, abspath, inner), timeout=60)
+    if _OUTSIDE_HOME in (out or ""):
+        return False, "Invalid path"
+    return (rc == 0), (e or out or "")
+
+
+def _write_chunked(server, user, abspath, b64, tmp, mk):
+    """Stream a large base64 payload to `tmp` in chunks (guard + mkdir on the first), then decode."""
     op = ">"
     first = True
     for i in range(0, max(len(b64), 1), _CHUNK_B64):
@@ -192,62 +209,34 @@ def _lgsm_cfg_dir(user, selfname):
     return f"/home/{user}/lgsm/config-lgsm/{selfname}"
 
 
-def lgsm_read_config(server, user, selfname):
-    """Read a game's LinuxGSM config: the curated common settings (merged from
-    _default.cfg < common.cfg < instance <selfname>.cfg) plus the raw instance cfg
-    text for the advanced editor."""
-    if not _idents_ok(user, selfname):
-        return {"settings": {}, "raw": "", "error": "Invalid account or script name"}
-    d = _lgsm_cfg_dir(user, selfname)
-    inst = f"{d}/{selfname}.cfg"
-    # Each section is FRAMED and base64'd, for two reasons a plain `echo ===MARKER; cat file` could
-    # not give.
-    #
-    # 1. The marker was emitted with `echo` AFTER a `cat`, so it only landed on its own line if the
-    #    previous file ended with a newline. A common.cfg without one produced `a=1===INSTANCE`,
-    #    which matches nothing — `cur` stayed COMMON, sec["INSTANCE"] stayed empty, and `raw` came
-    #    back "". The Raw tab then showed an EMPTY editor for a real config, and Save wrote that ""
-    #    straight over it. Measured on a live host: a 5-line fctrserver.cfg rendered as 0 bytes with
-    #    error=None. A sentinel that cannot fuse to file content is the fix; base64 guarantees it,
-    #    because the encoded body cannot contain the marker's characters.
-    # 2. The same byte fidelity read_file needed: the transport decodes in text mode, so CRLF became
-    #    LF on the way to an editor whose Save writes the result back byte-exact.
-    #
-    # And a section whose frame is MISSING means the read never ran — not "an empty file". That is
-    # the destructive case read_file already names: rc was discarded here (`out, _, _ =`), so a
-    # timed-out or sudo-refused read returned {"raw": "", "error": None} and the editor offered to
-    # save it back.
-    def _frame(path, tag):
-        b, e = "__LGSMP_%s_B__" % tag, "__LGSMP_%s_E__" % tag
-        return (f"printf %s {_core._quote(b)}; base64 {_core._quote(path)} 2>/dev/null | tr -d '\n'; "
-                f"printf %s {_core._quote(e)}; ")
+def _lgsm_frame(path, tag):
+    """Shell printing `path` base64'd between this tag's begin/end sentinels (see lgsm_read_config)."""
+    b, e = "__LGSMP_%s_B__" % tag, "__LGSMP_%s_E__" % tag
+    return (f"printf %s {_core._quote(b)}; base64 {_core._quote(path)} 2>/dev/null | tr -d '\n'; "
+            f"printf %s {_core._quote(e)}; ")
 
-    inner = (_frame(d + "/_default.cfg", "DEFAULT") + _frame(d + "/common.cfg", "COMMON")
-             + _frame(inst, "INSTANCE"))
-    out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=20, selfname=selfname)
-    body = out or ""
+
+def _unframe_lgsm_sections(body, inst):
+    """Decode the DEFAULT/COMMON/INSTANCE frames into {tag: text}, or None if any is missing/bad."""
     sect = {}
     for tag in ("DEFAULT", "COMMON", "INSTANCE"):
         b, e = "__LGSMP_%s_B__" % tag, "__LGSMP_%s_E__" % tag
         i, j = body.find(b), body.find(e)
         if i == -1 or j < i:
             _core._log.warning("lgsm_read_config: no %s frame for %s — reporting a failed read", tag, inst)
-            return {"settings": {}, "raw": "", "merged": {}, "instance": {},
-                    "error": "Could not read the config — the host did not answer."}
+            return None
         enc = body[i + len(b):j].strip()
         try:
             import base64 as _b64
             sect[tag] = _b64.b64decode(enc, validate=True).decode("utf-8", "replace") if enc else ""
         except Exception:
             _core._log.warning("lgsm_read_config: %s frame for %s was not valid base64", tag, inst)
-            return {"settings": {}, "raw": "", "merged": {}, "instance": {},
-                    "error": "Could not read the config — the host did not answer."}
-    defaults = _parse_cfg(sect["DEFAULT"])
-    common = _parse_cfg(sect["COMMON"])
-    instance_text = sect["INSTANCE"]
-    instance = _parse_cfg(instance_text)
-    merged = dict(defaults); merged.update(common); merged.update(instance)
-    # Curated "common" quick list.
+            return None
+    return sect
+
+
+def _curated_cfg_settings(merged, defaults, instance, common):
+    """The curated "common" quick list: each _COMMON_CFG_KEYS entry the merged config carries."""
     settings = []
     for key, label in _COMMON_CFG_KEYS:
         if key in merged:
@@ -256,11 +245,17 @@ def lgsm_read_config(server, user, selfname):
                 "default": defaults.get(key, ""),
                 "overridden": key in instance or key in common,
             })
-    # EVERY setting, grouped by _default.cfg's "#### Section ####" headers, so any
-    # LinuxGSM setting is editable (not just the curated ones).
+    return settings
+
+
+def _grouped_cfg_settings(default_text, merged, defaults, instance, common):
+    """EVERY setting, grouped by _default.cfg's "#### Section ####" headers.
+
+    So any LinuxGSM setting is editable (not just the curated ones). Empty sections are dropped.
+    """
     groups = []
     cur = None
-    for line in sect["DEFAULT"].splitlines():
+    for line in default_text.splitlines():
         h = re.match(r"^#{3,}\s+(.+?)\s+#{3,}\s*$", line.strip())
         if h:
             cur = {"section": h.group(1), "settings": []}
@@ -279,7 +274,52 @@ def lgsm_read_config(server, user, selfname):
                 "default": defaults.get(key, ""),
                 "overridden": key in instance or key in common,
             })
-    groups = [g for g in groups if g["settings"]]
+    return [g for g in groups if g["settings"]]
+
+
+def lgsm_read_config(server, user, selfname):
+    """Read a game's LinuxGSM config: the curated common settings plus the raw instance cfg.
+
+    The settings are merged from _default.cfg < common.cfg < instance <selfname>.cfg; the raw
+    instance cfg text is for the advanced editor.
+    """
+    if not _idents_ok(user, selfname):
+        return {"settings": {}, "raw": "", "error": "Invalid account or script name"}
+    d = _lgsm_cfg_dir(user, selfname)
+    inst = f"{d}/{selfname}.cfg"
+    # Each section is FRAMED and base64'd (_lgsm_frame), for two reasons a plain
+    # `echo ===MARKER; cat file` could not give.
+    #
+    # 1. The marker was emitted with `echo` AFTER a `cat`, so it only landed on its own line if the
+    #    previous file ended with a newline. A common.cfg without one produced `a=1===INSTANCE`,
+    #    which matches nothing — `cur` stayed COMMON, sec["INSTANCE"] stayed empty, and `raw` came
+    #    back "". The Raw tab then showed an EMPTY editor for a real config, and Save wrote that ""
+    #    straight over it. Measured on a live host: a 5-line fctrserver.cfg rendered as 0 bytes with
+    #    error=None. A sentinel that cannot fuse to file content is the fix; base64 guarantees it,
+    #    because the encoded body cannot contain the marker's characters.
+    # 2. The same byte fidelity read_file needed: the transport decodes in text mode, so CRLF became
+    #    LF on the way to an editor whose Save writes the result back byte-exact.
+    #
+    # And a section whose frame is MISSING means the read never ran — not "an empty file". That is
+    # the destructive case read_file already names: rc was discarded here (`out, _, _ =`), so a
+    # timed-out or sudo-refused read returned {"raw": "", "error": None} and the editor offered to
+    # save it back.
+    inner = (_lgsm_frame(d + "/_default.cfg", "DEFAULT") + _lgsm_frame(d + "/common.cfg", "COMMON")
+             + _lgsm_frame(inst, "INSTANCE"))
+    out, _, _ = _core.shell_as_game_user(server, user, inner, timeout=20, selfname=selfname)
+    sect = _unframe_lgsm_sections(out or "", inst)
+    if sect is None:
+        return {"settings": {}, "raw": "", "merged": {}, "instance": {},
+                "error": "Could not read the config — the host did not answer."}
+    defaults = _parse_cfg(sect["DEFAULT"])
+    common = _parse_cfg(sect["COMMON"])
+    instance_text = sect["INSTANCE"]
+    instance = _parse_cfg(instance_text)
+    merged = dict(defaults)
+    merged.update(common)
+    merged.update(instance)
+    settings = _curated_cfg_settings(merged, defaults, instance, common)
+    groups = _grouped_cfg_settings(sect["DEFAULT"], merged, defaults, instance, common)
     return {"path": inst, "raw": instance_text, "settings": settings, "groups": groups}
 
 
@@ -289,12 +329,14 @@ _DETAILS_DONE = "__LGSMP_DETAILS_DONE__"
 
 
 def lgsm_game_config(server, user, selfname):
-    """Locate and read the game's OWN server config file (e.g. a Source server.cfg
-    or cod's serverfiles/main/<name>.cfg) by parsing LinuxGSM `details`. This is the
+    """Locate and read the game's OWN server config file by parsing LinuxGSM `details`.
+
+    E.g. a Source server.cfg or cod's serverfiles/main/<name>.cfg. This is the
     file where in-game settings like sv_maxclients actually live for many games.
     Returns {rel, content, exists, error}. A `details` run that never completed answers
     "the host did not answer" — NOT "this game has no config file", which is a claim about
-    the game that a failed read never established."""
+    the game that a failed read never established.
+    """
     if not _idents_ok(user, selfname):
         return {"rel": "", "content": "", "exists": False,
                 "error": "Invalid account or script name"}
@@ -331,8 +373,10 @@ def lgsm_game_config(server, user, selfname):
 
 
 def lgsm_get_values(server, user, selfname, keys):
-    """Return {key: value} for `keys` from the merged LinuxGSM config (_default < common <
-    instance — instance wins). Missing keys come back as "". Used by focused editors (alerts).
+    """Return {key: value} for `keys` from the merged LinuxGSM config.
+
+    Merged as _default < common < instance — instance wins. Missing keys come back as "". Used by
+    focused editors (alerts).
 
     Returns **None when the config could not be read at all**, which is a different answer from
     "every one of these settings is unset" and has to stay tellable apart.
@@ -355,7 +399,8 @@ def lgsm_get_values(server, user, selfname, keys):
     `discordalert="on"` followed by an instance cfg opening with its webhook read back as
     discordalert=`on"discordwebhook="https://…` and NO discordwebhook at all. The Alerts card then
     showed an empty webhook, and its Save wrote "" over the real one. lgsm_read_config met the same
-    fusion and frames each file; a blank line between them is all this parser needs."""
+    fusion and frames each file; a blank line between them is all this parser needs.
+    """
     if not _idents_ok(user, selfname):
         return None
     d = _lgsm_cfg_dir(user, selfname)
@@ -372,12 +417,28 @@ def lgsm_get_values(server, user, selfname, keys):
 
 
 def lgsm_write_config(server, user, selfname, updates):
-    """Apply key→value updates to the instance <selfname>.cfg (replace an existing
-    uncommented line, else append). Other files (_default/common) are left alone."""
+    """Apply key→value updates to the instance <selfname>.cfg.
+
+    Replaces an existing uncommented line, else appends. Other files (_default/common) are left
+    alone.
+    """
     if not _idents_ok(user, selfname):
         return False, "Invalid account or script name"
     d = _lgsm_cfg_dir(user, selfname)
     inst = f"{d}/{selfname}.cfg"
+    lines = _read_instance_cfg_lines(server, user, selfname, inst)
+    if lines is None:
+        return False, "Could not read the current config — nothing has been changed."
+    _apply_cfg_updates(lines, updates)
+    content = "\n".join(lines).rstrip("\n") + "\n"
+    return _write_file_as_user(server, user, inst, content.encode())
+
+
+def _read_instance_cfg_lines(server, user, selfname, inst):
+    """The instance cfg's lines ([] when it does not exist yet), or None when the read failed.
+
+    None means the caller must not write: see the comment below for the data loss that caused.
+    """
     # The read is FRAMED, and a read that did not happen ABORTS the write.
     #
     # This was `cat … 2>/dev/null` with the rc discarded (`out, _, _ =`). run_command does not raise
@@ -398,20 +459,23 @@ def lgsm_write_config(server, user, selfname, updates):
     out, _, _ = _core.shell_as_game_user(server, user, _probe, timeout=15, selfname=selfname)
     body = out or ""
     if body.strip() == "__NOFILE__":
-        lines = []                      # no instance cfg yet — the updates become the file
-    else:
-        i, j = body.find(_READ_BEGIN), body.rfind(_READ_END)
-        if i == -1 or j <= i:
-            _core._log.warning("lgsm_write_config: could not read %s — refusing to write", inst)
-            return False, "Could not read the current config — nothing has been changed."
-        try:
-            import base64 as _b64
-            _framed = body[i + len(_READ_BEGIN):j].strip()
-            _cur = _b64.b64decode(_framed, validate=True).decode("utf-8", "replace") if _framed else ""
-        except Exception:
-            _core._log.warning("lgsm_write_config: framed body for %s was not valid base64", inst)
-            return False, "Could not read the current config — nothing has been changed."
-        lines = _cur.splitlines()
+        return []                       # no instance cfg yet — the updates become the file
+    i, j = body.find(_READ_BEGIN), body.rfind(_READ_END)
+    if i == -1 or j <= i:
+        _core._log.warning("lgsm_write_config: could not read %s — refusing to write", inst)
+        return None
+    try:
+        import base64 as _b64
+        _framed = body[i + len(_READ_BEGIN):j].strip()
+        _cur = _b64.b64decode(_framed, validate=True).decode("utf-8", "replace") if _framed else ""
+    except Exception:
+        _core._log.warning("lgsm_write_config: framed body for %s was not valid base64", inst)
+        return None
+    return _cur.splitlines()
+
+
+def _apply_cfg_updates(lines, updates):
+    """Set each valid key in `lines` IN PLACE: replace its uncommented line, else append one."""
     for key, val in (updates or {}).items():
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*\Z", key or ""):
             continue
@@ -426,8 +490,6 @@ def lgsm_write_config(server, user, selfname, updates):
                 break
         if not replaced:
             lines.append(newline)
-    content = "\n".join(lines).rstrip("\n") + "\n"
-    return _write_file_as_user(server, user, inst, content.encode())
 
 
 # --- Mods / addons (LinuxGSM mods-install / mods-remove) --------------------
@@ -453,7 +515,8 @@ def _parse_mods_available(out):
     installed, NO description above them) and then 'Available addons/mods' where each ' * <id>' is
     preceded by a 'Name - desc - url' line. Only the Available block carries real, named entries — the
     Installed block's ids would otherwise be emitted named after the section header ('Installed
-    addons/mods') AND duplicate the real Available rows, so we skip that section and de-dupe by id."""
+    addons/mods') AND duplicate the real Available rows, so we skip that section and de-dupe by id.
+    """
     mods = []
     prev = ""
     in_installed = False
@@ -461,30 +524,45 @@ def _parse_mods_available(out):
     for raw in (out or "").splitlines():
         line = _strip_ansi(raw).rstrip()
         low = line.strip().lower()
-        if low == "installed addons/mods":   # enter the skip section (its ' * <id>' lines have no name)
-            in_installed, prev = True, ""
-            continue
-        if low == "available addons/mods":    # back to the real, described list
-            in_installed, prev = False, ""
+        if low in _MODS_SECTIONS:   # a section header: which one decides whether rows count
+            in_installed, prev = _MODS_SECTIONS[low], ""
             continue
         m = _MOD_AVAIL_RE.match(line)
         if m and _MOD_ID_OK.match(m.group(1)):
             mod_id = m.group(1)
             if not in_installed and mod_id not in seen:
                 seen.add(mod_id)
-                name = prev.split(" - ")[0].strip() if prev else mod_id
-                mods.append({"id": mod_id, "name": name or mod_id, "desc": prev})
+                mods.append(_available_mod(mod_id, prev))
         else:
-            t = line.strip()
-            if t and set(t) != {"="}:   # remember the latest real description line, skip === rules
-                prev = t
+            prev = _mod_description_line(line, prev)
     return mods
 
 
+# The two mods-install section headers, and whether each one is the skip section. "Installed"
+# rows are bare ' * <id>' lines with no name; "Available" is back to the real, described list.
+_MODS_SECTIONS = {"installed addons/mods": True, "available addons/mods": False}
+
+
+def _available_mod(mod_id, prev):
+    """One available mod, named from the description line above its ' * <id>' line."""
+    name = prev.split(" - ")[0].strip() if prev else mod_id
+    return {"id": mod_id, "name": name or mod_id, "desc": prev}
+
+
+def _mod_description_line(line, prev):
+    """The latest real description line: `line` unless it is blank or an === rule, else `prev`."""
+    t = line.strip()
+    if t and set(t) != {"="}:   # remember the latest real description line, skip === rules
+        return t
+    return prev
+
+
 def _game_supports_mods(text):
-    """False for games with no LinuxGSM mods installer (e.g. cod): running mods-install/-remove
-    on them prints 'Error! Unknown command' followed by a usage banner ('LinuxGSM - <Game> -
-    Version v…') that would otherwise be misparsed as an installed mod."""
+    """False for games with no LinuxGSM mods installer (e.g. cod).
+
+    Running mods-install/-remove on them prints 'Error! Unknown command' followed by a usage banner
+    ('LinuxGSM - <Game> - Version v…') that would otherwise be misparsed as an installed mod.
+    """
     return "unknown command" not in (text or "").lower()
 
 
@@ -526,12 +604,14 @@ def _mods_read_ok(text):
 
 
 def mods_available(server, user, selfname, timeout=60):
-    """Returns (available_mods, supported). `supported` is False for games with no LinuxGSM mods
-    installer (e.g. cod), where mods-install answers 'Unknown command' — so the UI can hide the
-    whole card rather than show an empty one.
+    """Return (available_mods, supported).
+
+    `supported` is False for games with no LinuxGSM mods installer (e.g. cod), where mods-install
+    answers 'Unknown command' — so the UI can hide the whole card rather than show an empty one.
 
     The list is **None when the host did not answer at all**, which is a different thing from "this
-    game has no mods" and has to stay tellable apart — see _mods_read_ok."""
+    game has no mods" and has to stay tellable apart — see _mods_read_ok.
+    """
     out, err, _ = _core.run_as_game_user(server, user, "mods-install", timeout=timeout,
                                          selfname=selfname, answers=["abort"])
     text = (out or "") + "\n" + (err or "")
@@ -542,8 +622,10 @@ def mods_available(server, user, selfname, timeout=60):
 
 
 def mods_installed(server, user, selfname, timeout=60):
-    """Returns (installed_mods, supported). See mods_available for `supported` and for why the
-    list is None when the read did not happen."""
+    """Return (installed_mods, supported).
+
+    See mods_available for `supported` and for why the list is None when the read did not happen.
+    """
     out, err, _ = _core.run_as_game_user(server, user, "mods-remove", timeout=timeout,
                                          selfname=selfname, answers=["abort"])
     text = (out or "") + "\n" + (err or "")
@@ -554,11 +636,14 @@ def mods_installed(server, user, selfname, timeout=60):
 
 
 def mods_action(server, user, selfname, which, mod_id, timeout=600):
-    """Install or remove a mod by its LinuxGSM id (e.g. "sourcemod"). `which` is 'install' or
-    'remove'. Returns (out, err, rc). We feed the id then a "Y": mods-remove always asks
-    "Continue?" before deleting files, and mods-install asks it too when the mod is already
-    installed (both default to Y). The id is validated to a safe charset first, so nothing but a
-    bare id + Y is ever fed to the command. Verified install+remove on a live Garry's Mod box."""
+    """Install or remove a mod by its LinuxGSM id (e.g. "sourcemod").
+
+    `which` is 'install' or 'remove'. Returns (out, err, rc). We feed the id then a "Y":
+    mods-remove always asks "Continue?" before deleting files, and mods-install asks it too when
+    the mod is already installed (both default to Y). The id is validated to a safe charset first,
+    so nothing but a bare id + Y is ever fed to the command. Verified install+remove on a live
+    Garry's Mod box.
+    """
     if not _MOD_ID_OK.match(mod_id or ""):
         return "", "invalid mod id", 1
     cmd = "mods-install" if which == "install" else "mods-remove"
@@ -602,9 +687,11 @@ def _is_protected_path(relpath, selfname):
 
 
 def browse_dir(server, user, relpath="", selfname=None):
-    """List a directory in the game user's home (dirs first). Each entry is flagged
-    `protected` when deleting it would break LinuxGSM/the game. Returns None on a
-    path-traversal attempt."""
+    """List a directory in the game user's home (dirs first).
+
+    Each entry is flagged `protected` when deleting it would break LinuxGSM/the game. Returns None
+    on a path-traversal attempt.
+    """
     ap = _safe_abspath(user, relpath)
     if ap is None:
         return None
@@ -620,6 +707,11 @@ def browse_dir(server, user, relpath="", selfname=None):
     if rc != 0:
         return {"path": (relpath or "").strip("/"), "entries": [], "unreadable": True}
     base = (relpath or "").strip("/")
+    return {"path": base, "entries": _browse_entries(out, base, selfname)}
+
+
+def _browse_entries(out, base, selfname):
+    """The tab-separated `find -printf` listing (type, size, name) as entries, dirs first."""
     entries = []
     for line in (out or "").splitlines():
         parts = line.split("\t")
@@ -631,7 +723,7 @@ def browse_dir(server, user, relpath="", selfname=None):
                             "size": int(size) if size.isdecimal() else 0,
                             "protected": _is_protected_path(rel, selfname)})
     entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
-    return {"path": base, "entries": entries}
+    return entries
 
 
 # Sentinels framing a file's bytes on the wire — see read_file for why they are needed.
@@ -641,7 +733,9 @@ _READ_END = "__LGSMP_FILE_END__"
 
 def read_file(server, user, relpath, max_bytes=1048576):
     """Read a text file from the game user's home. Returns (content, error).
-    Refuses binaries and files larger than max_bytes."""
+
+    Refuses binaries and files larger than max_bytes.
+    """
     ap = _safe_abspath(user, relpath)
     if ap is None:
         return None, "Invalid path"
@@ -683,32 +777,45 @@ def read_file(server, user, relpath, max_bytes=1048576):
         f"printf %s {_core._quote(_READ_END)}; else echo __BINARY__; fi"
     )
     out, _err, _rc = _core.shell_as_game_user(server, user, _guarded(user, ap, inner), timeout=20)
+    return _read_file_reply(out, ap, _rc)
+
+
+# What read_file's script prints INSTEAD of a frame, and what each one tells the editor.
+_READ_REFUSALS = {
+    "__NOFILE__": "File not found",
+    "__TOOBIG__": "File is too large to edit in the browser",
+    "__BINARY__": "Binary file — download/replace via upload instead",
+}
+
+
+def _decode_read_frame(framed, ap):
+    """The (content, error) for the base64 text between read_file's sentinels."""
+    if not framed:
+        return "", None          # a genuinely empty file, framed and confirmed
+    try:
+        import base64 as _b64
+        # errors="replace" matches what the text transport did for a file that is not valid
+        # UTF-8: grep -qI calls it text, and the editor still has to show something.
+        return _b64.b64decode(framed, validate=True).decode("utf-8", "replace"), None
+    except Exception:
+        _core._log.warning("read_file: framed body for %s was not valid base64", ap)
+        return None, "Could not read that file — the host did not answer. Nothing has been changed."
+
+
+def _read_file_reply(out, ap, _rc):
+    """Turn read_file's script output into (content, error) — see read_file."""
     if _OUTSIDE_HOME in (out or ""):
         return None, "Invalid path"
     stripped = (out or "").strip()
-    if stripped == "__NOFILE__":
-        return None, "File not found"
-    if stripped == "__TOOBIG__":
-        return None, "File is too large to edit in the browser"
-    if stripped == "__BINARY__":
-        return None, "Binary file — download/replace via upload instead"
+    if stripped in _READ_REFUSALS:
+        return None, _READ_REFUSALS[stripped]
     # First BEGIN, LAST end: a file that happens to contain a sentinel still round-trips unless it
     # contains both, in that order, which no real config does.
     body = out or ""
     i = body.find(_READ_BEGIN)
     j = body.rfind(_READ_END)
     if i != -1 and j > i:
-        framed = body[i + len(_READ_BEGIN):j].strip()
-        if not framed:
-            return "", None          # a genuinely empty file, framed and confirmed
-        try:
-            import base64 as _b64
-            # errors="replace" matches what the text transport did for a file that is not valid
-            # UTF-8: grep -qI calls it text, and the editor still has to show something.
-            return _b64.b64decode(framed, validate=True).decode("utf-8", "replace"), None
-        except Exception:
-            _core._log.warning("read_file: framed body for %s was not valid base64", ap)
-            return None, "Could not read that file — the host did not answer. Nothing has been changed."
+        return _decode_read_frame(body[i + len(_READ_BEGIN):j].strip(), ap)
     # No frame, and none of the three sentinels above: the read never got as far as `cat`. This
     # used to `return body, None` — i.e. "" with no error — and that is destructive, not merely
     # wrong. run_command does not raise on the local or Tailscale transports; it returns
@@ -762,6 +869,11 @@ def stat_upload_targets(server, user, reldir, names):
     # when the command itself failed.
     if rc != 0:
         raise ConnectionError((err or out or "could not list the upload directory").strip()[:200])
+    return _upload_conflicts(names, _upload_dir_entries(out))
+
+
+def _upload_dir_entries(out):
+    """Map each name to {is_dir, size, mtime}, from the tab-separated `find -printf` listing."""
     present = {}
     for line in (out or "").splitlines():
         parts = line.split("\t")
@@ -776,6 +888,11 @@ def stat_upload_targets(server, user, reldir, names):
             mt = 0
         present[nm] = {"is_dir": typ == "d",
                        "size": int(size) if size.isdecimal() else 0, "mtime": mt}
+    return present
+
+
+def _upload_conflicts(names, present):
+    """The requested names that already exist in `present`, each once, in request order."""
     hits = []
     seen = set()
     for n in (names or []):
@@ -804,31 +921,49 @@ def upload_file(server, user, reldir, filename, data_bytes, overwrite=True):
     if not (target.startswith(f"/home/{user}/")):
         return False, "Invalid path"
     if not overwrite:
-        chk = f"test -e {_core._quote(target)} && echo __YES__ || true"
-        out, _, rc = _core.shell_as_game_user(server, user, _guarded(user, target, chk), timeout=15)
-        if _OUTSIDE_HOME in (out or ""):
-            return False, "Invalid path"
-        # The probe prints NOTHING when the file is absent, so silence is its ordinary success —
-        # rc is what separates that from a read that never ran. Without it, a failed check read as
-        # "no file there" and the upload went ahead and replaced a file the caller had explicitly
-        # asked not to overwrite.
-        if rc != 0:
-            return False, ("Couldn't check whether that file already exists on the host — "
-                           "nothing was uploaded. Try again.")
-        if "__YES__" in (out or ""):
-            return False, UPLOAD_EXISTS
+        refusal = _existing_target_refusal(server, user, target)
+        if refusal:
+            return False, refusal
     return _write_file_as_user(server, user, target, data_bytes)
 
 
-def delete_path(server, user, relpath, selfname=None):
-    """Delete a file or directory (recursively) in the game user's home. Refuses
-    the home root, anything outside it, and protected LinuxGSM/game paths."""
-    ap = _safe_abspath(user, relpath)
+def _existing_target_refusal(server, user, target):
+    """Why a no-overwrite upload must not proceed (UPLOAD_EXISTS, or a failed check), else None."""
+    chk = f"test -e {_core._quote(target)} && echo __YES__ || true"
+    out, _, rc = _core.shell_as_game_user(server, user, _guarded(user, target, chk), timeout=15)
+    if _OUTSIDE_HOME in (out or ""):
+        return "Invalid path"
+    # The probe prints NOTHING when the file is absent, so silence is its ordinary success —
+    # rc is what separates that from a read that never ran. Without it, a failed check read as
+    # "no file there" and the upload went ahead and replaced a file the caller had explicitly
+    # asked not to overwrite.
+    if rc != 0:
+        return ("Couldn't check whether that file already exists on the host — "
+                "nothing was uploaded. Try again.")
+    if "__YES__" in (out or ""):
+        return UPLOAD_EXISTS
+    return None
+
+
+def _delete_refusal(user, relpath, selfname, ap):
+    """Why delete_path must refuse this path (the home root, outside it, protected), else None."""
     home = f"/home/{user}"
     if ap is None or ap == home or not (relpath or "").strip("/"):
-        return False, "Refusing to delete this path"
+        return "Refusing to delete this path"
     if _is_protected_path(relpath, selfname):
-        return False, "This file/folder is protected — deleting it would break the server."
+        return "This file/folder is protected — deleting it would break the server."
+    return None
+
+
+def delete_path(server, user, relpath, selfname=None):
+    """Delete a file or directory (recursively) in the game user's home.
+
+    Refuses the home root, anything outside it, and protected LinuxGSM/game paths.
+    """
+    ap = _safe_abspath(user, relpath)
+    refusal = _delete_refusal(user, relpath, selfname, ap)
+    if refusal:
+        return False, refusal
     inner = f"rm -rf -- {_core._quote(ap)} && echo __OK__"
     # The most destructive of the six, so it gets the same host-side resolution check: a symlink
     # under the home dir must not turn `rm -rf` loose on whatever it points at.
@@ -905,6 +1040,111 @@ def _remote_read_command(user, as_tar):
     return _core.game_user_cmd(user, body)
 
 
+def _local_download_argv(user, rel, ap, as_tar):
+    """The argv that reads a download on the panel's own host AS THE GAME USER, or None if refused.
+
+    The helper opens the file only after dropping supplementary groups, gid and uid
+    to the game user, and redoes the containment check there — the same reasoning as
+    game-backup-read. The fallback for a host that has no helper yet keeps the one
+    property that matters, reading AS THE GAME USER, and stays an argv: no shell is
+    involved on either branch, so the caller's path is never text anything parses.
+    """
+    if _core.helper_present():
+        try:
+            return _priv.helper_argv("game-dir-tar" if as_tar else "game-file-read", [user, rel])
+        except _priv.VerbError:
+            # Unreachable while `rel` is canonical and non-root, which stream_path guarantees —
+            # but this feeds a GENERATOR, and an exception raised in one comes
+            # out of the middle of a streaming response, where Flask can no longer turn
+            # it into an error page. The browser would get a truncated file and a 200.
+            # A refusal has to end the stream, not corrupt it.
+            _core._log.debug("download: the helper refused the path", exc_info=True)
+            return None
+    if as_tar:
+        return cron._as_user_argv(user, "tar", "czf", "-",
+                                  "-C", _pp.dirname(ap), "--", _pp.basename(ap))
+    return cron._as_user_argv(user, "cat", "--", ap)
+
+
+def _ssh_download_argv(server, shell):
+    """The `ssh` argv for a Tailscale-CLI remote's download, or None when its login is refused.
+
+    The login and host are stored data handed to ssh as an argument — see
+    _core.ssh_destination. A refusal ends the download empty, as a refused path does.
+    """
+    try:
+        return ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
+                "-p", _core._ssh_port_arg(server), _core.SSH_DEST_SEP,
+                _core.ssh_destination(server.username, _core._resolve_ts_host(server)),
+                shell]
+    except (TypeError, ValueError):
+        _core._log.warning("download: refusing the host's stored ssh login or address")
+        return None
+
+
+def _stream_argv(argv, rel, chunk):
+    """Yield the stdout of `argv` in `chunk`-sized blocks, handing the SSH form the path on stdin."""
+    # stdin is a pipe only for the SSH form, which expects the path there. The local forms
+    # take it in argv (helper) or already resolved (the pre-helper fallback), and get
+    # DEVNULL -- never the panel's own stdin, which a helper verb would read to EOF.
+    feed = rel.encode() if argv[0] == "ssh" else None
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; argv[0] is a literal
+                         stdin=subprocess.PIPE if feed is not None else subprocess.DEVNULL)
+    if feed is not None:
+        try:
+            p.stdin.write(feed)
+            p.stdin.close()
+        except OSError:
+            # ssh died before it could take the path — a dead host, a refused key. The
+            # read below then sees EOF and the download ends empty, which is what every
+            # other unreachable-host path in this module does.
+            _core._log.debug("download: could not hand the path to ssh", exc_info=True)
+    try:
+        while True:
+            b = p.stdout.read(chunk)
+            if not b:
+                break
+            yield b
+    finally:
+        try:
+            p.stdout.close()
+        except Exception:  # nosec B110
+            pass
+        p.wait()
+
+
+def _stream_paramiko(server, shell, rel, chunk):
+    """Yield a paramiko remote's download — same fixed command, same path-on-stdin."""
+    client = _core.get_connection(server)
+    _in, out, _err = client.exec_command(shell)
+    try:
+        _in.write(rel)
+        _in.flush()
+        _in.channel.shutdown_write()   # the remote `cat` needs EOF before it will return
+    except Exception:
+        _core._log.debug("download: could not hand the path to the remote shell", exc_info=True)
+    while True:
+        b = out.read(chunk)
+        if not b:
+            break
+        yield b
+
+
+def _download_blocks(server, user, rel, ap, as_tar, chunk):
+    """Yield the raw download bytes over whichever transport this host uses."""
+    shell = _remote_read_command(user, as_tar)
+    if _core.is_local_server(server):
+        argv = _local_download_argv(user, rel, ap, as_tar)
+    elif getattr(server, "auth_method", "") == "tailscale":
+        argv = _ssh_download_argv(server, shell)
+    else:
+        yield from _stream_paramiko(server, shell, rel, chunk)
+        return
+    if argv is None:
+        return
+    yield from _stream_argv(argv, rel, chunk)
+
+
 def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
     """Yield the bytes of a file under the game user's home — or of a .tar.gz of a directory.
 
@@ -938,89 +1178,9 @@ def stream_path(server, user, relpath, as_tar=False, limit=None, chunk=262144):
     rel = _pp.relpath(ap, f"/home/{user}")
     if rel in (".", "", "/"):
         return   # the home directory itself: archiving a whole game install is not a download
-    shell = _remote_read_command(user, as_tar)
-
-    def _raw():
-        if _core.is_local_server(server) or getattr(server, "auth_method", "") == "tailscale":
-            if _core.is_local_server(server):
-                # The helper opens the file only after dropping supplementary groups, gid and uid
-                # to the game user, and redoes the containment check there — the same reasoning as
-                # game-backup-read. The fallback for a host that has no helper yet keeps the one
-                # property that matters, reading AS THE GAME USER, and stays an argv: no shell is
-                # involved on either branch, so the caller's path is never text anything parses.
-                if _core.helper_present():
-                    try:
-                        argv = _priv.helper_argv("game-dir-tar" if as_tar else "game-file-read",
-                                                 [user, rel])
-                    except _priv.VerbError:
-                        # Unreachable while `rel` is canonical and non-root, which the lines above
-                        # guarantee — but this is a GENERATOR, and an exception raised in one comes
-                        # out of the middle of a streaming response, where Flask can no longer turn
-                        # it into an error page. The browser would get a truncated file and a 200.
-                        # A refusal has to end the stream, not corrupt it.
-                        _core._log.debug("download: the helper refused the path", exc_info=True)
-                        return
-                elif as_tar:
-                    argv = cron._as_user_argv(user, "tar", "czf", "-",
-                                         "-C", _pp.dirname(ap), "--", _pp.basename(ap))
-                else:
-                    argv = cron._as_user_argv(user, "cat", "--", ap)
-            else:
-                # The login and host are stored data handed to ssh as an argument — see
-                # _core.ssh_destination. A refusal ends the download empty, as a refused path does.
-                try:
-                    argv = ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes",
-                            "-p", _core._ssh_port_arg(server), _core.SSH_DEST_SEP,
-                            _core.ssh_destination(server.username, _core._resolve_ts_host(server)),
-                            shell]
-                except (TypeError, ValueError):
-                    _core._log.warning("download: refusing the host's stored ssh login or address")
-                    return
-            # stdin is a pipe only for the SSH form, which expects the path there. The local forms
-            # take it in argv (helper) or already resolved (the pre-helper fallback), and get
-            # DEVNULL -- never the panel's own stdin, which a helper verb would read to EOF.
-            feed = rel.encode() if argv[0] == "ssh" else None
-            p = subprocess.Popen(argv, stdout=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; argv[0] is a literal
-                                 stdin=subprocess.PIPE if feed is not None else subprocess.DEVNULL)
-            if feed is not None:
-                try:
-                    p.stdin.write(feed)
-                    p.stdin.close()
-                except OSError:
-                    # ssh died before it could take the path — a dead host, a refused key. The
-                    # read below then sees EOF and the download ends empty, which is what every
-                    # other unreachable-host path in this module does.
-                    _core._log.debug("download: could not hand the path to ssh", exc_info=True)
-            try:
-                while True:
-                    b = p.stdout.read(chunk)
-                    if not b:
-                        break
-                    yield b
-            finally:
-                try:
-                    p.stdout.close()
-                except Exception:  # nosec B110
-                    pass
-                p.wait()
-            return
-        # paramiko remote — same fixed command, same path-on-stdin.
-        client = _core.get_connection(server)
-        _in, out, _err = client.exec_command(shell)
-        try:
-            _in.write(rel)
-            _in.flush()
-            _in.channel.shutdown_write()   # the remote `cat` needs EOF before it will return
-        except Exception:
-            _core._log.debug("download: could not hand the path to the remote shell", exc_info=True)
-        while True:
-            b = out.read(chunk)
-            if not b:
-                break
-            yield b
 
     first, sent = True, 0
-    for block in _raw():
+    for block in _download_blocks(server, user, rel, ap, as_tar, chunk):
         if first:
             first = False
             # The guard prints its sentinel and exits 9. On the shell paths that text IS the body,

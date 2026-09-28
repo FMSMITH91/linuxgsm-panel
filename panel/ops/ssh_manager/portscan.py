@@ -1,5 +1,9 @@
-"""SSH connection manager for remote LinuxGSM servers.
-Also supports local execution for running on the panel's own machine."""
+"""The cached listening-port scan of a host.
+
+Part of the SSH connection manager for remote LinuxGSM servers, which also supports local
+execution for running on the panel's own machine (see the package docstring for how names
+resolve across its submodules).
+"""
 import time
 from panel.ops.ssh_manager import (_core)  # noqa: E402,F401  (module objects: the
 # reference resolves at CALL time, which is what keeps a stub on the definition site
@@ -34,7 +38,8 @@ def _remote_listening_ports(remote):
     declared every game server on that host down: a "Server offline" alert each, gs.status written
     offline in the database (so the bots and the dashboard repeated it), the one-shot "notify when
     empty" request falsely fired AND consumed, and a matching "back online" storm 60s later. The
-    `if out:` below already knew empty output means a blip; only the return did not."""
+    `if out:` below already knew empty output means a blip; only the return did not.
+    """
     now = time.time()
     hit = _port_scan_cache.get(remote.id)
     if hit and hit[0] > now:
@@ -67,6 +72,9 @@ def _remote_listening_ports(remote):
     return ports
 
 def _invalidate_port_scan(remote_id):
-    """Drop a remote's cached port scan so the next status poll re-reads it — call after any
-    action that changes what's listening (start/stop/restart), so status is fresh immediately."""
+    """Drop a remote's cached port scan so the next status poll re-reads it.
+
+    Call after any action that changes what's listening (start/stop/restart), so status is fresh
+    immediately.
+    """
     _port_scan_cache.pop(remote_id, None)
