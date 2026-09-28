@@ -722,9 +722,24 @@ try:
             "cpu_percent": 0.0, "ram_percent": 0, "ram_total": 0, "disk_percent": 0,
             "cores": 1, "game_procs": 0, "game_cpu_percent": 0.0, "game_ram_mb": 0,
             "game_uptime_secs": 0, "port_open": False}
+        # The row says online going in, so "offline" can only come from the port the sample never
+        # read. Reporting that (in _persisted_stats_status since api_server_stats was split) left
+        # every suite green: the persist guard held, so only the ANSWER was wrong, and only the
+        # source-text checks in part02 looked at this route.
+        with app.app_context():
+            _st_before = db.session.get(GameServer, gs_id).status
+            db.session.get(GameServer, gs_id).status = "online"
+            db.session.commit()
         _sj2 = (c.get("/api/server/%d/stats" % gs_id).get_json() or {})
         check("server stats: an all-zero sample is reported as NOT readable",
               _sj2.get("metrics_readable") is False, str(_sj2)[:140])
+        with app.app_context():
+            _st_row = db.session.get(GameServer, gs_id).status
+            db.session.get(GameServer, gs_id).status = _st_before
+            db.session.commit()
+        check("server stats: ...and reports the status it last KNEW, not 'offline' off a port it "
+              "never read", _sj2.get("status") == "online" and _st_row == "online",
+              "reported %r, row now %r" % (_sj2.get("status"), _st_row))
     finally:
         _sm_core.server_live_metrics = _st_saved
 
