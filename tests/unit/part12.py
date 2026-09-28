@@ -2631,9 +2631,15 @@ try:
                             _P9US(user_id=P9_VIEWER, sid="p9-rem-off", remember=False)])
         db.session.commit()
         _rem_u = db.session.get(User, P9_VIEWER)
-        for _rem_sid in ("p9-rem-on", "p9-rem-off", "p9-rem-none", None):
-            _p9_patch(_p9_tags, "current_user", NS(_sid=_rem_sid))
-            _rem.append(_p9_tags._remember_this_device(_rem_u))
+        # Unrolled rather than a loop: this whole part is one try block, already over mccabe's limit.
+        _p9_patch(_p9_tags, "current_user", NS(_sid="p9-rem-on"))       # row says remembered
+        _rem.append(_p9_tags._remember_this_device(_rem_u))
+        _p9_patch(_p9_tags, "current_user", NS(_sid="p9-rem-off"))      # row says not, cookie or no
+        _rem.append(_p9_tags._remember_this_device(_rem_u))
+        _p9_patch(_p9_tags, "current_user", NS(_sid="p9-rem-none"))     # no such row: the cookie
+        _rem.append(_p9_tags._remember_this_device(_rem_u))
+        _p9_patch(_p9_tags, "current_user", NS(_sid=None))              # no sid at all: the cookie
+        _rem.append(_p9_tags._remember_this_device(_rem_u))
         _P9US.query.filter(_P9US.sid.in_(["p9-rem-on", "p9-rem-off"])).delete(
             synchronize_session=False)
         db.session.commit()
