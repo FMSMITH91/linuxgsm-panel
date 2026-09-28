@@ -85,6 +85,7 @@ def raises_exit(fn, *a, **kw):
 
 class Args(object):
     def __init__(self, **kw):
+        """Build an argparse-like namespace: username and password default to None."""
         self.username = kw.pop("username", None)
         self.password = kw.pop("password", None)
         for k, v in kw.items():
@@ -98,7 +99,7 @@ def seed(**kw):
                  is_active=kw.get("active", True))
         u.totp_enabled = kw.get("totp", False)
         if kw.get("totp"):
-            u.totp_secret = "SEEDSECRET"
+            u.totp_secret = "SEEDSECRET"  # nosec B105 - a planted fixture value the 2fa check proves is wiped
         db.session.add(u)
         db.session.commit()
         return u.id
@@ -126,6 +127,8 @@ def cleanup():
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
         except OSError:
             pass
+
+
 try:
     admin_id = seed(username="cli_admin", admin=True)
     seed(username="cli_user", admin=False)
@@ -161,7 +164,7 @@ try:
     with manage.app.app_context():
         before = db.session.get(User, admin_id)
         old_hash, old_epoch = before.password_hash, (before.auth_epoch or 0)
-    manage.cmd_reset_password(Args(username="cli_admin", password="An0ther!Str0ng1"))
+    manage.cmd_reset_password(Args(username="cli_admin", password="An0ther!Str0ng1"))  # nosec B106 - test fixture
     with manage.app.app_context():
         after = db.session.get(User, admin_id)
         check("reset: the password actually changes", after.password_hash != old_hash)
@@ -171,10 +174,12 @@ try:
               (after.auth_epoch or 0) > old_epoch,
               "%s -> %s" % (old_epoch, after.auth_epoch))
 
-    exited, msg = raises_exit(manage.cmd_reset_password, Args(username="cli_admin", password="weak"))
+    exited, msg = raises_exit(manage.cmd_reset_password,
+                              Args(username="cli_admin", password="weak"))  # nosec B106 - test fixture
     check("reset: a weak --password is refused before anything is written",
           exited and "Weak password" in msg, msg[:60])
-    exited, msg = raises_exit(manage.cmd_reset_password, Args(username="nobody_here", password="An0ther!Str0ng1"))
+    exited, msg = raises_exit(manage.cmd_reset_password,
+                              Args(username="nobody_here", password="An0ther!Str0ng1"))  # nosec B106 - test fixture
     check("reset: an unknown username is refused", exited and "No such user" in msg, msg[:60])
 
     # ── 3. disable-2fa must clear the SECRET, not just the flag ───────────────────────────────
@@ -215,12 +220,13 @@ try:
         sys.stdin = _real_stdin
 
     # ── 5. create-admin ───────────────────────────────────────────────────────────────────────
-    manage.cmd_create_admin(Args(username="cli_new", password="Br@ndNew1pass"))
+    manage.cmd_create_admin(Args(username="cli_new", password="Br@ndNew1pass"))  # nosec B106 - test fixture
     with manage.app.app_context():
         n = User.query.filter_by(username="cli_new").first()
         check("create-admin: the account exists, superadmin and active",
               n is not None and n.is_superadmin and n.is_active)
-    exited, msg = raises_exit(manage.cmd_create_admin, Args(username="cli_new", password="Br@ndNew1pass"))
+    exited, msg = raises_exit(manage.cmd_create_admin,
+                              Args(username="cli_new", password="Br@ndNew1pass"))  # nosec B106 - test fixture
     check("create-admin: refuses to clobber an existing user",
           exited and "already exists" in msg, msg[:60])
 

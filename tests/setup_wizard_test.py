@@ -108,6 +108,8 @@ def cleanup():
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
         except OSError:
             pass
+
+
 def superadmins():
     with app.app_context():
         return [u.username for u in User.query.filter_by(is_superadmin=True).all()]
@@ -124,6 +126,11 @@ def mark_setup_complete():
     cfg = load_config()
     cfg["setup_complete"] = True
     save_config(cfg)
+
+
+# The first admin's password throughout: it passes the strength policy, so every refusal below is
+# the lock or the step order refusing, never the password rules.
+_ADMIN_PASSWORD = "Sufficient1!pass"  # nosec B105 - a fixture for this suite's throwaway DB  # noqa: password
 
 
 try:
@@ -192,13 +199,14 @@ try:
     r = c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
                                "port": "5052", "bind_host": ""})
     check("open: step=welcome treats a blank bind_host as the 0.0.0.0 default",
-          load_config().get("bind_host") == "0.0.0.0", repr(load_config().get("bind_host")))
+          load_config().get("bind_host") == "0.0.0.0",  # nosec B104 - the expected default, not a bind
+          repr(load_config().get("bind_host")))
     c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
                            "port": "5052", "bind_host": "127.0.0.1"})
     _bind_before = load_config().get("bind_host")
     check("open: a refused bind address leaves the rest of step 1 unsaved too",
           load_config().get("site_title") == "Test Panel", load_config().get("site_title"))
-    for _good in ("0.0.0.0", "::", "127.0.0.1", "::1"):
+    for _good in ("0.0.0.0", "::", "127.0.0.1", "::1"):  # nosec B104 - inputs posted to the wizard
         r = c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
                                    "port": "5052", "bind_host": _good})
         check("open: step=welcome accepts bind_host=%r (positive control)" % _good,
@@ -208,12 +216,13 @@ try:
 
     # ── Step 2 validation: none of these may create an account ────────────────────────────────
     for _name, _form, _why in (
-            ("a short username", {"username": "ab", "password": "Sufficient1!pass",
-                                  "confirm_password": "Sufficient1!pass"}, "under 3 chars"),
-            ("a weak password", {"username": "admin1", "password": "short",
-                                 "confirm_password": "short"}, "password_problem"),
-            ("a mismatched confirmation", {"username": "admin1", "password": "Sufficient1!pass",
-                                           "confirm_password": "Different1!pass"}, "mismatch")):
+            ("a short username", {"username": "ab", "password": _ADMIN_PASSWORD,
+                                  "confirm_password": _ADMIN_PASSWORD}, "under 3 chars"),
+            ("a weak password", {"username": "admin1", "password": "short",  # nosec B105 - fixture
+                                 "confirm_password": "short"}, "password_problem"),  # nosec B105
+            ("a mismatched confirmation", {"username": "admin1", "password": _ADMIN_PASSWORD,
+                                           "confirm_password": "Different1!pass"},  # nosec B105
+             "mismatch")):
         c.post("/setup", data=dict(step="admin_user", **_form))
         check("open: %s creates no account (%s)" % (_name, _why), superadmins() == [],
               str(superadmins()))
@@ -244,7 +253,7 @@ try:
 
     # The happy path.
     r = c.post("/setup", data={"step": "admin_user", "username": "firstadmin",
-                               "password": "Sufficient1!pass", "confirm_password": "Sufficient1!pass",
+                               "password": _ADMIN_PASSWORD, "confirm_password": _ADMIN_PASSWORD,
                                "email": "admin@example.com"})
     check("open: a valid step=admin_user creates the first superadmin",
           superadmins() == ["firstadmin"], str(superadmins()))
@@ -253,7 +262,7 @@ try:
         check("open: the first admin is active and a superadmin",
               _u is not None and _u.is_superadmin and _u.is_active)
         check("open: their password is HASHED, never stored in the clear",
-              _u is not None and "Sufficient1!pass" not in (_u.password_hash or ""))
+              _u is not None and _ADMIN_PASSWORD not in (_u.password_hash or ""))
         check("open: their email is encrypted at rest, not stored in the clear",
               _u is not None and "admin@example.com" not in (_u.email or ""))
 
@@ -293,7 +302,7 @@ try:
          _ts_mod.setup_tailscale_serve) = _ts_saved
     _bind_owner = load_config().get("bind_host")
     _att.post("/setup", data={"step": "welcome", "site_title": "Hijacked", "port": "5099",
-                              "bind_host": "0.0.0.0"})
+                              "bind_host": "0.0.0.0"})  # nosec B104 - a hostile input, not a bind
     check("owner: another browser cannot rewrite the bind or port",
           load_config().get("bind_host") == _bind_owner and load_config().get("port") != 5099,
           "%s %s" % (load_config().get("bind_host"), load_config().get("port")))
@@ -310,7 +319,7 @@ try:
           r.status_code == 200, "got %d -> %s" % (r.status_code, r.headers.get("Location")))
     _rec = app.test_client()
     _rec.post("/login?next=/setup", data={"username": "firstadmin",
-                                          "password": "Sufficient1!pass"})
+                                          "password": _ADMIN_PASSWORD})
     r = _rec.get("/setup", follow_redirects=False)
     check("owner: a browser signed in as the superadmin may finish the wizard",
           r.status_code == 200, "got %d -> %s" % (r.status_code, r.headers.get("Location")))
@@ -321,7 +330,7 @@ try:
     # A second admin_user POST must be refused even while the wizard is still open — the wizard
     # creates the FIRST admin only (defence in depth behind the completion lock).
     c.post("/setup", data={"step": "admin_user", "username": "sneak",
-                           "password": "Sufficient1!pass", "confirm_password": "Sufficient1!pass"})
+                           "password": _ADMIN_PASSWORD, "confirm_password": _ADMIN_PASSWORD})
     check("open: step=admin_user refuses once a superadmin exists",
           superadmins() == ["firstadmin"], str(superadmins()))
 
@@ -336,14 +345,14 @@ try:
 
     # REGRESSION 1: POST used to be unguarded while GET was blocked.
     r = c.post("/setup", data={"step": "admin_user", "username": "backdoor",
-                               "password": "Sufficient1!pass", "confirm_password": "Sufficient1!pass"},
+                               "password": _ADMIN_PASSWORD, "confirm_password": _ADMIN_PASSWORD},
                follow_redirects=False)
     check("locked: POST step=admin_user cannot create a superadmin",
           "backdoor" not in superadmins(), str(superadmins()))
 
     _before = load_config()
     c.post("/setup", data={"step": "welcome", "site_title": "Hijacked",
-                           "port": "1234", "bind_host": "0.0.0.0"}, follow_redirects=False)
+                           "port": "1234", "bind_host": "0.0.0.0"}, follow_redirects=False)  # nosec B104 - hostile input
     _after = load_config()
     check("locked: POST step=welcome cannot rewrite the panel's binding",
           _after.get("bind_host") == _before.get("bind_host")
@@ -357,7 +366,7 @@ try:
     # setup_complete is False — so anything gated on is_setup_complete() reopens the moment
     # config.json is unreadable. A full disk truncates a file the same way an attacker would.
     for _label, _writer in (
-            ("deleted", lambda: CONFIG_FILE.unlink()),
+            ("deleted", CONFIG_FILE.unlink),
             ("truncated to empty", lambda: CONFIG_FILE.write_text("", encoding="utf-8")),
             ("invalid JSON", lambda: CONFIG_FILE.write_text("{not json", encoding="utf-8"))):
         _writer()
@@ -367,8 +376,8 @@ try:
               r.status_code in (301, 302, 303) and "login" in (r.headers.get("Location") or ""),
               "%d -> %s" % (r.status_code, r.headers.get("Location")))
         c2.post("/setup", data={"step": "admin_user", "username": "cfgbreak-%s" % _label[:4],
-                                "password": "Sufficient1!pass",
-                                "confirm_password": "Sufficient1!pass"}, follow_redirects=False)
+                                "password": _ADMIN_PASSWORD,
+                                "confirm_password": _ADMIN_PASSWORD}, follow_redirects=False)
         check("locked: with config.json %s, POST still creates NO superadmin" % _label,
               not any(u.startswith("cfgbreak") for u in superadmins()), str(superadmins()))
 
@@ -378,7 +387,7 @@ try:
         # writes. On a live install that turns a loopback-only panel into 0.0.0.0 at the next
         # restart, from an unauthenticated request, with no credential involved.
         c2.post("/setup", data={"step": "welcome", "site_title": "Hijacked-%s" % _label[:4],
-                                "port": "1234", "bind_host": "0.0.0.0"}, follow_redirects=False)
+                                "port": "1234", "bind_host": "0.0.0.0"}, follow_redirects=False)  # nosec B104 - hostile input
         _cfg_now = load_config()
         check("locked: with config.json %s, POST step=welcome cannot rewrite the binding" % _label,
               not str(_cfg_now.get("site_title", "")).startswith("Hijacked")

@@ -42,7 +42,8 @@ def fetch_errors():
     second on the strength of the first is the failure this gate exists to prevent. Its sibling
     codeql-alerts.yml states the rule outright: "'No analysis' is never treated as 'no alerts'."
     A repo that has not been analysed, an endpoint that moved, a filter shape that changed, or
-    anonymous access being withdrawn all yield a 200 with nothing useful in it."""
+    anonymous access being withdrawn all yield a 200 with nothing useful in it.
+    """
     out, cursor, answered = [], None, False
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     token = os.environ.get("CODACY_API_TOKEN")
@@ -63,7 +64,8 @@ def fetch_errors():
     return out, answered
 
 
-def main():
+def _load_allow():
+    """The accepted list, keyed for lookup against what Codacy reports."""
     accepted = json.loads(ACCEPTED_FILE.read_text(encoding="utf-8")).get("accepted", [])
     # Keyed on (file, pattern, the source line itself) — NOT the line NUMBER, which moves with
     # every edit above it and would make the list go stale on contact.
@@ -75,9 +77,12 @@ def main():
     # which is the exact failure this gate exists to prevent. Including the line also means that
     # EDITING an accepted line re-opens it for review, which is the right default for a standing
     # security exception.
-    allow = {(a["filePath"], a["patternId"], " ".join(a["lineText"].split())): a
-             for a in accepted}
+    return {(a["filePath"], a["patternId"], " ".join(a["lineText"].split())): a
+            for a in accepted}
 
+
+def _fetch_or_exit_code():
+    """Fetch the issues: (issues, None), or (None, exit code) when the API gave no usable answer."""
     try:
         issues, answered = fetch_errors()
     except urllib.error.HTTPError as exc:
@@ -93,23 +98,23 @@ def main():
         if exc.code >= 500 or exc.code in TRANSIENT_HTTP:
             print("::warning::the Codacy API errored or rate-limited (HTTP %d) — not failing the "
                   "build; the next scheduled run will re-check." % exc.code)
-            return 0
+            return None, 0
         print("::error::the Codacy API refused the request (HTTP %d) for %s/%s — refusing to "
               "report it clean. Check the endpoint, the filter shape, and whether anonymous "
               "access is still allowed." % (exc.code, ORG, REPO))
-        return 1
+        return None, 1
     except ValueError as exc:
         # A 200 whose body is not JSON (an HTML error or login page, a changed content type) is
         # the API answering in a shape this gate cannot read — the same claim as `not answered`
         # below, and fatal for the same reason. It used to share the "could not reach" branch.
         print("::error::the Codacy API answered with something that is not JSON (%s) for %s/%s — "
               "refusing to report it clean." % (type(exc).__name__, ORG, REPO))
-        return 1
+        return None, 1
     except (urllib.error.URLError, OSError) as exc:
         # No answer at all — DNS, a refused connection, a timeout. An outage, not a verdict.
         print("::warning::could not reach the Codacy API (%s) — not failing the build; the next "
               "scheduled run will re-check." % type(exc).__name__)
-        return 0
+        return None, 0
     if not answered:
         # A 200 that carried no `data` at all. Distinct from the unreachable case above, which is
         # an outage and is deliberately not fatal: this is the API answering in a shape this gate
@@ -117,8 +122,12 @@ def main():
         print("::error::the Codacy API returned no issue list for %s/%s — refusing to report it "
               "clean. Check the endpoint, the filter shape, and whether the repository is still "
               "being analysed." % (ORG, REPO))
-        return 1
+        return None, 1
+    return issues, None
 
+
+def _split_unreviewed(issues, allow):
+    """The issues no accepted entry covers, and the set of keys every issue had."""
     unreviewed, seen = [], set()
     for i in issues:
         key = (i.get("filePath"), (i.get("patternInfo") or {}).get("id"),
@@ -126,38 +135,63 @@ def main():
         seen.add(key)
         if key not in allow:
             unreviewed.append(i)
+    return unreviewed, seen
+
+
+def _unreviewed_table(unreviewed):
+    """The summary's lines for the unreviewed issues: a table and the fix hint, or the all-clear."""
+    if not unreviewed:
+        return ["Nothing unreviewed. :white_check_mark:"]
+    lines = ["| file | line | tool | rule | message |", "| --- | --- | --- | --- | --- |"]
+    for i in unreviewed:
+        pi, ti = i.get("patternInfo") or {}, i.get("toolInfo") or {}
+        lines.append("| `%s` | %s | %s | `%s` | %s |"
+                     % (i.get("filePath"), i.get("lineNumber"), ti.get("name"),
+                        (pi.get("id") or "").split(".")[-1], (i.get("message") or "")[:90]))
+    _fix_hint = ("Fix it, or — if it is deliberate — add it to "
+                 "`.github/codacy-accepted-errors.json` **with a reason**.")
+    return lines + ["", _fix_hint]
+
+
+def _stale_lines(allow, seen):
+    """The summary's lines for accepted entries that no longer match any issue (none if all do)."""
+    # An accepted entry that no longer matches anything is dead weight, and a stale allow-list is
+    # how a real finding gets waved through later. Say so, without failing the run.
+    stale = [k for k in allow if k not in seen]
+    if not stale:
+        return []
+    return (["", "**Accepted entries that no longer match any issue** (remove them):", ""]
+            + ["- `%s` / `%s`\n  (was: `%s`)" % (f, p.split(".")[-1], t) for f, p, t in stale])
+
+
+def _publish(out):
+    """Print the summary, and append it to the job summary when the runner provides one."""
+    print(out)
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step_summary:
+        with open(step_summary, "a", encoding="utf-8") as fh:
+            fh.write(out + "\n")
+
+
+def main():
+    """Compare main's Error-level issues with the accepted list; the exit code is the verdict."""
+    allow = _load_allow()
+
+    issues, rc = _fetch_or_exit_code()
+    if issues is None:
+        return rc
+
+    unreviewed, seen = _split_unreviewed(issues, allow)
 
     summary = [
         "### Error-level Codacy issues on `main`", "",
         "%d reported · %d accepted · **%d unreviewed**"
         % (len(issues), len(issues) - len(unreviewed), len(unreviewed)), "",
     ]
-    if unreviewed:
-        summary += ["| file | line | tool | rule | message |", "| --- | --- | --- | --- | --- |"]
-        for i in unreviewed:
-            pi, ti = i.get("patternInfo") or {}, i.get("toolInfo") or {}
-            summary.append("| `%s` | %s | %s | `%s` | %s |"
-                           % (i.get("filePath"), i.get("lineNumber"), ti.get("name"),
-                              (pi.get("id") or "").split(".")[-1], (i.get("message") or "")[:90]))
-        _fix_hint = ("Fix it, or — if it is deliberate — add it to "
-                     "`.github/codacy-accepted-errors.json` **with a reason**.")
-        summary += ["", _fix_hint]
-    else:
-        summary.append("Nothing unreviewed. :white_check_mark:")
+    summary += _unreviewed_table(unreviewed)
+    summary += _stale_lines(allow, seen)
 
-    # An accepted entry that no longer matches anything is dead weight, and a stale allow-list is
-    # how a real finding gets waved through later. Say so, without failing the run.
-    stale = [k for k in allow if k not in seen]
-    if stale:
-        summary += ["", "**Accepted entries that no longer match any issue** (remove them):", ""]
-        summary += ["- `%s` / `%s`\n  (was: `%s`)" % (f, p.split(".")[-1], t) for f, p, t in stale]
-
-    out = "\n".join(summary)
-    print(out)
-    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if step_summary:
-        with open(step_summary, "a", encoding="utf-8") as fh:
-            fh.write(out + "\n")
+    _publish("\n".join(summary))
 
     if unreviewed:
         print("::error::main has %d unreviewed Error-level Codacy issue(s) — see the job summary."

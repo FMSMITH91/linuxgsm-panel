@@ -1,5 +1,6 @@
-"""Automated RBAC enforcement test — proves permissions are enforced server-side and
-cannot be bypassed by calling endpoints directly.
+"""Automated RBAC enforcement test: permissions are enforced server-side.
+
+It proves they cannot be bypassed by calling endpoints directly.
 
 Run it against a configured install (from anywhere):
 
@@ -190,11 +191,14 @@ print("Accessible server id=%d (remote %d); non-granted server id=%s (remote %s)
       % (accessible_id, granted_remote, other_id, other_remote))
 
 def _run_fixture_rows():
-    """Every row this run leaves on a configured install, found by name — what the final cleanup
-    deletes. A fixture named from `tag` is in here BY CONSTRUCTION, so a block that raises halfway
-    through still leaves nothing in the operator's panel. One named any other way is not: the
-    invite block's deactivated SUPERADMIN and its "pre-existing" invite were named "inv_<hex>",
-    deleted only on the success path, and left behind by any exception. Needs an app context."""
+    """Every row this run leaves on a configured install, found by name.
+
+    It is what the final cleanup deletes. A fixture named from `tag` is in here BY CONSTRUCTION,
+    so a block that raises halfway through still leaves nothing in the operator's panel. One named
+    any other way is not: the invite block's deactivated SUPERADMIN and its "pre-existing" invite
+    were named "inv_<hex>", deleted only on the success path, and left behind by any exception.
+    Needs an app context.
+    """
     from panel.db.models import CustomCommand, Invite
     _like = tag + "%"
     return (Invite.query.filter(Invite.note.like(_like)).all()
@@ -270,7 +274,588 @@ class _ThreadingTrap:
 _ms_threading_saved = _ms_rb.threading
 _ms_rb.threading = _ThreadingTrap()
 
-try:
+
+def _specs_as_installer_and_as_manager():
+    """The /specs answers, with the host's specs stubbed, for each of the two users."""
+    _sp_rv.host_specs = lambda r, force=False: {"os": "Ubuntu 22.04", "kernel": "6.8.0-rbac",
+                                                "hostname": "rbac-host"}
+    _sp_hosts.host_os_slug = lambda r: "ubuntu-22.04"
+    _spr = client_as(_spu_id).get("/api/remote/%d/specs" % granted_remote)
+    check("specs: an INSTALL_SERVER user gets the host's OS for the install picker",
+          _spr.status_code == 200 and (_spr.get_json() or {}).get("os_slug") == "ubuntu-22.04",
+          "got %d %s" % (_spr.status_code, _spr.get_data(as_text=True)[:80]))
+    check("specs: ...and nothing of the hardware card",
+          set((_spr.get_json() or {"x": 1}).keys()) == {"os_slug"},
+          "keys %r" % sorted((_spr.get_json() or {}).keys()))
+    _spmr = client_as(_spmu_id).get("/api/remote/%d/specs" % granted_remote)
+    check("specs: ...while MANAGE_REMOTES still gets the full specs",
+          _spmr.status_code == 200 and (_spmr.get_json() or {}).get("kernel") == "6.8.0-rbac"
+          and (_spmr.get_json() or {}).get("os_slug") == "ubuntu-22.04",
+          "got %d %s" % (_spmr.status_code, _spmr.get_data(as_text=True)[:80]))
+
+
+def _redirect_chain_from_the_console():
+    """Follow the redirects from the console of the failed install; the chain must end."""
+    global _, _chain2, _loc, _path, _r
+    _path, _chain = "/server/%d" % _loopfail_id, []
+    for _ in range(12):
+        _r = c.get(_path)
+        _chain.append("%s -> %s" % (_path, _r.status_code))
+        if _r.status_code not in (301, 302, 303, 307, 308):
+            break
+        _loc = _r.headers.get("Location") or ""
+        _path = _loc.split("localhost", 1)[-1] if _loc.startswith("http") else _loc
+    check("failed install + no MANAGE_SERVERS: the redirect chain terminates",
+          len(_chain) < 12, " | ".join(_chain[:6]))
+    check("failed install + no MANAGE_SERVERS: ...on a page that actually renders",
+          _chain and _chain[-1].endswith("200"), _chain[-1] if _chain else "no response")
+    # And the same from the other end, for someone who followed a Files & Config link.
+    _path, _chain2 = "/server/%d/files" % _loopfail_id, []
+
+
+def _redirect_chain_from_files_and_config():
+    """...and from its Files & Config page, the other end of the same loop."""
+    global _, _loc, _path, _r
+    for _ in range(12):
+        _r = c.get(_path)
+        _chain2.append("%s -> %s" % (_path, _r.status_code))
+        if _r.status_code not in (301, 302, 303, 307, 308):
+            break
+        _loc = _r.headers.get("Location") or ""
+        _path = _loc.split("localhost", 1)[-1] if _loc.startswith("http") else _loc
+    check("failed install + no MANAGE_SERVERS: ...and from the Files & Config side too",
+          len(_chain2) < 12 and _chain2[-1].endswith("200"), " | ".join(_chain2[:6]))
+
+
+def _tag_list_as_caller_and_superadmin():
+    """The tag list's server ids, for the caller and for a superadmin."""
+    _tr_ids = next((t["server_ids"] for t in (c.get("/api/tags").get_json() or {})["tags"]
+                    if t["id"] == _tr_id), None)
+    check("tag list: (control) a tag on a server the caller CAN access lists that server",
+          _tr_ids is not None and accessible_id in _tr_ids, "got %r" % (_tr_ids,))
+    check("IDOR: the tag list does not name a server the caller cannot access",
+          _tr_ids is not None and other_id not in _tr_ids, "got %r" % (_tr_ids,))
+    _tr_admin = next((t["server_ids"] for t in
+                      (client_as(admin_id).get("/api/tags").get_json() or {})["tags"]
+                      if t["id"] == _tr_id), None)
+    check("tag list: ...while a superadmin still sees every server on it",
+          _tr_admin is not None and other_id in _tr_admin, "got %r" % (_tr_admin,))
+
+
+def _tag_list_counts_for_a_scoped_admin():
+    """The tag list's server counts, for a scoped admin who may delete it and one who may not."""
+    # A MANAGE_SERVERS holder scoped to one host can DELETE the tag, which strips it from
+    # every server panel-wide — so the count they are shown is every server's. The Tags
+    # card printed the length of the filtered ids: "0 server(s)" on a tag other hosts'
+    # servers carry, one click from removing it (and its alert muting) from all of them.
+    _tr_ci = next((t for t in (_ci.get("/api/tags").get_json() or {})["tags"]
+                   if t["id"] == _tr_id), None)
+    check("tag list: a scoped admin who can delete a tag is told how many servers carry it",
+          _tr_ci is not None and _tr_ci.get("server_count") == 2
+          and _tr_ci.get("server_ids") == [accessible_id], "got %r" % (_tr_ci,))
+    _tr_c = next((t for t in (c.get("/api/tags").get_json() or {})["tags"]
+                  if t["id"] == _tr_id), None)
+    check("tag list: ...while a caller who cannot delete it gets only their own count",
+          _tr_c is not None and _tr_c.get("server_count") == 1, "got %r" % (_tr_c,))
+
+
+def _check_tag_list_names_only_reachable():
+    """The tag list names only the servers the caller can access (with a second server)."""
+    global _tr_id
+    from panel.db.models import ServerTag as _TagR
+    with app.app_context():
+        _tr = _TagR(name=tag + "tagleak")
+        _tr.servers.extend([db.session.get(GameServer, accessible_id),
+                            db.session.get(GameServer, other_id)])
+        db.session.add(_tr)
+        db.session.commit()
+        _tr_id = _tr.id
+    try:
+        _tag_list_as_caller_and_superadmin()
+        _tag_list_counts_for_a_scoped_admin()
+    finally:
+        with app.app_context():
+            db.session.delete(db.session.get(_TagR, _tr_id))
+            db.session.commit()
+
+
+def _tailscale_page_as_scoped_admin():
+    """The /tailscale page as the scoped admin, with the panel host's Tailscale state stubbed."""
+    global _rts_admin
+    _rts.get_tailscale_info = lambda force_refresh=False: _rts_info
+    _rts_page = cmr.get("/tailscale")
+    _rts_html = _rts_page.get_data(as_text=True)
+    check("tailscale page: a scoped MANAGE_REMOTES admin can still open it (200)",
+          _rts_page.status_code == 200, "got %d" % _rts_page.status_code)
+    check("tailscale page: ...but is shown none of the PANEL HOST's tailnet inventory",
+          not [x for x in _rts_leaks if x in _rts_html],
+          repr([x for x in _rts_leaks if x in _rts_html]))
+    _rts_api = _rts_json.dumps(cmr.get("/api/tailscale").get_json() or {})
+    check("/api/tailscale: ...nor does its JSON carry it",
+          not [x for x in _rts_leaks if x in _rts_api], repr([x for x in _rts_leaks if x in _rts_api]))
+    _rts_admin = client_as(admin_id).get("/tailscale").get_data(as_text=True)
+
+
+def _tailscale_page_as_superadmin():
+    """...and as a superadmin, who still sees all of it."""
+    check("tailscale page: a superadmin still sees all of it (control)",
+          all(x in _rts_admin for x in _rts_leaks),
+          repr([x for x in _rts_leaks if x not in _rts_admin]))
+
+
+def _view_logs_as_viewer_and_superadmin():
+    """Read the log page as the scoped viewer and as a superadmin."""
+    _lv_page = client_as(_lv_id).get("/logs?q=" + _lt).get_data(as_text=True)
+    _sa_logs = client_as(admin_id).get("/logs?q=" + _lt).get_data(as_text=True)
+    check("view_logs: a scoped viewer sees rows about the server they can access",
+          _lt + "_mine_srv" in _lv_page and _lt + "_own" in _lv_page,
+          "their own server's / their own row is missing — the scope is too tight")
+    check("view_logs: ...but not another server's console commands",
+          _lt + "_other_srv" not in _lv_page and "S3cret" not in _lv_page,
+          "a server outside their grants leaked its console history")
+    check("view_logs: ...nor anyone's sign-ins or failed-login usernames",
+          _lt + "_failed" not in _lv_page and _lt + "_adminlogin" not in _lv_page
+          and (tag + "Sup3rSecretPw") not in _lv_page,
+          "account rows (or the failed-login username in the filter list) leaked")
+    check("view_logs: ...nor an account row whose target merely names their server",
+          _lt + "_invite" not in _lv_page,
+          "an invite row reached a server-scoped viewer by its target")
+    check("view_logs: ...nor another user's address, while their own is shown",
+          "198.51.100.1" not in _lv_page and "198.51.100.4" in _lv_page,
+          "another admin's IP is visible, or the viewer's own is hidden")
+    check("view_logs: a superadmin still sees every row and address (control)",
+          all(_lt + s in _sa_logs for s in ("_mine_srv", "_other_srv", "_failed",
+                                            "_adminlogin", "_own", "_invite"))
+          and "198.51.100.1" in _sa_logs and (tag + "Sup3rSecretPw") in _sa_logs,
+          "the scoping also narrowed the superadmin's view")
+
+
+def _check_view_logs_with_a_second_host():
+    """Plant audit rows about two hosts, read them as a scoped viewer and a superadmin."""
+    global _lt, _lv_id, _row
+    from panel.db.models import AuditLog as _AL
+    from panel.core.clock import utcnow as _al_now
+    with app.app_context():
+        _lv_grp = Group(name=tag + "_logs", description="RBAC test log viewer (auto)",
+                        is_default=False)
+        _lv_grp.set_permissions([auth.VIEW_LOGS, auth.VIEW_SERVERS])
+        _lv_grp.game_servers.append(db.session.get(GameServer, accessible_id))
+        db.session.add(_lv_grp)
+        db.session.flush()
+        _lv = User(username=tag + "_logviewer",
+                   password_hash=auth.hash_password(secrets.token_hex(16)),
+                   display_name="log viewer", is_superadmin=False, is_active=True)
+        _lv.groups.append(_lv_grp)
+        db.session.add(_lv)
+        db.session.flush()
+        _lv_id = _lv.id
+        _mine_name = db.session.get(GameServer, accessible_id).name
+        _other_name = db.session.get(GameServer, other_id).name
+        _lt = tag + "LOGROW"
+        for _uid_, _who, _act, _tgt, _det, _ip in (
+                (admin_id, "admin", "send_command", _mine_name, _lt + "_mine_srv", "198.51.100.1"),
+                (admin_id, "admin", "send_command", _other_name,
+                 _lt + "_other_srv rcon_password S3cret", "198.51.100.5"),
+                (None, tag + "Sup3rSecretPw", "login_failed", "", _lt + "_failed", "198.51.100.2"),
+                (admin_id, "admin", "login", "", _lt + "_adminlogin", "198.51.100.3"),
+                # An ACCOUNT row whose free-text target happens to name their server (an
+                # invite's note is whatever the minter typed): still not theirs to read.
+                (admin_id, "admin", "invite_created", _mine_name, _lt + "_invite",
+                 "198.51.100.6"),
+                (_lv_id, tag + "_logviewer", "logout", "", _lt + "_own", "198.51.100.4")):
+            db.session.add(_AL(user_id=_uid_, username=_who, action=_act, target=_tgt,
+                               detail=_det, ip_address=_ip, success=True,
+                               timestamp=_al_now()))
+        db.session.commit()
+    try:
+        _view_logs_as_viewer_and_superadmin()
+    finally:
+        with app.app_context():
+            for _row in _AL.query.filter(_AL.detail.like(_lt + "%")).all():
+                db.session.delete(_row)
+            db.session.commit()
+
+
+def _invite_happy_path_and_replays():
+    """An invite redeems once; replaying or racing it is refused."""
+    global _anmod, _pw_real, _r2
+    # 1. The happy path, so the refusals below are not passing for the wrong reason.
+    _iid, _tok = _mint(_sa)
+    check("invite route: a valid invite is accepted and creates the account",
+          _accept(_tok, _inv_tag + "_ok").status_code in (200, 302)
+          and _user(_inv_tag + "_ok") is not None,
+          "the positive control failed — every refusal below proves nothing")
+    check("invite route: ...and does NOT grant superadmin unless the invite said so",
+          getattr(_user(_inv_tag + "_ok"), "is_superadmin", None) is False,
+          "an ordinary invite minted a superadmin")
+
+    # 2. The same link twice. The route claims the invite with UPDATE ... WHERE used_at IS NULL
+    #    precisely so two submissions cannot both make an account.
+    _r2 = _accept(_tok, _inv_tag + "_twice")
+    check("invite route: the same link cannot be redeemed twice",
+          _user(_inv_tag + "_twice") is None,
+          "a second account was created from one invite (status %s)" % _r2.status_code)
+
+    # 2b. ...and the RACE, which the sequential case above does not reach. A used invite is
+    #     already refused by the early is_usable check, so that check is what makes 2 pass —
+    #     the claim's `UPDATE ... WHERE used_at IS NULL` exists for two submissions in flight
+    #     at once. Deterministic stand-in for the race: password_problem() is the last call
+    #     before the claim, so marking the row used from inside it puts the invite in exactly
+    #     the state a competing request would have left it in.
+    import panel.routes.admin_notifications as _anmod
+    _pw_real = _anmod.password_problem
+    _iid_race, _tok_race = _mint(_sa)
+
+    def _pw_then_steal(pw):
+        with app.app_context():
+            _row = db.session.get(_Inv, _iid_race)
+            if _row is not None and _row.used_at is None:
+                _row.used_at = _inv_utcnow()
+                db.session.commit()
+        return _pw_real(pw)
+
+    _anmod.password_problem = _pw_then_steal
+    try:
+        _r_race = _accept(_tok_race, _inv_tag + "_race")
+    finally:
+        _anmod.password_problem = _pw_real
+    check("invite route: an invite claimed mid-request makes no second account",
+          _user(_inv_tag + "_race") is None,
+          "the claim is not conditional on used_at, so two requests in flight both win "
+          "(status %s)" % _r_race.status_code)
+
+
+def _invite_revoked_during_the_race():
+    """An invite revoked while its redemption is in flight is refused."""
+    # 2c. The OTHER half of that same race, which the claim did not ask about. is_usable tests
+    #     used_at, revoked_at and expiry; the claim tested used_at alone — so an admin clicking
+    #     Revoke between the is_usable check and the UPDATE did not stop the redemption. The
+    #     account was created anyway, the row ended up stamped BOTH revoked and used, and the
+    #     admin was told "the link no longer works" about a link that had just worked.
+    #     revoke_invite already claims its side on both columns; same window, same stub.
+    _iid_rev, _tok_rev = _mint(_sa)
+
+    def _pw_then_revoke(pw):
+        with app.app_context():
+            _row = db.session.get(_Inv, _iid_rev)
+            if _row is not None and _row.revoked_at is None:
+                _row.revoked_at = _inv_utcnow()
+                db.session.commit()
+        return _pw_real(pw)
+
+    _anmod.password_problem = _pw_then_revoke
+    try:
+        _r_rev = _accept(_tok_rev, _inv_tag + "_revoked")
+    finally:
+        _anmod.password_problem = _pw_real
+    with app.app_context():
+        _rev_row = db.session.get(_Inv, _iid_rev)
+        _rev_stamped = _rev_row is not None and _rev_row.revoked_at is not None
+        _rev_used = _rev_row is not None and _rev_row.used_at is not None
+    check("invite route: (premise) the revocation really did land mid-request",
+          _rev_stamped, "the window never opened, so the checks below prove nothing")
+    check("invite route: an invite revoked mid-request creates no account",
+          _user(_inv_tag + "_revoked") is None,
+          "the claim asks only about used_at, so a revoke in flight loses the race "
+          "(status %s)" % _r_rev.status_code)
+    check("invite route: ...and the row is not left stamped both revoked and used",
+          not _rev_used,
+          "the redemption claimed a revoked invite — the admin is told the link no longer "
+          "works about one that had just worked")
+
+
+def _invite_superadmin_from_a_demoted_minter():
+    """A superadmin-granting invite from a since-demoted minter is refused."""
+    # 3. The delegation must not outlive the authority behind it. A superadmin-granting invite
+    #    from someone since DEMOTED must not still hand out the rank they lost.
+    _iid_sa, _tok_sa = _mint(_sa, superadmin=True)
+    with app.app_context():
+        db.session.get(User, _sa_id).is_superadmin = False
+        db.session.commit()
+    _r3 = _accept(_tok_sa, _inv_tag + "_demoted")
+    check("invite route: a superadmin invite from a DEMOTED admin is refused",
+          _user(_inv_tag + "_demoted") is None,
+          "an offboarded admin's outstanding invite still created an account "
+          "(status %s)" % _r3.status_code)
+    check("invite route: ...and the form is not even shown for it",
+          _anon_inv.get("/invite/%s" % _tok_sa).status_code == 404,
+          "a dead invite still renders its form")
+    with app.app_context():                      # put the fixture back before the next case
+        db.session.get(User, _sa_id).is_superadmin = True
+        db.session.commit()
+
+
+def _invite_group_from_a_demoted_minter():
+    """A GROUP grant from a since-demoted minter is refused."""
+    global _groups_of, _grp_ok
+    # 3b. A GROUP grant is the same rank, and it used to survive demotion. Minting is
+    #     superadmin-only and the groups are validated against the minter AT MINT TIME —
+    #     which for a superadmin is everything — so a superadmin who minted an invite into a
+    #     privileged group and was then demoted (while staying active) left a live link that
+    #     still created an account holding the permissions they had just lost. Whoever kept
+    #     the link, including them, could redeem it.
+    with app.app_context():
+        _priv_grp = Group(name=_inv_tag + "_priv", description="privileged (auto)",
+                          is_default=False)
+        _priv_grp.set_permissions([auth.MANAGE_USERS, auth.MANAGE_REMOTES])
+        db.session.add(_priv_grp)
+        db.session.commit()
+        _priv_gid = _priv_grp.id
+        _ginv, _tok_grp = _Inv.mint(_sa, group_ids=[_priv_gid])
+        db.session.add(_ginv)
+        db.session.commit()
+    with app.app_context():                    # the minter loses the rank behind the grant
+        db.session.get(User, _sa_id).is_superadmin = False
+        db.session.commit()
+    _r_grp = _accept(_tok_grp, _inv_tag + "_grp")
+
+    def _groups_of(username):
+        # INSIDE a context: _user() hands back a detached row, and touching .groups on it
+        # raises DetachedInstanceError rather than answering.
+        with app.app_context():
+            _u = User.query.filter_by(username=username).first()
+            return None if _u is None else sorted(g.name for g in _u.groups)
+
+    _grp_got = _groups_of(_inv_tag + "_grp")
+    check("invite route: a GROUP grant does not outlive its minter's authority either",
+          _grp_got is None,
+          "a demoted admin's invite still created an account carrying %s (status %s)"
+          % (_grp_got, _r_grp.status_code))
+    with app.app_context():
+        db.session.get(User, _sa_id).is_superadmin = True
+        db.session.commit()
+        _ginv2, _tok_grp2 = _Inv.mint(_sa, group_ids=[_priv_gid])
+        db.session.add(_ginv2)
+        db.session.commit()
+    _accept(_tok_grp2, _inv_tag + "_grp_ok")
+    _grp_ok = _groups_of(_inv_tag + "_grp_ok")
+    check("invite route: ...while an intact minter's group invite still works",
+          _grp_ok is not None and (_inv_tag + "_priv") in _grp_ok,
+          "the control failed (%s) — the refusal above proves nothing" % (_grp_ok,))
+
+
+def _invite_host_outside_the_minters_reach():
+    """A group reaching a host outside the minter's reach is refused."""
+    global _host_gid
+    # 3c. The same rule on the OBJECT axis, which this re-validation never asked about.
+    #     grantable_groups' _within_my_reach tests three things — permissions, whole-host
+    #     grants (Group.servers) and per-server grants (Group.game_servers) — and the copy in
+    #     redeem_invite tested the permissions subset alone. A group carrying NO permissions
+    #     makes `set() <= _mine` trivially true, so a pure-ACCESS group sailed straight through
+    #     with its whole-host grant intact and the new account could reach every server on a
+    #     host the minter had just lost. /users (grantable_groups) and /groups
+    #     (grantable_object_ids) both refuse that same grant to that same person; the invite
+    #     was the one door left open. 3b cannot catch this — its group's permissions are what
+    #     the demotion takes away.
+    with app.app_context():
+        _host_grp = Group(name=_inv_tag + "_host", description="host access only (auto)",
+                          is_default=False)
+        _host_grp.set_permissions([])          # none at all: the subset test cannot catch it
+        _host_grp.servers.append(db.session.get(RemoteServer, granted_remote))
+        db.session.add(_host_grp)
+        db.session.commit()
+        _host_gid = _host_grp.id
+        _hinv, _tok_host = _Inv.mint(db.session.get(User, _sa_id), group_ids=[_host_gid])
+        db.session.add(_hinv)
+        db.session.commit()
+    with app.app_context():                    # the minter loses the reach behind the grant
+        db.session.get(User, _sa_id).is_superadmin = False
+        db.session.commit()
+    _r_host = _accept(_tok_host, _inv_tag + "_host")
+    _host_got = _groups_of(_inv_tag + "_host")
+    check("invite route: a WHOLE-HOST group grant does not outlive its minter's reach either",
+          _host_got is None,
+          "a demoted minter's invite still created an account carrying %s — a group with no "
+          "permissions at all, so a permissions-only subset test waves it through (status %s)"
+          % (_host_got, _r_host.status_code))
+
+
+def _invite_host_inside_the_minters_reach():
+    """...while the same host, once inside the minter's reach, is accepted."""
+    global _host_ok, _sa_row
+    # ...and that is a REACH test, not a blanket refusal for anyone who is not a superadmin:
+    # hand the (still demoted) minter that same host through a group of their own, and the
+    # identical invite works again.
+    with app.app_context():
+        _reach_grp = Group(name=_inv_tag + "_reach", description="minter's own reach (auto)",
+                           is_default=False)
+        _reach_grp.set_permissions([])
+        _reach_grp.servers.append(db.session.get(RemoteServer, granted_remote))
+        db.session.add(_reach_grp)
+        _sa_row = db.session.get(User, _sa_id)
+        _sa_row.groups.append(_reach_grp)
+        db.session.commit()
+        _hinv2, _tok_host2 = _Inv.mint(_sa_row, group_ids=[_host_gid])
+        db.session.add(_hinv2)
+        db.session.commit()
+    _accept(_tok_host2, _inv_tag + "_host_ok")
+    _host_ok = _groups_of(_inv_tag + "_host_ok")
+    check("invite route: ...while a minter who still reaches that host can hand it out",
+          _host_ok is not None and (_inv_tag + "_host") in _host_ok,
+          "the control failed (%s) — the refusal above proves nothing" % (_host_ok,))
+    with app.app_context():                    # restore the fixture the next case expects
+        _sa_row = db.session.get(User, _sa_id)
+        _sa_row.groups = [_g for _g in _sa_row.groups
+                          if _g.name != _inv_tag + "_reach"]
+        _sa_row.is_superadmin = True
+        db.session.commit()
+
+
+def _invite_custom_command_axis():
+    """A group holding a custom command the minter cannot run is refused."""
+    global _cmd_ok, _sa_row
+    # 3d. The fourth axis, custom commands: a group holding nothing but a superadmin-authored
+    #     command passes the permission, host and server tests trivially, and membership alone
+    #     authorises the command.
+    with app.app_context():
+        from panel.db.models import CustomCommand as _ICC
+        _inv_cmd = _ICC(name=_inv_tag + "_cmd", command_template="exec {}", enabled=True)
+        db.session.add(_inv_cmd)
+        _icmd_grp = Group(name=_inv_tag + "_cmdgrp", description="a command only (auto)",
+                          is_default=False)
+        _icmd_grp.set_permissions([])
+        _icmd_grp.custom_commands.append(_inv_cmd)
+        db.session.add(_icmd_grp)
+        db.session.commit()
+        _inv_cmd_id, _icmd_gid = _inv_cmd.id, _icmd_grp.id
+        _cinv, _tok_cmd = _Inv.mint(db.session.get(User, _sa_id), group_ids=[_icmd_gid])
+        db.session.add(_cinv)
+        db.session.commit()
+    with app.app_context():                    # the minter loses the command with the demotion
+        db.session.get(User, _sa_id).is_superadmin = False
+        db.session.commit()
+    _r_cmd = _accept(_tok_cmd, _inv_tag + "_cmd")
+    check("invite route: a CUSTOM-COMMAND group grant does not outlive its minter's reach",
+          _groups_of(_inv_tag + "_cmd") is None,
+          "a demoted minter's invite created an account carrying %s (status %s)"
+          % (_groups_of(_inv_tag + "_cmd"), _r_cmd.status_code))
+    with app.app_context():                    # positive control: the minter holds it too
+        _own_cmd = Group(name=_inv_tag + "_owncmd", description="minter's command (auto)",
+                         is_default=False)
+        _own_cmd.set_permissions([])
+        _own_cmd.custom_commands.append(db.session.get(_ICC, _inv_cmd_id))
+        db.session.add(_own_cmd)
+        _sa_row = db.session.get(User, _sa_id)
+        _sa_row.groups.append(_own_cmd)
+        db.session.commit()
+        _cinv2, _tok_cmd2 = _Inv.mint(_sa_row, group_ids=[_icmd_gid])
+        db.session.add(_cinv2)
+        db.session.commit()
+    _accept(_tok_cmd2, _inv_tag + "_cmd_ok")
+    _cmd_ok = _groups_of(_inv_tag + "_cmd_ok")
+    check("invite route: ...while a minter who holds that command can hand it out",
+          _cmd_ok is not None and (_inv_tag + "_cmdgrp") in _cmd_ok,
+          "the control failed (%s) — the refusal above proves nothing" % (_cmd_ok,))
+
+
+def _invite_deactivated_expired_and_guessed():
+    """A deactivated minter's invite is refused; an expired and a guessed token look alike."""
+    global _dl, _sa_row, _x
+    with app.app_context():                    # restore the fixture the next case expects
+        _sa_row = db.session.get(User, _sa_id)
+        _sa_row.groups = [_g for _g in _sa_row.groups
+                          if _g.name != _inv_tag + "_owncmd"]
+        _sa_row.is_superadmin = True
+        db.session.commit()
+
+    # 4. Deactivated, not merely demoted: nobody is standing behind the invite at all.
+    _iid_d, _tok_d = _mint(_sa)
+    with app.app_context():
+        db.session.get(User, _sa_id).is_active = False
+        db.session.commit()
+    _r4 = _accept(_tok_d, _inv_tag + "_inactive")
+    check("invite route: an invite from a DEACTIVATED admin is refused",
+          _user(_inv_tag + "_inactive") is None,
+          "status %s" % _r4.status_code)
+    with app.app_context():
+        db.session.get(User, _sa_id).is_active = True
+        db.session.commit()
+
+    # 5. An expired invite, and a token nobody minted, answer the SAME way — a link that said
+    #    "already used" would confirm to a stranger that the token was real.
+    _iid_x, _tok_x = _mint(_sa, hours=1)
+    with app.app_context():
+        _x = db.session.get(_Inv, _iid_x)
+        _x.expires_at = _inv_utcnow() - _inv_timedelta(hours=2)
+        db.session.commit()
+    _r_exp = _anon_inv.get("/invite/%s" % _tok_x)
+    _r_bogus = _anon_inv.get("/invite/%s" % ("z" * 43))
+    check("invite route: an expired invite is refused",
+          _r_exp.status_code == 404 and _user(_inv_tag + "_exp") is None)
+    # Per-REQUEST values are normalised out before comparing: the CSP nonce and the CSRF
+    # token are fresh every response by design and say nothing about the invite. Everything
+    # else must match, because a page that said "already used" would confirm to a stranger
+    # that a guessed token was real.
+    #
+    # The nonce alone was not enough. CI failed this where the machine that wrote it passed:
+    # the CSRF token is time-based, so two requests in the same second produce the same one
+    # and two that straddle a second do not. A test that depends on how fast the machine is
+    # is not a test.
+    import difflib as _dl
+    import re as _inv_re
+
+    def _no_nonce(t):
+        t = _inv_re.sub(r'nonce="[^"]*"', 'nonce="X"', t)
+        t = _inv_re.sub(r'window\.CSRF\s*=\s*"[^"]*"', 'window.CSRF = "X"', t)
+        t = _inv_re.sub(r'name="csrf_token"[^>]*value="[^"]*"',
+                        'name="csrf_token" value="X"', t)
+        return t
+
+    _d_exp, _d_bog = _no_nonce(_r_exp.get_data(as_text=True)), \
+        _no_nonce(_r_bogus.get_data(as_text=True))
+    _diff = [_ln for _ln in _dl.unified_diff(_d_exp.split("\n"), _d_bog.split("\n"),
+                                             lineterm="", n=0)
+             if _ln[:1] in "+-" and _ln[:3] not in ("---", "+++")]
+    check("invite route: ...and a guessed token is refused the SAME way, telling it nothing",
+          _r_bogus.status_code == _r_exp.status_code and _d_bog == _d_exp,
+          "status %s vs %s; differing lines: %s"
+          % (_r_exp.status_code, _r_bogus.status_code, " || ".join(_diff[:4])[:400]))
+
+
+def _invite_cleanup_rows():
+    """Delete the invite users, invites and groups, and restore the borrowed superadmin."""
+    global _ICC_rm, _g, _n, _row, _sa_row, _u
+    for _n in ("_ok", "_twice", "_demoted", "_inactive", "_exp", "_race", "_revoked",
+               "_grp", "_grp_ok", "_host", "_host_ok", "_cmd", "_cmd_ok"):
+        _u = User.query.filter_by(username=_inv_tag + _n).first()
+        if _u is not None:
+            db.session.delete(_u)
+    for _row in _Inv.query.all():
+        if _row.id not in _inv_before:     # this run's invites only, never the operator's
+            db.session.delete(_row)
+    _sa_row = db.session.get(User, _sa_id)
+    if _sa_row is not None:
+        # The reach fixture is a group ON the superadmin, so it has to come off before the
+        # groups are deleted — the rest of this suite runs against that account. Restored
+        # to exactly what it was, not to a literal (True, True).
+        _sa_row.groups = [_g for _g in (db.session.get(Group, _i) for _i in _sa_before[2])
+                          if _g is not None]
+        _sa_row.is_superadmin, _sa_row.is_active = _sa_before[0], _sa_before[1]
+    db.session.commit()
+    for _g in Group.query.filter(Group.name.like(_inv_tag + "%")).all():
+        db.session.delete(_g)
+    db.session.commit()
+    from panel.db.models import CustomCommand as _ICC_rm
+
+
+def _invite_cleanup_commands():
+    """Delete this run's invite custom commands."""
+    global _c
+    for _c in _ICC_rm.query.filter(_ICC_rm.name.like(_inv_tag + "%")).all():
+        db.session.delete(_c)
+    db.session.commit()
+
+
+def _invite_cleanup():
+    """Remove this run's invite users, invites, groups and commands; restore the superadmin."""
+    with app.app_context():
+        _invite_cleanup_rows()
+        _invite_cleanup_commands()
+
+
+def _check_limited_user_denied_pages():
+    """A limited user (VIEW_SERVERS + VIEW_CONSOLE, one remote) is denied the admin pages."""
+    global c, code, p
     # ── Limited user (VIEW_SERVERS + VIEW_CONSOLE, access to ONE remote) ──
     c = client_as(uid)
     for p in ["/users", "/groups", "/logs", "/remotes", "/server-management",
@@ -279,12 +864,16 @@ try:
         code = c.get(p).status_code
         check("limited user DENIED %s" % p, code != 200, "got %d" % code)
 
+
+def _check_specs_os_slug_for_installers():
+    """/specs gives an INSTALL_SERVER user the OS slug, and only MANAGE_REMOTES the hardware."""
+    global _obj, _sp_hosts, _sp_rv, _spmu_id, _spu_id
     # ── the install picker's OS filter must answer the people who install ──────────────────────
     # /specs was MANAGE_REMOTES only, but its os_slug is what manage_servers.js greys out games
     # with, on a page for INSTALL_SERVER / MANAGE_SERVERS. They got 403, the filter read "OS unknown"
     # and left every game selectable. They now get os_slug — and ONLY os_slug: the hardware card
     # (kernel, hostname, CPU, disk) stays with MANAGE_REMOTES.
-    import panel.routes.remote_vps as _sp_rv
+    _sp_rv = _rvps_mod                   # panel.routes.remote_vps, imported once above
     import panel.ops.ssh_manager.hosts as _sp_hosts
     _sp_saved = (_sp_rv.host_specs, _sp_hosts.host_os_slug)
     with app.app_context():
@@ -305,21 +894,7 @@ try:
         db.session.commit()
         _spu_id, _spmu_id = _spu.id, _spmu.id
     try:
-        _sp_rv.host_specs = lambda r, force=False: {"os": "Ubuntu 22.04", "kernel": "6.8.0-rbac",
-                                                    "hostname": "rbac-host"}
-        _sp_hosts.host_os_slug = lambda r: "ubuntu-22.04"
-        _spr = client_as(_spu_id).get("/api/remote/%d/specs" % granted_remote)
-        check("specs: an INSTALL_SERVER user gets the host's OS for the install picker",
-              _spr.status_code == 200 and (_spr.get_json() or {}).get("os_slug") == "ubuntu-22.04",
-              "got %d %s" % (_spr.status_code, _spr.get_data(as_text=True)[:80]))
-        check("specs: ...and nothing of the hardware card",
-              set((_spr.get_json() or {"x": 1}).keys()) == {"os_slug"},
-              "keys %r" % sorted((_spr.get_json() or {}).keys()))
-        _spmr = client_as(_spmu_id).get("/api/remote/%d/specs" % granted_remote)
-        check("specs: ...while MANAGE_REMOTES still gets the full specs",
-              _spmr.status_code == 200 and (_spmr.get_json() or {}).get("kernel") == "6.8.0-rbac"
-              and (_spmr.get_json() or {}).get("os_slug") == "ubuntu-22.04",
-              "got %d %s" % (_spmr.status_code, _spmr.get_data(as_text=True)[:80]))
+        _specs_as_installer_and_as_manager()
     finally:
         _sp_rv.host_specs, _sp_hosts.host_os_slug = _sp_saved
         with app.app_context():
@@ -328,6 +903,10 @@ try:
                     db.session.delete(_obj)
             db.session.commit()
 
+
+def _check_failed_install_redirects_terminate():
+    """A failed install seen without MANAGE_SERVERS: the redirect chain ends on a page."""
+    global _loopfail_id, _row
     # ── Two guards that each redirect to the other are an infinite loop ────────────────────────
     # A failed install sends the console to Files & Config, because that is where the LinuxGSM
     # config the failure talks about lives. Files & Config sends a user without MANAGE_SERVERS to
@@ -344,29 +923,8 @@ try:
         db.session.commit()
         _loopfail_id = _loopfail.id
     try:
-        _path, _chain = "/server/%d" % _loopfail_id, []
-        for _ in range(12):
-            _r = c.get(_path)
-            _chain.append("%s -> %s" % (_path, _r.status_code))
-            if _r.status_code not in (301, 302, 303, 307, 308):
-                break
-            _loc = _r.headers.get("Location") or ""
-            _path = _loc.split("localhost", 1)[-1] if _loc.startswith("http") else _loc
-        check("failed install + no MANAGE_SERVERS: the redirect chain terminates",
-              len(_chain) < 12, " | ".join(_chain[:6]))
-        check("failed install + no MANAGE_SERVERS: ...on a page that actually renders",
-              _chain and _chain[-1].endswith("200"), _chain[-1] if _chain else "no response")
-        # And the same from the other end, for someone who followed a Files & Config link.
-        _path, _chain2 = "/server/%d/files" % _loopfail_id, []
-        for _ in range(12):
-            _r = c.get(_path)
-            _chain2.append("%s -> %s" % (_path, _r.status_code))
-            if _r.status_code not in (301, 302, 303, 307, 308):
-                break
-            _loc = _r.headers.get("Location") or ""
-            _path = _loc.split("localhost", 1)[-1] if _loc.startswith("http") else _loc
-        check("failed install + no MANAGE_SERVERS: ...and from the Files & Config side too",
-              len(_chain2) < 12 and _chain2[-1].endswith("200"), " | ".join(_chain2[:6]))
+        _redirect_chain_from_the_console()
+        _redirect_chain_from_files_and_config()
     finally:
         with app.app_context():
             _row = db.session.get(GameServer, _loopfail_id)
@@ -374,6 +932,10 @@ try:
                 db.session.delete(_row)
                 db.session.commit()
 
+
+def _check_uninstall_lands_on_openable_page():
+    """A successful uninstall redirects to a page the uninstaller can open."""
+    global _obj
     # ── a successful uninstall must not land on a page the uninstaller cannot open ─────────────
     # Every exit of uninstall_server redirected to /servers/manage, which needs MANAGE_SERVERS or
     # INSTALL_SERVER — neither of which an UNINSTALL_SERVER-only operator has. The dashboard's
@@ -430,6 +992,10 @@ try:
                     db.session.delete(_obj)
             db.session.commit()
 
+
+def _check_retry_install_matches_its_route():
+    """The Retry install button and the route it posts to agree about who may press it."""
+    global _r
     # ── the Retry button and the route it posts to must agree about who may press it ───────────
     # The dashboard renders "Retry install" on the can_install flag, which is
     # INSTALL_SERVER *or* MANAGE_SERVERS — the same pair /servers/install and /servers/add accept.
@@ -475,6 +1041,10 @@ try:
                 db.session.delete(_u2)
             db.session.commit()
 
+
+def _check_vps_prep_refuses_panel_host():
+    """The VPS-preparation routes refuse the panel's OWN host."""
+    global _ac, _label, _local_id, _local_made, _path, _r, _rem_id, _trapped_at
     # ── VPS-preparation routes must refuse the panel's OWN host ────────────────────────────────
     # manage_remotes.html hides Prepare / Tailscale for the local host, but the ROUTES accepted a
     # POST carrying its id. Those actions apt full-upgrade the machine, rewrite its sshd config,
@@ -510,6 +1080,11 @@ try:
               b"panel's own host" in _r.data, _r.data[:120])
     check("...and none of those four reached the action on the panel's own host",
           not _trapped[_trapped_at:], "reached: %r" % (_trapped[_trapped_at:],))
+
+
+def _check_vps_prep_allows_a_remote_host():
+    """...but not a remote host: refusing everything would pass the checks above too."""
+    global _ci, _r2
     # A remote host must NOT be refused by that guard — refusing everything is the easy way to make
     # the assertions above pass for the wrong reason.
     if _rem_id is not None:
@@ -564,6 +1139,10 @@ try:
         check("IDOR: ...while tagging the granted server gets past access (control)",
               _it.status_code == 400, "got %d" % _it.status_code)
 
+
+def _check_limited_user_server_actions():
+    """The limited user's server actions and file/cron/tag writes are refused; tag reads scoped."""
+    global _dl
     check("action 'start' without START_SERVER -> 403",
           c.post("/api/server/%d/action" % accessible_id, json={"action": "start"}).status_code == 403)
     check("send command without SEND_COMMAND -> 403",
@@ -614,44 +1193,11 @@ try:
     # ...but it names only the servers the caller can access. It listed every server's id under
     # every tag: an inventory of what they cannot open, and what it is tagged with.
     if other_id:
-        from panel.db.models import ServerTag as _TagR
-        with app.app_context():
-            _tr = _TagR(name=tag + "tagleak")
-            _tr.servers.extend([db.session.get(GameServer, accessible_id),
-                                db.session.get(GameServer, other_id)])
-            db.session.add(_tr)
-            db.session.commit()
-            _tr_id = _tr.id
-        try:
-            _tr_ids = next((t["server_ids"] for t in (c.get("/api/tags").get_json() or {})["tags"]
-                            if t["id"] == _tr_id), None)
-            check("tag list: (control) a tag on a server the caller CAN access lists that server",
-                  _tr_ids is not None and accessible_id in _tr_ids, "got %r" % (_tr_ids,))
-            check("IDOR: the tag list does not name a server the caller cannot access",
-                  _tr_ids is not None and other_id not in _tr_ids, "got %r" % (_tr_ids,))
-            _tr_admin = next((t["server_ids"] for t in
-                              (client_as(admin_id).get("/api/tags").get_json() or {})["tags"]
-                              if t["id"] == _tr_id), None)
-            check("tag list: ...while a superadmin still sees every server on it",
-                  _tr_admin is not None and other_id in _tr_admin, "got %r" % (_tr_admin,))
-            # A MANAGE_SERVERS holder scoped to one host can DELETE the tag, which strips it from
-            # every server panel-wide — so the count they are shown is every server's. The Tags
-            # card printed the length of the filtered ids: "0 server(s)" on a tag other hosts'
-            # servers carry, one click from removing it (and its alert muting) from all of them.
-            _tr_ci = next((t for t in (_ci.get("/api/tags").get_json() or {})["tags"]
-                           if t["id"] == _tr_id), None)
-            check("tag list: a scoped admin who can delete a tag is told how many servers carry it",
-                  _tr_ci is not None and _tr_ci.get("server_count") == 2
-                  and _tr_ci.get("server_ids") == [accessible_id], "got %r" % (_tr_ci,))
-            _tr_c = next((t for t in (c.get("/api/tags").get_json() or {})["tags"]
-                          if t["id"] == _tr_id), None)
-            check("tag list: ...while a caller who cannot delete it gets only their own count",
-                  _tr_c is not None and _tr_c.get("server_count") == 1, "got %r" % (_tr_c,))
-        finally:
-            with app.app_context():
-                db.session.delete(db.session.get(_TagR, _tr_id))
-                db.session.commit()
+        _check_tag_list_names_only_reachable()
 
+
+def _check_legacy_super_admin_grant():
+    """A legacy "super_admin" group grant confers nothing."""
     # ── A legacy "super_admin" group grant confers nothing ────────────────────────────────────
     c3 = client_as(uid3)
     for p3 in ["/settings", "/notifications", "/server-management", "/users"]:
@@ -665,6 +1211,10 @@ try:
     check("super_admin is not a grantable permission any more",
           "super_admin" not in auth.ALL_PERMISSIONS)
 
+
+def _check_denials_and_limited_pages():
+    """Denials read right for any caller; pages render for the limited user; hosts are per host."""
+    global cmr
     # ── A denial must be readable by whoever asked ────────────────────────────────────────────
     # The decorators used to flash + 302 unconditionally. An in-page fetch follows that redirect,
     # gets HTML, fails to parse it, and base.html's fallback turned the refusal into a SUCCESS
@@ -723,6 +1273,10 @@ try:
     cmr = client_as(uid2)
     check("MANAGE_REMOTES user can open /remotes -> 200", cmr.get("/remotes").status_code == 200)
 
+
+def _check_tailscale_page_is_host_scoped():
+    """/tailscale shows a per-host MANAGE_REMOTES admin nothing about the panel host."""
+    global _rts, _rts_info, _rts_json, _rts_leaks, ids, r
     # /tailscale is gated on MANAGE_REMOTES, which is granted PER HOST — this user holds it for one
     # remote. The page reported on the PANEL HOST instead: its tailnet name and IPs, its Serve
     # mappings with their backends, and every peer on the operator's tailnet (personal devices
@@ -741,21 +1295,8 @@ try:
     _rts_leaks = ("alice-iphone", "100.64.7.7", "100.101.102.103", "gamepanel.tail1234.ts.net",
                   "127.0.0.1:3999")
     try:
-        _rts.get_tailscale_info = lambda force_refresh=False: _rts_info
-        _rts_page = cmr.get("/tailscale")
-        _rts_html = _rts_page.get_data(as_text=True)
-        check("tailscale page: a scoped MANAGE_REMOTES admin can still open it (200)",
-              _rts_page.status_code == 200, "got %d" % _rts_page.status_code)
-        check("tailscale page: ...but is shown none of the PANEL HOST's tailnet inventory",
-              not [x for x in _rts_leaks if x in _rts_html],
-              repr([x for x in _rts_leaks if x in _rts_html]))
-        _rts_api = _rts_json.dumps(cmr.get("/api/tailscale").get_json() or {})
-        check("/api/tailscale: ...nor does its JSON carry it",
-              not [x for x in _rts_leaks if x in _rts_api], repr([x for x in _rts_leaks if x in _rts_api]))
-        _rts_admin = client_as(admin_id).get("/tailscale").get_data(as_text=True)
-        check("tailscale page: a superadmin still sees all of it (control)",
-              all(x in _rts_admin for x in _rts_leaks),
-              repr([x for x in _rts_leaks if x not in _rts_admin]))
+        _tailscale_page_as_scoped_admin()
+        _tailscale_page_as_superadmin()
     finally:
         _rts.get_tailscale_info = _rts_saved
         _rts._cache["info"] = None
@@ -772,6 +1313,10 @@ try:
     if other_id:
         check("/api/servers HIDES non-granted server", other_id not in ids, str(ids))
 
+
+def _check_unauthenticated():
+    """An unauthenticated client is refused, and /setup cannot mint a superadmin after setup."""
+    global r
     # ── Unauthenticated ──
     cu = client_as(None)
     check("unauth GET / -> redirect to login", cu.get("/").status_code == 302)
@@ -781,7 +1326,7 @@ try:
     # CRITICAL: /setup POST must NOT create a superadmin once setup is complete.
     pwn = "pwned_" + tag
     r = cu.post("/setup", data={"step": "admin_user", "username": pwn,
-                                "password": "hackme123", "confirm_password": "hackme123"})
+                                "password": "hackme123", "confirm_password": "hackme123"})  # nosec B105 - posted by an anonymous probe that must be refused
     with app.app_context():
         created = User.query.filter_by(username=pwn).first()
         was_created = created is not None
@@ -792,6 +1337,10 @@ try:
           "ACCOUNT WAS CREATED (status %d)" % r.status_code if was_created else "blocked")
     check("unauth GET /setup -> redirect", cu.get("/setup").status_code == 302)
 
+
+def _check_group_admin_cannot_grant_more():
+    """A delegated group admin cannot grant a permission they do not hold."""
+    global c4
     # ── Privilege escalation: a delegated group admin cannot grant what they don't hold ──────────
     # They have MANAGE_GROUPS, so they may create and edit groups — including groups they are in.
     # _grantable_perms is the whole defence, and nothing exercised it for a non-superadmin
@@ -819,6 +1368,10 @@ try:
     check("escalation: an edit PRESERVES a permission the editor cannot grant",
           auth.MANAGE_USERS in kept, "after edit: %s" % sorted(kept))
 
+
+def _check_membership_escalation():
+    """...and cannot escalate from the MEMBERSHIP side either."""
+    global _mu_gid, _mu_uid, _prize_gid, cmu
     # ── …and the same escalation from the MEMBERSHIP side ────────────────────────────────────────
     # _grantable_perms stops a delegated admin giving a GROUP a permission they lack. It said
     # nothing about which groups a user may JOIN, and /users/<id>/edit set user.groups straight
@@ -856,6 +1409,9 @@ try:
     check("escalation: ...and keeps the group they legitimately had",
           auth.MANAGE_USERS in _now, "ended up with: %s" % sorted(_now))
 
+
+def _check_superadmin_edit_refused_by_name():
+    """A MANAGE_USERS holder editing a superadmin is refused by name, and nothing changes."""
     # A superadmin account is refused BY NAME, before anything else is weighed. The refusal alone
     # proves nothing about this guard: the superadmin-flag and reach checks behind it refuse the
     # same edit in other words, so deleting it left every suite green when edit_user was split
@@ -874,6 +1430,10 @@ try:
           == "Only a superadmin can modify a superadmin account." and _sa_after == _sa_before,
           repr((_r_sa.status_code, _r_sa.get_json(silent=True), _sa_after == _sa_before)))
 
+
+def _check_join_needs_the_hosts_too():
+    """...and cannot join a group whose permissions they hold but whose hosts they do not."""
+    global _reach, _reach_gid
     # ── ...and cannot join a group whose PERMISSIONS they hold but whose HOSTS they do not ──────
     # grantable_groups tested `set(g.get_permissions()) <= mine` and nothing else, while
     # can_access_server unions Group.servers (whole-host grants) and Group.game_servers. So a
@@ -895,6 +1455,9 @@ try:
     check("escalation: joining a permission-subset group does not hand over its hosts",
           _got_host is False, "gained access to server %s on an ungranted host" % other_id)
 
+
+def _check_user_form_offers_only_joinable():
+    """...and the /users form offers only the groups the POST will accept."""
     # ── ...and the FORM must offer only the groups the POST will actually accept ────────────────
     # /users passed `Group.query.all()` to the template, which renders a checkbox per group in the
     # Add User, Edit User and Invite modals. grantable_groups then silently dropped the ones out of
@@ -926,6 +1489,9 @@ try:
           'name="is_superadmin"' in _sa_page,
           "the switch vanished for the one role that may actually use it")
 
+
+def _check_manage_users_needs_the_perms():
+    """MANAGE_USERS does not reach an account holding permissions the actor lacks."""
     # ── MANAGE_USERS must not reach an account holding permissions the actor lacks ──────────────
     # The superadmin flag was the ONLY actor-vs-target test, so MANAGE_USERS alone edited every
     # other account — and reset_password mints a new one and hands the plaintext straight back,
@@ -946,7 +1512,7 @@ try:
         _vic_id, _vic_hash = _vic.id, _vic.password_hash
     _r_take = cmu.post("/users/%d/edit" % _vic_id,
                        data={"display_name": "victim", "is_active": "on",
-                             "reset_password": "on", "reset_2fa": "on"})
+                             "reset_password": "on", "reset_2fa": "on"})  # nosec B105 - a checkbox value
     with app.app_context():
         _vic_now = db.session.get(User, _vic_id)
         _hash_changed = _vic_now.password_hash != _vic_hash
@@ -963,12 +1529,15 @@ try:
         db.session.commit()
         _low_id, _low_hash = _low.id, _low.password_hash
     cmu.post("/users/%d/edit" % _low_id,
-             data={"display_name": "low", "is_active": "on", "reset_password": "on"})
+             data={"display_name": "low", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
     with app.app_context():
         _low_changed = db.session.get(User, _low_id).password_hash != _low_hash
     check("escalation: ...but MAY still administer an account within their own permissions",
           _low_changed, "a legitimate reset was refused too — the guard is too broad")
 
+
+def _check_manage_users_needs_the_objects():
+    """...nor one reaching hosts or servers the actor cannot."""
     # ── ...and the same door, opened with OBJECTS instead of permissions ──────────────────────
     # Permissions were the whole test, and they are only half of what an account carries. Two
     # delegated admins can hold the IDENTICAL permission set and be granted different hosts: the
@@ -1005,12 +1574,16 @@ try:
           "perms_equal=%s reach_wider=%s — the check below would prove nothing"
           % (_perms_equal, _reach_wider))
     cmu.post("/users/%d/edit" % _peer_id,
-             data={"display_name": "peer", "is_active": "on", "reset_password": "on"})
+             data={"display_name": "peer", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
     with app.app_context():
         _peer_changed = db.session.get(User, _peer_id).password_hash != _peer_hash
     check("escalation: MANAGE_USERS cannot take over a peer who can reach hosts the actor cannot",
           not _peer_changed, "the peer's password hash was replaced")
 
+
+def _check_manage_users_custom_commands():
+    """...nor one holding custom commands the actor cannot run."""
+    global _cmd_peer_hash, _cmd_peer_id, _plain_peer_hash, _plain_peer_id
     # ── ...and with CUSTOM COMMANDS, which need no permission at all to run ──────────────────
     # can_run_custom_command authorises on group membership alone, and the reach tests compared
     # permissions, hosts and game servers — never Group.custom_commands. So a group whose
@@ -1054,9 +1627,13 @@ try:
     check("escalation: ...while the same group WITHOUT the command is still joined",
           _plain_gid in _mu_gids, "the plain group was refused too — the guard is too broad")
     cmu.post("/users/%d/edit" % _cmd_peer_id,
-             data={"display_name": "cmd peer", "is_active": "on", "reset_password": "on"})
+             data={"display_name": "cmd peer", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
     cmu.post("/users/%d/edit" % _plain_peer_id,
-             data={"display_name": "plain peer", "is_active": "on", "reset_password": "on"})
+             data={"display_name": "plain peer", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
+
+
+def _check_custom_command_peers_untouched():
+    """...which leaves the refused peers' passwords exactly as they were."""
     with app.app_context():
         _cmd_peer_changed = db.session.get(User, _cmd_peer_id).password_hash != _cmd_peer_hash
         _plain_peer_changed = (db.session.get(User, _plain_peer_id).password_hash
@@ -1066,74 +1643,15 @@ try:
     check("escalation: ...but may still reset a peer with the same permissions and no command",
           _plain_peer_changed, "a legitimate reset was refused — the guard is too broad")
 
+
+def _check_view_logs_scope_and_users_add():
+    """VIEW_LOGS shows only what the viewer can reach; /users/add cannot fill the prize group."""
     # ── VIEW_LOGS is scoped to what the viewer can reach ─────────────────────────────────────
     # It was install-wide: a moderator given view_logs with ONE server read every server's console
     # commands (`rcon_password …`), every admin's sign-in address, and the attempted username of
     # every failed login — where people paste their password by mistake.
     if other_id is not None:
-        from panel.db.models import AuditLog as _AL
-        from panel.core.clock import utcnow as _al_now
-        with app.app_context():
-            _lv_grp = Group(name=tag + "_logs", description="RBAC test log viewer (auto)",
-                            is_default=False)
-            _lv_grp.set_permissions([auth.VIEW_LOGS, auth.VIEW_SERVERS])
-            _lv_grp.game_servers.append(db.session.get(GameServer, accessible_id))
-            db.session.add(_lv_grp)
-            db.session.flush()
-            _lv = User(username=tag + "_logviewer",
-                       password_hash=auth.hash_password(secrets.token_hex(16)),
-                       display_name="log viewer", is_superadmin=False, is_active=True)
-            _lv.groups.append(_lv_grp)
-            db.session.add(_lv)
-            db.session.flush()
-            _lv_id = _lv.id
-            _mine_name = db.session.get(GameServer, accessible_id).name
-            _other_name = db.session.get(GameServer, other_id).name
-            _lt = tag + "LOGROW"
-            for _uid_, _who, _act, _tgt, _det, _ip in (
-                    (admin_id, "admin", "send_command", _mine_name, _lt + "_mine_srv", "198.51.100.1"),
-                    (admin_id, "admin", "send_command", _other_name,
-                     _lt + "_other_srv rcon_password S3cret", "198.51.100.5"),
-                    (None, tag + "Sup3rSecretPw", "login_failed", "", _lt + "_failed", "198.51.100.2"),
-                    (admin_id, "admin", "login", "", _lt + "_adminlogin", "198.51.100.3"),
-                    # An ACCOUNT row whose free-text target happens to name their server (an
-                    # invite's note is whatever the minter typed): still not theirs to read.
-                    (admin_id, "admin", "invite_created", _mine_name, _lt + "_invite",
-                     "198.51.100.6"),
-                    (_lv_id, tag + "_logviewer", "logout", "", _lt + "_own", "198.51.100.4")):
-                db.session.add(_AL(user_id=_uid_, username=_who, action=_act, target=_tgt,
-                                   detail=_det, ip_address=_ip, success=True,
-                                   timestamp=_al_now()))
-            db.session.commit()
-        try:
-            _lv_page = client_as(_lv_id).get("/logs?q=" + _lt).get_data(as_text=True)
-            _sa_logs = client_as(admin_id).get("/logs?q=" + _lt).get_data(as_text=True)
-            check("view_logs: a scoped viewer sees rows about the server they can access",
-                  _lt + "_mine_srv" in _lv_page and _lt + "_own" in _lv_page,
-                  "their own server's / their own row is missing — the scope is too tight")
-            check("view_logs: ...but not another server's console commands",
-                  _lt + "_other_srv" not in _lv_page and "S3cret" not in _lv_page,
-                  "a server outside their grants leaked its console history")
-            check("view_logs: ...nor anyone's sign-ins or failed-login usernames",
-                  _lt + "_failed" not in _lv_page and _lt + "_adminlogin" not in _lv_page
-                  and (tag + "Sup3rSecretPw") not in _lv_page,
-                  "account rows (or the failed-login username in the filter list) leaked")
-            check("view_logs: ...nor an account row whose target merely names their server",
-                  _lt + "_invite" not in _lv_page,
-                  "an invite row reached a server-scoped viewer by its target")
-            check("view_logs: ...nor another user's address, while their own is shown",
-                  "198.51.100.1" not in _lv_page and "198.51.100.4" in _lv_page,
-                  "another admin's IP is visible, or the viewer's own is hidden")
-            check("view_logs: a superadmin still sees every row and address (control)",
-                  all(_lt + s in _sa_logs for s in ("_mine_srv", "_other_srv", "_failed",
-                                                    "_adminlogin", "_own", "_invite"))
-                  and "198.51.100.1" in _sa_logs and (tag + "Sup3rSecretPw") in _sa_logs,
-                  "the scoping also narrowed the superadmin's view")
-        finally:
-            with app.app_context():
-                for _row in _AL.query.filter(_AL.detail.like(_lt + "%")).all():
-                    db.session.delete(_row)
-                db.session.commit()
+        _check_view_logs_with_a_second_host()
     check("view_logs: (premise) the fixture has a second host to be scoped out",
           other_id is not None, "the scoping checks above did not run")
 
@@ -1150,6 +1668,9 @@ try:
                             and auth.MANAGE_REMOTES not in _made_perms),
           "the new account holds: %s" % sorted(_made_perms))
 
+
+def _check_group_admin_cannot_widen_reach():
+    """A delegated group admin cannot widen a group's host or server reach."""
     # ── A delegated group admin must not widen a group's HOST/SERVER reach ───────────────────────
     # The permission list was filtered; the object grants beside it were not, so the same admin
     # could grant their own group every host in the install. Permissions unchanged — which is why
@@ -1165,6 +1686,10 @@ try:
     check("escalation: a MANAGE_GROUPS admin cannot grant hosts they cannot reach",
           _granted <= {granted_remote}, "group now grants hosts: %s" % sorted(_granted))
 
+
+def _check_groups_page_offers_only_grantable():
+    """...and the /groups page does not offer them what the POST will refuse."""
+    global _gp_html, _unreachable
     # ── ...and the PAGE must not offer them what the POST will refuse ────────────────────────────
     # /groups rendered every host and every game server on the panel, with a tick box beside each,
     # to any MANAGE_GROUPS holder. The write path above refuses the ones outside their reach — so
@@ -1201,6 +1726,10 @@ try:
         check("groups page: ...nor the game servers on them",
               not _boxes("game_servers", _unreach_games),
               "offers server ids %s" % sorted(_boxes("game_servers", _unreach_games)))
+
+
+def _check_group_summaries_name_nothing_hidden():
+    """...and the group summaries do not name hosts or servers they cannot see."""
     # ...and the group SUMMARIES do not name them either. The tick boxes were filtered for exactly
     # this reason, while each group's summary still printed every host and game server it grants.
     if other_remote and other_id:
@@ -1237,6 +1766,9 @@ try:
     check("groups page: ...while a superadmin is still offered every host",
           not _sa_missing, "a superadmin is missing host ids %s" % _sa_missing)
 
+
+def _check_permission_boxes_are_filtered():
+    """...and the permission boxes are filtered the same way."""
     # ── ...and the same for the PERMISSION boxes, which were offered unfiltered ────────────────
     # The host and game-server lists were narrowed to what the POST accepts; the permission list
     # beside them still rendered every entry in ALL_PERMISSIONS as an ordinary tick box.
@@ -1267,6 +1799,10 @@ try:
           "every permission box is disabled, so the check above passes for the wrong reason: %r"
           % _pb_free)
 
+
+def _check_unshowable_server_grant_survives():
+    """A per-server grant the form cannot show survives a save by someone who cannot see it."""
+    global _ic, _ind_html, _ind_offered, _ind_tid
     # ── A per-server grant the form cannot SHOW is stripped by any save ────────────────────────
     # all_remotes (whole-host grants only) buckets the per-server tick boxes, but the write path's
     # allow-set is get_user_servers() — which also includes servers granted INDIVIDUALLY, whose
@@ -1311,6 +1847,10 @@ try:
     check("groups page: it renders for an admin whose only access is a per-server grant",
           _ind_page.status_code == 200,
           "status %d — the checks below would prove nothing" % _ind_page.status_code)
+
+
+def _check_empty_host_list_wording():
+    """An empty host list says none are grantable, not that none are configured."""
     # ...and the host list's empty state must not make a claim about the INSTALL. It is filtered
     # to what this admin may grant, and it told them the panel had no hosts at all.
     check("groups page: an empty host list says none are GRANTABLE, not none configured",
@@ -1335,6 +1875,10 @@ try:
           "description is %r — the POST did nothing at all, so the check above proves nothing"
           % _ind_desc)
 
+
+def _check_bulk_actions_per_id():
+    """Bulk actions are access-checked for every id."""
+    global _t
     # ── Bulk actions are access-checked per id ────────────────────────────────────────────────────
     # /api/servers/bulk-action is not an /<int:server_id> route, so the structural sweep below
     # never sees it, and it carries no @server_access_required — the check is hand-written in the
@@ -1374,6 +1918,10 @@ try:
         finally:
             _sm_core.run_as_game_user = _sv_rag
 
+
+def _check_setup_endpoints_stay_shut():
+    """The setup-only endpoints stay shut when config.json is lost."""
+    global _label, _m, _p, _r
     # ── The setup-only endpoints must stay shut when config.json is LOST ───────────────────────────
     # /api/setup/tailscale/{status,install,up,serve} are deliberately unauthenticated — during a fresh
     # install there is no user to authenticate. They are safe only for as long as their "setup is still
@@ -1444,6 +1992,10 @@ try:
         _cfg_mod._cfg_cache.clear()
         _cfg_mod._cfg_cache.update(_real_cache)
 
+
+def _check_healthz_before_setup():
+    """/healthz answers before setup is complete, instead of redirecting to /setup."""
+    global _r
     # /healthz is a liveness probe, and it answers before setup has finished too: a first-run panel
     # redirected it to /setup, and a monitor reading "302" learned nothing about the process or DB.
     with app.app_context():
@@ -1462,6 +2014,11 @@ try:
                 _r.complete = True
             db.session.commit()
 
+
+def _check_invites():
+    """Invites: helpers and planted fixtures, each refusal a redemption needs, the cleanup."""
+    global _, _Inv, _accept, _anon_inv, _dormant, _inv_before, _inv_tag, _inv_timedelta
+    global _inv_utcnow, _mint, _pre_inv_id, _sa, _sa_before, _sa_id, _user
     # ...and now DRIVEN, not read. The check above asserts the call exists in the source; it cannot
     # tell whether the route acts on the answer, and the whole acceptance path (the 61 lines from the
     # token lookup to the committed account) was executed by nothing. An invite is the one flow where
@@ -1482,7 +2039,7 @@ try:
             return inv.id, tok
 
 
-    def _accept(tok, username, password="Sufficient1!pass"):
+    def _accept(tok, username, password="Sufficient1!pass"):  # nosec B107 - a throwaway invitee's password
         return _anon_inv.post("/invite/%s" % tok,
                               data={"username": username, "password": password,
                                     "confirm_password": password})
@@ -1529,335 +2086,21 @@ try:
     check("invite fixtures: ...and that cleanup finds this run's ordinary fixtures too (positive "
           "control)", ("User", uid) in _swept, "swept %s" % sorted(_swept)[:6])
     try:
-        # 1. The happy path, so the refusals below are not passing for the wrong reason.
-        _iid, _tok = _mint(_sa)
-        check("invite route: a valid invite is accepted and creates the account",
-              _accept(_tok, _inv_tag + "_ok").status_code in (200, 302)
-              and _user(_inv_tag + "_ok") is not None,
-              "the positive control failed — every refusal below proves nothing")
-        check("invite route: ...and does NOT grant superadmin unless the invite said so",
-              getattr(_user(_inv_tag + "_ok"), "is_superadmin", None) is False,
-              "an ordinary invite minted a superadmin")
-
-        # 2. The same link twice. The route claims the invite with UPDATE ... WHERE used_at IS NULL
-        #    precisely so two submissions cannot both make an account.
-        _r2 = _accept(_tok, _inv_tag + "_twice")
-        check("invite route: the same link cannot be redeemed twice",
-              _user(_inv_tag + "_twice") is None,
-              "a second account was created from one invite (status %s)" % _r2.status_code)
-
-        # 2b. ...and the RACE, which the sequential case above does not reach. A used invite is
-        #     already refused by the early is_usable check, so that check is what makes 2 pass —
-        #     the claim's `UPDATE ... WHERE used_at IS NULL` exists for two submissions in flight
-        #     at once. Deterministic stand-in for the race: password_problem() is the last call
-        #     before the claim, so marking the row used from inside it puts the invite in exactly
-        #     the state a competing request would have left it in.
-        import panel.routes.admin_notifications as _anmod
-        _pw_real = _anmod.password_problem
-        _iid_race, _tok_race = _mint(_sa)
-
-        def _pw_then_steal(pw):
-            with app.app_context():
-                _row = db.session.get(_Inv, _iid_race)
-                if _row is not None and _row.used_at is None:
-                    _row.used_at = _inv_utcnow()
-                    db.session.commit()
-            return _pw_real(pw)
-
-        _anmod.password_problem = _pw_then_steal
-        try:
-            _r_race = _accept(_tok_race, _inv_tag + "_race")
-        finally:
-            _anmod.password_problem = _pw_real
-        check("invite route: an invite claimed mid-request makes no second account",
-              _user(_inv_tag + "_race") is None,
-              "the claim is not conditional on used_at, so two requests in flight both win "
-              "(status %s)" % _r_race.status_code)
-
-        # 2c. The OTHER half of that same race, which the claim did not ask about. is_usable tests
-        #     used_at, revoked_at and expiry; the claim tested used_at alone — so an admin clicking
-        #     Revoke between the is_usable check and the UPDATE did not stop the redemption. The
-        #     account was created anyway, the row ended up stamped BOTH revoked and used, and the
-        #     admin was told "the link no longer works" about a link that had just worked.
-        #     revoke_invite already claims its side on both columns; same window, same stub.
-        _iid_rev, _tok_rev = _mint(_sa)
-
-        def _pw_then_revoke(pw):
-            with app.app_context():
-                _row = db.session.get(_Inv, _iid_rev)
-                if _row is not None and _row.revoked_at is None:
-                    _row.revoked_at = _inv_utcnow()
-                    db.session.commit()
-            return _pw_real(pw)
-
-        _anmod.password_problem = _pw_then_revoke
-        try:
-            _r_rev = _accept(_tok_rev, _inv_tag + "_revoked")
-        finally:
-            _anmod.password_problem = _pw_real
-        with app.app_context():
-            _rev_row = db.session.get(_Inv, _iid_rev)
-            _rev_stamped = _rev_row is not None and _rev_row.revoked_at is not None
-            _rev_used = _rev_row is not None and _rev_row.used_at is not None
-        check("invite route: (premise) the revocation really did land mid-request",
-              _rev_stamped, "the window never opened, so the checks below prove nothing")
-        check("invite route: an invite revoked mid-request creates no account",
-              _user(_inv_tag + "_revoked") is None,
-              "the claim asks only about used_at, so a revoke in flight loses the race "
-              "(status %s)" % _r_rev.status_code)
-        check("invite route: ...and the row is not left stamped both revoked and used",
-              not _rev_used,
-              "the redemption claimed a revoked invite — the admin is told the link no longer "
-              "works about one that had just worked")
-
-        # 3. The delegation must not outlive the authority behind it. A superadmin-granting invite
-        #    from someone since DEMOTED must not still hand out the rank they lost.
-        _iid_sa, _tok_sa = _mint(_sa, superadmin=True)
-        with app.app_context():
-            db.session.get(User, _sa_id).is_superadmin = False
-            db.session.commit()
-        _r3 = _accept(_tok_sa, _inv_tag + "_demoted")
-        check("invite route: a superadmin invite from a DEMOTED admin is refused",
-              _user(_inv_tag + "_demoted") is None,
-              "an offboarded admin's outstanding invite still created an account "
-              "(status %s)" % _r3.status_code)
-        check("invite route: ...and the form is not even shown for it",
-              _anon_inv.get("/invite/%s" % _tok_sa).status_code == 404,
-              "a dead invite still renders its form")
-        with app.app_context():                      # put the fixture back before the next case
-            db.session.get(User, _sa_id).is_superadmin = True
-            db.session.commit()
-
-        # 3b. A GROUP grant is the same rank, and it used to survive demotion. Minting is
-        #     superadmin-only and the groups are validated against the minter AT MINT TIME —
-        #     which for a superadmin is everything — so a superadmin who minted an invite into a
-        #     privileged group and was then demoted (while staying active) left a live link that
-        #     still created an account holding the permissions they had just lost. Whoever kept
-        #     the link, including them, could redeem it.
-        with app.app_context():
-            _priv_grp = Group(name=_inv_tag + "_priv", description="privileged (auto)",
-                              is_default=False)
-            _priv_grp.set_permissions([auth.MANAGE_USERS, auth.MANAGE_REMOTES])
-            db.session.add(_priv_grp)
-            db.session.commit()
-            _priv_gid = _priv_grp.id
-            _ginv, _tok_grp = _Inv.mint(_sa, group_ids=[_priv_gid])
-            db.session.add(_ginv)
-            db.session.commit()
-        with app.app_context():                    # the minter loses the rank behind the grant
-            db.session.get(User, _sa_id).is_superadmin = False
-            db.session.commit()
-        _r_grp = _accept(_tok_grp, _inv_tag + "_grp")
-
-        def _groups_of(username):
-            # INSIDE a context: _user() hands back a detached row, and touching .groups on it
-            # raises DetachedInstanceError rather than answering.
-            with app.app_context():
-                _u = User.query.filter_by(username=username).first()
-                return None if _u is None else sorted(g.name for g in _u.groups)
-
-        _grp_got = _groups_of(_inv_tag + "_grp")
-        check("invite route: a GROUP grant does not outlive its minter's authority either",
-              _grp_got is None,
-              "a demoted admin's invite still created an account carrying %s (status %s)"
-              % (_grp_got, _r_grp.status_code))
-        with app.app_context():
-            db.session.get(User, _sa_id).is_superadmin = True
-            db.session.commit()
-            _ginv2, _tok_grp2 = _Inv.mint(_sa, group_ids=[_priv_gid])
-            db.session.add(_ginv2)
-            db.session.commit()
-        _accept(_tok_grp2, _inv_tag + "_grp_ok")
-        _grp_ok = _groups_of(_inv_tag + "_grp_ok")
-        check("invite route: ...while an intact minter's group invite still works",
-              _grp_ok is not None and (_inv_tag + "_priv") in _grp_ok,
-              "the control failed (%s) — the refusal above proves nothing" % (_grp_ok,))
-
-        # 3c. The same rule on the OBJECT axis, which this re-validation never asked about.
-        #     grantable_groups' _within_my_reach tests three things — permissions, whole-host
-        #     grants (Group.servers) and per-server grants (Group.game_servers) — and the copy in
-        #     redeem_invite tested the permissions subset alone. A group carrying NO permissions
-        #     makes `set() <= _mine` trivially true, so a pure-ACCESS group sailed straight through
-        #     with its whole-host grant intact and the new account could reach every server on a
-        #     host the minter had just lost. /users (grantable_groups) and /groups
-        #     (grantable_object_ids) both refuse that same grant to that same person; the invite
-        #     was the one door left open. 3b cannot catch this — its group's permissions are what
-        #     the demotion takes away.
-        with app.app_context():
-            _host_grp = Group(name=_inv_tag + "_host", description="host access only (auto)",
-                              is_default=False)
-            _host_grp.set_permissions([])          # none at all: the subset test cannot catch it
-            _host_grp.servers.append(db.session.get(RemoteServer, granted_remote))
-            db.session.add(_host_grp)
-            db.session.commit()
-            _host_gid = _host_grp.id
-            _hinv, _tok_host = _Inv.mint(db.session.get(User, _sa_id), group_ids=[_host_gid])
-            db.session.add(_hinv)
-            db.session.commit()
-        with app.app_context():                    # the minter loses the reach behind the grant
-            db.session.get(User, _sa_id).is_superadmin = False
-            db.session.commit()
-        _r_host = _accept(_tok_host, _inv_tag + "_host")
-        _host_got = _groups_of(_inv_tag + "_host")
-        check("invite route: a WHOLE-HOST group grant does not outlive its minter's reach either",
-              _host_got is None,
-              "a demoted minter's invite still created an account carrying %s — a group with no "
-              "permissions at all, so a permissions-only subset test waves it through (status %s)"
-              % (_host_got, _r_host.status_code))
-        # ...and that is a REACH test, not a blanket refusal for anyone who is not a superadmin:
-        # hand the (still demoted) minter that same host through a group of their own, and the
-        # identical invite works again.
-        with app.app_context():
-            _reach_grp = Group(name=_inv_tag + "_reach", description="minter's own reach (auto)",
-                               is_default=False)
-            _reach_grp.set_permissions([])
-            _reach_grp.servers.append(db.session.get(RemoteServer, granted_remote))
-            db.session.add(_reach_grp)
-            _sa_row = db.session.get(User, _sa_id)
-            _sa_row.groups.append(_reach_grp)
-            db.session.commit()
-            _hinv2, _tok_host2 = _Inv.mint(_sa_row, group_ids=[_host_gid])
-            db.session.add(_hinv2)
-            db.session.commit()
-        _accept(_tok_host2, _inv_tag + "_host_ok")
-        _host_ok = _groups_of(_inv_tag + "_host_ok")
-        check("invite route: ...while a minter who still reaches that host can hand it out",
-              _host_ok is not None and (_inv_tag + "_host") in _host_ok,
-              "the control failed (%s) — the refusal above proves nothing" % (_host_ok,))
-        with app.app_context():                    # restore the fixture the next case expects
-            _sa_row = db.session.get(User, _sa_id)
-            _sa_row.groups = [_g for _g in _sa_row.groups
-                              if _g.name != _inv_tag + "_reach"]
-            _sa_row.is_superadmin = True
-            db.session.commit()
-
-        # 3d. The fourth axis, custom commands: a group holding nothing but a superadmin-authored
-        #     command passes the permission, host and server tests trivially, and membership alone
-        #     authorises the command.
-        with app.app_context():
-            from panel.db.models import CustomCommand as _ICC
-            _inv_cmd = _ICC(name=_inv_tag + "_cmd", command_template="exec {}", enabled=True)
-            db.session.add(_inv_cmd)
-            _icmd_grp = Group(name=_inv_tag + "_cmdgrp", description="a command only (auto)",
-                              is_default=False)
-            _icmd_grp.set_permissions([])
-            _icmd_grp.custom_commands.append(_inv_cmd)
-            db.session.add(_icmd_grp)
-            db.session.commit()
-            _inv_cmd_id, _icmd_gid = _inv_cmd.id, _icmd_grp.id
-            _cinv, _tok_cmd = _Inv.mint(db.session.get(User, _sa_id), group_ids=[_icmd_gid])
-            db.session.add(_cinv)
-            db.session.commit()
-        with app.app_context():                    # the minter loses the command with the demotion
-            db.session.get(User, _sa_id).is_superadmin = False
-            db.session.commit()
-        _r_cmd = _accept(_tok_cmd, _inv_tag + "_cmd")
-        check("invite route: a CUSTOM-COMMAND group grant does not outlive its minter's reach",
-              _groups_of(_inv_tag + "_cmd") is None,
-              "a demoted minter's invite created an account carrying %s (status %s)"
-              % (_groups_of(_inv_tag + "_cmd"), _r_cmd.status_code))
-        with app.app_context():                    # positive control: the minter holds it too
-            _own_cmd = Group(name=_inv_tag + "_owncmd", description="minter's command (auto)",
-                             is_default=False)
-            _own_cmd.set_permissions([])
-            _own_cmd.custom_commands.append(db.session.get(_ICC, _inv_cmd_id))
-            db.session.add(_own_cmd)
-            _sa_row = db.session.get(User, _sa_id)
-            _sa_row.groups.append(_own_cmd)
-            db.session.commit()
-            _cinv2, _tok_cmd2 = _Inv.mint(_sa_row, group_ids=[_icmd_gid])
-            db.session.add(_cinv2)
-            db.session.commit()
-        _accept(_tok_cmd2, _inv_tag + "_cmd_ok")
-        _cmd_ok = _groups_of(_inv_tag + "_cmd_ok")
-        check("invite route: ...while a minter who holds that command can hand it out",
-              _cmd_ok is not None and (_inv_tag + "_cmdgrp") in _cmd_ok,
-              "the control failed (%s) — the refusal above proves nothing" % (_cmd_ok,))
-        with app.app_context():                    # restore the fixture the next case expects
-            _sa_row = db.session.get(User, _sa_id)
-            _sa_row.groups = [_g for _g in _sa_row.groups
-                              if _g.name != _inv_tag + "_owncmd"]
-            _sa_row.is_superadmin = True
-            db.session.commit()
-
-        # 4. Deactivated, not merely demoted: nobody is standing behind the invite at all.
-        _iid_d, _tok_d = _mint(_sa)
-        with app.app_context():
-            db.session.get(User, _sa_id).is_active = False
-            db.session.commit()
-        _r4 = _accept(_tok_d, _inv_tag + "_inactive")
-        check("invite route: an invite from a DEACTIVATED admin is refused",
-              _user(_inv_tag + "_inactive") is None,
-              "status %s" % _r4.status_code)
-        with app.app_context():
-            db.session.get(User, _sa_id).is_active = True
-            db.session.commit()
-
-        # 5. An expired invite, and a token nobody minted, answer the SAME way — a link that said
-        #    "already used" would confirm to a stranger that the token was real.
-        _iid_x, _tok_x = _mint(_sa, hours=1)
-        with app.app_context():
-            _x = db.session.get(_Inv, _iid_x)
-            _x.expires_at = _inv_utcnow() - _inv_timedelta(hours=2)
-            db.session.commit()
-        _r_exp = _anon_inv.get("/invite/%s" % _tok_x)
-        _r_bogus = _anon_inv.get("/invite/%s" % ("z" * 43))
-        check("invite route: an expired invite is refused",
-              _r_exp.status_code == 404 and _user(_inv_tag + "_exp") is None)
-        # Per-REQUEST values are normalised out before comparing: the CSP nonce and the CSRF
-        # token are fresh every response by design and say nothing about the invite. Everything
-        # else must match, because a page that said "already used" would confirm to a stranger
-        # that a guessed token was real.
-        #
-        # The nonce alone was not enough. CI failed this where the machine that wrote it passed:
-        # the CSRF token is time-based, so two requests in the same second produce the same one
-        # and two that straddle a second do not. A test that depends on how fast the machine is
-        # is not a test.
-        import difflib as _dl
-        import re as _inv_re
-
-        def _no_nonce(t):
-            t = _inv_re.sub(r'nonce="[^"]*"', 'nonce="X"', t)
-            t = _inv_re.sub(r'window\.CSRF\s*=\s*"[^"]*"', 'window.CSRF = "X"', t)
-            t = _inv_re.sub(r'name="csrf_token"[^>]*value="[^"]*"',
-                            'name="csrf_token" value="X"', t)
-            return t
-
-        _d_exp, _d_bog = _no_nonce(_r_exp.get_data(as_text=True)), \
-            _no_nonce(_r_bogus.get_data(as_text=True))
-        _diff = [l for l in _dl.unified_diff(_d_exp.split("\n"), _d_bog.split("\n"),
-                                             lineterm="", n=0)
-                 if l[:1] in "+-" and l[:3] not in ("---", "+++")]
-        check("invite route: ...and a guessed token is refused the SAME way, telling it nothing",
-              _r_bogus.status_code == _r_exp.status_code and _d_bog == _d_exp,
-              "status %s vs %s; differing lines: %s"
-              % (_r_exp.status_code, _r_bogus.status_code, " || ".join(_diff[:4])[:400]))
+        _invite_happy_path_and_replays()
+        _invite_revoked_during_the_race()
+        _invite_superadmin_from_a_demoted_minter()
+        _invite_group_from_a_demoted_minter()
+        _invite_host_outside_the_minters_reach()
+        _invite_host_inside_the_minters_reach()
+        _invite_custom_command_axis()
+        _invite_deactivated_expired_and_guessed()
     finally:
-        with app.app_context():
-            for _n in ("_ok", "_twice", "_demoted", "_inactive", "_exp", "_race", "_revoked",
-                       "_grp", "_grp_ok", "_host", "_host_ok", "_cmd", "_cmd_ok"):
-                _u = User.query.filter_by(username=_inv_tag + _n).first()
-                if _u is not None:
-                    db.session.delete(_u)
-            for _row in _Inv.query.all():
-                if _row.id not in _inv_before:     # this run's invites only, never the operator's
-                    db.session.delete(_row)
-            _sa_row = db.session.get(User, _sa_id)
-            if _sa_row is not None:
-                # The reach fixture is a group ON the superadmin, so it has to come off before the
-                # groups are deleted — the rest of this suite runs against that account. Restored
-                # to exactly what it was, not to a literal (True, True).
-                _sa_row.groups = [_g for _g in (db.session.get(Group, _i) for _i in _sa_before[2])
-                                  if _g is not None]
-                _sa_row.is_superadmin, _sa_row.is_active = _sa_before[0], _sa_before[1]
-            db.session.commit()
-            for _g in Group.query.filter(Group.name.like(_inv_tag + "%")).all():
-                db.session.delete(_g)
-            db.session.commit()
-            from panel.db.models import CustomCommand as _ICC_rm
-            for _c in _ICC_rm.query.filter(_ICC_rm.name.like(_inv_tag + "%")).all():
-                db.session.delete(_c)
-            db.session.commit()
+        _invite_cleanup()
+
+
+def _check_invite_fixtures_survive():
+    """The dormant superadmin and the pre-existing invite are as they were after the run."""
+    global _gone
     with app.app_context():
         _dorm = User.query.filter_by(username=_inv_tag + "_dormant").first()
         check("invite fixtures: a DEACTIVATED superadmin is still deactivated after the run",
@@ -1879,6 +2122,10 @@ try:
                 db.session.delete(_gone)
         db.session.commit()
 
+
+def _check_delete_user_offers_only_allowed():
+    """Deleting a user: the fixtures, and the users page offering only what the route allows."""
+    global _alive, _del_tag, _vord_id, _vsa_id, ca_del
     # ── deleting a user ───────────────────────────────────────────────────────────────────────
     # /users/<id>/delete had no test executing it at all. It refuses on four counts, but only two
     # of them are REACHABLE: the explicit "only a superadmin may delete a superadmin" is already
@@ -1926,12 +2173,17 @@ try:
           "the page carries the email of an account the viewer cannot administer")
     check("users page: nobody is offered Delete on their own account",
           ("/users/%d/delete" % _mu_uid) not in _ua_html)
+
+
+def _check_users_page_reach_and_sa_delete():
+    """The users page computes reach once per account; a group admin cannot delete a superadmin."""
+    global _, _gone, _x
     # ...and it decides that ONCE per account, with the viewer's own reach computed once. The
     # template asked per row twice (the table and #users-data), and every call recomputed the
     # viewer's server set as well as the target's: several queries per account, twice over, for a
     # delegated admin. Measured as a shape: three more administrable accounts must not add a single
     # call on the viewer's side, and no account is looked up twice.
-    from panel.security import auth as _ua_auth
+    _ua_auth = auth                      # panel.security.auth, imported once above
     from collections import Counter as _UaCounter
     _ua_gus = _ua_auth.get_user_servers
 
@@ -1987,6 +2239,9 @@ try:
     check("delete user: ...while a superadmin CAN delete that same account", not _alive(_vsa_id),
           "the control failed, so the refusal above proves nothing")
 
+
+def _check_delete_user_ordinary_and_self():
+    """A superadmin deletes an ordinary account, nobody deletes themselves, and the traps held."""
     # 3. And an ordinary account, the plain path.
     ca_del.post("/users/%d/delete" % _vord_id)
     check("delete user: a superadmin can delete an ordinary account", not _alive(_vord_id))
@@ -2014,12 +2269,56 @@ try:
     check("traps: no refused probe reached a reboot, an uninstall or a bootstrap",
           not _unexpected, "reached: %r" % (_unexpected,))
 
+
+def _check_superadmin_full_access():
+    """A superadmin still has full access."""
+    global code, p
     # ── Superadmin sanity: still full access ──
     ca = client_as(admin_id)
     for p in ["/users", "/groups", "/logs", "/remotes", "/server-management", "/tailscale",
               "/settings", "/notifications"]:
         code = ca.get(p).status_code
         check("superadmin CAN access %s" % p, code == 200, "got %d" % code)
+
+
+try:
+    _check_limited_user_denied_pages()
+    _check_specs_os_slug_for_installers()
+    _check_failed_install_redirects_terminate()
+    _check_uninstall_lands_on_openable_page()
+    _check_retry_install_matches_its_route()
+    _check_vps_prep_refuses_panel_host()
+    _check_vps_prep_allows_a_remote_host()
+    _check_limited_user_server_actions()
+    _check_legacy_super_admin_grant()
+    _check_denials_and_limited_pages()
+    _check_tailscale_page_is_host_scoped()
+    _check_unauthenticated()
+    _check_group_admin_cannot_grant_more()
+    _check_membership_escalation()
+    _check_superadmin_edit_refused_by_name()
+    _check_join_needs_the_hosts_too()
+    _check_user_form_offers_only_joinable()
+    _check_manage_users_needs_the_perms()
+    _check_manage_users_needs_the_objects()
+    _check_manage_users_custom_commands()
+    _check_custom_command_peers_untouched()
+    _check_view_logs_scope_and_users_add()
+    _check_group_admin_cannot_widen_reach()
+    _check_groups_page_offers_only_grantable()
+    _check_group_summaries_name_nothing_hidden()
+    _check_permission_boxes_are_filtered()
+    _check_unshowable_server_grant_survives()
+    _check_empty_host_list_wording()
+    _check_bulk_actions_per_id()
+    _check_setup_endpoints_stay_shut()
+    _check_healthz_before_setup()
+    _check_invites()
+    _check_invite_fixtures_survive()
+    _check_delete_user_offers_only_allowed()
+    _check_users_page_reach_and_sa_delete()
+    _check_delete_user_ordinary_and_self()
+    _check_superadmin_full_access()
 finally:
     for _m, _n, _f in _traps_saved:
         setattr(_m, _n, _f)
@@ -2031,7 +2330,7 @@ finally:
             with app.app_context():
                 db.session.remove()
                 db.engine.dispose()
-        except Exception:
+        except Exception:  # nosec B110 - best-effort teardown of a throwaway DB
             pass   # best-effort teardown of a throwaway DB — nothing to recover if it fails
         for _f in _managed_files() - _files_before:
             try:
@@ -2267,7 +2566,7 @@ for _f in pathlib.Path(_ROOT, "panel").rglob("*.py"):
             _stack.append(n.name)
             self.generic_visit(n)
             _stack.pop()
-        visit_AsyncFunctionDef = visit_FunctionDef
+        visit_AsyncFunctionDef = visit_FunctionDef   # noqa: N815 - the name ast.NodeVisitor dispatches on
 
         def visit_Call(self, n):
             _nm = getattr(n.func, "id", getattr(n.func, "attr", None))

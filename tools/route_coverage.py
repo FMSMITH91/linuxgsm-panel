@@ -39,8 +39,10 @@ PY = os.path.join(REPO, ".venv", "bin", "python")
 
 
 def _copy_worktree(dest):
-    """The working tree as git sees it — tracked plus not-yet-committed, .gitignore respected.
-    Exactly what smoke-local.sh copies, so a suite you just wrote is included."""
+    """Copy the working tree as git sees it — tracked plus not-yet-committed, .gitignore respected.
+
+    Exactly what smoke-local.sh copies, so a suite you just wrote is included.
+    """
     listing = subprocess.run(  # nosec B603 B607 - git, on PATH, fixed argv, no shell
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=REPO, capture_output=True, check=True)
@@ -81,8 +83,8 @@ def _run_suites(work):
     return results
 
 
-def _first_body_line(fn):
-    """The first executable line of fn, past its decorators and docstring."""
+def _parse_source(fn):
+    """Parse fn's own source, dedented so a nested def parses; (tree, first line) or None."""
     try:
         src, start = inspect.getsourcelines(fn)
     except (OSError, TypeError):
@@ -90,16 +92,30 @@ def _first_body_line(fn):
     indent = len(src[0]) - len(src[0].lstrip())
     text = "".join(line[indent:] if len(line) > indent else line for line in src)
     try:
-        tree = ast.parse(text)
+        return ast.parse(text), start
     except SyntaxError:
         return None
+
+
+def _body_past_docstring(node):
+    """The statements of a def's body, its docstring (if it has one) left out."""
+    body = list(node.body)
+    if body and isinstance(body[0], ast.Expr) \
+       and isinstance(body[0].value, ast.Constant) \
+       and isinstance(body[0].value.value, str):
+        body = body[1:]
+    return body
+
+
+def _first_body_line(fn):
+    """The first executable line of fn, past its decorators and docstring."""
+    parsed = _parse_source(fn)
+    if parsed is None:
+        return None
+    tree, start = parsed
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            body = list(node.body)
-            if body and isinstance(body[0], ast.Expr) \
-               and isinstance(body[0].value, ast.Constant) \
-               and isinstance(body[0].value.value, str):
-                body = body[1:]
+            body = _body_past_docstring(node)
             return start + body[0].lineno - 1 if body else None
     return None
 

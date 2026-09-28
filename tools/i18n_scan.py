@@ -71,7 +71,10 @@ def _resolve_jinja(src):
 
 
 def is_translatable(text):
-    """Could this string plausibly be a catalog key? (Has a letter and isn't a lone character.)"""
+    """Could this string plausibly be a catalog key?
+
+    It could if it has a letter and isn't a lone character.
+    """
     text = text.strip()
     return bool(text) and len(text) > 1 and bool(_HAS_LETTER.search(text))
 
@@ -113,18 +116,22 @@ class _Walker(HTMLParser):
         # title/placeholder too. Testing only the outer depth reported placeholders as gaps that
         # the runtime never even looks at.
         if self._skip_at is None and not skips:
-            for name in I18N_ATTRS:
-                value = attr_map.get(name)
-                if value is None or _DYNAMIC in value or _SPLIT in value:
-                    continue   # server-side t() already handled it, or it is per-request text
-                value = html.unescape(value).strip()
-                if is_translatable(value):
-                    self.strings.setdefault(value, set()).add("@" + name)
+            self._collect_attrs(attr_map)
         if tag in self._VOID:
             return                # never closes, so it opens no region
         self._open.append(tag)
         if skips and self._skip_at is None:
             self._skip_at = len(self._open)   # the depth this skip region starts at
+
+    def _collect_attrs(self, attr_map):
+        """Record the element's translatable attributes (title, placeholder...) as "@name"."""
+        for name in I18N_ATTRS:
+            value = attr_map.get(name)
+            if value is None or _DYNAMIC in value or _SPLIT in value:
+                continue   # server-side t() already handled it, or it is per-request text
+            value = html.unescape(value).strip()
+            if is_translatable(value):
+                self.strings.setdefault(value, set()).add("@" + name)
 
     def handle_endtag(self, tag):
         if tag in self._VOID or tag not in self._open:
@@ -203,40 +210,59 @@ def _js_strings(source):
         c = source[i]
         if c == "\n":
             line += 1; i += 1
-        elif c == "/" and i + 1 < n and source[i + 1] == "/":
-            while i < n and source[i] != "\n":
-                i += 1
-        elif c == "/" and i + 1 < n and source[i + 1] == "*":
-            end = source.find("*/", i + 2)
-            end = n if end < 0 else end + 2
+        elif c == "/" and source[i + 1:i + 2] in ("/", "*"):
+            end = _comment_end(source, i)
             line += source.count("\n", i, end); i = end
         elif c in "'\"`":
-            quote, start_line, buf, i = c, line, [], i + 1
-            while i < n and source[i] != quote:
-                if source[i] == "\\" and i + 1 < n:
-                    # DECODE the escape rather than keeping the letter after the backslash:
-                    # — is an em dash in the string the browser builds, and treating it as
-                    # the four characters "u2014" produced catalog keys that matched nothing.
-                    esc = source[i + 1]
-                    if esc == "u" and re.match(r"[0-9a-fA-F]{4}", source[i + 2:i + 6]):
-                        buf.append(chr(int(source[i + 2:i + 6], 16))); i += 6
-                    else:
-                        buf.append({"n": "\n", "t": "\t", "r": "\r"}.get(esc, esc)); i += 2
-                    continue
-                if source[i] == "\n":
-                    line += 1
-                buf.append(source[i]); i += 1
-            i += 1
-            out.append(("".join(buf), start_line))
+            start_line = line
+            text, i, line = _read_js_string(source, i, line)
+            out.append((text, start_line))
         else:
             i += 1
     return out
 
 
-def is_js_ui_text(text):
-    """Does this literal read like a WHOLE thing a person sees? (Conservative on purpose.)
+def _comment_end(source, i):
+    """Where the comment opening at source[i] ends: a // AT its newline, a /* just past its */."""
+    n = len(source)
+    if source[i + 1] == "/":
+        end = source.find("\n", i)
+        return n if end < 0 else end
+    end = source.find("*/", i + 2)
+    return n if end < 0 else end + 2
 
-    Gating on a guess means false positives demand pointless translations, so this only claims a
+
+def _read_js_string(source, i, line):
+    """Read the literal whose opening quote is at source[i]: (its text, the index past it, line)."""
+    quote, buf, n = source[i], [], len(source)
+    i += 1
+    while i < n and source[i] != quote:
+        if source[i] == "\\" and i + 1 < n:
+            char, i = _decode_js_escape(source, i)
+            buf.append(char)
+            continue
+        if source[i] == "\n":
+            line += 1
+        buf.append(source[i])
+        i += 1
+    return "".join(buf), i + 1, line
+
+
+def _decode_js_escape(source, i):
+    """The character the backslash escape at source[i] stands for, and the index just past it."""
+    # DECODE the escape rather than keeping the letter after the backslash:
+    # — is an em dash in the string the browser builds, and treating it as
+    # the four characters "u2014" produced catalog keys that matched nothing.
+    esc = source[i + 1]
+    if esc == "u" and re.match(r"[0-9a-fA-F]{4}", source[i + 2:i + 6]):
+        return chr(int(source[i + 2:i + 6], 16)), i + 6
+    return {"n": "\n", "t": "\t", "r": "\r"}.get(esc, esc), i + 2
+
+
+def is_js_ui_text(text):
+    """Does this literal read like a WHOLE thing a person sees?
+
+    Conservative on purpose. Gating on a guess means false positives demand pointless translations, so this only claims a
     literal that looks like prose: at least two words, opening with a capital, and free of the
     punctuation that marks a selector, URL or markup fragment.
 
@@ -308,20 +334,30 @@ def _main():
     print("MISSING           : %d" % len(gaps))
     print("unreachable ({{}}): %d" % len(dynamic))
     print()
-    for text, where in sorted(gaps.items(), key=lambda kv: sorted(kv[1])[0]):
-        files = ",".join(sorted(where))
-        print("  MISSING  [%s] %r" % (files[:40], text[:100]))
+    _print_missing(gaps)
     if dynamic:
         print()
-        for text, where in sorted(dynamic.items(), key=lambda kv: sorted(kv[1])[0]):
-            if text in catalog:
-                continue   # translated elsewhere as a standalone node; here it is just inert
-            print("  DYNAMIC  [%s] %r" % (",".join(sorted(where))[:40], text[:100]))
+        _print_dynamic(dynamic, catalog)
     if show_all:
         print()
         for text in sorted(t for t in found if t in catalog):
             print("  ok       %r" % text[:100])
     return 1 if gaps else 0
+
+
+def _print_missing(gaps):
+    """One MISSING line per template string with no catalog entry, grouped by first template."""
+    for text, where in sorted(gaps.items(), key=lambda kv: sorted(kv[1])[0]):
+        files = ",".join(sorted(where))
+        print("  MISSING  [%s] %r" % (files[:40], text[:100]))
+
+
+def _print_dynamic(dynamic, catalog):
+    """One DYNAMIC line per string welded to a {{ }} that no catalog entry can reach."""
+    for text, where in sorted(dynamic.items(), key=lambda kv: sorted(kv[1])[0]):
+        if text in catalog:
+            continue   # translated elsewhere as a standalone node; here it is just inert
+        print("  DYNAMIC  [%s] %r" % (",".join(sorted(where))[:40], text[:100]))
 
 
 if __name__ == "__main__":
