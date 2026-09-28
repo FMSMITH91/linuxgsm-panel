@@ -4357,6 +4357,20 @@ check(_ng_rows and _ng_sec and "Number(h.count)" in _ng_rows and "Number(h.secur
       "os-updates banner: the counts reach its innerHTML only through Number()",
       "raw in the markup: %s" % (_ng_raw or "(could not find the rows/sec builders)"))
 
+# The same shape on the host Security tab: each offender's attempt and ban counts go into the
+# top-offenders table's innerHTML unescaped. The server int()-parses them after _F2B_EVENT_RE has
+# dropped any fail2ban line carrying markup, in two row builders (system_ops, ssh_manager/hosts),
+# and those were the only thing keeping a compromised host's log out of the sink: S5696 traced the
+# fetch into el.innerHTML through o.attempts and o.bans. The ip and jails are escapeHtml'd, and
+# banned_now and blocked are only tested for truth, so the two counts are the whole of it.
+_tip_fn = _js_code_only(_js_block_after(
+    (ROOT / "static" / "js" / "remote_manage.js").read_text(encoding="utf-8"),
+    "var rows=ips.map(function(o,i)"))
+_tip_raw = re.findall(r"(?<!Number\()o\.(?:attempts|bans)\b", _tip_fn or "")
+check(_tip_fn and "Number(o.attempts)" in _tip_fn and "Number(o.bans)" in _tip_fn and not _tip_raw,
+      "fail2ban top offenders: the attempt and ban counts reach innerHTML only through Number()",
+      "raw in the markup: %s" % (_tip_raw or "(could not find the rows builder)"))
+
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)
 skipped = [(name, detail) for c, name, detail in results if c is None]

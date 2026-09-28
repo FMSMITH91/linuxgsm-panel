@@ -43,8 +43,11 @@ function loadSecurityTopIps(){
     }
     if(!ips.length){ el.innerHTML='<div class="small text-secondary">No fail2ban activity logged yet.</div>'; return; }
     var rows=ips.map(function(o,i){
+      // Number() at the sink: the counts go into innerHTML unescaped, and the server's int() parse
+      // (after _F2B_EVENT_RE) should not be the only thing keeping markup out of the page.
+      var att = Number(o.attempts) || 0, bans = Number(o.bans) || 0;
       var badge = o.banned_now ? '<span class="badge bg-danger">banned now</span>'
-                : (o.bans>0 ? '<span class="badge bg-secondary" style="font-weight:normal;">'+o.bans+' ban'+(o.bans===1?'':'s')+'</span>' : '');
+                : (bans>0 ? '<span class="badge bg-secondary" style="font-weight:normal;">'+bans+' ban'+(bans===1?'':'s')+'</span>' : '');
       var block = o.blocked
         ? '<span class="badge bg-dark border me-1" style="font-weight:normal;"><i class="bi bi-shield-fill-x"></i> blocked</span>'
           +'<button class="btn btn-link btn-sm p-0" style="font-size:.72rem;"'+_da('unblockOffender',[o.ip,'@self'])+'>unblock</button>'
@@ -56,8 +59,8 @@ function loadSecurityTopIps(){
         : '<span class="text-secondary">—</span>';
       return '<tr><td class="small text-secondary">'+(i+1)+'</td>'
         +'<td class="small"><code>'+escapeHtml(o.ip)+'</code></td>'
-        +'<td class="small text-end">'+(o.attempts||0)+'</td>'
-        +'<td class="small text-end">'+(o.bans||0)+'</td>'
+        +'<td class="small text-end">'+att+'</td>'
+        +'<td class="small text-end">'+bans+'</td>'
         +'<td class="small text-nowrap">'+jailCell+'</td>'
         +'<td class="small">'+badge+'</td>'
         +'<td class="small text-nowrap">'+block+'</td></tr>';
@@ -93,7 +96,7 @@ function toggleAutoblock(cb){
     }).catch(function(){ if(window.toast) toast('Couldn\'t change auto-block','danger'); if(cb) cb.checked=!on; });
 }
 function saveThreshold(btn){
-  var inp=document.getElementById('sec-threshold'); var v=parseInt(inp&&inp.value,10);
+  var inp=document.getElementById('sec-threshold'); var v=Number.parseInt(inp&&inp.value,10);
   if(!v||v<1){ if(window.toast) toast('Enter a number of attempts (1 or more)','info'); return; }
   // The on/off state rides along (the endpoint sets both), so it has to be the host's real one:
   // an unpainted toggle reads OFF whatever the host has. Refuse until it has been read.
