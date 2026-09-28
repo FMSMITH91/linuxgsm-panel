@@ -145,9 +145,9 @@
     <div id="tab-game" class="cfg-tab" style="display:none;">
       <div id="game-loading" class="text-secondary small"><i class="bi bi-arrow-repeat"></i> Locating game config file…</div>
       <div id="game-wrap" style="display:none;">
-        <p class="small text-secondary mb-1">Game's own config file — where this game's in-game settings, such as the player limit, actually live.</p>
+        <p class="small text-secondary mb-1" id="game-cfg-desc">Game's own config file — where this game's in-game settings, such as the player limit, actually live.</p>
         <p class="small text-secondary mb-1"><code id="game-path"></code></p>
-        <textarea id="game-cfg" class="form-control font-monospace" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
+        <textarea id="game-cfg" aria-labelledby="game-cfg-desc" class="form-control font-monospace" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
         <button class="btn btn-primary btn-sm mt-2" data-action="saveGameCfg"><i class="bi bi-save"></i> Save game config</button>
         <span id="game-msg" class="small ms-2"></span>
       </div>
@@ -155,8 +155,8 @@
     </div>
     <!-- Raw instance cfg -->
     <div id="tab-raw" class="cfg-tab" style="display:none;">
-      <p class="small text-secondary mb-1">Raw instance config <code>{{ server.lgsm_name }}.cfg</code>.</p>
-      <textarea id="cfg-raw" class="form-control font-monospace" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
+      <p class="small text-secondary mb-1" id="cfg-raw-desc">Raw instance config <code>{{ server.lgsm_name }}.cfg</code>.</p>
+      <textarea id="cfg-raw" aria-labelledby="cfg-raw-desc" class="form-control font-monospace" rows="14" style="font-size:.8rem;" spellcheck="false"></textarea>
       <button class="btn btn-primary btn-sm mt-2" data-action="saveRaw"><i class="bi bi-save"></i> Save raw config</button>
       <span id="cfg-raw-msg" class="small ms-2"></span>
     </div>
@@ -175,14 +175,14 @@
       <button class="btn btn-sm btn-outline-secondary" data-action="_clickUpload">
         <i class="bi bi-upload"></i> Upload
       </button>
-      <input type="file" id="upload-input" multiple style="display:none;" data-action="doUpload" data-args='["@event"]' data-on="change">
+      <input type="file" id="upload-input" aria-label="Upload" multiple style="display:none;" data-action="doUpload" data-args='["@event"]' data-on="change">
       {# The click path for a whole folder. Dragging between the desktop and the browser is not
          always reliable (notably on Linux/Wayland), so the picker is the dependable route. #}
       <button class="btn btn-sm btn-outline-secondary" data-action="_clickUploadDir"
               title="Upload a whole folder, including its subfolders">
         <i class="bi bi-folder-plus"></i> Upload folder
       </button>
-      <input type="file" id="upload-dir-input" webkitdirectory directory multiple style="display:none;" data-action="doUploadDir" data-args='["@event"]' data-on="change">
+      <input type="file" id="upload-dir-input" aria-label="Upload folder" webkitdirectory directory multiple style="display:none;" data-action="doUploadDir" data-args='["@event"]' data-on="change">
     </div>
   </div>
   <div class="card-body">
@@ -220,7 +220,7 @@
              trade — and it is what every code editor does. #}
           <div class="editor-wrap">
             <div id="editor-gutter" class="editor-gutter" aria-hidden="true"></div>
-            <textarea id="editor" class="form-control font-monospace" rows="20" spellcheck="false"
+            <textarea id="editor" aria-labelledby="editor-path" class="form-control font-monospace" rows="20" spellcheck="false"
                       wrap="off" data-action="syncGutter" data-on="input"></textarea>
           </div>
         </div>
@@ -305,11 +305,11 @@
     <!-- Add / edit form -->
     <form id="cron-form" class="row g-2 align-items-end mb-2" data-action="saveCron" data-args='["@event"]' data-on="submit">
       <div class="col-12 col-md-3">
-        <label class="form-label mb-1" style="font-size:.7rem;">Schedule</label>
+        <label class="form-label mb-1" style="font-size:.7rem;" for="cron-sched">Schedule</label>
         <input type="text" id="cron-sched" class="form-control form-control-sm font-monospace" placeholder="*/5 * * * *" spellcheck="false" required>
       </div>
       <div class="col-12 col-md-6">
-        <label class="form-label mb-1" style="font-size:.7rem;">Command</label>
+        <label class="form-label mb-1" style="font-size:.7rem;" for="cron-cmd">Command</label>
         <input type="text" id="cron-cmd" class="form-control form-control-sm font-monospace" placeholder="/home/{{ server.short_name }}/backup.sh" spellcheck="false" required>
       </div>
       <div class="col-12 col-md-3 d-flex gap-2">

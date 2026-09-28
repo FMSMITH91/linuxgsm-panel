@@ -4121,6 +4121,178 @@ check("if backups is None:" in _hr,
       "backups: the prune-to-make-room path refuses a listing it could not read",
       "the one path here that DELETES backups still acts on an unknown listing")
 
+# ── every form control has a name a screen reader can read, and every label a control ─────────
+# SonarCloud listed 57 of these across 18 templates (InputWithoutLabelCheck, S6853, S9379, S5256):
+# switches announced as "switch, off" with no word of what they switch, a firewall form whose only
+# names were placeholders (gone the moment you type), "Groups" and "Account type" written as
+# <label> with nothing to label, and key/value tables with no header cell tying a value to its
+# name. This is the same four rules, run over every template, so the next one fails here instead of
+# waiting for the scanner: a control needs aria-label, aria-labelledby naming ids that exist, a
+# wrapping <label> or a <label for> its id; a <label> needs a for= or a control inside it; no
+# autofocus (it moves a screen reader past whatever precedes the field — on these pages, the
+# error that says why you are looking at the form again); a data table needs a <th>.
+#
+# Plus the i18n half, which Sonar cannot see. i18n.js translates aria-label, but it skips every
+# attribute of a TEXTAREA/CODE/PRE and of anything under data-no-i18n, so an aria-label there
+# stays English for good — remote_manage's "Debug report" textarea had exactly that, beside an
+# es/fr entry that could never be used. Name those with aria-labelledby, pointing at text the
+# walker does reach.
+from html.parser import HTMLParser as _A11yHTMLParser                             # noqa: E402
+
+_A11Y_JINJA = re.compile(r"\{#.*?#\}|\{%.*?%\}", re.S)
+_A11Y_NAMELESS = {"hidden", "submit", "button", "image", "reset"}
+_A11Y_I18N_SKIP = {"script", "style", "textarea", "code", "pre", "noscript"}      # i18n.js SKIP
+_A11Y_VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
+              "source", "track", "wbr"}
+
+
+class _A11yScan(_A11yHTMLParser):
+    """One template's controls, labels, tables and ids, both arms of every {% if %} included."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.ids, self.label_for, self.problems = set(), set(), []
+        self.controls, self.labels, self.tables = [], [], []
+        self._labels, self._tables, self._open = [], [], []
+
+    def handle_starttag(self, tag, attrs):
+        a = {k: (v or "") for k, v in attrs}
+        line = self.getpos()[0]
+        if a.get("id", "").strip():
+            self.ids.add(a["id"].strip())
+        if "autofocus" in a:
+            self.problems.append("<%s> line %d: autofocus" % (tag, line))
+        guarded = (tag in _A11Y_I18N_SKIP or "data-no-i18n" in a
+                   or any(g for _, g in self._open))
+        if a.get("aria-label", "").strip() and guarded and "{{" not in a["aria-label"]:
+            self.problems.append("<%s> line %d: aria-label %r is never translated (i18n.js skips "
+                                 "it here) — use aria-labelledby" % (tag, line, a["aria-label"]))
+        if tag not in _A11Y_VOID:
+            self._open.append((tag, guarded))
+        if tag == "label":
+            lab = {"line": line, "for": a.get("for", "").strip(), "control": False}
+            self.labels.append(lab)
+            if lab["for"]:
+                self.label_for.add(lab["for"])
+            self._labels.append(lab)
+        elif tag in ("input", "select", "textarea"):
+            if tag == "input" and (a.get("type") or "text").strip().lower() in _A11Y_NAMELESS:
+                return
+            for lab in self._labels:
+                lab["control"] = True
+            self.controls.append((tag, line, a, bool(self._labels)))
+        elif tag == "table":
+            t = {"line": line, "th": False,
+                 "layout": a.get("role", "").strip().lower() in ("presentation", "none")}
+            self.tables.append(t)
+            self._tables.append(t)
+        elif tag == "th" and self._tables:
+            self._tables[-1]["th"] = True
+
+    def handle_endtag(self, tag):
+        for i in range(len(self._open) - 1, -1, -1):
+            if self._open[i][0] == tag:
+                del self._open[i:]
+                break
+        if tag == "label" and self._labels:
+            self._labels.pop()
+        elif tag == "table" and self._tables:
+            self._tables.pop()
+
+    def report(self):
+        out = list(self.problems)
+        for tag, line, a, in_label in self.controls:
+            what = "<%s%s> line %d" % (tag, (" #" + a["id"]) if a.get("id") else "", line)
+            if a.get("aria-label", "").strip() or in_label:
+                continue
+            refs = a.get("aria-labelledby", "").split()
+            if refs:
+                gone = [r for r in refs if "{{" not in r and r not in self.ids]
+                if gone:
+                    out.append("%s: aria-labelledby names no element: %s" % (what, gone))
+                continue
+            if not (a.get("id", "").strip() and a["id"].strip() in self.label_for):
+                out.append("%s: no label, aria-label or aria-labelledby" % what)
+        out += ["<label> line %d: labels no control (no for=, nothing inside)" % lab["line"]
+                for lab in self.labels if not lab["for"] and not lab["control"]]
+        out += ["<table> line %d: no <th>" % t["line"]
+                for t in self.tables if not t["th"] and not t["layout"]]
+        return out
+
+
+def _a11y_scan(src):
+    # Jinja comments and tags blanked with their newlines kept, so line numbers stay the file's.
+    # A comment has to go: it can say "<head>" or "<label>" in prose.
+    p = _A11yScan()
+    p.feed(_A11Y_JINJA.sub(lambda m: "\n" * m.group(0).count("\n"), src))
+    p.close()
+    return p
+
+
+def _a11y_problems(src):
+    return _a11y_scan(src).report()
+
+
+_a11y_bad = {}
+_a11y_seen = 0
+for _tpl in sorted(TEMPLATES.glob("*.html")):
+    _scan = _a11y_scan(_tpl.read_text(encoding="utf-8"))
+    _a11y_seen += len(_scan.controls)
+    if _scan.report():
+        _a11y_bad[_tpl.name] = _scan.report()
+check(_a11y_seen >= 100,
+      "templates a11y: the scan finds the form controls it is judging",
+      "only %d controls across every template — the parser is reading nothing" % _a11y_seen)
+check(not _a11y_bad,
+      "templates a11y: every control is named, every label labels something, no autofocus, "
+      "every data table has a <th>",
+      "; ".join("%s: %s" % (f, " | ".join(v[:3])) for f, v in sorted(_a11y_bad.items())[:4]))
+# ...and each rule actually fires. A scanner that returns [] for everything passes the gate above.
+_a11y_neg = {
+    "unnamed input": '<input type="text" id="x" placeholder="Port">',
+    "orphan label": '<label class="form-label">Groups</label><div><input type="checkbox" id="c">'
+                    '<label for="c">A</label></div>',
+    "autofocus": '<label for="u">User</label><input id="u" autofocus>',
+    "headerless table": "<table><tr><td>Hostname</td><td>x</td></tr></table>",
+    "labelledby a missing id": '<input type="text" aria-labelledby="nope">',
+    "aria-label a textarea never translates": '<textarea aria-label="Debug report"></textarea>',
+    "aria-label under data-no-i18n": '<div data-no-i18n><input aria-label="Port"></div>',
+    "a Jinja comment hides nothing": '{# <label>x</label> #}<input type="text" id="y">',
+}
+_a11y_pos = ('<label for="a">A</label><input id="a">'
+             '<label>B <input type="checkbox"></label>'
+             '<span id="h">H</span><div role="group" aria-labelledby="h">'
+             '<input type="checkbox" aria-label="Enabled"></div>'
+             '<textarea aria-labelledby="h"></textarea>'
+             '<input type="hidden" name="csrf"><input type="submit" value="Go">'
+             '<table><tr><th scope="row">Host</th><td>x</td></tr></table>'
+             '<table role="presentation"><tr><td>layout</td></tr></table>'
+             '{% if x %}<label for="b">B</label>{% endif %}<select id="b"></select>')
+check(all(_a11y_problems(_s) for _s in _a11y_neg.values()) and not _a11y_problems(_a11y_pos),
+      "templates a11y: ...and each rule fires on a sample of the bug it describes, and not on "
+      "the ways this codebase names controls correctly",
+      "silent on: %s; flagged a correct sample: %s"
+      % ([k for k, s in _a11y_neg.items() if not _a11y_problems(s)], _a11y_problems(_a11y_pos)))
+
+# The OS-updates banner puts each host's update and security counts into innerHTML unescaped.
+# The API sends ints (len() and sum() in app.py's _os_update_note), and that was the only thing
+# keeping markup out of the sink: SonarCloud's S5696 traced the fetch into box.innerHTML through
+# h.count. Number() at the sink makes the banner safe whatever the server's types. The dismissal
+# signature (sig) is left raw on purpose — it reaches the page only through _da, which escapes.
+_ng_fn = _js_code_only(_js_block_after(
+    (ROOT / "static" / "js" / "nags.js").read_text(encoding="utf-8"),
+    "window.osUpdatesNagCheck = function("))
+_ng_r0 = _ng_fn.find("var rows = hosts.map(")
+_ng_s0 = _ng_fn.find("var sec = hosts.reduce(")
+_ng_rows = _ng_fn[_ng_r0:_ng_fn.find(".join('')", _ng_r0)] if _ng_r0 >= 0 else ""
+_ng_sec = _ng_fn[_ng_s0:_ng_r0] if 0 <= _ng_s0 < _ng_r0 else ""
+_ng_raw = [m.group(0) for part in (_ng_rows, _ng_sec)
+           for m in re.finditer(r"(?<!Number\()h\.(count|security)\b", part)]
+check(_ng_rows and _ng_sec and "Number(h.count)" in _ng_rows and "Number(h.security)" in _ng_rows
+      and not _ng_raw,
+      "os-updates banner: the counts reach its innerHTML only through Number()",
+      "raw in the markup: %s" % (_ng_raw or "(could not find the rows/sec builders)"))
+
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)
 skipped = [(name, detail) for c, name, detail in results if c is None]

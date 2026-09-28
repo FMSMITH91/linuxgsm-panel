@@ -33,8 +33,13 @@ window.t = function(s){ return i18nLookup(s) || s; };
     var key = en.replace(/\s+/g, ' ').trim();
     if (!key) return;
     var v = i18nLookup(key);
-    // keep leading/trailing whitespace (inline layout, e.g. the gap after an icon)
-    var out = (v !== undefined) ? en.match(/^\s*/)[0] + v + en.match(/\s*$/)[0] : en;
+    // keep leading/trailing whitespace (inline layout, e.g. the gap after an icon). Measured with
+    // trim, not /\s*$/: that unanchored search started at every blank of every run in the text and
+    // read the run to its end each time. trim strips exactly what \s matches (both are the spec's
+    // WhiteSpace + LineTerminator), so the two slices are the same strings.
+    var out = (v !== undefined)
+      ? en.slice(0, en.length - en.trimStart().length) + v + en.slice(en.trimEnd().length)
+      : en;
     node.__i18nW = out;
     if (node.nodeValue !== out) node.nodeValue = out;   // guard: no redundant set => no observer loop
   }
