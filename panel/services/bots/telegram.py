@@ -292,8 +292,10 @@ def _set_tg_pending_update(chat_id, from_commit):
 
 
 def _report_tg_pending_update():
-    """After a restart, if a Telegram-triggered update was pending, tell the chat how it went — by
-    comparing the git commit before/after (the version is a date, shared by a day's commits)."""
+    """After a restart, tell the chat how a Telegram-triggered update went, if one was pending.
+
+    It compares the git commit before and after: the version is a date, which a day's commits share.
+    """
     cfg = load_config()
     pend = cfg.get("telegram_pending_update")
     if not pend:
