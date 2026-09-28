@@ -379,6 +379,34 @@ for _f in sorted(os.listdir(_SMPKG)):
 check("ssh_manager: no submodule binds another's function by name (the stub seam)",
       not _smg_bad, "; ".join(_smg_bad[:4]))
 
+# Nor may two submodules define the same top-level NAME differently. The package's __getattr__
+# answers with the FIRST submodule in _MODULES order that has it, so a helper added to an earlier
+# module under a name a later one already uses silently replaces the later one for every
+# `ssh_manager.<name>` reader: no import error, no failed call, just a different function. A
+# refactor gave cron.py an `_int_or_none` that only passes real ints through, and
+# `ssh_manager._int_or_none("3")` went from 3 (game.py's, which parses) to None. A duplicate is
+# allowed only when every definition is the same code (cron and gmod share one regex that way).
+_smg_defs = {}
+for _f in sorted(os.listdir(_SMPKG)):
+    if not _f.endswith(".py") or _f == "__init__.py":
+        continue
+    for _n in _smg_ast.parse(open(os.path.join(_SMPKG, _f), encoding="utf-8").read()).body:
+        if isinstance(_n, (_smg_ast.FunctionDef, _smg_ast.AsyncFunctionDef, _smg_ast.ClassDef)):
+            _smg_named = [(_n.name, _n)]
+        elif isinstance(_n, _smg_ast.Assign):
+            _smg_named = [(_t.id, _n.value) for _t in _n.targets if isinstance(_t, _smg_ast.Name)]
+        else:
+            _smg_named = []
+        for _x, _node in _smg_named:
+            _smg_defs.setdefault(_x, []).append((_f, _smg_ast.dump(_node)))
+_smg_dups = sorted("%s in %s" % (_k, ", ".join(_f for _f, _ in _v)) for _k, _v in _smg_defs.items()
+                   if len({_d for _, _d in _v}) > 1)
+check("ssh_manager: no top-level name is defined differently in two submodules (the first wins)",
+      not _smg_dups, "; ".join(_smg_dups[:4]))
+check("ssh_manager: ...and that scan read every submodule (control: the shared regex is seen twice)",
+      [_f for _f, _ in _smg_defs.get("_NO_CRONTAB_RE", [])] == ["cron.py", "gmod.py"]
+      and len(_smg_defs) > 300, "%d names" % len(_smg_defs))
+
 # And the mirror of it on the test side: a stub assigned onto the PACKAGE shadows its __getattr__,
 # so attribute-access callers would see it while the package's own 163 internal call sites would
 # not. Half a stub, no error. Stubs belong on the defining submodule.

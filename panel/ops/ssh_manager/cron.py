@@ -1144,8 +1144,13 @@ def _last_line(out):
     return (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
 
 
-def _int_or_none(v):
-    """`v` when it is an int, else None."""
+def _json_int(v):
+    """`v` when it is already an int (a decoded JSON number), else None.
+
+    Not named _int_or_none: game.py has one that PARSES, and the package resolves a name to the
+    first submodule defining it — cron before game — so a second one here would silently replace
+    it for every `ssh_manager._int_or_none` reader.
+    """
     return v if isinstance(v, int) else None
 
 
@@ -1199,7 +1204,7 @@ def player_count(server, user, game_type=None, port=None, query_type=None):
     cmd = (f"gamedig --type {gdtype} {_core._gamedig_host(server)}:{int(port)} 2>/dev/null "
            f"| jq -c {_core._quote(jqf)} 2>/dev/null")
     d = _gamedig_reply(server, user, cmd)
-    return None if d is None else _int_or_none(d.get("c"))
+    return None if d is None else _json_int(d.get("c"))
 
 
 def player_slots(server, user, game_type=None, port=None, query_type=None):
@@ -1225,8 +1230,8 @@ def player_slots(server, user, game_type=None, port=None, query_type=None):
     d = _gamedig_reply(server, user, cmd)
     if d is None:
         return None, None, None   # gamedig couldn't read the server (error / no A2S response) -> unknown
-    cur = _int_or_none(d.get("c"))
-    mx = _int_or_none(d.get("m"))
+    cur = _json_int(d.get("c"))
+    mx = _json_int(d.get("m"))
     nm = d.get("n")
     nm = (" ".join(str(nm).split())[:120] or None) if nm else None
     return cur, mx, nm
@@ -1301,7 +1306,7 @@ def player_count_via_lgsm_query(server, user, selfname, fallback_port=None):
     cmd = ("gamedig --type %s %s:%d 2>/dev/null | jq -c %s 2>/dev/null"
            % (qtype, _core._gamedig_host(server), int(qport), _core._quote(jqf)))
     d = _gamedig_reply(server, user, cmd)
-    return None if d is None else _int_or_none(d.get("c"))
+    return None if d is None else _json_int(d.get("c"))
 
 
 def _lgsm_gamedig_target(vals, fallback_port):
