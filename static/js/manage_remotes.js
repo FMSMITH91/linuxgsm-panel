@@ -20,6 +20,27 @@ document.addEventListener('DOMContentLoaded', function() {
 var _bsTimers = {};
 function watchBootstrap(remoteId) {
   if (_bsTimers[remoteId]) return;
+  // Where the job is: the step line and the bar, and on a final state the dismiss button.
+  function paintStatus(s, step, bar) {
+    if (s.status === 'rebooting') {
+      bar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
+      step.innerHTML = '<i class="bi bi-arrow-clockwise"></i> ' + escapeHtml(s.step_name);  // nosemgrep
+    } else if (s.status === 'done') {
+      bar.className = 'progress-bar bg-success'; bar.style.width = '100%';
+      step.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + escapeHtml(s.message || 'Prepared & secured!');  // nosemgrep
+      var dz = document.getElementById('bs-dismiss-' + remoteId); if (dz) dz.style.display = 'inline';
+      stopWatch(remoteId);
+      // Update just this remote's live figures instead of reloading the whole page.
+      if (typeof loadLiveStats === 'function') loadLiveStats(remoteId);
+    } else if (s.status === 'failed') {
+      bar.className = 'progress-bar bg-danger';
+      step.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + escapeHtml(s.message || 'Bootstrap failed');  // nosemgrep
+      var df = document.getElementById('bs-dismiss-' + remoteId); if (df) df.style.display = 'inline';
+      stopWatch(remoteId);
+    } else {
+      step.innerHTML = '<i class="bi bi-gear-fill"></i> ' + escapeHtml(s.step_name);  // nosemgrep
+    }
+  }
   function tick() {
     fetch(MOUNT + '/api/remote/' + remoteId + '/bootstrap-status')
       .then(r => r.json())
@@ -35,24 +56,7 @@ function watchBootstrap(remoteId) {
         if (pct) pct.textContent = (s.total ? s.step + '/' + s.total + ' · ' : '') + s.percent + '% · ' + s.elapsed + 's';
         if (bar) bar.style.width = s.percent + '%';
         if (log && s.log) { log.textContent = s.log.join('\n'); if (log.style.display !== 'none') log.scrollTop = log.scrollHeight; }
-        if (s.status === 'rebooting') {
-          bar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
-          step.innerHTML = '<i class="bi bi-arrow-clockwise"></i> ' + escapeHtml(s.step_name);  // nosemgrep
-        } else if (s.status === 'done') {
-          bar.className = 'progress-bar bg-success'; bar.style.width = '100%';
-          step.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + escapeHtml(s.message || 'Prepared & secured!');  // nosemgrep
-          var dz = document.getElementById('bs-dismiss-' + remoteId); if (dz) dz.style.display = 'inline';
-          stopWatch(remoteId);
-          // Update just this remote's live figures instead of reloading the whole page.
-          if (typeof loadLiveStats === 'function') loadLiveStats(remoteId);
-        } else if (s.status === 'failed') {
-          bar.className = 'progress-bar bg-danger';
-          step.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + escapeHtml(s.message || 'Bootstrap failed');  // nosemgrep
-          var df = document.getElementById('bs-dismiss-' + remoteId); if (df) df.style.display = 'inline';
-          stopWatch(remoteId);
-        } else {
-          step.innerHTML = '<i class="bi bi-gear-fill"></i> ' + escapeHtml(s.step_name);  // nosemgrep
-        }
+        paintStatus(s, step, bar);
       })
       .catch(function(){});
   }
@@ -481,6 +485,27 @@ function pollBootstrap(remoteId, btn) {
   // after _bootstrapPoll names the new interval, and clearing _bootstrapPoll from here would have
   // stopped that one instead.
   function stop() { clearInterval(handle); if (_bootstrapPoll === handle) _bootstrapPoll = null; }
+  // Where the job is, once the modal is known to be this host's and the job to still exist. The
+  // two final states stop this poll and give the button back.
+  function paintStatus(s, stepEl, barEl, pctEl) {
+    if (s.status === 'rebooting') {
+      barEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
+      stepEl.innerHTML = '<i class="bi bi-arrow-clockwise"></i> ' + escapeHtml(s.step_name);  // nosemgrep
+    } else if (s.status === 'done') {
+      stop();
+      barEl.className = 'progress-bar bg-success'; barEl.style.width = '100%';
+      stepEl.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + escapeHtml(s.message || 'Server prepared & secured!');  // nosemgrep
+      pctEl.textContent = '100%';
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-check2"></i> Done — Run Again'; }
+    } else if (s.status === 'failed') {
+      stop();
+      barEl.className = 'progress-bar bg-danger';
+      stepEl.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + escapeHtml(s.message || 'Bootstrap failed');  // nosemgrep
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-rocket-takeoff"></i> Retry'; }
+    } else {
+      stepEl.innerHTML = '<i class="bi bi-gear-fill"></i> ' + escapeHtml(s.step_name);  // nosemgrep
+    }
+  }
   function tick() {
     fetch(MOUNT + '/api/remote/' + remoteId + '/bootstrap-status')  // nosemgrep
       .then(r => r.json())
@@ -518,23 +543,7 @@ function pollBootstrap(remoteId, btn) {
           logEl.textContent = s.log.join('\n');
           logEl.scrollTop = logEl.scrollHeight;
         }
-        if (s.status === 'rebooting') {
-          barEl.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
-          stepEl.innerHTML = '<i class="bi bi-arrow-clockwise"></i> ' + escapeHtml(s.step_name);  // nosemgrep
-        } else if (s.status === 'done') {
-          stop();
-          barEl.className = 'progress-bar bg-success'; barEl.style.width = '100%';
-          stepEl.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> ' + escapeHtml(s.message || 'Server prepared & secured!');  // nosemgrep
-          pctEl.textContent = '100%';
-          if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-check2"></i> Done — Run Again'; }
-        } else if (s.status === 'failed') {
-          stop();
-          barEl.className = 'progress-bar bg-danger';
-          stepEl.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + escapeHtml(s.message || 'Bootstrap failed');  // nosemgrep
-          if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-rocket-takeoff"></i> Retry'; }
-        } else {
-          stepEl.innerHTML = '<i class="bi bi-gear-fill"></i> ' + escapeHtml(s.step_name);  // nosemgrep
-        }
+        paintStatus(s, stepEl, barEl, pctEl);
       })
       .catch(function(){ /* transient poll error, keep going */ });
   }
