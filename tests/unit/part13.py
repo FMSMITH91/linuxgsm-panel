@@ -205,6 +205,12 @@ try:
           _saved10["events"]["server_up"] is True and _saved10["events"]["disk_low"] is True
           and _saved10["events"]["ip_banned"] is False,
           repr(_saved10["events"]))
+    # ...and the Discord channel id is capped, not only trimmed. The save above sends " 555 ", which
+    # no cap can change, so the "length-capped" check held with the [:32] removed.
+    _n10.save_settings(telegram={}, discord={"channel_id": " " + "5" * 40 + " "}, events={})
+    check("notify save: a Discord channel id is capped at 32 characters, as the chat id is at 64",
+          _n10_store["notifications"]["discord"]["channel_id"] == "5" * 32,
+          repr(_n10_store["notifications"]["discord"]["channel_id"]))
 
     # ── migrate_master_switch: an explicit OFF survives the switch's removal ───────────────────
     _n10_store["notifications"] = {"enabled": False, "telegram": {"enabled": True},
@@ -501,6 +507,28 @@ try:
           and _tsr10["dc_ok"] == (True, "Test message sent — check Discord.")
           and _tsr10["nt_ok"] == (True, "Test message sent — check the ntfy app."),
           repr((_tsr10["tg_fail"], _tsr10["bot_fail"])))
+    # ...and with the form left blank it tests the SAVED channel: the stored secret decrypted, the
+    # stored chat/channel id, the stored ntfy server and topic. Every request above passes its
+    # values in, so the saved half of each lookup was never read.
+    _n10_store["notifications"] = {
+        "telegram": {"token": _n10.encrypt_secret(_TG10), "chat_id": "4242"},
+        "discord": {"webhook": _n10.encrypt_secret(_WH10), "bot_token": _n10.encrypt_secret(_BOT10),
+                    "channel_id": "987654"},
+        "ntfy": {"server": "https://ntfy.example.org", "topic": "saved_topic",
+                 "token": _n10.encrypt_secret("tk_saved")}}
+    _tss10 = []
+    _n10.send_telegram = lambda *a: (_tss10.append(("tg",) + a[:2]) or (True, ""))
+    _n10.send_discord = lambda *a: (_tss10.append(("dc",) + a[:1]) or (True, ""))
+    _n10.send_ntfy = lambda *a: (_tss10.append(("nt",) + a[:3]) or (True, ""))
+    _n10.discord_bot_send = lambda *a: (_tss10.append(("bot",) + a[:2]) or (True, ""))
+    try:
+        for _tsk10 in ("telegram", "discord", "discord_bot", "ntfy"):
+            _n10.test_send(_tsk10)
+    finally:
+        _n10.send_telegram, _n10.send_discord, _n10.send_ntfy, _n10.discord_bot_send = _snd_saved10
+    check("notify test_send: a blank form tests the SAVED channel, its secrets decrypted",
+          _tss10 == [("tg", _TG10, "4242"), ("dc", _WH10), ("bot", _BOT10, "987654"),
+                     ("nt", "https://ntfy.example.org", "saved_topic", "tk_saved")], repr(_tss10))
 
     # ── alerts_muted: any muting tag wins; an unreadable tag list fails OPEN ───────────────────
     class _BadTags10:
@@ -654,6 +682,43 @@ try:
     check("notify gateway: a heartbeat that cannot be sent stops the heartbeat, not the process",
           _gwr3_10 is None and not [m for m in _gw3_10.sent if m.get("op") == 1]
           and _gw3_10.closed_by == [_me10], repr((_gw3_10.sent, _gw3_10.closed_by)))
+
+    # The other half of the zombie guard: a link that DOES ACK stays up. The sessions above either
+    # never ACK or end before a second tick, so an op 11 that failed to re-arm `acked` passed all
+    # of them — while a real Gateway would have been dropped by the heartbeat every other beat.
+    import queue as _queue10  # noqa: E402
+
+    class _GwAckWS10(_GwWS10):
+        """A Gateway that ACKs each heartbeat and asks for a reconnect after the third."""
+
+        def __init__(self, frames):
+            super().__init__(frames)
+            self._q = _queue10.Queue()
+
+        def recv(self):
+            if self.frames:
+                return self.frames.pop(0)
+            try:
+                return self._q.get(timeout=self.idle)
+            except _queue10.Empty:
+                return ""
+
+        def send(self, s):
+            super().send(s)
+            if _json10.loads(s).get("op") == 1:
+                _beats = sum(m.get("op") == 1 for m in self.sent)
+                self._q.put(_json10.dumps({"op": 11} if _beats < 3 else {"op": 7}))
+
+        def close(self):
+            super().close()
+            self._q.put("")
+
+    # 200 ms beats: the ACK is handled well inside one interval even on a loaded runner.
+    _gwa10 = _GwAckWS10([{"op": 10, "d": {"heartbeat_interval": 200}}])
+    _gwra10 = _try10(_n10.discord_gateway_run, _BOT10, lambda *a: None, _connect=lambda: _gwa10)
+    check("notify gateway: an ACKed heartbeat keeps the link up — only the session closes it",
+          _gwra10 is None and sum(m.get("op") == 1 for m in _gwa10.sent) == 3
+          and _gwa10.closed_by == [_me10], repr((_gwa10.sent, _gwa10.closed_by)))
 
     # Without an injected socket it builds its own through websocket-client — stood in for here,
     # so nothing dials Discord — and when that package is missing it warns ONCE and returns.

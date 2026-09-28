@@ -37,11 +37,14 @@ _OS_SLUG_RE = __import__("re").compile(r"^[a-z][a-z0-9]{1,15}-[0-9]{1,2}(?:\.[0-
 
 
 def deps_name(os_slug):
-    """The data file for a distro slug ('ubuntu-22.04' -> 'ubuntu-22.04.csv'), or the default when
-    the slug is missing or not the shape LinuxGSM uses."""
+    """Name the data file for a distro slug ('ubuntu-22.04' -> 'ubuntu-22.04.csv').
+
+    Returns the default when the slug is missing or not the shape LinuxGSM uses.
+    """
     if os_slug and _OS_SLUG_RE.match(os_slug):
         return os_slug + ".csv"
     return DEPS
+
 
 # Refetch once a week. LinuxGSM adds games steadily but not daily, and a stale-by-days list is a
 # far smaller problem than hammering GitHub from every panel on every boot.
@@ -80,7 +83,8 @@ def _fetch(name):
     """Download one file and return its text, or None. Never raises."""
     req = urllib.request.Request(_BASE + name, headers={"User-Agent": "linuxgsm-panel"})
     try:
-        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- _BASE is a fixed https://raw.githubusercontent.com URL
+        # _BASE is a fixed https://raw.githubusercontent.com URL; only a LinuxGSM filename is appended.
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:  # nosec B310 - fixed https host
             if getattr(resp, "status", 200) != 200:
                 _last_error[name] = "HTTP %s" % resp.status
@@ -111,8 +115,11 @@ def _age(name):
 
 
 def _text(name, allow_fetch=True):
-    """The file's text: the cache when it is present and fresh, otherwise a fetch, otherwise
-    whatever stale copy we have. A stale list beats no list."""
+    """Return the file's text, from the freshest source that answers.
+
+    That is the cache when it is present and fresh, otherwise a fetch, otherwise whatever stale
+    copy we have. A stale list beats no list.
+    """
     age = _age(name)
     if age is not None and age < MAX_AGE_SECONDS:
         try:
@@ -157,7 +164,8 @@ def _memoised(key, load, allow_fetch):
     after a refetch failed (a stale file, or a fetch that could not be written) lives
     _RETRY_SECONDS. A stale file read with fetching NOT allowed (status()) is not kept, so the next
     read that may fetch still does. A re-read that comes back EMPTY keeps serving the copy it had —
-    a stale list beats no list — rather than emptying the install menu of a running panel."""
+    a stale list beats no list — rather than emptying the install menu of a running panel.
+    """
     hit = _mem.get(key)
     if hit is not None and time.time() < hit[0]:
         return hit[1]
@@ -192,7 +200,8 @@ def serverlist(allow_fetch=True):
 
     While a parsed copy is being served, every call returns the SAME list object, so a caller that
     derives something from it (app.load_game_list) can tell a re-read (a new object) from a
-    repeat."""
+    repeat.
+    """
     with _lock:
         return _memoised("serverlist", lambda: _load_serverlist(allow_fetch), allow_fetch)
 
@@ -231,7 +240,8 @@ def status():
     `reason` is the one-line form for a page to print. This function had NO CALLERS at all while
     two comments — this module's header and app.load_game_list's docstring — both said the install
     page surfaced it; the page showed a fixed generic warning and never asked. install_server.html
-    reads it now."""
+    reads it now.
+    """
     ages = {n: _age(n) for n in (SERVERLIST, DEPS)}
     errs = dict(_last_error)
     reason = ""
@@ -254,7 +264,8 @@ def refresh(force=True):
     this answered True with every network fetch failing. The route turns that into
     `{"success": true, "message": "Loaded 30 games."}` and an audit row saying the refresh worked:
     a superadmin pressing Retry because a newly-supported game is missing is told it loaded, and
-    the list is unchanged."""
+    the list is unchanged.
+    """
     ok = True
     with _lock:
         _mem.clear()

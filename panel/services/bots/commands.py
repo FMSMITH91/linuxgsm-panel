@@ -19,8 +19,10 @@ _log = logging.getLogger("panel.app")
 
 
 def _reply_header():
-    """A short identifier for THIS panel so replies are unambiguous when someone runs several panels:
-    '<site title> (<hostname>)'."""
+    """A short identifier for THIS panel: '<site title> (<hostname>)'.
+
+    It keeps replies unambiguous when someone runs several panels.
+    """
     import socket
     title = (load_config().get("site_title") or "LinuxGSM Panel").strip()
     try:
@@ -36,20 +38,33 @@ def _command_arg(text):
     return parts[1].strip() if len(parts) > 1 else ""
 
 
+def _exact_matches(servers, low):
+    """Return the servers whose short_name or name IS `low` (already lower-cased)."""
+    return [g for g in servers if g.short_name.lower() == low or g.name.lower() == low]
+
+
+def _partial_matches(servers, low):
+    """Return the servers whose name or short_name CONTAINS `low` (already lower-cased)."""
+    return [g for g in servers if low in g.name.lower() or low in g.short_name.lower()]
+
+
 def _find_server(arg):
-    """Resolve a GameServer from a name/short_name argument (case-insensitive). Returns (gs, error):
-    an exact short_name/name match wins, else a unique partial name match, else (None, message)."""
+    """Resolve a GameServer from a name/short_name argument (case-insensitive).
+
+    Returns (gs, error): an exact short_name/name match wins, else a unique partial name match,
+    else (None, message).
+    """
     arg = (arg or "").strip()
     if not arg:
         return None, "Which server? Send /servers to see the names."
     servers = GameServer.query.filter_by(installed=True).all()
     low = arg.lower()
-    exact = [g for g in servers if g.short_name.lower() == low or g.name.lower() == low]
+    exact = _exact_matches(servers, low)
     if len(exact) == 1:
         return exact[0], None
     if len(exact) > 1:
         return None, "That matches several — use the exact short name: %s" % ", ".join(g.short_name for g in exact)
-    partial = [g for g in servers if low in g.name.lower() or low in g.short_name.lower()]
+    partial = _partial_matches(servers, low)
     if len(partial) == 1:
         return partial[0], None
     if len(partial) > 1:
@@ -58,8 +73,11 @@ def _find_server(arg):
 
 
 def _players_text(app, arg, fence=None):
-    """`fence`, when given, wraps the player names — the part a player chose — for a transport
-    that renders markup in them (see discord._dc_literal)."""
+    """List who is on a server, as a chat reply.
+
+    `fence`, when given, wraps the player names — the part a player chose — for a transport
+    that renders markup in them (see discord._dc_literal).
+    """
     with app.app_context():
         gs, err = _find_server(arg)
         if err:
@@ -90,8 +108,9 @@ _BOT_BODY_MAX = 1500
 
 
 def _join_capped(rows):
-    """Join `rows` into one body, dropping WHOLE rows off the end once the total passes
-    _BOT_BODY_MAX and saying how many went.
+    """Join `rows` into one body, dropping WHOLE rows off the end past _BOT_BODY_MAX.
+
+    Once the total passes _BOT_BODY_MAX the rest are dropped and a last row says how many went.
 
     The cap above was written for all four variable-length builders and applied to exactly one of
     them (_console_text). The other three built unbounded bodies, and on Discord the end of that
@@ -102,7 +121,8 @@ def _join_capped(rows):
 
     Truncated FORWARD, unlike _console_text: the newest lines are the point of a console tail,
     while the head is the useful end of a server/host/player list. The first row is always kept,
-    so a single over-long row still produces a body rather than nothing."""
+    so a single over-long row still produces a body rather than nothing.
+    """
     out, used = [], 0
     for i, row in enumerate(rows):
         row = str(row)
@@ -115,12 +135,14 @@ def _join_capped(rows):
 
 
 def _console_text(app, arg, lines=20, fence=None):
-    """The tail of a server's live console. `fence` is as for _players_text: the tail carries
-    in-game chat.
+    """The tail of a server's live console, as a chat reply.
+
+    `fence` is as for _players_text: the tail carries in-game chat.
 
     The missing half of the power commands: start/stop/restart run in the background and their
     output is discarded, so when a start fails the bot can say that it failed but never why. This
-    is that answer, without opening the panel."""
+    is that answer, without opening the panel.
+    """
     with app.app_context():
         gs, err = _find_server(arg)
         if err:
@@ -146,14 +168,19 @@ def _console_text(app, arg, lines=20, fence=None):
             return "%s — the server isn't running, so there's no console to read." % gs.name
         if rc != 0:
             return "%s — couldn't read the console (the host didn't answer)." % gs.name
-        text = terminal.strip_escapes(out or "")
-        rows = [r.rstrip() for r in text.splitlines() if r.strip()][-lines:]
-        if not rows:
-            return "%s — no console output (is it running?)." % gs.name
-        body = "\n".join(rows)
-        if len(body) > _BOT_BODY_MAX:      # keep the END: the newest lines are the useful ones
-            body = "…" + body[-_BOT_BODY_MAX:]
-        return "%s — last %d console line(s):\n%s" % (gs.name, len(rows), fence(body) if fence else body)
+        return _console_tail_reply(gs.name, out, lines, fence)
+
+
+def _console_tail_reply(name, out, lines, fence):
+    """Render a console capture that DID answer as the reply's last `lines` non-blank lines."""
+    text = terminal.strip_escapes(out or "")
+    rows = [r.rstrip() for r in text.splitlines() if r.strip()][-lines:]
+    if not rows:
+        return "%s — no console output (is it running?)." % name
+    body = "\n".join(rows)
+    if len(body) > _BOT_BODY_MAX:      # keep the END: the newest lines are the useful ones
+        body = "…" + body[-_BOT_BODY_MAX:]
+    return "%s — last %d console line(s):\n%s" % (name, len(rows), fence(body) if fence else body)
 
 
 def _say_text(app, arg):
@@ -161,7 +188,8 @@ def _say_text(app, arg):
 
     The server is the FIRST word (a short name never contains a space), everything after it is the
     message — otherwise there is no way to tell where one ends and the other begins. _sm.moderate()
-    sanitizes the text, so a message can't smuggle a second console command."""
+    sanitizes the text, so a message can't smuggle a second console command.
+    """
     name, _, message = (arg or "").strip().partition(" ")
     if not name:
         return "Usage: say <server> <message>"
@@ -260,9 +288,11 @@ class CommandWorker:
     """A single daemon thread that runs queued bot commands in arrival order.
 
     Started lazily on first use and restarted if it ever dies, so an unconfigured bot costs no
-    thread and a crashed one does not silently stop answering for the life of the process."""
+    thread and a crashed one does not silently stop answering for the life of the process.
+    """
 
     def __init__(self, name):
+        """Set up an idle worker whose thread is called `name`; nothing runs until submit()."""
         self.name = name
         self._q = queue.Queue(maxsize=_CMD_QUEUE_MAX)
         self._thread = None
@@ -312,7 +342,8 @@ def working_ack(cmd):
     the command set, not of a transport, and a branch added to one router and not the other is
     precisely the drift that produced the /start and /update bugs. Asking here means a new slow
     command starts acking on both bots the moment it is added to the table above, with no way for
-    one of them to be forgotten."""
+    one of them to be forgotten.
+    """
     return _WORKING_ACK.get(cmd)
 
 
@@ -320,7 +351,8 @@ def action_ack(action, name):
     """The "starting…" line for a server action, with the server's name already filled in.
 
     The fallback matters: an action with no wording still has to say SOMETHING, because the ack is
-    the only thing standing between the user and a silent minute."""
+    the only thing standing between the user and a silent minute.
+    """
     return _ACTION_ACK.get(action, "🔄 %s — working on it…") % name
 
 
@@ -385,3 +417,27 @@ def _panel_ver_label():
     ver = so.panel_version()
     commit = so.panel_commit()
     return "%s (%s)" % (ver, commit) if commit else ver
+
+
+def update_outcome_text(now, frm):
+    """Word the post-restart report of a chat-triggered panel update, from the commits now/before.
+
+    Shared by both bots, which carried one copy each, worded identically.
+
+    "no new commit landed (already current, or it rolled back)" is a claim about git, and the
+    else-branch it sat in was reached by THREE conditions: the commits are equal, `now` is empty,
+    or `frm` is empty. Only the first supports the sentence. An empty value means the panel could
+    not READ the commit — panel_commit() shells out to `git rev-parse --short HEAD`, and the
+    reporter fires 8 s after the new process starts, while install.sh's health-check phase is
+    still running and the box is at its busiest — so a clean update was reported as one that had
+    not landed, naming two specific causes nothing had established. The admin's reasonable next
+    move is to send /update again and restart the panel a second time for nothing.
+    """
+    if not (now and frm):
+        return ("ℹ️ I'm back online, but I couldn't read the panel's git commit, so "
+                "I can't tell you whether the update landed — check Settings → "
+                "Panel, or data/self-update.log.")
+    if now != frm:
+        return "✅ Update complete — now on %s (was %s). Back online." % (_panel_ver_label(), frm)
+    return ("ℹ️ Update finished — no new commit landed (already current, or it "
+            "rolled back). Still on %s." % _panel_ver_label())
