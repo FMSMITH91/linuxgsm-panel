@@ -1836,6 +1836,10 @@ try:
        _tsi.suggest_best_bind(5000, scheme="https")["url"], "https://100.90.141.12:5000")
     eq("tailscale: ...and http only when the panel serves http (control)",
        _tsi.suggest_best_bind(5000, scheme="http")["url"], "http://100.90.141.12:5000")
+    # The URL above names the tailnet IP whatever bind_host says, so it cannot catch a suggestion
+    # that tells the panel to bind to every interface instead of that one address.
+    eq("tailscale: the tailnet-direct answer binds to the node's own Tailscale IP",
+       _tsi.suggest_best_bind(5000)["bind_host"], "100.90.141.12")
 finally:
     _tsi.get_tailscale_info = _orig_gti
     _tsi._cache["info"] = None
