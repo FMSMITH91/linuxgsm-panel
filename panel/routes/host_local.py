@@ -130,6 +130,9 @@ def register(app):
         except Exception:
             return jsonify({"git": False, "update_available": False, "boot_id": _BOOT_ID,
                             "current_version": so.panel_version(),
+                            # The card shows the version beside its commit (a date alone names a
+                            # whole day of commits), so a failed check keeps the commit too.
+                            "current_sha": so.panel_commit().rstrip("+"),
                             "message": _log_and_generic("panel update-status failed")})
 
     @app.route("/api/panel/update", methods=["POST"])
