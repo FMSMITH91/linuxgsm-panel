@@ -88,7 +88,8 @@ def _host_idle_state(remote):
     # therefore reported a confident "idle", the watcher rebooted it inside 60s, and the install
     # died mid-write to be reconciled later as "the panel restarted before this install finished".
     # The two siblings in this file already filter on exactly these statuses (_refresh_player_counts
-    # and the _monitor_pass server loop); this is the same filter, read the other way round.
+    # and _monitor_server, the _monitor_pass per-server step); this is the same filter, read the
+    # other way round.
     for gs in GameServer.query.filter_by(remote_id=remote.id).all():
         if gs.status in ("installing", "configuring"):
             unknown = True   # work in flight: no players to count, but certainly not idle
