@@ -361,8 +361,13 @@ def _register_invites(app):
         The invite decides what the account gets (groups, superadmin); the person decides only
         their username and password. Anything else would be a privilege they awarded themselves.
         """
-        inv, _creator = _live_invite(token)
-        if inv is None:
+        inv = Invite.by_token(token)
+        # An invite is a delegation, and it must not outlive the authority behind it: an admin who
+        # is offboarded — demoted, deactivated, deleted — would otherwise leave live invites behind
+        # for up to 30 days, still handing out whatever they promised, superadmin included.
+        # Checked on GET as well as POST, so a dead invite never even shows the form.
+        _creator = _invite_creator(inv)
+        if inv is None or not inv.is_usable or not inv.authority_intact(_creator):
             # One message for missing, used and expired alike: a link that says "already used"
             # confirms it was real, which is information a stranger holding a guessed token has
             # not earned. There is nothing the person can do differently either way.
@@ -594,17 +599,9 @@ def _audit_user_edit(user, _old_username, _pending_audit):
     log_action(current_user, "edit_user", target=user.username)
 
 
-def _live_invite(token):
-    """(invite, its creator) for a usable invite whose creator's authority stands, else (None, None)."""
-    inv = Invite.by_token(token)
-    # An invite is a delegation, and it must not outlive the authority behind it: an admin who
-    # is offboarded — demoted, deactivated, deleted — would otherwise leave live invites behind
-    # for up to 30 days, still handing out whatever they promised, superadmin included.
-    # Checked on GET as well as POST, so a dead invite never even shows the form.
-    _creator = db.session.get(User, inv.created_by_id) if (inv and inv.created_by_id) else None
-    if inv is None or not inv.is_usable or not inv.authority_intact(_creator):
-        return None, None
-    return inv, _creator
+def _invite_creator(inv):
+    """The account that minted `inv`: None for no invite, no recorded creator, or a deleted one."""
+    return db.session.get(User, inv.created_by_id) if (inv and inv.created_by_id) else None
 
 
 def _invite_form():
