@@ -6062,10 +6062,13 @@ try:
     # 375px: the old rules overlapped all five tiles, these overlap none.
     check("layout: the editing controls are hidden until edit mode",
           ".panel-tools, .host-move, .srv-move { display: none; }" in _drag_html)
+    # Whitespace-tolerant: panel.css writes one declaration per line (Stylelint), so a rule is
+    # "selector {\n  prop: value;" there. A literal "{ .panel-tools" would never match the
+    # stylesheet's own spelling and the negative check below would pass on anything.
     check("layout: nothing makes them visible again on touch",
-          "@media (hover: none) { .panel-tools" not in _drag_html)
+          _re_d.search(r"@media \(hover: none\)\s*\{\s*\.panel-tools", _drag_html) is None)
     check("layout: in edit mode they sit IN FLOW, so they cannot overlay the content",
-          "body.layout-edit .panel-tools { position: static;" in _drag_html)
+          _re_d.search(r"body\.layout-edit \.panel-tools \{\s*position: static;", _drag_html) is not None)
     check("layout: the dashboard offers a way to turn edit mode on",
           'data-action="toggleLayoutEdit"' in _drag_html
           and "window.toggleLayoutEdit = function" in _drag_html)

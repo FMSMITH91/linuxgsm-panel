@@ -109,6 +109,34 @@ if esprima:
             _broken.append("%s: %s" % (_p.name, _e))
     check(not _broken, "static/js: every file parses as JavaScript", "; ".join(_broken[:3]))
 
+# ── 0a-ii. ...and no regex literal in it contains a quote ─────────────────────────────────────
+# Two tools read these files with a lexer that knows strings and comments but not regex literals:
+# tools/i18n_scan.py (whose docstring relies on "none in this tree contains a quote") and Lizard,
+# Codacy's complexity analyser. panel.js had two - /'/g in _da and /[&<>"']/g in the Ubuntu Pro
+# card's escaper - and both tools read that quote as a string opening. The i18n gate went blind
+# from _da onwards, and the "Sign out everywhere else" dialog carried two untranslated strings with
+# it green; Lizard folded the next 325 lines into _da and never saw the Ubuntu Pro card at all.
+# Write a quote in a pattern as \x27 / \x22: the same character to the regex engine.
+if esprima:
+    _quoted_re, _seen_hex_quote = [], False
+    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+        try:
+            _toks = esprima.tokenize(_p.read_text(encoding="utf-8"), {"loc": True})
+        except Exception:        # not JavaScript at all: the parse gate above reports it by name
+            continue
+        for _t in _toks:
+            if _t.type != "RegularExpression":
+                continue
+            if re.search(r"['\"`]", _t.value):
+                _quoted_re.append("%s:%d %s" % (_p.name, _t.loc.start.line, _t.value))
+            _seen_hex_quote = _seen_hex_quote or (_p.name == "panel.js" and "\\x27" in _t.value)
+    # Positive control: the scan is reading regex tokens at all, including the rewritten one.
+    check(_seen_hex_quote, "static/js: the regex-literal scan sees panel.js's \\x27 pattern",
+          "no RegularExpression token with \\x27 in panel.js - the check below judged nothing")
+    check(not _quoted_re,
+          "static/js: no regex literal contains a quote (the i18n scan and Lizard misread it)",
+          "; ".join(_quoted_re[:3]))
+
 # ── Every swap of one region has to re-arm it the SAME way ────────────────────────────────────
 # refreshSection(sel, afterName) replaces a region's innerHTML with freshly server-rendered markup.
 # The elements inside are new objects, so anything bound to the old ones is gone; afterName is the
@@ -1425,6 +1453,42 @@ check("a.trim() === b.trim()" in _js_code_only(_js_function_body(_sd_js, "_sameL
       "console stitch: the overlap match ignores surrounding whitespace",
       "an exact compare turns one trailing space into 'no overlap' and a whole re-appended window")
 
+# ── 0d-ter. three promises that moved into helpers when their functions were split ───────────
+# Lizard's complexity findings split confirmDialog, pollStats and the Ubuntu Pro card's render into
+# helpers. Each carried one rule its comments state and nothing here enforced — mutation runs
+# showed a helper could drop it with every suite green:
+#   * a confirm dialog's bodyText is TEXT: _cdFillBody writes it with textContent, never as markup,
+#     which is what makes it the safe option for a caller holding untrusted text;
+#   * a stat tile the user has hidden is simply absent, so _setStatText checks the element before
+#     writing to it - unguarded, the first hidden tile threw and stopped the rest of the handler;
+#   * the attached Ubuntu Pro card puts payload fields into markup only through e().
+_pj_js = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+_cdfb = _js_code_only(_js_function_body(_pj_js, "_cdFillBody") or "")
+check(len(_cdfb) > 100 and "opts.bodyNode" in _cdfb,
+      "helpers: confirmDialog's _cdFillBody was found to check",
+      "extractor got %r - the check below would prove nothing" % _cdfb[:60])
+check("_cb.textContent = opts.bodyText" in _cdfb and not _SINK.search(_cdfb),
+      "confirmDialog: bodyText is written as text, never through an HTML sink",
+      "_cdFillBody no longer assigns bodyText by textContent, or reaches innerHTML")
+_sst = _js_code_only(_js_function_body(_sd_js, "_setStatText") or "")
+check(re.search(r"if\s*\(\s*el\s*\)\s*el\.textContent\s*=\s*value", _sst) is not None,
+      "server page: a stat tile is written only when it exists (the Controls panel can be hidden)",
+      "_setStatText writes to an element it did not check: %r" % _sst[:120])
+check(re.search(r"getElementById\('stat-[\w-]+'\)\s*\.textContent", _js_code_only(_sd_js)) is None,
+      "server page: ...and no tile is written around it, straight off getElementById",
+      "a stat tile is dereferenced unguarded again")
+_ra = _js_code_only(_js_function_body(_pj_js, "renderAttached") or "")
+_ra_bare = re.sub(r"\be\s*\((?:[^()]|\([^()]*\))*\)", "", _ra)
+_ra_bare = re.sub(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"", "", _ra_bare)
+_ra_raw = sorted(set(re.findall(r"\+\s*([ds]\.[\w.]+)(?!\s*\?)", _ra_bare)
+                     + re.findall(r"([ds]\.[\w.]+)\s*\+", _ra_bare)))
+check(len(_ra) > 200 and "d.services" in _ra,
+      "ubuntu pro card: renderAttached was found to check",
+      "extractor got %r - the check below would prove nothing" % _ra[:60])
+check(not _ra_raw,
+      "ubuntu pro card: the attached card interpolates payload fields only through e()",
+      "raw payload values in the markup: %s" % _ra_raw)
+
 # ── 0e. no template renders the same id= twice ────────────────────────────────────────────────
 # getElementById returns the FIRST match, so a duplicate id does not fail loudly — it silently
 # points every handler at the wrong element. remote_manage.html carried id="diag-repair-btn" on
@@ -2305,7 +2369,7 @@ _SECTION_PAGE_TEMPLATE = {
     "/servers/install": "install_server.html",
 }
 _pal_src = (ROOT / "static" / "js" / "palette.js").read_text(encoding="utf-8")
-_sec_block = re.search(r"var SECTIONS = \[(.*?)\n  \];", _pal_src, re.S)
+_sec_block = re.search(r"var PALETTE_SECTIONS = \[(.*?)\n\];", _pal_src, re.S)
 _sections = re.findall(r"page:\s*'([^']+)'\s*,\s*hash:\s*'([^']+)'",
                        _sec_block.group(1) if _sec_block else "")
 check(len(_sections) >= 10, "palette: the SECTIONS table was found and parsed",
@@ -2390,7 +2454,7 @@ check(not _unreachable,
 
 # HOST_SECTIONS are expanded per host at runtime, so their page is always remote_manage.html.
 # Same rot, same gate: a renamed card id there breaks every host's entry at once.
-_host_block = re.search(r"var HOST_SECTIONS = \[(.*?)\n  \];", _pal_src, re.S)
+_host_block = re.search(r"var PALETTE_HOST_SECTIONS = \[(.*?)\n\];", _pal_src, re.S)
 _host_hashes = re.findall(r"hash:\s*'([^']+)'", _host_block.group(1) if _host_block else "")
 check(len(_host_hashes) >= 5, "palette: the HOST_SECTIONS table was found and parsed",
       "%d entries parsed" % len(_host_hashes))

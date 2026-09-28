@@ -860,21 +860,32 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
   function parseField(f,lo,hi,names){
     f=(f||'').trim().toLowerCase(); if(f==='') return null;
     var out=new Set(), parts=f.split(',');
-    for(var i=0;i<parts.length;i++){
-      var p=parts[i], step=1, range=p, sl=p.indexOf('/');
-      if(sl>=0){ step=parseInt(p.slice(sl+1),10); range=p.slice(0,sl); if(!(step>=1)) return null; }
-      var a,b;
-      if(range==='*'){ a=lo; b=hi; }
-      else {
-        var seg=range.split('-');
-        var mv=function(x){ x=x.trim(); if(names&&names[x]!=null) return names[x]; if(!/^\d+$/.test(x)) return NaN; return parseInt(x,10); };
-        a=mv(seg[0]); b=(seg.length>1)?mv(seg[1]):(sl>=0?hi:a);
-        if(isNaN(a)||isNaN(b)) return null;
-      }
+    // A range's two ends as [a, b]: '*' is the whole field, and a lone value with a step runs to
+    // hi. null when either end is neither a number nor one of the field's names.
+    function ends(range, stepped){
+      if(range==='*') return [lo, hi];
+      var seg=range.split('-');
+      var mv=function(x){ x=x.trim(); if(names&&names[x]!=null) return names[x]; if(!/^\d+$/.test(x)) return NaN; return parseInt(x,10); };
+      var a=mv(seg[0]), b=(seg.length>1)?mv(seg[1]):(stepped?hi:a);
+      if(isNaN(a)||isNaN(b)) return null;
+      return [a, b];
+    }
+    // One comma-separated part ('5', '1-5', '*/15', 'mon-fri', '10/5') into out. False when it is
+    // invalid, which makes the whole field invalid.
+    function addPart(p){
+      var step=1, range=p, sl=p.indexOf('/');
+      if(sl>=0){ step=parseInt(p.slice(sl+1),10); range=p.slice(0,sl); if(!(step>=1)) return false; }
+      var e=ends(range, sl>=0);
+      if(!e) return false;
+      var a=e[0], b=e[1];
       // Weekday 7 is Sunday, as 0 is. It is folded AFTER the range is expanded: folding the ends
       // first turned the valid '1-7' and '5-7' into 1-0 and 5-0 ("invalid"), and '0-7' into Sunday.
-      if(a>b || a<lo || b>hi) return null;
+      if(a>b || a<lo || b>hi) return false;
       for(var v=a; v<=b; v+=step) out.add(names===NM_DOW && v===7 ? 0 : v);
+      return true;
+    }
+    for(var i=0;i<parts.length;i++){
+      if(!addPart(parts[i])) return null;
     }
     return out;
   }
@@ -1111,19 +1122,9 @@ function loadBackups(){
     .catch(function(){ /* transient error — keep whatever is already shown */ });
 }
 
-function renderBackups(d){
-  if(!d || d.error) return;
-  var loading=document.getElementById('bk-loading'), wrap=document.getElementById('bk-wrap');
-  if(loading) loading.style.display='none';
-  if(wrap) wrap.style.display='';
-  _bkDefault = d.default || _bkDefault;
-  var sc = d.schedule || {interval_days:0, keep:2, interval_set:false, keep_set:false};
-  // Don't clobber a select the user is actively changing.
-  var iv=document.getElementById('bk-interval'), kp=document.getElementById('bk-keep');
-  if(iv && document.activeElement!==iv) _bkShow(iv, 'interval', sc.interval_set ? String(sc.interval_days) : 'default',
-                                                'Every '+sc.interval_days+' days');
-  if(kp && document.activeElement!==kp) _bkShow(kp, 'keep', sc.keep_set ? String(sc.keep) : 'default', String(sc.keep));
-  // Disk headroom + a rough projection for the retained set.
+// The card's parts, for renderBackups: the disk line, the last run, the list, and the poll.
+// Disk headroom + a rough projection for the retained set.
+function _bkRenderDisk(d, sc){
   var keepEff=sc.keep, est=d.est_backup||0, disk=d.disk||{free:0,total:0}, parts=[];
   if(disk.total){
     var usedPct=Math.round((disk.total-disk.free)/disk.total*100);
@@ -1137,17 +1138,26 @@ function renderBackups(d){
   var defTxt=(_bkDefault.interval_days>0)?('every '+_bkDefault.interval_days+'d, keep '+_bkDefault.keep):'off';
   parts.push('<span class="text-secondary">Panel default: '+defTxt+'</span>');
   var dk=document.getElementById('bk-disk'); if(dk) dk.innerHTML=parts.join(' &middot; ');  // nosemgrep
-  // Live status of any in-flight/last backup.
-  var st=document.getElementById('bk-status'), s=d.status;
-  if(st){
-    if(s && s.running){ st.className='small text-info'; st.innerHTML='<i class="bi bi-arrow-repeat"></i> Backing up…'; }
-    else if(s && s.busy){ st.className='small text-warning'; st.innerHTML='<i class="bi bi-people-fill"></i> '+esc(s.msg||'players online — waiting')+' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1"' + _da('backupNow', [true]) + '>Back up anyway</button>'; }  // nosemgrep
-    else if(s && s.ok===true){ st.className='small text-success'; st.innerHTML='<i class="bi bi-check-circle"></i> '+esc(s.msg||'Backed up'); }  // nosemgrep
-    else if(s && s.ok===false){ st.className='small text-danger'; st.innerHTML='<i class="bi bi-x-circle"></i> '+esc(s.msg||'Backup failed'); }  // nosemgrep
-    else st.textContent='';
-  }
-  var nowBtn=document.getElementById('bk-now'); if(nowBtn) nowBtn.disabled=!!(s && s.running);
-  // Backup rows.
+}
+// Live status of any in-flight/last backup. No status at all reads as an empty line.
+function _bkRenderStatus(s){
+  var st=document.getElementById('bk-status');
+  if(!st) return;
+  if(!s){ st.textContent=''; return; }
+  if(s.running){ st.className='small text-info'; st.innerHTML='<i class="bi bi-arrow-repeat"></i> Backing up…'; }
+  else if(s.busy){ st.className='small text-warning'; st.innerHTML='<i class="bi bi-people-fill"></i> '+esc(s.msg||'players online — waiting')+' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1"' + _da('backupNow', [true]) + '>Back up anyway</button>'; }  // nosemgrep
+  else if(s.ok===true){ st.className='small text-success'; st.innerHTML='<i class="bi bi-check-circle"></i> '+esc(s.msg||'Backed up'); }  // nosemgrep
+  else if(s.ok===false){ st.className='small text-danger'; st.innerHTML='<i class="bi bi-x-circle"></i> '+esc(s.msg||'Backup failed'); }  // nosemgrep
+  else st.textContent='';
+}
+// Poll while a backup is running; stop once it finishes.
+function _bkPollWhileRunning(s){
+  var running=s && s.running;
+  if(running && !_bkPoll) _bkPoll=setInterval(loadBackups, 4000);
+  if(!running && _bkPoll){ clearInterval(_bkPoll); _bkPoll=null; }
+}
+// Backup rows.
+function _bkRenderRows(d){
   var rows=(d.backups||[]).map(function(b){
     var ip=b.in_progress;
     return '<tr>'
@@ -1177,10 +1187,30 @@ function renderBackups(d){
       tr.appendChild(td); tb.appendChild(tr);
     }
   }
+}
+
+function renderBackups(d){
+  // The two schedule selects. Don't clobber a select the user is actively changing.
+  function showSchedule(sc){
+    var iv=document.getElementById('bk-interval'), kp=document.getElementById('bk-keep');
+    if(iv && document.activeElement!==iv) _bkShow(iv, 'interval', sc.interval_set ? String(sc.interval_days) : 'default',
+                                                  'Every '+sc.interval_days+' days');
+    if(kp && document.activeElement!==kp) _bkShow(kp, 'keep', sc.keep_set ? String(sc.keep) : 'default', String(sc.keep));
+  }
+  if(!d || d.error) return;
+  var loading=document.getElementById('bk-loading'), wrap=document.getElementById('bk-wrap');
+  if(loading) loading.style.display='none';
+  if(wrap) wrap.style.display='';
+  _bkDefault = d.default || _bkDefault;
+  var sc = d.schedule || {interval_days:0, keep:2, interval_set:false, keep_set:false};
+  showSchedule(sc);
+  _bkRenderDisk(d, sc);
+  var s=d.status;
+  _bkRenderStatus(s);
+  var nowBtn=document.getElementById('bk-now'); if(nowBtn) nowBtn.disabled=!!(s && s.running);
+  _bkRenderRows(d);
   // Poll while a backup is running; stop once it finishes.
-  var running=s && s.running;
-  if(running && !_bkPoll) _bkPoll=setInterval(loadBackups, 4000);
-  if(!running && _bkPoll){ clearInterval(_bkPoll); _bkPoll=null; }
+  _bkPollWhileRunning(s);
 }
 
 function saveBkSchedule(){
