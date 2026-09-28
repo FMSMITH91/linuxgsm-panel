@@ -1634,6 +1634,32 @@ try:
           repr((_hmaps10, [x[3] for x in _hm2_10])))
     _mon_restore10("game_map", "server_live_metrics", "host_live_metrics")
 
+    # ── /api/dashboard/metrics: what a sample becomes in the payload ─────────────────────────────
+    # "up" is a live game process, not a listening port: the port can belong to something else, and
+    # a stopped game can leave it held. Reporting every sampled server as up (in _server_metrics,
+    # since api_dashboard_metrics was split) left every suite green — the samplers above are tested,
+    # the step that turns a sample into the payload was not. Driven through _sample_metrics, the
+    # loop the route calls, with the host sampler stubbed.
+    from panel.routes import api as _api10
+    _api10_qhm = _api10._query_host_metrics
+    try:
+        _api10._query_host_metrics = lambda item: [
+            (1, {"game_procs": 3, "game_cpu_percent": 30.0, "game_ram_mb": 900, "port_open": True,
+                 "ram_total": 8 << 30}, 3, "de_dust2"),
+            (2, {"game_procs": 0, "port_open": True, "ram_total": 8 << 30}, 3, ""),
+            (4, None, 3, "")]
+        _smx10 = _api10._sample_metrics([("h",)], {3: NS(display_name="h", is_local=False)}, {})
+    finally:
+        _api10._query_host_metrics = _api10_qhm
+    check("dashboard metrics: 'up' is a live game process, not a port something else may hold",
+          _smx10.get("1", {}).get("up") is True and _smx10.get("2", {}).get("up") is False,
+          repr(_smx10))
+    check("dashboard metrics: ...a running game carries its CPU, RAM and map",
+          _smx10.get("1", {}).get("cpu") == 30.0 and _smx10.get("1", {}).get("ram_mb") == 900
+          and _smx10.get("1", {}).get("map") == "de_dust2", repr(_smx10.get("1")))
+    check("dashboard metrics: ...and a server whose sample failed is left out, not reported idle",
+          "4" not in _smx10, repr(sorted(_smx10)))
+
     # ── _server_slots: which reading wins, and what an unreadable server reports ───────────────
     _mon10.lgsm_get_values = lambda r, sn, ln, keys: {"maxplayers": "24"}
     _gsl10 = NS(id=910001, remote=_R10, short_name="gm", game_type="gmod", port=27015,
