@@ -5990,7 +5990,9 @@ check("peer check: an invalid host is refused before ping runs, not pinged",
 _panel_js = open(os.path.join(_root, "static", "js", "panel.js"), encoding="utf-8").read()
 _da_src = _panel_js[_panel_js.index("window._da = function"):]
 _da_src = _da_src[:_da_src.index("\n};")]
-_da_amp, _da_quote = _da_src.find("replace(/&/g, '&amp;')"), _da_src.find("replace(/'/g")
+# The quote is matched as /\x27/ (the same character) because a bare ' inside a regex literal is
+# read by Lizard, Codacy's complexity analyser, as a string opening that swallows the rest of the file.
+_da_amp, _da_quote = _da_src.find("replace(/&/g, '&amp;')"), _da_src.find("replace(/\\x27/g, '&#39;')")
 check("_da: ampersands are escaped in data-args", _da_amp >= 0)
 # .find, not .index: a missing escape is the thing being tested for, and raising here would take
 # the whole suite down with a ValueError instead of reporting one FAIL.

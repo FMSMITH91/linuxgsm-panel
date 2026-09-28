@@ -109,6 +109,34 @@ if esprima:
             _broken.append("%s: %s" % (_p.name, _e))
     check(not _broken, "static/js: every file parses as JavaScript", "; ".join(_broken[:3]))
 
+# ── 0a-ii. ...and no regex literal in it contains a quote ─────────────────────────────────────
+# Two tools read these files with a lexer that knows strings and comments but not regex literals:
+# tools/i18n_scan.py (whose docstring relies on "none in this tree contains a quote") and Lizard,
+# Codacy's complexity analyser. panel.js had two - /'/g in _da and /[&<>"']/g in the Ubuntu Pro
+# card's escaper - and both tools read that quote as a string opening. The i18n gate went blind
+# from _da onwards, and the "Sign out everywhere else" dialog carried two untranslated strings with
+# it green; Lizard folded the next 325 lines into _da and never saw the Ubuntu Pro card at all.
+# Write a quote in a pattern as \x27 / \x22: the same character to the regex engine.
+if esprima:
+    _quoted_re, _seen_hex_quote = [], False
+    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+        try:
+            _toks = esprima.tokenize(_p.read_text(encoding="utf-8"), {"loc": True})
+        except Exception:        # not JavaScript at all: the parse gate above reports it by name
+            continue
+        for _t in _toks:
+            if _t.type != "RegularExpression":
+                continue
+            if re.search(r"['\"`]", _t.value):
+                _quoted_re.append("%s:%d %s" % (_p.name, _t.loc.start.line, _t.value))
+            _seen_hex_quote = _seen_hex_quote or (_p.name == "panel.js" and "\\x27" in _t.value)
+    # Positive control: the scan is reading regex tokens at all, including the rewritten one.
+    check(_seen_hex_quote, "static/js: the regex-literal scan sees panel.js's \\x27 pattern",
+          "no RegularExpression token with \\x27 in panel.js - the check below judged nothing")
+    check(not _quoted_re,
+          "static/js: no regex literal contains a quote (the i18n scan and Lizard misread it)",
+          "; ".join(_quoted_re[:3]))
+
 # ── Every swap of one region has to re-arm it the SAME way ────────────────────────────────────
 # refreshSection(sel, afterName) replaces a region's innerHTML with freshly server-rendered markup.
 # The elements inside are new objects, so anything bound to the old ones is gone; afterName is the
