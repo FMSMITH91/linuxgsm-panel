@@ -85,8 +85,8 @@ REPO_URL="https://github.com/FMSMITH91/linuxgsm-panel.git"
 # whatever PANEL_BRANCH says. See root_source_commit.
 TRUSTED_BRANCH="main"
 DEFAULT_BRANCH="${TRUSTED_BRANCH}"
-if [ -n "${PANEL_BRANCH:-}" ] && printf '%s' "${PANEL_BRANCH}" | grep -Eq '^[A-Za-z0-9._/-]{1,100}$' \
-   && [ "${PANEL_BRANCH#-}" = "${PANEL_BRANCH}" ] && [ "${PANEL_BRANCH##*..*}" = "${PANEL_BRANCH}" ]; then
+if [[ -n "${PANEL_BRANCH:-}" ]] && printf '%s' "${PANEL_BRANCH}" | grep -Eq '^[A-Za-z0-9._/-]{1,100}$' \
+   && [[ "${PANEL_BRANCH#-}" = "${PANEL_BRANCH}" ]] && [[ "${PANEL_BRANCH##*..*}" = "${PANEL_BRANCH}" ]]; then
     DEFAULT_BRANCH="${PANEL_BRANCH}"
 fi
 SERVICE_USER="lgsmpanel"          # dedicated user created for root installs
@@ -112,6 +112,9 @@ warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 # write_terminal_sudo_grant), each of which then exited with the panel still stopped: the exact
 # outcome the trap was added to prevent, and a bug the next `die` added in there would inherit.
 # The recovery is the handler's job for ALL exits; only the wording is conditional.
+# Set here, never inherited: the abort handler compares it with [[ -eq ]], which evaluates its
+# operand as arithmetic, so a value from the environment would be run as an expression by root.
+_DIE_SAID=0
 die()   { _DIE_SAID=1; echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 echo -e "${CYAN}╔═══════════════════════════════════════════╗"
@@ -121,7 +124,7 @@ echo -e "╚══════════════════════�
 # ── Prerequisites ──
 command -v python3 >/dev/null 2>&1 || die "Python 3 is required."
 PY_MM="$(python3 -I -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)"
-[ -n "${PY_MM}" ] || die "python3 is installed but does not run.  sudo apt install --reinstall -y python3"
+[[ -n "${PY_MM}" ]] || die "python3 is installed but does not run.  sudo apt install --reinstall -y python3"
 # requirements.txt is pinned for 3.10 and newer (tests/unit ties this floor to it). An older
 # python3 only fails later, inside pip, as "No matching distribution found for …".
 python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null \
@@ -144,7 +147,7 @@ _venv_works() {
 # root for a root install, and via sudo otherwise).
 if ! _venv_works || ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
-        SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+        SUDO=""; [[ "$(id -u)" -ne 0 ]] && SUDO="sudo"
         info "Installing prerequisites (python3-venv, python3-pip, git, curl)…"
         ${SUDO} apt-get update -qq || true
         ${SUDO} apt-get install -y python3-venv python3-pip git curl \
@@ -159,8 +162,8 @@ fi
 # anything else on the way; and apt-get alone stays the only thing the prerequisites above need
 # sudo to allow.
 TZ_DB="/usr/share/zoneinfo/UTC"
-if [ ! -e "${TZ_DB}" ] && command -v apt-get >/dev/null 2>&1; then
-    SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+if [[ ! -e "${TZ_DB}" ]] && command -v apt-get >/dev/null 2>&1; then
+    SUDO=""; [[ "$(id -u)" -ne 0 ]] && SUDO="sudo"
     info "Installing tzdata (the time zone database)…"
     ${SUDO} apt-get update -qq || true
     ${SUDO} env DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 \
@@ -172,12 +175,12 @@ _venv_works || die "Python can't create virtual environments. Install the venv p
      sudo apt install -y python3-venv python3-pip"
 command -v git >/dev/null 2>&1 || die "git is required.  sudo apt install -y git"
 command -v curl >/dev/null 2>&1 || warn "curl not found — the health check will fall back to python3."
-[ -e "${TZ_DB}" ] || warn "No time zone database, so time zone names will be rejected.  sudo apt install -y tzdata"
+[[ -e "${TZ_DB}" ]] || warn "No time zone database, so time zone names will be rejected.  sudo apt install -y tzdata"
 ok "Python ${PY_MM} found"
 
 # Where is the source? Prefer the current checkout; otherwise we'll clone.
 SRC=""
-if [ -f "./app.py" ] && [ -f "./requirements.txt" ]; then
+if [[ -f "./app.py" ]] && [[ -f "./requirements.txt" ]]; then
     SRC="$(pwd)"
     ok "Using the current checkout as source: ${SRC}"
 fi
@@ -199,26 +202,26 @@ fi
 # its data directory, which is a bigger and more dangerous operation than this script should
 # perform without being asked.
 _other_install=""
-if [ "$(id -u)" -eq 0 ]; then
+if [[ "$(id -u)" -eq 0 ]]; then
     # Running as root: is there a per-user install under some human's home?
     for _h in /home/*; do
-        [ -f "${_h}/linuxgsm-panel/app.py" ] || continue
+        [[ -f "${_h}/linuxgsm-panel/app.py" ]] || continue
         _u="$(basename "${_h}")"
-        [ "${_u}" = "${SERVICE_USER}" ] && continue      # that IS the root-install location
-        [ -f "${_h}/.config/systemd/user/linuxgsm-panel.service" ] || continue
+        [[ "${_u}" = "${SERVICE_USER}" ]] && continue      # that IS the root-install location
+        [[ -f "${_h}/.config/systemd/user/linuxgsm-panel.service" ]] || continue
         _other_install="${_h}/linuxgsm-panel (per-user service, owned by '${_u}')"
         break
     done
-elif [ -f "/etc/systemd/system/linuxgsm-panel.service" ]; then
+elif [[ -f "/etc/systemd/system/linuxgsm-panel.service" ]]; then
     # Running as a normal user: is there already a system-service install?
     _other_install="a system service (/etc/systemd/system/linuxgsm-panel.service)"
 fi
-if [ -n "${_other_install}" ]; then
+if [[ -n "${_other_install}" ]]; then
     warn "This host already has a LinuxGSM Panel installed in the OTHER service model:"
     warn "    ${_other_install}"
     warn "Installing the way you just invoked this script would create a SECOND, separate panel —"
     warn "its own user, service, database and port — rather than updating the one you have."
-    if [ "$(id -u)" -eq 0 ]; then
+    if [[ "$(id -u)" -eq 0 ]]; then
         warn "To update the existing install, run it AS THAT USER, without sudo:"
         warn "    sudo -u <that-user> -i bash ~/linuxgsm-panel/install.sh"
     else
@@ -228,7 +231,7 @@ if [ -n "${_other_install}" ]; then
     die "Refusing to build a parallel install."
 fi
 
-if [ "$(id -u)" -eq 0 ]; then
+if [[ "$(id -u)" -eq 0 ]]; then
     RUN_AS_ROOT=1
     PANEL_USER="${SERVICE_USER}"
     if ! id "${PANEL_USER}" >/dev/null 2>&1; then
@@ -247,7 +250,7 @@ else
 fi
 
 # systemctl / journalctl wrappers that target the right scope (system vs --user).
-svc() { if [ "${RUN_AS_ROOT}" -eq 1 ]; then systemctl "$@"; else systemctl --user "$@"; fi; }
+svc() { if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then systemctl "$@"; else systemctl --user "$@"; fi; }
 
 svc_active() { svc is-active linuxgsm-panel.service 2>/dev/null || true; }
 
@@ -261,7 +264,7 @@ svc_active() { svc is-active linuxgsm-panel.service 2>/dev/null || true; }
 _epoch_version() {
     local ymd
     case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
-    [ "${#1}" -le 12 ] || return 1
+    [[ "${#1}" -le 12 ]] || return 1
     ymd="$(date -u -d "@$1" +%Y.%m.%d 2>/dev/null)" || return 1
     [[ "${ymd}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
     printf '%d.%d.%d\n' "$((10#${BASH_REMATCH[1]}))" "$((10#${BASH_REMATCH[2]}))" \
@@ -283,7 +286,7 @@ _version_file() {
 
 panel_version() {
     local ts="" sha="" ver=""
-    if [ -d "${PANEL_DIR}/.git" ]; then
+    if [[ -d "${PANEL_DIR}/.git" ]]; then
         ts="$(_gitc log -1 --no-show-signature --format=%ct HEAD -- 2>/dev/null)" || ts=""
         sha="$(_gitc rev-parse --short HEAD 2>/dev/null)" || sha=""
         case "${sha}" in *[!0-9a-f]*) sha="" ;; esac
@@ -298,7 +301,7 @@ panel_version() {
 # Port the panel serves on (from data/config.json), default 5000.
 panel_port() {
     local cfg="${PANEL_DIR}/data/config.json"
-    if [ -f "${cfg}" ]; then
+    if [[ -f "${cfg}" ]]; then
         python3 -I -c "import json;print(int(json.load(open('${cfg}')).get('port',5000)))" 2>/dev/null || echo 5000
     else
         echo 5000
@@ -319,9 +322,9 @@ panel_port() {
 # that stays root: a fresh install, where root still owns the tree.
 choose_and_record_port() {
     local desired="${1:-5000}" as_owner="" owner=""
-    if [ "$(id -u)" -eq 0 ]; then
+    if [[ "$(id -u)" -eq 0 ]]; then
         owner="$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)"
-        [ "${owner}" != "root" ] && as_owner="sudo -u ${owner}"
+        [[ "${owner}" != "root" ]] && as_owner="sudo -u ${owner}"
     fi
     ${as_owner} python3 -I - "${desired}" "${PANEL_DIR}/data/config.json" <<'PYEOF'
 import json, os, socket, sys, tempfile
@@ -427,7 +430,7 @@ health_check() {
     local port; port="$(panel_port)"
     local tries=30 code scheme
     for _ in $(seq 1 "${tries}"); do
-        if [ "$(svc_active)" = "active" ]; then
+        if [[ "$(svc_active)" = "active" ]]; then
             for scheme in https http; do
                 code="$(_http_code "${scheme}://127.0.0.1:${port}/")"
                 code="${code:-000}"
@@ -451,8 +454,8 @@ health_check() {
 # operate as the owner. As root we can sudo -u <owner> without a password.
 _gitc() {
     local owner=""
-    [ -d "${PANEL_DIR}/.git" ] && owner="$(stat -c '%U' "${PANEL_DIR}/.git" 2>/dev/null || echo)"
-    if [ "$(id -u)" -eq 0 ] && [ -n "${owner}" ] && [ "${owner}" != "root" ]; then
+    [[ -d "${PANEL_DIR}/.git" ]] && owner="$(stat -c '%U' "${PANEL_DIR}/.git" 2>/dev/null || echo)"
+    if [[ "$(id -u)" -eq 0 ]] && [[ -n "${owner}" ]] && [[ "${owner}" != "root" ]]; then
         sudo -u "${owner}" git -C "${PANEL_DIR}" "$@"
     else
         git -C "${PANEL_DIR}" "$@"
@@ -506,7 +509,7 @@ _fetch_branch() {
 # clone skips it) and for this branch only. If the deepening fetch fails the plain one is tried,
 # and the decision is made on the history there is, as before.
 _fetch_branch_history() {
-    if [ "$(_gitc rev-parse --is-shallow-repository 2>/dev/null)" = true ] \
+    if [[ "$(_gitc rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]] \
        && _fetch_branch --unshallow 2>/dev/null; then
         return 0
     fi
@@ -545,7 +548,7 @@ _fetch_branch_history() {
 # numbers (mawk, Ubuntu's awk, and gawk alike), and a hex id made of digits and one 'e' does:
 # every "0e<digits>" is 0, so `$0 == want` called two different ids equal.
 _on_first_parent_line() {
-    [ -n "$2" ] || return 1
+    [[ -n "$2" ]] || return 1
     "$1" rev-list --first-parent "$3" 2>/dev/null \
         | awk -v want="$2" '($0 "") == want { found = 1 } END { exit !found }'
 }
@@ -578,7 +581,7 @@ _choose_update_target() {
         return 1
     fi
     UPD_WHY="tip"
-    [ -n "${PANEL_UPDATE_REF:-}" ] || return 0
+    [[ -n "${PANEL_UPDATE_REF:-}" ]] || return 0
     _head="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" || _head=""
     # The pin is resolved to a full commit id ONCE, and that id is what is checked and what is
     # reset to — a name git has to look up (an abbreviated id is tried as a ref name first) is never
@@ -588,7 +591,7 @@ _choose_update_target() {
         *) UPD_PIN="$(_gitc rev-parse --verify --quiet "${PANEL_UPDATE_REF}^{commit}" 2>/dev/null)" \
                || UPD_PIN="" ;;
     esac
-    if [ -z "${UPD_PIN}" ] || ! _on_first_parent_line _gitc "${UPD_PIN}" "${_tracking}"; then
+    if [[ -z "${UPD_PIN}" ]] || ! _on_first_parent_line _gitc "${UPD_PIN}" "${_tracking}"; then
         # A pin that was given and cannot be verified is not "no pin". It used to be treated as
         # one, and the update went to the branch's TIP — the one commit nothing had verified. The
         # deploy of a commit whose CI passed, or the panel's update to one, then installed whatever
@@ -601,7 +604,7 @@ _choose_update_target() {
         # clone's history ends above it), when it is on another branch or the side of a merge, or
         # when a foxtrot push has just taken it off the line (see _on_first_parent_line).
         UPD_PIN=""
-        if [ -n "${_head}" ] && _gitc merge-base --is-ancestor "${_head}" "${_tracking}" 2>/dev/null; then
+        if [[ -n "${_head}" ]] && _gitc merge-base --is-ancestor "${_head}" "${_tracking}" 2>/dev/null; then
             UPD_TARGET="${_head}"; UPD_WHY="hold"; UPD_HOLD="unverified"
             UPD_HOLD_WHY="the pinned commit ${PANEL_UPDATE_REF} could not be verified on ${DEFAULT_BRANCH}"
             return 0
@@ -636,7 +639,7 @@ _choose_update_target() {
     # it. Nor does ancestry keep a HEAD off the line for good (one put on a merged pull request's
     # intermediate commit by hand, say): the next pin newer than HEAD descends from it, so that
     # update moves it forward.
-    if [ -n "${_head}" ] && _gitc merge-base --is-ancestor "${_head}" "${_tracking}" 2>/dev/null; then
+    if [[ -n "${_head}" ]] && _gitc merge-base --is-ancestor "${_head}" "${_tracking}" 2>/dev/null; then
         if _gitc merge-base --is-ancestor "${UPD_PIN}" "${_head}" 2>/dev/null; then
             UPD_TARGET="${_head}"; UPD_WHY="stay"
         elif ! _gitc merge-base --is-ancestor "${_head}" "${UPD_PIN}" 2>/dev/null; then
@@ -651,13 +654,13 @@ _choose_update_target() {
 # secrets), or clone/pull from git when there's no local checkout.
 fetch_code() {
     mkdir -p "${PANEL_DIR}"
-    if [ -n "${SRC}" ] && [ "${SRC}" != "${PANEL_DIR}" ]; then
+    if [[ -n "${SRC}" ]] && [[ "${SRC}" != "${PANEL_DIR}" ]]; then
         # --no-same-owner: as root, tar would otherwise give the copy SRC's owners. A fresh install
         # then chowns it to the panel user anyway; before that, stage_root_source reads the copy
         # directly only when every file in it is root's.
         tar -C "${SRC}" --exclude=./venv --exclude=./data --exclude='*.pyc' -cf - . \
             | tar -C "${PANEL_DIR}" --no-same-owner -xf -
-    elif [ -d "${PANEL_DIR}/.git" ]; then
+    elif [[ -d "${PANEL_DIR}/.git" ]]; then
         # The fresh clone below is shallow + single-branch (main only). Widen it so ANY branch is
         # fetchable and give it real history, so switching branches / updating on a branch works.
         _gitc remote set-branches origin '*' 2>/dev/null || true
@@ -676,14 +679,14 @@ fetch_code() {
             pin) echo "  Updating to verified commit ${UPD_TARGET}" ;;
             stay) echo "  Keeping ${UPD_TARGET}: it is on ${DEFAULT_BRANCH} and already contains the verified commit ${UPD_PIN}" ;;
             hold)
-                if [ "${UPD_HOLD}" = sideways ]; then
+                if [[ "${UPD_HOLD}" = "sideways" ]]; then
                     echo "  Keeping ${UPD_TARGET}: ${UPD_HOLD_WHY}"
                 else
                     echo "  Keeping ${UPD_TARGET}: the pinned commit ${PANEL_UPDATE_REF} is not on ${DEFAULT_BRANCH}'s first-parent line here, and the update does not fall back to the unverified tip"
                 fi ;;
         esac
         _gitc reset --hard --quiet "${UPD_TARGET}"
-    elif [ -z "${SRC}" ]; then
+    elif [[ -z "${SRC}" ]]; then
         command -v git >/dev/null 2>&1 || die "git is required to fetch the panel.  apt install -y git"
         # --no-single-branch keeps the clone shallow (fast) but fetches EVERY branch tip, so the
         # panel's branch switcher can see + check out non-main branches without re-fetching history.
@@ -700,10 +703,10 @@ fetch_code() {
 # decides on the history fetch_code will decide on (see _fetch_branch_history).
 resolve_update_target() {
     CURRENT_SHA=""; TARGET_SHA=""; RESOLVE_ERR=""
-    if [ -n "${SRC}" ] && [ "${SRC}" != "${PANEL_DIR}" ]; then
+    if [[ -n "${SRC}" ]] && [[ "${SRC}" != "${PANEL_DIR}" ]]; then
         return 0   # local-source update: no git comparison, always applies
     fi
-    [ -d "${PANEL_DIR}/.git" ] || return 0   # not a git checkout: let fetch_code decide
+    [[ -d "${PANEL_DIR}/.git" ]] || return 0   # not a git checkout: let fetch_code decide
     _fetch_branch_history || return 1
     CURRENT_SHA="$(_gitc rev-parse HEAD 2>/dev/null)"
     # The same decision fetch_code acts on (see _choose_update_target). One it cannot make is NOT
@@ -715,10 +718,10 @@ resolve_update_target() {
     # Staying put because moving to the pin is not safe would read as "Already up to date" to the
     # caller. Say why first: this is what the deploy's log and the panel's update log show, and the
     # caller ends on update_noop_line's "Not updated: held at ...".
-    if [ "${UPD_WHY}" = hold ] && [ "${UPD_HOLD}" = sideways ]; then
+    if [[ "${UPD_WHY}" = "hold" ]] && [[ "${UPD_HOLD}" = "sideways" ]]; then
         warn "The commit this update is pinned to, ${UPD_PIN}, is on ${DEFAULT_BRANCH}'s first-parent line, but it neither contains this checkout (${UPD_TARGET}) nor is contained by it: ${DEFAULT_BRANCH} was fast-forwarded onto a merge since this checkout was installed."
         warn "This checkout stays at ${UPD_TARGET}: moving to the pin would drop commits it has. An update to a commit that contains it moves it forward."
-    elif [ "${UPD_WHY}" = hold ]; then
+    elif [[ "${UPD_WHY}" = "hold" ]]; then
         warn "The commit this update is pinned to, ${PANEL_UPDATE_REF}, is not on ${DEFAULT_BRANCH}'s first-parent line here, so it is not verified."
         warn "This checkout stays at ${UPD_TARGET}: the update does not fall back to ${DEFAULT_BRANCH}'s tip, which nothing verified."
     fi
@@ -731,7 +734,7 @@ resolve_update_target() {
 # and the panel's update card are read by. The card reads it from data/self-update.log by its
 # "Not updated: " start (panel_update_log in panel/ops/system_ops.py), so keep that wording.
 update_noop_line() {
-    if [ "${UPD_WHY:-}" = hold ]; then
+    if [[ "${UPD_WHY:-}" = "hold" ]]; then
         warn "Not updated: held at ${TARGET_SHA:0:10}, because ${UPD_HOLD_WHY:-the pinned commit ${PANEL_UPDATE_REF:-} could not be verified on ${DEFAULT_BRANCH}}. The panel was left running."
     else
         ok "Already up to date (version ${FROM_VER}) — no snapshot taken, panel left running."
@@ -759,13 +762,13 @@ _venv_stale() {
     local built runs
     VENV_STALE_WHY=""
     built="$(_venv_python)"
-    [ -n "${built}" ] || return 1
-    if [ ! -e "${PANEL_DIR}/venv/bin/python3" ]; then
+    [[ -n "${built}" ]] || return 1
+    if [[ ! -e "${PANEL_DIR}/venv/bin/python3" ]]; then
         VENV_STALE_WHY="the venv was built for Python ${built}, and that interpreter is gone"
         return 0
     fi
     runs="$(_venv_link_python)"
-    { [ -n "${runs}" ] && [ "${built}" != "${runs}" ]; } || return 1
+    { [[ -n "${runs}" ]] && [[ "${built}" != "${runs}" ]]; } || return 1
     VENV_STALE_WHY="the venv was built for Python ${built}, and its python3 is now ${runs}"
 }
 
@@ -780,8 +783,8 @@ _venv_stale() {
 # came from a clone of REPO_URL that the operator asked for as root — so that path is unchanged.
 install_deps() {
     local as_owner="" clear=""
-    if [ "$(id -u)" -eq 0 ] && [ -n "${PANEL_USER:-}" ] && [ "${PANEL_USER}" != "root" ] \
-       && [ "$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)" = "${PANEL_USER}" ]; then
+    if [[ "$(id -u)" -eq 0 ]] && [[ -n "${PANEL_USER:-}" ]] && [[ "${PANEL_USER}" != "root" ]] \
+       && [[ "$(stat -c '%U' "${PANEL_DIR}" 2>/dev/null || echo root)" = "${PANEL_USER}" ]]; then
         as_owner="sudo -u ${PANEL_USER}"
     fi
     if _venv_stale; then
@@ -795,7 +798,7 @@ install_deps() {
     # hashed. A commit WITHOUT it — an update pinned to an older commit, or the rollback putting
     # one back — keeps the pip the venv already has, which installs requirements.txt as well
     # (22.04's own 22.0.2 does), rather than falling back to an unpinned upgrade.
-    if [ -f "${PANEL_DIR}/requirements-bootstrap.txt" ]; then
+    if [[ -f "${PANEL_DIR}/requirements-bootstrap.txt" ]]; then
         ${as_owner} "${PANEL_DIR}/venv/bin/pip" install --quiet --require-hashes --only-binary :all: \
             -r "${PANEL_DIR}/requirements-bootstrap.txt"
     else
@@ -812,9 +815,9 @@ install_deps() {
 # where a failed pipe in an assignment would end the update.
 _deps_digest() {
     local f out=""
-    [ -f "${PANEL_DIR}/requirements.txt" ] || return 0
+    [[ -f "${PANEL_DIR}/requirements.txt" ]] || return 0
     for f in requirements.txt requirements-bootstrap.txt; do
-        if [ -f "${PANEL_DIR}/${f}" ]; then
+        if [[ -f "${PANEL_DIR}/${f}" ]]; then
             out="${out}$(sha256sum "${PANEL_DIR}/${f}" 2>/dev/null | awk '{print $1}' || true) "
         fi
     done
@@ -853,8 +856,8 @@ nodesource_key_ok() {
     gh="$(mktemp -d 2>/dev/null)" || return 1
     listing="$(GNUPGHOME="${gh}" gpg --batch --with-colons --show-keys "$1" 2>/dev/null || true)"
     rm -rf "${gh}"
-    [ "$(printf '%s\n' "${listing}" | awk -F: '$1=="pub"{n++} END{print n+0}')" = "1" ] || return 1
-    [ "$(printf '%s\n' "${listing}" | awk -F: '$1=="fpr"{print $10; exit}')" = "${NODESOURCE_KEY_FPR}" ]
+    [[ "$(printf '%s\n' "${listing}" | awk -F: '$1=="pub"{n++} END{print n+0}')" = "1" ]] || return 1
+    [[ "$(printf '%s\n' "${listing}" | awk -F: '$1=="fpr"{print $10; exit}')" = "${NODESOURCE_KEY_FPR}" ]]
 }
 
 # Configure NodeSource's repository with the pinned key. $1 is the sudo prefix ("" or "sudo").
@@ -866,7 +869,7 @@ nodesource_setup() {
     command -v gpg >/dev/null 2>&1 || ${S} apt-get install -y gnupg >/dev/null 2>&1 || true
     key="$(mktemp 2>/dev/null)" || return 1
     gh="$(mktemp -d 2>/dev/null)" || { rm -f "${key}"; return 1; }
-    if curl -fsSL --connect-timeout 15 --max-time 60 "${NODESOURCE_KEY_URL}" -o "${key}" 2>/dev/null \
+    if curl --proto '=https' -fsSL --connect-timeout 15 --max-time 60 "${NODESOURCE_KEY_URL}" -o "${key}" 2>/dev/null \
         && nodesource_key_ok "${key}" \
         && GNUPGHOME="${gh}" gpg --batch --yes --dearmor -o "${key}.gpg" "${key}" 2>/dev/null \
         && ${S} install -d -m 0755 "$(dirname "${NODESOURCE_KEYRING}")" 2>/dev/null \
@@ -891,7 +894,7 @@ ensure_nodejs() {
     # Every command below is guarded so it returns 0 — the script runs under `set -euo pipefail`,
     # so an unguarded failure here (e.g. a missing `node`) would abort the whole install.
     local S=""
-    [ "$(id -u)" -eq 0 ] || S="sudo"
+    [[ "$(id -u)" -eq 0 ]] || S="sudo"
     if ! command -v jq >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
         ${S} apt-get install -y jq curl >/dev/null 2>&1 || true
     fi
@@ -899,31 +902,34 @@ ensure_nodejs() {
     command -v pigz >/dev/null 2>&1 || ${S} apt-get install -y pigz >/dev/null 2>&1 || true
     # Read Node's major version ONLY if node exists: `node -v` on a host without node fails the pipe
     # under `set -o pipefail`, which would kill install.sh. Absent/unparseable => 0 => (re)install.
+    # Each read goes through 10# once: [[ -lt ]] below reads its operands as arithmetic, where a
+    # leading zero means octal ("08" is an error, "010" is 8). These digits come from another
+    # program's output, so they are read in base 10, as `[` read them.
     local nmaj=0
     if command -v node >/dev/null 2>&1; then
         nmaj="$(node -v 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
-        nmaj="${nmaj:-0}"
+        nmaj="$((10#${nmaj:-0}))"
     fi
     # Prefer the distro's own nodejs when it is new enough. NodeSource publishes ONE repo per
     # distro codename, so in the weeks after a new LTS lands that codename can be missing — which
     # is exactly when people are installing onto it. Ubuntu 24.04 ships Node 18 and 26.04 ships
     # newer still, so on a current release this needs no third-party repo at all. 22.04 ships
     # Node 12, which is why the NodeSource fallback below stays.
-    if [ "${nmaj:-0}" -lt 18 ] 2>/dev/null; then
+    if [[ "${nmaj:-0}" -lt 18 ]] 2>/dev/null; then
         local cand=0
         cand="$(apt-cache policy nodejs 2>/dev/null | awk '/Candidate:/{print $2}' \
                 | grep -oE '^[0-9]+' | head -1 || true)"
-        cand="${cand:-0}"
-        if [ "${cand:-0}" -ge 18 ] 2>/dev/null; then
+        cand="$((10#${cand:-0}))"
+        if [[ "${cand:-0}" -ge 18 ]] 2>/dev/null; then
             info "Installing Node.js ${cand} from the distro (gamedig needs it for player queries)…"
             ${S} apt-get install -y nodejs >/dev/null 2>&1 || true
             if command -v node >/dev/null 2>&1; then
                 nmaj="$(node -v 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
-                nmaj="${nmaj:-0}"
+                nmaj="$((10#${nmaj:-0}))"
             fi
         fi
     fi
-    if [ "${nmaj:-0}" -lt 18 ] 2>/dev/null; then
+    if [[ "${nmaj:-0}" -lt 18 ]] 2>/dev/null; then
         info "Installing Node.js ${NODESOURCE_NODE_MAJOR} from NodeSource (gamedig needs it for player queries)…"
         # NodeSource's repository with its signing key pinned by fingerprint — see nodesource_setup.
         # Their setup script is no longer downloaded and run as root.
@@ -937,7 +943,7 @@ ensure_nodejs() {
     # The distro's nodejs ships WITHOUT npm (NodeSource's bundles it), and gamedig is installed
     # with npm, so every host that took the distro path above -- 24.04 and 26.04 -- ended with node
     # and no gamedig, silently. Also reached on an update, for a host installed that way already.
-    if [ "${nmaj:-0}" -ge 18 ] 2>/dev/null && ! command -v npm >/dev/null 2>&1; then
+    if [[ "${nmaj:-0}" -ge 18 ]] 2>/dev/null && ! command -v npm >/dev/null 2>&1; then
         info "Installing npm (gamedig is installed with it)…"
         ${S} apt-get install -y npm >/dev/null 2>&1 \
             || warn "npm install failed — player queries stay unavailable until npm is installed."
@@ -970,7 +976,7 @@ ensure_fail2ban() {
         return 0
     fi
     local S=""
-    [ "$(id -u)" -eq 0 ] || S="sudo"
+    [[ "$(id -u)" -eq 0 ]] || S="sudo"
     info "Installing fail2ban (brute-force protection for the panel login)…"
     ${S} apt-get install -y fail2ban >/dev/null 2>&1 \
         || warn "fail2ban install failed — panel-login brute-force protection stays off until it's installed."
@@ -984,7 +990,7 @@ ensure_fail2ban() {
 # and survives future unit changes.
 ensure_service_tuning() {
     local dir
-    if [ "${RUN_AS_ROOT}" -eq 1 ]; then
+    if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
         dir="/etc/systemd/system/linuxgsm-panel.service.d"
     else
         dir="${HOME}/.config/systemd/user/linuxgsm-panel.service.d"
@@ -1005,7 +1011,7 @@ PRIOEOF
 # memory in RAM but still lets swap save us from OOM under real pressure (so we DON'T disable swap).
 # Root-only (writes /etc/sysctl.d); namespaced file so it's easy to find/remove. Idempotent.
 ensure_system_tuning() {
-    [ "${RUN_AS_ROOT}" -eq 1 ] || return 0
+    [[ "${RUN_AS_ROOT}" -eq 1 ]] || return 0
     cat > /etc/sysctl.d/99-linuxgsm-panel.conf <<'SYSCTLEOF'
 # LinuxGSM Panel host tuning — prefer RAM over swap (swap stays as an OOM safety net, just used less).
 vm.swappiness=10
@@ -1043,7 +1049,7 @@ SYSCTLEOF
 # The panel's Diagnostics card already surfaces a helper/code version mismatch.
 ORIGIN_TRUSTED=1
 check_origin_trusted() {
-    [ -d "${PANEL_DIR}/.git" ] || return 0
+    [[ -d "${PANEL_DIR}/.git" ]] || return 0
     local url
     url="$(_gitc remote get-url origin 2>/dev/null || echo)"
     case "${url}" in
@@ -1144,14 +1150,14 @@ _rootgit() {
 # Does the panel user have no hand in this checkout? True only when every file and directory in
 # it, .git included, is root's. find does not follow symlinks, so a link is judged by its own owner.
 _checkout_is_roots() {
-    [ -d "${PANEL_DIR}" ] && [ ! -L "${PANEL_DIR}" ] || return 1
-    [ -z "$(find "${PANEL_DIR}" ! -uid 0 -print -quit 2>/dev/null)" ]
+    [[ -d "${PANEL_DIR}" ]] && [[ ! -L "${PANEL_DIR}" ]] || return 1
+    [[ -z "$(find "${PANEL_DIR}" ! -uid 0 -print -quit 2>/dev/null)" ]]
 }
 
 # The panel user's uid and groups, for the reach tests below. Fails when there is no such account,
 # so every reach test fails closed with it.
 _panel_ids() {
-    _PR_UID="$(id -u "${PANEL_USER:-}" 2>/dev/null)" && [ -n "${_PR_UID}" ] || return 1
+    _PR_UID="$(id -u "${PANEL_USER:-}" 2>/dev/null)" && [[ -n "${_PR_UID}" ]] || return 1
     _PR_GIDS=" $(id -G "${PANEL_USER}" 2>/dev/null) "
 }
 
@@ -1165,11 +1171,11 @@ _panel_cannot_write() {
     st="$(stat -c '%u %g %a' -- "$1" 2>/dev/null)" || return 1
     read -r u g m <<< "${st}"
     m=$((8#${m}))
-    [ -n "${_PR_UID:-}" ] && [ "${u}" != "${_PR_UID}" ] || return 1
-    [ ! -L "$1" ] || return 0
-    if [ ! -d "$1" ] || [ $((m & 01000)) -eq 0 ]; then
-        [ $((m & 02)) -eq 0 ] || return 1
-        [ $((m & 020)) -eq 0 ] || [ "${_PR_GIDS#* "${g}" }" = "${_PR_GIDS}" ] || return 1
+    [[ -n "${_PR_UID:-}" ]] && [[ "${u}" != "${_PR_UID}" ]] || return 1
+    [[ ! -L "$1" ]] || return 0
+    if [[ ! -d "$1" ]] || [[ $((m & 01000)) -eq 0 ]]; then
+        [[ $((m & 02)) -eq 0 ]] || return 1
+        [[ $((m & 020)) -eq 0 ]] || [[ "${_PR_GIDS#* "${g}" }" = "${_PR_GIDS}" ]] || return 1
     fi
 }
 
@@ -1187,14 +1193,14 @@ _panel_cannot_write() {
 #     for itself with `app.py -> /etc/passwd`.
 _operator_src() {
     local rs p
-    [ -n "${SRC:-}" ] && [ "${SRC}" != "${PANEL_DIR}" ] && _panel_ids || return 1
-    rs="$(readlink -f -- "${SRC}" 2>/dev/null)" && [ -d "${rs}" ] || return 1
-    [ "$(readlink -f -- "${SCRIPT_PATH:-}" 2>/dev/null)" = "${rs}/install.sh" ] || return 1
-    [ "${rs}" != "$(readlink -f -- "${PANEL_DIR}" 2>/dev/null)" ] || return 1
+    [[ -n "${SRC:-}" ]] && [[ "${SRC}" != "${PANEL_DIR}" ]] && _panel_ids || return 1
+    rs="$(readlink -f -- "${SRC}" 2>/dev/null)" && [[ -d "${rs}" ]] || return 1
+    [[ "$(readlink -f -- "${SCRIPT_PATH:-}" 2>/dev/null)" = "${rs}/install.sh" ]] || return 1
+    [[ "${rs}" != "$(readlink -f -- "${PANEL_DIR}" 2>/dev/null)" ]] || return 1
     p="${rs}"
     while :; do
         _panel_cannot_write "${p}" || return 1
-        [ "${p}" != "/" ] || break
+        [[ "${p}" != "/" ]] || break
         p="$(dirname -- "${p}")"
     done
     printf '%s\n' "${rs}"
@@ -1212,9 +1218,9 @@ _operator_file() {
     for part in "${parts[@]}"; do
         case "${part}" in ""|.|..) return 1 ;; esac
         p="${p}/${part}"
-        [ ! -L "${p}" ] && _panel_cannot_write "${p}" || return 1
+        [[ ! -L "${p}" ]] && _panel_cannot_write "${p}" || return 1
     done
-    [ -f "${p}" ] || return 1
+    [[ -f "${p}" ]] || return 1
     printf '%s\n' "${p}"
 }
 
@@ -1237,11 +1243,11 @@ _operator_file() {
 # AS the panel user, so a run started there counts as the panel's: a terminal the panel renders is
 # one it can type into. Run it over SSH instead.
 _panel_started_run() {
-    [ -z "${PANEL_SELF_UPDATE:-}" ] || return 0
+    [[ -z "${PANEL_SELF_UPDATE:-}" ]] || return 0
     local pu=""
-    [ -n "${SUDO_UID:-}" ] && [ -n "${PANEL_USER:-}" ] || return 1
+    [[ -n "${SUDO_UID:-}" ]] && [[ -n "${PANEL_USER:-}" ]] || return 1
     pu="$(id -u "${PANEL_USER}" 2>/dev/null)" || return 1
-    [ -n "${pu}" ] && [ "${SUDO_UID}" = "${pu}" ]
+    [[ -n "${pu}" ]] && [[ "${SUDO_UID}" = "${pu}" ]]
 }
 
 # Root's source floor, as a full commit id: the file's, or the seed when there is no file. A file
@@ -1251,17 +1257,17 @@ _panel_started_run() {
 # anything in it — the same ground root's clone beside it stands on.
 _source_floor() {
     local f="${ROOT_SRC_FLOOR_FILE}" v=""
-    if [ ! -e "${f}" ] && [ ! -L "${f}" ]; then
+    if [[ ! -e "${f}" ]] && [[ ! -L "${f}" ]]; then
         printf '%s\n' "${ROOT_SRC_FLOOR_SEED}"
         return 0
     fi
-    if [ -f "${f}" ] && [ ! -L "${f}" ]; then
+    if [[ -f "${f}" ]] && [[ ! -L "${f}" ]]; then
         v="$(head -c 100 -- "${f}" 2>/dev/null | tr -d '[:space:]')" || v=""
     fi
     case "${v}" in
         *[!0-9a-f]*|"") v="" ;;
     esac
-    if [ "${#v}" -ne 40 ]; then
+    if [[ "${#v}" -ne 40 ]]; then
         warn "Root's source floor ${f} is not a single commit id, so root stages nothing until it is" >&2
         warn "fixed. Delete it to fall back to the built-in floor; the next update records it again." >&2
         return 1
@@ -1274,7 +1280,7 @@ _source_floor() {
 _raise_source_floor() {
     local new="$1" cur="" tmp="${ROOT_SRC_FLOOR_FILE}.new"
     cur="$(_source_floor)" || return 1
-    if [ "${cur}" = "${new}" ] && [ -f "${ROOT_SRC_FLOOR_FILE}" ]; then
+    if [[ "${cur}" = "${new}" ]] && [[ -f "${ROOT_SRC_FLOOR_FILE}" ]]; then
         return 0
     fi
     _rootgit merge-base --is-ancestor "${cur}" "${new}" >/dev/null 2>&1 || return 1
@@ -1294,7 +1300,7 @@ _enforces_source_floor() {
     local n=""
     n="$(_rootgit cat-file blob "$1:install.sh" 2>/dev/null \
          | grep -cxF -- "${_ROOT_SRC_FLOOR_LINE}" 2>/dev/null || true)"
-    [ "${n:-0}" -ge 1 ] 2>/dev/null
+    [[ "${n:-0}" -ge 1 ]] 2>/dev/null
 }
 
 # Which commit root may stage from: the checkout's HEAD, once root's own clone shows that commit is
@@ -1326,13 +1332,13 @@ _enforces_source_floor() {
 # seed alone does not stop that on a host with no floor file yet. So the commit's install.sh must
 # carry _ROOT_SRC_FLOOR_LINE, which every installer that enforces the floor does.
 root_source_commit() {
-    if [ "${ROOT_SRC_TRIED}" -eq 1 ]; then
-        [ -n "${ROOT_SRC_COMMIT}" ]
+    if [[ "${ROOT_SRC_TRIED}" -eq 1 ]]; then
+        [[ -n "${ROOT_SRC_COMMIT}" ]]
         return
     fi
     ROOT_SRC_TRIED=1
     local want="" branch="${DEFAULT_BRANCH}" floor="" tip=""
-    [ -d "${PANEL_DIR}/.git" ] \
+    [[ -d "${PANEL_DIR}/.git" ]] \
         && want="$(_gitc rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null || true)"
     # The panel's git produced this, so it is a request, not a fact: a commit id, or nothing.
     #
@@ -1346,7 +1352,7 @@ root_source_commit() {
             return 1 ;;
     esac
     if _panel_started_run; then
-        if [ "${DEFAULT_BRANCH}" != "${TRUSTED_BRANCH}" ]; then
+        if [[ "${DEFAULT_BRANCH}" != "${TRUSTED_BRANCH}" ]]; then
             warn "The panel started this update on its branch '${DEFAULT_BRANCH}'. When the panel asks,"
             warn "root takes its own pieces only from ${REPO_URL}'s ${TRUSTED_BRANCH}, so it stages"
             warn "nothing from this checkout; the code still updates. To take them from"
@@ -1372,7 +1378,7 @@ root_source_commit() {
     # floor is a commit of ${TRUSTED_BRANCH}, and a clone holding only a branch forked below it
     # would not know the floor at all.
     local -a refspecs=("+refs/heads/${branch}:refs/root-src/tip")
-    [ "${branch}" = "${TRUSTED_BRANCH}" ] \
+    [[ "${branch}" = "${TRUSTED_BRANCH}" ]] \
         || refspecs+=("+refs/heads/${TRUSTED_BRANCH}:refs/root-src/trusted")
     if ! _rootgit fetch --quiet --no-tags "${REPO_URL}" "${refspecs[@]}" >/dev/null 2>&1; then
         warn "Could not fetch ${REPO_URL} (${branch}) into root's own copy, so root stages"
@@ -1391,13 +1397,13 @@ root_source_commit() {
     if ! _rootgit merge-base --is-ancestor "${floor}" "${want}" >/dev/null 2>&1; then
         tip="$(_rootgit rev-parse --verify --quiet 'refs/root-src/tip^{commit}' 2>/dev/null || true)"
         if ! _rootgit cat-file -e "${floor}^{commit}" 2>/dev/null \
-           && { [ "${branch}" = "${TRUSTED_BRANCH}" ] || [ "${want}" != "${tip}" ]; }; then
+           && { [[ "${branch}" = "${TRUSTED_BRANCH}" ]] || [[ "${want}" != "${tip}" ]]; }; then
             warn "Root's source floor ${floor} is not in ${REPO_URL}'s history, so root"
             warn "stages nothing. If this installer now points at another repository, delete"
             warn "${ROOT_SRC_FLOOR_FILE} to start its floor again."
             return 1
         fi
-        if [ "${branch}" = "${TRUSTED_BRANCH}" ] || [ "${want}" != "${tip}" ]; then
+        if [[ "${branch}" = "${TRUSTED_BRANCH}" ]] || [[ "${want}" != "${tip}" ]]; then
             warn "This checkout is at ${want}, older than root's source floor ${floor}."
             warn "Root never goes back below it, so it stages nothing from this checkout. (The floor"
             warn "is the newest commit of ${TRUSTED_BRANCH} root has staged from: ${ROOT_SRC_FLOOR_FILE}.)"
@@ -1413,7 +1419,7 @@ root_source_commit() {
     # Raised only by a commit of the trusted branch. An operator's branch forks from it and may
     # never be merged as itself (a squash merge makes a new commit), so a floor on the branch would
     # leave every later commit of the trusted branch below it, and root refusing them all.
-    if [ "${branch}" = "${TRUSTED_BRANCH}" ] && ! _raise_source_floor "${want}"; then
+    if [[ "${branch}" = "${TRUSTED_BRANCH}" ]] && ! _raise_source_floor "${want}"; then
         warn "Could not record ${want} as root's source floor in ${ROOT_SRC_FLOOR_FILE}; it stays"
         warn "where it was. Root still stages from this commit."
     fi
@@ -1428,7 +1434,7 @@ root_source_commit() {
 # is not read this way — nothing checks who can write its .git — so a root update from one leaves
 # the floor to the next update through root's clone.
 _record_own_source_floor() {
-    [ "$(id -u)" -eq 0 ] && _checkout_is_roots && [ -d "${PANEL_DIR}/.git" ] || return 0
+    [[ "$(id -u)" -eq 0 ]] && _checkout_is_roots && [[ -d "${PANEL_DIR}/.git" ]] || return 0
     local have=""
     have="$(git -C "${PANEL_DIR}" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null || true)"
     case "${have}" in ""|*[!0-9a-f]*) return 0 ;; esac
@@ -1448,7 +1454,7 @@ _record_own_source_floor() {
 # and its warnings would land in the captured path instead of on the screen. Always returns 0: the
 # staging calls that follow each report their own failure.
 _prepare_root_source() {
-    if [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots && ! _operator_src >/dev/null; then
+    if [[ "$(id -u)" -eq 0 ]] && ! _checkout_is_roots && ! _operator_src >/dev/null; then
         root_source_commit || true
     fi
     return 0
@@ -1457,17 +1463,17 @@ _prepare_root_source() {
 stage_root_source() {
     local rel="$1" out="${HELPER_DIR}/.stage-$2" osrc="" from=""
     ${H_SUDO} rm -f "${out}" 2>/dev/null || true
-    if [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots && osrc="$(_operator_src)" \
+    if [[ "$(id -u)" -eq 0 ]] && ! _checkout_is_roots && osrc="$(_operator_src)" \
        && from="$(_operator_file "${osrc}" "${rel}")"; then
         # Root, installing from the operator's own tree: the working tree fetch_code just copied
         # in, read at the path the reach test walked.
         cp -- "${from}" "${out}" 2>/dev/null || { rm -f "${out}" 2>/dev/null; return 1; }
-    elif [ "$(id -u)" -eq 0 ] && ! _checkout_is_roots; then
+    elif [[ "$(id -u)" -eq 0 ]] && ! _checkout_is_roots; then
         # Root, and the panel user owns some of the checkout: its tree, its .git, or both.
         root_source_commit >&2 || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
         _rootgit cat-file blob "${ROOT_SRC_COMMIT}:${rel}" 2>/dev/null \
             | ${H_SUDO} tee "${out}" >/dev/null 2>&1 || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
-    elif [ -d "${PANEL_DIR}/.git" ]; then
+    elif [[ -d "${PANEL_DIR}/.git" ]]; then
         # A checkout the running account owns outright: root's before the chown, or the invoking
         # user's own on a per-user install.
         _gitc cat-file blob "HEAD:${rel}" 2>/dev/null \
@@ -1477,7 +1483,7 @@ stage_root_source() {
         ${H_SUDO} cp -- "${PANEL_DIR}/${rel}" "${out}" 2>/dev/null \
             || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
     fi
-    [ -s "${out}" ] || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
+    [[ -s "${out}" ]] || { ${H_SUDO} rm -f "${out}" 2>/dev/null; return 1; }
     ${H_SUDO} chown root:root "${out}" 2>/dev/null || true
     printf '%s\n' "${out}"
 }
@@ -1519,20 +1525,20 @@ install_recovery_command() {
     # install_root_tools makes: a host keeps whatever recovery command it already had rather than
     # being handed one from a source this installer does not trust. Returning before the fallback
     # matters too — that branch points the symlink into ${PANEL_DIR}, which is panel-writable.
-    if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then
+    if [[ "${ORIGIN_TRUSTED:-1}" -ne 1 ]]; then
         warn "Leaving \`linuxgsm-panel-recover\` as it is — it would have come from an untrusted origin."
         return 0
     fi
-    H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
+    H_SUDO=""; [[ "$(id -u)" -ne 0 ]] && H_SUDO="sudo"
     if ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" 2>/dev/null \
        && _prepare_root_source \
        && stage="$(stage_root_source recover.sh recover.sh)" \
        && ${H_SUDO} install -o root -g root -m 0755 "${stage}" "${HELPER_DIR}/recover.sh" 2>/dev/null; then
         target="${HELPER_DIR}/recover.sh"
         ${H_SUDO} rm -f "${stage}" 2>/dev/null || true
-    elif [ "$(id -u)" -eq 0 ]; then
-        if [ -f "${HELPER_DIR}/recover.sh" ] && [ ! -L "${HELPER_DIR}/recover.sh" ] \
-           && [ "$(stat -c '%U' "${HELPER_DIR}/recover.sh" 2>/dev/null)" = "root" ]; then
+    elif [[ "$(id -u)" -eq 0 ]]; then
+        if [[ -f "${HELPER_DIR}/recover.sh" ]] && [[ ! -L "${HELPER_DIR}/recover.sh" ]] \
+           && [[ "$(stat -c '%U' "${HELPER_DIR}/recover.sh" 2>/dev/null)" = "root" ]]; then
             target="${HELPER_DIR}/recover.sh"
             warn "The recovery command was not refreshed; \`linuxgsm-panel-recover\` keeps the"
             warn "root-owned copy already in ${HELPER_DIR}."
@@ -1540,23 +1546,23 @@ install_recovery_command() {
             warn "No root-owned recovery command could be placed, so \`linuxgsm-panel-recover\` is not"
             warn "linked: root must not run a file from the panel's checkout. Re-run this installer"
             warn "once it can stage one (a clone of ${REPO_URL:-the repository}'s ${DEFAULT_BRANCH:-main}, or with network access)."
-            if [ "$(readlink "${link}" 2>/dev/null)" = "${PANEL_DIR}/recover.sh" ]; then
+            if [[ "$(readlink "${link}" 2>/dev/null)" = "${PANEL_DIR}/recover.sh" ]]; then
                 rm -f "${link}" 2>/dev/null || true
                 warn "Removed the old link that pointed it at ${PANEL_DIR}/recover.sh."
             fi
         fi
-    elif [ -f "${PANEL_DIR}/recover.sh" ]; then
+    elif [[ -f "${PANEL_DIR}/recover.sh" ]]; then
         target="${PANEL_DIR}/recover.sh"
         warn "Recovery command points into the checkout — no root-owned copy could be placed."
         warn "Re-run this installer as root so \`sudo linuxgsm-panel-recover\` is not panel-writable."
     fi
-    [ -n "${target}" ] || return 0
+    [[ -n "${target}" ]] || return 0
     ${H_SUDO} ln -sf "${target}" "${link}" 2>/dev/null || true
 }
 
 # Sets HELPER_OK / ROOT_TOOLS_OK, which write_sudoers_grant reads.
 install_root_tools() {
-    if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then
+    if [[ "${ORIGIN_TRUSTED:-1}" -ne 1 ]]; then
         # Leave HELPER_OK / ROOT_TOOLS_OK as they are: write_sudoers_grant is skipped alongside
         # this, so the host keeps whatever grant it already had rather than being widened.
         return 0
@@ -1567,7 +1573,7 @@ install_root_tools() {
     INSTALLER_DST="${HELPER_DIR}/install.sh"
     DBM_DST="${HELPER_DIR}/db_maintenance.py"
     PANEL_CONF="${HELPER_DIR}/panel.conf"
-    H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
+    H_SUDO=""; [[ "$(id -u)" -ne 0 ]] && H_SUDO="sudo"
 
     local _stage="" _istage=""
 
@@ -1632,21 +1638,21 @@ install_root_tools() {
                 # install.sh in the checkout yet. Fall back to the script actually running — the
                 # shebang test below is what stops that being /usr/bin/bash.
                 _istage=""
-                if [ -f "${SCRIPT_PATH}" ]; then
+                if [[ -f "${SCRIPT_PATH}" ]]; then
                     _istage="${HELPER_DIR}/.stage-install.sh"
                     ${H_SUDO} cp -- "${SCRIPT_PATH}" "${_istage}" 2>/dev/null || _istage=""
                 fi
             fi
-            if [ -n "${_istage}" ] && head -n1 "${_istage}" | grep -q '^#!.*sh'; then
+            if [[ -n "${_istage}" ]] && head -n1 "${_istage}" | grep -q '^#!.*sh'; then
                 ${H_SUDO} install -o root -g root -m 0755 "${_istage}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1
             else
                 warn "Could not find this installer to copy root-owned — skipping."
             fi
-            [ -n "${_istage}" ] && ${H_SUDO} rm -f "${_istage}" 2>/dev/null || true
+            [[ -n "${_istage}" ]] && ${H_SUDO} rm -f "${_istage}" 2>/dev/null || true
             # ALL THREE, not just db_maintenance. The grant below is documented as meaning "every
             # root-owned piece is in place … the helper, db_maintenance, and the root-owned
             # installer", and this flag is what it reads.
-            if [ "${CONF_OK}" -eq 1 ] && [ "${INST_OK}" -eq 1 ]; then
+            if [[ "${CONF_OK}" -eq 1 ]] && [[ "${INST_OK}" -eq 1 ]]; then
                 ROOT_TOOLS_OK=1
                 ok "Offline DB repair installed root-owned at ${DBM_DST}"
             else
@@ -1664,7 +1670,7 @@ install_root_tools() {
     # A fresh install staged the helper from root's own checkout; record where that is on the trusted
     # branch, so the panel cannot ask root to go back below it (the update path records it inside
     # root_source_commit).
-    [ "${HELPER_OK}" -eq 1 ] && _record_own_source_floor
+    [[ "${HELPER_OK}" -eq 1 ]] && _record_own_source_floor
     return 0
 }
 
@@ -1685,11 +1691,11 @@ install_root_tools() {
 GAMEDIG_DIR="${HELPER_DIR}/gamedig"
 GAMEDIG_FILES=(package.json package-lock.json install-gamedig.sh)
 install_gamedig() {
-    if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then
+    if [[ "${ORIGIN_TRUSTED:-1}" -ne 1 ]]; then
         warn "Leaving gamedig as it is — its lockfile would have come from an untrusted origin."
         return 0
     fi
-    H_SUDO=""; [ "$(id -u)" -ne 0 ] && H_SUDO="sudo"
+    H_SUDO=""; [[ "$(id -u)" -ne 0 ]] && H_SUDO="sudo"
     local f mode out line bad=""
     if ! ${H_SUDO} install -d -o root -g root -m 0755 "${HELPER_DIR}" "${GAMEDIG_DIR}" 2>/dev/null; then
         warn "Could not create ${GAMEDIG_DIR} (needs root) — gamedig was not installed."
@@ -1700,14 +1706,14 @@ install_gamedig() {
         stage_root_source "tools/gamedig/${f}" "gamedig-${f}" >/dev/null || { bad="${f}"; break; }
     done
     # Installed under a temporary name first, and renamed into place only once all three are there.
-    if [ -z "${bad}" ]; then
+    if [[ -z "${bad}" ]]; then
         for f in "${GAMEDIG_FILES[@]}"; do
-            mode=0644; [ "${f}" = install-gamedig.sh ] && mode=0755
+            mode=0644; [[ "${f}" = "install-gamedig.sh" ]] && mode=0755
             ${H_SUDO} install -o root -g root -m "${mode}" "${HELPER_DIR}/.stage-gamedig-${f}" \
                 "${GAMEDIG_DIR}/.new-${f}" 2>/dev/null || { bad="${f}"; break; }
         done
     fi
-    if [ -z "${bad}" ]; then
+    if [[ -z "${bad}" ]]; then
         for f in "${GAMEDIG_FILES[@]}"; do
             ${H_SUDO} mv -f "${GAMEDIG_DIR}/.new-${f}" "${GAMEDIG_DIR}/${f}" 2>/dev/null \
                 || { bad="${f}"; break; }
@@ -1716,7 +1722,7 @@ install_gamedig() {
     for f in "${GAMEDIG_FILES[@]}"; do
         ${H_SUDO} rm -f "${HELPER_DIR}/.stage-gamedig-${f}" "${GAMEDIG_DIR}/.new-${f}" 2>/dev/null || true
     done
-    if [ -n "${bad}" ]; then
+    if [[ -n "${bad}" ]]; then
         warn "Could not place tools/gamedig/${bad} root-owned in ${GAMEDIG_DIR} — gamedig was NOT"
         warn "refreshed, and keeps whatever this host already had."
         return 0
@@ -1762,8 +1768,8 @@ install_gamedig() {
 root_tools_present() {
     local f
     for f in "${HELPER_DST:-}" "${DBM_DST:-}" "${INSTALLER_DST:-}" "${PANEL_CONF:-}"; do
-        [ -n "${f}" ] && [ -f "${f}" ] || return 1
-        [ "$(stat -c '%U' "${f}" 2>/dev/null)" = "root" ] || return 1
+        [[ -n "${f}" ]] && [[ -f "${f}" ]] || return 1
+        [[ "$(stat -c '%U' "${f}" 2>/dev/null)" = "root" ]] || return 1
     done
     return 0
 }
@@ -1803,7 +1809,7 @@ can_already_sudo() {
     if id -nG "${_cas_user}" 2>/dev/null | tr " " "\n" | grep -qxE "${_cas_groups}"; then
         echo yes; return 0
     fi
-    if [ -f "${HELPER_DIR}/panel-helper" ]; then
+    if [[ -f "${HELPER_DIR}/panel-helper" ]]; then
         # Root runs the root-owned copy it installed — never the checkout's — and asks one question.
         # -I (isolated): no cwd on sys.path and no PYTHON* variables. A self-update runs this from
         # the panel's own checkout, and `python3 -` puts that directory first on the import path,
@@ -1839,17 +1845,17 @@ CAS_PY
 # account has neither, and must not end up here — the group is a grant, and adding a person to it
 # would let the panel become them.
 sync_game_user_group() {
-    [ "${RUN_AS_ROOT}" -eq 1 ] || return 0
+    [[ "${RUN_AS_ROOT}" -eq 1 ]] || return 0
     groupadd -f "${GAME_GROUP}" >/dev/null 2>&1 || {
         warn "Could not create group '${GAME_GROUP}'; game accounts stay outside the grant."
         return 0
     }
     _joined=0
     for _gh in /home/*; do
-        [ -d "${_gh}" ] || continue
+        [[ -d "${_gh}" ]] || continue
         _gu="$(basename "${_gh}")"
-        [ "${_gu}" = "${PANEL_USER}" ] && continue
-        { [ -d "${_gh}/lgsm/config-lgsm" ] || [ -d "${_gh}/serverfiles" ]; } || continue
+        [[ "${_gu}" = "${PANEL_USER}" ]] && continue
+        { [[ -d "${_gh}/lgsm/config-lgsm" ]] || [[ -d "${_gh}/serverfiles" ]]; } || continue
         id "${_gu}" >/dev/null 2>&1 || continue
         # NEVER enrol an account that can already escalate. The grant says the panel may BECOME a
         # member, so a member who can run sudo makes it NOPASSWD:ALL with one extra hop. Running
@@ -1900,7 +1906,7 @@ sync_game_user_group() {
             _joined=$((_joined + 1))
         fi
     done
-    if [ "${_joined}" -gt 0 ]; then
+    if [[ "${_joined}" -gt 0 ]]; then
         ok "Added ${_joined} game account(s) to '${GAME_GROUP}'"
     fi
     return 0
@@ -1932,13 +1938,13 @@ sync_game_user_group() {
 # as it is typed. This is strictly weaker than the same sudo over real SSH, and it is the reason
 # this is opt-in rather than the default.
 write_terminal_sudo_grant() {
-    [ "${RUN_AS_ROOT}" -eq 1 ] || return 0
+    [[ "${RUN_AS_ROOT}" -eq 1 ]] || return 0
     _tsudo_f=/etc/sudoers.d/00-linuxgsm-panel-terminal
     case "${PANEL_TERMINAL_SUDO:-}" in
         1|yes|true)
             ;;
         0|no|false)
-            if [ -f "${_tsudo_f}" ]; then
+            if [[ -f "${_tsudo_f}" ]]; then
                 rm -f "${_tsudo_f}"
                 ok "Host-terminal sudo disabled (removed ${_tsudo_f})"
             fi
@@ -1946,7 +1952,7 @@ write_terminal_sudo_grant() {
             ;;
         *)
             # Unset: leave the host exactly as it is, and say which way that is.
-            [ -f "${_tsudo_f}" ] && info "Host-terminal sudo is enabled (${_tsudo_f})"
+            [[ -f "${_tsudo_f}" ]] && info "Host-terminal sudo is enabled (${_tsudo_f})"
             return 0
             ;;
     esac
@@ -1966,8 +1972,8 @@ write_terminal_sudo_grant() {
 }
 
 write_sudoers_grant() {
-    [ "${RUN_AS_ROOT}" -eq 1 ] || return 0
-    if { [ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]; } || root_tools_present; then
+    [[ "${RUN_AS_ROOT}" -eq 1 ]] || return 0
+    if { [[ "${HELPER_OK}" -eq 1 ]] && [[ "${ROOT_TOOLS_OK}" -eq 1 ]]; } || root_tools_present; then
         sync_game_user_group
         # TWO lines, and the split is the whole point. Root is reachable only by running the
         # root-owned helper, which validates every argument against its own table. Becoming a GAME
@@ -2000,7 +2006,7 @@ write_sudoers_grant() {
     # narrow and could not place the helper this time gets its grant widened again — a real
     # security downgrade, and it should not slide past in a wall of green ticks.
     case "${SUDO_SCOPE}" in narrow*) _narrow=1 ;; *) _narrow=0 ;; esac
-    if [ "${_narrow}" -eq 1 ]; then
+    if [[ "${_narrow}" -eq 1 ]]; then
         ok "sudo grant: ${SUDO_SCOPE}"
     else
         warn "sudo grant: ${SUDO_SCOPE}"
@@ -2011,14 +2017,14 @@ write_sudoers_grant() {
 
 # ── Is this a fresh install or an update of an existing one? ──
 IS_UPDATE=0
-if [ -f "${PANEL_DIR}/app.py" ] && [ -f "${UNIT_FILE}" ]; then
+if [[ -f "${PANEL_DIR}/app.py" ]] && [[ -f "${UNIT_FILE}" ]]; then
     IS_UPDATE=1
 fi
 
 # ═════════════════════════════════════════════════════════
 # UPDATE PATH  (safe: snapshot → update → health-check → rollback)
 # ═════════════════════════════════════════════════════════
-if [ "${IS_UPDATE}" -eq 1 ]; then
+if [[ "${IS_UPDATE}" -eq 1 ]]; then
     FROM_VER="$(panel_version)"
     info "Existing install detected at ${PANEL_DIR} (version ${FROM_VER}). Updating…"
 
@@ -2033,7 +2039,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # fetches; the working tree stays untouched until fetch_code below.
     CURRENT_SHA=""; TARGET_SHA=""; RESOLVE_ERR=""
     if ! resolve_update_target; then
-        [ -n "${RESOLVE_ERR}" ] \
+        [[ -n "${RESOLVE_ERR}" ]] \
             || RESOLVE_ERR="Couldn't reach the update source (offline, or a private repo without credentials)."
         die "${RESOLVE_ERR}
      Nothing was changed."
@@ -2041,10 +2047,10 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # A venv left behind by an OS release upgrade is the other thing a current checkout can need:
     # the panel cannot start, and this branch used to exit before the only step that rebuilds it.
     # Take the full path instead, for its snapshot, health check and rollback.
-    if [ -n "${CURRENT_SHA}" ] && [ "${CURRENT_SHA}" = "${TARGET_SHA}" ] && _venv_stale; then
+    if [[ -n "${CURRENT_SHA}" ]] && [[ "${CURRENT_SHA}" = "${TARGET_SHA}" ]] && _venv_stale; then
         info "The code is current, but ${VENV_STALE_WHY}. Rebuilding it through the full update."
     fi
-    if [ -n "${CURRENT_SHA}" ] && [ "${CURRENT_SHA}" = "${TARGET_SHA}" ] && ! _venv_stale; then
+    if [[ -n "${CURRENT_SHA}" ]] && [[ "${CURRENT_SHA}" = "${TARGET_SHA}" ]] && ! _venv_stale; then
         # Nothing to FETCH is not nothing to DO. The root-owned pieces and the sudoers grant live
         # outside the checkout, so they can be stale or missing while the code is perfectly current
         # — and this branch used to `exit 0` before reaching either of them.
@@ -2063,7 +2069,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         # append-only `usermod -aG`. So do them, then report.
         check_origin_trusted
         install_root_tools
-        [ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant
+        [[ "${ORIGIN_TRUSTED}" -eq 1 ]] && write_sudoers_grant
         write_terminal_sudo_grant
         # And the recovery command, which was the one root-owned piece this branch backfilled
         # everything EXCEPT. /usr/local/bin/linuxgsm-panel-recover lives outside the checkout and
@@ -2115,7 +2121,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # the same pipeline whose status still has to be 0, because a TRUNCATED archive lists the
     # members it got to before tar failed. One line on purpose: tests/unit/part06.py extracts this
     # function by line and executes it, rather than reimplementing what it hopes it says.
-    snapshot_ok() { local _n; [ -s "$1" ] && _n="$(tar -tzf "$1" 2>/dev/null | wc -l)" && [ "${_n}" -gt 0 ]; }
+    snapshot_ok() { local _n; [[ -s "$1" ]] && _n="$(tar -tzf "$1" 2>/dev/null | wc -l)" && [[ "${_n}" -gt 0 ]]; }
     snapshot_ok "${BACKUP}/code.tgz" || die "Couldn't snapshot the current version (the backup is empty or unreadable) —
      update ABORTED, the panel is unchanged. Check free disk space with 'df -h' and try again."
     # …and the whole data dir (DB + encryption keys + config), since the app runs a
@@ -2160,30 +2166,30 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         # KILLED, so "(exit 0)" was a false statement in the one message the operator gets: name
         # the signal when there was one, and say nothing at all when there is neither.
         local _why=""
-        if [ -n "${_ABORT_SIG}" ]; then
+        if [[ -n "${_ABORT_SIG}" ]]; then
             _why=" (killed by ${_ABORT_SIG})"
-        elif [ "${_rc}" -ne 0 ]; then
+        elif [[ "${_rc}" -ne 0 ]]; then
             _why=" (exit ${_rc})"
         fi
         # A `die` has already printed an accurate, specific message (see die() at the top), so the
         # generic sentence is skipped — but only that sentence. The RECOVERY below runs for a die
         # exactly as it does for an unexplained abort, because the panel is stopped either way.
-        [ "${_DIE_SAID:-0}" -eq 1 ] || warn "The update aborted unexpectedly${_why} with the panel stopped."
-        if [ "${_CODE_FETCHED}" -eq 1 ] && [ -f "${BACKUP}/code.tgz" ]; then
+        [[ "${_DIE_SAID:-0}" -eq 1 ]] || warn "The update aborted unexpectedly${_why} with the panel stopped."
+        if [[ "${_CODE_FETCHED}" -eq 1 ]] && [[ -f "${BACKUP}/code.tgz" ]]; then
             warn "Putting ${FROM_VER} back from the snapshot…"
             find "${PANEL_DIR}" -mindepth 1 -maxdepth 1 \
                 ! -name data ! -name venv -exec rm -rf {} + 2>/dev/null || true
             tar -C "${PANEL_DIR}" -xzf "${BACKUP}/code.tgz" 2>/dev/null || true
             install_deps || true
         fi
-        [ "${RUN_AS_ROOT}" -eq 1 ] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}" 2>/dev/null || true
+        [[ "${RUN_AS_ROOT}" -eq 1 ]] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}" 2>/dev/null || true
         svc daemon-reload || true
         svc start linuxgsm-panel.service || true
-        if [ "${_DIE_SAID:-0}" -eq 1 ]; then
+        if [[ "${_DIE_SAID:-0}" -eq 1 ]]; then
             # The what and the why are already on screen; add only what the die could not know —
             # that the recovery above has run.
             warn "The panel has been restarted on ${FROM_VER}. Snapshot of this attempt: ${BACKUP}"
-            if [ "${_rc}" -eq 0 ]; then _rc=1; fi
+            if [[ "${_rc}" -eq 0 ]]; then _rc=1; fi
             exit "${_rc}"
         fi
         die "Update ABORTED partway through${_why} — the panel has been restarted on ${FROM_VER}.
@@ -2198,7 +2204,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     trap '_update_window_signal SIGTERM 143' TERM
     trap _update_window_abort ERR EXIT
 
-    if [ -d "${PANEL_DIR}/data" ]; then
+    if [[ -d "${PANEL_DIR}/data" ]]; then
         tar -C "${PANEL_DIR}/data" --ignore-failed-read --exclude=./.backups -cf - . 2>/dev/null | ${SNAP_GZ} > "${BACKUP}/data.tgz" || true
         # The service is stopped by now, so this die must put it back — the message promises the
         # panel is unchanged, and a panel that is down is not unchanged.
@@ -2228,18 +2234,18 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # an unprivileged (systemd --user) install keeps the checkout copy, where there is no boundary
     # to cross — it is the same account either way.
     DBM_RUN=""
-    if [ "$(id -u)" -eq 0 ]; then
-        [ -f "/usr/local/lib/linuxgsm-panel/db_maintenance.py" ] \
+    if [[ "$(id -u)" -eq 0 ]]; then
+        [[ -f "/usr/local/lib/linuxgsm-panel/db_maintenance.py" ]] \
             && DBM_RUN="python3 /usr/local/lib/linuxgsm-panel/db_maintenance.py"
-    elif [ -x "${PANEL_DIR}/venv/bin/python3" ] && [ -f "${PANEL_DIR}/db_maintenance.py" ]; then
+    elif [[ -x "${PANEL_DIR}/venv/bin/python3" ]] && [[ -f "${PANEL_DIR}/db_maintenance.py" ]]; then
         DBM_RUN="${PANEL_DIR}/venv/bin/python3 ${PANEL_DIR}/db_maintenance.py"
     fi
-    if [ -n "${DBM_RUN}" ]; then
+    if [[ -n "${DBM_RUN}" ]]; then
         if ${DBM_RUN} update; then
             ok "Database checked"
         else
             _dbrc=$?
-            if [ "${_dbrc}" -eq 2 ]; then
+            if [[ "${_dbrc}" -eq 2 ]]; then
                 warn "The database failed its health check and could not be repaired."
                 svc start linuxgsm-panel.service || true
                 die "Update ABORTED to protect your data. The panel is UNCHANGED and has been
@@ -2267,14 +2273,14 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # built for this python3. After an OS release upgrade it was not, and skipping left a panel
     # that cannot start (see _venv_stale).
     info "[4/6] Installing dependencies…"
-    if [ -x "${PANEL_DIR}/venv/bin/python3" ] && ! _venv_stale \
-       && [ -n "${REQ_BEFORE}" ] && [ "${REQ_BEFORE}" = "${REQ_AFTER}" ]; then
+    if [[ -x "${PANEL_DIR}/venv/bin/python3" ]] && ! _venv_stale \
+       && [[ -n "${REQ_BEFORE}" ]] && [[ "${REQ_BEFORE}" = "${REQ_AFTER}" ]]; then
         ok "Dependencies unchanged — skipping pip (nothing to build)"
     else
         install_deps
         ok "Dependencies installed"
     fi
-    [ "${RUN_AS_ROOT}" -eq 1 ] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
+    [[ "${RUN_AS_ROOT}" -eq 1 ]] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
 
     # Refresh the ROOT-OWNED copies to match the code we just fetched, BEFORE the service comes
     # back up — the new code may call verbs the installed helper does not know yet, and a stale
@@ -2283,7 +2289,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
     # the helper existed gets narrowed here instead of keeping NOPASSWD:ALL indefinitely.
     check_origin_trusted
     install_root_tools
-    [ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant
+    [[ "${ORIGIN_TRUSTED}" -eq 1 ]] && write_sudoers_grant
     write_terminal_sudo_grant
 
     info "[5/6] Starting the service…"
@@ -2310,7 +2316,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         # rolled-back update leaves the tree the host already had alone.
         install_gamedig
         # Prune old snapshots, keep the most recent few.
-        if [ -d "${BACKUP_ROOT}" ]; then
+        if [[ -d "${BACKUP_ROOT}" ]]; then
             ls -1dt "${BACKUP_ROOT}"/*/ 2>/dev/null | tail -n +"$((KEEP_BACKUPS+1))" | xargs -r rm -rf
         fi
         echo ""
@@ -2318,7 +2324,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         # If the panel now answers on HTTPS, say so explicitly. Older installs were plain
         # HTTP, and the self-signed-HTTPS default means an existing http:// bookmark would
         # otherwise just fail with ERR_EMPTY_RESPONSE and no explanation.
-        if [ "${PANEL_SCHEME}" = "https" ]; then
+        if [[ "${PANEL_SCHEME}" = "https" ]]; then
             _uport="$(panel_port)"
             _uip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
                 || hostname -I 2>/dev/null | awk '{print $1}')"
@@ -2333,17 +2339,17 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         # apply them now and reboot (same "bake it in + prove it boots" philosophy as a
         # fresh install). Skipped entirely with PANEL_NO_UPGRADE=1, which the CI auto-deploy
         # sets so it never upgrades/reboots the panel host.
-        if [ "${PANEL_NO_UPGRADE:-0}" != "1" ] && command -v apt-get >/dev/null 2>&1; then
-            UPG_SUDO=""; [ "$(id -u)" -ne 0 ] && UPG_SUDO="sudo"
+        if [[ "${PANEL_NO_UPGRADE:-0}" != "1" ]] && command -v apt-get >/dev/null 2>&1; then
+            UPG_SUDO=""; [[ "$(id -u)" -ne 0 ]] && UPG_SUDO="sudo"
             export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
             ${UPG_SUDO} apt-get update -qq || true
-            if [ "$(${UPG_SUDO} apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst ')" -gt 0 ]; then
+            if [[ "$(${UPG_SUDO} apt-get -s full-upgrade 2>/dev/null | grep -c '^Inst ')" -gt 0 ]]; then
                 echo ""
                 info "System updates are available — applying them now…"
                 ${UPG_SUDO} apt-get -y -o Dpkg::Options::="--force-confold" full-upgrade \
                     || warn "Some packages could not be upgraded — continuing."
                 ${UPG_SUDO} apt-get -y autoremove --purge >/dev/null 2>&1 || true
-                if [ ! -f /var/run/reboot-required ]; then
+                if [[ ! -f /var/run/reboot-required ]]; then
                     ok "System updated — no reboot required."
                 elif pgrep -x tmux >/dev/null 2>&1 || pgrep -x SCREEN >/dev/null 2>&1; then
                     warn "The update needs a reboot, but game servers are running (tmux/screen) —"
@@ -2378,7 +2384,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
        ${BACKUP}/code.tgz
      (data/ and venv/ were not touched.)"
     fi
-    if [ -f "${BACKUP}/data.tgz" ]; then
+    if [[ -f "${BACKUP}/data.tgz" ]]; then
         find "${PANEL_DIR}/data" -mindepth 1 -maxdepth 1 ! -name .backups -exec rm -rf {} + 2>/dev/null || true
         if ! tar -C "${PANEL_DIR}/data" -xzf "${BACKUP}/data.tgz"; then
             die "Update FAILED, and so did the rollback: the data snapshot could not be unpacked.
@@ -2387,7 +2393,7 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         fi
     fi
     install_deps || true
-    [ "${RUN_AS_ROOT}" -eq 1 ] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
+    [[ "${RUN_AS_ROOT}" -eq 1 ]] && chown -R "${PANEL_USER}:${PANEL_USER}" "${PANEL_DIR}"
     svc daemon-reload || true
     svc restart linuxgsm-panel.service || true
 
@@ -2395,21 +2401,21 @@ if [ "${IS_UPDATE}" -eq 1 ]; then
         ok "Rollback succeeded — the panel is back on the previous version (${FROM_VER}, HTTP ${HEALTH_CODE})."
         echo ""
         die "Update to ${TO_VER} failed its health check and was rolled back. Your panel is unchanged and running.
-     Logs from the failed attempt: $([ "${RUN_AS_ROOT}" -eq 1 ] && echo 'sudo journalctl -u linuxgsm-panel -n 50' || echo 'journalctl --user -u linuxgsm-panel -n 50')
+     Logs from the failed attempt: $([[ "${RUN_AS_ROOT}" -eq 1 ]] && echo 'sudo journalctl -u linuxgsm-panel -n 50' || echo 'journalctl --user -u linuxgsm-panel -n 50')
      Snapshot kept at: ${BACKUP}"
     else
         echo ""
         die "Update FAILED and the automatic rollback could not confirm health either.
      Restore manually from the snapshot at: ${BACKUP}
        (code.tgz + data.tgz — extract over ${PANEL_DIR}, then restart the service)
-     Service logs: $([ "${RUN_AS_ROOT}" -eq 1 ] && echo 'sudo journalctl -u linuxgsm-panel -n 80' || echo 'journalctl --user -u linuxgsm-panel -n 80')"
+     Service logs: $([[ "${RUN_AS_ROOT}" -eq 1 ]] && echo 'sudo journalctl -u linuxgsm-panel -n 80' || echo 'journalctl --user -u linuxgsm-panel -n 80')"
     fi
 fi
 
 # ═════════════════════════════════════════════════════════
 # FRESH INSTALL PATH
 # ═════════════════════════════════════════════════════════
-if [ "${RUN_AS_ROOT}" -eq 1 ]; then
+if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
     ok "Installing as dedicated user '${PANEL_USER}' (root will not run the panel)"
 else
     ok "Installing for the current user '${PANEL_USER}'"
@@ -2420,8 +2426,8 @@ fi
 # up front instead of making the operator babysit apt; if the upgrade needs a reboot
 # (e.g. a new kernel) we reboot at the very end. Fully non-interactive. Skip it entirely
 # with PANEL_NO_UPGRADE=1.
-if [ "${PANEL_NO_UPGRADE:-0}" != "1" ] && command -v apt-get >/dev/null 2>&1; then
-    UPG_SUDO=""; [ "$(id -u)" -ne 0 ] && UPG_SUDO="sudo"
+if [[ "${PANEL_NO_UPGRADE:-0}" != "1" ]] && command -v apt-get >/dev/null 2>&1; then
+    UPG_SUDO=""; [[ "$(id -u)" -ne 0 ]] && UPG_SUDO="sudo"
     info "Bringing the OS fully up to date (one-time — set PANEL_NO_UPGRADE=1 to skip)…"
     export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
     ${UPG_SUDO} apt-get update -qq || true
@@ -2436,7 +2442,7 @@ fi
 # Idempotent and non-fatal — a problem here must never block the install, and it
 # can always be toggled later from the panel's Diagnostics page.
 if command -v apt-get >/dev/null 2>&1; then
-    AU_SUDO=""; [ "$(id -u)" -ne 0 ] && AU_SUDO="sudo"
+    AU_SUDO=""; [[ "$(id -u)" -ne 0 ]] && AU_SUDO="sudo"
     info "Enabling automatic security updates (unattended-upgrades)…"
     export DEBIAN_FRONTEND=noninteractive
     ${AU_SUDO} apt-get install -y unattended-upgrades >/dev/null 2>&1 \
@@ -2473,10 +2479,10 @@ PANEL_PORT="$(choose_and_record_port "${DESIRED_PORT}")"
 # else — so the one outcome where NONE of the three consumers named above would work printed as the
 # green tick. Stop here instead: the operator can free a port or pick one, and either beats a
 # service that restarts every 5s against an address the installer called free.
-if [ -z "${PANEL_PORT}" ]; then
+if [[ -z "${PANEL_PORT}" ]]; then
     die "No free port found in ${DESIRED_PORT}-$((DESIRED_PORT + 50)).
      Free one of them, or set \"port\" in ${PANEL_DIR}/data/config.json, and re-run."
-elif [ "${PANEL_PORT}" != "${DESIRED_PORT}" ]; then
+elif [[ "${PANEL_PORT}" != "${DESIRED_PORT}" ]]; then
     warn "Port ${DESIRED_PORT} is already in use — the panel will use port ${PANEL_PORT} instead."
 else
     ok "Port ${PANEL_PORT} is free for the panel"
@@ -2486,7 +2492,7 @@ install_root_tools
 install_gamedig   # player queries for game servers on this host; root-owned, like the helper
 
 info "[3/4] Registering the service…"
-if [ "${RUN_AS_ROOT}" -eq 1 ]; then
+if [[ "${RUN_AS_ROOT}" -eq 1 ]]; then
     # Path-independent recovery command: `sudo linuxgsm-panel-recover` from anywhere. HERE, beside
     # install_root_tools and before the chown below, for the same reason: until then the checkout
     # is still root's own, so recover.sh is read straight from it. After the chown it is the panel
@@ -2578,7 +2584,7 @@ echo -e "  Update:  ${CYAN}re-run this same command any time — it updates in p
 echo ""
 # ── Hand the user the real URL(s) to open ──
 PORT="$(panel_port)"
-SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+SUDO=""; [[ "$(id -u)" -ne 0 ]] && SUDO="sudo"
 
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
     || curl -fsS --max-time 5 https://ifconfig.me 2>/dev/null \
@@ -2624,8 +2630,8 @@ fi
 # Auto-open the port when Tailscale ISN'T already a way in (not logged in, or UFW
 # doesn't allow the tailscale0 interface) — so a plain-IP install just works. If
 # Tailscale access is set up we leave the public port closed (more private).
-if [ "${UFW_ACTIVE}" -eq 1 ] && [ "${PORT_OPEN}" -eq 0 ] \
-        && { [ -z "${TS_ADDR}" ] || [ "${TS_UFW}" -eq 0 ]; }; then
+if [[ "${UFW_ACTIVE}" -eq 1 ]] && [[ "${PORT_OPEN}" -eq 0 ]] \
+        && { [[ -z "${TS_ADDR}" ]] || [[ "${TS_UFW}" -eq 0 ]]; }; then
     if ${SUDO} ufw allow "${PORT}/tcp" >/dev/null 2>&1; then
         PORT_OPEN=1
         ok "Opened ${PORT}/tcp in UFW so the panel is reachable by IP."
@@ -2633,11 +2639,11 @@ if [ "${UFW_ACTIVE}" -eq 1 ] && [ "${PORT_OPEN}" -eq 0 ] \
 fi
 
 echo -e "${GREEN}Open the panel — the first visit runs the setup wizard:${NC}"
-[ -n "${TS_ADDR}" ] && echo -e "  • Tailscale:  ${CYAN}${PANEL_SCHEME}://${TS_ADDR}:${PORT}${NC}"
-if [ -n "${PUBLIC_IP}" ]; then
-    if [ "${UFW_ACTIVE}" -eq 1 ] && [ "${PORT_OPEN}" -eq 0 ]; then
+[[ -n "${TS_ADDR}" ]] && echo -e "  • Tailscale:  ${CYAN}${PANEL_SCHEME}://${TS_ADDR}:${PORT}${NC}"
+if [[ -n "${PUBLIC_IP}" ]]; then
+    if [[ "${UFW_ACTIVE}" -eq 1 ]] && [[ "${PORT_OPEN}" -eq 0 ]]; then
         echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${NC}  ${YELLOW}(firewalled — run 'ufw allow ${PORT}/tcp' to expose)${NC}"
-    elif [ "${UFW_READ}" -eq 0 ] && command -v ufw >/dev/null 2>&1; then
+    elif [[ "${UFW_READ}" -eq 0 ]] && command -v ufw >/dev/null 2>&1; then
         # ufw is installed but would not answer — as an ordinary user it needs root. Say the state
         # is unknown rather than printing the address as though it were reachable: the health check
         # above proves only that the panel answers on 127.0.0.1.
@@ -2646,7 +2652,7 @@ if [ -n "${PUBLIC_IP}" ]; then
         echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${NC}"
     fi
 fi
-if [ "${PANEL_SCHEME}" = "https" ]; then
+if [[ "${PANEL_SCHEME}" = "https" ]]; then
     echo ""
     echo -e "  ${YELLOW}Served over HTTPS with a built-in self-signed cert, so your browser will show a${NC}"
     echo -e "  ${YELLOW}one-time \"not private\" warning — click Advanced → Proceed. Set up Tailscale Serve${NC}"
@@ -2666,9 +2672,9 @@ echo ""
 #    the players, so we never do it automatically — we tell you to reboot when they're empty.
 #    Skip the reboot entirely with PANEL_NO_UPGRADE=1 or PANEL_NO_REBOOT=1. The panel service is
 #    enabled on boot, so it's back at the URL above ~1 minute after any reboot. ──
-if [ "${PANEL_NO_UPGRADE:-0}" != "1" ] && [ "${PANEL_NO_REBOOT:-0}" != "1" ]; then
-    RB_SUDO=""; [ "$(id -u)" -ne 0 ] && RB_SUDO="sudo"
-    if [ ! -f /var/run/reboot-required ]; then
+if [[ "${PANEL_NO_UPGRADE:-0}" != "1" ]] && [[ "${PANEL_NO_REBOOT:-0}" != "1" ]]; then
+    RB_SUDO=""; [[ "$(id -u)" -ne 0 ]] && RB_SUDO="sudo"
+    if [[ ! -f /var/run/reboot-required ]]; then
         ok "No reboot needed — nothing pending requires one."
     elif pgrep -x tmux >/dev/null 2>&1 || pgrep -x SCREEN >/dev/null 2>&1; then
         warn "A system update needs a reboot to finish (e.g. a new kernel), but this host is running"

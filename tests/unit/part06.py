@@ -1277,7 +1277,7 @@ check("install.sh: refuses rather than adopting the other install",
       "Refusing to build a parallel install." in _inst_guard)
 # The service user's OWN directory must not trip it, or a root install could never update itself.
 check("install.sh: skips the service user's own home when scanning for a per-user install",
-      '[ "${_u}" = "${SERVICE_USER}" ] && continue' in _inst_guard)
+      '[[ "${_u}" = "${SERVICE_USER}" ]] && continue' in _inst_guard)
 # A stray checkout is not an install; requiring the unit file keeps the check specific.
 check("install.sh: requires a user UNIT file, not just an app.py, to call it an install",
       ".config/systemd/user/linuxgsm-panel.service" in _inst_guard)
@@ -1324,9 +1324,9 @@ check("install.sh: the group is synced before the grant that names it is written
 # A person's account must never land in a grant that lets the panel become them. The rule is a
 # property of the home directory — a LinuxGSM instance or a Steam content tree — not a uid range.
 check("install.sh: only homes with a LinuxGSM/Steam tree join the group",
-      '[ -d "${_gh}/lgsm/config-lgsm" ] || [ -d "${_gh}/serverfiles" ]' in _inst)
+      '[[ -d "${_gh}/lgsm/config-lgsm" ]] || [[ -d "${_gh}/serverfiles" ]]' in _inst)
 check("install.sh: the narrow grant is conditional on the root-owned pieces being installed",
-      '[ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]' in _inst)
+      '[[ "${HELPER_OK}" -eq 1 ]] && [[ "${ROOT_TOOLS_OK}" -eq 1 ]]' in _inst)
 check("install.sh: still validates whichever grant it wrote with visudo",
       "visudo -cf /etc/sudoers.d/linuxgsm-panel" in _inst)
 
@@ -1949,7 +1949,7 @@ finally:
 _irt_i = _inst.find("install_root_tools() {")
 _irt = _inst[_irt_i:_inst.find("\n}\n", _irt_i)] if _irt_i != -1 else ""
 check("install.sh: install_root_tools records the floor for a fresh install, once the helper landed",
-      '\n    [ "${HELPER_OK}" -eq 1 ] && _record_own_source_floor\n' in _irt, _irt[-400:])
+      '\n    [[ "${HELPER_OK}" -eq 1 ]] && _record_own_source_floor\n' in _irt, _irt[-400:])
 
 # The helper's panel-self-update is what marks a run as the panel's. The marker is set on the
 # environment the helper BUILDS, after copying its own, so nothing the panel hands sudo removes it —
@@ -1994,7 +1994,7 @@ for _src in ("HELPER_SRC", "DBM_SRC"):
 # Sliced with find(), not index(): an anchor that has MOVED must fail this gate, not raise out of
 # the module and take the other 1900 checks with it. (Injecting a change to the grant condition
 # did exactly that — the suite died at import with a ValueError instead of reporting a failure.)
-_g_i = _inst.find('if { [ "${HELPER_OK}"')
+_g_i = _inst.find('if { [[ "${HELPER_OK}"')
 _g_j = _inst.find("chmod 440 /etc/sudoers.d")
 check("install.sh: the sudoers grant block is where this gate expects it",
       _g_i != -1 and _g_j > _g_i, "start=%d end=%d" % (_g_i, _g_j))
@@ -2104,7 +2104,7 @@ check("install.sh: ROOT_TOOLS_OK is set in exactly one place", len(_rt_set) == 1
 if len(_rt_set) == 1:
     _rt_guard = _rt_lines[_rt_set[0] - 1].strip()
     check("install.sh: ...and only once panel.conf AND the root-owned installer both landed",
-          _rt_guard == 'if [ "${CONF_OK}" -eq 1 ] && [ "${INST_OK}" -eq 1 ]; then', _rt_guard)
+          _rt_guard == 'if [[ "${CONF_OK}" -eq 1 ]] && [[ "${INST_OK}" -eq 1 ]]; then', _rt_guard)
     check("install.sh: the installer copy records its own success rather than `|| true`",
           '"${_istage}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1' in _inst_txt)
 
@@ -2201,8 +2201,8 @@ try:
     open(os.path.join(_su_sb, "rootlib", "db_maintenance.py"), "w").close()
     _su_env = "PANEL_DIR=%s\n" % _su_shlex.quote(os.path.join(_su_sb, "panel"))
 
-    _su_dbm = _su_between('    DBM_RUN=""', '    fi\n    if [ -n "${DBM_RUN}" ]; then')
-    _su_dbm = _su_dbm.rsplit("    if [ -n", 1)[0] + '\necho "DBM_RUN=${DBM_RUN}"\n'
+    _su_dbm = _su_between('    DBM_RUN=""', '    fi\n    if [[ -n "${DBM_RUN}" ]]; then')
+    _su_dbm = _su_dbm.rsplit("    if [[ -n", 1)[0] + '\necho "DBM_RUN=${DBM_RUN}"\n'
     _su_real = _su_dbm.replace("/usr/local/lib/linuxgsm-panel/db_maintenance.py",
                                os.path.join(_su_sb, "rootlib", "db_maintenance.py"))
     _su_gone = _su_dbm.replace("/usr/local/lib/linuxgsm-panel/db_maintenance.py",
@@ -2386,7 +2386,7 @@ try:
           "OK Dependencies unchanged" in _r and "INSTALL_DEPS" not in _r, repr(_r))
     # The common case after a release upgrade: no new panel version, so the checkout is current and
     # the "Already up to date" branch used to exit before the only step that rebuilds the venv.
-    _su_noop = _su_find('    if [ -n "${CURRENT_SHA}" ] && [ "${CURRENT_SHA}" = "${TARGET_SHA}" ]',
+    _su_noop = _su_find('    if [[ -n "${CURRENT_SHA}" ]] && [[ "${CURRENT_SHA}" = "${TARGET_SHA}" ]]',
                         '        exit 0\n    fi\n')
     _su_noop_env = ("CURRENT_SHA=abc\nTARGET_SHA=abc\nFROM_VER=1\nORIGIN_TRUSTED=0\n"
                     "info() { echo \"INFO $*\"; }\nok() { echo \"OK $*\"; }\n"
@@ -2496,6 +2496,24 @@ try:
     _r = _eg_run(True)
     check("install.sh: ...and a host that has npm does not reinstall it",
           "APT install -y npm" not in _r and "NPM " not in _r, repr(_r[-300:]))
+    # The version tests are [[ -lt ]] / [[ -ge ]], which read their operands as ARITHMETIC: a
+    # leading zero is octal there ("08" an error, "020" is 16), where `[` read decimal. The digits
+    # come from `node -v` and `apt-cache policy`, so ensure_nodejs reads each one base 10 first.
+    # Driven with the two outputs a bare [[ ]] would get wrong.
+    _eg_ns = 'nodesource_setup() { echo "NODESOURCE_SETUP"; return 1; }\n'
+    _r = _eg_run(True, _eg_shim.replace("node() { echo v22.3.0; }", "node() { echo v08.17.0; }")
+                 + _eg_ns)
+    check("install.sh: ensure_nodejs reads `node -v` v08 as Node 8 (too old, so it installs one), "
+          "not as an octal error",
+          "v22.3.0" in _eg_shim and "INFO Installing Node.js 22 from NodeSource" in _r
+          and "NODESOURCE_SETUP" in _r, repr(_r[-300:]))
+    _r = _eg_run(True, _eg_shim.replace("node() { echo v22.3.0; }", "node() { echo v12.22.9; }")
+                 .replace("apt-cache() { :; }",
+                          "apt-cache() { printf '  Installed: (none)\\n  Candidate: 020.1.0\\n'; }")
+                 + _eg_ns)
+    check("install.sh: ...and reads the distro's candidate 020 as Node 20 (new enough), not octal 16",
+          "apt-cache() { :; }" in _eg_shim and "INFO Installing Node.js 20 from the distro" in _r
+          and "APT install -y nodejs" in _r, repr(_r[-300:]))
 
     # ── install_gamedig: the three files root-owned from root's own source, then the script ──────
     # Root runs install-gamedig.sh, so it is a boundary file like the helper: it must come from
@@ -2588,7 +2606,7 @@ try:
     # Every path that places root-owned pieces places this one too — the full update, the
     # already-up-to-date re-run, and a fresh install.
     import re as _re_ig
-    _ig_upd = _su_find('if [ "${IS_UPDATE}" -eq 1 ]; then', '\n    BACKUP_ROOT=')
+    _ig_upd = _su_find('if [[ "${IS_UPDATE}" -eq 1 ]]; then', '\n    BACKUP_ROOT=')
     _ig_full = _su_find("\n    fetch_code\n    _CODE_FETCHED=1", 'ok "Update complete: ')
     _ig_fresh = _su_find("\nfetch_code\n", 'info "[3/4] Registering the service')
 
@@ -3084,11 +3102,11 @@ try:
         i = _su_txt.index(name + "() {")
         return _su_txt[i:_su_txt.index("\n}\n", i)]
 
-    _su_guard = 'if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then'
+    _su_guard = 'if [[ "${ORIGIN_TRUSTED:-1}" -ne 1 ]]; then'
     check("install.sh: install_root_tools returns early when the origin is not trusted",
           _su_guard in _su_body("install_root_tools"))
     check("install.sh: ...and the sudoers grant is not rewritten from an untrusted checkout",
-          '[ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant' in _su_txt)
+          '[[ "${ORIGIN_TRUSTED}" -eq 1 ]] && write_sudoers_grant' in _su_txt)
     # install_recovery_command is the one root-owned file an untrusted origin could still place,
     # and it was NOT gated. On the update path fetch_code has already `git reset --hard`-ed to the
     # untrusted commit before check_origin_trusted runs, and this function stages recover.sh from
@@ -5645,7 +5663,7 @@ eq("prefix: ...and no mount key at all leaves the argument in charge",
 _inst = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
 check("install.sh: the root-owned tools are installed by a FUNCTION, callable from both paths",
       "install_root_tools() {" in _inst and "write_sudoers_grant() {" in _inst)
-_upd = _inst[_inst.index("if [ \"${IS_UPDATE}\" -eq 1 ]; then"):]
+_upd = _inst[_inst.index("if [[ \"${IS_UPDATE}\" -eq 1 ]]; then"):]
 _upd_body = _upd[:_upd.index("    # ── Health check FAILED")]
 check("install.sh: the UPDATE path refreshes the root-owned helper before restarting the service",
       "install_root_tools" in _upd_body
@@ -7400,7 +7418,7 @@ for _needed in ("install_root_tools", "write_sudoers_grant", "check_origin_trust
 # ...and it must still be gated on the origin, exactly as the real update path is: an untrusted
 # origin must not be able to get a grant written for it by doing nothing.
 check("install.sh: ...with the grant still gated on a trusted origin",
-      '[ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant' in _noop, _noop[-200:])
+      '[[ "${ORIGIN_TRUSTED}" -eq 1 ]] && write_sudoers_grant' in _noop, _noop[-200:])
 
 # ── no unit check may READ or WRITE the machine's own config.json ──────────────────────────────
 # Two turned up in one audit. part06's PrefixMiddleware checks READ it, so they passed on a dev box

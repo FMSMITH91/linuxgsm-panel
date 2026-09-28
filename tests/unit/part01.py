@@ -2440,7 +2440,7 @@ import subprocess as _iw_sub     # noqa: E402
 import tempfile as _iw_tmp       # noqa: E402
 
 _iw_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
-_iw_upd = _iw_src[_iw_src.index('if [ "${IS_UPDATE}" -eq 1 ]; then'):
+_iw_upd = _iw_src[_iw_src.index('if [[ "${IS_UPDATE}" -eq 1 ]]; then'):
                   _iw_src.index("    # ── Health check FAILED")]
 
 # (1) Ordering: quiesce, THEN tar the database. The gates that MEASURE that ordering EXECUTE
@@ -2473,6 +2473,8 @@ def _iw_upto(start, end):
 
 
 _iw_die = ([ln for ln in _iw_src.splitlines() if ln.startswith("die()")] or [""])[-1]
+# …with the top-level line that gives _DIE_SAID its starting value, as install.sh runs it.
+_iw_die_init = [ln for ln in _iw_src.splitlines() if ln.startswith("_DIE_SAID=")]
 # The handler + its arming, exactly as install.sh has them…
 _iw_window = _iw_seg("    _CODE_FETCHED=0", "trap _update_window_abort ERR EXIT")
 # …the real [3/6] call site, so the marker that tells the handler the tree has been replaced is
@@ -2490,17 +2492,18 @@ _iw_stage12 = _iw_upto('    info "[1/6] Snapshotting', '    info "[3/6] Fetching
 _iw_grants = _iw_upto("\n    check_origin_trusted\n", '\n    info "[5/6]')
 
 
-def _iw_run(scenario, panel_dir, backup):
+def _iw_run(scenario, panel_dir, backup, env=None):
     """Run install.sh's real stopped-window code in bash, then `scenario`. → (rc, output).
 
     Everything that would touch the host (systemctl, pip, the tuning drop-ins) is stubbed to echo,
-    so this measures the control flow and nothing else."""
+    so this measures the control flow and nothing else. `env`: extra environment for the run."""
     script = "\n".join([
         "set -euo pipefail",
         "RED=''; GREEN=''; YELLOW=''; CYAN=''; NC=''",
         'info() { echo "INFO $*"; }',
         'ok()   { echo "OK $*"; }',
         'warn() { echo "WARN $*"; }',
+        *_iw_die_init,
         _iw_die,
         'svc() { echo "SVC $*"; }',
         "install_deps() { echo 'INSTALL_DEPS'; }",
@@ -2517,7 +2520,8 @@ def _iw_run(scenario, panel_dir, backup):
         scenario,
         "echo 'WINDOW-COMPLETED'",
     ])
-    p = _iw_sub.run(["bash", "-c", script], capture_output=True, text=True)
+    p = _iw_sub.run(["bash", "-c", script], capture_output=True, text=True,
+                    env=dict(os.environ, **env) if env else None)
     return p.returncode, p.stdout + p.stderr
 
 
@@ -2603,6 +2607,22 @@ try:
     check("install.sh: ...and says what happened, instead of ending the script with no message",
           "aborted unexpectedly" in _iw_out and "WINDOW-COMPLETED" not in _iw_out and _iw_rc != 0,
           "rc=%d %s" % (_iw_rc, _iw_out[-300:]))
+    # The handler tests _DIE_SAID with [[ -eq ]], which evaluates its operand as ARITHMETIC: the
+    # subscript of a set array there runs its command substitution (`[` only said "integer
+    # expected"). So install.sh sets the flag itself: a value from the environment must not be
+    # run by root, and an inherited 1 must not silence the one sentence an unexplained abort gets.
+    _iw_mark = os.path.join(_iw_dir, "die-said-evaluated")
+    _iw_rc, _iw_out = _iw_run("false", _iw_pd, _iw_bk, env={
+        "_DIE_SAID": "BASH_VERSINFO[$(touch %s)]" % _iw_shlex.quote(_iw_mark)})
+    check("install.sh: a _DIE_SAID from the environment is never evaluated by the abort handler",
+          len(_iw_die_init) == 1 and not os.path.exists(_iw_mark)
+          and "aborted unexpectedly" in _iw_out and _iw_rc != 0,
+          "init=%r ran=%r rc=%d %s" % (_iw_die_init, os.path.exists(_iw_mark), _iw_rc,
+                                       _iw_out[-300:]))
+    _iw_rc, _iw_out = _iw_run("false", _iw_pd, _iw_bk, env={"_DIE_SAID": "1"})
+    check("install.sh: ...and an inherited _DIE_SAID=1 does not silence an unexplained abort",
+          "aborted unexpectedly" in _iw_out and "SVC start linuxgsm-panel.service" in _iw_out
+          and _iw_rc != 0, "rc=%d %s" % (_iw_rc, _iw_out[-300:]))
 
     # …and once fetch_code has swapped the tree, the abort has to put the OLD code back, not just
     # restart the service on top of a half-installed new version. This runs the REAL [3/6] call

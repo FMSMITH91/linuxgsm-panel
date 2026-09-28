@@ -3342,6 +3342,63 @@ check("install.sh: no downloaded script is run — NodeSource's setup script is 
 check("install.sh: ensure_nodejs configures NodeSource through the pinned-key setup",
       any(_re_ntc.fullmatch(r'\s*if nodesource_setup "\$\{S\}"; then', _l)
           for _l in _ntc_fn.splitlines()))
+# The key fetch follows redirects (-L). Without --proto =https a redirect could send it to plain
+# http, so the file the fingerprint check reads could come from anyone on the path. The pin
+# still refuses a wrong key, but only https is an answer at all. Driven: curl is a shell function
+# that records its argv one word per line, so the check sees the flag after bash's quote removal.
+# The fetch then fails, so nothing is trusted and gpg is never reached.
+_ns_argv_dir = _tempfile.mkdtemp(prefix="panel-nodesource-argv-")
+try:
+    _ns_argv_log = os.path.join(_ns_argv_dir, "argv")
+    _ns_argv_p = _sp_ns.run(["bash", "-c", "\n".join([
+        "\n".join(_l for _l in _ns_code_lines if _l.startswith("NODESOURCE_")),
+        _ns_fn("nodesource_key_ok"), _ns_fn("nodesource_setup"),
+        "dpkg() { echo amd64; }", "apt-get() { :; }",
+        "curl() { printf '%%s\\n' \"$@\" > %s; return 22; }" % _shlex_q(_ns_argv_log),
+        "nodesource_setup ''; echo \"RC=$?\""])], capture_output=True, text=True, timeout=60)
+    try:
+        with open(_ns_argv_log, encoding="utf-8") as _fh:
+            _ns_argv = _fh.read().splitlines()
+    except OSError:
+        _ns_argv = []
+    _ns_url = _re_ntc.search(r'^NODESOURCE_KEY_URL="([^"]+)"$', _ntc_sh, _re_ntc.M)
+    check("install.sh: the NodeSource key fetch refuses anything but https, redirects included",
+          "--proto" in _ns_argv and _ns_argv[_ns_argv.index("--proto") + 1:][:1] == ["=https"]
+          and bool(_ns_url) and _ns_url.group(1).startswith("https://")
+          and _ns_url.group(1) in _ns_argv
+          and _ns_argv.index("--proto") < _ns_argv.index(_ns_url.group(1))
+          and _ns_argv_p.stdout.strip().endswith("RC=1"),
+          "argv=%r out=%r" % (_ns_argv, (_ns_argv_p.stdout + _ns_argv_p.stderr)[-200:]))
+finally:
+    _shutil_ns.rmtree(_ns_argv_dir, ignore_errors=True)
+
+
+def _curl_calls(src):
+    """Every curl invocation in shell source: one logical line, from `curl` to the end of its
+    command. Comments, `command -v curl` and package names are not invocations."""
+    _logical = src.replace("\\\n", " ")
+    _out = []
+    for _ln in _logical.splitlines():
+        if _ln.lstrip().startswith("#"):
+            continue
+        for _m in _re_ntc.finditer(r"(?<![\w./-])curl\s+(?=-)", _ln):
+            _rest = _ln[_m.start():]
+            _cut = _re_ntc.search(r"\s(?:\||&&|\|\|)\s|;|$", _rest)
+            _out.append(_rest[:_cut.start()])
+    return _out
+
+
+# The same rule for the whole installer: a curl that follows a redirect is https-only, so one
+# added later cannot quietly accept a downgrade. The four fetches that follow no redirect (the
+# health check and the public-IP lookups) are not held to it.
+_ns_curls = _curl_calls(_ntc_sh)
+_ns_follow = [_c for _c in _ns_curls
+              if _re_ntc.search(r"\s-[A-Za-z]*L[A-Za-z]*\b|\s--location\b", _c)]
+check("install.sh: every curl that follows redirects says --proto '=https'",
+      len(_ns_curls) >= 2 and len(_ns_follow) >= 1
+      and all(_re_ntc.search(r"\s--proto[ =](?:'=https'|\"=https\"|=https)(?=\s)", _c)
+              for _c in _ns_follow),
+      "all=%r following=%r" % (_ns_curls, _ns_follow))
 
 # The add-host bootstrap configures NodeSource on REMOTE hosts through the nodesource-setup verb
 # (privileged.py), which ran `curl … setup_lts.x | bash -` as root until it became one. Two copies
