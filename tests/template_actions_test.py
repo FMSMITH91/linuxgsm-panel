@@ -2305,7 +2305,7 @@ _SECTION_PAGE_TEMPLATE = {
     "/servers/install": "install_server.html",
 }
 _pal_src = (ROOT / "static" / "js" / "palette.js").read_text(encoding="utf-8")
-_sec_block = re.search(r"var SECTIONS = \[(.*?)\n  \];", _pal_src, re.S)
+_sec_block = re.search(r"var PALETTE_SECTIONS = \[(.*?)\n\];", _pal_src, re.S)
 _sections = re.findall(r"page:\s*'([^']+)'\s*,\s*hash:\s*'([^']+)'",
                        _sec_block.group(1) if _sec_block else "")
 check(len(_sections) >= 10, "palette: the SECTIONS table was found and parsed",
@@ -2390,7 +2390,7 @@ check(not _unreachable,
 
 # HOST_SECTIONS are expanded per host at runtime, so their page is always remote_manage.html.
 # Same rot, same gate: a renamed card id there breaks every host's entry at once.
-_host_block = re.search(r"var HOST_SECTIONS = \[(.*?)\n  \];", _pal_src, re.S)
+_host_block = re.search(r"var PALETTE_HOST_SECTIONS = \[(.*?)\n\];", _pal_src, re.S)
 _host_hashes = re.findall(r"hash:\s*'([^']+)'", _host_block.group(1) if _host_block else "")
 check(len(_host_hashes) >= 5, "palette: the HOST_SECTIONS table was found and parsed",
       "%d entries parsed" % len(_host_hashes))
