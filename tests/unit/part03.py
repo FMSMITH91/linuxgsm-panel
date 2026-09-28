@@ -776,6 +776,16 @@ eq("metrics: game_procs parsed", _m["game_procs"], 3)
 check("metrics: port_open true when a socket is listening", _m["port_open"] is True)
 eq("metrics: cpu_percent from the /proc/stat delta", _m["cpu_percent"], 20.0)
 eq("metrics: game_cpu_percent from the jiffie delta", _m["game_cpu_percent"], 100.0)
+# ...and a count of ZERO listening sockets is a closed port — the half of the online check that
+# says a crashed game is down while its tmux session lingers.
+_o_metrics_rc = _sm_core.run_command
+try:
+    _sm_core.run_command = lambda server, cmd, timeout=30, sudo=None: (
+        _METRICS_OUT.replace("PORT 1", "PORT 0"), "", 0)
+    _m0 = _sm_core.server_live_metrics(None, "gmodserver", 27015, force=True)
+finally:
+    _sm_core.run_command = _o_metrics_rc
+check("metrics: port_open false when nothing is listening", _m0["port_open"] is False, repr(_m0))
 
 # ...and a game user or port that is not an identifier / a number is never interpolated. Both go
 # into the command unquoted, and @validates runs on assignment only: a legacy or restored row

@@ -2154,6 +2154,16 @@ try:
           and _F.upload_file(_p8_srv(), "cs2server", "../..", "x", b"") == (False, "Invalid path")
           and _F.delete_path(_p8_srv(), "cs2server", "../../etc") == (False, "Refusing to delete this path")
           and _calls == [], "calls=%r" % _calls)
+    # The listing itself: folders before files, each group by name ignoring case, a short line
+    # skipped, and the LinuxGSM script flagged protected (deleting it would break the server).
+    _fl_rc(("f\t10\tzeta.txt\nd\t4096\tMaps\nf\t7\tcs2server\nd\t4096\tcfg\nf\tjunk\n", "", 0))
+    _bd = _F.browse_dir(_p8_srv(), "cs2server", "", "cs2server")
+    eq("files: a listing shows folders first, then files, each by name ignoring case",
+       [(e["name"], e["is_dir"], e["size"]) for e in (_bd or {}).get("entries", [])],
+       [("cfg", True, 4096), ("Maps", True, 4096), ("cs2server", False, 7), ("zeta.txt", False, 10)])
+    check("files: ...and the instance script in the home is flagged protected",
+          [e["name"] for e in (_bd or {}).get("entries", []) if e["protected"]] == ["cs2server"],
+          repr(_bd))
     del _written[:]
     eq("files: a write under the home goes through the user write, content encoded",
        (_F.write_file(_p8_srv(), "cs2server", "serverfiles/cfg/server.cfg", "sv_cheats 0\n"), _written),

@@ -4913,6 +4913,13 @@ try:
     check("run_as_game_user: ...and no element of that argv contains a shell metacharacter",
           _ragu_argv and not any(ch in el for el in _ragu_argv[0] for ch in ";|&$`<>"),
           str(_ragu_argv))
+    # The shell form is `2>&1` and every caller reads LinuxGSM's errors out of stdout, so the verb's
+    # two streams are merged into stdout too — a transport switch must not move an error message.
+    _sm_core._exec_local_argv = lambda argv, **k: ("Starting gmodserver", "Error! no steamcmd", 1)
+    check("run_as_game_user: the helper path merges stderr into stdout, as `2>&1` did",
+          _sm_core.run_as_game_user(NS(), "gmodserver", "start", selfname="gmodserver")
+          == ("Starting gmodserver\nError! no steamcmd", "", 1))
+    _sm_core._exec_local_argv = lambda argv, **k: (_ragu_argv.append(argv), ("out", "", 0))[1]
 
     # The refusal has to bite BEFORE the transport, or a bad value reaches one of them.
     _ragu_argv.clear(); _ragu_shell.clear()

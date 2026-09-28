@@ -1094,6 +1094,28 @@ try:
           % ([_i[:160] for _i in _bl_inner],))
 finally:
     _sm_core.run_command = _orig_run8
+# The players-online skip itself. The route tests stub run_game_backup whole, so nothing ran it.
+# LinuxGSM's `backup` STOPS the server, so ONE connected player is enough to skip — and the count
+# is asked with the server's query_type override, whose absence is the bug its docstring records.
+_cap9 = {"cmds": [], "pc": []}
+_orig_run9, _orig_pc9 = _sm_core.run_command, _sm_cron.player_count
+try:
+    _sm_core.run_command = lambda s, c, **k: (_cap9["cmds"].append(c), ("", "", 0))[1]
+    _sm_cron.player_count = lambda *a, **k: (_cap9["pc"].append(a), 1)[1]
+    _r9 = _sm_game.run_game_backup(None, "gm", "gmodserver", 2, game_type="pz", port=16261,
+                                   query_type="przomboid")
+    check("run_game_backup: ONE player online skips the backup rather than disconnect them",
+          _r9[0] is False and _r9[2] is True and "1 player(s) online" in _r9[1]
+          and not any("./gmodserver backup" in _c for _c in _cap9["cmds"]),
+          "%r %r" % (_r9, _cap9["cmds"][:2]))
+    check("run_game_backup: ...asking with the server's query_type override",
+          [_a[-1] for _a in _cap9["pc"]] == ["przomboid"], str(_cap9["pc"]))
+    _r9f = _sm_game.run_game_backup(None, "gm", "gmodserver", 2, force=True)
+    check("run_game_backup: force=True backs up with players on (positive control)",
+          _r9f[0] is True and _r9f[2] is False
+          and any("./gmodserver backup" in _c for _c in _cap9["cmds"]), str(_r9f))
+finally:
+    _sm_core.run_command, _sm_cron.player_count = _orig_run9, _orig_pc9
 
 # ── a backup.lock is orphaned only when no backup is running ─────────────────────────────────
 # Any lock older than five minutes was deleted, on a comment's word that the panel runs one game
@@ -1241,6 +1263,20 @@ try:
     _sm_core.run_command = lambda s, c, **k: ('{"c":7,"ok":true}', "", 0)
     check("player_count_via_lgsm_query: a real count is returned",
           _sm_cron.player_count_via_lgsm_query(None, "gm", "gmodserver") == 7)
+    # Only querymode 2 is a gamedig query. 1 is LinuxGSM's process check (Factorio) and there is
+    # nothing to ask, and the port falls back from queryport to port to the one the panel knows.
+    _cap_q.clear()
+    _sm_core.run_command = lambda s, c, **k: (_cap_q.__setitem__("cmd", c), ('{"c":7,"ok":true}', "", 0))[1]
+    _sm_files.lgsm_get_values = lambda *a, **k: {"querymode": "1", "querytype": "protocol-valve",
+                                                 "queryport": "27015", "port": "27015"}
+    check("player_count_via_lgsm_query: querymode 1 (a process check) is None, and queries nothing",
+          _sm_cron.player_count_via_lgsm_query(None, "gm", "gmodserver") is None and "cmd" not in _cap_q,
+          _cap_q.get("cmd", "")[:120])
+    _sm_files.lgsm_get_values = lambda *a, **k: {"querymode": "2", "querytype": "minecraft",
+                                                 "queryport": "", "port": ""}
+    check("player_count_via_lgsm_query: with no port in the .cfg, the panel's own port is queried",
+          _sm_cron.player_count_via_lgsm_query(None, "gm", "mcserver", fallback_port=25565) == 7
+          and ":25565 " in _cap_q.get("cmd", ""), _cap_q.get("cmd", "")[:120])
     # ...and an unreadable CONFIG is unknown too, rather than falling through as "no query".
     _sm_files.lgsm_get_values = lambda *a, **k: None
     check("player_count_via_lgsm_query: an unreadable LinuxGSM config is None",
@@ -3085,6 +3121,17 @@ try:
     _ok4, _msg4 = _sm_gmod.gmod_mount_setup(NS(), "gmodserver", "gmodcontent", ["cstrike"])
     check("gmod mounts: a liveness check that FAILS warns rather than claiming it is live",
           _ok4 is True and "restart" in _msg4.lower(), _msg4)
+
+    # The write is confirmed by its sentinel, not by rc alone: a chain that stopped part-way under a
+    # wrapper that still exits 0 prints no __OK__, and nothing was written.
+    def _gm_no_ok(server, cmd, **kw):
+        if "base64 -d" in cmd:
+            return ("", "", 0)
+        return ("gmodcontent", "", 0) if cmd.startswith("id -gn") else ("__LIVE__", "", 0)
+    _sm_core.run_command = _gm_no_ok
+    _ok5, _msg5 = _sm_gmod.gmod_mount_setup(NS(), "gmodserver", "gmodcontent", ["cstrike"])
+    check("gmod mounts: a write that never printed its __OK__ is a failure, not 'Mounted'",
+          _ok5 is False and "Mounted" not in _msg5, _msg5)
 finally:
     _sm_core.run_command, _sm_core.run_privileged = _orig_gm_run, _orig_gm_priv
 

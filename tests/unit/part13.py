@@ -2751,6 +2751,15 @@ try:
     check("core connect: a dead pooled client is closed and replaced",
           _c1c_10 is not _c1_10 and _c1_10.closed == 1
           and _sm_core._connections.get(_key1_10) is _c1c_10, "")
+    # force_new means a NEW connection even while the pooled one is alive (the caller has reason
+    # to distrust it), and the new one takes the pool slot. Restored after, for the checks below.
+    _made_fn10 = len(_FakeSSH10.made)
+    _c1f_10 = _gc10(_pw_srv10, force_new=True)
+    check("core connect: force_new opens a fresh client even while the pooled one is alive",
+          isinstance(_c1f_10, _FakeSSH10) and _c1f_10 is not _c1c_10
+          and len(_FakeSSH10.made) == _made_fn10 + 1
+          and _sm_core._connections.get(_key1_10) is _c1f_10, repr(_c1f_10))
+    _sm_core._connections[_key1_10] = _c1c_10
     _c1c_10.get_transport = _raiser10(EOFError("transport torn down"))
     _c1c_10.fail_close = True
 

@@ -1396,6 +1396,26 @@ try:
     finally:
         _sm_core.run_privileged, _sm_cron._read_cron_status = _o_rp2, _o_st2
         _sm_cron._read_cron_run_times = _o_rt2
+    # The history columns. A job the recorder has no status for still shows WHEN it last ran, from
+    # cron's own log, so the column never regresses to "—"; one it has status for shows that.
+    _CR_MON = "/home/gm/gmodserver monitor > /dev/null 2>&1"
+
+    def _cron_hist(status, run_times):
+        _o = (_sm_core.run_privileged, _sm_cron._read_cron_status, _sm_cron._read_cron_run_times)
+        try:
+            _sm_core.run_privileged = lambda *_a, **_k: ("*/5 * * * * " + _CR_MON, "", 0)
+            _sm_cron._read_cron_status = lambda *_a, **_k: status
+            _sm_cron._read_cron_run_times = lambda *_a, **_k: run_times
+            return [(j["last_run"], j["ok"], j["error"]) for j in (_sm_cron.list_cron_jobs(None, "gm") or [])]
+        finally:
+            _sm_core.run_privileged, _sm_cron._read_cron_status, _sm_cron._read_cron_run_times = _o
+
+    check("cron list: a job with no recorder status still shows its last run from cron's own log",
+          _cron_hist({}, {_CR_MON: 1700000000}) == [(1700000000, None, "")],
+          repr(_cron_hist({}, {_CR_MON: 1700000000})))
+    check("cron list: ...and a job the recorder HAS a status for shows that status",
+          _cron_hist({_sm_cron._cron_job_id(_CR_MON): {"last_run": 5, "ok": False, "error": "boom"}},
+                     {_CR_MON: 1700000000}) == [(5, False, "boom")])
     # ── a crontab that could not be READ is not an empty crontab ────────────────────────────
     # The rc was discarded, so every failure parsed to []. Three transports reach here: a local
     # helper failure, an unreachable tailscale/ssh host (which answers ("", "...", -1) rather than
@@ -2111,6 +2131,12 @@ try:
            _argvs[-1][3], "game-dir-tar")
         check("stream_path: no shell is involved on the helper path",
               not any(x in ("bash", "/bin/bash", "sh") for x in _argvs[-1]), str(_argvs[-1]))
+        # The backup download's own local path, which only its refusals were run through: the
+        # helper verb that reads AS the game user, handed the account and the archive name.
+        eq("stream_game_backup: a local backup download goes through its helper verb, as argv",
+           (b"".join(_sm_cron.stream_game_backup(_FakeSrv(), "csgoserver", "csgoserver-2026.tar.zst")),
+            _argvs[-1][3:6]),
+           (b"abcdef", ["game-backup-read", "csgoserver", "csgoserver-2026.tar.zst"]))
         # No helper yet (a host between `git pull` and the next install.sh run): still argv, and
         # still read AS THE GAME USER — that is the property the whole design rests on.
         _sm_core.helper_present = lambda: False
