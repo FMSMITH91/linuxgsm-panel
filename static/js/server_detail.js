@@ -72,29 +72,7 @@ function renderPlayers(d){
   if(card.style.display==='none') return;
   var engine=d.engine||'';
   window._plEngine = engine;   // the ban dialog uses this to decide if "all servers" can apply
-  var unsup=document.getElementById('pl-unsupported'), empty=document.getElementById('pl-empty'),
-      wrap=document.getElementById('pl-table-wrap'), ann=document.getElementById('pl-announce'),
-      cnt=document.getElementById('pl-count'), netonly=document.getElementById('pl-netonly');
-  if(ann) ann.style.display = (_CAN_SAY && caps.say) ? 'flex' : 'none';
-  if(netonly) netonly.style.display='none';
-  if(!queryable){ if(unsup)unsup.style.display=''; if(empty)empty.style.display='none'; if(wrap)wrap.style.display='none'; if(cnt)cnt.textContent=''; return; }
-  if(unsup) unsup.style.display='none';
-  // gamedig couldn't read the server and the console wasn't run: show the GSLT / load-once hint for
-  // a console-capable game, rather than a misleading "no players connected". But if a list is already
-  // on screen (e.g. you just loaded it from the console), keep it — an automatic gamedig miss must
-  // not blank what you explicitly pulled.
-  if(d.unknown){
-    var hasRows = wrap && wrap.style.display !== 'none';
-    if(!hasRows){
-      if(netonly && d.console_capable){ netonly.style.display=''; }
-      else if(unsup){ unsup.style.display=''; }
-      if(empty)empty.style.display='none';
-    }
-    return;
-  }
-  if(cnt) cnt.textContent='('+players.length+')';
-  if(!players.length){ if(empty)empty.style.display=''; if(wrap)wrap.style.display='none'; return; }
-  if(empty) empty.style.display='none'; if(wrap) wrap.style.display='';
+  if(!_plShowPanels(d, caps, players, queryable)) return;
   var rows=players.map(function(p){
     var acts='';
     if(_CAN_MODERATE){
@@ -118,6 +96,43 @@ function renderPlayers(d){
       +(_CAN_MODERATE?('<td class="text-nowrap">'+acts+'</td>'):'')+'</tr>';
   }).join('');
   document.getElementById('pl-rows').innerHTML=rows;  // nosemgrep
+}
+
+// Which parts of the players card show for one answer: the announce box, and then one of
+// "unsupported", the console hint, "no players" or the table. True when it is the table, which
+// renderPlayers then fills.
+function _plShowPanels(d, caps, players, queryable){
+  var unsup=document.getElementById('pl-unsupported'), empty=document.getElementById('pl-empty'),
+      wrap=document.getElementById('pl-table-wrap'), ann=document.getElementById('pl-announce'),
+      cnt=document.getElementById('pl-count'), netonly=document.getElementById('pl-netonly');
+  if(ann) ann.style.display = (_CAN_SAY && caps.say) ? 'flex' : 'none';
+  if(netonly) netonly.style.display='none';
+  if(!queryable){ _plShowUnsupported(unsup, empty, wrap, cnt); return false; }
+  if(unsup) unsup.style.display='none';
+  // gamedig couldn't read the server and the console wasn't run: show the GSLT / load-once hint for
+  // a console-capable game, rather than a misleading "no players connected". But if a list is already
+  // on screen (e.g. you just loaded it from the console), keep it — an automatic gamedig miss must
+  // not blank what you explicitly pulled.
+  if(d.unknown){ _plShowUnknown(d, unsup, empty, wrap, netonly); return false; }
+  return _plShowList(players, empty, wrap, cnt);
+}
+function _plShowUnsupported(unsup, empty, wrap, cnt){
+  if(unsup)unsup.style.display=''; if(empty)empty.style.display='none'; if(wrap)wrap.style.display='none'; if(cnt)cnt.textContent='';
+}
+function _plShowUnknown(d, unsup, empty, wrap, netonly){
+  var hasRows = wrap && wrap.style.display !== 'none';
+  if(!hasRows){
+    if(netonly && d.console_capable){ netonly.style.display=''; }
+    else if(unsup){ unsup.style.display=''; }
+    if(empty)empty.style.display='none';
+  }
+}
+// The count, and "no players" or the table. True when there are players to list.
+function _plShowList(players, empty, wrap, cnt){
+  if(cnt) cnt.textContent='('+players.length+')';
+  if(!players.length){ if(empty)empty.style.display=''; if(wrap)wrap.style.display='none'; return false; }
+  if(empty) empty.style.display='none'; if(wrap) wrap.style.display='';
+  return true;
 }
 
 function moderatePlayer(btn, action){
@@ -469,9 +484,9 @@ function renderAnsi(el, line) {
   // WITHOUT colour lost its time, which is most real console output. Only the coloured lines kept
   // theirs, which made it look like a colour bug rather than what it was.
   if (line.indexOf('\x1b[') < 0) { el.appendChild(document.createTextNode(line)); return; }
-  var last = 0, codes = '', m;
+  var last = 0, codes = '';
   _SGR_RE.lastIndex = 0;
-  while ((m = _SGR_RE.exec(line)) !== null) {
+  for (var m = _SGR_RE.exec(line); m !== null; m = _SGR_RE.exec(line)) {
     _ansiRun(el, line.slice(last, m.index), codes);
     codes = m[1];
     last = _SGR_RE.lastIndex;
@@ -782,22 +797,26 @@ function _wallTimeIn(hhmm, fromTz, toTz) {
   var parts = /^(\d{1,2}):(\d{2})$/.exec(hhmm || '');
   if (!parts) return hhmm;
   try {
-    // Find the instant that reads as hh:mm in fromTz today, by probing the offset at that wall
-    // time. One correction pass is enough: the guess is at most a few hours out.
-    var now = new Date();
-    var guess = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
-                                  Number(parts[1]), Number(parts[2])));
-    for (var i = 0; i < 2; i++) {
-      var shown = _hhmmIn(guess, fromTz);
-      var want = Number(parts[1]) * 60 + Number(parts[2]);
-      var got = Number(shown.split(':')[0]) * 60 + Number(shown.split(':')[1]);
-      var diff = want - got;
-      if (diff > 720) { diff -= 1440; } else if (diff < -720) { diff += 1440; }
-      if (!diff) break;
-      guess = new Date(guess.getTime() + diff * 60000);
-    }
-    return _hhmmIn(guess, toTz);
+    return _hhmmIn(_wallTimeInstant(parts, fromTz), toTz);
   } catch (e) { return hhmm; }
+}
+
+// Find the instant that reads as hh:mm (parts[1]:parts[2]) in fromTz today, by probing the offset
+// at that wall time. One correction pass is enough: the guess is at most a few hours out.
+function _wallTimeInstant(parts, fromTz) {
+  var now = new Date();
+  var guess = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
+                                Number(parts[1]), Number(parts[2])));
+  for (var i = 0; i < 2; i++) {
+    var shown = _hhmmIn(guess, fromTz);
+    var want = Number(parts[1]) * 60 + Number(parts[2]);
+    var got = Number(shown.split(':')[0]) * 60 + Number(shown.split(':')[1]);
+    var diff = want - got;
+    if (diff > 720) { diff -= 1440; } else if (diff < -720) { diff += 1440; }
+    if (!diff) break;
+    guess = new Date(guess.getTime() + diff * 60000);
+  }
+  return guess;
 }
 
 function _hhmmIn(date, tz) {
@@ -815,9 +834,13 @@ function renderDailyRestart() {
   var mine = _wallTimeIn(hostTime, hostTz, _viewerTz());
   if ('value' in el && el.tagName === 'INPUT') { el.value = mine; } else { el.textContent = mine; }
   if (!hint) return;
-  // Say what is on the host, ALWAYS — including when its zone could not be read, which is a
-  // different and more useful statement than showing the host's number as if it were yours.
-  // Only the values are set here; the words are in the template so they can be translated.
+  _showDailyRestartHostTime(hint, hostTime, hostTz);
+}
+
+// Say what is on the host, ALWAYS — including when its zone could not be read, which is a
+// different and more useful statement than showing the host's number as if it were yours.
+// Only the values are set here; the words are in the template so they can be translated.
+function _showDailyRestartHostTime(hint, hostTime, hostTz) {
   var tEl = document.getElementById('drh-time');
   var tzEl = document.getElementById('drh-tz');
   var onEl = document.getElementById('drh-on');
@@ -956,15 +979,7 @@ function pollStats() {
     .then(d => {
       if (d.error) return;
       _lastStatus = d.status || '';
-      connectAddr = d.connect || '';
-      var _ca = document.getElementById('connect-addr');
-      if (_ca) _ca.textContent = connectAddr || 'unknown';
-      // One-click join link (steam://connect/…) for games that support it.
-      var join = document.getElementById('connect-join');
-      if (join) {
-        if (d.connect_url) { join.href = d.connect_url; join.style.display = ''; }
-        else { join.removeAttribute('href'); join.style.display = 'none'; }
-      }
+      _showConnectAddr(d);
       setStatus(d.status);
       var m = d.metrics || {};
       // A read that FAILED is not a server sitting idle at 0%. The route computes the sentinel
@@ -973,40 +988,69 @@ function pollStats() {
       // Tiles show '–' and the chart is not advanced, so the graph shows a GAP rather than a dip
       // that never happened. `!== false` so an older payload without the field behaves as before.
       var readable = d.metrics_readable !== false;
-      // Every id below lives inside the Controls panel, which the user can HIDE — hidePanel()
-      // removes the element and the layout is persisted, so it is absent from the DOM on every
-      // later load. These were unguarded `getElementById(...).textContent = ...`, so on a hidden
-      // panel the first one threw, the throw was swallowed by the .catch below, and everything
-      // after it in this handler stopped running — including setStatus's siblings further down.
-      // initChart two functions up already guards its canvas for exactly this reason.
-      function setText(id, value) {
-        var el = document.getElementById(id);
-        if (el) el.textContent = value;
-      }
       // Game-specific tiles
-      setText('stat-gcpu', readable && m.game_cpu_percent!=null ? m.game_cpu_percent + '%' : '–');
-      setText('stat-gcpu-sub', readable ? 'of ' + (m.cores||1) + '-core server' : 'not read');
-      setText('stat-gram', readable ? (m.game_ram_mb||0) + ' MB' : '–');
-      setText('stat-gram-sub', !readable ? 'not read'
-              : (m.game_ram_percent!=null? m.game_ram_percent+'% of RAM' : (m.game_procs||0)+' procs'));
-      setText('stat-gup', !readable ? '–' : (m.game_procs ? fmtUptime(m.game_uptime_secs||0) : 'stopped'));
-      setText('stat-gup-sub', !readable ? 'not read'
-              : (m.game_procs||0) + ' process' + ((m.game_procs===1)?'':'es'));
+      _showGameCpuTile(m, readable);
+      _showGameRamTile(m, readable);
+      _showGameUptimeTile(m, readable);
       // Whole-server tile
-      setText('stat-scpu', readable && m.cpu_percent!=null ? m.cpu_percent + '%' : '–');
-      setText('stat-server-sub', readable
-              ? 'RAM ' + (m.ram_percent||0) + '% · disk ' + (m.disk_percent||0) + '%'
-              : 'The panel could not read this host');
-      if (statsChart && readable) {
-        var t = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-        var L = statsChart.data.labels, A = statsChart.data.datasets[0].data, B = statsChart.data.datasets[1].data;
-        L.push(t); A.push(m.game_cpu_percent||0); B.push(m.cpu_percent||0);
-        if (L.length > 45) { L.shift(); A.shift(); B.shift(); }
-        statsChart.update('none');
-      }
+      _showServerTile(m, readable);
+      if (statsChart && readable) _pushStatsPoint(m);
     })
     .catch(() => {})
     .finally(_scheduleStats);
+}
+
+// The connect address, and the one-click join link (steam://connect/…) for games that support it.
+function _showConnectAddr(d) {
+  connectAddr = d.connect || '';
+  var _ca = document.getElementById('connect-addr');
+  if (_ca) _ca.textContent = connectAddr || 'unknown';
+  var join = document.getElementById('connect-join');
+  if (join) {
+    if (d.connect_url) { join.href = d.connect_url; join.style.display = ''; }
+    else { join.removeAttribute('href'); join.style.display = 'none'; }
+  }
+}
+
+// Every stat tile lives inside the Controls panel, which the user can HIDE — hidePanel()
+// removes the element and the layout is persisted, so it is absent from the DOM on every
+// later load. These were unguarded `getElementById(...).textContent = ...`, so on a hidden
+// panel the first one threw, the throw was swallowed by pollStats's .catch, and everything
+// after it in that handler stopped running — including setStatus's siblings further down.
+// initChart two functions up already guards its canvas for exactly this reason.
+function _setStatText(id, value) {
+  var el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+// One tile each, value and sub-line, from one /stats reading. `readable` false shows a read
+// that failed as '–' / 'not read', never as zeros.
+function _showGameCpuTile(m, readable) {
+  _setStatText('stat-gcpu', readable && m.game_cpu_percent!=null ? m.game_cpu_percent + '%' : '–');
+  _setStatText('stat-gcpu-sub', readable ? 'of ' + (m.cores||1) + '-core server' : 'not read');
+}
+function _showGameRamTile(m, readable) {
+  _setStatText('stat-gram', readable ? (m.game_ram_mb||0) + ' MB' : '–');
+  _setStatText('stat-gram-sub', !readable ? 'not read'
+          : (m.game_ram_percent!=null? m.game_ram_percent+'% of RAM' : (m.game_procs||0)+' procs'));
+}
+function _showGameUptimeTile(m, readable) {
+  _setStatText('stat-gup', !readable ? '–' : (m.game_procs ? fmtUptime(m.game_uptime_secs||0) : 'stopped'));
+  _setStatText('stat-gup-sub', !readable ? 'not read'
+          : (m.game_procs||0) + ' process' + ((m.game_procs===1)?'':'es'));
+}
+function _showServerTile(m, readable) {
+  _setStatText('stat-scpu', readable && m.cpu_percent!=null ? m.cpu_percent + '%' : '–');
+  _setStatText('stat-server-sub', readable
+          ? 'RAM ' + (m.ram_percent||0) + '% · disk ' + (m.disk_percent||0) + '%'
+          : 'The panel could not read this host');
+}
+// Advance the live chart by one reading, keeping the last 45.
+function _pushStatsPoint(m) {
+  var t = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  var L = statsChart.data.labels, A = statsChart.data.datasets[0].data, B = statsChart.data.datasets[1].data;
+  L.push(t); A.push(m.game_cpu_percent||0); B.push(m.cpu_percent||0);
+  if (L.length > 45) { L.shift(); A.shift(); B.shift(); }
+  statsChart.update('none');
 }
 
 var _histRange = '24h';
