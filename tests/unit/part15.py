@@ -87,10 +87,10 @@ def _cv_version_at(path):
     return SO.panel_version()
 
 
-def _cv_sh(path, call="panel_version"):
+def _cv_sh(path, call="panel_version", **env):
     """What install.sh's `call` prints for a panel at `path`: (stdout, returncode)."""
     r = _sp15.run(["bash", "-c", _CV_SH + call + "\n"], capture_output=True, text=True,
-                  check=False, timeout=60, env=dict(os.environ, PANEL_DIR=path))
+                  check=False, timeout=60, env=dict(os.environ, PANEL_DIR=path, **env))
     return r.stdout.strip(), r.returncode
 
 
@@ -220,6 +220,20 @@ try:
           "refuses what the panel refuses",
           _cv_sh_ep == {"1788264000": "2026.9.1", "08": "1970.1.1", "12a": "", "9" * 13: ""},
           repr(_cv_sh_ep))
+    # A rev-parse that answers with something other than a commit (a warning, a sudo notice)
+    # names no commit: the date is shown alone, never beside that text. git is a stand-in here,
+    # the only way to make rev-parse say it; the date it gives proves the stand-in answered.
+    _cv_bin = os.path.join(_CV_SB, "stub-bin")
+    os.makedirs(_cv_bin)
+    _cv_fd = os.open(os.path.join(_cv_bin, "git"), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
+    with os.fdopen(_cv_fd, "w", encoding="utf-8") as _cv_fh:
+        _cv_fh.write('#!/bin/sh\ncase "$*" in\n  *--format=%%ct*) echo %d ;;\n'
+                     '  *rev-parse*) echo "warning: not a commit" ;;\nesac\n' % _CV_LATE)
+    _cv_junk = _cv_dir("junk-rev-parse")
+    os.makedirs(os.path.join(_cv_junk, ".git"))
+    _cv_junk_got = _cv_sh(_cv_junk, PATH=_cv_bin + os.pathsep + os.environ.get("PATH", ""))
+    check("install.sh: a rev-parse answer that is not a commit is left out, and the date kept",
+          _cv_junk_got == ("2026.9.26", 0), repr(_cv_junk_got))
     check("install.sh: a .git that git cannot read falls back to VERSION, as the panel does",
           _cv_sh(_cv_nogit) == ("2026.9.26", 0), repr(_cv_sh(_cv_nogit)))
     for _cv_what, (_cv_body, _cv_want) in sorted(_CV_RULES.items()):
