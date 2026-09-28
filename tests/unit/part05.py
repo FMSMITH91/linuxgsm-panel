@@ -3460,6 +3460,49 @@ check("nodesource: the remote rendering fetches only the key — no setup script
       "setup_lts" not in _ns_rcmd and "deb.nodesource.com/setup" not in _ns_rcmd
       and not _re_ntc.search(r"\|\s*(sudo\s+)?(ba)?sh\b", _ns_rcmd)
       and _shlex_q(_priv.NODESOURCE_KEY_URL) in _ns_rcmd, _ns_rcmd[:300])
+# The remote rendering's key fetch is https-only too. It has two shells to get through: bash, and
+# first the SSH login shell whenever the host runs commands without `sudo bash -c` (sudo off, a root
+# login), which can be zsh, where an unquoted =https is an =command lookup that fails before curl
+# runs. Driven like install.sh's check above: curl is a shell function that writes its argv one
+# word per line and fails, so the setup stops there having trusted nothing.
+
+
+def _nsr_argv(shell):
+    _d = _tempfile.mkdtemp(prefix="panel-nodesource-rargv-")
+    try:
+        _log = os.path.join(_d, "argv")
+        _p = _sp_ns.run([shell, "-c", "\n".join([  # nosec B603 - bash or zsh, running our own render
+            "dpkg() { echo amd64; }", "gpg() { :; }", "apt-get() { :; }",
+            "curl() { printf '%%s\\n' \"$@\" > %s; return 22; }" % _shlex_q(_log),
+            _priv.remote_command("nodesource-setup", [])])], capture_output=True, text=True, timeout=60)
+        try:
+            with open(_log, encoding="utf-8") as _fh:
+                return _fh.read().splitlines(), _p
+        except OSError:
+            return [], _p
+    finally:
+        _shutil_ns.rmtree(_d, ignore_errors=True)
+
+
+def _nsr_https_only(argv, proc):
+    _url = _priv.NODESOURCE_KEY_URL
+    return ("--proto" in argv and argv[argv.index("--proto") + 1:][:1] == ["=https"]
+            and _url.startswith("https://") and _url in argv
+            and argv.index("--proto") < argv.index(_url)
+            and proc.returncode != 0 and "Could not download" in proc.stdout)
+
+
+_nsr_av, _nsr_p = _nsr_argv("bash")
+check("nodesource (remote): the key fetch refuses anything but https, redirects included",
+      _nsr_https_only(_nsr_av, _nsr_p),
+      "argv=%r out=%r" % (_nsr_av, (_nsr_p.stdout + _nsr_p.stderr)[-200:]))
+if not _shutil_ns.which("zsh"):
+    skip("nodesource (remote): ...and the flag survives a zsh login shell", "no zsh on this machine")
+else:
+    _nsr_av, _nsr_p = _nsr_argv("zsh")
+    check("nodesource (remote): ...and the flag survives a zsh login shell",
+          _nsr_https_only(_nsr_av, _nsr_p),
+          "argv=%r out=%r" % (_nsr_av, (_nsr_p.stdout + _nsr_p.stderr)[-200:]))
 if not _shutil_ns.which("gpg"):
     skip("install.sh: NodeSource key pinning, driven", "no gpg on this machine")
 else:
