@@ -7557,7 +7557,7 @@ import glob as _anc_glob                                                        
 # whitespace/newline is either absorbed by the pattern or captured on purpose.
 _ANCHOR_LINE_PARSERS = {
     "_CRON_VERDICT_RE", "_CFG_LINE_RE", "_MOD_AVAIL_RE", "_MOD_INST_RE", "_HOSTNAME_RE",
-    "_UFW_RULE_RE", "_CONSOLE_PROMPT_RE", "_ASCII_INT_RE", "header",
+    "_CONSOLE_PROMPT_RE", "_ASCII_INT_RE",
     # One crontab line, already .strip()ed by its only caller, and its own `\s*$` absorbs
     # whatever is left — so $ and \Z behave identically here.
     "_CRON_WRAP_RE",
@@ -7605,7 +7605,7 @@ check("regex anchors: every validator refuses a trailing newline (\\Z, not $)", 
 _anc_known = set(_ANCHOR_LINE_PARSERS)
 for _p in _ANCHOR_VALIDATORS.values():
     _anc_known |= set(_p)
-_anc_unclassified = []
+_anc_unclassified, _anc_seen = [], set()
 for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
                  + [os.path.join(_root, n) for n in ("app.py", "manage.py", "db_maintenance.py")]):
     try:
@@ -7621,12 +7621,19 @@ for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recu
         _pat = "".join(_parts) if _parts else ""
         if not _pat or not _pat.endswith("$") or _pat.endswith("\\$"):
             continue
+        _anc_seen |= {_t.id for _t in _n.targets if isinstance(_t, _anc_ast.Name)}
         for _t in _n.targets:
             if isinstance(_t, _anc_ast.Name) and _t.id not in _anc_known:
                 _anc_unclassified.append("%s:%d %s" % (os.path.basename(_f), _n.lineno, _t.id))
 check("regex anchors: every $-anchored pattern is classified as a validator or a line parser",
       not _anc_unclassified,
       "unclassified (decide, then add to the list in this test): %s" % _anc_unclassified[:5])
+# ...and the other direction: every line-parser entry still names one. A pattern rewritten to \Z,
+# or away entirely, left its entry behind (_UFW_RULE_RE and `header` did), and a dead entry is not
+# harmless: it pre-approves the next pattern given that name, before anyone has looked at it.
+_anc_dead = sorted(set(_ANCHOR_LINE_PARSERS) - _anc_seen)
+check("regex anchors: every line-parser entry still names a $-anchored pattern in the code",
+      not _anc_dead, "no longer in the code, or no longer ending in $ (delete them): %s" % _anc_dead)
 
 # ── the same question for an INLINE re.match/fullmatch/search ─────────────────────────────────
 # The sweep above walks module-level `X = re.compile(...)` assignments, which is a shape an
@@ -7644,17 +7651,15 @@ check("regex anchors: every $-anchored pattern is classified as a validator or a
 # read off a remote host, a LinuxGSM config key, a .cfg filename going into `find`, an apt package
 # name, and a mod id.
 _INLINE_DOLLAR_OK = {
-    r"\)\s+CMD\s+\((.*)\)\s*$",                                  # a syslog cron line
     r"^#{3,}\s+(.+?)\s+#{3,}\s*$",                                 # a config section header
     r"^(.*)/(tcp|udp)$",                                            # a ufw port column
     r"^\s*\[\s*(\d+)\]\s*(.*)$",                                   # a `ufw status numbered` row
     r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{6,})\s+(.+)$",      # an idTech3 player row
     r"^\s*([a-z][a-z0-9-]*)\s+([a-z]{1,4})\s+\|\s+(.+?)\s*$",        # a LinuxGSM table row
-    r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?/?\s*$",                # a `git remote -v` line
     r"\s*port\s*=\s*(\d+)\s*$",                                     # an sshd_config line
     r"^(https?://\S+)\s*(\(.*\))?$",                                # a `tailscale up` output line
 }
-_inline_bad = []
+_inline_bad, _inline_seen = [], set()
 for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
                  + [os.path.join(_root, n) for n in ("app.py", "manage.py", "db_maintenance.py")]):
     _rel = os.path.relpath(_f, _root)
@@ -7672,12 +7677,18 @@ for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recu
         _pat = _n.args[0].value
         if not _pat.endswith("$") or _pat.endswith("\\$"):
             continue
+        _inline_seen.add(_pat)
         if _pat not in _INLINE_DOLLAR_OK:
             _inline_bad.append("%s:%d %r" % (_rel, _n.lineno, _pat[:44]))
 check("regex anchors: no unclassified $-anchored inline re.match/search either",
       not _inline_bad,
       "use \\Z for a VALIDATOR, or add the file to _INLINE_DOLLAR_OK saying why $ is right: %s"
       % _inline_bad[:5])
+# Every entry still matches an inline call. Two outlived theirs: the repo-URL pattern went to \Z,
+# and the syslog cron one was replaced outright (it was quadratic on a hostile line).
+_inline_dead = sorted(_INLINE_DOLLAR_OK - _inline_seen)
+check("regex anchors: every _INLINE_DOLLAR_OK entry still matches an inline call in the code",
+      not _inline_dead, "matches nothing any more (delete them): %s" % [p[:44] for p in _inline_dead])
 
 # ── A no-op UPDATE must still refresh what lives outside the checkout ─────────────────────────
 # "Nothing to fetch" is not "nothing to do". The helper, db_maintenance.py and the sudoers grant

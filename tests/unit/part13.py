@@ -2163,13 +2163,37 @@ def _unshim10(fn):
     return fn
 
 
-def _dead10(pid):
-    """Gone, or a zombie waiting to be reaped — either way it is not running."""
+def _proc_state13(pid):
+    """Return the state letter /proc shows for `pid`, or "" once the pid is gone."""
     try:
         with open("/proc/%d/stat" % pid) as fh:
-            return fh.read().rsplit(")", 1)[1].split()[0] == "Z"
-    except OSError:
-        return True
+            return fh.read().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return ""
+
+
+def _await_group_dead13(proc, grand, deadline=10.0):
+    """Poll until `proc` is reaped and `grand` has stopped running, or `deadline` seconds pass.
+
+    Returns {"child": its rc or None, "grand": the state it was seen dead in or None, "last": the
+    last state read}. Each is LATCHED at the first read that finds it dead and never read again,
+    because a dying pid is a different fact on every read. The orphaned grandchild's reaper
+    (systemd --user here) takes it Z -> X -> gone, and the check this replaces counted only Z as
+    dead: it looped out on Z, re-read the pid mid-reap as X ("running") and failed, then its
+    message re-read it gone and printed dead=True. Once gone, the pid can also be reused.
+    """
+    seen = {"child": None, "grand": None, "last": None}
+    end = time.monotonic() + deadline
+    while True:
+        if seen["child"] is None:
+            seen["child"] = proc.poll()
+        if seen["grand"] is None:
+            seen["last"] = _proc_state13(grand)
+            if seen["last"] in ("", "Z", "X"):      # gone, a zombie, or being reaped
+                seen["grand"] = seen["last"] or "gone"
+        if (seen["child"] is not None and seen["grand"] is not None) or time.monotonic() >= end:
+            return seen
+        time.sleep(0.05)
 
 
 _LOCAL10 = NS(id=701, name="panel", is_local=True, auth_method="local", sudo_enabled=True)
@@ -2199,12 +2223,10 @@ try:
                         stdin=_sp10.DEVNULL, start_new_session=True)
     _grand10 = int(_kp10.stdout.readline().strip() or 0)
     _sm_core._kill_process_tree(_kp10)
-    _t0_10 = time.monotonic()
-    while not (_dead10(_kp10.pid) and _dead10(_grand10)) and time.monotonic() - _t0_10 < 10:
-        time.sleep(0.05)
+    _seen10 = _await_group_dead13(_kp10, _grand10)
     check("core kill: a timed-out command's whole process group is killed, grandchild included",
-          _grand10 > 0 and _kp10.poll() is not None and _dead10(_grand10),
-          "child rc=%r grandchild %s dead=%r" % (_kp10.poll(), _grand10, _dead10(_grand10)))
+          _grand10 > 0 and _seen10["child"] is not None and _seen10["grand"] is not None,
+          "grandchild %s, seen %r" % (_grand10, _seen10))
 
     class _GhostProc10:
         pid = 999999999                     # no such process: getpgid raises
@@ -4282,14 +4304,36 @@ def _tk13_check_priority(loops, app):
           repr((calls, slept)))
 
 
+def _tk13_hush(logger, keep):
+    """Detach every handler on `logger` but `keep`, and stop it propagating; return the undo.
+
+    For a check that provokes an error on purpose and asserts on the captured record: the record
+    still reaches `keep`, but its traceback stays out of the run's output. Flask's own handler put
+    the two below in the unit log, pointing only at app.py lines, and they were read there as
+    real tickers left running by an earlier check.
+    """
+    others, propagate = [h for h in logger.handlers if h is not keep], logger.propagate
+    for h in others:
+        logger.removeHandler(h)
+    logger.propagate = False
+
+    def _undo():
+        for h in others:
+            logger.addHandler(h)
+        logger.propagate = propagate
+    return _undo
+
+
 def _tk13_check_tick_failures(loops, app):
     """A tick that cannot even read the database is logged, and the loop keeps its interval."""
     cap, off = _cap10(app.logger.name)
+    unhush = _tk13_hush(app.logger, cap)
     _ca13_set(_app10mod, "GameServer", NS())       # every query in the tick raises
     try:
         _r1, rec_slept = _tk13_run(loops["install-reconcile"][1], 2)
         _r2, pk_slept = _tk13_run(loops["priority-keeper"][1], 2)
     finally:
+        unhush()
         off()
         _app10mod.GameServer = _CA13_SAVED.pop((_app10mod, "GameServer"))
     logs = _ca13_logs(cap)
