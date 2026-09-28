@@ -2024,6 +2024,19 @@ try:
           and [(e[1] or {}).get("data") for e in _P9_EMITS if e[2].get("to") == "sid-p9-v2"]
           == ["[access to this console was revoked]"], repr(_P9_EMITS))
     _p9_patch(_p9.socketio.server, "leave_room", _P9_PATCHED[(_p9.socketio.server, "leave_room")])
+    # ...and reaching the server is not enough: the socket must still hold VIEW_CONSOLE. The file
+    # manager can reach host 1 but may not read its consoles, so a join that outlived the
+    # permission is evicted just like one that lost the host — while the viewer beside it, who
+    # holds VIEW_CONSOLE there, keeps watching. Nothing else drove the permission half of
+    # _viewer_still_allowed: deleting it passed both the unit and the smoke suite.
+    with _p9_sf._viewers_lock:
+        _p9_sf._console_viewers[P9_GS] = {"sid-p9-files": P9_FILES, "sid-p9-view": P9_VIEWER}
+    with _p9.app_context():
+        _ev_n = _p9_sf._evict_unauthorized_viewers(_p9, _p9.socketio, P9_GS)
+    with _p9_sf._viewers_lock:
+        _ev_kept = dict(_p9_sf._console_viewers.pop(P9_GS, None) or {})
+    check("evict: a viewer who reaches the server but no longer holds VIEW_CONSOLE is dropped",
+          _ev_n == 1 and _ev_kept == {"sid-p9-view": P9_VIEWER}, repr((_ev_n, _ev_kept)))
 
     _p9_patch(_p9_banlist, "active", lambda: True)
     _p9_patch(_p9_banlist, "is_banned", lambda ip, widen=True: str(ip) == "198.51.100.66")
