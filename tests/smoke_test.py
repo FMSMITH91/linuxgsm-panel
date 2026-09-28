@@ -13972,6 +13972,35 @@ try:
         check("terminal: ...while term_open on a granted REMOTE does (positive control)",
               any(getattr(v, "host", None) == _lt_rid for v in _lt_sessions.values()),
               "no session on the remote — the gate refuses everything")
+        # term_open asks _may_use_terminal itself: a socket event never passes the before_request
+        # that sends a must-change-password account to the change page, and carries no permission
+        # decorator. With that call gone (in _terminal_target since on_term_open was split) every
+        # suite stayed green, while this same account, host grant intact, got a shell on the
+        # remote on a handed-over temporary password — or with no use_terminal at all.
+        _lt_sessions.clear()
+        _lt_c.get_received()
+        with app.app_context():
+            db.session.get(User, _lt_uid).must_change_password = True
+            db.session.commit()
+        _lt_c.emit("term_open", {"remote_id": _lt_rid, "cols": 80, "rows": 24})
+        _lt_err = [e for e in _lt_c.get_received() if e.get("name") == "term_error"]
+        check("terminal: term_open refuses an account that must change its password, grant or not",
+              not _lt_sessions and _lt_err
+              and "permission to open a terminal" in str(_lt_err[0].get("args")),
+              "sessions=%r errors=%r" % (list(_lt_sessions), _lt_err))
+        with app.app_context():
+            db.session.get(User, _lt_uid).must_change_password = False
+            db.session.get(Group, _lt_gid).set_permissions([auth.MANAGE_REMOTES])
+            db.session.commit()
+        _lt_c.emit("term_open", {"remote_id": _lt_rid, "cols": 80, "rows": 24})
+        _lt_err = [e for e in _lt_c.get_received() if e.get("name") == "term_error"]
+        check("terminal: ...and one whose groups no longer grant use_terminal",
+              not _lt_sessions and _lt_err
+              and "permission to open a terminal" in str(_lt_err[0].get("args")),
+              "sessions=%r errors=%r" % (list(_lt_sessions), _lt_err))
+        with app.app_context():
+            db.session.get(Group, _lt_gid).set_permissions([auth.USE_TERMINAL, auth.MANAGE_REMOTES])
+            db.session.commit()
         _lt_c.disconnect()
         _lt_sessions.clear()
 
