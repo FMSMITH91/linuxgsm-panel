@@ -516,7 +516,7 @@ function uploadEntries(list, base){
 
 // The folder picker (<input webkitdirectory>). The click path, which works regardless of whether
 // dragging between the desktop and the browser behaves — on Linux it often does not.
-function doUploadDir(ev){
+function doUploadDir(ev){  // NOSONAR - the constant false is the data-action preventDefault contract (panel.js fire)
   if(ev) ev.preventDefault();
   var inp=document.getElementById('upload-dir-input');
   if(!inp || !inp.files.length) return false;
@@ -865,16 +865,18 @@ if (_el_cron_tbody) _el_cron_tbody.addEventListener('click', function(ev){
     function ends(range, stepped){
       if(range==='*') return [lo, hi];
       var seg=range.split('-');
-      var mv=function(x){ x=x.trim(); if(names&&names[x]!=null) return names[x]; if(!/^\d+$/.test(x)) return NaN; return parseInt(x,10); };
+      var mv=function(x){ x=x.trim(); if(names&&names[x]!=null) return names[x]; if(!/^\d+$/.test(x)) return Number.NaN; return Number.parseInt(x,10); };
       var a=mv(seg[0]), b=(seg.length>1)?mv(seg[1]):(stepped?hi:a);
-      if(isNaN(a)||isNaN(b)) return null;
+      // Number() first, as the global isNaN did: names[x] also finds inherited members, so the
+      // weekday 'constructor' is a function here, and Number.isNaN alone passes it as valid.
+      if(Number.isNaN(Number(a))||Number.isNaN(Number(b))) return null;
       return [a, b];
     }
     // One comma-separated part ('5', '1-5', '*/15', 'mon-fri', '10/5') into out. False when it is
     // invalid, which makes the whole field invalid.
     function addPart(p){
       var step=1, range=p, sl=p.indexOf('/');
-      if(sl>=0){ step=parseInt(p.slice(sl+1),10); range=p.slice(0,sl); if(!(step>=1)) return false; }
+      if(sl>=0){ step=Number.parseInt(p.slice(sl+1),10); range=p.slice(0,sl); if(!(step>=1)) return false; }
       var e=ends(range, sl>=0);
       if(!e) return false;
       var a=e[0], b=e[1];

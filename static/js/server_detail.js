@@ -43,7 +43,7 @@ var consoleEl = document.getElementById('console-output');
 var wsStatus = document.getElementById('ws-status');
 
 function plTime(t){
-  var n = Number(t); if(!isFinite(n)) return String(t);
+  var n = Number(t); if(!Number.isFinite(n)) return String(t);
   n = Math.floor(n); var h=Math.floor(n/3600), m=Math.floor((n%3600)/60), s=n%60;
   return h>0 ? (h+':'+String(m).padStart(2,'0')) : (m+':'+String(s).padStart(2,'0'));
 }
@@ -415,7 +415,7 @@ try { _tsOn = localStorage.getItem('sd.consoleTs') !== '0'; } catch (e) { /* pri
 
 function stampLine(div, ts) {
   var d = new Date(Number(ts) * 1000);
-  if (isNaN(d.getTime())) return;
+  if (Number.isNaN(d.getTime())) return;
   var g = document.createElement('span');
   g.className = 'console-ts';
   // 24-hour, deliberately, even where the viewer's locale is 12-hour: "7:35:57 PM" is three
@@ -739,7 +739,7 @@ function clearConsole() {
   _consolePrimed = false;  // and repaints with a full window, not just what arrived since
 }
 
-function sendCommand(ev) {
+function sendCommand(ev) {  // NOSONAR - the constant false is the data-action preventDefault contract (panel.js fire)
   ev.preventDefault();
   var input = document.getElementById('command-input');
   var cmd = input.value.trim();

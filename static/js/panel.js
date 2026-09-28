@@ -241,7 +241,7 @@ window.localizeTimes = function(root){
   (root || document).querySelectorAll('.localtime[data-utc]').forEach(function(el){
     if(el.dataset.localized) return;
     var d = new Date(el.getAttribute('data-utc'));
-    if(isNaN(d.getTime())) return;
+    if(Number.isNaN(d.getTime())) return;
     el.title = el.textContent;                 // keep the UTC value as a tooltip
     el.textContent = d.toLocaleString();       // show local time
     el.dataset.localized = '1';

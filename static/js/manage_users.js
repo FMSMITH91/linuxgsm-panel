@@ -28,9 +28,9 @@ window.openEditUser = function (id) {
 
   // Coerce the id to a number before it reaches the form action. It is always an integer from our
   // own database, but it arrives here as text read out of the DOM, and a form action is a URL sink
-  // — CodeQL flags that flow (js/xss-through-dom) and is right to. parseInt both proves the value
+  // — CodeQL flags that flow (js/xss-through-dom) and is right to. Number.parseInt both proves the value
   // cannot carry meta-characters and rejects a tampered island outright.
-  var uid = parseInt(u.id, 10);
+  var uid = Number.parseInt(u.id, 10);
   if (!(uid > 0)) return;
 
   var form = document.getElementById('edit-user-form');
@@ -54,7 +54,7 @@ function _euFillIdentity(u) {
 
   var groups = u.groups || [];
   document.querySelectorAll('.eu-group').forEach(function (cb) {
-    cb.checked = groups.indexOf(parseInt(cb.value, 10)) !== -1;
+    cb.checked = groups.indexOf(Number.parseInt(cb.value, 10)) !== -1;
   });
 }
 
