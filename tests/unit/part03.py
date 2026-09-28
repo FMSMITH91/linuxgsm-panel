@@ -1306,7 +1306,15 @@ try:
     check("corrupt: DB is auto-restored to a healthy state", _db_quick_check(_dbp) is True)
     check("corrupt: the corrupt file is preserved aside (not destroyed)",
           any(fn.startswith("t.db.corrupt-") for fn in os.listdir(_dbdir)))
-    _r = _sqlite.connect(_dbp).execute("SELECT COUNT(*) FROM x").fetchone()[0]
+    # A restore that did not happen leaves a FRESH file with no table x: that must be this named
+    # failure, not an OperationalError that aborts the whole suite before any result is printed.
+    _rc = _sqlite.connect(_dbp)
+    try:
+        _r = _rc.execute("SELECT COUNT(*) FROM x").fetchone()[0]
+    except _sqlite.Error as _e:
+        _r = "unreadable: %s" % _e
+    finally:
+        _rc.close()
     eq("corrupt: restored data is intact", _r, 200)
 
     # No good backup + corrupt live DB -> move the corrupt file aside so the app can
