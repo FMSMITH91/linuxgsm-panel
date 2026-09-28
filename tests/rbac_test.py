@@ -1,5 +1,6 @@
-"""Automated RBAC enforcement test — proves permissions are enforced server-side and
-cannot be bypassed by calling endpoints directly.
+"""Automated RBAC enforcement test: permissions are enforced server-side.
+
+It proves they cannot be bypassed by calling endpoints directly.
 
 Run it against a configured install (from anywhere):
 
@@ -190,11 +191,14 @@ print("Accessible server id=%d (remote %d); non-granted server id=%s (remote %s)
       % (accessible_id, granted_remote, other_id, other_remote))
 
 def _run_fixture_rows():
-    """Every row this run leaves on a configured install, found by name — what the final cleanup
-    deletes. A fixture named from `tag` is in here BY CONSTRUCTION, so a block that raises halfway
-    through still leaves nothing in the operator's panel. One named any other way is not: the
-    invite block's deactivated SUPERADMIN and its "pre-existing" invite were named "inv_<hex>",
-    deleted only on the success path, and left behind by any exception. Needs an app context."""
+    """Every row this run leaves on a configured install, found by name.
+
+    It is what the final cleanup deletes. A fixture named from `tag` is in here BY CONSTRUCTION,
+    so a block that raises halfway through still leaves nothing in the operator's panel. One named
+    any other way is not: the invite block's deactivated SUPERADMIN and its "pre-existing" invite
+    were named "inv_<hex>", deleted only on the success path, and left behind by any exception.
+    Needs an app context.
+    """
     from panel.db.models import CustomCommand, Invite
     _like = tag + "%"
     return (Invite.query.filter(Invite.note.like(_like)).all()
@@ -284,7 +288,7 @@ try:
     # with, on a page for INSTALL_SERVER / MANAGE_SERVERS. They got 403, the filter read "OS unknown"
     # and left every game selectable. They now get os_slug — and ONLY os_slug: the hardware card
     # (kernel, hostname, CPU, disk) stays with MANAGE_REMOTES.
-    import panel.routes.remote_vps as _sp_rv
+    _sp_rv = _rvps_mod                   # panel.routes.remote_vps, imported once above
     import panel.ops.ssh_manager.hosts as _sp_hosts
     _sp_saved = (_sp_rv.host_specs, _sp_hosts.host_os_slug)
     with app.app_context():
@@ -771,7 +775,7 @@ try:
     # CRITICAL: /setup POST must NOT create a superadmin once setup is complete.
     pwn = "pwned_" + tag
     r = cu.post("/setup", data={"step": "admin_user", "username": pwn,
-                                "password": "hackme123", "confirm_password": "hackme123"})
+                                "password": "hackme123", "confirm_password": "hackme123"})  # nosec B105 - posted by an anonymous probe that must be refused
     with app.app_context():
         created = User.query.filter_by(username=pwn).first()
         was_created = created is not None
@@ -918,7 +922,7 @@ try:
         _vic_id, _vic_hash = _vic.id, _vic.password_hash
     _r_take = cmu.post("/users/%d/edit" % _vic_id,
                        data={"display_name": "victim", "is_active": "on",
-                             "reset_password": "on", "reset_2fa": "on"})
+                             "reset_password": "on", "reset_2fa": "on"})  # nosec B105 - a checkbox value
     with app.app_context():
         _vic_now = db.session.get(User, _vic_id)
         _hash_changed = _vic_now.password_hash != _vic_hash
@@ -935,7 +939,7 @@ try:
         db.session.commit()
         _low_id, _low_hash = _low.id, _low.password_hash
     cmu.post("/users/%d/edit" % _low_id,
-             data={"display_name": "low", "is_active": "on", "reset_password": "on"})
+             data={"display_name": "low", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
     with app.app_context():
         _low_changed = db.session.get(User, _low_id).password_hash != _low_hash
     check("escalation: ...but MAY still administer an account within their own permissions",
@@ -977,7 +981,7 @@ try:
           "perms_equal=%s reach_wider=%s — the check below would prove nothing"
           % (_perms_equal, _reach_wider))
     cmu.post("/users/%d/edit" % _peer_id,
-             data={"display_name": "peer", "is_active": "on", "reset_password": "on"})
+             data={"display_name": "peer", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
     with app.app_context():
         _peer_changed = db.session.get(User, _peer_id).password_hash != _peer_hash
     check("escalation: MANAGE_USERS cannot take over a peer who can reach hosts the actor cannot",
@@ -1026,9 +1030,9 @@ try:
     check("escalation: ...while the same group WITHOUT the command is still joined",
           _plain_gid in _mu_gids, "the plain group was refused too — the guard is too broad")
     cmu.post("/users/%d/edit" % _cmd_peer_id,
-             data={"display_name": "cmd peer", "is_active": "on", "reset_password": "on"})
+             data={"display_name": "cmd peer", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
     cmu.post("/users/%d/edit" % _plain_peer_id,
-             data={"display_name": "plain peer", "is_active": "on", "reset_password": "on"})
+             data={"display_name": "plain peer", "is_active": "on", "reset_password": "on"})  # nosec B105 - a checkbox value
     with app.app_context():
         _cmd_peer_changed = db.session.get(User, _cmd_peer_id).password_hash != _cmd_peer_hash
         _plain_peer_changed = (db.session.get(User, _plain_peer_id).password_hash
@@ -1454,7 +1458,7 @@ try:
             return inv.id, tok
 
 
-    def _accept(tok, username, password="Sufficient1!pass"):
+    def _accept(tok, username, password="Sufficient1!pass"):  # nosec B107 - a throwaway invitee's password
         return _anon_inv.post("/invite/%s" % tok,
                               data={"username": username, "password": password,
                                     "confirm_password": password})
@@ -1797,9 +1801,9 @@ try:
 
         _d_exp, _d_bog = _no_nonce(_r_exp.get_data(as_text=True)), \
             _no_nonce(_r_bogus.get_data(as_text=True))
-        _diff = [l for l in _dl.unified_diff(_d_exp.split("\n"), _d_bog.split("\n"),
-                                             lineterm="", n=0)
-                 if l[:1] in "+-" and l[:3] not in ("---", "+++")]
+        _diff = [_ln for _ln in _dl.unified_diff(_d_exp.split("\n"), _d_bog.split("\n"),
+                                                 lineterm="", n=0)
+                 if _ln[:1] in "+-" and _ln[:3] not in ("---", "+++")]
         check("invite route: ...and a guessed token is refused the SAME way, telling it nothing",
               _r_bogus.status_code == _r_exp.status_code and _d_bog == _d_exp,
               "status %s vs %s; differing lines: %s"
@@ -1903,7 +1907,7 @@ try:
     # viewer's server set as well as the target's: several queries per account, twice over, for a
     # delegated admin. Measured as a shape: three more administrable accounts must not add a single
     # call on the viewer's side, and no account is looked up twice.
-    from panel.security import auth as _ua_auth
+    _ua_auth = auth                      # panel.security.auth, imported once above
     from collections import Counter as _UaCounter
     _ua_gus = _ua_auth.get_user_servers
 
@@ -2003,7 +2007,7 @@ finally:
             with app.app_context():
                 db.session.remove()
                 db.engine.dispose()
-        except Exception:
+        except Exception:  # nosec B110 - best-effort teardown of a throwaway DB
             pass   # best-effort teardown of a throwaway DB — nothing to recover if it fails
         for _f in _managed_files() - _files_before:
             try:
@@ -2233,7 +2237,7 @@ for _f in pathlib.Path(_ROOT, "panel").rglob("*.py"):
             _stack.append(n.name)
             self.generic_visit(n)
             _stack.pop()
-        visit_AsyncFunctionDef = visit_FunctionDef
+        visit_AsyncFunctionDef = visit_FunctionDef   # noqa: N815 - the name ast.NodeVisitor dispatches on
 
         def visit_Call(self, n):
             _nm = getattr(n.func, "id", getattr(n.func, "attr", None))
