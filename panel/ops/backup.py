@@ -56,16 +56,22 @@ _SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2 ** 15, 8, 1
 
 
 def _derive_key(passphrase, salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P):
-    """scrypt(passphrase) -> a urlsafe-b64 Fernet key. Memory-hard, so a stolen archive cannot be
-    brute-forced at GPU speed the way a plain SHA-based KDF would allow."""
+    """scrypt(passphrase) -> a urlsafe-b64 Fernet key.
+
+    Memory-hard, so a stolen archive cannot be brute-forced at GPU speed the way a plain SHA-based
+    KDF would allow.
+    """
     from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
     raw = Scrypt(salt=salt, length=32, n=n, r=r, p=p).derive(passphrase.encode("utf-8"))
     return base64.urlsafe_b64encode(raw)
 
 
 def _is_readable_tar(path):
-    """True if `path` opens as a gzip tar. Used to ASSERT the opposite of an encrypted archive —
-    "it has a header" is not the same claim as "its contents are unreadable"."""
+    """True if `path` opens as a gzip tar.
+
+    Used to ASSERT the opposite of an encrypted archive — "it has a header" is not the same claim
+    as "its contents are unreadable".
+    """
     try:
         with tarfile.open(str(path), "r:gz"):
             return True
@@ -78,8 +84,11 @@ def is_encrypted_backup(name):
 
 
 def _encrypt_archive(plain_path, dest_path, passphrase):
-    """Encrypt the tar.gz at `plain_path` to `dest_path`. Whole-file, so the archive is held in
-    memory once — fine for a panel DB (metrics are pruned; these run to single-digit MB)."""
+    """Encrypt the tar.gz at `plain_path` to `dest_path`.
+
+    Whole-file, so the archive is held in memory once — fine for a panel DB (metrics are pruned;
+    these run to single-digit MB).
+    """
     from cryptography.fernet import Fernet
     salt = os.urandom(16)
     key = _derive_key(passphrase, salt)
@@ -97,9 +106,11 @@ def _encrypt_archive(plain_path, dest_path, passphrase):
 
 
 def _decrypt_archive(src_path, dest_path, passphrase):
-    """Decrypt to `dest_path`. Returns (ok, message). A wrong passphrase is reported as such and
-    never raises — Fernet authenticates, so a tampered archive fails here too rather than being
-    unpacked over the live install."""
+    """Decrypt to `dest_path`. Returns (ok, message).
+
+    A wrong passphrase is reported as such and never raises — Fernet authenticates, so a tampered
+    archive fails here too rather than being unpacked over the live install.
+    """
     from cryptography.fernet import Fernet, InvalidToken
     try:
         with open(src_path, "rb") as f:
@@ -164,7 +175,8 @@ def get_passphrase():
     Stored ENCRYPTED in config.json (under cred_key), which matters for the case this whole
     feature is about: config.json travels inside the archive, so a leaked archive would otherwise
     carry its own passphrase in the clear. It cannot be decrypted without cred_key, which lives
-    only on the panel host."""
+    only on the panel host.
+    """
     try:
         _cfg = load_config()
         stored = _cfg.get("backup_passphrase") or ""
@@ -196,13 +208,16 @@ MIN_PASSPHRASE_LEN = 12
 
 
 def set_passphrase(passphrase):
-    """Set (or clear, with "") the backup passphrase. Existing archives are NOT re-encrypted —
-    they keep whatever they were written with, which is why restore accepts an explicit one.
+    """Set (or clear, with "") the backup passphrase.
+
+    Existing archives are NOT re-encrypted — they keep whatever they were written with, which is
+    why restore accepts an explicit one.
 
     Raises ValueError below MIN_PASSPHRASE_LEN. The route checks this too and returns a friendly
     message, but the rule lives HERE as well: this is the only thing standing between a leaked
     archive and every secret in it, and a second caller — a manage.py subcommand, a setup step —
-    would otherwise set a two-character passphrase with nothing objecting."""
+    would otherwise set a two-character passphrase with nothing objecting.
+    """
     if passphrase and len(passphrase) < MIN_PASSPHRASE_LEN:
         raise ValueError("Backup passphrase must be at least %d characters." % MIN_PASSPHRASE_LEN)
     value = encrypt_secret(passphrase) if passphrase else ""
@@ -212,6 +227,7 @@ def set_passphrase(passphrase):
 
     update_config(_mut)
     return bool(passphrase)
+
 
 DEFAULT_KEEP_DAYS = 14
 
@@ -228,8 +244,11 @@ MAX_INTERVAL_DAYS = 365
 
 
 def keep_limits():
-    """The bounds the UI must not let a typed value exceed, so the number field and the clamp below
-    cannot disagree. A dropdown could not be wrong; a text box can, so it is told."""
+    """The bounds the UI must not let a typed value exceed.
+
+    So the number field and the clamp below cannot disagree. A dropdown could not be wrong; a text
+    box can, so it is told.
+    """
     return {"keep_days": {"min": MIN_KEEP_DAYS, "max": MAX_KEEP_DAYS},
             "full_keep": {"min": MIN_FULL_KEEP, "max": MAX_FULL_KEEP}}
 
@@ -244,9 +263,12 @@ def _ensure_dir():
 
 
 def _safe_path(name):
-    """Return the backup file named `name` from BACKUP_DIR, or None. The returned path is taken
-    from the directory LISTING — never built from the request — and `name` must basename-match
-    one of our strictly-named backups, so nothing outside data/backups can ever be reached."""
+    """Return the backup file named `name` from BACKUP_DIR, or None.
+
+    The returned path is taken from the directory LISTING — never built from the request — and
+    `name` must basename-match one of our strictly-named backups, so nothing outside data/backups
+    can ever be reached.
+    """
     name = os.path.basename(name or "")
     if not _NAME_RE.match(name):
         return None
@@ -257,8 +279,10 @@ def _safe_path(name):
 
 
 def _snapshot_db(dest):
-    """Write a CONSISTENT copy of panel.db to `dest` using SQLite's online-backup API — safe
-    even while the panel is mid-write (WAL), unlike a plain file copy."""
+    """Write a CONSISTENT copy of panel.db to `dest` using SQLite's online-backup API.
+
+    Safe even while the panel is mid-write (WAL), unlike a plain file copy.
+    """
     if not os.path.exists(DB_PATH):
         return
     src = sqlite3.connect(str(DB_PATH))
@@ -274,8 +298,9 @@ def _snapshot_db(dest):
 
 
 def create_backup(kind="manual", encrypt=True, passphrase=None):
-    """Create a new backup archive. `kind` is a short lowercase tag (manual/daily/pre-restore).
-    Returns (True, name) or (False, message).
+    """Create a new backup archive; return (True, name) or (False, message).
+
+    `kind` is a short lowercase tag (manual/daily/pre-restore).
 
     `passphrase` overrides the configured one ("" = write it in the clear); None, the default,
     reads the configured one. `encrypt=False` writes it in the clear whatever is configured, and
@@ -287,7 +312,8 @@ def create_backup(kind="manual", encrypt=True, passphrase=None):
     takes one typed in. Meanwhile every restore left a plaintext archive of panel.db, secret_key
     and cred_key — every stored SSH credential — in the directory the operator had turned
     encryption on for so it could be synced off the box, and nothing ever pruned it. See
-    _restore_validated for how it is encrypted now."""
+    _restore_validated for how it is encrypted now.
+    """
     kind = re.sub(r"[^a-z]", "", (kind or "manual").lower()) or "manual"
     _ensure_dir()
     try:
@@ -390,8 +416,10 @@ def delete_backup(name):
 
 
 def prune_backups(keep_days=None):
-    """Remove daily backups older than keep_days (manual/pre-restore backups are kept — the
-    user made those deliberately). Returns the number removed."""
+    """Remove daily backups older than keep_days; return the number removed.
+
+    Manual/pre-restore backups are kept — the user made those deliberately.
+    """
     if keep_days is None:
         try:
             keep_days = int(load_config().get("backup_keep_days", DEFAULT_KEEP_DAYS))
@@ -407,9 +435,11 @@ def prune_backups(keep_days=None):
 
 
 def daily_backup_tick():
-    """Called periodically by the panel's background thread: if daily backups are enabled and
-    the newest daily one is >~24h old (or none exists), make one and prune old dailies. Cheap
-    no-op otherwise. Returns True if a backup was taken."""
+    """Take a daily backup when one is due; called periodically by the panel's background thread.
+
+    If daily backups are enabled and the newest daily one is >~24h old (or none exists), make one
+    and prune old dailies. Cheap no-op otherwise. Returns True if a backup was taken.
+    """
     cfg = load_config()
     if not cfg.get("backup_enabled", True):
         return False
@@ -424,8 +454,11 @@ def daily_backup_tick():
 
 
 def _service_restart_launcher(script_path):
-    """systemd-run argv that runs `script_path` DETACHED (survives the panel stop/restart the
-    script performs). Mirrors system_ops' service-model detection: per-user vs system unit."""
+    """systemd-run argv that runs `script_path` DETACHED.
+
+    Detached, it survives the panel stop/restart the script performs. Mirrors system_ops'
+    service-model detection: per-user vs system unit.
+    """
     user_unit = os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")
     system_unit = "/etc/systemd/system/linuxgsm-panel.service"
     if os.path.exists(user_unit) or not os.path.exists(system_unit):
@@ -434,9 +467,11 @@ def _service_restart_launcher(script_path):
 
 
 def restore_backup(name, passphrase=None, skip_safety_backup=False):
-    """Restore a backup: take an automatic pre-restore safety backup, then swap the DB/config/
-    keys into place and restart the panel — all from a DETACHED unit so it survives the panel
-    stopping. Destructive; returns (ok, message). The panel goes down for a few seconds.
+    """Restore a backup. Destructive; returns (ok, message).
+
+    Take an automatic pre-restore safety backup, then swap the DB/config/keys into place and
+    restart the panel — all from a DETACHED unit so it survives the panel stopping. The panel goes
+    down for a few seconds.
 
     `passphrase` is for an encrypted archive; when omitted the configured one is used. Restoring
     onto a FRESH install is the case that needs it passed explicitly — that panel has no
@@ -444,7 +479,8 @@ def restore_backup(name, passphrase=None, skip_safety_backup=False):
 
     `skip_safety_backup` is the operator's answer to "the safety copy could not be written, go
     ahead anyway" — see _restore_validated. It is not a default because the thing being
-    overwritten includes cred_key, without which every stored SSH credential is unreadable."""
+    overwritten includes cred_key, without which every stored SSH credential is unreadable.
+    """
     src = _safe_path(name)
     if not src:
         return False, "No such backup."
@@ -533,10 +569,13 @@ _RESTORE_ROW_LABEL = {"game_server": "game server", "remote_server": "host"}
 
 
 def _restore_fernet(tar, names):
-    """A Fernet for the key the restored panel will decrypt its columns with: the archive's own
-    cred_key, or the live one when the archive has none (the restore then keeps it). None if
-    neither can be read — an encrypted value is then unreadable after the restore too, and an
-    unreadable column reads as "" (models.UnreadableSecret), which no command can be built from."""
+    """A Fernet for the key the restored panel will decrypt its columns with.
+
+    That is the archive's own cred_key, or the live one when the archive has none (the restore then
+    keeps it). None if neither can be read — an encrypted value is then unreadable after the
+    restore too, and an unreadable column reads as "" (models.UnreadableSecret), which no command
+    can be built from.
+    """
     from cryptography.fernet import Fernet
     try:
         if "cred_key" in names:
@@ -779,7 +818,8 @@ def _restore_db_refusal(src):
     """Why the database inside archive `src` must not be restored, or "" when it may be.
 
     Read from a private temp copy, never in place: nothing about the live install is touched until
-    this has answered, and a refusal leaves no trace but the log line naming the rows."""
+    this has answered, and a refusal leaves no trace but the log line naming the rows.
+    """
     tmpd = tempfile.mkdtemp(prefix="lgsm-bk-chk-")
     try:
         with tarfile.open(src, "r:gz") as tar:
@@ -820,14 +860,16 @@ def _restore_db_refusal(src):
 
 
 def _safety_copy_passphrase(operator_passphrase=None):
-    """The passphrase the pre-restore safety copy is written under: the one configured NOW, before
-    the restore replaces it, or "" when backups are not encrypted — the same choice every other
-    backup honours. When a passphrase is configured but cannot be decrypted here, the one the
-    operator typed for this restore is used instead; with neither, PassphraseUnreadable, and the
-    safety copy is refused rather than written in the clear.
+    """The passphrase the pre-restore safety copy is written under.
+
+    That is the one configured NOW, before the restore replaces it, or "" when backups are not
+    encrypted — the same choice every other backup honours. When a passphrase is configured but
+    cannot be decrypted here, the one the operator typed for this restore is used instead; with
+    neither, PassphraseUnreadable, and the safety copy is refused rather than written in the clear.
 
     Returns (passphrase, typed): `typed` True when it is the operator's, because the message that
-    names the safety copy has to say which passphrase opens it."""
+    names the safety copy has to say which passphrase opens it.
+    """
     try:
         return get_passphrase(), False
     except PassphraseUnreadable:
@@ -837,8 +879,10 @@ def _safety_copy_passphrase(operator_passphrase=None):
 
 
 def _restore_validated(src, name, skip_safety_backup=False, operator_passphrase=None):
-    """The destructive half, on an archive already decrypted and checked. `name` is only for the
-    message shown to the user — `src` is what actually gets unpacked."""
+    """The destructive half, on an archive already decrypted and checked.
+
+    `name` is only for the message shown to the user — `src` is what actually gets unpacked.
+    """
     # The safety net, and its result is CHECKED. create_backup swallows every exception and
     # answers (False, "Backup failed — see panel logs.") — a full disk, a BACKUP_DIR whose mode
     # changed, a _snapshot_db failure on a database that is already damaged. Both results were
@@ -914,8 +958,11 @@ def _restore_validated(src, name, skip_safety_backup=False, operator_passphrase=
 
 
 def _restore_started_msg(name, safety, typed_passphrase=False):
-    """What the operator is told. It names the safety copy, because that archive IS their way back
-    and it is the only place its name appears — the panel is about to restart."""
+    """What the operator is told.
+
+    It names the safety copy, because that archive IS their way back and it is the only place its
+    name appears — the panel is about to restart.
+    """
     if safety and is_encrypted_backup(safety):
         # The restore may replace the configured passphrase with the archive's own, so the
         # operator needs to know which one opens this copy: the one they had BEFORE it, or — when
@@ -936,7 +983,8 @@ def _legacy_restore_dispatch(stage, name, safety="", typed_passphrase=False):
     """The pre-helper restore: write a script and run it under `sudo systemd-run`.
 
     Kept ONLY for a host that has the new code but has not had install.sh re-run as root, which is
-    also the reason the sudoers grant cannot narrow yet — see the escalation census in the tests."""
+    also the reason the sudoers grant cannot narrow yet — see the escalation census in the tests.
+    """
     ufl = "--user " if os.path.exists(os.path.expanduser("~/.config/systemd/user/linuxgsm-panel.service")) else ""
     lines = ["#!/bin/bash", "sleep 1",
              "systemctl %sstop linuxgsm-panel.service || true" % ufl, "sleep 1"]
@@ -1055,7 +1103,9 @@ def full_backup_due():
 # so scheduled backups are decided (and staggered) per server.
 def get_game_schedule(sid):
     """Effective schedule for one server: its override where set, else the global default.
-    Returns {interval_days, keep, last, overridden}."""
+
+    Returns {interval_days, keep, last, overridden}.
+    """
     cfg = load_config()
     entry = _game_schedules(cfg).get(str(sid))
     if not isinstance(entry, dict):   # tolerate a corrupted config — treat as no override
@@ -1081,15 +1131,17 @@ def get_game_schedule(sid):
 
 
 def game_prune_keep(sid):
-    """(keep, read) — how many archives a backup of server `sid` may prune down to, and whether
-    config.json was actually read to decide it.
+    """Return (keep, read): the archive count a backup of server `sid` may prune down to.
+
+    `read` says whether config.json was actually read to decide it.
 
     A backup PRUNES to `keep` afterwards, and on a tight disk deletes down to it beforehand. With
     config.json unreadable, get_game_schedule answers the global DEFAULT (2), so "Back up now" and
     the full run deleted archives past a server's own retention (say 10) — the sweeps skip in that
     state for exactly this reason. Returned instead is the largest retention any setting can hold,
     MAX_FULL_KEEP, so nothing an operator could have chosen to keep is deleted until the file
-    reads again. `read` False lets the caller say so."""
+    reads again. `read` False lets the caller say so.
+    """
     if is_unreadable(load_config()):
         return MAX_FULL_KEEP, False
     return get_game_schedule(sid)["keep"], True
@@ -1111,9 +1163,11 @@ UNCHANGED = object()
 
 
 def set_game_schedule(sid, interval_days, keep):
-    """Set/clear a server's schedule override. For each of interval_days/keep: a number sets an
-    override, None clears it (inherit the global default), UNCHANGED leaves it exactly as it is.
-    The server's last-run is preserved."""
+    """Set/clear a server's schedule override.
+
+    For each of interval_days/keep: a number sets an override, None clears it (inherit the global
+    default), UNCHANGED leaves it exactly as it is. The server's last-run is preserved.
+    """
     def _mut(cfg):
         sched = _game_schedules(cfg)
         cfg["game_schedules"] = sched   # normalise a corrupted value back to a dict
@@ -1141,8 +1195,11 @@ def set_game_schedule(sid, interval_days, keep):
 
 
 def remove_game_schedule(sid):
-    """Drop a server's schedule entry entirely — used when it's uninstalled, so no stale override
-    or last-run lingers in config (and can't be inherited if SQLite later reuses the row id)."""
+    """Drop a server's schedule entry entirely — used when it's uninstalled.
+
+    So no stale override or last-run lingers in config (and can't be inherited if SQLite later
+    reuses the row id).
+    """
     def _mut(cfg):
         gs = cfg.get("game_schedules")
         if isinstance(gs, dict):
