@@ -1200,11 +1200,13 @@ def _trusted_proxy_networks(value):
     elif isinstance(value, str):
         value = [value]
     nets = []
-    for entry in value:
+    for pos, entry in enumerate(value, 1):
         net = ip_network_or_none(entry)
         if net is None:
+            # Named by its place in the list, not echoed: the entry is in config.json already,
+            # and a log line is no place for whatever text was typed there.
             logging.getLogger("panel.app").warning(
-                "trusted_proxies: %r is not an address or network; ignored", str(entry)[:64])
+                "trusted_proxies: entry %d is not an address or network; ignored", pos)
         else:
             nets.append(net)
     return tuple(nets)
@@ -1221,8 +1223,8 @@ def _trusted_proxy_uids(value):
     import pwd
     uids = {0, os.getuid(), os.geteuid()}
     explicit = value is not None
-    for entry in (_DEFAULT_PROXY_USERS if value is None else
-                  ([value] if isinstance(value, (str, int)) else value)):
+    for pos, entry in enumerate(_DEFAULT_PROXY_USERS if value is None else
+                                ([value] if isinstance(value, (str, int)) else value), 1):
         if isinstance(entry, int) or str(entry).strip().isdecimal():
             uids.add(int(entry))
             continue
@@ -1230,8 +1232,8 @@ def _trusted_proxy_uids(value):
             uids.add(pwd.getpwnam(str(entry).strip()).pw_uid)
         except KeyError:
             if explicit:        # the defaults are a list of candidates, most absent on any host
-                logging.getLogger("panel.app").warning(
-                    "trusted_proxy_users: no account named %r; ignored", str(entry)[:64])
+                logging.getLogger("panel.app").warning(       # by position, as above
+                    "trusted_proxy_users: entry %d names no account on this host; ignored", pos)
     return frozenset(uids)
 
 

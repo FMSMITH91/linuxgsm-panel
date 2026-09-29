@@ -7363,10 +7363,21 @@ check("client_ip: the ignored-proxy warning names a zoned peer by its address al
 # config.json's values, parsed once: a bad entry is skipped (and said), a bare string is one entry.
 _ip_cfg_app = _IpFlask("ip_cfg")
 _ip_conf = getattr(_ip_auth, "configure_proxy_trust", None)
-if _ip_conf is not None:
-    _ip_conf(_ip_cfg_app, {"trust_proxy": True, "trusted_proxies": ["10.0.0.5", "not-an-ip",
-                                                                     "fd00::/8"],
-                           "trusted_proxy_users": ["root", "no-such-user-here", 4242]})
+_ip_cfg_h = _IpWarned()
+_ip_logger("panel.app").addHandler(_ip_cfg_h)
+try:
+    if _ip_conf is not None:
+        _ip_conf(_ip_cfg_app, {"trust_proxy": True,
+                               "trusted_proxies": ["10.0.0.5", "not-an-ip", "fd00::/8"],
+                               "trusted_proxy_users": ["root", "no-such-user-here", 4242]})
+finally:
+    _ip_logger("panel.app").removeHandler(_ip_cfg_h)
+# Named by position, never echoed: whatever was typed into config.json is not a log line's to carry.
+check("config: a bad trusted_proxies / trusted_proxy_users entry is named by its place, not echoed",
+      any("trusted_proxies: entry 2 " in m for m in _ip_cfg_h.got)
+      and any("trusted_proxy_users: entry 2 " in m for m in _ip_cfg_h.got)
+      and not any("not-an-ip" in m or "no-such-user-here" in m for m in _ip_cfg_h.got),
+      repr(_ip_cfg_h.got))
 check("config: trusted_proxies keeps the entries that parse, as networks",
       [str(n) for n in _ip_cfg_app.config.get("_TRUSTED_PROXIES", ())] == ["10.0.0.5/32", "fd00::/8"],
       repr(_ip_cfg_app.config.get("_TRUSTED_PROXIES")))
