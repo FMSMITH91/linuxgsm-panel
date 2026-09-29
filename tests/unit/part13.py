@@ -3143,6 +3143,69 @@ try:
         _db10.session.remove()
     check("core host key: a first-contact pin is stored on the host's row",
           _pinned10 == "ssh-ed25519 ROWKEY", repr(_pinned10))
+
+    # ...and only on the row for the endpoint that connection met (_pin_row_matches). The row is
+    # loaded by id, and SQLite hands a deleted host's id to the next host created, so a handshake
+    # held across a delete — the far side holds it, so the far side chooses — pinned the OLD box's
+    # key on the host that took the id, and the panel then trusted that box at the new address.
+    # Each "caller" below is the copy the connection was made with: loaded, then detached.
+    import datetime as _dtp10  # noqa: E402
+    from panel.db.models import UnreadableSecret as _US10  # noqa: E402
+
+    def _caller10(row):
+        _db10.session.refresh(row)
+        _db10.session.expunge(row)
+        return row
+
+    with _dbapp10.app_context():
+        _reset_db10()
+        _met10 = _caller10(_mk_remote10("pin-met", host="192.0.2.60", auth_method="key"))
+        _db10.session.execute(_db10.text("UPDATE remote_server SET created_at = :c WHERE id = :i"),
+                              {"c": _dtp10.datetime(2001, 1, 1), "i": _met10.id})
+        _db10.session.commit()
+        _reborn_r10 = _core_saved10["_persist_host_key"](_met10, "ssh-ed25519 OLDBOX")
+        _reborn_k10 = _db10.session.get(_RS10, _met10.id).host_key
+        _db10.session.remove()
+    with _dbapp10.app_context():
+        _reset_db10()
+        _met10 = _caller10(_mk_remote10("pin-moved", host="192.0.2.61", auth_method="key"))
+        _db10.session.execute(_db10.text("UPDATE remote_server SET host = '192.0.2.62' WHERE id = :i"),
+                              {"i": _met10.id})
+        _db10.session.commit()
+        _moved_r10 = _core_saved10["_persist_host_key"](_met10, "ssh-ed25519 OTHERADDR")
+        _moved_k10 = _db10.session.get(_RS10, _met10.id).host_key
+        _db10.session.remove()
+    with _dbapp10.app_context():
+        _reset_db10()
+        _met10 = _caller10(_mk_remote10("pin-race", host="192.0.2.63", auth_method="key"))
+        _db10.session.execute(_db10.text("UPDATE remote_server SET host_key = NULL WHERE id = :i"),
+                              {"i": _met10.id})
+        _row10 = _db10.session.get(_RS10, _met10.id)
+        _row10.host_key = "ssh-ed25519 FIRSTSEEN"
+        _db10.session.commit()
+        _race_r10 = _core_saved10["_persist_host_key"](_met10, "ssh-ed25519 SECONDSEEN")
+        _same_r10 = _core_saved10["_persist_host_key"](_met10, "ssh-ed25519 FIRSTSEEN")
+        _db10.session.expire_all()
+        _race_k10 = _db10.session.get(_RS10, _met10.id).host_key
+        _db10.session.remove()
+    check("core host key: a connection whose host was replaced by one that took its id pins "
+          "nothing on the new host", _reborn_r10 is False and not _reborn_k10,
+          repr((_reborn_r10, _reborn_k10)))
+    check("core host key: ...nor on a row that now names another address",
+          _moved_r10 is False and not _moved_k10, repr((_moved_r10, _moved_k10)))
+    check("core host key: a pin another first contact already stored is never replaced by a "
+          "different key", _race_r10 is False and _race_k10 == "ssh-ed25519 FIRSTSEEN",
+          repr((_race_r10, _race_k10)))
+    check("core host key: ...and the same key again is simply accepted (control)",
+          _same_r10 is True, repr(_same_r10))
+    _unreadable_row10 = NS(created_at=None, host="192.0.2.64", port=22, host_key=_US10())
+    check("core host key: a pin this host cannot decrypt is never replaced (it reads as '')",
+          _sm_core._pin_row_matches(_unreadable_row10, NS(host="192.0.2.64", port=22),
+                                    "ssh-ed25519 NEW") is False
+          and _sm_core._pin_row_matches(NS(created_at=None, host="192.0.2.64", port=22,
+                                           host_key=""),
+                                        NS(host="192.0.2.64", port=22), "ssh-ed25519 NEW") is True,
+          "")
     check("core pool: repointing a host closes BOTH the key its client was opened under and the "
           "key it spells now", _closed_keys10 == ["root@192.0.2.40:22", "root@192.0.2.41:22"],
           repr(_closed_keys10))
@@ -4318,14 +4381,26 @@ def _ca13_check_proxy(app, client):
 
 def _ca13_login_fails(client, n, remote, xff_for):
     """POST n failed logins from `remote`, each with X-Forwarded-For xff_for(i); returns the 1-based
-    attempt the throttle first refused, or None."""
-    for i in range(n):
-        r = client.post("/login", data={"username": "p13_nobody", "password": "wrong"},
-                        environ_base={"REMOTE_ADDR": remote},
-                        headers={"X-Forwarded-For": xff_for(i)})
-        if b"Too many failed attempts" in r.data:
-            return i + 1
-    return None
+    attempt the throttle first refused, or None.
+
+    A failure that carries X-Forwarded-For schedules banlist.refresh_soon() (a read of fail2ban and
+    the firewall, 3 s later, on a thread). Left real, that thread fired inside the NEXT part and
+    ran part16's tripwired _run_verb — a leak that only showed once part16 followed this part. The
+    refresh is not what these checks are about, so it is held off for them.
+    """
+    from panel.security import banlist as _bl13
+    saved = _bl13.refresh_soon
+    _bl13.refresh_soon = lambda delay=3.0: None
+    try:
+        for i in range(n):
+            r = client.post("/login", data={"username": "p13_nobody", "password": "wrong"},
+                            environ_base={"REMOTE_ADDR": remote},
+                            headers={"X-Forwarded-For": xff_for(i)})
+            if b"Too many failed attempts" in r.data:
+                return i + 1
+        return None
+    finally:
+        _bl13.refresh_soon = saved
 
 
 def _ca13_check_login_behind_proxy(app, client):

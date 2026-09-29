@@ -959,6 +959,8 @@ def _persist_host_key(server, keystr):
                 row = db.session.get(RemoteServer, server.id)
                 if row is None:
                     return False           # the host was deleted mid-connect: nothing to pin
+                if not _pin_row_matches(row, server, keystr):
+                    return False
                 row.host_key = keystr
                 db.session.commit()
             except Exception:
@@ -971,6 +973,34 @@ def _persist_host_key(server, keystr):
     if row is not server:
         _mirror_pin(server, keystr)
     return True
+
+
+def _pin_row_matches(row, server, keystr):
+    """Whether the row loaded by `server`'s id may take the key `server`'s connection just met.
+
+    The row is loaded by id, and SQLite hands a deleted row's id to the next row created. A
+    connection whose host was deleted while its handshake was held — by the far side, which the
+    far side controls — would otherwise pin THAT box's key onto whichever host took the id, and
+    the panel would then trust it at the new host's address. So the row must still be the one the
+    caller connected with (the same created_at, when the caller's copy has it loaded) and name
+    the same endpoint, and it must hold no other pin: first contact is the only time a pin is
+    written, and two first contacts that met different keys have met a man in the middle.
+    """
+    from sqlalchemy import inspect as _sa_inspect
+    try:
+        seen = _sa_inspect(server).dict        # loaded attributes only: never a lazy load
+    except Exception:
+        seen = getattr(server, "__dict__", {}) or {}
+    created = seen.get("created_at")
+    if created is not None and row.created_at != created:
+        return False
+    if (row.host, row.port) != (seen.get("host", row.host), seen.get("port", row.port)):
+        return False
+    from panel.db.models import UnreadableSecret
+    current = row.host_key
+    if isinstance(current, UnreadableSecret):
+        return False            # an empty str that IS a pin, just one this key cannot read
+    return not current or current == keystr
 
 
 def _mirror_pin(server, keystr):
