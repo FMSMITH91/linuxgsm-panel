@@ -2736,7 +2736,8 @@ try:
         _p9_state._install_jobs[_ms_y] = {"status": "done", "updated": _p9_real_time.time()}
     _d = _p9_json(_A.post("/servers/%d/delete" % _ms_y, headers=_XHR))
     check("uninstall (JSON): the firewall rules it removed are counted in the message",
-          _d == {"success": True, "message": "Server 'p9fw' uninstalled. 2 firewall rule(s) removed."},
+          _d == {"success": True, "message": "Server 'p9fw' uninstalled. 2 firewall rule(s) removed.",
+                 "warn": False},
           repr(_d))
     # Aikido 745379215: past its tagged rules, uninstall takes an UNTAGGED allow on its port (a
     # panel that did not tag yet left those) — and only when no other server's block holds it.
@@ -2765,7 +2766,8 @@ try:
     _d = _p9_json(_A.post("/servers/%d/delete" % _ms_w, headers=_XHR))
     check("uninstall: a rule the cleanup could not remove, or left, is named in the answer — once",
           _d == {"success": True, "message": "Server 'p9fwleft' uninstalled. 2 firewall rule(s) "
-                                             "removed. " + _ms_stuck + " " + _ms_kept}, repr(_d))
+                                             "removed. " + _ms_stuck + " " + _ms_kept,
+                 "warn": True}, repr(_d))
     _ms_v = _p9_new_server(P9_HOST, "p9fwhalf", "csgo", 27193)
     _ms_fw[0], _ms_legacy_fw[0] = (2, "", []), (0, "", [])
     _ms_reset(boom={"ufw-close"})
@@ -2773,7 +2775,8 @@ try:
     check("uninstall: a legacy sweep that raised keeps the count of what the name cleanup removed, "
           "and says the rest may still be open",
           _d == {"success": True, "message": "Server 'p9fwhalf' uninstalled. 2 firewall rule(s) "
-                                             "removed. " + _p9_sm.UFW_UNREAD_NOTE}, repr(_d))
+                                             "removed. " + _p9_sm.UFW_UNREAD_NOTE,
+                 "warn": True}, repr(_d))
     _ms_fw[0], _ms_legacy_fw[0] = (0, "", []), (0, "", [])
     with _p9_state._install_lock:
         _ms_y_job = _p9_state._install_jobs.pop(_ms_y, None)
