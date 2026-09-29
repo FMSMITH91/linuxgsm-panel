@@ -901,6 +901,9 @@ try:
     try:
         _sm_core.run_command = lambda *a, **k: ("", "", 0)
         _sm_core.run_as_game_user = lambda *a, **k: ("", "", 0)
+        # The third: rules that CARRY the server's name but are not what the panel makes — a DENY,
+        # a LIMIT, and a `22` allow the old "Open all ports" takeover could leave tagged with a
+        # server. The name cleanup took every one of them; they stay now, and are named.
         for _uf_name, _uf_port, _uf_rules, _uf_keep, _uf_gone in (
                 ("fwsshsrv", 22,
                  (("22/tcp", "ALLOW", "operator"), ("22", "ALLOW", ""), ("27041", "ALLOW", "fwsshsrv")),
@@ -909,7 +912,13 @@ try:
                  (("22/tcp", "LIMIT", ""), ("27042", "ALLOW", "fwforeign"),
                   ("27042/udp", "ALLOW", "voicebridge"), ("27042/tcp", "ALLOW", "")),
                  [("22/tcp", "LIMIT", ""), ("27042/udp", "ALLOW", "voicebridge")],
-                 ["27042", "27042/tcp"])):
+                 ["27042", "27042/tcp"]),
+                ("fwmixed", 27045,
+                 (("22/tcp", "ALLOW", "operator"), ("27045", "ALLOW", "fwmixed"),
+                  ("27046", "DENY", "fwmixed"), ("27047/tcp", "LIMIT", "fwmixed"),
+                  ("22", "ALLOW", "fwmixed")),
+                 [("22/tcp", "ALLOW", "operator"), ("27046", "DENY", "fwmixed"),
+                  ("27047/tcp", "LIMIT", "fwmixed"), ("22", "ALLOW", "fwmixed")], ["27045"])):
             _uf = _UfwTable(*_uf_rules)
             _sm_core.run_privileged = _uf.priv
             with app.app_context():
@@ -928,6 +937,12 @@ try:
             check("uninstall %s: ...while its own tagged rule and an untagged legacy allow on a port "
                   "no one else holds still go (positive control)" % _uf_name,
                   not any(r[0] in _uf_gone for r in _uf_left), "left=%r" % (_uf_left,))
+            if _uf_name == "fwmixed":
+                _uf_msg = (_resp.get_json() or {}).get("message", "")
+                check("uninstall fwmixed: ...and the rules carrying its name that it left are named "
+                      "in the answer",
+                      "27046 DENY, 27047/tcp LIMIT" in _uf_msg and "own port: 22." in _uf_msg,
+                      "message=%r" % (_uf_msg,))
             with app.app_context():
                 _left = _UGS.query.get(_tid)
                 if _left: db.session.delete(_left); db.session.commit()
