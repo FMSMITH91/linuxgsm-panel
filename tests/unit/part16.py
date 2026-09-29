@@ -1261,8 +1261,13 @@ for _mode16 in ("eventlet", "threads"):
           "grace for all its pipes, then they are closed" % _mode16,
           _e16.get("got") == ["kept", 4, "", 0, 0] and _e16.get("took", 99) < 1.8
           and _e16.get("open") == 0 and _e16.get("holder") is True, repr(_e16))
+# What "kept running" can be told apart from: every timeout case above waits about 2s (its 1s
+# timeout, then the 1s reader grace), so a hub held through any one of those waits shows a gap of 2s
+# or more. Scheduling on a loaded machine is the other thing a gap measures: about 0.01-0.03s here
+# and on the test VPS, and 0.64-0.80s on GitHub's shared runners (PR #369, all three Pythons), where
+# a 0.5s bound failed a correct tree. 1.5s sits between the two.
 check("run_verb (eventlet): the rest of the panel kept running through every wait",
-      _rv16_beat["gap"] < 0.5, "the longest gap between heartbeats was %.2fs" % _rv16_beat["gap"])
+      _rv16_beat["gap"] < 1.5, "the longest gap between heartbeats was %.2fs" % _rv16_beat["gap"])
 
 
 # ── the capped reader itself: eventlet's green read answers "" (a str) for a closed descriptor ──
