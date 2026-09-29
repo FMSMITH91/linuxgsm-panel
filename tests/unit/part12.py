@@ -2296,10 +2296,11 @@ try:
               lambda r: _ms_next("listen" if "as:start" in _ms_log else "listen_pre"))
     _p9_patch(_p9_sm, "protected_host_ports", lambda r: {22})
     _p9_patch(_p9_sm, "remote_ufw_tagged_ports", lambda r, n: _ms_next("tagged"))
+    _ms_legacy_fw = [(0, "", [])]     # what the legacy (untagged) cleanup answers
     _p9_patch(_p9_ms, "remote_ufw_close_game_port",
               lambda r, p, name="", legacy=False: (
                   _ms_log.append("ufw-close:%s:%s:%s" % (p, name, legacy)), _ms_boom("ufw-close"),
-                  (0, ""))[2])
+                  _ms_legacy_fw[0])[2])
     _p9_patch(_p9_ms, "remote_ufw_allow_game_ports",
               lambda r, ports, name: _ms_log.append("ufw-allow:%s" % sorted(ports)))
     _p9_patch(_p9_ms, "set_autostart",
@@ -2681,7 +2682,7 @@ try:
     with _p9_state._install_lock:
         _p9_state._install_jobs.pop(_ms_x, None)
 
-    _ms_fw = [(0, "")]
+    _ms_fw = [(0, "", [])]
     _p9_patch(_p9_ms, "remote_ufw_close_by_name", lambda r, n: _ms_next_fw())
 
     def _ms_next_fw():
@@ -2711,11 +2712,13 @@ try:
     _ms_fw[0] = ConnectionError("ufw unreachable")
     _p9_patch(_p9_bk, "remove_game_schedule", _raise_conn)
     _r = _A.post("/servers/%d/delete" % _ms_x)
-    check("uninstall (form): success flashes, even when the firewall and schedule cleanup raised",
+    check("uninstall (form): success flashes, even when the firewall and schedule cleanup raised — "
+          "and it says the server's rules may still be open, rather than nothing",
           _r.status_code == 302 and not _p9_exists(_ms_x)
-          and _p9_flashes(_A) == ["Server 'p9empty' uninstalled."], repr(_p9_row(_ms_x)))
+          and _p9_flashes(_A) == ["Server 'p9empty' uninstalled. " + _p9_sm.UFW_UNREAD_NOTE],
+          repr((_p9_row(_ms_x), _p9_flashes(_A))))
     _ms_y = _p9_new_server(P9_HOST, "p9fw", "csgo", 27185)
-    _ms_fw[0] = (2, "")
+    _ms_fw[0] = (2, "", [])
     # This one's cleanup works, and it has a FINISHED install job: the row id is handed to the next
     # server created, so a job left behind makes /install-status answer for that new server with
     # this one's outcome. The check above cannot see it — its schedule cleanup raises first.
@@ -2733,13 +2736,36 @@ try:
     _ms_z = _p9_new_server(P9_HOST, "p9fwnext", "csgo", 27187)
     _ms_zz = _p9_new_server(P9_HOST, "p9fwrust", "rust", 27186)     # its block is 27186-27187
     _ms_reset()
-    _ms_fw[0] = (0, "")
+    _ms_fw[0] = (0, "", [])
     _d = _p9_json(_A.post("/servers/%d/delete" % _ms_z, headers=_XHR))
     check("uninstall: ...and NOT on a port inside another server's block — that rule is at least as "
           "likely to be theirs",
           _d.get("success") is True and not any("ufw-close:27187" in e for e in _ms_log),
           repr((_d, [e for e in _ms_log if "ufw-close" in e])))
     _p9_delete_server(_ms_zz)
+    # What the cleanups could not remove, or left on purpose, is in the uninstall's answer: a rule
+    # that stayed open used to read as a clean uninstall, since only the delete count was kept.
+    _ms_w = _p9_new_server(P9_HOST, "p9fwleft", "csgo", 27189)
+    _ms_stuck = ("Still open, as it could not be removed: 27190 — remove it from the host's "
+                 "Firewall page.")
+    _ms_kept = "Left in place, as the panel does not make rules like these: 27191 DENY."
+    _ms_fw[0] = (1, "1 rule(s) removed for p9fwleft. " + _ms_stuck + " " + _ms_kept,
+                 [_ms_stuck, _ms_kept])
+    _ms_legacy_fw[0] = (1, "Port 27189: 1 rule(s) removed. " + _ms_stuck, [_ms_stuck])
+    _ms_reset()
+    _d = _p9_json(_A.post("/servers/%d/delete" % _ms_w, headers=_XHR))
+    check("uninstall: a rule the cleanup could not remove, or left, is named in the answer — once",
+          _d == {"success": True, "message": "Server 'p9fwleft' uninstalled. 2 firewall rule(s) "
+                                             "removed. " + _ms_stuck + " " + _ms_kept}, repr(_d))
+    _ms_v = _p9_new_server(P9_HOST, "p9fwhalf", "csgo", 27193)
+    _ms_fw[0], _ms_legacy_fw[0] = (2, "", []), (0, "", [])
+    _ms_reset(boom={"ufw-close"})
+    _d = _p9_json(_A.post("/servers/%d/delete" % _ms_v, headers=_XHR))
+    check("uninstall: a legacy sweep that raised keeps the count of what the name cleanup removed, "
+          "and says the rest may still be open",
+          _d == {"success": True, "message": "Server 'p9fwhalf' uninstalled. 2 firewall rule(s) "
+                                             "removed. " + _p9_sm.UFW_UNREAD_NOTE}, repr(_d))
+    _ms_fw[0], _ms_legacy_fw[0] = (0, "", []), (0, "", [])
     with _p9_state._install_lock:
         _ms_y_job = _p9_state._install_jobs.pop(_ms_y, None)
     check("uninstall: the removed server's install job goes with its row (the id is reused)",

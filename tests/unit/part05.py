@@ -6431,15 +6431,18 @@ try:
         return ("", "", 0)
 
     def _cbn_status(_s):
-        return {"installed": True, "enabled": True, "groups": [
-            {"nums": [i + 1], "protected": False, "key": "k:%s" % r,
-             "comment": _fw_f._parse_ufw_rule(r)["comment"]} for i, r in enumerate(_cbn["rules"])]}
+        # The real grouping, so each group carries the fields the cleanup selects on (an ALLOW,
+        # from anywhere, on one port); only the lockout annotation is left out.
+        _g = _fw_f._group_ufw_rules([{"num": str(i + 1), "detail": r}
+                                     for i, r in enumerate(_cbn["rules"])])
+        return {"installed": True, "enabled": True,
+                "groups": [dict(g, protected=False) for g in _g]}
     _sm_core.run_privileged, _fw_f.remote_ufw_status = _cbn_priv, _cbn_status
     _cbn["rules"] = ["27015                      ALLOW IN    Anywhere     # gamea",
                      "27016                      ALLOW IN    Anywhere     # gameb",
                      "27017                      ALLOW IN    Anywhere     # gamea",
                      "22/tcp                     LIMIT IN    Anywhere"]
-    _cbn_n, _ = _fw_h.remote_ufw_close_by_name(NS(), "gamea")
+    _cbn_n = _fw_h.remote_ufw_close_by_name(NS(), "gamea")[0]
     _cbn_left = [r.split("#")[-1].strip() if "#" in r else r.split()[0] for r in _cbn["rules"]]
     check("ufw close-by-name: an insert mid-cleanup does not move a delete onto another rule",
           sorted(_cbn_left) == ["22/tcp", "gameb", "panel-autoblock"] and _cbn_n == 2,
@@ -6481,7 +6484,7 @@ try:
           and sum(r.startswith("27016") for r in _cgp_rules) == 2, repr((_cgp_sent, _cgp_rules)))
     check("ufw close-game-port: ...while the port's own tagged and untagged-legacy rules still go, "
           "by number (positive control)",
-          _cgp_n == (2, "Port 27015: 2 rule(s) removed")
+          _cgp_n == (2, "Port 27015: 2 rule(s) removed", [])
           and not any(r.startswith("27015") for r in _cgp_rules)
           and [v for v, _a in _cgp_sent if v.startswith("ufw-delete")] == ["ufw-delete-num"] * 2,
           repr((_cgp_n, _cgp_sent, _cgp_rules)))

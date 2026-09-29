@@ -925,7 +925,7 @@ try:
     _r = _cgp(_p8_srv(port=2222), 27015, "gamea", legacy=True)
     check("ufw close game port: this server's tagged rule and an UNTAGGED legacy allow go — "
           "another tag on the same port stays",
-          _r == (2, "Port 27015: 2 rule(s) removed")
+          _r == (2, "Port 27015: 2 rule(s) removed", [])
           and ("27015/udp", "ALLOW", "voicebridge") in _fu.left()
           and not any(t in ("27015", "27015/tcp") for t, _a, _c in _fu.left()),
           "result=%r left=%r" % (_r, _fu.left()))
@@ -947,10 +947,12 @@ try:
           ("27020/tcp", "LIMIT", "") in _fu.left() and not _w.verbs_called("ufw-delete-num"),
           "result=%r left=%r" % (_r, _fu.left()))
     _w = _wire(verbs={"ufw-status": ("", "SSH command timed out", -1)})
-    check("ufw close game port: an unreadable firewall deletes nothing",
-          _cgp(_p8_srv(), 27015, "gamea", legacy=True) == (0, "Port 27015: 0 rule(s) removed")
+    _r = _cgp(_p8_srv(), 27015, "gamea", legacy=True)
+    check("ufw close game port: an unreadable firewall deletes nothing, and says its rules may "
+          "still be open rather than reporting a clean 0",
+          _r == (0, "Port 27015: 0 rule(s) removed. " + _H.UFW_UNREAD_NOTE, [_H.UFW_UNREAD_NOTE])
           and [v for v, _a in _w.verbs_called()] == ["sshd-effective-config", "ufw-status"],
-          repr(_w.verbs_called()))
+          "result=%r verbs=%r" % (_r, _w.verbs_called()))
 
     # ── the ports a server's own tagged rules already open ────────────────────────────────────
     _fu = _FakeUfw(("27015", "ALLOW", "gamea"), ("27016", "DENY", "gamea"),
@@ -990,9 +992,10 @@ try:
           "left=%r" % (_fu.left(),))
     check("game ports: ...an operator's DENY is not turned into an allow",
           ("3306", "DENY", "operator-db") in _fu.left(), "left=%r" % (_fu.left(),))
-    check("game ports: ...a free port and this server's own are still opened (positive control)",
-          ("27017", "ALLOW", "gamea") in _fu.left()
-          and [a[0] for _v, a in _w.verbs_called("ufw-allow-port")] == ["27015", "27017"],
+    check("game ports: ...a free port is still opened, and this server's own rule is left as it "
+          "is (positive control)",
+          ("27017", "ALLOW", "gamea") in _fu.left() and ("27015", "ALLOW", "gamea") in _fu.left()
+          and [a[0] for _v, a in _w.verbs_called("ufw-allow-port")] == ["27017"],
           repr(_w.verbs_called("ufw-allow-port")))
     check("game ports: ...and what is open is reported: a port another ALLOW holds is open, one a "
           "DENY holds is not",
@@ -1062,15 +1065,28 @@ try:
     eq("game ports: nothing opened says 'none'", _H.remote_ufw_allow_game_ports(_p8_srv(), [1]),
        ([], "opened 0 port(s): none"))
 
-    # ── close_by_name: re-read before every delete, never retry a refused rule ─────────────────
+    # ── close_by_name: re-read before every delete, retry a rule that MOVED ────────────────────
+    def _cbn3(*a, **k):
+        """remote_ufw_close_by_name, its result padded to three values (the pre-fix one had two)."""
+        return tuple(_H.remote_ufw_close_by_name(*a, **k)) + (None,) * 3
+
+    def _cgp3(*a, **k):
+        """remote_ufw_close_game_port, likewise."""
+        return tuple(_H.remote_ufw_close_game_port(*a, **k)) + (None,) * 3
+
     eq("close by name: a name with nothing safe in it deletes nothing",
-       _H.remote_ufw_close_by_name(_p8_srv(), "$();|&"), (0, "no name"))
-    _cbn_rules = [{"comment": "cs2server", "key": "k1", "nums": [2, 6]},
-                  {"comment": "cs2server", "key": "k2", "nums": [4]},
-                  {"comment": "other", "key": "k3", "nums": [5]}]
-    _sm_firewall.remote_ufw_status = lambda s: {"installed": True,
+       _H.remote_ufw_close_by_name(_p8_srv(), "$();|&"), (0, "no name", []))
+
+    def _cbn_group(key, port, nums, comment="cs2server"):
+        """A group as remote_ufw_status builds it for a bare public allow."""
+        return {"comment": comment, "key": key, "nums": nums, "action": "ALLOW", "direction": "IN",
+                "scope": "Any address", "proto_label": "BOTH", "port_num": port,
+                "port_label": port, "is_iface": False}
+    _cbn_rules = [_cbn_group("k1", "27015", [2, 6]), _cbn_group("k2", "27016", [4]),
+                  _cbn_group("k3", "27017", [5], "other")]
+    _sm_firewall.remote_ufw_status = lambda s: {"installed": True, "enabled": True,
                                                 "groups": [dict(g, nums=list(g["nums"]))
-                                                           for g in _cbn_rules]}
+                                                           for g in _cbn_rules if g["nums"]]}
     _cbn_del = []
 
     def _cbn_delete(server, n, force=False, expect_key=None):
@@ -1082,16 +1098,281 @@ try:
                 g["nums"].remove(n)
         return True, "deleted"
     _H.remote_ufw_delete_rule = _cbn_delete
+    _wire()
     _cbn = _H.remote_ufw_close_by_name(_p8_srv(), "cs2server")
     check("close by name: only the tagged rules go, highest number first, each named by its key; "
-          "a refused one is skipped and never retried",
-          _cbn == (2, "2 rule(s) removed for cs2server")
-          and _cbn_del == [(6, "k1"), (4, "k2"), (2, "k1")], "result=%r deletes=%r" % (_cbn, _cbn_del))
+          "a refused one is tried three times, each against a fresh read, then NAMED as still open",
+          _cbn == (2, "2 rule(s) removed for cs2server. Still open, as it could not be removed: "
+                      "27016 — remove it from the host's Firewall page.",
+                   ["Still open, as it could not be removed: 27016 — remove it from the host's "
+                    "Firewall page."])
+          and _cbn_del == [(6, "k1"), (4, "k2"), (4, "k2"), (4, "k2"), (2, "k1")],
+          "result=%r deletes=%r" % (_cbn, _cbn_del))
     _sm_firewall.remote_ufw_status = lambda s: {"installed": False, "groups": [], "unreachable": True}
-    eq("close by name: an unreachable firewall deletes nothing",
-       _H.remote_ufw_close_by_name(_p8_srv(), "cs2server"), (0, "0 rule(s) removed for cs2server"))
+    eq("close by name: an unreachable firewall deletes nothing, and says the rules may still be open",
+       _H.remote_ufw_close_by_name(_p8_srv(), "cs2server"),
+       (0, "0 rule(s) removed for cs2server. " + _H.UFW_UNREAD_NOTE, [_H.UFW_UNREAD_NOTE]))
+    _sm_firewall.remote_ufw_status = lambda s: {"installed": True, "enabled": False, "groups": []}
+    _cbn = _cbn3(_p8_srv(), "cs2server")
+    check("close by name: an INACTIVE ufw lists no rules, stored ones included — that is said, not "
+          "read as 'nothing to remove'",
+          _cbn[0] == 0 and len(_cbn[2] or ()) == 1 and "UFW is not active" in _cbn[2][0], repr(_cbn))
     _H.remote_ufw_delete_rule = _h_saved["remote_ufw_delete_rule"]
     _sm_firewall.remote_ufw_status = _h_fw_saved["remote_ufw_status"]
+
+    # ── the cleanup and "Open all ports" against ufw 0.36.2's own listing ─────────────────────
+    # _Ufw36 prints `ufw status numbered` the way the test VPS (vps-374e9220, ufw 0.36.2) printed it
+    # on 2026-09-29: a rule from anywhere is listed TWICE, its IPv4 row in the first block and its
+    # (v6) twin in the second, numbered as one list — so one inserted row moves every number after
+    # it. A rule from one IPv4 source has no twin. `allow` appends to the end of each block
+    # (updating a rule that differs only in comment or action), `add(top=True)` is `prepend`, and
+    # a delete by number removes that one row. The first check below proves the fixture prints
+    # exactly what the VPS printed.
+    class _Ufw36:
+        HDR = ("Status: active\n\n     To                         Action      From\n"
+               "     --                         ------      ----\n")
+
+        def __init__(self, *rules):
+            self.v4, self.v6, self.reads, self.hook = [], [], 0, None
+            for r in rules:
+                self.add(*r)
+
+        def add(self, to, action="ALLOW", frm="Anywhere", comment="", top=False):
+            for fam, fam_ok in ((self.v4, True), (self.v6, frm == "Anywhere")):
+                if fam_ok:
+                    fam.insert(0 if top else len(fam), [to, action, frm, comment])
+
+        @staticmethod
+        def _row(r, v6):
+            to, action, frm, comment = r
+            if v6:
+                to = to.replace(" on ", " (v6) on ") if " on " in to else to + " (v6)"
+                frm += " (v6)"
+            return ("%-26s %-11s %-26s" % (to, action + " IN", frm)
+                    + (" # " + comment if comment else ""))
+
+        def rows(self):
+            return [self._row(r, False) for r in self.v4] + [self._row(r, True) for r in self.v6]
+
+        def status(self, _a):
+            self.reads += 1
+            if self.hook:
+                self.hook(self, self.reads)
+            return (self.HDR + "".join("[%2d] %s\n" % (i, r) for i, r in enumerate(self.rows(), 1)),
+                    "", 0)
+
+        def delete_num(self, a):
+            n = int(a[0])
+            if not 1 <= n <= len(self.v4) + len(self.v6):
+                return ("ERROR: Could not find rule '%d'" % n, "", 1)
+            if n <= len(self.v4):
+                del self.v4[n - 1]
+                return ("Rule deleted", "", 0)
+            del self.v6[n - 1 - len(self.v4)]
+            return ("Rule deleted (v6)", "", 0)
+
+        def allow(self, a):
+            to, comment = a[0], (a[1] if len(a) > 1 else "")
+            same = [r for r in self.v4 + self.v6 if r[0] == to and r[2] == "Anywhere"]
+            if not same:
+                self.add(to, "ALLOW", "Anywhere", comment)
+                return ("Rule added\nRule added (v6)", "", 0)
+            if all(r[1:] == ["ALLOW", "Anywhere", comment] for r in same):
+                return ("Skipping adding existing rule\nSkipping adding existing rule (v6)", "", 0)
+            for r in same:
+                r[1], r[3] = "ALLOW", comment
+            return ("Rule updated\nRule updated (v6)", "", 0)
+
+        def left(self):
+            return [re.sub(r"\s+", " ", r).strip() for r in self.rows()]
+
+        def verbs(self):
+            return {"ufw-status": self.status, "ufw-delete-num": self.delete_num,
+                    "ufw-allow-port": self.allow}
+
+    # The VPS's baseline rules, then the two probeH allows it tagged for scenario h.
+    _VPS_BASE = (("Anywhere on tailscale0", "ALLOW", "Anywhere", ""),
+                 ("28960", "ALLOW", "Anywhere", "codserver"),
+                 ("27015", "ALLOW", "Anywhere", "gmodserver"),
+                 ("22/tcp", "ALLOW", "Anywhere", "SSH panel"))
+    _VPS_H = _VPS_BASE + (("47826", "ALLOW", "Anywhere", "probeH"),
+                          ("47827", "ALLOW", "Anywhere", "probeH"))
+    _u = _Ufw36(*_VPS_H)
+    eq("ufw 0.36.2 fixture: prints scenario h's table exactly as the VPS printed it",
+       _u.status(None)[0].splitlines(), [
+           "Status: active", "",
+           "     To                         Action      From",
+           "     --                         ------      ----",
+           "[ 1] Anywhere on tailscale0     ALLOW IN    Anywhere                  ",
+           "[ 2] 28960                      ALLOW IN    Anywhere                   # codserver",
+           "[ 3] 27015                      ALLOW IN    Anywhere                   # gmodserver",
+           "[ 4] 22/tcp                     ALLOW IN    Anywhere                   # SSH panel",
+           "[ 5] 47826                      ALLOW IN    Anywhere                   # probeH",
+           "[ 6] 47827                      ALLOW IN    Anywhere                   # probeH",
+           "[ 7] Anywhere (v6) on tailscale0 ALLOW IN    Anywhere (v6)             ",
+           "[ 8] 28960 (v6)                 ALLOW IN    Anywhere (v6)              # codserver",
+           "[ 9] 27015 (v6)                 ALLOW IN    Anywhere (v6)              # gmodserver",
+           "[10] 22/tcp (v6)                ALLOW IN    Anywhere (v6)              # SSH panel",
+           "[11] 47826 (v6)                 ALLOW IN    Anywhere (v6)              # probeH",
+           "[12] 47827 (v6)                 ALLOW IN    Anywhere (v6)              # probeH"])
+    _VPS_AFTER_BASE = ["Anywhere on tailscale0 ALLOW IN Anywhere",
+                       "28960 ALLOW IN Anywhere # codserver", "27015 ALLOW IN Anywhere # gmodserver",
+                       "22/tcp ALLOW IN Anywhere # SSH panel"]
+    _VPS_AFTER_V6 = ["Anywhere (v6) on tailscale0 ALLOW IN Anywhere (v6)",
+                     "28960 (v6) ALLOW IN Anywhere (v6) # codserver",
+                     "27015 (v6) ALLOW IN Anywhere (v6) # gmodserver",
+                     "22/tcp (v6) ALLOW IN Anywhere (v6) # SSH panel"]
+
+    # Defect: the VPS's scenario h. A rule prepended between the cleanup's read and the delete's
+    # fresh read (what the auto-block does) moved rule 12 — 47827's v6 twin — onto `22/tcp (v6)`.
+    # expect_key refused that delete, as it should, and the cleanup then gave 47827 up for good:
+    # it stayed open, v4 and v6, under "2 rule(s) removed for probeH".
+    _u = _Ufw36(*_VPS_H)
+    _u.hook = lambda u, n: n == 2 and u.add("47829", comment="intruder", top=True)
+    _w = _wire(verbs=_u.verbs())
+    _r = _cbn3(_p8_srv(), "probeH")
+    check("close by name: a rule whose number MOVED between the read and the delete is read again "
+          "and removed — the server's port does not stay open, v4 or v6",
+          not any("probeH" in r for r in _u.left()) and _r[:3] == (4, "4 rule(s) removed for probeH",
+                                                                    []),
+          "result=%r left=%r" % (_r, _u.left()))
+    check("close by name: ...and nothing else went — the rule the stale number named, the inserted "
+          "rule and the other servers' rules all stay",
+          _u.left() == (["47829 ALLOW IN Anywhere # intruder"] + _VPS_AFTER_BASE
+                        + ["47829 (v6) ALLOW IN Anywhere (v6) # intruder"] + _VPS_AFTER_V6),
+          "left=%r" % (_u.left(),))
+
+    # The firewall changing under EVERY delete (an auto-block deny prepended each time): each rule
+    # gets three tries, then the cleanup stops and names what is still open instead of reporting a
+    # clean result.
+    _u = _Ufw36(*_VPS_H)
+    _denied = []
+    _u.hook = lambda u, n: n % 2 == 0 and (_denied.append(n), u.add(
+        "Anywhere", "DENY", "203.0.113.%d" % n, "panel-autoblock", top=True))
+    _w = _wire(verbs=_u.verbs())
+    _r = _cbn3(_p8_srv(), "probeH")
+    check("close by name: a rule that keeps moving is tried three times against a fresh read, not "
+          "forever — then the cleanup stops",
+          _u.reads == 13 and not _w.verbs_called("ufw-delete-num"),
+          "reads=%d deletes=%r" % (_u.reads, _w.verbs_called("ufw-delete-num")))
+    check("close by name: ...and what stayed open is NAMED in the result, not counted as removed",
+          _r[0] == 0 and _r[2] == ["Still open, as it could not be removed: 47826, 47827 — remove "
+                                   "them from the host's Firewall page."]
+          and _r[1].endswith(_r[2][0]), "result=%r" % (_r,))
+    check("close by name: ...while every auto-block deny it raced stays (nothing about the "
+          "auto-block changes)",
+          _denied and sorted(r for r in _u.left() if "panel-autoblock" in r)
+          == sorted("Anywhere DENY IN 203.0.113.%d # panel-autoblock" % n for n in _denied),
+          "inserted=%r left=%r" % (_denied, _u.left()))
+
+    # The same race on remote_ufw_close_game_port, which had the same give-up-at-once loop: 47827's
+    # rules are ONE group (v4 + v6), so one moved number used to give up both rows.
+    _u = _Ufw36(*_VPS_H)
+    _u.hook = lambda u, n: n == 2 and u.add("47829", comment="intruder", top=True)
+    _w = _wire(verbs=_u.verbs())
+    _r = _cgp3(_p8_srv(), 47827, "probeH")
+    check("close game port: a rule whose number moved is read again and removed, v4 and v6",
+          _r[:3] == (2, "Port 47827: 2 rule(s) removed", [])
+          and not any("47827" in r for r in _u.left()) and len(_u.left()) == 12,
+          "result=%r left=%r" % (_r, _u.left()))
+    _u = _Ufw36(*_VPS_H)
+    _u.hook = lambda u, n: n % 2 == 0 and u.add("Anywhere", "DENY", "203.0.113.%d" % n,
+                                                "panel-autoblock", top=True)
+    _w = _wire(verbs=_u.verbs())
+    _r = _cgp3(_p8_srv(), 47827, "probeH")
+    check("close game port: ...and one that keeps moving is tried three times, then named as still "
+          "open",
+          _u.reads == 7 and _r[0] == 0
+          and _r[2] == ["Still open, as it could not be removed: 47827 — remove it from the host's "
+                        "Firewall page."], "reads=%d result=%r" % (_u.reads, _r))
+
+    # Defect: the VPS's scenario i. The uninstall's name cleanup took every rule carrying the name —
+    # an operator's DENY, a LIMIT, an allow from one network: 7 rules — although the panel makes
+    # none of those. And it had no protected-port check, so a `22` allow tagged with the server
+    # (what the old "Open all ports" takeover could leave) was guarded only by the last-way-in check.
+    _VPS_I = _VPS_BASE + (("47826", "ALLOW", "Anywhere", "probeA"),
+                          ("47828", "DENY", "Anywhere", "probeA"),
+                          ("47829/tcp", "LIMIT", "Anywhere", "probeA"),
+                          ("47810/tcp", "ALLOW", "10.0.0.0/8", "probeA"),
+                          ("47830/udp", "ALLOW", "Anywhere", "probeA"),
+                          ("22", "ALLOW", "Anywhere", "probeA"),
+                          ("2222/tcp", "ALLOW", "Anywhere", "probeA"))
+    _u = _Ufw36(*_VPS_I)
+    _w = _wire(verbs=dict(_u.verbs(), **{"sshd-effective-config": ("port 22\n", "", 0)}))
+    _r = _cbn3(_p8_srv(port=2222), "probeA")
+    check("close by name: the server's own public allows go, v4 and v6 — bare and /udp (positive "
+          "control)",
+          _r[0] == 4 and not any(("47826" in r or "47830" in r) for r in _u.left()),
+          "result=%r left=%r" % (_r, _u.left()))
+    check("close by name: a DENY, a LIMIT and an allow from one network carrying the name are left "
+          "— the panel makes none of those",
+          all(any(r.startswith(p) for r in _u.left()) for p in (
+              "47828 DENY", "47828 (v6) DENY", "47829/tcp LIMIT", "47829/tcp (v6) LIMIT",
+              "47810/tcp ALLOW IN 10.0.0.0/8")), "left=%r" % (_u.left(),))
+    check("close by name: an allow tagged with the server on SSH's port, or on the port the panel "
+          "connects on, is never deleted",
+          all(any(r.startswith(p) for r in _u.left()) for p in (
+              "22 ALLOW IN Anywhere # probeA", "22 (v6) ALLOW", "2222/tcp ALLOW", "2222/tcp (v6)"))
+          and _w.verbs_called("sshd-effective-config"), "left=%r" % (_u.left(),))
+    check("close by name: ...and every rule it left is NAMED in the result",
+          _r[2] == ["Left in place, as the panel does not make rules like these: 47828 DENY, "
+                    "47829/tcp LIMIT, 47810/tcp from 10.0.0.0/8.",
+                    "Left in place on SSH's or the panel's own port: 22, 2222/tcp."]
+          and _r[1] == "4 rule(s) removed for probeA. " + " ".join(_r[2]), "result=%r" % (_r,))
+
+    # ── "Open all ports" never reports a port open that an existing rule still blocks ─────────
+    # Defect: the VPS's scenario c4. With `deny 47824/tcp` in place the bare allow went in after it
+    # and 47824 was reported opened: only BARE rules were looked at, and TCP still met the DENY.
+    def _first(u, port, proto):
+        f = _H._ufw_first_public_rule(u.status(None)[0], port, proto)
+        return re.sub(r"\s+", " ", f["detail"]).strip() if f else None
+    _u = _Ufw36(*_VPS_BASE + (("47824/tcp", "DENY", "Anywhere", ""),))
+    _w = _wire(verbs=_u.verbs())
+    _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [47824], "probeB")
+    check("game ports: a port a per-protocol DENY still blocks is NOT reported opened",
+          _op[0] == [] and "47824/tcp DENY" in _op[1], repr(_op))
+    check("game ports: ...the DENY is still what TCP meets, and only UDP — which no rule named — "
+          "gets this server's allow",
+          _first(_u, 47824, "tcp") == "47824/tcp DENY IN Anywhere"
+          and _first(_u, 47824, "udp") == "47824/udp ALLOW IN Anywhere # probeB"
+          and [a for _v, a in _w.verbs_called("ufw-allow-port")] == [["47824/udp", "probeB"]],
+          "tcp=%r udp=%r allows=%r" % (_first(_u, 47824, "tcp"), _first(_u, 47824, "udp"),
+                                       _w.verbs_called("ufw-allow-port")))
+    # Scenario c2: `limit 47817/tcp` plus the bare allow was "opened 1". TCP meets the LIMIT (let
+    # in, rate limited) and UDP the allow, so the port IS open on both — the claim is honest; what
+    # it did not say is that TCP is somebody's LIMIT. It says so now.
+    _u = _Ufw36(*_VPS_BASE + (("47817/tcp", "LIMIT", "Anywhere", ""),))
+    _w = _wire(verbs=_u.verbs())
+    _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [47817], "probeB")
+    check("game ports: a port a LIMIT holds for TCP is open, and the LIMIT is named as what TCP is "
+          "left to",
+          _op == ([47817], "opened 1 port(s): 47817; left to an existing rule: 47817/tcp LIMIT")
+          and _first(_u, 47817, "tcp") == "47817/tcp LIMIT IN Anywhere"
+          and _first(_u, 47817, "udp") == "47817/udp ALLOW IN Anywhere # probeB", repr(_op))
+    # Scenario c1 and c3: a bare DENY / LIMIT decides both protocols, and nothing is added.
+    for _act, _open in (("DENY", []), ("LIMIT", [47819])):
+        _u = _Ufw36(*_VPS_BASE + (("47819", _act, "Anywhere", ""),))
+        _w = _wire(verbs=_u.verbs())
+        _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [47819], "probeB")
+        check("game ports: a bare %s decides both protocols — nothing added, reported %s, and "
+              "named" % (_act, "open" if _open else "not open"),
+              _op[0] == _open and ("47819 %s" % _act) in _op[1]
+              and not _w.verbs_called("ufw-allow-port"), repr((_op, _w.verbs_called())))
+    _u = _Ufw36(*_VPS_BASE + (("47811:47813/udp", "DENY", "Anywhere", "operator"),))
+    _w = _wire(verbs=_u.verbs())
+    _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [47812], "probeB")
+    check("game ports: a DENY RANGE covering the port blocks its protocol too",
+          _op[0] == [] and "47811:47813/udp DENY" in _op[1]
+          and _first(_u, 47812, "udp") == "47811:47813/udp DENY IN Anywhere # operator",
+          repr(_op))
+    _u = _Ufw36(*_VPS_BASE)
+    _w = _wire(verbs=_u.verbs())
+    _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [47826], "probeB")
+    check("game ports: a port no rule names still gets one bare allow, v4 and v6, and is reported "
+          "opened (positive control)",
+          _op == ([47826], "opened 1 port(s): 47826")
+          and _u.left()[4] == "47826 ALLOW IN Anywhere # probeB"
+          and _u.left()[-1] == "47826 (v6) ALLOW IN Anywhere (v6) # probeB", repr((_op, _u.left())))
 
     # ── dependency lists ───────────────────────────────────────────────────────────────────────
     eq("apt names: duplicates, blanks and anything that is not a package name are dropped",

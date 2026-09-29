@@ -1034,6 +1034,15 @@ CI-verified commit regardless of this file — this changelog is for humans.
   host, not only Install Server. An install holds back a port something else started listening on
   while its files downloaded, and says so. A port scan that cannot be read no longer counts as
   "every port is free".
+  - Uninstall no longer leaves a rule open when the firewall changes during the cleanup. A new
+    auto-block rule shifted the rule numbers, the delete was rightly refused, and the rule was then
+    given up and the uninstall reported a clean result. The panel now reads the firewall again and
+    retries up to three times, and the uninstall message names any rule still open. It also no
+    longer deletes a DENY, a LIMIT, a rule for one address, or any rule on the SSH or panel port
+    just because it carries the server's name. Those rules stay, and the message lists them.
+    "Open all ports" no longer says a port is open when a DENY for TCP or UDP still blocks it. It
+    adds an allow only for the protocol no rule covers yet, and names the rule it left each
+    protocol to (for example `27015/tcp DENY`).
 - **Root `apt` installs only the packages LinuxGSM lists for the game.** A game's install step
   passed whatever package names LinuxGSM's output reported missing to a root `apt-get install`.
   A name is now kept only when LinuxGSM's dependency list for that game and distro names it, the

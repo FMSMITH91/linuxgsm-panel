@@ -580,82 +580,266 @@ def _is_public_port_rule(g, port, protos=("BOTH",)):
             and str(g.get("port_num", "")).strip() == str(port))
 
 
-def _rules_an_allow_would_replace(groups, port, comment):
-    """The rules `ufw allow <port> comment <comment>` would overwrite: every bare public rule on
-    exactly `port` except an ALLOW already carrying that comment."""
-    return [g for g in groups if _is_public_port_rule(g, port)
-            and not (g.get("action") == "ALLOW" and g.get("comment") == comment)]
+def _is_panel_allow(g):
+    """Is group `g` the shape of rule the panel itself opens for a game server?
+
+    An inbound ALLOW from anywhere, on no interface, for ONE port — bare, /tcp or /udp. A LIMIT, a
+    DENY, an allow from one address, an interface rule or a range was somebody's own decision,
+    whatever its comment says."""
+    pn = str(g.get("port_num", "")).strip()
+    return (g.get("action") == "ALLOW" and pn.isdecimal()
+            and _is_public_port_rule(g, pn, ("BOTH", "TCP", "UDP")))
+
+
+_UFW_PROTOS = ("tcp", "udp")
+# One entry of a rule's port column: a port, or a lo:hi range. ufw lists several with commas.
+_UFW_PORT_ITEM_RE = re.compile(r"^\s*(\d{1,5})(?::(\d{1,5}))?\s*\Z")
+
+
+def _rule_covers(g, port, proto):
+    """Does group `g` decide what a `proto` connection to `port` from anywhere meets? Inbound, from
+    anywhere, on no interface, naming the port (alone, in a range or in a list); a bare rule
+    decides both protocols."""
+    if g.get("is_iface") or g.get("direction", "IN") != "IN" or g.get("scope") != "Any address":
+        return False
+    if g.get("proto_label") not in ("BOTH", proto.upper()):
+        return False
+    for item in str(g.get("port_num", "")).split(","):
+        m = _UFW_PORT_ITEM_RE.match(item)
+        if m and int(m.group(1)) <= port <= int(m.group(2) or m.group(1)):
+            return True
+    return False
+
+
+def _first_rule_for(groups, port, proto):
+    """The rule a `proto` connection to `port` from anywhere meets first (ufw stops at the first
+    match), or None when no rule names it."""
+    hits = [g for g in groups if g.get("nums") and _rule_covers(g, port, proto)]
+    return min(hits, key=lambda g: min(g["nums"])) if hits else None
+
+
+def _rule_label(g):
+    """A rule as a person reads it: its port, then what it does when that is not a plain public
+    allow — `47828 DENY`, `47829/tcp LIMIT`, `47810/tcp from 10.0.0.0/8`."""
+    parts = [str(g.get("port_label") or g.get("port_num") or "?")]
+    if g.get("action", "ALLOW") != "ALLOW":
+        parts.append(g["action"])
+    if g.get("direction", "IN") != "IN":
+        parts.append(g["direction"])
+    if g.get("iface"):
+        parts.append("on " + g["iface"])
+    elif g.get("scope", "Any address") != "Any address":
+        parts.append("from " + g["scope"])
+    return " ".join(parts)
+
+
+def _readable_groups(server):
+    """The firewall's rule groups, or [] when it cannot be read (or UFW is not installed)."""
+    try:
+        status = firewall.remote_ufw_status(server)
+    except Exception:
+        _core._log.debug("game ports: the firewall could not be read before opening", exc_info=True)
+        return []
+    if not status or not status.get("installed") or status.get("unreachable"):
+        return []
+    return status.get("groups", [])
+
+
+def _open_game_port(server, groups, port, comment):
+    """Open `port` for the server whose rules carry `comment`. -> (open now, rules it was left to).
+
+    Per protocol: one another rule already decides is left to that rule, whatever it does, and
+    only the protocols no rule names get this server's allow — the bare rule when that is both,
+    `<port>/tcp` or `/udp` when it is one. An allow is appended, so it never sits ahead of a rule
+    that is already there. "Open" means both protocols now let a connection in, so a port a DENY
+    still blocks for one of them is not reported open."""
+    try:
+        port = _ufw_port_int(port)
+    except (TypeError, ValueError):
+        return False, []
+    first = {pr: _first_rule_for(groups, port, pr) for pr in _UFW_PROTOS}
+    spec = _spec_for_unruled(port, first)
+    added = bool(spec) and _core.run_privileged(
+        server, "ufw-allow-port", [spec, comment], timeout=15)[2] == 0
+    lets_in = all(added if g is None else g.get("action") in ("ALLOW", "LIMIT")
+                  for g in first.values())
+    return lets_in, _decided_by_others(first, comment)
+
+
+def _spec_for_unruled(port, first):
+    """The allow that covers exactly the protocols no rule names yet ({proto: first rule}), or ""."""
+    free = [pr for pr in _UFW_PROTOS if first[pr] is None]
+    if len(free) == len(_UFW_PROTOS):
+        return str(port)
+    return "%d/%s" % (port, free[0]) if free else ""
+
+
+def _decided_by_others(first, comment):
+    """The rules ({proto: first rule}) other than this server's own allow that decide a protocol."""
+    labels = []
+    for g in first.values():
+        if g is None or (g.get("action") == "ALLOW" and g.get("comment") == comment):
+            continue
+        if _rule_label(g) not in labels:
+            labels.append(_rule_label(g))
+    return labels
 
 
 def remote_ufw_allow_game_ports(server, ports, name="Game"):
-    """Open a LIST of ports (each bare rule = TCP+UDP), all tagged with the game
-    server's name. Idempotent — re-opening an existing port is a no-op. Used to open
-    every port a game actually needs (game/query/rcon/etc.), not just the main one.
+    """Open a LIST of ports, all tagged with the game server's name. Idempotent — a port this
+    server's own rule already opens is left as it is. Used to open every port a game actually
+    needs (game/query/rcon/etc.), not just the main one.
 
-    A port some OTHER rule already governs is left to that rule. `ufw allow <port> comment <name>`
-    does not add a rule beside one that differs from it only in comment or action: it REPLACES it
-    (ufw's set_rule swaps any match short of exact on a non-delete). So opening a port another
-    server's rule held re-tagged that rule as THIS server's, and this server's uninstall
+    A protocol some OTHER rule already decides is left to that rule. `ufw allow <port> comment
+    <name>` does not add a rule beside one that differs from it only in comment or action: it
+    REPLACES it (ufw's set_rule swaps any match short of exact on a non-delete). So opening a port
+    another server's rule held re-tagged that rule as THIS server's, and this server's uninstall
     (remote_ufw_close_by_name) then deleted it; an operator's `deny 3306` became an allow. The
     ports come from LinuxGSM's `details` run as the game account, which reads a config that account
-    can write — so which rule got taken over was the account's choice. Such a port is counted as
-    open when every rule on it lets traffic in, and as not opened when one of them is a deny.
+    can write — so which rule got taken over was the account's choice.
+
+    Only BARE rules used to be looked at. With `deny 27015/tcp` in place the bare allow went in
+    after it and 27015 was reported opened while every TCP connection still met the DENY. The rule
+    each protocol meets first is what decides now (_open_game_port): a port is reported open only
+    when both protocols let a connection in, and the rules it was left to are named, with what
+    they do (`27015/tcp DENY`, `27016 LIMIT`).
 
     A firewall that cannot be read is opened as it always was: nothing an attacker does makes this
     read fail, and holding back every port of a freshly installed server on a busy host (a Tailscale
     host after a long SteamCMD run times out routinely) is the worse failure."""
     comment = _game_rule_comment(name)
-    try:
-        status = firewall.remote_ufw_status(server)
-    except Exception:
-        _core._log.debug("game ports: the firewall could not be read before opening", exc_info=True)
-        status = None
-    groups = (status.get("groups", []) if status and status.get("installed")
-              and not status.get("unreachable") else [])
-    opened, held = [], []
+    groups = _readable_groups(server)
+    opened, left_to = [], []
     for p in sorted({int(x) for x in ports if x}):
-        others = _rules_an_allow_would_replace(groups, p, comment)
-        if others:
-            held.append(p)
-            if all(g.get("action") in ("ALLOW", "LIMIT") for g in others):
-                opened.append(p)
-            continue
-        cnt, _ = remote_ufw_allow_game_port(server, p, name)
-        if cnt:
+        is_open, rules = _open_game_port(server, groups, p, comment)
+        if is_open:
             opened.append(p)
+        left_to += [r for r in rules if r not in left_to]
     return opened, (f"opened {len(opened)} port(s): {', '.join(map(str, opened)) or 'none'}"
-                    + (f"; left to an existing rule: {', '.join(map(str, held))}" if held else ""))
+                    + (f"; left to an existing rule: {', '.join(left_to)}" if left_to else ""))
+
+
+# How many times a cleanup tries one rule, each against a fresh read. ufw numbers are positions and
+# the auto-block inserts its denies at 1 from another thread, so a delete refused because the rule
+# moved (remote_ufw_delete_rule's expect_key) is a reason to read again, not to give the rule up.
+_UFW_DELETE_TRIES = 3
+
+
+def _delete_picked_rules(server, pick, bound):
+    """Delete every rule `pick(group)` takes, highest number first, each by number against a fresh
+    read and naming the rule it means. -> (rules deleted, the last read).
+
+    A rule that is refused is read again and retried, up to _UFW_DELETE_TRIES times; any `pick`
+    still takes on the last read is one that would not go. That read is an unreachable one when the
+    firewall stopped answering, and then nothing is known about what is left."""
+    deleted, refused = 0, {}
+    status = {}
+    for _ in range(bound):
+        status = firewall.remote_ufw_status(server)
+        if status.get("unreachable") or not status.get("installed"):
+            break
+        nxt = _next_pick(status, pick, refused)
+        if nxt is None:
+            break
+        n, key = nxt
+        if remote_ufw_delete_rule(server, n, expect_key=key)[0]:
+            deleted += 1
+        else:
+            refused[key] = refused.get(key, 0) + 1
+    else:
+        status = firewall.remote_ufw_status(server)
+    return deleted, status
+
+
+def _next_pick(status, pick, refused):
+    """The highest-numbered (number, key) `pick` takes that has tries left ({key: refusals}), or
+    None. Highest first, so this loop's own deletes never move the rules still to go."""
+    mine = [(n, g["key"]) for g in status.get("groups", [])
+            if pick(g) and refused.get(g["key"], 0) < _UFW_DELETE_TRIES
+            for n in g.get("nums", [])]
+    return max(mine) if mine else None
+
+
+# A cleanup that could not read the firewall knows nothing about what it left. Shared with the
+# uninstall route, which says the same when the cleanup raised.
+UFW_UNREAD_NOTE = ("The firewall could not be read, so this server's rules may still be open — "
+                   "check the host's Firewall page.")
+
+
+def _still_there(status, pick):
+    """What a cleanup meant to remove and did not, as sentences for its result ([] = nothing)."""
+    if status.get("unreachable"):
+        return [UFW_UNREAD_NOTE]
+    if not status.get("installed"):
+        return []
+    if not status.get("enabled"):
+        # An inactive ufw lists no rules, stored ones included: nothing here could be seen or removed.
+        return ["UFW is not active on this host, so its stored rules cannot be listed, and any this "
+                "server had are still stored — they apply again if UFW is enabled."]
+    stuck = [_rule_label(g) for g in status.get("groups", []) if pick(g)]
+    if not stuck:
+        return []
+    return ["Still open, as it could not be removed: %s — remove %s from the host's Firewall "
+            "page." % (", ".join(stuck), "it" if len(stuck) == 1 else "them")]
+
+
+def _left_on_purpose(status, comment, removable, protected):
+    """Sentences naming the rules carrying `comment` that a name cleanup does not take."""
+    kept = [g for g in status.get("groups", [])
+            if g.get("comment") == comment and not removable(g)]
+    on_host = [g for g in kept if _is_panel_allow(g) and _port_of(g) in protected]
+    return (_naming("Left in place, as the panel does not make rules like these",
+                    [g for g in kept if g not in on_host])
+            + _naming("Left in place on SSH's or the panel's own port", on_host))
+
+
+def _port_of(g):
+    """The one port a _is_panel_allow group is on, as an int."""
+    return int(str(g["port_num"]).strip())
+
+
+def _naming(lead, groups):
+    """["<lead>: <each rule>."], or [] when there are none."""
+    return ["%s: %s." % (lead, ", ".join(map(_rule_label, groups)))] if groups else []
+
+
+def _with_notes(message, notes):
+    """`message`, then each of `notes` as a sentence of its own."""
+    return message + ("." + "".join(" " + n for n in notes) if notes else "")
 
 
 def remote_ufw_close_by_name(server, name):
-    """Delete ALL UFW rules tagged with a game server's name (its comment). Used on
-    uninstall so multi-port games are fully cleaned up.
+    """Delete the ALLOW rules tagged with a game server's name (its comment). Used on uninstall so
+    multi-port games are fully cleaned up. -> (rules removed, message, what is left).
 
     The firewall is RE-READ before every delete, and each delete names the rule it means
     (expect_key). The numbers used to be read once and deleted highest-first, which kept them valid
     only against this loop's own deletes: the hourly auto-block reconcile inserts its denies at
     position 1 from another thread, and one insert mid-loop shifted every remaining number onto
     the rule above it — another server's port, or the deny holding an attacker out — while this
-    reported "8 rule(s) removed"."""
+    reported "8 rule(s) removed". A delete refused because its rule MOVED was then given up for
+    good, so the same insert left the server's port open, v4 and v6, still reported as a clean
+    "2 rule(s) removed"; it is retried now (_delete_picked_rules).
+
+    Only rules the panel itself makes (_is_panel_allow), and never one on SSH's or the panel's own
+    port (protected_host_ports). Anything carrying the name was taken: an operator's DENY or LIMIT,
+    an allow from one address, and a `22` allow the old "Open all ports" takeover could leave
+    tagged with a server — guarded only by the last-way-in check.
+
+    The third value names, as sentences, every rule carrying the name that is still there — ones
+    that would not go, and ones left on purpose — or that the firewall could not be read. Empty
+    means the server's rules are gone; the message says the same things."""
     comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "")[:60]
     if not comment:
-        return 0, "no name"
-    deleted, refused = 0, set()
-    for _ in range(256):           # bounded: a rule that will not go is skipped, never retried
-        status = firewall.remote_ufw_status(server)
-        if status.get("unreachable") or not status.get("installed"):
-            break
-        tagged = [(n, g["key"]) for g in status.get("groups", [])
-                  if g.get("comment") == comment and g.get("key") not in refused
-                  for n in g.get("nums", [])]
-        if not tagged:
-            break
-        n, key = max(tagged)
-        if remote_ufw_delete_rule(server, n, expect_key=key)[0]:
-            deleted += 1
-        else:
-            refused.add(key)
-    return deleted, f"{deleted} rule(s) removed for {comment}"
+        return 0, "no name", []
+    protected = protected_host_ports(server)
+
+    def removable(g):
+        return g.get("comment") == comment and _is_panel_allow(g) and _port_of(g) not in protected
+
+    deleted, status = _delete_picked_rules(server, removable, 256)
+    left = _still_there(status, removable) + _left_on_purpose(status, comment, removable, protected)
+    return deleted, _with_notes(f"{deleted} rule(s) removed for {comment}", left), left
 
 
 def remote_ufw_tagged_ports(server, name):
@@ -672,13 +856,8 @@ def remote_ufw_tagged_ports(server, name):
     except Exception:
         _core._log.debug("tagged ports: the firewall could not be read", exc_info=True)
         return set()
-    ports = set()
-    for g in status.get("groups", []):
-        pn = str(g.get("port_num", "")).strip()
-        if (g.get("comment") == comment and g.get("action") == "ALLOW" and pn.isdecimal()
-                and _is_public_port_rule(g, pn, ("BOTH", "TCP", "UDP"))):
-            ports.add(int(pn))
-    return ports
+    return {_port_of(g) for g in status.get("groups", [])
+            if g.get("comment") == comment and _is_panel_allow(g)}
 
 
 def protected_host_ports(server):
@@ -718,7 +897,7 @@ def _is_game_rule_for(g, port, comment, legacy):
 
 
 def remote_ufw_close_game_port(server, port, name="", legacy=False):
-    """Remove THIS server's rules on `port`. -> (rules removed, message).
+    """Remove THIS server's rules on `port`. -> (rules removed, message, what is left).
 
     Which rules are this server's: an inbound public ALLOW on exactly `port` (bare, /tcp or /udp)
     tagged with `name`; and with legacy=True, one with NO comment, which is what a panel that did
@@ -742,32 +921,28 @@ def remote_ufw_close_game_port(server, port, name="", legacy=False):
     the NEXT server's game port, or a rule the operator opened from the Firewall page — so
     uninstalling the server on 27015 closed 27016/udp and its neighbour stopped taking players,
     with nothing in the uninstall output saying so. The server's tagged rules, extra ports
-    included, are removed by remote_ufw_close_by_name."""
+    included, are removed by remote_ufw_close_by_name.
+
+    A delete refused because the rule MOVED (an insert between the read and the delete) is read
+    again and retried; it used to be given up at once, leaving the rule open with nothing said.
+    The third value names, as sentences, a rule of this server's that is still there after its
+    tries, or that the firewall could not be read; empty means none is left."""
     try:
         port = _ufw_port_int(port)
     except (TypeError, ValueError):
-        return 0, "Invalid port"
+        return 0, "Invalid port", []
     comment = _game_rule_comment(name, "")
     if legacy and port in protected_host_ports(server):
         legacy = False
     if not comment and not legacy:
-        return 0, f"Port {port}: no rule here is known to be this server's"
-    deleted, refused = 0, set()
-    for _ in range(64):            # bounded: a rule that will not go is skipped, never retried
-        status = firewall.remote_ufw_status(server)
-        if status.get("unreachable") or not status.get("installed"):
-            break
-        mine = [(n, g["key"]) for g in status.get("groups", [])
-                if g.get("key") not in refused and _is_game_rule_for(g, port, comment, legacy)
-                for n in g.get("nums", [])]
-        if not mine:
-            break
-        n, key = max(mine)
-        if remote_ufw_delete_rule(server, n, expect_key=key)[0]:
-            deleted += 1
-        else:
-            refused.add(key)
-    return deleted, f"Port {port}: {deleted} rule(s) removed"
+        return 0, f"Port {port}: no rule here is known to be this server's", []
+
+    def mine(g):
+        return _is_game_rule_for(g, port, comment, legacy)
+
+    deleted, status = _delete_picked_rules(server, mine, 64)
+    left = _still_there(status, mine)
+    return deleted, _with_notes(f"Port {port}: {deleted} rule(s) removed", left), left
 
 
 # LinuxGSM dependencies common to most game servers on Debian/Ubuntu. The game
