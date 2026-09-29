@@ -1039,7 +1039,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
   A name is now kept only when LinuxGSM's dependency list for that game and distro names it, the
   panel's common set does, or it is `steamcmd`. Anything else is refused, named in the result and
   logged. Package names must also end in a letter or digit, because `apt-get install foo-`
-  *removes* `foo`.
+  *removes* `foo`. A game account on an older LinuxGSM release asks for that release's packages,
+  which can differ from the panel's copy (v26.1.0 wants `openjdk-21-jre` and `dotnet-runtime-8.0`
+  where the newest release has `-25-` and `10.0`), and a newer release can list a package the
+  panel's weekly copy has not caught up with. A name the panel's copy refuses is now looked up
+  again in LinuxGSM's own repository: in the list at the release the account's script runs, then
+  in the current list, fetched at most once an hour. The account's own copy of the list is never
+  used, because the account can edit it; it can pick only which published release is read.
 - **A refused SSH connection is now closed.** When a connection to a remote failed its host-key
   check, its login or any other step, the panel left that connection's thread and socket open. A
   real SSH server hangs up after its login grace time, but a man-in-the-middle can keep them open

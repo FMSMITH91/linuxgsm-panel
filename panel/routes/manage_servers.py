@@ -1096,8 +1096,10 @@ def _retry_with_missing_deps(job, remote, auto, missing, last_out):
     """Install the packages LinuxGSM said were missing, then download again. -> last_out."""
     short_name, game_type = job.short_name, job.game_type
     try:
+        # The account and its script, so a name the panel's own copy of LinuxGSM's list refuses is
+        # looked up at the release this account runs, which is the list its check_deps read.
         _r_ok, _r_msg = install_game_dependencies(
-            remote, game_type, extra=" ".join(missing))
+            remote, game_type, extra=" ".join(missing), account=short_name, selfname=job.lgsm_name)
         if not _r_ok:
             _log.warning("install %s: retry of the dependency step failed: "
                          "%s", short_name, (_r_msg or "")[:300])
