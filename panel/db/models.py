@@ -1278,12 +1278,14 @@ def _unzone_audit_ips():
     """Drop the IPv6 zone text from every stored audit IP, whatever its age. Returns rows changed.
 
     An older version stored a proxy-reported client address with its zone ('fe80::1%eth0', or
-    '2001:db8::%<any text>'), and its reduction kept the zone ahead of the "/64". anonymise_audit_ips
-    rewrites such a row only once it is past the retention window, and never while IP ageing is off
-    (audit_ip_retention_days 0), so the text stayed on every younger row. Here every row holding a
-    '%' is rewritten at startup: an address becomes the address it names (the zone-dropping parse),
-    a reduced row the network it was reduced to, both rebuilt from the parsed number, and anything
-    else is blanked. Idempotent: no row keeps a '%', and nothing writes one any more.
+    '2001:db8::%<any text>'), and its reduction kept the zone ahead of the "/64".
+    anonymise_audit_ips rewrites such a row only once it is past the retention window, and never
+    while IP ageing is off (audit_ip_retention_days 0), so the text stayed on every younger row.
+    Here every row holding a '%' is rewritten at startup: an address becomes the address it names
+    (the zone-dropping parse), a reduced row the network it was reduced to, both rebuilt from the
+    parsed number, and anything else is blanked. Idempotent: a rewritten row holds no '%', so the
+    next start finds nothing (the address the log records now is parsed with any zone dropped),
+    and costs one scan.
 
     Committed here, before _run_light_migrations goes on to the id rebuild and the index build,
     which take SQLite's write lock on connections of their own: left open, the rewrite made them
