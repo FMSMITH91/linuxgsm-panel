@@ -392,6 +392,18 @@ try:
     _sm_core.run_privileged = lambda *a, **k: ("", "SSH command timed out", -1)
     check("remote attempt counts: a failed read is unread too",
           _sm_hosts.remote_fail2ban_attempt_counts(object(), days=7) is None, "")
+    # ...and the answer the old LENGTH test got wrong: rc 0 and exactly the ceiling, which the
+    # remote form prints (plus awk's closing newline) for a complete log. Anything within 64 KB of
+    # the transport's cap was called cut, so this read was None and that host's auto-block held.
+    _ac_max = getattr(_priv, "F2B_LOG_MAX_BYTES", _sm_core._MAX_OUTPUT_BYTES - 65536)
+    _ac_one = "2026-09-03 10:00:00 x [sshd] Found 203.0.113.5 -"
+    _ac_k = _ac_max // (len(_ac_one) + 1)
+    _ac_pad = "x" * (_ac_max - _ac_k * (len(_ac_one) + 1) + 1)     # the last line, to the byte
+    _ac_exact = [_ac_one] * (_ac_k - 1) + [_ac_one + _ac_pad]
+    _sm_core.run_privileged = lambda *a, **k: ("\n".join(_ac_exact) + "\n", "", 0)
+    eq("remote attempt counts: an rc-0 answer of exactly the ceiling is tallied in full, not unread",
+       (len("\n".join(_ac_exact)), _sm_hosts.remote_fail2ban_attempt_counts(object(), days=7)),
+       (_ac_max, {"203.0.113.5": _ac_k}))
 finally:
     _sm_core.run_privileged, _sm_hosts.remote_fail2ban_overview = _orig_rt_rp, _orig_rt_ov
 

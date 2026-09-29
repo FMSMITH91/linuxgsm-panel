@@ -1121,6 +1121,99 @@ check("f2b remote: a failed read is still unread (None), for both",
       _rf16.get("failed", (0, 0, 0))[1:3] == (None, None), repr(_rf16.get("failed")))
 check("f2b remote: nothing but the fail2ban read reached the stand-in transport",
       not _RF16_OTHER, repr(_RF16_OTHER[:3]))
+# The fixtures above are dated from the clock (_F2B16_DAY) because the readers keep only the last 7
+# days counted back from now; a fixed date made them fail once it was a week old. Said by name.
+check("f2b remote: (guard) the fixtures' day is inside the readers' 7-day window",
+      _F2B16_DAY >= _p9_so._f2b_cutoff(7),
+      "%s is before the readers' cutoff %s" % (_F2B16_DAY, _p9_so._f2b_cutoff(7)))
+
+# ...and the remote form keeps the helper's LINES, not only its ceiling. Its byte count decides
+# where a remote says "cut", so a filter that kept more or fewer lines than do_f2b_log_lines would
+# cut a remote at another point than the panel host for the same log, and tally other events; the
+# ceiling check above compares only the constant. One rotated family (a plain log, a plain .1 and
+# a .gz) with Found and Ban lines for several jails, the Unban and Restore Ban lines neither keeps,
+# lines ON the cutoff day (kept: the comparison is >=) and the day before. The helper's own read is
+# the reference, and what the reader gets from the rendering must be exactly it, under each awk
+# (the transport strips the output, awk's closing newline with it, as the SSH ones do). Valid UTF-8
+# and no leading blanks: there the two differ by design (the helper counts a bad byte as U+FFFD's
+# three; awk's $1 skips leading blanks), as the grep form did.
+import gzip as _gz16  # noqa: E402
+from datetime import timedelta as _tdfp16  # noqa: E402
+
+# (days before now, time, the rest of the line, kept by the helper), per file of the family. One
+# "now" for every date, so a run that crosses midnight cannot shift some of them and not others.
+_FP16_NOW = _dt16.now()
+_FP16_FAMILY = {
+    "fail2ban.log": [
+        (2, "10:00:00,000", "filter         [812]: INFO    [nginx-http-auth] Found 192.0.2.44", 1),
+        (2, "10:00:01,000", "filter         [812]: INFO    [my_jail.v2] Found 192.0.2.44", 1),
+        (2, "10:00:02,000", "filter         [812]: INFO    [sshd] Ignore 10.0.0.1 by ip", 0),
+        (2, "10:00:03,000", "actions        [812]: WARNING [sshd] 203.0.113.5 already banned", 0),
+        (0, "08:00:00,000", "actions        [812]: NOTICE  [recidive] Ban 203.0.113.5", 1)],
+    "fail2ban.log.1": [
+        (3, "06:00:00,000", "server         [812]: INFO    Jail 'sshd' started", 0),
+        (3, "06:10:00,000", "filter         [812]: INFO    [panel-auth] Found 2001:db8::77", 1),
+        (3, "06:10:05,000", "actions        [812]: NOTICE  [panel-auth] Ban 2001:db8::77", 1),
+        (3, "06:20:00,000", "actions        [812]: NOTICE  [sshd] Unban 203.0.113.50", 0),
+        (3, "06:30:00,000", "actions        [812]: NOTICE  [recidive] Restore Ban 192.0.2.7", 0)],
+    "fail2ban.log.2.gz": [
+        (4, "23:59:59,900", "filter         [812]: INFO    [sshd] Found 203.0.113.99", 0),
+        (4, "23:59:59,950", "actions        [812]: NOTICE  [sshd] Ban 203.0.113.99", 0),
+        (3, "00:00:00,000", "filter         [812]: INFO    [sshd] Found 203.0.113.50", 1),
+        (3, "00:00:01,000", "actions        [812]: NOTICE  [sshd] Ban 203.0.113.50", 1)],
+}
+
+
+def _fp16_line(days, when, rest):
+    """A fail2ban log line `days` before now, as fail2ban writes one."""
+    day = (_FP16_NOW - _tdfp16(days=days)).strftime("%Y-%m-%d")
+    return "%s %s fail2ban.%s" % (day, when, rest)
+
+
+def _fp16_write_family():
+    """Write _FP16_FAMILY into _RF16_DIR; the lines the helper keeps, in its (sorted) file order."""
+    os.makedirs(_RF16_DIR, exist_ok=True)
+    kept = []
+    for name in sorted(_FP16_FAMILY):
+        lines = [(_fp16_line(d, t, r), k) for d, t, r, k in _FP16_FAMILY[name]]
+        data = ("\n".join(text for text, _k in lines) + "\n").encode("utf-8")
+        opener = _gz16.open if name.endswith(".gz") else open
+        with opener(os.path.join(_RF16_DIR, name), "wb") as fh:
+            fh.write(data)
+        kept += [text for text, k in lines if k]
+    return kept
+
+
+def _fp16_helper(cutoff):
+    """The helper's do_f2b_log_lines over _RF16_DIR, run in this process: (rc, stdout, stderr)."""
+    saved = (_helper.F2B_LOG_GLOB, sys.stdout, sys.stderr)
+    out, err = _io16.StringIO(), _io16.StringIO()
+    _helper.F2B_LOG_GLOB, sys.stdout, sys.stderr = _RF16_GLOB, out, err
+    try:
+        rc = _helper.do_f2b_log_lines([cutoff], "")
+    finally:
+        _helper.F2B_LOG_GLOB, sys.stdout, sys.stderr = saved
+    return rc, out.getvalue(), err.getvalue()
+
+
+_fp16 = {}
+_FP16_KEPT = []
+_FP16_CUT = (_FP16_NOW - _tdfp16(days=3)).strftime("%Y-%m-%d")
+try:
+    _FP16_KEPT = _fp16_write_family()
+    _fp16["helper"] = _fp16_helper(_FP16_CUT)
+    for _fpawk16 in ["awk"] + _RF16_AWKS:
+        _fpout16, _fperr16, _fprc16 = _rf16_transport(None if _fpawk16 == "awk" else _fpawk16)(
+            _RF16_SRV, _privm16.remote_command("f2b-log-lines", [_FP16_CUT], merge_stderr=False))
+        _fp16[_fpawk16] = (_fprc16, _fpout16, _fperr16)
+finally:
+    _shutil16.rmtree(_RF16_DIR, ignore_errors=True)
+_FP16_REF = _fp16.get("helper", (None, None, None))
+eq("f2b parity: (premise) the helper keeps the cutoff day's lines, the .gz's too, and drops the "
+   "day before, Unban and Restore Ban", _FP16_REF, (0, "\n".join(_FP16_KEPT), ""))
+for _fpawk16 in ["awk"] + _RF16_AWKS:
+    eq("f2b parity (%s): the remote rendering prints exactly the helper's lines" % _fpawk16,
+       _fp16.get(_fpawk16), (0, _FP16_REF[1], ""))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
