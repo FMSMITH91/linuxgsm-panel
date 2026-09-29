@@ -2009,7 +2009,16 @@ try:
         _FakeSSH.raise_on_connect = _exc
         eq("ssh test: %s is answered, with no exception text leaking" % type(_exc).__name__,
            _H.ssh_test_connection("203.0.113.10", auth_method="key"), (False, _want))
+        # The client was closed on the SUCCESS path alone, so every refused test login left
+        # paramiko's Transport thread and socket open.
+        check("ssh test: ...and the client that failed with %s is closed" % type(_exc).__name__,
+              _FakeSSH.last.closed is True, repr(_FakeSSH.last.closed))
     _FakeSSH.raise_on_connect = None
+    _FakeSSH.presents = ("ssh-ed25519", "AAAAsomeoneelse")
+    _st = _H.ssh_test_connection("203.0.113.10", auth_method="key", host_key="ssh-ed25519 AAAApin")
+    _FakeSSH.presents = None
+    check("ssh test: a CHANGED host key fails the test and closes the client it refused",
+          _st[0] is False and _FakeSSH.last.closed is True, repr((_st, _FakeSSH.last.closed)))
 
     # Enrolment pins the key its own test login saw: `captured` gets it on SUCCESS only. A key
     # handed back after a failed login would pin a host the panel never got into.

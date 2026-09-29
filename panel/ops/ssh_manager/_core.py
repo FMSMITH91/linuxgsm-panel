@@ -729,7 +729,25 @@ def get_connection(server, force_new=False, pooled=True):
     if cached is not None:
         return cached
 
-    client = paramiko.SSHClient()
+    client = _open_client(server)
+    _keep_warm(client)
+
+    if not pooled:
+        return client      # caller owns it — see the docstring
+    return _pool_client(server, key, client, force_new)
+
+
+def _open_client(server):
+    """A new SSHClient for `server`: host key checked, logged in, and pinned on first contact.
+
+    Every failure closes the client before it propagates, and the exception propagates unchanged.
+    A refused connection used to be left open: paramiko's connect() starts its Transport thread
+    and socket before the host-key check or the login can fail, and closes neither when one does.
+    Measured on the test host: three connects refused for a wrong pinned key left three Transport
+    threads and three ESTABLISHED sockets, all still there 30 s later. sshd drops its side after
+    LoginGraceTime, but a man-in-the-middle, the one endpoint the pin exists to refuse, can hold
+    them for good, and the monitor's host probe adds one per host per pass.
+    """
     # Pin the server's SSH host key (TOFU). Tailscale connections are already
     # authenticated by WireGuard, so there the tailnet is the trust anchor, not the SSH
     # host key — capture it but don't reject a change (tailscaled may rotate it).
@@ -738,7 +756,8 @@ def get_connection(server, force_new=False, pooled=True):
     # both, and _PinPolicy reads "" as first contact: it accepts whatever key is presented and
     # _persist_host_key then overwrites the stored pin with it. So a rotated or restored cred_key
     # silently turned the one control that detects a man-in-the-middle into a control that trusts
-    # one and remembers it. Refuse instead, and say which of the two it is.
+    # one and remembers it. Refuse instead, and say which of the two it is. Before a client exists,
+    # so there is nothing to close.
     from panel.db.models import UnreadableSecret
     if enforce_pin and isinstance(server.host_key, UnreadableSecret):
         raise HostKeyMismatch(
@@ -748,19 +767,27 @@ def get_connection(server, force_new=False, pooled=True):
             'unverified key — click "Re-trust host key" on the server page if you are certain this '
             'is the right server.' % getattr(server, "name", "this server"))
     policy = _PinPolicy(expected=(server.host_key or ""), reject_on_change=enforce_pin)
-    client.set_missing_host_key_policy(policy)
+    client = paramiko.SSHClient()
+    try:
+        client.set_missing_host_key_policy(policy)
+        _connect_client(client, server)
+        # First successful contact with a direct-SSH host → pin the key we just saw.
+        if policy.captured and enforce_pin:
+            _pin_first_contact(server, policy.captured)
+    except BaseException:
+        # BaseException, not Exception: an eventlet Timeout or a killed green thread leaves the
+        # same thread and socket behind. Closed, then re-raised as it came.
+        _close_quietly(client)
+        raise
+    return client
 
-    _connect_client(client, server)
 
-    # First successful contact with a direct-SSH host → pin the key we just saw.
-    if policy.captured and enforce_pin:
-        _pin_first_contact(server, client, policy.captured)
-
-    _keep_warm(client)
-
-    if not pooled:
-        return client      # caller owns it — see the docstring
-    return _pool_client(server, key, client, force_new)
+def _close_quietly(client):
+    """Close an SSH client; a close that fails (its transport already torn down) is only logged."""
+    try:
+        client.close()
+    except Exception:  # nosec B110
+        _log.debug("closing an SSH client failed", exc_info=True)
 
 
 def _live_pooled_client(key, force_new):
@@ -892,19 +919,16 @@ def _pool_client(server, key, client, force_new):
     return client
 
 
-def _pin_first_contact(server, client, keystr):
-    """Store the key a first contact saw; when it cannot be stored, close `client` and raise.
+def _pin_first_contact(server, keystr):
+    """Store the key a first contact saw; raise ConnectionError when it cannot be stored.
 
     Refused rather than used: an unstored pin makes the next fresh connection first contact again,
     accepting any key, so the pin has to land before the connection is handed out. `is False`, not
-    falsiness — a stand-in for _persist_host_key that answers nothing has not said it failed.
+    falsiness — a stand-in for _persist_host_key that answers nothing has not said it failed. The
+    client is closed by _open_client, which closes it on every failure, this one included.
     """
     if _persist_host_key(server, keystr) is not False:
         return
-    try:
-        client.close()
-    except Exception:  # nosec B110
-        _log.debug("closing an unpinned client", exc_info=True)
     raise ConnectionError(
         "Connected to %s, but the panel could not store its SSH host key, so it will not use a "
         "connection it could not check next time. Nothing was run. Try again; if this keeps "

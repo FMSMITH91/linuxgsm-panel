@@ -1040,6 +1040,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
   panel's common set does, or it is `steamcmd`. Anything else is refused, named in the result and
   logged. Package names must also end in a letter or digit, because `apt-get install foo-`
   *removes* `foo`.
+- **A refused SSH connection is now closed.** When a connection to a remote failed its host-key
+  check, its login or any other step, the panel left that connection's thread and socket open. A
+  real SSH server hangs up after its login grace time, but a man-in-the-middle can keep them open
+  for good, and the host monitor added one per host on every pass. The "Test connection" button
+  left one open the same way whenever a test failed. Both now close the connection on every failure.
 - **A new server or host no longer inherits a deleted one's state when SQLite reuses its id.**
   SQLite hands a deleted row's id to the next row created, and the panel keyed per-server and
   per-host state by that id: console backlog, install and action jobs, cached OS-update lists and

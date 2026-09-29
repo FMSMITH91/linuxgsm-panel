@@ -3107,23 +3107,14 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
     A pin that exists but cannot be DECRYPTED is refused before anything is sent. `host_key` is
     then an UnreadableSecret, which is "" — and "" is first contact, so the Test button offered the
     stored password to whoever answered and reported success. Callers must pass the row's value
-    itself, not `host_key or ""`, which drops the type."""
+    itself, not `host_key or ""`, which drops the type.
+
+    The client is closed on every way out. It used to be closed on success alone, so each refused
+    test login and each changed host key left paramiko's Transport thread and socket open, as
+    get_connection's refusals did (see _core._open_client)."""
     # Tailscale SSH must use the system ssh client (tailscaled handles auth).
     if auth_method == "tailscale":
-        class _S:
-            pass
-        s = _S()
-        s.host, s.port, s.username = host, port, username
-        s.auth_method, s.linuxgsm_user, s.sudo_enabled = "tailscale", "", False
-        out, err, rc = _core._run_via_ssh_cli(s, "echo ok && whoami", timeout=15, sudo=False)
-        if rc == 0:
-            return True, "Tailscale SSH connection successful"
-        low = (err or "").lower()
-        if "permission denied" in low:
-            return False, "Tailscale SSH denied — check the tailnet ACL allows SSH to this node/user."
-        if "timed out" in low or "timeout" in low:
-            return False, f"Timed out reaching {host} over Tailscale. Is the node online?"
-        return False, f"Tailscale SSH failed: {(err or out or 'unknown')[:150]}"
+        return _ssh_test_tailscale(host, port, username)
 
     from panel.db.models import UnreadableSecret
     if isinstance(host_key, UnreadableSecret):
@@ -3136,43 +3127,78 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
     policy = _core._PinPolicy(expected=host_key or "", reject_on_change=bool(host_key))
     client.set_missing_host_key_policy(policy)
     try:
-        if auth_method == "password":
-            if not credential:
-                # A password remote with no usable credential must FAIL, not fall through to the
-                # key branch below and authenticate with the panel user's own ~/.ssh/id_rsa — a
-                # different credential, against a host the operator never authorised it for.
-                # decrypt_secret() returns "" both for "nothing stored" and for "stored but could
-                # not be decrypted" (a restored backup with a mismatched cred_key, a corrupt row),
-                # so this is also the only place that failure becomes visible.
-                return False, ("No usable SSH password is stored for this host. If the panel was "
-                               "restored from a backup, its credential key may not match.")
-            client.connect(
-                host, port=port, username=username,
-                password=credential, timeout=10,
-                allow_agent=False, look_for_keys=False,
-            )
-        else:
-            key_path = credential or os.path.expanduser("~/.ssh/id_rsa")
-            client.connect(
-                host, port=port, username=username,
-                key_filename=key_path, timeout=10,
-            )
-        client.close()
-        if captured is not None and policy.captured:
-            captured.append(policy.captured)
-        return True, "Connection successful"
-    except paramiko.AuthenticationException:
-        return False, "SSH authentication failed. Check your credentials."
-    except socket.timeout:
-        return False, f"Connection to {host}:{port} timed out. Is the host reachable?"
-    except socket.gaierror:
-        return False, f"Cannot resolve hostname: {host}"
-    except Exception:
-        # Don't surface the raw exception text to the browser — it can carry internal detail
-        # (key paths, host internals). Log the full trace server-side (no user-supplied host/port
-        # in the message — exc_info already carries the detail), show a generic message.
-        _core._log.warning("ssh_test_connection failed", exc_info=True)
-        return False, "Connection failed. Check the host, port, credentials, and that SSH is reachable."
+        refused = _ssh_test_login(client, host, port, username, auth_method, credential)
+    except Exception as e:
+        return False, _ssh_test_failure(e, host, port)
+    finally:
+        _core._close_quietly(client)
+    if refused:
+        return False, refused
+    if captured is not None and policy.captured:
+        captured.append(policy.captured)
+    return True, "Connection successful"
+
+
+def _ssh_test_tailscale(host, port, username):
+    """Run ssh_test_connection over Tailscale SSH, with the system ssh client, unprivileged."""
+    class _S:
+        pass
+    s = _S()
+    s.host, s.port, s.username = host, port, username
+    s.auth_method, s.linuxgsm_user, s.sudo_enabled = "tailscale", "", False
+    out, err, rc = _core._run_via_ssh_cli(s, "echo ok && whoami", timeout=15, sudo=False)
+    if rc == 0:
+        return True, "Tailscale SSH connection successful"
+    low = (err or "").lower()
+    if "permission denied" in low:
+        return False, "Tailscale SSH denied — check the tailnet ACL allows SSH to this node/user."
+    if "timed out" in low or "timeout" in low:
+        return False, f"Timed out reaching {host} over Tailscale. Is the node online?"
+    return False, f"Tailscale SSH failed: {(err or out or 'unknown')[:150]}"
+
+
+def _ssh_test_login(client, host, port, username, auth_method, credential):
+    """Log `client` in for ssh_test_connection. None when it connected, else why it was not tried.
+
+    Raises what paramiko raises; the caller turns that into a message and closes the client.
+    """
+    if auth_method == "password":
+        if not credential:
+            # A password remote with no usable credential must FAIL, not fall through to the
+            # key branch below and authenticate with the panel user's own ~/.ssh/id_rsa — a
+            # different credential, against a host the operator never authorised it for.
+            # decrypt_secret() returns "" both for "nothing stored" and for "stored but could
+            # not be decrypted" (a restored backup with a mismatched cred_key, a corrupt row),
+            # so this is also the only place that failure becomes visible.
+            return ("No usable SSH password is stored for this host. If the panel was "
+                    "restored from a backup, its credential key may not match.")
+        client.connect(
+            host, port=port, username=username,
+            password=credential, timeout=10,
+            allow_agent=False, look_for_keys=False,
+        )
+    else:
+        key_path = credential or os.path.expanduser("~/.ssh/id_rsa")
+        client.connect(
+            host, port=port, username=username,
+            key_filename=key_path, timeout=10,
+        )
+    return None
+
+
+def _ssh_test_failure(exc, host, port):
+    """The message ssh_test_connection shows for a connect that raised `exc`."""
+    if isinstance(exc, paramiko.AuthenticationException):
+        return "SSH authentication failed. Check your credentials."
+    if isinstance(exc, socket.timeout):
+        return f"Connection to {host}:{port} timed out. Is the host reachable?"
+    if isinstance(exc, socket.gaierror):
+        return f"Cannot resolve hostname: {host}"
+    # Don't surface the raw exception text to the browser — it can carry internal detail
+    # (key paths, host internals). Log the full trace server-side (no user-supplied host/port
+    # in the message — exc_info already carries the detail), show a generic message.
+    _core._log.warning("ssh_test_connection failed", exc_info=exc)
+    return "Connection failed. Check the host, port, credentials, and that SSH is reachable."
 
 
 # ── Ubuntu Pro (ubuntu-advantage-tools / `pro`) ────────────────────────────
