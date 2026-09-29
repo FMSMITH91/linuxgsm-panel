@@ -123,6 +123,9 @@ SSHD_SOCKET_DROPIN_BAK = SSHD_SOCKET_DROPIN + ".bak"
 F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
 # The fail2ban log family, current plus rotated — see tools/panel-helper.
 F2B_LOG_GLOB = "/var/log/fail2ban.log*"
+# The most f2b-log-lines prints before it gives up with rc 3 — the helper's own ceiling, which this
+# mirrors (tests/unit ties the two). A remote has no helper, so its shell form stops there itself.
+F2B_LOG_MAX_BYTES = 8 * 1024 * 1024 - 65536
 
 # Where `tailscale up` streams while it waits for authorisation — see tools/panel-helper. In /run
 # (tmpfs, root-owned) rather than /tmp, where any local user could pre-create the file.
@@ -1265,6 +1268,29 @@ def _gamedig_install_remote(a):
     return "; ".join(parts)
 
 
+def _f2b_log_lines_remote(a):
+    """The remote form of f2b-log-lines: the helper's read, and the helper's ceiling, in one awk.
+
+    A remote has no helper, so this keeps the zcat|awk read — but only the READ half; the tallying
+    is the shared Python on both transports. The awk filters by date, keeps the Ban/Found lines,
+    and counts the bytes of the answer as the helper does (the lines joined by newlines): up to
+    AND INCLUDING F2B_LOG_MAX_BYTES it prints them and exits 0, and one byte past it it says so on
+    stderr and exits 3, which the callers read as "cut, so unread" (system_ops._f2b_unread). They
+    used to guess that from the answer's length — anything within 64 KB of the transport's cap —
+    which threw away a complete log just under it.
+
+    One awk, and nothing after it: a pipeline's status is its last command's, so the exit 3 is what
+    the caller sees. Unlike the grep it replaces, awk exits 0 when nothing matches (a quiet week is
+    not a failed read, which the callers would answer None) and non-zero when it fails. LC_ALL=C
+    makes gawk count bytes, not characters; mawk always does.
+    """
+    return ("zcat -f %s 2>/dev/null | LC_ALL=C awk -v c=%s -v m=%d '"
+            "$1 >= c && /\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+/ { "
+            "n += length($0) + s; s = 1; if (n > m) { print \"f2b-log-lines: the log passed \" m "
+            "\" bytes; truncated, so it must be treated as unread\" > \"/dev/stderr\"; exit 3 } "
+            "print }'" % (F2B_LOG_GLOB, shlex.quote(a[0]), F2B_LOG_MAX_BYTES))
+
+
 # The remote renderings of the SECRET_STDIN verbs, naming the mktemp file "$f" that holds the secret.
 _SECRET_REMOTE = {
     "pro-attach": lambda a: "pro attach --attach-config \"$f\"",
@@ -1422,19 +1448,8 @@ _REMOTE_ACTIONS = {
           content_path(a[0], "lgsm", "config-lgsm", a[2])])),
     "content-cron-remove": lambda a: (
         "rm -f %s" % shlex.quote("%s-%s" % (CONTENT_CRON_PREFIX, _username(a[0])))),
-    # A remote has no helper, so it keeps the zcat|awk|grep read — but only the READ half; the
-    # tallying awk is gone from both transports.
-    # `|| [ $? -eq 1 ]`: grep exits 1 for NO MATCHES and >=2 for a real error, and both callers read
-    # a non-zero rc as "the log could not be read" and answer None. So a perfectly healthy host —
-    # one with no Ban/Found lines in the window, which is what a quiet week looks like — reported a
-    # failed read forever, and _autoblock_reconcile skips its tick on None, so that host's expired
-    # auto-blocks were never released. Distinguishing the two grep statuses keeps the failure
-    # signal (a transport timeout still returns rc -1) while letting "nothing to report" be the
-    # success it is.
-    "f2b-log-lines": lambda a: (
-        "zcat -f %s 2>/dev/null | awk -v c=%s '$1 >= c' | "
-        "{ grep -E '\\[[A-Za-z0-9._-]+\\] (Ban|Found) [0-9a-fA-F:.]+' || [ $? -eq 1 ]; }"
-        % (F2B_LOG_GLOB, shlex.quote(a[0]))),
+    # The helper's read and its ceiling, with the same rc for a cut read — see the function.
+    "f2b-log-lines": _f2b_log_lines_remote,
     "gmod-mount-read": lambda a: (
         "cat %s 2>/dev/null || true"
         % shlex.quote(home_of(a[0]) + "/" + GMOD_CFG_SUBPATH + "/mount.cfg")),

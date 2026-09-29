@@ -347,14 +347,14 @@ try:
           str(_rt_args[:1]))
     check("remote top-IPs: that cutoff is one privileged.py would accept",
           _priv.check_args("f2b-log-lines", _rt_args[0][1]) == _rt_args[0][1], str(_rt_args[:1]))
-    # The auto-block reconcile's read. A log answer that FILLS the transport ceiling was cut (the
-    # transports keep the oldest bytes), and a partial tally undercounts recent offenders — whom the
-    # reconcile then RELEASES. At the ceiling it must answer None ("unread"), which the reconcile
-    # treats as "leave every block where it is".
+    # The auto-block reconcile's read. A cut read keeps the oldest bytes, and a partial tally
+    # undercounts recent offenders — whom the reconcile then RELEASES. Cut, which the remote form
+    # answers with rc 3 at the helper's ceiling, must answer None ("unread"), which the reconcile
+    # treats as "leave every block where it is". (The exact ceiling, end to end: part16.)
     _ac_line = "2026-09-03 10:00:00 x [sshd] Found 203.0.113.5\n"
-    _ac_full = _ac_line * (_sm_core._MAX_OUTPUT_BYTES // len(_ac_line) + 1)
-    _sm_core.run_privileged = lambda *a, **k: (_ac_full[:_sm_core._MAX_OUTPUT_BYTES], "", 0)
-    check("remote attempt counts: a log read cut at the output ceiling is unread, not a partial tally",
+    _sm_core.run_privileged = lambda *a, **k: (
+        _ac_line * 1000, "f2b-log-lines: the log passed 8323072 bytes; truncated", 3)
+    check("remote attempt counts: a log read cut at the ceiling (rc 3) is unread, not a partial tally",
           _sm_hosts.remote_fail2ban_attempt_counts(object(), days=7) is None,
           "a cut read was tallied — the reconcile would release the offenders it undercounts")
     _sm_core.run_privileged = lambda *a, **k: (_RAW, "", 0)

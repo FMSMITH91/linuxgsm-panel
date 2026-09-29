@@ -272,6 +272,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
   while Server Management read the same firewall fine. On the panel's own host that setting is no
   longer read: the rule list goes through the helper like every other firewall action. A remote
   still follows its own setting.
+- **On a remote host, a fail2ban log just under the 8 MB read limit is counted again.** The panel
+  guessed that a remote host's log had been cut short whenever it came within 64 KB of that limit,
+  and treated a complete log as unread, so auto-blocking on that host held still. The remote read
+  now stops at the limit itself and says when it had to, as the panel's own host already did, and
+  only a log that really was cut is treated as unread. A cut log on a remote host now shows as
+  unreadable on the Security card, rather than as a smaller count.
 - **On Python 3.13 and later (Ubuntu 26.04), a closed terminal could keep its slot until the panel
   restarted.** If the terminal's output reader was still busy a second after the close, for
   instance still handing output to the browser, the close stopped partway. The session stayed on

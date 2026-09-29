@@ -169,9 +169,10 @@ _HELPER_STATE = {"present": None}
 # Verbs whose output is all or nothing: every caller discards a partial answer rather than act on
 # it. The helper's f2b-log-lines stops past its own ceiling and exits 3 (F2B_LOG_MAX_BYTES, one
 # read chunk under this process's collector cap, so the collector never cuts the helper first).
-# When this process's collector does the cutting -- the pre-helper shell form, or a helper that
-# predates that exit -- _collect_verb_output answers the SAME rc 3. So "cut" means one thing
-# whichever side stopped reading, and an answer the helper called complete is complete here too.
+# The shell form (the pre-helper fallback, and every remote host) stops at the same ceiling with the
+# same rc 3 itself. When this process's collector does the cutting -- a helper that predates that
+# exit -- _collect_verb_output answers the SAME rc 3. So "cut" means one thing whichever side
+# stopped reading, and an answer the helper called complete is complete here too.
 _WHOLE_OUTPUT_VERBS = frozenset({"f2b-log-lines"})
 _CUT_RC = 3
 
@@ -2781,12 +2782,13 @@ def fail2ban_attempt_counts(days=7):
 def _f2b_unread(rc, what):
     """Whether a fail2ban log read must be treated as unread: it failed, or it was cut (rc 3).
 
-    Cut means the helper stopped at its own ceiling, or this process's collector stopped keeping
-    bytes at _MAX_OUTPUT_BYTES (the pre-helper shell form, or a helper that predates the ceiling);
-    _run_verb answers both as _CUT_RC. The bytes a cut read keeps are the FIRST ones — the oldest
-    days — so a partial tally undercounts exactly the recent offenders, and the auto-block
-    reconcile RELEASES any block that falls under the threshold: a cut read is unread, never
-    smaller. Under a flood the panel host's auto-block therefore holds still (no new blocks, no
+    Cut means the helper, or the shell form standing in for it (privileged._f2b_log_lines_remote),
+    stopped at its own ceiling, or this process's collector stopped keeping bytes at
+    _MAX_OUTPUT_BYTES (a helper that predates the ceiling); all answer _CUT_RC, and the remote
+    readers in ssh_manager.hosts decide from this too. The bytes a cut read keeps are the FIRST
+    ones — the oldest days — so a partial tally undercounts exactly the recent offenders, and the
+    auto-block reconcile RELEASES any block that falls under the threshold: a cut read is unread,
+    never smaller. Under a flood the host's auto-block therefore holds still (no new blocks, no
     releases) — fail2ban's own bans are unaffected.
 
     The rc, and not the answer's length: that was `len >= F2B_LOG_MAX_BYTES`, while the helper

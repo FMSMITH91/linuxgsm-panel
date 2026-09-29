@@ -2523,18 +2523,13 @@ def remote_fail2ban_attempt_counts(server, days=7):
     from panel.ops import system_ops as _so
     out, _, rc = _core.run_privileged(server, "f2b-log-lines", [_so._f2b_cutoff(days)], timeout=25,
                                       merge_stderr=False)
-    if rc != 0:
-        _core._log.debug("remote attempt counts: the fail2ban log read failed (rc=%s)", rc)
-        return None
-    # An answer AT the transport's output ceiling is a cut answer, and the transports keep the
-    # FIRST bytes — the oldest days. A partial tally undercounts the recent offenders, and the
-    # auto-block reconcile RELEASES any block whose IP falls below the threshold, so on a busy host
-    # (7 days of fail2ban log over 8 MB) a cut read unblocked the attackers it was built to hold.
-    # Tailscale and local hosts only acquired that ceiling with the memory-exhaustion fix; paramiko
-    # always had it. Unread, not partial: the reconcile leaves everything as it is on None.
-    if len((out or "").encode("utf-8", "replace")) >= _core._MAX_OUTPUT_BYTES - 65536:
-        _core._log.warning("remote attempt counts: the fail2ban log filled the transport's read "
-                           "limit; treated as unread so no block is released on a partial tally")
+    # A cut read keeps the FIRST bytes — the oldest days — so its tally undercounts the recent
+    # offenders, and the auto-block reconcile RELEASES any block whose IP falls below the threshold:
+    # on a busy host a cut read unblocked the attackers it was built to hold. Unread, not partial.
+    # Decided from the rc, as on the panel host: the remote form stops at the helper's own ceiling
+    # and exits 3 (privileged._f2b_log_lines_remote). It was the answer's length — anything within
+    # 64 KB of the transport's cap — which also threw away a complete log just under it.
+    if _so._f2b_unread(rc, "remote attempt counts"):
         return None
     return _so._tally_f2b_events(out)[0]
 
@@ -2559,10 +2554,10 @@ def remote_fail2ban_top_ips(server, limit=20, days=7):
     # None, not [], when the read FAILED — see system_ops.fail2ban_top_ips for why the two have to
     # be distinguishable. On a local or Tailscale-SSH host a timeout does not raise: the transport
     # returns ("", "...timed out", -1), so without the rc this looked exactly like "no offenders".
+    # rc 3 is a read cut at the ceiling: unread too, and said so, as fail2ban_top_ips answers it.
     out, _, rc = _core.run_privileged(server, "f2b-log-lines", [cutoff], timeout=25,
                                       merge_stderr=False)
-    if rc != 0:
-        _core._log.debug("remote top-ips: the fail2ban log read failed (rc=%s)", rc)
+    if _so._f2b_unread(rc, "remote top-ips"):
         return None
     out = _so._tally_f2b_lines(out, limit)
     banned = set()

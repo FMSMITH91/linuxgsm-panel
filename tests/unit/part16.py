@@ -38,7 +38,7 @@ from types import SimpleNamespace as NS
 
 from unit import REPO_ROOT as _REPO16
 from unit import idreuse_support as _reuse16
-from unit.part01 import check, eq  # noqa: F401
+from unit.part01 import check, eq, skip  # noqa: F401
 from unit.part05 import _helper, _helper_path
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_HOST2, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED,
                          _P9Thread, _p9, _p9_app, _p9_auth, _p9_banlist, _p9_bk, _p9_cfg,
@@ -958,6 +958,166 @@ check("f2b ceiling: ...one byte past the cap is unread (None), and one byte unde
       _ex16.get("cap+1", (0, 0, 0))[2] is None
       and _ex16.get("cap-1", (0, 0, None))[2] == {_EX16_IP: _ex16["cap-1"][0]},
       repr((_ex16_got("cap+1"), _ex16_got("cap-1"))))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# ...and on a REMOTE host, where there is no helper: the shell form stops at the same ceiling
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# A remote is sent privileged.py's rendering of f2b-log-lines, and its answer was judged by LENGTH:
+# remote_fail2ban_attempt_counts called anything within 64 KB of the transport's cap cut, so a
+# complete log just under it was thrown away, and remote top-ips tallied whatever arrived. The
+# rendering now stops at the helper's ceiling itself and exits 3, and both readers decide from the
+# rc. Driven end to end: the real run_privileged and rendering, run by the local transport's own
+# shell executor over a sandboxed log (no sudo, nothing privileged), in a UTF-8 locale so a byte
+# count that is really a character count shows; and under each awk this machine has, because a
+# remote runs whichever one it has (Ubuntu's default is mawk).
+import shutil as _shutil16  # noqa: E402
+
+from panel.ops.ssh_manager import hosts as _hosts16  # noqa: E402
+from panel.security import privileged as _privm16  # noqa: E402
+
+_RF16_MAX = getattr(_privm16, "F2B_LOG_MAX_BYTES", _EX16_MAX)
+_RF16_DIR = _tf16.mkdtemp(prefix="lgsm-unit-f2b-remote-")
+_RF16_GLOB = os.path.join(_RF16_DIR, "fail2ban.log*")
+_RF16_SRV = NS(name="f2b-remote16", host="192.0.2.16", port=22, username="lgsm", is_local=False,
+               auth_method="key", sudo_enabled=True)
+_RF16_OTHER = []
+_RF16_FEW = [_F2B16_LINE % i for i in range(3)] + ["2026-08-01 old line [sshd] Found 1.2.3.4",
+                                                    "2026-09-20 00:00:00 nothing of interest"]
+
+
+def _rf16_write(lines):
+    """Write the sandboxed fail2ban.log; the number of lines."""
+    with open(os.path.join(_RF16_DIR, "fail2ban.log"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return len(lines)
+
+
+def _rf16_transport(awk=None):
+    """A run_command for _core that runs the f2b rendering locally over _RF16_DIR.
+
+    With `awk` in place of the rendering's own when given. Anything else it is sent is refused and
+    recorded.
+    """
+    def _run(server, command, timeout=30, sudo=None, stdin_text=None):
+        if _privm16.F2B_LOG_GLOB not in command:
+            _RF16_OTHER.append(command[:60])
+            return "", "not under test", 1
+        cmd = command.replace(_privm16.F2B_LOG_GLOB, _RF16_GLOB)
+        if awk:
+            cmd = cmd.replace(" awk ", " %s " % awk, 1)
+        return _core16._exec_local_shell("export LC_ALL=C.UTF-8; " + cmd, timeout=timeout)
+    return _run
+
+
+def _rf16_read(awk=None):
+    """The rendering's own answer over the current log: (rc, bytes of stdout, stderr)."""
+    out, err, rc = _rf16_transport(awk)(_RF16_SRV, _privm16.remote_command(
+        "f2b-log-lines", ["2026-09-01"], merge_stderr=False))
+    return rc, len(out.encode("utf-8")), err
+
+
+class _Rec16(object):
+    """system_ops' logger, keeping the warnings."""
+
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, msg, *a, **k):
+        self.warnings.append(msg % a if a else msg)
+
+    def __getattr__(self, name):
+        return lambda *a, **k: None
+
+
+_rf16 = {}
+_RF16_AWKS = [a for a in ("gawk", "mawk") if _shutil16.which(a)]
+_rf16_saved = (_core16.run_command, _p9_so._log, _hosts16.remote_fail2ban_overview,
+               _hosts16.remote_ufw_blocked_ips)
+try:
+    for _rfawk16 in [None] + _RF16_AWKS:
+        _rfk16 = _rf16_write(_ex16_lines(_RF16_MAX))
+        _rfexact16 = _rf16_read(_rfawk16)
+        _rf16_write(_ex16_lines(_RF16_MAX + 1))
+        _rfover16 = _rf16_read(_rfawk16)
+        _rf16_write(_ex16_lines(_RF16_MAX - 1))
+        _rfunder16 = _rf16_read(_rfawk16)
+        # One byte past the ceiling in BYTES, and exactly at it in characters: " - " (3 bytes) is
+        # swapped for a space and an e-acute (3 bytes, 2 characters), after the tallied address.
+        _rfmb16 = _ex16_lines(_RF16_MAX + 1)
+        _rfmb16[0] = _rfmb16[0].replace(" - ", " \u00e9", 1)
+        _rf16_write(_rfmb16)
+        _rfmulti16 = _rf16_read(_rfawk16)
+        _rf16_write(_RF16_FEW)
+        _rffew16 = _rf16_transport(_rfawk16)(_RF16_SRV, _privm16.remote_command(
+            "f2b-log-lines", ["2026-09-01"], merge_stderr=False))
+        _rf16_write(["2026-09-20 00:00:00 nothing of interest"])
+        _rfquiet16 = _rf16_read(_rfawk16)
+        _rf16[_rfawk16 or "awk"] = (_rfexact16, _rfover16, _rfunder16, _rfmulti16, _rffew16,
+                                    _rfquiet16)
+
+    # The two readers, through the real run_privileged and the shipped rendering.
+    _core16.run_command = _rf16_transport()
+    _hosts16.remote_fail2ban_overview = lambda server: {"jails": []}   # annotations: not under test
+    _hosts16.remote_ufw_blocked_ips = lambda server, shadowed=None: {}
+    for _rfname16, _rfn16 in (("exact", _RF16_MAX), ("over", _RF16_MAX + 1)):
+        _rfk16 = _rf16_write(_ex16_lines(_rfn16))
+        _p9_so._log = _Rec16()
+        _rf16[_rfname16] = (_rfk16, _hosts16.remote_fail2ban_attempt_counts(_RF16_SRV, days=7),
+                            _hosts16.remote_fail2ban_top_ips(_RF16_SRV, limit=20, days=7),
+                            list(_p9_so._log.warnings))
+    _rf16_write(_RF16_FEW)
+    _rf16["few"] = (3, _hosts16.remote_fail2ban_attempt_counts(_RF16_SRV, days=7), None, [])
+    _core16.run_command = lambda server, command, timeout=30, sudo=None, stdin_text=None: (
+        "", "SSH command timed out", -1)
+    _rf16["failed"] = (0, _hosts16.remote_fail2ban_attempt_counts(_RF16_SRV, days=7),
+                       _hosts16.remote_fail2ban_top_ips(_RF16_SRV, limit=20, days=7), [])
+finally:
+    (_core16.run_command, _p9_so._log, _hosts16.remote_fail2ban_overview,
+     _hosts16.remote_ufw_blocked_ips) = _rf16_saved
+    _shutil16.rmtree(_RF16_DIR, ignore_errors=True)
+
+eq("f2b remote: the rendering's ceiling is the helper's (they cannot drift)",
+   getattr(_privm16, "F2B_LOG_MAX_BYTES", None), getattr(_helper, "F2B_LOG_MAX_BYTES", 0))
+for _rfawk16 in ["awk"] + _RF16_AWKS:
+    _rfe16, _rfo16, _rfu16, _rfm16, _rff16, _rfq16 = _rf16.get(
+        _rfawk16, ((None, 0, ""),) * 4 + (("", "", None), (None, 0, "")))
+    check("f2b remote (%s): exactly the ceiling is complete (rc 0, every byte)" % _rfawk16,
+          _rfe16[:2] == (0, _RF16_MAX), repr(_rfe16))
+    check("f2b remote (%s): one byte past it is cut (rc 3), says so, and stops at it" % _rfawk16,
+          _rfo16[0] == 3 and _rfo16[1] <= _RF16_MAX and "truncated" in _rfo16[2],
+          repr(_rfo16)[:200])
+    check("f2b remote (%s): one byte under it is complete (rc 0)" % _rfawk16,
+          _rfu16[:2] == (0, _RF16_MAX - 1), repr(_rfu16))
+    check("f2b remote (%s): the ceiling counts bytes, as the helper does, not characters"
+          % _rfawk16, _rfm16[0] == 3, repr(_rfm16)[:200])
+    check("f2b remote (%s): an ordinary log is read exactly as before (control)" % _rfawk16,
+          tuple(_rff16) == ("\n".join(_RF16_FEW[:3]), "", 0), repr(_rff16)[:200])
+    check("f2b remote (%s): a quiet log is a complete, empty read (rc 0)" % _rfawk16,
+          tuple(_rfq16) == (0, 0, ""), repr(_rfq16))
+for _rfawk16 in ("gawk", "mawk"):
+    if _rfawk16 not in _RF16_AWKS:
+        skip("f2b remote (%s): the rendering under %s" % (_rfawk16, _rfawk16),
+             "%s is not installed here" % _rfawk16)
+_rx16 = _rf16.get("exact", (0, "missing", "missing", []))
+_ro16 = _rf16.get("over", (0, "missing", "missing", []))
+check("f2b remote: attempt counts tally a log of exactly the ceiling (it was 'within 64 KB': None)",
+      _rx16[1] == {_EX16_IP: _rx16[0]}, repr(_rx16[1])[:200])
+check("f2b remote: ...and top-ips ranks it",
+      isinstance(_rx16[2], list)
+      and [(r["ip"], r["attempts"]) for r in _rx16[2]] == [(_EX16_IP, _rx16[0])],
+      repr(_rx16[2])[:200])
+check("f2b remote: one byte past the ceiling, both are unread (None), never a partial tally",
+      _ro16[1] is None and _ro16[2] is None, repr((_ro16[1], _ro16[2]))[:200])
+check("f2b remote: ...and each says why (a warning, as the panel host's readers give)",
+      len(_ro16[3]) == 2 and all("ceiling" in w for w in _ro16[3]) and not _rx16[3],
+      repr((_ro16[3], _rx16[3])))
+eq("f2b remote: an ordinary log is tallied (control)",
+   _rf16.get("few", (0, None))[1], {"2001:db8::0": 1, "2001:db8::1": 1, "2001:db8::2": 1})
+check("f2b remote: a failed read is still unread (None), for both",
+      _rf16.get("failed", (0, 0, 0))[1:3] == (None, None), repr(_rf16.get("failed")))
+check("f2b remote: nothing but the fail2ban read reached the stand-in transport",
+      not _RF16_OTHER, repr(_RF16_OTHER[:3]))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
