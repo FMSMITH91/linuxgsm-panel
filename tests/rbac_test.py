@@ -564,6 +564,88 @@ def _invite_revoked_during_the_race():
           "works about one that had just worked")
 
 
+def _invite_accept_with_form_hook(tok, username, hook):
+    """Redeem `tok` with `hook()` run where the route first reads the form, then the real read."""
+    _form_real = _anmod._invite_form
+
+    def _hooked():
+        hook()
+        return _form_real()
+
+    _anmod._invite_form = _hooked
+    try:
+        return _accept(tok, username)
+    finally:
+        _anmod._invite_form = _form_real
+
+
+def _invite_minter_demoted_mid_request():
+    """A superadmin invite whose minter is demoted while the body is in flight creates nothing."""
+    # Aikido 745379189. The authority checks run BEFORE the form is read, and a Bearer-headed
+    # request skips csrf.protect(), which is what otherwise reads the body in before_request. So
+    # the body is first read in _invite_form(), after authority_intact said yes — and under
+    # eventlet a client can withhold it for as long as it likes while the minter is demoted and
+    # deactivated. The claim then went through on the stale creator the session had loaded, and
+    # an ACTIVE SUPERADMIN account appeared after its minter's offboarding. The hook stands in
+    # for the held body: it demotes the minter where the real request would be waiting.
+    with app.app_context():
+        _tsa = User(username=_inv_tag + "_tsa", display_name="throwaway minter",
+                    password_hash=auth.hash_password(secrets.token_hex(16)),
+                    is_superadmin=True, is_active=True)
+        db.session.add(_tsa)
+        db.session.commit()
+        _tsa_id = _tsa.id
+
+    def _minted_by_tsa():
+        with app.app_context():
+            _i, _t = _Inv.mint(db.session.get(User, _tsa_id), superadmin=True)
+            db.session.add(_i)
+            db.session.commit()
+            return _i.id, _t
+
+    def _demote():
+        with app.app_context():
+            _c = db.session.get(User, _tsa_id)
+            _c.is_superadmin, _c.is_active = False, False
+            db.session.commit()
+
+    # Control: the same hook shape with nothing changed still redeems, so the refusal below is
+    # the demotion's doing and not the hook's.
+    _, _tok_ok = _minted_by_tsa()
+    _invite_accept_with_form_hook(_tok_ok, _inv_tag + "_midok", lambda: None)
+    check("invite route: (control) a superadmin invite redeems through the form hook",
+          getattr(_user(_inv_tag + "_midok"), "is_superadmin", None) is True,
+          "the control failed — the refusal below proves nothing")
+    _, _tok_mid = _minted_by_tsa()
+    _r_mid = _invite_accept_with_form_hook(_tok_mid, _inv_tag + "_midsa", _demote)
+    with app.app_context():
+        _c = db.session.get(User, _tsa_id)
+        _demoted = _c is not None and not _c.is_superadmin and not _c.is_active
+    check("invite route: (premise) the minter really was demoted mid-request", _demoted,
+          "the window never opened")
+    check("invite route: a minter demoted while the body is in flight mints no superadmin",
+          _user(_inv_tag + "_midsa") is None,
+          "an active superadmin account was created after its minter lost the rank (status %s)"
+          % _r_mid.status_code)
+
+
+def _invite_expired_mid_request():
+    """An invite that expires while its body is in flight creates nothing."""
+    # The claim's WHERE asked about used_at and revoked_at and not the expiry, so the same held
+    # body outlived the invite's TTL too.
+    _iid_e, _tok_e = _mint(_sa)
+
+    def _expire():
+        with app.app_context():
+            db.session.get(_Inv, _iid_e).expires_at = _inv_utcnow() - _inv_timedelta(minutes=1)
+            db.session.commit()
+
+    _r_e = _invite_accept_with_form_hook(_tok_e, _inv_tag + "_midexp", _expire)
+    check("invite route: an invite that expires mid-request creates no account",
+          _user(_inv_tag + "_midexp") is None,
+          "the claim does not ask about expires_at (status %s)" % _r_e.status_code)
+
+
 def _invite_superadmin_from_a_demoted_minter():
     """A superadmin-granting invite from a since-demoted minter is refused."""
     # 3. The delegation must not outlive the authority behind it. A superadmin-granting invite
@@ -816,7 +898,8 @@ def _invite_cleanup_rows():
     """Delete the invite users, invites and groups, and restore the borrowed superadmin."""
     global _ICC_rm, _g, _n, _row, _sa_row, _u
     for _n in ("_ok", "_twice", "_demoted", "_inactive", "_exp", "_race", "_revoked",
-               "_grp", "_grp_ok", "_host", "_host_ok", "_cmd", "_cmd_ok"):
+               "_grp", "_grp_ok", "_host", "_host_ok", "_cmd", "_cmd_ok", "_midok", "_midsa",
+               "_midexp", "_tsa"):
         _u = User.query.filter_by(username=_inv_tag + _n).first()
         if _u is not None:
             db.session.delete(_u)
@@ -2370,6 +2453,8 @@ def _check_invites():
     try:
         _invite_happy_path_and_replays()
         _invite_revoked_during_the_race()
+        _invite_minter_demoted_mid_request()
+        _invite_expired_mid_request()
         _invite_superadmin_from_a_demoted_minter()
         _invite_group_from_a_demoted_minter()
         _invite_host_outside_the_minters_reach()

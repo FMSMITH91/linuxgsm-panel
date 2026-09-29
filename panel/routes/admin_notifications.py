@@ -391,15 +391,35 @@ def _register_invites(app):
         # the row ended up stamped BOTH revoked and used, and the admin was told "Invite revoked —
         # the link no longer works" about a link that had just worked. revoke_invite already claims
         # its side with exactly this pair; this is the same shape from the other end.
+        #
+        # ...and expires_at, the third of is_usable's questions, for the same reason. The checks
+        # above ran before the form was read, and a request that skips csrf.protect() (a Bearer
+        # header and no cookie) first reads its body in _invite_form() — a green socket read that
+        # a client can hold open for as long as it likes. An invite that expired while it waited
+        # was redeemed anyway (Aikido 745379189).
+        #
+        # Hashed BEFORE the claim: the claim takes SQLite's write lock, and bcrypt under it held
+        # every other writer in the panel for the length of the hash.
+        _pw_hash = hash_password(password)
         claimed = (db.session.query(Invite)
                    .filter(Invite.id == inv.id, Invite.used_at.is_(None),
-                           Invite.revoked_at.is_(None))
+                           Invite.revoked_at.is_(None), Invite.expires_at > utcnow())
                    .update({"used_at": utcnow()}, synchronize_session=False))
         if not claimed:
             db.session.rollback()
             return render_template("invite.html", invalid=True), 404
+        # The minter's authority, re-read UNDER that write lock. authority_intact above answered
+        # for whoever the session loaded before the body arrived; a demotion or deactivation that
+        # committed while it was held left the redemption deciding on a stale row, and an ACTIVE
+        # SUPERADMIN account appeared after its minter's offboarding. Nothing can commit a
+        # demotion now until this transaction ends, so the answer holds for the account created
+        # below — and _beyond_creator_reach reads the same fresh row.
+        _creator = _invite_creator(inv, fresh=True)
+        if not inv.authority_intact(_creator):
+            db.session.rollback()
+            return render_template("invite.html", invalid=True), 404
 
-        user = User(username=username, password_hash=hash_password(password),
+        user = User(username=username, password_hash=_pw_hash,
                     display_name=username, is_superadmin=bool(inv.grants_superadmin),
                     is_active=True, language=_new_user_language(load_config(), i18n.LANGUAGES))
         # must_change_password stays False: they chose this password themselves, nobody handed it
@@ -599,9 +619,19 @@ def _audit_user_edit(user, _old_username, _pending_audit):
     log_action(current_user, "edit_user", target=user.username)
 
 
-def _invite_creator(inv):
-    """The account that minted `inv`: None for no invite, no recorded creator, or a deleted one."""
-    return db.session.get(User, inv.created_by_id) if (inv and inv.created_by_id) else None
+def _invite_creator(inv, fresh=False):
+    """The account that minted `inv`: None for no invite, no recorded creator, or a deleted one.
+
+    `fresh`: re-read the row rather than trust the session's copy — its flags and its groups —
+    which may predate a demotion committed on another connection.
+    """
+    if not (inv and inv.created_by_id):
+        return None
+    if fresh:
+        _loaded = db.session.get(User, inv.created_by_id)
+        if _loaded is not None:
+            db.session.expire(_loaded)
+    return db.session.get(User, inv.created_by_id)
 
 
 def _invite_form():

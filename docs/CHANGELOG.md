@@ -926,6 +926,15 @@ CI-verified commit regardless of this file — this changelog is for humans.
   install with more than one tenant, a delegated admin can no longer edit "Everyone", or their
   own group if someone else in it reaches more than they do. That is the intended rule. A
   superadmin's page and edits are unchanged.
+- **An invite no longer outlives its minter, or its expiry, while its form is in flight.** The
+  checks that the minter is still active and still holds what the invite grants ran before the
+  form was read. A request carrying an `Authorization: Bearer` header and no cookie skips the
+  CSRF check that otherwise reads the body early, so a client could send the headers, hold the
+  body back while the minter was demoted and deactivated, and still get the account, superadmin
+  included. An invite that expired while the body was held was redeemed the same way. Redemption
+  now claims the invite only if it is unexpired, and re-reads the minter after the claim, while it
+  holds the database's write lock, before creating the account. The password is hashed before
+  that lock is taken, so other writers wait less.
 - **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported by
   kta1kri). Twenty-five places built `sudo -u <account> bash -c '…'` from a server's account
   (`short_name`) and LinuxGSM script name with neither quoting nor a check — the dashboard's own
