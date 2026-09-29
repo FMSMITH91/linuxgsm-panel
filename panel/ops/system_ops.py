@@ -165,6 +165,15 @@ from panel.security import privileged as _priv
 
 _HELPER_STATE = {"present": None}
 
+# Verbs whose output is all or nothing: every caller discards a partial answer rather than act on
+# it. The helper's f2b-log-lines stops past its own ceiling and exits 3 (F2B_LOG_MAX_BYTES, one
+# read chunk under this process's collector cap, so the collector never cuts the helper first).
+# When this process's collector does the cutting -- the pre-helper shell form, or a helper that
+# predates that exit -- _collect_verb_output answers the SAME rc 3. So "cut" means one thing
+# whichever side stopped reading, and an answer the helper called complete is complete here too.
+_WHOLE_OUTPUT_VERBS = frozenset({"f2b-log-lines"})
+_CUT_RC = 3
+
 
 def _helper_present():
     """Whether the root-owned privileged helper is installed on this machine (cached)."""
@@ -209,7 +218,8 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
             argv = _priv.tool_argv(verb, args)
         else:
             return _run_verb_shell(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
-                                   timeout=timeout, sudo=True)
+                                   timeout=timeout, sudo=True,
+                                   whole=verb in _WHOLE_OUTPUT_VERBS)
     except _priv.VerbError:
         _log.warning("privileged verb %s refused its arguments", verb)
         return "", "invalid argument", -1
@@ -235,7 +245,8 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              stdin=(subprocess.PIPE if _in is not None else subprocess.DEVNULL),
                              start_new_session=True)
-        out, err, rc = _collect_verb_output(p, argv, timeout, _in)
+        out, err, rc = _collect_verb_output(p, argv, timeout, _in,
+                                            whole=verb in _WHOLE_OUTPUT_VERBS)
     except subprocess.TimeoutExpired:
         return "", "Command timed out", -1
     except FileNotFoundError:
@@ -246,7 +257,7 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
     return _verb_result(out, err, rc, merge_stderr)
 
 
-def _collect_verb_output(p, cmd, timeout, stdin_text=None):
+def _collect_verb_output(p, cmd, timeout, stdin_text=None, whole=False):
     """A started verb's (stdout, stderr, rc) as text, KEEPING at most the transports' ceiling.
 
     subprocess.run(capture_output=True) — what both branches of _run_verb used — buffers every
@@ -256,10 +267,16 @@ def _collect_verb_output(p, cmd, timeout, stdin_text=None):
     process from 12 MB to 656 MB). Remotes were already capped at ssh_manager._core's
     _MAX_OUTPUT_BYTES; this is the same reader and the same ceiling, so no caller can depend on
     more here than it gets from a remote. Raises TimeoutExpired, like subprocess.run, when the
-    verb outlives `timeout` (it has been killed, its whole process group with it).
+    verb outlives `timeout` (it has been killed, its whole process group with it) -- within about
+    a second of it, however the verb's descendants behave: see _collect_capped.
+
+    `whole`: the verb is all-or-nothing (_WHOLE_OUTPUT_VERBS), so output this cut short is
+    answered as the helper answers its own: rc 3, and a message on stderr.
     """
     from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
-    res = _smc._collect_capped(p, timeout, kill=lambda: _smc._kill_process_tree(p),
+    # The kill only SIGNALS: _collect_capped reaps, after its readers have let go of the pipes.
+    # It was _kill_process_tree, whose communicate() read the same pipes as those readers.
+    res = _smc._collect_capped(p, timeout, kill=lambda: _smc._signal_process_tree(p),
                                threads=threading,
                                stdin_bytes=(stdin_text.encode("utf-8")
                                             if stdin_text is not None else None))
@@ -269,6 +286,10 @@ def _collect_verb_output(p, cmd, timeout, stdin_text=None):
     if truncated:
         _log.warning("privileged verb output exceeded %d bytes and was truncated",
                      _smc._MAX_OUTPUT_BYTES)
+        if whole and rc == 0:
+            return (_smc._decode_output(out),
+                    "output passed the panel's %d-byte read limit; truncated, so it must be "
+                    "treated as unread" % _smc._MAX_OUTPUT_BYTES, _CUT_RC)
     return _smc._decode_output(out), _smc._decode_output(err), rc
 
 
@@ -282,13 +303,13 @@ def _verb_result(out, err, rc, merge_stderr):
     return out, err, rc
 
 
-def _run_verb_shell(cmd, timeout=30, sudo=False):
+def _run_verb_shell(cmd, timeout=30, sudo=False, whole=False):
     """_run_verb's pre-helper fallback: a composed shell form, with the same ceiling as the rest.
 
     It used to go through _run, i.e. subprocess.run(shell=True, capture_output=True), which keeps
     everything — and this branch is the one a panel host whose helper predates a fix still takes,
     so it needs the ceiling most. Merging stderr is the command's own business here (the shell
-    form ends in `2>&1` when asked to).
+    form ends in `2>&1` when asked to). `whole` as for _collect_verb_output.
     """
     # os.geteuid() is Unix-only; guard it so callers don't crash off-Linux (tests).
     if sudo and hasattr(os, "geteuid") and os.geteuid() != 0:
@@ -298,7 +319,7 @@ def _run_verb_shell(cmd, timeout=30, sudo=False):
         p = subprocess.Popen(cmd, shell=True,  # nosec B602 - privileged.py's own shell form
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              stdin=subprocess.DEVNULL, start_new_session=True)
-        out, err, rc = _collect_verb_output(p, cmd, timeout)
+        out, err, rc = _collect_verb_output(p, cmd, timeout, whole=whole)
         return out.strip(), err.strip(), rc
     except subprocess.TimeoutExpired:
         return "", "Command timed out", -1
@@ -2718,8 +2739,7 @@ def fail2ban_top_ips(limit=20, days=7):
     # and the limit interpolated into it. The verb reads the rotated logs and returns the lines;
     # everything the awk did — filter by date, extract Ban/Found, tally per IP — is Python now.
     out, _, rc = _run_verb("f2b-log-lines", [cutoff], timeout=25, merge_stderr=False)
-    if rc != 0 or _f2b_read_cut(out, "top-ips"):
-        _log.debug("top-ips: the fail2ban log read failed (rc=%s)", rc)
+    if _f2b_unread(rc, "top-ips"):
         return None
     out = _tally_f2b_lines(out, limit)
     banned_now = set()
@@ -2756,29 +2776,32 @@ def fail2ban_attempt_counts(days=7):
     100 as a wave of new ones passed it and was RELEASED while still over the threshold. The
     threshold is a count, so the reconcile needs every count."""
     out, _, rc = _run_verb("f2b-log-lines", [_f2b_cutoff(days)], timeout=25, merge_stderr=False)
-    if rc != 0 or _f2b_read_cut(out, "attempt counts"):
-        _log.debug("attempt counts: the fail2ban log read failed (rc=%s)", rc)
+    if _f2b_unread(rc, "attempt counts"):
         return None
     return _tally_f2b_events(out)[0]
 
 
-def _f2b_read_cut(out, what):
-    """Whether a fail2ban log read came back AT the output ceiling, i.e. cut short.
+def _f2b_unread(rc, what):
+    """Whether a fail2ban log read must be treated as unread: it failed, or it was cut (rc 3).
 
-    The helper refuses to go past its own ceiling (rc 3), but the pre-helper shell form has no such
-    exit code: _run_verb just stops keeping bytes at _MAX_OUTPUT_BYTES, and the bytes it keeps are
-    the FIRST ones — the oldest days. A partial tally undercounts exactly the recent offenders, and
-    the auto-block reconcile RELEASES any block that falls under the threshold, so a cut read is
-    unread, never smaller: the same rule remote_fail2ban_attempt_counts applies to its transport.
-    Under a flood the panel host's auto-block therefore holds still (no new blocks, no releases)
-    — fail2ban's own bans are unaffected.
+    Cut means the helper stopped at its own ceiling, or this process's collector stopped keeping
+    bytes at _MAX_OUTPUT_BYTES (the pre-helper shell form, or a helper that predates the ceiling);
+    _run_verb answers both as _CUT_RC. The bytes a cut read keeps are the FIRST ones — the oldest
+    days — so a partial tally undercounts exactly the recent offenders, and the auto-block
+    reconcile RELEASES any block that falls under the threshold: a cut read is unread, never
+    smaller. Under a flood the panel host's auto-block therefore holds still (no new blocks, no
+    releases) — fail2ban's own bans are unaffected.
+
+    The rc, and not the answer's length: that was `len >= F2B_LOG_MAX_BYTES`, while the helper
+    prints up to AND INCLUDING that many bytes with rc 0, so an answer the helper called complete
+    was discarded here.
     """
-    from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
-    if len((out or "").encode("utf-8", "replace")) < _smc._MAX_OUTPUT_BYTES - 65536:
-        return False
-    _log.warning("%s: the fail2ban log filled the output ceiling; treated as unread so no block "
-                 "is released on a partial tally", what)
-    return True
+    if rc == _CUT_RC:
+        _log.warning("%s: the fail2ban log passed the read ceiling; treated as unread so no block "
+                     "is released on a partial tally", what)
+    elif rc != 0:
+        _log.debug("%s: the fail2ban log read failed (rc=%s)", what, rc)
+    return rc != 0
 
 
 def fail2ban_unban(jail, ip):

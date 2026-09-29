@@ -2336,10 +2336,16 @@ try:
             self.calls.append("communicate")
             raise OSError("no pipes")
 
+        def wait(self, timeout=None):
+            self.calls.append("wait")
+            raise OSError("no such child")
+
+    # Reaped with wait(), never communicate(): communicate() READS the pipes, and a capped reader
+    # may still be reading them (under eventlet a second reader on one descriptor raises).
     _gp10 = _GhostProc10()
     _gpr10 = _try10(_sm_core._kill_process_tree, _gp10)
     check("core kill: a process already gone falls back to kill(), and every failure is contained",
-          _gpr10 is None and _gp10.calls == ["kill", "communicate"], repr((_gpr10, _gp10.calls)))
+          _gpr10 is None and _gp10.calls == ["kill", "wait"], repr((_gpr10, _gp10.calls)))
 
     # ── _collect_capped: the ceiling on KEPT output, and pipes that break under it ─────────────
     class _Stream10:
