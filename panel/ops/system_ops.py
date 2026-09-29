@@ -7,6 +7,7 @@ import re
 import shlex
 import subprocess
 from panel.core import terminal
+from panel.core.validation import canonical_ip, canonical_ip_or_network, ip_address_or_none
 import threading
 import time
 import urllib.error
@@ -165,6 +166,15 @@ from panel.security import privileged as _priv
 
 _HELPER_STATE = {"present": None}
 
+# Verbs whose output is all or nothing: every caller discards a partial answer rather than act on
+# it. The helper's f2b-log-lines stops past its own ceiling and exits 3 (F2B_LOG_MAX_BYTES, one
+# read chunk under this process's collector cap, so the collector never cuts the helper first).
+# When this process's collector does the cutting -- the pre-helper shell form, or a helper that
+# predates that exit -- _collect_verb_output answers the SAME rc 3. So "cut" means one thing
+# whichever side stopped reading, and an answer the helper called complete is complete here too.
+_WHOLE_OUTPUT_VERBS = frozenset({"f2b-log-lines"})
+_CUT_RC = 3
+
 
 def _helper_present():
     """Whether the root-owned privileged helper is installed on this machine (cached)."""
@@ -208,8 +218,9 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
         elif hasattr(os, "geteuid") and os.geteuid() == 0:
             argv = _priv.tool_argv(verb, args)
         else:
-            return _run(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
-                        timeout=timeout, sudo=True)
+            return _run_verb_shell(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
+                                   timeout=timeout, sudo=True,
+                                   whole=verb in _WHOLE_OUTPUT_VERBS)
     except _priv.VerbError:
         _log.warning("privileged verb %s refused its arguments", verb)
         return "", "invalid argument", -1
@@ -230,11 +241,13 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
         # stdin: the verb's own text when it has one, else DEVNULL. NOT the default of
         # inheriting -- see _POPEN_KW in ssh_manager/_core.py for what that cost.
         _in = _priv.stdin_for(verb)
-        _stdin_kw = {"input": _in} if _in is not None else {"stdin": subprocess.DEVNULL}
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-        r = subprocess.run(argv, shell=False,  # nosec B603 - argv from privileged.py's fixed table
-                           capture_output=True, text=True,
-                           timeout=timeout, **_stdin_kw)
+        p = subprocess.Popen(argv, shell=False,  # nosec B603 - argv from privileged.py's fixed table
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             stdin=(subprocess.PIPE if _in is not None else subprocess.DEVNULL),
+                             start_new_session=True)
+        out, err, rc = _collect_verb_output(p, argv, timeout, _in,
+                                            whole=verb in _WHOLE_OUTPUT_VERBS)
     except subprocess.TimeoutExpired:
         return "", "Command timed out", -1
     except FileNotFoundError:
@@ -242,12 +255,80 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
     except Exception:
         _log.debug("privileged verb failed", exc_info=True)
         return "", "command execution error", -1
-    out, err = (r.stdout or "").strip(), (r.stderr or "").strip()
+    return _verb_result(out, err, rc, merge_stderr)
+
+
+def _collect_verb_output(p, cmd, timeout, stdin_text=None, whole=False):
+    """A started verb's (stdout, stderr, rc) as text, KEEPING at most the transports' ceiling.
+
+    subprocess.run(capture_output=True) — what both branches of _run_verb used — buffers every
+    byte a command writes until it exits. On the panel host that is the one process running every
+    host's management, and a verb's output is not always the panel's to size: f2b-log-lines prints
+    the fail2ban log, which an unauthenticated attacker grows (a million lines, 124 MB, took this
+    process from 12 MB to 656 MB). Remotes were already capped at ssh_manager._core's
+    _MAX_OUTPUT_BYTES; this is the same reader and the same ceiling, so no caller can depend on
+    more here than it gets from a remote. Raises TimeoutExpired, like subprocess.run, when the
+    verb outlives `timeout` (it has been killed, its whole process group with it) -- within about
+    a second of it, however the verb's descendants behave: see _collect_capped.
+
+    `whole`: the verb is all-or-nothing (_WHOLE_OUTPUT_VERBS), so output this cut short is
+    answered as the helper answers its own: rc 3, and a message on stderr.
+    """
+    from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
+    # The kill only SIGNALS: _collect_capped reaps, after its readers have let go of the pipes.
+    # It was _kill_process_tree, whose communicate() read the same pipes as those readers.
+    res = _smc._collect_capped(p, timeout, kill=lambda: _smc._signal_process_tree(p),
+                               threads=threading,
+                               stdin_bytes=(stdin_text.encode("utf-8")
+                                            if stdin_text is not None else None))
+    if res is None:
+        raise subprocess.TimeoutExpired(cmd, timeout)
+    out, err, rc, truncated = res
+    if truncated:
+        _log.warning("privileged verb output exceeded %d bytes and was truncated",
+                     _smc._MAX_OUTPUT_BYTES)
+        if whole and rc == 0:
+            return (_smc._decode_output(out),
+                    "output passed the panel's %d-byte read limit; truncated, so it must be "
+                    "treated as unread" % _smc._MAX_OUTPUT_BYTES, _CUT_RC)
+    return _smc._decode_output(out), _smc._decode_output(err), rc
+
+
+def _verb_result(out, err, rc, merge_stderr):
+    """_run_verb's answer from a finished verb: stripped, with stderr merged in unless asked not."""
+    out, err = (out or "").strip(), (err or "").strip()
     if merge_stderr:
         # The shell form ended in `2>&1` and callers read tool errors out of stdout; merging keeps
         # a message on the stream its caller already reads.
-        return ("\n".join(x for x in (out, err) if x)).strip(), "", r.returncode
-    return out, err, r.returncode
+        return ("\n".join(x for x in (out, err) if x)).strip(), "", rc
+    return out, err, rc
+
+
+def _run_verb_shell(cmd, timeout=30, sudo=False, whole=False):
+    """_run_verb's pre-helper fallback: a composed shell form, with the same ceiling as the rest.
+
+    It used to go through _run, i.e. subprocess.run(shell=True, capture_output=True), which keeps
+    everything — and this branch is the one a panel host whose helper predates a fix still takes,
+    so it needs the ceiling most. Merging stderr is the command's own business here (the shell
+    form ends in `2>&1` when asked to). `whole` as for _collect_verb_output.
+    """
+    # os.geteuid() is Unix-only; guard it so callers don't crash off-Linux (tests).
+    if sudo and hasattr(os, "geteuid") and os.geteuid() != 0:
+        cmd = f"sudo {cmd}"
+    try:
+        # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true -- the pre-helper verb form, built by privileged.py from its fixed table
+        p = subprocess.Popen(cmd, shell=True,  # nosec B602 - privileged.py's own shell form
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+        out, err, rc = _collect_verb_output(p, cmd, timeout, whole=whole)
+        return out.strip(), err.strip(), rc
+    except subprocess.TimeoutExpired:
+        return "", "Command timed out", -1
+    except FileNotFoundError:
+        return "", "Command not found", -1
+    except Exception:
+        _log.debug("privileged verb (shell form) failed", exc_info=True)
+        return "", "command execution error", -1
 
 
 def _run(cmd, timeout=30, sudo=False, text=True):
@@ -1741,11 +1822,11 @@ def host_has_ip(ip):
     host's own Tailscale IP "not an address on this host". A host always has loopback, so nothing
     read means the list was not read, and the kernel is asked instead (_kernel_has_ip). The
     comparison is on parsed addresses: an IPv6 address typed in upper case ("FD7A:115C:A1E0::1")
-    never equalled `ip`'s lowercase output."""
+    never equalled `ip`'s lowercase output. A zone id is refused outright, rather than left to
+    IPv6Address's equality (which counts the zone) to answer no."""
     import ipaddress
-    try:
-        want = ipaddress.ip_address(str(ip).strip())
-    except ValueError:
+    want = ip_address_or_none(ip)
+    if want is None:
         return False        # not an IP at all: it cannot be one of this host's addresses
     try:
         out, _, _ = _run("ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1", timeout=8)
@@ -2064,18 +2145,14 @@ def _f2b_ignoreip_line(ignore_ips):
     """Space-separated ignoreip value: always localhost, plus the caller's whitelist. EVERY entry is
     re-parsed through ipaddress (IP or CIDR) so an unvalidated token can never reach the jail file —
     a bad entry is dropped, not written. Deduped, order-stable."""
-    import ipaddress
     entries = ["127.0.0.1/8", "::1"]
     for raw in (ignore_ips or []):
-        s = (str(raw) or "").strip()
-        try:
-            canon = (str(ipaddress.ip_network(s, strict=False)) if "/" in s
-                     else str(ipaddress.ip_address(s)))
-        except ValueError:
+        canon = canonical_ip_or_network(raw)
+        if canon is None:
             continue
-        # Parsing is not enough: ipaddress keeps an IPv6 zone id verbatim — `::1%\nbantime = 1`
-        # parses, newline and all — so a stored entry could still add lines to the jail. A value
-        # carrying a zone id or any whitespace/control character is dropped like any other bad one.
+        # Parsing was not enough: ipaddress keeps an IPv6 zone id verbatim — `::1%\nbantime = 1`
+        # parses, newline and all — so a stored entry could still add lines to the jail. The
+        # validator refuses a zone now; this stays as the jail file's own last check.
         if "%" in canon or any(c.isspace() or not c.isprintable() for c in canon):
             continue
         entries.append(canon)
@@ -2552,11 +2629,13 @@ def _ufw_deny_with(ip, tag, existing, run, shadowed=None):
 
 def ufw_deny_ip(ip, tag=_UFW_BLOCK_TAG):
     """Block an IP on ALL ports (UFW deny inserted at the top, tagged). The IP is reparsed to its
-    canonical ipaddress form so nothing request-supplied reaches the shell unchecked. (ok, msg)."""
-    import ipaddress
-    try:
-        ip = str(ipaddress.ip_address((ip or "").strip()))
-    except (ValueError, TypeError):
+    canonical ipaddress form so nothing request-supplied reaches the shell unchecked. (ok, msg).
+
+    That claim needs a zone id refused, and it is (panel/core/validation.py): ipaddress kept one
+    verbatim, so 'fe80::1%$(id) x;reboot' went through as its own "canonical form" and reached the
+    root helper intact, stopped only by ufw's own address check."""
+    ip = canonical_ip(ip)
+    if ip is None:
         return False, "Invalid IP address."
     tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
     # Separate verbs, never a "a; b" compound: _run prepends `sudo` to the FIRST command only.
@@ -2568,11 +2647,9 @@ def ufw_deny_ip(ip, tag=_UFW_BLOCK_TAG):
 
 
 def ufw_undeny_ip(ip):
-    """Remove a UFW deny rule for an IP (canonicalised first). (ok, msg)."""
-    import ipaddress
-    try:
-        ip = str(ipaddress.ip_address((ip or "").strip()))
-    except (ValueError, TypeError):
+    """Remove a UFW deny rule for an IP (canonicalised first, a zone id refused). (ok, msg)."""
+    ip = canonical_ip(ip)
+    if ip is None:
         return False, "Invalid IP address."
     # Read the result. This discarded the tuple and returned True unconditionally, while its
     # sibling ufw_deny_ip five lines up captures (out, err, rc) and fails on non-zero — so a
@@ -2659,8 +2736,7 @@ def fail2ban_top_ips(limit=20, days=7):
     # and the limit interpolated into it. The verb reads the rotated logs and returns the lines;
     # everything the awk did — filter by date, extract Ban/Found, tally per IP — is Python now.
     out, _, rc = _run_verb("f2b-log-lines", [cutoff], timeout=25, merge_stderr=False)
-    if rc != 0:
-        _log.debug("top-ips: the fail2ban log read failed (rc=%s)", rc)
+    if _f2b_unread(rc, "top-ips"):
         return None
     out = _tally_f2b_lines(out, limit)
     banned_now = set()
@@ -2697,18 +2773,40 @@ def fail2ban_attempt_counts(days=7):
     100 as a wave of new ones passed it and was RELEASED while still over the threshold. The
     threshold is a count, so the reconcile needs every count."""
     out, _, rc = _run_verb("f2b-log-lines", [_f2b_cutoff(days)], timeout=25, merge_stderr=False)
-    if rc != 0:
-        _log.debug("attempt counts: the fail2ban log read failed (rc=%s)", rc)
+    if _f2b_unread(rc, "attempt counts"):
         return None
     return _tally_f2b_events(out)[0]
+
+
+def _f2b_unread(rc, what):
+    """Whether a fail2ban log read must be treated as unread: it failed, or it was cut (rc 3).
+
+    Cut means the helper stopped at its own ceiling, or this process's collector stopped keeping
+    bytes at _MAX_OUTPUT_BYTES (the pre-helper shell form, or a helper that predates the ceiling);
+    _run_verb answers both as _CUT_RC. The bytes a cut read keeps are the FIRST ones — the oldest
+    days — so a partial tally undercounts exactly the recent offenders, and the auto-block
+    reconcile RELEASES any block that falls under the threshold: a cut read is unread, never
+    smaller. Under a flood the panel host's auto-block therefore holds still (no new blocks, no
+    releases) — fail2ban's own bans are unaffected.
+
+    The rc, and not the answer's length: that was `len >= F2B_LOG_MAX_BYTES`, while the helper
+    prints up to AND INCLUDING that many bytes with rc 0, so an answer the helper called complete
+    was discarded here.
+    """
+    if rc == _CUT_RC:
+        _log.warning("%s: the fail2ban log passed the read ceiling; treated as unread so no block "
+                     "is released on a partial tally", what)
+    elif rc != 0:
+        _log.debug("%s: the fail2ban log read failed (rc=%s)", what, rc)
+    return rc != 0
 
 
 def fail2ban_unban(jail, ip):
     """Lift a ban: `fail2ban-client set <jail> unbanip <ip>`. The request-supplied values are
     neutralised BEFORE they reach the command: `jail` must be one of the host's actual jails (an
     allowlist — not a free string), and `ip` is reparsed to the canonical form produced by
-    ipaddress (which rejects anything that isn't a real IP). Then shell-quoted. (ok, msg)."""
-    import ipaddress
+    ipaddress (which rejects anything that isn't a real IP, a zone id included). Then shell-quoted.
+    (ok, msg)."""
     jail = (jail or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", jail):   # metacharacter-free guard
         return False, "Invalid jail name."
@@ -2719,10 +2817,8 @@ def fail2ban_unban(jail, ip):
     jail = next((j for j in _fail2ban_jails() if j == jail), None)
     if jail is None:
         return False, "Unknown jail."
-    ip = (ip or "").strip()
-    try:
-        ip = str(ipaddress.ip_address(ip))   # canonical form; rejects anything that isn't a real IP
-    except ValueError:
+    ip = canonical_ip(ip)   # canonical form; rejects anything that isn't a real IP
+    if ip is None:
         return False, "Invalid IP address."
     if not re.fullmatch(r"[0-9A-Fa-f:.]{1,45}", ip):   # metacharacter-free guard (a barrier CodeQL recognises)
         return False, "Invalid IP address."
@@ -2735,10 +2831,8 @@ def fail2ban_unban(jail, ip):
 def fail2ban_unban_ip_everywhere(ip):
     """Best-effort: lift `ip` from EVERY jail that currently bans it. Used when an IP is whitelisted,
     so an existing ban is cleared immediately instead of waiting for it to expire. (ok, msg)."""
-    import ipaddress
-    try:
-        ip = str(ipaddress.ip_address((ip or "").strip()))
-    except ValueError:
+    ip = canonical_ip(ip)
+    if ip is None:
         return False, "Invalid IP address."
     lifted = 0
     try:

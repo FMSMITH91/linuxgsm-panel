@@ -37,6 +37,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0   # scan the FULL git history, not just the tip
+          # That history is fetched here, during checkout: gitleaks needs no token after it.
+          persist-credentials: false
       # Blocking gate: a committed credential is always actionable. --redact keeps the
       # secret out of the public log. Uses the OSS binary directly (free on any repo;
       # the marketplace action needs a licence for orgs). The .github/gitleaks.toml allowlist

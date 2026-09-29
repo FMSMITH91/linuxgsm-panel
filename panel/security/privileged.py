@@ -212,6 +212,9 @@ WRITE_TARGETS = {
     "fail2ban-panel-whitelist": ("/etc/fail2ban/jail.d/zz-panel-whitelist.local", 0o644),
     "fail2ban-panel-filter": ("/etc/fail2ban/filter.d/linuxgsm-panel.conf", 0o644),
     "fail2ban-panel-jail": ("/etc/fail2ban/jail.d/linuxgsm-panel.conf", 0o644),
+    # The ports fail2ban's sshd jail bans on, after an SSH port move. jail.d/*.local is read after
+    # jail.local, so this applies on a stock install too, which has no jail.local to edit.
+    "fail2ban-panel-sshd": ("/etc/fail2ban/jail.d/zz-panel-sshd.local", 0o644),
     "node-tools-cron": ("/etc/cron.d/lgsm-node-tools", 0o644),
     "sysctl-tailscale": ("/etc/sysctl.d/99-tailscale.conf", 0o644),
     # Added deliberately alongside the sshd verbs — see tools/panel-helper.
@@ -270,12 +273,26 @@ def _portspec_bare(s):
     return spec
 
 
-def _cidr(s):
-    try:
-        ipaddress.ip_network(str(s), strict=False)
-    except ValueError:
-        raise VerbError("not an IP address or network")
-    return str(s)
+def canonical_cidr(s):
+    """An address, or an address/prefix, as ipaddress SPELLS it; VerbError for anything else.
+
+    What reaches the tool is the parsed value's text, never the input — see tools/panel-helper
+    v_cidr, which this mirrors. An IPv6 zone id is refused first: ipaddress accepts one and keeps
+    it verbatim, so 'fe80::1%x' plus spaces, `$(...)` or a newline passed, and was handed to
+    fail2ban-client and ufw as root unchanged. A prefix keeps its host bits (2001:db8::1/64 stays
+    that): ufw keeps an IPv6 source's host bits in the rule it stores, so masking them here would
+    stop a delete matching the rule it names.
+    """
+    s = str(s)
+    if "%" not in s:
+        try:
+            return str(ipaddress.ip_interface(s)) if "/" in s else str(ipaddress.ip_address(s))
+        except ValueError:
+            pass
+    raise VerbError("not an IP address or network")
+
+
+_cidr = canonical_cidr      # the name the verb tables below use
 
 
 def _comment(s):
@@ -292,18 +309,19 @@ def _yesno(s):
 
 
 def _routes(s):
-    """A comma-separated CIDR list, or "-" — see tools/panel-helper."""
+    """A comma-separated CIDR list, or "-" — see tools/panel-helper. Each route canonical_cidr's."""
     if str(s) == "-":
         return "-"
     parts = str(s).split(",")
     if not (1 <= len(parts) <= 16):
         raise VerbError("expected 1..16 routes")
+    routes = []
     for part in parts:
         try:
-            ipaddress.ip_network(part, strict=False)
-        except ValueError:
+            routes.append(canonical_cidr(part))
+        except VerbError:
             raise VerbError("not a route list")
-    return str(s)
+    return ",".join(routes)
 
 
 def _tags(s):
@@ -724,7 +742,13 @@ def _dfpath(s):
 
 
 def _package(s):
-    if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,60}(?::[a-z0-9]{1,10})?", str(s)):
+    """A Debian package name, optionally with an architecture qualifier (libc6:i386).
+
+    It must END alphanumeric. `apt-get install` reads a trailing `-` as "remove this one" and a
+    trailing `+` as "install it", so `openssh-server-` passed here and REMOVED openssh-server, as
+    root, from an install verb. Same rule as the helper's v_package and hosts.APT_PKG_RE.
+    """
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9+.-]{0,59}[a-z0-9])?(?::[a-z0-9]{1,10})?", str(s)):
         raise VerbError("not a package name")
     return str(s)
 
@@ -913,6 +937,11 @@ _ARGV = {
     "f2b-set-sshd-ports": ([_portlist], lambda a: [], None),
     "sshd-validate": ([], lambda a: ["sshd", "-t"], None),
     "listening-sockets": ([], lambda a: ["ss", "-lnt"], None),
+    # ...with each socket's owner: `-e` adds uid (non-root only) and the systemd cgroup, so the port
+    # move can tell sshd from an unprivileged account that took the port first. A verb of its own
+    # rather than a change to the one above: an installed helper older than this refuses it
+    # outright, which the caller reads as "owner unknown", instead of answering in the old format.
+    "listening-sockets-owner": ([], lambda a: ["ss", "-lnte"], None),
     "reboot-delayed": ([], lambda a: [], None),
 
     # ── cron and user accounts ──

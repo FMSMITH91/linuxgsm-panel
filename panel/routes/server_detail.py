@@ -159,7 +159,7 @@ def _run_sync_action(app, gs, remote, action, actor, origin):
     timeout = 90 if action == "restart" else 60
     out, err, rc = _sm.run_as_game_user(remote, gs.short_name, action, timeout=timeout, selfname=gs.lgsm_name)
     log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0),
-               detail=_clean_action_output(out)[-400:], actor=origin)
+               detail=_clean_action_output(out)[-400:], actor=origin, server=gs)
     clean = _clean_action_output((out or "") + "\n" + (err or "")).strip()
     _after_power_action(app, gs, remote, gs.short_name, action, rc)
     if action in READONLY_ACTIONS:
@@ -196,7 +196,7 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None):
         _mark_expected_offline(gs.id)   # so the monitor doesn't alert on an intentional stop
     if action in LONG_ACTIONS:
         _bg_action(app, gs.id, remote.id, gs.short_name, action, gs.lgsm_name, on_done=on_done)
-        log_action(actor, f"{action}_server", target=gs.name, actor=origin)
+        log_action(actor, f"{action}_server", target=gs.name, actor=origin, server=gs)
         return True, f"'{action}' started — watch the live console for progress."
     if action in ("start", "stop", "restart"):
         # These block for ~8-17s (srcds Steam/VAC init on start, a graceful `quit` wait on stop,
@@ -295,7 +295,7 @@ def _moderate_here(gs, action, target, message, steamid, num):
                            target=target, message=message,
                            selfname=gs.lgsm_name, steamid=steamid, num=num)
     log_action(current_user, "moderate_%s" % action, target=gs.name,
-               detail=(target or steamid or message)[:120], success=ok)
+               detail=(target or steamid or message)[:120], success=ok, server=gs)
     return ok, msg
 
 
@@ -450,7 +450,7 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                 clean = terminal.strip_escapes(out or "")
                 ok, detail = (rc == 0), clean
                 log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0),
-                           detail=clean[-400:], actor=origin)
+                           detail=clean[-400:], actor=origin, server=gs)
                 _after_power_action(app, gs, remote, short_name, action, rc)
         except Exception:
             app.logger.exception("power action %s failed for server %s", action, server_id)
@@ -520,7 +520,7 @@ def _bg_action(app, server_id, remote_id, short_name, action, selfname=None, on_
                 ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
                 gs = db.session.get(GameServer, server_id)
                 log_action(None, f"{action}_complete", target=gs.name if gs else short_name,
-                           success=(rc == 0), detail=(out or err or "")[-300:])
+                           success=(rc == 0), detail=(out or err or "")[-300:], server=gs)
                 # An update/validate/fastdl can restart the server (port cycles) — drop the
                 # cached port scan so the dashboard shows the real state on its next poll.
                 _sm._invalidate_port_scan(remote_id)
@@ -665,7 +665,8 @@ def _register_actions(app):
             ok, msg = _run_action(app, gs, gs.remote, action, current_user)
             flash(msg, "info" if (action in LONG_ACTIONS or action in READONLY_ACTIONS) else ("success" if ok else "warning"))
         except Exception as e:
-            log_action(current_user, f"{action}_server", target=gs.name, detail=str(e), success=False)
+            log_action(current_user, f"{action}_server", target=gs.name, detail=str(e), success=False,
+                       server=gs)
             # The exception text is in the audit log above, not in the flash: echoing str(e) to the
             # browser is how internals leak into the UI (py/stack-trace-exposure), and this
             # codebase's rule is never to do it.
@@ -809,7 +810,8 @@ def _register_players(app):
                             "numbers, - or _ (see the gamedig games list)."}), 400
         gs.query_type = raw or None
         db.session.commit()
-        log_action(current_user, "set_query_type", target=gs.name, detail=raw or "(default)")
+        log_action(current_user, "set_query_type", target=gs.name, detail=raw or "(default)",
+                   server=gs)
         return jsonify({"success": True, "query_type": gs.query_type or "",
                         "queryable": is_player_queryable(gs.game_type, gs.query_type)})
 
@@ -905,7 +907,7 @@ def _register_custom_commands(app):
             _, err, rc = send_console_command(gs.remote, gs.short_name, final,
                                               timeout=10, selfname=gs.lgsm_name)
             log_action(current_user, "custom_command", target=gs.name,
-                       detail=("%s: %s" % (cmd.name, final))[:200], success=(rc == 0))
+                       detail=("%s: %s" % (cmd.name, final))[:200], success=(rc == 0), server=gs)
             if rc != 0:
                 return jsonify({"success": False,
                                 "message": _console_send_failure(rc, err)}), 502
@@ -930,7 +932,7 @@ def _register_when_empty(app):
         gs.restart_pending = True
         gs.stop_pending = False   # restart supersedes a queued stop
         db.session.commit()
-        log_action(current_user, "restart_when_empty", target=gs.name, success=True)
+        log_action(current_user, "restart_when_empty", target=gs.name, success=True, server=gs)
         return jsonify({"success": True,
                         "message": "Queued — %s will restart automatically once it's empty." % gs.name})
 
@@ -948,7 +950,7 @@ def _register_when_empty(app):
         gs.stop_pending = True
         gs.restart_pending = False   # stop supersedes a queued restart
         db.session.commit()
-        log_action(current_user, "stop_when_empty", target=gs.name, success=True)
+        log_action(current_user, "stop_when_empty", target=gs.name, success=True, server=gs)
         return jsonify({"success": True,
                         "message": "Queued — %s will stop automatically once it's empty." % gs.name})
 
@@ -974,7 +976,8 @@ def _register_schedules(app):
             if ok:
                 gs.autostart = enabled
                 db.session.commit()
-                log_action(current_user, "set_autostart", target=gs.name, detail=str(enabled))
+                log_action(current_user, "set_autostart", target=gs.name, detail=str(enabled),
+                           server=gs)
                 return jsonify({"success": True, "enabled": enabled})
             return jsonify({"success": False, "message": detail or "Failed to update crontab"}), 500
         except Exception:
@@ -1019,7 +1022,7 @@ def _register_schedules(app):
                 db.session.commit()
                 log_action(current_user, "set_daily_restart", target=gs.name,
                            detail="%s at %s %s" % (enabled, gs.daily_restart_at,
-                                                   host_tz or "host time"))
+                                                   host_tz or "host time"), server=gs)
                 back_h, back_m = clock.convert_wall_time(host_h, host_m, host_tz, viewer_tz)
                 return jsonify({"success": True, "enabled": enabled,
                                 "host_time": gs.daily_restart_at, "host_tz": host_tz,
@@ -1045,7 +1048,8 @@ def _register_schedules(app):
         enabled = bool(_json_body().get("enabled"))
         gs.notify_when_empty = enabled
         db.session.commit()
-        log_action(current_user, "set_notify_when_empty", target=gs.name, detail=str(enabled))
+        log_action(current_user, "set_notify_when_empty", target=gs.name, detail=str(enabled),
+                   server=gs)
         return jsonify({"success": True, "enabled": enabled})
 
 
@@ -1082,7 +1086,7 @@ def _register_commands(app):
             if not cmds:
                 log_action(current_user, "refresh_commands", target=gs.name,
                            detail="host returned no commands — keeping the stored list",
-                           success=False)
+                           success=False, server=gs)
                 flash(f"Couldn't read the command list for '{gs.name}' — the host returned "
                       f"nothing, so the stored list is unchanged.", "warning")
                 return redirect(url_for("server_detail", server_id=gs.id))
@@ -1095,12 +1099,12 @@ def _register_commands(app):
             # api_server_query_type — same permission set, same "writes server configuration"
             # rationale — has logged since it was written.
             log_action(current_user, "refresh_commands", target=gs.name,
-                       detail="%d commands" % len(cmds), success=True)
+                       detail="%d commands" % len(cmds), success=True, server=gs)
             flash(f"Loaded {len(cmds)} commands for '{gs.name}'.", "success")
         except Exception:
             _log.debug("command list refresh failed for %s", gs.name, exc_info=True)
             log_action(current_user, "refresh_commands", target=gs.name,
-                       detail="could not read the command list", success=False)
+                       detail="could not read the command list", success=False, server=gs)
             flash(f"Could not read the command list for '{gs.name}'.", "danger")
         return redirect(url_for("server_detail", server_id=server_id))
 
@@ -1128,14 +1132,15 @@ def _register_commands(app):
             # (server_files.api_send_command) has always done that, while this branch logged only
             # on success, so an attempt that failed left no audit row at all.
             log_action(current_user, "send_command", target=gs.name, detail=cmd_text,
-                       success=(rc == 0))
+                       success=(rc == 0), server=gs)
             if rc != 0:
                 flash(_console_send_failure(rc, err), "warning")
                 return redirect(url_for("server_detail", server_id=server_id))
             flash(f"Command sent: {cmd_text}", "success")
 
         except Exception as e:
-            log_action(current_user, "send_command", target=gs.name, detail=f"{cmd_text} - {e}", success=False)
+            log_action(current_user, "send_command", target=gs.name, detail=f"{cmd_text} - {e}", success=False,
+                       server=gs)
             flash("Failed to send that command. The audit log has the details.", "danger")
 
         return redirect(url_for("server_detail", server_id=server_id))

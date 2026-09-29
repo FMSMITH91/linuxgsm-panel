@@ -14,9 +14,11 @@ moves — because this holds no routes.
 
 The values themselves are MOVED VERBATIM from app.py, comments and all, so the diff reads as a move.
 """
+import ipaddress
 import os
 import re
 import secrets as _secrets
+import unicodedata
 from urllib.parse import quote
 
 
@@ -51,6 +53,136 @@ SAFE_LABEL_RE = re.compile(r"""^[^<>"'`\r\n\\]{1,120}\Z""")
 # `is_local`, never by an edit.
 EDITABLE_AUTH_METHODS = ("key", "password", "tailscale")
 
+# ── IP addresses and networks ─────────────────────────────────────────────
+# ipaddress parses an IPv6 ZONE ID (the scope after '%') and keeps it VERBATIM. 'fe80::1%x y',
+# 'fe80::1%$(id)' and 'fe80::1%' + a newline + 'FAKE' all parse, and str() hands the text back with
+# its spaces and newlines. So "it parsed as an address" never meant "it is only an address", and
+# every check that took str(ipaddress.ip_address(x)) as its canonical, safe form let free text
+# through: into data/auth.log (which fail2ban reads), admin alerts, the audit trail, the root
+# helper's argv and a remote host's sshd drop-in.
+#
+# A client, ban, whitelist, firewall or bind address never legitimately carries a zone. A zone
+# names an interface of the machine that holds the address, and means nothing to a ban list, a
+# firewall rule, a log line or another host. So these REFUSE one outright, and with it refused
+# the canonical text is built by ipaddress from the parsed number: hex digits, ':' and '.' only.
+# The one exception is unzoned_ip_address_or_none, for the few callers that must key a real
+# address rather than refuse it; its docstring says which.
+
+
+# What an audit row records as the address of a block or unban whose address did not parse: a
+# fixed text, never the request's own.
+NOT_AN_IP = "(not an IP address)"
+
+
+def _ip_text(value):
+    """The stripped text of `value`, or None when it is empty or holds a zone id ('%')."""
+    text = "" if value is None else str(value).strip()
+    return text if text and "%" not in text else None
+
+
+def ip_address_or_none(value):
+    """Parse `value` as exactly one IP address; None for anything else, a zone id included.
+
+    str() of the result is the canonical form: what fail2ban and ufw store, and what two
+    spellings of one address ("2001:0DB8::0001", "2001:db8::1") compare equal as.
+    """
+    text = _ip_text(value)
+    if text is None:
+        return None
+    try:
+        return ipaddress.ip_address(text)
+    except ValueError:
+        return None
+
+
+def ip_network_or_none(value):
+    """Parse `value` as an IP network, host bits masked; None for anything else, a zone id included.
+
+    A bare address is its own /32 or /128. 'fe80::/64%x' was already refused, but ipaddress
+    accepts 'fe80::1%x y' as a network and keeps the zone at /128 — and at any prefix when the
+    host bits are zero ('2001:db8::%x y/64').
+    """
+    text = _ip_text(value)
+    if text is None:
+        return None
+    try:
+        return ipaddress.ip_network(text, strict=False)
+    except ValueError:
+        return None
+
+
+def canonical_ip(value):
+    """The canonical text of `value` as one IP address, or None (see ip_address_or_none)."""
+    addr = ip_address_or_none(value)
+    return None if addr is None else str(addr)
+
+
+def canonical_ip_or_network(value):
+    """An address as its canonical address, 'a/n' as its canonical NETWORK; None otherwise.
+
+    '10.0.0.5/24' -> '10.0.0.0/24'. The form the security whitelist is stored and compared in.
+    """
+    text = _ip_text(value)
+    if text is not None and "/" in text:
+        net = ip_network_or_none(text)
+        return None if net is None else str(net)
+    return canonical_ip(text)
+
+
+def unzoned_ip_address_or_none(value):
+    """Parse `value` as one IP address with any IPv6 zone id DROPPED rather than refused.
+
+    Only for a value that must still be keyed or judged as the address it names:
+
+      * the SOCKET PEER. The kernel can hand a link-local client over with its interface as the
+        zone (fe80::1%eth0); eventlet reports one without it, but a WSGI server is free to write
+        it. That is one real client, and refusing it would key it as raw text or skip its ban;
+      * the client address a PROXY reports. Apache's mod_proxy and Go's httputil.ReverseProxy
+        write a link-local client into X-Forwarded-For with its zone. Refusing it keyed that
+        client as the proxy, so its failed logins reached auth.log as the proxy's, and fail2ban
+        banned the proxy and everyone behind it;
+      * a throttle KEY, which must stay one bucket per address whatever text follows the '%';
+      * a refuse-only ban check, where reading the address a zone is attached to can only refuse
+        more — refusing the value instead let '2001:db8::1%x' past a ban on 2001:db8::1;
+      * a value an older version already STORED with a zone (a whitelist entry, an audit row's
+        address), which is read as the address it was stored for.
+
+    What such a caller records, logs or hands on is str() of the result: the parsed number, with
+    no zone. Never the input text, and never the value itself where refusing it is the check (a
+    ban, a firewall rule, a bind address): use ip_address_or_none there.
+    Only IPv6 has zones, so '1.2.3.4%x' is not an address at all.
+    """
+    text = "" if value is None else str(value).strip()
+    addr = ip_address_or_none(text.split("%", 1)[0])
+    if addr is not None and "%" in text and addr.version != 6:
+        return None
+    return addr
+
+
+def unzoned_ip_or_network(value):
+    """A STORED whitelist entry as canonical text, an IPv6 zone id dropped; None if it is neither.
+
+    For entries written before the whitelist refused a zone (the add refuses one now, so only an
+    older config holds one). Before that refusal the auto-block and the ban gate honoured such an
+    entry as the address or network it named, and the Settings page still lists it as active, so
+    it is read that way again rather than silently exempting nothing. A bare address stays an
+    address ('fe80::1%eth0' -> 'fe80::1'); 'a%zone/n' is the network the old parse gave
+    ('2001:db8::%eth0/64' -> '2001:db8::/64'). Both are rebuilt from the parsed number, so no
+    zone text survives. An entry without a zone reads exactly as canonical_ip_or_network does.
+    Also what a whitelist removal is audited as: the entry it takes out, read the same way.
+    """
+    text = "" if value is None else str(value).strip()
+    if "/" not in text:
+        addr = unzoned_ip_address_or_none(text)
+        return None if addr is None else str(addr)
+    try:
+        net = ipaddress.ip_network(text, strict=False)
+    except ValueError:
+        return None
+    # From the integer, through the network's own class: an int alone would read ::1 as IPv4.
+    return str(type(net)((int(net.network_address), net.prefixlen)))
+
+
 # nosec B104 - the set of wildcard addresses to RECOGNISE, so callers can tell "listening
 # everywhere" from loopback. Naming a value is not binding to it.
 BIND_WILDCARD = frozenset({"0.0.0.0", "::"})  # nosec B104
@@ -83,10 +215,10 @@ def bind_host_error(value, host_has_ip=None):
         return None
     if text in BIND_LOOPBACK and text != "localhost":
         return None
-    import ipaddress
-    try:
-        ipaddress.ip_address(text)
-    except ValueError:
+    # A zone id is refused with everything else that is not an address. It used to parse, and then
+    # can_bind_address's bind raised gaierror rather than EADDRNOTAVAIL — "could not tell" — so any
+    # address the host does not have got past the local-address check by growing a '%x'.
+    if ip_address_or_none(text) is None:
         return ("Bind address must be an IP — e.g. 0.0.0.0 (all interfaces), 127.0.0.1 "
                 "(localhost), or this host's Tailscale IP.")
     if host_has_ip is not None and not host_has_ip(text):
@@ -103,11 +235,9 @@ def can_bind_address(ip):
     "could not tell" and does not block the operator.
     """
     import errno
-    import ipaddress
     import socket
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
+    addr = ip_address_or_none(ip)
+    if addr is None:
         return False
     # A wildcard is not an address this host HAS: binding 0.0.0.0 or :: always succeeds, which would
     # answer yes for every host. Callers that accept a wildcard bind test for it themselves.
@@ -183,6 +313,44 @@ def username_problem(name):
         # It is typed into a login box and read off a screen; an interior space (or a tab pasted in
         # from a spreadsheet) is invisible there and makes the account unloggable-into.
         return "Username cannot contain spaces."
+    if _has_control_or_format(name):
+        return "Username can only contain printable characters."
+    return None
+
+
+def _has_control_or_format(text):
+    """Whether `text` holds a character of Unicode category C.
+
+    That is a control (ESC, BEL, the C1 CSI), a format character (bidi overrides such as U+202E,
+    zero-width joiners and spaces), a surrogate, a private-use or an unassigned code point.
+
+    A stored name is printed to a TERMINAL by the recovery CLI (manage.py, run as root), where an
+    ESC sequence moves the cursor, erases the line or writes the clipboard (OSC 52), and a bidi
+    override reorders what is shown. It is also nothing anyone can type into a login box. The UI
+    ships English, Spanish and French, none of which needs ZWJ/ZWNJ. (Line and paragraph
+    separators are Z, not C; the whitespace checks refuse those.) Aikido 745379084.
+    """
+    return any(unicodedata.category(c)[0] == "C" for c in text)
+
+
+# Group.name is String(80) too, and had no format check at all: a newline and ESC both passed,
+# and manage.py list-users prints each user's groups beside the name.
+MAX_GROUP_NAME_LEN = 80
+
+
+def group_name_problem(name):
+    """Return a human error if a permission group's name is unusable, else None (FORMAT only)."""
+    name = (name or "").strip()
+    if not name:
+        return "Group name is required."
+    if len(name) > MAX_GROUP_NAME_LEN:
+        return f"Group name must be at most {MAX_GROUP_NAME_LEN} characters."
+    # A plain space is fine ("Game Admins"); a newline, tab or line separator is a second row in
+    # every listing the name is printed in.
+    if any(c.isspace() and c != " " for c in name):
+        return "Group name cannot contain line breaks or tabs."
+    if _has_control_or_format(name):
+        return "Group name can only contain printable characters."
     return None
 
 

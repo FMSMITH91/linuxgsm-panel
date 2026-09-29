@@ -4,12 +4,14 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (render_template, request)
 from flask_login import (current_user, login_required)
-from panel.db.models import (Group, RemoteServer, db)
+from panel.db.models import (Group, Invite, RemoteServer, User, db)
 from panel.security.auth import (ALL_PERMISSIONS, MANAGE_GROUPS, SUPER_ADMIN, _grantable_perms,
-    accessible_remote_ids, get_user_permissions, get_user_servers, grantable_object_ids,
-    log_action, permission_required)
+    _group_within_reach, _my_group_reach, accessible_remote_ids, get_user_permissions,
+    get_user_servers, grantable_object_ids, log_action, permission_required)
 from panel.services import (notifications)
+from panel.core.clock import utcnow
 from panel.core.http import (_form_err, _form_ok)
+from panel.core.validation import group_name_problem
 from app import (_selected_game_servers, _selected_remotes)
 
 
@@ -22,9 +24,14 @@ def register(app):
         # per-server grants. All three are lazy relationships, so the plain .all() cost THREE
         # queries per group: 16 at two groups, 190 at sixty. selectinload makes it three in total.
         from sqlalchemy.orm import selectinload
-        groups = (Group.query.options(selectinload(Group.users),
+        #
+        # ...and each member's OWN groups plus every group's custom commands, which is what
+        # _manageable_group_ids reads to decide Edit/Delete per group. The members' groups are the
+        # same rows as `groups`, so this adds two queries, not one per member.
+        groups = (Group.query.options(selectinload(Group.users).selectinload(User.groups),
                                       selectinload(Group.servers),
-                                      selectinload(Group.game_servers)).all())
+                                      selectinload(Group.game_servers),
+                                      selectinload(Group.custom_commands)).all())
         all_perms = ALL_PERMISSIONS
         # ...and which of them THIS admin may actually toggle: the same set _grantable_perms will
         # accept. Every permission in the table was rendered as an ordinary tick box to a
@@ -58,6 +65,10 @@ def register(app):
         _game_host_ids = _my_remotes | {gs.remote_id for gs in all_servers if gs.remote_id}
         all_game_hosts = [r for r in _remotes if r.id in _game_host_ids]
         return render_template("manage_groups.html", groups=groups,
+                               # Passed on BOTH paths — for a superadmin it is every id. A name the
+                               # route never passed is Jinja's Undefined, falsy, and the template
+                               # would quietly take Edit and Delete away from everyone.
+                               manageable_ids=_manageable_group_ids(groups),
                                all_perms=all_perms, grantable_perms=grantable_perms,
                                all_servers=all_servers, all_remotes=all_remotes,
                                all_game_hosts=all_game_hosts,
@@ -76,8 +87,11 @@ def register(app):
     def add_group():
         name = request.form.get("name", "").strip()
         description = request.form.get("description", "").strip()
-        if not name:
-            return _form_err("Group name is required.", "manage_groups")
+        # Non-empty, and nothing a terminal would act on: the recovery CLI prints group names
+        # (Aikido 745379084).
+        _nerr = group_name_problem(name)
+        if _nerr:
+            return _form_err(_nerr, "manage_groups")
 
         existing = Group.query.filter_by(name=name).first()
         if existing:
@@ -106,12 +120,21 @@ def register(app):
     @permission_required(MANAGE_GROUPS)
     def edit_group(group_id):
         group = Group.query.get_or_404(group_id)
+        _refused = _refuse_unmanageable(group, "edit_group",
+                                        "only a superadmin can change it.")
+        if _refused is not None:
+            return _refused
         new_name = (request.form.get("name") or group.name or "").strip() or group.name
         # Group.name is unique=True, so a rename onto an existing name raises IntegrityError at
         # commit — a 500 for what is just a typo. add_group has always checked this; the edit path
         # never did.
-        if new_name != group.name and Group.query.filter_by(name=new_name).first():
+        if _rename_taken(group, new_name):
             return _form_err(f"Group '{new_name}' already exists.", "manage_groups")
+        # Checked only when the name CHANGES, as a user rename is: a group stored before the check
+        # existed can still have its permissions edited.
+        _nerr = group_name_problem(new_name) if new_name != group.name else None
+        if _nerr:
+            return _form_err(_nerr, "manage_groups")
         group.name = new_name
         group.description = (request.form.get("description") or group.description or "").strip()
         group.set_permissions(_grantable_perms(request.form.getlist("permissions"),
@@ -140,23 +163,16 @@ def register(app):
                        detail="refused: the default group cannot be deleted")
             return _form_err("The default group can't be deleted — every new account and invite "
                              "starts in it.", "manage_groups")
-        # The SAME escalation rule the edit path enforces. _grantable_perms preserves a permission
-        # the editor cannot grant "so an edit can't silently strip them", and grantable_object_ids
-        # does the same for host and per-server grants — and then delete threw the whole group
-        # away for anyone holding MANAGE_GROUPS. One POST achieved exactly what the edit path
-        # exists to refuse: a delegated group admin could strip every non-superadmin in the
-        # install of all access, permissions they never held included.
-        if not current_user.is_superadmin:
-            _mine = get_user_permissions(current_user) - {SUPER_ADMIN}
-            _over = (set(group.get_permissions()) - _mine,
-                     {r.id for r in (group.servers or [])} - accessible_remote_ids(current_user),
-                     ({g.id for g in (group.game_servers or [])}
-                      - {g.id for g in get_user_servers(current_user)}))
-            if any(_over):
-                log_action(current_user, "delete_group", target=group.name, success=False,
-                           detail="refused: the group holds access the caller cannot grant")
-                return _form_err("That group holds permissions or server access you can't grant, "
-                                 "so you can't delete it either.", "manage_groups")
+        # The SAME rule the edit path enforces, from the same helper. A delete strips every member
+        # of what the group grants, so a delegated admin must be able to administer each of them —
+        # and the group itself must lie within their reach on all four axes. The hand-rolled
+        # check this replaces compared permissions, hosts and servers and left out custom
+        # commands, so a group made for a superadmin-authored `exec {}` was deletable by anyone
+        # holding its permissions (Aikido 745378983).
+        _refused = _refuse_unmanageable(group, "delete_group",
+                                        "only a superadmin can delete it.")
+        if _refused is not None:
+            return _refused
         # The membership clear used to be a loop over group.users calling user.groups.remove(group)
         # — and User.groups back-populates Group.users, so every removal shortened the very list
         # being iterated and the loop visited every OTHER member. It was never a bug: SQLAlchemy
@@ -177,6 +193,89 @@ def register(app):
         notifications.notify("account_change", "Permission group deleted",
                              "%s deleted the group '%s'." % (current_user.username, _gname))
         return _form_ok(f"Group '{_gname}' deleted.", "manage_groups")
+
+
+def _manageable_group_ids(groups):
+    """The ids among `groups` that current_user may edit or delete: every one, for a superadmin.
+
+    _grantable_perms and grantable_object_ids decide WHICH permissions and hosts a delegated
+    admin may toggle; nothing decided WHOSE. edit_group took any group id, and a permission added
+    to any group applies on every host its members reach through ANY group, because permissions
+    are flat. So an admin scoped to hostA gave tenant B's viewers use_terminal on hostB, stripped
+    tenant B's admins, and — through the default group, which holds every account and no hosts,
+    so it is within almost anyone's reach — gave the whole install a shell in one POST (Aikido
+    745379016). /users refuses the same change to the same people: can_administer_user.
+
+    A non-superadmin may manage a group only when all three hold:
+      (a) the group itself lies within their reach (_group_within_reach: permissions, hosts,
+          custom commands and servers);
+      (b) they could administer every member but themselves and superadmins (whom a group change
+          does not move). An account's reach is the union of its groups', so "every group of
+          theirs is within my reach" is exactly can_administer_user's subset test, answered from
+          the groups already loaded instead of four queries per member;
+      (c) no live invite names the group together with one outside their reach — its future
+          member is someone they could not administer either, and a superadmin's invite is not
+          re-checked against its minter at redemption.
+    """
+    if current_user.is_superadmin:
+        return {g.id for g in groups}
+    reach = _my_group_reach(current_user)
+    _within = {}
+
+    def _in_reach(g):
+        if g.id not in _within:
+            _within[g.id] = _group_within_reach(g, reach)
+        return _within[g.id]
+
+    def _member_ok(u):
+        return u.is_superadmin or u.id == current_user.id or all(_in_reach(mg) for mg in u.groups)
+
+    _invited = _invited_beside_out_of_reach(_in_reach)
+    return {g.id for g in groups
+            if _in_reach(g) and g.id not in _invited and all(_member_ok(u) for u in g.users)}
+
+
+def _invited_beside_out_of_reach(in_reach):
+    """Ids of the groups a live invite names together with a group `in_reach` refuses."""
+    live = _live_group_invites()
+    rows = _groups_by_id({gid for inv in live for gid in inv.groups_wanted})
+    out = set()
+    for inv in live:
+        named = [rows[gid] for gid in inv.groups_wanted if gid in rows]
+        if not all(map(in_reach, named)):
+            out.update(g.id for g in named)
+    return out
+
+
+def _groups_by_id(ids):
+    """{id: Group} for `ids`, in one query (none for no ids)."""
+    if not ids:
+        return {}
+    return {g.id: g for g in Group.query.filter(Group.id.in_(ids)).all()}
+
+
+def _live_group_invites():
+    """The unused, unrevoked, unexpired invites that name groups and do not grant superadmin."""
+    live = Invite.query.filter(Invite.used_at.is_(None), Invite.revoked_at.is_(None),
+                               Invite.expires_at > utcnow()).all()
+    # A superadmin invite's account holds everything, whatever its groups grant.
+    return [inv for inv in live if inv.groups_wanted and not inv.grants_superadmin]
+
+
+def _refuse_unmanageable(group, action, why):
+    """Refuse (403, audited) when current_user may not edit or delete `group`; None when they may."""
+    if group.id in _manageable_group_ids([group]):
+        return None
+    log_action(current_user, action, target=group.name, success=False,
+               detail="refused: the group, a member of it, or a live invite naming it reaches "
+                      "beyond the caller")
+    return _form_err("That group, or someone in it, has access you don't hold — " + why,
+                     "manage_groups", code=403)
+
+
+def _rename_taken(group, new_name):
+    """Whether renaming `group` to `new_name` would land on another group's name."""
+    return new_name != group.name and Group.query.filter_by(name=new_name).first() is not None
 
 
 def _apply_group_reach(group):

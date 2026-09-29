@@ -13,7 +13,6 @@ is deliberate — routes may reach into monitoring; monitoring never reaches int
 """
 import concurrent.futures
 import contextlib
-import ipaddress
 import itertools
 import logging
 import re
@@ -25,11 +24,12 @@ from panel.ops import system_ops as so
 from panel.security.auth import log_action
 from panel.core.clock import utcnow
 from panel.core.config import load_config
+from panel.core.validation import ip_address_or_none, ip_network_or_none, unzoned_ip_or_network
 from panel.db.models import GameServer, HostSample, MetricSample, RemoteServer, db
 from panel.core.panel_state import (
     _cron_restart_pending, _expected_offline, _max_players_cache, _monitor_state,
     _player_counts, _reboot_when_empty, _rwe_lock, _server_full_alerted, _server_peak_notified,
-    keyed_state_with_locks,
+    forget_rows, keyed_state_with_locks,
 )
 from panel.ops.ssh_manager import (
     _remote_listening_ports, game_map, host_live_metrics, lgsm_get_values, metrics_for_game,
@@ -805,8 +805,8 @@ def _forget_deleted_rows(remote_ids, server_ids):
     to RENDER a server's page, so a recycled id showed the new server the previous one's backup
     outcome, or a content install frozen at "running". They are registered at their declarations
     now (panel_state.register_server_state / register_remote_state), and this walks the registry.
-    A map that is deliberately NOT pruned here — _os_update_state, which prunes itself inside the
-    sweep — is now visibly unregistered rather than indistinguishable from one that was forgotten.
+    The OS-update sweep's arming counts (_os_update_state["hosts"]) are registered too: the sweep
+    prunes them itself, but only against ids no row holds, which a recycled id never is.
 
     #85's snapshot (_os_update_seen) is registered even though the sweep also prunes it: it is read
     on every page load by /api/os-updates/summary, so a deleted host would otherwise linger in the
@@ -814,15 +814,21 @@ def _forget_deleted_rows(remote_ids, server_ids):
     its name and package count show to whoever can access the NEW host. Both are idempotent.
     """
     server_maps, remote_maps = keyed_state_with_locks()
+    gone = []
     for entries, live in ((remote_maps, remote_ids), (server_maps, server_ids)):
+        dead = set()
         for m, lock in entries:
             # Under the map's own lock where it has one — _install_jobs and _bootstrap_jobs are
             # written from request handlers and job threads that only ever touch them locked, and
             # this sweep runs on the monitor thread. Each of those locks covers a dict operation
             # and nothing else, so holding it here cannot stall the sweep.
             with lock if lock is not None else contextlib.nullcontext():
-                for gone in [k for k in m if k not in live]:
-                    m.pop(gone, None)
+                dead.update(k for k in m if k not in live)
+        gone.append(dead)
+    # The same forgetting the delete routes and every INSERT do, so an action-output entry dropped
+    # here is marked `forgotten` too — its worker may still be running, and must not announce its
+    # end into whatever server takes the id next.
+    forget_rows(remote_ids=gone[0], server_ids=gone[1])
 
 
 # How long PAST _EXPECT_OFFLINE_WINDOW a reboot the panel fires keeps its servers' "down" quiet. The
@@ -881,7 +887,7 @@ def _fire_reboot_when_empty(remote, info):
     ok, msg = _reboot_expecting_offline(remote, remote_reboot)
     log_action(None, "reboot_when_empty_fire", target=remote.name,
                detail="host idle — %s" % msg, success=ok,
-               actor=info.get("by") or "system")
+               actor=info.get("by") or "system", remote=remote)
     if ok:
         notifications.notify("auto_reboot", "Host auto-rebooted",
                              "%s was empty of players, so its queued reboot ran." % remote.display_name)
@@ -947,25 +953,32 @@ def _autoblock_threshold():
 
 
 def _whitelist_networks():
-    """The whitelist parsed into ip_network objects once (skipping any that no longer parse)."""
+    """The whitelist parsed into ip_network objects once (skipping any that no longer parse).
+
+    An entry stored with a zone id (only a config from before _security_whitelist_add refused one
+    can hold it) is read as the address or network it names, as it was before that refusal: the
+    Settings page lists it as active, and skipping it silently let the auto-block ban an address
+    an admin believes is whitelisted (validation.unzoned_ip_or_network).
+    """
     nets = []
     # Reads the config directly rather than calling app.py's _security_whitelist(): that reader is
     # one of a trio with _security_whitelist_add/_remove, and importing it here would be circular
     # (app imports monitoring). Splitting the trio to avoid one line of duplication is the worse
     # trade — the key name is the contract, and it is asserted below.
     for entry in list(load_config().get("security_whitelist", []) or []):
-        try:
-            nets.append(ipaddress.ip_network(entry, strict=False))
-        except ValueError:
-            continue
+        net = ip_network_or_none(unzoned_ip_or_network(entry))
+        if net is not None:
+            nets.append(net)
     return nets
 
 
 def _whitelisted(ip, nets=None):
-    """True if `ip` is covered by any whitelist entry (an exact IP or a CIDR that contains it)."""
-    try:
-        addr = ipaddress.ip_address((ip or "").strip())
-    except ValueError:
+    """True if `ip` is covered by any whitelist entry (an exact IP or a CIDR that contains it).
+
+    A zoned `ip` is not an address, and is covered by nothing.
+    """
+    addr = ip_address_or_none(ip)
+    if addr is None:
         return False
     return any(addr in n for n in (nets if nets is not None else _whitelist_networks()))
 

@@ -14,7 +14,8 @@ from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permiss
     superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
-from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, _port_or)
+from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, NOT_AN_IP, _port_or,
+                                   canonical_ip, ip_address_or_none)
 from app import (AUTH_LOG_PATH, _autoblock_hosts, _maybe_set_threshold, _run_autoblock_now,
     _security_whitelist, _set_autoblock_host)
 from panel.routes._shared import (_whitelist_mutate)
@@ -38,9 +39,8 @@ def _panel_bind_is_public(bind):
     b = (bind or "").strip()
     if b == "localhost":
         return False
-    try:
-        a = _ipaddress.ip_address(b)
-    except ValueError:
+    a = ip_address_or_none(b)
+    if a is None:
         return True          # validated before this is asked; unknown keeps the port open
     if a.is_unspecified:
         return True
@@ -114,8 +114,10 @@ def _register_blocking(app):
                             "%s is on the security whitelist — remove it there first to block it." % ip})
         try:
             ok, msg = (remote_ufw_undeny_ip(remote, ip) if unblock else remote_ufw_deny_ip(remote, ip))
+            # The address, never the request's text: the row records what was acted on.
             log_action(current_user, "ufw_unblock" if unblock else "ufw_block",
-                       target=ip, detail=remote.name, success=ok)
+                       target=canonical_ip(ip) or NOT_AN_IP, detail=remote.name, success=ok,
+                       remote=remote)
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("block failed")}), 500
@@ -136,7 +138,8 @@ def _register_blocking(app):
         if current_user.is_superadmin:
             _maybe_set_threshold(_json_body())
         _set_autoblock_host(remote_id, enabled)
-        log_action(current_user, "autoblock_toggle", target=remote.name, detail="on" if enabled else "off")
+        log_action(current_user, "autoblock_toggle", target=remote.name, detail="on" if enabled else "off",
+                   remote=remote)
         if enabled:
             _run_autoblock_now(app, remote_id)
         return jsonify({"success": True, "enabled": enabled, "threshold": _autoblock_threshold()})
@@ -168,8 +171,9 @@ def _register_whitelist_and_log(app):
         jail, banned_ip = _json_str(d, "jail"), _json_str(d, "ip")
         try:
             ok, msg = remote_fail2ban_unban(remote, jail, banned_ip)
-            log_action(current_user, "fail2ban_unban", target=banned_ip,
-                       detail="%s on %s — %s" % (jail, remote.name, msg), success=ok)
+            log_action(current_user, "fail2ban_unban", target=canonical_ip(banned_ip) or NOT_AN_IP,
+                       detail="%s on %s — %s" % (jail, remote.name, msg), success=ok,
+                       remote=remote)
             return jsonify({"success": ok, "message": msg})
         except ConnectionError:
             return _unreachable("fail2ban unban")
@@ -233,27 +237,30 @@ def _register_panel_binding(app):
         cfg["bind_host"] = new_bind
         save_config(cfg)
 
-        fw_note = _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port)
+        fw_note, fw_ok = _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port)
+        f2b_ok, f2b_msg = _follow_binding_in_fail2ban(app, new_port, cur_port)
 
-        # Keep the fail2ban panel-login jail pointed at the new port so brute-force protection
-        # follows the move. Idempotent + best-effort; a no-op if the jail isn't set up.
-        if new_port != cur_port:
-            try:
-                # _security_whitelist() is NOT optional here: ensure_panel_fail2ban REWRITES the
-                # jail whenever the port changes, and an omitted ignore_ips writes an ignoreip of
-                # localhost only — silently dropping every whitelisted IP/CIDR until the next boot
-                # re-applies it (or indefinitely, if the restart below fails).
-                so.ensure_panel_fail2ban(AUTH_LOG_PATH, new_port, _security_whitelist())
-            except Exception:
-                app.logger.warning("change-port: fail2ban port update failed", exc_info=True)
-
+        # The row says what HAPPENED. It used to be success=True whatever the firewall and the
+        # jail did — both outcomes were computed and dropped — so "the panel moved to 5055" was on
+        # record as a success for a move whose port the firewall still blocked. The binding itself
+        # is saved above either way; the detail says which half did not follow it.
+        #
+        # BEFORE the restart, and it stays there: restart_panel arms a detached two-second timer
+        # that restarts the unit (KillMode=control-group), and an audit write queued behind a
+        # SQLite lock for longer than that would die with the process. The restart's own outcome
+        # is therefore a row of its own, below.
         log_action(current_user, "panel_change_binding", target=LOCAL_HOST_LABEL,
-                   detail=f"{cur_bind}:{cur_port} -> {new_bind}:{new_port}", success=True)
-        ok, _ = so.restart_panel()
+                   detail=f"{cur_bind}:{cur_port} -> {new_bind}:{new_port}; "
+                          f"firewall: {fw_note.strip() or 'n/a'}; fail2ban: {f2b_msg}",
+                   success=fw_ok and f2b_ok)
+        ok, restart_msg = so.restart_panel()
         if not ok:
+            log_action(current_user, "panel_restart", target=LOCAL_HOST_LABEL,
+                       detail=f"after the binding change: {restart_msg}", success=False)
             return jsonify({"success": False,
                             "message": "Saved the new binding, but couldn't restart the panel "
-                                       "automatically — restart it (or reboot the host) to apply."}), 200
+                                       "automatically — restart it (or reboot the host) to apply."
+                                       + fw_note}), 200
         return jsonify({"success": True, "new_port": new_port, "old_port": cur_port,
                         "new_bind": new_bind, "port_changed": new_port != cur_port,
                         "served_over_tailscale": bool(cfg.get("tailscale_setup_done")),
@@ -290,9 +297,8 @@ def _bind_refusal(served, new_bind):
     loopback = {"127.0.0.1", "::1", "localhost"}
     # ── Validate the bind address ──
     if new_bind not in wildcard:
-        try:
-            _ipaddress.ip_address(new_bind)
-        except ValueError:
+        # A zone id is not an address to bind (see panel/core/validation.py).
+        if ip_address_or_none(new_bind) is None:
             return ("Bind address must be an IP — e.g. 0.0.0.0 (all "
                     "interfaces), 127.0.0.1 (localhost), or this host's "
                     "Tailscale IP.")
@@ -313,14 +319,42 @@ def _bind_refusal(served, new_bind):
     return None
 
 
+def _follow_binding_in_fail2ban(app, new_port, cur_port):
+    """Point the panel-login jail at the new port: (ok, what happened, for the audit row).
+
+    Keeps brute-force protection following the move. Idempotent; a no-op when the jail is not set
+    up. Not asked at all when the port did not change, which is not a failure.
+    """
+    if new_port == cur_port:
+        return True, "n/a (port unchanged)"
+    try:
+        # _security_whitelist() is NOT optional here: ensure_panel_fail2ban REWRITES the jail
+        # whenever the port changes, and an omitted ignore_ips writes an ignoreip of localhost
+        # only — silently dropping every whitelisted IP/CIDR until the next boot re-applies it
+        # (or indefinitely, if the restart after this fails).
+        ok, msg = so.ensure_panel_fail2ban(AUTH_LOG_PATH, new_port, _security_whitelist())
+        # "Does NOT install fail2ban — no-ops when it isn't present", and says so with ok=False.
+        # A host with no fail2ban has no jail to follow the move, which is not a failed move.
+        if not ok and not so.panel_fail2ban_status().get("installed"):
+            return True, "n/a (fail2ban is not installed)"
+    except Exception:
+        app.logger.warning("change-port: fail2ban port update failed", exc_info=True)
+        return False, "the jail update failed"
+    return bool(ok), (msg or ("updated" if ok else "not updated"))
+
+
 def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
-    """Open or close the panel's port for the new binding's exposure; returns the reply's note."""
+    """Open or close the panel's port for the new binding's exposure.
+
+    -> (the reply's note, whether the firewall now matches the binding). With no local host row
+    there is no firewall to follow, which is not a failure.
+    """
     # ── Bring the firewall in line with the resulting exposure ──
     # Reached on its port (the wildcard, or the host's own public/LAN address) → the port must
     # be open. Loopback/tailnet-bound → the public port rule isn't needed, so close it. A
     # changed port also gets its old rule gone.
     now_public = _panel_bind_is_public(new_bind)
-    fw_note = ""
+    fw_note, fw_ok = "", True
     if local:
         # Each of these returns (ok, msg) and all three were called for effect, with fw_note
         # assigned on the next line regardless — so the panel could restart onto a port the
@@ -335,10 +369,14 @@ def _follow_binding_in_firewall(app, local, new_bind, new_port, cur_port):
                 _fw_ok, _fw_msg = remote_ufw_close_port(local, new_port, "tcp")
                 fw_note = (f" Firewall: {new_port} kept tailnet-only." if _fw_ok
                            else f" Firewall rule for {new_port} could not be removed ({_fw_msg}).")
+            fw_ok = bool(_fw_ok)
             if new_port != cur_port:
                 _old_ok, _old_msg = remote_ufw_close_port(local, cur_port, "tcp")
                 fw_note += (f" Removed the old rule for {cur_port}." if _old_ok
                             else f" The old rule for {cur_port} is still there ({_old_msg}).")
+                fw_ok = fw_ok and bool(_old_ok)
         except Exception:
             app.logger.warning("change-port: firewall update failed", exc_info=True)
-    return fw_note
+            fw_note += " The firewall could not be updated."
+            fw_ok = False
+    return fw_note, fw_ok

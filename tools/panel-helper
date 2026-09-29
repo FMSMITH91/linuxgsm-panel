@@ -184,6 +184,12 @@ F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
 # The fail2ban log family, current plus rotated. Fixed here — no part of it is ever
 # supplied by a caller, which is what makes reading them safe to do as root.
 F2B_LOG_GLOB = "/var/log/fail2ban.log*"
+# The most f2b-log-lines prints before it gives up (rc 3); up to and including this many bytes is
+# a complete answer (rc 0), and the panel reads it as one. One read chunk under the panel's own
+# transport ceiling (ssh_manager._core._MAX_OUTPUT_BYTES, 8 MB) — so the answer is refused here
+# before a transport could cut it, and the panel's callers decide from the rc alone. Written out
+# because this file imports nothing from the panel; tests/unit ties the two together.
+F2B_LOG_MAX_BYTES = 8 * 1024 * 1024 - 65536
 
 # Where `tailscale up` streams while it waits for the operator to authorise the node. Fixed here so
 # the login-URL poll reads a path no caller chose.
@@ -302,6 +308,7 @@ WRITE_TARGETS = {
     "fail2ban-panel-whitelist": ("/etc/fail2ban/jail.d/zz-panel-whitelist.local", 0o644),
     "fail2ban-panel-filter": ("/etc/fail2ban/filter.d/linuxgsm-panel.conf", 0o644),
     "fail2ban-panel-jail": ("/etc/fail2ban/jail.d/linuxgsm-panel.conf", 0o644),
+    "fail2ban-panel-sshd": ("/etc/fail2ban/jail.d/zz-panel-sshd.local", 0o644),
     "node-tools-cron": ("/etc/cron.d/lgsm-node-tools", 0o644),
     "sysctl-tailscale": ("/etc/sysctl.d/99-tailscale.conf", 0o644),
     # Added deliberately, with the sshd verbs below. Every other write here is a config the panel
@@ -442,6 +449,11 @@ _F2B_JAIL_RULE = _WholeFile(
     lambda c: _fail2ban_config_ok(c, _F2B_JAIL_SECTIONS, _F2B_JAIL_KEYS))
 _F2B_FILTER_RULE = _WholeFile(
     lambda c: _fail2ban_config_ok(c, _F2B_FILTER_SECTIONS, _F2B_FILTER_KEYS))
+# The sshd port drop-in says ONE thing: which ports the sshd jail bans on. It is read after every
+# other jail file, so a key it admitted beyond `port` (enabled, maxretry...) would override the
+# operator's jail.local — the narrowest grammar, not the jail rule's.
+_F2B_SSHD_PORT_RULE = _WholeFile(
+    lambda c: _fail2ban_config_ok(c, re.compile(r"sshd"), {"port": _F2B_JAIL_KEYS["port"]}))
 
 
 def _lines_match(content, pattern):
@@ -479,6 +491,7 @@ WRITE_CONTENT = {
     "fail2ban-panel-whitelist": _F2B_JAIL_RULE,
     "fail2ban-panel-filter": _F2B_FILTER_RULE,
     "fail2ban-panel-jail": _F2B_JAIL_RULE,
+    "fail2ban-panel-sshd": _F2B_SSHD_PORT_RULE,
 }
 
 # The one body the helper writes itself. Byte-identical to what the panel sends remote hosts
@@ -539,13 +552,21 @@ def v_portspec_bare(s):
 
 
 def v_cidr(s):
-    """An IPv4/IPv6 address or network. Parsed, not pattern-matched, so 'any' and
-    '1.2.3.4 || rm -rf /' are both rejected for the same reason: they are not addresses."""
-    try:
-        ipaddress.ip_network(s, strict=False)
-    except ValueError:
-        raise ValueError("not an IP address or network")
-    return s
+    """An IPv4/IPv6 address or network, returned as ipaddress SPELLS it — never as given.
+
+    Parsed, not pattern-matched, so 'any' and '1.2.3.4 || rm -rf /' are both rejected for the same
+    reason: they are not addresses. But ipaddress accepts an IPv6 zone id and keeps it VERBATIM, so
+    'fe80::1%x || rm -rf /' parsed and came back unchanged, spaces, `$(...)` and newlines included,
+    and reached fail2ban-client and ufw as their argument (fail2ban, by its own source, logs such an
+    unbanip value verbatim to its root-owned log). A zone is refused before parsing, and what is
+    returned is the parsed value's text. A prefix keeps its host bits; see
+    privileged.canonical_cidr, which mirrors this."""
+    if "%" not in s:
+        try:
+            return str(ipaddress.ip_interface(s)) if "/" in s else str(ipaddress.ip_address(s))
+        except ValueError:
+            pass
+    raise ValueError("not an IP address or network")
 
 
 def v_comment(s):
@@ -571,18 +592,20 @@ def v_yesno(s):
 
 
 def v_routes(s):
-    """A comma-separated CIDR list to advertise, or "-" for none. Parsed, not pattern-matched."""
+    """A comma-separated CIDR list to advertise, or "-" for none. Parsed, not pattern-matched:
+    each route is v_cidr's, zone id refused, and returned in v_cidr's spelling."""
     if s == "-":
         return s
     parts = s.split(",")
     if not (1 <= len(parts) <= 16):
         raise ValueError("expected 1..16 routes")
+    routes = []
     for part in parts:
         try:
-            ipaddress.ip_network(part, strict=False)
+            routes.append(v_cidr(part))
         except ValueError:
             raise ValueError("not a route list")
-    return s
+    return ",".join(routes)
 
 
 def v_tags(s):
@@ -1082,8 +1105,12 @@ def v_dfpath(s):
 
 
 def v_package(s):
-    """A Debian package name, optionally with an architecture qualifier (gcc:i386)."""
-    if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,60}(?::[a-z0-9]{1,10})?", s):
+    """A Debian package name, optionally with an architecture qualifier (gcc:i386).
+
+    It must END alphanumeric: `apt-get install` reads a trailing `-` as "remove this one" and a
+    trailing `+` as "install it", so `openssh-server-` passed here and REMOVED openssh-server from
+    an install verb. Same rule as the panel's privileged._package."""
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9+.-]{0,59}[a-z0-9])?(?::[a-z0-9]{1,10})?", s):
         raise ValueError("not a package name")
     return s
 
@@ -1614,6 +1641,9 @@ VERBS = {
     # Listening sockets, so the caller can confirm sshd actually bound the new port. The panel
     # greps the output in Python; no port reaches a command line.
     "listening-sockets": ([], lambda a: ["ss", "-lnt"], None),
+    # The same list with each socket's owner (`-e`: uid when not root, and the systemd cgroup), so
+    # the port move can tell sshd from an unprivileged account that bound the port first.
+    "listening-sockets-owner": ([], lambda a: ["ss", "-lnte"], None),
     # Reboot, a couple of seconds out, so the command asking for it can return first.
     "reboot-delayed": ([], lambda a: [], None),
 
@@ -3395,7 +3425,13 @@ def do_f2b_log_lines(args, content):
     Gzip is handled here rather than by zcat, so the only thing this verb can open is the fail2ban
     log family — the glob is fixed, and nothing about the path comes from the caller."""
     cutoff = args[0]
-    out = []
+    # STREAMED, and stopped at a ceiling. This used to append every matching line to a list and
+    # write the list at the end: a million-line log (IPv6 rotation defeats per-address bans, and
+    # sustaining the events needs no login) cost this root process 448 MB and the panel reading it
+    # 656 MB. The caller cannot use a partial tally anyway — the auto-block reconcile RELEASES any
+    # block that falls under the threshold — so past the ceiling this says so and exits 3, and the
+    # callers read that as "unread", exactly as they read the transport's own cap on remotes.
+    sent, sep = 0, ""
     for path in sorted(glob.glob(F2B_LOG_GLOB)):
         try:
             opener = gzip.open if path.endswith(".gz") else open
@@ -3405,7 +3441,14 @@ def do_f2b_log_lines(args, content):
                     # format is ISO-ish and fixed-width. Same comparison, same reason.
                     first = line.split(" ", 1)[0]
                     if first >= cutoff and F2B_EVENT_RE.search(line):
-                        out.append(line.rstrip("\n"))
+                        chunk = sep + line.rstrip("\n")
+                        sent += len(chunk.encode("utf-8", "replace"))
+                        if sent > F2B_LOG_MAX_BYTES:
+                            sys.stderr.write("f2b-log-lines: the log passed %d bytes; truncated, "
+                                             "so it must be treated as unread\n" % F2B_LOG_MAX_BYTES)
+                            return 3
+                        sys.stdout.write(chunk)
+                        sep = "\n"
         except FileNotFoundError:
             continue          # a rotated file that vanished mid-read; the others still count
         except OSError as e:
@@ -3419,7 +3462,6 @@ def do_f2b_log_lines(args, content):
             # fact — the handler turned "I could not look" into "there was nothing there".
             sys.stderr.write("could not read %s: %s\n" % (path, e))
             return 1
-    sys.stdout.write("\n".join(out))
     return 0
 
 

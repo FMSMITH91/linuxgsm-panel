@@ -14,6 +14,7 @@ Run from the panel directory with its venv (or `sudo linuxgsm-panel-recover`):
     ./venv/bin/python manage.py create-admin <username>
     ./venv/bin/python manage.py promote <username>
     ./venv/bin/python manage.py activate <username>
+    ./venv/bin/python manage.py setup-token               # the first-run wizard's link, again
 
 Run interactively with no username and you get a numbered menu of users to choose
 from. Passwords are read interactively (never echoed, never in shell history)
@@ -72,10 +73,26 @@ def _read_password(args):
         return pw
 
 
+def _tty_safe(value):
+    r"""Return `value` as text a terminal shows rather than obeys.
+
+    Each non-printable character becomes its visible escape (\x1b, \u202e, \n, \U000e0001).
+
+    This CLI prints names that were typed into the web UI — by a delegate with MANAGE_USERS or
+    MANAGE_GROUPS, or by whoever redeemed an invite — and the operator runs it as root in exactly
+    the moment they need to trust what it lists. Printed raw, an ESC sequence moved the cursor,
+    erased or forged rows, and wrote the clipboard (OSC 52). The web forms refuse such names now;
+    this also covers rows stored before they did (Aikido 745379084). Display only: matching a
+    menu choice compares the stored names themselves.
+    """
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode("ascii")
+                   for c in str(value))
+
+
 def _require_user(username):
     u = User.query.filter_by(username=username).first()
     if not u:
-        sys.exit("No such user: %s" % username)
+        sys.exit("No such user: %s" % _tty_safe(username))
     return u
 
 
@@ -88,8 +105,8 @@ def cmd_list_users(args):
         for u in users:
             flags = (["superadmin"] if u.is_superadmin else []) + \
                     (["active"] if u.is_active else ["INACTIVE"])
-            groups = ", ".join(g.name for g in u.groups) or "-"
-            print("  %-20s [%s]  groups: %s" % (u.username, ", ".join(flags), groups))
+            groups = ", ".join(_tty_safe(g.name) for g in u.groups) or "-"
+            print("  %-20s [%s]  groups: %s" % (_tty_safe(u.username), ", ".join(flags), groups))
 
 
 def _pick_user_interactive(prompt="Which user?"):
@@ -118,7 +135,7 @@ def _print_user_menu(prompt, users):
     for i, u in enumerate(users, 1):
         flags = (["superadmin"] if u.is_superadmin else []) + ([] if u.is_active else ["inactive"])
         tag = ("  [" + ", ".join(flags) + "]") if flags else ""
-        print("  %2d) %s%s" % (i, u.username, tag))
+        print("  %2d) %s%s" % (i, _tty_safe(u.username), tag))
 
 
 def _menu_choice(sel, users):
@@ -143,7 +160,7 @@ def _resolve_username(username, default_sole_admin=True):
     if default_sole_admin:
         admins = User.query.filter_by(is_superadmin=True).order_by(User.username).all()
         if len(admins) == 1:
-            print("Resetting the only superadmin: %s" % admins[0].username)
+            print("Resetting the only superadmin: %s" % _tty_safe(admins[0].username))
             return admins[0].username
     # No terminal for the menu, and no single superadmin to default to → the caller must name one.
     # `raise` (not sys.exit) so every path here clearly returns a value or terminates.
@@ -170,18 +187,49 @@ def cmd_reset_password(args):
         # could leave themselves a key that survived the victim's whole recovery.
         u.revoke_api_token()
         db.session.commit()
-        print("Password reset for '%s' (existing sessions revoked)." % username)
+        print("Password reset for '%s' (existing sessions revoked)." % _tty_safe(username))
 
 
 def cmd_create_admin(args):
     with app.app_context():
         if User.query.filter_by(username=args.username).first():
-            sys.exit("User '%s' already exists — use reset-password / promote instead." % args.username)
+            sys.exit("User '%s' already exists — use reset-password / promote instead."
+                     % _tty_safe(args.username))
         u = User(username=args.username, password_hash=auth.hash_password(_read_password(args)),
                  display_name=args.username, is_superadmin=True, is_active=True)
         db.session.add(u)
         db.session.commit()
-        print("Superadmin '%s' created." % args.username)
+        print("Superadmin '%s' created." % _tty_safe(args.username))
+
+
+def cmd_setup_token(args):
+    """Print the first-run wizard's one-time setup token, creating it if there is none yet.
+
+    Until the first admin exists the wizard answers only to a browser that shows this token, so
+    the operator — who can read this host's data dir — is the one who creates that admin, not
+    whoever reaches the port first. The installer runs this and prints the link it makes. Refused
+    once setup has an administrator: from then on the token opens nothing, and it is deleted.
+    """
+    from app import _retire_setup_token, _setup_open, _superadmin_exists
+    from panel.core.config import SETUP_TOKEN_FILE, ensure_setup_token
+    with app.app_context():
+        if not _setup_open() or _superadmin_exists():
+            _retire_setup_token()
+            sys.exit("Setup already has an administrator, so there is no setup token — sign in "
+                     "instead (manage.py reset-password if you have lost the password).")
+        tok = ensure_setup_token()
+    if not tok:
+        sys.exit("Could not create or read %s — check that this runs as the panel's own account."
+                 % SETUP_TOKEN_FILE)
+    if getattr(args, "raw", False):
+        print(tok)
+        return
+    from panel.core.config import load_config
+    cfg = load_config()
+    scheme = "https" if cfg.get("use_https", True) else "http"
+    print("Open the setup wizard with this link, using this server's address:")
+    print("    %s://<this-server>:%s/setup?token=%s" % (scheme, cfg.get("port", 5000), tok))
+    print("or open /setup and paste the token:  %s" % tok)
 
 
 def cmd_disable_2fa(args):
@@ -195,7 +243,7 @@ def cmd_disable_2fa(args):
         # in panel.db is the kind of divergence that only becomes reachable later.
         u.backup_codes = ""
         db.session.commit()
-        print("Two-factor auth disabled for '%s'." % username)
+        print("Two-factor auth disabled for '%s'." % _tty_safe(username))
 
 
 def _set_flag(username, field, value, label):
@@ -219,7 +267,7 @@ def _set_flag(username, field, value, label):
             sys.exit("Refusing — that would leave no active superadmin. "
                      "Create or promote another admin first.")
         db.session.commit()
-        print("'%s' %s." % (username, label))
+        print("'%s' %s." % (_tty_safe(username), label))
 
 
 def main():
@@ -237,6 +285,10 @@ def main():
     cp.add_argument("username")
     cp.add_argument("--password")
     cp.set_defaults(func=cmd_create_admin)
+
+    st = sub.add_parser("setup-token", help="Print the first-run setup wizard's one-time token")
+    st.add_argument("--raw", action="store_true", help="Print only the token (for scripts)")
+    st.set_defaults(func=cmd_setup_token)
 
     dp2 = sub.add_parser("disable-2fa", help="Turn off a user's two-factor auth (menu if no username)")
     dp2.add_argument("username", nargs="?", help="Omit for a numbered menu")

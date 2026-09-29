@@ -871,6 +871,89 @@ try:
     finally:
         _sm_core.run_privileged = _u_orig
 
+    # ── uninstall removes THIS server's firewall rules, and nobody else's (Aikido 745379215) ────
+    # After the server's tagged rules it ran `ufw delete allow <port>` and the proto tcp/udp pair
+    # with no comment — and ufw removes a rule matching all but its comment when the delete has
+    # none. So every ALLOW on the port went, whoever's: another service's, an operator's own SSH
+    # allow, with no lockout guard in the way. The host below is a rule table answering the verbs
+    # with ufw's own matching; the route, the cleanup and the status parser are all real.
+    class _UfwTable:
+        def __init__(self, *rules):
+            self.rules = [list(r) for r in rules]
+
+        def priv(self, server, verb, args=(), *a, **k):
+            args = [str(x) for x in args]
+            if verb == "ufw-status":
+                return ("Status: active\n\n" + "".join(
+                    "[%2d] %-26s %-5s IN    Anywhere%s\n" % (
+                        i, t, act, ("                   # " + cm) if cm else "")
+                    for i, (t, act, cm) in enumerate(self.rules, 1)), "", 0)
+            if verb == "ufw-delete-num":
+                del self.rules[int(args[0]) - 1]
+                return ("Rule deleted", "", 0)
+            if verb in ("ufw-delete-allow-port", "ufw-delete-allow-proto-port"):
+                to = args[0] if verb == "ufw-delete-allow-port" else "%s/%s" % (args[1], args[0])
+                self.rules = [r for r in self.rules if not (r[0] == to and r[1] == "ALLOW")]
+                return ("Rule deleted", "", 0)
+            return ("", "", 0)
+
+    _uf_saved = (_sm_core.run_privileged, _sm_core.run_command, _sm_core.run_as_game_user)
+    try:
+        _sm_core.run_command = lambda *a, **k: ("", "", 0)
+        _sm_core.run_as_game_user = lambda *a, **k: ("", "", 0)
+        # The third: rules that CARRY the server's name but are not what the panel makes — a DENY,
+        # a LIMIT, and a `22` allow the old "Open all ports" takeover could leave tagged with a
+        # server. The name cleanup took every one of them; they stay now, and are named.
+        for _uf_name, _uf_port, _uf_rules, _uf_keep, _uf_gone in (
+                ("fwsshsrv", 22,
+                 (("22/tcp", "ALLOW", "operator"), ("22", "ALLOW", ""), ("27041", "ALLOW", "fwsshsrv")),
+                 [("22/tcp", "ALLOW", "operator"), ("22", "ALLOW", "")], ["27041"]),
+                ("fwforeign", 27042,
+                 (("22/tcp", "LIMIT", ""), ("27042", "ALLOW", "fwforeign"),
+                  ("27042/udp", "ALLOW", "voicebridge"), ("27042/tcp", "ALLOW", "")),
+                 [("22/tcp", "LIMIT", ""), ("27042/udp", "ALLOW", "voicebridge")],
+                 ["27042", "27042/tcp"]),
+                ("fwmixed", 27045,
+                 (("22/tcp", "ALLOW", "operator"), ("27045", "ALLOW", "fwmixed"),
+                  ("27046", "DENY", "fwmixed"), ("27047/tcp", "LIMIT", "fwmixed"),
+                  ("22", "ALLOW", "fwmixed")),
+                 [("22/tcp", "ALLOW", "operator"), ("27046", "DENY", "fwmixed"),
+                  ("27047/tcp", "LIMIT", "fwmixed"), ("22", "ALLOW", "fwmixed")], ["27045"])):
+            _uf = _UfwTable(*_uf_rules)
+            _sm_core.run_privileged = _uf.priv
+            with app.app_context():
+                _rm = RemoteServer.query.first()
+                _tmp = _UGS(remote_id=_rm.id, name=_uf_name, short_name=_uf_name, game_type="gmod",
+                            port=_uf_port, installed=True, status="offline")
+                db.session.add(_tmp); db.session.commit()
+                _tid = _tmp.id
+            _resp = c.post("/servers/%d/delete" % _tid, json={},
+                           headers={"X-Requested-With": "XMLHttpRequest"})
+            _uf_left = [tuple(r) for r in _uf.rules]
+            check("uninstall %s (port %d): every rule that is not this server's survives — an "
+                  "operator's SSH allow, another service's tag, a LIMIT" % (_uf_name, _uf_port),
+                  (_resp.get_json() or {}).get("success") is True
+                  and all(k in _uf_left for k in _uf_keep), "left=%r" % (_uf_left,))
+            check("uninstall %s: ...while its own tagged rule and an untagged legacy allow on a port "
+                  "no one else holds still go (positive control)" % _uf_name,
+                  not any(r[0] in _uf_gone for r in _uf_left), "left=%r" % (_uf_left,))
+            if _uf_name == "fwmixed":
+                _uf_msg = (_resp.get_json() or {}).get("message", "")
+                check("uninstall fwmixed: ...and the rules carrying its name that it left are named "
+                      "in the answer",
+                      "27046 DENY, 27047/tcp LIMIT" in _uf_msg and "own port: 22." in _uf_msg,
+                      "message=%r" % (_uf_msg,))
+                check("uninstall fwmixed: ...and the answer is a WARNING, not a green 'done'",
+                      (_resp.get_json() or {}).get("warn") is True, repr(_resp.get_json()))
+            else:
+                check("uninstall %s: a clean firewall cleanup is no warning (control)" % _uf_name,
+                      (_resp.get_json() or {}).get("warn") is False, repr(_resp.get_json()))
+            with app.app_context():
+                _left = _UGS.query.get(_tid)
+                if _left: db.session.delete(_left); db.session.commit()
+    finally:
+        _sm_core.run_privileged, _sm_core.run_command, _sm_core.run_as_game_user = _uf_saved
+
     # ── a queued "stop/restart when empty" must not be thrown away ────────────────────────────
     # The deferred sweep asks get_server_status and treats "offline" as "already stopped, nothing
     # to do" — clearing BOTH flags. Once the port cross-check began answering "offline" for a
@@ -1408,6 +1491,52 @@ try:
         check("MANAGE_GROUPS user can't grant super_admin to a group",
               eg is not None and "super_admin" not in eg.get_permissions())
 
+    # ── Aikido 745379084: a name an admin types cannot carry terminal controls ───────────────
+    # The recovery CLI (`sudo linuxgsm-panel-recover`, manage.py) prints stored usernames and
+    # group names to the operator's terminal. username_problem refused only whitespace, and group
+    # names had no format check at all, so a delegate with MANAGE_USERS or MANAGE_GROUPS could store
+    # ESC sequences (cursor moves, erase-line, OSC 52 clipboard writes) and a newline (a forged row).
+    import panel.core.validation as _valmod
+    _unp = _valmod.username_problem
+    _gnp = getattr(_valmod, "group_name_problem", lambda _n: None)   # absent before the fix
+    for _nm in ("a\x1bb", "a\u202eb", "a\x9bb", "a\x07b", "ab\u200bc", "a\x00b"):
+        check("username: %r (a control or format character) is refused" % _nm,
+              _unp(_nm) is not None, "accepted")
+    for _nm in ("José", "dan_the-man.2", "Łukasz", "用户名"):
+        check("username: %r is still accepted (control)" % _nm, _unp(_nm) is None, _unp(_nm))
+    for _nm in ("a\nb", "a\x1bb", "a\tb", "a\u2028b", "a\u202eb", "", "x" * 81):
+        check("group name: %r is refused" % _nm, _gnp(_nm) is not None, "accepted")
+    check("group name: an ordinary name with spaces is still accepted (control)",
+          _gnp("Game Admins") is None, _gnp("Game Admins"))
+    _xhr = {"X-Requested-With": "XMLHttpRequest"}
+    _inj_user = "\x1b[1A\x1b[2K\x1b]52;c;ZWNobyBoaQ==\x07zz"
+    _iu = dc.post("/users/add", data={"username": _inj_user, "display_name": "x"}, headers=_xhr)
+    with app.app_context():
+        check("users/add: a delegate cannot store a username carrying ESC sequences",
+              User.query.filter_by(username=_inj_user).first() is None and _iu.status_code == 400,
+              "status=%d" % _iu.status_code)
+    for _gn in ("ops\nforged", "ops\x1b[2Kteam"):
+        _ig = dc.post("/groups/add", data={"name": _gn}, headers=_xhr)
+        with app.app_context():
+            check("groups/add: a delegate cannot store the group name %r" % _gn,
+                  Group.query.filter_by(name=_gn).first() is None and _ig.status_code == 400,
+                  "status=%d" % _ig.status_code)
+    with app.app_context():
+        _eg_id = Group.query.filter_by(name="esc_group").first().id
+    _ie = dc.post("/groups/%d/edit" % _eg_id, data={"name": "esc\x1b]52;c;eA==\x07"}, headers=_xhr)
+    with app.app_context():
+        check("groups/edit: ...nor rename one to it",
+              db.session.get(Group, _eg_id).name == "esc_group" and _ie.status_code == 400,
+              "status=%d name=%r" % (_ie.status_code, db.session.get(Group, _eg_id).name))
+    _ok_g = dc.post("/groups/add", data={"name": "Esc Ops Team"}, headers=_xhr)
+    with app.app_context():
+        _okg = Group.query.filter_by(name="Esc Ops Team").first()
+        check("groups/add: an ordinary name with a space is still created (control)",
+              _okg is not None, "status=%d" % _ok_g.status_code)
+        if _okg is not None:
+            db.session.delete(_okg)
+            db.session.commit()
+
     # ── Group create via the real route WITH a host selected. This is the exact
     #    regression that 500'd: the route assigned GameServer objects to
     #    Group.servers, which is a RemoteServer collection. ──
@@ -1732,6 +1861,152 @@ try:
                     _ar_row.groups = []
                     db.session.delete(_ar_row)
                     db.session.commit()
+
+    # ── the host key an enrolment login saw is PINNED with the row ───────────────────────────
+    # add_remote and the setup wizard tested the login, threw the key it saw away and committed the
+    # row unpinned, so the pin came from whichever connection happened next — for a wizard-added
+    # host, a background worker. The REAL ssh_test_connection runs here against a fake SSH client
+    # that shows a chosen key; then the next connection, shown a different key, has to refuse.
+    import paramiko as _enr_paramiko
+    import types as _enr_types
+    from cryptography.fernet import Fernet as _EnrFernet
+    from sqlalchemy import text as _enr_text
+    from panel.core.config import encrypt_secret as _enr_encrypt
+    import panel.routes.route_helpers as _enr_rh
+
+    class _EnrSSH:
+        presents = ("ssh-ed25519", "AAAAENROLLED")
+        made = []
+
+        def __init__(self):
+            self.policy, self.kw, self.closed = None, None, 0
+            _EnrSSH.made.append(self)
+
+        def set_missing_host_key_policy(self, p):
+            self.policy = p
+
+        def connect(self, host, **kw):
+            self.kw = dict(kw, host=host)
+            _kt, _kb = _EnrSSH.presents
+            self.policy.missing_host_key(self, host, _enr_types.SimpleNamespace(
+                get_name=lambda: _kt, get_base64=lambda: _kb))
+
+        def get_transport(self):
+            return None
+
+        def close(self):
+            self.closed += 1
+
+    def _enr_next_connection(rid):
+        """What the panel's next fresh connection to row `rid` does: 'refused', 'accepted', or why."""
+        with app.app_context():
+            _row = db.session.get(RemoteServer, rid)
+            _sm_core.close_connection(_row)
+            try:
+                _sm_core.get_connection(_row, force_new=True, pooled=False)
+                return "accepted"
+            except _sm_core.HostKeyMismatch:
+                return "refused"
+            except Exception as _e:
+                return repr(_e)
+
+    _enr_fake = _enr_types.SimpleNamespace(SSHClient=_EnrSSH,
+                                           AuthenticationException=_enr_paramiko.AuthenticationException)
+    _enr_saved = (_sm_hosts.paramiko, _sm_core.paramiko)
+    _enr_names = ("smoke-enrol-pin", "smoke-wizard-pin", "smoke-test-unpinned", "smoke-test-unreadable",
+                  "smoke-worker-pin")
+    try:
+        _sm_hosts.paramiko = _sm_core.paramiko = _enr_fake
+        _EnrSSH.presents = ("ssh-ed25519", "AAAAENROLLED")
+        c.post("/remotes/add", data={"name": "smoke-enrol-pin", "host": "198.51.100.60",
+                                     "ssh_user": "root", "ssh_port": "22", "auth_method": "password",
+                                     "credential": "s3cret", "setup_type": "existing"})
+        with app.app_context():
+            _er = RemoteServer.query.filter_by(name="smoke-enrol-pin").first()
+            _er_id, _er_key = (_er.id, _er.host_key) if _er else (None, None)
+        check("add_remote: the host key its test login saw is pinned with the new row",
+              _er_key == "ssh-ed25519 AAAAENROLLED", repr(_er_key))
+        _EnrSSH.presents = ("ssh-ed25519", "AAAADIFFERENT")
+        check("add_remote: ...so the next connection, shown a DIFFERENT key, is refused",
+              _er_id is not None and _enr_next_connection(_er_id) == "refused",
+              _er_id and _enr_next_connection(_er_id))
+
+        # The setup wizard's remote_server step, the path that makes no connection of its own after.
+        _EnrSSH.presents = ("ssh-ed25519", "AAAAWIZARD")
+        with app.test_request_context("/setup", method="POST", data={
+                "name": "smoke-wizard-pin", "host": "198.51.100.61", "ssh_user": "root",
+                "ssh_port": "22", "auth_method": "password", "credential": "s3cret"}):
+            _wz_data = {}
+            _enr_rh._setup_add_remote(_enr_types.SimpleNamespace(data="{}"), _wz_data)
+            _wz = RemoteServer.query.filter_by(name="smoke-wizard-pin").first()
+            _wz_id, _wz_key = (_wz.id, _wz.host_key) if _wz else (None, None)
+        check("setup wizard: the host key its test login saw is pinned with the new row",
+              _wz_data.get("remote_added") is True and _wz_key == "ssh-ed25519 AAAAWIZARD",
+              repr((_wz_data, _wz_key)))
+        _EnrSSH.presents = ("ssh-ed25519", "AAAADIFFERENT")
+        check("setup wizard: ...so the next connection, shown a DIFFERENT key, is refused",
+              _wz_id is not None and _enr_next_connection(_wz_id) == "refused",
+              _wz_id and _enr_next_connection(_wz_id))
+
+        # The Test button: an UNPINNED host is pinned by the login (it is first contact, like the
+        # next connection would be), and an UNREADABLE pin refuses before any credential is sent.
+        with app.app_context():
+            _tu = RemoteServer(name="smoke-test-unpinned", host="198.51.100.63", port=22,
+                               username="root", auth_method="password",
+                               auth_credential=_enr_encrypt("s3cret"))
+            _tr = RemoteServer(name="smoke-test-unreadable", host="198.51.100.64", port=22,
+                               username="root", auth_method="password",
+                               auth_credential=_enr_encrypt("s3cret"), is_online=False)
+            db.session.add_all([_tu, _tr])
+            db.session.commit()
+            _tu_id, _tr_id = _tu.id, _tr.id
+            db.session.execute(_enr_text("UPDATE remote_server SET host_key = :k WHERE id = :i"),
+                               {"k": "enc:v1:" + _EnrFernet(_EnrFernet.generate_key()).encrypt(
+                                   b"ssh-ed25519 AAAAREAL").decode(), "i": _tr_id})
+            db.session.commit()
+        _EnrSSH.presents = ("ssh-ed25519", "AAAATESTED")
+        c.post("/remotes/%d/test" % _tu_id)
+        with app.app_context():
+            _tu_key = db.session.get(RemoteServer, _tu_id).host_key
+        check("remote test: an unpinned host is pinned to the key the Test login saw",
+              _tu_key == "ssh-ed25519 AAAATESTED", repr(_tu_key))
+        _EnrSSH.presents = ("ssh-ed25519", "AAAAMITM")
+        _made_before = len(_EnrSSH.made)
+        _tr_resp = c.post("/remotes/%d/test" % _tr_id, headers={"Accept": "application/json"})
+        with app.app_context():
+            _tr_row = db.session.get(RemoteServer, _tr_id)
+            _tr_after = (type(_tr_row.host_key).__name__, _tr_row.is_online)
+        _tr_sent = [m.kw for m in _EnrSSH.made[_made_before:] if m.kw]
+        check("remote test: an UNREADABLE pin refuses the Test login before the password is sent",
+              _tr_sent == [] and _tr_after == ("UnreadableSecret", False),
+              "connect calls=%r row=%r status=%s" % (_tr_sent, _tr_after, _tr_resp.status_code))
+
+        # create_app registers the app the pin is stored with from a WORKER thread (no app
+        # context): the monitor's probes and the /api/servers port scan make most first contacts.
+        import concurrent.futures as _enr_cf
+        with app.app_context():
+            _wp = RemoteServer(name="smoke-worker-pin", host="198.51.100.65", port=22,
+                               username="root", auth_method="key", auth_credential="")
+            db.session.add(_wp)
+            db.session.commit()
+            _wp_id = _wp.id
+            _wp_obj = db.session.get(RemoteServer, _wp_id)
+        with _enr_cf.ThreadPoolExecutor(max_workers=1) as _enr_ex:
+            _wp_ok = _enr_ex.submit(_sm_core._persist_host_key, _wp_obj,
+                                    "ssh-ed25519 AAAAWORKER").result(timeout=30)
+        with app.app_context():
+            _wp_key = db.session.get(RemoteServer, _wp_id).host_key
+        check("host key: create_app lets a worker thread with no app context store a pin",
+              _wp_ok is True and _wp_key == "ssh-ed25519 AAAAWORKER", repr((_wp_ok, _wp_key)))
+    finally:
+        _sm_hosts.paramiko, _sm_core.paramiko = _enr_saved
+        with app.app_context():
+            for _n in _enr_names:
+                for _row in RemoteServer.query.filter_by(name=_n).all():
+                    _sm_core.close_connection(_row)
+                    _row.groups = []
+                    db.session.delete(_row)
+            db.session.commit()
 
     # ── ...but only with a credential the delegated admin SUPPLIED ───────────────────────────
     # add_remote decided a host was the creator's to have by logging in to it, then granted it to
@@ -2487,6 +2762,11 @@ try:
         return j, _row_status, False
 
     _ij_saved, _ij_calls, _ij_state = {}, [], {"started": False}
+    _ij_verbs = []
+
+    def _ij_priv(server, verb, args=(), *a, **k):
+        _ij_verbs.append((verb, list(args)))
+        return ("freed=0 held=0 slots=10", "", 0)
 
     def _ij_stub(mod, name, fn):
         _ij_saved[(mod, name)] = getattr(mod, name)
@@ -2523,7 +2803,7 @@ try:
         _ij_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
         _ij_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
         _ij_stub(_sm_core, "run_as_game_user", _ij_run_as)
-        _ij_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
+        _ij_stub(_sm_core, "run_privileged", _ij_priv)
         _ij_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop", "monitor"])
         _ij_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
         _ij_stub(_msmod, "_looks_installed", lambda *a, **k: True)
@@ -2534,7 +2814,8 @@ try:
         _ij_stub(_msmod, "ensure_persistent_bans", lambda *a, **k: None)
         _ij_stub(_msmod, "sm_game_engine", lambda *a, **k: "source")
         _ij_stub(_msmod, "set_autostart", lambda *a, **k: (True, ""))
-        _ij_stub(_msmod, "remote_ufw_close_game_port", lambda *a, **k: None)
+        # remote_ufw_close_game_port is left REAL: the adoption below leaves 28990, and what it
+        # sends the host for that is checked verb by verb.
         _ij_stub(_msmod, "_remote_listening_ports", _ij_ports)
         _ij_stub(_msmod, "remote_ufw_allow_game_ports",
                  lambda r, ports, name: _ij_calls.append(("ufw_allow", tuple(sorted(ports)))))
@@ -2581,6 +2862,13 @@ try:
             _ij_opened = [c2 for c2 in _ij_calls if c2[0] == "ufw_allow"]
             check("install job: ...and opened the reported ports in the firewall",
                   any(28991 in c2[1] for c2 in _ij_opened), "ufw calls: %s | %s" % (_ij_opened, _why_job))
+            # Aikido 745379215. Leaving 28990 ran `ufw delete allow 28990` and the proto tcp/udp
+            # pair with no comment — every ALLOW on the port, whoever's — on a port that, this
+            # early in a FRESH install, cannot hold a rule of this server's yet.
+            _ij_deletes = [v for v in _ij_verbs if v[0].startswith("ufw-delete")]
+            check("install job: ...and leaving the allocated port deleted NO firewall rule — "
+                  "nothing on it was this new server's",
+                  _ij_deletes == [], "delete verbs: %r | %s" % (_ij_deletes, _why_job))
             with app.app_context():
                 _d = db.session.get(GameServer, _ij_id)
                 if _d is not None:
@@ -2589,6 +2877,59 @@ try:
                 _install_jobs_sm.pop(_ij_id, None)
     finally:
         for (_m, _n), _v in _ij_saved.items():
+            setattr(_m, _n, _v)
+
+    # ── a port scan that could not be read allocates NO port (Aikido 745379002) ────────────────
+    # resolve_free_port read a failed scan as "nothing is listening" (`or ()`, over a comment
+    # saying the install "then fails with a clear error" — it did not): the port it offered was
+    # opened at step 6 with no second look when the game reported it, under the new server's name,
+    # in front of whatever was already listening there. The tailscale and local transports do not
+    # raise on a timeout; they return ("", "…timed out", -1), which is what `ss` answers here.
+    _su_saved, _su_ss, _su_allow = {}, [], []
+
+    def _su_stub(mod, name, fn):
+        _su_saved[(mod, name)] = getattr(mod, name)
+        setattr(mod, name, fn)
+
+    def _su_run(server, cmd, **k):
+        if "ss -H -lntu" in cmd:
+            _su_ss.append(1)
+            return ("", "SSH command timed out", -1)
+        return ("", "", 0)
+
+    try:
+        _su_stub(_sm_core, "get_connection",
+                 lambda *a, **k: (_ for _ in ()).throw(AssertionError("a real SSH connection")))
+        _su_stub(_sm_core, "run_command", _su_run)
+        _su_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
+        _su_stub(_msmod, "remote_ufw_allow_game_ports",
+                 lambda r, ports, name: (_su_allow.append(list(ports)), ([], ""))[1])
+        _ij_ps._port_scan_cache.clear()
+        _su_r = c.post("/servers/add", data={"remote_id": str(_cg_remote_id), "game_type": "gmod",
+                                             "server_name": "scanfail", "port": "28980"},
+                       headers={"X-Requested-With": "XMLHttpRequest"})
+        with app.app_context():
+            _su_row = GameServer.query.filter_by(short_name="scanfail").first()
+            _su_row_id = _su_row.id if _su_row is not None else None
+        check("install: a port scan that twice could not be read creates no server — it is "
+              "refused, naming the host",
+              _su_r.status_code == 400 and _su_row_id is None
+              and "can't check which ports are free" in ((_su_r.get_json() or {}).get("message") or ""),
+              "status=%d body=%r row=%r" % (_su_r.status_code, _su_r.get_json(), _su_row_id))
+        check("install: ...after one fresh second look, and with nothing sent to the firewall",
+              len(_su_ss) == 2 and _su_allow == [], "scans=%d opened=%r" % (len(_su_ss), _su_allow))
+        _su_fp = c.get("/api/free-port?remote_id=%d&desired=28980&game=gmod" % _cg_remote_id)
+        check("free-port: ...and the install form's hint is 'no suggestion', not a 500",
+              _su_fp.status_code == 200 and (_su_fp.get_json() or {}).get("port") is None,
+              "status=%d body=%r" % (_su_fp.status_code, _su_fp.get_json()))
+        if _su_row_id is not None:
+            with app.app_context():
+                db.session.delete(db.session.get(GameServer, _su_row_id))
+                db.session.commit()
+            with _install_lock_sm:
+                _install_jobs_sm.pop(_su_row_id, None)
+    finally:
+        for (_m, _n), _v in _su_saved.items():
             setattr(_m, _n, _v)
 
     # ...and the branch where the reported port is ALREADY HELD by something that is not us.
@@ -3587,6 +3928,76 @@ try:
     check("login: ...while the neighbouring /64 is its own bucket (control)",
           b"Too many failed attempts" not in _r.data, "a different /64 was blocked too")
     _LOGIN_FAILS.clear()
+
+    # An IPv6 zone id. ipaddress parses '2001:db8:9::%<anything>' and client_ip() kept the text, and
+    # with the host bits zero the /64 kept it too, so behind a proxy that passes the client's own
+    # X-Forwarded-For through (nginx setting only X-Real-IP, say) every attempt had a new throttle
+    # bucket — and the client wrote the text of each auth.log line fail2ban reads, whose unanchored
+    # search then banned the second address. Through the real /login, in the Serve shape as above.
+    #
+    # What each check gates. The LOCK check gates a PAIR: the forwarded-header parse
+    # (auth._forwarded_hop_address, which keys the address and drops the zone) and throttle_key's
+    # own zone drop. Either one alone keeps every attempt in one bucket, so it fails only when both
+    # are reverted; throttle_key's own gate is the unit check in tests/unit/part17.py. The auth.log
+    # and audit checks after it gate the header parse alone: a legitimate link-local client behind
+    # Apache or Go's reverse proxy arrives with a zone, and it must be named as ITS address — never
+    # the zone's text, and never the proxy (fail2ban would then ban the proxy and all behind it).
+    import logging as _zn_logging
+    from panel.db.models import AuditLog as _ZnAL
+
+    class _ZnLines(_zn_logging.Handler):
+        """What data/auth.log would receive."""
+
+        def __init__(self):
+            """Start with no lines."""
+            super().__init__()
+            self.lines = []
+
+        def emit(self, record):
+            """Keep the formatted message."""
+            self.lines.append(record.getMessage())
+    _zn_h = _ZnLines()
+    _zn_logging.getLogger("panel.auth").addHandler(_zn_h)
+    _zn_saved = _xff_auth._loopback_proxy_trusted
+    _zn_locked = False
+    _LOGIN_FAILS.clear()
+    try:
+        _xff_auth._loopback_proxy_trusted = lambda: True
+        _zn = app.test_client()
+        for _j in range(LOGIN_MAX_FAILS + 2):
+            _r = _zn.post("/login", data={"username": "nobody_zone", "password": "wrong"},
+                          headers={"X-Forwarded-For": "2001:db8:9::%%z%d panel login failed from "
+                                                      "203.0.113.9" % _j})
+            if b"Too many failed attempts" in _r.data:
+                _zn_locked = True
+                break
+    finally:
+        _xff_auth._loopback_proxy_trusted = _zn_saved
+        _zn_logging.getLogger("panel.auth").removeHandler(_zn_h)
+        _LOGIN_FAILS.clear()
+    check("login: a rotating IPv6 zone id in X-Forwarded-For does not mint a throttle bucket per "
+          "attempt", _zn_locked, "%d attempts, never locked" % (LOGIN_MAX_FAILS + 2))
+    _zn_logged = [ln for ln in _zn_h.lines if ln.startswith("panel login")]
+    check("login: ...and auth.log names the client's ADDRESS — not the proxy that connected, not "
+          "the zone's text (fail2ban would have banned 203.0.113.9)",
+          _zn_logged and all(ln.endswith(" from 2001:db8:9::") and "%" not in ln
+                             and "203.0.113.9" not in ln for ln in _zn_logged),
+          repr(_zn_logged[:3]))
+    # One login from a real link-local client, as Apache and Go's reverse proxy report it.
+    _xff_auth._loopback_proxy_trusted = lambda: True
+    try:
+        app.test_client().post("/login", data={"username": "nobody_zone_ll", "password": "wrong"},
+                               headers={"X-Forwarded-For": "fe80::1c2d:3e4f:5a6b:7c8d%eth0"})
+    finally:
+        _xff_auth._loopback_proxy_trusted = _zn_saved
+        _LOGIN_FAILS.clear()
+    with app.app_context():
+        _zn_ips = {(_u, r.ip_address) for _u in ("nobody_zone", "nobody_zone_ll")
+                   for r in _ZnAL.query.filter_by(action="login_failed", username=_u)}
+    check("login: ...and so does the audit trail, for a link-local client a proxy names with its "
+          "zone too — the address alone, no '%'",
+          _zn_ips == {("nobody_zone", "2001:db8:9::"),
+                      ("nobody_zone_ll", "fe80::1c2d:3e4f:5a6b:7c8d")}, repr(_zn_ips))
 
     # ── Database maintenance: stats + VACUUM/ANALYZE optimize ─────
     with app.app_context():
@@ -4613,6 +5024,33 @@ try:
         check("audit-ip: ...and the throttle's own window is untouched by it",
               _AL.query.filter(_AL.action == "login_failed",
                                _AL.timestamp >= _now - _td(seconds=300)).count() == _recent)
+        # An older version stored proxy-reported client addresses with an IPv6 zone id, and its
+        # reduction of one whose low 64 bits were zero kept the zone's text ahead of the "/64". That
+        # row then read as already reduced (it holds a '/'), so the text stayed for good. An aged
+        # row holding a '%' is now rewritten through _anonymise_ip: the network kept, the text gone,
+        # and one that is no address at all blanked.
+        _zn_old = {}
+        for _v in ("2001:db8:77::%x panel login failed from 203.0.113.9/64",   # reduced, text kept
+                   "fe80::1c2d:3e4f:5a6b:7c8d%eth0",                          # never reduced
+                   "%not an address/64"):
+            _zn_old[_v] = _AL(username="zone_aged", action="login_failed", ip_address=_v,
+                              timestamp=_now - _td(days=200))
+        db.session.add_all(list(_zn_old.values()))
+        db.session.commit()
+        _zn_ids = {_v: _r.id for _v, _r in _zn_old.items()}
+        _anon(90)
+        _zn_got = {_v: db.session.get(_AL, _i).ip_address for _v, _i in _zn_ids.items()}
+        check("audit-ip: an aged row holding an IPv6 zone id is rewritten even when an older "
+              "version already reduced it — no '%' and no zone text is left",
+              not any("%" in _g or "203.0.113" in _g or " " in _g for _g in _zn_got.values()),
+              repr(_zn_got))
+        check("audit-ip: ...and it keeps the network: each zoned row becomes its address's /64, "
+              "one that is no address is blanked",
+              _zn_got == {
+                  "2001:db8:77::%x panel login failed from 203.0.113.9/64": "2001:db8:77::/64",
+                  "fe80::1c2d:3e4f:5a6b:7c8d%eth0": "fe80::/64", "%not an address/64": ""},
+              repr(_zn_got))
+        check("audit-ip: ...and a second run rewrites none of them again", _anon(90) == 0)
 
     # ── one server table: /servers/manage folded into the dashboard ──────────────────────────
     # The two pages showed seven of the same eight columns and shared no code at all — doAction vs
@@ -5757,17 +6195,20 @@ try:
             try:
                 with app.app_context():
                     for _r in RemoteServer.query.all():
+                        # "created" ties an entry to the row holding its id now; one without
+                        # it reads as not-checked-yet, and would skip every host below.
                         _appmod._os_update_seen[_r.id] = {
                             "name": _r.name, "count": 3, "security": 1,
                             "packages": [{"name": "openssl", "suite": "noble-security"}],
-                            "at": 1.0}
+                            "at": 1.0, "created": _r.created_at}
                 _sum_q, _sum_code = _qcount("/api/os-updates/summary")
                 check("perf: the OS-updates banner endpoint renders", _sum_code == 200,
                       "got %d" % _sum_code)
-                # 5 and 8, not 10 and 15: it really costs 3 and 5, and there are 5 hosts in
-                # the snapshot, so a per-host query would add 5. A looser budget would leave the
-                # N+1 this guards against comfortably inside it — a gate with too much headroom
-                # passes exactly when it matters.
+                # 5 and 8, not 10 and 15: it really costs 3 and 7 (measured 2026-09-29, with 9
+                # hosts in the snapshot — the same with the row-identity check the entries now
+                # carry, whose query also answers which host is the panel's), so a per-host query
+                # would add 9. A looser budget would leave the N+1 this guards against comfortably
+                # inside it — a gate with too much headroom passes exactly when it matters.
                 check("perf: the banner endpoint does NOT query per host",
                       _sum_q <= 5, "%d queries for %d hosts"
                       % (_sum_q, len(_appmod._os_update_seen)))
@@ -13626,6 +14067,44 @@ try:
         _rv_mod.detect_game_ports = _rv_detect
         _rv_mod.remote_ufw_allow_game_ports = _rv_allow
 
+    # ── sync-ports is a firewall write: MANAGE_REMOTES on the host, like every other (745379031) ─
+    # It accepted INSTALL_SERVER, so the stock "admin" group — install, manage and uninstall
+    # servers, NOT manage remotes — could put root-owned allow rules on a host's firewall, from
+    # ports `details` reads out of a config that group can edit through the file manager. Through
+    # the real route and real permissions, with the host calls stubbed.
+    _sp_saved = (_rv_mod.detect_game_ports, _rv_mod.remote_ufw_allow_game_ports,
+                 _sm_core.run_privileged)
+    try:
+        with app.app_context():
+            _apg = Group(name="smoke-admin-preset", description="", is_default=False)
+            _apg.set_permissions([auth.INSTALL_SERVER, auth.MANAGE_SERVERS, auth.UNINSTALL_SERVER])
+            _apg.servers.append(db.session.get(RemoteServer, remote_id))
+            db.session.add(_apg)
+            db.session.flush()
+            _apu = User(username="smoke_adminpreset", is_superadmin=False, is_active=True,
+                        password_hash=auth.hash_password("Str0ng!passw0rd"))
+            _apu.groups.append(_apg)
+            db.session.add(_apu)
+            db.session.commit()
+            _apu_id = _apu.id
+        _sp_opened = []
+        _rv_mod.detect_game_ports = lambda *a, **k: {"game_port": 27015, "open_ports": [27015],
+                                                     "ports": []}
+        _rv_mod.remote_ufw_allow_game_ports = lambda r, ports, name: (
+            _sp_opened.append(list(ports)), (list(ports), "opened"))[1]
+        _sm_core.run_privileged = lambda *a, **k: ("", "", 0)    # sshd's ports: none extra
+        _spa = client_as(_apu_id).post("/api/server/%d/sync-ports" % gs_id, json={})
+        check("sync-ports: the stock admin group (no MANAGE_REMOTES) is refused, and opens nothing",
+              _spa.status_code == 403 and _sp_opened == [],
+              "status=%d opened=%r" % (_spa.status_code, _sp_opened))
+        _spm = client_as(mru_id).post("/api/server/%d/sync-ports" % gs_id, json={})
+        check("sync-ports: ...while MANAGE_REMOTES on that host still syncs (positive control)",
+              _spm.status_code == 200 and (_spm.get_json() or {}).get("success") is True
+              and _sp_opened == [[27015]], "status=%d body=%r" % (_spm.status_code, _spm.get_json()))
+    finally:
+        (_rv_mod.detect_game_ports, _rv_mod.remote_ufw_allow_game_ports,
+         _sm_core.run_privileged) = _sp_saved
+
     # ── a validation regex is not silently truncated into a DIFFERENT one ─────────────────────
     # The pattern was compiled in full and then stored as arg_pattern[:200]. A cut does not always
     # break a regex: an alternation sliced just after a `|` leaves a trailing empty branch, and an
@@ -14386,6 +14865,48 @@ try:
         # Caddy examples, and Tailscale Serve, all forward the host).
         check("socket origin: a proxy that hides the host is refused without a site_domain",
               not _sio_ok("https://panel.lan", scheme="http", host="127.0.0.1:5000"))
+        # Aikido 745379243. An explicit "*" answered True before any of the checks above ran, so a
+        # page on another port of the panel's own address (same-site: the Lax cookie rides along)
+        # or on a sibling tailnet node could open a terminal as whoever was logged in. A "*"
+        # anywhere in a list did the same. It is ignored now, with a warning saying what to set.
+        _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins="*"))
+        import logging as _so_logging
+
+        class _SoWarned(_so_logging.Handler):
+            def __init__(self):
+                _so_logging.Handler.__init__(self)
+                self.got = []
+
+            def emit(self, rec):
+                if rec.levelno >= _so_logging.WARNING:
+                    self.got.append(rec.getMessage())
+
+        _so_h = _SoWarned()
+        _so_logging.getLogger("panel.app").addHandler(_so_h)
+        try:
+            _so_star_other = _sio_ok("http://1.2.3.4:8123", scheme="http", host="1.2.3.4:5000")
+            _sio_ok("http://1.2.3.4:8124", scheme="http", host="1.2.3.4:5000")
+        finally:
+            _so_logging.getLogger("panel.app").removeHandler(_so_h)
+        check("socket: an explicit '*' does not admit a page on another port of the panel's address",
+              not _so_star_other)
+        _so_said = [m for m in _so_h.got if "socketio_cors_origins" in m]
+        check("socket: ...and the log says it is ignored and what to set instead, once",
+              len(_so_said) == 1 and "site_domain" in _so_said[0], repr(_so_h.got))
+        check("socket: ...nor a sibling host on the same tailnet",
+              not _sio_ok("https://other.example.ts.net", scheme="http", host="127.0.0.1:5000",
+                          HTTP_X_FORWARDED_PROTO="https",
+                          HTTP_X_FORWARDED_HOST="node.example.ts.net"))
+        check("socket: ...nor any other origin",
+              not _sio_ok("https://evil.example", scheme="http", host="1.2.3.4:5000"))
+        check("socket: ...while under '*' the panel's own page still connects (control)",
+              _sio_ok("http://1.2.3.4:5000", scheme="http", host="1.2.3.4:5000"))
+        _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=["https://only.example", "*"]))
+        check("socket: a '*' hidden in a list is not a wildcard either",
+              not _sio_ok("http://1.2.3.4:8123", scheme="http", host="1.2.3.4:5000")
+              and not _sio_ok("https://evil.example"))
+        check("socket: ...and the exact origins in that list still connect (control)",
+              _sio_ok("https://only.example"))
     finally:
         _sc_cfg(_cfg_before)
     # The app's REAL engine.io server, driven over HTTP: its handshake refuses the other-port page
@@ -14405,6 +14926,46 @@ try:
           _so_bad.status_code == 400, "status %d %r" % (_so_bad.status_code, _so_bad.data[:80]))
     check("socket origin: ...and completes for the panel's own origin (control)",
           _so_ok.status_code == 200, "status %d %r" % (_so_ok.status_code, _so_ok.data[:80]))
+    # ...and the same two over the live handshake with an operator's "*" in config.json, the case
+    # Aikido 745379243 is about. Then the ways the panel is really reached, so the fix is known
+    # not to cost anyone the console: Tailscale Serve at the root and under a mount (it forwards
+    # the host it was asked for), and a TLS reverse proxy that rewrites Host with site_domain set.
+    _so_cfg0 = _lc_cfg()
+
+    def _so_handshake(cfg_over, base_url, origin, path="/socket.io/", **headers):
+        _sc_cfg(dict(_so_cfg0, **cfg_over))
+        _r = _so_c.get(path + "?EIO=4&transport=polling", base_url=base_url,
+                       headers=dict(headers, Origin=origin))
+        return _r.status_code, _r.data[:60]
+
+    try:
+        _so_star = dict(site_domain="", socketio_cors_origins="*")
+        _so_r = _so_handshake(_so_star, "http://1.2.3.4:5000", "http://1.2.3.4:8123")
+        check("socket origin: with '*' configured the live handshake still refuses another port",
+              _so_r[0] == 400, repr(_so_r))
+        _so_r = _so_handshake(_so_star, "http://1.2.3.4:5000", "http://1.2.3.4:5000")
+        check("socket origin: ...and still completes for the panel's own origin (control)",
+              _so_r[0] == 200, repr(_so_r))
+        _so_r = _so_handshake(dict(site_domain="", socketio_cors_origins=None),
+                              "http://node.example.ts.net", "https://node.example.ts.net",
+                              **{"X-Forwarded-Proto": "https",
+                                 "X-Forwarded-Host": "node.example.ts.net"})
+        check("socket origin: Tailscale Serve at the root still connects",
+              _so_r[0] == 200, repr(_so_r))
+        _so_r = _so_handshake(dict(site_domain="", socketio_cors_origins=None,
+                                   tailscale_mount="/lgsm"),
+                              "http://node.example.ts.net", "https://node.example.ts.net",
+                              path="/lgsm/socket.io/",
+                              **{"X-Forwarded-Proto": "https",
+                                 "X-Forwarded-Host": "node.example.ts.net"})
+        check("socket origin: ...and under a /lgsm mount",
+              _so_r[0] == 200, repr(_so_r))
+        _so_r = _so_handshake(dict(site_domain="panel.example.com", socketio_cors_origins=None),
+                              "http://127.0.0.1:5000", "https://panel.example.com")
+        check("socket origin: a TLS reverse proxy that rewrites Host connects with site_domain set",
+              _so_r[0] == 200, repr(_so_r))
+    finally:
+        _sc_cfg(_so_cfg0)
 
     # ── GHSA-hh39-76g3-wxcx: a LOADED row with an injected account name drives no command ─────────
     # The advisory end to end, through the real app. A game_server row whose short_name carries a

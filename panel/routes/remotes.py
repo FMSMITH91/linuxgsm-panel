@@ -14,8 +14,8 @@ from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, can_acce
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, LINUX_USER_RE, MAX_PORT,
     MIN_PORT, SAFE_LABEL_RE, _port_or)
-from panel.core.panel_state import (_install_jobs, _install_lock)
-from panel.routes._shared import (_begin_bootstrap, _bootstrap_jobs, _bootstrap_lock)
+from panel.core.panel_state import (forget_rows)
+from panel.routes._shared import (_begin_bootstrap)
 import logging
 
 _log = logging.getLogger("panel.routes.remotes")
@@ -34,12 +34,12 @@ def _forget_deleted_remote_state(remote_id, game_server_ids):
     per-row event ever fires for them. That is the same reason _forget_deleted_rows is driven off
     the live id sets instead of the delete routes. So the route clears what it knows it just
     deleted, and the sweep stays the backstop for everything that does not come through here.
+
+    EVERY registered map, not only the two job registries it used to name: a host's cached update
+    list and its servers' console backlogs are keyed the same way, and were served to whoever could
+    see the next host or server to take the id (the INSERT forgets them too; see models.py).
     """
-    with _install_lock:
-        for gid in game_server_ids:
-            _install_jobs.pop(gid, None)
-    with _bootstrap_lock:
-        _bootstrap_jobs.pop(remote_id, None)
+    forget_rows(remote_ids=(remote_id,), server_ids=tuple(game_server_ids))
 
 
 def _forget_deleted_remote_config(remote_id, game_server_ids):
@@ -231,7 +231,11 @@ def _register_remote_list(app):
             return _add_local_remote(name, lgsm_user)
 
         # (host presence + charset already validated above for non-local remotes)
-        success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential)
+        # The host key this test sees is PINNED with the row, in the same commit. Left to the next
+        # connection, the pin would come from whichever one that is, not from this login.
+        _seen_key = []
+        success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential,
+                                           captured=_seen_key)
         if not success:
             return _form_err(f"Connection test failed: {msg}", "manage_remotes")
 
@@ -241,10 +245,12 @@ def _register_remote_list(app):
             auth_credential=encrypt_secret(credential),
             sudo_enabled=sudo_enabled, linuxgsm_user=lgsm_user,
             is_online=True, last_seen=utcnow(),
+            host_key=_seen_key[0] if _seen_key else "",
         )
         db.session.add(remote)
         db.session.commit()
-        log_action(current_user, "add_remote", target=name, detail=f"{ssh_user}@{host}")
+        log_action(current_user, "add_remote", target=name, detail=f"{ssh_user}@{host}",
+                   remote=remote)
 
         # ── the creator has to be able to reach what they just created ──────────────────────
         # Per-host access is purely group-derived — can_access_remote / accessible_remote_ids walk
@@ -318,7 +324,7 @@ def _register_remote_edit(app):
             return _form_err(_bad_auth, "manage_remotes")
         remote.sudo_enabled = request.form.get("sudo_enabled") == "on"
         db.session.commit()
-        log_action(current_user, "edit_remote", target=remote.name)
+        log_action(current_user, "edit_remote", target=remote.name, remote=remote)
         return _form_ok(f"Remote '{remote.name}' updated.", "manage_remotes")
 
 
@@ -398,11 +404,19 @@ def _register_remote_delete_and_test(app):
     @permission_required(MANAGE_REMOTES)
     def test_remote(remote_id):
         remote = get_remote(remote_id)
+        # The row's own host_key, not `or ""`: that turns an UNREADABLE pin into "no pin", i.e.
+        # first contact, and the stored credential was offered to whoever answered.
+        _seen_key = []
         success, msg = ssh_test_connection(
             remote.host, remote.port, remote.username,
             remote.auth_method, decrypt_secret(remote.auth_credential),
-            host_key=remote.host_key or "",
+            host_key=remote.host_key, captured=_seen_key,
         )
+        # A host with no pin yet (added before enrolment stored one, or just re-trusted) is pinned
+        # by this login, exactly as its next connection would pin it.
+        if (success and _seen_key and not remote.host_key
+                and remote.auth_method in ("key", "password")):
+            remote.host_key = _seen_key[0]
         remote.is_online = bool(success)
         remote.last_seen = utcnow()
         db.session.commit()
@@ -454,7 +468,7 @@ def _add_local_remote(name, lgsm_user):
     )
     db.session.add(remote)
     db.session.commit()
-    log_action(current_user, "add_local_remote", target=name)
+    log_action(current_user, "add_local_remote", target=name, remote=remote)
     return _form_ok(f"Local server '{name}' added! You can now install game servers on this machine.",
                     "manage_remotes")
 

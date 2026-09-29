@@ -566,7 +566,8 @@ _h_saved = {n: getattr(_H, n) for n in (
     "time", "paramiko", "decrypt_secret", "ssh_test_connection", "_wait_for_reboot",
     "_tcp_reachable", "remote_ufw_delete_rule", "remote_check_tailscale", "host_os_slug",
     "deps_for_game", "_load_deps_csv", "_tailscale_conn_state", "remote_public_ssh_status",
-    "remote_fail2ban_overview", "remote_ufw_blocked_ips", "socket", "_bootstrap_node")}
+    "remote_fail2ban_overview", "remote_ufw_blocked_ips", "socket", "_bootstrap_node",
+    "_F2B_JAIL_SETTLE_S")}
 _h_fw_saved = {"remote_ufw_status": _sm_firewall.remote_ufw_status}
 
 
@@ -846,13 +847,177 @@ try:
     _wire(verbs={"ufw-delete-allow-port": ("", "", 1)})
     eq("ufw close port 22: a silent failure still says it failed",
        _H.remote_ufw_close_port_22(_p8_srv()), (False, "Failed to remove port 22"))
-    _w = _wire(verbs={"ufw-delete-allow-port": ("", "", 0), "ufw-delete-allow-proto-port": [
-        ("", "", 1), ("", "", 0)]})
-    eq("ufw close game port: the bare rule plus both legacy proto rules, counting what went",
-       (_H.remote_ufw_close_game_port(_p8_srv(), 27015), _w.verbs_called()),
-       ((2, "Port 27015: 2 rule(s) removed"),
-        [("ufw-delete-allow-port", ["27015"]), ("ufw-delete-allow-proto-port", ["tcp", "27015"]),
-         ("ufw-delete-allow-proto-port", ["udp", "27015"])]))
+    # ── a game server's firewall cleanup takes only ITS rules (Aikido 745379215) ──────────────
+    # remote_ufw_close_game_port deleted by SPEC — `ufw delete allow <port>` and the same for
+    # proto tcp and udp — with no comment, and ufw removes a rule matching all but its comment when
+    # the delete carries none. So uninstall (and install's port adoption) took every ALLOW on the
+    # port: another server's, an operator's, an operator's own SSH allow — none of it through
+    # remote_ufw_delete_rule's lockout guard. _FakeUfw keeps a rule table and answers the verbs with
+    # ufw 0.36's own matching (backend_iptables.set_rule), so these read what really happens.
+    class _FakeUfw:
+        """A ufw rule table behind the verbs: an allow differing from a rule only in comment or
+        action REPLACES it; a delete by spec (no comment) removes every ALLOW matching all but its
+        comment, never a LIMIT or DENY; a delete by number removes that position."""
+
+        def __init__(self, *rules):
+            self.rules = [dict(zip(("to", "action", "comment"), r)) for r in rules]
+
+        def status(self, _a):
+            rows = ["[%2d] %-26s %-5s IN    Anywhere%s" % (
+                i, r["to"], r["action"], ("                   # " + r["comment"]) if r["comment"]
+                else "") for i, r in enumerate(self.rules, 1)]
+            return (_UFW_HDR + "\n".join(rows) + "\n", "", 0)
+
+        def delete_num(self, a):
+            n = int(a[0])
+            if not 1 <= n <= len(self.rules):
+                return ("ERROR: Could not find rule '%d'" % n, "", 1)
+            del self.rules[n - 1]
+            return ("Rule deleted", "", 0)
+
+        def spec_delete(self, to):
+            left = [r for r in self.rules if not (r["to"] == to and r["action"] == "ALLOW")]
+            gone, self.rules = len(self.rules) - len(left), left
+            return ("Rule deleted", "", 0) if gone else ("Could not delete non-existent rule", "", 1)
+
+        def allow(self, a):
+            to, comment = a[0], (a[1] if len(a) > 1 else "")
+            for r in self.rules:
+                if r["to"] == to:
+                    if (r["action"], r["comment"]) == ("ALLOW", comment):
+                        return ("Skipping adding existing rule", "", 0)
+                    r.update(action="ALLOW", comment=comment)
+                    return ("Rule updated", "", 0)
+            self.rules.append({"to": to, "action": "ALLOW", "comment": comment})
+            return ("Rule added", "", 0)
+
+        def left(self):
+            return [(r["to"], r["action"], r["comment"]) for r in self.rules]
+
+        def verbs(self):
+            return {"ufw-status": self.status, "ufw-delete-num": self.delete_num,
+                    "ufw-allow-port": self.allow,
+                    "ufw-delete-allow-port": lambda a: self.spec_delete(a[0]),
+                    "ufw-delete-allow-proto-port": lambda a: self.spec_delete("%s/%s" % (a[1], a[0]))}
+
+    def _cgp(*a, **k):
+        """remote_ufw_close_game_port, with a signature the pre-fix code lacked read as a result."""
+        try:
+            return _H.remote_ufw_close_game_port(*a, **k)
+        except TypeError as e:
+            return ("no such signature", str(e))
+
+    _CGP_RULES = (("22/tcp", "LIMIT", ""), ("2222/tcp", "ALLOW", "operator"),
+                  ("27015", "ALLOW", "gamea"), ("27015/udp", "ALLOW", "voicebridge"),
+                  ("27015/tcp", "ALLOW", ""), ("27016", "ALLOW", "gameb"),
+                  ("27020/tcp", "LIMIT", ""), ("22", "ALLOW", ""))
+    _SPEC_DELETES = ("ufw-delete-allow-port", "ufw-delete-allow-proto-port")
+    _fu = _FakeUfw(*_CGP_RULES)
+    _w = _wire(verbs=_fu.verbs())
+    _r = _cgp(_p8_srv(port=2222), 27015)
+    check("ufw close game port: with no name to own a rule by, nothing on the port is deleted — "
+          "no delete by spec at all",
+          _fu.left() == [tuple(r) for r in _CGP_RULES]
+          and not [v for v in _w.verbs_called() if v[0] in _SPEC_DELETES],
+          "result=%r left=%r verbs=%r" % (_r, _fu.left(), _w.verbs_called()))
+    _fu = _FakeUfw(*_CGP_RULES)
+    _w = _wire(verbs=_fu.verbs())
+    _r = _cgp(_p8_srv(port=2222), 27015, "gamea", legacy=True)
+    check("ufw close game port: this server's tagged rule and an UNTAGGED legacy allow go — "
+          "another tag on the same port stays",
+          _r == (2, "Port 27015: 2 rule(s) removed", [])
+          and ("27015/udp", "ALLOW", "voicebridge") in _fu.left()
+          and not any(t in ("27015", "27015/tcp") for t, _a, _c in _fu.left()),
+          "result=%r left=%r" % (_r, _fu.left()))
+    check("ufw close game port: ...each by NUMBER, against a fresh read, never by spec",
+          [v for v, _a in _w.verbs_called() if v.startswith("ufw-delete")] == ["ufw-delete-num"] * 2,
+          repr(_w.verbs_called()))
+    _fu = _FakeUfw(*_CGP_RULES)
+    _w = _wire(verbs=_fu.verbs())
+    _r = _cgp(_p8_srv(port=2222), 22, "gamea", legacy=True)
+    check("ufw close game port: an untagged ALLOW on an SSH port is never taken as the server's — "
+          "the operator's `allow 22` stays",
+          ("22", "ALLOW", "") in _fu.left() and not _w.verbs_called("ufw-delete-num")
+          and not [v for v in _w.verbs_called() if v[0] in _SPEC_DELETES],
+          "result=%r left=%r" % (_r, _fu.left()))
+    _fu = _FakeUfw(*_CGP_RULES)
+    _w = _wire(verbs=_fu.verbs())
+    _r = _cgp(_p8_srv(port=2222), 27020, "gamea", legacy=True)
+    check("ufw close game port: ...and an untagged LIMIT is not an allow the panel left",
+          ("27020/tcp", "LIMIT", "") in _fu.left() and not _w.verbs_called("ufw-delete-num"),
+          "result=%r left=%r" % (_r, _fu.left()))
+    _w = _wire(verbs={"ufw-status": ("", "SSH command timed out", -1)})
+    _r = _cgp(_p8_srv(), 27015, "gamea", legacy=True)
+    check("ufw close game port: an unreadable firewall deletes nothing, and says its rules may "
+          "still be open rather than reporting a clean 0",
+          _r == (0, "Port 27015: 0 rule(s) removed. " + _H.UFW_UNREAD_NOTE, [_H.UFW_UNREAD_NOTE])
+          and [v for v, _a in _w.verbs_called()] == ["sshd-effective-config", "ufw-status"],
+          "result=%r verbs=%r" % (_r, _w.verbs_called()))
+
+    # ── the ports a server's own tagged rules already open ────────────────────────────────────
+    _fu = _FakeUfw(("27015", "ALLOW", "gamea"), ("27016", "DENY", "gamea"),
+                   ("27017", "ALLOW", "gameb"), ("27018/udp", "ALLOW", "gamea"),
+                   ("27019", "ALLOW", "gamea2"))
+    _w = _wire(verbs=_fu.verbs())
+    eq("tagged ports: only ALLOWs carrying exactly this server's name",
+       getattr(_H, "remote_ufw_tagged_ports", lambda s, n: None)(_p8_srv(), "gamea"), {27015, 27018})
+    _wire(verbs={"ufw-status": ("", "SSH command timed out", -1)})
+    eq("tagged ports: an unreadable firewall excuses nothing",
+       getattr(_H, "remote_ufw_tagged_ports", lambda s, n: None)(_p8_srv(), "gamea"), set())
+
+    # ── which ports no game server may take ───────────────────────────────────────────────────
+    _w = _wire(verbs={"sshd-effective-config": ("port 2200\nport 443\npermitrootlogin no\n", "", 0)})
+    _php = getattr(_H, "protected_host_ports", lambda s: set())
+    eq("protected ports: 22, the port the panel connects on, and every port sshd names",
+       _php(_p8_srv(port=2222)), {22, 2222, 2200, 443})
+    _wire(verbs={"sshd-effective-config": ("", "SSH command timed out", -1)})
+    eq("protected ports: an unread sshd config narrows the set, never empties it",
+       _php(_p8_srv(port=2222)), {22, 2222})
+    _wire(verbs={"sshd-effective-config": ConnectionError("dropped")})
+    eq("protected ports: ...and a raising transport is the same answer",
+       _php(_p8_srv(port=2222, auth_method="key")), {22, 2222})
+    _wire()
+    check("protected ports: on the panel's own host, its web port too",
+          5000 in _php(_p8_srv(is_local=True)), repr(_php(_p8_srv(is_local=True))))
+
+    # ── opening a game server's ports never takes over another rule (Aikido 745379031) ─────────
+    # `ufw allow <port> comment <name>` REPLACES a rule that differs only in comment or action.
+    _fu = _FakeUfw(("27016", "ALLOW", "gameb"), ("3306", "DENY", "operator-db"),
+                   ("27015", "ALLOW", "gamea"), ("27018", "ALLOW", ""))
+    _w = _wire(verbs=_fu.verbs())
+    _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [27015, 27016, 3306, 27017, 27018], "gamea")
+    check("game ports: another server's rule on a reported port keeps its owner — it is not "
+          "re-tagged as this server's (whose uninstall would then delete it)",
+          ("27016", "ALLOW", "gameb") in _fu.left() and ("27018", "ALLOW", "") in _fu.left(),
+          "left=%r" % (_fu.left(),))
+    check("game ports: ...an operator's DENY is not turned into an allow",
+          ("3306", "DENY", "operator-db") in _fu.left(), "left=%r" % (_fu.left(),))
+    check("game ports: ...a free port is still opened, and this server's own rule is left as it "
+          "is (positive control)",
+          ("27017", "ALLOW", "gamea") in _fu.left() and ("27015", "ALLOW", "gamea") in _fu.left()
+          and [a[0] for _v, a in _w.verbs_called("ufw-allow-port")] == ["27017"],
+          repr(_w.verbs_called("ufw-allow-port")))
+    # The single-port route (/api/remote/<id>/game-port/<port>/open) ran its own bare
+    # `ufw allow <port> comment <name>`, which REPLACES a rule differing only in comment or action.
+    _fu1 = _FakeUfw(("27016", "ALLOW", "gameb"), ("3306", "DENY", "operator-db"))
+    _wire(verbs=_fu1.verbs())
+    _gp_b = _H.remote_ufw_allow_game_port(_p8_srv(), 27016, "gamea")
+    _gp_d = _H.remote_ufw_allow_game_port(_p8_srv(), 3306, "gamea")
+    check("game port (one): another server's rule on the port keeps its owner",
+          ("27016", "ALLOW", "gameb") in _fu1.left()
+          and not any(r[0] == "27016" and r[2] == "gamea" for r in _fu1.left()),
+          "left=%r %r" % (_fu1.left(), _gp_b))
+    check("game port (one): ...an operator's DENY stays, and the port is not reported opened",
+          ("3306", "DENY", "operator-db") in _fu1.left() and _gp_d[0] == 0,
+          "left=%r %r" % (_fu1.left(), _gp_d))
+    check("game ports: ...and what is open is reported: a port another ALLOW holds is open, one a "
+          "DENY holds is not",
+          _op[0] == [27015, 27016, 27017, 27018] and "3306" in _op[1], repr(_op))
+    _w = _wire(verbs={"ufw-status": ("", "SSH command timed out", -1)})
+    _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [27015, 27016], "gamea")
+    check("game ports: a firewall that cannot be read is opened as before — a busy host must not "
+          "leave a new server closed",
+          _op[0] == [27015, 27016] and len(_w.verbs_called("ufw-allow-port")) == 2, repr(_op))
 
     # ── delete by number: an unverifiable firewall refuses ────────────────────────────────────
     _w = _wire()
@@ -899,12 +1064,16 @@ try:
     _w = _wire()
     eq("game port: an out-of-range port is (0, Invalid port), unsent",
        (_H.remote_ufw_allow_game_port(_p8_srv(), 70000), _w.calls), ((0, "Invalid port"), []))
+    _gp1 = _H.remote_ufw_allow_game_port(_p8_srv(), "27015", "cs2`id`server")
     eq("game port: one bare rule tagged with the server's safe name",
-       (_H.remote_ufw_allow_game_port(_p8_srv(), "27015", "cs2`id`server"), _w.verbs_called()),
-       ((1, "Port 27015: opened (TCP+UDP)"), [("ufw-allow-port", ["27015", "cs2idserver"])]))
+       (_gp1[0], [c for c in _w.verbs_called() if c[0].startswith("ufw-allow")]),
+       (1, [("ufw-allow-port", ["27015", "cs2idserver"])]))
+    check("game port: ...and the answer says it is open", "27015" in _gp1[1] and "opened" in _gp1[1],
+          repr(_gp1))
     _w = _wire()
     _H.remote_ufw_allow_game_port(_p8_srv(), 27015, "$()")
-    eq("game port: a name with nothing safe in it is tagged 'Game'", _w.verbs_called()[-1][1][1], "Game")
+    eq("game port: a name with nothing safe in it is tagged 'Game'",
+       [c for c in _w.verbs_called() if c[0].startswith("ufw-allow")][-1][1][1], "Game")
     _wire(verbs={"ufw-allow-port": lambda a: ("", "", 1) if a[0] == "27016" else ("", "", 0)})
     eq("game ports: the list is de-duplicated and sorted, and only what OPENED is reported",
        _H.remote_ufw_allow_game_ports(_p8_srv(), [27016, "27015", 27015, None, 0], "cs2"),
@@ -913,15 +1082,28 @@ try:
     eq("game ports: nothing opened says 'none'", _H.remote_ufw_allow_game_ports(_p8_srv(), [1]),
        ([], "opened 0 port(s): none"))
 
-    # ── close_by_name: re-read before every delete, never retry a refused rule ─────────────────
+    # ── close_by_name: re-read before every delete, retry a rule that MOVED ────────────────────
+    def _cbn3(*a, **k):
+        """remote_ufw_close_by_name, its result padded to three values (the pre-fix one had two)."""
+        return tuple(_H.remote_ufw_close_by_name(*a, **k)) + (None,) * 3
+
+    def _cgp3(*a, **k):
+        """remote_ufw_close_game_port, likewise."""
+        return tuple(_H.remote_ufw_close_game_port(*a, **k)) + (None,) * 3
+
     eq("close by name: a name with nothing safe in it deletes nothing",
-       _H.remote_ufw_close_by_name(_p8_srv(), "$();|&"), (0, "no name"))
-    _cbn_rules = [{"comment": "cs2server", "key": "k1", "nums": [2, 6]},
-                  {"comment": "cs2server", "key": "k2", "nums": [4]},
-                  {"comment": "other", "key": "k3", "nums": [5]}]
-    _sm_firewall.remote_ufw_status = lambda s: {"installed": True,
+       _H.remote_ufw_close_by_name(_p8_srv(), "$();|&"), (0, "no name", []))
+
+    def _cbn_group(key, port, nums, comment="cs2server"):
+        """A group as remote_ufw_status builds it for a bare public allow."""
+        return {"comment": comment, "key": key, "nums": nums, "action": "ALLOW", "direction": "IN",
+                "scope": "Any address", "proto_label": "BOTH", "port_num": port,
+                "port_label": port, "is_iface": False}
+    _cbn_rules = [_cbn_group("k1", "27015", [2, 6]), _cbn_group("k2", "27016", [4]),
+                  _cbn_group("k3", "27017", [5], "other")]
+    _sm_firewall.remote_ufw_status = lambda s: {"installed": True, "enabled": True,
                                                 "groups": [dict(g, nums=list(g["nums"]))
-                                                           for g in _cbn_rules]}
+                                                           for g in _cbn_rules if g["nums"]]}
     _cbn_del = []
 
     def _cbn_delete(server, n, force=False, expect_key=None):
@@ -933,16 +1115,281 @@ try:
                 g["nums"].remove(n)
         return True, "deleted"
     _H.remote_ufw_delete_rule = _cbn_delete
+    _wire()
     _cbn = _H.remote_ufw_close_by_name(_p8_srv(), "cs2server")
     check("close by name: only the tagged rules go, highest number first, each named by its key; "
-          "a refused one is skipped and never retried",
-          _cbn == (2, "2 rule(s) removed for cs2server")
-          and _cbn_del == [(6, "k1"), (4, "k2"), (2, "k1")], "result=%r deletes=%r" % (_cbn, _cbn_del))
+          "a refused one is tried three times, each against a fresh read, then NAMED as still open",
+          _cbn == (2, "2 rule(s) removed for cs2server. Still open, as it could not be removed: "
+                      "27016 — remove it from the host's Firewall page.",
+                   ["Still open, as it could not be removed: 27016 — remove it from the host's "
+                    "Firewall page."])
+          and _cbn_del == [(6, "k1"), (4, "k2"), (4, "k2"), (4, "k2"), (2, "k1")],
+          "result=%r deletes=%r" % (_cbn, _cbn_del))
     _sm_firewall.remote_ufw_status = lambda s: {"installed": False, "groups": [], "unreachable": True}
-    eq("close by name: an unreachable firewall deletes nothing",
-       _H.remote_ufw_close_by_name(_p8_srv(), "cs2server"), (0, "0 rule(s) removed for cs2server"))
+    eq("close by name: an unreachable firewall deletes nothing, and says the rules may still be open",
+       _H.remote_ufw_close_by_name(_p8_srv(), "cs2server"),
+       (0, "0 rule(s) removed for cs2server. " + _H.UFW_UNREAD_NOTE, [_H.UFW_UNREAD_NOTE]))
+    _sm_firewall.remote_ufw_status = lambda s: {"installed": True, "enabled": False, "groups": []}
+    _cbn = _cbn3(_p8_srv(), "cs2server")
+    check("close by name: an INACTIVE ufw lists no rules, stored ones included — that is said, not "
+          "read as 'nothing to remove'",
+          _cbn[0] == 0 and len(_cbn[2] or ()) == 1 and "UFW is not active" in _cbn[2][0], repr(_cbn))
     _H.remote_ufw_delete_rule = _h_saved["remote_ufw_delete_rule"]
     _sm_firewall.remote_ufw_status = _h_fw_saved["remote_ufw_status"]
+
+    # ── the cleanup and "Open all ports" against ufw 0.36.2's own listing ─────────────────────
+    # _Ufw36 prints `ufw status numbered` the way the test VPS (vps-374e9220, ufw 0.36.2) printed it
+    # on 2026-09-29: a rule from anywhere is listed TWICE, its IPv4 row in the first block and its
+    # (v6) twin in the second, numbered as one list — so one inserted row moves every number after
+    # it. A rule from one IPv4 source has no twin. `allow` appends to the end of each block
+    # (updating a rule that differs only in comment or action), `add(top=True)` is `prepend`, and
+    # a delete by number removes that one row. The first check below proves the fixture prints
+    # exactly what the VPS printed.
+    class _Ufw36:
+        HDR = ("Status: active\n\n     To                         Action      From\n"
+               "     --                         ------      ----\n")
+
+        def __init__(self, *rules):
+            self.v4, self.v6, self.reads, self.hook = [], [], 0, None
+            for r in rules:
+                self.add(*r)
+
+        def add(self, to, action="ALLOW", frm="Anywhere", comment="", top=False):
+            for fam, fam_ok in ((self.v4, True), (self.v6, frm == "Anywhere")):
+                if fam_ok:
+                    fam.insert(0 if top else len(fam), [to, action, frm, comment])
+
+        @staticmethod
+        def _row(r, v6):
+            to, action, frm, comment = r
+            if v6:
+                to = to.replace(" on ", " (v6) on ") if " on " in to else to + " (v6)"
+                frm += " (v6)"
+            return ("%-26s %-11s %-26s" % (to, action + " IN", frm)
+                    + (" # " + comment if comment else ""))
+
+        def rows(self):
+            return [self._row(r, False) for r in self.v4] + [self._row(r, True) for r in self.v6]
+
+        def status(self, _a):
+            self.reads += 1
+            if self.hook:
+                self.hook(self, self.reads)
+            return (self.HDR + "".join("[%2d] %s\n" % (i, r) for i, r in enumerate(self.rows(), 1)),
+                    "", 0)
+
+        def delete_num(self, a):
+            n = int(a[0])
+            if not 1 <= n <= len(self.v4) + len(self.v6):
+                return ("ERROR: Could not find rule '%d'" % n, "", 1)
+            if n <= len(self.v4):
+                del self.v4[n - 1]
+                return ("Rule deleted", "", 0)
+            del self.v6[n - 1 - len(self.v4)]
+            return ("Rule deleted (v6)", "", 0)
+
+        def allow(self, a):
+            to, comment = a[0], (a[1] if len(a) > 1 else "")
+            same = [r for r in self.v4 + self.v6 if r[0] == to and r[2] == "Anywhere"]
+            if not same:
+                self.add(to, "ALLOW", "Anywhere", comment)
+                return ("Rule added\nRule added (v6)", "", 0)
+            if all(r[1:] == ["ALLOW", "Anywhere", comment] for r in same):
+                return ("Skipping adding existing rule\nSkipping adding existing rule (v6)", "", 0)
+            for r in same:
+                r[1], r[3] = "ALLOW", comment
+            return ("Rule updated\nRule updated (v6)", "", 0)
+
+        def left(self):
+            return [re.sub(r"\s+", " ", r).strip() for r in self.rows()]
+
+        def verbs(self):
+            return {"ufw-status": self.status, "ufw-delete-num": self.delete_num,
+                    "ufw-allow-port": self.allow}
+
+    # The VPS's baseline rules, then the two probeH allows it tagged for scenario h.
+    _VPS_BASE = (("Anywhere on tailscale0", "ALLOW", "Anywhere", ""),
+                 ("28960", "ALLOW", "Anywhere", "codserver"),
+                 ("27015", "ALLOW", "Anywhere", "gmodserver"),
+                 ("22/tcp", "ALLOW", "Anywhere", "SSH panel"))
+    _VPS_H = _VPS_BASE + (("47826", "ALLOW", "Anywhere", "probeH"),
+                          ("47827", "ALLOW", "Anywhere", "probeH"))
+    _u = _Ufw36(*_VPS_H)
+    eq("ufw 0.36.2 fixture: prints scenario h's table exactly as the VPS printed it",
+       _u.status(None)[0].splitlines(), [
+           "Status: active", "",
+           "     To                         Action      From",
+           "     --                         ------      ----",
+           "[ 1] Anywhere on tailscale0     ALLOW IN    Anywhere                  ",
+           "[ 2] 28960                      ALLOW IN    Anywhere                   # codserver",
+           "[ 3] 27015                      ALLOW IN    Anywhere                   # gmodserver",
+           "[ 4] 22/tcp                     ALLOW IN    Anywhere                   # SSH panel",
+           "[ 5] 47826                      ALLOW IN    Anywhere                   # probeH",
+           "[ 6] 47827                      ALLOW IN    Anywhere                   # probeH",
+           "[ 7] Anywhere (v6) on tailscale0 ALLOW IN    Anywhere (v6)             ",
+           "[ 8] 28960 (v6)                 ALLOW IN    Anywhere (v6)              # codserver",
+           "[ 9] 27015 (v6)                 ALLOW IN    Anywhere (v6)              # gmodserver",
+           "[10] 22/tcp (v6)                ALLOW IN    Anywhere (v6)              # SSH panel",
+           "[11] 47826 (v6)                 ALLOW IN    Anywhere (v6)              # probeH",
+           "[12] 47827 (v6)                 ALLOW IN    Anywhere (v6)              # probeH"])
+    _VPS_AFTER_BASE = ["Anywhere on tailscale0 ALLOW IN Anywhere",
+                       "28960 ALLOW IN Anywhere # codserver", "27015 ALLOW IN Anywhere # gmodserver",
+                       "22/tcp ALLOW IN Anywhere # SSH panel"]
+    _VPS_AFTER_V6 = ["Anywhere (v6) on tailscale0 ALLOW IN Anywhere (v6)",
+                     "28960 (v6) ALLOW IN Anywhere (v6) # codserver",
+                     "27015 (v6) ALLOW IN Anywhere (v6) # gmodserver",
+                     "22/tcp (v6) ALLOW IN Anywhere (v6) # SSH panel"]
+
+    # Defect: the VPS's scenario h. A rule prepended between the cleanup's read and the delete's
+    # fresh read (what the auto-block does) moved rule 12 — 47827's v6 twin — onto `22/tcp (v6)`.
+    # expect_key refused that delete, as it should, and the cleanup then gave 47827 up for good:
+    # it stayed open, v4 and v6, under "2 rule(s) removed for probeH".
+    _u = _Ufw36(*_VPS_H)
+    _u.hook = lambda u, n: n == 2 and u.add("47829", comment="intruder", top=True)
+    _w = _wire(verbs=_u.verbs())
+    _r = _cbn3(_p8_srv(), "probeH")
+    check("close by name: a rule whose number MOVED between the read and the delete is read again "
+          "and removed — the server's port does not stay open, v4 or v6",
+          not any("probeH" in r for r in _u.left()) and _r[:3] == (4, "4 rule(s) removed for probeH",
+                                                                    []),
+          "result=%r left=%r" % (_r, _u.left()))
+    check("close by name: ...and nothing else went — the rule the stale number named, the inserted "
+          "rule and the other servers' rules all stay",
+          _u.left() == (["47829 ALLOW IN Anywhere # intruder"] + _VPS_AFTER_BASE
+                        + ["47829 (v6) ALLOW IN Anywhere (v6) # intruder"] + _VPS_AFTER_V6),
+          "left=%r" % (_u.left(),))
+
+    # The firewall changing under EVERY delete (an auto-block deny prepended each time): each rule
+    # gets three tries, then the cleanup stops and names what is still open instead of reporting a
+    # clean result.
+    _u = _Ufw36(*_VPS_H)
+    _denied = []
+    _u.hook = lambda u, n: n % 2 == 0 and (_denied.append(n), u.add(
+        "Anywhere", "DENY", "203.0.113.%d" % n, "panel-autoblock", top=True))
+    _w = _wire(verbs=_u.verbs())
+    _r = _cbn3(_p8_srv(), "probeH")
+    check("close by name: a rule that keeps moving is tried three times against a fresh read, not "
+          "forever — then the cleanup stops",
+          _u.reads == 13 and not _w.verbs_called("ufw-delete-num"),
+          "reads=%d deletes=%r" % (_u.reads, _w.verbs_called("ufw-delete-num")))
+    check("close by name: ...and what stayed open is NAMED in the result, not counted as removed",
+          _r[0] == 0 and _r[2] == ["Still open, as it could not be removed: 47826, 47827 — remove "
+                                   "them from the host's Firewall page."]
+          and _r[1].endswith(_r[2][0]), "result=%r" % (_r,))
+    check("close by name: ...while every auto-block deny it raced stays (nothing about the "
+          "auto-block changes)",
+          _denied and sorted(r for r in _u.left() if "panel-autoblock" in r)
+          == sorted("Anywhere DENY IN 203.0.113.%d # panel-autoblock" % n for n in _denied),
+          "inserted=%r left=%r" % (_denied, _u.left()))
+
+    # The same race on remote_ufw_close_game_port, which had the same give-up-at-once loop: 47827's
+    # rules are ONE group (v4 + v6), so one moved number used to give up both rows.
+    _u = _Ufw36(*_VPS_H)
+    _u.hook = lambda u, n: n == 2 and u.add("47829", comment="intruder", top=True)
+    _w = _wire(verbs=_u.verbs())
+    _r = _cgp3(_p8_srv(), 47827, "probeH")
+    check("close game port: a rule whose number moved is read again and removed, v4 and v6",
+          _r[:3] == (2, "Port 47827: 2 rule(s) removed", [])
+          and not any("47827" in r for r in _u.left()) and len(_u.left()) == 12,
+          "result=%r left=%r" % (_r, _u.left()))
+    _u = _Ufw36(*_VPS_H)
+    _u.hook = lambda u, n: n % 2 == 0 and u.add("Anywhere", "DENY", "203.0.113.%d" % n,
+                                                "panel-autoblock", top=True)
+    _w = _wire(verbs=_u.verbs())
+    _r = _cgp3(_p8_srv(), 47827, "probeH")
+    check("close game port: ...and one that keeps moving is tried three times, then named as still "
+          "open",
+          _u.reads == 7 and _r[0] == 0
+          and _r[2] == ["Still open, as it could not be removed: 47827 — remove it from the host's "
+                        "Firewall page."], "reads=%d result=%r" % (_u.reads, _r))
+
+    # Defect: the VPS's scenario i. The uninstall's name cleanup took every rule carrying the name —
+    # an operator's DENY, a LIMIT, an allow from one network: 7 rules — although the panel makes
+    # none of those. And it had no protected-port check, so a `22` allow tagged with the server
+    # (what the old "Open all ports" takeover could leave) was guarded only by the last-way-in check.
+    _VPS_I = _VPS_BASE + (("47826", "ALLOW", "Anywhere", "probeA"),
+                          ("47828", "DENY", "Anywhere", "probeA"),
+                          ("47829/tcp", "LIMIT", "Anywhere", "probeA"),
+                          ("47810/tcp", "ALLOW", "10.0.0.0/8", "probeA"),
+                          ("47830/udp", "ALLOW", "Anywhere", "probeA"),
+                          ("22", "ALLOW", "Anywhere", "probeA"),
+                          ("2222/tcp", "ALLOW", "Anywhere", "probeA"))
+    _u = _Ufw36(*_VPS_I)
+    _w = _wire(verbs=dict(_u.verbs(), **{"sshd-effective-config": ("port 22\n", "", 0)}))
+    _r = _cbn3(_p8_srv(port=2222), "probeA")
+    check("close by name: the server's own public allows go, v4 and v6 — bare and /udp (positive "
+          "control)",
+          _r[0] == 4 and not any(("47826" in r or "47830" in r) for r in _u.left()),
+          "result=%r left=%r" % (_r, _u.left()))
+    check("close by name: a DENY, a LIMIT and an allow from one network carrying the name are left "
+          "— the panel makes none of those",
+          all(any(r.startswith(p) for r in _u.left()) for p in (
+              "47828 DENY", "47828 (v6) DENY", "47829/tcp LIMIT", "47829/tcp (v6) LIMIT",
+              "47810/tcp ALLOW IN 10.0.0.0/8")), "left=%r" % (_u.left(),))
+    check("close by name: an allow tagged with the server on SSH's port, or on the port the panel "
+          "connects on, is never deleted",
+          all(any(r.startswith(p) for r in _u.left()) for p in (
+              "22 ALLOW IN Anywhere # probeA", "22 (v6) ALLOW", "2222/tcp ALLOW", "2222/tcp (v6)"))
+          and _w.verbs_called("sshd-effective-config"), "left=%r" % (_u.left(),))
+    check("close by name: ...and every rule it left is NAMED in the result",
+          _r[2] == ["Left in place, as the panel does not make rules like these: 47828 DENY, "
+                    "47829/tcp LIMIT, 47810/tcp from 10.0.0.0/8.",
+                    "Left in place on SSH's or the panel's own port: 22, 2222/tcp."]
+          and _r[1] == "4 rule(s) removed for probeA. " + " ".join(_r[2]), "result=%r" % (_r,))
+
+    # ── "Open all ports" never reports a port open that an existing rule still blocks ─────────
+    # Defect: the VPS's scenario c4. With `deny 47824/tcp` in place the bare allow went in after it
+    # and 47824 was reported opened: only BARE rules were looked at, and TCP still met the DENY.
+    def _first(u, port, proto):
+        f = _H._ufw_first_public_rule(u.status(None)[0], port, proto)
+        return re.sub(r"\s+", " ", f["detail"]).strip() if f else None
+    _u = _Ufw36(*_VPS_BASE + (("47824/tcp", "DENY", "Anywhere", ""),))
+    _w = _wire(verbs=_u.verbs())
+    _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [47824], "probeB")
+    check("game ports: a port a per-protocol DENY still blocks is NOT reported opened",
+          _op[0] == [] and "47824/tcp DENY" in _op[1], repr(_op))
+    check("game ports: ...the DENY is still what TCP meets, and only UDP — which no rule named — "
+          "gets this server's allow",
+          _first(_u, 47824, "tcp") == "47824/tcp DENY IN Anywhere"
+          and _first(_u, 47824, "udp") == "47824/udp ALLOW IN Anywhere # probeB"
+          and [a for _v, a in _w.verbs_called("ufw-allow-port")] == [["47824/udp", "probeB"]],
+          "tcp=%r udp=%r allows=%r" % (_first(_u, 47824, "tcp"), _first(_u, 47824, "udp"),
+                                       _w.verbs_called("ufw-allow-port")))
+    # Scenario c2: `limit 47817/tcp` plus the bare allow was "opened 1". TCP meets the LIMIT (let
+    # in, rate limited) and UDP the allow, so the port IS open on both — the claim is honest; what
+    # it did not say is that TCP is somebody's LIMIT. It says so now.
+    _u = _Ufw36(*_VPS_BASE + (("47817/tcp", "LIMIT", "Anywhere", ""),))
+    _w = _wire(verbs=_u.verbs())
+    _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [47817], "probeB")
+    check("game ports: a port a LIMIT holds for TCP is open, and the LIMIT is named as what TCP is "
+          "left to",
+          _op == ([47817], "opened 1 port(s): 47817; left to an existing rule: 47817/tcp LIMIT")
+          and _first(_u, 47817, "tcp") == "47817/tcp LIMIT IN Anywhere"
+          and _first(_u, 47817, "udp") == "47817/udp ALLOW IN Anywhere # probeB", repr(_op))
+    # Scenario c1 and c3: a bare DENY / LIMIT decides both protocols, and nothing is added.
+    for _act, _open in (("DENY", []), ("LIMIT", [47819])):
+        _u = _Ufw36(*_VPS_BASE + (("47819", _act, "Anywhere", ""),))
+        _w = _wire(verbs=_u.verbs())
+        _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [47819], "probeB")
+        check("game ports: a bare %s decides both protocols — nothing added, reported %s, and "
+              "named" % (_act, "open" if _open else "not open"),
+              _op[0] == _open and ("47819 %s" % _act) in _op[1]
+              and not _w.verbs_called("ufw-allow-port"), repr((_op, _w.verbs_called())))
+    _u = _Ufw36(*_VPS_BASE + (("47811:47813/udp", "DENY", "Anywhere", "operator"),))
+    _w = _wire(verbs=_u.verbs())
+    _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [47812], "probeB")
+    check("game ports: a DENY RANGE covering the port blocks its protocol too",
+          _op[0] == [] and "47811:47813/udp DENY" in _op[1]
+          and _first(_u, 47812, "udp") == "47811:47813/udp DENY IN Anywhere # operator",
+          repr(_op))
+    _u = _Ufw36(*_VPS_BASE)
+    _w = _wire(verbs=_u.verbs())
+    _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [47826], "probeB")
+    check("game ports: a port no rule names still gets one bare allow, v4 and v6, and is reported "
+          "opened (positive control)",
+          _op == ([47826], "opened 1 port(s): 47826")
+          and _u.left()[4] == "47826 ALLOW IN Anywhere # probeB"
+          and _u.left()[-1] == "47826 (v6) ALLOW IN Anywhere (v6) # probeB", repr((_op, _u.left())))
 
     # ── dependency lists ───────────────────────────────────────────────────────────────────────
     eq("apt names: duplicates, blanks and anything that is not a package name are dropped",
@@ -1005,6 +1452,247 @@ try:
        ((True, "no dependencies to install"), []))
     _H.host_os_slug = _h_saved["host_os_slug"]
     _H.deps_for_game = _h_saved["deps_for_game"]
+
+    # ── root apt installs what LinuxGSM's list names, not what the game account prints (745379155)
+    # A retry installs what LinuxGSM printed as missing — output of a script run AS THE GAME
+    # ACCOUNT over a config it can write — and those names went to root's apt-get checked for
+    # syntax alone. Real LinuxGSM lines (lgsm/data/ubuntu-24.04.csv) and its real warning format,
+    # through the real parsers: lgsm_data.deps and parse_missing_deps.
+    from panel.services import lgsm_data as _p8_ld  # noqa: E402
+    _p8_ld_text = _p8_ld._text
+    _P8_CSV = (
+        "all,bc,binutils,bsdmainutils,bzip2,ca-certificates,cpio,curl,distro-info,file,gzip,hostname,"
+        "jq,lib32gcc-s1,lib32stdc++6,netcat-openbsd,pigz,python3,tar,tmux,unzip,util-linux,"
+        "uuid-runtime,wget,xz-utils\n"
+        "steamcmd,lib32gcc-s1,lib32stdc++6,libsdl2-2.0-0:i386,steamcmd\n"
+        "cod,libstdc++5:i386\nmc,openjdk-25-jre\nrust,lib32z1\n")
+    _P8_MISSING = ("\x1b[1;33mWarning!\x1b[0m Missing dependencies: \x1b[31mlibstdc++5:i386 "
+                   "postfix openssh-server- openjdk-25-jre steamcmd\x1b[0m\n"
+                   "\x1b[1;36mInformation!\x1b[0m Run: 'sudo apt install ...'\n")
+    _p8_ld_fetch = _p8_ld._fetch
+    try:
+        _p8_ld._mem.clear()
+        _p8_ld._attempted.clear()
+        _p8_ld._fetch = lambda name: None      # a refusal now refreshes master: no network here
+        _p8_ld._text = lambda name, allow_fetch=True: _P8_CSV if name == "ubuntu-24.04.csv" else None
+        _H.host_os_slug = lambda s: "ubuntu-24.04"
+        _p8_missing = _H.parse_missing_deps(_P8_MISSING)
+        _w = _wire()
+        _gd = _H.install_game_dependencies(_p8_srv(), "cod", extra=" ".join(_p8_missing))
+        _p8_apt = [p for _v, a in _w.verbs_called("apt-install-minimal") for p in a]
+        check("game deps: the fixture really does carry the names LinuxGSM printed",
+              _p8_missing == ["libstdc++5:i386", "postfix", "openssh-server-", "openjdk-25-jre",
+                              "steamcmd"], repr(_p8_missing))
+        check("game deps: a name LinuxGSM's list for this game does not have reaches no root apt "
+              "call — an MTA, a trailing-dash REMOVE, another game's package",
+              not {"postfix", "openssh-server-", "openjdk-25-jre"} & set(_p8_apt), repr(_p8_apt))
+        check("game deps: ...while the listed names still install (positive control)",
+              "libstdc++5:i386" in _p8_apt and "libsdl2-2.0-0:i386" in _p8_apt
+              and _w.verbs_called("steamcmd-install"), repr(_w.verbs_called()))
+        check("game deps: ...and the refusal is said in the result, which fails the step",
+              _gd[0] is False and "postfix" in _gd[1] and "openssh-server-" in _gd[1], repr(_gd))
+        _p8_ld._mem.clear()
+        _p8_ld._text = lambda name, allow_fetch=True: None
+        _w = _wire()
+        _H.install_game_dependencies(_p8_srv(), "cod", extra="libstdc++5:i386 postfix")
+        _p8_apt = [p for _v, a in _w.verbs_called("apt-install-minimal") for p in a]
+        check("game deps: with LinuxGSM's list unavailable, only the common set passes — never "
+              "the printed names unfiltered",
+              "libstdc++5:i386" in _p8_apt and "postfix" not in _p8_apt, repr(_p8_apt))
+    finally:
+        _p8_ld._text = _p8_ld_text
+        _p8_ld._fetch = _p8_ld_fetch
+        _p8_ld._mem.clear()
+        _p8_ld._attempted.clear()
+        _H.host_os_slug = _h_saved["host_os_slug"]
+
+    # ── ...and at the release the game account runs, or on master now: never the account's copy ──
+    # The panel's copy is master's, refreshed weekly; the account's LinuxGSM asks from the list AT
+    # ITS OWN RELEASE (core_dl.sh fetches data files from the `version=` tag). On the test host
+    # mcserver and fctrserver run v26.1.0, whose list names openjdk-21-jre and dotnet-runtime-8.0
+    # where master names -25- and 10.0, and a retry was refused the package LinuxGSM needed. The
+    # account's own ~/lgsm/data copy is game-writable, so it is never read; the account chooses
+    # only WHICH upstream release, through a tag that must be exactly vN.N.N. Every fetch stubbed.
+    import tempfile as _p8_tempfile  # noqa: E402
+    _p8_ld_saved = {n: getattr(_p8_ld, n)
+                    for n in ("_text", "_fetch", "_fetch_release", "_CACHE_DIR")}
+    _p8_urlopen_saved = _p8_ld.urllib.request.urlopen
+    _p8_urls = []
+    # The real rows: v26.1.0's lgsm/data/ubuntu-24.04.csv against master's (v26.2.0) for pmc and vints.
+    _P8_MASTER = _P8_CSV + "pmc,openjdk-25-jre\nvints,dotnet-runtime-10.0\n"
+    _P8_V2610 = _P8_CSV + "pmc,openjdk-21-jre\nvints,dotnet-runtime-8.0\n"
+    _p8_rel_calls, _p8_master_calls = [], []
+    _p8_rel_lists = {"v26.1.0": _P8_V2610}
+    _p8_master_now = [None]
+
+    def _p8_reset():
+        _p8_ld._mem.clear()
+        _p8_ld._releases.clear()
+        _p8_ld._attempted.clear()
+        _p8_rel_calls[:] = []
+        _p8_master_calls[:] = []
+
+    def _p8_raise(exc):
+        raise exc
+
+    class _FakeResp8:
+        """urlopen's answer: a 200 with `body`."""
+
+        def __init__(self, body):
+            self._b, self.status = body.encode(), 200
+
+        def read(self, _n=None):
+            return self._b
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _p8_install(game, extra, version=None, **kw):
+        """Run install_game_dependencies for `game`; the account's script answers `version`."""
+        _w8 = _wire(cmds=[("version=", version if version is not None else ("", "", 0))])
+        _r8 = _H.install_game_dependencies(_p8_srv(), game, extra=extra, **kw)
+        return _r8, [p for _v, a in _w8.verbs_called("apt-install-minimal") for p in a], _w8
+
+    try:
+        _p8_ld._CACHE_DIR = __import__("pathlib").Path(_p8_tempfile.mkdtemp(prefix="unit-p8-lgsm-"))
+        _p8_ld._text = lambda name, allow_fetch=True: _P8_MASTER if name == "ubuntu-24.04.csv" else None
+        _p8_ld._fetch_release = lambda tag, name: (_p8_rel_calls.append((tag, name)),
+                                                   _p8_rel_lists.get(tag))[1]
+        _p8_ld._fetch = lambda name: (_p8_master_calls.append(name), _p8_master_now[0])[1]
+        # Nothing below may reach the network: a request that gets past the stubs is recorded.
+        _p8_ld.urllib.request.urlopen = lambda req, timeout=None: (_p8_urls.append(req.full_url),
+                                                                   _p8_raise(OSError("no network")))
+        _H.host_os_slug = lambda s: "ubuntu-24.04"
+        _P8_ACCT = dict(account="vintsserver", selfname="vintsserver")
+        _P8_V = ('version="v26.1.0"', "", 0)
+
+        _p8_reset()
+        _gd, _p8_apt, _w = _p8_install("vints", "dotnet-runtime-8.0", _P8_V, **_P8_ACCT)
+        check("game deps: a name only the list at the account's OWN release names (v26.1.0's "
+              "dotnet-runtime-8.0; master has 10.0) is installed once that release's list is loaded",
+              _gd[0] is True and "dotnet-runtime-8.0" in _p8_apt
+              and _p8_rel_calls == [("v26.1.0", "ubuntu-24.04.csv")],
+              repr((_gd, _p8_apt, _p8_rel_calls)))
+        _p8_acct_cmds = [c[1] for c in _w.calls if c[0] == "cmd"]
+        check("game deps: ...the release is read from the account's own script, as the account — "
+              "its own package list is never read",
+              len(_p8_acct_cmds) == 1 and _p8_acct_cmds[0].startswith("sudo -u vintsserver ")
+              and "/home/vintsserver/vintsserver" in _p8_acct_cmds[0]
+              and "lgsm/data" not in _p8_acct_cmds[0] and ".csv" not in _p8_acct_cmds[0],
+              repr(_p8_acct_cmds))
+        check("game deps: ...and master is not re-fetched when that release's list answered",
+              _p8_master_calls == [], repr(_p8_master_calls))
+        _gd, _p8_apt, _w = _p8_install("pmc", "openjdk-21-jre", _P8_V,
+                                       account="pmcserver", selfname="pmcserver")
+        check("game deps: another game on the same release reuses that release's list, fetched "
+              "once (openjdk-21-jre for pmc)", _gd[0] is True and "openjdk-21-jre" in _p8_apt
+              and _p8_rel_calls == [("v26.1.0", "ubuntu-24.04.csv")], repr((_gd, _p8_rel_calls)))
+
+        _p8_reset()
+        _gd, _p8_apt, _w = _p8_install("vints", "dotnet-runtime-8.0", ('version="v26.0.9"', "", 0),
+                                       **_P8_ACCT)
+        check("game deps: ...but it is REFUSED when that release's list cannot be fetched",
+              _gd[0] is False and "dotnet-runtime-8.0" not in _p8_apt
+              and "dotnet-runtime-8.0" in _gd[1] and _p8_rel_calls == [("v26.0.9", "ubuntu-24.04.csv")],
+              repr((_gd, _p8_apt, _p8_rel_calls)))
+        _p8_install("vints", "dotnet-runtime-8.0", ('version="v26.0.9"', "", 0), **_P8_ACCT)
+        check("game deps: ...and a release that failed is not asked again within the hour",
+              _p8_rel_calls == [("v26.0.9", "ubuntu-24.04.csv")], repr(_p8_rel_calls))
+        _p8_reset()
+        _gd, _p8_apt, _w = _p8_install("vints", "dotnet-runtime-8.0", **_P8_ACCT)
+        check("game deps: a script whose version cannot be read (an empty answer) looks nothing up "
+              "at any release", _gd[0] is False and _p8_rel_calls == [], repr((_gd, _p8_rel_calls)))
+
+        # The tag is the account's to write, and it becomes a URL path segment.
+        _p8_bad_tags = ('version="master"', 'version="v26.1.0/../../../../x"', 'version="v26.1"',
+                        'version="26.1.0"', 'version="v26.1.0;id"', "version=$(id)",
+                        'version="v\uff12\uff16.1.0"', 'version="v\u0662\u0666.1.0"',
+                        'version="v26.1.0-rc1"', 'version="V26.1.0"', 'version=" v26.1.0"',
+                        'version="v26.1.0 "', 'version="v26.1.0?x=1"', 'version="v1234567.1.0"')
+        _p8_bad_seen = {}
+        for _bt in _p8_bad_tags:
+            _p8_reset()
+            _gd, _p8_apt, _w = _p8_install("vints", "dotnet-runtime-8.0", (_bt, "", 0), **_P8_ACCT)
+            _p8_bad_seen[_bt] = (_gd[0], list(_p8_rel_calls), "dotnet-runtime-8.0" in _p8_apt)
+        check("game deps: a version that is not exactly vN.N.N (a branch, a path, fullwidth or "
+              "Arabic-Indic digits, a suffix, a space) is ignored and fetches nothing",
+              all(v == (False, [], False) for v in _p8_bad_seen.values()),
+              repr({k: v for k, v in _p8_bad_seen.items() if v != (False, [], False)}))
+        check("release tag: only a plain vN.N.N passes, with no trailing newline",
+              [_p8_ld.release_tag(t) for t in ("v26.1.0", "v0.0.1", "v26.1.0\n", "", None, 26)]
+              == ["v26.1.0", "v0.0.1", None, None, None, None])
+        _p8_reset()
+        _p8_ld._fetch_release = _p8_ld_saved["_fetch_release"]     # the real one, network stubbed
+        _p8_bad_direct = [_p8_ld.deps_at_release("ubuntu-24.04", t)
+                          for t in ("v26.1.0\n", "../v26.1.0", "v26.1.0/..", "master")]
+        check("release lists: deps_at_release sends NO request for a tag that is not one",
+              _p8_bad_direct == [{}] * 4 and _p8_urls == [], repr((_p8_bad_direct, _p8_urls)))
+        _P8_V2610_FULL = _P8_V2610 + "".join("g%02d,libg%02d\n" % (i, i) for i in range(25))
+        _p8_ld.urllib.request.urlopen = lambda req, timeout=None: (
+            _p8_urls.append(req.full_url), _FakeResp8(_P8_V2610_FULL))[1]
+        _p8_real_rel = _p8_ld.deps_at_release("ubuntu-24.04", "v26.1.0")
+        check("release lists: fetched from LinuxGSM's own repository at exactly that tag",
+              _p8_urls == ["https://raw.githubusercontent.com/GameServerManagers/LinuxGSM/v26.1.0/"
+                           "lgsm/data/ubuntu-24.04.csv"]
+              and _p8_real_rel.get("vints") == ["dotnet-runtime-8.0"],
+              repr((_p8_urls, _p8_real_rel.get("vints"))))
+        _p8_ld.urllib.request.urlopen = lambda req, timeout=None: (_p8_urls.append(req.full_url),
+                                                                   _p8_raise(OSError("no network")))
+        _p8_ld._fetch_release = lambda tag, name: (_p8_rel_calls.append((tag, name)),
+                                                   _p8_rel_lists.get(tag))[1]
+
+        # evilpkg: in no list LinuxGSM publishes, at the account's release or on master now.
+        _p8_reset()
+        _p8_master_now[0] = _P8_MASTER
+        _gd, _p8_apt, _w = _p8_install("vints", "evilpkg dotnet-runtime-8.0", _P8_V, **_P8_ACCT)
+        check("game deps: a name in NO upstream list (evilpkg) is still refused, after both "
+              "lookups, while the release's own name still installs (positive control)",
+              _gd[0] is False and "evilpkg" not in _p8_apt and "evilpkg" in _gd[1]
+              and "dotnet-runtime-8.0" in _p8_apt and len(_p8_rel_calls) == 1
+              and _p8_master_calls == ["ubuntu-24.04.csv"],
+              repr((_gd, _p8_apt, _p8_rel_calls, _p8_master_calls)))
+        # The refresh on refusal is rate-limited: a name that is simply not LinuxGSM's must not
+        # turn every retry of every install into a request to GitHub.
+        for _i in range(3):
+            _p8_install("vints", "evilpkg", _P8_V, **_P8_ACCT)
+        check("game deps: the refresh on refusal is rate-limited — three more refusals within the "
+              "hour fetch master no more", _p8_master_calls == ["ubuntu-24.04.csv"],
+              repr(_p8_master_calls))
+        for _k8 in list(_p8_ld._attempted):
+            _p8_ld._attempted[_k8] -= _p8_ld._RETRY_SECONDS + 1
+        _p8_install("vints", "evilpkg", _P8_V, **_P8_ACCT)
+        check("game deps: ...and asks again once the hour is up",
+              _p8_master_calls == ["ubuntu-24.04.csv"] * 2, repr(_p8_master_calls))
+
+        # The other direction: LinuxGSM listed a package after the panel's weekly copy was taken.
+        _p8_reset()
+        _p8_master_now[0] = _P8_MASTER.replace("vints,dotnet-runtime-10.0",
+                                               "vints,dotnet-runtime-10.0,libnewer1")
+        _gd, _p8_apt, _w = _p8_install("vints", "libnewer1")
+        check("game deps: a name master lists NOW but the weekly copy does not is installed after "
+              "one refresh — with no account to read a release from",
+              _gd[0] is True and "libnewer1" in _p8_apt and _p8_master_calls == ["ubuntu-24.04.csv"],
+              repr((_gd, _p8_apt, _p8_master_calls)))
+        # A missing file is a failed check, not a crash: a run that stops here reports nothing.
+        _p8_cache_file = _p8_ld._CACHE_DIR / "ubuntu-24.04.csv"
+        _p8_cached = _p8_cache_file.read_text(encoding="utf-8") if _p8_cache_file.exists() else ""
+        check("game deps: ...and the refreshed list replaces the panel's cached copy",
+              "libnewer1" in _p8_cached, _p8_cached[-80:])
+        check("game deps: none of the above reached the network", _p8_urls == [
+            "https://raw.githubusercontent.com/GameServerManagers/LinuxGSM/v26.1.0/lgsm/data/"
+            "ubuntu-24.04.csv"], repr(_p8_urls))
+    finally:
+        __import__("shutil").rmtree(str(_p8_ld._CACHE_DIR), ignore_errors=True)
+        for _k8, _v8 in _p8_ld_saved.items():
+            setattr(_p8_ld, _k8, _v8)
+        _p8_ld.urllib.request.urlopen = _p8_urlopen_saved
+        _p8_ld._mem.clear()
+        _p8_ld._releases.clear()
+        _p8_ld._attempted.clear()
+        _H.host_os_slug = _h_saved["host_os_slug"]
 
     # ── OS updates ─────────────────────────────────────────────────────────────────────────────
     _w = _wire(cmds=[("apt list --upgradable",
@@ -1102,6 +1790,15 @@ try:
     _H.ssh_test_connection = _updown([True])
     check("reboot wait: a host that never went down but is up is back (down phase times out)",
           _H._wait_for_reboot(_rb_srv, down_timeout=20, up_timeout=30) is True)
+    # The pin is handed over AS IS: `host_key or ""` turned an unreadable pin into first contact,
+    # and the wait loop then offered the stored credential to whatever answered on that address.
+    from panel.db.models import UnreadableSecret as _rb_Unreadable  # noqa: E402
+    _seen_creds.clear()
+    _H._wait_for_reboot(_p8_srv(auth_method="password", auth_credential="enc",
+                                host_key=_rb_Unreadable()), down_timeout=20, up_timeout=30)
+    check("reboot wait: an UNREADABLE pin reaches the probe as one, not as \"\" (first contact)",
+          _seen_creds and all(isinstance(s[4], _rb_Unreadable) for s in _seen_creds),
+          repr([type(s[4]).__name__ for s in _seen_creds][:3]))
     _H.time = _h_saved["time"]
     _H.ssh_test_connection = _h_saved["ssh_test_connection"]
     _H.decrypt_secret = _h_saved["decrypt_secret"]
@@ -1495,6 +2192,131 @@ try:
           and _w.names()[-1] == "sshd-discard-backup"
           and ("f2b-set-sshd-ports", ["2222,22"]) in _w.verbs_called(), repr(_cp))
 
+    # ── ...and the thing now listening on the new port has to BE sshd ──────────────────────────
+    # Both listening checks are process-blind (`ss -lnt`, a TCP connect). A local game account that
+    # binds the new port after the free-port check — it only needs a port >= 1024 and the seconds
+    # the move takes — was reported as "SSH now listens on port 2222", sshd logged a failed bind
+    # and stayed on 22, and the route pointed the panel at the squatter. `ss -lnte` names what the
+    # account cannot change: its uid, and the systemd unit the socket was created in.
+    _OWN_22 = "LISTEN 0 128 0.0.0.0:22 0.0.0.0:* ino:4100 sk:1 cgroup:/system.slice/ssh.service <->\n"
+
+    def _own(line2222):
+        return {"listening-sockets-owner": (_OWN_22 + line2222, "", 0)}
+    _SQUAT = ("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* uid:1001 ino:4200 sk:2 "
+              "cgroup:/user.slice/user-1001.slice/session-4.scope <->\n")
+    _w = _csp_wire(**_own(_SQUAT))
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: a new port held by an UNPRIVILEGED account (the squatter) is reverted",
+          _cp[0] is False and "not held by sshd" in _cp[1] and "uid 1001" in _cp[1]
+          and "sshd-restore-dropin" in _w.names() and "sshd-discard-backup" not in _w.names()
+          and "ufw-delete-allow-proto-port" in _w.names(), "result=%r names=%r" % (_cp, _w.names()))
+    check("ssh port: ...and fail2ban is not repointed at the squatter's port",
+          not _w.verbs_called("f2b-set-sshd-ports") and "fail2ban-panel-sshd" not in _w.names(),
+          repr(_w.names()))
+    _w = _csp_wire(**_own("LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:* ino:4300 sk:3 "
+                          "cgroup:/system.slice/docker.service <->\n"))
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: ...as is one held by another root SERVICE (docker-proxy took it first)",
+          _cp[0] is False and "docker.service" in _cp[1], repr(_cp))
+    _w = _csp_wire(**_own("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* ino:4400 sk:4 "
+                          "cgroup:/system.slice/ssh.service <->\n"
+                          "LISTEN 0 128 [::]:2222 [::]:* ino:4401 sk:5 cgroup:/system.slice/ssh.service v6only:1 <->\n"))
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: sshd holding the new port (both families) passes, with no caveat",
+          _cp[0] is True and "could not confirm" not in _cp[1] and _w.names()[-1] == "sshd-discard-backup",
+          repr(_cp))
+    # Socket activation: systemd (pid 1, init.scope) holds sshd's socket — right there, wrong elsewhere.
+    _INIT = "LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:* ino:4500 sk:6 cgroup:/init.scope <->\n"
+    _w = _csp_wire(**dict(_own(_INIT), **{"sshd-socket-active": ("active", "", 0)}))
+    _cp_sock = _H.change_ssh_port(_p8_srv(), 2222)
+    _w = _csp_wire(**_own(_INIT))
+    _cp_nosock = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: a socket held by systemd passes only on a socket-activated host",
+          _cp_sock[0] is True and _cp_nosock[0] is False and "init.scope" in _cp_nosock[1],
+          repr((_cp_sock, _cp_nosock)))
+    # With BPF firewalling (Ubuntu 24.04) systemd creates the socket inside ssh.socket's OWN cgroup.
+    _SOCKU = "LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:* ino:4501 sk:9 cgroup:/system.slice/ssh.socket <->\n"
+    _w = _csp_wire(**dict(_own(_SOCKU), **{"sshd-socket-active": ("active", "", 0)}))
+    _cp_socku = _H.change_ssh_port(_p8_srv(), 2222)
+    _w = _csp_wire(**_own(_SOCKU))
+    _cp_socku_no = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: ...including in ssh.socket's own cgroup, again only when socket-activated",
+          _cp_socku[0] is True and "could not confirm" not in _cp_socku[1]
+          and _cp_socku_no[0] is False and "ssh.socket" in _cp_socku_no[1],
+          repr((_cp_socku, _cp_socku_no)))
+    # An installed helper older than the verb refuses it (exit 2): the port-only check already
+    # passed, so the move stands — and says what it could not confirm.
+    _w = _csp_wire(**{"listening-sockets-owner": ("", "panel-helper: unknown verb 'listening-sockets-owner'", 2)})
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: an owner list the host cannot give keeps the move, and says it is unconfirmed",
+          _cp[0] is True and "could not confirm that sshd itself holds port 2222" in _cp[1]
+          and "sshd-discard-backup" in _w.names(), repr(_cp))
+    # The bind-address branch on a REMOTE verified by a TCP connect alone — equally process-blind.
+    _H._tcp_reachable = lambda host, port, timeout=8: True
+    _w = _csp_wire(**_own("LISTEN 0 128 198.51.100.4:2222 0.0.0.0:* uid:1001 ino:4600 sk:7 <->\n"))
+    _cp_bind_squat = _H.change_ssh_port(_p8_srv(), 2222, bind_addr="198.51.100.4")
+    _bind_squat_names = _w.names()
+    _w = _csp_wire(**_own("LISTEN 0 128 [fd00::5]:2222 [::]:* ino:4700 sk:8 "
+                          "cgroup:/system.slice/ssh.service <->\n"))
+    _cp_bind_ok = _H.change_ssh_port(_p8_srv(), 2222, bind_addr="fd00:0:0::5")
+    _H._tcp_reachable = _h_saved["_tcp_reachable"]
+    check("ssh port (bind): a reachable address held by a non-root account is reverted too",
+          _cp_bind_squat[0] is False and "uid 1001" in _cp_bind_squat[1]
+          and "sshd-restore-dropin" in _bind_squat_names, repr(_cp_bind_squat))
+    check("ssh port (bind): ...while sshd on it passes, however the IPv6 address was typed",
+          _cp_bind_ok[0] is True and "could not confirm" not in _cp_bind_ok[1], repr(_cp_bind_ok))
+    eq("ss rows: parsed by COLUMN, so `ino:2222` in the extended fields is not a listener on 2222",
+       [(a, p) for a, p, _f in _H._ss_listeners(
+           "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+           "LISTEN 0 128 0.0.0.0:22 0.0.0.0:* uid:2222 ino:2222 sk:2222 <->\n"
+           "LISTEN 0 128 [::]:22 [::]:* ino:9 sk:9 v6only:1 <->\n")],
+       [("0.0.0.0", 22), ("[::]", 22)])
+
+    # ── fail2ban has to cover the port sshd now serves ──────────────────────────────────────────
+    # The old step edited jail.local's [sshd] port line and restarted fail2ban, ignoring both
+    # answers. A stock install has no jail.local (only Prepare & Secure writes one), so the edit did
+    # nothing, the jail kept banning on 22, and the message said "fail2ban updated". The panel now
+    # writes its own jail.d drop-in (read after jail.local) and says "updated" only when the write,
+    # the reload and the sshd jail all answer.
+    _H._F2B_JAIL_SETTLE_S = 0
+    _w = _csp_wire()
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    _f2b_writes = [c[2] for c in _w.calls if c[0] == "write" and c[1] == "fail2ban-panel-sshd"]
+    check("ssh port: a verified move writes the panel's sshd jail drop-in with both ports",
+          _cp[0] is True and len(_f2b_writes) == 1 and _f2b_writes[0].endswith("[sshd]\nport = 2222,22\n")
+          and "fail2ban updated" in _cp[1] and ("f2b-status-jail", ["sshd"]) in _w.verbs_called(),
+          "result=%r writes=%r" % (_cp, _f2b_writes))
+    _w = _csp_wire(**{"f2b-status": ("", "bash: fail2ban-client: command not found", 127)})
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: with fail2ban not installed, nothing is written and the message says so",
+          _cp[0] is True and "fail2ban updated" not in _cp[1] and "not installed" in _cp[1]
+          and "fail2ban-panel-sshd" not in _w.names(), repr(_cp))
+    for _label, _over in (
+            ("an older helper refuses the drop-in", {"writes": {"fail2ban-panel-sshd": (
+                "", "panel-helper: bad argument", 2)}}),
+            ("fail2ban will not reload", {"verbs": {"f2b-reload": ("", "", 1), "service-reload": ("", "", 1),
+                                                    "service-restart": lambda a: ("", "", 1) if a == ["fail2ban"] else ("", "", 0)}}),
+            ("the sshd jail is not running", {"verbs": {"f2b-status-jail": ("", "Sorry but the jail 'sshd' does not exist", 255)}}),
+            ("the write raises (paramiko)", {"writes": {"fail2ban-panel-sshd": ConnectionError("socket closed")}})):
+        _v = {"sshd-socket-active": ("inactive", "", 3), "sshd-effective-config": ("port 22\n", "", 0),
+              "listening-sockets": [(_SS_22, "", 0), (_SS_BOTH, "", 0)]}
+        _v.update(_over.get("verbs", {}))
+        _w = _wire(verbs=_v, writes=_over.get("writes"))
+        _cp = _H.change_ssh_port(_p8_srv(), 2222)
+        check("ssh port: when %s, the move stands but fail2ban is NOT claimed updated" % _label,
+              _cp[0] is True and "fail2ban updated" not in _cp[1] and "fail2ban was NOT" in _cp[1]
+              and "close the old one" not in _cp[1] and _w.names()[-1] == "sshd-discard-backup",
+              repr(_cp))
+    _H._F2B_JAIL_SETTLE_S = _h_saved["_F2B_JAIL_SETTLE_S"]
+    # A move that is REVERTED never touches fail2ban (it used to be repointed before the restart,
+    # so a revert left it banning on a port nothing serves).
+    _w = _csp_wire(**{"listening-sockets": [(_SS_22, "", 0), (_SS_22, "", 0)]})
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: a reverted move leaves fail2ban alone",
+          _cp[0] is False and not _w.verbs_called("f2b-set-sshd-ports")
+          and "fail2ban-panel-sshd" not in _w.names() and not _w.verbs_called("f2b-reload"),
+          repr(_w.names()))
+
     # ── fail2ban on a remote ───────────────────────────────────────────────────────────────────
     _wire(verbs={"f2b-status": ("Status\n|- Number of jail: 2\n`- Jail list:\tsshd, recidive, bad jail!", "", 0),
                  "f2b-status-jail": lambda a: (
@@ -1628,6 +2450,7 @@ try:
     class _FakeSSH:
         raise_on_connect = None
         last = None
+        presents = None          # (type, base64): the host key the fake server shows, if any
 
         def __init__(self):
             self.policy, self.kw, self.closed = None, None, False
@@ -1638,6 +2461,10 @@ try:
 
         def connect(self, host, **kw):
             self.kw = dict(kw, host=host)
+            if _FakeSSH.presents is not None:
+                _kt, _kb = _FakeSSH.presents
+                self.policy.missing_host_key(self, host, NS(get_name=lambda: _kt,
+                                                            get_base64=lambda: _kb))
             if _FakeSSH.raise_on_connect is not None:
                 raise _FakeSSH.raise_on_connect
 
@@ -1673,7 +2500,51 @@ try:
         _FakeSSH.raise_on_connect = _exc
         eq("ssh test: %s is answered, with no exception text leaking" % type(_exc).__name__,
            _H.ssh_test_connection("203.0.113.10", auth_method="key"), (False, _want))
+        # The client was closed on the SUCCESS path alone, so every refused test login left
+        # paramiko's Transport thread and socket open.
+        check("ssh test: ...and the client that failed with %s is closed" % type(_exc).__name__,
+              _FakeSSH.last.closed is True, repr(_FakeSSH.last.closed))
     _FakeSSH.raise_on_connect = None
+    _FakeSSH.presents = ("ssh-ed25519", "AAAAsomeoneelse")
+    _st = _H.ssh_test_connection("203.0.113.10", auth_method="key", host_key="ssh-ed25519 AAAApin")
+    _FakeSSH.presents = None
+    check("ssh test: a CHANGED host key fails the test and closes the client it refused",
+          _st[0] is False and _FakeSSH.last.closed is True, repr((_st, _FakeSSH.last.closed)))
+
+    # Enrolment pins the key its own test login saw: `captured` gets it on SUCCESS only. A key
+    # handed back after a failed login would pin a host the panel never got into.
+    _FakeSSH.presents = ("ssh-ed25519", "AAAAENROLLED")
+    _cap = []
+    _st = _H.ssh_test_connection("203.0.113.10", auth_method="key", captured=_cap)
+    check("ssh test: a first-contact login hands back the key it saw, for enrolment to pin",
+          _st == (True, "Connection successful") and _cap == ["ssh-ed25519 AAAAENROLLED"],
+          repr((_st, _cap)))
+    _cap = []
+    _FakeSSH.raise_on_connect = _p8_paramiko.AuthenticationException("bad")
+    _st = _H.ssh_test_connection("203.0.113.10", auth_method="password", credential="pw",
+                                 captured=_cap)
+    _FakeSSH.raise_on_connect = None
+    check("ssh test: ...but never after a FAILED login", _st[0] is False and _cap == [],
+          repr((_st, _cap)))
+    _cap = []
+    _st = _H.ssh_test_connection("203.0.113.10", auth_method="key", captured=_cap,
+                                 host_key="ssh-ed25519 AAAAENROLLED")
+    check("ssh test: ...and not when the host was already pinned (nothing new was captured)",
+          _st[0] is True and _cap == [], repr((_st, _cap)))
+
+    # A pin that exists but cannot be DECRYPTED is refused before anything is sent. It reads as ""
+    # — first contact — so the Test button offered the stored password to whoever answered.
+    from panel.db.models import UnreadableSecret as _p8_Unreadable  # noqa: E402
+    _FakeSSH.last = None
+    _FakeSSH.presents = ("ssh-ed25519", "AAAAMITM")
+    for _am, _cred in (("password", "s3cret"), ("key", "/home/panel/.ssh/vps_key")):
+        _cap = []
+        _st = _H.ssh_test_connection("203.0.113.10", auth_method=_am, credential=_cred,
+                                     host_key=_p8_Unreadable(), captured=_cap)
+        check("ssh test (%s): an UNREADABLE pin refuses before connecting — no credential sent" % _am,
+              _st[0] is False and "cannot be decrypted" in _st[1] and _FakeSSH.last is None
+              and _cap == [], repr((_st, _FakeSSH.last and _FakeSSH.last.kw)))
+    _FakeSSH.presents = None
     _H.paramiko = _h_saved["paramiko"]
 
     # ── host_timezone ──────────────────────────────────────────────────────────────────────────
@@ -1847,6 +2718,40 @@ try:
           _body == {"success": True, "message": "closed"} and _fw_calls[-1] == ("close", 8080, "udp")
           and _rv_log[-1] == ("remote_port_close", "%s:8080/udp" % _r.name, None, True))
 
+    # The audit TARGET is built from what the port and protocol checks accept, never the request's
+    # text. The row is written even when the command refuses them, so whatever a MANAGE_REMOTES
+    # admin typed there went into the audit trail verbatim.
+    _rv_bad = {"port": "22 panel login failed from 203.0.113.9", "protocol": "tcp\nFAKE"}
+    _rv_fw_rows = []
+    for _path, _js in (("open", _rv_bad), ("allow-from", dict(_rv_bad, source="10.0.0.0/24")),
+                       ("limit", _rv_bad), ("close", _rv_bad)):
+        _rv_client.post("/api/remote/%d/firewall/%s" % (_r.id, _path), json=_js)
+        _rv_fw_rows.append(_rv_log[-1][:2])
+    eq("firewall open/allow-from/limit/close: a port and protocol that fail their checks are "
+       "audited as fixed texts, never the request's own",
+       _rv_fw_rows, [(_a, "%s:(not a port)/(not a protocol)" % _r.name)
+                     for _a in ("remote_port_open", "remote_port_allow_from", "remote_port_limit",
+                                "remote_port_close")])
+    _rv_fw_rows = []
+    for _path, _js in (("open", {"port": " 27015 ", "protocol": "UDP"}),
+                       ("allow-from", {"source": "10.0.0.0/24", "port": "27015:27020",
+                                       "protocol": "udp"}),
+                       ("limit", {"port": 22}), ("close", {"port": 8080, "protocol": "both"})):
+        _rv_client.post("/api/remote/%d/firewall/%s" % (_r.id, _path), json=_js)
+        _rv_fw_rows.append(_rv_log[-1][1])
+    eq("firewall open/allow-from/limit/close: ...and valid ones as the commands read them — a "
+       "range where allow-from takes one (positive control)", _rv_fw_rows,
+       ["%s:%s" % (_r.name, _t) for _t in ("27015/udp", "27015:27020/udp", "22/tcp", "8080/both")])
+    _rv.remote_ufw_delete_rule = lambda remote, num, expect_key=None: (False, "Invalid rule number")
+    _rv_fw_rows = []
+    for _num in ("3 panel login failed from 203.0.113.9", 0, 3):
+        _rv_client.post("/api/remote/%d/firewall/delete-rule" % _r.id, json={"num": _num})
+        _rv_fw_rows.append(_rv_log[-1][:2])
+    eq("firewall delete-rule: a rule number that fails the check is audited as a fixed text, a "
+       "valid one as the number", _rv_fw_rows,
+       [("remote_ufw_delete_rule", "%s:#%s" % (_r.name, _t))
+        for _t in ("(not a rule number)", "(not a rule number)", "3")])
+
     # ── SSH port ───────────────────────────────────────────────────────────────────────────────
     _rv.current_user = _RvUser(superadmin=False, name="op")
     _csp = []
@@ -1860,6 +2765,62 @@ try:
     check("ssh port: a raise is a 500 with a GENERIC message, and the stored port is unchanged",
           _st == 500 and (_body or {}).get("message") == "Internal server error" and _r.port == 22,
           repr(_body))
+    # One port change per host at a time. The move snapshots and restores ONE fixed drop-in path,
+    # so an overlapping second change (a double-submit) restored or deleted the drop-in the first
+    # had written and verified, and the panel stored a port sshd no longer served. The second
+    # request is made from INSIDE the first's change_ssh_port, i.e. exactly while it runs.
+    _rv_inner = _rv_app.test_client()
+    _csp_runs, _inner = [], {}
+    _other = _rv_remote()
+
+    def _csp_slow(remote, port, bind):
+        _csp_runs.append((remote.id, port))
+        if len(_csp_runs) == 1:
+            _inner["same"] = _rv_json(_rv_inner.post("/api/remote/%d/ssh-port" % remote.id,
+                                                     json={"port": 3333}))
+            _inner["other"] = _rv_json(_rv_inner.post("/api/remote/%d/ssh-port" % _other.id,
+                                                      json={"port": 4444}))
+        return True, "moved"
+    _rv.change_ssh_port = _csp_slow
+    _held_at_commit = []
+    _rv_commit_saved = _rv.db.session.commit
+    # Two commits: the other host's (made inside the first change) and the first change's own —
+    # both while THIS host's lock is held. The last one is the one this is about.
+    _rv.db.session.commit = lambda: (_held_at_commit.append(_rv._ssh_port_locks[_r.id].locked()),
+                                     _rv_commit_saved())[1]
+    _st, _body = _rv_json(_rv_client.post("/api/remote/%d/ssh-port" % _r.id, json={"port": 2222}))
+    _rv.db.session.commit = _rv_commit_saved
+    check("ssh port: a second change for the SAME host while one runs is refused with 409",
+          _inner.get("same") == (409, {"success": False, "message":
+                                       "An SSH port change is already running for this host."})
+          and (_r.id, 3333) not in _csp_runs, "inner=%r runs=%r" % (_inner.get("same"), _csp_runs))
+    check("ssh port: ...while the first completes, and holds the lock through the port commit",
+          _st == 200 and (_body or {}).get("success") is True and _r.port == 2222
+          and _held_at_commit == [True, True], "%r %r held=%r" % (_st, _body, _held_at_commit))
+    check("ssh port: ...and a change for a DIFFERENT host is not held up by it",
+          (_inner.get("other") or (None,))[0] == 200 and (_other.id, 4444) in _csp_runs,
+          repr(_inner.get("other")))
+    _rv.change_ssh_port = lambda remote, port, bind: (_ for _ in ()).throw(RuntimeError("boom"))
+    _rv_json(_rv_client.post("/api/remote/%d/ssh-port" % _r.id, json={"port": 2223}))
+    _rv.change_ssh_port = lambda remote, port, bind: (_csp.append((port, bind)), (True, "moved"))[1]
+    _csp.clear()
+    _st, _body = _rv_json(_rv_client.post("/api/remote/%d/ssh-port" % _r.id, json={"port": 2224}))
+    check("ssh port: the lock is released afterwards — even after a change that RAISED",
+          _st == 200 and _csp == [(2224, "")] and not _rv._ssh_port_locks[_r.id].locked(),
+          "status=%r calls=%r" % (_st, _csp))
+    # ...and the page does not offer the second click: the button is disabled from the moment the
+    # request is sent until it answers — on success, on a refusal, and when the request fails.
+    _csp_js = open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), "static", "js", "remote_manage_host.js"), encoding="utf-8").read()
+    _csp_fn = _csp_js.split("function changeSshPort(){", 1)[-1].split("\nfunction ", 1)[0]
+    _csp_then = _csp_fn.split(".then(function(d){", 1)[-1].split(".catch(", 1)[0]
+    _csp_catch = _csp_fn.split(".catch(", 1)[-1]
+    check("ssh port (page): the button is disabled before the request and re-enabled on every answer",
+          "querySelectorAll('[data-action=\"changeSshPort\"]')" in _csp_fn
+          and "busy(true)" in _csp_fn and _csp_fn.index("busy(true)") < _csp_fn.index("fetch(")
+          and "busy(false)" in _csp_then and "busy(false)" in _csp_catch,
+          "changeSshPort never disables its button, or leaves it disabled after an answer")
+    _r.port = 22
 
     # ── close the panel's public port ──────────────────────────────────────────────────────────
     _rv.load_config = lambda: {"tailscale_setup_done": True, "port": 5000}
@@ -1898,10 +2859,40 @@ try:
     # ── sync ports ─────────────────────────────────────────────────────────────────────────────
     _gs = _rv_games[-1]
     _rv.get_game = lambda sid: _gs
+    # The route reads the host's SSH ports; answered here, so no check reaches a transport.
+    _rv._sm = NS(protected_host_ports=lambda remote: {22, 2222})
     _rv.current_user = _RvUser(superadmin=False, name="viewer")
     _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
     eq("sync ports: without MANAGE_REMOTES or INSTALL_SERVER -> 403", (_st, _body["message"]),
        (403, "Permission denied"))
+    # Aikido 745379031. The stock "admin" group has install/manage/uninstall servers and NOT
+    # manage remotes; INSTALL_SERVER let it write root-owned allow rules on a host's firewall, from
+    # ports the game account's config decides — every other firewall write needs MANAGE_REMOTES.
+    from panel.security.auth import (INSTALL_SERVER as _p8_IS, MANAGE_REMOTES as _p8_MR,  # noqa: E402
+                                     MANAGE_SERVERS as _p8_MS, UNINSTALL_SERVER as _p8_US)
+    _gpo = []
+    _rv.detect_game_ports = lambda remote, short, lgsm: {"game_port": _gs.port,
+                                                         "open_ports": [_gs.port, 3306], "ports": []}
+    _rv.remote_ufw_allow_game_ports = lambda remote, ports, name: (_gpo.append((list(ports), name)),
+                                                                   (list(ports), "x"))[1]
+    _rv.current_user = _RvUser(superadmin=False, name="delegated-admin")
+    _rv.has_permission = lambda u, p: p in (_p8_IS, _p8_MS, _p8_US)
+    _rv.can_access_remote = lambda u, rid: True
+    _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
+    check("sync ports: the stock admin group (install/manage/uninstall servers, no MANAGE_REMOTES) "
+          "is refused, and nothing reaches the firewall",
+          _st == 403 and _gpo == [], "status=%r body=%r opened=%r" % (_st, _body, _gpo))
+    _rv.has_permission = lambda u, p: p == _p8_MR
+    _rv.can_access_remote = lambda u, rid: False
+    _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
+    check("sync ports: MANAGE_REMOTES without THIS host in the user's groups is refused too",
+          _st == 403 and _gpo == [], "status=%r body=%r" % (_st, _body))
+    _rv.can_access_remote = lambda u, rid: rid == _gs.remote_id
+    _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
+    check("sync ports: ...while MANAGE_REMOTES on this host goes through (positive control)",
+          _st == 200 and _gpo == [([_gs.port, 3306], "cs2server")], "status=%r body=%r" % (_st, _body))
+    _rv.has_permission = lambda u, p: False
+    _rv.can_access_remote = lambda u, rid: False
     _rv.current_user = _RvUser()
     _rv.detect_game_ports = lambda remote, short, lgsm: {"game_port": 27016, "open_ports": [27016, 27017],
                                                          "ports": [{"port": 27016}]}
@@ -1916,6 +2907,28 @@ try:
           and _body["failed_ports"] == [27017] and _body["open_ports"] == [27016]
           and "27017 could not be opened" in _body["message"] and _gpo == [([27016, 27017], "cs2server")]
           and _rv_log[-1][3] is False, "body=%r" % (_body,))
+    # Whoever calls it: a reported port inside ANOTHER server's block (a stopped Rust server on
+    # 27017 still owns 27018, its query port), or SSH's, is neither opened nor stored. `details`
+    # runs as the game account over a config it can write, so "Game 22" moved the row onto SSH,
+    # and "Query 27018" re-tagged the other server's rule as this one's.
+    _p8_other = NS(id=next(_p8_ids), remote_id=_r.id, port=27017, short_name="rustserver",
+                   name="Rust", installed=True, game_type="rust", query_type=None, status="online",
+                   lgsm_name="rustserver", remote=_r)
+    _rv_games.insert(0, _p8_other)
+    _rv.detect_game_ports = lambda remote, short, lgsm: {"game_port": 22,
+                                                         "open_ports": [22, 27016, 27018], "ports": []}
+    _rv.remote_ufw_allow_game_ports = lambda remote, ports, name: (_gpo.append((list(ports), name)),
+                                                                   (list(ports), "x"))[1]
+    _gpo.clear()
+    _p8_before = _gs.port
+    _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
+    check("sync ports: a port SSH or another server's block holds is neither stored on the row "
+          "nor opened — and the answer names each one",
+          _gs.port == _p8_before and _gpo == [([27016], "cs2server")]
+          and _body.get("refused_ports") == [22, 27018] and _body["success"] is False
+          and "22, 27018" in _body["message"] and "REFUSED" in (_rv_log[-1][2] or ""),
+          "port=%r opened=%r body=%r" % (_gs.port, _gpo, _body))
+    _rv_games.remove(_p8_other)
     _rv.detect_game_ports = lambda *a: (_ for _ in ()).throw(ConnectionError("down"))
     _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
     eq("sync ports: a raise is a generic 500", (_st, _body),

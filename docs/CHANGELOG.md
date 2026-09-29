@@ -911,6 +911,209 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **The first-run wizard now needs a one-time setup token, so a stranger can no longer take a fresh
+  install.** Until the first admin existed, anyone who reached the port could open the wizard and
+  make themselves the superadmin, which is root on the panel's host. A default install opens that
+  port itself. The operator's own browser was then sent to a login it had no account for. The same
+  caller could also join the host to *their* tailnet with Tailscale SSH on, through the wizard's
+  Tailscale endpoints (a cookie-less request with a Bearer header skipped CSRF, so one request was
+  enough). They could also make the panel test SSH connections to hosts of their choosing.
+  The installer now ends by printing the wizard's link with a token in it (`/setup?token=…`), read from
+  `data/setup_token` (0600, the panel's account). `manage.py setup-token`, or
+  `sudo linuxgsm-panel-recover setup-token`, prints it again. Until an admin exists, the wizard and
+  every `/api/setup/*` endpoint answer only a browser that has shown the token. Anyone else gets a
+  page asking for it. The token is deleted once the admin exists.
+  The Tailscale endpoints refuse everyone until then. Two "create admin" requests that raced (the
+  password hash yielded between the check and the insert) can no longer both make a superadmin. The
+  wizard now follows its own step, so a form cannot skip ahead to a later one.
+  Its "add a host" step runs the Hosts page's own checks before connecting. That step also accepted
+  `auth_method=local`, which made a remote host read as the panel's own host.
+  An install that is already set up is unaffected: the token is never needed there.
+- **The wizard's last page no longer calls a panel that is still public "Private tailnet".** The Serve
+  step stores a loopback bind, but a new bind applies only from the next start. Until then the panel
+  kept answering on its public address, and the page said only your devices could reach it. That page
+  was also never shown, because finishing redirected to the login page. It is shown now. It says
+  where the panel still answers and offers **Restart now**; nothing restarts on its own, since that
+  would cut off an operator who is not on the tailnet.
+- **Tailscale migrate and finalize refuse the panel's own host**, like the other Tailscale actions on
+  the Hosts page. They rewrite a remote's record and firewall; migrate also deletes its public
+  22/tcp rule.
+- **`trust_proxy` believes `X-Forwarded-For` only from the proxy.** It used to read the header from
+  any peer, so a panel also reachable directly — or any local account on its host, a game-server
+  user included — could send a fresh address with every login attempt (unlimited guessing past the
+  throttle) and have fail2ban and the auto-block ban an address it chose. The socket peer must now
+  be in the new `trusted_proxies` (default `127.0.0.1` and `::1`), and on loopback the connection
+  must belong to root, the panel's own account or one in `trusted_proxy_users` (default `www-data`,
+  `nginx`, `http`, `caddy`, `cloudflared`). **If your proxy is on another machine or in a Docker
+  bridge network, add its address to `trusted_proxies` in `data/config.json`**; until you do, every
+  client is keyed as the proxy (one shared login throttle), and the panel log says
+  `ignoring X-Forwarded-For from <address>`. The startup output now warns when `trust_proxy` is on
+  and the panel listens beyond loopback.
+- **An IPv6 zone id no longer passes as an address.** Python's address parser accepts a zone after
+  `%` on any IPv6 address and keeps whatever text follows it, spaces, `$(…)` and newlines included:
+  `fe80::1%x panel login failed from 203.0.113.9` parses. The panel used that parse as its safety
+  check, so the text got through wherever an address was expected. A delegated admin with
+  **Manage remotes** could put lines of their own into a remote host's root-owned sshd or
+  `ssh.socket` drop-in through the SSH port's bind address, which is more than that permission
+  grants. The same admin could pass the text to `fail2ban-client` as root through **Unban**, on any
+  host in their groups (the panel's own included). fail2ban's source shows it logging such a value
+  verbatim to `/var/log/fail2ban.log`, and the panel counts that log's lines toward the auto-block.
+  Behind a proxy that passes the client's own `X-Forwarded-For` through (nginx setting only
+  `X-Real-IP`, say), or from a local account trusted as a proxy, a login client could write free
+  text into `data/auth.log`, the audit trail, the session list and admin alerts. fail2ban then
+  banned an address the text named, or every address of a hostname, instead of the client. When
+  the address's last 64 bits were zero, each new zone was also a new login-throttle bucket, which
+  meant unlimited password guessing. Through Tailscale Serve or Funnel, or the README's nginx block,
+  a client cannot choose that value. The first-run wizard also accepted a zoned bind address that
+  the next start could not bind. Every address, network, ban, whitelist, firewall and bind check now
+  refuses a zone and passes on the parsed address rather than the typed text, and the root helper
+  checks this for itself. A block, unban, allow-from or whitelist-removal row is audited under its
+  address or network, or as `(not an IP address)`; an allow-from row names the source as the rule
+  was sent, and a port rule's row names its port and protocol as they were checked, or
+  `(not a port)` / `(not a protocol)`.
+  A client address that a proxy reports with a zone is read with the zone dropped: Apache and Go's
+  reverse proxy write a link-local client into `X-Forwarded-For` that way, and that client is
+  keyed, logged and audited as its address alone. Refusing the value would have keyed it as the
+  proxy, so fail2ban could have banned the proxy and everyone behind it. That parse is what closes
+  the throttle hole: every zone on one address is that address's bucket. The throttle also drops a
+  zone itself, as a second guard in case another path ever hands it one. A link-local client that
+  the kernel reports with its interface attached is keyed by its address too. A whitelist entry
+  stored with a zone before the whitelist refused them still exempts its address from the
+  auto-block and the ban gate, as it did before (fail2ban's `ignoreip` leaves it out, as it always
+  has); remove it and add the address without the `%zone` to have fail2ban skip it too. Audit IPs
+  that an older version stored with a zone lose it as they age: each is reduced to its `/64`,
+  including the rows that version had already reduced with the zone's text kept.
+- **A `"*"` in `socketio_cors_origins` is ignored.** It let a page on another port of the panel's
+  address, or on a sibling tailnet node — both same-site, so the session cookie is sent — open the
+  console and the terminal as whoever visited it. If you had set it, set `site_domain` or list the
+  exact origin (e.g. `https://panel.example.com`); the panel logs
+  `socketio_cors_origins "*" is ignored` once.
+- **Usernames and group names cannot carry control or format characters.** A delegate with
+  user or group management could store ESC sequences that moved the cursor, forged rows or wrote the
+  clipboard in the recovery CLI (`manage.py`, run as root); group names had no format check at all.
+  The CLI now shows any such character as a visible escape, so names stored earlier are safe too.
+- **The chat bots' `!update` can no longer hold every self-update at "still being verified".** Each
+  one forced a fresh check against GitHub's anonymous API (60 requests an hour), and a spent limit
+  reads as "pending", which blocked the web UI's update too. A status under a minute old is reused,
+  a second `!update` while one is running is answered instead of queued, and chat-triggered checks
+  are limited to ten an hour across both bots.
+- **The post-restart "update complete" message goes only to a channel that is still authorised.**
+  It went to the channel that asked even after the bot was switched off or moved.
+- **The terminal's input queue is counted, not re-summed on every keystroke**, and dropped input is
+  reported once a second rather than once per keystroke.
+- **A delegated group admin can edit or delete only a group wholly within their reach.** The
+  permission list was filtered to what the editor holds, but nothing asked whose group it was:
+  an admin scoped to one host could give another tenant's viewers `use_terminal` and
+  `send_command` on a host the admin cannot reach, strip another tenant's admins, or, through
+  the default "Everyone" group, give every account a shell in one POST. Deleting a group skipped
+  its custom commands, so a group made for a superadmin-authored command could be deleted by
+  anyone who held its permissions. Editing and deleting now need all three of: the group's
+  permissions, hosts, servers and custom commands within the editor's reach; every member but
+  themselves and superadmins someone the editor could administer on Users (the rule `/users`
+  already applied); and no live invite naming the group alongside one outside their reach.
+  Otherwise the request is refused and audited. The Groups page shows those groups without Edit
+  or Delete, with their members, permissions and access still listed. **What changes:** on an
+  install with more than one tenant, a delegated admin can no longer edit "Everyone", or their
+  own group if someone else in it reaches more than they do. That is the intended rule. A
+  superadmin's page and edits are unchanged.
+- **An invite no longer outlives its minter, or its expiry, while its form is in flight.** The
+  checks that the minter is still active and still holds what the invite grants ran before the
+  form was read. A request carrying an `Authorization: Bearer` header and no cookie skips the
+  CSRF check that otherwise reads the body early, so a client could send the headers, hold the
+  body back while the minter was demoted and deactivated, and still get the account, superadmin
+  included. An invite that expired while the body was held was redeemed the same way. Redemption
+  now claims the invite only if it is unexpired, and re-reads the minter after the claim, while it
+  holds the database's write lock, before creating the account. The password is hashed before
+  that lock is taken, so other writers wait less.
+- **A delegated log viewer sees the rows about their own servers and hosts, chosen by id, not by
+  name.** `/logs` matched a row to a viewer's servers and hosts by the row's target name, and
+  names are not unique. The same game installed on two hosts gets the same name by default, so a
+  viewer granted one read the other's console commands with their arguments (`rcon_password ...`).
+  Anyone who could rename their own server or host could rename it onto another tenant's server,
+  onto `database`, a branch name or an IP, and read those rows too: another tenant's firewall
+  changes, the panel host's own administration, and another account's password or 2FA reset. Each
+  audit row now records the game server or host it is about, and a delegated viewer is shown their
+  own rows plus the rows about servers and hosts they can reach. Nothing is matched by name. When
+  a server or host is deleted its rows let go of the id, so a new server that SQLite gives the
+  same id to does not inherit another tenant's history. **On upgrade**, existing rows get their id
+  once, only where the action is about a server or host and exactly one server or host has that
+  name. The rest stay visible to the person who did the action and to superadmins. Password and
+  2FA resets are now treated as account rows.
+- **A host's SSH key is pinned from the first connection, whichever part of the panel makes it.**
+  A first contact from a background check (the host monitor, a pool worker) had no app context,
+  so its pin was never saved. Every later connection was "first contact" again, and a
+  man-in-the-middle at any of them was trusted. The pin is now stored from any thread, and a
+  connection whose pin cannot be stored is closed rather than used. Adding a host, the setup
+  wizard's host step and the **Test** button now pin the key they logged in with. A pin that
+  can no longer be decrypted refuses the Test login instead of reading as "no pin" and sending the
+  password to whatever answered.
+- **Changing a host's SSH port checks that sshd is what answers on the new port.** The move was
+  kept once *something* listened there, so a game account that bound the port first took the
+  panel's next SSH connections to that host. Each listener on the new port must now be root's sshd
+  (`ssh.service`/`sshd.service`, or `ssh.socket` under socket activation); anything else reverts
+  the move. fail2ban's sshd jail now covers the new port through
+  `/etc/fail2ban/jail.d/zz-panel-sshd.local`. The old edit touched only `jail.local`, which a stock
+  install does not have, so the jail kept watching the old port. It is updated only after the move
+  is confirmed, and the result says "fail2ban updated" only when the jail is running on the new
+  port. Two port changes for the same host at once are refused (409). **Re-run `install.sh` to
+  update the privileged helper**; an older helper keeps the move and says it could not confirm
+  sshd.
+- **The firewall touches only the rules a game server owns.** Uninstalling a server deleted every
+  rule on its port by spec, an operator's and another server's included, and "Open all ports"
+  replaced whatever rule held a port: another server's, an operator's DENY or LIMIT. Rules are now
+  removed by number, only ALLOW rules tagged with that server's name (and untagged ones only where
+  no other server's block holds the port), and a rule the panel did not make is never replaced.
+  No port is opened or stored on SSH, the panel's own web port, or another server's reserved
+  block. "Open all ports" (`/api/server/<id>/sync-ports`) now needs **Manage Remotes** for that
+  host, not only Install Server. An install holds back a port something else started listening on
+  while its files downloaded, and says so. A port scan that cannot be read no longer counts as
+  "every port is free".
+  - Uninstall no longer leaves a rule open when the firewall changes during the cleanup. A new
+    auto-block rule shifted the rule numbers, the delete was rightly refused, and the rule was then
+    given up and the uninstall reported a clean result. The panel now reads the firewall again and
+    retries up to three times, and the uninstall message names any rule still open. It also no
+    longer deletes a DENY, a LIMIT, a rule for one address, or any rule on the SSH or panel port
+    just because it carries the server's name. Those rules stay, and the message lists them.
+    "Open all ports" no longer says a port is open when a DENY for TCP or UDP still blocks it. It
+    adds an allow only for the protocol no rule covers yet, and names the rule it left each
+    protocol to (for example `27015/tcp DENY`).
+- **Root `apt` installs only the packages LinuxGSM lists for the game.** A game's install step
+  passed whatever package names LinuxGSM's output reported missing to a root `apt-get install`.
+  A name is now kept only when LinuxGSM's dependency list for that game and distro names it, the
+  panel's common set does, or it is `steamcmd`. Anything else is refused, named in the result and
+  logged. Package names must also end in a letter or digit, because `apt-get install foo-`
+  *removes* `foo`. A game account on an older LinuxGSM release asks for that release's packages,
+  which can differ from the panel's copy (v26.1.0 wants `openjdk-21-jre` and `dotnet-runtime-8.0`
+  where the newest release has `-25-` and `10.0`), and a newer release can list a package the
+  panel's weekly copy has not caught up with. A name the panel's copy refuses is now looked up
+  again in LinuxGSM's own repository: in the list at the release the account's script runs, then
+  in the current list, fetched at most once an hour. The account's own copy of the list is never
+  used, because the account can edit it; it can pick only which published release is read.
+- **A refused SSH connection is now closed.** When a connection to a remote failed its host-key
+  check, its login or any other step, the panel left that connection's thread and socket open. A
+  real SSH server hangs up after its login grace time, but a man-in-the-middle can keep them open
+  for good, and the host monitor added one per host on every pass. The "Test connection" button
+  left one open the same way whenever a test failed. Both now close the connection on every failure.
+- **A new server or host no longer inherits a deleted one's state when SQLite reuses its id.**
+  SQLite hands a deleted row's id to the next row created, and the panel keyed per-server and
+  per-host state by that id: console backlog, install and action jobs, cached OS-update lists and
+  alert counts. A new server could replay the previous one's console, and its first update alert
+  could be swallowed. That state is now dropped when a row is deleted, and again when a row is
+  created. A host bootstrap whose id was taken mid-run no longer writes onto the host that took it.
+  If the taking host's first SSH contact is stalled, the stale worker no longer pins its own key
+  onto it or aims its remaining root steps there.
+- **Unbounded reads and rows are capped.**
+  - The fail2ban log read stops at 8 MB, and a tally cut short is shown as unread rather than as
+    a smaller count.
+  - The console backlog keeps each line under 2048 characters and the whole backlog under 256 KB,
+    without cutting a colour sequence in half. The live console is unchanged.
+  - Every audit column is capped at its declared size, and the detail at 8 KB. SQLite does not
+    enforce column sizes, so a megabyte console command went into `panel.db` whole.
+  - The Ubuntu Pro service endpoint refuses an unknown service or action before running or
+    auditing anything.
+- **Changing the panel's own port audits what really happened.** The row said success even when
+  the firewall or fail2ban step failed or the old port's rule stayed open. A failed restart now
+  gets its own row, and the failure reply includes the firewall outcome.
 - **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported by
   kta1kri). Twenty-five places built `sudo -u <account> bash -c '…'` from a server's account
   (`short_name`) and LinuxGSM script name with neither quoting nor a check — the dashboard's own

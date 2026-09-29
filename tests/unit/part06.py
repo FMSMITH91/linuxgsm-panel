@@ -3455,6 +3455,60 @@ try:
     check("install.sh: the URL banner says so when the firewall state is unknown",
           'UFW_READ}" -eq 0' in _su_txt and "firewall state unknown" in _su_txt)
 
+    # ── the banner's link carries the setup token, read as the panel's account ────────────────
+    # Until the first admin exists the wizard answers only to a browser holding this token, so the
+    # link the operator is handed must carry it. Run for real: manage.py is a stand-in that says
+    # who ran it; sudo and id are shims, so nothing here escalates.
+    _stk_fn = _su_between("setup_link_token() {", "\n}\n")
+    _stk_dir = _tempfile.mkdtemp(prefix="setuptoken-")
+    try:
+        os.makedirs(os.path.join(_stk_dir, "venv", "bin"))
+        _stk_py = os.path.join(_stk_dir, "venv", "bin", "python")
+        with open(_stk_py, "w", encoding="utf-8") as _fh:
+            _fh.write('#!/bin/bash\n[ "$2" = setup-token ] && [ "$3" = --raw ] || exit 9\n'
+                      'echo "noise on stdout first" ; cat "$STK_OUT"; exit "${STK_RC:-0}"\n')
+        os.chmod(_stk_py, 0o700)
+        _stk_out = os.path.join(_stk_dir, "out")
+        _stk_as = os.path.join(_stk_dir, "as")      # who the sudo shim ran it as
+
+        def _stk_who():
+            return open(_stk_as, encoding="utf-8").read() if os.path.exists(_stk_as) else ""
+
+        def _stk_run(printed, rc=0, uid=0, user="lgsmpanel"):
+            with open(_stk_out, "w", encoding="utf-8") as _fh:
+                _fh.write(printed)
+            if os.path.exists(_stk_as):
+                os.unlink(_stk_as)
+            _env = ("PANEL_DIR=%s\nPANEL_USER=%s\nexport STK_OUT=%s STK_RC=%d STK_AS=%s\n"
+                    % (_su_shlex.quote(_stk_dir), user, _su_shlex.quote(_stk_out), rc,
+                       _su_shlex.quote(_stk_as)))
+            _shim = ("id() { echo %d; }\n"
+                     "sudo() { [ \"$1\" = -u ] || return 7; echo \"AS=$2\" >>\"$STK_AS\"; "
+                     "shift 2; \"$@\"; }\n" % uid)
+            return _su_run(_stk_fn + '\nprintf "TOK=[%s]" "$(setup_link_token)"\n', _env,
+                           extra=_shim)
+        _good = "Abc_def-" + "x" * 24
+        _r = _stk_run(_good + "\n")
+        check("install.sh: the banner's setup token comes from manage.py, as the PANEL's account",
+              ("TOK=[%s]" % _good) in _r.stdout and _stk_who() == "AS=lgsmpanel\n",
+              repr((_r.stdout[-120:], _stk_who())))
+        _r = _stk_run(_good + "\n", uid=1000, user="alice")
+        check("install.sh: ...and a non-root install runs it as itself, with no sudo",
+              ("TOK=[%s]" % _good) in _r.stdout and _stk_who() == "",
+              repr((_r.stdout[-120:], _stk_who())))
+        _r = _stk_run("Setup already has an administrator\n", rc=1)
+        check("install.sh: an install that already has an admin prints no token (plain address)",
+              "TOK=[]" in _r.stdout, repr(_r.stdout[-120:]))
+        _r = _stk_run("\x1b]0;owned\x07" + _good + "\n")
+        check("install.sh: ...and anything that is not a bare token never reaches root's terminal",
+              "TOK=[]" in _r.stdout and "\x1b" not in _r.stdout, repr(_r.stdout[-120:]))
+    finally:
+        _shutil.rmtree(_stk_dir, ignore_errors=True)
+    _banner = _su_between('SETUP_TOKEN="$(setup_link_token)"', "sudo linuxgsm-panel-recover setup-token")
+    check("install.sh: every URL the banner prints carries the setup path",
+          _banner.count("${PORT}${SETUP_PATH}${NC}") == 4 and 'SETUP_PATH="/setup?token=${SETUP_TOKEN}"'
+          in _banner, _banner[:200])
+
     # ── uninstall.sh must not report work it did not do ──────────────────────────────────────
     _un_txt = open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read()
 
@@ -4244,6 +4298,35 @@ _bandit_flags = " ".join(l.strip() for l in _bandit_src.splitlines()
                          if "FLAGS=" in l or "bandit -r" in l)
 check("coverage: panel-helper is bandit-scanned (bandit -r . globs *.py and would miss it)",
       "-r ." in _bandit_flags and "tools/panel-helper" in _bandit_flags, _bandit_flags[:140])
+
+# ── No source file carries a literal bidi control, zero-width or line-separator character ──────
+# They make a line read differently from how it runs ("Trojan Source", CVE-2021-42574), and a test
+# that needs one can always spell it as an escape. Two literal U+202E in smoke_test.py's
+# control-character checks failed SonarCloud's security gate (text:S6389) on PR #369, which no
+# local check would have caught. Vendored third-party files are not ours to rewrite.
+_invis_re = re.compile("[\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069]")
+_invis_ext = (".py", ".js", ".html", ".css", ".scss", ".sh", ".md", ".yml", ".yaml", ".json",
+              ".txt", ".toml", ".cfg", ".in", ".service", ".conf")
+_invis_hits = []
+for _dp, _dns, _fns in os.walk(_root):
+    _dns[:] = [_d for _d in _dns if _d not in (".git", ".claude", ".venv", "venv", "node_modules",
+                                               "data", "__pycache__", "vendor")]
+    for _fn in _fns:
+        _fp = os.path.join(_dp, _fn)
+        if not (_fn.endswith(_invis_ext) or os.path.relpath(_fp, _root) == os.path.join(
+                "tools", "panel-helper")):
+            continue
+        try:
+            _ftext = open(_fp, encoding="utf-8").read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for _ln, _line in enumerate(_ftext.splitlines(), 1):
+            _m = _invis_re.search(_line)
+            if _m:
+                _invis_hits.append("%s:%d U+%04X" % (os.path.relpath(_fp, _root), _ln,
+                                                     ord(_m.group())))
+check("source: no literal bidi control, zero-width or line-separator character (use an escape)",
+      not _invis_hits, "; ".join(_invis_hits[:5]))
 # ...and the errors[] guard: a file bandit cannot PARSE contributes zero results and exits 0, so
 # without this the module holding the privilege boundary could be reported clean for not being
 # read at all. Proven by execution with a syntax error injected into system_ops.py.
@@ -4382,6 +4465,8 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # login_required: creating your own account is the whole point of the link.
 # 212, was 211: /account/profile is a genuinely new view — it lets someone change their OWN
 # display name, which previously only an admin could do through Manage Users.
+# 224, was 223: /setup/restart is a genuinely new view — the finished wizard's "Restart now", which
+# applies a loopback bind the Serve step stored for the next start. Owner-only (_setup_owner_ok).
 # 223, was 222: /terminal/<id> is a genuinely new view — an interactive shell on a host, behind
 # its own USE_TERMINAL permission rather than MANAGE_REMOTES, because a shell is every capability
 # the session's account has at once and should be granted on purpose.
@@ -4389,8 +4474,8 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # password is held on until it sets its own). This total exists to catch a view VANISHING during a
 # move, so adding one is a deliberate bump — and url_map_baseline.json's diff is the record of what
 # the new route actually is.
-check("register_routes: every one of the 223 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 223,
+check("register_routes: every one of the 224 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 224,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being
@@ -4687,6 +4772,130 @@ for _wf in _wf_files:
             _wf_pipe.append("%s:%d" % (os.path.basename(_wf), _n))
 check("workflows: none pipes a downloaded script into a shell",
       _wf_files and not _wf_pipe, "files=%d piped=%r" % (len(_wf_files), _wf_pipe))
+
+# ── every actions/checkout step drops the job token, unless its job pushes with it ──────────────
+# actions/checkout persists the job token by default (since v6 in a $RUNNER_TEMP credentials file
+# that .git/config pulls in with includeIf), where every later step in the job can run git with it
+# or read it: the suites and their pip dependencies, fuzz targets, the Lighthouse panel, tools this
+# repo downloads. Ten of the sixteen checkouts left it there although none of their jobs pushes,
+# fetches or tags with it (Aikido 745329667-677). So: every checkout says `persist-credentials:
+# false` under its `with:`. The one exemption is a job with a `git … push` in it, and even that
+# must say `true` rather than lean on the default, so the intent is written down. The parse is
+# text (no PyYAML here), and it must account for every `actions/checkout@` in the workflows, in
+# both .yml and .yaml files, or it has read less than it claims.
+def _wf_checkout_steps(text):
+    """[(line, persist, job_pushes)] for each actions/checkout step in a workflow's text.
+
+    persist is the step's `persist-credentials` input unquoted, "" when it is not set, or None
+    when the step's `- ` line could not be found (a shape this parser does not know).
+    """
+    _lines = text.splitlines()
+
+    def _code(_l):
+        return bool(_l.strip()) and not _l.lstrip().startswith("#")
+
+    def _ind(_l):
+        return len(_l) - len(_l.lstrip(" "))
+
+    _jobs = [_n for _n, _l in enumerate(_lines) if re.match(r"^jobs:\s*(#.*)?$", _l)]
+    _heads = [_n for _n, _l in enumerate(_lines)
+              if _jobs and _n > _jobs[0] and re.match(r"^  [A-Za-z_][\w-]*:\s*(#.*)?$", _l)]
+    _out = []
+    for _i, _l in enumerate(_lines):
+        _m = re.match(r"^(\s*)(- )?uses:\s*[\"']?actions/checkout@", _l)
+        if not _m:   # a comment line cannot match: `#` is not whitespace, `- ` or `uses:`
+            continue
+        # The step's keys sit at _key; its `- ` is this line, or the nearest code line above
+        # that is indented less than the keys (a `- name:` first, `uses:` under it).
+        _key = len(_m.group(1)) + (2 if _m.group(2) else 0)
+        _s = _i
+        if not _m.group(2):
+            _s = _i - 1
+            while _s >= 0 and (not _code(_lines[_s]) or _ind(_lines[_s]) >= _key):
+                _s -= 1
+        if _s < 0 or _ind(_lines[_s]) != _key - 2 or not _lines[_s].lstrip().startswith("- "):
+            _out.append((_i + 1, None, False))
+            continue
+        _e = _s + 1
+        while _e < len(_lines) and (not _code(_lines[_e]) or _ind(_lines[_e]) > _key - 2):
+            _e += 1
+        _with = [_n for _n in range(_s + 1, _e) if _code(_lines[_n]) and _ind(_lines[_n]) == _key
+                 and re.match(r"^\s*with:\s*(#.*)?$", _lines[_n])]
+        _val = ""
+        if _with:
+            _kids = []
+            _n = _with[0] + 1
+            while _n < _e and (not _code(_lines[_n]) or _ind(_lines[_n]) > _key):
+                if _code(_lines[_n]):
+                    _kids.append(_lines[_n])
+                _n += 1
+            # First-level inputs only: text inside a block-scalar input is not an input.
+            for _k in _kids:
+                _pc = re.match(r"^\s*persist-credentials:\s*(\S+?)\s*(#.*)?$", _k)
+                if _pc and _ind(_k) == _ind(_kids[0]):
+                    _val = _pc.group(1).strip("'\"")
+        _hd = [_h for _h in _heads if _h < _i]
+        _jb = _hd[-1] if _hd else 0
+        _je = min([_h for _h in _heads if _h > _i] or [len(_lines)])
+        _push = any(_code(_x) and re.search(r"\bgit\b[^#\n]*\bpush\b", _x)
+                    for _x in _lines[_jb:_je])
+        _out.append((_i + 1, _val, _push))
+    return _out
+
+
+def _wf_checkout_ok(persist, job_pushes):
+    """False drops the token; only a job that pushes may keep it, and it must say so."""
+    return persist == "false" or (persist == "true" and job_pushes)
+
+
+_co_files = sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml"))
+                   + glob.glob(os.path.join(_root, ".github", "workflows", "*.yaml")))
+_co_seen = _co_raw = 0
+_co_bad, _co_push = [], []
+for _wf in _co_files:
+    _co_text = open(_wf, encoding="utf-8").read()
+    _co_raw += sum(1 for _l in _co_text.splitlines()
+                   if "actions/checkout@" in _l and not _l.lstrip().startswith("#"))
+    for _co_ln, _co_val, _co_pushes in _wf_checkout_steps(_co_text):
+        _co_seen += 1
+        _co_tag = "%s:%d" % (os.path.basename(_wf), _co_ln)
+        if not _wf_checkout_ok(_co_val, _co_pushes):
+            _co_bad.append("%s=%r" % (_co_tag, _co_val))
+        elif _co_val == "true":
+            _co_push.append(_co_tag)
+check("workflows: every actions/checkout step sets persist-credentials: false, unless its job "
+      "pushes with the token and says `true`",
+      _co_seen > 0 and _co_seen == _co_raw and not _co_bad,
+      "files=%d steps=%d of %d bad=%r kept-for-a-push=%r"
+      % (len(_co_files), _co_seen, _co_raw, _co_bad, _co_push))
+# The parser and the rule, on shapes the workflows do not all have today: a `- name:` above
+# `uses:`; the input inside a block scalar (not an input); a sibling step's `with:`; a pushing job
+# on the default (fails); a job whose only push is in a comment; a step it cannot place (counted,
+# failing); a pushing job that says `true` (the one pass besides false); `true` quoted, no push.
+_co_probe = _wf_checkout_steps(
+    "on: push\njobs:\n  a:\n    steps:\n"
+    "      - name: Checkout\n        uses: actions/checkout@x\n        with:\n"
+    "          persist-credentials: false   # nothing here pushes\n"
+    "      - uses: actions/checkout@x\n        with:\n          sparse-checkout: |\n"
+    "            persist-credentials: false\n"
+    "      - uses: actions/checkout@x\n"
+    "      - uses: actions/setup-python@x\n        with:\n          persist-credentials: false\n"
+    "  b:\n    steps:\n      - uses: actions/checkout@x\n      - run: git push origin HEAD\n"
+    "  c:\n    steps:\n      - uses: actions/checkout@x\n      # then: git push origin HEAD\n"
+    "  d:\n    steps:\n  uses: actions/checkout@x\n"
+    "  e:\n    steps:\n      - uses: actions/checkout@x\n        with:\n"
+    "          persist-credentials: true   # the step below pushes the tag\n"
+    "      - run: git push origin v1\n"
+    "  f:\n    steps:\n      - uses: actions/checkout@x\n        with:\n"
+    "          persist-credentials: \"true\"\n")
+_co_want = [(6, "false", False), (9, "", False), (13, "", False), (19, "", True),
+            (23, "", False), (27, None, False), (30, "true", True), (36, "true", False)]
+check("workflows: the checkout parser reads a named step's inputs and not a block scalar's text or "
+      "a sibling step's, sees a push only outside comments, fails a step it cannot place, and "
+      "passes only false, or true in a job that pushes",
+      _co_probe == _co_want
+      and [_wf_checkout_ok(_v, _p) for _ln, _v, _p in _co_probe]
+      == [True, False, False, False, False, False, True, False], repr(_co_probe))
 _ci_wf = open(os.path.join(_root, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
 _cov_job = _ci_wf[_ci_wf.index("\n  coverage:\n"):]
 _cov_env = _cov_job[_cov_job.index("\n    env:\n"):]
@@ -6738,7 +6947,9 @@ check("suites: no check() hands its reporter something that is not a string",
 # Anything else fails, and the fix is shlex.quote() — not an exemption.
 import ast as _sh_ast
 
-_SHELL_RUNNERS = {"_run"}
+# _run_verb_shell is system_ops' capped runner for the pre-helper verb form (it replaced _run at
+# that one call site so the output is bounded) — shell=True like _run, so held to the same rule.
+_SHELL_RUNNERS = {"_run", "_run_verb_shell"}
 
 
 def _literal_names(fn):
@@ -6986,20 +7197,33 @@ from flask import Flask as _IpFlask                                             
 _ip_app = _IpFlask(__name__)
 
 
-def _ip_for(headers, remote="127.0.0.1", trust_proxy=False, proxy_fix_orig=None, root_peer=True):
+# A local account that is not a proxy (a game-server user with a shell), and one that is (nginx's).
+_IP_GAME_UID, _IP_PROXY_UID = 54321, 33
+_IP_UNREADABLE = object()          # peer_uid: /proc/net could not name the socket's owner
+
+
+def _ip_for(headers, remote="127.0.0.1", trust_proxy=False, proxy_fix_orig=None, root_peer=True,
+            trusted=None, proxy_users=(_IP_PROXY_UID,), peer_uid=None):
     # root_peer: the loopback caller is tailscaled (a root-owned socket), the Serve shape these
     # checks are about. A non-root loopback caller is not trusted at all — see part02.
+    # trusted / proxy_users: config.json's trusted_proxies / trusted_proxy_users (None = default).
+    # peer_uid: who owns the loopback peer's socket, when it is not root_peer's 0-or-a-game-user.
     _ip_app.config["_TRUST_PROXY"] = trust_proxy
+    getattr(_ip_auth, "configure_proxy_trust", lambda _a, _c: None)(
+        _ip_app, {"trust_proxy": trust_proxy, "trusted_proxies": trusted,
+                  "trusted_proxy_users": list(proxy_users) if proxy_users is not None else None})
     env = {"REMOTE_ADDR": remote}
     if proxy_fix_orig is not None:
         env["werkzeug.proxy_fix.orig"] = {"REMOTE_ADDR": proxy_fix_orig}
-    _saved_lpt = _ip_auth._loopback_proxy_trusted
+    _uid = peer_uid if peer_uid is not None else (0 if root_peer else _IP_GAME_UID)
+    _saved_lpt, _saved_uid = _ip_auth._loopback_proxy_trusted, _ip_auth._loopback_peer_uid
     _ip_auth._loopback_proxy_trusted = lambda: root_peer
+    _ip_auth._loopback_peer_uid = lambda _env: None if _uid is _IP_UNREADABLE else _uid
     try:
         with _ip_app.test_request_context("/", headers=headers, environ_overrides=env):
             return _ip_auth.client_ip()
     finally:
-        _ip_auth._loopback_proxy_trusted = _saved_lpt
+        _ip_auth._loopback_proxy_trusted, _ip_auth._loopback_peer_uid = _saved_lpt, _saved_uid
 
 
 # X-Forwarded-For's LAST hop wins, and X-Real-IP is only the fallback. The order used to be the
@@ -7039,12 +7263,132 @@ eq("client_ip: behind ProxyFix, a non-address hop does not come back via remote_
            proxy_fix_orig="10.0.0.5"), "10.0.0.5")
 eq("client_ip: (control) ...while a real address in that same position is still the client",
    _ip_for({"X-Forwarded-For": "198.51.100.7"}, remote="198.51.100.7", trust_proxy=True,
-           proxy_fix_orig="10.0.0.5"), "198.51.100.7")
+           proxy_fix_orig="10.0.0.5", trusted=["10.0.0.0/8"]), "198.51.100.7")
 eq("client_ip: a NON-root loopback caller's headers are ignored (a local account, not Serve)",
    _ip_for({"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "100.64.0.5"}, root_peer=False),
    "127.0.0.1")
-eq("client_ip: ...but a declared proxy (trust_proxy) is still believed from any peer",
-   _ip_for({"X-Forwarded-For": "100.64.0.5"}, trust_proxy=True, root_peer=False), "100.64.0.5")
+# Aikido 745379296. trust_proxy used to mean "believe these headers from ANY peer": a panel also
+# reachable directly (the auto bind picks 0.0.0.0 when Serve is not proxying) believed whoever
+# connected, and on the README's own layout (proxy + bind 127.0.0.1) so did every local account —
+# a popped game account included, the attacker _loopback_proxy_trusted exists to stop. Either way
+# a fresh X-Forwarded-For per attempt was a fresh throttle bucket, and failures were written to
+# auth.log under an address the attacker chose for fail2ban and the auto-block to ban. Now: only
+# from a peer in trusted_proxies (default loopback), and from loopback only when the socket is
+# root's, the panel's own account's, or a proxy account's (trusted_proxy_users).
+eq("client_ip: a declared proxy on loopback is believed when a proxy account owns the socket",
+   _ip_for({"X-Forwarded-For": "100.64.0.5"}, trust_proxy=True, root_peer=False,
+           peer_uid=_IP_PROXY_UID), "100.64.0.5")
+eq("client_ip: ...but not when a local account that is no proxy dialled loopback (745379296)",
+   _ip_for({"X-Forwarded-For": "100.64.0.5"}, trust_proxy=True, root_peer=False), "127.0.0.1")
+eq("client_ip: ...and ProxyFix's rewritten remote_addr does not bring the header back",
+   _ip_for({"X-Forwarded-For": "100.64.0.5"}, remote="100.64.0.5", trust_proxy=True,
+           proxy_fix_orig="127.0.0.1", root_peer=False), "127.0.0.1")
+eq("client_ip: under trust_proxy a DIRECT peer's X-Forwarded-For is not believed (745379296)",
+   _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+           proxy_fix_orig="203.0.113.9"), "203.0.113.9")
+eq("client_ip: ...nor its X-Real-IP",
+   _ip_for({"X-Real-IP": "192.0.2.77"}, remote="203.0.113.9", trust_proxy=True,
+           proxy_fix_orig="203.0.113.9"), "203.0.113.9")
+eq("client_ip: a proxy on another machine is believed once it is in trusted_proxies (control)",
+   _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+           proxy_fix_orig="203.0.113.9", trusted=["203.0.113.0/24"]), "192.0.2.77")
+eq("client_ip: trusted_proxies REPLACES the default, so a listed remote proxy does not also admit "
+   "every local account",
+   _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+           proxy_fix_orig="127.0.0.1", trusted=["203.0.113.0/24"]), "127.0.0.1")
+eq("client_ip: a dual-stack bind's ::ffff:127.0.0.1 is loopback to trusted_proxies too",
+   _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+           proxy_fix_orig="::ffff:127.0.0.1"), "192.0.2.77")
+eq("client_ip: root and the panel's own account are always believed on loopback, whatever "
+   "trusted_proxy_users lists",
+   (_ip_for({"X-Forwarded-For": "192.0.2.7"}, trust_proxy=True, proxy_users=[], peer_uid=0),
+    _ip_for({"X-Forwarded-For": "192.0.2.8"}, trust_proxy=True, proxy_users=[],
+            peer_uid=os.getuid())), ("192.0.2.7", "192.0.2.8"))
+eq("client_ip: an unreadable socket owner on loopback is not believed",
+   _ip_for({"X-Forwarded-For": "192.0.2.9"}, trust_proxy=True, root_peer=False,
+           peer_uid=_IP_UNREADABLE), "127.0.0.1")
+# The fallback on its own: the untrusted branch returns the SOCKET peer. The first version of this
+# fix returned remote_addr there, which ProxyFix had already rewritten from the refused header, so
+# every refusal above would still have keyed the spoofed address.
+_ip_saved_rctp = getattr(_ip_auth, "_request_came_through_proxy", None)
+try:
+    _ip_auth._request_came_through_proxy = lambda _peer: False
+    eq("client_ip: a refused peer is keyed by the socket peer, never by ProxyFix's remote_addr",
+       _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+               proxy_fix_orig="203.0.113.9"), "203.0.113.9")
+finally:
+    _ip_auth._request_came_through_proxy = _ip_saved_rctp
+# What the refusal costs a real proxy that is not listed: every client keyed as the proxy, one
+# shared throttle bucket. So it is said in the log — once per peer, not once per request — naming
+# the setting that fixes it.
+from logging import Handler as _IpHandler, WARNING as _IP_WARNING, getLogger as _ip_logger  # noqa: E402
+
+
+class _IpWarned(_IpHandler):
+    def __init__(self):
+        _IpHandler.__init__(self)
+        self.got = []
+
+    def emit(self, rec):
+        if rec.levelno >= _IP_WARNING:
+            self.got.append(rec.getMessage())
+
+
+_ip_h = _IpWarned()
+_ip_logger("panel.app").addHandler(_ip_h)
+getattr(_ip_auth, "_ignored_proxy_warned", {}).clear()      # the checks above warned already
+try:
+    for _ in range(5):
+        _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+                proxy_fix_orig="198.51.100.200")
+    _ip_for({"X-Forwarded-For": "192.0.2.77"}, trust_proxy=True, root_peer=False)
+    _ip_for({}, remote="198.51.100.201", trust_proxy=True)        # no header: nothing to ignore
+    # A socket peer carrying an IPv6 zone: ipaddress accepts any text after '%', and the warning
+    # is a log line. (A real peer's zone is an interface name; the text here is the worst case.)
+    _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+            proxy_fix_orig="fe80::77%x FORGED ban for 203.0.113.9")
+finally:
+    _ip_logger("panel.app").removeHandler(_ip_h)
+_ip_w_remote = [m for m in _ip_h.got if "198.51.100.200" in m]
+check("client_ip: an ignored X-Forwarded-For is logged once per peer, naming trusted_proxies",
+      len(_ip_w_remote) == 1 and "trusted_proxies" in _ip_w_remote[0], repr(_ip_h.got))
+check("client_ip: ...and for a local account, naming the uid and trusted_proxy_users",
+      any("127.0.0.1" in m and str(_IP_GAME_UID) in m and "trusted_proxy_users" in m
+          for m in _ip_h.got), repr(_ip_h.got))
+check("client_ip: ...and a peer that sent no forwarding header is not warned about",
+      not any("198.51.100.201" in m for m in _ip_h.got), repr(_ip_h.got))
+check("client_ip: the ignored-proxy warning names a zoned peer by its address alone",
+      any("fe80::77" in m for m in _ip_h.got) and not any("FORGED" in m for m in _ip_h.got),
+      repr(_ip_h.got))
+# config.json's values, parsed once: a bad entry is skipped (and said), a bare string is one entry.
+_ip_cfg_app = _IpFlask("ip_cfg")
+_ip_conf = getattr(_ip_auth, "configure_proxy_trust", None)
+_ip_cfg_h = _IpWarned()
+_ip_logger("panel.app").addHandler(_ip_cfg_h)
+try:
+    if _ip_conf is not None:
+        _ip_conf(_ip_cfg_app, {"trust_proxy": True,
+                               "trusted_proxies": ["10.0.0.5", "not-an-ip", "fd00::/8"],
+                               "trusted_proxy_users": ["root", "no-such-user-here", 4242]})
+finally:
+    _ip_logger("panel.app").removeHandler(_ip_cfg_h)
+# Named by position, never echoed: whatever was typed into config.json is not a log line's to carry.
+check("config: a bad trusted_proxies / trusted_proxy_users entry is named by its place, not echoed",
+      any("trusted_proxies: entry 2 " in m for m in _ip_cfg_h.got)
+      and any("trusted_proxy_users: entry 2 " in m for m in _ip_cfg_h.got)
+      and not any("not-an-ip" in m or "no-such-user-here" in m for m in _ip_cfg_h.got),
+      repr(_ip_cfg_h.got))
+check("config: trusted_proxies keeps the entries that parse, as networks",
+      [str(n) for n in _ip_cfg_app.config.get("_TRUSTED_PROXIES", ())] == ["10.0.0.5/32", "fd00::/8"],
+      repr(_ip_cfg_app.config.get("_TRUSTED_PROXIES")))
+check("config: trusted_proxy_users takes names and uids, and always root and the panel's own",
+      {0, 4242, os.getuid()} <= set(_ip_cfg_app.config.get("_TRUSTED_PROXY_UIDS", ())),
+      repr(_ip_cfg_app.config.get("_TRUSTED_PROXY_UIDS")))
+if _ip_conf is not None:
+    _ip_conf(_ip_cfg_app, {"trust_proxy": True, "trusted_proxies": "192.0.2.1"})
+check("config: a single trusted_proxies string is one entry, not its characters",
+      [str(n) for n in _ip_cfg_app.config.get("_TRUSTED_PROXIES", ())] == ["192.0.2.1/32"],
+      repr(_ip_cfg_app.config.get("_TRUSTED_PROXIES")))
 eq("client_ip: no headers at all -> the socket address",
    _ip_for({}, remote="203.0.113.9"), "203.0.113.9")
 # ...and the deployment guide has to set the header it tells the panel to read.

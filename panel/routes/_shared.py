@@ -15,6 +15,7 @@ from flask_login import (current_user)
 from panel.core.clock import (utcnow)
 from panel.core.config import (ConfigUnreadable, is_unreadable, load_config)
 from panel.core.http import (_json_str)
+from panel.core.validation import (NOT_AN_IP, unzoned_ip_or_network)
 from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
     _game_backup_status, register_remote_state, register_server_state)
 from panel.db.models import (GameServer, RemoteServer, db)
@@ -49,12 +50,12 @@ def _begin_bootstrap(app, remote_id, opts, actor_id):
         existing = _bootstrap_jobs.get(remote_id)
         if existing and existing.get("status") in ("running", "rebooting"):
             return False, "A bootstrap is already running for this server."
-        _bootstrap_jobs[remote_id] = {
+        job = _bootstrap_jobs[remote_id] = {
             "status": "running", "step": 0, "total": 0,
             "step_name": "Starting…", "log": [], "message": "",
             "started": time.time(), "updated": time.time(),
         }
-    _start_bootstrap_job(app, remote_id, opts, actor_id)
+    _start_bootstrap_job(app, remote_id, job, opts, actor_id)
     return True, "Bootstrap started."
 
 
@@ -111,11 +112,15 @@ def _whitelist_mutate(app, body):
     raw = _json_str(body, "ip")
     remove = bool(body.get("remove"))
     if remove:
-        canon = _security_whitelist_remove(raw)
+        # The raw text only picks the entry to drop, so one stored with a zone id before the add
+        # refused them can still go. What is audited and answered is the address or network it
+        # names, read as the gate reads a stored entry, or a fixed text — never the request's own.
+        _security_whitelist_remove(raw)
+        shown = unzoned_ip_or_network(raw) or NOT_AN_IP
         threading.Thread(target=_apply_whitelist_everywhere, args=(app,), daemon=True).start()
         _banlist.refresh_soon(0)
-        log_action(current_user, "whitelist_remove", target=canon)
-        return jsonify({"success": True, "removed": canon, "whitelist": _security_whitelist()})
+        log_action(current_user, "whitelist_remove", target=shown)
+        return jsonify({"success": True, "removed": shown, "whitelist": _security_whitelist()})
     canon = _security_whitelist_add(raw)
     if not canon:
         return jsonify({"success": False, "message": "Enter a valid IP address or CIDR (e.g. 1.2.3.4 or 10.0.0.0/8)."})
@@ -240,10 +245,11 @@ def _record_backup_outcome(app, sid, gname, ok, reason, action, title):
     still applies — the Tags UI promises muting keeps a server out of the alert channel.
     """
     try:
-        log_action(None, action, target=gname, detail=(reason or "")[:500], success=bool(ok))
+        _bk_gs = db.session.get(GameServer, sid)
+        log_action(None, action, target=gname, detail=(reason or "")[:500], success=bool(ok),
+                   server=_bk_gs)
         if ok:
             return
-        _bk_gs = db.session.get(GameServer, sid)
         if _bk_gs is not None and notifications.alerts_muted(_bk_gs):
             return
         notifications.notify("backup_failed", title,
@@ -579,7 +585,8 @@ def _run_queued_action(app, gs):
     give_up = retry and fails >= _QUEUED_ACTION_ATTEMPTS
     detail = _queued_action_detail(act, (_out, err, rc), fails, retry, give_up)
     try:
-        log_action(None, "%s_server" % act, target=gs.name, detail=detail[:500], success=ok)
+        log_action(None, "%s_server" % act, target=gs.name, detail=detail[:500], success=ok,
+                   server=gs)
     except Exception:
         db.session.rollback()
         app.logger.warning("could not audit the queued %s of %s", act, gs.name, exc_info=True)
@@ -656,18 +663,64 @@ def _run_due_restarts(app):
                 app.logger.debug("pending restart/stop of %s failed", gs.name, exc_info=True)
 
 
-def _start_bootstrap_job(app, remote_id, opts, actor_id):
+def _start_bootstrap_job(app, remote_id, job, opts, actor_id):
     """Run remote_bootstrap_vps in a background (green) thread.
 
-    It streams progress into the _bootstrap_jobs registry for the status endpoint.
-    """
-    _app = app
+    It streams progress into `job`, the entry _begin_bootstrap registered for the status endpoint.
 
-    def _progress(step, total, name, status):
+    THAT entry, not whichever one holds remote_id when a step reports. remote_id is a rowid, and
+    SQLite hands a deleted host's id to the next host added — while this worker, on a machine
+    whose owner can hold any step for as long as they like, is still running. Looked up by id, a
+    delegated admin's deleted host wrote its own output into the next host's job (a superadmin's,
+    on a host outside the delegate's reach), flipped it to "done/Complete" while that host's real
+    bootstrap was still running — which then let a second one start beside it — stamped that
+    host's last_seen, and wrote a success audit row naming it.
+
+    The row goes the same way. The bootstrap is handed a DETACHED copy of it: a session commit
+    expires every object it holds, and the first SSH contact with a host commits (the host-key pin,
+    _core._persist_host_key), after which the next attribute read reloads the row BY ID — from the
+    new host's row, if its id was taken meanwhile. The remaining root steps were then aimed at the
+    new host with its credentials, and the pin had been written onto the new row too. Detached, the
+    bootstrap keeps the host it was started for, and what it learned is written back only if the
+    row that holds the id now is still the one that was loaded (created_at is its identity: a
+    superadmin editing the host mid-bootstrap is legitimate, so the address must not be).
+    """
+    run = _BootstrapRun(app, remote_id, job)
+    threading.Thread(target=run.run, args=(opts,), daemon=True).start()
+
+
+class _BootstrapRun:
+    """One bootstrap worker: the job it registered, and the detached row it was started for."""
+
+    def __init__(self, app, remote_id, job):
+        self.app, self.remote_id, self.job = app, remote_id, job
+        self.remote = self.created = self.pinned = None
+
+    def _mine(self):
+        """Whether our job is still the registered job for remote_id. Call holding the lock."""
+        return _bootstrap_jobs.get(self.remote_id) is self.job
+
+    def _pin_back(self):
+        """Write back a pin first contact learned, at the next step rather than at the end.
+
+        The monitor and every request reach the host through the ROW, and until the pin is on it
+        they trust whatever key they are shown; the bootstrap itself runs for many minutes.
+        """
+        learned = self.remote.host_key if self.remote is not None else None
+        if learned and learned != self.pinned:
+            self.pinned = learned             # once, whatever the write does: never every step
+            _settle_bootstrapped_row(self.remote_id, self.created, None, learned, None)
+
+    def progress(self, step, total, name, status):
+        """remote_bootstrap_vps's progress callback: the step it is on, into OUR job only."""
+        try:
+            self._pin_back()                  # outside the lock: it is a database write
+        except Exception:
+            _log.debug("bootstrap: writing the learned host key back failed", exc_info=True)
         with _bootstrap_lock:
-            job = _bootstrap_jobs.get(remote_id)
-            if job is None:
+            if not self._mine():
                 return
+            job = self.job
             job["step"] = step
             job["total"] = total
             job["step_name"] = name
@@ -677,35 +730,74 @@ def _start_bootstrap_job(app, remote_id, opts, actor_id):
                 job["status"] = "rebooting" if status == "rebooting" else job["status"]
             job["log"].append(f"[{step}/{total}] {name}" if total else name)
 
-    def _run():
-        try:
-            with _app.app_context():
-                remote = db.session.get(RemoteServer, remote_id)
-                if not remote:
-                    raise RuntimeError("Remote no longer exists")
-                success, msg, _ = remote_bootstrap_vps(remote, progress=_progress, **opts)
-                if success:
-                    remote.is_online = True
-                    remote.last_seen = utcnow()
-                    db.session.commit()
-                log_action(None, "remote_vps_bootstrap", target=remote.name, detail=msg, success=success)
-                with _bootstrap_lock:
-                    job = _bootstrap_jobs.get(remote_id)
-                    if job is not None:
-                        job["status"] = "done" if success else "failed"
-                        job["step_name"] = "Complete" if success else "Failed"
-                        job["message"] = msg
-                        job["updated"] = time.time()
-        except Exception as e:
-            with _bootstrap_lock:
-                job = _bootstrap_jobs.get(remote_id)
-                if job is not None:
-                    job["status"] = "failed"
-                    job["message"] = str(e)
-                    job["log"].append(f"ERROR: {e}")
-                    job["updated"] = time.time()
+    def _end(self, status, step_name, message, log_line=None):
+        """Mark OUR job finished — and nothing, if it is no longer the one registered."""
+        with _bootstrap_lock:
+            if not self._mine():
+                return
+            self.job["status"] = status
+            if step_name is not None:
+                self.job["step_name"] = step_name
+            self.job["message"] = message
+            if log_line is not None:
+                self.job["log"].append(log_line)
+            self.job["updated"] = time.time()
 
-    threading.Thread(target=_run, daemon=True).start()
+    def _bootstrap(self, opts):
+        """Load the row, run the bootstrap on a detached copy, settle it: (success, message)."""
+        remote = db.session.get(RemoteServer, self.remote_id)
+        if not remote:
+            raise RuntimeError("Remote no longer exists")
+        self.remote, self.created, self.pinned = remote, remote.created_at, remote.host_key
+        name = remote.name
+        db.session.expunge(remote)
+        success = False
+        try:
+            success, msg, _ = remote_bootstrap_vps(remote, progress=self.progress, **opts)
+        finally:
+            # However the run ended: a pin first contact learned was kept even when a later step
+            # raised, back when first contact committed it itself.
+            same = _settle_bootstrapped_row(self.remote_id, self.created, self.pinned,
+                                            remote.host_key, success)
+        # The row is filed under the host only while that id is still this host: _audit_ref
+        # resolves an id, and one a new host took would show this run to that host's viewers.
+        log_action(None, "remote_vps_bootstrap", target=name, detail=msg, success=success,
+                   remote=remote if same else None)
+        return success, msg
+
+    def run(self, opts):
+        """The thread's body."""
+        try:
+            with self.app.app_context():
+                success, msg = self._bootstrap(opts)
+            self._end("done" if success else "failed", "Complete" if success else "Failed", msg)
+        except Exception as e:
+            self._end("failed", None, str(e), f"ERROR: {e}")
+
+
+def _settle_bootstrapped_row(remote_id, created, pinned, learned, success):
+    """Write a bootstrap's result onto its host's row, if that row is still the one it loaded.
+
+    `created` is the loaded row's created_at, which is what tells "the same host" from "a host
+    that took its id". `success` True marks the host online and seen now (None: the run has not
+    finished). `learned` is the host key the bootstrap's own connections pinned in memory, on the
+    detached copy, and `pinned` what it was loaded with; it is written only when it is new and the
+    row has no pin yet — first contact, the only time the in-session write it replaces would have
+    happened. A pin the row already holds, or one that cannot be decrypted, is never replaced.
+    Returns whether the row was still that host's.
+    """
+    from panel.db.models import UnreadableSecret
+    row = db.session.get(RemoteServer, remote_id)
+    if row is None or row.created_at != created:
+        return False
+    if success:
+        row.is_online = True
+        row.last_seen = utcnow()
+    if (learned and learned != pinned and not row.host_key
+            and not isinstance(row.host_key, UnreadableSecret)):
+        row.host_key = learned
+    db.session.commit()
+    return True
 
 
 def _maybe_cache_commands(app, server_id):
@@ -861,6 +953,40 @@ def _action_log_path(short_name, action):
 # game is a few hundred lines of SteamCMD spool; this holds one comfortably without becoming a
 # place anyone would mistake for the log.
 _CONSOLE_BACKLOG_MAX = 600
+# ...and how much of it, in characters, since a line count is no bound on its own: a drain pushes
+# up to _ACTION_TAIL_CHUNK bytes, and 64KB with no newline in it is ONE line, so 600 of them held
+# ~39MB per server and /api/console sent all of it on every poll. A line is cut at
+# _CONSOLE_LINE_MAX (SteamCMD and LinuxGSM lines are a fraction of that), and the oldest lines go
+# once the whole backlog passes _CONSOLE_BACKLOG_BYTES — 600 ordinary lines are ~90KB, so the
+# budget only ever bites on output nobody could read anyway. Only the REPLAY is bounded: the live
+# socket push still carries what the command printed.
+_CONSOLE_LINE_MAX = 2048
+_CONSOLE_BACKLOG_BYTES = 256 * 1024
+# A colour escape the cut may land inside: the browser would print its tail as text.
+_PARTIAL_SGR_RE = re.compile(r"\x1b(?:\[[0-9;]*)?\Z")
+
+
+def _backlog_line(ln):
+    """`ln` as the backlog keeps it: whole, or cut at _CONSOLE_LINE_MAX and marked with '…'."""
+    if len(ln) <= _CONSOLE_LINE_MAX:
+        return ln
+    cut = _PARTIAL_SGR_RE.sub("", ln[:_CONSOLE_LINE_MAX])
+    # render_colour leaves SGR open across a line; close it so the marker is not painted too.
+    return cut + ("\x1b[0m" if "\x1b[" in cut else "") + "…"
+
+
+def _backlog_append(server_id, text, ts):
+    """Keep `text`'s non-blank lines in the server's backlog, inside both of its ceilings."""
+    buf = _console_backlog.setdefault(server_id, [])
+    buf.extend({"t": ts, "line": _backlog_line(ln)} for ln in str(text).split("\n") if ln.strip())
+    if len(buf) > _CONSOLE_BACKLOG_MAX:
+        del buf[:len(buf) - _CONSOLE_BACKLOG_MAX]
+    size = sum(len(e["line"]) for e in buf)
+    drop = 0
+    while size > _CONSOLE_BACKLOG_BYTES and drop < len(buf) - 1:     # the newest line always stays
+        size -= len(buf[drop]["line"])
+        drop += 1
+    del buf[:drop]
 
 
 def _console_push(app, server_id, text, ts=None):
@@ -885,10 +1011,7 @@ def _console_push(app, server_id, text, ts=None):
         return
     ts = float(ts if ts is not None else time.time())
     try:
-        buf = _console_backlog.setdefault(server_id, [])
-        buf.extend({"t": ts, "line": ln} for ln in str(text).split("\n") if ln.strip())
-        if len(buf) > _CONSOLE_BACKLOG_MAX:
-            del buf[:len(buf) - _CONSOLE_BACKLOG_MAX]
+        _backlog_append(server_id, text, ts)
     except Exception:
         _log.debug("console backlog append failed for server %s", server_id, exc_info=True)
     try:
@@ -977,7 +1100,9 @@ def _begin_action_tail(app, server_id, action, path, user):
 def _reinstate_displaced(server_id, cur):
     """Tail again the newest run `cur` displaced that is still going, or stop tailing the server."""
     nxt = cur.get("prev")
-    while nxt is not None and nxt.get("ended"):
+    # A forgotten run belonged to a server that is gone (panel_state.forget_rows): its id may be
+    # another server's now, so it is never tailed again.
+    while nxt is not None and (nxt.get("ended") or nxt.get("forgotten")):
         nxt = nxt.get("prev")
     if nxt is not None:
         _action_output[server_id] = nxt
@@ -1025,6 +1150,12 @@ def _end_action_tail(app, server_id, remote, action, rc):
     mine = (getattr(_action_tail_local, "tokens", None) or {}).pop((server_id, action), None)
     if mine is not None:
         mine["ended"] = True
+        if mine.get("forgotten"):
+            # The server this run was registered for was deleted while it ran, and forget_rows
+            # dropped the registration. The id may already be ANOTHER server's, so there is nothing
+            # of ours to drain and no console of ours to announce the end in: "[panel] update
+            # finished" pushed now lands in the new server's backlog and its viewers' live console.
+            return
     cur = _action_output.get(server_id)
     own = cur is not None and (cur is mine if mine is not None else cur.get("action") == action)
     if own:

@@ -4,6 +4,7 @@ import logging
 import re
 import bcrypt
 from panel.core.clock import utcnow
+from panel.core.validation import unzoned_ip_address_or_none
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
@@ -824,6 +825,49 @@ class AuditLog(db.Model):
     ip_address = db.Column(db.String(45), default="")
     timestamp = db.Column(db.DateTime, default=utcnow, index=True)
     success = db.Column(db.Boolean, default=True)
+    # What the row is ABOUT, by id: the game server, or the host. audit_scope authorises a
+    # delegated viewer by these and never by `target`, which is free text and not unique — two
+    # hosts' copies of one game share a name by default, and a server can be renamed onto any
+    # other target. No FK, like MetricSample: the listeners at the bottom of this module null
+    # them when the row they point at is deleted, because SQLite hands a freed id to the next
+    # row created, and a recycled id would show one tenant's history to another.
+    game_server_id = db.Column(db.Integer, nullable=True, index=True)
+    remote_id = db.Column(db.Integer, nullable=True, index=True)
+
+
+# Which audit actions are ABOUT a game server, and which about a host — used ONCE, to backfill
+# game_server_id / remote_id on rows written before those columns existed. New rows get their ids
+# from the log_action call that writes them (server= / remote=), never from this list, and a row
+# whose action is not in it keeps NULL ids: its own actor and a superadmin can still read it,
+# nobody else. That is the point: panel_repair_db's target is 'database' and ufw_block's an IP,
+# and a server renamed 'database' must not pick those rows up. LIKE patterns cover the actions
+# whose name is built at the call site ('%s_server', 'moderate_%s', f"pro_{action}"...).
+# tests/rbac_test.py holds every log_action call that passes server=/remote= to this list.
+AUDIT_SERVER_ACTIONS = frozenset({
+    "install_complete", "install_server", "retry_install", "uninstall_server", "edit_server",
+    "game_backup", "game_backup_delete", "game_backup_download", "game_backup_schedule",
+    "scheduled_backup", "queued_backup", "sync_ports", "set_daily_restart",
+    "set_notify_when_empty", "refresh_commands", "send_command", "set_query_type",
+    "custom_command", "restart_when_empty", "stop_when_empty", "set_autostart", "edit_config",
+    "server_alerts_save", "edit_file", "delete_file", "download_file", "cron_add",
+    "cron_update", "cron_delete", "cron_run_now", "set_log_timestamps", "gmod_content",
+    "gmod_content_uninstall", "upload_file", "server_tags_set",
+})
+AUDIT_SERVER_ACTION_LIKE = ("%\\_server", "%\\_complete", "moderate\\_%", "mods\\_%")
+AUDIT_HOST_ACTIONS = frozenset({
+    "autoblock_reconcile", "import_servers", "terminal_open", "terminal_close",
+    "retrust_hostkey", "change_ssh_port", "game_port_open", "reboot_when_empty_arm",
+    "reboot_when_empty_cancel", "reboot_when_empty_fire", "add_remote", "edit_remote",
+    "add_local_remote",
+})
+AUDIT_HOST_ACTION_LIKE = ("remote\\_%", "pro\\_%")
+# Host actions whose rows carry remote_id from the call site but are NOT backfilled: their old
+# target is an IP or a port, never the host's name, and the panel host writes the same actions
+# about itself (autoblock_toggle's panel variant targets 'panel host'). A host named like one of
+# those targets must not inherit the panel host's rows.
+AUDIT_HOST_ACTIONS_CALL_ONLY = frozenset({
+    "ufw_block", "ufw_unblock", "fail2ban_unban", "close_panel_port", "autoblock_toggle",
+})
 
 
 class Invite(db.Model):
@@ -1154,11 +1198,16 @@ def _anonymise_ip(ip):
 
     Anything that will not parse as an IP returns "" rather than being kept. A value that got in
     without being an address is not something to preserve on the off-chance.
+
+    An IPv6 zone id is DROPPED and the address it is attached to reduced, so the network stays and
+    the text goes. An older version stored client addresses a proxy reported with a zone (Apache
+    and Go's reverse proxy write a link-local client that way), and its reduction kept the zone:
+    '2001:db8::%<text>' came back as '2001:db8::%<text>/64', text and all. Both now come out as
+    '2001:db8::/64', built from the parsed number.
     """
     import ipaddress
-    try:
-        addr = ipaddress.ip_address((ip or "").strip())
-    except ValueError:
+    addr = unzoned_ip_address_or_none(ip)
+    if addr is None:
         return ""
     prefix = 24 if addr.version == 4 else 64
     return str(ipaddress.ip_network("%s/%d" % (addr, prefix), strict=False))
@@ -1186,7 +1235,10 @@ def anonymise_audit_ips(days):
     rows = (AuditLog.query
             .filter(AuditLog.timestamp < cutoff, AuditLog.ip_address != "",
                     AuditLog.ip_address.isnot(None),
-                    ~AuditLog.ip_address.like("%/%"))     # already reduced -> skip
+                    db.or_(~AuditLog.ip_address.like("%/%"),     # already reduced -> skip...
+                           # ...unless it holds a '%': an older version's reduction kept an IPv6
+                           # zone id, and whatever text followed it, ahead of the "/64".
+                           AuditLog.ip_address.like("%\\%%", escape="\\")))
             .all())
     for r in rows:
         r.ip_address = _anonymise_ip(r.ip_address)
@@ -1220,6 +1272,9 @@ _LIGHT_MIGRATIONS = {
         "ALTER TABLE game_server ADD COLUMN install_retryable BOOLEAN DEFAULT 1",
     ("game_server", "content_games"):
         "ALTER TABLE game_server ADD COLUMN content_games TEXT DEFAULT ''",
+    # NULL on upgrade, then backfilled once by _backfill_audit_object_ids (see there).
+    ("audit_log", "game_server_id"): "ALTER TABLE audit_log ADD COLUMN game_server_id INTEGER",
+    ("audit_log", "remote_id"): "ALTER TABLE audit_log ADD COLUMN remote_id INTEGER",
     ("invite", "revoked_at"): "ALTER TABLE invite ADD COLUMN revoked_at DATETIME",
     ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
     ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",
@@ -1265,11 +1320,51 @@ def _run_light_migrations():
     from sqlalchemy import inspect
     insp = inspect(db.engine)
     existing = {t: {c["name"] for c in insp.get_columns(t)} for t in insp.get_table_names()}
+    _audit_ids_new = "audit_log" in existing and "game_server_id" not in existing["audit_log"]
     for (table, col), ddl in _LIGHT_MIGRATIONS.items():
         if table in existing and col not in existing[table]:
             db.session.execute(text(ddl))
+    if _audit_ids_new:
+        _backfill_audit_object_ids()
+        # Committed HERE: _create_declared_indexes builds on db.engine, another connection, and
+        # the backfill's UPDATEs hold SQLite's write lock until this session commits — so the
+        # index build waited out the 15 s busy timeout and the upgrade died at startup.
+        db.session.commit()
     _create_declared_indexes(existing)
     db.session.commit()
+
+
+def _backfill_audit_object_ids():
+    """Give the rows written before AuditLog.game_server_id/remote_id existed their ids, ONCE.
+
+    Only where it is unambiguous NOW: the action is a server (or host) action, and its target
+    names exactly one game server (or host) — for a host, exactly, or as "<name>:<port/rule>".
+    Everything else keeps NULL ids and is readable by its own actor and a superadmin only. This
+    runs when the columns are added and never again: after that no row is ever matched by name,
+    which is the whole fix — a name match at read time is what let a renamed server read another
+    tenant's console history. Runs inside _run_light_migrations' transaction.
+    """
+    al, gs, rs = AuditLog.__table__, GameServer.__table__, RemoteServer.__table__
+
+    def _is(col, exact, like):
+        return db.or_(col.in_(sorted(exact)), *(col.like(p, escape="\\") for p in like))
+
+    _gs_named = gs.c.name == al.c.target
+    db.session.execute(al.update().where(
+        al.c.game_server_id.is_(None),
+        _is(al.c.action, AUDIT_SERVER_ACTIONS, AUDIT_SERVER_ACTION_LIKE),
+        db.select(db.func.count()).select_from(gs).where(_gs_named).scalar_subquery() == 1,
+    ).values(game_server_id=db.select(gs.c.id).where(_gs_named).scalar_subquery()))
+    # A host row's target is the host's name, or "<name>:<port/proto>" / "<name>:#<rule>". substr
+    # rather than LIKE, so a name holding % or _ matches only itself.
+    _rs_named = db.or_(rs.c.name == al.c.target,
+                       db.func.substr(al.c.target, 1, db.func.length(rs.c.name) + 1)
+                       == rs.c.name + ":")
+    db.session.execute(al.update().where(
+        al.c.remote_id.is_(None),
+        _is(al.c.action, AUDIT_HOST_ACTIONS, AUDIT_HOST_ACTION_LIKE),
+        db.select(db.func.count()).select_from(rs).where(_rs_named).scalar_subquery() == 1,
+    ).values(remote_id=db.select(rs.c.id).where(_rs_named).scalar_subquery()))
 
 
 def _create_declared_indexes(existing):
@@ -1648,6 +1743,41 @@ def _register_audit_detach():
             _log.debug("detaching a deleted user's audit rows failed", exc_info=True)
 
 
+def _register_audit_object_detach():
+    """Null AuditLog.game_server_id / remote_id when the server or host they name is deleted."""
+    from sqlalchemy import event
+
+    # Both ids are bare INTEGER PRIMARY KEYs, so SQLite gives a deleted row's id to the next row
+    # created — and audit_scope reads these ids to decide who sees a row. Without this, a deleted
+    # tenant-B server's console history (`rcon_password ...`) is shown to whoever is granted the
+    # server that inherits its id. Nulled, not deleted: the entries stay for the superadmin; only
+    # the pointer must not lie. Same shape as _register_audit_detach above.
+    @event.listens_for(GameServer, "after_delete")
+    def _detach_audit_rows_of_deleted_server(_mapper, connection, target):
+        try:
+            connection.execute(AuditLog.__table__.update()
+                               .where(AuditLog.game_server_id == target.id)
+                               .values(game_server_id=None))
+        except Exception:
+            _log.debug("detaching a deleted server's audit rows failed", exc_info=True)
+
+    # A host's game servers are removed by a BULK delete in remotes.py, which fires no ORM event —
+    # and they are gone before this runs, so they cannot be found by remote_id. Null every
+    # game_server_id that no longer names a row instead: whatever deleted it, it must not point.
+    @event.listens_for(RemoteServer, "after_delete")
+    def _detach_audit_rows_of_deleted_host(_mapper, connection, target):
+        try:
+            _al = AuditLog.__table__
+            connection.execute(_al.update().where(_al.c.remote_id == target.id)
+                               .values(remote_id=None))
+            connection.execute(_al.update().where(
+                _al.c.game_server_id.is_not(None),
+                _al.c.game_server_id.not_in(db.select(GameServer.__table__.c.id)))
+                .values(game_server_id=None))
+        except Exception:
+            _log.debug("detaching a deleted host's audit rows failed", exc_info=True)
+
+
 def _register_host_sample_pruning():
     """Clear the samples of a deleted host's game servers, which a bulk delete removed."""
     from sqlalchemy import event
@@ -1665,10 +1795,40 @@ def _register_host_sample_pruning():
             _log.debug("game-server sample prune failed for a deleted host", exc_info=True)
 
 
+def _register_new_row_forgetting():
+    """Forget every in-memory entry keyed by a host's or game server's id when a row TAKES it."""
+    from sqlalchemy import event
+
+    # The delete routes forget a row's state (panel_state.forget_rows), and the monitor sweeps the
+    # rest a minute later — but state can be written AFTER the delete by something the delete could
+    # not see: a long action's drain, an update check or the daily sweep still holding the old row.
+    # SQLite then hands the freed id to the next INSERT, and whoever can see the new row reads the
+    # old one's console backlog or pending packages. The INSERT is the one point every creation
+    # path shares (install, import, add a host, the panel host's own row, the setup wizard), and it
+    # comes before anything seeds state for the new id: a job is queued only after the commit that
+    # gives the row its id, so forgetting here never takes the new row's own job with it.
+    #
+    # after_insert rather than after the commit: it is the earliest point the id exists. A rolled
+    # back insert loses nothing either — the id it was given belonged to no live row.
+    def _forget(kind):
+        def _handler(_mapper, _connection, target):
+            try:
+                from panel.core.panel_state import forget_rows
+                forget_rows(**{kind: (target.id,)})
+            except Exception:
+                _log.debug("forgetting a recycled id's state failed", exc_info=True)
+        return _handler
+
+    event.listen(RemoteServer, "after_insert", _forget("remote_ids"))
+    event.listen(GameServer, "after_insert", _forget("server_ids"))
+
+
 _register_sample_pruning()
 _register_invite_revocation()
 _register_audit_detach()
+_register_audit_object_detach()
 _register_host_sample_pruning()
+_register_new_row_forgetting()
 
 
 # ── A row LOADED with a name @validates would have refused ─────────────────────────────────────

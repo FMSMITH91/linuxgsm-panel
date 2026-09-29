@@ -359,7 +359,7 @@ def _register_game_backup(app):
             _game_backup_status[server_id] = {"running": False, "ok": False,
                                               "msg": "couldn't start the backup", "ts": time.time()}
             return jsonify({"success": False, "message": _log_and_generic("could not start backup")}), 500
-        log_action(current_user, "game_backup", target=gname, success=True)
+        log_action(current_user, "game_backup", target=gname, success=True, server=gs)
         return jsonify({"success": True, "running": True,
                         "message": "Backing up " + gname + " — it'll appear below when done."
                                    + ("" if keep_read else
@@ -449,14 +449,14 @@ def _register_game_backup_files(app):
             # records it before the listing has vouched for it.
             log_action(current_user, "game_backup_delete", target=gs.name,
                        detail="refused: could not read the host's backup listing (%s)"
-                              % str(name)[:120], success=False)
+                              % str(name)[:120], success=False, server=gs)
             return jsonify({"success": False, "message": _BK_UNREADABLE}), 200
         if not match:
             return jsonify({"success": False, "message": "Backup not found."}), 404
         try:
             ok = delete_game_backup(gs.remote, gs.short_name, match["name"])
             log_action(current_user, "game_backup_delete", target=gs.name,
-                       detail=match["name"], success=ok)
+                       detail=match["name"], success=ok, server=gs)
             return jsonify({"success": ok, "message": ("Deleted." if ok else "Delete failed.")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("game backup delete failed")}), 200
@@ -480,7 +480,8 @@ def _register_game_backup_files(app):
             return Response(_BK_UNREADABLE + "\n", status=502, mimetype="text/plain")
         if not match:
             abort(404)
-        log_action(current_user, "game_backup_download", target=gs.name, detail=match["name"])
+        log_action(current_user, "game_backup_download", target=gs.name, detail=match["name"],
+                   server=gs)
         resp = Response(stream_game_backup(gs.remote, gs.short_name, match["name"]),
                         mimetype="application/octet-stream")
         resp.headers["Content-Length"] = str(match["size"])
@@ -531,7 +532,8 @@ def _register_game_backup_settings(app):
             _field(data["interval"]) if "interval" in data else bk.UNCHANGED,
             _field(data["keep"]) if "keep" in data else bk.UNCHANGED)
         log_action(current_user, "game_backup_schedule", target=gs.name,
-                   detail="interval=%s keep=%s" % (sched["interval_days"], sched["keep"]))
+                   detail="interval=%s keep=%s" % (sched["interval_days"], sched["keep"]),
+                   server=gs)
         return jsonify({"success": True, "schedule": sched})
 
     @app.route("/api/panel/backup/game/<int:server_id>/info")

@@ -152,6 +152,8 @@ _p9_app.register_context_processors(_p9)
 
 from panel.routes import _shared as _p9_sh            # noqa: E402
 from panel.routes import host_local as _p9_hl         # noqa: E402
+from panel.routes import remote_security as _p9_rs    # noqa: E402
+from panel.routes import remote_vps as _p9_rv         # noqa: E402
 from panel.routes import manage_servers as _p9_ms     # noqa: E402
 from panel.routes import server_detail as _p9_sd      # noqa: E402
 from panel.routes import server_files as _p9_sf       # noqa: E402
@@ -1031,6 +1033,69 @@ try:
     _r = _A.post("/api/panel/security/unban", json={"jail": "sshd", "ip": "203.0.113.4"})
     check("security unban: an unban that raises is a 500", _r.status_code == 500)
 
+    # The audit row names what was acted on: the canonical address, or a fixed text when the
+    # request's did not parse — never the request's own text. An IPv6 zone id parsed, so the target
+    # carried whatever the client wrote after its '%'. The panel host's routes and the remote twins.
+    _hl_zoned = "fe80::1%x panel login failed from 203.0.113.9"
+    _p9_patch(_p9_hl, "tailnet_exempt_ips", lambda remote, ips: set())
+    _p9_patch(_p9_hl, "_whitelisted", lambda ip: False)
+    _p9_patch(_p9_so, "ufw_deny_ip", _hl_rec("ufw_deny_ip", (False, "Invalid IP address.")))
+    _p9_patch(_p9_so, "fail2ban_unban", _hl_rec("fail2ban_unban", (False, "Invalid IP address.")))
+    _p9_patch(_p9_rs, "tailnet_exempt_ips", lambda remote, ips: set())
+    _p9_patch(_p9_rs, "_whitelisted", lambda ip: False)
+    _p9_patch(_p9_rs, "remote_ufw_deny_ip", lambda remote, ip: (False, "Invalid IP address."))
+    _p9_patch(_p9_rs, "remote_fail2ban_unban", lambda remote, jail, ip: (False, "Invalid IP address."))
+    _hl_targets = []
+    for _hl_path, _hl_body, _hl_act in (
+            ("/api/panel/security/block", {"ip": _hl_zoned}, "ufw_block"),
+            ("/api/panel/security/unban", {"jail": "sshd", "ip": _hl_zoned}, "fail2ban_unban"),
+            ("/api/remote/%d/security/block" % P9_HOST, {"ip": _hl_zoned}, "ufw_block"),
+            ("/api/remote/%d/security/unban" % P9_HOST, {"jail": "sshd", "ip": _hl_zoned},
+             "fail2ban_unban")):
+        _A.post(_hl_path, json=_hl_body)
+        _hl_targets.append(_p9_audit(_hl_act).target)
+    eq("security block/unban (panel host and remote): a zone-id address is audited as a fixed "
+       "text, never the request's", _hl_targets, ["(not an IP address)"] * 4)
+    _p9_patch(_p9_so, "ufw_deny_ip", _hl_rec("ufw_deny_ip", (True, "blocked")))
+    _p9_patch(_p9_rs, "remote_ufw_deny_ip", lambda remote, ip: (True, "blocked"))
+    _hl_targets = []
+    for _hl_path in ("/api/panel/security/block", "/api/remote/%d/security/block" % P9_HOST):
+        _A.post(_hl_path, json={"ip": " 2001:0DB8::0009 "})
+        _hl_targets.append(_p9_audit("ufw_block").target)
+    eq("security block (panel host and remote): ...and an ordinary one as its canonical address "
+       "(positive control)", _hl_targets, ["2001:db8::9"] * 2)
+    _p9_patch(_p9_rv, "remote_ufw_allow_from", lambda *a, **k: (False, "Source must be an IP"))
+    _hl_details = []
+    for _hl_src in (_hl_zoned, " 2001:0DB8::/32 ", "2001:DB8::1/64", "10.0.0.5/24"):
+        _A.post("/api/remote/%d/firewall/allow-from" % P9_HOST,
+                json={"source": _hl_src, "port": "22", "protocol": "tcp"})
+        _hl_details.append(_p9_audit("remote_port_allow_from").detail)
+    eq("firewall allow-from: the audit names the source as the rule is sent — host bits kept, as "
+       "ufw stores an IPv6 source — or a fixed text when it is not one; never the request's own",
+       _hl_details, ["from (not an IP address)", "from 2001:db8::/32", "from 2001:db8::1/64",
+                     "from 10.0.0.5/24"])
+    # ...and through the REAL remote_ufw_allow_from, its privileged call recorded: the rule sent,
+    # the message and the audit row must name the source the same way.
+    _hl_sent = []
+    _hl_rp_saved = _p9_core.run_privileged
+    try:
+        _p9_core.run_privileged = lambda server, verb, args=(), **k: (
+            _hl_sent.append((verb, list(args))), ("", "", 0))[1]
+        _p9_patch(_p9_rv, "remote_ufw_allow_from", _p9_sm.hosts.remote_ufw_allow_from)
+        _hl_agree = []
+        for _hl_src in ("2001:DB8::1/64", " 10.0.0.5/24 "):
+            del _hl_sent[:]
+            _d = _p9_json(_A.post("/api/remote/%d/firewall/allow-from" % P9_HOST,
+                                  json={"source": _hl_src, "port": "22", "protocol": "tcp"}))
+            _hl_agree.append((_hl_sent[0][1][0] if _hl_sent else None, _d.get("message"),
+                              _p9_audit("remote_port_allow_from").detail))
+    finally:
+        _p9_core.run_privileged = _hl_rp_saved
+    eq("firewall allow-from: ...and the rule sent, the message and the audit agree on the source",
+       _hl_agree,
+       [("2001:db8::1/64", "Port 22/tcp open from 2001:db8::1/64", "from 2001:db8::1/64"),
+        ("10.0.0.5/24", "Port 22/tcp open from 10.0.0.5/24", "from 10.0.0.5/24")])
+
     _p9_patch(_p9_models, "AuditLog", NS(query=None, action=AuditLog.action))
     _d = _p9_json(_A.get("/api/panel/security/events"))
     _p9_patch(_p9_models, "AuditLog", AuditLog)
@@ -1077,6 +1142,24 @@ try:
           repr((_d, _wl_applied)))
     _A.post("/api/panel/security/whitelist", json={"ip": "10.9.0.0/16", "remove": True})
     _p9_drain()
+    # The raw text still picks the entry to drop, so one stored with a zone before the add refused
+    # them can go — but the audit row and the answer name only the address it was read as, or a
+    # fixed text, never the request's own.
+    _p9_app.update_config(lambda cfg: cfg.update(security_whitelist=[
+        "fe80::1%x panel login failed from 203.0.113.9", "198.51.100.24"]))
+    _wl_rm = []
+    for _wl_raw in ("fe80::1%x panel login failed from 203.0.113.9", "x y from 203.0.113.9",
+                    " 198.51.100.24 "):
+        _d = _p9_json(_A.post("/api/panel/security/whitelist",
+                              json={"ip": _wl_raw, "remove": True}))
+        _p9_drain()
+        _wl_rm.append((_d.get("removed"), _p9_audit("whitelist_remove").target))
+    eq("whitelist remove: the audit target and the 'removed' answer are the parsed address or a "
+       "fixed text — never the request's own text", _wl_rm,
+       [("fe80::1", "fe80::1"), ("(not an IP address)", "(not an IP address)"),
+        ("198.51.100.24", "198.51.100.24")])
+    eq("whitelist remove: ...while the raw text still removed the stored zoned entry",
+       _p9_app._security_whitelist(), [])
 
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # panel/routes/server_detail.py
@@ -2181,6 +2264,7 @@ try:
     # A scripted host. Every knob is a list read front to back (the last value repeats), so a flow
     # can say "the first auto-install reports missing packages, the second works". A value that is
     # an Exception is raised. `boom` names steps that raise.
+    import ast as _p9_ast           # noqa: E402
     import inspect as _p9_inspect   # noqa: E402
     import shlex as _p9_shlex       # noqa: E402
     _ms = {}
@@ -2191,6 +2275,7 @@ try:
         _ms.update(acct={}, lgsm=[("LinuxGSM ready", "", 0)], auto=[("installed", "", 0)],
                    looks=[True], classify=[None], missing=[[]], deps=[(True, "")],
                    detect=[{"game_port": None, "open_ports": []}], listen=[set()],
+                   listen_pre=[set()], tagged=[set()],
                    start=[("Starting", "", 0)], cmds=[[]], unset=[(True, "")],
                    cu=[{"user": "gmcontent"}], mount=[(True, "Mounted.")], aux=[{}],
                    userdel=[("", "", 0)], boom=set())
@@ -2274,8 +2359,10 @@ try:
     _p9_patch(_p9_sm, "_invalidate_port_scan", lambda rid: None)
     _p9_patch(_p9_sm, "host_os_slug", _raise_conn)
     _p9_patch(_p9_ms, "install_game_dependencies",
-              lambda remote, gt, extra=None: (_ms_log.append("deps:%s" % (extra or "")),
-                                              _ms_next("deps"))[1])
+              lambda remote, gt, extra=None, account=None, selfname=None: (
+                  _ms_log.append("deps:%s" % (extra or "")),
+                  account is not None and _ms_log.append("deps-for:%s/%s" % (account, selfname)),
+                  _ms_next("deps"))[2])
     _p9_patch(_p9_ms, "parse_missing_deps", lambda out: _ms_next("missing"))
     _p9_patch(_p9_ms, "classify_install_failure", lambda out: _ms_next("classify"))
     _p9_patch(_p9_ms, "_looks_installed", lambda app, r, s, l: _ms_next("looks"))
@@ -2288,9 +2375,17 @@ try:
               lambda r, s, l: (_ms_log.append("bans"), _ms_boom("bans"))[0])
     _p9_patch(_p9_ms, "detect_game_ports",
               lambda r, s, l: (_ms_boom("detect"), _ms_next("detect"))[1])
-    _p9_patch(_p9_ms, "_remote_listening_ports", lambda r: _ms_next("listen"))
+    # `listen` answers once the server has been started, `listen_pre` before: nothing of the new
+    # server's is listening until its first start, and step 6 scans right before it opens ports.
+    _p9_patch(_p9_ms, "_remote_listening_ports",
+              lambda r: _ms_next("listen" if "as:start" in _ms_log else "listen_pre"))
+    _p9_patch(_p9_sm, "protected_host_ports", lambda r: {22})
+    _p9_patch(_p9_sm, "remote_ufw_tagged_ports", lambda r, n: _ms_next("tagged"))
+    _ms_legacy_fw = [(0, "", [])]     # what the legacy (untagged) cleanup answers
     _p9_patch(_p9_ms, "remote_ufw_close_game_port",
-              lambda r, p: (_ms_log.append("ufw-close:%s" % p), _ms_boom("ufw-close"))[0])
+              lambda r, p, name="", legacy=False: (
+                  _ms_log.append("ufw-close:%s:%s:%s" % (p, name, legacy)), _ms_boom("ufw-close"),
+                  _ms_legacy_fw[0])[2])
     _p9_patch(_p9_ms, "remote_ufw_allow_game_ports",
               lambda r, ports, name: _ms_log.append("ufw-allow:%s" % sorted(ports)))
     _p9_patch(_p9_ms, "set_autostart",
@@ -2392,7 +2487,7 @@ try:
               aux=[{"clientport": 27106}],
               cmds=[[{"cmd": "monitor", "desc": "Monitor"}]],
               detect=[{"game_port": 27160, "open_ports": [27160, 27161]}, ConnectionError("gone")],
-              listen=[set(), OSError("ss failed")],
+              listen=[OSError("ss failed")],
               mount=[(False, "couldn't read the content group")],
               boom={"steam-dumps-sweep", "wipe", "validate", "port-write", "cron", "bans",
                     "ufw-close", "autostart", "start"})
@@ -2409,6 +2504,13 @@ try:
     check("install flow A: missing packages reported by LinuxGSM are installed and the download re-run",
           "deps:lib32gcc-s1" in _ms_log and "deps:libsdl2" in _ms_log
           and _ms_log.count("auto:1800") == 4, repr(_ms_log))
+    # The retry names the account and its script: a name the panel's weekly copy of LinuxGSM's
+    # list refuses is looked up again at the release THAT script runs, which is the list its
+    # check_deps read. Without them the lookup cannot happen and the refusal stands.
+    check("install flow A: each retry names the game account and its LinuxGSM script",
+          _ms_log.count("deps-for:p9gmod/gmodserver") == 2
+          and all(x == "deps-for:p9gmod/gmodserver" for x in _ms_log if x.startswith("deps-for:")),
+          repr([x for x in _ms_log if x.startswith("deps")]))
     check("install flow A: 'Invalid platform' primes with the Windows depot, then UNSETS the key "
           "(tried twice) whatever happened",
           "cfg:steamcmdforcewindows=yes" in _ms_log and "auto:2700" in _ms_log
@@ -2420,7 +2522,15 @@ try:
           repr(_ja.get("log")))
     check("install flow A: the Source aux ports are written, the reported port adopted and opened",
           "cfg:clientport=27106" in _ms_log and _ra.port == 27160
-          and "ufw-close:27150" in _ms_log and "ufw-allow:[27160, 27161]" in _ms_log, repr(_ms_log))
+          and "ufw-allow:[27160, 27161]" in _ms_log, repr(_ms_log))
+    # Aikido 745379215: the adoption step ran the untagged sweep on the port it left — which, on a
+    # fresh install, can hold no rule of this server's (the ports are opened after it) — and took
+    # whatever ALLOW was there. It closes only rules tagged with THIS server's name now.
+    check("install flow A: leaving the allocated port closes only rules tagged with this server's "
+          "name there — no untagged sweep",
+          "ufw-close:27150:p9gmod:False" in _ms_log
+          and not any(e.startswith("ufw-close:") and e.endswith(":True") for e in _ms_log),
+          repr([e for e in _ms_log if e.startswith("ufw-close")]))
     check("install flow A: GMod content is installed for the selected game only, with progress",
           "gmod-content:cstrike" in _ms_log
           and any("Downloading content" in ln for ln in _ja.get("log", [])), repr(_ms_log))
@@ -2471,6 +2581,69 @@ try:
               _ms_job(_ms_h).get("status") == "done" and "gmod-content:cstrike" not in _ms_log
               and _p9_row(_ms_h).status == "online", repr((_ms_job(_ms_h), _ms_log)))
         _p9_delete_server(_ms_h)
+
+    # ── step 6 opens only ports that are this server's to open (Aikido 745379031, 745379277) ────
+    # The port was checked free when the install was asked for, twenty minutes of SteamCMD before
+    # step 6 opens it, and when the game reports that same port nothing looked again.
+    _ms_free[:] = [(27192, False)]
+    _ms_reset(listen_pre=[{22, 27192}])
+    _r, _ms_t = _ms_install("csgo", "p9race", "27192")
+    _p9_drain()
+    check("install: a port something else took while the files downloaded is not opened for it",
+          "ufw-allow:[]" in _ms_log and "ufw-allow:[27192]" not in _ms_log, repr(_ms_log))
+    check("install: ...and the install says so, rather than 'installed and started'",
+          "port 27192 is already used by another process on this host"
+          in _ms_job(_ms_t).get("message", ""), repr(_ms_job(_ms_t)))
+    _p9_delete_server(_ms_t)
+    _ms_free[:] = [(27193, False)]
+    _ms_reset(listen_pre=[None])
+    _r, _ms_t = _ms_install("csgo", "p9noscan", "27193")
+    _p9_drain()
+    check("install: ...while a scan that cannot be read still opens the port the allocation "
+          "verified (positive control — a busy host must not leave a new server closed)",
+          "ufw-allow:[27193]" in _ms_log, repr(_ms_log))
+    _p9_delete_server(_ms_t)
+    # A retry of an install whose server an earlier attempt started — a panel restart mid-install
+    # fails the row — finds that server listening on its own port. A rule tagged with this
+    # server's name already opens it; that is not "another process".
+    _ms_free[:] = [(27199, False)]
+    _ms_reset(listen_pre=[{27199}], tagged=[{27199}], listen=[{27199}])
+    _r, _ms_t = _ms_install("csgo", "p9again", "27199")
+    _p9_drain()
+    check("install: a port already open under this server's OWN tag is not held back as someone "
+          "else's — no false 'another process' warning",
+          "ufw-allow:[27199]" in _ms_log
+          and _ms_job(_ms_t).get("message") == "p9again installed and started",
+          repr((_ms_log, _ms_job(_ms_t).get("message"))))
+    _p9_delete_server(_ms_t)
+    # `details` is run as the game account, over a config that account can write. Only the GAME
+    # port went through any check; "Query <another server's port>" was opened under this server's
+    # name — re-tagging that server's rule, which this one's uninstall then deleted.
+    _ms_sib = _p9_new_server(P9_HOST, "p9sib", "rust", 27197)
+    _ms_free[:] = [(27194, False)]
+    _ms_reset(detect=[{"game_port": 27194, "open_ports": [22, 27194, 27198]}])
+    _r, _ms_t = _ms_install("csgo", "p9query", "27194")
+    _p9_drain()
+    # Two refused ports, not one: the first becomes the conflict the install reports, and the
+    # post-start re-read already skips that one — the second is what only the withheld set stops.
+    _ms_opened = [_p9_ast.literal_eval(e.split(":", 1)[1]) for e in _ms_log
+                  if e.startswith("ufw-allow:")]
+    check("install: a reported port inside ANOTHER server's block, or SSH's, is not opened — at "
+          "step 6, nor by the re-read after the first start",
+          len(_ms_opened) == 2 and all(a == [27194] for a in _ms_opened), repr(_ms_log))
+    _p9_delete_server(_ms_t)
+    _p9_delete_server(_ms_sib)
+    _ms_free[:] = [(27195, False)]
+    _ms_reset(detect=[{"game_port": 22, "open_ports": [22]}])
+    _r, _ms_t = _ms_install("csgo", "p9ssh", "27195")
+    _p9_drain()
+    check("install: a reported game port of 22 is not adopted — the row keeps its port, and SSH "
+          "is not opened under the server's name",
+          _p9_row(_ms_t).port == 27195 and "ufw-allow:[27195]" in _ms_log
+          and not any(22 in _p9_ast.literal_eval(e.split(":", 1)[1])
+                      for e in _ms_log if e.startswith("ufw-allow:")),
+          repr((_p9_row(_ms_t).port, _ms_log)))
+    _p9_delete_server(_ms_t)
 
     # ── a failure a retry cannot fix, and the Windows-prime whose reset works first time ─────────
     _ms_free[:] = [(27190, False)]
@@ -2601,7 +2774,7 @@ try:
     with _p9_state._install_lock:
         _p9_state._install_jobs.pop(_ms_x, None)
 
-    _ms_fw = [(0, "")]
+    _ms_fw = [(0, "", [])]
     _p9_patch(_p9_ms, "remote_ufw_close_by_name", lambda r, n: _ms_next_fw())
 
     def _ms_next_fw():
@@ -2631,11 +2804,13 @@ try:
     _ms_fw[0] = ConnectionError("ufw unreachable")
     _p9_patch(_p9_bk, "remove_game_schedule", _raise_conn)
     _r = _A.post("/servers/%d/delete" % _ms_x)
-    check("uninstall (form): success flashes, even when the firewall and schedule cleanup raised",
+    check("uninstall (form): success flashes, even when the firewall and schedule cleanup raised — "
+          "and it says the server's rules may still be open, rather than nothing",
           _r.status_code == 302 and not _p9_exists(_ms_x)
-          and _p9_flashes(_A) == ["Server 'p9empty' uninstalled."], repr(_p9_row(_ms_x)))
+          and _p9_flashes(_A) == ["Server 'p9empty' uninstalled. " + _p9_sm.UFW_UNREAD_NOTE],
+          repr((_p9_row(_ms_x), _p9_flashes(_A))))
     _ms_y = _p9_new_server(P9_HOST, "p9fw", "csgo", 27185)
-    _ms_fw[0] = (2, "")
+    _ms_fw[0] = (2, "", [])
     # This one's cleanup works, and it has a FINISHED install job: the row id is handed to the next
     # server created, so a job left behind makes /install-status answer for that new server with
     # this one's outcome. The check above cannot see it — its schedule cleanup raises first.
@@ -2644,8 +2819,48 @@ try:
         _p9_state._install_jobs[_ms_y] = {"status": "done", "updated": _p9_real_time.time()}
     _d = _p9_json(_A.post("/servers/%d/delete" % _ms_y, headers=_XHR))
     check("uninstall (JSON): the firewall rules it removed are counted in the message",
-          _d == {"success": True, "message": "Server 'p9fw' uninstalled. 2 firewall rule(s) removed."},
+          _d == {"success": True, "message": "Server 'p9fw' uninstalled. 2 firewall rule(s) removed.",
+                 "warn": False},
           repr(_d))
+    # Aikido 745379215: past its tagged rules, uninstall takes an UNTAGGED allow on its port (a
+    # panel that did not tag yet left those) — and only when no other server's block holds it.
+    check("uninstall: the untagged legacy sweep runs on a port no other server holds",
+          "ufw-close:27185::True" in _ms_log, repr([e for e in _ms_log if "ufw-close" in e]))
+    _ms_z = _p9_new_server(P9_HOST, "p9fwnext", "csgo", 27187)
+    _ms_zz = _p9_new_server(P9_HOST, "p9fwrust", "rust", 27186)     # its block is 27186-27187
+    _ms_reset()
+    _ms_fw[0] = (0, "", [])
+    _d = _p9_json(_A.post("/servers/%d/delete" % _ms_z, headers=_XHR))
+    check("uninstall: ...and NOT on a port inside another server's block — that rule is at least as "
+          "likely to be theirs",
+          _d.get("success") is True and not any("ufw-close:27187" in e for e in _ms_log),
+          repr((_d, [e for e in _ms_log if "ufw-close" in e])))
+    _p9_delete_server(_ms_zz)
+    # What the cleanups could not remove, or left on purpose, is in the uninstall's answer: a rule
+    # that stayed open used to read as a clean uninstall, since only the delete count was kept.
+    _ms_w = _p9_new_server(P9_HOST, "p9fwleft", "csgo", 27189)
+    _ms_stuck = ("Still open, as it could not be removed: 27190 — remove it from the host's "
+                 "Firewall page.")
+    _ms_kept = "Left in place, as the panel does not make rules like these: 27191 DENY."
+    _ms_fw[0] = (1, "1 rule(s) removed for p9fwleft. " + _ms_stuck + " " + _ms_kept,
+                 [_ms_stuck, _ms_kept])
+    _ms_legacy_fw[0] = (1, "Port 27189: 1 rule(s) removed. " + _ms_stuck, [_ms_stuck])
+    _ms_reset()
+    _d = _p9_json(_A.post("/servers/%d/delete" % _ms_w, headers=_XHR))
+    check("uninstall: a rule the cleanup could not remove, or left, is named in the answer — once",
+          _d == {"success": True, "message": "Server 'p9fwleft' uninstalled. 2 firewall rule(s) "
+                                             "removed. " + _ms_stuck + " " + _ms_kept,
+                 "warn": True}, repr(_d))
+    _ms_v = _p9_new_server(P9_HOST, "p9fwhalf", "csgo", 27193)
+    _ms_fw[0], _ms_legacy_fw[0] = (2, "", []), (0, "", [])
+    _ms_reset(boom={"ufw-close"})
+    _d = _p9_json(_A.post("/servers/%d/delete" % _ms_v, headers=_XHR))
+    check("uninstall: a legacy sweep that raised keeps the count of what the name cleanup removed, "
+          "and says the rest may still be open",
+          _d == {"success": True, "message": "Server 'p9fwhalf' uninstalled. 2 firewall rule(s) "
+                                             "removed. " + _p9_sm.UFW_UNREAD_NOTE,
+                 "warn": True}, repr(_d))
+    _ms_fw[0], _ms_legacy_fw[0] = (0, "", []), (0, "", [])
     with _p9_state._install_lock:
         _ms_y_job = _p9_state._install_jobs.pop(_ms_y, None)
     check("uninstall: the removed server's install job goes with its row (the id is reused)",

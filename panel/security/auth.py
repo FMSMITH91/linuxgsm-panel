@@ -5,6 +5,7 @@ import secrets
 import threading
 import time
 from panel.core.clock import utcnow
+from panel.core.validation import canonical_ip, ip_network_or_none, unzoned_ip_address_or_none
 from contextlib import suppress
 from functools import wraps
 from urllib.parse import quote
@@ -900,11 +901,14 @@ def throttle_key(ip):
     smallest block a site or a phone is normally handed, so one attacker holds 2^64 addresses
     and a per-ADDRESS limit gave them that many fresh buckets. An IPv4-mapped IPv6 address is the
     IPv4 address it maps. Anything that is not an address is returned unchanged.
+
+    An IPv6 zone id is dropped: it is text after the address, not part of it. Kept, it survived the
+    /64 whenever the host bits were zero ('2001:db8::%x/64'), so every new zone text was a new
+    bucket — unlimited guessing for anyone who can choose the forwarded address.
     """
     import ipaddress
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
+    addr = unzoned_ip_address_or_none(ip)
+    if addr is None:
         return ip
     if addr.version == 6:
         if addr.ipv4_mapped is not None:
@@ -994,19 +998,51 @@ def _ip_or_none(value):
     A header carrying anything else is not a client address the panel failed to parse; it is a
     client choosing its own bucket. Some proxies bracket an IPv6 literal and may append a port,
     so those are peeled before parsing rather than rejected.
+
+    Parsing is not enough: ipaddress keeps an IPv6 zone id verbatim, so 'fe80::1%x panel login
+    failed from 203.0.113.9' parsed and came back whole — into data/auth.log, where fail2ban then
+    banned 203.0.113.9, into the audit trail and into admin alerts. A zone is refused here like any
+    other text that is not an address (panel/core/validation.py). The proxy-reported client address
+    is read by _forwarded_hop_address instead, which keys the address and drops the zone.
     """
-    import ipaddress
+    return canonical_ip(_forwarded_host_text(value))
+
+
+def _forwarded_host_text(value):
+    """A forwarded address with its brackets and port peeled (some proxies add them); "" if none."""
     text = (value or "").strip()
-    if not text:
-        return None
     if text.startswith("["):                       # [2001:db8::1] or [2001:db8::1]:443
-        text = text[1:].split("]", 1)[0]
-    elif text.count(":") == 1:                     # 203.0.113.9:443 — one colon means IPv4:port
-        text = text.split(":", 1)[0]
-    try:
-        return str(ipaddress.ip_address(text))
-    except ValueError:
-        return None
+        return text[1:].split("]", 1)[0]
+    if text.count(":") == 1:                       # 203.0.113.9:443 — one colon means IPv4:port
+        return text.split(":", 1)[0]
+    return text
+
+
+def _forwarded_hop_address(value):
+    """The client address a PROXY reported, as a bare address string; None if it is not one.
+
+    Like _ip_or_none, but an IPv6 zone id is DROPPED rather than refused. Apache's mod_proxy and
+    Go's httputil.ReverseProxy write a link-local client into X-Forwarded-For with its zone
+    (fe80::1%eth0). Refused, that client was keyed as the proxy: its failed logins went to
+    data/auth.log and the audit trail under the proxy's address, and fail2ban and the auto-block
+    banned the proxy, locking out everyone behind it. What is returned is built from the parsed
+    number alone, so no zone text reaches any of those, and a zone full of text names the same
+    client, and the same throttle bucket, as the bare address.
+    """
+    addr = unzoned_ip_address_or_none(_forwarded_host_text(value))
+    return None if addr is None else str(addr)
+
+
+def _peer_or_none(value):
+    """The SOCKET PEER as a bare address string, or None if it is not one.
+
+    Like _ip_or_none, but a zone id is dropped rather than refused: the kernel can report a
+    link-local client with its interface attached (fe80::1%eth0), and that is still one real client
+    to key — refusing it fell back to the raw text. A proxy's header is read by
+    _forwarded_hop_address, which drops a zone the same way.
+    """
+    addr = unzoned_ip_address_or_none(value)
+    return None if addr is None else str(addr)
 
 
 # The kernel's socket tables, by address family. A module constant so a test can point it at a
@@ -1132,17 +1168,156 @@ def _loopback_proxy_trusted():
     owns, and from nobody else on loopback (a declared reverse proxy is trust_proxy's case, handled
     by the caller). Memoised per request: client_ip() is called more than once per request.
     """
+    return _loopback_peer_uid_memo() == 0
+
+
+def _loopback_peer_uid_memo():
+    """_loopback_peer_uid for this request, read from /proc once per request."""
     try:
         from flask import g as _g
-        cached = _g.get("_loopback_proxy_trusted")
+        cached = _g.get("_loopback_peer_uid")
         if cached is not None:
-            return cached
+            return cached[0]
     except RuntimeError:
         _g = None
-    trusted = _loopback_peer_uid(request.environ) == 0
+    uid = _loopback_peer_uid(request.environ)
     if _g is not None:
-        _g._loopback_proxy_trusted = trusted
-    return trusted
+        _g._loopback_peer_uid = (uid,)
+    return uid
+
+
+# ── Who may be believed as a reverse proxy under trust_proxy (Aikido 745379296) ─────────────────
+# trust_proxy used to mean "read X-Forwarded-For from ANY peer". So a panel that was also reachable
+# directly — the auto bind picks 0.0.0.0 when Serve is not proxying, and bind_host is editable in
+# the UI — believed whoever connected, and on the README's own layout (a proxy, bind 127.0.0.1)
+# every local account on the host could dial loopback with a forged header: a popped game account
+# included, the attacker _loopback_proxy_trusted exists to stop. A fresh header per attempt was a
+# fresh throttle bucket (unlimited password guessing), and each failure went into auth.log under
+# an address the attacker chose, for fail2ban and the auto-block to ban.
+#
+# Now the ORIGINAL socket peer must be in trusted_proxies (config.json; default loopback, which is
+# every documented layout — nginx, Caddy and cloudflared on the panel's own host), and a loopback
+# peer's socket must belong to root, to the panel's own account (which already owns everything the
+# panel has), or to an account in trusted_proxy_users (default: whichever of these exist). What it
+# costs a proxy that is not listed — on another machine, in a Docker bridge network, or running as
+# another account — is that every client is keyed as the proxy: one shared throttle bucket, and a
+# ban aimed at the proxy. So an ignored header is logged, once an hour per peer, naming the key.
+_DEFAULT_TRUSTED_PROXIES = ("127.0.0.0/8", "::1/128")
+_DEFAULT_PROXY_USERS = ("www-data", "nginx", "http", "caddy", "cloudflared")
+_IGNORED_PROXY_WARN_EVERY = 3600
+_ignored_proxy_warned = {}         # (peer, uid) -> when it was last logged; bounded below
+
+
+def _trusted_proxy_networks(value):
+    """config.json's trusted_proxies as ip_network objects; None means the loopback default.
+
+    An entry with a zone id is ignored like any other that is not an address or network.
+    """
+    import logging
+    if value is None:
+        value = _DEFAULT_TRUSTED_PROXIES
+    elif isinstance(value, str):
+        value = [value]
+    nets = []
+    for pos, entry in enumerate(value, 1):
+        net = ip_network_or_none(entry)
+        if net is None:
+            # Named by its place in the list, not echoed: the entry is in config.json already,
+            # and a log line is no place for whatever text was typed there.
+            logging.getLogger("panel.app").warning(
+                "trusted_proxies: entry %d is not an address or network; ignored", pos)
+        else:
+            nets.append(net)
+    return tuple(nets)
+
+
+def _trusted_proxy_uids(value):
+    """The uids whose loopback sockets may speak for a client.
+
+    Root, the panel's own account, and config.json's trusted_proxy_users (names or uids; None
+    means _DEFAULT_PROXY_USERS).
+    """
+    import logging
+    import os
+    import pwd
+    uids = {0, os.getuid(), os.geteuid()}
+    explicit = value is not None
+    for pos, entry in enumerate(_DEFAULT_PROXY_USERS if value is None else
+                                ([value] if isinstance(value, (str, int)) else value), 1):
+        if isinstance(entry, int) or str(entry).strip().isdecimal():
+            uids.add(int(entry))
+            continue
+        try:
+            uids.add(pwd.getpwnam(str(entry).strip()).pw_uid)
+        except KeyError:
+            if explicit:        # the defaults are a list of candidates, most absent on any host
+                logging.getLogger("panel.app").warning(       # by position, as above
+                    "trusted_proxy_users: entry %d names no account on this host; ignored", pos)
+    return frozenset(uids)
+
+
+def configure_proxy_trust(app, cfg):
+    """Record, once at startup, which peers trust_proxy believes.
+
+    Like trust_proxy itself (and the ProxyFix it installs), these are read from config.json and
+    take effect on a restart.
+    """
+    app.config["_TRUSTED_PROXIES"] = _trusted_proxy_networks(cfg.get("trusted_proxies"))
+    app.config["_TRUSTED_PROXY_UIDS"] = _trusted_proxy_uids(cfg.get("trusted_proxy_users"))
+
+
+def _declared_proxy_trusted(addr, conf):
+    """Under trust_proxy: is the socket peer `addr` (already unmapped) a proxy we were told of?
+
+    The peer is judged, and logged, as the address it parses to (a zone dropped, as for any socket
+    peer): never as the raw text, which is what reached the warning lines below.
+    """
+    nets = conf.get("_TRUSTED_PROXIES")
+    if nets is None:
+        nets = _trusted_proxy_networks(None)
+    ip = unzoned_ip_address_or_none(addr)
+    if ip is None:
+        return False
+    if not any(ip in n for n in nets):
+        _note_ignored_proxy(str(ip))
+        return False
+    if not ip.is_loopback:
+        return True
+    # Loopback is where every local account can reach the panel, so WHO dialled decides.
+    uids = conf.get("_TRUSTED_PROXY_UIDS")
+    if uids is None:
+        uids = _trusted_proxy_uids(None)
+    uid = _loopback_peer_uid_memo()
+    if uid is not None and uid in uids:
+        return True
+    _note_ignored_proxy(str(ip), local_uid=uid if uid is not None else "unknown")
+    return False
+
+
+def _note_ignored_proxy(addr, local_uid=None):
+    """Log that a forwarding header from `addr` was not believed.
+
+    Once an hour per peer, and only when the request carried one (a direct client without headers
+    is not news). `local_uid`: the peer IS in trusted_proxies (loopback) but this local account is
+    not a proxy account.
+    """
+    import logging
+    if not (request.headers.get("X-Forwarded-For") or request.headers.get("X-Real-IP")):
+        return
+    key, now = (addr, local_uid), time.monotonic()
+    last = _ignored_proxy_warned.get(key)
+    if last is not None and now - last < _IGNORED_PROXY_WARN_EVERY:
+        return
+    if len(_ignored_proxy_warned) >= 256:
+        _ignored_proxy_warned.clear()       # bounded: a scan from many addresses cannot grow it
+    _ignored_proxy_warned[key] = now
+    log = logging.getLogger("panel.app")
+    if local_uid is None:
+        log.warning("ignoring X-Forwarded-For from %s; add it to trusted_proxies in config.json if "
+                    "it is your proxy", addr)
+    else:
+        log.warning("ignoring X-Forwarded-For from %s (a local account, uid %s); add that account "
+                    "to trusted_proxy_users in config.json if it is your proxy", addr, local_uid)
 
 
 def client_ip():
@@ -1184,65 +1359,76 @@ def client_ip():
 
       * and neither unless the value parses as an IP address. A throttle key is only a throttle
         while the set of keys is bounded; an unparseable header would otherwise become a bucket
-        of its own.
+        of its own. An IPv6 zone id is dropped and the address kept (_forwarded_hop_address): a
+        link-local client behind Apache or Go's reverse proxy arrives with one.
       * and neither unless the request reached us from a proxy at all — trust_proxy set, or a
         loopback peer whose socket ROOT owns (tailscaled; see _loopback_proxy_trusted — any local
         account can dial loopback). The ORIGINAL socket peer is used to decide, because ProxyFix
         has by then already rewritten request.remote_addr from the header we are trying to judge.
 
-    A `trust_proxy` install that also accepts direct connections (binding 0.0.0.0 alongside the
-    proxy) still trusts these headers from anyone who reaches the port — bind loopback, or put the
-    proxy on the only reachable address.
+    Under trust_proxy the proxy has to be one we were told of: the socket peer in trusted_proxies
+    (default loopback), and on loopback a socket that root, the panel's own account or a
+    trusted_proxy_users account owns. A panel that also accepts direct connections no longer
+    believes whoever reaches the port (see _declared_proxy_trusted).
     """
     if not request:
         return ""
     remote = request.remote_addr or ""
     # ProxyFix stores what it overwrote; without it this is just remote_addr.
     peer = (request.environ.get("werkzeug.proxy_fix.orig") or {}).get("REMOTE_ADDR") or remote
-    if _request_came_through_proxy(peer):
-        forwarded = _forwarded_client_ip()
-        if forwarded:
-            return forwarded
+    if not _request_came_through_proxy(peer):
+        # The SOCKET peer, never remote_addr: under trust_proxy ProxyFix has already rewritten
+        # remote_addr from the very X-Forwarded-For just refused, so returning it keyed the spoofed
+        # address after all.
+        return _peer_or_none(peer) or peer
+    forwarded = _forwarded_client_ip()
+    if forwarded:
+        return forwarded
     # The fallthrough is held to the same rule. Behind trust_proxy, ProxyFix has already copied the
     # last X-Forwarded-For hop into remote_addr WITHOUT parsing it, so when a proxy passes a
     # client's header through unappended, the "bogus-<n>" the branches above refused came straight
     # back here as the key: a fresh throttle bucket per attempt. An unparseable value falls back to
     # the socket peer that really connected (the proxy), which is an address and one bucket.
-    return _ip_or_none(remote) or _ip_or_none(peer) or remote
+    return _ip_or_none(remote) or _peer_or_none(peer) or remote
 
 
 def _request_came_through_proxy(peer):
-    """Whether this request's forwarding headers may be read: trust_proxy, or a root loopback peer.
+    """Whether this request's forwarding headers may be read.
 
-    `peer` is the ORIGINAL socket peer, from before ProxyFix rewrote remote_addr.
+    Under trust_proxy, from a proxy it was told of (_declared_proxy_trusted); without it, from a
+    root loopback peer (tailscaled). `peer` is the ORIGINAL socket peer, from before ProxyFix
+    rewrote remote_addr.
     """
     try:
-        behind_proxy = bool(current_app.config.get("_TRUST_PROXY"))
+        conf = current_app.config
+        declared = bool(conf.get("_TRUST_PROXY"))
     except Exception:
-        behind_proxy = False     # outside an app context: trust nothing
+        return False             # outside an app context: trust nothing
     # A dual-stack bind ('::') reports an IPv4 peer as ::ffff:127.0.0.1. The plain test missed it,
     # so tailscaled's X-Forwarded-For was never believed there: every Serve and Funnel client was
     # keyed as ::ffff:7f00:1, fail2ban ignored that as loopback, and one attacker's failures
     # throttled every other client — the whole panel locked out by one Funnel visitor.
-    if not behind_proxy and _unmapped(peer) in ("127.0.0.1", "::1"):
-        # Loopback is NOT a proxy by itself — any local account can dial it. Only a root-owned
-        # peer (tailscaled) is; see _loopback_proxy_trusted.
-        behind_proxy = _loopback_proxy_trusted()
-    return behind_proxy
+    addr = _unmapped(peer)
+    if declared:
+        return _declared_proxy_trusted(addr, conf)
+    # Loopback is NOT a proxy by itself — any local account can dial it. Only a root-owned peer
+    # (tailscaled) is; see _loopback_proxy_trusted.
+    return addr in ("127.0.0.1", "::1") and _loopback_proxy_trusted()
 
 
 def _forwarded_client_ip():
     """The client address the proxy reported, or None.
 
     X-Forwarded-For's LAST hop when it parses as an IP address, else X-Real-IP when that does (see
-    client_ip for why that order).
+    client_ip for why that order). A zone id on either is dropped, not refused, and the address
+    it is attached to is the client (see _forwarded_hop_address).
     """
     xff = request.headers.get("X-Forwarded-For", "")
     if xff:
-        hop = _ip_or_none(xff.split(",")[-1])
+        hop = _forwarded_hop_address(xff.split(",")[-1])
         if hop:
             return hop
-    return _ip_or_none(request.headers.get("X-Real-IP"))
+    return _forwarded_hop_address(request.headers.get("X-Real-IP"))
 
 
 def session_fingerprint():
@@ -1291,23 +1477,73 @@ def _session_binding_ok():
     return hmac.compare_digest(str(bound), fp)
 
 
-def log_action(user, action, target="", detail="", success=True, actor=None):
+# The longest detail an audit row keeps. SQLite does not enforce a String(n) length, so every
+# column here held whatever the caller passed — and several callers pass request text (a console
+# command, a Pro service name): 5 MB per request was measured going straight into panel.db, with
+# no rate limit and audit retention off by default. The longest legitimate details are operation
+# messages that callers already cut to a few hundred characters.
+_AUDIT_DETAIL_MAX = 8192
+
+
+def _audit_cut(value, limit, marker=""):
+    """`value` as text, cut to `limit` characters (then `marker` appended) when longer."""
+    text = "" if value is None else str(value)
+    return text if len(text) <= limit else text[:limit] + marker
+
+
+def log_action(user, action, target="", detail="", success=True, actor=None, server=None,
+               remote=None):
     """Write an audit log entry.
 
     `actor` overrides the recorded username — used for a failed login, where there's no
     authenticated user but we still want the ATTEMPTED username in the User column.
+
+    `server` / `remote`: the GameServer or RemoteServer the row is ABOUT, which is what decides
+    which delegated viewers may read it (panel/routes/audit.py audit_scope). Pass the object
+    wherever the target names one. A row with neither is readable by its own actor and by a
+    superadmin only — never matched by name, because names are not unique: the same game on two
+    hosts gets the same name by default, and a server could be renamed onto any target to read
+    its rows (Aikido 745379041).
+
+    Every column is cut to its model's declared size, and the detail to _AUDIT_DETAIL_MAX — see
+    there for why that has to happen here and not in the callers.
     """
     entry = AuditLog(
         user_id=user.id if user else None,
-        username=actor if actor else (user.username if user else "system"),
-        action=action,
-        target=target,
-        detail=detail,
+        username=_audit_cut(actor if actor else (user.username if user else "system"), 80),
+        action=_audit_cut(action, 128),
+        target=_audit_cut(target, 255),
+        detail=_audit_cut(detail, _AUDIT_DETAIL_MAX, "…[truncated]"),
         ip_address=client_ip(),
         success=success,
+        game_server_id=_audit_ref(GameServer, server),
+        remote_id=_audit_ref(RemoteServer, remote),
     )
     db.session.add(entry)
     db.session.commit()
+
+
+def _audit_ref(model, obj):
+    """The id column value for an audit row about `obj` — NULL when the row is already gone.
+
+    A SQL expression, not the id itself, so the INSERT resolves it: a server deleted (or a host
+    whose servers were bulk-deleted) before the row is written leaves NULL rather than an id
+    SQLite will hand the next row it creates. The detach listeners in models.py null the rows
+    that existed at the delete; this covers a row written after it — an uninstall's failure row,
+    a background worker's outcome row. The identity is read without loading, so a deleted or
+    detached instance answers too.
+    """
+    if obj is None:
+        return None
+    from sqlalchemy import inspect as _sa_inspect
+    from sqlalchemy.exc import NoInspectionAvailable
+    try:
+        ident = _sa_inspect(obj).identity
+    except NoInspectionAvailable:
+        return None
+    if not ident:
+        return None
+    return db.select(model.id).where(model.id == ident[0]).scalar_subquery()
 
 
 def strip_legacy_superadmin_grants():

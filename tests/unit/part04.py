@@ -993,12 +993,27 @@ check("branch: ...so a leading '_' is refused up front, not by the verb mid-swit
       not _so._valid_branch("_wip") and _so._valid_branch("wip_2"))
 # And _run_verb keeps its "never raises" contract when a verb refuses an argument: callers are
 # written on it and have no handler for VerbError.
-_rv_saved = (_so._helper_present, _so.subprocess.run)
+from io import BytesIO as _RvBytesIO  # noqa: E402
+_rv_saved = (_so._helper_present, _so.subprocess.Popen)
 _rv_ran = []
+
+
+class _RvProc:
+    """A finished verb: printed "ok", exited 0. _run_verb reads it through the capped reader."""
+
+    pid = -1
+
+    def __init__(self, argv, **kw):
+        _rv_ran.append((argv,))
+        self.stdout, self.stderr, self.stdin = _RvBytesIO(b"ok"), _RvBytesIO(b""), None
+
+    def wait(self, timeout=None):
+        return 0
+
+
 try:
     _so._helper_present = lambda: True
-    _so.subprocess.run = lambda *a, **k: (_rv_ran.append(a), type(
-        "R", (), {"returncode": 0, "stdout": "ok", "stderr": ""})())[1]
+    _so.subprocess.Popen = _RvProc
     try:
         _rv_r = _so._run_verb("panel-self-update", ["-", "-oops"])
     except Exception as _rv_e:  # noqa: BLE001 - the regression IS the raise
@@ -1009,7 +1024,7 @@ try:
           _so._run_verb("panel-self-update", ["-", "main"])[2] == 0 and len(_rv_ran) == 1,
           repr(_rv_ran))
 finally:
-    _so._helper_present, _so.subprocess.run = _rv_saved
+    _so._helper_present, _so.subprocess.Popen = _rv_saved
 
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):
@@ -1120,7 +1135,9 @@ check("f2b: the jail body carries an ignoreip line with the valid entry only",
 # stored, and dropped again where the jail line is built, in case an older value is on disk.
 _zone = "::1%\nbantime = 999999\nmaxretry = 0\n[sshd]\nenabled = false"
 check("f2b: the zone-id payload really does parse (so the checks below test something)",
-      _valid_ip_or_cidr(_zone) == _zone)
+      str(_ipaddr.ip_address(_zone)) == _zone)
+check("f2b: ...and _valid_ip_or_cidr itself refuses it now, for every caller (the remove path too)",
+      _valid_ip_or_cidr(_zone) is None)
 _ign_z = SO._f2b_ignoreip_line(["1.2.3.4", _zone, "fe80::1%eth0"])
 check("f2b: ignoreip drops an entry carrying an IPv6 zone id, newline or not",
       "\n" not in _ign_z and "%" not in _ign_z and "bantime" not in _ign_z, repr(_ign_z))
@@ -1331,12 +1348,15 @@ try:
     _tgm.decrypt_secret = lambda s: s
     _tgm._tg_reply = lambda tok, chat, text: _tg_said.append(text)
 
-    def _tg_pend(from_commit):
-        return {"notifications": {"telegram": {"token": "tok"}},  # nosec B105 - a placeholder in a stubbed config; the reply is stubbed too
+    # The bot as it was when /update was sent: on, taking commands, in the chat the marker names.
+    _TG_ON = {"token": "tok", "enabled": True, "accept_commands": True, "chat_id": "42"}  # nosec B105 - a placeholder in a stubbed config; the reply is stubbed too
+
+    def _tg_pend(from_commit, tg=None):
+        return {"notifications": {"telegram": dict(_TG_ON) if tg is None else tg},
                 "telegram_pending_update": {"chat_id": "42", "from_commit": from_commit}}
 
-    def _tg_report(from_commit, now_commit):
-        _tgm.load_config = lambda: _tg_pend(from_commit)
+    def _tg_report(from_commit, now_commit, tg=None):
+        _tgm.load_config = lambda: _tg_pend(from_commit, tg)
         _tgm.so.panel_commit = lambda: now_commit
         _tg_said.clear()
         _tgm._report_tg_pending_update()
@@ -1355,6 +1375,26 @@ try:
     _tg_msg = _tg_report("abc1234", "abc1234")
     check("telegram: ...and one that really did not still says no new commit landed",
           "no new commit landed" in _tg_msg, _tg_msg)
+    # Aikido 745379202. The marker is written when the AUTHORISED chat sends /update, and read
+    # after the restart — by which time the admin may have switched the bot off, turned its
+    # commands off, or moved it to another chat. The poller re-checks that gate on every update;
+    # the report went to the marker's chat whatever the settings now said. It is dropped, and the
+    # marker cleared, exactly as it is when the report is sent.
+    _tg_cleared = []
+    _tgm.update_config = lambda fn: _tg_cleared.append(
+        "telegram_pending_update" not in (lambda c: (fn(c), c)[1])(_tg_pend("abc1234")))
+    for _tg_what, _tg_now in (("the bot switched off", dict(_TG_ON, enabled=False)),
+                              ("its commands switched off", dict(_TG_ON, accept_commands=False)),
+                              ("the bot moved to another chat", dict(_TG_ON, chat_id="999"))):
+        _tg_cleared.clear()
+        _tg_msg = _tg_report("abc1234", "def5678", tg=_tg_now)
+        check("telegram: the post-restart report is not sent after %s (745379202)" % _tg_what,
+              _tg_said == [] and _tg_cleared == [True], repr((_tg_said, _tg_cleared)))
+    _tg_cleared.clear()
+    _tg_msg = _tg_report("abc1234", "def5678", tg=dict(_TG_ON, chat_id=" 42 "))
+    check("telegram: ...while the chat that is still authorised gets it once (control)",
+          len(_tg_said) == 1 and "Update complete" in _tg_said[0] and _tg_cleared == [True],
+          repr((_tg_said, _tg_cleared)))
 finally:
     (_tgm.load_config, _tgm.update_config, _tgm._tg_reply, _tgm.decrypt_secret,
      _tgm.so.panel_commit) = _tg_saved
@@ -1370,10 +1410,14 @@ try:
     _dcm.decrypt_secret = lambda s: s
     _dcm._dc_reply = lambda tok, chan, text: _dc_said.append(text)
 
-    def _dc_report(from_commit, now_commit):
-        _dcm.load_config = lambda: {"notifications": {"discord": {"bot_token": "tok"}},  # nosec B105 - a placeholder; the reply is stubbed
-                                    "discord_pending_update": {"channel_id": "42",
-                                                               "from_commit": from_commit}}
+    _DC_ON = {"bot_token": "tok", "enabled": True, "accept_commands": True, "channel_id": "42"}  # nosec B105 - a placeholder; the reply is stubbed
+
+    def _dc_pend(from_commit, dc=None):
+        return {"notifications": {"discord": dict(_DC_ON) if dc is None else dc},
+                "discord_pending_update": {"channel_id": "42", "from_commit": from_commit}}
+
+    def _dc_report(from_commit, now_commit, dc=None):
+        _dcm.load_config = lambda: _dc_pend(from_commit, dc)
         _dcm.so.panel_commit = lambda: now_commit
         _dc_said.clear()
         _dcm._report_dc_pending_update()
@@ -1391,9 +1435,223 @@ try:
     _dc_msg = _dc_report("abc1234", "abc1234")
     check("discord: ...and one that really did not still says no new commit landed (control)",
           "no new commit landed" in _dc_msg, _dc_msg)
+    # Aikido 745379202, the Discord twin: revoked or moved between !update and the restart.
+    _dc_cleared = []
+    _dcm.update_config = lambda fn: _dc_cleared.append(
+        "discord_pending_update" not in (lambda c: (fn(c), c)[1])(_dc_pend("abc1234")))
+    for _dc_what, _dc_now in (("the bot switched off", dict(_DC_ON, enabled=False)),
+                              ("its commands switched off", dict(_DC_ON, accept_commands=False)),
+                              ("the bot moved to another channel", dict(_DC_ON, channel_id="222"))):
+        _dc_cleared.clear()
+        _dc_msg = _dc_report("abc1234", "def5678", dc=_dc_now)
+        check("discord: the post-restart report is not sent after %s (745379202)" % _dc_what,
+              _dc_said == [] and _dc_cleared == [True], repr((_dc_said, _dc_cleared)))
+    _dc_cleared.clear()
+    _dc_msg = _dc_report("abc1234", "def5678", dc=dict(_DC_ON, channel_id="42 "))
+    check("discord: ...while the channel that is still authorised gets it once (control)",
+          len(_dc_said) == 1 and "Update complete" in _dc_said[0] and _dc_cleared == [True],
+          repr((_dc_said, _dc_cleared)))
 finally:
     (_dcm.load_config, _dcm.update_config, _dcm._dc_reply, _dcm.decrypt_secret,
      _dcm.so.panel_commit) = _dc_saved
+
+# ── Aikido 745379272: a chat's !update cannot spend GitHub's quota for the whole panel ─────────
+# Every !update ran panel_update_status(force=True): a fresh check, and each check asks GitHub's
+# ANONYMOUS check-runs API once per commit walked (60 requests an hour per IP). A 403/429 from it
+# reads as "pending" by design, and "pending" makes panel_self_update refuse — the superadmin's
+# web-UI update as well as the bot's. So a channel member sending about one !update a minute held
+# every self-update, security fixes included, at "still being verified". Counted here as
+# _compute_update_status runs (each one is at least one API request while the panel is behind),
+# through the real dispatchers and the real panel_update_status cache.
+import panel.services.bots.commands as _ubc  # noqa: E402
+_ub_state = {"computes": 0, "self_updates": 0, "status": None}
+
+
+def _ub_compute():
+    _ub_state["computes"] += 1
+    return dict(_ub_state["status"])
+
+
+def _ub_self_update():
+    # The real one re-checks with force=True before anything else (its own CI gate), and here it
+    # then refuses without restarting: the worst case, since a restart would end the spam itself.
+    _ub_state["self_updates"] += 1
+    _dcm.so.panel_update_status(force=True)
+    return False, "Could not start the updater — check the panel logs."
+
+
+class _UbInline(object):
+    """Runs each submitted command at once, in order — the real worker's contract, synchronously."""
+
+    def submit(self, fn):
+        fn()
+        return True
+
+
+class _UbHold(object):
+    """Queues each submitted command and runs none until told to."""
+
+    def __init__(self):
+        self.held = []
+
+    def submit(self, fn):
+        self.held.append(fn)
+        return True
+
+
+_ub_said = []
+_ub_saved = (_dcm.so._compute_update_status, _dcm.so.panel_self_update, dict(_dcm.so._update_cache),
+             _dcm._dc_reply, _dcm._dc_ack, _dcm._DC_WORKER, _tgm._tg_reply, _tgm._tg_ack,
+             _tgm._TG_WORKER, _dcm._set_dc_pending_update, _tgm._set_tg_pending_update)
+_ub_gate_saved = getattr(_ubc, "_UPDATE_GATE", None)
+try:
+    _dcm.so._compute_update_status = _ub_compute
+    _dcm.so.panel_self_update = _ub_self_update
+    _dcm._dc_reply = _dcm._dc_ack = lambda tok, chan, text: _ub_said.append(("dc", text))
+    _tgm._tg_reply = _tgm._tg_ack = lambda tok, chat, text: _ub_said.append(("tg", text))
+    _dcm._set_dc_pending_update = _tgm._set_tg_pending_update = lambda *a: None
+    _dcm._DC_WORKER = _tgm._TG_WORKER = _UbInline()
+
+    def _ub_reset(status):
+        _ub_state.update(computes=0, self_updates=0, status=status)
+        _dcm.so._update_cache.update(ts=0.0, data=None)
+        _ub_said.clear()
+        if _ub_gate_saved is not None:
+            _ubc._UPDATE_GATE = _ubc._UpdateGate()      # a fresh allowance, nothing in flight
+
+    # Up to date: ten !update in a row. The first may check; the other nine have a status seconds
+    # old and ask nothing. Before the fix: ten checks.
+    _ub_reset({"git": True, "update_available": False, "behind": 0, "ci_state": "passing"})
+    for _ in range(10):
+        _dcm._dc_dispatch(_app, "tok", "42", "!update")
+    check("bots: ten !update in a row, panel up to date, cost ONE update check (745379272)",
+          _ub_state["computes"] == 1, "checks=%d" % _ub_state["computes"])
+    check("bots: ...and every one of them was still answered 'Already up to date' (control)",
+          len(_ub_said) == 10 and all("Already up to date" in t for _, t in _ub_said),
+          repr(_ub_said[:3]))
+
+    # Behind, with the installer refusing each time (nothing restarts to end the loop): each
+    # !update reaches panel_self_update, whose own forced gate is kept. What bounds that is the
+    # hourly allowance for chat-triggered updates, shared by both bots. Before: 2 checks each.
+    _ub_reset({"git": True, "update_available": True, "behind": 2, "ci_state": "passing",
+               "target_sha": "b" * 40})
+    for _ in range(20):
+        _dcm._dc_dispatch(_app, "tok", "42", "!update")
+    _ub_allow = getattr(_ubc, "_BOT_FORCED_CHECKS_PER_HOUR", 0)
+    check("bots: twenty !update while behind spend no more checks than the hourly allowance "
+          "(745379272)",
+          0 < _ub_allow < 20 and _ub_state["computes"] <= _ub_allow,
+          "allowance=%r self_updates=%d checks=%d" % (_ub_allow, _ub_state["self_updates"],
+                                                      _ub_state["computes"]))
+    _ub_refused = [t for _, t in _ub_said if "try again in" in t.lower()]
+    check("bots: ...and the ones past it are told when to try again, and that the web page works",
+          _ub_refused and len(_ub_refused) == 20 - _ub_state["self_updates"]
+          and all("web page" in t for t in _ub_refused), repr(_ub_said[-2:]))
+    # The allowance is the PANEL's, not one bot's: GitHub's limit is per IP.
+    _ub_said.clear()
+    _before = _ub_state["computes"]
+    _tgm._tg_dispatch(_app, "tok", "42", "/update")
+    check("bots: ...and it is shared — Telegram gets no fresh allowance after Discord spent it",
+          _ub_state["computes"] == _before
+          and any("try again in" in t.lower() for _, t in _ub_said),
+          repr(_ub_said))
+    # An hour later the allowance is back.
+    if _ub_gate_saved is not None:
+        _ubc._UPDATE_GATE._now = lambda _base=_ubc._UPDATE_GATE._now: _base() + 3601
+    _ub_said.clear()
+    _tgm._tg_dispatch(_app, "tok", "42", "/update")
+    check("bots: ...and an hour later a chat may ask again (control)",
+          not any("try again in" in t.lower() for _, t in _ub_said), repr(_ub_said))
+
+    # Coalescing: a second !update while the first is still queued or running gets the
+    # in-progress reply, not a second slot on the 32-deep queue and a second check.
+    _ub_reset({"git": True, "update_available": False, "behind": 0, "ci_state": "passing"})
+    _ub_hold = _UbHold()
+    _dcm._DC_WORKER = _ub_hold
+    _dcm._dc_dispatch(_app, "tok", "42", "!update")
+    _dcm._dc_dispatch(_app, "tok", "42", "!update")
+    _dcm._dc_dispatch(_app, "tok", "42", "!upgrade")
+    check("bots: a duplicate !update while one is queued is not queued again (745379272)",
+          len(_ub_hold.held) == 1, "queued=%d" % len(_ub_hold.held))
+    check("bots: ...it is told one is already running",
+          sum("already running" in t for _, t in _ub_said) == 2, repr(_ub_said))
+    _dcm._dc_dispatch(_app, "tok", "42", "!update smoke-cs")
+    check("bots: ...while '!update <server>' — a game server's update — is not coalesced with it",
+          len(_ub_hold.held) == 2, "queued=%d" % len(_ub_hold.held))
+    _ub_hold.held[0]()
+    _ub_said.clear()
+    _dcm._dc_dispatch(_app, "tok", "42", "!update")
+    check("bots: ...and once the first has run, the next !update is accepted (control)",
+          len(_ub_hold.held) == 3 and not any("already running" in t for _, t in _ub_said),
+          "queued=%d said=%r" % (len(_ub_hold.held), _ub_said))
+    # ...and Telegram's twin coalesces the same way, on its own worker.
+    _ub_tg_hold = _UbHold()
+    _tgm._TG_WORKER = _ub_tg_hold
+    _ub_said.clear()
+    _tgm._tg_dispatch(_app, "tok", "42", "/update")
+    _tgm._tg_dispatch(_app, "tok", "42", "/update@SomeBot")
+    check("telegram: a duplicate /update while one is queued is not queued again (745379272)",
+          len(_ub_tg_hold.held) == 1 and sum("already running" in t for _, t in _ub_said) == 1,
+          "queued=%d said=%r" % (len(_ub_tg_hold.held), _ub_said))
+    _tgm._TG_WORKER = _UbInline()
+    # A check that raises must not leave the claim behind, or every later !update would be told
+    # one is running, for the life of the process.
+    _dcm.so._compute_update_status = lambda: (_ for _ in ()).throw(RuntimeError("git broke"))
+    _dcm.so._update_cache.update(ts=0.0, data=None)
+    try:
+        # The real worker catches what a command raises; so does this. Absent only when the check
+        # above already failed (the claim was never released), and then the one below fails too.
+        if len(_ub_hold.held) > 2:
+            _ub_hold.held[2]()
+    except RuntimeError:
+        pass
+    _ub_said.clear()
+    _dcm._dc_dispatch(_app, "tok", "42", "!update")
+    check("bots: ...and a check that raised releases it too",
+          len(_ub_hold.held) == 4 and not any("already running" in t for _, t in _ub_said),
+          "queued=%d said=%r" % (len(_ub_hold.held), _ub_said))
+    # Past the allowance, NO check at all. The fallback was panel_update_status(force=False), which
+    # computes afresh once the badge's five-minute cache is stale: about ten more checks an hour.
+    # Run inline again, and count checks again: the checks above leave the workers holding
+    # commands and the status check raising, and a raising check reads as "try again" too, which
+    # would pass these against the old code.
+    _dcm._DC_WORKER = _tgm._TG_WORKER = _UbInline()
+    _dcm.so._compute_update_status = _ub_compute
+    def _ub_spent(age, status):
+        _ub_reset(status)
+        for _ in range(_ub_allow):
+            _ubc._UPDATE_GATE.spend()
+        _dcm.so._update_cache.update(ts=_lgd_real_time.time() - age,
+                                     data={"git": True, "update_available": False})
+
+    _ub_spent(_dcm.so._UPDATE_TTL + 1,
+              {"git": True, "update_available": False, "behind": 2, "ci_state": "pending"})
+    _dcm._dc_dispatch(_app, "tok", "42", "!update")
+    check("bots: past the hour's allowance, a stale status makes !update ask GitHub NOTHING — it "
+          "says when to try again (Aikido PR #369)",
+          _ub_state["computes"] == 0 and any("try again in" in t.lower() for _, t in _ub_said),
+          "checks=%d said=%r" % (_ub_state["computes"], _ub_said[-1:]))
+    _ub_spent(_dcm.so._UPDATE_TTL + 1,
+              {"git": True, "update_available": False, "behind": 2, "ci_state": "pending"})
+    _tgm._tg_dispatch(_app, "tok", "42", "/update")
+    check("telegram: ...and /update the same (Aikido PR #369)",
+          _ub_state["computes"] == 0 and any("try again in" in t.lower() for _, t in _ub_said),
+          "checks=%d said=%r" % (_ub_state["computes"], _ub_said[-1:]))
+    _ub_spent(120, {"git": True, "update_available": False, "behind": 0, "ci_state": "passing"})
+    _dcm._dc_dispatch(_app, "tok", "42", "!update")
+    check("bots: ...while a status within the badge's five minutes still answers, with no check "
+          "(control)",
+          _ub_state["computes"] == 0 and any("Already up to date" in t for _, t in _ub_said),
+          "checks=%d said=%r" % (_ub_state["computes"], _ub_said[-1:]))
+
+finally:
+    (_dcm.so._compute_update_status, _dcm.so.panel_self_update, _ub_cache,
+     _dcm._dc_reply, _dcm._dc_ack, _dcm._DC_WORKER, _tgm._tg_reply, _tgm._tg_ack,
+     _tgm._TG_WORKER, _dcm._set_dc_pending_update, _tgm._set_tg_pending_update) = _ub_saved
+    _dcm.so._update_cache.clear()
+    _dcm.so._update_cache.update(_ub_cache)
+    if _ub_gate_saved is not None:
+        _ubc._UPDATE_GATE = _ub_gate_saved
 
 # ── Discord command bot (Gateway): parsing, SSRF-safe reply path, and the message pump ──
 from panel.services.bots.discord import _parse_dc_command  # noqa: E402

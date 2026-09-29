@@ -155,13 +155,19 @@ function changeSshPort(){
       +p+', close the old port from the Firewall page.',
     onConfirm:function(){
       var m=document.getElementById('ssh-port-msg');
+      // One move at a time: the server refuses an overlapping one (409), and a second click while
+      // this runs is how an overlapping one happens.
+      var btns=document.querySelectorAll('[data-action="changeSshPort"]');
+      var busy=function(on){ btns.forEach(function(b){ b.disabled=on; }); };
+      busy(true);
       if(m) m.innerHTML='<span class="text-secondary"><i class="bi bi-arrow-repeat"></i> Applying (opening the port, updating sshd + fail2ban, restarting sshd)…</span>';
       fetch(MOUNT+'/api/remote/'+REMOTE_ID+'/ssh-port',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({port:p, bind:bind})})
         .then(function(r){return r.json();}).then(function(d){
+          busy(false);
           if(m) m.innerHTML='<span class="text-'+(d.success?'success':'danger')+'">'+(window.escapeHtml?escapeHtml(d.message||''):(d.message||''))+'</span>';  // nosemgrep
           if(window.toast) toast(d.message||(d.success?'SSH port changed':'Failed'), d.success?'success':'danger');
         })
-        .catch(function(){ if(m) m.innerHTML='<span class="text-danger">Request failed.</span>'; });
+        .catch(function(){ busy(false); if(m) m.innerHTML='<span class="text-danger">Request failed.</span>'; });
     }});
 }
 function switchToTailscale(){
@@ -463,7 +469,9 @@ function watchPanelRestart(beforeBoot, msg, doneLabel, before, targetBranch){
           }
         };
         fetch(MOUNT+'/api/panel/update-log').then(function(r){ return r.ok?r.json():null; })
-          .catch(function(){ return null; }).then(finish);
+          .catch(function(){ return null; }).then(finish)
+          // finish itself failing must not leave "Restarting…" up for good with nothing said.
+          .catch(function(){ msg.textContent='The panel restarted — reload the page to see its state.'; });
       }
     }).catch(function(){ if(!restarted){ restarted=true; msg.innerHTML='<span class="text-warning"><i class="bi bi-arrow-repeat"></i> Restarting the panel…</span>'; } });
     if(tries>120){ clearInterval(iv); msg.innerHTML='<span class="text-warning">Still working — reload the page to check.</span>'; }

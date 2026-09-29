@@ -8,6 +8,7 @@ from panel.core import clock, terminal
 import time
 import paramiko
 from panel.core.config import decrypt_secret
+from panel.core.validation import canonical_ip, ip_address_or_none, ip_network_or_none
 from panel.security import privileged as _priv
 from panel.ops.ssh_manager import (_core, firewall)  # noqa: E402,F401  (module objects: the
 # reference resolves at CALL time, which is what keeps a stub on the definition site
@@ -301,7 +302,9 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
     ipaddress and refuses anything that is not a network, so nothing composable reaches the
     command line.
 
-    A port RANGE is fine (27015:27020), which Source-engine games need."""
+    A port RANGE is fine (27015:27020), which Source-engine games need. An IPv6 zone id is not an
+    address or a network, though ipaddress parses one, so it is refused here; what is passed on and
+    reported is the verb's canonical spelling of the source, never the typed text."""
     src = (source or "").strip()
     if not src:
         return False, "Source address required"
@@ -320,7 +323,7 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
     # so the user still got no reason and the panel log still got a traceback. Same two answers
     # the sibling gives, as (ok, msg).
     try:
-        _ipaddress.ip_network(src, strict=False)
+        src = _priv.canonical_cidr(src)
     except ValueError:
         return False, "Source must be an IP address or network (e.g. 10.0.0.0/24)"
     if not _UFW_PORT_SPEC_RE.match(spec):
@@ -549,10 +552,20 @@ def remote_ufw_delete_rule(server, num, force=False, expect_key=None):
     return False, err or out or "Failed to delete rule"
 
 
+def _game_rule_comment(name, default="Game"):
+    """The UFW comment a game server's rules carry: its name, cut to what ufw's comment accepts."""
+    return re.sub(r"[^A-Za-z0-9 _.-]", "", name or default)[:60] or default
+
+
 def remote_ufw_allow_game_port(server, port, name="Game"):
-    """Open the game server port for BOTH TCP and UDP in ONE UFW rule, tagging the
-    rule with the game server's name (its LinuxGSM username) so the firewall list
-    shows which server each port belongs to. A bare `ufw allow <port>` covers tcp+udp."""
+    """Open ONE game server's port, tagged with the server's name: (1 when it is open, message).
+
+    Through remote_ufw_allow_game_ports, so it never takes over a rule someone else holds. It ran a
+    bare `ufw allow <port> comment <name>` itself, which REPLACES a rule on that port that differs
+    only in comment or action — another server's allow re-tagged as this one's (and deleted with
+    it at this server's uninstall), an operator's DENY turned into an allow. The list opener was
+    fixed for that; this single-port route was not.
+    """
     # Range-checked HERE, like every sibling in this module. The verb's _portspec raises
     # VerbError, run_privileged does not catch it, and there is no route-level handler — so
     # `POST /api/remote/<id>/game-port/70000/open` came back as a bare HTML 500 that the caller's
@@ -561,78 +574,395 @@ def remote_ufw_allow_game_port(server, port, name="Game"):
         port = _ufw_port_int(port)
     except (TypeError, ValueError):
         return 0, "Invalid port"
-    comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "Game")[:60] or "Game"
-    out, err, rc = _core.run_privileged(server, "ufw-allow-port", [str(port), comment], timeout=15)
-    ok = rc == 0
-    return (1 if ok else 0), f"Port {port}: {'opened (TCP+UDP)' if ok else (err or out or 'failed')}"
+    opened, msg = remote_ufw_allow_game_ports(server, [port], name)
+    return (1 if port in opened else 0), f"Port {port}: {msg}"
+
+
+def _is_public_port_rule(g, port, protos=("BOTH",)):
+    """True when group `g` is an inbound rule from anywhere, on no interface, for exactly `port`
+    with one of `protos` ("BOTH" is a bare rule — what `ufw allow <port>` writes)."""
+    return (not g.get("is_iface") and g.get("direction", "IN") == "IN"
+            and g.get("scope") == "Any address" and g.get("proto_label") in protos
+            and str(g.get("port_num", "")).strip() == str(port))
+
+
+def _is_panel_allow(g):
+    """Is group `g` the shape of rule the panel itself opens for a game server?
+
+    An inbound ALLOW from anywhere, on no interface, for ONE port — bare, /tcp or /udp. A LIMIT, a
+    DENY, an allow from one address, an interface rule or a range was somebody's own decision,
+    whatever its comment says."""
+    pn = str(g.get("port_num", "")).strip()
+    return (g.get("action") == "ALLOW" and pn.isdecimal()
+            and _is_public_port_rule(g, pn, ("BOTH", "TCP", "UDP")))
+
+
+_UFW_PROTOS = ("tcp", "udp")
+# One entry of a rule's port column: a port, or a lo:hi range. ufw lists several with commas.
+_UFW_PORT_ITEM_RE = re.compile(r"^\s*(\d{1,5})(?::(\d{1,5}))?\s*\Z")
+
+
+def _rule_covers(g, port, proto):
+    """Does group `g` decide what a `proto` connection to `port` from anywhere meets? Inbound, from
+    anywhere, on no interface, naming the port (alone, in a range or in a list); a bare rule
+    decides both protocols."""
+    if g.get("is_iface") or g.get("direction", "IN") != "IN" or g.get("scope") != "Any address":
+        return False
+    if g.get("proto_label") not in ("BOTH", proto.upper()):
+        return False
+    for item in str(g.get("port_num", "")).split(","):
+        m = _UFW_PORT_ITEM_RE.match(item)
+        if m and int(m.group(1)) <= port <= int(m.group(2) or m.group(1)):
+            return True
+    return False
+
+
+def _first_rule_for(groups, port, proto):
+    """The rule a `proto` connection to `port` from anywhere meets first (ufw stops at the first
+    match), or None when no rule names it."""
+    hits = [g for g in groups if g.get("nums") and _rule_covers(g, port, proto)]
+    return min(hits, key=lambda g: min(g["nums"])) if hits else None
+
+
+def _rule_label(g):
+    """A rule as a person reads it: its port, then what it does when that is not a plain public
+    allow — `47828 DENY`, `47829/tcp LIMIT`, `47810/tcp from 10.0.0.0/8`."""
+    parts = [str(g.get("port_label") or g.get("port_num") or "?")]
+    if g.get("action", "ALLOW") != "ALLOW":
+        parts.append(g["action"])
+    if g.get("direction", "IN") != "IN":
+        parts.append(g["direction"])
+    if g.get("iface"):
+        parts.append("on " + g["iface"])
+    elif g.get("scope", "Any address") != "Any address":
+        parts.append("from " + g["scope"])
+    return " ".join(parts)
+
+
+def _readable_groups(server):
+    """The firewall's rule groups, or [] when it cannot be read (or UFW is not installed)."""
+    try:
+        status = firewall.remote_ufw_status(server)
+    except Exception:
+        _core._log.debug("game ports: the firewall could not be read before opening", exc_info=True)
+        return []
+    if not status or not status.get("installed") or status.get("unreachable"):
+        return []
+    return status.get("groups", [])
+
+
+def _open_game_port(server, groups, port, comment):
+    """Open `port` for the server whose rules carry `comment`. -> (open now, rules it was left to).
+
+    Per protocol: one another rule already decides is left to that rule, whatever it does, and
+    only the protocols no rule names get this server's allow — the bare rule when that is both,
+    `<port>/tcp` or `/udp` when it is one. An allow is appended, so it never sits ahead of a rule
+    that is already there. "Open" means both protocols now let a connection in, so a port a DENY
+    still blocks for one of them is not reported open."""
+    try:
+        port = _ufw_port_int(port)
+    except (TypeError, ValueError):
+        return False, []
+    first = {pr: _first_rule_for(groups, port, pr) for pr in _UFW_PROTOS}
+    spec = _spec_for_unruled(port, first)
+    added = bool(spec) and _core.run_privileged(
+        server, "ufw-allow-port", [spec, comment], timeout=15)[2] == 0
+    lets_in = all(added if g is None else g.get("action") in ("ALLOW", "LIMIT")
+                  for g in first.values())
+    return lets_in, _decided_by_others(first, comment)
+
+
+def _spec_for_unruled(port, first):
+    """The allow that covers exactly the protocols no rule names yet ({proto: first rule}), or ""."""
+    free = [pr for pr in _UFW_PROTOS if first[pr] is None]
+    if len(free) == len(_UFW_PROTOS):
+        return str(port)
+    return "%d/%s" % (port, free[0]) if free else ""
+
+
+def _decided_by_others(first, comment):
+    """The rules ({proto: first rule}) other than this server's own allow that decide a protocol."""
+    labels = []
+    for g in first.values():
+        if g is None or (g.get("action") == "ALLOW" and g.get("comment") == comment):
+            continue
+        if _rule_label(g) not in labels:
+            labels.append(_rule_label(g))
+    return labels
 
 
 def remote_ufw_allow_game_ports(server, ports, name="Game"):
-    """Open a LIST of ports (each bare rule = TCP+UDP), all tagged with the game
-    server's name. Idempotent — re-opening an existing port is a no-op. Used to open
-    every port a game actually needs (game/query/rcon/etc.), not just the main one."""
-    opened = []
+    """Open a LIST of ports, all tagged with the game server's name. Idempotent — a port this
+    server's own rule already opens is left as it is. Used to open every port a game actually
+    needs (game/query/rcon/etc.), not just the main one.
+
+    A protocol some OTHER rule already decides is left to that rule. `ufw allow <port> comment
+    <name>` does not add a rule beside one that differs from it only in comment or action: it
+    REPLACES it (ufw's set_rule swaps any match short of exact on a non-delete). So opening a port
+    another server's rule held re-tagged that rule as THIS server's, and this server's uninstall
+    (remote_ufw_close_by_name) then deleted it; an operator's `deny 3306` became an allow. The
+    ports come from LinuxGSM's `details` run as the game account, which reads a config that account
+    can write — so which rule got taken over was the account's choice.
+
+    Only BARE rules used to be looked at. With `deny 27015/tcp` in place the bare allow went in
+    after it and 27015 was reported opened while every TCP connection still met the DENY. The rule
+    each protocol meets first is what decides now (_open_game_port): a port is reported open only
+    when both protocols let a connection in, and the rules it was left to are named, with what
+    they do (`27015/tcp DENY`, `27016 LIMIT`).
+
+    A firewall that cannot be read is opened as it always was: nothing an attacker does makes this
+    read fail, and holding back every port of a freshly installed server on a busy host (a Tailscale
+    host after a long SteamCMD run times out routinely) is the worse failure."""
+    comment = _game_rule_comment(name)
+    groups = _readable_groups(server)
+    opened, left_to = [], []
     for p in sorted({int(x) for x in ports if x}):
-        cnt, _ = remote_ufw_allow_game_port(server, p, name)
-        if cnt:
+        is_open, rules = _open_game_port(server, groups, p, comment)
+        if is_open:
             opened.append(p)
-    return opened, f"opened {len(opened)} port(s): {', '.join(map(str, opened)) or 'none'}"
+        left_to += [r for r in rules if r not in left_to]
+    return opened, (f"opened {len(opened)} port(s): {', '.join(map(str, opened)) or 'none'}"
+                    + (f"; left to an existing rule: {', '.join(left_to)}" if left_to else ""))
+
+
+# How many times a cleanup tries one rule, each against a fresh read. ufw numbers are positions and
+# the auto-block inserts its denies at 1 from another thread, so a delete refused because the rule
+# moved (remote_ufw_delete_rule's expect_key) is a reason to read again, not to give the rule up.
+_UFW_DELETE_TRIES = 3
+
+
+def _delete_picked_rules(server, pick, bound):
+    """Delete every rule `pick(group)` takes, highest number first, each by number against a fresh
+    read and naming the rule it means. -> (rules deleted, the last read).
+
+    A rule that is refused is read again and retried, up to _UFW_DELETE_TRIES times; any `pick`
+    still takes on the last read is one that would not go. That read is an unreachable one when the
+    firewall stopped answering, and then nothing is known about what is left."""
+    deleted, refused = 0, {}
+    status = {}
+    for _ in range(bound):
+        status = firewall.remote_ufw_status(server)
+        if status.get("unreachable") or not status.get("installed"):
+            break
+        nxt = _next_pick(status, pick, refused)
+        if nxt is None:
+            break
+        n, key = nxt
+        if remote_ufw_delete_rule(server, n, expect_key=key)[0]:
+            deleted += 1
+        else:
+            refused[key] = refused.get(key, 0) + 1
+    else:
+        status = firewall.remote_ufw_status(server)
+    return deleted, status
+
+
+def _next_pick(status, pick, refused):
+    """The highest-numbered (number, key) `pick` takes that has tries left ({key: refusals}), or
+    None. Highest first, so this loop's own deletes never move the rules still to go."""
+    mine = [(n, g["key"]) for g in status.get("groups", [])
+            if pick(g) and refused.get(g["key"], 0) < _UFW_DELETE_TRIES
+            for n in g.get("nums", [])]
+    return max(mine) if mine else None
+
+
+# A cleanup that could not read the firewall knows nothing about what it left. Shared with the
+# uninstall route, which says the same when the cleanup raised.
+UFW_UNREAD_NOTE = ("The firewall could not be read, so this server's rules may still be open — "
+                   "check the host's Firewall page.")
+
+
+def _still_there(status, pick):
+    """What a cleanup meant to remove and did not, as sentences for its result ([] = nothing)."""
+    if status.get("unreachable"):
+        return [UFW_UNREAD_NOTE]
+    if not status.get("installed"):
+        return []
+    if not status.get("enabled"):
+        # An inactive ufw lists no rules, stored ones included: nothing here could be seen or removed.
+        return ["UFW is not active on this host, so its stored rules cannot be listed, and any this "
+                "server had are still stored — they apply again if UFW is enabled."]
+    stuck = [_rule_label(g) for g in status.get("groups", []) if pick(g)]
+    if not stuck:
+        return []
+    return ["Still open, as it could not be removed: %s — remove %s from the host's Firewall "
+            "page." % (", ".join(stuck), "it" if len(stuck) == 1 else "them")]
+
+
+def _left_on_purpose(status, comment, removable, protected):
+    """Sentences naming the rules carrying `comment` that a name cleanup does not take."""
+    kept = [g for g in status.get("groups", [])
+            if g.get("comment") == comment and not removable(g)]
+    on_host = [g for g in kept if _is_panel_allow(g) and _port_of(g) in protected]
+    return (_naming("Left in place, as the panel does not make rules like these",
+                    [g for g in kept if g not in on_host])
+            + _naming("Left in place on SSH's or the panel's own port", on_host))
+
+
+def _port_of(g):
+    """The one port a _is_panel_allow group is on, as an int."""
+    return int(str(g["port_num"]).strip())
+
+
+def _naming(lead, groups):
+    """["<lead>: <each rule>."], or [] when there are none."""
+    return ["%s: %s." % (lead, ", ".join(map(_rule_label, groups)))] if groups else []
+
+
+def _with_notes(message, notes):
+    """`message`, then each of `notes` as a sentence of its own."""
+    return message + ("." + "".join(" " + n for n in notes) if notes else "")
 
 
 def remote_ufw_close_by_name(server, name):
-    """Delete ALL UFW rules tagged with a game server's name (its comment). Used on
-    uninstall so multi-port games are fully cleaned up.
+    """Delete the ALLOW rules tagged with a game server's name (its comment). Used on uninstall so
+    multi-port games are fully cleaned up. -> (rules removed, message, what is left).
 
     The firewall is RE-READ before every delete, and each delete names the rule it means
     (expect_key). The numbers used to be read once and deleted highest-first, which kept them valid
     only against this loop's own deletes: the hourly auto-block reconcile inserts its denies at
     position 1 from another thread, and one insert mid-loop shifted every remaining number onto
     the rule above it — another server's port, or the deny holding an attacker out — while this
-    reported "8 rule(s) removed"."""
+    reported "8 rule(s) removed". A delete refused because its rule MOVED was then given up for
+    good, so the same insert left the server's port open, v4 and v6, still reported as a clean
+    "2 rule(s) removed"; it is retried now (_delete_picked_rules).
+
+    Only rules the panel itself makes (_is_panel_allow), and never one on SSH's or the panel's own
+    port (protected_host_ports). Anything carrying the name was taken: an operator's DENY or LIMIT,
+    an allow from one address, and a `22` allow the old "Open all ports" takeover could leave
+    tagged with a server — guarded only by the last-way-in check.
+
+    The third value names, as sentences, every rule carrying the name that is still there — ones
+    that would not go, and ones left on purpose — or that the firewall could not be read. Empty
+    means the server's rules are gone; the message says the same things."""
     comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "")[:60]
     if not comment:
-        return 0, "no name"
-    deleted, refused = 0, set()
-    for _ in range(256):           # bounded: a rule that will not go is skipped, never retried
+        return 0, "no name", []
+    protected = protected_host_ports(server)
+
+    def removable(g):
+        return g.get("comment") == comment and _is_panel_allow(g) and _port_of(g) not in protected
+
+    deleted, status = _delete_picked_rules(server, removable, 256)
+    left = _still_there(status, removable) + _left_on_purpose(status, comment, removable, protected)
+    return deleted, _with_notes(f"{deleted} rule(s) removed for {comment}", left), left
+
+
+def remote_ufw_tagged_ports(server, name):
+    """The ports an inbound public ALLOW tagged with `name` already opens, as a set of ints.
+
+    Empty when there is no name or the firewall cannot be read — so a caller using this to excuse
+    something is excused nothing it could not see.
+    """
+    comment = _game_rule_comment(name, "")
+    if not comment:
+        return set()
+    try:
         status = firewall.remote_ufw_status(server)
-        if status.get("unreachable") or not status.get("installed"):
-            break
-        tagged = [(n, g["key"]) for g in status.get("groups", [])
-                  if g.get("comment") == comment and g.get("key") not in refused
-                  for n in g.get("nums", [])]
-        if not tagged:
-            break
-        n, key = max(tagged)
-        if remote_ufw_delete_rule(server, n, expect_key=key)[0]:
-            deleted += 1
-        else:
-            refused.add(key)
-    return deleted, f"{deleted} rule(s) removed for {comment}"
+    except Exception:
+        _core._log.debug("tagged ports: the firewall could not be read", exc_info=True)
+        return set()
+    return {_port_of(g) for g in status.get("groups", [])
+            if g.get("comment") == comment and _is_panel_allow(g)}
 
 
-def remote_ufw_close_game_port(server, port):
-    """Remove the game server port rule (used on uninstall). Handles the new
-    single bare rule plus any legacy proto-specific rules on that port.
+def protected_host_ports(server):
+    """The ports on `server` no game server may open, adopt or clean up, as a set of ints.
+
+    SSH — 22, the port the panel connects on, and every port sshd's effective config names — and,
+    on the panel's own host, the panel's web port. A game server's ports are read from LinuxGSM's
+    `details`, run AS THE GAME ACCOUNT over a config that account (and anyone with MANAGE_SERVERS,
+    through the file manager) can write, so "Query 22" is a line they can make the panel act on as
+    root. An `sshd -T` that cannot be read leaves the first two: a failed read narrows this set,
+    never empties it.
+    """
+    ports = set(firewall._ssh_ports(server))
+    try:
+        ports.update(int(p) for p in _sshd_current_ports(server))
+    except Exception:
+        _core._log.debug("protected ports: sshd's effective config could not be read",
+                         exc_info=True)
+    try:
+        web = firewall._panel_web_port(server)
+    except Exception:
+        _core._log.debug("protected ports: the panel's web port could not be read", exc_info=True)
+        web = None
+    if web:
+        ports.add(int(web))
+    return ports
+
+
+def _is_game_rule_for(g, port, comment, legacy):
+    """Is group `g` a rule remote_ufw_close_game_port may take as the server's on `port`?
+
+    An inbound public ALLOW on exactly that port (bare, /tcp or /udp) — never a LIMIT or DENY —
+    tagged `comment`, or, with `legacy`, carrying no comment at all."""
+    return (_is_public_port_rule(g, port, ("BOTH", "TCP", "UDP")) and g.get("action") == "ALLOW"
+            and ((bool(comment) and g.get("comment") == comment)
+                 or (legacy and not g.get("comment"))))
+
+
+def remote_ufw_close_game_port(server, port, name="", legacy=False):
+    """Remove THIS server's rules on `port`. -> (rules removed, message, what is left).
+
+    Which rules are this server's: an inbound public ALLOW on exactly `port` (bare, /tcp or /udp)
+    tagged with `name`; and with legacy=True, one with NO comment, which is what a panel that did
+    not tag its rules yet left behind. Nothing else, ever.
+
+    It used to delete by SPEC — `ufw delete allow <port>`, then the same `proto tcp` and `proto udp`
+    — with no comment. ufw removes a rule matching all but its comment when the delete's comment is
+    empty, so those three took every ALLOW on the port whoever it belonged to: another server's, a
+    rule the operator opened from the Firewall page, or an operator's `allow 22/tcp comment ssh`,
+    a lockout — and none of it went through remote_ufw_delete_rule's guard. On a fresh install the
+    adoption step ran it on the port the panel had allocated, which cannot hold a rule of this
+    server's yet (the ports are opened after it).
+
+    So every delete is now by number against a fresh read, names the rule it means (expect_key),
+    and is never forced: the guard that refuses to delete the last way into the host still stands.
+    An untagged rule is a guess at ownership, so legacy=True is refused on a port SSH or the panel
+    is on, and never takes a LIMIT or a DENY. The CALLER must also know that no other game server
+    on the host holds the port — that is a database fact this module does not have.
 
     NOT port+1. That sweep deleted `port+1/tcp` and `/udp` with no idea whose they were — commonly
     the NEXT server's game port, or a rule the operator opened from the Firewall page — so
     uninstalling the server on 27015 closed 27016/udp and its neighbour stopped taking players,
     with nothing in the uninstall output saying so. The server's tagged rules, extra ports
-    included, are removed by remote_ufw_close_by_name."""
-    n = 0
-    ok, _ = remote_ufw_close_port(server, port)  # new-style bare rule (both protocols)
-    n += 1 if ok else 0
-    for proto in ("tcp", "udp"):  # legacy cleanup: old proto-specific rules on this port
-        ok, _ = remote_ufw_close_port(server, port, proto)
-        n += 1 if ok else 0
-    return n, f"Port {port}: {n} rule(s) removed"
+    included, are removed by remote_ufw_close_by_name.
+
+    A delete refused because the rule MOVED (an insert between the read and the delete) is read
+    again and retried; it used to be given up at once, leaving the rule open with nothing said.
+    The third value names, as sentences, a rule of this server's that is still there after its
+    tries, or that the firewall could not be read; empty means none is left."""
+    try:
+        port = _ufw_port_int(port)
+    except (TypeError, ValueError):
+        return 0, "Invalid port", []
+    comment = _game_rule_comment(name, "")
+    if legacy and port in protected_host_ports(server):
+        legacy = False
+    if not comment and not legacy:
+        return 0, f"Port {port}: no rule here is known to be this server's", []
+
+    def mine(g):
+        return _is_game_rule_for(g, port, comment, legacy)
+
+    deleted, status = _delete_picked_rules(server, mine, 64)
+    left = _still_there(status, mine)
+    return deleted, _with_notes(f"Port {port}: {deleted} rule(s) removed", left), left
 
 
 # LinuxGSM dependencies common to most game servers on Debian/Ubuntu. The game
 # user has no sudo, so the panel installs these as root before/around auto-install.
 # A Debian package name, optionally with an architecture qualifier (libstdc++5:i386). Debian
 # policy: lowercase alphanumeric plus + - . , at least two characters, starting alphanumeric.
-APT_PKG_RE = re.compile(r"[a-z0-9][a-z0-9+.-]+(?::[a-z0-9][a-z0-9-]*)?\Z")
+#
+# ENDING alphanumeric too, which policy does not require and apt-get needs. `apt-get install`
+# reads a trailing `-` as "remove this one" and a trailing `+` as "install it" (apt-get(8)), so
+# `openssh-server-` in an install list REMOVES openssh-server, as root — and that name satisfied
+# this pattern. The arch qualifier ends alphanumeric for the same reason (`libc6:i386-`). Every
+# name in LinuxGSM's package lists ends alphanumeric, so nothing real is refused; the helper's
+# v_package and privileged._package say the same.
+APT_PKG_RE = re.compile(r"[a-z0-9][a-z0-9+.-]*[a-z0-9](?::[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)?\Z")
 
 
 def _apt_pkgs(names):
@@ -735,22 +1065,128 @@ def deps_for_game(game_type, os_slug=None):
     return pkgs, needs_steamcmd
 
 
-def install_game_dependencies(server, game_type=None, extra=""):
+def _listed_dependencies(names, per_game):
+    """Split `names` into (those a LinuxGSM package list names, the rest), each in order.
+
+    Listed means: in `per_game` — LinuxGSM's own list for this game on this host's distro, the only
+    place its check_deps takes names from — or in the panel's common set, which is what an install
+    falls back to when that list cannot be had, or `steamcmd`.
+    """
+    allowed = set(per_game) | set(LGSM_COMMON_DEPS.split()) | {"steamcmd"}
+    keep, refused = [], []
+    for n in names:
+        (keep if n in allowed else refused).append(n)
+    return keep, refused
+
+
+def _listed_extras(server, game_type, names, per_game, account=None, selfname=None):
+    """Split `names` into (keep, refused) like _listed_dependencies, then look again at refused.
+
+    The panel's copy of LinuxGSM's list is master's, fetched weekly, and the game account's
+    LinuxGSM asks from a list that can differ from it either way: an account on an older release
+    reads THAT release's list (measured on the test host: mcserver and fctrserver run v26.1.0, whose
+    list names openjdk-21-jre for pmc/pz/rw/vpmc/wmc and dotnet-runtime-8.0 for vints, where master
+    names -25- and 10.0), and a release newer than the weekly copy lists what that copy has not
+    seen yet. Refusing those broke the install: vints' check_deps greps for its exact runtime.
+
+    The account's own copy (~/lgsm/data/<distro>.csv) is the one list that must NOT be consulted:
+    the account can write it, and this check exists because that account is less trusted than
+    root. So the second look is at LinuxGSM's own repository only (_upstream_names).
+    """
+    keep, refused = _listed_dependencies(names, per_game)
+    if not refused:
+        return keep, refused
+    also = _upstream_names(server, game_type, refused, account, selfname)
+    return keep + [n for n in refused if n in also], [n for n in refused if n not in also]
+
+
+def _names_for_game(table, game_type):
+    """Every name a LinuxGSM package table lists for a game: its 'all', 'steamcmd' and own rows."""
+    return {p for key in ("all", "steamcmd", game_type or "") for p in table.get(key, ())}
+
+
+def _upstream_names(server, game_type, refused, account, selfname):
+    """Collect the set LinuxGSM's repository lists for this game where the panel's copy lags.
+
+    First the list at the release the account's script runs, which is exactly the one its
+    check_deps read (lgsm_data.deps_at_release). Then, only for names still refused, master
+    fetched now rather than up to a week ago (lgsm_data.refresh_deps). Both fetch only here, after
+    a refusal during an install, and both are rate-limited; neither is on any page's path.
+    """
+    from panel.services import lgsm_data
+    slug = host_os_slug(server)
+    names = set()
+    tag = lgsm_release(server, account, selfname)
+    if tag:
+        names |= _names_for_game(lgsm_data.deps_at_release(slug, tag), game_type)
+    if not set(refused) <= names:
+        names |= _names_for_game(lgsm_data.refresh_deps(slug), game_type)
+    return names
+
+
+def lgsm_release(server, account, selfname):
+    """The LinuxGSM release a game account's script runs, as its tag ('v26.1.0'), or None.
+
+    From the `version=` line of the account's own script, /home/<account>/<selfname>: the value
+    its LinuxGSM fetches its modules and package list at (see lgsm_data._RELEASE_BASE). The
+    instance script, not ~/linuxgsm.sh: update-lgsm rewrites the first and leaves the second, and
+    on the test host gmodserver's two said v26.2.0 and v26.1.0, with its list v26.2.0's.
+
+    The account can edit that file, so this chooses only WHICH of LinuxGSM's published releases is
+    read; lgsm_data.release_tag refuses anything that is not a plain tag. None when it cannot be
+    read: an empty answer is a failed read, not a version.
+    """
+    if not (account and selfname):
+        return None
+    script = _core._quote("/home/%s/%s" % (account, selfname))
+    try:
+        out, _err, rc = _core.read_as_game_user(
+            server, account, "grep -m1 -E '^version=' " + script, timeout=10, selfname=selfname)
+    except Exception:
+        _core._log.debug("could not read the account's LinuxGSM version", exc_info=True)
+        return None
+    from panel.services import lgsm_data
+    line = (out or "").strip().splitlines()[:1] if rc == 0 else []
+    value = line[0].partition("=")[2].strip().strip("\"'") if line else ""
+    return lgsm_data.release_tag(value)
+
+
+def install_game_dependencies(server, game_type=None, extra="", account=None, selfname=None):
     """Install the exact LinuxGSM dependencies for a game (from LinuxGSM's list for this host's
     distro — a 22.04 box gets 22.04's packages, not 24.04's),
-    plus any extras, as root. Falls back to the common set if the CSV is missing.
+    plus any extras THAT LIST NAMES, as root. Falls back to the common set if the CSV is missing.
     Enables i386 + universe + multiverse first, then installs the batch, and if that
     fails (apt-get install is atomic — one unavailable package aborts everything)
     falls back to installing each package individually so the critical libs still
     land. `steamcmd` (needed by every Steam game — gmod/cs/tf2/rust/…) is installed
     specially: it's in `multiverse` and its Steam license must be pre-accepted via
-    debconf or apt hangs waiting for interactive input."""
+    debconf or apt hangs waiting for interactive input.
+
+    `account` and `selfname` name the game account and its LinuxGSM script, for a retry: the
+    release that script runs is where a name the panel's own copy refuses is looked up again."""
     if game_type:
         per_game, needs_steamcmd = deps_for_game(game_type, host_os_slug(server))
     else:
         per_game, needs_steamcmd = [], True  # unknown game → make sure steamcmd is present
+    # A retry passes back what LinuxGSM printed as missing. That is the output of a script run AS
+    # THE GAME ACCOUNT, out of that account's home, reading a config that account can edit (and
+    # that MANAGE_SERVERS can, through the file manager) — and the names went to apt-get install as
+    # ROOT, checked for syntax alone. So the account chose what root installed: an MTA that starts
+    # listening, anything in the host's repositories. LinuxGSM's check_deps only ever reports names
+    # from its package list for this game, so a name that list does not have is refused, logged,
+    # and said in the result — never installed. The list is loaded above for exactly this game on
+    # exactly this distro; when it cannot be had, the common set is all that passes. A name the
+    # panel's weekly copy refuses is looked up once more in LinuxGSM's repository, at the release
+    # the account runs and on master now — never in the account's own copy (_listed_extras).
+    extra_pkgs, refused = _listed_extras(server, game_type, (extra or "").split(), per_game,
+                                         account, selfname)
+    for _name in refused:
+        _core._log.warning("dependency list: refusing %r — LinuxGSM reported it missing, but "
+                           "no LinuxGSM package list the panel could read for %s names it",
+                           _name[:60], game_type or "this game")
+    refusal = ("Not installed — not in LinuxGSM's package list for this game on this host: %s. "
+               % ", ".join(n[:60] for n in refused)) if refused else ""
     # A retry may pass "steamcmd" back via `extra` (LinuxGSM lists it as missing).
-    extra_pkgs = (extra or "").split()
     if "steamcmd" in extra_pkgs:
         needs_steamcmd = True
         extra_pkgs = [p for p in extra_pkgs if p != "steamcmd"]
@@ -798,7 +1234,7 @@ def install_game_dependencies(server, game_type=None, extra=""):
             _core._log.warning("steamcmd install failed: %s", (_s_err or _s_out or "")[:200])
 
     if not pkgs:
-        return steam_ok, "no dependencies to install"
+        return (steam_ok and not refused), (refusal or "no dependencies to install")
 
     # apt-get install is ATOMIC — one unavailable package aborts the batch — so a failed batch
     # falls back to one at a time, which is what the shell `|| for p in …` loop did. Chunked
@@ -819,8 +1255,9 @@ def install_game_dependencies(server, game_type=None, extra=""):
 
     # rc now reports the BATCH. It used to report `echo deps-done`, the last command in the
     # pipeline, so this function returned True however badly the install had gone — which is the
-    # other half of why a refused step never surfaced.
-    return (rc == 0 and steam_ok), (out or err or "")
+    # other half of why a refused step never surfaced. A refused name fails it too: LinuxGSM will
+    # still report that package missing, and the result is where the refusal is said.
+    return (rc == 0 and steam_ok and not refused), refusal + (out or err or "")
 
 
 # Which classified causes a RETRY cannot get past. Only one: the rest are all "do this, then try
@@ -1160,7 +1597,7 @@ def _wait_for_reboot(server, on_wait=None, down_timeout=150, up_timeout=480):
             ok, _ = ssh_test_connection(
                 server.host, server.port or 22, server.username,
                 server.auth_method, decrypt_secret(server.auth_credential),
-                host_key=server.host_key or "",
+                host_key=server.host_key,   # the row's own value: an unreadable pin must refuse
             )
             return ok
         except Exception:
@@ -1914,12 +2351,11 @@ def _canonical_ip(s):
 
     Canonical matters: fail2ban and ufw store the normalised form, so unbanning
     "2001:0DB8::0001" against a stored "2001:db8::1" silently matches nothing. Two of the three
-    remote helpers already normalised; the unban one compared the raw string."""
-    import ipaddress
-    try:
-        return str(ipaddress.ip_address(str(s).strip()))
-    except ValueError:
-        return None
+    remote helpers already normalised; the unban one compared the raw string.
+
+    An IPv6 zone id is refused: ipaddress kept it verbatim, so "canonical" was request text, and it
+    reached fail2ban-client's argv through the root helper."""
+    return canonical_ip(s)
 
 
 def _valid_ip(s):
@@ -1979,11 +2415,10 @@ _UFW_BLOCK_TAG = "panel-block"          # a one-off manual block
 def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
     """Firewall-block an IP on ALL ports via a UFW deny rule, inserted at the top so it beats any
     allow, and tagged in the rule comment so the panel recognises its own blocks. The IP is reparsed
-    to its canonical ipaddress form so nothing request-supplied reaches the shell unchecked. (ok, msg)."""
-    import ipaddress
-    try:
-        ip = str(ipaddress.ip_address((ip or "").strip()))
-    except (ValueError, TypeError):
+    to its canonical ipaddress form, with a zone id refused, so nothing request-supplied reaches the
+    shell unchecked. (ok, msg)."""
+    ip = canonical_ip(ip)
+    if ip is None:
         return False, "Invalid IP address."
     tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
     # The same decision as the panel host's ufw_deny_ip — one implementation, so the twins cannot
@@ -1999,11 +2434,9 @@ def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
 
 
 def remote_ufw_undeny_ip(server, ip):
-    """Remove a UFW deny rule for an IP (canonicalised first). (ok, msg)."""
-    import ipaddress
-    try:
-        ip = str(ipaddress.ip_address((ip or "").strip()))
-    except (ValueError, TypeError):
+    """Remove a UFW deny rule for an IP (canonicalised first, a zone id refused). (ok, msg)."""
+    ip = canonical_ip(ip)
+    if ip is None:
         return False, "Invalid IP address."
     # Read the result — the same fix system_ops.ufw_undeny_ip already carries, for the same
     # reason, and this is the REMOTE twin that was missed. It discarded the tuple and returned
@@ -2246,6 +2679,143 @@ def _port_has_listener(ss_out, port):
     return bool(re.search(r"[:.]%d\s" % int(port), ss_out or ""))
 
 
+# The units sshd runs as: Debian/Ubuntu name it ssh.service, most other distributions sshd.service.
+_SSHD_UNITS = ("ssh.service", "sshd.service")
+# ...and the socket units that hold its listening socket under socket activation. systemd creates
+# an AF_INET socket inside the SOCKET unit's cgroup when BPF firewalling is available (so the
+# unit's IPAddressDeny= applies to it), and in its own (init.scope) when it is not.
+_SSHD_SOCKET_UNITS = ("ssh.socket", "sshd.socket")
+
+
+def _ss_listeners(ss_out):
+    """The LISTEN rows of `ss -lnt[e]` output, as (address, port, extended fields) tuples.
+
+    Parsed by COLUMN: `-e` appends `uid:1001 ino:2222 sk:…`, and a port match over the whole line
+    would read `ino:2222` as a listener on 2222."""
+    rows = []
+    for line in (ss_out or "").splitlines():
+        cols = line.split()
+        if len(cols) < 5 or cols[0] != "LISTEN":
+            continue
+        addr, _, port = cols[3].rpartition(":")
+        if port.isdecimal():
+            rows.append((addr, int(port), cols[5:]))
+    return rows
+
+
+def _listener_not_sshd(fields, socket_mode):
+    """Why a listening socket (its `ss -e` fields) is not sshd's, or None when it can be.
+
+    `ss -e` prints `uid:N` only for a socket a NON-root process created, and, where the kernel
+    reports it, the systemd cgroup it was created in. A local game account can bind a free port
+    >= 1024 in the window between the free-port check and sshd's restart; sshd then logs a failed
+    bind on that Port and carries on with the others, and a port-only listening check was answered
+    by the squatter. Its socket is uid:<game user>, which it cannot change — while the process
+    NAME it can (a binary called `sshd`), which is why this does not read `ss -p`. Under socket
+    activation systemd holds sshd's listening socket: in ssh.socket's cgroup, or init.scope."""
+    uid = next((f[4:] for f in fields if f.startswith("uid:")), None)
+    if uid not in (None, "0"):
+        return "a socket owned by uid %s, not root" % uid
+    cgroup = next((f[7:] for f in fields if f.startswith("cgroup:")), "")
+    unit = cgroup.rstrip("/").rsplit("/", 1)[-1]
+    if unit in _SSHD_UNITS or (socket_mode and (unit in _SSHD_SOCKET_UNITS
+                                                or cgroup == "/init.scope")):
+        return None
+    if cgroup == "/init.scope" or cgroup.startswith("/system.slice/"):
+        return "held by %s, not sshd" % (unit or cgroup)
+    return None            # no cgroup reported (cgroup v1, a container): root-owned is what we know
+
+
+def _sshd_holds_port(server, port, bind_addr, socket_mode):
+    """Whether every listener on `port` (on `bind_addr`, when given) is sshd's.
+
+    (True, "") when it is; (False, why) when something else holds it; (None, why) when the owners
+    could not be read — an installed panel-helper older than the `listening-sockets-owner` verb
+    refuses it, and that must not fail a port change the port-only check already confirmed."""
+    try:
+        out, _err, rc = _core.run_privileged(server, "listening-sockets-owner", [], timeout=15,
+                                             merge_stderr=False)
+    except Exception:
+        _core._log.debug("listening-sockets-owner failed", exc_info=True)
+        out, rc = "", -1
+    rows = _ss_listeners(out)
+    if rc != 0 or not any(f.startswith("ino:") for _a, _p, fs in rows for f in fs):
+        return None, "the panel could not read which process holds it"
+    def _same_ip(ss_addr):
+        # ss prints "[fd00::5]" and the canonical form; the operator may have typed "fd00:0::5".
+        try:
+            return (_ipaddress.ip_address(ss_addr.strip("[]").split("%", 1)[0])
+                    == _ipaddress.ip_address(bind_addr))
+        except ValueError:
+            return False
+    held = [fs for a, p, fs in rows if p == int(port) and (not bind_addr or _same_ip(a))]
+    if not held:
+        return False, "nothing is listening there"
+    for fs in held:
+        why = _listener_not_sshd(fs, socket_mode)
+        if why:
+            return False, why
+    return True, ""
+
+
+# fail2ban's [sshd] jail, pointed at the ports sshd serves. A drop-in of the panel's own rather than
+# an edit of jail.local: jail.d/*.local is read AFTER jail.local, so it applies however fail2ban was
+# installed. The jail.local edit alone (f2b-set-sshd-ports) did nothing on a stock install, which
+# has no jail.local — the jail kept banning on 22 while the panel said "fail2ban updated".
+# Printable ASCII only: the helper's fail2ban content rule refuses anything else.
+_F2B_SSHD_DROPIN_HEADER = (
+    "# Managed by LinuxGSM Panel: the ports fail2ban's sshd jail bans on, written when the SSH\n"
+    "# port is changed from the panel. Read after jail.local, so it overrides a port set there.\n")
+# How long fail2ban gets to bring the sshd jail back after a reload that fell through to a restart.
+_F2B_JAIL_SETTLE_S = 6
+
+
+def _f2b_sshd_dropin_body(ports):
+    """The [sshd] drop-in body for `ports` (validated ints, as strings)."""
+    return _F2B_SSHD_DROPIN_HEADER + "[sshd]\nport = %s\n" % ",".join(str(int(p)) for p in ports)
+
+
+def _rc_of(result):
+    """The return code of a (out, err, rc) transport answer; -1 for anything else."""
+    return result[2] if isinstance(result, tuple) and len(result) == 3 else -1
+
+
+def _point_f2b_sshd_at(server, ports):
+    """Make fail2ban's sshd jail ban on `ports`: ("updated" | "absent" | "failed", why).
+
+    "updated" only when the drop-in was written, fail2ban reloaded, and the sshd jail answers
+    afterwards — each of those has failed in a way the old step never looked at. Never raises: a
+    transport error here must not turn a port change that worked into a 500."""
+    try:
+        out, err, rc = _core.run_privileged(server, "f2b-status", [], timeout=10,
+                                            merge_stderr=False)
+        if rc == 127 or "not found" in ((out or "") + (err or "")).lower():
+            return "absent", "fail2ban is not installed on this host"
+        portlist = ",".join(ports)
+        # Hosts the panel prepared have a jail.local [sshd] port line; keep it in step.
+        _core.run_privileged(server, "f2b-set-sshd-ports", [portlist], timeout=20,
+                             merge_stderr=False)
+        if _rc_of(_core.write_root_file(server, "fail2ban-panel-sshd",
+                                        _f2b_sshd_dropin_body(ports), timeout=15)) != 0:
+            return "failed", ("its sshd drop-in could not be written"
+                              + ("; the panel-helper on this host may predate it, and re-running "
+                                 "install.sh updates it" if _core.is_local_server(server) else ""))
+        if _rc_of(_core._f2b_reload(server)) != 0:
+            return "failed", "fail2ban did not reload"
+        deadline = time.time() + _F2B_JAIL_SETTLE_S
+        while True:
+            _o, _e, jrc = _core.run_privileged(server, "f2b-status-jail", ["sshd"], timeout=10,
+                                               merge_stderr=False)
+            if jrc == 0:
+                return "updated", ""
+            if time.time() >= deadline:
+                return "failed", "its sshd jail is not running"
+            time.sleep(1)
+    except Exception:
+        _core._log.warning("fail2ban sshd port update failed", exc_info=True)
+        return "failed", "the host did not answer"
+
+
 def _restart_ssh_listener(server, socket_mode):
     """Restart whichever unit owns the listening socket.
 
@@ -2319,9 +2889,16 @@ def change_ssh_port(server, new_port, bind_addr=""):
         return False, "Enter a valid port number."
     if not (1 <= new_port <= 65535):
         return False, "Port must be between 1 and 65535."
+    # Canonical from here on, and never with a zone id. _valid_ip used to keep the typed text, and
+    # ipaddress keeps a zone verbatim, newlines included: 'fe80::1%a' + a newline + anything closed
+    # the ListenAddress line and wrote the rest as lines of their own into a root-owned sshd or
+    # ssh.socket drop-in on a remote — where no line grammar checks the file, and the socket unit
+    # is reloaded before anything validates it. That is past what MANAGE_REMOTES grants.
     bind_addr = (str(bind_addr) if bind_addr else "").strip()
-    if bind_addr and not _valid_ip(bind_addr):
-        return False, "Bind address must be a valid IP address, or blank for all interfaces."
+    if bind_addr:
+        bind_addr = canonical_ip(bind_addr)
+        if bind_addr is None:
+            return False, "Bind address must be a valid IP address, or blank for all interfaces."
     # A LOOPBACK bind is the one lockout this function cannot undo, so it is refused before
     # anything is touched rather than caught afterwards.
     #
@@ -2337,15 +2914,11 @@ def change_ssh_port(server, new_port, bind_addr=""):
     # refuses a loopback-only panel bind unless Tailscale Serve is in front of it). sshd has no
     # equivalent proxy, so here it is refused outright.
     if bind_addr:
-        import ipaddress
-        try:
-            if ipaddress.ip_address(bind_addr).is_loopback:
-                return False, ("Binding SSH to %s would make it reachable only from the host "
-                               "itself — remote SSH would stop working, and binding is "
-                               "all-or-nothing so there is no fallback to revert to. Use the "
-                               "address you actually connect on." % bind_addr)
-        except ValueError:
-            return False, "Bind address must be a valid IP address, or blank for all interfaces."
+        if ip_address_or_none(bind_addr).is_loopback:
+            return False, ("Binding SSH to %s would make it reachable only from the host "
+                           "itself — remote SSH would stop working, and binding is "
+                           "all-or-nothing so there is no fallback to revert to. Use the "
+                           "address you actually connect on." % bind_addr)
         # ...and on the panel's own host, an address the host does not HAVE. This used to be caught
         # for free: sshd could not bind a missing address, so it failed to start and the listening
         # check reverted. Under socket activation systemd creates the socket anyway, so something
@@ -2452,10 +3025,8 @@ def change_ssh_port(server, new_port, bind_addr=""):
     if trc != 0:
         return _revert("sshd rejected the new config — nothing changed. (%s)" % ((terr or "invalid")[:120]))
 
-    # 4. Point fail2ban's [sshd] jail at the new + old ports so its bans target the right port.
-    _core.run_privileged(server, "f2b-set-sshd-ports", [",".join(ports)], timeout=20,
-                   merge_stderr=False)
-    _core.run_privileged(server, "service-restart", ["fail2ban"], timeout=20, merge_stderr=False)
+    # 4. (fail2ban is repointed at step 7, once the move is VERIFIED: done here, before the restart,
+    #    a reverted change left fail2ban banning on a port nothing serves.)
 
     # 5. Restart whatever actually holds the port. Established sessions survive either way.
     _restart_ssh_listener(server, socket_mode)
@@ -2482,18 +3053,46 @@ def change_ssh_port(server, new_port, bind_addr=""):
         elif not _port_has_listener(out, new_port):
             return _revert("sshd didn't come up on port %d — reverted. Your existing SSH still works." % new_port)
 
+    #    ...and that what answers there IS sshd. Both checks above are process-blind (`ss -lnt` and
+    #    a TCP connect), so a local account that bound the port after step 0 passed them, the route
+    #    repointed the panel at it, and the next connection offered it the stored credential.
+    _holds, _why = _sshd_holds_port(server, new_port, bind_addr, socket_mode)
+    if _holds is False:
+        return _revert("Port %d is not held by sshd (%s) — reverted. Your existing SSH still works."
+                       % (new_port, _why))
+    _unchecked = ("" if _holds else
+                  " (The panel could not confirm that sshd itself holds port %d: %s — the "
+                  "panel-helper on this host may predate that check; re-running install.sh "
+                  "updates it.)" % (new_port, _why))
+
+    # 7. Point fail2ban's sshd jail at the new + old ports so its bans cover the port now served.
+    _f2b, _f2b_why = _point_f2b_sshd_at(server, ports)
+
     _core.run_privileged(server, _discard_verb, [], timeout=10,
                    merge_stderr=False)   # success — drop the snapshot
+    if _f2b == "updated":
+        _done = "firewall + fail2ban updated"
+    elif _f2b == "absent":
+        _done = "firewall updated; %s, so nothing bans SSH brute force on any port" % _f2b_why
+    else:
+        _done = ("firewall updated, but fail2ban was NOT: %s, so it may not be banning SSH brute "
+                 "force on port %d" % (_f2b_why, new_port))
     if bind_addr:
         # No fallback sentence here: ListenAddress is all-or-nothing (this function's own docstring
         # says so), so sshd is now on THIS address and nothing else. Telling the operator a previous
         # port is still available would be untrue exactly when it matters most.
-        return True, ("SSH now listens on %s:%d, and only there (firewall + fail2ban updated). "
-                      "Confirm you can still reach it before closing anything."
-                      % (bind_addr, new_port))
-    return True, ("SSH now listens on port %d (firewall + fail2ban updated). The previous port is "
+        return True, ("SSH now listens on %s:%d, and only there (%s). "
+                      "Confirm you can still reach it before closing anything.%s"
+                      % (bind_addr, new_port, _done, _unchecked))
+    if _f2b == "failed":
+        # Closing the old port is the advice that assumes fail2ban covers the new one.
+        return True, ("SSH now listens on port %d (%s). The previous port is still available as a "
+                      "fallback; fix fail2ban before relying on it for port %d.%s"
+                      % (new_port, _done, new_port, _unchecked))
+    return True, ("SSH now listens on port %d (%s). The previous port is "
                   "still available as a fallback — once you've confirmed you can reach SSH on %d, "
-                  "close the old one from the Firewall page." % (new_port, new_port))
+                  "close the old one from the Firewall page.%s"
+                  % (new_port, _done, new_port, _unchecked))
 
 
 # A ufw rule whose To column IS port 22 — the number (with or without /tcp) or the app profile.
@@ -2608,16 +3207,13 @@ def tailnet_exempt_ips(server, ips):
     but only when Tailscale is actually running on this host. Returns a set of canonical IP strings
     (empty if Tailscale is down or nothing is in range). Works for local + remote (run_command
     dispatches). Best-effort; fails safe to no exemptions."""
-    import ipaddress
-    try:
-        net = ipaddress.ip_network(_TAILNET_CGNAT)
-    except ValueError:
+    net = ip_network_or_none(_TAILNET_CGNAT)
+    if net is None:
         return set()
     cand = set()
     for ip in ips or ():
-        try:
-            addr = ipaddress.ip_address((ip or "").strip())
-        except (ValueError, TypeError):
+        addr = ip_address_or_none(ip)
+        if addr is None:
             continue
         if addr in net:
             cand.add(str(addr))
@@ -2742,7 +3338,7 @@ def remote_set_public_ssh(server, mode):
 
 
 def ssh_test_connection(host, port=22, username="root", auth_method="key", credential="",
-                        host_key=""):
+                        host_key="", captured=None):
     """Test an SSH connection and return (success, message).
 
     `host_key` is the pin to check against, for the callers that HAVE one. It was not a parameter
@@ -2756,65 +3352,108 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
     ten minutes while the operator watches a progress bar.
 
     Left unpinned only where there is genuinely nothing to compare against: adding a remote, which
-    is the first contact the TOFU pin is established from."""
+    is the first contact the TOFU pin is established from.
+
+    `captured`, when given, is a list the key seen on that first contact is appended to — on
+    SUCCESS only, never after a failed login — so the caller can store it with the row it creates.
+    Enrolment used to throw it away and commit the row unpinned, leaving the pin to whichever
+    connection came next, which for a host added in the setup wizard is a background worker.
+
+    A pin that exists but cannot be DECRYPTED is refused before anything is sent. `host_key` is
+    then an UnreadableSecret, which is "" — and "" is first contact, so the Test button offered the
+    stored password to whoever answered and reported success. Callers must pass the row's value
+    itself, not `host_key or ""`, which drops the type.
+
+    The client is closed on every way out. It used to be closed on success alone, so each refused
+    test login and each changed host key left paramiko's Transport thread and socket open, as
+    get_connection's refusals did (see _core._open_client)."""
     # Tailscale SSH must use the system ssh client (tailscaled handles auth).
     if auth_method == "tailscale":
-        class _S:
-            pass
-        s = _S()
-        s.host, s.port, s.username = host, port, username
-        s.auth_method, s.linuxgsm_user, s.sudo_enabled = "tailscale", "", False
-        out, err, rc = _core._run_via_ssh_cli(s, "echo ok && whoami", timeout=15, sudo=False)
-        if rc == 0:
-            return True, "Tailscale SSH connection successful"
-        low = (err or "").lower()
-        if "permission denied" in low:
-            return False, "Tailscale SSH denied — check the tailnet ACL allows SSH to this node/user."
-        if "timed out" in low or "timeout" in low:
-            return False, f"Timed out reaching {host} over Tailscale. Is the node online?"
-        return False, f"Tailscale SSH failed: {(err or out or 'unknown')[:150]}"
+        return _ssh_test_tailscale(host, port, username)
 
+    from panel.db.models import UnreadableSecret
+    if isinstance(host_key, UnreadableSecret):
+        return False, ("The stored SSH host key for this server cannot be decrypted on this host, "
+                       "so it cannot be checked. Nothing was sent. Click \"Re-trust host key\" on "
+                       "the server page if you are sure this is the right server.")
     client = paramiko.SSHClient()
     # Pinned when the caller has a pin (an existing remote); capture-only on genuine first contact,
     # where there is nothing to compare against. Never AutoAddPolicy either way.
-    client.set_missing_host_key_policy(
-        _core._PinPolicy(expected=host_key or "", reject_on_change=bool(host_key)))
+    policy = _core._PinPolicy(expected=host_key or "", reject_on_change=bool(host_key))
+    client.set_missing_host_key_policy(policy)
     try:
-        if auth_method == "password":
-            if not credential:
-                # A password remote with no usable credential must FAIL, not fall through to the
-                # key branch below and authenticate with the panel user's own ~/.ssh/id_rsa — a
-                # different credential, against a host the operator never authorised it for.
-                # decrypt_secret() returns "" both for "nothing stored" and for "stored but could
-                # not be decrypted" (a restored backup with a mismatched cred_key, a corrupt row),
-                # so this is also the only place that failure becomes visible.
-                return False, ("No usable SSH password is stored for this host. If the panel was "
-                               "restored from a backup, its credential key may not match.")
-            client.connect(
-                host, port=port, username=username,
-                password=credential, timeout=10,
-                allow_agent=False, look_for_keys=False,
-            )
-        else:
-            key_path = credential or os.path.expanduser("~/.ssh/id_rsa")
-            client.connect(
-                host, port=port, username=username,
-                key_filename=key_path, timeout=10,
-            )
-        client.close()
-        return True, "Connection successful"
-    except paramiko.AuthenticationException:
-        return False, "SSH authentication failed. Check your credentials."
-    except socket.timeout:
-        return False, f"Connection to {host}:{port} timed out. Is the host reachable?"
-    except socket.gaierror:
-        return False, f"Cannot resolve hostname: {host}"
-    except Exception:
-        # Don't surface the raw exception text to the browser — it can carry internal detail
-        # (key paths, host internals). Log the full trace server-side (no user-supplied host/port
-        # in the message — exc_info already carries the detail), show a generic message.
-        _core._log.warning("ssh_test_connection failed", exc_info=True)
-        return False, "Connection failed. Check the host, port, credentials, and that SSH is reachable."
+        refused = _ssh_test_login(client, host, port, username, auth_method, credential)
+    except Exception as e:
+        return False, _ssh_test_failure(e, host, port)
+    finally:
+        _core._close_quietly(client)
+    if refused:
+        return False, refused
+    if captured is not None and policy.captured:
+        captured.append(policy.captured)
+    return True, "Connection successful"
+
+
+def _ssh_test_tailscale(host, port, username):
+    """Run ssh_test_connection over Tailscale SSH, with the system ssh client, unprivileged."""
+    class _S:
+        pass
+    s = _S()
+    s.host, s.port, s.username = host, port, username
+    s.auth_method, s.linuxgsm_user, s.sudo_enabled = "tailscale", "", False
+    out, err, rc = _core._run_via_ssh_cli(s, "echo ok && whoami", timeout=15, sudo=False)
+    if rc == 0:
+        return True, "Tailscale SSH connection successful"
+    low = (err or "").lower()
+    if "permission denied" in low:
+        return False, "Tailscale SSH denied — check the tailnet ACL allows SSH to this node/user."
+    if "timed out" in low or "timeout" in low:
+        return False, f"Timed out reaching {host} over Tailscale. Is the node online?"
+    return False, f"Tailscale SSH failed: {(err or out or 'unknown')[:150]}"
+
+
+def _ssh_test_login(client, host, port, username, auth_method, credential):
+    """Log `client` in for ssh_test_connection. None when it connected, else why it was not tried.
+
+    Raises what paramiko raises; the caller turns that into a message and closes the client.
+    """
+    if auth_method == "password":
+        if not credential:
+            # A password remote with no usable credential must FAIL, not fall through to the
+            # key branch below and authenticate with the panel user's own ~/.ssh/id_rsa — a
+            # different credential, against a host the operator never authorised it for.
+            # decrypt_secret() returns "" both for "nothing stored" and for "stored but could
+            # not be decrypted" (a restored backup with a mismatched cred_key, a corrupt row),
+            # so this is also the only place that failure becomes visible.
+            return ("No usable SSH password is stored for this host. If the panel was "
+                    "restored from a backup, its credential key may not match.")
+        client.connect(
+            host, port=port, username=username,
+            password=credential, timeout=10,
+            allow_agent=False, look_for_keys=False,
+        )
+    else:
+        key_path = credential or os.path.expanduser("~/.ssh/id_rsa")
+        client.connect(
+            host, port=port, username=username,
+            key_filename=key_path, timeout=10,
+        )
+    return None
+
+
+def _ssh_test_failure(exc, host, port):
+    """The message ssh_test_connection shows for a connect that raised `exc`."""
+    if isinstance(exc, paramiko.AuthenticationException):
+        return "SSH authentication failed. Check your credentials."
+    if isinstance(exc, socket.timeout):
+        return f"Connection to {host}:{port} timed out. Is the host reachable?"
+    if isinstance(exc, socket.gaierror):
+        return f"Cannot resolve hostname: {host}"
+    # Don't surface the raw exception text to the browser — it can carry internal detail
+    # (key paths, host internals). Log the full trace server-side (no user-supplied host/port
+    # in the message — exc_info already carries the detail), show a generic message.
+    _core._log.warning("ssh_test_connection failed", exc_info=exc)
+    return "Connection failed. Check the host, port, credentials, and that SSH is reachable."
 
 
 # ── Ubuntu Pro (ubuntu-advantage-tools / `pro`) ────────────────────────────

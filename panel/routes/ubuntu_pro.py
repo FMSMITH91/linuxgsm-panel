@@ -4,7 +4,8 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (jsonify, request)
 from flask_login import (current_user, login_required)
-from panel.ops.ssh_manager import (pro_attach, pro_detach, pro_service, remote_live_metrics)
+from panel.ops.ssh_manager import (_PRO_SERVICES, pro_attach, pro_detach, pro_service,
+    remote_live_metrics)
 from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permission_required)
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from app import (_pro_status_cached)
@@ -48,7 +49,7 @@ def _register_pro_changes(app):
         # NOTE: the token is deliberately never logged.
         if ok:
             _pro_status_cached(remote, force=True)   # state changed → refresh the stored status
-        log_action(current_user, "pro_attach", target=remote.name, success=ok)
+        log_action(current_user, "pro_attach", target=remote.name, success=ok, remote=remote)
         return jsonify({"success": ok, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/pro-service", methods=["POST"])
@@ -59,14 +60,21 @@ def _register_pro_changes(app):
         data = _json_body()
         service = _json_str(data, "service")
         action = _json_str(data, "action")
+        # Refused here, BEFORE the audit row. pro_service already refused both without touching the
+        # host, but the route audited them anyway — `pro_<action>` with the service as the detail,
+        # as long as the request cared to make them (5 MB each, three requests: 58 MB of panel.db,
+        # from a delegate with MANAGE_REMOTES on one host). Nothing that is not a real toggle of a
+        # real service is worth a row.
+        if service not in _PRO_SERVICES or action not in ("enable", "disable"):
+            return jsonify({"success": False, "message": "Unknown service or action"}), 400
         try:
             ok, msg = pro_service(remote, service, action)
         except ConnectionError:
             return _unreachable("pro service")
         if ok:
             _pro_status_cached(remote, force=True)   # a service toggled → refresh the stored status
-        log_action(current_user, f"pro_{action or 'service'}", target=remote.name,
-                   detail=service, success=ok)
+        log_action(current_user, f"pro_{action}", target=remote.name,
+                   detail=service, success=ok, remote=remote)
         return jsonify({"success": ok, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/pro-detach", methods=["POST"])
@@ -80,7 +88,7 @@ def _register_pro_changes(app):
             return _unreachable("pro detach")
         if ok:
             _pro_status_cached(remote, force=True)   # detached → refresh the stored status
-        log_action(current_user, "pro_detach", target=remote.name, success=ok)
+        log_action(current_user, "pro_detach", target=remote.name, success=ok, remote=remote)
         return jsonify({"success": ok, "message": msg})
 
 

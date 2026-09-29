@@ -4,7 +4,7 @@ Moved out of register_routes() verbatim — see panel/routes/__init__.py for why
 """
 from flask import (render_template, request)
 from flask_login import (current_user, login_required)
-from panel.db.models import (AuditLog, LOCAL_HOST_LABEL, RemoteServer, db)
+from panel.db.models import (AuditLog, LOCAL_HOST_LABEL, db)
 from panel.security.auth import (VIEW_LOGS, accessible_remote_ids, get_user_servers,
                                  permission_required)
 from sqlalchemy import (and_, desc, or_, true)
@@ -19,12 +19,11 @@ _ACCOUNT_ACTIONS = frozenset({
     "rename_user", "revoke_session", "revoke_sessions", "invite_created", "invite_revoked",
     "invite_redeemed", "add_group", "edit_group", "delete_group", "otp_nag_dismissed",
     "ui_layout_reset",
+    # An admin's reset of another account's password or 2FA (edit_user's deferred rows). They name
+    # the ACCOUNT, and were missing here, so a viewer whose server shared the account's name read
+    # the fact, time and actor of someone else's reset (Aikido 745379096).
+    "reset_user_password", "2fa_reset",
 })
-
-
-def _like_prefix(name):
-    """A LIKE pattern matching targets written as "<name>:<detail>" (a host's port or rule)."""
-    return name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + ":%"
 
 
 def audit_scope(user):
@@ -33,13 +32,21 @@ def audit_scope(user):
     view_logs was install-wide. A group holding it with one server in scope read the whole trail:
     other servers' console commands (`rcon_password …` is a console command), every admin's
     sign-in address, and the attempted username of every failed login. A delegated viewer now
-    sees their OWN rows, plus rows whose target is a game server they can access or a host they
-    were granted — never an account row of anyone else's, and never the panel host's own
+    sees their OWN rows, plus rows ABOUT a game server they can access or a host they were
+    granted — never an account row of anyone else's, and never the panel host's own
     administration (LOCAL_HOST_LABEL: backups, self-update, binding).
+
+    "About" is AuditLog.game_server_id / remote_id, which log_action records from the object it
+    was handed. It was the TARGET, by name, and names are not unique: the same game installed on
+    two hosts gets the same name, so a viewer granted one read the other's console commands with
+    their arguments; and anyone who could rename their own server or host could rename it onto
+    any target — another tenant's server, 'database', a branch, an IP — and read that row and
+    every later one (Aikido 745379041, 745379096). A row with no id (an account, the panel host,
+    a server since deleted) is its actor's and the superadmin's only.
     """
     if user.is_superadmin:
         return None
-    about = _reachable_target_filters(user)
+    about = _reachable_object_filters(user)
     theirs = AuditLog.user_id == user.id
     if not about:
         return theirs
@@ -48,19 +55,15 @@ def audit_scope(user):
                             ~AuditLog.action.in_(sorted(_ACCOUNT_ACTIONS))))
 
 
-def _reachable_target_filters(user):
-    """Filters for the rows whose target is a game server `user` can access or a host they were granted."""
-    server_names = {gs.name for gs in get_user_servers(user) if gs.name}
+def _reachable_object_filters(user):
+    """Filters for the rows about a game server `user` can access or a host they were granted."""
+    server_ids = {gs.id for gs in get_user_servers(user)}
     remote_ids = accessible_remote_ids(user)
-    remote_names = ({r.name for r in RemoteServer.query.filter(RemoteServer.id.in_(remote_ids))
-                     if r.name} if remote_ids else set())
     about = []
-    if server_names:
-        about.append(AuditLog.target.in_(sorted(server_names)))
-    if remote_names:
-        about.append(AuditLog.target.in_(sorted(remote_names)))
-        about.extend(AuditLog.target.like(_like_prefix(n), escape="\\")
-                     for n in sorted(remote_names))
+    if server_ids:
+        about.append(AuditLog.game_server_id.in_(sorted(server_ids)))
+    if remote_ids:
+        about.append(AuditLog.remote_id.in_(sorted(remote_ids)))
     return about
 
 

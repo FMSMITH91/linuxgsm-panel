@@ -7,6 +7,7 @@ resolve across its submodules).
 import logging
 import os
 import re
+import select
 import shlex
 import signal
 import socket
@@ -134,10 +135,15 @@ try:
     # ...and the unpatched threading to go with it: _finish runs inside a tpool NATIVE thread,
     # where a green thread (what threading.Thread is after monkey_patch) has no hub to run on.
     _real_threading = _ev_original("threading")
+    # ...and the unpatched select for those native threads' readers: monkey_patch deletes
+    # select.poll and makes select.select wait in the CALLING thread's hub, which a tpool thread
+    # does not run. See _readiness().
+    _real_select = _ev_original("select")
 except Exception:
     _tpool = None
     _real_subprocess = subprocess
     _real_threading = threading
+    _real_select = select
 
 
 # In-memory SSH connection cache, keyed by _conn_key() below.
@@ -252,8 +258,12 @@ def _register_remote_cache_invalidation():
 _register_remote_cache_invalidation()
 
 
-def _kill_process_tree(p):
-    """Kill a Popen and its entire process group, so no grandchildren are left orphaned."""
+def _signal_process_tree(p):
+    """SIGKILL a Popen and its entire process group, so no grandchildren are left orphaned.
+
+    Signals only: it never touches p's pipes, because the capped readers own them (see
+    _collect_capped). Never raises.
+    """
     try:
         if hasattr(os, "killpg") and hasattr(os, "getpgid"):
             os.killpg(os.getpgid(p.pid), signal.SIGKILL)
@@ -264,10 +274,29 @@ def _kill_process_tree(p):
             p.kill()
         except Exception:  # nosec B110 - killing an already-dead process is the expected race
             pass           # here, and there is nothing left to do about it either way.
+
+
+def _kill_process_tree(p):
+    """Kill a Popen and its entire process group, and reap it so it doesn't linger as a zombie.
+
+    Reaped with wait(), not communicate(): communicate() READS the pipes, and a capped reader may
+    still be reading them. Under eventlet that second reader raised "Second simultaneous read on
+    fileno N" (swallowed here), and in native threads the two split the output between them.
+    """
+    _signal_process_tree(p)
+    _reap(p, 5)
+
+
+def _reap(p, grace):
+    """Collect a killed `p`'s exit status, waiting at most `grace` seconds for it. Never raises.
+
+    A `p` still running after that is one the kill could not reach; it is not waited for.
+    subprocess reaps it later: Popen.__del__ files an unreaped child for the next Popen to collect.
+    """
     try:
-        p.communicate(timeout=5)   # reap it so it doesn't linger as a zombie
-    except Exception:  # nosec B110
-        pass
+        p.wait(timeout=grace)
+    except Exception:
+        _log.debug("a killed command had not exited; subprocess reaps it later", exc_info=True)
 
 
 def _already_escalated(cmd):
@@ -347,24 +376,86 @@ def _decode_output(b):
     return b.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
-# How long a reader may still be draining after the command it reads has exited (or been killed):
-# a grandchild holding the pipe open gets this, not the caller's whole timeout over again.
+# How long a reader may still be draining after the command it reads has exited on its own: a
+# grandchild holding the pipe open gets this, not the caller's whole timeout over again. ONE
+# deadline for all of a command's readers, not one each.
 _READER_GRACE = 5
+# ...and after a KILL. A killed tree's pipes reach EOF at once, so a pipe still open by then is held
+# by something the kill could not reach -- from the panel's own account, the root helper and what
+# it runs under sudo -- and waiting for that only delays the answer. Measured on the test VPS: a
+# `journal` read with a 1s timeout answered after 8.6s, and a stand-in the kill missed held a 1s
+# timeout for 16s (11s under eventlet).
+_KILL_GRACE = 1
+# How often a reader with nothing to read checks whether it has been told to stop.
+_READER_POLL = 0.1
 
 
-def _pump_capped(stream, buf, cap, flags):
-    """Read `stream` to EOF into `buf`, keeping its first `cap` bytes and discarding the rest."""
-    rd = getattr(stream, "read1", None) or stream.read
+def _keep_capped(buf, chunk, cap, flags):
+    """Append what fits of `chunk` under `cap` to `buf`; flag the rest as truncated."""
+    room = cap - len(buf)
+    if room > 0:
+        buf.extend(chunk[:room])
+    if len(chunk) > max(room, 0):
+        flags["truncated"] = True
+
+
+def _fileno(stream):
+    """`stream`'s descriptor, or None when it has none (a test's in-memory stream)."""
     try:
-        while True:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):     # io.UnsupportedOperation is both of the last
+        return None
+    return fd if isinstance(fd, int) else None
+
+
+def _readiness(sel, fd):
+    """`ready(seconds) -> bool`: whether `fd` can be read without blocking (data, EOF or an error).
+
+    `sel` is the select module that matches the reader's kind of thread (see _collect_capped).
+    poll() where it has one, which has no FD_SETSIZE ceiling. eventlet's patched module has none --
+    monkey_patch deletes it -- and its select() waits in the hub instead, which has no ceiling
+    either and lets every other greenlet run meanwhile.
+    """
+    if hasattr(sel, "poll"):
+        poller = sel.poll()
+        poller.register(fd, sel.POLLIN | sel.POLLPRI)     # hang-up and errors are always reported
+        return lambda seconds: bool(poller.poll(seconds * 1000))
+    return lambda seconds: bool(sel.select([fd], [], [], seconds)[0])
+
+
+def _until_readable(stream, sel, stop):
+    """`wait() -> bool`: True once `stream` can be read, False once the reader is told to stop."""
+    fd = _fileno(stream)
+    if fd is None or sel is None:
+        return lambda: not stop["now"]          # nothing to wait on: the read itself is the wait
+    ready = _readiness(sel, fd)
+
+    def wait():
+        while not stop["now"]:
+            if ready(_READER_POLL):
+                return True
+        return False
+    return wait
+
+
+def _pump_capped(stream, buf, cap, flags, stop=None, sel=None):
+    """Read `stream` to EOF into `buf`, keeping its first `cap` bytes and discarding the rest.
+
+    It returns early, keeping what it has read, once `stop["now"]` is set. It never blocks in a
+    read: it waits for readiness in _READER_POLL slices and checks `stop` between them and between
+    reads, so a pipe that something unkillable holds open -- or keeps writing to -- cannot hold it
+    past the collector's grace. The collector closes the pipe only after this has returned.
+    """
+    rd = getattr(stream, "read1", None) or stream.read
+    wait = _until_readable(stream, sel, stop if stop is not None else {"now": False})
+    try:
+        while wait():
             chunk = rd(65536)
+            # b"" at EOF, or "" -- a str: eventlet's green read answers that when its descriptor is
+            # closed under it. Either ends the read, and neither is data to keep.
             if not chunk:
                 return
-            room = cap - len(buf)
-            if room > 0:
-                buf.extend(chunk[:room])
-            if len(chunk) > max(room, 0):
-                flags["truncated"] = True
+            _keep_capped(buf, chunk, cap, flags)
     except (OSError, ValueError):
         return          # the pipe was closed under us (a kill); what was read is kept
 
@@ -394,30 +485,100 @@ def _signalling(target, done):
     return run
 
 
-def _reader_jobs(p, bufs, cap, flags, stdin_bytes):
-    """(target, args) per _collect_capped thread: a capped pump per pipe, and the stdin feed."""
+def _reader_jobs(p, bufs, cap, flags, stdin_bytes, stop=None, sel=None):
+    """(target, args, pipe) per _collect_capped thread: a capped pump per pipe, and the stdin feed.
+
+    `pipe` is what the collector closes once that thread has finished: the pump's stream, or None
+    for the feed, which closes stdin itself.
+    """
     # `bufs` pairs with (p.stdout, p.stderr); a stream that is None (no pipe) gets no pump.
-    jobs = [(_pump_capped, (stream, buf, cap, flags))
+    jobs = [(_pump_capped, (stream, buf, cap, flags, stop, sel), stream)
             for stream, buf in zip((p.stdout, p.stderr), bufs) if stream is not None]
     if p.stdin is not None:
-        jobs.append((_feed_stdin, (p, stdin_bytes)))
+        jobs.append((_feed_stdin, (p, stdin_bytes), None))
     return jobs
 
 
+def _start_readers(jobs, threads):
+    """Run each job in a daemon `threads`.Thread: [(pipe, Event set when it returns)] per job."""
+    readers = []
+    for target, args, pipe in jobs:
+        done = threads.Event()
+        threads.Thread(target=_signalling(target, done), args=args, daemon=True).start()
+        readers.append((pipe, done))
+    return readers
+
+
+def _await_all(readers, grace):
+    """Wait for every reader's Event, `grace` seconds in all -- one deadline, not one each."""
+    deadline = time.monotonic() + grace
+    for _pipe, done in readers:
+        done.wait(max(0.0, deadline - time.monotonic()))
+
+
+def _close_pipe_quietly(pipe):
+    """Close our end of a pipe; one already closed, or a stand-in with no close(), is fine.
+
+    Not named _close_quietly: that is the SSH-client closer below, and the second def of one name
+    in a module silently replaces the first, which is what the merge that brought both in did.
+    """
+    try:
+        pipe.close()
+    except (AttributeError, OSError, ValueError):
+        _log.debug("closing a command's pipe", exc_info=True)
+
+
+def _release_pipes(readers, stop):
+    """Stop every reader, and close each pipe whose reader has let go of it.
+
+    Never a pipe whose reader is still in it. eventlet allows ONE waiter per descriptor, and a
+    native read is not woken by a close at all: it would keep waiting on a descriptor number that
+    the next open() may already have been handed. A reader that has not let go within a few polls
+    keeps its pipe, which is closed with the reader's stream when that reader ends.
+    """
+    stop["now"] = True
+    _await_all(readers, _READER_POLL * 5)
+    for pipe, done in readers:
+        if pipe is not None and done.is_set():
+            _close_pipe_quietly(pipe)
+
+
+def _wait_or_kill(p, timeout, kill, readers):
+    """Wait for `p` to exit, then for its readers: its exit status, or None when it was killed.
+
+    A `p` that outlives `timeout` is killed, its readers get _KILL_GRACE instead of _READER_GRACE,
+    and the caller reaps it.
+    """
+    try:
+        rc = p.wait(timeout=timeout)
+    except (_real_subprocess.TimeoutExpired, subprocess.TimeoutExpired):
+        kill()
+        _await_all(readers, _KILL_GRACE)
+        return None
+    _await_all(readers, _READER_GRACE)
+    return rc
+
+
 def _collect_capped(p, timeout, kill, threads, stdin_bytes=None, cap=None):
-    """communicate(), with a ceiling on what is KEPT.
+    """communicate(), with a ceiling on what is KEPT and a bound on how long it takes.
 
     -> (out, err, rc, truncated) as bytes, or None when the command outlived `timeout` (it has been
-    killed by then).
+    killed and reaped by then, and its pipes closed).
 
     communicate() buffers everything a command writes until it exits, and the two subprocess
     transports used it: a remote reached over Tailscale that answers a five-second metrics probe
     with gigabytes grew the panel until the OOM killer ended it, taking every other host's
     management with it — and the next poll did it again. The paramiko path has had an 8 MB
-    ceiling all along. This is the same rule for these two: each stream is read to EOF in its own
-    thread (reading one to EOF first deadlocks the moment the other fills its pipe), the first
-    `cap` bytes are kept, and the rest is read and DISCARDED rather than left unread, so a command
-    still writing is not blocked into outliving its timeout.
+    ceiling all along. This is the same rule for these two: each stream is read in its own thread
+    (reading one to EOF first deadlocks the moment the other fills its pipe), the first `cap` bytes
+    are kept, and the rest is read and DISCARDED rather than left unread, so a command still
+    writing is not blocked into outliving its timeout.
+
+    BOUNDED: it answers within `timeout` plus _KILL_GRACE, however the command's descendants
+    behave. `kill` only signals; the readers get _KILL_GRACE to reach EOF, are told to stop, and
+    each pipe is closed once its reader has returned (one reader per descriptor: never
+    communicate(), which is a second). Then p is reaped. What the kill cannot reach (the root
+    helper under sudo, from the panel's account) exits in its own time, and is not waited for.
 
     `threads` is the caller's to choose, as a threading MODULE: the unpatched one inside tpool,
     where a green thread has no hub to run on; the patched (green) one in a request greenlet,
@@ -425,40 +586,33 @@ def _collect_capped(p, timeout, kill, threads, stdin_bytes=None, cap=None):
     Event says when each has finished — one module for both. Measured under eventlet: a green
     Event set from a native thread wakes nobody, whether the waiter is a greenlet or another
     native thread (the wait runs its full timeout), and a native Event waited on in a greenlet
-    stops the whole hub while it waits, the green readers that would set it included.
+    stops the whole hub while it waits, the green readers that would set it included. The readers'
+    select module follows the same choice; `stop` is a plain flag either kind can read.
 
     Waited on those Events, never with Thread.join(timeout=...): under eventlet on Python 3.13+
     (Ubuntu 26.04) a green join that runs out of time RAISES eventlet.timeout.Timeout, a
-    BaseException, instead of returning. A grandchild still holding a pipe past _READER_GRACE
-    sent that straight through _run_via_ssh_cli's `except Exception`, and every one above it,
-    out of the request or background loop that asked.
+    BaseException, which went straight through _run_via_ssh_cli's `except Exception` and every
+    one above it, out of the request or background loop that asked.
     """
     cap = _MAX_OUTPUT_BYTES if cap is None else cap
     out, err = bytearray(), bytearray()
-    flags = {"truncated": False}
-    jobs = _reader_jobs(p, (out, err), cap, flags, stdin_bytes)
-    finished = [threads.Event() for _ in jobs]
-    workers = [threads.Thread(target=_signalling(target, done), args=args, daemon=True)
-               for (target, args), done in zip(jobs, finished)]
-    for w in workers:
-        w.start()
+    flags, stop = {"truncated": False}, {"now": False}
+    sel = _real_select if threads is _real_threading else select
+    readers = _start_readers(_reader_jobs(p, (out, err), cap, flags, stdin_bytes, stop, sel),
+                             threads)
     try:
-        rc = p.wait(timeout=timeout)
-    except (_real_subprocess.TimeoutExpired, subprocess.TimeoutExpired):
-        kill()
-        for done in finished:
-            done.wait(_READER_GRACE)
+        rc = _wait_or_kill(p, timeout, kill, readers)
+    finally:
+        _release_pipes(readers, stop)
+    if rc is None:
+        _reap(p, _KILL_GRACE)
         return None
-    # The direct child has exited. Its output normally reaches EOF with it; a grandchild still
-    # holding the pipe open gets _READER_GRACE, not the caller's whole timeout over again.
-    for done in finished:
-        done.wait(_READER_GRACE)
     return bytes(out), bytes(err), rc, flags["truncated"]
 
 
 def _finish(p, timeout, stdin_text=None):
     """Collect a started process: (stdout, stderr, rc), killing the whole group on timeout."""
-    res = _collect_capped(p, timeout, kill=lambda: _kill_process_tree(p),
+    res = _collect_capped(p, timeout, kill=lambda: _signal_process_tree(p),
                           threads=_real_threading,
                           stdin_bytes=(stdin_text.encode("utf-8")
                                        if stdin_text is not None else None))
@@ -729,7 +883,25 @@ def get_connection(server, force_new=False, pooled=True):
     if cached is not None:
         return cached
 
-    client = paramiko.SSHClient()
+    client = _open_client(server)
+    _keep_warm(client)
+
+    if not pooled:
+        return client      # caller owns it — see the docstring
+    return _pool_client(server, key, client, force_new)
+
+
+def _open_client(server):
+    """A new SSHClient for `server`: host key checked, logged in, and pinned on first contact.
+
+    Every failure closes the client before it propagates, and the exception propagates unchanged.
+    A refused connection used to be left open: paramiko's connect() starts its Transport thread
+    and socket before the host-key check or the login can fail, and closes neither when one does.
+    Measured on the test host: three connects refused for a wrong pinned key left three Transport
+    threads and three ESTABLISHED sockets, all still there 30 s later. sshd drops its side after
+    LoginGraceTime, but a man-in-the-middle, the one endpoint the pin exists to refuse, can hold
+    them for good, and the monitor's host probe adds one per host per pass.
+    """
     # Pin the server's SSH host key (TOFU). Tailscale connections are already
     # authenticated by WireGuard, so there the tailnet is the trust anchor, not the SSH
     # host key — capture it but don't reject a change (tailscaled may rotate it).
@@ -738,7 +910,8 @@ def get_connection(server, force_new=False, pooled=True):
     # both, and _PinPolicy reads "" as first contact: it accepts whatever key is presented and
     # _persist_host_key then overwrites the stored pin with it. So a rotated or restored cred_key
     # silently turned the one control that detects a man-in-the-middle into a control that trusts
-    # one and remembers it. Refuse instead, and say which of the two it is.
+    # one and remembers it. Refuse instead, and say which of the two it is. Before a client exists,
+    # so there is nothing to close.
     from panel.db.models import UnreadableSecret
     if enforce_pin and isinstance(server.host_key, UnreadableSecret):
         raise HostKeyMismatch(
@@ -748,19 +921,27 @@ def get_connection(server, force_new=False, pooled=True):
             'unverified key — click "Re-trust host key" on the server page if you are certain this '
             'is the right server.' % getattr(server, "name", "this server"))
     policy = _PinPolicy(expected=(server.host_key or ""), reject_on_change=enforce_pin)
-    client.set_missing_host_key_policy(policy)
+    client = paramiko.SSHClient()
+    try:
+        client.set_missing_host_key_policy(policy)
+        _connect_client(client, server)
+        # First successful contact with a direct-SSH host → pin the key we just saw.
+        if policy.captured and enforce_pin:
+            _pin_first_contact(server, policy.captured)
+    except BaseException:
+        # BaseException, not Exception: an eventlet Timeout or a killed green thread leaves the
+        # same thread and socket behind. Closed, then re-raised as it came.
+        _close_quietly(client)
+        raise
+    return client
 
-    _connect_client(client, server)
 
-    # First successful contact with a direct-SSH host → pin the key we just saw.
-    if policy.captured and enforce_pin:
-        _persist_host_key(server, policy.captured)
-
-    _keep_warm(client)
-
-    if not pooled:
-        return client      # caller owns it — see the docstring
-    return _pool_client(server, key, client, force_new)
+def _close_quietly(client):
+    """Close an SSH client; a close that fails (its transport already torn down) is only logged."""
+    try:
+        client.close()
+    except Exception:  # nosec B110
+        _log.debug("closing an SSH client failed", exc_info=True)
 
 
 def _live_pooled_client(key, force_new):
@@ -892,22 +1073,125 @@ def _pool_client(server, key, client, force_new):
     return client
 
 
-def _persist_host_key(server, keystr):
-    """Store the pinned host key on the server row.
+def _pin_first_contact(server, keystr):
+    """Store the key a first contact saw; raise ConnectionError when it cannot be stored.
 
-    Best-effort; if there's no DB session in scope it simply pins on the next connection instead.
+    Refused rather than used: an unstored pin makes the next fresh connection first contact again,
+    accepting any key, so the pin has to land before the connection is handed out. `is False`, not
+    falsiness — a stand-in for _persist_host_key that answers nothing has not said it failed. The
+    client is closed by _open_client, which closes it on every failure, this one included.
     """
+    if _persist_host_key(server, keystr) is not False:
+        return
+    raise ConnectionError(
+        "Connected to %s, but the panel could not store its SSH host key, so it will not use a "
+        "connection it could not check next time. Nothing was run. Try again; if this keeps "
+        "happening, check that the panel's database can be written."
+        % getattr(server, "name", "this server"))
+
+
+# The Flask app, for storing a pin from a thread that has no app context. Registered by create_app
+# (register_pin_app); None only where no app was ever built, and then a pin cannot be stored.
+_pin_app = None
+
+
+def register_pin_app(app):
+    """Let _persist_host_key reach the database from any thread. create_app calls it once."""
+    global _pin_app
+    _pin_app = app
+
+
+def _persist_host_key(server, keystr):
+    """Store `keystr` as the pinned host key on `server`'s row. True when it is stored, else False.
+
+    This must work from ANY thread, because most first contacts happen on one with no app
+    context: the monitor's host probes, the player poll and metric sampler, /api/servers' port
+    scan, the backup list and the OS-update check all connect from ThreadPoolExecutor workers. It
+    used to do `server.host_key = keystr; db.session.commit()`, which raised outside an app
+    context and was swallowed, so a host whose first contact came from a worker stayed unpinned
+    while its pooled client lived, and every fresh connection after it — a TCP reset forces one —
+    was first contact again and accepted whatever key was presented.
+
+    So the row is loaded and written in a session this function owns: the caller's own when there
+    is an app context, else a fresh context on the registered app. A worker's new session does not
+    hold the caller's `server` object, so writing through `server` itself would commit nothing.
+    When the row written is not `server`, the key is set on `server` as its COMMITTED value: the
+    caller sees the pin, and its session is not left dirty with a write it would autoflush later.
+    """
+    from contextlib import nullcontext
+    from flask import has_app_context
+    from panel.db.models import RemoteServer, db
+    if getattr(server, "id", None) is None:
+        return False                       # no row to store it on
+    if has_app_context():
+        ctx = nullcontext()
+    elif _pin_app is not None:
+        ctx = _pin_app.app_context()
+    else:
+        _log.warning("host-key pin: no app to store it with; not pinning %s",
+                     getattr(server, "name", "a host"))
+        return False
     try:
-        from panel.db.models import db
-        server.host_key = keystr
-        db.session.commit()
+        with ctx:
+            try:
+                row = db.session.get(RemoteServer, server.id)
+                if row is None:
+                    return False           # the host was deleted mid-connect: nothing to pin
+                if not _pin_row_matches(row, server, keystr):
+                    return False
+                row.host_key = keystr
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                raise
     except Exception:
+        _log.warning("host-key pin: could not store the key for %s",
+                     getattr(server, "name", "a host"), exc_info=True)
+        return False
+    if row is not server:
+        _mirror_pin(server, keystr)
+    return True
+
+
+def _pin_row_matches(row, server, keystr):
+    """Whether the row loaded by `server`'s id may take the key `server`'s connection just met.
+
+    The row is loaded by id, and SQLite hands a deleted row's id to the next row created. A
+    connection whose host was deleted while its handshake was held — by the far side, which the
+    far side controls — would otherwise pin THAT box's key onto whichever host took the id, and
+    the panel would then trust it at the new host's address. So the row must still be the one the
+    caller connected with (the same created_at, when the caller's copy has it loaded) and name
+    the same endpoint, and it must hold no other pin: first contact is the only time a pin is
+    written, and two first contacts that met different keys have met a man in the middle.
+    """
+    from sqlalchemy import inspect as _sa_inspect
+    try:
+        seen = _sa_inspect(server).dict        # loaded attributes only: never a lazy load
+    except Exception:
+        seen = getattr(server, "__dict__", {}) or {}
+    created = seen.get("created_at")
+    if created is not None and row.created_at != created:
+        return False
+    if (row.host, row.port) != (seen.get("host", row.host), seen.get("port", row.port)):
+        return False
+    from panel.db.models import UnreadableSecret
+    current = row.host_key
+    if isinstance(current, UnreadableSecret):
+        return False            # an empty str that IS a pin, just one this key cannot read
+    return not current or current == keystr
+
+
+def _mirror_pin(server, keystr):
+    """Show a pin stored through another session on the caller's `server`, without dirtying it."""
+    try:
+        from sqlalchemy.orm.attributes import set_committed_value
+        set_committed_value(server, "host_key", keystr)
+    except Exception:
+        # Not a mapped object (a caller's stand-in): a plain attribute is all there is.
         try:
-            from panel.db.models import db
-            db.session.rollback()
+            server.host_key = keystr
         except Exception:
-            # no usable session; the key just pins on the next connection instead
-            _log.debug("host-key pin: session rollback unavailable", exc_info=True)
+            _log.debug("host-key pin: stored, but the caller's object refused it", exc_info=True)
 
 
 def close_connection(server):

@@ -114,6 +114,16 @@ try:
     _p_free, _ch_free = _app_mod.resolve_free_port(None, 1, 30000, "csgo")
     check("free-port: a free desired port is still returned unchanged",
           _p_free == 30000 and _ch_free is False, "%s/%s" % (_p_free, _ch_free))
+    # Aikido 745379002. A scan that could not be read was `or ()` — "nothing is listening" — and
+    # the port it then offered was opened at step 6 with no second look when the game reported it.
+    _app_mod._remote_listening_ports = lambda remote: None
+    try:
+        _p_unread = _app_mod.resolve_free_port(None, 1, 30000, "csgo")
+    except ConnectionError as _e:
+        _p_unread = _e
+    check("free-port: a scan that could not be read offers NO port — it raises the "
+          "ConnectionError the paramiko transport raises for the same host",
+          type(_p_unread).__name__ == "PortScanUnreadable", repr(_p_unread))
 finally:
     _app_mod._remote_listening_ports, _app_mod.GameServer = _o_rlp, _o_gsq
     _app_mod.lgsm_get_values, _app_mod.sm_game_engine = _o_lgv, _o_eng
@@ -3364,7 +3374,8 @@ try:
 
     _cs["socket"] = "active"
     _ok, _msg = _sm_hosts.change_ssh_port(NS(port=22), 2222)
-    _t = [t for t, _c in _cs["writes"]]
+    # (the sshd targets only: the fail2ban sshd drop-in is written after a verified move too)
+    _t = [t for t, _c in _cs["writes"] if t.startswith("sshd-")]
     check("ssh.socket: a socket-activated host gets the SOCKET drop-in, not the sshd_config one",
           _ok is True and _t == ["sshd-socket-dropin"], "%r %r" % (_ok, _t))
     _body = _cs["writes"][0][1]
@@ -3381,7 +3392,7 @@ try:
 
     _cs["writes"], _cs["verbs"], _cs["socket"], _cs["up"] = [], [], "inactive", False
     _ok2, _msg2 = _sm_hosts.change_ssh_port(NS(port=22), 2222)
-    _t2 = [t for t, _c in _cs["writes"]]
+    _t2 = [t for t, _c in _cs["writes"] if t.startswith("sshd-")]
     check("ssh.socket: a NON socket-activated host still gets the sshd_config drop-in",
           _ok2 is True and _t2 == ["sshd-port-dropin"], "%r %r" % (_ok2, _t2))
     check("ssh.socket: ...with Port lines, and no systemd reload it does not need",

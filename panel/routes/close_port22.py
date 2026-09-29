@@ -34,10 +34,11 @@ def register(app):
             running, ssh_enabled, iface_allowed = _tailnet_ssh_state(remote)
             if not (running and (ssh_enabled or iface_allowed)):
                 log_action(current_user, "remote_close_port_22", target=remote.name,
-                           detail=_NO_WAY_BACK, success=False)
+                           detail=_NO_WAY_BACK, success=False, remote=remote)
                 return jsonify({"success": False, "message": _NO_WAY_BACK})
             success, msg = remote_ufw_close_port_22(remote)
-            log_action(current_user, "remote_close_port_22", target=remote.name, detail=msg, success=success)
+            log_action(current_user, "remote_close_port_22", target=remote.name, detail=msg, success=success,
+                       remote=remote)
             return jsonify({"success": success, "message": msg})
         # Ahead of the catch-all: a host that is switched off is not a fault in the panel. The
         # catch-all below stays 500 on purpose — anything that is not a ConnectionError is ours.

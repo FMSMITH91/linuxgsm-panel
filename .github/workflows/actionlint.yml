@@ -40,6 +40,9 @@ jobs:
       contents: read   # no checks: write — nothing posts annotations now; the job's own exit says it
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # actionlint reads local files only; no step here needs the job token.
+          persist-credentials: false
 
       # The BINARY, pinned and checksummed, rather than a wrapper action. Two reasons, both found
       # by auditing what this gate actually proves:

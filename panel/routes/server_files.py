@@ -195,7 +195,8 @@ def _handshake_addrs():
     peer = ((env.get("werkzeug.proxy_fix.orig") or {}).get("REMOTE_ADDR")
             or env.get("REMOTE_ADDR") or "")
     xff = request.headers.get("X-Forwarded-For")
-    # forwarded_client parses a bare address as a one-hop header, unmapping ::ffff:a.b.c.d.
+    # forwarded_client parses a bare address as a one-hop header, unmapping ::ffff:a.b.c.d and
+    # dropping a zone id (a link-local peer's interface) so the address itself is what is judged.
     return banlist.forwarded_client(peer), (banlist.forwarded_client(xff) if xff else None)
 
 
@@ -662,7 +663,8 @@ def _run_mods_action(gs, which, mod_id):
     """Install or remove a mod, audit it, and say whether a restart is pending: the route's answer."""
     out, err, rc = mods_action(gs.remote, gs.short_name, gs.lgsm_name, which, mod_id)
     clean = terminal.strip_escapes(((out or "") + "\n" + (err or ""))).strip()
-    log_action(current_user, f"mods_{which}", target=gs.name, success=(rc == 0), detail=clean[-400:])
+    log_action(current_user, f"mods_{which}", target=gs.name, success=(rc == 0), detail=clean[-400:],
+               server=gs)
     ok = rc == 0
     tail = _last_output_line(clean)
     msg = (f"Mod {which} finished." if ok
@@ -903,7 +905,8 @@ def _gmod_uninstall_request(app, gs, remote, sel):
     if not _claim_gmod_content_host(remote.id):
         return _gmod_busy()
     _bg_gmod_content_uninstall(app, gs.id, remote.id, gs.short_name, sel)
-    log_action(current_user, "gmod_content_uninstall", target=gs.name, detail=",".join(sel))
+    log_action(current_user, "gmod_content_uninstall", target=gs.name, detail=",".join(sel),
+               server=gs)
     return jsonify({"success": True, "games": sel,
                     "message": "Removing content from the host — this frees disk for every GMod "
                                "server here. Restart affected servers afterwards."})
@@ -923,7 +926,8 @@ def _gmod_apply_request(app, gs, remote, sel):
     if not _claim_gmod_content_host(remote.id):
         return _gmod_busy()
     _bg_gmod_content_apply(app, gs.id, remote.id, gs.short_name, sel)
-    log_action(current_user, "gmod_content", target=gs.name, detail=(",".join(sel) or "(none)"))
+    log_action(current_user, "gmod_content", target=gs.name, detail=(",".join(sel) or "(none)"),
+               server=gs)
     return jsonify({"success": True, "games": sel,
                     "message": "Applying mount changes — a download can take a while for large games. "
                                "Restart the server afterwards to load the changes."})
@@ -938,7 +942,7 @@ def _store_upload(gs, reldir, f, data, overwrite):
                         "message": "A file with that name already exists."}), 409
     log_action(current_user, "upload_file", target=gs.name,
                detail="%s/%s%s" % (reldir, f.filename, " (overwrote)" if overwrite else ""),
-               success=ok)
+               success=ok, server=gs)
     return jsonify({"success": ok, "message": msg or ("Uploaded" if ok else "Failed"), "name": f.filename})
 
 
@@ -1118,7 +1122,7 @@ def _register_config_editor(app):
                 ok, msg = write_file(gs.remote, gs.short_name, rel, data["raw"])
             else:
                 ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, data.get("settings") or {})
-            log_action(current_user, "edit_config", target=gs.name, success=ok)
+            log_action(current_user, "edit_config", target=gs.name, success=ok, server=gs)
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
@@ -1157,7 +1161,7 @@ def _register_alerts(app):
         updates = _alert_updates(_json_body().get("values"))
         try:
             ok, msg = lgsm_write_config(gs.remote, gs.short_name, gs.lgsm_name, updates)
-            log_action(current_user, "server_alerts_save", target=gs.name, success=ok)
+            log_action(current_user, "server_alerts_save", target=gs.name, success=ok, server=gs)
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("alerts save failed")}), 200
@@ -1230,7 +1234,8 @@ def _register_file_editor(app):
             return jsonify({"success": False, "message": "The file contents must be text."}), 400
         try:
             ok, msg = write_file(gs.remote, gs.short_name, rel, data["content"])
-            log_action(current_user, "edit_file", target=gs.name, detail=rel, success=ok)
+            log_action(current_user, "edit_file", target=gs.name, detail=rel, success=ok,
+                       server=gs)
             return jsonify({"success": ok, "message": msg or ("Saved" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
@@ -1248,7 +1253,8 @@ def _register_file_removal(app):
         rel = _json_body().get("path", "")
         try:
             ok, msg = delete_path(gs.remote, gs.short_name, rel, gs.lgsm_name)
-            log_action(current_user, "delete_file", target=gs.name, detail=rel, success=ok)
+            log_action(current_user, "delete_file", target=gs.name, detail=rel, success=ok,
+                       server=gs)
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("delete_path failed")}), 500
@@ -1311,7 +1317,7 @@ def _register_download(app):
         is_dir = info["type"] == "d"
         name = info["name"] + (".tar.gz" if is_dir else "")
         log_action(current_user, "download_file", target=gs.name,
-                   detail=rel + (" (as .tar.gz)" if is_dir else ""))
+                   detail=rel + (" (as .tar.gz)" if is_dir else ""), server=gs)
         resp = Response(stream_path(gs.remote, gs.short_name, rel, as_tar=is_dir,
                                     limit=None if is_dir else info["size"]),
                         mimetype="application/gzip" if is_dir else "application/octet-stream")
@@ -1383,7 +1389,7 @@ def _register_cron_jobs(app):
             if ok:
                 _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
             log_action(current_user, "cron_add", target=gs.name, success=ok,
-                       detail=(data.get("schedule") or "")[:120])
+                       detail=(data.get("schedule") or "")[:120], server=gs)
             return jsonify({"success": ok, "message": msg or ("Added" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("add_cron_job failed")}), 500
@@ -1400,7 +1406,7 @@ def _register_cron_jobs(app):
             ok, msg = update_cron_job(gs.remote, gs.short_name, data.get("raw") or "",
                                       data.get("schedule"), data.get("command"), gs.lgsm_name)
             log_action(current_user, "cron_update", target=gs.name, success=ok,
-                       detail=(data.get("schedule") or "")[:120])
+                       detail=(data.get("schedule") or "")[:120], server=gs)
             return jsonify({"success": ok, "message": msg or ("Updated" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("update_cron_job failed")}), 500
@@ -1421,7 +1427,7 @@ def _register_cron_actions(app):
             if ok:
                 # The card's own help text promises that deleting `monitor` turns Autostart off.
                 _sync_toggles_from_cron(gs, _sm.list_cron_jobs(gs.remote, gs.short_name, gs.lgsm_name))
-            log_action(current_user, "cron_delete", target=gs.name, success=ok)
+            log_action(current_user, "cron_delete", target=gs.name, success=ok, server=gs)
             return jsonify({"success": ok, "message": msg or ("Deleted" if ok else "Failed")})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("delete_cron_job failed")}), 500
@@ -1437,7 +1443,7 @@ def _register_cron_actions(app):
         raw = _json_body().get("raw") or ""
         try:
             ok, msg = run_cron_job_now(gs.remote, gs.short_name, raw, gs.lgsm_name)
-            log_action(current_user, "cron_run_now", target=gs.name, success=ok)
+            log_action(current_user, "cron_run_now", target=gs.name, success=ok, server=gs)
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("cron run failed")}), 200
@@ -1593,7 +1599,8 @@ def _register_console_routes(app):
                                             {"logtimestamp": want})
                 if not ok:
                     return jsonify({"error": msg or "Could not write the LinuxGSM config"}), 502
-                log_action(current_user, "set_log_timestamps", target=gs.name, detail=want)
+                log_action(current_user, "set_log_timestamps", target=gs.name, detail=want,
+                           server=gs)
                 return jsonify({"success": True, "enabled": want == "on",
                                 "needs_restart": True})
             vals = lgsm_get_values(gs.remote, gs.short_name, gs.lgsm_name, ["logtimestamp"])
@@ -1625,7 +1632,8 @@ def _register_send_command(app):
 
         try:
             _, _, rc = send_console_command(remote, gs.short_name, cmd_text, timeout=10, selfname=gs.lgsm_name)
-            log_action(current_user, "send_command", target=gs.name, detail=cmd_text, success=(rc == 0))
+            log_action(current_user, "send_command", target=gs.name, detail=cmd_text, success=(rc == 0),
+                       server=gs)
             if rc != 0:
                 return jsonify({"error": "Console (tmux) not accessible. Is the server running?"}), 502
             return jsonify({"success": True, "command": cmd_text})

@@ -308,6 +308,28 @@ panel_port() {
     fi
 }
 
+# The first-run wizard's one-time setup token, for the link the banner prints. Until the first
+# admin exists the wizard answers only to a browser that shows it — otherwise whoever reached the
+# port first (this script opens it) created the superadmin. Empty once setup has an administrator
+# (manage.py refuses then), or when it cannot be read; the banner then prints the plain address.
+#
+# AS THE PANEL'S ACCOUNT: `manage.py setup-token` creates data/setup_token 0600 as that account,
+# and data/ is theirs, so root reading a path in it would follow a symlink they planted. What it
+# prints is matched against the token's own alphabet before it reaches the terminal, so the
+# panel's code cannot put escape sequences on root's screen through it.
+setup_link_token() {
+    local as_owner="" tok=""
+    if [[ "$(id -u)" -eq 0 ]] && [[ -n "${PANEL_USER:-}" ]] && [[ "${PANEL_USER}" != "root" ]]; then
+        as_owner="sudo -u ${PANEL_USER}"
+    fi
+    tok="$(cd / && ${as_owner} "${PANEL_DIR}/venv/bin/python" "${PANEL_DIR}/manage.py" \
+               setup-token --raw 2>/dev/null | tail -n 1)" || return 0
+    if [[ "${tok}" =~ ^[A-Za-z0-9_-]{20,128}$ ]]; then
+        printf '%s' "${tok}"
+    fi
+    return 0
+}
+
 # Pick a free listen port and record it in data/config.json before the first boot. If the
 # desired port (5000, or a previously configured one) is already taken by another service,
 # the panel would fail to bind — so probe upward for a free port and persist the choice so
@@ -2638,19 +2660,32 @@ if [[ "${UFW_ACTIVE}" -eq 1 ]] && [[ "${PORT_OPEN}" -eq 0 ]] \
     fi
 fi
 
-echo -e "${GREEN}Open the panel — the first visit runs the setup wizard:${NC}"
-[[ -n "${TS_ADDR}" ]] && echo -e "  • Tailscale:  ${CYAN}${PANEL_SCHEME}://${TS_ADDR}:${PORT}${NC}"
+# While the wizard has no administrator, the link carries its one-time setup token (see
+# setup_link_token). On an install that is already set up there is none, and this is just the address.
+SETUP_TOKEN="$(setup_link_token)"
+SETUP_PATH=""
+if [[ -n "${SETUP_TOKEN}" ]]; then
+    SETUP_PATH="/setup?token=${SETUP_TOKEN}"
+    echo -e "${GREEN}Open the panel — this link runs the setup wizard (it carries a one-time setup token):${NC}"
+else
+    echo -e "${GREEN}Open the panel:${NC}"
+fi
+[[ -n "${TS_ADDR}" ]] && echo -e "  • Tailscale:  ${CYAN}${PANEL_SCHEME}://${TS_ADDR}:${PORT}${SETUP_PATH}${NC}"
 if [[ -n "${PUBLIC_IP}" ]]; then
     if [[ "${UFW_ACTIVE}" -eq 1 ]] && [[ "${PORT_OPEN}" -eq 0 ]]; then
-        echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${NC}  ${YELLOW}(firewalled — run 'ufw allow ${PORT}/tcp' to expose)${NC}"
+        echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${SETUP_PATH}${NC}  ${YELLOW}(firewalled — run 'ufw allow ${PORT}/tcp' to expose)${NC}"
     elif [[ "${UFW_READ}" -eq 0 ]] && command -v ufw >/dev/null 2>&1; then
         # ufw is installed but would not answer — as an ordinary user it needs root. Say the state
         # is unknown rather than printing the address as though it were reachable: the health check
         # above proves only that the panel answers on 127.0.0.1.
-        echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${NC}  ${YELLOW}(firewall state unknown — check 'sudo ufw status' allows ${PORT}/tcp)${NC}"
+        echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${SETUP_PATH}${NC}  ${YELLOW}(firewall state unknown — check 'sudo ufw status' allows ${PORT}/tcp)${NC}"
     else
-        echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${NC}"
+        echo -e "  • Public IP:  ${CYAN}${PANEL_SCHEME}://${PUBLIC_IP}:${PORT}${SETUP_PATH}${NC}"
     fi
+fi
+if [[ -n "${SETUP_TOKEN}" ]]; then
+    echo -e "  ${YELLOW}Setup stays locked until that token is shown, so nobody else who reaches the port can${NC}"
+    echo -e "  ${YELLOW}create the admin account first. Lost the link? Print it again:${NC}  sudo linuxgsm-panel-recover setup-token"
 fi
 if [[ "${PANEL_SCHEME}" = "https" ]]; then
     echo ""

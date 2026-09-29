@@ -285,7 +285,7 @@ def _register_tag_changes(app):
             db.session.rollback()
             return jsonify({"success": False, "message": _log_and_generic("set server tags failed")}), 500
         log_action(current_user, "server_tags_set", target=gs.name,
-                   detail="tags: " + (", ".join(t.name for t in gs.tags) or "(none)"))
+                   detail="tags: " + (", ".join(t.name for t in gs.tags) or "(none)"), server=gs)
         return jsonify({"success": True, "tags": [{"id": t.id, "name": t.name,
                                                    "color": t.color or "", "notify": bool(t.notify)}
                                                   for t in gs.tags]})

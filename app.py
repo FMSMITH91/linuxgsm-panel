@@ -101,10 +101,11 @@ from flask_wtf.csrf import CSRFProtect
 from werkzeug.exceptions import HTTPException
 
 from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, client_ip,
-    get_user_permissions, init_auth, log_action, strip_legacy_superadmin_grants)
+    configure_proxy_trust, get_user_permissions, init_auth, log_action,
+    strip_legacy_superadmin_grants)
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
-    encrypt_secret, is_encrypted, harden_data_permissions,
+    encrypt_secret, is_encrypted, harden_data_permissions, read_setup_token, remove_setup_token,
 )
 from panel.services import notifications
 # The two chat bots. They import nothing from app.py — every dependency they have comes from
@@ -122,7 +123,8 @@ from panel.security import banlist as _banlist
 # app.py does not use has no reason to be reachable through app.py, and leaving it importable from
 # here is what let the cycle grow in the first place. See the docstrings in panel/core/validation.py
 # and panel/core/http.py.
-from panel.core.validation import MAX_PORT, MIN_PORT, _valid_hex_color
+from panel.core.validation import (MAX_PORT, MIN_PORT, _valid_hex_color, canonical_ip,
+                                   canonical_ip_or_network, ip_address_or_none)
 from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SECONDS,
     _MONITOR_SECONDS, _PLAYER_POLL_SECONDS, _autoblock_reconcile, _autoblock_threshold,
     _host_reachable, _monitor_pass, _reboot_when_empty_watch, _record_metric_samples,
@@ -156,13 +158,13 @@ AUTH_LOG_PATH = os.path.join(str(DATA_DIR), "auth.log")
 def _log_ip(ip):
     """Only a valid IP literal is written to auth.log (fail2ban bans IPs anyway); anything else
     becomes 'unknown'. CR/LF are stripped explicitly first, so a forged header value can never
-    inject a second line into the log fail2ban parses."""
-    import ipaddress
+    inject a second line into the log fail2ban parses.
+
+    And an IPv6 zone id is refused, because ipaddress kept it verbatim: 'fe80::1%x panel login
+    failed from 203.0.113.9' was written whole, and fail2ban's unanchored search banned
+    203.0.113.9 — or, given a hostname there, every address that name resolves to."""
     s = str(ip or "").replace("\r", "").replace("\n", "").strip()
-    try:
-        return str(ipaddress.ip_address(s))
-    except ValueError:
-        return "unknown"
+    return canonical_ip(s) or "unknown"
 
 
 def _session_label(ua):
@@ -456,19 +458,46 @@ def _is_security_pkg(p):
     return "-security" in ((p or {}).get("suite") or "")
 
 
-def _os_update_note(remote, result):
+def _os_update_born(remote):
+    """(id, created_at, display name) of a host row: what a cached update check belongs to.
+
+    Take it when the row is LOADED, before the check runs. SQLite hands a deleted host's id to the
+    next host added, and a check still in flight when that happens answers for the old machine
+    under an id that is now the new one's — while its first SSH contact COMMITS (the host-key pin),
+    which expires the row object, so created_at and the name read off it afterwards reload from
+    the new host's row and make the old machine's packages look like the new one's.
+    """
+    return remote.id, getattr(remote, "created_at", None), remote.display_name
+
+
+def _os_update_current(seen, created):
+    """Whether a cached check belongs to the row holding its id NOW (created_at is the identity).
+
+    An entry noted for an earlier row with the same id — or one with no identity recorded at all —
+    is not this host's, and reads as "not checked yet": it named the old host and listed its
+    pending packages (patch-level reconnaissance) to whoever could see the new one.
+    """
+    return bool(seen) and "created" in seen and seen["created"] == created
+
+
+def _os_update_note(remote, result, born=None):
     """Record one host's check result. A check that FAILED is dropped rather than stored: apt
     produces no output when it fails, which is exactly what a clean host produces, so recording it
-    would clear a real banner and tell you the host is up to date when nobody ever asked it."""
+    would clear a real banner and tell you the host is up to date when nobody ever asked it.
+
+    `born` is _os_update_born(remote) as the caller took it when it loaded the row; a caller that
+    ran no SSH since loading it may leave it out."""
     if not result or not result.get("ok"):
         return
+    rid, created, name = born if born is not None else _os_update_born(remote)
     pkgs = result.get("packages") or []
-    _os_update_seen[remote.id] = {
-        "name": remote.display_name,
+    _os_update_seen[rid] = {
+        "name": name,
         "count": len(pkgs),
         "security": sum(1 for p in pkgs if _is_security_pkg(p)),
         "packages": pkgs,
         "at": time.time(),
+        "created": created,
     }
 
 
@@ -666,13 +695,12 @@ def _set_autoblock_host(remote_id, enabled):
 # ── Login-security whitelist: IPs / CIDRs that are NEVER fail2ban-banned or UFW auto-blocked (global,
 # ── on top of the automatic tailnet exemption). Stored as validated canonical strings in the config.
 def _valid_ip_or_cidr(value):
-    """Canonical 'ip' or 'cidr' string for a user-entered value, or None if it isn't a real one."""
-    import ipaddress
-    s = (str(value) or "").strip()
-    try:
-        return str(ipaddress.ip_network(s, strict=False)) if "/" in s else str(ipaddress.ip_address(s))
-    except ValueError:
-        return None
+    """Canonical 'ip' or 'cidr' string for a user-entered value, or None if it isn't a real one.
+
+    An IPv6 zone id is not a real one: ipaddress parsed '::1%<anything>' and kept the text, which
+    is why _security_whitelist_add grew its own guard. The refusal lives here now, so every caller
+    has it (panel/core/validation.py)."""
+    return canonical_ip_or_network(value)
 
 
 def _security_whitelist():
@@ -685,6 +713,7 @@ def _security_whitelist_add(value):
     # IPv6 zone id VERBATIM, and `::1%<anything>` survives it with spaces and newlines intact. Stored
     # here, it reached the root-owned jail file as extra lines (bantime, [sshd] enabled = false, ...).
     # A zone id means nothing to a ban list, so refuse it, and anything that is not one plain token.
+    # _valid_ip_or_cidr refuses a zone itself now; this stays as the jail file's own last check.
     if not canon or "%" in canon or any(c.isspace() or not c.isprintable() for c in canon):
         return None
 
@@ -695,6 +724,8 @@ def _security_whitelist_add(value):
 
 
 def _security_whitelist_remove(value):
+    # The raw text is the fallback on purpose: it only ever removes an entry EQUAL to it, which is
+    # how one stored before the add refused it (a zone id, say) can still be taken out.
     canon = _valid_ip_or_cidr(value) or (str(value) or "").strip()
     update_config(lambda cfg: cfg.update(
         {"security_whitelist": [w for w in (cfg.get("security_whitelist", []) or []) if w != canon]}))
@@ -876,7 +907,8 @@ def _autoblock_watch(app):
                         a, r = _autoblock_reconcile(remote)
                         if a or r:
                             log_action(None, "autoblock_reconcile", target=remote.name,
-                                       detail="+%d blocked, -%d released" % (a, r), actor="system")
+                                       detail="+%d blocked, -%d released" % (a, r), actor="system",
+                                       remote=remote)
                 except Exception:
                     _log.debug("autoblock tick failed for remote %s", rid, exc_info=True)
 
@@ -1230,6 +1262,9 @@ def create_app():
     # Initialize extensions
     init_auth(app)
     init_db(app)
+    # SSH host-key pins are first captured on worker threads with no app context (the monitor's
+    # probes, the /api/servers port scan); this is how they reach the database from there.
+    _sm._core.register_pin_app(app)
     # One-time: drop the removed global notifications master switch from the stored config
     # (preserves a muted state via the channel toggles). No-op once the key is gone.
     try:
@@ -1251,6 +1286,11 @@ def create_app():
     # DB exists — keeps them unreachable by other local users. Idempotent; tightens old installs too.
     harden_data_permissions()
     _setup_auth_log()   # failed logins → data/auth.log for the optional fail2ban jail
+    try:
+        with app.app_context():
+            _retire_setup_token()    # a token left over from a wizard that has an admin now
+    except Exception:
+        _log.debug("setup token check skipped", exc_info=True)
 
     # CSRF protection for every state-changing request. Forms carry a hidden token
     # (auto-injected in base.html); the JSON API sends it as an X-CSRFToken header
@@ -1581,6 +1621,8 @@ def create_app():
     # request — it has to know, because ProxyFix below rewrites remote_addr from the very header
     # client_ip is deciding whether to trust.
     app.config["_TRUST_PROXY"] = bool(cfg.get("trust_proxy"))
+    # ...and WHICH peers it believes: trusted_proxies / trusted_proxy_users (Aikido 745379296).
+    configure_proxy_trust(app, cfg)
     if cfg.get("trust_proxy"):
         from werkzeug.middleware.proxy_fix import ProxyFix
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
@@ -1790,6 +1832,14 @@ def register_context_processors(app):
 # closure cell, which is the same function. Hoisting them is the precondition for splitting
 # the route table into modules, and it makes them directly testable and stubbable besides.
 
+class PortScanUnreadable(ConnectionError):
+    """The host's listening ports could not be read, so no port on it can be called free.
+
+    A ConnectionError because that is what the paramiko transport already raises for the same
+    host — the tailscale and local transports return ("", …, -1) instead, and _remote_listening_ports
+    turns that into None — so a caller catching the one catches the other."""
+
+
 def resolve_free_port(remote, remote_id, desired, game_type):
     """Find a free contiguous port block at/after `desired` on a remote for a `game_type`
     server. A block of _port_span(game_type) ports must clear (a) the ports other panel
@@ -1798,6 +1848,7 @@ def resolve_free_port(remote, remote_id, desired, game_type):
     configured on this remote's valve servers, which no span covers and which a stopped server
     still owns. Returns (start_port, changed), or (None, False)
     when no free block exists near `desired` — see _first_free_block on why that is not a port.
+    Raises PortScanUnreadable when the host's listening ports could not be read.
 
     The span makes the increment game-correct: single-port games (most, incl. Call of Duty and
     Source) pack sequentially (28960, 28961, …) instead of wastefully skipping every other
@@ -1806,10 +1857,18 @@ def resolve_free_port(remote, remote_id, desired, game_type):
     # Whatever is currently listening on the host (cached scan) — covers running servers'
     # FULL real footprint (game + query + rcon + …) and any non-panel service, so we never
     # land on one even if a game's span table entry is imperfect.
-    # `or ()`: None means the scan failed. Treating that as 'no ports occupied' can suggest
-    # a port that is actually taken — the install then fails with a clear error, which is
-    # the same outcome this had before the scanner learned to say 'I could not read'.
-    occupied = set(_remote_listening_ports(remote) or ())
+    #
+    # A scan that FAILED is not an empty one. This was `or ()` here, over a comment saying the
+    # install "then fails with a clear error" — it did not. Step 6 opens the firewall for the
+    # allocated port without scanning again when the game reports that same port, so a scan that
+    # timed out handed the new server a port some other service was listening on, opened it to the
+    # internet under the new server's name, and called the server online because something
+    # answered there.
+    live = _remote_listening_ports(remote)
+    if live is None:
+        raise PortScanUnreadable("the listening ports on %s could not be read"
+                                 % getattr(remote, "name", "the host"))
+    occupied = set(live)
     # Plus every panel server's reserved block (covers STOPPED servers, which aren't listening) —
     # AND every valve sibling's configured SourceTV/client ports, which are reserved for exactly
     # the same reason and were missing here. See _add_sibling_ports for what that cost.
@@ -1833,9 +1892,9 @@ def is_setup_complete():
     return SetupState.query.filter_by(complete=True).first() is not None
 
 # ── Setup-only Tailscale endpoints ─────────────────────────
-# No login exists yet during setup, so these are unauthenticated BUT usable ONLY
-# while setup is unfinished (they're a no-op/forbidden once complete, same as the
-# wizard itself). They operate on THIS host only.
+# No login exists yet during setup, so these carry no @login_required. They are usable ONLY while
+# setup is unfinished (forbidden once complete, same as the wizard itself), ONLY once the admin
+# exists, and only by the browser that created it (_setup_ts_ok). They operate on THIS host only.
 def _setup_open():
     # The SAME DB-row-only lock the wizard uses, and for the same reason — see the long
     # comment on setup_wizard() above, which describes this exact failure and then only
@@ -1874,23 +1933,70 @@ def issue_setup_owner_token(data):
     return token
 
 
+def _superadmin_exists():
+    return User.query.filter_by(is_superadmin=True).first() is not None
+
+
+def claim_setup(candidate):
+    """Does `candidate` match the setup token? If so, this browser may run the wizard.
+
+    Stores the token's HASH in the session, never the token, and compares hashes so the two sides
+    are always the same length and ASCII (compare_digest raises on non-ASCII str). An absent or
+    unreadable token file matches nothing."""
+    import hmac
+    want = read_setup_token()
+    if not want or not candidate:
+        return False
+    if not hmac.compare_digest(_setup_owner_hash(str(candidate).strip()), _setup_owner_hash(want)):
+        return False
+    session["_setup_claim"] = _setup_owner_hash(want)
+    return True
+
+
+def _setup_claimed():
+    """Has this browser shown the CURRENT setup token (claim_setup)?"""
+    import hmac
+    claim = session.get("_setup_claim") or ""
+    if not isinstance(claim, str) or not claim.isascii():
+        return False
+    want = read_setup_token()
+    return bool(claim and want) and hmac.compare_digest(claim, _setup_owner_hash(want))
+
+
+def _retire_setup_token():
+    """Delete the setup token once it can no longer open anything: setup has finished, or an admin
+    exists (from here the wizard answers to that admin — see _setup_owner_ok).
+
+    The wizard deletes it itself when it creates the admin; this covers the rest — `manage.py
+    create-admin` mid-wizard, an interrupted update, a copy restored by hand. Needs an app context."""
+    if not _setup_open() or _superadmin_exists():
+        if remove_setup_token():
+            _log.info("setup token deleted: setup already has an administrator")
+
+
 def _setup_owner_ok():
-    """May THIS caller drive the wizard past the admin step?
+    """May THIS caller drive the wizard?
 
-    _setup_open() only says the wizard has not finished. From the moment the admin is created until
-    the last step, that left it open to anyone who could reach the port — and the steps in that
-    window are the dangerous ones: /api/setup/tailscale/up joins this host to the CALLER's tailnet
-    with Tailscale SSH on (a root shell under the default policy) and hands them the auth URL,
-    /install runs the installer as root, step=welcome rewrites the bind and port, and
-    step=remote_server makes the panel SSH to a host of their choosing. The operator already has
-    an account at that point and reasonably believes the install is theirs.
+    _setup_open() only says the wizard has not finished. Before the first admin exists the wizard IS
+    the panel — step 2 makes whoever submits it the superadmin, which is root on this host — and it
+    was open to anyone who could reach the port: a default install opens that port itself and
+    prints that "the first visit runs the setup wizard". Whoever got there first took the install,
+    and the operator's own browser was then sent to a login it had no account for.
 
-    So once a superadmin exists, the caller must be the browser that created it (the token issued
-    then) or be signed in as a superadmin — which is also the way back in for an operator who
-    lost that session: /login stays reachable in this window (check_setup). Before any
-    superadmin exists the first-run steps are open by necessity, exactly as before."""
-    if User.query.filter_by(is_superadmin=True).first() is None:
-        return True
+    So before any superadmin exists the caller must have shown the one-time setup token
+    (claim_setup) — a secret the installer prints in the operator's own terminal, from a file only
+    the panel's account can read (`manage.py setup-token` prints it again). It gates /setup and
+    every /api/setup/* route alike, because they all ask this.
+
+    From the moment the admin is created until the last step, the caller must be the browser that
+    created it (the owner token issued then) or be signed in as a superadmin — which is also the
+    way back in for an operator who lost that session: /login stays reachable in this window
+    (check_setup). The steps in that window are the dangerous ones: /api/setup/tailscale/up joins
+    this host to the CALLER's tailnet with Tailscale SSH on (a root shell under the default policy)
+    and hands them the auth URL, /install runs the installer as root, step=welcome rewrites the
+    bind and port, and step=remote_server makes the panel SSH to a host of their choosing."""
+    if not _superadmin_exists():
+        return _setup_claimed()
     try:
         if current_user.is_authenticated and current_user.is_superadmin:
             return True
@@ -1905,6 +2011,15 @@ def _setup_owner_ok():
     except (ValueError, TypeError, AttributeError):
         want = ""
     return bool(token and want) and hmac.compare_digest(_setup_owner_hash(token), want)
+
+
+def _setup_ts_ok():
+    """May this caller use the wizard's Tailscale endpoints (/api/setup/tailscale/*)?
+
+    Only from step 3 on: the page that calls them renders after the admin exists, so nothing
+    legitimate needs them earlier — and before then a browser holding the setup token is still not
+    an account. An admin made with `manage.py create-admin` reaches the step by signing in."""
+    return _setup_open() and _superadmin_exists() and _setup_owner_ok()
 
 # ── Account / Two-factor auth ───────────────────────────
 def _qr_svg(data):
@@ -2109,7 +2224,7 @@ def _pro_status_cached(remote, force=False):
         return dict(cached["data"], unreadable=True, stale=True)
     return data
 
-def _refuse_on_panel_host(remote, what):
+def _refuse_on_panel_host(remote, what, why=None):
     """A JSON 400 when a VPS-PREPARATION action is aimed at the panel's own host, else None.
 
     get_remote() already enforces WHICH hosts a user may touch. This is the other axis: WHICH
@@ -2121,15 +2236,18 @@ def _refuse_on_panel_host(remote, what):
 
     manage_remotes.html already hides all three for the local host. This is the server-side
     half of that: a UI-only restriction on a destructive privileged action is not a
-    restriction — the route still accepted a POST with the local host's id."""
+    restriction — the route still accepted a POST with the local host's id.
+
+    `why` replaces the reboot reason for an action that does not reboot anything (the Tailscale
+    migration and finalize), so the refusal does not state something untrue about it."""
     if not is_local_server(remote):
         return None
     _log.warning("refused %s aimed at the panel's own host (remote_id=%s)", what, remote.id)
     return jsonify({
         "success": False,
-        "message": ("%s prepares a REMOTE VPS and can't target the panel's own host — it "
-                    "would reboot the panel mid-request. Use the panel's own pages for "
-                    "updates, firewall and Tailscale." % what),
+        "message": ("%s prepares a REMOTE VPS and can't target the panel's own host — %s. Use the "
+                    "panel's own pages for updates, firewall and Tailscale."
+                    % (what, why or "it would reboot the panel mid-request")),
     }), 400
 
 # ── Scheduled tasks (cron) for the game user ──
@@ -2198,7 +2316,8 @@ def _host_port(value):
 def _socket_origin_allowed(origin, environ=None):
     """Whether a browser page at `origin` may open the console/terminal socket.
 
-    Explicit config (socketio_cors_origins) wins. Otherwise a page is allowed when it is served from
+    Exact origins listed in socketio_cors_origins win ("*" is ignored — see
+    _explicit_socket_origins). Otherwise a page is allowed when it is served from
     the host this request arrived on, the host a proxy forwarded, or site_domain — PORT INCLUDED.
 
     It was a list built once at startup: ["https://<site_domain>", "http://<site_domain>"], with no
@@ -2209,10 +2328,9 @@ def _socket_origin_allowed(origin, environ=None):
     so a Settings change applies at once. (The connect gate also requires an authenticated session,
     and the SameSite=Lax cookie stops a cross-site page carrying one.)"""
     cfg = load_config()
-    explicit = cfg.get("socketio_cors_origins")
-    if explicit:
-        allowed = [explicit] if isinstance(explicit, str) else list(explicit)
-        return "*" in allowed or origin in allowed
+    exact = _explicit_socket_origins(cfg.get("socketio_cors_origins"))
+    if exact:
+        return origin in exact
     key = _origin_key(origin)
     if key is None:
         return False                      # "null", a file: page, anything that is not http(s)
@@ -2235,6 +2353,32 @@ def _socket_origin_allowed(origin, environ=None):
         if hp and hp[0] == host and (hp[1] or default) == port:
             return True
     return False
+
+
+_socket_wildcard_warned = []
+
+
+def _explicit_socket_origins(explicit):
+    """The exact origins an operator listed in socketio_cors_origins, with any "*" taken out.
+
+    "*" was honoured, and anywhere in a list, before the per-request check ever ran (Aikido
+    745379243). That check is the only thing refusing a page on ANOTHER PORT of the panel's own
+    address or on a sibling tailnet node — both same-site, so the Lax session cookie rides along
+    and the connect gate sees a logged-in user. With "*", any such page could open a terminal as
+    whoever visited it. So "*" is ignored: a list that held only "*" falls through to the
+    per-request check, which accepts the panel's own page however it is reached. Warned once, since
+    whoever set it probably did so because their console would not connect: the answer is
+    site_domain, or the exact origin.
+    """
+    if not explicit:
+        return []
+    listed = [explicit] if isinstance(explicit, str) else list(explicit)
+    exact = [o for o in listed if str(o).strip() != "*"]
+    if len(exact) != len(listed) and not _socket_wildcard_warned:
+        _socket_wildcard_warned.append(True)
+        _log.warning('socketio_cors_origins "*" is ignored; set site_domain or list the exact '
+                     'origin (e.g. https://panel.example.com)')
+    return exact
 
 
 def _origin_key(origin):
@@ -2572,14 +2716,27 @@ def _https_ready(cfg):
                 or cfg.get("trust_proxy", False))
 
 
+def _trust_proxy_bind_warning(cfg, bind):
+    """What to tell the operator when trust_proxy is on but the panel listens beyond loopback, or "".
+
+    The README and docs/https.md pair trust_proxy with bind_host 127.0.0.1. With another bind
+    anything that reaches the port directly is a client too; its X-Forwarded-For is believed only
+    from trusted_proxies (loopback unless listed), so this is not a hole any more (Aikido 745379296),
+    but a direct path around the proxy is rarely what was meant, and it is the proxy's TLS that it
+    goes around."""
+    if not cfg.get("trust_proxy") or _bind_is_loopback(bind):
+        return ""
+    return ("trust_proxy is on but the panel listens on %s, so it can be reached without going "
+            "through the proxy. Set \"bind_host\": \"127.0.0.1\" if the proxy runs on this host; "
+            "a proxy elsewhere must be listed in trusted_proxies." % (bind or "all addresses"))
+
+
 def _bind_is_loopback(bind_host):
     """True only for a concrete loopback address (127.0.0.0/8, ::1). "" (auto) is not: it can
-    resolve to 0.0.0.0 or a tailnet IP at boot."""
-    import ipaddress
-    try:
-        return ipaddress.ip_address(str(bind_host or "").strip()).is_loopback
-    except ValueError:
-        return False
+    resolve to 0.0.0.0 or a tailnet IP at boot. Nor is a zoned one: '::1%x' is loopback to
+    ipaddress, and no address the panel can bind."""
+    addr = ip_address_or_none(bind_host)
+    return addr is not None and addr.is_loopback
 
 
 # The address this process binds, decided ONCE: bind_host when it is set, otherwise what boot picks
@@ -2784,8 +2941,15 @@ if __name__ == "__main__":
     # Tailscale Serve is up to proxy to it, otherwise 0.0.0.0 so the first-run setup wizard is
     # reachable over the network on a plain VPS. The SAME answer _effective_https reads.
     host = _resolved_bind(cfg)
+    # What this process really listens on, for pages that must not claim more than that: the
+    # wizard's complete page (a stored loopback bind applies only from the next start).
+    app.config["_BOOT_BIND"] = host
     _scheme = "https" if _effective_https(cfg) else "http"
     print(f"LinuxGSM Panel starting on {host}:{port}")
+    _proxy_bind_note = _trust_proxy_bind_warning(cfg, host)
+    if _proxy_bind_note:
+        _log.warning("%s", _proxy_bind_note)
+        print("  [!] " + _proxy_bind_note)
     print(f"Open {_scheme}://{host}:{port} in your browser")
 
     # Show Tailscale URL if available

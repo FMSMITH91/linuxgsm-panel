@@ -6,7 +6,7 @@ from flask import (jsonify, render_template, url_for)
 from flask_login import (current_user, login_required)
 from panel.core.config import (load_config)
 from panel.core.panel_state import (_os_update_seen, _reboot_when_empty, _rwe_lock)
-from panel.db.models import (GameServer, db)
+from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (system_ops as so)
 from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_game_ports,
     host_specs, is_player_queryable as sm_is_player_queryable, player_count as sm_player_count,
@@ -20,32 +20,88 @@ from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_gam
 # module would never be seen — attribute access resolves at call time and is stable
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
+# The firewall verbs' own port and protocol parse, read by the audit rows (_fw_audit_rule). The
+# module, not its functions: a stub on hosts is seen, and one of `_sm` above is not in the way.
+from panel.ops.ssh_manager import hosts as _fw_hosts
 from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
     accessible_remote_ids, can_access_remote, get_game,
     get_remote, has_permission, log_action, permission_required, server_access_required)
+import collections
+import threading
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
-from app import (_local_remote_id, _log, _os_update_note)
+from panel.core.validation import (NOT_AN_IP)
+from panel.security import privileged as _priv
+from app import (_log, _os_update_born, _os_update_current, _os_update_note)
+from panel.routes.manage_servers import (withheld_game_ports)
 
 
-def _resync_game_port(gs, info):
-    """Store the game port LinuxGSM reports when it differs from the stored one; return that port."""
+# One SSH port change per host at a time. The move snapshots and restores ONE fixed drop-in path
+# per host, so two overlapping changes (a double-submit is enough) interleave: one's revert restored
+# or deleted the drop-in the other had just written and verified, and the panel stored a port sshd
+# no longer served while reporting success. The panel is one process, so an in-process lock per
+# host id is the whole fix; threading is green under eventlet's monkey-patching. Registered so a
+# deleted host's lock is forgotten with its other per-host state.
+_ssh_port_locks = _sm._core.register_remote_cache(collections.defaultdict(threading.Lock))
+
+
+def _resync_game_port(gs, info, withheld=()):
+    """Store the game port LinuxGSM reports when it differs from the stored one; return that port.
+
+    Not a port in `withheld` (withheld_game_ports: another server's block, SSH, the panel). The
+    report is `details` run as the game account, over a config that account can write, and the
+    stored port is what every later firewall step, the monitor and the uninstall act on — "Game
+    22" made them all act on SSH. A refused port leaves the row as it was, and that is returned.
+    """
     gp = info.get("game_port")
+    if gp and gp in withheld:
+        return gs.port
     if gp and gp != gs.port:
         gs.port = gp
         db.session.commit()
     return gp
 
 
-def _sync_ports_detail(opened, missed):
-    """Audit detail for a port sync: what opened, and what FAILED when anything did."""
-    ok = not missed
-    return (("opened %s" % (opened or "none")) if ok
-            else "opened %s; FAILED %s" % (opened or "none", missed))
+def _ports_to_sync(gs, info):
+    """Re-sync `gs`'s stored port from `info` and split its ports. -> (port, to_open, refused).
+
+    Refused: every reported port withheld_game_ports names — another server's block on the host,
+    SSH, the panel — which is neither stored on the row nor opened.
+    """
+    withheld = withheld_game_ports(GameServer.query.filter_by(remote_id=gs.remote_id).all(), gs,
+                                   _sm.protected_host_ports(gs.remote))
+    gp = _resync_game_port(gs, info, withheld)
+    wanted = info.get("open_ports") or ([gs.port] if gs.port else [])
+    return (gp, [p for p in wanted if p not in withheld],
+            sorted({p for p in wanted if p in withheld}))
 
 
-def _sync_ports_message(opened, missed):
-    """Word a port sync's result for the user: all opened, some opened, or none opened."""
+def _sync_ports_detail(opened, missed, refused=()):
+    """Audit detail for a port sync: what opened, and what FAILED or was REFUSED when anything was."""
+    detail = (("opened %s" % (opened or "none")) if not missed
+              else "opened %s; FAILED %s" % (opened or "none", missed))
+    if refused:
+        detail += "; REFUSED %s" % sorted(refused)
+    return detail
+
+
+def _sync_ports_message(opened, missed, refused=()):
+    """Word a port sync's result for the user: what opened, what did not, and what was refused.
+
+    Refused: the ports it would not open because another server, SSH or the panel has them.
+    """
+    msg = (_sync_ports_plain_message(opened, missed) if (opened or missed or not refused)
+           else "No ports were opened.")
+    if refused:
+        # A helper, not a route: the text goes out inside jsonify(), and the ports are ints.
+        # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
+        msg += (" Not opened: %s — another game server on this host, SSH or the panel uses it."
+                % ", ".join(map(str, refused)))
+    return msg
+
+
+def _sync_ports_plain_message(opened, missed):
+    """_sync_ports_message's wording for what the firewall took and did not take."""
     if not missed:
         # A helper, not a route: the text goes out inside jsonify(), and the ports are ints.
         # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
@@ -130,9 +186,59 @@ def _register_firewall_view(app):
         except Exception:
             _log.debug("no cached connection to drop, or it's already gone", exc_info=True)
         log_action(current_user, "retrust_hostkey", target=remote.name,
-                   detail="cleared pinned host key (%s)" % (old_fp or "none"))
+                   detail="cleared pinned host key (%s)" % (old_fp or "none"), remote=remote)
         return jsonify({"success": True,
                         "message": "Host key cleared — it will be re-pinned on the next connection."})
+
+
+# What a firewall audit row names in place of a port or protocol that did not validate: a fixed
+# text, never the request's own.
+_FW_AUDIT_NOT_A_PORT = "(not a port)"
+_FW_AUDIT_NOT_A_PROTOCOL = "(not a protocol)"
+_FW_AUDIT_NOT_A_RULE = "(not a rule number)"
+
+
+def _fw_audit_rule(port, proto, ranges=False):
+    """The (port, protocol) a firewall audit row names: each as validated, or a fixed text.
+
+    The request's own port and protocol went into the row's target, and the row is written
+    whether or not the command refused them, so a MANAGE_REMOTES admin could put any text in the
+    audit trail. Each is read the way the command reads it: a port as one number
+    (_ufw_port_int), or with `ranges` as the number or lo:hi spec allow-from takes; a protocol as
+    _ufw_proto makes it (tcp, udp or both).
+    """
+    kind = _fw_hosts._ufw_proto(None if proto is None else str(proto)) or _FW_AUDIT_NOT_A_PROTOCOL
+    if ranges:
+        spec = str(port or "").strip()
+        return (spec if _fw_hosts._UFW_PORT_SPEC_RE.match(spec) else _FW_AUDIT_NOT_A_PORT), kind
+    try:
+        return str(_fw_hosts._ufw_port_int(port)), kind
+    except (TypeError, ValueError):
+        return _FW_AUDIT_NOT_A_PORT, kind
+
+
+def _fw_audit_rule_number(num):
+    """The rule number a delete-rule audit row names, read as the delete reads it, or a fixed text.
+
+    The request's own `num` went into the target whatever it held.
+    """
+    try:
+        n = int(num)
+    except (TypeError, ValueError):
+        return _FW_AUDIT_NOT_A_RULE
+    return str(n) if n >= 1 else _FW_AUDIT_NOT_A_RULE
+
+
+def _fw_audit_source(source):
+    """The source an allow-from audit row names: the spelling the rule was sent with, or NOT_AN_IP.
+
+    canonical_cidr, the same parse remote_ufw_allow_from sends and reports, so the audit, the
+    message and the rule agree — an IPv6 source keeps its host bits there, as ufw stores it.
+    """
+    try:
+        return _priv.canonical_cidr((source or "").strip())
+    except _priv.VerbError:
+        return NOT_AN_IP
 
 
 def _register_firewall_rules(app):
@@ -148,7 +254,9 @@ def _register_firewall_rules(app):
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
         success, msg = remote_ufw_open_port(remote, port, proto, data.get("comment", ""))
-        log_action(current_user, "remote_port_open", target=f"{remote.name}:{port}/{proto}", success=success)
+        a_port, a_proto = _fw_audit_rule(port, proto)
+        log_action(current_user, "remote_port_open", target=f"{remote.name}:{a_port}/{a_proto}",
+                   success=success, remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/firewall/allow-from", methods=["POST"])
@@ -170,8 +278,12 @@ def _register_firewall_rules(app):
             return jsonify({"success": False, "message": "Source and port required"}), 400
         success, msg = remote_ufw_allow_from(remote, source, port, proto,
                                              data.get("comment", ""), allow=on)
+        # The rule as it was sent, never the request's text (an IPv6 zone id parsed).
+        a_port, a_proto = _fw_audit_rule(port, proto, ranges=True)
         log_action(current_user, "remote_port_allow_from" if on else "remote_port_allow_from_remove",
-                   target=f"{remote.name}:{port}/{proto}", detail="from %s" % source, success=success)
+                   target=f"{remote.name}:{a_port}/{a_proto}",
+                   detail="from %s" % _fw_audit_source(source),
+                   success=success, remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/firewall/limit", methods=["POST"])
@@ -191,8 +303,9 @@ def _register_firewall_rules(app):
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
         success, msg = remote_ufw_limit_port(remote, port, proto, limit=on)
+        a_port, a_proto = _fw_audit_rule(port, proto)
         log_action(current_user, "remote_port_limit" if on else "remote_port_unlimit",
-                   target=f"{remote.name}:{port}/{proto}", success=success)
+                   target=f"{remote.name}:{a_port}/{a_proto}", success=success, remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/firewall/close", methods=["POST"])
@@ -206,7 +319,9 @@ def _register_firewall_rules(app):
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
         success, msg = remote_ufw_close_port(remote, port, proto)
-        log_action(current_user, "remote_port_close", target=f"{remote.name}:{port}/{proto}", success=success)
+        a_port, a_proto = _fw_audit_rule(port, proto)
+        log_action(current_user, "remote_port_close", target=f"{remote.name}:{a_port}/{a_proto}",
+                   success=success, remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/firewall/delete-rule", methods=["POST"])
@@ -222,7 +337,9 @@ def _register_firewall_rules(app):
         key = _json_body().get("key")
         success, msg = remote_ufw_delete_rule(remote, num,
                                               expect_key=key if isinstance(key, str) and key else None)
-        log_action(current_user, "remote_ufw_delete_rule", target=f"{remote.name}:#{num}", success=success)
+        log_action(current_user, "remote_ufw_delete_rule",
+                   target=f"{remote.name}:#{_fw_audit_rule_number(num)}", success=success,
+                   remote=remote)
         return jsonify({"success": success, "message": msg})
 
 
@@ -251,7 +368,8 @@ def _register_ssh_settings(app):
         remote = get_remote(remote_id)
         mode = _json_body().get("mode", "")
         success, msg = remote_set_public_ssh(remote, mode)
-        log_action(current_user, "remote_ssh_mode", target=f"{remote.name}:{mode}", success=success)
+        log_action(current_user, "remote_ssh_mode", target=f"{remote.name}:{mode}", success=success,
+                   remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/ssh-port", methods=["POST"])
@@ -275,18 +393,29 @@ def _register_ssh_settings(app):
             return jsonify({"success": False, "message": "Port must be between 1 and 65535."}), 400
         bind = _json_str(body, "bind")
         old = remote.port
+        # Held across the move AND the port commit that follows it, so a second change cannot read
+        # the port the first is about to replace.
+        lock = _ssh_port_locks[remote_id]
+        if not lock.acquire(blocking=False):
+            return jsonify({"success": False,
+                            "message": "An SSH port change is already running for this host."}), 409
         try:
-            ok, msg = change_ssh_port(remote, new_port, bind)
-        except Exception:
-            return jsonify({"success": False, "message": _log_and_generic("SSH port change failed")}), 500
-        if ok:
-            # Point the panel at the new port for future connections (cosmetic for the local host,
-            # which doesn't SSH). Same host, so the pinned host key still applies — leave it. The old
-            # port stays open, so any connection the panel is using right now survives.
-            remote.port = new_port
-            db.session.commit()
+            try:
+                ok, msg = change_ssh_port(remote, new_port, bind)
+            except Exception:
+                return jsonify({"success": False,
+                                "message": _log_and_generic("SSH port change failed")}), 500
+            if ok:
+                # Point the panel at the new port for future connections (cosmetic for the local
+                # host, which doesn't SSH). Same host, so the pinned host key still applies — leave
+                # it. The old port stays open, so any connection the panel is using right now
+                # survives.
+                remote.port = new_port
+                db.session.commit()
+        finally:
+            lock.release()
         log_action(current_user, "change_ssh_port", target=remote.name,
-                   detail=f"{old} -> {new_port}", success=ok)
+                   detail=f"{old} -> {new_port}", success=ok, remote=remote)
         return jsonify({"success": ok, "message": msg})
 
 
@@ -357,7 +486,7 @@ def _register_panel_port(app):
         _left, _verify_ok = _panel_port_rule_nums()
         # A verify read that FAILED cannot say the port is closed either.
         ok = _verify_ok and not _left
-        log_action(current_user, "close_panel_port", target=str(port), success=ok)
+        log_action(current_user, "close_panel_port", target=str(port), success=ok, remote=remote)
         return jsonify({"success": ok, "message": (
             f"Public port {port} closed — the panel is now reachable only over your tailnet."
             if ok else f"Couldn't remove every rule for port {port}; check the firewall page.")})
@@ -380,9 +509,10 @@ def _register_game_ports(app):
 
         And the port must actually BELONG to a game server on this host, which is what the route's
         name has always claimed. The row was looked up only to pick the UFW comment, falling back
-        to "Game" when it did not exist — so a port nothing serves was opened just as readily. The
-        safe sibling, api_server_sync_ports, derives its ports from detect_game_ports() rather than
-        trusting the caller; this now refuses rather than guessing.
+        to "Game" when it did not exist — so a port nothing serves was opened just as readily. This
+        now refuses rather than guessing. (Its sibling api_server_sync_ports was called the safe
+        one because its ports come from detect_game_ports() — but that is the game account's own
+        config talking, so it is MANAGE_REMOTES-only now as well.)
         """
         remote = get_remote(remote_id)
         gs = GameServer.query.filter_by(remote_id=remote_id, port=port).first()
@@ -392,7 +522,8 @@ def _register_game_ports(app):
                                        "open it." % port}), 400
         count, msg = remote_ufw_allow_game_port(remote, port, gs.short_name)
         success = count >= 1
-        log_action(current_user, "game_port_open", target=f"{remote.name}:{port}", success=success)
+        log_action(current_user, "game_port_open", target=f"{remote.name}:{port}", success=success,
+                   remote=remote)
         return jsonify({"success": success, "message": msg, "rules_added": count})
 
     @app.route("/api/server/<int:server_id>/sync-ports", methods=["POST"])
@@ -403,15 +534,28 @@ def _register_game_ports(app):
 
         That covers game/query/rcon/etc. Also re-syncs the stored port. Fixes servers
         that were installed before multi-port support, or whose ports changed.
+
+        MANAGE_REMOTES, on THIS host, like every other write to a host's firewall — the same
+        correction api_remote_game_port_open had. It accepted INSTALL_SERVER too, on the reasoning
+        that its ports come from detect_game_ports rather than the caller. They come from
+        `details`, run as the game account, over a config that account — and anyone with
+        MANAGE_SERVERS, through the file manager — can write. The stock "admin" group has
+        INSTALL_SERVER and MANAGE_SERVERS and not MANAGE_REMOTES, so it could put persistent
+        root-owned allow rules on a firewall it has no rights over, and re-tag (then, uninstalling,
+        delete) other servers' rules. Its only caller is the Firewall page, which already needs
+        MANAGE_REMOTES on the host.
+
+        And whoever calls it, a port another game server on the host holds, or SSH's, or the
+        panel's, is neither opened nor stored (withheld_game_ports).
         """
         gs = get_game(server_id)
-        if not (current_user.is_superadmin or has_permission(current_user, MANAGE_REMOTES)
-                or has_permission(current_user, INSTALL_SERVER)):
+        if not (current_user.is_superadmin
+                or (has_permission(current_user, MANAGE_REMOTES)
+                    and can_access_remote(current_user, gs.remote_id))):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         try:
             info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name)
-            gp = _resync_game_port(gs, info)
-            to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
+            gp, to_open, refused = _ports_to_sync(gs, info)
             # Report what the firewall ACTUALLY took, not what was asked for. The return value
             # used to be discarded on the reasoning that "the firewall page reports a partially
             # applied rule set" — but this said "Ports 27015, 27016 opened." and wrote an audit
@@ -420,13 +564,14 @@ def _register_game_ports(app):
             opened, _ = remote_ufw_allow_game_ports(gs.remote, to_open, gs.short_name)
             opened = sorted(set(opened or []))
             missed = [p for p in to_open if p not in set(opened)]
-            ok = not missed
+            ok = not (missed or refused)
             log_action(current_user, "sync_ports", target=gs.name, success=ok,
-                       detail=_sync_ports_detail(opened, missed))
-            msg = _sync_ports_message(opened, missed)
+                       detail=_sync_ports_detail(opened, missed, refused), server=gs)
+            msg = _sync_ports_message(opened, missed, refused)
             return jsonify({"success": ok, "message": msg,
                             "ports": info.get("ports", []), "open_ports": opened,
-                            "requested_ports": to_open, "failed_ports": missed, "game_port": gp})
+                            "requested_ports": to_open, "failed_ports": missed,
+                            "refused_ports": refused, "game_port": gp})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 
@@ -474,6 +619,23 @@ def _register_host_stats(app):
             return _unreachable("remote uptime")
 
 
+def _current_os_updates(snapshot):
+    """([(id, entry)] for each cached check that belongs to the row holding its id NOW, the local id).
+
+    An entry noted for an earlier host with the same id is not this one's (see _os_update_current)
+    — nor is one for an id no row holds any more. ONE query for the whole snapshot, which also
+    answers which of these hosts is the panel's own: that used to be a query of its own
+    (_local_remote_id), so the identity check costs the banner nothing — it is on every page load,
+    and its query budget is asserted.
+    """
+    rows = (db.session.query(RemoteServer.id, RemoteServer.created_at, RemoteServer.is_local)
+            .filter(RemoteServer.id.in_(list(snapshot))).all())
+    born = {rid: created for rid, created, _local in rows}
+    local_id = next((rid for rid, _created, is_local in rows if is_local), None)
+    return ([(rid, seen) for rid, seen in sorted(snapshot.items())
+             if rid in born and _os_update_current(seen, born[rid])], local_id)
+
+
 def _register_os_update_checks(app):
     """OS updates: check, summarise, read the cache, run."""
     @app.route("/api/remote/<int:remote_id>/check-updates")
@@ -486,6 +648,7 @@ def _register_os_update_checks(app):
         does too.
         """
         remote = get_remote(remote_id)
+        born = _os_update_born(remote)   # before any SSH — see _os_update_born
         try:
             result = (so.os_update_available(refresh=True) if remote.is_local
                       else _sm.remote_os_check_updates(remote))
@@ -496,7 +659,7 @@ def _register_os_update_checks(app):
         # "ok" travels to the UI: a check that failed (apt locked by unattended-upgrades, host mid
         # reboot) returns an empty list, and without this the card would report "System is up to
         # date" for a host nobody managed to ask.
-        _os_update_note(remote, result)
+        _os_update_note(remote, result, born)
         return jsonify({"ok": bool(result.get("ok")), "count": result["count"],
                         "packages": result["packages"]})
 
@@ -516,13 +679,13 @@ def _register_os_update_checks(app):
         if not snapshot:
             return jsonify({"hosts": []})     # nothing known yet — don't spend a query finding out
         hosts = []
-        local_id = _local_remote_id()
+        current, local_id = _current_os_updates(snapshot)
         # The accessible set, resolved ONCE. can_access_remote per host is the same answer and
         # costs a query set each time it is asked — fine when the grants were lazily cached on the
         # user, and three queries per host now that they are eagerly loaded. Same check, same
         # result, asked once instead of once per host in the snapshot.
         _allowed = None if current_user.is_superadmin else accessible_remote_ids(current_user)
-        for rid, seen in sorted(snapshot.items()):
+        for rid, seen in current:
             if not seen.get("count"):
                 continue
             # MANAGE_REMOTES is scoped per host (see get_remote): a user who can manage one remote
@@ -549,7 +712,7 @@ def _register_os_update_checks(app):
         """
         remote = get_remote(remote_id)
         seen = _os_update_seen.get(remote.id)
-        if not seen:
+        if not _os_update_current(seen, remote.created_at):
             return jsonify({"known": False})
         return jsonify({"known": True, "count": seen["count"], "security": seen["security"],
                         "at": seen["at"], "packages": seen["packages"]})
@@ -560,7 +723,8 @@ def _register_os_update_checks(app):
     def api_remote_run_updates(remote_id):
         remote = get_remote(remote_id)
         success, msg = remote_os_run_updates(remote)
-        log_action(current_user, "remote_os_update", target=remote.name, success=success)
+        log_action(current_user, "remote_os_update", target=remote.name, success=success,
+                   remote=remote)
         return jsonify({"success": success, "message": msg})
 
 
@@ -575,7 +739,8 @@ def _register_os_update_jobs(app):
         try:
             ok, msg = remote_os_update_start(remote)
             if ok:
-                log_action(current_user, "remote_os_update", target=remote.name, detail="started")
+                log_action(current_user, "remote_os_update", target=remote.name, detail="started",
+                           remote=remote)
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("couldn't start update")}), 500
@@ -670,7 +835,7 @@ def _register_reboot(app):
         if when_empty:
             with _rwe_lock:
                 _reboot_when_empty[remote_id] = {"by": current_user.username, "since": time.time()}
-            log_action(current_user, "reboot_when_empty_arm", target=remote.name)
+            log_action(current_user, "reboot_when_empty_arm", target=remote.name, remote=remote)
             # Warn if any game here can't be player-queried (no gamedig type AND no console engine):
             # the panel can't confirm it's empty while it's running, so the reboot waits until it is
             # stopped. Cheap, offline check — no network calls.
@@ -695,7 +860,8 @@ def _register_reboot(app):
         success, msg = _reboot_expecting_offline(remote, remote_reboot)
         # success=, or log_action's default (True) records a refused reboot as one that happened —
         # and /logs filtered to failures hides it. The OS-update sibling on this page passes it.
-        log_action(current_user, "remote_reboot", target=remote.name, success=success)
+        log_action(current_user, "remote_reboot", target=remote.name, success=success,
+                   remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/reboot-cancel", methods=["POST"])
@@ -707,7 +873,7 @@ def _register_reboot(app):
         with _rwe_lock:
             had = _reboot_when_empty.pop(remote_id, None)
         if had:
-            log_action(current_user, "reboot_when_empty_cancel", target=remote.name)
+            log_action(current_user, "reboot_when_empty_cancel", target=remote.name, remote=remote)
         return jsonify({"success": True, "pending": False,
                         "message": "Auto-reboot canceled." if had else "Nothing was scheduled."})
 

@@ -2320,6 +2320,15 @@
       "POST"
     ]
   },
+  "/setup/restart": {
+    "endpoint": "setup_restart",
+    "guards": [
+      "view:setup_restart"
+    ],
+    "methods": [
+      "POST"
+    ]
+  },
   "/static/<path:filename>": {
     "endpoint": "static",
     "guards": [
