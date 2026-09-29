@@ -997,6 +997,19 @@ try:
           ("27017", "ALLOW", "gamea") in _fu.left() and ("27015", "ALLOW", "gamea") in _fu.left()
           and [a[0] for _v, a in _w.verbs_called("ufw-allow-port")] == ["27017"],
           repr(_w.verbs_called("ufw-allow-port")))
+    # The single-port route (/api/remote/<id>/game-port/<port>/open) ran its own bare
+    # `ufw allow <port> comment <name>`, which REPLACES a rule differing only in comment or action.
+    _fu1 = _FakeUfw(("27016", "ALLOW", "gameb"), ("3306", "DENY", "operator-db"))
+    _wire(verbs=_fu1.verbs())
+    _gp_b = _H.remote_ufw_allow_game_port(_p8_srv(), 27016, "gamea")
+    _gp_d = _H.remote_ufw_allow_game_port(_p8_srv(), 3306, "gamea")
+    check("game port (one): another server's rule on the port keeps its owner",
+          ("27016", "ALLOW", "gameb") in _fu1.left()
+          and not any(r[0] == "27016" and r[2] == "gamea" for r in _fu1.left()),
+          "left=%r %r" % (_fu1.left(), _gp_b))
+    check("game port (one): ...an operator's DENY stays, and the port is not reported opened",
+          ("3306", "DENY", "operator-db") in _fu1.left() and _gp_d[0] == 0,
+          "left=%r %r" % (_fu1.left(), _gp_d))
     check("game ports: ...and what is open is reported: a port another ALLOW holds is open, one a "
           "DENY holds is not",
           _op[0] == [27015, 27016, 27017, 27018] and "3306" in _op[1], repr(_op))
@@ -1061,19 +1074,6 @@ try:
     _H.remote_ufw_allow_game_port(_p8_srv(), 27015, "$()")
     eq("game port: a name with nothing safe in it is tagged 'Game'",
        [c for c in _w.verbs_called() if c[0].startswith("ufw-allow")][-1][1][1], "Game")
-    # The single-port route (/api/remote/<id>/game-port/<port>/open) ran its own bare
-    # `ufw allow <port> comment <name>`, which REPLACES a rule differing only in comment or action.
-    _fu1 = _FakeUfw(("27016", "ALLOW", "gameb"), ("3306", "DENY", "operator-db"))
-    _wire(verbs=_fu1.verbs())
-    _gp_b = _H.remote_ufw_allow_game_port(_p8_srv(), 27016, "gamea")
-    _gp_d = _H.remote_ufw_allow_game_port(_p8_srv(), 3306, "gamea")
-    check("game port (one): another server's rule on the port keeps its owner",
-          ("27016", "ALLOW", "gameb") in _fu1.left()
-          and not any(r[0] == "27016" and r[2] == "gamea" for r in _fu1.left()),
-          "left=%r %r" % (_fu1.left(), _gp_b))
-    check("game port (one): ...an operator's DENY stays, and the port is not reported opened",
-          ("3306", "DENY", "operator-db") in _fu1.left() and _gp_d[0] == 0,
-          "left=%r %r" % (_fu1.left(), _gp_d))
     _wire(verbs={"ufw-allow-port": lambda a: ("", "", 1) if a[0] == "27016" else ("", "", 0)})
     eq("game ports: the list is de-duplicated and sorted, and only what OPENED is reported",
        _H.remote_ufw_allow_game_ports(_p8_srv(), [27016, "27015", 27015, None, 0], "cs2"),
