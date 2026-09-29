@@ -26,7 +26,7 @@ from panel.core.clock import utcnow
 from panel.core.config import load_config
 from panel.core.validation import ip_address_or_none, ip_network_or_none, unzoned_ip_or_network
 from panel.db.models import (GameServer, HostSample, MetricSample, RemoteServer, db,
-    rows_still_held)
+    row_label, rows_still_held)
 from panel.core.panel_state import (
     _cron_restart_pending, _expected_offline, _max_players_cache, _monitor_state,
     _player_counts, _reboot_when_empty, _rwe_lock, _server_full_alerted, _server_peak_notified,
@@ -484,7 +484,8 @@ def _lgsm_maintenance_running(remote, gs):
         # that echoes it back on stdout would otherwise mute this server's alerts permanently.
         return "BUSY" in (out or "").split()
     except Exception:
-        _log.debug("maintenance probe failed for %s", getattr(gs, "name", "?"), exc_info=True)
+        # row_label, not getattr: a server another row took the id of raises from this read too.
+        _log.debug("maintenance probe failed for %s", row_label(gs, "name"), exc_info=True)
         return False
 
 

@@ -1153,11 +1153,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
   onto it or aims its remaining root steps there.
 - **A deleted host, game server, user or group's id is no longer given to the next one, and work
   still running for a deleted row no longer lands on the row that took its id.** The hosts, game
-  servers, users, groups, custom commands and tags tables now use SQLite's AUTOINCREMENT, so a new
-  row never gets an id a deleted one had. An existing install's tables are rebuilt once, at the
-  first start after this update, with every row and id kept. A table that cannot be copied without
-  losing something is left as it was and logged, and the next start tries again. The next id also
-  starts above any id something still points at, such as an audit row or a tag left behind by a
+  servers, users, groups, custom commands, tags, global bans, invites and login sessions tables now
+  use SQLite's AUTOINCREMENT, so a new row never gets an id a deleted one had. A Global Bans page
+  left open while its newest ban was removed and another added no longer removes the new ban, and
+  lifts it on every server, when Remove is pressed. An existing install's tables are rebuilt once,
+  at the first start after this update, with every row and id kept. A table that cannot be copied
+  without losing something is left as it was and logged, and the next start tries again. The next id
+  also starts above any id something still points at, such as an audit row or a tag left behind by a
   deleted server. Work that holds a row through a long step also checks it is still the same row
   before writing or acting, for any table not rebuilt yet. An install whose host was deleted mid-run
   now stops at its next step instead of running it on the host that took the id, and no longer marks
@@ -1166,7 +1168,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
   and queued backups no longer write their result to, audit it under, or act on the server that took
   the id. The monitor, the player count poll, the metric history, the dashboard's status poll and
   the daily OS-update check no longer apply what they found for a deleted row to its successor, and
-  an open terminal on a deleted host is closed rather than kept by the host that took its id.
+  an open terminal on a deleted host is closed rather than kept by the host that took its id. The
+  hourly auto-block no longer adds or removes firewall rules on a host that took the id of a deleted
+  host that had it on.
 - **Unbounded reads and rows are capped.**
   - The fail2ban log read stops at 8 MB, and a tally cut short is shown as unread rather than as
     a smaller count.

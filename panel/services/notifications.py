@@ -904,5 +904,18 @@ def alerts_muted(gs):
     try:
         return any(not tag.notify for tag in (gs.tags or []))
     except Exception:
-        _log.debug("tag mute check failed for %s", getattr(gs, "short_name", "?"), exc_info=True)
+        _log.debug("tag mute check failed for %s", _server_log_name(gs), exc_info=True)
         return False
+
+
+def _server_log_name(gs):
+    """gs.short_name for alerts_muted's log line, or "?" when even that read raises.
+
+    getattr's default answers AttributeError only. A server another row took the id of raises
+    models.RowReplaced from every read, the one in the handler as well, and alerts_muted promises
+    never to raise (models.row_label, which this module does not import: see alerts_muted).
+    """
+    try:
+        return gs.short_name
+    except Exception:
+        return "?"

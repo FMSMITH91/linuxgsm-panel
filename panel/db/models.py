@@ -825,6 +825,9 @@ class GlobalBan(db.Model):
     (`banid 0 <id>; writeid`), so it uses the game's native ban list and persists across restarts.
     """
 
+    # AUTOINCREMENT: SQLite never gives this table's next row an id a deleted row had — see
+    # panel/db/id_sequence.py, which also converts a table an older version created.
+    __table_args__ = {"sqlite_autoincrement": True}
     id = db.Column(db.Integer, primary_key=True)
     steamid = db.Column(db.String(48), unique=True, nullable=False)   # canonical STEAM_x:y:z or [U:x:y]
     player_name = db.Column(db.String(80), default="")               # optional label, for reference
@@ -902,6 +905,9 @@ class Invite(db.Model):
     because anything else would be a privilege they awarded themselves.
     """
 
+    # AUTOINCREMENT: SQLite never gives this table's next row an id a deleted row had — see
+    # panel/db/id_sequence.py, which also converts a table an older version created.
+    __table_args__ = {"sqlite_autoincrement": True}
     id = db.Column(db.Integer, primary_key=True)
     token_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
@@ -1068,6 +1074,9 @@ class UserSession(db.Model):
     """
 
     __tablename__ = "user_session"
+    # AUTOINCREMENT: SQLite never gives this table's next row an id a deleted row had — see
+    # panel/db/id_sequence.py, which also converts a table an older version created.
+    __table_args__ = {"sqlite_autoincrement": True}
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), index=True, nullable=False)
     sid = db.Column(db.String(64), unique=True, index=True, nullable=False)
@@ -1266,9 +1275,14 @@ def anonymise_audit_ips(days):
 
 
 # The tables whose ids something else keeps — another table's column, an in-memory map, a job, a
-# login cookie — and so must never be handed to a new row (panel/db/id_sequence.py). Every one has
-# `sqlite_autoincrement` in its __table_args__; a unit check holds the two lists together.
-_AUTOINCREMENT_MODELS = (User, Group, RemoteServer, GameServer, CustomCommand, ServerTag)
+# login cookie, a page's own URLs — and so must never be handed to a new row
+# (panel/db/id_sequence.py). The last three are keyed only by URLs: a Global Bans page left open
+# while its newest ban was removed and another added posted the old id to /global-bans/<id>/delete,
+# which removed the NEW ban and lifted that SteamID on every server; an invite's Revoke and a login
+# session's Revoke are the same shape. Every one has `sqlite_autoincrement` in its __table_args__;
+# a unit check holds the two lists together.
+_AUTOINCREMENT_MODELS = (User, Group, RemoteServer, GameServer, CustomCommand, ServerTag,
+                         GlobalBan, Invite, UserSession)
 # ...and the columns that hold those ids without declaring a foreign key, which the rebuild reads
 # beside the foreign keys to pick the id SQLite starts from.
 _ID_REFS_WITHOUT_FK = {
@@ -1900,6 +1914,20 @@ def row_birth(obj):
     except NoInspectionAvailable:
         return _NO_BIRTH
     return info["born"] if "born" in info else obj.__dict__.get("created_at", _NO_BIRTH)
+
+
+def row_label(obj, attr, default="?"):
+    """`obj.<attr>` for a log line or a tally, or `default` when reading it raises.
+
+    getattr's own default answers AttributeError only. A held row that another row took the id of
+    raises RowReplaced from every read once it is expired, so an except handler that named its row
+    with getattr(gs, "short_name", "?") raised a second time, out of a helper that promises it
+    never raises.
+    """
+    try:
+        return getattr(obj, attr, default)
+    except Exception:      # a label must never be what raises
+        return default
 
 
 def _stored_births(session, model, ids):

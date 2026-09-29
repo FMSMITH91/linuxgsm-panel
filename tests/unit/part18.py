@@ -35,11 +35,12 @@ from unit.part12 import (P9_ADMIN, _P9_CFG_PATH, _P9_TRIPPED, _P9Thread, _p9, _p
                          _p9_so, _p9_state, _p9_supervised, _p9_threading, _p9_trip, _p9_ts)
 import db_maintenance as _dbm18
 from panel.db import models as _m18
-from panel.db.models import (AuditLog, GameServer, MetricSample, RemoteServer, RowReplaced, User,
-                             db)
+from panel.db.models import (AuditLog, GameServer, GlobalBan, MetricSample, RemoteServer,
+                             RowReplaced, User, db)
 from panel.ops import backup as _bk18
 from panel.routes import _shared as _sh18
 from panel.routes import api as _api18
+from panel.routes import custom_commands as _cc18
 from panel.routes import manage_servers as _ms18
 from panel.routes import panel_backup as _pb18
 from panel.routes import server_detail as _sd18
@@ -49,7 +50,7 @@ from panel.services import monitoring as _mon18
 _XHR18 = {"X-Requested-With": "XMLHttpRequest"}
 _TRIP18_START = len(_P9_TRIPPED)
 _CFG18_SNAPSHOT = _P9_CFG_PATH.read_bytes() if _P9_CFG_PATH.exists() else None
-_MODS18 = (_sh18, _ms18, _sf18, _sd18, _pb18)
+_MODS18 = (_sh18, _ms18, _sf18, _sd18, _pb18, _cc18)
 _saved18_threading = {m: m.threading for m in _MODS18 if hasattr(m, "threading")}
 _saved18_time = {m: m.time for m in _MODS18 if hasattr(m, "time")}
 _saved18_listeners = dict(_p9_banlist._listeners)
@@ -58,7 +59,7 @@ _saved18_maps = [(m, dict(m)) for _entries in _p9_state.keyed_state_with_locks()
                  for m, _lk in _entries]
 _saved18_monitor = {k: dict(v) for k, v in _p9_state._monitor_state.items()}
 _saved18_osu_run = _p9_state._os_update_state["last_run"]
-_mine18 = {"hosts": [], "servers": []}    # every row this part made, deleted in the finally
+_mine18 = {"hosts": [], "servers": [], "bans": []}   # every row this part made, deleted at the end
 
 
 class _SyncPool18:
@@ -304,6 +305,7 @@ def _restore18():
 
 def _delete_mine18():
     with _p9.app_context():
+        GlobalBan.query.filter(GlobalBan.id.in_(_mine18["bans"])).delete(synchronize_session=False)
         for gid in _mine18["servers"]:
             g = db.session.get(GameServer, gid)
             if g is not None:
@@ -520,6 +522,111 @@ def _osucheck18(remote):
     return {"ok": True, "packages": [{"name": "openssl-p18", "suite": "noble-security"}]}
 
 
+def _prepare18_gone(remote, remote_id, short_name, fresh):
+    # The operator deletes the server mid-install. Nothing takes its id, and the worker's own
+    # session is not committed, so none of the objects it holds reload.
+    with _ctx18():
+        db.session.delete(db.session.get(GameServer, _inst18["gone"]))
+        db.session.commit()
+    return True, "", False
+
+
+def _steamban18_pin(remote, short, lgsm, steamid, unban=False):
+    _fb18["bans"].append((short, steamid))
+    if short == _fb18["first"] and _fb18["swap"]:
+        _fb18["swap"] = False
+        # The first contact with the host pins its key, committing the pass's own session.
+        _pin_commit18()
+        _take_server18(_fb18["next"], name="p18-fb-taker", short_name="fbtakerserver",
+                       game_type="csgo")
+    return True, "banned"
+
+
+def _steamban18_record(remote, short, lgsm, steamid, unban=False):
+    _gbx18.append((short, steamid, unban))
+    return True, "banned"
+
+
+def _fb_servers18(prefix, port, addr):
+    """Three installed valve servers on one new host, the only installed ones; the others' ids."""
+    rid = _host18("p18-%s-host" % prefix, addr)
+    ids = [_server18(rid, "%s%s" % (prefix, n), port + i, game_type="csgo")
+           for i, n in enumerate(("one", "two", "three"))]
+    _fb18.update(bans=[], swap=True, first=prefix + "one", next=ids[1])
+    return ids, _only_installed18(set(ids))
+
+
+def _abreconcile18(remote):
+    _ab18["hosts"].append(remote.host)
+    event, _ab18["event"] = _ab18["event"], None
+    if event is not None:
+        event([i for i in _ab18["pair"] if i != remote.id][0])
+    return 0, 0
+
+
+def _ab_deleted18(other):
+    """The other host is deleted as delete_remote does (its opt-in dropped); a new one takes its id."""
+    from panel.routes import remotes as _rm18
+    _rm18._forget_deleted_remote_config(other, [])
+    _take_host18(other, host="192.0.2.159", name="p18-ab-taker")
+
+
+def _ab_kept18(other):
+    """...the same, but the config write that drops its opt-in did not land (it is best-effort)."""
+    _take_host18(other, host="192.0.2.158", name="p18-ab-taker2")
+
+
+def _ab_tick18(addrs, event):
+    """One hourly auto-block tick over two new opted-in hosts at `addrs`.
+
+    `event(other_id)` runs while the first of them is being reconciled. Returns (whether one tick
+    ran, the addresses reconciled).
+    """
+    ids = [_host18("p18-ab-%s" % a.rsplit(".", 1)[1], a) for a in addrs]
+    _ab18.update(hosts=[], pair=ids, event=event)
+    _p9_cfg.update_config(lambda cfg: cfg.update({"autoblock_hosts": sorted(ids)}))
+    ran = _ticks18(_p9_app._autoblock_watch, 3600)
+    _p9_cfg.update_config(lambda cfg: cfg.update({"autoblock_hosts": []}))
+    return ran, list(_ab18["hosts"])
+
+
+def _ticks18(loop, seconds):
+    """Run `loop(app)`, which sleeps `seconds` BEFORE each pass, for exactly one pass."""
+    slept = []
+
+    def _sleep(s):
+        if s == seconds:
+            slept.append(s)
+            if len(slept) > 1:
+                raise _Stop18()
+    saved = _p9_app.time
+    _p9_app.time = NS(time=saved.time, sleep=_sleep, monotonic=saved.monotonic)
+    try:
+        loop(_p9)
+    except _Stop18:
+        return True
+    finally:
+        _p9_app.time = saved
+    return False
+
+
+def _outcome18(fn, *a):
+    """('returned', value), or ('raised', repr) when fn(*a) raised."""
+    try:
+        return "returned", fn(*a)
+    except Exception as e:  # noqa: BLE001 - a raise is what these checks look for
+        return "raised", repr(e)
+
+
+def _ban_add18(steamid):
+    with _ctx18():
+        gb = GlobalBan(steamid=steamid, created_by="p18")
+        db.session.add(gb)
+        db.session.commit()
+        _mine18["bans"].append(gb.id)
+        return gb.id
+
+
 try:
     for _m in _saved18_threading:
         _m.threading = _p9_threading(_P9Thread)
@@ -606,6 +713,26 @@ try:
         _part18_read = _reads18(_part18, ("name", "status")) + [_m18.still_held(_part18)]
     check("guard: a row loaded without created_at is not taken for a replaced one when the rest "
           "loads", _part18_read == ["p18-guard-third", "offline", True], repr(_part18_read))
+    # A row this session inserted and then held without a read: its identity is the one it was
+    # inserted with (the after_insert listener), not whatever its first reload finds.
+    with _ctx18():
+        _ins18 = GameServer(remote_id=_gh18, name="p18-guard-new", short_name="guardnewserver",
+                            game_type="csgo", port=27501, installed=True, status="offline")
+        db.session.add(_ins18)
+        db.session.commit()                # expires it: nothing of it is loaded now
+        _ins18_id = _sa18.inspect(_ins18).identity[0]      # read without loading it
+        _mine18["servers"].append(_ins18_id)
+        _take_server18(_ins18_id, name="p18-guard-new-taker", status="online")
+        _ins18_held = _m18.still_held(_ins18)
+        _ins18_reads = _reads18(_ins18, ("name",))
+        _ins18.status = "installing"
+        _ins18_flush = _commit18()
+    check("guard: a row inserted and held unread knows its id was taken (its birth is the insert's)",
+          _ins18_held is False and _ins18_reads == ["refused"],
+          repr((_ins18_held, _ins18_reads)))
+    check("guard: ...and a write through it is refused, the row that took the id keeping its values",
+          _ins18_flush == "refused" and _row18(GameServer, _ins18_id).status == "online",
+          repr((_ins18_flush, _row18(GameServer, _ins18_id).status)))
 
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # The install job (manage_servers): its entry, its row, and the host its steps run on
@@ -648,6 +775,22 @@ try:
           repr((_inst18["cmds"], _p9_state._install_jobs.get(_is18b))))
     with _p9_state._install_lock:
         _p9_state._install_jobs.pop(_is18b, None)
+    # Deleted mid-install with no row taking the id, and no commit in the worker: nothing reloads,
+    # so only the job's own check before each step (_InstallRun.progress) can stop it.
+    _ih18c = _host18("p18-install-host3", "192.0.2.168")
+    _is18c = _server18(_ih18c, "inst3server", 27512, installed=False, status="installing")
+    _inst18.update(cmds=[], gone=_is18c)
+
+    _p9_patch(_ms18, "prepare_install_account", _prepare18_gone)
+    with _ctx18():
+        _ms18._queue_install_job(db.session.get(GameServer, _is18c), [])
+    _run_job18(_is18c, _ih18c, "inst3server", "csgo", "csgoserver", 27512, [], fresh=True)
+    _p9_drain()
+    check("install: a server deleted during step 1 gets no step 2, on its host or any other",
+          _row18(GameServer, _is18c) is None and _inst18["cmds"] == [],
+          repr((_row18(GameServer, _is18c), _inst18["cmds"])))
+    with _p9_state._install_lock:
+        _p9_state._install_jobs.pop(_is18c, None)
 
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # Power actions (server_detail): start/stop/restart in the background, a long action, bulk
@@ -959,6 +1102,10 @@ try:
     check("install reconcile: ...and the stranded row after it still is (control)",
           _xr218.status == "offline" and _xr218.installed is True,
           repr((_xs18, _xr218.status, _xr218.installed)))
+    _rs18_rows = [(a.target, a.game_server_id) for a in _audits18("restart_server")
+                  if a.target in ("p18-rsone", "p18-rstwo")]
+    check("queued restart: ...and the next queued server's restart still has its audit row",
+          ("p18-rstwo", _r218) in _rs18_rows, repr(_rs18_rows))
 
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # Sweeps that probe first and apply after: the monitor, the player poll, the metric history,
@@ -1058,8 +1205,9 @@ try:
     check("node-tools pass: a host whose id was taken during the pass is skipped, not acted on "
           "as the new host", "192.0.2.176" not in _nt18 and "192.0.2.174" in _nt18, repr(_nt18))
 
-    # The global ban fan-out loads its servers once and commits nothing until it ends, so a row
-    # replaced mid-pass is acted on as it was loaded — the deleted server — never as its successor.
+    # The global ban fan-out loads its servers once. With no commit in the pass, a row replaced
+    # mid-pass is skipped (app._valve_ban_target), never acted on as its successor. A first
+    # contact's commit mid-pass is its own block at the end of this part.
     _gbh18 = _host18("p18-gban-host", "192.0.2.177")
     _gb118 = _server18(_gbh18, "gbone", 27595, game_type="csgo")
     _gb218 = _server18(_gbh18, "gbtwo", 27596, game_type="csgo")
@@ -1124,6 +1272,106 @@ try:
           len(_tsid18) == 1 and _tsid18[0] in _tgone18, repr((_tsid18, _tgone18)))
     _sio18.disconnect()
     _forget_sids18(_tsid18)
+
+    # ════════════════════════════════════════════════════════════════════════════════════════════
+    # The global ban fan-out and sync when a first contact commits the pass's own session: a later
+    # server whose id is taken then reloads from the other row
+    # ════════════════════════════════════════════════════════════════════════════════════════════
+    _fb18 = {}
+
+    _p9_patch(_p9_app, "console_steamid_ban", _steamban18_pin)
+    _p9_patch(_p9_app, "ensure_persistent_bans", lambda *a, **k: None)
+    _fbi18, _fbo18 = _fb_servers18("fb", 27601, "192.0.2.154")
+    _fb18_err = _raises18(_p9_app._fan_out_global_ban, _p9, "STEAM_0:1:1820")
+    _fb18_rows = [(a.detail, a.success) for a in _audits18("global_ban_apply")
+                  if a.target == "STEAM_0:1:1820"]
+    _reinstall18(_fbo18)
+    check("global ban fan-out: a server whose id was taken after the pass's first commit does not "
+          "stop the pass", _fb18_err is None, _fb18_err)
+    check("global ban fan-out: ...the server after it still gets the ban, and the one that took "
+          "the id does not", _fb18["bans"] == [("fbone", "STEAM_0:1:1820"),
+                                               ("fbthree", "STEAM_0:1:1820")],
+          repr(_fb18["bans"]))
+    check("global ban fan-out: ...and its outcome row is written", _fb18_rows == [("2 applied", True)],
+          repr(_fb18_rows))
+
+    _ban_add18("STEAM_0:1:1821")
+    with _ctx18():
+        _sb18_n = GlobalBan.query.count()
+    _sb18_before = len(_audits18("global_ban_sync"))
+    _sbi18, _sbo18 = _fb_servers18("sb", 27604, "192.0.2.156")
+    _sb18_err = _raises18(_p9_app._sync_global_bans, _p9)
+    _sb18_rows = [(a.detail, a.success) for a in _audits18("global_ban_sync")][_sb18_before:]
+    _reinstall18(_sbo18)
+    _sb18_to = sorted({s for s, _i in _fb18["bans"]})
+    check("global ban sync: a server whose id was taken after the pass's first commit does not "
+          "stop the pass", _sb18_err is None, _sb18_err)
+    check("global ban sync: ...the server after it still gets every ban, and the one that took "
+          "the id none", _sb18_to == ["sbone", "sbthree"]
+          and ("sbthree", "STEAM_0:1:1821") in _fb18["bans"], repr(_fb18["bans"]))
+    check("global ban sync: ...and its outcome row is written",
+          _sb18_rows == [("%d applied" % (2 * _sb18_n), True)], repr((_sb18_n, _sb18_rows)))
+
+    # ════════════════════════════════════════════════════════════════════════════════════════════
+    # The hourly auto-block tick: hosts taken from its snapshot of the opted-in list
+    # ════════════════════════════════════════════════════════════════════════════════════════════
+    _ab18 = {}
+
+    _p9_patch(_p9_app, "_autoblock_reconcile", _abreconcile18)
+    _ab18_ctl = _ab_tick18(("192.0.2.150", "192.0.2.151"), None)
+    check("autoblock tick: with nothing changed, both opted-in hosts are reconciled (control)",
+          _ab18_ctl[0] and sorted(_ab18_ctl[1]) == ["192.0.2.150", "192.0.2.151"], repr(_ab18_ctl))
+    _ab18_del = _ab_tick18(("192.0.2.152", "192.0.2.153"), _ab_deleted18)
+    check("autoblock tick: a host that took a deleted host's id during the tick is not reconciled",
+          _ab18_del[0] and len(_ab18_del[1]) == 1 and "192.0.2.159" not in _ab18_del[1],
+          repr(_ab18_del))
+    _ab18_kept = _ab_tick18(("192.0.2.140", "192.0.2.141"), _ab_kept18)
+    check("autoblock tick: ...nor when the delete's config write left the deleted host's opt-in",
+          _ab18_kept[0] and len(_ab18_kept[1]) == 1 and "192.0.2.158" not in _ab18_kept[1],
+          repr(_ab18_kept))
+
+    # ════════════════════════════════════════════════════════════════════════════════════════════
+    # Helpers that promise never to raise, handed a server another row took the id of
+    # ════════════════════════════════════════════════════════════════════════════════════════════
+    _nrh18 = _host18("p18-nr-host", "192.0.2.162")
+    _nrs18 = _server18(_nrh18, "nrserver", 27607)
+    check("never-raise helpers (premise): the tag mute check and the maintenance probe are the "
+          "real ones here, not a stub", _p9_notif.alerts_muted.__module__ == _p9_notif.__name__
+          and _mon18._lgsm_maintenance_running.__module__ == _mon18.__name__,
+          repr((_p9_notif.alerts_muted, _mon18._lgsm_maintenance_running)))
+    with _ctx18():
+        _nr18 = db.session.get(GameServer, _nrs18)
+        _nr18_remote = _nr18.remote
+        db.session.commit()                  # expires both, as a worker's first contact does
+        _take_server18(_nrs18, name="p18-nr-taker", short_name="nrtakerserver")
+        _nr18_muted = _outcome18(_p9_notif.alerts_muted, _nr18)
+        _nr18_maint = _outcome18(_mon18._lgsm_maintenance_running, _nr18_remote, _nr18)
+    check("never-raise helpers: the tag mute check fails open for it rather than raising",
+          _nr18_muted == ("returned", False), repr(_nr18_muted))
+    check("never-raise helpers: the maintenance probe answers False for it rather than raising",
+          _nr18_maint == ("returned", False), repr(_nr18_maint))
+
+    # ════════════════════════════════════════════════════════════════════════════════════════════
+    # An id a page posts back: Global Bans left open while its newest ban was replaced
+    # ════════════════════════════════════════════════════════════════════════════════════════════
+    _gbx18 = []
+
+    _p9_patch(_p9_app, "console_steamid_ban", _steamban18_record)
+    _stale18 = _ban_add18("STEAM_0:1:1822")
+    with _ctx18():
+        db.session.delete(db.session.get(GlobalBan, _stale18))     # another superadmin removes it
+        db.session.commit()
+    _fresh18 = _ban_add18("STEAM_0:1:1823")                        # ...and adds another
+    _r = _A18.post("/global-bans/%d/delete" % _stale18)
+    _p9_drain()
+    with _ctx18():
+        _fresh18_row = db.session.get(GlobalBan, _fresh18)
+        _fresh18_sid = None if _fresh18_row is None else _fresh18_row.steamid
+    check("global bans: a stale page's Remove finds its ban gone, and the ban added after it stays",
+          _fresh18 != _stale18 and _r.status_code == 404 and _fresh18_sid == "STEAM_0:1:1823",
+          repr((_stale18, _fresh18, _r.status_code, _fresh18_sid)))
+    check("global bans: ...and nothing is lifted anywhere",
+          not any(sid == "STEAM_0:1:1823" for _s, sid, _u in _gbx18), repr(_gbx18))
 finally:
     _restore18()
 
@@ -1138,7 +1386,8 @@ check("part18: every deferred worker was run (none left to leak into a later che
 # The class fix: AUTOINCREMENT on the tables whose ids are kept, and the migration that gives it
 # to a database made before it
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-_KEYED18 = ("user", "group", "remote_server", "game_server", "custom_command", "server_tag")
+_KEYED18 = ("user", "group", "remote_server", "game_server", "custom_command", "server_tag",
+            "global_ban", "invite", "user_session")
 check("autoincrement: exactly the keyed tables declare it, and they are the ones the migration "
       "rebuilds",
       sorted(t.name for t in db.metadata.sorted_tables
@@ -1188,8 +1437,17 @@ def _old_db18(name):
         c.execute(t["game_server_tags"].insert(), [{"tag_id": 4, "game_server_id": 7}])
         c.execute(t["custom_command"].insert(), [{"id": 1, "name": "c1", "command_template": "say"}])
         c.execute(t["user_groups"].insert(), [{"user_id": 2, "group_id": 2}])
+        c.execute(t["global_ban"].insert(), [{"id": 1, "steamid": "STEAM_0:1:18"}])
+        c.execute(t["invite"].insert(), [{"id": 1, "token_hash": "p18" * 16,
+                                          "expires_at": _soon18()}])
+        c.execute(t["user_session"].insert(), [{"id": 1, "user_id": 1, "sid": "p18s1"}])
     eng.dispose()
     return path, old
+
+
+def _soon18():
+    """A day from now, naive UTC as the models store it."""
+    return (_dt18.datetime.now(_dt18.timezone.utc) + _dt18.timedelta(days=1)).replace(tzinfo=None)
 
 
 def _rows18(path, tables=_KEYED18 + ("game_server_tags", "user_groups", "audit_log")):
@@ -1230,6 +1488,47 @@ def _one18(path, sql, args=()):
         return con.execute(sql, args).fetchall()
     finally:
         con.close()
+
+
+# The row _nofk_floor18 adds to each table that holds a keyed id without a foreign key.
+_NOFK_ROW18 = {"audit_log": {"action": "p18-nofk", "username": "x"},
+               "metric_sample": {}, "host_sample": {}}
+
+
+def _nofk_floor18(name, table, column):
+    """The next-id floor the rebuild gives `name` when only `table`.`column` names an id above it.
+
+    A database from before (_old_db18) with one more row, in `table`, whose `column` names id 40,
+    and no foreign key declared on that column; then the keyed tables rebuilt, and `name`'s entry in
+    sqlite_sequence read back.
+    """
+    path, _ = _old_db18("nofk-%s-%s.db" % (table, column))
+    row = dict(_NOFK_ROW18[table], **{column: 40})
+    con = _sq18.connect(path)
+    try:
+        con.execute('INSERT INTO "%s" (%s) VALUES (%s)'  # nosec B608 - fixed names
+                    % (table, ", ".join('"%s"' % c for c in row), ", ".join("?" * len(row))),
+                    list(row.values()))
+        con.commit()
+    finally:
+        con.close()
+    with _app18(path).app_context():
+        _m18._give_keyed_tables_autoincrement()
+    return _seq18(path).get(name)
+
+
+def _next_after_delete18(model, **fields):
+    """(id of the newest row, deleted; id of the row added after it). Call in an app context."""
+    first = model(**fields)
+    db.session.add(first)
+    db.session.commit()
+    first_id = first.id
+    db.session.delete(first)
+    db.session.commit()
+    second = model(**fields)
+    db.session.add(second)
+    db.session.commit()
+    return first_id, second.id
 
 
 try:
@@ -1364,6 +1663,28 @@ try:
           _dump18 and _seq_a18 and not any(_plain18(_salv18, n) for n in _KEYED18)
           and all(_seq_s18.get(n, 0) >= _seq_a18.get(n, 0) for n in _seq_a18),
           repr((_dump18, _seq_a18, _seq_s18)))
+
+    # ── the floor from the columns that hold an id without a foreign key, each on its own ────────
+    _nf18_ag = _nofk_floor18("game_server", "audit_log", "game_server_id")
+    _nf18_ms = _nofk_floor18("game_server", "metric_sample", "server_id")
+    _nf18_ar = _nofk_floor18("remote_server", "audit_log", "remote_id")
+    _nf18_hs = _nofk_floor18("remote_server", "host_sample", "remote_id")
+    check("autoincrement: a game server id only an audit row still names is not handed out again",
+          _nf18_ag == 40, repr(_nf18_ag))
+    check("autoincrement: ...nor one only a metric sample still names", _nf18_ms == 40,
+          repr(_nf18_ms))
+    check("autoincrement: a host id only an audit row still names is not handed out again",
+          _nf18_ar == 40, repr(_nf18_ar))
+    check("autoincrement: ...nor one only a host sample still names", _nf18_hs == 40,
+          repr(_nf18_hs))
+
+    # ── the tables keyed by a page's own URLs: a ban, an invite and a login session ─────────────
+    with _a18.app_context():
+        _nx18 = (_next_after_delete18(_m18.GlobalBan, steamid="STEAM_0:1:1830"),
+                 _next_after_delete18(_m18.Invite, token_hash="p18x" * 16, expires_at=_soon18()),
+                 _next_after_delete18(_m18.UserSession, user_id=1, sid="p18-next"))
+    check("autoincrement: a removed global ban, invite or login session's id is not given to the "
+          "next one", all(a != b for a, b in _nx18), repr(_nx18))
 finally:
     for _a in _apps18:
         try:
