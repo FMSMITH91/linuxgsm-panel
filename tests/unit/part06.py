@@ -5315,8 +5315,9 @@ finally:
     _shutil.rmtree(_cfs_tmp, ignore_errors=True)
 
 # ── the fuzz image's build context: no keys, no databases, no worktree checkouts ──────────────
-# .clusterfuzzlite/Dockerfile does `COPY . $SRC/linuxgsm-panel` with the repository root as its
-# context, and Docker reads neither .gitignore nor .git/info/exclude, so a local fuzz build put the
+# .clusterfuzzlite/Dockerfile did `COPY . $SRC/linuxgsm-panel` with the repository root as its
+# context (it copies panel/ and tests/fuzz/ now; see the gates after these), and Docker reads
+# neither .gitignore nor .git/info/exclude, so a local fuzz build put the
 # working tree's data/ (secret_key, cred_key, panel.db), the .venv, .git and every worktree under
 # .claude/ into an image layer (Sonar docker:S6470). /.dockerignore is evaluated here the way
 # Docker's own matcher (moby/patternmatcher) does: a leading "/" is dropped, "**/" is any depth
@@ -5382,6 +5383,37 @@ check(".dockerignore: ...and keeps every file the fuzz build reads (requirements
       and any(_p.startswith("tests/fuzz/corpus/") for _p in _dki_need)
       and [_p for _p in _dki_need if _dki_out(_p)] == [],
       "need=%d dropped=%r" % (len(_dki_need), [_p for _p in _dki_need if _dki_out(_p)][:6]))
+
+# ── the fuzz image copies what its build reads, never the whole context (Sonar docker:S6470) ──
+# `COPY .` put the entire repository into the layer, and .dockerignore was the only thing between
+# it and the working tree's secrets. The image now copies panel/ and tests/fuzz/, which is enough
+# only while every harness imports nothing from the repository outside panel/ — so that is held
+# too: a harness reaching for app.py, db_maintenance.py or a new top-level module fails here, not
+# as a fuzzer that dies on its first input.
+_fz_df = open(os.path.join(_root, ".clusterfuzzlite", "Dockerfile"), encoding="utf-8").read()
+_fz_copies = [_l.split()[1:-1] for _l in _fz_df.splitlines()
+              if _l.split()[:1] in (["COPY"], ["ADD"])]
+_fz_wide = [_src for _srcs in _fz_copies for _src in _srcs
+            if _src.rstrip("/") in (".", "") or any(_g in _src for _g in "*?[")]
+check("fuzz image: the Dockerfile copies named paths, never the build context",
+      bool(_fz_copies) and not _fz_wide
+      and ["panel"] in _fz_copies and ["tests/fuzz"] in _fz_copies,
+      "COPY sources %r, context-wide %r" % (_fz_copies, _fz_wide))
+_fz_top = {os.path.splitext(_n)[0] for _n in os.listdir(_root)
+           if (_n.endswith(".py") or os.path.isdir(os.path.join(_root, _n))) and not _n.startswith(".")}
+_fz_bad = []
+for _fz in sorted(glob.glob(os.path.join(_root, "tests", "fuzz", "fuzz_*.py"))):
+    _fz_tree = _ast.parse(open(_fz, encoding="utf-8").read())
+    _fz_names = [_a.name for _n in _ast.walk(_fz_tree) if isinstance(_n, _ast.Import) for _a in _n.names]
+    _fz_names += [_n.module for _n in _ast.walk(_fz_tree) if isinstance(_n, _ast.ImportFrom) and _n.module]
+    _fz_names += [_c.value for _n in _ast.walk(_fz_tree) if isinstance(_n, _ast.Tuple)
+                  for _c in _n.elts if isinstance(_c, _ast.Constant) and isinstance(_c.value, str)
+                  and _c.value.split(".")[0] in _fz_top]   # the importlib _dep lists
+    _fz_bad += ["%s: %s" % (os.path.basename(_fz), _m) for _m in _fz_names
+                if _m.split(".")[0] in _fz_top and _m.split(".")[0] != "panel"]
+check("fuzz image: every harness imports from the repository only under panel/ (what the image copies)",
+      len(glob.glob(os.path.join(_root, "tests", "fuzz", "fuzz_*.py"))) >= 6 and not _fz_bad,
+      "outside panel/: %r" % _fz_bad)
 
 # ── the helper fetches Tailscale's installer over https only, every hop ───────────────────────
 # do_tailscale_install downloads install.sh and root runs it. Nothing checks the body, so TLS on
