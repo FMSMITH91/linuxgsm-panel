@@ -553,6 +553,7 @@ def _register_game_ports(app):
                 or (has_permission(current_user, MANAGE_REMOTES)
                     and can_access_remote(current_user, gs.remote_id))):
             return jsonify({"success": False, "message": "Permission denied"}), 403
+        ok = False     # set before the try, so no path can read it unset (CodeQL alert 512)
         try:
             info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name)
             gp, to_open, refused = _ports_to_sync(gs, info)
