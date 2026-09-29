@@ -25,8 +25,7 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
     get_remote, has_permission, log_action, permission_required, server_access_required)
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
-from app import (_local_remote_id, _log, _os_update_born, _os_update_current,
-    _os_update_note)
+from app import (_log, _os_update_born, _os_update_current, _os_update_note)
 
 
 def _resync_game_port(gs, info):
@@ -476,15 +475,20 @@ def _register_host_stats(app):
 
 
 def _current_os_updates(snapshot):
-    """(id, entry) for each cached check that belongs to the row holding its id NOW, by id.
+    """([(id, entry)] for each cached check that belongs to the row holding its id NOW, the local id).
 
-    One query for the whole snapshot. An entry noted for an earlier host with the same id is not
-    this one's (see _os_update_current) — nor is one for an id no row holds any more.
+    An entry noted for an earlier host with the same id is not this one's (see _os_update_current)
+    — nor is one for an id no row holds any more. ONE query for the whole snapshot, which also
+    answers which of these hosts is the panel's own: that used to be a query of its own
+    (_local_remote_id), so the identity check costs the banner nothing — it is on every page load,
+    and its query budget is asserted.
     """
-    born = dict(db.session.query(RemoteServer.id, RemoteServer.created_at)
-                .filter(RemoteServer.id.in_(list(snapshot))).all())
-    return [(rid, seen) for rid, seen in sorted(snapshot.items())
-            if rid in born and _os_update_current(seen, born[rid])]
+    rows = (db.session.query(RemoteServer.id, RemoteServer.created_at, RemoteServer.is_local)
+            .filter(RemoteServer.id.in_(list(snapshot))).all())
+    born = {rid: created for rid, created, _local in rows}
+    local_id = next((rid for rid, _created, is_local in rows if is_local), None)
+    return ([(rid, seen) for rid, seen in sorted(snapshot.items())
+             if rid in born and _os_update_current(seen, born[rid])], local_id)
 
 
 def _register_os_update_checks(app):
@@ -530,13 +534,13 @@ def _register_os_update_checks(app):
         if not snapshot:
             return jsonify({"hosts": []})     # nothing known yet — don't spend a query finding out
         hosts = []
-        local_id = _local_remote_id()
+        current, local_id = _current_os_updates(snapshot)
         # The accessible set, resolved ONCE. can_access_remote per host is the same answer and
         # costs a query set each time it is asked — fine when the grants were lazily cached on the
         # user, and three queries per host now that they are eagerly loaded. Same check, same
         # result, asked once instead of once per host in the snapshot.
         _allowed = None if current_user.is_superadmin else accessible_remote_ids(current_user)
-        for rid, seen in _current_os_updates(snapshot):
+        for rid, seen in current:
             if not seen.get("count"):
                 continue
             # MANAGE_REMOTES is scoped per host (see get_remote): a user who can manage one remote

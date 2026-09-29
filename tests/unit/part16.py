@@ -33,8 +33,9 @@ from types import SimpleNamespace as NS
 
 from unit.part01 import check, eq  # noqa: F401
 from unit.part05 import _helper
-from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_HOST2, _P9_CFG_PATH, _P9_TRIPPED, _P9Thread,
-                         _p9, _p9_app, _p9_auth, _p9_banlist, _p9_bk, _p9_cfg, _p9_client,
+from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_HOST2, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED,
+                         _P9Thread, _p9, _p9_app, _p9_auth, _p9_banlist, _p9_bk, _p9_cfg,
+                         _p9_client,
                          _p9_core, _p9_drain, _p9_fake_time, _p9_json, _p9_new_server, _p9_notif,
                          _p9_patch, _p9_queue, _p9_restore_all, _p9_sm, _p9_so, _p9_state,
                          _p9_threading, _p9_trip, _p9_ts)
@@ -53,6 +54,7 @@ _LINE_MAX16 = getattr(_sh16, "_CONSOLE_LINE_MAX", 2048)
 _BUDGET16 = getattr(_sh16, "_CONSOLE_BACKLOG_BYTES", 256 * 1024)
 _DETAIL_MAX16 = getattr(_p9_auth, "_AUDIT_DETAIL_MAX", 8192)
 _PW16 = "Str0ng!passw0rd"      # part12's admin password; the delegate below is given it too
+_ANY16 = "0.0.0.0"  # nosec B104 - a stored bind address the route is asked to accept, not a bind
 _XHR16 = {"X-Requested-With": "XMLHttpRequest"}
 _TRIP16_START = len(_P9_TRIPPED)
 _CFG16_SNAPSHOT = _P9_CFG_PATH.read_bytes() if _P9_CFG_PATH.exists() else None
@@ -214,7 +216,8 @@ try:
     _fn(*_a, **_k)                                   # the attacker's worker, start to finish
     check("bootstrap reuse: the host was deleted mid-run and the next host added took its id",
           _bs16["deleted"] == 200 and _bs16["victim"] == _bs16_aid,
-          "delete %r, attacker id %r, victim id %r" % (_bs16["deleted"], _bs16_aid, _bs16["victim"]))
+          "delete %r, attacker id %r, victim id %r"
+          % (_bs16["deleted"], _bs16_aid, _bs16["victim"]))
     _bs16_vid = _bs16["victim"]
     _st = _p9_json(_A16.get("/api/remote/%d/bootstrap-status" % _bs16_vid))
     check("bootstrap reuse: the new host's own job is untouched (still running, no foreign lines)",
@@ -303,7 +306,7 @@ try:
     _bs16_vid = _bs16["victim"]
     check("bootstrap reuse (first contact): the id was taken while the handshake was held",
           _bs16["deleted"] == 200 and _bs16_vid == _bs16_aid, repr((_bs16, _bs16_aid)))
-    check("bootstrap reuse (first contact): the key the old host presented is not pinned on the new",
+    check("bootstrap reuse (first contact): the old host's key is not pinned on the new one",
           _host_field(_bs16_vid, "host_key") in ("", None),
           repr(_host_field(_bs16_vid, "host_key")))
     check("bootstrap reuse (first contact): the worker's later steps still target ITS host",
@@ -471,6 +474,24 @@ try:
           == ["p16-mine2"], repr((_cj, _sj)))
     _drop_host(_s16)
 
+    # The banner links the panel's own host to its dedicated page (superadmins only; everyone else
+    # gets the ordinary manage page). Which host that is now comes out of the same one query that
+    # checks the entries' identity, instead of a query of its own.
+    _p9_patch(_p9_so, "os_update_available", lambda refresh=True: dict(_OSU16))
+    _A16.get("/api/remote/%d/check-updates" % P9_LOCAL)
+    _A16.get("/api/remote/%d/check-updates" % P9_HOST)
+    with _p9.test_request_context("/"):
+        from flask import url_for as _url16
+        _want16 = {P9_LOCAL: _url16("server_management"),
+                   P9_HOST: _url16("remote_manage", remote_id=P9_HOST)}
+    _got16 = {h["id"]: h["url"] for h in _p9_json(_A16.get("/api/os-updates/summary"))["hosts"]
+              if h["id"] in _want16}
+    check("os-update banner: the panel host links to its own page, another host to its manage page",
+          _got16 == _want16, repr((_got16, _want16)))
+    _dl16 = {h["id"]: h["url"] for h in _p9_json(_D16.get("/api/os-updates/summary"))["hosts"]}
+    check("os-update banner: ...and a delegate sees only their own host, on its manage page",
+          _dl16 == {P9_HOST: _want16[P9_HOST]}, repr(_dl16))
+
     # The daily sweep: a host deleted WHILE it runs. It loaded the host list at its start, and
     # pruned against that same list at its end, so the entry it had just written for the deleted
     # host stayed until the monitor's next pass — under an id the next host added may already own.
@@ -589,8 +610,8 @@ try:
     _p9_patch(_p9_so, "port_in_use", lambda port: False)
     _f2b16_installed = [True]
     _p9_patch(_p9_so, "panel_fail2ban_status", lambda: {"installed": _f2b16_installed[0]})
-    _p9_cfg.save_config(dict(_p9_cfg.load_config(), port=5000, bind_host="0.0.0.0"))  # nosec B104
-    _r = _A16.post("/api/panel/change-port", json={"port": 5055, "bind_host": "0.0.0.0"})  # nosec B104
+    _p9_cfg.save_config(dict(_p9_cfg.load_config(), port=5000, bind_host=_ANY16))
+    _r = _A16.post("/api/panel/change-port", json={"port": 5055, "bind_host": _ANY16})
     _cpb = (_audits("panel_change_binding") or [NS(success=None, detail="")])[-1]
     check("change-port: a move whose firewall and fail2ban steps failed is audited as a failure",
           _cpb.success is False and "FIREWALL NOT UPDATED" in _cpb.detail
@@ -602,7 +623,7 @@ try:
           "FIREWALL NOT UPDATED" in _p9_json(_r).get("message", ""), repr(_p9_json(_r)))
     _cp16.update(fw=(True, "ok"), f2b=(True, "jail updated"), restart=(True, "scheduled"))
     _n_restart16 = len(_audits("panel_restart"))
-    _r = _A16.post("/api/panel/change-port", json={"port": 5066, "bind_host": "0.0.0.0"})  # nosec B104
+    _r = _A16.post("/api/panel/change-port", json={"port": 5066, "bind_host": _ANY16})
     _cpb = (_audits("panel_change_binding") or [NS(success=None, detail="")])[-1]
     check("change-port: a move that fully took is a successful row and no restart row (control)",
           _p9_json(_r).get("success") is True and _cpb.success is True
@@ -611,7 +632,7 @@ try:
     # reachable where it was, which is a security side effect that did not follow the move.
     _cp16.update(fw=(True, "ok"))
     _p9_patch(_rs16, "remote_ufw_close_port", lambda *a, **k: (False, "ufw is not reachable"))
-    _r = _A16.post("/api/panel/change-port", json={"port": 5070, "bind_host": "0.0.0.0"})  # nosec B104
+    _r = _A16.post("/api/panel/change-port", json={"port": 5070, "bind_host": _ANY16})
     _cpb = (_audits("panel_change_binding") or [NS(success=None, detail="")])[-1]
     check("change-port: a move that left the OLD port's rule open is audited as a failure",
           _cpb.success is False and "still there" in _cpb.detail, repr((_cpb.success, _cpb.detail)))
@@ -620,7 +641,7 @@ try:
     # is no jail to follow the move — not a failed move.
     _f2b16_installed[0] = False
     _cp16["f2b"] = (False, "fail2ban isn't installed on this host.")
-    _r = _A16.post("/api/panel/change-port", json={"port": 5077, "bind_host": "0.0.0.0"})  # nosec B104
+    _r = _A16.post("/api/panel/change-port", json={"port": 5077, "bind_host": _ANY16})
     _cpb = (_audits("panel_change_binding") or [NS(success=None, detail="")])[-1]
     check("change-port: with no fail2ban installed there is nothing to follow, so it is a success",
           _p9_json(_r).get("success") is True and _cpb.success is True
