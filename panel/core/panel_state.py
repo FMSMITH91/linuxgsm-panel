@@ -10,6 +10,7 @@ _player_counts` safe: importers share the one object. Rebinding one of these (`_
 would silently give the rebinding module a private copy and strand every other reader on the old
 one — clear it with `.clear()` instead.
 """
+import contextlib
 import threading   # noqa: F401  (locks below are constructed from it)
 
 # This module exists ONLY to hold these; every one is read and written by importers
@@ -44,6 +45,7 @@ __all__ = [
     "server_keyed_state",
     "remote_keyed_state",
     "keyed_state_with_locks",
+    "forget_rows",
 ]
 
 
@@ -108,6 +110,36 @@ def keyed_state_with_locks():
     pruner needs to know which of them is serialised.
     """
     return tuple(_server_keyed_state), tuple(_remote_keyed_state)
+
+
+def forget_rows(remote_ids=(), server_ids=()):
+    """Drop these host and game-server ids from every registered map, NOW.
+
+    The monitor's sweep does the same against the live id sets, but a minute later — and the
+    first request of the next row to take a freed id can arrive long before that. Measured end to
+    end: a delegated admin whose own server took a deleted one's id read that server's console
+    backlog (the Steam login it had printed) and had the console poller tail its action log on
+    their host; one whose host took a deleted host's id read that host's pending packages.
+
+    Called from the delete routes, and on every INSERT of a host or game server (models.py), which
+    is what covers state written after the delete by something the delete could not see. An
+    action-output entry dropped here is marked `forgotten` — itself and every run it displaced —
+    because the worker that registered it is still running and will END it later: see
+    _shared._end_action_tail, which must then say nothing into what is now another server's
+    console.
+    """
+    for entries, ids in ((_remote_keyed_state, remote_ids), (_server_keyed_state, server_ids)):
+        ids = [i for i in ids if i is not None]
+        if not ids:
+            continue
+        for mapping, lock in entries:
+            with lock if lock is not None else contextlib.nullcontext():
+                for i in ids:
+                    gone = mapping.pop(i, None)
+                    if mapping is _action_output:
+                        while isinstance(gone, dict):
+                            gone["forgotten"] = True
+                            gone = gone.get("prev")
 
 
 _rwe_lock = threading.Lock()

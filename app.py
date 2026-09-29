@@ -456,19 +456,46 @@ def _is_security_pkg(p):
     return "-security" in ((p or {}).get("suite") or "")
 
 
-def _os_update_note(remote, result):
+def _os_update_born(remote):
+    """(id, created_at, display name) of a host row: what a cached update check belongs to.
+
+    Take it when the row is LOADED, before the check runs. SQLite hands a deleted host's id to the
+    next host added, and a check still in flight when that happens answers for the old machine
+    under an id that is now the new one's — while its first SSH contact COMMITS (the host-key pin),
+    which expires the row object, so created_at and the name read off it afterwards reload from
+    the new host's row and make the old machine's packages look like the new one's.
+    """
+    return remote.id, getattr(remote, "created_at", None), remote.display_name
+
+
+def _os_update_current(seen, created):
+    """Whether a cached check belongs to the row holding its id NOW (created_at is the identity).
+
+    An entry noted for an earlier row with the same id — or one with no identity recorded at all —
+    is not this host's, and reads as "not checked yet": it named the old host and listed its
+    pending packages (patch-level reconnaissance) to whoever could see the new one.
+    """
+    return bool(seen) and "created" in seen and seen["created"] == created
+
+
+def _os_update_note(remote, result, born=None):
     """Record one host's check result. A check that FAILED is dropped rather than stored: apt
     produces no output when it fails, which is exactly what a clean host produces, so recording it
-    would clear a real banner and tell you the host is up to date when nobody ever asked it."""
+    would clear a real banner and tell you the host is up to date when nobody ever asked it.
+
+    `born` is _os_update_born(remote) as the caller took it when it loaded the row; a caller that
+    ran no SSH since loading it may leave it out."""
     if not result or not result.get("ok"):
         return
+    rid, created, name = born if born is not None else _os_update_born(remote)
     pkgs = result.get("packages") or []
-    _os_update_seen[remote.id] = {
-        "name": remote.display_name,
+    _os_update_seen[rid] = {
+        "name": name,
         "count": len(pkgs),
         "security": sum(1 for p in pkgs if _is_security_pkg(p)),
         "packages": pkgs,
         "at": time.time(),
+        "created": created,
     }
 
 

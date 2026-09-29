@@ -993,12 +993,26 @@ check("branch: ...so a leading '_' is refused up front, not by the verb mid-swit
       not _so._valid_branch("_wip") and _so._valid_branch("wip_2"))
 # And _run_verb keeps its "never raises" contract when a verb refuses an argument: callers are
 # written on it and have no handler for VerbError.
-_rv_saved = (_so._helper_present, _so.subprocess.run)
+import io as _rv_io  # noqa: E402
+_rv_saved = (_so._helper_present, _so.subprocess.Popen)
 _rv_ran = []
+
+
+class _RvProc:
+    """A finished verb: printed "ok", exited 0. _run_verb reads it through the capped reader."""
+    pid = -1
+
+    def __init__(self, argv, **kw):
+        _rv_ran.append((argv,))
+        self.stdout, self.stderr, self.stdin = _rv_io.BytesIO(b"ok"), _rv_io.BytesIO(b""), None
+
+    def wait(self, timeout=None):
+        return 0
+
+
 try:
     _so._helper_present = lambda: True
-    _so.subprocess.run = lambda *a, **k: (_rv_ran.append(a), type(
-        "R", (), {"returncode": 0, "stdout": "ok", "stderr": ""})())[1]
+    _so.subprocess.Popen = _RvProc
     try:
         _rv_r = _so._run_verb("panel-self-update", ["-", "-oops"])
     except Exception as _rv_e:  # noqa: BLE001 - the regression IS the raise
@@ -1009,7 +1023,7 @@ try:
           _so._run_verb("panel-self-update", ["-", "main"])[2] == 0 and len(_rv_ran) == 1,
           repr(_rv_ran))
 finally:
-    _so._helper_present, _so.subprocess.run = _rv_saved
+    _so._helper_present, _so.subprocess.Popen = _rv_saved
 
 # ── cleanup: remove key/config files this run created ─────────
 for p in (config.CRED_KEY_FILE, config.SECRET_FILE, config.CONFIG_FILE):

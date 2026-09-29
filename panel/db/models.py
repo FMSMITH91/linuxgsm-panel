@@ -1665,10 +1665,39 @@ def _register_host_sample_pruning():
             _log.debug("game-server sample prune failed for a deleted host", exc_info=True)
 
 
+def _register_new_row_forgetting():
+    """Forget every in-memory entry keyed by a host's or game server's id when a row TAKES it."""
+    from sqlalchemy import event
+
+    # The delete routes forget a row's state (panel_state.forget_rows), and the monitor sweeps the
+    # rest a minute later — but state can be written AFTER the delete by something the delete could
+    # not see: a long action's drain, an update check or the daily sweep still holding the old row.
+    # SQLite then hands the freed id to the next INSERT, and whoever can see the new row reads the
+    # old one's console backlog or pending packages. The INSERT is the one point every creation
+    # path shares (install, import, add a host, the panel host's own row, the setup wizard), and it
+    # comes before anything seeds state for the new id: a job is queued only after the commit that
+    # gives the row its id, so forgetting here never takes the new row's own job with it.
+    #
+    # after_insert rather than after the commit: it is the earliest point the id exists. A rolled
+    # back insert loses nothing either — the id it was given belonged to no live row.
+    def _forget(kind):
+        def _handler(_mapper, _connection, target):
+            try:
+                from panel.core.panel_state import forget_rows
+                forget_rows(**{kind: (target.id,)})
+            except Exception:
+                _log.debug("forgetting a recycled id's state failed", exc_info=True)
+        return _handler
+
+    event.listen(RemoteServer, "after_insert", _forget("remote_ids"))
+    event.listen(GameServer, "after_insert", _forget("server_ids"))
+
+
 _register_sample_pruning()
 _register_invite_revocation()
 _register_audit_detach()
 _register_host_sample_pruning()
+_register_new_row_forgetting()
 
 
 # ── A row LOADED with a name @validates would have refused ─────────────────────────────────────

@@ -49,12 +49,12 @@ def _begin_bootstrap(app, remote_id, opts, actor_id):
         existing = _bootstrap_jobs.get(remote_id)
         if existing and existing.get("status") in ("running", "rebooting"):
             return False, "A bootstrap is already running for this server."
-        _bootstrap_jobs[remote_id] = {
+        job = _bootstrap_jobs[remote_id] = {
             "status": "running", "step": 0, "total": 0,
             "step_name": "Starting…", "log": [], "message": "",
             "started": time.time(), "updated": time.time(),
         }
-    _start_bootstrap_job(app, remote_id, opts, actor_id)
+    _start_bootstrap_job(app, remote_id, job, opts, actor_id)
     return True, "Bootstrap started."
 
 
@@ -656,17 +656,37 @@ def _run_due_restarts(app):
                 app.logger.debug("pending restart/stop of %s failed", gs.name, exc_info=True)
 
 
-def _start_bootstrap_job(app, remote_id, opts, actor_id):
+def _start_bootstrap_job(app, remote_id, job, opts, actor_id):
     """Run remote_bootstrap_vps in a background (green) thread.
 
-    It streams progress into the _bootstrap_jobs registry for the status endpoint.
+    It streams progress into `job`, the entry _begin_bootstrap registered for the status endpoint.
+
+    THAT entry, not whichever one holds remote_id when a step reports. remote_id is a rowid, and
+    SQLite hands a deleted host's id to the next host added — while this worker, on a machine
+    whose owner can hold any step for as long as they like, is still running. Looked up by id, a
+    delegated admin's deleted host wrote its own output into the next host's job (a superadmin's,
+    on a host outside the delegate's reach), flipped it to "done/Complete" while that host's real
+    bootstrap was still running — which then let a second one start beside it — stamped that
+    host's last_seen, and wrote a success audit row naming it.
+
+    The row goes the same way. The bootstrap is handed a DETACHED copy of it: a session commit
+    expires every object it holds, and the first SSH contact with a host commits (the host-key pin,
+    _core._persist_host_key), after which the next attribute read reloads the row BY ID — from the
+    new host's row, if its id was taken meanwhile. The remaining root steps were then aimed at the
+    new host with its credentials, and the pin had been written onto the new row too. Detached, the
+    bootstrap keeps the host it was started for, and what it learned is written back only if the
+    row that holds the id now is still the one that was loaded (created_at is its identity: a
+    superadmin editing the host mid-bootstrap is legitimate, so the address must not be).
     """
     _app = app
 
+    def _mine():
+        """Whether `job` is still the registered job for remote_id. Call holding the lock."""
+        return _bootstrap_jobs.get(remote_id) is job
+
     def _progress(step, total, name, status):
         with _bootstrap_lock:
-            job = _bootstrap_jobs.get(remote_id)
-            if job is None:
+            if not _mine():
                 return
             job["step"] = step
             job["total"] = total
@@ -683,29 +703,54 @@ def _start_bootstrap_job(app, remote_id, opts, actor_id):
                 remote = db.session.get(RemoteServer, remote_id)
                 if not remote:
                     raise RuntimeError("Remote no longer exists")
-                success, msg, _ = remote_bootstrap_vps(remote, progress=_progress, **opts)
-                if success:
-                    remote.is_online = True
-                    remote.last_seen = utcnow()
-                    db.session.commit()
-                log_action(None, "remote_vps_bootstrap", target=remote.name, detail=msg, success=success)
+                name, created, pinned = remote.name, remote.created_at, remote.host_key
+                db.session.expunge(remote)
+                success = False
+                try:
+                    success, msg, _ = remote_bootstrap_vps(remote, progress=_progress, **opts)
+                finally:
+                    # However the run ended: a pin first contact learned was kept even when a
+                    # later step raised, back when first contact committed it itself.
+                    _settle_bootstrapped_row(remote_id, created, pinned, remote.host_key, success)
+                log_action(None, "remote_vps_bootstrap", target=name, detail=msg, success=success)
                 with _bootstrap_lock:
-                    job = _bootstrap_jobs.get(remote_id)
-                    if job is not None:
+                    if _mine():
                         job["status"] = "done" if success else "failed"
                         job["step_name"] = "Complete" if success else "Failed"
                         job["message"] = msg
                         job["updated"] = time.time()
         except Exception as e:
             with _bootstrap_lock:
-                job = _bootstrap_jobs.get(remote_id)
-                if job is not None:
+                if _mine():
                     job["status"] = "failed"
                     job["message"] = str(e)
                     job["log"].append(f"ERROR: {e}")
                     job["updated"] = time.time()
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+def _settle_bootstrapped_row(remote_id, created, pinned, learned, success):
+    """Write a finished bootstrap's result onto its host's row, if that row is still there.
+
+    `created` is the loaded row's created_at, which is what tells "the same host" from "a host
+    that took its id". On success the host is marked online and seen now. `learned` is the host
+    key the bootstrap's own connections pinned in memory (on the detached copy), written only when
+    the row has no pin yet — first contact, which is the only time the in-session write it replaces
+    would have happened; a pin the row already holds, or one that cannot be decrypted, is never
+    replaced here.
+    """
+    from panel.db.models import UnreadableSecret
+    row = db.session.get(RemoteServer, remote_id)
+    if row is None or row.created_at != created:
+        return
+    if success:
+        row.is_online = True
+        row.last_seen = utcnow()
+    if (learned and learned != pinned and not row.host_key
+            and not isinstance(row.host_key, UnreadableSecret)):
+        row.host_key = learned
+    db.session.commit()
 
 
 def _maybe_cache_commands(app, server_id):
@@ -861,6 +906,26 @@ def _action_log_path(short_name, action):
 # game is a few hundred lines of SteamCMD spool; this holds one comfortably without becoming a
 # place anyone would mistake for the log.
 _CONSOLE_BACKLOG_MAX = 600
+# ...and how much of it, in characters, since a line count is no bound on its own: a drain pushes
+# up to _ACTION_TAIL_CHUNK bytes, and 64KB with no newline in it is ONE line, so 600 of them held
+# ~39MB per server and /api/console sent all of it on every poll. A line is cut at
+# _CONSOLE_LINE_MAX (SteamCMD and LinuxGSM lines are a fraction of that), and the oldest lines go
+# once the whole backlog passes _CONSOLE_BACKLOG_BYTES — 600 ordinary lines are ~90KB, so the
+# budget only ever bites on output nobody could read anyway. Only the REPLAY is bounded: the live
+# socket push still carries what the command printed.
+_CONSOLE_LINE_MAX = 2048
+_CONSOLE_BACKLOG_BYTES = 256 * 1024
+# A colour escape the cut may land inside: the browser would print its tail as text.
+_PARTIAL_SGR_RE = re.compile(r"\x1b(?:\[[0-9;]*)?\Z")
+
+
+def _backlog_line(ln):
+    """`ln` as the backlog keeps it: whole, or cut at _CONSOLE_LINE_MAX and marked with '…'."""
+    if len(ln) <= _CONSOLE_LINE_MAX:
+        return ln
+    cut = _PARTIAL_SGR_RE.sub("", ln[:_CONSOLE_LINE_MAX])
+    # render_colour leaves SGR open across a line; close it so the marker is not painted too.
+    return cut + ("\x1b[0m" if "\x1b[" in cut else "") + "…"
 
 
 def _console_push(app, server_id, text, ts=None):
@@ -886,9 +951,16 @@ def _console_push(app, server_id, text, ts=None):
     ts = float(ts if ts is not None else time.time())
     try:
         buf = _console_backlog.setdefault(server_id, [])
-        buf.extend({"t": ts, "line": ln} for ln in str(text).split("\n") if ln.strip())
+        buf.extend({"t": ts, "line": _backlog_line(ln)}
+                   for ln in str(text).split("\n") if ln.strip())
         if len(buf) > _CONSOLE_BACKLOG_MAX:
             del buf[:len(buf) - _CONSOLE_BACKLOG_MAX]
+        size = sum(len(e["line"]) for e in buf)
+        drop = 0
+        while size > _CONSOLE_BACKLOG_BYTES and drop < len(buf) - 1:
+            size -= len(buf[drop]["line"])
+            drop += 1
+        del buf[:drop]
     except Exception:
         _log.debug("console backlog append failed for server %s", server_id, exc_info=True)
     try:
@@ -977,7 +1049,9 @@ def _begin_action_tail(app, server_id, action, path, user):
 def _reinstate_displaced(server_id, cur):
     """Tail again the newest run `cur` displaced that is still going, or stop tailing the server."""
     nxt = cur.get("prev")
-    while nxt is not None and nxt.get("ended"):
+    # A forgotten run belonged to a server that is gone (panel_state.forget_rows): its id may be
+    # another server's now, so it is never tailed again.
+    while nxt is not None and (nxt.get("ended") or nxt.get("forgotten")):
         nxt = nxt.get("prev")
     if nxt is not None:
         _action_output[server_id] = nxt
@@ -1025,6 +1099,12 @@ def _end_action_tail(app, server_id, remote, action, rc):
     mine = (getattr(_action_tail_local, "tokens", None) or {}).pop((server_id, action), None)
     if mine is not None:
         mine["ended"] = True
+        if mine.get("forgotten"):
+            # The server this run was registered for was deleted while it ran, and forget_rows
+            # dropped the registration. The id may already be ANOTHER server's, so there is nothing
+            # of ours to drain and no console of ours to announce the end in: "[panel] update
+            # finished" pushed now lands in the new server's backlog and its viewers' live console.
+            return
     cur = _action_output.get(server_id)
     own = cur is not None and (cur is mine if mine is not None else cur.get("action") == action)
     if own:

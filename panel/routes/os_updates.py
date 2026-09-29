@@ -3,7 +3,7 @@
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
 from panel.core.panel_state import (_os_update_seen, _os_update_state)
-from panel.db.models import (RemoteServer)
+from panel.db.models import (RemoteServer, db)
 from panel.ops import (system_ops as so)
 from panel.services import (notifications)
 from panel.services.certs import (_maybe_alert_cert_expiring)
@@ -11,7 +11,7 @@ from panel.services.monitoring import (_MONITOR_HOST_WORKERS)
 import concurrent.futures
 import time
 from panel.core.clock import utcnow
-from app import (_is_security_pkg, _log, _os_update_note, _os_updates_for)
+from app import (_is_security_pkg, _log, _os_update_born, _os_update_note, _os_updates_for)
 
 _OS_UPDATE_EVERY = 24 * 3600
 # When this process started, as the stored created_at columns are (naive UTC). A host that existed
@@ -62,6 +62,8 @@ def register(app, supervise):
                 _os_update_state["last_run"] = now
                 if not remotes:
                     return
+                # Each row's identity as LOADED, before any host is asked: see _os_update_born.
+                born = {r.id: _os_update_born(r) for r in remotes}
                 # `apt update` is a network fetch with a 60s timeout, on top of a reachability
                 # probe; serially that is minutes of a shared ticker thread. Probe concurrently and
                 # decide serially — as _monitor_pass does — so the alert logic stays single-threaded.
@@ -70,8 +72,8 @@ def register(app, supervise):
                     got = checks.get(remote.id)
                     if got is None:
                         continue          # couldn't tell — say nothing rather than guess
-                    _record_and_announce(remote, got, seeding)
-                _forget_gone_hosts(remotes)
+                    _record_and_announce(remote, got, seeding, born.get(remote.id))
+                _forget_gone_hosts()
         except Exception:
             _log.debug("os-update sweep failed", exc_info=True)
 
@@ -126,11 +128,11 @@ def _check_hosts_for_updates(remotes):
     return checks
 
 
-def _record_and_announce(remote, got, seeding):
+def _record_and_announce(remote, got, seeding, born=None):
     """Record one host's update check, and announce what this process saw newly appear."""
     # The banner and the OS Updates card read this: the sweep is the only thing that
     # asks every host, and its answer is what they show until someone forces a check.
-    _os_update_note(remote, got)
+    _os_update_note(remote, got, born)
     count, sec, names = _update_summary(got.get("packages") or [])
     first_read = remote.id not in _os_update_state["hosts"]
     had_count, had_sec = _os_update_state["hosts"].get(remote.id) or (0, 0)
@@ -173,11 +175,16 @@ def _announce_os_updates(remote, names, count, sec):
            ", …" if count > len(names) else ""))
 
 
-def _forget_gone_hosts(remotes):
+def _forget_gone_hosts():
     """Drop the alert state of hosts that no longer exist."""
     # Forget hosts that no longer exist: SQLite hands a deleted remote's row id to the
     # next one added, and inheriting its count would swallow the new host's first batch.
-    ids = {r.id for r in remotes}
+    #
+    # The ids that exist NOW, not the list this sweep loaded at its start. The checks take up to a
+    # minute a host, and a host deleted meanwhile had its entry written by the loop above after
+    # the delete had already forgotten it; pruning against the start-of-sweep list kept it — under
+    # an id the next host added may already own, whose viewers were then shown the deleted host.
+    ids = {row[0] for row in db.session.query(RemoteServer.id).all()}
     for gone in [i for i in _os_update_state["hosts"] if i not in ids]:
         del _os_update_state["hosts"][gone]
     for gone in [i for i in _os_update_seen.copy() if i not in ids]:

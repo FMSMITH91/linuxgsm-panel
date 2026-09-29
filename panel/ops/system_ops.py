@@ -208,8 +208,8 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
         elif hasattr(os, "geteuid") and os.geteuid() == 0:
             argv = _priv.tool_argv(verb, args)
         else:
-            return _run(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
-                        timeout=timeout, sudo=True)
+            return _run_verb_shell(_priv.remote_command(verb, args, merge_stderr=merge_stderr),
+                                   timeout=timeout, sudo=True)
     except _priv.VerbError:
         _log.warning("privileged verb %s refused its arguments", verb)
         return "", "invalid argument", -1
@@ -230,11 +230,12 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
         # stdin: the verb's own text when it has one, else DEVNULL. NOT the default of
         # inheriting -- see _POPEN_KW in ssh_manager/_core.py for what that cost.
         _in = _priv.stdin_for(verb)
-        _stdin_kw = {"input": _in} if _in is not None else {"stdin": subprocess.DEVNULL}
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit,python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-        r = subprocess.run(argv, shell=False,  # nosec B603 - argv from privileged.py's fixed table
-                           capture_output=True, text=True,
-                           timeout=timeout, **_stdin_kw)
+        p = subprocess.Popen(argv, shell=False,  # nosec B603 - argv from privileged.py's fixed table
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             stdin=(subprocess.PIPE if _in is not None else subprocess.DEVNULL),
+                             start_new_session=True)
+        out, err, rc = _collect_verb_output(p, argv, timeout, _in)
     except subprocess.TimeoutExpired:
         return "", "Command timed out", -1
     except FileNotFoundError:
@@ -242,12 +243,70 @@ def _run_verb(verb, args=(), timeout=30, merge_stderr=True):
     except Exception:
         _log.debug("privileged verb failed", exc_info=True)
         return "", "command execution error", -1
-    out, err = (r.stdout or "").strip(), (r.stderr or "").strip()
+    return _verb_result(out, err, rc, merge_stderr)
+
+
+def _collect_verb_output(p, cmd, timeout, stdin_text=None):
+    """A started verb's (stdout, stderr, rc) as text, KEEPING at most the transports' ceiling.
+
+    subprocess.run(capture_output=True) — what both branches of _run_verb used — buffers every
+    byte a command writes until it exits. On the panel host that is the one process running every
+    host's management, and a verb's output is not always the panel's to size: f2b-log-lines prints
+    the fail2ban log, which an unauthenticated attacker grows (a million lines, 124 MB, took this
+    process from 12 MB to 656 MB). Remotes were already capped at ssh_manager._core's
+    _MAX_OUTPUT_BYTES; this is the same reader and the same ceiling, so no caller can depend on
+    more here than it gets from a remote. Raises TimeoutExpired, like subprocess.run, when the
+    verb outlives `timeout` (it has been killed, its whole process group with it).
+    """
+    from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
+    res = _smc._collect_capped(p, timeout, kill=lambda: _smc._kill_process_tree(p),
+                               threads=threading,
+                               stdin_bytes=(stdin_text.encode("utf-8")
+                                            if stdin_text is not None else None))
+    if res is None:
+        raise subprocess.TimeoutExpired(cmd, timeout)
+    out, err, rc, truncated = res
+    if truncated:
+        _log.warning("privileged verb output exceeded %d bytes and was truncated",
+                     _smc._MAX_OUTPUT_BYTES)
+    return _smc._decode_output(out), _smc._decode_output(err), rc
+
+
+def _verb_result(out, err, rc, merge_stderr):
+    """_run_verb's answer from a finished verb: stripped, with stderr merged in unless asked not."""
+    out, err = (out or "").strip(), (err or "").strip()
     if merge_stderr:
         # The shell form ended in `2>&1` and callers read tool errors out of stdout; merging keeps
         # a message on the stream its caller already reads.
-        return ("\n".join(x for x in (out, err) if x)).strip(), "", r.returncode
-    return out, err, r.returncode
+        return ("\n".join(x for x in (out, err) if x)).strip(), "", rc
+    return out, err, rc
+
+
+def _run_verb_shell(cmd, timeout=30, sudo=False):
+    """_run_verb's pre-helper fallback: a composed shell form, with the same ceiling as the rest.
+
+    It used to go through _run, i.e. subprocess.run(shell=True, capture_output=True), which keeps
+    everything — and this branch is the one a panel host whose helper predates a fix still takes,
+    so it needs the ceiling most. Merging stderr is the command's own business here (the shell
+    form ends in `2>&1` when asked to).
+    """
+    # os.geteuid() is Unix-only; guard it so callers don't crash off-Linux (tests).
+    if sudo and hasattr(os, "geteuid") and os.geteuid() != 0:
+        cmd = f"sudo {cmd}"
+    try:
+        # nosemgrep: python.lang.security.audit.subprocess-shell-true.subprocess-shell-true -- the pre-helper verb form, built by privileged.py from its fixed table
+        p = subprocess.Popen(cmd, shell=True,  # nosec B602 - privileged.py's own shell form
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+        out, err, rc = _collect_verb_output(p, cmd, timeout)
+        return out.strip(), err.strip(), rc
+    except subprocess.TimeoutExpired:
+        return "", "Command timed out", -1
+    except FileNotFoundError:
+        return "", "Command not found", -1
+    except Exception:
+        _log.debug("privileged verb (shell form) failed", exc_info=True)
+        return "", "command execution error", -1
 
 
 def _run(cmd, timeout=30, sudo=False, text=True):
@@ -2659,7 +2718,7 @@ def fail2ban_top_ips(limit=20, days=7):
     # and the limit interpolated into it. The verb reads the rotated logs and returns the lines;
     # everything the awk did — filter by date, extract Ban/Found, tally per IP — is Python now.
     out, _, rc = _run_verb("f2b-log-lines", [cutoff], timeout=25, merge_stderr=False)
-    if rc != 0:
+    if rc != 0 or _f2b_read_cut(out, "top-ips"):
         _log.debug("top-ips: the fail2ban log read failed (rc=%s)", rc)
         return None
     out = _tally_f2b_lines(out, limit)
@@ -2697,10 +2756,29 @@ def fail2ban_attempt_counts(days=7):
     100 as a wave of new ones passed it and was RELEASED while still over the threshold. The
     threshold is a count, so the reconcile needs every count."""
     out, _, rc = _run_verb("f2b-log-lines", [_f2b_cutoff(days)], timeout=25, merge_stderr=False)
-    if rc != 0:
+    if rc != 0 or _f2b_read_cut(out, "attempt counts"):
         _log.debug("attempt counts: the fail2ban log read failed (rc=%s)", rc)
         return None
     return _tally_f2b_events(out)[0]
+
+
+def _f2b_read_cut(out, what):
+    """Whether a fail2ban log read came back AT the output ceiling, i.e. cut short.
+
+    The helper refuses to go past its own ceiling (rc 3), but the pre-helper shell form has no such
+    exit code: _run_verb just stops keeping bytes at _MAX_OUTPUT_BYTES, and the bytes it keeps are
+    the FIRST ones — the oldest days. A partial tally undercounts exactly the recent offenders, and
+    the auto-block reconcile RELEASES any block that falls under the threshold, so a cut read is
+    unread, never smaller: the same rule remote_fail2ban_attempt_counts applies to its transport.
+    Under a flood the panel host's auto-block therefore holds still (no new blocks, no releases)
+    — fail2ban's own bans are unaffected.
+    """
+    from panel.ops.ssh_manager import _core as _smc     # lazy: ssh_manager imports this module
+    if len((out or "").encode("utf-8", "replace")) < _smc._MAX_OUTPUT_BYTES - 65536:
+        return False
+    _log.warning("%s: the fail2ban log filled the output ceiling; treated as unread so no block "
+                 "is released on a partial tally", what)
+    return True
 
 
 def fail2ban_unban(jail, ip):

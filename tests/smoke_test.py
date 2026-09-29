@@ -5757,10 +5757,12 @@ try:
             try:
                 with app.app_context():
                     for _r in RemoteServer.query.all():
+                        # "created" ties an entry to the row holding its id now; one without
+                        # it reads as not-checked-yet, and would skip every host below.
                         _appmod._os_update_seen[_r.id] = {
                             "name": _r.name, "count": 3, "security": 1,
                             "packages": [{"name": "openssl", "suite": "noble-security"}],
-                            "at": 1.0}
+                            "at": 1.0, "created": _r.created_at}
                 _sum_q, _sum_code = _qcount("/api/os-updates/summary")
                 check("perf: the OS-updates banner endpoint renders", _sum_code == 200,
                       "got %d" % _sum_code)

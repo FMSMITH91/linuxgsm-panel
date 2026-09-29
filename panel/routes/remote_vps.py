@@ -6,7 +6,7 @@ from flask import (jsonify, render_template, url_for)
 from flask_login import (current_user, login_required)
 from panel.core.config import (load_config)
 from panel.core.panel_state import (_os_update_seen, _reboot_when_empty, _rwe_lock)
-from panel.db.models import (GameServer, db)
+from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (system_ops as so)
 from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_game_ports,
     host_specs, is_player_queryable as sm_is_player_queryable, player_count as sm_player_count,
@@ -25,7 +25,8 @@ from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
     get_remote, has_permission, log_action, permission_required, server_access_required)
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
-from app import (_local_remote_id, _log, _os_update_note)
+from app import (_local_remote_id, _log, _os_update_born, _os_update_current,
+    _os_update_note)
 
 
 def _resync_game_port(gs, info):
@@ -486,6 +487,7 @@ def _register_os_update_checks(app):
         does too.
         """
         remote = get_remote(remote_id)
+        born = _os_update_born(remote)   # before any SSH — see _os_update_born
         try:
             result = (so.os_update_available(refresh=True) if remote.is_local
                       else _sm.remote_os_check_updates(remote))
@@ -496,7 +498,7 @@ def _register_os_update_checks(app):
         # "ok" travels to the UI: a check that failed (apt locked by unattended-upgrades, host mid
         # reboot) returns an empty list, and without this the card would report "System is up to
         # date" for a host nobody managed to ask.
-        _os_update_note(remote, result)
+        _os_update_note(remote, result, born)
         return jsonify({"ok": bool(result.get("ok")), "count": result["count"],
                         "packages": result["packages"]})
 
@@ -522,8 +524,12 @@ def _register_os_update_checks(app):
         # user, and three queries per host now that they are eagerly loaded. Same check, same
         # result, asked once instead of once per host in the snapshot.
         _allowed = None if current_user.is_superadmin else accessible_remote_ids(current_user)
+        # Which row holds each id NOW, in one query: an entry noted for an earlier host with the
+        # same id is not this one's (see _os_update_current).
+        _born = dict(db.session.query(RemoteServer.id, RemoteServer.created_at)
+                     .filter(RemoteServer.id.in_(list(snapshot))).all())
         for rid, seen in sorted(snapshot.items()):
-            if not seen.get("count"):
+            if not seen.get("count") or rid not in _born or not _os_update_current(seen, _born[rid]):
                 continue
             # MANAGE_REMOTES is scoped per host (see get_remote): a user who can manage one remote
             # must not learn the name or patch state of another's from this summary.
@@ -549,7 +555,7 @@ def _register_os_update_checks(app):
         """
         remote = get_remote(remote_id)
         seen = _os_update_seen.get(remote.id)
-        if not seen:
+        if not _os_update_current(seen, remote.created_at):
             return jsonify({"known": False})
         return jsonify({"known": True, "count": seen["count"], "security": seen["security"],
                         "at": seen["at"], "packages": seen["packages"]})
