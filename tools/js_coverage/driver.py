@@ -269,6 +269,8 @@ class Driver:
         try:
             self.cdp.evaluate(self._helpers, timeout=10, await_promise=False)
         except CDPError:
+            # Not reported here: js(), the only caller, retries its expression straight after, and
+            # a reinstall that failed makes that retry fail too, which js() logs ("! js: ...").
             pass
 
     def login(self):
