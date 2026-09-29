@@ -1612,8 +1612,11 @@ try:
           "queued=%d said=%r" % (len(_ub_hold.held), _ub_said))
     # Past the allowance, NO check at all. The fallback was panel_update_status(force=False), which
     # computes afresh once the badge's five-minute cache is stale: about ten more checks an hour.
-    # Run inline again (the coalescing checks above leave the workers holding commands).
+    # Run inline again, and count checks again: the checks above leave the workers holding
+    # commands and the status check raising, and a raising check reads as "try again" too, which
+    # would pass these against the old code.
     _dcm._DC_WORKER = _tgm._TG_WORKER = _UbInline()
+    _dcm.so._compute_update_status = _ub_compute
     def _ub_spent(age, status):
         _ub_reset(status)
         for _ in range(_ub_allow):
