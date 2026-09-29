@@ -727,7 +727,13 @@ def _dfpath(s):
 
 
 def _package(s):
-    if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]{0,60}(?::[a-z0-9]{1,10})?", str(s)):
+    """A Debian package name, optionally with an architecture qualifier (libc6:i386).
+
+    It must END alphanumeric. `apt-get install` reads a trailing `-` as "remove this one" and a
+    trailing `+` as "install it", so `openssh-server-` passed here and REMOVED openssh-server, as
+    root, from an install verb. Same rule as the helper's v_package and hosts.APT_PKG_RE.
+    """
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9+.-]{0,59}[a-z0-9])?(?::[a-z0-9]{1,10})?", str(s)):
         raise VerbError("not a package name")
     return str(s)
 

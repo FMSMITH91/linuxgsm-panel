@@ -549,6 +549,11 @@ def remote_ufw_delete_rule(server, num, force=False, expect_key=None):
     return False, err or out or "Failed to delete rule"
 
 
+def _game_rule_comment(name, default="Game"):
+    """The UFW comment a game server's rules carry: its name, cut to what ufw's comment accepts."""
+    return re.sub(r"[^A-Za-z0-9 _.-]", "", name or default)[:60] or default
+
+
 def remote_ufw_allow_game_port(server, port, name="Game"):
     """Open the game server port for BOTH TCP and UDP in ONE UFW rule, tagging the
     rule with the game server's name (its LinuxGSM username) so the firewall list
@@ -561,22 +566,65 @@ def remote_ufw_allow_game_port(server, port, name="Game"):
         port = _ufw_port_int(port)
     except (TypeError, ValueError):
         return 0, "Invalid port"
-    comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "Game")[:60] or "Game"
+    comment = _game_rule_comment(name)
     out, err, rc = _core.run_privileged(server, "ufw-allow-port", [str(port), comment], timeout=15)
     ok = rc == 0
     return (1 if ok else 0), f"Port {port}: {'opened (TCP+UDP)' if ok else (err or out or 'failed')}"
 
 
+def _is_public_port_rule(g, port, protos=("BOTH",)):
+    """True when group `g` is an inbound rule from anywhere, on no interface, for exactly `port`
+    with one of `protos` ("BOTH" is a bare rule — what `ufw allow <port>` writes)."""
+    return (not g.get("is_iface") and g.get("direction", "IN") == "IN"
+            and g.get("scope") == "Any address" and g.get("proto_label") in protos
+            and str(g.get("port_num", "")).strip() == str(port))
+
+
+def _rules_an_allow_would_replace(groups, port, comment):
+    """The rules `ufw allow <port> comment <comment>` would overwrite: every bare public rule on
+    exactly `port` except an ALLOW already carrying that comment."""
+    return [g for g in groups if _is_public_port_rule(g, port)
+            and not (g.get("action") == "ALLOW" and g.get("comment") == comment)]
+
+
 def remote_ufw_allow_game_ports(server, ports, name="Game"):
     """Open a LIST of ports (each bare rule = TCP+UDP), all tagged with the game
     server's name. Idempotent — re-opening an existing port is a no-op. Used to open
-    every port a game actually needs (game/query/rcon/etc.), not just the main one."""
-    opened = []
+    every port a game actually needs (game/query/rcon/etc.), not just the main one.
+
+    A port some OTHER rule already governs is left to that rule. `ufw allow <port> comment <name>`
+    does not add a rule beside one that differs from it only in comment or action: it REPLACES it
+    (ufw's set_rule swaps any match short of exact on a non-delete). So opening a port another
+    server's rule held re-tagged that rule as THIS server's, and this server's uninstall
+    (remote_ufw_close_by_name) then deleted it; an operator's `deny 3306` became an allow. The
+    ports come from LinuxGSM's `details` run as the game account, which reads a config that account
+    can write — so which rule got taken over was the account's choice. Such a port is counted as
+    open when every rule on it lets traffic in, and as not opened when one of them is a deny.
+
+    A firewall that cannot be read is opened as it always was: nothing an attacker does makes this
+    read fail, and holding back every port of a freshly installed server on a busy host (a Tailscale
+    host after a long SteamCMD run times out routinely) is the worse failure."""
+    comment = _game_rule_comment(name)
+    try:
+        status = firewall.remote_ufw_status(server)
+    except Exception:
+        _core._log.debug("game ports: the firewall could not be read before opening", exc_info=True)
+        status = None
+    groups = (status.get("groups", []) if status and status.get("installed")
+              and not status.get("unreachable") else [])
+    opened, held = [], []
     for p in sorted({int(x) for x in ports if x}):
+        others = _rules_an_allow_would_replace(groups, p, comment)
+        if others:
+            held.append(p)
+            if all(g.get("action") in ("ALLOW", "LIMIT") for g in others):
+                opened.append(p)
+            continue
         cnt, _ = remote_ufw_allow_game_port(server, p, name)
         if cnt:
             opened.append(p)
-    return opened, f"opened {len(opened)} port(s): {', '.join(map(str, opened)) or 'none'}"
+    return opened, (f"opened {len(opened)} port(s): {', '.join(map(str, opened)) or 'none'}"
+                    + (f"; left to an existing rule: {', '.join(map(str, held))}" if held else ""))
 
 
 def remote_ufw_close_by_name(server, name):
@@ -610,29 +658,130 @@ def remote_ufw_close_by_name(server, name):
     return deleted, f"{deleted} rule(s) removed for {comment}"
 
 
-def remote_ufw_close_game_port(server, port):
-    """Remove the game server port rule (used on uninstall). Handles the new
-    single bare rule plus any legacy proto-specific rules on that port.
+def remote_ufw_tagged_ports(server, name):
+    """The ports an inbound public ALLOW tagged with `name` already opens, as a set of ints.
+
+    Empty when there is no name or the firewall cannot be read — so a caller using this to excuse
+    something is excused nothing it could not see.
+    """
+    comment = _game_rule_comment(name, "")
+    if not comment:
+        return set()
+    try:
+        status = firewall.remote_ufw_status(server)
+    except Exception:
+        _core._log.debug("tagged ports: the firewall could not be read", exc_info=True)
+        return set()
+    ports = set()
+    for g in status.get("groups", []):
+        pn = str(g.get("port_num", "")).strip()
+        if (g.get("comment") == comment and g.get("action") == "ALLOW" and pn.isdecimal()
+                and _is_public_port_rule(g, pn, ("BOTH", "TCP", "UDP"))):
+            ports.add(int(pn))
+    return ports
+
+
+def protected_host_ports(server):
+    """The ports on `server` no game server may open, adopt or clean up, as a set of ints.
+
+    SSH — 22, the port the panel connects on, and every port sshd's effective config names — and,
+    on the panel's own host, the panel's web port. A game server's ports are read from LinuxGSM's
+    `details`, run AS THE GAME ACCOUNT over a config that account (and anyone with MANAGE_SERVERS,
+    through the file manager) can write, so "Query 22" is a line they can make the panel act on as
+    root. An `sshd -T` that cannot be read leaves the first two: a failed read narrows this set,
+    never empties it.
+    """
+    ports = set(firewall._ssh_ports(server))
+    try:
+        ports.update(int(p) for p in _sshd_current_ports(server))
+    except Exception:
+        _core._log.debug("protected ports: sshd's effective config could not be read",
+                         exc_info=True)
+    try:
+        web = firewall._panel_web_port(server)
+    except Exception:
+        _core._log.debug("protected ports: the panel's web port could not be read", exc_info=True)
+        web = None
+    if web:
+        ports.add(int(web))
+    return ports
+
+
+def _is_game_rule_for(g, port, comment, legacy):
+    """Is group `g` a rule remote_ufw_close_game_port may take as the server's on `port`?
+
+    An inbound public ALLOW on exactly that port (bare, /tcp or /udp) — never a LIMIT or DENY —
+    tagged `comment`, or, with `legacy`, carrying no comment at all."""
+    return (_is_public_port_rule(g, port, ("BOTH", "TCP", "UDP")) and g.get("action") == "ALLOW"
+            and ((bool(comment) and g.get("comment") == comment)
+                 or (legacy and not g.get("comment"))))
+
+
+def remote_ufw_close_game_port(server, port, name="", legacy=False):
+    """Remove THIS server's rules on `port`. -> (rules removed, message).
+
+    Which rules are this server's: an inbound public ALLOW on exactly `port` (bare, /tcp or /udp)
+    tagged with `name`; and with legacy=True, one with NO comment, which is what a panel that did
+    not tag its rules yet left behind. Nothing else, ever.
+
+    It used to delete by SPEC — `ufw delete allow <port>`, then the same `proto tcp` and `proto udp`
+    — with no comment. ufw removes a rule matching all but its comment when the delete's comment is
+    empty, so those three took every ALLOW on the port whoever it belonged to: another server's, a
+    rule the operator opened from the Firewall page, or an operator's `allow 22/tcp comment ssh`,
+    a lockout — and none of it went through remote_ufw_delete_rule's guard. On a fresh install the
+    adoption step ran it on the port the panel had allocated, which cannot hold a rule of this
+    server's yet (the ports are opened after it).
+
+    So every delete is now by number against a fresh read, names the rule it means (expect_key),
+    and is never forced: the guard that refuses to delete the last way into the host still stands.
+    An untagged rule is a guess at ownership, so legacy=True is refused on a port SSH or the panel
+    is on, and never takes a LIMIT or a DENY. The CALLER must also know that no other game server
+    on the host holds the port — that is a database fact this module does not have.
 
     NOT port+1. That sweep deleted `port+1/tcp` and `/udp` with no idea whose they were — commonly
     the NEXT server's game port, or a rule the operator opened from the Firewall page — so
     uninstalling the server on 27015 closed 27016/udp and its neighbour stopped taking players,
     with nothing in the uninstall output saying so. The server's tagged rules, extra ports
     included, are removed by remote_ufw_close_by_name."""
-    n = 0
-    ok, _ = remote_ufw_close_port(server, port)  # new-style bare rule (both protocols)
-    n += 1 if ok else 0
-    for proto in ("tcp", "udp"):  # legacy cleanup: old proto-specific rules on this port
-        ok, _ = remote_ufw_close_port(server, port, proto)
-        n += 1 if ok else 0
-    return n, f"Port {port}: {n} rule(s) removed"
+    try:
+        port = _ufw_port_int(port)
+    except (TypeError, ValueError):
+        return 0, "Invalid port"
+    comment = _game_rule_comment(name, "")
+    if legacy and port in protected_host_ports(server):
+        legacy = False
+    if not comment and not legacy:
+        return 0, f"Port {port}: no rule here is known to be this server's"
+    deleted, refused = 0, set()
+    for _ in range(64):            # bounded: a rule that will not go is skipped, never retried
+        status = firewall.remote_ufw_status(server)
+        if status.get("unreachable") or not status.get("installed"):
+            break
+        mine = [(n, g["key"]) for g in status.get("groups", [])
+                if g.get("key") not in refused and _is_game_rule_for(g, port, comment, legacy)
+                for n in g.get("nums", [])]
+        if not mine:
+            break
+        n, key = max(mine)
+        if remote_ufw_delete_rule(server, n, expect_key=key)[0]:
+            deleted += 1
+        else:
+            refused.add(key)
+    return deleted, f"Port {port}: {deleted} rule(s) removed"
 
 
 # LinuxGSM dependencies common to most game servers on Debian/Ubuntu. The game
 # user has no sudo, so the panel installs these as root before/around auto-install.
 # A Debian package name, optionally with an architecture qualifier (libstdc++5:i386). Debian
 # policy: lowercase alphanumeric plus + - . , at least two characters, starting alphanumeric.
-APT_PKG_RE = re.compile(r"[a-z0-9][a-z0-9+.-]+(?::[a-z0-9][a-z0-9-]*)?\Z")
+#
+# ENDING alphanumeric too, which policy does not require and apt-get needs. `apt-get install`
+# reads a trailing `-` as "remove this one" and a trailing `+` as "install it" (apt-get(8)), so
+# `openssh-server-` in an install list REMOVES openssh-server, as root — and that name satisfied
+# this pattern. The arch qualifier ends alphanumeric for the same reason (`libc6:i386-`). Every
+# name in LinuxGSM's package lists ends alphanumeric, so nothing real is refused; the helper's
+# v_package and privileged._package say the same.
+APT_PKG_RE = re.compile(r"[a-z0-9][a-z0-9+.-]*[a-z0-9](?::[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)?\Z")
 
 
 def _apt_pkgs(names):
@@ -735,10 +884,24 @@ def deps_for_game(game_type, os_slug=None):
     return pkgs, needs_steamcmd
 
 
+def _listed_dependencies(names, per_game):
+    """Split `names` into (those a LinuxGSM package list names, the rest), each in order.
+
+    Listed means: in `per_game` — LinuxGSM's own list for this game on this host's distro, the only
+    place its check_deps takes names from — or in the panel's common set, which is what an install
+    falls back to when that list cannot be had, or `steamcmd`.
+    """
+    allowed = set(per_game) | set(LGSM_COMMON_DEPS.split()) | {"steamcmd"}
+    keep, refused = [], []
+    for n in names:
+        (keep if n in allowed else refused).append(n)
+    return keep, refused
+
+
 def install_game_dependencies(server, game_type=None, extra=""):
     """Install the exact LinuxGSM dependencies for a game (from LinuxGSM's list for this host's
     distro — a 22.04 box gets 22.04's packages, not 24.04's),
-    plus any extras, as root. Falls back to the common set if the CSV is missing.
+    plus any extras THAT LIST NAMES, as root. Falls back to the common set if the CSV is missing.
     Enables i386 + universe + multiverse first, then installs the batch, and if that
     fails (apt-get install is atomic — one unavailable package aborts everything)
     falls back to installing each package individually so the critical libs still
@@ -749,8 +912,22 @@ def install_game_dependencies(server, game_type=None, extra=""):
         per_game, needs_steamcmd = deps_for_game(game_type, host_os_slug(server))
     else:
         per_game, needs_steamcmd = [], True  # unknown game → make sure steamcmd is present
+    # A retry passes back what LinuxGSM printed as missing. That is the output of a script run AS
+    # THE GAME ACCOUNT, out of that account's home, reading a config that account can edit (and
+    # that MANAGE_SERVERS can, through the file manager) — and the names went to apt-get install as
+    # ROOT, checked for syntax alone. So the account chose what root installed: an MTA that starts
+    # listening, anything in the host's repositories. LinuxGSM's check_deps only ever reports names
+    # from its package list for this game, so a name that list does not have is refused, logged,
+    # and said in the result — never installed. The list is loaded above for exactly this game on
+    # exactly this distro; when it cannot be had, the common set is all that passes.
+    extra_pkgs, refused = _listed_dependencies((extra or "").split(), per_game)
+    for _name in refused:
+        _core._log.warning("dependency list: refusing %r — LinuxGSM reported it missing, but "
+                           "its package list for %s does not name it",
+                           _name[:60], game_type or "this game")
+    refusal = ("Not installed — not in LinuxGSM's package list for this game on this host: %s. "
+               % ", ".join(n[:60] for n in refused)) if refused else ""
     # A retry may pass "steamcmd" back via `extra` (LinuxGSM lists it as missing).
-    extra_pkgs = (extra or "").split()
     if "steamcmd" in extra_pkgs:
         needs_steamcmd = True
         extra_pkgs = [p for p in extra_pkgs if p != "steamcmd"]
@@ -798,7 +975,7 @@ def install_game_dependencies(server, game_type=None, extra=""):
             _core._log.warning("steamcmd install failed: %s", (_s_err or _s_out or "")[:200])
 
     if not pkgs:
-        return steam_ok, "no dependencies to install"
+        return (steam_ok and not refused), (refusal or "no dependencies to install")
 
     # apt-get install is ATOMIC — one unavailable package aborts the batch — so a failed batch
     # falls back to one at a time, which is what the shell `|| for p in …` loop did. Chunked
@@ -819,8 +996,9 @@ def install_game_dependencies(server, game_type=None, extra=""):
 
     # rc now reports the BATCH. It used to report `echo deps-done`, the last command in the
     # pipeline, so this function returned True however badly the install had gone — which is the
-    # other half of why a refused step never surfaced.
-    return (rc == 0 and steam_ok), (out or err or "")
+    # other half of why a refused step never surfaced. A refused name fails it too: LinuxGSM will
+    # still report that package missing, and the result is where the refusal is said.
+    return (rc == 0 and steam_ok and not refused), refusal + (out or err or "")
 
 
 # Which classified causes a RETRY cannot get past. Only one: the rest are all "do this, then try

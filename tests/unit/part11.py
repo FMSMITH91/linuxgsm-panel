@@ -847,13 +847,161 @@ try:
     _wire(verbs={"ufw-delete-allow-port": ("", "", 1)})
     eq("ufw close port 22: a silent failure still says it failed",
        _H.remote_ufw_close_port_22(_p8_srv()), (False, "Failed to remove port 22"))
-    _w = _wire(verbs={"ufw-delete-allow-port": ("", "", 0), "ufw-delete-allow-proto-port": [
-        ("", "", 1), ("", "", 0)]})
-    eq("ufw close game port: the bare rule plus both legacy proto rules, counting what went",
-       (_H.remote_ufw_close_game_port(_p8_srv(), 27015), _w.verbs_called()),
-       ((2, "Port 27015: 2 rule(s) removed"),
-        [("ufw-delete-allow-port", ["27015"]), ("ufw-delete-allow-proto-port", ["tcp", "27015"]),
-         ("ufw-delete-allow-proto-port", ["udp", "27015"])]))
+    # ── a game server's firewall cleanup takes only ITS rules (Aikido 745379215) ──────────────
+    # remote_ufw_close_game_port deleted by SPEC — `ufw delete allow <port>` and the same for
+    # proto tcp and udp — with no comment, and ufw removes a rule matching all but its comment when
+    # the delete carries none. So uninstall (and install's port adoption) took every ALLOW on the
+    # port: another server's, an operator's, an operator's own SSH allow — none of it through
+    # remote_ufw_delete_rule's lockout guard. _FakeUfw keeps a rule table and answers the verbs with
+    # ufw 0.36's own matching (backend_iptables.set_rule), so these read what really happens.
+    class _FakeUfw:
+        """A ufw rule table behind the verbs: an allow differing from a rule only in comment or
+        action REPLACES it; a delete by spec (no comment) removes every ALLOW matching all but its
+        comment, never a LIMIT or DENY; a delete by number removes that position."""
+
+        def __init__(self, *rules):
+            self.rules = [dict(zip(("to", "action", "comment"), r)) for r in rules]
+
+        def status(self, _a):
+            rows = ["[%2d] %-26s %-5s IN    Anywhere%s" % (
+                i, r["to"], r["action"], ("                   # " + r["comment"]) if r["comment"]
+                else "") for i, r in enumerate(self.rules, 1)]
+            return (_UFW_HDR + "\n".join(rows) + "\n", "", 0)
+
+        def delete_num(self, a):
+            n = int(a[0])
+            if not 1 <= n <= len(self.rules):
+                return ("ERROR: Could not find rule '%d'" % n, "", 1)
+            del self.rules[n - 1]
+            return ("Rule deleted", "", 0)
+
+        def spec_delete(self, to):
+            left = [r for r in self.rules if not (r["to"] == to and r["action"] == "ALLOW")]
+            gone, self.rules = len(self.rules) - len(left), left
+            return ("Rule deleted", "", 0) if gone else ("Could not delete non-existent rule", "", 1)
+
+        def allow(self, a):
+            to, comment = a[0], (a[1] if len(a) > 1 else "")
+            for r in self.rules:
+                if r["to"] == to:
+                    if (r["action"], r["comment"]) == ("ALLOW", comment):
+                        return ("Skipping adding existing rule", "", 0)
+                    r.update(action="ALLOW", comment=comment)
+                    return ("Rule updated", "", 0)
+            self.rules.append({"to": to, "action": "ALLOW", "comment": comment})
+            return ("Rule added", "", 0)
+
+        def left(self):
+            return [(r["to"], r["action"], r["comment"]) for r in self.rules]
+
+        def verbs(self):
+            return {"ufw-status": self.status, "ufw-delete-num": self.delete_num,
+                    "ufw-allow-port": self.allow,
+                    "ufw-delete-allow-port": lambda a: self.spec_delete(a[0]),
+                    "ufw-delete-allow-proto-port": lambda a: self.spec_delete("%s/%s" % (a[1], a[0]))}
+
+    def _cgp(*a, **k):
+        """remote_ufw_close_game_port, with a signature the pre-fix code lacked read as a result."""
+        try:
+            return _H.remote_ufw_close_game_port(*a, **k)
+        except TypeError as e:
+            return ("no such signature", str(e))
+
+    _CGP_RULES = (("22/tcp", "LIMIT", ""), ("2222/tcp", "ALLOW", "operator"),
+                  ("27015", "ALLOW", "gamea"), ("27015/udp", "ALLOW", "voicebridge"),
+                  ("27015/tcp", "ALLOW", ""), ("27016", "ALLOW", "gameb"),
+                  ("27020/tcp", "LIMIT", ""), ("22", "ALLOW", ""))
+    _SPEC_DELETES = ("ufw-delete-allow-port", "ufw-delete-allow-proto-port")
+    _fu = _FakeUfw(*_CGP_RULES)
+    _w = _wire(verbs=_fu.verbs())
+    _r = _cgp(_p8_srv(port=2222), 27015)
+    check("ufw close game port: with no name to own a rule by, nothing on the port is deleted — "
+          "no delete by spec at all",
+          _fu.left() == [tuple(r) for r in _CGP_RULES]
+          and not [v for v in _w.verbs_called() if v[0] in _SPEC_DELETES],
+          "result=%r left=%r verbs=%r" % (_r, _fu.left(), _w.verbs_called()))
+    _fu = _FakeUfw(*_CGP_RULES)
+    _w = _wire(verbs=_fu.verbs())
+    _r = _cgp(_p8_srv(port=2222), 27015, "gamea", legacy=True)
+    check("ufw close game port: this server's tagged rule and an UNTAGGED legacy allow go — "
+          "another tag on the same port stays",
+          _r == (2, "Port 27015: 2 rule(s) removed")
+          and ("27015/udp", "ALLOW", "voicebridge") in _fu.left()
+          and not any(t in ("27015", "27015/tcp") for t, _a, _c in _fu.left()),
+          "result=%r left=%r" % (_r, _fu.left()))
+    check("ufw close game port: ...each by NUMBER, against a fresh read, never by spec",
+          [v for v, _a in _w.verbs_called() if v.startswith("ufw-delete")] == ["ufw-delete-num"] * 2,
+          repr(_w.verbs_called()))
+    _fu = _FakeUfw(*_CGP_RULES)
+    _w = _wire(verbs=_fu.verbs())
+    _r = _cgp(_p8_srv(port=2222), 22, "gamea", legacy=True)
+    check("ufw close game port: an untagged ALLOW on an SSH port is never taken as the server's — "
+          "the operator's `allow 22` stays",
+          ("22", "ALLOW", "") in _fu.left() and not _w.verbs_called("ufw-delete-num")
+          and not [v for v in _w.verbs_called() if v[0] in _SPEC_DELETES],
+          "result=%r left=%r" % (_r, _fu.left()))
+    _fu = _FakeUfw(*_CGP_RULES)
+    _w = _wire(verbs=_fu.verbs())
+    _r = _cgp(_p8_srv(port=2222), 27020, "gamea", legacy=True)
+    check("ufw close game port: ...and an untagged LIMIT is not an allow the panel left",
+          ("27020/tcp", "LIMIT", "") in _fu.left() and not _w.verbs_called("ufw-delete-num"),
+          "result=%r left=%r" % (_r, _fu.left()))
+    _w = _wire(verbs={"ufw-status": ("", "SSH command timed out", -1)})
+    check("ufw close game port: an unreadable firewall deletes nothing",
+          _cgp(_p8_srv(), 27015, "gamea", legacy=True) == (0, "Port 27015: 0 rule(s) removed")
+          and [v for v, _a in _w.verbs_called()] == ["sshd-effective-config", "ufw-status"],
+          repr(_w.verbs_called()))
+
+    # ── the ports a server's own tagged rules already open ────────────────────────────────────
+    _fu = _FakeUfw(("27015", "ALLOW", "gamea"), ("27016", "DENY", "gamea"),
+                   ("27017", "ALLOW", "gameb"), ("27018/udp", "ALLOW", "gamea"),
+                   ("27019", "ALLOW", "gamea2"))
+    _w = _wire(verbs=_fu.verbs())
+    eq("tagged ports: only ALLOWs carrying exactly this server's name",
+       getattr(_H, "remote_ufw_tagged_ports", lambda s, n: None)(_p8_srv(), "gamea"), {27015, 27018})
+    _wire(verbs={"ufw-status": ("", "SSH command timed out", -1)})
+    eq("tagged ports: an unreadable firewall excuses nothing",
+       getattr(_H, "remote_ufw_tagged_ports", lambda s, n: None)(_p8_srv(), "gamea"), set())
+
+    # ── which ports no game server may take ───────────────────────────────────────────────────
+    _w = _wire(verbs={"sshd-effective-config": ("port 2200\nport 443\npermitrootlogin no\n", "", 0)})
+    _php = getattr(_H, "protected_host_ports", lambda s: set())
+    eq("protected ports: 22, the port the panel connects on, and every port sshd names",
+       _php(_p8_srv(port=2222)), {22, 2222, 2200, 443})
+    _wire(verbs={"sshd-effective-config": ("", "SSH command timed out", -1)})
+    eq("protected ports: an unread sshd config narrows the set, never empties it",
+       _php(_p8_srv(port=2222)), {22, 2222})
+    _wire(verbs={"sshd-effective-config": ConnectionError("dropped")})
+    eq("protected ports: ...and a raising transport is the same answer",
+       _php(_p8_srv(port=2222, auth_method="key")), {22, 2222})
+    _wire()
+    check("protected ports: on the panel's own host, its web port too",
+          5000 in _php(_p8_srv(is_local=True)), repr(_php(_p8_srv(is_local=True))))
+
+    # ── opening a game server's ports never takes over another rule (Aikido 745379031) ─────────
+    # `ufw allow <port> comment <name>` REPLACES a rule that differs only in comment or action.
+    _fu = _FakeUfw(("27016", "ALLOW", "gameb"), ("3306", "DENY", "operator-db"),
+                   ("27015", "ALLOW", "gamea"), ("27018", "ALLOW", ""))
+    _w = _wire(verbs=_fu.verbs())
+    _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [27015, 27016, 3306, 27017, 27018], "gamea")
+    check("game ports: another server's rule on a reported port keeps its owner — it is not "
+          "re-tagged as this server's (whose uninstall would then delete it)",
+          ("27016", "ALLOW", "gameb") in _fu.left() and ("27018", "ALLOW", "") in _fu.left(),
+          "left=%r" % (_fu.left(),))
+    check("game ports: ...an operator's DENY is not turned into an allow",
+          ("3306", "DENY", "operator-db") in _fu.left(), "left=%r" % (_fu.left(),))
+    check("game ports: ...a free port and this server's own are still opened (positive control)",
+          ("27017", "ALLOW", "gamea") in _fu.left()
+          and [a[0] for _v, a in _w.verbs_called("ufw-allow-port")] == ["27015", "27017"],
+          repr(_w.verbs_called("ufw-allow-port")))
+    check("game ports: ...and what is open is reported: a port another ALLOW holds is open, one a "
+          "DENY holds is not",
+          _op[0] == [27015, 27016, 27017, 27018] and "3306" in _op[1], repr(_op))
+    _w = _wire(verbs={"ufw-status": ("", "SSH command timed out", -1)})
+    _op = _H.remote_ufw_allow_game_ports(_p8_srv(), [27015, 27016], "gamea")
+    check("game ports: a firewall that cannot be read is opened as before — a busy host must not "
+          "leave a new server closed",
+          _op[0] == [27015, 27016] and len(_w.verbs_called("ufw-allow-port")) == 2, repr(_op))
 
     # ── delete by number: an unverifiable firewall refuses ────────────────────────────────────
     _w = _wire()
@@ -1006,6 +1154,54 @@ try:
        ((True, "no dependencies to install"), []))
     _H.host_os_slug = _h_saved["host_os_slug"]
     _H.deps_for_game = _h_saved["deps_for_game"]
+
+    # ── root apt installs what LinuxGSM's list names, not what the game account prints (745379155)
+    # A retry installs what LinuxGSM printed as missing — output of a script run AS THE GAME
+    # ACCOUNT over a config it can write — and those names went to root's apt-get checked for
+    # syntax alone. Real LinuxGSM lines (lgsm/data/ubuntu-24.04.csv) and its real warning format,
+    # through the real parsers: lgsm_data.deps and parse_missing_deps.
+    from panel.services import lgsm_data as _p8_ld  # noqa: E402
+    _p8_ld_text = _p8_ld._text
+    _P8_CSV = (
+        "all,bc,binutils,bsdmainutils,bzip2,ca-certificates,cpio,curl,distro-info,file,gzip,hostname,"
+        "jq,lib32gcc-s1,lib32stdc++6,netcat-openbsd,pigz,python3,tar,tmux,unzip,util-linux,"
+        "uuid-runtime,wget,xz-utils\n"
+        "steamcmd,lib32gcc-s1,lib32stdc++6,libsdl2-2.0-0:i386,steamcmd\n"
+        "cod,libstdc++5:i386\nmc,openjdk-25-jre\nrust,lib32z1\n")
+    _P8_MISSING = ("\x1b[1;33mWarning!\x1b[0m Missing dependencies: \x1b[31mlibstdc++5:i386 "
+                   "postfix openssh-server- openjdk-25-jre steamcmd\x1b[0m\n"
+                   "\x1b[1;36mInformation!\x1b[0m Run: 'sudo apt install ...'\n")
+    try:
+        _p8_ld._mem.clear()
+        _p8_ld._text = lambda name, allow_fetch=True: _P8_CSV if name == "ubuntu-24.04.csv" else None
+        _H.host_os_slug = lambda s: "ubuntu-24.04"
+        _p8_missing = _H.parse_missing_deps(_P8_MISSING)
+        _w = _wire()
+        _gd = _H.install_game_dependencies(_p8_srv(), "cod", extra=" ".join(_p8_missing))
+        _p8_apt = [p for _v, a in _w.verbs_called("apt-install-minimal") for p in a]
+        check("game deps: the fixture really does carry the names LinuxGSM printed",
+              _p8_missing == ["libstdc++5:i386", "postfix", "openssh-server-", "openjdk-25-jre",
+                              "steamcmd"], repr(_p8_missing))
+        check("game deps: a name LinuxGSM's list for this game does not have reaches no root apt "
+              "call — an MTA, a trailing-dash REMOVE, another game's package",
+              not {"postfix", "openssh-server-", "openjdk-25-jre"} & set(_p8_apt), repr(_p8_apt))
+        check("game deps: ...while the listed names still install (positive control)",
+              "libstdc++5:i386" in _p8_apt and "libsdl2-2.0-0:i386" in _p8_apt
+              and _w.verbs_called("steamcmd-install"), repr(_w.verbs_called()))
+        check("game deps: ...and the refusal is said in the result, which fails the step",
+              _gd[0] is False and "postfix" in _gd[1] and "openssh-server-" in _gd[1], repr(_gd))
+        _p8_ld._mem.clear()
+        _p8_ld._text = lambda name, allow_fetch=True: None
+        _w = _wire()
+        _H.install_game_dependencies(_p8_srv(), "cod", extra="libstdc++5:i386 postfix")
+        _p8_apt = [p for _v, a in _w.verbs_called("apt-install-minimal") for p in a]
+        check("game deps: with LinuxGSM's list unavailable, only the common set passes — never "
+              "the printed names unfiltered",
+              "libstdc++5:i386" in _p8_apt and "postfix" not in _p8_apt, repr(_p8_apt))
+    finally:
+        _p8_ld._text = _p8_ld_text
+        _p8_ld._mem.clear()
+        _H.host_os_slug = _h_saved["host_os_slug"]
 
     # ── OS updates ─────────────────────────────────────────────────────────────────────────────
     _w = _wire(cmds=[("apt list --upgradable",
@@ -2129,10 +2325,40 @@ try:
     # ── sync ports ─────────────────────────────────────────────────────────────────────────────
     _gs = _rv_games[-1]
     _rv.get_game = lambda sid: _gs
+    # The route reads the host's SSH ports; answered here, so no check reaches a transport.
+    _rv._sm = NS(protected_host_ports=lambda remote: {22, 2222})
     _rv.current_user = _RvUser(superadmin=False, name="viewer")
     _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
     eq("sync ports: without MANAGE_REMOTES or INSTALL_SERVER -> 403", (_st, _body["message"]),
        (403, "Permission denied"))
+    # Aikido 745379031. The stock "admin" group has install/manage/uninstall servers and NOT
+    # manage remotes; INSTALL_SERVER let it write root-owned allow rules on a host's firewall, from
+    # ports the game account's config decides — every other firewall write needs MANAGE_REMOTES.
+    from panel.security.auth import (INSTALL_SERVER as _p8_IS, MANAGE_REMOTES as _p8_MR,  # noqa: E402
+                                     MANAGE_SERVERS as _p8_MS, UNINSTALL_SERVER as _p8_US)
+    _gpo = []
+    _rv.detect_game_ports = lambda remote, short, lgsm: {"game_port": _gs.port,
+                                                         "open_ports": [_gs.port, 3306], "ports": []}
+    _rv.remote_ufw_allow_game_ports = lambda remote, ports, name: (_gpo.append((list(ports), name)),
+                                                                   (list(ports), "x"))[1]
+    _rv.current_user = _RvUser(superadmin=False, name="delegated-admin")
+    _rv.has_permission = lambda u, p: p in (_p8_IS, _p8_MS, _p8_US)
+    _rv.can_access_remote = lambda u, rid: True
+    _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
+    check("sync ports: the stock admin group (install/manage/uninstall servers, no MANAGE_REMOTES) "
+          "is refused, and nothing reaches the firewall",
+          _st == 403 and _gpo == [], "status=%r body=%r opened=%r" % (_st, _body, _gpo))
+    _rv.has_permission = lambda u, p: p == _p8_MR
+    _rv.can_access_remote = lambda u, rid: False
+    _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
+    check("sync ports: MANAGE_REMOTES without THIS host in the user's groups is refused too",
+          _st == 403 and _gpo == [], "status=%r body=%r" % (_st, _body))
+    _rv.can_access_remote = lambda u, rid: rid == _gs.remote_id
+    _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
+    check("sync ports: ...while MANAGE_REMOTES on this host goes through (positive control)",
+          _st == 200 and _gpo == [([_gs.port, 3306], "cs2server")], "status=%r body=%r" % (_st, _body))
+    _rv.has_permission = lambda u, p: False
+    _rv.can_access_remote = lambda u, rid: False
     _rv.current_user = _RvUser()
     _rv.detect_game_ports = lambda remote, short, lgsm: {"game_port": 27016, "open_ports": [27016, 27017],
                                                          "ports": [{"port": 27016}]}
@@ -2147,6 +2373,28 @@ try:
           and _body["failed_ports"] == [27017] and _body["open_ports"] == [27016]
           and "27017 could not be opened" in _body["message"] and _gpo == [([27016, 27017], "cs2server")]
           and _rv_log[-1][3] is False, "body=%r" % (_body,))
+    # Whoever calls it: a reported port inside ANOTHER server's block (a stopped Rust server on
+    # 27017 still owns 27018, its query port), or SSH's, is neither opened nor stored. `details`
+    # runs as the game account over a config it can write, so "Game 22" moved the row onto SSH,
+    # and "Query 27018" re-tagged the other server's rule as this one's.
+    _p8_other = NS(id=next(_p8_ids), remote_id=_r.id, port=27017, short_name="rustserver",
+                   name="Rust", installed=True, game_type="rust", query_type=None, status="online",
+                   lgsm_name="rustserver", remote=_r)
+    _rv_games.insert(0, _p8_other)
+    _rv.detect_game_ports = lambda remote, short, lgsm: {"game_port": 22,
+                                                         "open_ports": [22, 27016, 27018], "ports": []}
+    _rv.remote_ufw_allow_game_ports = lambda remote, ports, name: (_gpo.append((list(ports), name)),
+                                                                   (list(ports), "x"))[1]
+    _gpo.clear()
+    _p8_before = _gs.port
+    _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
+    check("sync ports: a port SSH or another server's block holds is neither stored on the row "
+          "nor opened — and the answer names each one",
+          _gs.port == _p8_before and _gpo == [([27016], "cs2server")]
+          and _body.get("refused_ports") == [22, 27018] and _body["success"] is False
+          and "22, 27018" in _body["message"] and "REFUSED" in (_rv_log[-1][2] or ""),
+          "port=%r opened=%r body=%r" % (_gs.port, _gpo, _body))
+    _rv_games.remove(_p8_other)
     _rv.detect_game_ports = lambda *a: (_ for _ in ()).throw(ConnectionError("down"))
     _st, _body = _rv_json(_rv_client.post("/api/server/%d/sync-ports" % _gs.id))
     eq("sync ports: a raise is a generic 500", (_st, _body),

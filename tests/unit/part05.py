@@ -1110,6 +1110,39 @@ for _v, _a in _VERB_SAMPLES.items():
 check("privileged: helper and panel build an identical argv for every verb",
       not _drift, "; ".join(_drift[:2]))
 
+# ── a package name that makes `apt-get install` do something else is refused (Aikido 745379155) ──
+# apt-get reads a trailing `-` on an install argument as "REMOVE this package" and a trailing `+`
+# as "install it", so `openssh-server-` went through all three validators and would have removed
+# sshd, as root, from the install verb. Every name in LinuxGSM's package lists ends alphanumeric
+# (checked against all of ubuntu-20.04..26.04 and debian-11..13), so the positives below are real
+# names from them.
+def _pk_verb_ok(side, name):
+    """Does `side`'s apt-install-minimal verb accept `name`? — the validator, through its caller."""
+    try:
+        if side == "helper":
+            _helper.validate("apt-install-minimal", [name])
+        else:
+            _priv.tool_argv("apt-install-minimal", [name])
+        return True
+    except ValueError:
+        return False
+
+
+_PK_BAD = ("openssh-server-", "sudo-", "curl+", "libc6.", "lib32gcc-s1-", "g-")
+_PK_GOOD = ("curl", "xz-utils", "lib32stdc++6", "libstdc++5:i386", "libsdl2-2.0-0:i386",
+            "dotnet-runtime-8.0", "openjdk-25-jre", "libc++1")
+for _pk_side in ("helper", "panel"):
+    _pk_let = [n for n in _PK_BAD if _pk_verb_ok(_pk_side, n)]
+    check("apt verbs (%s): a name ending in - + or . is refused" % _pk_side, not _pk_let,
+          "accepted %r" % _pk_let)
+    _pk_lost = [n for n in _PK_GOOD if not _pk_verb_ok(_pk_side, n)]
+    check("apt verbs (%s): ...while LinuxGSM's real names still pass (positive control)" % _pk_side,
+          not _pk_lost, "refused %r" % _pk_lost)
+check("apt names (hosts.APT_PKG_RE): the same trailing characters are refused before any verb",
+      not [n for n in _PK_BAD if sm.APT_PKG_RE.fullmatch(n)]
+      and all(sm.APT_PKG_RE.fullmatch(n) for n in _PK_GOOD),
+      repr([n for n in _PK_BAD if sm.APT_PKG_RE.fullmatch(n)]))
+
 # ── a secret is never on a command line ───────────────────────────────────────────────────────
 # The Ubuntu Pro token and the Tailscale auth key were argv elements on every path: `sudo -n
 # panel-helper pro-attach <token>` then `pro attach <token>` locally, `sudo bash -c 'pro attach
@@ -6417,19 +6450,41 @@ finally:
 # ── uninstall's legacy port cleanup does not reach the NEXT port ───────────────────────────────
 # `for p in (port, port + 1)` deleted port+1/tcp and /udp with no idea whose they were — usually
 # the neighbouring server's game port.
+#
+# It then deleted by SPEC on the port itself, which took every ALLOW there whoever's it was (Aikido
+# 745379215); it deletes by number now, only this server's rules. Driven through the real status
+# parser, over a scripted rule table.
 _cgp_saved = _sm_core.run_privileged
 try:
     _cgp_sent = []
-    _sm_core.run_privileged = lambda s, verb, args=(), **k: (_cgp_sent.append((verb, list(args))),
-                                                            ("", "", 0))[1]
-    _fw_h.remote_ufw_close_game_port(NS(), 27015)
+    _cgp_rules = ["27015                      ALLOW IN    Anywhere                   # gamea",
+                  "27016/tcp                  ALLOW IN    Anywhere",
+                  "27016/udp                  ALLOW IN    Anywhere                   # gameb",
+                  "27015/tcp                  ALLOW IN    Anywhere"]
+
+    def _cgp_priv(s, verb, args=(), **k):
+        _cgp_sent.append((verb, list(args)))
+        if verb == "ufw-status":
+            return ("Status: active\n\n" + "".join(
+                "[%2d] %s\n" % (i + 1, r) for i, r in enumerate(_cgp_rules)), "", 0)
+        if verb == "ufw-delete-num":
+            _cgp_rules.pop(int(list(args)[0]) - 1)
+            return ("Rule deleted", "", 0)
+        return ("", "", 0)
+    _sm_core.run_privileged = _cgp_priv
+    try:
+        _cgp_n = _fw_h.remote_ufw_close_game_port(NS(), 27015, "gamea", legacy=True)
+    except TypeError as _e:
+        _cgp_n = ("no such signature", str(_e))
     check("ufw close-game-port: nothing is deleted on port+1 (another server's port)",
-          not any("27016" in a for _v, a in _cgp_sent), repr(_cgp_sent))
-    check("ufw close-game-port: ...while the port's own bare and tcp/udp rules still go "
-          "(positive control)",
-          ("ufw-delete-allow-port", ["27015"]) in _cgp_sent
-          and ("ufw-delete-allow-proto-port", ["tcp", "27015"]) in _cgp_sent
-          and ("ufw-delete-allow-proto-port", ["udp", "27015"]) in _cgp_sent, repr(_cgp_sent))
+          not any("27016" in a for _v, a in _cgp_sent)
+          and sum(r.startswith("27016") for r in _cgp_rules) == 2, repr((_cgp_sent, _cgp_rules)))
+    check("ufw close-game-port: ...while the port's own tagged and untagged-legacy rules still go, "
+          "by number (positive control)",
+          _cgp_n == (2, "Port 27015: 2 rule(s) removed")
+          and not any(r.startswith("27015") for r in _cgp_rules)
+          and [v for v, _a in _cgp_sent if v.startswith("ufw-delete")] == ["ufw-delete-num"] * 2,
+          repr((_cgp_n, _cgp_sent, _cgp_rules)))
 finally:
     _sm_core.run_privileged = _cgp_saved
 

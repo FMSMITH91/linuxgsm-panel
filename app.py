@@ -1802,6 +1802,14 @@ def register_context_processors(app):
 # closure cell, which is the same function. Hoisting them is the precondition for splitting
 # the route table into modules, and it makes them directly testable and stubbable besides.
 
+class PortScanUnreadable(ConnectionError):
+    """The host's listening ports could not be read, so no port on it can be called free.
+
+    A ConnectionError because that is what the paramiko transport already raises for the same
+    host — the tailscale and local transports return ("", …, -1) instead, and _remote_listening_ports
+    turns that into None — so a caller catching the one catches the other."""
+
+
 def resolve_free_port(remote, remote_id, desired, game_type):
     """Find a free contiguous port block at/after `desired` on a remote for a `game_type`
     server. A block of _port_span(game_type) ports must clear (a) the ports other panel
@@ -1810,6 +1818,7 @@ def resolve_free_port(remote, remote_id, desired, game_type):
     configured on this remote's valve servers, which no span covers and which a stopped server
     still owns. Returns (start_port, changed), or (None, False)
     when no free block exists near `desired` — see _first_free_block on why that is not a port.
+    Raises PortScanUnreadable when the host's listening ports could not be read.
 
     The span makes the increment game-correct: single-port games (most, incl. Call of Duty and
     Source) pack sequentially (28960, 28961, …) instead of wastefully skipping every other
@@ -1818,10 +1827,18 @@ def resolve_free_port(remote, remote_id, desired, game_type):
     # Whatever is currently listening on the host (cached scan) — covers running servers'
     # FULL real footprint (game + query + rcon + …) and any non-panel service, so we never
     # land on one even if a game's span table entry is imperfect.
-    # `or ()`: None means the scan failed. Treating that as 'no ports occupied' can suggest
-    # a port that is actually taken — the install then fails with a clear error, which is
-    # the same outcome this had before the scanner learned to say 'I could not read'.
-    occupied = set(_remote_listening_ports(remote) or ())
+    #
+    # A scan that FAILED is not an empty one. This was `or ()` here, over a comment saying the
+    # install "then fails with a clear error" — it did not. Step 6 opens the firewall for the
+    # allocated port without scanning again when the game reports that same port, so a scan that
+    # timed out handed the new server a port some other service was listening on, opened it to the
+    # internet under the new server's name, and called the server online because something
+    # answered there.
+    live = _remote_listening_ports(remote)
+    if live is None:
+        raise PortScanUnreadable("the listening ports on %s could not be read"
+                                 % getattr(remote, "name", "the host"))
+    occupied = set(live)
     # Plus every panel server's reserved block (covers STOPPED servers, which aren't listening) —
     # AND every valve sibling's configured SourceTV/client ports, which are reserved for exactly
     # the same reason and were missing here. See _add_sibling_ports for what that cost.

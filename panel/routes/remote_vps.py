@@ -28,6 +28,7 @@ import threading
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from app import (_local_remote_id, _log, _os_update_note)
+from panel.routes.manage_servers import (withheld_game_ports)
 
 
 # One SSH port change per host at a time. The move snapshots and restores ONE fixed drop-in path
@@ -39,24 +40,63 @@ from app import (_local_remote_id, _log, _os_update_note)
 _ssh_port_locks = _sm._core.register_remote_cache(collections.defaultdict(threading.Lock))
 
 
-def _resync_game_port(gs, info):
-    """Store the game port LinuxGSM reports when it differs from the stored one; return that port."""
+def _resync_game_port(gs, info, withheld=()):
+    """Store the game port LinuxGSM reports when it differs from the stored one; return that port.
+
+    Not a port in `withheld` (withheld_game_ports: another server's block, SSH, the panel). The
+    report is `details` run as the game account, over a config that account can write, and the
+    stored port is what every later firewall step, the monitor and the uninstall act on — "Game
+    22" made them all act on SSH. A refused port leaves the row as it was, and that is returned.
+    """
     gp = info.get("game_port")
+    if gp and gp in withheld:
+        return gs.port
     if gp and gp != gs.port:
         gs.port = gp
         db.session.commit()
     return gp
 
 
-def _sync_ports_detail(opened, missed):
-    """Audit detail for a port sync: what opened, and what FAILED when anything did."""
-    ok = not missed
-    return (("opened %s" % (opened or "none")) if ok
-            else "opened %s; FAILED %s" % (opened or "none", missed))
+def _ports_to_sync(gs, info):
+    """Re-sync `gs`'s stored port from `info` and split its ports. -> (port, to_open, refused).
+
+    Refused: every reported port withheld_game_ports names — another server's block on the host,
+    SSH, the panel — which is neither stored on the row nor opened.
+    """
+    withheld = withheld_game_ports(GameServer.query.filter_by(remote_id=gs.remote_id).all(), gs,
+                                   _sm.protected_host_ports(gs.remote))
+    gp = _resync_game_port(gs, info, withheld)
+    wanted = info.get("open_ports") or ([gs.port] if gs.port else [])
+    return (gp, [p for p in wanted if p not in withheld],
+            sorted({p for p in wanted if p in withheld}))
 
 
-def _sync_ports_message(opened, missed):
-    """Word a port sync's result for the user: all opened, some opened, or none opened."""
+def _sync_ports_detail(opened, missed, refused=()):
+    """Audit detail for a port sync: what opened, and what FAILED or was REFUSED when anything was."""
+    detail = (("opened %s" % (opened or "none")) if not missed
+              else "opened %s; FAILED %s" % (opened or "none", missed))
+    if refused:
+        detail += "; REFUSED %s" % sorted(refused)
+    return detail
+
+
+def _sync_ports_message(opened, missed, refused=()):
+    """Word a port sync's result for the user: what opened, what did not, and what was refused.
+
+    Refused: the ports it would not open because another server, SSH or the panel has them.
+    """
+    msg = (_sync_ports_plain_message(opened, missed) if (opened or missed or not refused)
+           else "No ports were opened.")
+    if refused:
+        # A helper, not a route: the text goes out inside jsonify(), and the ports are ints.
+        # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
+        msg += (" Not opened: %s — another game server on this host, SSH or the panel uses it."
+                % ", ".join(map(str, refused)))
+    return msg
+
+
+def _sync_ports_plain_message(opened, missed):
+    """_sync_ports_message's wording for what the firewall took and did not take."""
     if not missed:
         # A helper, not a route: the text goes out inside jsonify(), and the ports are ints.
         # nosemgrep: python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
@@ -407,9 +447,10 @@ def _register_game_ports(app):
 
         And the port must actually BELONG to a game server on this host, which is what the route's
         name has always claimed. The row was looked up only to pick the UFW comment, falling back
-        to "Game" when it did not exist — so a port nothing serves was opened just as readily. The
-        safe sibling, api_server_sync_ports, derives its ports from detect_game_ports() rather than
-        trusting the caller; this now refuses rather than guessing.
+        to "Game" when it did not exist — so a port nothing serves was opened just as readily. This
+        now refuses rather than guessing. (Its sibling api_server_sync_ports was called the safe
+        one because its ports come from detect_game_ports() — but that is the game account's own
+        config talking, so it is MANAGE_REMOTES-only now as well.)
         """
         remote = get_remote(remote_id)
         gs = GameServer.query.filter_by(remote_id=remote_id, port=port).first()
@@ -431,15 +472,28 @@ def _register_game_ports(app):
 
         That covers game/query/rcon/etc. Also re-syncs the stored port. Fixes servers
         that were installed before multi-port support, or whose ports changed.
+
+        MANAGE_REMOTES, on THIS host, like every other write to a host's firewall — the same
+        correction api_remote_game_port_open had. It accepted INSTALL_SERVER too, on the reasoning
+        that its ports come from detect_game_ports rather than the caller. They come from
+        `details`, run as the game account, over a config that account — and anyone with
+        MANAGE_SERVERS, through the file manager — can write. The stock "admin" group has
+        INSTALL_SERVER and MANAGE_SERVERS and not MANAGE_REMOTES, so it could put persistent
+        root-owned allow rules on a firewall it has no rights over, and re-tag (then, uninstalling,
+        delete) other servers' rules. Its only caller is the Firewall page, which already needs
+        MANAGE_REMOTES on the host.
+
+        And whoever calls it, a port another game server on the host holds, or SSH's, or the
+        panel's, is neither opened nor stored (withheld_game_ports).
         """
         gs = get_game(server_id)
-        if not (current_user.is_superadmin or has_permission(current_user, MANAGE_REMOTES)
-                or has_permission(current_user, INSTALL_SERVER)):
+        if not (current_user.is_superadmin
+                or (has_permission(current_user, MANAGE_REMOTES)
+                    and can_access_remote(current_user, gs.remote_id))):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         try:
             info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name)
-            gp = _resync_game_port(gs, info)
-            to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
+            gp, to_open, refused = _ports_to_sync(gs, info)
             # Report what the firewall ACTUALLY took, not what was asked for. The return value
             # used to be discarded on the reasoning that "the firewall page reports a partially
             # applied rule set" — but this said "Ports 27015, 27016 opened." and wrote an audit
@@ -448,13 +502,14 @@ def _register_game_ports(app):
             opened, _ = remote_ufw_allow_game_ports(gs.remote, to_open, gs.short_name)
             opened = sorted(set(opened or []))
             missed = [p for p in to_open if p not in set(opened)]
-            ok = not missed
+            ok = not (missed or refused)
             log_action(current_user, "sync_ports", target=gs.name, success=ok,
-                       detail=_sync_ports_detail(opened, missed), server=gs)
-            msg = _sync_ports_message(opened, missed)
+                       detail=_sync_ports_detail(opened, missed, refused), server=gs)
+            msg = _sync_ports_message(opened, missed, refused)
             return jsonify({"success": ok, "message": msg,
                             "ports": info.get("ports", []), "open_ports": opened,
-                            "requested_ports": to_open, "failed_ports": missed, "game_port": gp})
+                            "requested_ports": to_open, "failed_ports": missed,
+                            "refused_ports": refused, "game_port": gp})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("request failed")}), 500
 

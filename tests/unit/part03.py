@@ -114,6 +114,16 @@ try:
     _p_free, _ch_free = _app_mod.resolve_free_port(None, 1, 30000, "csgo")
     check("free-port: a free desired port is still returned unchanged",
           _p_free == 30000 and _ch_free is False, "%s/%s" % (_p_free, _ch_free))
+    # Aikido 745379002. A scan that could not be read was `or ()` — "nothing is listening" — and
+    # the port it then offered was opened at step 6 with no second look when the game reported it.
+    _app_mod._remote_listening_ports = lambda remote: None
+    try:
+        _p_unread = _app_mod.resolve_free_port(None, 1, 30000, "csgo")
+    except ConnectionError as _e:
+        _p_unread = _e
+    check("free-port: a scan that could not be read offers NO port — it raises the "
+          "ConnectionError the paramiko transport raises for the same host",
+          type(_p_unread).__name__ == "PortScanUnreadable", repr(_p_unread))
 finally:
     _app_mod._remote_listening_ports, _app_mod.GameServer = _o_rlp, _o_gsq
     _app_mod.lgsm_get_values, _app_mod.sm_game_engine = _o_lgv, _o_eng
