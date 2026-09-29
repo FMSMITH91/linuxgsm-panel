@@ -1547,6 +1547,16 @@ try:
     check("ssh port: a socket held by systemd passes only on a socket-activated host",
           _cp_sock[0] is True and _cp_nosock[0] is False and "init.scope" in _cp_nosock[1],
           repr((_cp_sock, _cp_nosock)))
+    # With BPF firewalling (Ubuntu 24.04) systemd creates the socket inside ssh.socket's OWN cgroup.
+    _SOCKU = "LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:* ino:4501 sk:9 cgroup:/system.slice/ssh.socket <->\n"
+    _w = _csp_wire(**dict(_own(_SOCKU), **{"sshd-socket-active": ("active", "", 0)}))
+    _cp_socku = _H.change_ssh_port(_p8_srv(), 2222)
+    _w = _csp_wire(**_own(_SOCKU))
+    _cp_socku_no = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: ...including in ssh.socket's own cgroup, again only when socket-activated",
+          _cp_socku[0] is True and "could not confirm" not in _cp_socku[1]
+          and _cp_socku_no[0] is False and "ssh.socket" in _cp_socku_no[1],
+          repr((_cp_socku, _cp_socku_no)))
     # An installed helper older than the verb refuses it (exit 2): the port-only check already
     # passed, so the move stands — and says what it could not confirm.
     _w = _csp_wire(**{"listening-sockets-owner": ("", "panel-helper: unknown verb 'listening-sockets-owner'", 2)})
@@ -2068,6 +2078,18 @@ try:
     check("ssh port: the lock is released afterwards — even after a change that RAISED",
           _st == 200 and _csp == [(2224, "")] and not _rv._ssh_port_locks[_r.id].locked(),
           "status=%r calls=%r" % (_st, _csp))
+    # ...and the page does not offer the second click: the button is disabled from the moment the
+    # request is sent until it answers — on success, on a refusal, and when the request fails.
+    _csp_js = open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), "static", "js", "remote_manage_host.js"), encoding="utf-8").read()
+    _csp_fn = _csp_js.split("function changeSshPort(){", 1)[-1].split("\nfunction ", 1)[0]
+    _csp_then = _csp_fn.split(".then(function(d){", 1)[-1].split(".catch(", 1)[0]
+    _csp_catch = _csp_fn.split(".catch(", 1)[-1]
+    check("ssh port (page): the button is disabled before the request and re-enabled on every answer",
+          "querySelectorAll('[data-action=\"changeSshPort\"]')" in _csp_fn
+          and "busy(true)" in _csp_fn and _csp_fn.index("busy(true)") < _csp_fn.index("fetch(")
+          and "busy(false)" in _csp_then and "busy(false)" in _csp_catch,
+          "changeSshPort never disables its button, or leaves it disabled after an answer")
     _r.port = 22
 
     # ── close the panel's public port ──────────────────────────────────────────────────────────

@@ -2248,6 +2248,10 @@ def _port_has_listener(ss_out, port):
 
 # The units sshd runs as: Debian/Ubuntu name it ssh.service, most other distributions sshd.service.
 _SSHD_UNITS = ("ssh.service", "sshd.service")
+# ...and the socket units that hold its listening socket under socket activation. systemd creates
+# an AF_INET socket inside the SOCKET unit's cgroup when BPF firewalling is available (so the
+# unit's IPAddressDeny= applies to it), and in its own (init.scope) when it is not.
+_SSHD_SOCKET_UNITS = ("ssh.socket", "sshd.socket")
 
 
 def _ss_listeners(ss_out):
@@ -2275,13 +2279,14 @@ def _listener_not_sshd(fields, socket_mode):
     bind on that Port and carries on with the others, and a port-only listening check was answered
     by the squatter. Its socket is uid:<game user>, which it cannot change — while the process
     NAME it can (a binary called `sshd`), which is why this does not read `ss -p`. Under socket
-    activation systemd itself (pid 1, init.scope) holds sshd's listening socket."""
+    activation systemd holds sshd's listening socket: in ssh.socket's cgroup, or init.scope."""
     uid = next((f[4:] for f in fields if f.startswith("uid:")), None)
     if uid not in (None, "0"):
         return "a socket owned by uid %s, not root" % uid
     cgroup = next((f[7:] for f in fields if f.startswith("cgroup:")), "")
     unit = cgroup.rstrip("/").rsplit("/", 1)[-1]
-    if unit in _SSHD_UNITS or (socket_mode and cgroup == "/init.scope"):
+    if unit in _SSHD_UNITS or (socket_mode and (unit in _SSHD_SOCKET_UNITS
+                                                or cgroup == "/init.scope")):
         return None
     if cgroup == "/init.scope" or cgroup.startswith("/system.slice/"):
         return "held by %s, not sshd" % (unit or cgroup)
@@ -2359,7 +2364,9 @@ def _point_f2b_sshd_at(server, ports):
                              merge_stderr=False)
         if _rc_of(_core.write_root_file(server, "fail2ban-panel-sshd",
                                         _f2b_sshd_dropin_body(ports), timeout=15)) != 0:
-            return "failed", "its sshd drop-in could not be written"
+            return "failed", ("its sshd drop-in could not be written"
+                              + ("; the panel-helper on this host may predate it, and re-running "
+                                 "install.sh updates it" if _core.is_local_server(server) else ""))
         if _rc_of(_core._f2b_reload(server)) != 0:
             return "failed", "fail2ban did not reload"
         deadline = time.time() + _F2B_JAIL_SETTLE_S
@@ -2632,8 +2639,8 @@ def change_ssh_port(server, new_port, bind_addr=""):
     elif _f2b == "absent":
         _done = "firewall updated; %s, so nothing bans SSH brute force on any port" % _f2b_why
     else:
-        _done = ("firewall updated, but fail2ban was NOT: %s, so it still bans only on the old "
-                 "port" % _f2b_why)
+        _done = ("firewall updated, but fail2ban was NOT: %s, so it may not be banning SSH brute "
+                 "force on port %d" % (_f2b_why, new_port))
     if bind_addr:
         # No fallback sentence here: ListenAddress is all-or-nothing (this function's own docstring
         # says so), so sshd is now on THIS address and nothing else. Telling the operator a previous

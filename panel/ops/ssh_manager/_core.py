@@ -752,21 +752,9 @@ def get_connection(server, force_new=False, pooled=True):
 
     _connect_client(client, server)
 
-    # First successful contact with a direct-SSH host → pin the key we just saw. A pin that could
-    # not be STORED is refused rather than used: the next fresh connection would be first contact
-    # again and accept any key, so the pin must land before the connection does. `is False`, not
-    # falsiness — see _persist_host_key for what the other answers mean.
+    # First successful contact with a direct-SSH host → pin the key we just saw.
     if policy.captured and enforce_pin:
-        if _persist_host_key(server, policy.captured) is False:
-            try:
-                client.close()
-            except Exception:  # nosec B110
-                _log.debug("closing an unpinned client", exc_info=True)
-            raise ConnectionError(
-                "Connected to %s, but the panel could not store its SSH host key, so it will not "
-                "use a connection it could not check next time. Nothing was run. Try again; if "
-                "this keeps happening, check that the panel's database can be written."
-                % getattr(server, "name", "this server"))
+        _pin_first_contact(server, client, policy.captured)
 
     _keep_warm(client)
 
@@ -904,6 +892,26 @@ def _pool_client(server, key, client, force_new):
     return client
 
 
+def _pin_first_contact(server, client, keystr):
+    """Store the key a first contact saw; when it cannot be stored, close `client` and raise.
+
+    Refused rather than used: an unstored pin makes the next fresh connection first contact again,
+    accepting any key, so the pin has to land before the connection is handed out. `is False`, not
+    falsiness — a stand-in for _persist_host_key that answers nothing has not said it failed.
+    """
+    if _persist_host_key(server, keystr) is not False:
+        return
+    try:
+        client.close()
+    except Exception:  # nosec B110
+        _log.debug("closing an unpinned client", exc_info=True)
+    raise ConnectionError(
+        "Connected to %s, but the panel could not store its SSH host key, so it will not use a "
+        "connection it could not check next time. Nothing was run. Try again; if this keeps "
+        "happening, check that the panel's database can be written."
+        % getattr(server, "name", "this server"))
+
+
 # The Flask app, for storing a pin from a thread that has no app context. Registered by create_app
 # (register_pin_app); None only where no app was ever built, and then a pin cannot be stored.
 _pin_app = None
@@ -961,16 +969,21 @@ def _persist_host_key(server, keystr):
                      getattr(server, "name", "a host"), exc_info=True)
         return False
     if row is not server:
-        try:
-            from sqlalchemy.orm.attributes import set_committed_value
-            set_committed_value(server, "host_key", keystr)
-        except Exception:
-            # Not a mapped object (a caller's stand-in): a plain attribute is all there is.
-            try:
-                server.host_key = keystr
-            except Exception:
-                _log.debug("host-key pin: stored, but the caller's object refused it", exc_info=True)
+        _mirror_pin(server, keystr)
     return True
+
+
+def _mirror_pin(server, keystr):
+    """Show a pin stored through another session on the caller's `server`, without dirtying it."""
+    try:
+        from sqlalchemy.orm.attributes import set_committed_value
+        set_committed_value(server, "host_key", keystr)
+    except Exception:
+        # Not a mapped object (a caller's stand-in): a plain attribute is all there is.
+        try:
+            server.host_key = keystr
+        except Exception:
+            _log.debug("host-key pin: stored, but the caller's object refused it", exc_info=True)
 
 
 def close_connection(server):
