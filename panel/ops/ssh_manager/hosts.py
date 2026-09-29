@@ -580,6 +580,13 @@ def _is_public_port_rule(g, port, protos=("BOTH",)):
             and str(g.get("port_num", "")).strip() == str(port))
 
 
+def _rules_an_allow_would_replace(groups, port, comment):
+    """The rules `ufw allow <port> comment <comment>` would overwrite: every bare public rule on
+    exactly `port` except an ALLOW already carrying that comment."""
+    return [g for g in groups if _is_public_port_rule(g, port)
+            and not (g.get("action") == "ALLOW" and g.get("comment") == comment)]
+
+
 def remote_ufw_allow_game_ports(server, ports, name="Game"):
     """Open a LIST of ports (each bare rule = TCP+UDP), all tagged with the game
     server's name. Idempotent — re-opening an existing port is a no-op. Used to open
@@ -607,8 +614,7 @@ def remote_ufw_allow_game_ports(server, ports, name="Game"):
               and not status.get("unreachable") else [])
     opened, held = [], []
     for p in sorted({int(x) for x in ports if x}):
-        others = [g for g in groups if _is_public_port_rule(g, p)
-                  and not (g.get("action") == "ALLOW" and g.get("comment") == comment)]
+        others = _rules_an_allow_would_replace(groups, p, comment)
         if others:
             held.append(p)
             if all(g.get("action") in ("ALLOW", "LIMIT") for g in others):
@@ -652,6 +658,29 @@ def remote_ufw_close_by_name(server, name):
     return deleted, f"{deleted} rule(s) removed for {comment}"
 
 
+def remote_ufw_tagged_ports(server, name):
+    """The ports an inbound public ALLOW tagged with `name` already opens, as a set of ints.
+
+    Empty when there is no name or the firewall cannot be read — so a caller using this to excuse
+    something is excused nothing it could not see.
+    """
+    comment = _game_rule_comment(name, "")
+    if not comment:
+        return set()
+    try:
+        status = firewall.remote_ufw_status(server)
+    except Exception:
+        _core._log.debug("tagged ports: the firewall could not be read", exc_info=True)
+        return set()
+    ports = set()
+    for g in status.get("groups", []):
+        pn = str(g.get("port_num", "")).strip()
+        if (g.get("comment") == comment and g.get("action") == "ALLOW" and pn.isdecimal()
+                and _is_public_port_rule(g, pn, ("BOTH", "TCP", "UDP"))):
+            ports.add(int(pn))
+    return ports
+
+
 def protected_host_ports(server):
     """The ports on `server` no game server may open, adopt or clean up, as a set of ints.
 
@@ -676,6 +705,16 @@ def protected_host_ports(server):
     if web:
         ports.add(int(web))
     return ports
+
+
+def _is_game_rule_for(g, port, comment, legacy):
+    """Is group `g` a rule remote_ufw_close_game_port may take as the server's on `port`?
+
+    An inbound public ALLOW on exactly that port (bare, /tcp or /udp) — never a LIMIT or DENY —
+    tagged `comment`, or, with `legacy`, carrying no comment at all."""
+    return (_is_public_port_rule(g, port, ("BOTH", "TCP", "UDP")) and g.get("action") == "ALLOW"
+            and ((bool(comment) and g.get("comment") == comment)
+                 or (legacy and not g.get("comment"))))
 
 
 def remote_ufw_close_game_port(server, port, name="", legacy=False):
@@ -719,10 +758,7 @@ def remote_ufw_close_game_port(server, port, name="", legacy=False):
         if status.get("unreachable") or not status.get("installed"):
             break
         mine = [(n, g["key"]) for g in status.get("groups", [])
-                if _is_public_port_rule(g, port, ("BOTH", "TCP", "UDP"))
-                and g.get("action") == "ALLOW" and g.get("key") not in refused
-                and ((comment and g.get("comment") == comment)
-                     or (legacy and not g.get("comment")))
+                if g.get("key") not in refused and _is_game_rule_for(g, port, comment, legacy)
                 for n in g.get("nums", [])]
         if not mine:
             break

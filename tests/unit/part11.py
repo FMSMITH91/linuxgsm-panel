@@ -951,6 +951,17 @@ try:
           and [v for v, _a in _w.verbs_called()] == ["sshd-effective-config", "ufw-status"],
           repr(_w.verbs_called()))
 
+    # ── the ports a server's own tagged rules already open ────────────────────────────────────
+    _fu = _FakeUfw(("27015", "ALLOW", "gamea"), ("27016", "DENY", "gamea"),
+                   ("27017", "ALLOW", "gameb"), ("27018/udp", "ALLOW", "gamea"),
+                   ("27019", "ALLOW", "gamea2"))
+    _w = _wire(verbs=_fu.verbs())
+    eq("tagged ports: only ALLOWs carrying exactly this server's name",
+       getattr(_H, "remote_ufw_tagged_ports", lambda s, n: None)(_p8_srv(), "gamea"), {27015, 27018})
+    _wire(verbs={"ufw-status": ("", "SSH command timed out", -1)})
+    eq("tagged ports: an unreadable firewall excuses nothing",
+       getattr(_H, "remote_ufw_tagged_ports", lambda s, n: None)(_p8_srv(), "gamea"), set())
+
     # ── which ports no game server may take ───────────────────────────────────────────────────
     _w = _wire(verbs={"sshd-effective-config": ("port 2200\nport 443\npermitrootlogin no\n", "", 0)})
     _php = getattr(_H, "protected_host_ports", lambda s: set())

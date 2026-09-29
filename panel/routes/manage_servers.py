@@ -1350,11 +1350,9 @@ def _open_game_ports(job, remote, gs):
         # is someone else, and opening it would hand them the hole under this server's name.
         # A read that fails keeps the ports as chosen: a busy Tailscale host times this out
         # routinely, and holding back every port of a new server over it is the worse failure.
-        live = _listening_now(remote)
-        if live is not None:
-            to_open, port_conflict = _withhold(
-                to_open, {p: "another process on this host" for p in live}, port_conflict)
-        job.withheld = frozenset(withheld) | frozenset(live or ())
+        to_open, port_conflict, foreign = _hold_back_listening(remote, short_name, to_open,
+                                                               port_conflict)
+        job.withheld = frozenset(withheld) | foreign
         remote_ufw_allow_game_ports(remote, to_open, short_name)
     except Exception:
         _log.debug("_run: ignored non-fatal error", exc_info=True)
@@ -1416,6 +1414,27 @@ def _withhold(to_open, holders, port_conflict):
 def _ports_not_in(ports, skip):
     """`ports` without any in `skip`, in order."""
     return [p for p in ports if p not in skip]
+
+
+def _hold_back_listening(remote, short_name, to_open, port_conflict):
+    """Drop from `to_open` every port something is listening on right now.
+
+    -> (to_open, port_conflict, the ports held by someone else). Nothing held back when the scan
+    cannot be read. A port a rule TAGGED with this server's name already opens is not held back:
+    that is a retry of an install whose server an earlier attempt started (a panel restart
+    mid-install fails the row) finding that server on its own port. The port is open already, and
+    was checked when it was opened; holding it back would only report "another process" about the
+    server itself.
+    """
+    live = _listening_now(remote)
+    if live is None:
+        return to_open, port_conflict, frozenset()
+    foreign = frozenset(live)
+    if foreign.intersection(to_open):
+        foreign -= _sm.remote_ufw_tagged_ports(remote, short_name)
+    to_open, port_conflict = _withhold(
+        to_open, {p: "another process on this host" for p in foreign}, port_conflict)
+    return to_open, port_conflict, foreign
 
 
 def _listening_now(remote):

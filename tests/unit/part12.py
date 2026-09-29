@@ -2192,7 +2192,7 @@ try:
         _ms.update(acct={}, lgsm=[("LinuxGSM ready", "", 0)], auto=[("installed", "", 0)],
                    looks=[True], classify=[None], missing=[[]], deps=[(True, "")],
                    detect=[{"game_port": None, "open_ports": []}], listen=[set()],
-                   listen_pre=[set()],
+                   listen_pre=[set()], tagged=[set()],
                    start=[("Starting", "", 0)], cmds=[[]], unset=[(True, "")],
                    cu=[{"user": "gmcontent"}], mount=[(True, "Mounted.")], aux=[{}],
                    userdel=[("", "", 0)], boom=set())
@@ -2295,6 +2295,7 @@ try:
     _p9_patch(_p9_ms, "_remote_listening_ports",
               lambda r: _ms_next("listen" if "as:start" in _ms_log else "listen_pre"))
     _p9_patch(_p9_sm, "protected_host_ports", lambda r: {22})
+    _p9_patch(_p9_sm, "remote_ufw_tagged_ports", lambda r, n: _ms_next("tagged"))
     _p9_patch(_p9_ms, "remote_ufw_close_game_port",
               lambda r, p, name="", legacy=False: (
                   _ms_log.append("ufw-close:%s:%s:%s" % (p, name, legacy)), _ms_boom("ufw-close"),
@@ -2509,16 +2510,34 @@ try:
           "verified (positive control — a busy host must not leave a new server closed)",
           "ufw-allow:[27193]" in _ms_log, repr(_ms_log))
     _p9_delete_server(_ms_t)
+    # A retry of an install whose server an earlier attempt started — a panel restart mid-install
+    # fails the row — finds that server listening on its own port. A rule tagged with this
+    # server's name already opens it; that is not "another process".
+    _ms_free[:] = [(27199, False)]
+    _ms_reset(listen_pre=[{27199}], tagged=[{27199}], listen=[{27199}])
+    _r, _ms_t = _ms_install("csgo", "p9again", "27199")
+    _p9_drain()
+    check("install: a port already open under this server's OWN tag is not held back as someone "
+          "else's — no false 'another process' warning",
+          "ufw-allow:[27199]" in _ms_log
+          and _ms_job(_ms_t).get("message") == "p9again installed and started",
+          repr((_ms_log, _ms_job(_ms_t).get("message"))))
+    _p9_delete_server(_ms_t)
     # `details` is run as the game account, over a config that account can write. Only the GAME
     # port went through any check; "Query <another server's port>" was opened under this server's
     # name — re-tagging that server's rule, which this one's uninstall then deleted.
     _ms_sib = _p9_new_server(P9_HOST, "p9sib", "rust", 27197)
     _ms_free[:] = [(27194, False)]
-    _ms_reset(detect=[{"game_port": 27194, "open_ports": [27194, 27198]}])
+    _ms_reset(detect=[{"game_port": 27194, "open_ports": [22, 27194, 27198]}])
     _r, _ms_t = _ms_install("csgo", "p9query", "27194")
     _p9_drain()
-    check("install: a reported query port inside ANOTHER server's block is not opened",
-          "ufw-allow:[27194]" in _ms_log and "ufw-allow:[27194, 27198]" not in _ms_log, repr(_ms_log))
+    # Two refused ports, not one: the first becomes the conflict the install reports, and the
+    # post-start re-read already skips that one — the second is what only the withheld set stops.
+    _ms_opened = [_p9_ast.literal_eval(e.split(":", 1)[1]) for e in _ms_log
+                  if e.startswith("ufw-allow:")]
+    check("install: a reported port inside ANOTHER server's block, or SSH's, is not opened — at "
+          "step 6, nor by the re-read after the first start",
+          len(_ms_opened) == 2 and all(a == [27194] for a in _ms_opened), repr(_ms_log))
     _p9_delete_server(_ms_t)
     _p9_delete_server(_ms_sib)
     _ms_free[:] = [(27195, False)]
