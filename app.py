@@ -1230,6 +1230,9 @@ def create_app():
     # Initialize extensions
     init_auth(app)
     init_db(app)
+    # SSH host-key pins are first captured on worker threads with no app context (the monitor's
+    # probes, the /api/servers port scan); this is how they reach the database from there.
+    _sm._core.register_pin_app(app)
     # One-time: drop the removed global notifications master switch from the stored config
     # (preserves a muted state via the channel toggles). No-op once the key is gone.
     try:

@@ -752,9 +752,21 @@ def get_connection(server, force_new=False, pooled=True):
 
     _connect_client(client, server)
 
-    # First successful contact with a direct-SSH host → pin the key we just saw.
+    # First successful contact with a direct-SSH host → pin the key we just saw. A pin that could
+    # not be STORED is refused rather than used: the next fresh connection would be first contact
+    # again and accept any key, so the pin must land before the connection does. `is False`, not
+    # falsiness — see _persist_host_key for what the other answers mean.
     if policy.captured and enforce_pin:
-        _persist_host_key(server, policy.captured)
+        if _persist_host_key(server, policy.captured) is False:
+            try:
+                client.close()
+            except Exception:  # nosec B110
+                _log.debug("closing an unpinned client", exc_info=True)
+            raise ConnectionError(
+                "Connected to %s, but the panel could not store its SSH host key, so it will not "
+                "use a connection it could not check next time. Nothing was run. Try again; if "
+                "this keeps happening, check that the panel's database can be written."
+                % getattr(server, "name", "this server"))
 
     _keep_warm(client)
 
@@ -892,22 +904,73 @@ def _pool_client(server, key, client, force_new):
     return client
 
 
-def _persist_host_key(server, keystr):
-    """Store the pinned host key on the server row.
+# The Flask app, for storing a pin from a thread that has no app context. Registered by create_app
+# (register_pin_app); None only where no app was ever built, and then a pin cannot be stored.
+_pin_app = None
 
-    Best-effort; if there's no DB session in scope it simply pins on the next connection instead.
+
+def register_pin_app(app):
+    """Let _persist_host_key reach the database from any thread. create_app calls it once."""
+    global _pin_app
+    _pin_app = app
+
+
+def _persist_host_key(server, keystr):
+    """Store `keystr` as the pinned host key on `server`'s row. True when it is stored, else False.
+
+    This must work from ANY thread, because most first contacts happen on one with no app
+    context: the monitor's host probes, the player poll and metric sampler, /api/servers' port
+    scan, the backup list and the OS-update check all connect from ThreadPoolExecutor workers. It
+    used to do `server.host_key = keystr; db.session.commit()`, which raised outside an app
+    context and was swallowed, so a host whose first contact came from a worker stayed unpinned
+    while its pooled client lived, and every fresh connection after it — a TCP reset forces one —
+    was first contact again and accepted whatever key was presented.
+
+    So the row is loaded and written in a session this function owns: the caller's own when there
+    is an app context, else a fresh context on the registered app. A worker's new session does not
+    hold the caller's `server` object, so writing through `server` itself would commit nothing.
+    When the row written is not `server`, the key is set on `server` as its COMMITTED value: the
+    caller sees the pin, and its session is not left dirty with a write it would autoflush later.
     """
+    from contextlib import nullcontext
+    from flask import has_app_context
+    from panel.db.models import RemoteServer, db
+    if getattr(server, "id", None) is None:
+        return False                       # no row to store it on
+    if has_app_context():
+        ctx = nullcontext()
+    elif _pin_app is not None:
+        ctx = _pin_app.app_context()
+    else:
+        _log.warning("host-key pin: no app to store it with; not pinning %s",
+                     getattr(server, "name", "a host"))
+        return False
     try:
-        from panel.db.models import db
-        server.host_key = keystr
-        db.session.commit()
+        with ctx:
+            try:
+                row = db.session.get(RemoteServer, server.id)
+                if row is None:
+                    return False           # the host was deleted mid-connect: nothing to pin
+                row.host_key = keystr
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                raise
     except Exception:
+        _log.warning("host-key pin: could not store the key for %s",
+                     getattr(server, "name", "a host"), exc_info=True)
+        return False
+    if row is not server:
         try:
-            from panel.db.models import db
-            db.session.rollback()
+            from sqlalchemy.orm.attributes import set_committed_value
+            set_committed_value(server, "host_key", keystr)
         except Exception:
-            # no usable session; the key just pins on the next connection instead
-            _log.debug("host-key pin: session rollback unavailable", exc_info=True)
+            # Not a mapped object (a caller's stand-in): a plain attribute is all there is.
+            try:
+                server.host_key = keystr
+            except Exception:
+                _log.debug("host-key pin: stored, but the caller's object refused it", exc_info=True)
+    return True
 
 
 def close_connection(server):

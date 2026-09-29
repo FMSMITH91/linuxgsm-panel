@@ -2998,9 +2998,29 @@ try:
         def host_key(self, v):
             raise RuntimeError("detached instance")
 
-    _phk10 = _try10(_core_saved10["_persist_host_key"], _PinRefuses10(), "ssh-rsa X")
-    check("core host key: a pin that cannot be stored is dropped (it pins next time), not raised",
-          _phk10 is None, repr(_phk10))
+    # ...and answers False rather than None when it did not store the pin: get_connection refuses
+    # the connection on False, because an unstored pin makes the NEXT fresh connection first
+    # contact again. Both ways a store can fail: no app to reach the database with, and a database
+    # that will not answer.
+    from flask import has_app_context as _hac10  # noqa: E402
+    _pin_app_saved10 = _sm_core._pin_app
+    _nodb_dir10 = _tmp10.mkdtemp(prefix="unit-nodb-")
+    try:
+        _sm_core._pin_app = None
+        _phk10 = _try10(_core_saved10["_persist_host_key"], _PinRefuses10(), "ssh-rsa X")
+        _nodb_app10 = _Flask10("unit_part13_nodb")
+        _nodb_app10.config.update(
+            SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_nodb_dir10, "gone", "x.db"),
+            SQLALCHEMY_TRACK_MODIFICATIONS=False, SECRET_KEY="unit-part13", TESTING=True)
+        _db10.init_app(_nodb_app10)
+        _sm_core._pin_app = _nodb_app10
+        _phk_db10 = _try10(_core_saved10["_persist_host_key"], _PinRefuses10(), "ssh-rsa X")
+    finally:
+        _sm_core._pin_app = _pin_app_saved10
+        _shutil10.rmtree(_nodb_dir10, ignore_errors=True)
+    check("core host key: a pin that cannot be stored answers False, and never raises",
+          _phk10 is False and _phk_db10 is False and not _hac10(),
+          repr((_phk10, _phk_db10, _hac10())))
 
     # The pool is invalidated when the ROW changes, and per-host caches when the row goes away.
     with _dbapp10.app_context():
@@ -3034,6 +3054,88 @@ try:
           repr(_closed_keys10))
     check("core pool: a pool or cache failure never turns into a failed commit",
           _upd_r10 is None and _del_r10 is None and _gone10, repr((_upd_r10, _del_r10)))
+
+    # ── a first-contact pin taken on a WORKER thread is stored ─────────────────────────────────
+    # Most first contacts happen on ThreadPoolExecutor workers with no app context: the monitor's
+    # host probes, the player poll, /api/servers' port scan. The pin used to be stored with
+    # `server.host_key = keystr; db.session.commit()`, which raised there and was swallowed, so the
+    # host stayed unpinned while its pooled client lived — and every fresh connection after that
+    # (a TCP reset forces one) was first contact again and trusted whatever key it was shown.
+    # Driven through the monitor's REAL pool (_probe_hosts), with its reachability read wired to
+    # the real get_connection and the fake client presenting a chosen key. A FILE database, not
+    # _dbapp10's in-memory one: that shares one connection between every session, which is not
+    # what a worker's commit meets in production.
+    _core_restore10("_persist_host_key", "get_connection")
+    _pin_dir10 = _tmp10.mkdtemp(prefix="unit-pin-")
+    _pinapp10 = _Flask10("unit_part13_pin")
+    _pinapp10.config.update(
+        SQLALCHEMY_DATABASE_URI="sqlite:///" + os.path.join(_pin_dir10, "pin.db"),
+        SQLALCHEMY_TRACK_MODIFICATIONS=False, SECRET_KEY="unit-part13", TESTING=True)
+    _db10.init_app(_pinapp10)
+    _MON_PROBES10 = ("run_command", "_remote_listening_ports", "_host_disk_pct", "_host_load_mem",
+                     "_host_restart_flags")
+    _mon_saved10 = {k: getattr(_mon10, k) for k in _MON_PROBES10}
+    _pin_app_saved10 = _sm_core._pin_app
+    _wctx10 = []
+    try:
+        _sm_core.register_pin_app(_pinapp10)
+
+        def _mon_reach10(remote, cmd, timeout=30, **k):
+            _wctx10.append(_hac10())
+            _sm_core.get_connection(remote)
+            return ("ok", "", 0)
+
+        _mon10.run_command = _mon_reach10
+        for _k10 in _MON_PROBES10[1:]:
+            setattr(_mon10, _k10, lambda *a, **k: None)
+        _sm_core._connections.clear()
+        with _pinapp10.app_context():
+            _db10.create_all()
+            _wrow10 = _RS10(name="pin-worker", host="192.0.2.50", port=22, username="root",
+                            auth_method="key", auth_credential="")
+            _db10.session.add(_wrow10)
+            _db10.session.commit()
+            _wid10 = _wrow10.id
+            _FakeSSH10.script = {"key": ("ssh-ed25519", "K1")}
+            _wprobe10 = _mon10._probe_hosts([_wrow10]).get(_wid10) or {}
+            _wparent10 = (_wrow10.host_key, _wrow10 in _db10.session.dirty)
+        with _pinapp10.app_context():
+            _wstored10 = _db10.session.get(_RS10, _wid10).host_key
+        # The pooled client dies (a reset), and the next connection meets a different key.
+        _sm_core._connections.clear()
+        with _pinapp10.app_context():
+            _FakeSSH10.script = {"key": ("ssh-ed25519", "KMITM")}
+            _wmitm10 = _try10(_sm_core.get_connection, _db10.session.get(_RS10, _wid10))
+            _wafter10 = _db10.session.get(_RS10, _wid10).host_key
+        # ...and when the pin cannot be stored at all, the connection is refused, not used.
+        _sm_core._connections.clear()
+        _sm_core._pin_app = None
+        _FakeSSH10.script = {"key": ("ssh-ed25519", "K1")}
+        _made_before_nopin10 = len(_FakeSSH10.made)
+        _nopin10 = _try10(_sm_core.get_connection,
+                          _srv10(id=_wid10, host="192.0.2.51", auth_method="key", host_key=""))
+        _nopin_clients10 = _FakeSSH10.made[_made_before_nopin10:]
+    finally:
+        _sm_core._pin_app = _pin_app_saved10
+        for _k10, _v10 in _mon_saved10.items():
+            setattr(_mon10, _k10, _v10)
+        _sm_core._connections.clear()
+        _shutil10.rmtree(_pin_dir10, ignore_errors=True)
+    check("core host key: the monitor probe really ran on a worker with no app context",
+          _wctx10 == [False], repr(_wctx10))
+    check("core host key: a first-contact pin taken on a monitor WORKER is stored in the database",
+          _wprobe10.get("reachable") is True and _wstored10 == "ssh-ed25519 K1",
+          "probe=%r stored=%r" % (_wprobe10, _wstored10))
+    check("core host key: ...and the caller's own row carries it without being left dirty",
+          _wparent10 == ("ssh-ed25519 K1", False), repr(_wparent10))
+    check("core host key: ...so once the pooled client is gone, a DIFFERENT key is refused",
+          isinstance(_wmitm10, tuple) and _wmitm10[1].startswith("HostKeyMismatch(")
+          and _wafter10 == "ssh-ed25519 K1", "%r pin=%r" % (_wmitm10, _wafter10))
+    check("core host key: a pin that could not be stored refuses the connection and closes it",
+          isinstance(_nopin10, tuple) and _nopin10[1].startswith("ConnectionError(")
+          and "could not store its SSH host key" in _nopin10[1]
+          and [c.closed for c in _nopin_clients10] == [1] and not _sm_core._connections,
+          "%r closed=%r" % (_nopin10, [c.closed for c in _nopin_clients10]))
 finally:
     _core_restore10()
     _sm_core._connections.clear()
