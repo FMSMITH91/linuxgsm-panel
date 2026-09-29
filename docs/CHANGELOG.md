@@ -1005,6 +1005,41 @@ CI-verified commit regardless of this file — this changelog is for humans.
   once, only where the action is about a server or host and exactly one server or host has that
   name. The rest stay visible to the person who did the action and to superadmins. Password and
   2FA resets are now treated as account rows.
+- **A host's SSH key is pinned from the first connection, whichever part of the panel makes it.**
+  A first contact from a background check (the host monitor, a pool worker) had no app context,
+  so its pin was never saved. Every later connection was "first contact" again, and a
+  man-in-the-middle at any of them was trusted. The pin is now stored from any thread, and a
+  connection whose pin cannot be stored is closed rather than used. Adding a host, the setup
+  wizard's host step and the **Test** button now pin the key they logged in with. A pin that
+  can no longer be decrypted refuses the Test login instead of reading as "no pin" and sending the
+  password to whatever answered.
+- **Changing a host's SSH port checks that sshd is what answers on the new port.** The move was
+  kept once *something* listened there, so a game account that bound the port first took the
+  panel's next SSH connections to that host. Each listener on the new port must now be root's sshd
+  (`ssh.service`/`sshd.service`, or `ssh.socket` under socket activation); anything else reverts
+  the move. fail2ban's sshd jail now covers the new port through
+  `/etc/fail2ban/jail.d/zz-panel-sshd.local`. The old edit touched only `jail.local`, which a stock
+  install does not have, so the jail kept watching the old port. It is updated only after the move
+  is confirmed, and the result says "fail2ban updated" only when the jail is running on the new
+  port. Two port changes for the same host at once are refused (409). **Re-run `install.sh` to
+  update the privileged helper**; an older helper keeps the move and says it could not confirm
+  sshd.
+- **The firewall touches only the rules a game server owns.** Uninstalling a server deleted every
+  rule on its port by spec, an operator's and another server's included, and "Open all ports"
+  replaced whatever rule held a port: another server's, an operator's DENY or LIMIT. Rules are now
+  removed by number, only ALLOW rules tagged with that server's name (and untagged ones only where
+  no other server's block holds the port), and a rule the panel did not make is never replaced.
+  No port is opened or stored on SSH, the panel's own web port, or another server's reserved
+  block. "Open all ports" (`/api/server/<id>/sync-ports`) now needs **Manage Remotes** for that
+  host, not only Install Server. An install holds back a port something else started listening on
+  while its files downloaded, and says so. A port scan that cannot be read no longer counts as
+  "every port is free".
+- **Root `apt` installs only the packages LinuxGSM lists for the game.** A game's install step
+  passed whatever package names LinuxGSM's output reported missing to a root `apt-get install`.
+  A name is now kept only when LinuxGSM's dependency list for that game and distro names it, the
+  panel's common set does, or it is `steamcmd`. Anything else is refused, named in the result and
+  logged. Package names must also end in a letter or digit, because `apt-get install foo-`
+  *removes* `foo`.
 - **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported by
   kta1kri). Twenty-five places built `sudo -u <account> bash -c '…'` from a server's account
   (`short_name`) and LinuxGSM script name with neither quoting nor a check — the dashboard's own
