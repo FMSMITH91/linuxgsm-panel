@@ -244,7 +244,8 @@ def _register_remote_list(app):
         )
         db.session.add(remote)
         db.session.commit()
-        log_action(current_user, "add_remote", target=name, detail=f"{ssh_user}@{host}")
+        log_action(current_user, "add_remote", target=name, detail=f"{ssh_user}@{host}",
+                   remote=remote)
 
         # ── the creator has to be able to reach what they just created ──────────────────────
         # Per-host access is purely group-derived — can_access_remote / accessible_remote_ids walk
@@ -318,7 +319,7 @@ def _register_remote_edit(app):
             return _form_err(_bad_auth, "manage_remotes")
         remote.sudo_enabled = request.form.get("sudo_enabled") == "on"
         db.session.commit()
-        log_action(current_user, "edit_remote", target=remote.name)
+        log_action(current_user, "edit_remote", target=remote.name, remote=remote)
         return _form_ok(f"Remote '{remote.name}' updated.", "manage_remotes")
 
 
@@ -454,7 +455,7 @@ def _add_local_remote(name, lgsm_user):
     )
     db.session.add(remote)
     db.session.commit()
-    log_action(current_user, "add_local_remote", target=name)
+    log_action(current_user, "add_local_remote", target=name, remote=remote)
     return _form_ok(f"Local server '{name}' added! You can now install game servers on this machine.",
                     "manage_remotes")
 

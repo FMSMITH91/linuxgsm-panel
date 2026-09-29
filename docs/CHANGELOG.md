@@ -935,6 +935,20 @@ CI-verified commit regardless of this file — this changelog is for humans.
   now claims the invite only if it is unexpired, and re-reads the minter after the claim, while it
   holds the database's write lock, before creating the account. The password is hashed before
   that lock is taken, so other writers wait less.
+- **A delegated log viewer sees the rows about their own servers and hosts, chosen by id, not by
+  name.** `/logs` matched a row to a viewer's servers and hosts by the row's target name, and
+  names are not unique. The same game installed on two hosts gets the same name by default, so a
+  viewer granted one read the other's console commands with their arguments (`rcon_password ...`).
+  Anyone who could rename their own server or host could rename it onto another tenant's server,
+  onto `database`, a branch name or an IP, and read those rows too: another tenant's firewall
+  changes, the panel host's own administration, and another account's password or 2FA reset. Each
+  audit row now records the game server or host it is about, and a delegated viewer is shown their
+  own rows plus the rows about servers and hosts they can reach. Nothing is matched by name. When
+  a server or host is deleted its rows let go of the id, so a new server that SQLite gives the
+  same id to does not inherit another tenant's history. **On upgrade**, existing rows get their id
+  once, only where the action is about a server or host and exactly one server or host has that
+  name. The rest stay visible to the person who did the action and to superadmins. Password and
+  2FA resets are now treated as account rows.
 - **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported by
   kta1kri). Twenty-five places built `sudo -u <account> bash -c '…'` from a server's account
   (`short_name`) and LinuxGSM script name with neither quoting nor a check — the dashboard's own

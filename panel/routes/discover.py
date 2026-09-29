@@ -260,7 +260,7 @@ def _finish_import(app, remote, remote_id, added):
     """
     db.session.commit()
     log_action(current_user, "import_servers", target=remote.name,
-               detail="added=%s" % ",".join(added))
+               detail="added=%s" % ",".join(added), remote=remote)
     not_enrolled = _enrol_imported(remote, added)
     # Populate the imported servers' command lists so "Supported Commands" is ready
     # without a manual refresh (install caches these; import didn't).

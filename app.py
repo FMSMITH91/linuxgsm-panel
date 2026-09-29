@@ -876,7 +876,8 @@ def _autoblock_watch(app):
                         a, r = _autoblock_reconcile(remote)
                         if a or r:
                             log_action(None, "autoblock_reconcile", target=remote.name,
-                                       detail="+%d blocked, -%d released" % (a, r), actor="system")
+                                       detail="+%d blocked, -%d released" % (a, r), actor="system",
+                                       remote=remote)
                 except Exception:
                     _log.debug("autoblock tick failed for remote %s", rid, exc_info=True)
 

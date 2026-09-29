@@ -452,20 +452,24 @@ def _check_view_logs_with_a_second_host():
         _mine_name = db.session.get(GameServer, accessible_id).name
         _other_name = db.session.get(GameServer, other_id).name
         _lt = tag + "LOGROW"
-        for _uid_, _who, _act, _tgt, _det, _ip in (
-                (admin_id, "admin", "send_command", _mine_name, _lt + "_mine_srv", "198.51.100.1"),
+        # The server rows carry the server's id, as log_action records it from server=; audit_scope
+        # reads that, never the target's name (the rows' names below are what a name match used).
+        for _uid_, _who, _act, _tgt, _det, _ip, _gsid in (
+                (admin_id, "admin", "send_command", _mine_name, _lt + "_mine_srv", "198.51.100.1",
+                 accessible_id),
                 (admin_id, "admin", "send_command", _other_name,
-                 _lt + "_other_srv rcon_password S3cret", "198.51.100.5"),
-                (None, tag + "Sup3rSecretPw", "login_failed", "", _lt + "_failed", "198.51.100.2"),
-                (admin_id, "admin", "login", "", _lt + "_adminlogin", "198.51.100.3"),
+                 _lt + "_other_srv rcon_password S3cret", "198.51.100.5", other_id),
+                (None, tag + "Sup3rSecretPw", "login_failed", "", _lt + "_failed", "198.51.100.2",
+                 None),
+                (admin_id, "admin", "login", "", _lt + "_adminlogin", "198.51.100.3", None),
                 # An ACCOUNT row whose free-text target happens to name their server (an
                 # invite's note is whatever the minter typed): still not theirs to read.
                 (admin_id, "admin", "invite_created", _mine_name, _lt + "_invite",
-                 "198.51.100.6"),
-                (_lv_id, tag + "_logviewer", "logout", "", _lt + "_own", "198.51.100.4")):
+                 "198.51.100.6", None),
+                (_lv_id, tag + "_logviewer", "logout", "", _lt + "_own", "198.51.100.4", None)):
             db.session.add(_AL(user_id=_uid_, username=_who, action=_act, target=_tgt,
                                detail=_det, ip_address=_ip, success=True,
-                               timestamp=_al_now()))
+                               timestamp=_al_now(), game_server_id=_gsid))
         db.session.commit()
     try:
         _view_logs_as_viewer_and_superadmin()
@@ -2241,6 +2245,346 @@ def _check_group_edit_scope():
         _group_scope_cleanup()
 
 
+_AUDIT_PW = "Rbac-audit-1!pw"   # nosec B105 - a throwaway fixture account's password, for a re-auth prompt
+
+
+def _audit_fixtures():
+    """Two fixture hosts whose game servers share a NAME, and two delegated log viewers."""
+    global _ax
+    with app.app_context():
+        _hosts = {}
+        for _k in ("hA", "hB"):
+            _hosts[_k] = RemoteServer(name=tag + "_" + _k, host="127.0.0.1", port=22,
+                                      username="root", auth_method="key", auth_credential="")
+            db.session.add(_hosts[_k])
+        db.session.flush()
+        # The default-install collision: the same game on two hosts gets the same name.
+        _srv = {"sA": GameServer(remote_id=_hosts["hA"].id, name=tag + "_cs2", short_name="rbaxsa",
+                                 game_type="cs2", port=27115, installed=True, status="offline"),
+                "sB": GameServer(remote_id=_hosts["hB"].id, name=tag + "_cs2", short_name="rbaxsb",
+                                 game_type="cs2", port=27116, installed=True, status="offline"),
+                "sB2": GameServer(remote_id=_hosts["hB"].id, name=tag + "_prod",
+                                  short_name="rbaxsb2", game_type="cs2", port=27117,
+                                  installed=True, status="offline")}
+        db.session.add_all(_srv.values())
+        db.session.flush()
+        _liz_g = Group(name=tag + "_ax_liz", description="", is_default=False)
+        _liz_g.set_permissions([auth.VIEW_LOGS, auth.VIEW_SERVERS])
+        _liz_g.game_servers.append(_srv["sA"])          # ONE server, by an individual grant
+        _dana_g = Group(name=tag + "_ax_dana", description="", is_default=False)
+        _dana_g.set_permissions([auth.VIEW_LOGS, auth.VIEW_SERVERS, auth.MANAGE_SERVERS,
+                                 auth.MANAGE_REMOTES])
+        _dana_g.servers.append(_hosts["hA"])            # the whole of hostA
+        db.session.add_all([_liz_g, _dana_g])
+        _users = {}
+        for _k, _grp in (("liz", _liz_g), ("dana", _dana_g)):
+            _users[_k] = User(username=tag + "_ax_" + _k, display_name=_k,
+                              password_hash=auth.hash_password(_AUDIT_PW),
+                              is_superadmin=False, is_active=True)
+            _users[_k].groups.append(_grp)
+            db.session.add(_users[_k])
+        db.session.commit()
+        _ax = {k: v.id for d in (_hosts, _srv, _users) for k, v in d.items()}
+        _ax.update(liz_g=_liz_g.id, dana_g=_dana_g.id, rows={})
+
+
+def _ax_log(key, action, target, detail, server=None, remote=None, user_id=None):
+    """Write an audit row through the real log_action and remember its id under `key`."""
+    from panel.db.models import AuditLog as _AXL
+    with app.test_request_context():
+        _who = db.session.get(User, user_id or admin_id)
+        auth.log_action(_who, action, target=target, detail=detail,
+                        server=db.session.get(GameServer, _ax[server]) if server else None,
+                        remote=db.session.get(RemoteServer, _ax[remote]) if remote else None)
+        _ax["rows"][key] = db.session.query(db.func.max(_AXL.id)).scalar()
+
+
+def _ax_sees(user_key, row_key):
+    """Whether `user_key`'s audit_scope includes the row remembered as `row_key` (rows, not page text)."""
+    from panel.db.models import AuditLog as _AXL
+    from panel.routes.audit import audit_scope as _ax_scope
+    with app.app_context():
+        _u = db.session.get(User, _ax[user_key] if user_key in _ax else user_key)
+        _scope = _ax_scope(_u)
+        _q = _AXL.query.filter(_AXL.id == _ax["rows"][row_key])
+        return (_q if _scope is None else _q.filter(_scope)).count() == 1
+
+
+def _check_audit_same_named_servers():
+    """745379041 (a): the same game on two hosts shares a name; a viewer of one reads neither the other's."""
+    _sa = client_as(admin_id)
+    for _k in ("sA", "sB"):
+        _sa.post("/api/server/%d/notify-empty" % _ax[_k], json={"enabled": True})
+    from panel.db.models import AuditLog as _AXL
+    with app.app_context():
+        for _k in ("sA", "sB"):
+            _ax["rows"]["notify_" + _k] = (db.session.query(db.func.max(_AXL.id))
+                                           .filter(_AXL.action == "set_notify_when_empty",
+                                                   _AXL.game_server_id == _ax[_k]).scalar())
+    check("audit scope: (premise) the route recorded WHICH server each row is about",
+          _ax["rows"]["notify_sA"] is not None and _ax["rows"]["notify_sB"] is not None,
+          "set_notify_when_empty wrote no game_server_id — the checks below would prove nothing")
+    _ax_log("rcon_sB", "send_command", tag + "_cs2", "rcon_password S3cretHostB", server="sB")
+    check("audit scope: a viewer of one server sees its rows (control)",
+          _ax_sees("liz", "notify_sA"), "the scope is too tight")
+    check("audit scope: ...but not the same-named server's on another host",
+          not _ax_sees("liz", "notify_sB") and not _ax_sees("liz", "rcon_sB"),
+          "hostB's console commands, rcon_password included, reach a viewer of hostA's copy")
+
+
+def _check_audit_rename_onto_other_targets():
+    """745379041 (b, c) / 745379096: renaming your own server or host onto a target reads nothing new."""
+    _ax_log("prod_sB2", "send_command", tag + "_prod", "sv_password TenantBpw", server="sB2")
+    _ax_log("port_hB", "remote_port_open", "%s_hB:27015/udp" % tag, "opened", remote="hB")
+    _ax_log("repair_db", "panel_repair_db", "database", "repaired")
+    _ax_log("ufw_panel", "ufw_block", "198.51.100.7", "panel host")
+    _dc = client_as(_ax["dana"])
+    for _new in (tag + "_prod", "database", "198.51.100.7"):
+        _dc.post("/servers/%d/edit" % _ax["sA"], data={"name": _new})
+    with app.app_context():
+        _renamed = db.session.get(GameServer, _ax["sA"]).name
+    check("audit scope: (premise) the delegated admin really renamed their server",
+          _renamed == "198.51.100.7", "server is named %r" % _renamed)
+    check("audit scope: renaming your server onto another tenant's does not read its rows",
+          not _ax_sees("dana", "prod_sB2"), "tenant B's sv_password reached tenant A's admin")
+    check("audit scope: ...nor onto the panel host's own targets ('database', an IP)",
+          not _ax_sees("dana", "repair_db") and not _ax_sees("dana", "ufw_panel"),
+          "a server renamed 'database' or to an IP read the panel host's administration")
+    _dc.post("/remotes/%d/edit" % _ax["hA"], data={
+        "name": tag + "_hB", "host": "127.0.0.1", "ssh_port": "22", "ssh_user": "root"})
+    with app.app_context():
+        _hname = db.session.get(RemoteServer, _ax["hA"]).name
+    check("audit scope: (premise) the delegated admin really renamed their host",
+          _hname == tag + "_hB", "host is named %r" % _hname)
+    check("audit scope: renaming your host onto another's does not read its 'host:port' rows",
+          not _ax_sees("dana", "port_hB"), "hostB's firewall row reached hostA's admin")
+    check("audit scope: ...while their own host's rows still reach them (control)",
+          _ax_sees("dana", "notify_sA"), "the scope is too tight")
+
+
+def _check_audit_account_rows():
+    """745379096: a server named like an account shows no reset of that account."""
+    with app.app_context():
+        _sa_row = db.session.get(GameServer, _ax["sA"])
+        _sa_row.name = tag + "_ax_victim"
+        db.session.commit()
+    _ax_log("reset_pw", "reset_user_password", tag + "_ax_victim", "")
+    _ax_log("reset_2fa", "2fa_reset", tag + "_ax_victim", "")
+    # ...and one that names their server BY ID, as a call site passing server= wrongly would:
+    # the account-action exclusion must still hold it back.
+    _ax_log("reset_pw_id", "reset_user_password", tag + "_ax_victim", "", server="sA")
+    check("audit scope: a viewer whose server shares an account's name sees no reset of it",
+          not _ax_sees("liz", "reset_pw") and not _ax_sees("liz", "reset_2fa"),
+          "another account's password/2FA reset reached a server-scoped viewer")
+    check("audit scope: ...not even one carrying their server's id (account actions stay out)",
+          not _ax_sees("liz", "reset_pw_id"),
+          "reset_user_password is not treated as an account action")
+
+
+def _check_audit_recycled_server_id():
+    """745379041: a deleted server's rows do not pass to the server that inherits its id."""
+    from panel.db.models import AuditLog as _AXL
+    with app.app_context():
+        _x = GameServer(remote_id=_ax["hB"], name=tag + "_gone", short_name="rbaxgone",
+                        game_type="cs2", port=27118, installed=True, status="offline")
+        db.session.add(_x)
+        db.session.commit()
+        _ax["sX"] = _x.id
+    _ax_log("gone_sX", "send_command", tag + "_gone", "rcon_password GoneSecret", server="sX")
+    with app.app_context():
+        db.session.delete(db.session.get(GameServer, _ax["sX"]))
+        db.session.commit()
+        _y = GameServer(remote_id=_ax["hA"], name=tag + "_heir", short_name="rbaxheir",
+                        game_type="cs2", port=27119, installed=True, status="offline")
+        db.session.add(_y)
+        db.session.commit()
+        _ax["sY"] = _y.id
+        _liz_g = db.session.get(Group, _ax["liz_g"])   # held: the identity map is weak
+        _liz_g.game_servers.append(_y)
+        db.session.commit()
+        _detached = db.session.get(_AXL, _ax["rows"]["gone_sX"]).game_server_id is None
+    check("audit scope: (premise) SQLite handed the deleted server's id to the next one",
+          _ax["sY"] == _ax["sX"], "ids %s / %s — the check below is not about reuse"
+          % (_ax["sX"], _ax["sY"]))
+    check("audit scope: a deleted server's rows are detached from its id",
+          _detached, "the row still points at an id SQLite has recycled")
+    check("audit scope: ...so the server that inherits the id does not inherit its history",
+          not _ax_sees("liz", "gone_sX"), "a deleted tenant's rcon_password reached the heir's viewer")
+    # A row written AFTER the delete, about the deleted instance — uninstall_server's failure row
+    # and a background worker's outcome row are written that way. The listener has already run,
+    # so only log_action itself can refuse to record the dead id.
+    with app.test_request_context():
+        _dead = GameServer(remote_id=_ax["hB"], name=tag + "_gone2",
+                           short_name="rbaxgone2", game_type="cs2", port=27121)
+        db.session.add(_dead)
+        db.session.commit()
+        db.session.delete(_dead)
+        db.session.commit()
+        auth.log_action(db.session.get(User, admin_id), "uninstall_server", target=tag + "_gone2",
+                        detail="rcon_password AfterDelete", server=_dead)
+        _ax["rows"]["after_delete"] = db.session.query(db.func.max(_AXL.id)).scalar()
+        _after = db.session.get(_AXL, _ax["rows"]["after_delete"]).game_server_id
+    check("audit scope: a row written after its server was deleted records no id for it",
+          _after is None, "it recorded %r — an id SQLite will hand to the next server" % _after)
+
+
+def _check_audit_recycled_host_ids():
+    """...nor a deleted HOST's rows, whose servers go by bulk delete, to the ones that take their ids."""
+    from panel.db.models import AuditLog as _AXL
+    with app.app_context():
+        _hc = RemoteServer(name=tag + "_hC", host="127.0.0.1", port=22, username="root",
+                           auth_method="key", auth_credential="")
+        db.session.add(_hc)
+        db.session.flush()
+        _sc = GameServer(remote_id=_hc.id, name=tag + "_onhc", short_name="rbaxsc",
+                         game_type="cs2", port=27120, installed=True, status="offline")
+        db.session.add(_sc)
+        _dana_g = db.session.get(Group, _ax["dana_g"])  # held: the identity map is weak
+        _dana_g.servers.append(_hc)
+        db.session.commit()
+        _ax.update(hC=_hc.id, sC=_sc.id)
+    _ax_log("hc_row", "remote_port_open", tag + "_hC:27015/udp", "opened", remote="hC")
+    _ax_log("sc_row", "send_command", tag + "_onhc", "rcon_password HostCSecret", server="sC")
+    # Through the real route: its game servers go by a BULK delete that fires no ORM event.
+    _rd = client_as(_ax["dana"]).post("/remotes/%d/delete" % _ax["hC"],
+                                      json={"password": _AUDIT_PW})
+    with app.app_context():
+        _gone = db.session.get(RemoteServer, _ax["hC"]) is None
+        _hc_row = db.session.get(_AXL, _ax["rows"]["hc_row"])
+        _sc_row = db.session.get(_AXL, _ax["rows"]["sc_row"])
+        _detached = (_hc_row.remote_id is None, _sc_row.game_server_id is None)
+    check("audit scope: (premise) the host delete went through", _gone,
+          "status %s" % _rd.status_code)
+    check("audit scope: a deleted host's rows, and its bulk-deleted servers', are detached",
+          _detached == (True, True), "remote_id/game_server_id detached: %s" % (_detached,))
+
+
+def _check_audit_superadmin_sees_all():
+    """The superadmin still reads every planted row."""
+    check("audit scope: a superadmin still reads every row (control)",
+          all(_ax_sees(admin_id, k) for k in _ax["rows"]),
+          "missing: %s" % [k for k in _ax["rows"] if not _ax_sees(admin_id, k)])
+
+
+def _ax_legacy_rows():
+    """(key, action, target, expected (game_server_id key, remote_id key)) for the upgrade check."""
+    return (("L_srv", "send_command", tag + "_cs2", ("sB", None)),        # one server by that name
+            ("L_like", "moderate_kick", tag + "_cs2", ("sB", None)),      # a built action name
+            ("L_dup", "start_server", tag + "_prod", (None, None)),       # two servers: ambiguous
+            ("L_panel", "panel_repair_db", tag + "_cs2", (None, None)),   # not a server action
+            ("L_acct", "invite_created", tag + "_cs2", (None, None)),     # an account action
+            ("L_port", "remote_port_open", tag + "_hB:27015/udp", (None, "hB")),
+            ("L_host", "edit_remote", tag + "_hA", (None, "hA")),
+            ("L_ip", "ufw_block", tag + "_hA", (None, None)))            # call-only: never backfilled
+
+
+def _ax_restore_audit_columns():
+    """Put the two columns back by hand after a failed upgrade, so the rest of the suite can run."""
+    from sqlalchemy import text as _t
+    from panel.db.models import _LIGHT_MIGRATIONS
+    for _c in ("game_server_id", "remote_id"):
+        try:
+            db.session.execute(_t(_LIGHT_MIGRATIONS[("audit_log", _c)]))
+            db.session.commit()
+        except Exception:   # nosec B110 - already there: the failure was after the ALTER
+            db.session.rollback()
+
+
+def _check_audit_backfill_on_upgrade():
+    """The upgrade adds both columns to an old audit_log and backfills only what is unambiguous."""
+    from sqlalchemy import text as _t, inspect as _ax_insp
+    from panel.db.models import AuditLog as _AXL, _run_light_migrations
+    # It drops two columns and replays the migration, so only on this run's own database.
+    check("audit backfill: (premise) the database is this run's own, so the upgrade can be replayed",
+          bool(any(seeded.values())), "not replayed on a configured install")
+    if not any(seeded.values()):
+        return
+    with app.app_context():
+        _hA, _sY = db.session.get(RemoteServer, _ax["hA"]), db.session.get(GameServer, _ax["sY"])
+        _hA.name, _sY.name = tag + "_hA", tag + "_prod"     # hA unique again; tag_prod ambiguous
+        db.session.commit()
+        for _c in ("game_server_id", "remote_id"):
+            db.session.execute(_t("DROP INDEX IF EXISTS ix_audit_log_%s" % _c))
+            db.session.execute(_t("ALTER TABLE audit_log DROP COLUMN %s" % _c))
+        db.session.commit()
+        _ids = {}
+        for _k, _act, _tgt, _ in _ax_legacy_rows():
+            db.session.execute(_t("INSERT INTO audit_log (username, action, target, detail, success) "
+                                  "VALUES ('legacy', :a, :t, :d, 1)"),
+                               {"a": _act, "t": _tgt, "d": tag + "_legacy"})
+            _ids[_k] = db.session.execute(_t("SELECT max(id) FROM audit_log")).scalar()
+        db.session.commit()
+        try:
+            _run_light_migrations()                         # <- the update path
+            _upgrade_err = None
+        except Exception as _e:   # a locked or failed upgrade is this check's finding, not a crash
+            db.session.rollback()
+            _upgrade_err = "%s: %s" % (type(_e).__name__, str(_e)[:160])
+            _ax_restore_audit_columns()
+        _ax["rows"].update(_ids)
+    check("audit backfill: the upgrade itself runs (an install upgrading to this starts at all)",
+          _upgrade_err is None, _upgrade_err or "")
+    if _upgrade_err is not None:
+        return
+    with app.app_context():
+        _cols = {c["name"] for c in _ax_insp(db.engine).get_columns("audit_log")}
+        _idx = {i["name"] for i in _ax_insp(db.engine).get_indexes("audit_log")}
+        _got = {_k: (db.session.get(_AXL, _i).game_server_id, db.session.get(_AXL, _i).remote_id)
+                for _k, _i in _ids.items()}
+    check("audit backfill: the upgrade adds both columns back, indexed",
+          {"game_server_id", "remote_id"} <= _cols
+          and {"ix_audit_log_game_server_id", "ix_audit_log_remote_id"} <= _idx,
+          "columns %s, indexes %s" % (sorted(_cols), sorted(_idx)))
+    _want = {_k: tuple(_ax[_e] if _e else None for _e in _exp)
+             for _k, _, _, _exp in _ax_legacy_rows()}
+    check("audit backfill: only an unambiguous server or host action gets an id",
+          _got == _want, "got %s, want %s" % (_got, _want))
+
+
+def _audit_cleanup():
+    """Remove the audit fixtures: rows, users, groups, servers, hosts."""
+    from panel.db.models import AuditLog as _AXL
+    with app.app_context():
+        for _rid in _ax.get("rows", {}).values():
+            _r = db.session.get(_AXL, _rid) if _rid else None
+            if _r is not None:
+                db.session.delete(_r)
+        for _k in ("liz", "dana"):
+            _u = db.session.get(User, _ax.get(_k))
+            if _u is not None:
+                db.session.delete(_u)
+        for _k in ("liz_g", "dana_g"):
+            _g = db.session.get(Group, _ax.get(_k))
+            if _g is not None:
+                db.session.delete(_g)
+        db.session.commit()
+        for _k in ("sA", "sB", "sB2", "sY"):
+            _s = db.session.get(GameServer, _ax.get(_k)) if _ax.get(_k) else None
+            if _s is not None:
+                db.session.delete(_s)
+        db.session.commit()
+        for _k in ("hA", "hB"):
+            _h = db.session.get(RemoteServer, _ax.get(_k)) if _ax.get(_k) else None
+            if _h is not None:
+                db.session.delete(_h)
+        db.session.commit()
+
+
+def _check_audit_scope_by_object():
+    """745379041 / 745379096: a delegated viewer's rows are chosen by server/host id, never by name."""
+    _audit_fixtures()
+    try:
+        _check_audit_same_named_servers()
+        _check_audit_rename_onto_other_targets()
+        _check_audit_account_rows()
+        _check_audit_recycled_server_id()
+        _check_audit_recycled_host_ids()
+        _check_audit_superadmin_sees_all()
+        _check_audit_backfill_on_upgrade()
+    finally:
+        _audit_cleanup()
+
+
 def _check_bulk_actions_per_id():
     """Bulk actions are access-checked for every id."""
     global _t
@@ -2678,6 +3022,7 @@ try:
     _check_unshowable_server_grant_survives()
     _check_empty_host_list_wording()
     _check_group_edit_scope()
+    _check_audit_scope_by_object()
     _check_bulk_actions_per_id()
     _check_setup_endpoints_stay_shut()
     _check_healthz_before_setup()
@@ -2965,6 +3310,96 @@ check("every mutating endpoint writes an audit entry (or is listed as having not
       not _unaudited,
       "; ".join(sorted(_unaudited)[:5]) + " — call log_action(), or add the endpoint to "
       "_NO_AUDIT_OK with the reason it has nothing to record")
+# ── an audit row about a server or host names it by ID ─────────────────────────────────────────
+# audit_scope decides who reads a row from AuditLog.game_server_id / remote_id, which log_action
+# records only from its server= / remote= arguments. A call whose target is a server's or a host's
+# name and passes neither writes a row nobody but its actor can read; one that passes them with an
+# action the upgrade's backfill does not know leaves that action's OLD rows unreadable; and one
+# that passes them with an ACCOUNT action would put someone's sign-in history in front of a
+# server's viewers. Read from the source, as an AST, across panel/ and app.py.
+from panel.db import models as _axm  # noqa: E402
+from panel.routes.audit import _ACCOUNT_ACTIONS as _AX_ACCOUNT  # noqa: E402
+import re as _ax_re  # noqa: E402
+
+
+def _ax_like(pattern):
+    """A regex for a SQL LIKE pattern written with a backslash escape."""
+    out, i = "", 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\" and i + 1 < len(pattern):
+            out, i = out + _ax_re.escape(pattern[i + 1]), i + 2
+            continue
+        out += ".*" if ch == "%" else "." if ch == "_" else _ax_re.escape(ch)
+        i += 1
+    return _ax_re.compile(out + r"\Z")
+
+
+def _ax_shapes(node):
+    """Every action name an action expression can produce, with 'Q' for the parts built at run time."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, ast.IfExp):
+        return _ax_shapes(node.body) + _ax_shapes(node.orelse)
+    if isinstance(node, ast.JoinedStr):
+        return ["".join(v.value if isinstance(v, ast.Constant) else "Q" for v in node.values)]
+    if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod)
+            and isinstance(node.left, ast.Constant)):
+        return [node.left.value.replace("%s", "Q").replace("%d", "Q")]
+    return [None]                               # a bare variable: named in _AX_ACTION_FROM_CALLER
+
+
+def _ax_names(expr, var):
+    return expr is not None and any(
+        isinstance(n, ast.Attribute) and n.attr == "name" and isinstance(n.value, ast.Name)
+        and n.value.id == var for n in ast.walk(expr))
+
+
+# Calls whose action is a parameter, with where the real names come from.
+_AX_ACTION_FROM_CALLER = {
+    "_record_backup_outcome",   # its callers pass "scheduled_backup" / "queued_backup"
+}
+_ax_bad, _ax_counts = [], {"server": 0, "remote": 0}
+_ax_srv = ([_ax_like(p) for p in _axm.AUDIT_SERVER_ACTION_LIKE], _axm.AUDIT_SERVER_ACTIONS)
+_ax_host = ([_ax_like(p) for p in _axm.AUDIT_HOST_ACTION_LIKE],
+            _axm.AUDIT_HOST_ACTIONS | _axm.AUDIT_HOST_ACTIONS_CALL_ONLY)
+for _f in sorted({*pathlib.Path(_ROOT, "panel").rglob("*.py"), pathlib.Path(_ROOT, "app.py")}):
+    _tree = ast.parse(_f.read_text(encoding="utf-8"))
+    _fn_of = {}
+    for _fd in ast.walk(_tree):
+        if isinstance(_fd, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for _n in ast.walk(_fd):
+                _fn_of.setdefault(id(_n), _fd.name)
+    for _n in ast.walk(_tree):
+        if not (isinstance(_n, ast.Call)
+                and getattr(_n.func, "id", getattr(_n.func, "attr", None)) == "log_action"):
+            continue
+        _where = "%s:%d" % (_f.relative_to(_ROOT), _n.lineno)
+        _kw = {k.arg: k.value for k in _n.keywords}
+        _tgt = _kw.get("target", _n.args[2] if len(_n.args) > 2 else None)
+        for _obj, _var in (("server", "gs"), ("remote", "remote")):
+            if _ax_names(_tgt, _var) and _obj not in _kw:
+                _ax_bad.append("%s names %s.name but passes no %s=" % (_where, _var, _obj))
+        for _obj, (_likes, _exact) in (("server", _ax_srv), ("remote", _ax_host)):
+            if _obj not in _kw:
+                continue
+            _ax_counts[_obj] += 1
+            for _shape in _ax_shapes(_n.args[1] if len(_n.args) > 1 else _kw.get("action")):
+                if _shape is None:
+                    if _fn_of.get(id(_n)) not in _AX_ACTION_FROM_CALLER:
+                        _ax_bad.append("%s: %s= with an action this gate cannot read" % (_where, _obj))
+                elif _shape in _AX_ACCOUNT:
+                    _ax_bad.append("%s: %s= on the ACCOUNT action %r" % (_where, _obj, _shape))
+                elif _shape not in _exact and not any(_l.match(_shape) for _l in _likes):
+                    _ax_bad.append("%s: %s= on %r, which models.AUDIT_%s_ACTIONS does not list"
+                                   % (_where, _obj, _shape, "SERVER" if _obj == "server" else "HOST"))
+check("audit ids: the scan found the server and host rows to check (positive control)",
+      _ax_counts["server"] >= 40 and _ax_counts["remote"] >= 30,
+      "server=%d remote=%d call sites — the check below proves nothing" % (
+          _ax_counts["server"], _ax_counts["remote"]))
+check("audit ids: every row about a server or host passes it, with an action the backfill knows",
+      not _ax_bad, "; ".join(_ax_bad[:5]))
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name

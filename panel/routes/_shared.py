@@ -240,10 +240,11 @@ def _record_backup_outcome(app, sid, gname, ok, reason, action, title):
     still applies — the Tags UI promises muting keeps a server out of the alert channel.
     """
     try:
-        log_action(None, action, target=gname, detail=(reason or "")[:500], success=bool(ok))
+        _bk_gs = db.session.get(GameServer, sid)
+        log_action(None, action, target=gname, detail=(reason or "")[:500], success=bool(ok),
+                   server=_bk_gs)
         if ok:
             return
-        _bk_gs = db.session.get(GameServer, sid)
         if _bk_gs is not None and notifications.alerts_muted(_bk_gs):
             return
         notifications.notify("backup_failed", title,
@@ -579,7 +580,8 @@ def _run_queued_action(app, gs):
     give_up = retry and fails >= _QUEUED_ACTION_ATTEMPTS
     detail = _queued_action_detail(act, (_out, err, rc), fails, retry, give_up)
     try:
-        log_action(None, "%s_server" % act, target=gs.name, detail=detail[:500], success=ok)
+        log_action(None, "%s_server" % act, target=gs.name, detail=detail[:500], success=ok,
+                   server=gs)
     except Exception:
         db.session.rollback()
         app.logger.warning("could not audit the queued %s of %s", act, gs.name, exc_info=True)
@@ -688,7 +690,8 @@ def _start_bootstrap_job(app, remote_id, opts, actor_id):
                     remote.is_online = True
                     remote.last_seen = utcnow()
                     db.session.commit()
-                log_action(None, "remote_vps_bootstrap", target=remote.name, detail=msg, success=success)
+                log_action(None, "remote_vps_bootstrap", target=remote.name, detail=msg, success=success,
+                           remote=remote)
                 with _bootstrap_lock:
                     job = _bootstrap_jobs.get(remote_id)
                     if job is not None:

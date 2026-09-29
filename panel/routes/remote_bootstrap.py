@@ -45,7 +45,8 @@ def register(app):
         # machine (SSH hardening, UFW, fail2ban, a new user, a reboot) and it was not audited at
         # all; the options are recorded because they decide what actually changed.
         log_action(current_user, "remote_bootstrap", target=remote.name,
-                   detail="started — " + ", ".join("%s=%s" % (k, v) for k, v in sorted(opts.items())))
+                   detail="started — " + ", ".join("%s=%s" % (k, v) for k, v in sorted(opts.items())),
+                   remote=remote)
         return jsonify({"success": True, "started": True})
 
     @app.route("/api/remote/<int:remote_id>/bootstrap-status")

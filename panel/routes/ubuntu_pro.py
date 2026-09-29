@@ -48,7 +48,7 @@ def _register_pro_changes(app):
         # NOTE: the token is deliberately never logged.
         if ok:
             _pro_status_cached(remote, force=True)   # state changed → refresh the stored status
-        log_action(current_user, "pro_attach", target=remote.name, success=ok)
+        log_action(current_user, "pro_attach", target=remote.name, success=ok, remote=remote)
         return jsonify({"success": ok, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/pro-service", methods=["POST"])
@@ -66,7 +66,7 @@ def _register_pro_changes(app):
         if ok:
             _pro_status_cached(remote, force=True)   # a service toggled → refresh the stored status
         log_action(current_user, f"pro_{action or 'service'}", target=remote.name,
-                   detail=service, success=ok)
+                   detail=service, success=ok, remote=remote)
         return jsonify({"success": ok, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/pro-detach", methods=["POST"])
@@ -80,7 +80,7 @@ def _register_pro_changes(app):
             return _unreachable("pro detach")
         if ok:
             _pro_status_cached(remote, force=True)   # detached → refresh the stored status
-        log_action(current_user, "pro_detach", target=remote.name, success=ok)
+        log_action(current_user, "pro_detach", target=remote.name, success=ok, remote=remote)
         return jsonify({"success": ok, "message": msg})
 
 

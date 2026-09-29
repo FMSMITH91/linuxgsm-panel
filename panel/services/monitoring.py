@@ -881,7 +881,7 @@ def _fire_reboot_when_empty(remote, info):
     ok, msg = _reboot_expecting_offline(remote, remote_reboot)
     log_action(None, "reboot_when_empty_fire", target=remote.name,
                detail="host idle — %s" % msg, success=ok,
-               actor=info.get("by") or "system")
+               actor=info.get("by") or "system", remote=remote)
     if ok:
         notifications.notify("auto_reboot", "Host auto-rebooted",
                              "%s was empty of players, so its queued reboot ran." % remote.display_name)
