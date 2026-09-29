@@ -11,7 +11,7 @@ import contextlib as _ctx14
 import importlib.util as _ilu14
 import io as _io14
 import signal as _sig14
-import subprocess as _sp14
+import subprocess as _sp14  # nosec B404 - runs this interpreter and bash on the suite's own files
 import tempfile as _tf14
 import time as _time14
 
@@ -162,7 +162,7 @@ try:
         with open(os.path.join(_JC_DIR, _f), "rb") as _i, \
                 open(os.path.join(_jc_tmp, "tools", "js_coverage", _f), "wb") as _o:
             _o.write(_i.read())
-    _jc_p = _sp14.run([sys.executable, os.path.join(_jc_tmp, "tools", "js_coverage", "serve.py")],
+    _jc_p = _sp14.run([sys.executable, os.path.join(_jc_tmp, "tools", "js_coverage", "serve.py")],  # nosec B603 - a fixed argv
                      capture_output=True, text=True, timeout=60, cwd=_jc_tmp,
                      env=dict(os.environ, JS_COVERAGE_USER="u", JS_COVERAGE_PASSWORD="p" * 20))
     check("js coverage: serve.py refuses to start in a tree run.py did not copy, before touching it",
@@ -242,9 +242,10 @@ try:
                                  "[ -n \"$JC_SUMMARY\" ] && echo \"$JC_SUMMARY\" > js-coverage.txt\n"
                                  "exit \"$JC_RC\"\n"),
                       ("google-chrome", "#!/bin/sh\nexit 0\n")):
-        with open(os.path.join(_jcm_bin, _n), "w") as _fh:
+        # Created owner-only and executable in the one open: no window in which it is anyone else's.
+        with os.fdopen(os.open(os.path.join(_jcm_bin, _n), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700),
+                       "w") as _fh:
             _fh.write(_body)
-        os.chmod(os.path.join(_jcm_bin, _n), 0o755)
     os.symlink("/bin/cat", os.path.join(_jcm_bin, "cat"))
 
     def _jcm_run(rc, summary="TOTAL 5216 4159 79.7%", chrome=True):
@@ -256,7 +257,7 @@ try:
                 if not os.path.exists(os.path.join(_path, _n)):
                     os.symlink(os.path.join(_jcm_bin, _n), os.path.join(_path, _n))
         _summ = os.path.join(_wd, "step-summary")
-        _p = _sp14.run(["/bin/bash", "-c", _jcm_code], cwd=_wd, capture_output=True, text=True,
+        _p = _sp14.run(["/bin/bash", "-c", _jcm_code], cwd=_wd, capture_output=True, text=True,  # nosec B603 - ci.yml's own step
                        timeout=30, env={"PATH": _path, "JC_RC": str(rc), "JC_SUMMARY": summary,
                                         "GITHUB_STEP_SUMMARY": _summ})
         _read = (lambda _f: open(_f).read() if os.path.exists(_f) else "")
@@ -429,12 +430,16 @@ finally:
 # which scripts' counts are kept.
 
 
+def _jc_no_event(_msg):
+    """Take an event and do nothing, as CDP does until the Driver sets its handler."""
+
+
 class _JcCDP:
     """Records calls and sends; hands back the replies the driver asks for."""
 
     def __init__(self):
         self.calls, self.sent, self.pending, self.events = [], [], [], []
-        self.on_event = None
+        self.on_event = _jc_no_event
 
     def call(self, method, params=None, timeout=30):
         self.calls.append((method, params or {}))

@@ -6,14 +6,15 @@ Ids are serve.py's seed: servers 1 Survival MC (panel host, online), 2 Garry's M
 restart pending), 3 Rust (vps-one, offline), 4 CS2 (vps-one), 5 Valheim (vps-two, host down),
 6 ARK (installing), 7 Broken Install (failed); hosts 1 panel-host (local), 2 vps-one, 3 vps-two.
 
-First the setup wizard, which the seed leaves unfinished. Then four passes. The first presses every control on every page and CANCELS every confirmation, so the
-seeded world is still there for the next page; a page's FLOWS (flows.py) then do what pressing
-each control once cannot. The second switches the account to Spanish with the language picker and
-reloads a few pages (i18n.js only runs for a language other than English), then back. The third
-goes back round the pages whose confirmations lead somewhere and presses OK — deleting, stopping,
-revoking — ending with the page that deletes hosts, because that takes their servers with it. The
-last turns on two-factor sign-in (it ends on the backup codes page) and then lets the session
-expire under an open page, which is how every page's poller finds out.
+First the setup wizard, which the seed leaves unfinished. Then four passes. The first presses every
+control on every page and CANCELS every confirmation, so the seeded world is still there for the
+next page; a page's FLOWS (flows.py) then do what pressing each control once cannot. The second
+switches the account to Spanish with the language picker and reloads a few pages (i18n.js only runs
+for a language other than English), then back. The third goes back round the pages whose
+confirmations lead somewhere and presses OK — deleting, stopping, revoking — ending with the page
+that deletes hosts, because that takes their servers with it. The last turns on two-factor sign-in
+(it ends on the backup codes page) and then lets the session expire under an open page, which is
+how every page's poller finds out.
 """
 import time
 

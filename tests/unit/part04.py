@@ -2241,7 +2241,9 @@ _pb4_ns = {"argparse": _tl_argparse, "json": _json_tg, "PATHS": ["/grows", "/fla
            "cleanup": lambda: _pb4_calls.append("cleanup"),
            "mark_setup_complete": lambda: _pb4_calls.append("flip"),
            "run_size": _pb4_run_size, "run_group_size": _pb4_run_group_size}
-exec(compile(_tl_ast.Module(body=_pb4_defs, type_ignores=[]), "perf_bench.py", "exec"),  # nosec B102 - this repo's own tool
+# exec, not an import: importing perf_bench runs its module body, which writes the panel's config
+# under data/ and boots the app, so only the step definitions picked out above are run, on stubs.
+exec(compile(_tl_ast.Module(body=_pb4_defs, type_ignores=[]), "perf_bench.py", "exec"),  # nosec B102 - this repo's own tool  # pylint: disable=exec-used
      _pb4_ns)
 _pb4_dir = _lgd_tempfile.mkdtemp(prefix="perf-bench-p4-")
 _pb4_json = os.path.join(_pb4_dir, "out.json")

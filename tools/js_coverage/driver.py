@@ -100,22 +100,40 @@ class Driver:
         c.call("Page.addScriptToEvaluateOnNewDocument", {"source": self._helpers})
 
     # ── events ─────────────────────────────────────────────────────────────────────────────────
+    # The events the driver reads, and the method each one goes to; every other event is ignored.
+    _EVENT_HANDLERS = {"Network.requestWillBeSent": "_request_sent",
+                       "Network.loadingFinished": "_request_ended",
+                       "Network.loadingFailed": "_request_ended",
+                       "Network.responseReceived": "_response_received",
+                       "Page.loadEventFired": "_load_fired",
+                       "Runtime.exceptionThrown": "_exception_thrown",
+                       "Debugger.paused": "_paused"}
+
     def _on_event(self, msg):
-        m, p = msg["method"], msg.get("params", {})
-        if m == "Network.requestWillBeSent":
-            url = p.get("request", {}).get("url", "")
-            if "/socket.io/" not in url and not url.startswith("data:"):
-                self._inflight[p["requestId"]] = time.monotonic()
-        elif m in ("Network.loadingFinished", "Network.loadingFailed"):
-            self._inflight.pop(p.get("requestId"), None)
-        elif m == "Network.responseReceived" and p.get("type") == "Document":
+        handler = self._EVENT_HANDLERS.get(msg["method"])
+        if handler is not None:
+            getattr(self, handler)(msg.get("params", {}))
+
+    def _request_sent(self, p):
+        url = p.get("request", {}).get("url", "")
+        if "/socket.io/" not in url and not url.startswith("data:"):
+            self._inflight[p["requestId"]] = time.monotonic()
+
+    def _request_ended(self, p):
+        self._inflight.pop(p.get("requestId"), None)
+
+    def _response_received(self, p):
+        if p.get("type") == "Document":
             self.doc_status = int(p.get("response", {}).get("status", 0) or 0)
-        elif m == "Page.loadEventFired":
-            self.loads += 1
-        elif m == "Runtime.exceptionThrown":
-            self._record_exception(p.get("exceptionDetails", {}))
-        elif m == "Debugger.paused":
-            self._hold_navigation()
+
+    def _load_fired(self, _p):
+        self.loads += 1
+
+    def _exception_thrown(self, p):
+        self._record_exception(p.get("exceptionDetails", {}))
+
+    def _paused(self, _p):
+        self._hold_navigation()
 
     def _hold_navigation(self):
         """Keep a leaving page's counts while it is paused, then let it go on."""
