@@ -97,7 +97,8 @@ def _audits(action, target=None):
         if target is not None:
             q = q.filter_by(target=target)
         return [NS(target=a.target, detail=a.detail or "", success=a.success,
-                   action=a.action, username=a.username) for a in q.order_by(AuditLog.id).all()]
+                   action=a.action, username=a.username, remote_id=a.remote_id)
+                for a in q.order_by(AuditLog.id).all()]
 
 
 def _new_host(name, host):
@@ -237,6 +238,12 @@ try:
           [(a.target, a.success) for a in _audits("remote_vps_bootstrap", "p16-attacker")]
           == [("p16-attacker", True)],
           repr([(a.target, a.success) for a in _audits("remote_vps_bootstrap")][-3:]))
+    # The audit row is filed under a host by id (log_action's remote=, which delegated viewers'
+    # /logs reads). That id is the new host's now, so filing the stale run under it would show the
+    # deleted host's bootstrap to whoever may see the new one.
+    check("bootstrap reuse: ...and that row is filed under NO host, not the one that took the id",
+          [a.remote_id for a in _audits("remote_vps_bootstrap", "p16-attacker")] == [None],
+          repr([(a.target, a.remote_id) for a in _audits("remote_vps_bootstrap")][-3:]))
 
     # The new host's own bootstrap: it still pins the key it met on first contact, still marks the
     # host seen, and still audits. The detached row is what the fix hands the bootstrap, so the pin
@@ -260,6 +267,9 @@ try:
           repr((_st, _host_field(_bs16_vid, "host_key"), _host_field(_bs16_vid, "last_seen"))))
     check("bootstrap: ...and the pin is on the row by the next step, not only once the run ends",
           _bs16_pin_at_step[:1] == ["ssh-ed25519 AAAAC3NzaVICTIMKEY"], repr(_bs16_pin_at_step))
+    check("bootstrap: the new host's own run is filed under its host (control)",
+          [a.remote_id for a in _audits("remote_vps_bootstrap", "p16-victim")] == [_bs16_vid],
+          repr([(a.target, a.remote_id) for a in _audits("remote_vps_bootstrap")][-3:]))
     # A pin the host ALREADY had is not replaced by what a bootstrap met (a re-bootstrap, or the
     # monitor pinning first): TOFU keeps the first key, and HostKeyMismatch is the answer to a
     # different one, not an overwrite.
