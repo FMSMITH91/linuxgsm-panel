@@ -114,13 +114,18 @@ _dbm7_saved = {k: getattr(_dbm7, k) for k in (
     "os", "sqlite3", "shutil", "subprocess", "_paths", "_euid", "_become", "repair",
     "integrity_check", "optimize", "run_update_maintenance", "_copy_to_new_file",
     "_reclaim_db_files")}
-try:
-    # ── _fmt_bytes: the unit ladder, and the GB cap (it never falls through to "B") ──────────────
+
+
+def _dbm7_fmt_bytes_unit_ladder():
+    # ── _fmt_bytes: the unit ladder, and the GB cap (it never falls through to "B")
     eq("dbm/_fmt_bytes: B, KB, MB, and GB is the ceiling",
        [_dbm7._fmt_bytes(n) for n in (0, None, 1023, 1536, 3 * 1024 ** 2, 5 * 1024 ** 4)],
        ["0 B", "0 B", "1023 B", "1.5 KB", "3.0 MB", "5120.0 GB"])
 
-    # ── optimize() ─────────────────────────────────────────────────────────────────────────────
+
+def _dbm7_optimize():
+    # ── optimize()
+    global _c, _cmp
     _big = _p7_db(os.path.join(_d7, "big.db"), (("t", 3000),))
     _c = _p7_sq.connect(_big)
     _c.execute("DELETE FROM t")
@@ -162,7 +167,9 @@ try:
         _dbm7.os = _dbm7_saved["os"]
     eq("dbm/optimize: an unreadable size after VACUUM claims no saving", _o_sz, (True, "already compact"))
 
-    # ── integrity_check(): a failed read is never "healthy" ─────────────────────────────────────
+
+def _dbm7_integrity_check_failed_read():
+    # ── integrity_check(): a failed read is never "healthy"
     _dbm7.os = _Over(os, path=_Over(os.path, exists=lambda p: True,
                                     getsize=_p7_raise(PermissionError("denied"))))
     try:
@@ -197,7 +204,9 @@ try:
     eq("dbm/integrity: an EMPTY pragma answer is a failure, not an 'ok'",
        _ic_none, (False, "integrity check failed"))
 
-    # ── _aside(): the forensic copy ────────────────────────────────────────────────────────────
+
+def _dbm7_aside_forensic_copy():
+    # ── _aside(): the forensic copy
     # A source that opens but cannot be READ (a directory) fails mid-copy: nothing may be left at
     # the destination name, or the next repair would find a half-written ".corrupt-" file.
     _asrc = os.path.join(_d7, "adir")
@@ -222,7 +231,9 @@ try:
           and all(t.startswith(_a_tried[0] + "-") for t in _a_tried[1:]),
           "res=%r tried=%r" % (_a_all, _a_tried[:3]))
 
-    # ── _silent_rm / _claim_new: a name that cannot be cleared or claimed skips the rebuild ─────
+
+def _dbm7_silent_rm_claim_new():
+    # ── _silent_rm / _claim_new: a name that cannot be cleared or claimed skips the rebuild
     _sr_dir = os.path.join(_d7, "not-removable")
     os.mkdir(_sr_dir)
     _sr_res = _p7_call(_dbm7._silent_rm, _sr_dir)
@@ -243,7 +254,9 @@ try:
        _p7_call(_dbm7.repair, os.path.join(_d7, "nothing-here.db"), ""),
        (False, "no database file to repair"))
 
-    # ── repair() when the swap itself fails: the original stays, and no temp is left behind ─────
+
+def _dbm7_repair_swap_itself_fails():
+    # ── repair() when the swap itself fails: the original stays, and no temp is left behind
     _sw = _p7_db(os.path.join(_d7, "swap.db"), (("t", 30),))
     _p7_db(_sw + ".backup", (("t", 30),))
     _dbm7.os = _Over(os, replace=_p7_raise(OSError("EXDEV")))
@@ -260,7 +273,9 @@ try:
           not os.path.lexists(_sw + ".rebuilt") and not os.path.lexists(_sw + ".restoring"),
           repr(sorted(n for n in os.listdir(_d7) if n.startswith("swap.db."))))
 
-    # ── _rebuild_via_recover: the sqlite3 CLI path, driven with a stubbed CLI ──────────────────
+
+def _dbm7_rebuild_via_recover_sqlite3():
+    # ── _rebuild_via_recover: the sqlite3 CLI path, driven with a stubbed CLI
     _rv_calls = []
 
     def _p7_mk_run(rec_rc, rec_out, load_rc, write_dst=True, raise_exc=None):
@@ -303,7 +318,10 @@ try:
     finally:
         _dbm7.shutil, _dbm7.subprocess = _dbm7_saved["shutil"], _dbm7_saved["subprocess"]
 
-    # ── _rebuild_via_dump: a statement the destination refuses is skipped, not fatal ────────────
+
+def _dbm7_rebuild_via_dump_statement():
+    # ── _rebuild_via_dump: a statement the destination refuses is skipped, not fatal
+    global _c
     _dp_src = _p7_db(os.path.join(_d7, "dump-src.db"), (("t", 5), ("u", 7)))
     _dp_dst = os.path.join(_d7, "dump-dst.db")
     _c = _p7_sq.connect(_dp_dst)
@@ -319,7 +337,10 @@ try:
     eq("dbm/dump: a destination sqlite cannot open is a failed rebuild, not an exception",
        _p7_call(_dbm7._rebuild_via_dump, _dp_src, _dp_dir), False)
 
-    # ── run_update_maintenance: the updater's continue (0) / abort (2) decision ─────────────────
+
+def _dbm7_run_update_maintenance_updater():
+    # ── run_update_maintenance: the updater's continue (0) / abort (2) decision
+    global _ru_fix, _ru_good, _ru_out, _ru_rc, f
     _ru_good = _p7_db(os.path.join(_d7, "ru-good.db"))
     _ru_rc, _ru_out = _p7_out(_dbm7.run_update_maintenance, _ru_good)
     check("dbm/update: a healthy database continues the update, through all three steps",
@@ -356,6 +377,10 @@ try:
     _ru_fix = _p7_garbage(os.path.join(_d7, "ru-fix.db"))
     _p7_db(_ru_fix + ".backup", (("t", 11),))
     _ru_rc, _ru_out = _p7_out(_dbm7.run_update_maintenance, _ru_fix)     # backup defaults to .backup
+
+
+def _dbm7_run_update_maintenance_updater_2():
+    global _ru_out, _ru_rc
     check("dbm/update: a damaged database with a healthy backup is repaired and the update continues",
           _ru_rc == 0 and "PROBLEMS FOUND" in _ru_out and _p7_rows(_ru_fix) == 11,
           "rc=%r rows=%r out=%r" % (_ru_rc, _p7_rows(_ru_fix), _ru_out))
@@ -370,49 +395,64 @@ try:
           _ru_rc == 2 and "STILL UNHEALTHY (row 9 missing from index)" in _ru_out,
           "rc=%r out=%r" % (_ru_rc, _ru_out))
 
-    # ── main(): the CLI install.sh and panel-helper call ────────────────────────────────────────
+
+def _dbm7_main_cli_install_sh():
+    # ── main(): the CLI install.sh and panel-helper call
+    global _mn_bad, _mn_db, _mn_seen
     _mn_db = _p7_db(os.path.join(_d7, "main.db"))
     _mn_bad = _p7_garbage(os.path.join(_d7, "main-bad.db"))
     _dbm7._euid = lambda: 1000
     _mn_seen = []
+
+
+def _dbm7_main_cli_install_sh_2():
+    eq("dbm/main: an unknown command is a usage error (64)",
+       _p7_out(_dbm7.main, ["db_maintenance.py", "vacuum"])[0], 64)
+    _dbm7._paths = lambda: (_mn_db, _mn_db + ".backup")
+    _mn_rc, _mn_out = _p7_out(_dbm7.main, ["db_maintenance.py"])
+    check("dbm/main: the default command is 'check' — 0 and 'ok' on a healthy database",
+          _mn_rc == 0 and _mn_out.strip() == "ok", "rc=%r out=%r" % (_mn_rc, _mn_out))
+    _mn_rc, _mn_out = _p7_out(_dbm7.main, ["db_maintenance.py", "optimize"])
+    check("dbm/main: 'optimize' answers 0 with its message",
+          _mn_rc == 0 and (_mn_out.strip() == "already compact" or _mn_out.startswith("reclaimed")),
+          "rc=%r out=%r" % (_mn_rc, _mn_out))
+    _dbm7._paths = lambda: (_mn_bad, _mn_bad + ".backup")
+    _mn_chk = _p7_out(_dbm7.main, ["db_maintenance.py", "check"])
+    _mn_opt = _p7_out(_dbm7.main, ["db_maintenance.py", "optimize"])
+    check("dbm/main: 'check' and 'optimize' answer 1 on a damaged database",
+          _mn_chk[0] == 1 and _mn_opt[0] == 1, "check=%r optimize=%r" % (_mn_chk, _mn_opt))
+    _dbm7.run_update_maintenance = lambda p, b: (_mn_seen.append(("update", p, b)), 7)[1]
+    _dbm7.repair = lambda p, b: (_mn_seen.append(("repair", p, b)), (False, "nope"))[1]
+    _mn_upd = _p7_out(_dbm7.main, ["db_maintenance.py", "update"])[0]
+    _mn_rep = _p7_out(_dbm7.main, ["db_maintenance.py", "repair"])[0]
+    check("dbm/main: 'update' and a path-less 'repair' act on _paths()'s database and its .backup",
+          _mn_upd == 7 and _mn_rep == 1
+          and _mn_seen == [("update", _mn_bad, _mn_bad + ".backup"),
+                           ("repair", _mn_bad, _mn_bad + ".backup")],
+          "update=%r repair=%r seen=%r" % (_mn_upd, _mn_rep, _mn_seen))
+    # As root, a database directory that does not exist is "nothing to maintain" for the
+    # updater's commands and a failure for the ones an operator asked for.
+    _dbm7._euid = lambda: 0
+    _mn_gone = os.path.join(_d7, "no-such-dir", "panel.db")
+    _dbm7._paths = lambda: (_mn_gone, _mn_gone + ".backup")
+    _mn_c = _p7_out(_dbm7.main, ["db_maintenance.py", "check"])
+    _mn_r = _p7_out(_dbm7.main, ["db_maintenance.py", "repair", _mn_gone])
+    check("dbm/main as root: a missing database directory is 0 for check, 1 for repair",
+          _mn_c[0] == 0 and "no database yet" in _mn_c[1] and _mn_r[0] == 1,
+          "check=%r repair=%r" % (_mn_c, _mn_r))
+
+
+def _dbm7_main_cli_install_sh_3():
+    global _k
     try:
-        eq("dbm/main: an unknown command is a usage error (64)",
-           _p7_out(_dbm7.main, ["db_maintenance.py", "vacuum"])[0], 64)
-        _dbm7._paths = lambda: (_mn_db, _mn_db + ".backup")
-        _mn_rc, _mn_out = _p7_out(_dbm7.main, ["db_maintenance.py"])
-        check("dbm/main: the default command is 'check' — 0 and 'ok' on a healthy database",
-              _mn_rc == 0 and _mn_out.strip() == "ok", "rc=%r out=%r" % (_mn_rc, _mn_out))
-        _mn_rc, _mn_out = _p7_out(_dbm7.main, ["db_maintenance.py", "optimize"])
-        check("dbm/main: 'optimize' answers 0 with its message",
-              _mn_rc == 0 and (_mn_out.strip() == "already compact" or _mn_out.startswith("reclaimed")),
-              "rc=%r out=%r" % (_mn_rc, _mn_out))
-        _dbm7._paths = lambda: (_mn_bad, _mn_bad + ".backup")
-        _mn_chk = _p7_out(_dbm7.main, ["db_maintenance.py", "check"])
-        _mn_opt = _p7_out(_dbm7.main, ["db_maintenance.py", "optimize"])
-        check("dbm/main: 'check' and 'optimize' answer 1 on a damaged database",
-              _mn_chk[0] == 1 and _mn_opt[0] == 1, "check=%r optimize=%r" % (_mn_chk, _mn_opt))
-        _dbm7.run_update_maintenance = lambda p, b: (_mn_seen.append(("update", p, b)), 7)[1]
-        _dbm7.repair = lambda p, b: (_mn_seen.append(("repair", p, b)), (False, "nope"))[1]
-        _mn_upd = _p7_out(_dbm7.main, ["db_maintenance.py", "update"])[0]
-        _mn_rep = _p7_out(_dbm7.main, ["db_maintenance.py", "repair"])[0]
-        check("dbm/main: 'update' and a path-less 'repair' act on _paths()'s database and its .backup",
-              _mn_upd == 7 and _mn_rep == 1
-              and _mn_seen == [("update", _mn_bad, _mn_bad + ".backup"),
-                               ("repair", _mn_bad, _mn_bad + ".backup")],
-              "update=%r repair=%r seen=%r" % (_mn_upd, _mn_rep, _mn_seen))
-        # As root, a database directory that does not exist is "nothing to maintain" for the
-        # updater's commands and a failure for the ones an operator asked for.
-        _dbm7._euid = lambda: 0
-        _mn_gone = os.path.join(_d7, "no-such-dir", "panel.db")
-        _dbm7._paths = lambda: (_mn_gone, _mn_gone + ".backup")
-        _mn_c = _p7_out(_dbm7.main, ["db_maintenance.py", "check"])
-        _mn_r = _p7_out(_dbm7.main, ["db_maintenance.py", "repair", _mn_gone])
-        check("dbm/main as root: a missing database directory is 0 for check, 1 for repair",
-              _mn_c[0] == 0 and "no database yet" in _mn_c[1] and _mn_r[0] == 1,
-              "check=%r repair=%r" % (_mn_c, _mn_r))
+        _dbm7_main_cli_install_sh_2()
     finally:
         for _k in ("_paths", "_euid", "repair", "run_update_maintenance"):
             setattr(_dbm7, _k, _dbm7_saved[_k])
+
+
+def _dbm7_main_cli_install_sh_4():
+    global _cf_cwd, _cf_db, _cf_dir, _pw_became, _pw_saved
     eq("dbm/_euid: the process's effective uid", _dbm7._euid(), os.geteuid())
 
     # As root, over a directory someone else owns, the drop to that owner FAILING must stop
@@ -464,6 +504,10 @@ try:
     sys.modules["pwd"] = _P7NoPw()
     _dbm7._become = lambda uid, gid: _pw_became.append((uid, gid))
     _dbm7._reclaim_db_files = lambda *a: None
+
+
+def _dbm7_main_cli_install_sh_5():
+    global e
     try:
         _pw_res = _p7_call(_dbm7._confine_to_db_dir, _cf_db)
     finally:
@@ -496,6 +540,23 @@ try:
     finally:
         sys.argv = _rp_argv
     eq("dbm/__main__: the script exits with main()'s status", _rp_code, 64)
+
+
+try:
+    _dbm7_fmt_bytes_unit_ladder()
+    _dbm7_optimize()
+    _dbm7_integrity_check_failed_read()
+    _dbm7_aside_forensic_copy()
+    _dbm7_silent_rm_claim_new()
+    _dbm7_repair_swap_itself_fails()
+    _dbm7_rebuild_via_recover_sqlite3()
+    _dbm7_rebuild_via_dump_statement()
+    _dbm7_run_update_maintenance_updater()
+    _dbm7_run_update_maintenance_updater_2()
+    _dbm7_main_cli_install_sh()
+    _dbm7_main_cli_install_sh_3()
+    _dbm7_main_cli_install_sh_4()
+    _dbm7_main_cli_install_sh_5()
 finally:
     for _k, _v in _dbm7_saved.items():
         setattr(_dbm7, _k, _v)
@@ -549,7 +610,7 @@ def _p7_names_in(d):
     return sorted(p.name for p in d.iterdir())
 
 
-try:
+def _bk7_setup():
     _bk7.BACKUP_DIR = _b7 / "backups"
     _bk7.DATA_DIR = _b7
     _bk7.DB_PATH = _b7 / "panel.db"
@@ -563,7 +624,10 @@ try:
     _bk7.SECRET_FILE.write_text("s")
     _bk7.CRED_KEY_FILE.write_text("k")
 
-    # ── the encrypted-archive reader: every malformed file is a refusal with a reason ─────────
+
+def _bk7_encrypted_archive_reader_malformed():
+    # ── the encrypted-archive reader: every malformed file is a refusal with a reason
+    global _plain_bytes, _plain_name
     _plain_ok, _plain_name = _bk7.create_backup("manual", passphrase="")  # nosec B106 - no passphrase
     _plain_path = _bk7.BACKUP_DIR / _plain_name if _plain_ok else None
     _plain_bytes = _plain_path.read_bytes() if _plain_path else b""
@@ -605,7 +669,9 @@ try:
     check("backup/decrypt: ...and the same archive opens with the right passphrase, byte for byte",
           _de_ok == (True, "") and _plain_bytes and _de_bytes == _plain_bytes, repr(_de_ok))
 
-    # ── get_passphrase / create_backup: a config it cannot read REFUSES the backup ─────────────
+
+def _bk7_get_passphrase_create_backup():
+    # ── get_passphrase / create_backup: a config it cannot read REFUSES the backup
     _bk7.load_config = _p7_raise(OSError("config.json: I/O error"))
     try:
         _cb_before = _p7_names_in(_bk7.BACKUP_DIR)
@@ -618,54 +684,69 @@ try:
           and _cb_after == _cb_before,
           "res=%r new=%r" % (_cb_ref, sorted(set(_cb_after) - set(_cb_before))))
 
-    # ── REGRESSION (fixed in this change): two backups of one kind within the same second ───────
+
+def _bk7_regression_two_backups_one():
+    # ── REGRESSION (fixed in this change): two backups of one kind within the same second
     # The archive name is the time to the second, and create_backup opened it for writing without
     # asking whether it was taken. A second manual backup in that second (a double-click, two
     # admins, the restore's safety copy racing a manual one) OVERWROTE the first archive — and when
     # the second one then failed, its cleanup os.remove()d the name, deleting the first backup
     # after it had been reported to its caller as taken. The clock is frozen on the module so both
     # calls really do land in one second.
+    global _frozen
     _frozen = _p7_time.time()
     _bk7.time = _Over(_p7_time, time=lambda: _frozen,
                       strftime=lambda f, t=None: _p7_time.strftime(
                           f, t if t is not None else _p7_time.localtime(_frozen)))
+
+
+def _bk7_regression_two_backups_one_2():
+    _same_a = _p7_call(_bk7.create_backup, "samesec", passphrase="")  # nosec B106 - no passphrase
+    _same_a_bytes = (_bk7.BACKUP_DIR / _same_a[1]).read_bytes() if _same_a[0] else b""
+    _bk7.CONFIG_FILE.write_text('{"changed": true}')
+    _same_b = _p7_call(_bk7.create_backup, "samesec", passphrase="")  # nosec B106 - no passphrase
+    _same_a_after = ((_bk7.BACKUP_DIR / _same_a[1]).read_bytes()
+                     if (_bk7.BACKUP_DIR / _same_a[1]).exists() else b"")
+    check("backup/create: a second backup in the same second gets its own name, not the first's",
+          _same_a[0] and _same_b[0] and _same_a[1] != _same_b[1] and _same_a_after == _same_a_bytes,
+          "a=%r b=%r first-intact=%r" % (_same_a, _same_b, _same_a_after == _same_a_bytes))
+    _bk7.os = _Over(os, chmod=_p7_raise(PermissionError("read-only")))
     try:
-        _same_a = _p7_call(_bk7.create_backup, "samesec", passphrase="")  # nosec B106 - no passphrase
-        _same_a_bytes = (_bk7.BACKUP_DIR / _same_a[1]).read_bytes() if _same_a[0] else b""
-        _bk7.CONFIG_FILE.write_text('{"changed": true}')
-        _same_b = _p7_call(_bk7.create_backup, "samesec", passphrase="")  # nosec B106 - no passphrase
-        _same_a_after = ((_bk7.BACKUP_DIR / _same_a[1]).read_bytes()
-                         if (_bk7.BACKUP_DIR / _same_a[1]).exists() else b"")
-        check("backup/create: a second backup in the same second gets its own name, not the first's",
-              _same_a[0] and _same_b[0] and _same_a[1] != _same_b[1] and _same_a_after == _same_a_bytes,
-              "a=%r b=%r first-intact=%r" % (_same_a, _same_b, _same_a_after == _same_a_bytes))
-        _bk7.os = _Over(os, chmod=_p7_raise(PermissionError("read-only")))
-        try:
-            _same_c = _p7_call(_bk7.create_backup, "samesec", passphrase="")  # nosec B106 - no passphrase
-        finally:
-            _bk7.os = _bk7_saved["os"]
-        _same_left = sorted(n for n in _p7_names_in(_bk7.BACKUP_DIR) if "samesec" in n)
-        check("backup/create: a same-second backup that FAILS does not delete the ones already taken",
-              _same_c == (False, "Backup failed — see panel logs.")
-              and _same_left == sorted([_same_a[1], _same_b[1]]),
-              "c=%r left=%r" % (_same_c, _same_left))
-        # Every candidate second taken: a refusal that touches none of them, never an overwrite.
-        for _b in range(10):
-            (_bk7.BACKUP_DIR / ("panel-backup-%s-samesec.tar.gz" % _p7_time.strftime(
-                "%Y%m%d-%H%M%S", _p7_time.localtime(_frozen + _b)))).write_bytes(b"kept")
-        _same_d = _p7_call(_bk7.create_backup, "samesec", passphrase="")  # nosec B106 - no passphrase
-        _same_kept = [(_bk7.BACKUP_DIR / _n).read_bytes() for _n in _p7_names_in(_bk7.BACKUP_DIR)
-                      if "samesec" in _n]
-        check("backup/create: with every candidate name taken it refuses and overwrites none",
-              _same_d == (False, "Backup failed — see panel logs.") and len(_same_kept) == 10
-              and all(b == b"kept" for b in _same_kept), "d=%r n=%d" % (_same_d, len(_same_kept)))
-        _bk7.os = _Over(os, open=_p7_raise(PermissionError("EACCES")))
-        try:
-            _same_e = _p7_call(_bk7.create_backup, "othersec", passphrase="")  # nosec B106 - no passphrase
-        finally:
-            _bk7.os = _bk7_saved["os"]
-        eq("backup/create: a backups dir it cannot create a file in is a failure, not a raise",
-           _same_e, (False, "Backup failed — see panel logs."))
+        _same_c = _p7_call(_bk7.create_backup, "samesec", passphrase="")  # nosec B106 - no passphrase
+    finally:
+        _bk7.os = _bk7_saved["os"]
+    _same_left = sorted(n for n in _p7_names_in(_bk7.BACKUP_DIR) if "samesec" in n)
+    check("backup/create: a same-second backup that FAILS does not delete the ones already taken",
+          _same_c == (False, "Backup failed — see panel logs.")
+          and _same_left == sorted([_same_a[1], _same_b[1]]),
+          "c=%r left=%r" % (_same_c, _same_left))
+
+
+def _bk7_regression_two_backups_one_3():
+    # Every candidate second taken: a refusal that touches none of them, never an overwrite.
+    for _b in range(10):
+        (_bk7.BACKUP_DIR / ("panel-backup-%s-samesec.tar.gz" % _p7_time.strftime(
+            "%Y%m%d-%H%M%S", _p7_time.localtime(_frozen + _b)))).write_bytes(b"kept")
+    _same_d = _p7_call(_bk7.create_backup, "samesec", passphrase="")  # nosec B106 - no passphrase
+    _same_kept = [(_bk7.BACKUP_DIR / _n).read_bytes() for _n in _p7_names_in(_bk7.BACKUP_DIR)
+                  if "samesec" in _n]
+    check("backup/create: with every candidate name taken it refuses and overwrites none",
+          _same_d == (False, "Backup failed — see panel logs.") and len(_same_kept) == 10
+          and all(b == b"kept" for b in _same_kept), "d=%r n=%d" % (_same_d, len(_same_kept)))
+    _bk7.os = _Over(os, open=_p7_raise(PermissionError("EACCES")))
+    try:
+        _same_e = _p7_call(_bk7.create_backup, "othersec", passphrase="")  # nosec B106 - no passphrase
+    finally:
+        _bk7.os = _bk7_saved["os"]
+    eq("backup/create: a backups dir it cannot create a file in is a failure, not a raise",
+       _same_e, (False, "Backup failed — see panel logs."))
+
+
+def _bk7_regression_two_backups_one_4():
+    global _n
+    try:
+        _bk7_regression_two_backups_one_2()
+        _bk7_regression_two_backups_one_3()
     finally:
         _bk7.time = _bk7_saved["time"]
         _bk7.CONFIG_FILE.write_text("{}")
@@ -673,7 +754,10 @@ try:
             if "samesec" in _n:
                 (_bk7.BACKUP_DIR / _n).unlink()
 
-    # ── create_backup: a failure after the archive exists leaves no partial archive behind ──────
+
+def _bk7_create_backup_failure_after():
+    # ── create_backup: a failure after the archive exists leaves no partial archive behind
+    global _db_moved, _n
     _bk7.os = _Over(os, chmod=_p7_raise(PermissionError("read-only")))
     try:
         _cp_before = _p7_names_in(_bk7.BACKUP_DIR)
@@ -707,6 +791,10 @@ try:
     # No panel.db at all (a fresh install): the archive carries the config and keys only.
     _db_moved = _b7 / "panel.db.away"
     os.replace(str(_bk7.DB_PATH), str(_db_moved))
+
+
+def _bk7_create_backup_failure_after_2():
+    global _nd_ok, _t, e
     try:
         _nd_ok, _nd_name = _bk7.create_backup("manual", passphrase="")  # nosec B106 - no passphrase
         with _p7_tar.open(str(_bk7.BACKUP_DIR / _nd_name)) as _t:
@@ -719,7 +807,9 @@ try:
     eq("backup/create: with no database yet the archive holds only config and keys",
        _nd_members, ["config.json", "cred_key", "secret_key"])
 
-    # ── the listing, _safe_path, delete ─────────────────────────────────────────────────────────
+
+def _bk7_listing_safe_path_delete():
+    # ── the listing, _safe_path, delete
     (_bk7.BACKUP_DIR / "panel-backup-notadate.tar.gz").write_bytes(b"x")
     os.symlink(str(_b7 / "gone"), str(_bk7.BACKUP_DIR / "panel-backup-20200101-000000-daily.tar.gz"))
     _lb_names = [b["name"] for b in _bk7.list_backups()]
@@ -744,7 +834,10 @@ try:
     eq("backup/delete: an unlink the OS refuses is reported as a failure",
        _del_res, (False, "Could not delete the backup."))
 
-    # ── prune_backups: the configured retention, and a junk value falling back to the default ──
+
+def _bk7_prune_backups_configured_retention():
+    # ── prune_backups: the configured retention, and a junk value falling back to the default
+    global _k
     _pr_names = {"old": "panel-backup-20200102-000000-daily.tar.gz",
                  "mid": "panel-backup-20200103-000000-daily.tar.gz"}
     for _k, _age in (("old", 20), ("mid", 5)):
@@ -766,7 +859,9 @@ try:
           _pr_three == 1 and _pr_names["mid"] not in _pr_after_three and _plain_name in _pr_after_three,
           "removed=%r left=%r" % (_pr_three, sorted(_pr_after_three)))
 
-    # ── daily_backup_tick ───────────────────────────────────────────────────────────────────────
+
+def _bk7_daily_backup_tick():
+    # ── daily_backup_tick
     _dt_calls = []
     _dt_next = [(True, "n")]
     _bk7.create_backup = lambda kind="manual", **k: (_dt_calls.append(("create", kind)), _dt_next[0])[1]
@@ -798,7 +893,9 @@ try:
         _bk7.create_backup, _bk7.prune_backups = _bk7_saved["create_backup"], _bk7_saved["prune_backups"]
         _b7_cfg.pop("backup_enabled", None)
 
-    # ── _service_restart_launcher: per-user unit, system unit, neither ──────────────────────────
+
+def _bk7_service_restart_launcher_per():
+    # ── _service_restart_launcher: per-user unit, system unit, neither
     _units = {"user": False, "system": False}
 
     def _p7_unit_exists(p):
@@ -822,7 +919,10 @@ try:
         ["sudo", "systemd-run", "--collect", "/bin/bash", "/s.sh"],
         ["systemd-run", "--user", "--collect", "/bin/bash", "/s.sh"]))
 
-    # ── restore_backup: every refusal happens before anything live is touched ──────────────────
+
+def _bk7_restore_backup_refusal_happens():
+    # ── restore_backup: every refusal happens before anything live is touched
+    global _p7_archive, _stage
     _stage = os.path.join(str(_b7), ".restore-stage")
     eq("backup/restore: an unknown name is refused",
        _p7_call(_bk7.restore_backup, "panel-backup-19990101-000000-manual.tar.gz"),
@@ -882,6 +982,10 @@ try:
           _hv_res == (False, "Could not start the restore.") and _rv_verbs == [("panel-restore", [], 20)]
           and not os.path.exists(_stage),
           "res=%r verbs=%r staged=%r" % (_hv_res, _rv_verbs, os.path.exists(_stage)))
+
+
+def _bk7_restore_backup_refusal_happens_2():
+    global _lg_script, _lg_text
     _bk7._helper_present = _p7_raise(RuntimeError("stat failed"))
     try:
         _hx_res = _p7_call(_bk7.restore_backup, _plain_name, skip_safety_backup=True)
@@ -913,6 +1017,9 @@ try:
     check("backup/restore (pre-helper): launches the written script detached, and says NO safety copy",
           isinstance(_lg_res, tuple) and _lg_res[0] is True and "NO pre-restore safety copy" in _lg_res[1]
           and _popen == [["LAUNCH", _lg_script]], "res=%r popen=%r" % (_lg_res, _popen))
+
+
+def _bk7_restore_backup_refusal_happens_3():
     check("backup/restore (pre-helper): the script copies only the members the archive had",
           ("cp -f '%s/panel.db' '%s' || true" % (_stage, _bk7.DB_PATH)) in _lg_text
           and ("cp -f '%s/config.json' '%s' || true" % (_stage, _bk7.CONFIG_FILE)) in _lg_text
@@ -923,7 +1030,9 @@ try:
     eq("backup/_sh: a quote in a path cannot end the quoting", _bk7._sh("/a b/it's"), "'/a b/it'\\''s'")
     _p7_sh.rmtree(_stage, ignore_errors=True)
 
-    # ── settings: every junk value is ignored or clamped, never stored raw ─────────────────────
+
+def _bk7_settings_junk_value_ignored():
+    # ── settings: every junk value is ignored or clamped, never stored raw
     _b7_cfg.clear()
     _b7_cfg["backup_keep_days"] = "a fortnight"
     eq("backup/settings: an unparseable stored retention reads as the default",
@@ -950,7 +1059,9 @@ try:
        (_b7_cfg.get("full_backup_interval_days"), _b7_cfg.get("full_backup_keep")),
        (_bk7.MAX_INTERVAL_DAYS, _bk7.MIN_FULL_KEEP))
 
-    # ── per-server retention ────────────────────────────────────────────────────────────────────
+
+def _bk7_per_server_retention():
+    # ── per-server retention
     _b7_cfg.clear()
     _b7_cfg["game_schedules"] = {"41": {"keep": 9}}
     eq("backup/game_prune_keep: a readable config answers the server's own retention",
@@ -969,6 +1080,25 @@ try:
     _p7_call(_bk7.set_game_schedule, 43, None, _bk7.UNCHANGED)
     check("backup/game schedule: clearing a server's only override removes its entry entirely",
           "43" not in _b7_cfg["game_schedules"], repr(_b7_cfg["game_schedules"]))
+
+
+try:
+    _bk7_setup()
+    _bk7_encrypted_archive_reader_malformed()
+    _bk7_get_passphrase_create_backup()
+    _bk7_regression_two_backups_one()
+    _bk7_regression_two_backups_one_4()
+    _bk7_create_backup_failure_after()
+    _bk7_create_backup_failure_after_2()
+    _bk7_listing_safe_path_delete()
+    _bk7_prune_backups_configured_retention()
+    _bk7_daily_backup_tick()
+    _bk7_service_restart_launcher_per()
+    _bk7_restore_backup_refusal_happens()
+    _bk7_restore_backup_refusal_happens_2()
+    _bk7_restore_backup_refusal_happens_3()
+    _bk7_settings_junk_value_ignored()
+    _bk7_per_server_retention()
 finally:
     for _k in _bk7_names:
         setattr(_bk7, _k, _bk7_saved[_k])
@@ -1495,11 +1625,14 @@ def _p7_so_reset():
     SO.__dict__.pop("open", None)
 
 
-try:
+def _so7_setup():
     SO.time = _Over(_p7_time, sleep=lambda s: None)          # nothing below may really sleep
     SO._is_system_service = lambda: False
 
-    # ── _run_verb: the three ways a command fails come back as values, never exceptions ──────────
+
+def _so7_run_verb_three_ways():
+    # ── _run_verb: the three ways a command fails come back as values, never exceptions
+    global _exc
     _sv = []
     SO._helper_present = lambda: False
     SO.os = _Over(os, geteuid=lambda: 0)                        # root: the tool runs directly
@@ -1523,7 +1656,10 @@ try:
     SO.os, SO.subprocess = _so7_saved["os"], _so7_saved["subprocess"]
     SO._helper_present = _so7_saved["_helper_present"]
 
-    # ── _run: the shell runner itself (the definition, not a runner's wrapper) ──────────────────
+
+def _so7_run_shell_runner_itself():
+    # ── _run: the shell runner itself (the definition, not a runner's wrapper)
+    global _exc
     from unit.part02 import _orig_so_run as _p7_run_before_leaks  # noqa: E402
     _real_run = _p7_defined(SO, "_run", _p7_run_before_leaks, SO._run)
     if _real_run is None:
@@ -1551,7 +1687,9 @@ try:
            _rr_fail, [("", "Command timed out", -1), ("", "Command not found", -1),
                       ("", "command execution error", -1)])
 
-    # ── _tracked_branch / _helper_present: a failed read picks the safe answer ─────────────────
+
+def _so7_tracked_branch_helper_present():
+    # ── _tracked_branch / _helper_present: a failed read picks the safe answer
     _p7_cfgmod.load_config = _p7_raise(OSError("EIO"))
     try:
         eq("so/_tracked_branch: an unreadable config follows the default branch", SO._tracked_branch(), "main")
@@ -1567,7 +1705,10 @@ try:
           _hp is False and SO._HELPER_STATE["present"] is False, repr(_hp))
     SO._HELPER_STATE.update(_so7_state["_HELPER_STATE"])
 
-    # ── live metrics from /proc: an unreadable /proc is flagged, never a confident zero ─────────
+
+def _so7_live_metrics_from_proc():
+    # ── live metrics from /proc: an unreadable /proc is flagged, never a confident zero
+    global _lm0, _stat_txt
     _stat_txt = "cpu  100 0 100 800 0 0 0 0\ncpu0 50 0 50 400 0 0 0\ncpu1 50 0 50 400 0 0 0\n"
     _mem_txt = "MemTotal: 1000 kB\nMemAvailable: 250 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n"
     SO._last_cpu_stat.update({"cpus": None, "ts": 0.0})
@@ -1589,6 +1730,9 @@ try:
     finally:
         _p7_sh.disk_usage = _du_real
         SO.__dict__.pop("open", None)
+
+
+def _so7_live_metrics_from_proc_2():
     check("so/live_metrics: nothing readable is read_ok=False with zeros — not an idle host",
           isinstance(_lm0, dict) and _lm0["read_ok"] is False and _lm0["core_count"] == 0
           and _lm0["ram_total"] == 0 and _lm0["disk_total"] == 0 and _lm0["disk_percent"] == 0,
@@ -1612,7 +1756,9 @@ try:
     eq("so/cpu%: an unparseable or unreadable /proc/stat is (0, 0), and the percent is unknown ('')",
        (_jf, _jf2, _jf3, _jf4), ((0, 0), (0, 0), "", ""))
 
-    # ── UFW / Tailscale reads ───────────────────────────────────────────────────────────────────
+
+def _so7_ufw_tailscale_reads():
+    # ── UFW / Tailscale reads
     SO._run_verb = _p7_verb_by({"ufw-status": ("Status: active\n\nTo  Action  From\n--  ------  ----\n"
                                                 "22/tcp                     ALLOW IN    Anywhere\n"
                                                 "22/tcp (v6)                ALLOW IN    Anywhere (v6)\n", "", 0)})
@@ -1650,7 +1796,9 @@ try:
     eq("so/tailscale_ssh_status: unparseable status and prefs are 'not running, could not read'",
        _tss, {"enabled": False, "running": False, "error": "Could not read Tailscale prefs"})
 
-    # ── apt history ─────────────────────────────────────────────────────────────────────────────
+
+def _so7_apt_history():
+    # ── apt history
     _apt_hist = ("Upgrade: zlib1g:amd64 (1:1.2.11, 1:1.2.13)\nEnd-Date: 2024-04-30  06:00:03\n\n"
                  "Start-Date: 2024-05-01  06:00:01\nCommandline: apt-get install htop\n"
                  "Install: htop:amd64 (3.0.5-7build2)\nEnd-Date: 2024-05-01  06:00:03\n\n"
@@ -1666,7 +1814,10 @@ try:
              {"start": "2024-05-02  06:00:01", "command": "/usr/bin/unattended-upgrade",
               "packages": ["libc6", "openssl"]}])
 
-    # ── git: the update machinery's failure answers ─────────────────────────────────────────────
+
+def _so7_git_update_machinery_failure():
+    # ── git: the update machinery's failure answers
+    global _cus, _cus_nf
     _gl = []
     SO.subprocess = _Over(_so7_saved["subprocess"], run=_p7_sp_run(_gl, exc=_p7_sp.TimeoutExpired("git", 45)))
     _g_to = _p7_call(SO._git, ["fetch"])
@@ -1701,6 +1852,10 @@ try:
     SO._git = lambda args, timeout=45: {"rev-parse": ("abc1234", "", 0),
                                         "fetch": ("", "fatal: could not read Username", 128)}.get(args[0], ("", "", 0))
     _cus_nf = _p7_call(SO._compute_update_status)
+
+
+def _so7_git_update_machinery_failure_2():
+    global _k
     check("so/update status: a source it cannot fetch offers nothing from the stale tracking ref",
           isinstance(_cus_nf, dict) and _cus_nf.get("fetched") is False and _cus_nf.get("update_available") is False
           and _cus_nf.get("message", "").startswith("Couldn't reach the update source"), repr(_cus_nf))
@@ -1714,7 +1869,10 @@ try:
     for _k in ("_git", "_is_git_checkout", "_tracked_branch"):
         setattr(SO, _k, _so7_saved[_k])
 
-    # ── _launch_installer: the detached updater, in a temp PANEL_DIR ───────────────────────────
+
+def _so7_launch_installer_detached_updater():
+    # ── _launch_installer: the detached updater, in a temp PANEL_DIR
+    global _li, _li_sys, _pd
     _pd = os.path.join(_s7, "panel")
     os.makedirs(os.path.join(_pd, "data"))
     SO.PANEL_DIR = _pd
@@ -1745,6 +1903,9 @@ try:
     SO._helper_present = lambda: False
     del _li[:]
     _li_sys = _p7_call(SO._launch_installer, "", "")
+
+
+def _so7_launch_installer_detached_updater_2():
     check("so/_launch_installer (system unit, no helper): the launcher is sudo systemd-run",
           isinstance(_li_sys, tuple) and _li_sys[0] is True and _li and _li[0][0][:2] == ["sudo", "systemd-run"],
           "%r %r" % (_li_sys, _li[:1]))
@@ -1763,7 +1924,10 @@ try:
        (False, "Could not start the updater — check the panel logs."))
     SO.subprocess = _so7_saved["subprocess"]
 
-    # ── branches ────────────────────────────────────────────────────────────────────────────────
+
+def _so7_branches():
+    # ── branches
+    global _k
     SO._is_git_checkout = lambda: True
     SO._tracked_branch = lambda: "feature/x"
     SO._fetch_all_branches = lambda: None
@@ -1804,7 +1968,9 @@ try:
     for _k in ("_git", "_is_git_checkout", "_tracked_branch", "_fetch_all_branches", "_launch_installer"):
         setattr(SO, _k, _so7_saved[_k])
 
-    # ── restart_panel ───────────────────────────────────────────────────────────────────────────
+
+def _so7_restart_panel():
+    # ── restart_panel
     SO.subprocess = _Over(_so7_saved["subprocess"], run=_p7_sp_run([], exc=OSError("no bus")))
     _rp_user = _p7_call(SO.restart_panel)
     SO.subprocess = _so7_saved["subprocess"]
@@ -1822,7 +1988,10 @@ try:
     eq("so/restart_panel: the delay handed across the boundary is clamped to 300",
        _rp_v, [("panel-restart", ["300"])])
 
-    # ── panel_repair_database ───────────────────────────────────────────────────────────────────
+
+def _so7_panel_repair_database():
+    # ── panel_repair_database
+    global _k
     eq("so/panel_repair_database: an install without its venv or db_maintenance is refused",
        SO.panel_repair_database(), (False, "The repair tool isn't available on this install."))
     os.makedirs(os.path.join(_pd, "venv", "bin"))
@@ -1859,7 +2028,9 @@ try:
     SO._is_system_service = lambda: False
     SO.PANEL_DIR = _so7_saved["PANEL_DIR"]
 
-    # ── lockout guards: port_in_use / host_has_ip ───────────────────────────────────────────────
+
+def _so7_lockout_guards_port_use():
+    # ── lockout guards: port_in_use / host_has_ip
     SO._run = _p7_raise(RuntimeError("fork failed"))
     _piu = _p7_call(SO.port_in_use, 8080)
     SO._run = _p7_run_by([("ss -H", ("0.0.0.0:5000\n[::]:8080\n", "", 0))])
@@ -1883,13 +2054,18 @@ try:
         SO.__dict__.pop("open", None)
     eq("so/_nonlocal_bind_allowed: '1' is on; an absent sysctl is the kernel default, off", _nlb, (True, False))
 
-    # ── self-update log outcome ─────────────────────────────────────────────────────────────────
+
+def _so7_self_update_log_outcome():
+    # ── self-update log outcome
     eq("so/_update_log_outcome: no exit line is still running; exit 0 with no hold is 'done'",
        (SO._update_log_outcome(["=== panel self-update ==="])["outcome"],
         SO._update_log_outcome(["[+] Restarted", "=== installer exit 0 ==="])),
        ("running", {"finished": True, "exit_code": 0, "outcome": "done", "reason": ""}))
 
-    # ── integrity and repair ────────────────────────────────────────────────────────────────────
+
+def _so7_integrity_repair():
+    # ── integrity and repair
+    global _k
     SO._is_git_checkout = lambda: True
     SO._git = lambda args, timeout=45: {"rev-parse": ("abc1234", "", 0),
                                         "diff": ("M\tapp.py\n\nD\tstatic/x.js\n", "", 0)}[args[0]]
@@ -1906,7 +2082,10 @@ try:
     for _k in ("_git", "_is_git_checkout", "panel_integrity"):
         setattr(SO, _k, _so7_saved[_k])
 
-    # ── unattended upgrades ─────────────────────────────────────────────────────────────────────
+
+def _so7_unattended_upgrades():
+    # ── unattended upgrades
+    global _k
     _ua_v, _ua_w = [], []
     SO._run_verb = _p7_verb_by({"apt-install": ("", "", 0)}, log=_ua_v)
     SO._write_root_file = lambda path, content: (_ua_w.append((path, content)), ("", "", 0))[1]
@@ -1924,7 +2103,10 @@ try:
        (_ua_on, _ua_off), ((True, "Automatic security updates are now enabled."),
                            (False, "Could not confirm automatic security updates were enabled — check the panel logs.")))
 
-    # ── the panel jail's files, as read back ────────────────────────────────────────────────────
+
+def _so7_panel_jail_files_read():
+    # ── the panel jail's files, as read back
+    global f
     SO._F2B_PANEL_FILTER = os.path.join(_s7, "filter.conf")
     SO._F2B_PANEL_JAIL = os.path.join(_s7, "jail.conf")
     _f2b_none = (SO._panel_f2b_filter_current(), SO._panel_f2b_jail_value("logpath"),
@@ -1950,7 +2132,10 @@ try:
     finally:
         _p7_cfgmod.load_config = _cfg7_saved["load_config"]
 
-    # ── _write_root_file: helper by NAME with the content on stdin, else base64 through sudo tee ─
+
+def _so7_write_root_file_helper():
+    # ── _write_root_file: helper by NAME with the content on stdin, else base64 through sudo tee
+    global _k
     _wr_sp, _wr_run = [], []
     SO._helper_present = lambda: True
     SO.subprocess = _Over(_so7_saved["subprocess"], run=_p7_sp_run(_wr_sp, _p7_sp.CompletedProcess([], 0, " ok ", "")))
@@ -1977,7 +2162,9 @@ try:
         "echo YQ== | base64 -d | sudo tee '/etc/x y.conf' >/dev/null",
         "echo Yg== | base64 -d | tee /etc/z.conf >/dev/null"])
 
-    # ── fail2ban reads ──────────────────────────────────────────────────────────────────────────
+
+def _so7_fail2ban_reads():
+    # ── fail2ban reads
     SO._run = _p7_run_by([("command -v fail2ban-client", ("no", "", 0))])
     _fs_absent = SO.panel_fail2ban_status()
     _fo_absent = SO.fail2ban_overview()
@@ -2010,7 +2197,9 @@ try:
            {"jail": "sshd", "currently_banned": 2, "total_banned": 9, "total_failed": 40,
             "banned_ips": ["203.0.113.5", "198.51.100.7"]}]}))
 
-    # ── _ufw_deny_sources: which rows are an all-ports block of an address ─────────────────────
+
+def _so7_ufw_deny_sources_rows():
+    # ── _ufw_deny_sources: which rows are an all-ports block of an address
     # The OUT deny comes FIRST: below the ALLOW it would be dropped as shadowed anyway, and then the
     # direction test would not be what excluded it.
     _uds = SO._ufw_deny_sources(
@@ -2023,7 +2212,9 @@ try:
     eq("so/_ufw_deny_sources: outbound denies and unparseable sources are not blocks; a panel rule is",
        _uds, {"198.51.100.7": "panel-autoblock"})
 
-    # ── _ufw_deny_with / _ufw_raise_shadowed_deny: the write sequences ─────────────────────────
+
+def _so7_ufw_deny_ufw_raise():
+    # ── _ufw_deny_with / _ufw_raise_shadowed_deny: the write sequences
     def _p7_ufw_runner(answers, log):
         def run(verb, args):
             log.append((verb, list(args)))
@@ -2054,7 +2245,9 @@ try:
        ((False, "Could not move the existing deny rule for 198.51.100.8"),
         [("ufw-delete-deny-ip", ["198.51.100.8"])]))
 
-    # ── fail2ban history: top offenders and the reconcile's counts ─────────────────────────────
+
+def _so7_fail2ban_history_top_offenders():
+    # ── fail2ban history: top offenders and the reconcile's counts
     _f2b_log = ("2024-05-01 12:00:00,000 fail2ban.filter  [1]: INFO    [sshd] Found 203.0.113.5\n"
                 "2024-05-01 12:00:01,000 fail2ban.actions [1]: NOTICE  [sshd] Ban 203.0.113.5\n"
                 "2024-05-01 12:00:02,000 fail2ban.filter  [1]: INFO    [linuxgsm-panel] Found 198.51.100.2\n"
@@ -2084,7 +2277,10 @@ try:
        (_ac, _tv, _ac_fail), ({"203.0.113.5": 2, "198.51.100.2": 1}, [("f2b-log-lines", [_cut7])], None))
     SO.fail2ban_overview, SO.ufw_blocked_ips = _so7_saved["fail2ban_overview"], _so7_saved["ufw_blocked_ips"]
 
-    # ── unbanning ───────────────────────────────────────────────────────────────────────────────
+
+def _so7_unbanning():
+    # ── unbanning
+    global _k
     _ub = []
     SO._fail2ban_jails = lambda: ["sshd", "linuxgsm-panel"]
     SO._run_verb = _p7_verb_by({"f2b-unban": lambda a: (_ub.append(a), ("", "", 0) if a[0] == "sshd"
@@ -2107,7 +2303,10 @@ try:
     for _k in ("_fail2ban_jails", "_run_verb", "fail2ban_overview"):
         setattr(SO, _k, _so7_saved[_k])
 
-    # ── the raw-log viewer ──────────────────────────────────────────────────────────────────────
+
+def _so7_raw_log_viewer():
+    # ── the raw-log viewer
+    global f
     _p7_cfgmod.DATA_DIR = _p7_pl.Path(_s7)
     try:
         _slt_none = SO.security_log_tail("panel")
@@ -2136,7 +2335,10 @@ try:
               ("log-tail", ["fail2ban", "4000"]), ("journal", ["fail2ban", "4000"]),
               ("journal", ["ssh", "100"]), ("log-tail", ["auth", "50"])])
 
-    # ── configure / ensure the panel-login jail ────────────────────────────────────────────────
+
+def _so7_configure_ensure_panel_login():
+    # ── configure / ensure the panel-login jail
+    global _auth_new, _cf_ok, _cf_v, _cf_w
     _cf_v, _cf_w = [], []
     _blocker = os.path.join(_s7, "a-file")
     open(_blocker, "w").close()
@@ -2159,6 +2361,10 @@ try:
         _cf_ok = _p7_call(SO.configure_panel_fail2ban, _auth_new, 5000, ["203.0.113.5"])
     finally:
         SO._panel_login_proxied = _so7_saved["_panel_login_proxied"]
+
+
+def _so7_configure_ensure_panel_login_2():
+    global _cf_down, _cf_down2, _st_late
     check("so/configure_panel_fail2ban: pre-creates the log, writes filter + jail, restarts if reload fails",
           isinstance(_cf_ok, tuple) and _cf_ok[0] is True and os.path.isfile(_auth_new)
           and [p for p, _c in _cf_w] == [_so7_saved["_F2B_PANEL_FILTER"], _so7_saved["_F2B_PANEL_JAIL"]]
@@ -2175,6 +2381,9 @@ try:
                                default=("", "", 0))
     _cf_down2 = _p7_call(SO.configure_panel_fail2ban, _auth_new, 5000)
     _st_late = [{"enabled": False}] * 6 + [{"enabled": True}]
+
+
+def _so7_configure_ensure_panel_login_3():
     SO.panel_fail2ban_status = lambda: _st_late.pop(0) if _st_late else {"enabled": False}
     _cf_late_v = []
     SO._run_verb = _p7_verb_by({}, default=("", "", 0), log=_cf_late_v)
@@ -2183,6 +2392,10 @@ try:
           isinstance(_cf_late, tuple) and _cf_late[0] is True
           and [v for v, _a in _cf_late_v].count("service-restart") == 1, "%r %r" % (_cf_late, _cf_late_v))
     SO.panel_fail2ban_status = lambda: {"enabled": False}
+
+
+def _so7_configure_ensure_panel_login_4():
+    global _k
     check("so/configure_panel_fail2ban: a jail that never comes up is a failure that quotes the real reason",
           isinstance(_cf_down, tuple) and _cf_down[0] is False
           and _cf_down[1].startswith("Configured fail2ban, but the jail didn't come up.")
@@ -2197,7 +2410,10 @@ try:
     for _k in ("_run", "_run_verb", "_write_root_file", "panel_fail2ban_status"):
         setattr(SO, _k, _so7_saved[_k])
 
-    # ── panel_diagnostics ──────────────────────────────────────────────────────────────────────
+
+def _so7_panel_diagnostics():
+    # ── panel_diagnostics
+    global _all_verbs, _d2, _d2s, _dg, _hv, _p7_cert, _p7_diag, _svc, f
     from cryptography import x509 as _p7_x509  # noqa: E402
     from cryptography.x509.oid import NameOID as _p7_oid  # noqa: E402
     from cryptography.hazmat.primitives import hashes as _p7_hashes, serialization as _p7_ser  # noqa: E402
@@ -2266,6 +2482,10 @@ try:
     _all_verbs = sorted(_p7_priv.verbs())
     _hv["res"] = _p7_sp.CompletedProcess([], 0, "\n".join(v + "\tdesc" for v in _all_verbs[5:]), "")
     _d2, _d2s = _p7_diag(integ={"git": True, "verified": True, "clean": False, "count": 3}, helper=True)
+
+
+def _so7_panel_diagnostics_2():
+    global _d3, _d3s, f
     check("so/diagnostics: tampered files, an empty DB, a stale helper and a near-expiry cert are each flagged",
           _d2["File integrity"] == ("fail", "3 panel file(s) differ from the installed version.")
           and _d2["Database"] == ("fail", "Database file is empty.")
@@ -2278,6 +2498,10 @@ try:
     open(os.path.join(_dg, "data", "cred_key"), "w").close()
     _hv["res"] = _p7_sp.CompletedProcess([], 0, "\n".join(v + "\tdesc" for v in _all_verbs), "")
     _d3, _d3s = _p7_diag(integ={"git": True, "verified": True, "clean": True, "current_sha": "abc1234"}, helper=True)
+
+
+def _so7_panel_diagnostics_3():
+    global _d4s, _d5s, f
     check("so/diagnostics: a clean tree, a current helper; a corrupt DB and an expired cert still fail",
           _d3["File integrity"] == ("ok", "All panel files match the installed version (abc1234).")
           and _d3["Privileged helper"] == ("ok", "Installed and current (%d verbs)." % len(_all_verbs))
@@ -2317,7 +2541,10 @@ try:
     _hv["exc"] = None
     _svc["on"] = False
 
-    # ── generate_debug_report ──────────────────────────────────────────────────────────────────
+
+def _so7_generate_debug_report():
+    # ── generate_debug_report
+    global _p7_report, _rep, _rep_text
     import importlib.metadata as _p7_md  # noqa: E402
     _md_version = _p7_md.version
     _dr_db = _p7_db(os.path.join(_s7, "dr.db"))
@@ -2365,6 +2592,10 @@ try:
           _rep_log[-200:])
     check("so/debug report: a long log keeps its TAIL, cut on a line boundary",
           len(_rep_log) <= 8000 and _rep_log.startswith("line ") and "line 0000" not in _rep_log, _rep_log[:80])
+
+
+def _so7_generate_debug_report_2():
+    global _rep_none
     check("so/debug report: an uninstalled dependency is left out, the rest listed; no config section",
           "- **eventlet**" not in _rep_text and "- **flask**: " in _rep_text
           and "### Config (non-secret settings only)\n- (none)\n" in _rep_text
@@ -2382,6 +2613,9 @@ try:
     check("so/debug report: a DB health check that raises is left out, never reported as 'ok'",
           isinstance(_rep_noic, dict) and "- **health**" not in _rep_noic["report"]
           and "### Database\n" in _rep_noic["report"], str(_rep_noic)[:300])
+
+
+def _so7_generate_debug_report_3():
     check("so/debug report: no journal anywhere says so rather than showing an empty block",
           isinstance(_rep_none, dict) and "```\n(no journal available)\n```" in _rep_none["report"],
           str(_rep_none)[:300])
@@ -2401,6 +2635,46 @@ try:
         "- **Outcome**: succeeded",
         "- **Outcome**: unknown (in progress, or the log doesn't show a final outcome)",
         "- No panel update has been run through the panel yet."])
+
+
+try:
+    _so7_setup()
+    _so7_run_verb_three_ways()
+    _so7_run_shell_runner_itself()
+    _so7_tracked_branch_helper_present()
+    _so7_live_metrics_from_proc()
+    _so7_live_metrics_from_proc_2()
+    _so7_ufw_tailscale_reads()
+    _so7_apt_history()
+    _so7_git_update_machinery_failure()
+    _so7_git_update_machinery_failure_2()
+    _so7_launch_installer_detached_updater()
+    _so7_launch_installer_detached_updater_2()
+    _so7_branches()
+    _so7_restart_panel()
+    _so7_panel_repair_database()
+    _so7_lockout_guards_port_use()
+    _so7_self_update_log_outcome()
+    _so7_integrity_repair()
+    _so7_unattended_upgrades()
+    _so7_panel_jail_files_read()
+    _so7_write_root_file_helper()
+    _so7_fail2ban_reads()
+    _so7_ufw_deny_sources_rows()
+    _so7_ufw_deny_ufw_raise()
+    _so7_fail2ban_history_top_offenders()
+    _so7_unbanning()
+    _so7_raw_log_viewer()
+    _so7_configure_ensure_panel_login()
+    _so7_configure_ensure_panel_login_2()
+    _so7_configure_ensure_panel_login_3()
+    _so7_configure_ensure_panel_login_4()
+    _so7_panel_diagnostics()
+    _so7_panel_diagnostics_2()
+    _so7_panel_diagnostics_3()
+    _so7_generate_debug_report()
+    _so7_generate_debug_report_2()
+    _so7_generate_debug_report_3()
 except Exception as e:  # noqa: BLE001 - a harness failure must fail by name, not end the suite
     import traceback as _p7_tb  # noqa: E402
     check("system_ops: the part10 harness ran to the end", False,
