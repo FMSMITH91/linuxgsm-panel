@@ -21,6 +21,7 @@ House rules this part keeps (see part01 and tests/unit_test.py):
   * create_app runs (section F) only with its database, data dir and auth log pointed into a temp
     dir, and with threads recorded rather than started.
 """
+import collections as _collections10
 import fcntl
 import json as _json10
 import logging
@@ -896,6 +897,99 @@ try:
           isinstance(_dead10, tuple) and "OSError" in _dead10[1] and not _dsess10._inq,
           repr((_dead10, list(_dsess10._inq))))
     _ts10.os = os
+
+    # ── Aikido 745379045: queueing a keystroke costs the same however much is already queued ───
+    # write() summed every queued chunk on each call, and the cap is in BYTES, so one-byte events
+    # could queue 262144 chunks and make every later write walk them all — ~4.5 ms an event on the
+    # single hub, measured, against ~0.4 ms for any socket event. A running byte count now.
+    class _NoWalk10(_collections10.deque):
+        """A queue that fails the test if anything iterates it."""
+
+        def __iter__(self):
+            raise AssertionError("the input queue was walked")
+
+    _qs10 = _sess10("qcount")
+    _qs10._fd = 99                  # a pty attached (no pump: nothing drains)
+    _qs10._inq = _NoWalk10([b"k"] * 200000)
+    _qs10._inq_bytes = 200000
+    _walked10 = _try10(_qs10.write, "a")
+    check("terminal write: queueing input does not walk the queue already there (745379045)",
+          _walked10 is None and len(_qs10._inq) == 200001 and _qs10._inq_bytes == 200001,
+          repr((_walked10, len(_qs10._inq), getattr(_qs10, "_inq_bytes", None))))
+    _qo10 = []
+    _qc10 = _sess10("qcap", out=_qo10)
+    _qc10._fd = 99
+    _qc10._inq.append(b"z" * (_ts10._MAX_PENDING_INPUT - 1))
+    _qc10._inq_bytes = _ts10._MAX_PENDING_INPUT - 1
+    _qc10.write("ab")
+    check("terminal write: ...and input past the byte bound is still dropped, with a message",
+          len(_qc10._inq) == 1 and _qc10._inq_bytes == _ts10._MAX_PENDING_INPUT - 1
+          and any("2 bytes of input were dropped" in o for o in _qo10), repr((_qo10, _qc10._inq_bytes)))
+    # The count follows the drain exactly: a partial write takes off what was written, a popped
+    # chunk its length, and an emptied queue reads zero.
+    _qd10 = _sess10("qdrain")
+    _qd10._fd = 99
+    for _ch in ("first", "second-chunk", "third"):
+        _qd10.write(_ch)
+    _qwr10 = []
+
+    def _qw_partial(fd, chunk):
+        _qwr10.append(bytes(chunk))
+        return 4 if len(_qwr10) == 2 else len(chunk)
+
+    _ts10.os = _OsProxy10(write=_qw_partial)
+    _ts10._drain_input(_qd10, 99)
+    _q_mid10 = _qd10._inq_bytes
+    _ts10.os = _OsProxy10(write=lambda fd, chunk: len(chunk))
+    _ts10._drain_input(_qd10, 99)
+    _ts10.os = os
+    check("terminal drain: the byte count drops by exactly what was written, and is 0 when empty",
+          _q_mid10 == len(b"nd-chunk") + len(b"third") and not _qd10._inq and _qd10._inq_bytes == 0,
+          repr((_q_mid10, list(_qd10._inq), _qd10._inq_bytes)))
+    _qz10 = _sess10("qdrift")
+    _qz10._fd = 99
+    _qz10.write("abc")
+    _qz10._inq_bytes += 5000                        # a count that drifted up
+    _ts10.os = _OsProxy10(write=lambda fd, chunk: len(chunk))
+    _ts10._drain_input(_qz10, 99)
+    _ts10.os = os
+    check("terminal drain: a queue drained empty reads zero even after the count drifted",
+          not _qz10._inq and _qz10._inq_bytes == 0, repr(_qz10._inq_bytes))
+    # A count that drifted up must not refuse every keystroke: an empty queue is zero, whatever the
+    # counter says — and it cannot drift at all under the lock, but a stale one heals here.
+    _qh10 = _sess10("qheal")
+    _qh10._fd = 99
+    _qh10._inq_bytes = _ts10._MAX_PENDING_INPUT
+    _qh10.write("a")
+    check("terminal write: an empty queue takes input whatever a drifted count says",
+          list(_qh10._inq) == [b"a"] and _qh10._inq_bytes == 1,
+          repr((list(_qh10._inq), _qh10._inq_bytes)))
+    # A full queue refused every event with a WARNING and an on-screen line EACH: a flood of
+    # keystrokes into a program that is not reading wrote a log line and a message per event.
+    # Once a second per session now, with the bytes counted.
+    _qclk10 = _Clock10(7000.0)
+    _ts10.time = _qclk10
+    _qn10 = []
+    _qf10 = _sess10("qflood", out=_qn10)
+    _qf10._fd = 99
+    _qf10._inq.append(b"z" * _ts10._MAX_PENDING_INPUT)
+    _qf10._inq_bytes = _ts10._MAX_PENDING_INPUT
+    _qcap10, _qoff10 = _cap10("panel.terminal")
+    try:
+        for _ in range(50):
+            _qf10.write("k")
+        _qclk10.now = 7001.0
+        _qf10.write("k")
+    finally:
+        _qoff10()
+        _ts10.time = time
+    _q_notes10 = [o for o in _qn10 if "dropped" in o]
+    _q_warned10 = [m for m in _qcap10.warned if "dropped" in m]
+    check("terminal write: a flood into a full queue says so once a second, not once an event",
+          len(_q_notes10) == 2 and "1 bytes" in _q_notes10[0] and "50 bytes" in _q_notes10[1],
+          repr(_q_notes10[:4]))
+    check("terminal write: ...and logs it once a second too",
+          len(_q_warned10) == 2, repr(_q_warned10[:4]))
 
     # ── _send_chan: a short send is continued, not discarded ───────────────────────────────────
     class _Chan10:
@@ -3165,6 +3259,7 @@ from panel.db.models import (GlobalBan as _GBan10, Group as _Group10, SetupState
                              User as _User10, UserSession as _USess10)
 from panel.ops.ssh_manager import cron as _smcron10  # noqa: E402
 from panel.ops.ssh_manager import hosts as _smhosts10  # noqa: E402
+from panel.security import auth as _ca13_auth  # noqa: E402
 
 _APP_STUBBED10 = ("time", "db", "open", "load_config", "update_config", "log_action",
                   "notifications", "current_user", "get_user_permissions",
@@ -3238,6 +3333,24 @@ try:
     check("app https: behind a trusted proxy the panel stands its own TLS down",
           _app10mod._effective_https({"use_https": True, "trust_proxy": True}) is False
           and _app10mod._effective_https({"use_https": True}) is True, "")
+    # Aikido 745379296: trust_proxy with a bind beyond loopback is a direct path around the proxy.
+    # Said at startup — the function, and that the entry point really calls it with the bind.
+    _tpw10 = getattr(_app10mod, "_trust_proxy_bind_warning", lambda c, b: "")
+    check("app startup: trust_proxy with a public bind is warned about, naming the fix",
+          "bind_host" in _tpw10({"trust_proxy": True}, "0.0.0.0")  # nosec B104 - the input under test
+          and "trusted_proxies" in _tpw10({"trust_proxy": True}, "0.0.0.0"),  # nosec B104
+          repr(_tpw10({"trust_proxy": True}, "0.0.0.0")))  # nosec B104
+    check("app startup: ...but not with a loopback bind, nor without trust_proxy (control)",
+          _tpw10({"trust_proxy": True}, "127.0.0.1") == ""
+          and _tpw10({"trust_proxy": False}, "0.0.0.0") == "", "")  # nosec B104
+    import ast as _ast10
+    _main10 = [n for n in _ast10.parse(open(_app10mod.__file__, encoding="utf-8").read()).body
+               if isinstance(n, _ast10.If) and "__main__" in _ast10.dump(n.test)]
+    _calls10 = [c for n in _main10 for c in _ast10.walk(n) if isinstance(c, _ast10.Call)
+                and getattr(c.func, "id", "") == "_trust_proxy_bind_warning"
+                and [getattr(a, "id", None) for a in c.args] == ["cfg", "host"]]
+    check("app startup: the entry point asks it, with the bind it resolved",
+          len(_calls10) == 1, "%d calls in the __main__ block" % len(_calls10))
     check("app origins: a malformed host or origin is None, not an exception",
           _app10mod._host_port("[::1") is None and _app10mod._origin_key("http://[::1") is None
           and _app10mod._host_port("panel.example.com:8443") == ("panel.example.com", 8443), "")
@@ -4203,6 +4316,67 @@ def _ca13_check_proxy(app, client):
                bool(fix) and fix[0].x_for == 1, got == "198.51.100.7")), repr((names, got)))
 
 
+def _ca13_login_fails(client, n, remote, xff_for):
+    """POST n failed logins from `remote`, each with X-Forwarded-For xff_for(i); returns the 1-based
+    attempt the throttle first refused, or None."""
+    for i in range(n):
+        r = client.post("/login", data={"username": "p13_nobody", "password": "wrong"},
+                        environ_base={"REMOTE_ADDR": remote},
+                        headers={"X-Forwarded-For": xff_for(i)})
+        if b"Too many failed attempts" in r.data:
+            return i + 1
+    return None
+
+
+def _ca13_check_login_behind_proxy(app, client):
+    """Aikido 745379296 end to end: this app came up with trust_proxy, so ProxyFix is REALLY in front
+    (a test that only flips _TRUST_PROXY never installs it, and passed against a fix that returned
+    ProxyFix's rewritten remote_addr). A direct client rotating X-Forwarded-For is still ONE throttle
+    bucket, and auth.log names the address that really connected."""
+    auth_log = _CA13_DIR / "auth.log"
+    fails = _app10mod._LOGIN_FAILS
+    saved_csrf = app.config.get("WTF_CSRF_ENABLED", True)
+    saved_uid = _ca13_auth._loopback_peer_uid
+    app.config["WTF_CSRF_ENABLED"] = False
+    try:
+        fails.clear()
+        before = auth_log.read_text() if auth_log.exists() else ""
+        at = _ca13_login_fails(client, 20, "203.0.113.9", lambda i: "192.0.2.%d" % (i + 1))
+        logged = (auth_log.read_text() if auth_log.exists() else "")[len(before):]
+        keys = sorted(fails)
+        check("login behind ProxyFix: a direct client rotating X-Forwarded-For is throttled "
+              "(745379296)",
+              at is not None and at <= _app10mod.LOGIN_MAX_FAILS + 1,
+              "first refused at attempt %r; keys %r" % (at, keys[:4]))
+        check("login behind ProxyFix: ...as ONE bucket, the address that connected",
+              len(keys) == 1 and "203.0.113.9" in str(keys[0]), repr(keys[:4]))
+        check("login behind ProxyFix: ...and auth.log names it, never an address it made up",
+              "from 203.0.113.9" in logged and "192.0.2." not in logged, logged[-300:])
+        # The control: the README's layout, a proxy on loopback. Its X-Forwarded-For IS the client —
+        # each forwarded client its own bucket — so a fix that ignored the header everywhere fails.
+        fails.clear()
+        _ca13_auth._loopback_peer_uid = lambda _env: 0
+        _ca13_login_fails(client, 1, "127.0.0.1", lambda i: "198.51.100.4")
+        check("login behind ProxyFix: a proxy on loopback still names the client (control)",
+              sorted(fails) == ["198.51.100.4"], repr(sorted(fails)))
+        # ...but not when the loopback socket is a local account that is no proxy.
+        fails.clear()
+        _ca13_auth._loopback_peer_uid = lambda _env: 54321
+        _ca13_login_fails(client, 1, "127.0.0.1", lambda i: "198.51.100.5")
+        check("login behind ProxyFix: a local game account on loopback is keyed as loopback",
+              sorted(fails) == ["127.0.0.1"], repr(sorted(fails)))
+        # config.json's trusted_proxies reached this app at boot: a proxy on another machine it
+        # lists is believed.
+        fails.clear()
+        _ca13_login_fails(client, 1, "198.51.100.9", lambda i: "192.0.2.50")
+        check("login behind ProxyFix: a proxy config.json lists in trusted_proxies names the client",
+              sorted(fails) == ["192.0.2.50"], repr(sorted(fails)))
+    finally:
+        _ca13_auth._loopback_peer_uid = saved_uid
+        app.config["WTF_CSRF_ENABLED"] = saved_csrf
+        fails.clear()
+
+
 def _ca13_check_compression(app, client):
     """gzip for big text answers the client accepts, the Vary merge, and the cache headers."""
     gz = {"Accept-Encoding": "gzip"}
@@ -4511,6 +4685,7 @@ def _ca13_first_boot():
     """Seed the throwaway install, boot it, and return (app, runners, boot logs)."""
     _ca13_seed()
     _ca13_config(session_lifetime_hours=12, remember_days=14, trust_proxy=True,
+                 trusted_proxies=["127.0.0.1", "::1", "198.51.100.0/24"],
                  audit_log_retention_days=30, audit_ip_retention_days=7)
     cap_a, off_a = _cap10("app")
     cap_p, off_p = _cap10("panel.app")
@@ -4569,6 +4744,7 @@ try:
     _ca13_check_sessions_and_secrets(_ca13_app)
     _ca13_check_migrations(_ca13_app, _ca13_bootlog)
     _ca13_check_proxy(_ca13_app, _ca13_client)
+    _ca13_check_login_behind_proxy(_ca13_app, _ca13_client)
     _ca13_check_compression(_ca13_app, _ca13_client)
     _ca13_check_errors(_ca13_app, _ca13_client)
     _ca13_loops = _tk13_loops(_ca13_runners)

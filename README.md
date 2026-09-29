@@ -164,6 +164,8 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `port` | 5000 | Web server port |
 | `bind_host` | *(auto)* | Bind address — empty picks `127.0.0.1` when Tailscale Serve can proxy, else `0.0.0.0`. Set `127.0.0.1` explicitly behind a proxy |
 | `trust_proxy` | false | Trust `X-Forwarded-*` from a reverse proxy |
+| `trusted_proxies` | `["127.0.0.1", "::1"]` | With `trust_proxy`: the addresses (or CIDRs) whose `X-Forwarded-For` is believed. Listing replaces the default — add your proxy here if it is on another machine or in a Docker bridge network |
+| `trusted_proxy_users` | `www-data`, `nginx`, `http`, `caddy`, `cloudflared` | With `trust_proxy`, on loopback: the local accounts a proxy may run as (names or uids). Root and the panel's own account always count |
 | `session_lifetime_hours` | 8 | Idle session timeout (sliding) |
 | `remember_days` | 3 | "Remember me" cookie lifetime |
 | `ssh_timeout` | 10 | SSH connection timeout (seconds) |

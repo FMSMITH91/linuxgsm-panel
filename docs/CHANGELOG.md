@@ -938,6 +938,36 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **Tailscale migrate and finalize refuse the panel's own host**, like the other Tailscale actions on
   the Hosts page. They rewrite a remote's record and firewall; migrate also deletes its public
   22/tcp rule.
+- **`trust_proxy` believes `X-Forwarded-For` only from the proxy.** It used to read the header from
+  any peer, so a panel also reachable directly — or any local account on its host, a game-server
+  user included — could send a fresh address with every login attempt (unlimited guessing past the
+  throttle) and have fail2ban and the auto-block ban an address it chose. The socket peer must now
+  be in the new `trusted_proxies` (default `127.0.0.1` and `::1`), and on loopback the connection
+  must belong to root, the panel's own account or one in `trusted_proxy_users` (default `www-data`,
+  `nginx`, `http`, `caddy`, `cloudflared`). **If your proxy is on another machine or in a Docker
+  bridge network, add its address to `trusted_proxies` in `data/config.json`**; until you do, every
+  client is keyed as the proxy (one shared login throttle), and the panel log says
+  `ignoring X-Forwarded-For from <address>`. The startup output now warns when `trust_proxy` is on
+  and the panel listens beyond loopback.
+- **A `"*"` in `socketio_cors_origins` is ignored.** It let a page on another port of the panel's
+  address, or on a sibling tailnet node — both same-site, so the session cookie is sent — open the
+  console and the terminal as whoever visited it. If you had set it, set `site_domain` or list the
+  exact origin (e.g. `https://panel.example.com`); the panel logs
+  `socketio_cors_origins "*" is ignored` once.
+- **Usernames and group names cannot carry control or format characters.** A delegate with
+  user or group management could store ESC sequences that moved the cursor, forged rows or wrote the
+  clipboard in the recovery CLI (`manage.py`, run as root); group names had no format check at all.
+  The CLI now shows any such character as a visible escape, so names stored earlier are safe too.
+- **The chat bots' `!update` can no longer hold every self-update at "still being verified".** Each
+  one forced a fresh check against GitHub's anonymous API (60 requests an hour), and a spent limit
+  reads as "pending", which blocked the web UI's update too. A status under a minute old is reused,
+  a second `!update` while one is running is answered instead of queued, and chat-triggered checks
+  are limited to ten an hour across both bots.
+- **The post-restart "update complete" message goes only to a channel that is still authorised.**
+  It went to the channel that asked even after the bot was switched off or moved.
+- **The terminal's input queue is counted, not re-summed on every keystroke**, and dropped input is
+  reported once a second rather than once per keystroke.
+
 - **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported by
   kta1kri). Twenty-five places built `sudo -u <account> bash -c '…'` from a server's account
   (`short_name`) and LinuxGSM script name with neither quoting nor a check — the dashboard's own

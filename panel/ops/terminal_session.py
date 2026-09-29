@@ -164,21 +164,30 @@ def _drain_input(sess, fd):
     Returns the number of bytes dropped because the far side would not take them.
     """
     dropped = 0
-    while sess._inq:
-        chunk = sess._inq[0]
+    while True:
+        with sess._inq_lock:
+            if not sess._inq:
+                sess._inq_bytes = 0          # empty is zero, whatever the count had drifted to
+                return dropped
+            chunk = sess._inq[0]
         try:
             n = os.write(fd, chunk)
         except BlockingIOError:
             return dropped          # no room right now; the next pass will try again
         except OSError:
-            sess._inq.clear()
+            with sess._inq_lock:
+                sess._inq.clear()
+                sess._inq_bytes = 0
             raise
-        if n >= len(chunk):
-            sess._inq.popleft()
-        else:
-            sess._inq[0] = chunk[n:]
-            return dropped          # partial: leave the rest for the next writable pass
-    return dropped
+        # The byte count moves with the queue, under the same lock write() takes: see write().
+        with sess._inq_lock:
+            if n >= len(chunk):
+                sess._inq.popleft()
+                sess._inq_bytes = max(0, sess._inq_bytes - len(chunk))
+            else:
+                sess._inq[0] = chunk[n:]
+                sess._inq_bytes = max(0, sess._inq_bytes - n)
+                return dropped      # partial: leave the rest for the next writable pass
 
 
 def _send_chan(chan, data, budget=_WRITE_BUDGET):
@@ -235,6 +244,18 @@ class Session:
         # never the same string. An incremental decoder holds the partial sequence instead.
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._inq = collections.deque()        # keystrokes waiting for the pump to write them
+        # The bytes in _inq, kept as it changes. write() used to SUM the queue on every call, and
+        # the bound below is in bytes, so one-byte events could queue 262144 chunks and make each
+        # later event walk all of them on the one hub (Aikido 745379045). Under _inq_lock with the
+        # deque: one greenlet per hub makes that moot under eventlet, but not in an unpatched
+        # process, where the pump is a real thread and a lost update would drift the count.
+        self._inq_bytes = 0
+        self._inq_lock = threading.Lock()
+        # Dropped input is reported at most once a second per session, like _emit's ceiling:
+        # every refused event used to log a WARNING and put a line on screen, so a flood into a
+        # program that is not reading was a flood of both. The bytes are counted in between.
+        self._drop_window = None
+        self._drop_unreported = 0
 
     # ── output ────────────────────────────────────────────────────────────────────────────────
     def _emit(self, data):
@@ -275,18 +296,29 @@ class Session:
         # QUEUED, not written here. The pump owns the descriptor (see _drain_input), and the queue
         # is bounded so a program that never reads its input cannot grow it without limit — the
         # pty's own buffer holds about 8 KB, so this is the paste that did not fit plus room.
-        queued = sum(len(c) for c in self._inq)
-        if queued + len(payload) > _MAX_PENDING_INPUT:
+        with self._inq_lock:
+            if not self._inq:
+                self._inq_bytes = 0          # an empty queue holds nothing, whatever the count says
+            refused = self._inq_bytes + len(payload) > _MAX_PENDING_INPUT
+            if not refused:
+                self._inq.append(payload)
+                self._inq_bytes += len(payload)
+        if refused:
             self._report_dropped(len(payload))
-            return
-        self._inq.append(payload)
 
     def _report_dropped(self, n):
         """Tell the operator that `n` input bytes were dropped.
 
         Say so. Dropping input silently is how a pasted config ends up half-applied with nothing on
-        screen to suggest it.
+        screen to suggest it. Once a second at most: drops within a second that has already been
+        reported are counted, and the next report includes them.
         """
+        self._drop_unreported += n
+        now = int(time.time())
+        if now == self._drop_window:
+            return
+        self._drop_window = now
+        n, self._drop_unreported = self._drop_unreported, 0
         _log.warning("terminal %s: dropped %d input bytes — the program is not reading",
                      self.label, n)
         self._emit("\r\n\x1b[33m[%d bytes of input were dropped — the program running here is "

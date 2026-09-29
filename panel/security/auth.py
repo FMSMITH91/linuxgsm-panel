@@ -1132,17 +1132,149 @@ def _loopback_proxy_trusted():
     owns, and from nobody else on loopback (a declared reverse proxy is trust_proxy's case, handled
     by the caller). Memoised per request: client_ip() is called more than once per request.
     """
+    return _loopback_peer_uid_memo() == 0
+
+
+def _loopback_peer_uid_memo():
+    """_loopback_peer_uid for this request, read from /proc once per request."""
     try:
         from flask import g as _g
-        cached = _g.get("_loopback_proxy_trusted")
+        cached = _g.get("_loopback_peer_uid")
         if cached is not None:
-            return cached
+            return cached[0]
     except RuntimeError:
         _g = None
-    trusted = _loopback_peer_uid(request.environ) == 0
+    uid = _loopback_peer_uid(request.environ)
     if _g is not None:
-        _g._loopback_proxy_trusted = trusted
-    return trusted
+        _g._loopback_peer_uid = (uid,)
+    return uid
+
+
+# ── Who may be believed as a reverse proxy under trust_proxy (Aikido 745379296) ─────────────────
+# trust_proxy used to mean "read X-Forwarded-For from ANY peer". So a panel that was also reachable
+# directly — the auto bind picks 0.0.0.0 when Serve is not proxying, and bind_host is editable in
+# the UI — believed whoever connected, and on the README's own layout (a proxy, bind 127.0.0.1)
+# every local account on the host could dial loopback with a forged header: a popped game account
+# included, the attacker _loopback_proxy_trusted exists to stop. A fresh header per attempt was a
+# fresh throttle bucket (unlimited password guessing), and each failure went into auth.log under
+# an address the attacker chose, for fail2ban and the auto-block to ban.
+#
+# Now the ORIGINAL socket peer must be in trusted_proxies (config.json; default loopback, which is
+# every documented layout — nginx, Caddy and cloudflared on the panel's own host), and a loopback
+# peer's socket must belong to root, to the panel's own account (which already owns everything the
+# panel has), or to an account in trusted_proxy_users (default: whichever of these exist). What it
+# costs a proxy that is not listed — on another machine, in a Docker bridge network, or running as
+# another account — is that every client is keyed as the proxy: one shared throttle bucket, and a
+# ban aimed at the proxy. So an ignored header is logged, once an hour per peer, naming the key.
+_DEFAULT_TRUSTED_PROXIES = ("127.0.0.0/8", "::1/128")
+_DEFAULT_PROXY_USERS = ("www-data", "nginx", "http", "caddy", "cloudflared")
+_IGNORED_PROXY_WARN_EVERY = 3600
+_ignored_proxy_warned = {}         # (peer, uid) -> when it was last logged; bounded below
+
+
+def _trusted_proxy_networks(value):
+    """config.json's trusted_proxies as ip_network objects; None means the loopback default."""
+    import ipaddress
+    import logging
+    if value is None:
+        value = _DEFAULT_TRUSTED_PROXIES
+    elif isinstance(value, str):
+        value = [value]
+    nets = []
+    for entry in value:
+        try:
+            nets.append(ipaddress.ip_network(str(entry).strip(), strict=False))
+        except ValueError:
+            logging.getLogger("panel.app").warning(
+                "trusted_proxies: %r is not an address or network; ignored", str(entry)[:64])
+    return tuple(nets)
+
+
+def _trusted_proxy_uids(value):
+    """The uids whose loopback sockets may speak for a client.
+
+    Root, the panel's own account, and config.json's trusted_proxy_users (names or uids; None
+    means _DEFAULT_PROXY_USERS).
+    """
+    import logging
+    import os
+    import pwd
+    uids = {0, os.getuid(), os.geteuid()}
+    explicit = value is not None
+    for entry in (_DEFAULT_PROXY_USERS if value is None else
+                  ([value] if isinstance(value, (str, int)) else value)):
+        if isinstance(entry, int) or str(entry).strip().isdecimal():
+            uids.add(int(entry))
+            continue
+        try:
+            uids.add(pwd.getpwnam(str(entry).strip()).pw_uid)
+        except KeyError:
+            if explicit:        # the defaults are a list of candidates, most absent on any host
+                logging.getLogger("panel.app").warning(
+                    "trusted_proxy_users: no account named %r; ignored", str(entry)[:64])
+    return frozenset(uids)
+
+
+def configure_proxy_trust(app, cfg):
+    """Record, once at startup, which peers trust_proxy believes.
+
+    Like trust_proxy itself (and the ProxyFix it installs), these are read from config.json and
+    take effect on a restart.
+    """
+    app.config["_TRUSTED_PROXIES"] = _trusted_proxy_networks(cfg.get("trusted_proxies"))
+    app.config["_TRUSTED_PROXY_UIDS"] = _trusted_proxy_uids(cfg.get("trusted_proxy_users"))
+
+
+def _declared_proxy_trusted(addr, conf):
+    """Under trust_proxy: is the socket peer `addr` (already unmapped) a proxy we were told of?"""
+    import ipaddress
+    nets = conf.get("_TRUSTED_PROXIES")
+    if nets is None:
+        nets = _trusted_proxy_networks(None)
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    if not any(ip in n for n in nets):
+        _note_ignored_proxy(addr)
+        return False
+    if not ip.is_loopback:
+        return True
+    # Loopback is where every local account can reach the panel, so WHO dialled decides.
+    uids = conf.get("_TRUSTED_PROXY_UIDS")
+    if uids is None:
+        uids = _trusted_proxy_uids(None)
+    uid = _loopback_peer_uid_memo()
+    if uid is not None and uid in uids:
+        return True
+    _note_ignored_proxy(addr, local_uid=uid if uid is not None else "unknown")
+    return False
+
+
+def _note_ignored_proxy(addr, local_uid=None):
+    """Log that a forwarding header from `addr` was not believed.
+
+    Once an hour per peer, and only when the request carried one (a direct client without headers
+    is not news). `local_uid`: the peer IS in trusted_proxies (loopback) but this local account is
+    not a proxy account.
+    """
+    import logging
+    if not (request.headers.get("X-Forwarded-For") or request.headers.get("X-Real-IP")):
+        return
+    key, now = (addr, local_uid), time.monotonic()
+    last = _ignored_proxy_warned.get(key)
+    if last is not None and now - last < _IGNORED_PROXY_WARN_EVERY:
+        return
+    if len(_ignored_proxy_warned) >= 256:
+        _ignored_proxy_warned.clear()       # bounded: a scan from many addresses cannot grow it
+    _ignored_proxy_warned[key] = now
+    log = logging.getLogger("panel.app")
+    if local_uid is None:
+        log.warning("ignoring X-Forwarded-For from %s; add it to trusted_proxies in config.json if "
+                    "it is your proxy", addr)
+    else:
+        log.warning("ignoring X-Forwarded-For from %s (a local account, uid %s); add that account "
+                    "to trusted_proxy_users in config.json if it is your proxy", addr, local_uid)
 
 
 def client_ip():
@@ -1190,19 +1322,24 @@ def client_ip():
         account can dial loopback). The ORIGINAL socket peer is used to decide, because ProxyFix
         has by then already rewritten request.remote_addr from the header we are trying to judge.
 
-    A `trust_proxy` install that also accepts direct connections (binding 0.0.0.0 alongside the
-    proxy) still trusts these headers from anyone who reaches the port — bind loopback, or put the
-    proxy on the only reachable address.
+    Under trust_proxy the proxy has to be one we were told of: the socket peer in trusted_proxies
+    (default loopback), and on loopback a socket that root, the panel's own account or a
+    trusted_proxy_users account owns. A panel that also accepts direct connections no longer
+    believes whoever reaches the port (see _declared_proxy_trusted).
     """
     if not request:
         return ""
     remote = request.remote_addr or ""
     # ProxyFix stores what it overwrote; without it this is just remote_addr.
     peer = (request.environ.get("werkzeug.proxy_fix.orig") or {}).get("REMOTE_ADDR") or remote
-    if _request_came_through_proxy(peer):
-        forwarded = _forwarded_client_ip()
-        if forwarded:
-            return forwarded
+    if not _request_came_through_proxy(peer):
+        # The SOCKET peer, never remote_addr: under trust_proxy ProxyFix has already rewritten
+        # remote_addr from the very X-Forwarded-For just refused, so returning it keyed the spoofed
+        # address after all.
+        return _ip_or_none(peer) or peer
+    forwarded = _forwarded_client_ip()
+    if forwarded:
+        return forwarded
     # The fallthrough is held to the same rule. Behind trust_proxy, ProxyFix has already copied the
     # last X-Forwarded-For hop into remote_addr WITHOUT parsing it, so when a proxy passes a
     # client's header through unappended, the "bogus-<n>" the branches above refused came straight
@@ -1212,23 +1349,27 @@ def client_ip():
 
 
 def _request_came_through_proxy(peer):
-    """Whether this request's forwarding headers may be read: trust_proxy, or a root loopback peer.
+    """Whether this request's forwarding headers may be read.
 
-    `peer` is the ORIGINAL socket peer, from before ProxyFix rewrote remote_addr.
+    Under trust_proxy, from a proxy it was told of (_declared_proxy_trusted); without it, from a
+    root loopback peer (tailscaled). `peer` is the ORIGINAL socket peer, from before ProxyFix
+    rewrote remote_addr.
     """
     try:
-        behind_proxy = bool(current_app.config.get("_TRUST_PROXY"))
+        conf = current_app.config
+        declared = bool(conf.get("_TRUST_PROXY"))
     except Exception:
-        behind_proxy = False     # outside an app context: trust nothing
+        return False             # outside an app context: trust nothing
     # A dual-stack bind ('::') reports an IPv4 peer as ::ffff:127.0.0.1. The plain test missed it,
     # so tailscaled's X-Forwarded-For was never believed there: every Serve and Funnel client was
     # keyed as ::ffff:7f00:1, fail2ban ignored that as loopback, and one attacker's failures
     # throttled every other client — the whole panel locked out by one Funnel visitor.
-    if not behind_proxy and _unmapped(peer) in ("127.0.0.1", "::1"):
-        # Loopback is NOT a proxy by itself — any local account can dial it. Only a root-owned
-        # peer (tailscaled) is; see _loopback_proxy_trusted.
-        behind_proxy = _loopback_proxy_trusted()
-    return behind_proxy
+    addr = _unmapped(peer)
+    if declared:
+        return _declared_proxy_trusted(addr, conf)
+    # Loopback is NOT a proxy by itself — any local account can dial it. Only a root-owned peer
+    # (tailscaled) is; see _loopback_proxy_trusted.
+    return addr in ("127.0.0.1", "::1") and _loopback_proxy_trusted()
 
 
 def _forwarded_client_ip():

@@ -141,6 +141,74 @@ def _run_setup_token(raw=True):
     return exited, msg, _out.getvalue()
 
 
+# ── Aikido 745379084: a stored name cannot drive the operator's terminal ─────────────────
+# This CLI is what the operator runs as root in a recovery ("which account is compromised?").
+# A username or group name stored with ESC sequences — cursor up, erase line, an OSC 52
+# clipboard write — was printed raw, so a delegate could hide or forge rows in exactly that
+# listing. Rows stored before validation existed are why the OUTPUT is escaped too.
+def _check_tty_safe():
+    """The recovery CLI shows stored names escaped, and still acts on the real rows."""
+    from panel.db.models import Group
+
+    def _tty_dirty(text):
+        """The characters in `text` a terminal would act on rather than show (newlines aside)."""
+        return [c for c in text if c != "\n" and not c.isprintable()]
+
+    def _captured(fn, *a):
+        _o = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(_o):
+                fn(*a)
+        except SystemExit:
+            pass
+        return _o.getvalue()
+
+    _esc_name = "\x1b[1A\x1b[2K\x1b]52;c;ZWNobyBoaQ==\x07zz"
+    _esc_id = seed(username=_esc_name)
+    with manage.app.app_context():
+        _esc_group = Group(name="ops\x1b[2Kteam\n  forged_admin [active]  groups: -", description="")
+        db.session.add(_esc_group)
+        _esc_row = db.session.get(User, _esc_id)
+        _esc_row.groups.append(_esc_group)
+        db.session.commit()
+        _n_users = User.query.count()
+    _listed = _captured(manage.cmd_list_users, Args())
+    check("list-users: a stored username or group name puts no control character on the terminal",
+          not _tty_dirty(_listed), repr(sorted(set(_tty_dirty(_listed)))))
+    check("list-users: ...nor a forged row — one line per user",
+          len(_listed.splitlines()) == _n_users, "%d lines for %d users" % (
+              len(_listed.splitlines()), _n_users))
+    check("list-users: ...and the name is still shown, escaped visibly (control)",
+          "\\x1b[1A" in _listed and "zz [active]" in _listed, repr(_listed[:200]))
+    builtins.input = lambda *_a: "1"          # the injected row sorts first (ESC < 'A')
+    try:
+        with manage.app.app_context():
+            _pick_out = io.StringIO()
+            with contextlib.redirect_stdout(_pick_out):
+                _picked = manage._pick_user_interactive()
+    finally:
+        builtins.input = _saved_input
+    check("menu: the picker shows a stored name without its control characters",
+          not _tty_dirty(_pick_out.getvalue()), repr(_pick_out.getvalue()[:160]))
+    check("menu: ...while the choice is still the REAL stored name, so the command acts on it",
+          _picked == _esc_name, repr(_picked))
+    for _what, _fn, _args in (
+            ("disable-2fa", manage.cmd_disable_2fa, Args(username=_esc_name)),
+            ("reset-password", manage.cmd_reset_password,
+             Args(username=_esc_name, password="An0ther!passw0rd")),  # nosec B106 - test fixture
+            ("disable", manage._set_flag, None)):
+        if _args is None:
+            _said = _captured(_fn, _esc_name, "is_active", False, "deactivated")
+        else:
+            _said = _captured(_fn, _args)
+        check("%s: the confirmation echoes the name without its control characters" % _what,
+              _said and not _tty_dirty(_said), repr(_said[:160]))
+    with manage.app.app_context():
+        _gone = raises_exit(manage._require_user, "nobody\x1b]52;c;eA==\x07")
+    check("a missing user: the refusal echoes the typed name without its control characters",
+          _gone[0] and not _tty_dirty(_gone[1]), repr(_gone))
+
+
 try:
     # ── 0. The first-run wizard's setup token ─────────────────────────────────────────────────
     # Before the first admin exists the wizard answers only to a browser that shows this token;
@@ -330,6 +398,8 @@ try:
                   repr(_shown))
     finally:
         builtins.input = _saved_input
+
+    _check_tty_safe()
 
 except Exception:
     # Without this the suite just reports fewer checks than it has and looks green-ish. A crash

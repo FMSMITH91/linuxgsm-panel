@@ -7042,20 +7042,33 @@ from flask import Flask as _IpFlask                                             
 _ip_app = _IpFlask(__name__)
 
 
-def _ip_for(headers, remote="127.0.0.1", trust_proxy=False, proxy_fix_orig=None, root_peer=True):
+# A local account that is not a proxy (a game-server user with a shell), and one that is (nginx's).
+_IP_GAME_UID, _IP_PROXY_UID = 54321, 33
+_IP_UNREADABLE = object()          # peer_uid: /proc/net could not name the socket's owner
+
+
+def _ip_for(headers, remote="127.0.0.1", trust_proxy=False, proxy_fix_orig=None, root_peer=True,
+            trusted=None, proxy_users=(_IP_PROXY_UID,), peer_uid=None):
     # root_peer: the loopback caller is tailscaled (a root-owned socket), the Serve shape these
     # checks are about. A non-root loopback caller is not trusted at all — see part02.
+    # trusted / proxy_users: config.json's trusted_proxies / trusted_proxy_users (None = default).
+    # peer_uid: who owns the loopback peer's socket, when it is not root_peer's 0-or-a-game-user.
     _ip_app.config["_TRUST_PROXY"] = trust_proxy
+    getattr(_ip_auth, "configure_proxy_trust", lambda _a, _c: None)(
+        _ip_app, {"trust_proxy": trust_proxy, "trusted_proxies": trusted,
+                  "trusted_proxy_users": list(proxy_users) if proxy_users is not None else None})
     env = {"REMOTE_ADDR": remote}
     if proxy_fix_orig is not None:
         env["werkzeug.proxy_fix.orig"] = {"REMOTE_ADDR": proxy_fix_orig}
-    _saved_lpt = _ip_auth._loopback_proxy_trusted
+    _uid = peer_uid if peer_uid is not None else (0 if root_peer else _IP_GAME_UID)
+    _saved_lpt, _saved_uid = _ip_auth._loopback_proxy_trusted, _ip_auth._loopback_peer_uid
     _ip_auth._loopback_proxy_trusted = lambda: root_peer
+    _ip_auth._loopback_peer_uid = lambda _env: None if _uid is _IP_UNREADABLE else _uid
     try:
         with _ip_app.test_request_context("/", headers=headers, environ_overrides=env):
             return _ip_auth.client_ip()
     finally:
-        _ip_auth._loopback_proxy_trusted = _saved_lpt
+        _ip_auth._loopback_proxy_trusted, _ip_auth._loopback_peer_uid = _saved_lpt, _saved_uid
 
 
 # X-Forwarded-For's LAST hop wins, and X-Real-IP is only the fallback. The order used to be the
@@ -7095,12 +7108,114 @@ eq("client_ip: behind ProxyFix, a non-address hop does not come back via remote_
            proxy_fix_orig="10.0.0.5"), "10.0.0.5")
 eq("client_ip: (control) ...while a real address in that same position is still the client",
    _ip_for({"X-Forwarded-For": "198.51.100.7"}, remote="198.51.100.7", trust_proxy=True,
-           proxy_fix_orig="10.0.0.5"), "198.51.100.7")
+           proxy_fix_orig="10.0.0.5", trusted=["10.0.0.0/8"]), "198.51.100.7")
 eq("client_ip: a NON-root loopback caller's headers are ignored (a local account, not Serve)",
    _ip_for({"X-Real-IP": "9.9.9.9", "X-Forwarded-For": "100.64.0.5"}, root_peer=False),
    "127.0.0.1")
-eq("client_ip: ...but a declared proxy (trust_proxy) is still believed from any peer",
-   _ip_for({"X-Forwarded-For": "100.64.0.5"}, trust_proxy=True, root_peer=False), "100.64.0.5")
+# Aikido 745379296. trust_proxy used to mean "believe these headers from ANY peer": a panel also
+# reachable directly (the auto bind picks 0.0.0.0 when Serve is not proxying) believed whoever
+# connected, and on the README's own layout (proxy + bind 127.0.0.1) so did every local account —
+# a popped game account included, the attacker _loopback_proxy_trusted exists to stop. Either way
+# a fresh X-Forwarded-For per attempt was a fresh throttle bucket, and failures were written to
+# auth.log under an address the attacker chose for fail2ban and the auto-block to ban. Now: only
+# from a peer in trusted_proxies (default loopback), and from loopback only when the socket is
+# root's, the panel's own account's, or a proxy account's (trusted_proxy_users).
+eq("client_ip: a declared proxy on loopback is believed when a proxy account owns the socket",
+   _ip_for({"X-Forwarded-For": "100.64.0.5"}, trust_proxy=True, root_peer=False,
+           peer_uid=_IP_PROXY_UID), "100.64.0.5")
+eq("client_ip: ...but not when a local account that is no proxy dialled loopback (745379296)",
+   _ip_for({"X-Forwarded-For": "100.64.0.5"}, trust_proxy=True, root_peer=False), "127.0.0.1")
+eq("client_ip: ...and ProxyFix's rewritten remote_addr does not bring the header back",
+   _ip_for({"X-Forwarded-For": "100.64.0.5"}, remote="100.64.0.5", trust_proxy=True,
+           proxy_fix_orig="127.0.0.1", root_peer=False), "127.0.0.1")
+eq("client_ip: under trust_proxy a DIRECT peer's X-Forwarded-For is not believed (745379296)",
+   _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+           proxy_fix_orig="203.0.113.9"), "203.0.113.9")
+eq("client_ip: ...nor its X-Real-IP",
+   _ip_for({"X-Real-IP": "192.0.2.77"}, remote="203.0.113.9", trust_proxy=True,
+           proxy_fix_orig="203.0.113.9"), "203.0.113.9")
+eq("client_ip: a proxy on another machine is believed once it is in trusted_proxies (control)",
+   _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+           proxy_fix_orig="203.0.113.9", trusted=["203.0.113.0/24"]), "192.0.2.77")
+eq("client_ip: trusted_proxies REPLACES the default, so a listed remote proxy does not also admit "
+   "every local account",
+   _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+           proxy_fix_orig="127.0.0.1", trusted=["203.0.113.0/24"]), "127.0.0.1")
+eq("client_ip: a dual-stack bind's ::ffff:127.0.0.1 is loopback to trusted_proxies too",
+   _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+           proxy_fix_orig="::ffff:127.0.0.1"), "192.0.2.77")
+eq("client_ip: root and the panel's own account are always believed on loopback, whatever "
+   "trusted_proxy_users lists",
+   (_ip_for({"X-Forwarded-For": "192.0.2.7"}, trust_proxy=True, proxy_users=[], peer_uid=0),
+    _ip_for({"X-Forwarded-For": "192.0.2.8"}, trust_proxy=True, proxy_users=[],
+            peer_uid=os.getuid())), ("192.0.2.7", "192.0.2.8"))
+eq("client_ip: an unreadable socket owner on loopback is not believed",
+   _ip_for({"X-Forwarded-For": "192.0.2.9"}, trust_proxy=True, root_peer=False,
+           peer_uid=_IP_UNREADABLE), "127.0.0.1")
+# The fallback on its own: the untrusted branch returns the SOCKET peer. The first version of this
+# fix returned remote_addr there, which ProxyFix had already rewritten from the refused header, so
+# every refusal above would still have keyed the spoofed address.
+_ip_saved_rctp = getattr(_ip_auth, "_request_came_through_proxy", None)
+try:
+    _ip_auth._request_came_through_proxy = lambda _peer: False
+    eq("client_ip: a refused peer is keyed by the socket peer, never by ProxyFix's remote_addr",
+       _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+               proxy_fix_orig="203.0.113.9"), "203.0.113.9")
+finally:
+    _ip_auth._request_came_through_proxy = _ip_saved_rctp
+# What the refusal costs a real proxy that is not listed: every client keyed as the proxy, one
+# shared throttle bucket. So it is said in the log — once per peer, not once per request — naming
+# the setting that fixes it.
+from logging import Handler as _IpHandler, WARNING as _IP_WARNING, getLogger as _ip_logger  # noqa: E402
+
+
+class _IpWarned(_IpHandler):
+    def __init__(self):
+        _IpHandler.__init__(self)
+        self.got = []
+
+    def emit(self, rec):
+        if rec.levelno >= _IP_WARNING:
+            self.got.append(rec.getMessage())
+
+
+_ip_h = _IpWarned()
+_ip_logger("panel.app").addHandler(_ip_h)
+getattr(_ip_auth, "_ignored_proxy_warned", {}).clear()      # the checks above warned already
+try:
+    for _ in range(5):
+        _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+                proxy_fix_orig="198.51.100.200")
+    _ip_for({"X-Forwarded-For": "192.0.2.77"}, trust_proxy=True, root_peer=False)
+    _ip_for({}, remote="198.51.100.201", trust_proxy=True)        # no header: nothing to ignore
+finally:
+    _ip_logger("panel.app").removeHandler(_ip_h)
+_ip_w_remote = [m for m in _ip_h.got if "198.51.100.200" in m]
+check("client_ip: an ignored X-Forwarded-For is logged once per peer, naming trusted_proxies",
+      len(_ip_w_remote) == 1 and "trusted_proxies" in _ip_w_remote[0], repr(_ip_h.got))
+check("client_ip: ...and for a local account, naming the uid and trusted_proxy_users",
+      any("127.0.0.1" in m and str(_IP_GAME_UID) in m and "trusted_proxy_users" in m
+          for m in _ip_h.got), repr(_ip_h.got))
+check("client_ip: ...and a peer that sent no forwarding header is not warned about",
+      not any("198.51.100.201" in m for m in _ip_h.got), repr(_ip_h.got))
+# config.json's values, parsed once: a bad entry is skipped (and said), a bare string is one entry.
+_ip_cfg_app = _IpFlask("ip_cfg")
+_ip_conf = getattr(_ip_auth, "configure_proxy_trust", None)
+if _ip_conf is not None:
+    _ip_conf(_ip_cfg_app, {"trust_proxy": True, "trusted_proxies": ["10.0.0.5", "not-an-ip",
+                                                                     "fd00::/8"],
+                           "trusted_proxy_users": ["root", "no-such-user-here", 4242]})
+check("config: trusted_proxies keeps the entries that parse, as networks",
+      [str(n) for n in _ip_cfg_app.config.get("_TRUSTED_PROXIES", ())] == ["10.0.0.5/32", "fd00::/8"],
+      repr(_ip_cfg_app.config.get("_TRUSTED_PROXIES")))
+check("config: trusted_proxy_users takes names and uids, and always root and the panel's own",
+      {0, 4242, os.getuid()} <= set(_ip_cfg_app.config.get("_TRUSTED_PROXY_UIDS", ())),
+      repr(_ip_cfg_app.config.get("_TRUSTED_PROXY_UIDS")))
+if _ip_conf is not None:
+    _ip_conf(_ip_cfg_app, {"trust_proxy": True, "trusted_proxies": "192.0.2.1"})
+check("config: a single trusted_proxies string is one entry, not its characters",
+      [str(n) for n in _ip_cfg_app.config.get("_TRUSTED_PROXIES", ())] == ["192.0.2.1/32"],
+      repr(_ip_cfg_app.config.get("_TRUSTED_PROXIES")))
 eq("client_ip: no headers at all -> the socket address",
    _ip_for({}, remote="203.0.113.9"), "203.0.113.9")
 # ...and the deployment guide has to set the header it tells the panel to read.

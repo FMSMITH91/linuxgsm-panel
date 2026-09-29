@@ -73,10 +73,26 @@ def _read_password(args):
         return pw
 
 
+def _tty_safe(value):
+    r"""Return `value` as text a terminal shows rather than obeys.
+
+    Each non-printable character becomes its visible escape (\x1b, \u202e, \n, \U000e0001).
+
+    This CLI prints names that were typed into the web UI — by a delegate with MANAGE_USERS or
+    MANAGE_GROUPS, or by whoever redeemed an invite — and the operator runs it as root in exactly
+    the moment they need to trust what it lists. Printed raw, an ESC sequence moved the cursor,
+    erased or forged rows, and wrote the clipboard (OSC 52). The web forms refuse such names now;
+    this also covers rows stored before they did (Aikido 745379084). Display only: matching a
+    menu choice compares the stored names themselves.
+    """
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode("ascii")
+                   for c in str(value))
+
+
 def _require_user(username):
     u = User.query.filter_by(username=username).first()
     if not u:
-        sys.exit("No such user: %s" % username)
+        sys.exit("No such user: %s" % _tty_safe(username))
     return u
 
 
@@ -89,8 +105,8 @@ def cmd_list_users(args):
         for u in users:
             flags = (["superadmin"] if u.is_superadmin else []) + \
                     (["active"] if u.is_active else ["INACTIVE"])
-            groups = ", ".join(g.name for g in u.groups) or "-"
-            print("  %-20s [%s]  groups: %s" % (u.username, ", ".join(flags), groups))
+            groups = ", ".join(_tty_safe(g.name) for g in u.groups) or "-"
+            print("  %-20s [%s]  groups: %s" % (_tty_safe(u.username), ", ".join(flags), groups))
 
 
 def _pick_user_interactive(prompt="Which user?"):
@@ -119,7 +135,7 @@ def _print_user_menu(prompt, users):
     for i, u in enumerate(users, 1):
         flags = (["superadmin"] if u.is_superadmin else []) + ([] if u.is_active else ["inactive"])
         tag = ("  [" + ", ".join(flags) + "]") if flags else ""
-        print("  %2d) %s%s" % (i, u.username, tag))
+        print("  %2d) %s%s" % (i, _tty_safe(u.username), tag))
 
 
 def _menu_choice(sel, users):
@@ -144,7 +160,7 @@ def _resolve_username(username, default_sole_admin=True):
     if default_sole_admin:
         admins = User.query.filter_by(is_superadmin=True).order_by(User.username).all()
         if len(admins) == 1:
-            print("Resetting the only superadmin: %s" % admins[0].username)
+            print("Resetting the only superadmin: %s" % _tty_safe(admins[0].username))
             return admins[0].username
     # No terminal for the menu, and no single superadmin to default to → the caller must name one.
     # `raise` (not sys.exit) so every path here clearly returns a value or terminates.
@@ -171,18 +187,19 @@ def cmd_reset_password(args):
         # could leave themselves a key that survived the victim's whole recovery.
         u.revoke_api_token()
         db.session.commit()
-        print("Password reset for '%s' (existing sessions revoked)." % username)
+        print("Password reset for '%s' (existing sessions revoked)." % _tty_safe(username))
 
 
 def cmd_create_admin(args):
     with app.app_context():
         if User.query.filter_by(username=args.username).first():
-            sys.exit("User '%s' already exists — use reset-password / promote instead." % args.username)
+            sys.exit("User '%s' already exists — use reset-password / promote instead."
+                     % _tty_safe(args.username))
         u = User(username=args.username, password_hash=auth.hash_password(_read_password(args)),
                  display_name=args.username, is_superadmin=True, is_active=True)
         db.session.add(u)
         db.session.commit()
-        print("Superadmin '%s' created." % args.username)
+        print("Superadmin '%s' created." % _tty_safe(args.username))
 
 
 def cmd_setup_token(args):
@@ -226,7 +243,7 @@ def cmd_disable_2fa(args):
         # in panel.db is the kind of divergence that only becomes reachable later.
         u.backup_codes = ""
         db.session.commit()
-        print("Two-factor auth disabled for '%s'." % username)
+        print("Two-factor auth disabled for '%s'." % _tty_safe(username))
 
 
 def _set_flag(username, field, value, label):
@@ -250,7 +267,7 @@ def _set_flag(username, field, value, label):
             sys.exit("Refusing — that would leave no active superadmin. "
                      "Create or promote another admin first.")
         db.session.commit()
-        print("'%s' %s." % (username, label))
+        print("'%s' %s." % (_tty_safe(username), label))
 
 
 def main():

@@ -10,6 +10,7 @@ from panel.security.auth import (ALL_PERMISSIONS, MANAGE_GROUPS, SUPER_ADMIN, _g
     log_action, permission_required)
 from panel.services import (notifications)
 from panel.core.http import (_form_err, _form_ok)
+from panel.core.validation import group_name_problem
 from app import (_selected_game_servers, _selected_remotes)
 
 
@@ -76,8 +77,11 @@ def register(app):
     def add_group():
         name = request.form.get("name", "").strip()
         description = request.form.get("description", "").strip()
-        if not name:
-            return _form_err("Group name is required.", "manage_groups")
+        # Non-empty, and nothing a terminal would act on: the recovery CLI prints group names
+        # (Aikido 745379084).
+        _nerr = group_name_problem(name)
+        if _nerr:
+            return _form_err(_nerr, "manage_groups")
 
         existing = Group.query.filter_by(name=name).first()
         if existing:
@@ -112,6 +116,11 @@ def register(app):
         # never did.
         if new_name != group.name and Group.query.filter_by(name=new_name).first():
             return _form_err(f"Group '{new_name}' already exists.", "manage_groups")
+        # Checked only when the name CHANGES, as a user rename is: a group stored before the check
+        # existed can still have its permissions edited.
+        _nerr = group_name_problem(new_name) if new_name != group.name else None
+        if _nerr:
+            return _form_err(_nerr, "manage_groups")
         group.name = new_name
         group.description = (request.form.get("description") or group.description or "").strip()
         group.set_permissions(_grantable_perms(request.form.getlist("permissions"),

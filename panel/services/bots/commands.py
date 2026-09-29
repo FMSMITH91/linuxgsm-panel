@@ -10,9 +10,11 @@ from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import ssh_manager as _sm
 from panel.ops import system_ops as so
 from panel.ops.ssh_manager import (player_list)
+import collections
 import logging
 import queue
 import threading
+import time
 
 # Same logger name app.py used, so existing log filters and greps keep working.
 _log = logging.getLogger("panel.app")
@@ -333,6 +335,130 @@ class CommandWorker:
 # never run, so "I'll get to it shortly" would be a promise the bot cannot keep.
 BUSY_REPLY = ("⏳ I'm still working through earlier commands, so that one didn't make the queue. "
               "Send it again in a moment.")
+
+
+# ── What a chat's !update may spend (Aikido 745379272) ──────────────────────────────────────────
+# Every !update used to run panel_update_status(force=True). A check asks GitHub's ANONYMOUS
+# check-runs API once per commit it walks while the panel is behind — 60 requests an hour per IP,
+# shared by everything this panel asks — and a 403/429 from it reads as "pending" on purpose. So
+# a channel member sending about one !update a minute spent the hour's allowance, and "pending"
+# then made panel_self_update refuse the superadmin's web-UI update as well as the bot's: every
+# self-update, security fixes included, held at "still being verified" for as long as it went on.
+# Two things bound it now. A status younger than _BOT_STATUS_FRESH is reused, so a burst asks
+# once. And the forced checks the bots may cause — the status refresh and the one panel_self_update
+# keeps as its own CI gate — are metered: _BOT_FORCED_CHECKS_PER_HOUR across BOTH bots, because
+# the limit is the panel's IP's. At one or two requests a check while behind, ten checks spend at
+# most about twenty of the sixty, leaving the rest for the sidebar badge (a check at most every
+# _UPDATE_TTL, five minutes) and for the web UI's own update.
+_BOT_STATUS_FRESH = 60
+_BOT_FORCED_CHECKS_PER_HOUR = 10
+_BOT_CHECK_WINDOW = 3600
+
+UPDATE_RUNNING_REPLY = "⏳ An update check is already running — I'll answer here when it's done."
+
+
+class _UpdateGate:
+    """One !update in flight per bot, and the forced checks both bots may spend in an hour."""
+
+    def __init__(self):
+        """An open gate: nothing in flight, nothing spent."""
+        self._lock = threading.Lock()
+        self._inflight = set()
+        self._spent = collections.deque()      # monotonic times of the forced checks spent
+        self._now = time.monotonic
+
+    def claim(self, bot):
+        """Mark `bot`'s !update in flight; False when one already is (queued or running)."""
+        with self._lock:
+            if bot in self._inflight:
+                return False
+            self._inflight.add(bot)
+            return True
+
+    def release(self, bot):
+        """End `bot`'s in-flight !update, however it ended."""
+        with self._lock:
+            self._inflight.discard(bot)
+
+    def _expire(self, now):
+        while self._spent and now - self._spent[0] >= _BOT_CHECK_WINDOW:
+            self._spent.popleft()
+
+    def spend(self):
+        """Spend one forced check; False when the hour's allowance is gone."""
+        now = self._now()
+        with self._lock:
+            self._expire(now)
+            if len(self._spent) >= _BOT_FORCED_CHECKS_PER_HOUR:
+                return False
+            self._spent.append(now)
+            return True
+
+    def retry_in(self):
+        """Seconds until a forced check is free again (0 when one is free now)."""
+        now = self._now()
+        with self._lock:
+            self._expire(now)
+            if len(self._spent) < _BOT_FORCED_CHECKS_PER_HOUR:
+                return 0.0
+            return max(0.0, _BOT_CHECK_WINDOW - (now - self._spent[0]))
+
+
+_UPDATE_GATE = _UpdateGate()
+
+
+def panel_update_requested(cmd, arg):
+    """Whether a command asks to update the PANEL — `update`/`upgrade` with no server named."""
+    return cmd in ("update", "upgrade") and not arg
+
+
+def queue_panel_update(worker, bot, fn):
+    """Queue `bot`'s panel !update `fn` unless one is already in flight.
+
+    Returns "queued", "running" (one is already queued or running — say so rather than queue a
+    second) or "busy" (the worker's queue is full — BUSY_REPLY).
+    """
+    gate = _UPDATE_GATE
+    if not gate.claim(bot):
+        return "running"
+
+    def _job():
+        try:
+            fn()
+        finally:
+            gate.release(bot)
+
+    if worker.submit(_job):
+        return "queued"
+    gate.release(bot)
+    return "busy"
+
+
+def bot_update_status():
+    """Return panel_update_status as a chat's !update may ask for it.
+
+    A status younger than _BOT_STATUS_FRESH as it is, a forced check while the hour's allowance
+    lasts, else the ordinary cache (the sidebar badge's five minutes).
+    """
+    cache = so._update_cache
+    data = cache.get("data")
+    if data is not None and time.time() - (cache.get("ts") or 0.0) < _BOT_STATUS_FRESH:
+        return data
+    return so.panel_update_status(force=_UPDATE_GATE.spend())
+
+
+def spend_update_check():
+    """Spend one forced check for panel_self_update's own gate; False when none is left."""
+    return _UPDATE_GATE.spend()
+
+
+def update_rate_reply():
+    """What to say when the hour's forced checks are spent."""
+    mins = max(1, int(round(_UPDATE_GATE.retry_in() / 60.0)))
+    return ("⏳ Update checks from chat are limited to %d an hour, and that many have run — GitHub "
+            "caps how often the panel may ask it, and the panel's own update needs some too. Try "
+            "again in %d min, or update from the panel's web page."
+            % (_BOT_FORCED_CHECKS_PER_HOUR, mins))
 
 
 def working_ack(cmd):

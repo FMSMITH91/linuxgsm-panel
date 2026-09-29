@@ -101,7 +101,8 @@ from flask_wtf.csrf import CSRFProtect
 from werkzeug.exceptions import HTTPException
 
 from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, client_ip,
-    get_user_permissions, init_auth, log_action, strip_legacy_superadmin_grants)
+    configure_proxy_trust, get_user_permissions, init_auth, log_action,
+    strip_legacy_superadmin_grants)
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
     encrypt_secret, is_encrypted, harden_data_permissions, read_setup_token, remove_setup_token,
@@ -1589,6 +1590,8 @@ def create_app():
     # request — it has to know, because ProxyFix below rewrites remote_addr from the very header
     # client_ip is deciding whether to trust.
     app.config["_TRUST_PROXY"] = bool(cfg.get("trust_proxy"))
+    # ...and WHICH peers it believes: trusted_proxies / trusted_proxy_users (Aikido 745379296).
+    configure_proxy_trust(app, cfg)
     if cfg.get("trust_proxy"):
         from werkzeug.middleware.proxy_fix import ProxyFix
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
@@ -2265,7 +2268,8 @@ def _host_port(value):
 def _socket_origin_allowed(origin, environ=None):
     """Whether a browser page at `origin` may open the console/terminal socket.
 
-    Explicit config (socketio_cors_origins) wins. Otherwise a page is allowed when it is served from
+    Exact origins listed in socketio_cors_origins win ("*" is ignored — see
+    _explicit_socket_origins). Otherwise a page is allowed when it is served from
     the host this request arrived on, the host a proxy forwarded, or site_domain — PORT INCLUDED.
 
     It was a list built once at startup: ["https://<site_domain>", "http://<site_domain>"], with no
@@ -2276,10 +2280,9 @@ def _socket_origin_allowed(origin, environ=None):
     so a Settings change applies at once. (The connect gate also requires an authenticated session,
     and the SameSite=Lax cookie stops a cross-site page carrying one.)"""
     cfg = load_config()
-    explicit = cfg.get("socketio_cors_origins")
-    if explicit:
-        allowed = [explicit] if isinstance(explicit, str) else list(explicit)
-        return "*" in allowed or origin in allowed
+    exact = _explicit_socket_origins(cfg.get("socketio_cors_origins"))
+    if exact:
+        return origin in exact
     key = _origin_key(origin)
     if key is None:
         return False                      # "null", a file: page, anything that is not http(s)
@@ -2302,6 +2305,32 @@ def _socket_origin_allowed(origin, environ=None):
         if hp and hp[0] == host and (hp[1] or default) == port:
             return True
     return False
+
+
+_socket_wildcard_warned = []
+
+
+def _explicit_socket_origins(explicit):
+    """The exact origins an operator listed in socketio_cors_origins, with any "*" taken out.
+
+    "*" was honoured, and anywhere in a list, before the per-request check ever ran (Aikido
+    745379243). That check is the only thing refusing a page on ANOTHER PORT of the panel's own
+    address or on a sibling tailnet node — both same-site, so the Lax session cookie rides along
+    and the connect gate sees a logged-in user. With "*", any such page could open a terminal as
+    whoever visited it. So "*" is ignored: a list that held only "*" falls through to the
+    per-request check, which accepts the panel's own page however it is reached. Warned once, since
+    whoever set it probably did so because their console would not connect: the answer is
+    site_domain, or the exact origin.
+    """
+    if not explicit:
+        return []
+    listed = [explicit] if isinstance(explicit, str) else list(explicit)
+    exact = [o for o in listed if str(o).strip() != "*"]
+    if len(exact) != len(listed) and not _socket_wildcard_warned:
+        _socket_wildcard_warned.append(True)
+        _log.warning('socketio_cors_origins "*" is ignored; set site_domain or list the exact '
+                     'origin (e.g. https://panel.example.com)')
+    return exact
 
 
 def _origin_key(origin):
@@ -2639,6 +2668,21 @@ def _https_ready(cfg):
                 or cfg.get("trust_proxy", False))
 
 
+def _trust_proxy_bind_warning(cfg, bind):
+    """What to tell the operator when trust_proxy is on but the panel listens beyond loopback, or "".
+
+    The README and docs/https.md pair trust_proxy with bind_host 127.0.0.1. With another bind
+    anything that reaches the port directly is a client too; its X-Forwarded-For is believed only
+    from trusted_proxies (loopback unless listed), so this is not a hole any more (Aikido 745379296),
+    but a direct path around the proxy is rarely what was meant, and it is the proxy's TLS that it
+    goes around."""
+    if not cfg.get("trust_proxy") or _bind_is_loopback(bind):
+        return ""
+    return ("trust_proxy is on but the panel listens on %s, so it can be reached without going "
+            "through the proxy. Set \"bind_host\": \"127.0.0.1\" if the proxy runs on this host; "
+            "a proxy elsewhere must be listed in trusted_proxies." % (bind or "all addresses"))
+
+
 def _bind_is_loopback(bind_host):
     """True only for a concrete loopback address (127.0.0.0/8, ::1). "" (auto) is not: it can
     resolve to 0.0.0.0 or a tailnet IP at boot."""
@@ -2856,6 +2900,10 @@ if __name__ == "__main__":
     app.config["_BOOT_BIND"] = host
     _scheme = "https" if _effective_https(cfg) else "http"
     print(f"LinuxGSM Panel starting on {host}:{port}")
+    _proxy_bind_note = _trust_proxy_bind_warning(cfg, host)
+    if _proxy_bind_note:
+        _log.warning("%s", _proxy_bind_note)
+        print("  [!] " + _proxy_bind_note)
     print(f"Open {_scheme}://{host}:{port} in your browser")
 
     # Show Tailscale URL if available

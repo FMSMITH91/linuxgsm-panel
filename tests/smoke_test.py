@@ -1408,6 +1408,52 @@ try:
         check("MANAGE_GROUPS user can't grant super_admin to a group",
               eg is not None and "super_admin" not in eg.get_permissions())
 
+    # ── Aikido 745379084: a name an admin types cannot carry terminal controls ───────────────
+    # The recovery CLI (`sudo linuxgsm-panel-recover`, manage.py) prints stored usernames and
+    # group names to the operator's terminal. username_problem refused only whitespace, and group
+    # names had no format check at all, so a delegate with MANAGE_USERS or MANAGE_GROUPS could store
+    # ESC sequences (cursor moves, erase-line, OSC 52 clipboard writes) and a newline (a forged row).
+    import panel.core.validation as _valmod
+    _unp = _valmod.username_problem
+    _gnp = getattr(_valmod, "group_name_problem", lambda _n: None)   # absent before the fix
+    for _nm in ("a\x1bb", "a‮b", "a\x9bb", "a\x07b", "ab​c", "a\x00b"):
+        check("username: %r (a control or format character) is refused" % _nm,
+              _unp(_nm) is not None, "accepted")
+    for _nm in ("José", "dan_the-man.2", "Łukasz", "用户名"):
+        check("username: %r is still accepted (control)" % _nm, _unp(_nm) is None, _unp(_nm))
+    for _nm in ("a\nb", "a\x1bb", "a\tb", "a b", "a‮b", "", "x" * 81):
+        check("group name: %r is refused" % _nm, _gnp(_nm) is not None, "accepted")
+    check("group name: an ordinary name with spaces is still accepted (control)",
+          _gnp("Game Admins") is None, _gnp("Game Admins"))
+    _xhr = {"X-Requested-With": "XMLHttpRequest"}
+    _inj_user = "\x1b[1A\x1b[2K\x1b]52;c;ZWNobyBoaQ==\x07zz"
+    _iu = dc.post("/users/add", data={"username": _inj_user, "display_name": "x"}, headers=_xhr)
+    with app.app_context():
+        check("users/add: a delegate cannot store a username carrying ESC sequences",
+              User.query.filter_by(username=_inj_user).first() is None and _iu.status_code == 400,
+              "status=%d" % _iu.status_code)
+    for _gn in ("ops\nforged", "ops\x1b[2Kteam"):
+        _ig = dc.post("/groups/add", data={"name": _gn}, headers=_xhr)
+        with app.app_context():
+            check("groups/add: a delegate cannot store the group name %r" % _gn,
+                  Group.query.filter_by(name=_gn).first() is None and _ig.status_code == 400,
+                  "status=%d" % _ig.status_code)
+    with app.app_context():
+        _eg_id = Group.query.filter_by(name="esc_group").first().id
+    _ie = dc.post("/groups/%d/edit" % _eg_id, data={"name": "esc\x1b]52;c;eA==\x07"}, headers=_xhr)
+    with app.app_context():
+        check("groups/edit: ...nor rename one to it",
+              db.session.get(Group, _eg_id).name == "esc_group" and _ie.status_code == 400,
+              "status=%d name=%r" % (_ie.status_code, db.session.get(Group, _eg_id).name))
+    _ok_g = dc.post("/groups/add", data={"name": "Esc Ops Team"}, headers=_xhr)
+    with app.app_context():
+        _okg = Group.query.filter_by(name="Esc Ops Team").first()
+        check("groups/add: an ordinary name with a space is still created (control)",
+              _okg is not None, "status=%d" % _ok_g.status_code)
+        if _okg is not None:
+            db.session.delete(_okg)
+            db.session.commit()
+
     # ── Group create via the real route WITH a host selected. This is the exact
     #    regression that 500'd: the route assigned GameServer objects to
     #    Group.servers, which is a RemoteServer collection. ──
@@ -14532,6 +14578,48 @@ try:
         # Caddy examples, and Tailscale Serve, all forward the host).
         check("socket origin: a proxy that hides the host is refused without a site_domain",
               not _sio_ok("https://panel.lan", scheme="http", host="127.0.0.1:5000"))
+        # Aikido 745379243. An explicit "*" answered True before any of the checks above ran, so a
+        # page on another port of the panel's own address (same-site: the Lax cookie rides along)
+        # or on a sibling tailnet node could open a terminal as whoever was logged in. A "*"
+        # anywhere in a list did the same. It is ignored now, with a warning saying what to set.
+        _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins="*"))
+        import logging as _so_logging
+
+        class _SoWarned(_so_logging.Handler):
+            def __init__(self):
+                _so_logging.Handler.__init__(self)
+                self.got = []
+
+            def emit(self, rec):
+                if rec.levelno >= _so_logging.WARNING:
+                    self.got.append(rec.getMessage())
+
+        _so_h = _SoWarned()
+        _so_logging.getLogger("panel.app").addHandler(_so_h)
+        try:
+            _so_star_other = _sio_ok("http://1.2.3.4:8123", scheme="http", host="1.2.3.4:5000")
+            _sio_ok("http://1.2.3.4:8124", scheme="http", host="1.2.3.4:5000")
+        finally:
+            _so_logging.getLogger("panel.app").removeHandler(_so_h)
+        check("socket: an explicit '*' does not admit a page on another port of the panel's address",
+              not _so_star_other)
+        _so_said = [m for m in _so_h.got if "socketio_cors_origins" in m]
+        check("socket: ...and the log says it is ignored and what to set instead, once",
+              len(_so_said) == 1 and "site_domain" in _so_said[0], repr(_so_h.got))
+        check("socket: ...nor a sibling host on the same tailnet",
+              not _sio_ok("https://other.example.ts.net", scheme="http", host="127.0.0.1:5000",
+                          HTTP_X_FORWARDED_PROTO="https",
+                          HTTP_X_FORWARDED_HOST="node.example.ts.net"))
+        check("socket: ...nor any other origin",
+              not _sio_ok("https://evil.example", scheme="http", host="1.2.3.4:5000"))
+        check("socket: ...while under '*' the panel's own page still connects (control)",
+              _sio_ok("http://1.2.3.4:5000", scheme="http", host="1.2.3.4:5000"))
+        _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins=["https://only.example", "*"]))
+        check("socket: a '*' hidden in a list is not a wildcard either",
+              not _sio_ok("http://1.2.3.4:8123", scheme="http", host="1.2.3.4:5000")
+              and not _sio_ok("https://evil.example"))
+        check("socket: ...and the exact origins in that list still connect (control)",
+              _sio_ok("https://only.example"))
     finally:
         _sc_cfg(_cfg_before)
     # The app's REAL engine.io server, driven over HTTP: its handshake refuses the other-port page
@@ -14551,6 +14639,46 @@ try:
           _so_bad.status_code == 400, "status %d %r" % (_so_bad.status_code, _so_bad.data[:80]))
     check("socket origin: ...and completes for the panel's own origin (control)",
           _so_ok.status_code == 200, "status %d %r" % (_so_ok.status_code, _so_ok.data[:80]))
+    # ...and the same two over the live handshake with an operator's "*" in config.json, the case
+    # Aikido 745379243 is about. Then the ways the panel is really reached, so the fix is known
+    # not to cost anyone the console: Tailscale Serve at the root and under a mount (it forwards
+    # the host it was asked for), and a TLS reverse proxy that rewrites Host with site_domain set.
+    _so_cfg0 = _lc_cfg()
+
+    def _so_handshake(cfg_over, base_url, origin, path="/socket.io/", **headers):
+        _sc_cfg(dict(_so_cfg0, **cfg_over))
+        _r = _so_c.get(path + "?EIO=4&transport=polling", base_url=base_url,
+                       headers=dict(headers, Origin=origin))
+        return _r.status_code, _r.data[:60]
+
+    try:
+        _so_star = dict(site_domain="", socketio_cors_origins="*")
+        _so_r = _so_handshake(_so_star, "http://1.2.3.4:5000", "http://1.2.3.4:8123")
+        check("socket origin: with '*' configured the live handshake still refuses another port",
+              _so_r[0] == 400, repr(_so_r))
+        _so_r = _so_handshake(_so_star, "http://1.2.3.4:5000", "http://1.2.3.4:5000")
+        check("socket origin: ...and still completes for the panel's own origin (control)",
+              _so_r[0] == 200, repr(_so_r))
+        _so_r = _so_handshake(dict(site_domain="", socketio_cors_origins=None),
+                              "http://node.example.ts.net", "https://node.example.ts.net",
+                              **{"X-Forwarded-Proto": "https",
+                                 "X-Forwarded-Host": "node.example.ts.net"})
+        check("socket origin: Tailscale Serve at the root still connects",
+              _so_r[0] == 200, repr(_so_r))
+        _so_r = _so_handshake(dict(site_domain="", socketio_cors_origins=None,
+                                   tailscale_mount="/lgsm"),
+                              "http://node.example.ts.net", "https://node.example.ts.net",
+                              path="/lgsm/socket.io/",
+                              **{"X-Forwarded-Proto": "https",
+                                 "X-Forwarded-Host": "node.example.ts.net"})
+        check("socket origin: ...and under a /lgsm mount",
+              _so_r[0] == 200, repr(_so_r))
+        _so_r = _so_handshake(dict(site_domain="panel.example.com", socketio_cors_origins=None),
+                              "http://127.0.0.1:5000", "https://panel.example.com")
+        check("socket origin: a TLS reverse proxy that rewrites Host connects with site_domain set",
+              _so_r[0] == 200, repr(_so_r))
+    finally:
+        _sc_cfg(_so_cfg0)
 
     # ── GHSA-hh39-76g3-wxcx: a LOADED row with an injected account name drives no command ─────────
     # The advisory end to end, through the real app. A game_server row whose short_name carries a
