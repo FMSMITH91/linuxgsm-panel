@@ -2025,6 +2025,50 @@ try:
     check("ssh port: a raise is a 500 with a GENERIC message, and the stored port is unchanged",
           _st == 500 and (_body or {}).get("message") == "Internal server error" and _r.port == 22,
           repr(_body))
+    # One port change per host at a time. The move snapshots and restores ONE fixed drop-in path,
+    # so an overlapping second change (a double-submit) restored or deleted the drop-in the first
+    # had written and verified, and the panel stored a port sshd no longer served. The second
+    # request is made from INSIDE the first's change_ssh_port, i.e. exactly while it runs.
+    _rv_inner = _rv_app.test_client()
+    _csp_runs, _inner = [], {}
+    _other = _rv_remote()
+
+    def _csp_slow(remote, port, bind):
+        _csp_runs.append((remote.id, port))
+        if len(_csp_runs) == 1:
+            _inner["same"] = _rv_json(_rv_inner.post("/api/remote/%d/ssh-port" % remote.id,
+                                                     json={"port": 3333}))
+            _inner["other"] = _rv_json(_rv_inner.post("/api/remote/%d/ssh-port" % _other.id,
+                                                      json={"port": 4444}))
+        return True, "moved"
+    _rv.change_ssh_port = _csp_slow
+    _held_at_commit = []
+    _rv_commit_saved = _rv.db.session.commit
+    # Two commits: the other host's (made inside the first change) and the first change's own —
+    # both while THIS host's lock is held. The last one is the one this is about.
+    _rv.db.session.commit = lambda: (_held_at_commit.append(_rv._ssh_port_locks[_r.id].locked()),
+                                     _rv_commit_saved())[1]
+    _st, _body = _rv_json(_rv_client.post("/api/remote/%d/ssh-port" % _r.id, json={"port": 2222}))
+    _rv.db.session.commit = _rv_commit_saved
+    check("ssh port: a second change for the SAME host while one runs is refused with 409",
+          _inner.get("same") == (409, {"success": False, "message":
+                                       "An SSH port change is already running for this host."})
+          and (_r.id, 3333) not in _csp_runs, "inner=%r runs=%r" % (_inner.get("same"), _csp_runs))
+    check("ssh port: ...while the first completes, and holds the lock through the port commit",
+          _st == 200 and (_body or {}).get("success") is True and _r.port == 2222
+          and _held_at_commit == [True, True], "%r %r held=%r" % (_st, _body, _held_at_commit))
+    check("ssh port: ...and a change for a DIFFERENT host is not held up by it",
+          (_inner.get("other") or (None,))[0] == 200 and (_other.id, 4444) in _csp_runs,
+          repr(_inner.get("other")))
+    _rv.change_ssh_port = lambda remote, port, bind: (_ for _ in ()).throw(RuntimeError("boom"))
+    _rv_json(_rv_client.post("/api/remote/%d/ssh-port" % _r.id, json={"port": 2223}))
+    _rv.change_ssh_port = lambda remote, port, bind: (_csp.append((port, bind)), (True, "moved"))[1]
+    _csp.clear()
+    _st, _body = _rv_json(_rv_client.post("/api/remote/%d/ssh-port" % _r.id, json={"port": 2224}))
+    check("ssh port: the lock is released afterwards — even after a change that RAISED",
+          _st == 200 and _csp == [(2224, "")] and not _rv._ssh_port_locks[_r.id].locked(),
+          "status=%r calls=%r" % (_st, _csp))
+    _r.port = 22
 
     # ── close the panel's public port ──────────────────────────────────────────────────────────
     _rv.load_config = lambda: {"tailscale_setup_done": True, "port": 5000}
