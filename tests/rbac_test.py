@@ -3668,11 +3668,12 @@ check("redeem_invite refuses an invite whose creator lost their authority",
 #
 # And resolved to the function each call REALLY reaches, by tests/audit_callgraph.py. It followed
 # callees by BARE NAME, so a view counted as audited when any function sharing a name with one of
-# its callees logged. `subprocess.run` matched a `run` that logs, which made every route that runs
-# a command pass; the setup wizard's Tailscale routes passed on system_ops._run, named like two
-# workers that log, while writing no row. Now a call counts only when that exact function (through
-# its imports, its module attributes, its own scopes) reaches log_action; one the walk cannot
-# resolve counts as silent, so a route that logs only through it fails here and has to be read.
+# its callees logged. `subprocess.run` matched a function named `run` that logs, so a route that
+# reached a subprocess passed (POST /setup and /setup/restart wrote no row and passed that way);
+# the wizard's Tailscale routes passed on system_ops._run, named like two workers that log. Now a
+# call counts only when that exact function, found through its imports, module attributes and
+# scopes, reaches log_action. One the walk cannot resolve counts as silent, so a route that logs
+# only through it fails here and has to be read.
 #
 # The listed endpoints genuinely have nothing to audit; each says why, so a real gap cannot hide
 # among them.
@@ -3690,8 +3691,8 @@ _NO_AUDIT_OK = {
     "notifications_test",            # sends one test notification to the configured channel
 }
 import importlib.util as _aud_iu  # noqa: E402
-# Loaded by path: tests/ is not a package, and a `tests` package some dependency installs would
-# otherwise be the one imported.
+# Loaded by path: tests/ is not a package, so a regular `tests` package installed by some
+# dependency would be imported instead of it.
 _aud_spec = _aud_iu.spec_from_file_location("audit_callgraph",
                                             os.path.join(_ROOT, "tests", "audit_callgraph.py"))
 _aud_cg = _aud_iu.module_from_spec(_aud_spec)
