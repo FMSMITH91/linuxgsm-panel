@@ -115,9 +115,62 @@ from panel.security.auth import can_access_remote, client_ip  # noqa: F401 - re-
 
 results = []
 
+# ── the eventlet hub, swept at every check() ────────────────────────────────────────────────────
+# This suite is monkey-patched (importing app runs eventlet.monkey_patch()), so every green wait —
+# os.read on a pipe, a socket, a subprocess — files a listener with the hub for the greenlet that
+# waits, and removes it when the wait ends. A wait that raises in the wrong place leaves it behind.
+# part10's _aside check did: green os.read on a DIRECTORY, epoll refused the fd after the listener
+# was filed, and the trampoline raised before the `try` that removes it. The next os.open to reuse
+# that fd number queued an IOClosed for the suite's own greenlet, and the hub threw it into
+# whatever the suite waited on next — a subprocess, two checks later, which crashed on Python 3.10
+# and 3.12 and quietly failed on 3.13+.
+#
+# The runner's part-boundary sweep could not have seen it: the leak and its victim were in the
+# same part, and the hub was clean again by the end of it. So each check() made from a thread's
+# MAIN greenlet (the suite's module-level code) looks for what cannot be a live wait: a listener
+# filed for the greenlet that is running right now (it is recording a result, not waiting), or for
+# a dead one, and an IOClosed still queued for the running one. Each is recorded against the check
+# being recorded — the code since the previous check() filed it — and removed, so a leak fails ONE
+# gate that says where it happened instead of whichever check it would have hit. The runner turns
+# hub_leaks into that gate, and fails it too if no check ever found a hub to read.
+hub_leaks = []
+hub_swept = [0]
+
+
+def _hub_sweep(name):
+    hubs, greenlet = sys.modules.get("eventlet.hubs"), sys.modules.get("greenlet")
+    if hubs is None or greenlet is None:
+        return
+    cur = greenlet.getcurrent()
+    if cur.parent is not None:      # a spawned greenthread: the main greenlet may really be waiting
+        return
+    try:
+        hub = getattr(hubs._threadlocal, "hub", None)     # this thread's hub, never a new one
+        if hub is None:
+            return
+        hub_swept[0] += 1
+        stale = [(ls, "listener") for bucket in hub.listeners.values() for ls in bucket.values()]
+        stale += [(ls, "secondary listener") for bucket in hub.secondaries.values()
+                  for waiting in bucket.values() for ls in waiting]
+        stale = [(ls, kind) for ls, kind in stale if ls.greenlet is cur or ls.greenlet.dead]
+        stale += [(ls, "queued IOClosed") for ls in hub.closed if ls.greenlet is cur]
+        for ls, kind in stale:
+            hub_leaks.append("%s: %s %s on fd %d, for %s" % (
+                name, ls.evtype, kind, ls.fileno,
+                "the running greenlet" if ls.greenlet is cur else "a dead greenlet"))
+            if kind == "queued IOClosed":
+                hub.closed.remove(ls)
+            else:
+                ls.spent = False            # hub.remove() skips a spent listener
+                hub.remove(ls)
+    except Exception as e:  # noqa: BLE001 - a sweep that cannot read the hub fails its gate
+        if not any(x.startswith("hub sweep failed") for x in hub_leaks):
+            hub_leaks.append("hub sweep failed at %s: %s: %s" % (name, type(e).__name__, e))
+
 
 def check(name, cond, detail=""):
     results.append((bool(cond), name, detail))
+    _hub_sweep(name)
 
 
 def skip(name, reason):

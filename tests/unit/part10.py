@@ -51,11 +51,21 @@ class _Over:
 
 
 def _p7_call(fn, *a, **k):
-    """fn(*a, **k), or the string 'raised <Type>: <msg>' if it raised — so a check fails by name."""
+    """fn(*a, **k), or 'raised <Type>: <msg> at <file>:<line>' if it raised — so a check fails by name.
+
+    The location is the INNERMOST frame, where the exception was raised. Without it, CI on
+    Python 3.10 and 3.12 reported only "raised TypeError: can't concat str to bytearray", and
+    nothing in that says the error came from inside subprocess.py (a green os.read handed
+    back '' where bytes were expected), not from the code under test.
+    """
     try:
         return fn(*a, **k)
     except Exception as e:  # noqa: BLE001 - recorded as the failure detail
-        return "raised %s: %s" % (type(e).__name__, e)
+        tb = e.__traceback__
+        while tb.tb_next is not None:
+            tb = tb.tb_next
+        return "raised %s: %s at %s:%d" % (type(e).__name__, e, tb.tb_frame.f_code.co_filename,
+                                           tb.tb_lineno)
 
 
 def _p7_out(fn, *a, **k):
@@ -76,6 +86,7 @@ def _p7_raise(exc):
 # The updater's pre-update database step and the root-run repair. Everything here happens in a temp
 # dir; _paths() is stubbed wherever a call would otherwise resolve the checkout's own data/panel.db.
 import db_maintenance as _dbm7  # noqa: E402
+from eventlet import patcher as _p7_patcher  # noqa: E402
 
 _d7 = _p7_tf.mkdtemp(prefix="p7-dbm-")
 
@@ -199,9 +210,24 @@ try:
     # ── _aside(): the forensic copy ────────────────────────────────────────────────────────────
     # A source that opens but cannot be READ (a directory) fails mid-copy: nothing may be left at
     # the destination name, or the next repair would find a half-written ".corrupt-" file.
+    #
+    # Read through the REAL os.read, the one production runs: db_maintenance is its own process
+    # (install.sh, panel-helper) and never runs under eventlet, but this suite is monkey-patched,
+    # and eventlet's green os.read waits on the hub for any fd that is not a regular file. For a
+    # directory, epoll refuses the fd (EPERM) AFTER the hub has filed a read listener for the
+    # suite's own greenlet, and the trampoline raises before the `try` that would remove it. So
+    # this check left that listener behind; repair()'s own _aside two checks down reopened the fd
+    # number, which turned it into a pending IOClosed; and the hub threw that into the next thing
+    # the suite waited on — the sqlite3 CLI's subprocess in the swap check below, where the green
+    # os.read answered '' to Popen's bytearray. TypeError on Python 3.10 and 3.12; on 3.13+ an
+    # OSError that silently aborted the .recover rebuild. The real read raises EISDIR.
     _asrc = os.path.join(_d7, "adir")
     os.mkdir(_asrc)
-    _a_res = _p7_call(_dbm7._aside, _asrc)
+    _dbm7.os = _Over(os, read=_p7_patcher.original("os").read)
+    try:
+        _a_res = _p7_call(_dbm7._aside, _asrc)
+    finally:
+        _dbm7.os = _dbm7_saved["os"]
     _a_left = [n for n in os.listdir(_d7) if n.startswith("adir.corrupt-")]
     check("dbm/aside: a copy that fails mid-way answers '' and leaves no partial file",
           _a_res == "" and not _a_left, "res=%r left=%r" % (_a_res, _a_left))
@@ -243,13 +269,17 @@ try:
        (False, "no database file to repair"))
 
     # ── repair() when the swap itself fails: the original stays, and no temp is left behind ─────
+    # The rebuild is forced down the iterdump path (no sqlite3 CLI), as the _rebuild_via_recover
+    # checks below stub it: this is about os.replace failing, and must not depend on whether the
+    # machine has the CLI, nor run a real subprocess to find out.
     _sw = _p7_db(os.path.join(_d7, "swap.db"), (("t", 30),))
     _p7_db(_sw + ".backup", (("t", 30),))
     _dbm7.os = _Over(os, replace=_p7_raise(OSError("EXDEV")))
+    _dbm7.shutil = _Over(_p7_sh, which=lambda n: None)
     try:
         _sw_res = _p7_call(_dbm7.repair, _sw, _sw + ".backup")
     finally:
-        _dbm7.os = _dbm7_saved["os"]
+        _dbm7.os, _dbm7.shutil = _dbm7_saved["os"], _dbm7_saved["shutil"]
     check("dbm/repair: when neither the rebuild nor the backup can be swapped in, it says so",
           isinstance(_sw_res, tuple) and _sw_res[0] is False
           and _sw_res[1].startswith("could not repair"), repr(_sw_res))
