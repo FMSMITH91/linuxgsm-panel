@@ -4717,7 +4717,7 @@ def _wf_checkout_steps(text):
     _out = []
     for _i, _l in enumerate(_lines):
         _m = re.match(r"^(\s*)(- )?uses:\s*[\"']?actions/checkout@", _l)
-        if not _code(_l) or not _m:
+        if not _m:   # a comment line cannot match: `#` is not whitespace, `- ` or `uses:`
             continue
         # The step's keys sit at _key; its `- ` is this line, or the nearest code line above
         # that is indented less than the keys (a `- name:` first, `uses:` under it).
@@ -4777,22 +4777,24 @@ check("workflows: every actions/checkout step sets persist-credentials: false, u
       "files=%d steps=%d of %d missing=%r push-exempt=%r"
       % (len(_co_files), _co_seen, _co_raw, _co_bad, _co_push))
 # The parser itself, on shapes the workflows do not all have today: a `- name:` above `uses:`,
-# the input inside a block scalar (not an input), a sibling step's `with:`, a pushing job, and a
-# step it cannot place (counted, and failing).
+# the input inside a block scalar (not an input), a sibling step's `with:`, a pushing job, a job
+# whose only push is in a comment (not exempt), and a step it cannot place (counted, and failing).
 _co_probe = _wf_checkout_steps(
     "on: push\njobs:\n  a:\n    steps:\n"
     "      - name: Checkout\n        uses: actions/checkout@x\n        with:\n"
     "          persist-credentials: false   # nothing here pushes\n"
     "      - uses: actions/checkout@x\n        with:\n          sparse-checkout: |\n"
     "            persist-credentials: false\n"
-    "      - uses: actions/setup-python@x\n        with:\n          persist-credentials: false\n"
     "      - uses: actions/checkout@x\n"
+    "      - uses: actions/setup-python@x\n        with:\n          persist-credentials: false\n"
     "  b:\n    steps:\n      - uses: actions/checkout@x\n      - run: git push origin HEAD\n"
-    "  c:\n    steps:\n  uses: actions/checkout@x\n")
+    "  c:\n    steps:\n      - uses: actions/checkout@x\n      # then: git push origin HEAD\n"
+    "  d:\n    steps:\n  uses: actions/checkout@x\n")
 check("workflows: the checkout parser finds a named step's inputs, ignores a block scalar's text "
-      "and a sibling step's, exempts only a pushing job, and fails a step it cannot place",
-      _co_probe == [(6, True, False), (9, False, False), (16, False, False), (19, False, True),
-                    (23, None, False)], repr(_co_probe))
+      "and a sibling step's, exempts only a job that pushes (not one that mentions a push in a "
+      "comment), and fails a step it cannot place",
+      _co_probe == [(6, True, False), (9, False, False), (13, False, False), (19, False, True),
+                    (23, False, False), (27, None, False)], repr(_co_probe))
 
 _ci_wf = open(os.path.join(_root, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
 _cov_job = _ci_wf[_ci_wf.index("\n  coverage:\n"):]
