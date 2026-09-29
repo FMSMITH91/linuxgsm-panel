@@ -822,9 +822,14 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
         return run_command(server, _priv.remote_command(verb, args, merge_stderr=merge_stderr),
                            timeout=timeout, sudo=sudo, **_secret_kw)
 
-    # sudo=None means "whatever this host is configured for", the same defaulting run_command does.
-    # A host with sudo disabled runs the tool directly — still argv, still no shell, just no root.
-    use_sudo = sudo if sudo is not None else getattr(server, "sudo_enabled", False)
+    # sudo=None ESCALATES here: this is a privileged verb on the panel's own machine, and the row's
+    # sudo_enabled is not consulted. That field is a REMOTE's SSH setting (whether the account the
+    # panel signs in as may `sudo bash -c`), and run_command already ignores it on this host. It
+    # used to decide this branch, so a local row saved with it off — the real test panel's own
+    # row is one — sent `ufw status numbered` straight to ufw as the panel's account, beside a
+    # helper the sudoers grant lets it run, and the host's Firewall card answered
+    # permission_denied. Only an explicit sudo=False runs the tool directly — still argv, no root.
+    use_sudo = True if sudo is None else sudo
     if not use_sudo:
         return _exec_local_argv(_priv.tool_argv(verb, args), timeout=timeout,
                                 stdin_text=_priv.stdin_for(verb, args))

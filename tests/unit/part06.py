@@ -199,6 +199,122 @@ finally:
     _sm_core._HELPER_STATE.update(_orig_helper_state)
 
 
+# ── the panel host's own Firewall card, on a row saved with sudo_enabled off ──────────────────
+# remote_ufw_status is the one caller that passes sudo=None, and run_privileged used to read that
+# as the ROW's sudo_enabled on the panel host too. The real test panel's own row has it off, so the
+# read ran `ufw status numbered` as the panel's account beside the helper its sudoers grant allows,
+# and GET /api/remote/1/firewall answered permission_denied. sudo_enabled is a remote's SSH
+# setting: on the panel host the helper decides, and a remote still honours the row.
+_PHF_LOCAL = NS(is_local=True, auth_method="key", sudo_enabled=False, linuxgsm_user="",
+                host="127.0.0.1", port=22, username="root", id=9601, name="this-host")
+_PHF_REMOTE_OFF = NS(is_local=False, auth_method="key", sudo_enabled=False, linuxgsm_user="",
+                     host="h", port=22, username="root", id=9602, name="r-off")
+_PHF_REMOTE_ON = NS(is_local=False, auth_method="key", sudo_enabled=True, linuxgsm_user="",
+                    host="h", port=22, username="admin", id=9603, name="r-on")
+_PHF_HELPER = ["sudo", "-n", _priv.HELPER_PATH, "ufw-status", "numbered"]
+_PHF_LISTING = ("Status: active\n\n     To                         Action      From\n"
+                "     --                         ------      ----\n"
+                "[ 1] Anywhere on tailscale0     ALLOW IN    Anywhere\n")
+_phf_argvs, _phf_shell, _phf_wire = [], [], []
+
+
+def _phf_exec_argv(argv, timeout=30, stdin_text=None):
+    """The host as it answers: the helper lists the rules, ufw run as the panel's account refuses."""
+    _phf_argvs.append(list(argv))
+    if list(argv[:3]) == _PHF_HELPER[:3]:
+        return _PHF_LISTING, "", 0
+    return "", "ERROR: You need to be root to run this script", 1
+
+
+class _PhfChan:
+    """A finished paramiko exec channel with nothing to read."""
+    def shutdown_write(self):
+        return None
+
+    def settimeout(self, _t):
+        return None
+
+    def recv_ready(self):
+        return False
+
+    def recv_stderr_ready(self):
+        return False
+
+    def recv(self, _n):
+        return b""
+
+    def recv_stderr(self, _n):
+        return b""
+
+    def exit_status_ready(self):
+        return True
+
+    def recv_exit_status(self):
+        return 0
+
+
+class _PhfStd:
+    channel = _PhfChan()
+
+    def write(self, _t):
+        return None
+
+    def flush(self):
+        return None
+
+
+def _phf_exec_command(cmd, timeout=None):
+    _phf_wire.append(cmd)
+    return _PhfStd(), _PhfStd(), _PhfStd()
+
+
+_phf_saved = (_sm_core._run_local, _sm_core._exec_local_argv, _sm_core.get_connection,
+              _sm_firewall._annotate_firewall_protection, dict(_sm_core._HELPER_STATE))
+try:
+    _sm_core._exec_local_argv = _phf_exec_argv
+    _sm_core._run_local = lambda cmd, timeout=30, sudo=False, **k: (
+        _phf_shell.append((cmd, sudo)), ("", "", 0))[1]
+    _sm_core.get_connection = lambda s, **k: NS(exec_command=_phf_exec_command)
+    # The lock-out annotations read tailscale and sshd state; what is under test is the status.
+    _sm_firewall._annotate_firewall_protection = lambda s, enabled, groups: groups
+    _sm_core._HELPER_STATE["present"] = True
+    _sm_core.run_privileged(_PHF_LOCAL, "ufw-status", ["numbered"], timeout=5, sudo=None)
+    eq("panel-host firewall: a local row with sudo_enabled off still reads ufw through the helper",
+       _phf_argvs[-1:], [_PHF_HELPER])
+    _phf_argvs.clear()
+    _phf_st = _sm_firewall.remote_ufw_status(_PHF_LOCAL)
+    check("panel-host firewall: the card's own reader gets the rules, not permission_denied",
+          _phf_st.get("installed") is True and _phf_st.get("enabled") is True
+          and len(_phf_st.get("rules") or []) == 1 and not _phf_st.get("permission_denied")
+          and _phf_argvs == [_PHF_HELPER], repr((_phf_st, _phf_argvs)))
+    # Positive control: an EXPLICIT sudo=False is still the tool itself, unescalated.
+    _phf_argvs.clear()
+    _sm_core.run_privileged(_PHF_LOCAL, "ufw-status", ["numbered"], timeout=5, sudo=False)
+    check("panel-host firewall: an explicit sudo=False still runs the tool directly, no sudo",
+          len(_phf_argvs) == 1 and _phf_argvs[0][0] != "sudo"
+          and _phf_argvs[0][1:] == ["status", "numbered"], repr(_phf_argvs))
+    # No helper yet: the pre-helper escalated shell form, as every other verb takes there.
+    _sm_core._HELPER_STATE["present"] = False
+    _phf_argvs.clear()
+    _sm_core.run_privileged(_PHF_LOCAL, "ufw-status", ["numbered"], timeout=5, sudo=None)
+    check("panel-host firewall: with no helper, it is the escalated shell form, not ufw as the panel",
+          _phf_argvs == [] and _phf_shell[-1:] == [(_priv.remote_command("ufw-status", ["numbered"]),
+                                                    True)], repr((_phf_argvs, _phf_shell[-1:])))
+    # A REMOTE still honours its row: off sends the bare command, on the `sudo bash -c` form.
+    _sm_core._HELPER_STATE["present"] = True
+    _sm_firewall.remote_ufw_status(_PHF_REMOTE_OFF)
+    _sm_firewall.remote_ufw_status(_PHF_REMOTE_ON)
+    eq("panel-host firewall: a remote's sudo_enabled still decides whether its ufw read escalates",
+       [c.startswith("sudo bash -c ") for c in _phf_wire], [False, True])
+    eq("panel-host firewall: ...and the unescalated one is the bare ufw read (the gate has a subject)",
+       _phf_wire[:1], [_priv.remote_command("ufw-status", ["numbered"])])
+finally:
+    (_sm_core._run_local, _sm_core._exec_local_argv, _sm_core.get_connection,
+     _sm_firewall._annotate_firewall_protection) = _phf_saved[:4]
+    _sm_core._HELPER_STATE.clear()
+    _sm_core._HELPER_STATE.update(_phf_saved[4])
+
+
 # ── the REMOTE fail2ban top-IPs report ────────────────────────────────────────────────────────
 # The remote twin of system_ops.fail2ban_top_ips. #118 converted the local one; this copy still
 # carried the five-stage root pipeline, which is how two copies of one behaviour drift. It shares

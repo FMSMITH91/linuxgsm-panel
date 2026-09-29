@@ -264,6 +264,14 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Fixed
 
+- **The panel host's own Firewall card could say "permission denied" with the helper installed.**
+  Its rule list was the one firewall read that followed the host row's "sudo" setting, which is a
+  remote's SSH option, and on the panel's own host it also decided whether to use the helper. A
+  panel-host row saved with it off (the test panel's is one) ran `ufw status` as the panel's
+  account, which ufw refuses, so the card listed no rules and no rule could be deleted from it,
+  while Server Management read the same firewall fine. On the panel's own host that setting is no
+  longer read: the rule list goes through the helper like every other firewall action. A remote
+  still follows its own setting.
 - **On Python 3.13 and later (Ubuntu 26.04), a closed terminal could keep its slot until the panel
   restarted.** If the terminal's output reader was still busy a second after the close, for
   instance still handing output to the browser, the close stopped partway. The session stayed on
