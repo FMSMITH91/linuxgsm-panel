@@ -1590,11 +1590,17 @@ def _audit_ref(model, obj):
         return None
     from sqlalchemy import inspect as _sa_inspect
     from sqlalchemy.exc import NoInspectionAvailable
+    from panel.db.models import replaced_since_loaded
     try:
         ident = _sa_inspect(obj).identity
     except NoInspectionAvailable:
         return None
     if not ident:
+        return None
+    # ...nor under a row that took the id since `obj` was loaded. A worker audits its outcome
+    # minutes after it loaded its server; resolved by id alone, the row was filed under whichever
+    # server holds the id by then, and shown to that server's viewers.
+    if replaced_since_loaded(obj):
         return None
     return db.select(model.id).where(model.id == ident[0]).scalar_subquery()
 

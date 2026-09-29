@@ -17,14 +17,17 @@ from flask import has_request_context, render_template, request
 from flask_login import current_user, login_required
 from flask_socketio import emit
 
-from panel.db.models import RemoteServer
+from panel.db.models import RemoteServer, claim_row, row_birth
 from panel.ops import socket_hooks as _socket_hooks
 from panel.ops import terminal_session as _ts
 from panel.ops.ssh_manager import is_local_server
 from panel.security.auth import (USE_TERMINAL, _deny, get_remote, has_permission, log_action,
     permission_required)
 
-# sid -> (remote_id or None). Only used to label audit rows and to tear down on disconnect.
+# sid -> (remote_id, models.row_birth of that host). Labels audit rows, tears down on disconnect,
+# and is what every access re-check asks about. The row's identity, not just its id: SQLite hands a
+# deleted host's id to the next host added, and the re-check then asked about THAT host — a shell
+# on the deleted machine stayed open for anyone who could use the one that took its id.
 _sid_host = {}
 _sid_lock = threading.Lock()
 
@@ -89,8 +92,10 @@ LOCAL_HOST_REFUSAL = ("A terminal on the panel's own host is for superadmins onl
                       "the account that owns the panel's database and keys.")
 
 
-def _terminal_still_permitted(uid, cred, remote_id):
+def _terminal_still_permitted(uid, cred, entry):
     """Would term_open still give this user a shell on this host, on the login it opened with?
+
+    `entry` is the shell's _sid_host entry, (remote_id, row_birth).
 
     The same questions the event handlers ask of current_user — active, not held at a forced
     password change, USE_TERMINAL (or superadmin), may_shell_on the host — plus whether the login
@@ -107,9 +112,17 @@ def _terminal_still_permitted(uid, cred, remote_id):
         return False
     if not (user.is_superadmin or has_permission(user, USE_TERMINAL)):
         return False
-    if not may_shell_on(user, db.session.get(RemoteServer, remote_id)):
+    if not may_shell_on(user, _session_host(entry)):
         return False
     return bool(_credential_still_valid(uid, cred))
+
+
+def _session_host(entry):
+    """The host an open shell is on, from its _sid_host entry: None once it is not that row."""
+    if entry is None:
+        return None
+    remote_id, born = entry
+    return claim_row(RemoteServer, remote_id, born)
 
 
 def revoked_terminal_sids(only_sid=None):
@@ -123,9 +136,9 @@ def revoked_terminal_sids(only_sid=None):
         owners = {s: (o, _sid_host.get(s)) for s, o in _sid_owner.items()
                   if only_sid is None or s == only_sid}
     out = []
-    for sid, ((uid, cred), remote_id) in owners.items():
+    for sid, ((uid, cred), entry) in owners.items():
         try:
-            if _terminal_still_permitted(uid, cred, remote_id):
+            if _terminal_still_permitted(uid, cred, entry):
                 continue
             out.append((sid, db.session.get(User, uid) if uid is not None else None))
         except Exception:
@@ -153,16 +166,16 @@ def _close_and_audit(app, sid, reason, user=None):
     _ts.close_for_sid(sid, reason)
     _sid_access.pop(sid, None)
     with _sid_lock:
-        remote_id = _sid_host.pop(sid, None)
+        entry = _sid_host.pop(sid, None)
         _sid_owner.pop(sid, None)
-    if remote_id is None:
+    if entry is None:
         return          # nothing to audit: this socket never got as far as an open session
     try:
         if user is None and has_request_context() and current_user.is_authenticated:
             user = current_user
-        remote = RemoteServer.query.get(remote_id)
+        remote = _session_host(entry)
         log_action(user, "terminal_close",
-                   target=(remote.name if remote else str(remote_id)), detail=reason,
+                   target=(remote.name if remote else str(entry[0])), detail=reason,
                    remote=remote)
     except Exception:
         app.logger.debug("terminal close audit failed", exc_info=True)
@@ -235,7 +248,7 @@ def _register_terminal_open(socketio):
             return
         from panel.routes.server_files import _viewer_credential
         with _sid_lock:
-            _sid_host[sid] = remote_id
+            _sid_host[sid] = (remote_id, row_birth(remote))
             _sid_owner[sid] = (current_user.id, _viewer_credential())
         # The session opening is auditable; what gets typed into it is not recorded anywhere —
         # people type passwords into terminals.
@@ -277,14 +290,14 @@ def _still_allowed(app, sid):
     takes effect within ten seconds rather than at the next reconnect.
     """
     with _sid_lock:
-        remote_id = _sid_host.get(sid)
-    if remote_id is None:
+        entry = _sid_host.get(sid)
+    if entry is None:
         return True                       # no open session of ours on this socket
     now = time.monotonic()
     cached = _sid_access.get(sid)
     if cached is not None and (now - cached[0]) < _ACCESS_RECHECK_SECONDS:
         return cached[1]
-    ok = may_shell_on(current_user, RemoteServer.query.get(remote_id))
+    ok = may_shell_on(current_user, _session_host(entry))
     _sid_access[sid] = (now, ok)
     if not ok:
         emit("term_error", {"message": "Your access to this host was removed, so the "

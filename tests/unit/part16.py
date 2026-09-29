@@ -22,6 +22,11 @@ HOW THE APP IS BUILT. Not again: this part drives part12's Flask app, its databa
 helpers, and re-arms part12's tripwire and deferred-thread queue for its own duration. Everything
 it replaces is restored in the finally at the bottom, and it ends by asserting that no route it
 drove reached a transport and no worker it queued was left unrun.
+
+IDS ARE REUSED HERE ON PURPOSE. The models now create these tables with AUTOINCREMENT, so no fresh
+database reuses an id; an install whose tables were made before that does until its rebuild runs.
+The fixes below are for those installs, so part16 rebuilds part12's remote_server and game_server
+without AUTOINCREMENT for its own duration (idreuse_support), and gives it back at the end.
 """
 import io as _io16
 import json as _json16
@@ -32,6 +37,7 @@ from datetime import datetime as _dt16
 from types import SimpleNamespace as NS
 
 from unit import REPO_ROOT as _REPO16
+from unit import idreuse_support as _reuse16
 from unit.part01 import check, eq  # noqa: F401
 from unit.part05 import _helper, _helper_path
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_HOST2, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED,
@@ -129,6 +135,12 @@ def _drop_server(sid):
 
 
 try:
+    with _p9.app_context():
+        _reuse16.reuse_ids(db, ("remote_server", "game_server"))
+        _reuse16_on = (_reuse16.plain_rowids(db, "remote_server")
+                       and _reuse16.plain_rowids(db, "game_server"))
+    check("part16: its hosts and servers reuse a deleted row's id (the schema before AUTOINCREMENT)",
+          _reuse16_on)
     for _m in _saved16_threading:
         _m.threading = _p9_threading(_P9Thread)
     for _m in _saved16_time:
@@ -695,6 +707,11 @@ finally:
     _p9_state._os_update_state["hosts"].update(_saved16_osu[1])
     try:
         with _p9.app_context():
+            _reuse16_back = _reuse16.put_back(db)
+    except Exception as _e16b:  # noqa: BLE001 - reported by the check below
+        _reuse16_back = repr(_e16b)
+    try:
+        with _p9.app_context():
             db.session.remove()
             db.engine.dispose()
     except Exception:  # nosec B110 - best-effort cleanup of a throwaway database
@@ -708,6 +725,8 @@ finally:
     except OSError:  # nosec B110 - best-effort cleanup of the runner's throwaway config
         pass
 
+check("part16: its two tables are given AUTOINCREMENT back by the panel's own migration",
+      _reuse16_back == ["remote_server", "game_server"], repr(_reuse16_back))
 check("part16: no route under test reached a real transport (every host call was stubbed)",
       len(_P9_TRIPPED) == _TRIP16_START, repr(_P9_TRIPPED[_TRIP16_START:][:6]))
 check("part16: every deferred worker was run (none left to leak into a later check)",

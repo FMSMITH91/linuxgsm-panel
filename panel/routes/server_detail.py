@@ -6,8 +6,8 @@ from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
 from panel.core import (clock, terminal)
 from panel.core.panel_state import (_cron_restart_pending)
-from panel.db.models import (CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER, CustomCommand,
-    GameServer, GlobalBan, RemoteServer, User, db)
+from panel.db.models import (_NO_BIRTH, CUSTOM_ARG_DEFAULT_PATTERN, CUSTOM_ARG_PLACEHOLDER,
+    CustomCommand, GameServer, GlobalBan, RemoteServer, User, claim_row, db, row_birth, still_held)
 from panel.ops.ssh_manager import (GAMEDIG_TYPE as GAMEDIG_TYPE_MAP, _resolve_from_console,
     _sanitize_steamid, game_engine, is_player_queryable, moderation_caps, player_count as
     sm_player_count, player_list, send_console_command, set_autostart, set_daily_restart)
@@ -157,18 +157,21 @@ def _action_failure_reason(clean):
 def _run_sync_action(app, gs, remote, action, actor, origin):
     """Run a short action in the request and report it: (ok, message)."""
     timeout = 90 if action == "restart" else 60
-    out, err, rc = _sm.run_as_game_user(remote, gs.short_name, action, timeout=timeout, selfname=gs.lgsm_name)
-    log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0),
+    # Read before the SSH, which can take a minute: the row can be deleted and its id taken by
+    # then, and a read after a commit would be of that row (models.RowReplaced refuses it).
+    name, short_name = gs.name, gs.short_name
+    out, err, rc = _sm.run_as_game_user(remote, short_name, action, timeout=timeout, selfname=gs.lgsm_name)
+    log_action(actor, f"{action}_server", target=name, success=(rc == 0),
                detail=_clean_action_output(out)[-400:], actor=origin, server=gs)
     clean = _clean_action_output((out or "") + "\n" + (err or "")).strip()
-    _after_power_action(app, gs, remote, gs.short_name, action, rc)
+    _after_power_action(app, gs, remote, short_name, action, rc)
     if action in READONLY_ACTIONS:
         return True, f"{action}: {clean[:600] or 'no output'}"
     if rc == 0:
-        return True, f"'{action}' succeeded for '{gs.name}'."
+        return True, f"'{action}' succeeded for '{name}'."
     # Surface WHY it failed — pull the most relevant LinuxGSM line.
     reason = _action_failure_reason(clean)
-    return False, f"'{action}' failed for '{gs.name}': {reason[:280] or 'unknown — check the console'}"
+    return False, f"'{action}' failed for '{name}': {reason[:280] or 'unknown — check the console'}"
 
 
 def _run_action(app, gs, remote, action, actor, origin=None, on_done=None):
@@ -195,7 +198,7 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None):
     if action in ("stop", "restart"):
         _mark_expected_offline(gs.id)   # so the monitor doesn't alert on an intentional stop
     if action in LONG_ACTIONS:
-        _bg_action(app, gs.id, remote.id, gs.short_name, action, gs.lgsm_name, on_done=on_done)
+        _bg_action(app, gs, remote, action, on_done=on_done)
         log_action(actor, f"{action}_server", target=gs.name, actor=origin, server=gs)
         return True, f"'{action}' started — watch the live console for progress."
     if action in ("start", "stop", "restart"):
@@ -207,20 +210,24 @@ def _run_action(app, gs, remote, action, actor, origin=None, on_done=None):
     return _run_sync_action(app, gs, remote, action, actor, origin)
 
 
-def _bg_bulk_action(app, server_id, remote_id, action, actor_id):
+def _bg_bulk_action(app, server_id, remote_id, action, actor_id, born=_NO_BIRTH):
     """Run one server's action in the background for the bulk endpoint.
 
     A request that fans out to many servers then returns immediately instead of blocking on
     each SSH round trip. Re-fetches the rows inside the worker's app context (the request's
     objects would be detached), then dispatches through the same _run_action path as the
     single-server controls.
+
+    `born` is the row the request checked access to (models.row_birth): the worker's lookup by
+    id must find THAT row, not a server that took the id after a delete — the access check was
+    made on the one the request saw.
     """
     _app = app
 
     def _run():
         try:
             with _app.app_context():
-                gs = db.session.get(GameServer, server_id)
+                gs = claim_row(GameServer, server_id, born)
                 remote = db.session.get(RemoteServer, remote_id)
                 actor = db.session.get(User, actor_id)
                 if gs and remote:
@@ -300,11 +307,15 @@ def _moderate_here(gs, action, target, message, steamid, num):
 
 
 def _ban_fanout_targets(gs, origin_eng, steamid, target):
-    """The ids of the OTHER servers a cross-server ban from `gs` should reach.
+    """The OTHER servers a cross-server ban from `gs` should reach, as (id, row_birth) pairs.
 
     Access and engine checks are cheap (DB only), so they pick the targets up front. SteamID bans
     go to every Valve server, name bans to every Minecraft server; slot-based (idTech3) bans
     reference a live connection slot, so they can't be ported and stay on this server only.
+
+    Each carries its row's identity: the bans run later, a few at a time, and one server's slow
+    SSH is time enough for another to be deleted and its id taken by a server the access check
+    here never saw.
     """
     targets = []
     for other in GameServer.query.filter_by(installed=True).all():
@@ -313,12 +324,12 @@ def _ban_fanout_targets(gs, origin_eng, steamid, target):
         if not can_access_server(current_user, other.id):
             continue
         if (origin_eng == "valve" and steamid) or (origin_eng == "minecraft" and target):
-            targets.append(other.id)   # idTech3 slot bans don't port; skipped
+            targets.append((other.id, row_birth(other)))   # idTech3 slot bans don't port; skipped
     return targets
 
 
-def _ban_one_other(app, origin_eng, steamid, target, oid):
-    """(server name, 'banned' | 'failed') — never a bare bool.
+def _ban_one_other(app, origin_eng, steamid, target, item):
+    """(server name, 'banned' | 'failed') — never a bare bool. `item` is (id, row_birth).
 
     It used to collapse every non-success to False, and the tally then counted only
     the servers it had succeeded on. Both halves of that are invisible failure:
@@ -328,8 +339,9 @@ def _ban_one_other(app, origin_eng, steamid, target, oid):
     A failed read is not a fact — which servers MISSED the ban is the half of this
     result an operator has to have.
     """
+    oid, born = item
     with app.app_context():
-        o = db.session.get(GameServer, oid)
+        o = claim_row(GameServer, oid, born)
         if not o:
             return "#%d" % oid, "failed"
         try:
@@ -425,8 +437,11 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
     empty' flags, and the CPU-priority nudge).
     """
     # Plain values, read here on the request's thread: the worker re-fetches the rows in its own
-    # app context, because the request's ORM objects are detached by the time it runs.
+    # app context, because the request's ORM objects are detached by the time it runs. The name
+    # and the row's identity too: the command takes up to a minute and a half, and by the time it
+    # answers the server can have been deleted and its id taken by another.
     server_id, remote_id, short_name, selfname = gs.id, remote.id, gs.short_name, gs.lgsm_name
+    name, born = gs.name, row_birth(gs)
     actor_id = actor.id if actor else None
     _app = app
 
@@ -439,7 +454,7 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
         try:
             with _app.app_context():
                 remote = db.session.get(RemoteServer, remote_id)
-                gs = db.session.get(GameServer, server_id)
+                gs = claim_row(GameServer, server_id, born)
                 actor = db.session.get(User, actor_id) if actor_id else None
                 if not remote or not gs:
                     detail = "the server or its host is no longer configured"
@@ -449,9 +464,13 @@ def _bg_power_action(app, gs, remote, action, actor, origin=None, on_done=None):
                                                   timeout=timeout, selfname=selfname)
                 clean = terminal.strip_escapes(out or "")
                 ok, detail = (rc == 0), clean
-                log_action(actor, f"{action}_server", target=gs.name, success=(rc == 0),
-                           detail=clean[-400:], actor=origin, server=gs)
-                _after_power_action(app, gs, remote, short_name, action, rc)
+                # The outcome is audited under the server only while it is still that server, and
+                # its bookkeeping (the queued flags, the priority nudge) is done only then.
+                held = still_held(gs)
+                log_action(actor, f"{action}_server", target=name, success=(rc == 0),
+                           detail=clean[-400:], actor=origin, server=gs if held else None)
+                if held:
+                    _after_power_action(app, gs, remote, short_name, action, rc)
         except Exception:
             app.logger.exception("power action %s failed for server %s", action, server_id)
         finally:
@@ -496,7 +515,7 @@ def _restart_after_mods_update(app, gs, remote, action, rc):
                                gs.name, exc_info=True)
 
 
-def _bg_action(app, server_id, remote_id, short_name, action, selfname=None, on_done=None):
+def _bg_action(app, gs, remote, action, on_done=None):
     """Run a long LinuxGSM command in the background (green thread).
 
     The command's output is TEED THROUGH a file on the host so the console poller can tail it
@@ -505,7 +524,15 @@ def _bg_action(app, server_id, remote_id, short_name, action, selfname=None, on_
     the output was captured over SSH into a variable and only ever surfaced in the audit log
     after the fact, so an update that spent ten minutes downloading left the console it told
     you to watch completely silent.
+
+    The server is looked up again when the command ends — up to half an hour later — by the
+    identity the request saw (models.row_birth). By id alone, a server deleted meanwhile answered
+    with the one that took its id: the outcome was audited under it, and a mods-update's restart
+    was applied to it.
     """
+    # Plain values, read here on the request's thread (see _bg_power_action).
+    server_id, remote_id, short_name, selfname = gs.id, remote.id, gs.short_name, gs.lgsm_name
+    born = row_birth(gs)
     _app = app
 
     def _run():
@@ -518,7 +545,7 @@ def _bg_action(app, server_id, remote_id, short_name, action, selfname=None, on_
                     return
                 out, err, rc = _run_teed(_app, remote, server_id, short_name, action, selfname)
                 ok, detail = (rc == 0), terminal.strip_escapes(out or err or "")
-                gs = db.session.get(GameServer, server_id)
+                gs = claim_row(GameServer, server_id, born)
                 log_action(None, f"{action}_complete", target=gs.name if gs else short_name,
                            success=(rc == 0), detail=(out or err or "")[-300:], server=gs)
                 # An update/validate/fastdl can restart the server (port cycles) — drop the
@@ -722,7 +749,7 @@ def _register_bulk_action(app):
             if skip:
                 skipped.append(skip)
                 continue
-            _bg_bulk_action(app, gs.id, gs.remote_id, action, current_user.id)
+            _bg_bulk_action(app, gs.id, gs.remote_id, action, current_user.id, row_birth(gs))
             queued.append({"server_id": sid, "name": gs.name})
 
         if queued:

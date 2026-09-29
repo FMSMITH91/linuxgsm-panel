@@ -3,7 +3,7 @@
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
 from panel.core.panel_state import (_os_update_seen, _os_update_state)
-from panel.db.models import (RemoteServer, db)
+from panel.db.models import (RemoteServer, db, rows_still_held)
 from panel.ops import (system_ops as so)
 from panel.services import (notifications)
 from panel.services.certs import (_maybe_alert_cert_expiring)
@@ -68,7 +68,10 @@ def register(app, supervise):
                 # probe; serially that is minutes of a shared ticker thread. Probe concurrently and
                 # decide serially — as _monitor_pass does — so the alert logic stays single-threaded.
                 checks = _check_hosts_for_updates(remotes)
-                for remote in remotes:
+                # A check takes up to a minute per host. A host deleted meanwhile, its id taken,
+                # is not recorded: its successor inherited the old host's alert counts, which
+                # swallowed its own first batch of updates.
+                for remote in rows_still_held(remotes):
                     got = checks.get(remote.id)
                     if got is None:
                         continue          # couldn't tell — say nothing rather than guess

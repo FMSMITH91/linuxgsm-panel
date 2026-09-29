@@ -132,7 +132,7 @@ from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SE
 from panel.core.panel_state import (_expected_offline, _install_jobs, _install_lock,
     _last_sample_prune, _monitor_state, _os_update_seen, _player_counts)
 from panel.db.models import (AuditLog, GameServer, Group, RemoteServer, SetupState, User, db,
-    init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, MetricSample, HostSample)
+    init_db, CUSTOM_ARG_PLACEHOLDER, GlobalBan, MetricSample, HostSample, still_held)
 from panel.ops.ssh_manager import (_remote_listening_ports, is_local_server, get_server_status,
     game_engine, console_steamid_ban, pro_status, list_game_backups, game_engine as
     sm_game_engine, set_game_priority_bulk, lgsm_get_values, remote_set_fail2ban_ignoreip,
@@ -557,7 +557,9 @@ def _metrics_history_watch(app):
 def _still_in_db(row):
     """Re-read `row` from the database. False when it has been deleted since it was loaded (by
     another session: a request deleting a host commits on its own), or cannot be read at all.
-    Refreshing also drops any relationship loaded earlier, so `gs.remote` is read afresh too."""
+    Refreshing also drops any relationship loaded earlier, so `gs.remote` is read afresh too.
+    False as well once another row has taken its id: the refresh raises models.RowReplaced
+    rather than turning `row` into that row."""
     try:
         db.session.refresh(row)
         return True
@@ -2621,6 +2623,42 @@ def register_routes(app):
     # the row stayed "failed", and the server the operator had just repaired remained unusable.
     # A row that is genuinely dead costs one `details` per 10 minutes, against an empty
     # serverfiles, which is the cheap case.
+    def _reconcile_stranded_install(gs):
+        """One row from the reconcile ticker's query: settle it against the host, if it can tell."""
+        with _install_lock:
+            live = (gs.id in _install_jobs
+                    and _install_jobs[gs.id].get("status") == "running")
+        if live:
+            return   # a genuinely in-progress install — leave it alone
+        try:
+            verdict = _looks_installed(app, gs.remote, gs.short_name, gs.lgsm_name)
+        except Exception:
+            verdict = None
+        # None (host unreachable): leave it; the next tick retries. And a row deleted during the
+        # read, its id taken by another server, is not what the host was asked about.
+        if verdict is None or not still_held(gs):
+            return
+        if verdict is True:
+            gs.installed = True
+            gs.status = "offline"   # live metrics flip it to online if running
+            db.session.commit()
+            _notify_servers_changed(app)
+            app.logger.info("reconciled stranded install '%s' -> installed", gs.short_name)
+        elif verdict is False:
+            # Only when something ACTUALLY changed. "failed" is itself in the query's filter set
+            # (deliberately — see above), so unlike the True branch this row comes back every
+            # tick, and writing the two values it already holds re-fired a `servers_changed`
+            # broadcast to every open dashboard — each one then re-requesting /api/servers and
+            # restarting its install-progress poller — and logged "reconciled stranded install
+            # 'X' -> failed" 144 times a day about a reconciliation that did not happen.
+            # _sync_toggles_from_cron compares before it commits for the same reason.
+            if gs.installed or gs.status != "failed":
+                gs.installed = False
+                gs.status = "failed"
+                db.session.commit()
+                _notify_servers_changed(app)
+                app.logger.info("reconciled stranded install '%s' -> failed", gs.short_name)
+
     def install_reconcile_ticker():
         time.sleep(20)   # let boot settle; the per-server check is an SSH round trip
         while True:
@@ -2628,38 +2666,10 @@ def register_routes(app):
                 with app.app_context():
                     for gs in GameServer.query.filter(
                             GameServer.status.in_(("installing", "configuring", "failed"))).all():
-                        with _install_lock:
-                            live = (gs.id in _install_jobs
-                                    and _install_jobs[gs.id].get("status") == "running")
-                        if live:
-                            continue   # a genuinely in-progress install — leave it alone
-                        try:
-                            verdict = _looks_installed(app, gs.remote, gs.short_name, gs.lgsm_name)
-                        except Exception:
-                            verdict = None
-                        if verdict is True:
-                            gs.installed = True
-                            gs.status = "offline"   # live metrics flip it to online if running
-                            db.session.commit()
-                            _notify_servers_changed(app)
-                            app.logger.info("reconciled stranded install '%s' -> installed", gs.short_name)
-                        elif verdict is False:
-                            # Only when something ACTUALLY changed. "failed" is itself in the
-                            # query's filter set (deliberately — see above), so unlike the True
-                            # branch this row comes back every tick, and writing the two values it
-                            # already holds re-fired a `servers_changed` broadcast to every open
-                            # dashboard — each one then re-requesting /api/servers and restarting
-                            # its install-progress poller — and logged "reconciled stranded install
-                            # 'X' -> failed" 144 times a day about a reconciliation that did not
-                            # happen. _sync_toggles_from_cron compares before it commits for the
-                            # same reason.
-                            if gs.installed or gs.status != "failed":
-                                gs.installed = False
-                                gs.status = "failed"
-                                db.session.commit()
-                                _notify_servers_changed(app)
-                                app.logger.info("reconciled stranded install '%s' -> failed", gs.short_name)
-                        # None (host unreachable): leave it; the next tick retries.
+                        # Each check is an SSH round trip, so a later row can have been deleted
+                        # (and its id taken) since the query: skipped without reading it.
+                        if still_held(gs):
+                            _reconcile_stranded_install(gs)
             except Exception:
                 app.logger.debug("install-reconcile tick failed", exc_info=True)
             time.sleep(600)

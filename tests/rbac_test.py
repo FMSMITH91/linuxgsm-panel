@@ -2474,8 +2474,11 @@ def _check_audit_recycled_server_id():
     with app.app_context():
         db.session.delete(db.session.get(GameServer, _ax["sX"]))
         db.session.commit()
-        _y = GameServer(remote_id=_ax["hA"], name=tag + "_heir", short_name="rbaxheir",
-                        game_type="cs2", port=27119, installed=True, status="offline")
+        # WITH the freed id: game_server has AUTOINCREMENT now, so a plain INSERT no longer takes
+        # it — but every install whose table predates that does, until its rebuild runs.
+        _y = GameServer(id=_ax["sX"], remote_id=_ax["hA"], name=tag + "_heir",
+                        short_name="rbaxheir", game_type="cs2", port=27119, installed=True,
+                        status="offline")
         db.session.add(_y)
         db.session.commit()
         _ax["sY"] = _y.id
@@ -2483,7 +2486,7 @@ def _check_audit_recycled_server_id():
         _liz_g.game_servers.append(_y)
         db.session.commit()
         _detached = db.session.get(_AXL, _ax["rows"]["gone_sX"]).game_server_id is None
-    check("audit scope: (premise) SQLite handed the deleted server's id to the next one",
+    check("audit scope: (premise) the next server holds the deleted server's id",
           _ax["sY"] == _ax["sX"], "ids %s / %s — the check below is not about reuse"
           % (_ax["sX"], _ax["sY"]))
     check("audit scope: a deleted server's rows are detached from its id",

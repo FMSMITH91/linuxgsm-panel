@@ -25,7 +25,8 @@ from panel.security.auth import log_action
 from panel.core.clock import utcnow
 from panel.core.config import load_config
 from panel.core.validation import ip_address_or_none, ip_network_or_none, unzoned_ip_or_network
-from panel.db.models import GameServer, HostSample, MetricSample, RemoteServer, db
+from panel.db.models import (GameServer, HostSample, MetricSample, RemoteServer, db,
+    rows_still_held)
 from panel.core.panel_state import (
     _cron_restart_pending, _expected_offline, _max_players_cache, _monitor_state,
     _player_counts, _reboot_when_empty, _rwe_lock, _server_full_alerted, _server_peak_notified,
@@ -267,7 +268,9 @@ def _refresh_player_counts(app):
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(servers))) as ex:
             for sid, slots in ex.map(_query_server_slots, servers):
                 results[sid] = slots
-        for gs in servers:
+        # Only the servers that are still the rows the queries were for: one deleted meanwhile,
+        # its id taken, would hand the new server the old one's count and in-game name.
+        for gs in rows_still_held(servers):
             count, mx, gname = results.get(gs.id, (None, None, None))
             _apply_player_count(gs, count, mx, gname)
 
@@ -356,6 +359,26 @@ _METRIC_SAMPLE_SECONDS = 60
 _METRIC_RETENTION_DAYS = 14
 
 
+def _sample_rows(sampled, now, server_ids, remote_ids):
+    """The MetricSample/HostSample rows for one pass's samples, for the rows still in the ids given."""
+    rows, hosts_seen = [], set()
+    for sid, m, rid, _mp in sampled:
+        # ram_total is the sentinel app.py's _live_run_state already uses: `free -b` never
+        # fails on a reachable host, so a zero there means the read did not happen. The
+        # metrics readers build their dict UP FRONT and return it all-zero when the SSH
+        # read produces no output — truthy, so `if not m` passed it through and every blip
+        # wrote a 0% CPU / 0 MB sample per game and a 0/0/0 host sample. The trend charts
+        # then showed dips that never happened, and a host at 95% disk recorded 0%. Kept
+        # after the switch to the batched worker, which applies the same sentinel itself.
+        if not m or not m.get("ram_total") or sid not in server_ids:
+            continue
+        rows.append(_metric_sample_row(sid, now, m))
+        if rid is not None and rid in remote_ids and rid not in hosts_seen:
+            hosts_seen.add(rid)
+            rows.append(_host_sample_row(rid, now, m))
+    return rows
+
+
 def _record_metric_samples(app):
     """One pass: snapshot game and host usage into MetricSample/HostSample for the history charts.
 
@@ -375,27 +398,21 @@ def _record_metric_samples(app):
         # connections. The tuple shape is identical, so the body below is unchanged — and the
         # sampler now shares host_live_metrics' short cache with an open dashboard instead of
         # each keeping its own.
-        work = _host_metrics_work(GameServer.query.options(joinedload(GameServer.remote))
-                                  .filter_by(installed=True).all())
+        servers = (GameServer.query.options(joinedload(GameServer.remote))
+                   .filter_by(installed=True).all())
+        work = _host_metrics_work(servers)
         if not work:
             return
         now = utcnow()
-        rows, hosts_seen = [], set()
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(_PLAYER_POLL_WORKERS, len(work))) as ex:
-            for sid, m, rid, _mp in itertools.chain.from_iterable(ex.map(_query_host_metrics, work)):
-                # ram_total is the sentinel app.py's _live_run_state already uses: `free -b` never
-                # fails on a reachable host, so a zero there means the read did not happen. The
-                # metrics readers build their dict UP FRONT and return it all-zero when the SSH
-                # read produces no output — truthy, so `if not m` passed it through and every blip
-                # wrote a 0% CPU / 0 MB sample per game and a 0/0/0 host sample. The trend charts
-                # then showed dips that never happened, and a host at 95% disk recorded 0%. Kept
-                # after the switch to the batched worker, which applies the same sentinel itself.
-                if not m or not m.get("ram_total"):
-                    continue
-                rows.append(_metric_sample_row(sid, now, m))
-                if rid is not None and rid not in hosts_seen:
-                    hosts_seen.add(rid)
-                    rows.append(_host_sample_row(rid, now, m))
+            sampled = list(itertools.chain.from_iterable(ex.map(_query_host_metrics, work)))
+        # A sample is history kept for 14 days under the row's id, so only rows that are still the
+        # ones sampled get one: a server or host deleted during the pass, its id taken, would
+        # start its successor's charts with the deleted one's figures.
+        live = rows_still_held(servers)
+        rows = _sample_rows(sampled, now, {gs.id for gs in live},
+                            {r.id for r in rows_still_held({gs.remote for gs in live
+                                                            if gs.remote is not None})})
         if rows:
             db.session.add_all(rows)
             db.session.commit()
@@ -593,6 +610,10 @@ def _monitor_pass():
     if not remotes:
         return
     probes = _probe_hosts(remotes)
+    # The probes take seconds per host. A host deleted meanwhile, its id taken, is not judged on
+    # the old host's probe: its successor's servers were checked against the OLD machine's port
+    # scan and alerted on, and the old host's reachability was recorded as the new one's.
+    remotes = rows_still_held(remotes)
     _th = notifications.get_thresholds()   # user-configurable disk_pct / load_pct; once per sweep
     # Every installed server for every host, in ONE query, grouped by host. The per-host fetch used
     # to sit inside the loop below, so the monitor's query count grew with the number of hosts —

@@ -6,7 +6,7 @@ import collections
 
 from flask import (jsonify)
 from flask_login import (current_user, login_required)
-from panel.db.models import (GameServer, db)
+from panel.db.models import (GameServer, db, row_birth)
 from panel.ops.ssh_manager import (content_box_users, discover_linuxgsm_servers,
                                   enrol_game_user, run_command)
 from panel.security.auth import (MANAGE_SERVERS, can_access_remote, get_remote, log_action,
@@ -271,5 +271,6 @@ def _finish_import(app, remote, remote_id, added):
     # helper refused to enrol is one the panel cannot become on a narrow-grant host.
     _bg_cache_commands(app, [gs.id for gs in new_rows],
                        autostart_ids=[gs.id for gs in new_rows
-                                      if gs.short_name not in refused])
+                                      if gs.short_name not in refused],
+                       births={gs.id: row_birth(gs) for gs in new_rows})
     return not_enrolled

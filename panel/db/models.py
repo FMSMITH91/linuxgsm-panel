@@ -171,6 +171,9 @@ UI_PREF_KEYS = frozenset({"host_order", "server_order", "panels", "hidden"})
 
 
 class User(UserMixin, db.Model):
+    # AUTOINCREMENT: SQLite never gives this table's next row an id a deleted row had — see
+    # panel/db/id_sequence.py, which also converts a table an older version created.
+    __table_args__ = {"sqlite_autoincrement": True}
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
@@ -405,6 +408,9 @@ user_groups = db.Table(
 
 
 class Group(db.Model):
+    # AUTOINCREMENT: SQLite never gives this table's next row an id a deleted row had — see
+    # panel/db/id_sequence.py, which also converts a table an older version created.
+    __table_args__ = {"sqlite_autoincrement": True}
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(80), unique=True, nullable=False)
     description = db.Column(db.String(256), default="")
@@ -438,6 +444,9 @@ LOCAL_HOST_LABEL = "Panel Server"
 class RemoteServer(db.Model):
     """A remote VPS running LinuxGSM servers."""
 
+    # AUTOINCREMENT: SQLite never gives this table's next row an id a deleted row had — see
+    # panel/db/id_sequence.py, which also converts a table an older version created.
+    __table_args__ = {"sqlite_autoincrement": True}
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     host = db.Column(EncryptedString, nullable=False)
@@ -594,6 +603,9 @@ _NO_UPDATE_GAMES = frozenset({"cod", "coduo", "cod2", "cod4", "codwaw"})
 class GameServer(db.Model):
     """A single game server instance managed by LinuxGSM."""
 
+    # AUTOINCREMENT: SQLite never gives this table's next row an id a deleted row had — see
+    # panel/db/id_sequence.py, which also converts a table an older version created.
+    __table_args__ = {"sqlite_autoincrement": True}
     id = db.Column(db.Integer, primary_key=True)
     remote_id = db.Column(db.Integer, db.ForeignKey("remote_server.id"), nullable=False, index=True)
     name = db.Column(db.String(120), nullable=False)
@@ -735,6 +747,9 @@ class CustomCommand(db.Model):
     `scope_*` limits which servers the command applies to (all / a game engine / one game_type).
     """
 
+    # AUTOINCREMENT: SQLite never gives this table's next row an id a deleted row had — see
+    # panel/db/id_sequence.py, which also converts a table an older version created.
+    __table_args__ = {"sqlite_autoincrement": True}
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(80), nullable=False)               # button label
     command_template = db.Column(db.String(500), nullable=False)  # e.g. "map {}" or "say Restarting"
@@ -775,6 +790,9 @@ class ServerTag(db.Model):
     UI_PREF_KEY and set_ui_pref would silently ignore it.
     """
 
+    # AUTOINCREMENT: SQLite never gives this table's next row an id a deleted row had — see
+    # panel/db/id_sequence.py, which also converts a table an older version created.
+    __table_args__ = {"sqlite_autoincrement": True}
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(32), unique=True, nullable=False)
     color = db.Column(db.String(7), default="")   # "#rrggbb", or "" for the default chip colour
@@ -1247,6 +1265,18 @@ def anonymise_audit_ips(days):
     return len(rows)
 
 
+# The tables whose ids something else keeps — another table's column, an in-memory map, a job, a
+# login cookie — and so must never be handed to a new row (panel/db/id_sequence.py). Every one has
+# `sqlite_autoincrement` in its __table_args__; a unit check holds the two lists together.
+_AUTOINCREMENT_MODELS = (User, Group, RemoteServer, GameServer, CustomCommand, ServerTag)
+# ...and the columns that hold those ids without declaring a foreign key, which the rebuild reads
+# beside the foreign keys to pick the id SQLite starts from.
+_ID_REFS_WITHOUT_FK = {
+    "game_server": (AuditLog.__table__.c.game_server_id, MetricSample.__table__.c.server_id),
+    "remote_server": (AuditLog.__table__.c.remote_id, HostSample.__table__.c.remote_id),
+}
+
+
 # The light migrations: (table, column) -> the ALTER TABLE that adds that column to a database
 # created by an older version. A new model column needs its entry here in the same commit — a fresh
 # DB (create_all) always has it, so only an UPGRADED install would throw "no such column" without
@@ -1329,9 +1359,23 @@ def _run_light_migrations():
         # Committed HERE: _create_declared_indexes builds on db.engine, another connection, and
         # the backfill's UPDATEs hold SQLite's write lock until this session commits — so the
         # index build waited out the 15 s busy timeout and the upgrade died at startup.
-        db.session.commit()
+    # ...and before the rebuild below, which takes the write lock on a connection of its own.
+    db.session.commit()
+    _give_keyed_tables_autoincrement()
     _create_declared_indexes(existing)
     db.session.commit()
+
+
+def _give_keyed_tables_autoincrement():
+    """Rebuild the id-keyed tables an older version created without AUTOINCREMENT (once each).
+
+    See panel/db/id_sequence.py. After the column ALTERs, so the copy carries every column, and
+    before _create_declared_indexes, which then finds the rebuilt tables' indexes already there.
+    """
+    from panel.db.id_sequence import rebuild_for_autoincrement
+    return rebuild_for_autoincrement(db.engine, db.metadata,
+                                     [m.__table__ for m in _AUTOINCREMENT_MODELS],
+                                     _ID_REFS_WITHOUT_FK)
 
 
 def _backfill_audit_object_ids():
@@ -1823,12 +1867,216 @@ def _register_new_row_forgetting():
     event.listen(GameServer, "after_insert", _forget("server_ids"))
 
 
+# ── A held row whose id another row has taken ──────────────────────────────────────────────────
+# A worker loads a host or a game server, runs for minutes (an install, an update, a backup, a
+# stop that waits for the game to quit), and then writes to it or acts on it again. Meanwhile the
+# row can be deleted and its id handed to a new row: every install made before AUTOINCREMENT (see
+# panel/db/id_sequence.py) reuses a freed id on the next INSERT. The ORM identifies an object by
+# its id alone, so after any commit the worker's object reloads FROM THE NEW ROW — the install's
+# next root step went to the new host with its credentials — and an UPDATE of an object that was
+# not reloaded is `WHERE id = ?`, which writes the old row's outcome onto the new one.
+#
+# created_at is a row's identity (the id is not, and the name and address are editable): the
+# value an object was loaded with is noted here, and a reload that finds another, or a flush onto
+# a row whose created_at is not it, raises RowReplaced instead. The object is expired again
+# before the raise, so every later read raises too rather than serving the other row's values.
+class RowReplaced(Exception):
+    """A host or game server this session holds now names a different row."""
+
+
+_WATCHED_IDENTITY = (RemoteServer, GameServer)
+_NO_BIRTH = object()      # row_birth() of an object that was never loaded or flushed
+
+
+def row_birth(obj):
+    """The created_at `obj` was loaded or inserted with, read without loading anything.
+
+    _NO_BIRTH for an object that is not a mapped row at all.
+    """
+    from sqlalchemy import inspect as _sa_inspect
+    from sqlalchemy.exc import NoInspectionAvailable
+    try:
+        info = _sa_inspect(obj).info
+    except NoInspectionAvailable:
+        return _NO_BIRTH
+    return info["born"] if "born" in info else obj.__dict__.get("created_at", _NO_BIRTH)
+
+
+def _stored_births(session, model, ids):
+    """{id: created_at} for the `model` rows holding `ids` now, read around the identity map."""
+    tbl = model.__table__
+    with session.no_autoflush:
+        rows = session.execute(db.select(tbl.c.id, tbl.c.created_at)
+                               .where(tbl.c.id.in_(list(ids)))).all()
+    return dict(rows)
+
+
+def same_row(model, row_id, born):
+    """The `model` row holding `row_id`, or None when it is gone or another row took the id.
+
+    `born` is row_birth() of the row the caller loaded earlier — in a request, before a worker
+    thread that looks it up again by id. A lookup by id alone answers with whatever row holds the
+    id now.
+    """
+    if row_id is None or born is _NO_BIRTH:
+        return None
+    stored = _stored_births(db.session, model, (row_id,))
+    if row_id not in stored or stored[row_id] != born:
+        return None
+    return db.session.get(model, row_id)
+
+
+def claim_row(model, row_id, born):
+    """A worker's first load of the row a request handed it by id: None when it is not that row.
+
+    `born` is row_birth() of the request's object. When that is _NO_BIRTH (the caller had no
+    mapped row to take it from) the row holding the id now is taken, as it always was.
+    """
+    if born is _NO_BIRTH:
+        return db.session.get(model, row_id) if row_id is not None else None
+    return same_row(model, row_id, born)
+
+
+def _identity_and_birth(obj):
+    """(id, born) of a loaded row; None when `obj` is not one, or when its birth was never noted."""
+    from sqlalchemy import inspect as _sa_inspect
+    from sqlalchemy.exc import NoInspectionAvailable
+    try:
+        ident = _sa_inspect(obj).identity
+    except NoInspectionAvailable:
+        return None
+    born = row_birth(obj)
+    return None if not ident or born is _NO_BIRTH else (ident[0], born)
+
+
+def still_held(obj):
+    """Whether the row `obj` was loaded from still holds its id (False once deleted or replaced).
+
+    True for anything that cannot be checked — not a mapped row, or one whose birth was never
+    noted — which is what every caller did before there was a check.
+    """
+    known = _identity_and_birth(obj)
+    return known is None or same_row(type(obj), known[0], known[1]) is not None
+
+
+def replaced_since_loaded(obj):
+    """True when `obj`'s id now belongs to a different row than the one it was loaded from.
+
+    False while that row still holds it, once the id is free again (a lookup finds nothing), and
+    for an object that was never loaded or flushed.
+    """
+    from sqlalchemy import inspect as _sa_inspect
+    ident, born = _sa_inspect(obj).identity, row_birth(obj)
+    if not ident or born is _NO_BIRTH:
+        return False
+    stored = _stored_births(db.session, type(obj), (ident[0],))
+    return ident[0] in stored and stored[ident[0]] != born
+
+
+def taken_by_another(model, row_id, born):
+    """True when a row other than the one born at `born` holds `row_id` now.
+
+    For state kept OUTSIDE the table and keyed by the id (a job's outcome, a cache entry): with
+    the id free, a late write is harmless — the INSERT that takes the id next forgets it — but
+    once another row holds the id, that write is the other row's state.
+    """
+    if row_id is None or born is _NO_BIRTH:
+        return False
+    stored = _stored_births(db.session, model, (row_id,))
+    return row_id in stored and stored[row_id] != born
+
+
+def held_ids(model, births):
+    """Of {id: row_birth} for `model`, the ids whose row is still the one noted — one query."""
+    if not births:
+        return set()
+    stored = _stored_births(db.session, model, births)
+    return {i for i, born in births.items() if i in stored and stored[i] == born}
+
+
+def rows_still_held(rows):
+    """The loaded rows (all of one model) whose ids still name them — one query, nothing loaded.
+
+    For a sweep that loads its rows, probes the hosts for seconds, and only then applies what it
+    found: a row deleted meanwhile, and its id taken, would get the old row's findings.
+    """
+    rows = list(rows)
+    known = {id(r): _identity_and_birth(r) for r in rows}
+    checked = [r for r in rows if known[id(r)] is not None]
+    live = held_ids(type(checked[0]), dict(known[id(r)] for r in checked)) if checked else set()
+    # What cannot be checked is kept, as still_held() keeps it.
+    return [r for r in rows if known[id(r)] is None or known[id(r)][0] in live]
+
+
+def _register_row_identity_guard():
+    from sqlalchemy import event, inspect as _sa_inspect
+    from sqlalchemy.orm import Session as _SASession
+
+    def _on_load(target, _context):
+        if "created_at" in target.__dict__:      # (a partial load notes it at its first refresh)
+            _sa_inspect(target).info.setdefault("born", target.__dict__["created_at"])
+
+    def _on_insert(_mapper, _connection, target):
+        _sa_inspect(target).info["born"] = target.__dict__.get("created_at")
+
+    def _on_update(_mapper, _connection, target):
+        st = _sa_inspect(target)
+        if st.attrs.created_at.history.has_changes():     # the row's own write, not another row
+            st.info["born"] = target.__dict__.get("created_at")
+
+    def _on_refresh(target, _context, _attrs):
+        st = _sa_inspect(target)
+        if "created_at" not in target.__dict__:
+            return
+        born = st.info.setdefault("born", target.__dict__["created_at"])
+        if target.__dict__["created_at"] != born:
+            st.info["replaced"] = True
+            if st.session is not None:
+                st.session.expire(target)
+            raise RowReplaced("%s #%s now names a different row"
+                              % (type(target).__tablename__, st.identity[0]))
+
+    for model in _WATCHED_IDENTITY:
+        event.listen(model, "load", _on_load)
+        event.listen(model, "after_insert", _on_insert)
+        event.listen(model, "after_update", _on_update)
+        event.listen(model, "refresh", _on_refresh)
+    event.listen(_SASession, "before_flush", _refuse_flush_onto_another_row)
+
+
+def _births_to_check(session):
+    """{model: {id: born}} of the watched objects this flush will UPDATE or DELETE."""
+    from sqlalchemy import inspect as _sa_inspect
+    want = {}
+    for obj in list(session.dirty) + list(session.deleted):
+        if not isinstance(obj, _WATCHED_IDENTITY):
+            continue
+        st = _sa_inspect(obj)
+        if st.info.get("replaced"):
+            raise RowReplaced("%s #%s now names a different row"
+                              % (type(obj).__tablename__, st.identity[0]))
+        if st.identity and "born" in st.info:
+            want.setdefault(type(obj), {})[st.identity[0]] = st.info["born"]
+    return want
+
+
+def _refuse_flush_onto_another_row(session, _flush_context, _instances):
+    """before_flush: an UPDATE or DELETE by id must reach the row the object was loaded from."""
+    for model, want in _births_to_check(session).items():
+        stored = _stored_births(session, model, want)
+        taken = sorted(i for i, born in want.items() if i in stored and stored[i] != born)
+        if taken:
+            raise RowReplaced("%s #%s now names a different row" % (model.__tablename__, taken[0]))
+
+
+
 _register_sample_pruning()
 _register_invite_revocation()
 _register_audit_detach()
 _register_audit_object_detach()
 _register_host_sample_pruning()
 _register_new_row_forgetting()
+_register_row_identity_guard()
 
 
 # ── A row LOADED with a name @validates would have refused ─────────────────────────────────────
