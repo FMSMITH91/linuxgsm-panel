@@ -2336,6 +2336,7 @@ def _check_audit_rename_onto_other_targets():
     """745379041 (b, c) / 745379096: renaming your own server or host onto a target reads nothing new."""
     _ax_log("prod_sB2", "send_command", tag + "_prod", "sv_password TenantBpw", server="sB2")
     _ax_log("port_hB", "remote_port_open", "%s_hB:27015/udp" % tag, "opened", remote="hB")
+    _ax_log("port_hA", "remote_port_open", "%s_hA:27015/udp" % tag, "opened", remote="hA")
     _ax_log("repair_db", "panel_repair_db", "database", "repaired")
     _ax_log("ufw_panel", "ufw_block", "198.51.100.7", "panel host")
     _dc = client_as(_ax["dana"])
@@ -2358,8 +2359,8 @@ def _check_audit_rename_onto_other_targets():
           _hname == tag + "_hB", "host is named %r" % _hname)
     check("audit scope: renaming your host onto another's does not read its 'host:port' rows",
           not _ax_sees("dana", "port_hB"), "hostB's firewall row reached hostA's admin")
-    check("audit scope: ...while their own host's rows still reach them (control)",
-          _ax_sees("dana", "notify_sA"), "the scope is too tight")
+    check("audit scope: ...while their own host's rows, and its servers', still reach them (control)",
+          _ax_sees("dana", "port_hA") and _ax_sees("dana", "notify_sA"), "the scope is too tight")
 
 
 def _check_audit_account_rows():
@@ -3319,11 +3320,11 @@ check("every mutating endpoint writes an audit entry (or is listed as having not
 # server's viewers. Read from the source, as an AST, across panel/ and app.py.
 from panel.db import models as _axm  # noqa: E402
 from panel.routes.audit import _ACCOUNT_ACTIONS as _AX_ACCOUNT  # noqa: E402
-import re as _ax_re  # noqa: E402
 
 
 def _ax_like(pattern):
     """A regex for a SQL LIKE pattern written with a backslash escape."""
+    import re as _ax_re
     out, i = "", 0
     while i < len(pattern):
         ch = pattern[i]
