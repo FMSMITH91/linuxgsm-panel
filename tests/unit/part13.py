@@ -946,6 +946,15 @@ try:
     check("terminal drain: the byte count drops by exactly what was written, and is 0 when empty",
           _q_mid10 == len(b"nd-chunk") + len(b"third") and not _qd10._inq and _qd10._inq_bytes == 0,
           repr((_q_mid10, list(_qd10._inq), _qd10._inq_bytes)))
+    _qz10 = _sess10("qdrift")
+    _qz10._fd = 99
+    _qz10.write("abc")
+    _qz10._inq_bytes += 5000                        # a count that drifted up
+    _ts10.os = _OsProxy10(write=lambda fd, chunk: len(chunk))
+    _ts10._drain_input(_qz10, 99)
+    _ts10.os = os
+    check("terminal drain: a queue drained empty reads zero even after the count drifted",
+          not _qz10._inq and _qz10._inq_bytes == 0, repr(_qz10._inq_bytes))
     # A count that drifted up must not refuse every keystroke: an empty queue is zero, whatever the
     # counter says — and it cannot drift at all under the lock, but a stale one heals here.
     _qh10 = _sess10("qheal")
@@ -4254,6 +4263,12 @@ def _ca13_check_login_behind_proxy(app, client):
         _ca13_login_fails(client, 1, "127.0.0.1", lambda i: "198.51.100.5")
         check("login behind ProxyFix: a local game account on loopback is keyed as loopback",
               sorted(fails) == ["127.0.0.1"], repr(sorted(fails)))
+        # config.json's trusted_proxies reached this app at boot: a proxy on another machine it
+        # lists is believed.
+        fails.clear()
+        _ca13_login_fails(client, 1, "198.51.100.9", lambda i: "192.0.2.50")
+        check("login behind ProxyFix: a proxy config.json lists in trusted_proxies names the client",
+              sorted(fails) == ["192.0.2.50"], repr(sorted(fails)))
     finally:
         _ca13_auth._loopback_peer_uid = saved_uid
         app.config["WTF_CSRF_ENABLED"] = saved_csrf
@@ -4568,6 +4583,7 @@ def _ca13_first_boot():
     """Seed the throwaway install, boot it, and return (app, runners, boot logs)."""
     _ca13_seed()
     _ca13_config(session_lifetime_hours=12, remember_days=14, trust_proxy=True,
+                 trusted_proxies=["127.0.0.1", "::1", "198.51.100.0/24"],
                  audit_log_retention_days=30, audit_ip_retention_days=7)
     cap_a, off_a = _cap10("app")
     cap_p, off_p = _cap10("panel.app")

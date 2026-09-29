@@ -14437,8 +14437,29 @@ try:
         # or on a sibling tailnet node could open a terminal as whoever was logged in. A "*"
         # anywhere in a list did the same. It is ignored now, with a warning saying what to set.
         _sc_cfg(dict(_cfg_before, site_domain="", socketio_cors_origins="*"))
+        import logging as _so_logging
+
+        class _SoWarned(_so_logging.Handler):
+            def __init__(self):
+                _so_logging.Handler.__init__(self)
+                self.got = []
+
+            def emit(self, rec):
+                if rec.levelno >= _so_logging.WARNING:
+                    self.got.append(rec.getMessage())
+
+        _so_h = _SoWarned()
+        _so_logging.getLogger("panel.app").addHandler(_so_h)
+        try:
+            _so_star_other = _sio_ok("http://1.2.3.4:8123", scheme="http", host="1.2.3.4:5000")
+            _sio_ok("http://1.2.3.4:8124", scheme="http", host="1.2.3.4:5000")
+        finally:
+            _so_logging.getLogger("panel.app").removeHandler(_so_h)
         check("socket: an explicit '*' does not admit a page on another port of the panel's address",
-              not _sio_ok("http://1.2.3.4:8123", scheme="http", host="1.2.3.4:5000"))
+              not _so_star_other)
+        _so_said = [m for m in _so_h.got if "socketio_cors_origins" in m]
+        check("socket: ...and the log says it is ignored and what to set instead, once",
+              len(_so_said) == 1 and "site_domain" in _so_said[0], repr(_so_h.got))
         check("socket: ...nor a sibling host on the same tailnet",
               not _sio_ok("https://other.example.ts.net", scheme="http", host="127.0.0.1:5000",
                           HTTP_X_FORWARDED_PROTO="https",

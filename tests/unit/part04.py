@@ -1567,6 +1567,16 @@ try:
     check("bots: ...and once the first has run, the next !update is accepted (control)",
           len(_ub_hold.held) == 3 and not any("already running" in t for _, t in _ub_said),
           "queued=%d said=%r" % (len(_ub_hold.held), _ub_said))
+    # ...and Telegram's twin coalesces the same way, on its own worker.
+    _ub_tg_hold = _UbHold()
+    _tgm._TG_WORKER = _ub_tg_hold
+    _ub_said.clear()
+    _tgm._tg_dispatch(_app, "tok", "42", "/update")
+    _tgm._tg_dispatch(_app, "tok", "42", "/update@SomeBot")
+    check("telegram: a duplicate /update while one is queued is not queued again (745379272)",
+          len(_ub_tg_hold.held) == 1 and sum("already running" in t for _, t in _ub_said) == 1,
+          "queued=%d said=%r" % (len(_ub_tg_hold.held), _ub_said))
+    _tgm._TG_WORKER = _UbInline()
     # A check that raises must not leave the claim behind, or every later !update would be told
     # one is running, for the life of the process.
     _dcm.so._compute_update_status = lambda: (_ for _ in ()).throw(RuntimeError("git broke"))
