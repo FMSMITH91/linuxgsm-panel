@@ -17,6 +17,7 @@ The values themselves are MOVED VERBATIM from app.py, comments and all, so the d
 import os
 import re
 import secrets as _secrets
+import unicodedata
 from urllib.parse import quote
 
 
@@ -183,6 +184,43 @@ def username_problem(name):
         # It is typed into a login box and read off a screen; an interior space (or a tab pasted in
         # from a spreadsheet) is invisible there and makes the account unloggable-into.
         return "Username cannot contain spaces."
+    if _has_control_or_format(name):
+        return "Username can only contain printable characters."
+    return None
+
+
+def _has_control_or_format(text):
+    """Whether `text` holds a character of Unicode category C: a control (ESC, BEL, the C1 CSI),
+    a format character (bidi overrides such as U+202E, zero-width joiners and spaces), a surrogate,
+    a private-use or an unassigned code point.
+
+    A stored name is printed to a TERMINAL by the recovery CLI (manage.py, run as root), where an
+    ESC sequence moves the cursor, erases the line or writes the clipboard (OSC 52), and a bidi
+    override reorders what is shown. It is also nothing anyone can type into a login box. The UI
+    ships English, Spanish and French, none of which needs ZWJ/ZWNJ. (Line and paragraph
+    separators are Z, not C; the whitespace checks refuse those.) Aikido 745379084.
+    """
+    return any(unicodedata.category(c)[0] == "C" for c in text)
+
+
+# Group.name is String(80) too, and had no format check at all: a newline and ESC both passed,
+# and manage.py list-users prints each user's groups beside the name.
+MAX_GROUP_NAME_LEN = 80
+
+
+def group_name_problem(name):
+    """Return a human error if a permission group's name is unusable, else None (FORMAT only)."""
+    name = (name or "").strip()
+    if not name:
+        return "Group name is required."
+    if len(name) > MAX_GROUP_NAME_LEN:
+        return f"Group name must be at most {MAX_GROUP_NAME_LEN} characters."
+    # A plain space is fine ("Game Admins"); a newline, tab or line separator is a second row in
+    # every listing the name is printed in.
+    if any(c.isspace() and c != " " for c in name):
+        return "Group name cannot contain line breaks or tabs."
+    if _has_control_or_format(name):
+        return "Group name can only contain printable characters."
     return None
 
 

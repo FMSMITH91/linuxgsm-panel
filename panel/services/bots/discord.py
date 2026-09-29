@@ -8,7 +8,9 @@ from panel.services import (notifications)
 from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin,
     _panel_ver_label, _command_arg, _connect_text, _console_text, _find_server,
     _hosts_text, _reply_header, _players_text, _say_text,
-    _servers_text, _status_text, action_ack, update_outcome_text, working_ack)
+    _servers_text, _status_text, action_ack, update_outcome_text, working_ack,
+    UPDATE_RUNNING_REPLY, bot_update_status, panel_update_requested, queue_panel_update,
+    spend_update_check, update_rate_reply)
 import logging
 import time
 
@@ -137,11 +139,22 @@ def _dc_dispatch(app, bot_token, channel_id, text, sender=None):
 
     See _tg_dispatch for why the ack cannot be queued along with the work.
     """
-    ack = working_ack(_parse_dc_command(text))
+    cmd = _parse_dc_command(text)
+    ack = working_ack(cmd)
     if ack:
         _dc_ack(bot_token, channel_id, ack)
-    if not _DC_WORKER.submit(
-            lambda: _handle_discord_command(app, bot_token, channel_id, text, sender)):
+
+    def job():
+        _handle_discord_command(app, bot_token, channel_id, text, sender)
+
+    if panel_update_requested(cmd, _command_arg(text)):
+        # One panel !update in flight at a time — see _tg_dispatch (Aikido 745379272).
+        outcome = queue_panel_update(_DC_WORKER, "discord", job)
+        if outcome != "queued":
+            _dc_reply(bot_token, channel_id,
+                      UPDATE_RUNNING_REPLY if outcome == "running" else BUSY_REPLY)
+        return
+    if not _DC_WORKER.submit(job):
         _dc_reply(bot_token, channel_id, BUSY_REPLY)
 
 
@@ -212,12 +225,16 @@ def _handle_discord_command(app, bot_token, channel_id, text, sender=None):
 
 
 def _discord_do_update(app, bot_token, channel_id):
+    # Not force=True, and the self-update's own forced check is metered — see _telegram_do_update.
     try:
-        st = so.panel_update_status(force=True)
+        st = bot_update_status()
     except Exception:
         st = {}
     if st.get("git") and not st.get("update_available"):
         _dc_reply(bot_token, channel_id, "✅ Already up to date — %s." % _panel_ver_label())
+        return
+    if not spend_update_check():
+        _dc_reply(bot_token, channel_id, update_rate_reply())
         return
     ok, msg = so.panel_self_update()   # detached + CI-gated; returns immediately, then restarts us
     if not ok:
@@ -236,6 +253,12 @@ def _set_dc_pending_update(channel_id, from_commit):
         {"discord_pending_update": {"channel_id": channel_id, "from_commit": from_commit, "ts": time.time()}}))
 
 
+def _dc_channel_still_authorised(dc, channel):
+    """Whether the Discord settings `dc` still take commands from `channel` — the watcher's gate."""
+    return bool(dc.get("enabled") and dc.get("accept_commands")
+                and (dc.get("channel_id") or "").strip() == str(channel).strip())
+
+
 def _report_dc_pending_update():
     """After a restart, tell the channel how a Discord-triggered update went, if one was pending.
 
@@ -251,6 +274,14 @@ def _report_dc_pending_update():
     bot_token = decrypt_secret(dc.get("bot_token") or "")
     channel = pend.get("channel_id") or ""
     if not (bot_token and channel):
+        return
+    # The channel was authorised when it sent !update, which is not the same as being authorised
+    # now: the marker outlives the restart, and the admin may have switched the bot off, turned
+    # commands off, or moved it to another channel in between. The watcher re-reads that gate on
+    # every message; this report went to the marker's channel whatever the settings said.
+    if not _dc_channel_still_authorised(dc, channel):
+        _log.info("discord: the pending update report was dropped; its channel is no longer the "
+                  "authorised one")
         return
     now = so.panel_commit()
     frm = pend.get("from_commit") or ""

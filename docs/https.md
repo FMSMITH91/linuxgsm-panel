@@ -16,6 +16,8 @@ The relevant `data/config.json` settings:
 |---------|---------|
 | `use_https` | Serve HTTPS directly with a built-in self-signed cert |
 | `trust_proxy` | You're behind a reverse proxy — trust its `X-Forwarded-*` headers |
+| `trusted_proxies` | Which peers count as that proxy — default `127.0.0.1` and `::1`; list yours if it is on another machine |
+| `trusted_proxy_users` | On loopback, the accounts the proxy may run as — default `www-data`, `nginx`, `http`, `caddy`, `cloudflared` (root and the panel's own account always count) |
 | `bind_host` | `127.0.0.1` when behind a proxy, `0.0.0.0` when facing clients directly |
 | `site_domain` | Your domain (turns on `Secure` cookies) |
 | `cookie_secure` | Force `Secure` cookies on/off regardless of the above |
@@ -42,7 +44,10 @@ cloudflared tunnel --url http://localhost:5000
 ```
 
 Then in `data/config.json`: set `"bind_host": "127.0.0.1"` and `"trust_proxy": true`,
-and restart the panel. (For a permanent named tunnel, see Cloudflare's docs.)
+and restart the panel. (For a permanent named tunnel, see Cloudflare's docs.) Run `cloudflared` as
+root, as the panel's own account, or as an account listed in `"trusted_proxy_users"` — the
+panel believes a loopback proxy's `X-Forwarded-For` only from those, since any local account can
+connect to 127.0.0.1.
 
 ## 3. Reverse proxy with a free domain + Caddy — real cert, auto-renewed
 

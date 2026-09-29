@@ -8,7 +8,9 @@ from panel.services import (notifications)
 from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin,
     _panel_ver_label, _command_arg, _connect_text, _console_text, _find_server,
     _hosts_text, _reply_header, _players_text, _say_text,
-    _servers_text, _status_text, action_ack, update_outcome_text, working_ack)
+    _servers_text, _status_text, action_ack, update_outcome_text, working_ack,
+    UPDATE_RUNNING_REPLY, bot_update_status, panel_update_requested, queue_panel_update,
+    spend_update_check, update_rate_reply)
 import logging
 import time
 
@@ -220,10 +222,22 @@ def _tg_dispatch(app, token, chat_id, text, sender=None):
     cannot end up acking a different set. Server actions ack separately, in _tg_server_action,
     because theirs names the server it is acting on.
     """
-    ack = working_ack(_parse_tg_command(text))
+    cmd = _parse_tg_command(text)
+    ack = working_ack(cmd)
     if ack:
         _tg_ack(token, chat_id, ack)
-    if not _TG_WORKER.submit(lambda: _handle_telegram_command(app, token, chat_id, text, sender)):
+
+    def job():
+        _handle_telegram_command(app, token, chat_id, text, sender)
+
+    if panel_update_requested(cmd, _command_arg(text)):
+        # One panel /update in flight at a time: a second one while the first is queued or running
+        # is answered, not queued behind it to run the same check again (Aikido 745379272).
+        outcome = queue_panel_update(_TG_WORKER, "telegram", job)
+        if outcome != "queued":
+            _tg_reply(token, chat_id, UPDATE_RUNNING_REPLY if outcome == "running" else BUSY_REPLY)
+        return
+    if not _TG_WORKER.submit(job):
         _tg_reply(token, chat_id, BUSY_REPLY)
 
 
@@ -314,12 +328,18 @@ def _handle_telegram_command(app, token, chat_id, text, sender=None):
 
 
 def _telegram_do_update(app, token, chat_id):
+    # NOT force=True: a status seconds old is reused, and a forced check is spent from an hourly
+    # allowance both bots share — each one can cost a GitHub request (see bot_update_status).
     try:
-        st = so.panel_update_status(force=True)
+        st = bot_update_status()
     except Exception:
         st = {}
     if st.get("git") and not st.get("update_available"):
         _tg_reply(token, chat_id, "✅ Already up to date — %s." % _panel_ver_label())
+        return
+    # panel_self_update keeps its own forced re-check (its CI gate), so it spends one too.
+    if not spend_update_check():
+        _tg_reply(token, chat_id, update_rate_reply())
         return
     ok, msg = so.panel_self_update()   # detached + CI-gated; returns immediately, then restarts us
     if not ok:
@@ -355,6 +375,14 @@ def _report_tg_pending_update():
     token = decrypt_secret(tg.get("token") or "")
     chat = pend.get("chat_id") or ""
     if not (token and chat):
+        return
+    # Authorised when it sent /update is not authorised now: the marker outlives the restart, and
+    # the bot may have been switched off, or its commands, or moved to another chat in between.
+    # The same gate the poller applies to every update (_tg_settings / _tg_route_update).
+    if not (tg.get("enabled") and tg.get("accept_commands")
+            and (tg.get("chat_id") or "").strip() == str(chat).strip()):
+        _log.info("telegram: the pending update report was dropped; its chat is no longer the "
+                  "authorised one")
         return
     now = so.panel_commit()
     frm = pend.get("from_commit") or pend.get("from_version")   # from_version: older pending markers
