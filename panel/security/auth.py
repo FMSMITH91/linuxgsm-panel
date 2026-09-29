@@ -1235,8 +1235,12 @@ def _declared_proxy_trusted(addr, conf):
         ip = ipaddress.ip_address(addr)
     except ValueError:
         return False
+    # What the warnings below name: the address alone. ipaddress keeps an IPv6 zone ("%eth0")
+    # verbatim, and takes nearly any text there, spaces and newlines included, which a log line
+    # must not carry. Rebuilt from the packed bytes, which hold no zone.
+    shown = str(ipaddress.ip_address(ip.packed))
     if not any(ip in n for n in nets):
-        _note_ignored_proxy(addr)
+        _note_ignored_proxy(shown)
         return False
     if not ip.is_loopback:
         return True
@@ -1247,7 +1251,7 @@ def _declared_proxy_trusted(addr, conf):
     uid = _loopback_peer_uid_memo()
     if uid is not None and uid in uids:
         return True
-    _note_ignored_proxy(addr, local_uid=uid if uid is not None else "unknown")
+    _note_ignored_proxy(shown, local_uid=uid if uid is not None else "unknown")
     return False
 
 

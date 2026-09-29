@@ -7343,6 +7343,10 @@ try:
                 proxy_fix_orig="198.51.100.200")
     _ip_for({"X-Forwarded-For": "192.0.2.77"}, trust_proxy=True, root_peer=False)
     _ip_for({}, remote="198.51.100.201", trust_proxy=True)        # no header: nothing to ignore
+    # A socket peer carrying an IPv6 zone: ipaddress accepts any text after '%', and the warning
+    # is a log line. (A real peer's zone is an interface name; the text here is the worst case.)
+    _ip_for({"X-Forwarded-For": "192.0.2.77"}, remote="192.0.2.77", trust_proxy=True,
+            proxy_fix_orig="fe80::77%x FORGED ban for 203.0.113.9")
 finally:
     _ip_logger("panel.app").removeHandler(_ip_h)
 _ip_w_remote = [m for m in _ip_h.got if "198.51.100.200" in m]
@@ -7353,6 +7357,9 @@ check("client_ip: ...and for a local account, naming the uid and trusted_proxy_u
           for m in _ip_h.got), repr(_ip_h.got))
 check("client_ip: ...and a peer that sent no forwarding header is not warned about",
       not any("198.51.100.201" in m for m in _ip_h.got), repr(_ip_h.got))
+check("client_ip: the ignored-proxy warning names a zoned peer by its address alone",
+      any("fe80::77" in m for m in _ip_h.got) and not any("FORGED" in m for m in _ip_h.got),
+      repr(_ip_h.got))
 # config.json's values, parsed once: a bad entry is skipped (and said), a bare string is one entry.
 _ip_cfg_app = _IpFlask("ip_cfg")
 _ip_conf = getattr(_ip_auth, "configure_proxy_trust", None)
