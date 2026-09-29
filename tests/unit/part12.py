@@ -2775,7 +2775,8 @@ try:
         _p9_state._install_jobs.pop(_ms_x, None)
 
     _ms_fw = [(0, "", [])]
-    _p9_patch(_p9_ms, "remote_ufw_close_by_name", lambda r, n, ports=(): _ms_next_fw())
+    _p9_patch(_p9_ms, "remote_ufw_close_by_name",
+              lambda r, n, ports=None, held=(), tagged=None: _ms_next_fw())
 
     def _ms_next_fw():
         v = _ms_fw[0]

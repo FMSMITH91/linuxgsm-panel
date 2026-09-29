@@ -799,17 +799,46 @@ def _left_on_purpose(status, comment, removable, protected):
             + _naming("Left in place on SSH's or the panel's own port", on_host))
 
 
+def _rule_port_words(g):
+    """Rule group `g`'s port column split in words: a destination address, when ufw prints one, then
+    the port (`203.0.113.10 27015/tcp`). [] for a rule with no port column."""
+    return str(g.get("port_label") or g.get("port_num") or "").split()
+
+
 def _rule_names_port_in(g, ports):
     """Does inbound rule group `g` name one of `ports`?
 
-    Alone, in a range or in a list; for either protocol, from any source, on any interface."""
+    Alone, in a range or in a list; for either protocol, from any source, on any interface, and to
+    any address — ufw prints a destination before the port, `203.0.113.10 27015/tcp`, which the
+    port pattern (anchored at the start) never matched, so such a rule was never named."""
     if g.get("direction", "IN") != "IN":
         return False
-    for item in str(g.get("port_num", "")).split(","):
+    words = str(g.get("port_num", "")).split()
+    for item in (words[-1] if words else "").split(","):
         m = _UFW_PORT_ITEM_RE.match(item)
         if m and any(int(m.group(1)) <= p <= int(m.group(2) or m.group(1)) for p in ports):
             return True
     return False
+
+
+def _unnamed_rule_label(g):
+    """A rule with no name on it, as an uninstall's answer names it: its port and what it does.
+
+    Not the address it admits from, nor its interface or destination — said only as "from some
+    addresses", "on one interface", "to one address". That answer goes to whoever may uninstall the
+    server (Uninstall servers plus that server), while reading the host's rules takes Manage
+    Remotes (the Firewall page): an operator's allow from a home address is not theirs to read."""
+    words = _rule_port_words(g) or ["?"]
+    parts = [words[-1]]
+    if g.get("action", "ALLOW") != "ALLOW":
+        parts.append(g["action"])
+    if g.get("iface"):
+        parts.append("on one interface")
+    elif g.get("scope", "Any address") != "Any address":
+        parts.append("from some addresses")
+    if len(words) > 1:
+        parts.append("to one address")
+    return " ".join(parts)
 
 
 def _left_on_own_ports(status, ports, protected, taken):
@@ -822,13 +851,16 @@ def _left_on_own_ports(status, ports, protected, taken):
     `27015/tcp LIMIT` (`ufw limit` sends no comment, and replaces the server's tagged allow with
     it), and the cleanup neither took nor named it, so the port stayed open under a clean
     "uninstalled". A rule carrying a name has an owner who still needs it; one carrying this
-    server's name is named by the cleanup already."""
+    server's name is named by the cleanup already. Each is named by _unnamed_rule_label, once."""
     ports = set(ports) - set(protected)
     if not ports:
         return []
     stray = [g for g in status.get("groups", [])
              if not g.get("comment") and not taken(g) and _rule_names_port_in(g, ports)]
-    return _naming("Left in place on its port" + ("s" if len(ports) > 1 else ""), stray)
+    labels = list(dict.fromkeys(map(_unnamed_rule_label, stray)))
+    if not labels:
+        return []
+    return ["Left in place on its port%s: %s." % ("s" if len(ports) > 1 else "", ", ".join(labels))]
 
 
 def _port_of(g):
@@ -846,7 +878,7 @@ def _with_notes(message, notes):
     return message + ("." + "".join(" " + n for n in notes) if notes else "")
 
 
-def remote_ufw_close_by_name(server, name, ports=()):
+def remote_ufw_close_by_name(server, name, ports=None, held=(), tagged=None):
     """Delete the ALLOW rules tagged with a game server's name (its comment). Used on uninstall so
     multi-port games are fully cleaned up. -> (rules removed, message, what is left).
 
@@ -867,20 +899,31 @@ def remote_ufw_close_by_name(server, name, ports=()):
     The third value names, as sentences, every rule carrying the name that is still there — ones
     that would not go, and ones left on purpose — or that the firewall could not be read. With
     `ports` (the server's own block), it also names every rule with no comment still on one of them
-    (_left_on_own_ports), from the same last read. Empty means the server's rules are gone; the
-    message says the same things."""
+    (_left_on_own_ports), from the same last read — and on every port a public allow carrying the
+    name was on, which is the server's too: the install tags the ports LinuxGSM reports, and a
+    Query port can sit outside the game's span (Rust's 28017, beyond 28015-28016). Less `held`,
+    the ports another server on the host holds, whose rules are that server's. Empty means the
+    server's rules are gone; the message says the same things.
+
+    `tagged`, a set when given, receives the ports those tagged allows were on, as this read them,
+    for a later step that names what is left instead (the uninstall's legacy sweep)."""
     comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "")[:60]
     if not comment:
         return 0, "no name", []
     protected = protected_host_ports(server)
+    seen = set() if tagged is None else tagged
 
     def removable(g):
-        return g.get("comment") == comment and _is_panel_allow(g) and _port_of(g) not in protected
+        if g.get("comment") != comment or not _is_panel_allow(g):
+            return False
+        seen.add(_port_of(g))
+        return _port_of(g) not in protected
 
     deleted, status = _delete_picked_rules(server, removable, 256)
+    own = () if ports is None else (set(ports) | seen) - set(held)
     left = (_still_there(status, removable)
             + _left_on_purpose(status, comment, removable, protected)
-            + _left_on_own_ports(status, ports, protected, removable))
+            + _left_on_own_ports(status, own, protected, removable))
     return deleted, _with_notes(f"{deleted} rule(s) removed for {comment}", left), left
 
 

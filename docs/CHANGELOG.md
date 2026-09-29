@@ -1129,7 +1129,11 @@ CI-verified commit regardless of this file — this changelog is for humans.
     port carries no server's name. It was neither removed nor mentioned, so the port stayed open,
     rate limited, after an uninstall that reported a clean result. The rule is still left in place,
     but the message now names it (for example `Left in place on its port: 27015/tcp LIMIT`) and the
-    result is a warning. A port another server on the host still uses is left out.
+    result is a warning. A port another server on the host still uses is left out. The server's
+    ports include every port its own rules were on, so a Query port outside the game's usual range
+    (Rust's 28017) is covered, and a rule on one interface or to one address is named too. The
+    message says only the port and what the rule does, not the address or interface it names:
+    whoever may uninstall the server is not always someone who may read the host's firewall.
 - **Root `apt` installs only the packages LinuxGSM lists for the game.** A game's install step
   passed whatever package names LinuxGSM's output reported missing to a root `apt-get install`.
   A name is now kept only when LinuxGSM's dependency list for that game and distro names it, the

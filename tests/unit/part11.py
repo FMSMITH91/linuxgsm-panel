@@ -1450,7 +1450,7 @@ try:
     check("own ports: a range or a list covering the block and a rule from one network are named; "
           "another name's rule and SSH's port are not",
           _r[2] == ["Left in place on its ports: 47850:47860/udp DENY, 47855,47857/tcp DENY, "
-                    "47857/tcp from 10.0.0.0/8."]
+                    "47857/tcp from some addresses."]
           and _r[0] == 2, "result=%r" % (_r,))
     eq("own ports: ...and a caller that passes no ports is answered as before",
        _own_ports_cbn(_p8_srv(), "probeN"), (0, "0 rule(s) removed for probeN", []))
@@ -1489,6 +1489,48 @@ try:
           _r[0] == 0 and _r[2] == [
               "Still open, as it could not be removed: 47856/udp — remove it from the host's "
               "Firewall page.", "Left in place on its port: 47856/tcp LIMIT."], "result=%r" % (_r,))
+    # A port the server's own tagged allow was on is its own too, inside its game's span or not:
+    # the install tags the ports LinuxGSM reports, and Rust's Query port (28017 by LinuxGSM's
+    # default) sits outside the 2-port span the panel reserves. A limit there was the item's defect
+    # again: neither removed nor named. Unless another server holds the port — then it is theirs.
+    _OWN_Q = _VPS_BASE + (("47840", "ALLOW", "Anywhere", "probeR"),
+                          ("47842/udp", "ALLOW", "Anywhere", "probeR"),
+                          ("47842/tcp", "LIMIT", "Anywhere", ""),
+                          ("47844/tcp", "LIMIT", "Anywhere", ""))
+    _u = _Ufw36L(*_OWN_Q)
+    _w = _wire(verbs=_u.verbs())
+    _own_seen = set()
+    _r = _own_ports_cbn(_p8_srv(), "probeR", ports=[47840, 47841], tagged=_own_seen)
+    check("own ports: a port its own tagged allow was on, outside its game's span, is its own too "
+          "— the untagged LIMIT there is named",
+          _r == (4, "4 rule(s) removed for probeR. Left in place on its ports: 47842/tcp LIMIT.",
+                 ["Left in place on its ports: 47842/tcp LIMIT."])
+          and "47842/tcp LIMIT IN Anywhere" in _u.left(), "result=%r left=%r" % (_r, _u.left()))
+    check("own ports: ...and the ports its tagged allows were on are handed back, for a sweep that "
+          "names what is left instead", _own_seen == {47840, 47842}, repr(_own_seen))
+    _u = _Ufw36L(*_OWN_Q)
+    _w = _wire(verbs=_u.verbs())
+    eq("own ports: ...unless another server holds that port: its LIMIT there is that server's",
+       _own_ports_cbn(_p8_srv(), "probeR", ports=[47840, 47841], held={47842}),
+       (4, "4 rule(s) removed for probeR", []))
+    # Which rules the answer names, and how. A rule on one interface and one to one of the host's
+    # addresses (ufw prints the destination before the port) keep the port open as surely. And the
+    # answer goes to whoever may uninstall the server, while reading the host's rules takes Manage
+    # Remotes: an operator's allow from a home address, or an interface's name, is not theirs.
+    _u = _Ufw36L(*_VPS_BASE + (("47856", "ALLOW", "Anywhere", "probeS"),
+                               ("47857 on eth1", "ALLOW", "Anywhere", ""),
+                               ("47857/tcp", "ALLOW", "198.51.100.7", "")))
+    _u.v4.append(["203.0.113.10 47856/tcp", "LIMIT", "Anywhere", ""])
+    _w = _wire(verbs=_u.verbs())
+    _r = _own_ports_cbn(_p8_srv(), "probeS", ports=[47856, 47857])
+    check("own ports: a rule on one interface, one from one address and one to one of the host's "
+          "addresses are named too",
+          _r[0] == 2 and _r[2] == ["Left in place on its ports: 47857 on one interface, 47857/tcp "
+                                   "from some addresses, 47856/tcp LIMIT to one address."],
+          "result=%r" % (_r,))
+    check("own ports: ...naming no interface, source or destination — those are the host's, which "
+          "only Manage Remotes reads",
+          not any(s in str(_r) for s in ("eth1", "198.51.100.7", "203.0.113.10")), repr(_r))
 
     # ── "Open all ports" never reports a port open that an existing rule still blocks ─────────
     # Defect: the VPS's scenario c4. With `deny 47824/tcp` in place the bare allow went in after it

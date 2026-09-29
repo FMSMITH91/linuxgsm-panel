@@ -1164,7 +1164,25 @@ try:
                 ("fwq", "rust", 27070, ("fwsib2", "gmod", 27070),
                  (("27070", "ALLOW", "fwq"), ("27071", "ALLOW", "fwq"), ("27070/tcp", "LIMIT", ""),
                   ("27071/tcp", "LIMIT", "")),
-                 "Left in place on its port: 27071/tcp LIMIT.", "27070/tcp")):
+                 "Left in place on its port: 27071/tcp LIMIT.", "27070/tcp"),
+                # A port its own tagged allow was on is its own too, outside the game's span: the
+                # install tags LinuxGSM's Query port, and Rust's (28017) is beyond the 2-port span.
+                # The legacy sweep names what is left, so the name cleanup hands the port on.
+                ("fwrq", "rust", 27080, None,
+                 (("27080", "ALLOW", "fwrq"), ("27082/udp", "ALLOW", "fwrq"),
+                  ("27082/tcp", "LIMIT", ""), ("27084/tcp", "LIMIT", "")),
+                 "Left in place on its ports: 27082/tcp LIMIT.", "27084"),
+                # ...but not one another server holds: the allocator reserves only the span, so the
+                # next Rust server can be given the first one's tagged Query port as its game port.
+                ("fwrh", "rust", 27086, ("fwsib3", "rust", 27088),
+                 (("27086", "ALLOW", "fwrh"), ("27088/udp", "ALLOW", "fwrh"),
+                  ("27088/tcp", "LIMIT", "")), None, "27088"),
+                # The same with no sweep (fwsib4 holds 27092): the name cleanup names it, less what
+                # fwsib4 holds.
+                ("fwrn", "rust", 27092, ("fwsib4", "gmod", 27092),
+                 (("27092", "ALLOW", "fwrn"), ("27094/udp", "ALLOW", "fwrn"),
+                  ("27094/tcp", "LIMIT", ""), ("27092/tcp", "LIMIT", "")),
+                 "Left in place on its ports: 27094/tcp LIMIT.", "27092/tcp")):
             _ul = _Ufw36Table(*(_UL_BASE + _ul_rules))
             _sm_core.run_privileged = _ul.priv
             with app.app_context():
