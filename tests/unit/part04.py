@@ -1543,6 +1543,35 @@ try:
           0 < _ub_allow < 20 and _ub_state["computes"] <= _ub_allow,
           "allowance=%r self_updates=%d checks=%d" % (_ub_allow, _ub_state["self_updates"],
                                                       _ub_state["computes"]))
+
+    # Past the allowance, NO check at all. The fallback was panel_update_status(force=False), which
+    # computes afresh once the badge's five-minute cache is stale: about ten more checks an hour.
+    def _ub_spent(age, status):
+        _ub_reset(status)
+        for _ in range(_ub_allow):
+            _ubc._UPDATE_GATE.spend()
+        _dcm.so._update_cache.update(ts=_lgd_real_time.time() - age,
+                                     data={"git": True, "update_available": False})
+
+    _ub_spent(_dcm.so._UPDATE_TTL + 1,
+              {"git": True, "update_available": False, "behind": 2, "ci_state": "pending"})
+    _dcm._dc_dispatch(_app, "tok", "42", "!update")
+    check("bots: past the hour's allowance, a stale status makes !update ask GitHub NOTHING — it "
+          "says when to try again (Aikido PR #369)",
+          _ub_state["computes"] == 0 and any("try again in" in t.lower() for _, t in _ub_said),
+          "checks=%d said=%r" % (_ub_state["computes"], _ub_said[-1:]))
+    _ub_spent(_dcm.so._UPDATE_TTL + 1,
+              {"git": True, "update_available": False, "behind": 2, "ci_state": "pending"})
+    _tgm._tg_dispatch(_app, "tok", "42", "/update")
+    check("telegram: ...and /update the same (Aikido PR #369)",
+          _ub_state["computes"] == 0 and any("try again in" in t.lower() for _, t in _ub_said),
+          "checks=%d said=%r" % (_ub_state["computes"], _ub_said[-1:]))
+    _ub_spent(120, {"git": True, "update_available": False, "behind": 0, "ci_state": "passing"})
+    _dcm._dc_dispatch(_app, "tok", "42", "!update")
+    check("bots: ...while a status within the badge's five minutes still answers, with no check "
+          "(control)",
+          _ub_state["computes"] == 0 and any("Already up to date" in t for _, t in _ub_said),
+          "checks=%d said=%r" % (_ub_state["computes"], _ub_said[-1:]))
     _ub_refused = [t for _, t in _ub_said if "try again in" in t.lower()]
     check("bots: ...and the ones past it are told when to try again, and that the web page works",
           _ub_refused and len(_ub_refused) == 20 - _ub_state["self_updates"]

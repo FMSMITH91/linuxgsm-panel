@@ -347,9 +347,10 @@ BUSY_REPLY = ("⏳ I'm still working through earlier commands, so that one didn'
 # Two things bound it now. A status younger than _BOT_STATUS_FRESH is reused, so a burst asks
 # once. And the forced checks the bots may cause — the status refresh and the one panel_self_update
 # keeps as its own CI gate — are metered: _BOT_FORCED_CHECKS_PER_HOUR across BOTH bots, because
-# the limit is the panel's IP's. At one or two requests a check while behind, ten checks spend at
-# most about twenty of the sixty, leaving the rest for the sidebar badge (a check at most every
-# _UPDATE_TTL, five minutes) and for the web UI's own update.
+# the limit is the panel's IP's. Past the allowance a chat causes no check at all (bot_update_status
+# answers from the badge's cache or not at all). At one or two requests a check while behind, ten
+# checks spend at most about twenty of the sixty, leaving the rest for the sidebar badge (a check at
+# most every _UPDATE_TTL, five minutes) and for the web UI's own update.
 _BOT_STATUS_FRESH = 60
 _BOT_FORCED_CHECKS_PER_HOUR = 10
 _BOT_CHECK_WINDOW = 3600
@@ -437,14 +438,21 @@ def queue_panel_update(worker, bot, fn):
 def bot_update_status():
     """Return panel_update_status as a chat's !update may ask for it.
 
-    A status younger than _BOT_STATUS_FRESH as it is, a forced check while the hour's allowance
-    lasts, else the ordinary cache (the sidebar badge's five minutes).
+    A status younger than _BOT_STATUS_FRESH as it is, and a forced check while the hour's allowance
+    lasts. Once it is spent, never a check at all: a status within the badge's TTL is what
+    force=False would have returned anyway, and anything older (or none) is {}, which the callers
+    answer with update_rate_reply(). It used to fall back to panel_update_status(force=False), and
+    that computes afresh whenever the five-minute cache is stale, so a chat past its allowance
+    still caused about ten more checks an hour: twenty in all, not the ten the allowance says.
     """
     cache = so._update_cache
     data = cache.get("data")
-    if data is not None and time.time() - (cache.get("ts") or 0.0) < _BOT_STATUS_FRESH:
+    age = time.time() - (cache.get("ts") or 0.0)
+    if data is not None and age < _BOT_STATUS_FRESH:
         return data
-    return so.panel_update_status(force=_UPDATE_GATE.spend())
+    if _UPDATE_GATE.spend():
+        return so.panel_update_status(force=True)
+    return data if data is not None and age < so._UPDATE_TTL else {}
 
 
 def spend_update_check():
