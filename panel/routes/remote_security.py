@@ -330,6 +330,10 @@ def _follow_binding_in_fail2ban(app, new_port, cur_port):
         # only — silently dropping every whitelisted IP/CIDR until the next boot re-applies it
         # (or indefinitely, if the restart after this fails).
         ok, msg = so.ensure_panel_fail2ban(AUTH_LOG_PATH, new_port, _security_whitelist())
+        # "Does NOT install fail2ban — no-ops when it isn't present", and says so with ok=False.
+        # A host with no fail2ban has no jail to follow the move, which is not a failed move.
+        if not ok and not so.panel_fail2ban_status().get("installed"):
+            return True, "n/a (fail2ban is not installed)"
     except Exception:
         app.logger.warning("change-port: fail2ban port update failed", exc_info=True)
         return False, "the jail update failed"

@@ -679,12 +679,29 @@ def _start_bootstrap_job(app, remote_id, job, opts, actor_id):
     superadmin editing the host mid-bootstrap is legitimate, so the address must not be).
     """
     _app = app
+    held = {}      # the detached row, and the identity and pin it was loaded with
 
     def _mine():
         """Whether `job` is still the registered job for remote_id. Call holding the lock."""
         return _bootstrap_jobs.get(remote_id) is job
 
+    def _pin_back():
+        """Write back a pin first contact learned, at the next step rather than at the end.
+
+        The monitor and every request reach the host through the ROW, and until the pin is on it
+        they trust whatever key they are shown; the bootstrap itself runs for many minutes.
+        """
+        r = held.get("remote")
+        learned = r.host_key if r is not None else None
+        if learned and learned != held["pinned"]:
+            held["pinned"] = learned          # once, whatever the write does: never every step
+            _settle_bootstrapped_row(remote_id, held["created"], None, learned, None)
+
     def _progress(step, total, name, status):
+        try:
+            _pin_back()                       # outside the lock: it is a database write
+        except Exception:
+            _log.debug("bootstrap: writing the learned host key back failed", exc_info=True)
         with _bootstrap_lock:
             if not _mine():
                 return
@@ -703,7 +720,8 @@ def _start_bootstrap_job(app, remote_id, job, opts, actor_id):
                 remote = db.session.get(RemoteServer, remote_id)
                 if not remote:
                     raise RuntimeError("Remote no longer exists")
-                name, created, pinned = remote.name, remote.created_at, remote.host_key
+                name, created = remote.name, remote.created_at
+                held.update(remote=remote, created=created, pinned=remote.host_key)
                 db.session.expunge(remote)
                 success = False
                 try:
@@ -711,7 +729,8 @@ def _start_bootstrap_job(app, remote_id, job, opts, actor_id):
                 finally:
                     # However the run ended: a pin first contact learned was kept even when a
                     # later step raised, back when first contact committed it itself.
-                    _settle_bootstrapped_row(remote_id, created, pinned, remote.host_key, success)
+                    _settle_bootstrapped_row(remote_id, created, held["pinned"], remote.host_key,
+                                             success)
                 log_action(None, "remote_vps_bootstrap", target=name, detail=msg, success=success)
                 with _bootstrap_lock:
                     if _mine():
@@ -731,14 +750,14 @@ def _start_bootstrap_job(app, remote_id, job, opts, actor_id):
 
 
 def _settle_bootstrapped_row(remote_id, created, pinned, learned, success):
-    """Write a finished bootstrap's result onto its host's row, if that row is still there.
+    """Write a bootstrap's result onto its host's row, if that row is still the one it loaded.
 
     `created` is the loaded row's created_at, which is what tells "the same host" from "a host
-    that took its id". On success the host is marked online and seen now. `learned` is the host
-    key the bootstrap's own connections pinned in memory (on the detached copy), written only when
-    the row has no pin yet — first contact, which is the only time the in-session write it replaces
-    would have happened; a pin the row already holds, or one that cannot be decrypted, is never
-    replaced here.
+    that took its id". `success` True marks the host online and seen now (None: the run has not
+    finished). `learned` is the host key the bootstrap's own connections pinned in memory, on the
+    detached copy, and `pinned` what it was loaded with; it is written only when it is new and the
+    row has no pin yet — first contact, the only time the in-session write it replaces would have
+    happened. A pin the row already holds, or one that cannot be decrypted, is never replaced.
     """
     from panel.db.models import UnreadableSecret
     row = db.session.get(RemoteServer, remote_id)

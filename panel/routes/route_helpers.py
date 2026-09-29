@@ -8,7 +8,7 @@ from panel.core.config import (encrypt_secret, load_config, save_config)
 from panel.db.models import (Group, RemoteServer, SetupState, User, db)
 from panel.ops import (tailscale_integration as ts)
 from panel.ops.ssh_manager import (ssh_test_connection)
-from panel.security.auth import (hash_password)
+from panel.security.auth import (hash_password, log_action)
 import json
 import os
 from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
@@ -123,6 +123,11 @@ def _register_setup_wizard(app):
                                setup_mode=True)
 
 
+# Who and what the setup wizard's Tailscale rows name: no account is signed in while it runs.
+_SETUP_ACTOR = "setup wizard"
+_SETUP_TARGET = "Panel Server"
+
+
 def _register_setup_tailscale(app):
     """The wizard's Tailscale step: status, install, sign-in and Serve."""
     @app.route("/api/setup/tailscale/status")
@@ -143,6 +148,11 @@ def _register_setup_tailscale(app):
         if not _setup_open() or not _setup_owner_ok():
             return jsonify({"error": "forbidden"}), 403
         ok, log = ts.install_tailscale_local()
+        # Audited like every other mutating endpoint. The rbac gate counted these three as audited
+        # only because a helper they reach is named `_run`, the same name as two workers that do
+        # log; nothing here ever wrote a row, for installing a package as root and joining a tailnet.
+        log_action(None, "setup_tailscale_install", target=_SETUP_TARGET, success=ok,
+                   actor=_SETUP_ACTOR)
         return jsonify({"success": ok, "log": log})
 
     @app.route("/api/setup/tailscale/up", methods=["POST"])
@@ -150,6 +160,8 @@ def _register_setup_tailscale(app):
         if not _setup_open() or not _setup_owner_ok():
             return jsonify({"error": "forbidden"}), 403
         ok, res = ts.tailscale_up_local(enable_ssh=True)
+        log_action(None, "setup_tailscale_up", target=_SETUP_TARGET, success=ok,
+                   actor=_SETUP_ACTOR)
         if not ok:
             return jsonify({"success": False, "message": res})
         if res == "ALREADY_CONNECTED":
@@ -165,6 +177,8 @@ def _register_setup_tailscale(app):
         mount = cfg.get("tailscale_mount", "/") or "/"
         ok, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=False,
                                            backend_scheme=_ts_backend_scheme(cfg))
+        log_action(None, "setup_tailscale_serve", target=_SETUP_TARGET,
+                   detail="port %s, mount %s" % (port, mount), success=ok, actor=_SETUP_ACTOR)
         if not ok:
             return jsonify({"success": False, "message": msg})
         info = ts.get_tailscale_info(force_refresh=True)

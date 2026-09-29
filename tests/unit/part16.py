@@ -238,9 +238,12 @@ try:
     # The new host's own bootstrap: it still pins the key it met on first contact, still marks the
     # host seen, and still audits. The detached row is what the fix hands the bootstrap, so the pin
     # has to be written back once it is done — this is the check that it is.
+    _bs16_pin_at_step = []
+
     def _bs16_normal(remote, progress=None, **opts):
         _p9_core._persist_host_key(remote, "ssh-ed25519 AAAAC3NzaVICTIMKEY")
         progress(1, 1, "Updating packages", "running")
+        _bs16_pin_at_step.append(_host_field(remote.id, "host_key"))
         return True, "VPS bootstrap complete (1/1 steps).", []
 
     _p9_patch(_sh16, "remote_bootstrap_vps", _bs16_normal)
@@ -252,6 +255,8 @@ try:
           and (_host_field(_bs16_vid, "last_seen") or _BS16_OLD) > _BS16_OLD
           and [a.success for a in _audits("remote_vps_bootstrap", "p16-victim")] == [True],
           repr((_st, _host_field(_bs16_vid, "host_key"), _host_field(_bs16_vid, "last_seen"))))
+    check("bootstrap: ...and the pin is on the row by the next step, not only once the run ends",
+          _bs16_pin_at_step[:1] == ["ssh-ed25519 AAAAC3NzaVICTIMKEY"], repr(_bs16_pin_at_step))
     # A pin the host ALREADY had is not replaced by what a bootstrap met (a re-bootstrap, or the
     # monitor pinning first): TOFU keeps the first key, and HostKeyMismatch is the answer to a
     # different one, not an overwrite.
@@ -582,6 +587,8 @@ try:
     _p9_patch(_p9_so, "ensure_panel_fail2ban", lambda *a, **k: _cp16["f2b"])
     _p9_patch(_p9_so, "restart_panel", lambda *a, **k: _cp16["restart"])
     _p9_patch(_p9_so, "port_in_use", lambda port: False)
+    _f2b16_installed = [True]
+    _p9_patch(_p9_so, "panel_fail2ban_status", lambda: {"installed": _f2b16_installed[0]})
     _p9_cfg.save_config(dict(_p9_cfg.load_config(), port=5000, bind_host="0.0.0.0"))  # nosec B104
     _r = _A16.post("/api/panel/change-port", json={"port": 5055, "bind_host": "0.0.0.0"})  # nosec B104
     _cpb = (_audits("panel_change_binding") or [NS(success=None, detail="")])[-1]
@@ -600,11 +607,21 @@ try:
     check("change-port: a move that fully took is a successful row and no restart row (control)",
           _p9_json(_r).get("success") is True and _cpb.success is True
           and len(_audits("panel_restart")) == _n_restart16, repr((_p9_json(_r), _cpb.detail)))
+    # A host with no fail2ban at all: ensure_panel_fail2ban no-ops and says ok=False, and there
+    # is no jail to follow the move — not a failed move.
+    _f2b16_installed[0] = False
+    _cp16["f2b"] = (False, "fail2ban isn't installed on this host.")
+    _r = _A16.post("/api/panel/change-port", json={"port": 5077, "bind_host": "0.0.0.0"})  # nosec B104
+    _cpb = (_audits("panel_change_binding") or [NS(success=None, detail="")])[-1]
+    check("change-port: with no fail2ban installed there is nothing to follow, so it is a success",
+          _p9_json(_r).get("success") is True and _cpb.success is True
+          and "not installed" in _cpb.detail, repr((_p9_json(_r), _cpb.detail)))
+    _f2b16_installed[0] = True
     # The same port, a new bind address: fail2ban is not asked, and that is not a failure.
     _p9_patch(_p9_so, "ensure_panel_fail2ban",
               lambda *a, **k: (_ for _ in ()).throw(AssertionError("fail2ban asked")))
     _p9_patch(_p9_so, "host_has_ip", lambda ip: True)
-    _r = _A16.post("/api/panel/change-port", json={"port": 5066, "bind_host": "192.0.2.5"})
+    _r = _A16.post("/api/panel/change-port", json={"port": 5077, "bind_host": "192.0.2.5"})
     _cpb = (_audits("panel_change_binding") or [NS(success=None, detail="")])[-1]
     check("change-port: a bind-only move that never needed fail2ban is still a success (control)",
           _p9_json(_r).get("success") is True and _cpb.success is True, repr((_p9_json(_r),
