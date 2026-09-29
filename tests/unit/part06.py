@@ -4694,14 +4694,15 @@ check("workflows: none pipes a downloaded script into a shell",
 # or read it: the suites and their pip dependencies, fuzz targets, the Lighthouse panel, tools this
 # repo downloads. Ten of the sixteen checkouts left it there although none of their jobs pushes,
 # fetches or tags with it (Aikido 745329667-677). So: every checkout says `persist-credentials:
-# false` under its `with:`, and the only exemption is a job that has a `git … push` in it. The
-# parse is text (no PyYAML here), and it must account for every `actions/checkout@` in the
-# workflows, in both .yml and .yaml files, or it has read less than it claims.
+# false` under its `with:`. The one exemption is a job with a `git … push` in it, and even that
+# must say `true` rather than lean on the default, so the intent is written down. The parse is
+# text (no PyYAML here), and it must account for every `actions/checkout@` in the workflows, in
+# both .yml and .yaml files, or it has read less than it claims.
 def _wf_checkout_steps(text):
-    """[(line, persists_false, job_pushes)] for each actions/checkout step in a workflow's text.
+    """[(line, persist, job_pushes)] for each actions/checkout step in a workflow's text.
 
-    persists_false is None when the step's `- ` line could not be found (a shape this parser does
-    not know), which the gate counts as a failure, never as a pass.
+    persist is the step's `persist-credentials` input unquoted, "" when it is not set, or None
+    when the step's `- ` line could not be found (a shape this parser does not know).
     """
     _lines = text.splitlines()
 
@@ -4735,7 +4736,7 @@ def _wf_checkout_steps(text):
             _e += 1
         _with = [_n for _n in range(_s + 1, _e) if _code(_lines[_n]) and _ind(_lines[_n]) == _key
                  and re.match(r"^\s*with:\s*(#.*)?$", _lines[_n])]
-        _off = False
+        _val = ""
         if _with:
             _kids = []
             _n = _with[0] + 1
@@ -4744,16 +4745,22 @@ def _wf_checkout_steps(text):
                     _kids.append(_lines[_n])
                 _n += 1
             # First-level inputs only: text inside a block-scalar input is not an input.
-            _off = any(_ind(_k) == _ind(_kids[0]) and re.match(
-                r"^\s*persist-credentials:\s*(false|'false'|\"false\")\s*(#.*)?$", _k)
-                for _k in _kids)
+            for _k in _kids:
+                _pc = re.match(r"^\s*persist-credentials:\s*(\S+?)\s*(#.*)?$", _k)
+                if _pc and _ind(_k) == _ind(_kids[0]):
+                    _val = _pc.group(1).strip("'\"")
         _hd = [_h for _h in _heads if _h < _i]
         _jb = _hd[-1] if _hd else 0
         _je = min([_h for _h in _heads if _h > _i] or [len(_lines)])
         _push = any(_code(_x) and re.search(r"\bgit\b[^#\n]*\bpush\b", _x)
                     for _x in _lines[_jb:_je])
-        _out.append((_i + 1, _off, _push))
+        _out.append((_i + 1, _val, _push))
     return _out
+
+
+def _wf_checkout_ok(persist, job_pushes):
+    """False drops the token; only a job that pushes may keep it, and it must say so."""
+    return persist == "false" or (persist == "true" and job_pushes)
 
 
 _co_files = sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml"))
@@ -4764,21 +4771,22 @@ for _wf in _co_files:
     _co_text = open(_wf, encoding="utf-8").read()
     _co_raw += sum(1 for _l in _co_text.splitlines()
                    if "actions/checkout@" in _l and not _l.lstrip().startswith("#"))
-    for _co_ln, _co_off, _co_pushes in _wf_checkout_steps(_co_text):
+    for _co_ln, _co_val, _co_pushes in _wf_checkout_steps(_co_text):
         _co_seen += 1
         _co_tag = "%s:%d" % (os.path.basename(_wf), _co_ln)
-        if _co_pushes:
+        if not _wf_checkout_ok(_co_val, _co_pushes):
+            _co_bad.append("%s=%r" % (_co_tag, _co_val))
+        elif _co_val == "true":
             _co_push.append(_co_tag)
-        elif not _co_off:
-            _co_bad.append(_co_tag)
 check("workflows: every actions/checkout step sets persist-credentials: false, unless its job "
-      "pushes with the token",
+      "pushes with the token and says `true`",
       _co_seen > 0 and _co_seen == _co_raw and not _co_bad,
-      "files=%d steps=%d of %d missing=%r push-exempt=%r"
+      "files=%d steps=%d of %d bad=%r kept-for-a-push=%r"
       % (len(_co_files), _co_seen, _co_raw, _co_bad, _co_push))
-# The parser itself, on shapes the workflows do not all have today: a `- name:` above `uses:`,
-# the input inside a block scalar (not an input), a sibling step's `with:`, a pushing job, a job
-# whose only push is in a comment (not exempt), and a step it cannot place (counted, and failing).
+# The parser and the rule, on shapes the workflows do not all have today: a `- name:` above
+# `uses:`; the input inside a block scalar (not an input); a sibling step's `with:`; a pushing job
+# on the default (fails); a job whose only push is in a comment; a step it cannot place (counted,
+# failing); a pushing job that says `true` (the one pass besides false); `true` quoted, no push.
 _co_probe = _wf_checkout_steps(
     "on: push\njobs:\n  a:\n    steps:\n"
     "      - name: Checkout\n        uses: actions/checkout@x\n        with:\n"
@@ -4789,13 +4797,20 @@ _co_probe = _wf_checkout_steps(
     "      - uses: actions/setup-python@x\n        with:\n          persist-credentials: false\n"
     "  b:\n    steps:\n      - uses: actions/checkout@x\n      - run: git push origin HEAD\n"
     "  c:\n    steps:\n      - uses: actions/checkout@x\n      # then: git push origin HEAD\n"
-    "  d:\n    steps:\n  uses: actions/checkout@x\n")
-check("workflows: the checkout parser finds a named step's inputs, ignores a block scalar's text "
-      "and a sibling step's, exempts only a job that pushes (not one that mentions a push in a "
-      "comment), and fails a step it cannot place",
-      _co_probe == [(6, True, False), (9, False, False), (13, False, False), (19, False, True),
-                    (23, False, False), (27, None, False)], repr(_co_probe))
-
+    "  d:\n    steps:\n  uses: actions/checkout@x\n"
+    "  e:\n    steps:\n      - uses: actions/checkout@x\n        with:\n"
+    "          persist-credentials: true   # the step below pushes the tag\n"
+    "      - run: git push origin v1\n"
+    "  f:\n    steps:\n      - uses: actions/checkout@x\n        with:\n"
+    "          persist-credentials: \"true\"\n")
+_co_want = [(6, "false", False), (9, "", False), (13, "", False), (19, "", True),
+            (23, "", False), (27, None, False), (30, "true", True), (36, "true", False)]
+check("workflows: the checkout parser reads a named step's inputs and not a block scalar's text or "
+      "a sibling step's, sees a push only outside comments, fails a step it cannot place, and "
+      "passes only false, or true in a job that pushes",
+      _co_probe == _co_want
+      and [_wf_checkout_ok(_v, _p) for _ln, _v, _p in _co_probe]
+      == [True, False, False, False, False, False, True, False], repr(_co_probe))
 _ci_wf = open(os.path.join(_root, ".github", "workflows", "ci.yml"), encoding="utf-8").read()
 _cov_job = _ci_wf[_ci_wf.index("\n  coverage:\n"):]
 _cov_env = _cov_job[_cov_job.index("\n    env:\n"):]
