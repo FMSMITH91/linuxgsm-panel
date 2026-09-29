@@ -911,6 +911,21 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **A delegated group admin can edit or delete only a group wholly within their reach.** The
+  permission list was filtered to what the editor holds, but nothing asked whose group it was:
+  an admin scoped to one host could give another tenant's viewers `use_terminal` and
+  `send_command` on a host the admin cannot reach, strip another tenant's admins, or, through
+  the default "Everyone" group, give every account a shell in one POST. Deleting a group skipped
+  its custom commands, so a group made for a superadmin-authored command could be deleted by
+  anyone who held its permissions. Editing and deleting now need all three of: the group's
+  permissions, hosts, servers and custom commands within the editor's reach; every member but
+  themselves and superadmins someone the editor could administer on Users (the rule `/users`
+  already applied); and no live invite naming the group alongside one outside their reach.
+  Otherwise the request is refused and audited. The Groups page shows those groups without Edit
+  or Delete, with their members, permissions and access still listed. **What changes:** on an
+  install with more than one tenant, a delegated admin can no longer edit "Everyone", or their
+  own group if someone else in it reaches more than they do. That is the intended rule. A
+  superadmin's page and edits are unchanged.
 - **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported by
   kta1kri). Twenty-five places built `sudo -u <account> bash -c '…'` from a server's account
   (`short_name`) and LinuxGSM script name with neither quoting nor a check — the dashboard's own

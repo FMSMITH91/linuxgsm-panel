@@ -1360,13 +1360,18 @@ def _check_group_admin_cannot_grant_more():
     check("escalation: they CAN grant a permission they do hold",
           made is not None and auth.VIEW_SERVERS in (got or set()), "granted: %s" % sorted(got or []))
 
-    # ...and editing a group must not silently strip a permission they cannot grant.
-    c4.post("/groups/%d/edit" % gid5, data={"name": tag5, "description": "",
+    # ...and editing a group must not silently strip a permission they cannot grant. It used to be
+    # PRESERVED by _grantable_perms while the rest of the edit went through; a group holding one is
+    # now outside the editor's reach, so the whole edit is refused (_may_manage_group) and this
+    # asserts the refusal — the description is what shows whether the edit landed at all.
+    c4.post("/groups/%d/edit" % gid5, data={"name": tag5, "description": "changed by grpadm",
                                             "permissions": [auth.VIEW_SERVERS]})
     with app.app_context():
         kept = set(Group.query.get(gid5).get_permissions())
-    check("escalation: an edit PRESERVES a permission the editor cannot grant",
-          auth.MANAGE_USERS in kept, "after edit: %s" % sorted(kept))
+        kept_desc = Group.query.get(gid5).description
+    check("escalation: an edit of a group holding a permission the editor cannot grant is refused",
+          auth.MANAGE_USERS in kept and kept_desc == "RBAC test preserve (auto)",
+          "after edit: %s, description %r" % (sorted(kept), kept_desc))
 
 
 def _check_membership_escalation():
@@ -1748,7 +1753,11 @@ def _check_group_summaries_name_nothing_hidden():
         try:
             _sg_page = c4.get("/groups").get_data(as_text=True)
             _sg_card = _sg_page[_sg_page.index(tag + "_sumleak"):]
-            _sg_card = _sg_card[:_sg_card.index('id="edit-group-')]
+            # Up to the NEXT card: this group is outside the viewer's reach, so it has no edit
+            # form to stop at, and the next group's edit form would drag its names in.
+            _sg_card = _sg_card[:min(_i for _i in (_sg_card.find('<div class="card mb-3">'),
+                                                   _sg_card.find("<!-- /#groups-list -->"),
+                                                   len(_sg_card)) if _i >= 0)]
             check("groups page: (control) a group's summary names the host the viewer CAN reach",
                   _sg_mine in _sg_card, "the summary names nothing — the check below is vacuous")
             check("groups page: a group's summary does not name hosts or servers outside the viewer's reach",
@@ -1775,25 +1784,36 @@ def _check_permission_boxes_are_filtered():
     # _grantable_perms drops a requested permission the actor does not hold and PRESERVES one the
     # group already holds, so the control was inert in both directions — and the un-tick case is
     # the dangerous one: unticking "Open a shell on a host" on a group that holds it answered
-    # "Group 'X' updated." and revoked nothing, while every member kept that shell. grp5 holds
-    # MANAGE_USERS, which this admin cannot grant, and VIEW_SERVERS, which they can.
+    # "Group 'X' updated." and revoked nothing, while every member kept that shell.
+    #
+    # A group that HOLDS a permission the admin cannot grant is now outside their reach, so it has
+    # no edit form at all (_manageable_group_ids) — grp5 holds MANAGE_USERS, which this admin
+    # lacks. Its power must still be VISIBLE on the card. The boxes are read off the admin's own
+    # group instead, which they may edit: MANAGE_USERS is still a box they cannot tick.
     def _perm_box(html, gid, perm):
         import re as _re
         _m = _re.search(r'<input[^>]*id="perm-%d-%s"[^>]*>' % (gid, perm), html)
         return _m.group(0) if _m else ""
 
-    _pb_locked = _perm_box(_gp_html, gid5, auth.MANAGE_USERS)
-    _pb_free = _perm_box(_gp_html, gid5, auth.VIEW_SERVERS)
+    _pb_locked = _perm_box(_gp_html, gid4_for_scope, auth.MANAGE_USERS)
+    _pb_free = _perm_box(_gp_html, gid4_for_scope, auth.VIEW_SERVERS)
     check("groups page: the permission tick boxes are where this check thinks they are",
           bool(_pb_locked) and bool(_pb_free),
           "locked=%r free=%r — the checks below would prove nothing" % (_pb_locked, _pb_free))
     check("groups page: a permission the admin cannot grant is not an ENABLED tick box",
           "disabled" in _pb_locked,
-          "offers %r — unticking it reports 'updated' and revokes nothing" % _pb_locked)
-    check("groups page: ...but is still shown, ticked, so the group's real power stays visible",
-          "checked" in _pb_locked,
-          "the box was hidden instead: %r — the page now understates what the group can do"
-          % _pb_locked)
+          "offers %r — ticking it would be silently dropped" % _pb_locked)
+    _g5_card = _gp_html[_gp_html.index(tag5):]
+    _g5_card = _g5_card[:min(_i for _i in (_g5_card.find('<div class="card mb-3">'),
+                                           _g5_card.find("<!-- /#groups-list -->"),
+                                           len(_g5_card)) if _i >= 0)]
+    check("groups page: a group holding one they cannot grant offers no edit form for it",
+          ('id="edit-group-%d"' % gid5) not in _gp_html and not _perm_box(_gp_html, gid5,
+                                                                            auth.MANAGE_USERS),
+          "the page offers an edit the POST refuses")
+    check("groups page: ...but its real power stays visible on the card",
+          auth.ALL_PERMISSIONS[auth.MANAGE_USERS] in _g5_card,
+          "the card no longer names MANAGE_USERS — the page understates what the group can do")
     check("groups page: ...while one they DO hold stays editable (positive control)",
           "disabled" not in _pb_free,
           "every permission box is disabled, so the check above passes for the wrong reason: %r"
@@ -1874,6 +1894,268 @@ def _check_empty_host_list_wording():
           _ind_desc == "description changed",
           "description is %r — the POST did nothing at all, so the check above proves nothing"
           % _ind_desc)
+
+
+def _gsx_group(name, perms, hosts=(), commands=()):
+    """A fixture group for the group-scope checks, named from `tag`. Needs an app context."""
+    _g = Group(name=tag + name, description="orig", is_default=False)
+    _g.set_permissions(perms)
+    for _h in hosts:
+        _g.servers.append(db.session.get(RemoteServer, _h))
+    for _c in commands:
+        _g.custom_commands.append(_c)
+    db.session.add(_g)
+    return _g
+
+
+def _gsx_user(name, groups):
+    """A fixture account in `groups`, named from `tag`. Needs an app context."""
+    _u = User(username=tag + name, password_hash=auth.hash_password(secrets.token_hex(16)),
+              display_name=name, is_superadmin=False, is_active=True)
+    _u.groups.extend(groups)
+    db.session.add(_u)
+    return _u
+
+
+def _group_scope_fixtures():
+    """Two tenants, a delegated admin in one, and the groups the scope checks edit and delete."""
+    global _gsx
+    from panel.db.models import CustomCommand as _GCC, Invite as _GInv
+    with app.app_context():
+        _cmd = _GCC(name=tag + "_gsx_cmd", command_template="exec {}", enabled=True)
+        db.session.add(_cmd)
+        _g = {
+            # dana: a tenant-A admin, holding what she could hand out.
+            "a_adm": _gsx_group("_gsx_a_adm", [auth.MANAGE_GROUPS, auth.SEND_COMMAND,
+                                               auth.USE_TERMINAL, auth.VIEW_SERVERS,
+                                               auth.VIEW_CONSOLE], hosts=[granted_remote]),
+            "b_view": _gsx_group("_gsx_b_view", [auth.VIEW_SERVERS], hosts=[other_remote]),
+            "b_adm": _gsx_group("_gsx_b_adm", [auth.VIEW_SERVERS, auth.SEND_COMMAND],
+                                hosts=[other_remote]),
+            "b_empty": _gsx_group("_gsx_b_empty", [auth.VIEW_SERVERS], hosts=[other_remote]),
+            "a_view": _gsx_group("_gsx_a_view", [auth.VIEW_SERVERS], hosts=[granted_remote]),
+            "a_inv": _gsx_group("_gsx_a_inv", []),
+            "a_free": _gsx_group("_gsx_a_free", [auth.VIEW_SERVERS], hosts=[granted_remote]),
+            "a_del": _gsx_group("_gsx_a_del", [auth.VIEW_SERVERS]),
+            "a_mixdel": _gsx_group("_gsx_a_mixdel", [auth.VIEW_SERVERS], hosts=[granted_remote]),
+            "cmd": _gsx_group("_gsx_cmdgrp", [auth.VIEW_SERVERS], commands=[_cmd]),
+        }
+        _u = {"dana": _gsx_user("_gsx_dana", [_g["a_adm"]]),
+              "vic": _gsx_user("_gsx_vic", [_g["b_view"]]),
+              "vera": _gsx_user("_gsx_vera", [_g["b_adm"]]),
+              # mia is in tenant A's viewers AND tenant B's: permissions are flat, so anything
+              # added to a_view she holds on hostB too.
+              "mia": _gsx_user("_gsx_mia", [_g["a_view"], _g["b_view"], _g["a_mixdel"]]),
+              "alice": _gsx_user("_gsx_alice", [_g["a_free"]]),
+              "carl": _gsx_user("_gsx_carl", [_g["cmd"]])}
+        db.session.flush()
+        # A live superadmin invite naming an EMPTY tenant-A group together with a tenant-B one:
+        # its future member is someone dana cannot administer either.
+        _inv, _ = _GInv.mint(db.session.get(User, admin_id),
+                             group_ids=[_g["a_inv"].id, _g["b_view"].id], note=tag + "_gsx_inv")
+        db.session.add(_inv)
+        db.session.commit()
+        _gsx = {k: v.id for k, v in _g.items()}
+        _gsx.update({k: v.id for k, v in _u.items()})
+        _gsx.update(cmd_id=_cmd.id, inv_id=_inv.id)
+        _dflt = Group.query.filter_by(is_default=True).first()
+        _gsx["dflt"] = _dflt.id if _dflt is not None else None
+        _gsx["dflt_before"] = ((_dflt.name, _dflt.description, _dflt.get_permissions())
+                               if _dflt is not None else None)
+
+
+def _gsx_perms(key):
+    """The effective permissions of the fixture account `key`."""
+    with app.app_context():
+        return auth.get_user_permissions(db.session.get(User, _gsx[key]))
+
+
+def _gsx_row(key):
+    """(name, description, permissions) of the fixture group `key`, or None once it is gone."""
+    with app.app_context():
+        _g = db.session.get(Group, _gsx[key])
+        return None if _g is None else (_g.name, _g.description, sorted(_g.get_permissions()))
+
+
+def _gsx_edit(client, key, perms, hosts=()):
+    """POST an edit of fixture group `key` the way the page submits it."""
+    return client.post("/groups/%d/edit" % _gsx[key],
+                       data={"name": _gsx_row(key)[0], "description": "changed",
+                             "permissions": perms, "servers": [str(h) for h in hosts]})
+
+
+def _check_group_edit_refusals():
+    """A delegated admin cannot edit a group whose members or future members they cannot administer."""
+    _dc = client_as(_gsx["dana"])
+    _grant = [auth.VIEW_SERVERS, auth.SEND_COMMAND, auth.USE_TERMINAL]
+    # 1. A group outside her reach gains use_terminal: vic, a tenant-B viewer, would get a shell on
+    #    hostB from an admin who cannot reach hostB.
+    _gsx_edit(_dc, "b_view", _grant)
+    check("group scope: a delegated admin cannot add a permission to a group outside their reach",
+          auth.USE_TERMINAL not in _gsx_perms("vic") and _gsx_row("b_view")[1] == "orig",
+          "vic now holds %s; group reads %r" % (sorted(_gsx_perms("vic")), _gsx_row("b_view")))
+    # 2. ...nor strip one: permissions=[] would take send_command off tenant B's admins.
+    _gsx_edit(_dc, "b_adm", [])
+    check("group scope: ...nor strip a permission they hold off a group outside their reach",
+          auth.SEND_COMMAND in _gsx_perms("vera"), "vera lost send_command")
+    # 2b. An out-of-reach group with NO members: only the group's own reach refuses it.
+    _gsx_edit(_dc, "b_empty", _grant)
+    check("group scope: ...nor edit an out-of-reach group that has no members yet",
+          _gsx_row("b_empty") == (tag + "_gsx_b_empty", "orig", [auth.VIEW_SERVERS]),
+          "b_empty now reads %r" % (_gsx_row("b_empty"),))
+    # 3. A group WITHIN her reach, whose member also sits in a tenant-B group: permissions are
+    #    flat, so mia would hold use_terminal on hostB.
+    _gsx_edit(_dc, "a_view", _grant, hosts=[granted_remote])
+    check("group scope: ...nor a within-reach group whose member reaches more than they do",
+          auth.USE_TERMINAL not in _gsx_perms("mia"),
+          "mia holds %s — use_terminal on hostB" % sorted(_gsx_perms("mia")))
+    # 5. An EMPTY within-reach group that a live superadmin invite names beside a tenant-B group.
+    _gsx_edit(_dc, "a_inv", _grant)
+    check("group scope: ...nor an empty group a live invite names beside an out-of-reach group",
+          _gsx_row("a_inv")[2] == [],
+          "a_inv now holds %s — the invitee would redeem it on hostB" % (_gsx_row("a_inv")[2],))
+    with app.app_context():
+        from panel.db.models import AuditLog as _GAL
+        _refused_rows = _GAL.query.filter_by(user_id=_gsx["dana"], action="edit_group",
+                                             success=False).count()
+    check("group scope: ...and each refusal is audited", _refused_rows >= 5,
+          "%d refused edit_group rows" % _refused_rows)
+    # Positive control: a group whose members she can administer still edits.
+    _gsx_edit(_dc, "a_free", _grant, hosts=[granted_remote])
+    check("group scope: an in-reach group whose members are in reach still edits (control)",
+          auth.USE_TERMINAL in _gsx_perms("alice") and _gsx_row("a_free")[1] == "changed",
+          "the edit was refused too — the checks above prove nothing (%r)" % (_gsx_row("a_free"),))
+
+
+def _check_group_edit_default_group():
+    """4. The default group, within reach of nearly every admin, with an out-of-reach member."""
+    if _gsx["dflt"] is None:
+        check("group scope: (premise) the install has a default group", False, "none found")
+        return
+    with app.app_context():
+        _dflt = db.session.get(Group, _gsx["dflt"])
+        _dflt.users.append(db.session.get(User, _gsx["vic"]))
+        db.session.commit()
+        _within = auth._group_within_reach(_dflt, auth._my_group_reach(
+            db.session.get(User, _gsx["dana"])))
+    check("group scope: (premise) the default group is within the delegated admin's reach",
+          _within, "the check below would pass on the group's own reach, not on its members")
+    _name, _desc, _perms = _gsx["dflt_before"]
+    try:
+        client_as(_gsx["dana"]).post("/groups/%d/edit" % _gsx["dflt"], data={
+            "name": _name, "description": _desc or "",
+            "permissions": sorted(set(_perms) | {auth.USE_TERMINAL, auth.SEND_COMMAND})})
+        check("group scope: ...nor the DEFAULT group, which holds every account",
+              auth.USE_TERMINAL not in _gsx_perms("vic"),
+              "vic holds %s after one POST to the default group" % sorted(_gsx_perms("vic")))
+    finally:
+        with app.app_context():
+            _dflt = db.session.get(Group, _gsx["dflt"])
+            _dflt.name, _dflt.description = _name, _desc
+            _dflt.set_permissions(_perms)
+            _dflt.users = [u for u in _dflt.users if u.id != _gsx["vic"]]
+            db.session.commit()
+
+
+def _check_group_delete_refusals():
+    """A delegated admin deletes only a group wholly within their reach, whose members they administer."""
+    from panel.db.models import Invite as _GInv
+    _dc = client_as(_gsx["dana"])
+    # 745378983: a group holding a superadmin-authored custom command dana does not hold.
+    _dc.post("/groups/%d/delete" % _gsx["cmd"])
+    with app.app_context():
+        _carl_cmds = auth.custom_command_ids(db.session.get(User, _gsx["carl"]))
+    check("group scope: a delegated admin cannot delete a group holding a command they lack",
+          _gsx_row("cmd") is not None and _gsx["cmd_id"] in _carl_cmds,
+          "the group is gone and carl lost the command")
+    _dc.post("/groups/%d/delete" % _gsx["a_mixdel"])
+    check("group scope: ...nor one whose member reaches more than they do",
+          _gsx_row("a_mixdel") is not None, "a_mixdel was deleted, stripping mia")
+    _dc.post("/groups/%d/delete" % _gsx["a_inv"])
+    with app.app_context():
+        _inv = db.session.get(_GInv, _gsx["inv_id"])
+        _inv_live = _inv is not None and _inv.revoked_at is None
+    check("group scope: ...nor one a live invite names beside an out-of-reach group",
+          _gsx_row("a_inv") is not None and _inv_live,
+          "the group was deleted, which also revoked the superadmin's invite")
+    _dc.post("/groups/%d/delete" % _gsx["a_del"])
+    check("group scope: an in-reach group with no members still deletes (control)",
+          _gsx_row("a_del") is None, "every delegated delete is refused, so the above prove nothing")
+
+
+def _check_group_scope_page_and_superadmin():
+    """The page offers Edit/Delete only where the POST allows it; a superadmin keeps both."""
+    _page = client_as(_gsx["dana"]).get("/groups").get_data(as_text=True)
+    _sa_page = client_as(admin_id).get("/groups").get_data(as_text=True)
+
+    def _has_edit(html, key):
+        return ('id="edit-group-%d"' % _gsx[key]) in html
+
+    def _has_delete(html, key):
+        return ('action="/groups/%d/delete"' % _gsx[key]) in html
+
+    check("groups page: no Edit form for a group the admin may not edit",
+          not _has_edit(_page, "b_view") and not _has_edit(_page, "a_view"),
+          "the page offers an edit the POST refuses")
+    check("groups page: ...nor a Delete button for one they may not delete",
+          (tag + "_gsx_cmdgrp") in _page and not _has_delete(_page, "cmd")
+          and not _has_delete(_page, "a_mixdel"),
+          "the page offers a delete the POST refuses (or the group is not on the page at all)")
+    check("groups page: ...while an editable group keeps both (control)",
+          _has_edit(_page, "a_free") and _has_delete(_page, "a_free"),
+          "the page offers nothing at all, so the two checks above are vacuous")
+    check("groups page: ...and a superadmin is offered Edit and Delete on every group",
+          all(_has_edit(_sa_page, k) and _has_delete(_sa_page, k)
+              for k in ("b_view", "a_view", "cmd", "a_mixdel", "a_free")),
+          "the manageable set narrowed the superadmin's page")
+    # A superadmin's edit of an out-of-reach group is not affected.
+    client_as(admin_id).post("/groups/%d/edit" % _gsx["b_view"], data={
+        "name": tag + "_gsx_b_view", "description": "sa-changed",
+        "permissions": [auth.VIEW_SERVERS], "servers": [str(other_remote)]})
+    check("group scope: a superadmin still edits any group (control)",
+          _gsx_row("b_view") == (tag + "_gsx_b_view", "sa-changed", [auth.VIEW_SERVERS]),
+          "got %r" % (_gsx_row("b_view"),))
+
+
+def _group_scope_cleanup():
+    """Remove the group-scope fixtures. The final sweep would too; this keeps later blocks clean."""
+    from panel.db.models import CustomCommand as _GCC, Invite as _GInv
+    with app.app_context():
+        _inv = db.session.get(_GInv, _gsx["inv_id"])
+        if _inv is not None:
+            db.session.delete(_inv)
+        for _k in ("dana", "vic", "vera", "mia", "alice", "carl"):
+            _u = db.session.get(User, _gsx[_k])
+            if _u is not None:
+                db.session.delete(_u)
+        db.session.commit()
+        for _g in Group.query.filter(Group.name.like(tag + "_gsx_%")).all():
+            db.session.delete(_g)
+        _c = db.session.get(_GCC, _gsx["cmd_id"])
+        if _c is not None:
+            db.session.delete(_c)
+        db.session.commit()
+
+
+def _check_group_edit_scope():
+    """745379016 / 745378983: edit and delete are scoped to groups wholly within the admin's reach."""
+    # _grantable_perms filtered WHICH permissions a delegated admin could toggle, and nothing asked
+    # WHOSE: edit_group took any group id. So an admin scoped to hostA handed use_terminal to
+    # tenant B's viewers on hostB, stripped tenant B's admins, and — through the default group,
+    # which holds every account — gave the whole install a shell in one POST. /users refuses the
+    # same change to the same people (can_administer_user); /groups did not.
+    if not (other_remote and other_id):
+        check("group scope: (premise) the fixture has a second host to be scoped out", False,
+              "the scope checks did not run")
+        return
+    _group_scope_fixtures()
+    try:
+        _check_group_edit_refusals()
+        _check_group_edit_default_group()
+        _check_group_delete_refusals()
+        _check_group_scope_page_and_superadmin()
+    finally:
+        _group_scope_cleanup()
 
 
 def _check_bulk_actions_per_id():
@@ -2310,6 +2592,7 @@ try:
     _check_permission_boxes_are_filtered()
     _check_unshowable_server_grant_survives()
     _check_empty_host_list_wording()
+    _check_group_edit_scope()
     _check_bulk_actions_per_id()
     _check_setup_endpoints_stay_shut()
     _check_healthz_before_setup()

@@ -81,11 +81,20 @@
       {% if group.description %}<span class="text-secondary small ms-2" data-no-i18n>{{ group.description }}</span>{% endif %}
     </div>
     <div>
+      {# Edit and Delete only where the POST allows them (groups.py _manageable_group_ids): a group
+         that reaches, or holds someone who reaches, beyond this admin is refused on save, so an
+         Edit form for it would be a form that cannot be submitted. The card above and below still
+         shows its members, permissions and access, so its real power stays visible. #}
+      {% set group_manageable = group.id in manageable_ids %}
+      {% if group_manageable %}
       <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="collapse"
               data-bs-target="#edit-group-{{ group.id }}">
         <i class="bi bi-pencil"></i> Edit
       </button>
-      {% if not group.is_default %}
+      {% else %}
+      <span class="text-secondary small group-locked"><i class="bi bi-lock" aria-hidden="true"></i> <span>Only a superadmin can change this group — it reaches accounts or access outside yours.</span></span>
+      {% endif %}
+      {% if group_manageable and not group.is_default %}
       <form method="POST" action="{{ url_for('delete_group', group_id=group.id) }}" style="display:inline;"
             class="ajax-form" data-ajax-refresh="#groups-list"
             data-confirm="Delete group “{{ group.name }}”? Members lose the access it grants."
@@ -150,6 +159,7 @@
   </div>
 
   <!-- Edit form (collapsible) -->
+  {% if group_manageable %}
   <div class="collapse" id="edit-group-{{ group.id }}">
     <div class="card-body border-top" style="border-color: #30363d !important;">
       <form method="POST" action="{{ url_for('edit_group', group_id=group.id) }}"
@@ -221,6 +231,7 @@
       </form>
     </div>
   </div>
+  {% endif %}
 </div>
 {% else %}
 <div class="card">
