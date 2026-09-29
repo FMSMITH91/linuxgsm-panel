@@ -911,6 +911,33 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 ### Security
 
+- **The first-run wizard now needs a one-time setup token, so a stranger can no longer take a fresh
+  install.** Until the first admin existed, anyone who reached the port could open the wizard and
+  make themselves the superadmin, which is root on the panel's host. A default install opens that
+  port itself. The operator's own browser was then sent to a login it had no account for. The same
+  caller could also join the host to *their* tailnet with Tailscale SSH on, through the wizard's
+  Tailscale endpoints (a cookie-less request with a Bearer header skipped CSRF, so one request was
+  enough). They could also make the panel test SSH connections to hosts of their choosing.
+  The installer now ends by printing the wizard's link with a token in it (`/setup?token=…`), read from
+  `data/setup_token` (0600, the panel's account). `manage.py setup-token`, or
+  `sudo linuxgsm-panel-recover setup-token`, prints it again. Until an admin exists, the wizard and
+  every `/api/setup/*` endpoint answer only a browser that has shown the token. Anyone else gets a
+  page asking for it. The token is deleted once the admin exists.
+  The Tailscale endpoints refuse everyone until then. Two "create admin" requests that raced (the
+  password hash yielded between the check and the insert) can no longer both make a superadmin. The
+  wizard now follows its own step, so a form cannot skip ahead to a later one.
+  Its "add a host" step runs the Hosts page's own checks before connecting. That step also accepted
+  `auth_method=local`, which made a remote host read as the panel's own host.
+  An install that is already set up is unaffected: the token is never needed there.
+- **The wizard's last page no longer calls a panel that is still public "Private tailnet".** The Serve
+  step stores a loopback bind, but a new bind applies only from the next start. Until then the panel
+  kept answering on its public address, and the page said only your devices could reach it. That page
+  was also never shown, because finishing redirected to the login page. It is shown now. It says
+  where the panel still answers and offers **Restart now**; nothing restarts on its own, since that
+  would cut off an operator who is not on the tailnet.
+- **Tailscale migrate and finalize refuse the panel's own host**, like the other Tailscale actions on
+  the Hosts page. They rewrite a remote's record and firewall; migrate also deletes its public
+  22/tcp rule.
 - **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported by
   kta1kri). Twenty-five places built `sudo -u <account> bash -c '…'` from a server's account
   (`short_name`) and LinuxGSM script name with neither quoting nor a check — the dashboard's own

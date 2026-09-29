@@ -14,6 +14,7 @@ Run from the panel directory with its venv (or `sudo linuxgsm-panel-recover`):
     ./venv/bin/python manage.py create-admin <username>
     ./venv/bin/python manage.py promote <username>
     ./venv/bin/python manage.py activate <username>
+    ./venv/bin/python manage.py setup-token               # the first-run wizard's link, again
 
 Run interactively with no username and you get a numbered menu of users to choose
 from. Passwords are read interactively (never echoed, never in shell history)
@@ -184,6 +185,36 @@ def cmd_create_admin(args):
         print("Superadmin '%s' created." % args.username)
 
 
+def cmd_setup_token(args):
+    """Print the first-run wizard's one-time setup token, creating it if there is none yet.
+
+    Until the first admin exists the wizard answers only to a browser that shows this token, so
+    the operator — who can read this host's data dir — is the one who creates that admin, not
+    whoever reaches the port first. The installer runs this and prints the link it makes. Refused
+    once setup has an administrator: from then on the token opens nothing, and it is deleted.
+    """
+    from app import _retire_setup_token, _setup_open, _superadmin_exists
+    from panel.core.config import SETUP_TOKEN_FILE, ensure_setup_token
+    with app.app_context():
+        if not _setup_open() or _superadmin_exists():
+            _retire_setup_token()
+            sys.exit("Setup already has an administrator, so there is no setup token — sign in "
+                     "instead (manage.py reset-password if you have lost the password).")
+        tok = ensure_setup_token()
+    if not tok:
+        sys.exit("Could not create or read %s — check that this runs as the panel's own account."
+                 % SETUP_TOKEN_FILE)
+    if getattr(args, "raw", False):
+        print(tok)
+        return
+    from panel.core.config import load_config
+    cfg = load_config()
+    scheme = "https" if cfg.get("use_https", True) else "http"
+    print("Open the setup wizard with this link, using this server's address:")
+    print("    %s://<this-server>:%s/setup?token=%s" % (scheme, cfg.get("port", 5000), tok))
+    print("or open /setup and paste the token:  %s" % tok)
+
+
 def cmd_disable_2fa(args):
     with app.app_context():
         username = _resolve_username(args.username, default_sole_admin=False)
@@ -237,6 +268,10 @@ def main():
     cp.add_argument("username")
     cp.add_argument("--password")
     cp.set_defaults(func=cmd_create_admin)
+
+    st = sub.add_parser("setup-token", help="Print the first-run setup wizard's one-time token")
+    st.add_argument("--raw", action="store_true", help="Print only the token (for scripts)")
+    st.set_defaults(func=cmd_setup_token)
 
     dp2 = sub.add_parser("disable-2fa", help="Turn off a user's two-factor auth (menu if no username)")
     dp2.add_argument("username", nargs="?", help="Omit for a numbered menu")

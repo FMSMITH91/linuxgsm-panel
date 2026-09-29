@@ -13,6 +13,12 @@ from panel.security import privileged as _priv
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from app import (_refuse_on_panel_host)
 
+# Why migrate and finalize refuse the panel host. Not the generic "it would reboot the panel": they
+# reboot nothing. They are the steps after a REMOTE joins the tailnet, and they rewrite that host's
+# record and firewall (migrate deletes its public 22/tcp rule).
+_NOT_A_REMOTE_JOIN = ("it rewrites a joined remote's host record and firewall, and the panel's own "
+                      "host joins the tailnet from its own Tailscale page")
+
 
 def register(app):
     _register_status_and_link_join(app)
@@ -81,6 +87,12 @@ def _register_finalize_and_install(app):
     def api_remote_tailscale_finalize(remote_id):
         """After a node joins the tailnet, allow tailscale0 in UFW and report status."""
         remote = get_remote(remote_id)
+        # The host-kind check the other Tailscale routes here carry. This one changes a firewall,
+        # and the panel host's own tailscale0 rule belongs to its own Tailscale page
+        # (allow_tailscale_ufw), not to a remote's post-join step.
+        refused = _refuse_on_panel_host(remote, "Tailscale finalize", _NOT_A_REMOTE_JOIN)
+        if refused:
+            return refused
         try:
             status, log = remote_tailscale_finalize(remote)
             # Opens tailscale0 in the remote's UFW — a firewall change, and the only one of this
@@ -183,6 +195,12 @@ def _register_key_join_and_migrate(app):
     def api_remote_tailscale_migrate(remote_id):
         """After bootstrapping, migrate the RemoteServer record to use Tailscale SSH."""
         remote = get_remote(remote_id)
+        # Moves the host record onto Tailscale SSH and then deletes the host's public 22/tcp rule.
+        # For the panel host that is its own firewall, and the record does not decide where its
+        # commands run (is_local does) — nothing about it is a remote's migration.
+        refused = _refuse_on_panel_host(remote, "Tailscale migration", _NOT_A_REMOTE_JOIN)
+        if refused:
+            return refused
         try:
             new_host, status = remote_migrate_to_tailscale(remote)
             if not new_host:

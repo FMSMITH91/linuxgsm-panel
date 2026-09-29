@@ -104,7 +104,7 @@ from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, client_
     get_user_permissions, init_auth, log_action, strip_legacy_superadmin_grants)
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
-    encrypt_secret, is_encrypted, harden_data_permissions,
+    encrypt_secret, is_encrypted, harden_data_permissions, read_setup_token, remove_setup_token,
 )
 from panel.services import notifications
 # The two chat bots. They import nothing from app.py — every dependency they have comes from
@@ -1251,6 +1251,11 @@ def create_app():
     # DB exists — keeps them unreachable by other local users. Idempotent; tightens old installs too.
     harden_data_permissions()
     _setup_auth_log()   # failed logins → data/auth.log for the optional fail2ban jail
+    try:
+        with app.app_context():
+            _retire_setup_token()    # a token left over from a wizard that has an admin now
+    except Exception:
+        _log.debug("setup token check skipped", exc_info=True)
 
     # CSRF protection for every state-changing request. Forms carry a hidden token
     # (auto-injected in base.html); the JSON API sends it as an X-CSRFToken header
@@ -1833,9 +1838,9 @@ def is_setup_complete():
     return SetupState.query.filter_by(complete=True).first() is not None
 
 # ── Setup-only Tailscale endpoints ─────────────────────────
-# No login exists yet during setup, so these are unauthenticated BUT usable ONLY
-# while setup is unfinished (they're a no-op/forbidden once complete, same as the
-# wizard itself). They operate on THIS host only.
+# No login exists yet during setup, so these carry no @login_required. They are usable ONLY while
+# setup is unfinished (forbidden once complete, same as the wizard itself), ONLY once the admin
+# exists, and only by the browser that created it (_setup_ts_ok). They operate on THIS host only.
 def _setup_open():
     # The SAME DB-row-only lock the wizard uses, and for the same reason — see the long
     # comment on setup_wizard() above, which describes this exact failure and then only
@@ -1874,23 +1879,70 @@ def issue_setup_owner_token(data):
     return token
 
 
+def _superadmin_exists():
+    return User.query.filter_by(is_superadmin=True).first() is not None
+
+
+def claim_setup(candidate):
+    """Does `candidate` match the setup token? If so, this browser may run the wizard.
+
+    Stores the token's HASH in the session, never the token, and compares hashes so the two sides
+    are always the same length and ASCII (compare_digest raises on non-ASCII str). An absent or
+    unreadable token file matches nothing."""
+    import hmac
+    want = read_setup_token()
+    if not want or not candidate:
+        return False
+    if not hmac.compare_digest(_setup_owner_hash(str(candidate).strip()), _setup_owner_hash(want)):
+        return False
+    session["_setup_claim"] = _setup_owner_hash(want)
+    return True
+
+
+def _setup_claimed():
+    """Has this browser shown the CURRENT setup token (claim_setup)?"""
+    import hmac
+    claim = session.get("_setup_claim") or ""
+    if not isinstance(claim, str) or not claim.isascii():
+        return False
+    want = read_setup_token()
+    return bool(claim and want) and hmac.compare_digest(claim, _setup_owner_hash(want))
+
+
+def _retire_setup_token():
+    """Delete the setup token once it can no longer open anything: setup has finished, or an admin
+    exists (from here the wizard answers to that admin — see _setup_owner_ok).
+
+    The wizard deletes it itself when it creates the admin; this covers the rest — `manage.py
+    create-admin` mid-wizard, an interrupted update, a copy restored by hand. Needs an app context."""
+    if not _setup_open() or _superadmin_exists():
+        if remove_setup_token():
+            _log.info("setup token deleted: setup already has an administrator")
+
+
 def _setup_owner_ok():
-    """May THIS caller drive the wizard past the admin step?
+    """May THIS caller drive the wizard?
 
-    _setup_open() only says the wizard has not finished. From the moment the admin is created until
-    the last step, that left it open to anyone who could reach the port — and the steps in that
-    window are the dangerous ones: /api/setup/tailscale/up joins this host to the CALLER's tailnet
-    with Tailscale SSH on (a root shell under the default policy) and hands them the auth URL,
-    /install runs the installer as root, step=welcome rewrites the bind and port, and
-    step=remote_server makes the panel SSH to a host of their choosing. The operator already has
-    an account at that point and reasonably believes the install is theirs.
+    _setup_open() only says the wizard has not finished. Before the first admin exists the wizard IS
+    the panel — step 2 makes whoever submits it the superadmin, which is root on this host — and it
+    was open to anyone who could reach the port: a default install opens that port itself and
+    prints that "the first visit runs the setup wizard". Whoever got there first took the install,
+    and the operator's own browser was then sent to a login it had no account for.
 
-    So once a superadmin exists, the caller must be the browser that created it (the token issued
-    then) or be signed in as a superadmin — which is also the way back in for an operator who
-    lost that session: /login stays reachable in this window (check_setup). Before any
-    superadmin exists the first-run steps are open by necessity, exactly as before."""
-    if User.query.filter_by(is_superadmin=True).first() is None:
-        return True
+    So before any superadmin exists the caller must have shown the one-time setup token
+    (claim_setup) — a secret the installer prints in the operator's own terminal, from a file only
+    the panel's account can read (`manage.py setup-token` prints it again). It gates /setup and
+    every /api/setup/* route alike, because they all ask this.
+
+    From the moment the admin is created until the last step, the caller must be the browser that
+    created it (the owner token issued then) or be signed in as a superadmin — which is also the
+    way back in for an operator who lost that session: /login stays reachable in this window
+    (check_setup). The steps in that window are the dangerous ones: /api/setup/tailscale/up joins
+    this host to the CALLER's tailnet with Tailscale SSH on (a root shell under the default policy)
+    and hands them the auth URL, /install runs the installer as root, step=welcome rewrites the
+    bind and port, and step=remote_server makes the panel SSH to a host of their choosing."""
+    if not _superadmin_exists():
+        return _setup_claimed()
     try:
         if current_user.is_authenticated and current_user.is_superadmin:
             return True
@@ -1905,6 +1957,15 @@ def _setup_owner_ok():
     except (ValueError, TypeError, AttributeError):
         want = ""
     return bool(token and want) and hmac.compare_digest(_setup_owner_hash(token), want)
+
+
+def _setup_ts_ok():
+    """May this caller use the wizard's Tailscale endpoints (/api/setup/tailscale/*)?
+
+    Only from step 3 on: the page that calls them renders after the admin exists, so nothing
+    legitimate needs them earlier — and before then a browser holding the setup token is still not
+    an account. An admin made with `manage.py create-admin` reaches the step by signing in."""
+    return _setup_open() and _superadmin_exists() and _setup_owner_ok()
 
 # ── Account / Two-factor auth ───────────────────────────
 def _qr_svg(data):
@@ -2109,7 +2170,7 @@ def _pro_status_cached(remote, force=False):
         return dict(cached["data"], unreadable=True, stale=True)
     return data
 
-def _refuse_on_panel_host(remote, what):
+def _refuse_on_panel_host(remote, what, why=None):
     """A JSON 400 when a VPS-PREPARATION action is aimed at the panel's own host, else None.
 
     get_remote() already enforces WHICH hosts a user may touch. This is the other axis: WHICH
@@ -2121,15 +2182,18 @@ def _refuse_on_panel_host(remote, what):
 
     manage_remotes.html already hides all three for the local host. This is the server-side
     half of that: a UI-only restriction on a destructive privileged action is not a
-    restriction — the route still accepted a POST with the local host's id."""
+    restriction — the route still accepted a POST with the local host's id.
+
+    `why` replaces the reboot reason for an action that does not reboot anything (the Tailscale
+    migration and finalize), so the refusal does not state something untrue about it."""
     if not is_local_server(remote):
         return None
     _log.warning("refused %s aimed at the panel's own host (remote_id=%s)", what, remote.id)
     return jsonify({
         "success": False,
-        "message": ("%s prepares a REMOTE VPS and can't target the panel's own host — it "
-                    "would reboot the panel mid-request. Use the panel's own pages for "
-                    "updates, firewall and Tailscale." % what),
+        "message": ("%s prepares a REMOTE VPS and can't target the panel's own host — %s. Use the "
+                    "panel's own pages for updates, firewall and Tailscale."
+                    % (what, why or "it would reboot the panel mid-request")),
     }), 400
 
 # ── Scheduled tasks (cron) for the game user ──
@@ -2784,6 +2848,9 @@ if __name__ == "__main__":
     # Tailscale Serve is up to proxy to it, otherwise 0.0.0.0 so the first-run setup wizard is
     # reachable over the network on a plain VPS. The SAME answer _effective_https reads.
     host = _resolved_bind(cfg)
+    # What this process really listens on, for pages that must not claim more than that: the
+    # wizard's complete page (a stored loopback bind applies only from the next start).
+    app.config["_BOOT_BIND"] = host
     _scheme = "https" if _effective_https(cfg) else "http"
     print(f"LinuxGSM Panel starting on {host}:{port}")
     print(f"Open {_scheme}://{host}:{port} in your browser")

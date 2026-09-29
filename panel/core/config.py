@@ -232,6 +232,77 @@ def get_secret_key():
         return f.read().strip()
 
 
+# ── The first-run wizard's one-time setup token ──
+# Until the first admin exists the wizard is the whole panel, and it used to be open to whoever
+# reached the port first — a default install opens that port itself. The operator is the one person
+# who can read this host's data dir (the installer runs in their terminal), so the wizard answers
+# only to a browser that has shown the token in this file. `manage.py setup-token` writes it and the
+# installer prints the link carrying it; the app deletes it once the first admin exists. See
+# app._setup_owner_ok for the gate itself.
+SETUP_TOKEN_FILE = DATA_DIR / "setup_token"
+
+
+def read_setup_token():
+    """The current setup token, or "" when there is none (or it cannot be read).
+
+    "" is never a token: the gate compares only when this is non-empty, so an unreadable file
+    locks the wizard rather than opening it.
+    """
+    try:
+        return SETUP_TOKEN_FILE.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        return ""
+
+
+def ensure_setup_token():
+    """Return the setup token, creating data/setup_token (0600) first when there is none.
+
+    The file appears with its content already in it: written to a private temp file and then
+    hard-linked into place, which fails when the name exists. So two creators at once (the service
+    and `manage.py setup-token`, which the installer runs) agree on ONE token, and nobody ever reads
+    a half-written one. A file that exists but is empty or unreadable is replaced.
+    """
+    tok = read_setup_token()
+    if tok:
+        return tok
+    import secrets
+    fd, tmp = tempfile.mkstemp(dir=str(DATA_DIR), prefix=".setup_token.")   # 0600, owner only
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as f:
+            f.write(secrets.token_urlsafe(24) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp, SETUP_TOKEN_FILE)
+        except FileExistsError:
+            if not read_setup_token():          # there, but empty or unreadable: replace it
+                os.replace(tmp, SETUP_TOKEN_FILE)
+        except OSError:
+            # A filesystem without hard links: an atomic rename instead. It can replace a token a
+            # concurrent creator has just written, which only means the one printed last is valid.
+            os.replace(tmp, SETUP_TOKEN_FILE)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass            # already renamed into place
+        except OSError:
+            _log.debug("ensure_setup_token: temp file not removed", exc_info=True)
+    return read_setup_token()
+
+
+def remove_setup_token():
+    """Delete the setup token; it is single-use. Returns whether one was there."""
+    try:
+        SETUP_TOKEN_FILE.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        _log.warning("could not delete %s; delete it by hand", SETUP_TOKEN_FILE, exc_info=True)
+        return False
+
+
 # ── Encryption for secrets stored in the DB (remote SSH passwords/key paths) ──
 CRED_KEY_FILE = DATA_DIR / "cred_key"
 _ENC_PREFIX = "enc:v1:"
@@ -317,7 +388,7 @@ def harden_data_permissions():
     failure (e.g. odd filesystem) is logged, never fatal.
     """
     targets = [(DATA_DIR, 0o700), (DB_PATH, 0o600), (CONFIG_FILE, 0o600),
-               (SECRET_FILE, 0o600), (CRED_KEY_FILE, 0o600),
+               (SECRET_FILE, 0o600), (CRED_KEY_FILE, 0o600), (SETUP_TOKEN_FILE, 0o600),
                # SQLite's WAL/SHM side files carry the same rows as the DB.
                (Path(str(DB_PATH) + "-wal"), 0o600), (Path(str(DB_PATH) + "-shm"), 0o600),
                # ...and so do the rolling known-good backup and any copy moved aside after

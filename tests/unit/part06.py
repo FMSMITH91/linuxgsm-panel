@@ -3455,6 +3455,60 @@ try:
     check("install.sh: the URL banner says so when the firewall state is unknown",
           'UFW_READ}" -eq 0' in _su_txt and "firewall state unknown" in _su_txt)
 
+    # ── the banner's link carries the setup token, read as the panel's account ────────────────
+    # Until the first admin exists the wizard answers only to a browser holding this token, so the
+    # link the operator is handed must carry it. Run for real: manage.py is a stand-in that says
+    # who ran it; sudo and id are shims, so nothing here escalates.
+    _stk_fn = _su_between("setup_link_token() {", "\n}\n")
+    _stk_dir = _tempfile.mkdtemp(prefix="setuptoken-")
+    try:
+        os.makedirs(os.path.join(_stk_dir, "venv", "bin"))
+        _stk_py = os.path.join(_stk_dir, "venv", "bin", "python")
+        with open(_stk_py, "w", encoding="utf-8") as _fh:
+            _fh.write('#!/bin/bash\n[ "$2" = setup-token ] && [ "$3" = --raw ] || exit 9\n'
+                      'echo "noise on stdout first" ; cat "$STK_OUT"; exit "${STK_RC:-0}"\n')
+        os.chmod(_stk_py, 0o700)
+        _stk_out = os.path.join(_stk_dir, "out")
+        _stk_as = os.path.join(_stk_dir, "as")      # who the sudo shim ran it as
+
+        def _stk_who():
+            return open(_stk_as, encoding="utf-8").read() if os.path.exists(_stk_as) else ""
+
+        def _stk_run(printed, rc=0, uid=0, user="lgsmpanel"):
+            with open(_stk_out, "w", encoding="utf-8") as _fh:
+                _fh.write(printed)
+            if os.path.exists(_stk_as):
+                os.unlink(_stk_as)
+            _env = ("PANEL_DIR=%s\nPANEL_USER=%s\nexport STK_OUT=%s STK_RC=%d STK_AS=%s\n"
+                    % (_su_shlex.quote(_stk_dir), user, _su_shlex.quote(_stk_out), rc,
+                       _su_shlex.quote(_stk_as)))
+            _shim = ("id() { echo %d; }\n"
+                     "sudo() { [ \"$1\" = -u ] || return 7; echo \"AS=$2\" >>\"$STK_AS\"; "
+                     "shift 2; \"$@\"; }\n" % uid)
+            return _su_run(_stk_fn + '\nprintf "TOK=[%s]" "$(setup_link_token)"\n', _env,
+                           extra=_shim)
+        _good = "Abc_def-" + "x" * 24
+        _r = _stk_run(_good + "\n")
+        check("install.sh: the banner's setup token comes from manage.py, as the PANEL's account",
+              ("TOK=[%s]" % _good) in _r.stdout and _stk_who() == "AS=lgsmpanel\n",
+              repr((_r.stdout[-120:], _stk_who())))
+        _r = _stk_run(_good + "\n", uid=1000, user="alice")
+        check("install.sh: ...and a non-root install runs it as itself, with no sudo",
+              ("TOK=[%s]" % _good) in _r.stdout and _stk_who() == "",
+              repr((_r.stdout[-120:], _stk_who())))
+        _r = _stk_run("Setup already has an administrator\n", rc=1)
+        check("install.sh: an install that already has an admin prints no token (plain address)",
+              "TOK=[]" in _r.stdout, repr(_r.stdout[-120:]))
+        _r = _stk_run("\x1b]0;owned\x07" + _good + "\n")
+        check("install.sh: ...and anything that is not a bare token never reaches root's terminal",
+              "TOK=[]" in _r.stdout and "\x1b" not in _r.stdout, repr(_r.stdout[-120:]))
+    finally:
+        _shutil.rmtree(_stk_dir, ignore_errors=True)
+    _banner = _su_between('SETUP_TOKEN="$(setup_link_token)"', "sudo linuxgsm-panel-recover setup-token")
+    check("install.sh: every URL the banner prints carries the setup path",
+          _banner.count("${PORT}${SETUP_PATH}${NC}") == 4 and 'SETUP_PATH="/setup?token=${SETUP_TOKEN}"'
+          in _banner, _banner[:200])
+
     # ── uninstall.sh must not report work it did not do ──────────────────────────────────────
     _un_txt = open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read()
 
@@ -4382,6 +4436,8 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # login_required: creating your own account is the whole point of the link.
 # 212, was 211: /account/profile is a genuinely new view — it lets someone change their OWN
 # display name, which previously only an admin could do through Manage Users.
+# 224, was 223: /setup/restart is a genuinely new view — the finished wizard's "Restart now", which
+# applies a loopback bind the Serve step stored for the next start. Owner-only (_setup_owner_ok).
 # 223, was 222: /terminal/<id> is a genuinely new view — an interactive shell on a host, behind
 # its own USE_TERMINAL permission rather than MANAGE_REMOTES, because a shell is every capability
 # the session's account has at once and should be granted on purpose.
@@ -4389,8 +4445,8 @@ check("register_routes: helper closures inside it <= %d (currently %d)"
 # password is held on until it sets its own). This total exists to catch a view VANISHING during a
 # move, so adding one is a deliberate bump — and url_map_baseline.json's diff is the record of what
 # the new route actually is.
-check("register_routes: every one of the 223 views is still accounted for",
-      len(_rr_views) + _MOVED_VIEWS == 223,
+check("register_routes: every one of the 224 views is still accounted for",
+      len(_rr_views) + _MOVED_VIEWS == 224,
       "views inside=%d, moved out=%d" % (len(_rr_views), _MOVED_VIEWS))
 # These two use current_app, which only equals the closed-over `app` inside a request — every
 # caller is a view, so that holds. If they drift back inside a closure, the reasoning stops being

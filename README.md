@@ -46,7 +46,9 @@ curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/insta
    whatever their own account already has is what applies.
 7. Serves HTTPS with a built-in self-signed cert (a trusted Tailscale Serve cert is offered in the wizard), then **reboots**.
 
-Then finish in the browser: open **`https://your-server:5000`** (`http://` won't load — it's TLS-only), accept the one-time cert warning (**Advanced → Proceed**), and the **setup wizard** creates your first super admin.
+Then finish in the browser: open **the link the installer prints at the end** — `https://your-server:5000/setup?token=…` (`http://` won't load — it's TLS-only) — accept the one-time cert warning (**Advanced → Proceed**), and the **setup wizard** creates your first super admin.
+
+The token in that link is what makes the install yours. Until the first admin exists the wizard answers only to a browser that has shown it, so nobody else who reaches the port first can create that account. It is single-use: it is deleted once the admin exists. Lost the link? `sudo linuxgsm-panel-recover setup-token` prints it again (or open `/setup` and paste the token).
 
 ### Updating
 
@@ -166,7 +168,7 @@ Stored in `data/config.json` after the setup wizard. Key settings:
 | `remember_days` | 3 | "Remember me" cookie lifetime |
 | `ssh_timeout` | 10 | SSH connection timeout (seconds) |
 
-Branding (site name, accent colour, login tagline), the default UI language for new users, the session timeouts and protection level, and the brute-force auto-block threshold are editable in-app at **Administration → Settings** (superadmin) and apply live. Network keys (`port`, `bind_host`, `trust_proxy`) stay in `config.json` since changing them can't safely be done from the web.
+Branding (site name, accent colour, login tagline), the default UI language for new users, the session timeouts and protection level, and the brute-force auto-block threshold are editable in-app at **Administration → Settings** (superadmin) and apply live. The panel's `port` and `bind_host` are changed at **Server management → Panel binding** (superadmin), which also updates the firewall and restarts the panel; `trust_proxy` stays in `config.json`.
 
 ## Permissions
 

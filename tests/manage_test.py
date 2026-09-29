@@ -25,11 +25,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from panel.core.config import DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE  # noqa: E402
+from panel.core.config import DATA_DIR, DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE  # noqa: E402
 
 if DB_PATH.exists():
     print("SKIP: %s already exists — this only runs against a throwaway DB." % DB_PATH)
     sys.exit(0)
+
+_TOKEN_FILE = DATA_DIR / "setup_token"   # what `manage.py setup-token` writes
 
 # panel.db.backup is in here, and it is the one that matters. It is not scratch: models.
 # _ensure_db_healthy keeps it as the rolling KNOWN-GOOD copy and restores from it when the live
@@ -40,7 +42,7 @@ if DB_PATH.exists():
 # panel.db EXISTS, so the only state in which they run and the backup is present is "the live
 # database is missing and this copy is the last one left". The WAL/SHM pair is here for the same
 # reason — they hold committed pages the main file may not have yet.
-_PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE,
+_PREEXISTING = {p for p in (SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE, _TOKEN_FILE,
                             DB_PATH.with_name("panel.db.backup"),
                             DB_PATH.with_name("panel.db-wal"),
                             DB_PATH.with_name("panel.db-shm")) if p.exists()}
@@ -114,7 +116,7 @@ def cleanup():
         pass
     if _CFG_BACKUP is not None:
         CONFIG_FILE.write_bytes(_CFG_BACKUP)
-    for p in (DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE,
+    for p in (DB_PATH, SECRET_FILE, CRED_KEY_FILE, CONFIG_FILE, _TOKEN_FILE,
               DB_PATH.with_name("panel.db-wal"), DB_PATH.with_name("panel.db-shm"),
               DB_PATH.with_name("panel.db.backup")):
         if p not in _PREEXISTING and p.exists():
@@ -129,8 +131,52 @@ def cleanup():
             pass
 
 
+def _run_setup_token(raw=True):
+    """(exited, message, stdout) of `manage.py setup-token [--raw]`."""
+    import contextlib
+    import io
+    _out = io.StringIO()
+    with contextlib.redirect_stdout(_out):
+        exited, msg = raises_exit(manage.cmd_setup_token, Args(raw=raw))
+    return exited, msg, _out.getvalue()
+
+
 try:
+    # ── 0. The first-run wizard's setup token ─────────────────────────────────────────────────
+    # Before the first admin exists the wizard answers only to a browser that shows this token;
+    # the installer runs this command (as the panel's account) and prints the link it makes.
+    # Nothing is seeded yet, so this is a fresh install.
+    if _TOKEN_FILE.exists() and _TOKEN_FILE not in _PREEXISTING:
+        _TOKEN_FILE.unlink()
+    _ex, _msg, _tok1 = _run_setup_token()
+    _tok1 = _tok1.strip()
+    import re as _re
+    check("setup-token: on a fresh install it prints a token", not _ex and
+          bool(_re.fullmatch(r"[A-Za-z0-9_-]{32,}", _tok1)), "%r %r" % (_msg, _tok1))
+    check("setup-token: ...and writes it to data/setup_token, owner-only (0600)",
+          _TOKEN_FILE.exists() and _TOKEN_FILE.read_text().strip() == _tok1
+          and (_TOKEN_FILE.stat().st_mode & 0o777) == 0o600,
+          oct(_TOKEN_FILE.stat().st_mode & 0o777) if _TOKEN_FILE.exists() else "no file")
+    _ex, _msg, _tok2 = _run_setup_token()
+    check("setup-token: run again it prints the SAME token (the link already printed still works)",
+          not _ex and _tok2.strip() == _tok1, "%r vs %r" % (_tok2.strip(), _tok1))
+    _ex, _msg, _human = _run_setup_token(raw=False)
+    check("setup-token: without --raw it prints the /setup?token= link",
+          not _ex and ("/setup?token=" + _tok1) in _human, _human[:200])
+    # An empty file (a truncated write, a full disk) is not a token: it is replaced, not printed.
+    _TOKEN_FILE.write_text("", encoding="ascii")
+    _ex, _msg, _tok3 = _run_setup_token()
+    check("setup-token: an empty token file is replaced with a real token",
+          not _ex and bool(_re.fullmatch(r"[A-Za-z0-9_-]{32,}", _tok3.strip()))
+          and _TOKEN_FILE.read_text().strip() == _tok3.strip(), "%r" % _tok3)
+
     admin_id = seed(username="cli_admin", admin=True)
+
+    # Once an admin exists the token opens nothing — refused, and the file is deleted.
+    _ex, _msg, _out = _run_setup_token()
+    check("setup-token: refused once setup has an administrator", _ex and not _out.strip()
+          and "administrator" in _msg, "%r %r" % (_msg, _out))
+    check("setup-token: ...and the leftover token file is deleted", not _TOKEN_FILE.exists())
     seed(username="cli_user", admin=False)
 
     # ── 1. The lock-out guard ─────────────────────────────────────────────────────────────────
