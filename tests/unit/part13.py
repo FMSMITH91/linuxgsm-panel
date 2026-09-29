@@ -3465,7 +3465,9 @@ try:
         _pl_nest10 = _sqlite_pl10.connect(_pl_path10, timeout=0)
         _pl_nest10.execute("BEGIN IMMEDIATE")
         _pl_t0_10 = time.monotonic()
-        _pl_nest_r10 = _try10(_sm_core._pinlock_poll, _pl_nest10, time.monotonic() + _PL_TIMEOUT10)
+        # getattr: a tree without the helper fails this check by name, not the part.
+        _pl_nest_r10 = _try10(getattr(_sm_core, "_pinlock_poll", None), _pl_nest10,
+                              time.monotonic() + _PL_TIMEOUT10)
         _pl_nest_t10 = time.monotonic() - _pl_t0_10
         _pl_nest10.rollback()
         _pl_nest10.close()

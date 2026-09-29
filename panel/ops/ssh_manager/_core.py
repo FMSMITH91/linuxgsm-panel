@@ -1202,8 +1202,8 @@ def _pinlock_take(sess):
     SQLite waits out a lock in C: its busy handler sleeps in the calling OS thread, and under
     eventlet every green thread shares that one, so the whole hub stopped for the busy timeout
     (15 s) — the console, every request, and whoever held the lock. When that holder was a green
-    thread, which it is whenever the lock is this process's own, it could not commit during the
-    wait, so the pin failed at the end of it anyway. Measured: a request holding a write while it
+    thread (another request, a background loop, the pool's caller), it could not commit during
+    the wait, so the pin failed at the end of it anyway. Measured: a request holding a write while it
     waited on a worker's first contact froze the hub for the full timeout, and so did one that
     would have committed 0.5 s later. So the busy timeout is set to 0 for the attempt, and the
     wait is a green sleep between attempts — as long in all as the timeout the connection was
