@@ -4382,6 +4382,18 @@ check(_un_fn and "d.warn ? 'warning' : 'success'" in _un_fn,
       "uninstall: a reply with warn=true is toasted as a warning, not a green success",
       (_un_fn or "(could not find doUninstall)")[:200])
 
+
+# SonarCloud javascript:S9383 (PR #369): the post-restart update-log read ended in .then(finish), so
+# a finish that threw was an unhandled rejection and the "Restarting…" line stayed up for good.
+_ul_src = _js_code_only((ROOT / "static" / "js" / "remote_manage_host.js").read_text(encoding="utf-8"))
+_ul_at = _ul_src.find("fetch(MOUNT+'/api/panel/update-log')")
+_ul_fin = _ul_src.find(".then(finish)", _ul_at) if _ul_at >= 0 else -1
+# From .then(finish) to the next ';' — the statement's end when nothing handles finish failing.
+_ul_after = _ul_src[_ul_fin:_ul_src.find(";", _ul_fin)] if _ul_fin >= 0 else ""
+check(_ul_fin >= 0 and ".catch(" in _ul_after,
+      "panel update: the post-restart log read handles a failure AFTER finish, not only before it",
+      _ul_after[:160] or "(could not find the update-log read)")
+
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)
 skipped = [(name, detail) for c, name, detail in results if c is None]

@@ -469,7 +469,9 @@ function watchPanelRestart(beforeBoot, msg, doneLabel, before, targetBranch){
           }
         };
         fetch(MOUNT+'/api/panel/update-log').then(function(r){ return r.ok?r.json():null; })
-          .catch(function(){ return null; }).then(finish);
+          .catch(function(){ return null; }).then(finish)
+          // finish itself failing must not leave "Restarting…" up for good with nothing said.
+          .catch(function(){ msg.textContent='The panel restarted — reload the page to see its state.'; });
       }
     }).catch(function(){ if(!restarted){ restarted=true; msg.innerHTML='<span class="text-warning"><i class="bi bi-arrow-repeat"></i> Restarting the panel…</span>'; } });
     if(tries>120){ clearInterval(iv); msg.innerHTML='<span class="text-warning">Still working — reload the page to check.</span>'; }
