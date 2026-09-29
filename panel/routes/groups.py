@@ -125,7 +125,14 @@ def register(app):
         if _refused is not None:
             return _refused
         new_name = (request.form.get("name") or group.name or "").strip() or group.name
-        _nerr = _rename_problem(group, new_name)
+        # Group.name is unique=True, so a rename onto an existing name raises IntegrityError at
+        # commit — a 500 for what is just a typo. add_group has always checked this; the edit path
+        # never did.
+        if _rename_taken(group, new_name):
+            return _form_err(f"Group '{new_name}' already exists.", "manage_groups")
+        # Checked only when the name CHANGES, as a user rename is: a group stored before the check
+        # existed can still have its permissions edited.
+        _nerr = group_name_problem(new_name) if new_name != group.name else None
         if _nerr:
             return _form_err(_nerr, "manage_groups")
         group.name = new_name
@@ -266,18 +273,9 @@ def _refuse_unmanageable(group, action, why):
                      "manage_groups", code=403)
 
 
-def _rename_problem(group, new_name):
-    """Why `group` may not be renamed to `new_name`, or None when it may (or the name is unchanged)."""
-    if new_name == group.name:
-        # Checked only when the name CHANGES, as a user rename is: a group stored before the name
-        # check existed can still have its permissions edited.
-        return None
-    # Group.name is unique=True, so a rename onto an existing name raises IntegrityError at
-    # commit — a 500 for what is just a typo. add_group has always checked this; the edit path
-    # never did.
-    if Group.query.filter_by(name=new_name).first():
-        return f"Group '{new_name}' already exists."
-    return group_name_problem(new_name)
+def _rename_taken(group, new_name):
+    """Whether renaming `group` to `new_name` would land on another group's name."""
+    return new_name != group.name and Group.query.filter_by(name=new_name).first() is not None
 
 
 def _apply_group_reach(group):

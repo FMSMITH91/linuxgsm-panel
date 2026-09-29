@@ -4298,6 +4298,35 @@ _bandit_flags = " ".join(l.strip() for l in _bandit_src.splitlines()
                          if "FLAGS=" in l or "bandit -r" in l)
 check("coverage: panel-helper is bandit-scanned (bandit -r . globs *.py and would miss it)",
       "-r ." in _bandit_flags and "tools/panel-helper" in _bandit_flags, _bandit_flags[:140])
+
+# ── No source file carries a literal bidi control, zero-width or line-separator character ──────
+# They make a line read differently from how it runs ("Trojan Source", CVE-2021-42574), and a test
+# that needs one can always spell it as an escape. Two literal U+202E in smoke_test.py's
+# control-character checks failed SonarCloud's security gate (text:S6389) on PR #369, which no
+# local check would have caught. Vendored third-party files are not ours to rewrite.
+_invis_re = re.compile("[\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069]")
+_invis_ext = (".py", ".js", ".html", ".css", ".scss", ".sh", ".md", ".yml", ".yaml", ".json",
+              ".txt", ".toml", ".cfg", ".in", ".service", ".conf")
+_invis_hits = []
+for _dp, _dns, _fns in os.walk(_root):
+    _dns[:] = [_d for _d in _dns if _d not in (".git", ".claude", ".venv", "venv", "node_modules",
+                                               "data", "__pycache__", "vendor")]
+    for _fn in _fns:
+        _fp = os.path.join(_dp, _fn)
+        if not (_fn.endswith(_invis_ext) or os.path.relpath(_fp, _root) == os.path.join(
+                "tools", "panel-helper")):
+            continue
+        try:
+            _ftext = open(_fp, encoding="utf-8").read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for _ln, _line in enumerate(_ftext.splitlines(), 1):
+            _m = _invis_re.search(_line)
+            if _m:
+                _invis_hits.append("%s:%d U+%04X" % (os.path.relpath(_fp, _root), _ln,
+                                                     ord(_m.group())))
+check("source: no literal bidi control, zero-width or line-separator character (use an escape)",
+      not _invis_hits, "; ".join(_invis_hits[:5]))
 # ...and the errors[] guard: a file bandit cannot PARSE contributes zero results and exits 0, so
 # without this the module holding the privilege boundary could be reported clean for not being
 # read at all. Proven by execution with a syntax error injected into system_ops.py.

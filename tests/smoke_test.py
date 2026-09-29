@@ -1479,12 +1479,12 @@ try:
     import panel.core.validation as _valmod
     _unp = _valmod.username_problem
     _gnp = getattr(_valmod, "group_name_problem", lambda _n: None)   # absent before the fix
-    for _nm in ("a\x1bb", "a‮b", "a\x9bb", "a\x07b", "ab​c", "a\x00b"):
+    for _nm in ("a\x1bb", "a\u202eb", "a\x9bb", "a\x07b", "ab\u200bc", "a\x00b"):
         check("username: %r (a control or format character) is refused" % _nm,
               _unp(_nm) is not None, "accepted")
     for _nm in ("José", "dan_the-man.2", "Łukasz", "用户名"):
         check("username: %r is still accepted (control)" % _nm, _unp(_nm) is None, _unp(_nm))
-    for _nm in ("a\nb", "a\x1bb", "a\tb", "a b", "a‮b", "", "x" * 81):
+    for _nm in ("a\nb", "a\x1bb", "a\tb", "a\u2028b", "a\u202eb", "", "x" * 81):
         check("group name: %r is refused" % _nm, _gnp(_nm) is not None, "accepted")
     check("group name: an ordinary name with spaces is still accepted (control)",
           _gnp("Game Admins") is None, _gnp("Game Admins"))
