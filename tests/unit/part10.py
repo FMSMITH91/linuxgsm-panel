@@ -124,6 +124,18 @@ _dbm7_saved = {k: getattr(_dbm7, k) for k in (
     "os", "sqlite3", "shutil", "subprocess", "_paths", "_euid", "_become", "repair",
     "integrity_check", "optimize", "run_update_maintenance", "_copy_to_new_file",
     "_reclaim_db_files")}
+
+
+@_p7_ctx.contextmanager
+def _p7_real_os_read():
+    """Inside the block, db_maintenance reads through the unpatched os.read (see _aside below)."""
+    _dbm7.os = _Over(os, read=_p7_patcher.original("os").read)
+    try:
+        yield
+    finally:
+        _dbm7.os = _dbm7_saved["os"]
+
+
 try:
     # ── _fmt_bytes: the unit ladder, and the GB cap (it never falls through to "B") ──────────────
     eq("dbm/_fmt_bytes: B, KB, MB, and GB is the ceiling",
@@ -216,18 +228,15 @@ try:
     # and eventlet's green os.read waits on the hub for any fd that is not a regular file. For a
     # directory, epoll refuses the fd (EPERM) AFTER the hub has filed a read listener for the
     # suite's own greenlet, and the trampoline raises before the `try` that would remove it. So
-    # this check left that listener behind; repair()'s own _aside two checks down reopened the fd
+    # this check left that listener behind; repair()'s own _aside, four checks on, reopened the fd
     # number, which turned it into a pending IOClosed; and the hub threw that into the next thing
     # the suite waited on — the sqlite3 CLI's subprocess in the swap check below, where the green
     # os.read answered '' to Popen's bytearray. TypeError on Python 3.10 and 3.12; on 3.13+ an
     # OSError that silently aborted the .recover rebuild. The real read raises EISDIR.
     _asrc = os.path.join(_d7, "adir")
     os.mkdir(_asrc)
-    _dbm7.os = _Over(os, read=_p7_patcher.original("os").read)
-    try:
+    with _p7_real_os_read():
         _a_res = _p7_call(_dbm7._aside, _asrc)
-    finally:
-        _dbm7.os = _dbm7_saved["os"]
     _a_left = [n for n in os.listdir(_d7) if n.startswith("adir.corrupt-")]
     check("dbm/aside: a copy that fails mid-way answers '' and leaves no partial file",
           _a_res == "" and not _a_left, "res=%r left=%r" % (_a_res, _a_left))

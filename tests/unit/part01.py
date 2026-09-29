@@ -122,7 +122,7 @@ results = []
 # part10's _aside check did: green os.read on a DIRECTORY, epoll refused the fd after the listener
 # was filed, and the trampoline raised before the `try` that removes it. The next os.open to reuse
 # that fd number queued an IOClosed for the suite's own greenlet, and the hub threw it into
-# whatever the suite waited on next — a subprocess, two checks later, which crashed on Python 3.10
+# whatever the suite waited on next — a subprocess, six checks later, which crashed on Python 3.10
 # and 3.12 and quietly failed on 3.13+.
 #
 # The runner's part-boundary sweep could not have seen it: the leak and its victim were in the
