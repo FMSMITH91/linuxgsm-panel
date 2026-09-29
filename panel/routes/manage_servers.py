@@ -1720,7 +1720,7 @@ def _report_install_outcome(job, gs, ports, started):
                 warn=True)
         log_action(None, "install_complete", target=gs.name, success=False,
                    detail=("port %s clashes with %s"
-                           % (port_conflict[0], port_conflict[1]))[:300])
+                           % (port_conflict[0], port_conflict[1]))[:300], server=gs)
     elif port_conflict:
         # The files are there and LinuxGSM will keep reporting STARTED, so this is
         # not a failed install — but the server cannot serve anyone until the
