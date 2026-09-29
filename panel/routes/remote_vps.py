@@ -475,6 +475,18 @@ def _register_host_stats(app):
             return _unreachable("remote uptime")
 
 
+def _current_os_updates(snapshot):
+    """(id, entry) for each cached check that belongs to the row holding its id NOW, by id.
+
+    One query for the whole snapshot. An entry noted for an earlier host with the same id is not
+    this one's (see _os_update_current) — nor is one for an id no row holds any more.
+    """
+    born = dict(db.session.query(RemoteServer.id, RemoteServer.created_at)
+                .filter(RemoteServer.id.in_(list(snapshot))).all())
+    return [(rid, seen) for rid, seen in sorted(snapshot.items())
+            if rid in born and _os_update_current(seen, born[rid])]
+
+
 def _register_os_update_checks(app):
     """OS updates: check, summarise, read the cache, run."""
     @app.route("/api/remote/<int:remote_id>/check-updates")
@@ -524,12 +536,8 @@ def _register_os_update_checks(app):
         # user, and three queries per host now that they are eagerly loaded. Same check, same
         # result, asked once instead of once per host in the snapshot.
         _allowed = None if current_user.is_superadmin else accessible_remote_ids(current_user)
-        # Which row holds each id NOW, in one query: an entry noted for an earlier host with the
-        # same id is not this one's (see _os_update_current).
-        _born = dict(db.session.query(RemoteServer.id, RemoteServer.created_at)
-                     .filter(RemoteServer.id.in_(list(snapshot))).all())
-        for rid, seen in sorted(snapshot.items()):
-            if not seen.get("count") or rid not in _born or not _os_update_current(seen, _born[rid]):
+        for rid, seen in _current_os_updates(snapshot):
+            if not seen.get("count"):
                 continue
             # MANAGE_REMOTES is scoped per host (see get_remote): a user who can manage one remote
             # must not learn the name or patch state of another's from this summary.

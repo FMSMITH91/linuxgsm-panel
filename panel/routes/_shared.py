@@ -678,33 +678,42 @@ def _start_bootstrap_job(app, remote_id, job, opts, actor_id):
     row that holds the id now is still the one that was loaded (created_at is its identity: a
     superadmin editing the host mid-bootstrap is legitimate, so the address must not be).
     """
-    _app = app
-    held = {}      # the detached row, and the identity and pin it was loaded with
+    run = _BootstrapRun(app, remote_id, job)
+    threading.Thread(target=run.run, args=(opts,), daemon=True).start()
 
-    def _mine():
-        """Whether `job` is still the registered job for remote_id. Call holding the lock."""
-        return _bootstrap_jobs.get(remote_id) is job
 
-    def _pin_back():
+class _BootstrapRun:
+    """One bootstrap worker: the job it registered, and the detached row it was started for."""
+
+    def __init__(self, app, remote_id, job):
+        self.app, self.remote_id, self.job = app, remote_id, job
+        self.remote = self.created = self.pinned = None
+
+    def _mine(self):
+        """Whether our job is still the registered job for remote_id. Call holding the lock."""
+        return _bootstrap_jobs.get(self.remote_id) is self.job
+
+    def _pin_back(self):
         """Write back a pin first contact learned, at the next step rather than at the end.
 
         The monitor and every request reach the host through the ROW, and until the pin is on it
         they trust whatever key they are shown; the bootstrap itself runs for many minutes.
         """
-        r = held.get("remote")
-        learned = r.host_key if r is not None else None
-        if learned and learned != held["pinned"]:
-            held["pinned"] = learned          # once, whatever the write does: never every step
-            _settle_bootstrapped_row(remote_id, held["created"], None, learned, None)
+        learned = self.remote.host_key if self.remote is not None else None
+        if learned and learned != self.pinned:
+            self.pinned = learned             # once, whatever the write does: never every step
+            _settle_bootstrapped_row(self.remote_id, self.created, None, learned, None)
 
-    def _progress(step, total, name, status):
+    def progress(self, step, total, name, status):
+        """remote_bootstrap_vps's progress callback: the step it is on, into OUR job only."""
         try:
-            _pin_back()                       # outside the lock: it is a database write
+            self._pin_back()                  # outside the lock: it is a database write
         except Exception:
             _log.debug("bootstrap: writing the learned host key back failed", exc_info=True)
         with _bootstrap_lock:
-            if not _mine():
+            if not self._mine():
                 return
+            job = self.job
             job["step"] = step
             job["total"] = total
             job["step_name"] = name
@@ -714,39 +723,46 @@ def _start_bootstrap_job(app, remote_id, job, opts, actor_id):
                 job["status"] = "rebooting" if status == "rebooting" else job["status"]
             job["log"].append(f"[{step}/{total}] {name}" if total else name)
 
-    def _run():
-        try:
-            with _app.app_context():
-                remote = db.session.get(RemoteServer, remote_id)
-                if not remote:
-                    raise RuntimeError("Remote no longer exists")
-                name, created = remote.name, remote.created_at
-                held.update(remote=remote, created=created, pinned=remote.host_key)
-                db.session.expunge(remote)
-                success = False
-                try:
-                    success, msg, _ = remote_bootstrap_vps(remote, progress=_progress, **opts)
-                finally:
-                    # However the run ended: a pin first contact learned was kept even when a
-                    # later step raised, back when first contact committed it itself.
-                    _settle_bootstrapped_row(remote_id, created, held["pinned"], remote.host_key,
-                                             success)
-                log_action(None, "remote_vps_bootstrap", target=name, detail=msg, success=success)
-                with _bootstrap_lock:
-                    if _mine():
-                        job["status"] = "done" if success else "failed"
-                        job["step_name"] = "Complete" if success else "Failed"
-                        job["message"] = msg
-                        job["updated"] = time.time()
-        except Exception as e:
-            with _bootstrap_lock:
-                if _mine():
-                    job["status"] = "failed"
-                    job["message"] = str(e)
-                    job["log"].append(f"ERROR: {e}")
-                    job["updated"] = time.time()
+    def _end(self, status, step_name, message, log_line=None):
+        """Mark OUR job finished — and nothing, if it is no longer the one registered."""
+        with _bootstrap_lock:
+            if not self._mine():
+                return
+            self.job["status"] = status
+            if step_name is not None:
+                self.job["step_name"] = step_name
+            self.job["message"] = message
+            if log_line is not None:
+                self.job["log"].append(log_line)
+            self.job["updated"] = time.time()
 
-    threading.Thread(target=_run, daemon=True).start()
+    def _bootstrap(self, opts):
+        """Load the row, run the bootstrap on a detached copy, settle it: (success, message)."""
+        remote = db.session.get(RemoteServer, self.remote_id)
+        if not remote:
+            raise RuntimeError("Remote no longer exists")
+        self.remote, self.created, self.pinned = remote, remote.created_at, remote.host_key
+        name = remote.name
+        db.session.expunge(remote)
+        success = False
+        try:
+            success, msg, _ = remote_bootstrap_vps(remote, progress=self.progress, **opts)
+        finally:
+            # However the run ended: a pin first contact learned was kept even when a later step
+            # raised, back when first contact committed it itself.
+            _settle_bootstrapped_row(self.remote_id, self.created, self.pinned, remote.host_key,
+                                     success)
+        log_action(None, "remote_vps_bootstrap", target=name, detail=msg, success=success)
+        return success, msg
+
+    def run(self, opts):
+        """The thread's body."""
+        try:
+            with self.app.app_context():
+                success, msg = self._bootstrap(opts)
+            self._end("done" if success else "failed", "Complete" if success else "Failed", msg)
+        except Exception as e:
+            self._end("failed", None, str(e), f"ERROR: {e}")
 
 
 def _settle_bootstrapped_row(remote_id, created, pinned, learned, success):
@@ -947,6 +963,20 @@ def _backlog_line(ln):
     return cut + ("\x1b[0m" if "\x1b[" in cut else "") + "…"
 
 
+def _backlog_append(server_id, text, ts):
+    """Keep `text`'s non-blank lines in the server's backlog, inside both of its ceilings."""
+    buf = _console_backlog.setdefault(server_id, [])
+    buf.extend({"t": ts, "line": _backlog_line(ln)} for ln in str(text).split("\n") if ln.strip())
+    if len(buf) > _CONSOLE_BACKLOG_MAX:
+        del buf[:len(buf) - _CONSOLE_BACKLOG_MAX]
+    size = sum(len(e["line"]) for e in buf)
+    drop = 0
+    while size > _CONSOLE_BACKLOG_BYTES and drop < len(buf) - 1:     # the newest line always stays
+        size -= len(buf[drop]["line"])
+        drop += 1
+    del buf[:drop]
+
+
 def _console_push(app, server_id, text, ts=None):
     """Push text into a server's live console for whoever has it open, and remember it.
 
@@ -969,17 +999,7 @@ def _console_push(app, server_id, text, ts=None):
         return
     ts = float(ts if ts is not None else time.time())
     try:
-        buf = _console_backlog.setdefault(server_id, [])
-        buf.extend({"t": ts, "line": _backlog_line(ln)}
-                   for ln in str(text).split("\n") if ln.strip())
-        if len(buf) > _CONSOLE_BACKLOG_MAX:
-            del buf[:len(buf) - _CONSOLE_BACKLOG_MAX]
-        size = sum(len(e["line"]) for e in buf)
-        drop = 0
-        while size > _CONSOLE_BACKLOG_BYTES and drop < len(buf) - 1:
-            size -= len(buf[drop]["line"])
-            drop += 1
-        del buf[:drop]
+        _backlog_append(server_id, text, ts)
     except Exception:
         _log.debug("console backlog append failed for server %s", server_id, exc_info=True)
     try:

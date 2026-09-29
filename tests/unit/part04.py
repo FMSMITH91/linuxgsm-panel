@@ -993,18 +993,19 @@ check("branch: ...so a leading '_' is refused up front, not by the verb mid-swit
       not _so._valid_branch("_wip") and _so._valid_branch("wip_2"))
 # And _run_verb keeps its "never raises" contract when a verb refuses an argument: callers are
 # written on it and have no handler for VerbError.
-import io as _rv_io  # noqa: E402
+from io import BytesIO as _RvBytesIO  # noqa: E402
 _rv_saved = (_so._helper_present, _so.subprocess.Popen)
 _rv_ran = []
 
 
 class _RvProc:
     """A finished verb: printed "ok", exited 0. _run_verb reads it through the capped reader."""
+
     pid = -1
 
     def __init__(self, argv, **kw):
         _rv_ran.append((argv,))
-        self.stdout, self.stderr, self.stdin = _rv_io.BytesIO(b"ok"), _rv_io.BytesIO(b""), None
+        self.stdout, self.stderr, self.stdin = _RvBytesIO(b"ok"), _RvBytesIO(b""), None
 
     def wait(self, timeout=None):
         return 0
