@@ -649,7 +649,7 @@
       background: #080d17;
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
-      font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, monospace;
       font-size: .78rem; padding: 1rem;
       width: 100%; box-sizing: border-box;
       max-height: 520px; min-height: 340px; overflow-y: auto;
@@ -694,7 +694,12 @@
          there like a extra space inbetween lines". Taking the gutter out of baseline alignment
          removes the effect and renders identically, since both share a line-height. */
       vertical-align: top;
-      -webkit-user-select: none; user-select: none;   /* copying the log should not copy the gutter */
+
+      /* Copying the log should not copy the gutter. Safari ships only the prefixed property:
+         unprefixed user-select arrived in Safari Technology Preview 252 (September 2026). */
+      /* stylelint-disable-next-line property-no-vendor-prefix */
+      -webkit-user-select: none;
+      user-select: none;
     }
 
     /* A line with NO stamp needs the gutter reserved anyway, or its text starts where the clock
@@ -930,11 +935,12 @@
       border: 1px solid var(--border); border-radius: var(--radius-sm);
       font-size: .85rem;
 
-      /* Longhands, NOT the `padding` shorthand: this file loads after bootstrap.min.css and
-         `.alert` has the same specificity as `.alert-dismissible`, so a shorthand here silently
-         reset that rule's `padding-right: 3rem` — the gap it reserves for the absolutely-positioned
-         close button — and long text ran underneath the button in every dismissible alert. */
-      padding-top: .7rem; padding-right: 1rem; padding-bottom: .7rem; padding-left: 1rem;
+      /* This resets Bootstrap's `.alert-dismissible { padding-right: 3rem }`, the gap reserved for
+         the absolutely-positioned close button: bootstrap.min.css loads first and the two selectors
+         have the same specificity. Long text then ran underneath the button in every dismissible
+         alert. The `.alert-dismissible` rule below puts the 3rem back, and must stay AFTER this
+         one. (A shorthand and the four longhands are the same declarations: either form resets it.) */
+      padding: .7rem 1rem;
       box-shadow: 0 4px 20px rgb(0 0 0 / 50%);
       margin-bottom: .5rem;
     }
@@ -1013,11 +1019,11 @@
        instead of the .66rem/#8b98a5 that rule asks for. Dead rules are not inert when they collide. */
 
     /* ── RESPONSIVE ── */
-    @media (max-width: 991.98px) {
+    @media (width <= 991.98px) {
       .main-content { padding: 1.5rem; }
     }
 
-    @media (max-width: 767.98px) {
+    @media (width <= 767.98px) {
       .sidebar {
         transform: translateX(-100%);
         width: 280px;
@@ -1198,7 +1204,7 @@
       }
     }
 
-    @media (min-width: 768px) {
+    @media (width >= 768px) {
       .sidebar { transform: none !important; }
       .topbar { display: none; }
       .hamburger { display: none; }
@@ -1215,7 +1221,7 @@
        and keeps the full size — which is why this is a min-width query and not a max-width
        override: `font-size: inherit` would take the CARD's 16px rather than reverting to the .h3
        size, shrinking the number on mobile, the opposite of what the full-row rule is for. */
-    @media (min-width: 768px) {
+    @media (width >= 768px) {
       #host-summary {
         font-size: .95rem;
 
@@ -1352,7 +1358,7 @@
       border-radius: 4px; color: var(--text-muted); font-family: inherit;
     }
 
-    @media (max-width: 767px) {
+    @media (width <= 767px) {
       .cmdk-backdrop { padding: 0; }
 
       .cmdk {

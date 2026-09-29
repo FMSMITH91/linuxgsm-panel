@@ -1077,7 +1077,8 @@ def _run_via_ssh_cli(server, command, timeout=30, sudo=None, stdin_text=None):
         # green Popen re-opening text pipes without the `errors=` it was given.
         # stdin_text is the one exception: a secret run_privileged keeps off the command line,
         # written to the pipe and then closed, so the remote still sees EOF.
-        p = subprocess.Popen(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # nosec B603  # nosemgrep - argv list, no shell; ssh_cmd is built here from validated parts
+        # nosemgrep - argv list, no shell; ssh_cmd is built here from validated parts
+        p = subprocess.Popen(ssh_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # nosec B603
                              stdin=(subprocess.PIPE if stdin_text is not None
                                     else subprocess.DEVNULL))
         res = _collect_capped(p, timeout, kill=p.kill, threads=threading,

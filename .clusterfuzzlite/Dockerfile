@@ -24,8 +24,13 @@ FROM gcr.io/oss-fuzz-base/base-builder-python@sha256:6b2b3a7e4a2da50de47f94925cf
 COPY requirements.txt $SRC/requirements.txt
 RUN pip3 install --no-cache-dir --require-hashes --only-binary :all: -r "$SRC/requirements.txt"
 
-# The whole context, which is the repository root: /.dockerignore keeps .git, .claude (worktree
-# checkouts), the venvs and every data/, key and database file out of this layer.
-COPY . $SRC/linuxgsm-panel
+# What the fuzz build reads, not the whole context. The harnesses import panel.* and nothing else
+# (a part06 gate holds them to that), and build.sh reads tests/fuzz/ and its seed corpora; the
+# rest of the repository (.git, .claude's worktree checkouts, data/, the venvs) stays out of the
+# layer by construction. /.dockerignore still guards the context. On CI, ClusterFuzzLite swaps
+# $SRC/linuxgsm-panel for a copy of the checkout before it compiles, so this is what a local
+# `helper.py build_image` gets.
+COPY panel $SRC/linuxgsm-panel/panel
+COPY tests/fuzz $SRC/linuxgsm-panel/tests/fuzz
 WORKDIR $SRC/linuxgsm-panel
 COPY .clusterfuzzlite/build.sh $SRC/
