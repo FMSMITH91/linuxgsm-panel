@@ -11,6 +11,7 @@ import select
 import shlex
 import signal
 import socket
+import sqlite3
 import stat
 import subprocess  # nosec B404 - every call site below passes an argv LIST, never a shell string
 import tempfile
@@ -1122,10 +1123,12 @@ def _persist_host_key(server, keystr):
     hold the caller's `server` object, so writing through `server` itself would commit nothing.
     When the row written is not `server`, the key is set on `server` as its COMMITTED value: the
     caller sees the pin, and its session is not left dirty with a write it would autoflush later.
+
+    The write waits for SQLite's write lock without stopping the eventlet hub: see
+    _pinlock_write_row.
     """
     from contextlib import nullcontext
     from flask import has_app_context
-    from panel.db.models import RemoteServer, db
     if getattr(server, "id", None) is None:
         return False                       # no row to store it on
     if has_app_context():
@@ -1138,24 +1141,104 @@ def _persist_host_key(server, keystr):
         return False
     try:
         with ctx:
-            try:
-                row = db.session.get(RemoteServer, server.id)
-                if row is None:
-                    return False           # the host was deleted mid-connect: nothing to pin
-                if not _pin_row_matches(row, server, keystr):
-                    return False
-                row.host_key = keystr
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
-                raise
+            row = _pinlock_write_row(server, keystr)
     except Exception:
         _log.warning("host-key pin: could not store the key for %s",
                      getattr(server, "name", "a host"), exc_info=True)
         return False
+    if row is None:
+        return False
     if row is not server:
         _mirror_pin(server, keystr)
     return True
+
+
+def _pinlock_write_row(server, keystr):
+    """Store `keystr` on `server`'s row in this context's session: the row written, else None.
+
+    None when the row is gone (the host was deleted mid-connect), when it is not the row `server`
+    connected with (_pin_row_matches), and when the database stayed locked for the connection's
+    whole busy timeout. Any failure rolls the session back and raises.
+
+    The row is read and checked under no_autoflush, so that when this call began the transaction
+    and then declines to write, the transaction holds nothing but reads and is ended at once: a
+    caller's session must not be left holding the write lock over a pin that was never written.
+    """
+    from panel.db.models import RemoteServer, db
+    sess = db.session()
+    try:
+        began = _pinlock_take(sess)
+        if began is None:
+            _log.warning("host-key pin: the database stayed locked; not pinning %s",
+                         getattr(server, "name", "a host"))
+            return None
+        with sess.no_autoflush:
+            row = sess.get(RemoteServer, server.id)
+            usable = row is not None and _pin_row_matches(row, server, keystr)
+        if not usable:
+            if began:
+                sess.connection().connection.dbapi_connection.rollback()
+            return None
+        row.host_key = keystr
+        sess.commit()
+        return row
+    except Exception:
+        sess.rollback()
+        raise
+
+
+# The wait before each retry of a busy write lock, in seconds: SQLite's own busy handler's
+# schedule (sqliteDefaultBusyCallback), the last step repeating until the deadline.
+_PINLOCK_DELAYS = (0.001, 0.002, 0.005, 0.01, 0.015, 0.02, 0.025, 0.025, 0.025, 0.05, 0.05, 0.1)
+
+
+def _pinlock_take(sess):
+    """Begin a write transaction on `sess`'s connection without ever stopping the eventlet hub.
+
+    True when this call began it, False when the connection was already in one (its own writes
+    hold the lock, so there is nothing to wait for), None when the database stayed locked for the
+    connection's whole busy timeout.
+
+    SQLite waits out a lock in C: its busy handler sleeps in the calling OS thread, and under
+    eventlet every green thread shares that one, so the whole hub stopped for the busy timeout
+    (15 s) — the console, every request, and whoever held the lock. When that holder was a green
+    thread, which it is whenever the lock is this process's own, it could not commit during the
+    wait, so the pin failed at the end of it anyway. Measured: a request holding a write while it
+    waited on a worker's first contact froze the hub for the full timeout, and so did one that
+    would have committed 0.5 s later. So the busy timeout is set to 0 for the attempt, and the
+    wait is a green sleep between attempts — as long in all as the timeout the connection was
+    configured with, which is then put back before anything else uses the connection.
+    """
+    raw = sess.connection().connection.dbapi_connection
+    if getattr(raw, "in_transaction", True):
+        return False
+    budget_ms = int(raw.execute("PRAGMA busy_timeout").fetchone()[0])
+    raw.execute("PRAGMA busy_timeout = 0")
+    try:
+        taken = _pinlock_poll(raw, time.monotonic() + budget_ms / 1000.0)
+    finally:
+        raw.execute("PRAGMA busy_timeout = %d" % budget_ms)
+    return True if taken else None
+
+
+def _pinlock_poll(raw, deadline):
+    """BEGIN IMMEDIATE on `raw` until it is taken (True) or `deadline` passes (False).
+
+    Only a busy database is retried; any other failure raises as it came.
+    """
+    delays = iter(_PINLOCK_DELAYS)
+    while True:
+        try:
+            raw.execute("BEGIN IMMEDIATE")
+            return True
+        except sqlite3.OperationalError as exc:
+            if "database is locked" not in str(exc):
+                raise
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return False
+        # A green sleep under eventlet, so the holder gets to run and commit.
+        time.sleep(min(next(delays, _PINLOCK_DELAYS[-1]), left))
 
 
 def _pin_row_matches(row, server, keystr):

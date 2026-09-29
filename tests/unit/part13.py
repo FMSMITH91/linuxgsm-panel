@@ -3335,6 +3335,189 @@ try:
           and "could not store its SSH host key" in _nopin10[1]
           and [c.closed for c in _nopin_clients10] == [1] and not _sm_core._connections,
           "%r closed=%r" % (_nopin10, [c.closed for c in _nopin_clients10]))
+
+    # ── the pin waits for SQLite's write lock WITHOUT stopping the eventlet hub ─────────────────
+    # SQLite waits out a lock in C, sleeping in the calling OS thread, and every green thread
+    # shares that one. So while a request held a write and waited on a pool worker making a first
+    # contact, the worker's commit froze the whole hub (console included) for the busy timeout and
+    # then failed; and it did the same when the holder would have committed a moment later,
+    # because the holder could not run to commit. Driven through the real pool and the real
+    # get_connection, on a FILE database in WAL mode with a busy timeout of its own, as production
+    # runs it, with a heartbeat green thread measuring how long the hub went without running it.
+    import concurrent.futures as _cf10  # noqa: E402
+    from eventlet import patcher as _evpatch10  # noqa: E402
+    import sqlite3 as _sqlite_pl10  # noqa: E402
+    from sqlalchemy import event as _saev10  # noqa: E402
+    _PL_TIMEOUT10 = 2.0
+    _pl_dir10 = _tmp10.mkdtemp(prefix="unit-pinlock-")
+    _pl_path10 = os.path.join(_pl_dir10, "pinlock.db")
+    _plapp10 = _Flask10("unit_part13_pinlock")
+    _plapp10.config.update(
+        SQLALCHEMY_DATABASE_URI="sqlite:///" + _pl_path10, SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        SECRET_KEY="unit-part13", TESTING=True,
+        SQLALCHEMY_ENGINE_OPTIONS={"connect_args": {"timeout": _PL_TIMEOUT10}})
+    _db10.init_app(_plapp10)
+    _pl_raws10 = []            # every DBAPI connection the engine opened, to read back at the end
+    _pl_beat10 = {"last": time.monotonic(), "gap": 0.0, "run": True}
+    _pl_ids10 = {}
+    _pl_hub_ident10 = _sm_core._real_threading.get_ident()
+
+    def _pl_heartbeat10():
+        """Record the longest the hub went without running this green thread."""
+        _pl_beat10["last"] = time.monotonic()
+        while _pl_beat10["run"]:
+            time.sleep(0.02)
+            _now = time.monotonic()
+            _pl_beat10["gap"] = max(_pl_beat10["gap"], _now - _pl_beat10["last"])
+            _pl_beat10["last"] = _now
+
+    def _pl_connect10(name):
+        """A pool worker's first contact with `name`: (result, seconds, app context?, on hub?)."""
+        _t0 = time.monotonic()
+        _FakeSSH10.script = {"key": ("ssh-ed25519", "KLOCK-" + name)}
+        _got = _try10(_sm_core.get_connection,
+                      _srv10(id=_pl_ids10[name], name=name, host=_pl_ids10[name + ":host"],
+                             port=22, auth_method="key", host_key=""))
+        return (_got, time.monotonic() - _t0, _hac10(),
+                _sm_core._real_threading.get_ident() == _pl_hub_ident10)
+
+    def _pl_request10(name, release_after):
+        """A request holding a write across a pool worker's first contact: the worker's result."""
+        with _plapp10.app_context():
+            _held = _db10.session.get(_RS10, _pl_ids10["other"])
+            _held.name = _held.name + "-x"
+            _db10.session.flush()           # SQLite's write lock is held from here to the commit
+            with _cf10.ThreadPoolExecutor(max_workers=1) as _ex:
+                _fut = _ex.submit(_pl_connect10, name)
+                if release_after is not None:
+                    time.sleep(release_after)
+                    _db10.session.commit()
+                _res = _fut.result()
+            _db10.session.commit()
+        return _res
+
+    def _pl_row_key10(name):
+        """The host key stored on `name`'s row, read in a context of its own."""
+        with _plapp10.app_context():
+            return _db10.session.get(_RS10, _pl_ids10[name]).host_key
+
+    def _pl_lock_free10():
+        """Whether another connection can take the write lock at once (no busy wait)."""
+        _probe = _sqlite_pl10.connect(_pl_path10, timeout=0)
+        try:
+            _probe.execute("BEGIN IMMEDIATE")
+            _probe.rollback()
+            return True
+        except _sqlite_pl10.OperationalError:
+            return False
+        finally:
+            _probe.close()
+
+    _pl_pin_app_saved10 = _sm_core._pin_app
+    _pl_hb10 = threading.Thread(target=_pl_heartbeat10, daemon=True)
+    try:
+        with _plapp10.app_context():
+            _saev10.listen(_db10.engine, "connect", lambda dbapi, _rec: _pl_raws10.append(dbapi))
+            _db10.session.execute(_db10.text("PRAGMA journal_mode=WAL"))
+            _db10.create_all()
+            for _pl_i10, _pl_n10 in enumerate(("other", "released", "deadlock", "held", "declined")):
+                _pl_r10 = _RS10(name=_pl_n10, host="192.0.2.%d" % (70 + _pl_i10), port=22,
+                             username="root", auth_method="key", auth_credential="")
+                _db10.session.add(_pl_r10)
+                _db10.session.commit()
+                _pl_ids10[_pl_n10], _pl_ids10[_pl_n10 + ":host"] = _pl_r10.id, _pl_r10.host
+        _sm_core.register_pin_app(_plapp10)
+        _sm_core._connections.clear()
+        _pl_hb10.start()
+        _pl_rel10 = _pl_request10("released", 0.3)
+        _sm_core._connections.clear()
+        _pl_rel_gap10, _pl_beat10["gap"] = _pl_beat10["gap"], 0.0
+        _pl_made10 = len(_FakeSSH10.made)
+        _pl_dead10 = _pl_request10("deadlock", None)
+        _pl_dead_closed10 = [c.closed for c in _FakeSSH10.made[_pl_made10:]]
+        _pl_dead_gap10 = _pl_beat10["gap"]
+        _sm_core._connections.clear()
+        # The request makes the first contact ITSELF while its own write holds the lock: nothing
+        # to wait for, and no deadlock against itself.
+        with _plapp10.app_context():
+            _pl_held10 = _db10.session.get(_RS10, _pl_ids10["other"])
+            _pl_held10.name = _pl_held10.name + "-y"
+            _db10.session.flush()
+            _pl_t0_10 = time.monotonic()
+            _pl_held_r10 = _sm_core._persist_host_key(_db10.session.get(_RS10, _pl_ids10["held"]),
+                                                      "ssh-ed25519 KHELD")
+            _pl_held_t10 = time.monotonic() - _pl_t0_10
+            _db10.session.rollback()
+        # A pin the row declines (it now names another address) leaves the caller's session
+        # holding no lock: this call began that transaction, so it ends it. And ending it must
+        # cost the caller nothing: a change it had made and not yet flushed still commits.
+        with _plapp10.app_context():
+            _db10.session.get(_RS10, _pl_ids10["other"]).name = "other-kept"
+            _pl_decl_r10 = _sm_core._persist_host_key(
+                NS(id=_pl_ids10["declined"], name="declined", host="192.0.2.99", port=22),
+                "ssh-ed25519 KDECLINED")
+            _pl_decl_tx10 = _db10.session.connection().connection.dbapi_connection.in_transaction
+            _pl_decl_free10 = _pl_lock_free10()
+            _db10.session.commit()
+        with _plapp10.app_context():
+            _pl_decl_kept10 = _db10.session.get(_RS10, _pl_ids10["other"]).name
+        # Only a busy database is waited for: any other failure is raised at once.
+        _pl_nest10 = _sqlite_pl10.connect(_pl_path10, timeout=0)
+        _pl_nest10.execute("BEGIN IMMEDIATE")
+        _pl_t0_10 = time.monotonic()
+        _pl_nest_r10 = _try10(_sm_core._pinlock_poll, _pl_nest10, time.monotonic() + _PL_TIMEOUT10)
+        _pl_nest_t10 = time.monotonic() - _pl_t0_10
+        _pl_nest10.rollback()
+        _pl_nest10.close()
+        _pl_timeouts10 = [_try10(lambda c=c: c.execute("PRAGMA busy_timeout").fetchone()[0])
+                          for c in _pl_raws10]
+        _pl_in_tx10 = [_try10(lambda c=c: c.in_transaction) for c in _pl_raws10]
+        _pl_keys10 = {n: _pl_row_key10(n) for n in ("released", "deadlock", "held", "declined")}
+    finally:
+        _pl_beat10["run"] = False
+        time.sleep(0.1)      # the heartbeat ends at its next beat
+        _sm_core._pin_app = _pl_pin_app_saved10
+        _sm_core._connections.clear()
+        with _plapp10.app_context():
+            _db10.engine.dispose()
+        _shutil10.rmtree(_pl_dir10, ignore_errors=True)
+    check("core host key lock: the suite is eventlet-patched and the pool worker shares the hub's "
+          "OS thread (so a wait in C would stop everything)",
+          _evpatch10.is_monkey_patched("thread") and _pl_rel10[3] is True
+          and _pl_dead10[3] is True and _pl_rel10[2] is False,
+          repr((_pl_rel10[2:], _pl_dead10[2:])))
+    check("core host key lock: a worker's pin waits out a write that is committed a moment later, "
+          "and is stored", not isinstance(_pl_rel10[0], tuple) and _pl_rel10[1] < 1.5
+          and _pl_keys10["released"] == "ssh-ed25519 KLOCK-released",
+          "%r took %.2fs" % (_pl_rel10[0], _pl_rel10[1]))
+    check("core host key lock: ...and the hub kept running while it waited",
+          _pl_rel_gap10 < 0.5, "the longest gap between heartbeats was %.2fs" % _pl_rel_gap10)
+    check("core host key lock: a pin behind a request that waits on it is refused after the busy "
+          "timeout, and the client closed",
+          isinstance(_pl_dead10[0], tuple)
+          and "could not store its SSH host key" in _pl_dead10[0][1]
+          and _PL_TIMEOUT10 - 0.5 <= _pl_dead10[1] < _PL_TIMEOUT10 + 1.0
+          and _pl_dead_closed10 == [1] and not _pl_keys10["deadlock"],
+          "%r took %.2fs closed=%r" % (_pl_dead10[0], _pl_dead10[1], _pl_dead_closed10))
+    check("core host key lock: ...and the hub kept running for the whole of that wait",
+          _pl_dead_gap10 < 0.5, "the longest gap between heartbeats was %.2fs" % _pl_dead_gap10)
+    check("core host key lock: a request whose own write holds the lock pins at once, in its own "
+          "session", _pl_held_r10 is True and _pl_held_t10 < 0.5
+          and _pl_keys10["held"] == "ssh-ed25519 KHELD",
+          "%r took %.2fs" % (_pl_held_r10, _pl_held_t10))
+    check("core host key lock: a pin the row declines leaves the caller's session holding no lock",
+          _pl_decl_r10 is False and _pl_decl_tx10 is False and _pl_decl_free10 is True
+          and not _pl_keys10["declined"],
+          repr((_pl_decl_r10, _pl_decl_tx10, _pl_decl_free10)))
+    check("core host key lock: ...and ending it keeps the caller's own unflushed change",
+          _pl_decl_kept10 == "other-kept", repr(_pl_decl_kept10))
+    check("core host key lock: a failure that is not a busy database is raised at once, not "
+          "retried to the deadline",
+          isinstance(_pl_nest_r10, tuple) and "within a transaction" in _pl_nest_r10[1]
+          and _pl_nest_t10 < 0.5, "%r took %.2fs" % (_pl_nest_r10, _pl_nest_t10))
+    check("core host key lock: every connection is back on its own busy timeout, in no transaction",
+          len(_pl_raws10) >= 2 and all(t == int(_PL_TIMEOUT10 * 1000) for t in _pl_timeouts10)
+          and all(x is False for x in _pl_in_tx10), repr((_pl_timeouts10, _pl_in_tx10)))
 finally:
     _core_restore10()
     _sm_core._connections.clear()

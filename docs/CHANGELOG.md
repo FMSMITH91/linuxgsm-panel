@@ -278,6 +278,15 @@ CI-verified commit regardless of this file — this changelog is for humans.
   now stops at the limit itself and says when it had to, as the panel's own host already did, and
   only a log that really was cut is treated as unread. A cut log on a remote host now shows as
   unreadable on the Security card, rather than as a smaller count.
+- **Storing a host's first SSH key pin no longer freezes the panel while the database is busy.**
+  The pin is written by whichever part of the panel made the first contact, often a background
+  worker. When another write held the database at that moment, the pin waited inside SQLite, and
+  that wait stops the whole panel: the console, every page, and the other write too, which then
+  could not finish. After up to 15 seconds the pin failed and the connection was refused anyway.
+  Measured with a 3-second wait: a write that would have finished half a second later still froze
+  the panel for all 3 seconds. The pin now waits in a way that lets the rest of the panel run, so
+  it is stored as soon as the other write finishes. If the database stays locked for the whole
+  wait, the connection is refused as before, and the panel keeps running while it waits.
 - **On Python 3.13 and later (Ubuntu 26.04), a closed terminal could keep its slot until the panel
   restarted.** If the terminal's output reader was still busy a second after the close, for
   instance still handing output to the browser, the close stopped partway. The session stayed on
