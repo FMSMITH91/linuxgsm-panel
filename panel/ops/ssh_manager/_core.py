@@ -516,8 +516,12 @@ def _await_all(readers, grace):
         done.wait(max(0.0, deadline - time.monotonic()))
 
 
-def _close_quietly(pipe):
-    """Close our end of a pipe; one already closed, or a stand-in with no close(), is fine."""
+def _close_pipe_quietly(pipe):
+    """Close our end of a pipe; one already closed, or a stand-in with no close(), is fine.
+
+    Not named _close_quietly: that is the SSH-client closer below, and the second def of one name
+    in a module silently replaces the first, which is what the merge that brought both in did.
+    """
     try:
         pipe.close()
     except (AttributeError, OSError, ValueError):
@@ -536,7 +540,7 @@ def _release_pipes(readers, stop):
     _await_all(readers, _READER_POLL * 5)
     for pipe, done in readers:
         if pipe is not None and done.is_set():
-            _close_quietly(pipe)
+            _close_pipe_quietly(pipe)
 
 
 def _wait_or_kill(p, timeout, kill, readers):
