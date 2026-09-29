@@ -1160,7 +1160,7 @@ def _wait_for_reboot(server, on_wait=None, down_timeout=150, up_timeout=480):
             ok, _ = ssh_test_connection(
                 server.host, server.port or 22, server.username,
                 server.auth_method, decrypt_secret(server.auth_credential),
-                host_key=server.host_key or "",
+                host_key=server.host_key,   # the row's own value: an unreadable pin must refuse
             )
             return ok
         except Exception:
@@ -2246,6 +2246,136 @@ def _port_has_listener(ss_out, port):
     return bool(re.search(r"[:.]%d\s" % int(port), ss_out or ""))
 
 
+# The units sshd runs as: Debian/Ubuntu name it ssh.service, most other distributions sshd.service.
+_SSHD_UNITS = ("ssh.service", "sshd.service")
+
+
+def _ss_listeners(ss_out):
+    """The LISTEN rows of `ss -lnt[e]` output, as (address, port, extended fields) tuples.
+
+    Parsed by COLUMN: `-e` appends `uid:1001 ino:2222 sk:…`, and a port match over the whole line
+    would read `ino:2222` as a listener on 2222."""
+    rows = []
+    for line in (ss_out or "").splitlines():
+        cols = line.split()
+        if len(cols) < 5 or cols[0] != "LISTEN":
+            continue
+        addr, _, port = cols[3].rpartition(":")
+        if port.isdecimal():
+            rows.append((addr, int(port), cols[5:]))
+    return rows
+
+
+def _listener_not_sshd(fields, socket_mode):
+    """Why a listening socket (its `ss -e` fields) is not sshd's, or None when it can be.
+
+    `ss -e` prints `uid:N` only for a socket a NON-root process created, and, where the kernel
+    reports it, the systemd cgroup it was created in. A local game account can bind a free port
+    >= 1024 in the window between the free-port check and sshd's restart; sshd then logs a failed
+    bind on that Port and carries on with the others, and a port-only listening check was answered
+    by the squatter. Its socket is uid:<game user>, which it cannot change — while the process
+    NAME it can (a binary called `sshd`), which is why this does not read `ss -p`. Under socket
+    activation systemd itself (pid 1, init.scope) holds sshd's listening socket."""
+    uid = next((f[4:] for f in fields if f.startswith("uid:")), None)
+    if uid not in (None, "0"):
+        return "a socket owned by uid %s, not root" % uid
+    cgroup = next((f[7:] for f in fields if f.startswith("cgroup:")), "")
+    unit = cgroup.rstrip("/").rsplit("/", 1)[-1]
+    if unit in _SSHD_UNITS or (socket_mode and cgroup == "/init.scope"):
+        return None
+    if cgroup == "/init.scope" or cgroup.startswith("/system.slice/"):
+        return "held by %s, not sshd" % (unit or cgroup)
+    return None            # no cgroup reported (cgroup v1, a container): root-owned is what we know
+
+
+def _sshd_holds_port(server, port, bind_addr, socket_mode):
+    """Whether every listener on `port` (on `bind_addr`, when given) is sshd's.
+
+    (True, "") when it is; (False, why) when something else holds it; (None, why) when the owners
+    could not be read — an installed panel-helper older than the `listening-sockets-owner` verb
+    refuses it, and that must not fail a port change the port-only check already confirmed."""
+    try:
+        out, _err, rc = _core.run_privileged(server, "listening-sockets-owner", [], timeout=15,
+                                             merge_stderr=False)
+    except Exception:
+        _core._log.debug("listening-sockets-owner failed", exc_info=True)
+        out, rc = "", -1
+    rows = _ss_listeners(out)
+    if rc != 0 or not any(f.startswith("ino:") for _a, _p, fs in rows for f in fs):
+        return None, "the panel could not read which process holds it"
+    def _same_ip(ss_addr):
+        # ss prints "[fd00::5]" and the canonical form; the operator may have typed "fd00:0::5".
+        try:
+            return (_ipaddress.ip_address(ss_addr.strip("[]").split("%", 1)[0])
+                    == _ipaddress.ip_address(bind_addr))
+        except ValueError:
+            return False
+    held = [fs for a, p, fs in rows if p == int(port) and (not bind_addr or _same_ip(a))]
+    if not held:
+        return False, "nothing is listening there"
+    for fs in held:
+        why = _listener_not_sshd(fs, socket_mode)
+        if why:
+            return False, why
+    return True, ""
+
+
+# fail2ban's [sshd] jail, pointed at the ports sshd serves. A drop-in of the panel's own rather than
+# an edit of jail.local: jail.d/*.local is read AFTER jail.local, so it applies however fail2ban was
+# installed. The jail.local edit alone (f2b-set-sshd-ports) did nothing on a stock install, which
+# has no jail.local — the jail kept banning on 22 while the panel said "fail2ban updated".
+# Printable ASCII only: the helper's fail2ban content rule refuses anything else.
+_F2B_SSHD_DROPIN_HEADER = (
+    "# Managed by LinuxGSM Panel: the ports fail2ban's sshd jail bans on, written when the SSH\n"
+    "# port is changed from the panel. Read after jail.local, so it overrides a port set there.\n")
+# How long fail2ban gets to bring the sshd jail back after a reload that fell through to a restart.
+_F2B_JAIL_SETTLE_S = 6
+
+
+def _f2b_sshd_dropin_body(ports):
+    """The [sshd] drop-in body for `ports` (validated ints, as strings)."""
+    return _F2B_SSHD_DROPIN_HEADER + "[sshd]\nport = %s\n" % ",".join(str(int(p)) for p in ports)
+
+
+def _rc_of(result):
+    """The return code of a (out, err, rc) transport answer; -1 for anything else."""
+    return result[2] if isinstance(result, tuple) and len(result) == 3 else -1
+
+
+def _point_f2b_sshd_at(server, ports):
+    """Make fail2ban's sshd jail ban on `ports`: ("updated" | "absent" | "failed", why).
+
+    "updated" only when the drop-in was written, fail2ban reloaded, and the sshd jail answers
+    afterwards — each of those has failed in a way the old step never looked at. Never raises: a
+    transport error here must not turn a port change that worked into a 500."""
+    try:
+        out, err, rc = _core.run_privileged(server, "f2b-status", [], timeout=10,
+                                            merge_stderr=False)
+        if rc == 127 or "not found" in ((out or "") + (err or "")).lower():
+            return "absent", "fail2ban is not installed on this host"
+        portlist = ",".join(ports)
+        # Hosts the panel prepared have a jail.local [sshd] port line; keep it in step.
+        _core.run_privileged(server, "f2b-set-sshd-ports", [portlist], timeout=20,
+                             merge_stderr=False)
+        if _rc_of(_core.write_root_file(server, "fail2ban-panel-sshd",
+                                        _f2b_sshd_dropin_body(ports), timeout=15)) != 0:
+            return "failed", "its sshd drop-in could not be written"
+        if _rc_of(_core._f2b_reload(server)) != 0:
+            return "failed", "fail2ban did not reload"
+        deadline = time.time() + _F2B_JAIL_SETTLE_S
+        while True:
+            _o, _e, jrc = _core.run_privileged(server, "f2b-status-jail", ["sshd"], timeout=10,
+                                               merge_stderr=False)
+            if jrc == 0:
+                return "updated", ""
+            if time.time() >= deadline:
+                return "failed", "its sshd jail is not running"
+            time.sleep(1)
+    except Exception:
+        _core._log.warning("fail2ban sshd port update failed", exc_info=True)
+        return "failed", "the host did not answer"
+
+
 def _restart_ssh_listener(server, socket_mode):
     """Restart whichever unit owns the listening socket.
 
@@ -2452,10 +2582,8 @@ def change_ssh_port(server, new_port, bind_addr=""):
     if trc != 0:
         return _revert("sshd rejected the new config — nothing changed. (%s)" % ((terr or "invalid")[:120]))
 
-    # 4. Point fail2ban's [sshd] jail at the new + old ports so its bans target the right port.
-    _core.run_privileged(server, "f2b-set-sshd-ports", [",".join(ports)], timeout=20,
-                   merge_stderr=False)
-    _core.run_privileged(server, "service-restart", ["fail2ban"], timeout=20, merge_stderr=False)
+    # 4. (fail2ban is repointed at step 7, once the move is VERIFIED: done here, before the restart,
+    #    a reverted change left fail2ban banning on a port nothing serves.)
 
     # 5. Restart whatever actually holds the port. Established sessions survive either way.
     _restart_ssh_listener(server, socket_mode)
@@ -2482,18 +2610,46 @@ def change_ssh_port(server, new_port, bind_addr=""):
         elif not _port_has_listener(out, new_port):
             return _revert("sshd didn't come up on port %d — reverted. Your existing SSH still works." % new_port)
 
+    #    ...and that what answers there IS sshd. Both checks above are process-blind (`ss -lnt` and
+    #    a TCP connect), so a local account that bound the port after step 0 passed them, the route
+    #    repointed the panel at it, and the next connection offered it the stored credential.
+    _holds, _why = _sshd_holds_port(server, new_port, bind_addr, socket_mode)
+    if _holds is False:
+        return _revert("Port %d is not held by sshd (%s) — reverted. Your existing SSH still works."
+                       % (new_port, _why))
+    _unchecked = ("" if _holds else
+                  " (The panel could not confirm that sshd itself holds port %d: %s — the "
+                  "panel-helper on this host may predate that check; re-running install.sh "
+                  "updates it.)" % (new_port, _why))
+
+    # 7. Point fail2ban's sshd jail at the new + old ports so its bans cover the port now served.
+    _f2b, _f2b_why = _point_f2b_sshd_at(server, ports)
+
     _core.run_privileged(server, _discard_verb, [], timeout=10,
                    merge_stderr=False)   # success — drop the snapshot
+    if _f2b == "updated":
+        _done = "firewall + fail2ban updated"
+    elif _f2b == "absent":
+        _done = "firewall updated; %s, so nothing bans SSH brute force on any port" % _f2b_why
+    else:
+        _done = ("firewall updated, but fail2ban was NOT: %s, so it still bans only on the old "
+                 "port" % _f2b_why)
     if bind_addr:
         # No fallback sentence here: ListenAddress is all-or-nothing (this function's own docstring
         # says so), so sshd is now on THIS address and nothing else. Telling the operator a previous
         # port is still available would be untrue exactly when it matters most.
-        return True, ("SSH now listens on %s:%d, and only there (firewall + fail2ban updated). "
-                      "Confirm you can still reach it before closing anything."
-                      % (bind_addr, new_port))
-    return True, ("SSH now listens on port %d (firewall + fail2ban updated). The previous port is "
+        return True, ("SSH now listens on %s:%d, and only there (%s). "
+                      "Confirm you can still reach it before closing anything.%s"
+                      % (bind_addr, new_port, _done, _unchecked))
+    if _f2b == "failed":
+        # Closing the old port is the advice that assumes fail2ban covers the new one.
+        return True, ("SSH now listens on port %d (%s). The previous port is still available as a "
+                      "fallback; fix fail2ban before relying on it for port %d.%s"
+                      % (new_port, _done, new_port, _unchecked))
+    return True, ("SSH now listens on port %d (%s). The previous port is "
                   "still available as a fallback — once you've confirmed you can reach SSH on %d, "
-                  "close the old one from the Firewall page." % (new_port, new_port))
+                  "close the old one from the Firewall page.%s"
+                  % (new_port, _done, new_port, _unchecked))
 
 
 # A ufw rule whose To column IS port 22 — the number (with or without /tcp) or the app profile.
@@ -2742,7 +2898,7 @@ def remote_set_public_ssh(server, mode):
 
 
 def ssh_test_connection(host, port=22, username="root", auth_method="key", credential="",
-                        host_key=""):
+                        host_key="", captured=None):
     """Test an SSH connection and return (success, message).
 
     `host_key` is the pin to check against, for the callers that HAVE one. It was not a parameter
@@ -2756,7 +2912,17 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
     ten minutes while the operator watches a progress bar.
 
     Left unpinned only where there is genuinely nothing to compare against: adding a remote, which
-    is the first contact the TOFU pin is established from."""
+    is the first contact the TOFU pin is established from.
+
+    `captured`, when given, is a list the key seen on that first contact is appended to — on
+    SUCCESS only, never after a failed login — so the caller can store it with the row it creates.
+    Enrolment used to throw it away and commit the row unpinned, leaving the pin to whichever
+    connection came next, which for a host added in the setup wizard is a background worker.
+
+    A pin that exists but cannot be DECRYPTED is refused before anything is sent. `host_key` is
+    then an UnreadableSecret, which is "" — and "" is first contact, so the Test button offered the
+    stored password to whoever answered and reported success. Callers must pass the row's value
+    itself, not `host_key or ""`, which drops the type."""
     # Tailscale SSH must use the system ssh client (tailscaled handles auth).
     if auth_method == "tailscale":
         class _S:
@@ -2774,11 +2940,16 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
             return False, f"Timed out reaching {host} over Tailscale. Is the node online?"
         return False, f"Tailscale SSH failed: {(err or out or 'unknown')[:150]}"
 
+    from panel.db.models import UnreadableSecret
+    if isinstance(host_key, UnreadableSecret):
+        return False, ("The stored SSH host key for this server cannot be decrypted on this host, "
+                       "so it cannot be checked. Nothing was sent. Click \"Re-trust host key\" on "
+                       "the server page if you are sure this is the right server.")
     client = paramiko.SSHClient()
     # Pinned when the caller has a pin (an existing remote); capture-only on genuine first contact,
     # where there is nothing to compare against. Never AutoAddPolicy either way.
-    client.set_missing_host_key_policy(
-        _core._PinPolicy(expected=host_key or "", reject_on_change=bool(host_key)))
+    policy = _core._PinPolicy(expected=host_key or "", reject_on_change=bool(host_key))
+    client.set_missing_host_key_policy(policy)
     try:
         if auth_method == "password":
             if not credential:
@@ -2802,6 +2973,8 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
                 key_filename=key_path, timeout=10,
             )
         client.close()
+        if captured is not None and policy.captured:
+            captured.append(policy.captured)
         return True, "Connection successful"
     except paramiko.AuthenticationException:
         return False, "SSH authentication failed. Check your credentials."

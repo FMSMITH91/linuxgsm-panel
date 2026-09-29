@@ -302,6 +302,7 @@ WRITE_TARGETS = {
     "fail2ban-panel-whitelist": ("/etc/fail2ban/jail.d/zz-panel-whitelist.local", 0o644),
     "fail2ban-panel-filter": ("/etc/fail2ban/filter.d/linuxgsm-panel.conf", 0o644),
     "fail2ban-panel-jail": ("/etc/fail2ban/jail.d/linuxgsm-panel.conf", 0o644),
+    "fail2ban-panel-sshd": ("/etc/fail2ban/jail.d/zz-panel-sshd.local", 0o644),
     "node-tools-cron": ("/etc/cron.d/lgsm-node-tools", 0o644),
     "sysctl-tailscale": ("/etc/sysctl.d/99-tailscale.conf", 0o644),
     # Added deliberately, with the sshd verbs below. Every other write here is a config the panel
@@ -442,6 +443,11 @@ _F2B_JAIL_RULE = _WholeFile(
     lambda c: _fail2ban_config_ok(c, _F2B_JAIL_SECTIONS, _F2B_JAIL_KEYS))
 _F2B_FILTER_RULE = _WholeFile(
     lambda c: _fail2ban_config_ok(c, _F2B_FILTER_SECTIONS, _F2B_FILTER_KEYS))
+# The sshd port drop-in says ONE thing: which ports the sshd jail bans on. It is read after every
+# other jail file, so a key it admitted beyond `port` (enabled, maxretry...) would override the
+# operator's jail.local — the narrowest grammar, not the jail rule's.
+_F2B_SSHD_PORT_RULE = _WholeFile(
+    lambda c: _fail2ban_config_ok(c, re.compile(r"sshd"), {"port": _F2B_JAIL_KEYS["port"]}))
 
 
 def _lines_match(content, pattern):
@@ -479,6 +485,7 @@ WRITE_CONTENT = {
     "fail2ban-panel-whitelist": _F2B_JAIL_RULE,
     "fail2ban-panel-filter": _F2B_FILTER_RULE,
     "fail2ban-panel-jail": _F2B_JAIL_RULE,
+    "fail2ban-panel-sshd": _F2B_SSHD_PORT_RULE,
 }
 
 # The one body the helper writes itself. Byte-identical to what the panel sends remote hosts
@@ -1614,6 +1621,9 @@ VERBS = {
     # Listening sockets, so the caller can confirm sshd actually bound the new port. The panel
     # greps the output in Python; no port reaches a command line.
     "listening-sockets": ([], lambda a: ["ss", "-lnt"], None),
+    # The same list with each socket's owner (`-e`: uid when not root, and the systemd cgroup), so
+    # the port move can tell sshd from an unprivileged account that bound the port first.
+    "listening-sockets-owner": ([], lambda a: ["ss", "-lnte"], None),
     # Reboot, a couple of seconds out, so the command asking for it can return first.
     "reboot-delayed": ([], lambda a: [], None),
 

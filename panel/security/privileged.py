@@ -212,6 +212,9 @@ WRITE_TARGETS = {
     "fail2ban-panel-whitelist": ("/etc/fail2ban/jail.d/zz-panel-whitelist.local", 0o644),
     "fail2ban-panel-filter": ("/etc/fail2ban/filter.d/linuxgsm-panel.conf", 0o644),
     "fail2ban-panel-jail": ("/etc/fail2ban/jail.d/linuxgsm-panel.conf", 0o644),
+    # The ports fail2ban's sshd jail bans on, after an SSH port move. jail.d/*.local is read after
+    # jail.local, so this applies on a stock install too, which has no jail.local to edit.
+    "fail2ban-panel-sshd": ("/etc/fail2ban/jail.d/zz-panel-sshd.local", 0o644),
     "node-tools-cron": ("/etc/cron.d/lgsm-node-tools", 0o644),
     "sysctl-tailscale": ("/etc/sysctl.d/99-tailscale.conf", 0o644),
     # Added deliberately alongside the sshd verbs — see tools/panel-helper.
@@ -913,6 +916,11 @@ _ARGV = {
     "f2b-set-sshd-ports": ([_portlist], lambda a: [], None),
     "sshd-validate": ([], lambda a: ["sshd", "-t"], None),
     "listening-sockets": ([], lambda a: ["ss", "-lnt"], None),
+    # ...with each socket's owner: `-e` adds uid (non-root only) and the systemd cgroup, so the port
+    # move can tell sshd from an unprivileged account that took the port first. A verb of its own
+    # rather than a change to the one above: an installed helper older than this refuses it
+    # outright, which the caller reads as "owner unknown", instead of answering in the old format.
+    "listening-sockets-owner": ([], lambda a: ["ss", "-lnte"], None),
     "reboot-delayed": ([], lambda a: [], None),
 
     # ── cron and user accounts ──

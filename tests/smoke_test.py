@@ -1733,6 +1733,152 @@ try:
                     db.session.delete(_ar_row)
                     db.session.commit()
 
+    # ── the host key an enrolment login saw is PINNED with the row ───────────────────────────
+    # add_remote and the setup wizard tested the login, threw the key it saw away and committed the
+    # row unpinned, so the pin came from whichever connection happened next — for a wizard-added
+    # host, a background worker. The REAL ssh_test_connection runs here against a fake SSH client
+    # that shows a chosen key; then the next connection, shown a different key, has to refuse.
+    import paramiko as _enr_paramiko
+    import types as _enr_types
+    from cryptography.fernet import Fernet as _EnrFernet
+    from sqlalchemy import text as _enr_text
+    from panel.core.config import encrypt_secret as _enr_encrypt
+    import panel.routes.route_helpers as _enr_rh
+
+    class _EnrSSH:
+        presents = ("ssh-ed25519", "AAAAENROLLED")
+        made = []
+
+        def __init__(self):
+            self.policy, self.kw, self.closed = None, None, 0
+            _EnrSSH.made.append(self)
+
+        def set_missing_host_key_policy(self, p):
+            self.policy = p
+
+        def connect(self, host, **kw):
+            self.kw = dict(kw, host=host)
+            _kt, _kb = _EnrSSH.presents
+            self.policy.missing_host_key(self, host, _enr_types.SimpleNamespace(
+                get_name=lambda: _kt, get_base64=lambda: _kb))
+
+        def get_transport(self):
+            return None
+
+        def close(self):
+            self.closed += 1
+
+    def _enr_next_connection(rid):
+        """What the panel's next fresh connection to row `rid` does: 'refused', 'accepted', or why."""
+        with app.app_context():
+            _row = db.session.get(RemoteServer, rid)
+            _sm_core.close_connection(_row)
+            try:
+                _sm_core.get_connection(_row, force_new=True, pooled=False)
+                return "accepted"
+            except _sm_core.HostKeyMismatch:
+                return "refused"
+            except Exception as _e:
+                return repr(_e)
+
+    _enr_fake = _enr_types.SimpleNamespace(SSHClient=_EnrSSH,
+                                           AuthenticationException=_enr_paramiko.AuthenticationException)
+    _enr_saved = (_sm_hosts.paramiko, _sm_core.paramiko)
+    _enr_names = ("smoke-enrol-pin", "smoke-wizard-pin", "smoke-test-unpinned", "smoke-test-unreadable",
+                  "smoke-worker-pin")
+    try:
+        _sm_hosts.paramiko = _sm_core.paramiko = _enr_fake
+        _EnrSSH.presents = ("ssh-ed25519", "AAAAENROLLED")
+        c.post("/remotes/add", data={"name": "smoke-enrol-pin", "host": "198.51.100.60",
+                                     "ssh_user": "root", "ssh_port": "22", "auth_method": "password",
+                                     "credential": "s3cret", "setup_type": "existing"})
+        with app.app_context():
+            _er = RemoteServer.query.filter_by(name="smoke-enrol-pin").first()
+            _er_id, _er_key = (_er.id, _er.host_key) if _er else (None, None)
+        check("add_remote: the host key its test login saw is pinned with the new row",
+              _er_key == "ssh-ed25519 AAAAENROLLED", repr(_er_key))
+        _EnrSSH.presents = ("ssh-ed25519", "AAAADIFFERENT")
+        check("add_remote: ...so the next connection, shown a DIFFERENT key, is refused",
+              _er_id is not None and _enr_next_connection(_er_id) == "refused",
+              _er_id and _enr_next_connection(_er_id))
+
+        # The setup wizard's remote_server step, the path that makes no connection of its own after.
+        _EnrSSH.presents = ("ssh-ed25519", "AAAAWIZARD")
+        with app.test_request_context("/setup", method="POST", data={
+                "name": "smoke-wizard-pin", "host": "198.51.100.61", "ssh_user": "root",
+                "ssh_port": "22", "auth_method": "password", "credential": "s3cret"}):
+            _wz_data = {}
+            _enr_rh._setup_add_remote(_enr_types.SimpleNamespace(data="{}"), _wz_data)
+            _wz = RemoteServer.query.filter_by(name="smoke-wizard-pin").first()
+            _wz_id, _wz_key = (_wz.id, _wz.host_key) if _wz else (None, None)
+        check("setup wizard: the host key its test login saw is pinned with the new row",
+              _wz_data.get("remote_added") is True and _wz_key == "ssh-ed25519 AAAAWIZARD",
+              repr((_wz_data, _wz_key)))
+        _EnrSSH.presents = ("ssh-ed25519", "AAAADIFFERENT")
+        check("setup wizard: ...so the next connection, shown a DIFFERENT key, is refused",
+              _wz_id is not None and _enr_next_connection(_wz_id) == "refused",
+              _wz_id and _enr_next_connection(_wz_id))
+
+        # The Test button: an UNPINNED host is pinned by the login (it is first contact, like the
+        # next connection would be), and an UNREADABLE pin refuses before any credential is sent.
+        with app.app_context():
+            _tu = RemoteServer(name="smoke-test-unpinned", host="198.51.100.63", port=22,
+                               username="root", auth_method="password",
+                               auth_credential=_enr_encrypt("s3cret"))
+            _tr = RemoteServer(name="smoke-test-unreadable", host="198.51.100.64", port=22,
+                               username="root", auth_method="password",
+                               auth_credential=_enr_encrypt("s3cret"), is_online=False)
+            db.session.add_all([_tu, _tr])
+            db.session.commit()
+            _tu_id, _tr_id = _tu.id, _tr.id
+            db.session.execute(_enr_text("UPDATE remote_server SET host_key = :k WHERE id = :i"),
+                               {"k": "enc:v1:" + _EnrFernet(_EnrFernet.generate_key()).encrypt(
+                                   b"ssh-ed25519 AAAAREAL").decode(), "i": _tr_id})
+            db.session.commit()
+        _EnrSSH.presents = ("ssh-ed25519", "AAAATESTED")
+        c.post("/remotes/%d/test" % _tu_id)
+        with app.app_context():
+            _tu_key = db.session.get(RemoteServer, _tu_id).host_key
+        check("remote test: an unpinned host is pinned to the key the Test login saw",
+              _tu_key == "ssh-ed25519 AAAATESTED", repr(_tu_key))
+        _EnrSSH.presents = ("ssh-ed25519", "AAAAMITM")
+        _made_before = len(_EnrSSH.made)
+        _tr_resp = c.post("/remotes/%d/test" % _tr_id, headers={"Accept": "application/json"})
+        with app.app_context():
+            _tr_row = db.session.get(RemoteServer, _tr_id)
+            _tr_after = (type(_tr_row.host_key).__name__, _tr_row.is_online)
+        _tr_sent = [m.kw for m in _EnrSSH.made[_made_before:] if m.kw]
+        check("remote test: an UNREADABLE pin refuses the Test login before the password is sent",
+              _tr_sent == [] and _tr_after == ("UnreadableSecret", False),
+              "connect calls=%r row=%r status=%s" % (_tr_sent, _tr_after, _tr_resp.status_code))
+
+        # create_app registers the app the pin is stored with from a WORKER thread (no app
+        # context): the monitor's probes and the /api/servers port scan make most first contacts.
+        import concurrent.futures as _enr_cf
+        with app.app_context():
+            _wp = RemoteServer(name="smoke-worker-pin", host="198.51.100.65", port=22,
+                               username="root", auth_method="key", auth_credential="")
+            db.session.add(_wp)
+            db.session.commit()
+            _wp_id = _wp.id
+            _wp_obj = db.session.get(RemoteServer, _wp_id)
+        with _enr_cf.ThreadPoolExecutor(max_workers=1) as _enr_ex:
+            _wp_ok = _enr_ex.submit(_sm_core._persist_host_key, _wp_obj,
+                                    "ssh-ed25519 AAAAWORKER").result(timeout=30)
+        with app.app_context():
+            _wp_key = db.session.get(RemoteServer, _wp_id).host_key
+        check("host key: create_app lets a worker thread with no app context store a pin",
+              _wp_ok is True and _wp_key == "ssh-ed25519 AAAAWORKER", repr((_wp_ok, _wp_key)))
+    finally:
+        _sm_hosts.paramiko, _sm_core.paramiko = _enr_saved
+        with app.app_context():
+            for _n in _enr_names:
+                for _row in RemoteServer.query.filter_by(name=_n).all():
+                    _sm_core.close_connection(_row)
+                    _row.groups = []
+                    db.session.delete(_row)
+            db.session.commit()
+
     # ── ...but only with a credential the delegated admin SUPPLIED ───────────────────────────
     # add_remote decided a host was the creator's to have by logging in to it, then granted it to
     # their MANAGE_REMOTES groups. With auth_method=key the credential is a PATH on the panel host
