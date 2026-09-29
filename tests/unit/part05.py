@@ -1033,6 +1033,7 @@ _VERB_SAMPLES = {
     "sshd-discard-backup": [],
     "sshd-validate": [],
     "listening-sockets": [],
+    "listening-sockets-owner": [],
     "f2b-set-sshd-ports": ["2222,22"],
     "reboot-delayed": [],
     "pro-status": [],
@@ -2530,6 +2531,14 @@ _F2B_ROOT = [
     ("fail2ban-panel-jail", "[linuxgsm-panel]\nbanaction = sendmail-whois\n"),
     ("fail2ban-panel-jail", "[linuxgsm-panel]\nbanaction = iptables-allports[actionban=\"id\"]\n"),
     ("fail2ban-panel-filter", "[Definition]\nfailregex = x\n    <HOST>\n"),
+    # The sshd port drop-in is read after EVERY other jail file, so it may say one thing only: the
+    # ports. Any other key would override the operator's own jail.local — switching the jail off,
+    # or making it ban nobody.
+    ("fail2ban-panel-sshd", "[sshd]\nport = 2222,22\nenabled = false\n"),
+    ("fail2ban-panel-sshd", "[sshd]\nport = 2222\nmaxretry = 100000\n"),
+    ("fail2ban-panel-sshd", "[DEFAULT]\nport = 2222\n"),
+    ("fail2ban-panel-sshd", "[sshd]\nport = ssh\", actionban=\"touch /tmp/pwned\n"),
+    ("fail2ban-panel-sshd", "[sshd]\nport = 2222\n    action = sendmail[actionban=id]\n"),
 ]
 _f2b_bad = [(n, b[:48]) for n, b in _F2B_ROOT
             if _helper._content_ok(b, _helper.WRITE_CONTENT[n])]
@@ -2538,7 +2547,7 @@ check("helper fail2ban: a continuation, an injected action, ignorecommand, INCLU
 check("helper fail2ban: ...and the write verb consults that whole-file rule, not a per-line one",
       all(isinstance(_helper.WRITE_CONTENT[n], _helper._WholeFile)
           for n in ("fail2ban-jail-local", "fail2ban-panel-whitelist",
-                    "fail2ban-panel-filter", "fail2ban-panel-jail")))
+                    "fail2ban-panel-filter", "fail2ban-panel-jail", "fail2ban-panel-sshd")))
 # The bodies the PANEL actually sends have to pass, or the feature is simply broken.
 from panel.ops.ssh_manager import hosts as _f2b_hosts                              # noqa: E402
 _F2B_BODIES = {
@@ -2551,6 +2560,9 @@ _F2B_BODIES = {
     "fail2ban-jail-local": ("[DEFAULT]\nbantime = 1h\nfindtime = 10m\nmaxretry = 5\n\n"
                             "[sshd]\nenabled = true\nport = 22\n"),
     "fail2ban-panel-whitelist": _f2b_hosts._f2b_dropin_ignoreip_body(["10.0.0.0/8", "100.64.0.1"]),
+    # The SSH port move's sshd drop-in. Written into a FRESH destination by the write-through check
+    # below — i.e. on a host with no jail.local at all, the stock install it exists for.
+    "fail2ban-panel-sshd": _f2b_hosts._f2b_sshd_dropin_body(["2222", "22"]),
 }
 _f2b_rejected = [n for n, b in _F2B_BODIES.items()
                  if _helper.WRITE_CONTENT[n.split("/")[0]] is None

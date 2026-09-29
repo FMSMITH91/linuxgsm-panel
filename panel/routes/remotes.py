@@ -231,7 +231,11 @@ def _register_remote_list(app):
             return _add_local_remote(name, lgsm_user)
 
         # (host presence + charset already validated above for non-local remotes)
-        success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential)
+        # The host key this test sees is PINNED with the row, in the same commit. Left to the next
+        # connection, the pin would come from whichever one that is, not from this login.
+        _seen_key = []
+        success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential,
+                                           captured=_seen_key)
         if not success:
             return _form_err(f"Connection test failed: {msg}", "manage_remotes")
 
@@ -241,6 +245,7 @@ def _register_remote_list(app):
             auth_credential=encrypt_secret(credential),
             sudo_enabled=sudo_enabled, linuxgsm_user=lgsm_user,
             is_online=True, last_seen=utcnow(),
+            host_key=_seen_key[0] if _seen_key else "",
         )
         db.session.add(remote)
         db.session.commit()
@@ -398,11 +403,19 @@ def _register_remote_delete_and_test(app):
     @permission_required(MANAGE_REMOTES)
     def test_remote(remote_id):
         remote = get_remote(remote_id)
+        # The row's own host_key, not `or ""`: that turns an UNREADABLE pin into "no pin", i.e.
+        # first contact, and the stored credential was offered to whoever answered.
+        _seen_key = []
         success, msg = ssh_test_connection(
             remote.host, remote.port, remote.username,
             remote.auth_method, decrypt_secret(remote.auth_credential),
-            host_key=remote.host_key or "",
+            host_key=remote.host_key, captured=_seen_key,
         )
+        # A host with no pin yet (added before enrolment stored one, or just re-trusted) is pinned
+        # by this login, exactly as its next connection would pin it.
+        if (success and _seen_key and not remote.host_key
+                and remote.auth_method in ("key", "password")):
+            remote.host_key = _seen_key[0]
         remote.is_online = bool(success)
         remote.last_seen = utcnow()
         db.session.commit()

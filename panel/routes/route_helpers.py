@@ -450,7 +450,11 @@ def _setup_add_remote(state, data):
     elif refusal:
         flash(refusal, "danger")
     else:
-        success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential)
+        # Pinned with the row, from this login. The wizard makes no connection of its own after
+        # this, so otherwise the first contact to pin from would be a background worker's.
+        _seen_key = []
+        success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential,
+                                           captured=_seen_key)
         if not success:
             flash(f"Connection test failed: {msg}", "danger")
         else:
@@ -462,6 +466,7 @@ def _setup_add_remote(state, data):
                 linuxgsm_user=lgsm_user,
                 is_online=True,
                 last_seen=utcnow(),
+                host_key=_seen_key[0] if _seen_key else "",
             )
             db.session.add(remote)
             db.session.commit()

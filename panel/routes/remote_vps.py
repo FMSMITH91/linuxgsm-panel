@@ -23,9 +23,20 @@ from panel.ops import ssh_manager as _sm
 from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
     accessible_remote_ids, can_access_remote, get_game,
     get_remote, has_permission, log_action, permission_required, server_access_required)
+import collections
+import threading
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
 from app import (_local_remote_id, _log, _os_update_note)
+
+
+# One SSH port change per host at a time. The move snapshots and restores ONE fixed drop-in path
+# per host, so two overlapping changes (a double-submit is enough) interleave: one's revert restored
+# or deleted the drop-in the other had just written and verified, and the panel stored a port sshd
+# no longer served while reporting success. The panel is one process, so an in-process lock per
+# host id is the whole fix; threading is green under eventlet's monkey-patching. Registered so a
+# deleted host's lock is forgotten with its other per-host state.
+_ssh_port_locks = _sm._core.register_remote_cache(collections.defaultdict(threading.Lock))
 
 
 def _resync_game_port(gs, info):
@@ -275,16 +286,27 @@ def _register_ssh_settings(app):
             return jsonify({"success": False, "message": "Port must be between 1 and 65535."}), 400
         bind = _json_str(body, "bind")
         old = remote.port
+        # Held across the move AND the port commit that follows it, so a second change cannot read
+        # the port the first is about to replace.
+        lock = _ssh_port_locks[remote_id]
+        if not lock.acquire(blocking=False):
+            return jsonify({"success": False,
+                            "message": "An SSH port change is already running for this host."}), 409
         try:
-            ok, msg = change_ssh_port(remote, new_port, bind)
-        except Exception:
-            return jsonify({"success": False, "message": _log_and_generic("SSH port change failed")}), 500
-        if ok:
-            # Point the panel at the new port for future connections (cosmetic for the local host,
-            # which doesn't SSH). Same host, so the pinned host key still applies — leave it. The old
-            # port stays open, so any connection the panel is using right now survives.
-            remote.port = new_port
-            db.session.commit()
+            try:
+                ok, msg = change_ssh_port(remote, new_port, bind)
+            except Exception:
+                return jsonify({"success": False,
+                                "message": _log_and_generic("SSH port change failed")}), 500
+            if ok:
+                # Point the panel at the new port for future connections (cosmetic for the local
+                # host, which doesn't SSH). Same host, so the pinned host key still applies — leave
+                # it. The old port stays open, so any connection the panel is using right now
+                # survives.
+                remote.port = new_port
+                db.session.commit()
+        finally:
+            lock.release()
         log_action(current_user, "change_ssh_port", target=remote.name,
                    detail=f"{old} -> {new_port}", success=ok)
         return jsonify({"success": ok, "message": msg})

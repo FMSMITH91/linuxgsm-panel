@@ -566,7 +566,8 @@ _h_saved = {n: getattr(_H, n) for n in (
     "time", "paramiko", "decrypt_secret", "ssh_test_connection", "_wait_for_reboot",
     "_tcp_reachable", "remote_ufw_delete_rule", "remote_check_tailscale", "host_os_slug",
     "deps_for_game", "_load_deps_csv", "_tailscale_conn_state", "remote_public_ssh_status",
-    "remote_fail2ban_overview", "remote_ufw_blocked_ips", "socket", "_bootstrap_node")}
+    "remote_fail2ban_overview", "remote_ufw_blocked_ips", "socket", "_bootstrap_node",
+    "_F2B_JAIL_SETTLE_S")}
 _h_fw_saved = {"remote_ufw_status": _sm_firewall.remote_ufw_status}
 
 
@@ -1102,6 +1103,15 @@ try:
     _H.ssh_test_connection = _updown([True])
     check("reboot wait: a host that never went down but is up is back (down phase times out)",
           _H._wait_for_reboot(_rb_srv, down_timeout=20, up_timeout=30) is True)
+    # The pin is handed over AS IS: `host_key or ""` turned an unreadable pin into first contact,
+    # and the wait loop then offered the stored credential to whatever answered on that address.
+    from panel.db.models import UnreadableSecret as _rb_Unreadable  # noqa: E402
+    _seen_creds.clear()
+    _H._wait_for_reboot(_p8_srv(auth_method="password", auth_credential="enc",
+                                host_key=_rb_Unreadable()), down_timeout=20, up_timeout=30)
+    check("reboot wait: an UNREADABLE pin reaches the probe as one, not as \"\" (first contact)",
+          _seen_creds and all(isinstance(s[4], _rb_Unreadable) for s in _seen_creds),
+          repr([type(s[4]).__name__ for s in _seen_creds][:3]))
     _H.time = _h_saved["time"]
     _H.ssh_test_connection = _h_saved["ssh_test_connection"]
     _H.decrypt_secret = _h_saved["decrypt_secret"]
@@ -1495,6 +1505,131 @@ try:
           and _w.names()[-1] == "sshd-discard-backup"
           and ("f2b-set-sshd-ports", ["2222,22"]) in _w.verbs_called(), repr(_cp))
 
+    # ── ...and the thing now listening on the new port has to BE sshd ──────────────────────────
+    # Both listening checks are process-blind (`ss -lnt`, a TCP connect). A local game account that
+    # binds the new port after the free-port check — it only needs a port >= 1024 and the seconds
+    # the move takes — was reported as "SSH now listens on port 2222", sshd logged a failed bind
+    # and stayed on 22, and the route pointed the panel at the squatter. `ss -lnte` names what the
+    # account cannot change: its uid, and the systemd unit the socket was created in.
+    _OWN_22 = "LISTEN 0 128 0.0.0.0:22 0.0.0.0:* ino:4100 sk:1 cgroup:/system.slice/ssh.service <->\n"
+
+    def _own(line2222):
+        return {"listening-sockets-owner": (_OWN_22 + line2222, "", 0)}
+    _SQUAT = ("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* uid:1001 ino:4200 sk:2 "
+              "cgroup:/user.slice/user-1001.slice/session-4.scope <->\n")
+    _w = _csp_wire(**_own(_SQUAT))
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: a new port held by an UNPRIVILEGED account (the squatter) is reverted",
+          _cp[0] is False and "not held by sshd" in _cp[1] and "uid 1001" in _cp[1]
+          and "sshd-restore-dropin" in _w.names() and "sshd-discard-backup" not in _w.names()
+          and "ufw-delete-allow-proto-port" in _w.names(), "result=%r names=%r" % (_cp, _w.names()))
+    check("ssh port: ...and fail2ban is not repointed at the squatter's port",
+          not _w.verbs_called("f2b-set-sshd-ports") and "fail2ban-panel-sshd" not in _w.names(),
+          repr(_w.names()))
+    _w = _csp_wire(**_own("LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:* ino:4300 sk:3 "
+                          "cgroup:/system.slice/docker.service <->\n"))
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: ...as is one held by another root SERVICE (docker-proxy took it first)",
+          _cp[0] is False and "docker.service" in _cp[1], repr(_cp))
+    _w = _csp_wire(**_own("LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* ino:4400 sk:4 "
+                          "cgroup:/system.slice/ssh.service <->\n"
+                          "LISTEN 0 128 [::]:2222 [::]:* ino:4401 sk:5 cgroup:/system.slice/ssh.service v6only:1 <->\n"))
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: sshd holding the new port (both families) passes, with no caveat",
+          _cp[0] is True and "could not confirm" not in _cp[1] and _w.names()[-1] == "sshd-discard-backup",
+          repr(_cp))
+    # Socket activation: systemd (pid 1, init.scope) holds sshd's socket — right there, wrong elsewhere.
+    _INIT = "LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:* ino:4500 sk:6 cgroup:/init.scope <->\n"
+    _w = _csp_wire(**dict(_own(_INIT), **{"sshd-socket-active": ("active", "", 0)}))
+    _cp_sock = _H.change_ssh_port(_p8_srv(), 2222)
+    _w = _csp_wire(**_own(_INIT))
+    _cp_nosock = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: a socket held by systemd passes only on a socket-activated host",
+          _cp_sock[0] is True and _cp_nosock[0] is False and "init.scope" in _cp_nosock[1],
+          repr((_cp_sock, _cp_nosock)))
+    # With BPF firewalling (Ubuntu 24.04) systemd creates the socket inside ssh.socket's OWN cgroup.
+    _SOCKU = "LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:* ino:4501 sk:9 cgroup:/system.slice/ssh.socket <->\n"
+    _w = _csp_wire(**dict(_own(_SOCKU), **{"sshd-socket-active": ("active", "", 0)}))
+    _cp_socku = _H.change_ssh_port(_p8_srv(), 2222)
+    _w = _csp_wire(**_own(_SOCKU))
+    _cp_socku_no = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: ...including in ssh.socket's own cgroup, again only when socket-activated",
+          _cp_socku[0] is True and "could not confirm" not in _cp_socku[1]
+          and _cp_socku_no[0] is False and "ssh.socket" in _cp_socku_no[1],
+          repr((_cp_socku, _cp_socku_no)))
+    # An installed helper older than the verb refuses it (exit 2): the port-only check already
+    # passed, so the move stands — and says what it could not confirm.
+    _w = _csp_wire(**{"listening-sockets-owner": ("", "panel-helper: unknown verb 'listening-sockets-owner'", 2)})
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: an owner list the host cannot give keeps the move, and says it is unconfirmed",
+          _cp[0] is True and "could not confirm that sshd itself holds port 2222" in _cp[1]
+          and "sshd-discard-backup" in _w.names(), repr(_cp))
+    # The bind-address branch on a REMOTE verified by a TCP connect alone — equally process-blind.
+    _H._tcp_reachable = lambda host, port, timeout=8: True
+    _w = _csp_wire(**_own("LISTEN 0 128 198.51.100.4:2222 0.0.0.0:* uid:1001 ino:4600 sk:7 <->\n"))
+    _cp_bind_squat = _H.change_ssh_port(_p8_srv(), 2222, bind_addr="198.51.100.4")
+    _bind_squat_names = _w.names()
+    _w = _csp_wire(**_own("LISTEN 0 128 [fd00::5]:2222 [::]:* ino:4700 sk:8 "
+                          "cgroup:/system.slice/ssh.service <->\n"))
+    _cp_bind_ok = _H.change_ssh_port(_p8_srv(), 2222, bind_addr="fd00:0:0::5")
+    _H._tcp_reachable = _h_saved["_tcp_reachable"]
+    check("ssh port (bind): a reachable address held by a non-root account is reverted too",
+          _cp_bind_squat[0] is False and "uid 1001" in _cp_bind_squat[1]
+          and "sshd-restore-dropin" in _bind_squat_names, repr(_cp_bind_squat))
+    check("ssh port (bind): ...while sshd on it passes, however the IPv6 address was typed",
+          _cp_bind_ok[0] is True and "could not confirm" not in _cp_bind_ok[1], repr(_cp_bind_ok))
+    eq("ss rows: parsed by COLUMN, so `ino:2222` in the extended fields is not a listener on 2222",
+       [(a, p) for a, p, _f in _H._ss_listeners(
+           "State Recv-Q Send-Q Local Address:Port Peer Address:Port\n"
+           "LISTEN 0 128 0.0.0.0:22 0.0.0.0:* uid:2222 ino:2222 sk:2222 <->\n"
+           "LISTEN 0 128 [::]:22 [::]:* ino:9 sk:9 v6only:1 <->\n")],
+       [("0.0.0.0", 22), ("[::]", 22)])
+
+    # ── fail2ban has to cover the port sshd now serves ──────────────────────────────────────────
+    # The old step edited jail.local's [sshd] port line and restarted fail2ban, ignoring both
+    # answers. A stock install has no jail.local (only Prepare & Secure writes one), so the edit did
+    # nothing, the jail kept banning on 22, and the message said "fail2ban updated". The panel now
+    # writes its own jail.d drop-in (read after jail.local) and says "updated" only when the write,
+    # the reload and the sshd jail all answer.
+    _H._F2B_JAIL_SETTLE_S = 0
+    _w = _csp_wire()
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    _f2b_writes = [c[2] for c in _w.calls if c[0] == "write" and c[1] == "fail2ban-panel-sshd"]
+    check("ssh port: a verified move writes the panel's sshd jail drop-in with both ports",
+          _cp[0] is True and len(_f2b_writes) == 1 and _f2b_writes[0].endswith("[sshd]\nport = 2222,22\n")
+          and "fail2ban updated" in _cp[1] and ("f2b-status-jail", ["sshd"]) in _w.verbs_called(),
+          "result=%r writes=%r" % (_cp, _f2b_writes))
+    _w = _csp_wire(**{"f2b-status": ("", "bash: fail2ban-client: command not found", 127)})
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: with fail2ban not installed, nothing is written and the message says so",
+          _cp[0] is True and "fail2ban updated" not in _cp[1] and "not installed" in _cp[1]
+          and "fail2ban-panel-sshd" not in _w.names(), repr(_cp))
+    for _label, _over in (
+            ("an older helper refuses the drop-in", {"writes": {"fail2ban-panel-sshd": (
+                "", "panel-helper: bad argument", 2)}}),
+            ("fail2ban will not reload", {"verbs": {"f2b-reload": ("", "", 1), "service-reload": ("", "", 1),
+                                                    "service-restart": lambda a: ("", "", 1) if a == ["fail2ban"] else ("", "", 0)}}),
+            ("the sshd jail is not running", {"verbs": {"f2b-status-jail": ("", "Sorry but the jail 'sshd' does not exist", 255)}}),
+            ("the write raises (paramiko)", {"writes": {"fail2ban-panel-sshd": ConnectionError("socket closed")}})):
+        _v = {"sshd-socket-active": ("inactive", "", 3), "sshd-effective-config": ("port 22\n", "", 0),
+              "listening-sockets": [(_SS_22, "", 0), (_SS_BOTH, "", 0)]}
+        _v.update(_over.get("verbs", {}))
+        _w = _wire(verbs=_v, writes=_over.get("writes"))
+        _cp = _H.change_ssh_port(_p8_srv(), 2222)
+        check("ssh port: when %s, the move stands but fail2ban is NOT claimed updated" % _label,
+              _cp[0] is True and "fail2ban updated" not in _cp[1] and "fail2ban was NOT" in _cp[1]
+              and "close the old one" not in _cp[1] and _w.names()[-1] == "sshd-discard-backup",
+              repr(_cp))
+    _H._F2B_JAIL_SETTLE_S = _h_saved["_F2B_JAIL_SETTLE_S"]
+    # A move that is REVERTED never touches fail2ban (it used to be repointed before the restart,
+    # so a revert left it banning on a port nothing serves).
+    _w = _csp_wire(**{"listening-sockets": [(_SS_22, "", 0), (_SS_22, "", 0)]})
+    _cp = _H.change_ssh_port(_p8_srv(), 2222)
+    check("ssh port: a reverted move leaves fail2ban alone",
+          _cp[0] is False and not _w.verbs_called("f2b-set-sshd-ports")
+          and "fail2ban-panel-sshd" not in _w.names() and not _w.verbs_called("f2b-reload"),
+          repr(_w.names()))
+
     # ── fail2ban on a remote ───────────────────────────────────────────────────────────────────
     _wire(verbs={"f2b-status": ("Status\n|- Number of jail: 2\n`- Jail list:\tsshd, recidive, bad jail!", "", 0),
                  "f2b-status-jail": lambda a: (
@@ -1628,6 +1763,7 @@ try:
     class _FakeSSH:
         raise_on_connect = None
         last = None
+        presents = None          # (type, base64): the host key the fake server shows, if any
 
         def __init__(self):
             self.policy, self.kw, self.closed = None, None, False
@@ -1638,6 +1774,10 @@ try:
 
         def connect(self, host, **kw):
             self.kw = dict(kw, host=host)
+            if _FakeSSH.presents is not None:
+                _kt, _kb = _FakeSSH.presents
+                self.policy.missing_host_key(self, host, NS(get_name=lambda: _kt,
+                                                            get_base64=lambda: _kb))
             if _FakeSSH.raise_on_connect is not None:
                 raise _FakeSSH.raise_on_connect
 
@@ -1674,6 +1814,41 @@ try:
         eq("ssh test: %s is answered, with no exception text leaking" % type(_exc).__name__,
            _H.ssh_test_connection("203.0.113.10", auth_method="key"), (False, _want))
     _FakeSSH.raise_on_connect = None
+
+    # Enrolment pins the key its own test login saw: `captured` gets it on SUCCESS only. A key
+    # handed back after a failed login would pin a host the panel never got into.
+    _FakeSSH.presents = ("ssh-ed25519", "AAAAENROLLED")
+    _cap = []
+    _st = _H.ssh_test_connection("203.0.113.10", auth_method="key", captured=_cap)
+    check("ssh test: a first-contact login hands back the key it saw, for enrolment to pin",
+          _st == (True, "Connection successful") and _cap == ["ssh-ed25519 AAAAENROLLED"],
+          repr((_st, _cap)))
+    _cap = []
+    _FakeSSH.raise_on_connect = _p8_paramiko.AuthenticationException("bad")
+    _st = _H.ssh_test_connection("203.0.113.10", auth_method="password", credential="pw",
+                                 captured=_cap)
+    _FakeSSH.raise_on_connect = None
+    check("ssh test: ...but never after a FAILED login", _st[0] is False and _cap == [],
+          repr((_st, _cap)))
+    _cap = []
+    _st = _H.ssh_test_connection("203.0.113.10", auth_method="key", captured=_cap,
+                                 host_key="ssh-ed25519 AAAAENROLLED")
+    check("ssh test: ...and not when the host was already pinned (nothing new was captured)",
+          _st[0] is True and _cap == [], repr((_st, _cap)))
+
+    # A pin that exists but cannot be DECRYPTED is refused before anything is sent. It reads as ""
+    # — first contact — so the Test button offered the stored password to whoever answered.
+    from panel.db.models import UnreadableSecret as _p8_Unreadable  # noqa: E402
+    _FakeSSH.last = None
+    _FakeSSH.presents = ("ssh-ed25519", "AAAAMITM")
+    for _am, _cred in (("password", "s3cret"), ("key", "/home/panel/.ssh/vps_key")):
+        _cap = []
+        _st = _H.ssh_test_connection("203.0.113.10", auth_method=_am, credential=_cred,
+                                     host_key=_p8_Unreadable(), captured=_cap)
+        check("ssh test (%s): an UNREADABLE pin refuses before connecting — no credential sent" % _am,
+              _st[0] is False and "cannot be decrypted" in _st[1] and _FakeSSH.last is None
+              and _cap == [], repr((_st, _FakeSSH.last and _FakeSSH.last.kw)))
+    _FakeSSH.presents = None
     _H.paramiko = _h_saved["paramiko"]
 
     # ── host_timezone ──────────────────────────────────────────────────────────────────────────
@@ -1860,6 +2035,62 @@ try:
     check("ssh port: a raise is a 500 with a GENERIC message, and the stored port is unchanged",
           _st == 500 and (_body or {}).get("message") == "Internal server error" and _r.port == 22,
           repr(_body))
+    # One port change per host at a time. The move snapshots and restores ONE fixed drop-in path,
+    # so an overlapping second change (a double-submit) restored or deleted the drop-in the first
+    # had written and verified, and the panel stored a port sshd no longer served. The second
+    # request is made from INSIDE the first's change_ssh_port, i.e. exactly while it runs.
+    _rv_inner = _rv_app.test_client()
+    _csp_runs, _inner = [], {}
+    _other = _rv_remote()
+
+    def _csp_slow(remote, port, bind):
+        _csp_runs.append((remote.id, port))
+        if len(_csp_runs) == 1:
+            _inner["same"] = _rv_json(_rv_inner.post("/api/remote/%d/ssh-port" % remote.id,
+                                                     json={"port": 3333}))
+            _inner["other"] = _rv_json(_rv_inner.post("/api/remote/%d/ssh-port" % _other.id,
+                                                      json={"port": 4444}))
+        return True, "moved"
+    _rv.change_ssh_port = _csp_slow
+    _held_at_commit = []
+    _rv_commit_saved = _rv.db.session.commit
+    # Two commits: the other host's (made inside the first change) and the first change's own —
+    # both while THIS host's lock is held. The last one is the one this is about.
+    _rv.db.session.commit = lambda: (_held_at_commit.append(_rv._ssh_port_locks[_r.id].locked()),
+                                     _rv_commit_saved())[1]
+    _st, _body = _rv_json(_rv_client.post("/api/remote/%d/ssh-port" % _r.id, json={"port": 2222}))
+    _rv.db.session.commit = _rv_commit_saved
+    check("ssh port: a second change for the SAME host while one runs is refused with 409",
+          _inner.get("same") == (409, {"success": False, "message":
+                                       "An SSH port change is already running for this host."})
+          and (_r.id, 3333) not in _csp_runs, "inner=%r runs=%r" % (_inner.get("same"), _csp_runs))
+    check("ssh port: ...while the first completes, and holds the lock through the port commit",
+          _st == 200 and (_body or {}).get("success") is True and _r.port == 2222
+          and _held_at_commit == [True, True], "%r %r held=%r" % (_st, _body, _held_at_commit))
+    check("ssh port: ...and a change for a DIFFERENT host is not held up by it",
+          (_inner.get("other") or (None,))[0] == 200 and (_other.id, 4444) in _csp_runs,
+          repr(_inner.get("other")))
+    _rv.change_ssh_port = lambda remote, port, bind: (_ for _ in ()).throw(RuntimeError("boom"))
+    _rv_json(_rv_client.post("/api/remote/%d/ssh-port" % _r.id, json={"port": 2223}))
+    _rv.change_ssh_port = lambda remote, port, bind: (_csp.append((port, bind)), (True, "moved"))[1]
+    _csp.clear()
+    _st, _body = _rv_json(_rv_client.post("/api/remote/%d/ssh-port" % _r.id, json={"port": 2224}))
+    check("ssh port: the lock is released afterwards — even after a change that RAISED",
+          _st == 200 and _csp == [(2224, "")] and not _rv._ssh_port_locks[_r.id].locked(),
+          "status=%r calls=%r" % (_st, _csp))
+    # ...and the page does not offer the second click: the button is disabled from the moment the
+    # request is sent until it answers — on success, on a refusal, and when the request fails.
+    _csp_js = open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), "static", "js", "remote_manage_host.js"), encoding="utf-8").read()
+    _csp_fn = _csp_js.split("function changeSshPort(){", 1)[-1].split("\nfunction ", 1)[0]
+    _csp_then = _csp_fn.split(".then(function(d){", 1)[-1].split(".catch(", 1)[0]
+    _csp_catch = _csp_fn.split(".catch(", 1)[-1]
+    check("ssh port (page): the button is disabled before the request and re-enabled on every answer",
+          "querySelectorAll('[data-action=\"changeSshPort\"]')" in _csp_fn
+          and "busy(true)" in _csp_fn and _csp_fn.index("busy(true)") < _csp_fn.index("fetch(")
+          and "busy(false)" in _csp_then and "busy(false)" in _csp_catch,
+          "changeSshPort never disables its button, or leaves it disabled after an answer")
+    _r.port = 22
 
     # ── close the panel's public port ──────────────────────────────────────────────────────────
     _rv.load_config = lambda: {"tailscale_setup_done": True, "port": 5000}
