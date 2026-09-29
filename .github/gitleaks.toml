@@ -13,6 +13,12 @@ useDefault = true
 description = "Non-secret UI placeholders and example values"
 # Match against the detected secret text.
 regexTarget = "match"
+# Commits whose every finding is exempt. Only for a commit reviewed line by line, whose findings
+# cannot be exempted by a match regex without also clearing what a gate needs gitleaks to find.
+#   12d1466 (PR #366): the part06 gate for the entry below wrote its two negative-control probes
+#   as literals (another value in the Ubuntu Pro field; this value in another field). The tree
+#   builds them now; a regex clearing their text would clear the probes the gate relies on.
+commits = ["12d1466321fa6c95f85dede160785208829b69b8"]
 regexes = [
   '''tskey-auth-\.{2,}''',          # Tailscale auth-key input placeholder (e.g. "tskey-auth-...")
   '''tskey-auth-\.\.\.''',

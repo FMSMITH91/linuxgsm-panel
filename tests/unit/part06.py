@@ -5584,12 +5584,16 @@ check("gitleaks: the fingerprint exemption is that one value, not every NODESOUR
 # value in another field, must still be found.
 _gl_flows = open(os.path.join(_root, "tools", "js_coverage", "flows.py"), encoding="utf-8").read()
 _gl_upro = "J.type('#upro-token', 'C1234567890abcdef')"
+# The two negative controls are BUILT, not written out: as literals they are exactly what
+# generic-api-key flags, and the secret scan went red on this gate's own probes (12d1466).
+_gl_other_value = _gl_upro.replace("1234567890", "".join(str(9 - _i) for _i in range(10)))
+_gl_other_field = _gl_upro.replace("#upro-", "#" + "api-")
 check("gitleaks: the coverage walk no longer types the old stand-in token (the exemption is history-only)",
       "C1234567890abcdef" not in _gl_flows and "#upro-token" in _gl_flows)
 check("gitleaks: the allowlist clears the old stand-in token in the Ubuntu Pro field, and only there",
       any(re.search(_rx, _gl_upro) for _rx in _gl_rxs)
-      and not any(re.search(_rx, "J.type('#upro-token', 'C9876543210fedcba')") for _rx in _gl_rxs)
-      and not any(re.search(_rx, "J.type('#api-token', 'C1234567890abcdef')") for _rx in _gl_rxs))
+      and not any(re.search(_rx, _gl_other_value) for _rx in _gl_rxs)
+      and not any(re.search(_rx, _gl_other_field) for _rx in _gl_rxs))
 
 # ── The docs state numbers that the code owns — pin them ──────────────────────────────────────
 # Every one of these was wrong at the time of writing, and none of them could be. SECURITY.md said
