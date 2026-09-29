@@ -7110,21 +7110,21 @@ finally:
 # What the refusal costs a real proxy that is not listed: every client keyed as the proxy, one
 # shared throttle bucket. So it is said in the log — once per peer, not once per request — naming
 # the setting that fixes it.
-import logging as _ip_logging  # noqa: E402
+from logging import Handler as _IpHandler, WARNING as _IP_WARNING, getLogger as _ip_logger  # noqa: E402
 
 
-class _IpWarned(_ip_logging.Handler):
+class _IpWarned(_IpHandler):
     def __init__(self):
-        _ip_logging.Handler.__init__(self)
+        _IpHandler.__init__(self)
         self.got = []
 
     def emit(self, rec):
-        if rec.levelno >= _ip_logging.WARNING:
+        if rec.levelno >= _IP_WARNING:
             self.got.append(rec.getMessage())
 
 
 _ip_h = _IpWarned()
-_ip_logging.getLogger("panel.app").addHandler(_ip_h)
+_ip_logger("panel.app").addHandler(_ip_h)
 getattr(_ip_auth, "_ignored_proxy_warned", {}).clear()      # the checks above warned already
 try:
     for _ in range(5):
@@ -7133,7 +7133,7 @@ try:
     _ip_for({"X-Forwarded-For": "192.0.2.77"}, trust_proxy=True, root_peer=False)
     _ip_for({}, remote="198.51.100.201", trust_proxy=True)        # no header: nothing to ignore
 finally:
-    _ip_logging.getLogger("panel.app").removeHandler(_ip_h)
+    _ip_logger("panel.app").removeHandler(_ip_h)
 _ip_w_remote = [m for m in _ip_h.got if "198.51.100.200" in m]
 check("client_ip: an ignored X-Forwarded-For is logged once per peer, naming trusted_proxies",
       len(_ip_w_remote) == 1 and "trusted_proxies" in _ip_w_remote[0], repr(_ip_h.got))

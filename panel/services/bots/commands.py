@@ -435,8 +435,11 @@ def queue_panel_update(worker, bot, fn):
 
 
 def bot_update_status():
-    """panel_update_status for a chat's !update: a status younger than _BOT_STATUS_FRESH as it is,
-    a forced check while the allowance lasts, else the ordinary cache (the badge's five minutes)."""
+    """Return panel_update_status as a chat's !update may ask for it.
+
+    A status younger than _BOT_STATUS_FRESH as it is, a forced check while the hour's allowance
+    lasts, else the ordinary cache (the sidebar badge's five minutes).
+    """
     cache = so._update_cache
     data = cache.get("data")
     if data is not None and time.time() - (cache.get("ts") or 0.0) < _BOT_STATUS_FRESH:

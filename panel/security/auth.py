@@ -1191,8 +1191,11 @@ def _trusted_proxy_networks(value):
 
 
 def _trusted_proxy_uids(value):
-    """The uids whose loopback sockets may speak for a client: root, the panel's own account, and
-    config.json's trusted_proxy_users (names or uids; None means _DEFAULT_PROXY_USERS)."""
+    """The uids whose loopback sockets may speak for a client.
+
+    Root, the panel's own account, and config.json's trusted_proxy_users (names or uids; None
+    means _DEFAULT_PROXY_USERS).
+    """
     import logging
     import os
     import pwd
@@ -1213,8 +1216,11 @@ def _trusted_proxy_uids(value):
 
 
 def configure_proxy_trust(app, cfg):
-    """Record, once at startup, which peers trust_proxy believes: like trust_proxy itself (and the
-    ProxyFix it installs), these are read from config.json and take effect on a restart."""
+    """Record, once at startup, which peers trust_proxy believes.
+
+    Like trust_proxy itself (and the ProxyFix it installs), these are read from config.json and
+    take effect on a restart.
+    """
     app.config["_TRUSTED_PROXIES"] = _trusted_proxy_networks(cfg.get("trusted_proxies"))
     app.config["_TRUSTED_PROXY_UIDS"] = _trusted_proxy_uids(cfg.get("trusted_proxy_users"))
 
@@ -1246,9 +1252,12 @@ def _declared_proxy_trusted(addr, conf):
 
 
 def _note_ignored_proxy(addr, local_uid=None):
-    """Log that a forwarding header from `addr` was not believed — once an hour per peer, and only
-    when the request carried one (a direct client without headers is not news). `local_uid`: the
-    peer IS in trusted_proxies (loopback) but this local account is not a proxy account."""
+    """Log that a forwarding header from `addr` was not believed.
+
+    Once an hour per peer, and only when the request carried one (a direct client without headers
+    is not news). `local_uid`: the peer IS in trusted_proxies (loopback) but this local account is
+    not a proxy account.
+    """
     import logging
     if not (request.headers.get("X-Forwarded-For") or request.headers.get("X-Real-IP")):
         return
@@ -1340,10 +1349,11 @@ def client_ip():
 
 
 def _request_came_through_proxy(peer):
-    """Whether this request's forwarding headers may be read: a proxy trust_proxy was told of (see
-    _declared_proxy_trusted), or without trust_proxy a root loopback peer (tailscaled).
+    """Whether this request's forwarding headers may be read.
 
-    `peer` is the ORIGINAL socket peer, from before ProxyFix rewrote remote_addr.
+    Under trust_proxy, from a proxy it was told of (_declared_proxy_trusted); without it, from a
+    root loopback peer (tailscaled). `peer` is the ORIGINAL socket peer, from before ProxyFix
+    rewrote remote_addr.
     """
     try:
         conf = current_app.config

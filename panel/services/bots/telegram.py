@@ -360,6 +360,12 @@ def _set_tg_pending_update(chat_id, from_commit):
         {"telegram_pending_update": {"chat_id": chat_id, "from_commit": from_commit, "ts": time.time()}}))
 
 
+def _tg_chat_still_authorised(tg, chat):
+    """Whether the Telegram settings `tg` still take commands from `chat` — the poller's gate."""
+    return bool(tg.get("enabled") and tg.get("accept_commands")
+                and (tg.get("chat_id") or "").strip() == str(chat).strip())
+
+
 def _report_tg_pending_update():
     """After a restart, tell the chat how a Telegram-triggered update went, if one was pending.
 
@@ -379,8 +385,7 @@ def _report_tg_pending_update():
     # Authorised when it sent /update is not authorised now: the marker outlives the restart, and
     # the bot may have been switched off, or its commands, or moved to another chat in between.
     # The same gate the poller applies to every update (_tg_settings / _tg_route_update).
-    if not (tg.get("enabled") and tg.get("accept_commands")
-            and (tg.get("chat_id") or "").strip() == str(chat).strip()):
+    if not _tg_chat_still_authorised(tg, chat):
         _log.info("telegram: the pending update report was dropped; its chat is no longer the "
                   "authorised one")
         return

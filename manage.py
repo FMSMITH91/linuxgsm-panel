@@ -73,8 +73,9 @@ def _read_password(args):
 
 
 def _tty_safe(value):
-    """`value` as text a terminal shows rather than obeys: each non-printable character as its
-    visible escape (\\x1b, \\u202e, \\n, \\U000e0001).
+    r"""Return `value` as text a terminal shows rather than obeys.
+
+    Each non-printable character becomes its visible escape (\x1b, \u202e, \n, \U000e0001).
 
     This CLI prints names that were typed into the web UI — by a delegate with MANAGE_USERS or
     MANAGE_GROUPS, or by whoever redeemed an invite — and the operator runs it as root in exactly

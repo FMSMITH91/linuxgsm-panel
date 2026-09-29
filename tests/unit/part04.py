@@ -1582,7 +1582,10 @@ try:
     _dcm.so._compute_update_status = lambda: (_ for _ in ()).throw(RuntimeError("git broke"))
     _dcm.so._update_cache.update(ts=0.0, data=None)
     try:
-        _ub_hold.held[2]()          # the real worker catches what a command raises; so does this
+        # The real worker catches what a command raises; so does this. Absent only when the check
+        # above already failed (the claim was never released), and then the one below fails too.
+        if len(_ub_hold.held) > 2:
+            _ub_hold.held[2]()
     except RuntimeError:
         pass
     _ub_said.clear()

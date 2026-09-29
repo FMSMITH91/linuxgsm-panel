@@ -190,9 +190,10 @@ def username_problem(name):
 
 
 def _has_control_or_format(text):
-    """Whether `text` holds a character of Unicode category C: a control (ESC, BEL, the C1 CSI),
-    a format character (bidi overrides such as U+202E, zero-width joiners and spaces), a surrogate,
-    a private-use or an unassigned code point.
+    """Whether `text` holds a character of Unicode category C.
+
+    That is a control (ESC, BEL, the C1 CSI), a format character (bidi overrides such as U+202E,
+    zero-width joiners and spaces), a surrogate, a private-use or an unassigned code point.
 
     A stored name is printed to a TERMINAL by the recovery CLI (manage.py, run as root), where an
     ESC sequence moves the cursor, erases the line or writes the clipboard (OSC 52), and a bidi
