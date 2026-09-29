@@ -163,7 +163,7 @@ def _remote_names():
 # tailnet, rewriting Serve or opening an SSH connection from a test run. rbac_test.py warns what
 # these do unstubbed — they reconfigure the tailnet of the machine the suite runs on.
 from panel.ops import tailscale_integration as _ts_mod  # noqa: E402
-from panel.ops import system_ops as _so_mod  # noqa: E402
+_so_mod = _so                                      # restart_panel is stubbed on it below
 import panel.routes.route_helpers as _rh  # noqa: E402
 from panel.db.models import RemoteServer  # noqa: E402
 _ts_saved = (_ts_mod.install_tailscale_local, _ts_mod.tailscale_up_local,
@@ -220,12 +220,14 @@ try:
     r = _anon.get("/setup?token=" + "x" * len(_TOKEN))
     check("token: a wrong ?token= is refused with the token page",
           r.status_code == 403 and _is_token_page(r), "got %d" % r.status_code)
-    for _bad in ("", _TOKEN[:-1], _TOKEN + "x", "é" * 8):
+    for _bad in ("", _TOKEN[:-1], _TOKEN + "x", "\u00e9" * 8):
         _anon.post("/setup", data={"setup_token": _bad})
-    _anon.post("/setup", data={"step": "admin_user", "username": "attacker",
-                               "password": _ADMIN_PASSWORD, "confirm_password": _ADMIN_PASSWORD})
+    # Step 1 is the one step the wizard's order allows here, so it is what shows a claim.
+    _anon.post("/setup", data={"step": "welcome", "site_title": "Hijacked", "port": "5098",
+                               "bind_host": "0.0.0.0"})  # nosec B104 - a hostile input, not a bind
     check("token: ...and a wrong, empty, truncated or non-ASCII one grants nothing",
-          superadmins() == [], str(superadmins()))
+          load_config().get("port") != 5098 and superadmins() == [],
+          "%s %s" % (load_config().get("port"), superadmins()))
 
     # The four setup Tailscale endpoints, unclaimed. /up joins this host to the CALLER's tailnet
     # with Tailscale SSH on, and returns them the login URL; /serve rewrites bind_host.
@@ -356,6 +358,16 @@ try:
               load_config().get("bind_host") == _good, repr(load_config().get("bind_host")))
     c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
                            "port": "5052", "bind_host": "127.0.0.1"})
+
+    # The real window: the operator has done step 1 and is filling in the admin form. The step
+    # order now allows admin_user, so only the token stands between a stranger and the account.
+    check("token: (precondition) the wizard is at the admin step", _wiz_step() == "admin_user",
+          _wiz_step())
+    r = app.test_client().post("/setup", data={"step": "admin_user", "username": "attacker",
+                                               "password": _ADMIN_PASSWORD,
+                                               "confirm_password": _ADMIN_PASSWORD})
+    check("token: while the operator is at the admin step, an unclaimed POST creates no superadmin",
+          superadmins() == [] and r.status_code == 403, "%d %s" % (r.status_code, superadmins()))
 
     # ── The wizard follows its OWN step, not the one the form names ───────────────────────────
     # The handler dispatched on the posted `step`, so step=remote_server action=add made the panel
