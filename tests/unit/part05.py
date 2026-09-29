@@ -5102,6 +5102,11 @@ try:
         _tl_p.stdout.readline()
         _tl_p.stdout.close()                 # the channel closes mid-action
         _tl_p.wait(timeout=20)
+        # Its stderr pipe too, now the action is done. `_tl_p` is a module global, so an open
+        # pipe here stayed open until interpreter shutdown, where its green file object's
+        # finalizer ran after eventlet's own module globals were cleared and printed "Exception
+        # ignored while finalizing file ... 'NoneType' object is not callable".
+        _tl_p.stderr.close()
         with open(os.path.join(_tl_home, ".panel-update.log")) as _tl_f:
             _tl_log = _tl_f.read()
         check("run_as_game_user: a closed channel does not kill the action; it runs to the end",
