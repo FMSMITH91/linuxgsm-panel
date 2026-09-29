@@ -741,8 +741,11 @@ check("part16: every deferred worker was run (none left to leak into a later che
 # their answer is capped at the transport. The PANEL host's helper built the whole list in memory,
 # and its _run_verb collected whatever the verb printed.
 _F2B16_DIR = _tf16.mkdtemp(prefix="lgsm-unit-f2b-")
-_F2B16_LINE = ("2026-09-28 10:00:00,123 fail2ban.filter [1]: INFO [sshd] Found "
-               "2001:db8::%x - 2026-09-28 10:00:00")
+# Dated YESTERDAY, not a fixed day: the readers keep only the last `days` (7) counted back from
+# now, so a fixed date made every check below fail once it was a week old (review, 2026-09-29).
+_F2B16_DAY = (_dt16.now() - __import__("datetime").timedelta(days=1)).strftime("%Y-%m-%d")
+_F2B16_LINE = (_F2B16_DAY + " 10:00:00,123 fail2ban.filter [1]: INFO [sshd] Found "
+               "2001:db8::%x - " + _F2B16_DAY + " 10:00:00")
 _f2b16_saved = (_helper.F2B_LOG_GLOB, sys.stdout, sys.stderr)
 
 
