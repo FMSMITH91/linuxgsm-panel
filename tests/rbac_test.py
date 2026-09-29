@@ -1082,6 +1082,71 @@ def _check_vps_prep_refuses_panel_host():
           not _trapped[_trapped_at:], "reached: %r" % (_trapped[_trapped_at:],))
 
 
+def _check_tailscale_migrate_refuses_panel_host():
+    """Tailscale migrate/finalize refuse the panel's own host, and still run for a remote one."""
+    # migrate rewrites a host record onto Tailscale SSH and then deletes its public 22/tcp rule;
+    # finalize opens tailscale0 in its firewall. Both are for a REMOTE that just joined the
+    # tailnet, and they were the two Tailscale routes here without the host-kind check the other
+    # three carry — so the panel host's own firewall was one request away. The actions are
+    # stubbed to SUCCEED: unstubbed they fail on their own ("local" is not an SSH user), and a
+    # bare "400" would then pass on today's code as easily as on the fixed one.
+    _calls = []
+    _saved = (_rts_mod.remote_migrate_to_tailscale, _rts_mod.remote_tailscale_finalize,
+              _rts_mod.close_connection)
+    _rts_mod.remote_migrate_to_tailscale = lambda r: (
+        _calls.append(("migrate", r.id)) or ("100.64.0.9", {"tailscale_ip": "100.64.0.9"}))
+    _rts_mod.remote_tailscale_finalize = lambda r: (
+        _calls.append(("finalize", r.id)) or ({"running": True}, "tailscale0 allowed"))
+    _rts_mod.close_connection = lambda r: None
+    with app.app_context():
+        _loc = RemoteServer.query.filter_by(is_local=True).first()
+        _made_local = _loc is None
+        if _made_local:
+            _loc = RemoteServer(name="rbac-ts-local", host="127.0.0.1", port=22, username="local",
+                                auth_method="local", auth_credential="", is_local=True)
+            db.session.add(_loc)
+        _probe = RemoteServer(name="rbac-ts-migrate-probe", host="192.0.2.77", port=2222,
+                              username="root", auth_method="key", auth_credential="")
+        db.session.add(_probe)
+        db.session.commit()
+        _loc_id, _probe_id = _loc.id, _probe.id
+        _loc_before = (_loc.host, _loc.auth_method, _loc.port)
+    try:
+        _cl = client_as(admin_id)
+        for _ep, _what in (("tailscale-migrate", "Tailscale migration"),
+                           ("tailscale-finalize", "Tailscale finalize")):
+            _rr = _cl.post("/api/remote/%d/%s" % (_loc_id, _ep), json={})
+            _msg = (_rr.get_json(silent=True) or {}).get("message") or ""
+            check("%s is REFUSED on the panel's own host" % _what,
+                  _rr.status_code == 400 and "panel's own host" in _msg and _what in _msg,
+                  "%d %s" % (_rr.status_code, _msg[:120]))
+            check("%s's refusal does not claim it would reboot the panel" % _what,
+                  "reboot the panel" not in _msg, _msg[:160])
+        check("...and neither reached the action on the panel's own host",
+              not [c for c in _calls if c[1] == _loc_id], repr(_calls))
+        with app.app_context():
+            _l = db.session.get(RemoteServer, _loc_id)
+            check("...and the panel host's row is unchanged",
+                  (_l.host, _l.auth_method, _l.port) == _loc_before,
+                  repr((_l.host, _l.auth_method, _l.port)))
+        # A REMOTE host still gets both — refusing everything would pass the checks above.
+        _rr = _cl.post("/api/remote/%d/tailscale-migrate" % _probe_id, json={})
+        _rf = _cl.post("/api/remote/%d/tailscale-finalize" % _probe_id, json={})
+        check("a REMOTE host still migrates and finalizes (positive control)",
+              _rr.status_code == 200 and _rf.status_code == 200
+              and _calls == [("migrate", _probe_id), ("finalize", _probe_id)],
+              "%d/%d %r" % (_rr.status_code, _rf.status_code, _calls))
+    finally:
+        (_rts_mod.remote_migrate_to_tailscale, _rts_mod.remote_tailscale_finalize,
+         _rts_mod.close_connection) = _saved
+        with app.app_context():
+            for _rid in ([_probe_id] + ([_loc_id] if _made_local else [])):
+                _row = db.session.get(RemoteServer, _rid)
+                if _row is not None:
+                    db.session.delete(_row)
+            db.session.commit()
+
+
 def _check_vps_prep_allows_a_remote_host():
     """...but not a remote host: refusing everything would pass the checks above too."""
     global _ci, _r2
@@ -1923,9 +1988,9 @@ def _check_setup_endpoints_stay_shut():
     """The setup-only endpoints stay shut when config.json is lost."""
     global _label, _m, _p, _r
     # ── The setup-only endpoints must stay shut when config.json is LOST ───────────────────────────
-    # /api/setup/tailscale/{status,install,up,serve} are deliberately unauthenticated — during a fresh
-    # install there is no user to authenticate. They are safe only for as long as their "setup is still
-    # open" test is. That test used to be is_setup_complete(), which was then (DB row AND config flag),
+    # /api/setup/tailscale/{status,install,up,serve} carry no login — during a fresh install there is no
+    # user to authenticate. They answer only the wizard's owner (the setup token before the admin
+    # exists, the owner token after), and only for as long as their "setup is still open" test holds. That test used to be is_setup_complete(), which was then (DB row AND config flag),
     # and the config half failed open: load_config() swallows JSONDecodeError/OSError and hands back
     # DEFAULT_CONFIG, where setup_complete is False.
     #
@@ -2288,6 +2353,7 @@ try:
     _check_uninstall_lands_on_openable_page()
     _check_retry_install_matches_its_route()
     _check_vps_prep_refuses_panel_host()
+    _check_tailscale_migrate_refuses_panel_host()
     _check_vps_prep_allows_a_remote_host()
     _check_limited_user_server_actions()
     _check_legacy_super_admin_grant()
@@ -2457,8 +2523,8 @@ _MUT_NO_PERM_OK = {
     # csrf.protect() is a no-op on safe methods; it is still self-service, and it is reachable
     # pre-login (the switcher is on the login page), so there is no permission to require.
     "set_language",
-    # Unauthenticated by design: login, the setup wizard, an invite redemption. The two setup
-    # Tailscale endpoints carry their own gate — _setup_open() — because no login exists yet.
+    # No login by design: login, the setup wizard, an invite redemption. The setup Tailscale
+    # endpoints carry their own gate — _setup_ts_ok() — because no login exists yet.
     #
     # setup_wizard was never exempt here, and passed only because its admin step's
     # `filter_by(is_superadmin=True)` put a gate token in its source by accident. Its real gates are
@@ -2467,6 +2533,10 @@ _MUT_NO_PERM_OK = {
     # on a word that was never a permission check.
     "login", "login_2fa", "redeem_invite", "force_password_change", "setup_wizard",
     "api_setup_ts_install", "api_setup_ts_serve", "api_setup_ts_up",
+    # The finished wizard's "Restart now". Gated on _setup_owner_ok() — the browser that ran the
+    # wizard, or a signed-in superadmin — and it restarts only while a stored loopback bind is
+    # waiting for the next start; setup_wizard_test drives both refusals.
+    "setup_restart",
 }
 _mut_unguarded, _mut_seen = [], []
 

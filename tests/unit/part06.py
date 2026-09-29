@@ -3455,6 +3455,53 @@ try:
     check("install.sh: the URL banner says so when the firewall state is unknown",
           'UFW_READ}" -eq 0' in _su_txt and "firewall state unknown" in _su_txt)
 
+    # ── the banner's link carries the setup token, read as the panel's account ────────────────
+    # Until the first admin exists the wizard answers only to a browser holding this token, so the
+    # link the operator is handed must carry it. Run for real: manage.py is a stand-in that says
+    # who ran it; sudo and id are shims, so nothing here escalates.
+    _stk_fn = _su_between("setup_link_token() {", "\n}\n")
+    _stk_dir = _tempfile.mkdtemp(prefix="setuptoken-")
+    try:
+        os.makedirs(os.path.join(_stk_dir, "venv", "bin"))
+        _stk_py = os.path.join(_stk_dir, "venv", "bin", "python")
+        with open(_stk_py, "w", encoding="utf-8") as _fh:
+            _fh.write('#!/bin/bash\n[ "$2" = setup-token ] && [ "$3" = --raw ] || exit 9\n'
+                      'echo "noise on stdout first" ; cat "$STK_OUT"; exit "${STK_RC:-0}"\n')
+        os.chmod(_stk_py, 0o700)
+        _stk_out = os.path.join(_stk_dir, "out")
+
+        def _stk_run(printed, rc=0, uid=0, user="lgsmpanel"):
+            with open(_stk_out, "w", encoding="utf-8") as _fh:
+                _fh.write(printed)
+            _env = ("PANEL_DIR=%s\nPANEL_USER=%s\nexport STK_OUT=%s STK_RC=%d\n"
+                    % (_su_shlex.quote(_stk_dir), user, _su_shlex.quote(_stk_out), rc))
+            _shim = ("id() { echo %d; }\n"
+                     "sudo() { [ \"$1\" = -u ] || return 7; echo \"AS=$2\" >&2; shift 2; \"$@\"; }\n"
+                     % uid)
+            return _su_run(_stk_fn + '\nprintf "TOK=[%s]" "$(setup_link_token)"\n', _env,
+                           extra=_shim)
+        _good = "Abc_def-" + "x" * 24
+        _r = _stk_run(_good + "\n")
+        check("install.sh: the banner's setup token comes from manage.py, as the PANEL's account",
+              ("TOK=[%s]" % _good) in _r.stdout and "AS=lgsmpanel" in _r.stderr,
+              repr((_r.stdout[-120:], _r.stderr[-120:])))
+        _r = _stk_run(_good + "\n", uid=1000, user="alice")
+        check("install.sh: ...and a non-root install runs it as itself, with no sudo",
+              ("TOK=[%s]" % _good) in _r.stdout and "AS=" not in _r.stderr,
+              repr((_r.stdout[-120:], _r.stderr[-120:])))
+        _r = _stk_run("Setup already has an administrator\n", rc=1)
+        check("install.sh: an install that already has an admin prints no token (plain address)",
+              "TOK=[]" in _r.stdout, repr(_r.stdout[-120:]))
+        _r = _stk_run("\x1b]0;owned\x07" + _good + "\n")
+        check("install.sh: ...and anything that is not a bare token never reaches root's terminal",
+              "TOK=[]" in _r.stdout and "\x1b" not in _r.stdout, repr(_r.stdout[-120:]))
+    finally:
+        _shutil.rmtree(_stk_dir, ignore_errors=True)
+    _banner = _su_between('SETUP_TOKEN="$(setup_link_token)"', "sudo linuxgsm-panel-recover setup-token")
+    check("install.sh: every URL the banner prints carries the setup path",
+          _banner.count("${PORT}${SETUP_PATH}${NC}") == 4 and 'SETUP_PATH="/setup?token=${SETUP_TOKEN}"'
+          in _banner, _banner[:200])
+
     # ── uninstall.sh must not report work it did not do ──────────────────────────────────────
     _un_txt = open(os.path.join(_root, "uninstall.sh"), encoding="utf-8").read()
 
