@@ -5766,10 +5766,11 @@ try:
                 _sum_q, _sum_code = _qcount("/api/os-updates/summary")
                 check("perf: the OS-updates banner endpoint renders", _sum_code == 200,
                       "got %d" % _sum_code)
-                # 5 and 8, not 10 and 15: it really costs 3 and 5, and there are 5 hosts in
-                # the snapshot, so a per-host query would add 5. A looser budget would leave the
-                # N+1 this guards against comfortably inside it — a gate with too much headroom
-                # passes exactly when it matters.
+                # 5 and 8, not 10 and 15: it really costs 3 and 7 (measured 2026-09-29, with 9
+                # hosts in the snapshot — the same with the row-identity check the entries now
+                # carry, whose query also answers which host is the panel's), so a per-host query
+                # would add 9. A looser budget would leave the N+1 this guards against comfortably
+                # inside it — a gate with too much headroom passes exactly when it matters.
                 check("perf: the banner endpoint does NOT query per host",
                       _sum_q <= 5, "%d queries for %d hosts"
                       % (_sum_q, len(_appmod._os_update_seen)))
