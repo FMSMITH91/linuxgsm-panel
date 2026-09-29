@@ -14,7 +14,8 @@ from panel.security.auth import (MANAGE_REMOTES, get_remote, log_action, permiss
     superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
-from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, _port_or)
+from panel.core.validation import (MAX_PORT, MIN_UNPRIVILEGED_PORT, NOT_AN_IP, _port_or,
+                                   canonical_ip, ip_address_or_none)
 from app import (AUTH_LOG_PATH, _autoblock_hosts, _maybe_set_threshold, _run_autoblock_now,
     _security_whitelist, _set_autoblock_host)
 from panel.routes._shared import (_whitelist_mutate)
@@ -38,9 +39,8 @@ def _panel_bind_is_public(bind):
     b = (bind or "").strip()
     if b == "localhost":
         return False
-    try:
-        a = _ipaddress.ip_address(b)
-    except ValueError:
+    a = ip_address_or_none(b)
+    if a is None:
         return True          # validated before this is asked; unknown keeps the port open
     if a.is_unspecified:
         return True
@@ -114,8 +114,10 @@ def _register_blocking(app):
                             "%s is on the security whitelist — remove it there first to block it." % ip})
         try:
             ok, msg = (remote_ufw_undeny_ip(remote, ip) if unblock else remote_ufw_deny_ip(remote, ip))
+            # The address, never the request's text: the row records what was acted on.
             log_action(current_user, "ufw_unblock" if unblock else "ufw_block",
-                       target=ip, detail=remote.name, success=ok, remote=remote)
+                       target=canonical_ip(ip) or NOT_AN_IP, detail=remote.name, success=ok,
+                       remote=remote)
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("block failed")}), 500
@@ -169,7 +171,7 @@ def _register_whitelist_and_log(app):
         jail, banned_ip = _json_str(d, "jail"), _json_str(d, "ip")
         try:
             ok, msg = remote_fail2ban_unban(remote, jail, banned_ip)
-            log_action(current_user, "fail2ban_unban", target=banned_ip,
+            log_action(current_user, "fail2ban_unban", target=canonical_ip(banned_ip) or NOT_AN_IP,
                        detail="%s on %s — %s" % (jail, remote.name, msg), success=ok,
                        remote=remote)
             return jsonify({"success": ok, "message": msg})
@@ -292,9 +294,8 @@ def _bind_refusal(served, new_bind):
     loopback = {"127.0.0.1", "::1", "localhost"}
     # ── Validate the bind address ──
     if new_bind not in wildcard:
-        try:
-            _ipaddress.ip_address(new_bind)
-        except ValueError:
+        # A zone id is not an address to bind (see panel/core/validation.py).
+        if ip_address_or_none(new_bind) is None:
             return ("Bind address must be an IP — e.g. 0.0.0.0 (all "
                     "interfaces), 127.0.0.1 (localhost), or this host's "
                     "Tailscale IP.")

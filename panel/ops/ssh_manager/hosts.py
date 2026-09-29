@@ -8,6 +8,7 @@ from panel.core import clock, terminal
 import time
 import paramiko
 from panel.core.config import decrypt_secret
+from panel.core.validation import canonical_ip, ip_address_or_none, ip_network_or_none
 from panel.security import privileged as _priv
 from panel.ops.ssh_manager import (_core, firewall)  # noqa: E402,F401  (module objects: the
 # reference resolves at CALL time, which is what keeps a stub on the definition site
@@ -301,7 +302,9 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
     ipaddress and refuses anything that is not a network, so nothing composable reaches the
     command line.
 
-    A port RANGE is fine (27015:27020), which Source-engine games need."""
+    A port RANGE is fine (27015:27020), which Source-engine games need. An IPv6 zone id is not an
+    address or a network, though ipaddress parses one, so it is refused here; what is passed on and
+    reported is the verb's canonical spelling of the source, never the typed text."""
     src = (source or "").strip()
     if not src:
         return False, "Source address required"
@@ -320,7 +323,7 @@ def remote_ufw_allow_from(server, source, port, protocol="tcp", comment="", allo
     # so the user still got no reason and the panel log still got a traceback. Same two answers
     # the sibling gives, as (ok, msg).
     try:
-        _ipaddress.ip_network(src, strict=False)
+        src = _priv.canonical_cidr(src)
     except ValueError:
         return False, "Source must be an IP address or network (e.g. 10.0.0.0/24)"
     if not _UFW_PORT_SPEC_RE.match(spec):
@@ -2092,12 +2095,11 @@ def _canonical_ip(s):
 
     Canonical matters: fail2ban and ufw store the normalised form, so unbanning
     "2001:0DB8::0001" against a stored "2001:db8::1" silently matches nothing. Two of the three
-    remote helpers already normalised; the unban one compared the raw string."""
-    import ipaddress
-    try:
-        return str(ipaddress.ip_address(str(s).strip()))
-    except ValueError:
-        return None
+    remote helpers already normalised; the unban one compared the raw string.
+
+    An IPv6 zone id is refused: ipaddress kept it verbatim, so "canonical" was request text, and it
+    reached fail2ban-client's argv through the root helper."""
+    return canonical_ip(s)
 
 
 def _valid_ip(s):
@@ -2157,11 +2159,10 @@ _UFW_BLOCK_TAG = "panel-block"          # a one-off manual block
 def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
     """Firewall-block an IP on ALL ports via a UFW deny rule, inserted at the top so it beats any
     allow, and tagged in the rule comment so the panel recognises its own blocks. The IP is reparsed
-    to its canonical ipaddress form so nothing request-supplied reaches the shell unchecked. (ok, msg)."""
-    import ipaddress
-    try:
-        ip = str(ipaddress.ip_address((ip or "").strip()))
-    except (ValueError, TypeError):
+    to its canonical ipaddress form, with a zone id refused, so nothing request-supplied reaches the
+    shell unchecked. (ok, msg)."""
+    ip = canonical_ip(ip)
+    if ip is None:
         return False, "Invalid IP address."
     tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
     # The same decision as the panel host's ufw_deny_ip — one implementation, so the twins cannot
@@ -2177,11 +2178,9 @@ def remote_ufw_deny_ip(server, ip, tag=_UFW_BLOCK_TAG):
 
 
 def remote_ufw_undeny_ip(server, ip):
-    """Remove a UFW deny rule for an IP (canonicalised first). (ok, msg)."""
-    import ipaddress
-    try:
-        ip = str(ipaddress.ip_address((ip or "").strip()))
-    except (ValueError, TypeError):
+    """Remove a UFW deny rule for an IP (canonicalised first, a zone id refused). (ok, msg)."""
+    ip = canonical_ip(ip)
+    if ip is None:
         return False, "Invalid IP address."
     # Read the result — the same fix system_ops.ufw_undeny_ip already carries, for the same
     # reason, and this is the REMOTE twin that was missed. It discarded the tuple and returned
@@ -2634,9 +2633,16 @@ def change_ssh_port(server, new_port, bind_addr=""):
         return False, "Enter a valid port number."
     if not (1 <= new_port <= 65535):
         return False, "Port must be between 1 and 65535."
+    # Canonical from here on, and never with a zone id. _valid_ip used to keep the typed text, and
+    # ipaddress keeps a zone verbatim, newlines included: 'fe80::1%a' + a newline + anything closed
+    # the ListenAddress line and wrote the rest as lines of their own into a root-owned sshd or
+    # ssh.socket drop-in on a remote — where no line grammar checks the file, and the socket unit
+    # is reloaded before anything validates it. That is past what MANAGE_REMOTES grants.
     bind_addr = (str(bind_addr) if bind_addr else "").strip()
-    if bind_addr and not _valid_ip(bind_addr):
-        return False, "Bind address must be a valid IP address, or blank for all interfaces."
+    if bind_addr:
+        bind_addr = canonical_ip(bind_addr)
+        if bind_addr is None:
+            return False, "Bind address must be a valid IP address, or blank for all interfaces."
     # A LOOPBACK bind is the one lockout this function cannot undo, so it is refused before
     # anything is touched rather than caught afterwards.
     #
@@ -2652,15 +2658,11 @@ def change_ssh_port(server, new_port, bind_addr=""):
     # refuses a loopback-only panel bind unless Tailscale Serve is in front of it). sshd has no
     # equivalent proxy, so here it is refused outright.
     if bind_addr:
-        import ipaddress
-        try:
-            if ipaddress.ip_address(bind_addr).is_loopback:
-                return False, ("Binding SSH to %s would make it reachable only from the host "
-                               "itself — remote SSH would stop working, and binding is "
-                               "all-or-nothing so there is no fallback to revert to. Use the "
-                               "address you actually connect on." % bind_addr)
-        except ValueError:
-            return False, "Bind address must be a valid IP address, or blank for all interfaces."
+        if ip_address_or_none(bind_addr).is_loopback:
+            return False, ("Binding SSH to %s would make it reachable only from the host "
+                           "itself — remote SSH would stop working, and binding is "
+                           "all-or-nothing so there is no fallback to revert to. Use the "
+                           "address you actually connect on." % bind_addr)
         # ...and on the panel's own host, an address the host does not HAVE. This used to be caught
         # for free: sshd could not bind a missing address, so it failed to start and the listening
         # check reverted. Under socket activation systemd creates the socket anyway, so something
@@ -2949,16 +2951,13 @@ def tailnet_exempt_ips(server, ips):
     but only when Tailscale is actually running on this host. Returns a set of canonical IP strings
     (empty if Tailscale is down or nothing is in range). Works for local + remote (run_command
     dispatches). Best-effort; fails safe to no exemptions."""
-    import ipaddress
-    try:
-        net = ipaddress.ip_network(_TAILNET_CGNAT)
-    except ValueError:
+    net = ip_network_or_none(_TAILNET_CGNAT)
+    if net is None:
         return set()
     cand = set()
     for ip in ips or ():
-        try:
-            addr = ipaddress.ip_address((ip or "").strip())
-        except (ValueError, TypeError):
+        addr = ip_address_or_none(ip)
+        if addr is None:
             continue
         if addr in net:
             cand.add(str(addr))

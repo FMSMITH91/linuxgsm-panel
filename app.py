@@ -123,7 +123,8 @@ from panel.security import banlist as _banlist
 # app.py does not use has no reason to be reachable through app.py, and leaving it importable from
 # here is what let the cycle grow in the first place. See the docstrings in panel/core/validation.py
 # and panel/core/http.py.
-from panel.core.validation import MAX_PORT, MIN_PORT, _valid_hex_color
+from panel.core.validation import (MAX_PORT, MIN_PORT, _valid_hex_color, canonical_ip,
+                                   canonical_ip_or_network, ip_address_or_none)
 from panel.services.monitoring import (_METRIC_RETENTION_DAYS, _METRIC_SAMPLE_SECONDS,
     _MONITOR_SECONDS, _PLAYER_POLL_SECONDS, _autoblock_reconcile, _autoblock_threshold,
     _host_reachable, _monitor_pass, _reboot_when_empty_watch, _record_metric_samples,
@@ -157,13 +158,13 @@ AUTH_LOG_PATH = os.path.join(str(DATA_DIR), "auth.log")
 def _log_ip(ip):
     """Only a valid IP literal is written to auth.log (fail2ban bans IPs anyway); anything else
     becomes 'unknown'. CR/LF are stripped explicitly first, so a forged header value can never
-    inject a second line into the log fail2ban parses."""
-    import ipaddress
+    inject a second line into the log fail2ban parses.
+
+    And an IPv6 zone id is refused, because ipaddress kept it verbatim: 'fe80::1%x panel login
+    failed from 203.0.113.9' was written whole, and fail2ban's unanchored search banned
+    203.0.113.9 — or, given a hostname there, every address that name resolves to."""
     s = str(ip or "").replace("\r", "").replace("\n", "").strip()
-    try:
-        return str(ipaddress.ip_address(s))
-    except ValueError:
-        return "unknown"
+    return canonical_ip(s) or "unknown"
 
 
 def _session_label(ua):
@@ -667,13 +668,12 @@ def _set_autoblock_host(remote_id, enabled):
 # ── Login-security whitelist: IPs / CIDRs that are NEVER fail2ban-banned or UFW auto-blocked (global,
 # ── on top of the automatic tailnet exemption). Stored as validated canonical strings in the config.
 def _valid_ip_or_cidr(value):
-    """Canonical 'ip' or 'cidr' string for a user-entered value, or None if it isn't a real one."""
-    import ipaddress
-    s = (str(value) or "").strip()
-    try:
-        return str(ipaddress.ip_network(s, strict=False)) if "/" in s else str(ipaddress.ip_address(s))
-    except ValueError:
-        return None
+    """Canonical 'ip' or 'cidr' string for a user-entered value, or None if it isn't a real one.
+
+    An IPv6 zone id is not a real one: ipaddress parsed '::1%<anything>' and kept the text, which
+    is why _security_whitelist_add grew its own guard. The refusal lives here now, so every caller
+    has it (panel/core/validation.py)."""
+    return canonical_ip_or_network(value)
 
 
 def _security_whitelist():
@@ -686,6 +686,7 @@ def _security_whitelist_add(value):
     # IPv6 zone id VERBATIM, and `::1%<anything>` survives it with spaces and newlines intact. Stored
     # here, it reached the root-owned jail file as extra lines (bantime, [sshd] enabled = false, ...).
     # A zone id means nothing to a ban list, so refuse it, and anything that is not one plain token.
+    # _valid_ip_or_cidr refuses a zone itself now; this stays as the jail file's own last check.
     if not canon or "%" in canon or any(c.isspace() or not c.isprintable() for c in canon):
         return None
 
@@ -696,6 +697,8 @@ def _security_whitelist_add(value):
 
 
 def _security_whitelist_remove(value):
+    # The raw text is the fallback on purpose: it only ever removes an entry EQUAL to it, which is
+    # how one stored before the add refused it (a zone id, say) can still be taken out.
     canon = _valid_ip_or_cidr(value) or (str(value) or "").strip()
     update_config(lambda cfg: cfg.update(
         {"security_whitelist": [w for w in (cfg.get("security_whitelist", []) or []) if w != canon]}))
@@ -2703,12 +2706,10 @@ def _trust_proxy_bind_warning(cfg, bind):
 
 def _bind_is_loopback(bind_host):
     """True only for a concrete loopback address (127.0.0.0/8, ::1). "" (auto) is not: it can
-    resolve to 0.0.0.0 or a tailnet IP at boot."""
-    import ipaddress
-    try:
-        return ipaddress.ip_address(str(bind_host or "").strip()).is_loopback
-    except ValueError:
-        return False
+    resolve to 0.0.0.0 or a tailnet IP at boot. Nor is a zoned one: '::1%x' is loopback to
+    ipaddress, and no address the panel can bind."""
+    addr = ip_address_or_none(bind_host)
+    return addr is not None and addr.is_loopback
 
 
 # The address this process binds, decided ONCE: bind_host when it is set, otherwise what boot picks

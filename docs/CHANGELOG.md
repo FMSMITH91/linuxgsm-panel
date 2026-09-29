@@ -949,6 +949,30 @@ CI-verified commit regardless of this file — this changelog is for humans.
   client is keyed as the proxy (one shared login throttle), and the panel log says
   `ignoring X-Forwarded-For from <address>`. The startup output now warns when `trust_proxy` is on
   and the panel listens beyond loopback.
+- **An IPv6 zone id no longer passes as an address.** Python's address parser accepts a zone after
+  `%` on any IPv6 address and keeps whatever text follows it, spaces, `$(…)` and newlines included:
+  `fe80::1%x panel login failed from 203.0.113.9` parses. The panel used that parse as its safety
+  check, so the text got through wherever an address was expected. A delegated admin with
+  **Manage remotes** could put lines of their own into a remote host's root-owned sshd or
+  `ssh.socket` drop-in through the SSH port's bind address, which is more than that permission
+  grants. The same admin could pass the text to `fail2ban-client` as root through **Unban**, on any
+  host in their groups (the panel's own included). fail2ban's source shows it logging such a value
+  verbatim to `/var/log/fail2ban.log`, and the panel counts that log's lines toward the auto-block.
+  Behind a proxy that passes the client's own `X-Forwarded-For` through (nginx setting only
+  `X-Real-IP`, say), or from a local account trusted as a proxy, a login client could write free
+  text into `data/auth.log`, the audit trail, the session list and admin alerts. fail2ban then
+  banned an address the text named, or every address of a hostname, instead of the client. When
+  the address's last 64 bits were zero, each new zone was also a new login-throttle bucket, which
+  meant unlimited password guessing. Through Tailscale Serve or Funnel, or the README's nginx block,
+  a client cannot choose that value. The first-run wizard also accepted a zoned bind address that
+  the next start could not bind. Every address, network, ban, whitelist, firewall and bind check now
+  refuses a zone and passes on the parsed address rather than the typed text, and the root helper
+  checks this for itself. A block, unban or allow-from rule is audited under its address or
+  network, or as `(not an IP address)`.
+  A link-local client that the kernel reports with its interface attached is still keyed by its
+  address. Nothing to do: no real client, ban or bind address carries a zone. A whitelist entry
+  stored with one before the whitelist refused them no longer exempts anything, which is how
+  fail2ban already treated it.
 - **A `"*"` in `socketio_cors_origins` is ignored.** It let a page on another port of the panel's
   address, or on a sibling tailnet node — both same-site, so the session cookie is sent — open the
   console and the terminal as whoever visited it. If you had set it, set `site_domain` or list the

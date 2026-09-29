@@ -15,6 +15,7 @@ from panel.security.auth import (log_action, superadmin_required)
 from panel.services.monitoring import (_autoblock_threshold, _whitelisted)
 from types import (SimpleNamespace)
 from panel.core.http import (_json_body, _json_str, _log_and_generic)
+from panel.core.validation import (NOT_AN_IP, canonical_ip)
 from app import (_autoblock_hosts, _local_remote_id, _maybe_set_threshold, _os_update_note,
     _run_autoblock_now, _security_whitelist, _set_autoblock_host)
 from panel.routes._shared import (_whitelist_mutate)
@@ -389,7 +390,9 @@ def _register_panel_blocking(app):
                                 "%s is on the security whitelist — remove it there first to block it." % ip})
         try:
             ok, msg = (so.ufw_undeny_ip(ip) if unblock else so.ufw_deny_ip(ip))
-            log_action(current_user, "ufw_unblock" if unblock else "ufw_block", target=ip, success=ok)
+            # The address, never the request's text: the row records what was acted on.
+            log_action(current_user, "ufw_unblock" if unblock else "ufw_block",
+                       target=canonical_ip(ip) or NOT_AN_IP, success=ok)
             if ok:
                 _banlist.refresh_soon(0)   # the panel's own gate, for traffic UFW cannot see
             return jsonify({"success": ok, "message": msg})
@@ -441,7 +444,7 @@ def _register_panel_security_misc(app):
             ok, msg = so.fail2ban_unban(jail, banned_ip)
             if ok:
                 _banlist.refresh_soon(0)
-            log_action(current_user, "fail2ban_unban", target=banned_ip,
+            log_action(current_user, "fail2ban_unban", target=canonical_ip(banned_ip) or NOT_AN_IP,
                        detail="%s — %s" % (jail, msg), success=ok)
             return jsonify({"success": ok, "message": msg})
         except Exception:

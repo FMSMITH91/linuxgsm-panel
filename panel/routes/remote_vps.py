@@ -27,6 +27,7 @@ import collections
 import threading
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
+from panel.core.validation import (NOT_AN_IP, canonical_ip_or_network)
 from app import (_local_remote_id, _log, _os_update_note)
 from panel.routes.manage_servers import (withheld_game_ports)
 
@@ -222,9 +223,11 @@ def _register_firewall_rules(app):
             return jsonify({"success": False, "message": "Source and port required"}), 400
         success, msg = remote_ufw_allow_from(remote, source, port, proto,
                                              data.get("comment", ""), allow=on)
+        # The network the rule covers, never the request's text (an IPv6 zone id parsed).
         log_action(current_user, "remote_port_allow_from" if on else "remote_port_allow_from_remove",
-                   target=f"{remote.name}:{port}/{proto}", detail="from %s" % source, success=success,
-                   remote=remote)
+                   target=f"{remote.name}:{port}/{proto}",
+                   detail="from %s" % (canonical_ip_or_network(source) or NOT_AN_IP),
+                   success=success, remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/firewall/limit", methods=["POST"])

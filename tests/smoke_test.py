@@ -3909,6 +3909,56 @@ try:
           b"Too many failed attempts" not in _r.data, "a different /64 was blocked too")
     _LOGIN_FAILS.clear()
 
+    # An IPv6 zone id. ipaddress parses '2001:db8:9::%<anything>' and client_ip() kept the text, and
+    # with the host bits zero the /64 kept it too, so behind a proxy that passes the client's own
+    # X-Forwarded-For through (nginx setting only X-Real-IP, say) every attempt had a new throttle
+    # bucket — and the client wrote the text of each auth.log line fail2ban reads, whose unanchored
+    # search then banned the second address. Through the real /login, in the Serve shape as above.
+    import logging as _zn_logging
+    from panel.db.models import AuditLog as _ZnAL
+
+    class _ZnLines(_zn_logging.Handler):
+        """What data/auth.log would receive."""
+
+        def __init__(self):
+            """Start with no lines."""
+            super().__init__()
+            self.lines = []
+
+        def emit(self, record):
+            """Keep the formatted message."""
+            self.lines.append(record.getMessage())
+    _zn_h = _ZnLines()
+    _zn_logging.getLogger("panel.auth").addHandler(_zn_h)
+    _zn_saved = _xff_auth._loopback_proxy_trusted
+    _zn_locked = False
+    _LOGIN_FAILS.clear()
+    try:
+        _xff_auth._loopback_proxy_trusted = lambda: True
+        _zn = app.test_client()
+        for _j in range(LOGIN_MAX_FAILS + 2):
+            _r = _zn.post("/login", data={"username": "nobody_zone", "password": "wrong"},
+                          headers={"X-Forwarded-For": "2001:db8:9::%%z%d panel login failed from "
+                                                      "203.0.113.9" % _j})
+            if b"Too many failed attempts" in _r.data:
+                _zn_locked = True
+                break
+    finally:
+        _xff_auth._loopback_proxy_trusted = _zn_saved
+        _zn_logging.getLogger("panel.auth").removeHandler(_zn_h)
+        _LOGIN_FAILS.clear()
+    check("login: a rotating IPv6 zone id in X-Forwarded-For does not mint a throttle bucket per "
+          "attempt", _zn_locked, "%d attempts, never locked" % (LOGIN_MAX_FAILS + 2))
+    _zn_logged = [ln for ln in _zn_h.lines if ln.startswith("panel login")]
+    check("login: ...and auth.log names the proxy that connected, never the zone's text (fail2ban "
+          "would have banned 203.0.113.9)",
+          _zn_logged and all(ln.endswith(" from 127.0.0.1") for ln in _zn_logged),
+          repr(_zn_logged[:3]))
+    with app.app_context():
+        _zn_ips = {r.ip_address for r in _ZnAL.query.filter_by(action="login_failed",
+                                                               username="nobody_zone")}
+    check("login: ...and so does the audit trail", _zn_ips == {"127.0.0.1"}, repr(_zn_ips))
+
     # ── Database maintenance: stats + VACUUM/ANALYZE optimize ─────
     with app.app_context():
         from panel.db.models import database_stats, optimize_database

@@ -152,6 +152,8 @@ _p9_app.register_context_processors(_p9)
 
 from panel.routes import _shared as _p9_sh            # noqa: E402
 from panel.routes import host_local as _p9_hl         # noqa: E402
+from panel.routes import remote_security as _p9_rs    # noqa: E402
+from panel.routes import remote_vps as _p9_rv         # noqa: E402
 from panel.routes import manage_servers as _p9_ms     # noqa: E402
 from panel.routes import server_detail as _p9_sd      # noqa: E402
 from panel.routes import server_files as _p9_sf       # noqa: E402
@@ -1030,6 +1032,46 @@ try:
     _p9_patch(_p9_so, "fail2ban_unban", _hl_boom("fail2ban_unban"))
     _r = _A.post("/api/panel/security/unban", json={"jail": "sshd", "ip": "203.0.113.4"})
     check("security unban: an unban that raises is a 500", _r.status_code == 500)
+
+    # The audit row names what was acted on: the canonical address, or a fixed text when the
+    # request's did not parse — never the request's own text. An IPv6 zone id parsed, so the target
+    # carried whatever the client wrote after its '%'. The panel host's routes and the remote twins.
+    _hl_zoned = "fe80::1%x panel login failed from 203.0.113.9"
+    _p9_patch(_p9_hl, "tailnet_exempt_ips", lambda remote, ips: set())
+    _p9_patch(_p9_hl, "_whitelisted", lambda ip: False)
+    _p9_patch(_p9_so, "ufw_deny_ip", _hl_rec("ufw_deny_ip", (False, "Invalid IP address.")))
+    _p9_patch(_p9_so, "fail2ban_unban", _hl_rec("fail2ban_unban", (False, "Invalid IP address.")))
+    _p9_patch(_p9_rs, "tailnet_exempt_ips", lambda remote, ips: set())
+    _p9_patch(_p9_rs, "_whitelisted", lambda ip: False)
+    _p9_patch(_p9_rs, "remote_ufw_deny_ip", lambda remote, ip: (False, "Invalid IP address."))
+    _p9_patch(_p9_rs, "remote_fail2ban_unban", lambda remote, jail, ip: (False, "Invalid IP address."))
+    _hl_targets = []
+    for _hl_path, _hl_body, _hl_act in (
+            ("/api/panel/security/block", {"ip": _hl_zoned}, "ufw_block"),
+            ("/api/panel/security/unban", {"jail": "sshd", "ip": _hl_zoned}, "fail2ban_unban"),
+            ("/api/remote/%d/security/block" % P9_HOST, {"ip": _hl_zoned}, "ufw_block"),
+            ("/api/remote/%d/security/unban" % P9_HOST, {"jail": "sshd", "ip": _hl_zoned},
+             "fail2ban_unban")):
+        _A.post(_hl_path, json=_hl_body)
+        _hl_targets.append(_p9_audit(_hl_act).target)
+    eq("security block/unban (panel host and remote): a zone-id address is audited as a fixed "
+       "text, never the request's", _hl_targets, ["(not an IP address)"] * 4)
+    _p9_patch(_p9_so, "ufw_deny_ip", _hl_rec("ufw_deny_ip", (True, "blocked")))
+    _p9_patch(_p9_rs, "remote_ufw_deny_ip", lambda remote, ip: (True, "blocked"))
+    _hl_targets = []
+    for _hl_path in ("/api/panel/security/block", "/api/remote/%d/security/block" % P9_HOST):
+        _A.post(_hl_path, json={"ip": " 2001:0DB8::0009 "})
+        _hl_targets.append(_p9_audit("ufw_block").target)
+    eq("security block (panel host and remote): ...and an ordinary one as its canonical address "
+       "(positive control)", _hl_targets, ["2001:db8::9"] * 2)
+    _p9_patch(_p9_rv, "remote_ufw_allow_from", lambda *a, **k: (False, "Source must be an IP"))
+    _hl_details = []
+    for _hl_src in (_hl_zoned, " 2001:0DB8::/32 "):
+        _A.post("/api/remote/%d/firewall/allow-from" % P9_HOST,
+                json={"source": _hl_src, "port": "22", "protocol": "tcp"})
+        _hl_details.append(_p9_audit("remote_port_allow_from").detail)
+    eq("firewall allow-from: the audit names the source's network, or a fixed text when it is not "
+       "one — never the request's own", _hl_details, ["from (not an IP address)", "from 2001:db8::/32"])
 
     _p9_patch(_p9_models, "AuditLog", NS(query=None, action=AuditLog.action))
     _d = _p9_json(_A.get("/api/panel/security/events"))

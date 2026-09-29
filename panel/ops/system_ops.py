@@ -7,6 +7,7 @@ import re
 import shlex
 import subprocess
 from panel.core import terminal
+from panel.core.validation import canonical_ip, canonical_ip_or_network, ip_address_or_none
 import threading
 import time
 import urllib.error
@@ -1741,11 +1742,11 @@ def host_has_ip(ip):
     host's own Tailscale IP "not an address on this host". A host always has loopback, so nothing
     read means the list was not read, and the kernel is asked instead (_kernel_has_ip). The
     comparison is on parsed addresses: an IPv6 address typed in upper case ("FD7A:115C:A1E0::1")
-    never equalled `ip`'s lowercase output."""
+    never equalled `ip`'s lowercase output. A zone id is refused outright, rather than left to
+    IPv6Address's equality (which counts the zone) to answer no."""
     import ipaddress
-    try:
-        want = ipaddress.ip_address(str(ip).strip())
-    except ValueError:
+    want = ip_address_or_none(ip)
+    if want is None:
         return False        # not an IP at all: it cannot be one of this host's addresses
     try:
         out, _, _ = _run("ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1", timeout=8)
@@ -2064,18 +2065,14 @@ def _f2b_ignoreip_line(ignore_ips):
     """Space-separated ignoreip value: always localhost, plus the caller's whitelist. EVERY entry is
     re-parsed through ipaddress (IP or CIDR) so an unvalidated token can never reach the jail file —
     a bad entry is dropped, not written. Deduped, order-stable."""
-    import ipaddress
     entries = ["127.0.0.1/8", "::1"]
     for raw in (ignore_ips or []):
-        s = (str(raw) or "").strip()
-        try:
-            canon = (str(ipaddress.ip_network(s, strict=False)) if "/" in s
-                     else str(ipaddress.ip_address(s)))
-        except ValueError:
+        canon = canonical_ip_or_network(raw)
+        if canon is None:
             continue
-        # Parsing is not enough: ipaddress keeps an IPv6 zone id verbatim — `::1%\nbantime = 1`
-        # parses, newline and all — so a stored entry could still add lines to the jail. A value
-        # carrying a zone id or any whitespace/control character is dropped like any other bad one.
+        # Parsing was not enough: ipaddress keeps an IPv6 zone id verbatim — `::1%\nbantime = 1`
+        # parses, newline and all — so a stored entry could still add lines to the jail. The
+        # validator refuses a zone now; this stays as the jail file's own last check.
         if "%" in canon or any(c.isspace() or not c.isprintable() for c in canon):
             continue
         entries.append(canon)
@@ -2552,11 +2549,13 @@ def _ufw_deny_with(ip, tag, existing, run, shadowed=None):
 
 def ufw_deny_ip(ip, tag=_UFW_BLOCK_TAG):
     """Block an IP on ALL ports (UFW deny inserted at the top, tagged). The IP is reparsed to its
-    canonical ipaddress form so nothing request-supplied reaches the shell unchecked. (ok, msg)."""
-    import ipaddress
-    try:
-        ip = str(ipaddress.ip_address((ip or "").strip()))
-    except (ValueError, TypeError):
+    canonical ipaddress form so nothing request-supplied reaches the shell unchecked. (ok, msg).
+
+    That claim needs a zone id refused, and it is (panel/core/validation.py): ipaddress kept one
+    verbatim, so 'fe80::1%$(id) x;reboot' went through as its own "canonical form" and reached the
+    root helper intact, stopped only by ufw's own address check."""
+    ip = canonical_ip(ip)
+    if ip is None:
         return False, "Invalid IP address."
     tag = re.sub(r"[^a-z0-9-]", "", (tag or ""))[:32] or _UFW_BLOCK_TAG
     # Separate verbs, never a "a; b" compound: _run prepends `sudo` to the FIRST command only.
@@ -2568,11 +2567,9 @@ def ufw_deny_ip(ip, tag=_UFW_BLOCK_TAG):
 
 
 def ufw_undeny_ip(ip):
-    """Remove a UFW deny rule for an IP (canonicalised first). (ok, msg)."""
-    import ipaddress
-    try:
-        ip = str(ipaddress.ip_address((ip or "").strip()))
-    except (ValueError, TypeError):
+    """Remove a UFW deny rule for an IP (canonicalised first, a zone id refused). (ok, msg)."""
+    ip = canonical_ip(ip)
+    if ip is None:
         return False, "Invalid IP address."
     # Read the result. This discarded the tuple and returned True unconditionally, while its
     # sibling ufw_deny_ip five lines up captures (out, err, rc) and fails on non-zero — so a
@@ -2707,8 +2704,8 @@ def fail2ban_unban(jail, ip):
     """Lift a ban: `fail2ban-client set <jail> unbanip <ip>`. The request-supplied values are
     neutralised BEFORE they reach the command: `jail` must be one of the host's actual jails (an
     allowlist — not a free string), and `ip` is reparsed to the canonical form produced by
-    ipaddress (which rejects anything that isn't a real IP). Then shell-quoted. (ok, msg)."""
-    import ipaddress
+    ipaddress (which rejects anything that isn't a real IP, a zone id included). Then shell-quoted.
+    (ok, msg)."""
     jail = (jail or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", jail):   # metacharacter-free guard
         return False, "Invalid jail name."
@@ -2719,10 +2716,8 @@ def fail2ban_unban(jail, ip):
     jail = next((j for j in _fail2ban_jails() if j == jail), None)
     if jail is None:
         return False, "Unknown jail."
-    ip = (ip or "").strip()
-    try:
-        ip = str(ipaddress.ip_address(ip))   # canonical form; rejects anything that isn't a real IP
-    except ValueError:
+    ip = canonical_ip(ip)   # canonical form; rejects anything that isn't a real IP
+    if ip is None:
         return False, "Invalid IP address."
     if not re.fullmatch(r"[0-9A-Fa-f:.]{1,45}", ip):   # metacharacter-free guard (a barrier CodeQL recognises)
         return False, "Invalid IP address."
@@ -2735,10 +2730,8 @@ def fail2ban_unban(jail, ip):
 def fail2ban_unban_ip_everywhere(ip):
     """Best-effort: lift `ip` from EVERY jail that currently bans it. Used when an IP is whitelisted,
     so an existing ban is cleared immediately instead of waiting for it to expire. (ok, msg)."""
-    import ipaddress
-    try:
-        ip = str(ipaddress.ip_address((ip or "").strip()))
-    except ValueError:
+    ip = canonical_ip(ip)
+    if ip is None:
         return False, "Invalid IP address."
     lifted = 0
     try:

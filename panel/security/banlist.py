@@ -20,6 +20,8 @@ import logging
 import threading
 import time
 
+from panel.core.validation import ip_network_or_none, unzoned_ip_address_or_none
+
 _log = logging.getLogger(__name__)
 
 _lock = threading.Lock()
@@ -32,7 +34,8 @@ _allow = ()                 # the security whitelist, never refused here
 # else, and the jail can ban one on the web port alone (a hand-made Serve), which this gate would
 # otherwise have turned into a lock-out from every page served through tailscaled.
 # Written out rather than imported: this module loads none of the panel's own at import time
-# (system_ops only inside refresh()), and the ranges are Tailscale's, not a host or a setting.
+# beyond the stdlib-only panel.core.validation (system_ops only inside refresh()), and the ranges
+# are Tailscale's, not a host or a setting.
 _TAILNET = tuple(ipaddress.ip_network(n) for n in ("100.64.0.0/10", "fd7a:115c:a1e0::/48"))  # NOSONAR - Tailscale's fixed ranges
 # What is_banned reads, rebuilt whole and swapped in: every banned network grouped by (IP version,
 # prefix length), so a lookup costs one set test per length present rather than one per network.
@@ -42,13 +45,13 @@ _by_len = {}
 def _networks(values):
     """ip_network for every value that is an address or a CIDR; anything else is skipped.
 
-    An IPv4-mapped IPv6 address counts as the IPv4 address it carries.
+    An IPv4-mapped IPv6 address counts as the IPv4 address it carries. A value with a zone id is
+    not an address or a CIDR, and is skipped with the rest.
     """
     out = set()
     for v in values or ():
-        try:
-            n = ipaddress.ip_network(str(v).strip(), strict=False)
-        except ValueError:
+        n = ip_network_or_none(v)
+        if n is None:
             continue
         if n.version == 6 and n.num_addresses == 1 and n.network_address.ipv4_mapped:
             n = ipaddress.ip_network(n.network_address.ipv4_mapped)
@@ -148,15 +151,20 @@ def forwarded_client(xff):
 
     The last hop is the one the nearest proxy wrote: tailscaled sets the header outright
     (discarding anything the client sent), and a reverse proxy appends to it.
+
+    An IPv6 zone id is DROPPED, not refused, and the address it is attached to is judged. Every
+    caller only refuses (ProxiedBanGate, and the socket sweep, which also hands the socket peer
+    here), so reading the address can only refuse more; refusing the value instead would let
+    '2001:db8::1%x' past a ban on 2001:db8::1. Kept, the zone made the address unequal to the
+    banned one (ipaddress counts it), so the firewall-exact test missed it.
     """
     hop = (xff or "").split(",")[-1].strip()
     if hop.startswith("["):
         hop = hop[1:].split("]", 1)[0]
     elif hop.count(":") == 1:
         hop = hop.split(":", 1)[0]
-    try:
-        a = ipaddress.ip_address(hop)
-    except ValueError:
+    a = unzoned_ip_address_or_none(hop)
+    if a is None:
         return None
     return a.ipv4_mapped if a.version == 6 and a.ipv4_mapped else a
 

@@ -1120,7 +1120,9 @@ check("f2b: the jail body carries an ignoreip line with the valid entry only",
 # stored, and dropped again where the jail line is built, in case an older value is on disk.
 _zone = "::1%\nbantime = 999999\nmaxretry = 0\n[sshd]\nenabled = false"
 check("f2b: the zone-id payload really does parse (so the checks below test something)",
-      _valid_ip_or_cidr(_zone) == _zone)
+      str(_ipaddr.ip_address(_zone)) == _zone)
+check("f2b: ...and _valid_ip_or_cidr itself refuses it now, for every caller (the remove path too)",
+      _valid_ip_or_cidr(_zone) is None)
 _ign_z = SO._f2b_ignoreip_line(["1.2.3.4", _zone, "fe80::1%eth0"])
 check("f2b: ignoreip drops an entry carrying an IPv6 zone id, newline or not",
       "\n" not in _ign_z and "%" not in _ign_z and "bantime" not in _ign_z, repr(_ign_z))

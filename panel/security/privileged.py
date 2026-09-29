@@ -273,12 +273,26 @@ def _portspec_bare(s):
     return spec
 
 
-def _cidr(s):
-    try:
-        ipaddress.ip_network(str(s), strict=False)
-    except ValueError:
-        raise VerbError("not an IP address or network")
-    return str(s)
+def canonical_cidr(s):
+    """An address, or an address/prefix, as ipaddress SPELLS it; VerbError for anything else.
+
+    What reaches the tool is the parsed value's text, never the input — see tools/panel-helper
+    v_cidr, which this mirrors. An IPv6 zone id is refused first: ipaddress accepts one and keeps
+    it verbatim, so 'fe80::1%x' plus spaces, `$(...)` or a newline passed, and was handed to
+    fail2ban-client and ufw as root unchanged. A prefix keeps its host bits (2001:db8::1/64 stays
+    that): ufw keeps an IPv6 source's host bits in the rule it stores, so masking them here would
+    stop a delete matching the rule it names.
+    """
+    s = str(s)
+    if "%" not in s:
+        try:
+            return str(ipaddress.ip_interface(s)) if "/" in s else str(ipaddress.ip_address(s))
+        except ValueError:
+            pass
+    raise VerbError("not an IP address or network")
+
+
+_cidr = canonical_cidr      # the name the verb tables below use
 
 
 def _comment(s):
@@ -295,18 +309,19 @@ def _yesno(s):
 
 
 def _routes(s):
-    """A comma-separated CIDR list, or "-" — see tools/panel-helper."""
+    """A comma-separated CIDR list, or "-" — see tools/panel-helper. Each route canonical_cidr's."""
     if str(s) == "-":
         return "-"
     parts = str(s).split(",")
     if not (1 <= len(parts) <= 16):
         raise VerbError("expected 1..16 routes")
+    routes = []
     for part in parts:
         try:
-            ipaddress.ip_network(part, strict=False)
-        except ValueError:
+            routes.append(canonical_cidr(part))
+        except VerbError:
             raise VerbError("not a route list")
-    return str(s)
+    return ",".join(routes)
 
 
 def _tags(s):

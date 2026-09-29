@@ -195,7 +195,8 @@ def _handshake_addrs():
     peer = ((env.get("werkzeug.proxy_fix.orig") or {}).get("REMOTE_ADDR")
             or env.get("REMOTE_ADDR") or "")
     xff = request.headers.get("X-Forwarded-For")
-    # forwarded_client parses a bare address as a one-hop header, unmapping ::ffff:a.b.c.d.
+    # forwarded_client parses a bare address as a one-hop header, unmapping ::ffff:a.b.c.d and
+    # dropping a zone id (a link-local peer's interface) so the address itself is what is judged.
     return banlist.forwarded_client(peer), (banlist.forwarded_client(xff) if xff else None)
 
 

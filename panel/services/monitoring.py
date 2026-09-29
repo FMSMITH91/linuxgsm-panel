@@ -13,7 +13,6 @@ is deliberate — routes may reach into monitoring; monitoring never reaches int
 """
 import concurrent.futures
 import contextlib
-import ipaddress
 import itertools
 import logging
 import re
@@ -25,6 +24,7 @@ from panel.ops import system_ops as so
 from panel.security.auth import log_action
 from panel.core.clock import utcnow
 from panel.core.config import load_config
+from panel.core.validation import ip_address_or_none, ip_network_or_none
 from panel.db.models import GameServer, HostSample, MetricSample, RemoteServer, db
 from panel.core.panel_state import (
     _cron_restart_pending, _expected_offline, _max_players_cache, _monitor_state,
@@ -947,25 +947,30 @@ def _autoblock_threshold():
 
 
 def _whitelist_networks():
-    """The whitelist parsed into ip_network objects once (skipping any that no longer parse)."""
+    """The whitelist parsed into ip_network objects once (skipping any that no longer parse).
+
+    An entry with a zone id is one that no longer parses: _security_whitelist_add refuses them, so
+    only a value from before it did can be one.
+    """
     nets = []
     # Reads the config directly rather than calling app.py's _security_whitelist(): that reader is
     # one of a trio with _security_whitelist_add/_remove, and importing it here would be circular
     # (app imports monitoring). Splitting the trio to avoid one line of duplication is the worse
     # trade — the key name is the contract, and it is asserted below.
     for entry in list(load_config().get("security_whitelist", []) or []):
-        try:
-            nets.append(ipaddress.ip_network(entry, strict=False))
-        except ValueError:
-            continue
+        net = ip_network_or_none(entry)
+        if net is not None:
+            nets.append(net)
     return nets
 
 
 def _whitelisted(ip, nets=None):
-    """True if `ip` is covered by any whitelist entry (an exact IP or a CIDR that contains it)."""
-    try:
-        addr = ipaddress.ip_address((ip or "").strip())
-    except ValueError:
+    """True if `ip` is covered by any whitelist entry (an exact IP or a CIDR that contains it).
+
+    A zoned `ip` is not an address, and is covered by nothing.
+    """
+    addr = ip_address_or_none(ip)
+    if addr is None:
         return False
     return any(addr in n for n in (nets if nets is not None else _whitelist_networks()))
 
