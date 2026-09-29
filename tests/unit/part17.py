@@ -7,8 +7,9 @@ banned the second address), admin alerts, the audit trail, the root helper's arg
 sshd drop-in, and a login-throttle key that was new on every attempt.
 
 Every entry point that takes an address from outside is fed each payload below and must refuse
-it. The few that must key or judge the address instead (a socket peer, a throttle bucket, a
-refuse-only ban check) must answer with the address, never the text. Each block has a positive
+it. The few that must key or judge the address instead (a socket peer, a client address a proxy
+reports, a throttle bucket, a refuse-only ban check, a value an older version stored) must answer
+with the address, never the text. Each block has a positive
 control: ordinary IPv4, IPv6, IPv4-mapped, CIDRs and Tailscale's ranges still pass.
 
 Runs before part15, which must stay last: it ends the run with a look for threads left running.
@@ -21,6 +22,7 @@ import logging as _zlog
 from flask import Flask as _ZFlask
 
 import app as _zapp
+from panel.core import config as _zcfgmod
 from panel.core import validation as _zv
 from panel.db import models as _zmodels
 from panel.ops import tailscale_integration as _zts
@@ -69,7 +71,7 @@ for _zname, _zfn in (("validation.ip_address_or_none", _zv.ip_address_or_none),
                      ("validation.ip_network_or_none", _zv.ip_network_or_none),
                      ("validation.canonical_ip", _zv.canonical_ip),
                      ("validation.canonical_ip_or_network", _zv.canonical_ip_or_network),
-                     ("auth._ip_or_none (client_ip's parser)", _zauth._ip_or_none),
+                     ("auth._ip_or_none (client_ip's fallthrough)", _zauth._ip_or_none),
                      ("app._valid_ip_or_cidr (the whitelist's)", _zapp._valid_ip_or_cidr),
                      ("hosts._canonical_ip", _sm_hosts._canonical_ip)):
     _zlet = _z_not_refused(_zfn)
@@ -142,9 +144,16 @@ eq("zone id: _panel_bind_is_public keeps the port open for a zoned bind (unknown
 eq("zone id: is_tailscale_ip is False for a zoned tailnet address, True for the plain one",
    [_zts.is_tailscale_ip(v) for v in ("fd7a:115c:a1e0::1%tailscale0", "fd7a:115c:a1e0::1",
                                       "100.101.102.103")], [False, True, True])
-_zlet = _z_not_refused(_zmodels._anonymise_ip, refused=lambda got: got == "")
-check("zone id: _anonymise_ip empties a stored zoned value, never keeps its text", not _zlet,
-      "; ".join(_zlet))
+# An older version stored zoned client addresses (a proxy's link-local client) and reduced some
+# with the zone kept ('2001:db8::%<text>/64'). Ageing keeps the network and drops the text.
+_zanon = {_p: _zmodels._anonymise_ip(_p) for _p in _Z_PAYLOADS + ("2001:db8::%x y/64",)}
+_zanon_want = {_p: str(_zi.ip_network(_p.split("%", 1)[0] + "/64", strict=False)) for _p in _zanon}
+check("zone id: _anonymise_ip reduces a stored zoned value to its address's /64 — no '%', no zone "
+      "text, the network kept", _zanon == _zanon_want
+      and not any("%" in v or "203.0.113" in v or " " in v for v in _zanon.values()),
+      "; ".join("%r -> %r" % kv for kv in _zanon.items() if kv[1] != _zanon_want[kv[0]]))
+eq("zone id: ...and an IPv4 address with a '%' is still nothing ('' — IPv4 has no zones)",
+   _zmodels._anonymise_ip("203.0.113.9%x y"), "")
 eq("zone id: ...and still reduces an ordinary address to its network (positive control)",
    [_zmodels._anonymise_ip(v) for v in ("203.0.113.77", "2001:db8::1")],
    ["203.0.113.0/24", "2001:db8::/64"])
@@ -157,13 +166,24 @@ check("zone id: monitoring._whitelisted covers no payload (membership ignored th
       not _zlet, "; ".join(_zlet))
 check("zone id: ...while the plain address is covered (positive control)",
       _zmon._whitelisted("2001:db8::5", _zwl_nets) is True)
-_zmon_load = _zmon.load_config
+# A whitelist entry stored with a zone before the add refused one: the Settings page lists it as
+# active, and before the refusal the auto-block honoured it — so it must still exempt its address.
+_zmon_saved = (_zmon.load_config, _zmon.tailnet_exempt_ips)
 try:
-    _zmon.load_config = lambda: {"security_whitelist": ["2001:db8::1%x y", "10.0.0.0/8"]}
-    eq("zone id: _whitelist_networks skips a stored zoned entry and keeps the good one",
-       [str(n) for n in _zmon._whitelist_networks()], ["10.0.0.0/8"])
+    _zmon.load_config = lambda: {"security_whitelist": [
+        "2001:db8::1%x y", "2001:db8:5::%eth0/48", "1.2.3.4%x", "10.0.0.0/8"]}
+    eq("zone id: _whitelist_networks reads a stored zoned entry as the address or network it names "
+       "(an IPv4 '%' is still nothing), and keeps the good one",
+       [str(n) for n in _zmon._whitelist_networks()],
+       ["2001:db8::1/128", "2001:db8:5::/48", "10.0.0.0/8"])
+    _zmon.tailnet_exempt_ips = lambda remote, ips: set()
+    eq("zone id: ...so the auto-block still spares the address of a stored zoned entry (the "
+       "caller)",
+       sorted(_zmon._autoblock_offenders(NS(id=1, is_local=True),
+                                         {"2001:db8::1": 50, "2001:db8:5::9": 50,
+                                          "198.51.100.7": 50}, 5)), ["198.51.100.7"])
 finally:
-    _zmon.load_config = _zmon_load
+    _zmon.load_config, _zmon.tailnet_exempt_ips = _zmon_saved
 
 # ── proxy trust, client_ip, and what the ignored-proxy warning logs ──────────────────────────────
 _zapplog = _zlog.getLogger("panel.app")
@@ -202,22 +222,40 @@ try:
         with _zfl.test_request_context(headers=headers, environ_overrides={"REMOTE_ADDR": peer}):
             return _zauth.client_ip()
 
-    eq("zone id: client_ip does not take a zoned last X-Forwarded-For hop, nor a zoned X-Real-IP: "
-       "each falls back to the proxy that really connected",
-       [_z_client_ip({"X-Forwarded-For": "198.51.100.1, fe80::1%x panel login failed from "
-                                         "203.0.113.9"}),
-        _z_client_ip({"X-Real-IP": "fe80::1%realip, commas survive here from 203.0.113.77"}),
-        _z_client_ip({"X-Forwarded-For": "2001:db8::%x y"})],
-       ["192.0.2.10", "192.0.2.10", "192.0.2.10"])
-    eq("zone id: ...a refused hop still lets X-Real-IP answer, and a plain hop is taken (control)",
-       [_z_client_ip({"X-Forwarded-For": "fe80::1%x y", "X-Real-IP": "198.51.100.44"}),
+    # Apache's mod_proxy and Go's httputil.ReverseProxy write a link-local client into
+    # X-Forwarded-For WITH its zone. Refused, that client was keyed as the proxy that connected, so
+    # its failed logins were written as the proxy's and fail2ban banned the proxy — everyone behind
+    # it. The zone is dropped instead, and only the parsed address comes back.
+    _z_zoned_hops = [
+        ({"X-Forwarded-For": "fe80::1c2d:3e4f:5a6b:7c8d%eth0"}, "fe80::1c2d:3e4f:5a6b:7c8d"),
+        ({"X-Forwarded-For": "198.51.100.1, fe80::1%x panel login failed from 203.0.113.9"},
+         "fe80::1"),
+        ({"X-Forwarded-For": "[fe80::1%eth0]:8443"}, "fe80::1"),
+        ({"X-Real-IP": "fe80::1%realip, commas survive here from 203.0.113.77"}, "fe80::1"),
+        ({"X-Forwarded-For": "2001:db8::%x y"}, "2001:db8::"),
+        ({"X-Forwarded-For": "fe80::1%x y", "X-Real-IP": "198.51.100.44"}, "fe80::1"),
+    ]
+    _z_got = [_z_client_ip(h) for h, _ in _z_zoned_hops]
+    eq("zone id: client_ip keys a zoned last X-Forwarded-For hop, and a zoned X-Real-IP, from a "
+       "trusted proxy as the CLIENT's address — never as the proxy that connected",
+       _z_got, [w for _, w in _z_zoned_hops])
+    check("zone id: ...and a zone full of text contributes nothing: no '%', space or second "
+          "address",
+          not any("%" in g or " " in g or "203.0.113" in g for g in _z_got), repr(_z_got))
+    eq("zone id: ...while a hop that is no address still falls back to X-Real-IP, then the proxy, "
+       "an IPv4 '%' is no address, and a plain hop is taken (controls)",
+       [_z_client_ip({"X-Forwarded-For": "bogus x y", "X-Real-IP": "198.51.100.44"}),
+        _z_client_ip({"X-Forwarded-For": "203.0.113.9%x"}),
         _z_client_ip({"X-Forwarded-For": "198.51.100.1, 203.0.113.9"})],
-       ["198.51.100.44", "203.0.113.9"])
+       ["198.51.100.44", "192.0.2.10", "203.0.113.9"])
+    eq("zone id: ...and throttle_key buckets a zoned forwarded client with its own /64",
+       sorted({_zauth.throttle_key(_z_client_ip({"X-Forwarded-For": "2001:db8:7::1%%z%d" % _i}))
+               for _i in range(4)}), ["2001:db8:7::/64"])
     # The fallthrough names the proxy that connected — its socket address, which for a link-local
     # proxy the kernel may report with its interface. That is keyed as the address, not the text.
     _zfl.config["_TRUSTED_PROXIES"] = _zauth._trusted_proxy_networks(["fe80::/64"])
     eq("zone id: ...and a zoned link-local PROXY in that fallback is keyed as its address",
-       _z_client_ip({"X-Forwarded-For": "fe80::1%x y"}, peer="fe80::5%eth0"), "fe80::5")
+       _z_client_ip({"X-Forwarded-For": "bogus x y"}, peer="fe80::5%eth0"), "fe80::5")
     _zfl.config["_TRUSTED_PROXIES"] = _znets
 
     _zfl.config["_TRUST_PROXY"] = False
@@ -257,11 +295,25 @@ try:
           "(widen=False missed it: ipaddress counts the zone in equality)",
           _zbl.is_banned(_zfc, widen=False) and _zbl.is_banned(_zfc))
     _zbl.set_whitelist(["2001:db8::1%x y"])
-    check("zone id: a stored zoned whitelist entry exempts nothing (fail2ban's ignoreip drops it "
-          "too)", _zbl.is_banned(_zi.ip_address("2001:db8::1")))
-    _zbl.set_whitelist(["2001:db8::1"])
-    check("zone id: ...while the plain entry does exempt it (positive control)",
-          not _zbl.is_banned(_zi.ip_address("2001:db8::1")))
+    check("zone id: a stored zoned whitelist entry still exempts its address from the ban gate, as "
+          "it did before the whitelist refused zones",
+          not _zbl.is_banned(_zi.ip_address("2001:db8::1"))
+          and not any("%" in str(n) for n in _zbl._allow), repr(_zbl._allow))
+    _zbl.set_whitelist(["1.2.3.4%x", "junk"])
+    check("zone id: ...while an entry that is no address at all exempts nothing (control)",
+          _zbl.is_banned(_zi.ip_address("2001:db8::1")) and _zbl._allow == (), repr(_zbl._allow))
+    # Through the ban gate's own reader, refresh(), which takes the whitelist from config.json.
+    _zbl_cfg_saved = (_zcfgmod.load_config, SO.panel_fail2ban_banned_ips, SO.ufw_blocked_ips)
+    try:
+        _zcfgmod.load_config = lambda: {"security_whitelist": ["2001:db8::1%eth0"]}
+        SO.panel_fail2ban_banned_ips = lambda: ["2001:db8::1", "203.0.113.9"]
+        SO.ufw_blocked_ips = lambda: []
+        _zbl.refresh()
+        check("zone id: ...and refresh() reads a stored zoned entry from config.json the same way",
+              not _zbl.is_banned(_zi.ip_address("2001:db8::1"))
+              and _zbl.is_banned(_zi.ip_address("203.0.113.9")), repr((_zbl._allow, _zbl._f2b)))
+    finally:
+        _zcfgmod.load_config, SO.panel_fail2ban_banned_ips, SO.ufw_blocked_ips = _zbl_cfg_saved
 finally:
     (_zbl._f2b, _zbl._ufw, _zbl._allow, _zbl._by_len, _zbl_taken0) = _zbl_saved
     _zbl._taken.clear()

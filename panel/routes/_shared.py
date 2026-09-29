@@ -15,6 +15,7 @@ from flask_login import (current_user)
 from panel.core.clock import (utcnow)
 from panel.core.config import (ConfigUnreadable, is_unreadable, load_config)
 from panel.core.http import (_json_str)
+from panel.core.validation import (NOT_AN_IP, unzoned_ip_or_network)
 from panel.core.panel_state import (_action_output, _console_backlog, _full_backup_lock,
     _game_backup_status, register_remote_state, register_server_state)
 from panel.db.models import (GameServer, RemoteServer, db)
@@ -111,11 +112,15 @@ def _whitelist_mutate(app, body):
     raw = _json_str(body, "ip")
     remove = bool(body.get("remove"))
     if remove:
-        canon = _security_whitelist_remove(raw)
+        # The raw text only picks the entry to drop, so one stored with a zone id before the add
+        # refused them can still go. What is audited and answered is the address or network it
+        # names, read as the gate reads a stored entry, or a fixed text — never the request's own.
+        _security_whitelist_remove(raw)
+        shown = unzoned_ip_or_network(raw) or NOT_AN_IP
         threading.Thread(target=_apply_whitelist_everywhere, args=(app,), daemon=True).start()
         _banlist.refresh_soon(0)
-        log_action(current_user, "whitelist_remove", target=canon)
-        return jsonify({"success": True, "removed": canon, "whitelist": _security_whitelist()})
+        log_action(current_user, "whitelist_remove", target=shown)
+        return jsonify({"success": True, "removed": shown, "whitelist": _security_whitelist()})
     canon = _security_whitelist_add(raw)
     if not canon:
         return jsonify({"success": False, "message": "Enter a valid IP address or CIDR (e.g. 1.2.3.4 or 10.0.0.0/8)."})

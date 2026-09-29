@@ -24,7 +24,7 @@ from panel.ops import system_ops as so
 from panel.security.auth import log_action
 from panel.core.clock import utcnow
 from panel.core.config import load_config
-from panel.core.validation import ip_address_or_none, ip_network_or_none
+from panel.core.validation import ip_address_or_none, ip_network_or_none, unzoned_ip_or_network
 from panel.db.models import GameServer, HostSample, MetricSample, RemoteServer, db
 from panel.core.panel_state import (
     _cron_restart_pending, _expected_offline, _max_players_cache, _monitor_state,
@@ -955,8 +955,10 @@ def _autoblock_threshold():
 def _whitelist_networks():
     """The whitelist parsed into ip_network objects once (skipping any that no longer parse).
 
-    An entry with a zone id is one that no longer parses: _security_whitelist_add refuses them, so
-    only a value from before it did can be one.
+    An entry stored with a zone id (only a config from before _security_whitelist_add refused one
+    can hold it) is read as the address or network it names, as it was before that refusal: the
+    Settings page lists it as active, and skipping it silently let the auto-block ban an address
+    an admin believes is whitelisted (validation.unzoned_ip_or_network).
     """
     nets = []
     # Reads the config directly rather than calling app.py's _security_whitelist(): that reader is
@@ -964,7 +966,7 @@ def _whitelist_networks():
     # (app imports monitoring). Splitting the trio to avoid one line of duplication is the worse
     # trade — the key name is the contract, and it is asserted below.
     for entry in list(load_config().get("security_whitelist", []) or []):
-        net = ip_network_or_none(entry)
+        net = ip_network_or_none(unzoned_ip_or_network(entry))
         if net is not None:
             nets.append(net)
     return nets

@@ -20,6 +20,9 @@ from panel.ops.ssh_manager import (change_ssh_port, close_connection, detect_gam
 # module would never be seen — attribute access resolves at call time and is stable
 # however the handler moves.
 from panel.ops import ssh_manager as _sm
+# The firewall verbs' own port and protocol parse, read by the audit rows (_fw_audit_rule). The
+# module, not its functions: a stub on hosts is seen, and one of `_sm` above is not in the way.
+from panel.ops.ssh_manager import hosts as _fw_hosts
 from panel.security.auth import (INSTALL_SERVER, MANAGE_REMOTES, MANAGE_SERVERS,
     accessible_remote_ids, can_access_remote, get_game,
     get_remote, has_permission, log_action, permission_required, server_access_required)
@@ -27,7 +30,8 @@ import collections
 import threading
 import time
 from panel.core.http import (_json_body, _json_str, _log_and_generic, _unreachable)
-from panel.core.validation import (NOT_AN_IP, canonical_ip_or_network)
+from panel.core.validation import (NOT_AN_IP)
+from panel.security import privileged as _priv
 from app import (_log, _os_update_born, _os_update_current, _os_update_note)
 from panel.routes.manage_servers import (withheld_game_ports)
 
@@ -187,6 +191,56 @@ def _register_firewall_view(app):
                         "message": "Host key cleared — it will be re-pinned on the next connection."})
 
 
+# What a firewall audit row names in place of a port or protocol that did not validate: a fixed
+# text, never the request's own.
+_FW_AUDIT_NOT_A_PORT = "(not a port)"
+_FW_AUDIT_NOT_A_PROTOCOL = "(not a protocol)"
+_FW_AUDIT_NOT_A_RULE = "(not a rule number)"
+
+
+def _fw_audit_rule(port, proto, ranges=False):
+    """The (port, protocol) a firewall audit row names: each as validated, or a fixed text.
+
+    The request's own port and protocol went into the row's target, and the row is written
+    whether or not the command refused them, so a MANAGE_REMOTES admin could put any text in the
+    audit trail. Each is read the way the command reads it: a port as one number
+    (_ufw_port_int), or with `ranges` as the number or lo:hi spec allow-from takes; a protocol as
+    _ufw_proto makes it (tcp, udp or both).
+    """
+    kind = _fw_hosts._ufw_proto(None if proto is None else str(proto)) or _FW_AUDIT_NOT_A_PROTOCOL
+    if ranges:
+        spec = str(port or "").strip()
+        return (spec if _fw_hosts._UFW_PORT_SPEC_RE.match(spec) else _FW_AUDIT_NOT_A_PORT), kind
+    try:
+        return str(_fw_hosts._ufw_port_int(port)), kind
+    except (TypeError, ValueError):
+        return _FW_AUDIT_NOT_A_PORT, kind
+
+
+def _fw_audit_rule_number(num):
+    """The rule number a delete-rule audit row names, read as the delete reads it, or a fixed text.
+
+    The request's own `num` went into the target whatever it held.
+    """
+    try:
+        n = int(num)
+    except (TypeError, ValueError):
+        return _FW_AUDIT_NOT_A_RULE
+    return str(n) if n >= 1 else _FW_AUDIT_NOT_A_RULE
+
+
+def _fw_audit_source(source):
+    """The source an allow-from audit row names: the spelling the rule was sent with, or NOT_AN_IP.
+
+    canonical_cidr, the same parse remote_ufw_allow_from sends and reports, so the audit, the
+    message and the rule agree — an IPv6 source keeps its host bits there, as ufw stores it.
+    """
+    try:
+        return _priv.canonical_cidr((source or "").strip())
+    except _priv.VerbError:
+        return NOT_AN_IP
+
+
 def _register_firewall_rules(app):
     """Firewall: open, allow-from, limit, close and delete rules."""
     @app.route("/api/remote/<int:remote_id>/firewall/open", methods=["POST"])
@@ -200,8 +254,9 @@ def _register_firewall_rules(app):
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
         success, msg = remote_ufw_open_port(remote, port, proto, data.get("comment", ""))
-        log_action(current_user, "remote_port_open", target=f"{remote.name}:{port}/{proto}", success=success,
-                   remote=remote)
+        a_port, a_proto = _fw_audit_rule(port, proto)
+        log_action(current_user, "remote_port_open", target=f"{remote.name}:{a_port}/{a_proto}",
+                   success=success, remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/firewall/allow-from", methods=["POST"])
@@ -223,10 +278,11 @@ def _register_firewall_rules(app):
             return jsonify({"success": False, "message": "Source and port required"}), 400
         success, msg = remote_ufw_allow_from(remote, source, port, proto,
                                              data.get("comment", ""), allow=on)
-        # The network the rule covers, never the request's text (an IPv6 zone id parsed).
+        # The rule as it was sent, never the request's text (an IPv6 zone id parsed).
+        a_port, a_proto = _fw_audit_rule(port, proto, ranges=True)
         log_action(current_user, "remote_port_allow_from" if on else "remote_port_allow_from_remove",
-                   target=f"{remote.name}:{port}/{proto}",
-                   detail="from %s" % (canonical_ip_or_network(source) or NOT_AN_IP),
+                   target=f"{remote.name}:{a_port}/{a_proto}",
+                   detail="from %s" % _fw_audit_source(source),
                    success=success, remote=remote)
         return jsonify({"success": success, "message": msg})
 
@@ -247,8 +303,9 @@ def _register_firewall_rules(app):
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
         success, msg = remote_ufw_limit_port(remote, port, proto, limit=on)
+        a_port, a_proto = _fw_audit_rule(port, proto)
         log_action(current_user, "remote_port_limit" if on else "remote_port_unlimit",
-                   target=f"{remote.name}:{port}/{proto}", success=success, remote=remote)
+                   target=f"{remote.name}:{a_port}/{a_proto}", success=success, remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/firewall/close", methods=["POST"])
@@ -262,8 +319,9 @@ def _register_firewall_rules(app):
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
         success, msg = remote_ufw_close_port(remote, port, proto)
-        log_action(current_user, "remote_port_close", target=f"{remote.name}:{port}/{proto}", success=success,
-                   remote=remote)
+        a_port, a_proto = _fw_audit_rule(port, proto)
+        log_action(current_user, "remote_port_close", target=f"{remote.name}:{a_port}/{a_proto}",
+                   success=success, remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/firewall/delete-rule", methods=["POST"])
@@ -279,7 +337,8 @@ def _register_firewall_rules(app):
         key = _json_body().get("key")
         success, msg = remote_ufw_delete_rule(remote, num,
                                               expect_key=key if isinstance(key, str) and key else None)
-        log_action(current_user, "remote_ufw_delete_rule", target=f"{remote.name}:#{num}", success=success,
+        log_action(current_user, "remote_ufw_delete_rule",
+                   target=f"{remote.name}:#{_fw_audit_rule_number(num)}", success=success,
                    remote=remote)
         return jsonify({"success": success, "message": msg})
 

@@ -3934,6 +3934,14 @@ try:
     # X-Forwarded-For through (nginx setting only X-Real-IP, say) every attempt had a new throttle
     # bucket — and the client wrote the text of each auth.log line fail2ban reads, whose unanchored
     # search then banned the second address. Through the real /login, in the Serve shape as above.
+    #
+    # What each check gates. The LOCK check gates a PAIR: the forwarded-header parse
+    # (auth._forwarded_hop_address, which keys the address and drops the zone) and throttle_key's
+    # own zone drop. Either one alone keeps every attempt in one bucket, so it fails only when both
+    # are reverted; throttle_key's own gate is the unit check in tests/unit/part17.py. The auth.log
+    # and audit checks after it gate the header parse alone: a legitimate link-local client behind
+    # Apache or Go's reverse proxy arrives with a zone, and it must be named as ITS address — never
+    # the zone's text, and never the proxy (fail2ban would then ban the proxy and all behind it).
     import logging as _zn_logging
     from panel.db.models import AuditLog as _ZnAL
 
@@ -3970,14 +3978,26 @@ try:
     check("login: a rotating IPv6 zone id in X-Forwarded-For does not mint a throttle bucket per "
           "attempt", _zn_locked, "%d attempts, never locked" % (LOGIN_MAX_FAILS + 2))
     _zn_logged = [ln for ln in _zn_h.lines if ln.startswith("panel login")]
-    check("login: ...and auth.log names the proxy that connected, never the zone's text (fail2ban "
-          "would have banned 203.0.113.9)",
-          _zn_logged and all(ln.endswith(" from 127.0.0.1") for ln in _zn_logged),
+    check("login: ...and auth.log names the client's ADDRESS — not the proxy that connected, not "
+          "the zone's text (fail2ban would have banned 203.0.113.9)",
+          _zn_logged and all(ln.endswith(" from 2001:db8:9::") and "%" not in ln
+                             and "203.0.113.9" not in ln for ln in _zn_logged),
           repr(_zn_logged[:3]))
+    # One login from a real link-local client, as Apache and Go's reverse proxy report it.
+    _xff_auth._loopback_proxy_trusted = lambda: True
+    try:
+        app.test_client().post("/login", data={"username": "nobody_zone_ll", "password": "wrong"},
+                               headers={"X-Forwarded-For": "fe80::1c2d:3e4f:5a6b:7c8d%eth0"})
+    finally:
+        _xff_auth._loopback_proxy_trusted = _zn_saved
+        _LOGIN_FAILS.clear()
     with app.app_context():
-        _zn_ips = {r.ip_address for r in _ZnAL.query.filter_by(action="login_failed",
-                                                               username="nobody_zone")}
-    check("login: ...and so does the audit trail", _zn_ips == {"127.0.0.1"}, repr(_zn_ips))
+        _zn_ips = {(_u, r.ip_address) for _u in ("nobody_zone", "nobody_zone_ll")
+                   for r in _ZnAL.query.filter_by(action="login_failed", username=_u)}
+    check("login: ...and so does the audit trail, for a link-local client a proxy names with its "
+          "zone too — the address alone, no '%'",
+          _zn_ips == {("nobody_zone", "2001:db8:9::"),
+                      ("nobody_zone_ll", "fe80::1c2d:3e4f:5a6b:7c8d")}, repr(_zn_ips))
 
     # ── Database maintenance: stats + VACUUM/ANALYZE optimize ─────
     with app.app_context():
@@ -5004,6 +5024,33 @@ try:
         check("audit-ip: ...and the throttle's own window is untouched by it",
               _AL.query.filter(_AL.action == "login_failed",
                                _AL.timestamp >= _now - _td(seconds=300)).count() == _recent)
+        # An older version stored proxy-reported client addresses with an IPv6 zone id, and its
+        # reduction of one whose low 64 bits were zero kept the zone's text ahead of the "/64". That
+        # row then read as already reduced (it holds a '/'), so the text stayed for good. An aged
+        # row holding a '%' is now rewritten through _anonymise_ip: the network kept, the text gone,
+        # and one that is no address at all blanked.
+        _zn_old = {}
+        for _v in ("2001:db8:77::%x panel login failed from 203.0.113.9/64",   # reduced, text kept
+                   "fe80::1c2d:3e4f:5a6b:7c8d%eth0",                          # never reduced
+                   "%not an address/64"):
+            _zn_old[_v] = _AL(username="zone_aged", action="login_failed", ip_address=_v,
+                              timestamp=_now - _td(days=200))
+        db.session.add_all(list(_zn_old.values()))
+        db.session.commit()
+        _zn_ids = {_v: _r.id for _v, _r in _zn_old.items()}
+        _anon(90)
+        _zn_got = {_v: db.session.get(_AL, _i).ip_address for _v, _i in _zn_ids.items()}
+        check("audit-ip: an aged row holding an IPv6 zone id is rewritten even when an older "
+              "version already reduced it — no '%' and no zone text is left",
+              not any("%" in _g or "203.0.113" in _g or " " in _g for _g in _zn_got.values()),
+              repr(_zn_got))
+        check("audit-ip: ...and it keeps the network: each zoned row becomes its address's /64, "
+              "one that is no address is blanked",
+              _zn_got == {
+                  "2001:db8:77::%x panel login failed from 203.0.113.9/64": "2001:db8:77::/64",
+                  "fe80::1c2d:3e4f:5a6b:7c8d%eth0": "fe80::/64", "%not an address/64": ""},
+              repr(_zn_got))
+        check("audit-ip: ...and a second run rewrites none of them again", _anon(90) == 0)
 
     # ── one server table: /servers/manage folded into the dashboard ──────────────────────────
     # The two pages showed seven of the same eight columns and shared no code at all — doAction vs

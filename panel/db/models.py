@@ -4,7 +4,7 @@ import logging
 import re
 import bcrypt
 from panel.core.clock import utcnow
-from panel.core.validation import ip_address_or_none
+from panel.core.validation import unzoned_ip_address_or_none
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
@@ -1197,13 +1197,16 @@ def _anonymise_ip(ip):
     every old row on every startup.
 
     Anything that will not parse as an IP returns "" rather than being kept. A value that got in
-    without being an address is not something to preserve on the off-chance — an IPv6 zone id
-    included. ipaddress parsed one and kept it, and when the address's low 64 bits were zero the
-    /64 kept it too: '2001:db8::%<text>' came back as '2001:db8::%<text>/64', text and all, and
-    then read as already reduced.
+    without being an address is not something to preserve on the off-chance.
+
+    An IPv6 zone id is DROPPED and the address it is attached to reduced, so the network stays and
+    the text goes. An older version stored client addresses a proxy reported with a zone (Apache
+    and Go's reverse proxy write a link-local client that way), and its reduction kept the zone:
+    '2001:db8::%<text>' came back as '2001:db8::%<text>/64', text and all. Both now come out as
+    '2001:db8::/64', built from the parsed number.
     """
     import ipaddress
-    addr = ip_address_or_none(ip)
+    addr = unzoned_ip_address_or_none(ip)
     if addr is None:
         return ""
     prefix = 24 if addr.version == 4 else 64
@@ -1232,7 +1235,10 @@ def anonymise_audit_ips(days):
     rows = (AuditLog.query
             .filter(AuditLog.timestamp < cutoff, AuditLog.ip_address != "",
                     AuditLog.ip_address.isnot(None),
-                    ~AuditLog.ip_address.like("%/%"))     # already reduced -> skip
+                    db.or_(~AuditLog.ip_address.like("%/%"),     # already reduced -> skip...
+                           # ...unless it holds a '%': an older version's reduction kept an IPv6
+                           # zone id, and whatever text followed it, ahead of the "/64".
+                           AuditLog.ip_address.like("%\\%%", escape="\\")))
             .all())
     for r in rows:
         r.ip_address = _anonymise_ip(r.ip_address)

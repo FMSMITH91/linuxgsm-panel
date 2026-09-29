@@ -967,12 +967,22 @@ CI-verified commit regardless of this file — this changelog is for humans.
   a client cannot choose that value. The first-run wizard also accepted a zoned bind address that
   the next start could not bind. Every address, network, ban, whitelist, firewall and bind check now
   refuses a zone and passes on the parsed address rather than the typed text, and the root helper
-  checks this for itself. A block, unban or allow-from rule is audited under its address or
-  network, or as `(not an IP address)`.
-  A link-local client that the kernel reports with its interface attached is still keyed by its
-  address. Nothing to do: no real client, ban or bind address carries a zone. A whitelist entry
-  stored with one before the whitelist refused them no longer exempts anything, which is how
-  fail2ban already treated it.
+  checks this for itself. A block, unban, allow-from or whitelist-removal row is audited under its
+  address or network, or as `(not an IP address)`; an allow-from row names the source as the rule
+  was sent, and a port rule's row names its port and protocol as they were checked, or
+  `(not a port)` / `(not a protocol)`.
+  A client address that a proxy reports with a zone is read with the zone dropped: Apache and Go's
+  reverse proxy write a link-local client into `X-Forwarded-For` that way, and that client is
+  keyed, logged and audited as its address alone. Refusing the value would have keyed it as the
+  proxy, so fail2ban could have banned the proxy and everyone behind it. That parse is what closes
+  the throttle hole: every zone on one address is that address's bucket. The throttle also drops a
+  zone itself, as a second guard in case another path ever hands it one. A link-local client that
+  the kernel reports with its interface attached is keyed by its address too. A whitelist entry
+  stored with a zone before the whitelist refused them still exempts its address from the
+  auto-block and the ban gate, as it did before (fail2ban's `ignoreip` leaves it out, as it always
+  has); remove it and add the address without the `%zone` to have fail2ban skip it too. Audit IPs
+  that an older version stored with a zone lose it as they age: each is reduced to its `/64`,
+  including the rows that version had already reduced with the zone's text kept.
 - **A `"*"` in `socketio_cors_origins` is ignored.** It let a page on another port of the panel's
   address, or on a sibling tailnet node — both same-site, so the session cookie is sent — open the
   console and the terminal as whoever visited it. If you had set it, set `site_domain` or list the
