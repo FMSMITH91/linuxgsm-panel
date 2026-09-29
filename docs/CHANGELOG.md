@@ -962,12 +962,15 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **The setup wizard's own steps are on the audit log.** Creating the first superadmin, the bind
   address and port it saves, a host added at its last step, finishing setup and **Restart now**
   wrote no row, so the one flow that runs before anyone can sign in left no record of what it did.
-  Each now writes one, by "setup wizard". The test that should have caught this matched functions
-  by name, and counted these as audited because other functions with the same names log. It now
-  follows each call to the function it really reaches. The Tailscale Serve the wizard sets up on
-  the way out is audited too, and is stored as set up only when Serve accepted it: its result was
-  ignored, so a Serve that failed left the firewall page treating the tailnet as the way in, and
-  the public web port's rule unprotected.
+  Each now writes one, by the account signed in to drive the wizard (a superadmin may, once the
+  first one exists), or by "setup wizard" when no one is signed in. **Restart now** writes its row
+  before the restart is scheduled, since the restart can stop the panel before a later write
+  lands, and a restart that could not be scheduled writes a second row saying why. The test that
+  should have caught this matched functions by name, and counted these as audited because other
+  functions with the same names log. It now follows each call to the function it really reaches.
+  The Tailscale Serve the wizard sets up on the way out is audited too, and is stored as set up
+  only when Serve accepted it: its result was ignored, so a Serve that failed left the firewall
+  page treating the tailnet as the way in, and the public web port's rule unprotected.
 - **Tailscale migrate and finalize refuse the panel's own host**, like the other Tailscale actions on
   the Hosts page. They rewrite a remote's record and firewall; migrate also deletes its public
   22/tcp rule.

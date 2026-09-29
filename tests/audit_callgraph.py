@@ -9,12 +9,16 @@ log are two unrelated workers.
 So each call is resolved statically, the way Python would resolve it:
 
   * a bare name through the function's own scope, then the enclosing functions', then the module's
-    globals, so a parameter or local that shadows a global is not the global;
-  * `import x as y` and `from x import y` followed to the module that defines the name, through
-    re-exports, star imports, and a package's PEP 562 __getattr__ over the modules in its _MODULES
-    tuple (panel.ops.ssh_manager), first one first, as at run time;
+    globals — never a class body's, which a method does not see — so a parameter, a local, or a
+    `for` / `with ... as` / `except ... as` name that shadows a global is not the global;
+  * `import x as y`, `from x import y` and `from .x import y` followed to the module that defines
+    the name, through re-exports, star imports (the names __all__ lists, else the public ones), and
+    a package's PEP 562 __getattr__ over the modules in its _MODULES tuple (panel.ops.ssh_manager),
+    first one first, as at run time; `y = x.fn` makes `y` an alias of what `x.fn` is;
   * `mod.fn` and `mod.sub.fn` on a resolved module, `self.fn` / `cls.fn` inside a method, and
-    `Class.fn`, including a base class the walk can resolve;
+    `Class.fn`, including a base class the walk can resolve; calling a class runs its __init__;
+  * only the calls in a function's own body: a nested def's calls are that def's, reached only
+    when something calls it;
   * a function PASSED to a call (threading.Thread(target=fn), start_background_task(fn),
     functools.partial(fn)) counts as reached by the caller, because that is how a route hands its
     work to a worker thread.
@@ -217,10 +221,23 @@ class CallGraph:
 
     def _star(self, scope, name, depth):
         for base in scope.stars:
+            if not self._exports(base, name):
+                continue
             found = self._member(("mod", base), name, depth + 1)
             if found is not None:
                 return found
         return None
+
+    def _exports(self, base, name):
+        """Does `from base import *` bind `name`?
+
+        The names its __all__ lists when it has one, else every name not starting with an
+        underscore — as Python does, so `_run` is never one.
+        """
+        listed = self._mods.get(base, _Scope("")).names.get("__all__")
+        if listed and listed[0] == "seq":
+            return name in {getattr(e, "value", None) for e in getattr(listed[1], "elts", ())}
+        return not name.startswith("_")
 
     def _settle(self, binding, depth):
         """Follow a lazy binding (an import, an alias) to a module, function or class."""

@@ -3,6 +3,7 @@
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
 from flask import (current_app, flash, jsonify, redirect, render_template, request, url_for)
+from flask_login import (current_user)
 from panel.core.clock import (utcnow)
 from panel.core.config import (encrypt_secret, load_config, remove_setup_token, save_config)
 from panel.db.models import (Group, RemoteServer, SetupState, User, db)
@@ -149,18 +150,35 @@ def _register_setup_wizard(app):
         if not _rebind_pending(cfg):
             flash("The panel already listens where its settings say — nothing to restart.", "info")
             return redirect(url_for("login"))
+        # BEFORE the restart, as remote_security's binding change does: restart_panel arms a
+        # detached two-second timer that stops the unit, and a row queued behind a SQLite lock for
+        # longer than that (the busy timeout is 15 s) died with the process. It was written after.
+        # The outcome is only known once restart_panel answers, so a failure is a row of its own.
+        _setup_log("panel_restart", target=_SETUP_TARGET,
+                   detail="requested, to listen on %s as the setup wizard stored"
+                          % cfg.get("bind_host"))
         ok, msg = so.restart_panel()
-        # Written once restart_panel has answered: it only schedules the restart, two seconds out,
-        # so this row and the page below go out before the process is stopped.
-        log_action(None, "panel_restart", target=_SETUP_TARGET, success=ok, actor=_SETUP_ACTOR,
-                   detail="to listen on %s, as the setup wizard stored: %s"
-                          % (cfg.get("bind_host"), msg))
+        if not ok:
+            _setup_log("panel_restart", target=_SETUP_TARGET, success=False,
+                       detail="the restart could not be scheduled: %s" % msg)
         return _complete_page(cfg, restarting=True, restart_ok=ok)
 
 
 # Who and what the setup wizard's audit rows name: no account need be signed in while it runs.
 _SETUP_ACTOR = "setup wizard"
 _SETUP_TARGET = "Panel Server"
+
+
+def _setup_log(action, target, **kw):
+    """Write one of the setup wizard's audit rows, as the signed-in account driving it if any.
+
+    Once the first admin exists a signed-in superadmin may drive the wizard too (_setup_owner_ok),
+    and every row said "setup wizard" with no account: a host added with root SSH, or a restart, was
+    on record as nobody's. The browser that ran the wizard from the start is signed in as no one,
+    so its rows still read "setup wizard".
+    """
+    user = current_user if getattr(current_user, "is_authenticated", False) else None
+    log_action(user, action, target=target, actor=None if user else _SETUP_ACTOR, **kw)
 
 
 def _register_setup_tailscale(app):
@@ -186,8 +204,7 @@ def _register_setup_tailscale(app):
         # Audited like every other mutating endpoint. The rbac gate counted these three as audited
         # only because a helper they reach is named `_run`, the same name as two workers that do
         # log; nothing here ever wrote a row, for installing a package as root and joining a tailnet.
-        log_action(None, "setup_tailscale_install", target=_SETUP_TARGET, success=ok,
-                   actor=_SETUP_ACTOR)
+        _setup_log("setup_tailscale_install", target=_SETUP_TARGET, success=ok)
         return jsonify({"success": ok, "log": log})
 
     @app.route("/api/setup/tailscale/up", methods=["POST"])
@@ -195,8 +212,7 @@ def _register_setup_tailscale(app):
         if not _setup_ts_ok():
             return jsonify({"error": "forbidden"}), 403
         ok, res = ts.tailscale_up_local(enable_ssh=True)
-        log_action(None, "setup_tailscale_up", target=_SETUP_TARGET, success=ok,
-                   actor=_SETUP_ACTOR)
+        _setup_log("setup_tailscale_up", target=_SETUP_TARGET, success=ok)
         if not ok:
             return jsonify({"success": False, "message": res})
         if res == "ALREADY_CONNECTED":
@@ -212,8 +228,8 @@ def _register_setup_tailscale(app):
         mount = cfg.get("tailscale_mount", "/") or "/"
         ok, msg = ts.setup_tailscale_serve(port=port, mount=mount, funnel=False,
                                            backend_scheme=_ts_backend_scheme(cfg))
-        log_action(None, "setup_tailscale_serve", target=_SETUP_TARGET,
-                   detail="port %s, mount %s" % (port, mount), success=ok, actor=_SETUP_ACTOR)
+        _setup_log("setup_tailscale_serve", target=_SETUP_TARGET,
+                   detail="port %s, mount %s" % (port, mount), success=ok)
         if not ok:
             return jsonify({"success": False, "message": msg})
         info = ts.get_tailscale_info(force_refresh=True)
@@ -361,7 +377,7 @@ def _setup_welcome(state, data, cfg):
     _advance(state, "admin_user")
     state.data = json.dumps(data)
     db.session.commit()
-    log_action(None, "setup_site_settings", target=_SETUP_TARGET, actor=_SETUP_ACTOR,
+    _setup_log("setup_site_settings", target=_SETUP_TARGET,
                detail="bind %s, port %s" % (_wiz_bind, _wiz_port))
     return redirect("/setup")
 
@@ -429,8 +445,7 @@ def _create_first_admin(state, data, username, password, email):
         db.session.commit()
     # Single-use: from here the wizard answers to this admin (the owner token, or signing in).
     remove_setup_token()
-    log_action(None, "add_user", target=username, detail="the first administrator, a superadmin",
-               actor=_SETUP_ACTOR)
+    _setup_log("add_user", target=username, detail="the first administrator, a superadmin")
     return redirect("/setup")
 
 
@@ -493,8 +508,8 @@ def _setup_add_remote(state, data):
             )
             db.session.add(remote)
             db.session.commit()
-            log_action(None, "add_remote", target=name, detail="%s@%s" % (ssh_user, host),
-                       actor=_SETUP_ACTOR, remote=remote)
+            _setup_log("add_remote", target=name, detail="%s@%s" % (ssh_user, host),
+                       remote=remote)
             flash(f"Remote '{name}' added successfully!", "success")
             data["remote_added"] = True
             state.data = json.dumps(data)
@@ -540,7 +555,7 @@ def _finish_setup(state, data, cfg):
             _log.debug("setup_wizard: ignored non-fatal error", exc_info=True)
     db.session.commit()
     remove_setup_token()     # already gone with the admin step; this covers a token made since
-    log_action(None, "setup_finished", target=_SETUP_TARGET, actor=_SETUP_ACTOR)
+    _setup_log("setup_finished", target=_SETUP_TARGET)
     # Rendered here rather than redirected to: the finished wizard is locked, so a GET of /setup
     # goes to /login, and this page — the one that says where the panel is reachable — was never
     # shown to anyone.
@@ -606,7 +621,7 @@ def _record_auto_serve(cfg, mount, ok, msg):
     The result was dropped, and tailscale_setup_done is what tells the firewall page the panel is
     reachable over the tailnet, so a Serve that failed left the public web port's rule unprotected.
     """
-    log_action(None, "setup_tailscale_serve", target=_SETUP_TARGET, success=ok, actor=_SETUP_ACTOR,
+    _setup_log("setup_tailscale_serve", target=_SETUP_TARGET, success=ok,
                detail="at the end of setup: port %s, mount %s: %s"
                       % (cfg.get("port", 5000), mount, msg))
     if ok:

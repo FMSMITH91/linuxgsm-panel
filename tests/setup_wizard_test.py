@@ -507,6 +507,57 @@ def _check_auto_serve_failure():
           _last[3] is False and "serve refused" in _last[2], repr(_last))
 
 
+def _check_setup_rows_by_account():
+    """Restart now writes its row before the restart is armed; a signed-in superadmin is named."""
+    # restart_panel arms a detached two-second timer that stops the unit, and a row queued behind a
+    # SQLite lock for longer than that died with the process: remote_security's binding change
+    # writes its row BEFORE the restart for that reason, and Restart now wrote its row after. So the
+    # stub below counts the rows already there when it is called, and refuses, as systemd-run can.
+    # And once the admin exists a signed-in superadmin may drive the wizard (_rec here), yet every
+    # row said "setup wizard" with no account: a restart, or a host added with root SSH, on record
+    # as nobody's.
+    app.config["_BOOT_BIND"] = "0.0.0.0"  # nosec B104 - the bind this process "started" on
+    _n_before = len(_audit("panel_restart"))
+    _at_call, _recorder = [], _so_mod.restart_panel
+
+    def _refusing_restart(*a, **k):
+        _at_call.append(len(_audit("panel_restart")))
+        return False, "systemd-run: refused"
+    _so_mod.restart_panel = _refusing_restart
+    try:
+        _rec.post("/setup/restart")
+    finally:
+        _so_mod.restart_panel = _recorder
+        app.config.pop("_BOOT_BIND", None)
+    with app.app_context():
+        _admin_id = User.query.filter_by(username="firstadmin").one().id
+        _rows = [(a.username, a.user_id, a.success, a.detail) for a in
+                 AuditLog.query.filter_by(action="panel_restart").order_by(AuditLog.id).all()]
+    _rows = _rows[_n_before:]
+    check("audit: Restart now's row is written BEFORE the restart is armed, which can stop the "
+          "process before a later write lands", _at_call == [_n_before + 1],
+          "rows when restart_panel ran: %r (before: %d)" % (_at_call, _n_before))
+    check("audit: ...and a restart that could not be scheduled is a row of its own, saying why",
+          [r[2] for r in _rows] == [True, False] and "systemd-run: refused" in _rows[-1][3],
+          repr(_rows))
+    check("audit: a signed-in superadmin's rows name that account, not 'setup wizard'",
+          {r[:2] for r in _rows} == {("firstadmin", _admin_id)}, repr(_rows))
+
+
+def _check_setup_rows_one_writer():
+    """Every row the wizard writes goes through _setup_log, so no step can write one by nobody."""
+    # A log_action call anywhere else in route_helpers.py is one that can.
+    import ast as _ast
+    import inspect as _inspect
+    _others = [f for f in _ast.parse(_inspect.getsource(_rh)).body
+               if getattr(f, "name", None) != "_setup_log"]
+    _outside = [n.lineno for f in _others for n in _ast.walk(f)
+                if getattr(getattr(n, "func", None), "id", None) == "log_action"]
+    check("audit: every row the wizard writes goes through _setup_log, which names the account",
+          _outside == [] and hasattr(_rh, "_setup_log"),
+          "log_action called directly at route_helpers.py lines %r" % (_outside,))
+
+
 try:
     _check_unclaimed_wizard()
     _check_unclaimed_tailscale()
@@ -716,6 +767,8 @@ try:
     _check_complete_page()
     _check_restart_now()
     _check_auto_serve_failure()
+    _check_setup_rows_by_account()
+    _check_setup_rows_one_writer()
 
     # ── Once setup is COMPLETE, the wizard is permanently locked ──────────────────────────────
     mark_setup_complete()

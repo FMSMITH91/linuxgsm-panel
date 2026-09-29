@@ -3910,6 +3910,114 @@ check("audit gate: ...while the function that does log is followed however it is
       all(_aud_fx_logs[q] for q in ("by_real_worker", "by_thread_target", "by_module_log_action",
                                     "by_pep562_module", "Svc.go", "register.<locals>.by_closure")),
       repr(_aud_fx_logs))
+# The rest of Python's scope rules, each of which stops a same-named but unrelated name from
+# counting as an audit row: a local, a `for` / `with ... as` / `except ... as` name shadows the
+# global; a method does not see its class body's names; and a nested def's calls are its own until
+# something calls it. And the rest of what the resolver follows, each a way a real route could
+# reach its logging helper: a class whose __init__ logs, an alias, a submodule's attribute, a
+# relative import, and a star import — which binds only the names Python binds (__all__'s, else
+# the public ones), so a `_run` is never one.
+_AUD_FIXTURE_SCOPES = dict(_AUD_FIXTURE, **{
+    "fx.starsrc": ("from fx.logs import log_action\n"
+                   "def record():\n    log_action(None, 's')\n"
+                   "def _hidden():\n    log_action(None, 'h')\n", False),
+    "fx.starall": ("from fx.logs import log_action\n__all__ = ('_listed',)\n"
+                   "def _listed():\n    log_action(None, 'l')\n"
+                   "def unlisted():\n    log_action(None, 'u')\n", False),
+    "fx.scopes": (textwrap.dedent('''
+        import fx.logs
+        from fx import logs, quiet
+        from .logs import _run as _rel_run
+        from fx.starsrc import *
+        from fx.starall import *
+
+        _alias_run = logs._run
+
+        def make():
+            return quiet
+
+        def by_shadowing_local():
+            logs = make()
+            logs._run()
+
+        def by_shadowing_with():
+            with open("x") as logs:
+                logs._run()
+
+        def by_shadowing_for():
+            for logs in ():
+                logs._run()
+
+        def by_shadowing_except():
+            try:
+                make()
+            except Exception as logs:
+                logs._run()
+
+        def by_unused_nested():
+            def _w():
+                logs._run()
+            return 1
+
+        def by_star_private():
+            _hidden()
+
+        def by_star_unlisted():
+            unlisted()
+
+        class K:
+            def logs(self):
+                return None
+
+            def m(self):
+                logs._run()
+
+        class Rec:
+            def __init__(self):
+                logs._run()
+
+        def by_class_init():
+            Rec()
+
+        def by_module_alias():
+            _alias_run()
+
+        def by_local_alias():
+            fn = logs._run
+            fn()
+
+        def by_submodule_attr():
+            fx.logs._run()
+
+        def by_relative_import():
+            _rel_run()
+
+        def by_star_import():
+            record()
+
+        def by_star_all():
+            _listed()
+        '''), False),
+})
+_aud_fx2 = _aud_cg.CallGraph(_AUD_FIXTURE_SCOPES)
+_aud_fx2_logs = {q: _aud_fx2.logs(_aud_fx2.function_key("fx.scopes", q)) for q in (
+    "by_shadowing_local", "by_shadowing_with", "by_shadowing_for", "by_shadowing_except",
+    "by_unused_nested", "by_star_private", "by_star_unlisted", "K.m", "by_class_init",
+    "by_module_alias", "by_local_alias", "by_submodule_attr", "by_relative_import",
+    "by_star_import", "by_star_all")}
+check("audit gate: a local, loop, with or except name that shadows a logging module is not an "
+      "audit row",
+      not any(_aud_fx2_logs[q] for q in ("by_shadowing_local", "by_shadowing_with",
+                                          "by_shadowing_for", "by_shadowing_except")),
+      repr(_aud_fx2_logs))
+check("audit gate: ...nor a nested def nothing calls, nor a name a star import does not bind",
+      not any(_aud_fx2_logs[q] for q in ("by_unused_nested", "by_star_private",
+                                          "by_star_unlisted")), repr(_aud_fx2_logs))
+check("audit gate: ...while a method reads its module's names, not its class's, and a class call, "
+      "an alias, a submodule, a relative and a star import are followed (control)",
+      all(_aud_fx2_logs[q] for q in ("K.m", "by_class_init", "by_module_alias", "by_local_alias",
+                                    "by_submodule_attr", "by_relative_import", "by_star_import",
+                                    "by_star_all")), repr(_aud_fx2_logs))
 # ── an audit row about a server or host names it by ID ─────────────────────────────────────────
 # audit_scope decides who reads a row from AuditLog.game_server_id / remote_id, which log_action
 # records only from its server= / remote= arguments. A call whose target is a server's or a host's
