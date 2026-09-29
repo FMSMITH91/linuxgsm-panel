@@ -412,14 +412,19 @@ try:
           "%d %r" % (_r.status_code, _p9_state._os_update_seen.get(_s16)))
     check("os-update reuse: the delegate cannot read that host's cache (the boundary)",
           _D16.get("/api/remote/%d/updates-cached" % _s16).status_code == 403)
+    _p9_state._os_update_state["hosts"][_s16] = (2, 1)      # what the daily sweep alerted on
     _r = _A16.post("/remotes/%d/delete" % _s16, json={"password": _PW16}, headers=_XHR16)
     check("os-update reuse: deleting the host drops its cached update list at once",
           _r.status_code == 200 and _s16 not in _p9_state._os_update_seen,
           repr(_p9_state._os_update_seen.get(_s16)))
+    check("os-update reuse: ...and the counts the daily sweep last alerted on for it",
+          _s16 not in _p9_state._os_update_state["hosts"],
+          repr(_p9_state._os_update_state["hosts"].get(_s16)))
     # Something written after the delete (the daily sweep holding the old row list) is not the
     # new host's either.
     _p9_state._os_update_seen[_s16] = {"name": "secret-host", "count": 2, "security": 1,
                                        "packages": _OSU16["packages"], "at": 1.0}
+    _p9_state._os_update_state["hosts"][_s16] = (2, 1)
     _D16.post("/remotes/add", data={"name": "p16-mine", "host": "192.0.2.91", "ssh_user": "root",
                                     "ssh_port": "22", "auth_method": "password",
                                     "credential": "mine", "setup_type": "existing"},
@@ -429,6 +434,11 @@ try:
           "%r vs %r" % (_mine16, _s16))
     check("os-update reuse: a new host inherits no cached update list from the id's last owner",
           _s16 not in _p9_state._os_update_seen, repr(_p9_state._os_update_seen.get(_s16)))
+    # ...nor the sweep's "already told you about 2": a host added after the panel started has its
+    # first batch announced (os_updates._os_update_seeds), and an inherited count swallowed it.
+    check("os-update reuse: ...nor the alert counts, so its own first batch is still announced",
+          _s16 not in _p9_state._os_update_state["hosts"],
+          repr(_p9_state._os_update_state["hosts"].get(_s16)))
     _cj = _p9_json(_D16.get("/api/remote/%d/updates-cached" % _s16))
     _sj = _p9_json(_D16.get("/api/os-updates/summary"))
     check("os-update reuse: the new host's card and the banner know nothing of the old host",

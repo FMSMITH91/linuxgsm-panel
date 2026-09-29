@@ -60,8 +60,8 @@ __all__ = [
 # GMod content-apply state, both of which are read to RENDER a server's page, so a recycled id
 # showed the new server the PREVIOUS one's backup outcome or a content install stuck at "running".
 # Registering at the declaration means the pruner's list and the declarations are the same list,
-# and a map that is deliberately not pruned (see _os_update_state) is now visibly not registered
-# rather than indistinguishable from one that was forgotten.
+# so a map that is not registered is visibly a decision rather than indistinguishable from one
+# that was forgotten.
 #
 # Entries are (mapping, lock). `lock` is None for a map nothing serialises, and the map's own
 # lock where one exists — the pruner runs on the monitor thread, so a map that its writers only
@@ -256,4 +256,11 @@ _game_backup_status = register_server_state({})
 # on. Distinct from _os_update_seen above, which is what the login banner and the OS Updates card
 # read — this one exists only to decide whether to send a chat alert, and must keep its exact
 # shape (see the transition tests in smoke_test.py).
-_os_update_state = {"last_run": 0.0, "hosts": {}}   # remote.id -> (count, security_count)
+#
+# "hosts" is registered like every other row-keyed map. It used to be left to the sweep's own
+# prune, which forgets only ids that no row holds — and a deleted host's id is held again by the
+# next host added, which then inherited "already told you about N updates" and had its own first
+# batch swallowed (a host added after the panel started is supposed to be announced; see
+# os_updates._os_update_seeds). The INSERT now forgets it, as it forgets the rest.
+# "hosts": remote.id -> (count, security_count)
+_os_update_state = {"last_run": 0.0, "hosts": register_remote_state({})}

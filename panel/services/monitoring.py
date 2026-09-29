@@ -805,8 +805,8 @@ def _forget_deleted_rows(remote_ids, server_ids):
     to RENDER a server's page, so a recycled id showed the new server the previous one's backup
     outcome, or a content install frozen at "running". They are registered at their declarations
     now (panel_state.register_server_state / register_remote_state), and this walks the registry.
-    A map that is deliberately NOT pruned here — _os_update_state, which prunes itself inside the
-    sweep — is now visibly unregistered rather than indistinguishable from one that was forgotten.
+    The OS-update sweep's arming counts (_os_update_state["hosts"]) are registered too: the sweep
+    prunes them itself, but only against ids no row holds, which a recycled id never is.
 
     #85's snapshot (_os_update_seen) is registered even though the sweep also prunes it: it is read
     on every page load by /api/os-updates/summary, so a deleted host would otherwise linger in the
