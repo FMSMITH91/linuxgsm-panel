@@ -184,9 +184,10 @@ F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
 # The fail2ban log family, current plus rotated. Fixed here — no part of it is ever
 # supplied by a caller, which is what makes reading them safe to do as root.
 F2B_LOG_GLOB = "/var/log/fail2ban.log*"
-# The most f2b-log-lines prints before it gives up (rc 3). One read chunk under the panel's own
-# transport ceiling (ssh_manager._core._MAX_OUTPUT_BYTES, 8 MB), which the callers treat as unread
-# at the same point — so the answer is refused here before a transport could cut it. Written out
+# The most f2b-log-lines prints before it gives up (rc 3); up to and including this many bytes is
+# a complete answer (rc 0), and the panel reads it as one. One read chunk under the panel's own
+# transport ceiling (ssh_manager._core._MAX_OUTPUT_BYTES, 8 MB) — so the answer is refused here
+# before a transport could cut it, and the panel's callers decide from the rc alone. Written out
 # because this file imports nothing from the panel; tests/unit ties the two together.
 F2B_LOG_MAX_BYTES = 8 * 1024 * 1024 - 65536
 

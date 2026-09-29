@@ -31,8 +31,9 @@ import tempfile as _tf16
 from datetime import datetime as _dt16
 from types import SimpleNamespace as NS
 
+from unit import REPO_ROOT as _REPO16
 from unit.part01 import check, eq  # noqa: F401
-from unit.part05 import _helper
+from unit.part05 import _helper, _helper_path
 from unit.part12 import (P9_ADMIN, P9_GS, P9_HOST, P9_HOST2, P9_LOCAL, _P9_CFG_PATH, _P9_TRIPPED,
                          _P9Thread, _p9, _p9_app, _p9_auth, _p9_banlist, _p9_bk, _p9_cfg,
                          _p9_client,
@@ -757,7 +758,10 @@ from panel.ops.ssh_manager import _core as _core16  # noqa: E402
 eq("f2b helper: its ceiling sits one read chunk under the transports' (they cannot drift)",
    getattr(_helper, "F2B_LOG_MAX_BYTES", None), _core16._MAX_OUTPUT_BYTES - 65536)
 
-# _run_verb, all three branches, against a real child printing more than the ceiling.
+# _run_verb, all three branches, against a real child printing more than the ceiling. f2b-log-lines
+# is all-or-nothing, so where THIS process's collector cut it (the root and shell forms, and a
+# helper that predates its own ceiling, which is what this child stands in for) the answer is the
+# helper's own answer for a cut read: rc 3. Any other verb keeps what fits, as it always did.
 _BIG16 = [sys.executable, "-c",
           "import sys; sys.stdout.write('A' * (%d + 4096))" % _core16._MAX_OUTPUT_BYTES]
 _rv16_saved = (_p9_so._helper_present, _p9_so.os, _p9_so._priv)
@@ -778,13 +782,19 @@ class _Os16(object):
         return getattr(os, name)
 
 
+def _priv16(argv_for):
+    """privileged.py's entry points, with every verb run as the local argv `argv_for(verb)`."""
+    return NS(helper_argv=lambda v, a: list(argv_for(v)), tool_argv=lambda v, a: list(argv_for(v)),
+              remote_command=lambda v, a, merge_stderr=True: " ".join(
+                  __import__("shlex").quote(x) for x in argv_for(v)),
+              stdin_for=lambda v: None, VerbError=ValueError)
+
+
 try:
-    _p9_so._priv = NS(helper_argv=lambda v, a: list(_BIG16), tool_argv=lambda v, a: list(_BIG16),
-                      remote_command=lambda v, a, merge_stderr=True: " ".join(
-                          __import__("shlex").quote(x) for x in _BIG16),
-                      stdin_for=lambda v: None, VerbError=ValueError)
+    _p9_so._priv = _priv16(lambda v: _BIG16)
     _p9_so._helper_present = lambda: True
     _rv16["helper"] = _p9_so._run_verb("f2b-log-lines", ["2026-09-01"], merge_stderr=False)
+    _rv16["journal"] = _p9_so._run_verb("journal", ["panel", "20"], merge_stderr=False)
     _p9_so._helper_present = lambda: False
     _p9_so.os = _Os16(0)
     _rv16["root"] = _p9_so._run_verb("f2b-log-lines", ["2026-09-01"], merge_stderr=False)
@@ -792,27 +802,491 @@ try:
     _rv16["shell"] = _p9_so._run_verb("f2b-log-lines", ["2026-09-01"], merge_stderr=False)
 finally:
     _p9_so._helper_present, _p9_so.os, _p9_so._priv = _rv16_saved
-check("f2b _run_verb: every branch keeps at most the transports' ceiling of a verb's output",
-      set(_rv16) == {"helper", "root", "shell"}
-      and all(r[2] == 0 and 0 < len(r[0]) <= _core16._MAX_OUTPUT_BYTES for r in _rv16.values()),
-      repr({k: (len(v[0]), v[1][:60], v[2]) for k, v in _rv16.items()}))
+_rv16_seen = {k: (len(v[0]), v[1][:60], v[2]) for k, v in _rv16.items()}
+check("f2b _run_verb: every branch keeps at most the ceiling, and answers a cut read as rc 3",
+      all(_rv16.get(k, ("", "", 0))[2] == 3 and "treated as unread" in _rv16[k][1]
+          and 0 < len(_rv16[k][0]) <= _core16._MAX_OUTPUT_BYTES
+          for k in ("helper", "root", "shell")), repr(_rv16_seen))
+check("f2b _run_verb: ...while a verb that is not all-or-nothing keeps what fits, rc 0 (control)",
+      _rv16.get("journal", ("", "", -1))[2] == 0
+      and len(_rv16["journal"][0]) == _core16._MAX_OUTPUT_BYTES, repr(_rv16_seen.get("journal")))
 
 _f2b16_verb = _p9_so._run_verb
-_AT_CAP16 = _F2B16_LINE % 1 + "\n"
-_AT_CAP16 = _AT_CAP16 * ((_core16._MAX_OUTPUT_BYTES - 65536) // len(_AT_CAP16) + 1)
 try:
-    _p9_so._run_verb = lambda verb, args=(), **k: (_AT_CAP16, "", 0)
-    _ac16 = (_p9_so.fail2ban_attempt_counts(), _p9_so.fail2ban_top_ips())
     _p9_so._run_verb = lambda verb, args=(), **k: ("", "panel-helper: truncated", 3)
+    _ac16 = (_p9_so.fail2ban_attempt_counts(), _p9_so.fail2ban_top_ips())
+    _p9_so._run_verb = lambda verb, args=(), **k: ("", "Command timed out", -1)
     _ac16 += (_p9_so.fail2ban_attempt_counts(), _p9_so.fail2ban_top_ips())
     _p9_so._run_verb = lambda verb, args=(), **k: (_F2B16_LINE % 7, "", 0)
     _ok16 = _p9_so.fail2ban_attempt_counts()
 finally:
     _p9_so._run_verb = _f2b16_verb
-check("f2b tally: an answer at the ceiling, or the helper's rc 3, is unread (None), not partial",
+check("f2b tally: a cut read (rc 3), or a failed one, is unread (None), never a partial tally",
       _ac16 == (None, None, None, None), repr([type(x).__name__ for x in _ac16]))
 eq("f2b tally: an ordinary answer is still tallied (control)", _ok16, {"2001:db8::7": 1})
 
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The fail2ban ceiling, EXACTLY: the helper and the panel agree where "complete" ends
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The helper answers rc 0 up to AND INCLUDING F2B_LOG_MAX_BYTES, and rc 3 one byte past it. The
+# panel used to call `len >= F2B_LOG_MAX_BYTES` cut, so an answer of exactly the ceiling (complete
+# by the helper's own rc) made both tallies None on the test VPS, where main tallied it. Now the rc
+# decides: the helper's where it ran, and the collector's cut, answered as the same rc 3, where it
+# did not. Driven through the real _run_verb, with the real helper function in a child for the
+# first half and the pre-helper shell form for the second.
+_EX16_MAX = getattr(_helper, "F2B_LOG_MAX_BYTES", _core16._MAX_OUTPUT_BYTES - 65536)
+_EX16_ONE = _F2B16_LINE % 7
+_EX16_IP = "2001:db8::7"
+_EX16_DIR = _tf16.mkdtemp(prefix="lgsm-unit-f2b-exact-")
+_EX16_CHILD = [sys.executable, "-c", (
+    "import importlib.machinery as m, importlib.util as u, sys\n"
+    "s = u.spec_from_loader('h', m.SourceFileLoader('h', %r))\n"
+    "h = u.module_from_spec(s)\n"
+    "s.loader.exec_module(h)\n"
+    "h.F2B_LOG_GLOB = %r\n"
+    "sys.exit(h.do_f2b_log_lines(['2026-09-01'], ''))\n")
+    % (_helper_path, os.path.join(_EX16_DIR, "fail2ban.log*"))]
+# The shell form's stand-in: exactly argv[1] bytes of the same lines, and no ceiling of its own.
+_CAP16_CHILD = [sys.executable, "-c", (
+    "import sys\n"
+    "one, n = %r, int(sys.argv[1])\n"
+    "k = n // (len(one) + 1)\n"
+    "pad = n - (k * (len(one) + 1) - 1)\n"
+    "sys.stdout.write('\\n'.join([one] * (k - 1) + [one + 'x' * pad]))\n")
+    % _EX16_ONE]
+
+
+def _ex16_lines(n):
+    """Found lines for _EX16_IP which, joined by newlines, are exactly `n` bytes."""
+    k = n // (len(_EX16_ONE) + 1)
+    return [_EX16_ONE] * (k - 1) + [_EX16_ONE + "x" * (n - (k * (len(_EX16_ONE) + 1) - 1))]
+
+
+def _ex16_log(n):
+    """Write a fail2ban.log whose f2b-log-lines answer is exactly `n` bytes; its line count."""
+    lines = _ex16_lines(n)
+    with open(os.path.join(_EX16_DIR, "fail2ban.log"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return len(lines)
+
+
+def _ex16_helper():
+    """The helper's do_f2b_log_lines over _EX16_DIR, run in this process: (rc, bytes printed)."""
+    saved = (_helper.F2B_LOG_GLOB, sys.stdout, sys.stderr)
+    out = _io16.StringIO()
+    _helper.F2B_LOG_GLOB = os.path.join(_EX16_DIR, "fail2ban.log*")
+    sys.stdout, sys.stderr = out, _io16.StringIO()
+    try:
+        rc = _helper.do_f2b_log_lines(["2026-09-01"], "")
+    finally:
+        _helper.F2B_LOG_GLOB, sys.stdout, sys.stderr = saved
+    return rc, len(out.getvalue().encode("utf-8"))
+
+
+_ex16 = {}
+_ex16_saved = (_p9_so._helper_present, _p9_so.os, _p9_so._priv, _p9_so.fail2ban_overview,
+               _p9_so.ufw_blocked_ips)
+try:
+    _p9_so.fail2ban_overview = lambda: {"jails": []}      # top-ips' annotations: not under test
+    _p9_so.ufw_blocked_ips = lambda shadowed=None: {}
+    _p9_so._helper_present = lambda: True
+    _p9_so._priv = _priv16(lambda v: _EX16_CHILD)
+    for _name16, _n16 in (("exact", _EX16_MAX), ("over", _EX16_MAX + 1), ("under", _EX16_MAX - 1)):
+        _k16 = _ex16_log(_n16)
+        _ex16[_name16] = (_k16, _ex16_helper(), _p9_so.fail2ban_attempt_counts(),
+                          _p9_so.fail2ban_top_ips() if _name16 == "exact" else None)
+    _p9_so._helper_present = lambda: False
+    _p9_so.os = _Os16(None)            # the shell fallback, with no sudo prefix
+    _C16 = _core16._MAX_OUTPUT_BYTES
+    for _name16, _n16 in (("cap", _C16), ("cap+1", _C16 + 1), ("cap-1", _C16 - 1)):
+        _p9_so._priv = _priv16(lambda v, _n=_n16: _CAP16_CHILD + [str(_n)])
+        _ex16[_name16] = (_n16 // (len(_EX16_ONE) + 1), None, _p9_so.fail2ban_attempt_counts(),
+                          None)
+finally:
+    (_p9_so._helper_present, _p9_so.os, _p9_so._priv, _p9_so.fail2ban_overview,
+     _p9_so.ufw_blocked_ips) = _ex16_saved
+    import shutil as _sh16ex
+    _sh16ex.rmtree(_EX16_DIR, ignore_errors=True)
+
+
+def _ex16_got(name):
+    """What case `name` answered, briefly: (lines written, helper (rc, bytes), tally shape)."""
+    k, helper, tally, _top = _ex16.get(name, (None, None, "missing", None))
+    return k, helper, (tally if not isinstance(tally, dict) else sorted(tally.items()))
+
+
+_EX16_TOP = _ex16.get("exact", (0, None, None, None))[3]
+check("f2b ceiling: the helper answers exactly its ceiling as complete (rc 0, every byte)",
+      _ex16_got("exact")[1] == (0, _EX16_MAX), repr(_ex16_got("exact")[:2]))
+check("f2b ceiling: ...one byte past it as cut (rc 3), and one byte under as complete",
+      (_ex16_got("over")[1] or (None,))[0] == 3 and _ex16_got("under")[1] == (0, _EX16_MAX - 1),
+      repr((_ex16_got("over")[1], _ex16_got("under")[1])))
+check("f2b ceiling: the panel tallies an answer the helper called complete at exactly its ceiling",
+      _ex16.get("exact", (0, 0, None))[2] == {_EX16_IP: _ex16["exact"][0]},
+      repr(_ex16_got("exact")))
+check("f2b ceiling: ...and top-ips ranks it, rather than answering None",
+      isinstance(_EX16_TOP, list)
+      and [(r["ip"], r["attempts"]) for r in _EX16_TOP] == [(_EX16_IP, _ex16["exact"][0])],
+      repr(_EX16_TOP)[:200])
+check("f2b ceiling: ...one byte past it is unread (None), and one byte under is tallied",
+      _ex16.get("over", (0, 0, 0))[2] is None
+      and _ex16.get("under", (0, 0, None))[2] == {_EX16_IP: _ex16["under"][0]},
+      repr((_ex16_got("over"), _ex16_got("under"))))
+check("f2b ceiling: with no helper the collector's cap decides, and exactly the cap is tallied",
+      _ex16.get("cap", (0, 0, None))[2] == {_EX16_IP: _ex16["cap"][0]}, repr(_ex16_got("cap")))
+check("f2b ceiling: ...one byte past the cap is unread (None), and one byte under is tallied",
+      _ex16.get("cap+1", (0, 0, 0))[2] is None
+      and _ex16.get("cap-1", (0, 0, None))[2] == {_EX16_IP: _ex16["cap-1"][0]},
+      repr((_ex16_got("cap+1"), _ex16_got("cap-1"))))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# _run_verb's timeout, whatever the verb leaves behind — under eventlet AND plain threads
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# On the panel host a privileged verb is `sudo -n <helper> <verb>`: the panel's account can kill
+# sudo, but not the root helper or what it runs, and those keep the pipes' write ends open. Found on
+# the test VPS: `_run_verb("journal", ["panel", "20000"], timeout=1)` answered after 8.6s (main,
+# subprocess.run: 1.0s), and a stand-in the kill could not reach held a 1s timeout for 16s under
+# threads and 11s under eventlet — the kill's communicate(timeout=5), a SECOND reader on the pipes
+# the capped readers were reading (under eventlet it raised "Second simultaneous read", swallowed),
+# then each reader's grace of 5s in turn. Their descriptors stayed open, and sudo was left a zombie.
+#
+# The stand-in here is the same: a grandchild in its OWN session (setsid), so the kill's killpg
+# misses it exactly as it misses a root process, ignoring SIGTERM for good measure, holding stdout
+# and stderr open. Nothing privileged runs, and the shell branch is driven with no geteuid, so no
+# `sudo` prefix either. The same functions run in this process (eventlet-patched, as the service
+# is) and in a child interpreter that never imports eventlet's patcher (plain threads), so they
+# import nothing from the suite.
+import gc as _gc16  # noqa: E402
+import shlex as _shlex16  # noqa: E402
+import signal as _signal16  # noqa: E402
+import time as _time16  # noqa: E402
+import weakref as _weakref16  # noqa: E402
+
+
+def _rv16_stub(so, branch, argv, popen):
+    """Point _run_verb's `branch` at the local `argv`, with `popen` as Popen; the originals."""
+
+    class _NoEuid(object):
+        """os without geteuid: the shell branch, and no `sudo` prefix on it."""
+
+        def __getattr__(self, name):
+            if name == "geteuid":
+                raise AttributeError(name)
+            return getattr(os, name)
+
+    saved = (so._priv, so._helper_present, so.os, so.subprocess.Popen)
+    so._priv = NS(helper_argv=lambda v, a: list(argv), tool_argv=lambda v, a: list(argv),
+                  remote_command=lambda v, a, merge_stderr=True: " ".join(
+                      _shlex16.quote(x) for x in argv),
+                  stdin_for=lambda v: None, VerbError=ValueError)
+    so._helper_present = lambda: branch == "helper"
+    so.os = os if branch == "helper" else _NoEuid()
+    so.subprocess.Popen = popen
+    return saved
+
+
+def _rv16_recorder(real, made, pipes, comms):
+    """A Popen stand-in: `real`'s process, recorded with its pipes' identities and communicate()s.
+
+    A function, not a subclass: under tools/nosudo_runner the module's Popen is its shim's method.
+    It keeps only the pid and a WEAK reference, as a caller that drops its Popen would: a pipe still
+    open afterwards is one something else holds (a reader that never let go), not this recorder.
+    """
+
+    def popen(*a, **k):
+        p = real(*a, **k)
+        made.append((p.pid, _weakref16.ref(p)))
+        for s in (p.stdout, p.stderr):
+            if s is not None:
+                pipes.append(os.readlink("/proc/self/fd/%d" % s.fileno()))
+        talk, ref = type(p).communicate, _weakref16.ref(p)
+
+        def communicate(*ca, **ck):
+            comms.append(1)
+            return talk(ref(), *ca, **ck)
+        p.communicate = communicate
+        return p
+    return popen
+
+
+def _rv16_open_pipes(pipes):
+    """How many of our ends of `pipes` this process still holds open, once garbage is collected."""
+    _gc16.collect()
+    held = 0
+    for fd in os.listdir("/proc/self/fd"):
+        try:
+            held += os.readlink("/proc/self/fd/" + fd) in pipes
+        except OSError:
+            continue
+    return held
+
+
+def _rv16_reaped(pid):
+    """Whether child `pid` was reaped by the code under test (not a zombie, not still running)."""
+    if pid is None:
+        return False
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        return True
+    return False
+
+
+def _rv16_holder(pidfile):
+    """Whether the stand-in named in `pidfile` was still alive; if it was, it is SIGKILLed now.
+
+    The pidfile goes once read, and a pid is killed only while it is still that stand-in (its
+    command line names rv16-standin): one already gone may have handed its pid to someone else.
+    """
+    if not pidfile:
+        return None
+    try:
+        with open(pidfile, encoding="utf-8") as fh:
+            pid = int(fh.read().strip())
+        os.unlink(pidfile)
+        with open("/proc/%d/cmdline" % pid, "rb") as fh:
+            if b"rv16-standin" not in fh.read():
+                return False
+        os.kill(pid, _signal16.SIGKILL)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _rv16_case(so, core, case):
+    """One _run_verb call against a local command: its answer, time, and what it left behind."""
+    branch, argv, timeout, pidfile, grace = case
+    made, pipes, comms = [], [], []
+    saved = _rv16_stub(so, branch, argv, _rv16_recorder(so.subprocess.Popen, made, pipes, comms))
+    saved_grace = core._READER_GRACE
+    core._READER_GRACE = grace or saved_grace
+    t0 = _time16.monotonic()
+    try:
+        got = so._run_verb("journal", ["panel", "20000"], timeout=timeout, merge_stderr=False)
+    finally:
+        took = _time16.monotonic() - t0
+        so._priv, so._helper_present, so.os, so.subprocess.Popen = saved
+        core._READER_GRACE = saved_grace
+    return {"got": [got[0][:40], len(got[0]), got[1][:40], len(got[1]), got[2]],
+            "took": round(took, 2), "open": _rv16_open_pipes(pipes),
+            "reaped": _rv16_reaped(made[-1][0] if made else None), "communicate": len(comms),
+            "holder": _rv16_holder(pidfile)}
+
+
+def _rv16_all(so, core, cases):
+    """Every case, {name: result}, and whether this interpreter is eventlet-patched."""
+    patcher = sys.modules.get("eventlet.patcher")
+    return {"patched": bool(patcher and patcher.is_monkey_patched("thread")),
+            "runs": {name: _rv16_case(so, core, case) for name, case in cases}}
+
+
+_RV16_TMP = _tf16.mkdtemp(prefix="lgsm-unit-rv16-")
+
+
+# The stand-in: ignores SIGTERM, names its pid, then holds the pipes for 30s -- silently, or writing
+# 64 KB every 10ms. PACED, not `yes`: the pre-fix kill path's communicate() kept everything it read,
+# with no ceiling, and against `yes` it took this suite past its 3 GB cap into the OOM killer.
+_RV16_STANDIN = os.path.join(_RV16_TMP, "rv16-standin.py")
+with open(_RV16_STANDIN, "w", encoding="utf-8") as _fh16:
+    _fh16.write("import os, signal, sys, time\n"
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                "with open(sys.argv[1] + '.tmp', 'w') as fh:\n"
+                "    fh.write(str(os.getpid()))\n"
+                "os.replace(sys.argv[1] + '.tmp', sys.argv[1])\n"
+                "for _ in range(3000 if sys.argv[2] == 'write' else 0):\n"
+                "    sys.stdout.buffer.write(bytes(65536))\n"
+                "    sys.stdout.buffer.flush()\n"
+                "    time.sleep(0.01)\n"
+                "time.sleep(30)\n")
+
+
+def _rv16_held(tag, kind, child):
+    """(argv, pidfile): /bin/sh running `child`, with a setsid'd stand-in of `kind` behind it."""
+    pid = os.path.join(_RV16_TMP, tag + ".pid")
+    return ["/bin/sh", "-c", "setsid %s & %s" % (" ".join(_shlex16.quote(x) for x in (
+        sys.executable, _RV16_STANDIN, pid, kind)), child)], pid
+
+
+def _rv16_cases(mode):
+    """The cases, for one mode: [name, [branch, argv, timeout, pidfile, reader grace]]."""
+    hold, hold_pid = _rv16_held(mode + "-hold", "hold", "printf partial; exec sleep 60")
+    shell, shell_pid = _rv16_held(mode + "-shell", "hold", "printf partial; exec sleep 60")
+    writer, writer_pid = _rv16_held(mode + "-writer", "write", "exec sleep 60")
+    exited, exited_pid = _rv16_held(mode + "-exited", "hold", "printf kept")
+    return [["quick", ["helper", ["/bin/sh", "-c", "printf 'hello\\n'; printf 'warn\\n' >&2"],
+                       10, None, None]],
+            ["big", ["helper", [sys.executable, "-c", "import sys; sys.stdout.write('A' * 3000000);"
+                                " sys.stderr.write('B' * 1000000)"], 30, None, None]],
+            ["hold", ["helper", hold, 1, hold_pid, None]],
+            ["shell", ["shell", shell, 1, shell_pid, None]],
+            ["writer", ["helper", writer, 1, writer_pid, None]],
+            ["exited", ["helper", exited, 10, exited_pid, 1]]]
+
+
+# The child: the functions above, then a main that redirects the three config paths (as this
+# runner does) before anything else imports panel.core.config.
+_RV16_SRC = "\n\n".join(__import__("inspect").getsource(f) for f in (
+    _rv16_stub, _rv16_recorder, _rv16_open_pipes, _rv16_reaped, _rv16_holder, _rv16_case,
+    _rv16_all)) + ((
+    "\n\nimport json, os, shutil, sys, tempfile\n"
+    "import gc as _gc16, shlex as _shlex16, signal as _signal16, time as _time16\n"
+    "import weakref as _weakref16\n"
+    "from types import SimpleNamespace as NS\n"
+    "sys.path.insert(0, %r)\n"
+    "from panel.core import config as _c\n"
+    "_d = tempfile.mkdtemp(prefix='lgsm-unit-rv16-cfg-')\n"
+    "for _n in ('CONFIG_FILE', 'SECRET_FILE', 'CRED_KEY_FILE'):\n"
+    "    setattr(_c, _n, type(getattr(_c, _n))(_d) / getattr(_c, _n).name)\n"
+    "from panel.ops import system_ops as so\n"
+    "from panel.ops.ssh_manager import _core as core\n"
+    "try:\n"
+    "    print('RV16=' + json.dumps(_rv16_all(so, core, json.loads(%r))))\n"
+    "finally:\n"
+    "    shutil.rmtree(_d, ignore_errors=True)\n")
+    % (_REPO16, _json16.dumps(_rv16_cases("threads"))))
+import subprocess as _sp16  # noqa: E402  # nosec B404 - the suite's own interpreter, fixed code
+_rv16_env = {k: v for k, v in os.environ.items() if k != "PYTEST_CURRENT_TEST"}
+_rv16_child = _sp16.Popen([sys.executable, "-c", _RV16_SRC], stdout=_sp16.PIPE,  # nosec B603
+                          stderr=_sp16.PIPE, stdin=_sp16.DEVNULL, cwd=_REPO16, env=_rv16_env)
+import threading as _thr16  # noqa: E402
+_rv16_beat = {"last": _time16.monotonic(), "gap": 0.0, "run": True}
+
+
+def _rv16_heartbeat():
+    """Record the longest the hub went without running this greenlet."""
+    while _rv16_beat["run"]:
+        _time16.sleep(0.02)
+        now = _time16.monotonic()
+        _rv16_beat["gap"] = max(_rv16_beat["gap"], now - _rv16_beat["last"])
+        _rv16_beat["last"] = now
+
+
+_rv16_hb = _thr16.Thread(target=_rv16_heartbeat, daemon=True)
+_rv16_hb.start()
+try:
+    _RV16 = {"eventlet": _rv16_all(_p9_so, _core16, _rv16_cases("eventlet"))}
+finally:
+    _rv16_beat["run"] = False
+    _time16.sleep(0.1)     # it ends at its next beat; no join(timeout=): see _collect_capped
+
+
+# ── _collect_capped closes the pipes and reaps ITSELF, for a caller that keeps its Popen ────────
+# _run_verb drops its Popen, so once the readers let go, CPython's refcounting alone would close
+# those pipes, and Popen.__del__ reaps a dead child: the checks above could not tell. A caller that
+# keeps its Popen (the local exec paths' except branch kills it again) gets neither, and the
+# docstring promises both. The kill is this check's own, a plain killpg. Both thread kinds: green,
+# as _run_verb and the ssh CLI use it, and native inside tpool, as _finish does.
+def _cc16_kill(p):
+    """SIGKILL `p`'s process group (it leads one); one already gone is fine."""
+    try:
+        os.killpg(p.pid, _signal16.SIGKILL)
+    except ProcessLookupError:
+        return
+
+
+def _cc16_run(threads, popen, argv, timeout):
+    """_collect_capped over a Popen this check keeps: (timed out, both pipes closed, reaped)."""
+    p = popen(argv, stdout=_sp16.PIPE, stderr=_sp16.PIPE, stdin=_sp16.DEVNULL,
+              start_new_session=True)
+    res = _core16._collect_capped(p, timeout, threads=threads,
+                                  kill=lambda: _cc16_kill(p))
+    return res is None, p.stdout.closed and p.stderr.closed, p.returncode is not None
+
+
+_cc16 = {}
+for _kind16 in ("green", "native"):
+    for _what16 in ("exits", "held"):
+        _argv16, _pid16 = ((["/bin/sh", "-c", "printf ok"], None) if _what16 == "exits" else
+                           _rv16_held("cc-%s" % _kind16, "hold", "exec sleep 60"))
+        _job16 = (lambda a=_argv16, t=(10 if _what16 == "exits" else 1), k=_kind16: _cc16_run(
+            _thr16 if k == "green" else _core16._real_threading,
+            _core16.subprocess.Popen if k == "green" else _core16._real_subprocess.Popen, a, t))
+        try:
+            _cc16[(_kind16, _what16)] = (_job16() if _kind16 == "green"
+                                         else _core16._in_tpool(_job16))
+        except Exception as _e16c:  # noqa: BLE001 - reported by the check below
+            _cc16[(_kind16, _what16)] = repr(_e16c)
+        _rv16_holder(_pid16)
+check("capped reader: a command that exits has both pipes closed by the collector (green, native)",
+      _cc16.get(("green", "exits")) == (False, True, True)
+      and _cc16.get(("native", "exits")) == (False, True, True), repr(_cc16))
+check("capped reader: ...and one killed at its timeout, a stand-in holding the pipes, is closed "
+      "AND reaped", _cc16.get(("green", "held")) == (True, True, True)
+      and _cc16.get(("native", "held")) == (True, True, True), repr(_cc16))
+
+try:
+    _rv16_out, _rv16_err = _rv16_child.communicate(timeout=120)
+except _sp16.TimeoutExpired:
+    _rv16_child.kill()
+    _rv16_out, _rv16_err = _rv16_child.communicate()
+_rv16_line = [ln for ln in _rv16_out.decode("utf-8", "replace").splitlines()
+              if ln.startswith("RV16=")]
+_RV16["threads"] = (_json16.loads(_rv16_line[-1][5:]) if _rv16_line else
+                    {"patched": None, "runs": {}, "stderr": _rv16_err.decode()[-600:]})
+for _f16 in os.listdir(_RV16_TMP):              # a stand-in whose case never got to it
+    if _f16.endswith(".pid"):
+        _rv16_holder(os.path.join(_RV16_TMP, _f16))
+__import__("shutil").rmtree(_RV16_TMP, ignore_errors=True)
+
+check("run_verb timeout: the in-suite run is eventlet-patched and the child's is not (they differ)",
+      _RV16["eventlet"]["patched"] is True and _RV16["threads"]["patched"] is False,
+      repr((_RV16["eventlet"]["patched"], _RV16["threads"].get("patched"),
+            _RV16["threads"].get("stderr", ""))))
+_TIMED_OUT16 = ["", 0, "Command timed out", 17, -1]
+for _mode16 in ("eventlet", "threads"):
+    _r16 = _RV16[_mode16]["runs"]
+    _q16, _b16 = _r16.get("quick", {}), _r16.get("big", {})
+    check("run_verb (%s): a quick command still answers in full, rc 0 (control)" % _mode16,
+          _q16.get("got") == ["hello", 5, "warn", 4, 0] and _q16.get("open") == 0
+          and _q16.get("reaped") is True, repr(_q16))
+    _bg16 = _b16.get("got") or [0] * 5
+    check("run_verb (%s): ...and output far past a pipe's buffer, on both pipes, is read whole"
+          % _mode16, [_bg16[1], _bg16[3], _bg16[4]] == [3000000, 1000000, 0], repr(_b16)[:300])
+    for _case16 in ("hold", "shell", "writer"):
+        _c16 = _r16.get(_case16, {})
+        check("run_verb (%s, %s): a timeout of 1s answers within 3s though the kill misses a "
+              "descendant holding the pipes" % (_mode16, _case16),
+              _c16.get("got") == _TIMED_OUT16 and _c16.get("took", 99) < 3, repr(_c16))
+        check("run_verb (%s, %s): ...closing our ends of its pipes, reaping the child, and never "
+              "reading them with a second reader" % (_mode16, _case16),
+              _c16.get("open") == 0 and _c16.get("reaped") is True
+              and _c16.get("communicate") == 0, repr(_c16))
+    check("run_verb (%s): ...the stand-in really was out of the kill's reach (it outlived the call)"
+          % _mode16, _r16.get("hold", {}).get("holder") is True
+          and _r16.get("shell", {}).get("holder") is True, repr(_r16.get("hold")))
+    _e16 = _r16.get("exited", {})
+    check("run_verb (%s): a command that exits while a descendant holds its pipes gets ONE reader "
+          "grace for all its pipes, then they are closed" % _mode16,
+          _e16.get("got") == ["kept", 4, "", 0, 0] and _e16.get("took", 99) < 1.8
+          and _e16.get("open") == 0 and _e16.get("holder") is True, repr(_e16))
+check("run_verb (eventlet): the rest of the panel kept running through every wait",
+      _rv16_beat["gap"] < 0.5, "the longest gap between heartbeats was %.2fs" % _rv16_beat["gap"])
+
+
+# ── the capped reader itself: eventlet's green read answers "" (a str) for a closed descriptor ──
+class _StrEOF16(object):
+    """A pipe whose read answers what eventlet's green os.read does when the fd is closed: ""."""
+
+    def __init__(self):
+        self.reads = 0
+
+    def read(self, n):
+        self.reads += 1
+        if self.reads > 1:
+            raise RuntimeError("read again after the end")
+        return ""
+
+
+_se16, _sebuf16, _seflags16 = _StrEOF16(), bytearray(), {"truncated": False}
+try:
+    _core16._pump_capped(_se16, _sebuf16, 16, _seflags16)
+    _se16_err = None
+except Exception as _e16x:  # noqa: BLE001 - the regression IS the raise
+    _se16_err = repr(_e16x)
+check("capped reader: a green read's '' ends the read like b'' does (no second read, no error)",
+      _se16_err is None and _se16.reads == 1 and not _sebuf16, repr((_se16_err, _se16.reads)))
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # 745379329 — BY DESIGN: skipped and neutral check runs pass the self-update gate

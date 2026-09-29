@@ -7,6 +7,7 @@ resolve across its submodules).
 import logging
 import os
 import re
+import select
 import shlex
 import signal
 import socket
@@ -134,10 +135,15 @@ try:
     # ...and the unpatched threading to go with it: _finish runs inside a tpool NATIVE thread,
     # where a green thread (what threading.Thread is after monkey_patch) has no hub to run on.
     _real_threading = _ev_original("threading")
+    # ...and the unpatched select for those native threads' readers: monkey_patch deletes
+    # select.poll and makes select.select wait in the CALLING thread's hub, which a tpool thread
+    # does not run. See _readiness().
+    _real_select = _ev_original("select")
 except Exception:
     _tpool = None
     _real_subprocess = subprocess
     _real_threading = threading
+    _real_select = select
 
 
 # In-memory SSH connection cache, keyed by _conn_key() below.
@@ -252,8 +258,12 @@ def _register_remote_cache_invalidation():
 _register_remote_cache_invalidation()
 
 
-def _kill_process_tree(p):
-    """Kill a Popen and its entire process group, so no grandchildren are left orphaned."""
+def _signal_process_tree(p):
+    """SIGKILL a Popen and its entire process group, so no grandchildren are left orphaned.
+
+    Signals only: it never touches p's pipes, because the capped readers own them (see
+    _collect_capped). Never raises.
+    """
     try:
         if hasattr(os, "killpg") and hasattr(os, "getpgid"):
             os.killpg(os.getpgid(p.pid), signal.SIGKILL)
@@ -264,10 +274,29 @@ def _kill_process_tree(p):
             p.kill()
         except Exception:  # nosec B110 - killing an already-dead process is the expected race
             pass           # here, and there is nothing left to do about it either way.
+
+
+def _kill_process_tree(p):
+    """Kill a Popen and its entire process group, and reap it so it doesn't linger as a zombie.
+
+    Reaped with wait(), not communicate(): communicate() READS the pipes, and a capped reader may
+    still be reading them. Under eventlet that second reader raised "Second simultaneous read on
+    fileno N" (swallowed here), and in native threads the two split the output between them.
+    """
+    _signal_process_tree(p)
+    _reap(p, 5)
+
+
+def _reap(p, grace):
+    """Collect a killed `p`'s exit status, waiting at most `grace` seconds for it. Never raises.
+
+    A `p` still running after that is one the kill could not reach; it is not waited for.
+    subprocess reaps it later: Popen.__del__ files an unreaped child for the next Popen to collect.
+    """
     try:
-        p.communicate(timeout=5)   # reap it so it doesn't linger as a zombie
-    except Exception:  # nosec B110
-        pass
+        p.wait(timeout=grace)
+    except Exception:
+        _log.debug("a killed command had not exited; subprocess reaps it later", exc_info=True)
 
 
 def _already_escalated(cmd):
@@ -347,24 +376,86 @@ def _decode_output(b):
     return b.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
 
 
-# How long a reader may still be draining after the command it reads has exited (or been killed):
-# a grandchild holding the pipe open gets this, not the caller's whole timeout over again.
+# How long a reader may still be draining after the command it reads has exited on its own: a
+# grandchild holding the pipe open gets this, not the caller's whole timeout over again. ONE
+# deadline for all of a command's readers, not one each.
 _READER_GRACE = 5
+# ...and after a KILL. A killed tree's pipes reach EOF at once, so a pipe still open by then is held
+# by something the kill could not reach -- from the panel's own account, the root helper and what
+# it runs under sudo -- and waiting for that only delays the answer. Measured on the test VPS: a
+# `journal` read with a 1s timeout answered after 8.6s, and a stand-in the kill missed held a 1s
+# timeout for 16s (11s under eventlet).
+_KILL_GRACE = 1
+# How often a reader with nothing to read checks whether it has been told to stop.
+_READER_POLL = 0.1
 
 
-def _pump_capped(stream, buf, cap, flags):
-    """Read `stream` to EOF into `buf`, keeping its first `cap` bytes and discarding the rest."""
-    rd = getattr(stream, "read1", None) or stream.read
+def _keep_capped(buf, chunk, cap, flags):
+    """Append what fits of `chunk` under `cap` to `buf`; flag the rest as truncated."""
+    room = cap - len(buf)
+    if room > 0:
+        buf.extend(chunk[:room])
+    if len(chunk) > max(room, 0):
+        flags["truncated"] = True
+
+
+def _fileno(stream):
+    """`stream`'s descriptor, or None when it has none (a test's in-memory stream)."""
     try:
-        while True:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):     # io.UnsupportedOperation is both of the last
+        return None
+    return fd if isinstance(fd, int) else None
+
+
+def _readiness(sel, fd):
+    """`ready(seconds) -> bool`: whether `fd` can be read without blocking (data, EOF or an error).
+
+    `sel` is the select module that matches the reader's kind of thread (see _collect_capped).
+    poll() where it has one, which has no FD_SETSIZE ceiling. eventlet's patched module has none --
+    monkey_patch deletes it -- and its select() waits in the hub instead, which has no ceiling
+    either and lets every other greenlet run meanwhile.
+    """
+    if hasattr(sel, "poll"):
+        poller = sel.poll()
+        poller.register(fd, sel.POLLIN | sel.POLLPRI)     # hang-up and errors are always reported
+        return lambda seconds: bool(poller.poll(seconds * 1000))
+    return lambda seconds: bool(sel.select([fd], [], [], seconds)[0])
+
+
+def _until_readable(stream, sel, stop):
+    """`wait() -> bool`: True once `stream` can be read, False once the reader is told to stop."""
+    fd = _fileno(stream)
+    if fd is None or sel is None:
+        return lambda: not stop["now"]          # nothing to wait on: the read itself is the wait
+    ready = _readiness(sel, fd)
+
+    def wait():
+        while not stop["now"]:
+            if ready(_READER_POLL):
+                return True
+        return False
+    return wait
+
+
+def _pump_capped(stream, buf, cap, flags, stop=None, sel=None):
+    """Read `stream` to EOF into `buf`, keeping its first `cap` bytes and discarding the rest.
+
+    It returns early, keeping what it has read, once `stop["now"]` is set. It never blocks in a
+    read: it waits for readiness in _READER_POLL slices and checks `stop` between them and between
+    reads, so a pipe that something unkillable holds open -- or keeps writing to -- cannot hold it
+    past the collector's grace. The collector closes the pipe only after this has returned.
+    """
+    rd = getattr(stream, "read1", None) or stream.read
+    wait = _until_readable(stream, sel, stop if stop is not None else {"now": False})
+    try:
+        while wait():
             chunk = rd(65536)
+            # b"" at EOF, or "" -- a str: eventlet's green read answers that when its descriptor is
+            # closed under it. Either ends the read, and neither is data to keep.
             if not chunk:
                 return
-            room = cap - len(buf)
-            if room > 0:
-                buf.extend(chunk[:room])
-            if len(chunk) > max(room, 0):
-                flags["truncated"] = True
+            _keep_capped(buf, chunk, cap, flags)
     except (OSError, ValueError):
         return          # the pipe was closed under us (a kill); what was read is kept
 
@@ -394,30 +485,96 @@ def _signalling(target, done):
     return run
 
 
-def _reader_jobs(p, bufs, cap, flags, stdin_bytes):
-    """(target, args) per _collect_capped thread: a capped pump per pipe, and the stdin feed."""
+def _reader_jobs(p, bufs, cap, flags, stdin_bytes, stop=None, sel=None):
+    """(target, args, pipe) per _collect_capped thread: a capped pump per pipe, and the stdin feed.
+
+    `pipe` is what the collector closes once that thread has finished: the pump's stream, or None
+    for the feed, which closes stdin itself.
+    """
     # `bufs` pairs with (p.stdout, p.stderr); a stream that is None (no pipe) gets no pump.
-    jobs = [(_pump_capped, (stream, buf, cap, flags))
+    jobs = [(_pump_capped, (stream, buf, cap, flags, stop, sel), stream)
             for stream, buf in zip((p.stdout, p.stderr), bufs) if stream is not None]
     if p.stdin is not None:
-        jobs.append((_feed_stdin, (p, stdin_bytes)))
+        jobs.append((_feed_stdin, (p, stdin_bytes), None))
     return jobs
 
 
+def _start_readers(jobs, threads):
+    """Run each job in a daemon `threads`.Thread: [(pipe, Event set when it returns)] per job."""
+    readers = []
+    for target, args, pipe in jobs:
+        done = threads.Event()
+        threads.Thread(target=_signalling(target, done), args=args, daemon=True).start()
+        readers.append((pipe, done))
+    return readers
+
+
+def _await_all(readers, grace):
+    """Wait for every reader's Event, `grace` seconds in all -- one deadline, not one each."""
+    deadline = time.monotonic() + grace
+    for _pipe, done in readers:
+        done.wait(max(0.0, deadline - time.monotonic()))
+
+
+def _close_quietly(pipe):
+    """Close our end of a pipe; one already closed, or a stand-in with no close(), is fine."""
+    try:
+        pipe.close()
+    except (AttributeError, OSError, ValueError):
+        _log.debug("closing a command's pipe", exc_info=True)
+
+
+def _release_pipes(readers, stop):
+    """Stop every reader, and close each pipe whose reader has let go of it.
+
+    Never a pipe whose reader is still in it. eventlet allows ONE waiter per descriptor, and a
+    native read is not woken by a close at all: it would keep waiting on a descriptor number that
+    the next open() may already have been handed. A reader that has not let go within a few polls
+    keeps its pipe, which is closed with the reader's stream when that reader ends.
+    """
+    stop["now"] = True
+    _await_all(readers, _READER_POLL * 5)
+    for pipe, done in readers:
+        if pipe is not None and done.is_set():
+            _close_quietly(pipe)
+
+
+def _wait_or_kill(p, timeout, kill, readers):
+    """Wait for `p` to exit, then for its readers: its exit status, or None when it was killed.
+
+    A `p` that outlives `timeout` is killed, its readers get _KILL_GRACE instead of _READER_GRACE,
+    and the caller reaps it.
+    """
+    try:
+        rc = p.wait(timeout=timeout)
+    except (_real_subprocess.TimeoutExpired, subprocess.TimeoutExpired):
+        kill()
+        _await_all(readers, _KILL_GRACE)
+        return None
+    _await_all(readers, _READER_GRACE)
+    return rc
+
+
 def _collect_capped(p, timeout, kill, threads, stdin_bytes=None, cap=None):
-    """communicate(), with a ceiling on what is KEPT.
+    """communicate(), with a ceiling on what is KEPT and a bound on how long it takes.
 
     -> (out, err, rc, truncated) as bytes, or None when the command outlived `timeout` (it has been
-    killed by then).
+    killed and reaped by then, and its pipes closed).
 
     communicate() buffers everything a command writes until it exits, and the two subprocess
     transports used it: a remote reached over Tailscale that answers a five-second metrics probe
     with gigabytes grew the panel until the OOM killer ended it, taking every other host's
     management with it — and the next poll did it again. The paramiko path has had an 8 MB
-    ceiling all along. This is the same rule for these two: each stream is read to EOF in its own
-    thread (reading one to EOF first deadlocks the moment the other fills its pipe), the first
-    `cap` bytes are kept, and the rest is read and DISCARDED rather than left unread, so a command
-    still writing is not blocked into outliving its timeout.
+    ceiling all along. This is the same rule for these two: each stream is read in its own thread
+    (reading one to EOF first deadlocks the moment the other fills its pipe), the first `cap` bytes
+    are kept, and the rest is read and DISCARDED rather than left unread, so a command still
+    writing is not blocked into outliving its timeout.
+
+    BOUNDED: it answers within `timeout` plus _KILL_GRACE, however the command's descendants
+    behave. `kill` only signals; the readers get _KILL_GRACE to reach EOF, are told to stop, and
+    each pipe is closed once its reader has returned (one reader per descriptor: never
+    communicate(), which is a second). Then p is reaped. What the kill cannot reach (the root
+    helper under sudo, from the panel's account) exits in its own time, and is not waited for.
 
     `threads` is the caller's to choose, as a threading MODULE: the unpatched one inside tpool,
     where a green thread has no hub to run on; the patched (green) one in a request greenlet,
@@ -425,40 +582,33 @@ def _collect_capped(p, timeout, kill, threads, stdin_bytes=None, cap=None):
     Event says when each has finished — one module for both. Measured under eventlet: a green
     Event set from a native thread wakes nobody, whether the waiter is a greenlet or another
     native thread (the wait runs its full timeout), and a native Event waited on in a greenlet
-    stops the whole hub while it waits, the green readers that would set it included.
+    stops the whole hub while it waits, the green readers that would set it included. The readers'
+    select module follows the same choice; `stop` is a plain flag either kind can read.
 
     Waited on those Events, never with Thread.join(timeout=...): under eventlet on Python 3.13+
     (Ubuntu 26.04) a green join that runs out of time RAISES eventlet.timeout.Timeout, a
-    BaseException, instead of returning. A grandchild still holding a pipe past _READER_GRACE
-    sent that straight through _run_via_ssh_cli's `except Exception`, and every one above it,
-    out of the request or background loop that asked.
+    BaseException, which went straight through _run_via_ssh_cli's `except Exception` and every
+    one above it, out of the request or background loop that asked.
     """
     cap = _MAX_OUTPUT_BYTES if cap is None else cap
     out, err = bytearray(), bytearray()
-    flags = {"truncated": False}
-    jobs = _reader_jobs(p, (out, err), cap, flags, stdin_bytes)
-    finished = [threads.Event() for _ in jobs]
-    workers = [threads.Thread(target=_signalling(target, done), args=args, daemon=True)
-               for (target, args), done in zip(jobs, finished)]
-    for w in workers:
-        w.start()
+    flags, stop = {"truncated": False}, {"now": False}
+    sel = _real_select if threads is _real_threading else select
+    readers = _start_readers(_reader_jobs(p, (out, err), cap, flags, stdin_bytes, stop, sel),
+                             threads)
     try:
-        rc = p.wait(timeout=timeout)
-    except (_real_subprocess.TimeoutExpired, subprocess.TimeoutExpired):
-        kill()
-        for done in finished:
-            done.wait(_READER_GRACE)
+        rc = _wait_or_kill(p, timeout, kill, readers)
+    finally:
+        _release_pipes(readers, stop)
+    if rc is None:
+        _reap(p, _KILL_GRACE)
         return None
-    # The direct child has exited. Its output normally reaches EOF with it; a grandchild still
-    # holding the pipe open gets _READER_GRACE, not the caller's whole timeout over again.
-    for done in finished:
-        done.wait(_READER_GRACE)
     return bytes(out), bytes(err), rc, flags["truncated"]
 
 
 def _finish(p, timeout, stdin_text=None):
     """Collect a started process: (stdout, stderr, rc), killing the whole group on timeout."""
-    res = _collect_capped(p, timeout, kill=lambda: _kill_process_tree(p),
+    res = _collect_capped(p, timeout, kill=lambda: _signal_process_tree(p),
                           threads=_real_threading,
                           stdin_bytes=(stdin_text.encode("utf-8")
                                        if stdin_text is not None else None))
