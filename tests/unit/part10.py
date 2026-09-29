@@ -13,12 +13,13 @@ House rules kept here, because they are what makes a check in this file mean any
   * a call under test is wrapped (_p7_call) so a regression is a FAIL naming the check, not an
     exception that takes the rest of the suite down with it.
 """
+import base64 as _p7_b64
 import contextlib as _p7_ctx
 import io as _p7_io
 import os
 import shutil as _p7_sh
 import sqlite3 as _p7_sq
-import subprocess as _p7_sp
+import subprocess as _p7_sp  # nosec B404 - the suite's stubs, and its own fixed argv
 import sys
 import tempfile as _p7_tf
 
@@ -85,7 +86,7 @@ def _p7_db(path, tables=(("t", 40),)):
     try:
         for name, rows in tables:
             c.execute("CREATE TABLE %s (id INTEGER PRIMARY KEY, v TEXT)" % name)
-            c.executemany("INSERT INTO %s (v) VALUES (?)" % name, [("x" * 80,) for _ in range(rows)])
+            c.executemany("INSERT INTO %s (v) VALUES (?)" % name, [("x" * 80,) for _ in range(rows)])  # nosec B608 - the test's table name
         c.commit()
     finally:
         c.close()
@@ -96,7 +97,7 @@ def _p7_rows(path, table="t"):
     try:
         c = _p7_sq.connect(path)
         try:
-            return c.execute("SELECT COUNT(*) FROM %s" % table).fetchone()[0]
+            return c.execute("SELECT COUNT(*) FROM %s" % table).fetchone()[0]  # nosec B608 - the test's table name
         finally:
             c.close()
     except _p7_sq.DatabaseError:
@@ -533,13 +534,12 @@ def _p7_enc_file(path, plain, passphrase, n=2 ** 12, kdf="scrypt", r=8, p=1):
 
     n=2**12, so a check here costs milliseconds rather than scrypt's default tenth of a second.
     """
-    import base64 as _b64
     import json as _json
     from cryptography.fernet import Fernet
     salt = os.urandom(16)
     key = _bk7_saved["_derive_key"](passphrase, salt, n=n, r=r, p=p)
     head = _json.dumps({"kdf": kdf, "n": n, "r": r, "p": p,
-                        "salt": _b64.b64encode(salt).decode()}).encode()
+                        "salt": _p7_b64.b64encode(salt).decode()}).encode()
     with open(path, "wb") as f:
         f.write(_bk7._ENC_MAGIC + head + b"\n" + Fernet(key).encrypt(plain))
     return path
@@ -564,7 +564,7 @@ try:
     _bk7.CRED_KEY_FILE.write_text("k")
 
     # ── the encrypted-archive reader: every malformed file is a refusal with a reason ─────────
-    _plain_ok, _plain_name = _bk7.create_backup("manual", passphrase="")
+    _plain_ok, _plain_name = _bk7.create_backup("manual", passphrase="")  # nosec B106 - no passphrase
     _plain_path = _bk7.BACKUP_DIR / _plain_name if _plain_ok else None
     _plain_bytes = _plain_path.read_bytes() if _plain_path else b""
     check("backup/_is_readable_tar: a plain archive reads as a tar, noise does not",
@@ -630,10 +630,10 @@ try:
                       strftime=lambda f, t=None: _p7_time.strftime(
                           f, t if t is not None else _p7_time.localtime(_frozen)))
     try:
-        _same_a = _p7_call(_bk7.create_backup, "samesec", passphrase="")
+        _same_a = _p7_call(_bk7.create_backup, "samesec", passphrase="")  # nosec B106 - no passphrase
         _same_a_bytes = (_bk7.BACKUP_DIR / _same_a[1]).read_bytes() if _same_a[0] else b""
         _bk7.CONFIG_FILE.write_text('{"changed": true}')
-        _same_b = _p7_call(_bk7.create_backup, "samesec", passphrase="")
+        _same_b = _p7_call(_bk7.create_backup, "samesec", passphrase="")  # nosec B106 - no passphrase
         _same_a_after = ((_bk7.BACKUP_DIR / _same_a[1]).read_bytes()
                          if (_bk7.BACKUP_DIR / _same_a[1]).exists() else b"")
         check("backup/create: a second backup in the same second gets its own name, not the first's",
@@ -641,7 +641,7 @@ try:
               "a=%r b=%r first-intact=%r" % (_same_a, _same_b, _same_a_after == _same_a_bytes))
         _bk7.os = _Over(os, chmod=_p7_raise(PermissionError("read-only")))
         try:
-            _same_c = _p7_call(_bk7.create_backup, "samesec", passphrase="")
+            _same_c = _p7_call(_bk7.create_backup, "samesec", passphrase="")  # nosec B106 - no passphrase
         finally:
             _bk7.os = _bk7_saved["os"]
         _same_left = sorted(n for n in _p7_names_in(_bk7.BACKUP_DIR) if "samesec" in n)
@@ -653,7 +653,7 @@ try:
         for _b in range(10):
             (_bk7.BACKUP_DIR / ("panel-backup-%s-samesec.tar.gz" % _p7_time.strftime(
                 "%Y%m%d-%H%M%S", _p7_time.localtime(_frozen + _b)))).write_bytes(b"kept")
-        _same_d = _p7_call(_bk7.create_backup, "samesec", passphrase="")
+        _same_d = _p7_call(_bk7.create_backup, "samesec", passphrase="")  # nosec B106 - no passphrase
         _same_kept = [(_bk7.BACKUP_DIR / _n).read_bytes() for _n in _p7_names_in(_bk7.BACKUP_DIR)
                       if "samesec" in _n]
         check("backup/create: with every candidate name taken it refuses and overwrites none",
@@ -661,7 +661,7 @@ try:
               and all(b == b"kept" for b in _same_kept), "d=%r n=%d" % (_same_d, len(_same_kept)))
         _bk7.os = _Over(os, open=_p7_raise(PermissionError("EACCES")))
         try:
-            _same_e = _p7_call(_bk7.create_backup, "othersec", passphrase="")
+            _same_e = _p7_call(_bk7.create_backup, "othersec", passphrase="")  # nosec B106 - no passphrase
         finally:
             _bk7.os = _bk7_saved["os"]
         eq("backup/create: a backups dir it cannot create a file in is a failure, not a raise",
@@ -677,7 +677,7 @@ try:
     _bk7.os = _Over(os, chmod=_p7_raise(PermissionError("read-only")))
     try:
         _cp_before = _p7_names_in(_bk7.BACKUP_DIR)
-        _cp_res = _p7_call(_bk7.create_backup, "manual", passphrase="")
+        _cp_res = _p7_call(_bk7.create_backup, "manual", passphrase="")  # nosec B106 - no passphrase
         _cp_after = _p7_names_in(_bk7.BACKUP_DIR)
     finally:
         _bk7.os = _bk7_saved["os"]
@@ -687,13 +687,13 @@ try:
     _bk7._encrypt_archive = _p7_raise(RuntimeError("fernet"))
     try:
         _ce_before = _p7_names_in(_bk7.BACKUP_DIR)
-        _ce_res = _p7_call(_bk7.create_backup, "manual", passphrase="a passphrase here")
+        _ce_res = _p7_call(_bk7.create_backup, "manual", passphrase="a passphrase here")  # nosec B106 - a fixture passphrase
         _ce_after = _p7_names_in(_bk7.BACKUP_DIR)
     finally:
         _bk7._encrypt_archive = _bk7_saved["_encrypt_archive"]
     _bk7.os = _Over(os, chmod=_p7_raise(PermissionError("read-only")), remove=_p7_raise(PermissionError("EPERM")))
     try:
-        _cr_res = _p7_call(_bk7.create_backup, "unremovable", passphrase="")
+        _cr_res = _p7_call(_bk7.create_backup, "unremovable", passphrase="")  # nosec B106 - no passphrase
     finally:
         _bk7.os = _bk7_saved["os"]
     _cr_left = [n for n in _p7_names_in(_bk7.BACKUP_DIR) if "unremovable" in n]
@@ -708,7 +708,7 @@ try:
     _db_moved = _b7 / "panel.db.away"
     os.replace(str(_bk7.DB_PATH), str(_db_moved))
     try:
-        _nd_ok, _nd_name = _bk7.create_backup("manual", passphrase="")
+        _nd_ok, _nd_name = _bk7.create_backup("manual", passphrase="")  # nosec B106 - no passphrase
         with _p7_tar.open(str(_bk7.BACKUP_DIR / _nd_name)) as _t:
             _nd_members = sorted(_t.getnames())
         os.remove(str(_bk7.BACKUP_DIR / _nd_name))
@@ -1046,7 +1046,7 @@ _pb7_db = _P7NS(session=_P7NS(commit=lambda: _pb7_db_commits.append(1), get=lamb
 _pb7_rows = {}
 
 _pb7_app = _p7_flask.Flask("p7_panel_backup")
-_pb7_app.secret_key = "unit-suite"
+_pb7_app.secret_key = "unit-suite"  # nosec B105 - a stand-in app's key
 _pb7_app.config["LOGIN_DISABLED"] = True     # login_required is not what is under test
 _pb7_app.logger.disabled = True
 _pb7_c = None
@@ -1154,7 +1154,7 @@ try:
           "status=%s locked=%r" % (_fb_nothread.status_code, _pb7._full_backup_lock.locked()))
 
     # ── precheck: only hosted servers count; busy means a cached count above zero ──────────────
-    _pb7._cached_player_count = lambda sid: {1: 3, 2: 0}.get(sid)
+    _pb7._cached_player_count = {1: 3, 2: 0}.get
     _P7GameServer.query = _P7Query([_p7_gs(1, "alpha"), _p7_gs(2, "bravo"), _p7_gs(3, "charlie"),
                                     _p7_gs(9, "nohost", remote_id=None)])
     eq("panel_backup/precheck: counts hosted servers and names those with players",
@@ -1305,15 +1305,15 @@ try:
     _pb7_pp = []
     _pb7.bk = _Over(_pb7_saved["bk"], set_settings=lambda **k: {"enabled": True},
                     set_full_settings=lambda **k: {"interval_days": 7},
-                    set_passphrase=lambda pp: _pb7_pp.append(pp),
+                    set_passphrase=_pb7_pp.append,
                     get_settings=lambda: {"enabled": True, "encrypt": bool(_pb7_pp and _pb7_pp[-1])})
     del _pb7_log[:]
-    _ps_short = _pb7_c.post("/api/panel/backup/settings", json={"passphrase": "short"})
+    _ps_short = _pb7_c.post("/api/panel/backup/settings", json={"passphrase": "short"})  # nosec B105 - a fixture passphrase
     check("panel_backup/settings: a passphrase under the minimum is a 400 and is NOT set",
           _ps_short.status_code == 400 and _pb7_pp == [] and _pb7_log == [],
           "%s set=%r log=%r" % (_ps_short.status_code, _pb7_pp, _pb7_log))
-    _ps_ok = _pb7_c.post("/api/panel/backup/settings", json={"passphrase": "correct horse battery"})
-    _ps_off = _pb7_c.post("/api/panel/backup/settings", json={"passphrase": ""})
+    _ps_ok = _pb7_c.post("/api/panel/backup/settings", json={"passphrase": "correct horse battery"})  # nosec B105 - a fixture passphrase
+    _ps_off = _pb7_c.post("/api/panel/backup/settings", json={"passphrase": ""})  # nosec B105 - no passphrase
     check("panel_backup/settings: a long passphrase is set and '' turns encryption off, each audited",
           _pb7_pp == ["correct horse battery", ""]
           and [(a, d) for a, _t, d, _s in _pb7_log if a == "panel_backup_encryption"]
@@ -1380,7 +1380,6 @@ finally:
 # config's data paths point into a temp dir, so nothing here executes a command or reads a real
 # /etc file. `open` is shadowed on the module (a module global beats the builtin) where a /proc or
 # /etc read has to fail on cue, and deleted again afterwards.
-import base64 as _p7_b64  # noqa: E402
 import shlex as _p7_shlex  # noqa: E402
 import builtins as _p7_builtins  # noqa: E402
 import platform as _p7_platform  # noqa: E402
@@ -1405,11 +1404,12 @@ _s7 = _p7_tf.mkdtemp(prefix="p7-so-")
 def _p7_defined(mod, name, *roots):
     """Return `mod.name` as the module DEFINES it, or None if it cannot be found.
 
-    Found by walking closures from `roots` (default: the current `mod.name`). Why a walk: by this point in the suite system_ops._run is NOT the function. part03's
-    auto-updates block assigns `_so._run = _mk_run(1, "")` and never puts it back, part05 then runs
-    tools/nosudo_runner.py's _install() over that (also never undone), and under
-    tools/smoke-local.sh the runner's own wrapper sits at the bottom. part02 kept a reference to
-    whatever _run was before any of that (`_orig_so_run`), which is why it is passed as a root.
+    Found by walking closures from `roots` (default: the current `mod.name`). Why a walk: by this
+    point in the suite system_ops._run is NOT the function. part03's auto-updates block assigns
+    `_so._run = _mk_run(1, "")` and never puts it back, part05 then runs tools/nosudo_runner.py's
+    _install() over that (also never undone), and under tools/smoke-local.sh the runner's own
+    wrapper sits at the bottom. part02 kept a reference to whatever _run was before any of that
+    (`_orig_so_run`), which is why it is passed as a root.
     """
     todo, seen = list(roots) or [getattr(mod, name)], set()
     while todo:
