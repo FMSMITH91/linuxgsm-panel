@@ -115,7 +115,7 @@ def _register_blocking(app):
         try:
             ok, msg = (remote_ufw_undeny_ip(remote, ip) if unblock else remote_ufw_deny_ip(remote, ip))
             log_action(current_user, "ufw_unblock" if unblock else "ufw_block",
-                       target=ip, detail=remote.name, success=ok)
+                       target=ip, detail=remote.name, success=ok, remote=remote)
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("block failed")}), 500
@@ -136,7 +136,8 @@ def _register_blocking(app):
         if current_user.is_superadmin:
             _maybe_set_threshold(_json_body())
         _set_autoblock_host(remote_id, enabled)
-        log_action(current_user, "autoblock_toggle", target=remote.name, detail="on" if enabled else "off")
+        log_action(current_user, "autoblock_toggle", target=remote.name, detail="on" if enabled else "off",
+                   remote=remote)
         if enabled:
             _run_autoblock_now(app, remote_id)
         return jsonify({"success": True, "enabled": enabled, "threshold": _autoblock_threshold()})
@@ -169,7 +170,8 @@ def _register_whitelist_and_log(app):
         try:
             ok, msg = remote_fail2ban_unban(remote, jail, banned_ip)
             log_action(current_user, "fail2ban_unban", target=banned_ip,
-                       detail="%s on %s — %s" % (jail, remote.name, msg), success=ok)
+                       detail="%s on %s — %s" % (jail, remote.name, msg), success=ok,
+                       remote=remote)
             return jsonify({"success": ok, "message": msg})
         except ConnectionError:
             return _unreachable("fail2ban unban")

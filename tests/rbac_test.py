@@ -452,20 +452,24 @@ def _check_view_logs_with_a_second_host():
         _mine_name = db.session.get(GameServer, accessible_id).name
         _other_name = db.session.get(GameServer, other_id).name
         _lt = tag + "LOGROW"
-        for _uid_, _who, _act, _tgt, _det, _ip in (
-                (admin_id, "admin", "send_command", _mine_name, _lt + "_mine_srv", "198.51.100.1"),
+        # The server rows carry the server's id, as log_action records it from server=; audit_scope
+        # reads that, never the target's name (the rows' names below are what a name match used).
+        for _uid_, _who, _act, _tgt, _det, _ip, _gsid in (
+                (admin_id, "admin", "send_command", _mine_name, _lt + "_mine_srv", "198.51.100.1",
+                 accessible_id),
                 (admin_id, "admin", "send_command", _other_name,
-                 _lt + "_other_srv rcon_password S3cret", "198.51.100.5"),
-                (None, tag + "Sup3rSecretPw", "login_failed", "", _lt + "_failed", "198.51.100.2"),
-                (admin_id, "admin", "login", "", _lt + "_adminlogin", "198.51.100.3"),
+                 _lt + "_other_srv rcon_password S3cret", "198.51.100.5", other_id),
+                (None, tag + "Sup3rSecretPw", "login_failed", "", _lt + "_failed", "198.51.100.2",
+                 None),
+                (admin_id, "admin", "login", "", _lt + "_adminlogin", "198.51.100.3", None),
                 # An ACCOUNT row whose free-text target happens to name their server (an
                 # invite's note is whatever the minter typed): still not theirs to read.
                 (admin_id, "admin", "invite_created", _mine_name, _lt + "_invite",
-                 "198.51.100.6"),
-                (_lv_id, tag + "_logviewer", "logout", "", _lt + "_own", "198.51.100.4")):
+                 "198.51.100.6", None),
+                (_lv_id, tag + "_logviewer", "logout", "", _lt + "_own", "198.51.100.4", None)):
             db.session.add(_AL(user_id=_uid_, username=_who, action=_act, target=_tgt,
                                detail=_det, ip_address=_ip, success=True,
-                               timestamp=_al_now()))
+                               timestamp=_al_now(), game_server_id=_gsid))
         db.session.commit()
     try:
         _view_logs_as_viewer_and_superadmin()
@@ -562,6 +566,88 @@ def _invite_revoked_during_the_race():
           not _rev_used,
           "the redemption claimed a revoked invite — the admin is told the link no longer "
           "works about one that had just worked")
+
+
+def _invite_accept_with_form_hook(tok, username, hook):
+    """Redeem `tok` with `hook()` run where the route first reads the form, then the real read."""
+    _form_real = _anmod._invite_form
+
+    def _hooked():
+        hook()
+        return _form_real()
+
+    _anmod._invite_form = _hooked
+    try:
+        return _accept(tok, username)
+    finally:
+        _anmod._invite_form = _form_real
+
+
+def _invite_minter_demoted_mid_request():
+    """A superadmin invite whose minter is demoted while the body is in flight creates nothing."""
+    # Aikido 745379189. The authority checks run BEFORE the form is read, and a Bearer-headed
+    # request skips csrf.protect(), which is what otherwise reads the body in before_request. So
+    # the body is first read in _invite_form(), after authority_intact said yes — and under
+    # eventlet a client can withhold it for as long as it likes while the minter is demoted and
+    # deactivated. The claim then went through on the stale creator the session had loaded, and
+    # an ACTIVE SUPERADMIN account appeared after its minter's offboarding. The hook stands in
+    # for the held body: it demotes the minter where the real request would be waiting.
+    with app.app_context():
+        _tsa = User(username=_inv_tag + "_tsa", display_name="throwaway minter",
+                    password_hash=auth.hash_password(secrets.token_hex(16)),
+                    is_superadmin=True, is_active=True)
+        db.session.add(_tsa)
+        db.session.commit()
+        _tsa_id = _tsa.id
+
+    def _minted_by_tsa():
+        with app.app_context():
+            _i, _t = _Inv.mint(db.session.get(User, _tsa_id), superadmin=True)
+            db.session.add(_i)
+            db.session.commit()
+            return _i.id, _t
+
+    def _demote():
+        with app.app_context():
+            _c = db.session.get(User, _tsa_id)
+            _c.is_superadmin, _c.is_active = False, False
+            db.session.commit()
+
+    # Control: the same hook shape with nothing changed still redeems, so the refusal below is
+    # the demotion's doing and not the hook's.
+    _, _tok_ok = _minted_by_tsa()
+    _invite_accept_with_form_hook(_tok_ok, _inv_tag + "_midok", lambda: None)
+    check("invite route: (control) a superadmin invite redeems through the form hook",
+          getattr(_user(_inv_tag + "_midok"), "is_superadmin", None) is True,
+          "the control failed — the refusal below proves nothing")
+    _, _tok_mid = _minted_by_tsa()
+    _r_mid = _invite_accept_with_form_hook(_tok_mid, _inv_tag + "_midsa", _demote)
+    with app.app_context():
+        _c = db.session.get(User, _tsa_id)
+        _demoted = _c is not None and not _c.is_superadmin and not _c.is_active
+    check("invite route: (premise) the minter really was demoted mid-request", _demoted,
+          "the window never opened")
+    check("invite route: a minter demoted while the body is in flight mints no superadmin",
+          _user(_inv_tag + "_midsa") is None,
+          "an active superadmin account was created after its minter lost the rank (status %s)"
+          % _r_mid.status_code)
+
+
+def _invite_expired_mid_request():
+    """An invite that expires while its body is in flight creates nothing."""
+    # The claim's WHERE asked about used_at and revoked_at and not the expiry, so the same held
+    # body outlived the invite's TTL too.
+    _iid_e, _tok_e = _mint(_sa)
+
+    def _expire():
+        with app.app_context():
+            db.session.get(_Inv, _iid_e).expires_at = _inv_utcnow() - _inv_timedelta(minutes=1)
+            db.session.commit()
+
+    _r_e = _invite_accept_with_form_hook(_tok_e, _inv_tag + "_midexp", _expire)
+    check("invite route: an invite that expires mid-request creates no account",
+          _user(_inv_tag + "_midexp") is None,
+          "the claim does not ask about expires_at (status %s)" % _r_e.status_code)
 
 
 def _invite_superadmin_from_a_demoted_minter():
@@ -816,7 +902,8 @@ def _invite_cleanup_rows():
     """Delete the invite users, invites and groups, and restore the borrowed superadmin."""
     global _ICC_rm, _g, _n, _row, _sa_row, _u
     for _n in ("_ok", "_twice", "_demoted", "_inactive", "_exp", "_race", "_revoked",
-               "_grp", "_grp_ok", "_host", "_host_ok", "_cmd", "_cmd_ok"):
+               "_grp", "_grp_ok", "_host", "_host_ok", "_cmd", "_cmd_ok", "_midok", "_midsa",
+               "_midexp", "_tsa"):
         _u = User.query.filter_by(username=_inv_tag + _n).first()
         if _u is not None:
             db.session.delete(_u)
@@ -1425,13 +1512,18 @@ def _check_group_admin_cannot_grant_more():
     check("escalation: they CAN grant a permission they do hold",
           made is not None and auth.VIEW_SERVERS in (got or set()), "granted: %s" % sorted(got or []))
 
-    # ...and editing a group must not silently strip a permission they cannot grant.
-    c4.post("/groups/%d/edit" % gid5, data={"name": tag5, "description": "",
+    # ...and editing a group must not silently strip a permission they cannot grant. It used to be
+    # PRESERVED by _grantable_perms while the rest of the edit went through; a group holding one is
+    # now outside the editor's reach, so the whole edit is refused (_may_manage_group) and this
+    # asserts the refusal — the description is what shows whether the edit landed at all.
+    c4.post("/groups/%d/edit" % gid5, data={"name": tag5, "description": "changed by grpadm",
                                             "permissions": [auth.VIEW_SERVERS]})
     with app.app_context():
         kept = set(Group.query.get(gid5).get_permissions())
-    check("escalation: an edit PRESERVES a permission the editor cannot grant",
-          auth.MANAGE_USERS in kept, "after edit: %s" % sorted(kept))
+        kept_desc = Group.query.get(gid5).description
+    check("escalation: an edit of a group holding a permission the editor cannot grant is refused",
+          auth.MANAGE_USERS in kept and kept_desc == "RBAC test preserve (auto)",
+          "after edit: %s, description %r" % (sorted(kept), kept_desc))
 
 
 def _check_membership_escalation():
@@ -1813,7 +1905,11 @@ def _check_group_summaries_name_nothing_hidden():
         try:
             _sg_page = c4.get("/groups").get_data(as_text=True)
             _sg_card = _sg_page[_sg_page.index(tag + "_sumleak"):]
-            _sg_card = _sg_card[:_sg_card.index('id="edit-group-')]
+            # Up to the NEXT card: this group is outside the viewer's reach, so it has no edit
+            # form to stop at, and the next group's edit form would drag its names in.
+            _sg_card = _sg_card[:min(_i for _i in (_sg_card.find('<div class="card mb-3">'),
+                                                   _sg_card.find("<!-- /#groups-list -->"),
+                                                   len(_sg_card)) if _i >= 0)]
             check("groups page: (control) a group's summary names the host the viewer CAN reach",
                   _sg_mine in _sg_card, "the summary names nothing — the check below is vacuous")
             check("groups page: a group's summary does not name hosts or servers outside the viewer's reach",
@@ -1840,25 +1936,42 @@ def _check_permission_boxes_are_filtered():
     # _grantable_perms drops a requested permission the actor does not hold and PRESERVES one the
     # group already holds, so the control was inert in both directions — and the un-tick case is
     # the dangerous one: unticking "Open a shell on a host" on a group that holds it answered
-    # "Group 'X' updated." and revoked nothing, while every member kept that shell. grp5 holds
-    # MANAGE_USERS, which this admin cannot grant, and VIEW_SERVERS, which they can.
+    # "Group 'X' updated." and revoked nothing, while every member kept that shell.
+    #
+    # A group that HOLDS a permission the admin cannot grant is now outside their reach, so it has
+    # no edit form at all (_manageable_group_ids) — grp5 holds MANAGE_USERS, which this admin
+    # lacks. Its power must still be VISIBLE on the card. The boxes are read off the admin's own
+    # group instead, which they may edit: MANAGE_USERS is still a box they cannot tick.
     def _perm_box(html, gid, perm):
         import re as _re
         _m = _re.search(r'<input[^>]*id="perm-%d-%s"[^>]*>' % (gid, perm), html)
         return _m.group(0) if _m else ""
 
-    _pb_locked = _perm_box(_gp_html, gid5, auth.MANAGE_USERS)
-    _pb_free = _perm_box(_gp_html, gid5, auth.VIEW_SERVERS)
+    _pb_locked = _perm_box(_gp_html, gid4_for_scope, auth.MANAGE_USERS)
+    _pb_free = _perm_box(_gp_html, gid4_for_scope, auth.VIEW_SERVERS)
     check("groups page: the permission tick boxes are where this check thinks they are",
           bool(_pb_locked) and bool(_pb_free),
           "locked=%r free=%r — the checks below would prove nothing" % (_pb_locked, _pb_free))
     check("groups page: a permission the admin cannot grant is not an ENABLED tick box",
           "disabled" in _pb_locked,
-          "offers %r — unticking it reports 'updated' and revokes nothing" % _pb_locked)
-    check("groups page: ...but is still shown, ticked, so the group's real power stays visible",
-          "checked" in _pb_locked,
-          "the box was hidden instead: %r — the page now understates what the group can do"
-          % _pb_locked)
+          "offers %r — ticking it would be silently dropped" % _pb_locked)
+    # Anchored on the card's own heading: a flash from an earlier POST ("Group '<tag5>' updated.")
+    # also names the group, above the list.
+    _g5_card = _gp_html[_gp_html.index(">%s</strong>" % tag5):]
+    _g5_card = _g5_card[:min(_i for _i in (_g5_card.find('<div class="card mb-3">'),
+                                           _g5_card.find("<!-- /#groups-list -->"),
+                                           len(_g5_card)) if _i >= 0)]
+    check("groups page: a group holding one they cannot grant offers no edit form for it",
+          ('id="edit-group-%d"' % gid5) not in _gp_html and not _perm_box(_gp_html, gid5,
+                                                                            auth.MANAGE_USERS),
+          "the page offers an edit the POST refuses")
+    check("groups page: ...but its real power stays visible on the card",
+          auth.ALL_PERMISSIONS[auth.MANAGE_USERS] in _g5_card,
+          "the card no longer names MANAGE_USERS — the page understates what the group can do")
+    check("groups page: a group's permission labels wrap instead of widening the page",
+          "badge bg-secondary text-wrap" in _g5_card,
+          "use_terminal's label is a sentence; unwrapped it ran 579px wide and scrolled a phone "
+          "sideways")
     check("groups page: ...while one they DO hold stays editable (positive control)",
           "disabled" not in _pb_free,
           "every permission box is disabled, so the check above passes for the wrong reason: %r"
@@ -1939,6 +2052,617 @@ def _check_empty_host_list_wording():
           _ind_desc == "description changed",
           "description is %r — the POST did nothing at all, so the check above proves nothing"
           % _ind_desc)
+
+
+def _gsx_group(name, perms, hosts=(), commands=()):
+    """A fixture group for the group-scope checks, named from `tag`. Needs an app context."""
+    _g = Group(name=tag + name, description="orig", is_default=False)
+    _g.set_permissions(perms)
+    for _h in hosts:
+        _g.servers.append(db.session.get(RemoteServer, _h))
+    for _c in commands:
+        _g.custom_commands.append(_c)
+    db.session.add(_g)
+    return _g
+
+
+def _gsx_user(name, groups):
+    """A fixture account in `groups`, named from `tag`. Needs an app context."""
+    _u = User(username=tag + name, password_hash=auth.hash_password(secrets.token_hex(16)),
+              display_name=name, is_superadmin=False, is_active=True)
+    _u.groups.extend(groups)
+    db.session.add(_u)
+    return _u
+
+
+def _group_scope_fixtures():
+    """Two tenants, a delegated admin in one, and the groups the scope checks edit and delete."""
+    global _gsx
+    from panel.db.models import CustomCommand as _GCC, Invite as _GInv
+    with app.app_context():
+        _cmd = _GCC(name=tag + "_gsx_cmd", command_template="exec {}", enabled=True)
+        db.session.add(_cmd)
+        _g = {
+            # dana: a tenant-A admin, holding what she could hand out.
+            "a_adm": _gsx_group("_gsx_a_adm", [auth.MANAGE_GROUPS, auth.SEND_COMMAND,
+                                               auth.USE_TERMINAL, auth.VIEW_SERVERS,
+                                               auth.VIEW_CONSOLE], hosts=[granted_remote]),
+            "b_view": _gsx_group("_gsx_b_view", [auth.VIEW_SERVERS], hosts=[other_remote]),
+            "b_adm": _gsx_group("_gsx_b_adm", [auth.VIEW_SERVERS, auth.SEND_COMMAND],
+                                hosts=[other_remote]),
+            "b_empty": _gsx_group("_gsx_b_empty", [auth.VIEW_SERVERS], hosts=[other_remote]),
+            "a_view": _gsx_group("_gsx_a_view", [auth.VIEW_SERVERS], hosts=[granted_remote]),
+            "a_inv": _gsx_group("_gsx_a_inv", []),
+            "a_free": _gsx_group("_gsx_a_free", [auth.VIEW_SERVERS], hosts=[granted_remote]),
+            "a_del": _gsx_group("_gsx_a_del", [auth.VIEW_SERVERS]),
+            "a_mixdel": _gsx_group("_gsx_a_mixdel", [auth.VIEW_SERVERS], hosts=[granted_remote]),
+            "cmd": _gsx_group("_gsx_cmdgrp", [auth.VIEW_SERVERS], commands=[_cmd]),
+        }
+        _u = {"dana": _gsx_user("_gsx_dana", [_g["a_adm"]]),
+              "vic": _gsx_user("_gsx_vic", [_g["b_view"]]),
+              "vera": _gsx_user("_gsx_vera", [_g["b_adm"]]),
+              # mia is in tenant A's viewers AND tenant B's: permissions are flat, so anything
+              # added to a_view she holds on hostB too.
+              "mia": _gsx_user("_gsx_mia", [_g["a_view"], _g["b_view"], _g["a_mixdel"]]),
+              "alice": _gsx_user("_gsx_alice", [_g["a_free"]]),
+              "carl": _gsx_user("_gsx_carl", [_g["cmd"]])}
+        db.session.flush()
+        # A live superadmin invite naming an EMPTY tenant-A group together with a tenant-B one:
+        # its future member is someone dana cannot administer either.
+        _inv, _ = _GInv.mint(db.session.get(User, admin_id),
+                             group_ids=[_g["a_inv"].id, _g["b_view"].id], note=tag + "_gsx_inv")
+        db.session.add(_inv)
+        # ...while a SUPERADMIN invite naming the editable group beside a tenant-B one blocks
+        # nothing: its account holds everything whatever the groups say (the control below).
+        _sainv, _ = _GInv.mint(db.session.get(User, admin_id), superadmin=True,
+                               group_ids=[_g["a_free"].id, _g["b_view"].id],
+                               note=tag + "_gsx_sainv")
+        db.session.add(_sainv)
+        db.session.commit()
+        _gsx = {k: v.id for k, v in _g.items()}
+        _gsx.update({k: v.id for k, v in _u.items()})
+        _gsx.update(cmd_id=_cmd.id, inv_id=_inv.id, sainv_id=_sainv.id)
+        _dflt = Group.query.filter_by(is_default=True).first()
+        _gsx["dflt"] = _dflt.id if _dflt is not None else None
+        _gsx["dflt_before"] = ((_dflt.name, _dflt.description, _dflt.get_permissions())
+                               if _dflt is not None else None)
+
+
+def _gsx_perms(key):
+    """The effective permissions of the fixture account `key`."""
+    with app.app_context():
+        return auth.get_user_permissions(db.session.get(User, _gsx[key]))
+
+
+def _gsx_row(key):
+    """(name, description, permissions) of the fixture group `key`, or None once it is gone."""
+    with app.app_context():
+        _g = db.session.get(Group, _gsx[key])
+        return None if _g is None else (_g.name, _g.description, sorted(_g.get_permissions()))
+
+
+def _gsx_edit(client, key, perms, hosts=()):
+    """POST an edit of fixture group `key` the way the page submits it."""
+    return client.post("/groups/%d/edit" % _gsx[key],
+                       data={"name": _gsx_row(key)[0], "description": "changed",
+                             "permissions": perms, "servers": [str(h) for h in hosts]})
+
+
+def _check_group_edit_refusals():
+    """A delegated admin cannot edit a group whose members or future members they cannot administer."""
+    _dc = client_as(_gsx["dana"])
+    _grant = [auth.VIEW_SERVERS, auth.SEND_COMMAND, auth.USE_TERMINAL]
+    # 1. A group outside her reach gains use_terminal: vic, a tenant-B viewer, would get a shell on
+    #    hostB from an admin who cannot reach hostB.
+    _gsx_edit(_dc, "b_view", _grant)
+    check("group scope: a delegated admin cannot add a permission to a group outside their reach",
+          auth.USE_TERMINAL not in _gsx_perms("vic") and _gsx_row("b_view")[1] == "orig",
+          "vic now holds %s; group reads %r" % (sorted(_gsx_perms("vic")), _gsx_row("b_view")))
+    # 2. ...nor strip one: permissions=[] would take send_command off tenant B's admins.
+    _gsx_edit(_dc, "b_adm", [])
+    check("group scope: ...nor strip a permission they hold off a group outside their reach",
+          auth.SEND_COMMAND in _gsx_perms("vera"), "vera lost send_command")
+    # 2b. An out-of-reach group with NO members: only the group's own reach refuses it.
+    _gsx_edit(_dc, "b_empty", _grant)
+    check("group scope: ...nor edit an out-of-reach group that has no members yet",
+          _gsx_row("b_empty") == (tag + "_gsx_b_empty", "orig", [auth.VIEW_SERVERS]),
+          "b_empty now reads %r" % (_gsx_row("b_empty"),))
+    # 3. A group WITHIN her reach, whose member also sits in a tenant-B group: permissions are
+    #    flat, so mia would hold use_terminal on hostB.
+    _gsx_edit(_dc, "a_view", _grant, hosts=[granted_remote])
+    check("group scope: ...nor a within-reach group whose member reaches more than they do",
+          auth.USE_TERMINAL not in _gsx_perms("mia"),
+          "mia holds %s — use_terminal on hostB" % sorted(_gsx_perms("mia")))
+    # 5. An EMPTY within-reach group that a live superadmin invite names beside a tenant-B group.
+    _gsx_edit(_dc, "a_inv", _grant)
+    check("group scope: ...nor an empty group a live invite names beside an out-of-reach group",
+          _gsx_row("a_inv")[2] == [],
+          "a_inv now holds %s — the invitee would redeem it on hostB" % (_gsx_row("a_inv")[2],))
+    with app.app_context():
+        from panel.db.models import AuditLog as _GAL
+        _refused_rows = _GAL.query.filter_by(user_id=_gsx["dana"], action="edit_group",
+                                             success=False).count()
+    check("group scope: ...and each refusal is audited", _refused_rows >= 5,
+          "%d refused edit_group rows" % _refused_rows)
+    # Positive control: a group whose members she can administer still edits.
+    _gsx_edit(_dc, "a_free", _grant, hosts=[granted_remote])
+    check("group scope: an in-reach group whose members are in reach still edits, a superadmin "
+          "invite naming it notwithstanding (control)",
+          auth.USE_TERMINAL in _gsx_perms("alice") and _gsx_row("a_free")[1] == "changed",
+          "the edit was refused too — the checks above prove nothing (%r)" % (_gsx_row("a_free"),))
+
+
+def _check_group_edit_default_group():
+    """4. The default group, within reach of nearly every admin, with an out-of-reach member."""
+    if _gsx["dflt"] is None:
+        check("group scope: (premise) the install has a default group", False, "none found")
+        return
+    with app.app_context():
+        _dflt = db.session.get(Group, _gsx["dflt"])
+        _dflt.users.append(db.session.get(User, _gsx["vic"]))
+        db.session.commit()
+        _within = auth._group_within_reach(_dflt, auth._my_group_reach(
+            db.session.get(User, _gsx["dana"])))
+    check("group scope: (premise) the default group is within the delegated admin's reach",
+          _within, "the check below would pass on the group's own reach, not on its members")
+    _name, _desc, _perms = _gsx["dflt_before"]
+    try:
+        client_as(_gsx["dana"]).post("/groups/%d/edit" % _gsx["dflt"], data={
+            "name": _name, "description": _desc or "",
+            "permissions": sorted(set(_perms) | {auth.USE_TERMINAL, auth.SEND_COMMAND})})
+        check("group scope: ...nor the DEFAULT group, which holds every account",
+              auth.USE_TERMINAL not in _gsx_perms("vic"),
+              "vic holds %s after one POST to the default group" % sorted(_gsx_perms("vic")))
+    finally:
+        with app.app_context():
+            _dflt = db.session.get(Group, _gsx["dflt"])
+            _dflt.name, _dflt.description = _name, _desc
+            _dflt.set_permissions(_perms)
+            _dflt.users = [u for u in _dflt.users if u.id != _gsx["vic"]]
+            db.session.commit()
+
+
+def _check_group_delete_refusals():
+    """A delegated admin deletes only a group wholly within their reach, whose members they administer."""
+    from panel.db.models import Invite as _GInv
+    _dc = client_as(_gsx["dana"])
+    # 745378983: a group holding a superadmin-authored custom command dana does not hold.
+    _dc.post("/groups/%d/delete" % _gsx["cmd"])
+    with app.app_context():
+        _carl_cmds = auth.custom_command_ids(db.session.get(User, _gsx["carl"]))
+    check("group scope: a delegated admin cannot delete a group holding a command they lack",
+          _gsx_row("cmd") is not None and _gsx["cmd_id"] in _carl_cmds,
+          "the group is gone and carl lost the command")
+    _dc.post("/groups/%d/delete" % _gsx["a_mixdel"])
+    check("group scope: ...nor one whose member reaches more than they do",
+          _gsx_row("a_mixdel") is not None, "a_mixdel was deleted, stripping mia")
+    _dc.post("/groups/%d/delete" % _gsx["a_inv"])
+    with app.app_context():
+        _inv = db.session.get(_GInv, _gsx["inv_id"])
+        _inv_live = _inv is not None and _inv.revoked_at is None
+    check("group scope: ...nor one a live invite names beside an out-of-reach group",
+          _gsx_row("a_inv") is not None and _inv_live,
+          "the group was deleted, which also revoked the superadmin's invite")
+    _dc.post("/groups/%d/delete" % _gsx["a_del"])
+    check("group scope: an in-reach group with no members still deletes (control)",
+          _gsx_row("a_del") is None, "every delegated delete is refused, so the above prove nothing")
+
+
+def _check_group_scope_page_and_superadmin():
+    """The page offers Edit/Delete only where the POST allows it; a superadmin keeps both."""
+    _page = client_as(_gsx["dana"]).get("/groups").get_data(as_text=True)
+    _sa_page = client_as(admin_id).get("/groups").get_data(as_text=True)
+
+    def _has_edit(html, key):
+        return ('id="edit-group-%d"' % _gsx[key]) in html
+
+    def _has_delete(html, key):
+        return ('action="/groups/%d/delete"' % _gsx[key]) in html
+
+    check("groups page: no Edit form for a group the admin may not edit",
+          not _has_edit(_page, "b_view") and not _has_edit(_page, "a_view"),
+          "the page offers an edit the POST refuses")
+    check("groups page: ...nor a Delete button for one they may not delete",
+          (tag + "_gsx_cmdgrp") in _page and not _has_delete(_page, "cmd")
+          and not _has_delete(_page, "a_mixdel"),
+          "the page offers a delete the POST refuses (or the group is not on the page at all)")
+    check("groups page: ...while an editable group keeps both (control)",
+          _has_edit(_page, "a_free") and _has_delete(_page, "a_free"),
+          "the page offers nothing at all, so the two checks above are vacuous")
+    check("groups page: ...and a superadmin is offered Edit and Delete on every group",
+          all(_has_edit(_sa_page, k) and _has_delete(_sa_page, k)
+              for k in ("b_view", "a_view", "cmd", "a_mixdel", "a_free")),
+          "the manageable set narrowed the superadmin's page")
+    # A superadmin's edit of an out-of-reach group is not affected.
+    client_as(admin_id).post("/groups/%d/edit" % _gsx["b_view"], data={
+        "name": tag + "_gsx_b_view", "description": "sa-changed",
+        "permissions": [auth.VIEW_SERVERS], "servers": [str(other_remote)]})
+    check("group scope: a superadmin still edits any group (control)",
+          _gsx_row("b_view") == (tag + "_gsx_b_view", "sa-changed", [auth.VIEW_SERVERS]),
+          "got %r" % (_gsx_row("b_view"),))
+
+
+def _group_scope_cleanup():
+    """Remove the group-scope fixtures. The final sweep would too; this keeps later blocks clean."""
+    from panel.db.models import CustomCommand as _GCC, Invite as _GInv
+    with app.app_context():
+        for _ik in ("inv_id", "sainv_id"):
+            _inv = db.session.get(_GInv, _gsx[_ik])
+            if _inv is not None:
+                db.session.delete(_inv)
+        for _k in ("dana", "vic", "vera", "mia", "alice", "carl"):
+            _u = db.session.get(User, _gsx[_k])
+            if _u is not None:
+                db.session.delete(_u)
+        db.session.commit()
+        for _g in Group.query.filter(Group.name.like(tag + "_gsx_%")).all():
+            db.session.delete(_g)
+        _c = db.session.get(_GCC, _gsx["cmd_id"])
+        if _c is not None:
+            db.session.delete(_c)
+        db.session.commit()
+
+
+def _check_group_edit_scope():
+    """745379016 / 745378983: edit and delete are scoped to groups wholly within the admin's reach."""
+    # _grantable_perms filtered WHICH permissions a delegated admin could toggle, and nothing asked
+    # WHOSE: edit_group took any group id. So an admin scoped to hostA handed use_terminal to
+    # tenant B's viewers on hostB, stripped tenant B's admins, and — through the default group,
+    # which holds every account — gave the whole install a shell in one POST. /users refuses the
+    # same change to the same people (can_administer_user); /groups did not.
+    if not (other_remote and other_id):
+        check("group scope: (premise) the fixture has a second host to be scoped out", False,
+              "the scope checks did not run")
+        return
+    _group_scope_fixtures()
+    try:
+        _check_group_edit_refusals()
+        _check_group_edit_default_group()
+        _check_group_delete_refusals()
+        _check_group_scope_page_and_superadmin()
+    finally:
+        _group_scope_cleanup()
+
+
+_AUDIT_PW = "Rbac-audit-1!pw"   # nosec B105 - a throwaway fixture account's password, for a re-auth prompt
+
+
+def _audit_fixtures():
+    """Two fixture hosts whose game servers share a NAME, and two delegated log viewers."""
+    global _ax
+    with app.app_context():
+        _hosts = {}
+        for _k in ("hA", "hB"):
+            _hosts[_k] = RemoteServer(name=tag + "_" + _k, host="127.0.0.1", port=22,
+                                      username="root", auth_method="key", auth_credential="")
+            db.session.add(_hosts[_k])
+        db.session.flush()
+        # The default-install collision: the same game on two hosts gets the same name.
+        _srv = {"sA": GameServer(remote_id=_hosts["hA"].id, name=tag + "_cs2", short_name="rbaxsa",
+                                 game_type="cs2", port=27115, installed=True, status="offline"),
+                "sB": GameServer(remote_id=_hosts["hB"].id, name=tag + "_cs2", short_name="rbaxsb",
+                                 game_type="cs2", port=27116, installed=True, status="offline"),
+                "sB2": GameServer(remote_id=_hosts["hB"].id, name=tag + "_prod",
+                                  short_name="rbaxsb2", game_type="cs2", port=27117,
+                                  installed=True, status="offline")}
+        db.session.add_all(_srv.values())
+        db.session.flush()
+        _liz_g = Group(name=tag + "_ax_liz", description="", is_default=False)
+        _liz_g.set_permissions([auth.VIEW_LOGS, auth.VIEW_SERVERS])
+        _liz_g.game_servers.append(_srv["sA"])          # ONE server, by an individual grant
+        _dana_g = Group(name=tag + "_ax_dana", description="", is_default=False)
+        _dana_g.set_permissions([auth.VIEW_LOGS, auth.VIEW_SERVERS, auth.MANAGE_SERVERS,
+                                 auth.MANAGE_REMOTES])
+        _dana_g.servers.append(_hosts["hA"])            # the whole of hostA
+        db.session.add_all([_liz_g, _dana_g])
+        _users = {}
+        for _k, _grp in (("liz", _liz_g), ("dana", _dana_g)):
+            _users[_k] = User(username=tag + "_ax_" + _k, display_name=_k,
+                              password_hash=auth.hash_password(_AUDIT_PW),
+                              is_superadmin=False, is_active=True)
+            _users[_k].groups.append(_grp)
+            db.session.add(_users[_k])
+        db.session.commit()
+        _ax = {k: v.id for d in (_hosts, _srv, _users) for k, v in d.items()}
+        _ax.update(liz_g=_liz_g.id, dana_g=_dana_g.id, rows={})
+
+
+def _ax_log(key, action, target, detail, server=None, remote=None, user_id=None):
+    """Write an audit row through the real log_action and remember its id under `key`."""
+    from panel.db.models import AuditLog as _AXL
+    with app.test_request_context():
+        _who = db.session.get(User, user_id or admin_id)
+        auth.log_action(_who, action, target=target, detail=detail,
+                        server=db.session.get(GameServer, _ax[server]) if server else None,
+                        remote=db.session.get(RemoteServer, _ax[remote]) if remote else None)
+        _ax["rows"][key] = db.session.query(db.func.max(_AXL.id)).scalar()
+
+
+def _ax_sees(user_key, row_key):
+    """Whether `user_key`'s audit_scope includes the row remembered as `row_key` (rows, not page text)."""
+    from panel.db.models import AuditLog as _AXL
+    from panel.routes.audit import audit_scope as _ax_scope
+    with app.app_context():
+        _u = db.session.get(User, _ax[user_key] if user_key in _ax else user_key)
+        _scope = _ax_scope(_u)
+        _q = _AXL.query.filter(_AXL.id == _ax["rows"][row_key])
+        return (_q if _scope is None else _q.filter(_scope)).count() == 1
+
+
+def _check_audit_same_named_servers():
+    """745379041 (a): the same game on two hosts shares a name; a viewer of one reads neither the other's."""
+    _sa = client_as(admin_id)
+    for _k in ("sA", "sB"):
+        _sa.post("/api/server/%d/notify-empty" % _ax[_k], json={"enabled": True})
+    from panel.db.models import AuditLog as _AXL
+    with app.app_context():
+        for _k in ("sA", "sB"):
+            _ax["rows"]["notify_" + _k] = (db.session.query(db.func.max(_AXL.id))
+                                           .filter(_AXL.action == "set_notify_when_empty",
+                                                   _AXL.game_server_id == _ax[_k]).scalar())
+    check("audit scope: (premise) the route recorded WHICH server each row is about",
+          _ax["rows"]["notify_sA"] is not None and _ax["rows"]["notify_sB"] is not None,
+          "set_notify_when_empty wrote no game_server_id — the checks below would prove nothing")
+    _ax_log("rcon_sB", "send_command", tag + "_cs2", "rcon_password S3cretHostB", server="sB")
+    check("audit scope: a viewer of one server sees its rows (control)",
+          _ax_sees("liz", "notify_sA"), "the scope is too tight")
+    check("audit scope: ...but not the same-named server's on another host",
+          not _ax_sees("liz", "notify_sB") and not _ax_sees("liz", "rcon_sB"),
+          "hostB's console commands, rcon_password included, reach a viewer of hostA's copy")
+
+
+def _check_audit_rename_onto_other_targets():
+    """745379041 (b, c) / 745379096: renaming your own server or host onto a target reads nothing new."""
+    _ax_log("prod_sB2", "send_command", tag + "_prod", "sv_password TenantBpw", server="sB2")
+    _ax_log("port_hB", "remote_port_open", "%s_hB:27015/udp" % tag, "opened", remote="hB")
+    _ax_log("port_hA", "remote_port_open", "%s_hA:27015/udp" % tag, "opened", remote="hA")
+    _ax_log("repair_db", "panel_repair_db", "database", "repaired")
+    _ax_log("ufw_panel", "ufw_block", "198.51.100.7", "panel host")
+    _dc = client_as(_ax["dana"])
+    for _new in (tag + "_prod", "database", "198.51.100.7"):
+        _dc.post("/servers/%d/edit" % _ax["sA"], data={"name": _new})
+    with app.app_context():
+        _renamed = db.session.get(GameServer, _ax["sA"]).name
+    check("audit scope: (premise) the delegated admin really renamed their server",
+          _renamed == "198.51.100.7", "server is named %r" % _renamed)
+    check("audit scope: renaming your server onto another tenant's does not read its rows",
+          not _ax_sees("dana", "prod_sB2"), "tenant B's sv_password reached tenant A's admin")
+    check("audit scope: ...nor onto the panel host's own targets ('database', an IP)",
+          not _ax_sees("dana", "repair_db") and not _ax_sees("dana", "ufw_panel"),
+          "a server renamed 'database' or to an IP read the panel host's administration")
+    _dc.post("/remotes/%d/edit" % _ax["hA"], data={
+        "name": tag + "_hB", "host": "127.0.0.1", "ssh_port": "22", "ssh_user": "root"})
+    with app.app_context():
+        _hname = db.session.get(RemoteServer, _ax["hA"]).name
+    check("audit scope: (premise) the delegated admin really renamed their host",
+          _hname == tag + "_hB", "host is named %r" % _hname)
+    check("audit scope: renaming your host onto another's does not read its 'host:port' rows",
+          not _ax_sees("dana", "port_hB"), "hostB's firewall row reached hostA's admin")
+    check("audit scope: ...while their own host's rows, and its servers', still reach them (control)",
+          _ax_sees("dana", "port_hA") and _ax_sees("dana", "notify_sA"), "the scope is too tight")
+
+
+def _check_audit_account_rows():
+    """745379096: a server named like an account shows no reset of that account."""
+    with app.app_context():
+        _sa_row = db.session.get(GameServer, _ax["sA"])
+        _sa_row.name = tag + "_ax_victim"
+        db.session.commit()
+    _ax_log("reset_pw", "reset_user_password", tag + "_ax_victim", "")
+    _ax_log("reset_2fa", "2fa_reset", tag + "_ax_victim", "")
+    # ...and one that names their server BY ID, as a call site passing server= wrongly would:
+    # the account-action exclusion must still hold it back.
+    _ax_log("reset_pw_id", "reset_user_password", tag + "_ax_victim", "", server="sA")
+    check("audit scope: a viewer whose server shares an account's name sees no reset of it",
+          not _ax_sees("liz", "reset_pw") and not _ax_sees("liz", "reset_2fa"),
+          "another account's password/2FA reset reached a server-scoped viewer")
+    check("audit scope: ...not even one carrying their server's id (account actions stay out)",
+          not _ax_sees("liz", "reset_pw_id"),
+          "reset_user_password is not treated as an account action")
+
+
+def _check_audit_recycled_server_id():
+    """745379041: a deleted server's rows do not pass to the server that inherits its id."""
+    from panel.db.models import AuditLog as _AXL
+    with app.app_context():
+        _x = GameServer(remote_id=_ax["hB"], name=tag + "_gone", short_name="rbaxgone",
+                        game_type="cs2", port=27118, installed=True, status="offline")
+        db.session.add(_x)
+        db.session.commit()
+        _ax["sX"] = _x.id
+    _ax_log("gone_sX", "send_command", tag + "_gone", "rcon_password GoneSecret", server="sX")
+    with app.app_context():
+        db.session.delete(db.session.get(GameServer, _ax["sX"]))
+        db.session.commit()
+        _y = GameServer(remote_id=_ax["hA"], name=tag + "_heir", short_name="rbaxheir",
+                        game_type="cs2", port=27119, installed=True, status="offline")
+        db.session.add(_y)
+        db.session.commit()
+        _ax["sY"] = _y.id
+        _liz_g = db.session.get(Group, _ax["liz_g"])   # held: the identity map is weak
+        _liz_g.game_servers.append(_y)
+        db.session.commit()
+        _detached = db.session.get(_AXL, _ax["rows"]["gone_sX"]).game_server_id is None
+    check("audit scope: (premise) SQLite handed the deleted server's id to the next one",
+          _ax["sY"] == _ax["sX"], "ids %s / %s — the check below is not about reuse"
+          % (_ax["sX"], _ax["sY"]))
+    check("audit scope: a deleted server's rows are detached from its id",
+          _detached, "the row still points at an id SQLite has recycled")
+    check("audit scope: ...so the server that inherits the id does not inherit its history",
+          not _ax_sees("liz", "gone_sX"), "a deleted tenant's rcon_password reached the heir's viewer")
+    # A row written AFTER the delete, about the deleted instance — uninstall_server's failure row
+    # and a background worker's outcome row are written that way. The listener has already run,
+    # so only log_action itself can refuse to record the dead id.
+    with app.test_request_context():
+        _dead = GameServer(remote_id=_ax["hB"], name=tag + "_gone2",
+                           short_name="rbaxgone2", game_type="cs2", port=27121)
+        db.session.add(_dead)
+        db.session.commit()
+        db.session.delete(_dead)
+        db.session.commit()
+        auth.log_action(db.session.get(User, admin_id), "uninstall_server", target=tag + "_gone2",
+                        detail="rcon_password AfterDelete", server=_dead)
+        _ax["rows"]["after_delete"] = db.session.query(db.func.max(_AXL.id)).scalar()
+        _after = db.session.get(_AXL, _ax["rows"]["after_delete"]).game_server_id
+    check("audit scope: a row written after its server was deleted records no id for it",
+          _after is None, "it recorded %r — an id SQLite will hand to the next server" % _after)
+
+
+def _check_audit_recycled_host_ids():
+    """...nor a deleted HOST's rows, whose servers go by bulk delete, to the ones that take their ids."""
+    from panel.db.models import AuditLog as _AXL
+    with app.app_context():
+        _hc = RemoteServer(name=tag + "_hC", host="127.0.0.1", port=22, username="root",
+                           auth_method="key", auth_credential="")
+        db.session.add(_hc)
+        db.session.flush()
+        _sc = GameServer(remote_id=_hc.id, name=tag + "_onhc", short_name="rbaxsc",
+                         game_type="cs2", port=27120, installed=True, status="offline")
+        db.session.add(_sc)
+        _dana_g = db.session.get(Group, _ax["dana_g"])  # held: the identity map is weak
+        _dana_g.servers.append(_hc)
+        db.session.commit()
+        _ax.update(hC=_hc.id, sC=_sc.id)
+    _ax_log("hc_row", "remote_port_open", tag + "_hC:27015/udp", "opened", remote="hC")
+    _ax_log("sc_row", "send_command", tag + "_onhc", "rcon_password HostCSecret", server="sC")
+    # Through the real route: its game servers go by a BULK delete that fires no ORM event.
+    _rd = client_as(_ax["dana"]).post("/remotes/%d/delete" % _ax["hC"],
+                                      json={"password": _AUDIT_PW})
+    with app.app_context():
+        _gone = db.session.get(RemoteServer, _ax["hC"]) is None
+        _hc_row = db.session.get(_AXL, _ax["rows"]["hc_row"])
+        _sc_row = db.session.get(_AXL, _ax["rows"]["sc_row"])
+        _detached = (_hc_row.remote_id is None, _sc_row.game_server_id is None)
+    check("audit scope: (premise) the host delete went through", _gone,
+          "status %s" % _rd.status_code)
+    check("audit scope: a deleted host's rows, and its bulk-deleted servers', are detached",
+          _detached == (True, True), "remote_id/game_server_id detached: %s" % (_detached,))
+
+
+def _check_audit_superadmin_sees_all():
+    """The superadmin still reads every planted row."""
+    check("audit scope: a superadmin still reads every row (control)",
+          all(_ax_sees(admin_id, k) for k in _ax["rows"]),
+          "missing: %s" % [k for k in _ax["rows"] if not _ax_sees(admin_id, k)])
+
+
+def _ax_legacy_rows():
+    """(key, action, target, expected (game_server_id key, remote_id key)) for the upgrade check."""
+    return (("L_srv", "send_command", tag + "_cs2", ("sB", None)),        # one server by that name
+            ("L_like", "moderate_kick", tag + "_cs2", ("sB", None)),      # a built action name
+            ("L_dup", "start_server", tag + "_prod", (None, None)),       # two servers: ambiguous
+            ("L_panel", "panel_repair_db", tag + "_cs2", (None, None)),   # not a server action
+            ("L_acct", "invite_created", tag + "_cs2", (None, None)),     # an account action
+            ("L_port", "remote_port_open", tag + "_hB:27015/udp", (None, "hB")),
+            ("L_host", "edit_remote", tag + "_hA", (None, "hA")),
+            ("L_ip", "ufw_block", tag + "_hA", (None, None)))            # call-only: never backfilled
+
+
+def _ax_restore_audit_columns():
+    """Put the two columns back by hand after a failed upgrade, so the rest of the suite can run."""
+    from sqlalchemy import text as _t
+    from panel.db.models import _LIGHT_MIGRATIONS
+    for _c in ("game_server_id", "remote_id"):
+        try:
+            db.session.execute(_t(_LIGHT_MIGRATIONS[("audit_log", _c)]))
+            db.session.commit()
+        except Exception:   # nosec B110 - already there: the failure was after the ALTER
+            db.session.rollback()
+
+
+def _check_audit_backfill_on_upgrade():
+    """The upgrade adds both columns to an old audit_log and backfills only what is unambiguous."""
+    from sqlalchemy import text as _t, inspect as _ax_insp
+    from panel.db.models import AuditLog as _AXL, _run_light_migrations
+    # It drops two columns and replays the migration, so only on this run's own database.
+    check("audit backfill: (premise) the database is this run's own, so the upgrade can be replayed",
+          bool(any(seeded.values())), "not replayed on a configured install")
+    if not any(seeded.values()):
+        return
+    with app.app_context():
+        _hA, _sY = db.session.get(RemoteServer, _ax["hA"]), db.session.get(GameServer, _ax["sY"])
+        _hA.name, _sY.name = tag + "_hA", tag + "_prod"     # hA unique again; tag_prod ambiguous
+        db.session.commit()
+        for _c in ("game_server_id", "remote_id"):
+            db.session.execute(_t("DROP INDEX IF EXISTS ix_audit_log_%s" % _c))
+            db.session.execute(_t("ALTER TABLE audit_log DROP COLUMN %s" % _c))
+        db.session.commit()
+        _ids = {}
+        for _k, _act, _tgt, _ in _ax_legacy_rows():
+            db.session.execute(_t("INSERT INTO audit_log (username, action, target, detail, success) "
+                                  "VALUES ('legacy', :a, :t, :d, 1)"),
+                               {"a": _act, "t": _tgt, "d": tag + "_legacy"})
+            _ids[_k] = db.session.execute(_t("SELECT max(id) FROM audit_log")).scalar()
+        db.session.commit()
+        try:
+            _run_light_migrations()                         # <- the update path
+            _upgrade_err = None
+        except Exception as _e:   # a locked or failed upgrade is this check's finding, not a crash
+            db.session.rollback()
+            _upgrade_err = "%s: %s" % (type(_e).__name__, str(_e)[:160])
+            _ax_restore_audit_columns()
+        _ax["rows"].update(_ids)
+    check("audit backfill: the upgrade itself runs (an install upgrading to this starts at all)",
+          _upgrade_err is None, _upgrade_err or "")
+    if _upgrade_err is not None:
+        return
+    with app.app_context():
+        _cols = {c["name"] for c in _ax_insp(db.engine).get_columns("audit_log")}
+        _idx = {i["name"] for i in _ax_insp(db.engine).get_indexes("audit_log")}
+        _got = {_k: (db.session.get(_AXL, _i).game_server_id, db.session.get(_AXL, _i).remote_id)
+                for _k, _i in _ids.items()}
+    check("audit backfill: the upgrade adds both columns back, indexed",
+          {"game_server_id", "remote_id"} <= _cols
+          and {"ix_audit_log_game_server_id", "ix_audit_log_remote_id"} <= _idx,
+          "columns %s, indexes %s" % (sorted(_cols), sorted(_idx)))
+    _want = {_k: tuple(_ax[_e] if _e else None for _e in _exp)
+             for _k, _, _, _exp in _ax_legacy_rows()}
+    check("audit backfill: only an unambiguous server or host action gets an id",
+          _got == _want, "got %s, want %s" % (_got, _want))
+
+
+def _audit_cleanup():
+    """Remove the audit fixtures: rows, users, groups, servers, hosts."""
+    from panel.db.models import AuditLog as _AXL
+    with app.app_context():
+        for _rid in _ax.get("rows", {}).values():
+            _r = db.session.get(_AXL, _rid) if _rid else None
+            if _r is not None:
+                db.session.delete(_r)
+        for _k in ("liz", "dana"):
+            _u = db.session.get(User, _ax.get(_k))
+            if _u is not None:
+                db.session.delete(_u)
+        for _k in ("liz_g", "dana_g"):
+            _g = db.session.get(Group, _ax.get(_k))
+            if _g is not None:
+                db.session.delete(_g)
+        db.session.commit()
+        for _k in ("sA", "sB", "sB2", "sY"):
+            _s = db.session.get(GameServer, _ax.get(_k)) if _ax.get(_k) else None
+            if _s is not None:
+                db.session.delete(_s)
+        db.session.commit()
+        for _k in ("hA", "hB"):
+            _h = db.session.get(RemoteServer, _ax.get(_k)) if _ax.get(_k) else None
+            if _h is not None:
+                db.session.delete(_h)
+        db.session.commit()
+
+
+def _check_audit_scope_by_object():
+    """745379041 / 745379096: a delegated viewer's rows are chosen by server/host id, never by name."""
+    _audit_fixtures()
+    try:
+        _check_audit_same_named_servers()
+        _check_audit_rename_onto_other_targets()
+        _check_audit_account_rows()
+        _check_audit_recycled_server_id()
+        _check_audit_recycled_host_ids()
+        _check_audit_superadmin_sees_all()
+        _check_audit_backfill_on_upgrade()
+    finally:
+        _audit_cleanup()
 
 
 def _check_bulk_actions_per_id():
@@ -2153,6 +2877,8 @@ def _check_invites():
     try:
         _invite_happy_path_and_replays()
         _invite_revoked_during_the_race()
+        _invite_minter_demoted_mid_request()
+        _invite_expired_mid_request()
         _invite_superadmin_from_a_demoted_minter()
         _invite_group_from_a_demoted_minter()
         _invite_host_outside_the_minters_reach()
@@ -2376,6 +3102,8 @@ try:
     _check_permission_boxes_are_filtered()
     _check_unshowable_server_grant_survives()
     _check_empty_host_list_wording()
+    _check_group_edit_scope()
+    _check_audit_scope_by_object()
     _check_bulk_actions_per_id()
     _check_setup_endpoints_stay_shut()
     _check_healthz_before_setup()
@@ -2667,6 +3395,96 @@ check("every mutating endpoint writes an audit entry (or is listed as having not
       not _unaudited,
       "; ".join(sorted(_unaudited)[:5]) + " — call log_action(), or add the endpoint to "
       "_NO_AUDIT_OK with the reason it has nothing to record")
+# ── an audit row about a server or host names it by ID ─────────────────────────────────────────
+# audit_scope decides who reads a row from AuditLog.game_server_id / remote_id, which log_action
+# records only from its server= / remote= arguments. A call whose target is a server's or a host's
+# name and passes neither writes a row nobody but its actor can read; one that passes them with an
+# action the upgrade's backfill does not know leaves that action's OLD rows unreadable; and one
+# that passes them with an ACCOUNT action would put someone's sign-in history in front of a
+# server's viewers. Read from the source, as an AST, across panel/ and app.py.
+from panel.db import models as _axm  # noqa: E402
+from panel.routes.audit import _ACCOUNT_ACTIONS as _AX_ACCOUNT  # noqa: E402
+
+
+def _ax_like(pattern):
+    """A regex for a SQL LIKE pattern written with a backslash escape."""
+    import re as _ax_re
+    out, i = "", 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\" and i + 1 < len(pattern):
+            out, i = out + _ax_re.escape(pattern[i + 1]), i + 2
+            continue
+        out += ".*" if ch == "%" else "." if ch == "_" else _ax_re.escape(ch)
+        i += 1
+    return _ax_re.compile(out + r"\Z")
+
+
+def _ax_shapes(node):
+    """Every action name an action expression can produce, with 'Q' for the parts built at run time."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, ast.IfExp):
+        return _ax_shapes(node.body) + _ax_shapes(node.orelse)
+    if isinstance(node, ast.JoinedStr):
+        return ["".join(v.value if isinstance(v, ast.Constant) else "Q" for v in node.values)]
+    if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod)
+            and isinstance(node.left, ast.Constant)):
+        return [node.left.value.replace("%s", "Q").replace("%d", "Q")]
+    return [None]                               # a bare variable: named in _AX_ACTION_FROM_CALLER
+
+
+def _ax_names(expr, var):
+    return expr is not None and any(
+        isinstance(n, ast.Attribute) and n.attr == "name" and isinstance(n.value, ast.Name)
+        and n.value.id == var for n in ast.walk(expr))
+
+
+# Calls whose action is a parameter, with where the real names come from.
+_AX_ACTION_FROM_CALLER = {
+    "_record_backup_outcome",   # its callers pass "scheduled_backup" / "queued_backup"
+}
+_ax_bad, _ax_counts = [], {"server": 0, "remote": 0}
+_ax_srv = ([_ax_like(p) for p in _axm.AUDIT_SERVER_ACTION_LIKE], _axm.AUDIT_SERVER_ACTIONS)
+_ax_host = ([_ax_like(p) for p in _axm.AUDIT_HOST_ACTION_LIKE],
+            _axm.AUDIT_HOST_ACTIONS | _axm.AUDIT_HOST_ACTIONS_CALL_ONLY)
+for _f in sorted({*pathlib.Path(_ROOT, "panel").rglob("*.py"), pathlib.Path(_ROOT, "app.py")}):
+    _tree = ast.parse(_f.read_text(encoding="utf-8"))
+    _fn_of = {}
+    for _fd in ast.walk(_tree):
+        if isinstance(_fd, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for _n in ast.walk(_fd):
+                _fn_of.setdefault(id(_n), _fd.name)
+    for _n in ast.walk(_tree):
+        if not (isinstance(_n, ast.Call)
+                and getattr(_n.func, "id", getattr(_n.func, "attr", None)) == "log_action"):
+            continue
+        _where = "%s:%d" % (_f.relative_to(_ROOT), _n.lineno)
+        _kw = {k.arg: k.value for k in _n.keywords}
+        _tgt = _kw.get("target", _n.args[2] if len(_n.args) > 2 else None)
+        for _obj, _var in (("server", "gs"), ("remote", "remote")):
+            if _ax_names(_tgt, _var) and _obj not in _kw:
+                _ax_bad.append("%s names %s.name but passes no %s=" % (_where, _var, _obj))
+        for _obj, (_likes, _exact) in (("server", _ax_srv), ("remote", _ax_host)):
+            if _obj not in _kw:
+                continue
+            _ax_counts[_obj] += 1
+            for _shape in _ax_shapes(_n.args[1] if len(_n.args) > 1 else _kw.get("action")):
+                if _shape is None:
+                    if _fn_of.get(id(_n)) not in _AX_ACTION_FROM_CALLER:
+                        _ax_bad.append("%s: %s= with an action this gate cannot read" % (_where, _obj))
+                elif _shape in _AX_ACCOUNT:
+                    _ax_bad.append("%s: %s= on the ACCOUNT action %r" % (_where, _obj, _shape))
+                elif _shape not in _exact and not any(_l.match(_shape) for _l in _likes):
+                    _ax_bad.append("%s: %s= on %r, which models.AUDIT_%s_ACTIONS does not list"
+                                   % (_where, _obj, _shape, "SERVER" if _obj == "server" else "HOST"))
+check("audit ids: the scan found the server and host rows to check (positive control)",
+      _ax_counts["server"] >= 40 and _ax_counts["remote"] >= 30,
+      "server=%d remote=%d call sites — the check below proves nothing" % (
+          _ax_counts["server"], _ax_counts["remote"]))
+check("audit ids: every row about a server or host passes it, with an action the backfill knows",
+      not _ax_bad, "; ".join(_ax_bad[:5]))
+
 passed = sum(1 for ok, _, _ in results if ok)
 for ok, name, detail in results:
     line = ("PASS" if ok else "FAIL") + "  " + name

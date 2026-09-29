@@ -141,7 +141,7 @@ def _register_firewall_view(app):
         except Exception:
             _log.debug("no cached connection to drop, or it's already gone", exc_info=True)
         log_action(current_user, "retrust_hostkey", target=remote.name,
-                   detail="cleared pinned host key (%s)" % (old_fp or "none"))
+                   detail="cleared pinned host key (%s)" % (old_fp or "none"), remote=remote)
         return jsonify({"success": True,
                         "message": "Host key cleared — it will be re-pinned on the next connection."})
 
@@ -159,7 +159,8 @@ def _register_firewall_rules(app):
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
         success, msg = remote_ufw_open_port(remote, port, proto, data.get("comment", ""))
-        log_action(current_user, "remote_port_open", target=f"{remote.name}:{port}/{proto}", success=success)
+        log_action(current_user, "remote_port_open", target=f"{remote.name}:{port}/{proto}", success=success,
+                   remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/firewall/allow-from", methods=["POST"])
@@ -182,7 +183,8 @@ def _register_firewall_rules(app):
         success, msg = remote_ufw_allow_from(remote, source, port, proto,
                                              data.get("comment", ""), allow=on)
         log_action(current_user, "remote_port_allow_from" if on else "remote_port_allow_from_remove",
-                   target=f"{remote.name}:{port}/{proto}", detail="from %s" % source, success=success)
+                   target=f"{remote.name}:{port}/{proto}", detail="from %s" % source, success=success,
+                   remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/firewall/limit", methods=["POST"])
@@ -203,7 +205,7 @@ def _register_firewall_rules(app):
             return jsonify({"success": False, "message": "Port required"}), 400
         success, msg = remote_ufw_limit_port(remote, port, proto, limit=on)
         log_action(current_user, "remote_port_limit" if on else "remote_port_unlimit",
-                   target=f"{remote.name}:{port}/{proto}", success=success)
+                   target=f"{remote.name}:{port}/{proto}", success=success, remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/firewall/close", methods=["POST"])
@@ -217,7 +219,8 @@ def _register_firewall_rules(app):
         if not port:
             return jsonify({"success": False, "message": "Port required"}), 400
         success, msg = remote_ufw_close_port(remote, port, proto)
-        log_action(current_user, "remote_port_close", target=f"{remote.name}:{port}/{proto}", success=success)
+        log_action(current_user, "remote_port_close", target=f"{remote.name}:{port}/{proto}", success=success,
+                   remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/firewall/delete-rule", methods=["POST"])
@@ -233,7 +236,8 @@ def _register_firewall_rules(app):
         key = _json_body().get("key")
         success, msg = remote_ufw_delete_rule(remote, num,
                                               expect_key=key if isinstance(key, str) and key else None)
-        log_action(current_user, "remote_ufw_delete_rule", target=f"{remote.name}:#{num}", success=success)
+        log_action(current_user, "remote_ufw_delete_rule", target=f"{remote.name}:#{num}", success=success,
+                   remote=remote)
         return jsonify({"success": success, "message": msg})
 
 
@@ -262,7 +266,8 @@ def _register_ssh_settings(app):
         remote = get_remote(remote_id)
         mode = _json_body().get("mode", "")
         success, msg = remote_set_public_ssh(remote, mode)
-        log_action(current_user, "remote_ssh_mode", target=f"{remote.name}:{mode}", success=success)
+        log_action(current_user, "remote_ssh_mode", target=f"{remote.name}:{mode}", success=success,
+                   remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/ssh-port", methods=["POST"])
@@ -308,7 +313,7 @@ def _register_ssh_settings(app):
         finally:
             lock.release()
         log_action(current_user, "change_ssh_port", target=remote.name,
-                   detail=f"{old} -> {new_port}", success=ok)
+                   detail=f"{old} -> {new_port}", success=ok, remote=remote)
         return jsonify({"success": ok, "message": msg})
 
 
@@ -379,7 +384,7 @@ def _register_panel_port(app):
         _left, _verify_ok = _panel_port_rule_nums()
         # A verify read that FAILED cannot say the port is closed either.
         ok = _verify_ok and not _left
-        log_action(current_user, "close_panel_port", target=str(port), success=ok)
+        log_action(current_user, "close_panel_port", target=str(port), success=ok, remote=remote)
         return jsonify({"success": ok, "message": (
             f"Public port {port} closed — the panel is now reachable only over your tailnet."
             if ok else f"Couldn't remove every rule for port {port}; check the firewall page.")})
@@ -414,7 +419,8 @@ def _register_game_ports(app):
                                        "open it." % port}), 400
         count, msg = remote_ufw_allow_game_port(remote, port, gs.short_name)
         success = count >= 1
-        log_action(current_user, "game_port_open", target=f"{remote.name}:{port}", success=success)
+        log_action(current_user, "game_port_open", target=f"{remote.name}:{port}", success=success,
+                   remote=remote)
         return jsonify({"success": success, "message": msg, "rules_added": count})
 
     @app.route("/api/server/<int:server_id>/sync-ports", methods=["POST"])
@@ -444,7 +450,7 @@ def _register_game_ports(app):
             missed = [p for p in to_open if p not in set(opened)]
             ok = not missed
             log_action(current_user, "sync_ports", target=gs.name, success=ok,
-                       detail=_sync_ports_detail(opened, missed))
+                       detail=_sync_ports_detail(opened, missed), server=gs)
             msg = _sync_ports_message(opened, missed)
             return jsonify({"success": ok, "message": msg,
                             "ports": info.get("ports", []), "open_ports": opened,
@@ -582,7 +588,8 @@ def _register_os_update_checks(app):
     def api_remote_run_updates(remote_id):
         remote = get_remote(remote_id)
         success, msg = remote_os_run_updates(remote)
-        log_action(current_user, "remote_os_update", target=remote.name, success=success)
+        log_action(current_user, "remote_os_update", target=remote.name, success=success,
+                   remote=remote)
         return jsonify({"success": success, "message": msg})
 
 
@@ -597,7 +604,8 @@ def _register_os_update_jobs(app):
         try:
             ok, msg = remote_os_update_start(remote)
             if ok:
-                log_action(current_user, "remote_os_update", target=remote.name, detail="started")
+                log_action(current_user, "remote_os_update", target=remote.name, detail="started",
+                           remote=remote)
             return jsonify({"success": ok, "message": msg})
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("couldn't start update")}), 500
@@ -692,7 +700,7 @@ def _register_reboot(app):
         if when_empty:
             with _rwe_lock:
                 _reboot_when_empty[remote_id] = {"by": current_user.username, "since": time.time()}
-            log_action(current_user, "reboot_when_empty_arm", target=remote.name)
+            log_action(current_user, "reboot_when_empty_arm", target=remote.name, remote=remote)
             # Warn if any game here can't be player-queried (no gamedig type AND no console engine):
             # the panel can't confirm it's empty while it's running, so the reboot waits until it is
             # stopped. Cheap, offline check — no network calls.
@@ -717,7 +725,8 @@ def _register_reboot(app):
         success, msg = _reboot_expecting_offline(remote, remote_reboot)
         # success=, or log_action's default (True) records a refused reboot as one that happened —
         # and /logs filtered to failures hides it. The OS-update sibling on this page passes it.
-        log_action(current_user, "remote_reboot", target=remote.name, success=success)
+        log_action(current_user, "remote_reboot", target=remote.name, success=success,
+                   remote=remote)
         return jsonify({"success": success, "message": msg})
 
     @app.route("/api/remote/<int:remote_id>/reboot-cancel", methods=["POST"])
@@ -729,7 +738,7 @@ def _register_reboot(app):
         with _rwe_lock:
             had = _reboot_when_empty.pop(remote_id, None)
         if had:
-            log_action(current_user, "reboot_when_empty_cancel", target=remote.name)
+            log_action(current_user, "reboot_when_empty_cancel", target=remote.name, remote=remote)
         return jsonify({"success": True, "pending": False,
                         "message": "Auto-reboot canceled." if had else "Nothing was scheduled."})
 

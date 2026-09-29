@@ -434,7 +434,7 @@ def _register_install(app):
         _notify_servers_changed(app)   # new "installing" row → appears live on other sessions
 
         log_action(current_user, "install_server", target=gs.name,
-                   detail=f"Type: {game_type}, port: {final_port}")
+                   detail=f"Type: {game_type}, port: {final_port}", server=gs)
         return _form_ok(_install_started_message(short_name, final_port, desired_port, port_changed,
                                                  name_changed), "manage_servers")
 
@@ -497,7 +497,7 @@ def _register_install(app):
         _run_install_job(gs.id, remote.id, gs.short_name, gs.game_type, gs.lgsm_name, gs.port,
                          _retry_content)
         _notify_servers_changed(app)   # the corner progress widget picks it up from here
-        log_action(current_user, "retry_install", target=gs.name)
+        log_action(current_user, "retry_install", target=gs.name, server=gs)
         return _form_ok(f"Installing {gs.short_name} again. "
                         f"Progress is shown in the corner while it runs.", "manage_servers")
 
@@ -1578,7 +1578,7 @@ def _report_install_outcome(job, gs, ports, started):
                 f"(Files & Config), or free that port on the host.", warn=True)
         log_action(None, "install_complete", target=gs.name, success=False,
                    detail=("port %s clashes with %s"
-                           % (port_conflict[0], port_conflict[1]))[:300])
+                           % (port_conflict[0], port_conflict[1]))[:300], server=gs)
     elif port_unchecked:
         # This used to be the sentence above, with "something the panel could not
         # check for" spliced in where the holder's name goes — so the operator was
@@ -1595,10 +1595,10 @@ def _report_install_outcome(job, gs, ports, started):
                 warn=True)
         log_action(None, "install_complete", target=gs.name, success=True,
                    detail=("port %s reported but the host's listening ports "
-                           "could not be read" % port_unchecked)[:300])
+                           "could not be read" % port_unchecked)[:300], server=gs)
     elif really_up:
         _finish(f"{short_name} installed and started")
-        log_action(None, "install_complete", target=gs.name, success=True)
+        log_action(None, "install_complete", target=gs.name, success=True, server=gs)
     else:
         _report_not_started(job, gs, s_rc, start_out)
 
@@ -1625,7 +1625,7 @@ def _report_not_started(job, gs, s_rc, start_out):
         _detail = "started; port %s not open after 90s" % gs.port
     _finish(note, warn=True)
     log_action(None, "install_complete", target=gs.name, success=False,
-               detail=_detail[:300])
+               detail=_detail[:300], server=gs)
 
 
 def _register_uninstall_and_edit(app):
@@ -1698,7 +1698,7 @@ def _register_uninstall_and_edit(app):
                 _log.debug("uninstall: steam dumps sweep failed", exc_info=True)
             out, err, rc = _sm.run_privileged(remote, "user-delete-force", [short_name], timeout=30)
             _gone = rc in (0, 6, 12)
-            log_action(current_user, "uninstall_server", target=gs.name, success=_gone)
+            log_action(current_user, "uninstall_server", target=gs.name, success=_gone, server=gs)
             if not _gone:
                 _em = ("Could not remove the '%s' account on %s, so '%s' has been left in place — "
                        "nothing was deleted from the panel. %s"
@@ -1721,7 +1721,7 @@ def _register_uninstall_and_edit(app):
 
         except Exception:
             _em = _log_and_generic("uninstall failed")
-            log_action(current_user, "uninstall_server", target=name, success=False)
+            log_action(current_user, "uninstall_server", target=name, success=False, server=gs)
             return _index_reply(_em, False, "danger", 500)
 
     @app.route("/servers/<int:server_id>/edit", methods=["POST"])
@@ -1764,7 +1764,7 @@ def _register_uninstall_and_edit(app):
         gs.name = name
         gs.game_display = game_display
         db.session.commit()
-        log_action(current_user, "edit_server", target=gs.name)
+        log_action(current_user, "edit_server", target=gs.name, server=gs)
         return _form_ok(f"Server '{gs.name}' updated.", "manage_servers")
 
 

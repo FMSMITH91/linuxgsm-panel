@@ -967,7 +967,44 @@ CI-verified commit regardless of this file — this changelog is for humans.
   It went to the channel that asked even after the bot was switched off or moved.
 - **The terminal's input queue is counted, not re-summed on every keystroke**, and dropped input is
   reported once a second rather than once per keystroke.
-
+- **A delegated group admin can edit or delete only a group wholly within their reach.** The
+  permission list was filtered to what the editor holds, but nothing asked whose group it was:
+  an admin scoped to one host could give another tenant's viewers `use_terminal` and
+  `send_command` on a host the admin cannot reach, strip another tenant's admins, or, through
+  the default "Everyone" group, give every account a shell in one POST. Deleting a group skipped
+  its custom commands, so a group made for a superadmin-authored command could be deleted by
+  anyone who held its permissions. Editing and deleting now need all three of: the group's
+  permissions, hosts, servers and custom commands within the editor's reach; every member but
+  themselves and superadmins someone the editor could administer on Users (the rule `/users`
+  already applied); and no live invite naming the group alongside one outside their reach.
+  Otherwise the request is refused and audited. The Groups page shows those groups without Edit
+  or Delete, with their members, permissions and access still listed. **What changes:** on an
+  install with more than one tenant, a delegated admin can no longer edit "Everyone", or their
+  own group if someone else in it reaches more than they do. That is the intended rule. A
+  superadmin's page and edits are unchanged.
+- **An invite no longer outlives its minter, or its expiry, while its form is in flight.** The
+  checks that the minter is still active and still holds what the invite grants ran before the
+  form was read. A request carrying an `Authorization: Bearer` header and no cookie skips the
+  CSRF check that otherwise reads the body early, so a client could send the headers, hold the
+  body back while the minter was demoted and deactivated, and still get the account, superadmin
+  included. An invite that expired while the body was held was redeemed the same way. Redemption
+  now claims the invite only if it is unexpired, and re-reads the minter after the claim, while it
+  holds the database's write lock, before creating the account. The password is hashed before
+  that lock is taken, so other writers wait less.
+- **A delegated log viewer sees the rows about their own servers and hosts, chosen by id, not by
+  name.** `/logs` matched a row to a viewer's servers and hosts by the row's target name, and
+  names are not unique. The same game installed on two hosts gets the same name by default, so a
+  viewer granted one read the other's console commands with their arguments (`rcon_password ...`).
+  Anyone who could rename their own server or host could rename it onto another tenant's server,
+  onto `database`, a branch name or an IP, and read those rows too: another tenant's firewall
+  changes, the panel host's own administration, and another account's password or 2FA reset. Each
+  audit row now records the game server or host it is about, and a delegated viewer is shown their
+  own rows plus the rows about servers and hosts they can reach. Nothing is matched by name. When
+  a server or host is deleted its rows let go of the id, so a new server that SQLite gives the
+  same id to does not inherit another tenant's history. **On upgrade**, existing rows get their id
+  once, only where the action is about a server or host and exactly one server or host has that
+  name. The rest stay visible to the person who did the action and to superadmins. Password and
+  2FA resets are now treated as account rows.
 - **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported by
   kta1kri). Twenty-five places built `sudo -u <account> bash -c '…'` from a server's account
   (`short_name`) and LinuxGSM script name with neither quoting nor a check — the dashboard's own

@@ -1432,11 +1432,19 @@ def _session_binding_ok():
     return hmac.compare_digest(str(bound), fp)
 
 
-def log_action(user, action, target="", detail="", success=True, actor=None):
+def log_action(user, action, target="", detail="", success=True, actor=None, server=None,
+               remote=None):
     """Write an audit log entry.
 
     `actor` overrides the recorded username — used for a failed login, where there's no
     authenticated user but we still want the ATTEMPTED username in the User column.
+
+    `server` / `remote`: the GameServer or RemoteServer the row is ABOUT, which is what decides
+    which delegated viewers may read it (panel/routes/audit.py audit_scope). Pass the object
+    wherever the target names one. A row with neither is readable by its own actor and by a
+    superadmin only — never matched by name, because names are not unique: the same game on two
+    hosts gets the same name by default, and a server could be renamed onto any target to read
+    its rows (Aikido 745379041).
     """
     entry = AuditLog(
         user_id=user.id if user else None,
@@ -1446,9 +1454,34 @@ def log_action(user, action, target="", detail="", success=True, actor=None):
         detail=detail,
         ip_address=client_ip(),
         success=success,
+        game_server_id=_audit_ref(GameServer, server),
+        remote_id=_audit_ref(RemoteServer, remote),
     )
     db.session.add(entry)
     db.session.commit()
+
+
+def _audit_ref(model, obj):
+    """The id column value for an audit row about `obj` — NULL when the row is already gone.
+
+    A SQL expression, not the id itself, so the INSERT resolves it: a server deleted (or a host
+    whose servers were bulk-deleted) before the row is written leaves NULL rather than an id
+    SQLite will hand the next row it creates. The detach listeners in models.py null the rows
+    that existed at the delete; this covers a row written after it — an uninstall's failure row,
+    a background worker's outcome row. The identity is read without loading, so a deleted or
+    detached instance answers too.
+    """
+    if obj is None:
+        return None
+    from sqlalchemy import inspect as _sa_inspect
+    from sqlalchemy.exc import NoInspectionAvailable
+    try:
+        ident = _sa_inspect(obj).identity
+    except NoInspectionAvailable:
+        return None
+    if not ident:
+        return None
+    return db.select(model.id).where(model.id == ident[0]).scalar_subquery()
 
 
 def strip_legacy_superadmin_grants():

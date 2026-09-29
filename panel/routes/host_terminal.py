@@ -162,7 +162,8 @@ def _close_and_audit(app, sid, reason, user=None):
             user = current_user
         remote = RemoteServer.query.get(remote_id)
         log_action(user, "terminal_close",
-                   target=(remote.name if remote else str(remote_id)), detail=reason)
+                   target=(remote.name if remote else str(remote_id)), detail=reason,
+                   remote=remote)
     except Exception:
         app.logger.debug("terminal close audit failed", exc_info=True)
 
@@ -238,7 +239,7 @@ def _register_terminal_open(socketio):
             _sid_owner[sid] = (current_user.id, _viewer_credential())
         # The session opening is auditable; what gets typed into it is not recorded anywhere —
         # people type passwords into terminals.
-        log_action(current_user, "terminal_open", target=remote.name)
+        log_action(current_user, "terminal_open", target=remote.name, remote=remote)
         emit("term_ready", {"host": remote.display_name})
 
 
