@@ -2209,7 +2209,8 @@ _sh.rmtree(_cg4_dir, ignore_errors=True)
 _pb4_want = {"main", "_parse_args", "_sweep_servers", "_sweep_groups", "_print_server_row",
              "_print_server_table", "_print_server_scaling", "_print_group_table",
              "_print_group_scaling"}
-with open(os.path.join(_UNIT_ROOT, "tools", "perf_bench.py"), encoding="utf-8") as _pb4_fh:
+_pb4_file = os.path.join(_UNIT_ROOT, "tools", "perf_bench.py")
+with open(_pb4_file, encoding="utf-8") as _pb4_fh:
     _pb4_defs = [_n for _n in _tl_ast.parse(_pb4_fh.read()).body
                  if isinstance(_n, _tl_ast.FunctionDef) and _n.name in _pb4_want]
 check("tools: perf_bench's sweep and report steps are all there to drive",
@@ -2237,13 +2238,16 @@ def _pb4_run_group_size(groups, hosts, per_host, iterations):
     return {"groups": groups, "rows": [_pb4_row("/groups", 2 + groups), _pb4_row("(user) /", 5)]}
 
 
+# Compiled under the file's real path, so coverage attributes these lines to tools/perf_bench.py.
+# Under the bare name "perf_bench.py" it recorded <repo>/perf_bench.py, a file that does not
+# exist, and the CI coverage job's `coverage xml` stopped with "No source for code".
 _pb4_ns = {"argparse": _tl_argparse, "json": _json_tg, "PATHS": ["/grows", "/flat", "/broken"],
            "cleanup": lambda: _pb4_calls.append("cleanup"),
            "mark_setup_complete": lambda: _pb4_calls.append("flip"),
            "run_size": _pb4_run_size, "run_group_size": _pb4_run_group_size}
 # exec, not an import: importing perf_bench runs its module body, which writes the panel's config
 # under data/ and boots the app, so only the step definitions picked out above are run, on stubs.
-exec(compile(_tl_ast.Module(body=_pb4_defs, type_ignores=[]), "perf_bench.py", "exec"),  # nosec B102 - this repo's own tool  # pylint: disable=exec-used
+exec(compile(_tl_ast.Module(body=_pb4_defs, type_ignores=[]), _pb4_file, "exec"),  # nosec B102 - this repo's own tool  # pylint: disable=exec-used
      _pb4_ns)
 _pb4_dir = _lgd_tempfile.mkdtemp(prefix="perf-bench-p4-")
 _pb4_json = os.path.join(_pb4_dir, "out.json")
