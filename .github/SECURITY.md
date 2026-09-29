@@ -46,6 +46,26 @@ The panel manages game-server hosts over SSH, so treat it as sensitive infrastru
 - Keep **two-factor authentication** enabled on admin accounts.
 - Keep the install **up to date** — re-running the installer applies the latest fixes.
 
+### First run: the setup token
+
+Until the first administrator exists, the setup wizard *is* the panel: its second step makes whoever
+submits it the superadmin, which is root-equivalent on the panel's host. A default install opens the
+panel's port itself, so that step must not be open to whoever reaches the port first.
+
+- The installer ends by printing the wizard's link with a **one-time setup token** in it
+  (`/setup?token=…`). The token lives in `data/setup_token`, mode 0600, owned by the panel's account;
+  `manage.py setup-token` (or `sudo linuxgsm-panel-recover setup-token`) creates it if it is missing and
+  prints it again.
+- Until an admin exists, `/setup` and every `/api/setup/*` endpoint answer only a browser that has shown
+  that token. Any other caller gets a page asking for it, and can change nothing. The token is taken out
+  of the URL at once, and deleted when the admin is created. From then on the rest of the wizard
+  answers only the browser that created the admin, or a superadmin who signs in.
+- The wizard's Tailscale endpoints (install, join, Serve) refuse every caller until that admin exists.
+  Two concurrent "create admin" requests can no longer both succeed.
+- Treat the link like a password until you have used it: anyone holding it before you finish step 2 can
+  create the admin account. It opens nothing once the admin exists, or on an install that is already set
+  up.
+
 ## Known trust-model limitation: the panel has root on its own host
 
 When the installer is run as **root** it creates a dedicated service user and grants it

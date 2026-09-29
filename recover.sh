@@ -7,6 +7,7 @@
 #   sudo linuxgsm-panel-recover disable-2fa <user>      # lost your authenticator
 #   sudo linuxgsm-panel-recover create-admin <user>     # no superadmin left
 #   sudo linuxgsm-panel-recover list-users
+#   sudo linuxgsm-panel-recover setup-token             # the first-run wizard's link, again
 #
 # No command yet (older install) or a fresh shell? Same one-liner style as the installer:
 #   curl -fsSL https://raw.githubusercontent.com/FMSMITH91/linuxgsm-panel/main/recover.sh | sudo bash
