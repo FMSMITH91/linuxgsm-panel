@@ -285,9 +285,9 @@ CI-verified commit regardless of this file — this changelog is for humans.
   that wait stops the whole panel: the console, every page, and the other write too, which then
   could not finish. After up to 15 seconds the pin failed and the connection was refused anyway.
   Measured with a 3-second wait: a write that would have finished half a second later still froze
-  the panel for all 3 seconds. The pin now waits in a way that lets the rest of the panel run, so
-  it is stored as soon as the other write finishes. If the database stays locked for the whole
-  wait, the connection is refused as before, and the panel keeps running while it waits.
+  the panel for all 3 seconds. The pin no longer waits for the database at all. If another write
+  holds it at that moment, the key is not stored and that one connection is refused straight away,
+  as it was at the end of the wait, and the next connection to the host tries again.
 - **On Python 3.13 and later (Ubuntu 26.04), a closed terminal could keep its slot until the panel
   restarted.** If the terminal's output reader was still busy a second after the close, for
   instance still handing output to the browser, the close stopped partway. The session stayed on
