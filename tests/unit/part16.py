@@ -607,6 +607,15 @@ try:
     check("change-port: a move that fully took is a successful row and no restart row (control)",
           _p9_json(_r).get("success") is True and _cpb.success is True
           and len(_audits("panel_restart")) == _n_restart16, repr((_p9_json(_r), _cpb.detail)))
+    # The new port opened, but the OLD port's rule could not be removed: the panel is still
+    # reachable where it was, which is a security side effect that did not follow the move.
+    _cp16.update(fw=(True, "ok"))
+    _p9_patch(_rs16, "remote_ufw_close_port", lambda *a, **k: (False, "ufw is not reachable"))
+    _r = _A16.post("/api/panel/change-port", json={"port": 5070, "bind_host": "0.0.0.0"})  # nosec B104
+    _cpb = (_audits("panel_change_binding") or [NS(success=None, detail="")])[-1]
+    check("change-port: a move that left the OLD port's rule open is audited as a failure",
+          _cpb.success is False and "still there" in _cpb.detail, repr((_cpb.success, _cpb.detail)))
+    _p9_patch(_rs16, "remote_ufw_close_port", lambda *a, **k: _cp16["fw"])
     # A host with no fail2ban at all: ensure_panel_fail2ban no-ops and says ok=False, and there
     # is no jail to follow the move — not a failed move.
     _f2b16_installed[0] = False
