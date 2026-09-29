@@ -2181,6 +2181,7 @@ try:
     # A scripted host. Every knob is a list read front to back (the last value repeats), so a flow
     # can say "the first auto-install reports missing packages, the second works". A value that is
     # an Exception is raised. `boom` names steps that raise.
+    import ast as _p9_ast           # noqa: E402
     import inspect as _p9_inspect   # noqa: E402
     import shlex as _p9_shlex       # noqa: E402
     _ms = {}
@@ -2191,6 +2192,7 @@ try:
         _ms.update(acct={}, lgsm=[("LinuxGSM ready", "", 0)], auto=[("installed", "", 0)],
                    looks=[True], classify=[None], missing=[[]], deps=[(True, "")],
                    detect=[{"game_port": None, "open_ports": []}], listen=[set()],
+                   listen_pre=[set()],
                    start=[("Starting", "", 0)], cmds=[[]], unset=[(True, "")],
                    cu=[{"user": "gmcontent"}], mount=[(True, "Mounted.")], aux=[{}],
                    userdel=[("", "", 0)], boom=set())
@@ -2288,9 +2290,15 @@ try:
               lambda r, s, l: (_ms_log.append("bans"), _ms_boom("bans"))[0])
     _p9_patch(_p9_ms, "detect_game_ports",
               lambda r, s, l: (_ms_boom("detect"), _ms_next("detect"))[1])
-    _p9_patch(_p9_ms, "_remote_listening_ports", lambda r: _ms_next("listen"))
+    # `listen` answers once the server has been started, `listen_pre` before: nothing of the new
+    # server's is listening until its first start, and step 6 scans right before it opens ports.
+    _p9_patch(_p9_ms, "_remote_listening_ports",
+              lambda r: _ms_next("listen" if "as:start" in _ms_log else "listen_pre"))
+    _p9_patch(_p9_sm, "protected_host_ports", lambda r: {22})
     _p9_patch(_p9_ms, "remote_ufw_close_game_port",
-              lambda r, p: (_ms_log.append("ufw-close:%s" % p), _ms_boom("ufw-close"))[0])
+              lambda r, p, name="", legacy=False: (
+                  _ms_log.append("ufw-close:%s:%s:%s" % (p, name, legacy)), _ms_boom("ufw-close"),
+                  (0, ""))[2])
     _p9_patch(_p9_ms, "remote_ufw_allow_game_ports",
               lambda r, ports, name: _ms_log.append("ufw-allow:%s" % sorted(ports)))
     _p9_patch(_p9_ms, "set_autostart",
@@ -2392,7 +2400,7 @@ try:
               aux=[{"clientport": 27106}],
               cmds=[[{"cmd": "monitor", "desc": "Monitor"}]],
               detect=[{"game_port": 27160, "open_ports": [27160, 27161]}, ConnectionError("gone")],
-              listen=[set(), OSError("ss failed")],
+              listen=[OSError("ss failed")],
               mount=[(False, "couldn't read the content group")],
               boom={"steam-dumps-sweep", "wipe", "validate", "port-write", "cron", "bans",
                     "ufw-close", "autostart", "start"})
@@ -2420,7 +2428,15 @@ try:
           repr(_ja.get("log")))
     check("install flow A: the Source aux ports are written, the reported port adopted and opened",
           "cfg:clientport=27106" in _ms_log and _ra.port == 27160
-          and "ufw-close:27150" in _ms_log and "ufw-allow:[27160, 27161]" in _ms_log, repr(_ms_log))
+          and "ufw-allow:[27160, 27161]" in _ms_log, repr(_ms_log))
+    # Aikido 745379215: the adoption step ran the untagged sweep on the port it left — which, on a
+    # fresh install, can hold no rule of this server's (the ports are opened after it) — and took
+    # whatever ALLOW was there. It closes only rules tagged with THIS server's name now.
+    check("install flow A: leaving the allocated port closes only rules tagged with this server's "
+          "name there — no untagged sweep",
+          "ufw-close:27150:p9gmod:False" in _ms_log
+          and not any(e.startswith("ufw-close:") and e.endswith(":True") for e in _ms_log),
+          repr([e for e in _ms_log if e.startswith("ufw-close")]))
     check("install flow A: GMod content is installed for the selected game only, with progress",
           "gmod-content:cstrike" in _ms_log
           and any("Downloading content" in ln for ln in _ja.get("log", [])), repr(_ms_log))
@@ -2471,6 +2487,51 @@ try:
               _ms_job(_ms_h).get("status") == "done" and "gmod-content:cstrike" not in _ms_log
               and _p9_row(_ms_h).status == "online", repr((_ms_job(_ms_h), _ms_log)))
         _p9_delete_server(_ms_h)
+
+    # ── step 6 opens only ports that are this server's to open (Aikido 745379031, 745379277) ────
+    # The port was checked free when the install was asked for, twenty minutes of SteamCMD before
+    # step 6 opens it, and when the game reports that same port nothing looked again.
+    _ms_free[:] = [(27192, False)]
+    _ms_reset(listen_pre=[{22, 27192}])
+    _r, _ms_t = _ms_install("csgo", "p9race", "27192")
+    _p9_drain()
+    check("install: a port something else took while the files downloaded is not opened for it",
+          "ufw-allow:[]" in _ms_log and "ufw-allow:[27192]" not in _ms_log, repr(_ms_log))
+    check("install: ...and the install says so, rather than 'installed and started'",
+          "port 27192 is already used by another process on this host"
+          in _ms_job(_ms_t).get("message", ""), repr(_ms_job(_ms_t)))
+    _p9_delete_server(_ms_t)
+    _ms_free[:] = [(27193, False)]
+    _ms_reset(listen_pre=[None])
+    _r, _ms_t = _ms_install("csgo", "p9noscan", "27193")
+    _p9_drain()
+    check("install: ...while a scan that cannot be read still opens the port the allocation "
+          "verified (positive control — a busy host must not leave a new server closed)",
+          "ufw-allow:[27193]" in _ms_log, repr(_ms_log))
+    _p9_delete_server(_ms_t)
+    # `details` is run as the game account, over a config that account can write. Only the GAME
+    # port went through any check; "Query <another server's port>" was opened under this server's
+    # name — re-tagging that server's rule, which this one's uninstall then deleted.
+    _ms_sib = _p9_new_server(P9_HOST, "p9sib", "rust", 27197)
+    _ms_free[:] = [(27194, False)]
+    _ms_reset(detect=[{"game_port": 27194, "open_ports": [27194, 27198]}])
+    _r, _ms_t = _ms_install("csgo", "p9query", "27194")
+    _p9_drain()
+    check("install: a reported query port inside ANOTHER server's block is not opened",
+          "ufw-allow:[27194]" in _ms_log and "ufw-allow:[27194, 27198]" not in _ms_log, repr(_ms_log))
+    _p9_delete_server(_ms_t)
+    _p9_delete_server(_ms_sib)
+    _ms_free[:] = [(27195, False)]
+    _ms_reset(detect=[{"game_port": 22, "open_ports": [22]}])
+    _r, _ms_t = _ms_install("csgo", "p9ssh", "27195")
+    _p9_drain()
+    check("install: a reported game port of 22 is not adopted — the row keeps its port, and SSH "
+          "is not opened under the server's name",
+          _p9_row(_ms_t).port == 27195 and "ufw-allow:[27195]" in _ms_log
+          and not any(22 in _p9_ast.literal_eval(e.split(":", 1)[1])
+                      for e in _ms_log if e.startswith("ufw-allow:")),
+          repr((_p9_row(_ms_t).port, _ms_log)))
+    _p9_delete_server(_ms_t)
 
     # ── a failure a retry cannot fix, and the Windows-prime whose reset works first time ─────────
     _ms_free[:] = [(27190, False)]
@@ -2646,6 +2707,20 @@ try:
     check("uninstall (JSON): the firewall rules it removed are counted in the message",
           _d == {"success": True, "message": "Server 'p9fw' uninstalled. 2 firewall rule(s) removed."},
           repr(_d))
+    # Aikido 745379215: past its tagged rules, uninstall takes an UNTAGGED allow on its port (a
+    # panel that did not tag yet left those) — and only when no other server's block holds it.
+    check("uninstall: the untagged legacy sweep runs on a port no other server holds",
+          "ufw-close:27185::True" in _ms_log, repr([e for e in _ms_log if "ufw-close" in e]))
+    _ms_z = _p9_new_server(P9_HOST, "p9fwnext", "csgo", 27187)
+    _ms_zz = _p9_new_server(P9_HOST, "p9fwrust", "rust", 27186)     # its block is 27186-27187
+    _ms_reset()
+    _ms_fw[0] = (0, "")
+    _d = _p9_json(_A.post("/servers/%d/delete" % _ms_z, headers=_XHR))
+    check("uninstall: ...and NOT on a port inside another server's block — that rule is at least as "
+          "likely to be theirs",
+          _d.get("success") is True and not any("ufw-close:27187" in e for e in _ms_log),
+          repr((_d, [e for e in _ms_log if "ufw-close" in e])))
+    _p9_delete_server(_ms_zz)
     with _p9_state._install_lock:
         _ms_y_job = _p9_state._install_jobs.pop(_ms_y, None)
     check("uninstall: the removed server's install job goes with its row (the id is reused)",

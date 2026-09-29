@@ -871,6 +871,69 @@ try:
     finally:
         _sm_core.run_privileged = _u_orig
 
+    # ── uninstall removes THIS server's firewall rules, and nobody else's (Aikido 745379215) ────
+    # After the server's tagged rules it ran `ufw delete allow <port>` and the proto tcp/udp pair
+    # with no comment — and ufw removes a rule matching all but its comment when the delete has
+    # none. So every ALLOW on the port went, whoever's: another service's, an operator's own SSH
+    # allow, with no lockout guard in the way. The host below is a rule table answering the verbs
+    # with ufw's own matching; the route, the cleanup and the status parser are all real.
+    class _UfwTable:
+        def __init__(self, *rules):
+            self.rules = [list(r) for r in rules]
+
+        def priv(self, server, verb, args=(), *a, **k):
+            args = [str(x) for x in args]
+            if verb == "ufw-status":
+                return ("Status: active\n\n" + "".join(
+                    "[%2d] %-26s %-5s IN    Anywhere%s\n" % (
+                        i, t, act, ("                   # " + cm) if cm else "")
+                    for i, (t, act, cm) in enumerate(self.rules, 1)), "", 0)
+            if verb == "ufw-delete-num":
+                del self.rules[int(args[0]) - 1]
+                return ("Rule deleted", "", 0)
+            if verb in ("ufw-delete-allow-port", "ufw-delete-allow-proto-port"):
+                to = args[0] if verb == "ufw-delete-allow-port" else "%s/%s" % (args[1], args[0])
+                self.rules = [r for r in self.rules if not (r[0] == to and r[1] == "ALLOW")]
+                return ("Rule deleted", "", 0)
+            return ("", "", 0)
+
+    _uf_saved = (_sm_core.run_privileged, _sm_core.run_command, _sm_core.run_as_game_user)
+    try:
+        _sm_core.run_command = lambda *a, **k: ("", "", 0)
+        _sm_core.run_as_game_user = lambda *a, **k: ("", "", 0)
+        for _uf_name, _uf_port, _uf_rules, _uf_keep, _uf_gone in (
+                ("fwsshsrv", 22,
+                 (("22/tcp", "ALLOW", "operator"), ("22", "ALLOW", ""), ("27041", "ALLOW", "fwsshsrv")),
+                 [("22/tcp", "ALLOW", "operator"), ("22", "ALLOW", "")], ["27041"]),
+                ("fwforeign", 27042,
+                 (("22/tcp", "LIMIT", ""), ("27042", "ALLOW", "fwforeign"),
+                  ("27042/udp", "ALLOW", "voicebridge"), ("27042/tcp", "ALLOW", "")),
+                 [("22/tcp", "LIMIT", ""), ("27042/udp", "ALLOW", "voicebridge")],
+                 ["27042", "27042/tcp"])):
+            _uf = _UfwTable(*_uf_rules)
+            _sm_core.run_privileged = _uf.priv
+            with app.app_context():
+                _rm = RemoteServer.query.first()
+                _tmp = _UGS(remote_id=_rm.id, name=_uf_name, short_name=_uf_name, game_type="gmod",
+                            port=_uf_port, installed=True, status="offline")
+                db.session.add(_tmp); db.session.commit()
+                _tid = _tmp.id
+            _resp = c.post("/servers/%d/delete" % _tid, json={},
+                           headers={"X-Requested-With": "XMLHttpRequest"})
+            _uf_left = [tuple(r) for r in _uf.rules]
+            check("uninstall %s (port %d): every rule that is not this server's survives — an "
+                  "operator's SSH allow, another service's tag, a LIMIT" % (_uf_name, _uf_port),
+                  (_resp.get_json() or {}).get("success") is True
+                  and all(k in _uf_left for k in _uf_keep), "left=%r" % (_uf_left,))
+            check("uninstall %s: ...while its own tagged rule and an untagged legacy allow on a port "
+                  "no one else holds still go (positive control)" % _uf_name,
+                  not any(r[0] in _uf_gone for r in _uf_left), "left=%r" % (_uf_left,))
+            with app.app_context():
+                _left = _UGS.query.get(_tid)
+                if _left: db.session.delete(_left); db.session.commit()
+    finally:
+        _sm_core.run_privileged, _sm_core.run_command, _sm_core.run_as_game_user = _uf_saved
+
     # ── a queued "stop/restart when empty" must not be thrown away ────────────────────────────
     # The deferred sweep asks get_server_status and treats "offline" as "already stopped, nothing
     # to do" — clearing BOTH flags. Once the port cross-check began answering "offline" for a
@@ -2487,6 +2550,11 @@ try:
         return j, _row_status, False
 
     _ij_saved, _ij_calls, _ij_state = {}, [], {"started": False}
+    _ij_verbs = []
+
+    def _ij_priv(server, verb, args=(), *a, **k):
+        _ij_verbs.append((verb, list(args)))
+        return ("freed=0 held=0 slots=10", "", 0)
 
     def _ij_stub(mod, name, fn):
         _ij_saved[(mod, name)] = getattr(mod, name)
@@ -2523,7 +2591,7 @@ try:
         _ij_stub(_sm_core, "create_game_user", lambda *a, **k: ("", "", 0))
         _ij_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
         _ij_stub(_sm_core, "run_as_game_user", _ij_run_as)
-        _ij_stub(_sm_core, "run_privileged", lambda *a, **k: ("freed=0 held=0 slots=10", "", 0))
+        _ij_stub(_sm_core, "run_privileged", _ij_priv)
         _ij_stub(_ij_game, "list_server_commands", lambda *a, **k: ["start", "stop", "monitor"])
         _ij_stub(_ij_ps, "_invalidate_port_scan", lambda *a, **k: None)
         _ij_stub(_msmod, "_looks_installed", lambda *a, **k: True)
@@ -2534,7 +2602,8 @@ try:
         _ij_stub(_msmod, "ensure_persistent_bans", lambda *a, **k: None)
         _ij_stub(_msmod, "sm_game_engine", lambda *a, **k: "source")
         _ij_stub(_msmod, "set_autostart", lambda *a, **k: (True, ""))
-        _ij_stub(_msmod, "remote_ufw_close_game_port", lambda *a, **k: None)
+        # remote_ufw_close_game_port is left REAL: the adoption below leaves 28990, and what it
+        # sends the host for that is checked verb by verb.
         _ij_stub(_msmod, "_remote_listening_ports", _ij_ports)
         _ij_stub(_msmod, "remote_ufw_allow_game_ports",
                  lambda r, ports, name: _ij_calls.append(("ufw_allow", tuple(sorted(ports)))))
@@ -2581,6 +2650,13 @@ try:
             _ij_opened = [c2 for c2 in _ij_calls if c2[0] == "ufw_allow"]
             check("install job: ...and opened the reported ports in the firewall",
                   any(28991 in c2[1] for c2 in _ij_opened), "ufw calls: %s | %s" % (_ij_opened, _why_job))
+            # Aikido 745379215. Leaving 28990 ran `ufw delete allow 28990` and the proto tcp/udp
+            # pair with no comment — every ALLOW on the port, whoever's — on a port that, this
+            # early in a FRESH install, cannot hold a rule of this server's yet.
+            _ij_deletes = [v for v in _ij_verbs if v[0].startswith("ufw-delete")]
+            check("install job: ...and leaving the allocated port deleted NO firewall rule — "
+                  "nothing on it was this new server's",
+                  _ij_deletes == [], "delete verbs: %r | %s" % (_ij_deletes, _why_job))
             with app.app_context():
                 _d = db.session.get(GameServer, _ij_id)
                 if _d is not None:
@@ -2589,6 +2665,59 @@ try:
                 _install_jobs_sm.pop(_ij_id, None)
     finally:
         for (_m, _n), _v in _ij_saved.items():
+            setattr(_m, _n, _v)
+
+    # ── a port scan that could not be read allocates NO port (Aikido 745379002) ────────────────
+    # resolve_free_port read a failed scan as "nothing is listening" (`or ()`, over a comment
+    # saying the install "then fails with a clear error" — it did not): the port it offered was
+    # opened at step 6 with no second look when the game reported it, under the new server's name,
+    # in front of whatever was already listening there. The tailscale and local transports do not
+    # raise on a timeout; they return ("", "…timed out", -1), which is what `ss` answers here.
+    _su_saved, _su_ss, _su_allow = {}, [], []
+
+    def _su_stub(mod, name, fn):
+        _su_saved[(mod, name)] = getattr(mod, name)
+        setattr(mod, name, fn)
+
+    def _su_run(server, cmd, **k):
+        if "ss -H -lntu" in cmd:
+            _su_ss.append(1)
+            return ("", "SSH command timed out", -1)
+        return ("", "", 0)
+
+    try:
+        _su_stub(_sm_core, "get_connection",
+                 lambda *a, **k: (_ for _ in ()).throw(AssertionError("a real SSH connection")))
+        _su_stub(_sm_core, "run_command", _su_run)
+        _su_stub(_msmod, "host_account_state", lambda *a, **k: "absent")
+        _su_stub(_msmod, "remote_ufw_allow_game_ports",
+                 lambda r, ports, name: (_su_allow.append(list(ports)), ([], ""))[1])
+        _ij_ps._port_scan_cache.clear()
+        _su_r = c.post("/servers/add", data={"remote_id": str(_cg_remote_id), "game_type": "gmod",
+                                             "server_name": "scanfail", "port": "28980"},
+                       headers={"X-Requested-With": "XMLHttpRequest"})
+        with app.app_context():
+            _su_row = GameServer.query.filter_by(short_name="scanfail").first()
+            _su_row_id = _su_row.id if _su_row is not None else None
+        check("install: a port scan that twice could not be read creates no server — it is "
+              "refused, naming the host",
+              _su_r.status_code == 400 and _su_row_id is None
+              and "can't check which ports are free" in ((_su_r.get_json() or {}).get("message") or ""),
+              "status=%d body=%r row=%r" % (_su_r.status_code, _su_r.get_json(), _su_row_id))
+        check("install: ...after one fresh second look, and with nothing sent to the firewall",
+              len(_su_ss) == 2 and _su_allow == [], "scans=%d opened=%r" % (len(_su_ss), _su_allow))
+        _su_fp = c.get("/api/free-port?remote_id=%d&desired=28980&game=gmod" % _cg_remote_id)
+        check("free-port: ...and the install form's hint is 'no suggestion', not a 500",
+              _su_fp.status_code == 200 and (_su_fp.get_json() or {}).get("port") is None,
+              "status=%d body=%r" % (_su_fp.status_code, _su_fp.get_json()))
+        if _su_row_id is not None:
+            with app.app_context():
+                db.session.delete(db.session.get(GameServer, _su_row_id))
+                db.session.commit()
+            with _install_lock_sm:
+                _install_jobs_sm.pop(_su_row_id, None)
+    finally:
+        for (_m, _n), _v in _su_saved.items():
             setattr(_m, _n, _v)
 
     # ...and the branch where the reported port is ALREADY HELD by something that is not us.
@@ -13625,6 +13754,44 @@ try:
     finally:
         _rv_mod.detect_game_ports = _rv_detect
         _rv_mod.remote_ufw_allow_game_ports = _rv_allow
+
+    # ── sync-ports is a firewall write: MANAGE_REMOTES on the host, like every other (745379031) ─
+    # It accepted INSTALL_SERVER, so the stock "admin" group — install, manage and uninstall
+    # servers, NOT manage remotes — could put root-owned allow rules on a host's firewall, from
+    # ports `details` reads out of a config that group can edit through the file manager. Through
+    # the real route and real permissions, with the host calls stubbed.
+    _sp_saved = (_rv_mod.detect_game_ports, _rv_mod.remote_ufw_allow_game_ports,
+                 _sm_core.run_privileged)
+    try:
+        with app.app_context():
+            _apg = Group(name="smoke-admin-preset", description="", is_default=False)
+            _apg.set_permissions([auth.INSTALL_SERVER, auth.MANAGE_SERVERS, auth.UNINSTALL_SERVER])
+            _apg.servers.append(db.session.get(RemoteServer, remote_id))
+            db.session.add(_apg)
+            db.session.flush()
+            _apu = User(username="smoke_adminpreset", is_superadmin=False, is_active=True,
+                        password_hash=auth.hash_password("Str0ng!passw0rd"))
+            _apu.groups.append(_apg)
+            db.session.add(_apu)
+            db.session.commit()
+            _apu_id = _apu.id
+        _sp_opened = []
+        _rv_mod.detect_game_ports = lambda *a, **k: {"game_port": 27015, "open_ports": [27015],
+                                                     "ports": []}
+        _rv_mod.remote_ufw_allow_game_ports = lambda r, ports, name: (
+            _sp_opened.append(list(ports)), (list(ports), "opened"))[1]
+        _sm_core.run_privileged = lambda *a, **k: ("", "", 0)    # sshd's ports: none extra
+        _spa = client_as(_apu_id).post("/api/server/%d/sync-ports" % gs_id, json={})
+        check("sync-ports: the stock admin group (no MANAGE_REMOTES) is refused, and opens nothing",
+              _spa.status_code == 403 and _sp_opened == [],
+              "status=%d opened=%r" % (_spa.status_code, _sp_opened))
+        _spm = client_as(mru_id).post("/api/server/%d/sync-ports" % gs_id, json={})
+        check("sync-ports: ...while MANAGE_REMOTES on that host still syncs (positive control)",
+              _spm.status_code == 200 and (_spm.get_json() or {}).get("success") is True
+              and _sp_opened == [[27015]], "status=%d body=%r" % (_spm.status_code, _spm.get_json()))
+    finally:
+        (_rv_mod.detect_game_ports, _rv_mod.remote_ufw_allow_game_ports,
+         _sm_core.run_privileged) = _sp_saved
 
     # ── a validation regex is not silently truncated into a DIFFERENT one ─────────────────────
     # The pattern was compiled in full and then stored as arg_pattern[:200]. A cut does not always

@@ -33,7 +33,7 @@ from panel.core.http import (_form_err, _form_ok, _log_and_generic, _wants_json)
 from panel.core import terminal
 from panel.core.validation import (GAME_TYPE_RE, INSTANCE_NAME_RE, MAX_PORT, MIN_PORT,
     SAFE_LABEL_RE, _port_or)
-from app import (_extract_start_error, _log, _prune_jobs,
+from app import (PortScanUnreadable, _extract_start_error, _log, _port_span, _prune_jobs,
     _resolve_source_aux_ports, game_os_unsupported, load_game_list, resolve_free_port)
 from panel.routes._shared import (_looks_installed, _notify_servers_changed, _record_game_clock)
 
@@ -620,9 +620,19 @@ def _pick_install_port(remote, remote_id, desired_port, game_type):
     # is a normal condition for this panel, not a fault in it (see _unreachable's docstring,
     # which lists the sibling endpoints this was already true of); it just needs the form
     # shape rather than the JSON one. Caught here, before any row exists.
+    #
+    # The tailscale and local transports do not raise: a scan that timed out comes back as
+    # PortScanUnreadable, and gets the same answer — no port is free that nobody could look at.
+    # One more look first, on a fresh read, because a single timed-out `ss` on a busy host is
+    # common and refusing an install over it is not the kinder failure.
     try:
-        final_port, port_changed = resolve_free_port(remote, remote_id, desired_port,
-                                                     game_type)
+        try:
+            final_port, port_changed = resolve_free_port(remote, remote_id, desired_port,
+                                                         game_type)
+        except PortScanUnreadable:
+            _sm._invalidate_port_scan(remote_id)
+            final_port, port_changed = resolve_free_port(remote, remote_id, desired_port,
+                                                         game_type)
     except (ConnectionError, OSError):
         _log.warning("install: host %s unreachable while picking a port", remote.name)
         return None, False, _form_err("Can't reach %s right now, so the panel can't check which ports "
@@ -1186,7 +1196,8 @@ def _configure_and_start(job, remote, gs):
     _enable_autostart(job, remote, gs)
     start_step = _install_gmod_content(job, remote)
     started = _start_and_verify(job, remote, gs, start_step)
-    _reopen_runtime_ports(remote, job.short_name, gs, port_conflict, port_unchecked)
+    _reopen_runtime_ports(remote, job.short_name, gs, port_conflict, port_unchecked,
+                          getattr(job, "withheld", frozenset()))
     _report_install_outcome(job, gs, (port_conflict, port_unchecked), started)
 
 
@@ -1305,7 +1316,10 @@ def _open_game_ports(job, remote, gs):
     try:
         info = detect_game_ports(remote, short_name, gs.lgsm_name)
         real_port = info.get("game_port")
-        port_conflict, port_unchecked = _adopt_reported_port(job, remote, gs, real_port)
+        rows = GameServer.query.filter_by(remote_id=remote.id).all()
+        protected = _sm.protected_host_ports(remote)
+        port_conflict, port_unchecked = _adopt_reported_port(job, remote, gs, real_port,
+                                                             rows, protected)
         # Only open what this server is actually entitled to. On the conflict
         # branch the panel has just REFUSED the reported port, so opening
         # info["open_ports"] — which contains it — would hand a hole in the
@@ -1322,17 +1336,106 @@ def _open_game_ports(job, remote, gs):
             to_open = _open_ports_but(info, gs, port_unchecked)
         else:
             to_open = info.get("open_ports") or ([gs.port] if gs.port else [])
+        # ONE filter for every port this server opens, whichever branch chose it. Only the GAME
+        # port went through the adoption check above; the query port and the rest were opened
+        # as reported — and `details` runs as the game account, over a config that account can
+        # write. "Query 27016" (another server's port) re-tagged that server's rule as this one's,
+        # so uninstalling this one deleted it; "Query 22" opened SSH to the internet.
+        withheld = withheld_game_ports(rows, gs, protected)
+        to_open, port_conflict = _withhold(to_open, withheld, port_conflict)
+        # ...and a last look at what is listening, right before the firewall changes. The port
+        # was verified free when the install was asked for, 20 minutes of SteamCMD ago, and the
+        # adoption check does not scan again when the game reports that same port. Nothing of
+        # ours can be listening yet — the first start comes later — so whatever holds a port now
+        # is someone else, and opening it would hand them the hole under this server's name.
+        # A read that fails keeps the ports as chosen: a busy Tailscale host times this out
+        # routinely, and holding back every port of a new server over it is the worse failure.
+        live = _listening_now(remote)
+        if live is not None:
+            to_open, port_conflict = _withhold(
+                to_open, {p: "another process on this host" for p in live}, port_conflict)
+        job.withheld = frozenset(withheld) | frozenset(live or ())
         remote_ufw_allow_game_ports(remote, to_open, short_name)
     except Exception:
         _log.debug("_run: ignored non-fatal error", exc_info=True)
     return port_conflict, port_unchecked
 
 
-def _adopt_reported_port(job, remote, gs, real_port):
-    """Adopt the port LinuxGSM reports unless someone else holds it. -> (port_conflict, port_unchecked)."""
+# Who holds a port a game server may not have, when it is SSH's or the panel's own.
+_PROTECTED_HOLDER = "this host's SSH or the panel itself"
+
+
+def sibling_port_blocks(rows, gs):
+    """{port: name} for every port ANOTHER panel server among `rows` reserves: its whole block (its
+    game's span), because a stopped server still owns the ports it is configured for."""
+    held = {}
+    for e in rows:
+        if e.id == gs.id or not e.port:
+            continue
+        for k in range(_port_span(e.game_type)):
+            held.setdefault(e.port + k, e.name)
+    return held
+
+
+def withheld_game_ports(rows, gs, protected):
+    """{port: who holds it} for every port game server `gs` must never open, adopt or claim.
+
+    Each other panel server's block on the host (`rows` are that host's servers), and `protected`
+    — hosts.protected_host_ports: SSH and the panel. Used for every port a server may take: the
+    install's firewall step, its post-start re-read, and the Firewall page's "Open all ports".
+
+    Except `gs`'s OWN stored port from the first half: the panel allocated it, adopted it or
+    imported it, and two imported servers configured on one default port are an ordinary host
+    (only one of them runs). What `details` reports can move nothing onto it — the adoption and
+    the re-sync both refuse a port in this set — and a rule another server already holds on it is
+    left to that server by remote_ufw_allow_game_ports. SSH and the panel are refused regardless.
+    """
+    held = {p: "'%s' on this host" % n for p, n in sibling_port_blocks(rows, gs).items()
+            if p != gs.port}
+    for p in protected:
+        held[p] = _PROTECTED_HOLDER
+    return held
+
+
+def _withhold(to_open, holders, port_conflict):
+    """Drop every port `holders` ({port: who}) names from `to_open`. -> (to_open, port_conflict).
+
+    The first one dropped becomes the conflict to report when there is none yet, as a THREE-tuple:
+    the install says the server cannot be reached on that port, and the post-start re-read
+    does not open it either."""
+    dropped = [p for p in to_open if p in holders]
+    if dropped and not port_conflict:
+        port_conflict = (dropped[0], holders[dropped[0]], "held")
+    return [p for p in to_open if p not in holders], port_conflict
+
+
+def _listening_now(remote):
+    """The host's listening ports on a FRESH read, or None when it could not be read."""
+    _sm._invalidate_port_scan(remote.id)
+    try:
+        return _remote_listening_ports(remote)
+    except Exception:
+        _log.debug("install: the pre-open port scan failed", exc_info=True)
+        return None
+
+
+def _adopt_reported_port(job, remote, gs, real_port, rows=None, protected=None):
+    """Adopt the port LinuxGSM reports unless someone else holds it. -> (port_conflict, port_unchecked).
+
+    `rows` are the host's game servers and `protected` its SSH and panel ports (each read here
+    when not given): a reported port in another server's block, or on SSH, is refused like one
+    somebody is listening on."""
     short_name, lgsm_name = job.short_name, job.lgsm_name
     port_conflict = None
     port_unchecked = None
+    if rows is None:
+        rows = GameServer.query.filter_by(remote_id=remote.id).all()
+    if protected is None:
+        protected = _sm.protected_host_ports(remote)
+    if real_port and real_port != gs.port and real_port in protected:
+        _log.warning("install %s: %s reports port %s, which is %s — keeping %s and not "
+                     "adopting it", short_name, lgsm_name, real_port, _PROTECTED_HOLDER, gs.port)
+        return (real_port, _PROTECTED_HOLDER), None
     # Adopt the port LinuxGSM reports — but NOT one another server on this host
     # already reserves. resolve_free_port picked a genuinely free port at
     # request time; this step exists because auto-install uses the game's
@@ -1352,17 +1455,21 @@ def _adopt_reported_port(job, remote, gs, real_port):
     # cannot tell whose socket it is. Not adopting the port is what stops the
     # panel manufacturing that state.
     # See decide_port_adoption for why this is three answers and not two.
-    _panel_ports = {e.port: e.name
-                    for e in GameServer.query.filter_by(
-                        remote_id=remote.id).all()
-                    if e.id != gs.id and e.port}
+    #
+    # Each other server's whole BLOCK, not only its first port: a stopped Rust server on 28015
+    # still owns 28016, its query port, and adopting it points two servers at one socket.
+    _panel_ports = sibling_port_blocks(rows, gs)
     _adopt, _taken_by, _unreadable = decide_port_adoption(
         real_port, gs.port, _panel_ports,
         lambda: _remote_listening_ports(remote))
     if _adopt:
         old_port = gs.port; gs.port = real_port; db.session.commit()
+        # Only rules TAGGED with this server's name. The ports are opened after this step, so on
+        # a fresh install the port being left holds no rule of this server's at all; the untagged
+        # sweep this used to run there deleted whatever ALLOW the port had — an operator's, or a
+        # neighbour's rule the panel had not tagged.
         try:
-            remote_ufw_close_game_port(remote, old_port)
+            remote_ufw_close_game_port(remote, old_port, short_name)
         except Exception:
             _log.debug("_run: ignored non-fatal error", exc_info=True)
     elif _taken_by is not None:
@@ -1527,8 +1634,13 @@ def _poll_for_game_port(remote, gs):
     return really_up, scan_read
 
 
-def _reopen_runtime_ports(remote, short_name, gs, port_conflict, port_unchecked):
-    """Open any port that only showed up once the server ran. Best-effort; ufw allow is idempotent."""
+def _reopen_runtime_ports(remote, short_name, gs, port_conflict, port_unchecked,
+                          withheld=frozenset()):
+    """Open any port that only showed up once the server ran. Best-effort; ufw allow is idempotent.
+
+    `withheld` is every port step 6 found belonging to someone else — another server's block, SSH,
+    the panel, or a port something was already listening on before this server first started —
+    none of which it may open now either."""
     # Now that it's actually run once, re-read the ports and open any that only
     # become visible at runtime. A no-op for the static-config majority (step 6 already
     # opened them before start); future-proofs a game whose effective ports settle on
@@ -1553,6 +1665,7 @@ def _reopen_runtime_ports(remote, short_name, gs, port_conflict, port_unchecked)
             # because it could not read who has it, so it must not be re-opened
             # here under this server's name either. The rest of `extra` is fine.
             extra = [p for p in extra if p != port_unchecked]
+        extra = [p for p in extra if p not in withheld]
         if extra:
             remote_ufw_allow_game_ports(remote, extra, short_name)
     except Exception:
@@ -1567,7 +1680,18 @@ def _report_install_outcome(job, gs, ports, started):
     short_name, lgsm_name, _finish = job.short_name, job.lgsm_name, job.finish
     port_conflict, port_unchecked = ports
     really_up, s_rc, start_out = started
-    if port_conflict:
+    if port_conflict and len(port_conflict) > 2:
+        # A port the firewall step held back (see _withhold): another server's, SSH's, or one
+        # something was listening on before this server's first start. Not "this game ignores the
+        # panel's port" — here it may well be the port the panel chose.
+        _finish(f"{short_name} installed, but port {port_conflict[0]} is already used by "
+                f"{port_conflict[1]}, so the panel did not open it in the firewall. Free that "
+                f"port on the host, or change it in the game's own config (Files & Config).",
+                warn=True)
+        log_action(None, "install_complete", target=gs.name, success=False,
+                   detail=("port %s clashes with %s"
+                           % (port_conflict[0], port_conflict[1]))[:300])
+    elif port_conflict:
         # The files are there and LinuxGSM will keep reporting STARTED, so this is
         # not a failed install — but the server cannot serve anyone until the
         # clash is resolved, and saying nothing would leave someone staring at a
@@ -1659,7 +1783,6 @@ def _register_uninstall_and_edit(app):
             return _index_reply(_m, False, "warning", 409)
         remote = gs.remote
         short_name = gs.short_name
-        game_port = gs.port
         selfname = gs.lgsm_name
 
         try:
@@ -1672,7 +1795,7 @@ def _register_uninstall_and_edit(app):
 
             # Close ALL of this server's firewall rules (multi-port games tag every
             # rule with the server name), then also the legacy single-port cleanup.
-            fw_note = _close_game_firewall(remote, short_name, game_port)
+            fw_note = _close_game_firewall(remote, gs)
 
             # Remove LinuxGSM user and home.
             #
@@ -1751,10 +1874,13 @@ def _register_uninstall_and_edit(app):
         # was silently ignored rather than refused — and it put a port through _int_or, the parser
         # that carries no range. Any submitted port that is not exactly the stored one is refused.
         if new_port and new_port != str(gs.port):
+            # "Open all ports" is on the HOST's Firewall page, which takes Manage Remotes — this
+            # route's MANAGE_SERVERS does not reach it, so the sentence says who can.
             return _form_err(
                 "The port can't be changed here — it would only move the panel's record, leaving "
                 "the game server and the firewall on the old port. Change it in the server's "
-                "LinuxGSM config, then use 'Open all ports' on the Firewall page.",
+                "LinuxGSM config, then use 'Open all ports' on the host's Firewall page (or ask "
+                "someone who manages the host to).",
                 "manage_servers")
         name = (request.form.get("name") or gs.name or "").strip() or gs.name
         game_display = (request.form.get("game_display") or gs.game_display or "").strip()
@@ -1791,12 +1917,18 @@ def _stop_game_processes(remote, short_name, selfname):
         _log.debug("uninstall: pkill failed; proceeding to userdel", exc_info=True)
 
 
-def _close_game_firewall(remote, short_name, game_port):
+def _close_game_firewall(remote, gs):
     """Close every firewall rule this server holds. -> a note for the success message, or ""."""
     fw_note = ""
     try:
-        count, _ = remote_ufw_close_by_name(remote, short_name)
-        remote_ufw_close_game_port(remote, game_port)
+        count, _ = remote_ufw_close_by_name(remote, gs.short_name)
+        # Then an UNTAGGED allow on its game port — what a panel that did not tag its rules yet
+        # left — but only when no other server on the host has that port in its block: then the
+        # rule is at least as likely to be theirs. SSH and the panel's port are refused below it.
+        if gs.port and gs.port not in sibling_port_blocks(
+                GameServer.query.filter_by(remote_id=remote.id).all(), gs):
+            legacy, _ = remote_ufw_close_game_port(remote, gs.port, legacy=True)
+            count += legacy
         if count > 0:
             fw_note = f" {count} firewall rule(s) removed."
     except Exception:
