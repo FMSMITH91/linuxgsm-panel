@@ -35,7 +35,8 @@ def _resync_game_port(gs, info, withheld=()):
     Not a port in `withheld` (withheld_game_ports: another server's block, SSH, the panel). The
     report is `details` run as the game account, over a config that account can write, and the
     stored port is what every later firewall step, the monitor and the uninstall act on — "Game
-    22" made them all act on SSH. A refused port leaves the row as it was, and that is returned."""
+    22" made them all act on SSH. A refused port leaves the row as it was, and that is returned.
+    """
     gp = info.get("game_port")
     if gp and gp in withheld:
         return gs.port
@@ -43,6 +44,20 @@ def _resync_game_port(gs, info, withheld=()):
         gs.port = gp
         db.session.commit()
     return gp
+
+
+def _ports_to_sync(gs, info):
+    """Re-sync `gs`'s stored port from `info` and split its ports. -> (port, to_open, refused).
+
+    Refused: every reported port withheld_game_ports names — another server's block on the host,
+    SSH, the panel — which is neither stored on the row nor opened.
+    """
+    withheld = withheld_game_ports(GameServer.query.filter_by(remote_id=gs.remote_id).all(), gs,
+                                   _sm.protected_host_ports(gs.remote))
+    gp = _resync_game_port(gs, info, withheld)
+    wanted = info.get("open_ports") or ([gs.port] if gs.port else [])
+    return (gp, [p for p in wanted if p not in withheld],
+            sorted({p for p in wanted if p in withheld}))
 
 
 def _sync_ports_detail(opened, missed, refused=()):
@@ -55,8 +70,10 @@ def _sync_ports_detail(opened, missed, refused=()):
 
 
 def _sync_ports_message(opened, missed, refused=()):
-    """Word a port sync's result for the user: all opened, some opened, or none opened — and the
-    ports it would not open because they are another server's, SSH's or the panel's."""
+    """Word a port sync's result for the user: what opened, what did not, and what was refused.
+
+    Refused: the ports it would not open because another server, SSH or the panel has them.
+    """
     msg = (_sync_ports_plain_message(opened, missed) if (opened or missed or not refused)
            else "No ports were opened.")
     if refused:
@@ -448,13 +465,7 @@ def _register_game_ports(app):
             return jsonify({"success": False, "message": "Permission denied"}), 403
         try:
             info = detect_game_ports(gs.remote, gs.short_name, gs.lgsm_name)
-            withheld = withheld_game_ports(
-                GameServer.query.filter_by(remote_id=gs.remote_id).all(), gs,
-                _sm.protected_host_ports(gs.remote))
-            gp = _resync_game_port(gs, info, withheld)
-            wanted = info.get("open_ports") or ([gs.port] if gs.port else [])
-            refused = sorted({p for p in wanted if p in withheld})
-            to_open = [p for p in wanted if p not in withheld]
+            gp, to_open, refused = _ports_to_sync(gs, info)
             # Report what the firewall ACTUALLY took, not what was asked for. The return value
             # used to be discarded on the reasoning that "the firewall page reports a partially
             # applied rule set" — but this said "Ports 27015, 27016 opened." and wrote an audit
@@ -463,7 +474,7 @@ def _register_game_ports(app):
             opened, _ = remote_ufw_allow_game_ports(gs.remote, to_open, gs.short_name)
             opened = sorted(set(opened or []))
             missed = [p for p in to_open if p not in set(opened)]
-            ok = not missed and not refused
+            ok = not (missed or refused)
             log_action(current_user, "sync_ports", target=gs.name, success=ok,
                        detail=_sync_ports_detail(opened, missed, refused))
             msg = _sync_ports_message(opened, missed, refused)

@@ -1366,8 +1366,11 @@ _PROTECTED_HOLDER = "this host's SSH or the panel itself"
 
 
 def sibling_port_blocks(rows, gs):
-    """{port: name} for every port ANOTHER panel server among `rows` reserves: its whole block (its
-    game's span), because a stopped server still owns the ports it is configured for."""
+    """{port: name} for every port ANOTHER panel server among `rows` reserves.
+
+    Its whole block (its game's span), because a stopped server still owns the ports it is
+    configured for.
+    """
     held = {}
     for e in rows:
         if e.id == gs.id or not e.port:
@@ -1402,11 +1405,17 @@ def _withhold(to_open, holders, port_conflict):
 
     The first one dropped becomes the conflict to report when there is none yet, as a THREE-tuple:
     the install says the server cannot be reached on that port, and the post-start re-read
-    does not open it either."""
+    does not open it either.
+    """
     dropped = [p for p in to_open if p in holders]
     if dropped and not port_conflict:
         port_conflict = (dropped[0], holders[dropped[0]], "held")
     return [p for p in to_open if p not in holders], port_conflict
+
+
+def _ports_not_in(ports, skip):
+    """`ports` without any in `skip`, in order."""
+    return [p for p in ports if p not in skip]
 
 
 def _listening_now(remote):
@@ -1424,7 +1433,8 @@ def _adopt_reported_port(job, remote, gs, real_port, rows=None, protected=None):
 
     `rows` are the host's game servers and `protected` its SSH and panel ports (each read here
     when not given): a reported port in another server's block, or on SSH, is refused like one
-    somebody is listening on."""
+    somebody is listening on.
+    """
     short_name, lgsm_name = job.short_name, job.lgsm_name
     port_conflict = None
     port_unchecked = None
@@ -1640,7 +1650,8 @@ def _reopen_runtime_ports(remote, short_name, gs, port_conflict, port_unchecked,
 
     `withheld` is every port step 6 found belonging to someone else — another server's block, SSH,
     the panel, or a port something was already listening on before this server first started —
-    none of which it may open now either."""
+    none of which it may open now either.
+    """
     # Now that it's actually run once, re-read the ports and open any that only
     # become visible at runtime. A no-op for the static-config majority (step 6 already
     # opened them before start); future-proofs a game whose effective ports settle on
@@ -1665,7 +1676,7 @@ def _reopen_runtime_ports(remote, short_name, gs, port_conflict, port_unchecked,
             # because it could not read who has it, so it must not be re-opened
             # here under this server's name either. The rest of `extra` is fine.
             extra = [p for p in extra if p != port_unchecked]
-        extra = [p for p in extra if p not in withheld]
+        extra = _ports_not_in(extra, withheld)
         if extra:
             remote_ufw_allow_game_ports(remote, extra, short_name)
     except Exception:
