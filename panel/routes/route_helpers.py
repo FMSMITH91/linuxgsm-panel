@@ -108,25 +108,9 @@ def _register_setup_wizard(app):
         # is false for the whole wizard and true only once it has finished.
         if SetupState.query.filter_by(complete=True).first() is not None:
             return redirect(url_for("login"))
-        # Before the admin exists, only a browser that has shown the setup token — the printed
-        # link's ?token=, or the token page's field. The link's token is redirected out of the URL
-        # at once, so it does not stay in history, the address bar or a Referer.
-        if not _superadmin_exists():
-            _offered = (request.args.get("token") if request.method == "GET"
-                        else request.form.get("setup_token"))
-            if _offered is not None:
-                if claim_setup(_offered):
-                    return redirect("/setup")
-                _log.warning("setup wizard: a wrong setup token was offered")
-                return _setup_token_page(bad=True)
-            if not _setup_owner_ok():
-                # NOT the sign-in redirect below: before an admin exists check_setup sends /login
-                # straight back here, so that would loop forever.
-                return _setup_token_page(bad=False)
-        # ...and once the admin exists, only its creator (or a signed-in superadmin) may go on.
-        elif not _setup_owner_ok():
-            flash("Sign in as the administrator to finish setup.", "info")
-            return redirect(url_for("login", next="/setup"))
+        refused = _setup_gate()
+        if refused is not None:
+            return refused
 
         state = _setup_state()
         data = json.loads(state.data or "{}")
@@ -157,7 +141,8 @@ def _register_setup_wizard(app):
         Only after the wizard has finished, only for the browser that ran it (or a signed-in
         superadmin), and only while the running bind is public and the stored one is loopback —
         otherwise there is nothing to apply and it restarts nothing. Never automatic: an operator
-        on the public address, off the tailnet, would be cut off."""
+        on the public address, off the tailnet, would be cut off.
+        """
         if _setup_open() or not _setup_owner_ok():
             return redirect(url_for("login"))
         cfg = load_config()
@@ -223,9 +208,38 @@ def _register_setup_tailscale(app):
                         "url": (f"https://{info.dns_name}" if info.dns_name else None)})
 
 
+def _setup_gate():
+    """Who may drive the wizard now: None to go on, else the response that refuses the caller.
+
+    Before the admin exists, only a browser that has shown the setup token — the printed link's
+    ?token=, or the token page's field. The link's token is redirected out of the URL at once, so
+    it does not stay in history, the address bar or a Referer. Once the admin exists, only its
+    creator or a signed-in superadmin (_setup_owner_ok).
+    """
+    if not _superadmin_exists():
+        offered = (request.args.get("token") if request.method == "GET"
+                   else request.form.get("setup_token"))
+        if offered is not None:
+            if claim_setup(offered):
+                return redirect("/setup")
+            _log.warning("setup wizard: a wrong setup token was offered")
+            return _setup_token_page(bad=True)
+        if not _setup_owner_ok():
+            # NOT the sign-in redirect below: before an admin exists check_setup sends /login
+            # straight back to /setup, so that would loop forever.
+            return _setup_token_page(bad=False)
+        return None
+    if not _setup_owner_ok():
+        flash("Sign in as the administrator to finish setup.", "info")
+        return redirect(url_for("login", next="/setup"))
+    return None
+
+
 def _setup_token_page(bad):
-    """The page that asks for the setup token: 200 when it is simply not given yet, 403 when a wrong
-    one was, or when a step was posted without it."""
+    """The page that asks for the setup token.
+
+    200 when it is simply not given yet; 403 when a wrong one was, or a step was posted without it.
+    """
     status = 403 if (bad or request.method == "POST") else 200
     return render_template("setup_token.html", setup_mode=True, bad=bad), status
 
@@ -235,9 +249,11 @@ def _step_index(step):
 
 
 def _advance(state, step):
-    """Move the wizard forward to `step`, never back: re-posting an earlier step (Back, then submit)
-    must not return an install that already has its admin to the admin page, whose POST then
-    refuses — the owner would be stuck there."""
+    """Move the wizard forward to `step`, never back.
+
+    Re-posting an earlier step (Back, then submit) must not return an install that already has its
+    admin to the admin page, whose POST then refuses — the owner would be stuck there.
+    """
     if _step_index(step) > _step_index(state.step):
         state.step = step
 
@@ -258,7 +274,8 @@ def _setup_post(state, data, cfg):
     It dispatched on the posted step alone, so nothing made a caller walk the wizard in order:
     step=remote_server action=add made the panel test an SSH connection to a host of the caller's
     choosing before any admin existed. The token gate is what keeps strangers out; this keeps the
-    steps in order for everyone, so each step's own checks always ran first."""
+    steps in order for everyone, so each step's own checks always ran first.
+    """
     step = request.form.get("step", "welcome")
     if step not in _STEP_ORDER or _step_index(step) > _step_index(state.step):
         return redirect("/setup")
@@ -359,7 +376,8 @@ def _create_first_admin(state, data, username, password, email):
     this greenlet in tpool, so two concurrent POSTs both passed it and both made a superadmin
     (reproduced: ['attacker', 'operator'], one of them hidden). So: hash first, outside the lock,
     then re-check, insert and commit while holding it, with nothing in between that could hand the
-    hub to a second request that has not seen this row."""
+    hub to a second request that has not seen this row.
+    """
     password_hash = hash_password(password)
     with _ADMIN_CREATE_LOCK:
         if _superadmin_exists():
@@ -503,7 +521,8 @@ def _rebind_pending(cfg):
 
     The Serve step stores bind_host 127.0.0.1, but the bind is read only when the process starts,
     so until the next restart the panel keeps answering on its public address — and from then on
-    ONLY on the tailnet. False when the running bind is unknown (not started by app.py's main)."""
+    ONLY on the tailnet. False when the running bind is unknown (not started by app.py's main).
+    """
     running = current_app.config.get("_BOOT_BIND")
     stored = (cfg.get("bind_host") or "").strip()
     return bool(running and stored) and _bind_is_loopback(stored) and not _bind_is_loopback(running)

@@ -191,7 +191,8 @@ def cmd_setup_token(args):
     Until the first admin exists the wizard answers only to a browser that shows this token, so
     the operator — who can read this host's data dir — is the one who creates that admin, not
     whoever reaches the port first. The installer runs this and prints the link it makes. Refused
-    once setup has an administrator: from then on the token opens nothing, and it is deleted."""
+    once setup has an administrator: from then on the token opens nothing, and it is deleted.
+    """
     from app import _retire_setup_token, _setup_open, _superadmin_exists
     from panel.core.config import SETUP_TOKEN_FILE, ensure_setup_token
     with app.app_context():

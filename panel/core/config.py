@@ -246,7 +246,8 @@ def read_setup_token():
     """The current setup token, or "" when there is none (or it cannot be read).
 
     "" is never a token: the gate compares only when this is non-empty, so an unreadable file
-    locks the wizard rather than opening it."""
+    locks the wizard rather than opening it.
+    """
     try:
         return SETUP_TOKEN_FILE.read_text(encoding="ascii").strip()
     except (OSError, UnicodeError):
@@ -259,7 +260,8 @@ def ensure_setup_token():
     The file appears with its content already in it: written to a private temp file and then
     hard-linked into place, which fails when the name exists. So two creators at once (the service
     and `manage.py setup-token`, which the installer runs) agree on ONE token, and nobody ever reads
-    a half-written one. A file that exists but is empty or unreadable is replaced."""
+    a half-written one. A file that exists but is empty or unreadable is replaced.
+    """
     tok = read_setup_token()
     if tok:
         return tok

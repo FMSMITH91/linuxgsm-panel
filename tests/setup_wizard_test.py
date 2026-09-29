@@ -91,6 +91,16 @@ def check(name, cond, detail=""):
     results.append((bool(cond), name, detail))
 
 
+def _restore(path, snapshot):
+    """Put back the bytes a file held before the suite ran (nothing to do when it had none)."""
+    if snapshot is None:
+        return
+    try:
+        path.write_bytes(snapshot)
+    except OSError:
+        pass
+
+
 def cleanup():
     try:
         with app.app_context():
@@ -108,16 +118,8 @@ def cleanup():
                 p.unlink()
             except OSError:
                 pass
-    if _CONFIG_SNAPSHOT is not None:
-        try:
-            CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
-        except OSError:
-            pass
-    if _TOKEN_SNAPSHOT is not None:
-        try:
-            _TOKEN_FILE.write_bytes(_TOKEN_SNAPSHOT)
-        except OSError:
-            pass
+    _restore(CONFIG_FILE, _CONFIG_SNAPSHOT)   # undo our edits to someone else's config
+    _restore(_TOKEN_FILE, _TOKEN_SNAPSHOT)     # ...and to a setup token that was already there
 
 
 def superadmins():
@@ -184,7 +186,19 @@ _SSH_ADD = {"step": "remote_server", "action": "add", "name": "Probe box", "host
             "ssh_port": "22", "ssh_user": "root", "auth_method": "password", "credential": "pw"}
 
 
-try:
+
+# The wizard's four Tailscale endpoints. /up joins this host to the CALLER's tailnet with Tailscale
+# SSH on and returns them the login URL; /install runs the installer as root; /serve rewrites
+# bind_host; /status reads out the host's tailnet name and addresses.
+_TS_EPS = (("/api/setup/tailscale/status", "get"), ("/api/setup/tailscale/install", "post"),
+           ("/api/setup/tailscale/up", "post"), ("/api/setup/tailscale/serve", "post"))
+# Set by the checks below, read by the ones after them.
+c = _TOKEN = _paste = _retire = None
+
+
+def _check_unclaimed_wizard():
+    """Before an admin exists, a browser without the setup token gets the token page, nothing more."""
+    global c, _TOKEN
     # ── Before an admin exists, the wizard answers only to the setup token ────────────────────
     # It was open to anyone who reached the port until the operator submitted step 2 — and a
     # default install opens that port itself. Whoever got there first created the superadmin (root
@@ -229,11 +243,12 @@ try:
           load_config().get("port") != 5098 and superadmins() == [],
           "%s %s" % (load_config().get("port"), superadmins()))
 
-    # The four setup Tailscale endpoints, unclaimed. /up joins this host to the CALLER's tailnet
-    # with Tailscale SSH on, and returns them the login URL; /serve rewrites bind_host.
+
+
+def _check_unclaimed_tailscale():
+    """...and the setup Tailscale endpoints refuse it, CSRF or no CSRF."""
+    _anon = app.test_client()
     _bind_first = load_config().get("bind_host")
-    _TS_EPS = (("/api/setup/tailscale/status", "get"), ("/api/setup/tailscale/install", "post"),
-               ("/api/setup/tailscale/up", "post"), ("/api/setup/tailscale/serve", "post"))
     for _ep, _meth in _TS_EPS:
         rr = getattr(_anon, _meth)(_ep)
         check("token: an unclaimed caller is refused %s" % _ep, rr.status_code == 403,
@@ -254,6 +269,11 @@ try:
     check("token: ...and the bind address is unchanged", load_config().get("bind_host") == _bind_first,
           repr(load_config().get("bind_host")))
 
+
+
+def _check_claim():
+    """The printed link (or the pasted token) claims the wizard; the Tailscale step still waits."""
+    global _paste, _retire
     # The printed link claims the wizard for this browser, and the token leaves the URL at once
     # (history, Referer and the address bar would otherwise keep it).
     r = c.get("/setup?token=" + _TOKEN)
@@ -284,6 +304,161 @@ try:
         _retire()
     check("token: starting the panel before an admin exists keeps the token",
           _TOKEN_FILE.exists(), "the boot check deleted a token the operator still needs")
+
+
+def _check_step_order():
+    """At the admin step: the token still guards it, and the wizard follows its own step."""
+    # The real window: the operator has done step 1 and is filling in the admin form. The step
+    # order now allows admin_user, so only the token stands between a stranger and the account.
+    check("token: (precondition) the wizard is at the admin step", _wiz_step() == "admin_user",
+          _wiz_step())
+    r = app.test_client().post("/setup", data={"step": "admin_user", "username": "attacker",
+                                               "password": _ADMIN_PASSWORD,
+                                               "confirm_password": _ADMIN_PASSWORD})
+    check("token: while the operator is at the admin step, an unclaimed POST creates no superadmin",
+          superadmins() == [] and r.status_code == 403, "%d %s" % (r.status_code, superadmins()))
+
+    # ── The wizard follows its OWN step, not the one the form names ───────────────────────────
+    # The handler dispatched on the posted `step`, so step=remote_server action=add made the panel
+    # test an SSH connection to a host of the caller's choosing before any admin existed — a
+    # reachability oracle from this host, known_hosts writes, and a planted host row. A posted step
+    # AHEAD of the stored one is refused; an earlier one (a browser Back resubmit) still works.
+    check("order: (precondition) the wizard is at the admin step", _wiz_step() == "admin_user",
+          _wiz_step())
+    c.post("/setup", data=_SSH_ADD)
+    check("order: step=remote_server posted ahead of the wizard makes no SSH connection",
+          _ssh_calls == [] and _remote_names() == [], "%r %r" % (_ssh_calls, _remote_names()))
+    c.post("/setup", data={"step": "tailscale"})
+    check("order: step=tailscale posted ahead does not advance the wizard",
+          _wiz_step() == "admin_user", _wiz_step())
+    c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
+                           "port": "5052", "bind_host": "127.0.0.1"})
+    check("order: re-posting an earlier step works, and does not move the wizard backwards",
+          _wiz_step() == "admin_user" and load_config().get("port") == 5052, _wiz_step())
+
+
+def _check_admin_race():
+    """The first admin, created while a second claimed browser races it; the token then retires."""
+    # The happy path — raced by a second claimed browser. The superadmin-exists check ran BEFORE
+    # hash_password, which parks the greenlet in tpool under eventlet, so two concurrent POSTs both
+    # passed it and both created a superadmin (reproduced: ['attacker', 'operator']). A timing
+    # race would not reproduce here, so the interleaving is forced: the racer's hash runs the
+    # operator's whole POST re-entrantly, which is exactly what the hub can do between the two.
+    _racer = app.test_client()
+    _racer.get("/setup?token=" + _TOKEN)
+    _real_hash = _rh.hash_password
+    _race_fired = []
+
+    def _racing_hash(pw):
+        if not _race_fired:
+            _race_fired.append(1)
+            c.post("/setup", data={"step": "admin_user", "username": "firstadmin",
+                                   "password": _ADMIN_PASSWORD,
+                                   "confirm_password": _ADMIN_PASSWORD,
+                                   "email": "admin@example.com"})
+        return _real_hash(pw)
+    _rh.hash_password = _racing_hash
+    try:
+        _racer.post("/setup", data={"step": "admin_user", "username": "racer",
+                                    "password": _ADMIN_PASSWORD, "confirm_password": _ADMIN_PASSWORD})
+    finally:
+        _rh.hash_password = _real_hash
+    check("race: (control) the operator's POST really ran inside the racer's password hash",
+          _race_fired == [1], repr(_race_fired))
+    check("race: two admin_user POSTs interleaved create exactly ONE superadmin",
+          superadmins() == ["firstadmin"], str(superadmins()))
+    check("open: a valid step=admin_user creates the first superadmin",
+          superadmins() == ["firstadmin"], str(superadmins()))
+    check("token: the token file is deleted once the first admin exists",
+          not _TOKEN_FILE.exists(), "still on disk")
+    r = app.test_client().get("/setup?token=" + _TOKEN, follow_redirects=False)
+    check("token: the printed link, opened after the admin exists, does not reopen the wizard",
+          r.status_code in (301, 302, 303) and "/login" in (r.headers.get("Location") or ""),
+          "%d -> %s" % (r.status_code, r.headers.get("Location")))
+    r = _paste.get("/setup", follow_redirects=False)
+    check("token: a browser that claimed the token but did not create the admin is sent to sign in",
+          r.status_code in (301, 302, 303) and "/login" in (r.headers.get("Location") or ""),
+          "%d -> %s" % (r.status_code, r.headers.get("Location")))
+
+
+def _check_remote_step():
+    """Step 4's add-a-host form runs the Hosts page's checks before any connection."""
+    # ── Step 4: the first remote host is checked like the Hosts page's own add form ───────────
+    # The wizard stored auth_method straight from the form, and "local" is what makes
+    # is_local_server() treat a row as the PANEL HOST — so "Backup box" at 203.0.113.9 became a
+    # host the terminal and every panel-host refusal read as this machine. Refused before any
+    # connection, like a host that is not a hostname and a name the Hosts page would refuse.
+    for _label, _over in (("auth_method=local", {"name": "Backup box", "host": "203.0.113.9",
+                                                 "auth_method": "local"}),
+                          ("an unknown auth_method", {"name": "Odd box", "auth_method": "agent"}),
+                          ("a host that is not a hostname", {"name": "Bad host",
+                                                             "host": "-oProxyCommand=x"}),
+                          ("a name with markup", {"name": "<b>box</b>"}),
+                          ("an SSH user that is not a Linux user", {"name": "User box",
+                                                                    "ssh_user": "root;id"})):
+        _before_calls = len(_ssh_calls)
+        c.post("/setup", data=dict(_SSH_ADD, **_over))
+        check("remote step: %s is refused before any connection, and adds no host" % _label,
+              len(_ssh_calls) == _before_calls and _remote_names() == [],
+              "%d call(s), hosts %r" % (len(_ssh_calls) - _before_calls, _remote_names()))
+    # Positive control: an ordinary host, in order, as the owner, is tested and added.
+    c.post("/setup", data=dict(_SSH_ADD, name="Wizard box"))
+    check("remote step: the owner's in-order add still tests the connection and adds the host",
+          len(_ssh_calls) == 1 and _remote_names() == ["Wizard box"],
+          "%r %r" % (_ssh_calls, _remote_names()))
+    with app.app_context():
+        _wb = RemoteServer.query.filter_by(name="Wizard box").first()
+        check("remote step: ...as a remote, not the panel host",
+              _wb is not None and _wb.auth_method == "password" and not _wb.is_local,
+              repr(_wb and (_wb.auth_method, _wb.is_local)))
+
+
+def _check_complete_page():
+    """Finishing shows the complete page, which says where the panel still answers."""
+    # ── Finishing: the complete page tells the truth about where the panel still answers ───────
+    # The Serve step stores bind_host 127.0.0.1, but the bind is read only at process start, so
+    # after the wizard the panel kept answering on its public bind until the next restart (and
+    # then, silently, only on the tailnet). The complete page said "Private tailnet — only your
+    # devices can reach it" the whole time. Nothing restarts on its own: an operator on the public
+    # address, off the tailnet, would be cut off mid-setup.
+    app.config["_BOOT_BIND"] = "0.0.0.0"  # nosec B104 - the bind this process "started" on
+    rr = c.post("/setup", data={"step": "remote_server", "action": "skip"})
+    _done_html = rr.get_data(as_text=True)
+    with app.app_context():
+        _done_state = SetupState.query.first()
+        check("complete: the last step completes setup", bool(_done_state and _done_state.complete))
+    check("complete: finishing shows the complete page", rr.status_code == 200
+          and "Setup Complete!" in _done_html, "%d %s" % (rr.status_code, _done_html[:80]))
+    check("complete: it says the panel still answers on its public bind until it restarts",
+          'id="rebind-notice"' in _done_html and "0.0.0.0:5052" in _done_html, _done_html[-600:])
+    check("complete: ...and makes no 'only your devices can reach it' claim while it does",
+          "Private tailnet" not in _done_html)
+    check("complete: ...and did NOT restart the panel by itself", _restarts == [], repr(_restarts))
+    # "Restart now" is the owner's explicit choice, and nobody else's.
+    rr = _att.post("/setup/restart")
+    check("complete: another browser cannot restart the panel", _restarts == [], repr(_restarts))
+    rr = c.post("/setup/restart")
+    check("complete: the owner's Restart now restarts the panel once",
+          _restarts == [1] and rr.status_code == 200, "%d %r" % (rr.status_code, _restarts))
+    # Once the running bind is the stored one there is nothing to apply, so no restart...
+    app.config["_BOOT_BIND"] = "127.0.0.1"
+    c.post("/setup/restart")
+    check("complete: with nothing to apply, Restart now does nothing", _restarts == [1],
+          repr(_restarts))
+    # ...and the private claim is back, because it is true now (positive control).
+    with app.test_request_context("/setup"):
+        _cp = getattr(_rh, "_complete_page", None)
+        _priv_html = _cp(load_config()) if _cp else ""
+    check("complete: on a loopback bind the page does say the tailnet URL is private",
+          "Private tailnet" in _priv_html and 'id="rebind-notice"' not in _priv_html,
+          _priv_html[-400:])
+    app.config.pop("_BOOT_BIND", None)
+
+
+try:
+    _check_unclaimed_wizard()
+    _check_unclaimed_tailscale()
+    _check_claim()
 
     # Any other path funnels into the wizard — until setup is done there are no users, so even
     # /login must not be reachable (it would be a login form with nothing to log into).
@@ -359,33 +534,7 @@ try:
     c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
                            "port": "5052", "bind_host": "127.0.0.1"})
 
-    # The real window: the operator has done step 1 and is filling in the admin form. The step
-    # order now allows admin_user, so only the token stands between a stranger and the account.
-    check("token: (precondition) the wizard is at the admin step", _wiz_step() == "admin_user",
-          _wiz_step())
-    r = app.test_client().post("/setup", data={"step": "admin_user", "username": "attacker",
-                                               "password": _ADMIN_PASSWORD,
-                                               "confirm_password": _ADMIN_PASSWORD})
-    check("token: while the operator is at the admin step, an unclaimed POST creates no superadmin",
-          superadmins() == [] and r.status_code == 403, "%d %s" % (r.status_code, superadmins()))
-
-    # ── The wizard follows its OWN step, not the one the form names ───────────────────────────
-    # The handler dispatched on the posted `step`, so step=remote_server action=add made the panel
-    # test an SSH connection to a host of the caller's choosing before any admin existed — a
-    # reachability oracle from this host, known_hosts writes, and a planted host row. A posted step
-    # AHEAD of the stored one is refused; an earlier one (a browser Back resubmit) still works.
-    check("order: (precondition) the wizard is at the admin step", _wiz_step() == "admin_user",
-          _wiz_step())
-    c.post("/setup", data=_SSH_ADD)
-    check("order: step=remote_server posted ahead of the wizard makes no SSH connection",
-          _ssh_calls == [] and _remote_names() == [], "%r %r" % (_ssh_calls, _remote_names()))
-    c.post("/setup", data={"step": "tailscale"})
-    check("order: step=tailscale posted ahead does not advance the wizard",
-          _wiz_step() == "admin_user", _wiz_step())
-    c.post("/setup", data={"step": "welcome", "site_title": "Test Panel",
-                           "port": "5052", "bind_host": "127.0.0.1"})
-    check("order: re-posting an earlier step works, and does not move the wizard backwards",
-          _wiz_step() == "admin_user" and load_config().get("port") == 5052, _wiz_step())
+    _check_step_order()
 
     # ── Step 2 validation: none of these may create an account ────────────────────────────────
     for _name, _form, _why in (
@@ -424,46 +573,8 @@ try:
     check("open: ...and the wizard is still reachable to finish properly",
           c.get("/setup").status_code == 200, "the wizard closed behind itself")
 
-    # The happy path — raced by a second claimed browser. The superadmin-exists check ran BEFORE
-    # hash_password, which parks the greenlet in tpool under eventlet, so two concurrent POSTs both
-    # passed it and both created a superadmin (reproduced: ['attacker', 'operator']). A timing
-    # race would not reproduce here, so the interleaving is forced: the racer's hash runs the
-    # operator's whole POST re-entrantly, which is exactly what the hub can do between the two.
-    _racer = app.test_client()
-    _racer.get("/setup?token=" + _TOKEN)
-    _real_hash = _rh.hash_password
-    _race_fired = []
+    _check_admin_race()
 
-    def _racing_hash(pw):
-        if not _race_fired:
-            _race_fired.append(1)
-            c.post("/setup", data={"step": "admin_user", "username": "firstadmin",
-                                   "password": _ADMIN_PASSWORD,
-                                   "confirm_password": _ADMIN_PASSWORD,
-                                   "email": "admin@example.com"})
-        return _real_hash(pw)
-    _rh.hash_password = _racing_hash
-    try:
-        _racer.post("/setup", data={"step": "admin_user", "username": "racer",
-                                    "password": _ADMIN_PASSWORD, "confirm_password": _ADMIN_PASSWORD})
-    finally:
-        _rh.hash_password = _real_hash
-    check("race: (control) the operator's POST really ran inside the racer's password hash",
-          _race_fired == [1], repr(_race_fired))
-    check("race: two admin_user POSTs interleaved create exactly ONE superadmin",
-          superadmins() == ["firstadmin"], str(superadmins()))
-    check("open: a valid step=admin_user creates the first superadmin",
-          superadmins() == ["firstadmin"], str(superadmins()))
-    check("token: the token file is deleted once the first admin exists",
-          not _TOKEN_FILE.exists(), "still on disk")
-    r = app.test_client().get("/setup?token=" + _TOKEN, follow_redirects=False)
-    check("token: the printed link, opened after the admin exists, does not reopen the wizard",
-          r.status_code in (301, 302, 303) and "/login" in (r.headers.get("Location") or ""),
-          "%d -> %s" % (r.status_code, r.headers.get("Location")))
-    r = _paste.get("/setup", follow_redirects=False)
-    check("token: a browser that claimed the token but did not create the admin is sent to sign in",
-          r.status_code in (301, 302, 303) and "/login" in (r.headers.get("Location") or ""),
-          "%d -> %s" % (r.status_code, r.headers.get("Location")))
     with app.app_context():
         _u = User.query.filter_by(username="firstadmin").first()
         check("open: the first admin is active and a superadmin",
@@ -538,73 +649,9 @@ try:
     check("open: step=admin_user refuses once a superadmin exists",
           superadmins() == ["firstadmin"], str(superadmins()))
 
-    # ── Step 4: the first remote host is checked like the Hosts page's own add form ───────────
-    # The wizard stored auth_method straight from the form, and "local" is what makes
-    # is_local_server() treat a row as the PANEL HOST — so "Backup box" at 203.0.113.9 became a
-    # host the terminal and every panel-host refusal read as this machine. Refused before any
-    # connection, like a host that is not a hostname and a name the Hosts page would refuse.
-    for _label, _over in (("auth_method=local", {"name": "Backup box", "host": "203.0.113.9",
-                                                 "auth_method": "local"}),
-                          ("an unknown auth_method", {"name": "Odd box", "auth_method": "agent"}),
-                          ("a host that is not a hostname", {"name": "Bad host",
-                                                             "host": "-oProxyCommand=x"}),
-                          ("a name with markup", {"name": "<b>box</b>"}),
-                          ("an SSH user that is not a Linux user", {"name": "User box",
-                                                                    "ssh_user": "root;id"})):
-        _before_calls = len(_ssh_calls)
-        c.post("/setup", data=dict(_SSH_ADD, **_over))
-        check("remote step: %s is refused before any connection, and adds no host" % _label,
-              len(_ssh_calls) == _before_calls and _remote_names() == [],
-              "%d call(s), hosts %r" % (len(_ssh_calls) - _before_calls, _remote_names()))
-    # Positive control: an ordinary host, in order, as the owner, is tested and added.
-    c.post("/setup", data=dict(_SSH_ADD, name="Wizard box"))
-    check("remote step: the owner's in-order add still tests the connection and adds the host",
-          len(_ssh_calls) == 1 and _remote_names() == ["Wizard box"],
-          "%r %r" % (_ssh_calls, _remote_names()))
-    with app.app_context():
-        _wb = RemoteServer.query.filter_by(name="Wizard box").first()
-        check("remote step: ...as a remote, not the panel host",
-              _wb is not None and _wb.auth_method == "password" and not _wb.is_local,
-              repr(_wb and (_wb.auth_method, _wb.is_local)))
+    _check_remote_step()
 
-    # ── Finishing: the complete page tells the truth about where the panel still answers ───────
-    # The Serve step stores bind_host 127.0.0.1, but the bind is read only at process start, so
-    # after the wizard the panel kept answering on its public bind until the next restart (and
-    # then, silently, only on the tailnet). The complete page said "Private tailnet — only your
-    # devices can reach it" the whole time. Nothing restarts on its own: an operator on the public
-    # address, off the tailnet, would be cut off mid-setup.
-    app.config["_BOOT_BIND"] = "0.0.0.0"  # nosec B104 - the bind this process "started" on
-    rr = c.post("/setup", data={"step": "remote_server", "action": "skip"})
-    _done_html = rr.get_data(as_text=True)
-    with app.app_context():
-        _done_state = SetupState.query.first()
-        check("complete: the last step completes setup", bool(_done_state and _done_state.complete))
-    check("complete: finishing shows the complete page", rr.status_code == 200
-          and "Setup Complete!" in _done_html, "%d %s" % (rr.status_code, _done_html[:80]))
-    check("complete: it says the panel still answers on its public bind until it restarts",
-          'id="rebind-notice"' in _done_html and "0.0.0.0:5052" in _done_html, _done_html[-600:])
-    check("complete: ...and makes no 'only your devices can reach it' claim while it does",
-          "Private tailnet" not in _done_html)
-    check("complete: ...and did NOT restart the panel by itself", _restarts == [], repr(_restarts))
-    # "Restart now" is the owner's explicit choice, and nobody else's.
-    rr = _att.post("/setup/restart")
-    check("complete: another browser cannot restart the panel", _restarts == [], repr(_restarts))
-    rr = c.post("/setup/restart")
-    check("complete: the owner's Restart now restarts the panel once",
-          _restarts == [1] and rr.status_code == 200, "%d %r" % (rr.status_code, _restarts))
-    # Once the running bind is the stored one there is nothing to apply, so no restart...
-    app.config["_BOOT_BIND"] = "127.0.0.1"
-    c.post("/setup/restart")
-    check("complete: with nothing to apply, Restart now does nothing", _restarts == [1],
-          repr(_restarts))
-    # ...and the private claim is back, because it is true now (positive control).
-    with app.test_request_context("/setup"):
-        _cp = getattr(_rh, "_complete_page", None)
-        _priv_html = _cp(load_config()) if _cp else ""
-    check("complete: on a loopback bind the page does say the tailnet URL is private",
-          "Private tailnet" in _priv_html and 'id="rebind-notice"' not in _priv_html,
-          _priv_html[-400:])
-    app.config.pop("_BOOT_BIND", None)
+    _check_complete_page()
 
     # ── Once setup is COMPLETE, the wizard is permanently locked ──────────────────────────────
     mark_setup_complete()
