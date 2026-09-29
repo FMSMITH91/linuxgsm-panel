@@ -88,9 +88,66 @@ for _attr, _fns in _WATCHED.items():
 # gate below can tell a part left off this list from one that ran.
 _PARTS = ("part01", "part02", "part03", "part04", "part05", "part06", "part07", "part08", "part09",
           "part10", "part11", "part12", "part13", "part14", "part15")
+
+
+# ── what each part leaves in the eventlet hub ────────────────────────────────────────────────────
+# Between two parts nothing of the suite's is waiting on anything, so the hub should hold exactly
+# one listener: eventlet tpool's own socket. Anything else was left by the part just run — a
+# listener a failed wait never removed, an IOClosed still queued to be thrown into whatever waits
+# next, or a greenthread still blocked on a socket. part01's check() sweeps for the first two at
+# every check (a leak and its victim can sit inside one part, where this cannot see them); this
+# catches what outlives a part, a stuck greenthread included, and never touches it.
+def _hub_leftovers():
+    """What the hub holds besides tpool's socket, as text; None when there is no hub to read."""
+    hubs = sys.modules.get("eventlet.hubs")
+    hub = getattr(getattr(hubs, "_threadlocal", None), "hub", None)
+    if hub is None:
+        return None
+    rsock = getattr(sys.modules.get("eventlet.tpool"), "_rsock", None)
+    tpool_fd = rsock.fileno() if rsock is not None else None
+
+    def _whose(ls):
+        g = ls.greenlet
+        if g.dead or g.parent is None:
+            return "a dead greenlet" if g.dead else "the suite's own greenlet"
+        # A started greenlet has no `run` left to name; its outermost frame is what it was spawned
+        # with — for an eventlet GreenThread, GreenThread.main, holding the spawned `function`.
+        f = g.gr_frame
+        while f is not None and f.f_back is not None:
+            f = f.f_back
+        fn = f.f_locals.get("function") if f is not None else None
+        code = getattr(f, "f_code", None)
+        return "a greenthread running %s" % (
+            getattr(fn, "__qualname__", None) or getattr(code, "co_qualname", None)
+            or getattr(code, "co_name", "?"))
+    left =["%s listener on fd %d, for %s" % (ev, fd, _whose(ls))
+            for ev, bucket in hub.listeners.items() for fd, ls in bucket.items() if fd != tpool_fd]
+    left += ["%s secondary listener on fd %d, for %s" % (ev, fd, _whose(ls))
+             for ev, bucket in hub.secondaries.items() for fd, waiting in bucket.items()
+             for ls in waiting]
+    left += ["IOClosed queued for fd %d, for %s" % (ls.fileno, _whose(ls)) for ls in hub.closed]
+    return left
+
+
+_hub_after = []
 for _part in _PARTS:
     importlib.import_module("unit." + _part)
-from unit.part01 import check, results  # noqa: E402
+    _hub_after.append((_part, _hub_leftovers()))
+from unit.part01 import check, results, hub_leaks, hub_swept  # noqa: E402
+
+_hub_first_after = {}      # each leftover once, with the part it first outlived
+for _part, _left in _hub_after:
+    for _item in (["no eventlet hub to read (is the suite still monkey-patched?)"]
+                  if _left is None else _left):
+        _hub_first_after.setdefault(_item, _part)
+check("unit suite: every part leaves the eventlet hub holding only tpool's own socket",
+      all(left == [] for _, left in _hub_after),
+      "; ".join("%s, first after %s" % kv for kv in _hub_first_after.items()))
+check("unit suite: no check leaves the eventlet hub a listener or IOClosed for a greenlet not "
+      "waiting on it",
+      hub_swept[0] > 0 and not hub_leaks,
+      "no check() found an eventlet hub to sweep" if not hub_swept[0]
+      else "%d found, first at: %s" % (len(hub_leaks), "; ".join(hub_leaks[:5])))
 
 check("suites: no unit check reads or writes the machine's own config.json or keys",
       not _config_touches,
