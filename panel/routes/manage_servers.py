@@ -6,7 +6,7 @@ import functools
 from types import SimpleNamespace
 from flask import (flash, jsonify, redirect, render_template, request, url_for)
 from flask_login import (current_user, login_required)
-from panel.core.panel_state import (_game_backup_status, _install_jobs, _install_lock)
+from panel.core.panel_state import (_install_jobs, _install_lock, forget_rows)
 from panel.db.models import (GameServer, RemoteServer, db)
 from panel.ops import (backup as bk)
 from panel.services import (lgsm_data)
@@ -1967,15 +1967,16 @@ def _close_game_firewall(remote, gs):
 
 
 def _forget_game_server(server_id):
-    """Drop a removed server's backup schedule, backup status and install job. Best-effort."""
+    """Drop a removed server's backup schedule and every in-memory entry keyed by its id."""
+    # FIRST, and outside the try below: the schedule removal writes config.json and can raise,
+    # which used to skip everything after it. The row id is handed to the next server created, and
+    # each of these would answer for it with THIS one's state — /install-status with its outcome,
+    # /api/console with its backlog (a Steam login in an update's output), and the console poller
+    # would tail its action log on the new server's host. The monitor also prunes them, a minute
+    # later; the INSERT that takes the id does as well (models.py).
+    forget_rows(server_ids=(server_id,))
     try:
         bk.remove_game_schedule(server_id)
-        _game_backup_status.pop(server_id, None)
-        # ...and this server's install job. Same reason as the schedule beside it: the row
-        # id is handed to the next server created, and /install-status would answer for it
-        # with THIS one's outcome. The monitor sweep also prunes it, one pass later.
-        with _install_lock:
-            _install_jobs.pop(server_id, None)
     except Exception:
         _log.debug("uninstall: schedule cleanup failed", exc_info=True)
 

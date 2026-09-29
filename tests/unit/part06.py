@@ -6947,7 +6947,9 @@ check("suites: no check() hands its reporter something that is not a string",
 # Anything else fails, and the fix is shlex.quote() — not an exemption.
 import ast as _sh_ast
 
-_SHELL_RUNNERS = {"_run"}
+# _run_verb_shell is system_ops' capped runner for the pre-helper verb form (it replaced _run at
+# that one call site so the output is bounded) — shell=True like _run, so held to the same rule.
+_SHELL_RUNNERS = {"_run", "_run_verb_shell"}
 
 
 def _literal_names(fn):

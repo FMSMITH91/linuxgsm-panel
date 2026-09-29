@@ -1640,6 +1640,36 @@ def _p7_sp_run(log, result=None, exc=None):
     return _r
 
 
+def _p7_sp_popen(log, out=b"", err=b"", rc=0, exc=None, hang=False):
+    """A subprocess.Popen stub for _run_verb's capped reader.
+
+    Records (argv, kwargs) and each wait()'s timeout; raises `exc` from the constructor, or hands
+    back a process whose pipes hold `out` / `err` and whose wait() answers `rc` — or runs out of
+    time, when `hang`.
+    """
+    class _P7Proc:
+        pid = -1
+
+        def __init__(self, argv, *a, **kw):
+            log.append((argv, kw))
+            if exc is not None:
+                raise exc
+            self.stdout, self.stderr, self.stdin = _p7_io.BytesIO(out), _p7_io.BytesIO(err), None
+
+        def wait(self, timeout=None):
+            log.append(("wait", timeout))
+            if hang:
+                raise _p7_sp.TimeoutExpired("verb", timeout)
+            return rc
+
+        def kill(self):
+            return None
+
+        def communicate(self, timeout=None):
+            return b"", b""
+    return _P7Proc
+
+
 def _p7_open_with(files, missing_raises=OSError):
     """Build an `open` for system_ops that answers the listed paths from `files`.
 
@@ -1669,23 +1699,26 @@ def _so7_setup():
 
 def _so7_run_verb_three_ways():
     # ── _run_verb: the three ways a command fails come back as values, never exceptions
-    global _exc
     _sv = []
     SO._helper_present = lambda: False
     SO.os = _Over(os, geteuid=lambda: 0)                        # root: the tool runs directly
+    # Popen, read through the transports' capped reader (see _collect_verb_output), not
+    # subprocess.run: capture_output kept every byte a verb printed.
     SO.subprocess = _Over(_so7_saved["subprocess"],
-                          run=_p7_sp_run(_sv, _p7_sp.CompletedProcess([], 3, "out\n", "err\n")))
+                          Popen=_p7_sp_popen(_sv, b"out\n", b"err\n", 3))
     _v_merged = SO._run_verb("ufw-status", ["verbose"], timeout=9)
     _v_split = SO._run_verb("ufw-status", ["verbose"], timeout=9, merge_stderr=False)
+    _sv_runs = [(a, k) for a, k in _sv if a != "wait"]
     check("so/_run_verb as root: runs the tool's own argv, no shell, stdin closed",
-          [a for a, _k in _sv] == [["ufw", "status", "verbose"]] * 2
-          and _sv[0][1].get("shell") is False and _sv[0][1].get("stdin") == _p7_sp.DEVNULL
-          and _sv[0][1].get("timeout") == 9, repr(_sv[:1]))
+          [a for a, _k in _sv_runs] == [["ufw", "status", "verbose"]] * 2
+          and _sv_runs[0][1].get("shell") is False
+          and _sv_runs[0][1].get("stdin") == _p7_sp.DEVNULL
+          and [k for a, k in _sv if a == "wait"] == [9, 9], repr(_sv[:2]))
     eq("so/_run_verb: stderr is merged into stdout by default, kept apart on request",
        (_v_merged, _v_split), (("out\nerr", "", 3), ("out", "err", 3)))
     _v_fail = []
-    for _exc in (_p7_sp.TimeoutExpired("ufw", 9), FileNotFoundError("ufw"), OSError("EIO")):
-        SO.subprocess = _Over(_so7_saved["subprocess"], run=_p7_sp_run([], exc=_exc))
+    for _pk in ({"hang": True}, {"exc": FileNotFoundError("ufw")}, {"exc": OSError("EIO")}):
+        SO.subprocess = _Over(_so7_saved["subprocess"], Popen=_p7_sp_popen([], **_pk))
         _v_fail.append(_p7_call(SO._run_verb, "ufw-status", ["verbose"]))
     eq("so/_run_verb: timeout, a missing tool and any other error each come back as rc -1",
        _v_fail, [("", "Command timed out", -1), ("", "Command not found", -1),

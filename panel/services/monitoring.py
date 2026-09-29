@@ -29,7 +29,7 @@ from panel.db.models import GameServer, HostSample, MetricSample, RemoteServer, 
 from panel.core.panel_state import (
     _cron_restart_pending, _expected_offline, _max_players_cache, _monitor_state,
     _player_counts, _reboot_when_empty, _rwe_lock, _server_full_alerted, _server_peak_notified,
-    keyed_state_with_locks,
+    forget_rows, keyed_state_with_locks,
 )
 from panel.ops.ssh_manager import (
     _remote_listening_ports, game_map, host_live_metrics, lgsm_get_values, metrics_for_game,
@@ -805,8 +805,8 @@ def _forget_deleted_rows(remote_ids, server_ids):
     to RENDER a server's page, so a recycled id showed the new server the previous one's backup
     outcome, or a content install frozen at "running". They are registered at their declarations
     now (panel_state.register_server_state / register_remote_state), and this walks the registry.
-    A map that is deliberately NOT pruned here — _os_update_state, which prunes itself inside the
-    sweep — is now visibly unregistered rather than indistinguishable from one that was forgotten.
+    The OS-update sweep's arming counts (_os_update_state["hosts"]) are registered too: the sweep
+    prunes them itself, but only against ids no row holds, which a recycled id never is.
 
     #85's snapshot (_os_update_seen) is registered even though the sweep also prunes it: it is read
     on every page load by /api/os-updates/summary, so a deleted host would otherwise linger in the
@@ -814,15 +814,21 @@ def _forget_deleted_rows(remote_ids, server_ids):
     its name and package count show to whoever can access the NEW host. Both are idempotent.
     """
     server_maps, remote_maps = keyed_state_with_locks()
+    gone = []
     for entries, live in ((remote_maps, remote_ids), (server_maps, server_ids)):
+        dead = set()
         for m, lock in entries:
             # Under the map's own lock where it has one — _install_jobs and _bootstrap_jobs are
             # written from request handlers and job threads that only ever touch them locked, and
             # this sweep runs on the monitor thread. Each of those locks covers a dict operation
             # and nothing else, so holding it here cannot stall the sweep.
             with lock if lock is not None else contextlib.nullcontext():
-                for gone in [k for k in m if k not in live]:
-                    m.pop(gone, None)
+                dead.update(k for k in m if k not in live)
+        gone.append(dead)
+    # The same forgetting the delete routes and every INSERT do, so an action-output entry dropped
+    # here is marked `forgotten` too — its worker may still be running, and must not announce its
+    # end into whatever server takes the id next.
+    forget_rows(remote_ids=gone[0], server_ids=gone[1])
 
 
 # How long PAST _EXPECT_OFFLINE_WINDOW a reboot the panel fires keeps its servers' "down" quiet. The

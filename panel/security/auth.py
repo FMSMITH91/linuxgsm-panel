@@ -1432,6 +1432,20 @@ def _session_binding_ok():
     return hmac.compare_digest(str(bound), fp)
 
 
+# The longest detail an audit row keeps. SQLite does not enforce a String(n) length, so every
+# column here held whatever the caller passed — and several callers pass request text (a console
+# command, a Pro service name): 5 MB per request was measured going straight into panel.db, with
+# no rate limit and audit retention off by default. The longest legitimate details are operation
+# messages that callers already cut to a few hundred characters.
+_AUDIT_DETAIL_MAX = 8192
+
+
+def _audit_cut(value, limit, marker=""):
+    """`value` as text, cut to `limit` characters (then `marker` appended) when longer."""
+    text = "" if value is None else str(value)
+    return text if len(text) <= limit else text[:limit] + marker
+
+
 def log_action(user, action, target="", detail="", success=True, actor=None, server=None,
                remote=None):
     """Write an audit log entry.
@@ -1445,13 +1459,16 @@ def log_action(user, action, target="", detail="", success=True, actor=None, ser
     superadmin only — never matched by name, because names are not unique: the same game on two
     hosts gets the same name by default, and a server could be renamed onto any target to read
     its rows (Aikido 745379041).
+
+    Every column is cut to its model's declared size, and the detail to _AUDIT_DETAIL_MAX — see
+    there for why that has to happen here and not in the callers.
     """
     entry = AuditLog(
         user_id=user.id if user else None,
-        username=actor if actor else (user.username if user else "system"),
-        action=action,
-        target=target,
-        detail=detail,
+        username=_audit_cut(actor if actor else (user.username if user else "system"), 80),
+        action=_audit_cut(action, 128),
+        target=_audit_cut(target, 255),
+        detail=_audit_cut(detail, _AUDIT_DETAIL_MAX, "…[truncated]"),
         ip_address=client_ip(),
         success=success,
         game_server_id=_audit_ref(GameServer, server),

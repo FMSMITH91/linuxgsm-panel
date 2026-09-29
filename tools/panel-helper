@@ -184,6 +184,11 @@ F2B_JAIL_LOCAL = "/etc/fail2ban/jail.local"
 # The fail2ban log family, current plus rotated. Fixed here — no part of it is ever
 # supplied by a caller, which is what makes reading them safe to do as root.
 F2B_LOG_GLOB = "/var/log/fail2ban.log*"
+# The most f2b-log-lines prints before it gives up (rc 3). One read chunk under the panel's own
+# transport ceiling (ssh_manager._core._MAX_OUTPUT_BYTES, 8 MB), which the callers treat as unread
+# at the same point — so the answer is refused here before a transport could cut it. Written out
+# because this file imports nothing from the panel; tests/unit ties the two together.
+F2B_LOG_MAX_BYTES = 8 * 1024 * 1024 - 65536
 
 # Where `tailscale up` streams while it waits for the operator to authorise the node. Fixed here so
 # the login-URL poll reads a path no caller chose.
@@ -3409,7 +3414,13 @@ def do_f2b_log_lines(args, content):
     Gzip is handled here rather than by zcat, so the only thing this verb can open is the fail2ban
     log family — the glob is fixed, and nothing about the path comes from the caller."""
     cutoff = args[0]
-    out = []
+    # STREAMED, and stopped at a ceiling. This used to append every matching line to a list and
+    # write the list at the end: a million-line log (IPv6 rotation defeats per-address bans, and
+    # sustaining the events needs no login) cost this root process 448 MB and the panel reading it
+    # 656 MB. The caller cannot use a partial tally anyway — the auto-block reconcile RELEASES any
+    # block that falls under the threshold — so past the ceiling this says so and exits 3, and the
+    # callers read that as "unread", exactly as they read the transport's own cap on remotes.
+    sent, sep = 0, ""
     for path in sorted(glob.glob(F2B_LOG_GLOB)):
         try:
             opener = gzip.open if path.endswith(".gz") else open
@@ -3419,7 +3430,14 @@ def do_f2b_log_lines(args, content):
                     # format is ISO-ish and fixed-width. Same comparison, same reason.
                     first = line.split(" ", 1)[0]
                     if first >= cutoff and F2B_EVENT_RE.search(line):
-                        out.append(line.rstrip("\n"))
+                        chunk = sep + line.rstrip("\n")
+                        sent += len(chunk.encode("utf-8", "replace"))
+                        if sent > F2B_LOG_MAX_BYTES:
+                            sys.stderr.write("f2b-log-lines: the log passed %d bytes; truncated, "
+                                             "so it must be treated as unread\n" % F2B_LOG_MAX_BYTES)
+                            return 3
+                        sys.stdout.write(chunk)
+                        sep = "\n"
         except FileNotFoundError:
             continue          # a rotated file that vanished mid-read; the others still count
         except OSError as e:
@@ -3433,7 +3451,6 @@ def do_f2b_log_lines(args, content):
             # fact — the handler turned "I could not look" into "there was nothing there".
             sys.stderr.write("could not read %s: %s\n" % (path, e))
             return 1
-    sys.stdout.write("\n".join(out))
     return 0
 
 

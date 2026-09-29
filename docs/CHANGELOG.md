@@ -1040,6 +1040,26 @@ CI-verified commit regardless of this file — this changelog is for humans.
   panel's common set does, or it is `steamcmd`. Anything else is refused, named in the result and
   logged. Package names must also end in a letter or digit, because `apt-get install foo-`
   *removes* `foo`.
+- **A new server or host no longer inherits a deleted one's state when SQLite reuses its id.**
+  SQLite hands a deleted row's id to the next row created, and the panel keyed per-server and
+  per-host state by that id: console backlog, install and action jobs, cached OS-update lists and
+  alert counts. A new server could replay the previous one's console, and its first update alert
+  could be swallowed. That state is now dropped when a row is deleted, and again when a row is
+  created. A host bootstrap whose id was taken mid-run no longer writes onto the host that took it.
+  If the taking host's first SSH contact is stalled, the stale worker no longer pins its own key
+  onto it or aims its remaining root steps there.
+- **Unbounded reads and rows are capped.**
+  - The fail2ban log read stops at 8 MB, and a tally cut short is shown as unread rather than as
+    a smaller count.
+  - The console backlog keeps each line under 2048 characters and the whole backlog under 256 KB,
+    without cutting a colour sequence in half. The live console is unchanged.
+  - Every audit column is capped at its declared size, and the detail at 8 KB. SQLite does not
+    enforce column sizes, so a megabyte console command went into `panel.db` whole.
+  - The Ubuntu Pro service endpoint refuses an unknown service or action before running or
+    auditing anything.
+- **Changing the panel's own port audits what really happened.** The row said success even when
+  the firewall or fail2ban step failed or the old port's rule stayed open. A failed restart now
+  gets its own row, and the failure reply includes the firewall outcome.
 - **A game server's account name can no longer carry a command** (GHSA-hh39-76g3-wxcx, reported by
   kta1kri). Twenty-five places built `sudo -u <account> bash -c '…'` from a server's account
   (`short_name`) and LinuxGSM script name with neither quoting nor a check — the dashboard's own

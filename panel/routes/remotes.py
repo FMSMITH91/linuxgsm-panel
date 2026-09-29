@@ -14,8 +14,8 @@ from panel.security.auth import (MANAGE_REMOTES, accessible_remote_ids, can_acce
 from panel.core.http import (_form_err, _form_ok, _json_body, _wants_json)
 from panel.core.validation import (EDITABLE_AUTH_METHODS, HOST_RE, LINUX_USER_RE, MAX_PORT,
     MIN_PORT, SAFE_LABEL_RE, _port_or)
-from panel.core.panel_state import (_install_jobs, _install_lock)
-from panel.routes._shared import (_begin_bootstrap, _bootstrap_jobs, _bootstrap_lock)
+from panel.core.panel_state import (forget_rows)
+from panel.routes._shared import (_begin_bootstrap)
 import logging
 
 _log = logging.getLogger("panel.routes.remotes")
@@ -34,12 +34,12 @@ def _forget_deleted_remote_state(remote_id, game_server_ids):
     per-row event ever fires for them. That is the same reason _forget_deleted_rows is driven off
     the live id sets instead of the delete routes. So the route clears what it knows it just
     deleted, and the sweep stays the backstop for everything that does not come through here.
+
+    EVERY registered map, not only the two job registries it used to name: a host's cached update
+    list and its servers' console backlogs are keyed the same way, and were served to whoever could
+    see the next host or server to take the id (the INSERT forgets them too; see models.py).
     """
-    with _install_lock:
-        for gid in game_server_ids:
-            _install_jobs.pop(gid, None)
-    with _bootstrap_lock:
-        _bootstrap_jobs.pop(remote_id, None)
+    forget_rows(remote_ids=(remote_id,), server_ids=tuple(game_server_ids))
 
 
 def _forget_deleted_remote_config(remote_id, game_server_ids):
