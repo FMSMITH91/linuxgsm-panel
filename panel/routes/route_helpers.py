@@ -2,19 +2,32 @@
 
 Moved out of register_routes() verbatim — see panel/routes/__init__.py for why.
 """
-from flask import (flash, jsonify, redirect, render_template, request, url_for)
+from flask import (current_app, flash, jsonify, redirect, render_template, request, url_for)
 from panel.core.clock import (utcnow)
-from panel.core.config import (encrypt_secret, load_config, save_config)
+from panel.core.config import (encrypt_secret, load_config, remove_setup_token, save_config)
 from panel.db.models import (Group, RemoteServer, SetupState, User, db)
-from panel.ops import (tailscale_integration as ts)
+from panel.ops import (system_ops as so, tailscale_integration as ts)
 from panel.ops.ssh_manager import (ssh_test_connection)
 from panel.security.auth import (hash_password)
 import json
 import os
+import threading
 from panel.core.validation import (MAX_PORT, MIN_PORT, MIN_UNPRIVILEGED_PORT,
     _port_or, bind_host_error, can_bind_address, password_problem)
-from app import (_current_lang, _log, _setup_open, _setup_owner_ok, _ts_backend_scheme,
-    is_setup_complete, issue_setup_owner_token)
+from panel.routes.remotes import (_add_remote_field_error, _add_remote_target_error)
+from app import (_bind_is_loopback, _current_lang, _log, _setup_open, _setup_owner_ok,
+    _setup_ts_ok, _superadmin_exists, _ts_backend_scheme, claim_setup, is_setup_complete,
+    issue_setup_owner_token)
+
+# The wizard's steps in the order it walks them. A POST naming a step AHEAD of the stored one is
+# refused (see _setup_post); an earlier one is a harmless Back-button resubmit.
+_STEP_ORDER = ("welcome", "admin_user", "tailscale", "remote_server")
+
+# Held from "is there a superadmin yet?" to the commit that creates one, so two admin_user POSTs
+# cannot both pass the check. Green under eventlet's monkey_patch (app.py patches before any panel
+# import), so a greenlet waiting on it parks rather than blocking the hub; the panel is one
+# process. The password is hashed BEFORE it is taken — bcrypt is the slow part, and it yields.
+_ADMIN_CREATE_LOCK = threading.Lock()
 
 
 def wizard_credential(auth_method, raw):
@@ -95,8 +108,23 @@ def _register_setup_wizard(app):
         # is false for the whole wizard and true only once it has finished.
         if SetupState.query.filter_by(complete=True).first() is not None:
             return redirect(url_for("login"))
+        # Before the admin exists, only a browser that has shown the setup token — the printed
+        # link's ?token=, or the token page's field. The link's token is redirected out of the URL
+        # at once, so it does not stay in history, the address bar or a Referer.
+        if not _superadmin_exists():
+            _offered = (request.args.get("token") if request.method == "GET"
+                        else request.form.get("setup_token"))
+            if _offered is not None:
+                if claim_setup(_offered):
+                    return redirect("/setup")
+                _log.warning("setup wizard: a wrong setup token was offered")
+                return _setup_token_page(bad=True)
+            if not _setup_owner_ok():
+                # NOT the sign-in redirect below: before an admin exists check_setup sends /login
+                # straight back here, so that would loop forever.
+                return _setup_token_page(bad=False)
         # ...and once the admin exists, only its creator (or a signed-in superadmin) may go on.
-        if not _setup_owner_ok():
+        elif not _setup_owner_ok():
             flash("Sign in as the administrator to finish setup.", "info")
             return redirect(url_for("login", next="/setup"))
 
@@ -122,12 +150,29 @@ def _register_setup_wizard(app):
         return render_template(tmpl, step=state.step, data=data, config=cfg, ts=ts_info,
                                setup_mode=True)
 
+    @app.route("/setup/restart", methods=["POST"])
+    def setup_restart():
+        """The complete page's "Restart now": apply a bind the wizard stored for the next start.
+
+        Only after the wizard has finished, only for the browser that ran it (or a signed-in
+        superadmin), and only while the running bind is public and the stored one is loopback —
+        otherwise there is nothing to apply and it restarts nothing. Never automatic: an operator
+        on the public address, off the tailnet, would be cut off."""
+        if _setup_open() or not _setup_owner_ok():
+            return redirect(url_for("login"))
+        cfg = load_config()
+        if not _rebind_pending(cfg):
+            flash("The panel already listens where its settings say — nothing to restart.", "info")
+            return redirect(url_for("login"))
+        ok, _msg = so.restart_panel()
+        return _complete_page(cfg, restarting=True, restart_ok=ok)
+
 
 def _register_setup_tailscale(app):
     """The wizard's Tailscale step: status, install, sign-in and Serve."""
     @app.route("/api/setup/tailscale/status")
     def api_setup_ts_status():
-        if not _setup_open() or not _setup_owner_ok():
+        if not _setup_ts_ok():
             return jsonify({"error": "forbidden"}), 403
         info = ts.get_tailscale_info(force_refresh=True)
         serve_url = next((s.get("url") for s in (info.serve_config or {}).get("services", [])), None)
@@ -140,14 +185,14 @@ def _register_setup_tailscale(app):
 
     @app.route("/api/setup/tailscale/install", methods=["POST"])
     def api_setup_ts_install():
-        if not _setup_open() or not _setup_owner_ok():
+        if not _setup_ts_ok():
             return jsonify({"error": "forbidden"}), 403
         ok, log = ts.install_tailscale_local()
         return jsonify({"success": ok, "log": log})
 
     @app.route("/api/setup/tailscale/up", methods=["POST"])
     def api_setup_ts_up():
-        if not _setup_open() or not _setup_owner_ok():
+        if not _setup_ts_ok():
             return jsonify({"error": "forbidden"}), 403
         ok, res = ts.tailscale_up_local(enable_ssh=True)
         if not ok:
@@ -158,7 +203,7 @@ def _register_setup_tailscale(app):
 
     @app.route("/api/setup/tailscale/serve", methods=["POST"])
     def api_setup_ts_serve():
-        if not _setup_open() or not _setup_owner_ok():
+        if not _setup_ts_ok():
             return jsonify({"error": "forbidden"}), 403
         cfg = load_config()
         port = cfg.get("port", 5000)
@@ -178,6 +223,25 @@ def _register_setup_tailscale(app):
                         "url": (f"https://{info.dns_name}" if info.dns_name else None)})
 
 
+def _setup_token_page(bad):
+    """The page that asks for the setup token: 200 when it is simply not given yet, 403 when a wrong
+    one was, or when a step was posted without it."""
+    status = 403 if (bad or request.method == "POST") else 200
+    return render_template("setup_token.html", setup_mode=True, bad=bad), status
+
+
+def _step_index(step):
+    return _STEP_ORDER.index(step) if step in _STEP_ORDER else 0
+
+
+def _advance(state, step):
+    """Move the wizard forward to `step`, never back: re-posting an earlier step (Back, then submit)
+    must not return an install that already has its admin to the admin page, whose POST then
+    refuses — the owner would be stuck there."""
+    if _step_index(step) > _step_index(state.step):
+        state.step = step
+
+
 def _setup_state():
     """The wizard's SetupState row, created at the welcome step when there is none yet."""
     state = SetupState.query.first()
@@ -189,8 +253,15 @@ def _setup_state():
 
 
 def _setup_post(state, data, cfg):
-    """One wizard step's form, dispatched on the `step` it names."""
+    """One wizard step's form, dispatched on the `step` it names — never one AHEAD of the stored step.
+
+    It dispatched on the posted step alone, so nothing made a caller walk the wizard in order:
+    step=remote_server action=add made the panel test an SSH connection to a host of the caller's
+    choosing before any admin existed. The token gate is what keeps strangers out; this keeps the
+    steps in order for everyone, so each step's own checks always ran first."""
     step = request.form.get("step", "welcome")
+    if step not in _STEP_ORDER or _step_index(step) > _step_index(state.step):
+        return redirect("/setup")
 
     if step == "welcome":
         return _setup_welcome(state, data, cfg)
@@ -201,7 +272,7 @@ def _setup_post(state, data, cfg):
     elif step == "tailscale":
         # The interactive install/connect/serve runs via /api/setup/tailscale/*;
         # this POST (Continue or Skip) just advances the wizard.
-        state.step = "remote_server"
+        _advance(state, "remote_server")
         state.data = json.dumps(data)
         db.session.commit()
         return redirect("/setup")
@@ -251,7 +322,7 @@ def _setup_welcome(state, data, cfg):
     cfg["bind_host"] = _wiz_bind
     save_config(cfg)
     data["site_configured"] = True
-    state.step = "admin_user"
+    _advance(state, "admin_user")
     state.data = json.dumps(data)
     db.session.commit()
     return redirect("/setup")
@@ -277,33 +348,48 @@ def _setup_admin_user(state, data):
     elif password != confirm:
         flash("Passwords do not match.", "danger")
     else:
-        existing = User.query.filter_by(username=username).first()
-        if existing:
+        return _create_first_admin(state, data, username, password, email)
+    return redirect("/setup")
+
+
+def _create_first_admin(state, data, username, password, email):
+    """Create the first superadmin, unless another request got there first.
+
+    The superadmin-exists check above ran BEFORE hash_password, and under eventlet the hash parks
+    this greenlet in tpool, so two concurrent POSTs both passed it and both made a superadmin
+    (reproduced: ['attacker', 'operator'], one of them hidden). So: hash first, outside the lock,
+    then re-check, insert and commit while holding it, with nothing in between that could hand the
+    hub to a second request that has not seen this row."""
+    password_hash = hash_password(password)
+    with _ADMIN_CREATE_LOCK:
+        if _superadmin_exists():
+            return redirect(url_for("login"))
+        if User.query.filter_by(username=username).first():
             flash("Username already exists.", "danger")
-        else:
-            admin = User(
-                username=username,
-                password_hash=hash_password(password),
-                email=encrypt_secret(email) if email else None,
-                display_name=username,
-                is_superadmin=True,
-                is_active=True,
-                # Carry the language chosen during setup into the admin account, so
-                # they land in it after logging in (falls back to en).
-                language=_current_lang(),
-            )
-            db.session.add(admin)
-            # Add to Everyone group
-            everyone = Group.query.filter_by(name="Everyone").first()
-            if everyone:
-                admin.groups.append(everyone)
-            db.session.commit()
-            data["admin_created"] = True
-            issue_setup_owner_token(data)   # the rest of the wizard is this browser's
-            state.step = "tailscale"
-            state.data = json.dumps(data)
-            db.session.commit()
             return redirect("/setup")
+        admin = User(
+            username=username,
+            password_hash=password_hash,
+            email=encrypt_secret(email) if email else None,
+            display_name=username,
+            is_superadmin=True,
+            is_active=True,
+            # Carry the language chosen during setup into the admin account, so
+            # they land in it after logging in (falls back to en).
+            language=_current_lang(),
+        )
+        db.session.add(admin)
+        # Add to Everyone group
+        everyone = Group.query.filter_by(name="Everyone").first()
+        if everyone:
+            admin.groups.append(everyone)
+        data["admin_created"] = True
+        issue_setup_owner_token(data)   # the rest of the wizard is this browser's
+        _advance(state, "tailscale")
+        state.data = json.dumps(data)
+        db.session.commit()
+    # Single-use: from here the wizard answers to this admin (the owner token, or signing in).
+    remove_setup_token()
     return redirect("/setup")
 
 
@@ -332,10 +418,19 @@ def _setup_add_remote(state, data):
     sudo_enabled = request.form.get("sudo_enabled") == "on"
     lgsm_user = request.form.get("lgsm_user", "").strip()
 
+    # The Hosts page's own add-form checks, before anything connects. The wizard stored
+    # auth_method straight from the form, and "local" is what makes is_local_server() read a row as
+    # the PANEL HOST — so a "remote" named anything, at any address, became a host the terminal and
+    # every panel-host refusal treated as this machine. The field checks keep a name, user or host
+    # out of the row (and out of the SSH test) that the Hosts page would refuse.
+    refusal = (_add_remote_field_error(name, ssh_port, lgsm_user, ssh_user)
+               or _add_remote_target_error(False, host, auth_method))
     if not name or not host:
         flash("Name and host are required.", "danger")
     elif ssh_port is None:
         flash("SSH port must be between %d and %d." % (MIN_PORT, MAX_PORT), "danger")
+    elif refusal:
+        flash(refusal, "danger")
     else:
         success, msg = ssh_test_connection(host, ssh_port, ssh_user, auth_method, credential)
         if not success:
@@ -396,8 +491,39 @@ def _finish_setup(state, data, cfg):
         except Exception:
             _log.debug("setup_wizard: ignored non-fatal error", exc_info=True)
     db.session.commit()
-    flash("Setup complete! You can now log in.", "success")
-    return redirect("/setup")
+    remove_setup_token()     # already gone with the admin step; this covers a token made since
+    # Rendered here rather than redirected to: the finished wizard is locked, so a GET of /setup
+    # goes to /login, and this page — the one that says where the panel is reachable — was never
+    # shown to anyone.
+    return _complete_page(cfg)
+
+
+def _rebind_pending(cfg):
+    """Is the panel still listening on a PUBLIC bind while its settings say loopback?
+
+    The Serve step stores bind_host 127.0.0.1, but the bind is read only when the process starts,
+    so until the next restart the panel keeps answering on its public address — and from then on
+    ONLY on the tailnet. False when the running bind is unknown (not started by app.py's main)."""
+    running = current_app.config.get("_BOOT_BIND")
+    stored = (cfg.get("bind_host") or "").strip()
+    return bool(running and stored) and _bind_is_loopback(stored) and not _bind_is_loopback(running)
+
+
+def _complete_facts(cfg):
+    """What the complete page may truthfully say about where the panel can be reached."""
+    running = current_app.config.get("_BOOT_BIND")
+    # "Only your devices can reach it" is true only while nothing but loopback is listening (Serve
+    # is then the one way in) and Funnel is not publishing it to the internet.
+    private = (bool(running) and _bind_is_loopback(running)
+               and not cfg.get("tailscale_use_funnel") and not cfg.get("trust_proxy"))
+    return {"rebind_pending": _rebind_pending(cfg), "running_bind": running or "",
+            "panel_port": cfg.get("port", 5000), "tailnet_private": private}
+
+
+def _complete_page(cfg, restarting=False, restart_ok=None):
+    """The wizard's last page: done, where the panel answers, and (after Restart now) what next."""
+    return render_template("setup_complete.html", setup_mode=True, restarting=restarting,
+                           restart_ok=restart_ok, **_complete_facts(cfg))
 
 
 def _auto_tailscale_serve(cfg):

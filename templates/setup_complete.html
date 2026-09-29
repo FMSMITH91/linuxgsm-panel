@@ -9,6 +9,15 @@
       <p class="text-secondary mb-3">
         Your panel is ready to go. Sign in with the admin account you created.
       </p>
+      {% if restarting %}
+      <div class="alert {{ 'alert-info' if restart_ok else 'alert-warning' }} text-start small" id="restart-status">
+        {% if restart_ok %}
+        The panel is restarting. In a few seconds it stops answering on its public address — open it through Tailscale Serve or your reverse proxy instead.
+        {% else %}
+        The panel could not restart itself. Restart it, or reboot the host, to apply the new setting.
+        {% endif %}
+      </div>
+      {% endif %}
       {% if tailscale_url %}
       <div class="bg-dark p-3 rounded-3 mb-3 text-start">
         <div class="d-flex align-items-center mb-1">
@@ -18,7 +27,23 @@
         </div>
         {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- built as https://<tailscale dns name> #}
         <a href="{{ tailscale_url }}" target="_blank" class="small">{{ tailscale_url }}</a>
+        {# Only while that is TRUE: the stored loopback bind applies from the next start, and until
+           then the panel still answers on its public address. #}
+        {% if tailnet_private %}
         <div class="text-secondary small mt-1">🔒 Private tailnet — only your devices can reach it</div>
+        {% endif %}
+      </div>
+      {% endif %}
+      {% if rebind_pending and not restarting %}
+      <div class="alert alert-warning text-start small" id="rebind-notice">
+        <div class="fw-semibold mb-1">Until it restarts, the panel still answers on its public address:</div>
+        <div class="mb-2"><code>{{ running_bind }}:{{ panel_port }}</code></div>
+        <div class="mb-2">From the next restart (Restart now, an update or a reboot) it listens on this machine only. Anything else then reaches it only through Tailscale Serve or your reverse proxy — a device that is not on your tailnet can no longer open it.</div>
+        <form method="POST" action="{{ url_for('setup_restart') }}" class="mb-0">
+          <button type="submit" class="btn btn-sm btn-warning">
+            <i class="bi bi-arrow-clockwise"></i> Restart now
+          </button>
+        </form>
       </div>
       {% endif %}
       <a href="{{ url_for('login') }}" class="btn btn-primary btn-lg">

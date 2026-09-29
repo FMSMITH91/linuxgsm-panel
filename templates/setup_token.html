@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Setup - Setup token{% endblock %}
+{% block content %}
+<div class="setup-card">
+  <div class="card">
+    <div class="card-body p-4">
+      <div class="text-center">
+        <span style="font-size: 4rem;">🔑</span>
+        <h2 class="mt-3">Enter the setup token</h2>
+      </div>
+      {% if bad %}
+      <div class="alert alert-danger py-2 small" id="setup-token-bad">That setup token is not right. Check it and try again.</div>
+      {% endif %}
+      <p class="text-secondary small">
+        Setup stays locked until you show the one-time token the installer printed, so nobody else
+        who reaches this address can create the administrator account first. Open the link the
+        installer printed, or paste the token here.
+      </p>
+      <form method="POST" action="{{ url_for('setup_wizard') }}">
+        <label class="form-label" for="setup-token-input">Setup token</label>
+        <input id="setup-token-input" type="text" name="setup_token" class="form-control"
+               autocomplete="off" autocapitalize="off" spellcheck="false" required>
+        <button type="submit" class="btn btn-primary mt-3 w-100">
+          <i class="bi bi-arrow-right"></i> Continue
+        </button>
+      </form>
+      <p class="text-secondary small mt-4 mb-1">Lost it? Print it again from a shell on this server:</p>
+      <pre class="small mb-0">sudo linuxgsm-panel-recover setup-token</pre>
+    </div>
+  </div>
+</div>
+{% endblock %}
