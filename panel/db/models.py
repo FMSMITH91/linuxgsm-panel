@@ -4,7 +4,7 @@ import logging
 import re
 import bcrypt
 from panel.core.clock import utcnow
-from panel.core.validation import unzoned_ip_address_or_none
+from panel.core.validation import unzoned_ip_address_or_none, unzoned_ip_or_network
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
@@ -1274,6 +1274,40 @@ def anonymise_audit_ips(days):
     return len(rows)
 
 
+def _unzone_audit_ips():
+    """Drop the IPv6 zone text from every stored audit IP, whatever its age. Returns rows changed.
+
+    An older version stored a proxy-reported client address with its zone ('fe80::1%eth0', or
+    '2001:db8::%<any text>'), and its reduction kept the zone ahead of the "/64". anonymise_audit_ips
+    rewrites such a row only once it is past the retention window, and never while IP ageing is off
+    (audit_ip_retention_days 0), so the text stayed on every younger row. Here every row holding a
+    '%' is rewritten at startup: an address becomes the address it names (the zone-dropping parse),
+    a reduced row the network it was reduced to, both rebuilt from the parsed number, and anything
+    else is blanked. Idempotent: no row keeps a '%', and nothing writes one any more.
+
+    Committed here, before _run_light_migrations goes on to the id rebuild and the index build,
+    which take SQLite's write lock on connections of their own: left open, the rewrite made them
+    wait out the busy timeout and the startup failed. A failure is rolled back and logged, and
+    never stops the panel starting; the next start tries again.
+    """
+    al = AuditLog.__table__
+    try:
+        rows = db.session.execute(db.select(al.c.id, al.c.ip_address).where(
+            al.c.ip_address.like("%\\%%", escape="\\"))).all()
+        for rid, ip in rows:
+            db.session.execute(al.update().where(al.c.id == rid)
+                               .values(ip_address=unzoned_ip_or_network(ip) or ""))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        _log.warning("could not drop the zone text from stored audit IPs; the next start tries "
+                     "again", exc_info=True)
+        return 0
+    if rows:
+        _log.info("dropped the IPv6 zone text from the IP of %d audit entries", len(rows))
+    return len(rows)
+
+
 # The tables whose ids something else keeps — another table's column, an in-memory map, a job, a
 # login cookie, a page's own URLs — and so must never be handed to a new row
 # (panel/db/id_sequence.py). The last three are keyed only by URLs: a Global Bans page left open
@@ -1375,6 +1409,7 @@ def _run_light_migrations():
         # index build waited out the 15 s busy timeout and the upgrade died at startup.
     # ...and before the rebuild below, which takes the write lock on a connection of its own.
     db.session.commit()
+    _unzone_audit_ips()                 # commits its own rewrite, for the same reason
     _give_keyed_tables_autoincrement()
     _create_declared_indexes(existing)
     db.session.commit()

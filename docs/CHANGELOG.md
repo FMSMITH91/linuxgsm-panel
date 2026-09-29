@@ -1014,8 +1014,10 @@ CI-verified commit regardless of this file — this changelog is for humans.
   stored with a zone before the whitelist refused them still exempts its address from the
   auto-block and the ban gate, as it did before (fail2ban's `ignoreip` leaves it out, as it always
   has); remove it and add the address without the `%zone` to have fail2ban skip it too. Audit IPs
-  that an older version stored with a zone lose it as they age: each is reduced to its `/64`,
-  including the rows that version had already reduced with the zone's text kept.
+  that an older version stored with a zone lose it at the first start after the update, whatever
+  their age and whether or not IP ageing is on: an address keeps the address alone, a row that
+  version had already reduced keeps its `/64` without the zone's text, and one that is no address
+  at all is blanked.
 - **A `"*"` in `socketio_cors_origins` is ignored.** It let a page on another port of the panel's
   address, or on a sibling tailnet node — both same-site, so the session cookie is sent — open the
   console and the terminal as whoever visited it. If you had set it, set `site_domain` or list the
