@@ -291,8 +291,8 @@ def _pct(hit, lines):
     return 100.0 * hit / lines if lines else 0.0
 
 
-def summary_text(files, loaded, errors, held=0, flow_errors=()):
-    """Return the per-file table, a TOTAL, and what broke, with the lines hit in all."""
+def _file_rows(files, loaded):
+    """Return the table's row for each file, and the lines and the lines hit over all of them."""
     rows, tf, th = [], 0, 0
     for path in sorted(files):
         hits = files[path]
@@ -302,10 +302,12 @@ def summary_text(files, loaded, errors, held=0, flow_errors=()):
                           for a, b, _n in v8_lcov.missed_spans(hits, 3))
         rows.append("%-34s %5d %5d %6.1f%%%s  %s" % (
             path, f, h, _pct(h, f), "" if path in loaded else "  (never loaded)", spans))
-    lines = ["%-34s %5s %5s %7s  %s" % ("file", "lines", "hit", "cover", "largest missed runs")]
-    lines += rows
-    lines.append("%-34s %5d %5d %6.1f%%" % ("TOTAL", tf, th, _pct(th, tf)))
-    lines.append("(%d navigations held to keep the leaving page's counts)" % held)
+    return rows, tf, th
+
+
+def _broken_lines(errors, flow_errors):
+    """Return the summary's lines for the flows that broke and the exceptions the pages threw."""
+    lines = []
     if flow_errors:
         lines += ["", "Flows that broke, so their part of the code went unexercised (%d):"
                   % len(flow_errors)]
@@ -315,15 +317,27 @@ def summary_text(files, loaded, errors, held=0, flow_errors=()):
         for u, ln, t in sorted(set(errors))[:40]:
             where = u.split("/static/", 1)[-1] if "/static/" in u else u
             lines.append("  %s:%s  %s" % (where, ln, t))
+    return lines
+
+
+def summary_text(files, loaded, errors, held=0, flow_errors=()):
+    """Return the per-file table, a TOTAL, and what broke, with the lines hit in all."""
+    rows, tf, th = _file_rows(files, loaded)
+    lines = ["%-34s %5s %5s %7s  %s" % ("file", "lines", "hit", "cover", "largest missed runs")]
+    lines += rows
+    lines.append("%-34s %5d %5d %6.1f%%" % ("TOTAL", tf, th, _pct(th, tf)))
+    lines.append("(%d navigations held to keep the leaving page's counts)" % held)
+    lines += _broken_lines(errors, flow_errors)
     return "\n".join(lines) + "\n", th
 
 
 def write_reports(files, text, out, summary_path):
     """Write the LCOV to `out` and, when asked, the summary to `summary_path`."""
-    with open(out, "w", encoding="utf-8") as fh:
+    # Both paths are this developer tool's own --out and --summary (CI passes fixed names).
+    with open(out, "w", encoding="utf-8") as fh:  # NOSONAR - the tool's own --out, not agent input
         fh.write(v8_lcov.to_lcov(files))
     if summary_path:
-        with open(summary_path, "w", encoding="utf-8") as fh:
+        with open(summary_path, "w", encoding="utf-8") as fh:  # NOSONAR - the tool's own --summary, not agent input
             fh.write(text)
 
 

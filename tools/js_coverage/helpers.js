@@ -51,24 +51,35 @@
   var FILL = {email: 'jscov@example.com', url: 'https://example.com/', tel: '1', time: '05:00',
               date: '2026-09-26', color: '#3ba55d', search: 'a'};
 
+  // The value for an empty field, by its type and then its name.
+  function fillValue(el, password) {
+    var name = (el.name || el.id || '').toLowerCase(), v = FILL[el.type];
+    if (el.type === 'password') return password || 'x';
+    if (el.type === 'number') return el.min || '1';
+    if (/port/.test(name)) return '27020';
+    if (/(host|^ip|_ip|address)/.test(name)) return '192.0.2.99';
+    return v === undefined ? 'jscov' : v;
+  }
+
+  // A field the fill leaves alone: one a person cannot, or does not, type into.
+  function notFilled(el) {
+    return el.disabled || el.readOnly || el.type === 'hidden' || el.type === 'file';
+  }
+
+  function fillField(el, password) {
+    if (notFilled(el)) return;
+    if (el.tagName === 'SELECT') {
+      if (!el.value && el.options.length > 1) setValue(el, el.options[1].value);
+      return;
+    }
+    if (el.type === 'checkbox' || el.type === 'radio' || el.value) return;
+    setValue(el, fillValue(el, password));
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+  }
+
   function fillForm(f, password) {
-    f.querySelectorAll('input, textarea, select').forEach(function (el) {
-      if (el.disabled || el.readOnly || el.type === 'hidden' || el.type === 'file') return;
-      if (el.tagName === 'SELECT') {
-        if (!el.value && el.options.length > 1) setValue(el, el.options[1].value);
-        return;
-      }
-      if (el.type === 'checkbox' || el.type === 'radio' || el.value) return;
-      var name = (el.name || el.id || '').toLowerCase(), v = FILL[el.type];
-      if (el.type === 'password') v = password || 'x';
-      else if (el.type === 'number') v = el.min || '1';
-      else if (/port/.test(name)) v = '27020';
-      else if (/(host|^ip|_ip|address)/.test(name)) v = '192.0.2.99';
-      else if (v === undefined) v = 'jscov';
-      setValue(el, v);
-      el.dispatchEvent(new Event('input', {bubbles: true}));
-      el.dispatchEvent(new Event('change', {bubbles: true}));
-    });
+    f.querySelectorAll('input, textarea, select').forEach(function (el) { fillField(el, password); });
   }
 
   // ── controls ───────────────────────────────────────────────────────────────────────────────
@@ -106,15 +117,25 @@
   // `mainOnly`: leave out the sidebar and top bar, which every page shares — pressing them once,
   // on the first page, is what there is to learn from them. The language picker is left alone:
   // switching language is a pass of its own, and left switched it would change every page after.
+  function isPlainLink(el) {
+    return el.tagName === 'A' && (el.getAttribute('href') || '').length > 1
+      && !el.hasAttribute('data-action') && !el.hasAttribute('data-bs-toggle');
+  }
+
+  function isFormLeftOut(el, accept) {
+    return el.tagName === 'FORM' && (!el.closest('main')
+      || (!accept && DESTRUCTIVE.test(el.getAttribute('action') || '')));
+  }
+
+  function leftOut(el, mainOnly, accept) {
+    return !!(el.disabled || el.closest('form[action*="logout"]') || el.hasAttribute('data-lang-select')
+      || (mainOnly && !el.closest('main')) || isPlainLink(el) || isFormLeftOut(el, accept));
+  }
+
   function controls(skip, mainOnly, accept) {
     var seen = {}, out = [];
     document.querySelectorAll(CONTROL_SEL).forEach(function (el) {
-      if (el.disabled || el.closest('form[action*="logout"]') || el.hasAttribute('data-lang-select')) return;
-      if (mainOnly && !el.closest('main')) return;
-      if (el.tagName === 'A' && (el.getAttribute('href') || '').length > 1
-          && !el.hasAttribute('data-action') && !el.hasAttribute('data-bs-toggle')) return;
-      if (el.tagName === 'FORM' && (!el.closest('main')
-          || (!accept && DESTRUCTIVE.test(el.getAttribute('action') || '')))) return;
+      if (leftOut(el, mainOnly, accept)) return;
       var s = csig(el);
       if (seen[s]) return;
       if (skip && skip.some(function (k) { return s.indexOf(k) >= 0; })) return;
@@ -124,44 +145,61 @@
     return out;
   }
 
+  function submitForm(el, password) {
+    fillForm(el, password);
+    var btn = el.querySelector('button[type="submit"], input[type="submit"]');
+    if (el.requestSubmit) el.requestSubmit(btn || undefined);
+    else el.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+    return 'submit';
+  }
+
+  function editTextarea(el) {
+    setValue(el, el.value + '\n# jscov');
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+    return 'input';
+  }
+
+  // A control that is changed rather than pressed: a select, or an input that is not a button.
+  function isField(el) {
+    return el.tagName === 'SELECT' || (el.tagName === 'INPUT' && el.type !== 'button'
+                                       && el.type !== 'submit');
+  }
+
+  function pickNextOption(el) {
+    var next = Array.prototype.filter.call(el.options, function (o) {
+      return !o.disabled && o.value !== el.value;
+    })[0];
+    if (next) setValue(el, next.value);
+  }
+
+  function changeField(el, on) {
+    if (el.tagName === 'SELECT') {
+      pickNextOption(el);
+    } else if (el.type === 'checkbox' || el.type === 'radio') {
+      el.checked = el.type === 'radio' ? true : !el.checked;
+    } else if (el.type !== 'file' && !el.value) {
+      setValue(el, el.type === 'number' ? (el.min || '1') : 'a');
+    }
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+    if (on === 'keydown') key(el, 'Enter');
+    return 'change';
+  }
+
+  function submitOwnForm(el, password) {
+    var f = el.tagName === 'FORM' ? el : el.closest('form');
+    if (f) { fillForm(f, password); f.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})); }
+    return 'submit';
+  }
+
   function fireControl(el, password) {
     var on = el.getAttribute('data-on') || '';
-    if (el.tagName === 'FORM') {
-      fillForm(el, password);
-      var btn = el.querySelector('button[type="submit"], input[type="submit"]');
-      if (el.requestSubmit) el.requestSubmit(btn || undefined);
-      else el.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
-      return 'submit';
-    }
-    if (el.tagName === 'TEXTAREA') {
-      setValue(el, el.value + '\n# jscov');
-      el.dispatchEvent(new Event('input', {bubbles: true}));
-      el.dispatchEvent(new Event('change', {bubbles: true}));
-      return 'input';
-    }
-    if (el.tagName === 'SELECT' || (el.tagName === 'INPUT' && el.type !== 'button'
-                                    && el.type !== 'submit')) {
-      if (el.tagName === 'SELECT') {
-        var next = Array.prototype.filter.call(el.options, function (o) {
-          return !o.disabled && o.value !== el.value;
-        })[0];
-        if (next) setValue(el, next.value);
-      } else if (el.type === 'checkbox' || el.type === 'radio') {
-        el.checked = el.type === 'radio' ? true : !el.checked;
-      } else if (el.type !== 'file' && !el.value) {
-        setValue(el, el.type === 'number' ? (el.min || '1') : 'a');
-      }
-      el.dispatchEvent(new Event('input', {bubbles: true}));
-      el.dispatchEvent(new Event('change', {bubbles: true}));
-      if (on === 'keydown') key(el, 'Enter');
-      return 'change';
-    }
+    if (el.tagName === 'FORM') return submitForm(el, password);
+    if (el.tagName === 'TEXTAREA') return editTextarea(el);
+    if (isField(el)) return changeField(el, on);
     if (on === 'keydown') { key(el, 'Enter'); return on; }
-    if (on === 'submit') {
-      var f = el.tagName === 'FORM' ? el : el.closest('form');
-      if (f) { fillForm(f, password); f.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})); }
-      return on;
-    }
+    if (on === 'submit') return submitOwnForm(el, password);
     el.click();
     return 'click';
   }
@@ -171,6 +209,16 @@
   // Cancel — the panel's own overlay dialogs, the command palette, and any Bootstrap modal left
   // open. Pressing a still-disabled OK is not something a person can do, so a dialog whose text
   // did not satisfy it is cancelled.
+  // What the confirm dialog asks to be typed: the account's password, or the name its label
+  // quotes, in (parentheses) or quotation marks. Neither run can hold its own opening mark, so a
+  // label full of them is read once, not once for every mark.
+  function confirmAnswer(card, inp, password) {
+    if (inp.type === 'password') return password || '';
+    var lab = card.querySelector('label[for="cd-input"]');
+    var m = lab && /\(([^()]+)\)|[“"']([^“”"']+)[”"']/.exec(lab.textContent);
+    return m ? (m[1] || m[2]) : '';
+  }
+
   function settleDialogs(accept, password) {
     var n = 0;
     document.querySelectorAll('[data-cd="ok"]').forEach(function (ok) {
@@ -178,13 +226,7 @@
       var cancel = card && card.querySelector('[data-cd="cancel"]');
       var inp = card && card.querySelector('#cd-input');
       if (accept && inp && !inp.value) {
-        if (inp.type === 'password') {
-          setValue(inp, password || '');
-        } else {
-          var lab = card.querySelector('label[for="cd-input"]');
-          var m = lab && /\(([^)]+)\)|[“"']([^”"']+)[”"']/.exec(lab.textContent);
-          setValue(inp, m ? (m[1] || m[2]) : '');
-        }
+        setValue(inp, confirmAnswer(card, inp, password));
         inp.dispatchEvent(new Event('input', {bubbles: true}));
       }
       if (accept && !ok.disabled) ok.click();

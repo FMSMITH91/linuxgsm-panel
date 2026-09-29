@@ -111,11 +111,29 @@ _DEFAULT_CFG = (
 _INSTANCE_CFG = "maxplayers=\"24\"\ndiscordalert=\"on\"\ndiscordwebhook=\"https://discord.example/x\"\n"
 
 
+# The file browser's `find` of a directory in the game user's home: the run of name characters
+# after /home/, then the rest of the path up to the closing quote or the space. Each part can match
+# only one way, so a long path is read once rather than backtracked over.
+_BROWSE_FIND = re.compile(r"find '?/home/([a-z0-9_]+)([^a-z0-9_' ][^' ]*)?'? -maxdepth 1")
+
+
+def _browse_rel(command):
+    """Return the directory a file-browser `find` lists, relative to the home, or None.
+
+    The home is the name up to its last "server" (a LinuxGSM user's name ends in it); whatever
+    follows that, and the rest of the path, is the directory.
+    """
+    for m in _BROWSE_FIND.finditer(command):
+        at = m.group(1).rfind("server", 1)
+        if at >= 0:
+            return (m.group(1)[at + 6:] + (m.group(2) or "")).strip("/")
+    return None
+
+
 def _browse(command):
-    m = re.search(r"find '?/home/[a-z0-9_]+server/?([^' ]*)'? -maxdepth 1", command)
-    if not m:
+    rel = _browse_rel(command)
+    if rel is None:
         return None
-    rel = m.group(1).strip("/")
     entries = _TREE.get(rel, [("f", 10, "readme.txt")])
     if "%T@" in command:        # the upload pre-check also asks for each entry's mtime
         return "\n".join("%s\t%d\t%d.5\t%s" % (t, n, time.time() - 3600, f) for t, n, f in entries)
@@ -311,15 +329,15 @@ _PRO_STATUS = json.dumps({
                   "description": "Canonical Livepatch service"}]})
 
 _TS_STATUS = json.dumps({
-    "BackendState": "Running", "TailscaleIPs": ["100.101.102.103", "fd7a:115c:a1e0::1"],
+    "BackendState": "Running", "TailscaleIPs": ["100.101.102.103", "fd7a:115c:a1e0::1"],  # NOSONAR - a fake tailnet's fixture address, in Tailscale's range
     "Self": {"HostName": "panel-host", "DNSName": "panel-host.tail1234.ts.net.",
-             "TailscaleIPs": ["100.101.102.103"], "OS": "linux", "Online": True},
+             "TailscaleIPs": ["100.101.102.103"], "OS": "linux", "Online": True},  # NOSONAR - a fake tailnet's fixture address, in Tailscale's range
     "Peer": {
         "nodekey:1": {"HostName": "vps-one", "DNSName": "vps-one.tail1234.ts.net.",
-                      "TailscaleIPs": ["100.101.102.104"], "OS": "linux", "Online": True,
+                      "TailscaleIPs": ["100.101.102.104"], "OS": "linux", "Online": True,  # NOSONAR - a fake tailnet's fixture address, in Tailscale's range
                       "LastSeen": "2026-09-26T10:00:00Z", "Relay": "lhr"},
         "nodekey:2": {"HostName": "laptop", "DNSName": "laptop.tail1234.ts.net.",
-                      "TailscaleIPs": ["100.101.102.105"], "OS": "macOS", "Online": False,
+                      "TailscaleIPs": ["100.101.102.105"], "OS": "macOS", "Online": False,  # NOSONAR - a fake tailnet's fixture address, in Tailscale's range
                       "LastSeen": "2026-09-20T08:00:00Z", "Relay": ""}}})
 
 _TS_NEEDS_LOGIN = json.dumps({"BackendState": "NeedsLogin", "AuthURL":
@@ -395,7 +413,7 @@ _TABLE = [
     (r"ss -H -lntu", "0.0.0.0:22\n0.0.0.0:25565\n0.0.0.0:27015\n0.0.0.0:28015\n"
                      "0.0.0.0:27016\n0.0.0.0:2456\n127.0.0.1:5000"),
     (r"reboot-required", "YES"),
-    (r"ip route get", "10.0.0.5"),
+    (r"ip route get", "10.0.0.5"),  # NOSONAR - the fake host's own LAN address; nothing connects to it
     (r"ufw[ -]status\b.*numbered", _UFW_NUMBERED),
     (r"ufw[ -]status\b.*verbose", _UFW_VERBOSE),
     (r"ufw[ -]status", "Status: active\n"),

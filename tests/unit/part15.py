@@ -15,7 +15,7 @@ As the last part, it also ends the run with a look for threads left running that
 """
 import os
 import shutil
-import subprocess as _sp15
+import subprocess as _sp15  # nosec B404 - git and bash, on fixture repositories made here
 import tarfile as _tar15
 import tempfile
 import time as _time15
@@ -46,7 +46,7 @@ _CV_SH = "set -euo pipefail\n" + "".join(
 
 def _cv_git(repo, *args, **env):
     """Run git in `repo` with no user or system config; returns stdout, stripped."""
-    r = _sp15.run(["git", "-C", repo, *args], capture_output=True, text=True, check=False,
+    r = _sp15.run(["git", "-C", repo, *args], capture_output=True, text=True, check=False,  # nosec B603 B607 - git, a fixed argv, on a fixture repo
                   env=dict(os.environ, **_CV_GIT_ENV, **env))
     return r.stdout.strip()
 
@@ -91,7 +91,7 @@ def _cv_version_at(path):
 
 def _cv_sh(path, call="panel_version", **env):
     """What install.sh's `call` prints for a panel at `path`: (stdout, returncode)."""
-    r = _sp15.run(["bash", "-c", _CV_SH + call + "\n"], capture_output=True, text=True,
+    r = _sp15.run(["bash", "-c", _CV_SH + call + "\n"], capture_output=True, text=True,  # nosec B603 B607 - install.sh's own functions
                   check=False, timeout=60, env=dict(os.environ, PANEL_DIR=path, **env))
     return r.stdout.strip(), r.returncode
 
@@ -114,14 +114,14 @@ try:
     # VERSION, not find whatever repository the temp dir happens to sit inside.
     os.environ["GIT_CEILING_DIRECTORIES"] = _CV_SB
     _cv_repo = os.path.join(_CV_SB, "repo")
-    _sp15.run(["git", "init", "-q", "-b", "main", _cv_repo], capture_output=True, check=False)
+    _sp15.run(["git", "init", "-q", "-b", "main", _cv_repo], capture_output=True, check=False)  # nosec B603 B607 - git, a fixed argv, on a fixture repo
     _cv_late = _cv_commit(_cv_repo, "late", "@%d +1400" % _CV_LATE,
                           author="@%d +0000" % _CV_OLD_AUTHOR,
                           files={"VERSION": "$Format:%ct$\n", ".gitattributes": "VERSION export-subst\n"})
     _cv_first = _cv_commit(_cv_repo, "first of the year", "@%d -1200" % _CV_FIRST)
     # A second checkout whose HEAD is the late commit, for the installer (which only asks HEAD).
     _cv_repo_late = os.path.join(_CV_SB, "repo-late")
-    _sp15.run(["git", "clone", "-q", "--no-checkout", _cv_repo, _cv_repo_late],
+    _sp15.run(["git", "clone", "-q", "--no-checkout", _cv_repo, _cv_repo_late],  # nosec B603 B607 - git, a fixed argv, on a fixture repo
               capture_output=True, check=False)
     _cv_git(_cv_repo_late, "checkout", "-q", "--detach", _cv_late)
     SO.PANEL_DIR = _cv_repo
@@ -182,7 +182,7 @@ try:
     # What a GitHub "Download ZIP" is built with. Committed from THIS checkout's two files, so a
     # placeholder or attribute that stopped matching fails here.
     _cv_arc_repo = os.path.join(_CV_SB, "arc-repo")
-    _sp15.run(["git", "init", "-q", "-b", "main", _cv_arc_repo], capture_output=True, check=False)
+    _sp15.run(["git", "init", "-q", "-b", "main", _cv_arc_repo], capture_output=True, check=False)  # nosec B603 B607 - git, a fixed argv, on a fixture repo
     for _cv_name in ("VERSION", ".gitattributes"):
         shutil.copyfile(os.path.join(_root, _cv_name), os.path.join(_cv_arc_repo, _cv_name))
         _cv_git(_cv_arc_repo, "add", _cv_name)
@@ -203,7 +203,7 @@ try:
           _cv_version_at(_cv_out) == "2026.9.26", repr(_cv_version_at(_cv_out)))
 
     # ── install.sh's panel_version: the same rule, in bash ───────────────────────────────────────
-    _cv_date_east = _sp15.run(["bash", "-c", "date -d @%d +%%d" % _CV_LATE], capture_output=True,
+    _cv_date_east = _sp15.run(["bash", "-c", "date -d @%d +%%d" % _CV_LATE], capture_output=True,  # nosec B603 B607 - a fixed date call
                               text=True, check=False).stdout.strip()
     check("calver: (control) bash's own date sees the east timezone too",
           _cv_date_east == "27", "date printed %r for 23:59 UTC on the 26th" % _cv_date_east)

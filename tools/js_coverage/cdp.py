@@ -18,6 +18,10 @@ class CDPError(RuntimeError):
     """A protocol call the browser refused, or did not answer in time."""
 
 
+def _ignore_event(_msg):
+    """Take an event and do nothing: CDP.on_event until a caller sets its own."""
+
+
 class CDP:
     """One DevTools WebSocket: calls in order, events kept, dialogs answered as they open."""
 
@@ -33,7 +37,7 @@ class CDP:
         self.events = []
         self.dialog_accept = False
         self.dialogs = []
-        self.on_event = None      # called with every event as it is read
+        self.on_event = _ignore_event   # called with every event as it is read
 
     def close(self):
         """Close the socket, quietly: the browser may have dropped it already."""
@@ -59,7 +63,7 @@ class CDP:
         msg = json.loads(raw)
         if msg.get("id") in self._callbacks:
             self._callbacks.pop(msg["id"])(msg)
-        if "method" in msg and self.on_event is not None:
+        if "method" in msg:
             self.on_event(msg)
         if msg.get("method") == "Page.javascriptDialogOpening":
             # "Leave site?" is always answered Leave: refusing it would cancel the next navigation
