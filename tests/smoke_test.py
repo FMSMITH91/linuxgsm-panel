@@ -954,6 +954,108 @@ try:
     finally:
         _sm_core.run_privileged, _sm_core.run_command, _sm_core.run_as_game_user = _uf_saved
 
+    # ── uninstall names a rule with no name on it that is still on the server's own ports ─────
+    # The Firewall page's rate limit writes an UNTAGGED `N/tcp LIMIT` (ufw-limit-port takes no
+    # comment) and moves the server's other protocol onto a tagged `N/udp` allow. Uninstall took
+    # the udp allow and answered a clean "uninstalled": the port stayed open, rate limited, and
+    # nobody was told. The host below prints `ufw status numbered` as ufw 0.36.2 did on the test
+    # VPS (each public rule twice, its (v6) twin in a second block, one numbering); the route, both
+    # cleanups and the status parser are real.
+    class _Ufw36Table:
+        HDR = ("Status: active\n\n     To                         Action      From\n"
+               "     --                         ------      ----\n")
+
+        def __init__(self, *rules):
+            self.v4 = [list(r) for r in rules]
+            self.v6 = [list(r) for r in rules]
+
+        def rows(self):
+            return (["%-26s %-11s %-26s%s" % (t, a + " IN", "Anywhere", " # " + c if c else "")
+                     for t, a, c in self.v4]
+                    + ["%-26s %-11s %-26s%s" % (t + " (v6)", a + " IN", "Anywhere (v6)",
+                                                " # " + c if c else "") for t, a, c in self.v6])
+
+        def priv(self, server, verb, args=(), *a, **k):
+            if verb == "ufw-status":
+                return (self.HDR + "".join("[%2d] %s\n" % (i, r)
+                                           for i, r in enumerate(self.rows(), 1)), "", 0)
+            if verb == "ufw-delete-num":
+                n = int(args[0])
+                fam, i = (self.v4, n - 1) if n <= len(self.v4) else (self.v6, n - 1 - len(self.v4))
+                del fam[i]
+                return ("Rule deleted", "", 0)
+            return ("", "", 0)
+
+        def left(self):
+            return [tuple(r) for r in self.v4 + self.v6]
+
+    _ul_saved = (_sm_core.run_privileged, _sm_core.run_command, _sm_core.run_as_game_user)
+    try:
+        _sm_core.run_command = lambda *a, **k: ("", "", 0)
+        _sm_core.run_as_game_user = lambda *a, **k: ("", "", 0)
+        _UL_BASE = (("28960", "ALLOW", "codserver"), ("27015", "ALLOW", "gmodserver"),
+                    ("22/tcp", "ALLOW", "SSH panel"))
+        # (name, game, port, a sibling (name, game, port) or None, rules, the sentence expected
+        # in the answer or None for a clean uninstall, text that must NOT be in the answer)
+        for _ul_name, _ul_game, _ul_port, _ul_sib, _ul_rules, _ul_named, _ul_not in (
+                # What remote_ufw_limit_port leaves on the server's tagged bare allow, and another
+                # port's untagged limit. The legacy sweep runs (no one else holds 27060).
+                ("fwlimit", "gmod", 27060, None,
+                 (("27060/tcp", "LIMIT", ""), ("27060/udp", "ALLOW", "fwlimit"),
+                  ("27062/tcp", "LIMIT", "")),
+                 "Left in place on its port: 27060/tcp LIMIT.", "27062"),
+                # ...and on a legacy UNTAGGED bare allow: its udp half is the sweep's to take, so
+                # it goes and is not named; only the LIMIT is.
+                ("fwlegacy", "gmod", 27074, None,
+                 (("27074/tcp", "LIMIT", ""), ("27074/udp", "ALLOW", "")),
+                 "Left in place on its port: 27074/tcp LIMIT.", "27074/udp"),
+                ("fwclean", "gmod", 27064, None,
+                 (("27064", "ALLOW", "fwclean"), ("27066/tcp", "LIMIT", "")), None, "27066"),
+                # 27068 is still in fwsib's block: a limit there is fwsib's concern, not left.
+                ("fwshared", "gmod", 27068, ("fwsib", "rust", 27067),
+                 (("27068", "ALLOW", "fwshared"), ("27068/tcp", "LIMIT", "")), None, "27068"),
+                # No legacy sweep (fwsib2 holds 27070), so the name cleanup names the block's
+                # other port, and not the one fwsib2 still holds.
+                ("fwq", "rust", 27070, ("fwsib2", "gmod", 27070),
+                 (("27070", "ALLOW", "fwq"), ("27071", "ALLOW", "fwq"), ("27070/tcp", "LIMIT", ""),
+                  ("27071/tcp", "LIMIT", "")),
+                 "Left in place on its port: 27071/tcp LIMIT.", "27070/tcp")):
+            _ul = _Ufw36Table(*(_UL_BASE + _ul_rules))
+            _sm_core.run_privileged = _ul.priv
+            with app.app_context():
+                _rm = RemoteServer.query.first()
+                _tmp = _UGS(remote_id=_rm.id, name=_ul_name, short_name=_ul_name,
+                            game_type=_ul_game, port=_ul_port, installed=True, status="offline")
+                _sib = (_UGS(remote_id=_rm.id, name=_ul_sib[0], short_name=_ul_sib[0],
+                             game_type=_ul_sib[1], port=_ul_sib[2], installed=True,
+                             status="offline") if _ul_sib else None)
+                db.session.add_all([_tmp] + ([_sib] if _sib else [])); db.session.commit()
+                _tid, _sid = _tmp.id, (_sib.id if _sib else None)
+            _uj = c.post("/servers/%d/delete" % _tid, json={},
+                         headers={"X-Requested-With": "XMLHttpRequest"}).get_json() or {}
+            _um = _uj.get("message", "")
+            if _ul_named:
+                check("uninstall %s: an untagged rule left on its own port is named in the answer, "
+                      "and the answer warns" % _ul_name,
+                      _uj.get("success") is True and _um.count(_ul_named) == 1
+                      and _uj.get("warn") is True, repr(_uj))
+            else:
+                check("uninstall %s: a clean uninstall still does not warn" % _ul_name,
+                      _uj.get("success") is True and _uj.get("warn") is False
+                      and "Left in place" not in _um, repr(_uj))
+            check("uninstall %s: ...a rule on another port, or on one another server still "
+                  "holds, is not named" % _ul_name,
+                  _ul_not not in _um, repr(_um))
+            check("uninstall %s: ...every LIMIT stays — named, never deleted" % _ul_name,
+                  all(r in _ul.left() for r in _ul_rules if r[1] == "LIMIT")
+                  and not any(r[2] == _ul_name for r in _ul.left()), repr(_ul.left()))
+            with app.app_context():
+                for _x in (_tid, _sid):
+                    _left = _UGS.query.get(_x) if _x else None
+                    if _left: db.session.delete(_left); db.session.commit()
+    finally:
+        _sm_core.run_privileged, _sm_core.run_command, _sm_core.run_as_game_user = _ul_saved
+
     # ── a queued "stop/restart when empty" must not be thrown away ────────────────────────────
     # The deferred sweep asks get_server_status and treats "offline" as "already stopped, nothing
     # to do" — clearing BOTH flags. Once the port cross-check began answering "offline" for a

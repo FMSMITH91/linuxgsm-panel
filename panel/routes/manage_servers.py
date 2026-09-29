@@ -1960,17 +1960,18 @@ def _close_game_firewall(remote, gs):
     meant to take — one that would not go, a DENY or LIMIT or source-restricted rule it leaves on
     purpose, one on SSH's or the panel's port — and says so when the firewall could not be read.
     It used to count the deletes and nothing else, so a rule that stayed open read as a clean
-    uninstall.
+    uninstall. It also names any rule with NO comment still on the server's own block — the
+    Firewall page's rate limit is one, `ufw limit` writes no comment — except on a port another
+    server still holds, which that server still needs. Named by the step that runs last, from its
+    own last read, so a rule the legacy sweep takes is never named as left.
     """
     count, left = 0, []
     try:
-        count, _, left = remote_ufw_close_by_name(remote, gs.short_name)
-        # Then an UNTAGGED allow on its game port — what a panel that did not tag its rules yet
-        # left — but only when no other server on the host has that port in its block: then the
-        # rule is at least as likely to be theirs. SSH and the panel's port are refused below it.
-        if gs.port and gs.port not in sibling_port_blocks(
-                GameServer.query.filter_by(remote_id=remote.id).all(), gs):
-            legacy, _, legacy_left = remote_ufw_close_game_port(remote, gs.port, legacy=True)
+        own, sweep = _uninstall_port_plan(remote, gs)
+        count, _, left = remote_ufw_close_by_name(remote, gs.short_name, ports=() if sweep else own)
+        if sweep:
+            legacy, _, legacy_left = remote_ufw_close_game_port(remote, gs.port, legacy=True,
+                                                                ports=own)
             count += legacy
             left = left + legacy_left
     except Exception:
@@ -1979,6 +1980,20 @@ def _close_game_firewall(remote, gs):
     notes = ([" %d firewall rule(s) removed." % count] if count > 0 else [])
     notes += [" " + n for i, n in enumerate(left) if n not in left[:i]]
     return "".join(notes), bool(left)
+
+
+def _uninstall_port_plan(remote, gs):
+    """What an uninstall's firewall cleanup covers. -> (its own ports, whether the sweep runs).
+
+    Its own ports are `gs`'s block — its port and the rest of its game's span — less every port
+    another server on the host holds. The legacy sweep takes an UNTAGGED allow on the game port —
+    what a panel that did not tag its rules yet left — only when no other server on the host has
+    that port in its block: then the rule is at least as likely to be theirs. SSH and the panel's
+    port are refused below it.
+    """
+    held = sibling_port_blocks(GameServer.query.filter_by(remote_id=remote.id).all(), gs)
+    block = range(gs.port, gs.port + _port_span(gs.game_type)) if gs.port else ()
+    return [p for p in block if p not in held], bool(gs.port) and gs.port not in held
 
 
 def _forget_game_server(server_id):

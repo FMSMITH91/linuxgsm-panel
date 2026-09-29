@@ -1096,6 +1096,12 @@ CI-verified commit regardless of this file — this changelog is for humans.
     "Open all ports" no longer says a port is open when a DENY for TCP or UDP still blocks it. It
     adds an allow only for the protocol no rule covers yet, and names the rule it left each
     protocol to (for example `27015/tcp DENY`).
+  - Uninstall also names a rule with no name on it that is still on the server's own ports. The
+    rate limit from the Firewall page is one: `ufw limit` writes no comment, so the limit on a game
+    port carries no server's name. It was neither removed nor mentioned, so the port stayed open,
+    rate limited, after an uninstall that reported a clean result. The rule is still left in place,
+    but the message now names it (for example `Left in place on its port: 27015/tcp LIMIT`) and the
+    result is a warning. A port another server on the host still uses is left out.
 - **Root `apt` installs only the packages LinuxGSM lists for the game.** A game's install step
   passed whatever package names LinuxGSM's output reported missing to a root `apt-get install`.
   A name is now kept only when LinuxGSM's dependency list for that game and distro names it, the

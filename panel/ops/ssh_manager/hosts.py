@@ -799,6 +799,38 @@ def _left_on_purpose(status, comment, removable, protected):
             + _naming("Left in place on SSH's or the panel's own port", on_host))
 
 
+def _rule_names_port_in(g, ports):
+    """Does inbound rule group `g` name one of `ports`?
+
+    Alone, in a range or in a list; for either protocol, from any source, on any interface."""
+    if g.get("direction", "IN") != "IN":
+        return False
+    for item in str(g.get("port_num", "")).split(","):
+        m = _UFW_PORT_ITEM_RE.match(item)
+        if m and any(int(m.group(1)) <= p <= int(m.group(2) or m.group(1)) for p in ports):
+            return True
+    return False
+
+
+def _left_on_own_ports(status, ports, protected, taken):
+    """Sentences naming each rule with no comment left on `ports` that `taken` did not mean to take.
+
+    [] when there is none, or no ports were given. `ports` are the uninstalled server's own block,
+    less any port another server still holds; SSH's and the panel's (`protected`) are never its
+    own. A rule nobody's name is on is not the panel's to delete, but it is still what keeps the
+    port open once the server is gone: the Firewall page's rate limit writes an untagged
+    `27015/tcp LIMIT` (`ufw limit` sends no comment, and replaces the server's tagged allow with
+    it), and the cleanup neither took nor named it, so the port stayed open under a clean
+    "uninstalled". A rule carrying a name has an owner who still needs it; one carrying this
+    server's name is named by the cleanup already."""
+    ports = set(ports) - set(protected)
+    if not ports:
+        return []
+    stray = [g for g in status.get("groups", [])
+             if not g.get("comment") and not taken(g) and _rule_names_port_in(g, ports)]
+    return _naming("Left in place on its port" + ("s" if len(ports) > 1 else ""), stray)
+
+
 def _port_of(g):
     """The one port a _is_panel_allow group is on, as an int."""
     return int(str(g["port_num"]).strip())
@@ -814,7 +846,7 @@ def _with_notes(message, notes):
     return message + ("." + "".join(" " + n for n in notes) if notes else "")
 
 
-def remote_ufw_close_by_name(server, name):
+def remote_ufw_close_by_name(server, name, ports=()):
     """Delete the ALLOW rules tagged with a game server's name (its comment). Used on uninstall so
     multi-port games are fully cleaned up. -> (rules removed, message, what is left).
 
@@ -833,8 +865,10 @@ def remote_ufw_close_by_name(server, name):
     tagged with a server — guarded only by the last-way-in check.
 
     The third value names, as sentences, every rule carrying the name that is still there — ones
-    that would not go, and ones left on purpose — or that the firewall could not be read. Empty
-    means the server's rules are gone; the message says the same things."""
+    that would not go, and ones left on purpose — or that the firewall could not be read. With
+    `ports` (the server's own block), it also names every rule with no comment still on one of them
+    (_left_on_own_ports), from the same last read. Empty means the server's rules are gone; the
+    message says the same things."""
     comment = re.sub(r"[^A-Za-z0-9 _.-]", "", name or "")[:60]
     if not comment:
         return 0, "no name", []
@@ -844,7 +878,9 @@ def remote_ufw_close_by_name(server, name):
         return g.get("comment") == comment and _is_panel_allow(g) and _port_of(g) not in protected
 
     deleted, status = _delete_picked_rules(server, removable, 256)
-    left = _still_there(status, removable) + _left_on_purpose(status, comment, removable, protected)
+    left = (_still_there(status, removable)
+            + _left_on_purpose(status, comment, removable, protected)
+            + _left_on_own_ports(status, ports, protected, removable))
     return deleted, _with_notes(f"{deleted} rule(s) removed for {comment}", left), left
 
 
@@ -902,7 +938,7 @@ def _is_game_rule_for(g, port, comment, legacy):
                  or (legacy and not g.get("comment"))))
 
 
-def remote_ufw_close_game_port(server, port, name="", legacy=False):
+def remote_ufw_close_game_port(server, port, name="", legacy=False, ports=()):
     """Remove THIS server's rules on `port`. -> (rules removed, message, what is left).
 
     Which rules are this server's: an inbound public ALLOW on exactly `port` (bare, /tcp or /udp)
@@ -932,22 +968,24 @@ def remote_ufw_close_game_port(server, port, name="", legacy=False):
     A delete refused because the rule MOVED (an insert between the read and the delete) is read
     again and retried; it used to be given up at once, leaving the rule open with nothing said.
     The third value names, as sentences, a rule of this server's that is still there after its
-    tries, or that the firewall could not be read; empty means none is left."""
+    tries, or that the firewall could not be read; empty means none is left. With `ports` (the
+    server's own block, when this is an uninstall's last step), it also names every rule with no
+    comment still on one of them that this did not mean to take (_left_on_own_ports)."""
     try:
         port = _ufw_port_int(port)
     except (TypeError, ValueError):
         return 0, "Invalid port", []
     comment = _game_rule_comment(name, "")
-    if legacy and port in protected_host_ports(server):
-        legacy = False
-    if not comment and not legacy:
+    protected = protected_host_ports(server) if legacy or ports else set()
+    legacy = legacy and port not in protected
+    if not comment and not legacy and not ports:
         return 0, f"Port {port}: no rule here is known to be this server's", []
 
     def mine(g):
         return _is_game_rule_for(g, port, comment, legacy)
 
     deleted, status = _delete_picked_rules(server, mine, 64)
-    left = _still_there(status, mine)
+    left = _still_there(status, mine) + _left_on_own_ports(status, ports, protected, mine)
     return deleted, _with_notes(f"Port {port}: {deleted} rule(s) removed", left), left
 
 

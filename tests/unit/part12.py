@@ -2383,7 +2383,7 @@ try:
     _p9_patch(_p9_sm, "remote_ufw_tagged_ports", lambda r, n: _ms_next("tagged"))
     _ms_legacy_fw = [(0, "", [])]     # what the legacy (untagged) cleanup answers
     _p9_patch(_p9_ms, "remote_ufw_close_game_port",
-              lambda r, p, name="", legacy=False: (
+              lambda r, p, name="", legacy=False, ports=(): (
                   _ms_log.append("ufw-close:%s:%s:%s" % (p, name, legacy)), _ms_boom("ufw-close"),
                   _ms_legacy_fw[0])[2])
     _p9_patch(_p9_ms, "remote_ufw_allow_game_ports",
@@ -2775,7 +2775,7 @@ try:
         _p9_state._install_jobs.pop(_ms_x, None)
 
     _ms_fw = [(0, "", [])]
-    _p9_patch(_p9_ms, "remote_ufw_close_by_name", lambda r, n: _ms_next_fw())
+    _p9_patch(_p9_ms, "remote_ufw_close_by_name", lambda r, n, ports=(): _ms_next_fw())
 
     def _ms_next_fw():
         v = _ms_fw[0]
