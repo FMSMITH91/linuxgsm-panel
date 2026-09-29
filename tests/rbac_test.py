@@ -1890,7 +1890,9 @@ def _check_permission_boxes_are_filtered():
     check("groups page: a permission the admin cannot grant is not an ENABLED tick box",
           "disabled" in _pb_locked,
           "offers %r — ticking it would be silently dropped" % _pb_locked)
-    _g5_card = _gp_html[_gp_html.index(tag5):]
+    # Anchored on the card's own heading: a flash from an earlier POST ("Group '<tag5>' updated.")
+    # also names the group, above the list.
+    _g5_card = _gp_html[_gp_html.index(">%s</strong>" % tag5):]
     _g5_card = _g5_card[:min(_i for _i in (_g5_card.find('<div class="card mb-3">'),
                                            _g5_card.find("<!-- /#groups-list -->"),
                                            len(_g5_card)) if _i >= 0)]
@@ -1901,6 +1903,10 @@ def _check_permission_boxes_are_filtered():
     check("groups page: ...but its real power stays visible on the card",
           auth.ALL_PERMISSIONS[auth.MANAGE_USERS] in _g5_card,
           "the card no longer names MANAGE_USERS — the page understates what the group can do")
+    check("groups page: a group's permission labels wrap instead of widening the page",
+          "badge bg-secondary text-wrap" in _g5_card,
+          "use_terminal's label is a sentence; unwrapped it ran 579px wide and scrolled a phone "
+          "sideways")
     check("groups page: ...while one they DO hold stays editable (positive control)",
           "disabled" not in _pb_free,
           "every permission box is disabled, so the check above passes for the wrong reason: %r"

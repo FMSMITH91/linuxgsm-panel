@@ -215,6 +215,7 @@
   "On ntfy.sh a topic is a public address — anyone who guesses the name receives your alerts. Pick something long and unguessable, or use a reserved topic with an access token.": "Sur ntfy.sh, un sujet est une adresse publique — quiconque devine le nom reçoit vos alertes. Choisissez un nom long et indevinable, ou utilisez un sujet réservé avec un jeton d'accès.",
   "Only a superadmin can change this one — you don't hold this permission yourself.": "Seul un superadministrateur peut modifier celui-ci — vous ne détenez pas cette permission vous-même.",
   "Only a superadmin can change this group — it reaches accounts or access outside yours.": "Seul un superadministrateur peut modifier ce groupe — il atteint des comptes ou des accès hors des vôtres.",
+  "Read-only": "Lecture seule",
   "No hosts you can grant.": "Aucun hôte que vous puissiez accorder.",
   "No game servers you can grant.": "Aucun serveur de jeu que vous puissiez accorder.",
   "Online": "En ligne",
