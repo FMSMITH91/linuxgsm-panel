@@ -75,6 +75,16 @@ updates:
       - dependency-name: "gamedig"
         update-types: ["version-update:semver-major"]
 
+  # The ClusterFuzzLite build image. .clusterfuzzlite/Dockerfile pins its base by digest, so only a
+  # deliberate bump moves it; this proposes that bump weekly. The FROM line names the `latest` tag
+  # beside the digest because Dependabot can only track a tag: Docker itself uses the digest and
+  # ignores the tag when both are given, so the tag changes nothing about what is built.
+  - package-ecosystem: "docker"
+    directory: "/.clusterfuzzlite"
+    schedule:
+      interval: "weekly"
+    labels: ["ci"]
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
