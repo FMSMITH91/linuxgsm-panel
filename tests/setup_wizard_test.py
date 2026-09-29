@@ -528,7 +528,7 @@ try:
     # (unclaimed, wrong token) are shown to have written none.
     check("audit: step=welcome is on record, by the setup wizard, with the bind it saved",
           [r[:4] for r in _audit("setup_site_settings")]
-          == [("setup wizard", "Panel Server", "listen on 127.0.0.1:5051", True)],
+          == [("setup wizard", "Panel Server", "bind 127.0.0.1, port 5051", True)],
           repr(_audit("setup_site_settings")))
 
     # The port this step writes is the address the panel BINDS TO on its next boot, and nothing

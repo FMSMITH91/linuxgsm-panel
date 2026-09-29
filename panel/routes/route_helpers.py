@@ -362,7 +362,7 @@ def _setup_welcome(state, data, cfg):
     state.data = json.dumps(data)
     db.session.commit()
     log_action(None, "setup_site_settings", target=_SETUP_TARGET, actor=_SETUP_ACTOR,
-               detail="listen on %s:%s" % (_wiz_bind, _wiz_port))
+               detail="bind %s, port %s" % (_wiz_bind, _wiz_port))
     return redirect("/setup")
 
 
@@ -427,10 +427,10 @@ def _create_first_admin(state, data, username, password, email):
         _advance(state, "tailscale")
         state.data = json.dumps(data)
         db.session.commit()
-    log_action(None, "add_user", target=username, detail="the first administrator, a superadmin",
-               actor=_SETUP_ACTOR)
     # Single-use: from here the wizard answers to this admin (the owner token, or signing in).
     remove_setup_token()
+    log_action(None, "add_user", target=username, detail="the first administrator, a superadmin",
+               actor=_SETUP_ACTOR)
     return redirect("/setup")
 
 
@@ -539,8 +539,8 @@ def _finish_setup(state, data, cfg):
         except Exception:
             _log.debug("setup_wizard: ignored non-fatal error", exc_info=True)
     db.session.commit()
-    log_action(None, "setup_finished", target=_SETUP_TARGET, actor=_SETUP_ACTOR)
     remove_setup_token()     # already gone with the admin step; this covers a token made since
+    log_action(None, "setup_finished", target=_SETUP_TARGET, actor=_SETUP_ACTOR)
     # Rendered here rather than redirected to: the finished wizard is locked, so a GET of /setup
     # goes to /login, and this page — the one that says where the panel is reachable — was never
     # shown to anyone.
