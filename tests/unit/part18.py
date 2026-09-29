@@ -452,6 +452,15 @@ def _gameuser18_queued(server, user, action, timeout=60, selfname=None, answers=
     return ("", "", 0)
 
 
+def _status18_idle(remote, gs, **k):
+    if gs.short_name == "rsidle" and _rsi18["swap"]:
+        _rsi18["swap"] = False
+        _take_server18(_rsi18["id"], name="p18-rsi-taker", short_name="rsitakerserver",
+                       status="online", restart_pending=True)
+        return "offline"          # found stopped: the sweep clears the flags without a reload
+    return "online"
+
+
 def _shell18(server, user, sh, timeout=30, selfname=None):
     _xs18.append(user)
     if user == "xone":
@@ -1102,10 +1111,26 @@ try:
     check("install reconcile: ...and the stranded row after it still is (control)",
           _xr218.status == "offline" and _xr218.installed is True,
           repr((_xs18, _xr218.status, _xr218.installed)))
-    _rs18_rows = [(a.target, a.game_server_id) for a in _audits18("restart_server")
-                  if a.target in ("p18-rsone", "p18-rstwo")]
-    check("queued restart: ...and the next queued server's restart still has its audit row",
-          ("p18-rstwo", _r218) in _rs18_rows, repr(_rs18_rows))
+    # A queued restart whose server is found stopped clears its flags WITHOUT a reload first: if
+    # the row was replaced during that status read, the flush refuses the write and leaves it in
+    # the sweep's session, for the next server's audit commit to refuse again, unless rolled back.
+    _rsi18 = {"swap": True}
+    _rsi18["id"] = _server18(_rh18, "rsidle", 27572, status="online", restart_pending=True)
+    _rsn18 = _server18(_rh18, "rsnext", 27573, status="online", restart_pending=True)
+    _only_flagged18({_rsi18["id"], _rsn18}, ("restart_pending", "stop_pending"))
+    _rs18.clear()
+
+    _p9_patch(_sh18, "get_server_status", _status18_idle)
+    _rsi18_err = _raises18(_sh18._run_due_restarts, _p9)
+    _rsi18_rows = [(a.target, a.game_server_id, a.success) for a in _audits18("restart_server")
+                   if a.target == "p18-rsnext"]
+    check("queued restart: a refused write for a replaced server leaves the next server's restart "
+          "its audit row", _rsi18_err is None and _rs18 == ["rsnext"]
+          and _rsi18_rows == [("p18-rsnext", _rsn18, True)],
+          repr((_rsi18_err, _rs18, _rsi18_rows)))
+    check("queued restart: ...and the server that took the id keeps its queued restart",
+          _row18(GameServer, _rsi18["id"]).restart_pending is True,
+          repr(_row18(GameServer, _rsi18["id"])))
 
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # Sweeps that probe first and apply after: the monitor, the player poll, the metric history,
