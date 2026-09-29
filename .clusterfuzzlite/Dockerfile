@@ -1,13 +1,14 @@
 # Build image for ClusterFuzzLite / OSS-Fuzz. Same contract as an upstream OSS-Fuzz project, with
 # the one documented difference: ClusterFuzzLite COPYs the checkout in, where OSS-Fuzz git-clones it.
-# PINNED by digest, like every `uses:` in .github/workflows is pinned by SHA. Untagged, this
+# PINNED by digest, like every `uses:` in .github/workflows is pinned by SHA; the `latest` tag beside
+# it is only for Dependabot (.github/dependabot.yml), since Docker builds the digest. Untagged, this
 # resolved to whatever :latest happened to be that morning, so the environment the fuzzers are
 # built in could change with no commit here — and a fuzz build that changes under you is a green
 # tick that means something different each week. Bump deliberately:
 #   curl -sSL https://gcr.io/v2/oss-fuzz-base/base-builder-python/manifests/latest \
 #     -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' -D - -o /dev/null \
 #     | grep -i docker-content-digest
-FROM gcr.io/oss-fuzz-base/base-builder-python@sha256:6b2b3a7e4a2da50de47f94925cffbe34747e1aae4f33d7f07ba6c681dd648b23
+FROM gcr.io/oss-fuzz-base/base-builder-python:latest@sha256:6b2b3a7e4a2da50de47f94925cffbe34747e1aae4f33d7f07ba6c681dd648b23
 # No USER line, deliberately: root is the base-builder contract. ClusterFuzzLite's build step runs
 # `cd / && rm -rf /src/linuxgsm-panel/* && cp -r <checkout> /src && cd - && compile` in this image
 # (oss-fuzz infra/cifuzz/continuous_integration.py), and compile writes $OUT and $WORK. As any
