@@ -3752,7 +3752,8 @@ _AUD_FIXTURE = {
     "fx.pkg": ("from fx.pkg import a, b\n_MODULES = (a, b)\n"
                "def __getattr__(name):\n    return None\n", True),
     "fx.pkg.a": ("def helper():\n    return 1\n", False),
-    "fx.pkg.b": ("from fx import logs\ndef helper():\n    logs._run()\n", False),
+    "fx.pkg.b": ("from fx import logs\ndef helper():\n    logs._run()\n"
+                 "def only_here():\n    logs._run()\n", False),
     "fx.routes": (textwrap.dedent('''
         import threading
         from fx import quiet as so, logs, pkg
@@ -3770,6 +3771,9 @@ _AUD_FIXTURE = {
 
         def by_first_pep562_module():
             pkg.helper()
+
+        def by_pep562_module():
+            pkg.only_here()
 
         def by_real_worker():
             logs._run()
@@ -3799,7 +3803,7 @@ _AUD_FIXTURE = {
 _aud_fx = _aud_cg.CallGraph(_AUD_FIXTURE)
 _aud_fx_logs = {q: _aud_fx.logs(_aud_fx.function_key("fx.routes", q)) for q in (
     "by_module_attr", "by_from_import", "by_shadowing_parameter", "by_first_pep562_module",
-    "by_real_worker", "by_thread_target", "by_module_log_action", "Svc.go",
+    "by_real_worker", "by_thread_target", "by_module_log_action", "by_pep562_module", "Svc.go",
     "register.<locals>.by_closure")}
 check("audit gate: a call that only shares its name with a function that logs is not an audit row",
       not any(_aud_fx_logs[q] for q in ("by_module_attr", "by_from_import",
@@ -3807,7 +3811,7 @@ check("audit gate: a call that only shares its name with a function that logs is
       repr(_aud_fx_logs))
 check("audit gate: ...while the function that does log is followed however it is reached (control)",
       all(_aud_fx_logs[q] for q in ("by_real_worker", "by_thread_target", "by_module_log_action",
-                                    "Svc.go", "register.<locals>.by_closure")),
+                                    "by_pep562_module", "Svc.go", "register.<locals>.by_closure")),
       repr(_aud_fx_logs))
 # ── an audit row about a server or host names it by ID ─────────────────────────────────────────
 # audit_scope decides who reads a row from AuditLog.game_server_id / remote_id, which log_action
