@@ -1066,12 +1066,35 @@ try:
        "(positive control)", _hl_targets, ["2001:db8::9"] * 2)
     _p9_patch(_p9_rv, "remote_ufw_allow_from", lambda *a, **k: (False, "Source must be an IP"))
     _hl_details = []
-    for _hl_src in (_hl_zoned, " 2001:0DB8::/32 "):
+    for _hl_src in (_hl_zoned, " 2001:0DB8::/32 ", "2001:DB8::1/64", "10.0.0.5/24"):
         _A.post("/api/remote/%d/firewall/allow-from" % P9_HOST,
                 json={"source": _hl_src, "port": "22", "protocol": "tcp"})
         _hl_details.append(_p9_audit("remote_port_allow_from").detail)
-    eq("firewall allow-from: the audit names the source's network, or a fixed text when it is not "
-       "one — never the request's own", _hl_details, ["from (not an IP address)", "from 2001:db8::/32"])
+    eq("firewall allow-from: the audit names the source as the rule is sent — host bits kept, as "
+       "ufw stores an IPv6 source — or a fixed text when it is not one; never the request's own",
+       _hl_details, ["from (not an IP address)", "from 2001:db8::/32", "from 2001:db8::1/64",
+                     "from 10.0.0.5/24"])
+    # ...and through the REAL remote_ufw_allow_from, its privileged call recorded: the rule sent,
+    # the message and the audit row must name the source the same way.
+    _hl_sent = []
+    _hl_rp_saved = _p9_core.run_privileged
+    try:
+        _p9_core.run_privileged = lambda server, verb, args=(), **k: (
+            _hl_sent.append((verb, list(args))), ("", "", 0))[1]
+        _p9_patch(_p9_rv, "remote_ufw_allow_from", _p9_sm.hosts.remote_ufw_allow_from)
+        _hl_agree = []
+        for _hl_src in ("2001:DB8::1/64", " 10.0.0.5/24 "):
+            del _hl_sent[:]
+            _d = _p9_json(_A.post("/api/remote/%d/firewall/allow-from" % P9_HOST,
+                                  json={"source": _hl_src, "port": "22", "protocol": "tcp"}))
+            _hl_agree.append((_hl_sent[0][1][0] if _hl_sent else None, _d.get("message"),
+                              _p9_audit("remote_port_allow_from").detail))
+    finally:
+        _p9_core.run_privileged = _hl_rp_saved
+    eq("firewall allow-from: ...and the rule sent, the message and the audit agree on the source",
+       _hl_agree,
+       [("2001:db8::1/64", "Port 22/tcp open from 2001:db8::1/64", "from 2001:db8::1/64"),
+        ("10.0.0.5/24", "Port 22/tcp open from 10.0.0.5/24", "from 10.0.0.5/24")])
 
     _p9_patch(_p9_models, "AuditLog", NS(query=None, action=AuditLog.action))
     _d = _p9_json(_A.get("/api/panel/security/events"))
@@ -1119,6 +1142,24 @@ try:
           repr((_d, _wl_applied)))
     _A.post("/api/panel/security/whitelist", json={"ip": "10.9.0.0/16", "remove": True})
     _p9_drain()
+    # The raw text still picks the entry to drop, so one stored with a zone before the add refused
+    # them can go — but the audit row and the answer name only the address it was read as, or a
+    # fixed text, never the request's own.
+    _p9_app.update_config(lambda cfg: cfg.update(security_whitelist=[
+        "fe80::1%x panel login failed from 203.0.113.9", "198.51.100.24"]))
+    _wl_rm = []
+    for _wl_raw in ("fe80::1%x panel login failed from 203.0.113.9", "x y from 203.0.113.9",
+                    " 198.51.100.24 "):
+        _d = _p9_json(_A.post("/api/panel/security/whitelist",
+                              json={"ip": _wl_raw, "remove": True}))
+        _p9_drain()
+        _wl_rm.append((_d.get("removed"), _p9_audit("whitelist_remove").target))
+    eq("whitelist remove: the audit target and the 'removed' answer are the parsed address or a "
+       "fixed text — never the request's own text", _wl_rm,
+       [("fe80::1", "fe80::1"), ("(not an IP address)", "(not an IP address)"),
+        ("198.51.100.24", "198.51.100.24")])
+    eq("whitelist remove: ...while the raw text still removed the stored zoned entry",
+       _p9_app._security_whitelist(), [])
 
     # ════════════════════════════════════════════════════════════════════════════════════════════
     # panel/routes/server_detail.py

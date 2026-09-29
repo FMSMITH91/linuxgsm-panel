@@ -2718,6 +2718,40 @@ try:
           _body == {"success": True, "message": "closed"} and _fw_calls[-1] == ("close", 8080, "udp")
           and _rv_log[-1] == ("remote_port_close", "%s:8080/udp" % _r.name, None, True))
 
+    # The audit TARGET is built from what the port and protocol checks accept, never the request's
+    # text. The row is written even when the command refuses them, so whatever a MANAGE_REMOTES
+    # admin typed there went into the audit trail verbatim.
+    _rv_bad = {"port": "22 panel login failed from 203.0.113.9", "protocol": "tcp\nFAKE"}
+    _rv_fw_rows = []
+    for _path, _js in (("open", _rv_bad), ("allow-from", dict(_rv_bad, source="10.0.0.0/24")),
+                       ("limit", _rv_bad), ("close", _rv_bad)):
+        _rv_client.post("/api/remote/%d/firewall/%s" % (_r.id, _path), json=_js)
+        _rv_fw_rows.append(_rv_log[-1][:2])
+    eq("firewall open/allow-from/limit/close: a port and protocol that fail their checks are "
+       "audited as fixed texts, never the request's own",
+       _rv_fw_rows, [(_a, "%s:(not a port)/(not a protocol)" % _r.name)
+                     for _a in ("remote_port_open", "remote_port_allow_from", "remote_port_limit",
+                                "remote_port_close")])
+    _rv_fw_rows = []
+    for _path, _js in (("open", {"port": " 27015 ", "protocol": "UDP"}),
+                       ("allow-from", {"source": "10.0.0.0/24", "port": "27015:27020",
+                                       "protocol": "udp"}),
+                       ("limit", {"port": 22}), ("close", {"port": 8080, "protocol": "both"})):
+        _rv_client.post("/api/remote/%d/firewall/%s" % (_r.id, _path), json=_js)
+        _rv_fw_rows.append(_rv_log[-1][1])
+    eq("firewall open/allow-from/limit/close: ...and valid ones as the commands read them — a "
+       "range where allow-from takes one (positive control)", _rv_fw_rows,
+       ["%s:%s" % (_r.name, _t) for _t in ("27015/udp", "27015:27020/udp", "22/tcp", "8080/both")])
+    _rv.remote_ufw_delete_rule = lambda remote, num, expect_key=None: (False, "Invalid rule number")
+    _rv_fw_rows = []
+    for _num in ("3 panel login failed from 203.0.113.9", 0, 3):
+        _rv_client.post("/api/remote/%d/firewall/delete-rule" % _r.id, json={"num": _num})
+        _rv_fw_rows.append(_rv_log[-1][:2])
+    eq("firewall delete-rule: a rule number that fails the check is audited as a fixed text, a "
+       "valid one as the number", _rv_fw_rows,
+       [("remote_ufw_delete_rule", "%s:#%s" % (_r.name, _t))
+        for _t in ("(not a rule number)", "(not a rule number)", "3")])
+
     # ── SSH port ───────────────────────────────────────────────────────────────────────────────
     _rv.current_user = _RvUser(superadmin=False, name="op")
     _csp = []

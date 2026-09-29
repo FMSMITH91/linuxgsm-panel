@@ -137,11 +137,19 @@ def unzoned_ip_address_or_none(value):
       * the SOCKET PEER. The kernel can hand a link-local client over with its interface as the
         zone (fe80::1%eth0); eventlet reports one without it, but a WSGI server is free to write
         it. That is one real client, and refusing it would key it as raw text or skip its ban;
+      * the client address a PROXY reports. Apache's mod_proxy and Go's httputil.ReverseProxy
+        write a link-local client into X-Forwarded-For with its zone. Refusing it keyed that
+        client as the proxy, so its failed logins reached auth.log as the proxy's, and fail2ban
+        banned the proxy and everyone behind it;
       * a throttle KEY, which must stay one bucket per address whatever text follows the '%';
       * a refuse-only ban check, where reading the address a zone is attached to can only refuse
-        more — refusing the value instead let '2001:db8::1%x' past a ban on 2001:db8::1.
+        more — refusing the value instead let '2001:db8::1%x' past a ban on 2001:db8::1;
+      * a value an older version already STORED with a zone (a whitelist entry, an audit row's
+        address), which is read as the address it was stored for.
 
-    Never for a value that is recorded, logged or handed to a tool: use ip_address_or_none.
+    What such a caller records, logs or hands on is str() of the result: the parsed number, with
+    no zone. Never the input text, and never the value itself where refusing it is the check (a
+    ban, a firewall rule, a bind address): use ip_address_or_none there.
     Only IPv6 has zones, so '1.2.3.4%x' is not an address at all.
     """
     text = "" if value is None else str(value).strip()
@@ -149,6 +157,30 @@ def unzoned_ip_address_or_none(value):
     if addr is not None and "%" in text and addr.version != 6:
         return None
     return addr
+
+
+def unzoned_ip_or_network(value):
+    """A STORED whitelist entry as canonical text, an IPv6 zone id dropped; None if it is neither.
+
+    For entries written before the whitelist refused a zone (the add refuses one now, so only an
+    older config holds one). Before that refusal the auto-block and the ban gate honoured such an
+    entry as the address or network it named, and the Settings page still lists it as active, so
+    it is read that way again rather than silently exempting nothing. A bare address stays an
+    address ('fe80::1%eth0' -> 'fe80::1'); 'a%zone/n' is the network the old parse gave
+    ('2001:db8::%eth0/64' -> '2001:db8::/64'). Both are rebuilt from the parsed number, so no
+    zone text survives. An entry without a zone reads exactly as canonical_ip_or_network does.
+    Also what a whitelist removal is audited as: the entry it takes out, read the same way.
+    """
+    text = "" if value is None else str(value).strip()
+    if "/" not in text:
+        addr = unzoned_ip_address_or_none(text)
+        return None if addr is None else str(addr)
+    try:
+        net = ipaddress.ip_network(text, strict=False)
+    except ValueError:
+        return None
+    # From the integer, through the network's own class: an int alone would read ::1 as IPv4.
+    return str(type(net)((int(net.network_address), net.prefixlen)))
 
 
 # nosec B104 - the set of wildcard addresses to RECOGNISE, so callers can tell "listening

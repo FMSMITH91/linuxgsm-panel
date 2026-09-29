@@ -20,7 +20,8 @@ import logging
 import threading
 import time
 
-from panel.core.validation import ip_network_or_none, unzoned_ip_address_or_none
+from panel.core.validation import (ip_network_or_none, unzoned_ip_address_or_none,
+                                   unzoned_ip_or_network)
 
 _log = logging.getLogger(__name__)
 
@@ -136,9 +137,14 @@ def set_ufw(ips, taken=None):
 
 
 def set_whitelist(entries):
-    """The security whitelist: addresses and networks this gate never refuses."""
+    """The security whitelist: addresses and networks this gate never refuses.
+
+    An entry stored with a zone id, from before the whitelist refused one, still exempts the
+    address or network it names, as it did then and as the Settings page shows it: skipped, it
+    stopped exempting anything with nothing on screen to say so (validation.unzoned_ip_or_network).
+    """
     global _allow
-    _allow = tuple(_networks(entries))
+    _allow = tuple(_networks(unzoned_ip_or_network(e) for e in entries or ()))
 
 
 def active():

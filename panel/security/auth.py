@@ -1001,17 +1001,36 @@ def _ip_or_none(value):
 
     Parsing is not enough: ipaddress keeps an IPv6 zone id verbatim, so 'fe80::1%x panel login
     failed from 203.0.113.9' parsed and came back whole — into data/auth.log, where fail2ban then
-    banned 203.0.113.9, into the audit trail and into admin alerts. A zone is refused like any other
-    text that is not an address (panel/core/validation.py).
+    banned 203.0.113.9, into the audit trail and into admin alerts. A zone is refused here like any
+    other text that is not an address (panel/core/validation.py). The proxy-reported client address
+    is read by _forwarded_hop_address instead, which keys the address and drops the zone.
     """
+    return canonical_ip(_forwarded_host_text(value))
+
+
+def _forwarded_host_text(value):
+    """A forwarded address with its brackets and port peeled (some proxies add them); "" if none."""
     text = (value or "").strip()
-    if not text:
-        return None
     if text.startswith("["):                       # [2001:db8::1] or [2001:db8::1]:443
-        text = text[1:].split("]", 1)[0]
-    elif text.count(":") == 1:                     # 203.0.113.9:443 — one colon means IPv4:port
-        text = text.split(":", 1)[0]
-    return canonical_ip(text)
+        return text[1:].split("]", 1)[0]
+    if text.count(":") == 1:                       # 203.0.113.9:443 — one colon means IPv4:port
+        return text.split(":", 1)[0]
+    return text
+
+
+def _forwarded_hop_address(value):
+    """The client address a PROXY reported, as a bare address string; None if it is not one.
+
+    Like _ip_or_none, but an IPv6 zone id is DROPPED rather than refused. Apache's mod_proxy and
+    Go's httputil.ReverseProxy write a link-local client into X-Forwarded-For with its zone
+    (fe80::1%eth0). Refused, that client was keyed as the proxy: its failed logins went to
+    data/auth.log and the audit trail under the proxy's address, and fail2ban and the auto-block
+    banned the proxy, locking out everyone behind it. What is returned is built from the parsed
+    number alone, so no zone text reaches any of those, and a zone full of text names the same
+    client, and the same throttle bucket, as the bare address.
+    """
+    addr = unzoned_ip_address_or_none(_forwarded_host_text(value))
+    return None if addr is None else str(addr)
 
 
 def _peer_or_none(value):
@@ -1019,8 +1038,8 @@ def _peer_or_none(value):
 
     Like _ip_or_none, but a zone id is dropped rather than refused: the kernel can report a
     link-local client with its interface attached (fe80::1%eth0), and that is still one real client
-    to key — refusing it fell back to the raw text. Only for the peer the kernel supplied, never a
-    header.
+    to key — refusing it fell back to the raw text. A proxy's header is read by
+    _forwarded_hop_address, which drops a zone the same way.
     """
     addr = unzoned_ip_address_or_none(value)
     return None if addr is None else str(addr)
@@ -1340,7 +1359,8 @@ def client_ip():
 
       * and neither unless the value parses as an IP address. A throttle key is only a throttle
         while the set of keys is bounded; an unparseable header would otherwise become a bucket
-        of its own.
+        of its own. An IPv6 zone id is dropped and the address kept (_forwarded_hop_address): a
+        link-local client behind Apache or Go's reverse proxy arrives with one.
       * and neither unless the request reached us from a proxy at all — trust_proxy set, or a
         loopback peer whose socket ROOT owns (tailscaled; see _loopback_proxy_trusted — any local
         account can dial loopback). The ORIGINAL socket peer is used to decide, because ProxyFix
@@ -1400,14 +1420,15 @@ def _forwarded_client_ip():
     """The client address the proxy reported, or None.
 
     X-Forwarded-For's LAST hop when it parses as an IP address, else X-Real-IP when that does (see
-    client_ip for why that order).
+    client_ip for why that order). A zone id on either is dropped, not refused, and the address
+    it is attached to is the client (see _forwarded_hop_address).
     """
     xff = request.headers.get("X-Forwarded-For", "")
     if xff:
-        hop = _ip_or_none(xff.split(",")[-1])
+        hop = _forwarded_hop_address(xff.split(",")[-1])
         if hop:
             return hop
-    return _ip_or_none(request.headers.get("X-Real-IP"))
+    return _forwarded_hop_address(request.headers.get("X-Real-IP"))
 
 
 def session_fingerprint():
