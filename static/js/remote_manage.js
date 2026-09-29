@@ -17,7 +17,8 @@ var _autoblockKnown = false;
 function loadSecurity(){ loadSecurityBans(); loadSecurityTopIps(); loadSecurityEvents(); }
 function loadSecurityTopIps(){
   var el=document.getElementById('sec-top'); if(!el) return;
-  fetch(secBase()+'/top-ips').then(function(r){return r.json();}).then(function(d){
+  // The card's controls - Auto-block, the threshold, the whitelist - from one /top-ips answer.
+  function paintControls(d){
     // Only repaint a control from a value the payload ACTUALLY CARRIED. This was
     // `tog.checked = !!(d && d.autoblock)`, and the error payload has no `autoblock` key — so a
     // failed read showed the Auto-block toggle OFF. saveThreshold then reads that toggle back
@@ -28,6 +29,9 @@ function loadSecurityTopIps(){
     var th=document.getElementById('sec-threshold');
     if(th && d && d.threshold!=null) th.value=d.threshold;
     if(d && 'whitelist' in d) renderWhitelist(d.whitelist||[]);
+  }
+  fetch(secBase()+'/top-ips').then(function(r){return r.json();}).then(function(d){
+    paintControls(d);
     var ips=(d&&d.ips)||[];
     // "nothing to report" and "the panel could not read the log" are different answers, and the
     // second one must not read as a clean bill of health on a SECURITY card.
@@ -39,8 +43,11 @@ function loadSecurityTopIps(){
     }
     if(!ips.length){ el.innerHTML='<div class="small text-secondary">No fail2ban activity logged yet.</div>'; return; }
     var rows=ips.map(function(o,i){
+      // Number() at the sink: the counts go into innerHTML unescaped, and the server's int() parse
+      // (after _F2B_EVENT_RE) should not be the only thing keeping markup out of the page.
+      var att = Number(o.attempts) || 0, bans = Number(o.bans) || 0;
       var badge = o.banned_now ? '<span class="badge bg-danger">banned now</span>'
-                : (o.bans>0 ? '<span class="badge bg-secondary" style="font-weight:normal;">'+o.bans+' ban'+(o.bans===1?'':'s')+'</span>' : '');
+                : (bans>0 ? '<span class="badge bg-secondary" style="font-weight:normal;">'+bans+' ban'+(bans===1?'':'s')+'</span>' : '');
       var block = o.blocked
         ? '<span class="badge bg-dark border me-1" style="font-weight:normal;"><i class="bi bi-shield-fill-x"></i> blocked</span>'
           +'<button class="btn btn-link btn-sm p-0" style="font-size:.72rem;"'+_da('unblockOffender',[o.ip,'@self'])+'>unblock</button>'
@@ -52,8 +59,8 @@ function loadSecurityTopIps(){
         : '<span class="text-secondary">—</span>';
       return '<tr><td class="small text-secondary">'+(i+1)+'</td>'
         +'<td class="small"><code>'+escapeHtml(o.ip)+'</code></td>'
-        +'<td class="small text-end">'+(o.attempts||0)+'</td>'
-        +'<td class="small text-end">'+(o.bans||0)+'</td>'
+        +'<td class="small text-end">'+att+'</td>'
+        +'<td class="small text-end">'+bans+'</td>'
         +'<td class="small text-nowrap">'+jailCell+'</td>'
         +'<td class="small">'+badge+'</td>'
         +'<td class="small text-nowrap">'+block+'</td></tr>';
@@ -89,7 +96,7 @@ function toggleAutoblock(cb){
     }).catch(function(){ if(window.toast) toast('Couldn\'t change auto-block','danger'); if(cb) cb.checked=!on; });
 }
 function saveThreshold(btn){
-  var inp=document.getElementById('sec-threshold'); var v=parseInt(inp&&inp.value,10);
+  var inp=document.getElementById('sec-threshold'); var v=Number.parseInt(inp&&inp.value,10);
   if(!v||v<1){ if(window.toast) toast('Enter a number of attempts (1 or more)','info'); return; }
   // The on/off state rides along (the endpoint sets both), so it has to be the host's real one:
   // an unpainted toggle reads OFF whatever the host has. Refuse until it has been read.
@@ -318,30 +325,40 @@ function pollLive(){
       return;
     }
     if(stale){ stale.textContent=''; stale.style.display='none'; }
-    var ov=d.cpu_overall||0;
-    document.getElementById('cpu-overall-val').textContent=ov;
-    var ob=document.getElementById('cpu-overall-bar'); ob.style.width=ov+'%'; ob.style.backgroundColor=barColor(ov);
-    document.getElementById('cpu-cores-label').textContent=(d.core_count||(d.cpu_cores||[]).length)+' cores';
-    var cores=d.cpu_cores||[];
-    if(cores.length!==coresBuilt) buildCores(cores.length);
-    cores.forEach(function(p,i){
-      var f=document.getElementById('core-fill-'+i), v=document.getElementById('core-val-'+i);
-      if(f){ f.style.width=p+'%'; f.style.backgroundColor=barColor(p); }
-      if(v) v.textContent=p+'%';
-    });
-    var rp=d.ram_percent||0;
-    document.getElementById('ram-val').textContent=rp;
-    var rb=document.getElementById('ram-bar'); rb.style.width=rp+'%'; rb.style.backgroundColor=barColor(rp);
-    document.getElementById('ram-detail').textContent=fmtGB(d.ram_used||0)+' / '+fmtGB(d.ram_total||0)+' used';
-    var sp=d.swap_percent||0;
-    document.getElementById('swap-val').textContent=sp;
-    var sb=document.getElementById('swap-bar'); sb.style.width=sp+'%'; sb.style.backgroundColor=barColor(sp);
-    document.getElementById('swap-detail').textContent=d.swap_total?(fmtGB(d.swap_used||0)+' / '+fmtGB(d.swap_total)+' used'):'No swap configured';
-    var dp=d.disk_percent||0;
-    document.getElementById('disk-val').textContent=dp;
-    var db=document.getElementById('disk-bar'); db.style.width=dp+'%'; db.style.backgroundColor=barColor(dp);
-    document.getElementById('disk-detail').textContent=d.disk_total?(fmtGB(d.disk_used||0)+' / '+fmtGB(d.disk_total)+' used'):'—';
+    _livePaintCpu(d);
+    _livePaintMemory(d);
+    _livePaintDisk(d);
   }).catch(function(){});
+}
+// One /live reading onto the card, for pollLive: the CPU and its cores, RAM and swap, the disk.
+function _livePaintCpu(d){
+  var ov=d.cpu_overall||0;
+  document.getElementById('cpu-overall-val').textContent=ov;
+  var ob=document.getElementById('cpu-overall-bar'); ob.style.width=ov+'%'; ob.style.backgroundColor=barColor(ov);
+  document.getElementById('cpu-cores-label').textContent=(d.core_count||(d.cpu_cores||[]).length)+' cores';
+  var cores=d.cpu_cores||[];
+  if(cores.length!==coresBuilt) buildCores(cores.length);
+  cores.forEach(function(p,i){
+    var f=document.getElementById('core-fill-'+i), v=document.getElementById('core-val-'+i);
+    if(f){ f.style.width=p+'%'; f.style.backgroundColor=barColor(p); }
+    if(v) v.textContent=p+'%';
+  });
+}
+function _livePaintMemory(d){
+  var rp=d.ram_percent||0;
+  document.getElementById('ram-val').textContent=rp;
+  var rb=document.getElementById('ram-bar'); rb.style.width=rp+'%'; rb.style.backgroundColor=barColor(rp);
+  document.getElementById('ram-detail').textContent=fmtGB(d.ram_used||0)+' / '+fmtGB(d.ram_total||0)+' used';
+  var sp=d.swap_percent||0;
+  document.getElementById('swap-val').textContent=sp;
+  var sb=document.getElementById('swap-bar'); sb.style.width=sp+'%'; sb.style.backgroundColor=barColor(sp);
+  document.getElementById('swap-detail').textContent=d.swap_total?(fmtGB(d.swap_used||0)+' / '+fmtGB(d.swap_total)+' used'):'No swap configured';
+}
+function _livePaintDisk(d){
+  var dp=d.disk_percent||0;
+  document.getElementById('disk-val').textContent=dp;
+  var db=document.getElementById('disk-bar'); db.style.width=dp+'%'; db.style.backgroundColor=barColor(dp);
+  document.getElementById('disk-detail').textContent=d.disk_total?(fmtGB(d.disk_used||0)+' / '+fmtGB(d.disk_total)+' used'):'—';
 }
 function isSecurityPkg(p){ return ((p.suite||'').indexOf('-security') >= 0); }
 // Render one check result into the OS Updates card. `note` is the provenance line — a forced check
@@ -464,13 +481,7 @@ function _pollOsUpdate(){
       // mid-upgrade is enough). An unread poll keeps the last log, is not counted towards the
       // "ended without a marker" verdict, and polls again; only a long silence ends the watch.
       if(_osuPollUnread(d)){
-        _osuMiss++;
-        if(_osuMiss>=40){ if(spin) spin.style.display='none';
-          if(stEl){ stEl.className='small mb-2 text-warning';
-            stEl.textContent='Lost contact with the host for two minutes. The update may still be running — reopen this later to check.'; }
-          return; }
-        if(stEl){ stEl.className='small mb-2 text-warning';
-          stEl.textContent='Lost contact with the host — still watching…'; }
+        if(_osuLostContact(spin, stEl)) return;
         _osuTimer=setTimeout(_pollOsUpdate, 3000);
         return;
       }
@@ -478,32 +489,55 @@ function _pollOsUpdate(){
       if(logEl){ var atBottom=logEl.scrollTop+logEl.clientHeight >= logEl.scrollHeight-30;
         logEl.textContent=d.log||'';                     // textContent: apt output is never HTML
         if(atBottom) logEl.scrollTop=logEl.scrollHeight; }
-      if(d.done){
-        if(spin) spin.style.display='none';
-        var ok=(d.rc===0);
-        if(stEl){ stEl.className='small mb-2 '+(ok?'text-success':'text-danger');
-          stEl.innerHTML=ok?'<i class="bi bi-check-circle-fill"></i> Updates installed.'  // nosemgrep
-                           :'<i class="bi bi-x-circle-fill"></i> Finished with errors (exit '+d.rc+') — see the log above.'; }
-        var info=document.getElementById('update-info');
-        if(info) info.innerHTML=ok?'<span class="text-success"><i class="bi bi-check-circle"></i> Updates installed — re-checking…</span>'
-                                  :'<span class="text-danger">Update finished with errors — see the popup.</span>';
-        // Re-check after a beat so the "installed" note is readable; a full-upgrade should now show 0.
-        if(ok && typeof checkUpdates==='function') setTimeout(checkUpdates, 1500);
-        if(window.rebootNagCheck){ if(IS_LOCAL && window.LOCAL_HOST_ID!=null) rebootNagCheck(window.LOCAL_HOST_ID,'the panel host');
-                                   else if(!IS_LOCAL) rebootNagCheck(REMOTE_ID, REMOTE_NAME); }   // kernel update -> banner
-        return;
-      }
+      if(d.done){ _osuShowDone(d, spin, stEl); return; }
       // Only a definite "apt is not running" counts towards giving up; an unanswered probe
       // (running null) is neither.
       _osuStale = d.running === true ? 0 : d.running === false ? (_osuStale+1) : _osuStale;
-      if(_osuStale>=3){ if(spin) spin.style.display='none';
-        if(stEl){ stEl.className='small mb-2 text-warning';
-          stEl.innerHTML='<i class="bi bi-exclamation-triangle"></i> The update process ended without a completion marker — check the log.'; }
-        return; }
-      if(stEl && d.running){ stEl.className='small mb-2 text-secondary';
-        stEl.innerHTML='<i class="bi bi-hourglass-split"></i> Installing… (safe to close this popup — it keeps running)'; }
+      if(!_osuStillRunning(d, spin, stEl)) return;
       _osuTimer=setTimeout(_pollOsUpdate, 1500);
     }).catch(function(){ _osuTimer=setTimeout(_pollOsUpdate, 3000); });
+}
+// An unread status poll, for _pollOsUpdate: counted, and said so. True once 40 in a row - two
+// minutes of silence - have ended the watch.
+function _osuLostContact(spin, stEl){
+  _osuMiss++;
+  if(_osuMiss>=40){ if(spin) spin.style.display='none';
+    if(stEl){ stEl.className='small mb-2 text-warning';
+      stEl.textContent='Lost contact with the host for two minutes. The update may still be running — reopen this later to check.'; }
+    return true; }
+  if(stEl){ stEl.className='small mb-2 text-warning';
+    stEl.textContent='Lost contact with the host — still watching…'; }
+  return false;
+}
+// The update finished: say how, in the popup and on the card, then re-check and raise the
+// reboot banner if the update left one due.
+function _osuShowDone(d, spin, stEl){
+  if(spin) spin.style.display='none';
+  var ok=(d.rc===0);
+  if(stEl){ stEl.className='small mb-2 '+(ok?'text-success':'text-danger');
+    stEl.innerHTML=ok?'<i class="bi bi-check-circle-fill"></i> Updates installed.'  // nosemgrep
+                     :'<i class="bi bi-x-circle-fill"></i> Finished with errors (exit '+d.rc+') — see the log above.'; }
+  var info=document.getElementById('update-info');
+  if(info) info.innerHTML=ok?'<span class="text-success"><i class="bi bi-check-circle"></i> Updates installed — re-checking…</span>'
+                            :'<span class="text-danger">Update finished with errors — see the popup.</span>';
+  // Re-check after a beat so the "installed" note is readable; a full-upgrade should now show 0.
+  if(ok && typeof checkUpdates==='function') setTimeout(checkUpdates, 1500);
+  _osuRebootNag();
+}
+function _osuRebootNag(){
+  if(window.rebootNagCheck){ if(IS_LOCAL && window.LOCAL_HOST_ID!=null) rebootNagCheck(window.LOCAL_HOST_ID,'the panel host');
+                             else if(!IS_LOCAL) rebootNagCheck(REMOTE_ID, REMOTE_NAME); }   // kernel update -> banner
+}
+// Not done yet. False once apt has been definitely not running for three polls in a row, which
+// ends the watch; otherwise the popup says it is installing while apt is running.
+function _osuStillRunning(d, spin, stEl){
+  if(_osuStale>=3){ if(spin) spin.style.display='none';
+    if(stEl){ stEl.className='small mb-2 text-warning';
+      stEl.innerHTML='<i class="bi bi-exclamation-triangle"></i> The update process ended without a completion marker — check the log.'; }
+    return false; }
+  if(stEl && d.running){ stEl.className='small mb-2 text-secondary';
+    stEl.innerHTML='<i class="bi bi-hourglass-split"></i> Installing… (safe to close this popup — it keeps running)'; }
+  return true;
 }
 function rebootRemote(){
   // Check for players on ANY game server on this host first — a reboot disconnects them all.

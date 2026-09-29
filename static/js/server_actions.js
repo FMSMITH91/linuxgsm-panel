@@ -2,6 +2,21 @@
 // Needs SERVER_NAME, serverId and MOUNT, which each page assigns inline before loading this.
 function _esc(s){ return window.escapeHtml(s); }
 
+// Maintenance/info actions (details, postdetails, monitor, …) return text you want to READ —
+// show it in a dismissible panel, not a toast that disappears before you see it.
+function _reportActionResult(action, d, showOutput) {
+  if (showOutput) showActionOutput(action, d.message || (d.success ? 'Done — no output' : 'Failed'), d.success);
+  else toast(d.message || (action + ' done'), d.success ? 'success' : 'danger');
+}
+
+// A start, stop or restart that went through supersedes one queued for "when empty".
+function _hidePendingBannerAfter(action, d) {
+  if (d.success && (action === 'restart' || action === 'start' || action === 'stop')) {
+    var b = document.getElementById('restart-pending-banner');
+    if (b) b.classList.add('d-none');
+  }
+}
+
 function _doServerAction(action, btn, showOutput) {
   var orig = btn.innerHTML;
   btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
@@ -11,14 +26,8 @@ function _doServerAction(action, btn, showOutput) {
   })
   .then(r => r.json())
   .then(function (d) {
-    // Maintenance/info actions (details, postdetails, monitor, …) return text you want to READ —
-    // show it in a dismissible panel, not a toast that disappears before you see it.
-    if (showOutput) showActionOutput(action, d.message || (d.success ? 'Done — no output' : 'Failed'), d.success);
-    else toast(d.message || (action + ' done'), d.success ? 'success' : 'danger');
-    if (d.success && (action === 'restart' || action === 'start' || action === 'stop')) {
-      var b = document.getElementById('restart-pending-banner');
-      if (b) b.classList.add('d-none');
-    }
+    _reportActionResult(action, d, showOutput);
+    _hidePendingBannerAfter(action, d);
     // pollStats lives in server_detail.js. This file is ALSO loaded by Files & Config, which does
     // not load that script — and `setTimeout(pollStats, …)` evaluates the identifier immediately,
     // so on that page it threw ReferenceError before any timer was set. The throw landed in the
@@ -61,7 +70,7 @@ function showActionOutput(title, text, ok) {
 
 function serverAction(action, btn, confirmFirst, showOutput) {
   // Restart AND stop get a player check first — warn, and offer "when empty".
-  if (action === 'restart' || action === 'stop') { return actionWithPlayerCheck(action, btn); }
+  if (action === 'restart' || action === 'stop') { actionWithPlayerCheck(action, btn); return; }
   if (confirmFirst) {
     var body = _esc(_cap(action)) + ' <strong>' + _esc(SERVER_NAME) + '</strong>?';
     if (action === 'fastdl') {

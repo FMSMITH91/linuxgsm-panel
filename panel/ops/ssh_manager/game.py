@@ -1,5 +1,9 @@
-"""SSH connection manager for remote LinuxGSM servers.
-Also supports local execution for running on the panel's own machine."""
+"""Engine families, player queries, the console, moderation and per-game backups.
+
+Part of the SSH connection manager for remote LinuxGSM servers, which also supports local
+execution for running on the panel's own machine (see the package docstring for how names
+resolve across its submodules).
+"""
 import re
 from panel.core import terminal
 import time
@@ -31,8 +35,11 @@ _ENG_MINECRAFT = frozenset({         # Minecraft — `list` gives names, kick/ba
 
 
 def game_engine(game_type):
-    """The moderation/query engine family for a LinuxGSM game: 'valve', 'idtech3', 'minecraft',
-    or '' when the game has no console-based moderation the panel understands."""
+    """The moderation/query engine family for a LinuxGSM game.
+
+    One of 'valve', 'idtech3', 'minecraft', or '' when the game has no console-based moderation the
+    panel understands.
+    """
     gt = (game_type or "").lower()
     if gt in _ENG_VALVE:
         return "valve"
@@ -70,8 +77,9 @@ def _sanitize_slotnum(s):
 
 
 def capture_console(server, user, selfname=None, lines=180):
-    """Read-only snapshot of the last `lines` of a LinuxGSM instance's live tmux console. Used to
-    read a `status`/`list` reply back. rc 3 + NO_SESSION when the server isn't running.
+    """Read-only snapshot of the last `lines` of a LinuxGSM instance's live tmux console.
+
+    Used to read a `status`/`list` reply back. rc 3 + NO_SESSION when the server isn't running.
 
     -J (join wrapped lines), because capture-pane otherwise returns the pane's VISUAL lines: every
     logical line is hard-wrapped at the pane width, mid-word, and both the console the user reads
@@ -84,7 +92,8 @@ def capture_console(server, user, selfname=None, lines=180):
     received two 80-column fragments — _parse_minecraft_list then read ONE player, named "Ali",
     and eleven were gone. That count feeds the Players panel, the empty-server notification and
     reboot-when-empty, and the ids moderation acts on. Five players with ordinary names is enough
-    to cross 80 columns."""
+    to cross 80 columns.
+    """
     selfname = selfname or user
     inner = _core._tmux_live_socket_sh(selfname) + f'tmux -L "$SOCK" capture-pane -p -J -t {selfname} -S -{int(lines)}'
     return _core.shell_as_game_user(server, user, inner, timeout=15, selfname=selfname)
@@ -97,9 +106,11 @@ _VALVE_ROW_RE = re.compile(r'\s*#\s*\d+\s+"([^"]*)"')
 
 
 def _parse_valve_status(text):
-    """Parse a Source/GoldSrc `status` reply into [{name, steamid, num, score, time}]. Player rows
-    start with '#' and carry a quoted name + a STEAM_/[U:..] id; bots have no id. Only the MOST
-    RECENT table is used (rows after the last 'uniqueid' header), so players who left don't linger.
+    """Parse a Source/GoldSrc `status` reply into [{name, steamid, num, score, time}].
+
+    Player rows start with '#' and carry a quoted name + a STEAM_/[U:..] id; bots have no id. Only
+    the MOST RECENT table is used (rows after the last 'uniqueid' header), so players who left
+    don't linger.
 
     Both halves of that are things a PLAYER CONTROLS, because their name is on the line:
 
@@ -142,11 +153,8 @@ def _parse_valve_status(text):
     return players
 
 
-def _parse_idtech3_status(text):
-    """Parse a Quake3/CoD `status` reply into [{name, num, guid, steamid, score, time}]. Rows are
-    'num score ping guid name … address …'; the name can contain spaces + ^-colour codes. Only the
-    most recent table (rows after the last 'num…score…ping' header) is kept."""
-    lines = (text or "").splitlines()
+def _idtech3_table_start(lines):
+    """Index of the first row after the LAST 'num…score…ping' header (0 when there is none)."""
     start = 0
     for i, ln in enumerate(lines):
         low = ln.lower()
@@ -158,24 +166,77 @@ def _parse_idtech3_status(text):
         # moderation needs came back None for the whole server.
         if "num" in low and "score" in low and "ping" in low and not re.match(r"\s*\d", ln):
             start = i + 1
+    return start
+
+
+# An idTech3 `status` row: "num score ping guid name … lastmsg address …". The name may hold
+# spaces, so it is whatever lies between the guid and the first "<lastmsg> <a.b.c.d:port>" after
+# it. That was one pattern, `\s+(.+?)\s+\d+\s+<address>`, and the lazy name re-walked every run
+# of blanks in the row at each character it grew by: quadratic in a row's blanks. The row is now
+# read in the same order the pattern read it — each run of blanks is tried ONCE, as the gap in
+# front of the lastmsg column — so the answers are the pattern's, in linear time.
+_IDT3_ROW_HEAD_RE = re.compile(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+(\S+)(\s+)")
+_IDT3_ADDR_RE = re.compile(r"\d+\s+\d{1,3}(?:\.\d{1,3}){3}:\d+")
+_BLANKS_RE = re.compile(r"\s+")
+# The fallback for rows with no address column: num score ping guid name(rest). The name starts on
+# a non-blank (`\S.*`, not `.+`): a `.+` after `\s+` could split the blanks between them every way.
+# Only the case where the row ENDS in blanks after the guid answers differently — there `.+` took
+# one blank as the name — and the caller strips a name and skips an empty one, as it does a miss.
+_IDT3_ROW_NOADDR_RE = re.compile(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{6,})\s+(\S.*)$")
+
+
+def _idtech3_row_with_address(ln):
+    """Return (num, score, ping, guid, name) for a row that has the address column, else None."""
+    head = _IDT3_ROW_HEAD_RE.match(ln)
+    if not head or head.end() >= len(ln):
+        return None
+    name_at = head.end()
+    for gap in _BLANKS_RE.finditer(ln, name_at + 1):
+        if _IDT3_ADDR_RE.match(ln, gap.end()):
+            return head.groups()[:4] + (ln[name_at:gap.start()],)
+    # The pattern's last resort: it gave the name a blank of the gap before it. So a row with NO
+    # name (the guid, three or more blanks, then lastmsg and address) matched with a one-blank name,
+    # which the caller skips. Returning None instead would hand that row to the fallback below,
+    # and it would come back as a player named after its own lastmsg and address.
+    if len(head.group(5)) >= 3 and _IDT3_ADDR_RE.match(ln, name_at):
+        return head.groups()[:4] + (ln[name_at - 2],)
+    return None
+
+
+def _match_idtech3_row(ln):
+    """Match one idTech3 status row, with or without the trailing address column (else None).
+
+    The answer is (num, score, ping, guid, name).
+    """
+    row = _idtech3_row_with_address(ln)
+    if row is None:
+        m = _IDT3_ROW_NOADDR_RE.match(ln)
+        row = m.groups() if m else None
+    return row
+
+
+def _parse_idtech3_status(text):
+    """Parse a Quake3/CoD `status` reply into [{name, num, guid, steamid, score, time}].
+
+    Rows are 'num score ping guid name … address …'; the name can contain spaces + ^-colour codes.
+    Only the most recent table (rows after the last 'num…score…ping' header) is kept.
+    """
+    lines = (text or "").splitlines()
+    start = _idtech3_table_start(lines)
     players, seen = [], set()
     for ln in lines[start:]:
-        # Preferred: name is everything between the guid and the trailing 'lastmsg address' columns.
-        m = re.match(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s+\d+\s+\d{1,3}(?:\.\d{1,3}){3}:\d+", ln)
-        if not m:
-            # Fallback for formats without an address column: num score ping guid name(rest).
-            m = re.match(r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{6,})\s+(.+)$", ln)
-            if not m:
-                continue
-        num = _int_or_none(m.group(1))
+        row = _match_idtech3_row(ln)
+        if not row:
+            continue
+        num = _int_or_none(row[0])
         if num is None or num in seen:
             continue
-        name = _strip_q3_colors(m.group(5)).strip()
+        name = _strip_q3_colors(row[4]).strip()
         if not name:
             continue
         seen.add(num)
-        players.append({"name": name[:64], "num": num, "guid": m.group(4), "steamid": "",
-                        "score": _int_or_none(m.group(2)), "time": None})
+        players.append({"name": name[:64], "num": num, "guid": row[3], "steamid": "",
+                        "score": _int_or_none(row[1]), "time": None})
     return players
 
 
@@ -207,8 +268,10 @@ def _mc_strip_log_prefix(line):
 
 
 def _parse_minecraft_list(text):
-    """Parse a Minecraft `list` reply ('There are N of M players online: Alice, Bob') into
-    [{name, …}], or None when the capture holds no `list` reply at all.
+    """Parse a Minecraft `list` reply into [{name, …}], or None when there is no reply at all.
+
+    The reply reads 'There are N of M players online: Alice, Bob'; None when the capture holds no
+    `list` reply at all.
 
     This kept the LAST line containing the bare substring "online:", and that is a line a PLAYER
     WRITES: a Minecraft server logs chat to the same stdout the tmux pane captures, so typing
@@ -223,7 +286,8 @@ def _parse_minecraft_list(text):
     not answer `list` inside the 0.8s capture window used to read as a server with nobody on it —
     or, with an older reply still in the pane, as the players who were on minutes ago. The count is
     cross-checked against the names for the same reason: a reply that arrived half-written (tmux
-    wrapping, a capture taken mid-print) is unknown, never a short player list and never zero."""
+    wrapping, a capture taken mid-print) is unknown, never a short player list and never zero.
+    """
     m, line = None, ""
     for ln in (text or "").splitlines():
         body = _mc_strip_log_prefix(ln)
@@ -244,20 +308,17 @@ def _parse_minecraft_list(text):
     return players
 
 
-def console_player_list(server, user, game_type, selfname=None):
-    """Player list from the game's OWN console — the only source that yields the identifiers needed
-    to kick/ban precisely (SteamIDs for valve, slot numbers for idTech3). Sends the list command,
-    then captures + parses the pane. Returns a list (possibly empty), or None for a non-console
-    game. Never raises."""
-    eng = game_engine(game_type)
-    if not eng:
-        return None
+def _send_rc(result):
+    """The rc of a send_console_command result, or 1 when it is not an (out, err, rc) tuple."""
+    return result[2] if isinstance(result, tuple) and len(result) >= 3 else 1
+
+
+def _send_and_capture(server, user, eng, selfname):
+    """Send the engine's player-list command and capture the reply: (out, rc), or None.
+
+    None when the send itself failed or anything raised — the capture is never trusted then.
+    """
     cmd = "list" if eng == "minecraft" else "status"
-    # NONE for "could not read", [] only for a table that really had no rows in it. These both
-    # answered [], and player_list's `or []` then turned a stopped server into a confirmed-empty
-    # one: the bot's /players said "no players connected" about a server that was down. Its own
-    # docstring already draws the distinction ("an empty list for a confirmed-empty server, or
-    # None when it can't be read"); only the code did not.
     try:
         # The SEND's status, not just the capture's. send_console_command returns (out, err, rc)
         # like every other call here and rc is meaningful (3 + NO_SESSION for no live tmux session,
@@ -270,14 +331,17 @@ def console_player_list(server, user, game_type, selfname=None):
         # players who had already disconnected, with their SteamIDs, on rows whose Ban fans out
         # fleet-wide and into GlobalBan. Same idiom moderate() and console_steamid_ban() use.
         _sent = _core.send_console_command(server, user, cmd, timeout=12, selfname=selfname)
-        if (_sent[2] if isinstance(_sent, tuple) and len(_sent) >= 3 else 1) != 0:
+        if _send_rc(_sent) != 0:
             return None
         time.sleep(0.8)   # let the server print its reply into the pane before we capture it
         out, _, rc = capture_console(server, user, selfname=selfname, lines=180)
     except Exception:
         return None
-    if rc != 0 or not out or "NO_SESSION" in out:
-        return None
+    return out, rc
+
+
+def _parse_player_reply(eng, out):
+    """Parse a captured player-list reply with the engine's own parser."""
     if eng == "idtech3":
         return _parse_idtech3_status(out)
     if eng == "minecraft":
@@ -285,56 +349,113 @@ def console_player_list(server, user, game_type, selfname=None):
     return _parse_valve_status(out)
 
 
-_HOSTNAME_RE = re.compile(r"^\s*(?:hostname|sv_hostname)\s*:?\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE)
+def console_player_list(server, user, game_type, selfname=None):
+    """Player list from the game's OWN console.
+
+    The only source that yields the identifiers needed to kick/ban precisely (SteamIDs for valve,
+    slot numbers for idTech3). Sends the list command, then captures + parses the pane. Returns a
+    list (possibly empty), or None for a non-console game. Never raises.
+    """
+    eng = game_engine(game_type)
+    if not eng:
+        return None
+    # NONE for "could not read", [] only for a table that really had no rows in it. These both
+    # answered [], and player_list's `or []` then turned a stopped server into a confirmed-empty
+    # one: the bot's /players said "no players connected" about a server that was down. Its own
+    # docstring already draws the distinction ("an empty list for a confirmed-empty server, or
+    # None when it can't be read"); only the code did not.
+    got = _send_and_capture(server, user, eng, selfname)
+    if got is None:
+        return None
+    out, rc = got
+    if rc != 0 or not out or "NO_SESSION" in out:
+        return None
+    return _parse_player_reply(eng, out)
+
+
+# The `hostname:` line of a valve/idTech3 `status` reply. The keyword must be the first thing on
+# its line, blanks aside, and it is looked for line by line: the old pattern's `^\s*` in front of it
+# crossed newlines and re-walked every blank line below each line start, quadratic in a run of
+# empty lines.
+_HOSTNAME_KEY_RE = re.compile(r"(?:hostname|sv_hostname)", re.IGNORECASE)
+
+
+def _hostname_key_end(out):
+    """Return where the keyword ends on the first line that starts with it, or -1 for none."""
+    at = 0
+    for line in out.split("\n"):
+        m = _HOSTNAME_KEY_RE.match(line, len(line) - len(line.lstrip()))
+        if m:
+            return at + m.end()
+        at += len(line) + 1
+    return -1
+
+
+def _status_hostname(out):
+    r"""Return the server name a console `status` reply advertises, as its line holds it, or None.
+
+    It answers what `^\s*(?:hostname|sv_hostname)\s*:?\s*(.+?)\s*$` (MULTILINE, IGNORECASE)
+    captured, wherever console_status can tell the difference. That pattern's `(.+?)\s*$` retried
+    the whole tail of the line at each character of the name: quadratic in a name holding a long run
+    of blanks. What it captured is the first non-blank after the keyword (and after a colon, if
+    one comes first), to the end of that line, and blanks before the name may span lines. After a
+    colon with nothing but blanks to the end of the reply it captured a blank, which console_status
+    reads as no name, or the colon itself when those blanks were all newlines.
+    """
+    end = _hostname_key_end(out)
+    if end < 0:
+        return None
+    value = out[end:].lstrip()
+    if value.startswith(":"):
+        after = value[1:].lstrip()
+        if not after:
+            return None if value[1:].strip("\n") else ":"
+        value = after
+    return value.split("\n", 1)[0].rstrip()
 
 
 def console_status(server, user, game_type, selfname=None):
-    """One console `status`/`list` capture → (players, name): the parsed player list AND the server's
-    advertised in-game name (the valve/idTech3 `hostname:` line), from a SINGLE round-trip. Used by
-    the background poller so a server gamedig can't query (e.g. no GSLT) isn't hit with two separate
-    `status` sends per pass — which would spam the very console an admin is watching.
+    """One console `status`/`list` capture → (players, name), from a SINGLE round-trip.
+
+    The parsed player list AND the server's advertised in-game name (the valve/idTech3 `hostname:`
+    line). Used by the background poller so a server gamedig can't query (e.g. no GSLT) isn't hit
+    with two separate `status` sends per pass — which would spam the very console an admin is
+    watching.
 
     Returns (None, None) for a non-console game or on failure — NOT ([], None). An empty list is
     "confirmed empty", and this returned it for a send that never arrived, a capture that failed
     and a game with no console at all, which is the same conflation console_player_list's contract
-    exists to avoid. Never raises."""
+    exists to avoid. Never raises.
+    """
     eng = game_engine(game_type)
     if not eng:
         return None, None
-    cmd = "list" if eng == "minecraft" else "status"
-    try:
-        # The send's status too — see console_player_list above for what dropping it cost: the
-        # capture is a separate round trip and succeeds happily after a send that never landed,
-        # so the pane's PREVIOUS table was returned as the current one.
-        _sent = _core.send_console_command(server, user, cmd, timeout=12, selfname=selfname)
-        if (_sent[2] if isinstance(_sent, tuple) and len(_sent) >= 3 else 1) != 0:
-            return None, None
-        time.sleep(0.8)   # let the server print its reply into the pane
-        out, _, rc = capture_console(server, user, selfname=selfname, lines=180)
-    except Exception:
+    # The send's status too — see _send_and_capture for what dropping it cost: the capture is a
+    # separate round trip and succeeds happily after a send that never landed, so the pane's
+    # PREVIOUS table was returned as the current one.
+    got = _send_and_capture(server, user, eng, selfname)
+    if got is None:
         return None, None
+    out, rc = got
     if rc != 0 or not out:
         return None, None
-    if eng == "idtech3":
-        players = _parse_idtech3_status(out)
-    elif eng == "minecraft":
-        players = _parse_minecraft_list(out)
-    else:
-        players = _parse_valve_status(out)
+    players = _parse_player_reply(eng, out)
     name = None
     if eng in ("valve", "idtech3"):
-        m = _HOSTNAME_RE.search(out)
-        if m:
-            name = " ".join(_strip_q3_colors(m.group(1)).split())[:120] or None
+        advertised = _status_hostname(out)
+        if advertised:
+            name = " ".join(_strip_q3_colors(advertised).split())[:120] or None
     return players, name
 
 
 def _gamedig_player_list(server, user, game_type=None, port=None, query_type=None):
-    """Player list via gamedig — the PRIMARY source. Returns a list ([{name, …}], possibly empty
-    for a confirmed-empty server) when gamedig could query the game, or None when it couldn't (no
-    gamedig type, no port, or the query failed) so the caller can fall back to the console. Never
-    raises. Names carry score/time where the game reports them; no kick/ban ids (those come from the
-    console on demand)."""
+    """Player list via gamedig — the PRIMARY source.
+
+    Returns a list ([{name, …}], possibly empty for a confirmed-empty server) when gamedig could
+    query the game, or None when it couldn't (no gamedig type, no port, or the query failed) so the
+    caller can fall back to the console. Never raises. Names carry score/time where the game
+    reports them; no kick/ban ids (those come from the console on demand).
+    """
     if not _core.game_idents_ok(user):
         return None      # refused, which is "could not query" — never an empty server
     gdtype = cron._gamedig_type(game_type, query_type)
@@ -351,6 +472,11 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
         out, _, _ = _core.shell_as_game_user(server, user, cmd, timeout=25)
     except Exception:
         return None
+    return _gamedig_players_from_output(out)
+
+
+def _gamedig_players_from_output(out):
+    """The player list from the jq-reduced gamedig output, or None when there is none to read."""
     line = next((ln.strip() for ln in (out or "").splitlines() if ln.strip().startswith("[")), "")
     if not line:
         return None
@@ -359,6 +485,11 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
         data = _json.loads(line)
     except (ValueError, TypeError):
         return None
+    return _gamedig_player_rows(data)
+
+
+def _gamedig_player_rows(data):
+    """Player rows from the decoded gamedig list: named entries only, name capped at 64."""
     players = []
     for p in (data if isinstance(data, list) else []):
         if isinstance(p, dict):
@@ -371,13 +502,16 @@ def _gamedig_player_list(server, user, game_type=None, port=None, query_type=Non
 
 def player_list(server, user, game_type=None, port=None, query_type=None, selfname=None,
                 allow_console=False):
-    """Connected players for the Players panel. gamedig is the PRIMARY source (names + score/time,
-    and it never touches the game console). The game's own console (`status`/`list`) is only used
-    when gamedig can't query the game AND the caller explicitly opts in with allow_console=True —
-    so a background/timer poll never issues a console command; only an on-demand user action does.
+    """Connected players for the Players panel.
+
+    gamedig is the PRIMARY source (names + score/time, and it never touches the game console). The
+    game's own console (`status`/`list`) is only used when gamedig can't query the game AND the
+    caller explicitly opts in with allow_console=True — so a background/timer poll never issues a
+    console command; only an on-demand user action does.
     Returns [{name, steamid, num, score, time}] (steamid/num set only when the list came from the
     console), an empty list for a confirmed-empty server, or None when it can't be read over the
-    network and the console wasn't allowed. Never raises."""
+    network and the console wasn't allowed. Never raises.
+    """
     pl = _gamedig_player_list(server, user, game_type, port, query_type)
     if pl is not None:
         return pl                       # gamedig answered (players, or a confirmed-empty server)
@@ -389,8 +523,11 @@ def player_list(server, user, game_type=None, port=None, query_type=None, selfna
 
 
 def is_player_queryable(game_type, query_type=None):
-    """True if the panel can show a live player list: a console engine (valve/idTech3/Minecraft)
-    or a gamedig type (built-in map or a per-server override)."""
+    """True if the panel can show a live player list.
+
+    That takes a console engine (valve/idTech3/Minecraft) or a gamedig type (built-in map or a
+    per-server override).
+    """
     return bool(game_engine(game_type)) or bool(cron._gamedig_type(game_type, query_type))
 
 
@@ -401,13 +538,16 @@ _MC_NO_BAN = frozenset({"mcbe", "mcb"})
 
 
 def moderation_caps(game_type):
-    """Which moderation actions this game's console supports: {kick, ban, say}. Driven by the engine
-    family, so every game of a family is covered. Non-console games get nothing (view-only).
+    """Which moderation actions this game's console supports: {kick, ban, say}.
+
+    Driven by the engine family, so every game of a family is covered. Non-console games get
+    nothing (view-only).
 
     `ban` is dropped for Bedrock: _ENG_MINECRAFT covers mcbe/mcb alongside the Java families, so
     this answered ban=True for a console with no ban command, the detail page rendered the button,
     and sending `ban <name>` into the pane got "Unknown command" while tmux send-keys exited 0 —
-    "Done.", a success audit row, and the griefer still connected."""
+    "Done.", a success audit row, and the griefer still connected.
+    """
     if game_engine(game_type):      # valve, idtech3 and minecraft all support kick + say
         return {"kick": True, "ban": (game_type or "").lower() not in _MC_NO_BAN, "say": True}
     return {"kick": False, "ban": False, "say": False}
@@ -425,9 +565,11 @@ def _mod_sanitize(s, maxlen=64):
 
 def _resolve_from_console(server, user, game_type, name, selfname):
     """Find a player by name in the game's console list and return their {name, num, steamid, …}.
+
     Used to resolve the kick/ban identifier (slot number / SteamID) when the list on screen came
     from gamedig, which doesn't carry those ids. Matches on the colour-code-stripped name; returns
-    None if not found. Only runs when someone actually clicks kick/ban — no continuous polling."""
+    None if not found. Only runs when someone actually clicks kick/ban — no continuous polling.
+    """
     want = _strip_q3_colors(name or "").strip()
     if not want:
         return None
@@ -437,89 +579,148 @@ def _resolve_from_console(server, user, game_type, name, selfname):
     return None
 
 
-def moderate(server, user, game_type, action, target="", message="", selfname=None,
-             steamid="", num=""):
-    """Kick/ban a player or announce a message through the game's own console, dispatched by engine:
+_MOD_IDENT_KEYS = ("steamid", "num")
+
+
+def _moderation_ident(ident):
+    """The (steamid, num) a moderate() call was given, refusing any other keyword.
+
+    They arrive as keywords only; an unknown one is the same TypeError a misspelled parameter
+    always raised, so a typo cannot silently turn into a ban with no identifier.
+    """
+    unknown = sorted(set(ident) - set(_MOD_IDENT_KEYS))
+    if unknown:
+        raise TypeError("moderate() got an unexpected keyword argument %r" % unknown[0])
+    return ident.get("steamid", ""), ident.get("num", "")
+
+
+def _mod_unsupported_reason(game_type, eng, action):
+    """Why an action this game's console cannot take was refused.
+
+    Bedrock gets its own reason, because "isn't supported" is not actionable: BDS has no ban
+    command at all (see _MC_NO_BAN), and banning there is the allowlist. Until moderation_caps
+    dropped it, this fell through to the minecraft branch, sent `ban <name>` into the pane,
+    and `tmux send-keys` exited 0 for a command the game answered with "Unknown command" — so
+    the panel flashed "Done.", wrote a success audit row, counted the Bedrock servers in
+    "Also banned on N other servers", and the griefer reconnected immediately. Same reasoning
+    as the space-in-name refusal in _mod_minecraft_cmd: a ban that silently does nothing is worse
+    than a button that says why it stopped.
+    """
+    if action == "ban" and eng == "minecraft" and (game_type or "").lower() in _MC_NO_BAN:
+        return ("Bedrock servers have no ban command — remove the player from the "
+                "server's allowlist instead.")
+    return "That action isn't supported for this game."
+
+
+def _mod_say_cmd(message):
+    """(console command, None) for an announcement, or (None, why) when there is nothing to say."""
+    msg = _mod_sanitize(message, 200)
+    if not msg:
+        return None, "Nothing to announce."
+    return "say %s" % msg, None
+
+
+def _mod_valve_cmd(action, target, steamid, resolve):
+    """(console command, None) for a Source/GoldSrc kick or ban, or (None, why) when refused.
+
+    Kick by name, ban by SteamID; `resolve()` looks the player up on the console when the list on
+    screen came from gamedig and carries no SteamID.
+    """
+    if action == "kick":
+        nm = _mod_sanitize(target, 64)
+        if not nm:
+            return None, "No player selected."
+        return 'kick "%s"' % nm, None
+    sid = _sanitize_steamid(steamid)
+    if not sid:      # list came from gamedig (no SteamID) — resolve it on the console now
+        p = resolve()
+        sid = _sanitize_steamid(p.get("steamid")) if p else ""
+    if not sid:
+        return None, "Couldn't find that player's SteamID to ban them."
+    # banid <0=permanent> <id> kick — the `kick` keyword boots them if they're connected
+    # right now (banid without it only blocks future joins); writeid persists to the ban file.
+    return "banid 0 %s kick; writeid" % sid, None
+
+
+def _mod_idtech3_cmd(action, num, resolve):
+    """(console command, None) for an idTech3 kick or ban by slot number, or (None, why)."""
+    slot = _sanitize_slotnum(num)
+    if slot is None:     # list came from gamedig (no slot number) — resolve it on the console now
+        p = resolve()
+        slot = _sanitize_slotnum(p.get("num")) if p else None
+    if slot is None:
+        return None, "Couldn't find that player on the server."
+    return "%s %d" % ("clientkick" if action == "kick" else "banclient", slot), None
+
+
+def _mod_minecraft_cmd(action, target):
+    """(console command, None) for a Minecraft kick or ban by name, or (None, why) when refused."""
+    nm = _mod_sanitize(target, 64)
+    if not nm:
+        return None, "No player selected."
+    # `kick <player> [reason]` — the name and the reason are separated by a SPACE, and
+    # _MOD_BAD_CHARS does not strip one. That is right for Source and idTech3, whose consoles
+    # separate on ';' and newline only, and wrong here: _ENG_MINECRAFT covers mcbe/mcb/
+    # pocketmine, Bedrock gamertags may contain spaces, and a gamedig-sourced list carries the
+    # raw name (only _parse_minecraft_list sanitises, and that is the console path). So a
+    # player named "<someone else> griefing" sends the admin's kick to that someone else.
+    # There is no quoting that is correct across Java, Bedrock and PocketMine, so this refuses
+    # rather than guessing — a misdirected ban is worse than a button that says why it stopped.
+    if re.search(r"\s", nm):
+        return None, ("That player's name contains a space, which this game's console reads "
+                      "as the start of the reason — kick or ban them from the server "
+                      "console directly.")
+    return "%s %s" % ("kick" if action == "kick" else "ban", nm), None
+
+
+def moderate(server, user, game_type, action, target="", message="", selfname=None, **ident):
+    """Kick/ban a player or announce a message through the game's own console.
+
+    Dispatched by engine:
       • valve (Source/GoldSrc): kick by name, ban by SteamID, say
       • idTech3 (CoD/Quake3):   kick/ban by slot number, say
       • minecraft:              kick/ban by name, say
     Names/messages are sanitized (and the SteamID/slot re-validated) so a hostile name can't inject
-    a console command. Returns (ok, msg)."""
+    a console command. Returns (ok, msg).
+
+    The player's console identifiers come as keywords only — `steamid=` (valve) and `num=`
+    (idTech3 slot) — and any other keyword is refused with a TypeError (see _moderation_ident).
+    """
+    steamid, num = _moderation_ident(ident)
     eng = game_engine(game_type)
     if action not in ("kick", "ban", "say") or not moderation_caps(game_type).get(action):
-        # Bedrock gets its own reason, because "isn't supported" is not actionable: BDS has no ban
-        # command at all (see _MC_NO_BAN), and banning there is the allowlist. Until moderation_caps
-        # dropped it, this fell through to the minecraft branch, sent `ban <name>` into the pane,
-        # and `tmux send-keys` exited 0 for a command the game answered with "Unknown command" — so
-        # the panel flashed "Done.", wrote a success audit row, counted the Bedrock servers in
-        # "Also banned on N other servers", and the griefer reconnected immediately. Same reasoning
-        # as the space-in-name refusal further down: a ban that silently does nothing is worse than
-        # a button that says why it stopped.
-        if action == "ban" and eng == "minecraft" and (game_type or "").lower() in _MC_NO_BAN:
-            return False, ("Bedrock servers have no ban command — remove the player from the "
-                           "server's allowlist instead.")
-        return False, "That action isn't supported for this game."
+        return False, _mod_unsupported_reason(game_type, eng, action)
+
+    def resolve():
+        return _resolve_from_console(server, user, game_type, target, selfname)
 
     if action == "say":
-        msg = _mod_sanitize(message, 200)
-        if not msg:
-            return False, "Nothing to announce."
-        cmd = "say %s" % msg
+        cmd, why = _mod_say_cmd(message)
     elif eng == "valve":
-        if action == "kick":
-            nm = _mod_sanitize(target, 64)
-            if not nm:
-                return False, "No player selected."
-            cmd = 'kick "%s"' % nm
-        else:
-            sid = _sanitize_steamid(steamid)
-            if not sid:      # list came from gamedig (no SteamID) — resolve it on the console now
-                p = _resolve_from_console(server, user, game_type, target, selfname)
-                sid = _sanitize_steamid(p.get("steamid")) if p else ""
-            if not sid:
-                return False, "Couldn't find that player's SteamID to ban them."
-            # banid <0=permanent> <id> kick — the `kick` keyword boots them if they're connected
-            # right now (banid without it only blocks future joins); writeid persists to the ban file.
-            cmd = "banid 0 %s kick; writeid" % sid
+        cmd, why = _mod_valve_cmd(action, target, steamid, resolve)
     elif eng == "idtech3":
-        slot = _sanitize_slotnum(num)
-        if slot is None:     # list came from gamedig (no slot number) — resolve it on the console now
-            p = _resolve_from_console(server, user, game_type, target, selfname)
-            slot = _sanitize_slotnum(p.get("num")) if p else None
-        if slot is None:
-            return False, "Couldn't find that player on the server."
-        cmd = "%s %d" % ("clientkick" if action == "kick" else "banclient", slot)
+        cmd, why = _mod_idtech3_cmd(action, num, resolve)
     elif eng == "minecraft":
-        nm = _mod_sanitize(target, 64)
-        if not nm:
-            return False, "No player selected."
-        # `kick <player> [reason]` — the name and the reason are separated by a SPACE, and
-        # _MOD_BAD_CHARS does not strip one. That is right for Source and idTech3, whose consoles
-        # separate on ';' and newline only, and wrong here: _ENG_MINECRAFT covers mcbe/mcb/
-        # pocketmine, Bedrock gamertags may contain spaces, and a gamedig-sourced list carries the
-        # raw name (only _parse_minecraft_list sanitises, and that is the console path). So a
-        # player named "<someone else> griefing" sends the admin's kick to that someone else.
-        # There is no quoting that is correct across Java, Bedrock and PocketMine, so this refuses
-        # rather than guessing — a misdirected ban is worse than a button that says why it stopped.
-        if re.search(r"\s", nm):
-            return False, ("That player's name contains a space, which this game's console reads "
-                           "as the start of the reason — kick or ban them from the server "
-                           "console directly.")
-        cmd = "%s %s" % ("kick" if action == "kick" else "ban", nm)
+        cmd, why = _mod_minecraft_cmd(action, target)
     else:
         return False, "That action isn't supported for this game."
+    if why:
+        return False, why
 
     out = _core.send_console_command(server, user, cmd, timeout=15, selfname=selfname)
-    rc = out[2] if isinstance(out, tuple) and len(out) >= 3 else 1
+    rc = _send_rc(out)
     return (rc == 0), ("Done." if rc == 0 else "Console not reachable — is the server running?")
 
 
 def console_steamid_ban(server, user, selfname, steamid, unban=False):
-    """Ban (or unban) a SteamID on ONE Source/GoldSrc server via its console — `banid 0 <id>; writeid`
-    to ban, `removeid <id>; writeid` to lift, using the game's native persistent ban list. The
-    SteamID is re-validated to STEAM_x:y:z / [U:x:y] so nothing injectable reaches the console.
+    """Ban (or unban) a SteamID on ONE Source/GoldSrc server via its console.
+
+    `banid 0 <id>; writeid` to ban, `removeid <id>; writeid` to lift, using the game's native
+    persistent ban list. The SteamID is re-validated to STEAM_x:y:z / [U:x:y] so nothing
+    injectable reaches the console.
     Only affects a RUNNING server (needs a live console). (ok, reason) where reason is a fixed word:
-    'banned' / 'unbanned' / 'invalid' / 'offline' / 'failed'."""
+    'banned' / 'unbanned' / 'invalid' / 'offline' / 'failed'.
+    """
     sid = _sanitize_steamid(steamid)
     if not sid:
         return False, "invalid"
@@ -533,12 +734,15 @@ def console_steamid_ban(server, user, selfname, steamid, unban=False):
 
 
 def ensure_persistent_bans(server, user, selfname):
-    """Make a Source server RELOAD its ban list on every (re)start. `banid`/`writeid` persist a
-    SteamID ban to cfg/banned_user.cfg, but the engine only loads that file if the server config
-    execs it — without the exec line a ban is silently lost on the next map change / restart and the
-    player can rejoin (exactly what bit us: a flapping server dropped every ban). Append the exec
-    lines to the LinuxGSM servercfg (`${selfname}.cfg` in the game's cfg dir), idempotently. Best-
-    effort; returns True when the line is present/added, False on any failure or non-Source layout."""
+    """Make a Source server RELOAD its ban list on every (re)start.
+
+    `banid`/`writeid` persist a SteamID ban to cfg/banned_user.cfg, but the engine only loads that
+    file if the server config execs it — without the exec line a ban is silently lost on the next
+    map change / restart and the player can rejoin (exactly what bit us: a flapping server dropped
+    every ban). Append the exec lines to the LinuxGSM servercfg (`${selfname}.cfg` in the game's
+    cfg dir), idempotently. Best-effort; returns True when the line is present/added, False on any
+    failure or non-Source layout.
+    """
     try:
         _vals = files.lgsm_get_values(server, user, selfname, ["servercfg"])
         if _vals is None:
@@ -562,16 +766,19 @@ def ensure_persistent_bans(server, user, selfname):
 
 
 def mod_restart_decision(status, players, force=False):
-    """Decide how to handle the restart a mod change needs, given the server `status`
-    ('online'/'offline'/'unresponsive'/'unknown'), the current player count (int, or None when
-    unknown), and whether the admin forced it. Pure/side-effect-free so it can be tested directly:
+    """Decide how to handle the restart a mod change needs.
+
+    Given the server `status` ('online'/'offline'/'unresponsive'/'unknown'), the current player
+    count (int, or None when unknown), and whether the admin forced it. Pure/side-effect-free so it
+    can be tested directly:
       'idle'    — server is stopped; nothing to do (the change loads on next start)
       'restart' — restart now (server is confirmed empty, or the admin forced it)
       'pending' — defer: players are online, or we can't confirm it's empty.
 
     Only a status of 'offline' is idle, and only STOPPED means offline. 'unresponsive' — a
     session running but not serving — falls through to 'pending' and keeps the request queued,
-    because clearing it would throw away something the operator asked for without doing it."""
+    because clearing it would throw away something the operator asked for without doing it.
+    """
     if status == "offline":
         return "idle"
     if force:
@@ -597,55 +804,42 @@ def _stale_backup_lock_sweep(user, home=None):
     tar of the install, and a game server runs none of its own. The match is on the process NAME
     (-x), never the command line — this snippet's own `bash -c` line contains the word `backup`,
     and a -f match would always find itself and never clear a stale lock again. `home` exists for
-    the test; the panel always passes the account's own."""
+    the test; the panel always passes the account's own.
+    """
     home = home or "/home/%s" % user
     return (f"pgrep -u {user} -x tar >/dev/null 2>&1 || "
             f"find {home} -maxdepth 4 -name '*backup.lock' -mmin +5 -delete 2>/dev/null; ")
 
 
-def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
-                    query_type=None):
-    """Run LinuxGSM's own `backup` for a game instance (archives serverfiles into
-    ~/lgsm/backup/), then prune to the newest `keep`. Runs AS THE GAME USER, non-interactively
-    (like a cron backup). Long-running — archives can be large.
+def _backup_players_online(server, user, game_type, port, query_type):
+    """The skip message when players are connected (a backup would disconnect them), else None.
 
-    LinuxGSM's `backup` STOPS a running server for the duration, which disconnects
-    anyone playing. So unless `force=True`, we first check the live player count and,
-    if anyone is on, SKIP rather than kick them. Returns (ok, message, skipped):
-      - (True, note, False)   backup completed
-      - (False, reason, False) backup attempted but failed
-      - (False, "N player(s) online …", True) skipped because players were connected
-    An unknown/unqueryable player count (None) is treated as empty, so games gamedig
-    can't query still back up on schedule (matching the daily-restart behaviour) —
-    which is exactly why `query_type` has to be threaded in (see below)."""
-    selfname = selfname or user
-    # Refused before the player query, the headroom prune and the listing, which would otherwise
-    # each reach the host first: the backup itself is refused by shell_as_game_user anyway.
-    if not _core.game_idents_ok(user, selfname):
-        return False, _core.GAME_ACCOUNT_REFUSED[1], False
-    keep = max(1, int(keep))
-    if not force:
-        # query_type, like every other player/version read in this file (_gamedig_player_list,
-        # _queried_version, is_player_queryable) and like the on-screen count in server_detail.
-        # This one call — the only one that decides whether to disconnect people — dropped it, so
-        # player_count resolved the gamedig type from the 26-entry built-in map ALONE. A game the
-        # map does not cover (Project Zomboid, ARK, Mordhau, Killing Floor) whose operator set the
-        # per-server override precisely so the panel could query it resolved to "", answered None,
-        # and the rule above reads None as empty — so the hourly ticker ran LinuxGSM's `backup`,
-        # which STOPS the server, and disconnected everyone on it. The override exists for exactly
-        # the servers this guard was blind on.
-        pc = cron.player_count(server, user, game_type, port, query_type)
-        if pc is not None and pc > 0:
-            return (False,
-                    f"{pc} player(s) online — backup skipped so nobody gets disconnected",
-                    True)
-    # Smart retention: if the disk is nearly full, delete old backups BEFORE creating the new one
-    # so the backup succeeds instead of aborting for lack of space.
-    headroom_note = cron._ensure_backup_headroom(server, user, keep)
-    # Pre-flight space check: if there STILL isn't room for the archive after freeing what we can,
-    # don't even start LinuxGSM's backup. A backup that runs out of space mid-write half-fills the
-    # disk with a partial archive and can leave a stale lock behind — far worse than not starting.
-    # We estimate the next archive from the largest existing one; with none to go by we let it try.
+    An unknown count (None) is treated as empty — see run_game_backup.
+
+    query_type, like every other player/version read in this file (_gamedig_player_list,
+    _queried_version, is_player_queryable) and like the on-screen count in server_detail.
+    This one call — the only one that decides whether to disconnect people — dropped it, so
+    player_count resolved the gamedig type from the 26-entry built-in map ALONE. A game the
+    map does not cover (Project Zomboid, ARK, Mordhau, Killing Floor) whose operator set the
+    per-server override precisely so the panel could query it resolved to "", answered None,
+    and the rule above reads None as empty — so the hourly ticker ran LinuxGSM's `backup`,
+    which STOPS the server, and disconnected everyone on it. The override exists for exactly
+    the servers this guard was blind on.
+    """
+    pc = cron.player_count(server, user, game_type, port, query_type)
+    if pc is not None and pc > 0:
+        return f"{pc} player(s) online — backup skipped so nobody gets disconnected"
+    return None
+
+
+def _backup_space_refusal(server, user, headroom_note):
+    """The refusal message when the next archive will not fit on the disk, else None.
+
+    Pre-flight space check: if there STILL isn't room for the archive after freeing what we can,
+    don't even start LinuxGSM's backup. A backup that runs out of space mid-write half-fills the
+    disk with a partial archive and can leave a stale lock behind — far worse than not starting.
+    We estimate the next archive from the largest existing one; with none to go by we let it try.
+    """
     try:
         # `or []`: this is only the ESTIMATE, and an unreadable listing means no estimate —
         # which the `_est and _total` guard below already treats as "let it try". It must
@@ -658,13 +852,30 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
         # NOT block an otherwise-fine backup.
         if _est and _total and _free < int(_est * 1.05):
             note = " after clearing what old backups it could" if headroom_note else ""
-            return (False,
-                    f"Not enough disk space to back up{note}: the archive needs about "
+            return (f"Not enough disk space to back up{note}: the archive needs about "
                     f"{cron._fmt_size(int(_est * 1.05))} but only {cron._fmt_size(_free)} is free on the host. "
-                    f"Lower this server's 'keep' count, remove old backups, or free space on the disk.",
-                    False)
+                    f"Lower this server's 'keep' count, remove old backups, or free space on the disk.")
     except Exception:
         _core._log.debug("backup pre-flight space check failed", exc_info=True)
+    return None
+
+
+def _backup_failure_reason(out, err):
+    """The most relevant LinuxGSM line from a failed backup, so the panel can show WHY it failed."""
+    clean = terminal.strip_escapes(((out or "") + "\n" + (err or ""))).strip()
+    reason = ""
+    for line in reversed(clean.splitlines()):
+        low = line.lower()
+        if any(k in low for k in ("fail", "error", "unable", "no space", "not enough", "denied", "cannot")):
+            reason = line.strip()
+            break
+    if not reason and clean.splitlines():
+        reason = clean.splitlines()[-1].strip()
+    return (reason or "backup failed")[-200:]
+
+
+def _run_linuxgsm_backup(server, user, selfname):
+    """Run LinuxGSM's `backup` as the game user: (ok, lock_refused, out, err)."""
     # A crashed/killed/timed-out earlier backup can leave LinuxGSM's backup.lock behind, after
     # which every backup refuses with "Lockfile found: Backup is currently running". See
     # _stale_backup_lock_sweep for when a lock counts as orphaned.
@@ -683,6 +894,43 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
     lock_refused = "lockfile found" in _blob or "backup is currently running" in _blob
     if lock_refused:
         ok = False
+    return ok, lock_refused, out, err
+
+
+def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=None, force=False,
+                    query_type=None):
+    """Run LinuxGSM's own `backup` for a game instance, then prune to the newest `keep`.
+
+    The backup archives serverfiles into ~/lgsm/backup/. Runs AS THE GAME USER, non-interactively
+    (like a cron backup). Long-running — archives can be large.
+
+    LinuxGSM's `backup` STOPS a running server for the duration, which disconnects
+    anyone playing. So unless `force=True`, we first check the live player count and,
+    if anyone is on, SKIP rather than kick them. Returns (ok, message, skipped):
+      - (True, note, False)   backup completed
+      - (False, reason, False) backup attempted but failed
+      - (False, "N player(s) online …", True) skipped because players were connected
+    An unknown/unqueryable player count (None) is treated as empty, so games gamedig
+    can't query still back up on schedule (matching the daily-restart behaviour) —
+    which is exactly why `query_type` has to be threaded in (see below).
+    """
+    selfname = selfname or user
+    # Refused before the player query, the headroom prune and the listing, which would otherwise
+    # each reach the host first: the backup itself is refused by shell_as_game_user anyway.
+    if not _core.game_idents_ok(user, selfname):
+        return False, _core.GAME_ACCOUNT_REFUSED[1], False
+    keep = max(1, int(keep))
+    if not force:
+        skip = _backup_players_online(server, user, game_type, port, query_type)
+        if skip:
+            return False, skip, True
+    # Smart retention: if the disk is nearly full, delete old backups BEFORE creating the new one
+    # so the backup succeeds instead of aborting for lack of space.
+    headroom_note = cron._ensure_backup_headroom(server, user, keep)
+    refusal = _backup_space_refusal(server, user, headroom_note)
+    if refusal:
+        return False, refusal, False
+    ok, lock_refused, out, err = _run_linuxgsm_backup(server, user, selfname)
     try:
         cron.prune_game_backups(server, user, keep)
     except Exception:
@@ -693,37 +941,53 @@ def run_game_backup(server, user, selfname=None, keep=3, game_type=None, port=No
         return False, ("A backup lock was in the way — a previous backup may still be running, or it "
                        "left a stale lock. Try again in a minute."), False
     # Surface the most relevant LinuxGSM line so the panel can show WHY it failed.
-    clean = terminal.strip_escapes(((out or "") + "\n" + (err or ""))).strip()
-    reason = ""
-    for line in reversed(clean.splitlines()):
-        low = line.lower()
-        if any(k in low for k in ("fail", "error", "unable", "no space", "not enough", "denied", "cannot")):
-            reason = line.strip()
-            break
-    if not reason and clean.splitlines():
-        reason = clean.splitlines()[-1].strip()
-    return False, (reason or "backup failed")[-200:], False
+    return False, _backup_failure_reason(out, err), False
+
+
+# One row of the command table the instance script prints with no arguments:
+# "start         st   | Start the server.". The description is read after the pattern, not by
+# it: `\|\s+(.+?)\s*$` retried its trailing `\s*$` at every character of the description, which
+# is quadratic in a description holding a long run of blanks.
+_CMD_ROW_HEAD_RE = re.compile(r"\s*([a-z][a-z0-9-]*)\s+([a-z]{1,4})\s+\|(?=\s)")
+
+
+def _command_table_row(line):
+    r"""Return (cmd, short, desc) for one command-table row, or None.
+
+    It answers what `^\s*([a-z][a-z0-9-]*)\s+([a-z]{1,4})\s+\|\s+(.+?)\s*$` answered on one
+    line: the description is the text after the bar with its blanks trimmed. When there is only
+    blank after the bar, that pattern needed two blanks and captured the last one, so it still does.
+    """
+    m = _CMD_ROW_HEAD_RE.match(line)
+    if not m:
+        return None
+    rest = line[m.end():]
+    desc = rest.strip()
+    if not desc:
+        if len(rest) < 2:
+            return None
+        desc = rest[-1]
+    return m.group(1), m.group(2), desc
 
 
 def list_server_commands(server, user, selfname=None):
-    """Run the LinuxGSM instance script with no arguments to read its command list,
-    which varies per game. Returns a list of {"cmd", "short", "desc"} dicts."""
+    """Run the LinuxGSM instance script with no arguments to read its command list.
+
+    The list varies per game. Returns a list of {"cmd", "short", "desc"} dicts.
+    """
     selfname = selfname or user
     out, err, _ = _core.shell_as_game_user(server, user, f"cd /home/{user} && ./{selfname}",
                                            timeout=30, selfname=selfname)
     text = terminal.strip_escapes((out or "") + "\n" + (err or ""))
     cmds, seen = [], set()
     for line in text.splitlines():
-        # "start         st   | Start the server."
-        m = re.match(r"^\s*([a-z][a-z0-9-]*)\s+([a-z]{1,4})\s+\|\s+(.+?)\s*$", line)
-        if m:
-            cmd, short, desc = m.group(1), m.group(2), m.group(3)
+        row = _command_table_row(line)
+        if row:
+            cmd, short, desc = row
             if cmd not in seen:
                 seen.add(cmd)
                 cmds.append({"cmd": cmd, "short": short, "desc": desc})
     return cmds
-
-
 
 
 # Port descriptions we DON'T open by default — only the ports players actually need
@@ -732,6 +996,52 @@ def list_server_commands(server, user, selfname=None):
 # expose to the internet (and on Source it rides the game port anyway). Users can
 # still open any of these manually from the firewall page if they want them.
 _NONESSENTIAL_PORT_DESCS = ("client", "sourcetv", "source tv", "rcon", "telnet")
+
+
+# One row of `details`' DESCRIPTION / PORT / PROTOCOL table: "Game  27015  udp". The description
+# may hold spaces, so it runs to the first gap followed by a 2-5 digit port and a protocol. That was
+# `([A-Za-z][A-Za-z0-9/+ .-]*?)\s+(\d{2,5})\s+(tcp|udp|both|raw)\b`, whose lazy description re-walked
+# every later run of blanks at each character it grew by: quadratic in a row's blanks.
+_PORT_ROW_DESC_RE = re.compile(r"[A-Za-z][A-Za-z0-9/+ .-]*", re.I)
+_PORT_ROW_TAIL_RE = re.compile(r"\s+(\d{2,5})\s+(tcp|udp|both|raw)\b", re.I)
+
+
+def _port_table_row(s):
+    """Return (desc, port, protocol) as the old row pattern captured them, or None.
+
+    Each gap inside the longest description the charset allows is tried once, in order, which is
+    exactly the order the lazy description tried them in; within a gap every position answered the
+    same, so its first is the one it took.
+    """
+    head = _PORT_ROW_DESC_RE.match(s)
+    if not head:
+        return None
+    for gap in _BLANKS_RE.finditer(s, 1, head.end() + 1):
+        tail = _PORT_ROW_TAIL_RE.match(s, gap.start())
+        if tail:
+            return s[:gap.start()], tail.group(1), tail.group(2)
+    return None
+
+
+def _parse_details_port_table(text):
+    """The DESCRIPTION/PORT/PROTOCOL table from `details`: (ports, the first "Game" port or None)."""
+    ports, game_port, in_table = [], None, False
+    for line in text.splitlines():
+        s = line.strip()
+        if re.match(r"DESCRIPTION\s+PORT\s+PROTOCOL", s, re.I):
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        row = _port_table_row(s)
+        if not row:
+            in_table = False  # blank/other line → table ended
+            continue
+        desc, port, proto = row[0].strip(), int(row[1]), row[2].lower()
+        ports.append({"desc": desc, "port": port, "protocol": proto})
+        if game_port is None and desc.lower().startswith("game"):
+            game_port = port
+    return ports, game_port
 
 
 def detect_game_ports(server, user, selfname=None):
@@ -745,21 +1055,7 @@ def detect_game_ports(server, user, selfname=None):
     """
     out, _, _ = _core.run_as_game_user(server, user, "details", timeout=45, selfname=selfname)
     text = terminal.strip_escapes(out or "")
-    ports, game_port, in_table = [], None, False
-    for line in text.splitlines():
-        s = line.strip()
-        if re.match(r"DESCRIPTION\s+PORT\s+PROTOCOL", s, re.I):
-            in_table = True
-            continue
-        if in_table:
-            m = re.match(r"([A-Za-z][A-Za-z0-9/+ .-]*?)\s+(\d{2,5})\s+(tcp|udp|both|raw)\b", s, re.I)
-            if m:
-                desc, port, proto = m.group(1).strip(), int(m.group(2)), m.group(3).lower()
-                ports.append({"desc": desc, "port": port, "protocol": proto})
-                if game_port is None and desc.lower().startswith("game"):
-                    game_port = port
-            else:
-                in_table = False  # blank/other line → table ended
+    ports, game_port = _parse_details_port_table(text)
     # Open only the essential inbound ports: Game + Query. Everything else (SourceTV,
     # RCON, Client, …) is left closed so we don't expose more than the game needs.
     open_ports = sorted({
@@ -813,8 +1109,9 @@ def get_server_status(server, game_server, distinguish_unresponsive=False):
     deferred restart/stop sweep read "offline" as "already stopped", cleared the operator's
     queued request and did nothing — so a "stop when empty" issued against a crashed server (the
     exact state this port check was added to detect) was silently dropped, as was one that
-    happened to land in the seconds between a restart and the port binding."""
-    out, err, rc = _core.run_as_game_user(
+    happened to land in the seconds between a restart and the port binding.
+    """
+    out, err, _ = _core.run_as_game_user(
         server, game_server.short_name, "details", timeout=30,
         selfname=game_server.lgsm_name,
     )
@@ -843,7 +1140,8 @@ def _really_serving(server, game_server):
 
     Split out from get_server_status so the cross-check has one place to be stubbed and
     tested. Returns True for "we could not tell" as well as for "yes", because the caller
-    uses it to DOWNGRADE LinuxGSM's answer and an unreadable host must never do that."""
+    uses it to DOWNGRADE LinuxGSM's answer and an unreadable host must never do that.
+    """
     port = getattr(game_server, "port", None)
     if not port:
         return True
@@ -876,12 +1174,15 @@ _VERSION_TTL = 600        # a build only changes when an update runs, and that i
 
 
 def _steam_build(server, user, selfname=None):
-    """{appid, build, updated} from the SteamCMD app manifest on disk, or {} for a game that has
-    none (non-Steam games, or files not downloaded yet). One SSH round trip. Never raises.
+    """{appid, build, updated} from the SteamCMD app manifest on disk, or {} when there is none.
+
+    {} for a game that has none (non-Steam games, or files not downloaded yet). One SSH round trip.
+    Never raises.
 
     The appid comes from LinuxGSM's own config rather than from whichever manifest happens to
     sort first: serverfiles/steamapps/ can hold several (a game plus a dependency), and picking
-    the wrong one reports a build number that never moves when the game updates."""
+    the wrong one reports a build number that never moves when the game updates.
+    """
     selfname = selfname or user
     sh = (
         f"cd /home/{user} 2>/dev/null || exit 0; "
@@ -922,7 +1223,8 @@ def _queried_version(server, user, game_type=None, port=None, query_type=None):
 
     Several protocols spell it differently and some report it as a number, so take the first of
     the known fields that has a value and stringify it — rather than trusting one path and showing
-    nothing for every game that uses another."""
+    nothing for every game that uses another.
+    """
     if not _core.game_idents_ok(user):
         return ""
     gdtype = cron._gamedig_type(game_type, query_type)
@@ -948,7 +1250,8 @@ def _version_detail(info):
     Built here rather than in the browser because it is prose assembled from several optional
     parts, and the panel's UI strings are translated by matching whole text nodes against a
     catalog: a sentence stitched together in JavaScript from three dynamic pieces could never
-    match one. One string, one place, and the page only has to display it."""
+    match one. One string, one place, and the page only has to display it.
+    """
     bits = []
     if info.get("reported"):
         bits.append("reported by the running server")
@@ -975,7 +1278,8 @@ def game_version(server, user, game_type=None, port=None, query_type=None, selfn
     it's built here and not in a template: "unknown" is a real answer for a game that is neither
     SteamCMD-based nor currently running, and the caller shouldn't have to re-derive that.
 
-    Cached for _VERSION_TTL, because nothing but an update moves any of it. Never raises."""
+    Cached for _VERSION_TTL, because nothing but an update moves any of it. Never raises.
+    """
     key = getattr(server, "id", None), user
     now = time.time()
     if not force:
@@ -1012,7 +1316,8 @@ def _register_version_invalidation():
 
     An event rather than a call in the delete route, for the reason the SSH pool's twin above
     gives: the invariant belongs where the row goes away, not at each of the places that remove
-    one. Never raises — a cache that failed to prune must not turn into a failed commit."""
+    one. Never raises — a cache that failed to prune must not turn into a failed commit.
+    """
     from sqlalchemy import event
     from panel.db.models import RemoteServer
 
@@ -1025,12 +1330,14 @@ def _register_version_invalidation():
 
 
 def invalidate_game_version(remote_id=None, user=None):
-    """Forget cached versions so the next read is fresh — call after an update/validate, which is
-    the one thing that changes the answer.
+    """Forget cached versions so the next read is fresh.
+
+    Call after an update/validate, which is the one thing that changes the answer.
 
     The cache is keyed by (host id, game user), which is what the instance actually is: the same
     short_name can exist on two different hosts. Called with neither argument it clears everything,
-    which is the right blast radius for a host-wide change."""
+    which is the right blast radius for a host-wide change.
+    """
     if remote_id is None and user is None:
         _version_cache.clear()
         return

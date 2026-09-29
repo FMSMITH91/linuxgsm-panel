@@ -13,6 +13,12 @@ useDefault = true
 description = "Non-secret UI placeholders and example values"
 # Match against the detected secret text.
 regexTarget = "match"
+# Commits whose every finding is exempt. Only for a commit reviewed line by line, whose findings
+# cannot be exempted by a match regex without also clearing what a gate needs gitleaks to find.
+#   12d1466 (PR #366): the part06 gate for the entry below wrote its two negative-control probes
+#   as literals (another value in the Ubuntu Pro field; this value in another field). The tree
+#   builds them now; a regex clearing their text would clear the probes the gate relies on.
+commits = ["12d1466321fa6c95f85dede160785208829b69b8"]
 regexes = [
   '''tskey-auth-\.{2,}''',          # Tailscale auth-key input placeholder (e.g. "tskey-auth-...")
   '''tskey-auth-\.\.\.''',
@@ -43,6 +49,12 @@ regexes = [
   # history is not rewritten. A key rotation changes the value, the gate goes red, and the new
   # fingerprint gets looked at — a unit gate ties this entry to install.sh so that happens there.
   '''NODESOURCE_KEY_FPR="6F71F525282841EEDAF851B42F59B5F99B1BE0B4"''',
+  # The JS coverage walk's stand-in Ubuntu Pro token, typed into the attach form to drive its
+  # "not a valid token" path. It is a sequential placeholder, not a credential, and the working
+  # tree now types 'not-a-real-pro-token', which no rule reads as a secret; this entry exists only
+  # because the PR range still carries the old literal (commit 13e3441, flows.py). Matched with
+  # its field name so a real token typed into any other field still turns the gate red.
+  '''upro-token', 'C1234567890abcdef''',
 ]
 # No `paths` exemptions. There was one — '''README\.md''' — and gitleaks' path patterns are
 # unanchored searches, so it took every README in the repo (the root one, static/js/,

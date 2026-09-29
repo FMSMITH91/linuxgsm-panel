@@ -103,7 +103,7 @@ function onBindSelect(){
 }
 function changePanelBinding(){
   var pinp=document.getElementById('panel-port-input'); if(!pinp) return;
-  var p=parseInt(pinp.value,10);
+  var p=Number.parseInt(pinp.value,10);
   if(!(p>=1024 && p<=65535)){ if(window.toast) toast('Pick a port between 1024 and 65535.','warning'); return; }
   var sel=document.getElementById('panel-bind-select');
   var bind = sel ? sel.value : '0.0.0.0';
@@ -144,7 +144,7 @@ function _changePanelBinding(p, bind){
 }
 function changeSshPort(){
   var inp=document.getElementById('ssh-port-input'); if(!inp) return;
-  var p=parseInt(inp.value,10);
+  var p=Number.parseInt(inp.value,10);
   if(!(p>=1 && p<=65535)){ if(window.toast) toast('Enter a port between 1 and 65535.','warning'); return; }
   var bindEl=document.getElementById('ssh-bind-input');
   var bind=bindEl ? (bindEl.value||'').trim() : '';
@@ -238,8 +238,8 @@ function ufwAllowTailscale(){
 // turns out to be an issue — GitHub redirects that way, not the other.
 function appendSubject(li, text, repo){
   if(!repo){ li.appendChild(document.createTextNode(text)); return; }
-  var re=/#(\d{1,9})\b/g, last=0, m;
-  while((m=re.exec(text))!==null){
+  var re=/#(\d{1,9})\b/g, last=0;
+  for(var m=re.exec(text); m!==null; m=re.exec(text)){
     if(m.index>last) li.appendChild(document.createTextNode(text.slice(last, m.index)));
     var a=document.createElement('a');
     a.href=repo+'/pull/'+m[1];
@@ -256,11 +256,11 @@ function appendSubject(li, text, repo){
 function renderUpdate(d){
   var st=document.getElementById('pu-status'); if(!st) return;
   var btn=document.getElementById('pu-update-btn'); var changes=document.getElementById('pu-changes');
-  var cur=document.getElementById('pu-current'); if(cur) cur.textContent='v'+(d.current_version||'?');
+  var cur=document.getElementById('pu-current'); if(cur) cur.textContent=(d.current_version||'?')+(d.current_sha?' · '+d.current_sha:'');
   if(d.git===false){ st.innerHTML='<i class="bi bi-info-circle"></i> '+escapeHtml(d.message||'Self-update unavailable (not a git checkout).'); btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
   if(d.fetched===false){ st.innerHTML='<span class="text-secondary"><i class="bi bi-cloud-slash"></i> '+escapeHtml(d.message||'Couldn\'t reach the update source.')+'</span>'; btn.style.display='none'; changes.style.display='none'; return; }  // nosemgrep
   if(d.update_available){
-    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>v'+escapeHtml(d.remote_version||'?')+'</strong> ('+escapeHtml(String(d.behind))+' commit'+(d.behind===1?'':'s')+' behind).</span>';  // nosemgrep
+    st.innerHTML='<span class="text-warning"><i class="bi bi-arrow-up-circle-fill"></i> Update available: <strong>'+escapeHtml((d.remote_version||'?')+(d.remote_sha?' · '+d.remote_sha:''))+'</strong> ('+escapeHtml(String(d.behind))+' commit'+(d.behind===1?'':'s')+' behind).</span>';  // nosemgrep
     // A verified target BELOW the tip carries a note saying so ("2 newer commits still being
     // verified"). It used to be dropped, which made the offer look like the newest thing there is.
     // Appended as a NODE rather than concatenated into the line above: adding an identifier to
@@ -285,7 +285,10 @@ function renderUpdate(d){
                ? d.repo_url : '';
     (d.changes||[]).forEach(function(c){
       var li=document.createElement('li');
-      var m = /^([0-9a-f]{7,40})[ \t]+([\s\S]+)$/.exec(String(c));
+      // The subject starts at the first character after the sha that is not a blank, or, on a line
+      // of nothing but blanks after it, is the last blank - what `[ \t]+([\s\S]+)$` captured, with
+      // no second run-of-anything for the blanks to be handed back and forth to.
+      var m = /^([0-9a-f]{7,40})[ \t]+([^ \t][\s\S]*|[ \t])$/.exec(String(c));
       if (repo && m) {
         var a = document.createElement('a');
         a.href = repo + '/commit/' + m[1];
@@ -340,9 +343,9 @@ function renderPuLog(lines){
   var html=(lines||[]).map(function(ln){
     var cls='text-secondary';
     if(/^\[\d+\/\d+\]/.test(ln)) cls='text-info fw-semibold';
-    else if(/^✓|health check passed|update complete|rollback succeeded|is responding|now running version/i.test(ln)) cls='text-success';
+    else if(/(?:^✓)|health check passed|update complete|rollback succeeded|is responding|now running version/i.test(ln)) cls='text-success';
     else if(/\[error\]|health check failed|rolling back|could not/i.test(ln)) cls='text-danger';
-    else if(/^\[!\]|warn/i.test(ln)) cls='text-warning';
+    else if(/(?:^\[!\])|warn/i.test(ln)) cls='text-warning';
     return '<div class="'+cls+'">'+(window.escapeHtml?escapeHtml(ln):ln)+'</div>';
   }).join('');
   body.innerHTML = html || '<span class="text-secondary">Starting…</span>';  // nosemgrep

@@ -241,7 +241,7 @@ window.localizeTimes = function(root){
   (root || document).querySelectorAll('.localtime[data-utc]').forEach(function(el){
     if(el.dataset.localized) return;
     var d = new Date(el.getAttribute('data-utc'));
-    if(isNaN(d.getTime())) return;
+    if(Number.isNaN(d.getTime())) return;
     el.title = el.textContent;                 // keep the UTC value as a tooltip
     el.textContent = d.toLocaleString();       // show local time
     el.dataset.localized = '1';
@@ -294,8 +294,8 @@ window.toast = function(msg, kind){
 //                 upload dialogs got this wrong and their "Replace existing file" ticks silently
 //                 did nothing. A detached node keeps its .checked, so the reference still works.
 // Dismiss via Cancel / backdrop / Esc; only Confirm runs onConfirm.
-window.confirmDialog = function(opts){
-  opts = opts || {};
+// The typed-confirmation / password field, for confirmDialog ('' when the dialog has none).
+function _cdInputHtml(opts){
   var inputHtml = '';
   if (opts.requireText || opts.requirePassword) {
     inputHtml = '<div class="mb-3">'
@@ -305,20 +305,11 @@ window.confirmDialog = function(opts){
       + '<div class="small text-danger mt-1" id="cd-err" style="display:none;"></div>'
       + '</div>';
   }
-  var ov = document.createElement('div');
-  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:11050;display:flex;align-items:center;justify-content:center;padding:1rem;';
-  // nosemgrep - static markup; every interpolation is escapeHtml'd, and opts.body is documented
-  // as trusted markup (both callers escape their one dynamic value; a test now enforces that).
-  ov.innerHTML = '<div class="card" style="max-width:480px;width:100%;">'  // nosemgrep
-    + '<div class="card-header"><i class="bi bi-' + escapeHtml(opts.icon || 'question-circle') + '"></i> ' + escapeHtml(opts.title || 'Confirm') + '</div>'
-    + '<div class="card-body">'
-    + '<p class="mb-3" data-cd-body style="white-space:pre-line;">' + (opts.body || '') + '</p>'
-    + inputHtml
-    + '<div class="d-flex justify-content-end gap-2">'
-    + '<button class="btn btn-outline-secondary" data-cd="cancel">Cancel</button>'
-    + '<button class="btn ' + escapeHtml(opts.confirmClass || 'btn-primary') + '" data-cd="ok">' + escapeHtml(opts.confirmLabel || 'Confirm') + '</button>'
-    + '</div></div></div>';
-  document.body.appendChild(ov);
+  return inputHtml;
+}
+// The dialog's body from bodyText or bodyNode, for confirmDialog. (`body`, the raw-markup one, is
+// already in place: it is part of the dialog's markup.)
+function _cdFillBody(ov, opts){
   // Plain-text body: assign via textContent (never innerHTML) so a caller may pass untrusted
   // text (e.g. a form's data-confirm value) with zero HTML-injection risk.
   if (opts.bodyText != null) { var _cb = ov.querySelector('[data-cd-body]'); if (_cb) _cb.textContent = opts.bodyText; }
@@ -335,6 +326,36 @@ window.confirmDialog = function(opts){
       _cn.appendChild(opts.bodyNode);
     }
   }
+}
+// Confirm stays disabled until the typed text matches (requireText) or a password is entered
+// (requirePassword), for confirmDialog.
+function _cdGateConfirm(opts, input, okBtn, errEl){
+  if (opts.requireText) {
+    okBtn.disabled = true;
+    input.addEventListener('input', function(){ okBtn.disabled = (input.value !== opts.requireText); });
+  } else if (opts.requirePassword) {
+    okBtn.disabled = true;
+    input.addEventListener('input', function(){ okBtn.disabled = !input.value; if(errEl) errEl.style.display='none'; });
+  }
+}
+window.confirmDialog = function(opts){
+  opts = opts || {};
+  var inputHtml = _cdInputHtml(opts);
+  var ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:11050;display:flex;align-items:center;justify-content:center;padding:1rem;';
+  // nosemgrep - static markup; every interpolation is escapeHtml'd, and opts.body is documented
+  // as trusted markup (both callers escape their one dynamic value; a test now enforces that).
+  ov.innerHTML = '<div class="card" style="max-width:480px;width:100%;">'  // nosemgrep
+    + '<div class="card-header"><i class="bi bi-' + escapeHtml(opts.icon || 'question-circle') + '"></i> ' + escapeHtml(opts.title || 'Confirm') + '</div>'
+    + '<div class="card-body">'
+    + '<p class="mb-3" data-cd-body style="white-space:pre-line;">' + (opts.body || '') + '</p>'
+    + inputHtml
+    + '<div class="d-flex justify-content-end gap-2">'
+    + '<button class="btn btn-outline-secondary" data-cd="cancel">Cancel</button>'
+    + '<button class="btn ' + escapeHtml(opts.confirmClass || 'btn-primary') + '" data-cd="ok">' + escapeHtml(opts.confirmLabel || 'Confirm') + '</button>'
+    + '</div></div></div>';
+  document.body.appendChild(ov);
+  _cdFillBody(ov, opts);
   var input = ov.querySelector('#cd-input'), okBtn = ov.querySelector('[data-cd="ok"]'),
       errEl = ov.querySelector('#cd-err'), okHtml = okBtn.innerHTML;
   function close(){ ov.remove(); document.removeEventListener('keydown', onKey); }
@@ -346,13 +367,7 @@ window.confirmDialog = function(opts){
     error: function(m){ if(errEl){ errEl.textContent = m || 'Incorrect.'; errEl.style.display=''; } okBtn.disabled=false; okBtn.innerHTML=okHtml; if(input){ input.value=''; input.focus(); } },
     busy: function(){ okBtn.disabled=true; okBtn.innerHTML='<span class="spinner-border spinner-border-sm"></span>'; }
   };
-  if (opts.requireText) {
-    okBtn.disabled = true;
-    input.addEventListener('input', function(){ okBtn.disabled = (input.value !== opts.requireText); });
-  } else if (opts.requirePassword) {
-    okBtn.disabled = true;
-    input.addEventListener('input', function(){ okBtn.disabled = !input.value; if(errEl) errEl.style.display='none'; });
-  }
+  _cdGateConfirm(opts, input, okBtn, errEl);
   function submit(){
     if (okBtn.disabled) return;
     var val = input ? input.value : undefined;
@@ -421,47 +436,52 @@ function _submitAjaxForm(form){
     .then(function(res){
       restore();
       if (res.status >= 200 && res.status < 300 && res.d.success !== false){
-        if (window.toast && res.d.message) toast(res.d.message, 'success');
-        if (form.getAttribute('data-ajax-reset') !== 'off' && form.reset) form.reset();
-        var sel = form.getAttribute('data-ajax-refresh');
-        var after = form.getAttribute('data-ajax-after');
-        // A response can carry a freshly minted secret (a generated password) for the page to show
-        // once. It rides along with the refresh rather than being shown straight away: opening a
-        // second modal while the first is still hiding leaves Bootstrap stripping `modal-open` off
-        // the body and stranding both backdrops over the new one — the password is on the page,
-        // behind two grey sheets, which is the same as losing it.
-        var cred = res.d.credential;
-        var doRefresh = function(){
-          // data-ajax-after runs whether or not there is a section to swap. It used to be handed
-          // ONLY to refreshSection, so a form with an after-hook and no data-ajax-refresh — the
-          // install form, deliberately, because the list it would refresh lives on another page —
-          // quietly never ran it. A data- attribute that is silently ignored in one configuration
-          // is a trap, not a feature.
-          // nosemgrep - the delegated dispatcher this UI is built on; `after` comes from a data-
-          // attribute in our own template and the typeof guard is the contract.
-          if (sel) window.refreshSection(sel, after);
-          else if (after && typeof window[after] === 'function') { try { window[after](); } catch(e){} }  // nosemgrep
-          if (cred && typeof window.showCredential === 'function'){
-            try { window.showCredential(cred); } catch(e){}
-          }
-        };
-        var modal = form.closest('.modal');
-        if (modal && window.bootstrap){
-          // Wait for the modal to FULLY hide (Bootstrap removes its backdrop) before swapping the
-          // section DOM — destroying the modal mid-animation would strand a grey backdrop overlay.
-          var mi = bootstrap.Modal.getInstance(modal) || bootstrap.Modal.getOrCreateInstance(modal);
-          modal.addEventListener('hidden.bs.modal', function _h(){
-            modal.removeEventListener('hidden.bs.modal', _h); doRefresh();
-          });
-          mi.hide();
-        } else {
-          doRefresh();
-        }
+        _ajaxFormSucceeded(form, res);
       } else if (window.toast) {
         toast(res.d.message || 'Action failed', 'danger');
       }
     })
     .catch(function(){ restore(); if (window.toast) toast('Request failed', 'danger'); });
+}
+// A form the server accepted: toast, reset, then refresh the section and run the after-hook -
+// once its modal has fully closed, when it sits in one.
+function _ajaxFormSucceeded(form, res){
+  if (window.toast && res.d.message) toast(res.d.message, 'success');
+  if (form.getAttribute('data-ajax-reset') !== 'off' && form.reset) form.reset();
+  var sel = form.getAttribute('data-ajax-refresh');
+  var after = form.getAttribute('data-ajax-after');
+  // A response can carry a freshly minted secret (a generated password) for the page to show
+  // once. It rides along with the refresh rather than being shown straight away: opening a
+  // second modal while the first is still hiding leaves Bootstrap stripping `modal-open` off
+  // the body and stranding both backdrops over the new one — the password is on the page,
+  // behind two grey sheets, which is the same as losing it.
+  var cred = res.d.credential;
+  var doRefresh = function(){
+    // data-ajax-after runs whether or not there is a section to swap. It used to be handed
+    // ONLY to refreshSection, so a form with an after-hook and no data-ajax-refresh — the
+    // install form, deliberately, because the list it would refresh lives on another page —
+    // quietly never ran it. A data- attribute that is silently ignored in one configuration
+    // is a trap, not a feature.
+    // nosemgrep - the delegated dispatcher this UI is built on; `after` comes from a data-
+    // attribute in our own template and the typeof guard is the contract.
+    if (sel) window.refreshSection(sel, after);
+    else if (after && typeof window[after] === 'function') { try { window[after](); } catch(e){} }  // nosemgrep
+    if (cred && typeof window.showCredential === 'function'){
+      try { window.showCredential(cred); } catch(e){}
+    }
+  };
+  var modal = form.closest('.modal');
+  if (modal && window.bootstrap){
+    // Wait for the modal to FULLY hide (Bootstrap removes its backdrop) before swapping the
+    // section DOM — destroying the modal mid-animation would strand a grey backdrop overlay.
+    var mi = bootstrap.Modal.getInstance(modal) || bootstrap.Modal.getOrCreateInstance(modal);
+    modal.addEventListener('hidden.bs.modal', function _h(){
+      modal.removeEventListener('hidden.bs.modal', _h); doRefresh();
+    });
+    mi.hide();
+  } else {
+    doRefresh();
+  }
 }
 window.ajaxForm = function(form){
   var msg = form.getAttribute('data-confirm');
@@ -503,11 +523,14 @@ window._noop = function(){};                    // for handlers that were only `
 // real quote and closed the attribute early, injecting whatever followed as further attributes on
 // the tag. Escaping & first (and only then ') means an ampersand in a value round-trips as data
 // instead of as the start of an entity. Order matters: & last would re-escape the & of &#39;.
+// The quote is matched as /\x27/, the same character: a bare ' inside a regex literal is read by
+// Lizard (Codacy's complexity analyser) as a string opening, and it then took the next 325 lines
+// for one function.
 window._da = function(action, args, on){        // build the attributes from JS that generates HTML
   var s = ' data-action="' + action + '"';
   if (args && args.length){
     s += " data-args='"
-       + JSON.stringify(args).replace(/&/g, '&amp;').replace(/'/g, '&#39;')
+       + JSON.stringify(args).replace(/&/g, '&amp;').replace(/\x27/g, '&#39;')
        + "'";
   }
   if (on){ s += ' data-on="' + on + '"'; }
@@ -650,32 +673,52 @@ window.makeSortable = function(container, opts){
 
   function onMove(ev){
     if (!dragging) return;
-    // A 4px dead zone, so a slightly shaky click is still a click.
-    if (!moved && Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return;
-    if (!moved){ moved = true; dragging.classList.add('sort-dragging'); document.body.classList.add('sort-active'); }
+    if (!leftDeadZone(ev)) return;
     // Reorder only when the pointer passes a neighbour's MIDPOINT — a handful of DOM moves per drag
     // rather than one per frame. That matters here: the i18n MutationObserver re-walks every
     // inserted subtree, so moving the node per frame would translate the whole panel each time.
     var sibs = items();
     for (var i = 0; i < sibs.length; i++){
-      var el = sibs[i];
-      // Skip anything not actually rendered. A display:none sibling (a row hidden by the search or
-      // tag filter) reports an ALL-ZERO rect, so its midpoint is 0 and "pointer past it" is true for
-      // every position on screen — it would swallow the very first pointermove as a drop target.
-      if (el === dragging || !el.getClientRects().length) continue;
-      var r = el.getBoundingClientRect();
-      // On a wrapping grid (the stat tiles are row-cols-2 on phones) an x-axis compare alone matches
-      // tiles on OTHER rows, whose x ranges overlap. Require the pointer to be within this
-      // candidate's row before applying the horizontal test.
-      if (horizontal && (ev.clientY < r.top || ev.clientY > r.bottom)) continue;
-      var mid = horizontal ? r.left + r.width / 2 : r.top + r.height / 2;
-      var pos = horizontal ? ev.clientX : ev.clientY;
-      var before = sibs.indexOf(dragging) > i;
-      if ((before && pos < mid) || (!before && pos > mid)){
-        container.insertBefore(dragging, before ? el : el.nextSibling);
-        break;
-      }
+      if (passedSibling(ev, sibs, i)) break;
     }
+  }
+
+  // A 4px dead zone, so a slightly shaky click is still a click. False while the pointer is still
+  // inside it; the first move out of it starts the drag.
+  function leftDeadZone(ev){
+    if (!moved && Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return false;
+    if (!moved){ moved = true; dragging.classList.add('sort-dragging'); document.body.classList.add('sort-active'); }
+    return true;
+  }
+
+  // Move the dragged item past sibs[i] if the pointer has crossed that sibling's midpoint. True
+  // when it moved, which ends this pointermove.
+  function passedSibling(ev, sibs, i){
+    var el = sibs[i];
+    var r = dropRect(ev, el);
+    if (!r) return false;
+    var mid = horizontal ? r.left + r.width / 2 : r.top + r.height / 2;
+    var pos = horizontal ? ev.clientX : ev.clientY;
+    var before = sibs.indexOf(dragging) > i;
+    if ((before && pos < mid) || (!before && pos > mid)){
+      container.insertBefore(dragging, before ? el : el.nextSibling);
+      return true;
+    }
+    return false;
+  }
+
+  // el's rect when it can take the drop, or null when it cannot.
+  function dropRect(ev, el){
+    // Skip anything not actually rendered. A display:none sibling (a row hidden by the search or
+    // tag filter) reports an ALL-ZERO rect, so its midpoint is 0 and "pointer past it" is true for
+    // every position on screen — it would swallow the very first pointermove as a drop target.
+    if (el === dragging || !el.getClientRects().length) return null;
+    var r = el.getBoundingClientRect();
+    // On a wrapping grid (the stat tiles are row-cols-2 on phones) an x-axis compare alone matches
+    // tiles on OTHER rows, whose x ranges overlap. Require the pointer to be within this
+    // candidate's row before applying the horizontal test.
+    if (horizontal && (ev.clientY < r.top || ev.clientY > r.bottom)) return null;
+    return r;
   }
 
   function onUp(ev){
@@ -728,7 +771,7 @@ document.addEventListener('click', function(ev){
 // id). Renders status, attach form, per-service enable/disable, and detach.
 window.UPro = (function(){
   var HOST = null, EL = null;
-  function e(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  function e(s){ return String(s==null?'':s).replace(/[&<>\x22\x27]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
   function msg(t, kind){ var m=document.getElementById('upro-msg'); if(m){ m.textContent=t; m.className='small mt-2 '+(kind==='success'?'text-success':(kind==='danger'?'text-danger':'text-secondary')); } }
   function attachForm(){
     return '<div class="input-group input-group-sm" style="max-width:540px;">'
@@ -768,6 +811,10 @@ window.UPro = (function(){
         + attachForm() + '<div id="upro-msg" class="small mt-2"></div>';
       return;
     }
+    renderAttached(d);
+  }
+  // An attached host: contract, account and expiry, then one row per service with its toggle.
+  function renderAttached(d){
     var head = '<div class="d-flex align-items-center gap-2 mb-2 flex-wrap"><span class="badge bg-success">Attached</span>'
       + (d.contract ? '<span class="small text-secondary">'+e(d.contract)+'</span>' : '')
       + (d.account ? '<span class="small text-secondary">· '+e(d.account)+'</span>' : '')

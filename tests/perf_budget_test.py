@@ -216,6 +216,8 @@ def cleanup():
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
         except OSError:
             pass
+
+
 def seed_servers(first, count):
     with app.app_context():
         remotes = RemoteServer.query.all()
@@ -261,15 +263,16 @@ def probe(client, paths):
             counter["n"] = 0
             try:
                 client.get(path)
-            except Exception:
-                continue          # a page that raises is smoke_test's business, not this gate's
+            except Exception:  # nosec B112 - a page that raises is smoke_test's business, not this gate's
+                continue
             out[path] = counter["n"]
         return out
     finally:
         sa_event.remove(engine, "before_cursor_execute", _count)
 
 
-try:
+def _seed_admin_and_hosts():
+    """Complete setup and seed the superadmin the sweep runs as, plus HOSTS hosts; return its id."""
     with app.app_context():
         db.create_all()
         st = SetupState.query.first() or SetupState(step="done", data="{}")
@@ -285,9 +288,11 @@ try:
             db.session.add(RemoteServer(name="host%d" % h, host="192.0.2.%d" % h,
                                         username="u", is_local=(h == 0)))
         db.session.commit()
-        admin_id = admin.id
+        return admin.id
 
-    seed_servers(0, SERVERS_SMALL)
+
+def _get_page_paths(admin_id):
+    """Every GET page in the url map, with a real row's id in place of each id placeholder."""
     with app.app_context():
         one_server = GameServer.query.first().id
         one_remote = RemoteServer.query.first().id
@@ -308,18 +313,20 @@ try:
             if "<" not in p:
                 paths.append(p)
     paths.sort()
+    return paths
 
-    c = app.test_client()
-    with c.session_transaction() as s:
-        s["_user_id"] = str(admin_id)
-        s["_fresh"] = True
 
-    t0 = time.perf_counter()
-    small = probe(c, paths)
-    seed_servers(SERVERS_SMALL, SERVERS_LARGE - SERVERS_SMALL)
-    large = probe(c, paths)
-    elapsed = time.perf_counter() - t0
+def _signed_in_client(user_id):
+    """A test client whose session is already signed in as `user_id`."""
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess["_user_id"] = str(user_id)
+        sess["_fresh"] = True
+    return client
 
+
+def _check_the_sweep_ran(small, large):
+    """The sweep rendered pages, reached the privileged path, and ran no sudo and no git."""
     check("perf: the probe actually rendered pages (a run that measures nothing proves nothing)",
           len(small) >= 40 and len(large) >= 40, "%d / %d pages" % (len(small), len(large)))
     check("perf: the sweep started no sudo, and no git in the checkout",
@@ -332,19 +339,26 @@ try:
     check("perf: the tripwire catches a sudo argv and a sudo shell run (its positive control)",
           len(_PB_TRIPPED) == _trip_before + 2, repr(_PB_TRIPPED[_trip_before:]))
 
-    # Host-bounded pages do not move at all. Allow a couple of queries of slack for pagination and
-    # the like; a real per-server N+1 adds ~80 here (4x the servers added), not 2.
-    SLACK = 2
-    grew = []
-    for p in sorted(small):
-        if p not in large:
-            continue
-        delta = large[p] - small[p]
-        if delta > SLACK:
-            grew.append("%s %d->%d (+%d)" % (p, small[p], large[p], delta))
-    check("perf: no page's query count grows with the number of game servers (N+1)",
-          not grew, "; ".join(grew[:4]))
 
+# Host-bounded pages do not move at all. Allow a couple of queries of slack for pagination and
+# the like; a real per-server N+1 adds ~80 here (4x the servers added), not 2.
+SLACK = 2
+
+
+def _pages_that_grew(before, after):
+    """Pages whose query count rose by more than SLACK between two sweeps, described."""
+    grew = []
+    for p in sorted(before):
+        if p not in after:
+            continue
+        delta = after[p] - before[p]
+        if delta > SLACK:
+            grew.append("%s %d->%d (+%d)" % (p, before[p], after[p], delta))
+    return grew
+
+
+def _check_no_growth_with_groups(paths):
+    """No page's query count grows with the number of groups a (non-superadmin) user is in."""
     # ── Second axis: GROUPS ───────────────────────────────────────────────────────────────────
     # The sweep above varies servers and holds groups fixed, which is a blind spot rather than a
     # choice — and something was hiding in it. Group.servers / Group.game_servers are lazy, so
@@ -362,26 +376,20 @@ try:
         restricted_id = _ru.id
     seed_groups(restricted_id, 0, GROUPS_SMALL)
 
-    cu = app.test_client()
-    with cu.session_transaction() as s2:
-        s2["_user_id"] = str(restricted_id)
-        s2["_fresh"] = True
+    cu = _signed_in_client(restricted_id)
     few = probe(cu, paths)
     seed_groups(restricted_id, GROUPS_SMALL, GROUPS_LARGE - GROUPS_SMALL)
     many = probe(cu, paths)
 
     check("perf: the group probe rendered pages too", len(few) >= 10 and len(many) >= 10,
           "%d / %d pages" % (len(few), len(many)))
-    grew_g = []
-    for p in sorted(few):
-        if p not in many:
-            continue
-        delta = many[p] - few[p]
-        if delta > SLACK:
-            grew_g.append("%s %d->%d (+%d)" % (p, few[p], many[p], delta))
+    grew_g = _pages_that_grew(few, many)
     check("perf: no page's query count grows with the number of GROUPS a user is in",
           not grew_g, "; ".join(grew_g[:4]))
 
+
+def _check_api_servers_scans_concurrently(client):
+    """/api/servers scans the hosts concurrently, not one after another."""
     # ── /api/servers must scan the HOSTS concurrently, not one after another ──────────────────
     # Query counts cannot see this one: the cost is SSH round trips, and they were serial. The
     # dashboard polls this every 8 seconds, so with an 80ms link it cost hosts x 80ms — 404ms at
@@ -409,13 +417,33 @@ try:
     _saved_scan = _apimod._remote_listening_ports
     try:
         _apimod._remote_listening_ports = _counting_scan
-        c.get("/api/servers")
+        client.get("/api/servers")
     finally:
         _apimod._remote_listening_ports = _saved_scan
     check("perf: /api/servers scans the hosts concurrently (peak %d of %d in flight)"
           % (_peak[0], HOSTS),
           _peak[0] > 1,
           "every host scanned in sequence — this endpoint costs hosts x SSH latency")
+
+
+try:
+    admin_id = _seed_admin_and_hosts()
+    seed_servers(0, SERVERS_SMALL)
+    paths = _get_page_paths(admin_id)
+    c = _signed_in_client(admin_id)
+
+    t0 = time.perf_counter()
+    small = probe(c, paths)
+    seed_servers(SERVERS_SMALL, SERVERS_LARGE - SERVERS_SMALL)
+    large = probe(c, paths)
+    elapsed = time.perf_counter() - t0
+
+    _check_the_sweep_ran(small, large)
+    grew = _pages_that_grew(small, large)
+    check("perf: no page's query count grows with the number of game servers (N+1)",
+          not grew, "; ".join(grew[:4]))
+    _check_no_growth_with_groups(paths)
+    _check_api_servers_scans_concurrently(c)
 
     worst = sorted(large.items(), key=lambda kv: -kv[1])[:5]
     print("busiest pages at %d hosts / %d servers: %s"

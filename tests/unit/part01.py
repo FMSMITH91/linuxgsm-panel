@@ -115,9 +115,62 @@ from panel.security.auth import can_access_remote, client_ip  # noqa: F401 - re-
 
 results = []
 
+# ── the eventlet hub, swept at every check() ────────────────────────────────────────────────────
+# This suite is monkey-patched (importing app runs eventlet.monkey_patch()), so every green wait —
+# os.read on a pipe, a socket, a subprocess — files a listener with the hub for the greenlet that
+# waits, and removes it when the wait ends. A wait that raises in the wrong place leaves it behind.
+# part10's _aside check did: green os.read on a DIRECTORY, epoll refused the fd after the listener
+# was filed, and the trampoline raised before the `try` that removes it. The next os.open to reuse
+# that fd number queued an IOClosed for the suite's own greenlet, and the hub threw it into
+# whatever the suite waited on next — a subprocess, six checks later, which crashed on Python 3.10
+# and 3.12 and quietly failed on 3.13+.
+#
+# The runner's part-boundary sweep could not have seen it: the leak and its victim were in the
+# same part, and the hub was clean again by the end of it. So each check() made from a thread's
+# MAIN greenlet (the suite's module-level code) looks for what cannot be a live wait: a listener
+# filed for the greenlet that is running right now (it is recording a result, not waiting), or for
+# a dead one, and an IOClosed still queued for the running one. Each is recorded against the check
+# being recorded — the code since the previous check() filed it — and removed, so a leak fails ONE
+# gate that says where it happened instead of whichever check it would have hit. The runner turns
+# hub_leaks into that gate, and fails it too if no check ever found a hub to read.
+hub_leaks = []
+hub_swept = [0]
+
+
+def _hub_sweep(name):
+    hubs, greenlet = sys.modules.get("eventlet.hubs"), sys.modules.get("greenlet")
+    if hubs is None or greenlet is None:
+        return
+    cur = greenlet.getcurrent()
+    if cur.parent is not None:      # a spawned greenthread: the main greenlet may really be waiting
+        return
+    try:
+        hub = getattr(hubs._threadlocal, "hub", None)     # this thread's hub, never a new one
+        if hub is None:
+            return
+        hub_swept[0] += 1
+        stale = [(ls, "listener") for bucket in hub.listeners.values() for ls in bucket.values()]
+        stale += [(ls, "secondary listener") for bucket in hub.secondaries.values()
+                  for waiting in bucket.values() for ls in waiting]
+        stale = [(ls, kind) for ls, kind in stale if ls.greenlet is cur or ls.greenlet.dead]
+        stale += [(ls, "queued IOClosed") for ls in hub.closed if ls.greenlet is cur]
+        for ls, kind in stale:
+            hub_leaks.append("%s: %s %s on fd %d, for %s" % (
+                name, ls.evtype, kind, ls.fileno,
+                "the running greenlet" if ls.greenlet is cur else "a dead greenlet"))
+            if kind == "queued IOClosed":
+                hub.closed.remove(ls)
+            else:
+                ls.spent = False            # hub.remove() skips a spent listener
+                hub.remove(ls)
+    except Exception as e:  # noqa: BLE001 - a sweep that cannot read the hub fails its gate
+        if not any(x.startswith("hub sweep failed") for x in hub_leaks):
+            hub_leaks.append("hub sweep failed at %s: %s: %s" % (name, type(e).__name__, e))
+
 
 def check(name, cond, detail=""):
     results.append((bool(cond), name, detail))
+    _hub_sweep(name)
 
 
 def skip(name, reason):
@@ -155,6 +208,19 @@ check("weak: no lower", password_problem("TEST1234!@") is not None)
 check("weak: no digit", password_problem("TestTest!@") is not None)
 check("weak: no symbol", password_problem("TestTest12") is not None)
 check("strong password accepted", password_problem("Test1234!@") is None)
+# ...and the refusal names the class that is MISSING, checked in a fixed order. The four class
+# checks are one table in validation.py (_PW_CLASSES): a swapped row there still refuses, so the
+# checks above stay green, while telling the user to add the class they already have.
+eq("weak: no upper is told to add an uppercase letter",
+   password_problem("test1234!@"), "Password must include an uppercase letter.")
+eq("weak: no lower is told to add a lowercase letter",
+   password_problem("TEST1234!@"), "Password must include a lowercase letter.")
+eq("weak: no digit is told to add a number",
+   password_problem("TestTest!@"), "Password must include a number.")
+eq("weak: no symbol is told to add a symbol",
+   password_problem("TestTest12"), "Password must include a symbol (e.g. !@#$%).")
+eq("weak: missing several classes, the lowercase one is named first",
+   password_problem("12345678!@"), "Password must include a lowercase letter.")
 
 # ── generate_password: the panel issues these, so they must pass its own rules every time ──────
 # Admin-created accounts and admin password resets get a generated password. If one of them could
@@ -522,7 +588,6 @@ _VALIDATORS = [
     ("validation._HEX_COLOR_RE", _V._HEX_COLOR_RE, "#aabbcc"),
     ("_core._SAFE_GAME_IDENT", _sm_core._SAFE_GAME_IDENT, "gmodserver"),
     ("gmod._CU_NAME_RE", _v_gmod._CU_NAME_RE, "gmodcontent"),
-    ("cron._GAME_BACKUP_NAME", _v_cron._GAME_BACKUP_NAME, "srv-2026.tar.gz"),
     ("backup._NAME_RE", _v_backup._NAME_RE, "panel-backup-20260918-120000-manual.tar.gz"),
     ("lgsm_data._OS_SLUG_RE", _v_lgsm._OS_SLUG_RE, "ubuntu-24.04"),
     ("tailscale._PEER_HOST_RE", _v_ts._PEER_HOST_RE, "box.tail1234.ts.net"),
@@ -539,6 +604,12 @@ check("validation._valid_hex_color returns nothing with a newline in it",
       _V._valid_hex_color("#aabbcc\n") == "#aabbcc" and "\n" not in _V._valid_hex_color("#aabbcc\n"))
 check("clock.valid_timezone returns nothing with a newline in it",
       _v_tz("Europe/London\n") == "Europe/London")
+# The game-backup name check became a function (a pattern that retried its tail at every ".tar."
+# took quadratic time); it is held to the same two answers the patterns above are.
+check("cron._game_backup_name_ok ACCEPTS its good value (the gate can still say yes)",
+      _v_cron._game_backup_name_ok("srv-2026.tar.gz") is True)
+check("cron._game_backup_name_ok REJECTS a trailing newline",
+      _v_cron._game_backup_name_ok("srv-2026.tar.gz\n") is False)
 # ...and the model validator must REFUSE, not merely fail to match.
 from panel.db.models import _validate_shell_ident as _v_ident
 _vi_raised = False
@@ -640,6 +711,21 @@ eq("console: a genuine strikethrough is still rendered",
    _clean_console_text("\x1b[9mstruck"), "\x1b[9mstruck\x1b[0m")
 eq("console: a genuine colour is still rendered",
    _clean_console_text("\x1b[33mwarn"), "\x1b[33mwarn\x1b[0m")
+# 39 / 49 reset ONE colour plane — the foreground / the background, bright range included — and
+# leave the rest of the style alone. Before these, no check pinned what they clear: a reset that
+# cleared nothing, or only the normal range, left the whole suite green.
+eq("console: 39 clears the foreground only, keeping bold and the background",
+   _term.render_line_colour("\x1b[1;31;44mA\x1b[39mB"), "\x1b[1;31;44mA\x1b[1;44mB\x1b[0m")
+eq("console: ...a BRIGHT foreground (90-97) included",
+   _term.render_line_colour("\x1b[1;91;44mA\x1b[39mB"), "\x1b[1;91;44mA\x1b[1;44mB\x1b[0m")
+eq("console: 49 clears the background only, keeping bold and the foreground",
+   _term.render_line_colour("\x1b[1;31;44mA\x1b[49mB"), "\x1b[1;31;44mA\x1b[1;31mB\x1b[0m")
+eq("console: ...a BRIGHT background (100-107) included",
+   _term.render_line_colour("\x1b[1;31;101mA\x1b[49mB"), "\x1b[1;31;101mA\x1b[1;31mB\x1b[0m")
+# A code already active is not added again: a spool that re-asserts its colour on every line must
+# render as one run, not as a style that grows by a copy of itself each time.
+eq("console: a colour re-asserted while active is not stacked, the text stays one run",
+   _term.render_line_colour("\x1b[1;33mA\x1b[1;33mB"), "\x1b[1;33mAB\x1b[0m")
 
 # A carriage return OVERWRITES from column 0 — it does not start a new line. Rendering it as a
 # newline (the old behaviour) split JLine's prompt-erase into stray blank lines.
@@ -1396,6 +1482,26 @@ try:
     finally:
         _sm_core.run_privileged, _sm_cron._read_cron_status = _o_rp2, _o_st2
         _sm_cron._read_cron_run_times = _o_rt2
+    # The history columns. A job the recorder has no status for still shows WHEN it last ran, from
+    # cron's own log, so the column never regresses to "—"; one it has status for shows that.
+    _CR_MON = "/home/gm/gmodserver monitor > /dev/null 2>&1"
+
+    def _cron_hist(status, run_times):
+        _o = (_sm_core.run_privileged, _sm_cron._read_cron_status, _sm_cron._read_cron_run_times)
+        try:
+            _sm_core.run_privileged = lambda *_a, **_k: ("*/5 * * * * " + _CR_MON, "", 0)
+            _sm_cron._read_cron_status = lambda *_a, **_k: status
+            _sm_cron._read_cron_run_times = lambda *_a, **_k: run_times
+            return [(j["last_run"], j["ok"], j["error"]) for j in (_sm_cron.list_cron_jobs(None, "gm") or [])]
+        finally:
+            _sm_core.run_privileged, _sm_cron._read_cron_status, _sm_cron._read_cron_run_times = _o
+
+    check("cron list: a job with no recorder status still shows its last run from cron's own log",
+          _cron_hist({}, {_CR_MON: 1700000000}) == [(1700000000, None, "")],
+          repr(_cron_hist({}, {_CR_MON: 1700000000})))
+    check("cron list: ...and a job the recorder HAS a status for shows that status",
+          _cron_hist({_sm_cron._cron_job_id(_CR_MON): {"last_run": 5, "ok": False, "error": "boom"}},
+                     {_CR_MON: 1700000000}) == [(5, False, "boom")])
     # ── a crontab that could not be READ is not an empty crontab ────────────────────────────
     # The rc was discarded, so every failure parsed to []. Three transports reach here: a local
     # helper failure, an unreachable tailscale/ssh host (which answers ("", "...", -1) rather than
@@ -2111,6 +2217,12 @@ try:
            _argvs[-1][3], "game-dir-tar")
         check("stream_path: no shell is involved on the helper path",
               not any(x in ("bash", "/bin/bash", "sh") for x in _argvs[-1]), str(_argvs[-1]))
+        # The backup download's own local path, which only its refusals were run through: the
+        # helper verb that reads AS the game user, handed the account and the archive name.
+        eq("stream_game_backup: a local backup download goes through its helper verb, as argv",
+           (b"".join(_sm_cron.stream_game_backup(_FakeSrv(), "csgoserver", "csgoserver-2026.tar.zst")),
+            _argvs[-1][3:6]),
+           (b"abcdef", ["game-backup-read", "csgoserver", "csgoserver-2026.tar.zst"]))
         # No helper yet (a host between `git pull` and the next install.sh run): still argv, and
         # still read AS THE GAME USER — that is the property the whole design rests on.
         _sm_core.helper_present = lambda: False
@@ -2440,7 +2552,7 @@ import subprocess as _iw_sub     # noqa: E402
 import tempfile as _iw_tmp       # noqa: E402
 
 _iw_src = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
-_iw_upd = _iw_src[_iw_src.index('if [ "${IS_UPDATE}" -eq 1 ]; then'):
+_iw_upd = _iw_src[_iw_src.index('if [[ "${IS_UPDATE}" -eq 1 ]]; then'):
                   _iw_src.index("    # ── Health check FAILED")]
 
 # (1) Ordering: quiesce, THEN tar the database. The gates that MEASURE that ordering EXECUTE
@@ -2473,6 +2585,8 @@ def _iw_upto(start, end):
 
 
 _iw_die = ([ln for ln in _iw_src.splitlines() if ln.startswith("die()")] or [""])[-1]
+# …with the top-level line that gives _DIE_SAID its starting value, as install.sh runs it.
+_iw_die_init = [ln for ln in _iw_src.splitlines() if ln.startswith("_DIE_SAID=")]
 # The handler + its arming, exactly as install.sh has them…
 _iw_window = _iw_seg("    _CODE_FETCHED=0", "trap _update_window_abort ERR EXIT")
 # …the real [3/6] call site, so the marker that tells the handler the tree has been replaced is
@@ -2490,17 +2604,18 @@ _iw_stage12 = _iw_upto('    info "[1/6] Snapshotting', '    info "[3/6] Fetching
 _iw_grants = _iw_upto("\n    check_origin_trusted\n", '\n    info "[5/6]')
 
 
-def _iw_run(scenario, panel_dir, backup):
+def _iw_run(scenario, panel_dir, backup, env=None):
     """Run install.sh's real stopped-window code in bash, then `scenario`. → (rc, output).
 
     Everything that would touch the host (systemctl, pip, the tuning drop-ins) is stubbed to echo,
-    so this measures the control flow and nothing else."""
+    so this measures the control flow and nothing else. `env`: extra environment for the run."""
     script = "\n".join([
         "set -euo pipefail",
         "RED=''; GREEN=''; YELLOW=''; CYAN=''; NC=''",
         'info() { echo "INFO $*"; }',
         'ok()   { echo "OK $*"; }',
         'warn() { echo "WARN $*"; }',
+        *_iw_die_init,
         _iw_die,
         'svc() { echo "SVC $*"; }',
         "install_deps() { echo 'INSTALL_DEPS'; }",
@@ -2517,7 +2632,8 @@ def _iw_run(scenario, panel_dir, backup):
         scenario,
         "echo 'WINDOW-COMPLETED'",
     ])
-    p = _iw_sub.run(["bash", "-c", script], capture_output=True, text=True)
+    p = _iw_sub.run(["bash", "-c", script], capture_output=True, text=True,
+                    env=dict(os.environ, **env) if env else None)
     return p.returncode, p.stdout + p.stderr
 
 
@@ -2603,6 +2719,22 @@ try:
     check("install.sh: ...and says what happened, instead of ending the script with no message",
           "aborted unexpectedly" in _iw_out and "WINDOW-COMPLETED" not in _iw_out and _iw_rc != 0,
           "rc=%d %s" % (_iw_rc, _iw_out[-300:]))
+    # The handler tests _DIE_SAID with [[ -eq ]], which evaluates its operand as ARITHMETIC: the
+    # subscript of a set array there runs its command substitution (`[` only said "integer
+    # expected"). So install.sh sets the flag itself: a value from the environment must not be
+    # run by root, and an inherited 1 must not silence the one sentence an unexplained abort gets.
+    _iw_mark = os.path.join(_iw_dir, "die-said-evaluated")
+    _iw_rc, _iw_out = _iw_run("false", _iw_pd, _iw_bk, env={
+        "_DIE_SAID": "BASH_VERSINFO[$(touch %s)]" % _iw_shlex.quote(_iw_mark)})
+    check("install.sh: a _DIE_SAID from the environment is never evaluated by the abort handler",
+          len(_iw_die_init) == 1 and not os.path.exists(_iw_mark)
+          and "aborted unexpectedly" in _iw_out and _iw_rc != 0,
+          "init=%r ran=%r rc=%d %s" % (_iw_die_init, os.path.exists(_iw_mark), _iw_rc,
+                                       _iw_out[-300:]))
+    _iw_rc, _iw_out = _iw_run("false", _iw_pd, _iw_bk, env={"_DIE_SAID": "1"})
+    check("install.sh: ...and an inherited _DIE_SAID=1 does not silence an unexplained abort",
+          "aborted unexpectedly" in _iw_out and "SVC start linuxgsm-panel.service" in _iw_out
+          and _iw_rc != 0, "rc=%d %s" % (_iw_rc, _iw_out[-300:]))
 
     # …and once fetch_code has swapped the tree, the abort has to put the OLD code back, not just
     # restart the service on top of a half-installed new version. This runs the REAL [3/6] call

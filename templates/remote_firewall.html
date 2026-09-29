@@ -69,17 +69,17 @@
       <div class="card-body">
         <div class="row g-2">
           <div class="col-4">
-            <input type="number" id="new-port" class="form-control form-control-sm" placeholder="Port" min="1" max="65535">
+            <input type="number" id="new-port" class="form-control form-control-sm" placeholder="Port" aria-label="Port" min="1" max="65535">
           </div>
           <div class="col-3">
-            <select id="new-proto" class="form-select form-select-sm">
+            <select id="new-proto" class="form-select form-select-sm" aria-label="Protocol">
               <option value="both" selected>Both (TCP+UDP)</option>
               <option value="tcp">TCP</option>
               <option value="udp">UDP</option>
             </select>
           </div>
           <div class="col-5">
-            <input type="text" id="new-comment" class="form-control form-control-sm" placeholder="Comment (optional)">
+            <input type="text" id="new-comment" class="form-control form-control-sm" placeholder="Comment (optional)" aria-label="Comment (optional)">
           </div>
           <div class="col-12 mt-1">
             <button class="btn btn-success btn-sm w-100" data-action="openPort">
@@ -93,7 +93,7 @@
 
     <!-- Open a port to ONE address/network, and rate limiting -->
     <div class="card mb-3">
-      <div class="card-header"><i class="bi bi-shield-lock"></i> Restrict a Port</div>
+      <div class="card-header" id="fw-restrict-title"><i class="bi bi-shield-lock"></i> Restrict a Port</div>
       <div class="card-body">
         <p class="text-secondary small mb-2">Open a port to a single address or network instead of
           the whole internet — an admin port that only you should reach, or a game port only your
@@ -101,14 +101,14 @@
         <div class="row g-2">
           <div class="col-6">
             <input type="text" id="src-cidr" class="form-control form-control-sm"
-                   placeholder="1.2.3.4 or 10.0.0.0/8" data-no-i18n>
+                   placeholder="1.2.3.4 or 10.0.0.0/8" aria-labelledby="fw-restrict-title" data-no-i18n>
           </div>
           <div class="col-3">
             <input type="text" id="src-port" class="form-control form-control-sm"
-                   placeholder="Port" data-no-i18n>
+                   placeholder="Port" aria-label="Port">
           </div>
           <div class="col-3">
-            <select id="src-proto" class="form-select form-select-sm">
+            <select id="src-proto" class="form-select form-select-sm" aria-label="Protocol">
               <option value="tcp" selected>TCP</option>
               <option value="udp">UDP</option>
             </select>
@@ -130,10 +130,10 @@
         <div class="row g-2">
           <div class="col-6">
             <input type="text" id="limit-port" class="form-control form-control-sm"
-                   placeholder="Port" data-no-i18n>
+                   placeholder="Port" aria-label="Port">
           </div>
           <div class="col-3">
-            <select id="limit-proto" class="form-select form-select-sm">
+            <select id="limit-proto" class="form-select form-select-sm" aria-label="Protocol">
               <option value="tcp" selected>TCP</option>
               <option value="udp">UDP</option>
             </select>
@@ -289,7 +289,7 @@
         </p>
         <div class="row g-2 mb-2">
           <div class="col-sm">
-            <input type="text" id="block-ip" class="form-control form-control-sm" placeholder="IP address to block (e.g. 203.0.113.10)">
+            <input type="text" id="block-ip" class="form-control form-control-sm" placeholder="IP address to block (e.g. 203.0.113.10)" aria-label="IP address to block (e.g. 203.0.113.10)">
           </div>
           <div class="col-sm-auto">
             <button class="btn btn-danger btn-sm w-100" data-action="blockIp">

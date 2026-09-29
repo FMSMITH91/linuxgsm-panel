@@ -207,6 +207,7 @@ class Session:
     """One live shell. Owns its transport and is responsible for tearing it down exactly once."""
 
     def __init__(self, sid, label, on_output, on_exit):
+        """Set up an unattached session; an opener attaches its transport afterwards."""
         self.sid = sid
         self.label = label
         self._on_output = on_output
@@ -281,8 +282,11 @@ class Session:
         self._inq.append(payload)
 
     def _report_dropped(self, n):
-        """Say so. Dropping input silently is how a pasted config ends up half-applied with
-        nothing on screen to suggest it."""
+        """Tell the operator that `n` input bytes were dropped.
+
+        Say so. Dropping input silently is how a pasted config ends up half-applied with nothing on
+        screen to suggest it.
+        """
         _log.warning("terminal %s: dropped %d input bytes — the program is not reading",
                      self.label, n)
         self._emit("\r\n\x1b[33m[%d bytes of input were dropped — the program running here is "
@@ -304,9 +308,7 @@ class Session:
             if self._chan is not None:
                 self._chan.resize_pty(width=cols, height=rows)
             elif self._fd is not None:
-                import fcntl
                 import struct
-                import termios
                 fcntl.ioctl(self._fd, termios.TIOCSWINSZ,
                             struct.pack("HHHH", rows, cols, 0, 0))
         except Exception:
@@ -467,6 +469,35 @@ def _pump_channel(sess):
     sess.close("the shell exited")
 
 
+def _pump_fd_step(sess, fd):
+    """Run one select/read round of _pump_fd; return False once the session's output has ended.
+
+    Writes any queued input when the descriptor is writable, then emits whatever is readable. EOF
+    and any error other than a spurious wakeup end the pump; the caller owns closing `fd`.
+    """
+    try:
+        # One greenlet, one descriptor, both directions. Asking for writability only when
+        # something is queued keeps the common case a plain read wait.
+        r, w, _ = select.select([fd], [fd] if sess._inq else [], [], 0.2)
+        if w:
+            _drain_input(sess, fd)
+        if not r:
+            return True
+        data = os.read(fd, _READ_CHUNK)
+        if not data:
+            return False
+        sess._emit(sess._decoder.decode(data))
+    except BlockingIOError:
+        # The descriptor is non-blocking now (see _write_fd). select said readable and the
+        # byte was gone by the time we read: that is not the end of the session.
+        return True
+    except (OSError, ValueError):
+        return False
+    except Exception:
+        return False
+    return True
+
+
 @_retires
 def _pump_fd(sess):
     """Local/tailscale: select yields under eventlet; os.read on a pty fd would not.
@@ -478,25 +509,7 @@ def _pump_fd(sess):
     fd = sess._fd
     try:
         while not sess.closed:
-            try:
-                # One greenlet, one descriptor, both directions. Asking for writability only when
-                # something is queued keeps the common case a plain read wait.
-                r, w, _ = select.select([fd], [fd] if sess._inq else [], [], 0.2)
-                if w:
-                    _drain_input(sess, fd)
-                if not r:
-                    continue
-                data = os.read(fd, _READ_CHUNK)
-                if not data:
-                    break
-                sess._emit(sess._decoder.decode(data))
-            except BlockingIOError:
-                # The descriptor is non-blocking now (see _write_fd). select said readable and the
-                # byte was gone by the time we read: that is not the end of the session.
-                continue
-            except (OSError, ValueError):
-                break
-            except Exception:
+            if not _pump_fd_step(sess, fd):
                 break
     finally:
         # Claim it before closing — and close it ONLY if the claim succeeded. os.close used to sit
@@ -586,7 +599,7 @@ def open_session(sid, server, is_local, user_key, on_output, on_exit, cols=80, r
 
 
 def _login_shell():
-    """This account's own login shell, from its passwd entry.
+    """Return this account's own login shell, from its passwd entry.
 
     It read os.environ["SHELL"] before. Under systemd that variable is not set at all, so a root
     install always got the /bin/bash fallback no matter what shell the account actually has — and
@@ -621,8 +634,9 @@ def _open_local(sess, cols, rows):
     env["TERM"] = "xterm-256color"
     # A login shell, so the operator gets their own profile rather than the service unit's stripped
     # environment. start_new_session gives it its own process group for the SIGHUP on teardown.
+
     def _attach_ctty():
-        """Make the slave this process's CONTROLLING terminal, in the child, after setsid().
+        r"""Make the slave this process's CONTROLLING terminal, in the child, after setsid().
 
         start_new_session=True calls setsid, which is necessary but not sufficient: the child then
         has no controlling terminal at all, because it INHERITS the slave as a descriptor rather
@@ -638,7 +652,7 @@ def _open_local(sess, cols, rows):
         and exec, and the shell hands the dispositions it started with to every job it runs, so a
         panel started with them ignored — from a script with `&`, where the shell ignores both for
         a background command — gave every local terminal a `sleep`, a `tail -f` or a runaway loop
-        that ^C and ^\\ could not stop, with the foreground process group set up correctly. It
+        that ^C and ^\ could not stop, with the foreground process group set up correctly. It
         worked under systemd only because systemd starts the service with default dispositions.
         """
         fcntl.ioctl(0, termios.TIOCSCTTY, 0)

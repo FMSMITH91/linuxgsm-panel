@@ -241,7 +241,7 @@
 <div class="card mb-3" id="updates" data-mtab="maintenance">
   <div class="card-header d-flex justify-content-between align-items-center">
     <span><i class="bi bi-arrow-up-circle"></i> Panel Updates</span>
-    <span class="small text-secondary">LinuxGSM Panel <strong id="pu-current">v{{ panel_version }}</strong></span>
+    <span class="small text-secondary">LinuxGSM Panel <strong id="pu-current">{{ panel_version }}{% if panel_commit %} · {{ panel_commit }}{% endif %}</strong></span>
   </div>
   <div class="card-body">
     <div class="row g-3">
@@ -329,7 +329,7 @@
       </p>
       <div class="d-flex gap-2 flex-wrap align-items-center">
         <input type="password" id="bk-pass" class="form-control form-control-sm"
-               style="max-width:22rem;" autocomplete="new-password"
+               style="max-width:22rem;" autocomplete="new-password" aria-label="Backup passphrase"
                placeholder="Passphrase — at least 12 characters">
         <button class="btn btn-primary btn-sm" data-action="saveBackupPassphrase" data-args='["@self"]'>
           <i class="bi bi-lock"></i> Encrypt new backups
@@ -506,7 +506,8 @@
         </a>
         <span id="diag-report-msg" class="small"></span>
       </div>
-      <textarea id="diag-report-text" class="form-control" rows="8" readonly aria-label="Debug report"
+      <span class="visually-hidden" id="diag-report-name">Debug report</span>
+      <textarea id="diag-report-text" class="form-control" rows="8" readonly aria-labelledby="diag-report-name"
                 style="display:none;font-family:ui-monospace,monospace;font-size:.72rem;"></textarea>
     </div>
   </div>

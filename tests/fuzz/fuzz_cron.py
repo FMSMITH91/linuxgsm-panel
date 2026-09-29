@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Atheris fuzz harness: the crontab / cron-status parsers (ssh_manager).
+r"""Atheris fuzz harness: the crontab / cron-status parsers (ssh_manager).
 
 Everything these read comes off a REMOTE host: the game user's crontab, and the base64-framed
 status blob the panel's own cron wrapper writes after each run. Both are outside the panel's
@@ -7,7 +7,7 @@ control — a crontab can be edited by hand on the box, and the status blob carr
 LinuxGSM command printed to stderr, which for an update means text fetched off the internet.
 
 The Scheduled Tasks page renders all of it, and the panel's cron-status path has already produced
-one real bug this way (a `tr` that missed \\r truncated every record at the transport, so errors
+one real bug this way (a `tr` that missed \r truncated every record at the transport, so errors
 silently read as empty). These parsers are best-effort and must never raise: a crash here takes
 out the whole page rather than one row.
 

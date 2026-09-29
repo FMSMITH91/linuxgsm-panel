@@ -409,14 +409,14 @@
              left is the part you cannot read anywhere else — the switches. #}
           {% if server.short_name != server.name %}
           <tr>
-            <td class="text-secondary">Short Name
-              <span class="text-muted" style="font-size:.7rem;">(the Linux user)</span></td>
+            <th scope="row" class="text-secondary fw-normal">Short Name
+              <span class="text-muted" style="font-size:.7rem;">(the Linux user)</span></th>
             <td class="text-end"><code>{{ server.short_name }}</code></td>
           </tr>
           {% endif %}
           <tr>
-            <td class="text-secondary">Auto-start &amp; recover
-              <span class="text-muted" style="font-size:.7rem;">(monitor, every 5 min)</span></td>
+            <th scope="row" class="text-secondary fw-normal">Auto-start &amp; recover
+              <span class="text-muted" style="font-size:.7rem;">(monitor, every 5 min)</span></th>
             <td class="text-end">
               {% if can_autostart %}
               <div class="form-check form-switch d-inline-block m-0">
@@ -431,7 +431,7 @@
             </td>
           </tr>
           <tr>
-            <td class="text-secondary">Daily restart <span class="text-muted" style="font-size:.7rem;">(when empty)</span></td>
+            <th scope="row" class="text-secondary fw-normal">Daily restart <span class="text-muted" style="font-size:.7rem;">(when empty)</span></th>
             <td class="text-end">
               {% if can_autostart %}
               <div class="form-check form-switch d-inline-block m-0">
@@ -450,8 +450,8 @@
              takes the time in YOUR zone, converts on the way in, and shows what it actually wrote
              on the host underneath. #}
           <tr>
-            <td class="text-secondary">Restart at
-              <span class="text-muted" style="font-size:.7rem;">(your time)</span></td>
+            <th scope="row" class="text-secondary fw-normal">Restart at
+              <span class="text-muted" style="font-size:.7rem;">(your time)</span></th>
             <td class="text-end">
               {% if can_autostart %}
               <input type="time" class="form-control form-control-sm d-inline-block"
@@ -480,8 +480,8 @@
           </tr>
           {% if can_autostart %}
           <tr>
-            <td class="text-secondary">Notify when empty
-              <span class="text-muted" style="font-size:.7rem;">(one-off; needs notifications set up)</span></td>
+            <th scope="row" class="text-secondary fw-normal">Notify when empty
+              <span class="text-muted" style="font-size:.7rem;">(one-off; needs notifications set up)</span></th>
             <td class="text-end">
               <div class="form-check form-switch d-inline-block m-0">
                 <input class="form-check-input" type="checkbox" role="switch" id="notify-empty-toggle"
@@ -501,19 +501,19 @@
       <div class="card-body">
         <table class="table table-borderless table-sm mb-0">
           <tr>
-            <td class="text-secondary">Machine</td>
+            <th scope="row" class="text-secondary fw-normal">Machine</th>
             <td class="text-end">{{ remote.name }}{% if remote.is_local %} <span class="badge bg-secondary" style="font-size:.6rem;">this panel</span>{% endif %}</td>
           </tr>
           {# Only while there is nothing to connect to yet. Once resolved, the Connect row below is
              the same address plus the port — and it is the one you can click to copy. #}
           {% if not public_host %}
           <tr>
-            <td class="text-secondary">Public IP</td>
+            <th scope="row" class="text-secondary fw-normal">Public IP</th>
             <td class="text-end text-secondary">resolving…</td>
           </tr>
           {% endif %}
           <tr>
-            <td class="text-secondary">Connect</td>
+            <th scope="row" class="text-secondary fw-normal">Connect</th>
             <td class="text-end">{% set caddr = (public_host ~ ':' ~ server.port) if public_host else (':' ~ server.port) %}
               <code class="text-info{% if public_host %} copy-addr{% endif %}"{% if public_host %} style="cursor:pointer;" title="Click to copy" data-copy="{{ caddr }}"{% endif %}>{{ caddr }}</code></td>
           </tr>
@@ -545,7 +545,7 @@
         <table class="table table-sm table-borderless mb-0 small">
           {% for c in all_commands %}
           <tr>
-            <td class="ps-3" style="white-space:nowrap;vertical-align:top;"><code class="text-info">{{ c.cmd }}</code></td>
+            <th scope="row" class="ps-3 fw-normal" style="white-space:nowrap;vertical-align:top;"><code class="text-info">{{ c.cmd }}</code></th>
             <td class="text-secondary pe-3">{{ c.desc }}</td>
           </tr>
           {% endfor %}

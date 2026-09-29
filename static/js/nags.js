@@ -84,16 +84,20 @@ window.osUpdatesNagCheck = function(){
       var sig = hosts.map(function(h){ return h.id+':'+h.count+':'+h.security; }).join('|');
       var off = null; try { off = sessionStorage.getItem('osUpdatesNagOff'); } catch(e){}
       if(off === sig){ _osNagClear(box); return; }
-      var sec = hosts.reduce(function(a,h){ return a + (h.security||0); }, 0);
+      var sec = hosts.reduce(function(a,h){ return a + (Number(h.security)||0); }, 0);
       // One line per host, so a narrow screen breaks between hosts rather than mid-sentence.
       var rows = hosts.map(function(h){
+        // The two counts go into markup unescaped, so they are made numbers HERE. The API sends
+        // ints (len() and sum() in _os_update_note), but that was the only thing keeping a string
+        // out of this innerHTML; Number() makes the banner's safety this line's, not the server's.
+        var n = Number(h.count) || 0, s = Number(h.security) || 0;
         // inline-block + padding: a bare inline link is only as tall as its text (16px), which is
         // an unfair target on a phone. This lifts each one to a 24px row without padding the banner.
         return '<div><a class="alert-link" style="display:inline-block;padding:.25rem 0;"'
              + ' href="' + escapeHtml(h.url) + '#os-updates">'
-             + escapeHtml(h.name) + '</a> — ' + h.count + ' update' + (h.count===1?'':'s')
-             + (h.security ? ' <span class="badge bg-danger" style="font-weight:normal;">'
-                             + h.security + ' security</span>' : '') + '</div>';
+             + escapeHtml(h.name) + '</a> — ' + n + ' update' + (n===1?'':'s')
+             + (s ? ' <span class="badge bg-danger" style="font-weight:normal;">'
+                  + s + ' security</span>' : '') + '</div>';
       }).join('');
       // alert-dismissible parks the close button in the corner and reserves room for it; laying it
       // out in the flow instead drops it onto a line of its own at 375px.

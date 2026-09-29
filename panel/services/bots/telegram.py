@@ -8,7 +8,7 @@ from panel.services import (notifications)
 from panel.services.bots.commands import (BUSY_REPLY, CommandWorker, _bot_origin,
     _panel_ver_label, _command_arg, _connect_text, _console_text, _find_server,
     _hosts_text, _reply_header, _players_text, _say_text,
-    _servers_text, _status_text, action_ack, working_ack)
+    _servers_text, _status_text, action_ack, update_outcome_text, working_ack)
 import logging
 import time
 
@@ -57,7 +57,8 @@ def _tg_addressed_elsewhere(text, bot_username):
     append in groups — so a command addressed to ANOTHER bot in the authorised group ran here too:
     with privacy mode off, or this bot a group admin (admins receive every message),
     '/update@MinecraftBot' self-updated and restarted the panel. An '@' naming a bot this one cannot
-    identify (getMe has not answered yet) is not assumed to be this one."""
+    identify (getMe has not answered yet) is not assumed to be this one.
+    """
     first = (text or "").strip().split()[0] if (text or "").strip() else ""
     if "@" not in first:
         return False
@@ -65,18 +66,82 @@ def _tg_addressed_elsewhere(text, bot_username):
     return not (bot_username and target.lower() == bot_username.lower())
 
 
+def _tg_settings():
+    """Read the bot's settings for one tick of the watch: (token, authorised chat id, state).
+
+    `state` is "off" when the bot or its commands are switched off, "unconfigured" when they are on
+    but the token or the chat id is missing, and "on" otherwise. The chat id is only read once
+    commands are on, and is "" when they are not.
+    """
+    tg = notifications._cfg().get("telegram") or {}
+    token = decrypt_secret(tg.get("token") or "")
+    if not (tg.get("enabled") and tg.get("accept_commands")):
+        return token, "", "off"
+    authorized = (tg.get("chat_id") or "").strip()
+    if not token or not authorized:
+        return token, authorized, "unconfigured"
+    return token, authorized, "on"
+
+
+def _tg_drop_menu(token, registered):
+    """Clear the '/' menu this loop registered, if it did; returns the new `registered`."""
+    if registered and token:
+        notifications.telegram_set_commands(token, clear=True)   # drop the '/' menu
+        return False
+    return registered
+
+
+def _tg_register_menu(token, registered):
+    """Register the '/' menu unless it already is; returns the new `registered`."""
+    if registered:
+        return registered
+    # Populate Telegram's '/' autocomplete menu with the bot's commands.
+    return bool(notifications.telegram_set_commands(token))
+
+
+def _tg_bot_username(token, bot_username):
+    """Return this bot's @username, asking getMe only while it is still unknown."""
+    if bot_username is not None:
+        return bot_username
+    return notifications.telegram_get_me(token)   # None: asked again next tick
+
+
+def _tg_offset_after(updates, offset):
+    """Return the offset that confirms every update in `updates`, or `offset` when there are none."""
+    return updates[-1].get("update_id", 0) + 1 if updates else offset
+
+
+def _tg_route_update(app, token, authorized, bot_username, upd):
+    """Dispatch one polled update when it is a command, from the authorised chat, for THIS bot."""
+    msg = upd.get("message") or upd.get("edited_message") or {}
+    text = (msg.get("text") or "").strip()
+    chat = str((msg.get("chat") or {}).get("id") or "")
+    if not text.startswith("/"):
+        return
+    if chat != authorized:
+        _log.info("telegram: ignoring a command from unauthorised chat %s", chat[:32])
+        return
+    if _tg_addressed_elsewhere(text, bot_username):
+        return          # '/update@OtherBot' in the group is that bot's command
+    _tg_dispatch(app, token, authorized, text, msg.get("from"))
+
+
 def _telegram_command_watch(app):
-    """Long-poll loop: honour commands from the authorised chat only. Skips any backlog on (re)start
-    so a command sent while we were down — including the /update that caused our own restart — is
-    never replayed."""
+    """Long-poll loop: honour commands from the authorised chat only.
+
+    Skips any backlog on (re)start so a command sent while we were down — including the /update
+    that caused our own restart — is never replayed.
+
+    The offset is advanced HERE, one update at a time and before that update is routed, so an
+    update that makes routing raise is confirmed and skipped by the next poll instead of replaying
+    the ones already dispatched ahead of it.
+    """
     offset, primed, registered = None, False, False
     state_token = None     # the bot the three values above belong to
     bot_username = None    # this bot's @username (getMe), so '/cmd@OtherBot' is not run here
     while True:
         try:
-            cfg = notifications._cfg()
-            tg = cfg.get("telegram") or {}
-            token = decrypt_secret(tg.get("token") or "")
+            token, authorized, state = _tg_settings()
             if token != state_token:
                 # A DIFFERENT BOT. update_id sequences are per bot and unrelated, so the old bot's
                 # offset either sat above every id the new one had — each poll then confirmed and
@@ -85,22 +150,16 @@ def _telegram_command_watch(app):
                 # backlog. `registered` stayed True too, so the new bot never got its '/' menu.
                 offset, primed, registered = None, False, False
                 state_token, bot_username = token, None
-            if not (tg.get("enabled") and tg.get("accept_commands")):
-                if registered and token:
-                    notifications.telegram_set_commands(token, clear=True)   # drop the '/' menu
-                    registered = False
+            if state == "off":
+                registered = _tg_drop_menu(token, registered)
                 time.sleep(_TG_CMD_BACKOFF)
                 offset, primed = None, False   # re-prime (skip backlog) when it's re-enabled
                 continue
-            authorized = (tg.get("chat_id") or "").strip()
-            if not token or not authorized:
+            if state == "unconfigured":
                 time.sleep(_TG_CMD_BACKOFF)
                 continue
-            if not registered:
-                # Populate Telegram's '/' autocomplete menu with the bot's commands.
-                registered = bool(notifications.telegram_set_commands(token))
-            if bot_username is None:
-                bot_username = notifications.telegram_get_me(token)   # None: asked again next tick
+            registered = _tg_register_menu(token, registered)
+            bot_username = _tg_bot_username(token, bot_username)
             if not primed:
                 # PRIMED ONLY IF THE POLL ANSWERED. telegram_get_updates returns None on a network
                 # error, on a 409 (a second poller) and on ok:false — and `primed = True` used to
@@ -112,8 +171,7 @@ def _telegram_command_watch(app):
                 if latest is None:
                     time.sleep(_TG_CMD_BACKOFF)
                     continue          # try again; do NOT mark primed on an answer we never got
-                if latest:
-                    offset = latest[-1].get("update_id", 0) + 1
+                offset = _tg_offset_after(latest, offset)
                 primed = True
                 continue
             updates = notifications.telegram_get_updates(token, offset=offset, timeout=25)
@@ -122,17 +180,7 @@ def _telegram_command_watch(app):
                 continue
             for upd in updates:
                 offset = upd.get("update_id", 0) + 1
-                msg = upd.get("message") or upd.get("edited_message") or {}
-                text = (msg.get("text") or "").strip()
-                chat = str((msg.get("chat") or {}).get("id") or "")
-                if not text.startswith("/"):
-                    continue
-                if chat != authorized:
-                    _log.info("telegram: ignoring a command from unauthorised chat %s", chat[:32])
-                    continue
-                if _tg_addressed_elsewhere(text, bot_username):
-                    continue          # '/update@OtherBot' in the group is that bot's command
-                _tg_dispatch(app, token, authorized, text, msg.get("from"))
+                _tg_route_update(app, token, authorized, bot_username, upd)
         except Exception:
             _log.debug("telegram command-watch tick failed", exc_info=True)
             time.sleep(_TG_CMD_BACKOFF)
@@ -226,6 +274,7 @@ def _tg_server_action(app, token, chat_id, action, arg, sender=None):
 
 
 def _handle_telegram_command(app, token, chat_id, text, sender=None):
+    """Run one command from the authorised chat and answer it there."""
     cmd = _parse_tg_command(text)
     arg = _command_arg(text)
     # A BARE /start is Telegram's own "open the chat" command and should answer with help — but
@@ -233,22 +282,22 @@ def _handle_telegram_command(app, token, chat_id, text, sender=None):
     # puts it in the '/' menu, and _tg_help_text lists it). Matching on the word alone swallowed
     # every one of those: the branch below never saw "start", so the bot answered a start request
     # with its help text. Discord's equivalent matches "help" only and has always worked.
+    #
+    # The commands that only answer: one reply each, built by a shared text helper. Built per call
+    # and resolved by name when it runs, so each helper is still looked up as a module attribute.
+    replies = {
+        "status": lambda: _status_text(app),
+        "servers": lambda: _servers_text(app),
+        "hosts": lambda: _hosts_text(app),
+        "players": lambda: _players_text(app, arg),
+        "console": lambda: _console_text(app, arg),
+        "say": lambda: _say_text(app, arg),
+        "connect": lambda: _connect_text(app, arg),
+    }
     if cmd == "help" or (cmd == "start" and not arg):
         _tg_reply(token, chat_id, _tg_help_text())
-    elif cmd == "status":
-        _tg_reply(token, chat_id, _status_text(app))
-    elif cmd == "servers":
-        _tg_reply(token, chat_id, _servers_text(app))
-    elif cmd == "hosts":
-        _tg_reply(token, chat_id, _hosts_text(app))
-    elif cmd == "players":
-        _tg_reply(token, chat_id, _players_text(app, arg))
-    elif cmd == "console":
-        _tg_reply(token, chat_id, _console_text(app, arg))
-    elif cmd == "say":
-        _tg_reply(token, chat_id, _say_text(app, arg))
-    elif cmd == "connect":
-        _tg_reply(token, chat_id, _connect_text(app, arg))
+    elif cmd in replies:
+        _tg_reply(token, chat_id, replies[cmd]())
     elif cmd in ("restart", "start", "stop", "backup"):
         _tg_server_action(app, token, chat_id, cmd, arg, sender)
     elif cmd in ("update", "upgrade"):
@@ -276,8 +325,8 @@ def _telegram_do_update(app, token, chat_id):
     if not ok:
         _tg_reply(token, chat_id, "⚠️ Update not started: %s" % msg)
         return
-    # Store the COMMIT (not the VERSION string, which rarely changes) so the post-restart check can
-    # tell whether the update actually landed.
+    # Store the COMMIT (not the version, a date every commit of that day shares) so the post-restart
+    # check can tell whether the update actually landed.
     _set_tg_pending_update(chat_id, so.panel_commit())
     target = (st.get("target_sha") or "")[:7] or "the newest verified commit"
     _tg_reply(token, chat_id, "🔄 Update started: %s → %s. I'll message you here once I'm back."
@@ -292,8 +341,11 @@ def _set_tg_pending_update(chat_id, from_commit):
 
 
 def _report_tg_pending_update():
-    """After a restart, if a Telegram-triggered update was pending, tell the chat how it went — by
-    comparing the git commit before/after (the VERSION string usually doesn't move between commits)."""
+    """After a restart, tell the chat how a Telegram-triggered update went, if one was pending.
+
+    It compares the git commit before and after, because the version is a date that a day's
+    commits share; commands.update_outcome_text words the answer for both bots.
+    """
     cfg = load_config()
     pend = cfg.get("telegram_pending_update")
     if not pend:
@@ -306,22 +358,8 @@ def _report_tg_pending_update():
         return
     now = so.panel_commit()
     frm = pend.get("from_commit") or pend.get("from_version")   # from_version: older pending markers
-    # "no new commit landed (already current, or it rolled back)" is a claim about git, and the
-    # else-branch it sat in was reached by THREE conditions: the commits are equal, `now` is empty,
-    # or `frm` is empty. Only the first supports the sentence. An empty value means the panel could
-    # not READ the commit — panel_commit() shells out to `git rev-parse --short HEAD`, and this
-    # reporter fires 8 s after the new process starts, while install.sh's health-check phase is
-    # still running and the box is at its busiest — so a clean update was reported as one that had
-    # not landed, naming two specific causes nothing had established. The admin's reasonable next
-    # move is to send /update again and restart the panel a second time for nothing. Same split as
+    # An empty commit on either side is one git never gave — see update_outcome_text, which is
+    # where the split between "couldn't read" and "no new commit landed" lives. Same split as
     # _telegram_do_update above, which already refuses to conclude anything from `st` unless
     # st["git"] is true.
-    if not (now and frm):
-        _tg_reply(token, chat, "ℹ️ I'm back online, but I couldn't read the panel's git commit, so "
-                               "I can't tell you whether the update landed — check Settings → "
-                               "Panel, or data/self-update.log.")
-    elif now != frm:
-        _tg_reply(token, chat, "✅ Update complete — now on %s (was %s). Back online." % (_panel_ver_label(), frm))
-    else:
-        _tg_reply(token, chat, "ℹ️ Update finished — no new commit landed (already current, or it "
-                               "rolled back). Still on %s." % _panel_ver_label())
+    _tg_reply(token, chat, update_outcome_text(now, frm))

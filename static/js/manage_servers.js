@@ -62,13 +62,38 @@ function _osOlder(gameOs, hostOs) {
   var g = String(gameOs || '').toLowerCase().split('-');
   var h = String(hostOs || '').toLowerCase().split('-');
   if (g.length !== 2 || h.length !== 2 || !g[0] || g[0] !== h[0]) return false;
-  var gv = g[1].split('.').map(Number), hv = h[1].split('.').map(Number);
-  if (gv.some(isNaN) || hv.some(isNaN)) return false;
+  var gv = _osVersionParts(g[1]), hv = _osVersionParts(h[1]);
+  if (!gv || !hv) return false;
+  return _osVersionBelow(gv, hv);
+}
+
+// '24.04' as [24, 4], or null when any part is not a number.
+function _osVersionParts(v) {
+  var parts = v.split('.').map(Number);
+  return parts.some(Number.isNaN) ? null : parts;
+}
+
+// Is version gv below version hv? A missing part counts as 0, so 24 and 24.0 are equal.
+function _osVersionBelow(gv, hv) {
   for (var i = 0; i < Math.max(gv.length, hv.length); i++) {
     var a = gv[i] || 0, b = hv[i] || 0;
     if (a !== b) return a < b;
   }
   return false;
+}
+
+// An option's text without its trailing "(…)" note ("Game (ubuntu-20.04)" is "Game"), exactly as
+// /\s*\(.*\)\s*$/ removed it: the note opens at the first "(" on the last line, which has to end
+// in ")", and takes the blanks before it along. Found with string searches instead, because that
+// regex tries every blank and every "(" as a start and reads the rest of the line from each one.
+// (Its `.` matches no line terminator, so the note cannot start on an earlier line.)
+function _withoutParenNote(text) {
+  var body = text.trimEnd();
+  var lineStart = 1 + Math.max(body.lastIndexOf('\n'), body.lastIndexOf('\r'),
+                               body.lastIndexOf('\u2028'), body.lastIndexOf('\u2029'));
+  var open = body.indexOf('(', lineStart);
+  if (body.slice(-1) !== ')' || open < 0) return text;
+  return text.slice(0, open).trimEnd();
 }
 
 function filterGamesForHost() {
@@ -85,7 +110,7 @@ function filterGamesForHost() {
       if (bad) {
         hidden++;
         if (opt.textContent.indexOf('needs ') === -1) {
-          opt.textContent = opt.textContent.replace(/\s*\(.*\)\s*$/, '')
+          opt.textContent = _withoutParenNote(opt.textContent)
             + ' (needs ' + gameOs.replace('-', ' ') + ')';
         }
         // Do not leave a disabled game SELECTED — the form would post it.
@@ -171,42 +196,55 @@ function watchInstall(id) {
         if (pct) pct.textContent = (s.total ? s.step + '/' + s.total + ' · ' : '') + s.percent + '% · ' + s.elapsed + 's';
         if (bar) bar.style.width = s.percent + '%';
         if (s.installed) enableServerLinks(id);   // files have landed — Console + Files are usable now
-        if (s.status === 'done') {
-          // Installed, but with a caveat (warn) — e.g. the files installed yet the server didn't
-          // start. Show that as a yellow warning with the reason, not a clean green success.
-          var warn = !!s.warn;
-          bar.className = 'progress-bar ' + (warn ? 'bg-warning' : 'bg-success'); bar.style.width = '100%';
-          step.innerHTML = '<i class="bi bi-' + (warn ? 'exclamation-triangle-fill text-warning' : 'check-circle-fill text-success') + '"></i> ' + escapeHtml(s.message || 'Installed');  // nosemgrep
-          if (badge) { badge.className = 'badge ' + (warn ? 'bg-warning text-dark' : 'bg-success'); badge.textContent = 'Installed'; }
-          var dz = document.getElementById('inst-dismiss-' + id); if (dz) dz.style.display = 'inline';
-          stopInstall(id);
-        } else if (s.status === 'failed') {
-          bar.className = 'progress-bar bg-danger';
-          step.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + escapeHtml(s.message || 'Install failed');  // nosemgrep
-          if (badge) { badge.className = 'badge bg-danger'; badge.textContent = 'Failed'; }
-          var df = document.getElementById('inst-dismiss-' + id); if (df) df.style.display = 'inline';
-          stopInstall(id);
-        } else if (s.status === 'interrupted') {
-          if (bar) bar.className = 'progress-bar bg-warning';
-          step.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-warning"></i> ' + escapeHtml(s.message || 'Install status unknown');  // nosemgrep
-          if (badge) { badge.className = 'badge bg-warning text-dark'; badge.textContent = 'Unknown'; }
-          var di = document.getElementById('inst-dismiss-' + id); if (di) di.style.display = 'inline';
-          stopInstall(id);
-        } else {
-          // Running (steps 1-8). Once the game files land (s.installed), the server IS installed
-          // but still finishing config/start — show "Finishing setup…" rather than a premature
-          // "Installed", with the bar tracking the remaining steps.
-          step.innerHTML = '<i class="bi bi-gear-fill"></i> ' + escapeHtml(s.step_name);  // nosemgrep
-          if (badge) {
-            badge.className = 'badge bg-info text-dark';
-            badge.textContent = s.installed ? 'Finishing setup…' : 'Installing…';
-          }
-        }
+        if (s.status === 'done') _instShowDone(id, s, step, bar, badge);
+        else if (s.status === 'failed') _instShowFailed(id, s, step, bar, badge);
+        else if (s.status === 'interrupted') _instShowInterrupted(id, s, step, bar, badge);
+        else _instShowRunning(s, step, badge);
       })
       .catch(function() {});
   }
   tick();
   _instTimers[id] = setInterval(tick, 2500);
+}
+
+// The four ways one install-status answer ends, for watchInstall. The three that are final show
+// the row's dismiss button and stop the poll; the running one only moves the step and the badge.
+function _instShowDone(id, s, step, bar, badge) {
+  // Installed, but with a caveat (warn) — e.g. the files installed yet the server didn't
+  // start. Show that as a yellow warning with the reason, not a clean green success.
+  var warn = !!s.warn;
+  bar.className = 'progress-bar ' + (warn ? 'bg-warning' : 'bg-success'); bar.style.width = '100%';
+  step.innerHTML = '<i class="bi bi-' + (warn ? 'exclamation-triangle-fill text-warning' : 'check-circle-fill text-success') + '"></i> ' + escapeHtml(s.message || 'Installed');  // nosemgrep
+  if (badge) { badge.className = 'badge ' + (warn ? 'bg-warning text-dark' : 'bg-success'); badge.textContent = 'Installed'; }
+  var dz = document.getElementById('inst-dismiss-' + id); if (dz) dz.style.display = 'inline';
+  stopInstall(id);
+}
+
+function _instShowFailed(id, s, step, bar, badge) {
+  bar.className = 'progress-bar bg-danger';
+  step.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i> ' + escapeHtml(s.message || 'Install failed');  // nosemgrep
+  if (badge) { badge.className = 'badge bg-danger'; badge.textContent = 'Failed'; }
+  var df = document.getElementById('inst-dismiss-' + id); if (df) df.style.display = 'inline';
+  stopInstall(id);
+}
+
+function _instShowInterrupted(id, s, step, bar, badge) {
+  if (bar) bar.className = 'progress-bar bg-warning';
+  step.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-warning"></i> ' + escapeHtml(s.message || 'Install status unknown');  // nosemgrep
+  if (badge) { badge.className = 'badge bg-warning text-dark'; badge.textContent = 'Unknown'; }
+  var di = document.getElementById('inst-dismiss-' + id); if (di) di.style.display = 'inline';
+  stopInstall(id);
+}
+
+function _instShowRunning(s, step, badge) {
+  // Running (steps 1-8). Once the game files land (s.installed), the server IS installed
+  // but still finishing config/start — show "Finishing setup…" rather than a premature
+  // "Installed", with the bar tracking the remaining steps.
+  step.innerHTML = '<i class="bi bi-gear-fill"></i> ' + escapeHtml(s.step_name);  // nosemgrep
+  if (badge) {
+    badge.className = 'badge bg-info text-dark';
+    badge.textContent = s.installed ? 'Finishing setup…' : 'Installing…';
+  }
 }
 function stopInstall(id) {
   if (_instTimers[id]) { clearInterval(_instTimers[id]); delete _instTimers[id]; }
@@ -371,7 +409,7 @@ if (_hasServerList) {
 // Live per-server resources (CPU/RAM/uptime) in the Resources column — a slower, heavier poll (an
 // SSH sample per server) than the status reconcile above.
 function _fmtUptimeShort(s){
-  s = Math.max(0, s|0);
+  s = Math.max(0, Math.trunc(s) || 0);   // `|| 0`: as `s|0` did, a NaN reads as 0 seconds
   var d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
   return d ? (d+'d '+h+'h') : (h ? (h+'h '+m+'m') : (m+'m'));
 }

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Custom Commands{% endblock %}
 
-{% macro scope_select(cmd) %}
+{% macro scope_select(cmd, idp) %}
 {# A command scoped to a game the current list does not hold — LinuxGSM dropped or renamed it, or
    the list could not be fetched and nothing is cached (load_game_list() is then []). No option
    matched, so the browser selected the first, "All games", and pressing Save on an unrelated edit
@@ -9,7 +9,7 @@
    and selected. #}
 {% set orphan_game = cmd and cmd.scope_type == 'game'
                      and cmd.scope_value not in games|map(attribute='shortname')|list %}
-<select name="scope" class="form-select form-select-sm">
+<select name="scope" class="form-select form-select-sm" id="{{ idp }}-scope">
   <option value="all|" {% if not cmd or cmd.scope_type == 'all' %}selected{% endif %}>All games</option>
   <optgroup label="By engine">
     {% for ev, el in engines.items() %}
@@ -61,12 +61,12 @@
     <div class="form-text mt-0">Blank = safe default (letters, digits, and the characters _ . -).</div>
   </div>
   <div class="col-md-4">
-    <label class="form-label small mb-0">Applies to</label>
-    {{ scope_select(cmd) }}
+    <label class="form-label small mb-0" for="{{ idp }}-scope">Applies to</label>
+    {{ scope_select(cmd, idp) }}
   </div>
   <div class="col-12">
-    <label class="form-label small mb-1 fw-bold">Groups allowed to run this</label>
-    <div class="d-flex flex-wrap gap-2" style="max-height: 120px; overflow-y: auto;">
+    <span class="form-label small mb-1 fw-bold d-inline-block" id="{{ idp }}-groups-label">Groups allowed to run this</span>
+    <div class="d-flex flex-wrap gap-2" style="max-height: 120px; overflow-y: auto;" role="group" aria-labelledby="{{ idp }}-groups-label">
       {% for grp in groups %}
       <div class="form-check">
         <input type="checkbox" name="groups" value="{{ grp.id }}" class="form-check-input"

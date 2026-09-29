@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Atheris fuzz harness: UFW status parsers (ssh_manager).
+r"""Atheris fuzz harness: UFW status parsers (ssh_manager).
 
 Mirrors the real `remote_ufw_status` pipeline WITHOUT the network: fuzzed text is split into lines,
 each line goes through `_parse_ufw_rule`, and lines matching UFW's numbered-rule format are grouped
-by `_group_ufw_rules` exactly as the live parser feeds it (rule numbers come from the `\\d+` capture,
+by `_group_ufw_rules` exactly as the live parser feeds it (rule numbers come from the `\d+` capture,
 never arbitrary strings — feeding a non-numeric num would be a harness bug, not a real input).
 
 Run locally (from anywhere):

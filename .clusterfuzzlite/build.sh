@@ -37,7 +37,7 @@ for fuzzer in "$SRC_DIR"/tests/fuzz/fuzz_*.py; do
   # $OUT. The corpora are named after the target minus its fuzz_ prefix (tests/fuzz/corpus/console
   # feeds fuzz_console), matching what .github/workflows/fuzz.yml already passes on the command line.
   corpus_dir="$SRC_DIR/tests/fuzz/corpus/${name#fuzz_}"
-  if [ -d "$corpus_dir" ]; then
+  if [[ -d "$corpus_dir" ]]; then
     zip -j -q -r "$OUT/${name}_seed_corpus.zip" "$corpus_dir"
   else
     # LOUD. A renamed or deleted corpus directory used to be silent: the target still built, still

@@ -15,14 +15,17 @@ from app import (_bind_is_loopback, _effective_https, _resolved_bind, _ts_backen
 
 
 def _sees_panel_host_tailnet(user):
-    """Whether `user` is shown the PANEL HOST's tailnet identity and inventory: its name, tailnet
-    IPs and MagicDNS name, its Serve mappings and their backends, and every peer on the tailnet.
+    """Whether `user` is shown the PANEL HOST's tailnet identity and inventory.
+
+    That means its name, tailnet IPs and MagicDNS name, its Serve mappings and their backends, and
+    every peer on the tailnet.
 
     Superadmins only. This page is gated on MANAGE_REMOTES, which is granted per host — a delegated
     admin for one rented VPS holds it — and none of this is about a host they were granted. It is
     the panel host's, whose management (System -> Panel Server) is superadmin-only, and the peer
     list is the operator's whole tailnet: other servers they were not granted, and personal devices
-    ("alice-iphone", "nas") with their addresses, OS and when each was last online."""
+    ("alice-iphone", "nas") with their addresses, OS and when each was last online.
+    """
     return bool(getattr(user, "is_superadmin", False))
 
 
@@ -32,9 +35,12 @@ def _panel_scheme(cfg):
 
 
 def _serve_default_mount(info, cfg, port):
-    """The mount the Enable form offers. Enabling Serve at a mount another app already holds
-    REPLACES that app's mapping, and the form offered "/" without looking — the setup wizard
-    already moves the panel to /lgsm when "/" is taken, and this is the same rule."""
+    """The mount the Enable form offers.
+
+    Enabling Serve at a mount another app already holds REPLACES that app's mapping, and the form
+    offered "/" without looking — the setup wizard already moves the panel to /lgsm when "/" is
+    taken, and this is the same rule.
+    """
     mount = cfg.get("tailscale_mount") or "/"
     for svc in (info.serve_config or {}).get("services") or []:
         for r in svc.get("routes") or []:
@@ -53,7 +59,8 @@ def _disable_would_strand_panel(cfg):
     linuxgsm-panel-recover. /api/panel/change-port refuses to create this same state ("Binding to
     localhost only would lock you out unless Tailscale Serve is set up"); this is that rule seen
     from the other side. The bind is the RESOLVED one: an unset bind_host that boot resolved to
-    127.0.0.1 is just as stranded until someone restarts the panel from the host."""
+    127.0.0.1 is just as stranded until someone restarts the panel from the host.
+    """
     if not _bind_is_loopback(_resolved_bind(cfg)):
         return ""
     return ("The panel is bound to localhost only, so Tailscale Serve is the only way to reach it. "
@@ -62,6 +69,12 @@ def _disable_would_strand_panel(cfg):
 
 
 def register(app):
+    _register_tailscale_setup(app)
+    _register_tailscale_serve(app)
+
+
+def _register_tailscale_setup(app):
+    """The panel host's Tailscale page, status, install and sign-in."""
     @app.route("/tailscale")
     @login_required
     @permission_required(MANAGE_REMOTES)
@@ -118,9 +131,11 @@ def register(app):
     @login_required
     @superadmin_required
     def api_tailscale_install():
-        """Install Tailscale on the PANEL HOST itself — the same in-panel flow the setup
-        wizard and the remote-server bootstrap use, instead of sending the user off to
-        tailscale.com to do it by hand."""
+        """Install Tailscale on the PANEL HOST itself.
+
+        This is the same in-panel flow the setup wizard and the remote-server bootstrap use, instead
+        of sending the user off to tailscale.com to do it by hand.
+        """
         ok, log = ts.install_tailscale_local()
         log_action(current_user, "tailscale_install_local", target=LOCAL_HOST_LABEL, success=ok)
         return jsonify({"success": ok, "log": log})
@@ -129,8 +144,11 @@ def register(app):
     @login_required
     @superadmin_required
     def api_tailscale_up():
-        """Run `tailscale up` on the panel host and return the browser login URL to
-        approve this machine (or connected=True if it's already on the tailnet)."""
+        """Run `tailscale up` on the panel host and return the browser login URL.
+
+        Opening that URL approves this machine; the reply says connected=True instead if it's
+        already on the tailnet.
+        """
         ok, res = ts.tailscale_up_local(enable_ssh=True)
         # Logged BEFORE the branching, on every outcome. log_action used to sit inside the
         # ALREADY_CONNECTED arm — the one where nothing changed — so the failure path and the path
@@ -146,6 +164,9 @@ def register(app):
             return jsonify({"success": True, "connected": True})
         return jsonify({"success": True, "connected": False, "auth_url": res})
 
+
+def _register_tailscale_serve(app):
+    """Tailscale Serve for the panel, and the peer check."""
     @app.route("/api/tailscale/serve", methods=["POST"])
     @login_required
     @superadmin_required

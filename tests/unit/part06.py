@@ -1129,33 +1129,64 @@ try:
 finally:
     _shutil.rmtree(_dbo_dir, ignore_errors=True)
 
+def _assign_names(node):
+    """The plain names an assignment binds, `A = ...` and `A, B = ...` alike."""
+    names = []
+    for _t2 in node.targets:
+        _elts = _t2.elts if isinstance(_t2, (_ast_scan.Tuple, _ast_scan.List)) else [_t2]
+        names.extend(_e.id for _e in _elts if isinstance(_e, _ast_scan.Name))
+    return names
+
+
+# Which statements bind a name at top level, and how to read it off each.
+_NAME_READERS = (
+    ((_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef, _ast_scan.ClassDef), lambda n: [n.name]),
+    (_ast_scan.Assign, _assign_names),
+    (_ast_scan.ImportFrom, lambda n: [_a.asname or _a.name for _a in n.names]),
+    (_ast_scan.Import, lambda n: [(_a.asname or _a.name).split(".")[0] for _a in n.names]),
+)
+
+
+def _stmt_names(node):
+    """The names one simple top-level statement binds: a def or class, an assignment, an import.
+
+    Anything else binds nothing here; a try or an if is walked by _body_names instead.
+    """
+    for _types, _read in _NAME_READERS:
+        if isinstance(node, _types):
+            return _read(node)
+    return []
+
+
+# A module attribute bound inside a top-level try or if is as real as one bound outside it:
+# app.py's PANEL_COMMIT is set in a try/except, and a stub of it read as a stub of nothing.
+_BLOCK_STMTS = (_ast_scan.Try, _ast_scan.If) + ((_ast_scan.TryStar,) if hasattr(_ast_scan, "TryStar")
+                                                else ())
+
+
+def _body_names(body, out):
+    """Add to `out` every name the statements in `body` bind, descending into try and if blocks."""
+    for _n in body:
+        if isinstance(_n, _BLOCK_STMTS):
+            for _blk in [_n.body, _n.orelse, getattr(_n, "finalbody", [])] + [
+                    _h.body for _h in getattr(_n, "handlers", [])]:
+                _body_names(_blk, out)
+        else:
+            out.update(_stmt_names(_n))
+
+
 def _module_toplevel_names(path):
     """Every name a module defines or imports at top level, by AST — no importing.
 
     Importing a panel module to ask `dir()` would boot eventlet, threads and a Flask app; this only
-    needs to know what names EXIST, which the syntax tells us."""
+    needs to know what names EXIST, which the syntax tells us.
+    """
     out = set()
     try:
         _t = _ast_scan.parse(open(path, encoding="utf-8").read())
     except (SyntaxError, OSError):
         return out
-    for _n in _t.body:
-        if isinstance(_n, (_ast_scan.FunctionDef, _ast_scan.AsyncFunctionDef, _ast_scan.ClassDef)):
-            out.add(_n.name)
-        elif isinstance(_n, _ast_scan.Assign):
-            for _t2 in _n.targets:
-                if isinstance(_t2, _ast_scan.Name):
-                    out.add(_t2.id)
-                elif isinstance(_t2, (_ast_scan.Tuple, _ast_scan.List)):
-                    for _e in _t2.elts:
-                        if isinstance(_e, _ast_scan.Name):
-                            out.add(_e.id)
-        elif isinstance(_n, _ast_scan.ImportFrom):
-            for _a in _n.names:
-                out.add(_a.asname or _a.name)
-        elif isinstance(_n, _ast_scan.Import):
-            for _a in _n.names:
-                out.add((_a.asname or _a.name).split(".")[0])
+    _body_names(_t.body, out)
     return out
 
 
@@ -1214,6 +1245,22 @@ for _f in sorted(glob.glob(os.path.join(_root, "tests", "*.py"))
                              % (os.path.basename(_f), _n.lineno, _n.value.id, _n.attr, _mod))
 check("every stub is installed on a module that actually defines the name",
       not _stub_bad, "; ".join(sorted(set(_stub_bad))[:4]))
+# The reader the gate stands on, against a module with a name in each place one can be bound.
+_tn_dir = _tempfile.mkdtemp(prefix="toplevel-names-")
+try:
+    with open(os.path.join(_tn_dir, "m.py"), "w", encoding="utf-8") as _tn_fh:
+        _tn_fh.write("import os.path as P\nA, B = 1, 2\n"
+                     "try:\n    C = 1\nexcept Exception:\n    D = 1\nelse:\n    E = 1\n"
+                     "finally:\n    F = 1\n"
+                     "if P:\n    G = 1\nelse:\n    H = 1\n"
+                     "def fn():\n    INNER = 1\n")
+    _tn_names = _module_toplevel_names(os.path.join(_tn_dir, "m.py"))
+finally:
+    _shutil.rmtree(_tn_dir, ignore_errors=True)
+check("stub gate: a name bound in a top-level try or if is a module name (app.py's PANEL_COMMIT)",
+      _tn_names >= set("PABCDEFGH") and "fn" in _tn_names, repr(sorted(_tn_names)))
+check("stub gate: ...and a name bound inside a function is not", "INNER" not in _tn_names,
+      repr(sorted(_tn_names)))
 
 # ── The installer must not build a SECOND panel beside an existing one ────────────────────────
 # IS_UPDATE asks "is there an app.py and a unit file where I am about to install?" — but where that
@@ -1230,7 +1277,7 @@ check("install.sh: refuses rather than adopting the other install",
       "Refusing to build a parallel install." in _inst_guard)
 # The service user's OWN directory must not trip it, or a root install could never update itself.
 check("install.sh: skips the service user's own home when scanning for a per-user install",
-      '[ "${_u}" = "${SERVICE_USER}" ] && continue' in _inst_guard)
+      '[[ "${_u}" = "${SERVICE_USER}" ]] && continue' in _inst_guard)
 # A stray checkout is not an install; requiring the unit file keeps the check specific.
 check("install.sh: requires a user UNIT file, not just an app.py, to call it an install",
       ".config/systemd/user/linuxgsm-panel.service" in _inst_guard)
@@ -1277,9 +1324,9 @@ check("install.sh: the group is synced before the grant that names it is written
 # A person's account must never land in a grant that lets the panel become them. The rule is a
 # property of the home directory — a LinuxGSM instance or a Steam content tree — not a uid range.
 check("install.sh: only homes with a LinuxGSM/Steam tree join the group",
-      '[ -d "${_gh}/lgsm/config-lgsm" ] || [ -d "${_gh}/serverfiles" ]' in _inst)
+      '[[ -d "${_gh}/lgsm/config-lgsm" ]] || [[ -d "${_gh}/serverfiles" ]]' in _inst)
 check("install.sh: the narrow grant is conditional on the root-owned pieces being installed",
-      '[ "${HELPER_OK}" -eq 1 ] && [ "${ROOT_TOOLS_OK}" -eq 1 ]' in _inst)
+      '[[ "${HELPER_OK}" -eq 1 ]] && [[ "${ROOT_TOOLS_OK}" -eq 1 ]]' in _inst)
 check("install.sh: still validates whichever grant it wrote with visudo",
       "visudo -cf /etc/sudoers.d/linuxgsm-panel" in _inst)
 
@@ -1902,7 +1949,7 @@ finally:
 _irt_i = _inst.find("install_root_tools() {")
 _irt = _inst[_irt_i:_inst.find("\n}\n", _irt_i)] if _irt_i != -1 else ""
 check("install.sh: install_root_tools records the floor for a fresh install, once the helper landed",
-      '\n    [ "${HELPER_OK}" -eq 1 ] && _record_own_source_floor\n' in _irt, _irt[-400:])
+      '\n    [[ "${HELPER_OK}" -eq 1 ]] && _record_own_source_floor\n' in _irt, _irt[-400:])
 
 # The helper's panel-self-update is what marks a run as the panel's. The marker is set on the
 # environment the helper BUILDS, after copying its own, so nothing the panel hands sudo removes it —
@@ -1947,7 +1994,7 @@ for _src in ("HELPER_SRC", "DBM_SRC"):
 # Sliced with find(), not index(): an anchor that has MOVED must fail this gate, not raise out of
 # the module and take the other 1900 checks with it. (Injecting a change to the grant condition
 # did exactly that — the suite died at import with a ValueError instead of reporting a failure.)
-_g_i = _inst.find('if { [ "${HELPER_OK}"')
+_g_i = _inst.find('if { [[ "${HELPER_OK}"')
 _g_j = _inst.find("chmod 440 /etc/sudoers.d")
 check("install.sh: the sudoers grant block is where this gate expects it",
       _g_i != -1 and _g_j > _g_i, "start=%d end=%d" % (_g_i, _g_j))
@@ -2057,7 +2104,7 @@ check("install.sh: ROOT_TOOLS_OK is set in exactly one place", len(_rt_set) == 1
 if len(_rt_set) == 1:
     _rt_guard = _rt_lines[_rt_set[0] - 1].strip()
     check("install.sh: ...and only once panel.conf AND the root-owned installer both landed",
-          _rt_guard == 'if [ "${CONF_OK}" -eq 1 ] && [ "${INST_OK}" -eq 1 ]; then', _rt_guard)
+          _rt_guard == 'if [[ "${CONF_OK}" -eq 1 ]] && [[ "${INST_OK}" -eq 1 ]]; then', _rt_guard)
     check("install.sh: the installer copy records its own success rather than `|| true`",
           '"${_istage}" "${INSTALLER_DST}" 2>/dev/null && INST_OK=1' in _inst_txt)
 
@@ -2154,8 +2201,8 @@ try:
     open(os.path.join(_su_sb, "rootlib", "db_maintenance.py"), "w").close()
     _su_env = "PANEL_DIR=%s\n" % _su_shlex.quote(os.path.join(_su_sb, "panel"))
 
-    _su_dbm = _su_between('    DBM_RUN=""', '    fi\n    if [ -n "${DBM_RUN}" ]; then')
-    _su_dbm = _su_dbm.rsplit("    if [ -n", 1)[0] + '\necho "DBM_RUN=${DBM_RUN}"\n'
+    _su_dbm = _su_between('    DBM_RUN=""', '    fi\n    if [[ -n "${DBM_RUN}" ]]; then')
+    _su_dbm = _su_dbm.rsplit("    if [[ -n", 1)[0] + '\necho "DBM_RUN=${DBM_RUN}"\n'
     _su_real = _su_dbm.replace("/usr/local/lib/linuxgsm-panel/db_maintenance.py",
                                os.path.join(_su_sb, "rootlib", "db_maintenance.py"))
     _su_gone = _su_dbm.replace("/usr/local/lib/linuxgsm-panel/db_maintenance.py",
@@ -2339,7 +2386,7 @@ try:
           "OK Dependencies unchanged" in _r and "INSTALL_DEPS" not in _r, repr(_r))
     # The common case after a release upgrade: no new panel version, so the checkout is current and
     # the "Already up to date" branch used to exit before the only step that rebuilds the venv.
-    _su_noop = _su_find('    if [ -n "${CURRENT_SHA}" ] && [ "${CURRENT_SHA}" = "${TARGET_SHA}" ]',
+    _su_noop = _su_find('    if [[ -n "${CURRENT_SHA}" ]] && [[ "${CURRENT_SHA}" = "${TARGET_SHA}" ]]',
                         '        exit 0\n    fi\n')
     _su_noop_env = ("CURRENT_SHA=abc\nTARGET_SHA=abc\nFROM_VER=1\nORIGIN_TRUSTED=0\n"
                     "info() { echo \"INFO $*\"; }\nok() { echo \"OK $*\"; }\n"
@@ -2368,10 +2415,10 @@ try:
     # only when it is true (its remedy, re-running install.sh, now works on a current checkout).
     _su_rec_all = open(os.path.join(_root, "recover.sh"), encoding="utf-8").read()
     _su_rec = _su_rec_all[_su_rec_all.index('VENV_PY="$('):
-                          _su_rec_all.index('if [ -n "${STALE_WHY}" ]; then')] if (
-        'VENV_PY="$(' in _su_rec_all and 'if [ -n "${STALE_WHY}" ]; then' in _su_rec_all) else ""
-    _su_rec_end = _su_rec_all.find("\nfi\n", _su_rec_all.find('if [ -n "${STALE_WHY}" ]; then'))
-    _su_rec += _su_rec_all[_su_rec_all.find('if [ -n "${STALE_WHY}" ]; then'):_su_rec_end + 4] if (
+                          _su_rec_all.index('if [[ -n "${STALE_WHY}" ]]; then')] if (
+        'VENV_PY="$(' in _su_rec_all and 'if [[ -n "${STALE_WHY}" ]]; then' in _su_rec_all) else ""
+    _su_rec_end = _su_rec_all.find("\nfi\n", _su_rec_all.find('if [[ -n "${STALE_WHY}" ]]; then'))
+    _su_rec += _su_rec_all[_su_rec_all.find('if [[ -n "${STALE_WHY}" ]]; then'):_su_rec_end + 4] if (
         _su_rec and _su_rec_end > 0) else ""
 
     def _su_rec_run(cfg_text, link_to):
@@ -2449,6 +2496,24 @@ try:
     _r = _eg_run(True)
     check("install.sh: ...and a host that has npm does not reinstall it",
           "APT install -y npm" not in _r and "NPM " not in _r, repr(_r[-300:]))
+    # The version tests are [[ -lt ]] / [[ -ge ]], which read their operands as ARITHMETIC: a
+    # leading zero is octal there ("08" an error, "020" is 16), where `[` read decimal. The digits
+    # come from `node -v` and `apt-cache policy`, so ensure_nodejs reads each one base 10 first.
+    # Driven with the two outputs a bare [[ ]] would get wrong.
+    _eg_ns = 'nodesource_setup() { echo "NODESOURCE_SETUP"; return 1; }\n'
+    _r = _eg_run(True, _eg_shim.replace("node() { echo v22.3.0; }", "node() { echo v08.17.0; }")
+                 + _eg_ns)
+    check("install.sh: ensure_nodejs reads `node -v` v08 as Node 8 (too old, so it installs one), "
+          "not as an octal error",
+          "v22.3.0" in _eg_shim and "INFO Installing Node.js 22 from NodeSource" in _r
+          and "NODESOURCE_SETUP" in _r, repr(_r[-300:]))
+    _r = _eg_run(True, _eg_shim.replace("node() { echo v22.3.0; }", "node() { echo v12.22.9; }")
+                 .replace("apt-cache() { :; }",
+                          "apt-cache() { printf '  Installed: (none)\\n  Candidate: 020.1.0\\n'; }")
+                 + _eg_ns)
+    check("install.sh: ...and reads the distro's candidate 020 as Node 20 (new enough), not octal 16",
+          "apt-cache() { :; }" in _eg_shim and "INFO Installing Node.js 20 from the distro" in _r
+          and "APT install -y nodejs" in _r, repr(_r[-300:]))
 
     # ── install_gamedig: the three files root-owned from root's own source, then the script ──────
     # Root runs install-gamedig.sh, so it is a boundary file like the helper: it must come from
@@ -2541,7 +2606,7 @@ try:
     # Every path that places root-owned pieces places this one too — the full update, the
     # already-up-to-date re-run, and a fresh install.
     import re as _re_ig
-    _ig_upd = _su_find('if [ "${IS_UPDATE}" -eq 1 ]; then', '\n    BACKUP_ROOT=')
+    _ig_upd = _su_find('if [[ "${IS_UPDATE}" -eq 1 ]]; then', '\n    BACKUP_ROOT=')
     _ig_full = _su_find("\n    fetch_code\n    _CODE_FETCHED=1", 'ok "Update complete: ')
     _ig_fresh = _su_find("\nfetch_code\n", 'info "[3/4] Registering the service')
 
@@ -3037,11 +3102,11 @@ try:
         i = _su_txt.index(name + "() {")
         return _su_txt[i:_su_txt.index("\n}\n", i)]
 
-    _su_guard = 'if [ "${ORIGIN_TRUSTED:-1}" -ne 1 ]; then'
+    _su_guard = 'if [[ "${ORIGIN_TRUSTED:-1}" -ne 1 ]]; then'
     check("install.sh: install_root_tools returns early when the origin is not trusted",
           _su_guard in _su_body("install_root_tools"))
     check("install.sh: ...and the sudoers grant is not rewritten from an untrusted checkout",
-          '[ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant' in _su_txt)
+          '[[ "${ORIGIN_TRUSTED}" -eq 1 ]] && write_sudoers_grant' in _su_txt)
     # install_recovery_command is the one root-owned file an untrusted origin could still place,
     # and it was NOT gated. On the update path fetch_code has already `git reset --hard`-ed to the
     # untrusted commit before check_origin_trusted runs, and this function stages recover.sh from
@@ -3627,7 +3692,7 @@ try:
     _gl_loop = "for _gd_link in /usr/local/bin/gamedig /usr/bin/gamedig; do"
     _gl_at = _un_txt.find(_gl_loop)
     # The branch that runs only when the host-shared pieces are this install's (SHARED_MINE).
-    _gl_elif = _un_txt.find("\nelif [ -d /usr/local/lib/linuxgsm-panel ]")
+    _gl_elif = _un_txt.find("\nelif [[ -d /usr/local/lib/linuxgsm-panel ]]")
     # ...and they are the links the script makes: its LINK_DIRS, each + /gamedig.
     _gl_script = open(os.path.join(_root, "tools", "gamedig", "install-gamedig.sh"),
                       encoding="utf-8").read()
@@ -3919,7 +3984,7 @@ try:
     # leaves the home; `userdel -r` itself exits 12 when it cannot remove the home, having already
     # deleted the account. Both cases asked only whether the ACCOUNT was gone, so the key survived
     # an uninstall that reported itself complete.
-    _ud_block = _su_between2('    if [ "${PANEL_USER}" = "${SERVICE_USER}" ]', "        fi\n    fi\n")
+    _ud_block = _su_between2('    if [[ "${PANEL_USER}" = "${SERVICE_USER}" ]]', "        fi\n    fi\n")
     _ud_tmp = _tempfile.mkdtemp(prefix="uninst-user-")
     try:
         _ud_homes = os.path.join(_ud_tmp, "home")
@@ -4673,8 +4738,8 @@ check("codacy-coverage: the token is in the upload step's env and nowhere else; 
 # a push from `Main` uploads), REPORT_DIR must be where the download put the artifact, and the
 # artifact must be the one CI's coverage job uploads, from the run that finished. None of this can
 # be exercised before merge: a workflow_run job runs main's copy of its file.
-_cc_dl = _cc_raw[_cc_raw.find("- name: Download the coverage report CI made"):
-                 _cc_raw.find("- name: Send coverage to Codacy")]
+_cc_dl_at = _cc_raw.find("- name: Download the coverage report CI made")
+_cc_dl = _cc_raw[_cc_dl_at:_cc_raw.find("\n      - name: ", _cc_dl_at)] if _cc_dl_at >= 0 else ""
 _cc_dl_with = dict(re.findall(r"^\s+([a-z][a-z-]*): (\S.*)$", _cc_dl[_cc_dl.find("with:"):], re.M))
 _cc_up_name = re.search(r"uses: actions/upload-artifact@\S+[^\n]*\n\s+with:\n\s+name: (\S+)\n", _cov_job)
 check("codacy-coverage: the step reads the workflow_run's own event, and the report from where the "
@@ -4696,17 +4761,26 @@ _cc_sb = _tempfile.mkdtemp(prefix="codacy-")
 try:
     _cc_bin = os.path.join(_cc_sb, "bin")
     os.makedirs(_cc_bin)
-    # curl writes a stand-in reporter where the step asked for the real one; it logs its argv and
-    # keeps the report it was given. sha256sum is waved through here (the pin is checked above).
+    # curl writes a stand-in reporter where the step asked for the real one. It logs its argv,
+    # keeps each report it is given (the file after -r, as $CC_LOG.<its name>), and fails the
+    # upload of the language named in $CC_FAIL_LANG. sha256sum is waved through here (the pin is
+    # checked above).
+    _cc_fake = os.path.join(_cc_sb, "fake-reporter")
+    with open(_cc_fake, "w") as _fh:
+        _fh.write("#!/bin/sh\necho \x22REPORTER $*\x22 >> \x22$CC_LOG\x22\nprev=; lang=\n"
+                  "for a in \x22$@\x22; do\n"
+                  "  [ \x22$prev\x22 = -r ] && cp \x22$a\x22 \x22$CC_LOG.$(basename \x22$a\x22)\x22\n"
+                  "  [ \x22$prev\x22 = -l ] && lang=\x22$a\x22\n  prev=\x22$a\x22\ndone\n"
+                  "[ -n \x22$CC_FAIL_LANG\x22 ] && [ \x22$lang\x22 = \x22$CC_FAIL_LANG\x22 ] && exit 3\n"
+                  "exit 0\n")
     with open(os.path.join(_cc_bin, "curl"), "w") as _fh:
         _fh.write("#!/bin/sh\nwhile [ $# -gt 0 ]; do case \x22$1\x22 in -o) o=\x22$2\x22; shift 2;; "
-                  "*) shift;; esac; done\nprintf '%s\\n' '#!/bin/sh' "
-                  "'echo \x22REPORTER $*\x22 >> \x22$CC_LOG\x22' 'cp \x22$3\x22 \x22$CC_LOG.xml\x22' "
-                  "> \x22$o\x22\n")
+                  "*) shift;; esac; done\ncp \x22$CC_REPORTER\x22 \x22$o\x22\n")
     with open(os.path.join(_cc_bin, "sha256sum"), "w") as _fh:
         _fh.write("#!/bin/sh\ncat >/dev/null\n")
     for _f in ("curl", "sha256sum"):
         os.chmod(os.path.join(_cc_bin, _f), 0o755)
+    os.chmod(_cc_fake, 0o755)
     _cc_sha = "c" * 40
     _cc_good = ('<?xml version="1.0" ?>\n<coverage version="7.6" line-rate="0.5">\n'
                 '<sources><source>/home/runner/work/x/x</source></sources>\n<packages><package '
@@ -4718,12 +4792,23 @@ try:
                '</sources></coverage>\n')
     _cc_n = [0]
 
-    def _cc_case(report, event="push", branch="main", sha=_cc_sha, token="t0ken", link=False):
+    def _cc_case(report, event="push", branch="main", sha=_cc_sha, token="t0ken", link=False,
+                 lcov=None, lcov_link=False, fail_lang=""):
+        """Run the send step against a Python report and, when `lcov` is given, a JavaScript one.
+        Returns (rc, reporter calls, Python report sent, output, RUNNER_TEMP, LCOV report sent)."""
         _cc_n[0] += 1
         _d = os.path.join(_cc_sb, "case%d" % _cc_n[0])
         _art, _rt = os.path.join(_d, "art"), os.path.join(_d, "rt")
+        _jsart = os.path.join(_d, "jsart")
         os.makedirs(_art)
         os.makedirs(_rt)
+        if lcov is not None:
+            os.makedirs(_jsart)
+            _jdst = os.path.join(_d if lcov_link else _jsart, "lcov.info")
+            with open(_jdst, "wb") as _fh:
+                _fh.write(lcov if isinstance(lcov, bytes) else lcov.encode())
+            if lcov_link:
+                os.symlink(_jdst, os.path.join(_jsart, "lcov.info"))
         if report is not None:
             # link: the artifact's coverage.xml is a symlink to a good report kept elsewhere.
             _dst = os.path.join(_d if link else _art, "coverage.xml")
@@ -4735,21 +4820,28 @@ try:
         _p = _sh_sub.run(["bash", "-c", _cc_run], capture_output=True, text=True, env=dict(
             os.environ, PATH=_cc_bin + os.pathsep + os.environ["PATH"], CC_LOG=_log,
             CODACY_PROJECT_TOKEN=token, HEAD_SHA=sha, HEAD_BRANCH=branch, WR_EVENT=event,
-            REPORT_DIR=_art, RUNNER_TEMP=_rt, VERSION="0", SHA256="0" * 64))
-        _called = open(_log).read() if os.path.exists(_log) else ""
-        _sent = open(_log + ".xml").read() if os.path.exists(_log + ".xml") else ""
-        return _p.returncode, _called, _sent, _p.stdout + _p.stderr, _rt
+            REPORT_DIR=_art, JS_REPORT_DIR=_jsart, RUNNER_TEMP=_rt, VERSION="0", SHA256="0" * 64,
+            CC_REPORTER=_cc_fake, CC_FAIL_LANG=fail_lang))
 
+        def _read(path):
+            return open(path).read() if os.path.exists(path) else ""
+        return (_p.returncode, _read(_log), _read(_log + ".coverage-clean.xml"),
+                _p.stdout + _p.stderr, _rt, _read(_log + ".lcov-clean.info"))
+
+    # With no JavaScript artifact (a CI run whose js-coverage job failed): the Python report goes
+    # up as a partial report, `final` completes the commit, and the step says the JS is missing.
     _c = _cc_case(_cc_good)
-    check("codacy-coverage: a push to main uploads a re-written report for exactly that commit "
-          "(positive control)",
-          _c[0] == 0 and _c[1] == "REPORTER report -r %s/coverage-clean.xml --commit-uuid %s\n"
-          % (_c[4], _cc_sha)
-          and 'filename="panel/app.py"' in _c[2] and 'hits="1"' in _c[2] and "<coverage" in _c[2],
+    check("codacy-coverage: a push to main uploads a re-written report for exactly that commit, "
+          "partial then final (positive control)",
+          _c[0] == 0 and _c[1] == ("REPORTER report --partial -l Python -r %s/coverage-clean.xml "
+                                   "--commit-uuid %s\nREPORTER final --commit-uuid %s\n"
+                                   % (_c[4], _cc_sha, _cc_sha))
+          and 'filename="panel/app.py"' in _c[2] and 'hits="1"' in _c[2] and "<coverage" in _c[2]
+          and "::warning::the CI run left no lcov.info" in _c[3] and not _c[5],
           repr(_c[:4]))
     _c = _cc_case(_cc_good, event="pull_request", branch="Main")
     check("codacy-coverage: ...a pull request uploads whatever its branch is called",
-          _c[0] == 0 and _c[1].startswith("REPORTER report -r "), repr(_c[:4]))
+          _c[0] == 0 and _c[1].startswith("REPORTER report --partial -l Python -r "), repr(_c[:4]))
     _cc_skips = {"push Main": _cc_case(_cc_good, branch="Main"),
                  "push MAIN": _cc_case(_cc_good, branch="MAIN"),
                  "no token": _cc_case(_cc_good, token="")}
@@ -4800,8 +4892,151 @@ try:
           and "holds no coverage.xml" in _cc_only["symlink"][3]
           and "not a Cobertura report" in _cc_only["no line-rate"][3],
           repr({_k: _v[:4] for _k, _v in _cc_only.items()}))
+
+    # ── the JavaScript report: the js-coverage job's lcov.info ──────────────────────────────────
+    # Sent beside the Python report with the reporter's partial/final flow. It is DATA from the
+    # tested code, reaching the job that holds the token, so it gets the XML's treatment: every
+    # line one of LCOV's records, every file static/js/<name>.js, and what is sent is rebuilt from
+    # the parsed numbers — which also keeps it from being XML, which the reporter would otherwise
+    # hand to its XML parsers before its LCOV one.
+    _cc_lcov = ("TN:\nSF:static/js/panel.js\nFN:3,init\nFNDA:1,init\nFNF:1\nFNH:1\n"
+                "DA:3,1\nDA:4,0\nDA:9,12,abcd==\nLF:3\nLH:2\nend_of_record\n"
+                "TN:\nSF:static/js/dashboard.js\nBRDA:5,0,0,1\nBRDA:5,0,1,-\nBRF:2\nBRH:1\n"
+                "DA:5,2\nLF:1\nLH:1\nend_of_record\n")
+    _c = _cc_case(_cc_good, lcov=_cc_lcov)
+    check("codacy-coverage: with an lcov.info as well, both go up as partial reports — the "
+          "JavaScript through the LCOV parser — and then one final (positive control)",
+          _c[0] == 0 and _c[1] == (
+              "REPORTER report --partial -l Python -r {rt}/coverage-clean.xml --commit-uuid {s}\n"
+              "REPORTER report --partial -l Javascript --force-coverage-parser lcov -r "
+              "{rt}/lcov-clean.info --commit-uuid {s}\nREPORTER final --commit-uuid {s}\n"
+          ).format(rt=_c[4], s=_cc_sha)
+          and "no lcov.info" not in _c[3] and 'filename="panel/app.py"' in _c[2],
+          repr(_c[:4]))
+    check("codacy-coverage: ...and the LCOV sent is rebuilt from its numbers (SF, DA, LF, LH), "
+          "nothing else it carried",
+          _c[5] == ("SF:static/js/dashboard.js\nDA:5,2\nLF:1\nLH:1\nend_of_record\n"
+                    "SF:static/js/panel.js\nDA:3,1\nDA:4,0\nDA:9,12\nLF:3\nLH:2\nend_of_record\n"),
+          repr(_c[5]))
+
+    def _cc_lc(*bodies):
+        """One record per body, each about a different static/js file."""
+        return "".join("TN:\nSF:static/js/f%d.js\n%s\nend_of_record\n" % (_i, _b)
+                       for _i, _b in enumerate(bodies))
+
+    _cc_js_bad = {
+        "path traversal": (_cc_lcov.replace("static/js/panel.js", "static/js/../../app.py"),
+                           "is not static/js/<name>.js"),
+        "absolute path": (_cc_lcov.replace("static/js/panel.js", "/etc/passwd"),
+                          "is not static/js/<name>.js"),
+        "subdirectory": (_cc_lcov.replace("static/js/panel.js", "static/js/sub/panel.js"),
+                         "is not static/js/<name>.js"),
+        "vendor file": (_cc_lcov.replace("static/js/panel.js", "static/vendor/x/panel.js"),
+                        "is not static/js/<name>.js"),
+        "not a .js file": (_cc_lcov.replace("static/js/panel.js", "static/js/panel.py"),
+                           "is not static/js/<name>.js"),
+        "an XML document": ('<?xml version="1.0"?>\n<!DOCTYPE c [<!ENTITY x SYSTEM '
+                            '"file:///etc/hostname">]>\n<coverage line-rate="1">&x;</coverage>\n',
+                            "is not an LCOV record"),
+        "an unknown record": (_cc_lc("DA:1,1\nXX:1"), "is not an LCOV record"),
+        "a malformed DA": (_cc_lc("DA:one,1"), "malformed DA"),
+        "a malformed FN": (_cc_lc("FN:x,init\nDA:1,1"), "malformed FN"),
+        "line 0": (_cc_lc("DA:0,1"), "or a line 0"),
+        "a line twice": (_cc_lc("DA:1,1\nDA:1,2"), "twice, or a line 0"),
+        "a file twice": (_cc_lcov + _cc_lcov, "names static/js/panel.js twice"),
+        "a record outside a file": ("DA:1,1\n" + _cc_lc("DA:2,1"), "outside any file"),
+        "a record inside another": ("SF:static/js/a.js\n" + _cc_lc("DA:1,1"), "inside another"),
+        "no end": ("SF:static/js/a.js\nDA:1,1\n", "ends inside a record"),
+        "a stray end": ("end_of_record\n" + _cc_lc("DA:1,1"), "never began"),
+        "no file": ("TN:\n", "holds no line of any file"),
+        "files with no lines": (_cc_lc("LF:0\nLH:0"), "holds no line of any file"),
+        "a carriage return": (_cc_lc("DA:1,1\r"), "control character"),
+        "a NUL": (_cc_lc("DA:1,1") + "\x00", "control character"),
+        "non-ASCII": (_cc_lc("DA:1,1").replace("TN:", "TN:café", 1).encode("utf-8"),
+                      "is not plain ASCII text"),
+        "over 16 MB": (_cc_lc("DA:1,1") + "TN:\n" * (4 * 1024 * 1024 + 1),
+                       "is larger than 16 MB"),
+    }
+    _cc_js_refused = {_k: _cc_case(_cc_good, lcov=_v[0]) for _k, _v in _cc_js_bad.items()}
+    _cc_js_refused["a symlink"] = _cc_case(_cc_good, lcov=_cc_lcov, lcov_link=True)
+    _cc_js_missed = sorted(
+        _k for _k, _v in _cc_js_refused.items()
+        if not (_v[0] != 0 and not _v[1] and not _v[5]
+                and (_cc_js_bad[_k][1] if _k in _cc_js_bad else "no regular lcov.info") in _v[3]))
+    check("codacy-coverage: an lcov.info with a path outside static/js/<name>.js, a record LCOV "
+          "does not have, a malformed or repeated one, control characters, non-ASCII, XML, no "
+          "lines at all, over 16 MB, or reached through a symlink stops BOTH uploads, and says why",
+          len(_cc_js_refused) == len(_cc_js_bad) + 1 and not _cc_js_missed,
+          repr({_k: _cc_js_refused[_k][:4] for _k in _cc_js_missed[:4]}))
+    _c = _cc_case(_cc_good, lcov=_cc_lcov, fail_lang="Javascript")
+    check("codacy-coverage: a JavaScript upload the reporter fails still sends final (or the Python "
+          "report that went up is never processed), and fails the job",
+          _c[0] != 0 and _c[1].count("REPORTER ") == 3
+          and _c[1].endswith("REPORTER final --commit-uuid %s\n" % _cc_sha)
+          and "the JavaScript report was not accepted" in _c[3], repr(_c[:4]))
+    _c = _cc_case(_cc_good, lcov=_cc_lcov, fail_lang="Python")
+    check("codacy-coverage: ...while a Python upload the reporter fails stops the step there",
+          _c[0] != 0 and _c[1].count("REPORTER ") == 1, repr(_c[:4]))
 finally:
     _shutil.rmtree(_cc_sb, ignore_errors=True)
+
+# ── .prospector.yaml switches off pydocstyle's D213, and nothing else ────────────────────────────
+# Codacy's Prospector reported every multi-line docstring as D213 ("summary should start at the
+# second line"), the mirror image of D212, which this codebase follows. The profile disables D213
+# by name on top of Prospector's default profile — what Codacy ran with no profile at all — and its
+# two `run:` lines are Codacy's default tool choice, so that Codacy's "Configuration file" toggle
+# changes nothing if flipped (the file's header has the evidence). The shape is pinned exactly: a
+# second code in `disable`, a changed strictness or a dropped `inherits` would switch off rules
+# Codacy enables, silently, on every file. Read as text: PyYAML is not a dependency of this suite.
+_pz_path = os.path.join(_root, ".prospector.yaml")
+_pz_body = ([_l.rstrip() for _l in open(_pz_path, encoding="utf-8").read().splitlines()
+             if _l.strip() and not _l.lstrip().startswith("#")] if os.path.isfile(_pz_path) else None)
+check("prospector: .prospector.yaml inherits Prospector's defaults, keeps Codacy's default tools "
+      "and disables D213 and nothing else",
+      _pz_body == ["inherits:", "  - default", "pylint:", "  run: false",
+                   "pydocstyle:", "  run: true", "  disable:", "    - D213"], repr(_pz_body))
+# Prospector loads the FIRST profile it finds at the root, and four .landscape names come before
+# .prospector.yaml (prospector/profiles/__init__.py, AUTO_LOADED_PROFILES): any of them, or a
+# .prospector/ or prospector/ directory holding one, would replace this file without a word.
+_pz_shadow = [_n for _n in (".landscape.yml", ".landscape.yaml", "landscape.yml", "landscape.yaml",
+                            ".prospector.yml", "prospector.yaml", "prospector.yml",
+                            os.path.join("prospector", ".prospector.yaml"),
+                            os.path.join("prospector", ".prospector.yml"),
+                            os.path.join("prospector", "prospector.yaml"),
+                            os.path.join("prospector", "prospector.yml"),
+                            os.path.join(".prospector", ".prospector.yaml"),
+                            os.path.join(".prospector", ".prospector.yml"),
+                            os.path.join(".prospector", "prospector.yaml"),
+                            os.path.join(".prospector", "prospector.yml"))
+              if os.path.exists(os.path.join(_root, _n))]
+check("prospector: no other profile at the root shadows .prospector.yaml", not _pz_shadow,
+      repr(_pz_shadow))
+# The JavaScript artifact the step reads is the one CI's js-coverage job uploads, from the run
+# that finished, into the directory the step reads; and its absence is not the Python report's
+# failure: only that download may fail without stopping the job.
+_cc_jsdl_at = _cc_raw.find("- name: Download the JavaScript coverage report CI made")
+_cc_jsdl = (_cc_raw[_cc_jsdl_at:_cc_raw.find("\n      - name: ", _cc_jsdl_at)]
+            if _cc_jsdl_at >= 0 else "")
+_cc_jsdl_with = dict(re.findall(r"^\s+([a-z][a-z-]*): (\S.*)$", _cc_jsdl[_cc_jsdl.find("with:"):],
+                                re.M))
+_js_job_at = _ci_wf.find("\n  js-coverage:\n")
+_js_job = _ci_wf[_js_job_at:] if _js_job_at >= 0 else ""
+_js_job = _js_job[:re.search(r"\n  [a-z][a-z0-9_-]*:\n", _js_job[1:]).start() + 1] if re.search(
+    r"\n  [a-z][a-z0-9_-]*:\n", _js_job[1:]) else _js_job
+_js_up = re.search(r"uses: actions/upload-artifact@[0-9a-f]{40} # v\S+\n\s+with:\n\s+name: (\S+)\n"
+                   r"\s+path: \|\n((?:\s+\S+\n)+)", _js_job)
+_cc_dl_uses = re.findall(r"uses: (actions/download-artifact@[0-9a-f]{40})", _cc_raw)
+check("codacy-coverage: the JavaScript report is CI's js-coverage artifact, from the run that "
+      "finished, downloaded where the step reads it; only that download may fail",
+      _js_up is not None and _cc_jsdl_with.get("name") == _js_up.group(1) == "js-coverage"
+      and "lcov.info" in _js_up.group(2).split()
+      and _cc_jsdl_with.get("run-id") == "${{ github.event.workflow_run.id }}"
+      and _cc_jsdl_with.get("github-token") == "${{ github.token }}"
+      and bool(_cc_env.get("JS_REPORT_DIR")) and _cc_jsdl_with.get("path") == _cc_env["JS_REPORT_DIR"]
+      and "\n        continue-on-error: true\n" in _cc_jsdl
+      and _cc_code.count("continue-on-error") == 1
+      and len(_cc_dl_uses) == 2 and len(set(_cc_dl_uses)) == 1,
+      repr((_cc_jsdl_with, _js_up and _js_up.groups(), _cc_dl_uses)))
 
 # ── deleting a host says what stays on it, and the README's removal commands do what they say ────
 # The delete forgets a host and never connects to it, so the gamedig tree, its links and the weekly
@@ -4998,6 +5233,201 @@ check("workflows: no pip install names a package; every one installs a file, has
       and ".clusterfuzzlite/Dockerfile" in _ci_req_installs and len(_ci_req_installs) >= 5,
       "installs=%d named=%r unhashed=%r source-build=%r requirements.txt=%r"
       % (len(_ci_installs), _ci_named, _ci_unhashed, _ci_srcbuild, _ci_req_installs))
+
+# ── wheels only, everywhere; the one source build is esprima, spelled so pip means it ──────────
+# The check above holds the PANEL's requirements.txt to wheels. ci.yml's install of the lint tools
+# (checks.txt) had no such flag, so any package pinned there could build from an sdist, running its
+# setup code on the runner (Sonar githubactions:S8541). It is now `--only-binary :all:
+# --no-binary=esprima`: esprima ships no wheel, and it is the only exemption. pip applies the two
+# flags in the order written, so the exemption has to come AFTER `--only-binary :all:` (the other
+# way round leaves esprima wheel-only and the install fails; measured with pip 26.2's own parser),
+# and in the one-token `=` form, since the scan above reads a bare `--no-binary esprima` as a named
+# package.
+_wb_bad, _wb_exempt = [], []
+for _wf, _toks in _ci_installs:
+    _wb_ob = [_i for _i, _t in enumerate(_toks)
+              if _t == "--only-binary=:all:"
+              or (_t == "--only-binary" and _i + 1 < len(_toks) and _toks[_i + 1] == ":all:")]
+    if not _wb_ob:
+        _wb_bad.append("%s: not wheels-only: %s" % (_wf, " ".join(_toks)))
+        continue
+    _wb_files = [_toks[_i + 1] for _i, _t in enumerate(_toks[:-1]) if _t == "-r"]
+    for _i, _t in enumerate(_toks):
+        if not _t.startswith("--no-binary"):
+            continue
+        if (_t != "--no-binary=esprima" or _i < _wb_ob[-1]
+                or _wb_files != [".github/ci-requirements-checks/checks.txt"]):
+            _wb_bad.append("%s: source build allowed by %r: %s" % (_wf, _t, " ".join(_toks)))
+        else:
+            _wb_exempt.append(_wf)
+check("workflows: every pip install is wheels only, and the one source build (esprima, in ci.yml) "
+      "is named after --only-binary :all:",
+      len(_ci_installs) >= 10 and not _wb_bad and _wb_exempt == ["ci.yml"],
+      "bad=%r exempt=%r" % (_wb_bad, _wb_exempt))
+
+# ── every https download in a workflow refuses to be redirected to http ───────────────────────
+# `curl -L` follows a redirect to any protocol. The three release downloads (gitleaks, actionlint,
+# the Codacy reporter) are pinned by sha256, so a downgraded body fails the checksum before it
+# runs; `--proto '=https'` refuses the plain-http hop outright instead (Sonar githubactions:S6506).
+_cpx_calls, _cpx_bad = [], []
+for _wf in sorted(glob.glob(os.path.join(_root, ".github", "workflows", "*.yml"))):
+    with open(_wf, encoding="utf-8") as _cpx_fh:
+        _cpx_src = "\n".join(_l for _l in _cpx_fh.read().splitlines()
+                             if not _l.lstrip().startswith("#"))
+    _cpx_src = re.sub(r"\\\n\s*", " ", _cpx_src)
+    for _m in re.finditer(r"(?<![\w-])curl\s[^\n;&|]*", _cpx_src):
+        if "https://" not in _m.group(0):
+            continue                  # the loopback health probes are plain http on purpose
+        _cpx_calls.append(os.path.basename(_wf))
+        _tk = [_t.strip("\x22'") for _t in _m.group(0).split()]
+        if not any(_tk[_i] == "--proto" and _tk[_i + 1] == "=https" for _i in range(len(_tk) - 1)):
+            _cpx_bad.append("%s: %s" % (os.path.basename(_wf), " ".join(_m.group(0).split())))
+check("workflows: every curl that fetches over https refuses a redirect to http (--proto '=https')",
+      {"actionlint.yml", "codacy-coverage.yml", "security.yml"} <= set(_cpx_calls) and not _cpx_bad,
+      "calls=%r bad=%r" % (_cpx_calls, _cpx_bad))
+
+# ── the batch fuzz job's summary says storage is configured, never what it is ─────────────────
+# CFL_STORAGE_REPO is the https URL with a write token IN it (the workflow's header, step 3), and
+# the step summary printed it verbatim for anyone who can read the run. The step is run here as
+# GitHub runs it, with a sentinel in the secret's place.
+_cfs_raw = open(os.path.join(_root, ".github", "workflows", "cflite_batch.yml"),
+                encoding="utf-8").read()
+_cfs_run = _wf_run_block(_cfs_raw, "Say whether this job is actually doing anything")
+_cfs_tmp = _tempfile.mkdtemp(prefix="cflite-summary-")
+try:
+    _cfs_out = {}
+    for _cfs_val in ("https://x-access-token:SENTINEL-corpus-token-0451@github.com/o/c.git", ""):
+        _cfs_sum = os.path.join(_cfs_tmp, "summary-%d" % len(_cfs_out))
+        _r = _sp.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", _cfs_run],
+                     env=dict(os.environ, GITHUB_STEP_SUMMARY=_cfs_sum, CFL_STORAGE_REPO=_cfs_val),
+                     capture_output=True, text=True, timeout=60)
+        _cfs_txt = open(_cfs_sum, encoding="utf-8").read() if os.path.exists(_cfs_sum) else ""
+        _cfs_out[bool(_cfs_val)] = (_r.returncode, _cfs_txt, _r.stdout + _r.stderr)
+    check("cflite_batch: with corpus storage set, the step summary says it is configured and never "
+          "prints the URL, which holds the token",
+          _cfs_out[True][0] == 0 and _cfs_out[True][1] == "Corpus storage: configured.\n"
+          and "SENTINEL-corpus-token" not in _cfs_out[True][1] + _cfs_out[True][2],
+          repr(_cfs_out[True]))
+    check("cflite_batch: ...and unset, it still says the job is DISABLED (control: the block ran)",
+          _cfs_out[False][0] == 0 and _cfs_out[False][1].startswith("DISABLED: "),
+          repr(_cfs_out[False]))
+finally:
+    _shutil.rmtree(_cfs_tmp, ignore_errors=True)
+
+# ── the fuzz image's build context: no keys, no databases, no worktree checkouts ──────────────
+# .clusterfuzzlite/Dockerfile does `COPY . $SRC/linuxgsm-panel` with the repository root as its
+# context, and Docker reads neither .gitignore nor .git/info/exclude, so a local fuzz build put the
+# working tree's data/ (secret_key, cred_key, panel.db), the .venv, .git and every worktree under
+# .claude/ into an image layer (Sonar docker:S6470). /.dockerignore is evaluated here the way
+# Docker's own matcher (moby/patternmatcher) does: a leading "/" is dropped, "**/" is any depth
+# (zero included), "*" and "?" stop at "/", and a path is left out when it or any parent matches.
+def _dki_rx(pat):
+    _o, _i = "^", 0
+    while _i < len(pat):
+        if pat.startswith("**", _i):
+            _i += 3 if pat.startswith("**/", _i) else 2
+            _o += "(.*/)?" if _i < len(pat) else ".*"
+            continue
+        _o += {"*": "[^/]*", "?": "[^/]"}.get(pat[_i], re.escape(pat[_i]))
+        _i += 1
+    return re.compile(_o + "$")
+
+
+_dki_path = os.path.join(_root, ".dockerignore")
+_dki_pats = []
+if os.path.exists(_dki_path):
+    for _l in open(_dki_path, encoding="utf-8").read().splitlines():
+        _l = _l.strip()
+        if _l and not _l.startswith("#"):
+            _dki_neg = _l.startswith("!")
+            _l = os.path.normpath(_l.lstrip("!").strip())
+            _dki_pats.append((_dki_neg, _dki_rx(_l[1:] if len(_l) > 1 and _l[0] == "/" else _l)))
+
+
+def _dki_out(path):
+    _parts = path.split("/")
+    _out = False
+    for _neg, _rx in _dki_pats:
+        if any(_rx.match("/".join(_parts[:_k])) for _k in range(1, len(_parts) + 1)):
+            _out = not _neg
+    return _out
+
+
+_dki_secret = ["data/secret_key", "data/cred_key", "data/panel.db", "data/panel.db-wal",
+               "data/config.json", ".git/config", ".venv/bin/python", "venv/bin/python",
+               "panel/__pycache__/app.cpython-314.pyc", ".claude/settings.local.json",
+               ".claude/worktrees/wt1/data/cred_key", ".claude/worktrees/wt1/app.py",
+               "tests/deep/secret_key", "tests/deep/cred_key", "x/panel.db", "x/y.sqlite3",
+               "x/y.db-shm", "x/z.secret", "node_modules/a/b.js"]
+check(".dockerignore: the fuzz image's context leaves out keys, databases, venvs, .git and every "
+      "worktree checkout, at any depth",
+      bool(_dki_pats) and [_p for _p in _dki_secret if not _dki_out(_p)] == [],
+      "copied=%r" % [_p for _p in _dki_secret if not _dki_out(_p)])
+# ...and keeps what the build reads: the requirements, build.sh, every harness and seed, and all of
+# the source the harnesses import. Walked, not listed, so a new source file is covered too.
+_dki_need = []
+for _dp, _dns, _fns in os.walk(_root):
+    _dns[:] = [_d for _d in _dns if _d not in (".git", ".claude", ".venv", "venv", "node_modules",
+                                               "data", "__pycache__")]
+    _rel = os.path.relpath(_dp, _root).replace(os.sep, "/")
+    for _fn in _fns:
+        _rp = _fn if _rel == "." else _rel + "/" + _fn
+        if (_rp.startswith(("tests/fuzz/corpus/", ".clusterfuzzlite/"))
+                or re.search(r"\.(py|sh|txt|json|ya?ml|in|cfg|toml|html|js|css|md)$", _fn)):
+            _dki_need.append(_rp)
+check(".dockerignore: ...and keeps every file the fuzz build reads (requirements, build.sh, the "
+      "harnesses, their seeds, the source)",
+      len(_dki_need) > 200 and "requirements.txt" in _dki_need
+      and ".clusterfuzzlite/build.sh" in _dki_need
+      and any(_p.startswith("tests/fuzz/corpus/") for _p in _dki_need)
+      and [_p for _p in _dki_need if _dki_out(_p)] == [],
+      "need=%d dropped=%r" % (len(_dki_need), [_p for _p in _dki_need if _dki_out(_p)][:6]))
+
+# ── the helper fetches Tailscale's installer over https only, every hop ───────────────────────
+# do_tailscale_install downloads install.sh and root runs it. Nothing checks the body, so TLS on
+# each redirect hop is all that stands between the network and a root shell script: `-L` alone
+# follows a redirect to plain http. Called here with curl stubbed to fail, so nothing is installed.
+import io as _tsp_io                                                               # noqa: E402
+import types as _tsp_types                                                         # noqa: E402
+_tsp_runs = []
+_tsp_saved = (_helper.subprocess, _helper.resolve, _helper.os, sys.stderr)
+_tsp_tmp = _tempfile.mkdtemp(prefix="tsinstall-")
+
+
+class _TspOs:
+    """The real os, with the helper's fixed /run path moved into a temp dir."""
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+    @staticmethod
+    def _p(path):
+        return os.path.join(_tsp_tmp, "i.sh") if path == "/run/panel-tailscale-install.sh" else path
+
+    def open(self, path, *a):
+        return os.open(self._p(path), *a)
+
+    def unlink(self, path):
+        return os.unlink(self._p(path))
+
+
+try:
+    _helper.subprocess = _tsp_types.SimpleNamespace(
+        run=lambda argv, **kw: (_tsp_runs.append(list(argv)), _sp.CompletedProcess(argv, 6))[1],
+        PIPE=_sp.PIPE, STDOUT=_sp.STDOUT, TimeoutExpired=_sp.TimeoutExpired)
+    _helper.resolve = lambda n: "/usr/bin/" + n
+    _helper.os = _TspOs()
+    sys.stderr = _tsp_io.StringIO()
+    _tsp_rc = _helper.do_tailscale_install([], "")
+finally:
+    _helper.subprocess, _helper.resolve, _helper.os, sys.stderr = _tsp_saved
+    _shutil.rmtree(_tsp_tmp, ignore_errors=True)
+check("helper: the Tailscale installer is fetched https-only, redirects included "
+      "(curl --proto =https)",
+      _tsp_rc == 1 and _tsp_runs == [["/usr/bin/curl", "--proto", "=https", "-fsSL",
+                                      "https://tailscale.com/install.sh"]],
+      repr((_tsp_rc, _tsp_runs)))
+
 # The scan above reads workflows as TEXT, so it passes a file GitHub cannot load. A one-line
 # `run: pip install --only-binary :all: -r ...` is exactly that: in a plain YAML scalar ": " is a
 # mapping indicator, so the whole workflow fails to parse ("mapping values are not allowed here")
@@ -5148,6 +5578,22 @@ check("gitleaks: the allowlist clears install.sh's NodeSource fingerprint assign
       "assignments %r, allowlist %r" % (_gl_fpr, _gl_rxs))
 check("gitleaks: the fingerprint exemption is that one value, not every NODESOURCE_KEY_FPR",
       not any(re.search(_rx, 'NODESOURCE_KEY_FPR="' + "0" * 40 + '"') for _rx in _gl_rxs))
+# The JS coverage walk typed a sequential stand-in Ubuntu Pro token that generic-api-key reads as a
+# credential. The tree types a non-secret value now; the allowlist clears the old literal, which is
+# still in the PR's range (13e3441), and nothing wider: a different token in that field, or the same
+# value in another field, must still be found.
+_gl_flows = open(os.path.join(_root, "tools", "js_coverage", "flows.py"), encoding="utf-8").read()
+_gl_upro = "J.type('#upro-token', 'C1234567890abcdef')"
+# The two negative controls are BUILT, not written out: as literals they are exactly what
+# generic-api-key flags, and the secret scan went red on this gate's own probes (12d1466).
+_gl_other_value = _gl_upro.replace("1234567890", "".join(str(9 - _i) for _i in range(10)))
+_gl_other_field = _gl_upro.replace("#upro-", "#" + "api-")
+check("gitleaks: the coverage walk no longer types the old stand-in token (the exemption is history-only)",
+      "C1234567890abcdef" not in _gl_flows and "#upro-token" in _gl_flows)
+check("gitleaks: the allowlist clears the old stand-in token in the Ubuntu Pro field, and only there",
+      any(re.search(_rx, _gl_upro) for _rx in _gl_rxs)
+      and not any(re.search(_rx, _gl_other_value) for _rx in _gl_rxs)
+      and not any(re.search(_rx, _gl_other_field) for _rx in _gl_rxs))
 
 # ── The docs state numbers that the code owns — pin them ──────────────────────────────────────
 # Every one of these was wrong at the time of writing, and none of them could be. SECURITY.md said
@@ -5428,7 +5874,7 @@ eq("prefix: ...and no mount key at all leaves the argument in charge",
 _inst = open(os.path.join(_root, "install.sh"), encoding="utf-8").read()
 check("install.sh: the root-owned tools are installed by a FUNCTION, callable from both paths",
       "install_root_tools() {" in _inst and "write_sudoers_grant() {" in _inst)
-_upd = _inst[_inst.index("if [ \"${IS_UPDATE}\" -eq 1 ]; then"):]
+_upd = _inst[_inst.index("if [[ \"${IS_UPDATE}\" -eq 1 ]]; then"):]
 _upd_body = _upd[:_upd.index("    # ── Health check FAILED")]
 check("install.sh: the UPDATE path refreshes the root-owned helper before restarting the service",
       "install_root_tools" in _upd_body
@@ -5820,7 +6266,9 @@ check("peer check: an invalid host is refused before ping runs, not pinged",
 _panel_js = open(os.path.join(_root, "static", "js", "panel.js"), encoding="utf-8").read()
 _da_src = _panel_js[_panel_js.index("window._da = function"):]
 _da_src = _da_src[:_da_src.index("\n};")]
-_da_amp, _da_quote = _da_src.find("replace(/&/g, '&amp;')"), _da_src.find("replace(/'/g")
+# The quote is matched as /\x27/ (the same character) because a bare ' inside a regex literal is
+# read by Lizard, Codacy's complexity analyser, as a string opening that swallows the rest of the file.
+_da_amp, _da_quote = _da_src.find("replace(/&/g, '&amp;')"), _da_src.find("replace(/\\x27/g, '&#39;')")
 check("_da: ampersands are escaped in data-args", _da_amp >= 0)
 # .find, not .index: a missing escape is the thing being tested for, and raising here would take
 # the whole suite down with a ValueError instead of reporting one FAIL.
@@ -5889,7 +6337,7 @@ _unremoved = sorted(_p for _p in _inst_paths if not _is_removed(_p))
 # rindex, not index: uninstall.sh tests MODE earlier too (to print the service user in the
 # summary), and splitting on the first occurrence puts the whole cleanup block on the wrong side
 # — which is how this check first reported a fix that was already in place.
-_uninst_cut = _uninst.rindex('if [ "${MODE}" = "system" ]; then')
+_uninst_cut = _uninst.rindex('if [[ "${MODE}" = "system" ]]; then')
 _uninst_sys = _uninst[_uninst_cut:]
 _uninst_common = _uninst[:_uninst_cut]
 _user_created = ["/usr/local/lib/linuxgsm-panel", "/etc/cron.d/lgsm-node-tools",
@@ -5954,7 +6402,7 @@ check("console: ...and no rule exists for a code the server strips",
 # background with the run's own colour, and the glyphs need the console's background put back —
 # through -webkit-text-fill-color, because `color` is what currentColor reads.
 check("console: reverse video actually inverts rather than doing nothing",
-      "background: currentColor" in _css_raw and "-webkit-text-fill-color" in _css_raw,
+      "background: currentcolor" in _css_raw.lower() and "-webkit-text-fill-color" in _css_raw,
       ".ansi-7 does not swap anything")
 
 
@@ -6214,9 +6662,14 @@ check("suites: no result printer raises on a non-string detail",
       "a FAILING check in these prints a TypeError instead of its name: %s" % ", ".join(_rep_fragile))
 
 _det_bad = []
-for _f in _REPORTER_SUITES + ["tests/unit/part01.py", "tests/unit/part02.py",
-                              "tests/unit/part03.py", "tests/unit/part04.py",
-                              "tests/unit/part05.py", "tests/unit/part06.py"]:
+# Every part on disk, globbed: a hand-kept list named parts 01-06 and stayed that way while parts
+# 07-13 were added, so a tuple detail in any of them went unread by the gate that exists for it.
+_det_parts = sorted("tests/unit/" + os.path.basename(_p)
+                    for _p in glob.glob(os.path.join(_root, "tests", "unit", "part*.py")))
+# The glob found this very file: a wrong path would find nothing and read as a clean pass.
+check("suites: the tuple-detail gate's glob finds the part files (this one included)",
+      "tests/unit/part06.py" in _det_parts, _det_parts)
+for _f in _REPORTER_SUITES + _det_parts:
     _tree = _rep_ast.parse(open(os.path.join(_root, _f), encoding="utf-8").read())
     for _n in _rep_ast.walk(_tree):
         if not (isinstance(_n, _rep_ast.Call) and getattr(_n.func, "id", "") == "check"):
@@ -6702,8 +7155,22 @@ eq("setup: (control) an absolute key path is kept as typed",
    _wc_rh.wizard_credential("key", "/srv/keys/id_ed25519"), "/srv/keys/id_ed25519")
 eq("setup: a PASSWORD that starts with ~ is not treated as a path",
    _wc_rh.wizard_credential("password", "~hunter2"), "~hunter2")
-_wc_fn = next(n for n in _wc_ast.walk(_wc_ast.parse(open(_wc_rh.__file__, encoding="utf-8").read()))
+_wc_tree = _wc_ast.parse(open(_wc_rh.__file__, encoding="utf-8").read())
+_wc_fn = next(n for n in _wc_ast.walk(_wc_tree)
               if isinstance(n, _wc_ast.FunctionDef) and n.name == "setup_wizard")
+# The wizard's steps are module functions the view calls (setup_wizard -> _setup_post ->
+# _setup_welcome, ...), so "the wizard" is the view plus every module function it reaches.
+_wc_defs = {n.name: n for n in _wc_tree.body if isinstance(n, _wc_ast.FunctionDef)}
+_wc_seen, _wc_todo = [], [_wc_fn]
+while _wc_todo:
+    _wc_f = _wc_todo.pop()
+    if any(_wc_f is _s for _s in _wc_seen):
+        continue
+    _wc_seen.append(_wc_f)
+    _wc_todo += [_wc_defs[c.func.id] for c in _wc_ast.walk(_wc_f)
+                 if isinstance(c, _wc_ast.Call) and isinstance(c.func, _wc_ast.Name)
+                 and c.func.id in _wc_defs]
+_wc_fn = _wc_ast.Module(body=_wc_seen, type_ignores=[])
 check("setup: setup_wizard builds the credential it tests and stores with wizard_credential()",
       any(isinstance(n, _wc_ast.Call) and getattr(n.func, "id", None) == "wizard_credential"
           for n in _wc_ast.walk(_wc_fn)),
@@ -6851,6 +7318,77 @@ try:
           "isn't running" not in _bc_out and "Server started" in _bc_out, _bc_out)
 finally:
     _botcmd._find_server, _bc_game.capture_console = _bc_saved
+
+# ── the bots' server lookup: an exact name wins, else ONE partial match, else a reason ─────────
+# _find_server's two filters are helpers now (_exact_matches, _partial_matches), and the other
+# checks that reach it (smoke's "smoke-cs" / "csgoserver") use names that match exactly AND
+# partially at once, so either filter could be emptied and they would still pass. Each case below
+# separates them: "rust" is an exact name that is also a partial match for two servers, "two" is
+# a partial match only.
+_fs_rows = [NS(name="Rust", short_name="rustserver"), NS(name="Rust Two", short_name="rust2server"),
+            NS(name="Dup", short_name="dup1server"), NS(name="Dup", short_name="dup2server"),
+            NS(name="CS", short_name="csgoserver")]
+_fs_saved = _botcmd.GameServer
+try:
+    _botcmd.GameServer = NS(query=NS(filter_by=lambda **k: NS(all=lambda: list(_fs_rows))))
+    _fs = {a: _botcmd._find_server(a) for a in ("rust", "RUSTSERVER", "two", "ru", "dup", "", "zzz")}
+finally:
+    _botcmd.GameServer = _fs_saved
+check("bots: an exact server name wins over the partial matches it is also part of",
+      _fs["rust"] == (_fs_rows[0], None) and _fs["RUSTSERVER"] == (_fs_rows[0], None),
+      repr({k: _fs[k] for k in ("rust", "RUSTSERVER")}))
+check("bots: a unique PARTIAL name match resolves the server",
+      _fs["two"] == (_fs_rows[1], None), repr(_fs["two"]))
+check("bots: an ambiguous match names the candidates instead of picking one",
+      _fs["ru"][0] is None and "Rust, Rust Two" in (_fs["ru"][1] or "")
+      and _fs["dup"][0] is None and "dup1server, dup2server" in (_fs["dup"][1] or ""),
+      repr((_fs["ru"], _fs["dup"])))
+check("bots: no argument and no match each answer with a reason, never a server",
+      _fs[""][0] is None and "Which server" in (_fs[""][1] or "")
+      and _fs["zzz"][0] is None and "No server matches 'zzz'" in (_fs["zzz"][1] or ""),
+      repr((_fs[""], _fs["zzz"])))
+
+# ── both routers send each answer-only command to the helper that answers THAT command ─────────
+# The routers answer /status /servers /hosts /players /console /say /connect from a per-call
+# table of lambdas (it was an if/elif chain). The pairing of command to helper lives only in that
+# table, and the smoke ack-parity gate stubs all seven helpers to one string, so a table sending
+# /say to _connect_text would still pass it. Each helper here answers with its own name and the
+# arguments it was given.
+from panel.services.bots import discord as _rt_dc                                  # noqa: E402
+_rt_helpers = ("_status_text", "_servers_text", "_hosts_text", "_players_text", "_console_text",
+               "_say_text", "_connect_text")
+_rt_cases = (("status", "", "_status_text", ()), ("servers", "", "_servers_text", ()),
+             ("hosts", "", "_hosts_text", ()), ("players", " srv", "_players_text", ("srv",)),
+             ("console", " srv", "_console_text", ("srv",)),
+             ("say", " srv hi there", "_say_text", ("srv hi there",)),
+             ("connect", " srv", "_connect_text", ("srv",)))
+_rt_got = {}
+for _rt_bot, _rt_mod, _rt_pfx, _rt_reply, _rt_run in (
+        ("telegram", _tgm, "/", "_tg_reply",
+         lambda t: _tgm._handle_telegram_command(None, "1:tok", "1", t)),
+        ("discord", _rt_dc, "!", "_dc_reply",
+         lambda t: _rt_dc._handle_discord_command(None, "tok", "1", t))):
+    _rt_saved = {h: getattr(_rt_mod, h) for h in _rt_helpers + (_rt_reply,)}
+    _rt_sent = []
+    try:
+        for _h in _rt_helpers:
+            setattr(_rt_mod, _h, (lambda name: lambda app, *a, **k: (name, a, sorted(k)))(_h))
+        setattr(_rt_mod, _rt_reply, lambda tok, chan, text: _rt_sent.append(text))
+        for _cmd, _tail, _helper_name, _args in _rt_cases:
+            del _rt_sent[:]
+            _rt_run(_rt_pfx + _cmd + _tail)
+            _rt_got[(_rt_bot, _cmd)] = list(_rt_sent)
+    finally:
+        for _h, _fn in _rt_saved.items():
+            setattr(_rt_mod, _h, _fn)
+for _rt_bot in ("telegram", "discord"):
+    _rt_want = {_cmd: [(_helper_name, _args,
+                        ["fence"] if _rt_bot == "discord" and _cmd in ("players", "console") else [])]
+                for _cmd, _tail, _helper_name, _args in _rt_cases}
+    _rt_have = {_cmd: _rt_got.get((_rt_bot, _cmd)) for _cmd in _rt_want}
+    check("bots: the %s router answers each reply-only command with ITS helper, once" % _rt_bot,
+          _rt_have == _rt_want,
+          repr({c: (_rt_have[c], _rt_want[c]) for c in _rt_want if _rt_have[c] != _rt_want[c]}))
 
 # ── Discord replies must not be able to ping the channel ──────────────────────────────────────
 # The content is not ours: player names (!players), the tail of the live console (which on most
@@ -7036,8 +7574,8 @@ import glob as _anc_glob                                                        
 # Line parsers: `$` is correct because the pattern is matched against one line and the trailing
 # whitespace/newline is either absorbed by the pattern or captured on purpose.
 _ANCHOR_LINE_PARSERS = {
-    "_CRON_VERDICT_RE", "_CFG_LINE_RE", "_MOD_AVAIL_RE", "_MOD_INST_RE", "_HOSTNAME_RE",
-    "_UFW_RULE_RE", "_CONSOLE_PROMPT_RE", "_ASCII_INT_RE", "header",
+    "_CRON_VERDICT_RE", "_CFG_LINE_RE", "_MOD_AVAIL_RE", "_MOD_INST_RE", "_UFW_NUMBERED_RE",
+    "_IDT3_ROW_NOADDR_RE", "_CONSOLE_PROMPT_RE", "_ASCII_INT_RE",
     # One crontab line, already .strip()ed by its only caller, and its own `\s*$` absorbs
     # whatever is left — so $ and \Z behave identically here.
     "_CRON_WRAP_RE",
@@ -7085,7 +7623,7 @@ check("regex anchors: every validator refuses a trailing newline (\\Z, not $)", 
 _anc_known = set(_ANCHOR_LINE_PARSERS)
 for _p in _ANCHOR_VALIDATORS.values():
     _anc_known |= set(_p)
-_anc_unclassified = []
+_anc_unclassified, _anc_seen = [], set()
 for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
                  + [os.path.join(_root, n) for n in ("app.py", "manage.py", "db_maintenance.py")]):
     try:
@@ -7101,12 +7639,19 @@ for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recu
         _pat = "".join(_parts) if _parts else ""
         if not _pat or not _pat.endswith("$") or _pat.endswith("\\$"):
             continue
+        _anc_seen |= {_t.id for _t in _n.targets if isinstance(_t, _anc_ast.Name)}
         for _t in _n.targets:
             if isinstance(_t, _anc_ast.Name) and _t.id not in _anc_known:
                 _anc_unclassified.append("%s:%d %s" % (os.path.basename(_f), _n.lineno, _t.id))
 check("regex anchors: every $-anchored pattern is classified as a validator or a line parser",
       not _anc_unclassified,
       "unclassified (decide, then add to the list in this test): %s" % _anc_unclassified[:5])
+# ...and the other direction: every line-parser entry still names one. A pattern rewritten to \Z,
+# or away entirely, left its entry behind (_UFW_RULE_RE and `header` did), and a dead entry is not
+# harmless: it pre-approves the next pattern given that name, before anyone has looked at it.
+_anc_dead = sorted(set(_ANCHOR_LINE_PARSERS) - _anc_seen)
+check("regex anchors: every line-parser entry still names a $-anchored pattern in the code",
+      not _anc_dead, "no longer in the code, or no longer ending in $ (delete them): %s" % _anc_dead)
 
 # ── the same question for an INLINE re.match/fullmatch/search ─────────────────────────────────
 # The sweep above walks module-level `X = re.compile(...)` assignments, which is a shape an
@@ -7124,17 +7669,10 @@ check("regex anchors: every $-anchored pattern is classified as a validator or a
 # read off a remote host, a LinuxGSM config key, a .cfg filename going into `find`, an apt package
 # name, and a mod id.
 _INLINE_DOLLAR_OK = {
-    r"\)\s+CMD\s+\((.*)\)\s*$",                                  # a syslog cron line
-    r"^#{3,}\s+(.+?)\s+#{3,}\s*$",                                 # a config section header
     r"^(.*)/(tcp|udp)$",                                            # a ufw port column
-    r"^\s*\[\s*(\d+)\]\s*(.*)$",                                   # a `ufw status numbered` row
-    r"\s*(\d+)\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{6,})\s+(.+)$",      # an idTech3 player row
-    r"^\s*([a-z][a-z0-9-]*)\s+([a-z]{1,4})\s+\|\s+(.+?)\s*$",        # a LinuxGSM table row
-    r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?/?\s*$",                # a `git remote -v` line
     r"\s*port\s*=\s*(\d+)\s*$",                                     # an sshd_config line
-    r"^(https?://\S+)\s*(\(.*\))?$",                                # a `tailscale up` output line
 }
-_inline_bad = []
+_inline_bad, _inline_seen = [], set()
 for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recursive=True)
                  + [os.path.join(_root, n) for n in ("app.py", "manage.py", "db_maintenance.py")]):
     _rel = os.path.relpath(_f, _root)
@@ -7152,12 +7690,18 @@ for _f in sorted(_anc_glob.glob(os.path.join(_root, "panel", "**", "*.py"), recu
         _pat = _n.args[0].value
         if not _pat.endswith("$") or _pat.endswith("\\$"):
             continue
+        _inline_seen.add(_pat)
         if _pat not in _INLINE_DOLLAR_OK:
             _inline_bad.append("%s:%d %r" % (_rel, _n.lineno, _pat[:44]))
 check("regex anchors: no unclassified $-anchored inline re.match/search either",
       not _inline_bad,
       "use \\Z for a VALIDATOR, or add the file to _INLINE_DOLLAR_OK saying why $ is right: %s"
       % _inline_bad[:5])
+# Every entry still matches an inline call. Two outlived theirs: the repo-URL pattern went to \Z,
+# and the syslog cron one was replaced outright (it was quadratic on a hostile line).
+_inline_dead = sorted(_INLINE_DOLLAR_OK - _inline_seen)
+check("regex anchors: every _INLINE_DOLLAR_OK entry still matches an inline call in the code",
+      not _inline_dead, "matches nothing any more (delete them): %s" % [p[:44] for p in _inline_dead])
 
 # ── A no-op UPDATE must still refresh what lives outside the checkout ─────────────────────────
 # "Nothing to fetch" is not "nothing to do". The helper, db_maintenance.py and the sudoers grant
@@ -7178,7 +7722,7 @@ for _needed in ("install_root_tools", "write_sudoers_grant", "check_origin_trust
 # ...and it must still be gated on the origin, exactly as the real update path is: an untrusted
 # origin must not be able to get a grant written for it by doing nothing.
 check("install.sh: ...with the grant still gated on a trusted origin",
-      '[ "${ORIGIN_TRUSTED}" -eq 1 ] && write_sudoers_grant' in _noop, _noop[-200:])
+      '[[ "${ORIGIN_TRUSTED}" -eq 1 ]] && write_sudoers_grant' in _noop, _noop[-200:])
 
 # ── no unit check may READ or WRITE the machine's own config.json ──────────────────────────────
 # Two turned up in one audit. part06's PrefixMiddleware checks READ it, so they passed on a dev box
@@ -7983,11 +8527,17 @@ try:
             except Exception as _tsh_e:
                 return {"raised": repr(_tsh_e)}
 
+        def _tsh_cal(sha):
+            """The version a commit should read as: its committer time as a UTC date, YYYY.M.D."""
+            _tsh_ct = _tsh_git("-C", _tsh_up, "log", "-1", "--format=%ct", sha)
+            return "%d.%d.%d" % _time.gmtime(int(_tsh_ct))[:3] if _tsh_ct.isdigit() else "?!"
+
         _tsh_st = _tsh_status()
         _tsh_subjects = [c.split(" ", 1)[-1] for c in _tsh_st.get("changes") or []]
         check("update status: a tag named origin/main does not stand in for the branch",
               _tsh_pre and _tsh_st.get("update_available") is True
-              and _tsh_st.get("target_sha") == _tsh_c and _tsh_st.get("remote_version") == "1.2.0"
+              and _tsh_st.get("target_sha") == _tsh_c
+              and _tsh_st.get("remote_version") == _tsh_cal(_tsh_c)
               and _tsh_subjects == ["C main tip", "B on main"],
               "fixture shadowed=%s; C=%s X=%s got %r" % (
                   _tsh_pre, _tsh_c[:7], _tsh_x[:7],
@@ -8000,12 +8550,12 @@ try:
         check("update status: ...and its fetch brought no tag along, not even one on the tip it fetched",
               not _tsh_has(_tsh_so, "refs/tags/late-on-main"), "late-on-main fetched")
         # A tracked NON-default branch takes its own path through the same function: the tip,
-        # its VERSION and its changelog are all read off the ref.
+        # its version and its changelog are all read off the ref.
         _tsh_branch["v"] = "dev"
         _tsh_sd = _tsh_status()
         _tsh_dsubj = [c.split(" ", 1)[-1] for c in _tsh_sd.get("changes") or []]
-        check("update status: ...on a non-default branch too (tip, VERSION and changelog)",
-              _tsh_sd.get("target_sha") == _tsh_d2 and _tsh_sd.get("remote_version") == "2.0.2"
+        check("update status: ...on a non-default branch too (tip, version and changelog)",
+              _tsh_sd.get("target_sha") == _tsh_d2 and _tsh_sd.get("remote_version") == _tsh_cal(_tsh_d2)
               and _tsh_dsubj == ["D2 dev tip", "D1 on dev"],
               "D2=%s X=%s got %r" % (_tsh_d2[:7], _tsh_x[:7], {k: _tsh_sd.get(k) for k in (
                   "target_sha", "remote_version", "changes", "raised", "message")}))

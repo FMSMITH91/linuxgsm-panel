@@ -35,9 +35,21 @@ def audit_scope(user):
     sign-in address, and the attempted username of every failed login. A delegated viewer now
     sees their OWN rows, plus rows whose target is a game server they can access or a host they
     were granted — never an account row of anyone else's, and never the panel host's own
-    administration (LOCAL_HOST_LABEL: backups, self-update, binding)."""
+    administration (LOCAL_HOST_LABEL: backups, self-update, binding).
+    """
     if user.is_superadmin:
         return None
+    about = _reachable_target_filters(user)
+    theirs = AuditLog.user_id == user.id
+    if not about:
+        return theirs
+    return or_(theirs, and_(or_(*about),
+                            AuditLog.target != LOCAL_HOST_LABEL,
+                            ~AuditLog.action.in_(sorted(_ACCOUNT_ACTIONS))))
+
+
+def _reachable_target_filters(user):
+    """Filters for the rows whose target is a game server `user` can access or a host they were granted."""
     server_names = {gs.name for gs in get_user_servers(user) if gs.name}
     remote_ids = accessible_remote_ids(user)
     remote_names = ({r.name for r in RemoteServer.query.filter(RemoteServer.id.in_(remote_ids))
@@ -49,12 +61,7 @@ def audit_scope(user):
         about.append(AuditLog.target.in_(sorted(remote_names)))
         about.extend(AuditLog.target.like(_like_prefix(n), escape="\\")
                      for n in sorted(remote_names))
-    theirs = AuditLog.user_id == user.id
-    if not about:
-        return theirs
-    return or_(theirs, and_(or_(*about),
-                            AuditLog.target != LOCAL_HOST_LABEL,
-                            ~AuditLog.action.in_(sorted(_ACCOUNT_ACTIONS))))
+    return about
 
 
 def register(app):
@@ -68,49 +75,65 @@ def register(app):
         # errorhandler does not even dress it up).
         page = max(1, min(request.args.get("page", 1, type=int) or 1, 10_000_000))
         per_page = 50
-        q = (request.args.get("q") or "").strip()
-        f_action = (request.args.get("action") or "").strip()
-        f_user = (request.args.get("user") or "").strip()
-        f_status = (request.args.get("status") or "").strip()   # "" | ok | fail
-        sort = request.args.get("sort", "timestamp")
-        direction = "asc" if request.args.get("dir") == "asc" else "desc"
-
+        filters = _audit_filters()
         scope = audit_scope(current_user)
-        query = AuditLog.query if scope is None else AuditLog.query.filter(scope)
-        if q:
-            like = f"%{q}%"
-            query = query.filter(or_(AuditLog.target.ilike(like),
-                                     AuditLog.detail.ilike(like),
-                                     AuditLog.username.ilike(like)))
-        if f_action:
-            query = query.filter(AuditLog.action == f_action)
-        if f_user:
-            query = query.filter(AuditLog.username == f_user)
-        if f_status == "ok":
-            query = query.filter(AuditLog.success.is_(True))
-        elif f_status == "fail":
-            query = query.filter(AuditLog.success.is_(False))
-
-        sort_cols = {"timestamp": AuditLog.timestamp, "username": AuditLog.username,
-                     "action": AuditLog.action, "target": AuditLog.target}
-        col = sort_cols.get(sort, AuditLog.timestamp)
-        query = query.order_by(col.asc() if direction == "asc" else desc(col))
+        query = _filtered_audit_query(scope, filters)
 
         logs = query.paginate(page=page, per_page=per_page, error_out=False)
 
         # Distinct values for the filter dropdowns (cheap on an indexed/small table) — from the
         # SAME scope as the rows. The user list was every AuditLog.username install-wide, which
         # includes each failed login's attempted username.
-        _where = scope if scope is not None else true()
-        actions = [r[0] for r in db.session.query(AuditLog.action).filter(_where)
-                   .distinct().order_by(AuditLog.action).all() if r[0]]
-        users = [r[0] for r in db.session.query(AuditLog.username).filter(_where)
-                 .distinct().order_by(AuditLog.username).all() if r[0]]
+        actions, users = _audit_dropdowns(scope)
 
         return render_template(
             "logs.html", logs=logs, actions=actions, users=users,
             # Whose sign-in addresses this viewer may see: a superadmin, everyone's; anyone else,
             # only their own rows' (another admin's address is not in a moderator's remit).
             show_all_ips=bool(current_user.is_superadmin),
-            filters={"q": q, "action": f_action, "user": f_user,
-                     "status": f_status, "sort": sort, "dir": direction})
+            filters=filters)
+
+
+def _audit_filters():
+    """The /logs filter and sort fields from the query string, as the template echoes them back."""
+    return {"q": (request.args.get("q") or "").strip(),
+            "action": (request.args.get("action") or "").strip(),
+            "user": (request.args.get("user") or "").strip(),
+            "status": (request.args.get("status") or "").strip(),   # "" | ok | fail
+            "sort": request.args.get("sort", "timestamp"),
+            "dir": "asc" if request.args.get("dir") == "asc" else "desc"}
+
+
+def _filtered_audit_query(scope, filters):
+    """The AuditLog rows inside `scope` that match the /logs filters, in the chosen order."""
+    q, f_action, f_user, f_status = (filters["q"], filters["action"], filters["user"],
+                                     filters["status"])
+    query = AuditLog.query if scope is None else AuditLog.query.filter(scope)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(AuditLog.target.ilike(like),
+                                 AuditLog.detail.ilike(like),
+                                 AuditLog.username.ilike(like)))
+    if f_action:
+        query = query.filter(AuditLog.action == f_action)
+    if f_user:
+        query = query.filter(AuditLog.username == f_user)
+    if f_status == "ok":
+        query = query.filter(AuditLog.success.is_(True))
+    elif f_status == "fail":
+        query = query.filter(AuditLog.success.is_(False))
+
+    sort_cols = {"timestamp": AuditLog.timestamp, "username": AuditLog.username,
+                 "action": AuditLog.action, "target": AuditLog.target}
+    col = sort_cols.get(filters["sort"], AuditLog.timestamp)
+    return query.order_by(col.asc() if filters["dir"] == "asc" else desc(col))
+
+
+def _audit_dropdowns(scope):
+    """The distinct actions and usernames inside `scope`, for the filter dropdowns."""
+    _where = scope if scope is not None else true()
+    actions = [r[0] for r in db.session.query(AuditLog.action).filter(_where)
+               .distinct().order_by(AuditLog.action).all() if r[0]]
+    users = [r[0] for r in db.session.query(AuditLog.username).filter(_where)
+             .distinct().order_by(AuditLog.username).all() if r[0]]
+    return actions, users

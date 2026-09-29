@@ -55,6 +55,8 @@ Trigger it one of two ways:
 - **In the panel:** *Panel Server → Update*. This is **CI-gated** — it only moves to a commit whose checks have all passed — and runs detached so it survives its own restart. Also available via the Telegram/Discord `/update` command.
 - **From the shell:** re-run the same command (or `bash install.sh` from the checkout). A manual re-run pulls the branch tip directly (not CI-gated), so do it when you know the tip is good.
 
+**Versions are dates.** The panel's version is the date of the commit it runs, in UTC, written without leading zeros: `2026.9.26`. It is always shown with the short commit (`2026.9.26 · a1b2c3d` in the footer), because every commit made on the same day shares the date. Nothing is bumped by hand; a copy downloaded as a ZIP from GitHub reads the date from its `VERSION` file, which git fills in when it builds the archive.
+
 **What the updater does** — the same safe path either way:
 
 1. **Checks if there's anything to do.** If you're already on the target version it stops here — no snapshot, panel left running. A commit the panel already contains leaves it where it is. It also stops here, saying "Not updated: held at …" and why, when the commit it was given cannot be verified, or would move the panel sideways rather than forward. An in-panel update that stops at this step (that, or an unreachable update source) is reported on the update card with the installer's reason.
@@ -112,7 +114,8 @@ sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing
 
 ## Features
 
-**Game servers**
+### Game servers
+
 - One-click install of any LinuxGSM game (Garry's Mod, Minecraft, CS2/CS:Source, TF2, ARMA 3, Rust, and 130+ more), including LinuxGSM itself and the ports it needs.
 - Real-time WebSocket console, command sending, per-game CPU/RAM/uptime tiles, and live current/max player counts (gamedig, with console + LinuxGSM-query fallbacks). gamedig is installed on each host from a hash-locked lockfile in `tools/gamedig`, updated through reviewed Dependabot pull requests.
 - Player-aware control — start/stop/restart/update/validate and more; restart, stop, backups, mod changes, and host reboots can wait until a server is empty.
@@ -120,11 +123,13 @@ sudo rmdir /usr/local/lib/linuxgsm-panel 2>/dev/null || true   # only if nothing
 - **Garry's Mod content mounting** — install Counter-Strike: Source and other Source-engine games' content (via LinuxGSM) so GMod maps and props render instead of showing missing-texture errors. One shared copy per host, mounted read-only into each GMod server, with per-server enable/disable, one-click uninstall, a free-disk readout, and a weekly content auto-update cron.
 - Per-server LinuxGSM alerts (Discord, Telegram, email, Pushover, Slack, Gotify, ntfy…).
 
-**Backups**
+### Backups
+
 - One-click and scheduled backups of the panel (DB, settings, keys) and of each game server (LinuxGSM full backups), with retention, download, and restore.
 - Per-server schedules override a global default; player-aware (busy servers queue) and disk-aware (won't start a backup that can't fit).
 
-**Access, security & hosts**
+### Access, security & hosts
+
 - Multi-user RBAC (Super Admin / Server Admin / Moderator / Viewer) — groups set per-action permissions and per-server access, enforced server-side on every route.
 - Fine-grained moderation (**kick / ban / announce** individually) and superadmin-defined **custom console commands** with a charset-validated argument, granted per group.
 - One host page for the panel and every remote: specs, live per-core resources, OS updates, UFW firewall, power controls, Ubuntu Pro, SSH lockdown, and lockout-safe port/bind changes.
@@ -253,6 +258,8 @@ bash tools/run-tests.sh    # compile, flake8, unit + smoke tests, shellcheck
 ```
 
 CI runs the same suite on every push and PR, plus CodeQL, Bandit, Semgrep, a dependency audit, and coverage-guided fuzzing (`tests/fuzz/`).
+
+The panel's own JavaScript (`static/js/`) is measured separately, in a real browser: `tools/js_coverage/run.py` boots a seeded panel in a throwaway copy of the tree, with every host command answered by a fake host, walks its pages and controls in headless Chrome, and writes V8's coverage as LCOV (`python tools/js_coverage/run.py --summary js-coverage.txt` with Chrome or Chromium installed; it never touches `data/`). CI sends that to Codacy beside the Python report.
 
 ### Layout
 

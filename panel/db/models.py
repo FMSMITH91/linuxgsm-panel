@@ -47,7 +47,8 @@ class EncryptedString(db.TypeDecorator):
     these: the brute-force counter filters on it.
 
     Legacy plaintext rows keep working — decrypt_secret() passes an unencrypted value straight
-    through — so an upgrade cannot lock anyone out of their own hosts while the migration runs."""
+    through — so an upgrade cannot lock anyone out of their own hosts while the migration runs.
+    """
 
     impl = db.Text
     cache_ok = True
@@ -73,6 +74,7 @@ class EncryptedString(db.TypeDecorator):
             # existing caller behaves exactly as before; the two that must tell them apart now can.
             return UnreadableSecret()
         return out
+
 
 # How many previous passwords an account may not go straight back to. Each one costs a bcrypt
 # comparison (~0.2s at cost 12) on a password change, so this is a small number on purpose — it
@@ -125,6 +127,7 @@ def _validate_port(key, value):
     if not (_MIN_PORT <= n <= _MAX_PORT):
         raise ValueError("%s must be between %d and %d, got %d" % (key, _MIN_PORT, _MAX_PORT, n))
     return n
+
 
 # Association table: group -> permission strings
 group_permissions = db.Table(
@@ -214,9 +217,11 @@ class User(UserMixin, db.Model):
     groups = db.relationship("Group", secondary="user_groups", back_populates="users")
 
     def get_ui_prefs(self):
-        """This user's saved UI layout, or {}. A NULL column (ALTER-added on an upgraded install),
-        a corrupt blob, or a key we no longer honour must fall back to the default layout rather
-        than raise into a page render."""
+        """Return this user's saved UI layout, or {}.
+
+        A NULL column (ALTER-added on an upgraded install), a corrupt blob, or a key we no longer
+        honour must fall back to the default layout rather than raise into a page render.
+        """
         try:
             prefs = json.loads(self.ui_prefs or "{}")
         except (ValueError, TypeError):
@@ -226,8 +231,10 @@ class User(UserMixin, db.Model):
         return {k: v for k, v in prefs.items() if k in UI_PREF_KEYS}
 
     def set_ui_pref(self, key, value):
-        """Set one whitelisted layout key, or clear it with value=None (which restores the
-        default, since absent IS the default). Caller commits."""
+        """Set one whitelisted layout key, or clear it with value=None.
+
+        Clearing restores the default, since absent IS the default. Caller commits.
+        """
         if key not in UI_PREF_KEYS:
             return
         prefs = self.get_ui_prefs()
@@ -243,8 +250,10 @@ class User(UserMixin, db.Model):
         return (code or "").strip().lower().replace("-", "").replace(" ", "")
 
     def set_backup_codes(self, plain_codes):
-        """Store one-time 2FA backup codes as bcrypt hashes (the plaintext is shown to
-        the user once and never persisted)."""
+        """Store one-time 2FA backup codes as bcrypt hashes.
+
+        The plaintext is shown to the user once and never persisted.
+        """
         from panel.security.auth import run_off_hub   # lazy: auth imports this module
         # Off the eventlet hub: eight cost-12 hashes held every other request for ~2-3s.
         self.backup_codes = json.dumps([
@@ -253,8 +262,10 @@ class User(UserMixin, db.Model):
         ])
 
     def use_backup_code(self, code):
-        """If `code` matches an unused backup code, consume it (one-time) and return
-        True. Caller must commit."""
+        """Consume `code` if it matches an unused backup code (one-time); return True if it did.
+
+        Caller must commit.
+        """
         code = self._norm_code(code)
         if not code or not self.backup_codes:
             return False
@@ -278,7 +289,8 @@ class User(UserMixin, db.Model):
 
         Every caller that changes an EXISTING account's password goes through here, so the history
         cannot be maintained in one place and forgotten in another — that is the whole reason this
-        is a method and not two lines at each call site. Caller still commits."""
+        is a method and not two lines at each call site. Caller still commits.
+        """
         old_hash = (self.password_hash or "").strip()
         if old_hash:
             try:
@@ -300,7 +312,8 @@ class User(UserMixin, db.Model):
         hundred milliseconds each. Call it LAST, after every free check has already rejected what
         it can, and only where a human picked the password: a generated one is random, and paying
         a second of hashing to rule out a collision that will not happen is not a trade worth
-        making."""
+        making.
+        """
         if not candidate:
             return False
         try:
@@ -352,8 +365,11 @@ class User(UserMixin, db.Model):
 
     # ── API token (Bearer auth for scripts/bots; inherits the user's RBAC) ──
     def generate_api_token(self):
-        """Mint a new API token: return the plaintext (shown to the user ONCE) and store only its
-        SHA-256 hash, so a leaked DB never yields a working token. Replaces any existing token."""
+        """Mint a new API token: return the plaintext (shown to the user ONCE), store its hash.
+
+        Only the SHA-256 hash is stored, so a leaked DB never yields a working token. Replaces any
+        existing token.
+        """
         import hashlib
         import secrets
         token = "lgsm_" + secrets.token_hex(24)
@@ -369,8 +385,10 @@ class User(UserMixin, db.Model):
 
     @staticmethod
     def by_api_token(token):
-        """The ACTIVE user whose token hashes to `token`, or None. Lookup is by the unique hash
-        index — an unknown token simply misses."""
+        """Return the ACTIVE user whose token hashes to `token`, or None.
+
+        Lookup is by the unique hash index — an unknown token simply misses.
+        """
         import hashlib
         if not token:
             return None
@@ -418,6 +436,7 @@ LOCAL_HOST_LABEL = "Panel Server"
 
 class RemoteServer(db.Model):
     """A remote VPS running LinuxGSM servers."""
+
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     host = db.Column(EncryptedString, nullable=False)
@@ -454,32 +473,43 @@ class RemoteServer(db.Model):
 
     @property
     def display_name(self):
-        """User-facing name. The local host is always shown as 'Panel Server' so the
-        label is consistent with the nav and the Panel Server management page,
-        regardless of whatever name was typed when it was added."""
+        """User-facing name.
+
+        The local host is always shown as 'Panel Server' so the label is consistent with the nav
+        and the Panel Server management page, regardless of whatever name was typed when it was
+        added.
+        """
         return LOCAL_HOST_LABEL if self.is_local else self.name
 
     @property
     def display_host(self):
-        """Address to show for this host. The local host's stored host is 127.0.0.1
-        (loopback SSH), which is meaningless to a user — show the public IP instead."""
+        """Address to show for this host.
+
+        The local host's stored host is 127.0.0.1 (loopback SSH), which is meaningless to a user —
+        show the public IP instead.
+        """
         if self.is_local:
             return self.public_ip or ""
         return self.host
 
     @property
     def connect_host(self):
-        """The PUBLIC address to hand players for a game connect string — the resolved public IP
-        when known, else the address the host was added with. For a Tailscale-managed remote,
-        `host` is a tailnet-only MagicDNS name players can't reach, so the public IP must win.
-        (public_ip is resolved and cached by the /api/servers poll that every server list runs.)"""
+        """The PUBLIC address to hand players for a game connect string.
+
+        That is the resolved public IP when known, else the address the host was added with. For a
+        Tailscale-managed remote, `host` is a tailnet-only MagicDNS name players can't reach, so
+        the public IP must win. (public_ip is resolved and cached by the /api/servers poll that
+        every server list runs.)
+        """
         return self.public_ip or self.display_host
 
     @property
     def cached_stats(self):
         """Last known live stats (cpu_percent/memory/disk/uptime) as a dict, or None.
+
         Rendered on page load so the card shows real numbers immediately instead of a
-        spinner; the background poll only repaints when a value actually changes."""
+        spinner; the background poll only repaints when a value actually changes.
+        """
         if not self.stats_cache:
             return None
         try:
@@ -494,9 +524,12 @@ class RemoteServer(db.Model):
 
     @property
     def cached_pro(self):
-        """Last known Ubuntu Pro status as {"data": {...}, "ts": epoch}, or None. Served/rendered
-        instantly so the page never re-spawns the slow `pro status` client just to show a state that
-        only changes through the panel (attach/detach/service, which refresh this)."""
+        """Last known Ubuntu Pro status as {"data": {...}, "ts": epoch}, or None.
+
+        Served/rendered instantly so the page never re-spawns the slow `pro status` client just to
+        show a state that only changes through the panel (attach/detach/service, which refresh
+        this).
+        """
         if not self.pro_cache:
             return None
         try:
@@ -510,8 +543,10 @@ class RemoteServer(db.Model):
 
     @property
     def host_key_fingerprint(self):
-        """SHA256 fingerprint of the pinned SSH host key (OpenSSH format), or "" if none
-        is pinned yet. Shown so the operator can eyeball what they're trusting."""
+        """SHA256 fingerprint of the pinned SSH host key (OpenSSH format), or "" if none is pinned.
+
+        Shown so the operator can eyeball what they're trusting.
+        """
         if isinstance(self.host_key, UnreadableSecret):
             # A pin IS stored, this host just cannot read it. Saying "" here would print "none
             # pinned" in the UI while get_connection refuses with "the stored key cannot be
@@ -557,6 +592,7 @@ _NO_UPDATE_GAMES = frozenset({"cod", "coduo", "cod2", "cod4", "codwaw"})
 
 class GameServer(db.Model):
     """A single game server instance managed by LinuxGSM."""
+
     id = db.Column(db.Integer, primary_key=True)
     remote_id = db.Column(db.Integer, db.ForeignKey("remote_server.id"), nullable=False, index=True)
     name = db.Column(db.String(120), nullable=False)
@@ -622,10 +658,13 @@ class GameServer(db.Model):
 
     @property
     def supports_update(self):
-        """True if this game exposes LinuxGSM's `update` command. The fetched command list is
-        authoritative; before it's been fetched (empty) we assume yes, EXCEPT for games known to
-        lack update (the Call of Duty family isn't SteamCMD-based), so their Update button is
-        correctly hidden even on a freshly imported server whose commands aren't populated yet."""
+        """True if this game exposes LinuxGSM's `update` command.
+
+        The fetched command list is authoritative; before it's been fetched (empty) we assume yes,
+        EXCEPT for games known to lack update (the Call of Duty family isn't SteamCMD-based), so
+        their Update button is correctly hidden even on a freshly imported server whose commands
+        aren't populated yet.
+        """
         cmds = {c.get("cmd") for c in self.get_commands()}
         if cmds:
             return "update" in cmds
@@ -638,7 +677,8 @@ class GameServer(db.Model):
         game and joins the server. `host` is the already-resolved public IP or
         hostname (validated upstream); we only ever interpolate it plus the
         integer port, so there is nothing shell/HTML-injectable here. Returns ""
-        for games with no scheme so the UI shows a copyable ip:port instead."""
+        for games with no scheme so the UI shows a copyable ip:port instead.
+        """
         if host and self.game_type in STEAM_CONNECT_GAMES:
             return f"steam://connect/{host}:{self.port}"
         return ""
@@ -654,10 +694,11 @@ class GameServer(db.Model):
 
     @property
     def lgsm_name(self):
-        """The LinuxGSM script/instance name — ALWAYS '{game_type}server' (e.g.
-        'codserver'), regardless of the custom instance name. Only the Ubuntu user
-        (short_name) is renamed; the LinuxGSM command stays canonical, otherwise
-        LinuxGSM can't find its game data."""
+        """The LinuxGSM script/instance name — ALWAYS '{game_type}server' (e.g. 'codserver').
+
+        That holds regardless of the custom instance name. Only the Ubuntu user (short_name) is
+        renamed; the LinuxGSM command stays canonical, otherwise LinuxGSM can't find its game data.
+        """
         return f"{self.game_type}server"
 
     @property
@@ -666,8 +707,10 @@ class GameServer(db.Model):
 
     @property
     def console_log(self):
-        """LinuxGSM console log path: /home/<user>/log/console/<lgsm_name>-console.log
-        (the file is named after the script/selfname, not the user)."""
+        """Path of the LinuxGSM console log: /home/<user>/log/console/<lgsm_name>-console.log.
+
+        The file is named after the script/selfname, not the user.
+        """
         return f"/home/{self.short_name}/log/console/{self.lgsm_name}-console.log"
 
 
@@ -688,7 +731,9 @@ class CustomCommand(db.Model):
     placeholder for one value the operator fills in at run time; that value is validated
     against `argument_pattern` (default CUSTOM_ARG_DEFAULT_PATTERN) before being substituted,
     so a mod who is given the command can't inject additional console/shell commands through it.
-    `scope_*` limits which servers the command applies to (all / a game engine / one game_type)."""
+    `scope_*` limits which servers the command applies to (all / a game engine / one game_type).
+    """
+
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(80), nullable=False)               # button label
     command_template = db.Column(db.String(500), nullable=False)  # e.g. "map {}" or "say Restarting"
@@ -726,7 +771,9 @@ class ServerTag(db.Model):
     actions and notification routing only mean anything against one common vocabulary. Editing is
     gated on MANAGE_SERVERS; reading is not. Which tags a user is FILTERING by is a separate,
     personal thing — deliberately not persisted at all (see dashboard.html), so it is not a
-    UI_PREF_KEY and set_ui_pref would silently ignore it."""
+    UI_PREF_KEY and set_ui_pref would silently ignore it.
+    """
+
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(32), unique=True, nullable=False)
     color = db.Column(db.String(7), default="")   # "#rrggbb", or "" for the default chip colour
@@ -753,9 +800,12 @@ game_server_tags = db.Table(
 
 
 class GlobalBan(db.Model):
-    """A SteamID banned across EVERY Source/GoldSrc (valve-engine) server on every host — ban a
-    cheater once and they're gone everywhere. Applied through each server's own console
-    (`banid 0 <id>; writeid`), so it uses the game's native ban list and persists across restarts."""
+    """A SteamID banned across EVERY Source/GoldSrc (valve-engine) server on every host.
+
+    Ban a cheater once and they're gone everywhere. Applied through each server's own console
+    (`banid 0 <id>; writeid`), so it uses the game's native ban list and persists across restarts.
+    """
+
     id = db.Column(db.Integer, primary_key=True)
     steamid = db.Column(db.String(48), unique=True, nullable=False)   # canonical STEAM_x:y:z or [U:x:y]
     player_name = db.Column(db.String(80), default="")               # optional label, for reference
@@ -789,6 +839,7 @@ class Invite(db.Model):
     created it and frozen here — the invitee chooses their name and password and nothing else,
     because anything else would be a privilege they awarded themselves.
     """
+
     id = db.Column(db.Integer, primary_key=True)
     token_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
@@ -835,8 +886,11 @@ class Invite(db.Model):
 
     @property
     def is_usable(self):
-        """Unused and unexpired. Both halves matter: a used invite must not be reusable, and an
-        old one must not be usable forever if a link leaks out of someone's inbox."""
+        """Unused and unexpired.
+
+        Both halves matter: a used invite must not be reusable, and an old one must not be usable
+        forever if a link leaks out of someone's inbox.
+        """
         return (self.used_at is None and self.revoked_at is None
                 and (self.expires_at or utcnow()) > utcnow())
 
@@ -851,7 +905,8 @@ class Invite(db.Model):
         `creator` is the User row (or None if the account is gone). A missing creator fails closed:
         the row is deleted or the id dangles, and either way nobody is standing behind the invite.
         An invite with no creator recorded at all (created_by_id NULL — only fixtures do that) is
-        left alone, because there is no authority to have lapsed."""
+        left alone, because there is no authority to have lapsed.
+        """
         if self.created_by_id is None:
             return True
         if creator is None or not creator.is_active:
@@ -862,8 +917,11 @@ class Invite(db.Model):
 
     @property
     def state(self):
-        """One word for the list. Order matters: a link that was redeemed AND has since expired is
-        still 'used' — what happened to it is the interesting fact, not the clock."""
+        """One word for the list.
+
+        Order matters: a link that was redeemed AND has since expired is still 'used' — what
+        happened to it is the interesting fact, not the clock.
+        """
         if self.used_at is not None:
             return "used"
         if self.revoked_at is not None:
@@ -883,6 +941,7 @@ class Invite(db.Model):
 
 class SetupState(db.Model):
     """Tracks multi-step setup progress."""
+
     id = db.Column(db.Integer, primary_key=True)
     step = db.Column(db.String(64), default="welcome")
     complete = db.Column(db.Boolean, default=False)
@@ -890,8 +949,10 @@ class SetupState(db.Model):
 
 
 class MetricSample(db.Model):
-    """A periodic snapshot of one game server's live figures (game CPU%, RAM MB, player count) for the
-    history charts. Written by the metrics-history sampler (~1/min) and pruned after ~14 days.
+    """A periodic snapshot of one game server's live figures, for the history charts.
+
+    The figures are game CPU%, RAM MB and player count. Written by the metrics-history sampler
+    (~1/min) and pruned after ~14 days.
 
     No FK, so the write stays cheap — but the orphans do NOT "just age out" harmlessly, which is
     what this used to say. SQLite hands a deleted row's id straight to the next INSERT (plain
@@ -899,7 +960,9 @@ class MetricSample(db.Model):
     server whose id was recycled shows the DELETED server's CPU, RAM and player counts on its
     history chart — silently wrong data on the page an operator uses to decide whether a box is
     overloaded. The after_delete listener at the bottom of this module clears them with the row,
-    which is the same rule the per-remote caches and panel_state already follow."""
+    which is the same rule the per-remote caches and panel_state already follow.
+    """
+
     # The history charts ask "one server, last 7 (or 1) days, in time order" — server_id AND ts
     # together. With only the two single-column indexes SQLite picked server_id and then sorted
     # the whole 14-day slice in a temp B-tree to satisfy ORDER BY. Measured on 806k rows (40
@@ -917,7 +980,9 @@ class MetricSample(db.Model):
 class HostSample(db.Model):
     """A periodic snapshot of one host's whole-VPS figures (CPU%, RAM%, disk%) for the history charts.
 
-    Cleared when the host row is deleted — see MetricSample for why aging out is not enough."""
+    Cleared when the host row is deleted — see MetricSample for why aging out is not enough.
+    """
+
     # Same (id, ts) shape as MetricSample, and this one was worse: with far fewer distinct hosts
     # than servers, SQLite preferred the ts index and scanned half the table before filtering
     # remote_id. Measured on 100k rows: 7.7ms -> 2.7ms, a 2.8x improvement on the same query the
@@ -932,10 +997,14 @@ class HostSample(db.Model):
 
 
 class UserSession(db.Model):
-    """One active login (a device/browser). The random `sid` is embedded in the login cookie
-    (User.get_id) and checked on every request, so a session can be listed and revoked INDIVIDUALLY
-    from the account page — deleting the row makes that one cookie fail the loader, without touching
-    the others. (Signing out *everywhere* still bumps User.auth_epoch, which invalidates them all.)"""
+    """One active login (a device/browser).
+
+    The random `sid` is embedded in the login cookie (User.get_id) and checked on every request, so
+    a session can be listed and revoked INDIVIDUALLY from the account page — deleting the row makes
+    that one cookie fail the loader, without touching the others. (Signing out *everywhere* still
+    bumps User.auth_epoch, which invalidates them all.)
+    """
+
     __tablename__ = "user_session"
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), index=True, nullable=False)
@@ -1037,8 +1106,9 @@ ENCRYPTED_AT_REST_COLUMNS = {
 
 
 def encrypt_at_rest_columns():
-    """Encrypt any rows in ENCRYPTED_AT_REST_COLUMNS still stored as plaintext. Returns the number
-    of rows rewritten. Idempotent, and safe to call on every startup.
+    """Encrypt any rows in ENCRYPTED_AT_REST_COLUMNS still stored as plaintext.
+
+    Returns the number of rows rewritten. Idempotent, and safe to call on every startup.
 
     A function rather than inline startup code so it can be tested — and it is genuinely
     load-bearing: an ordinary save does NOT convert a legacy row, because SQLAlchemy writes only
@@ -1053,7 +1123,8 @@ def encrypt_at_rest_columns():
 
     Built with SQLAlchemy Core rather than formatted SQL strings: the table and column names come
     from the constant above and were never attacker-controlled, but SQL assembled by string
-    formatting is worth avoiding on sight — and Core expresses this more clearly anyway."""
+    formatting is worth avoiding on sight — and Core expresses this more clearly anyway.
+    """
     from sqlalchemy import Text as _SAText, select, type_coerce, update
     from panel.core.config import is_encrypted
     targets = [(RemoteServer, ENCRYPTED_AT_REST_COLUMNS["remote_server"]),
@@ -1082,7 +1153,8 @@ def _anonymise_ip(ip):
     every old row on every startup.
 
     Anything that will not parse as an IP returns "" rather than being kept. A value that got in
-    without being an address is not something to preserve on the off-chance."""
+    without being an address is not something to preserve on the off-chance.
+    """
     import ipaddress
     try:
         addr = ipaddress.ip_address((ip or "").strip())
@@ -1096,7 +1168,8 @@ def anonymise_audit_ips(days):
     """Reduce audit IPs older than `days` to their network prefix. Returns rows changed.
 
     Cannot affect login throttling: the brute-force counter looks back LOGIN_WINDOW, which is 300
-    SECONDS, so it never reads a row old enough for this to touch."""
+    SECONDS, so it never reads a row old enough for this to touch.
+    """
     # Coerce FIRST. config.json is hand-editable and "90" (quoted) is an easy thing to write;
     # comparing a str to an int raises TypeError, the caller in app.py swallows it with a bare
     # except, and the control then silently never runs while the config still says it is on. A
@@ -1122,70 +1195,88 @@ def anonymise_audit_ips(days):
     return len(rows)
 
 
+# The light migrations: (table, column) -> the ALTER TABLE that adds that column to a database
+# created by an older version. A new model column needs its entry here in the same commit — a fresh
+# DB (create_all) always has it, so only an UPGRADED install would throw "no such column" without
+# one. A smoke check parses this map out of the source, so keep each entry's `("t", "c"): "ALTER..."`
+# shape.
+_LIGHT_MIGRATIONS = {
+    ("game_server", "commands"): "ALTER TABLE game_server ADD COLUMN commands TEXT DEFAULT '[]'",
+    ("game_server", "daily_restart_at"):
+        "ALTER TABLE game_server ADD COLUMN daily_restart_at VARCHAR(5) DEFAULT '05:00'",
+    ("game_server", "query_type"): "ALTER TABLE game_server ADD COLUMN query_type VARCHAR(40)",
+    ("game_server", "daily_restart"): "ALTER TABLE game_server ADD COLUMN daily_restart BOOLEAN DEFAULT 0",
+    ("game_server", "notify_when_empty"): "ALTER TABLE game_server ADD COLUMN notify_when_empty BOOLEAN DEFAULT 0",
+    ("game_server", "peak_players"): "ALTER TABLE game_server ADD COLUMN peak_players INTEGER DEFAULT 0",
+    ("game_server", "restart_pending"): "ALTER TABLE game_server ADD COLUMN restart_pending BOOLEAN DEFAULT 0",
+    ("game_server", "backup_pending"): "ALTER TABLE game_server ADD COLUMN backup_pending BOOLEAN DEFAULT 0",
+    ("game_server", "stop_pending"): "ALTER TABLE game_server ADD COLUMN stop_pending BOOLEAN DEFAULT 0",
+    # Empty on upgrade: a failure that already happened has no reason recorded anywhere to
+    # backfill from, and DEFAULT 1 for retryable is the safe guess — it offers the button
+    # rather than withholding it from a row whose cause nobody can name any more.
+    ("game_server", "install_error"):
+        "ALTER TABLE game_server ADD COLUMN install_error TEXT DEFAULT ''",
+    ("game_server", "install_retryable"):
+        "ALTER TABLE game_server ADD COLUMN install_retryable BOOLEAN DEFAULT 1",
+    ("game_server", "content_games"):
+        "ALTER TABLE game_server ADD COLUMN content_games TEXT DEFAULT ''",
+    ("invite", "revoked_at"): "ALTER TABLE invite ADD COLUMN revoked_at DATETIME",
+    ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
+    ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",
+    ("remote_server", "pro_cache"): "ALTER TABLE remote_server ADD COLUMN pro_cache TEXT DEFAULT ''",
+    ("remote_server", "host_key"): "ALTER TABLE remote_server ADD COLUMN host_key TEXT DEFAULT ''",
+    ("remote_server", "timezone"):
+        "ALTER TABLE remote_server ADD COLUMN timezone VARCHAR(64) DEFAULT ''",
+    ("user", "totp_secret"): "ALTER TABLE user ADD COLUMN totp_secret TEXT",
+    ("user", "totp_enabled"): "ALTER TABLE user ADD COLUMN totp_enabled BOOLEAN DEFAULT 0",
+    ("user", "auth_epoch"): "ALTER TABLE user ADD COLUMN auth_epoch INTEGER DEFAULT 0",
+    ("user", "backup_codes"): "ALTER TABLE user ADD COLUMN backup_codes TEXT DEFAULT ''",
+    ("user", "language"): "ALTER TABLE user ADD COLUMN language VARCHAR(5) DEFAULT 'en'",
+    ("user", "otp_nag_dismissed"): "ALTER TABLE user ADD COLUMN otp_nag_dismissed BOOLEAN DEFAULT 0",
+    ("user", "api_token"): "ALTER TABLE user ADD COLUMN api_token VARCHAR(64)",
+    ("user", "ui_prefs"): "ALTER TABLE user ADD COLUMN ui_prefs TEXT DEFAULT '{}'",
+    ("user", "last_totp_step"): "ALTER TABLE user ADD COLUMN last_totp_step INTEGER DEFAULT 0",
+    # DEFAULT 0: every account that already exists chose its own password, or has been using
+    # whatever it was given for long enough that a forced change on upgrade would be a surprise
+    # rather than a protection. The flag only ever starts true for a password set from now on.
+    ("user", "must_change_password"):
+        "ALTER TABLE user ADD COLUMN must_change_password BOOLEAN DEFAULT 0 NOT NULL",
+    # Empty on upgrade: the panel never stored past passwords, so there is no history to
+    # backfill. It starts filling on the next change each account makes.
+    ("user", "password_history"): "ALTER TABLE user ADD COLUMN password_history TEXT DEFAULT ''",
+    # DEFAULT 1, unlike the model's default of False, and only here: this DDL runs once, on
+    # an install that already has session rows, and its DEFAULT exists solely to backfill
+    # them. Guessing "remembered" for those is the kind guess — the expiry sweep then gives
+    # them the LONGER window, so nobody is signed out by the upgrade itself; a plain session
+    # that is really dead lingers in the list a few days and then goes. Guessing the other way
+    # signs out every remember-me login the first time they idle for an afternoon. New rows
+    # never see this default: every insert goes through the ORM, which always supplies the
+    # real value.
+    ("user_session", "remember"):
+        "ALTER TABLE user_session ADD COLUMN remember BOOLEAN DEFAULT 1 NOT NULL",
+}
+
+
 def _run_light_migrations():
     """Add columns that may be missing on databases created by older versions.
-    SQLAlchemy's create_all() never ALTERs existing tables, so do it by hand."""
-    from sqlalchemy import inspect, text
+
+    SQLAlchemy's create_all() never ALTERs existing tables, so do it by hand.
+    """
+    from sqlalchemy import inspect
     insp = inspect(db.engine)
     existing = {t: {c["name"] for c in insp.get_columns(t)} for t in insp.get_table_names()}
-    wanted = {
-        ("game_server", "commands"): "ALTER TABLE game_server ADD COLUMN commands TEXT DEFAULT '[]'",
-        ("game_server", "daily_restart_at"):
-            "ALTER TABLE game_server ADD COLUMN daily_restart_at VARCHAR(5) DEFAULT '05:00'",
-        ("game_server", "query_type"): "ALTER TABLE game_server ADD COLUMN query_type VARCHAR(40)",
-        ("game_server", "daily_restart"): "ALTER TABLE game_server ADD COLUMN daily_restart BOOLEAN DEFAULT 0",
-        ("game_server", "notify_when_empty"): "ALTER TABLE game_server ADD COLUMN notify_when_empty BOOLEAN DEFAULT 0",
-        ("game_server", "peak_players"): "ALTER TABLE game_server ADD COLUMN peak_players INTEGER DEFAULT 0",
-        ("game_server", "restart_pending"): "ALTER TABLE game_server ADD COLUMN restart_pending BOOLEAN DEFAULT 0",
-        ("game_server", "backup_pending"): "ALTER TABLE game_server ADD COLUMN backup_pending BOOLEAN DEFAULT 0",
-        ("game_server", "stop_pending"): "ALTER TABLE game_server ADD COLUMN stop_pending BOOLEAN DEFAULT 0",
-        # Empty on upgrade: a failure that already happened has no reason recorded anywhere to
-        # backfill from, and DEFAULT 1 for retryable is the safe guess — it offers the button
-        # rather than withholding it from a row whose cause nobody can name any more.
-        ("game_server", "install_error"):
-            "ALTER TABLE game_server ADD COLUMN install_error TEXT DEFAULT ''",
-        ("game_server", "install_retryable"):
-            "ALTER TABLE game_server ADD COLUMN install_retryable BOOLEAN DEFAULT 1",
-        ("game_server", "content_games"):
-            "ALTER TABLE game_server ADD COLUMN content_games TEXT DEFAULT ''",
-        ("invite", "revoked_at"): "ALTER TABLE invite ADD COLUMN revoked_at DATETIME",
-        ("remote_server", "public_ip"): "ALTER TABLE remote_server ADD COLUMN public_ip VARCHAR(45) DEFAULT ''",
-        ("remote_server", "stats_cache"): "ALTER TABLE remote_server ADD COLUMN stats_cache TEXT DEFAULT ''",
-        ("remote_server", "pro_cache"): "ALTER TABLE remote_server ADD COLUMN pro_cache TEXT DEFAULT ''",
-        ("remote_server", "host_key"): "ALTER TABLE remote_server ADD COLUMN host_key TEXT DEFAULT ''",
-        ("remote_server", "timezone"):
-            "ALTER TABLE remote_server ADD COLUMN timezone VARCHAR(64) DEFAULT ''",
-        ("user", "totp_secret"): "ALTER TABLE user ADD COLUMN totp_secret TEXT",
-        ("user", "totp_enabled"): "ALTER TABLE user ADD COLUMN totp_enabled BOOLEAN DEFAULT 0",
-        ("user", "auth_epoch"): "ALTER TABLE user ADD COLUMN auth_epoch INTEGER DEFAULT 0",
-        ("user", "backup_codes"): "ALTER TABLE user ADD COLUMN backup_codes TEXT DEFAULT ''",
-        ("user", "language"): "ALTER TABLE user ADD COLUMN language VARCHAR(5) DEFAULT 'en'",
-        ("user", "otp_nag_dismissed"): "ALTER TABLE user ADD COLUMN otp_nag_dismissed BOOLEAN DEFAULT 0",
-        ("user", "api_token"): "ALTER TABLE user ADD COLUMN api_token VARCHAR(64)",
-        ("user", "ui_prefs"): "ALTER TABLE user ADD COLUMN ui_prefs TEXT DEFAULT '{}'",
-        ("user", "last_totp_step"): "ALTER TABLE user ADD COLUMN last_totp_step INTEGER DEFAULT 0",
-        # DEFAULT 0: every account that already exists chose its own password, or has been using
-        # whatever it was given for long enough that a forced change on upgrade would be a surprise
-        # rather than a protection. The flag only ever starts true for a password set from now on.
-        ("user", "must_change_password"):
-            "ALTER TABLE user ADD COLUMN must_change_password BOOLEAN DEFAULT 0 NOT NULL",
-        # Empty on upgrade: the panel never stored past passwords, so there is no history to
-        # backfill. It starts filling on the next change each account makes.
-        ("user", "password_history"): "ALTER TABLE user ADD COLUMN password_history TEXT DEFAULT ''",
-        # DEFAULT 1, unlike the model's default of False, and only here: this DDL runs once, on
-        # an install that already has session rows, and its DEFAULT exists solely to backfill
-        # them. Guessing "remembered" for those is the kind guess — the expiry sweep then gives
-        # them the LONGER window, so nobody is signed out by the upgrade itself; a plain session
-        # that is really dead lingers in the list a few days and then goes. Guessing the other way
-        # signs out every remember-me login the first time they idle for an afternoon. New rows
-        # never see this default: every insert goes through the ORM, which always supplies the
-        # real value.
-        ("user_session", "remember"):
-            "ALTER TABLE user_session ADD COLUMN remember BOOLEAN DEFAULT 1 NOT NULL",
-    }
-    for (table, col), ddl in wanted.items():
+    for (table, col), ddl in _LIGHT_MIGRATIONS.items():
         if table in existing and col not in existing[table]:
             db.session.execute(text(ddl))
+    _create_declared_indexes(existing)
+    db.session.commit()
+
+
+def _create_declared_indexes(existing):
+    """Create the models' declared indexes on tables that already existed, idempotently.
+
+    `existing` is _run_light_migrations()'s {table: {column, ...}} census of the database.
+    """
     # Indexes the audit-log filters/sort rely on. create_all() adds these on a fresh DB but
     # never to an already-existing table — so (re)create the model's own declared indexes
     # here, idempotently, to keep the /logs page fast as the table grows. Driving this off the
@@ -1205,12 +1296,13 @@ def _run_light_migrations():
         if _model.__tablename__ in existing:
             for ix in _model.__table__.indexes:
                 ix.create(db.engine, checkfirst=True)
-    db.session.commit()
 
 
 def database_stats():
-    """Size of the DB file + its WAL sidecar (bytes) and the audit_log row count —
-    the numbers that tell you whether the DB is growing and worth optimizing."""
+    """Size of the DB file + its WAL sidecar (bytes) and the audit_log row count.
+
+    These are the numbers that tell you whether the DB is growing and worth optimizing.
+    """
     import os
     from panel.core.config import DB_PATH
 
@@ -1232,11 +1324,13 @@ def database_stats():
 
 def _run_maintenance(path):
     """Blocking sqlite maintenance over one short-lived autocommit connection.
+
     ANALYZE is cheap and reliable; the checkpoint and VACUUM are not, and NEITHER of
     them reports failure by raising, so both are read rather than assumed.
     Returns (wal_trimmed, vacuumed): wal_trimmed is True when the TRUNCATE checkpoint
     completed, False when SQLite reported it busy, and None when the pragma returned
-    nothing to read. vacuumed is True only if VACUUM actually ran."""
+    nothing to read. vacuumed is True only if VACUUM actually ran.
+    """
     import sqlite3
     con = sqlite3.connect(path, timeout=20, isolation_level=None)  # autocommit
     try:
@@ -1264,9 +1358,11 @@ def _run_maintenance(path):
 
 
 def optimize_database():
-    """Reclaim space + refresh stats: WAL checkpoint + ANALYZE (reliable) plus a
-    best-effort VACUUM. Returns (ok, message, {"before","after","freed"} bytes).
-    Never raises — any failure yields (False, friendly message)."""
+    """Reclaim space + refresh stats: WAL checkpoint + ANALYZE (reliable) plus a best-effort VACUUM.
+
+    Returns (ok, message, {"before","after","freed"} bytes).
+    Never raises — any failure yields (False, friendly message).
+    """
     import os
     from panel.core.config import DB_PATH
     path = str(DB_PATH)
@@ -1327,9 +1423,11 @@ def optimize_database():
 
 
 def _silent_remove(p):
-    """Delete a path if present, ignoring 'already gone' / permission races. For
-    throwaway temp and stale WAL/SHM files where a failed remove isn't worth
-    surfacing."""
+    """Delete a path if present, ignoring 'already gone' / permission races.
+
+    For throwaway temp and stale WAL/SHM files where a failed remove isn't worth
+    surfacing.
+    """
     import os
     try:
         os.remove(p)
@@ -1338,10 +1436,12 @@ def _silent_remove(p):
 
 
 def _db_quick_check(path):
-    """True if the SQLite file passes PRAGMA quick_check (i.e. not corrupt). A
-    missing/empty file counts as healthy — a fresh DB will just be created. Any
+    """True if the SQLite file passes PRAGMA quick_check (i.e. not corrupt).
+
+    A missing/empty file counts as healthy — a fresh DB will just be created. Any
     open/read error (a malformed image, "file is not a database", I/O error from a
-    bad drive) counts as NOT healthy."""
+    bad drive) counts as NOT healthy.
+    """
     import os
     import sqlite3
     if not os.path.exists(path) or os.path.getsize(path) == 0:
@@ -1364,64 +1464,82 @@ def _ensure_db_healthy(path=None):
     known-good backup (SQLite's online backup — consistent even mid-write). If it's
     corrupt, restore that backup — moving the corrupt file aside first so nothing is
     destroyed — so the panel comes back on the last good data instead of failing to
-    boot. Best-effort: it never raises, so it can't itself block startup."""
-    import os
-    import shutil
-    import sqlite3
-    import time as _t
+    boot. Best-effort: it never raises, so it can't itself block startup.
+    """
     from panel.core.config import DB_PATH
     path = path or str(DB_PATH)
     backup = path + ".backup"
     try:
         if _db_quick_check(path):
-            # Healthy — refresh the rolling backup via the online backup API.
-            if os.path.exists(path) and os.path.getsize(path) > 0:
-                tmp = backup + ".tmp"
-                src = dst = None
-                ok_copy = False
-                try:
-                    src = sqlite3.connect(path, timeout=10)
-                    dst = sqlite3.connect(tmp)
-                    with dst:
-                        src.backup(dst)
-                    ok_copy = True
-                except sqlite3.DatabaseError:
-                    ok_copy = False   # source unreadable mid-copy — keep the existing backup
-                finally:
-                    for _c in (dst, src):
-                        if _c is not None:
-                            try:
-                                _c.close()
-                            except sqlite3.Error:
-                                _log.debug("connection already broken — nothing to close", exc_info=True)
-                # Swap the temp copy in only after the handles are closed (Windows won't
-                # rename an open file) and only if the copy actually completed.
-                if ok_copy:
-                    os.replace(tmp, backup)
-                else:
-                    _silent_remove(tmp)
+            _refresh_rolling_backup(path, backup)
             return
-        # Corrupt — always move the bad file aside (preserved for forensics/recovery,
-        # never deleted), then either restore the last good backup or let the app
-        # build a fresh DB. Either way the panel starts instead of crash-looping.
-        aside = "%s.corrupt-%d" % (path, int(_t.time()))
-        try:
-            os.replace(path, aside)
-        except OSError:
-            _log.debug("couldn't move it (perms) — fall through; a fresh DB gets created", exc_info=True)
-        # Drop the corrupt DB's stale WAL/SHM so they aren't replayed over a new file.
-        for ext in ("-wal", "-shm"):
-            _silent_remove(path + ext)
-        if os.path.exists(backup) and _db_quick_check(backup):
-            _log.error("database at %s is corrupt — restored last good backup "
-                       "(corrupt copy saved to %s)", path, aside)
-            shutil.copy2(backup, path)
-        else:
-            _log.error("database at %s is corrupt and no healthy backup exists — moved "
-                       "it aside (%s) so the panel can start fresh; use the recovery "
-                       "tool if you need to salvage its data", path, aside)
+        _set_corrupt_db_aside(path, backup)
     except Exception:
         _log.exception("database self-heal check failed (continuing startup)")
+
+
+def _refresh_rolling_backup(path, backup):
+    """Refresh the rolling backup of the HEALTHY database at `path` via the online backup API.
+
+    A missing or empty `path` has nothing to back up. The copy goes to `<backup>.tmp` first, so a
+    copy that fails part-way keeps the existing backup.
+    """
+    import os
+    import sqlite3
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        tmp = backup + ".tmp"
+        src = dst = None
+        ok_copy = False
+        try:
+            src = sqlite3.connect(path, timeout=10)
+            dst = sqlite3.connect(tmp)
+            with dst:
+                src.backup(dst)
+            ok_copy = True
+        except sqlite3.DatabaseError:
+            ok_copy = False   # source unreadable mid-copy — keep the existing backup
+        finally:
+            for _c in (dst, src):
+                if _c is not None:
+                    try:
+                        _c.close()
+                    except sqlite3.Error:
+                        _log.debug("connection already broken — nothing to close", exc_info=True)
+        # Swap the temp copy in only after the handles are closed (Windows won't
+        # rename an open file) and only if the copy actually completed.
+        if ok_copy:
+            os.replace(tmp, backup)
+        else:
+            _silent_remove(tmp)
+
+
+def _set_corrupt_db_aside(path, backup):
+    """Move the CORRUPT database at `path` aside, then restore `backup` over it if that is healthy.
+
+    Raises what os/shutil raise beyond the aside move itself; _ensure_db_healthy catches it.
+    """
+    import os
+    import shutil
+    import time as _t
+    # Corrupt — always move the bad file aside (preserved for forensics/recovery,
+    # never deleted), then either restore the last good backup or let the app
+    # build a fresh DB. Either way the panel starts instead of crash-looping.
+    aside = "%s.corrupt-%d" % (path, int(_t.time()))
+    try:
+        os.replace(path, aside)
+    except OSError:
+        _log.debug("couldn't move it (perms) — fall through; a fresh DB gets created", exc_info=True)
+    # Drop the corrupt DB's stale WAL/SHM so they aren't replayed over a new file.
+    for ext in ("-wal", "-shm"):
+        _silent_remove(path + ext)
+    if os.path.exists(backup) and _db_quick_check(backup):
+        _log.error("database at %s is corrupt — restored last good backup "
+                   "(corrupt copy saved to %s)", path, aside)
+        shutil.copy2(backup, path)
+    else:
+        _log.error("database at %s is corrupt and no healthy backup exists — moved "
+                   "it aside (%s) so the panel can start fresh; use the recovery "
+                   "tool if you need to salvage its data", path, aside)
 
 
 # ── A deleted row must not leave its history behind ───────────────────────────────────────────
@@ -1435,6 +1553,7 @@ def _ensure_db_healthy(path=None):
 # The DELETE goes through the flush's own connection, so it is part of the same transaction — a
 # rolled-back delete does not lose the samples.
 def _register_sample_pruning():
+    """Delete a deleted game server's or host's history samples with it."""
     from sqlalchemy import event
 
     def _prune(model, column):
@@ -1447,6 +1566,11 @@ def _register_sample_pruning():
 
     event.listen(GameServer, "after_delete", _prune(MetricSample, MetricSample.server_id))
     event.listen(RemoteServer, "after_delete", _prune(HostSample, HostSample.remote_id))
+
+
+def _register_invite_revocation():
+    """Revoke the invites a deleted user minted, and those that delegate a deleted group."""
+    from sqlalchemy import event
 
     # An invite must die with the account that minted it. authority_intact() resolves the creator
     # with db.session.get(User, created_by_id) and fails closed when it is gone — but user.id is a
@@ -1502,6 +1626,11 @@ def _register_sample_pruning():
         except Exception:
             _log.debug("revoking a deleted group's invites failed", exc_info=True)
 
+
+def _register_audit_detach():
+    """Null AuditLog.user_id on a deleted user's rows; the rows themselves stay."""
+    from sqlalchemy import event
+
     # AuditLog.user_id is a FK with no cascade, this app never sets PRAGMA foreign_keys, and the
     # rowid is recycled — so after a delete the column pointed at whoever took the freed id.
     # Verified: alice's rows read back as bob's. No render path joins on it today (they all use
@@ -1518,6 +1647,11 @@ def _register_sample_pruning():
         except Exception:
             _log.debug("detaching a deleted user's audit rows failed", exc_info=True)
 
+
+def _register_host_sample_pruning():
+    """Clear the samples of a deleted host's game servers, which a bulk delete removed."""
+    from sqlalchemy import event
+
     # A host's game servers go with it, and remotes.py deletes them in BULK — which bypasses the
     # ORM, so the per-server listener above never fires for them. Clear their samples by
     # subquery on the host id instead of relying on that cascade.
@@ -1532,6 +1666,9 @@ def _register_sample_pruning():
 
 
 _register_sample_pruning()
+_register_invite_revocation()
+_register_audit_detach()
+_register_host_sample_pruning()
 
 
 # ── A row LOADED with a name @validates would have refused ─────────────────────────────────────

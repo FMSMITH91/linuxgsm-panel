@@ -85,6 +85,7 @@ def raises_exit(fn, *a, **kw):
 
 class Args(object):
     def __init__(self, **kw):
+        """Build an argparse-like namespace: username and password default to None."""
         self.username = kw.pop("username", None)
         self.password = kw.pop("password", None)
         for k, v in kw.items():
@@ -98,7 +99,7 @@ def seed(**kw):
                  is_active=kw.get("active", True))
         u.totp_enabled = kw.get("totp", False)
         if kw.get("totp"):
-            u.totp_secret = "SEEDSECRET"
+            u.totp_secret = "SEEDSECRET"  # nosec B105 - a planted fixture value the 2fa check proves is wiped
         db.session.add(u)
         db.session.commit()
         return u.id
@@ -126,6 +127,8 @@ def cleanup():
             CONFIG_FILE.write_bytes(_CONFIG_SNAPSHOT)   # undo our edits to someone else's config
         except OSError:
             pass
+
+
 try:
     admin_id = seed(username="cli_admin", admin=True)
     seed(username="cli_user", admin=False)
@@ -161,7 +164,7 @@ try:
     with manage.app.app_context():
         before = db.session.get(User, admin_id)
         old_hash, old_epoch = before.password_hash, (before.auth_epoch or 0)
-    manage.cmd_reset_password(Args(username="cli_admin", password="An0ther!Str0ng1"))
+    manage.cmd_reset_password(Args(username="cli_admin", password="An0ther!Str0ng1"))  # nosec B106 - test fixture
     with manage.app.app_context():
         after = db.session.get(User, admin_id)
         check("reset: the password actually changes", after.password_hash != old_hash)
@@ -171,10 +174,12 @@ try:
               (after.auth_epoch or 0) > old_epoch,
               "%s -> %s" % (old_epoch, after.auth_epoch))
 
-    exited, msg = raises_exit(manage.cmd_reset_password, Args(username="cli_admin", password="weak"))
+    exited, msg = raises_exit(manage.cmd_reset_password,
+                              Args(username="cli_admin", password="weak"))  # nosec B106 - test fixture
     check("reset: a weak --password is refused before anything is written",
           exited and "Weak password" in msg, msg[:60])
-    exited, msg = raises_exit(manage.cmd_reset_password, Args(username="nobody_here", password="An0ther!Str0ng1"))
+    exited, msg = raises_exit(manage.cmd_reset_password,
+                              Args(username="nobody_here", password="An0ther!Str0ng1"))  # nosec B106 - test fixture
     check("reset: an unknown username is refused", exited and "No such user" in msg, msg[:60])
 
     # ── 3. disable-2fa must clear the SECRET, not just the flag ───────────────────────────────
@@ -215,30 +220,68 @@ try:
         sys.stdin = _real_stdin
 
     # ── 5. create-admin ───────────────────────────────────────────────────────────────────────
-    manage.cmd_create_admin(Args(username="cli_new", password="Br@ndNew1pass"))
+    manage.cmd_create_admin(Args(username="cli_new", password="Br@ndNew1pass"))  # nosec B106 - test fixture
     with manage.app.app_context():
         n = User.query.filter_by(username="cli_new").first()
         check("create-admin: the account exists, superadmin and active",
               n is not None and n.is_superadmin and n.is_active)
-    exited, msg = raises_exit(manage.cmd_create_admin, Args(username="cli_new", password="Br@ndNew1pass"))
+    exited, msg = raises_exit(manage.cmd_create_admin,
+                              Args(username="cli_new", password="Br@ndNew1pass"))  # nosec B106 - test fixture
     check("create-admin: refuses to clobber an existing user",
           exited and "already exists" in msg, msg[:60])
 
     # ── 6. The interactive menu accepts a number or a name ────────────────────────────────────
     _real_input = manage.input if hasattr(manage, "input") else None
     import builtins
+    import contextlib
+    import io
     _saved_input = builtins.input
+    seed(username="cli_gone", active=False)
+    seed(username="cli_gone_admin", admin=True, active=False)
+
+    def _menu(*answers):
+        """Return (chosen, printed) for the menu run on these scripted answers.
+
+        Past the last answer, input() raises EOFError and the menu takes its own "Cancelled." exit,
+        so a menu that wrongly re-prompts comes back None and fails its check by name. A stub that
+        repeats one answer forever turned exactly that bug into a hang the memory cap killed.
+        """
+        _left = iter(answers)
+
+        def _answer(*_a):
+            try:
+                return next(_left)
+            except StopIteration:
+                raise EOFError from None
+        builtins.input = _answer
+        _out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(_out):
+                chosen = manage._pick_user_interactive()
+        except SystemExit:
+            chosen = None
+        return chosen, _out.getvalue()
+
     try:
         with manage.app.app_context():
             names = [u.username for u in User.query.order_by(User.username).all()]
-            builtins.input = lambda *a: "2"
-            check("menu: a number selects the matching row", manage._pick_user_interactive() == names[1])
-            builtins.input = lambda *a: names[0]
-            check("menu: a typed username is accepted", manage._pick_user_interactive() == names[0])
-            _tries = iter(["nope", "1"])
-            builtins.input = lambda *a: next(_tries)
+            check("menu: a number selects the matching row", _menu("2")[0] == names[1])
+            check("menu: a typed username is accepted", _menu(names[0])[0] == names[0])
             check("menu: a bad choice re-prompts rather than exiting",
-                  manage._pick_user_interactive() == names[0])
+                  _menu("nope", "1")[0] == names[0])
+            _shown = _menu("1")[1].splitlines()
+            _row = {n: "  %2d) %s" % (i, n) for i, n in enumerate(names, 1)}
+            check("menu: the prompt, then one numbered line per user in name order",
+                  _shown[:1] == ["Which user?"] and len(_shown) == 1 + len(names)
+                  and all(line.startswith(_row[n]) for line, n in zip(_shown[1:], names)),
+                  repr(_shown[:4]))
+            check("menu: a superadmin is tagged, a plain user is not",
+                  _row["cli_new"] + "  [superadmin]" in _shown and _row["cli_user"] in _shown,
+                  repr(_shown))
+            check("menu: an inactive user is tagged, and an inactive superadmin carries both",
+                  _row["cli_gone"] + "  [inactive]" in _shown
+                  and _row["cli_gone_admin"] + "  [superadmin, inactive]" in _shown,
+                  repr(_shown))
     finally:
         builtins.input = _saved_input
 

@@ -448,8 +448,10 @@ def _ufw_public_rules(status_out):
     the (v6) twins are left out: none of them decides what the public meets first."""
     rules = []
     for line in (status_out or "").splitlines():
-        m = re.match(r"\s*\[\s*\d+\]\s*(.*)\Z", line)
-        detail = (m.group(1) if m else line).strip()
+        # The row after its `[ N]` number, sliced off: a splitlines() line holds no newline, so the
+        # `\s*(.*)\Z` this used to capture with was always the rest of the line anyway.
+        m = re.match(r"\s*\[\s*\d+\]\s*", line)
+        detail = (line[m.end():] if m else line).strip()
         p = firewall._parse_ufw_rule(detail)
         if (not p["action"] or p["v6"] or p["iface"] or p["direction"] not in ("", "IN")
                 or p["from"].lower() != "anywhere"):
@@ -857,9 +859,9 @@ def classify_install_failure(output):
     """
     text = terminal.strip_escapes(output or "")
     low = text.lower()
-    # Bandit's hard-coded-/tmp rule: this is a substring of SteamCMD's error text being matched,
-    # not a path anything here opens or writes.
-    if "please delete some /tmp/dumps" in low or "/tmp/dumps* directories" in low:   # nosec B108
+    # Bandit's hard-coded-/tmp rule (and Sonar's S5443): this is a substring of SteamCMD's error
+    # text being matched, not a path anything here opens or writes.
+    if "please delete some /tmp/dumps" in low or "/tmp/dumps* directories" in low:   # nosec B108  # NOSONAR - error text, not a path
         return ("steam_dumps", (
             "Steam keeps only ten crash-dump slots on a host (/tmp/dumps … /tmp/dumps09), one per "
             "Linux account, and every one of them is in use by a game account that still exists. "
@@ -906,7 +908,13 @@ def parse_missing_deps(output):
     'Missing dependencies: pkg1 pkg2 ... Run:' warning)."""
     text = terminal.strip_escapes(output or "")
     deps = []
-    for m in re.finditer(r"[Mm]issing dependencies:\s*(.+?)(?:\s+Run:|[\r\n]|$)", text):
+    # The list runs to the end of its line, or to the " Run:" LinuxGSM puts after it. Read as ONE
+    # greedy pass that stops before a blank followed by "Run:", not the lazy
+    # `\s*(.+?)(?:\s+Run:|[\r\n]|$)` this was: that tried to end the list at every character, and
+    # at each blank read the rest of the run of blanks looking for "Run:", so a long run of blanks
+    # cost its square. The names found are the same — the old stopping point sat at the start of
+    # the blanks before "Run:" and this one at their end, and only blanks lie between the two.
+    for m in re.finditer(r"[Mm]issing dependencies:\s*((?:(?!\sRun:)[^\r\n])*)", text):
         for pkg in m.group(1).split():
             if re.match(r"^[a-z0-9][a-z0-9+._:-]*\Z", pkg) and pkg not in deps:
                 deps.append(pkg)
@@ -1631,8 +1639,11 @@ def remote_install_tailscale(server):
     # could pin the URL, but only by giving the helper the ability to execute a downloaded script —
     # the capability its tool allowlist exists to deny. (The NodeSource step used to be the same
     # shape; it now fetches only a signing key, pinned by fingerprint — see _bootstrap_node.)
+    # --proto '=https': the script goes straight into a root shell with nothing to check it
+    # against, and -L follows redirects, so the least it can do is refuse any hop that is not
+    # HTTPS — a downgraded or redirected-to-plain-http fetch is a script anyone on the path wrote.
     cmds = [
-        "curl -fsSL https://tailscale.com/install.sh | sh 2>&1",
+        "curl --proto '=https' -fsSL https://tailscale.com/install.sh | sh 2>&1",
     ]
     for cmd in cmds:
         out, _, rc = _core.run_command(server, cmd, timeout=120, sudo=True)
@@ -2589,7 +2600,7 @@ def _tailscale_conn_state(server):
 # that range, so the panel never firewall-blocks a tailnet IP while Tailscale is up — blocking one
 # would cut off tailnet access (and, inserted at UFW position 1, it would override the tailscale0
 # allow rule).
-_TAILNET_CGNAT = "100.64.0.0/10"
+_TAILNET_CGNAT = "100.64.0.0/10"  # NOSONAR - the range Tailscale assigns every node from, fixed by Tailscale
 
 
 def tailnet_exempt_ips(server, ips):

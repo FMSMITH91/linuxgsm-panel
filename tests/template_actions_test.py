@@ -109,6 +109,34 @@ if esprima:
             _broken.append("%s: %s" % (_p.name, _e))
     check(not _broken, "static/js: every file parses as JavaScript", "; ".join(_broken[:3]))
 
+# ── 0a-ii. ...and no regex literal in it contains a quote ─────────────────────────────────────
+# Two tools read these files with a lexer that knows strings and comments but not regex literals:
+# tools/i18n_scan.py (whose docstring relies on "none in this tree contains a quote") and Lizard,
+# Codacy's complexity analyser. panel.js had two - /'/g in _da and /[&<>"']/g in the Ubuntu Pro
+# card's escaper - and both tools read that quote as a string opening. The i18n gate went blind
+# from _da onwards, and the "Sign out everywhere else" dialog carried two untranslated strings with
+# it green; Lizard folded the next 325 lines into _da and never saw the Ubuntu Pro card at all.
+# Write a quote in a pattern as \x27 / \x22: the same character to the regex engine.
+if esprima:
+    _quoted_re, _seen_hex_quote = [], False
+    for _p in sorted((ROOT / "static" / "js").glob("*.js")):
+        try:
+            _toks = esprima.tokenize(_p.read_text(encoding="utf-8"), {"loc": True})
+        except Exception:        # not JavaScript at all: the parse gate above reports it by name
+            continue
+        for _t in _toks:
+            if _t.type != "RegularExpression":
+                continue
+            if re.search(r"['\"`]", _t.value):
+                _quoted_re.append("%s:%d %s" % (_p.name, _t.loc.start.line, _t.value))
+            _seen_hex_quote = _seen_hex_quote or (_p.name == "panel.js" and "\\x27" in _t.value)
+    # Positive control: the scan is reading regex tokens at all, including the rewritten one.
+    check(_seen_hex_quote, "static/js: the regex-literal scan sees panel.js's \\x27 pattern",
+          "no RegularExpression token with \\x27 in panel.js - the check below judged nothing")
+    check(not _quoted_re,
+          "static/js: no regex literal contains a quote (the i18n scan and Lizard misread it)",
+          "; ".join(_quoted_re[:3]))
+
 # ── Every swap of one region has to re-arm it the SAME way ────────────────────────────────────
 # refreshSection(sel, afterName) replaces a region's innerHTML with freshly server-rendered markup.
 # The elements inside are new objects, so anything bound to the old ones is gone; afterName is the
@@ -1425,6 +1453,42 @@ check("a.trim() === b.trim()" in _js_code_only(_js_function_body(_sd_js, "_sameL
       "console stitch: the overlap match ignores surrounding whitespace",
       "an exact compare turns one trailing space into 'no overlap' and a whole re-appended window")
 
+# ── 0d-ter. three promises that moved into helpers when their functions were split ───────────
+# Lizard's complexity findings split confirmDialog, pollStats and the Ubuntu Pro card's render into
+# helpers. Each carried one rule its comments state and nothing here enforced — mutation runs
+# showed a helper could drop it with every suite green:
+#   * a confirm dialog's bodyText is TEXT: _cdFillBody writes it with textContent, never as markup,
+#     which is what makes it the safe option for a caller holding untrusted text;
+#   * a stat tile the user has hidden is simply absent, so _setStatText checks the element before
+#     writing to it - unguarded, the first hidden tile threw and stopped the rest of the handler;
+#   * the attached Ubuntu Pro card puts payload fields into markup only through e().
+_pj_js = (ROOT / "static" / "js" / "panel.js").read_text(encoding="utf-8")
+_cdfb = _js_code_only(_js_function_body(_pj_js, "_cdFillBody") or "")
+check(len(_cdfb) > 100 and "opts.bodyNode" in _cdfb,
+      "helpers: confirmDialog's _cdFillBody was found to check",
+      "extractor got %r - the check below would prove nothing" % _cdfb[:60])
+check("_cb.textContent = opts.bodyText" in _cdfb and not _SINK.search(_cdfb),
+      "confirmDialog: bodyText is written as text, never through an HTML sink",
+      "_cdFillBody no longer assigns bodyText by textContent, or reaches innerHTML")
+_sst = _js_code_only(_js_function_body(_sd_js, "_setStatText") or "")
+check(re.search(r"if\s*\(\s*el\s*\)\s*el\.textContent\s*=\s*value", _sst) is not None,
+      "server page: a stat tile is written only when it exists (the Controls panel can be hidden)",
+      "_setStatText writes to an element it did not check: %r" % _sst[:120])
+check(re.search(r"getElementById\('stat-[\w-]+'\)\s*\.textContent", _js_code_only(_sd_js)) is None,
+      "server page: ...and no tile is written around it, straight off getElementById",
+      "a stat tile is dereferenced unguarded again")
+_ra = _js_code_only(_js_function_body(_pj_js, "renderAttached") or "")
+_ra_bare = re.sub(r"\be\s*\((?:[^()]|\([^()]*\))*\)", "", _ra)
+_ra_bare = re.sub(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"", "", _ra_bare)
+_ra_raw = sorted(set(re.findall(r"\+\s*([ds]\.[\w.]+)(?!\s*\?)", _ra_bare)
+                     + re.findall(r"([ds]\.[\w.]+)\s*\+", _ra_bare)))
+check(len(_ra) > 200 and "d.services" in _ra,
+      "ubuntu pro card: renderAttached was found to check",
+      "extractor got %r - the check below would prove nothing" % _ra[:60])
+check(not _ra_raw,
+      "ubuntu pro card: the attached card interpolates payload fields only through e()",
+      "raw payload values in the markup: %s" % _ra_raw)
+
 # ── 0e. no template renders the same id= twice ────────────────────────────────────────────────
 # getElementById returns the FIRST match, so a duplicate id does not fail loudly — it silently
 # points every handler at the wrong element. remote_manage.html carried id="diag-repair-btn" on
@@ -2305,7 +2369,7 @@ _SECTION_PAGE_TEMPLATE = {
     "/servers/install": "install_server.html",
 }
 _pal_src = (ROOT / "static" / "js" / "palette.js").read_text(encoding="utf-8")
-_sec_block = re.search(r"var SECTIONS = \[(.*?)\n  \];", _pal_src, re.S)
+_sec_block = re.search(r"var PALETTE_SECTIONS = \[(.*?)\n\];", _pal_src, re.S)
 _sections = re.findall(r"page:\s*'([^']+)'\s*,\s*hash:\s*'([^']+)'",
                        _sec_block.group(1) if _sec_block else "")
 check(len(_sections) >= 10, "palette: the SECTIONS table was found and parsed",
@@ -2390,7 +2454,7 @@ check(not _unreachable,
 
 # HOST_SECTIONS are expanded per host at runtime, so their page is always remote_manage.html.
 # Same rot, same gate: a renamed card id there breaks every host's entry at once.
-_host_block = re.search(r"var HOST_SECTIONS = \[(.*?)\n  \];", _pal_src, re.S)
+_host_block = re.search(r"var PALETTE_HOST_SECTIONS = \[(.*?)\n\];", _pal_src, re.S)
 _host_hashes = re.findall(r"hash:\s*'([^']+)'", _host_block.group(1) if _host_block else "")
 check(len(_host_hashes) >= 5, "palette: the HOST_SECTIONS table was found and parsed",
       "%d entries parsed" % len(_host_hashes))
@@ -3212,6 +3276,26 @@ check(_upd.count("else if(d.message)") == 0,
       "a message-only branch is back")
 check("You\\'re up to date" in _upd and "Update available:" in _upd,
       "js: ...just the two it is asked for")
+
+# ── a version is a date, and it is always named beside its commit ───────────────────────────────
+# Every commit made on one day shares the date (panel_version in system_ops), so the card's header,
+# its offer and the sidebar pill each carry the short commit too. A date takes no "v" in front.
+_upd_cur = [ln for ln in _upd.splitlines() if "getElementById('pu-current')" in ln]
+check(len(_upd_cur) == 1 and "d.current_version" in _upd_cur[0] and "d.current_sha" in _upd_cur[0]
+      and "'v'+" not in _upd_cur[0],
+      "js: the update card's header is the running version beside its commit, with no 'v'",
+      repr(_upd_cur))
+_upd_offer = [ln for ln in _upd.splitlines() if "Update available:" in ln]
+check(len(_upd_offer) == 1 and "d.remote_version" in _upd_offer[0] and "d.remote_sha" in _upd_offer[0]
+      and "<strong>v'" not in _upd_offer[0],
+      "js: ...and its offer is the target's version beside the target's commit",
+      repr(_upd_offer))
+_badge_js = (ROOT / "static" / "js" / "update_badge.js").read_text(encoding="utf-8")
+_badge_title = [ln for ln in _badge_js.splitlines() if "'title=\"Version '" in ln]
+check(len(_badge_title) == 1 and "d.remote_version" in _badge_title[0]
+      and "d.remote_sha" in _badge_title[0],
+      "js: the sidebar's update pill names the offered version with its commit",
+      repr(_badge_title))
 
 # The "(#282)" at the end of a squash-merged subject is the part worth reading before taking an
 # update — the PR says what changed and why. Same rule as the sha: the only interpolated piece is
@@ -4100,6 +4184,192 @@ _hr = _between(_bk_cron, "def _ensure_backup_headroom", "def run_game_backup")
 check("if backups is None:" in _hr,
       "backups: the prune-to-make-room path refuses a listing it could not read",
       "the one path here that DELETES backups still acts on an unknown listing")
+
+# ── every form control has a name a screen reader can read, and every label a control ─────────
+# SonarCloud listed 57 of these across 18 templates (InputWithoutLabelCheck, S6853, S9379, S5256):
+# switches announced as "switch, off" with no word of what they switch, a firewall form whose only
+# names were placeholders (gone the moment you type), "Groups" and "Account type" written as
+# <label> with nothing to label, and key/value tables with no header cell tying a value to its
+# name. This is the same four rules, run over every template, so the next one fails here instead of
+# waiting for the scanner: a control needs aria-label, aria-labelledby naming ids that exist, a
+# wrapping <label> or a <label for> its id; a <label> needs a for= or a control inside it; no
+# autofocus (it moves a screen reader past whatever precedes the field — on these pages, the
+# error that says why you are looking at the form again); a data table needs a <th>.
+#
+# Plus the i18n half, which Sonar cannot see. i18n.js translates aria-label, but it skips every
+# attribute of a TEXTAREA/CODE/PRE and of anything under data-no-i18n, so an aria-label there
+# stays English for good — remote_manage's "Debug report" textarea had exactly that, beside an
+# es/fr entry that could never be used. Name those with aria-labelledby, pointing at text the
+# walker does reach.
+from html.parser import HTMLParser as _A11yHTMLParser                             # noqa: E402
+
+_A11Y_JINJA = re.compile(r"\{#.*?#\}|\{%.*?%\}", re.S)
+_A11Y_NAMELESS = {"hidden", "submit", "button", "image", "reset"}
+_A11Y_I18N_SKIP = {"script", "style", "textarea", "code", "pre", "noscript"}      # i18n.js SKIP
+_A11Y_VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
+              "source", "track", "wbr"}
+
+
+class _A11yScan(_A11yHTMLParser):
+    """One template's controls, labels, tables and ids, both arms of every {% if %} included."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.ids, self.label_for, self.problems = set(), set(), []
+        self.controls, self.labels, self.tables = [], [], []
+        self._labels, self._tables, self._open = [], [], []
+
+    def handle_starttag(self, tag, attrs):
+        a = {k: (v or "") for k, v in attrs}
+        line = self.getpos()[0]
+        if a.get("id", "").strip():
+            self.ids.add(a["id"].strip())
+        if "autofocus" in a:
+            self.problems.append("<%s> line %d: autofocus" % (tag, line))
+        guarded = (tag in _A11Y_I18N_SKIP or "data-no-i18n" in a
+                   or any(g for _, g in self._open))
+        if a.get("aria-label", "").strip() and guarded and "{{" not in a["aria-label"]:
+            self.problems.append("<%s> line %d: aria-label %r is never translated (i18n.js skips "
+                                 "it here) — use aria-labelledby" % (tag, line, a["aria-label"]))
+        if tag not in _A11Y_VOID:
+            self._open.append((tag, guarded))
+        if tag == "label":
+            lab = {"line": line, "for": a.get("for", "").strip(), "control": False}
+            self.labels.append(lab)
+            if lab["for"]:
+                self.label_for.add(lab["for"])
+            self._labels.append(lab)
+        elif tag in ("input", "select", "textarea"):
+            if tag == "input" and (a.get("type") or "text").strip().lower() in _A11Y_NAMELESS:
+                return
+            for lab in self._labels:
+                lab["control"] = True
+            self.controls.append((tag, line, a, bool(self._labels)))
+        elif tag == "table":
+            t = {"line": line, "th": False,
+                 "layout": a.get("role", "").strip().lower() in ("presentation", "none")}
+            self.tables.append(t)
+            self._tables.append(t)
+        elif tag == "th" and self._tables:
+            self._tables[-1]["th"] = True
+
+    def handle_endtag(self, tag):
+        for i in range(len(self._open) - 1, -1, -1):
+            if self._open[i][0] == tag:
+                del self._open[i:]
+                break
+        if tag == "label" and self._labels:
+            self._labels.pop()
+        elif tag == "table" and self._tables:
+            self._tables.pop()
+
+    def report(self):
+        out = list(self.problems)
+        for tag, line, a, in_label in self.controls:
+            what = "<%s%s> line %d" % (tag, (" #" + a["id"]) if a.get("id") else "", line)
+            if a.get("aria-label", "").strip() or in_label:
+                continue
+            refs = a.get("aria-labelledby", "").split()
+            if refs:
+                gone = [r for r in refs if "{{" not in r and r not in self.ids]
+                if gone:
+                    out.append("%s: aria-labelledby names no element: %s" % (what, gone))
+                continue
+            if not (a.get("id", "").strip() and a["id"].strip() in self.label_for):
+                out.append("%s: no label, aria-label or aria-labelledby" % what)
+        out += ["<label> line %d: labels no control (no for=, nothing inside)" % lab["line"]
+                for lab in self.labels if not lab["for"] and not lab["control"]]
+        out += ["<table> line %d: no <th>" % t["line"]
+                for t in self.tables if not t["th"] and not t["layout"]]
+        return out
+
+
+def _a11y_scan(src):
+    # Jinja comments and tags blanked with their newlines kept, so line numbers stay the file's.
+    # A comment has to go: it can say "<head>" or "<label>" in prose.
+    p = _A11yScan()
+    p.feed(_A11Y_JINJA.sub(lambda m: "\n" * m.group(0).count("\n"), src))
+    p.close()
+    return p
+
+
+def _a11y_problems(src):
+    return _a11y_scan(src).report()
+
+
+_a11y_bad = {}
+_a11y_seen = 0
+for _tpl in sorted(TEMPLATES.glob("*.html")):
+    _scan = _a11y_scan(_tpl.read_text(encoding="utf-8"))
+    _a11y_seen += len(_scan.controls)
+    if _scan.report():
+        _a11y_bad[_tpl.name] = _scan.report()
+check(_a11y_seen >= 100,
+      "templates a11y: the scan finds the form controls it is judging",
+      "only %d controls across every template — the parser is reading nothing" % _a11y_seen)
+check(not _a11y_bad,
+      "templates a11y: every control is named, every label labels something, no autofocus, "
+      "every data table has a <th>",
+      "; ".join("%s: %s" % (f, " | ".join(v[:3])) for f, v in sorted(_a11y_bad.items())[:4]))
+# ...and each rule actually fires. A scanner that returns [] for everything passes the gate above.
+_a11y_neg = {
+    "unnamed input": '<input type="text" id="x" placeholder="Port">',
+    "orphan label": '<label class="form-label">Groups</label><div><input type="checkbox" id="c">'
+                    '<label for="c">A</label></div>',
+    "autofocus": '<label for="u">User</label><input id="u" autofocus>',
+    "headerless table": "<table><tr><td>Hostname</td><td>x</td></tr></table>",
+    "labelledby a missing id": '<input type="text" aria-labelledby="nope">',
+    "aria-label a textarea never translates": '<textarea aria-label="Debug report"></textarea>',
+    "aria-label under data-no-i18n": '<div data-no-i18n><input aria-label="Port"></div>',
+    "a Jinja comment hides nothing": '{# <label>x</label> #}<input type="text" id="y">',
+}
+_a11y_pos = ('<label for="a">A</label><input id="a">'
+             '<label>B <input type="checkbox"></label>'
+             '<span id="h">H</span><div role="group" aria-labelledby="h">'
+             '<input type="checkbox" aria-label="Enabled"></div>'
+             '<textarea aria-labelledby="h"></textarea>'
+             '<input type="hidden" name="csrf"><input type="submit" value="Go">'
+             '<table><tr><th scope="row">Host</th><td>x</td></tr></table>'
+             '<table role="presentation"><tr><td>layout</td></tr></table>'
+             '{% if x %}<label for="b">B</label>{% endif %}<select id="b"></select>')
+check(all(_a11y_problems(_s) for _s in _a11y_neg.values()) and not _a11y_problems(_a11y_pos),
+      "templates a11y: ...and each rule fires on a sample of the bug it describes, and not on "
+      "the ways this codebase names controls correctly",
+      "silent on: %s; flagged a correct sample: %s"
+      % ([k for k, s in _a11y_neg.items() if not _a11y_problems(s)], _a11y_problems(_a11y_pos)))
+
+# The OS-updates banner puts each host's update and security counts into innerHTML unescaped.
+# The API sends ints (len() and sum() in app.py's _os_update_note), and that was the only thing
+# keeping markup out of the sink: SonarCloud's S5696 traced the fetch into box.innerHTML through
+# h.count. Number() at the sink makes the banner safe whatever the server's types. The dismissal
+# signature (sig) is left raw on purpose — it reaches the page only through _da, which escapes.
+_ng_fn = _js_code_only(_js_block_after(
+    (ROOT / "static" / "js" / "nags.js").read_text(encoding="utf-8"),
+    "window.osUpdatesNagCheck = function("))
+_ng_r0 = _ng_fn.find("var rows = hosts.map(")
+_ng_s0 = _ng_fn.find("var sec = hosts.reduce(")
+_ng_rows = _ng_fn[_ng_r0:_ng_fn.find(".join('')", _ng_r0)] if _ng_r0 >= 0 else ""
+_ng_sec = _ng_fn[_ng_s0:_ng_r0] if 0 <= _ng_s0 < _ng_r0 else ""
+_ng_raw = [m.group(0) for part in (_ng_rows, _ng_sec)
+           for m in re.finditer(r"(?<!Number\()h\.(count|security)\b", part)]
+check(_ng_rows and _ng_sec and "Number(h.count)" in _ng_rows and "Number(h.security)" in _ng_rows
+      and not _ng_raw,
+      "os-updates banner: the counts reach its innerHTML only through Number()",
+      "raw in the markup: %s" % (_ng_raw or "(could not find the rows/sec builders)"))
+
+# The same shape on the host Security tab: each offender's attempt and ban counts go into the
+# top-offenders table's innerHTML unescaped. The server int()-parses them after _F2B_EVENT_RE has
+# dropped any fail2ban line carrying markup, in two row builders (system_ops, ssh_manager/hosts),
+# and those were the only thing keeping a compromised host's log out of the sink: S5696 traced the
+# fetch into el.innerHTML through o.attempts and o.bans. The ip and jails are escapeHtml'd, and
+# banned_now and blocked are only tested for truth, so the two counts are the whole of it.
+_tip_fn = _js_code_only(_js_block_after(
+    (ROOT / "static" / "js" / "remote_manage.js").read_text(encoding="utf-8"),
+    "var rows=ips.map(function(o,i)"))
+_tip_raw = re.findall(r"(?<!Number\()o\.(?:attempts|bans)\b", _tip_fn or "")
+check(_tip_fn and "Number(o.attempts)" in _tip_fn and "Number(o.bans)" in _tip_fn and not _tip_raw,
+      "fail2ban top offenders: the attempt and ban counts reach innerHTML only through Number()",
+      "raw in the markup: %s" % (_tip_raw or "(could not find the rows builder)"))
 
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)

@@ -55,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           TARBALL="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -sSfL -o "/tmp/${TARBALL}" \
+          curl --proto '=https' -sSfL -o "/tmp/${TARBALL}" \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${TARBALL}"
           echo "${GITLEAKS_SHA256}  /tmp/${TARBALL}" | sha256sum -c -
           tar -xz -C /tmp -f "/tmp/${TARBALL}" gitleaks

@@ -42,68 +42,8 @@ function refreshFirewall() {
       var groups = data.groups || [];
       var openGroups = groups.filter(function(g) { return !g.is_block; });
       var blockGroups = groups.filter(function(g) { return g.is_block; });
-      if (openGroups.length) {
-        var html = '<table class="table table-sm table-hover mb-0 align-middle">'
-          + '<thead><tr><th>Port</th><th>Protocol</th><th>For</th><th>Scope</th><th>IP</th><th></th></tr></thead><tbody>';
-        openGroups.forEach(function(g) {
-          var port = g.is_iface
-            ? '<span class="badge bg-info text-dark">' + esc(g.port_num) + '</span>'
-            : '<code>' + esc(g.port_num) + '</code>';
-          var scope = (g.action !== 'ALLOW' ? '<span class="badge bg-danger me-1">' + esc(g.action) + '</span>' : '') + esc(g.scope);
-          html += '<tr><td>' + port + '</td>'
-            + '<td>' + protoBadge(g.proto_label) + '</td>'
-            + '<td class="small">' + esc(g.comment || '—') + '</td>'
-            + '<td class="small text-secondary">' + scope + '</td>'
-            + '<td><span class="text-secondary" style="font-size:.68rem;">' + esc(g.family_label) + '</span></td>'
-            + '<td>' + (g.protected
-                ? '<button class="btn btn-outline-secondary btn-sm py-0 px-1" disabled title="' + esc(g.protect_reason) + '"><i class="bi bi-lock-fill"></i></button>'
-                : '<button class="btn btn-outline-danger btn-sm py-0 px-1"' + _da('deleteGroup', [g.nums, '@self', !!g.warn, (g.protect_reason || ''), (g.key || '')]) + '><i class="bi bi-x"></i></button>')
-            + '</td></tr>';
-        });
-        html += '</tbody></table>';
-        listEl.innerHTML = html;  // nosemgrep
-      } else {
-        listEl.innerHTML = '<div class="p-3 text-center text-secondary small">No open ports yet.</div>';
-      }
-      // The number and the WORD as separate nodes, matching what the template renders. As one
-      // text node the result was "3 rules", which is not a catalog key and never can be — so this
-      // repaint replaced a translated count with an English one on every refresh. t() is the same
-      // catalog the DOM walker uses, so the word is right immediately rather than after the
-      // observer catches up.
-      var rc = document.getElementById('rules-count');
-      if (rc) {
-        rc.textContent = openGroups.length + ' ';
-        var rw = document.createElement('span');
-        rw.textContent = t(openGroups.length === 1 ? 'rule' : 'rules');
-        rc.appendChild(rw);
-      }
-
-      // Blocked IPs (separate card)
-      var blocksEl = document.getElementById('blocks-list');
-      if (blocksEl) {
-        if (blockGroups.length) {
-          var bh = '<table class="table table-sm table-hover mb-0 align-middle">'
-            + '<thead><tr><th>IP address</th><th>Source</th><th>Family</th><th></th></tr></thead><tbody>';
-          blockGroups.forEach(function(g) {
-            bh += '<tr><td><code>' + esc(g.block_ip) + '</code></td>'
-              + '<td>' + blockBadge(g.comment) + '</td>'
-              + '<td><span class="text-secondary" style="font-size:.68rem;">' + esc(g.family_label) + '</span></td>'
-              + '<td><button class="btn btn-outline-warning btn-sm py-0 px-1" title="Unblock ' + esc(g.block_ip) + '"'
-              + _da('unblockIp', [g.block_ip, '@self']) + '><i class="bi bi-x"></i></button></td></tr>';
-          });
-          bh += '</tbody></table>';
-          blocksEl.innerHTML = bh;  // nosemgrep
-        } else {
-          blocksEl.innerHTML = '<div class="p-3 text-center text-secondary small">No IPs are blocked.</div>';
-        }
-        var bc = document.getElementById('blocks-count');
-        if (bc) {
-          bc.textContent = blockGroups.length + ' ';
-          var bw = document.createElement('span');
-          bw.textContent = t('blocked');
-          bc.appendChild(bw);
-        }
-      }
+      _fwRenderRules(listEl, openGroups);
+      _fwRenderBlocks(blockGroups);
     })
     // The one fetch chain on this page without a rejection handler — every sibling has one, and
     // openPort's was added with a note about "⟳ Opening..." being stuck on screen forever. This
@@ -114,6 +54,74 @@ function refreshFirewall() {
       if (window.toast) toast('Could not refresh the firewall rules — the host may be unreachable.',
                               'danger');
     });
+}
+
+// The open-ports table, or its empty state, and the rule count beside the card title.
+function _fwRenderRules(listEl, openGroups) {
+  if (openGroups.length) {
+    var html = '<table class="table table-sm table-hover mb-0 align-middle">'
+      + '<thead><tr><th>Port</th><th>Protocol</th><th>For</th><th>Scope</th><th>IP</th><th></th></tr></thead><tbody>';
+    openGroups.forEach(function(g) {
+      var port = g.is_iface
+        ? '<span class="badge bg-info text-dark">' + esc(g.port_num) + '</span>'
+        : '<code>' + esc(g.port_num) + '</code>';
+      var scope = (g.action !== 'ALLOW' ? '<span class="badge bg-danger me-1">' + esc(g.action) + '</span>' : '') + esc(g.scope);
+      html += '<tr><td>' + port + '</td>'
+        + '<td>' + protoBadge(g.proto_label) + '</td>'
+        + '<td class="small">' + esc(g.comment || '—') + '</td>'
+        + '<td class="small text-secondary">' + scope + '</td>'
+        + '<td><span class="text-secondary" style="font-size:.68rem;">' + esc(g.family_label) + '</span></td>'
+        + '<td>' + (g.protected
+            ? '<button class="btn btn-outline-secondary btn-sm py-0 px-1" disabled title="' + esc(g.protect_reason) + '"><i class="bi bi-lock-fill"></i></button>'
+            : '<button class="btn btn-outline-danger btn-sm py-0 px-1"' + _da('deleteGroup', [g.nums, '@self', !!g.warn, (g.protect_reason || ''), (g.key || '')]) + '><i class="bi bi-x"></i></button>')
+        + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    listEl.innerHTML = html;  // nosemgrep
+  } else {
+    listEl.innerHTML = '<div class="p-3 text-center text-secondary small">No open ports yet.</div>';
+  }
+  // The number and the WORD as separate nodes, matching what the template renders. As one
+  // text node the result was "3 rules", which is not a catalog key and never can be — so this
+  // repaint replaced a translated count with an English one on every refresh. t() is the same
+  // catalog the DOM walker uses, so the word is right immediately rather than after the
+  // observer catches up.
+  var rc = document.getElementById('rules-count');
+  if (rc) {
+    rc.textContent = openGroups.length + ' ';
+    var rw = document.createElement('span');
+    rw.textContent = t(openGroups.length === 1 ? 'rule' : 'rules');
+    rc.appendChild(rw);
+  }
+}
+
+// Blocked IPs (separate card): the table or its empty state, and the count.
+function _fwRenderBlocks(blockGroups) {
+  var blocksEl = document.getElementById('blocks-list');
+  if (blocksEl) {
+    if (blockGroups.length) {
+      var bh = '<table class="table table-sm table-hover mb-0 align-middle">'
+        + '<thead><tr><th>IP address</th><th>Source</th><th>Family</th><th></th></tr></thead><tbody>';
+      blockGroups.forEach(function(g) {
+        bh += '<tr><td><code>' + esc(g.block_ip) + '</code></td>'
+          + '<td>' + blockBadge(g.comment) + '</td>'
+          + '<td><span class="text-secondary" style="font-size:.68rem;">' + esc(g.family_label) + '</span></td>'
+          + '<td><button class="btn btn-outline-warning btn-sm py-0 px-1" title="Unblock ' + esc(g.block_ip) + '"'
+          + _da('unblockIp', [g.block_ip, '@self']) + '><i class="bi bi-x"></i></button></td></tr>';
+      });
+      bh += '</tbody></table>';
+      blocksEl.innerHTML = bh;  // nosemgrep
+    } else {
+      blocksEl.innerHTML = '<div class="p-3 text-center text-secondary small">No IPs are blocked.</div>';
+    }
+    var bc = document.getElementById('blocks-count');
+    if (bc) {
+      bc.textContent = blockGroups.length + ' ';
+      var bw = document.createElement('span');
+      bw.textContent = t('blocked');
+      bc.appendChild(bw);
+    }
+  }
 }
 
 // Both lists replaced by one sentence, and both counts by an em dash: the state where the rules
@@ -200,7 +208,7 @@ function openPort() {
   fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/open', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({port: parseInt(port, 10), protocol: proto, comment: comment}),
+    body: JSON.stringify({port: Number.parseInt(port, 10), protocol: proto, comment: comment}),
   })
   .then(r => r.json())
   .then(data => {
@@ -300,21 +308,29 @@ function deleteGroup(nums, btn, warn, reason, key) {
       if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
       if (!key) { _say('This page is out of date — reload it and try again.'); refreshFirewall(); return; }
       var budget = nums.length + 2, first = true;   // bounded: never loops on a rule that will not go
+      // The clicked group, found again by its identity in a fresh read — or null, once it has said
+      // why and repainted, when the read failed, the group is gone, or it has become protected.
+      function _groupToDelete(data) {
+        if (!data || data.unreachable || !data.groups) {
+          _say("Couldn't re-read the firewall, so the rule was not removed.");
+          refreshFirewall(); return null;
+        }
+        var g = data.groups.filter(function(x) { return x.key === key; })[0];
+        if (!g || !g.nums || !g.nums.length) {
+          if (first) _say('That rule is no longer in the firewall — the list has been refreshed.');
+          refreshFirewall(); return null;
+        }
+        if (g.protected) { _say(g.protect_reason || 'This rule protects your access to the host and can\'t be removed here.'); refreshFirewall(); return null; }
+        return g;
+      }
       (function next() {
         fetch(MOUNT + '/api/remote/' + remoteId + '/firewall')
           .then(r => r.json())
           .then(function(data) {
-            if (!data || data.unreachable || !data.groups) {
-              _say("Couldn't re-read the firewall, so the rule was not removed.");
-              refreshFirewall(); return;
-            }
-            var g = data.groups.filter(function(x) { return x.key === key; })[0];
-            if (!g || !g.nums || !g.nums.length) {
-              if (first) _say('That rule is no longer in the firewall — the list has been refreshed.');
-              refreshFirewall(); return;
-            }
-            if (g.protected) { _say(g.protect_reason || 'This rule protects your access to the host and can\'t be removed here.'); refreshFirewall(); return; }
-            if (budget-- <= 0) { refreshFirewall(); return; }
+            var g = _groupToDelete(data);
+            if (!g) return null;
+            budget -= 1;
+            if (budget < 0) { refreshFirewall(); return null; }
             first = false;
             return fetch(MOUNT + '/api/remote/' + remoteId + '/firewall/delete-rule', {
               method: 'POST',

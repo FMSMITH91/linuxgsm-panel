@@ -13,23 +13,37 @@ function _euUsers() {
   }
 }
 
-window.openEditUser = function (id) {
-  var u = null, all = _euUsers();
+// The first user in the island with this id, or null.
+function _euFind(id) {
+  var all = _euUsers();
   for (var i = 0; i < all.length; i++) {
-    if (all[i].id === id) { u = all[i]; break; }
+    if (all[i].id === id) return all[i];
   }
+  return null;
+}
+
+window.openEditUser = function (id) {
+  var u = _euFind(id);
   if (!u) return;
 
   // Coerce the id to a number before it reaches the form action. It is always an integer from our
   // own database, but it arrives here as text read out of the DOM, and a form action is a URL sink
-  // — CodeQL flags that flow (js/xss-through-dom) and is right to. parseInt both proves the value
+  // — CodeQL flags that flow (js/xss-through-dom) and is right to. Number.parseInt both proves the value
   // cannot carry meta-characters and rejects a tampered island outright.
-  var uid = parseInt(u.id, 10);
+  var uid = Number.parseInt(u.id, 10);
   if (!(uid > 0)) return;
 
   var form = document.getElementById('edit-user-form');
   form.setAttribute('action', (window.MOUNT || '') + '/users/' + uid + '/edit');
 
+  _euFillIdentity(u);
+  _euFillSwitches(u);
+
+  new bootstrap.Modal(document.getElementById('editUserModal')).show();
+};
+
+// The text fields (name, username, display name, email) and the group checkboxes.
+function _euFillIdentity(u) {
   document.getElementById('eu-name').textContent = u.username;   // textContent: never HTML
   // Populated, not left blank: the field posts back as the username, so an unfilled one would
   // submit empty and the route would read "no change" — or, with the browser's `required`, refuse
@@ -40,9 +54,12 @@ window.openEditUser = function (id) {
 
   var groups = u.groups || [];
   document.querySelectorAll('.eu-group').forEach(function (cb) {
-    cb.checked = groups.indexOf(parseInt(cb.value, 10)) !== -1;
+    cb.checked = groups.indexOf(Number.parseInt(cb.value, 10)) !== -1;
   });
+}
 
+// The switches: superadmin, active, and the two resets, which start OFF on every open.
+function _euFillSwitches(u) {
   // The superadmin switch is rendered only for a superadmin — the route refuses the grant from
   // anyone else, so offering it was a control that threw the whole form away. GUARDED, not
   // assumed: an unguarded .checked on the absent element throws, and everything after it here —
@@ -69,9 +86,7 @@ window.openEditUser = function (id) {
   // Same reasoning as the 2FA box: a password reset is destructive and must be chosen fresh each
   // time the dialog opens, never inherited from the last user you edited.
   document.getElementById('eu-reset-password').checked = false;
-
-  new bootstrap.Modal(document.getElementById('editUserModal')).show();
-};
+}
 
 // Show a one-time password the server just minted. Called by the ajax-form handler the moment the
 // response lands (see _submitAjaxForm) — the panel keeps only the hash, so if this is missed the

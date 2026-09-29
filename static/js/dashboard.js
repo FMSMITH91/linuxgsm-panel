@@ -20,7 +20,7 @@ window.toggleTagFilter = function(tagId, btn){
 function rowHasEveryTag(tr){
   if (!_tagFilter.length) return true;
   var have = Array.prototype.map.call(tr.querySelectorAll('.tag-chip'),
-                                      function(c){ return parseInt(c.getAttribute('data-tag-id'), 10); });
+                                      function(c){ return Number.parseInt(c.getAttribute('data-tag-id'), 10); });
   // AND, not OR: picking "production" + "modded" should narrow to servers that are both, which is
   // what makes the filter useful as a bulk-action selector.
   return _tagFilter.every(function(id){ return have.indexOf(id) !== -1; });
@@ -83,14 +83,7 @@ function refreshStatus() {
         window.refreshSection('#server-cards', 'afterDashRefresh');
         return;
       }
-      var online = data.filter(s => s.status === 'online').length;
-      var offline = data.filter(s => s.status === 'offline').length;
-      var oc = document.getElementById('online-count');
-      var fc = document.getElementById('offline-count');
-      var tc = document.getElementById('total-servers');
-      if (oc) oc.innerHTML = '<span class="status-dot status-online"></span> ' + online;  // nosemgrep
-      if (fc) fc.innerHTML = '<span class="status-dot status-offline"></span> ' + offline;  // nosemgrep
-      if (tc) tc.textContent = data.length;
+      _dashShowCounts(data);
       // The "+N installing or failed" line under Offline. It was rendered once by the template
       // and never touched again, so as servers finished installing the three tiles above moved to
       // agree while this one kept claiming the old count — the tile contradicting its own
@@ -126,93 +119,132 @@ function refreshStatus() {
       // So compare the failed set the API reports against the banners actually on screen, and
       // re-render the card region when they disagree. It settles after one pass (the banners then
       // match), so this cannot loop, and a dashboard with nothing failed never fetches at all.
-      var failedNow = data.filter(function(s){ return s.status === 'failed'; })
-                          .map(function(s){ return String(s.id); }).sort().join(',');
-      var failedShown = Array.prototype.map
-        .call(document.querySelectorAll('.install-failed[data-server-id]'),
-              function(el){ return el.getAttribute('data-server-id'); }).sort().join(',');
-      if (failedNow !== failedShown && document.getElementById('server-cards')
-          && window.refreshSection) {
-        // With the after-hook, same as the other #server-cards swap above. Without it the region
-        // comes back re-rendered but un-re-armed: a filter the user has typed stops applying (every
-        // row reappears) and host-card dragging stops working, until a reload. The swap replaces
-        // the tbody elements, so whatever was bound to the old ones is gone.
-        window.refreshSection('#server-cards', 'afterDashRefresh');
-      }
+      _dashResyncFailedBanners(data);
       // Total online / total capacity = sums of the known per-server values (unknowns excluded).
       var totalPlayers = data.reduce(function(a, s){ return a + (typeof s.players === 'number' ? s.players : 0); }, 0);
       var totalMax = data.reduce(function(a, s){ return a + (typeof s.max_players === 'number' ? s.max_players : 0); }, 0);
       var tp = document.getElementById('total-players');
       if (tp) tp.innerHTML = '<i class="bi bi-people-fill text-info"></i> ' + totalPlayers + (totalMax > 0 ? ' / ' + totalMax : '');  // nosemgrep
-      data.forEach(function(s){
-        var pcell = document.getElementById('players-' + s.id);
-        if (pcell) {
-          pcell.innerHTML = (typeof s.players === 'number')  // nosemgrep
-            ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players + (typeof s.max_players === 'number' && s.max_players > 0 ? ' / ' + s.max_players : '')
-            : '<span class="text-secondary">—</span>';
-        }
-        var cell = document.getElementById('status-' + s.id);
-        if (cell && cell.dataset.status !== s.status) {
-          cell.dataset.status = s.status;
-          var cls = (s.status === 'online' || s.status === 'offline') ? s.status : 'unknown';
-          cell.innerHTML = '<span class="status-dot status-' + cls + '"></span> ' + titleCase(s.status);  // nosemgrep
-        }
-        var conn = document.getElementById('connect-' + s.id);
-        var key = (s.connect || '') + '|' + (s.connect_url || '');
-        if (conn && s.connect && conn.dataset.addr !== key) {
-          conn.dataset.addr = key;
-          // Build via textContent + a listener (NOT innerHTML with the raw address) so a
-          // hostile connect address can't inject HTML/script into the dashboard.
-          conn.textContent = '';
-          var code = document.createElement('code');
-          code.className = 'text-info';
-          code.style.cssText = 'font-size:.78rem;cursor:pointer;';
-          code.title = 'Click to copy';
-          code.textContent = s.connect;
-          code.addEventListener('click', function(){ copyAddr(s.connect); });
-          conn.appendChild(code);
-          // One-click join link (steam://connect/…) for games that support it.
-          if (s.connect_url) {
-            var join = document.createElement('a');
-            join.className = 'btn btn-success btn-sm py-0 px-1 ms-2 join-link';
-            join.style.fontSize = '.7rem';
-            join.rel = 'noopener';
-            join.title = 'Launch the game and join (on phones, taps to copy the address)';
-            join.href = s.connect_url;   // href property assignment — no HTML parsing
-            if (s.connect) join.setAttribute('data-addr', s.connect);  // touch fallback: copy addr
-            join.innerHTML = '<i class="bi bi-box-arrow-in-right"></i> Join';
-            conn.appendChild(join);
-          }
-        }
-        // In-game server name (the hostname players see), from gamedig. textContent, never innerHTML,
-        // so a hostile server name can't inject markup. Keep the old value when none is reported.
-        var nm = document.getElementById('game-name-' + s.id);
-        if (nm && s.game_name && nm.textContent !== s.game_name) nm.textContent = s.game_name;
-        // Keep the row's sort keys in sync with live status/players so a re-sort reflects reality.
-        var row = cell ? cell.closest('tr') : null;
-        if (row) {
-          row.setAttribute('data-status', s.status);
-          row.setAttribute('data-players', typeof s.players === 'number' ? s.players : -1);
-          // Disable start/restart/stop + console while a server is installing/configuring (or not
-          // installed yet), and re-enable them live the moment it's ready — no page reload needed.
-          var busy = !s.installed || s.status === 'installing' || s.status === 'configuring';
-          row.querySelectorAll('.srv-ctl').forEach(function(b){ b.disabled = busy; });
-          // Files & Config is NOT gated the same way: its LinuxGSM config exists even when the
-          // install failed, and that page is where the usual causes are fixed. Same rule the
-          // template renders with.
-          var link = function(sel, off){
-            var a = row.querySelector(sel);
-            if (!a) return;
-            a.classList.toggle('disabled', off);
-            if (off) { a.setAttribute('tabindex', '-1'); a.setAttribute('aria-disabled', 'true'); }
-            else { a.removeAttribute('tabindex'); a.removeAttribute('aria-disabled'); }
-          };
-          link('.srv-console', busy);
-          link('.srv-files', busy && s.status !== 'failed');
-        }
-      });
+      data.forEach(_dashSyncServer);
     })
     .catch(() => {});
+}
+
+// The tiles: how many servers are online, offline, and in all.
+function _dashShowCounts(data) {
+  var online = data.filter(s => s.status === 'online').length;
+  var offline = data.filter(s => s.status === 'offline').length;
+  var oc = document.getElementById('online-count');
+  var fc = document.getElementById('offline-count');
+  var tc = document.getElementById('total-servers');
+  if (oc) oc.innerHTML = '<span class="status-dot status-online"></span> ' + online;  // nosemgrep
+  if (fc) fc.innerHTML = '<span class="status-dot status-offline"></span> ' + offline;  // nosemgrep
+  if (tc) tc.textContent = data.length;
+}
+
+// Re-render the card region when the failed set the API reports is not the set of failed-install
+// banners on screen. Why that is needed is at the call, in refreshStatus.
+function _dashResyncFailedBanners(data) {
+  var failedNow = data.filter(function(s){ return s.status === 'failed'; })
+                      .map(function(s){ return String(s.id); }).sort().join(',');
+  var failedShown = Array.prototype.map
+    .call(document.querySelectorAll('.install-failed[data-server-id]'),
+          function(el){ return el.getAttribute('data-server-id'); }).sort().join(',');
+  if (failedNow !== failedShown && document.getElementById('server-cards')
+      && window.refreshSection) {
+    // With the after-hook, same as the other #server-cards swap above. Without it the region
+    // comes back re-rendered but un-re-armed: a filter the user has typed stops applying (every
+    // row reappears) and host-card dragging stops working, until a reload. The swap replaces
+    // the tbody elements, so whatever was bound to the old ones is gone.
+    window.refreshSection('#server-cards', 'afterDashRefresh');
+  }
+}
+
+// One server's row, from one poll: players, status, connect address and in-game name, then the
+// row's sort keys and controls - in the order the poll has always done them.
+function _dashSyncServer(s) {
+  _dashPlayersCell(s);
+  var cell = _dashStatusCell(s);
+  _dashConnectCell(s);
+  // In-game server name (the hostname players see), from gamedig. textContent, never innerHTML,
+  // so a hostile server name can't inject markup. Keep the old value when none is reported.
+  var nm = document.getElementById('game-name-' + s.id);
+  if (nm && s.game_name && nm.textContent !== s.game_name) nm.textContent = s.game_name;
+  // Keep the row's sort keys in sync with live status/players so a re-sort reflects reality.
+  var row = cell ? cell.closest('tr') : null;
+  if (row) _dashSyncRow(row, s);
+}
+
+function _dashPlayersCell(s) {
+  var pcell = document.getElementById('players-' + s.id);
+  if (pcell) {
+    pcell.innerHTML = (typeof s.players === 'number')  // nosemgrep
+      ? '<i class="bi bi-people-fill text-secondary"></i> ' + s.players + (typeof s.max_players === 'number' && s.max_players > 0 ? ' / ' + s.max_players : '')
+      : '<span class="text-secondary">—</span>';
+  }
+}
+
+// Repaints the status cell when the status changed, and returns the cell (null when the row has
+// none) - the row's other updates find their row through it.
+function _dashStatusCell(s) {
+  var cell = document.getElementById('status-' + s.id);
+  if (cell && cell.dataset.status !== s.status) {
+    cell.dataset.status = s.status;
+    var cls = (s.status === 'online' || s.status === 'offline') ? s.status : 'unknown';
+    cell.innerHTML = '<span class="status-dot status-' + cls + '"></span> ' + titleCase(s.status);  // nosemgrep
+  }
+  return cell;
+}
+
+function _dashConnectCell(s) {
+  var conn = document.getElementById('connect-' + s.id);
+  var key = (s.connect || '') + '|' + (s.connect_url || '');
+  if (conn && s.connect && conn.dataset.addr !== key) {
+    conn.dataset.addr = key;
+    // Build via textContent + a listener (NOT innerHTML with the raw address) so a
+    // hostile connect address can't inject HTML/script into the dashboard.
+    conn.textContent = '';
+    var code = document.createElement('code');
+    code.className = 'text-info';
+    code.style.cssText = 'font-size:.78rem;cursor:pointer;';
+    code.title = 'Click to copy';
+    code.textContent = s.connect;
+    code.addEventListener('click', function(){ copyAddr(s.connect); });
+    conn.appendChild(code);
+    // One-click join link (steam://connect/…) for games that support it.
+    if (s.connect_url) {
+      var join = document.createElement('a');
+      join.className = 'btn btn-success btn-sm py-0 px-1 ms-2 join-link';
+      join.style.fontSize = '.7rem';
+      join.rel = 'noopener';
+      join.title = 'Launch the game and join (on phones, taps to copy the address)';
+      join.href = s.connect_url;   // href property assignment — no HTML parsing
+      if (s.connect) join.setAttribute('data-addr', s.connect);  // touch fallback: copy addr
+      join.innerHTML = '<i class="bi bi-box-arrow-in-right"></i> Join';
+      conn.appendChild(join);
+    }
+  }
+}
+
+function _dashSyncRow(row, s) {
+  row.setAttribute('data-status', s.status);
+  row.setAttribute('data-players', typeof s.players === 'number' ? s.players : -1);
+  // Disable start/restart/stop + console while a server is installing/configuring (or not
+  // installed yet), and re-enable them live the moment it's ready — no page reload needed.
+  var busy = !s.installed || s.status === 'installing' || s.status === 'configuring';
+  row.querySelectorAll('.srv-ctl').forEach(function(b){ b.disabled = busy; });
+  // Files & Config is NOT gated the same way: its LinuxGSM config exists even when the
+  // install failed, and that page is where the usual causes are fixed. Same rule the
+  // template renders with.
+  var link = function(sel, off){
+    var a = row.querySelector(sel);
+    if (!a) return;
+    a.classList.toggle('disabled', off);
+    if (off) { a.setAttribute('tabindex', '-1'); a.setAttribute('aria-disabled', 'true'); }
+    else { a.removeAttribute('tabindex'); a.removeAttribute('aria-disabled'); }
+  };
+  link('.srv-console', busy);
+  link('.srv-files', busy && s.status !== 'failed');
 }
 
 // Click-to-sort a single host card's table (the dashboard is already grouped by host into cards, so
@@ -222,14 +254,14 @@ function refreshStatus() {
 window.sortDashCol = function(key, th){
   var table = th.closest('table'); if (!table) return;
   var tb = table.querySelector('tbody'); if (!tb) return;
-  var dir = (table.dataset.sortKey === key) ? -(parseInt(table.dataset.sortDir || '1', 10)) : 1;
+  var dir = (table.dataset.sortKey === key) ? -(Number.parseInt(table.dataset.sortDir || '1', 10)) : 1;
   table.dataset.sortKey = key; table.dataset.sortDir = String(dir);
   // Sort the SERVER rows only, then re-attach each progress row under its own server. Sorting
   // every `tr` sent the progress rows (which carry no data-name/status/players) to one end, away
   // from the server they describe.
   Array.prototype.slice.call(tb.querySelectorAll('tr[data-server-id]')).sort(function(a, b){
     if (key === 'players') {
-      return ((parseInt(a.getAttribute('data-players'), 10)) - (parseInt(b.getAttribute('data-players'), 10))) * dir;
+      return ((Number.parseInt(a.getAttribute('data-players'), 10)) - (Number.parseInt(b.getAttribute('data-players'), 10))) * dir;
     }
     return (a.getAttribute('data-' + key) || '').localeCompare(b.getAttribute('data-' + key) || '', undefined, {sensitivity: 'base', numeric: true}) * dir;
   }).forEach(function(r){
@@ -249,7 +281,7 @@ pollWhenVisible(refreshStatus, 8000);
 // CPU/RAM/uptime in the Resources column). Heavier than the status feed (an SSH sample per server),
 // so it polls on a slower cadence.
 function _fmtUptimeShort(s){
-  s = Math.max(0, s|0);
+  s = Math.max(0, Math.trunc(s) || 0);   // `|| 0`: as `s|0` did, a NaN reads as 0 seconds
   var d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
   return d ? (d+'d '+h+'h') : (h ? (h+'h '+m+'m') : (m+'m'));
 }
@@ -456,13 +488,13 @@ window.showPanel = function(region, key, btn){
 function collectLayout(){
   var host_order = [], server_order = {};
   hostCards().forEach(function(card){
-    var rid = parseInt(card.getAttribute('data-remote-id'), 10);
-    if (isNaN(rid)) return;
+    var rid = Number.parseInt(card.getAttribute('data-remote-id'), 10);
+    if (Number.isNaN(rid)) return;
     host_order.push(rid);
     server_order[rid] = Array.prototype.slice
       .call(card.querySelectorAll('tbody tr[data-server-id]'))
-      .map(function(tr){ return parseInt(tr.getAttribute('data-server-id'), 10); })
-      .filter(function(n){ return !isNaN(n); });
+      .map(function(tr){ return Number.parseInt(tr.getAttribute('data-server-id'), 10); })
+      .filter(function(n){ return !Number.isNaN(n); });
   });
   var p = collectPanels();
   return {host_order: host_order, server_order: server_order,
@@ -557,10 +589,10 @@ function copyAddr(addr) {
 // current (-1 when the count is unknown), so the warning can say who is online from the DOM.
 function _actionRow(id) {
   var row = document.querySelector('tr[data-server-id="' + id + '"]');
-  var n = row ? parseInt(row.getAttribute('data-players'), 10) : NaN;
+  var n = row ? Number.parseInt(row.getAttribute('data-players'), 10) : Number.NaN;
   return {
     name: (row && row.getAttribute('data-name')) || ('server #' + id),
-    players: (isFinite(n) && n >= 0) ? n : null      // null = not known, so do not claim either way
+    players: (Number.isFinite(n) && n >= 0) ? n : null      // null = not known, so do not claim either way
   };
 }
 function _playerNote(n) {
@@ -678,16 +710,7 @@ function bulkAction(action) {
   // Restart joined stop and update here: it disconnects every player on every selected server, so
   // the one action that skipped the prompt was also the easiest to fire by accident.
   if (action === 'stop' || action === 'update' || action === 'restart') {
-    // Total players across the selection, from the same live row attribute the per-row confirm
-    // uses. Summed only over rows that actually know their count.
-    var known = checks.map(function (c) {
-      var row = c.closest('tr');
-      var n = row ? parseInt(row.getAttribute('data-players'), 10) : NaN;
-      return (isFinite(n) && n >= 0) ? n : null;
-    }).filter(function (n) { return n !== null; });
-    var online = known.reduce(function (a, n) { return a + n; }, 0);
-    var note = (action === 'update' || !known.length || !online) ? ''
-      : ' ' + online + ' player' + (online === 1 ? '' : 's') + ' connected across them will be disconnected.';
+    var note = _bulkPlayersNote(action, checks);
     confirmDialog({
       title: titleCase(action) + ' ' + ids.length + ' server' + (ids.length === 1 ? '' : 's'),
       icon: 'exclamation-triangle',
@@ -700,6 +723,21 @@ function bulkAction(action) {
     run();
   }
 }
+// The confirm's "N players connected across them will be disconnected." ('' when no row knows a
+// count, when none is connected, or for an update). Total players across the selection, from the
+// same live row attribute the per-row confirm uses. Summed only over rows that actually know their
+// count.
+function _bulkPlayersNote(action, checks) {
+  var known = checks.map(function (c) {
+    var row = c.closest('tr');
+    var n = row ? Number.parseInt(row.getAttribute('data-players'), 10) : Number.NaN;
+    return (Number.isFinite(n) && n >= 0) ? n : null;
+  }).filter(function (n) { return n !== null; });
+  var online = known.reduce(function (a, n) { return a + n; }, 0);
+  return (action === 'update' || !known.length || !online) ? ''
+    : ' ' + online + ' player' + (online === 1 ? '' : 's') + ' connected across them will be disconnected.';
+}
+
 // Keep the bar's count in sync as individual boxes are toggled.
 document.addEventListener('change', function (e) {
   if (e.target && e.target.classList && e.target.classList.contains('srv-check')) updateBulkBar();

@@ -3279,7 +3279,9 @@ def do_tailscale_install(args, content):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, "wb") as fh:
-            r = subprocess.run([resolve("curl"), "-fsSL", url],  # nosec B603 - fixed argv
+            # --proto =https: -L follows redirects, and nothing checks this body before root runs
+            # it, so TLS on every hop is all there is. The flag refuses a redirect to http.
+            r = subprocess.run([resolve("curl"), "--proto", "=https", "-fsSL", url],  # nosec B603 - fixed argv
                                stdout=fh, stderr=subprocess.PIPE, check=False, timeout=120)
         if r.returncode != 0:
             sys.stderr.write("download failed\n")

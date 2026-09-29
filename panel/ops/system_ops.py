@@ -350,17 +350,38 @@ def ufw_status():
         # field and EVERY rule whose To column is not numeric was dropped entirely: the
         # tailscale0 allow, app profiles like OpenSSH, and every `panel-block` DENY. Split on the
         # ACTION instead, which is the one column with a fixed vocabulary.
-        m = _UFW_RULE_RE.match(line)
-        if m:
-            rules.append({"to": m.group(1).strip(), "action": m.group(2),
-                          "direction": m.group(3), "from": m.group(4).strip()})
+        rule = _ufw_rule_split(line)
+        if rule:
+            rules.append(rule)
 
     return {"enabled": enabled, "status_text": status_text, "rules": rules}
 
 
 # "<to>  <ACTION> <DIR>  <from>" — the shape of every rule row in `ufw status verbose`.
-# ALLOW/DENY/REJECT/LIMIT is the only column with a closed vocabulary, so it is the anchor.
-_UFW_RULE_RE = re.compile(r"^(.+?)\s{2,}(ALLOW|DENY|REJECT|LIMIT)\s+(IN|OUT|FWD)\s*(.*)$")
+# ALLOW/DENY/REJECT/LIMIT is the only column with a closed vocabulary, so it is the anchor: the To
+# column ends at the first gap of two or more blanks that an action follows.
+#
+# Two passes, not the one `^(.+?)\s{2,}(ALLOW|DENY|REJECT|LIMIT)\s+(IN|OUT|FWD)\s*(.*)$` this
+# was. There the lazy `.+?` stepped onto every blank of a gap and `\s{2,}` re-read the rest of the
+# gap from each one, so a row with a long run of blanks cost the square of its length (20,000
+# blanks: 1.3s, and 4x that for twice as many). finditer reads each gap once, from its first
+# blank — the only place the old pattern could end the To column, since a later blank of the same
+# gap reaches the same action — and the action is tried where `\s{2,}` left off, the gap's end.
+_UFW_RULE_GAP_RE = re.compile(r"\s{2,}")
+_UFW_RULE_TAIL_RE = re.compile(r"(ALLOW|DENY|REJECT|LIMIT)\s+(IN|OUT|FWD)")
+
+
+def _ufw_rule_split(line):
+    """One `ufw status verbose` row as {to, action, direction, from}, or None when it is not one.
+
+    `line` is one line (no newline in it). The search starts at 1 because the To column is never
+    empty, which is what the old pattern's `.+` said."""
+    for gap in _UFW_RULE_GAP_RE.finditer(line, 1):
+        m = _UFW_RULE_TAIL_RE.match(line, gap.end())
+        if m:
+            return {"to": line[:gap.start()].strip(), "action": m.group(1),
+                    "direction": m.group(2), "from": line[m.end():].strip()}
+    return None
 
 
 def ufw_allows_iface_in(rules, iface):
@@ -718,9 +739,9 @@ def _local_cpu_percent():
         if not total or total <= prev_total:
             return ""
     _CPU_SAMPLE["idle"], _CPU_SAMPLE["total"] = idle, total
+    # Always > 0: both branches above return unless total > prev_total, and all four are this
+    # call's own locals. The `if d_total <= 0: return ""` that sat here could never run.
     d_total = total - prev_total
-    if d_total <= 0:
-        return ""
     return "%.1f" % max(0.0, min(100.0, (1 - (idle - prev_idle) / d_total) * 100))
 
 
@@ -820,12 +841,68 @@ _update_cache = {"ts": 0.0, "data": None}
 _UPDATE_TTL = 300  # re-check GitHub at most every 5 min for the sidebar badge
 
 
-def panel_version():
+def _version_from_epoch(text):
+    """The calendar version for a Unix time given as text: its UTC date as YYYY.M.D.
+
+    No leading zeros (2026.9.26), and UTC whatever the host's timezone. "" for anything that is
+    not a plain run of ASCII digits, or that the platform cannot convert.
+    """
+    text = (text or "").strip()
+    if not re.fullmatch(r"[0-9]{1,12}", text):
+        return ""
     try:
-        with open(os.path.join(PANEL_DIR, "VERSION")) as f:
-            return f.read().strip() or "0.0.0"
-    except Exception:
-        return "0.0.0"
+        t = time.gmtime(int(text))
+    except (OverflowError, OSError, ValueError):
+        return ""
+    return "%d.%d.%d" % (t.tm_year, t.tm_mon, t.tm_mday)
+
+
+def version_for_commit(commit="HEAD"):
+    """The panel's version for one commit: the date it was committed, in UTC, as YYYY.M.D.
+
+    Read as the committer time in seconds (%ct), so neither the host's timezone nor the offset the
+    commit was made in moves it. Every commit of a day shares the date, which is why the panel
+    shows it beside the short commit. "" when git cannot say. The trailing `--` makes git take the
+    name as a revision only: without it, a name that is not one but is a file in the checkout
+    answered with the last commit that touched that file.
+    """
+    if not commit or commit.startswith("-"):
+        return ""
+    out, _, rc = _git(["log", "-1", "--no-show-signature", "--format=%ct", commit, "--"],
+                      timeout=10)
+    return _version_from_epoch(out) if rc == 0 else ""
+
+
+def _version_file():
+    """The version from the VERSION file, for a copy of the panel that is not a git checkout.
+
+    The repository's VERSION holds git's export-subst placeholder, which `git archive` (so also a
+    GitHub "Download ZIP") replaces with the commit's epoch. An epoch reads as its date; the
+    placeholder itself, or an empty or unreadable file, as "unknown"; anything else is a version
+    kept by hand before dates (a snapshot or rollback of an older install) and is shown as it is.
+    """
+    try:
+        with open(os.path.join(PANEL_DIR, "VERSION"), encoding="utf-8") as f:
+            raw = f.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return "unknown"
+    if raw.isascii() and raw.isdecimal():
+        return _version_from_epoch(raw) or "unknown"
+    if not raw or raw.startswith("$Format:"):
+        return "unknown"
+    return raw
+
+
+def panel_version():
+    """The running panel's version: the checked-out commit's date (see version_for_commit).
+
+    Without a .git, or when git cannot answer, it is read from the VERSION file instead.
+    """
+    if _is_git_checkout():
+        ver = version_for_commit("HEAD")
+        if ver:
+            return ver
+    return _version_file()
 
 
 def panel_commit():
@@ -875,7 +952,9 @@ def _repo_slug():
     url, _, rc = _git(["remote", "get-url", "origin"], timeout=10)
     if rc != 0:
         return None
-    m = re.search(r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?/?\s*$", url.strip())
+    # \Z where this had `\s*$`: the URL is stripped, so nothing but its end can follow, and `\s*`
+    # there only let the lazy repo name re-scan a run of blanks from each of its characters.
+    m = re.search(r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?/?\Z", url.strip())
     return m.group(1) if m else None
 
 
@@ -962,9 +1041,11 @@ _NOISE_DIRS = (".github/", "docs/", "tests/", "tools/", ".vscode/")
 # name in the .in, so a commit that changes only the .in changes nothing a host installs.
 # requirements-bootstrap.in is the same for pip's own lockfile, requirements-bootstrap.txt, which
 # install.sh does read, and which therefore counts.
+# .codacy.yaml and .prospector.yaml configure Codacy's analysis of the repository; neither the panel
+# nor install.sh reads either, so a commit that only tunes the linting is not an update.
 _NOISE_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".dockerignore",
                 ".pre-commit-config.yaml", "codecov.yml", ".flake8", "mypy.ini", "requirements.in",
-                "requirements-bootstrap.in"}
+                "requirements-bootstrap.in", ".codacy.yaml", ".prospector.yaml"}
 # Files that live inside a noise directory but DO affect the running host, checked before the
 # directory rule. A denylist of directories cannot express "this one file matters".
 #
@@ -1057,7 +1138,7 @@ def _compute_update_status():
     branch = _tracked_branch()
     # Both names IN FULL. git resolves a bare `origin/main` as refs/tags/origin/main before
     # refs/remotes/origin/main (gitrevisions), so a tag pushed under that name answered every
-    # question below — how far behind, which commit to offer, its VERSION and changelog — about a
+    # question below — how far behind, which commit to offer, its version and changelog — about a
     # commit that was never on the branch, and the verified target handed to install.sh came from
     # it. A fetch SOURCE is looked up the same way on the remote: `fetch origin main` takes a TAG
     # named `main` over the branch and then never moves the remote-tracking ref, so the card sat on
@@ -1118,7 +1199,7 @@ def _compute_update_status():
         # docs_only is still REPORTED (the card can note it), but it no longer suppresses the
         # badge: the question this card answers is "am I running the latest?", and the answer to
         # that does not depend on what the newer commits happen to touch.
-        tgt_ver, _, tv_rc = _git(["show", "%s:VERSION" % ref])
+        tgt_ver = version_for_commit(ref)
         rem_full, _, _ = _git(["rev-parse", ref])
         runtime_log = _runtime_changelog("HEAD.." + ref)
         # Same fallback as the verified branch below, and docs_only reported here too — the card's
@@ -1129,7 +1210,7 @@ def _compute_update_status():
         return {**base, "update_available": True, "ci_state": "unverified",
                 "docs_only": not runtime_log,
                 "behind": len(rc_log) or behind_n, "behind_tip": behind_n,
-                "remote_version": ((tgt_ver.strip() if tv_rc == 0 else "") or "?"),
+                "remote_version": tgt_ver or "?",
                 "target_sha": rem_full.strip(),
                 "changes": rc_log[:10]}
 
@@ -1192,11 +1273,11 @@ def _compute_update_status():
         # ci_state and behind_tip are still reported for the API and the tests; only the card's
         # wording is deliberately silent.
         full_tip = commits[0] if commits else ""
-        tip_ver, _, tv_rc = _git(["show", "%s:VERSION" % ref])
+        tip_ver = version_for_commit(ref)
         return {**base, "update_available": False, "ci_state": tip_state,
                 "behind": behind_n, "behind_tip": behind_n,
                 "target_sha": full_tip,
-                "remote_version": ((tip_ver.strip() if tv_rc == 0 else "") or "?"),
+                "remote_version": tip_ver or "?",
                 "changes": _runtime_changelog("HEAD.." + ref)[:10]}
 
     # We have a verified target (possibly older than the tip if newer commits are still verifying).
@@ -1206,7 +1287,7 @@ def _compute_update_status():
     # up and re-trigger the badge once it passes CI.)
     # docs_only is reported, not used to suppress — see the branch case above.
     _docs_only = not _update_touches_runtime(target_sha)
-    tgt_ver, _, tv_rc = _git(["show", f"{target_sha}:VERSION"])
+    tgt_ver = version_for_commit(target_sha)
     rc_log = _runtime_changelog(f"HEAD..{target_sha}")   # runtime commits only (drops docs/CI)
     # What is COUNTED and what is LISTED must be the same set. `len(rc_log) or behind_target` used
     # the filtered count when it had one and the raw count when it did not — so an update made
@@ -1226,7 +1307,7 @@ def _compute_update_status():
         "behind": len(shown_log) or behind_target,   # always the number of commits listed below
         "behind_tip": behind_n,
         "newer_unverified": newer_unverified,
-        "remote_version": ((tgt_ver.strip() if tv_rc == 0 else "") or "?"),
+        "remote_version": tgt_ver or "?",
         "remote_sha": target_sha[:7],
         "target_sha": target_sha,
         "changes": shown_log[:10],
@@ -2043,8 +2124,9 @@ def _panel_login_proxied():
                 or bind in ("127.0.0.1", "::1", "localhost"))
 
 
-# Every tailnet peer's address: Tailscale's CGNAT IPv4 range and its IPv6 ULA prefix.
-_TAILNET_RANGES = ("100.64.0.0/10", "fd7a:115c:a1e0::/48")
+# Every tailnet peer's address: Tailscale's CGNAT IPv4 range and its IPv6 ULA prefix. These are
+# the ranges Tailscale assigns EVERY node from, fixed by Tailscale, not a host or a setting.
+_TAILNET_RANGES = ("100.64.0.0/10", "fd7a:115c:a1e0::/48")  # NOSONAR - Tailscale's fixed ranges
 
 
 def _panel_f2b_ignore(ignore_ips):
@@ -2303,8 +2385,11 @@ def _ufw_deny_sources(status_out, shadowed=None):
     late = {}           # operator denies an allow above them shadows
     allows = []         # (version, source network or None) of every inbound ALLOW/LIMIT so far
     for line in (status_out or "").splitlines():
-        m = re.match(r"\s*\[\s*\d+\]\s*(.*)\Z", line)
-        body, _, comment = (m.group(1) if m else line).partition("#")
+        # The row after its `[ N]` number. Sliced off rather than captured with `\s*(.*)\Z`: a
+        # line from splitlines() holds no newline, so that capture was always the rest of the line,
+        # and `\s*` beside `.*` in front of an anchor is a scan the pattern never needed.
+        m = re.match(r"\s*\[\s*\d+\]\s*", line)
+        body, _, comment = (line[m.end():] if m else line).partition("#")
         v6 = "(v6)" in body
         toks = body.replace("(v6)", " ").split()
         act = next((i for i, t in enumerate(toks) if t in ("DENY", "REJECT", "ALLOW", "LIMIT")), None)
@@ -3029,17 +3114,55 @@ _DEBUG_CONFIG_KEYS = (
 )
 
 
+# An address: a run of [\w.+-] (the local part), "@", a [\w-] label, ".", then [\w.-] to its end.
+_EMAIL_LOCAL_RE = re.compile(r"[\w.+-]+")
+_EMAIL_DOMAIN_RE = re.compile(r"@[\w-]+\.[\w.-]+")
+
+
+def _redact_emails(text):
+    r"""`text` with every email address replaced by [email], in one pass.
+
+    Exactly what re.sub(r"[\w.+-]+@[\w-]+\.[\w.-]+", "[email]", text) returns. That sub tried
+    a match at every character of a run with no "@" after it, and read the run to its end from
+    each one: a 20,000-character token — a base64 blob in the log tail — took 1.2s, and one twice
+    as long four times that. A match can only begin where the search resumes or at the start of a
+    run, since every character of a run reaches the same "@", so taking each run whole and
+    looking at what follows it finds the same addresses at the same places."""
+    out, done, pos = [], 0, 0
+    while True:
+        run = _EMAIL_LOCAL_RE.search(text, pos)
+        if run is None:
+            break
+        dom = _EMAIL_DOMAIN_RE.match(text, run.end())
+        if dom is None:
+            pos = run.end()
+            continue
+        out.append(text[done:run.start()])
+        out.append("[email]")
+        done = pos = dom.end()
+    out.append(text[done:])
+    return "".join(out)
+
+
 def _redact(text):
     """Best-effort scrub of anything secret-looking from free text (a log tail). The
     report is whitelist-built so this is defence-in-depth: emails, long token/key/hash
     strings, and key=value secrets get masked before an admin reviews + shares it."""
-    text = re.sub(r"[\w.+-]+@[\w-]+\.[\w.-]+", "[email]", text)
+    text = _redact_emails(text)
     # key=value / key: value where the key name contains a secret-ish word (incl.
     # prefixed forms like auth_token, access_key) — redact the value, keep the key.
     text = re.sub(r"(?i)\b([\w-]*(?:password|passwd|secret|token|api[_-]?key|auth[_-]?key|"
                   r"cred(?:ential)?|cookie|bearer)[\w-]*)(\s*[=:]\s*)\S+", r"\1\2[redacted]", text)
     text = re.sub(r"\b[A-Za-z0-9+/_-]{28,}={0,2}\b", "[redacted]", text)
     return text
+
+
+# A journal line's syslog 'time host proc[pid]:' prefix. `\S+\s[^:]+:` where this had
+# `\S+\s+[^:]+:`: the two match the same prefixes — `[^:]` takes blanks too, so "one or more
+# blanks, then one or more non-colons" is just "a blank, then one or more non-colons" — but with
+# `\s+` beside `[^:]+`, a line with no colon after a long run of blanks was re-split at every
+# blank of the run before it could fail.
+_JOURNAL_PREFIX_RE = re.compile(r"^[A-Z][a-z]{2}\s+\d+\s+[\d:]+\s+\S+\s[^:]+:\s?")
 
 
 def _dedupe_log_tracebacks(text):
@@ -3049,10 +3172,9 @@ def _dedupe_log_tracebacks(text):
     distinct traceback is kept; later identical ones are replaced with a one-line note.
     The dedup signature ignores the syslog 'time host proc[pid]:' prefix, so the same
     traceback logged at different times still matches."""
-    prefix_re = re.compile(r"^[A-Z][a-z]{2}\s+\d+\s+[\d:]+\s+\S+\s+[^:]+:\s?")
 
     def body(ln):
-        return prefix_re.sub("", ln)
+        return _JOURNAL_PREFIX_RE.sub("", ln)
 
     lines = text.split("\n")
     n = len(lines)

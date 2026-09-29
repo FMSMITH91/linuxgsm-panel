@@ -15,16 +15,160 @@ from app import (_has_remember_cookie, _log, _register_session, _tag_json)
 
 
 def register(app):
+    """Register the tag, dashboard-layout and account-security routes on `app`."""
+    _register_tag_catalog(app)
+    _register_tag_changes(app)
+    _register_own_layout(app)
+    _register_default_layout(app)
+    _register_own_layout_reset(app)
+    _register_account_routes(app)
+
+
+def _int_ids(raw):
+    """Parse the first 100 entries of `raw` as ints, skipping any that are not numeric."""
+    ids = []
+    for ident in raw[:100]:
+        try:
+            ids.append(int(ident))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+def _clean_ids(raw, allowed):
+    """Ids from `raw`, keeping only ones in `allowed`, deduped, order preserved."""
+    out, seen = [], set()
+    for ident in (raw or [])[:200]:
+        try:
+            num = int(ident)
+        except (TypeError, ValueError):
+            continue
+        if num in allowed and num not in seen:
+            seen.add(num)
+            out.append(num)
+    return out
+
+
+def _clean_server_order(raw, ok_hosts, ok_servers):
+    """Per-host server order from `raw`, keyed by host id string, visible hosts and servers only."""
+    per_host = {}
+    for host_id, ids in list(raw.items())[:100]:
+        if not isinstance(ids, list):
+            continue
+        try:
+            host_key = str(int(host_id))
+        except (TypeError, ValueError):
+            continue
+        if int(host_key) in ok_hosts:
+            per_host[host_key] = _clean_ids(ids, ok_servers)
+    return per_host
+
+
+def _merged_region_map(stored_map, sent, declared):
+    """Merge the regions a page sent into the stored map, capped at 20 regions.
+
+    Within a region, keep keys this page could not have sent. server_detail's gated panels
+    (commands, content) are absent on servers that don't offer them, and dropping them here would
+    erase that placement for every OTHER server.
+    """
+    merged = dict(stored_map or {})
+    for region, keys in _clean_panel_map(sent).items():
+        known = declared.get(region)
+        if known is not None:
+            keys = keys + [k for k in (merged.get(region) or [])
+                           if k not in keys and k not in known]
+        merged[region] = keys
+    return dict(list(merged.items())[:20])
+
+
+def _stage_ui_order(data):
+    """Set current_user's layout prefs from the parts of `data` present; return their names.
+
+    Nothing is committed here. Ids the caller cannot see are dropped by the cleaners.
+    """
+    visible = get_user_servers(current_user)
+    ok_hosts = {gs.remote_id for gs in visible}
+    ok_servers = {gs.id for gs in visible}
+
+    saved = []
+    if isinstance(data.get("host_order"), list):
+        current_user.set_ui_pref("host_order", _clean_ids(data["host_order"], ok_hosts))
+        saved.append("host_order")
+    if isinstance(data.get("server_order"), dict):
+        current_user.set_ui_pref("server_order",
+                                 _clean_server_order(data["server_order"], ok_hosts, ok_servers))
+        saved.append("server_order")
+    # MERGE regions rather than replacing the whole map: a page only ever knows its own
+    # regions (the dashboard sends dash_tiles, a server page sends detail_console), so a
+    # whole-map write from one page would silently delete the other page's layout.
+    stored = current_user.get_ui_prefs()
+    declared = _clean_panel_map(data.get("declared"))
+    for field in ("panels", "hidden"):
+        if field not in data:
+            continue
+        current_user.set_ui_pref(field, _merged_region_map(stored.get(field), data.get(field),
+                                                           declared))
+        saved.append(field)
+    return saved
+
+
+def _existing_tags(ids):
+    """Return the ServerTag rows for `ids` in first-seen order, unknown ids dropped, no repeats."""
+    from panel.db.models import ServerTag
+    return [t for t in (db.session.get(ServerTag, i) for i in dict.fromkeys(ids)) if t]
+
+
+def _spend_second_factor(u, code, back, mismatch):
+    """Check and spend `u`'s 2FA `code`; return a redirect to `back` if it fails, else None.
+
+    A matching authenticator code passes only when its step is newer than the last one spent
+    (verify_totp_STEP + last_totp_step is what makes it single use; the caller commits the step);
+    otherwise a valid one-time backup code is consumed. `mismatch` is the message flashed when
+    neither matches.
+    """
+    ok_2fa = False
+    _step = verify_totp_step(u.totp_secret_plain, code) if u.totp_secret_plain else None
+    if _step is not None:
+        if _step <= (u.last_totp_step or 0):
+            flash("That code has already been used — wait for your authenticator to show "
+                  "the next one.", "danger")
+            return redirect(back)
+        u.last_totp_step = _step
+        ok_2fa = True
+    elif u.use_backup_code(code):
+        ok_2fa = True
+    if not ok_2fa:
+        flash(mismatch, "danger")
+        return redirect(back)
+    return None
+
+
+def _remember_this_device(u):
+    """Whether this device's login is a remembered one, read from its session row or cookie.
+
+    Carried across the re-login after a password change, or changing a password would silently
+    downgrade a remembered login to one that expires in hours.
+    """
+    from panel.db.models import UserSession
+    _sid = getattr(current_user, "_sid", None)
+    _cur = UserSession.query.filter_by(sid=_sid, user_id=u.id).first() if _sid else None
+    return bool(_cur.remember) if _cur is not None else _has_remember_cookie()
+
+
+def _register_tag_catalog(app):
+    """Tags: list them, and create one."""
     @app.route("/api/tags")
     @login_required
     def api_tags_list():
-        """Every tag, with the servers carrying it that the CALLER can access. Readable by any
-        signed-in user — tags are how the UI groups and filters.
+        """Every tag, with the servers carrying it that the CALLER can access.
+
+        Readable by any signed-in user — tags are how the UI groups and filters.
 
         The server ids were every server's. The UI only uses them to decorate rows the caller can
         already see, but the response is the caller's to read, and it listed the ids of servers
         they cannot access and which tags those carry (an inventory server_access_required's
-        blanket 403 is careful not to give)."""
+        blanket 403 is careful not to give).
+        """
         from panel.db.models import ServerTag
         from sqlalchemy.orm import selectinload
         tags = ServerTag.query.options(selectinload(ServerTag.servers)).order_by(ServerTag.name).all()
@@ -48,8 +192,11 @@ def register(app):
     @app.route("/api/tags", methods=["POST"])
     @login_required
     def api_tags_create():
-        """Create a tag. The name's charset is enforced by the model (@validates), so a bad one
-        raises before it can be stored — caught here and returned as a 400 rather than a 500."""
+        """Create a tag.
+
+        The name's charset is enforced by the model (@validates), so a bad one raises before it can
+        be stored — caught here and returned as a 400 rather than a 500.
+        """
         from panel.db.models import ServerTag
         if not _can_edit_tags():
             return jsonify({"success": False, "message": "Permission denied"}), 403
@@ -82,13 +229,19 @@ def register(app):
         log_action(current_user, "tag_create", target=tag.name)
         return jsonify({"success": True, "tag": _tag_json(tag)})
 
+
+def _register_tag_changes(app):
+    """Tags: delete one, and replace one server's tag set."""
     @app.route("/api/tags/<int:tag_id>/delete", methods=["POST"])
     @login_required
     def api_tags_delete(tag_id):
-        """Delete a tag. Its association rows go too — SQLAlchemy clears the secondary table for a
-        deleted parent, and nothing here relies on database FK enforcement (this app never sets
-        PRAGMA foreign_keys, so an orphan would otherwise outlive the tag and get inherited by a
-        future server reusing the rowid)."""
+        """Delete a tag.
+
+        Its association rows go too — SQLAlchemy clears the secondary table for a deleted parent,
+        and nothing here relies on database FK enforcement (this app never sets PRAGMA foreign_keys,
+        so an orphan would otherwise outlive the tag and get inherited by a future server reusing
+        the rowid).
+        """
         from panel.db.models import ServerTag
         if not _can_edit_tags():
             return jsonify({"success": False, "message": "Permission denied"}), 403
@@ -110,9 +263,11 @@ def register(app):
     @login_required
     @server_access_required
     def api_server_tags_set(server_id):
-        """Replace one server's tag set. @server_access_required covers visibility (server_id is a
-        URL kwarg here, so the decorator applies), and MANAGE_SERVERS is still required to write."""
-        from panel.db.models import ServerTag
+        """Replace one server's tag set.
+
+        @server_access_required covers visibility (server_id is a URL kwarg here, so the decorator
+        applies), and MANAGE_SERVERS is still required to write.
+        """
         if not _can_edit_tags():
             return jsonify({"success": False, "message": "Permission denied"}), 403
         gs = get_game(server_id)
@@ -120,16 +275,11 @@ def register(app):
         raw = data.get("tag_ids")
         if not isinstance(raw, list):
             return jsonify({"success": False, "message": "tag_ids must be a list."}), 400
-        ids = []
-        for ident in raw[:100]:
-            try:
-                ids.append(int(ident))
-            except (TypeError, ValueError):
-                continue
+        ids = _int_ids(raw)
         try:
             # Assign through the relationship, never a raw INSERT: unknown ids are dropped, and a
             # repeated id can't create a duplicate association row.
-            gs.tags = [t for t in (db.session.get(ServerTag, i) for i in dict.fromkeys(ids)) if t]
+            gs.tags = _existing_tags(ids)
             db.session.commit()
         except Exception:
             db.session.rollback()
@@ -140,11 +290,16 @@ def register(app):
                                                    "color": t.color or "", "notify": bool(t.notify)}
                                                   for t in gs.tags]})
 
+
+def _register_own_layout(app):
+    """Dashboard layout: save the caller's own."""
     @app.route("/api/account/ui-order", methods=["POST"])
     @login_required
     def api_account_ui_order():
-        """Save THIS user's preferred dashboard order. Scoped to current_user: the body carries ids
-        only and never a user id, so there is no way to write someone else's layout.
+        """Save THIS user's preferred dashboard order.
+
+        Scoped to current_user: the body carries ids only and never a user id, so there is no way to
+        write someone else's layout.
 
         Ids the caller can't see, ids that no longer exist, and non-numeric junk are DROPPED rather
         than rejected — a stale tab or a hand-edited body should still produce a sane layout, and a
@@ -156,61 +311,7 @@ def register(app):
         same. The reset endpoint below IS logged, because it discards state.
         """
         try:
-            data = _json_body()
-            visible = get_user_servers(current_user)
-            ok_hosts = {gs.remote_id for gs in visible}
-            ok_servers = {gs.id for gs in visible}
-
-            def _clean(raw, allowed):
-                """Ids from `raw`, keeping only ones in `allowed`, deduped, order preserved."""
-                out, seen = [], set()
-                for ident in (raw or [])[:200]:
-                    try:
-                        num = int(ident)
-                    except (TypeError, ValueError):
-                        continue
-                    if num in allowed and num not in seen:
-                        seen.add(num)
-                        out.append(num)
-                return out
-
-            saved = []
-            if isinstance(data.get("host_order"), list):
-                current_user.set_ui_pref("host_order", _clean(data["host_order"], ok_hosts))
-                saved.append("host_order")
-            if isinstance(data.get("server_order"), dict):
-                per_host = {}
-                for host_id, ids in list(data["server_order"].items())[:100]:
-                    if not isinstance(ids, list):
-                        continue
-                    try:
-                        host_key = str(int(host_id))
-                    except (TypeError, ValueError):
-                        continue
-                    if int(host_key) in ok_hosts:
-                        per_host[host_key] = _clean(ids, ok_servers)
-                current_user.set_ui_pref("server_order", per_host)
-                saved.append("server_order")
-            # MERGE regions rather than replacing the whole map: a page only ever knows its own
-            # regions (the dashboard sends dash_tiles, a server page sends detail_console), so a
-            # whole-map write from one page would silently delete the other page's layout.
-            stored = current_user.get_ui_prefs()
-            declared = _clean_panel_map(data.get("declared"))
-            for field in ("panels", "hidden"):
-                if field not in data:
-                    continue
-                merged = dict(stored.get(field) or {})
-                for region, keys in _clean_panel_map(data.get(field)).items():
-                    # Within a region, keep keys this page could not have sent. server_detail's
-                    # gated panels (commands, content) are absent on servers that don't offer them,
-                    # and dropping them here would erase that placement for every OTHER server.
-                    known = declared.get(region)
-                    if known is not None:
-                        keys = keys + [k for k in (merged.get(region) or [])
-                                       if k not in keys and k not in known]
-                    merged[region] = keys
-                current_user.set_ui_pref(field, dict(list(merged.items())[:20]))
-                saved.append(field)
+            saved = _stage_ui_order(_json_body())
             if not saved:
                 return jsonify({"success": False, "message": "Nothing to save."}), 400
             try:
@@ -223,15 +324,21 @@ def register(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("save layout failed")}), 500
 
+
+def _register_default_layout(app):
+    """Dashboard layout: publish or clear the install-wide default."""
     @app.route("/api/settings/ui-default", methods=["POST"])
     @login_required
     def api_ui_default_publish():
-        """Publish THIS superadmin's current layout as the install default, so new accounts (and
-        anyone who resets) land on the house arrangement instead of bare defaults.
+        """Publish THIS superadmin's current layout as the install default.
+
+        New accounts (and anyone who resets) then land on the house arrangement instead of bare
+        defaults.
 
         Takes no body on purpose: it copies the caller's own saved layout, which they arranged by
         using the same controls as everyone else. That means there is nothing to validate here that
-        was not already validated on the way in, and no way to publish a layout nobody has seen."""
+        was not already validated on the way in, and no way to publish a layout nobody has seen.
+        """
         if not current_user.is_superadmin:
             return jsonify({"success": False, "message": "Permission denied"}), 403
         try:
@@ -262,12 +369,18 @@ def register(app):
                    detail="removed the install default dashboard layout")
         return jsonify({"success": True})
 
+
+def _register_own_layout_reset(app):
+    """Dashboard layout: reset the caller's own to the default."""
     @app.route("/api/account/ui-order/reset", methods=["POST"])
     @login_required
     def api_account_ui_order_reset():
-        """Drop this user's saved order so the default layout applies again. A separate endpoint
-        rather than a sentinel value in the save payload, so "never customised" and "reset back to
-        default" end up as the SAME stored state (no keys) instead of two states to reason about."""
+        """Drop this user's saved order so the default layout applies again.
+
+        A separate endpoint rather than a sentinel value in the save payload, so "never customised"
+        and "reset back to default" end up as the SAME stored state (no keys) instead of two states
+        to reason about.
+        """
         try:
             for key in ("host_order", "server_order", "panels", "hidden"):
                 current_user.set_ui_pref(key, None)
@@ -283,6 +396,9 @@ def register(app):
         except Exception:
             return jsonify({"success": False, "message": _log_and_generic("reset layout failed")}), 500
 
+
+def _register_account_routes(app):
+    """Account security: disable 2FA, change the password, dismiss the 2FA nag."""
     @app.route("/account/2fa/disable", methods=["POST"])
     @login_required
     def account_2fa_disable():
@@ -308,21 +424,12 @@ def register(app):
         # use, and it is committed below with the rest.
         code = (request.form.get("totp_code") or "").strip()
         if u.totp_enabled:
-            ok_2fa = False
-            _step = verify_totp_step(u.totp_secret_plain, code) if u.totp_secret_plain else None
-            if _step is not None:
-                if _step <= (u.last_totp_step or 0):
-                    flash("That code has already been used — wait for your authenticator to show "
-                          "the next one.", "danger")
-                    return redirect(url_for("account"))
-                u.last_totp_step = _step
-                ok_2fa = True
-            elif u.use_backup_code(code):
-                ok_2fa = True
-            if not ok_2fa:
-                flash("That authenticator code didn't match — two-factor authentication was not "
-                      "turned off.", "danger")
-                return redirect(url_for("account"))
+            refused = _spend_second_factor(
+                u, code, url_for("account"),
+                "That authenticator code didn't match — two-factor authentication was not "
+                "turned off.")
+            if refused is not None:
+                return refused
         u.totp_enabled = False
         u.totp_secret = None
         u.backup_codes = ""   # 2FA off → its backup codes no longer apply
@@ -334,11 +441,14 @@ def register(app):
     @app.route("/account/password", methods=["POST"])
     @login_required
     def account_change_password():
-        """Self-service password change. The user must prove they're really the account holder:
-        their CURRENT password, plus — when 2FA is on — a valid authenticator code (or a one-time
-        backup code). On success the new password is set and every OTHER session is signed out
-        (auth_epoch bump); this session is refreshed so the user stays logged in here.
-        (Superadmins change other people's passwords on the Users page, which needs neither.)"""
+        """Self-service password change.
+
+        The user must prove they're really the account holder: their CURRENT password, plus — when
+        2FA is on — a valid authenticator code (or a one-time backup code). On success the new
+        password is set and every OTHER session is signed out (auth_epoch bump); this session is
+        refreshed so the user stays logged in here. (Superadmins change other people's passwords on
+        the Users page, which needs neither.)
+        """
         # The real User row, NOT the current_user proxy. login_user() below re-logs this same user
         # in to refresh the session, and handing it the proxy makes flask-login store the proxy as
         # the logged-in user — every later `current_user` then resolves through it, recurses, and
@@ -381,21 +491,12 @@ def register(app):
         # once be replayed for the rest of that window. The login path has recorded the spent step
         # since single-use was introduced; this — the panel's other route that accepts a live code —
         # was still asking the yes/no question. The step is committed below with the new password.
+        # A consumed backup code, like the spent step, is committed below alongside the password.
         if u.totp_enabled:
-            ok_2fa = False
-            _step = verify_totp_step(u.totp_secret_plain, code) if u.totp_secret_plain else None
-            if _step is not None:
-                if _step <= (u.last_totp_step or 0):
-                    flash("That code has already been used — wait for your authenticator to show "
-                          "the next one.", "danger")
-                    return redirect(_back)
-                u.last_totp_step = _step
-                ok_2fa = True
-            elif u.use_backup_code(code):
-                ok_2fa = True                    # committed below alongside the new password
-            if not ok_2fa:
-                flash("That authenticator code didn't match — password not changed.", "danger")
-                return redirect(_back)
+            refused = _spend_second_factor(u, code, _back,
+                                           "That authenticator code didn't match — password not changed.")
+            if refused is not None:
+                return refused
 
         # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- password_problem() checked it above
         u.set_password(hash_password(new))   # remembers the outgoing one; see password_reused
@@ -404,20 +505,17 @@ def register(app):
         _was_forced = bool(u.must_change_password)
         u.must_change_password = False
         u.auth_epoch = (u.auth_epoch or 0) + 1   # sign out every other session/remember cookie
-            # The API token too. It is a SECOND credential for the same account, and it did not
-            # answer to any of the controls that exist to take an account back: it carries no
-            # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted
-            # every UserSession row and left it working. app.py's note that "cookie theft is also
-            # recoverable via sign out everywhere" was not true while one existed. Minting one
-            # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
-            # could leave themselves a key that survived the victim's whole recovery.
+        # The API token too. It is a SECOND credential for the same account, and it did not
+        # answer to any of the controls that exist to take an account back: it carries no
+        # auth_epoch, so a password change did not touch it, and "sign out everywhere" deleted
+        # every UserSession row and left it working. app.py's note that "cookie theft is also
+        # recoverable via sign out everywhere" was not true while one existed. Minting one
+        # needs only a live session (no password, no 2FA), so an attacker with a stolen cookie
+        # could leave themselves a key that survived the victim's whole recovery.
         u.revoke_api_token()
         from panel.db.models import UserSession
-        # Carry this device's "remember me" across the re-login, or changing a password would
-        # silently downgrade a remembered login to one that expires in hours.
-        _sid = getattr(current_user, "_sid", None)
-        _cur = UserSession.query.filter_by(sid=_sid, user_id=u.id).first() if _sid else None
-        _remember = bool(_cur.remember) if _cur is not None else _has_remember_cookie()
+        # Carry this device's "remember me" across the re-login (see _remember_this_device).
+        _remember = _remember_this_device(u)
         UserSession.query.filter_by(user_id=u.id).delete()   # epoch bump killed them all; clear rows
         db.session.commit()
         _register_session(u, _remember)          # fresh session row for THIS device

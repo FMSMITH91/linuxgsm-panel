@@ -174,39 +174,37 @@ _ms_mod.threading = _IvThreadingShim()
 from panel.ops import tailscale_integration as _ts_mod  # noqa: E402
 _o_ts_setup = _ts_mod.setup_tailscale_serve
 
-try:
+
+# Readers for the rows the checks below watch. `remote_id` is the fixture host the try block
+# creates first; these only run after it has.
+def servers_count():
     with app.app_context():
-        db.session.add(SetupState(step="complete", complete=True))
-        admin = User(username="iv_admin", password_hash=auth.hash_password("Str0ng!passw0rd"),
-                     display_name="IV Admin", is_superadmin=True, is_active=True)
-        db.session.add(admin)
-        remote = RemoteServer(name="iv-host", host="192.0.2.10", port=22, username="root",
-                              auth_method="key", auth_credential="", is_local=False)
-        # A LOCAL host too. Every port decision reads the host's listening ports, which for a
-        # remote is an SSH round trip this suite deliberately cannot make (192.0.2.0/24 is
-        # TEST-NET-1 and egress is refused). The positive controls — the half that proves the
-        # route still ACCEPTS good input — therefore run against the panel's own machine, where
-        # the scan is a local command and no network is involved.
-        local = RemoteServer(name="iv-local", host="127.0.0.1", port=22, username="root",
-                             auth_method="local", auth_credential="", is_local=True)
-        db.session.add_all([remote, local])
-        db.session.commit()
-        admin_id, remote_id, local_id = admin.id, remote.id, local.id
+        return GameServer.query.count()
 
-    c = client_as(admin_id)
 
-    def servers_count():
-        with app.app_context():
-            return GameServer.query.count()
+def remotes_count():
+    with app.app_context():
+        return RemoteServer.query.count()
 
-    def remotes_count():
-        with app.app_context():
-            return RemoteServer.query.count()
 
-    def stored_remote_port():
-        with app.app_context():
-            return db.session.get(RemoteServer, remote_id).port
+def stored_remote_port():
+    with app.app_context():
+        return db.session.get(RemoteServer, remote_id).port
 
+
+def stored_remote_auth():
+    with app.app_context():
+        return db.session.get(RemoteServer, remote_id).auth_method
+
+
+def stored_remote_fields():
+    with app.app_context():
+        _r = db.session.get(RemoteServer, remote_id)
+        return _r.name, _r.host, _r.username
+
+
+def _check_servers_add_refuses_bad_ports():
+    """/servers/add refuses every out-of-range or malformed port, writing no row."""
     # ── /servers/add — the endpoint that had no bounds at all ────────────────────────────────
     # A refusal here must leave NO row. That is the assertion that matters: the route used to
     # commit the GameServer first and only fail later, on the host, as the game's own error.
@@ -216,7 +214,6 @@ try:
     # posted to the unreachable host, which refuses every add by itself ("on an unreachable host
     # writes no server row" below, with a VALID port): the loop passed with the range check
     # deleted. A blank port is not in it — on this form blank means "the game's default port".
-    import panel.routes.manage_servers as _ms_mod
     _o_rfp_bad, _o_has_bad = _ms_mod.resolve_free_port, _ms_mod.host_account_state
     try:
         _ms_mod.resolve_free_port = lambda remote, remote_id, desired, game_type: (desired, False)
@@ -234,6 +231,9 @@ try:
     finally:
         _ms_mod.resolve_free_port, _ms_mod.host_account_state = _o_rfp_bad, _o_has_bad
 
+
+def _check_servers_add_stores_the_port():
+    """/servers/add stores a valid port, and the reassigned one when it is taken."""
     # Positive control: a valid port IS accepted and IS what gets stored. Without this the block
     # above would pass against a route that refuses everything.
     #
@@ -242,7 +242,6 @@ try:
     # nothing on 28960 and failed on the test VPS, which runs a real CoD server there — the route
     # correctly reassigned to 28961 and the check called that a bug. The route's contract is
     # "stores what it was given WHEN THAT PORT IS FREE", so the allocator has to be the free one.
-    import panel.routes.manage_servers as _ms_mod
     _o_rfp = _ms_mod.resolve_free_port
     before = servers_count()
     try:
@@ -274,6 +273,9 @@ try:
     finally:
         _ms_mod.resolve_free_port = _o_rfp
 
+
+def _check_servers_add_refuses_existing_accounts():
+    """/servers/add refuses a server name the host already has an account for."""
     # ── a server name that is ALREADY an account on the host ─────────────────────────────────
     # The name becomes the Linux account the install creates and acts as. INSTANCE_NAME_RE is a
     # username grammar, not an ownership check, so "root" or "ubuntu" passed it; the job then
@@ -315,6 +317,9 @@ try:
         _ms_mod.host_account_state = _o_has
         _ms_mod.resolve_free_port = _o_rfp2
 
+
+def _check_servers_add_odd_ports_and_unreachable_host():
+    """Odd-but-valid ports install, no install job runs, and a down host writes nothing."""
     # int() accepts these and they name a real port, so they must still work.
     # Typed throwaway names: an auto-named row is `codserver`, a real account on a host that runs
     # CoD, which is where this suite gets run.
@@ -345,6 +350,9 @@ try:
     check("/servers/add on an unreachable host writes no server row", servers_count() == before,
           "row count went %d -> %d" % (before, servers_count()))
 
+
+def _check_remote_ssh_port():
+    """/remotes/add and /remotes/<id>/edit refuse a bad SSH port and keep a good one."""
     # ── /remotes/add and /remotes/<id>/edit — the SSH port ───────────────────────────────────
     # The connection test is stubbed SUCCESSFUL, as the auth_method block below does and for its
     # reason: left real, the unreachable 192.0.2.11 refused every add on its own, and this loop
@@ -385,21 +393,15 @@ try:
     check("/remotes/edit accepts a valid ssh_port (positive control)", stored_remote_port() == 2222,
           "stored port is %s" % stored_remote_port())
 
+
+def _check_remote_edit_auth_method():
+    """/remotes/<id>/edit never turns a remote into local execution."""
     # ── /remotes/<id>/edit — auth_method PICKS THE TRANSPORT ─────────────────────────────────
     # Every other field on this form was validated; this one was stored raw. It is not a label:
     # _core.is_local_server() answers True for auth_method == "local", so that one value moves
     # every command the panel runs "on that host" onto the PANEL HOST — the machine holding the
     # database, the credential key and the panel's own sudoers grant. The form's select offers
     # exactly key/password/tailscale (templates/manage_remotes.html), so anything else is forged.
-    def stored_remote_auth():
-        with app.app_context():
-            return db.session.get(RemoteServer, remote_id).auth_method
-
-    def stored_remote_fields():
-        with app.app_context():
-            _r = db.session.get(RemoteServer, remote_id)
-            return _r.name, _r.host, _r.username
-
     for bad in ("local", "LOCAL", "banana", "", "key\nlocal"):
         r = c.post("/remotes/%d/edit" % remote_id,
                    data={"name": "iv-host", "host": "192.0.2.10", "ssh_user": "root",
@@ -416,6 +418,9 @@ try:
         check("/remotes/edit accepts auth_method=%s (positive control)" % good,
               stored_remote_auth() == good, "stored auth_method is %r" % stored_remote_auth())
 
+
+def _check_remote_add_auth_and_host():
+    """/remotes/add refuses auth_method=local, and a host that is an ssh option."""
     # ...and /remotes/add refuses the same value, so the hole is closed on both sides.
     #
     # The connection test has to be stubbed SUCCESSFUL for this to mean anything. Left real, the
@@ -461,6 +466,10 @@ try:
                   "status %d, rows %d -> %d" % (r.status_code, before, remotes_count()))
     finally:
         _rr.ssh_test_connection = _saved_test
+
+
+def _check_remote_edit_dash_host():
+    """/remotes/<id>/edit keeps its host when handed an ssh option."""
     for _dash in ("-A", "--"):
         _was = stored_remote_fields()
         r = c.post("/remotes/%d/edit" % remote_id,
@@ -479,6 +488,9 @@ try:
             check("/remotes/edit accepts a plain host (positive control)",
                   stored_remote_fields()[1] == "192.0.2.14", "host is %r" % (stored_remote_fields()[1],))
 
+
+def _check_remote_edit_blank_fields():
+    """/remotes/<id>/edit leaves the stored values alone when fields are blank."""
     # ── /remotes/<id>/edit — a BLANK field is not an edit ────────────────────────────────────
     # `.get(key, default)` only falls back when the key is ABSENT, and this form posts all three
     # every time, without `required` (the add form above it has it). So clearing a box and saving
@@ -493,6 +505,9 @@ try:
           stored_remote_fields() == _was,
           "%r -> %r" % (_was, stored_remote_fields()))
 
+
+def _check_change_port():
+    """/api/panel/change-port refuses every bad port with a 400."""
     # ── /api/panel/change-port — JSON body, and the panel's OWN port ─────────────────────────
     # Side-effect-free for every value below: all are refused before any save or restart. A VALID
     # port is deliberately not exercised — that one restarts the panel.
@@ -503,6 +518,9 @@ try:
               r.status_code == 400 and not (r.get_json() or {}).get("success"),
               "got %d" % r.status_code)
 
+
+def _check_free_port():
+    """/api/free-port suggests nothing for a bad port, and a real one for a good one."""
     # ── /api/free-port — the read-only suggestion the install form uses ──────────────────────
     # At the LOCAL host with the allocator stubbed to hand back whatever it is asked for, so the
     # route's own range check is what answers None. Aimed at the unreachable host, the allocator
@@ -527,6 +545,9 @@ try:
     check("free-port suggests a real port for a valid request (positive control)",
           isinstance(_fp, int) and 1 <= _fp <= 65535, "got %r" % (_fp,))
 
+
+def _check_data_layer_ports():
+    """The models refuse an out-of-range port, whatever route assigns it."""
     # ── The data layer refuses what a route might not ────────────────────────────────────────
     # The route checks above are the first line; this is the one that cannot be forgotten by the
     # NEXT route to assign a port. Same reasoning as the shell-identifier validator beside it.
@@ -544,6 +565,9 @@ try:
         check("GameServer.query_port = None is still allowed (optional column)",
               GameServer(query_port=None).query_port is None)
 
+
+def _check_tailscale_mount():
+    """A hostile Tailscale mount point is refused, not a 500, and never reaches the host."""
     # ── A hostile Tailscale mount point is a refusal, not a 500 ─────────────────────────────
     # The mount is request JSON and it is strictly validated — privileged._ts_mount rebuilds it
     # character by character out of a literal alphabet, so nothing outside that set survives. But
@@ -555,7 +579,6 @@ try:
     #
     # Nothing is stored either way (the route only writes tailscale_mount when Serve succeeded),
     # so this is about the ANSWER, not about a bad value reaching the config.
-    from panel.core.config import load_config as _tsl
     # setup_tailscale_serve is a RECORDER here. The real one makes the current user the Tailscale
     # operator, adds a UFW allow on tailscale0, and runs `tailscale serve --bg` UNPRIVILEGED first —
     # which nosudo_runner cannot refuse, since it names no sudo. So the positive control below left
@@ -564,7 +587,7 @@ try:
     # answers "not done" so nothing is stored, and what it received is asserted instead.
     _ts_calls = []
     _ts_mod.setup_tailscale_serve = lambda **kw: (_ts_calls.append(kw), (False, "stub: not run"))[1]
-    _mount_before = _tsl().get("tailscale_mount")
+    _mount_before = load_config().get("tailscale_mount")
     for _bad in ("../etc", "/a/../../b", "not-a-path", "/" + "x" * 40, "/a;b", "//host"):
         r = c.post("/api/tailscale/serve", json={"action": "enable", "mount": _bad})
         check("tailscale serve mount=%r is refused, not a 500" % _bad,
@@ -574,8 +597,8 @@ try:
               (r.get_json() or {}).get("success") is False,
               "body was %s" % r.get_data(as_text=True)[:80])
     check("tailscale serve: a refused mount is never stored",
-          _tsl().get("tailscale_mount") == _mount_before,
-          "config moved to %r" % (_tsl().get("tailscale_mount"),))
+          load_config().get("tailscale_mount") == _mount_before,
+          "config moved to %r" % (load_config().get("tailscale_mount"),))
     # Positive control: a VALID mount must get PAST the validation above and reach the real work,
     # so the gate cannot pass by refusing everything.
     #
@@ -599,13 +622,15 @@ try:
     check("tailscale serve: ...and it reaches Serve with that mount, recorded and not run",
           [k.get("mount") for k in _ts_calls] == ["/lgsm"], repr(_ts_calls))
 
+
+def _check_no_port_parsed_with_int_or():
+    """No port is parsed with _int_or, the parser without a range."""
     # ── Structural: a port field must go through the bounded parser ──────────────────────────
     # This is the check that generalises. _int_or guarantees "an int" and carries no range; every
     # place that took a port through it is where a bad port got in. Naming the parser is what stops
     # the next port field repeating it, so assert it rather than trusting the convention.
     import ast
-    import pathlib
-    _root = pathlib.Path(__file__).resolve().parent.parent
+    _root = _pl.Path(__file__).resolve().parent.parent
     offenders = []
     _int_or_sites = 0
     for py in sorted((_root / "panel").rglob("*.py")) + [_root / "app.py"]:
@@ -629,6 +654,44 @@ try:
           % _int_or_sites)
     check("no port is parsed with _int_or (the parser without a range)", not offenders,
           "; ".join(offenders))
+
+
+try:
+    with app.app_context():
+        db.session.add(SetupState(step="complete", complete=True))
+        admin = User(username="iv_admin", password_hash=auth.hash_password("Str0ng!passw0rd"),
+                     display_name="IV Admin", is_superadmin=True, is_active=True)
+        db.session.add(admin)
+        remote = RemoteServer(name="iv-host", host="192.0.2.10", port=22, username="root",
+                              auth_method="key", auth_credential="", is_local=False)
+        # A LOCAL host too. Every port decision reads the host's listening ports, which for a
+        # remote is an SSH round trip this suite deliberately cannot make (192.0.2.0/24 is
+        # TEST-NET-1 and egress is refused). The positive controls — the half that proves the
+        # route still ACCEPTS good input — therefore run against the panel's own machine, where
+        # the scan is a local command and no network is involved.
+        local = RemoteServer(name="iv-local", host="127.0.0.1", port=22, username="root",
+                             auth_method="local", auth_credential="", is_local=True)
+        db.session.add_all([remote, local])
+        db.session.commit()
+        admin_id, remote_id, local_id = admin.id, remote.id, local.id
+
+    c = client_as(admin_id)
+
+    # Each block is a function above, run in this order; a crash in any one is caught below.
+    _check_servers_add_refuses_bad_ports()
+    _check_servers_add_stores_the_port()
+    _check_servers_add_refuses_existing_accounts()
+    _check_servers_add_odd_ports_and_unreachable_host()
+    _check_remote_ssh_port()
+    _check_remote_edit_auth_method()
+    _check_remote_add_auth_and_host()
+    _check_remote_edit_dash_host()
+    _check_remote_edit_blank_fields()
+    _check_change_port()
+    _check_free_port()
+    _check_data_layer_ports()
+    _check_tailscale_mount()
+    _check_no_port_parsed_with_int_or()
 
 except Exception as exc:                      # a crash in the harness is a failure, not a pass
     import traceback

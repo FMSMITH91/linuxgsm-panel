@@ -41,7 +41,7 @@
     <div class="card-header"><i class="bi bi-translate"></i> Language</div>
     <div class="card-body">
       <p class="text-secondary small mb-2">Choose the language for the panel interface. This preference is saved to your account and follows you across devices.</p>
-      <select class="form-select form-select-sm" style="max-width: 260px;"
+      <select class="form-select form-select-sm" style="max-width: 260px;" aria-label="Language"
               data-lang-select data-lang-url="{{ url_for('set_language', lang='LANGCODE') }}">
         {% for code, name in languages.items() %}
         <option value="{{ code }}" {% if code == current_lang %}selected{% endif %}>{{ name }}</option>
@@ -121,10 +121,10 @@
            password change above does. Turning the second factor OFF is the change that makes
            every later login easier, so it asks for the same proof. A backup code works here. #}
         <form method="POST" action="{{ url_for('account_2fa_disable') }}">
-          <label class="form-label small">Confirm your password and a current code to turn 2FA off</label>
-          <div class="d-flex gap-2 flex-wrap" style="max-width: 560px;">
-            <input type="password" name="password" class="form-control form-control-sm" style="min-width:12rem;flex:1 1 12rem;" autocomplete="current-password" placeholder="Password" required>
-            <input type="text" name="totp_code" class="form-control form-control-sm" style="min-width:9rem;flex:0 1 9rem;" inputmode="numeric" autocomplete="one-time-code" placeholder="Code or backup code" required>
+          <span class="form-label small d-inline-block" id="tfa-off-label">Confirm your password and a current code to turn 2FA off</span>
+          <div class="d-flex gap-2 flex-wrap" style="max-width: 560px;" role="group" aria-labelledby="tfa-off-label">
+            <input type="password" name="password" class="form-control form-control-sm" style="min-width:12rem;flex:1 1 12rem;" autocomplete="current-password" placeholder="Password" aria-label="Password" required>
+            <input type="text" name="totp_code" class="form-control form-control-sm" style="min-width:9rem;flex:0 1 9rem;" inputmode="numeric" autocomplete="one-time-code" placeholder="Code or backup code" aria-label="Code or backup code" required>
             <button class="btn btn-outline-danger btn-sm text-nowrap" type="submit">Disable 2FA</button>
           </div>
         </form>

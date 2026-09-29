@@ -36,7 +36,8 @@ def _is_sudo(cmd, sudo_flag=False):
     argv[0] alone was not enough, and the shape it missed is the common one: the local privileged
     path builds ["/bin/bash", "-c", "sudo bash -c '<cmd>'"], so the sudo is in argv[2] and argv[0]
     is bash. Verified: _is_sudo(["/bin/bash", "-c", "sudo bash -c x"]) was False. An absolute
-    /usr/bin/sudo missed too."""
+    /usr/bin/sudo missed too.
+    """
     if sudo_flag:
         return True
     if isinstance(cmd, (list, tuple)):
@@ -140,8 +141,11 @@ def _install():
 
 
 def _caller_label(suffix):
-    """Which module called into the shim, for the refusal report. Taken from the calling frame
-    because the shim is shared — it cannot be baked in at construction any more."""
+    """Which module called into the shim, for the refusal report.
+
+    Taken from the calling frame because the shim is shared — it cannot be baked in at
+    construction any more.
+    """
     try:
         return "%s.%s" % (sys._getframe(2).f_globals.get("__name__", "?"), suffix)
     except Exception:
@@ -149,9 +153,12 @@ def _caller_label(suffix):
 
 
 def _make_shim(_sp):
-    """A stand-in for one subprocess module that refuses anything invoking sudo, and passes the
-    rest to `_sp` — the module it is standing in FOR, so its semantics are the ones that module
-    had. Substituting a different subprocess module here changes behaviour the app depends on."""
+    """A stand-in for one subprocess module that refuses anything invoking sudo.
+
+    It passes the rest to `_sp` — the module it is standing in FOR, so its semantics are the ones
+    that module had. Substituting a different subprocess module here changes behaviour the app
+    depends on.
+    """
     class _Shim:
         def __getattr__(self, name):
             return getattr(_sp, name)
@@ -175,11 +182,14 @@ def _make_shim(_sp):
 
 
 def _greenify_first():
-    """eventlet.monkey_patch() REPLACES socket.socket wholesale, so any patch we install before it
+    """Run eventlet.monkey_patch() now, before the egress guard is installed.
+
+    eventlet.monkey_patch() REPLACES socket.socket wholesale, so any patch we install before it
     runs is silently discarded. app.py line 53 calls it when the suite imports the app — i.e. after
     us — which is exactly how the first version of the egress guard came to do nothing at all while
     the run happily opened SSH sockets. monkey_patch is idempotent, so calling it here first just
-    fixes the ordering."""
+    fixes the ordering.
+    """
     try:
         import eventlet
         eventlet.monkey_patch()

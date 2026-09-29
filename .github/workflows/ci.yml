@@ -72,6 +72,10 @@ jobs:
         # Everything is hash-pinned: requirements.txt is the panel's own lockfile (requirements.in),
         # and the tools' are in .github/ci-requirements-checks. esprima is an sdist, so its build
         # tools go in first and it builds against those, not against a fetched setuptools.
+        # Wheels only for everything else: esprima is the ONE package allowed to build from source.
+        # pip applies the two flags in order, so `--no-binary=esprima` comes after
+        # `--only-binary :all:` (the other way round makes esprima wheel-only, and the install
+        # fails). Drop the exemption if esprima ever ships a wheel.
         # requirements-bootstrap.txt first: the pip install.sh puts in every panel venv, installed
         # the way install.sh installs it, so a Dependabot bump of it is proved on each Python here,
         # and the requirements below go in through the same pip the hosts use.
@@ -80,8 +84,8 @@ jobs:
           python -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
           python -m pip install --quiet --require-hashes --only-binary :all: \
             -r .github/ci-requirements-checks/build.txt
-          python -m pip install --quiet --require-hashes --no-build-isolation \
-            -r .github/ci-requirements-checks/checks.txt
+          python -m pip install --quiet --require-hashes --only-binary :all: --no-binary=esprima \
+            --no-build-isolation -r .github/ci-requirements-checks/checks.txt
 
       - name: Run all checks (compile, lint, unit, smoke, shellcheck)
         # Same script developers run locally via ./tools/run-tests.sh, so green here == green there.
@@ -201,6 +205,77 @@ jobs:
       # repository secret was readable by a workflow on any branch pushed here. codacy-coverage.yml
       # uploads the artifact above once this workflow completes, from main's copy of that file, in
       # an environment the owner can restrict to main (its header has the settings).
+
+  js-coverage:
+    # Line coverage of the panel's OWN JavaScript (static/js/*.js — not static/vendor), for Codacy
+    # beside the Python report above: the Python suites never run a line of it, so until this job
+    # every one of those files was simply absent from the coverage Codacy reports.
+    #
+    # tools/js_coverage/run.py boots a seeded panel in a throwaway copy of the tree, with every
+    # command it would run on a host answered by a fake host and every other way out refused
+    # (tools/js_coverage/serve.py), drives the runner's own Chrome through its pages and controls
+    # over the DevTools protocol, and writes V8's block coverage as LCOV. Nothing is installed
+    # beyond the panel's requirements.txt: the DevTools client is websocket-client, already in it,
+    # and Chrome is part of the runner image. So there is no new lockfile to pin or keep current.
+    #
+    # It FAILS rather than uploading nothing when the panel does not boot, the sign-in does not
+    # land, Chrome cannot be driven, a page the walk names does not render as itself, or no line
+    # of static/js ran: an empty report would read as "0% covered", which is a measurement of
+    # nothing. Like the job above it holds no secret — codacy-coverage.yml uploads its artifact.
+    name: js coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --quiet --require-hashes --only-binary :all: -r requirements.txt
+
+      - name: Measure
+        run: |
+          set -euo pipefail
+          chrome=""
+          for c in google-chrome chromium; do
+            if command -v "${c}" >/dev/null; then chrome="$(command -v "${c}")"; break; fi
+          done
+          if [ -z "${chrome}" ]; then
+            echo "::error::no Chrome on this runner image; the JavaScript was not measured."
+            exit 1
+          fi
+          # The summary goes on the run page whether or not the run passed — a failed one names
+          # the page it could not reach or the flow that broke — and the step then exits with
+          # run.py's own status, so a failure stops the upload below.
+          rc=0
+          python tools/js_coverage/run.py --chrome "${chrome}" \
+            --out lcov.info --summary js-coverage.txt || rc=$?
+          if [ -f js-coverage.txt ]; then
+            {
+              echo '### JavaScript coverage (static/js)'
+              echo ''
+              echo '```'
+              cat js-coverage.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "${rc}"
+
+      - name: Upload the report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: js-coverage
+          path: |
+            lcov.info
+            js-coverage.txt
+          if-no-files-found: error
 
   gamedig-lockfile:
     # tools/gamedig/package-lock.json is the tree install-gamedig.sh installs on every host, and it

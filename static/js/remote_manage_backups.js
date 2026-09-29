@@ -35,128 +35,161 @@ function loadBackups(){
     var kp=document.getElementById('bk-keep'); if(kp && s.keep_days) kp.value = String(s.keep_days);
     bkShowEncState(s.encrypt===true);
     var tb=document.getElementById('bk-tbody'); if(!tb) return;
-    var rows='';
-    (d.backups||[]).forEach(function(b){
-      var when=new Date(b.created*1000).toLocaleString();
-      var kind = b.kind==='daily'?'<span class="badge bg-secondary">daily</span>'
-               : b.kind==='prerestore'?'<span class="badge bg-info text-dark">pre-restore</span>'
-               : '<span class="badge bg-primary">manual</span>';
-      // Encrypted rows are marked so a download is not mistaken for a file you can just open —
-      // and so it is obvious which archives need the passphrase to restore.
-      if(b.encrypted) kind += ' <i class="bi bi-shield-lock-fill text-success" title="Encrypted — needs the passphrase to restore"></i>';
-      rows += '<tr>'
-        + '<td title="'+escapeHtml(when)+'">'+escapeHtml(bkAgo(b.created))+'</td>'
-        + '<td>'+kind+'</td>'
-        + '<td>'+bkFmtBytes(b.size)+'</td>'
-        + '<td class="text-end text-nowrap">'
-        // The archive is panel.db PLUS secret_key and cred_key — the pair that decrypts every
-        // stored SSH credential. Downloading it moves that off the 0700 data dir onto whatever
-        // machine the browser is on, so the title says so rather than just "Download".
-        + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/api/panel/backup/download/'+encodeURIComponent(b.name)+'" title="Download — contains the database AND the encryption keys for every stored SSH credential. Keep it somewhere you would keep those keys."><i class="bi bi-download"></i></a> '
-        + '<button class="btn btn-sm btn-outline-warning py-0 px-1" title="Restore"' + _da('restoreBackup', [b.name, !!b.encrypted, '@self']) + '><i class="bi bi-arrow-counterclockwise"></i></button> '
-        + '<button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"' + _da('deleteBackup', [b.name, '@self']) + '><i class="bi bi-trash"></i></button>'
-        + '</td></tr>';
-    });
-    if(!(d.backups||[]).length) rows='<tr><td colspan="4" class="text-secondary text-center py-3">No backups yet.</td></tr>';
-    tb.innerHTML=rows;  // nosemgrep
-    document.getElementById('bk-loading').style.display='none';
-    document.getElementById('bk-table-wrap').style.display='';
+    bkRenderList(d, tb);
     // ── Full (game server files) backup section ──
     var f=d.full||{};
-    var autoOn=(f.interval_days||0)>0;
-    var fen=document.getElementById('fb-auto-enabled'); if(fen) fen.checked=autoOn;
-    var fi=document.getElementById('fb-interval');
-    if(fi){ fi.value=String(autoOn?f.interval_days:7); fi.disabled=!autoOn; }
-    var fk=document.getElementById('fb-keep'); if(fk) fk.value=String(f.keep||2);
+    bkRenderFullSchedule(f);
     window._bkDisk=d.disk||{free:0,total:0,backup_bytes:0,est_cycle:0};
     window._bkMultiHost=!!d.multi_host;
-    var fdk=document.getElementById('fb-disk');
-    if(fdk){
-      var dk=window._bkDisk;
-      if(window._bkMultiHost){
-        // Servers span multiple hosts — a single disk figure would be misleading, so show
-        // each server's own host disk on its row below instead.
-        fdk.innerHTML='<i class="bi bi-hdd"></i> Your servers are on more than one host — free disk is shown per server below.';
-      } else if(dk.total>0){
-        var pct=Math.round((dk.total-dk.free)/dk.total*100);
-        fdk.innerHTML='<i class="bi bi-hdd"></i> Disk: <strong>'+bkFmtBytes(dk.free)+'</strong> free of '+bkFmtBytes(dk.total)  // nosemgrep
-          +' ('+pct+'% used). Game backups currently use '+bkFmtBytes(dk.backup_bytes||0)+'.';
-      } else { fdk.textContent=''; }
-    }
+    bkRenderDisk();
     fbSummary();
-    var fnow=document.getElementById('fb-now'); if(fnow) fnow.disabled = !!d.full_running;
-    var fs=document.getElementById('fb-status');
-    if(fs){ fs.textContent = d.full_running ? 'Running now…' : (f.last ? ('Last: '+bkAgo(f.last)+(f.summary?' — '+f.summary:'')) : 'Never run'); }
+    bkRenderFullStatus(d, f);
     var fg=document.getElementById('fb-games');
-    if(fg){
-      var gh='';
-      (d.games||[]).forEach(function(g){
-        var rows=(g.backups||[])
-          // Skip a backup that's still being written — show it only once it's finished.
-          .filter(function(b){ return !b.in_progress; })
-          .map(function(b){
-          return '<tr>'
-            + '<td><div style="font-family:monospace;font-size:.72rem;word-break:break-all;">'+escapeHtml(b.name)+'</div>'
-            +   '<div class="text-secondary" style="font-size:.68rem;">'+escapeHtml(bkAgo(b.created))+'</div></td>'
-            + '<td>'+bkFmtBytes(b.size)+'</td>'
-            + '<td class="text-end text-nowrap">'
-            + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/backup/game/'+g.id+'/download?name='+encodeURIComponent(b.name)+'" title="Download backup"><i class="bi bi-download"></i></a> '
-            + '<button class="btn btn-sm btn-outline-danger py-0 px-1" data-gid="'+g.id+'" data-name="'+escapeHtml(b.name)+'"' + _da('deleteGameBackup', ['@self']) + ' title="Delete backup"><i class="bi bi-trash"></i></button>'
-            + '</td></tr>';
-        }).join('');
-        var table = rows
-          ? '<div class="table-responsive mt-1"><table class="table table-sm align-middle mb-0" style="font-size:.8rem;">'
-            + '<thead><tr><th>Backup file</th><th>Size</th><th class="text-end">Actions</th></tr></thead>'
-            + '<tbody>'+rows+'</tbody></table></div>'
-          // "no backups yet" and "the host did not answer" are different facts, and only one of
-          // them means nothing is protecting this server. The endpoint has reported which it is
-          // since #330 (backups_unreadable, from the worker's `return sid, None`) and this page
-          // read the field nowhere: every server on an unreachable host rendered "no backups yet",
-          // while the SAME server's Files & Config card said the opposite. Same wording as the
-          // card (static/js/server_files.js), so the two pages cannot contradict each other.
-          : g.backups_unreadable
-            ? '<div class="small text-warning mt-1">' + escapeHtml("Couldn't read this server's backups — the host didn't answer. This is not the same as there being none.") + '</div>'
-            : '<div class="small text-secondary mt-1">no backups yet</div>';
-        var st=g.status, stHtml='';
-        if(st){
-          if(st.running){ stHtml=' <span class="text-secondary"><i class="bi bi-arrow-repeat"></i> backing up…</span>'; }
-          else if(st.busy){
-            // Skipped because players were connected — offer a one-click force.
-            stHtml=' <span class="text-warning"><i class="bi bi-people-fill"></i> '+escapeHtml(st.msg||'players online — skipped')+'</span>'
-              +' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1"' + _da('backupOneGame', [g.id, '@self', true]) + '>Back up anyway</button>';
-          }
-          else if(st.ok===true){ stHtml=' <span class="text-success">✓ '+escapeHtml(st.msg||'backed up')+'</span>'; }
-          else if(st.ok===false){ stHtml=' <span class="text-danger">✗ '+escapeHtml(st.msg||'failed')+'</span>'; }
-        }
-        // Host label disambiguates same-named servers on different machines; per-server disk is
-        // that server's OWN host, so the numbers/warnings are right even with multiple hosts.
-        var hostHtml = g.host ? ' <span class="text-secondary small">· <i class="bi bi-hdd-network"></i> '+escapeHtml(g.host)+'</span>' : '';
-        var dkHtml = '';
-        if(g.disk && g.disk.total>0){
-          dkHtml = '<div class="small text-secondary"><i class="bi bi-hdd"></i> '+escapeHtml(g.host||'host')+': '+bkFmtBytes(g.disk.free)+' free';
-          var eb=g.est_backup||0, keep=(g.schedule&&g.schedule.keep)||2;
-          if(eb>0){
-            var proj=eb*keep;
-            if(proj>g.disk.free) dkHtml += ' <span class="text-danger">— ~'+bkFmtBytes(proj)+' needed for '+keep+' backups, not enough space!</span>';
-            else if(proj>g.disk.free*0.5) dkHtml += ' <span class="text-warning">— ~'+bkFmtBytes(proj)+' for '+keep+' backups (over half free)</span>';
-          }
-          dkHtml += '</div>';
-        }
-        gh += '<div class="mb-3 border-bottom pb-2">'
-            + '<div class="d-flex justify-content-between align-items-center gap-2">'
-            + '<span><strong>'+escapeHtml(g.name)+'</strong>'+hostHtml+'</span>'
-            + '<button class="btn btn-sm btn-outline-success py-0 px-2" '+(st&&st.running?'disabled':'')
-            + '' + _da('backupOneGame', [g.id, '@self']) + '><i class="bi bi-play-circle"></i> Back up now</button>'
-            + '</div>'
-            + gameSchedule(g)
-            + dkHtml
-            + (stHtml ? '<div class="small">'+stHtml+'</div>' : '')
-            + table
-            + '</div>';
-      });
-      fg.innerHTML = (d.games||[]).length ? gh : '<span class="text-secondary">No installed game servers.</span>';  // nosemgrep
-    }
+    if(fg) bkRenderGames(fg, d);
   }).catch(function(){ var l=document.getElementById('bk-loading'); if(l) l.innerHTML='<span class="text-danger">Could not load backups.</span>'; });
+}
+// Every game server's backup block: its schedule, disk, last run and finished backups.
+function bkRenderGames(fg, d){
+  var gh='';
+  (d.games||[]).forEach(function(g){
+    var rows=bkGameRows(g);
+    var table = rows
+      ? '<div class="table-responsive mt-1"><table class="table table-sm align-middle mb-0" style="font-size:.8rem;">'
+        + '<thead><tr><th>Backup file</th><th>Size</th><th class="text-end">Actions</th></tr></thead>'
+        + '<tbody>'+rows+'</tbody></table></div>'
+      // "no backups yet" and "the host did not answer" are different facts, and only one of
+      // them means nothing is protecting this server. The endpoint has reported which it is
+      // since #330 (backups_unreadable, from the worker's `return sid, None`) and this page
+      // read the field nowhere: every server on an unreachable host rendered "no backups yet",
+      // while the SAME server's Files & Config card said the opposite. Same wording as the
+      // card (static/js/server_files.js), so the two pages cannot contradict each other.
+      : g.backups_unreadable
+        ? '<div class="small text-warning mt-1">' + escapeHtml("Couldn't read this server's backups — the host didn't answer. This is not the same as there being none.") + '</div>'
+        : '<div class="small text-secondary mt-1">no backups yet</div>';
+    var st=g.status, stHtml=bkGameStatus(g, st);
+    // Host label disambiguates same-named servers on different machines; per-server disk is
+    // that server's OWN host, so the numbers/warnings are right even with multiple hosts.
+    var hostHtml = g.host ? ' <span class="text-secondary small">· <i class="bi bi-hdd-network"></i> '+escapeHtml(g.host)+'</span>' : '';
+    var dkHtml = bkGameDisk(g);
+    gh += '<div class="mb-3 border-bottom pb-2">'
+        + '<div class="d-flex justify-content-between align-items-center gap-2">'
+        + '<span><strong>'+escapeHtml(g.name)+'</strong>'+hostHtml+'</span>'
+        + '<button class="btn btn-sm btn-outline-success py-0 px-2" '+(st&&st.running?'disabled':'')
+        + '' + _da('backupOneGame', [g.id, '@self']) + '><i class="bi bi-play-circle"></i> Back up now</button>'
+        + '</div>'
+        + gameSchedule(g)
+        + dkHtml
+        + (stHtml ? '<div class="small">'+stHtml+'</div>' : '')
+        + table
+        + '</div>';
+  });
+  fg.innerHTML = (d.games||[]).length ? gh : '<span class="text-secondary">No installed game servers.</span>';  // nosemgrep
+}
+// The panel's own backups: one row each, and the table shown once it is filled.
+function bkRenderList(d, tb){
+  var rows='';
+  (d.backups||[]).forEach(function(b){
+    var when=new Date(b.created*1000).toLocaleString();
+    var kind = b.kind==='daily'?'<span class="badge bg-secondary">daily</span>'
+             : b.kind==='prerestore'?'<span class="badge bg-info text-dark">pre-restore</span>'
+             : '<span class="badge bg-primary">manual</span>';
+    // Encrypted rows are marked so a download is not mistaken for a file you can just open —
+    // and so it is obvious which archives need the passphrase to restore.
+    if(b.encrypted) kind += ' <i class="bi bi-shield-lock-fill text-success" title="Encrypted — needs the passphrase to restore"></i>';
+    rows += '<tr>'
+      + '<td title="'+escapeHtml(when)+'">'+escapeHtml(bkAgo(b.created))+'</td>'
+      + '<td>'+kind+'</td>'
+      + '<td>'+bkFmtBytes(b.size)+'</td>'
+      + '<td class="text-end text-nowrap">'
+      // The archive is panel.db PLUS secret_key and cred_key — the pair that decrypts every
+      // stored SSH credential. Downloading it moves that off the 0700 data dir onto whatever
+      // machine the browser is on, so the title says so rather than just "Download".
+      + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/api/panel/backup/download/'+encodeURIComponent(b.name)+'" title="Download — contains the database AND the encryption keys for every stored SSH credential. Keep it somewhere you would keep those keys."><i class="bi bi-download"></i></a> '
+      + '<button class="btn btn-sm btn-outline-warning py-0 px-1" title="Restore"' + _da('restoreBackup', [b.name, !!b.encrypted, '@self']) + '><i class="bi bi-arrow-counterclockwise"></i></button> '
+      + '<button class="btn btn-sm btn-outline-danger py-0 px-1" title="Delete"' + _da('deleteBackup', [b.name, '@self']) + '><i class="bi bi-trash"></i></button>'
+      + '</td></tr>';
+  });
+  if(!(d.backups||[]).length) rows='<tr><td colspan="4" class="text-secondary text-center py-3">No backups yet.</td></tr>';
+  tb.innerHTML=rows;  // nosemgrep
+  document.getElementById('bk-loading').style.display='none';
+  document.getElementById('bk-table-wrap').style.display='';
+}
+
+// The game-server backup schedule controls, from the payload's `full` settings.
+function bkRenderFullSchedule(f){
+  var autoOn=(f.interval_days||0)>0;
+  var fen=document.getElementById('fb-auto-enabled'); if(fen) fen.checked=autoOn;
+  var fi=document.getElementById('fb-interval');
+  if(fi){ fi.value=String(autoOn?f.interval_days:7); fi.disabled=!autoOn; }
+  var fk=document.getElementById('fb-keep'); if(fk) fk.value=String(f.keep||2);
+}
+// The free-disk line over the game backups, from window._bkDisk / window._bkMultiHost.
+function bkRenderDisk(){
+  var fdk=document.getElementById('fb-disk');
+  if(fdk){
+    var dk=window._bkDisk;
+    if(window._bkMultiHost){
+      // Servers span multiple hosts — a single disk figure would be misleading, so show
+      // each server's own host disk on its row below instead.
+      fdk.innerHTML='<i class="bi bi-hdd"></i> Your servers are on more than one host — free disk is shown per server below.';
+    } else if(dk.total>0){
+      var pct=Math.round((dk.total-dk.free)/dk.total*100);
+      fdk.innerHTML='<i class="bi bi-hdd"></i> Disk: <strong>'+bkFmtBytes(dk.free)+'</strong> free of '+bkFmtBytes(dk.total)  // nosemgrep
+        +' ('+pct+'% used). Game backups currently use '+bkFmtBytes(dk.backup_bytes||0)+'.';
+    } else { fdk.textContent=''; }
+  }
+}
+// "Back up all now" and the line beside it: running, when it last ran, or never.
+function bkRenderFullStatus(d, f){
+  var fnow=document.getElementById('fb-now'); if(fnow) fnow.disabled = !!d.full_running;
+  var fs=document.getElementById('fb-status');
+  if(fs){ fs.textContent = d.full_running ? 'Running now…' : (f.last ? ('Last: '+bkAgo(f.last)+(f.summary?' — '+f.summary:'')) : 'Never run'); }
+}
+// One game server's finished backups as table rows ('' when it has none).
+function bkGameRows(g){
+  return (g.backups||[])
+    // Skip a backup that's still being written — show it only once it's finished.
+    .filter(function(b){ return !b.in_progress; })
+    .map(function(b){
+    return '<tr>'
+      + '<td><div style="font-family:monospace;font-size:.72rem;word-break:break-all;">'+escapeHtml(b.name)+'</div>'
+      +   '<div class="text-secondary" style="font-size:.68rem;">'+escapeHtml(bkAgo(b.created))+'</div></td>'
+      + '<td>'+bkFmtBytes(b.size)+'</td>'
+      + '<td class="text-end text-nowrap">'
+      + '<a class="btn btn-sm btn-outline-secondary py-0 px-1" href="'+MOUNT+'/backup/game/'+g.id+'/download?name='+encodeURIComponent(b.name)+'" title="Download backup"><i class="bi bi-download"></i></a> '
+      + '<button class="btn btn-sm btn-outline-danger py-0 px-1" data-gid="'+g.id+'" data-name="'+escapeHtml(b.name)+'"' + _da('deleteGameBackup', ['@self']) + ' title="Delete backup"><i class="bi bi-trash"></i></button>'
+      + '</td></tr>';
+  }).join('');
+}
+// The last backup run's outcome for one game server ('' when there is none to report).
+function bkGameStatus(g, st){
+  var stHtml='';
+  if(st){
+    if(st.running){ stHtml=' <span class="text-secondary"><i class="bi bi-arrow-repeat"></i> backing up…</span>'; }
+    else if(st.busy){
+      // Skipped because players were connected — offer a one-click force.
+      stHtml=' <span class="text-warning"><i class="bi bi-people-fill"></i> '+escapeHtml(st.msg||'players online — skipped')+'</span>'
+        +' <button class="btn btn-sm btn-outline-warning py-0 px-1 ms-1"' + _da('backupOneGame', [g.id, '@self', true]) + '>Back up anyway</button>';
+    }
+    else if(st.ok===true){ stHtml=' <span class="text-success">✓ '+escapeHtml(st.msg||'backed up')+'</span>'; }
+    else if(st.ok===false){ stHtml=' <span class="text-danger">✗ '+escapeHtml(st.msg||'failed')+'</span>'; }
+  }
+  return stHtml;
+}
+// One game server's own host disk, and whether its kept backups would fit ('' when unknown).
+function bkGameDisk(g){
+  var dkHtml = '';
+  if(g.disk && g.disk.total>0){
+    dkHtml = '<div class="small text-secondary"><i class="bi bi-hdd"></i> '+escapeHtml(g.host||'host')+': '+bkFmtBytes(g.disk.free)+' free';
+    var eb=g.est_backup||0, keep=(g.schedule&&g.schedule.keep)||2;
+    if(eb>0){
+      var proj=eb*keep;
+      if(proj>g.disk.free) dkHtml += ' <span class="text-danger">— ~'+bkFmtBytes(proj)+' needed for '+keep+' backups, not enough space!</span>';
+      else if(proj>g.disk.free*0.5) dkHtml += ' <span class="text-warning">— ~'+bkFmtBytes(proj)+' for '+keep+' backups (over half free)</span>';
+    }
+    dkHtml += '</div>';
+  }
+  return dkHtml;
 }
 function createBackup(btn){
   if(btn){ btn.disabled=true; }
@@ -174,7 +207,7 @@ function onFbAutoToggle(){
 function fbSummary(){
   var el=document.getElementById('fb-summary'); if(!el) return;
   var on=document.getElementById('fb-auto-enabled').checked;
-  var keep=parseInt(document.getElementById('fb-keep').value,10)||1;
+  var keep=Number.parseInt(document.getElementById('fb-keep').value,10)||1;
   var dk=window._bkDisk||{free:0,est_cycle:0};
   var cycle=dk.est_cycle||0;        // size of one full backup run (all servers)
   var free=dk.free||0;
@@ -189,7 +222,7 @@ function fbSummary(){
     el.innerHTML=parts.join('<br>'); return;  // nosemgrep
   }
 
-  var days=parseInt(document.getElementById('fb-interval').value,10)||7;
+  var days=Number.parseInt(document.getElementById('fb-interval').value,10)||7;
   var every=(days===1?'every day':(days===7?'once a week':(days===14?'once every 2 weeks':'once a month')));
   var s='<i class="bi bi-info-circle"></i> By default, each server is backed up <strong>'+every+'</strong>. '
     +'The <strong>'+keep+'</strong> newest '+(keep===1?'backup is':'backups are')+' kept per server; older ones are deleted automatically. '
@@ -225,13 +258,13 @@ function saveBackupSettings(){
   // which the server reads as "don't change this field". That is the right outcome (the value on
   // disk is left alone) and the box is refilled from the response, so a cleared field visibly
   // snaps back to what is actually stored instead of appearing to have saved a blank.
-  var keep=parseInt(document.getElementById('bk-keep').value,10);
-  if(isNaN(keep)) keep=null;
+  var keep=Number.parseInt(document.getElementById('bk-keep').value,10);
+  if(Number.isNaN(keep)) keep=null;
   // Automatic game backups off → send interval 0 (disabled); on → the chosen interval.
   var autoOn=document.getElementById('fb-auto-enabled').checked;
-  var fi=autoOn ? (parseInt(document.getElementById('fb-interval').value,10)||7) : 0;
-  var fk=parseInt(document.getElementById('fb-keep').value,10);
-  if(isNaN(fk)) fk=null;
+  var fi=autoOn ? (Number.parseInt(document.getElementById('fb-interval').value,10)||7) : 0;
+  var fk=Number.parseInt(document.getElementById('fb-keep').value,10);
+  if(Number.isNaN(fk)) fk=null;
   fbSummary();
   fetch(MOUNT+'/api/panel/backup/settings',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({enabled:enabled,keep_days:keep,full_interval_days:fi,full_keep:fk})})
@@ -439,7 +472,7 @@ function _bkRestore(name, passphrase, btn, encrypted, skipSafety){
   if(skipSafety) body.skip_safety_backup=true;
   return fetch(MOUNT+'/api/panel/backup/restore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(r=>r.json()).then(function(d){
-      if(!d.success && encrypted && /passphrase/i.test(d.message||'')){
+      if(_bkRestoreWantsPassphrase(d, encrypted)){
         if(btn) btn.disabled=false;
         bkMsg('','text-secondary');
         _bkAskPassphrase(name, btn);
@@ -448,16 +481,29 @@ function _bkRestore(name, passphrase, btn, encrypted, skipSafety){
       // The pre-restore safety copy could not be written. The server refuses rather than
       // overwriting the keys with no way back, and this is where the operator says to go ahead —
       // which is the whole point of refusing: the decision reaches a person, before the fact.
-      if(!d.success && !skipSafety && /safety copy/i.test(d.message||'')){
+      if(_bkRestoreWantsSkipSafety(d, skipSafety)){
         if(btn) btn.disabled=false;
         bkMsg('','text-secondary');
         _bkAskSkipSafety(name, passphrase, btn, encrypted, d.message||'');
         return;
       }
-      bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
-      if(d.success){ setTimeout(function(){ location.reload(); }, 8000); } else if(btn){ btn.disabled=false; }
+      _bkRestoreDone(d, btn);
     })
     .catch(function(){ bkMsg('The panel is restarting — reconnect in a moment.','text-warning'); });
+}
+// A restore refused for want of the archive's passphrase (asked only of an encrypted archive).
+function _bkRestoreWantsPassphrase(d, encrypted){
+  return !d.success && encrypted && /passphrase/i.test(d.message||'');
+}
+// A restore refused because the pre-restore safety copy could not be written, when the operator
+// has not already said to go ahead without one.
+function _bkRestoreWantsSkipSafety(d, skipSafety){
+  return !d.success && !skipSafety && /safety copy/i.test(d.message||'');
+}
+// Any other answer: say it, and reload once a restore has gone through (the panel restarts).
+function _bkRestoreDone(d, btn){
+  bkMsg((d.success?'✓ ':'✗ ')+(d.message||''), d.success?'text-success':'text-danger');
+  if(d.success){ setTimeout(function(){ location.reload(); }, 8000); } else if(btn){ btn.disabled=false; }
 }
 function _bkAskSkipSafety(name, passphrase, btn, encrypted, why){
   confirmDialog({title:'No safety copy', icon:'exclamation-triangle',
@@ -635,7 +681,7 @@ function importExisting(btn){
   var picks=[], msg=document.getElementById('disc-msg');
   document.querySelectorAll('.disc-chk:checked').forEach(function(c){
     picks.push({user:c.getAttribute('data-user'), game_type:c.getAttribute('data-game'),
-                port:parseInt(c.getAttribute('data-port'),10)||0,
+                port:Number.parseInt(c.getAttribute('data-port'),10)||0,
                 autostart:c.getAttribute('data-autostart')==='1'});
   });
   if(!picks.length){ if(msg) msg.innerHTML='<span class="text-warning">Select at least one.</span>'; return; }

@@ -1,0 +1,25 @@
+# The build context of .clusterfuzzlite/Dockerfile is the repository root (ClusterFuzzLite, and
+# OSS-Fuzz's `helper.py build_image --external $PWD`, both build with it), and its
+# `COPY . $SRC/linuxgsm-panel` takes everything in it, gitignored or not. Docker does not read
+# .gitignore or .git/info/exclude, so without this file a local fuzz build copied the working
+# tree's secrets into an image layer: data/ (secret_key, cred_key, panel.db), the .venv, .git and
+# every worktree checkout under .claude/, each with its own data/.
+#
+# A pattern without `**/` matches only at the root of the context, so the key and database names
+# are written with it: a nested worktree's data/cred_key is not caught by `/data`.
+# The fuzz build needs only tracked files, and none of them matches a line below.
+.git
+.claude
+/data
+.venv
+venv
+env
+node_modules
+**/__pycache__
+**/*.db
+**/*.db-*
+**/*.sqlite3
+**/*.secret
+**/secret_key
+**/cred_key
+**/panel.db

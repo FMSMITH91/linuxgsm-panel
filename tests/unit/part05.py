@@ -362,6 +362,7 @@ check("telegram: an '@' naming a bot this one cannot identify yet is not assumed
 # suites would make real SSH connections and still report green. It is the exact failure this repo
 # has hit more than any other, and it leaves no trace, so it gets a gate rather than a comment.
 import ast as _smg_ast                                                             # noqa: E402
+import glob as _smg_glob                                                           # noqa: E402
 _SMPKG = os.path.join(_root, "panel", "ops", "ssh_manager")
 _smg_mods = {f[:-3] for f in os.listdir(_SMPKG) if f.endswith(".py") and f != "__init__.py"}
 _smg_bad = []
@@ -378,6 +379,34 @@ for _f in sorted(os.listdir(_SMPKG)):
 check("ssh_manager: no submodule binds another's function by name (the stub seam)",
       not _smg_bad, "; ".join(_smg_bad[:4]))
 
+# Nor may two submodules define the same top-level NAME differently. The package's __getattr__
+# answers with the FIRST submodule in _MODULES order that has it, so a helper added to an earlier
+# module under a name a later one already uses silently replaces the later one for every
+# `ssh_manager.<name>` reader: no import error, no failed call, just a different function. A
+# refactor gave cron.py an `_int_or_none` that only passes real ints through, and
+# `ssh_manager._int_or_none("3")` went from 3 (game.py's, which parses) to None. A duplicate is
+# allowed only when every definition is the same code (cron and gmod share one regex that way).
+_smg_defs = {}
+for _f in sorted(os.listdir(_SMPKG)):
+    if not _f.endswith(".py") or _f == "__init__.py":
+        continue
+    for _n in _smg_ast.parse(open(os.path.join(_SMPKG, _f), encoding="utf-8").read()).body:
+        if isinstance(_n, (_smg_ast.FunctionDef, _smg_ast.AsyncFunctionDef, _smg_ast.ClassDef)):
+            _smg_named = [(_n.name, _n)]
+        elif isinstance(_n, _smg_ast.Assign):
+            _smg_named = [(_t.id, _n.value) for _t in _n.targets if isinstance(_t, _smg_ast.Name)]
+        else:
+            _smg_named = []
+        for _x, _node in _smg_named:
+            _smg_defs.setdefault(_x, []).append((_f, _smg_ast.dump(_node)))
+_smg_dups = sorted("%s in %s" % (_k, ", ".join(_f for _f, _ in _v)) for _k, _v in _smg_defs.items()
+                   if len({_d for _, _d in _v}) > 1)
+check("ssh_manager: no top-level name is defined differently in two submodules (the first wins)",
+      not _smg_dups, "; ".join(_smg_dups[:4]))
+check("ssh_manager: ...and that scan read every submodule (control: the shared regex is seen twice)",
+      [_f for _f, _ in _smg_defs.get("_NO_CRONTAB_RE", [])] == ["cron.py", "gmod.py"]
+      and len(_smg_defs) > 300, "%d names" % len(_smg_defs))
+
 # And the mirror of it on the test side: a stub assigned onto the PACKAGE shadows its __getattr__,
 # so attribute-access callers would see it while the package's own 163 internal call sites would
 # not. Half a stub, no error. Stubs belong on the defining submodule.
@@ -392,9 +421,18 @@ _smg_pkg_stubs = []
 # "0 refused — this run never tried to escalate". On a developer machine that is pam_faillock
 # counting genuine auth failures against their account — the exact harm the wrapper exists to
 # prevent, with its own reporting saying it had not happened.
-_SMG_STUB_FILES = ["tests/unit_test.py", "tests/smoke_test.py", "tests/rbac_test.py",
-                   "tests/setup_wizard_test.py", "tools/perf_bench.py",
-                   "tools/nosudo_runner.py"]
+#
+# The unit suite is a runner plus tests/unit/part*.py, and its checks live in the PARTS. Naming only
+# tests/unit_test.py here read the runner, which stubs nothing, so every unit check was outside the
+# gate from the day the suite was split. Globbed, so a part added later is read too.
+_UNIT_SUITE_FILES = ["tests/unit_test.py"] + sorted(
+    "tests/unit/" + os.path.basename(_p)
+    for _p in _smg_glob.glob(os.path.join(_root, "tests", "unit", "part*.py")))
+check("suites: the file-list gates see the unit suite's parts, not only its runner",
+      "tests/unit/part05.py" in _UNIT_SUITE_FILES, _UNIT_SUITE_FILES)
+_SMG_STUB_FILES = _UNIT_SUITE_FILES + ["tests/smoke_test.py", "tests/rbac_test.py",
+                                       "tests/setup_wizard_test.py", "tools/perf_bench.py",
+                                       "tools/nosudo_runner.py"]
 for _f in _SMG_STUB_FILES:
     _src = open(os.path.join(_root, _f), encoding="utf-8").read()
     _tree = _smg_ast.parse(_src)
@@ -3332,6 +3370,63 @@ check("install.sh: no downloaded script is run — NodeSource's setup script is 
 check("install.sh: ensure_nodejs configures NodeSource through the pinned-key setup",
       any(_re_ntc.fullmatch(r'\s*if nodesource_setup "\$\{S\}"; then', _l)
           for _l in _ntc_fn.splitlines()))
+# The key fetch follows redirects (-L). Without --proto =https a redirect could send it to plain
+# http, so the file the fingerprint check reads could come from anyone on the path. The pin
+# still refuses a wrong key, but only https is an answer at all. Driven: curl is a shell function
+# that records its argv one word per line, so the check sees the flag after bash's quote removal.
+# The fetch then fails, so nothing is trusted and gpg is never reached.
+_ns_argv_dir = _tempfile.mkdtemp(prefix="panel-nodesource-argv-")
+try:
+    _ns_argv_log = os.path.join(_ns_argv_dir, "argv")
+    _ns_argv_p = _sp_ns.run(["bash", "-c", "\n".join([
+        "\n".join(_l for _l in _ns_code_lines if _l.startswith("NODESOURCE_")),
+        _ns_fn("nodesource_key_ok"), _ns_fn("nodesource_setup"),
+        "dpkg() { echo amd64; }", "apt-get() { :; }",
+        "curl() { printf '%%s\\n' \"$@\" > %s; return 22; }" % _shlex_q(_ns_argv_log),
+        "nodesource_setup ''; echo \"RC=$?\""])], capture_output=True, text=True, timeout=60)
+    try:
+        with open(_ns_argv_log, encoding="utf-8") as _fh:
+            _ns_argv = _fh.read().splitlines()
+    except OSError:
+        _ns_argv = []
+    _ns_url = _re_ntc.search(r'^NODESOURCE_KEY_URL="([^"]+)"$', _ntc_sh, _re_ntc.M)
+    check("install.sh: the NodeSource key fetch refuses anything but https, redirects included",
+          "--proto" in _ns_argv and _ns_argv[_ns_argv.index("--proto") + 1:][:1] == ["=https"]
+          and bool(_ns_url) and _ns_url.group(1).startswith("https://")
+          and _ns_url.group(1) in _ns_argv
+          and _ns_argv.index("--proto") < _ns_argv.index(_ns_url.group(1))
+          and _ns_argv_p.stdout.strip().endswith("RC=1"),
+          "argv=%r out=%r" % (_ns_argv, (_ns_argv_p.stdout + _ns_argv_p.stderr)[-200:]))
+finally:
+    _shutil_ns.rmtree(_ns_argv_dir, ignore_errors=True)
+
+
+def _curl_calls(src):
+    """Every curl invocation in shell source: one logical line, from `curl` to the end of its
+    command. Comments, `command -v curl` and package names are not invocations."""
+    _logical = src.replace("\\\n", " ")
+    _out = []
+    for _ln in _logical.splitlines():
+        if _ln.lstrip().startswith("#"):
+            continue
+        for _m in _re_ntc.finditer(r"(?<![\w./-])curl\s+(?=-)", _ln):
+            _rest = _ln[_m.start():]
+            _cut = _re_ntc.search(r"\s(?:\||&&|\|\|)\s|;|$", _rest)
+            _out.append(_rest[:_cut.start()])
+    return _out
+
+
+# The same rule for the whole installer: a curl that follows a redirect is https-only, so one
+# added later cannot quietly accept a downgrade. The four fetches that follow no redirect (the
+# health check and the public-IP lookups) are not held to it.
+_ns_curls = _curl_calls(_ntc_sh)
+_ns_follow = [_c for _c in _ns_curls
+              if _re_ntc.search(r"\s-[A-Za-z]*L[A-Za-z]*\b|\s--location\b", _c)]
+check("install.sh: every curl that follows redirects says --proto '=https'",
+      len(_ns_curls) >= 2 and len(_ns_follow) >= 1
+      and all(_re_ntc.search(r"\s--proto[ =](?:'=https'|\"=https\"|=https)(?=\s)", _c)
+              for _c in _ns_follow),
+      "all=%r following=%r" % (_ns_curls, _ns_follow))
 
 # The add-host bootstrap configures NodeSource on REMOTE hosts through the nodesource-setup verb
 # (privileged.py), which ran `curl … setup_lts.x | bash -` as root until it became one. Two copies
@@ -3365,6 +3460,54 @@ check("nodesource: the remote rendering fetches only the key — no setup script
       "setup_lts" not in _ns_rcmd and "deb.nodesource.com/setup" not in _ns_rcmd
       and not _re_ntc.search(r"\|\s*(sudo\s+)?(ba)?sh\b", _ns_rcmd)
       and _shlex_q(_priv.NODESOURCE_KEY_URL) in _ns_rcmd, _ns_rcmd[:300])
+# The remote rendering's key fetch is https-only too. It has two shells to get through: bash, and
+# first the SSH login shell whenever the host runs commands without `sudo bash -c` (sudo off, a root
+# login), which can be zsh, where an unquoted =https is an =command lookup that fails before curl
+# runs. Driven like install.sh's check above: curl is a shell function that writes its argv one
+# word per line and fails, so the setup stops there having trusted nothing.
+
+
+def _nsr_argv(shell):
+    _d = _tempfile.mkdtemp(prefix="panel-nodesource-rargv-")
+    try:
+        _log = os.path.join(_d, "argv")
+        _p = _sp_ns.run([shell, "-c", "\n".join([  # nosec B603 - bash or zsh, running our own render
+            "dpkg() { echo amd64; }", "gpg() { :; }", "apt-get() { :; }",
+            "curl() { printf '%%s\\n' \"$@\" > %s; return 22; }" % _shlex_q(_log),
+            _priv.remote_command("nodesource-setup", [])])], capture_output=True, text=True, timeout=60)
+        try:
+            with open(_log, encoding="utf-8") as _fh:
+                return _fh.read().splitlines(), _p
+        except OSError:
+            return [], _p
+    finally:
+        _shutil_ns.rmtree(_d, ignore_errors=True)
+
+
+def _nsr_https_only(argv, proc):
+    _url = _priv.NODESOURCE_KEY_URL
+    return ("--proto" in argv and argv[argv.index("--proto") + 1:][:1] == ["=https"]
+            and _url.startswith("https://") and _url in argv
+            and argv.index("--proto") < argv.index(_url)
+            and proc.returncode != 0 and "Could not download" in proc.stdout)
+
+
+_nsr_av, _nsr_p = _nsr_argv("bash")
+check("nodesource (remote): the key fetch refuses anything but https, redirects included",
+      _nsr_https_only(_nsr_av, _nsr_p),
+      "argv=%r out=%r" % (_nsr_av, (_nsr_p.stdout + _nsr_p.stderr)[-200:]))
+# Quoted in the text itself, so no shell sees a bare =https. This one needs no zsh, so it runs on
+# CI's runners too, which do not ship it; the drive below is the proof on a machine that has it.
+check("nodesource (remote): ...with the =https quoted, for a login shell that is zsh",
+      bool(_re_ntc.search(r"""\scurl\s+--proto\s+(?:"=https"|'=https')\s""", " " + _ns_rcmd)),
+      _ns_rcmd[:200])
+if not _shutil_ns.which("zsh"):
+    skip("nodesource (remote): ...and the flag survives a zsh login shell", "no zsh on this machine")
+else:
+    _nsr_av, _nsr_p = _nsr_argv("zsh")
+    check("nodesource (remote): ...and the flag survives a zsh login shell",
+          _nsr_https_only(_nsr_av, _nsr_p),
+          "argv=%r out=%r" % (_nsr_av, (_nsr_p.stdout + _nsr_p.stderr)[-200:]))
 if not _shutil_ns.which("gpg"):
     skip("install.sh: NodeSource key pinning, driven", "no gpg on this machine")
 else:
@@ -4085,8 +4228,8 @@ assert "app.py" in _SCAN_MODULES and os.path.join("panel", "ops", "ssh_manager",
 # no longer vouch for a name's aliveness.
 _SCAN_PROD_USERS = _SCAN_MODULES + ["tools/panel-helper", "tools/perf_bench.py",
                                     "tools/lhci_serve.py"]
-_SCAN_TEST_USERS = ["tests/unit_test.py", "tests/smoke_test.py", "tests/rbac_test.py",
-                    "tests/manage_test.py", "tests/template_actions_test.py"]
+_SCAN_TEST_USERS = _UNIT_SUITE_FILES + ["tests/smoke_test.py", "tests/rbac_test.py",
+                                        "tests/manage_test.py", "tests/template_actions_test.py"]
 _SCAN_USERS = _SCAN_PROD_USERS + _SCAN_TEST_USERS
 _referenced = set()
 _referenced_prod = set()
@@ -4875,6 +5018,13 @@ try:
     check("run_as_game_user: ...and no element of that argv contains a shell metacharacter",
           _ragu_argv and not any(ch in el for el in _ragu_argv[0] for ch in ";|&$`<>"),
           str(_ragu_argv))
+    # The shell form is `2>&1` and every caller reads LinuxGSM's errors out of stdout, so the verb's
+    # two streams are merged into stdout too — a transport switch must not move an error message.
+    _sm_core._exec_local_argv = lambda argv, **k: ("Starting gmodserver", "Error! no steamcmd", 1)
+    check("run_as_game_user: the helper path merges stderr into stdout, as `2>&1` did",
+          _sm_core.run_as_game_user(NS(), "gmodserver", "start", selfname="gmodserver")
+          == ("Starting gmodserver\nError! no steamcmd", "", 1))
+    _sm_core._exec_local_argv = lambda argv, **k: (_ragu_argv.append(argv), ("out", "", 0))[1]
 
     # The refusal has to bite BEFORE the transport, or a bad value reaches one of them.
     _ragu_argv.clear(); _ragu_shell.clear()
@@ -4952,6 +5102,11 @@ try:
         _tl_p.stdout.readline()
         _tl_p.stdout.close()                 # the channel closes mid-action
         _tl_p.wait(timeout=20)
+        # Its stderr pipe too, now the action is done. `_tl_p` is a module global, so an open
+        # pipe here stayed open until interpreter shutdown, where its green file object's
+        # finalizer ran after eventlet's own module globals were cleared and printed "Exception
+        # ignored while finalizing file ... 'NoneType' object is not callable".
+        _tl_p.stderr.close()
         with open(os.path.join(_tl_home, ".panel-update.log")) as _tl_f:
             _tl_log = _tl_f.read()
         check("run_as_game_user: a closed channel does not kill the action; it runs to the end",

@@ -1052,7 +1052,7 @@ _orig_run7 = _sm_core.run_command
 try:
     _sm_core.run_command = lambda s, c, **k: (
         "F\tgmodserver-2026.tar.gz\t1048576\t1720000000\nF\told.tar.gz\t500\t1719000000" + _BK_END, "", 0)
-    _gbl = _sm_cron.list_game_backups(None, "gm")
+    _gbl = _sm_cron.list_game_backups(None, "gm") or []
     check("game backups: parsed newest-first with sizes",
           len(_gbl) == 2 and _gbl[0]["name"] == "gmodserver-2026.tar.gz" and _gbl[0]["size"] == 1048576)
     check("game backups: no lock -> nothing marked in-progress",
@@ -1062,15 +1062,15 @@ try:
     _sm_core.run_command = lambda s, c, **k: (
         "F\tgmodserver-new.tar.zst\t2000\t1720000100\nF\tgmodserver-old.tar.zst\t1048576\t1720000000\n"
         "LOCK\t1720000050.5" + _BK_END, "", 0)
-    _gbl2 = _sm_cron.list_game_backups(None, "gm")
+    _gbl2 = _sm_cron.list_game_backups(None, "gm") or []
     check("game backups: active lock flags the new archive in-progress only",
-          _gbl2[0]["name"] == "gmodserver-new.tar.zst" and _gbl2[0].get("in_progress") is True
+          len(_gbl2) == 2 and _gbl2[0]["name"] == "gmodserver-new.tar.zst" and _gbl2[0].get("in_progress") is True
           and not _gbl2[1].get("in_progress"))
     # Early in a backup (lock present, new archive not created yet): the existing backup predates the
     # lock, so it must NOT be flagged/hidden — this is the "existing backup disappears" regression.
     _sm_core.run_command = lambda s, c, **k: (
         "F\tgmodserver-old.tar.zst\t1048576\t1720000000\nLOCK\t1720000050.5" + _BK_END, "", 0)
-    _gbl3 = _sm_cron.list_game_backups(None, "gm")
+    _gbl3 = _sm_cron.list_game_backups(None, "gm") or []
     check("game backups: a pre-existing backup isn't hidden while a new one is starting",
           len(_gbl3) == 1 and not _gbl3[0].get("in_progress"))
 finally:
@@ -1094,6 +1094,28 @@ try:
           % ([_i[:160] for _i in _bl_inner],))
 finally:
     _sm_core.run_command = _orig_run8
+# The players-online skip itself. The route tests stub run_game_backup whole, so nothing ran it.
+# LinuxGSM's `backup` STOPS the server, so ONE connected player is enough to skip — and the count
+# is asked with the server's query_type override, whose absence is the bug its docstring records.
+_cap9 = {"cmds": [], "pc": []}
+_orig_run9, _orig_pc9 = _sm_core.run_command, _sm_cron.player_count
+try:
+    _sm_core.run_command = lambda s, c, **k: (_cap9["cmds"].append(c), ("", "", 0))[1]
+    _sm_cron.player_count = lambda *a, **k: (_cap9["pc"].append(a), 1)[1]
+    _r9 = _sm_game.run_game_backup(None, "gm", "gmodserver", 2, game_type="pz", port=16261,
+                                   query_type="przomboid")
+    check("run_game_backup: ONE player online skips the backup rather than disconnect them",
+          _r9[0] is False and _r9[2] is True and "1 player(s) online" in _r9[1]
+          and not any("./gmodserver backup" in _c for _c in _cap9["cmds"]),
+          "%r %r" % (_r9, _cap9["cmds"][:2]))
+    check("run_game_backup: ...asking with the server's query_type override",
+          [_a[-1] for _a in _cap9["pc"]] == ["przomboid"], str(_cap9["pc"]))
+    _r9f = _sm_game.run_game_backup(None, "gm", "gmodserver", 2, force=True)
+    check("run_game_backup: force=True backs up with players on (positive control)",
+          _r9f[0] is True and _r9f[2] is False
+          and any("./gmodserver backup" in _c for _c in _cap9["cmds"]), str(_r9f))
+finally:
+    _sm_core.run_command, _sm_cron.player_count = _orig_run9, _orig_pc9
 
 # ── a backup.lock is orphaned only when no backup is running ─────────────────────────────────
 # Any lock older than five minutes was deleted, on a comment's word that the panel runs one game
@@ -1241,6 +1263,20 @@ try:
     _sm_core.run_command = lambda s, c, **k: ('{"c":7,"ok":true}', "", 0)
     check("player_count_via_lgsm_query: a real count is returned",
           _sm_cron.player_count_via_lgsm_query(None, "gm", "gmodserver") == 7)
+    # Only querymode 2 is a gamedig query. 1 is LinuxGSM's process check (Factorio) and there is
+    # nothing to ask, and the port falls back from queryport to port to the one the panel knows.
+    _cap_q.clear()
+    _sm_core.run_command = lambda s, c, **k: (_cap_q.__setitem__("cmd", c), ('{"c":7,"ok":true}', "", 0))[1]
+    _sm_files.lgsm_get_values = lambda *a, **k: {"querymode": "1", "querytype": "protocol-valve",
+                                                 "queryport": "27015", "port": "27015"}
+    check("player_count_via_lgsm_query: querymode 1 (a process check) is None, and queries nothing",
+          _sm_cron.player_count_via_lgsm_query(None, "gm", "gmodserver") is None and "cmd" not in _cap_q,
+          _cap_q.get("cmd", "")[:120])
+    _sm_files.lgsm_get_values = lambda *a, **k: {"querymode": "2", "querytype": "minecraft",
+                                                 "queryport": "", "port": ""}
+    check("player_count_via_lgsm_query: with no port in the .cfg, the panel's own port is queried",
+          _sm_cron.player_count_via_lgsm_query(None, "gm", "mcserver", fallback_port=25565) == 7
+          and ":25565 " in _cap_q.get("cmd", ""), _cap_q.get("cmd", "")[:120])
     # ...and an unreadable CONFIG is unknown too, rather than falling through as "no query".
     _sm_files.lgsm_get_values = lambda *a, **k: None
     check("player_count_via_lgsm_query: an unreadable LinuxGSM config is None",
@@ -2511,6 +2547,13 @@ try:
        [_bl.is_banned(_ip(a)) for a in ("100.101.102.103", "fd7a:115c:a1e0::5",
                                          "2001:db8:1:2::11", "2001:db8:1:3::1")],
        [False, False, True, False])
+    # widen=False is what the host FIREWALL asks (server_files asks it of a directly connected
+    # console peer): the banned address itself, not the /64 this gate widens an IPv6 ban to.
+    # Nothing checked it: ignoring `widen` (in _in_banned_network since is_banned was split) left
+    # every suite green, and refused the console to a neighbour the firewall still lets in.
+    eq("banlist: widen=False refuses the banned address itself, not its /64 neighbour",
+       [_bl.is_banned(_ip(a), widen=False) for a in ("2001:db8:1:2::10", "2001:db8:1:2::11")],
+       [True, False])
     import panel.ops.system_ops as _bl_so2
     check("banlist: its tailnet ranges are the ones the jail and the auto-block exempt",
           [str(n) for n in _bl._TAILNET] == list(_bl_so2._TAILNET_RANGES))
@@ -3085,6 +3128,17 @@ try:
     _ok4, _msg4 = _sm_gmod.gmod_mount_setup(NS(), "gmodserver", "gmodcontent", ["cstrike"])
     check("gmod mounts: a liveness check that FAILS warns rather than claiming it is live",
           _ok4 is True and "restart" in _msg4.lower(), _msg4)
+
+    # The write is confirmed by its sentinel, not by rc alone: a chain that stopped part-way under a
+    # wrapper that still exits 0 prints no __OK__, and nothing was written.
+    def _gm_no_ok(server, cmd, **kw):
+        if "base64 -d" in cmd:
+            return ("", "", 0)
+        return ("gmodcontent", "", 0) if cmd.startswith("id -gn") else ("__LIVE__", "", 0)
+    _sm_core.run_command = _gm_no_ok
+    _ok5, _msg5 = _sm_gmod.gmod_mount_setup(NS(), "gmodserver", "gmodcontent", ["cstrike"])
+    check("gmod mounts: a write that never printed its __OK__ is a failure, not 'Mounted'",
+          _ok5 is False and "Mounted" not in _msg5, _msg5)
 finally:
     _sm_core.run_command, _sm_core.run_privileged = _orig_gm_run, _orig_gm_priv
 
@@ -3221,11 +3275,17 @@ check("stats endpoint: ...and an install in progress is never overwritten",
       '_readable and gs.installed and gs.status not in ("installing", "configuring")' in _stats_src)
 
 # The predicate that decides online/offline must stay the one _live_run_state promises it matches.
+#
+# Stubbed on _core, the DEFINITION site — app reaches it as `_sm.server_live_metrics`, which the
+# package's __getattr__ forwards there. This used to set and then "restore" the name on the
+# PACKAGE, and the restore left a real attribute behind that shadows __getattr__ for the rest of
+# the run: every later stub on _core.server_live_metrics was invisible to app, and a part10 check
+# went on to run the real read — an actual `ssh` to its fixture host — while still passing.
 import app as _app_mod
-_lrs_orig = _app_mod._sm.server_live_metrics
+_lrs_orig = _sm_core.server_live_metrics
 try:
     _lrs = {"m": {}}
-    _app_mod._sm.server_live_metrics = lambda r, s=None, p=None, force=False: _lrs["m"]
+    _sm_core.server_live_metrics = lambda r, s=None, p=None, force=False: _lrs["m"]
     _gsx, _rx = NS(short_name="gmodserver", port=27015), NS()
 
     _lrs["m"] = {"ram_total": 0, "port_open": False, "game_procs": 0}      # the failed sample
@@ -3239,7 +3299,10 @@ try:
     _lrs["m"] = {"ram_total": 8 * 10 ** 9, "port_open": False, "game_procs": 4}
     check("_live_run_state: live processes are True", _app_mod._live_run_state(_gsx, _rx) is True)
 finally:
-    _app_mod._sm.server_live_metrics = _lrs_orig
+    _sm_core.server_live_metrics = _lrs_orig
+check("ssh_manager: no test left server_live_metrics bound on the package (it shadows __getattr__)",
+      "server_live_metrics" not in vars(_app_mod._sm),
+      "a real attribute on panel.ops.ssh_manager hides every later _core stub from app")
 
 
 # ── a crashed server must not report itself online (panel bug #22) ───────────────────────────────

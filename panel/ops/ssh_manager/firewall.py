@@ -1,5 +1,9 @@
-"""SSH connection manager for remote LinuxGSM servers.
-Also supports local execution for running on the panel's own machine."""
+"""Remote firewall management (UFW) and static host specs.
+
+Part of the SSH connection manager for remote LinuxGSM servers, which also supports local
+execution for running on the panel's own machine (see the package docstring for how names
+resolve across its submodules).
+"""
 import json as _json
 import re
 from panel.ops.ssh_manager import (_core, hosts)  # noqa: E402,F401  (module objects: the
@@ -12,9 +16,11 @@ from panel.ops.ssh_manager import (_core, hosts)  # noqa: E402,F401  (module obj
 
 
 def _parse_ufw_rule(detail):
-    """Parse one `ufw status numbered` rule line into structured fields, so the UI can
-    show clean columns instead of the raw string. Handles the optional `on <iface>`
-    clause, the `# comment` suffix, and the `(v6)` family markers."""
+    """Parse one `ufw status numbered` rule line into structured fields.
+
+    Structured so the UI can show clean columns instead of the raw string. Handles the optional
+    `on <iface>` clause, the `# comment` suffix, and the `(v6)` family markers.
+    """
     v6 = "(v6)" in detail
     s = detail.replace("(v6)", " ")
     comment = ""
@@ -55,10 +61,67 @@ def _parse_ufw_rule(detail):
 _SSH_APP_PROFILES = frozenset({"openssh", "ssh"})
 
 
+def _ufw_port_label(p):
+    """The To column as the UI shows it: "All ports" for a bare interface rule."""
+    to = p["to"]
+    if p["iface"] and to.lower() in ("anywhere", ""):
+        return "All ports"
+    return to or "—"
+
+
+def _split_ufw_proto(port_label):
+    """Split the protocol out of a port label, returning (port_num, proto_label).
+
+    So the UI can show it in its own column (e.g. "5000/tcp" -> port "5000", protocol "TCP"). A
+    bare numeric port with no suffix means UFW allowed both TCP and UDP.
+    """
+    m_proto = re.match(r"^(.*)/(tcp|udp)$", port_label, re.IGNORECASE)
+    if m_proto:
+        return m_proto.group(1), m_proto.group(2).upper()
+    if re.search(r"\d", port_label):
+        return port_label, "BOTH"
+    return port_label, "—"
+
+
+def _ufw_scope(p):
+    """Where a rule applies: its interface (tagged when Tailscale) or its source address."""
+    iface = p["iface"]
+    if iface:
+        return iface + (" (Tailscale)" if iface.startswith("tailscale") else "")
+    return "Any address" if p["from"].lower() == "anywhere" else (p["from"] or "—")
+
+
+def _new_ufw_group(p, key):
+    """Build the empty display group for one parsed rule, with its friendly derived fields."""
+    iface = p["iface"]
+    port_label = _ufw_port_label(p)
+    port_num, proto_label = _split_ufw_proto(port_label)
+    # A "deny/reject from <specific IP>" rule is an IP block (its own UI section), as opposed
+    # to an open-port / access rule. Interface rules and "deny to a port" (no from-IP) aren't.
+    from_ip = "" if p["from"].lower() == "anywhere" else (p["from"] or "")
+    is_block = ((p["action"] or "").upper() in ("DENY", "REJECT")
+                and bool(from_ip) and not iface)
+    return {
+        "nums": [], "families": [], "port_label": port_label,
+        "port_num": port_num, "proto_label": proto_label,
+        "comment": p["comment"], "scope": _ufw_scope(p), "iface": iface,
+        "action": p["action"] or "ALLOW", "direction": p["direction"] or "IN",
+        "is_iface": bool(iface), "is_block": is_block,
+        "block_ip": from_ip if is_block else "",
+        # WHICH rule this is, independent of where it sits. `nums` are positions and ufw
+        # renumbers on every insert/delete (the hourly auto-block inserts at 1), so the
+        # page re-finds a group by this before deleting rather than trusting a number
+        # read when the table was drawn.
+        "key": _json.dumps(list(key)),
+    }
+
+
 def _group_ufw_rules(rules):
-    """Collapse the raw numbered rules into user-friendly groups, merging the separate
-    IPv4 and IPv6 entries UFW keeps for the same rule into a single row (with the list
-    of underlying rule numbers so a group can be deleted as a unit)."""
+    """Collapse the raw numbered rules into user-friendly groups.
+
+    Merges the separate IPv4 and IPv6 entries UFW keeps for the same rule into a single row (with
+    the list of underlying rule numbers so a group can be deleted as a unit).
+    """
     groups = []
     index = {}
     for r in rules:
@@ -66,49 +129,7 @@ def _group_ufw_rules(rules):
         key = (p["to"], p["action"], p["direction"], p["from"], p["iface"], p["comment"])
         g = index.get(key)
         if not g:
-            # Friendly derived fields.
-            iface = p["iface"]
-            to = p["to"]
-            is_iface = bool(iface)
-            if is_iface and to.lower() in ("anywhere", ""):
-                port_label = "All ports"
-            else:
-                port_label = to or "—"
-            # Split the protocol out of the port so the UI can show it in its own
-            # column (e.g. "5000/tcp" -> port "5000", protocol "TCP"). A bare
-            # numeric port with no suffix means UFW allowed both TCP and UDP.
-            m_proto = re.match(r"^(.*)/(tcp|udp)$", port_label, re.IGNORECASE)
-            if m_proto:
-                port_num = m_proto.group(1)
-                proto_label = m_proto.group(2).upper()
-            elif re.search(r"\d", port_label):
-                port_num = port_label
-                proto_label = "BOTH"
-            else:
-                port_num = port_label
-                proto_label = "—"
-            if iface:
-                scope = iface + (" (Tailscale)" if iface.startswith("tailscale") else "")
-            else:
-                scope = "Any address" if p["from"].lower() == "anywhere" else (p["from"] or "—")
-            # A "deny/reject from <specific IP>" rule is an IP block (its own UI section), as opposed
-            # to an open-port / access rule. Interface rules and "deny to a port" (no from-IP) aren't.
-            from_ip = "" if p["from"].lower() == "anywhere" else (p["from"] or "")
-            is_block = ((p["action"] or "").upper() in ("DENY", "REJECT")
-                        and bool(from_ip) and not iface)
-            g = {
-                "nums": [], "families": [], "port_label": port_label,
-                "port_num": port_num, "proto_label": proto_label,
-                "comment": p["comment"], "scope": scope, "iface": iface,
-                "action": p["action"] or "ALLOW", "direction": p["direction"] or "IN",
-                "is_iface": is_iface, "is_block": is_block,
-                "block_ip": from_ip if is_block else "",
-                # WHICH rule this is, independent of where it sits. `nums` are positions and ufw
-                # renumbers on every insert/delete (the hourly auto-block inserts at 1), so the
-                # page re-finds a group by this before deleting rather than trusting a number
-                # read when the table was drawn.
-                "key": _json.dumps(list(key)),
-            }
+            g = _new_ufw_group(p, key)
             index[key] = g
             groups.append(g)
         g["nums"].append(int(r["num"]))
@@ -124,9 +145,11 @@ def _group_ufw_rules(rules):
 
 
 def _ssh_ports(server):
-    """Ports whose firewall rule keeps SSH reachable. Always includes 22 (the default)
-    and the port the panel actually connects on — which covers a CUSTOM SSH port,
-    since that's exactly what's stored on the remote."""
+    """Ports whose firewall rule keeps SSH reachable.
+
+    Always includes 22 (the default) and the port the panel actually connects on — which covers a
+    CUSTOM SSH port, since that's exactly what's stored on the remote.
+    """
     ports = {22}
     try:
         if getattr(server, "port", None):
@@ -143,7 +166,8 @@ def _last_parsed_panel_port():
     drops only the cache KEY — the parsed data stays — so that dict is the file the live listener
     was started from. A config.json that was ALREADY unreadable at boot never populated it, and
     the boot path then read DEFAULT_CONFIG as well, so the default is the reading in that case
-    rather than a guess. None when even that cannot be reached."""
+    rather than a guess. None when even that cannot be reached.
+    """
     try:
         from panel.core import config as _cfg
         return int((_cfg._cfg_cache.get("data") or {}).get("port", _cfg.DEFAULT_CONFIG["port"]))
@@ -153,9 +177,11 @@ def _last_parsed_panel_port():
 
 
 def _panel_web_port(server, ts_running=None):
-    """If `server` is the panel's OWN host and the panel UI isn't reachable over Tailscale
-    right now, the public web port is the only way in — return it so its rule can be protected.
-    Returns None for a remote, or once Tailscale Serve is actually serving the panel.
+    """The panel's public web port when it is the only way into the UI, else None.
+
+    If `server` is the panel's OWN host and the panel UI isn't reachable over Tailscale right now,
+    the public web port is the only way in — return it so its rule can be protected. Returns None
+    for a remote, or once Tailscale Serve is actually serving the panel.
 
     Note: a `tailscale0` UFW rule (Tailscale SSH being reachable) is NOT enough to unprotect
     it — that's only a recovery path, not panel-UI access. The panel UI is only reachable over
@@ -163,7 +189,8 @@ def _panel_web_port(server, ts_running=None):
     so gate on both.
 
     `ts_running` is the caller's LIVE tailnet reading. It defaults to None — "nobody established
-    that" — which keeps the port protected, because not knowing is not a route."""
+    that" — which keeps the port protected, because not knowing is not a route.
+    """
     if not _core.is_local_server(server):
         return None
     # A config.json that is THERE and unparseable degrades to DEFAULT_CONFIG and says nothing —
@@ -209,18 +236,21 @@ def _config_unreadable():
     The shared predicate, not a copy of it. This kept its own, which had already drifted: it read
     the file as UTF-8 while load_config reads it in the locale's encoding, so on a non-UTF-8
     locale the two could disagree about the very file whose defaults this guards against. Kept
-    as a name because it is the stub seam the unit suite patches."""
+    as a name because it is the stub seam the unit suite patches.
+    """
     from panel.core.config import config_unreadable
     return config_unreadable()
 
 
 def _panel_served_over_tailscale(server):
-    """True when THIS host is the panel AND its web UI is published over Tailscale Serve
-    (tailscale_setup_done). In that case the *inbound* tailscale0 UFW rule is exactly what
+    """True when THIS host is the panel AND its web UI is published over Tailscale Serve.
+
+    Read from tailscale_setup_done. In that case the *inbound* tailscale0 UFW rule is exactly what
     keeps the panel reachable over the tailnet — with UFW default-deny, deleting it drops
     inbound tailnet traffic to Serve and locks you out of the panel. It's the mirror image
     of _panel_web_port: once Serve is the way in, the public port is free to close BUT the
-    tailscale0 rule becomes load-bearing and must be protected."""
+    tailscale0 rule becomes load-bearing and must be protected.
+    """
     if not _core.is_local_server(server):
         return False
     # load_config() degrades a CORRUPT config.json to DEFAULT_CONFIG and says nothing — by design,
@@ -239,59 +269,144 @@ def _panel_served_over_tailscale(server):
         return True
 
 
+def _is_ssh_rule(g, pn, inbound, ts_iface, ssh_ports):
+    """True when group `g` is an inbound ALLOW/LIMIT rule that keeps SSH reachable.
+
+    An SSH rule the panel can recognise is one of three shapes, and it used to see only the
+    first:
+      22/tcp                     — a bare port number
+      OpenSSH                    — ufw's APP PROFILE, which is the form Ubuntu's own docs and
+                                   `ufw app list` steer people to. It prints the profile name
+                                   in the To column, so pn.isdecimal() was False.
+      22 on eth0                 — interface-scoped, which `not is_iface` threw away
+    Both missed shapes came back is_ssh=False AND is_access=False, so protected and warn were
+    both False and remote_ufw_delete_rule — which gates only on protected — deleted the
+    host's only way in without a word. Reproduced against this module's own parser.
+    A tailscale-scoped rule stays out of is_ssh so the two categories remain disjoint;
+    is_tailscale already covers it and the messages below differ.
+    """
+    _named_ssh = pn.strip().lower() in _SSH_APP_PROFILES
+    return (g.get("action") in ("ALLOW", "LIMIT") and inbound and not ts_iface
+            and ((pn.isdecimal() and int(pn) in ssh_ports) or _named_ssh))
+
+
+def _classify_access_rule(g, ssh_ports):
+    """Set is_ssh / is_tailscale / is_access on one group: is it a way into the host."""
+    pn = str(g.get("port_num", ""))
+    # Only an INCOMING rule is a "way in". An `allow out on tailscale0` rule (or any
+    # OUT rule) must not count. A rate-limited SSH rule (`ufw limit`, action LIMIT) is
+    # just as much a way in as an ALLOW — miss it and the panel would let you delete
+    # your only SSH access.
+    inbound = g.get("direction", "IN") != "OUT"
+    _iface = str(g.get("iface", "") or "")
+    _ts_iface = _iface.startswith("tailscale")
+    g["is_ssh"] = _is_ssh_rule(g, pn, inbound, _ts_iface, ssh_ports)
+    # LIMIT here too, for the reason spelled out above: a rate-limited rule is a way in.
+    g["is_tailscale"] = (bool(g.get("is_iface")) and g.get("action") in ("ALLOW", "LIMIT")
+                         and inbound and _ts_iface)
+    g["is_access"] = g["is_ssh"] or g["is_tailscale"]
+
+
+def _is_panel_rule(g, panel_port):
+    """True when group `g` is the inbound ALLOW/LIMIT rule for the panel's own web port.
+
+    ALLOW *or LIMIT*, and inbound — the same two corrections is_ssh already carries.
+    `ufw limit 5000/tcp` on the panel's own web port is an ordinary thing to do and left the
+    only route to the panel UI deletable; an `ALLOW OUT` rule on that port was conversely
+    treated AS the panel rule and made undeletable.
+    """
+    return (panel_port is not None and not g.get("is_iface")
+            and g.get("action") in ("ALLOW", "LIMIT")
+            and g.get("direction", "IN") != "OUT"
+            and str(g.get("port_num", "")).isdecimal()
+            and int(g["port_num"]) == panel_port)
+
+
+def _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_ok):
+    """Set protected / warn / protect_reason on one group of an ENABLED firewall."""
+    if g["is_panel"]:
+        # No Tailscale route, so this public port is the only way into the panel.
+        g["protected"] = True
+        g["protect_reason"] = (
+            "Port %d is where this panel's own web interface listens, and it isn't reachable "
+            "over Tailscale — removing it would lock you out of the panel. Set up Tailscale "
+            "first if you want to close it." % panel_port)
+        return
+    if not g["is_access"]:
+        return
+    if g["is_ssh"]:
+        # Deleting this SSH rule is safe only if another way in remains: another SSH rule,
+        # Tailscale SSH, or regular SSH over a running tailnet (Tailscale isn't affected).
+        other_way = (ssh_count > 1) or ts_ssh_ok or ts_iface_ok
+        reason_last = (
+            "Port %s is the SSH port used to reach this host, and there's no working Tailscale "
+            "route to fall back on — removing it would lock you out. Enable Tailscale SSH, or "
+            "connect Tailscale and allow the tailscale0 interface, first." % g["port_num"])
+    else:  # is_tailscale — deleting it drops regular SSH over the tailnet; Tailscale SSH is unaffected
+        if served_over_ts:
+            # This is the panel host and its UI is published over Tailscale Serve, so this
+            # inbound tailscale0 rule is what keeps the PANEL reachable over the tailnet —
+            # not just SSH. With UFW default-deny, removing it drops inbound tailnet traffic
+            # to Serve and locks you out of the panel, and an available SSH path doesn't save
+            # the UI. Protect it outright (blocks the UI's × and any direct delete API call).
+            g["protected"] = True
+            g["protect_reason"] = (
+                "This Tailscale interface rule keeps the panel reachable over your tailnet "
+                "(Tailscale Serve). With the firewall's default-deny, removing it would drop "
+                "inbound tailnet traffic and lock you out of the panel — so it can't be "
+                "deleted here.")
+            return
+        other_way = (ssh_count > 0) or ts_ssh_ok
+        reason_last = (
+            "This is the Tailscale interface rule and currently the only way in — removing it "
+            "would lock you out. Open your SSH port (or enable Tailscale SSH) first.")
+    if not other_way:
+        g["protected"] = True
+        g["protect_reason"] = reason_last
+    else:
+        g["warn"] = True
+        g["protect_reason"] = (
+            "This keeps you connected (SSH or Tailscale). Another way in exists so it can be "
+            "removed, but make sure you won't lock yourself out.")
+
+
+def _live_tailscale_state(server, enabled, groups):
+    """(ts_running, ts_ssh_enabled) from the live tailnet, probed only when it can matter.
+
+    A Tailscale rule only counts as a real fallback when Tailscale is ACTUALLY running —
+    a lingering `allow tailscale0` UFW rule with Tailscale down/uninstalled is no route at
+    all. Query the live state once (only when it could change a decision).
+
+    Hoisted ABOVE _panel_web_port because it decides that too. The panel port was unprotected
+    by `tailscale_setup_done` alone — a flag saying Serve was configured at some point — so a
+    stopped tailscaled or an expired node key left the panel's only remaining door with an
+    ordinary delete ×. On the panel's own host the probe therefore runs even when no access
+    rule is in the table, because there the web-port rule is the one at risk.
+    """
+    ts_running = ts_ssh_enabled = False
+    if enabled and (any(g.get("is_access") for g in groups) or _core.is_local_server(server)):
+        ts_running, ts_ssh_enabled = hosts._tailscale_conn_state(server)
+    return ts_running, ts_ssh_enabled
+
+
 def _annotate_firewall_protection(server, enabled, groups):
-    """Flag rules whose removal could LOCK YOU OUT, so the UI and API can refuse to
-    delete the last way in. Access rules: the SSH-port ALLOW and the Tailscale-
-    interface ALLOW — a rule is *blocked* only when it's the sole remaining one (no
+    """Flag rules whose removal could LOCK YOU OUT.
+
+    So the UI and API can refuse to delete the last way in. Access rules: the SSH-port ALLOW and
+    the Tailscale-interface ALLOW — a rule is *blocked* only when it's the sole remaining one (no
     SSH and no Tailscale would be left); otherwise it's flagged to warn on. On the
     panel's OWN host, the panel's web port is also protected when Tailscale isn't an
     alternate route (otherwise you'd delete your only way into the panel UI). If UFW
-    is disabled it isn't enforcing anything, so nothing is protected."""
+    is disabled it isn't enforcing anything, so nothing is protected.
+    """
     ssh_ports = _ssh_ports(server)
     for g in groups:
-        pn = str(g.get("port_num", ""))
-        # Only an INCOMING rule is a "way in". An `allow out on tailscale0` rule (or any
-        # OUT rule) must not count. A rate-limited SSH rule (`ufw limit`, action LIMIT) is
-        # just as much a way in as an ALLOW — miss it and the panel would let you delete
-        # your only SSH access.
-        inbound = g.get("direction", "IN") != "OUT"
-        _iface = str(g.get("iface", "") or "")
-        _ts_iface = _iface.startswith("tailscale")
-        # An SSH rule the panel can recognise is one of three shapes, and it used to see only the
-        # first:
-        #   22/tcp                     — a bare port number
-        #   OpenSSH                    — ufw's APP PROFILE, which is the form Ubuntu's own docs and
-        #                                `ufw app list` steer people to. It prints the profile name
-        #                                in the To column, so pn.isdecimal() was False.
-        #   22 on eth0                 — interface-scoped, which `not is_iface` threw away
-        # Both missed shapes came back is_ssh=False AND is_access=False, so protected and warn were
-        # both False and remote_ufw_delete_rule — which gates only on protected — deleted the
-        # host's only way in without a word. Reproduced against this module's own parser.
-        # A tailscale-scoped rule stays out of is_ssh so the two categories remain disjoint;
-        # is_tailscale already covers it and the messages below differ.
-        _named_ssh = pn.strip().lower() in _SSH_APP_PROFILES
-        g["is_ssh"] = (g.get("action") in ("ALLOW", "LIMIT") and inbound and not _ts_iface
-                       and ((pn.isdecimal() and int(pn) in ssh_ports) or _named_ssh))
-        # LIMIT here too, for the reason spelled out above: a rate-limited rule is a way in.
-        g["is_tailscale"] = (bool(g.get("is_iface")) and g.get("action") in ("ALLOW", "LIMIT")
-                             and inbound and _ts_iface)
-        g["is_access"] = g["is_ssh"] or g["is_tailscale"]
+        _classify_access_rule(g, ssh_ports)
 
     ssh_count = sum(1 for g in groups if g.get("is_ssh"))
     has_ts_iface = any(g.get("is_tailscale") for g in groups)
 
-    # A Tailscale rule only counts as a real fallback when Tailscale is ACTUALLY running —
-    # a lingering `allow tailscale0` UFW rule with Tailscale down/uninstalled is no route at
-    # all. Query the live state once (only when it could change a decision).
-    #
-    # Hoisted ABOVE _panel_web_port because it decides that too. The panel port was unprotected
-    # by `tailscale_setup_done` alone — a flag saying Serve was configured at some point — so a
-    # stopped tailscaled or an expired node key left the panel's only remaining door with an
-    # ordinary delete ×. On the panel's own host the probe therefore runs even when no access
-    # rule is in the table, because there the web-port rule is the one at risk.
-    ts_running = ts_ssh_enabled = False
-    if enabled and (any(g.get("is_access") for g in groups) or _core.is_local_server(server)):
-        ts_running, ts_ssh_enabled = hosts._tailscale_conn_state(server)
+    ts_running, ts_ssh_enabled = _live_tailscale_state(server, enabled, groups)
 
     panel_port = _panel_web_port(server, ts_running=ts_running)
     served_over_ts = _panel_served_over_tailscale(server)
@@ -302,61 +417,10 @@ def _annotate_firewall_protection(server, enabled, groups):
         g["protected"] = False
         g["warn"] = False
         g["protect_reason"] = ""
-        # ALLOW *or LIMIT*, and inbound — the same two corrections is_ssh already carries.
-        # `ufw limit 5000/tcp` on the panel's own web port is an ordinary thing to do and left the
-        # only route to the panel UI deletable; an `ALLOW OUT` rule on that port was conversely
-        # treated AS the panel rule and made undeletable.
-        g["is_panel"] = (panel_port is not None and not g.get("is_iface")
-                         and g.get("action") in ("ALLOW", "LIMIT")
-                         and g.get("direction", "IN") != "OUT"
-                         and str(g.get("port_num", "")).isdecimal()
-                         and int(g["port_num"]) == panel_port)
+        g["is_panel"] = _is_panel_rule(g, panel_port)
         if not enabled:
             continue
-        if g["is_panel"]:
-            # No Tailscale route, so this public port is the only way into the panel.
-            g["protected"] = True
-            g["protect_reason"] = (
-                "Port %d is where this panel's own web interface listens, and it isn't reachable "
-                "over Tailscale — removing it would lock you out of the panel. Set up Tailscale "
-                "first if you want to close it." % panel_port)
-            continue
-        if not g["is_access"]:
-            continue
-        if g["is_ssh"]:
-            # Deleting this SSH rule is safe only if another way in remains: another SSH rule,
-            # Tailscale SSH, or regular SSH over a running tailnet (Tailscale isn't affected).
-            other_way = (ssh_count > 1) or ts_ssh_ok or ts_iface_ok
-            reason_last = (
-                "Port %s is the SSH port used to reach this host, and there's no working Tailscale "
-                "route to fall back on — removing it would lock you out. Enable Tailscale SSH, or "
-                "connect Tailscale and allow the tailscale0 interface, first." % g["port_num"])
-        else:  # is_tailscale — deleting it drops regular SSH over the tailnet; Tailscale SSH is unaffected
-            if served_over_ts:
-                # This is the panel host and its UI is published over Tailscale Serve, so this
-                # inbound tailscale0 rule is what keeps the PANEL reachable over the tailnet —
-                # not just SSH. With UFW default-deny, removing it drops inbound tailnet traffic
-                # to Serve and locks you out of the panel, and an available SSH path doesn't save
-                # the UI. Protect it outright (blocks the UI's × and any direct delete API call).
-                g["protected"] = True
-                g["protect_reason"] = (
-                    "This Tailscale interface rule keeps the panel reachable over your tailnet "
-                    "(Tailscale Serve). With the firewall's default-deny, removing it would drop "
-                    "inbound tailnet traffic and lock you out of the panel — so it can't be "
-                    "deleted here.")
-                continue
-            other_way = (ssh_count > 0) or ts_ssh_ok
-            reason_last = (
-                "This is the Tailscale interface rule and currently the only way in — removing it "
-                "would lock you out. Open your SSH port (or enable Tailscale SSH) first.")
-        if not other_way:
-            g["protected"] = True
-            g["protect_reason"] = reason_last
-        else:
-            g["warn"] = True
-            g["protect_reason"] = (
-                "This keeps you connected (SSH or Tailscale). Another way in exists so it can be "
-                "removed, but make sure you won't lock yourself out.")
+        _protect_rule(g, panel_port, served_over_ts, ssh_count, ts_ssh_ok, ts_iface_ok)
     return groups
 
 
@@ -369,7 +433,8 @@ def _ufw_is_active(status_out):
 
     ...in English. The line is translated (`Status: actief`), so the reading is shared with the
     panel host's own ufw code and falls back to the untranslated rules listing — see
-    system_ops.ufw_status_active."""
+    system_ops.ufw_status_active.
+    """
     from panel.ops import system_ops as _so
     return _so.ufw_status_active(status_out)
 
@@ -396,6 +461,13 @@ _SUDO_REFUSED_RE = re.compile(
     r"|ERROR:\s*You need to be root to run this script"
     r"|panel-helper:\s*\S+ failed \(PermissionError\)"
     r")")
+
+
+# One row of `ufw status numbered`: "[ N] <to>  <action>  <from>". The detail starts on a
+# non-blank, `(?:\S.*)?` rather than `.*`: a `.*` straight after `\s*` could split the blanks
+# between the two every way before failing, which is quadratic. The groups are the ones
+# `\s*(.*)$` gave.
+_UFW_NUMBERED_RE = re.compile(r"^\s*\[\s*(\d+)\]\s*((?:\S.*)?)$")
 
 
 def remote_ufw_status(server):
@@ -442,7 +514,7 @@ def remote_ufw_status(server):
     # `ufw status numbered` prints each rule as "[ N] <to>  <action>  <from>".
     # Collapse runs of spaces so the detail reads cleanly.
     for line in out.split("\n"):
-        m = re.match(r"^\s*\[\s*(\d+)\]\s*(.*)$", line)
+        m = _UFW_NUMBERED_RE.match(line)
         if m:
             detail = re.sub(r"\s{2,}", "  ", m.group(2).strip())
             rules.append({"num": m.group(1), "detail": detail})
@@ -475,10 +547,12 @@ _specs_cache = _core.register_remote_cache({})   # remote id -> result
 
 
 def host_specs(server, force=False):
-    """Static hardware/OS specs for a host (OS, CPU, cores, RAM, disk, kernel, arch, virt). Probed
-    ONCE and cached for the panel's whole lifetime — these don't change while the machine is up, and
-    a reboot/resize restarts the panel anyway, so there's no periodic re-check. force=True re-probes
-    (e.g. after resizing the box without a reboot)."""
+    """Static hardware/OS specs for a host (OS, CPU, cores, RAM, disk, kernel, arch, virt).
+
+    Probed ONCE and cached for the panel's whole lifetime — these don't change while the machine
+    is up, and a reboot/resize restarts the panel anyway, so there's no periodic re-check.
+    force=True re-probes (e.g. after resizing the box without a reboot).
+    """
     key = hosts._pro_key(server)
     if not force and key in _specs_cache:
         return _specs_cache[key]
@@ -491,7 +565,7 @@ def host_specs(server, force=False):
 def _compute_host_specs(server):
     """Probe hardware/OS specs (OS, CPU model, cores, RAM, disk, kernel, arch, virt)."""
     try:
-        out, err, rc = _core.run_command(server, _SPECS_CMD, timeout=20, sudo=False)
+        out, err, _ = _core.run_command(server, _SPECS_CMD, timeout=20, sudo=False)
     except Exception:
         # Never surface raw exception text — it flows to a JSON response (CodeQL
         # py/stack-trace-exposure). Log it server-side; the caller shows a generic message.
@@ -505,6 +579,11 @@ def _compute_host_specs(server):
         if "\t" in line:
             k, v = line.split("\t", 1)
             d[k.strip()] = v.strip()
+    return _host_specs_from_fields(d)
+
+
+def _host_specs_from_fields(d):
+    """Shape the probe's KEY -> VALUE fields into the specs dict the UI shows."""
     mhz = d.get("MAXMHZ", "")
     ghz = ""
     try:

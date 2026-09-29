@@ -546,6 +546,27 @@ try:
     check("nav active: Settings on /settings",
           _active_navs(c.get("/settings").get_data(as_text=True)) == ["Settings"])
 
+    # ── The footer's version: the commit's date, beside the commit it is the date of ──────────────
+    # Every commit of a day shares the date, so the footer only answers "what is deployed" with the
+    # commit next to it. Rendered with known values: this suite's copy of the panel may have no
+    # .git, and then its own version reads "unknown" with no commit at all.
+    import app as _fv_app
+    _fv_saved = (_fv_app.PANEL_VERSION, _fv_app.PANEL_COMMIT)
+    try:
+        _fv_app.PANEL_VERSION, _fv_app.PANEL_COMMIT = "2026.9.26", "a1b2c3d"
+        _fv_html = c.get("/").get_data(as_text=True)
+    finally:
+        _fv_app.PANEL_VERSION, _fv_app.PANEL_COMMIT = _fv_saved
+    _fv_m = _nre.search(r'<span id="panel-version">([^<]*)</span>\s*<(a|span) id="panel-commit"'
+                        r'([^>]*)>([^<]*)<', _fv_html)
+    check("footer: the version is the date, as it is, followed by the running commit",
+          _fv_m is not None and _fv_m.group(1) == "2026.9.26"
+          and _fv_m.group(4).strip() == "· a1b2c3d",
+          repr(_fv_m.groups() if _fv_m else _fv_html[_fv_html.find("panel-version") - 20:][:300]))
+    check("footer: ...and the commit links to that commit on GitHub",
+          _fv_m is not None and _fv_m.group(2) == "a" and "/commit/a1b2c3d\"" in _fv_m.group(3),
+          repr(_fv_m.group(3) if _fv_m else None))
+
     # ── Audit-log filters/sort must be injection-safe: a junk sort column, bad
     #    direction/status, and hostile filter values are allowlisted/parameterized,
     #    so the page still renders 200 rather than 500. ──
@@ -570,6 +591,17 @@ try:
           "DTLHEAD" in _dtl_html, "the probe row did not render — the check below proves nothing")
     check("audit log: a long detail's tail (where the outcome is) is rendered, not cut at 100 chars",
           _dtl_tail in _dtl_html, "the FAIL reason stored at the end of the detail is not on /logs")
+    # ...and the search leaves out what does not match it. Ignoring `q` (in _filtered_audit_query
+    # since view_logs was split) left every suite green: every search here only looked for the row
+    # it expected, and a newer, unrelated row is on page one either way.
+    with app.app_context():
+        db.session.add(_dtl_AL(username="admin", action="server_start", target="dtl-other",
+                               detail="DTLOTHER_UNRELATED", success=True))
+        db.session.commit()
+    _dtl_q = c.get("/logs?q=DTLHEAD").get_data(as_text=True)
+    check("audit log: a search shows only the rows that match it",
+          "DTLHEAD" in _dtl_q and "DTLOTHER_UNRELATED" not in _dtl_q,
+          "an unrelated row is on the page a search for DTLHEAD returned")
 
     # The Files & Config page (config editor + file browser + cron manager) must render.
     check("GET /server/<id>/files renders (200)",
@@ -722,9 +754,24 @@ try:
             "cpu_percent": 0.0, "ram_percent": 0, "ram_total": 0, "disk_percent": 0,
             "cores": 1, "game_procs": 0, "game_cpu_percent": 0.0, "game_ram_mb": 0,
             "game_uptime_secs": 0, "port_open": False}
+        # The row says online going in, so "offline" can only come from the port the sample never
+        # read. Reporting that (in _persisted_stats_status since api_server_stats was split) left
+        # every suite green: the persist guard held, so only the ANSWER was wrong, and only the
+        # source-text checks in part02 looked at this route.
+        with app.app_context():
+            _st_before = db.session.get(GameServer, gs_id).status
+            db.session.get(GameServer, gs_id).status = "online"
+            db.session.commit()
         _sj2 = (c.get("/api/server/%d/stats" % gs_id).get_json() or {})
         check("server stats: an all-zero sample is reported as NOT readable",
               _sj2.get("metrics_readable") is False, str(_sj2)[:140])
+        with app.app_context():
+            _st_row = db.session.get(GameServer, gs_id).status
+            db.session.get(GameServer, gs_id).status = _st_before
+            db.session.commit()
+        check("server stats: ...and reports the status it last KNEW, not 'offline' off a port it "
+              "never read", _sj2.get("status") == "online" and _st_row == "online",
+              "reported %r, row now %r" % (_sj2.get("status"), _st_row))
     finally:
         _sm_core.server_live_metrics = _st_saved
 
@@ -1231,6 +1278,42 @@ try:
     cp3 = c.post("/api/panel/change-port", json={"port": 5000, "bind_host": "not-an-ip"})
     check("change-port refuses a non-IP bind address",
           cp3.status_code == 400 and not (cp3.get_json() or {}).get("success"))
+    # ...and a port a game server on the panel's own host already holds, by the server's name.
+    # Deleting that clash check (in _port_refusal since api_panel_change_port was split) left
+    # every suite green — only the range and bind refusals above were driven — and the panel then
+    # saves and restarts onto the game's port. port_in_use is stubbed so the clash is the only thing
+    # that can refuse, and restart_panel so a regression cannot restart anything.
+    import panel.routes.remote_security as _cp_rs
+    with app.app_context():
+        _cp_local = RemoteServer.query.filter_by(is_local=True).first()
+        _cp_made = _cp_local is None
+        if _cp_made:
+            _cp_local = RemoteServer(name="smoke-cp-local", host="127.0.0.1", port=22,
+                                     username="panel", auth_method="local", auth_credential="",
+                                     is_local=True)
+            db.session.add(_cp_local)
+            db.session.flush()
+        _cp_gs = GameServer(remote_id=_cp_local.id, name="cp-clash", short_name="cpclash",
+                            game_type="csgo", port=5099, installed=True, status="offline")
+        db.session.add(_cp_gs)
+        db.session.commit()
+        _cp_ids = (_cp_local.id, _cp_gs.id)
+    _cp_saved = (_cp_rs.so.port_in_use, _cp_rs.so.restart_panel)
+    try:
+        _cp_rs.so.port_in_use = lambda _p: False
+        _cp_rs.so.restart_panel = lambda: (False, "stubbed by smoke_test")
+        cp4 = c.post("/api/panel/change-port", json={"port": 5099})
+    finally:
+        _cp_rs.so.port_in_use, _cp_rs.so.restart_panel = _cp_saved
+        with app.app_context():
+            db.session.delete(db.session.get(GameServer, _cp_ids[1]))
+            if _cp_made:
+                db.session.delete(db.session.get(RemoteServer, _cp_ids[0]))
+            db.session.commit()
+    check("change-port refuses a port a game server on the panel's host already uses",
+          cp4.status_code == 400
+          and "is used by game server 'cp-clash'" in ((cp4.get_json() or {}).get("message") or ""),
+          str(cp4.get_json())[:160])
 
     # ── Backups: list + settings + name validation (no real backup/restart triggered) ──
     bl = c.get("/api/panel/backups")
@@ -1577,7 +1660,17 @@ try:
         check("host page: ...while a REMOTE's page keeps all of them (positive control)",
               'data-mtab-btn="security"' in _hp_rem and "Migrate to Tailscale SSH" in _hp_rem
               and "Pinned SSH host key" in _hp_rem, "the gate hides them on every host")
-        _hp_loc_a = c.get("/remote/%d/manage" % _hp_lid).get_data(as_text=True)
+        # Known version and commit (see the footer's check) for the Updates card's header.
+        import app as _hp_app
+        _hp_vsaved = (_hp_app.PANEL_VERSION, _hp_app.PANEL_COMMIT)
+        try:
+            _hp_app.PANEL_VERSION, _hp_app.PANEL_COMMIT = "2026.9.26", "a1b2c3d"
+            _hp_loc_a = c.get("/remote/%d/manage" % _hp_lid).get_data(as_text=True)
+        finally:
+            _hp_app.PANEL_VERSION, _hp_app.PANEL_COMMIT = _hp_vsaved
+        check("panel host page: the Updates card names the running version beside its commit",
+              '<strong id="pu-current">2026.9.26 · a1b2c3d</strong>' in _hp_loc_a,
+              _hp_loc_a[_hp_loc_a.find('id="pu-current"') - 10:][:120])
         check("panel host page: ...and a superadmin still gets the Security tab there (positive control)",
               'data-mtab-btn="security"' in _hp_loc_a and 'id="sec-bans"' in _hp_loc_a,
               "the Security tab is gone for the superadmin too")
@@ -2909,6 +3002,14 @@ try:
                 _d = db.session.get(User, _nou_id)
                 if _d:
                     db.session.delete(_d); db.session.commit()
+        # A GMod install with content has NINE steps, and the row reads the job's own total. A
+        # fixed 8 (in _install_row since api_installs was split) left every suite green, because
+        # the probe above is an 8-step job — and it draws a 9-step install's bar past its end.
+        with _il:
+            _ij[gs_id]["total"] = 9
+        _row9 = ((c.get("/api/installs").get_json() or {}).get("installs") or [{}])[0]
+        check("installs: ...the total and the percentage are the job's own (a 9-step install)",
+              _row9.get("total") == 9 and _row9.get("percent") == 33, _row9)
         # A finished job is not an install in progress — the widget settles those through the
         # per-server endpoint, and leaving them here would pin a card open forever.
         with _il:
@@ -2918,6 +3019,41 @@ try:
     finally:
         with _il:
             _ij.pop(gs_id, None)
+
+    # ── install-status: a row whose job was lost is settled by asking the host ──────────────────
+    # A row left "installing" with no job behind it (the worker died with a panel restart) is put
+    # to the host: files there -> installed, offline; clearly not -> failed; no answer -> nothing
+    # written. None of the three had a test: marking a verified install NOT installed (in
+    # _reconcile_lost_install since api_server_install_status was split) left every suite green.
+    import panel.routes.api as _rl_api
+    _rl_saved = _rl_api._looks_installed
+    with app.app_context():
+        _rl_row = db.session.get(GameServer, gs_id)
+        _rl_before = (_rl_row.status, _rl_row.installed)
+    _rl_seen = {}
+    try:
+        for _rl_verdict in (True, False, None):
+            with app.app_context():
+                _rl_row = db.session.get(GameServer, gs_id)
+                _rl_row.status, _rl_row.installed = "installing", False
+                db.session.commit()
+            _rl_api._looks_installed = lambda *a, _v=_rl_verdict, **k: _v
+            _rl_js = c.get("/api/server/%d/install-status" % gs_id).get_json() or {}
+            with app.app_context():
+                _rl_row = db.session.get(GameServer, gs_id)
+                _rl_seen[_rl_verdict] = (_rl_js.get("status"), _rl_row.status, _rl_row.installed)
+    finally:
+        _rl_api._looks_installed = _rl_saved
+        with app.app_context():
+            _rl_row = db.session.get(GameServer, gs_id)
+            _rl_row.status, _rl_row.installed = _rl_before
+            db.session.commit()
+    check("install-status: a lost job whose files ARE on the host is settled installed, offline",
+          _rl_seen.get(True) == ("done", "offline", True), repr(_rl_seen))
+    check("install-status: ...one the host says is NOT there is failed, and says so",
+          _rl_seen.get(False) == ("failed", "failed", False), repr(_rl_seen))
+    check("install-status: ...and one the host would not answer for is left as it was",
+          _rl_seen.get(None) == ("interrupted", "installing", False), repr(_rl_seen))
 
 
     # ── Cookie-reuse defense: a session/remember cookie captured before logout must
@@ -4955,6 +5091,11 @@ try:
     # module — it follows the handler, not the name (same rule as remote_security below).
     from panel.routes import discover as _disc_mod
     _orig_disc = _disc_mod.discover_linuxgsm_servers
+    # ...and an account the panel ALREADY has a row for on this host, which is not offered again.
+    # Dropping that skip (in _discovered_listing since api_remote_discover was split) left every
+    # suite green, and relisted an imported server as new; importing it is refused, not deduped.
+    with app.app_context():
+        _dsc_have = [g.short_name for g in GameServer.query.filter_by(remote_id=remote_id).all()]
     try:
         def _fake_disc(_server):
             rows = [{"user": "contentbox", "lgsm_name": n, "port": 27015, "backups": 0,
@@ -4962,6 +5103,8 @@ try:
                     for n in ("cssserver", "tf2server", "dodsserver", "l4d2server")]
             rows.append({"user": "realgmod", "lgsm_name": "gmodserver", "port": 27015,
                          "backups": 1, "mods": 0, "cron": 2, "autostart": True})
+            rows += [{"user": _u, "lgsm_name": "gmodserver", "port": 27016, "backups": 0,
+                      "mods": 0, "cron": 1, "autostart": False} for _u in _dsc_have[:1]]
             return rows
         _disc_mod.discover_linuxgsm_servers = _fake_disc
         _d2 = (c.get("/api/remote/%d/discover" % remote_id).get_json() or {})
@@ -4970,6 +5113,9 @@ try:
               "contentbox" not in _users, "users=%s" % _users)
         check("discover: ...while a real server on the same host still is",
               _users == ["realgmod"], "users=%s" % _users)
+        check("discover: an account the panel already has a row for is not offered again",
+              bool(_dsc_have) and _dsc_have[0] not in _users,
+              "have=%s users=%s" % (_dsc_have[:1], _users))
         _content = _d2.get("content") or []
         check("discover: ...and the content it skipped is reported, not silently dropped",
               len(_content) == 1 and _content[0]["user"] == "contentbox"
@@ -5916,10 +6062,13 @@ try:
     # 375px: the old rules overlapped all five tiles, these overlap none.
     check("layout: the editing controls are hidden until edit mode",
           ".panel-tools, .host-move, .srv-move { display: none; }" in _drag_html)
+    # Whitespace-tolerant: panel.css writes one declaration per line (Stylelint), so a rule is
+    # "selector {\n  prop: value;" there. A literal "{ .panel-tools" would never match the
+    # stylesheet's own spelling and the negative check below would pass on anything.
     check("layout: nothing makes them visible again on touch",
-          "@media (hover: none) { .panel-tools" not in _drag_html)
+          _re_d.search(r"@media \(hover: none\)\s*\{\s*\.panel-tools", _drag_html) is None)
     check("layout: in edit mode they sit IN FLOW, so they cannot overlay the content",
-          "body.layout-edit .panel-tools { position: static;" in _drag_html)
+          _re_d.search(r"body\.layout-edit \.panel-tools \{\s*position: static;", _drag_html) is not None)
     check("layout: the dashboard offers a way to turn edit mode on",
           'data-action="toggleLayoutEdit"' in _drag_html
           and "window.toggleLayoutEdit = function" in _drag_html)
@@ -12569,6 +12718,14 @@ try:
                 db.session.add(_iv_dead)
                 db.session.flush()
                 _iv_made.append(_iv_dead.id)
+            # One that EXPIRED without being used or revoked: finished, shown once for context,
+            # and not live. Counting it live (in _invite_listing since manage_users was split) left
+            # every suite green — the dead rows above are all used — and listed it twice.
+            _iv_exp, _ = _IvR.mint(_iv_admin3, hours=1, note="smoke-expired-invite")
+            _iv_exp.expires_at = _iv_now() - _iv_td(minutes=5)
+            db.session.add(_iv_exp)
+            db.session.flush()
+            _iv_made.append(_iv_exp.id)
             db.session.commit()
             _iv_live_row = db.session.get(_IvR, _iv_live_id)
             _iv_live_usable = _iv_live_row.is_usable
@@ -12587,6 +12744,10 @@ try:
         check("invite list: finished invites are still listed for context",
               "smoke-dead-29" in _iv_page,
               "the page now shows nothing but live invites")
+        check("invite list: an expired invite is listed once, as finished, with no Revoke",
+              _iv_page.count(">smoke-expired-invite<") == 1
+              and ("/users/invite/%d/revoke" % _iv_made[-1]) not in _iv_page,
+              "listed %d time(s)" % _iv_page.count(">smoke-expired-invite<"))
     finally:
         with app.app_context():
             if _iv_made:
@@ -13972,6 +14133,35 @@ try:
         check("terminal: ...while term_open on a granted REMOTE does (positive control)",
               any(getattr(v, "host", None) == _lt_rid for v in _lt_sessions.values()),
               "no session on the remote — the gate refuses everything")
+        # term_open asks _may_use_terminal itself: a socket event never passes the before_request
+        # that sends a must-change-password account to the change page, and carries no permission
+        # decorator. With that call gone (in _terminal_target since on_term_open was split) every
+        # suite stayed green, while this same account, host grant intact, got a shell on the
+        # remote on a handed-over temporary password — or with no use_terminal at all.
+        _lt_sessions.clear()
+        _lt_c.get_received()
+        with app.app_context():
+            db.session.get(User, _lt_uid).must_change_password = True
+            db.session.commit()
+        _lt_c.emit("term_open", {"remote_id": _lt_rid, "cols": 80, "rows": 24})
+        _lt_err = [e for e in _lt_c.get_received() if e.get("name") == "term_error"]
+        check("terminal: term_open refuses an account that must change its password, grant or not",
+              not _lt_sessions and _lt_err
+              and "permission to open a terminal" in str(_lt_err[0].get("args")),
+              "sessions=%r errors=%r" % (list(_lt_sessions), _lt_err))
+        with app.app_context():
+            db.session.get(User, _lt_uid).must_change_password = False
+            db.session.get(Group, _lt_gid).set_permissions([auth.MANAGE_REMOTES])
+            db.session.commit()
+        _lt_c.emit("term_open", {"remote_id": _lt_rid, "cols": 80, "rows": 24})
+        _lt_err = [e for e in _lt_c.get_received() if e.get("name") == "term_error"]
+        check("terminal: ...and one whose groups no longer grant use_terminal",
+              not _lt_sessions and _lt_err
+              and "permission to open a terminal" in str(_lt_err[0].get("args")),
+              "sessions=%r errors=%r" % (list(_lt_sessions), _lt_err))
+        with app.app_context():
+            db.session.get(Group, _lt_gid).set_permissions([auth.USE_TERMINAL, auth.MANAGE_REMOTES])
+            db.session.commit()
         _lt_c.disconnect()
         _lt_sessions.clear()
 

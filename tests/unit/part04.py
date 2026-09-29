@@ -204,7 +204,7 @@ try:
     _lgd_before = (len(_app.load_game_list()), _app.lgsm_name_to_game_type("newgserver"),
                    _sm_hosts._load_deps_csv(None).get("all"))
     # Upstream moves on: the next fetch returns the new files.
-    _lgd._fetch = lambda name: {_lgd.SERVERLIST: _LGD_NEW_SL, _lgd.DEPS: _LGD_NEW_DP}.get(name)
+    _lgd._fetch = {_lgd.SERVERLIST: _LGD_NEW_SL, _lgd.DEPS: _LGD_NEW_DP}.get
     # Positive control: inside the week nothing is re-read, so the cache is still a cache.
     check("lgsm data: inside the week the parsed copy is served, not re-read (control)",
           _lgd_before == (3, None, ["bc", "binutils", "curl"])
@@ -367,8 +367,14 @@ check("parser(valve): a second status reply still supersedes the first",
       [p["name"] for p in _sm_game._parse_valve_status(_HDR + _SPOOF)]
       == ["STEAM_0:1:11111111", "Victim"],
       str([p["name"] for p in _sm_game._parse_valve_status(_HDR + _SPOOF)]))
+# The idTech3 twin, which had none: the older table's players (and their slot numbers, which is
+# what kick/ban send) must not survive into the newer reply's list.
+check("parser(idtech3): a second status reply still supersedes the first",
+      [(p["num"], p["name"]) for p in _sm_game._parse_idtech3_status(_COD_HDR + _COD)]
+      == [(0, "Alice"), (1, "Bob Smith")],
+      str(_sm_game._parse_idtech3_status(_COD_HDR + _COD)))
 
-_MC = "[12:34:56] [Server thread/INFO]: There are 2 of a max of 20 players online: Alice, Bob_1"
+_MC ="[12:34:56] [Server thread/INFO]: There are 2 of a max of 20 players online: Alice, Bob_1"
 
 
 def _mc_names(text):
@@ -378,9 +384,11 @@ def _mc_names(text):
     returns None for "could not read" — so a regression that made it stop matching raised
     TypeError out of the check expression and killed the whole suite on a traceback, instead of
     failing the one check by name. Proven by mutation: two separate breaks to the prefix stripper
-    both ended the run at this line with no check reported."""
+    both ended the run at this line with no check reported.
+    """
     got = _sm_game._parse_minecraft_list(text)
     return [p["name"] for p in got] if isinstance(got, list) else got
+
 
 check("parser(minecraft): names from a prefixed log line",
       _mc_names(_MC) == ["Alice", "Bob_1"])
@@ -455,7 +463,10 @@ check("console: capture-pane joins wrapped lines (-J), so a long line is not cut
 # silently dropped — the panel must query the host's primary IP. (run_command runs the awk pipeline
 # remotely, so the stub returns what awk WOULD emit: just the IP, or nothing.)
 class _FakeRemote:
-    def __init__(self, rid): self.id = rid
+    def __init__(self, rid):
+        self.id = rid
+
+
 _orig_rc = _sm_core.run_command
 try:
     _sm_core._gamedig_host_cache.clear()
@@ -513,8 +524,47 @@ try:
     check("game-map: strips angle brackets from game-supplied text",
           "<" not in _sm_cron.game_map(object(), "u", "css", 27015) and ">" not in _sm_cron.game_map(object(), "u", "css", 27015))
     check("game-map: no gamedig type/port -> '' (no query)", _sm_cron.game_map(object(), "u", "css", None) == "")
+    _sm_cron._game_map_cache.clear(); _sm_core.run_command = lambda *a, **k: ("a banner line\nde_nuke\n", "", 0)
+    check("game-map: the map is the LAST line of output, where jq prints it",
+          _sm_cron.game_map(object(), "u", "css", 27015) == "de_nuke")
+    # The gamedig player reader had only stubbed callers. The JSON list is found on whatever line
+    # it lands on, unnamed entries are dropped, and a reply with no list in it is "could not query"
+    # (None) — never the confirmed-empty server an empty list is.
+    _sm_core.run_command = lambda *a, **k: ('a banner line\n[{"name":" Alice ","score":3,"time":61.5},'
+                                            '{"name":""},"x"]\n', "", 0)
+    check("gamedig players: the list is read off its own line, unnamed entries dropped",
+          _sm_game._gamedig_player_list(object(), "u", "css", 27015)
+          == [{"name": "Alice", "steamid": "", "num": None, "score": 3, "time": 61.5}],
+          str(_sm_game._gamedig_player_list(object(), "u", "css", 27015)))
+    _sm_core.run_command = lambda *a, **k: ("[]\n", "", 0)
+    check("gamedig players: an empty list is a confirmed-empty server ([]), not unknown",
+          _sm_game._gamedig_player_list(object(), "u", "css", 27015) == [])
+    _sm_core.run_command = lambda *a, **k: ("", "", 0)
+    check("gamedig players: no reply at all is unknown (None), not an empty server",
+          _sm_game._gamedig_player_list(object(), "u", "css", 27015) is None)
 finally:
     _sm_core.run_command = _orig_rc5; _sm_cron._game_map_cache.clear()
+
+# detect_game_ports reads LinuxGSM `details`' port table; its callers are all stubbed. The GAME
+# port is the "Game" row even when another row comes first, only Game + Query are opened, and the
+# table ends at the first line that is not a row (a later "Other 5000 tcp" is not a port of it).
+_DGP_DETAILS = ("DESCRIPTION  PORT   PROTOCOL  LISTEN\n"
+                "Query        27016  udp       1\n"
+                "Game         27017  udp       1\n"
+                "SourceTV     27020  udp       1\n"
+                "RCON         27015  tcp       1\n"
+                "\n"
+                "Other        5000   tcp\n")
+_orig_rag_dgp = _sm_core.run_as_game_user
+try:
+    _sm_core.run_as_game_user = lambda *a, **k: (_DGP_DETAILS, "", 0)
+    _dgp = _sm_game.detect_game_ports(object(), "u", "csgoserver")
+    check("detect_game_ports: the game port is the Game row, not the first row of the table",
+          _dgp["game_port"] == 27017 and _dgp["open_ports"] == [27016, 27017], str(_dgp))
+    check("detect_game_ports: ...and the table ends at its first non-row line",
+          [p["port"] for p in _dgp["ports"]] == [27016, 27017, 27020, 27015], str(_dgp["ports"]))
+finally:
+    _sm_core.run_as_game_user = _orig_rag_dgp
 
 # player_list: gamedig is PRIMARY (no console spam). The console is a backup used ONLY when the
 # caller explicitly passes allow_console=True (a user action) — the automatic path (default) never
@@ -571,6 +621,17 @@ try:
           _mc_ok is False and "cmd" not in _msent and "space" in _mc_why, "%s %r" % (_mc_why, _msent))
     check("moderation: a non-console game (rust) refuses moderation",
           _sm_game.moderate(None, "u", "rust", "ban", target="x")[0] is False)
+    # steamid/num reach moderate() as keywords (**ident), so a misspelled one would be silently
+    # dropped — a ban with no identifier — unless it still raises the TypeError a parameter typo did.
+    _msent.clear()
+    try:
+        _sm_game.moderate(None, "u", "gmod", "ban", steam_id="STEAM_0:1:5")
+        _mod_typo = "accepted"
+    except Exception as _e:      # any type is caught: the TYPE is what is being checked
+        _mod_typo = "%s: %s" % (type(_e).__name__, _e)
+    check("moderation: a misspelled identifier keyword is a TypeError, not a ban without one",
+          _mod_typo.startswith("TypeError") and "steam_id" in _mod_typo and "cmd" not in _msent,
+          "%s %r" % (_mod_typo, _msent))
     # on-demand id resolution: a gamedig-sourced list carries no ids, so kick/ban looks the player
     # up on the console by name and uses the slot / SteamID it finds there.
     _sm_game.console_player_list = lambda *a, **k: [{"name": "Ace", "num": 4, "steamid": "STEAM_0:1:9"}]
@@ -615,7 +676,7 @@ check("valid-ip: rejects host:port form", _sm_hosts._valid_ip("1.2.3.4:22") is F
 # ── db_maintenance: offline SQLite check / repair / optimize (updater + health card) ──
 import db_maintenance as _dbm
 import sqlite3 as _sq3
-import tempfile as _tf
+_tf = _lgd_tempfile                      # the tempfile module, imported once above
 import shutil as _sh
 
 _dbm_dir = _tf.mkdtemp(prefix="dbm-")
@@ -679,21 +740,24 @@ try:
     # repair() reported "rebuilt from recoverable data". The loss then became permanent, because
     # the panel restarts after a repair and _ensure_db_healthy refreshes the rolling backup from
     # whatever panel.db now is.
-    import sqlite3 as _sq_p
+    _sq_p = _sq3                         # the sqlite3 module, imported once above
 
     def _rows_in(_p, _table="t"):
         try:
             _c = _sq_p.connect(_p)
             try:
-                return _c.execute("select count(*) from %s" % _table).fetchone()[0]
+                return _c.execute("select count(*) from %s" % _table).fetchone()[0]  # nosec B608 - _table is this test's own table name, never input
             finally:
                 _c.close()
         except _sq_p.DatabaseError:
             return None
 
     def _bite(_p, _at=4096 * 3):
-        """Overwrite one data page, leaving the header and later pages intact — the shape that
-        makes a partial salvage possible at all. A wholly-garbage file cannot produce one."""
+        """Overwrite one data page, leaving the header and later pages intact.
+
+        That is the shape that makes a partial salvage possible at all. A wholly-garbage file
+        cannot produce one.
+        """
         with open(_p, "r+b") as _fh:
             _fh.seek(_at)
             _fh.write(b"\xde\xad\xbe\xef" * 256)
@@ -851,6 +915,49 @@ check("custom arg: rejects backtick", not _arg_ok("`id`"))
 check("custom arg: rejects spaces", not _arg_ok("mp toujane"))
 check("custom arg: rejects newline", not _arg_ok("a\nb"))
 check("custom arg: rejects empty", not _arg_ok(""))
+
+# ── can_administer_user: EVERY axis of reach, each on its own ──────────────────────────────────
+# A delegated admin may administer a peer only if the peer holds nothing beyond the admin: its
+# permissions, the hosts it reaches, its custom commands and its game servers. rbac_test drives
+# the route with a peer granted another host, but that host HAS game servers, so the servers axis
+# refuses the peer as well and the hosts axis was never the deciding test: disabling it (moved to
+# _reach_within_actors when can_administer_user was split) left every suite green. A peer reaching
+# a host with no game servers on it is refused by that axis alone. Driven here with the four axis
+# readers stubbed, one axis wider at a time, so each one is the only thing that can refuse.
+from panel.security import auth as _cau_auth  # noqa: E402
+
+_cau_names = ("get_user_permissions", "accessible_remote_ids", "custom_command_ids",
+              "get_user_servers")
+_cau_saved = {n: getattr(_cau_auth, n) for n in _cau_names}
+_cau_reach = {}
+
+
+def _cau_axis(axis):
+    return lambda user: _cau_reach[user.id][axis]
+
+
+_cau_actor, _cau_peer = _NS(id=801, is_superadmin=False), _NS(id=802, is_superadmin=False)
+_cau_base = {"get_user_permissions": {"manage_users"}, "accessible_remote_ids": {1},
+             "custom_command_ids": {5}, "get_user_servers": [_NS(id=11)]}
+_cau_wider = {"get_user_permissions": {"manage_users", "manage_remotes"},
+              "accessible_remote_ids": {1, 2}, "custom_command_ids": {5, 6},
+              "get_user_servers": [_NS(id=11), _NS(id=12)]}
+_cau_seen = {}
+try:
+    for _n in _cau_names:
+        setattr(_cau_auth, _n, _cau_axis(_n))
+    for _axis in (None,) + _cau_names:
+        _cau_reach[801] = dict(_cau_base)
+        _cau_reach[802] = dict(_cau_base, **({_axis: _cau_wider[_axis]} if _axis else {}))
+        _cau_seen[_axis] = _cau_auth.can_administer_user(_cau_actor, _cau_peer)
+finally:
+    for _n, _f in _cau_saved.items():
+        setattr(_cau_auth, _n, _f)
+check("administer user: a peer holding exactly what the admin holds may be administered",
+      _cau_seen.get(None) is True, repr(_cau_seen))
+for _axis in _cau_names:
+    check("administer user: a peer wider on %s alone is refused" % _axis,
+          _cau_seen.get(_axis) is False, repr(_cau_seen))
 
 # ── panel branch-switch: git-ref name validation (fed to git + the root installer) ──
 # _so is the `import system_ops as _so` from the integrity-tests section above.
@@ -1018,11 +1125,11 @@ _ign_z = SO._f2b_ignoreip_line(["1.2.3.4", _zone, "fe80::1%eth0"])
 check("f2b: ignoreip drops an entry carrying an IPv6 zone id, newline or not",
       "\n" not in _ign_z and "%" not in _ign_z and "bantime" not in _ign_z, repr(_ign_z))
 check("f2b: ...and keeps the good entry beside it", "1.2.3.4" in _ign_z.split(), repr(_ign_z))
-import app as _wl_app                                                              # noqa: E402
+_wl_app = _app_thr                       # the app module, imported once above
 _wl_saved = []
 _wl_o_update = _wl_app.update_config
 try:
-    _wl_app.update_config = lambda fn: _wl_saved.append(fn)
+    _wl_app.update_config = _wl_saved.append
     _wl_z = [_wl_app._security_whitelist_add(v) for v in (_zone, "fe80::1%eth0")]
     _wl_ok = _wl_app._security_whitelist_add("2001:db8::1")
 finally:
@@ -1039,7 +1146,7 @@ check("whitelist: ...while a plain IPv6 address is still accepted (positive cont
 # "Login attack in progress" alert once three land together. A blip reading the jail manufactured
 # the exact event the alert exists to report. panel_fail2ban_banned_ips now answers None, matching
 # fail2ban_jail_detail two functions below it — same verb, same `rc != 0 or not out`.
-import app as _f2b_app                                                             # noqa: E402
+_f2b_app = _app_thr                      # the app module, imported once above
 _A, _B, _C = "203.0.113.1", "203.0.113.2", "203.0.113.3"
 _seen0, _nb0, _ub0 = _f2b_app._f2b_ban_events(None, {_A, _B})
 check("f2b watch: the first successful reading seeds silently",
@@ -1225,7 +1332,7 @@ try:
     _tgm._tg_reply = lambda tok, chat, text: _tg_said.append(text)
 
     def _tg_pend(from_commit):
-        return {"notifications": {"telegram": {"token": "tok"}},
+        return {"notifications": {"telegram": {"token": "tok"}},  # nosec B105 - a placeholder in a stubbed config; the reply is stubbed too
                 "telegram_pending_update": {"chat_id": "42", "from_commit": from_commit}}
 
     def _tg_report(from_commit, now_commit):
@@ -1264,7 +1371,7 @@ try:
     _dcm._dc_reply = lambda tok, chan, text: _dc_said.append(text)
 
     def _dc_report(from_commit, now_commit):
-        _dcm.load_config = lambda: {"notifications": {"discord": {"bot_token": "tok"}},
+        _dcm.load_config = lambda: {"notifications": {"discord": {"bot_token": "tok"}},  # nosec B105 - a placeholder; the reply is stubbed
                                     "discord_pending_update": {"channel_id": "42",
                                                                "from_commit": from_commit}}
         _dcm.so.panel_commit = lambda: now_commit
@@ -1411,6 +1518,12 @@ try:
     _sm_core.run_command = lambda *a, **k: ('{"c":0,"m":null,"n":"","ok":true}', "", 0)
     check("player_slots: null max + empty name -> (0, None, None)",
           _sm_cron.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (0, None, None))
+    # A count or max that is not a JSON integer is unknown too — never a string or float that a
+    # caller would compare with a number.
+    _sm_core.run_command = lambda *a, **k: ('{"c":"7","m":24.5,"n":"S","ok":true}', "", 0)
+    check("player_slots: a non-integer count/max is None, not passed through",
+          _sm_cron.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo") == (None, None, "S"),
+          repr(_sm_cron.player_slots(object(), "u", game_type="csgo", port=27015, query_type="csgo")))
     # A gamedig FAILURE ({"error":...} -> ok=false) is 'unknown', NOT 0 players, so the caller can
     # fall back to the console instead of showing a bogus 0.
     _sm_core.run_command = lambda *a, **k: ('{"c":0,"m":null,"n":"","ok":false}', "", 0)
@@ -1519,7 +1632,7 @@ finally:
 import hashlib as _hl
 from panel.db.models import User as _U, RemoteServer as _RS
 
-_tu = _U(username="tok", password_hash="x")
+_tu = _U(username="tok", password_hash="x")  # nosec B106 - an unsaved model; no password is ever checked against it
 _plain = _tu.generate_api_token()
 check("api token: the minted token is handed back in plaintext, once",
       isinstance(_plain, str) and _plain.startswith("lgsm_") and len(_plain) >= 32, _plain[:12])
@@ -1633,7 +1746,7 @@ finally:
 #     File ".../db_maintenance.py", line 31, in _paths
 #       from panel.core.config import DB_PATH
 #   ModuleNotFoundError: No module named 'panel'
-import tempfile as _pc_tmp
+_pc_tmp = _lgd_tempfile                  # the tempfile module, imported once above
 
 _pc_dir = _pc_tmp.mkdtemp(prefix="dbm-conf-")
 _pc_orig_file = _dbm.__file__
@@ -1665,7 +1778,7 @@ try:
           _dbm._paths()[1] == _dbm._paths()[0] + ".backup")
 finally:
     _dbm.__file__ = _pc_orig_file
-    import shutil as _pc_sh
+    _pc_sh = _sh                         # the shutil module, imported once above
     _pc_sh.rmtree(_pc_dir, ignore_errors=True)
 
 # ── GMod content probes: "could not read" is not "not installed" ──────────────────────────────
@@ -1874,3 +1987,301 @@ check("gmod content removal: a confirmed removal still reports done (positive co
 _grr_st4, _grr_msg4 = _grr([], [])
 check("gmod content removal: a host with no content storage still reports done (positive control)",
       _grr_st4 == "done" and "(none)" in _grr_msg4, "%r %r" % (_grr_st4, _grr_msg4))
+
+# ── the repo's report tools: the branches a clean tree never reaches ──────────────────────────
+# tools/route_coverage.py, tools/i18n_scan.py, tools/perf_bench.py and the Codacy gate each had a
+# function too tangled to read, and each became a few named helpers. The suites run the scanners
+# against the real tree, but a clean tree never reaches most of what those helpers decide: a route
+# with a docstring, a JS escape, a translatable attribute, a report line for a gap, a table row for
+# an endpoint that failed, an unreviewed Codacy issue. Nothing noticed when one of them broke.
+# Each is driven here directly, on a PRIVATE instance of the script, so no other part's copy (or
+# anything it stubbed) is touched.
+import argparse as _tl_argparse  # noqa: E402
+import ast as _tl_ast  # noqa: E402
+import contextlib as _tl_ctx  # noqa: E402
+import importlib.util as _tl_ilu  # noqa: E402
+import inspect as _tl_inspect  # noqa: E402
+import io as _tl_io  # noqa: E402
+import sys as _tl_sys  # noqa: E402
+
+
+def _tl_load(rel, name):
+    """A private instance of a repo script, loaded from its path."""
+    spec = _tl_ilu.spec_from_file_location(name, os.path.join(_UNIT_ROOT, *rel.split("/")))
+    mod = _tl_ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _tl_printed(fn, *args):
+    """What fn(*args) prints, as a list of lines."""
+    out = _tl_io.StringIO()
+    with _tl_ctx.redirect_stdout(out):
+        fn(*args)
+    return out.getvalue().splitlines()
+
+
+# route_coverage: the line it looks for is a route's first STATEMENT, past decorators + docstring.
+_rc4 = _tl_load("tools/route_coverage.py", "route_coverage_p4")
+
+
+def _rc4_deco(fn):
+    return fn
+
+
+@_rc4_deco
+def _rc4_documented():
+    """A docstring the tool has to step over."""
+    return 1
+
+
+def _rc4_bare():
+    return 2
+
+
+def _rc4_only_doc():
+    """Nothing but a docstring."""
+
+
+def _rc4_outer():
+    def _rc4_nested():
+        """Indented source: it only parses once it is dedented."""
+        return 3
+    return _rc4_nested
+
+
+def _rc4_line_of(fn, text):
+    """The file line in fn's source holding `text` (the answer, found without the tool)."""
+    lines, start = _tl_inspect.getsourcelines(fn)
+    return start + next(i for i, ln in enumerate(lines) if text in ln)
+
+
+check("tools: route_coverage finds a decorated route's first statement past its docstring",
+      _rc4._first_body_line(_rc4_documented) == _rc4_line_of(_rc4_documented, "return 1"),
+      "%r" % _rc4._first_body_line(_rc4_documented))
+check("tools: ...a route with no docstring starts at its first statement",
+      _rc4._first_body_line(_rc4_bare) == _rc4_line_of(_rc4_bare, "return 2"))
+check("tools: ...a nested (indented) def is dedented before it is parsed",
+      _rc4._first_body_line(_rc4_outer()) == _rc4_line_of(_rc4_outer(), "return 3"),
+      "%r" % _rc4._first_body_line(_rc4_outer()))
+check("tools: ...a body that is only a docstring has no statement, and a builtin no source",
+      _rc4._first_body_line(_rc4_only_doc) is None and _rc4._first_body_line(len) is None)
+
+# i18n_scan: JS literals, escapes and comments; element attributes; the report's gap lines.
+_i18n4 = _tl_load("tools/i18n_scan.py", "i18n_scan_p4")
+_BS4 = chr(92)   # a backslash, spelled out so nothing on the way decodes the escape early
+_i18n4_js = _i18n4._js_strings('a = "Em' + _BS4 + 'u2014dash" + ' + r''''It\'s\tok' // "not this one"
+/* "nor
+this" */ `Two
+lines` "Last one"''')
+check("tools: i18n_scan decodes a JS \\u escape to the character the browser shows",
+      _i18n4_js[:1] == [("Em" + chr(0x2014) + "dash", 1)], repr(_i18n4_js[:1]))
+check("tools: ...and \\' and \\t escapes, inside a single-quoted literal",
+      _i18n4_js[1:2] == [("It's\tok", 1)], repr(_i18n4_js[1:2]))
+check("tools: ...skips // and /* */ comments and keeps counting lines through them",
+      _i18n4_js[2:] == [("Two\nlines", 3), ("Last one", 4)], repr(_i18n4_js[2:]))
+check("tools: ...an unterminated literal or comment ends at the end of the file, not in a crash",
+      _i18n4._js_strings('"never closed') == [("never closed", 1)]
+      and _i18n4._js_strings("/* open") == [] and _i18n4._js_strings("x /") == [])
+_i18n4_w = _i18n4._Walker()
+_i18n4_w.feed(_i18n4._resolve_jinja(
+    '<input placeholder="Type a name" title="Rename {{ server.name }}">'
+    '<span data-no-i18n title="Not this one">x</span><a aria-label="Go &amp; see">y</a>'))
+_i18n4_w.close()
+check("tools: i18n_scan collects translatable attributes, decoded, and skips a per-request one",
+      _i18n4_w.strings == {"Type a name": {"@placeholder"}, "Go & see": {"@aria-label"}},
+      repr(_i18n4_w.strings))
+_i18n4_missing = _tl_printed(_i18n4._print_missing,
+                             {"Alpha text": {"b.html": {"text"}, "a.html": {"@title"}}})
+check("tools: ...a string with no catalog entry is reported with every template it is in",
+      _i18n4_missing == ["  MISSING  [a.html,b.html] 'Alpha text'"], repr(_i18n4_missing))
+_i18n4_dyn = _tl_printed(_i18n4._print_dynamic,
+                         {"entries": {"z.html": {"text"}}, "In catalog": {"a.html": {"text"}}},
+                         {"In catalog": "En el catálogo"})
+check("tools: ...a welded {{ }} string is reported, unless the catalog already has it",
+      _i18n4_dyn == ["  DYNAMIC  [z.html] 'entries'"], repr(_i18n4_dyn))
+
+# The Codacy gate: which issues are unreviewed, the table, the stale list, and main()'s verdict.
+_cg4 = _tl_load(".github/scripts/codacy_open_errors.py", "codacy_gate_p4")
+_cg4_issues = [
+    {"filePath": "a.py", "patternInfo": {"id": "x.rule1"}, "lineText": "foo(   bar )"},
+    {"filePath": "b.py", "patternInfo": {"id": "z.rule3"}, "lineText": "evil()", "lineNumber": 9,
+     "toolInfo": {"name": "Semgrep"}, "message": "bad"}]
+_cg4_allow = {("a.py", "x.rule1", "foo( bar )"): {}, ("gone.py", "y.rule2", "stale line"): {}}
+_cg4_unrev, _cg4_seen = _cg4._split_unreviewed(_cg4_issues, _cg4_allow)
+check("tools: the Codacy gate waves through an accepted issue, matched on its normalised line",
+      [_i.get("filePath") for _i in _cg4_unrev] == ["b.py"], repr(_cg4_unrev))
+_cg4_table = _cg4._unreviewed_table(_cg4_unrev)
+check("tools: ...an unreviewed one gets a row naming its file, line, tool and rule",
+      "| `b.py` | 9 | Semgrep | `rule3` | bad |" in _cg4_table
+      and "Nothing unreviewed. :white_check_mark:" not in _cg4_table, repr(_cg4_table))
+check("tools: ...and with none unreviewed the summary says so",
+      _cg4._unreviewed_table([]) == ["Nothing unreviewed. :white_check_mark:"])
+_cg4_stale = "\n".join(_cg4._stale_lines(_cg4_allow, _cg4_seen))
+check("tools: ...an accepted entry that matches nothing any more is listed for removal",
+      "gone.py" in _cg4_stale and "a.py" not in _cg4_stale, _cg4_stale)
+check("tools: ...and nothing is listed while every entry still matches",
+      _cg4._stale_lines({_k: {} for _k in _cg4_seen}, _cg4_seen) == [])
+
+
+class _Cg4Resp:
+    def __init__(self, body):
+        self._b = body
+
+    def read(self):
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+_cg4_dir = _lgd_tempfile.mkdtemp(prefix="codacy-gate-p4-")
+_cg4.ACCEPTED_FILE = _Path(_cg4_dir) / "accepted.json"
+_cg4.ACCEPTED_FILE.write_text(_json_tg.dumps({"accepted": [
+    {"filePath": "a.py", "patternId": "x.rule1", "lineText": "foo( bar )", "reason": "r"}]}),
+    encoding="utf-8")
+_cg4_sum = os.path.join(_cg4_dir, "summary.md")
+_cg4_saved = (_cg4.urllib.request.urlopen, os.environ.pop("GITHUB_STEP_SUMMARY", None))
+_cg4_out, _cg4_err = _tl_io.StringIO(), _tl_io.StringIO()
+try:
+    os.environ["GITHUB_STEP_SUMMARY"] = _cg4_sum
+    _cg4.urllib.request.urlopen = (
+        lambda req, timeout=None: _Cg4Resp(_json_tg.dumps({"data": _cg4_issues}).encode()))
+    with _tl_ctx.redirect_stdout(_cg4_out), _tl_ctx.redirect_stderr(_cg4_err):
+        _cg4_rc = _cg4.main()
+finally:
+    _cg4.urllib.request.urlopen = _cg4_saved[0]
+    os.environ.pop("GITHUB_STEP_SUMMARY", None)
+    if _cg4_saved[1] is not None:
+        os.environ["GITHUB_STEP_SUMMARY"] = _cg4_saved[1]
+check("tools: ...main() fails a run carrying one unreviewed issue, and counts it",
+      _cg4_rc == 1 and "2 reported · 1 accepted · **1 unreviewed**" in _cg4_out.getvalue()
+      and "1 unreviewed" in _cg4_err.getvalue(), "rc=%r %r" % (_cg4_rc, _cg4_out.getvalue()[:200]))
+with open(_cg4_sum, encoding="utf-8") as _cg4_fh:
+    check("tools: ...and appends the same summary to the job summary",
+          _cg4_fh.read() == _cg4_out.getvalue())
+
+
+# A 200 whose JSON is not the object the gate reads has to fail the run with a message. A JSON
+# list met `page.get("data")` and escaped as an AttributeError, and so did a `data` of strings
+# (at `i.get`) and a list-shaped `pagination`. The run failed, but its log was a stack trace. A
+# bad LATER page counts as well: the issues were not all read, so page one alone is not "clean".
+# The well-formed empty answer is the control that passes.
+def _cg4_drive(*bodies):
+    """main()'s exit code (or the exception it raised) and stdout, answering with `bodies`."""
+    pages = iter(bodies)
+    out, saved = _tl_io.StringIO(), _cg4.urllib.request.urlopen
+    step_summary = os.environ.pop("GITHUB_STEP_SUMMARY", None)
+    _cg4.urllib.request.urlopen = lambda req, timeout=None: _Cg4Resp(next(pages).encode())
+    try:
+        with _tl_ctx.redirect_stdout(out), _tl_ctx.redirect_stderr(_tl_io.StringIO()):
+            rc = _cg4.main()
+    except Exception as exc:  # noqa: BLE001 - the traceback IS the bug
+        rc = type(exc).__name__
+    finally:
+        _cg4.urllib.request.urlopen = saved
+        if step_summary is not None:
+            os.environ["GITHUB_STEP_SUMMARY"] = step_summary
+    return rc, out.getvalue()
+
+
+_cg4_shapes = {_label: _cg4_drive(*_bodies) for _label, _bodies in (
+    ("a list", ("[]",)),
+    ("a list of issues", (_json_tg.dumps(_cg4_issues),)),
+    ("data of strings", ('{"data": ["x"]}',)),
+    ("pagination a list", ('{"data": [], "pagination": ["c"]}',)),
+    ("a list on page two", ('{"data": [], "pagination": {"cursor": "p2"}}', "[]")),
+    ("clean", ('{"data": [], "pagination": {}}',)))}
+check("tools: ...a 200 whose JSON is not the object it reads fails the run, with a message",
+      {_k: _v[0] for _k, _v in _cg4_shapes.items()}
+      == {"a list": 1, "a list of issues": 1, "data of strings": 1, "pagination a list": 1,
+          "a list on page two": 1, "clean": 0}
+      and all("::error::" in _v[1] and "refusing to report it clean" in _v[1]
+              for _k, _v in _cg4_shapes.items() if _k != "clean"),
+      repr({_k: (_v[0], _v[1][:90]) for _k, _v in _cg4_shapes.items()}))
+_sh.rmtree(_cg4_dir, ignore_errors=True)
+
+# perf_bench: importing it boots the panel against data/, so its report steps are compiled out
+# of the source and run with the runs stubbed — which is all they read.
+_pb4_want = {"main", "_parse_args", "_sweep_servers", "_sweep_groups", "_print_server_row",
+             "_print_server_table", "_print_server_scaling", "_print_group_table",
+             "_print_group_scaling"}
+_pb4_file = os.path.join(_UNIT_ROOT, "tools", "perf_bench.py")
+with open(_pb4_file, encoding="utf-8") as _pb4_fh:
+    _pb4_defs = [_n for _n in _tl_ast.parse(_pb4_fh.read()).body
+                 if isinstance(_n, _tl_ast.FunctionDef) and _n.name in _pb4_want]
+check("tools: perf_bench's sweep and report steps are all there to drive",
+      {_n.name for _n in _pb4_defs} == _pb4_want, repr(sorted(_n.name for _n in _pb4_defs)))
+_pb4_calls = []
+
+
+def _pb4_row(path, queries, error=False):
+    if error:
+        return {"path": path, "status": 302, "error": True, "note": "redirect to /setup"}
+    return {"path": path, "status": 200, "queries": queries, "p50_ms": 2.0, "p95_ms": 3.0,
+            "kb": 10.0, "wire_kb": 2.0}
+
+
+def _pb4_run_size(n, hosts, iterations, paths):
+    _pb4_calls.append(("seed", n))
+    return {"servers": n, "hosts": hosts, "monitor_ms": 1.5,
+            "rows": [_pb4_row("/grows", 3 + n // 10), _pb4_row("/flat", 7),
+                     _pb4_row("/broken", 0, error=True)],
+            "restricted": [_pb4_row("/", 4), _pb4_row("/api/servers", 0, error=True)]}
+
+
+def _pb4_run_group_size(groups, hosts, per_host, iterations):
+    _pb4_calls.append(("group", groups))
+    return {"groups": groups, "rows": [_pb4_row("/groups", 2 + groups), _pb4_row("(user) /", 5)]}
+
+
+# Compiled under the file's real path, so coverage attributes these lines to tools/perf_bench.py.
+# Under the bare name "perf_bench.py" it recorded <repo>/perf_bench.py, a file that does not
+# exist, and the CI coverage job's `coverage xml` stopped with "No source for code".
+_pb4_ns = {"argparse": _tl_argparse, "json": _json_tg, "PATHS": ["/grows", "/flat", "/broken"],
+           "cleanup": lambda: _pb4_calls.append("cleanup"),
+           "mark_setup_complete": lambda: _pb4_calls.append("flip"),
+           "run_size": _pb4_run_size, "run_group_size": _pb4_run_group_size}
+# exec, not an import: importing perf_bench runs its module body, which writes the panel's config
+# under data/ and boots the app, so only the step definitions picked out above are run, on stubs.
+exec(compile(_tl_ast.Module(body=_pb4_defs, type_ignores=[]), _pb4_file, "exec"),  # nosec B102 - this repo's own tool  # pylint: disable=exec-used
+     _pb4_ns)
+_pb4_dir = _lgd_tempfile.mkdtemp(prefix="perf-bench-p4-")
+_pb4_json = os.path.join(_pb4_dir, "out.json")
+_pb4_argv = _tl_sys.argv
+try:
+    _tl_sys.argv = ["perf_bench.py", "--sizes", "10,50", "--group-sizes", "2,20", "--json", _pb4_json]
+    _pb4_lines = _tl_printed(_pb4_ns["main"])
+finally:
+    _tl_sys.argv = _pb4_argv
+check("tools: perf_bench gives every size and every group count a virgin, flipped database",
+      _pb4_calls == ["cleanup", "flip", ("seed", 10), "cleanup", "flip", ("seed", 50),
+                     "cleanup", "flip", ("group", 2), "cleanup", "flip", ("group", 20)],
+      repr(_pb4_calls))
+
+
+def _pb4_line(*parts):
+    """The first printed line holding every one of `parts`, or None."""
+    return next((ln for ln in _pb4_lines if all(p in ln for p in parts)), None)
+
+
+check("tools: ...an endpoint that did not answer 200 shows its status, for admin and user alike",
+      _pb4_line("/broken ", "HTTP 302") and _pb4_line("(user) /api/servers", "HTTP 302")
+      and _pb4_line("(user) / ", " 4 "), "\n".join(_pb4_lines[:20]))
+check("tools: ...queries that grow with the server count are flagged, and flat ones are not",
+      "QUERIES GROW WITH SERVER COUNT" in (_pb4_line("/grows", "queries") or "")
+      and "QUERIES GROW" not in (_pb4_line("/flat", "queries") or "missing")
+      and _pb4_line("/broken", "queries") is None, "\n".join(_pb4_lines))
+check("tools: ...and the group axis flags the same way",
+      "QUERIES GROW WITH GROUP COUNT" in (_pb4_line("/groups", "queries") or "")
+      and "QUERIES GROW" not in (_pb4_line("(user) /", "queries") or "missing"),
+      "\n".join(_pb4_lines))
+with open(_pb4_json, encoding="utf-8") as _pb4_fh:
+    _pb4_out = _json_tg.load(_pb4_fh)
+check("tools: ...and --json writes both sweeps",
+      [_r["servers"] for _r in _pb4_out["by_servers"]] == [10, 50]
+      and [_r["groups"] for _r in _pb4_out["by_groups"]] == [2, 20], repr(_pb4_out)[:200])
+_sh.rmtree(_pb4_dir, ignore_errors=True)

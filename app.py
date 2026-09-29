@@ -245,12 +245,14 @@ def _setup_auth_log():
 
 
 def _read_version():
-    """Panel version from the VERSION file next to this module (bumped per release)."""
+    """The panel's version: the running commit's date, as system_ops.panel_version works it out.
+
+    Asked once, at import, so a failure reads as "unknown" rather than stopping the app loading.
+    """
     try:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")) as f:
-            return f.read().strip() or "0.0.0"
+        return so.panel_version()
     except Exception:
-        return "0.0.0"
+        return "unknown"
 
 
 PANEL_VERSION = _read_version()
@@ -1257,8 +1259,11 @@ def create_app():
     app.config.setdefault("WTF_CSRF_TIME_LIMIT", None)  # token valid for the session
     # Protect per-request (below) instead of automatically, so we can skip CSRF for API-token
     # (Bearer) requests — those carry no session cookie, so CSRF (a cookie-riding attack) can't
-    # apply, and an invalid token is still rejected by @login_required.
-    app.config["WTF_CSRF_CHECK_DEFAULT"] = False
+    # apply, and an invalid token is still rejected by @login_required. (Sonar's S4502 reads the
+    # line below as CSRF switched off. It is the automatic hook that goes; the before_request right
+    # after it calls csrf.protect() on every request but a cookie-less Bearer one, and the smoke
+    # suite posts tokenless forms to prove it.)
+    app.config["WTF_CSRF_CHECK_DEFAULT"] = False  # NOSONAR - replaced by the explicit csrf.protect() hook below
     csrf = CSRFProtect(app)
 
     @app.before_request

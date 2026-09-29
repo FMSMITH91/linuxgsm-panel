@@ -1,5 +1,7 @@
-"""Performance benchmark — boots the panel on a THROWAWAY database, seeds it at several
-sizes, and reports wall-clock time, SQL query count and response bytes per endpoint.
+"""Performance benchmark: how the panel's endpoints scale with the size of the install.
+
+Boots the panel on a THROWAWAY database, seeds it at several sizes, and reports wall-clock time,
+SQL query count and response bytes per endpoint.
 
 The point is to see how the panel SCALES. A query count that grows with the number of game
 servers is an N+1; one that stays flat (or grows with hosts only) is fine. tests/smoke_test.py
@@ -75,14 +77,17 @@ from panel.core.config import load_config, save_config  # noqa: E402
 
 
 def mark_setup_complete():
-    """Flip setup_complete so config.json matches a finished install. (It no longer decides whether
-    the panel serves pages or the first-run wizard: is_setup_complete() reads only the completed
-    SetupState row, which seed() adds. The history below is from when it did.)
+    """Flip setup_complete so config.json matches a finished install.
+
+    (It no longer decides whether the panel serves pages or the first-run wizard:
+    is_setup_complete() reads only the completed SetupState row, which seed() adds. The history
+    below is from when it did.)
 
     Called after EVERY cleanup(), not once at import. cleanup() deletes config.json to give each
     size a virgin install, which silently undid the flip — so from the first cleanup() onward every
     request 302'd to /setup and the benchmark timed a 199-byte redirect. The table looked plausible
-    (sub-millisecond, one query, flat across sizes) precisely because it was measuring nothing."""
+    (sub-millisecond, one query, flat across sizes) precisely because it was measuring nothing.
+    """
     cfg = load_config()
     cfg["setup_complete"] = True
     save_config(cfg)
@@ -143,7 +148,7 @@ def build_app():
     scans all of it (.codacy.yaml excludes nothing), so it says so at the line.
     """
     a = appmod.create_app()
-    a.config["WTF_CSRF_ENABLED"] = False   # nosemgrep - benchmark harness, never served
+    a.config["WTF_CSRF_ENABLED"] = False   # nosemgrep  # NOSONAR - benchmark harness, never served
     a.config["SESSION_PROTECTION"] = None
     a.config["SESSION_COOKIE_SECURE"] = False
     a.config["REMEMBER_COOKIE_SECURE"] = False
@@ -177,12 +182,15 @@ def seed_history(app, gs_id):
 
 
 def seed(app, hosts, per_host, tags=3, groups=5, users=100):
-    """Seed `hosts` remotes with `per_host` game servers each, plus a NON-superadmin in `groups`
-    groups and a population of `users` plain accounts.
+    """Seed `hosts` remotes with `per_host` game servers each, and the accounts that use them.
+
+    The accounts are a NON-superadmin in `groups` groups and a population of `users` plain
+    accounts.
 
     The restricted user matters: is_superadmin short-circuits get_user_servers, so a benchmark that
     only logs in as an admin never executes the permission-resolution path that every other account
-    goes through. Returns (admin_id, server_id, restricted_id)."""
+    goes through. Returns (admin_id, server_id, restricted_id).
+    """
     with app.app_context():
         db.session.add(SetupState(step="complete", complete=True))
         admin = User(username="bench_admin", password_hash=auth.hash_password("Str0ng!passw0rd"),
@@ -245,6 +253,7 @@ class QueryCounter:
     """Counts statements on the real engine, and keeps the slowest one for attribution."""
 
     def __init__(self, engine):
+        """Start counting: listen before and after every cursor execute on `engine`."""
         from sqlalchemy import event
         self.n = 0
         self.slowest = (0.0, "")
@@ -402,7 +411,7 @@ GROUP_PATHS = ["/groups", "/", "/api/servers", "/api/dashboard/metrics"]
 def run_group_size(groups, hosts, per_host, iterations):
     """One run at a fixed dataset size, varying only how many groups the restricted user is in."""
     app = build_app()
-    admin_id, gs_id, restricted_id = seed(app, hosts, per_host, groups=groups)
+    admin_id, _, restricted_id = seed(app, hosts, per_host, groups=groups)
     with app.app_context():
         counter = QueryCounter(db.engine)
     ca, cu = client_as(app, admin_id), client_as(app, restricted_id)
@@ -416,7 +425,8 @@ def run_group_size(groups, hosts, per_host, iterations):
     return {"groups": groups, "rows": rows}
 
 
-def main():
+def _parse_args():
+    """The command line: the sizes to sweep, the host spread, iterations and a JSON path."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--sizes", default="10,50,200,500",
                     help="total game servers per run (comma separated)")
@@ -426,8 +436,11 @@ def main():
     ap.add_argument("--hosts", type=int, default=5, help="hosts to spread them over")
     ap.add_argument("--iterations", type=int, default=11)
     ap.add_argument("--json", default="", help="write the full result set here")
-    args = ap.parse_args()
+    return ap.parse_args()
 
+
+def _sweep_servers(args):
+    """One run_size() per --sizes entry, each on a virgin database."""
     sizes = [int(s) for s in args.sizes.split(",") if s.strip()]
     runs = []
     for n in sizes:
@@ -435,77 +448,112 @@ def main():
         mark_setup_complete()            # ...which also removed config.json, flip included
         print("seeding %d servers across %d hosts…" % (n, args.hosts), flush=True)
         runs.append(run_size(n, args.hosts, args.iterations, PATHS))
+    return runs
 
+
+def _sweep_groups(args):
+    """One run_group_size() per --group-sizes entry (none unless asked), each on a virgin database."""
     group_runs = []
     for g in [int(x) for x in args.group_sizes.split(",") if x.strip()]:
         cleanup()
         mark_setup_complete()
         print("seeding a user in %d groups…" % g, flush=True)
         group_runs.append(run_group_size(g, args.hosts, 4, args.iterations))
+    return group_runs
 
+
+def _print_server_row(label, servers, row, error_format):
+    """One endpoint's line in the server table, or its HTTP status when it was not a 200."""
+    if row.get("error"):
+        print(error_format % (label, servers, row["status"]))
+        return
+    print("%-22s %7d %7d %7.1f %7.1f %8.1f %8.1f"
+          % (label, servers, row["queries"], row["p50_ms"], row["p95_ms"],
+             row["kb"], row["wire_kb"]))
+
+
+def _print_server_table(runs):
+    """The table of every endpoint at every size: admin rows, then the restricted user's."""
     print("\n%-22s %7s %7s %7s %7s %8s %8s"
           % ("endpoint", "servers", "queries", "p50 ms", "p95 ms", "HTML KB", "wire KB"))
     print("-" * 76)
     for run in runs:
         for row in run["rows"]:
-            if row.get("error"):
-                print("%-22s %8d   HTTP %d" % (row["path"], run["servers"], row["status"]))
-                continue
-            print("%-22s %7d %7d %7.1f %7.1f %8.1f %8.1f"
-                  % (row["path"], run["servers"], row["queries"], row["p50_ms"], row["p95_ms"],
-                     row["kb"], row["wire_kb"]))
+            _print_server_row(row["path"], run["servers"], row, "%-22s %8d   HTTP %d")
         for row in run.get("restricted", []):
-            if row.get("error"):
-                print("%-22s %7d   HTTP %d" % ("(user) " + row["path"], run["servers"],
-                                               row["status"]))
-                continue
-            print("%-22s %7d %7d %7.1f %7.1f %8.1f %8.1f"
-                  % ("(user) " + row["path"], run["servers"], row["queries"], row["p50_ms"],
-                     row["p95_ms"], row["kb"], row["wire_kb"]))
+            _print_server_row("(user) " + row["path"], run["servers"], row,
+                              "%-22s %7d   HTTP %d")
         print("%-22s %7d %7s %7.1f" % ("[monitor sweep]", run["servers"], "-", run["monitor_ms"]))
         print("-" * 76)
+
+
+def _print_server_scaling(runs):
+    """How each endpoint's queries and time moved from the smallest size to the largest."""
+    first, last = runs[0], runs[-1]
+    growth = last["servers"] / float(first["servers"])
+    print("\nscaling %d -> %d servers (%.0fx more data)"
+          % (first["servers"], last["servers"], growth))
+    for a, b in zip(first["rows"], last["rows"]):
+        if a.get("error") or b.get("error"):
+            continue
+        dq = b["queries"] - a["queries"]
+        dt = (b["p50_ms"] / a["p50_ms"]) if a["p50_ms"] else 0
+        flag = "  <-- QUERIES GROW WITH SERVER COUNT" if dq > 2 else ""
+        print("  %-22s queries %3d -> %3d (%+d)   time x%.1f   wire %.0f -> %.0f KB%s"
+              % (a["path"], a["queries"], b["queries"], dq, dt, a["wire_kb"], b["wire_kb"],
+                 flag))
+
+
+def _print_group_table(group_runs):
+    """The table of the group-axis endpoints at every group count."""
+    print("\n%-28s %8s %8s %8s %8s" % ("endpoint", "groups", "queries", "p50 ms", "p95 ms"))
+    print("-" * 64)
+    for gr in group_runs:
+        for row in gr["rows"]:
+            if row.get("error"):
+                print("%-28s %8d   HTTP %d" % (row["path"], gr["groups"], row["status"]))
+                continue
+            print("%-28s %8d %8d %8.1f %8.1f"
+                  % (row["path"], gr["groups"], row["queries"], row["p50_ms"], row["p95_ms"]))
+        print("-" * 64)
+
+
+def _print_group_scaling(group_runs):
+    """How each endpoint's queries and time moved from the fewest groups to the most."""
+    first, last = group_runs[0], group_runs[-1]
+    print("\nscaling %d -> %d groups (same dataset)" % (first["groups"], last["groups"]))
+    for a, b in zip(first["rows"], last["rows"]):
+        if a.get("error") or b.get("error"):
+            continue
+        dq = b["queries"] - a["queries"]
+        flag = "  <-- QUERIES GROW WITH GROUP COUNT" if dq > 2 else ""
+        print("  %-28s queries %3d -> %3d (%+d)   time x%.1f%s"
+              % (a["path"], a["queries"], b["queries"], dq,
+                 (b["p50_ms"] / a["p50_ms"]) if a["p50_ms"] else 0, flag))
+
+
+def main():
+    """Sweep the sizes asked for, print the tables and the scaling, and write --json if given."""
+    args = _parse_args()
+    runs = _sweep_servers(args)
+    group_runs = _sweep_groups(args)
+
+    _print_server_table(runs)
 
     # Scaling: the number that matters. Queries should be flat in server count; ms may grow, but
     # only linearly with the payload. Anything superlinear is the bug this harness exists to find.
     if len(runs) > 1:
-        first, last = runs[0], runs[-1]
-        growth = last["servers"] / float(first["servers"])
-        print("\nscaling %d -> %d servers (%.0fx more data)"
-              % (first["servers"], last["servers"], growth))
-        for a, b in zip(first["rows"], last["rows"]):
-            if a.get("error") or b.get("error"):
-                continue
-            dq = b["queries"] - a["queries"]
-            dt = (b["p50_ms"] / a["p50_ms"]) if a["p50_ms"] else 0
-            flag = "  <-- QUERIES GROW WITH SERVER COUNT" if dq > 2 else ""
-            print("  %-22s queries %3d -> %3d (%+d)   time x%.1f   wire %.0f -> %.0f KB%s"
-                  % (a["path"], a["queries"], b["queries"], dq, dt, a["wire_kb"], b["wire_kb"],
-                     flag))
+        _print_server_scaling(runs)
 
     if group_runs:
-        print("\n%-28s %8s %8s %8s %8s" % ("endpoint", "groups", "queries", "p50 ms", "p95 ms"))
-        print("-" * 64)
-        for gr in group_runs:
-            for row in gr["rows"]:
-                if row.get("error"):
-                    print("%-28s %8d   HTTP %d" % (row["path"], gr["groups"], row["status"]))
-                    continue
-                print("%-28s %8d %8d %8.1f %8.1f"
-                      % (row["path"], gr["groups"], row["queries"], row["p50_ms"], row["p95_ms"]))
-            print("-" * 64)
-        first, last = group_runs[0], group_runs[-1]
-        print("\nscaling %d -> %d groups (same dataset)" % (first["groups"], last["groups"]))
-        for a, b in zip(first["rows"], last["rows"]):
-            if a.get("error") or b.get("error"):
-                continue
-            dq = b["queries"] - a["queries"]
-            flag = "  <-- QUERIES GROW WITH GROUP COUNT" if dq > 2 else ""
-            print("  %-28s queries %3d -> %3d (%+d)   time x%.1f%s"
-                  % (a["path"], a["queries"], b["queries"], dq,
-                     (b["p50_ms"] / a["p50_ms"]) if a["p50_ms"] else 0, flag))
+        _print_group_table(group_runs)
+        _print_group_scaling(group_runs)
 
     if args.json:
-        with open(args.json, "w") as f:
+        # Sonar's S8707 (path traversal) is a false positive: --json is the path the person
+        # running this chose, written as that person, across no privilege boundary. Nothing
+        # automated runs this tool.
+        with open(args.json, "w") as f:  # NOSONAR - the operator's own --json output path
             json.dump({"by_servers": runs, "by_groups": group_runs} if group_runs else runs,
                       f, indent=2)
         print("\nwrote %s" % args.json)

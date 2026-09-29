@@ -11,7 +11,7 @@
         if (d && d.update_available) {
           badge.innerHTML = ' <a href="' + window.MOUNT + '/server-management#updates" '  // nosemgrep - MOUNT is server-rendered panel config and the version is escapeHtml output
             + 'style="color:#d29922;text-decoration:none;font-weight:600;" '
-            + 'title="Version ' + escapeHtml(d.remote_version||'') + ' is available — click to update">'
+            + 'title="Version ' + escapeHtml((d.remote_version||'') + (d.remote_sha ? ' (' + d.remote_sha + ')' : '')) + ' is available — click to update">'
             + '<i class="bi bi-arrow-up-circle-fill"></i> update</a>';
         } else if (d && d.update_available === false) {
           badge.innerHTML = '';   // definitively up to date (e.g. after updating) — clear the pill

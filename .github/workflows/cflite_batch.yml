@@ -48,7 +48,9 @@ jobs:
               >> "$GITHUB_STEP_SUMMARY"
             echo "::warning::ClusterFuzzLite is disabled (CFL_STORAGE_REPO unset) — this green tick means no fuzzing ran."
           else
-            echo "Corpus storage: ${CFL_STORAGE_REPO}" >> "$GITHUB_STEP_SUMMARY"
+            # A constant, never the value: CFL_STORAGE_REPO is the https URL with a write token in
+            # it (header, step 3), and the step summary is a page anyone who can read the run sees.
+            echo "Corpus storage: configured." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Build fuzzers (${{ matrix.sanitizer }})

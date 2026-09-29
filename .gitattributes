@@ -4,6 +4,11 @@
 *.sh text eol=lf
 *.py text eol=lf
 
+# The panel's version is its commit's date (see panel_version in panel/ops/system_ops.py), read
+# from git. A copy with no .git — GitHub's "Download ZIP", `git archive` — gets it from VERSION,
+# whose `$Format:%ct$` placeholder git replaces with the commit's epoch when it builds the archive.
+VERSION export-subst
+
 # Fuzzing corpora are exact byte sequences, not text. The `* text=auto eol=lf` rule above rewrote
 # CRLF out of the console seeds — which is the very thing those seeds exist to feed the renderer.
 tests/fuzz/corpus/** -text

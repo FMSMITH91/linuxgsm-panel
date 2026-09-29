@@ -74,7 +74,8 @@ def bind_host_error(value, host_has_ip=None):
     `host_has_ip` is passed in rather than imported: this module is the low-level validation layer
     and must not depend on panel.ops. When it is None the local-address check is skipped. The wizard
     passes can_bind_address below: a well-formed IP that is not on this host passes the parse and
-    the wildcard/loopback rules, and then fails to bind at the next start."""
+    the wildcard/loopback rules, and then fails to bind at the next start.
+    """
     text = (value or "").strip()
     if not text:
         return "Pick a bind address — e.g. 0.0.0.0 (all interfaces) or 127.0.0.1 (localhost)."
@@ -99,7 +100,8 @@ def can_bind_address(ip):
     The exact question the next start will ask: it follows interface addresses, IPv6, and even
     net.ipv4.ip_nonlocal_bind, with no command output to parse (an empty read from a missing `ip`
     binary would read as "not on this host"). Only EADDRNOTAVAIL means no; any other error is
-    "could not tell" and does not block the operator."""
+    "could not tell" and does not block the operator.
+    """
     import errno
     import ipaddress
     import socket
@@ -143,9 +145,19 @@ def _attachment_header(name):
     return "attachment; filename=\"%s\"; filename*=UTF-8\'\'%s" % (
         ascii_name, quote(base, safe=""))
 
+
 MIN_PASSWORD_LEN = 10
 import string as _string
 _PW_SYMBOLS = set(_string.punctuation)
+
+# Each character class a password must include, in the order they are checked, with the error for
+# a password that lacks it. The symbol test reads _PW_SYMBOLS when it runs, not when this is built.
+_PW_CLASSES = (
+    (str.islower, "Password must include a lowercase letter."),
+    (str.isupper, "Password must include an uppercase letter."),
+    (str.isdecimal, "Password must include a number."),
+    (lambda c: c in _PW_SYMBOLS, "Password must include a symbol (e.g. !@#$%)."),
+)
 
 
 # The username column is String(80) and the creation form asked only for >= 3 characters, so a
@@ -160,7 +172,8 @@ def username_problem(name):
     """Return a human error if the username is unusable, else None.
 
     FORMAT only — uniqueness needs the database and stays with the caller, which is also the only
-    place that knows whether a clash with the user's OWN current name should count."""
+    place that knows whether a clash with the user's OWN current name should count.
+    """
     name = (name or "").strip()
     if len(name) < MIN_USERNAME_LEN:
         return f"Username must be at least {MIN_USERNAME_LEN} characters."
@@ -175,17 +188,14 @@ def username_problem(name):
 
 def password_problem(pw):
     """Return a human error if the password is too weak, else None.
-    Requires: length, lower, upper, digit, and a symbol."""
+
+    Requires: length, lower, upper, digit, and a symbol (_PW_CLASSES, checked in that order).
+    """
     if not pw or len(pw) < MIN_PASSWORD_LEN:
         return f"Password must be at least {MIN_PASSWORD_LEN} characters."
-    if not any(c.islower() for c in pw):
-        return "Password must include a lowercase letter."
-    if not any(c.isupper() for c in pw):
-        return "Password must include an uppercase letter."
-    if not any(c.isdecimal() for c in pw):
-        return "Password must include a number."
-    if not any(c in _PW_SYMBOLS for c in pw):
-        return "Password must include a symbol (e.g. !@#$%)."
+    for has_class, problem in _PW_CLASSES:
+        if not any(has_class(c) for c in pw):
+            return problem
     return None
 
 
@@ -217,16 +227,20 @@ def generate_password(length=GENERATED_PASSWORD_LEN):
     pools = (_GEN_LOWER, _GEN_UPPER, _GEN_DIGIT, _GEN_SYMBOL)
     chars = [_secrets.choice(p) for p in pools]
     chars += [_secrets.choice(_GEN_ALL) for _ in range(length - len(pools))]
-    _secrets.SystemRandom().shuffle(chars)   # or the class of each position would be predictable
+    # Shuffled, or the class of each position would be predictable. SystemRandom draws from
+    # os.urandom, not the Mersenne Twister, so the order is as unguessable as the characters.
+    _secrets.SystemRandom().shuffle(chars)  # NOSONAR - SystemRandom is os.urandom's CSPRNG
     return "".join(chars)
 
 
 def _int_or(value, default):
-    """Parse an int from untrusted form input, falling back to default instead of
-    raising (a bad value like an empty or non-numeric port must not 500 the page).
+    """Parse an int from untrusted form input, falling back to default instead of raising.
+
+    A bad value like an empty or non-numeric port must not 500 the page.
 
     NOT FOR PORTS — use _port_or. This guarantees "an int" and nothing else, which is exactly
-    how a port of 0, -5 or 99999 reached a database row; see the note there."""
+    how a port of 0, -5 or 99999 reached a database row; see the note there.
+    """
     try:
         return int(str(value).strip())
     except (TypeError, ValueError):
@@ -259,7 +273,8 @@ def _port_or(value, default, lo=MIN_PORT, hi=MAX_PORT):
     (/api/panel/change-port, change_ssh_port) and two did not — the game-server install form and
     the setup wizard — so `int(port)` from a form became a stored port of 0 or 99999 and an
     unbootable panel. Keeping the bound with the parse is what stops the fifth call site
-    repeating it."""
+    repeating it.
+    """
     s = str(value if value is not None else "").strip()
     # ASCII digits only. int() happily accepts every Unicode decimal form, so "\u0661\u0662\u0663"
     # parsed as 123 and was stored as a port — a value nobody typed, on a field that ends up in a
@@ -273,14 +288,15 @@ def _port_or(value, default, lo=MIN_PORT, hi=MAX_PORT):
     return n if lo <= n <= hi else default
 
 
-
 _HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}\Z")
 
 
 def _valid_hex_color(value):
     """Return a normalised #rrggbb string if `value` is a 6-digit hex colour, else "".
+
     The accent colour is emitted into a CSS custom property, so it must be a strict
-    colour literal — never arbitrary text that could carry `}` / `<` and break out."""
+    colour literal — never arbitrary text that could carry `}` / `<` and break out.
+    """
     v = (value or "").strip()
     if not v.startswith("#"):
         v = "#" + v

@@ -29,7 +29,7 @@ _log = logging.getLogger("panel.db_maintenance")
 
 
 def _paths():
-    """(db_path, rolling_backup_path).
+    """Return (db_path, rolling_backup_path).
 
     panel.conf FIRST, because that is the case this file exists for. install.sh installs a
     root-owned copy of this script at /usr/local/lib/linuxgsm-panel/ and runs it with the SYSTEM
@@ -46,7 +46,8 @@ def _paths():
     fire, because the script died with rc=1 before checking anything. Seen on a real host mid-update.
 
     The import stays as the fallback for the in-checkout copy (an unprivileged systemd --user
-    install runs that one, where panel IS importable and no panel.conf is written)."""
+    install runs that one, where panel IS importable and no panel.conf is written).
+    """
     conf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.conf")
     try:
         with open(conf, encoding="utf-8") as fh:
@@ -68,7 +69,7 @@ def _silent_rm(path):
     # the copy that followed wrote through it. os.remove on a link removes the link itself.
     try:
         if path and os.path.lexists(path):
-            os.remove(path)
+            os.remove(path)  # NOSONAR - the configured db path, not agent input
     except OSError:
         _log.debug("db_maintenance: could not remove %s", path, exc_info=True)
 
@@ -84,23 +85,25 @@ _NEW_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _CLOEXEC
 def _claim_new(path):
     """Create `path` empty, as a name nothing else holds. True if this call created it."""
     try:
-        os.close(os.open(path, _NEW_FILE_FLAGS, 0o600))
+        os.close(os.open(path, _NEW_FILE_FLAGS, 0o600))  # NOSONAR - the configured db path, not agent input
         return True
     except OSError:
         return False
 
 
 def _copy_to_new_file(src, dst):
-    """Copy src's bytes into a file this call CREATES at dst (mode 0600). Raises OSError —
-    FileExistsError when anything, a symlink included, already holds the name.
+    """Copy src's bytes into a file this call CREATES at dst (mode 0600).
+
+    Raises OSError — FileExistsError when anything, a symlink included, already holds the name.
 
     Replaces shutil.copy2 for every copy repair() makes. copy2 opens its destination with
     open(dst, "wb"), which follows a symlink and writes THROUGH it, and copystat() then gives the
     link's target the source's mode. repair() runs as root over the panel user's own data/
-    directory, so every destination name there is one that user can plant first."""
-    sfd = os.open(src, os.O_RDONLY | _NOFOLLOW | _CLOEXEC)
+    directory, so every destination name there is one that user can plant first.
+    """
+    sfd = os.open(src, os.O_RDONLY | _NOFOLLOW | _CLOEXEC)  # NOSONAR - the configured db path, not agent input
     try:
-        dfd = os.open(dst, _NEW_FILE_FLAGS, 0o600)
+        dfd = os.open(dst, _NEW_FILE_FLAGS, 0o600)  # NOSONAR - the configured db path, not agent input
         try:
             while True:
                 chunk = os.read(sfd, 1 << 20)
@@ -120,16 +123,18 @@ def _copy_to_new_file(src, dst):
 
 
 def integrity_check(path):
-    """(ok, detail). ok=True when PRAGMA integrity_check reports 'ok'. A missing or empty
-    file counts as healthy (a fresh DB will just be created). An unopenable/malformed image
-    is NOT healthy. Never raises."""
+    """Return (ok, detail); ok=True when PRAGMA integrity_check reports 'ok'.
+
+    A missing or empty file counts as healthy (a fresh DB will just be created). An
+    unopenable/malformed image is NOT healthy. Never raises.
+    """
     try:
         if not os.path.exists(path) or os.path.getsize(path) == 0:
             return True, "no database yet"
     except OSError:
         return False, "database file is unreadable"
     try:
-        con = sqlite3.connect(path, timeout=15)
+        con = sqlite3.connect(path, timeout=15)  # NOSONAR - the configured db path, not agent input
         try:
             rows = con.execute("PRAGMA integrity_check").fetchall()
         finally:
@@ -143,9 +148,12 @@ def integrity_check(path):
 
 
 def optimize(path=None):
-    """(ok, message) with bytes reclaimed. WAL checkpoint + ANALYZE + VACUUM. Meant to run
-    with NO other connection open (the updater stops the service first). VACUUM is atomic —
-    a failure leaves the DB exactly as it was. Never raises."""
+    """Compact the database; return (ok, message) with the bytes reclaimed.
+
+    WAL checkpoint + ANALYZE + VACUUM. Meant to run with NO other connection open (the updater
+    stops the service first). VACUUM is atomic — a failure leaves the DB exactly as it was. Never
+    raises.
+    """
     if path is None:
         path = _paths()[0]
     try:
@@ -160,7 +168,7 @@ def optimize(path=None):
             return before
 
     try:
-        con = sqlite3.connect(path, timeout=60)
+        con = sqlite3.connect(path, timeout=60)  # NOSONAR - the configured db path, not agent input
         try:
             con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             con.execute("ANALYZE")
@@ -184,8 +192,9 @@ def _fmt_bytes(n):
 
 
 def _aside(path):
-    """Copy (not move) the flagged DB aside so the original stays in place as the rebuild
-    source and as a forensic/recovery copy. Returns the aside path (or '' on failure).
+    """Copy (not move) the flagged DB aside; return the aside path (or '' on failure).
+
+    The original stays in place as the rebuild source and as a forensic/recovery copy.
 
     The copy is CREATED, never opened over something already there. The name was
     `<path>.corrupt-<unix time>` written with shutil.copy2 — a name the panel user could predict
@@ -193,7 +202,8 @@ def _aside(path):
     that writes through a link. Root ran this unconditionally, straight after the symlink checks
     on path and backup, so a single panel-db-repair call wrote panel.db's bytes (chosen by the
     same user) to any root path — /etc/cron.d included. A planted name is now skipped, and the
-    fallback names carry a random part so planting cannot exhaust them either."""
+    fallback names carry a random part so planting cannot exhaust them either.
+    """
     base = "%s.corrupt-%d" % (path, int(time.time()))
     for attempt in range(8):
         dst = base if attempt == 0 else "%s-%s" % (base, secrets.token_hex(4))
@@ -225,9 +235,10 @@ def _row_census(path):
 
     None means "could not count" and is deliberately NOT zero — a caller comparing candidates must
     be able to tell an empty database from one it failed to read, which is the same distinction the
-    rest of this codebase draws for a failed probe. Never raises."""
+    rest of this codebase draws for a failed probe. Never raises.
+    """
     try:
-        con = sqlite3.connect(path, timeout=15)
+        con = sqlite3.connect(path, timeout=15)  # NOSONAR - the configured db path, not agent input
         try:
             names = [r[0] for r in con.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' "
@@ -259,8 +270,11 @@ def _row_census(path):
 
 
 def _rebuild_via_recover(src_path, dst_path):
-    """Best salvage: the sqlite3 CLI '.recover' reads the file page-by-page and reconstructs
-    what it can — it survives corruption a plain dump can't. Only used when the CLI exists."""
+    """Best salvage: rebuild with the sqlite3 CLI's '.recover'. Only used when the CLI exists.
+
+    '.recover' reads the file page-by-page and reconstructs what it can — it survives corruption a
+    plain dump can't.
+    """
     cli = shutil.which("sqlite3")
     if not cli:
         return False
@@ -268,10 +282,11 @@ def _rebuild_via_recover(src_path, dst_path):
     # config-derived DB paths — no shell, nothing caller/HTTP supplied. Bandit B603 and Semgrep's
     # dangerous-subprocess audit are false positives here (they flag any non-static argv).
     try:
-        rec = subprocess.run([cli, src_path, ".recover"], capture_output=True, timeout=600)  # nosec B603  # nosemgrep
+        rec = subprocess.run([cli, src_path, ".recover"],  # nosec B603  # nosemgrep  # NOSONAR - the configured db path, not agent input
+                             capture_output=True, timeout=600)
         if rec.returncode != 0 or not rec.stdout:
             return False
-        load = subprocess.run([cli, dst_path], input=rec.stdout,  # nosec B603  # nosemgrep
+        load = subprocess.run([cli, dst_path], input=rec.stdout,  # nosec B603  # nosemgrep  # NOSONAR - the configured db path, not agent input
                               capture_output=True, timeout=600)
         return load.returncode == 0 and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0
     except (OSError, subprocess.SubprocessError):
@@ -279,8 +294,9 @@ def _rebuild_via_recover(src_path, dst_path):
 
 
 def _rebuild_via_dump(src_path, dst_path):
-    """Fallback salvage using Python's iterdump — recovers cleanly readable rows, skipping any
-    statement that hits corruption. Handles lighter damage when the CLI isn't installed.
+    """Fallback salvage using Python's iterdump, for lighter damage when the CLI isn't installed.
+
+    Recovers cleanly readable rows, skipping any statement that hits corruption.
 
     KEEP WHAT WAS READ. The per-statement guard only wrapped `dst.execute(line)`, and the error a
     corrupt page raises comes from the `src.iterdump()` GENERATOR — so it escaped that guard,
@@ -292,10 +308,11 @@ def _rebuild_via_dump(src_path, dst_path):
     That is the case this function exists for. The generator is stepped by hand now, so the
     statements read BEFORE the bad page are committed, and each commit is its own transaction so
     the rollback cannot take them either. It is still only a salvage: the caller runs an integrity
-    check on the result and refuses to swap in a rebuild that is not healthy."""
+    check on the result and refuses to swap in a rebuild that is not healthy.
+    """
     try:
-        src = sqlite3.connect(src_path, timeout=15)
-        dst = sqlite3.connect(dst_path)
+        src = sqlite3.connect(src_path, timeout=15)  # NOSONAR - the configured db path, not agent input
+        dst = sqlite3.connect(dst_path)  # NOSONAR - the configured db path, not agent input
         kept = 0
         try:
             lines = src.iterdump()
@@ -324,128 +341,199 @@ def _rebuild_via_dump(src_path, dst_path):
         return False
 
 
-def repair(path=None, backup=None):
-    """(ok, message). Data-preserving repair, in order of least data loss:
-      1. copy the flagged DB aside (never deleted),
-      2. rebuild it (CLI .recover, else iterdump) and, if the rebuilt copy is healthy, swap it in,
-      3. else restore the last healthy rolling backup,
-      4. else fail (original left in place for manual recovery).
-    Never raises."""
+def _repair_targets(path, backup):
+    """Return repair()'s (path, backup), filling whichever the caller left as None from _paths().
+
+    An empty `backup` is kept as given: it means "no backup", and only None asks for the default.
+    """
     if path is None or backup is None:
         _p, _b = _paths()
         path = path or _p
         backup = backup if backup is not None else _b
-    if not os.path.exists(path):
-        return False, "no database file to repair"
-    # NEITHER of these may be a symlink. This function runs as ROOT (panel-helper's
-    # panel-db-repair execs it with the system python), and both paths live in the panel's own
-    # data/ directory, which the panel user owns. os.path.exists() follows links, shutil.copy2()
-    # opens its DESTINATION "wb" and so writes THROUGH one, and `backup` is just
-    # `<db_path>.backup` — so pointing panel.db at a root-owned file and putting a valid SQLite
-    # database (integrity_check passes; a SQLite file can carry any bytes you like inside a TEXT
-    # value) at panel.db.backup made root overwrite that file, and copystat then set its mode.
-    # The rebuild branch fails first on a non-database target, which is what routes execution to
-    # the copy.
-    #
-    # lstat, not realpath: the question is whether this exact name is a link, and O_NOFOLLOW is
-    # the same question asked by open(). Refusing is right — a symlink here is never something the
-    # panel put there.
+    return path, backup
+
+
+def _symlink_refusal(path, backup):
+    """Return why repair() refuses to touch `path`/`backup` as symlinks, or "" if neither is one.
+
+    NEITHER of these may be a symlink. repair() runs as ROOT (panel-helper's
+    panel-db-repair execs it with the system python), and both paths live in the panel's own
+    data/ directory, which the panel user owns. os.path.exists() follows links, shutil.copy2()
+    opens its DESTINATION "wb" and so writes THROUGH one, and `backup` is just
+    `<db_path>.backup` — so pointing panel.db at a root-owned file and putting a valid SQLite
+    database (integrity_check passes; a SQLite file can carry any bytes you like inside a TEXT
+    value) at panel.db.backup made root overwrite that file, and copystat then set its mode.
+    The rebuild branch fails first on a non-database target, which is what routes execution to
+    the copy.
+
+    lstat, not realpath: the question is whether this exact name is a link, and O_NOFOLLOW is
+    the same question asked by open(). Refusing is right — a symlink here is never something the
+    panel put there.
+    """
     for _p, _what in ((path, "database"), (backup, "backup")):
         if _p and os.path.islink(_p):
-            return False, "refusing to repair through a symlinked %s path" % _what
+            return "refusing to repair through a symlinked %s path" % _what
+    return ""
 
-    aside = _aside(path)
-    kept = (" (original kept at %s)" % os.path.basename(aside)) if aside else ""
-    tmp = path + ".rebuilt"
-    _restored_note = ""     # set when the rebuild was measurably worse than the backup
-    _silent_rm(tmp)
-    # Split, with a _silent_rm between. These were `A(path, tmp) or B(path, tmp)`, so when the
-    # .recover attempt failed AFTER creating tmp, the iterdump attempt opened that same partial
-    # file: its CREATE TABLE statements then fail as "table already exists", get skipped by the
-    # salvage loop, and the rows that belong to them land nowhere. The same _silent_rm(tmp) already
-    # brackets this block on both sides.
-    #
-    # Each attempt starts from a file THIS call created (_claim_new: O_EXCL|O_NOFOLLOW), not from
-    # whatever the name held. sqlite opens its database path following links, so a symlink left at
-    # panel.db.rebuilt was a destination for the salvaged output. A name that cannot be claimed is
-    # a skipped rebuild, and the backup branch below still runs.
+
+def _rebuild_to(path, tmp):
+    """Salvage `path` into a fresh file at `tmp`: CLI .recover first, else iterdump.
+
+    Returns the salvage's truthy result, or a falsy one when neither attempt produced a file.
+
+    Split, with a _silent_rm between. These were `A(path, tmp) or B(path, tmp)`, so when the
+    .recover attempt failed AFTER creating tmp, the iterdump attempt opened that same partial
+    file: its CREATE TABLE statements then fail as "table already exists", get skipped by the
+    salvage loop, and the rows that belong to them land nowhere. The same _silent_rm(tmp) already
+    brackets this block on both sides (in repair()).
+
+    Each attempt starts from a file THIS call created (_claim_new: O_EXCL|O_NOFOLLOW), not from
+    whatever the name held. sqlite opens its database path following links, so a symlink left at
+    panel.db.rebuilt was a destination for the salvaged output. A name that cannot be claimed is
+    a skipped rebuild, and the backup branch in repair() still runs.
+    """
     _rebuilt = _claim_new(tmp) and _rebuild_via_recover(path, tmp)
     if not _rebuilt:
         _silent_rm(tmp)
         _rebuilt = _claim_new(tmp) and _rebuild_via_dump(path, tmp)
-    if _rebuilt:
-        ok, _ = integrity_check(tmp)
-        if ok:
-            # "Least data loss" is the docstring's promise, and nothing measured it. Both tests
-            # above are STRUCTURAL: _rebuild_via_dump returns on `os.path.getsize(dst) > 0` and
-            # integrity_check asks PRAGMA integrity_check — "is this a well-formed SQLite file",
-            # not "does it still hold the data". A rebuild that salvaged the schema and almost
-            # nothing else passes both, and the backup branch below is only reached when the
-            # rebuild fails ENTIRELY, so the healthy rolling backup was never even consulted.
-            #
-            # Measured, in a temp dir, against a 4000-row table with one early data page
-            # overwritten and a complete backup on disk: repair() reported
-            # "rebuilt from recoverable data" and swapped in a database holding 17 of 4000 rows,
-            # while panel.db.backup still had all 4000. The loss then becomes permanent — the
-            # panel restarts straight after a repair, and _ensure_db_healthy refreshes the rolling
-            # backup FROM the gutted file on that next boot.
-            #
-            # So compare them and take the fuller one. A census that cannot be read answers None,
-            # and an unknown does not get to overrule the rebuild — that keeps the previous
-            # behaviour for every case this can no longer measure.
-            _rebuilt_rows = _row_census(tmp)
-            _backup_rows = _row_census(backup) if (backup and os.path.exists(backup)) else None
-            _prefer_backup = (_rebuilt_rows is not None and _backup_rows is not None
-                              and _backup_rows > _rebuilt_rows
-                              and integrity_check(backup)[0])
-            if _prefer_backup:
-                _log.debug("db repair: backup holds %d row(s) vs %d rebuilt — restoring the backup",
-                           _backup_rows, _rebuilt_rows)
-                _silent_rm(tmp)
-                _restored_note = (" (restored the rolling backup: %d row(s), against %d salvaged "
-                                  "from the damaged file)" % (_backup_rows, _rebuilt_rows))
-            else:
-                try:
-                    os.replace(tmp, path)
-                    for ext in ("-wal", "-shm"):
-                        _silent_rm(path + ext)   # stale WAL/SHM must not replay over the rebuild
-                    _n = "" if _rebuilt_rows is None else (" (%d row(s) recovered)" % _rebuilt_rows)
-                    return True, "rebuilt from recoverable data" + _n + kept
-                except OSError:
-                    _log.debug("db repair: could not swap in the rebuilt DB", exc_info=True)
+    return _rebuilt
+
+
+def _fuller_backup(tmp, backup):
+    """Compare row counts; return (prefer_backup, rebuilt_rows, backup_rows).
+
+    "Least data loss" is repair()'s docstring's promise, and nothing measured it. Both tests
+    before this are STRUCTURAL: _rebuild_via_dump returns on `os.path.getsize(dst) > 0` and
+    integrity_check asks PRAGMA integrity_check — "is this a well-formed SQLite file",
+    not "does it still hold the data". A rebuild that salvaged the schema and almost
+    nothing else passes both, and the backup branch is only reached when the
+    rebuild fails ENTIRELY, so the healthy rolling backup was never even consulted.
+
+    Measured, in a temp dir, against a 4000-row table with one early data page
+    overwritten and a complete backup on disk: repair() reported
+    "rebuilt from recoverable data" and swapped in a database holding 17 of 4000 rows,
+    while panel.db.backup still had all 4000. The loss then becomes permanent — the
+    panel restarts straight after a repair, and _ensure_db_healthy refreshes the rolling
+    backup FROM the gutted file on that next boot.
+
+    So compare them and take the fuller one. A census that cannot be read answers None,
+    and an unknown does not get to overrule the rebuild — that keeps the previous
+    behaviour for every case this can no longer measure.
+    """
+    _rebuilt_rows = _row_census(tmp)
+    _backup_rows = _row_census(backup) if (backup and os.path.exists(backup)) else None
+    _prefer_backup = (_rebuilt_rows is not None and _backup_rows is not None
+                      and _backup_rows > _rebuilt_rows
+                      and integrity_check(backup)[0])
+    return _prefer_backup, _rebuilt_rows, _backup_rows
+
+
+def _swap_in_rebuild(path, backup, tmp, kept):
+    """Rebuild `path` at `tmp` and swap it in if it is healthy and not worse than the backup.
+
+    Returns (result, restored_note). `result` is repair()'s (ok, message) when the rebuild was
+    swapped in, else None and repair() goes on to the rolling backup; `restored_note` is set when
+    the backup was preferred because it holds more rows.
+    """
+    if not _rebuild_to(path, tmp):
+        return None, ""
+    ok, _ = integrity_check(tmp)
+    if not ok:
+        return None, ""
+    _prefer_backup, _rebuilt_rows, _backup_rows = _fuller_backup(tmp, backup)
+    if _prefer_backup:
+        _log.debug("db repair: backup holds %d row(s) vs %d rebuilt — restoring the backup",
+                   _backup_rows, _rebuilt_rows)
+        _silent_rm(tmp)
+        return None, (" (restored the rolling backup: %d row(s), against %d salvaged "
+                      "from the damaged file)" % (_backup_rows, _rebuilt_rows))
+    try:
+        os.replace(tmp, path)  # NOSONAR - the configured db path, not agent input
+        for ext in ("-wal", "-shm"):
+            _silent_rm(path + ext)   # stale WAL/SHM must not replay over the rebuild
+        _n = "" if _rebuilt_rows is None else (" (%d row(s) recovered)" % _rebuilt_rows)
+        return (True, "rebuilt from recoverable data" + _n + kept), ""
+    except OSError:
+        _log.debug("db repair: could not swap in the rebuilt DB", exc_info=True)
+    return None, ""
+
+
+def _restore_rolling_backup(path, backup, restored_note, kept):
+    """Put the rolling backup in place of `path` if it is healthy; return repair()'s result or None.
+
+    None means there was no healthy backup, or it could not be copied into place.
+    """
+    if not (backup and os.path.exists(backup)):
+        return None
+    ok, _ = integrity_check(backup)
+    if not ok:
+        return None
+    try:
+        # Copy to a temp beside the target and RENAME, rather than copy2 onto the target.
+        # os.replace does not follow a symlink at the destination — it replaces the name —
+        # so even if the islink check in repair() were ever removed or raced, the write cannot
+        # land on whatever the link points at. Same reason the rebuild branch is
+        # safe: it already goes through os.replace.
+        #
+        # The temp itself is CREATED (_copy_to_new_file), not copy2'd over: copy2 wrote
+        # through a symlink planted at panel.db.restoring, and _silent_rm used to leave a
+        # DANGLING one in place because exists() follows it.
+        _restore_tmp = path + ".restoring"
+        _silent_rm(_restore_tmp)
+        _copy_to_new_file(backup, _restore_tmp)
+        os.replace(_restore_tmp, path)  # NOSONAR - the configured db path, not agent input
+        for ext in ("-wal", "-shm"):
+            _silent_rm(path + ext)
+        return True, "restored the last healthy backup" + restored_note + kept
+    except OSError:
+        _silent_rm(path + ".restoring")
+        _log.debug("db repair: could not restore the backup", exc_info=True)
+    return None
+
+
+def repair(path=None, backup=None):
+    """Repair the database with the least data loss available; return (ok, message).
+
+    Data-preserving repair, in order of least data loss:
+
+      1. copy the flagged DB aside (never deleted),
+      2. rebuild it (CLI .recover, else iterdump) and, if the rebuilt copy is healthy, swap it in,
+      3. else restore the last healthy rolling backup,
+      4. else fail (original left in place for manual recovery).
+
+    Never raises.
+    """
+    path, backup = _repair_targets(path, backup)
+    if not os.path.exists(path):
+        return False, "no database file to repair"
+    refusal = _symlink_refusal(path, backup)
+    if refusal:
+        return False, refusal
+
+    aside = _aside(path)
+    kept = (" (original kept at %s)" % os.path.basename(aside)) if aside else ""
+    tmp = path + ".rebuilt"
+    _silent_rm(tmp)
+    # `restored_note` is set when the rebuild was measurably worse than the backup.
+    result, restored_note = _swap_in_rebuild(path, backup, tmp, kept)
+    if result is not None:
+        return result
     _silent_rm(tmp)
 
-    if backup and os.path.exists(backup):
-        ok, _ = integrity_check(backup)
-        if ok:
-            try:
-                # Copy to a temp beside the target and RENAME, rather than copy2 onto the target.
-                # os.replace does not follow a symlink at the destination — it replaces the name —
-                # so even if the islink check above were ever removed or raced, the write cannot
-                # land on whatever the link points at. Same reason the rebuild branch above is
-                # safe: it already goes through os.replace.
-                #
-                # The temp itself is CREATED (_copy_to_new_file), not copy2'd over: copy2 wrote
-                # through a symlink planted at panel.db.restoring, and _silent_rm used to leave a
-                # DANGLING one in place because exists() follows it.
-                _restore_tmp = path + ".restoring"
-                _silent_rm(_restore_tmp)
-                _copy_to_new_file(backup, _restore_tmp)
-                os.replace(_restore_tmp, path)
-                for ext in ("-wal", "-shm"):
-                    _silent_rm(path + ext)
-                return True, "restored the last healthy backup" + _restored_note + kept
-            except OSError:
-                _silent_rm(path + ".restoring")
-                _log.debug("db repair: could not restore the backup", exc_info=True)
+    result = _restore_rolling_backup(path, backup, restored_note, kept)
+    if result is not None:
+        return result
     return False, "could not repair — rebuild failed and no healthy backup exists" + kept
 
 
 def run_update_maintenance(path=None, backup=None):
-    """The updater's post-snapshot DB step (service already stopped):
+    """Run the updater's post-snapshot DB step (service already stopped).
+
         health check -> repair only if needed -> optimize -> health check again.
+
     Prints progress for the update log. Returns 0 to CONTINUE the update, 2 to ABORT (the
-    database could not be made healthy — the updater then restores the original and stops)."""
+    database could not be made healthy — the updater then restores the original and stops).
+    """
     if path is None:
         path, backup = _paths()
     elif backup is None:
@@ -470,7 +558,7 @@ def run_update_maintenance(path=None, backup=None):
             print("  ABORT: database could not be repaired — leaving your data untouched")
             return 2
 
-    ook, omsg = optimize(path)      # optimize failure is non-fatal — the DB is still healthy
+    _ook, omsg = optimize(path)     # optimize failure is non-fatal — the DB is still healthy
     print("  [2/3] optimize: %s" % omsg)
 
     fok, fdetail = integrity_check(path)
@@ -486,16 +574,20 @@ def _euid():
 
 
 def _become(uid, gid):
-    """Drop to uid/gid for good: no supplementary groups, and real, effective and saved ids all
-    changed, so nothing later in this process can take root back."""
+    """Drop to uid/gid for good.
+
+    No supplementary groups, and real, effective and saved ids all changed, so nothing later in
+    this process can take root back.
+    """
     os.setgroups([])
     os.setgid(gid)
     os.setuid(uid)
 
 
 def _confine_to_db_dir(path):
-    """ROOT ONLY. Pin the database's directory, become the account that owns it, and work from
-    inside it. Returns (name, why): `name` is the database's name relative to the new working
+    """Pin the database's directory, become the account that owns it, and work from inside it.
+
+    ROOT ONLY. Returns (name, why): `name` is the database's name relative to the new working
     directory, or None with `why` saying why that could not be done safely.
 
     Every file this module creates or opens sits in the panel's data/ directory, which the panel
@@ -509,10 +601,11 @@ def _confine_to_db_dir(path):
     a symlink where it was afterwards changes nothing about where this process is working.
 
     A root-owned directory stays root's, since nothing below root can plant a name in it unless
-    its mode lets group or others write — and that is refused."""
+    its mode lets group or others write — and that is refused.
+    """
     d = os.path.dirname(os.path.abspath(path))
     try:
-        fd = os.open(d, os.O_RDONLY | os.O_DIRECTORY | _NOFOLLOW | _CLOEXEC)
+        fd = os.open(d, os.O_RDONLY | os.O_DIRECTORY | _NOFOLLOW | _CLOEXEC)  # NOSONAR - the configured db path, not agent input
     except FileNotFoundError:
         return None, "missing"
     except OSError as e:
@@ -549,7 +642,8 @@ def _reclaim_db_files(dir_fd, name, uid, gid):
 
     Each file is opened by descriptor with O_NOFOLLOW and fchown'd only if it is a regular file with
     ONE link: a symlink is refused at open, and a second link would mean the inode is also some
-    other file's, which must not change hands."""
+    other file's, which must not change hands.
+    """
     for member in (name, name + "-wal", name + "-shm", name + ".backup"):
         try:
             mfd = os.open(member, os.O_RDONLY | _NOFOLLOW | _CLOEXEC | getattr(os, "O_NONBLOCK", 0),
@@ -566,29 +660,39 @@ def _reclaim_db_files(dir_fd, name, uid, gid):
             os.close(mfd)
 
 
-def main(argv):
-    cmd = argv[1] if len(argv) > 1 else "check"
-    if cmd not in ("update", "check", "optimize", "repair"):
-        print("usage: db_maintenance.py [update|check|optimize|repair]")
-        return 64
-    # An explicit DB path makes repair runnable WITHOUT importing config — which is what lets the
-    # privileged helper run a root-owned copy of this file with the system interpreter, instead
-    # of root executing the panel's own checkout. _paths() (and therefore config) is only
-    # touched when no path is given, i.e. when a human runs it from the panel directory.
+def _command_path(cmd, argv):
+    """Return the database path `cmd` works on: argv[2] for an explicit repair, else _paths()'s.
+
+    An explicit DB path makes repair runnable WITHOUT importing config — which is what lets the
+    privileged helper run a root-owned copy of this file with the system interpreter, instead
+    of root executing the panel's own checkout. _paths() (and therefore config) is only
+    touched when no path is given, i.e. when a human runs it from the panel directory.
+    """
     if cmd == "repair" and len(argv) > 2:
-        path = argv[2]
-    else:
-        path = _paths()[0]
-    if _euid() == 0:
-        name, why = _confine_to_db_dir(path)
-        if name is None:
-            if why == "missing":
-                print("no database yet — nothing to maintain")
-                return 0 if cmd in ("update", "check") else 1
-            print("refusing: %s" % why)
-            return 1
-        path = name
-    backup = path + ".backup"
+        return argv[2]
+    return _paths()[0]
+
+
+def _confined_path(cmd, path):
+    """As root, confine this process to the database's directory; return (path, exit code).
+
+    The exit code is None when the command should go on with the returned path (as root, the
+    database's name relative to its directory), or the code to exit with when it cannot.
+    """
+    if _euid() != 0:
+        return path, None
+    name, why = _confine_to_db_dir(path)
+    if name is None:
+        if why == "missing":
+            print("no database yet — nothing to maintain")
+            return None, (0 if cmd in ("update", "check") else 1)
+        print("refusing: %s" % why)
+        return None, 1
+    return name, None
+
+
+def _dispatch(cmd, path, backup):
+    """Run one maintenance command on `path` and return its exit code."""
     if cmd == "update":
         return run_update_maintenance(path, backup)
     if cmd == "check":
@@ -602,6 +706,18 @@ def main(argv):
     ok, msg = repair(path, backup)
     print(msg)
     return 0 if ok else 1
+
+
+def main(argv):
+    """Run the command named in argv[1] (default "check") and return the process exit code."""
+    cmd = argv[1] if len(argv) > 1 else "check"
+    if cmd not in ("update", "check", "optimize", "repair"):
+        print("usage: db_maintenance.py [update|check|optimize|repair]")
+        return 64
+    path, rc = _confined_path(cmd, _command_path(cmd, argv))
+    if rc is not None:
+        return rc
+    return _dispatch(cmd, path, path + ".backup")
 
 
 if __name__ == "__main__":

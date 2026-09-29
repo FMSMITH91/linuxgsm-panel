@@ -17,7 +17,7 @@ expect an initial response within a few days.
 
 When you can, please include:
 
-- the version you're running (see the `VERSION` file, or the panel's footer),
+- the version and commit you're running (both are in the panel's footer, e.g. `2026.9.26 · a1b2c3d`),
 - a description of the issue and its impact,
 - steps to reproduce (or a proof of concept), and
 - any suggested fix.
@@ -28,12 +28,13 @@ before any public write-up.
 ## Supported versions
 
 The panel is a rolling release — fixes land on `main` and are picked up by re-running the
-installer, which updates in place (with a health check and automatic rollback). Security
-fixes are applied to the **latest** version only, so please update before reporting.
+installer, which updates in place (with a health check and automatic rollback). A version is
+the date of the commit it runs (`2026.9.26`), so there are no numbered releases to pick from.
+Security fixes are applied to the **latest** version only, so please update before reporting.
 
 | Version | Supported |
 | --- | --- |
-| Latest `main` / newest release | ✅ |
+| Latest `main` (the newest date) | ✅ |
 | Anything older | ❌ — please update first |
 
 ## Deploying securely
@@ -423,15 +424,15 @@ the first line alone, and every one of those silently failed on exactly the inst
 recommends; `lgsm-command` converted server control, and the rest are the same shape. So the right
 to *become a game account* is granted, and bounded by a group instead:
 
-* the Runas target is `%lgsmpanel-games`, never `ALL` and never a named user, so `sudo -u root`
+- the Runas target is `%lgsmpanel-games`, never `ALL` and never a named user, so `sudo -u root`
   stays refused — verified on a test host, along with a non-member account also being refused;
-* membership is controlled by install.sh and by the `gameuser-group` verb, which takes the account
+- membership is controlled by install.sh and by the `gameuser-group` verb, which takes the account
   as its only argument and holds the group name as a literal — a caller that could name the group
   could name one that root is in;
-* install.sh only enrols a home with a LinuxGSM instance (`lgsm/config-lgsm`) or a Steam content
+- install.sh only enrols a home with a LinuxGSM instance (`lgsm/config-lgsm`) or a Steam content
   tree (`serverfiles`). A person's account has neither, and must never be enrolled: the group is
   the right for the panel to act as that account;
-* **and no account that can already escalate is ever enrolled, by either route.** This is the
+- **and no account that can already escalate is ever enrolled, by either route.** This is the
   check the whole split rests on: the grant says the panel may *become* a member, so a member who
   can run `sudo` makes it `NOPASSWD:ALL` with one extra hop — `sudo -u them bash -c 'sudo -i'`.
   It is also not an exotic case. Running LinuxGSM under your own sudo-capable account is an
@@ -448,13 +449,13 @@ packages, cannot read another account's home, and cannot edit the helper or the 
 
 Three conditions bound that claim, and all are enforced rather than asserted:
 
-* **The grant only narrows when all three root-owned pieces landed** — the helper, the
+- **The grant only narrows when all three root-owned pieces landed** — the helper, the
   root-owned `db_maintenance.py`, and the root-owned installer. A host running new code that
   has not had `install.sh` re-run as root keeps the wide grant, because it still falls back to
   `sudo bash -c '<verb rendered as text>'` and narrowing under that would break every
   privileged action rather than secure anything. The installer prints which grant it wrote.
 
-* **Root no longer executes anything out of the panel's checkout — and no longer *installs* from
+- **Root no longer executes anything out of the panel's checkout — and no longer *installs* from
   it either.** `PANEL_DIR` is owned by the service user and rewritten by `git pull` on every
   self-update, so a boundary that let root run files from there would have been decorative. The
   offline DB repair and the self-update run root-owned copies placed only by `install.sh`, never
@@ -564,7 +565,7 @@ Three conditions bound that claim, and all are enforced rather than asserted:
   Installs run as a normal user are unchanged: their updates run as that account, which already
   owns everything they would stage from, so there is no boundary for either rule to hold.
 
-* **The installed helper has to stay in step with the panel's code.** It lives outside the
+- **The installed helper has to stay in step with the panel's code.** It lives outside the
   checkout, so the panel cannot refresh it — only `install.sh` can, as root. The verb table grows
   most releases, and a helper left behind answers a new verb with `unknown verb` and rc 2, with no
   fallback: the feature behind it simply stops working, silently. `install.sh` therefore refreshes

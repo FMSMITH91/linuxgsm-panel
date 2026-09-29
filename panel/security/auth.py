@@ -43,9 +43,9 @@ MANAGE_REMOTES = "manage_remotes"       # Add/edit/remove remote VPS nodes
 MANAGE_USERS = "manage_users"           # Add/edit/remove users
 MANAGE_GROUPS = "manage_groups"         # Add/edit/remove groups and permissions
 VIEW_LOGS = "view_logs"
-SUPER_ADMIN = "super_admin"   # NOT grantable: superadmin is User.is_superadmin, the flag.
-                              # Kept only so an old stored group permission can be recognised
-                              # and stripped; see strip_legacy_superadmin_grants().
+# NOT grantable: superadmin is User.is_superadmin, the flag. Kept only so an old stored group
+# permission can be recognised and stripped; see strip_legacy_superadmin_grants().
+SUPER_ADMIN = "super_admin"
 
 ALL_PERMISSIONS = {
     VIEW_SERVERS: "View server status list",
@@ -119,7 +119,8 @@ def _prehash(password):
     routing the bcrypt calls through run_off_hub changed the flow CodeQL traces, and a changed
     flow is a new alert. So it reopens when this function moves OR when its callers' flow changes.
     Before dismissing it again, re-read this note and both call sites (hash_password and
-    check_password) to confirm the digest still reaches only bcrypt."""
+    check_password) to confirm the digest still reaches only bcrypt.
+    """
     return base64.b64encode(hashlib.sha256((password or "").encode("utf-8")).digest())
 
 
@@ -131,7 +132,8 @@ def run_off_hub(fn, *args):
     for an unknown username: a few hundred source addresses each spending their allowed failures
     kept the hub busy hashing, and every page, console stream and poller with it stalled. tpool
     hands the call to a worker thread and parks only the calling greenlet. Off eventlet (the test
-    suites, manage.py) it is a direct call; inside a tpool worker tpool runs it inline itself."""
+    suites, manage.py) it is a direct call; inside a tpool worker tpool runs it inline itself.
+    """
     try:
         import eventlet.patcher
         if eventlet.patcher.is_monkey_patched("thread"):
@@ -144,15 +146,21 @@ def run_off_hub(fn, *args):
 
 
 def hash_password(password):
-    """Hash a password of ANY length. Stored as `sha256$<bcrypt>` so check_password can tell the
-    two schemes apart — a bare `$2b$...` row is a legacy hash of the raw password."""
+    """Hash a password of ANY length.
+
+    Stored as `sha256$<bcrypt>` so check_password can tell the two schemes apart — a bare `$2b$...`
+    row is a legacy hash of the raw password.
+    """
     return _SHA256_PREFIX + run_off_hub(bcrypt.hashpw, _prehash(password),
                                         bcrypt.gensalt()).decode()
 
 
 def check_password(password, password_hash):
-    """Verify a password against either hash format. Returns False (never raises) if the stored
-    hash is missing or malformed, so a bad DB row can't 500 the login."""
+    """Verify a password against either hash format.
+
+    Returns False (never raises) if the stored hash is missing or malformed, so a bad DB row can't
+    500 the login.
+    """
     stored = (password_hash or "").strip()
     if not stored:
         return False
@@ -174,8 +182,11 @@ def check_password(password, password_hash):
 
 
 def needs_rehash(password_hash):
-    """True if the stored hash is the legacy format, so a caller can quietly upgrade it after a
-    successful sign-in. The password is unchanged, so this is a re-encoding, not a reset."""
+    """True if the stored hash is the legacy format.
+
+    A caller can then quietly upgrade it after a successful sign-in. The password is unchanged, so
+    this is a re-encoding, not a reset.
+    """
     return not (password_hash or "").startswith(_SHA256_PREFIX)
 
 
@@ -200,8 +211,10 @@ def _dummy_hash():
 
 
 def dummy_password_check(password):
-    """Run a throwaway bcrypt compare to equalize login timing for a nonexistent or
-    inactive user. Always returns False."""
+    """Run a throwaway bcrypt compare to equalize login timing for a nonexistent or inactive user.
+
+    Always returns False.
+    """
     check_password(password, _dummy_hash())
     return False
 
@@ -212,7 +225,9 @@ _BACKUP_CODE_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
 
 def generate_backup_codes(n=8, length=10):
     """Generate `n` human-friendly one-time 2FA backup codes, formatted xxxxx-xxxxx.
-    Returned in plaintext ONCE — only their bcrypt hashes are stored (User.set_backup_codes)."""
+
+    Returned in plaintext ONCE — only their bcrypt hashes are stored (User.set_backup_codes).
+    """
     codes = []
     for _ in range(n):
         raw = "".join(secrets.choice(_BACKUP_CODE_ALPHABET) for _ in range(length))
@@ -221,13 +236,15 @@ def generate_backup_codes(n=8, length=10):
 
 
 def backup_code_shaped(code, length=10):
-    """Whether `code` could be one of generate_backup_codes()' codes: `length` characters from the
-    backup alphabet once the display dash and spaces are dropped (the same normalisation
-    User.use_backup_code compares with).
+    """Whether `code` could be one of generate_backup_codes()' codes.
+
+    That is, `length` characters from the backup alphabet once the display dash and spaces are
+    dropped (the same normalisation User.use_backup_code compares with).
 
     The login's 2FA step fell back to the backup codes after EVERY wrong entry, and trying them is
     one cost-12 bcrypt per stored code — about 2s of work for a mistyped six-digit TOTP, which
-    can never match anyway: 0 and 1 are not in the alphabet and it is the wrong length."""
+    can never match anyway: 0 and 1 are not in the alphabet and it is the wrong length.
+    """
     norm = (code or "").strip().lower().replace("-", "").replace(" ", "")
     return len(norm) == length and all(c in _BACKUP_CODE_ALPHABET for c in norm)
 
@@ -257,8 +274,9 @@ def verify_totp(secret, code):
 
 
 def verify_totp_step(secret, code):
-    """The TOTP timestep `code` matches for `secret` (this step, or one either side for clock
-    skew) — or None if it matches none of them.
+    """The TOTP timestep `code` matches for `secret`, or None if it matches none of them.
+
+    The steps tried are this one, and one either side for clock skew.
 
     verify_totp() answers only yes/no, which is not enough to stop a replay: the same code stays
     valid for ~90 seconds, so a code observed once (a phishing proxy, a shoulder-surf, a leaked
@@ -266,7 +284,8 @@ def verify_totp_step(secret, code):
     something to record, so it can refuse a step it has already accepted.
 
     compare_digest rather than ==: the comparison is against a freshly derived code, so a timing
-    difference here leaks digits of a code that is still live."""
+    difference here leaks digits of a code that is still live.
+    """
     import pyotp
     entered = str(code or "").strip().replace(" ", "")
     if not secret or not entered:
@@ -295,7 +314,7 @@ def get_user_permissions(user):
 
 
 def _groups_with_grants(user, commands=False):
-    """This user's groups, with their host and game-server grants ALREADY LOADED.
+    """The user's groups, with their host and game-server grants ALREADY LOADED.
 
     Group.servers and Group.game_servers are lazy relationships, so walking `user.groups` and
     touching them fires one query PER GROUP — two, here, one for each collection. That is an N+1
@@ -353,7 +372,6 @@ def _groups_with_grants(user, commands=False):
 
 def get_user_servers(user):
     """Get game servers a user has access to (superadmin = all)."""
-    from panel.db.models import GameServer
     from sqlalchemy.orm import joinedload, selectinload
     # Eager-load each server's remote in the SAME query. Callers (dashboard, /api/servers) all
     # read gs.remote per server; without this, accessing it lazily fires one query per remote
@@ -389,12 +407,14 @@ def has_permission(user, perm):
 
 
 def can_access_server(user, game_server_id):
-    """Check if user can access a specific game server. Access is granted either at the HOST
-    level (the server's remote is in one of the user's groups) or at the individual GAME-SERVER
-    level (the server itself is assigned to one of the user's groups). Superadmin = all."""
+    """Check if user can access a specific game server.
+
+    Access is granted either at the HOST level (the server's remote is in one of the user's groups)
+    or at the individual GAME-SERVER level (the server itself is assigned to one of the user's
+    groups). Superadmin = all.
+    """
     if user.is_superadmin:
         return True
-    from panel.db.models import GameServer
     gs = db.session.get(GameServer, game_server_id)
     if not gs:
         return False
@@ -412,10 +432,12 @@ _MODERATION_PERM = {"kick": KICK_PLAYER, "ban": BAN_PLAYER, "say": SAY_SERVER}
 
 
 def can_moderate_action(user, action):
-    """Whether `user` may perform a moderation `action` ('kick' | 'ban' | 'say'). Full console
-    access (SEND_COMMAND) or the umbrella MODERATE_SERVER grant every action; otherwise the
-    matching granular permission (kick_player / ban_player / say_server) is required. This does
-    NOT check server access — pair it with can_access_server / @server_access_required."""
+    """Whether `user` may perform a moderation `action` ('kick' | 'ban' | 'say').
+
+    Full console access (SEND_COMMAND) or the umbrella MODERATE_SERVER grant every action; otherwise
+    the matching granular permission (kick_player / ban_player / say_server) is required. This does
+    NOT check server access — pair it with can_access_server / @server_access_required.
+    """
     if user.is_superadmin:
         return True
     perms = get_user_permissions(user)
@@ -426,8 +448,10 @@ def can_moderate_action(user, action):
 
 
 def _custom_command_scope_matches(cmd, game_server):
-    """True if custom command `cmd` applies to `game_server` (all games / a game engine / one
-    specific game_type)."""
+    """True if custom command `cmd` applies to `game_server`.
+
+    A command's scope is all games, a game engine, or one specific game_type.
+    """
     scope = cmd.scope_type or "all"
     if scope == "all":
         return True
@@ -447,16 +471,20 @@ def custom_command_ids(user):
     game servers. grantable_groups and can_administer_user compared those three and not this, so a
     delegated admin could join a group made for a superadmin-authored command — `exec {}`,
     `sv_password {}` — or take over a member of one, and run it. The superadmin question is the
-    caller's: a superadmin can run every command and is short-circuited before this is asked."""
+    caller's: a superadmin can run every command and is short-circuited before this is asked.
+    """
     return {c.id for g in _groups_with_grants(user, commands=True)
             for c in (g.custom_commands or [])}
 
 
 def can_run_custom_command(user, cmd, game_server):
-    """Whether `user` may run custom command `cmd` on `game_server`: the command must be enabled,
-    in scope for that game, on a server the user can access, and — for non-superadmins — assigned
-    to one of the user's groups. The command TEMPLATE is superadmin-authored; only the argument
-    is user-supplied and is validated separately before substitution."""
+    """Whether `user` may run custom command `cmd` on `game_server`.
+
+    The command must be enabled, in scope for that game, on a server the user can access, and — for
+    non-superadmins — assigned to one of the user's groups. The command TEMPLATE is
+    superadmin-authored; only the argument is user-supplied and is validated separately before
+    substitution.
+    """
     if not cmd or not cmd.enabled:
         return False
     if not _custom_command_scope_matches(cmd, game_server):
@@ -473,8 +501,11 @@ def can_run_custom_command(user, cmd, game_server):
 
 
 def allowed_custom_commands(user, game_server):
-    """The list of CustomCommand rows `user` may run on `game_server` (superadmin sees every
-    enabled, in-scope command; others see only those assigned to their groups)."""
+    """The list of CustomCommand rows `user` may run on `game_server`.
+
+    A superadmin sees every enabled, in-scope command; others see only those assigned to their
+    groups.
+    """
     from panel.db.models import CustomCommand
     out = []
     seen = set()
@@ -494,10 +525,12 @@ def allowed_custom_commands(user, game_server):
 
 
 def can_access_remote(user, remote_id):
-    """Check if user can manage a specific remote host. Access is granted per host
-    through group membership — the SAME model as game-server access — so having the
-    MANAGE_REMOTES permission alone is not enough; the remote must be in one of the
-    user's groups. Superadmin = all."""
+    """Check if user can manage a specific remote host.
+
+    Access is granted per host through group membership — the SAME model as game-server access — so
+    having the MANAGE_REMOTES permission alone is not enough; the remote must be in one of the
+    user's groups. Superadmin = all.
+    """
     if user.is_superadmin:
         return True
     try:
@@ -513,7 +546,6 @@ def can_access_remote(user, remote_id):
 
 def accessible_remote_ids(user):
     """Set of remote-host ids the user may manage (all of them for a superadmin)."""
-    from panel.db.models import RemoteServer
     if user.is_superadmin:
         return {r.id for r in RemoteServer.query.all()}
     ids = set()
@@ -532,7 +564,8 @@ def _denial_wants_json():
     useless: it follows the redirect, gets 200 text/html, JSON-parsing fails, and the caller's
     fallback turns a REFUSED action into a success toast. Several routes worked around it with an
     inline check returning jsonify(...), 403 — this makes the decorators do the same thing, so the
-    workaround stops being necessary."""
+    workaround stops being necessary.
+    """
     if (request.path or "").startswith("/api/"):
         return True
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
@@ -543,10 +576,12 @@ def _denial_wants_json():
 
 
 def _deny(message, code):
-    """A denial in the shape the caller can read: JSON for fetch/API, flash + redirect for a real
-    browser navigation. A 401 also carries X-Auth-Required, the flag the page's fetch wrapper
-    watches for — "not signed in" is the one denial the whole tab has to react to, not just the
-    one widget that asked."""
+    """A denial in the shape the caller can read.
+
+    JSON for fetch/API, flash + redirect for a real browser navigation. A 401 also carries
+    X-Auth-Required, the flag the page's fetch wrapper watches for — "not signed in" is the one
+    denial the whole tab has to react to, not just the one widget that asked.
+    """
     if _denial_wants_json():
         resp = jsonify({"success": False, "message": message})
         resp.status_code = code
@@ -583,7 +618,8 @@ def superadmin_required(f):
     Replaces @permission_required(SUPER_ADMIN). That form also passed for anyone whose GROUP granted
     a "super_admin" permission, while every other superadmin gate — the nav, /users, the settings
     pages — tests the flag. The result was an account with real power (settings, notification
-    credentials, host reboot) and no way to see or reach most of it."""
+    credentials, host reboot) and no way to see or reach most of it.
+    """
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not current_user.is_authenticated:
@@ -601,7 +637,8 @@ def server_access_required(f):
     A permission alone is NOT a grant for every server — get_game() is a bare get_or_404 — so any
     route taking <int:server_id> needs this as well as its permission decorator. rbac_test asserts
     that structurally via the marker below, which is why the marker exists rather than each route
-    being probed one at a time (probing a destructive route on a real install would fire it)."""
+    being probed one at a time (probing a destructive route on a real install would fire it).
+    """
     # The check reads kwargs["server_id"]. On a route whose parameter is spelled anything else
     # that is None, and `if server_id is not None` then skips the check entirely — a decorator
     # that looks applied, passes rbac_test's structural marker, and grants everyone access to
@@ -628,18 +665,80 @@ def server_access_required(f):
 
 # ─── Initialization ────────────────────────────────────────────
 
+def _load_legacy_user(s):
+    """The user a legacy cookie id (a plain "<user_id>", no epoch) names, or None to refuse it.
+
+    Legacy cookie issued before epochs existed — accept by plain id (one-time, until they next log
+    in and get an epoch-tagged cookie).
+    """
+    legacy = db.session.get(User, int(s)) if s.isdecimal() else None
+    if legacy is None or not legacy.is_active or not _session_binding_ok():
+        return None                                  # see _user_for_cookie_id on is_active
+    return legacy
+
+
+def _user_for_cookie_id(s):
+    """The active user and session sid a "<user_id>:<auth_epoch>[:<sid>]" id names.
+
+    Returns (user, sid), sid None for a cookie without one, or (None, None) when the id is malformed,
+    names no user, carries a stale epoch, or names a deactivated account.
+    """
+    parts = s.split(":")
+    uid, epoch = parts[0], parts[1]
+    sid = parts[2] if len(parts) > 2 and parts[2] else None
+    if not uid.isdecimal():
+        return None, None
+    user = db.session.get(User, int(uid))
+    if user is None or str(user.auth_epoch or 0) != epoch:
+        return None, None
+    # Belt to flask-login's braces, NOT the thing that makes deactivation work. What makes it
+    # work today is subtle enough to be worth writing down: this model is
+    # `class User(UserMixin, db.Model)` with `is_active` declared as a Column, and
+    # UserMixin.is_authenticated is `return self.is_active` (flask_login/mixins.py:17) — so
+    # overriding the column silently overrides is_authenticated too, and @login_required
+    # already refuses a deactivated account. Verified by running it, not by reading it.
+    #
+    # That is a load-bearing coincidence between a mixin property and a column name. If the
+    # model ever declares its own is_authenticated, or drops UserMixin for a plain object, the
+    # coupling disappears with no error anywhere and every open session of every deactivated
+    # account starts working again — for up to remember_days, refreshed on each use. This line
+    # is what keeps that from being silent, and it costs an attribute read.
+    if not user.is_active:
+        return None, None
+    return user, sid
+
+
+def _drop_expired_session(sess):
+    """Delete an expired login-session row, best-effort."""
+    try:
+        db.session.delete(sess)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()   # the sweep can wait; the rejection cannot
+
+
+def _touch_session(sess, now):
+    """Throttled "last active" update (~5 min) of a login-session row."""
+    if not sess.last_seen or (now - sess.last_seen).total_seconds() > 300:
+        sess.last_seen = now
+        db.session.commit()
+
+
+def _warm():
+    """Compute the login-timing dummy hash on a real worker thread (eventlet's tpool) if there is one."""
+    try:
+        from eventlet import tpool
+        tpool.execute(_dummy_hash)
+    except Exception:
+        _dummy_hash()
+
+
 def init_auth(app):
     login_manager.init_app(app)
     # Pre-compute the login-timing dummy hash (~400ms bcrypt) so it's ready before the first login
     # WITHOUT adding it to startup or to the first failed-login timing. Run it on a real worker
     # thread via eventlet's tpool so the deliberately-slow hash doesn't block the event hub (a plain
     # green thread would, since bcrypt never yields). Falls back to a daemon thread off eventlet.
-    def _warm():
-        try:
-            from eventlet import tpool
-            tpool.execute(_dummy_hash)
-        except Exception:
-            _dummy_hash()
     try:
         import eventlet
         eventlet.spawn_n(_warm)
@@ -661,33 +760,9 @@ def init_auth(app):
         # accepted on the epoch alone until the user next logs in and is issued a sid.
         s = str(user_id)
         if ":" not in s:
-            # Legacy cookie issued before epochs existed — accept by plain id (one-time, until they
-            # next log in and get an epoch-tagged cookie).
-            legacy = db.session.get(User, int(s)) if s.isdecimal() else None
-            if legacy is None or not legacy.is_active or not _session_binding_ok():
-                return None                                                     # see below
-            return legacy
-        parts = s.split(":")
-        uid, epoch = parts[0], parts[1]
-        sid = parts[2] if len(parts) > 2 and parts[2] else None
-        if not uid.isdecimal():
-            return None
-        user = db.session.get(User, int(uid))
-        if user is None or str(user.auth_epoch or 0) != epoch:
-            return None
-        # Belt to flask-login's braces, NOT the thing that makes deactivation work. What makes it
-        # work today is subtle enough to be worth writing down: this model is
-        # `class User(UserMixin, db.Model)` with `is_active` declared as a Column, and
-        # UserMixin.is_authenticated is `return self.is_active` (flask_login/mixins.py:17) — so
-        # overriding the column silently overrides is_authenticated too, and @login_required
-        # already refuses a deactivated account. Verified by running it, not by reading it.
-        #
-        # That is a load-bearing coincidence between a mixin property and a column name. If the
-        # model ever declares its own is_authenticated, or drops UserMixin for a plain object, the
-        # coupling disappears with no error anywhere and every open session of every deactivated
-        # account starts working again — for up to remember_days, refreshed on each use. This line
-        # is what keeps that from being silent, and it costs an attribute read.
-        if not user.is_active:
+            return _load_legacy_user(s)
+        user, sid = _user_for_cookie_id(s)
+        if user is None:
             return None
         if sid:
             try:
@@ -703,16 +778,10 @@ def init_auth(app):
                     # captured months ago still logged straight in. Drop the row as well: an expired
                     # session is not a session, and leaving it listed on the account page as active
                     # is exactly the wrong thing to tell someone checking for intruders.
-                    try:
-                        db.session.delete(sess)
-                        db.session.commit()
-                    except Exception:
-                        db.session.rollback()   # the sweep can wait; the rejection cannot
+                    _drop_expired_session(sess)
                     return None
                 user._sid = sid                       # keep it so get_id re-embeds it on cookie refresh
-                if not sess.last_seen or (now - sess.last_seen).total_seconds() > 300:
-                    sess.last_seen = now              # throttled "last active" update (~5 min)
-                    db.session.commit()
+                _touch_session(sess, now)
             except Exception:
                 db.session.rollback()
                 # DENY this request. The handler used to fall through to `return user`, which
@@ -741,60 +810,72 @@ def init_auth(app):
 
     @login_manager.unauthorized_handler
     def _unauthorized():
-        """What an unauthenticated request gets back.
-
-        flask-login's default is always a redirect to /login. For a browser navigation that is
-        right. For the panel's in-page fetches it is not: the redirect is followed, the login
-        PAGE comes back with status 200, and the caller then tries to parse a chunk of HTML as
-        JSON — which is why, once a cookie expired, a page left open didn't bounce to the login
-        screen, it just threw errors on every click. Answer those callers with a machine-readable
-        401 instead, flagged by a header so the client can redirect the whole tab in one place.
-        """
-        if _denial_wants_json():
-            resp = jsonify({"success": False, "error": "auth_required",
-                            "message": "Your session has expired — please log in again."})
-            resp.status_code = 401
-            resp.headers["X-Auth-Required"] = "1"
-            resp.headers["Cache-Control"] = "no-store"
-            return resp
-        flash(login_manager.login_message, "info")
-        target = url_for(login_manager.login_view)
-        # Come back to the page they were on. Only a same-site path, rebuilt from what matched —
-        # never the raw value — so this can't become an open redirect (same shape as /login's).
-        nxt = request.full_path if request.method == "GET" else ""
-        nxt = nxt[:-1] if nxt.endswith("?") else nxt
-        # Same charset /login itself will accept back, so the round trip actually survives. No
-        # nested quantifier (see /login's copy): `(?:[seg]+/?)*` backtracked exponentially on an
-        # unauthenticated GET like /server/<30 digits>?! and stalled the whole eventlet hub.
-        m = re.fullmatch(r"/(?:[A-Za-z0-9._~\-]+/)*[A-Za-z0-9._~\-]*(?:\?[A-Za-z0-9._~\-=&%]*)?",
-                         nxt or "")
-        if m and not nxt.startswith(target):
-            target += "?next=" + quote(m.group(0), safe="")
-        return redirect(target)
+        """What an unauthenticated request gets back; see _unauthorized_response."""
+        return _unauthorized_response()
 
     @login_manager.request_loader
     def load_user_from_request(req):
-        """Authenticate an API client via `Authorization: Bearer <token>` (for scripts/bots), so the
-        REST API is usable without a browser session. The token authenticates AS its owner and
-        inherits exactly that user's RBAC permissions — nothing more. Returns None for a normal
-        request so flask-login falls back to the session cookie (user_loader).
+        """Authenticate an API client by its bearer token; see _user_from_bearer."""
+        return _user_from_bearer(req)
 
-        Failed attempts are throttled per IP. /login has had a throttle for a long time; this
-        path — the panel's OTHER way in — had none, so an attacker could try tokens as fast as
-        the network allowed, and nothing anywhere recorded that it was happening."""
-        header = req.headers.get("Authorization", "")
-        if not header.startswith("Bearer "):
-            return None
-        ip = client_ip() or "unknown"
-        if _token_auth_blocked(ip):
-            # Return None rather than aborting: a blocked IP simply gets no token identity, and
-            # flask-login still falls back to the session cookie — so throttling the token path
-            # never locks a logged-in human out of the UI from the same address.
-            _token_auth_note_blocked(ip)
-            return None
-        user = User.by_api_token(header[7:].strip())
-        _token_auth_record(ip, ok=user is not None)
-        return user
+
+def _unauthorized_response():
+    """What an unauthenticated request gets back.
+
+    flask-login's default is always a redirect to /login. For a browser navigation that is
+    right. For the panel's in-page fetches it is not: the redirect is followed, the login
+    PAGE comes back with status 200, and the caller then tries to parse a chunk of HTML as
+    JSON — which is why, once a cookie expired, a page left open didn't bounce to the login
+    screen, it just threw errors on every click. Answer those callers with a machine-readable
+    401 instead, flagged by a header so the client can redirect the whole tab in one place.
+    """
+    if _denial_wants_json():
+        resp = jsonify({"success": False, "error": "auth_required",
+                        "message": "Your session has expired — please log in again."})
+        resp.status_code = 401
+        resp.headers["X-Auth-Required"] = "1"
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+    flash(login_manager.login_message, "info")
+    target = url_for(login_manager.login_view)
+    # Come back to the page they were on. Only a same-site path, rebuilt from what matched —
+    # never the raw value — so this can't become an open redirect (same shape as /login's).
+    nxt = request.full_path if request.method == "GET" else ""
+    nxt = nxt[:-1] if nxt.endswith("?") else nxt
+    # Same charset /login itself will accept back, so the round trip actually survives. No
+    # nested quantifier (see /login's copy): `(?:[seg]+/?)*` backtracked exponentially on an
+    # unauthenticated GET like /server/<30 digits>?! and stalled the whole eventlet hub.
+    m = re.fullmatch(r"/(?:[A-Za-z0-9._~\-]+/)*[A-Za-z0-9._~\-]*(?:\?[A-Za-z0-9._~\-=&%]*)?",
+                     nxt or "")
+    if m and not nxt.startswith(target):
+        target += "?next=" + quote(m.group(0), safe="")
+    return redirect(target)
+
+
+def _user_from_bearer(req):
+    """Authenticate an API client via `Authorization: Bearer <token>` (for scripts/bots).
+
+    This makes the REST API usable without a browser session. The token authenticates AS its
+    owner and inherits exactly that user's RBAC permissions — nothing more. Returns None for a
+    normal request so flask-login falls back to the session cookie (user_loader).
+
+    Failed attempts are throttled per IP. /login has had a throttle for a long time; this
+    path — the panel's OTHER way in — had none, so an attacker could try tokens as fast as
+    the network allowed, and nothing anywhere recorded that it was happening.
+    """
+    header = req.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return None
+    ip = client_ip() or "unknown"
+    if _token_auth_blocked(ip):
+        # Return None rather than aborting: a blocked IP simply gets no token identity, and
+        # flask-login still falls back to the session cookie — so throttling the token path
+        # never locks a logged-in human out of the UI from the same address.
+        _token_auth_note_blocked(ip)
+        return None
+    user = User.by_api_token(header[7:].strip())
+    _token_auth_record(ip, ok=user is not None)
+    return user
 
 
 # ─── API-token brute-force throttle ───────────────────────────────────────────────────────────
@@ -818,7 +899,8 @@ def throttle_key(ip):
     An IPv4 address is its own bucket. An IPv6 address is bucketed by its /64: that is the
     smallest block a site or a phone is normally handed, so one attacker holds 2^64 addresses
     and a per-ADDRESS limit gave them that many fresh buckets. An IPv4-mapped IPv6 address is the
-    IPv4 address it maps. Anything that is not an address is returned unchanged."""
+    IPv4 address it maps. Anything that is not an address is returned unchanged.
+    """
     import ipaddress
     try:
         addr = ipaddress.ip_address(ip)
@@ -869,11 +951,15 @@ _TOKEN_BLOCK_AUDITED = {}   # throttle key -> when that block was last written t
 
 
 def _token_auth_note_blocked(ip):
-    """A token attempt from `ip` was refused by the throttle: one auth.log line per refusal (which
-    fail2ban counts), one audit row per block window, and a prompt ban-gate refresh when it came
-    through a proxy. Best-effort — nothing here may fail the request."""
+    """Record that the throttle refused a token attempt from `ip`.
+
+    One auth.log line per refusal (which fail2ban counts), one audit row per block window, and a
+    prompt ban-gate refresh when it came through a proxy. Best-effort — nothing here may fail the
+    request.
+    """
     import logging
-    # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure -- logs the client address only; 'api token' is the event's name
+    # Logs the client address only; 'api token' is the event's name, not a credential.
+    # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
     logging.getLogger("panel.auth").warning(
         "panel api token blocked from %s", _ip_or_none(ip) or "unknown")
     key, now = throttle_key(ip), time.time()
@@ -907,7 +993,8 @@ def _ip_or_none(value):
     the 7-day auto-block counts — and a key space is only bounded while the values are addresses.
     A header carrying anything else is not a client address the panel failed to parse; it is a
     client choosing its own bucket. Some proxies bracket an IPv6 literal and may append a port,
-    so those are peeled before parsing rather than rejected."""
+    so those are peeled before parsing rather than rejected.
+    """
     import ipaddress
     text = (value or "").strip()
     if not text:
@@ -931,7 +1018,8 @@ def _proc_net_address(addr, port):
     """`addr`:`port` spelled the way /proc/net/tcp{,6} prints it, or None if `addr` is not an IP.
 
     The kernel prints each 32-bit word of the address as the raw integer in HOST byte order, so
-    127.0.0.1 is 0100007F on a little-endian machine; struct's native order reproduces that."""
+    127.0.0.1 is 0100007F on a little-endian machine; struct's native order reproduces that.
+    """
     import ipaddress
     import struct
     try:
@@ -971,17 +1059,12 @@ def _loopback_peer_uid(environ):
     so whatever state it is in, its uid is who dialled.
 
     Whole addresses, not port suffixes: a root-owned connection between two OTHER addresses can
-    share both port numbers with this one, and the first row whose ports matched used to answer."""
-    orig = environ.get("werkzeug.proxy_fix.orig") or {}
-    peer = orig.get("REMOTE_ADDR") or environ.get("REMOTE_ADDR") or ""
-    ours = orig.get("SERVER_NAME") or environ.get("SERVER_NAME") or ""
-    try:
-        peer_port = int(environ.get("REMOTE_PORT") or 0)
-        our_port = int(orig.get("SERVER_PORT") or environ.get("SERVER_PORT") or 0)
-    except (TypeError, ValueError):
+    share both port numbers with this one, and the first row whose ports matched used to answer.
+    """
+    ends = _loopback_endpoints(environ)
+    if ends is None:
         return None
-    if not peer_port or not our_port:
-        return None
+    peer, peer_port, ours, our_port = ends
     # A panel bound dual-stack ('::') accepts an IPv4 client as ::ffff:127.0.0.1, but the CLIENT's
     # socket is IPv4 and its row is in /proc/net/tcp, not tcp6. Looking in tcp6 found nothing, so
     # Tailscale Serve dialling 127.0.0.1 was never trusted and every Serve user shared one
@@ -990,8 +1073,40 @@ def _loopback_peer_uid(environ):
     local, remote = _proc_net_address(peer, peer_port), _proc_net_address(ours, our_port)
     if local is None or remote is None:
         return None
+    return _proc_net_owner_uid(_PROC_NET_TCP[6 if ":" in peer else 4], local, remote)
+
+
+def _loopback_endpoints(environ):
+    """(peer, peer_port, ours, our_port) of this connection, or None when a port is missing.
+
+    The ORIGINAL socket names are read, where ProxyFix kept them: by the time this runs it may have
+    rewritten REMOTE_ADDR from the very header the caller is trying to judge.
+    """
+    orig = environ.get("werkzeug.proxy_fix.orig") or {}
+    peer = _orig_or_now(orig, environ, "REMOTE_ADDR")
+    ours = _orig_or_now(orig, environ, "SERVER_NAME")
     try:
-        with open(_PROC_NET_TCP[6 if ":" in peer else 4]) as fh:
+        peer_port = int(environ.get("REMOTE_PORT") or 0)
+        our_port = int(_orig_or_now(orig, environ, "SERVER_PORT") or 0)
+    except (TypeError, ValueError):
+        return None
+    if not peer_port or not our_port:
+        return None
+    return peer, peer_port, ours, our_port
+
+
+def _orig_or_now(orig, environ, key):
+    """environ[`key`] as ProxyFix found it (its saved original), else as it is now, else ""."""
+    return orig.get(key) or environ.get(key) or ""
+
+
+def _proc_net_owner_uid(table, local, remote):
+    """The uid of the live socket in /proc/net `table` from `local` to `remote`, or None.
+
+    A row is believed only when a socket INODE owns it (see _loopback_peer_uid for why).
+    """
+    try:
+        with open(table) as fh:
             next(fh, None)                              # the header row
             for line in fh:
                 cols = line.split()
@@ -1015,7 +1130,8 @@ def _loopback_proxy_trusted():
 
     tailscaled runs as root. So the headers are believed from a loopback peer whose socket root
     owns, and from nobody else on loopback (a declared reverse proxy is trust_proxy's case, handled
-    by the caller). Memoised per request: client_ip() is called more than once per request."""
+    by the caller). Memoised per request: client_ip() is called more than once per request.
+    """
     try:
         from flask import g as _g
         cached = _g.get("_loopback_proxy_trusted")
@@ -1076,12 +1192,30 @@ def client_ip():
 
     A `trust_proxy` install that also accepts direct connections (binding 0.0.0.0 alongside the
     proxy) still trusts these headers from anyone who reaches the port — bind loopback, or put the
-    proxy on the only reachable address."""
+    proxy on the only reachable address.
+    """
     if not request:
         return ""
     remote = request.remote_addr or ""
     # ProxyFix stores what it overwrote; without it this is just remote_addr.
     peer = (request.environ.get("werkzeug.proxy_fix.orig") or {}).get("REMOTE_ADDR") or remote
+    if _request_came_through_proxy(peer):
+        forwarded = _forwarded_client_ip()
+        if forwarded:
+            return forwarded
+    # The fallthrough is held to the same rule. Behind trust_proxy, ProxyFix has already copied the
+    # last X-Forwarded-For hop into remote_addr WITHOUT parsing it, so when a proxy passes a
+    # client's header through unappended, the "bogus-<n>" the branches above refused came straight
+    # back here as the key: a fresh throttle bucket per attempt. An unparseable value falls back to
+    # the socket peer that really connected (the proxy), which is an address and one bucket.
+    return _ip_or_none(remote) or _ip_or_none(peer) or remote
+
+
+def _request_came_through_proxy(peer):
+    """Whether this request's forwarding headers may be read: trust_proxy, or a root loopback peer.
+
+    `peer` is the ORIGINAL socket peer, from before ProxyFix rewrote remote_addr.
+    """
     try:
         behind_proxy = bool(current_app.config.get("_TRUST_PROXY"))
     except Exception:
@@ -1094,21 +1228,21 @@ def client_ip():
         # Loopback is NOT a proxy by itself — any local account can dial it. Only a root-owned
         # peer (tailscaled) is; see _loopback_proxy_trusted.
         behind_proxy = _loopback_proxy_trusted()
-    if behind_proxy:
-        xff = request.headers.get("X-Forwarded-For", "")
-        if xff:
-            hop = _ip_or_none(xff.split(",")[-1])
-            if hop:
-                return hop
-        xr = _ip_or_none(request.headers.get("X-Real-IP"))
-        if xr:
-            return xr
-    # The fallthrough is held to the same rule. Behind trust_proxy, ProxyFix has already copied the
-    # last X-Forwarded-For hop into remote_addr WITHOUT parsing it, so when a proxy passes a
-    # client's header through unappended, the "bogus-<n>" the branches above refused came straight
-    # back here as the key: a fresh throttle bucket per attempt. An unparseable value falls back to
-    # the socket peer that really connected (the proxy), which is an address and one bucket.
-    return _ip_or_none(remote) or _ip_or_none(peer) or remote
+    return behind_proxy
+
+
+def _forwarded_client_ip():
+    """The client address the proxy reported, or None.
+
+    X-Forwarded-For's LAST hop when it parses as an IP address, else X-Real-IP when that does (see
+    client_ip for why that order).
+    """
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        hop = _ip_or_none(xff.split(",")[-1])
+        if hop:
+            return hop
+    return _ip_or_none(request.headers.get("X-Real-IP"))
 
 
 def session_fingerprint():
@@ -1121,14 +1255,15 @@ def session_fingerprint():
     IPv6 client by its /64, a mapped IPv4 address as that IPv4. Temporary ("privacy") IPv6
     addresses rotate inside the /64 about daily and every new connection takes the newest, so
     binding the exact address signed IPv6 users out each time it rotated. A replayed cookie still
-    has to come from the same /64 — the same LAN, as behind an IPv4 NAT — with the same User-Agent."""
+    has to come from the same /64 — the same LAN, as behind an IPv4 NAT — with the same User-Agent.
+    """
     ua = request.headers.get("User-Agent", "") if request else ""
     return hashlib.sha256(("%s|%s" % (throttle_key(client_ip() or ""), ua))
                           .encode("utf-8", "replace")).hexdigest()[:32]
 
 
 def _session_binding_ok():
-    """Is this request's session being used from the client it was bound to? ("strong" only.)
+    """Whether this request's session is used from the client it was bound to ("strong" only).
 
     SESSION_PROTECTION="strong" was inert. flask-login only clears a session on an identifier
     mismatch when the session is NOT permanent — `if mode == "basic" or sess.permanent:` just marks
@@ -1138,7 +1273,8 @@ def _session_binding_ok():
 
     So the binding is kept in the session as "_bind" (set at login) and compared here. A session
     from before this check has none and is bound on its first request instead of being logged out
-    by the upgrade. "basic" and off skip it."""
+    by the upgrade. "basic" and off skip it.
+    """
     try:
         if current_app.config.get("SESSION_PROTECTION") != "strong":
             return True
@@ -1156,8 +1292,11 @@ def _session_binding_ok():
 
 
 def log_action(user, action, target="", detail="", success=True, actor=None):
-    """Write an audit log entry. `actor` overrides the recorded username — used for a failed login,
-    where there's no authenticated user but we still want the ATTEMPTED username in the User column."""
+    """Write an audit log entry.
+
+    `actor` overrides the recorded username — used for a failed login, where there's no
+    authenticated user but we still want the ATTEMPTED username in the User column.
+    """
     entry = AuditLog(
         user_id=user.id if user else None,
         username=actor if actor else (user.username if user else "system"),
@@ -1177,7 +1316,8 @@ def strip_legacy_superadmin_grants():
     Nothing consults it any more, so this changes no access — it stops a stale string sitting in the
     permissions JSON where the Groups UI can no longer show or untick it, and where a future
     has_permission(user, SUPER_ADMIN) would silently start honouring it again. Returns how many
-    groups were cleaned; best-effort and never fatal at startup."""
+    groups were cleaned; best-effort and never fatal at startup.
+    """
     from panel.db.models import Group
     cleaned = 0
     try:
@@ -1206,10 +1346,12 @@ READONLY_ACTIONS = {"monitor", "details", "check-update", "postdetails", "test-a
 
 
 def get_remote(remote_id):
-    """Fetch a remote AND enforce per-host access. MANAGE_REMOTES grants the
-    ability to manage remotes, but only the ones in the user's groups — the same
-    per-host scoping game servers get. Superadmin sees all. Every remote-scoped
-    route goes through here, so a direct API call to another remote's id is a 403."""
+    """Fetch a remote AND enforce per-host access.
+
+    MANAGE_REMOTES grants the ability to manage remotes, but only the ones in the user's groups —
+    the same per-host scoping game servers get. Superadmin sees all. Every remote-scoped route goes
+    through here, so a direct API call to another remote's id is a 403.
+    """
     r = RemoteServer.query.get_or_404(remote_id)
     if not can_access_remote(current_user, remote_id):
         abort(403)
@@ -1223,9 +1365,11 @@ def get_game(server_id):
 
 
 def _can_edit_tags():
-    """Tag writes need MANAGE_SERVERS. Checked INLINE rather than with @permission_required,
-    because that decorator flashes and redirects — which a fetch().then(r => r.json()) can only
-    see as unparseable HTML."""
+    """Tag writes need MANAGE_SERVERS.
+
+    Checked INLINE rather than with @permission_required, because that decorator flashes and
+    redirects — which a fetch().then(r => r.json()) can only see as unparseable HTML.
+    """
     return current_user.is_superadmin or has_permission(current_user, MANAGE_SERVERS)
 
 
@@ -1234,8 +1378,11 @@ def _can_manage_files():
 
 
 def _perm_for_action(action):
-    """Which permission an action requires (core actions have specific perms;
-    read-only commands need VIEW_CONSOLE; the rest need UPDATE_SERVER)."""
+    """Which permission an action requires.
+
+    Core actions have specific perms; read-only commands need VIEW_CONSOLE; the rest need
+    UPDATE_SERVER.
+    """
     p = ACTION_PERMISSION_MAP.get(action)
     if p is None:
         p = VIEW_CONSOLE if action in READONLY_ACTIONS else UPDATE_SERVER
@@ -1262,29 +1409,41 @@ def grantable_groups(requested_ids, existing=()):
     existing = set(existing or ())
     if current_user.is_superadmin:
         return list(requested)
-    mine = get_user_permissions(current_user)
+    reach = _my_group_reach(current_user)
+
+    def _within_my_reach(g):
+        return _group_within_reach(g, reach)
+
+    keepable = {g for g in requested if _within_my_reach(g)}
+    return list(keepable | (existing - {g for g in existing if _within_my_reach(g)}))
+
+
+def _my_group_reach(user):
+    """What `user` can reach, as (permissions, remote ids, custom-command ids, game-server ids)."""
+    mine = get_user_permissions(user)
     # Permissions AND object reach. The subset test covered Group.permissions only, while
     # can_access_server unions Group.servers (whole-host grants) and Group.game_servers — so a
     # group whose permissions you already hold, but which carries a host you were never granted,
     # passed this check and handed you that host on the next request. The permission set was
     # unchanged, which is why the existing escalation tests stayed green. grantable_object_ids
     # closes the same gap from the group-editing side; this is the membership side.
-    mine_remotes = set(accessible_remote_ids(current_user))
-    mine_servers = {gs.id for gs in get_user_servers(current_user)}
+    mine_remotes = set(accessible_remote_ids(user))
+    mine_servers = {gs.id for gs in get_user_servers(user)}
     # ...and the custom commands, the fourth thing membership hands over (see custom_command_ids).
-    mine_commands = custom_command_ids(current_user)
+    mine_commands = custom_command_ids(user)
+    return mine, mine_remotes, mine_commands, mine_servers
 
-    def _within_my_reach(g):
-        if not set(g.get_permissions()) <= mine:
-            return False
-        if not {r.id for r in (g.servers or [])} <= mine_remotes:
-            return False
-        if not {c.id for c in (g.custom_commands or [])} <= mine_commands:
-            return False
-        return {s.id for s in (g.game_servers or [])} <= mine_servers
 
-    keepable = {g for g in requested if _within_my_reach(g)}
-    return list(keepable | (existing - {g for g in existing if _within_my_reach(g)}))
+def _group_within_reach(g, reach):
+    """Whether everything group `g` grants lies within `reach` (from _my_group_reach)."""
+    mine, mine_remotes, mine_commands, mine_servers = reach
+    if not set(g.get_permissions()) <= mine:
+        return False
+    if not {r.id for r in (g.servers or [])} <= mine_remotes:
+        return False
+    if not {c.id for c in (g.custom_commands or [])} <= mine_commands:
+        return False
+    return {s.id for s in (g.game_servers or [])} <= mine_servers
 
 
 def can_administer_user(actor, target, actor_memo=None):
@@ -1306,7 +1465,8 @@ def can_administer_user(actor, target, actor_memo=None):
     The rule is theirs, applied to the target as a whole: a non-superadmin may only administer an
     account whose permissions are a SUBSET of their own. Editing yourself is always allowed —
     your own permissions are trivially a subset of your own, but say it outright so a future
-    change to get_user_permissions cannot lock someone out of their own account page."""
+    change to get_user_permissions cannot lock someone out of their own account page.
+    """
     if getattr(actor, "is_superadmin", False):
         return True
     if getattr(target, "is_superadmin", False):
@@ -1323,6 +1483,14 @@ def can_administer_user(actor, target, actor_memo=None):
             memo[key] = compute()
         return memo[key]
 
+    return _reach_within_actors(actor, target, mine)
+
+
+def _reach_within_actors(actor, target, mine):
+    """Whether everything `target` holds — permissions and objects — `actor` holds too.
+
+    `mine(key, compute)` answers the actor's side, memoised by can_administer_user.
+    """
     if not (set(get_user_permissions(target))
             <= mine("perms", lambda: set(get_user_permissions(actor)))):
         return False
@@ -1366,11 +1534,13 @@ def grantable_object_ids(requested_ids, existing_ids, allowed_ids):
 
 
 def _grantable_perms(requested, existing=()):
-    """Compute a group's permission set after an edit, safely. A superadmin can set any
-    real permission. Anyone else (a delegated MANAGE_GROUPS user) can only toggle the
-    permissions they themselves hold — and never SUPER_ADMIN — so they can't escalate
-    their own privileges by editing a group they belong to. Permissions already on the
-    group that they can't grant are PRESERVED (so an edit can't silently strip them)."""
+    """Compute a group's permission set after an edit, safely.
+
+    A superadmin can set any real permission. Anyone else (a delegated MANAGE_GROUPS user) can only
+    toggle the permissions they themselves hold — and never SUPER_ADMIN — so they can't escalate
+    their own privileges by editing a group they belong to. Permissions already on the group that
+    they can't grant are PRESERVED (so an edit can't silently strip them).
+    """
     requested = set(requested) & set(ALL_PERMISSIONS.keys())
     if current_user.is_superadmin:
         return list(requested)
