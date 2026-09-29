@@ -826,10 +826,12 @@ def run_privileged(server, verb, args=(), timeout=30, merge_stderr=True, sudo=Tr
     # sudo=None ESCALATES here: this is a privileged verb on the panel's own machine, and the row's
     # sudo_enabled is not consulted. That field is a REMOTE's SSH setting (whether the account the
     # panel signs in as may `sudo bash -c`), and run_command already ignores it on this host. It
-    # used to decide this branch, so a local row saved with it off — the real test panel's own
-    # row is one — sent `ufw status numbered` straight to ufw as the panel's account, beside a
-    # helper the sudoers grant lets it run, and the host's Firewall card answered
-    # permission_denied. Only an explicit sudo=False runs the tool directly — still argv, no root.
+    # used to decide this branch, so a local row with it off — the panel creates that row with it
+    # on, but the real test panel's was inserted by a probe script without it — sent `ufw status
+    # numbered` straight to ufw as the panel's account, beside a helper the sudoers grant lets it
+    # run, and the host's Firewall card answered permission_denied. Escalating means the helper
+    # where it is installed and the pre-helper `sudo bash -c` form below where it is not. Only an
+    # explicit sudo=False runs the tool directly — still argv, no root.
     use_sudo = True if sudo is None else sudo
     if not use_sudo:
         return _exec_local_argv(_priv.tool_argv(verb, args), timeout=timeout,

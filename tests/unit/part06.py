@@ -199,18 +199,26 @@ finally:
     _sm_core._HELPER_STATE.update(_orig_helper_state)
 
 
-# ── the panel host's own Firewall card, on a row saved with sudo_enabled off ──────────────────
+# ── the panel host's own Firewall card, on a row with sudo_enabled off ────────────────────────
 # remote_ufw_status is the one caller that passes sudo=None, and run_privileged used to read that
-# as the ROW's sudo_enabled on the panel host too. The real test panel's own row has it off, so the
-# read ran `ufw status numbered` as the panel's account beside the helper its sudoers grant allows,
-# and GET /api/remote/1/firewall answered permission_denied. sudo_enabled is a remote's SSH
-# setting: on the panel host the helper decides, and a remote still honours the row.
+# as the ROW's sudo_enabled on the panel host too. The real test panel's own row has it off (a
+# probe script inserted it; the panel creates that row with it on), so the read ran `ufw status
+# numbered` as the panel's account beside the helper its sudoers grant allows, and
+# GET /api/remote/1/firewall answered permission_denied. sudo_enabled is a remote's SSH setting:
+# on the panel host a sudo=None read always escalates, and a remote still honours the row, over
+# paramiko and over the Tailscale ssh CLI alike (each transport reads the row itself).
+import shlex as _shlex_phf  # noqa: E402
+
 _PHF_LOCAL = NS(is_local=True, auth_method="key", sudo_enabled=False, linuxgsm_user="",
                 host="127.0.0.1", port=22, username="root", id=9601, name="this-host")
 _PHF_REMOTE_OFF = NS(is_local=False, auth_method="key", sudo_enabled=False, linuxgsm_user="",
                      host="h", port=22, username="root", id=9602, name="r-off")
 _PHF_REMOTE_ON = NS(is_local=False, auth_method="key", sudo_enabled=True, linuxgsm_user="",
                     host="h", port=22, username="admin", id=9603, name="r-on")
+_PHF_TS_OFF = NS(is_local=False, auth_method="tailscale", sudo_enabled=False, linuxgsm_user="",
+                 host="box.ts.net", port=22, username="root", id=9604, name="ts-off")
+_PHF_TS_ON = NS(is_local=False, auth_method="tailscale", sudo_enabled=True, linuxgsm_user="",
+                host="box.ts.net", port=22, username="admin", id=9605, name="ts-on")
 _PHF_HELPER = ["sudo", "-n", _priv.HELPER_PATH, "ufw-status", "numbered"]
 _PHF_LISTING = ("Status: active\n\n     To                         Action      From\n"
                 "     --                         ------      ----\n"
@@ -270,6 +278,9 @@ def _phf_exec_command(cmd, timeout=None):
 
 _phf_saved = (_sm_core._run_local, _sm_core._exec_local_argv, _sm_core.get_connection,
               _sm_firewall._annotate_firewall_protection, dict(_sm_core._HELPER_STATE))
+_phf_ts_saved = (_sm_core.subprocess, _sm_core._collect_capped, _sm_core._resolve_ts_host,
+                 _sm_core._ssh_mux_opts)
+_phf_ts_argvs = []
 try:
     _sm_core._exec_local_argv = _phf_exec_argv
     _sm_core._run_local = lambda cmd, timeout=30, sudo=False, **k: (
@@ -308,9 +319,25 @@ try:
        [c.startswith("sudo bash -c ") for c in _phf_wire], [False, True])
     eq("panel-host firewall: ...and the unescalated one is the bare ufw read (the gate has a subject)",
        _phf_wire[:1], [_priv.remote_command("ufw-status", ["numbered"])])
+    # ...and over Tailscale, whose transport (_run_via_ssh_cli) does its own defaulting from the
+    # row rather than paramiko's. The remote command is the last word of the ssh argv it builds.
+    _sm_core.subprocess = NS(Popen=lambda argv, **k: (_phf_ts_argvs.append(list(argv)),
+                                                      NS(kill=lambda: None))[1],
+                             PIPE="PIPE", DEVNULL="DEVNULL")
+    _sm_core._collect_capped = lambda p, t, kill, threads, stdin_bytes=None: (b"", b"", 0, False)
+    _sm_core._resolve_ts_host = lambda s: s.host
+    _sm_core._ssh_mux_opts = lambda: []
+    _sm_firewall.remote_ufw_status(_PHF_TS_OFF)
+    _sm_firewall.remote_ufw_status(_PHF_TS_ON)
+    _phf_ts_cmd = _priv.remote_command("ufw-status", ["numbered"])
+    eq("panel-host firewall: a Tailscale remote's sudo_enabled decides its ufw read the same way",
+       [a[-1] for a in _phf_ts_argvs],
+       [_phf_ts_cmd, "sudo bash -c " + _shlex_phf.quote(_phf_ts_cmd)])
 finally:
     (_sm_core._run_local, _sm_core._exec_local_argv, _sm_core.get_connection,
      _sm_firewall._annotate_firewall_protection) = _phf_saved[:4]
+    (_sm_core.subprocess, _sm_core._collect_capped, _sm_core._resolve_ts_host,
+     _sm_core._ssh_mux_opts) = _phf_ts_saved
     _sm_core._HELPER_STATE.clear()
     _sm_core._HELPER_STATE.update(_phf_saved[4])
 

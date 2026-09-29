@@ -266,12 +266,13 @@ CI-verified commit regardless of this file — this changelog is for humans.
 
 - **The panel host's own Firewall card could say "permission denied" with the helper installed.**
   Its rule list was the one firewall read that followed the host row's "sudo" setting, which is a
-  remote's SSH option, and on the panel's own host it also decided whether to use the helper. A
-  panel-host row saved with it off (the test panel's is one) ran `ufw status` as the panel's
-  account, which ufw refuses, so the card listed no rules and no rule could be deleted from it,
-  while Server Management read the same firewall fine. On the panel's own host that setting is no
-  longer read: the rule list goes through the helper like every other firewall action. A remote
-  still follows its own setting.
+  remote's SSH option, and on the panel's own host it also decided whether to use the helper. The
+  panel creates its own host's row with that setting on and never shows it for that row, but a row
+  with it off (one written into the database directly, as the test panel's was) ran `ufw status`
+  as the panel's account, which ufw refuses, so the card listed no rules and no rule could be
+  deleted from it, while Server Management read the same firewall fine. On the panel's own host
+  that setting is no longer read: the rule list is read as root like every other firewall action,
+  through the helper where it is installed. A remote still follows its own setting.
 - **On a remote host, a fail2ban log just under the 8 MB read limit is counted again.** The panel
   guessed that a remote host's log had been cut short whenever it came within 64 KB of that limit,
   and treated a complete log as unread, so auto-blocking on that host held still. The remote read
