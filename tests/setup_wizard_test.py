@@ -454,6 +454,10 @@ def _check_complete_page():
     _serve_end = [r for r in _audit("setup_tailscale_serve") if r[2].startswith("at the end")]
     check("audit: ...and so is the Serve it set up on the way out",
           [r[3] for r in _serve_end] == [True], repr(_audit("setup_tailscale_serve")))
+
+
+def _check_restart_now():
+    """The complete page's Restart now: the owner's alone, and only when there is a bind to apply."""
     # "Restart now" is the owner's explicit choice, and nobody else's.
     rr = _att.post("/setup/restart")
     check("complete: another browser cannot restart the panel", _restarts == [], repr(_restarts))
@@ -710,6 +714,7 @@ try:
     _check_remote_step()
 
     _check_complete_page()
+    _check_restart_now()
     _check_auto_serve_failure()
 
     # ── Once setup is COMPLETE, the wizard is permanently locked ──────────────────────────────
