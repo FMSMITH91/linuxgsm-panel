@@ -902,8 +902,10 @@ def remote_ufw_close_by_name(server, name, ports=None, held=(), tagged=None):
     (_left_on_own_ports), from the same last read — and on every port a public allow carrying the
     name was on, which is the server's too: the install tags the ports LinuxGSM reports, and a
     Query port can sit outside the game's span (Rust's 28017, beyond 28015-28016). Less `held`,
-    the ports another server on the host holds, whose rules are that server's. Empty means the
-    server's rules are gone; the message says the same things.
+    the ports another server on the host holds, whose rules are that server's. `ports` None (the
+    default) names none of that; any other value turns it on, an empty block included, so a caller
+    whose later step names what is left passes None. Empty means the server's rules are gone; the
+    message says the same things.
 
     `tagged`, a set when given, receives the ports those tagged allows were on, as this read them,
     for a later step that names what is left instead (the uninstall's legacy sweep)."""
