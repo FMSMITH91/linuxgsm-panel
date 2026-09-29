@@ -228,22 +228,29 @@ def _manageable_group_ids(groups):
 
 def _invited_beside_out_of_reach(in_reach):
     """Ids of the groups a live invite names together with a group `in_reach` refuses."""
-    _now = utcnow()
-    live = [inv for inv in Invite.query.filter(Invite.used_at.is_(None),
-                                                Invite.revoked_at.is_(None),
-                                                Invite.expires_at > _now).all()
-            # A superadmin invite's account holds everything whatever its groups grant.
-            if not inv.grants_superadmin and inv.groups_wanted]
-    if not live:
-        return set()
-    _ids = {gid for inv in live for gid in inv.groups_wanted}
-    _rows = {g.id: g for g in Group.query.filter(Group.id.in_(_ids)).all()}
+    live = _live_group_invites()
+    rows = _groups_by_id({gid for inv in live for gid in inv.groups_wanted})
     out = set()
     for inv in live:
-        _named = [_rows[gid] for gid in inv.groups_wanted if gid in _rows]
-        if not all(in_reach(g) for g in _named):
-            out.update(g.id for g in _named)
+        named = [rows[gid] for gid in inv.groups_wanted if gid in rows]
+        if not all(map(in_reach, named)):
+            out.update(g.id for g in named)
     return out
+
+
+def _groups_by_id(ids):
+    """{id: Group} for `ids`, in one query (none for no ids)."""
+    if not ids:
+        return {}
+    return {g.id: g for g in Group.query.filter(Group.id.in_(ids)).all()}
+
+
+def _live_group_invites():
+    """The unused, unrevoked, unexpired invites that name groups and do not grant superadmin."""
+    live = Invite.query.filter(Invite.used_at.is_(None), Invite.revoked_at.is_(None),
+                               Invite.expires_at > utcnow()).all()
+    # A superadmin invite's account holds everything, whatever its groups grant.
+    return [inv for inv in live if inv.groups_wanted and not inv.grants_superadmin]
 
 
 def _refuse_unmanageable(group, action, why):

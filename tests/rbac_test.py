@@ -2047,10 +2047,16 @@ def _group_scope_fixtures():
         _inv, _ = _GInv.mint(db.session.get(User, admin_id),
                              group_ids=[_g["a_inv"].id, _g["b_view"].id], note=tag + "_gsx_inv")
         db.session.add(_inv)
+        # ...while a SUPERADMIN invite naming the editable group beside a tenant-B one blocks
+        # nothing: its account holds everything whatever the groups say (the control below).
+        _sainv, _ = _GInv.mint(db.session.get(User, admin_id), superadmin=True,
+                               group_ids=[_g["a_free"].id, _g["b_view"].id],
+                               note=tag + "_gsx_sainv")
+        db.session.add(_sainv)
         db.session.commit()
         _gsx = {k: v.id for k, v in _g.items()}
         _gsx.update({k: v.id for k, v in _u.items()})
-        _gsx.update(cmd_id=_cmd.id, inv_id=_inv.id)
+        _gsx.update(cmd_id=_cmd.id, inv_id=_inv.id, sainv_id=_sainv.id)
         _dflt = Group.query.filter_by(is_default=True).first()
         _gsx["dflt"] = _dflt.id if _dflt is not None else None
         _gsx["dflt_before"] = ((_dflt.name, _dflt.description, _dflt.get_permissions())
@@ -2115,7 +2121,8 @@ def _check_group_edit_refusals():
           "%d refused edit_group rows" % _refused_rows)
     # Positive control: a group whose members she can administer still edits.
     _gsx_edit(_dc, "a_free", _grant, hosts=[granted_remote])
-    check("group scope: an in-reach group whose members are in reach still edits (control)",
+    check("group scope: an in-reach group whose members are in reach still edits, a superadmin "
+          "invite naming it notwithstanding (control)",
           auth.USE_TERMINAL in _gsx_perms("alice") and _gsx_row("a_free")[1] == "changed",
           "the edit was refused too — the checks above prove nothing (%r)" % (_gsx_row("a_free"),))
 
@@ -2214,9 +2221,10 @@ def _group_scope_cleanup():
     """Remove the group-scope fixtures. The final sweep would too; this keeps later blocks clean."""
     from panel.db.models import CustomCommand as _GCC, Invite as _GInv
     with app.app_context():
-        _inv = db.session.get(_GInv, _gsx["inv_id"])
-        if _inv is not None:
-            db.session.delete(_inv)
+        for _ik in ("inv_id", "sainv_id"):
+            _inv = db.session.get(_GInv, _gsx[_ik])
+            if _inv is not None:
+                db.session.delete(_inv)
         for _k in ("dana", "vic", "vera", "mia", "alice", "carl"):
             _u = db.session.get(User, _gsx[_k])
             if _u is not None:
