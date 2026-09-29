@@ -5962,6 +5962,17 @@ check("gitleaks: the allowlist clears install.sh's NodeSource fingerprint assign
       "assignments %r, allowlist %r" % (_gl_fpr, _gl_rxs))
 check("gitleaks: the fingerprint exemption is that one value, not every NODESOURCE_KEY_FPR",
       not any(re.search(_rx, 'NODESOURCE_KEY_FPR="' + "0" * 40 + '"') for _rx in _gl_rxs))
+# part13 assigns a wrapper to _persist_host_key, and generic-api-key read the assignment as a
+# credential (PR #371). The finding's MATCH, as gitleaks reported it, is the whole assignment; the
+# allowlist clears that and nothing wider. The same name given any other value must still be found.
+_gl_pin_match = "_sm_core._persist_host_key = _pl_traced_persist10"
+_gl_pin_src = open(os.path.join(_root, "tests", "unit", "part13.py"), encoding="utf-8").read()
+check("gitleaks: the pin-trace assignment the allowlist clears is still in part13 (it has a subject)",
+      _gl_pin_match in _gl_pin_src)
+check("gitleaks: the allowlist clears part13's pin-trace assignment",
+      any(re.search(_rx, _gl_pin_match) for _rx in _gl_rxs), repr(_gl_rxs[-2:]))
+check("gitleaks: ...and only that value: the same name given a key-shaped value is still found",
+      not any(re.search(_rx, "_persist_host_key = " + "Zq8" * 8) for _rx in _gl_rxs))
 # The JS coverage walk typed a sequential stand-in Ubuntu Pro token that generic-api-key reads as a
 # credential. The tree types a non-secret value now; the allowlist clears the old literal, which is
 # still in the PR's range (13e3441), and nothing wider: a different token in that field, or the same
