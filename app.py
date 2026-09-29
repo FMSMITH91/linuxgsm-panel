@@ -1407,8 +1407,9 @@ def create_app():
     # A signed-in request's body is read HERE, before any check authorizes it, and who is asking is
     # then loaded again — so a token revoked, an account deactivated or a permission removed while a
     # client held its body back is what the checks ahead see (auth.authorize_after_body). After the
-    # CSRF hook, so a refused cross-site post costs no read; before the password gate below, which
-    # is itself one of those checks.
+    # CSRF hook, so a JSON or text post that hook refuses costs no read (csrf.protect() parses a
+    # FORM body itself, to find its token, so a refused form post is read either way); before the
+    # password gate below, which is itself one of those checks.
     app.before_request(authorize_after_body)
 
     # ── An unhandled exception on a JSON endpoint must answer JSON ───────────────────────────

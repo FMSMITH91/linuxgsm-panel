@@ -1060,14 +1060,15 @@ CI-verified commit regardless of this file — this changelog is for humans.
 - **A signed-in request is authorized once its body has arrived, not before.** Every check that a
   token, an account or a permission is still good ran before the request's body was read, and the
   body is read only when the route first asks for it. So a client could send the headers, hold the
-  body back while its API token was revoked, its account deactivated or its permission removed,
-  and the action still ran once the body arrived. That was open for every API call made with an
-  `Authorization: Bearer` token and for every in-page request from a signed-in browser: the CSRF
-  check, which reads a form's body early, skips the first and does not read the second's JSON. The
-  panel now reads the whole body of a signed-in request before any check, then looks up who is
-  asking again, so the checks see the token, the account and its permissions as they are when the
-  body lands. An upload still streams to a temporary file rather than into memory, and a request
-  that is not signed in is still refused without its body being read.
+  body back while its API token was revoked, its account deactivated or its permission removed, and
+  the action still ran once the body arrived. That was open for every API call made with an
+  `Authorization: Bearer` token and for every in-page request with a JSON body from a signed-in
+  browser: the CSRF check, which reads a form's body early, skips the first and does not read the
+  second's JSON. (A browser's form posts were already safe: that check reads them first.) The panel
+  now reads the whole body of a signed-in request before any check, then looks up who is asking
+  again, so the checks see the token, the account and its permissions as they are when the body
+  lands. An upload still streams to a temporary file rather than into memory, and a request that is
+  not signed in is still refused without its body being read.
 - **A delegated log viewer sees the rows about their own servers and hosts, chosen by id, not by
   name.** `/logs` matched a row to a viewer's servers and hosts by the row's target name, and
   names are not unique. The same game installed on two hosts gets the same name by default, so a

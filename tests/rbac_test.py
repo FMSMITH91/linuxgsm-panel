@@ -3366,6 +3366,100 @@ def _check_held_body_forgets_the_grants_memo(hb_uid):
               % _primed)
 
 
+def _check_held_body_refused_by_csrf_unread(hb_uid):
+    """With CSRF on, a session's JSON post with no token is refused before its body is read."""
+    # The body hook runs AFTER the CSRF hook, so a cross-site JSON post that hook refuses is never
+    # read. csrf.protect() parses a form body itself to find its token, so only a non-form body
+    # shows the order: registered ahead of the CSRF hook, the body hook would read this one first.
+    c = client_as(hb_uid)
+    _signed_in = c.get("/account").status_code == 200
+    app.config["WTF_CSRF_ENABLED"] = True
+    try:
+        r, read = _hb_post_tag(c, tag + "_hbnocsrf", lambda: None)
+    finally:
+        app.config["WTF_CSRF_ENABLED"] = False
+    check("held body: with CSRF on, a session's JSON post with no CSRF token is refused unread",
+          _signed_in and r.status_code == 400 and not read and not _hb_tag_made(tag + "_hbnocsrf"),
+          "signed in=%s, read=%s, %d — the body was read before the CSRF check refused it"
+          % (_signed_in, read, r.status_code))
+
+
+def _hb_login_session(hb_uid, sid):
+    """Register a login-session row for the user; return the cookie id a login today carries."""
+    from panel.db.models import UserSession
+    with app.app_context():
+        db.session.add(UserSession(user_id=hb_uid, sid=sid, ip="", user_agent=""))
+        db.session.commit()
+        u = db.session.get(User, hb_uid)
+        u._sid = sid
+        return u.get_id()
+
+
+def _hb_login_state(hb_uid, sid, drop=False, bump_epoch=False):
+    """Revoke the login (drop) or sign out everywhere (bump_epoch), committed from its own app
+    context; return (auth_epoch, whether the login-session row is still there)."""
+    from panel.db.models import UserSession
+    with app.app_context():
+        u = db.session.get(User, hb_uid)
+        if drop:
+            UserSession.query.filter_by(sid=sid).delete()
+        if bump_epoch:
+            u.auth_epoch = (u.auth_epoch or 0) + 1
+        db.session.commit()
+        return u.auth_epoch or 0, UserSession.query.filter_by(sid=sid).count() == 1
+
+
+def _hb_client_for_login(login_id):
+    """A client whose session carries `login_id` exactly as flask-login stores it at login."""
+    c = app.test_client()
+    with c.session_transaction() as s:
+        s["_user_id"] = login_id
+        s["_fresh"] = True
+    return c
+
+
+def _hb_current_login_refusals(hb_uid, sid):
+    """Its device revoked, then everywhere signed out, each while a body is held back."""
+    _ep0 = _hb_login_state(hb_uid, sid + "x")[0]
+    c = _hb_client_for_login(_hb_login_session(hb_uid, sid + "rev"))
+    r, read = _hb_post_tag(c, tag + "_hbmrev",
+                           lambda: _hb_login_state(hb_uid, sid + "rev", drop=True))
+    check("held body: a login whose device is signed out while its body is held back is refused",
+          read and _hb_login_state(hb_uid, sid + "rev")[1] is False
+          and r.status_code == 401 and not _hb_tag_made(tag + "_hbmrev"),
+          "a revoked device's cookie still created a tag (read=%s, %d)" % (read, r.status_code))
+    c = _hb_client_for_login(_hb_login_session(hb_uid, sid + "ep"))
+    r, read = _hb_post_tag(c, tag + "_hbmep",
+                           lambda: _hb_login_state(hb_uid, sid + "ep", bump_epoch=True))
+    check("held body: a login signed out everywhere while its body is held back is refused",
+          read and _hb_login_state(hb_uid, sid + "ep")[0] == _ep0 + 1
+          and r.status_code == 401 and not _hb_tag_made(tag + "_hbmep"),
+          "a cookie from before the epoch bump still created a tag (read=%s, %d)"
+          % (read, r.status_code))
+
+
+def _check_held_body_current_login_cookie(hb_uid):
+    """A login's "<uid>:<epoch>:<sid>" cookie: its device revoked, or signed out everywhere."""
+    # client_as() writes the legacy "<uid>" id, which only _load_legacy_user reads. Every login
+    # today carries "<uid>:<epoch>:<sid>" (User.get_id): a UserSession lookup and an auth_epoch
+    # compare, and nothing above drives those with a body held back.
+    _sid = tag + "_hbsid_"
+    try:
+        c = _hb_client_for_login(_hb_login_session(hb_uid, _sid + "ok"))
+        r, read = _hb_post_tag(c, tag + "_hbmok", lambda: None)
+        check("held body: (control) a current login's cookie whose body arrives late still works",
+              read and r.status_code == 200 and _hb_tag_made(tag + "_hbmok"),
+              "the control failed (read=%s, %d) — the refusals below prove nothing"
+              % (read, r.status_code))
+        _hb_current_login_refusals(hb_uid, _sid)
+    finally:
+        from panel.db.models import UserSession
+        with app.app_context():
+            UserSession.query.filter(UserSession.sid.like(_sid + "%")).delete(
+                synchronize_session=False)
+            db.session.commit()
+
+
 def _check_held_bodies():
     """Every held-body case, then the tags they may have made."""
     hb_uid, hb_gid, tok = _hb_fixture()
@@ -3379,6 +3473,8 @@ def _check_held_bodies():
         _check_held_body_with_csrf_on(hb_uid)
         _check_held_upload(hb_uid, bearer)
         _check_held_body_forgets_the_grants_memo(hb_uid)
+        _check_held_body_refused_by_csrf_unread(hb_uid)
+        _check_held_body_current_login_cookie(hb_uid)
     finally:
         from panel.db.models import ServerTag
         with app.app_context():

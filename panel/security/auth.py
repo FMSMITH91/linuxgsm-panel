@@ -888,7 +888,7 @@ def _user_from_bearer(req):
 # landed the action ran anyway, on the answer given before any of that. csrf.protect() reads a FORM
 # body in before_request, which closed this for a browser's form post by accident; a Bearer request
 # with no cookie skips csrf.protect(), and a JSON body is never read by it at all, because the CSRF
-# token of a fetch rides a header. So every API call and every in-page fetch was open.
+# token of a fetch rides a header. So every API call and every in-page JSON fetch was open.
 #
 # The body of a signed-in request is therefore read HERE, before any check, and the identity the
 # request has loaded is then forgotten, so the first check ahead loads it again — token, active
