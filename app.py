@@ -100,8 +100,8 @@ from flask_login import (current_user)
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.exceptions import HTTPException
 
-from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, client_ip,
-    configure_proxy_trust, get_user_permissions, init_auth, log_action,
+from panel.security.auth import (ALL_PERMISSIONS, accessible_remote_ids, authorize_after_body,
+    client_ip, configure_proxy_trust, get_user_permissions, init_auth, log_action,
     strip_legacy_superadmin_grants)
 from panel.core.config import (
     DATA_DIR, DB_PATH, get_secret_key, load_config, save_config, update_config, is_unreadable,
@@ -1336,6 +1336,13 @@ def create_app():
                 and not any(request.cookies.get(_c) for _c in _auth_cookies)):
             return   # genuinely cookie-less API-token request: CSRF cannot apply
         csrf.protect()   # session/cookie request: full CSRF enforcement (no-op on safe methods)
+
+    # A signed-in request's body is read HERE, before any check authorizes it, and who is asking is
+    # then loaded again — so a token revoked, an account deactivated or a permission removed while a
+    # client held its body back is what the checks ahead see (auth.authorize_after_body). After the
+    # CSRF hook, so a refused cross-site post costs no read; before the password gate below, which
+    # is itself one of those checks.
+    app.before_request(authorize_after_body)
 
     # ── An unhandled exception on a JSON endpoint must answer JSON ───────────────────────────
     # There was no errorhandler anywhere in this project, so an exception in a route came back as

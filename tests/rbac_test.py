@@ -3061,6 +3061,329 @@ def _check_delete_user_ordinary_and_self():
           not _unexpected, "reached: %r" % (_unexpected,))
 
 
+# ── A body held back is authorized when it ARRIVES, not when the headers did ──────────────────────
+# A route's checks ran before its body was read, and the body is read where the view first touches
+# request.form, request.files or get_json(): under eventlet, a socket read the client controls. So
+# a client could send the headers, hold the body, and wait while its token was revoked, its account
+# deactivated or its group's permission removed, and the action then ran on the answer given
+# before. csrf.protect() never covered it: a Bearer request with no cookie skips it, and it does
+# not read a JSON body at all. _HeldBody stands in for that client. Its first read, wherever the
+# panel makes it, commits the change the real request would be waiting through, from its own app
+# context, as an admin's request on another greenlet would.
+import io as _hb_io  # noqa: E402
+import json as _hb_json  # noqa: E402
+import panel.routes.server_files as _hb_sf  # noqa: E402
+
+
+class _HeldBody(_hb_io.BytesIO):
+    """A request body whose first read runs `on_arrival`: the moment a held-back body lands."""
+
+    def __init__(self, data, on_arrival):
+        super().__init__(data)
+        self._on_arrival = on_arrival
+        self.arrived = False
+
+    def _arrive(self):
+        if not self.arrived:
+            self.arrived = True
+            self._on_arrival()
+
+    def read(self, *a):
+        self._arrive()
+        return super().read(*a)
+
+    def read1(self, *a):
+        self._arrive()
+        return super().read1(*a)
+
+    def readinto(self, b):
+        self._arrive()
+        return super().readinto(b)
+
+    def readline(self, *a):
+        self._arrive()
+        return super().readline(*a)
+
+
+def _hb_fixture():
+    """A MANAGE_SERVERS user on the granted host, with an API token: (user id, group id, token)."""
+    with app.app_context():
+        grp = Group(name=tag + "_hb", description="RBAC held body (auto)", is_default=False)
+        grp.set_permissions([auth.VIEW_SERVERS, auth.MANAGE_SERVERS])
+        grp.servers.append(db.session.get(RemoteServer, granted_remote))
+        db.session.add(grp)
+        db.session.flush()
+        u = User(username=tag + "_hb", display_name=tag + "_hb", is_superadmin=False,
+                 is_active=True, password_hash=auth.hash_password(secrets.token_hex(16)))
+        u.groups.append(grp)
+        db.session.add(u)
+        tok = u.generate_api_token()
+        db.session.commit()
+        return u.id, grp.id, tok
+
+
+def _hb_user(uid_, **fields):
+    """Commit `fields` onto the user from its own app context; return its row's auth state."""
+    with app.app_context():
+        u = db.session.get(User, uid_)
+        for k, v in fields.items():
+            setattr(u, k, v)
+        db.session.commit()
+        return {"token": u.api_token, "active": u.is_active, "sa": u.is_superadmin,
+                "must_change": u.must_change_password}
+
+
+def _hb_new_token(uid_):
+    """Mint the user a fresh token (the revoke case clears it) and return the plaintext."""
+    with app.app_context():
+        tok = db.session.get(User, uid_).generate_api_token()
+        db.session.commit()
+        return tok
+
+
+def _hb_perms(gid, perms=None):
+    """Set the group's permissions (if given) from its own app context; return what is stored."""
+    with app.app_context():
+        grp = db.session.get(Group, gid)
+        if perms is not None:
+            grp.set_permissions(perms)
+            db.session.commit()
+        return sorted(grp.get_permissions())
+
+
+def _hb_tag_made(name):
+    from panel.db.models import ServerTag
+    with app.app_context():
+        return ServerTag.query.filter_by(name=name).first() is not None
+
+
+def _hb_post_tag(client, name, on_arrival, headers=None):
+    """POST /api/tags with its JSON body held back until `on_arrival` has run: (response, read?)."""
+    body = _HeldBody(_hb_json.dumps({"name": name}).encode(), on_arrival)
+    r = client.post("/api/tags", input_stream=body, content_type="application/json",
+                    headers=headers or {})
+    return r, body.arrived
+
+
+def _check_held_json_body_with_a_token(hb_uid, tok):
+    """Bearer + JSON: a token revoked, or an account deactivated, while the body is held."""
+    _bearer = {"Authorization": "Bearer %s" % tok}
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbok", lambda: None, _bearer)
+    check("held body: (control) a Bearer JSON request whose body arrives late still works",
+          read and r.status_code == 200 and _hb_tag_made(tag + "_hbok"),
+          "the control failed (read=%s, %d) — the refusals below prove nothing"
+          % (read, r.status_code))
+    # Each refusal also asserts its premise — the body was read, and the change had landed by the
+    # end — so a window that never opened cannot pass as a refusal.
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbrev",
+                           lambda: _hb_user(hb_uid, api_token=None), _bearer)
+    check("held body: a token revoked while its body is held back is refused, and makes nothing",
+          read and _hb_user(hb_uid)["token"] is None
+          and r.status_code == 401 and not _hb_tag_made(tag + "_hbrev"),
+          "a revoked token still created a tag (read=%s, %d)" % (read, r.status_code))
+    _bearer = {"Authorization": "Bearer %s" % _hb_new_token(hb_uid)}
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbdeact",
+                           lambda: _hb_user(hb_uid, is_active=False), _bearer)
+    check("held body: an account deactivated while its body is held back is refused",
+          read and _hb_user(hb_uid)["active"] is False
+          and r.status_code == 401 and not _hb_tag_made(tag + "_hbdeact"),
+          "a deactivated account's token still created a tag (read=%s, %d)" % (read, r.status_code))
+    _hb_user(hb_uid, is_active=True)
+    return _bearer
+
+
+def _check_held_body_not_read_when_signed_out():
+    """Not signed in: nothing can go stale, so a client about to get a 401 is not read."""
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbanon", lambda: None,
+                           {"Authorization": "Bearer lgsm_" + "0" * 48})
+    check("held body: a request that is not signed in is refused WITHOUT its body being read",
+          not read and r.status_code == 401 and not _hb_tag_made(tag + "_hbanon"),
+          "read=%s, %d — an unauthenticated client could make the panel buffer 50 MB per request"
+          % (read, r.status_code))
+
+
+def _check_held_json_body_demoted(hb_uid, hb_gid, bearer):
+    """Bearer + JSON: a group permission, or the superadmin flag, removed mid-body."""
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbdemote",
+                           lambda: _hb_perms(hb_gid, [auth.VIEW_SERVERS]), bearer)
+    check("held body: a permission removed while the body is held back is refused",
+          read and _hb_perms(hb_gid) == [auth.VIEW_SERVERS]
+          and r.status_code == 403 and not _hb_tag_made(tag + "_hbdemote"),
+          "the group lost MANAGE_SERVERS and the tag was created anyway (read=%s, %d)"
+          % (read, r.status_code))
+    # A superadmin demoted mid-body. The flag is not in the token lookup's WHERE, so only a fresh
+    # read of the row can see it change. The group still lacks MANAGE_SERVERS from the case above,
+    # so the flag is the only grant in play.
+    _hb_user(hb_uid, is_superadmin=True)
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbsa",
+                           lambda: _hb_user(hb_uid, is_superadmin=False), bearer)
+    check("held body: a SUPERADMIN demoted while the body is held back is refused",
+          read and _hb_user(hb_uid)["sa"] is False
+          and r.status_code == 403 and not _hb_tag_made(tag + "_hbsa"),
+          "the stale is_superadmin still created a tag (read=%s, %d)" % (read, r.status_code))
+    _hb_perms(hb_gid, [auth.VIEW_SERVERS, auth.MANAGE_SERVERS])
+
+
+def _check_held_body_meets_the_password_gate(hb_uid, bearer):
+    """The password gate is a before_request check too, so the body must be in hand before it."""
+    r, read = _hb_post_tag(app.test_client(), tag + "_hbpw",
+                           lambda: _hb_user(hb_uid, must_change_password=True), bearer)
+    check("held body: an account told to change its password mid-body meets the password gate",
+          read and _hb_user(hb_uid)["must_change"] is True
+          and r.status_code == 403 and r.headers.get("X-Password-Change-Required") == "1"
+          and not _hb_tag_made(tag + "_hbpw"),
+          "the gate ran on the identity loaded before the body (read=%s, %d)"
+          % (read, r.status_code))
+    _hb_user(hb_uid, must_change_password=False)
+
+
+def _check_held_body_row_kept_alive(hb_uid, hb_gid, bearer):
+    """The re-load re-reads the row even when something still holds the one loaded first."""
+    # The superadmin case passes without expire_all() today only because nothing else references the
+    # first-loaded User: the session's identity map is weak, so dropping flask-login's copy frees
+    # the row and the re-load builds a new one. Anything that keeps it alive — a signal receiver, a
+    # log record's args, a traceback — turns that re-load into a REUSE of the stale object, and the
+    # old is_superadmin answers again. A receiver on flask-login's own signal stands in for it.
+    from flask_login.signals import user_loaded_from_request
+    _kept = []
+
+    def _keep(_sender, user=None, **_kw):
+        _kept.append(user)
+
+    _hb_perms(hb_gid, [auth.VIEW_SERVERS])
+    _hb_user(hb_uid, is_superadmin=True)
+    user_loaded_from_request.connect(_keep, weak=False)
+    try:
+        r, read = _hb_post_tag(app.test_client(), tag + "_hbkept",
+                               lambda: _hb_user(hb_uid, is_superadmin=False), bearer)
+    finally:
+        user_loaded_from_request.disconnect(_keep)
+    check("held body: a demoted superadmin is refused even while the first-loaded row is held",
+          read and _kept and _hb_user(hb_uid)["sa"] is False
+          and r.status_code == 403 and not _hb_tag_made(tag + "_hbkept"),
+          "the loaded rows were not expired, so the re-load reused the stale one (read=%s, kept=%d,"
+          " %d)" % (read, len(_kept), r.status_code))
+    _hb_perms(hb_gid, [auth.VIEW_SERVERS, auth.MANAGE_SERVERS])
+
+
+def _check_held_json_body_with_a_cookie(hb_uid):
+    """A signed-in browser's fetch: csrf.protect() does not read a JSON body, so it was open too."""
+    r, read = _hb_post_tag(client_as(hb_uid), tag + "_hbcok", lambda: None)
+    check("held body: (control) a session's JSON request whose body arrives late still works",
+          read and r.status_code == 200 and _hb_tag_made(tag + "_hbcok"),
+          "the control failed (read=%s, %d)" % (read, r.status_code))
+    r, read = _hb_post_tag(client_as(hb_uid), tag + "_hbcdeact",
+                           lambda: _hb_user(hb_uid, is_active=False))
+    check("held body: a SESSION whose account is deactivated mid-body is refused too",
+          read and _hb_user(hb_uid)["active"] is False
+          and r.status_code == 401 and not _hb_tag_made(tag + "_hbcdeact"),
+          "a deactivated account's session still created a tag (read=%s, %d)"
+          % (read, r.status_code))
+    _hb_user(hb_uid, is_active=True)
+
+
+def _check_held_body_with_csrf_on(hb_uid):
+    """With CSRF on, as in production: a fetch and a form post from a session both still work."""
+    # The suite runs with CSRF off, so nothing above drives the order production has: csrf.protect()
+    # parses a FORM body first, and the hook then finds it already read. A fetch's JSON body it does
+    # not read, so there the hook is the first reader.
+    import re as _hb_re
+    c = client_as(hb_uid)
+    _m = _hb_re.search(r'window\.CSRF = "([^"]+)"', c.get("/account").get_data(as_text=True))
+    app.config["WTF_CSRF_ENABLED"] = True
+    try:
+        r_json = c.post("/api/tags", json={"name": tag + "_hbcsrf"},
+                        headers={"X-CSRFToken": _m.group(1) if _m else ""})
+        r_form = c.post("/account/profile", data={"display_name": tag + " csrf form",
+                                                  "csrf_token": _m.group(1) if _m else ""})
+    finally:
+        app.config["WTF_CSRF_ENABLED"] = False
+    with app.app_context():
+        _shown = db.session.get(User, hb_uid).display_name
+    check("held body: with CSRF on, a session's fetch still works (the hook reads its JSON)",
+          _m and r_json.status_code == 200 and _hb_tag_made(tag + "_hbcsrf"),
+          "token found=%s, %d" % (bool(_m), r_json.status_code))
+    check("held body: ...and a form post csrf.protect() has already parsed keeps its fields",
+          _m and r_form.status_code == 302 and _shown == tag + " csrf form",
+          "got %d, display_name=%r" % (r_form.status_code, _shown))
+
+
+def _hb_upload_recorder(seen):
+    """A stand-in for server_files._store_upload that records how the upload reached the view."""
+    from flask import jsonify, request as _rq
+
+    def _store(gs, reldir, f, data, overwrite):
+        seen.append({"raw_body_in_memory": len(getattr(_rq, "_cached_data", None) or b""),
+                     "spooled_to_disk": getattr(f.stream, "_rolled", None), "size": len(data)})
+        return jsonify({"success": True})
+    return _store
+
+
+def _check_held_upload(hb_uid, bearer):
+    """An upload still streams to disk, and one whose token goes mid-body stores nothing."""
+    from werkzeug.datastructures import FileStorage
+    from werkzeug.test import encode_multipart
+    url, seen = "/api/server/%d/upload" % accessible_id, []
+    _saved = _hb_sf._store_upload
+    _hb_sf._store_upload = _hb_upload_recorder(seen)
+    try:
+        r = app.test_client().post(url, headers=bearer, content_type="multipart/form-data", data={
+            "path": "", "file": (_hb_io.BytesIO(b"x" * 600000), "big.cfg")})
+        check("held body: (control) a Bearer multipart upload still works",
+              r.status_code == 200 and len(seen) == 1 and seen[0]["size"] == 600000,
+              "got %d, %r" % (r.status_code, seen))
+        check("held body: ...and still STREAMS: the file part is spooled to disk, and the raw "
+              "body is never held in memory",
+              seen[:1] and seen[0]["spooled_to_disk"] is True
+              and seen[0]["raw_body_in_memory"] == 0, repr(seen))
+        _bd, _mp = encode_multipart({"path": "", "file": FileStorage(
+            _hb_io.BytesIO(b"echo held\n"), filename="held.cfg")})
+        _held = _HeldBody(_mp, lambda: _hb_user(hb_uid, api_token=None))
+        r = app.test_client().post(url, headers=bearer, input_stream=_held,
+                                   content_type="multipart/form-data; boundary=%s" % _bd)
+        check("held body: an upload whose token is revoked mid-body is refused, and stores nothing",
+              _held.arrived and _hb_user(hb_uid)["token"] is None
+              and r.status_code == 401 and len(seen) == 1,
+              "the upload was stored after its token was revoked (read=%s, %d, %r)"
+              % (_held.arrived, r.status_code, seen))
+    finally:
+        _hb_sf._store_upload = _saved
+
+
+def _check_held_body_forgets_the_grants_memo(hb_uid):
+    """Forgetting the identity drops _groups_with_grants' per-request memo, under its real name."""
+    with app.test_request_context("/"):
+        from flask import g as _hb_g
+        auth._groups_with_grants(db.session.get(User, hb_uid))
+        _primed = "_groups_with_grants_cache" in _hb_g
+        auth._heldbody_forget_identity()
+        check("held body: re-loading the identity also drops the per-request grants memo",
+              _primed and "_groups_with_grants_cache" not in _hb_g,
+              "primed=%s — a stale memo would answer the checks ahead with the old groups"
+              % _primed)
+
+
+def _check_held_bodies():
+    """Every held-body case, then the tags they may have made."""
+    hb_uid, hb_gid, tok = _hb_fixture()
+    try:
+        bearer = _check_held_json_body_with_a_token(hb_uid, tok)
+        _check_held_body_not_read_when_signed_out()
+        _check_held_json_body_demoted(hb_uid, hb_gid, bearer)
+        _check_held_body_meets_the_password_gate(hb_uid, bearer)
+        _check_held_body_row_kept_alive(hb_uid, hb_gid, bearer)
+        _check_held_json_body_with_a_cookie(hb_uid)
+        _check_held_body_with_csrf_on(hb_uid)
+        _check_held_upload(hb_uid, bearer)
+        _check_held_body_forgets_the_grants_memo(hb_uid)
+    finally:
+        from panel.db.models import ServerTag
+        with app.app_context():
+            for _t in ServerTag.query.filter(ServerTag.name.like(tag + "_hb%")).all():
+                db.session.delete(_t)
+            db.session.commit()
+
+
 def _check_superadmin_full_access():
     """A superadmin still has full access."""
     global code, p
@@ -3112,6 +3435,7 @@ try:
     _check_delete_user_offers_only_allowed()
     _check_users_page_reach_and_sa_delete()
     _check_delete_user_ordinary_and_self()
+    _check_held_bodies()
     _check_superadmin_full_access()
 finally:
     for _m, _n, _f in _traps_saved:
