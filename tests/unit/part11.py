@@ -1171,8 +1171,11 @@ try:
     _P8_MISSING = ("\x1b[1;33mWarning!\x1b[0m Missing dependencies: \x1b[31mlibstdc++5:i386 "
                    "postfix openssh-server- openjdk-25-jre steamcmd\x1b[0m\n"
                    "\x1b[1;36mInformation!\x1b[0m Run: 'sudo apt install ...'\n")
+    _p8_ld_fetch = _p8_ld._fetch
     try:
         _p8_ld._mem.clear()
+        _p8_ld._attempted.clear()
+        _p8_ld._fetch = lambda name: None      # a refusal now refreshes master: no network here
         _p8_ld._text = lambda name, allow_fetch=True: _P8_CSV if name == "ubuntu-24.04.csv" else None
         _H.host_os_slug = lambda s: "ubuntu-24.04"
         _p8_missing = _H.parse_missing_deps(_P8_MISSING)
@@ -1200,7 +1203,197 @@ try:
               "libstdc++5:i386" in _p8_apt and "postfix" not in _p8_apt, repr(_p8_apt))
     finally:
         _p8_ld._text = _p8_ld_text
+        _p8_ld._fetch = _p8_ld_fetch
         _p8_ld._mem.clear()
+        _p8_ld._attempted.clear()
+        _H.host_os_slug = _h_saved["host_os_slug"]
+
+    # ── ...and at the release the game account runs, or on master now: never the account's copy ──
+    # The panel's copy is master's, refreshed weekly; the account's LinuxGSM asks from the list AT
+    # ITS OWN RELEASE (core_dl.sh fetches data files from the `version=` tag). On the test host
+    # mcserver and fctrserver run v26.1.0, whose list names openjdk-21-jre and dotnet-runtime-8.0
+    # where master names -25- and 10.0, and a retry was refused the package LinuxGSM needed. The
+    # account's own ~/lgsm/data copy is game-writable, so it is never read; the account chooses
+    # only WHICH upstream release, through a tag that must be exactly vN.N.N. Every fetch stubbed.
+    import tempfile as _p8_tempfile  # noqa: E402
+    _p8_ld_saved = {n: getattr(_p8_ld, n)
+                    for n in ("_text", "_fetch", "_fetch_release", "_CACHE_DIR")}
+    _p8_urlopen_saved = _p8_ld.urllib.request.urlopen
+    _p8_urls = []
+    # The real rows: v26.1.0's lgsm/data/ubuntu-24.04.csv against master's (v26.2.0) for pmc and vints.
+    _P8_MASTER = _P8_CSV + "pmc,openjdk-25-jre\nvints,dotnet-runtime-10.0\n"
+    _P8_V2610 = _P8_CSV + "pmc,openjdk-21-jre\nvints,dotnet-runtime-8.0\n"
+    _p8_rel_calls, _p8_master_calls = [], []
+    _p8_rel_lists = {"v26.1.0": _P8_V2610}
+    _p8_master_now = [None]
+
+    def _p8_reset():
+        _p8_ld._mem.clear()
+        _p8_ld._releases.clear()
+        _p8_ld._attempted.clear()
+        _p8_rel_calls[:] = []
+        _p8_master_calls[:] = []
+
+    def _p8_raise(exc):
+        raise exc
+
+    class _FakeResp8:
+        """urlopen's answer: a 200 with `body`."""
+
+        def __init__(self, body):
+            self._b, self.status = body.encode(), 200
+
+        def read(self, _n=None):
+            return self._b
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _p8_install(game, extra, version=None, **kw):
+        """Run install_game_dependencies for `game`; the account's script answers `version`."""
+        _w8 = _wire(cmds=[("version=", version if version is not None else ("", "", 0))])
+        _r8 = _H.install_game_dependencies(_p8_srv(), game, extra=extra, **kw)
+        return _r8, [p for _v, a in _w8.verbs_called("apt-install-minimal") for p in a], _w8
+
+    try:
+        _p8_ld._CACHE_DIR = __import__("pathlib").Path(_p8_tempfile.mkdtemp(prefix="unit-p8-lgsm-"))
+        _p8_ld._text = lambda name, allow_fetch=True: _P8_MASTER if name == "ubuntu-24.04.csv" else None
+        _p8_ld._fetch_release = lambda tag, name: (_p8_rel_calls.append((tag, name)),
+                                                   _p8_rel_lists.get(tag))[1]
+        _p8_ld._fetch = lambda name: (_p8_master_calls.append(name), _p8_master_now[0])[1]
+        # Nothing below may reach the network: a request that gets past the stubs is recorded.
+        _p8_ld.urllib.request.urlopen = lambda req, timeout=None: (_p8_urls.append(req.full_url),
+                                                                   _p8_raise(OSError("no network")))
+        _H.host_os_slug = lambda s: "ubuntu-24.04"
+        _P8_ACCT = dict(account="vintsserver", selfname="vintsserver")
+        _P8_V = ('version="v26.1.0"', "", 0)
+
+        _p8_reset()
+        _gd, _p8_apt, _w = _p8_install("vints", "dotnet-runtime-8.0", _P8_V, **_P8_ACCT)
+        check("game deps: a name only the list at the account's OWN release names (v26.1.0's "
+              "dotnet-runtime-8.0; master has 10.0) is installed once that release's list is loaded",
+              _gd[0] is True and "dotnet-runtime-8.0" in _p8_apt
+              and _p8_rel_calls == [("v26.1.0", "ubuntu-24.04.csv")],
+              repr((_gd, _p8_apt, _p8_rel_calls)))
+        _p8_acct_cmds = [c[1] for c in _w.calls if c[0] == "cmd"]
+        check("game deps: ...the release is read from the account's own script, as the account — "
+              "its own package list is never read",
+              len(_p8_acct_cmds) == 1 and _p8_acct_cmds[0].startswith("sudo -u vintsserver ")
+              and "/home/vintsserver/vintsserver" in _p8_acct_cmds[0]
+              and "lgsm/data" not in _p8_acct_cmds[0] and ".csv" not in _p8_acct_cmds[0],
+              repr(_p8_acct_cmds))
+        check("game deps: ...and master is not re-fetched when that release's list answered",
+              _p8_master_calls == [], repr(_p8_master_calls))
+        _gd, _p8_apt, _w = _p8_install("pmc", "openjdk-21-jre", _P8_V,
+                                       account="pmcserver", selfname="pmcserver")
+        check("game deps: another game on the same release reuses that release's list, fetched "
+              "once (openjdk-21-jre for pmc)", _gd[0] is True and "openjdk-21-jre" in _p8_apt
+              and _p8_rel_calls == [("v26.1.0", "ubuntu-24.04.csv")], repr((_gd, _p8_rel_calls)))
+
+        _p8_reset()
+        _gd, _p8_apt, _w = _p8_install("vints", "dotnet-runtime-8.0", ('version="v26.0.9"', "", 0),
+                                       **_P8_ACCT)
+        check("game deps: ...but it is REFUSED when that release's list cannot be fetched",
+              _gd[0] is False and "dotnet-runtime-8.0" not in _p8_apt
+              and "dotnet-runtime-8.0" in _gd[1] and _p8_rel_calls == [("v26.0.9", "ubuntu-24.04.csv")],
+              repr((_gd, _p8_apt, _p8_rel_calls)))
+        _p8_install("vints", "dotnet-runtime-8.0", ('version="v26.0.9"', "", 0), **_P8_ACCT)
+        check("game deps: ...and a release that failed is not asked again within the hour",
+              _p8_rel_calls == [("v26.0.9", "ubuntu-24.04.csv")], repr(_p8_rel_calls))
+        _p8_reset()
+        _gd, _p8_apt, _w = _p8_install("vints", "dotnet-runtime-8.0", **_P8_ACCT)
+        check("game deps: a script whose version cannot be read (an empty answer) looks nothing up "
+              "at any release", _gd[0] is False and _p8_rel_calls == [], repr((_gd, _p8_rel_calls)))
+
+        # The tag is the account's to write, and it becomes a URL path segment.
+        _p8_bad_tags = ('version="master"', 'version="v26.1.0/../../../../x"', 'version="v26.1"',
+                        'version="26.1.0"', 'version="v26.1.0;id"', "version=$(id)",
+                        'version="v\uff12\uff16.1.0"', 'version="v\u0662\u0666.1.0"',
+                        'version="v26.1.0-rc1"', 'version="V26.1.0"', 'version=" v26.1.0"',
+                        'version="v26.1.0 "', 'version="v26.1.0?x=1"', 'version="v1234567.1.0"')
+        _p8_bad_seen = {}
+        for _bt in _p8_bad_tags:
+            _p8_reset()
+            _gd, _p8_apt, _w = _p8_install("vints", "dotnet-runtime-8.0", (_bt, "", 0), **_P8_ACCT)
+            _p8_bad_seen[_bt] = (_gd[0], list(_p8_rel_calls), "dotnet-runtime-8.0" in _p8_apt)
+        check("game deps: a version that is not exactly vN.N.N (a branch, a path, fullwidth or "
+              "Arabic-Indic digits, a suffix, a space) is ignored and fetches nothing",
+              all(v == (False, [], False) for v in _p8_bad_seen.values()),
+              repr({k: v for k, v in _p8_bad_seen.items() if v != (False, [], False)}))
+        check("release tag: only a plain vN.N.N passes, with no trailing newline",
+              [_p8_ld.release_tag(t) for t in ("v26.1.0", "v0.0.1", "v26.1.0\n", "", None, 26)]
+              == ["v26.1.0", "v0.0.1", None, None, None, None])
+        _p8_reset()
+        _p8_ld._fetch_release = _p8_ld_saved["_fetch_release"]     # the real one, network stubbed
+        _p8_bad_direct = [_p8_ld.deps_at_release("ubuntu-24.04", t)
+                          for t in ("v26.1.0\n", "../v26.1.0", "v26.1.0/..", "master")]
+        check("release lists: deps_at_release sends NO request for a tag that is not one",
+              _p8_bad_direct == [{}] * 4 and _p8_urls == [], repr((_p8_bad_direct, _p8_urls)))
+        _P8_V2610_FULL = _P8_V2610 + "".join("g%02d,libg%02d\n" % (i, i) for i in range(25))
+        _p8_ld.urllib.request.urlopen = lambda req, timeout=None: (
+            _p8_urls.append(req.full_url), _FakeResp8(_P8_V2610_FULL))[1]
+        _p8_real_rel = _p8_ld.deps_at_release("ubuntu-24.04", "v26.1.0")
+        check("release lists: fetched from LinuxGSM's own repository at exactly that tag",
+              _p8_urls == ["https://raw.githubusercontent.com/GameServerManagers/LinuxGSM/v26.1.0/"
+                           "lgsm/data/ubuntu-24.04.csv"]
+              and _p8_real_rel.get("vints") == ["dotnet-runtime-8.0"],
+              repr((_p8_urls, _p8_real_rel.get("vints"))))
+        _p8_ld.urllib.request.urlopen = lambda req, timeout=None: (_p8_urls.append(req.full_url),
+                                                                   _p8_raise(OSError("no network")))
+        _p8_ld._fetch_release = lambda tag, name: (_p8_rel_calls.append((tag, name)),
+                                                   _p8_rel_lists.get(tag))[1]
+
+        # evilpkg: in no list LinuxGSM publishes, at the account's release or on master now.
+        _p8_reset()
+        _p8_master_now[0] = _P8_MASTER
+        _gd, _p8_apt, _w = _p8_install("vints", "evilpkg dotnet-runtime-8.0", _P8_V, **_P8_ACCT)
+        check("game deps: a name in NO upstream list (evilpkg) is still refused, after both "
+              "lookups, while the release's own name still installs (positive control)",
+              _gd[0] is False and "evilpkg" not in _p8_apt and "evilpkg" in _gd[1]
+              and "dotnet-runtime-8.0" in _p8_apt and len(_p8_rel_calls) == 1
+              and _p8_master_calls == ["ubuntu-24.04.csv"],
+              repr((_gd, _p8_apt, _p8_rel_calls, _p8_master_calls)))
+        # The refresh on refusal is rate-limited: a name that is simply not LinuxGSM's must not
+        # turn every retry of every install into a request to GitHub.
+        for _i in range(3):
+            _p8_install("vints", "evilpkg", _P8_V, **_P8_ACCT)
+        check("game deps: the refresh on refusal is rate-limited — three more refusals within the "
+              "hour fetch master no more", _p8_master_calls == ["ubuntu-24.04.csv"],
+              repr(_p8_master_calls))
+        for _k8 in list(_p8_ld._attempted):
+            _p8_ld._attempted[_k8] -= _p8_ld._RETRY_SECONDS + 1
+        _p8_install("vints", "evilpkg", _P8_V, **_P8_ACCT)
+        check("game deps: ...and asks again once the hour is up",
+              _p8_master_calls == ["ubuntu-24.04.csv"] * 2, repr(_p8_master_calls))
+
+        # The other direction: LinuxGSM listed a package after the panel's weekly copy was taken.
+        _p8_reset()
+        _p8_master_now[0] = _P8_MASTER.replace("vints,dotnet-runtime-10.0",
+                                               "vints,dotnet-runtime-10.0,libnewer1")
+        _gd, _p8_apt, _w = _p8_install("vints", "libnewer1")
+        check("game deps: a name master lists NOW but the weekly copy does not is installed after "
+              "one refresh — with no account to read a release from",
+              _gd[0] is True and "libnewer1" in _p8_apt and _p8_master_calls == ["ubuntu-24.04.csv"],
+              repr((_gd, _p8_apt, _p8_master_calls)))
+        # A missing file is a failed check, not a crash: a run that stops here reports nothing.
+        _p8_cache_file = _p8_ld._CACHE_DIR / "ubuntu-24.04.csv"
+        _p8_cached = _p8_cache_file.read_text(encoding="utf-8") if _p8_cache_file.exists() else ""
+        check("game deps: ...and the refreshed list replaces the panel's cached copy",
+              "libnewer1" in _p8_cached, _p8_cached[-80:])
+        check("game deps: none of the above reached the network", _p8_urls == [
+            "https://raw.githubusercontent.com/GameServerManagers/LinuxGSM/v26.1.0/lgsm/data/"
+            "ubuntu-24.04.csv"], repr(_p8_urls))
+    finally:
+        __import__("shutil").rmtree(str(_p8_ld._CACHE_DIR), ignore_errors=True)
+        for _k8, _v8 in _p8_ld_saved.items():
+            setattr(_p8_ld, _k8, _v8)
+        _p8_ld.urllib.request.urlopen = _p8_urlopen_saved
+        _p8_ld._mem.clear()
+        _p8_ld._releases.clear()
+        _p8_ld._attempted.clear()
         _H.host_os_slug = _h_saved["host_os_slug"]
 
     # ── OS updates ─────────────────────────────────────────────────────────────────────────────
@@ -2009,7 +2202,16 @@ try:
         _FakeSSH.raise_on_connect = _exc
         eq("ssh test: %s is answered, with no exception text leaking" % type(_exc).__name__,
            _H.ssh_test_connection("203.0.113.10", auth_method="key"), (False, _want))
+        # The client was closed on the SUCCESS path alone, so every refused test login left
+        # paramiko's Transport thread and socket open.
+        check("ssh test: ...and the client that failed with %s is closed" % type(_exc).__name__,
+              _FakeSSH.last.closed is True, repr(_FakeSSH.last.closed))
     _FakeSSH.raise_on_connect = None
+    _FakeSSH.presents = ("ssh-ed25519", "AAAAsomeoneelse")
+    _st = _H.ssh_test_connection("203.0.113.10", auth_method="key", host_key="ssh-ed25519 AAAApin")
+    _FakeSSH.presents = None
+    check("ssh test: a CHANGED host key fails the test and closes the client it refused",
+          _st[0] is False and _FakeSSH.last.closed is True, repr((_st, _FakeSSH.last.closed)))
 
     # Enrolment pins the key its own test login saw: `captured` gets it on SUCCESS only. A key
     # handed back after a failed login would pin a host the panel never got into.

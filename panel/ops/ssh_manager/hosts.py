@@ -898,7 +898,79 @@ def _listed_dependencies(names, per_game):
     return keep, refused
 
 
-def install_game_dependencies(server, game_type=None, extra=""):
+def _listed_extras(server, game_type, names, per_game, account=None, selfname=None):
+    """Split `names` into (keep, refused) like _listed_dependencies, then look again at refused.
+
+    The panel's copy of LinuxGSM's list is master's, fetched weekly, and the game account's
+    LinuxGSM asks from a list that can differ from it either way: an account on an older release
+    reads THAT release's list (measured on the test host: mcserver and fctrserver run v26.1.0, whose
+    list names openjdk-21-jre for pmc/pz/rw/vpmc/wmc and dotnet-runtime-8.0 for vints, where master
+    names -25- and 10.0), and a release newer than the weekly copy lists what that copy has not
+    seen yet. Refusing those broke the install: vints' check_deps greps for its exact runtime.
+
+    The account's own copy (~/lgsm/data/<distro>.csv) is the one list that must NOT be consulted:
+    the account can write it, and this check exists because that account is less trusted than
+    root. So the second look is at LinuxGSM's own repository only (_upstream_names).
+    """
+    keep, refused = _listed_dependencies(names, per_game)
+    if not refused:
+        return keep, refused
+    also = _upstream_names(server, game_type, refused, account, selfname)
+    return keep + [n for n in refused if n in also], [n for n in refused if n not in also]
+
+
+def _names_for_game(table, game_type):
+    """Every name a LinuxGSM package table lists for a game: its 'all', 'steamcmd' and own rows."""
+    return {p for key in ("all", "steamcmd", game_type or "") for p in table.get(key, ())}
+
+
+def _upstream_names(server, game_type, refused, account, selfname):
+    """Collect the set LinuxGSM's repository lists for this game where the panel's copy lags.
+
+    First the list at the release the account's script runs, which is exactly the one its
+    check_deps read (lgsm_data.deps_at_release). Then, only for names still refused, master
+    fetched now rather than up to a week ago (lgsm_data.refresh_deps). Both fetch only here, after
+    a refusal during an install, and both are rate-limited; neither is on any page's path.
+    """
+    from panel.services import lgsm_data
+    slug = host_os_slug(server)
+    names = set()
+    tag = lgsm_release(server, account, selfname)
+    if tag:
+        names |= _names_for_game(lgsm_data.deps_at_release(slug, tag), game_type)
+    if not set(refused) <= names:
+        names |= _names_for_game(lgsm_data.refresh_deps(slug), game_type)
+    return names
+
+
+def lgsm_release(server, account, selfname):
+    """The LinuxGSM release a game account's script runs, as its tag ('v26.1.0'), or None.
+
+    From the `version=` line of the account's own script, /home/<account>/<selfname>: the value
+    its LinuxGSM fetches its modules and package list at (see lgsm_data._RELEASE_BASE). The
+    instance script, not ~/linuxgsm.sh: update-lgsm rewrites the first and leaves the second, and
+    on the test host gmodserver's two said v26.2.0 and v26.1.0, with its list v26.2.0's.
+
+    The account can edit that file, so this chooses only WHICH of LinuxGSM's published releases is
+    read; lgsm_data.release_tag refuses anything that is not a plain tag. None when it cannot be
+    read: an empty answer is a failed read, not a version.
+    """
+    if not (account and selfname):
+        return None
+    script = _core._quote("/home/%s/%s" % (account, selfname))
+    try:
+        out, _err, rc = _core.read_as_game_user(
+            server, account, "grep -m1 -E '^version=' " + script, timeout=10, selfname=selfname)
+    except Exception:
+        _core._log.debug("could not read the account's LinuxGSM version", exc_info=True)
+        return None
+    from panel.services import lgsm_data
+    line = (out or "").strip().splitlines()[:1] if rc == 0 else []
+    value = line[0].partition("=")[2].strip().strip("\"'") if line else ""
+    return lgsm_data.release_tag(value)
+
+
+def install_game_dependencies(server, game_type=None, extra="", account=None, selfname=None):
     """Install the exact LinuxGSM dependencies for a game (from LinuxGSM's list for this host's
     distro — a 22.04 box gets 22.04's packages, not 24.04's),
     plus any extras THAT LIST NAMES, as root. Falls back to the common set if the CSV is missing.
@@ -907,7 +979,10 @@ def install_game_dependencies(server, game_type=None, extra=""):
     falls back to installing each package individually so the critical libs still
     land. `steamcmd` (needed by every Steam game — gmod/cs/tf2/rust/…) is installed
     specially: it's in `multiverse` and its Steam license must be pre-accepted via
-    debconf or apt hangs waiting for interactive input."""
+    debconf or apt hangs waiting for interactive input.
+
+    `account` and `selfname` name the game account and its LinuxGSM script, for a retry: the
+    release that script runs is where a name the panel's own copy refuses is looked up again."""
     if game_type:
         per_game, needs_steamcmd = deps_for_game(game_type, host_os_slug(server))
     else:
@@ -919,11 +994,14 @@ def install_game_dependencies(server, game_type=None, extra=""):
     # listening, anything in the host's repositories. LinuxGSM's check_deps only ever reports names
     # from its package list for this game, so a name that list does not have is refused, logged,
     # and said in the result — never installed. The list is loaded above for exactly this game on
-    # exactly this distro; when it cannot be had, the common set is all that passes.
-    extra_pkgs, refused = _listed_dependencies((extra or "").split(), per_game)
+    # exactly this distro; when it cannot be had, the common set is all that passes. A name the
+    # panel's weekly copy refuses is looked up once more in LinuxGSM's repository, at the release
+    # the account runs and on master now — never in the account's own copy (_listed_extras).
+    extra_pkgs, refused = _listed_extras(server, game_type, (extra or "").split(), per_game,
+                                         account, selfname)
     for _name in refused:
         _core._log.warning("dependency list: refusing %r — LinuxGSM reported it missing, but "
-                           "its package list for %s does not name it",
+                           "no LinuxGSM package list the panel could read for %s names it",
                            _name[:60], game_type or "this game")
     refusal = ("Not installed — not in LinuxGSM's package list for this game on this host: %s. "
                % ", ".join(n[:60] for n in refused)) if refused else ""
@@ -3107,23 +3185,14 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
     A pin that exists but cannot be DECRYPTED is refused before anything is sent. `host_key` is
     then an UnreadableSecret, which is "" — and "" is first contact, so the Test button offered the
     stored password to whoever answered and reported success. Callers must pass the row's value
-    itself, not `host_key or ""`, which drops the type."""
+    itself, not `host_key or ""`, which drops the type.
+
+    The client is closed on every way out. It used to be closed on success alone, so each refused
+    test login and each changed host key left paramiko's Transport thread and socket open, as
+    get_connection's refusals did (see _core._open_client)."""
     # Tailscale SSH must use the system ssh client (tailscaled handles auth).
     if auth_method == "tailscale":
-        class _S:
-            pass
-        s = _S()
-        s.host, s.port, s.username = host, port, username
-        s.auth_method, s.linuxgsm_user, s.sudo_enabled = "tailscale", "", False
-        out, err, rc = _core._run_via_ssh_cli(s, "echo ok && whoami", timeout=15, sudo=False)
-        if rc == 0:
-            return True, "Tailscale SSH connection successful"
-        low = (err or "").lower()
-        if "permission denied" in low:
-            return False, "Tailscale SSH denied — check the tailnet ACL allows SSH to this node/user."
-        if "timed out" in low or "timeout" in low:
-            return False, f"Timed out reaching {host} over Tailscale. Is the node online?"
-        return False, f"Tailscale SSH failed: {(err or out or 'unknown')[:150]}"
+        return _ssh_test_tailscale(host, port, username)
 
     from panel.db.models import UnreadableSecret
     if isinstance(host_key, UnreadableSecret):
@@ -3136,43 +3205,78 @@ def ssh_test_connection(host, port=22, username="root", auth_method="key", crede
     policy = _core._PinPolicy(expected=host_key or "", reject_on_change=bool(host_key))
     client.set_missing_host_key_policy(policy)
     try:
-        if auth_method == "password":
-            if not credential:
-                # A password remote with no usable credential must FAIL, not fall through to the
-                # key branch below and authenticate with the panel user's own ~/.ssh/id_rsa — a
-                # different credential, against a host the operator never authorised it for.
-                # decrypt_secret() returns "" both for "nothing stored" and for "stored but could
-                # not be decrypted" (a restored backup with a mismatched cred_key, a corrupt row),
-                # so this is also the only place that failure becomes visible.
-                return False, ("No usable SSH password is stored for this host. If the panel was "
-                               "restored from a backup, its credential key may not match.")
-            client.connect(
-                host, port=port, username=username,
-                password=credential, timeout=10,
-                allow_agent=False, look_for_keys=False,
-            )
-        else:
-            key_path = credential or os.path.expanduser("~/.ssh/id_rsa")
-            client.connect(
-                host, port=port, username=username,
-                key_filename=key_path, timeout=10,
-            )
-        client.close()
-        if captured is not None and policy.captured:
-            captured.append(policy.captured)
-        return True, "Connection successful"
-    except paramiko.AuthenticationException:
-        return False, "SSH authentication failed. Check your credentials."
-    except socket.timeout:
-        return False, f"Connection to {host}:{port} timed out. Is the host reachable?"
-    except socket.gaierror:
-        return False, f"Cannot resolve hostname: {host}"
-    except Exception:
-        # Don't surface the raw exception text to the browser — it can carry internal detail
-        # (key paths, host internals). Log the full trace server-side (no user-supplied host/port
-        # in the message — exc_info already carries the detail), show a generic message.
-        _core._log.warning("ssh_test_connection failed", exc_info=True)
-        return False, "Connection failed. Check the host, port, credentials, and that SSH is reachable."
+        refused = _ssh_test_login(client, host, port, username, auth_method, credential)
+    except Exception as e:
+        return False, _ssh_test_failure(e, host, port)
+    finally:
+        _core._close_quietly(client)
+    if refused:
+        return False, refused
+    if captured is not None and policy.captured:
+        captured.append(policy.captured)
+    return True, "Connection successful"
+
+
+def _ssh_test_tailscale(host, port, username):
+    """Run ssh_test_connection over Tailscale SSH, with the system ssh client, unprivileged."""
+    class _S:
+        pass
+    s = _S()
+    s.host, s.port, s.username = host, port, username
+    s.auth_method, s.linuxgsm_user, s.sudo_enabled = "tailscale", "", False
+    out, err, rc = _core._run_via_ssh_cli(s, "echo ok && whoami", timeout=15, sudo=False)
+    if rc == 0:
+        return True, "Tailscale SSH connection successful"
+    low = (err or "").lower()
+    if "permission denied" in low:
+        return False, "Tailscale SSH denied — check the tailnet ACL allows SSH to this node/user."
+    if "timed out" in low or "timeout" in low:
+        return False, f"Timed out reaching {host} over Tailscale. Is the node online?"
+    return False, f"Tailscale SSH failed: {(err or out or 'unknown')[:150]}"
+
+
+def _ssh_test_login(client, host, port, username, auth_method, credential):
+    """Log `client` in for ssh_test_connection. None when it connected, else why it was not tried.
+
+    Raises what paramiko raises; the caller turns that into a message and closes the client.
+    """
+    if auth_method == "password":
+        if not credential:
+            # A password remote with no usable credential must FAIL, not fall through to the
+            # key branch below and authenticate with the panel user's own ~/.ssh/id_rsa — a
+            # different credential, against a host the operator never authorised it for.
+            # decrypt_secret() returns "" both for "nothing stored" and for "stored but could
+            # not be decrypted" (a restored backup with a mismatched cred_key, a corrupt row),
+            # so this is also the only place that failure becomes visible.
+            return ("No usable SSH password is stored for this host. If the panel was "
+                    "restored from a backup, its credential key may not match.")
+        client.connect(
+            host, port=port, username=username,
+            password=credential, timeout=10,
+            allow_agent=False, look_for_keys=False,
+        )
+    else:
+        key_path = credential or os.path.expanduser("~/.ssh/id_rsa")
+        client.connect(
+            host, port=port, username=username,
+            key_filename=key_path, timeout=10,
+        )
+    return None
+
+
+def _ssh_test_failure(exc, host, port):
+    """The message ssh_test_connection shows for a connect that raised `exc`."""
+    if isinstance(exc, paramiko.AuthenticationException):
+        return "SSH authentication failed. Check your credentials."
+    if isinstance(exc, socket.timeout):
+        return f"Connection to {host}:{port} timed out. Is the host reachable?"
+    if isinstance(exc, socket.gaierror):
+        return f"Cannot resolve hostname: {host}"
+    # Don't surface the raw exception text to the browser — it can carry internal detail
+    # (key paths, host internals). Log the full trace server-side (no user-supplied host/port
+    # in the message — exc_info already carries the detail), show a generic message.
+    _core._log.warning("ssh_test_connection failed", exc_info=exc)
+    return "Connection failed. Check the host, port, credentials, and that SSH is reachable."
 
 
 # ── Ubuntu Pro (ubuntu-advantage-tools / `pro`) ────────────────────────────

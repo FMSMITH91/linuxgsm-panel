@@ -2276,8 +2276,10 @@ try:
     _p9_patch(_p9_sm, "_invalidate_port_scan", lambda rid: None)
     _p9_patch(_p9_sm, "host_os_slug", _raise_conn)
     _p9_patch(_p9_ms, "install_game_dependencies",
-              lambda remote, gt, extra=None: (_ms_log.append("deps:%s" % (extra or "")),
-                                              _ms_next("deps"))[1])
+              lambda remote, gt, extra=None, account=None, selfname=None: (
+                  _ms_log.append("deps:%s" % (extra or "")),
+                  account is not None and _ms_log.append("deps-for:%s/%s" % (account, selfname)),
+                  _ms_next("deps"))[2])
     _p9_patch(_p9_ms, "parse_missing_deps", lambda out: _ms_next("missing"))
     _p9_patch(_p9_ms, "classify_install_failure", lambda out: _ms_next("classify"))
     _p9_patch(_p9_ms, "_looks_installed", lambda app, r, s, l: _ms_next("looks"))
@@ -2418,6 +2420,13 @@ try:
     check("install flow A: missing packages reported by LinuxGSM are installed and the download re-run",
           "deps:lib32gcc-s1" in _ms_log and "deps:libsdl2" in _ms_log
           and _ms_log.count("auto:1800") == 4, repr(_ms_log))
+    # The retry names the account and its script: a name the panel's weekly copy of LinuxGSM's
+    # list refuses is looked up again at the release THAT script runs, which is the list its
+    # check_deps read. Without them the lookup cannot happen and the refusal stands.
+    check("install flow A: each retry names the game account and its LinuxGSM script",
+          _ms_log.count("deps-for:p9gmod/gmodserver") == 2
+          and all(x == "deps-for:p9gmod/gmodserver" for x in _ms_log if x.startswith("deps-for:")),
+          repr([x for x in _ms_log if x.startswith("deps")]))
     check("install flow A: 'Invalid platform' primes with the Windows depot, then UNSETS the key "
           "(tried twice) whatever happened",
           "cfg:steamcmdforcewindows=yes" in _ms_log and "auto:2700" in _ms_log

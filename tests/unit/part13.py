@@ -2936,6 +2936,7 @@ try:
           _sm_core.get_connection(_LOCAL10) is None, "")
     _pw_srv10 = _srv10()
     _c1_10 = _gc10(_pw_srv10, {"key": ("ssh-ed25519", "AAAAfirst")})
+    _c1_closed10 = getattr(_c1_10, "closed", None)    # read now: a later check closes it on purpose
     _key1_10 = _sm_core._conn_key("admin", "192.0.2.30", 2200)
     check("core connect: a password host connects with the password only (no agent, no keys) "
           "and the configured timeout",
@@ -2949,6 +2950,8 @@ try:
           "kept warm", _sm_core._connections.get(_key1_10) is _c1_10
           and _sm_core._remote_conn_keys.get(901) == _key1_10 and _c1_10.transport.keepalive == 30,
           repr(sorted(_sm_core._connections)))
+    check("core connect: a connection that succeeds is handed out open — the close on failure "
+          "does not reach it (positive control)", _c1_closed10 == 0, repr(_c1_closed10))
     _c1b_10 = _gc10(_pw_srv10)
     check("core connect: a live pooled client is reused (and poked), not reopened",
           _c1b_10 is _c1_10 and _c1_10.transport.ignores == 1 and len(_FakeSSH10.made) == 1,
@@ -3012,22 +3015,55 @@ try:
           and "cannot be decrypted" in _unr10[1]
           and all(m.host is None for m in _FakeSSH10.made[_made_before10:]),
           repr(_unr10)[:200])
+    _made_mitm10 = len(_FakeSSH10.made)
     _mitm10 = _gc10(_srv10(id=905, host="192.0.2.35", auth_method="key", host_key="ssh-ed25519 PINNED"),
                     {"key": ("ssh-ed25519", "SOMEONE-ELSE")})
+    _mitm_clients10 = _FakeSSH10.made[_made_mitm10:]
     check("core connect: a CHANGED host key on a direct host is refused, unwrapped",
           isinstance(_mitm10, tuple) and _mitm10[1].startswith("HostKeyMismatch(")
           and "CHANGED" in _mitm10[1], repr(_mitm10)[:200])
+    # paramiko's connect() has started a Transport thread and opened the socket by the time the
+    # host-key policy raises, and closes neither. On a test host three refused connects left three
+    # threads and three ESTABLISHED sockets 30 s later; a man-in-the-middle can hold them for good.
+    check("core connect: ...and the client it refused is CLOSED, not left holding a thread and a "
+          "socket", [c.closed for c in _mitm_clients10] == [1]
+          and _mitm_clients10[0] not in _sm_core._connections.values(),
+          repr([c.closed for c in _mitm_clients10]))
     _same10 = _gc10(_srv10(id=906, host="192.0.2.36", auth_method="key", host_key="ssh-ed25519 PINNED"),
                     {"key": ("ssh-ed25519", "PINNED")}, pooled=False)
     check("core connect: the pinned key presented again is accepted",
           isinstance(_same10, _FakeSSH10), repr(_same10))
 
-    _errs10 = {}
+    _errs10, _err_closed10 = {}, {}
     for _label10, _exc10 in (("auth", _paramiko10.AuthenticationException("no")),
                              ("timeout", socket.timeout()),
                              ("dns", socket.gaierror(-2, "Name or service not known")),
                              ("other", RuntimeError("banner garbled"))):
+        _made_err10 = len(_FakeSSH10.made)
         _errs10[_label10] = _gc10(_srv10(id=907, host="192.0.2.37"), {"raise": _exc10}, force_new=True)
+        _err_closed10[_label10] = [c.closed for c in _FakeSSH10.made[_made_err10:]]
+    check("core connect: a failed login, a timeout, an unresolvable name and any other connect "
+          "error each CLOSE the client they failed on",
+          _err_closed10 == {"auth": [1], "timeout": [1], "dns": [1], "other": [1]},
+          repr(_err_closed10))
+
+    # Not only Exception: an eventlet Timeout or a killed green thread is a BaseException, reaches
+    # the caller unwrapped, and leaves the same thread and socket behind if nothing closes them.
+    class _Killed10(BaseException):
+        pass
+
+    _made_kill10 = len(_FakeSSH10.made)
+    _FakeSSH10.script = {"raise": _Killed10("green thread killed mid-connect")}
+    try:
+        _sm_core.get_connection(_srv10(id=909, host="192.0.2.39"), force_new=True)
+        _kill10 = "returned"
+    except _Killed10 as _e10:
+        _kill10 = "raised " + str(_e10)
+    _FakeSSH10.script = {}
+    check("core connect: a connect killed by a BaseException closes the client and re-raises it "
+          "as it came", _kill10 == "raised green thread killed mid-connect"
+          and [c.closed for c in _FakeSSH10.made[_made_kill10:]] == [1],
+          repr((_kill10, [c.closed for c in _FakeSSH10.made[_made_kill10:]])))
     check("core connect: each failure becomes a ConnectionError that says which it was",
           all(isinstance(v, tuple) and v[1].startswith("ConnectionError(") for v in _errs10.values())
           and "authentication failed" in _errs10["auth"][1]

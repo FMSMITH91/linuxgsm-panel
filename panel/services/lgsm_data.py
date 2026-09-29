@@ -17,7 +17,9 @@ a network-backed *config* would not be.
 """
 import csv
 import io
+import logging
 import os
+import re
 import threading
 import time
 import urllib.request
@@ -33,7 +35,27 @@ DEPS = "ubuntu-24.04.csv"
 # /etc/os-release — which is attacker-influenceable if that host is compromised. So it has to match
 # LinuxGSM's own filename shape exactly and nothing else: no slashes, no dots beyond a version, no
 # traversal, nothing that could address a different path on the server.
-_OS_SLUG_RE = __import__("re").compile(r"^[a-z][a-z0-9]{1,15}-[0-9]{1,2}(?:\.[0-9]{1,2})?\Z")
+_OS_SLUG_RE = re.compile(r"^[a-z][a-z0-9]{1,15}-[0-9]{1,2}(?:\.[0-9]{1,2})?\Z")
+
+# The same package lists AT A RELEASE. LinuxGSM, on its default branch, fetches every module and
+# data file from the tag its own script's `version=` names, not from master (fn_fetch_file_github
+# in lgsm/modules/core_dl.sh: "to prevent version mixing"); only update-lgsm reads master. So a
+# game account on an older release asks for the packages THAT release lists, and they can differ
+# from master's: v26.1.0 lists openjdk-21-jre for five Java games where master has -25-.
+_RELEASE_BASE = "https://raw.githubusercontent.com/GameServerManagers/LinuxGSM/%s/lgsm/data/"
+# A release tag and nothing else ('v26.1.0'). It is read from a game account's own script, which
+# that account can edit, and becomes a URL path segment; so it is LinuxGSM's tag shape exactly.
+# ASCII digits, because \d also matches other scripts' digits; fullmatch, because `$` would let a
+# trailing newline through.
+_RELEASE_TAG_RE = re.compile(r"v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
+_log = logging.getLogger(__name__)
+
+
+def release_tag(value):
+    """`value` when it is a LinuxGSM release tag ('v26.1.0'), else None."""
+    if isinstance(value, str) and _RELEASE_TAG_RE.fullmatch(value):
+        return value
+    return None
 
 
 def deps_name(os_slug):
@@ -79,23 +101,40 @@ def _looks_like(name, text):
     return head.startswith("all,") and text.count("\n") > 20
 
 
-def _fetch(name):
-    """Download one file and return its text, or None. Never raises."""
-    req = urllib.request.Request(_BASE + name, headers={"User-Agent": "linuxgsm-panel"})
+def _download(url, name):
+    """GET one of LinuxGSM's files: (text, None), or (None, why). Never raises."""
+    req = urllib.request.Request(url, headers={"User-Agent": "linuxgsm-panel"})
     try:
-        # _BASE is a fixed https://raw.githubusercontent.com URL; only a LinuxGSM filename is appended.
+        # `url` is _BASE or _RELEASE_BASE, fixed https://raw.githubusercontent.com URLs, with a
+        # validated release tag and a LinuxGSM filename filled in.
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:  # nosec B310 - fixed https host
             if getattr(resp, "status", 200) != 200:
-                _last_error[name] = "HTTP %s" % resp.status
-                return None
+                return None, "HTTP %s" % resp.status
             text = resp.read(4 * 1024 * 1024).decode("utf-8", errors="replace")
     except Exception as e:
-        _last_error[name] = e.__class__.__name__
-        return None
+        return None, e.__class__.__name__
     if not _looks_like(name, text):
-        _last_error[name] = "the response was not %s" % name
-        return None
+        return None, "the response was not %s" % name
+    return text, None
+
+
+def _fetch(name):
+    """Download one file from master and return its text, or None. Never raises."""
+    text, why = _download(_BASE + name, name)
+    if why:
+        _last_error[name] = why
+    return text
+
+
+def _fetch_release(tag, name):
+    """Download one data file at release `tag` (validated by the caller), or None. Never raises.
+
+    Its failures are logged, not recorded for status(), which reports the panel's own copies.
+    """
+    text, why = _download(_RELEASE_BASE % tag + name, name)
+    if why:
+        _log.warning("LinuxGSM %s at %s could not be fetched: %s", name, tag, why)
     return text
 
 
@@ -223,15 +262,90 @@ def deps(os_slug=None, allow_fetch=True):
         if text is None and name != DEPS:
             # this distro is not one LinuxGSM ships a list for
             text, source = _text(DEPS, allow_fetch), DEPS
-        out = {}
-        for line in (text or "").splitlines():
-            parts = [p.strip() for p in line.strip().split(",") if p.strip()]
-            if parts:
-                out[parts[0]] = parts[1:]
-        return out, source
+        return _parse_deps(text), source
 
     with _lock:
         return _memoised("deps:" + name, _load, allow_fetch)
+
+
+def _parse_deps(text):
+    """A package-list CSV as {key: [packages]}; the first field of each line is its key."""
+    out = {}
+    for line in (text or "").splitlines():
+        parts = [p.strip() for p in line.strip().split(",") if p.strip()]
+        if parts:
+            out[parts[0]] = parts[1:]
+    return out
+
+
+# The two lookups below run only when an install has just refused a package name, and a refusal
+# can repeat on every retry of every install. So each goes to the network at most once per
+# _RETRY_SECONDS for the same file, whatever asks: key -> when it last went.
+_attempted = {}
+
+
+def _may_attempt(key):
+    """True, and the attempt recorded, unless `key` went to the network within _RETRY_SECONDS."""
+    now = time.time()
+    last = _attempted.get(key)
+    if last is not None and 0 <= now - last < _RETRY_SECONDS:
+        return False
+    _attempted[key] = now
+    return True
+
+
+def refresh_deps(os_slug=None):
+    """Fetch this distro's package list from master NOW, past the weekly cache; {} if not fetched.
+
+    For a name the cached copy refuses: LinuxGSM may have listed it since that copy was taken, up to
+    a week ago. A fetched copy replaces the cache, so deps() serves it from then on. Rate-limited
+    (see _may_attempt): a name that is simply not LinuxGSM's costs one fetch an hour, not one per
+    retry, and a throttled or failed refresh answers {} so the caller refuses as before.
+    """
+    name = deps_name(os_slug)
+    with _lock:
+        if not _may_attempt("master/" + name):
+            return {}
+    # Outside the lock: a page reading the game list must not wait on an install's fetch.
+    fresh = _fetch(name)
+    if fresh is None:
+        return {}
+    with _lock:
+        try:
+            _write_cache(name, fresh)
+            _last_error.pop(name, None)
+            _mem.pop("deps:" + name, None)
+        except OSError as e:
+            _last_error[name] = "could not write the cache (%s)" % e.__class__.__name__
+    return _parse_deps(fresh)
+
+
+# (tag, file) -> parsed list. A release's files do not change, so a list fetched once is kept for
+# the life of the process; a failed fetch is retried under _may_attempt's limit.
+_releases = {}
+
+
+def deps_at_release(os_slug, tag):
+    """Read the package list LinuxGSM published for a distro AT RELEASE `tag`; {} if not had.
+
+    `tag` comes from a game account's own script (hosts.lgsm_release), so that account chooses
+    which of LinuxGSM's releases is read, never what the list says: the text comes from LinuxGSM's
+    repository, and anything that is not a plain release tag fetches nothing.
+    """
+    tag = release_tag(tag)
+    if tag is None:
+        return {}
+    name = deps_name(os_slug)
+    with _lock:
+        hit = _releases.get((tag, name))
+        if hit is not None or not _may_attempt(tag + "/" + name):
+            return hit or {}
+    text = _fetch_release(tag, name)        # outside the lock, as in refresh_deps
+    if text is None:
+        return {}
+    with _lock:
+        hit = _releases[(tag, name)] = _parse_deps(text)
+    return hit
 
 
 def status():
