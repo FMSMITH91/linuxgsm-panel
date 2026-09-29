@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from panel.core.validation import ip_address_or_none
 from panel.security import privileged as _priv
 from panel.ops import system_ops as _so
 
@@ -713,9 +714,8 @@ def is_tailscale_ip(host):
         return False
     if _TS_DNS_RE.search(host):
         return True
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
+    addr = ip_address_or_none(host)
+    if addr is None:
         return False
     return any(addr in n for n in _TS_NETS)   # a v4 network holds no v6 address, and back
 

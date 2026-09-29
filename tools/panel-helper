@@ -552,13 +552,21 @@ def v_portspec_bare(s):
 
 
 def v_cidr(s):
-    """An IPv4/IPv6 address or network. Parsed, not pattern-matched, so 'any' and
-    '1.2.3.4 || rm -rf /' are both rejected for the same reason: they are not addresses."""
-    try:
-        ipaddress.ip_network(s, strict=False)
-    except ValueError:
-        raise ValueError("not an IP address or network")
-    return s
+    """An IPv4/IPv6 address or network, returned as ipaddress SPELLS it — never as given.
+
+    Parsed, not pattern-matched, so 'any' and '1.2.3.4 || rm -rf /' are both rejected for the same
+    reason: they are not addresses. But ipaddress accepts an IPv6 zone id and keeps it VERBATIM, so
+    'fe80::1%x || rm -rf /' parsed and came back unchanged, spaces, `$(...)` and newlines included,
+    and reached fail2ban-client and ufw as their argument (fail2ban, by its own source, logs such an
+    unbanip value verbatim to its root-owned log). A zone is refused before parsing, and what is
+    returned is the parsed value's text. A prefix keeps its host bits; see
+    privileged.canonical_cidr, which mirrors this."""
+    if "%" not in s:
+        try:
+            return str(ipaddress.ip_interface(s)) if "/" in s else str(ipaddress.ip_address(s))
+        except ValueError:
+            pass
+    raise ValueError("not an IP address or network")
 
 
 def v_comment(s):
@@ -584,18 +592,20 @@ def v_yesno(s):
 
 
 def v_routes(s):
-    """A comma-separated CIDR list to advertise, or "-" for none. Parsed, not pattern-matched."""
+    """A comma-separated CIDR list to advertise, or "-" for none. Parsed, not pattern-matched:
+    each route is v_cidr's, zone id refused, and returned in v_cidr's spelling."""
     if s == "-":
         return s
     parts = s.split(",")
     if not (1 <= len(parts) <= 16):
         raise ValueError("expected 1..16 routes")
+    routes = []
     for part in parts:
         try:
-            ipaddress.ip_network(part, strict=False)
+            routes.append(v_cidr(part))
         except ValueError:
             raise ValueError("not a route list")
-    return s
+    return ",".join(routes)
 
 
 def v_tags(s):

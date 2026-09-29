@@ -4,6 +4,7 @@ import logging
 import re
 import bcrypt
 from panel.core.clock import utcnow
+from panel.core.validation import ip_address_or_none
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
@@ -1196,12 +1197,14 @@ def _anonymise_ip(ip):
     every old row on every startup.
 
     Anything that will not parse as an IP returns "" rather than being kept. A value that got in
-    without being an address is not something to preserve on the off-chance.
+    without being an address is not something to preserve on the off-chance — an IPv6 zone id
+    included. ipaddress parsed one and kept it, and when the address's low 64 bits were zero the
+    /64 kept it too: '2001:db8::%<text>' came back as '2001:db8::%<text>/64', text and all, and
+    then read as already reduced.
     """
     import ipaddress
-    try:
-        addr = ipaddress.ip_address((ip or "").strip())
-    except ValueError:
+    addr = ip_address_or_none(ip)
+    if addr is None:
         return ""
     prefix = 24 if addr.version == 4 else 64
     return str(ipaddress.ip_network("%s/%d" % (addr, prefix), strict=False))

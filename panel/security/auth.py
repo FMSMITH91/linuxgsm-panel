@@ -5,6 +5,7 @@ import secrets
 import threading
 import time
 from panel.core.clock import utcnow
+from panel.core.validation import canonical_ip, ip_network_or_none, unzoned_ip_address_or_none
 from contextlib import suppress
 from functools import wraps
 from urllib.parse import quote
@@ -900,11 +901,14 @@ def throttle_key(ip):
     smallest block a site or a phone is normally handed, so one attacker holds 2^64 addresses
     and a per-ADDRESS limit gave them that many fresh buckets. An IPv4-mapped IPv6 address is the
     IPv4 address it maps. Anything that is not an address is returned unchanged.
+
+    An IPv6 zone id is dropped: it is text after the address, not part of it. Kept, it survived the
+    /64 whenever the host bits were zero ('2001:db8::%x/64'), so every new zone text was a new
+    bucket — unlimited guessing for anyone who can choose the forwarded address.
     """
     import ipaddress
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
+    addr = unzoned_ip_address_or_none(ip)
+    if addr is None:
         return ip
     if addr.version == 6:
         if addr.ipv4_mapped is not None:
@@ -994,8 +998,12 @@ def _ip_or_none(value):
     A header carrying anything else is not a client address the panel failed to parse; it is a
     client choosing its own bucket. Some proxies bracket an IPv6 literal and may append a port,
     so those are peeled before parsing rather than rejected.
+
+    Parsing is not enough: ipaddress keeps an IPv6 zone id verbatim, so 'fe80::1%x panel login
+    failed from 203.0.113.9' parsed and came back whole — into data/auth.log, where fail2ban then
+    banned 203.0.113.9, into the audit trail and into admin alerts. A zone is refused like any other
+    text that is not an address (panel/core/validation.py).
     """
-    import ipaddress
     text = (value or "").strip()
     if not text:
         return None
@@ -1003,10 +1011,19 @@ def _ip_or_none(value):
         text = text[1:].split("]", 1)[0]
     elif text.count(":") == 1:                     # 203.0.113.9:443 — one colon means IPv4:port
         text = text.split(":", 1)[0]
-    try:
-        return str(ipaddress.ip_address(text))
-    except ValueError:
-        return None
+    return canonical_ip(text)
+
+
+def _peer_or_none(value):
+    """The SOCKET PEER as a bare address string, or None if it is not one.
+
+    Like _ip_or_none, but a zone id is dropped rather than refused: the kernel can report a
+    link-local client with its interface attached (fe80::1%eth0), and that is still one real client
+    to key — refusing it fell back to the raw text. Only for the peer the kernel supplied, never a
+    header.
+    """
+    addr = unzoned_ip_address_or_none(value)
+    return None if addr is None else str(addr)
 
 
 # The kernel's socket tables, by address family. A module constant so a test can point it at a
@@ -1173,8 +1190,10 @@ _ignored_proxy_warned = {}         # (peer, uid) -> when it was last logged; bou
 
 
 def _trusted_proxy_networks(value):
-    """config.json's trusted_proxies as ip_network objects; None means the loopback default."""
-    import ipaddress
+    """config.json's trusted_proxies as ip_network objects; None means the loopback default.
+
+    An entry with a zone id is ignored like any other that is not an address or network.
+    """
     import logging
     if value is None:
         value = _DEFAULT_TRUSTED_PROXIES
@@ -1182,11 +1201,12 @@ def _trusted_proxy_networks(value):
         value = [value]
     nets = []
     for entry in value:
-        try:
-            nets.append(ipaddress.ip_network(str(entry).strip(), strict=False))
-        except ValueError:
+        net = ip_network_or_none(entry)
+        if net is None:
             logging.getLogger("panel.app").warning(
                 "trusted_proxies: %r is not an address or network; ignored", str(entry)[:64])
+        else:
+            nets.append(net)
     return tuple(nets)
 
 
@@ -1226,21 +1246,19 @@ def configure_proxy_trust(app, cfg):
 
 
 def _declared_proxy_trusted(addr, conf):
-    """Under trust_proxy: is the socket peer `addr` (already unmapped) a proxy we were told of?"""
-    import ipaddress
+    """Under trust_proxy: is the socket peer `addr` (already unmapped) a proxy we were told of?
+
+    The peer is judged, and logged, as the address it parses to (a zone dropped, as for any socket
+    peer): never as the raw text, which is what reached the warning lines below.
+    """
     nets = conf.get("_TRUSTED_PROXIES")
     if nets is None:
         nets = _trusted_proxy_networks(None)
-    try:
-        ip = ipaddress.ip_address(addr)
-    except ValueError:
+    ip = unzoned_ip_address_or_none(addr)
+    if ip is None:
         return False
-    # What the warnings below name: the address alone. ipaddress keeps an IPv6 zone ("%eth0")
-    # verbatim, and takes nearly any text there, spaces and newlines included, which a log line
-    # must not carry. Rebuilt from the packed bytes, which hold no zone.
-    shown = str(ipaddress.ip_address(ip.packed))
     if not any(ip in n for n in nets):
-        _note_ignored_proxy(shown)
+        _note_ignored_proxy(str(ip))
         return False
     if not ip.is_loopback:
         return True
@@ -1251,7 +1269,7 @@ def _declared_proxy_trusted(addr, conf):
     uid = _loopback_peer_uid_memo()
     if uid is not None and uid in uids:
         return True
-    _note_ignored_proxy(shown, local_uid=uid if uid is not None else "unknown")
+    _note_ignored_proxy(str(ip), local_uid=uid if uid is not None else "unknown")
     return False
 
 
@@ -1340,7 +1358,7 @@ def client_ip():
         # The SOCKET peer, never remote_addr: under trust_proxy ProxyFix has already rewritten
         # remote_addr from the very X-Forwarded-For just refused, so returning it keyed the spoofed
         # address after all.
-        return _ip_or_none(peer) or peer
+        return _peer_or_none(peer) or peer
     forwarded = _forwarded_client_ip()
     if forwarded:
         return forwarded
@@ -1349,7 +1367,7 @@ def client_ip():
     # client's header through unappended, the "bogus-<n>" the branches above refused came straight
     # back here as the key: a fresh throttle bucket per attempt. An unparseable value falls back to
     # the socket peer that really connected (the proxy), which is an address and one bucket.
-    return _ip_or_none(remote) or _ip_or_none(peer) or remote
+    return _ip_or_none(remote) or _peer_or_none(peer) or remote
 
 
 def _request_came_through_proxy(peer):
