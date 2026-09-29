@@ -1827,7 +1827,7 @@ def _register_uninstall_and_edit(app):
 
             # Close ALL of this server's firewall rules (multi-port games tag every
             # rule with the server name), then also the legacy single-port cleanup.
-            fw_note = _close_game_firewall(remote, gs)
+            fw_note, fw_left = _close_game_firewall(remote, gs)
 
             # Remove LinuxGSM user and home.
             #
@@ -1872,7 +1872,8 @@ def _register_uninstall_and_edit(app):
             _forget_game_server(server_id)
             _notify_servers_changed(app)   # row disappears live on other sessions
             _m = f"Server '{name}' uninstalled.{fw_note}"
-            return _index_reply(_m, True, "success")
+            # A rule left open is not a clean uninstall: shown as a warning, not a green "done".
+            return _index_reply(_m, True, "warning" if fw_left else "success", warn=fw_left)
 
         except Exception:
             _em = _log_and_generic("uninstall failed")
@@ -1926,10 +1927,13 @@ def _register_uninstall_and_edit(app):
         return _form_ok(f"Server '{gs.name}' updated.", "manage_servers")
 
 
-def _index_reply(message, success, category, code=None):
-    """Answer an uninstall: JSON (with `code`, when given) for a fetch, else flash + the dashboard."""
+def _index_reply(message, success, category, code=None, warn=False):
+    """Answer an uninstall: JSON (with `code`, when given) for a fetch, else flash + the dashboard.
+
+    `warn`: it succeeded, but left something the operator should look at (a firewall rule).
+    """
     if _wants_json():
-        body = jsonify({"success": success, "message": message})
+        body = jsonify({"success": success, "message": message, "warn": bool(warn)})
         return (body, code) if code else body
     flash(message, category)
     return redirect(url_for("index"))
@@ -1950,7 +1954,7 @@ def _stop_game_processes(remote, short_name, selfname):
 
 
 def _close_game_firewall(remote, gs):
-    """Close every firewall rule this server holds. -> a note for the success message, or "".
+    """Close every firewall rule this server holds. -> (note for the success message, anything left).
 
     The note names every rule still there that carries the server's name or that the cleanup
     meant to take — one that would not go, a DENY or LIMIT or source-restricted rule it leaves on
@@ -1974,7 +1978,7 @@ def _close_game_firewall(remote, gs):
         left = left + [_sm.UFW_UNREAD_NOTE]
     notes = ([" %d firewall rule(s) removed." % count] if count > 0 else [])
     notes += [" " + n for i, n in enumerate(left) if n not in left[:i]]
-    return "".join(notes)
+    return "".join(notes), bool(left)
 
 
 def _forget_game_server(server_id):

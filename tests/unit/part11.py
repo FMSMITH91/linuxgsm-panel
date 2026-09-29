@@ -1051,12 +1051,29 @@ try:
     _w = _wire()
     eq("game port: an out-of-range port is (0, Invalid port), unsent",
        (_H.remote_ufw_allow_game_port(_p8_srv(), 70000), _w.calls), ((0, "Invalid port"), []))
+    _gp1 = _H.remote_ufw_allow_game_port(_p8_srv(), "27015", "cs2`id`server")
     eq("game port: one bare rule tagged with the server's safe name",
-       (_H.remote_ufw_allow_game_port(_p8_srv(), "27015", "cs2`id`server"), _w.verbs_called()),
-       ((1, "Port 27015: opened (TCP+UDP)"), [("ufw-allow-port", ["27015", "cs2idserver"])]))
+       (_gp1[0], [c for c in _w.verbs_called() if c[0].startswith("ufw-allow")]),
+       (1, [("ufw-allow-port", ["27015", "cs2idserver"])]))
+    check("game port: ...and the answer says it is open", "27015" in _gp1[1] and "opened" in _gp1[1],
+          repr(_gp1))
     _w = _wire()
     _H.remote_ufw_allow_game_port(_p8_srv(), 27015, "$()")
-    eq("game port: a name with nothing safe in it is tagged 'Game'", _w.verbs_called()[-1][1][1], "Game")
+    eq("game port: a name with nothing safe in it is tagged 'Game'",
+       [c for c in _w.verbs_called() if c[0].startswith("ufw-allow")][-1][1][1], "Game")
+    # The single-port route (/api/remote/<id>/game-port/<port>/open) ran its own bare
+    # `ufw allow <port> comment <name>`, which REPLACES a rule differing only in comment or action.
+    _fu1 = _FakeUfw(("27016", "ALLOW", "gameb"), ("3306", "DENY", "operator-db"))
+    _wire(verbs=_fu1.verbs())
+    _gp_b = _H.remote_ufw_allow_game_port(_p8_srv(), 27016, "gamea")
+    _gp_d = _H.remote_ufw_allow_game_port(_p8_srv(), 3306, "gamea")
+    check("game port (one): another server's rule on the port keeps its owner",
+          ("27016", "ALLOW", "gameb") in _fu1.left()
+          and not any(r[0] == "27016" and r[2] == "gamea" for r in _fu1.left()),
+          "left=%r %r" % (_fu1.left(), _gp_b))
+    check("game port (one): ...an operator's DENY stays, and the port is not reported opened",
+          ("3306", "DENY", "operator-db") in _fu1.left() and _gp_d[0] == 0,
+          "left=%r %r" % (_fu1.left(), _gp_d))
     _wire(verbs={"ufw-allow-port": lambda a: ("", "", 1) if a[0] == "27016" else ("", "", 0)})
     eq("game ports: the list is de-duplicated and sorted, and only what OPENED is reported",
        _H.remote_ufw_allow_game_ports(_p8_srv(), [27016, "27015", 27015, None, 0], "cs2"),

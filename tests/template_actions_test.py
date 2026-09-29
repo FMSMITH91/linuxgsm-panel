@@ -4371,6 +4371,17 @@ check(_tip_fn and "Number(o.attempts)" in _tip_fn and "Number(o.bans)" in _tip_f
       "fail2ban top offenders: the attempt and ban counts reach innerHTML only through Number()",
       "raw in the markup: %s" % (_tip_raw or "(could not find the rows builder)"))
 
+
+# An uninstall that left a firewall rule open answers warn=true (manage_servers._index_reply), and
+# the page shows it as a warning. It always toasted green 'success', so "rule still open" read as
+# a clean uninstall.
+_un_fn = _js_code_only(_js_block_after(
+    (ROOT / "static" / "js" / "manage_servers.js").read_text(encoding="utf-8"),
+    "function doUninstall(id, name, btn)"))
+check(_un_fn and "d.warn ? 'warning' : 'success'" in _un_fn,
+      "uninstall: a reply with warn=true is toasted as a warning, not a green success",
+      (_un_fn or "(could not find doUninstall)")[:200])
+
 passed = sum(1 for c, _, _ in results if c is True)
 failed = sum(1 for c, _, _ in results if c is False)
 skipped = [(name, detail) for c, name, detail in results if c is None]

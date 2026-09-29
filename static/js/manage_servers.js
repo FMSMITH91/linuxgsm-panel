@@ -313,7 +313,8 @@ function doUninstall(id, name, btn){
       if (d && d.success){
         removeServerRow(id);
         _svrBaseline = serverIdsOnPage();   // adopt the reduced set so live-sync doesn't force a reload
-        if (window.toast) toast(d.message || 'Uninstalled', 'success');
+        // warn: uninstalled, but something is left for the operator (a firewall rule still open).
+        if (window.toast) toast(d.message || 'Uninstalled', d.warn ? 'warning' : 'success');
       } else {
         btn.disabled = false; btn.innerHTML = orig; setRowDisabled(false);  // nosemgrep
         if (window.toast) toast((d && d.message) || 'Uninstall failed', 'danger');

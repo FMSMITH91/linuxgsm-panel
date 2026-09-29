@@ -331,7 +331,7 @@ try:
     # 745379050 — a deleted server's console, served to and run on the next one
     # ════════════════════════════════════════════════════════════════════════════════════════
     _p9_patch(_ms16, "_stop_game_processes", lambda *a, **k: None)
-    _p9_patch(_ms16, "_close_game_firewall", lambda *a, **k: "")
+    _p9_patch(_ms16, "_close_game_firewall", lambda *a, **k: ("", False))
     _p9_patch(_p9_sm, "run_privileged", lambda *a, **k: ("", "", 0))
     _p9_patch(_p9_bk, "remove_game_schedule", lambda sid: None)
     _SECRET16 = "Logging in user 'secret_steam_acct' to Steam Public...OK"

@@ -943,6 +943,11 @@ try:
                       "in the answer",
                       "27046 DENY, 27047/tcp LIMIT" in _uf_msg and "own port: 22." in _uf_msg,
                       "message=%r" % (_uf_msg,))
+                check("uninstall fwmixed: ...and the answer is a WARNING, not a green 'done'",
+                      (_resp.get_json() or {}).get("warn") is True, repr(_resp.get_json()))
+            else:
+                check("uninstall %s: a clean firewall cleanup is no warning (control)" % _uf_name,
+                      (_resp.get_json() or {}).get("warn") is False, repr(_resp.get_json()))
             with app.app_context():
                 _left = _UGS.query.get(_tid)
                 if _left: db.session.delete(_left); db.session.commit()

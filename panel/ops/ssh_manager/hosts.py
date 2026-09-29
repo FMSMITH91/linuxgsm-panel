@@ -555,9 +555,14 @@ def _game_rule_comment(name, default="Game"):
 
 
 def remote_ufw_allow_game_port(server, port, name="Game"):
-    """Open the game server port for BOTH TCP and UDP in ONE UFW rule, tagging the
-    rule with the game server's name (its LinuxGSM username) so the firewall list
-    shows which server each port belongs to. A bare `ufw allow <port>` covers tcp+udp."""
+    """Open ONE game server's port, tagged with the server's name: (1 when it is open, message).
+
+    Through remote_ufw_allow_game_ports, so it never takes over a rule someone else holds. It ran a
+    bare `ufw allow <port> comment <name>` itself, which REPLACES a rule on that port that differs
+    only in comment or action — another server's allow re-tagged as this one's (and deleted with
+    it at this server's uninstall), an operator's DENY turned into an allow. The list opener was
+    fixed for that; this single-port route was not.
+    """
     # Range-checked HERE, like every sibling in this module. The verb's _portspec raises
     # VerbError, run_privileged does not catch it, and there is no route-level handler — so
     # `POST /api/remote/<id>/game-port/70000/open` came back as a bare HTML 500 that the caller's
@@ -566,10 +571,8 @@ def remote_ufw_allow_game_port(server, port, name="Game"):
         port = _ufw_port_int(port)
     except (TypeError, ValueError):
         return 0, "Invalid port"
-    comment = _game_rule_comment(name)
-    out, err, rc = _core.run_privileged(server, "ufw-allow-port", [str(port), comment], timeout=15)
-    ok = rc == 0
-    return (1 if ok else 0), f"Port {port}: {'opened (TCP+UDP)' if ok else (err or out or 'failed')}"
+    opened, msg = remote_ufw_allow_game_ports(server, [port], name)
+    return (1 if port in opened else 0), f"Port {port}: {msg}"
 
 
 def _is_public_port_rule(g, port, protos=("BOTH",)):
