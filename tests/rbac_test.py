@@ -3666,6 +3666,14 @@ check("redeem_invite refuses an invite whose creator lost their authority",
 # until you follow _run_action, and both whitelist endpoints log inside _whitelist_mutate. A
 # shallow check would accuse all three.
 #
+# And resolved to the function each call REALLY reaches, by tests/audit_callgraph.py. It followed
+# callees by BARE NAME, so a view counted as audited when any function sharing a name with one of
+# its callees logged. `subprocess.run` matched a `run` that logs, which made every route that runs
+# a command pass; the setup wizard's Tailscale routes passed on system_ops._run, named like two
+# workers that log, while writing no row. Now a call counts only when that exact function (through
+# its imports, its module attributes, its own scopes) reaches log_action; one the walk cannot
+# resolve counts as silent, so a route that logs only through it fails here and has to be read.
+#
 # The listed endpoints genuinely have nothing to audit; each says why, so a real gap cannot hide
 # among them.
 _NO_AUDIT_OK = {
@@ -3675,53 +3683,132 @@ _NO_AUDIT_OK = {
     "api_server_upload_check",       # pre-flight check before an upload; changes nothing
     "api_tailscale_check_peer",      # connectivity probe; changes nothing
     "set_language",                  # the viewer's own UI language; usable pre-login
-    "test_remote",                   # SSH reachability probe; changes nothing
+    # SSH reachability probe. It records is_online / last_seen, and pins the key it met on a host
+    # with no pin yet, exactly as that host's next connection from anywhere in the panel would
+    # (_persist_host_key), and none of those write a row either.
+    "test_remote",
     "notifications_test",            # sends one test notification to the configured channel
 }
-_calls, _logs_direct = {}, set()
-for _f in pathlib.Path(_ROOT, "panel").rglob("*.py"):
-    try:
-        _tree = ast.parse(_f.read_text(encoding="utf-8"))
-    except (SyntaxError, OSError):
-        continue
-    _stack = []
+import importlib.util as _aud_iu  # noqa: E402
+# Loaded by path: tests/ is not a package, and a `tests` package some dependency installs would
+# otherwise be the one imported.
+_aud_spec = _aud_iu.spec_from_file_location("audit_callgraph",
+                                            os.path.join(_ROOT, "tests", "audit_callgraph.py"))
+_aud_cg = _aud_iu.module_from_spec(_aud_spec)
+_aud_spec.loader.exec_module(_aud_cg)
 
-    class _V(ast.NodeVisitor):
-        def visit_FunctionDef(self, n):
-            _stack.append(n.name)
-            self.generic_visit(n)
-            _stack.pop()
-        visit_AsyncFunctionDef = visit_FunctionDef   # noqa: N815 - the name ast.NodeVisitor dispatches on
 
-        def visit_Call(self, n):
-            _nm = getattr(n.func, "id", getattr(n.func, "attr", None))
-            if _stack and _nm:
-                if _nm == "log_action":
-                    _logs_direct.add(_stack[-1])
-                else:
-                    _calls.setdefault(_stack[-1], set()).add(_nm)
-            self.generic_visit(n)
-    _V().visit(_tree)
-_logs = set(_logs_direct)
-for _ in range(6):                       # transitive: a view logs if what it calls logs
-    _grew = False
-    for _fn, _callees in _calls.items():
-        if _fn not in _logs and (_callees & _logs):
-            _logs.add(_fn)
-            _grew = True
-    if not _grew:
-        break
-_unaudited, _seen_ep = [], set()
-for _rule in app.url_map.iter_rules():
-    if not (_rule.methods & {"POST", "PUT", "DELETE", "PATCH"}) or _rule.endpoint in _seen_ep:
-        continue
-    _seen_ep.add(_rule.endpoint)
-    if _rule.endpoint not in _logs and _rule.endpoint not in _NO_AUDIT_OK:
-        _unaudited.append("%s (%s)" % (_rule, _rule.endpoint))
+def _aud_views():
+    """{endpoint: view function, unwrapped} for every endpoint that accepts a mutating method."""
+    out = {}
+    for _r in app.url_map.iter_rules():
+        if _r.methods & {"POST", "PUT", "DELETE", "PATCH"} and _r.endpoint not in out:
+            out[_r.endpoint] = (str(_r), inspect.unwrap(app.view_functions[_r.endpoint]))
+    return out
+
+
+def _aud_key(graph, view):
+    """The call-graph key of a view function: its module, __qualname__ and first line."""
+    code = getattr(view, "__code__", None)
+    if code is None:
+        return None
+    return graph.function_key(getattr(view, "__module__", ""), view.__qualname__,
+                              code.co_firstlineno)
+
+
+_aud_graph = _aud_cg.CallGraph.from_tree(_ROOT, sorted(
+    {*pathlib.Path(_ROOT, "panel").rglob("*.py"), *pathlib.Path(_ROOT).glob("*.py")}))
+_aud_eps = _aud_views()
+_unaudited, _aud_indirect = [], []
+for _ep, (_rule_s, _view) in sorted(_aud_eps.items()):
+    _k = _aud_key(_aud_graph, _view)
+    if _k is not None and len(_aud_graph.chain(_k)) > 2:
+        _aud_indirect.append(_ep)
+    if _ep not in _NO_AUDIT_OK and (_k is None or not _aud_graph.logs(_k)):
+        _unaudited.append("%s (%s%s)" % (_rule_s, _ep, "" if _k else ", source not found"))
+check("audit gate: the scan found mutating endpoints to check", len(_aud_eps) > 40,
+      "only %d mutating endpoints seen" % len(_aud_eps))
+check("audit gate: a view that logs only through a helper is followed into it (control)",
+      {"api_server_action", "api_panel_security_whitelist"} <= set(_aud_indirect),
+      repr(_aud_indirect))
 check("every mutating endpoint writes an audit entry (or is listed as having nothing to audit)",
       not _unaudited,
       "; ".join(sorted(_unaudited)[:5]) + " — call log_action(), or add the endpoint to "
       "_NO_AUDIT_OK with the reason it has nothing to record")
+_aud_stale = sorted(_e for _e in _NO_AUDIT_OK if _e not in _aud_eps
+                    or _aud_key(_aud_graph, _aud_eps[_e][1]) is None
+                    or _aud_graph.logs(_aud_key(_aud_graph, _aud_eps[_e][1])))
+check("audit gate: every _NO_AUDIT_OK entry is a mutating endpoint that really writes no row",
+      not _aud_stale, repr(_aud_stale))
+
+# The resolver itself, on modules made for it: each route's only candidate for an audit row is a
+# function whose NAME matches one that logs. By bare name every one of them was audited.
+_AUD_FIXTURE = {
+    "panel.security.auth": ("def log_action(user, action, **kw):\n    return None\n", False),
+    "fx": ("", True),
+    "fx.logs": ("from panel.security.auth import log_action\n"
+                "def _run(cmd=None):\n    log_action(None, 'x')\n", False),
+    "fx.quiet": ("def _run(cmd=None):\n    return cmd\n", False),
+    "fx.pkg": ("from fx.pkg import a, b\n_MODULES = (a, b)\n"
+               "def __getattr__(name):\n    return None\n", True),
+    "fx.pkg.a": ("def helper():\n    return 1\n", False),
+    "fx.pkg.b": ("from fx import logs\ndef helper():\n    logs._run()\n", False),
+    "fx.routes": (textwrap.dedent('''
+        import threading
+        from fx import quiet as so, logs, pkg
+        from fx.quiet import _run as _quiet_run
+        from panel.security import auth
+
+        def by_module_attr():
+            so._run("ls")
+
+        def by_from_import():
+            _quiet_run("ls")
+
+        def by_shadowing_parameter(logs):
+            logs._run()
+
+        def by_first_pep562_module():
+            pkg.helper()
+
+        def by_real_worker():
+            logs._run()
+
+        def by_thread_target():
+            threading.Thread(target=logs._run).start()
+
+        def by_module_log_action():
+            auth.log_action(None, "y")
+
+        class Svc:
+            def work(self):
+                logs._run()
+
+            def go(self):
+                self.work()
+
+        def register(app):
+            def _inner():
+                logs._run()
+
+            def by_closure():
+                _inner()
+            return by_closure
+        '''), False),
+}
+_aud_fx = _aud_cg.CallGraph(_AUD_FIXTURE)
+_aud_fx_logs = {q: _aud_fx.logs(_aud_fx.function_key("fx.routes", q)) for q in (
+    "by_module_attr", "by_from_import", "by_shadowing_parameter", "by_first_pep562_module",
+    "by_real_worker", "by_thread_target", "by_module_log_action", "Svc.go",
+    "register.<locals>.by_closure")}
+check("audit gate: a call that only shares its name with a function that logs is not an audit row",
+      not any(_aud_fx_logs[q] for q in ("by_module_attr", "by_from_import",
+                                         "by_shadowing_parameter", "by_first_pep562_module")),
+      repr(_aud_fx_logs))
+check("audit gate: ...while the function that does log is followed however it is reached (control)",
+      all(_aud_fx_logs[q] for q in ("by_real_worker", "by_thread_target", "by_module_log_action",
+                                    "Svc.go", "register.<locals>.by_closure")),
+      repr(_aud_fx_logs))
 # ── an audit row about a server or host names it by ID ─────────────────────────────────────────
 # audit_scope decides who reads a row from AuditLog.game_server_id / remote_id, which log_action
 # records only from its server= / remote= arguments. A call whose target is a server's or a host's

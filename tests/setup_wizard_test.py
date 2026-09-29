@@ -160,6 +160,13 @@ def _remote_names():
         return sorted(r.name for r in RemoteServer.query.all())
 
 
+def _audit(action):
+    """(username, target, detail, success, remote_id) of each audit row with `action`, in order."""
+    with app.app_context():
+        return [(a.username, a.target, a.detail, a.success, a.remote_id)
+                for a in AuditLog.query.filter_by(action=action).order_by(AuditLog.id).all()]
+
+
 # The three Tailscale actions that change this host, and the wizard's SSH test, are recorders for
 # the whole run: a broken gate then RECORDS a call instead of installing Tailscale, joining a
 # tailnet, rewriting Serve or opening an SSH connection from a test run. rbac_test.py warns what
@@ -167,7 +174,7 @@ def _remote_names():
 from panel.ops import tailscale_integration as _ts_mod  # noqa: E402
 _so_mod = _so                                      # restart_panel is stubbed on it below
 import panel.routes.route_helpers as _rh  # noqa: E402
-from panel.db.models import RemoteServer  # noqa: E402
+from panel.db.models import AuditLog, RemoteServer  # noqa: E402
 _ts_saved = (_ts_mod.install_tailscale_local, _ts_mod.tailscale_up_local,
              _ts_mod.setup_tailscale_serve, _ts_mod.get_tailscale_info)
 _ssh_saved = _rh.ssh_test_connection
@@ -411,6 +418,13 @@ def _check_remote_step():
         check("remote step: ...as a remote, not the panel host",
               _wb is not None and _wb.auth_method == "password" and not _wb.is_local,
               repr(_wb and (_wb.auth_method, _wb.is_local)))
+        _wb_id = _wb.id if _wb is not None else None
+    # Filed under the host's id (remote=), which is what lets its delegated viewers read it; the
+    # refused adds above wrote nothing.
+    check("audit: the host the wizard added is one row, about that host",
+          [(r[0], r[1], r[2], r[4]) for r in _audit("add_remote")]
+          == [("setup wizard", "Wizard box", "root@192.0.2.44", _wb_id)] and _wb_id is not None,
+          repr(_audit("add_remote")))
 
 
 def _check_complete_page():
@@ -434,17 +448,28 @@ def _check_complete_page():
     check("complete: ...and makes no 'only your devices can reach it' claim while it does",
           "Private tailnet" not in _done_html)
     check("complete: ...and did NOT restart the panel by itself", _restarts == [], repr(_restarts))
+    check("audit: finishing setup is on record, by the setup wizard",
+          [r[:2] + r[3:4] for r in _audit("setup_finished")]
+          == [("setup wizard", "Panel Server", True)], repr(_audit("setup_finished")))
+    _serve_end = [r for r in _audit("setup_tailscale_serve") if r[2].startswith("at the end")]
+    check("audit: ...and so is the Serve it set up on the way out",
+          [r[3] for r in _serve_end] == [True], repr(_audit("setup_tailscale_serve")))
     # "Restart now" is the owner's explicit choice, and nobody else's.
     rr = _att.post("/setup/restart")
     check("complete: another browser cannot restart the panel", _restarts == [], repr(_restarts))
     rr = c.post("/setup/restart")
     check("complete: the owner's Restart now restarts the panel once",
           _restarts == [1] and rr.status_code == 200, "%d %r" % (rr.status_code, _restarts))
+    check("audit: the owner's restart is one row, with the bind it applies; the refused one none",
+          [(r[0], r[3]) for r in _audit("panel_restart")] == [("setup wizard", True)]
+          and "127.0.0.1" in _audit("panel_restart")[0][2], repr(_audit("panel_restart")))
     # Once the running bind is the stored one there is nothing to apply, so no restart...
     app.config["_BOOT_BIND"] = "127.0.0.1"
     c.post("/setup/restart")
     check("complete: with nothing to apply, Restart now does nothing", _restarts == [1],
           repr(_restarts))
+    check("audit: ...and writes no row", len(_audit("panel_restart")) == 1,
+          repr(_audit("panel_restart")))
     # ...and the private claim is back, because it is true now (positive control).
     with app.test_request_context("/setup"):
         _cp = getattr(_rh, "_complete_page", None)
@@ -453,6 +478,29 @@ def _check_complete_page():
           "Private tailnet" in _priv_html and 'id="rebind-notice"' not in _priv_html,
           _priv_html[-400:])
     app.config.pop("_BOOT_BIND", None)
+
+
+def _check_auto_serve_failure():
+    """A Serve that fails at the end of setup is on record as failed, and not stored as done."""
+    # Its result was dropped: tailscale_setup_done went True whatever Serve answered, and that flag
+    # is what tells the firewall page the panel is reachable over the tailnet, so the public web
+    # port's rule stopped being protected on a host where Serve never took.
+    _cfg = dict(load_config(), tailscale_setup_done=False, tailscale_mount="/keep")
+    _on_disk = load_config()
+    _recorder = _ts_mod.setup_tailscale_serve
+    _ts_mod.setup_tailscale_serve = lambda *a, **k: (False, "serve refused")
+    try:
+        with app.test_request_context("/setup"):
+            _rh._auto_tailscale_serve(_cfg)
+    finally:
+        _ts_mod.setup_tailscale_serve = _recorder
+    check("auto-serve: a Serve that failed is not recorded as set up",
+          _cfg.get("tailscale_setup_done") is False and _cfg.get("tailscale_mount") == "/keep"
+          and load_config() == _on_disk, repr((_cfg.get("tailscale_setup_done"),
+                                               _cfg.get("tailscale_mount"))))
+    _last = (_audit("setup_tailscale_serve") or [("", "", "", None, None)])[-1]
+    check("auto-serve: ...and its row says it failed, and why",
+          _last[3] is False and "serve refused" in _last[2], repr(_last))
 
 
 try:
@@ -475,6 +523,13 @@ try:
     check("open: step=welcome saves the site settings",
           _cfg_after.get("site_title") == "Test Panel" and _cfg_after.get("port") == 5051
           and _cfg_after.get("bind_host") == "127.0.0.1", str(_cfg_after.get("port")))
+    # The wizard's rows. It wrote none: the bind it set, the first superadmin, a host it added and
+    # a restart were on record nowhere. Exactly one row, so the refused step=welcome POSTs above
+    # (unclaimed, wrong token) are shown to have written none.
+    check("audit: step=welcome is on record, by the setup wizard, with the bind it saved",
+          [r[:4] for r in _audit("setup_site_settings")]
+          == [("setup wizard", "Panel Server", "listen on 127.0.0.1:5051", True)],
+          repr(_audit("setup_site_settings")))
 
     # The port this step writes is the address the panel BINDS TO on its next boot, and nothing
     # downstream re-checks it — app.py reads cfg["port"] and hands it straight to socketio.run().
@@ -574,6 +629,9 @@ try:
           c.get("/setup").status_code == 200, "the wizard closed behind itself")
 
     _check_admin_race()
+    check("audit: the first superadmin's creation is one row naming it, the racer's none",
+          [r[:2] for r in _audit("add_user")] == [("setup wizard", "firstadmin")],
+          repr(_audit("add_user")))
 
     with app.app_context():
         _u = User.query.filter_by(username="firstadmin").first()
@@ -652,6 +710,7 @@ try:
     _check_remote_step()
 
     _check_complete_page()
+    _check_auto_serve_failure()
 
     # ── Once setup is COMPLETE, the wizard is permanently locked ──────────────────────────────
     mark_setup_complete()
