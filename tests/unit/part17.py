@@ -776,7 +776,13 @@ _sf17_calls = []
 
 
 def _sf17_out(resp):
-    """(status, json) of a view's return value, bare or (response, status)."""
+    """(status, json) of a view's return value, bare or (response, status); (None, None) for None.
+
+    None is what a gate that let the request through returns, so a gate that stopped refusing
+    fails its check by name here instead of raising out of the whole suite.
+    """
+    if resp is None:
+        return None, None
     body, code = resp if isinstance(resp, tuple) else (resp, 200)
     return code, body.get_json()
 
