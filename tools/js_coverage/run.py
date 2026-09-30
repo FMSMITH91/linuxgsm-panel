@@ -110,6 +110,7 @@ def free_port():
 def http_ok(url, timeout=2):
     """Say whether `url` (on loopback) answers 200."""
     try:
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- loopback only (the panel or the browser the harness started)
         with urllib.request.urlopen(url, timeout=timeout) as r:  # nosec B310 - loopback only
             return r.status == 200
     except OSError:
@@ -166,6 +167,7 @@ def start_chrome(binary, profile, tmp):
 def devtools_json(port, path):
     """GET one of the browser's DevTools JSON endpoints."""
     url = "http://127.0.0.1:%d%s" % (port, path)
+    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- 127.0.0.1 DevTools endpoint
     with urllib.request.urlopen(url, timeout=5) as r:  # nosec B310 - loopback only
         return json.load(r)
 

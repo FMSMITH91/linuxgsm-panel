@@ -322,6 +322,17 @@ function renderUpdate(d){
       note.style.display = d.docs_only ? '' : 'none';
     }
     changes.style.display=(d.changes&&d.changes.length)?'':'none';
+  } else if((d.unverified_reason || d.update_running) && d.message){
+    // Not installable, and the server says why in a way that does NOT pass in a few minutes: the
+    // newer commit's checks cannot be read at all (an origin the panel does not recognise, a
+    // private repository, GitHub unreachable), or an update is being installed right now. The
+    // first used to be offered as installable; left silent it would read "You're up to date" on a
+    // panel that can never be told otherwise. Text, not markup: the reason is the server's words.
+    var warn=document.createElement('span'), wi=document.createElement('i');
+    warn.className='text-warning'; wi.className='bi bi-'+(d.update_running?'arrow-repeat':'shield-exclamation');
+    warn.appendChild(wi); warn.appendChild(document.createTextNode(' '+d.message));
+    st.textContent=''; st.appendChild(warn);
+    btn.style.display='none'; changes.style.display='none';
   } else {
     // Two states, nothing in between: there is an update to install, or there is not.
     //
@@ -421,13 +432,42 @@ function panelUpdateEndedEarly(l, beforeBoot){
   return {cls:'text-warning', icon:'question-circle',
           text:'The updater finished without restarting the panel — see the log above.', detail:''};
 }
+// Polls ONE cheap endpoint, the update log, which also carries boot_id. It used to poll
+// /api/panel/update-status as well, every 1.5 seconds for the whole run, and each of those could
+// be a full status check: a `git fetch` of the very ref install.sh fetches (a lost race on that
+// ref's lock aborted the update) plus anonymous GitHub requests (the hour's 60 were gone in about a
+// minute and a half). The status is read ONCE now, after the restart, for the version the new
+// process runs — and the server answers that without fetching while the run is still finishing.
 function watchPanelRestart(beforeBoot, msg, doneLabel, before, targetBranch){
   var tries=0, restarted=false, done=false;
+  var showRestarting=function(){
+    if(!restarted && !done){ restarted=true; msg.innerHTML='<span class="text-warning"><i class="bi bi-arrow-repeat"></i> Restarting the panel…</span>'; }
+  };
+  var finish=function(s, l){
+    if(l && l.lines) renderPuLog(l.lines);
+    var outcome=panelRestartOutcome(before, s, targetBranch, l && l.lines);
+    if(outcome==='moved'){
+      msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+escapeHtml(doneLabel||'Done')+' — reloading…</span>';  // nosemgrep
+      setTimeout(function(){ location.reload(); }, 2500);
+    } else if(outcome==='unknown'){
+      msg.innerHTML='<span class="text-warning"><i class="bi bi-question-circle"></i> '+escapeHtml('The panel restarted, but its new version could not be read — reloading to check.')+'</span>';  // nosemgrep
+      setTimeout(function(){ location.reload(); }, 2500);
+    } else {
+      // Rolled back, or restarted on the code it had: the change did not apply. No reload —
+      // it would wipe the log above, which is the only account of why.
+      msg.innerHTML='<span class="text-danger"><i class="bi bi-x-circle"></i> '+escapeHtml('The panel restarted on its previous version, so the change did not apply — see the log above.')+'</span>';  // nosemgrep
+      var ub=document.getElementById('pu-update-btn'), sb=document.getElementById('pu-branch-switch');
+      if(ub) ub.disabled=false;
+      if(sb) sb.disabled=false;
+    }
+  };
   var iv=setInterval(function(){
     tries++;
     fetch(MOUNT+'/api/panel/update-log').then(function(r){ return r.ok?r.json():null; })
       .then(function(l){
-        if(l && l.lines && l.lines.length) renderPuLog(l.lines);
+        // No answer: the panel is down between its old process and its new one.
+        if(!l){ showRestarting(); return; }
+        if(l.lines && l.lines.length) renderPuLog(l.lines);
         var early = done ? null : panelUpdateEndedEarly(l, beforeBoot);
         if(early){
           done=true; clearInterval(iv);
@@ -444,37 +484,20 @@ function watchPanelRestart(beforeBoot, msg, doneLabel, before, targetBranch){
           var ub=document.getElementById('pu-update-btn'), sb=document.getElementById('pu-branch-switch');
           if(ub) ub.disabled=false;
           if(sb) sb.disabled=false;
+          return;
         }
-      }).catch(function(){});
-    fetch(MOUNT+'/api/panel/update-status').then(function(r){ return r.ok?r.json():null; }).then(function(s){
-      if(!s){ if(!restarted){ restarted=true; msg.innerHTML='<span class="text-warning"><i class="bi bi-arrow-repeat"></i> Restarting the panel…</span>'; } return; }
-      if(s.boot_id && beforeBoot && s.boot_id!==beforeBoot && !done){
-        done=true; clearInterval(iv);
-        var finish=function(l){
-          if(l && l.lines) renderPuLog(l.lines);
-          var outcome=panelRestartOutcome(before, s, targetBranch, l && l.lines);
-          if(outcome==='moved'){
-            msg.innerHTML='<span class="text-success"><i class="bi bi-check-circle"></i> '+escapeHtml(doneLabel||'Done')+' — reloading…</span>';  // nosemgrep
-            setTimeout(function(){ location.reload(); }, 2500);
-          } else if(outcome==='unknown'){
-            msg.innerHTML='<span class="text-warning"><i class="bi bi-question-circle"></i> '+escapeHtml('The panel restarted, but its new version could not be read — reloading to check.')+'</span>';  // nosemgrep
-            setTimeout(function(){ location.reload(); }, 2500);
-          } else {
-            // Rolled back, or restarted on the code it had: the change did not apply. No reload —
-            // it would wipe the log above, which is the only account of why.
-            msg.innerHTML='<span class="text-danger"><i class="bi bi-x-circle"></i> '+escapeHtml('The panel restarted on its previous version, so the change did not apply — see the log above.')+'</span>';  // nosemgrep
-            var ub=document.getElementById('pu-update-btn'), sb=document.getElementById('pu-branch-switch');
-            if(ub) ub.disabled=false;
-            if(sb) sb.disabled=false;
-          }
-        };
-        fetch(MOUNT+'/api/panel/update-log').then(function(r){ return r.ok?r.json():null; })
-          .catch(function(){ return null; }).then(finish)
-          // finish itself failing must not leave "Restarting…" up for good with nothing said.
-          .catch(function(){ msg.textContent='The panel restarted — reload the page to see its state.'; });
-      }
-    }).catch(function(){ if(!restarted){ restarted=true; msg.innerHTML='<span class="text-warning"><i class="bi bi-arrow-repeat"></i> Restarting the panel…</span>'; } });
-    if(tries>120){ clearInterval(iv); msg.innerHTML='<span class="text-warning">Still working — reload the page to check.</span>'; }
+        if(!done && l.boot_id && beforeBoot && l.boot_id!==beforeBoot){
+          done=true; clearInterval(iv);
+          // The new process is live. ONE status read, for the commit and branch it runs.
+          fetch(MOUNT+'/api/panel/update-status').then(function(r){ return r.ok?r.json():null; })
+            .catch(function(){ return null; })
+            .then(function(s){ finish(s, l); })
+            // finish itself failing must not leave "Restarting…" up for good with nothing said.
+            .catch(function(){ msg.textContent='The panel restarted — reload the page to see its state.'; });
+        }
+      }).catch(showRestarting);
+    // done too: a poll still in flight must not overwrite this line with a later verdict.
+    if(tries>120 && !done){ done=true; clearInterval(iv); msg.innerHTML='<span class="text-warning">Still working — reload the page to check.</span>'; }
   }, 1500);
 }
 // Populate the branch selector with the remote branches + the currently tracked one.

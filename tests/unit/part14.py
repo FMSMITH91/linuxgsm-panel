@@ -570,3 +570,559 @@ check("js coverage: a flow that breaks is recorded against its page, and the wal
       _jc_walk is not None and _jc_fd_raised is None
       and _jc_fd.flow_errors == [("/users", "boom", "RuntimeError: element gone")],
       repr((_jc_fd_raised, _jc_fd.flow_errors)))
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# The self-update CI gate: what it may install, what it must see first, and what it may cost
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+import http.client as _hc14  # noqa: E402
+import json as _json14  # noqa: E402
+import shutil as _shutil14  # noqa: E402
+import threading as _thr14  # noqa: E402
+import urllib.error as _ue14  # noqa: E402
+
+from panel.ops import system_ops as _so14  # noqa: E402
+
+_WF14 = os.path.join(_root, ".github", "workflows")
+
+
+def _wf14(name):
+    with open(os.path.join(_WF14, name), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _wf14_code(name):
+    """The workflow's text with whole-line comments dropped (PyYAML is not a suite dependency)."""
+    return "\n".join(_l for _l in _wf14(name).splitlines() if not _l.lstrip().startswith("#"))
+
+
+def _wf14_run(text, step_name):
+    """The `run: |` body of the step named `step_name`, dedented."""
+    lines = text.splitlines()
+    i = next(n for n, ln in enumerate(lines) if ln.strip() == "- name: " + step_name)
+    j = next(n for n in range(i + 1, len(lines)) if lines[n].strip() == "run: |")
+    ind = len(lines[j]) - len(lines[j].lstrip())
+    body = []
+    for ln in lines[j + 1:]:
+        if ln.strip() and len(ln) - len(ln.lstrip()) <= ind:
+            break
+        body.append(ln)
+    cut = min(len(ln) - len(ln.lstrip()) for ln in body if ln.strip())
+    return "\n".join(ln[cut:] for ln in body) + "\n"
+
+
+class _Resp14:
+    """A urlopen() result carrying `payload` as its JSON body."""
+
+    def __init__(self, payload):
+        self._b = _json14.dumps(payload).encode()
+
+    def read(self):
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _runs14(*pairs, status="completed"):
+    return {"check_runs": [{"name": n, "status": status, "conclusion": c} for n, c in pairs]}
+
+
+# Every check _CI_REQUIRED names, passing — the shape of a code commit whose suite has finished.
+_FULL14 = [("checks (ubuntu-24.04 · py3.12)", "success"), ("coverage", "success"),
+           ("js coverage", "success"), ("gamedig lockfile (node 22)", "success"),
+           ("Analyze (python)", "success"), ("Open code-scanning alerts", "success"),
+           ("Secret scanning (Gitleaks)", "success")]
+
+
+def _ci14(payload_or_exc, sha="a" * 40, diff=None):
+    """_remote_ci_state(sha) over a stubbed GitHub answer and (optionally) a stubbed diff.
+
+    Returns (state, the unknown-reason it left)."""
+    saved = (_so14._repo_slug, _so14.urllib.request.urlopen, _so14._git)
+    try:
+        _so14._repo_slug = lambda: "o/r"
+
+        def _open(req, timeout=8):
+            if isinstance(payload_or_exc, BaseException):
+                raise payload_or_exc
+            return _Resp14(payload_or_exc)
+        _so14.urllib.request.urlopen = _open
+        if diff is not None:
+            _so14._git = lambda args, timeout=45: diff if args[:1] == ["diff"] else ("", "", 1)
+        return _so14._remote_ci_state(sha), _so14._ci_unknown_why["reason"]
+    finally:
+        _so14._repo_slug, _so14.urllib.request.urlopen, _so14._git = saved
+
+
+# ── 1. _repo_slug recognises GitHub's SSH-over-443 origin ──────────────────────────────────────
+# ssh://git@ssh.github.com:443/owner/repo.git is GitHub's documented form for hosts that block port
+# 22. The pattern read "443/owner" as the owner and returned None — no repository to ask — so every
+# commit was 'unknown', which was installable: the gate was off for good on such a host, silently.
+_rs14_saved = _so14._git
+_rs14_url = [""]
+try:
+    _so14._git = lambda args, timeout=45: (_rs14_url[0], "", 0)
+    _rs14 = {}
+    for _u in ("ssh://git@ssh.github.com:443/o/r.git", "https://github.com:443/o/r",
+               "git@github.com:123/r.git", "https://github.com/o/r.git", "git@github.com:o/r",
+               "https://ghe.example.com/o/r.git", "https://gitlab.com/o/r"):
+        _rs14_url[0] = _u
+        _rs14[_u] = (_so14._repo_slug(), _so14.github_repo_url())
+finally:
+    _so14._git = _rs14_saved
+check("update gate: the ssh.github.com:443 origin (and a port on https) is recognised",
+      _rs14["ssh://git@ssh.github.com:443/o/r.git"] == ("o/r", "https://github.com/o/r")
+      and _rs14["https://github.com:443/o/r"][0] == "o/r", repr(_rs14))
+check("update gate: ...while a scp-style owner made of digits is still the owner, and ordinary "
+      "origins are unchanged (controls)",
+      _rs14["git@github.com:123/r.git"][0] == "123/r"
+      and _rs14["https://github.com/o/r.git"][0] == "o/r"
+      and _rs14["git@github.com:o/r"][0] == "o/r", repr(_rs14))
+check("update gate: ...and an origin that is not github.com (GHE, a mirror) has no slug",
+      _rs14["https://ghe.example.com/o/r.git"][0] is None
+      and _rs14["https://gitlab.com/o/r"][0] is None, repr(_rs14))
+
+# ── 2. 'unknown' says why ──────────────────────────────────────────────────────────────────────
+_sl14 = _so14._repo_slug
+try:
+    _so14._repo_slug = lambda: None
+    _u14_noslug = (_so14._remote_ci_state("a" * 40), _so14._ci_unknown_why["reason"])
+finally:
+    _so14._repo_slug = _sl14
+_u14_404 = _ci14(_ue14.HTTPError("u", 404, "Not Found", {}, None))
+_u14_net = _ci14(_ue14.URLError("offline"))
+_u14_trunc = _ci14(_hc14.IncompleteRead(b"{", 10))
+check("update gate: an unreadable answer is 'unknown' with a reason — no slug, a 404 (private "
+      "repository), the network",
+      _u14_noslug == ("unknown", _so14._CI_WHY_NO_SLUG)
+      and _u14_404 == ("unknown", _so14._CI_WHY_NOT_FOUND)
+      and _u14_net == ("unknown", _so14._CI_WHY_UNREACHABLE)
+      and _u14_trunc == ("unknown", _so14._CI_WHY_UNREACHABLE),
+      repr((_u14_noslug, _u14_404, _u14_net, _u14_trunc)))
+check("update gate: ...and a rate limit is still 'pending', with no unknown-reason left over",
+      _ci14(_ue14.HTTPError("u", 403, "limit", {}, None)) == ("pending", ""))
+
+# ── 3. the walk: 'unknown' is not installable, ends the walk, and the card says why ────────────
+_W14 = ["a" * 40, "b" * 40, "c" * 40]      # tip first
+
+
+def _w14_git(args, timeout=45):
+    if args[0] == "fetch":
+        return ("", "", 0)
+    if args[:3] == ["rev-parse", "--short", "HEAD"]:
+        return ("headabc", "", 0)
+    if args[0] == "rev-list" and "--count" in args:
+        return ("3", "", 0)
+    if args[:3] == ["rev-parse", "--short", "refs/remotes/origin/main"]:
+        return (_W14[0][:7], "", 0)
+    if args[0] == "rev-list" and "-n" in args:
+        return ("\n".join(_W14), "", 0)
+    if args[0] == "log":
+        return ("", "", 0)
+    return ("", "", 0)
+
+
+def _w14_status(states, reason=""):
+    """_compute_update_status with each commit's CI state from `states`; (status, commits asked)."""
+    asked = []
+    saved = (_so14._git, _so14._is_git_checkout, _so14.panel_version, _so14._tracked_branch,
+             _so14._remote_ci_state)
+
+    def _ci(sha):
+        asked.append(sha)
+        st = states.get(sha, "pending")
+        _so14._ci_unknown_why["reason"] = reason if st == "unknown" else ""
+        return st
+    try:
+        _so14._git, _so14._is_git_checkout = _w14_git, (lambda: True)
+        _so14.panel_version, _so14._tracked_branch = (lambda: "2026.9.1"), (lambda: "main")
+        _so14._remote_ci_state = _ci
+        return _so14._compute_update_status(), asked
+    finally:
+        (_so14._git, _so14._is_git_checkout, _so14.panel_version, _so14._tracked_branch,
+         _so14._remote_ci_state) = saved
+
+
+_w14_unk, _w14_unk_asked = _w14_status({_W14[0]: "unknown", _W14[1]: "passing"},
+                                       reason=_so14._CI_WHY_NO_SLUG)
+check("update gate: a tip whose checks cannot be read is NOT offered (it was: 'unknown' counted as "
+      "installable, and the walk takes the tip first)",
+      _w14_unk.get("update_available") is False and _w14_unk.get("ci_state") == "unknown",
+      repr({k: _w14_unk.get(k) for k in ("update_available", "ci_state", "target_sha")}))
+check("update gate: ...nor is anything below it: the walk stops there instead of asking again",
+      _w14_unk_asked == [_W14[0]], repr([a[:7] for a in _w14_unk_asked]))
+check("update gate: ...and the card is told why, in words (origin not recognised)",
+      _w14_unk.get("unverified_reason") == _so14._CI_WHY_NO_SLUG
+      and "couldn't be verified" in (_w14_unk.get("message") or "")
+      and _so14._CI_WHY_NO_SLUG in (_w14_unk.get("message") or ""), repr(_w14_unk.get("message")))
+_w14_mid, _w14_mid_asked = _w14_status({_W14[0]: "pending", _W14[1]: "unknown",
+                                        _W14[2]: "passing"}, reason=_so14._CI_WHY_UNREACHABLE)
+check("update gate: a pending tip over an unreadable commit offers nothing and says GitHub could "
+      "not be read",
+      _w14_mid.get("update_available") is False and _w14_mid_asked == _W14[:2]
+      and _so14._CI_WHY_UNREACHABLE in (_w14_mid.get("message") or ""),
+      repr((_w14_mid.get("update_available"), _w14_mid.get("message"))))
+_w14_ok, _ = _w14_status({_W14[0]: "pending", _W14[1]: "passing"})
+_w14_pend, _ = _w14_status({})
+check("update gate: ...while a verified commit under a pending tip is still offered, and an "
+      "all-pending range stays silent (controls)",
+      _w14_ok.get("update_available") is True and _w14_ok.get("target_sha") == _W14[1]
+      and _w14_pend.get("update_available") is False and not _w14_pend.get("message")
+      and "unverified_reason" not in _w14_pend,
+      repr((_w14_ok.get("target_sha"), _w14_pend.get("message"))))
+
+# panel_self_update refuses it with that reason, and launches nothing.
+_su14_saved = (_so14._is_git_checkout, _so14.panel_update_status, _so14._launch_installer)
+_su14_launched = []
+try:
+    _so14._is_git_checkout = lambda: True
+    _so14._launch_installer = lambda **k: (_su14_launched.append(k), (True, "started"))[1]
+    _so14.panel_update_status = lambda force=False: _w14_unk
+    _su14_r = _so14.panel_self_update()
+finally:
+    (_so14._is_git_checkout, _so14.panel_update_status, _so14._launch_installer) = _su14_saved
+check("update gate: the self-update refuses an unverifiable update, with the reason, launching "
+      "nothing", _su14_r[0] is False and _so14._CI_WHY_NO_SLUG in _su14_r[1] and not _su14_launched,
+      repr((_su14_r, _su14_launched)))
+
+# ── 4. a commit must CARRY the required checks, the late alerts check included ────────────────
+_code14 = ("panel/ops/system_ops.py", "", 0)
+_docs14 = ("README.md\ndocs/x.md\nLICENSE", "", 0)
+_no_alerts = [p for p in _FULL14 if p[0] != "Open code-scanning alerts"]
+check("update gate: a code commit whose every EXISTING check passed, but without the alerts check "
+      "yet, is 'pending' (it was 'passing', for the minute before CodeQL finished)",
+      _ci14(_runs14(*_no_alerts), diff=_code14)[0] == "pending")
+check("update gate: ...and 'passing' once the alerts check is on it (control)",
+      _ci14(_runs14(*_FULL14), diff=_code14)[0] == "passing")
+check("update gate: ...a SKIPPED alerts check does not count as present (fork PRs file those on "
+      "main's tip)",
+      _ci14(_runs14(*(_no_alerts + [("Open code-scanning alerts", "skipped")])),
+            diff=_code14)[0] == "pending")
+_missing14 = {}
+for _req in _so14._CI_REQUIRED:
+    _without = [p for p in _FULL14 if not _so14._ci_name_matches(_req, p[0])]
+    _missing14[_req] = _ci14(_runs14(*_without), diff=_code14)[0]
+check("update gate: ...and each required check missing, alone, holds the commit at 'pending'",
+      set(_missing14.values()) == {"pending"}, repr(_missing14))
+check("update gate: a matrix job is matched by its prefix, so a new matrix entry does not strand "
+      "panels on an old version",
+      _ci14(_runs14(*([p for p in _FULL14 if not p[0].startswith("checks (")]
+                      + [("checks (ubuntu-28.04 · py3.16)", "success")])), diff=_code14)[0]
+      == "passing")
+check("update gate: a docs-only commit (CI and CodeQL do not run for it) passes on what it has",
+      _ci14(_runs14(("Secret scanning (Gitleaks)", "success")), diff=_docs14)[0] == "passing")
+check("update gate: ...but a docs-only commit that DOES carry one suite check needs them all",
+      _ci14(_runs14(("Secret scanning (Gitleaks)", "success"), ("coverage", "success")),
+            diff=_docs14)[0] == "pending")
+check("update gate: ...and a diff that cannot be read expects the whole suite (fails safe)",
+      _ci14(_runs14(("Secret scanning (Gitleaks)", "success")), diff=("", "bad", 128))[0]
+      == "pending")
+check("update gate: the alerts workflow's own job run (filed on main's tip, about another commit) "
+      "is ignored, failing or not",
+      _ci14(_runs14(*(_FULL14 + [("Code-scanning alerts gate", "failure")])), diff=_code14)[0]
+      == "passing")
+check("update gate: ...while a failing alerts CHECK on the commit fails it (control)",
+      _ci14(_runs14(*([p for p in _FULL14 if p[0] != "Open code-scanning alerts"]
+                      + [("Open code-scanning alerts", "failure")])), diff=_code14)[0]
+      == "failing")
+
+# The names are the workflows' own. A renamed job would hold every installed panel back.
+_ci_wf14 = _wf14_code("ci.yml")
+_cq_wf14 = _wf14_code("codeql.yml")
+_cqa_wf14 = _wf14_code("codeql-alerts.yml")
+_names14 = re.findall(r"^    name: (.+)$", _ci_wf14 + "\n" + _cq_wf14, re.M)
+_names14 = [re.sub(r"\$\{\{[^}]*\}\}", "", n).strip() for n in _names14]
+_req_found = {r: any((n == r) if not r.endswith("(") else n.startswith(r) for n in _names14)
+              for r in _so14._CI_REQUIRED if r != "Open code-scanning alerts"}
+check("update gate: every required CI/CodeQL name is a job name in ci.yml or codeql.yml",
+      all(_req_found.values()), repr((_req_found, _names14)))
+_ci_jobs14 = re.findall(r"^    name: (.+)$", _ci_wf14, re.M)
+_ci_jobs14 = [n.split("${{")[0].strip() for n in _ci_jobs14]
+check("update gate: ...and every ci.yml job is required (none left for the gate to miss)",
+      len(_ci_jobs14) == 4
+      and all(any(_so14._ci_name_matches(r, n) for r in _so14._CI_REQUIRED) for n in _ci_jobs14),
+      repr(_ci_jobs14))
+check("update gate: the alerts workflow POSTS the required 'Open code-scanning alerts' check, and "
+      "its own job name is the one the gate ignores",
+      '-f name="Open code-scanning alerts"' in _cqa_wf14
+      and re.search(r"^    name: Code-scanning alerts gate$", _cqa_wf14, re.M) is not None
+      and "Code-scanning alerts gate" in _so14._CI_IGNORE, "")
+_pi14 = {}
+for _wfn in ("ci.yml", "codeql.yml", "security-code.yml"):
+    _t = _wf14(_wfn)
+    _pi14[_wfn] = [sorted(re.findall(r"^      - '([^']+)'$", _blk, re.M))
+                   for _blk in re.findall(r"    paths-ignore:\n((?:      - .*\n)+)", _t)]
+_pi14_all = {tuple(b) for v in _pi14.values() for b in v}
+check("update gate: ci.yml, codeql.yml and security-code.yml share one paths-ignore list",
+      len(_pi14_all) == 1 and all(len(v) == 2 for v in _pi14.values()), repr(_pi14))
+_pi14_list = list(next(iter(_pi14_all))) if len(_pi14_all) == 1 else []
+check("update gate: ...and it is the list _ci_path_ignored applies",
+      sorted(p for p in _pi14_list if "*" not in p) == sorted(_so14._CI_PATHS_IGNORED_FILES)
+      and set(p for p in _pi14_list if "*" in p) == {"**/*.md", "docs/**"}
+      and _so14._ci_path_ignored("a/b/README.md") and _so14._ci_path_ignored("docs/x.png")
+      and not _so14._ci_path_ignored("docsx/y.py") and not _so14._ci_path_ignored("app.py"),
+      repr(_pi14_list))
+
+# ── 5. codeql-alerts.yml: the verdict lands on the commit it judged ───────────────────────────
+_cqa_raw14 = _wf14("codeql-alerts.yml")
+check("codeql-alerts: it waits for BOTH uploaders (CodeQL and the Bandit/Semgrep workflow), and "
+      "may post checks",
+      'workflows: [ "CodeQL", "Security scan (code)" ]' in _cqa_raw14
+      and "checks: write" in _cqa_wf14 and "actions: read" in _cqa_wf14, "")
+_sb14 = _tf14.mkdtemp(prefix="cqa14-")
+try:
+    _bin14 = os.path.join(_sb14, "bin")
+    os.makedirs(_bin14)
+    with open(os.path.join(_bin14, "gh"), "w") as _fh:
+        # Answers each query the steps make from the environment, and logs every call.
+        _fh.write('#!/bin/bash\necho "$*" >> "$GH_LOG"\n'
+                  'case "$*" in\n'
+                  '  *actions/workflows/codeql.yml/*) echo "${OPEN_CODEQL:-0}" ;;\n'
+                  '  *actions/workflows/security-code.yml/*) echo "${OPEN_SEC:-0}" ;;\n'
+                  '  *code-scanning/alerts*) echo "${ALERTS:-[]}" ;;\n'
+                  '  *code-scanning/analyses*sha=*) echo "${TOTAL:-1}" ;;\n'
+                  '  *code-scanning/analyses*) echo "${NEWEST:-}" ;;\n'
+                  '  *check-runs*) : ;;\n'
+                  'esac\n')
+    os.chmod(os.path.join(_bin14, "gh"), 0o755)
+
+    def _cqa14(step, **env):
+        out = os.path.join(_sb14, "out")
+        log = os.path.join(_sb14, "log")
+        summ = os.path.join(_sb14, "summary")
+        for p in (out, log, summ):
+            open(p, "w").close()
+        p = _sp14.run(["bash", "-c", _wf14_run(_cqa_raw14, step)], capture_output=True, text=True,
+                      env=dict(os.environ, PATH=_bin14 + os.pathsep + os.environ["PATH"],
+                               GH_LOG=log, GITHUB_OUTPUT=out, GITHUB_STEP_SUMMARY=summ,
+                               GITHUB_REPOSITORY="o/r", **env))
+        outs = dict(ln.split("=", 1) for ln in open(out).read().splitlines() if "=" in ln)
+        return p.returncode, outs, open(log).read()
+
+    _S14 = "d" * 40
+    _wait_busy = _cqa14("Wait for the other uploader", GITHUB_EVENT_NAME="workflow_run",
+                        WR_SHA=_S14, WR_NAME="CodeQL", OPEN_SEC="1")
+    _wait_done = _cqa14("Wait for the other uploader", GITHUB_EVENT_NAME="workflow_run",
+                        WR_SHA=_S14, WR_NAME="CodeQL")
+    _wait_man = _cqa14("Wait for the other uploader", GITHUB_EVENT_NAME="workflow_dispatch",
+                       WR_SHA="", WR_NAME="")
+    check("codeql-alerts: the first uploader to finish posts nothing while the other still runs; "
+          "the second judges; a manual run judges at once",
+          _wait_busy[:2] == (0, {"judge": "false"}) and _wait_done[:2] == (0, {"judge": "true"})
+          and "head_sha=%s" % _S14 in _wait_done[2] and _wait_man[:2] == (0, {"judge": "true"}),
+          repr((_wait_busy, _wait_done, _wait_man)))
+    _jenv = dict(REF="refs/heads/main", LABEL="`main`", SHA=_S14)
+    _j_clean = _cqa14("Fail if that ref has open code-scanning alerts", NEWEST=_S14, **_jenv)
+    _j_dirty = _cqa14("Fail if that ref has open code-scanning alerts", NEWEST=_S14,
+                      ALERTS='[{"rule":"x","sev":"high","path":"a.py","line":1}]', **_jenv)
+    _j_none = _cqa14("Fail if that ref has open code-scanning alerts", TOTAL="0", NEWEST=_S14,
+                     **_jenv)
+    _j_moved = _cqa14("Fail if that ref has open code-scanning alerts", NEWEST="e" * 40, **_jenv)
+    check("codeql-alerts: clean is 'success', open alerts or no analysis OF THIS COMMIT fail",
+          _j_clean[:2] == (0, {"verdict": "success"}) and _j_dirty[0] == 1
+          and _j_none[0] == 1 and "sha=%s" % _S14 in _j_none[2],
+          repr((_j_clean[:2], _j_dirty[:2], _j_none[:2])))
+    check("codeql-alerts: ...and when main's alerts are already a LATER commit's, this one is not "
+          "judged on them", _j_moved[:2] == (0, {"verdict": "skipped"}), repr(_j_moved[:2]))
+    _posts = {}
+    for _oc, _vd in (("success", "success"), ("success", "skipped"), ("failure", "")):
+        _r = _cqa14("Post the verdict on the judged commit", SHA=_S14, OUTCOME=_oc, VERDICT=_vd,
+                    RUN_URL="https://x/run/1")
+        _posts[_oc + ":" + _vd] = (_r[0], re.search(r"conclusion=(\w+)", _r[2]) and
+                                   re.search(r"conclusion=(\w+)", _r[2]).group(1),
+                                   "head_sha=%s" % _S14 in _r[2]
+                                   and "name=Open code-scanning alerts" in _r[2])
+    check("codeql-alerts: the verdict is posted on the judged commit as 'Open code-scanning "
+          "alerts' — success, skipped (not judged) or failure",
+          _posts == {"success:success": (0, "success", True), "success:skipped": (0, "skipped", True),
+                     "failure:": (0, "failure", True)}, repr(_posts))
+finally:
+    _shutil14.rmtree(_sb14, ignore_errors=True)
+
+# ── 6. deploy.yml waits for the same set before shipping ──────────────────────────────────────
+_dep_raw14 = _wf14("deploy.yml")
+_dep_verify14 = _wf14_run(_dep_raw14, "Verify the commit is on main, and take its installer")
+_dep_req14 = re.search(r"^REQUIRED=\((.*)\)$", _dep_verify14, re.M)
+_dep_ign14 = re.search(r"^IGNORED='(\[.*\])'$", _dep_verify14, re.M)
+check("deploy: its required and ignored check lists are the panel gate's",
+      _dep_req14 is not None and _dep_ign14 is not None
+      and tuple(re.findall(r'"([^"]+)"', _dep_req14.group(1))) == _so14._CI_REQUIRED
+      and set(_json14.loads(_dep_ign14.group(1))) == _so14._CI_IGNORE,
+      repr((_dep_req14 and _dep_req14.group(1), _dep_ign14 and _dep_ign14.group(1))))
+check("deploy: the job may read check runs and hands the verify step a token",
+      "checks: read" in _dep_raw14 and "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in
+      _dep_raw14[_dep_raw14.index("- name: Verify the commit is on main"):
+                 _dep_raw14.index("- name: Join the tailnet")], "")
+# Drive the wait itself: the loop, cut out of the step, with no deadline and no sleep.
+_dep_loop14 = _dep_verify14[_dep_verify14.index("REQUIRED=("):
+                            _dep_verify14.index('echo "installer=')]
+_dep_loop14 = _dep_loop14.replace("20 * 60", "0").replace("sleep 30", "sleep 0")
+_dsb14 = _tf14.mkdtemp(prefix="dep14-")
+try:
+    _dbin = os.path.join(_dsb14, "bin")
+    os.makedirs(_dbin)
+    with open(os.path.join(_dbin, "gh"), "w") as _fh:
+        _fh.write('#!/bin/sh\ncat "$RUNS"\n')      # the --jq result: one check run per line
+    os.chmod(os.path.join(_dbin, "gh"), 0o755)
+
+    def _dep14(runs):
+        rf = os.path.join(_dsb14, "runs")
+        with open(rf, "w") as fh:
+            fh.write("".join(_json14.dumps({"name": n, "status": s, "conclusion": c}) + "\n"
+                             for n, s, c in runs))
+        p = _sp14.run(["bash", "-c", "set -euo pipefail\n" + _dep_loop14 + "echo WAITED-OK\n"],
+                      capture_output=True, text=True,
+                      env=dict(os.environ, PATH=_dbin + os.pathsep + os.environ["PATH"], RUNS=rf,
+                               HEAD_SHA="f" * 40, GITHUB_REPOSITORY="o/r"))
+        return p.returncode, p.stdout
+
+    _all14 = [(n, "completed", c) for n, c in _FULL14]
+    _d_ok = _dep14(_all14 + [("deploy", "in_progress", None),
+                             ("Code-scanning alerts gate", "completed", "failure")])
+    _d_bad = _dep14(_all14 + [("Python security lint (Bandit)", "completed", "failure")])
+    _d_noalert = _dep14([r for r in _all14 if r[0] != "Open code-scanning alerts"])
+    _d_skip = _dep14([r for r in _all14 if r[0] != "Open code-scanning alerts"]
+                     + [("Open code-scanning alerts", "completed", "skipped")])
+    _d_run = _dep14(_all14 + [("lighthouse", "in_progress", None)])
+    check("deploy: a commit with every required check passed is deployed (its own run and the "
+          "alerts job's misfiled run ignored)", _d_ok[0] == 0 and "WAITED-OK" in _d_ok[1],
+          repr(_d_ok))
+    check("deploy: ...a failed security check stops the deploy (it waited for CI alone)",
+          _d_bad[0] == 1 and "failed a check (Python security lint (Bandit))" in _d_bad[1],
+          repr(_d_bad))
+    check("deploy: ...and so does a missing or merely skipped alerts check, or a check still "
+          "running, once the wait runs out",
+          _d_noalert[0] == 1 and "missing: Open code-scanning alerts" in _d_noalert[1]
+          and _d_skip[0] == 1 and "missing: Open code-scanning alerts" in _d_skip[1]
+          and _d_run[0] == 1 and "1 still running" in _d_run[1],
+          repr((_d_noalert, _d_skip, _d_run)))
+finally:
+    _shutil14.rmtree(_dsb14, ignore_errors=True)
+
+# ── 7. Semgrep gates, through code scanning (its docstring said it did; it did not) ───────────
+_sc14 = _wf14("security-code.yml")
+_sg14 = _sc14[_sc14.index("\n  sast-semgrep:\n"):]
+_sg14_code = "\n".join(_l for _l in _sg14.splitlines() if not _l.lstrip().startswith("#"))
+check("security-code: Semgrep writes SARIF and uploads it to code scanning (category semgrep), "
+      "with the permission to, and fails when it wrote none",
+      "--sarif-output=semgrep.sarif" in _sg14_code
+      and "github/codeql-action/upload-sarif@" in _sg14_code
+      and "sarif_file: semgrep.sarif" in _sg14_code and "category: semgrep" in _sg14_code
+      and "security-events: write" in _sg14_code and "if [ ! -s semgrep.sarif ]; then" in _sg14_code
+      and "|| true" not in _sg14_code, "")
+check("security-code: ...pinned to the same upload-sarif commit Bandit's upload uses",
+      len(set(re.findall(r"github/codeql-action/upload-sarif@([0-9a-f]{40})", _sc14))) == 1
+      and _sc14.count("github/codeql-action/upload-sarif@") == 2, "")
+
+# ── 8. one status computation at a time, and none while an update runs ───────────────────────
+# Each computation is a `git fetch` of the ref install.sh fetches plus GitHub requests. The update
+# card polled the status every 1.5s during the run, nothing serialised the computations, and a
+# fetch that lost the race for the ref's lock aborted the UPDATE.
+_ss14_saved = (_so14._compute_update_status, dict(_so14._update_cache), _so14.PANEL_DIR,
+               dict(_so14._update_launched), _so14._git, _so14.panel_version,
+               _so14._tracked_branch, _so14._update_lock)
+_ss14_dir = _tf14.mkdtemp(prefix="upd14-")
+try:
+    # The panel creates this lock after eventlet.monkey_patch() (app.py patches first), so it is a
+    # GREEN lock there, like the threads below. This suite imports system_ops before app patches,
+    # so its module-level lock is a real one: a greenlet blocking on it would block the whole hub,
+    # and the lock's holder with it. The test takes a lock of the same kind as its threads.
+    _so14._update_lock = _thr14.Lock()
+    os.makedirs(os.path.join(_ss14_dir, "data"))
+    _so14.PANEL_DIR = _ss14_dir
+    _so14._update_launched["ts"] = 0.0
+    _ss14_calls = []
+    _ss14_gate = _thr14.Event()
+
+    def _slow_compute():
+        _ss14_calls.append(1)
+        _ss14_gate.wait(5)
+        return {"git": True, "update_available": False, "n": len(_ss14_calls)}
+    _so14._compute_update_status = _slow_compute
+    _so14._update_cache.update({"ts": 0.0, "data": None})
+    _ss14_out = []
+    _ts14 = [_thr14.Thread(target=lambda f=f: _ss14_out.append(_so14.panel_update_status(force=f)))
+             for f in (False, True, False, True, False)]
+    for _t in _ts14:
+        _t.start()
+    _time14.sleep(0.3)
+    _ss14_gate.set()
+    for _t in _ts14:
+        _t.join(10)
+    check("update status: five concurrent requests (forced or not) run ONE computation and all get "
+          "its answer", len(_ss14_calls) == 1 and len(_ss14_out) == 5
+          and all(o.get("n") == 1 for o in _ss14_out), repr((len(_ss14_calls), _ss14_out)))
+    _ss14_calls.clear()
+    _so14.panel_update_status(force=True)
+    check("update status: ...while a later forced request, with none in flight, computes afresh "
+          "(control)", len(_ss14_calls) == 1, repr(_ss14_calls))
+
+    # While an update runs: no computation, no fetch, update_available False, and what the
+    # watcher compares after the restart.
+    _ss14_git = []
+    _so14._git = lambda args, timeout=45: (_ss14_git.append(args[0]),
+                                           ("abc1234", "", 0) if args[0] == "rev-parse"
+                                           else ("", "", 0))[1]
+    _so14.panel_version, _so14._tracked_branch = (lambda: "2026.9.30"), (lambda: "main")
+    _log14 = os.path.join(_ss14_dir, "data", "self-update.log")
+    with open(_log14, "w") as fh:
+        fh.write("=== panel self-update ===\n[2/6] Fetching the new version\n")
+    _ss14_calls.clear()
+    _run14 = _so14.panel_update_status(force=True)
+    check("update status: while the run's log has no exit line, nothing is computed or fetched, "
+          "and nothing is installable",
+          not _ss14_calls and "fetch" not in _ss14_git and _run14.get("update_running") is True
+          and _run14.get("update_available") is False and _run14.get("current_sha") == "abc1234"
+          and _run14.get("branch") == "main" and _run14.get("message"),
+          repr((_ss14_calls, _ss14_git, _run14)))
+    check("update status: ...and the running sha is read with rev-parse only, never `git status` "
+          "(which may take the index lock the installer's reset needs)",
+          set(_ss14_git) <= {"rev-parse", "log"}, repr(_ss14_git))
+    _su14b_saved = (_so14._launch_installer, _so14._is_git_checkout)
+    _su14b = []
+    try:
+        _so14._launch_installer = lambda **k: (_su14b.append(k), (True, "x"))[1]
+        _so14._is_git_checkout = lambda: True
+        _su14b_r = _so14.panel_self_update()
+    finally:
+        _so14._launch_installer, _so14._is_git_checkout = _su14b_saved
+    check("update status: ...so a second Update pressed during the run is refused, not launched",
+          _su14b_r[0] is False and not _su14b, repr(_su14b_r))
+    with open(_log14, "a") as fh:
+        fh.write("=== installer exit 0 ===\n")
+    _so14.panel_update_status(force=True)
+    check("update status: once the log says the run ended, the next request computes (control)",
+          len(_ss14_calls) == 1, repr(_ss14_calls))
+    with open(_log14, "w") as fh:
+        fh.write("=== panel self-update ===\n[3/6] Installing\n")
+    _old14 = _time14.time() - _so14._UPDATE_STALE_LOG - 60
+    os.utime(_log14, (_old14, _old14))
+    _ss14_calls.clear()
+    _so14.panel_update_status(force=True)
+    check("update status: ...and a log with no exit line that has not moved in 20 minutes is a dead "
+          "run, not a running one", len(_ss14_calls) == 1, repr(_ss14_calls))
+    # Between the launch and the new log: the launch itself is the witness.
+    os.unlink(_log14)
+    _so14._mark_update_launched()
+    _ss14_calls.clear()
+    _gap14 = _so14.panel_update_status(force=True)
+    check("update status: in the moment after a launch, before its log exists, nothing is computed "
+          "either (the cache used to be emptied there, making the next poll a fetch)",
+          not _ss14_calls and _gap14.get("update_running") is True
+          and _so14._update_cache["ts"] == 0.0, repr((_ss14_calls, _gap14)))
+    _so14._update_launched["ts"] = _time14.time() - _so14._UPDATE_LAUNCH_GRACE - 1
+    _so14.panel_update_status(force=True)
+    check("update status: ...for a bounded time only (a launch whose run never wrote a log)",
+          len(_ss14_calls) == 1, repr(_ss14_calls))
+finally:
+    (_so14._compute_update_status, _cache14, _so14.PANEL_DIR, _launched14, _so14._git,
+     _so14.panel_version, _so14._tracked_branch, _so14._update_lock) = _ss14_saved
+    _so14._update_cache.clear()
+    _so14._update_cache.update(_cache14)
+    _so14._update_launched.clear()
+    _so14._update_launched.update(_launched14)
+    _shutil14.rmtree(_ss14_dir, ignore_errors=True)

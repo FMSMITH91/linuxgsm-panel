@@ -1580,7 +1580,12 @@ check("capped reader: a green read's '' ends the read like b'' does (no second r
 # shapes that matter). The PR-only "Open code-scanning alerts (PR)" is skipped on every push, and
 # fork PRs file skipped workflow_run runs of "Open code-scanning alerts" beside the push run.
 # Counting skipped as failing would block every update the panel is offered.
-_CI16 = [("checks (ubuntu-24.04 · py3.12)", "success"), ("Analyze (python)", "success"),
+# (CI's other three jobs are listed too since the gate REQUIRES each of them to be present on a
+# code commit — system_ops._CI_REQUIRED; they were trimmed from this sample as "shapes that don't
+# matter", and now they do.)
+_CI16 = [("checks (ubuntu-24.04 · py3.12)", "success"), ("coverage", "success"),
+         ("js coverage", "success"), ("gamedig lockfile (node 22)", "success"),
+         ("Analyze (python)", "success"),
          ("Open code-scanning alerts (PR)", "skipped"), ("Open code-scanning alerts", "success"),
          ("Open code-scanning alerts", "skipped"), ("Open code-scanning alerts", "skipped"),
          ("Upload coverage to Codacy", "skipped"), ("deploy", "skipped"), ("lighthouse", "success"),

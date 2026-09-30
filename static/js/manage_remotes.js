@@ -46,7 +46,9 @@ function watchBootstrap(remoteId) {
       .then(r => r.json())
       .then(s => {
         var card = document.getElementById('bootstrap-card-' + remoteId);
-        if (!card) return;
+        // The card is gone (the host was removed): stop. This returned and left the interval
+        // running, a bootstrap-status request every 3s for the life of the page.
+        if (!card) { stopWatch(remoteId); return; }
         if (s.status === 'none') { card.style.display = 'none'; stopWatch(remoteId); return; }
         card.style.display = 'block';
         var step = document.getElementById('bs-step-' + remoteId);

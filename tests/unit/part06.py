@@ -8485,6 +8485,19 @@ try:
     _dp_genv = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
                     GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
                     GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+    # The verify step now also waits for the commit's check runs (`gh api …/check-runs`, see
+    # deploy.yml). These checks are about WHICH commit is shipped, so `gh` answers with every
+    # required check passed; part14 drives the waiting itself.
+    _dp_ghbin = os.path.join(_dp_sb, "gh-bin")
+    os.makedirs(_dp_ghbin)
+    with open(os.path.join(_dp_ghbin, "gh"), "w") as _dp_f:
+        _dp_f.write("#!/bin/sh\nfor n in 'checks (x)' coverage 'js coverage' 'gamedig lockfile (22)' "
+                    "'Analyze (python)' 'Open code-scanning alerts'; do\n"
+                    "  printf '{\"name\":\"%s\",\"status\":\"completed\",\"conclusion\":\"success\"}\\n'"
+                    " \"$n\"\ndone\n")
+    os.chmod(os.path.join(_dp_ghbin, "gh"), 0o755)
+    _dp_genv["PATH"] = _dp_ghbin + os.pathsep + _dp_genv.get("PATH", "")
+    _dp_genv["GITHUB_REPOSITORY"] = "o/r"     # set on every runner; the step reads it under set -u
 
     def _dp_git(*a):
         return _sh_sub.run(["git", "-C", _dp_runner, *a], capture_output=True, text=True,
@@ -9222,7 +9235,7 @@ finally:
 # (--no-ff) brings every one of its commits into main's ancestry, including an intermediate one
 # whose change was reverted before the merge: never main's tip, never what main's CI ran. The
 # update check's walk offered such a commit as the verified target while the merge was still being
-# checked (its CI state is its pull-request run's, or none — and "unknown" is accepted), and
+# checked (its CI state is its pull-request run's, or none — and "unknown" was then accepted), and
 # install.sh's pin checks accepted it. Main's own line is its FIRST-PARENT history.
 #
 # The fixture: main is A, then M (a --no-ff merge of a pull request E-F-G, where F reverts E), then
@@ -9776,8 +9789,8 @@ try:
           in _inst, "update_noop_line is not what the no-op branch ends on")
 
     # The panel's update check, for real against a clone at A. The tip and the merge are still being
-    # verified; the pull request's commits carry their PR runs' state, or none ("unknown", which the
-    # walk accepts so an API outage cannot hide an update).
+    # verified; the pull request's commits carry their PR runs' state, or none ("unknown" — which
+    # the walk no longer accepts, and stops at; none of them is on the first-parent line walked).
     _fp_so = _fp_clone("panel", _fp_a)
     _fp_saved = (SO.PANEL_DIR, SO._tracked_branch, SO._remote_ci_state)
     _fp_env_saved = {_k: os.environ.get(_k) for _k in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM")}
