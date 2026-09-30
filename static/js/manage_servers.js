@@ -336,7 +336,8 @@ function msrvAction(id, action, btn){
       setTimeout(reconcileServerList, 1500);
     })
     .catch(function(){ if(window.toast) toast('Action failed', 'danger'); })
-    .finally(function(){ btn.disabled = false; btn.innerHTML = orig; });  // nosemgrep
+    .finally(function(){ btn.disabled = false; btn.innerHTML = orig; })  // nosemgrep
+    .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
 // ── Live sync: reflect servers other users add/remove ──────────────────────

@@ -464,7 +464,7 @@ function restoreBackup(name,encrypted,btn){
       // the configured one, which is the right key for every backup this panel wrote. Only an
       // archive from ANOTHER panel (or from before the passphrase changed) needs to be asked for,
       // so the common case stays one click.
-      _bkRestore(name, null, btn, encrypted);
+      void _bkRestore(name, null, btn, encrypted);   // _bkRestore ends in its own .catch
     }});
 }
 function _bkRestore(name, passphrase, btn, encrypted, skipSafety){
@@ -514,7 +514,7 @@ function _bkAskSkipSafety(name, passphrase, btn, encrypted, why){
       // the requirePassword form leaves it open for the caller.
       if(btn) btn.disabled=true;
       bkMsg('Restoring…','text-secondary');
-      _bkRestore(name, passphrase, btn, encrypted, true);
+      void _bkRestore(name, passphrase, btn, encrypted, true);   // _bkRestore ends in its own .catch
     }});
 }
 function _bkAskPassphrase(name, btn){
@@ -621,7 +621,8 @@ function scanExisting(){
       +'<button class="btn btn-sm btn-primary"' + _da('importExisting', ['@self']) + '><i class="bi bi-plus-circle"></i> Import selected</button> <span id="disc-msg" class="small ms-2"></span>';
     prependContentNotes(out, d.content);
   }).catch(function(){ if(out) out.innerHTML='<span class="text-danger small">Scan failed.</span>'; })
-  .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-search"></i> Scan'; } });
+  .finally(function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="bi bi-search"></i> Scan'; } })
+  .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 // Say what the scan left out, and why. A GMod content box installs each mountable game through
 // LinuxGSM, so the host scan sees every one of them as a server — this table used to show one

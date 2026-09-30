@@ -46,7 +46,8 @@ function _doServerAction(action, btn, showOutput) {
     // succeeded, and telling someone their restart failed invites them to run it a second time.
     if (window.console && console.error) console.error('server action: handler error', err);
   })
-  .finally(() => { btn.disabled = false; btn.innerHTML = orig; });  // nosemgrep
+  .finally(() => { btn.disabled = false; btn.innerHTML = orig; })  // nosemgrep
+  .catch(() => { /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
 function showActionOutput(title, text, ok) {

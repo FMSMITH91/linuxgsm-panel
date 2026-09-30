@@ -402,7 +402,7 @@ function _flat(f){ return {file:f, dir:''}; }
 //     list is emptied as soon as it returns. So the roots are taken synchronously below and only
 //     the walk is async.
 function _walkEntry(entry, prefix, out){
-  return new Promise(function(resolve){
+  return new Promise(function(resolve, reject){
     if(!entry){ resolve(); return; }
     if(entry.isFile){
       entry.file(function(f){ out.push({file:f, dir:prefix}); resolve(); },
@@ -415,7 +415,9 @@ function _walkEntry(entry, prefix, out){
     (function read(){
       reader.readEntries(function(batch){
         if(!batch.length){
-          Promise.all(kids.map(function(k){ return _walkEntry(k, dir, out); })).then(resolve);
+          // A sub-walk that threw goes up to the drop handler, which says the folder could not be
+          // read; with no rejection handler here this directory just stayed pending for good.
+          Promise.all(kids.map(function(k){ return _walkEntry(k, dir, out); })).then(resolve, reject);
           return;
         }
         kids = kids.concat(Array.prototype.slice.call(batch));
@@ -572,7 +574,10 @@ function uploadFiles(files, base){
           _doUpload(send.map(_flat), ovw, base);
         }
       });
-    });
+    })
+    // Only the handler above can land here (the check's own failure is caught before it). Say so,
+    // rather than leaving "Checking N file(s)…" on screen for an upload that never started.
+    .catch(function(){ _uploadStatus('Request failed','text-danger'); });
 }
 var _uploadChecked = true;   // did the pre-flight actually reach the host?
 // `entries` are {file, dir} — dir is the file's subdirectory RELATIVE to `base`, "" for a loose
@@ -634,7 +639,8 @@ function _doUpload(entries, ovw, base){
                                   : ('Uploading '+e.file.name+'\u2026');
             st.className='small mt-2 text-secondary';
             pump();
-          });
+          })
+          .catch(function(){ /* the failure was counted above; this only stops a throwing pump() going unhandled */ });
       })(entries[next]);
     }
   }

@@ -360,7 +360,8 @@ function syncPorts(serverId, btn) {
       else if(window.toast) { toast(data.message || 'Failed', 'danger'); }
     })
     .catch(function(){ if(window.toast) toast('Request failed', 'danger'); })
-    .finally(function(){ btn.disabled = false; btn.innerHTML = orig; });  // nosemgrep
+    .finally(function(){ btn.disabled = false; btn.innerHTML = orig; })  // nosemgrep
+    .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
 
 // Enter key opens port

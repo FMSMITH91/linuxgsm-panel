@@ -17,5 +17,6 @@ function testChannel(channel, btn) {
   .then(r => r.json())
   .then(d => toast(d.message || (d.success ? 'Sent' : 'Failed'), d.success ? 'success' : 'danger'))
   .catch(function(){ toast('Request failed', 'danger'); })
-  .finally(function(){ if (btn) { btn.disabled = false; btn.innerHTML = orig; } });  // nosemgrep - orig is the markup this button itself had, captured above
+  .finally(function(){ if (btn) { btn.disabled = false; btn.innerHTML = orig; } })  // nosemgrep - orig is the markup this button itself had, captured above
+  .catch(function(){ /* failure already reported above; this only stops a throwing cleanup going unhandled */ });
 }
